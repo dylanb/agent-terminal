@@ -1,0 +1,19 @@
+appId: dev.agentterminal.app
+productName: Agent Terminal
+directories:
+  buildResources: build
+  output: dist
+files:
+  - out/**
+  - package.json
+asarUnpack:
+  - node_modules/node-pty/**
+mac:
+  target:
+    - dmg
+    - zip
+linux:
+  target:
+    - AppImage
+    - deb
+  category: Development
