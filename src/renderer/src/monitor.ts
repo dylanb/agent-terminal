@@ -4,6 +4,9 @@
 
 import type { MonitorEvent, MonitorUpdateMsg } from '../../shared/ipc';
 
+// While quiet, the "quiet for Ns" counter is re-rendered on this cadence (§8.3).
+const QUIET_TICK_MS = 1000;
+
 export function wireMonitorPane(): void {
   const statusEl = document.getElementById('monitor-status')!;
   const blocksEl = document.getElementById('monitor-blocks')!;
@@ -35,13 +38,17 @@ export function wireMonitorPane(): void {
   }
 
   function appendBlock(event: MonitorEvent): void {
+    const time = new Date(event.capturedAt).toLocaleTimeString();
     const block = document.createElement('div');
     block.className = 'capture-block';
     block.dataset.eventId = event.id;
+    // Each block's buttons share a label, so scope them by capture time for screen readers (WCAG 2.4.6).
+    block.setAttribute('role', 'group');
+    block.setAttribute('aria-label', `Capture at ${time}`);
 
     const meta = document.createElement('div');
     meta.className = 'capture-meta';
-    meta.textContent = new Date(event.capturedAt).toLocaleTimeString();
+    meta.textContent = time;
 
     const pre = document.createElement('pre');
     pre.className = 'capture-text';
@@ -61,11 +68,16 @@ export function wireMonitorPane(): void {
     blocksEl.appendChild(block);
   }
 
+  function stopQuietTick(): void {
+    if (quietTick) clearInterval(quietTick);
+    quietTick = null;
+  }
+
   window.monitor.onUpdate((msg) => {
     last = msg;
     renderStatus();
-    if (quietTick) clearInterval(quietTick);
-    quietTick = msg.agentState === 'quiet' ? setInterval(renderStatus, 1000) : null;
+    stopQuietTick();
+    if (msg.agentState === 'quiet') quietTick = setInterval(renderStatus, QUIET_TICK_MS);
   });
 
   window.monitor.onEvent((event) => appendBlock(event));

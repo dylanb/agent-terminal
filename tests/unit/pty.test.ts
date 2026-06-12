@@ -1,7 +1,31 @@
 import { describe, expect, it } from 'vitest';
-import { buildSpawnConfig } from '../../src/main/pty';
+import { buildSpawnConfig, mergePaths } from '../../src/main/pty';
 
 const HOME = '/home/u';
+
+describe('mergePaths (§5 — GUI-launch PATH probe must not clobber the inherited env)', () => {
+  it('appends probed-only entries after the inherited ones, preserving precedence', () => {
+    expect(mergePaths('/usr/bin:/bin', '/opt/homebrew/bin:/usr/bin')).toBe(
+      '/usr/bin:/bin:/opt/homebrew/bin',
+    );
+  });
+
+  it('keeps inherited-only entries (e.g. an active venv) that the probe lacks', () => {
+    expect(mergePaths('/venv/bin:/usr/bin', '/usr/bin')).toBe('/venv/bin:/usr/bin');
+  });
+
+  it('never duplicates an entry', () => {
+    expect(mergePaths('/usr/bin', '/usr/bin')).toBe('/usr/bin');
+  });
+
+  it('falls back to the probed path when nothing is inherited', () => {
+    expect(mergePaths('', '/usr/bin:/bin')).toBe('/usr/bin:/bin');
+  });
+
+  it('ignores empty segments', () => {
+    expect(mergePaths('/usr/bin:', ':/opt/bin')).toBe('/usr/bin:/opt/bin');
+  });
+});
 
 describe('buildSpawnConfig (§5)', () => {
   it('Linux: plain interactive bash (sources ~/.bashrc), no -l', () => {

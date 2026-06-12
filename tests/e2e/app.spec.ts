@@ -16,23 +16,28 @@ async function typeCommand(cmd: string): Promise<void> {
   await page.keyboard.press('Enter');
 }
 
-/** Drag-select the whole visible row containing `needle`; returns its bounding box. */
-async function selectRowContaining(needle: string): Promise<{ x: number; y: number; width: number; height: number }> {
+async function findRowIndex(needle: string): Promise<number> {
   const rows = page.locator('.xterm-rows > div');
   const count = await rows.count();
   for (let i = 0; i < count; i++) {
-    const text = await rows.nth(i).textContent();
-    if (text?.trim() === needle) {
-      const box = (await rows.nth(i).boundingBox())!;
-      const cy = box.y + box.height / 2;
-      await page.mouse.move(box.x + 2, cy);
-      await page.mouse.down();
-      await page.mouse.move(box.x + box.width - 2, cy, { steps: 10 });
-      await page.mouse.up();
-      return box;
-    }
+    if ((await rows.nth(i).textContent())?.trim() === needle) return i;
   }
-  throw new Error(`no terminal row contains ${JSON.stringify(needle)}`);
+  return -1;
+}
+
+/** Drag-select the whole visible row whose exact text is `needle`; returns its bounding box. */
+async function selectRowContaining(needle: string): Promise<{ x: number; y: number; width: number; height: number }> {
+  // Wait for the exact output row to render — a preceding toContainText can match the
+  // echoed command line before the command's own output appears (avoids a select race).
+  await expect.poll(() => findRowIndex(needle)).toBeGreaterThanOrEqual(0);
+  const row = page.locator('.xterm-rows > div').nth(await findRowIndex(needle));
+  const box = (await row.boundingBox())!;
+  const cy = box.y + box.height / 2;
+  await page.mouse.move(box.x + 2, cy);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width - 2, cy, { steps: 10 });
+  await page.mouse.up();
+  return box;
 }
 
 function inject(text: string, submit: boolean): Promise<void> {
@@ -148,6 +153,57 @@ test('embedded ESC[201~ in injected content cannot break out of paste mode', asy
   await inject('bad\x1b[201~rm', true);
   // The end marker inside the content is stripped: payload arrives contiguous.
   await expect(termRows()).toContainText(/\[200~badrm.*\[201~/);
+});
+
+test('the terminal exposes an accessibility tree for screen readers', async () => {
+  // screenReaderMode wires xterm's AccessibilityManager, which mounts this container.
+  await expect(page.locator('.xterm-accessibility')).toHaveCount(1);
+});
+
+test('Send selection pastes the selected text as an editable command line', async () => {
+  await typeCommand("echo 'echo send-payload-xyz'");
+  await expect(termRows()).toContainText('echo send-payload-xyz');
+
+  await selectRowContaining('echo send-payload-xyz');
+  await page.locator('#send-selection').click();
+  // The selection stays highlighted after Send (§7.5).
+  await expect(page.locator('.xterm-decoration').first()).toBeVisible();
+
+  // Pasted at the prompt, not executed — running it now yields the echo output on its own row.
+  await page.locator('.xterm-screen').click();
+  await page.keyboard.press('Enter');
+  await expect(
+    page.locator('.xterm-rows > div').filter({ hasText: /^\s*send-payload-xyz\s*$/ }),
+  ).toHaveCount(1);
+});
+
+test('Escape clears an active selection but passes through to the agent otherwise (§7.5.1)', async () => {
+  await typeCommand("echo 'esc-target-row'");
+  await expect(termRows()).toContainText('esc-target-row');
+
+  // With a selection active, Escape clears it and is NOT sent to the shell.
+  await selectRowContaining('esc-target-row');
+  await expect(page.locator('.xterm-decoration')).not.toHaveCount(0);
+  await page.locator('.xterm-screen').click();
+  await page.keyboard.press('Escape');
+  await expect(page.locator('.xterm-decoration')).toHaveCount(0);
+
+  // With no selection, Escape passes through — cat -v renders the byte as ^[.
+  await typeCommand('cat -v');
+  await page.keyboard.press('Escape');
+  await expect(termRows()).toContainText('^[');
+  await page.keyboard.press('Control+D');
+});
+
+test('captured blocks are replayed to a reloaded monitor pane (§8.4)', async () => {
+  await typeCommand("echo 'replay-me-block'");
+  await expect(termRows()).toContainText('replay-me-block');
+  await selectRowContaining('replay-me-block');
+  await page.locator('#capture-selection').click();
+  await expect(page.locator('.capture-block').last()).toContainText('replay-me-block');
+
+  await page.reload();
+  await expect(page.locator('.capture-block').filter({ hasText: 'replay-me-block' })).toHaveCount(1);
 });
 
 test('monitor status strip tracks quiescence and alt-screen', async () => {
