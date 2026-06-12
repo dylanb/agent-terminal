@@ -90,4 +90,10 @@ describe('shadow screen model (§8)', () => {
     await settle();
     expect(shadow.isBracketedPaste()).toBe(true);
   });
+
+  it('ignores writes and resizes after dispose (§4G — onData can race window close)', () => {
+    shadow.dispose();
+    expect(() => shadow.write('late output')).not.toThrow();
+    expect(() => shadow.resize(100, 40)).not.toThrow();
+  });
 });

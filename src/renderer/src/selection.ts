@@ -3,9 +3,11 @@
 
 import type { IDecoration, Terminal } from '@xterm/xterm';
 import type { BufferType } from '../../shared/ipc';
+import { stripPasteBreakout } from '../../shared/paste';
 import { cleanSelectionText, createSelectionModel } from './selectionModel';
 
-const SEL_COLOR = 'rgba(80, 140, 255, 0.35)';
+// >=3:1 against the #1e1e1e background (WCAG 1.4.11); the native highlight is suppressed (§7.0).
+const SEL_COLOR = 'rgba(80, 140, 255, 0.7)';
 
 export function wireSelection(term: Terminal): void {
   let decorations: IDecoration[] = [];
@@ -72,7 +74,8 @@ export function wireSelection(term: Terminal): void {
     const s = model.get();
     if (!s.active) return;
     // paste(), not write(): honors the foreground app's bracketed-paste mode (§7.5).
-    term.paste(cleanSelectionText(s.text));
+    // xterm's paste() does NOT strip the end marker, so we guard the breakout here (§7.5/§9.3).
+    term.paste(stripPasteBreakout(cleanSelectionText(s.text)));
   });
 
   document.getElementById('capture-selection')!.addEventListener('click', () => {

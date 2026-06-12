@@ -77,6 +77,7 @@ export function createShadowModel(opts: {
 
   return {
     write(data) {
+      if (disposed) return; // onData can race window close (§4G)
       term.write(data);
       detector.noteOutputActivity();
       if (settleTimer) clearTimeout(settleTimer);
@@ -84,6 +85,7 @@ export function createShadowModel(opts: {
       settleTimer = setTimeout(publishStatus, settleMs);
     },
     resize(cols, rows) {
+      if (disposed) return;
       term.resize(cols, rows);
     },
     isBracketedPaste() {

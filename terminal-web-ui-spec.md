@@ -1,9 +1,10 @@
 # Technical Specification — Agent Terminal: Foundation for a Coding-Agent Management Application
 
-**Document status:** Draft v2.3
+**Document status:** Draft v2.4
 **Scope:** Foundation / "walking skeleton" build only — plus drafted requirements for the next phase (§15)
 **Target platforms:** Linux and macOS (Windows out of scope for this version)
 
+> **Changelog v2.4:** Review-driven reconciliation pass (no scope change). Contract: documented the `monitor:replay` invoke channel and `monitor.onExit` in §6 — both shipped in the skeleton but were missing from the table. Security: the renderer Send path now strips the `ESC[201~` breakout marker via a shared `stripPasteBreakout` guard (the pinned `@xterm/xterm` `paste()` does **not** strip it, contrary to the old §7.5 wording); the window denies navigation/window-open and honors `ELECTRON_RENDERER_URL` only in dev builds; renderer→main IPC payloads are validated before reaching the PTY. Reliability: early PTY output is buffered until the renderer subscribes (§8.1); all per-window IPC listeners are torn down on close; the GUI-launch PATH probe now **merges** with the inherited env instead of replacing it (§5); shadow writes/resizes after `dispose()` are no-ops. Docs: §10/§11 updated to the electron-vite/TypeScript layout; the §4 diagram now routes capture through main's event store and Send through `term.paste()`. §12 annotations corrected to match the tests that now exist. A11y: xterm `screenReaderMode` on; landmarks, a status live region, and contrast fixes.
 > **Changelog v2.3:** Drafted the requirements for the **next build phase** as §15: the semantic-capture pipeline (previously only sketched in §13.1) and a new sibling capability, **command-output capture** via OSC 133 shell-integration marks. §15 is requirements only — it does not change the walking-skeleton scope or the §12 acceptance criteria. Notable design commitments: scan on the §8.3 `active → quiet` transition with a scrollback watermark and explicit truncation marking; per-agent adapters + generic heuristics, detection-only (no autonomy); `MonitorEvent` `type`/`source` unions widen (the §8.4 schema absorbs this, as designed); command segmentation via OSC 133 (never prompt-regex), which will require an opt-out shell-integration hook amending §5 when built.
 > **Changelog v2.2:** Hardening pass from review. Selection model stamps `baseY` + buffer-type at gesture time and extraction is crash-guarded against alt-buffer edge cases (§7.2–§7.3); window resize is debounced to avoid PTY/renderer/shadow width races during output bursts (§7.1); `SUBMIT_DELAY_MS` is a setting (not a constant) with an echo-confirmation upgrade path (§9.3); GUI-launch environment caveat documented (§5); monitor-pane terminology pinned — a shared-renderer DOM component in this version, main-process-mediated by rule (§9).
 > **Changelog v2.1:** Added **quiescence detection** to the shadow-model subsystem (§8.3): the main process tracks whether the agent's output stream is **active** or **quiet** and publishes transitions on `monitor:update`. The monitor pane gains a working/quiet activity indicator. This is the skeleton's first (deliberately primitive) monitoring heuristic and the trigger hook the future semantic-capture pipeline will attach to.
@@ -77,15 +78,16 @@ Two processes, connected by Electron IPC. `node-pty` and the shadow terminal run
 ```mermaid
 flowchart LR
     subgraph Main["Main process (Node)"]
-        PTY["node-pty\n(interactive bash → agent CLI)"]
-        SHADOW["@xterm/headless\nshadow screen model\n(modes, alt-screen, buffer)"]
-        INJ["injection API\nwrapForPaste + submit"]
+        PTY["node-pty<br/>(interactive bash → agent CLI)"]
+        SHADOW["@xterm/headless<br/>shadow screen model<br/>(modes, alt-screen, buffer,<br/>quiescence detector)"]
+        STORE["event store<br/>stamp + replay"]
+        INJ["injection API<br/>wrapForPaste + submit"]
     end
     subgraph Renderer["Renderer process (Chromium)"]
         subgraph TermPane["Terminal pane"]
             XT["xterm.js terminal"]
-            SELMODEL["selection model\n(app-owned, focus-independent)"]
-            DECO["decoration layer\n(custom highlight)"]
+            SELMODEL["selection model<br/>(app-owned, focus-independent)"]
+            DECO["decoration layer<br/>(custom highlight)"]
             BTN["Send / Capture / Clear buttons"]
         end
         subgraph MonPane["Monitor pane (second UI)"]
@@ -93,15 +95,17 @@ flowchart LR
             ACT["Insert / Insert & submit"]
         end
     end
-    Preload["preload.js\n(contextBridge API)"]
+    Preload["preload.js<br/>(contextBridge API)"]
 
     PTY -- "output bytes (tee)" --> SHADOW
     PTY -- "output bytes" --> Preload --> XT
-    XT -- "keystrokes" --> Preload --> PTY
+    XT -- "keystrokes / paste data" --> Preload --> PTY
     XT -- "pointer gesture" --> SELMODEL
     SELMODEL -- "render ranges" --> DECO --> XT
-    BTN -- "send: model.text" --> Preload --> PTY
-    BTN -- "capture: block" --> Preload --> LIST
+    BTN -- "send: term.paste(model.text)" --> XT
+    BTN -- "monitor:capture {text, range}" --> Preload --> STORE
+    STORE -- "monitor:event (stamped)" --> Preload --> LIST
+    LIST -- "monitor:replay" --> Preload --> STORE
     SHADOW -- "monitor:update (status)" --> Preload --> LIST
     ACT -- "agent:inject {text, submit}" --> Preload --> INJ --> PTY
 ```
@@ -191,6 +195,7 @@ All payloads carry a `sessionId` (a single fixed id in this version). This costs
 | `monitor:capture` | renderer → main | `{sessionId, text, range, source: 'selection'}` | User captured a region; main stamps `{id, capturedAt}` and broadcasts it back on `monitor:event`. |
 | `monitor:event` | main → renderer | `{sessionId, event}` | Capture blocks and (later) semantic events for the monitor pane. `event = {id, type:'capture', text, range, capturedAt}` in this version. |
 | `monitor:update` | main → renderer | `{sessionId, altScreen: boolean, bracketedPaste: boolean, agentState: 'active'\|'quiet', quietSince: number\|null}` | Debounced shadow-state and activity changes (live status indicators). |
+| `monitor:replay` | renderer → main (invoke) | `() → MonitorEvent[]` | A (re)loaded monitor pane requests the captures stamped so far (§8.4). |
 | `agent:inject` | renderer → main | `{sessionId, text, submit: boolean}` | Monitor-pane action: paste-wrap per live mode, write to PTY, optionally submit. |
 
 > Captures are routed **through main** (rather than renderer-internally, which would be simpler today) so the monitor pane has no dependency on the terminal pane. When the monitor pane later becomes a separate `WebContentsView`/web app, and when captures start originating from the shadow model instead of user selection, nothing about this contract changes.
@@ -210,6 +215,8 @@ contextBridge.exposeInMainWorld('monitor', {
   capture:  (block) => ipcRenderer.send('monitor:capture', { sessionId: SID, ...block }),
   onEvent:  (cb) => ipcRenderer.on('monitor:event',  (_e, m) => cb(m.event)),
   onUpdate: (cb) => ipcRenderer.on('monitor:update', (_e, m) => cb(m)),
+  onExit:   (cb) => ipcRenderer.on('pty:exit',       (_e, m) => cb(m)), // session alive/exited (§9.2)
+  replay:   () => ipcRenderer.invoke('monitor:replay'),
   inject:   (req) => ipcRenderer.send('agent:inject', { sessionId: SID, ...req }),
 });
 ```
@@ -615,18 +622,24 @@ function injectToAgent(text, { submit = false } = {}) {
 
 ## 10. Project structure
 
+Built with **electron-vite** (TypeScript, `strict`), three tsconfig projects (main/preload share the node project; renderer is the web project). The IPC contract is a shared module both sides import.
+
 ```
 agent-terminal/
 ├── package.json
-├── electron/
-│   ├── main.js          # window + node-pty lifecycle + shadow terminal + IPC + injection API (§8, §9.3)
-│   └── preload.js       # contextBridge: term + monitor namespaces (§6)
+├── electron.vite.config.ts
 ├── src/
-│   ├── index.html       # two-pane layout: #terminal + toolbar | #monitor
-│   ├── renderer.js      # xterm setup, selection model + decorations, send/capture wiring (§7)
-│   ├── monitor.js       # monitor pane: status strip, captured blocks, inject actions (§9)
-│   └── styles.css       # flex layout: terminal pane (whole-cell sized) | monitor pane
-└── build/               # electron-builder output
+│   ├── main/            # window + node-pty lifecycle + shadow terminal + IPC + injection API (§5, §8, §9.3)
+│   │   ├── index.ts     # window, IPC wiring, output gate, navigation guards
+│   │   ├── pty.ts  shadow.ts  quiescence.ts  inject.ts  eventStore.ts
+│   │   ├── outputGate.ts  sessionIpc.ts  ipcValidation.ts  rendererTarget.ts  windowGuards.ts
+│   ├── preload/index.ts # contextBridge: term + monitor namespaces (§6)
+│   ├── renderer/
+│   │   ├── index.html   # two-pane layout: <main> #terminal + toolbar | <aside> #monitor
+│   │   └── src/         # terminal.ts, selection.ts, selectionModel.ts, monitor.ts, styles.css (§7, §9)
+│   └── shared/ipc.ts    # the typed IPC contract — single source of truth (§6)
+├── tests/               # unit + integration (vitest) + e2e (playwright _electron)
+└── out/ , dist/         # electron-vite build + electron-builder output
 ```
 
 **Minimal `index.html` layout**
@@ -668,8 +681,8 @@ electron-builder triggers this during packaging; for `electron .` dev runs you m
 
 ### Run (dev)
 ```
-npm run rebuild   # electron-rebuild for node-pty
-npm start         # electron .
+npm run rebuild   # electron-rebuild for node-pty (also runs on postinstall)
+npm run dev       # electron-vite dev (renderer HMR)
 ```
 
 ### Package
@@ -692,8 +705,8 @@ The foundation is "done" when all of the following pass on both Linux and macOS:
 
 **Selection (unchanged behavior + capture)**
 - [x] Dragging to select output shows the app's own highlight (custom translucent decoration, not native xterm highlight). *(e2e, including absolute-coordinate placement after 100 lines of scrollback)*
-- [x] **Focus independence:** the highlight remains after clicking any button, typing in the terminal, or focusing the monitor pane. It disappears **only** on Clear / Escape-with-active-selection / starting a new selection. *(e2e)*
-- [ ] Clicking **Send selection** inserts exactly the selected text (whitespace-trimmed, no trailing newline) at the prompt; the selection stays highlighted. *(trim/newline logic unit-tested via `cleanSelectionText`; the Send-button path itself has no e2e yet)*
+- [x] **Focus independence:** the highlight remains after clicking any button, typing in the terminal, or focusing the monitor pane. It disappears **only** on Clear / Escape-with-active-selection / starting a new selection. *(e2e: monitor-click persistence + Clear; Escape-clears and Escape-passthrough now e2e too)*
+- [x] Clicking **Send selection** inserts exactly the selected text (whitespace-trimmed, no trailing newline) at the prompt; the selection stays highlighted. *(e2e: Send pastes an editable command line and the highlight persists; trim/newline logic unit-tested via `cleanSelectionText`)*
 - [ ] The highlight stays glued to its text when the buffer scrolls. *(implemented — marker-anchored decorations + `onScroll` re-render; no automated assertion yet)*
 
 **Agent hosting + monitor loop (new — the product-defining criteria)**
@@ -704,7 +717,7 @@ The foundation is "done" when all of the following pass on both Linux and macOS:
 - [ ] **Insert into agent:** with Claude Code running, clicking **Insert into agent** on a captured multi-line block places the whole block in Claude Code's input box as one editable unit, **without running anything** — including when the terminal pane is not focused. *(mechanics e2e-verified against bash, including injection with the terminal pane unfocused; the Claude Code input box is manual)*
 - [ ] **Insert & submit:** the same block lands and is submitted; Claude Code receives it as a single message. *(same: bash path e2e-verified; Claude Code manual)*
 - [x] **Mode honoring:** the same insert against a session with bracketed paste off (plain bash prompt with the mode disabled) arrives as raw input — no stray `ESC[200~` markers visible. *(e2e, both directions: `?2004l` → no markers, `?2004h` → fenced)*
-- [x] Injected text containing the literal sequence `ESC[201~` does not break out of paste mode (sanitization works on both paths). *(main path e2e-verified end-to-end; both paths unit-tested)*
+- [x] Injected text containing the literal sequence `ESC[201~` does not break out of paste mode (sanitization works on both paths). *(main path e2e-verified end-to-end; the shared `stripPasteBreakout` guard is unit-tested and applied on both the main `wrapForPaste` and renderer `term.paste()` paths; the Send-button path is e2e-verified)*
 
 **Lifecycle**
 - [ ] Exiting the shell (`exit`) shows the exit notice in both panes; closing the window terminates the bash process (no orphaned PTY) and disposes the shadow terminal. *(exit notices in both panes e2e-verified; PTY-kill/shadow-dispose on window close implemented but not asserted by a test)*

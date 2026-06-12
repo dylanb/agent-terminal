@@ -93,6 +93,16 @@ export interface AgentInjectMsg {
   submit: boolean;
 }
 
+/** Binds each main→renderer channel to its payload so emit sites stay type-checked (§6). */
+export interface ChannelPayloads {
+  'pty:data': PtyDataMsg;
+  'pty:exit': PtyExitMsg;
+  'monitor:event': MonitorEventMsg;
+  'monitor:update': MonitorUpdateMsg;
+}
+
+export type SendChannel = keyof ChannelPayloads;
+
 // ---- Preload-exposed API surfaces (§6) ----
 
 export interface TermApi {

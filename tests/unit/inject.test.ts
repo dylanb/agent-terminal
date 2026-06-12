@@ -1,8 +1,28 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createInjector, wrapForPaste } from '../../src/main/inject';
+import { createInjector, resolveSubmitDelay, wrapForPaste } from '../../src/main/inject';
 
 const START = '\x1b[200~';
 const END = '\x1b[201~';
+
+describe('resolveSubmitDelay (§9.3 — APP_SUBMIT_DELAY_MS)', () => {
+  it('defaults to 50 when unset, empty, or non-numeric', () => {
+    expect(resolveSubmitDelay(undefined)).toBe(50);
+    expect(resolveSubmitDelay('')).toBe(50);
+    expect(resolveSubmitDelay('abc')).toBe(50);
+  });
+
+  it('honors an explicit zero (no submit delay) rather than coercing it to 50', () => {
+    expect(resolveSubmitDelay('0')).toBe(0);
+  });
+
+  it('parses a positive integer', () => {
+    expect(resolveSubmitDelay('100')).toBe(100);
+  });
+
+  it('rejects negative values, falling back to the default', () => {
+    expect(resolveSubmitDelay('-5')).toBe(50);
+  });
+});
 
 describe('wrapForPaste (§9.3)', () => {
   it('wraps text in paste markers when bracketed mode is on', () => {

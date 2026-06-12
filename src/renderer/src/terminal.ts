@@ -14,6 +14,8 @@ export function createTerminalPane(container: HTMLElement): Terminal {
     cursorBlink: true,
     scrollback: 5000,
     allowProposedApi: true,
+    // Expose row content to assistive tech — the terminal is the primary surface (WCAG 4.1.2).
+    screenReaderMode: true,
     theme: {
       selectionBackground: 'rgba(0,0,0,0)',
       selectionInactiveBackground: 'rgba(0,0,0,0)',
