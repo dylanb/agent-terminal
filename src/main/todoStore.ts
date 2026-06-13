@@ -1,0 +1,135 @@
+// Repo-scoped todo store (§16.3 / §16.4) — the app's first in-repo persistence.
+// Each repo key (a git root or a non-repo dir) owns one file at
+// <repoKey>/.agent-terminal/todos.json. Lists are loaded lazily, cached per key,
+// and rewritten atomically on every mutation. A missing/corrupt file degrades to
+// an empty list (never a throw) so a bad file can't wedge the pane.
+//
+// `order` is a monotonically increasing sort key: new/re-activated items take the
+// next value, so they append to the bottom of the active list. The Done section is
+// capped (APP_MAX_DONE_TODOS) by pruning the smallest-order (oldest) done items.
+
+import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
+import path from 'node:path';
+import type { TodoItem, TodoSource, TodoStatus } from '../shared/ipc';
+
+export interface TodoStoreDeps {
+  maxDoneTodos: number;
+  now?: () => number;
+  newId?: () => string;
+  /** Override the on-disk file for a repo key (defaults to <repoKey>/.agent-terminal/todos.json). */
+  fileFor?: (repoKey: string) => string;
+}
+
+export interface TodoStore {
+  list(repoKey: string): TodoItem[];
+  add(repoKey: string, text: string, source?: TodoSource): TodoItem[];
+  update(repoKey: string, id: string, text: string): TodoItem[];
+  reorder(repoKey: string, orderedIds: string[]): TodoItem[];
+  setStatus(repoKey: string, id: string, status: TodoStatus): TodoItem[];
+  delete(repoKey: string, id: string): TodoItem[];
+}
+
+interface RepoState {
+  items: TodoItem[];
+  seq: number;
+}
+
+function defaultFileFor(repoKey: string): string {
+  return path.join(repoKey, '.agent-terminal', 'todos.json');
+}
+
+/** All items sorted by `order`; callers split active/done by status (§16.3). */
+function sorted(items: TodoItem[]): TodoItem[] {
+  return [...items].sort((a, b) => a.order - b.order);
+}
+
+export function createTodoStore(deps: TodoStoreDeps): TodoStore {
+  const now = deps.now ?? Date.now;
+  const newId = deps.newId ?? randomUUID;
+  const fileFor = deps.fileFor ?? defaultFileFor;
+  const cache = new Map<string, RepoState>();
+
+  function load(repoKey: string): RepoState {
+    const cached = cache.get(repoKey);
+    if (cached) return cached;
+    let items: TodoItem[] = [];
+    try {
+      const raw = JSON.parse(readFileSync(fileFor(repoKey), 'utf8'));
+      if (Array.isArray(raw)) items = raw as TodoItem[];
+    } catch {
+      items = []; // missing/corrupt → empty (§16.3)
+    }
+    const seq = items.reduce((max, t) => Math.max(max, t.order), 0);
+    const state: RepoState = { items, seq };
+    cache.set(repoKey, state);
+    return state;
+  }
+
+  function persist(repoKey: string, state: RepoState): TodoItem[] {
+    const file = fileFor(repoKey);
+    mkdirSync(path.dirname(file), { recursive: true });
+    const tmp = `${file}.tmp`;
+    writeFileSync(tmp, JSON.stringify(state.items));
+    renameSync(tmp, file);
+    return sorted(state.items);
+  }
+
+  function pruneDone(state: RepoState): void {
+    const done = state.items.filter((t) => t.status === 'done').sort((a, b) => a.order - b.order);
+    const excess = done.length - deps.maxDoneTodos;
+    if (excess <= 0) return;
+    const drop = new Set(done.slice(0, excess).map((t) => t.id));
+    state.items = state.items.filter((t) => !drop.has(t.id));
+  }
+
+  return {
+    list(repoKey) {
+      return sorted(load(repoKey).items);
+    },
+    add(repoKey, text, source) {
+      const state = load(repoKey);
+      state.items.push({
+        id: newId(),
+        repoKey,
+        text,
+        status: 'active',
+        order: ++state.seq,
+        createdAt: new Date(now()).toISOString(),
+        ...(source ? { source } : {}),
+      });
+      return persist(repoKey, state);
+    },
+    update(repoKey, id, text) {
+      const state = load(repoKey);
+      const item = state.items.find((t) => t.id === id);
+      if (item) item.text = text;
+      return persist(repoKey, state);
+    },
+    reorder(repoKey, orderedIds) {
+      const state = load(repoKey);
+      // Reassign a fresh ascending run to the listed active items, preserving the
+      // given sequence; unlisted items keep their order.
+      for (const id of orderedIds) {
+        const item = state.items.find((t) => t.id === id);
+        if (item) item.order = ++state.seq;
+      }
+      return persist(repoKey, state);
+    },
+    setStatus(repoKey, id, status) {
+      const state = load(repoKey);
+      const item = state.items.find((t) => t.id === id);
+      if (item) {
+        item.status = status;
+        if (status === 'active') item.order = ++state.seq; // re-copy → bottom of active
+        else pruneDone(state);
+      }
+      return persist(repoKey, state);
+    },
+    delete(repoKey, id) {
+      const state = load(repoKey);
+      state.items = state.items.filter((t) => t.id !== id);
+      return persist(repoKey, state);
+    },
+  };
+}

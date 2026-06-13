@@ -4,6 +4,7 @@ import {
   SESSION_ID,
   type AgentInjectMsg,
   type CommandSummary,
+  type CwdChangedMsg,
   type MonitorApi,
   type MonitorCaptureMsg,
   type MonitorEvent,
@@ -12,6 +13,9 @@ import {
   type PtyDataMsg,
   type PtyExitMsg,
   type TermApi,
+  type TodoItem,
+  type TodoSource,
+  type TodoStatus,
   type UiSettings,
 } from '../shared/ipc';
 
@@ -41,6 +45,20 @@ const monitorApi: MonitorApi = {
   // Global UI prefs (§16.6) — no sessionId; app-wide, not per-session.
   getSettings: () => ipcRenderer.invoke(CH.uiGetSettings) as Promise<UiSettings>,
   setSettings: (settings) => ipcRenderer.send(CH.uiSetSettings, { settings }),
+  onCwdChanged: (cb) => ipcRenderer.on(CH.cwdChanged, (_e, m: CwdChangedMsg) => cb(m)),
+  clearCommands: () => ipcRenderer.send(CH.monitorClearCommands, { sessionId: SESSION_ID }),
+  // Todo (§16.4) — repoKey threaded so an in-flight edit always targets its own repo.
+  todoList: (repoKey) => ipcRenderer.invoke(CH.todoList, { sessionId: SESSION_ID, repoKey }) as Promise<TodoItem[]>,
+  todoAdd: (repoKey, text, source?: TodoSource) =>
+    ipcRenderer.invoke(CH.todoAdd, { sessionId: SESSION_ID, repoKey, text, source }) as Promise<TodoItem[]>,
+  todoUpdate: (repoKey, id, text) =>
+    ipcRenderer.invoke(CH.todoUpdate, { sessionId: SESSION_ID, repoKey, id, text }) as Promise<TodoItem[]>,
+  todoReorder: (repoKey, orderedIds) =>
+    ipcRenderer.invoke(CH.todoReorder, { sessionId: SESSION_ID, repoKey, orderedIds }) as Promise<TodoItem[]>,
+  todoSetStatus: (repoKey, id, status: TodoStatus) =>
+    ipcRenderer.invoke(CH.todoSetStatus, { sessionId: SESSION_ID, repoKey, id, status }) as Promise<TodoItem[]>,
+  todoDelete: (repoKey, id) =>
+    ipcRenderer.invoke(CH.todoDelete, { sessionId: SESSION_ID, repoKey, id }) as Promise<TodoItem[]>,
 };
 
 contextBridge.exposeInMainWorld('term', termApi);

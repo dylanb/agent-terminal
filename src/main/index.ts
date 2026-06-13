@@ -11,6 +11,7 @@ import { installNavigationGuards } from './windowGuards';
 import {
   isValidCapture,
   isValidCaptureCommand,
+  isValidClearCommands,
   isValidCommandsRequest,
   isValidDismiss,
   isValidDismissAll,
@@ -18,11 +19,19 @@ import {
   isValidInput,
   isValidResize,
   isValidSetSettings,
+  isValidTodoAdd,
+  isValidTodoDelete,
+  isValidTodoList,
+  isValidTodoReorder,
+  isValidTodoSetStatus,
+  isValidTodoUpdate,
 } from './ipcValidation';
+import { createTodoStore } from './todoStore';
 import { createUiSettingsStore } from './uiSettings';
 import { registerIpcListeners } from './sessionIpc';
 import { resolveRuntimeConfig } from './runtimeConfig';
 import { createCommandTracker } from './commandTracker';
+import { createCwdTracker } from './cwdTracker';
 import { createScanner } from './scanner';
 import { createInjectionSuppressor } from './injectionSuppression';
 import { createClaudeCodeAdapter } from './adapters/claudeCode';
@@ -51,6 +60,8 @@ async function createWindow(): Promise<void> {
   const store = createMonitorEventStore();
   // Global UI prefs (§16.6) — the only state outside the repo (userData).
   const uiSettings = createUiSettingsStore(path.join(app.getPath('userData'), 'ui-settings.json'));
+  // Repo-scoped todos (§16.3) — persisted in-repo, keyed by the cwd tracker's repo key.
+  const todoStore = createTodoStore({ maxDoneTodos: config.maxDoneTodos });
 
   const send = <C extends SendChannel>(channel: C, payload: ChannelPayloads[C]): void => {
     if (!win.isDestroyed()) win.webContents.send(channel, payload);
@@ -74,6 +85,14 @@ async function createWindow(): Promise<void> {
   });
   // Command history is live off the OSC-133 marks, not §8.3 quiescence (§15.5).
   tracker.onChange(() => send(CH.monitorCommandsChanged, { sessionId: SESSION_ID }));
+  // CWD tracking (§16.3): OSC 7 → repo key; broadcast only on key change so the
+  // pane swaps its repo-scoped todo list once per `cd` across a repo boundary.
+  // TODO(dylan): the full OSC-7 → cwd:changed → repo-list-swap loop through real
+  // node-pty + bash is verified in the §F e2e (plan PR5 5c) — recorded gap.
+  const cwdTracker = createCwdTracker({ onOsc: (id, cb) => shadow.onOsc(id, cb) });
+  cwdTracker.onChange(({ cwd, repoKey }) =>
+    send(CH.cwdChanged, { sessionId: SESSION_ID, cwd, repoKey }),
+  );
   // Drops echoed self-injected input from re-capture (§16.5): the inject path seeds
   // a watermark; the scanner consults it on the next quiet scan.
   // TODO(dylan): the watermark→reply row separation and selfInjectWindowMs default
@@ -162,6 +181,11 @@ async function createWindow(): Promise<void> {
       [CH.monitorDismissAll]: (_e, m) => {
         if (isValidDismissAll(m)) store.clear();
       },
+      // Clear commands (§16.2): drop the whole command history; tracker.onChange
+      // notifies the pane to re-pull (now empty).
+      [CH.monitorClearCommands]: (_e, m) => {
+        if (isValidClearCommands(m)) tracker.clear();
+      },
       [CH.agentInject]: (_e, m) => {
         if (isValidInject(m)) inject(m.text, { submit: m.submit });
       },
@@ -177,6 +201,15 @@ async function createWindow(): Promise<void> {
         isValidCommandsRequest(m)
           ? tracker.summaries().map((s) => ({ ...s, sessionId: SESSION_ID }))
           : [],
+      // Todo CRUD (§16.4) — each returns the fresh repo list; fail-closed to [] on
+      // a malformed payload so a bad message can never mutate another repo's list.
+      [CH.todoList]: (_e, m) => (isValidTodoList(m) ? todoStore.list(m.repoKey) : []),
+      [CH.todoAdd]: (_e, m) => (isValidTodoAdd(m) ? todoStore.add(m.repoKey, m.text, m.source) : []),
+      [CH.todoUpdate]: (_e, m) => (isValidTodoUpdate(m) ? todoStore.update(m.repoKey, m.id, m.text) : []),
+      [CH.todoReorder]: (_e, m) => (isValidTodoReorder(m) ? todoStore.reorder(m.repoKey, m.orderedIds) : []),
+      [CH.todoSetStatus]: (_e, m) =>
+        isValidTodoSetStatus(m) ? todoStore.setStatus(m.repoKey, m.id, m.status) : [],
+      [CH.todoDelete]: (_e, m) => (isValidTodoDelete(m) ? todoStore.delete(m.repoKey, m.id) : []),
     },
   );
 
@@ -185,6 +218,7 @@ async function createWindow(): Promise<void> {
     ptyProcess.kill();
     scanner.dispose();
     suppressor.dispose();
+    cwdTracker.dispose();
     tracker.dispose();
     shadow.dispose();
   });

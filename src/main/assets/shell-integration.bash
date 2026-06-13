@@ -23,6 +23,8 @@ __app_term_precmd() {
   local ec=$?
   printf '\e]133;D;%s\a' "$ec"
   printf '\e]133;A\a'
+  # OSC 7 cwd report (§16.3) so the host can scope the todo list to the repo.
+  printf '\e]7;file://%s%s\a' "${HOSTNAME:-}" "$PWD"
   __app_term_install
   return 0
 }

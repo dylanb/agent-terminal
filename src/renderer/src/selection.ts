@@ -12,6 +12,12 @@ const SEL_COLOR = 'rgba(80, 140, 255, 0.7)';
 export function wireSelection(term: Terminal): void {
   let decorations: IDecoration[] = [];
   const model = createSelectionModel(() => renderSelection());
+  // Manual selection capture routes straight to the repo-scoped Todo list (§16.2);
+  // track the live repo key the same way the action window does.
+  let repoKey: string | null = null;
+  window.monitor.onCwdChanged((m) => {
+    repoKey = m.repoKey;
+  });
 
   function clearDecorations(): void {
     for (const d of decorations) d.dispose();
@@ -78,14 +84,14 @@ export function wireSelection(term: Terminal): void {
     term.paste(stripPasteBreakout(cleanSelectionText(s.text)));
   });
 
+  // Capture selection → straight to the Todo list (§16.2); no Capture-tab block.
+  // TODO(dylan): the real xterm selection → todoAdd path is verified only in the §F
+  // e2e (plan PR5 5c) — jsdom can't drive an xterm selection and the emulator must
+  // not be mocked (CLAUDE.md test rules). Recorded gap.
   document.getElementById('capture-selection')!.addEventListener('click', () => {
     const s = model.get();
-    if (!s.active || !s.start || !s.end) return;
-    window.monitor.capture({
-      text: cleanSelectionText(s.text),
-      range: { start: s.start, end: s.end, baseY: s.baseY, bufferType: s.bufferType },
-      source: 'selection',
-    });
+    if (!s.active || !s.start || !s.end || !repoKey) return;
+    void window.monitor.todoAdd(repoKey, cleanSelectionText(s.text), { type: 'selection' });
   });
 
   document.getElementById('clear-selection')!.addEventListener('click', clearSelection);

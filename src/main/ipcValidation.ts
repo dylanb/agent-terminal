@@ -6,14 +6,31 @@ import {
   SESSION_ID,
   type AgentInjectMsg,
   type CaptureCommandMsg,
+  type ClearCommandsMsg,
   type CommandsRequestMsg,
   type DismissAllMsg,
   type DismissMsg,
   type MonitorCaptureMsg,
   type PtyInputMsg,
   type PtyResizeMsg,
+  type TodoAddMsg,
+  type TodoDeleteMsg,
+  type TodoListMsg,
+  type TodoReorderMsg,
+  type TodoSetStatusMsg,
+  type TodoSourceType,
+  type TodoUpdateMsg,
   type UiSetSettingsMsg,
 } from '../shared/ipc';
+
+const TODO_SOURCE_TYPES: readonly TodoSourceType[] = [
+  'manual',
+  'selection',
+  'report',
+  'finding',
+  'capture',
+  'command-output',
+];
 
 function isRecord(m: unknown): m is Record<string, unknown> {
   return typeof m === 'object' && m !== null;
@@ -66,4 +83,46 @@ export function isValidSetSettings(m: unknown): m is UiSetSettingsMsg {
   if ('splitRatio' in s && (typeof s.splitRatio !== 'number' || !Number.isFinite(s.splitRatio))) return false;
   if ('lastTab' in s && s.lastTab !== 'capture' && s.lastTab !== 'todo') return false;
   return true;
+}
+
+export function isValidClearCommands(m: unknown): m is ClearCommandsMsg {
+  return isRecord(m) && isLiveSession(m);
+}
+
+// ---- todo:* validators (§16.3 / §16.4). repoKey is threaded on every mutation. ----
+
+function isTodoBase(m: unknown): m is Record<string, unknown> {
+  return isRecord(m) && isLiveSession(m) && typeof m.repoKey === 'string';
+}
+
+function isValidSource(s: unknown): boolean {
+  if (s === undefined) return true;
+  if (!isRecord(s)) return false;
+  if (!TODO_SOURCE_TYPES.includes(s.type as TodoSourceType)) return false;
+  if ('eventId' in s && typeof s.eventId !== 'string') return false;
+  return true;
+}
+
+export function isValidTodoList(m: unknown): m is TodoListMsg {
+  return isTodoBase(m);
+}
+
+export function isValidTodoAdd(m: unknown): m is TodoAddMsg {
+  return isTodoBase(m) && typeof m.text === 'string' && isValidSource(m.source);
+}
+
+export function isValidTodoUpdate(m: unknown): m is TodoUpdateMsg {
+  return isTodoBase(m) && typeof m.id === 'string' && typeof m.text === 'string';
+}
+
+export function isValidTodoReorder(m: unknown): m is TodoReorderMsg {
+  return isTodoBase(m) && Array.isArray(m.orderedIds) && m.orderedIds.every((x) => typeof x === 'string');
+}
+
+export function isValidTodoSetStatus(m: unknown): m is TodoSetStatusMsg {
+  return isTodoBase(m) && typeof m.id === 'string' && (m.status === 'active' || m.status === 'done');
+}
+
+export function isValidTodoDelete(m: unknown): m is TodoDeleteMsg {
+  return isTodoBase(m) && typeof m.id === 'string';
 }

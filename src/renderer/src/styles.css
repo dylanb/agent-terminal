@@ -75,6 +75,118 @@ button:hover {
   background: #232323;
 }
 
+/* Tabs (§16.1) */
+#monitor-tabs {
+  display: flex;
+  border-bottom: 1px solid #333;
+}
+
+#monitor-tabs [role='tab'] {
+  flex: 1 1 0;
+  padding: 8px;
+  background: #2a2a2a;
+  color: #b0b0b0;
+  border: none;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+}
+
+#monitor-tabs [role='tab'][aria-selected='true'] {
+  background: #232323;
+  color: #e6e6e6;
+  border-bottom-color: #508cff;
+}
+
+.unread-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-left: 6px;
+  border-radius: 50%;
+  background: #508cff;
+}
+
+.todo-count {
+  margin-left: 6px;
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 8px;
+  background: #333;
+}
+
+#panel-capture,
+#panel-todo {
+  flex: 1 1 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* Todo tab (§16.4) */
+#todo-list {
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.swap-blocked {
+  padding: 6px 8px;
+  border-radius: 4px;
+  background: #4d3a1f;
+  color: #f0d39f;
+  font-size: 12px;
+}
+
+.todo-add {
+  display: flex;
+  gap: 6px;
+}
+
+.todo-new {
+  flex: 1 1 0;
+  resize: vertical;
+  min-height: 2.2em;
+  font-family: inherit;
+}
+
+.todo-item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 6px;
+  border: 1px solid #333;
+  border-radius: 4px;
+}
+
+.todo-item.done {
+  opacity: 0.6;
+}
+
+.todo-item .todo-text {
+  flex: 1 1 120px;
+  white-space: pre-wrap;
+}
+
+.todo-edit-area {
+  flex: 1 1 100%;
+  resize: vertical;
+  font-family: inherit;
+}
+
+.drag-handle {
+  cursor: grab;
+  color: #777;
+}
+
+.todo-done summary {
+  cursor: pointer;
+  color: #b0b0b0;
+  padding: 4px 0;
+}
+
 #monitor-status {
   padding: 8px;
   display: flex;

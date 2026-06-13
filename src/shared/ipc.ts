@@ -23,6 +23,14 @@ export const CH = {
   agentInject: 'agent:inject',
   uiGetSettings: 'ui:getSettings',
   uiSetSettings: 'ui:setSettings',
+  cwdChanged: 'cwd:changed',
+  monitorClearCommands: 'monitor:clearCommands',
+  todoList: 'todo:list',
+  todoAdd: 'todo:add',
+  todoUpdate: 'todo:update',
+  todoReorder: 'todo:reorder',
+  todoSetStatus: 'todo:setStatus',
+  todoDelete: 'todo:delete',
 } as const;
 
 /** Action-window tabs (§16.1). */
@@ -43,6 +51,71 @@ export const DEFAULT_UI_SETTINGS: UiSettings = { splitRatio: 0.65, lastTab: 'cap
 
 export interface UiSetSettingsMsg {
   settings: Partial<UiSettings>;
+}
+
+// ---- Todo lists (§16.3 / §16.4) ----
+
+export type TodoStatus = 'active' | 'done';
+
+/** Where a todo came from (§16.3): manual entry, a selection capture, or a semantic event. */
+export type TodoSourceType = 'manual' | 'selection' | 'report' | 'finding' | 'capture' | 'command-output';
+
+export interface TodoSource {
+  type: TodoSourceType;
+  /** The source MonitorEvent id, when added from a capture (§16.2). */
+  eventId?: string;
+}
+
+/**
+ * A persistent, repo-scoped todo (§16.3). `order` is the sort key within a status
+ * group (active list / Done section). Strict-typed, no `any`, per CLAUDE.md.
+ */
+export interface TodoItem {
+  id: string;
+  repoKey: string;
+  text: string;
+  status: TodoStatus;
+  order: number;
+  createdAt: string;
+  source?: TodoSource;
+}
+
+export interface TodoListMsg {
+  sessionId: SessionId;
+  repoKey: string;
+}
+
+export interface TodoAddMsg {
+  sessionId: SessionId;
+  repoKey: string;
+  text: string;
+  source?: TodoSource;
+}
+
+export interface TodoUpdateMsg {
+  sessionId: SessionId;
+  repoKey: string;
+  id: string;
+  text: string;
+}
+
+export interface TodoReorderMsg {
+  sessionId: SessionId;
+  repoKey: string;
+  orderedIds: string[];
+}
+
+export interface TodoSetStatusMsg {
+  sessionId: SessionId;
+  repoKey: string;
+  id: string;
+  status: TodoStatus;
+}
+
+export interface TodoDeleteMsg {
+  sessionId: SessionId;
+  repoKey: string;
+  id: string;
 }
 
 export interface PtyDataMsg {
@@ -157,9 +230,24 @@ export interface DismissAllMsg {
   sessionId: SessionId;
 }
 
+/** Clear the command-history list — Dismiss-all for commands (§16.2). */
+export interface ClearCommandsMsg {
+  sessionId: SessionId;
+}
+
 export interface MonitorEventMsg {
   sessionId: SessionId;
   event: MonitorEvent;
+}
+
+/**
+ * The agent's repo key changed (OSC 7 → §16.3); the action window re-pulls
+ * `todo:list` for `repoKey`, blocking a swap while a todo edit is open (§16.3).
+ */
+export interface CwdChangedMsg {
+  sessionId: SessionId;
+  cwd: string;
+  repoKey: string;
 }
 
 export type AgentState = 'active' | 'quiet';
@@ -185,6 +273,7 @@ export interface ChannelPayloads {
   'monitor:event': MonitorEventMsg;
   'monitor:update': MonitorUpdateMsg;
   'monitor:commandsChanged': CommandsChangedMsg;
+  'cwd:changed': CwdChangedMsg;
 }
 
 export type SendChannel = keyof ChannelPayloads;
@@ -218,6 +307,17 @@ export interface MonitorApi {
   /** Global UI prefs — split ratio + last tab (§16.6). */
   getSettings(): Promise<UiSettings>;
   setSettings(settings: Partial<UiSettings>): void;
+  /** The agent's repo key changed (OSC 7 → §16.3); pane re-pulls its todo list. */
+  onCwdChanged(cb: (msg: CwdChangedMsg) => void): void;
+  /** Clear the command-history list — Dismiss-all for commands (§16.2). */
+  clearCommands(): void;
+  // Todo (§16.4) — repoKey threaded so an in-flight edit always targets its own repo.
+  todoList(repoKey: string): Promise<TodoItem[]>;
+  todoAdd(repoKey: string, text: string, source?: TodoSource): Promise<TodoItem[]>;
+  todoUpdate(repoKey: string, id: string, text: string): Promise<TodoItem[]>;
+  todoReorder(repoKey: string, orderedIds: string[]): Promise<TodoItem[]>;
+  todoSetStatus(repoKey: string, id: string, status: TodoStatus): Promise<TodoItem[]>;
+  todoDelete(repoKey: string, id: string): Promise<TodoItem[]>;
 }
 
 declare global {

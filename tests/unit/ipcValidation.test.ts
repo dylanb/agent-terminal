@@ -3,6 +3,7 @@ import { SESSION_ID } from '../../src/shared/ipc';
 import {
   isValidCapture,
   isValidCaptureCommand,
+  isValidClearCommands,
   isValidCommandsRequest,
   isValidDismiss,
   isValidDismissAll,
@@ -10,6 +11,12 @@ import {
   isValidInput,
   isValidResize,
   isValidSetSettings,
+  isValidTodoAdd,
+  isValidTodoDelete,
+  isValidTodoList,
+  isValidTodoReorder,
+  isValidTodoSetStatus,
+  isValidTodoUpdate,
 } from '../../src/main/ipcValidation';
 
 const sid = SESSION_ID;
@@ -85,5 +92,55 @@ describe('IPC payload validation (§6 — renderer-supplied input is untrusted)'
     expect(isValidSetSettings({ settings: null })).toBe(false);
     expect(isValidSetSettings({})).toBe(false);
     expect(isValidSetSettings(null)).toBe(false);
+  });
+
+  it('accepts a clear-commands request and rejects a wrong sessionId (§16.2)', () => {
+    expect(isValidClearCommands({ sessionId: sid })).toBe(true);
+    expect(isValidClearCommands({ sessionId: 'other' })).toBe(false);
+    expect(isValidClearCommands(null)).toBe(false);
+  });
+
+  // ---- todo:* validators (§16.3 / §16.4) ----
+
+  it('accepts a todo:list and rejects a missing/non-string repoKey or wrong session', () => {
+    expect(isValidTodoList({ sessionId: sid, repoKey: '/repo' })).toBe(true);
+    expect(isValidTodoList({ sessionId: sid, repoKey: 7 })).toBe(false);
+    expect(isValidTodoList({ sessionId: sid })).toBe(false);
+    expect(isValidTodoList({ sessionId: 'other', repoKey: '/repo' })).toBe(false);
+  });
+
+  it('accepts a todo:add with/without a source and rejects bad text or source', () => {
+    expect(isValidTodoAdd({ sessionId: sid, repoKey: '/r', text: 'do it' })).toBe(true);
+    expect(isValidTodoAdd({ sessionId: sid, repoKey: '/r', text: 'x', source: { type: 'finding', eventId: 'e1' } })).toBe(true);
+    expect(isValidTodoAdd({ sessionId: sid, repoKey: '/r', text: 'x', source: { type: 'manual' } })).toBe(true);
+    expect(isValidTodoAdd({ sessionId: sid, repoKey: '/r', text: 7 })).toBe(false);
+    expect(isValidTodoAdd({ sessionId: sid, repoKey: '/r', text: 'x', source: { type: 'bogus' } })).toBe(false);
+    expect(isValidTodoAdd({ sessionId: sid, repoKey: '/r', text: 'x', source: { type: 'finding', eventId: 7 } })).toBe(false);
+    expect(isValidTodoAdd({ sessionId: sid, text: 'x' })).toBe(false);
+  });
+
+  it('accepts a todo:update and rejects missing id/text', () => {
+    expect(isValidTodoUpdate({ sessionId: sid, repoKey: '/r', id: 'a', text: 'b' })).toBe(true);
+    expect(isValidTodoUpdate({ sessionId: sid, repoKey: '/r', id: 'a' })).toBe(false);
+    expect(isValidTodoUpdate({ sessionId: sid, repoKey: '/r', id: 7, text: 'b' })).toBe(false);
+  });
+
+  it('accepts a todo:reorder with a string[] and rejects a non-array / non-string entries', () => {
+    expect(isValidTodoReorder({ sessionId: sid, repoKey: '/r', orderedIds: ['a', 'b'] })).toBe(true);
+    expect(isValidTodoReorder({ sessionId: sid, repoKey: '/r', orderedIds: [] })).toBe(true);
+    expect(isValidTodoReorder({ sessionId: sid, repoKey: '/r', orderedIds: 'a' })).toBe(false);
+    expect(isValidTodoReorder({ sessionId: sid, repoKey: '/r', orderedIds: ['a', 7] })).toBe(false);
+  });
+
+  it('accepts a todo:setStatus with a valid status and rejects anything else', () => {
+    expect(isValidTodoSetStatus({ sessionId: sid, repoKey: '/r', id: 'a', status: 'done' })).toBe(true);
+    expect(isValidTodoSetStatus({ sessionId: sid, repoKey: '/r', id: 'a', status: 'active' })).toBe(true);
+    expect(isValidTodoSetStatus({ sessionId: sid, repoKey: '/r', id: 'a', status: 'maybe' })).toBe(false);
+    expect(isValidTodoSetStatus({ sessionId: sid, repoKey: '/r', id: 'a' })).toBe(false);
+  });
+
+  it('accepts a todo:delete and rejects a missing id', () => {
+    expect(isValidTodoDelete({ sessionId: sid, repoKey: '/r', id: 'a' })).toBe(true);
+    expect(isValidTodoDelete({ sessionId: sid, repoKey: '/r' })).toBe(false);
   });
 });

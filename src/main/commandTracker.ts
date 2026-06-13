@@ -58,6 +58,8 @@ export interface CommandTrackerDeps {
 
 export interface CommandTracker {
   summaries(): CommandSpanSummary[];
+  /** Clear the whole history — Dismiss-all for commands (§16.2); disposes all markers. */
+  clear(): void;
   capture(id: string): CommandCapture | undefined;
   /** Output ranges of finished spans, for scanner gating (§15.6). */
   closedSpans(): CommandSpanRange[];
@@ -235,6 +237,15 @@ export function createCommandTracker(deps: CommandTrackerDeps): CommandTracker {
         startedAt: s.startedAt,
         truncated: s.truncated,
       }));
+    },
+    clear() {
+      if (pendingB) {
+        pendingB.marker.dispose();
+        pendingB = null;
+      }
+      for (const s of spans) disposeSpan(s);
+      spans.length = 0;
+      emitChange();
     },
     capture(id) {
       const span = spans.find((s) => s.id === id);

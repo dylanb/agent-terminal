@@ -125,6 +125,27 @@ describe('resizable splitter & ratio persistence (§16.6)', () => {
     );
   });
 
+  it('notifies the terminal to refit (window resize) when the layout changes', async () => {
+    // The terminal pane fits xterm to its width on window resize; if the splitter
+    // changes flex-basis without a resize, the xterm canvas overflows the shrunken
+    // pane and overlaps the monitor. So a layout change must dispatch a resize.
+    const settings = makeSettings(0.5);
+    let resizes = 0;
+    const onResize = () => resizes++;
+    window.addEventListener('resize', onResize);
+    try {
+      dispose = wireLayout(settings);
+      await flush();
+      expect(resizes).toBeGreaterThan(0); // applied the stored ratio → refit
+
+      const before = resizes;
+      drag(450);
+      expect(resizes).toBeGreaterThan(before); // drag rebalanced → refit
+    } finally {
+      window.removeEventListener('resize', onResize);
+    }
+  });
+
   it('round-trips a dragged ratio through settings and restores it on reload', async () => {
     const settings = makeSettings(0.65);
     dispose = wireLayout(settings);

@@ -3,6 +3,7 @@ import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createShadowModel } from '../../src/main/shadow';
 import { createCommandTracker, type CommandTracker } from '../../src/main/commandTracker';
+import { createCwdTracker } from '../../src/main/cwdTracker';
 import { resolveRuntimeConfig } from '../../src/main/runtimeConfig';
 
 const SCRIPT = path.resolve(__dirname, '../../src/main/assets/shell-integration.bash');
@@ -62,5 +63,19 @@ describe('shell integration script (§15.5 / D3) — real bash under a PTY', () 
     expect(echo).toBeTruthy();
     expect(echo!.exitCode).toBe(0);
     expect(tracker.capture(echo!.id)?.text).toContain('hi');
+  });
+
+  it('emits OSC 7 on each prompt so the cwd tracker follows a real `cd` (§16.3)', async () => {
+    const output = runBashSession('cd /tmp\nexit\n');
+    expect(output).toMatch(/\x1b]7;file:\/\//); // PTY produced an OSC 7 cwd mark
+
+    shadow = createShadowModel({ cols: 80, rows: 24, settleMs: 5, quietMs: 20, onStatus: () => {} });
+    const cwdTracker = createCwdTracker({ onOsc: (id, cb) => shadow.onOsc(id, cb), resolveRepoKey: (c) => c });
+    shadow.write(output);
+    await sleep(80);
+
+    // The session's last prompt fires after `cd /tmp`, so the tracker lands there.
+    expect(cwdTracker.cwd()).toBe('/tmp');
+    cwdTracker.dispose();
   });
 });

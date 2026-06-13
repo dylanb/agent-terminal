@@ -51,6 +51,18 @@ describe('command tracker (§15.5 — OSC 133 segmentation, detection only)', ()
     expect(s[0].truncated).toBe(false);
   });
 
+  it('clear() empties the command list and fires a change (Clear commands, §16.2)', async () => {
+    setup();
+    shadow.write(runCmd('echo hi', 'hi\r\n', 0));
+    await sleep(60);
+    expect(tracker.summaries().length).toBe(1);
+    let changed = 0;
+    tracker.onChange(() => changed++);
+    tracker.clear();
+    expect(tracker.summaries()).toEqual([]);
+    expect(changed).toBe(1);
+  });
+
   it('captures a finished command output on demand', async () => {
     setup();
     shadow.write(runCmd('echo hi', 'hi\r\n', 0));

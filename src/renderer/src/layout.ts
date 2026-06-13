@@ -25,6 +25,8 @@ export function wireLayout(settings: LayoutSettings): () => void {
 
   let ratio = DEFAULT_SPLIT_RATIO;
   let dragging = false;
+  // Guards the self-dispatched resize below from re-entering our own resize handler.
+  let selfResize = false;
 
   // Min widths expressed as ratio bounds for the *current* container width.
   const bounds = (): { min: number; max: number } => {
@@ -43,6 +45,12 @@ export function wireLayout(settings: LayoutSettings): () => void {
     splitter.setAttribute('aria-valuenow', String(Math.round(pct)));
     splitter.setAttribute('aria-valuemin', String(Math.round(min * 100)));
     splitter.setAttribute('aria-valuemax', String(Math.round(max * 100)));
+    // The terminal pane width just changed; tell the terminal to refit so its xterm
+    // canvas tracks the new size instead of overflowing into the action window (§16.6).
+    // selfResize guards our own resize handler (below) from re-entering apply().
+    selfResize = true;
+    window.dispatchEvent(new Event('resize'));
+    selfResize = false;
   };
 
   const persist = (): void => settings.setSettings({ splitRatio: ratio });
@@ -79,7 +87,10 @@ export function wireLayout(settings: LayoutSettings): () => void {
     e.preventDefault();
     persist();
   };
-  const onResize = (): void => apply(ratio); // re-clamp against the new container width
+  const onResize = (): void => {
+    if (selfResize) return; // our own dispatch (refit signal) must not re-clamp
+    apply(ratio); // re-clamp against the new container width
+  };
 
   splitter.addEventListener('pointerdown', onPointerDown);
   splitter.addEventListener('dblclick', onDblClick);
