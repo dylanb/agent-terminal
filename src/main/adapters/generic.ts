@@ -7,7 +7,7 @@
 // so a pager showing ordinary prose with a "?" does not false-positive.
 
 import type { Adapter, AdapterContext, DetectedRegion } from './types';
-import type { CommandSpanRange } from '../commandTracker';
+import type { CommandSpanRange } from '../spanTypes';
 
 const QUESTION = /\?\s*$/;
 const YES_NO = /\[y\/n\]/i;

@@ -4,7 +4,7 @@ import { createScanner, type ScannerEmission } from '../../src/main/scanner';
 import { createCommandTracker, type CommandTracker } from '../../src/main/commandTracker';
 import { createClaudeCodeAdapter } from '../../src/main/adapters/claudeCode';
 import { createGenericAdapter } from '../../src/main/adapters/generic';
-import { resolveRuntimeConfig } from '../../src/main/profiles';
+import { resolveRuntimeConfig } from '../../src/main/runtimeConfig';
 import { ALT_BORING, BORING_NO_MARKS, BORING_WITH_MARKS, SPOOFED_OSC } from '../fixtures';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));

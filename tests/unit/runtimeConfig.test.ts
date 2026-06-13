@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { resolveRuntimeConfig } from '../../src/main/profiles';
+import { resolveRuntimeConfig } from '../../src/main/runtimeConfig';
 
 describe('resolveRuntimeConfig (§15.7 — env-overridable per-agent profile seam, no magic numbers)', () => {
   it('defaults quietMs to 1000 and parses a valid override, falling back on garbage', () => {

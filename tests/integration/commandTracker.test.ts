@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { createShadowModel } from '../../src/main/shadow';
 import { createCommandTracker, type CommandTracker } from '../../src/main/commandTracker';
-import { resolveRuntimeConfig, type RuntimeConfig } from '../../src/main/profiles';
+import { resolveRuntimeConfig, type RuntimeConfig } from '../../src/main/runtimeConfig';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const osc = (s: string) => `\x1b]${s}\x07`;
@@ -151,24 +151,29 @@ describe('command tracker (§15.5 — OSC 133 segmentation, detection only)', ()
 
   it('caps concurrent open spans, evicting oldest-first and disposing its markers', async () => {
     setup({ maxOpenSpans: 2 });
-    const created: Array<{ dispose: () => void; disposed: boolean }> = [];
-    // re-wrap addMarker to observe disposal of evicted spans' markers (resource bound)
+    // Observe disposal through the injected addMarker seam with a test-owned wrapper
+    // (delegating the members the tracker uses) rather than mutating the real IMarker.
+    let live = 0;
     tracker.dispose();
     tracker = createCommandTracker({
       reader: shadow.reader,
       addMarker: (r) => {
         const m = shadow.addMarker(r);
-        if (m) {
-          const rec = m as unknown as { dispose: () => void; disposed: boolean };
-          const orig = rec.dispose.bind(rec);
-          rec.disposed = false;
-          rec.dispose = () => {
-            rec.disposed = true;
-            orig();
-          };
-          created.push(rec);
-        }
-        return m;
+        if (!m) return m;
+        live++;
+        const wrapper = {
+          get id() {
+            return m.id;
+          },
+          get line() {
+            return m.line;
+          },
+          dispose() {
+            live--;
+            m.dispose();
+          },
+        };
+        return wrapper as unknown as typeof m;
       },
       onOsc: (id, cb) => shadow.onOsc(id, cb),
       config: { ...resolveRuntimeConfig({}), maxOpenSpans: 2 },
@@ -177,9 +182,10 @@ describe('command tracker (§15.5 — OSC 133 segmentation, detection only)', ()
     const openOnly = (c: string) => osc('133;A') + '$ ' + osc('133;B') + c + '\r\n' + osc('133;C');
     shadow.write(openOnly('a') + openOnly('b') + openOnly('c'));
     await sleep(60);
-    const s = tracker.summaries();
-    expect(s.map((c) => c.command)).toEqual(['b', 'c']);
-    expect(created.some((m) => m.disposed)).toBe(true);
+    expect(tracker.summaries().map((c) => c.command)).toEqual(['b', 'c']);
+    // The evicted span's markers were disposed, not leaked: 3 commands × 1 retained
+    // output marker each, minus the evicted one ⇒ fewer live markers than created.
+    expect(live).toBeLessThan(3);
   });
 
   it('retains at most maxCommandSummaries, dropping oldest', async () => {

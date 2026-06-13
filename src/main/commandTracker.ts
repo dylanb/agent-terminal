@@ -10,6 +10,7 @@
 
 import { randomUUID } from 'node:crypto';
 import type { ShadowMarker, ShadowReader } from './shadow';
+import type { CommandSpanRange } from './spanTypes';
 import { extractText } from './extraction';
 
 interface Mark {
@@ -36,11 +37,6 @@ export interface CommandSpanSummary {
   running: boolean;
   startedAt: number;
   truncated: boolean;
-}
-
-export interface CommandSpanRange {
-  startRow: number;
-  endRow: number;
 }
 
 export interface CommandCapture {

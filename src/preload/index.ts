@@ -30,6 +30,7 @@ const monitorApi: MonitorApi = {
   replay: () => ipcRenderer.invoke(CH.monitorReplay) as Promise<MonitorEvent[]>,
   commands: () =>
     ipcRenderer.invoke(CH.monitorCommands, { sessionId: SESSION_ID }) as Promise<CommandSummary[]>,
+  onCommandsChanged: (cb) => ipcRenderer.on(CH.monitorCommandsChanged, () => cb()),
   captureCommand: (commandId) =>
     ipcRenderer.send(CH.monitorCaptureCommand, { sessionId: SESSION_ID, commandId }),
   inject: (req) =>

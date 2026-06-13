@@ -3,7 +3,7 @@ import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createShadowModel } from '../../src/main/shadow';
 import { createCommandTracker, type CommandTracker } from '../../src/main/commandTracker';
-import { resolveRuntimeConfig } from '../../src/main/profiles';
+import { resolveRuntimeConfig } from '../../src/main/runtimeConfig';
 
 const SCRIPT = path.resolve(__dirname, '../../src/main/assets/shell-integration.bash');
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));

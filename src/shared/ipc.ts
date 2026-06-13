@@ -16,6 +16,7 @@ export const CH = {
   monitorUpdate: 'monitor:update',
   monitorReplay: 'monitor:replay',
   monitorCommands: 'monitor:commands',
+  monitorCommandsChanged: 'monitor:commandsChanged',
   monitorCaptureCommand: 'monitor:captureCommand',
   agentInject: 'agent:inject',
 } as const;
@@ -104,6 +105,11 @@ export interface CommandsRequestMsg {
   sessionId: SessionId;
 }
 
+/** Fired when a command span opens/closes so the pane re-pulls history (§15.5). */
+export interface CommandsChangedMsg {
+  sessionId: SessionId;
+}
+
 export interface CaptureCommandMsg {
   sessionId: SessionId;
   commandId: string;
@@ -136,6 +142,7 @@ export interface ChannelPayloads {
   'pty:exit': PtyExitMsg;
   'monitor:event': MonitorEventMsg;
   'monitor:update': MonitorUpdateMsg;
+  'monitor:commandsChanged': CommandsChangedMsg;
 }
 
 export type SendChannel = keyof ChannelPayloads;
@@ -155,8 +162,10 @@ export interface MonitorApi {
   onUpdate(cb: (msg: MonitorUpdateMsg) => void): void;
   onExit(cb: (msg: PtyExitMsg) => void): void;
   replay(): Promise<MonitorEvent[]>;
-  /** Compact command history (§15.5); re-pulled on each monitor:update tick for liveness. */
+  /** Compact command history (§15.5); re-pulled on each monitor:update tick and commandsChanged signal. */
   commands(): Promise<CommandSummary[]>;
+  /** Mark-driven signal that a command span opened/closed; pane re-pulls history (§15.5). */
+  onCommandsChanged(cb: () => void): void;
   /** Materialize a command's output as a monitor:event block; fail-closed on unknown id (§15.4). */
   captureCommand(commandId: string): void;
   inject(req: Omit<AgentInjectMsg, 'sessionId'>): void;

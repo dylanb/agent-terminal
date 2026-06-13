@@ -1,7 +1,8 @@
 // Runtime configuration seam (§15.7). Every threshold the scanner/tracker would
 // otherwise hardcode resolves here, env-overridable like APP_SUBMIT_DELAY_MS — so
-// no magic numbers leak downstream. The per-agent profile table is the future seam
-// that replaces these env lookups without touching call sites (D10).
+// no magic numbers leak downstream.
+// TODO(dylan): a per-agent profile table (D10) is the intended future seam to
+// replace these env lookups without touching call sites.
 
 const DEFAULTS = {
   quietMs: 1000,

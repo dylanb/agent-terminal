@@ -9,7 +9,8 @@ files:
 asarUnpack:
   - node_modules/node-pty/**
   # Keep the sourced shell-integration script on disk so bash can read it (§15.5 / D3).
-  - out/main/**
+  # Scoped to the .bash asset only — the compiled main bundle stays sealed inside the asar.
+  - out/main/**/*.bash
 mac:
   target:
     - dmg

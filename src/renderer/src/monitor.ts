@@ -28,17 +28,16 @@ export function wireMonitorPane(): void {
   let alive = true;
   let last: MonitorUpdateMsg | null = null;
   let quietTick: ReturnType<typeof setInterval> | null = null;
+  let quietCounterEl: HTMLElement | null = null;
+  const rendered = new Set<string>();
 
   function renderStatus(): void {
     const state = last?.agentState ?? 'quiet';
-    const quietFor =
-      state === 'quiet' && last?.quietSince
-        ? ` for ${Math.max(0, Math.round((Date.now() - last.quietSince) / 1000))}s`
-        : '';
     statusEl.innerHTML = '';
+    quietCounterEl = null;
     const items: Array<[string, string, boolean]> = [
       ['session', alive ? 'alive' : 'exited', alive],
-      ['agent', state === 'active' ? 'working' : `quiet${quietFor}`, state === 'active'],
+      ['agent', state === 'active' ? 'working' : 'quiet', state === 'active'],
       ['full-screen', last?.altScreen ? 'yes' : 'no', !!last?.altScreen],
       ['paste mode', last?.bracketedPaste ? 'on' : 'off', !!last?.bracketedPaste],
     ];
@@ -47,8 +46,25 @@ export function wireMonitorPane(): void {
       chip.className = `status-chip${on ? ' on' : ''}`;
       chip.dataset.status = label;
       chip.textContent = `${label}: ${value}`;
+      // The "quiet for Ns" counter ticks every second; keeping it in an aria-hidden
+      // child stops the aria-live status region re-announcing on every tick (WCAG 4.1.3).
+      if (label === 'agent' && state === 'quiet') {
+        quietCounterEl = document.createElement('span');
+        quietCounterEl.className = 'quiet-counter';
+        quietCounterEl.setAttribute('aria-hidden', 'true');
+        chip.appendChild(quietCounterEl);
+      }
       statusEl.appendChild(chip);
     }
+    updateQuietCounter();
+  }
+
+  function updateQuietCounter(): void {
+    if (!quietCounterEl) return;
+    const since = last?.quietSince;
+    quietCounterEl.textContent = since
+      ? ` for ${Math.max(0, Math.round((Date.now() - since) / 1000))}s`
+      : '';
   }
 
   function renderCommands(commands: CommandSummary[]): void {
@@ -69,6 +85,8 @@ export function wireMonitorPane(): void {
 
       const capture = document.createElement('button');
       capture.textContent = 'Capture';
+      // Repeated "Capture" buttons need per-row accessible names (WCAG 2.4.6/4.1.2).
+      capture.setAttribute('aria-label', `Capture output of: ${c.command}`);
       // Fail-closed: we ask main to materialize the block; it flows back via
       // monitor:event only if the id is still valid (§15.4). No optimistic render.
       capture.addEventListener('click', () => window.monitor.captureCommand(c.id));
@@ -83,6 +101,10 @@ export function wireMonitorPane(): void {
   }
 
   function appendBlock(event: MonitorEvent): void {
+    // Replay (§8.4) and the live monitor:event stream can both deliver the same id;
+    // render each stored event exactly once.
+    if (rendered.has(event.id)) return;
+    rendered.add(event.id);
     const time = new Date(event.capturedAt).toLocaleTimeString();
     const block = document.createElement('div');
     block.className = 'capture-block';
@@ -137,10 +159,14 @@ export function wireMonitorPane(): void {
     // re-pull the history so it stays live (§15.4).
     pullCommands();
     stopQuietTick();
-    if (msg.agentState === 'quiet') quietTick = setInterval(renderStatus, QUIET_TICK_MS);
+    if (msg.agentState === 'quiet') quietTick = setInterval(updateQuietCounter, QUIET_TICK_MS);
   });
 
   window.monitor.onEvent((event) => appendBlock(event));
+
+  // Mark-driven liveness (§15.5): command spans open/close independent of the §8.3
+  // quiescence machinery, so refresh history on the tracker's change signal too.
+  window.monitor.onCommandsChanged(() => pullCommands());
 
   window.monitor.onExit(() => {
     alive = false;

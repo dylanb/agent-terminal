@@ -1,7 +1,11 @@
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createShadowModel } from '../../src/main/shadow';
 import { createScanner, type ScannerEmit } from '../../src/main/scanner';
+import { createGenericAdapter } from '../../src/main/adapters/generic';
 import type { Adapter } from '../../src/main/adapters/types';
+import type { CommandSpanRange } from '../../src/main/spanTypes';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 // Generous margins: vitest runs files in parallel workers, so setTimeout-based
@@ -43,7 +47,15 @@ describe('semantic scanner (§15.2/§15.3 — quiet-triggered, watermarked, dedu
     });
   }
 
-  afterEach(() => shadow.dispose());
+  afterEach(() => shadow?.dispose());
+
+  it('is stored as plain text, not a NUL-containing binary blob', () => {
+    // A NUL (or other control byte) in the source makes git treat the file as
+    // binary, destroying diff/blame/merge for the central scanner module.
+    const bytes = readFileSync(path.resolve(__dirname, '../../src/main/scanner.ts'));
+    const offending = bytes.findIndex((b) => b === 0 || (b < 9) || (b > 13 && b < 32));
+    expect(offending, `control byte 0x${bytes[offending]?.toString(16)} at offset ${offending}`).toBe(-1);
+  });
 
   it('emits only on the quiet transition, never per output chunk', async () => {
     setup();
@@ -84,6 +96,48 @@ describe('semantic scanner (§15.2/§15.3 — quiet-triggered, watermarked, dedu
     await goQuiet();
     const q2 = emitted.find((e) => e.text === 'Q2?')!;
     expect(q2.truncated).toBe(true);
+  });
+
+  function setupGeneric(closed: CommandSpanRange[] = []) {
+    emitted = [];
+    shadow = createShadowModel({ cols: 80, rows: 24, scrollback: 5000, settleMs: SETTLE, quietMs: QUIET, onStatus: () => {} });
+    createScanner({
+      reader: shadow.reader,
+      addMarker: (r) => shadow.addMarker(r),
+      onQuiet: (cb) => shadow.onQuiet(cb),
+      adapters: [], // no specific adapter matches → degrade to the generic fallback (§15.3)
+      fallback: createGenericAdapter(),
+      dedupRetention: 200,
+      closedSpans: () => closed,
+      emit: (e) => emitted.push(e),
+    });
+  }
+
+  it('degrades to the generic fallback and labels its emissions heuristic', async () => {
+    setupGeneric();
+    shadow.write('Do you want to proceed?\r\nAre you sure?\r\n');
+    await goQuiet();
+    const text = (t: string) => emitted.filter((e) => e.type === t).map((e) => e.text);
+    expect(text('permission-prompt')).toContain('Do you want to proceed?'); // strong prompt
+    expect(text('agent-question')).toContain('Are you sure?'); // bare trailing ?
+    expect(emitted.every((e) => e.source === 'heuristic')).toBe(true);
+  });
+
+  it('suppresses an unchanged prompt-like line on re-scan but emits a newly-changed one', async () => {
+    setupGeneric();
+    shadow.write('Are you sure?\r\n');
+    await goQuiet();
+    expect(emitted.map((e) => e.text)).toEqual(['Are you sure?']);
+    shadow.write('All done now?\r\n'); // prior line stable (chrome), a new prompt-like line appears
+    await goQuiet();
+    expect(emitted.map((e) => e.text)).toEqual(['Are you sure?', 'All done now?']);
+  });
+
+  it('skips a prompt-like line that falls inside a closed command-output span (§15.6)', async () => {
+    setupGeneric([{ startRow: 0, endRow: 5 }]); // the prompt text lands on row 0 = command output
+    shadow.write('Are you sure?\r\n');
+    await goQuiet();
+    expect(emitted).toEqual([]);
   });
 
   it('runs on the alternate buffer without crashing and dedups identical screens', async () => {

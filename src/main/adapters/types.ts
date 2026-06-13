@@ -5,7 +5,7 @@
 
 import type { MonitorEventSource, MonitorEventType } from '../../shared/ipc';
 import type { ShadowReader } from '../shadow';
-import type { CommandSpanRange } from '../commandTracker';
+import type { CommandSpanRange } from '../spanTypes';
 
 export interface AdapterContext {
   reader: ShadowReader;

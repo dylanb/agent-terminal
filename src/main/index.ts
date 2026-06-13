@@ -7,7 +7,7 @@ import { createShadowModel } from './shadow';
 import { spawnAgentShell } from './pty';
 import { createOutputGate } from './outputGate';
 import { resolveRendererTarget } from './rendererTarget';
-import { denyWindowOpen, preventForeignNavigation } from './windowGuards';
+import { installNavigationGuards } from './windowGuards';
 import {
   isValidCapture,
   isValidCaptureCommand,
@@ -17,7 +17,7 @@ import {
   isValidResize,
 } from './ipcValidation';
 import { registerIpcListeners } from './sessionIpc';
-import { resolveRuntimeConfig } from './profiles';
+import { resolveRuntimeConfig } from './runtimeConfig';
 import { createCommandTracker } from './commandTracker';
 import { createScanner } from './scanner';
 import { createClaudeCodeAdapter } from './adapters/claudeCode';
@@ -37,8 +37,7 @@ async function createWindow(): Promise<void> {
 
   // The preload bridge exposes PTY-writing APIs; the window must never navigate
   // away from the bundled renderer or open child windows (§6, security checklist).
-  win.webContents.setWindowOpenHandler(denyWindowOpen);
-  win.webContents.on('will-navigate', preventForeignNavigation);
+  installNavigationGuards(win.webContents);
 
   const config = resolveRuntimeConfig(process.env);
   const ptyProcess = await spawnAgentShell({
@@ -66,6 +65,8 @@ async function createWindow(): Promise<void> {
     onOsc: (id, cb) => shadow.onOsc(id, cb),
     config,
   });
+  // Command history is live off the OSC-133 marks, not §8.3 quiescence (§15.5).
+  tracker.onChange(() => send(CH.monitorCommandsChanged, { sessionId: SESSION_ID }));
   const scanner = createScanner({
     reader: shadow.reader,
     addMarker: (r) => shadow.addMarker(r),

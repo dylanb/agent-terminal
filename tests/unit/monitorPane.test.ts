@@ -37,11 +37,13 @@ describe('monitor pane DOM (§9/§15.6 — talks only to window.monitor.*)', () 
     event?: (e: MonitorEvent) => void;
     update?: (m: unknown) => void;
     exit?: () => void;
+    commandsChanged?: () => void;
   };
   let monitor: {
     onEvent: ReturnType<typeof vi.fn>;
     onUpdate: ReturnType<typeof vi.fn>;
     onExit: ReturnType<typeof vi.fn>;
+    onCommandsChanged: ReturnType<typeof vi.fn>;
     replay: ReturnType<typeof vi.fn>;
     commands: ReturnType<typeof vi.fn>;
     captureCommand: ReturnType<typeof vi.fn>;
@@ -58,6 +60,7 @@ describe('monitor pane DOM (§9/§15.6 — talks only to window.monitor.*)', () 
       onEvent: vi.fn((cb) => (handlers.event = cb)),
       onUpdate: vi.fn((cb) => (handlers.update = cb)),
       onExit: vi.fn((cb) => (handlers.exit = cb)),
+      onCommandsChanged: vi.fn((cb) => (handlers.commandsChanged = cb)),
       replay: vi.fn(async () => []),
       commands: vi.fn(async () => []),
       captureCommand: vi.fn(),
@@ -73,6 +76,14 @@ describe('monitor pane DOM (§9/§15.6 — talks only to window.monitor.*)', () 
 
   const blocks = () => document.getElementById('monitor-blocks')!;
   const history = () => document.getElementById('command-history')!;
+  const status = () => document.getElementById('monitor-status')!;
+
+  /** Text a screen reader would announce: the subtree minus aria-hidden branches. */
+  function announcedText(root: HTMLElement): string {
+    const clone = root.cloneNode(true) as HTMLElement;
+    clone.querySelectorAll('[aria-hidden="true"]').forEach((n) => n.remove());
+    return (clone.textContent ?? '').replace(/\s+/g, ' ').trim();
+  }
 
   it('renders a known type with a type badge', async () => {
     wireMonitorPane();
@@ -132,6 +143,62 @@ describe('monitor pane DOM (§9/§15.6 — talks only to window.monitor.*)', () 
     expect(buttons.length).toBe(2);
     (buttons[1] as HTMLButtonElement).click();
     expect(monitor.inject).toHaveBeenCalledWith({ text: 'hi', submit: true });
+  });
+
+  it('renders a stored event exactly once when replay and a live event carry the same id', async () => {
+    monitor.replay.mockResolvedValueOnce([makeEvent({ id: 'dup', text: 'once' })]);
+    wireMonitorPane();
+    // Live event with the same id arrives before replay resolves (the §8.4 race).
+    handlers.event!(makeEvent({ id: 'dup', text: 'once' }));
+    await flush();
+    expect(blocks().querySelectorAll('[data-event-id="dup"]').length).toBe(1);
+  });
+
+  it('gives each Capture button a distinct accessible name naming its command (WCAG 2.4.6/4.1.2)', async () => {
+    monitor.commands.mockResolvedValueOnce([
+      makeCommand({ id: 'c1', command: 'ls' }),
+      makeCommand({ id: 'c2', command: 'sleep 5' }),
+    ]);
+    wireMonitorPane();
+    await flush();
+    const buttons = Array.from(history().querySelectorAll('.command-entry button')) as HTMLButtonElement[];
+    const names = buttons.map((b) => b.getAttribute('aria-label') ?? b.textContent ?? '');
+    expect(names[0]).toContain('ls');
+    expect(names[1]).toContain('sleep 5');
+    expect(names[0]).not.toBe(names[1]);
+  });
+
+  it('does not re-announce the live status region on each quiet tick (WCAG 4.1.3)', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-06-13T00:00:00.000Z'));
+    try {
+      wireMonitorPane();
+      handlers.update!({
+        sessionId: 's1',
+        altScreen: false,
+        bracketedPaste: false,
+        agentState: 'quiet',
+        quietSince: Date.now() - 3000,
+      });
+      const before = announcedText(status());
+      expect(before).toContain('agent: quiet');
+      expect(before).not.toMatch(/for \d+s/); // the changing duration is not announced
+      vi.advanceTimersByTime(3000); // three quiet ticks
+      expect(announcedText(status())).toBe(before); // live region unchanged → no re-announcement
+      const counter = status().querySelector('[aria-hidden="true"]');
+      expect(counter?.textContent).toMatch(/for \d+s/); // duration still updates, just silently
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('re-pulls command history on a mark-driven change notification (§15.5 liveness)', async () => {
+    wireMonitorPane();
+    await flush();
+    const baseline = monitor.commands.mock.calls.length;
+    handlers.commandsChanged!();
+    await flush();
+    expect(monitor.commands.mock.calls.length).toBeGreaterThan(baseline);
   });
 
   it('renders HTML metacharacters inert (textContent only, never innerHTML)', async () => {
