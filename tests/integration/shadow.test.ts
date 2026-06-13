@@ -97,3 +97,92 @@ describe('shadow screen model (§8)', () => {
     expect(() => shadow.resize(100, 40)).not.toThrow();
   });
 });
+
+describe('shadow read API for semantic capture (§15.2 / D1)', () => {
+  let shadow: ReturnType<typeof createShadowModel>;
+
+  afterEach(() => shadow.dispose());
+
+  function makeShadow(opts: Partial<Parameters<typeof createShadowModel>[0]> = {}) {
+    shadow = createShadowModel({
+      cols: 80,
+      rows: 24,
+      settleMs: SETTLE_MS,
+      quietMs: QUIET_MS,
+      onStatus: () => {},
+      ...opts,
+    });
+    return shadow;
+  }
+
+  it('onQuiet fires once per active→quiet transition and observes just-written bytes (settling barrier)', async () => {
+    const seen: string[] = [];
+    makeShadow();
+    shadow.onQuiet(() => seen.push(shadow.snapshotText()));
+
+    shadow.write('hello world');
+    await goQuiet();
+    expect(seen.length).toBe(1);
+    expect(seen[0]).toContain('hello world');
+
+    shadow.write('\r\nsecond');
+    await goQuiet();
+    expect(seen.length).toBe(2);
+    expect(seen[1]).toContain('second');
+  });
+
+  it('flags wrapped rows so logical lines can be rejoined (§15.2)', async () => {
+    makeShadow({ cols: 10 });
+    shadow.write('abcdefghijKLMNO'); // 15 cols into a 10-col terminal → row 1 is a wrap
+    await settle();
+    expect(shadow.reader.isLineWrapped(1)).toBe(true);
+    expect(shadow.reader.isLineWrapped(0)).toBe(false);
+  });
+
+  it('marker-as-watermark: a marker disposes (line -1) when its row trims past scrollback (D2)', async () => {
+    makeShadow({ rows: 5, scrollback: 10 });
+    shadow.write('row0\r\n');
+    await settle();
+    const watermark = shadow.addMarker(0)!;
+    expect(watermark).toBeTruthy();
+    expect(watermark.line).toBe(0);
+
+    let lines = '';
+    for (let i = 1; i <= 50; i++) lines += `r${i}\r\n`;
+    shadow.write(lines);
+    await settle();
+    expect(watermark.line).toBe(-1); // trimmed past scrollback → disposed (conservative truncation)
+  });
+
+  it('a marker on a row still in scrollback survives with a shifted line index (D2)', async () => {
+    makeShadow({ rows: 5, scrollback: 50 });
+    shadow.write('mark-here\r\n');
+    await settle();
+    const m = shadow.addMarker(0)!;
+    shadow.write('a\r\nb\r\nc\r\n');
+    await settle();
+    expect(m.line).toBe(0); // still within capacity, no trim → not disposed
+  });
+
+  it('onOsc(133) receives the payload sans ident, and cursor() inside the handler is the mark position', async () => {
+    makeShadow();
+    let received: string | null = null;
+    let cursorAtMark: { x: number; y: number } | null = null;
+    shadow.onOsc(133, (data) => {
+      received = data;
+      cursorAtMark = shadow.reader.cursor();
+    });
+    shadow.write('abc\x1b]133;D;0\x07');
+    await settle();
+    expect(received).toBe('D;0');
+    expect(cursorAtMark).toEqual({ x: 3, y: 0 });
+  });
+
+  it('addMarker returns undefined on the alternate buffer (markers unsupported there, D1)', async () => {
+    makeShadow();
+    shadow.write('\x1b[?1049h');
+    await settle();
+    expect(shadow.reader.bufferType()).toBe('alternate');
+    expect(shadow.addMarker(0)).toBeUndefined();
+  });
+});

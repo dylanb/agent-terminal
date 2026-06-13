@@ -1,9 +1,10 @@
 # Technical Specification — Agent Terminal: Foundation for a Coding-Agent Management Application
 
-**Document status:** Draft v2.4
+**Document status:** Draft v2.5
 **Scope:** Foundation / "walking skeleton" build only — plus drafted requirements for the next phase (§15)
 **Target platforms:** Linux and macOS (Windows out of scope for this version)
 
+> **Changelog v2.5:** Built §15 — semantic capture & command-output capture — now implemented and automated, not just specified. Amendments from building it: **§15.4** previously read "no new renderer-direction IPC channels"; building command-output capture required two, so the clause is **amended** to admit `monitor:commands` (invoke `{sessionId} → CommandSummary[]`, the sole command-history data path) and `monitor:captureCommand` (`{sessionId, commandId}`, fail-closed materialization of a command block) — same renderer→main class as the already-shipped `monitor:replay` (A1). **§6** gains those two channels; `monitor:event` now carries the widened `type`/`source` unions and a `truncated` field; `monitor:update` is clarified as **status-only** (it does *not* carry commands — the pane re-pulls `monitor:commands` on each update tick for liveness). **§5** gains the opt-out shell-integration hook: the session sources an app-owned script via `PROMPT_COMMAND` *after* the user's startup files (env seam, never `--rcfile`), emitting OSC 133 marks; disable with `APP_SHELL_INTEGRATION=0` or a non-bash `APP_SHELL`; an rc that overwrites `PROMPT_COMMAND` disables command capture (spec-sanctioned absence). **§15.1** `completion` stays in the type union but no detector emits it this phase (minimum scope). Trim truncation is stamped scan-wide, not per-region (conservative, A2). All adapter/heuristic thresholds and resource caps resolve through an env-overridable config seam (§15.7) — no magic numbers. Detection-only, no autonomy, as specified. **Review pass:** command history is now live off the marks via a third channel, `monitor:commandsChanged` (§6 / §15.4) — no longer gated on the quiescence tick; the §4 diagram and §10 structure now reflect the §15 modules; the monitor pane renders each stored event exactly once (replay/live dedupe) and the status live region no longer re-announces the quiet counter every second (WCAG 4.1.3) with per-command Capture buttons individually labeled (WCAG 2.4.6/4.1.2).
 > **Changelog v2.4:** Review-driven reconciliation pass (no scope change). Contract: documented the `monitor:replay` invoke channel and `monitor.onExit` in §6 — both shipped in the skeleton but were missing from the table. Security: the renderer Send path now strips the `ESC[201~` breakout marker via a shared `stripPasteBreakout` guard (the pinned `@xterm/xterm` `paste()` does **not** strip it, contrary to the old §7.5 wording); the window denies navigation/window-open and honors `ELECTRON_RENDERER_URL` only in dev builds; renderer→main IPC payloads are validated before reaching the PTY. Reliability: early PTY output is buffered until the renderer subscribes (§8.1); all per-window IPC listeners are torn down on close; the GUI-launch PATH probe now **merges** with the inherited env instead of replacing it (§5); shadow writes/resizes after `dispose()` are no-ops. Docs: §10/§11 updated to the electron-vite/TypeScript layout; the §4 diagram now routes capture through main's event store and Send through `term.paste()`. §12 annotations corrected to match the tests that now exist. A11y: xterm `screenReaderMode` on; landmarks, a status live region, and contrast fixes.
 > **Changelog v2.3:** Drafted the requirements for the **next build phase** as §15: the semantic-capture pipeline (previously only sketched in §13.1) and a new sibling capability, **command-output capture** via OSC 133 shell-integration marks. §15 is requirements only — it does not change the walking-skeleton scope or the §12 acceptance criteria. Notable design commitments: scan on the §8.3 `active → quiet` transition with a scrollback watermark and explicit truncation marking; per-agent adapters + generic heuristics, detection-only (no autonomy); `MonitorEvent` `type`/`source` unions widen (the §8.4 schema absorbs this, as designed); command segmentation via OSC 133 (never prompt-regex), which will require an opt-out shell-integration hook amending §5 when built.
 > **Changelog v2.2:** Hardening pass from review. Selection model stamps `baseY` + buffer-type at gesture time and extraction is crash-guarded against alt-buffer edge cases (§7.2–§7.3); window resize is debounced to avoid PTY/renderer/shadow width races during output bursts (§7.1); `SUBMIT_DELAY_MS` is a setting (not a constant) with an echo-confirmation upgrade path (§9.3); GUI-launch environment caveat documented (§5); monitor-pane terminology pinned — a shared-renderer DOM component in this version, main-process-mediated by rule (§9).
@@ -80,6 +81,8 @@ flowchart LR
     subgraph Main["Main process (Node)"]
         PTY["node-pty<br/>(interactive bash → agent CLI)"]
         SHADOW["@xterm/headless<br/>shadow screen model<br/>(modes, alt-screen, buffer,<br/>quiescence detector)"]
+        SCAN["semantic scanner<br/>(adapters + generic,<br/>active→quiet · §15.2/§15.3)"]
+        CMD["command tracker<br/>(OSC 133 spans · §15.5)"]
         STORE["event store<br/>stamp + replay"]
         INJ["injection API<br/>wrapForPaste + submit"]
     end
@@ -91,7 +94,8 @@ flowchart LR
             BTN["Send / Capture / Clear buttons"]
         end
         subgraph MonPane["Monitor pane (second UI)"]
-            LIST["captured blocks + status"]
+            LIST["captured + semantic blocks + status"]
+            HIST["command history"]
             ACT["Insert / Insert & submit"]
         end
     end
@@ -107,6 +111,12 @@ flowchart LR
     STORE -- "monitor:event (stamped)" --> Preload --> LIST
     LIST -- "monitor:replay" --> Preload --> STORE
     SHADOW -- "monitor:update (status)" --> Preload --> LIST
+    SHADOW -- "active→quiet scan" --> SCAN
+    SCAN -- "monitor:event (semantic)" --> STORE
+    SHADOW -- "OSC 133 marks" --> CMD
+    CMD -- "monitor:commandsChanged" --> Preload --> HIST
+    HIST -- "monitor:commands / captureCommand {id}" --> Preload --> CMD
+    CMD -- "command-output → monitor:event" --> STORE
     ACT -- "agent:inject {text, submit}" --> Preload --> INJ --> PTY
 ```
 
@@ -134,6 +144,12 @@ After PTY writes settle (debounced), main reads shadow state — `buffer.active.
 
 **G. Lifecycle**
 On `ptyProcess.onExit` → main sends `pty:exit` → both panes show a notice. On window close → main kills the PTY and disposes the shadow.
+
+**H. Agent-semantic capture (shadow → event store → monitor)** — *§15.2/§15.3*
+On the active→quiet transition (§8.3), the **semantic scanner** reads the shadow buffer from a marker watermark, dispatches the scan window to the per-agent adapters (or the generic heuristic fallback when none match), dedups regions by content, and emits each new region on `monitor:event` (`source: shadow-scan` / `heuristic`). Detection only — the scanner never acts on what it finds.
+
+**I. Command-output capture (OSC 133 → command tracker → monitor)** — *§15.5*
+The **command tracker** segments the stream into command spans from OSC 133 marks (`A` prompt-start, `B` command-start, `C` output-start, `D;exit` finished), keyed off the marks and independent of the §8.3 quiescence machinery. When a span opens or closes it fires `monitor:commandsChanged`; the monitor pane re-pulls the compact history via `monitor:commands`. Clicking **Capture** on a history row sends `monitor:captureCommand {id}`, and main materializes that span's output as a `command-output` `monitor:event` (fail-closed on an unknown/trimmed id). Closed-span output ranges also gate the generic heuristic so command output is not mistaken for an agent prompt (§15.6).
 
 ---
 
@@ -175,6 +191,7 @@ const ptyProcess = pty.spawn(shellPath, shellArgs, {
 - Do **not** pass `--rcfile` or `--noprofile`; that would defeat "use the user's default configuration."
 - The locale-dependent vars (`LANG`, `LC_*`) are inherited via `...process.env`, which keeps Unicode/emoji rendering correct.
 - **GUI launches start with a barren environment.** When the app is opened from Launchpad or a Linux `.desktop` file rather than a terminal, Electron's `process.env` lacks the user's interactive `PATH` (nvm/asdf shims, `~/.local/bin`, Homebrew) — and agent CLIs are typically npm-installed onto exactly those paths. macOS is covered: the `-l` login shell re-evaluates the profile inside the PTY. On Linux the non-login shell sources `~/.bashrc`, which rebuilds `PATH` for most nvm/asdf setups — but `PATH` set only in `~/.profile` (login-only) will be missing. **Verify that `claude`/`codex` resolve in a GUI-launched session on Linux**; if not, probe once at startup with `bash -lc 'echo $PATH'` and seed the PTY env with the result. (Launching from a terminal has the inverse issue — a pre-polluted inherited env — which is acceptable: it matches what a nested shell would see.)
+- **Shell-integration hook (§15.5, added v2.5).** To segment command output, the spawn env gets `APP_TERM_INTEGRATION=<app-owned script path>` and `PROMPT_COMMAND=source "$APP_TERM_INTEGRATION"`. `PROMPT_COMMAND` is bash's only **post-rc** env seam, so the script loads *after* the user's startup files — preserving the "use the user's own configuration" rule above (still no `--rcfile`/`--noprofile`). The script installs OSC 133 marks (`A`/`B` via PS1, `C` via PS0, `D;exit` via a precmd), self-heals each prompt, and degrades silently if a foreign/non-bash shell inherits the env without the file. Opt out with `APP_SHELL_INTEGRATION=0` or a non-bash `APP_SHELL`. Known, accepted limit: an rc that *overwrites* (not appends to) `PROMPT_COMMAND` removes the hook — command capture then becomes unavailable, with no heuristic fallback this phase.
 - **Why bash at all (not the agent directly):** the user's shell config provides their PATH, credentials helpers, and aliases that agent CLIs depend on; and a shell lets the user choose/restart/switch agents within one session. Direct-spawn of an agent binary is a possible later optimization, not the foundation.
 - **Agent CLIs care about the terminal they see.** Claude Code, Codex, etc. read `TERM`, the window size, and color support to choose their rendering. The settings above (xterm-256color, truecolor, live resize) are what they expect. Note: Claude Code renders into the **normal** buffer (scrolling transcript); Codex's TUI uses the **alternate screen**. Both cases are handled by this design — see the alt-screen notes in §7.4 and §8.2.
 
@@ -193,9 +210,12 @@ All payloads carry a `sessionId` (a single fixed id in this version). This costs
 | `pty:resize` | renderer → main | `{sessionId, cols, rows}` | Resize the PTY **and** the shadow terminal. |
 | `pty:exit` | main → renderer | `{sessionId, code: number}` | Shell exited. |
 | `monitor:capture` | renderer → main | `{sessionId, text, range, source: 'selection'}` | User captured a region; main stamps `{id, capturedAt}` and broadcasts it back on `monitor:event`. |
-| `monitor:event` | main → renderer | `{sessionId, event}` | Capture blocks and (later) semantic events for the monitor pane. `event = {id, type:'capture', text, range, capturedAt}` in this version. |
-| `monitor:update` | main → renderer | `{sessionId, altScreen: boolean, bracketedPaste: boolean, agentState: 'active'\|'quiet', quietSince: number\|null}` | Debounced shadow-state and activity changes (live status indicators). |
+| `monitor:event` | main → renderer | `{sessionId, event}` | Manual captures, semantic events, and command-output blocks. `event = {id, type, source, text, range, truncated, capturedAt}`; `type`/`source` are the widened §15.4 unions. |
+| `monitor:update` | main → renderer | `{sessionId, altScreen: boolean, bracketedPaste: boolean, agentState: 'active'\|'quiet', quietSince: number\|null}` | Debounced shadow-state and activity changes (live status indicators). **Status-only** — it carries no command data; the pane re-pulls `monitor:commands` on each tick for liveness (§15.4). |
 | `monitor:replay` | renderer → main (invoke) | `() → MonitorEvent[]` | A (re)loaded monitor pane requests the captures stamped so far (§8.4). |
+| `monitor:commands` | renderer → main (invoke) | `{sessionId} → CommandSummary[]` | The sole command-history data path (§15.4 / §15.5); re-invoked on each `monitor:update` tick and `monitor:commandsChanged` signal. |
+| `monitor:commandsChanged` | main → renderer | `{sessionId}` | A command span opened or closed (OSC 133). Signal-only — the pane re-pulls `monitor:commands`. Keeps history live off the marks, independent of §8.3 quiescence (§15.5, added v2.5). |
+| `monitor:captureCommand` | renderer → main | `{sessionId, commandId}` | Materialize a command's output as a `monitor:event` block. **Fail-closed**: an unknown/stale/trimmed id yields nothing and emits no event (§15.4). |
 | `agent:inject` | renderer → main | `{sessionId, text, submit: boolean}` | Monitor-pane action: paste-wrap per live mode, write to PTY, optionally submit. |
 
 > Captures are routed **through main** (rather than renderer-internally, which would be simpler today) so the monitor pane has no dependency on the terminal pane. When the monitor pane later becomes a separate `WebContentsView`/web app, and when captures start originating from the shadow model instead of user selection, nothing about this contract changes.
@@ -217,6 +237,8 @@ contextBridge.exposeInMainWorld('monitor', {
   onUpdate: (cb) => ipcRenderer.on('monitor:update', (_e, m) => cb(m)),
   onExit:   (cb) => ipcRenderer.on('pty:exit',       (_e, m) => cb(m)), // session alive/exited (§9.2)
   replay:   () => ipcRenderer.invoke('monitor:replay'),
+  commands: () => ipcRenderer.invoke('monitor:commands', { sessionId: SID }),
+  captureCommand: (commandId) => ipcRenderer.send('monitor:captureCommand', { sessionId: SID, commandId }),
   inject:   (req) => ipcRenderer.send('agent:inject', { sessionId: SID, ...req }),
 });
 ```
@@ -633,9 +655,12 @@ agent-terminal/
 │   │   ├── index.ts     # window, IPC wiring, output gate, navigation guards
 │   │   ├── pty.ts  shadow.ts  quiescence.ts  inject.ts  eventStore.ts
 │   │   ├── outputGate.ts  sessionIpc.ts  ipcValidation.ts  rendererTarget.ts  windowGuards.ts
+│   │   ├── scanner.ts  commandTracker.ts  extraction.ts  spanTypes.ts  runtimeConfig.ts  shellIntegration.ts  # §15
+│   │   ├── adapters/    # types.ts, claudeCode.ts, generic.ts — per-agent semantic detection (§15.3)
+│   │   └── assets/      # shell-integration.bash — sourced PROMPT_COMMAND OSC-133 marks (§15.5)
 │   ├── preload/index.ts # contextBridge: term + monitor namespaces (§6)
 │   ├── renderer/
-│   │   ├── index.html   # two-pane layout: <main> #terminal + toolbar | <aside> #monitor
+│   │   ├── index.html   # two-pane layout: <main> #terminal + toolbar | <aside> #monitor (status, command-history, blocks)
 │   │   └── src/         # terminal.ts, selection.ts, selectionModel.ts, monitor.ts, styles.css (§7, §9)
 │   └── shared/ipc.ts    # the typed IPC contract — single source of truth (§6)
 ├── tests/               # unit + integration (vitest) + e2e (playwright _electron)
@@ -655,6 +680,7 @@ agent-terminal/
   </div>
   <div id="monitor">
     <div id="monitor-status"></div>
+    <div id="command-history"></div>
     <div id="monitor-blocks"></div>
   </div>
 </div>
@@ -772,6 +798,7 @@ These shape choices above (the shadow model, the event schema, the `sessionId` f
 - Additionally, capture **ordinary command output** (e.g. `ls`, `git status`) as cleanly-delimited, on-demand capturable units (§15.5) — a segmentation problem, solved by shell-integration marks, not a recognition problem.
 - Manual selection capture (§7.5) remains and is unchanged; both new capture families are additive alongside it.
 - **Detection only, no autonomy:** the pipeline emits events; it never acts on them (no auto-answer, no auto-submit). Actions remain the user's, via the existing per-block Insert / Insert & submit.
+- **Deferral (v2.5):** `completion` stays in the `MonitorEventType` union (§15.4) but **no detector emits it this phase** — completion-summary recognition is deferred; the type is reserved so adding it later is additive, not a contract change.
 
 ### 15.2 Trigger, data source, and scan scope
 
@@ -800,7 +827,7 @@ These shape choices above (the shadow model, the event schema, the `sessionId` f
   - A `truncated: boolean` field marks trim-loss (§15.2).
   - `text` is the durable payload, extracted at scan time; `range` remains best-effort provenance, never re-extracted from (§7.3 rule applies unchanged). `id`/`capturedAt` stamped by main; every payload carries `sessionId`.
 - Events append to the existing in-memory event store and are included in replay, so a reloaded monitor pane sees semantic, command, and manual captures in one ordered history.
-- No new renderer-direction IPC channels; the §6 contract gains only the widened unions and fields in `src/shared/ipc.ts` (strict-typed, no `any`).
+- ~~No new renderer-direction IPC channels; the §6 contract gains only the widened unions and fields.~~ **Amended v2.5:** building command-output capture required two renderer→main channels, `monitor:commands` and `monitor:captureCommand` (§6), in the same class as the already-shipped `monitor:replay`, plus one main→renderer signal channel, `monitor:commandsChanged` (a command span opened/closed; the pane re-pulls `monitor:commands`), so history stays live off the OSC-133 marks rather than the §8.3 quiescence tick. Everything else holds: the widened `type`/`source` unions and `truncated` field live in `src/shared/ipc.ts` (strict-typed, no `any`), and `monitor:update` stays status-only (it does **not** carry commands).
 
 ### 15.5 Command-output capture (shell integration)
 
@@ -808,7 +835,7 @@ These shape choices above (the shadow model, the event schema, the `sessionId` f
 - Output rows between `C` and `D` are extracted from scrollback under the same watermark / truncation / wrapped-line rules as §15.2.
 - **Opt-out shell-integration injection (amends §5 when built):** bash does not emit OSC 133 on its own; the hosted session sources a small integration script (`PROMPT_COMMAND`/`PS0` hooks) *after* the user's own startup files — env-var hook, **not** `--rcfile`/`--noprofile`, preserving §5's "user's own configuration" rule. Documented and disableable (e.g. `APP_SHELL_INTEGRATION=0`). Marks are invisible in the renderer (xterm ignores unhandled OSC). When marks are absent (user execs another shell, SSHes away, opt-out), command-output capture is simply unavailable — no heuristic fallback this phase; agent-semantic capture is unaffected.
 - **Capture-on-demand, not block-per-command:** every completed command becomes a *capturable* entry, but plain commands must not each spam a monitor block (`ls; cd; git status` would bury real agent events). The monitor pane shows a compact command history (command + exit code); expanding/capturing one materializes the full `monitor:event` block with the standard Insert / Insert & submit actions.
-- **Boundary cases:** a command still running at scan time (no `D` yet) is an open span, capturable as "output so far." Command capture keys off marks, not quiet transitions — it is independent of the §8.3 quiescence machinery.
+- **Boundary cases:** a command still running at scan time (no `D` yet) is an open span, capturable as "output so far." Command capture keys off marks, not quiet transitions — it is independent of the §8.3 quiescence machinery, and the tracker fires `monitor:commandsChanged` (§6) on each span open/close so the pane's history refreshes without waiting for an `active→quiet` flip.
 - **Composition with agent capture:** an agent CLI launched as a command is itself one OSC-delimited span, telling the scanner exactly which scrollback region belongs to the agent session. The two capture families compose.
 
 ### 15.6 Monitor pane

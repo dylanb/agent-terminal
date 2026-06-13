@@ -17,18 +17,39 @@ export interface SpawnConfig {
   };
 }
 
+/** True when the shell is bash (the only shell whose OSC-133 hooks we install, §15.5). */
+function isBashShell(shellPath: string): boolean {
+  return /(^|\/)bash$/.test(shellPath);
+}
+
 export function buildSpawnConfig(input: {
   platform: NodeJS.Platform;
   env: NodeJS.ProcessEnv;
   home: string;
   probedPath?: string;
+  /** App-owned, non-user-writable path to the sourced integration script (§15.5 / D3). */
+  integrationScriptPath?: string;
 }): SpawnConfig {
-  const { platform, env, home, probedPath } = input;
+  const { platform, env, home, probedPath, integrationScriptPath } = input;
   const cleanEnv = Object.fromEntries(
     Object.entries(env).filter((e): e is [string, string] => e[1] !== undefined),
   );
+  const shellPath = env.APP_SHELL || 'bash';
+
+  // Source the integration script after the user's startup files via the only
+  // post-rc env seam bash exposes — PROMPT_COMMAND. Opt-out: APP_SHELL_INTEGRATION=0
+  // or a non-bash shell (§15.5).
+  const integrate =
+    !!integrationScriptPath && env.APP_SHELL_INTEGRATION !== '0' && isBashShell(shellPath);
+  const integrationEnv: Record<string, string> = integrate
+    ? {
+        APP_TERM_INTEGRATION: integrationScriptPath as string,
+        PROMPT_COMMAND: `source "${integrationScriptPath}"`,
+      }
+    : {};
+
   return {
-    shellPath: env.APP_SHELL || 'bash',
+    shellPath,
     // Login shell on macOS (native terminals' convention), plain interactive on Linux (§5).
     shellArgs: platform === 'darwin' ? ['-l'] : [],
     options: {
@@ -41,6 +62,7 @@ export function buildSpawnConfig(input: {
         ...(probedPath ? { PATH: probedPath } : {}),
         TERM: 'xterm-256color',
         COLORTERM: 'truecolor',
+        ...integrationEnv,
       },
     },
   };
@@ -77,13 +99,14 @@ export function probeLoginPath(): Promise<string | undefined> {
   });
 }
 
-export async function spawnAgentShell(): Promise<pty.IPty> {
+export async function spawnAgentShell(opts: { integrationScriptPath?: string } = {}): Promise<pty.IPty> {
   const probedPath = await probeLoginPath();
   const cfg = buildSpawnConfig({
     platform: process.platform,
     env: process.env,
     home: os.homedir(),
     probedPath,
+    integrationScriptPath: opts.integrationScriptPath,
   });
   return pty.spawn(cfg.shellPath, cfg.shellArgs, cfg.options);
 }

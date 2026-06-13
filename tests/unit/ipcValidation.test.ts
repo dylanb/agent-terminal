@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { SESSION_ID } from '../../src/shared/ipc';
 import {
   isValidCapture,
+  isValidCaptureCommand,
+  isValidCommandsRequest,
   isValidInject,
   isValidInput,
   isValidResize,
@@ -40,5 +42,18 @@ describe('IPC payload validation (§6 — renderer-supplied input is untrusted)'
     expect(isValidCapture({ sessionId: sid, text: 'x', range: null, source: 'selection' })).toBe(true);
     expect(isValidCapture({ sessionId: sid, text: 'x', range: null, source: 'other' })).toBe(false);
     expect(isValidCapture({ sessionId: sid, text: 7, range: null, source: 'selection' })).toBe(false);
+  });
+
+  it('accepts a well-formed commands request and rejects a wrong sessionId (§15.4)', () => {
+    expect(isValidCommandsRequest({ sessionId: sid })).toBe(true);
+    expect(isValidCommandsRequest({ sessionId: 'other' })).toBe(false);
+    expect(isValidCommandsRequest(null)).toBe(false);
+  });
+
+  it('accepts a capture-command request and rejects missing/non-string commandId (§15.4)', () => {
+    expect(isValidCaptureCommand({ sessionId: sid, commandId: 'abc' })).toBe(true);
+    expect(isValidCaptureCommand({ sessionId: sid, commandId: 7 })).toBe(false);
+    expect(isValidCaptureCommand({ sessionId: sid })).toBe(false);
+    expect(isValidCaptureCommand({ sessionId: 'other', commandId: 'abc' })).toBe(false);
   });
 });

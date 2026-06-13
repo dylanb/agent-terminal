@@ -4,8 +4,13 @@
 import { randomUUID } from 'node:crypto';
 import type { MonitorCaptureMsg, MonitorEvent } from '../shared/ipc';
 
+/** A semantic/command event minus the main-stamped id/capturedAt (§15.4). */
+export type NewMonitorEvent = Omit<MonitorEvent, 'id' | 'capturedAt'>;
+
 export interface MonitorEventStore {
   addCapture(msg: MonitorCaptureMsg): MonitorEvent;
+  /** Append a pre-typed semantic/command event; main stamps id/capturedAt (§15.4). */
+  addEvent(event: NewMonitorEvent): MonitorEvent;
   list(): readonly MonitorEvent[];
 }
 
@@ -13,19 +18,26 @@ export function createMonitorEventStore(opts: { now?: () => Date } = {}): Monito
   const now = opts.now ?? (() => new Date());
   const events: MonitorEvent[] = [];
 
+  function append(event: MonitorEvent): MonitorEvent {
+    events.push(event);
+    return event;
+  }
+
   return {
     addCapture(msg) {
-      const event: MonitorEvent = {
+      return append({
         id: randomUUID(),
         sessionId: msg.sessionId,
         type: 'capture',
         source: msg.source,
         text: msg.text,
         range: msg.range,
+        truncated: false,
         capturedAt: now().toISOString(),
-      };
-      events.push(event);
-      return event;
+      });
+    },
+    addEvent(event) {
+      return append({ ...event, id: randomUUID(), capturedAt: now().toISOString() });
     },
     list() {
       return events;

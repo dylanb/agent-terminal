@@ -15,6 +15,9 @@ export const CH = {
   monitorEvent: 'monitor:event',
   monitorUpdate: 'monitor:update',
   monitorReplay: 'monitor:replay',
+  monitorCommands: 'monitor:commands',
+  monitorCommandsChanged: 'monitor:commandsChanged',
+  monitorCaptureCommand: 'monitor:captureCommand',
   agentInject: 'agent:inject',
 } as const;
 
@@ -61,15 +64,55 @@ export interface MonitorCaptureMsg {
   source: 'selection';
 }
 
-/** Event shape the future semantic pipeline will emit (§8.4). */
+/** Typed semantic/command regions plus the manual `capture` (§15.4). */
+export type MonitorEventType =
+  | 'capture'
+  | 'agent-question'
+  | 'permission-prompt'
+  | 'tool-use'
+  | 'diff'
+  | 'completion'
+  | 'command-output';
+
+/** Provenance: manual selection, semantic adapter, generic heuristic, or OSC 133 marks (§15.4). */
+export type MonitorEventSource = 'selection' | 'shadow-scan' | 'shell-integration' | 'heuristic';
+
+/** Event shape emitted on monitor:event (§8.4/§15.4). `text` is the durable payload. */
 export interface MonitorEvent {
   id: string;
   sessionId: SessionId;
-  type: 'capture';
-  source: 'selection';
+  type: MonitorEventType;
+  source: MonitorEventSource;
   text: string;
   range: SelectionRange | null;
+  /** True when scrollback trim lost part of the region before extraction (§15.2). */
+  truncated: boolean;
   capturedAt: string;
+}
+
+/** A completed or running command segmented by OSC 133 marks (§15.5). Newest-last. */
+export interface CommandSummary {
+  id: string;
+  sessionId: SessionId;
+  command: string;
+  exitCode: number | null;
+  running: boolean;
+  startedAt: number;
+  truncated: boolean;
+}
+
+export interface CommandsRequestMsg {
+  sessionId: SessionId;
+}
+
+/** Fired when a command span opens/closes so the pane re-pulls history (§15.5). */
+export interface CommandsChangedMsg {
+  sessionId: SessionId;
+}
+
+export interface CaptureCommandMsg {
+  sessionId: SessionId;
+  commandId: string;
 }
 
 export interface MonitorEventMsg {
@@ -99,6 +142,7 @@ export interface ChannelPayloads {
   'pty:exit': PtyExitMsg;
   'monitor:event': MonitorEventMsg;
   'monitor:update': MonitorUpdateMsg;
+  'monitor:commandsChanged': CommandsChangedMsg;
 }
 
 export type SendChannel = keyof ChannelPayloads;
@@ -118,6 +162,12 @@ export interface MonitorApi {
   onUpdate(cb: (msg: MonitorUpdateMsg) => void): void;
   onExit(cb: (msg: PtyExitMsg) => void): void;
   replay(): Promise<MonitorEvent[]>;
+  /** Compact command history (§15.5); re-pulled on each monitor:update tick and commandsChanged signal. */
+  commands(): Promise<CommandSummary[]>;
+  /** Mark-driven signal that a command span opened/closed; pane re-pulls history (§15.5). */
+  onCommandsChanged(cb: () => void): void;
+  /** Materialize a command's output as a monitor:event block; fail-closed on unknown id (§15.4). */
+  captureCommand(commandId: string): void;
   inject(req: Omit<AgentInjectMsg, 'sessionId'>): void;
 }
 

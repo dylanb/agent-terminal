@@ -41,4 +41,43 @@ describe('monitor event store (§8.4)', () => {
     expect(store.list().map((e) => e.id)).toEqual([a.id, b.id]);
     expect(store.list().map((e) => e.text)).toEqual(['first', 'second']);
   });
+
+  it('stamps captures truncated:false (manual selection is never trim-lossy, §15.4)', () => {
+    const store = createMonitorEventStore({ now: () => new Date(0) });
+    const event = store.addCapture(capture);
+    expect(event.truncated).toBe(false);
+  });
+
+  it('addEvent stamps id/capturedAt and preserves a widened semantic event (§15.4)', () => {
+    const store = createMonitorEventStore({ now: () => new Date('2026-06-12T10:00:00Z') });
+    const event = store.addEvent({
+      sessionId: 's1',
+      type: 'agent-question',
+      source: 'shadow-scan',
+      text: 'Do you want to continue?',
+      range: null,
+      truncated: true,
+    });
+    expect(event.id).toBeTruthy();
+    expect(event.capturedAt).toBe('2026-06-12T10:00:00.000Z');
+    expect(event.type).toBe('agent-question');
+    expect(event.source).toBe('shadow-scan');
+    expect(event.text).toBe('Do you want to continue?');
+    expect(event.truncated).toBe(true);
+    expect(event.sessionId).toBe('s1');
+  });
+
+  it('addEvent appends into the same ordered history as captures', () => {
+    const store = createMonitorEventStore({ now: () => new Date(0) });
+    const cap = store.addCapture({ ...capture, text: 'manual' });
+    const sem = store.addEvent({
+      sessionId: 's1',
+      type: 'command-output',
+      source: 'shell-integration',
+      text: 'hi',
+      range: null,
+      truncated: false,
+    });
+    expect(store.list().map((e) => e.id)).toEqual([cap.id, sem.id]);
+  });
 });
