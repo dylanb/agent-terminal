@@ -114,8 +114,10 @@ button:hover {
   background: #333;
 }
 
-#panel-capture,
-#panel-todo {
+/* :not([hidden]) so the `hidden` attribute (set by tab switching) still wins —
+   a bare `display: flex` would override the UA `[hidden] { display: none }` (§16.1). */
+#panel-capture:not([hidden]),
+#panel-todo:not([hidden]) {
   flex: 1 1 0;
   display: flex;
   flex-direction: column;

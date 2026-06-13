@@ -351,6 +351,23 @@ test('APP_SHELL_INTEGRATION=0 disables command capture (no history entries)', as
 
 // ---- §16: action window — todo lists, focus rule, layout ----
 
+test('only the active tab’s panel is visible (§16.1)', async () => {
+  const capture = page.locator('#panel-capture');
+  const todo = page.locator('#panel-todo');
+
+  // beforeEach selects the Capture tab.
+  await expect(capture).toBeVisible();
+  await expect(todo).toBeHidden();
+
+  await page.locator('#tab-todo').click();
+  await expect(todo).toBeVisible();
+  await expect(capture).toBeHidden();
+
+  await page.locator('#tab-capture').click();
+  await expect(capture).toBeVisible();
+  await expect(todo).toBeHidden();
+});
+
 test('cd between directories swaps the repo-scoped todo list (§16.3)', async () => {
   const todo = (text: string) => page.locator('.todo-item').filter({ hasText: text });
 
