@@ -13,6 +13,7 @@ function makeEvent(over: Partial<MonitorEvent>): MonitorEvent {
     source: 'selection',
     text: 'hello',
     range: null,
+    parentId: null,
     truncated: false,
     capturedAt: '2026-06-12T10:00:00.000Z',
     ...over,
@@ -47,6 +48,8 @@ describe('monitor pane DOM (§9/§15.6 — talks only to window.monitor.*)', () 
     replay: ReturnType<typeof vi.fn>;
     commands: ReturnType<typeof vi.fn>;
     captureCommand: ReturnType<typeof vi.fn>;
+    dismiss: ReturnType<typeof vi.fn>;
+    dismissAll: ReturnType<typeof vi.fn>;
     inject: ReturnType<typeof vi.fn>;
   };
 
@@ -64,6 +67,8 @@ describe('monitor pane DOM (§9/§15.6 — talks only to window.monitor.*)', () 
       replay: vi.fn(async () => []),
       commands: vi.fn(async () => []),
       captureCommand: vi.fn(),
+      dismiss: vi.fn(),
+      dismissAll: vi.fn(),
       inject: vi.fn(),
     };
     (window as unknown as { monitor: typeof monitor }).monitor = monitor;
@@ -87,11 +92,11 @@ describe('monitor pane DOM (§9/§15.6 — talks only to window.monitor.*)', () 
 
   it('renders a known type with a type badge', async () => {
     wireMonitorPane();
-    handlers.event!(makeEvent({ type: 'agent-question', text: 'Continue?' }));
+    handlers.event!(makeEvent({ type: 'tool-use', text: 'Read(x)' }));
     const badge = blocks().querySelector('.capture-badge') as HTMLElement;
     expect(badge).toBeTruthy();
-    expect(badge.dataset.type).toBe('agent-question');
-    expect(blocks().querySelector('.capture-text')!.textContent).toBe('Continue?');
+    expect(badge.dataset.type).toBe('tool-use');
+    expect(blocks().querySelector('.capture-text')!.textContent).toBe('Read(x)');
   });
 
   it('renders an unknown future type generically, never dropped', async () => {
@@ -102,7 +107,7 @@ describe('monitor pane DOM (§9/§15.6 — talks only to window.monitor.*)', () 
     expect(badge.textContent).toContain('mystery-type');
   });
 
-  it('renders command-history entries with exit chips and a Capture button', async () => {
+  it('renders command-history entries newest-first with exit chips and a Capture button', async () => {
     monitor.commands.mockResolvedValueOnce([
       makeCommand({ id: 'c1', command: 'ls', exitCode: 0 }),
       makeCommand({ id: 'c2', command: 'sleep 5', running: true, exitCode: null }),
@@ -111,9 +116,11 @@ describe('monitor pane DOM (§9/§15.6 — talks only to window.monitor.*)', () 
     await flush();
     const entries = history().querySelectorAll('.command-entry');
     expect(entries.length).toBe(2);
-    expect(entries[0].querySelector('.command-text')!.textContent).toBe('ls');
-    expect(entries[0].textContent).toContain('exit 0');
-    expect(entries[1].textContent?.toLowerCase()).toContain('running');
+    // CommandSummary is newest-last; the pane shows newest at the top (v2.6).
+    expect((entries[0] as HTMLElement).dataset.commandId).toBe('c2');
+    expect(entries[0].textContent?.toLowerCase()).toContain('running');
+    expect(entries[1].querySelector('.command-text')!.textContent).toBe('ls');
+    expect(entries[1].textContent).toContain('exit 0');
     expect(entries[0].querySelector('button')!.textContent).toContain('Capture');
   });
 
@@ -139,10 +146,72 @@ describe('monitor pane DOM (§9/§15.6 — talks only to window.monitor.*)', () 
   it('a command-output block gets the standard Insert / Insert & submit actions', async () => {
     wireMonitorPane();
     handlers.event!(makeEvent({ type: 'command-output', source: 'shell-integration', text: 'hi' }));
-    const buttons = blocks().querySelectorAll('.capture-block button');
+    const buttons = blocks().querySelectorAll('.capture-actions button');
     expect(buttons.length).toBe(2);
     (buttons[1] as HTMLButtonElement).click();
     expect(monitor.inject).toHaveBeenCalledWith({ text: 'hi', submit: true });
+  });
+
+  it('shows top-level blocks newest-first (v2.6)', async () => {
+    wireMonitorPane();
+    handlers.event!(makeEvent({ id: 'a', text: 'first' }));
+    handlers.event!(makeEvent({ id: 'b', text: 'second' }));
+    const els = blocks().querySelectorAll('.capture-block');
+    expect(els.length).toBe(2);
+    expect((els[0] as HTMLElement).dataset.eventId).toBe('b');
+    expect((els[1] as HTMLElement).dataset.eventId).toBe('a');
+  });
+
+  it('renders a report as one group with its findings nested, each finding individually injectable', async () => {
+    wireMonitorPane();
+    handlers.event!(makeEvent({ id: 'r', type: 'report', source: 'shadow-scan', text: 'the whole report' }));
+    handlers.event!(makeEvent({ id: 'f1', type: 'finding', parentId: 'r', text: 'finding one' }));
+    handlers.event!(makeEvent({ id: 'f2', type: 'finding', parentId: 'r', text: 'finding two' }));
+
+    const group = blocks().querySelector('.capture-block[data-type="report"]') as HTMLElement;
+    expect(group).toBeTruthy();
+    expect(group.dataset.eventId).toBe('r');
+    const findings = group.querySelectorAll('.finding');
+    expect(findings.length).toBe(2);
+    expect(findings[0].textContent).toContain('finding one');
+    expect(findings[1].textContent).toContain('finding two');
+
+    const f1Actions = findings[0].querySelectorAll('.capture-actions button');
+    expect(f1Actions.length).toBe(2);
+    (f1Actions[1] as HTMLButtonElement).click();
+    expect(monitor.inject).toHaveBeenCalledWith({ text: 'finding one', submit: true });
+  });
+
+  it('dismissing a block calls monitor.dismiss(id) and removes it from the DOM', async () => {
+    wireMonitorPane();
+    handlers.event!(makeEvent({ id: 'x', type: 'capture', text: 'bye' }));
+    const block = blocks().querySelector('[data-event-id="x"]') as HTMLElement;
+    (block.querySelector('.dismiss') as HTMLButtonElement).click();
+    expect(monitor.dismiss).toHaveBeenCalledWith('x');
+    expect(blocks().querySelector('[data-event-id="x"]')).toBeNull();
+  });
+
+  it('dismissing a report removes the whole group (findings included) and cascades via dismiss(reportId)', async () => {
+    wireMonitorPane();
+    handlers.event!(makeEvent({ id: 'r', type: 'report', source: 'shadow-scan', text: 'report' }));
+    handlers.event!(makeEvent({ id: 'f1', type: 'finding', parentId: 'r', text: 'one' }));
+    const group = blocks().querySelector('[data-event-id="r"]') as HTMLElement;
+    // The report's own dismiss (header) is the first .dismiss in the group.
+    (group.querySelector('.dismiss') as HTMLButtonElement).click();
+    expect(monitor.dismiss).toHaveBeenCalledWith('r');
+    expect(blocks().querySelector('[data-event-id="r"]')).toBeNull();
+    expect(blocks().querySelector('[data-event-id="f1"]')).toBeNull();
+  });
+
+  it('Dismiss all calls monitor.dismissAll() and clears every block', async () => {
+    wireMonitorPane();
+    handlers.event!(makeEvent({ id: 'a', text: 'one' }));
+    handlers.event!(makeEvent({ id: 'b', text: 'two' }));
+    const dismissAll = document.getElementById('dismiss-all') as HTMLButtonElement;
+    expect(dismissAll).toBeTruthy();
+    dismissAll.click();
+    expect(monitor.dismissAll).toHaveBeenCalled();
+    expect(blocks().querySelectorAll('.capture-block').length).toBe(0);
   });
 
   it('renders a stored event exactly once when replay and a live event carry the same id', async () => {
@@ -163,9 +232,9 @@ describe('monitor pane DOM (§9/§15.6 — talks only to window.monitor.*)', () 
     await flush();
     const buttons = Array.from(history().querySelectorAll('.command-entry button')) as HTMLButtonElement[];
     const names = buttons.map((b) => b.getAttribute('aria-label') ?? b.textContent ?? '');
-    expect(names[0]).toContain('ls');
-    expect(names[1]).toContain('sleep 5');
-    expect(names[0]).not.toBe(names[1]);
+    expect(names.some((n) => n.includes('ls'))).toBe(true);
+    expect(names.some((n) => n.includes('sleep 5'))).toBe(true);
+    expect(new Set(names).size).toBe(names.length);
   });
 
   it('does not re-announce the live status region on each quiet tick (WCAG 4.1.3)', async () => {

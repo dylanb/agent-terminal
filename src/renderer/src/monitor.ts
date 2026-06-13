@@ -1,8 +1,12 @@
 // Monitor pane (§9/§15.6): status strip + command history + captured/semantic
-// blocks + inject actions. Architectural rule (§9.1): talks ONLY to
+// blocks + inject/dismiss actions. Architectural rule (§9.1): talks ONLY to
 // window.monitor.* — never to the terminal pane, the renderer xterm, or the
 // selection model. All user-controlled text is set via textContent, never
 // innerHTML, so command/output bytes cannot inject markup.
+//
+// v2.6: a `report` renders as a group whose `finding` children are individually
+// actionable; every block/group/finding can be dismissed; blocks and command
+// history are shown newest-first.
 
 import type { CommandSummary, MonitorEvent, MonitorEventType, MonitorUpdateMsg } from '../../shared/ipc';
 
@@ -12,8 +16,8 @@ const QUIET_TICK_MS = 1000;
 /** Friendly badge labels; unknown future types fall back to the raw type, never dropped (§15.6). */
 const TYPE_LABELS: Record<string, string> = {
   capture: 'capture',
-  'agent-question': 'agent-question',
-  'permission-prompt': 'permission',
+  report: 'report',
+  finding: 'finding',
   'tool-use': 'tool',
   diff: 'diff',
   completion: 'completion',
@@ -30,6 +34,138 @@ export function wireMonitorPane(): void {
   let quietTick: ReturnType<typeof setInterval> | null = null;
   let quietCounterEl: HTMLElement | null = null;
   const rendered = new Set<string>();
+  // Findings whose parent report has not rendered yet (replay/live ordering safety).
+  const orphans = new Map<string, MonitorEvent[]>();
+
+  function badgeLabel(type: MonitorEventType): string {
+    return TYPE_LABELS[type] ?? type;
+  }
+
+  function dismissButton(label: string, onClick: () => void): HTMLButtonElement {
+    const btn = document.createElement('button');
+    btn.className = 'dismiss';
+    btn.textContent = '×';
+    btn.setAttribute('aria-label', label);
+    btn.addEventListener('click', onClick);
+    return btn;
+  }
+
+  function injectActions(text: string): HTMLElement {
+    const actions = document.createElement('div');
+    actions.className = 'capture-actions';
+    const insert = document.createElement('button');
+    insert.textContent = 'Insert into agent';
+    insert.addEventListener('click', () => window.monitor.inject({ text, submit: false }));
+    const submit = document.createElement('button');
+    submit.textContent = 'Insert & submit';
+    submit.addEventListener('click', () => window.monitor.inject({ text, submit: true }));
+    actions.append(insert, submit);
+    return actions;
+  }
+
+  function renderFinding(event: MonitorEvent): HTMLElement {
+    const el = document.createElement('div');
+    el.className = 'finding';
+    el.dataset.eventId = event.id;
+    const pre = document.createElement('pre');
+    pre.className = 'capture-text';
+    pre.textContent = event.text;
+    el.append(
+      pre,
+      injectActions(event.text),
+      dismissButton('Dismiss finding', () => {
+        window.monitor.dismiss(event.id);
+        el.remove();
+      }),
+    );
+    return el;
+  }
+
+  function groupById(id: string): Element | null {
+    for (const el of blocksEl.querySelectorAll('.capture-block')) {
+      if ((el as HTMLElement).dataset.eventId === id) return el;
+    }
+    return null;
+  }
+
+  function attachFinding(event: MonitorEvent): void {
+    const group = groupById(event.parentId!);
+    if (!group) {
+      const list = orphans.get(event.parentId!) ?? [];
+      list.push(event);
+      orphans.set(event.parentId!, list);
+      return;
+    }
+    // First finding supersedes the report's whole-text fallback pre.
+    group.querySelector('pre.report-full')?.remove();
+    group.querySelector('.findings')!.appendChild(renderFinding(event));
+  }
+
+  function appendBlock(event: MonitorEvent): void {
+    // Replay (§8.4) and the live monitor:event stream can both deliver the same id;
+    // render each stored event exactly once.
+    if (rendered.has(event.id)) return;
+    rendered.add(event.id);
+
+    if (event.type === 'finding') {
+      attachFinding(event);
+      return;
+    }
+
+    const time = new Date(event.capturedAt).toLocaleTimeString();
+    const block = document.createElement('div');
+    block.className = 'capture-block';
+    block.dataset.eventId = event.id;
+    block.dataset.type = event.type;
+    // Each block's buttons share a label, so scope them by capture time for screen readers (WCAG 2.4.6).
+    block.setAttribute('role', 'group');
+    block.setAttribute('aria-label', `${badgeLabel(event.type)} at ${time}`);
+
+    const meta = document.createElement('div');
+    meta.className = 'capture-meta';
+    const badge = document.createElement('span');
+    badge.className = 'capture-badge';
+    badge.dataset.type = event.type;
+    badge.textContent = badgeLabel(event.type);
+    const timeEl = document.createElement('span');
+    timeEl.className = 'capture-time';
+    timeEl.textContent = time + (event.truncated ? ' · truncated' : '');
+    meta.append(
+      badge,
+      timeEl,
+      dismissButton(`Dismiss ${badgeLabel(event.type)} at ${time}`, () => {
+        window.monitor.dismiss(event.id); // main cascades to child findings (§15.6)
+        block.remove();
+      }),
+    );
+    block.append(meta);
+
+    if (event.type === 'report') {
+      // Whole-report actions, a fallback pre (removed once findings arrive), and a
+      // container the findings nest into in natural order.
+      block.append(injectActions(event.text));
+      const full = document.createElement('pre');
+      full.className = 'capture-text report-full';
+      full.textContent = event.text;
+      const findings = document.createElement('div');
+      findings.className = 'findings';
+      block.append(full, findings);
+    } else {
+      const pre = document.createElement('pre');
+      pre.className = 'capture-text';
+      pre.textContent = event.text;
+      block.append(pre, injectActions(event.text));
+    }
+
+    // Newest-first: prepend top-level blocks (§15.6 / v2.6).
+    blocksEl.insertBefore(block, blocksEl.firstChild);
+
+    const pending = orphans.get(event.id);
+    if (pending) {
+      orphans.delete(event.id);
+      for (const f of pending) attachFinding(f);
+    }
+  }
 
   function renderStatus(): void {
     const state = last?.agentState ?? 'quiet';
@@ -69,7 +205,8 @@ export function wireMonitorPane(): void {
 
   function renderCommands(commands: CommandSummary[]): void {
     historyEl.innerHTML = '';
-    for (const c of commands) {
+    // CommandSummary is newest-last; show newest at the top (§15.6 / v2.6).
+    for (const c of [...commands].reverse()) {
       const entry = document.createElement('div');
       entry.className = 'command-entry';
       entry.dataset.commandId = c.id;
@@ -96,53 +233,6 @@ export function wireMonitorPane(): void {
     }
   }
 
-  function badgeLabel(type: MonitorEventType): string {
-    return TYPE_LABELS[type] ?? type;
-  }
-
-  function appendBlock(event: MonitorEvent): void {
-    // Replay (§8.4) and the live monitor:event stream can both deliver the same id;
-    // render each stored event exactly once.
-    if (rendered.has(event.id)) return;
-    rendered.add(event.id);
-    const time = new Date(event.capturedAt).toLocaleTimeString();
-    const block = document.createElement('div');
-    block.className = 'capture-block';
-    block.dataset.eventId = event.id;
-    block.dataset.type = event.type;
-    // Each block's buttons share a label, so scope them by capture time for screen readers (WCAG 2.4.6).
-    block.setAttribute('role', 'group');
-    block.setAttribute('aria-label', `${badgeLabel(event.type)} at ${time}`);
-
-    const meta = document.createElement('div');
-    meta.className = 'capture-meta';
-    const badge = document.createElement('span');
-    badge.className = 'capture-badge';
-    badge.dataset.type = event.type;
-    badge.textContent = badgeLabel(event.type);
-    const timeEl = document.createElement('span');
-    timeEl.className = 'capture-time';
-    timeEl.textContent = time + (event.truncated ? ' · truncated' : '');
-    meta.append(badge, timeEl);
-
-    const pre = document.createElement('pre');
-    pre.className = 'capture-text';
-    pre.textContent = event.text;
-
-    const actions = document.createElement('div');
-    actions.className = 'capture-actions';
-    const insert = document.createElement('button');
-    insert.textContent = 'Insert into agent';
-    insert.addEventListener('click', () => window.monitor.inject({ text: event.text, submit: false }));
-    const submit = document.createElement('button');
-    submit.textContent = 'Insert & submit';
-    submit.addEventListener('click', () => window.monitor.inject({ text: event.text, submit: true }));
-    actions.append(insert, submit);
-
-    block.append(meta, pre, actions);
-    blocksEl.appendChild(block);
-  }
-
   function stopQuietTick(): void {
     if (quietTick) clearInterval(quietTick);
     quietTick = null;
@@ -151,6 +241,21 @@ export function wireMonitorPane(): void {
   function pullCommands(): void {
     void window.monitor.commands().then(renderCommands);
   }
+
+  // Dismiss-all toolbar (created here so the pane owns it; §9.1 — no terminal coupling).
+  const toolbar = document.createElement('div');
+  toolbar.className = 'blocks-toolbar';
+  const dismissAll = document.createElement('button');
+  dismissAll.id = 'dismiss-all';
+  dismissAll.textContent = 'Dismiss all';
+  dismissAll.addEventListener('click', () => {
+    window.monitor.dismissAll();
+    blocksEl.innerHTML = '';
+    rendered.clear();
+    orphans.clear();
+  });
+  toolbar.appendChild(dismissAll);
+  blocksEl.parentNode?.insertBefore(toolbar, blocksEl);
 
   window.monitor.onUpdate((msg) => {
     last = msg;

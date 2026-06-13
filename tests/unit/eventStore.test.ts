@@ -42,27 +42,29 @@ describe('monitor event store (§8.4)', () => {
     expect(store.list().map((e) => e.text)).toEqual(['first', 'second']);
   });
 
-  it('stamps captures truncated:false (manual selection is never trim-lossy, §15.4)', () => {
+  it('stamps captures truncated:false and parentId:null (manual selection is top-level, §15.4)', () => {
     const store = createMonitorEventStore({ now: () => new Date(0) });
     const event = store.addCapture(capture);
     expect(event.truncated).toBe(false);
+    expect(event.parentId).toBeNull();
   });
 
   it('addEvent stamps id/capturedAt and preserves a widened semantic event (§15.4)', () => {
     const store = createMonitorEventStore({ now: () => new Date('2026-06-12T10:00:00Z') });
     const event = store.addEvent({
       sessionId: 's1',
-      type: 'agent-question',
+      type: 'report',
       source: 'shadow-scan',
-      text: 'Do you want to continue?',
+      text: 'A long agent report',
       range: null,
+      parentId: null,
       truncated: true,
     });
     expect(event.id).toBeTruthy();
     expect(event.capturedAt).toBe('2026-06-12T10:00:00.000Z');
-    expect(event.type).toBe('agent-question');
+    expect(event.type).toBe('report');
     expect(event.source).toBe('shadow-scan');
-    expect(event.text).toBe('Do you want to continue?');
+    expect(event.text).toBe('A long agent report');
     expect(event.truncated).toBe(true);
     expect(event.sessionId).toBe('s1');
   });
@@ -76,8 +78,57 @@ describe('monitor event store (§8.4)', () => {
       source: 'shell-integration',
       text: 'hi',
       range: null,
+      parentId: null,
       truncated: false,
     });
     expect(store.list().map((e) => e.id)).toEqual([cap.id, sem.id]);
+  });
+
+  it('addEvent carries a finding parentId through to the stored event', () => {
+    const store = createMonitorEventStore({ now: () => new Date(0) });
+    const report = store.addEvent({
+      sessionId: 's1', type: 'report', source: 'shadow-scan',
+      text: 'report', range: null, parentId: null, truncated: false,
+    });
+    const finding = store.addEvent({
+      sessionId: 's1', type: 'finding', source: 'shadow-scan',
+      text: 'one finding', range: null, parentId: report.id, truncated: false,
+    });
+    expect(finding.parentId).toBe(report.id);
+  });
+
+  it('remove(id) drops the event and cascades to its child findings (§15.6)', () => {
+    const store = createMonitorEventStore({ now: () => new Date(0) });
+    const report = store.addEvent({
+      sessionId: 's1', type: 'report', source: 'shadow-scan',
+      text: 'report', range: null, parentId: null, truncated: false,
+    });
+    store.addEvent({
+      sessionId: 's1', type: 'finding', source: 'shadow-scan',
+      text: 'f1', range: null, parentId: report.id, truncated: false,
+    });
+    store.addEvent({
+      sessionId: 's1', type: 'finding', source: 'shadow-scan',
+      text: 'f2', range: null, parentId: report.id, truncated: false,
+    });
+    const keep = store.addCapture({ ...capture, text: 'keep me' });
+    store.remove(report.id);
+    expect(store.list().map((e) => e.id)).toEqual([keep.id]);
+  });
+
+  it('remove(id) of a single non-parent event leaves others intact', () => {
+    const store = createMonitorEventStore({ now: () => new Date(0) });
+    const a = store.addCapture({ ...capture, text: 'a' });
+    const b = store.addCapture({ ...capture, text: 'b' });
+    store.remove(a.id);
+    expect(store.list().map((e) => e.id)).toEqual([b.id]);
+  });
+
+  it('clear() empties the history', () => {
+    const store = createMonitorEventStore({ now: () => new Date(0) });
+    store.addCapture({ ...capture, text: 'a' });
+    store.addCapture({ ...capture, text: 'b' });
+    store.clear();
+    expect(store.list()).toEqual([]);
   });
 });

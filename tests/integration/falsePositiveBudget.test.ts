@@ -10,7 +10,7 @@ import { ALT_BORING, BORING_NO_MARKS, BORING_WITH_MARKS, SPOOFED_OSC } from '../
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const goQuiet = () => sleep(220);
 
-const SEMANTIC = new Set(['agent-question', 'permission-prompt', 'tool-use', 'diff', 'completion']);
+const SEMANTIC = new Set(['report', 'finding', 'tool-use', 'diff', 'completion']);
 
 describe('false-positive budget (§15.8) — boring transcripts emit zero agent-semantic events', () => {
   let shadow: ReturnType<typeof createShadowModel>;
@@ -36,7 +36,11 @@ describe('false-positive budget (§15.8) — boring transcripts emit zero agent-
       adapters: [createClaudeCodeAdapter()],
       fallback: createGenericAdapter(),
       dedupRetention: 200,
-      emit: (e) => emitted.push(e),
+      reportMinChars: resolveRuntimeConfig({}).reportMinChars,
+      emit: (e) => {
+        emitted.push(e);
+        return String(emitted.length);
+      },
       closedSpans: () => tracker.closedSpans(),
     });
     shadow.write(fixture);

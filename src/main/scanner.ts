@@ -12,10 +12,13 @@ export interface ScannerEmission {
   type: MonitorEventType;
   source: MonitorEventSource;
   text: string;
+  /** A finding's parent report id; null for top-level events (§15.6 / v2.6). */
+  parentId: string | null;
   truncated: boolean;
 }
 
-export type ScannerEmit = (e: ScannerEmission) => void;
+/** Persists the emission and returns its stamped event id (so findings can link to a report). */
+export type ScannerEmit = (e: ScannerEmission) => string;
 
 export interface ScannerDeps {
   reader: ShadowReader;
@@ -26,6 +29,8 @@ export interface ScannerDeps {
   /** Generic heuristic, used only when no specific adapter matches (§15.3 / D6). */
   fallback?: Adapter;
   dedupRetention: number;
+  /** Minimum report size (chars) before a `report` is emitted (§15.3 / §15.7). */
+  reportMinChars: number;
   emit: ScannerEmit;
   closedSpans?: () => CommandSpanRange[];
 }
@@ -73,16 +78,22 @@ export function createScanner(deps: ScannerDeps): Scanner {
     }
     const endRow = reader.length() - 1;
     const closedSpans = deps.closedSpans?.() ?? [];
-    const ctx = { reader, startRow, endRow, altScreen, closedSpans };
+    const ctx = { reader, startRow, endRow, altScreen, closedSpans, reportMinChars: deps.reportMinChars };
 
     // Select the first specific adapter that fingerprints this buffer; degrade to
     // the generic fallback when none match, never to silence (§15.3).
     const active = deps.adapters.find((a) => (a.matches ? a.matches(ctx) : true)) ?? deps.fallback;
     for (const region of active?.detect(ctx) ?? []) {
+      // Dedup at the parent level only; findings ride on the parent so identical
+      // finding text across different reports never collides, and an unchanged
+      // report (and its findings) is skipped wholesale on the next scan.
       const key = dedupKey(region.type, region.text);
       if (seen.has(key)) continue;
       remember(key);
-      emit({ type: region.type, source: region.source, text: region.text, truncated });
+      const parentId = emit({ type: region.type, source: region.source, text: region.text, parentId: null, truncated });
+      for (const child of region.children ?? []) {
+        emit({ type: child.type, source: child.source, text: child.text, parentId, truncated });
+      }
     }
 
     watermark?.dispose();

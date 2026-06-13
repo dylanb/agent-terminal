@@ -12,6 +12,8 @@ import {
   isValidCapture,
   isValidCaptureCommand,
   isValidCommandsRequest,
+  isValidDismiss,
+  isValidDismissAll,
   isValidInject,
   isValidInput,
   isValidResize,
@@ -74,6 +76,7 @@ async function createWindow(): Promise<void> {
     adapters: config.adapterEnabled('claude-code') ? [createClaudeCodeAdapter()] : [],
     fallback: createGenericAdapter(),
     dedupRetention: config.dedupRetention,
+    reportMinChars: config.reportMinChars,
     closedSpans: () => tracker.closedSpans(),
     emit: (e) => {
       const event = store.addEvent({
@@ -82,9 +85,11 @@ async function createWindow(): Promise<void> {
         source: e.source,
         text: e.text,
         range: null,
+        parentId: e.parentId,
         truncated: e.truncated,
       });
       send(CH.monitorEvent, { sessionId: SESSION_ID, event });
+      return event.id;
     },
   });
 
@@ -127,9 +132,18 @@ async function createWindow(): Promise<void> {
           source: 'shell-integration',
           text: cap.text,
           range: null,
+          parentId: null,
           truncated: cap.truncated,
         });
         send(CH.monitorEvent, { sessionId: SESSION_ID, event });
+      },
+      // Dismiss removes from the store so a reloaded pane's replay won't resurrect it;
+      // removing a report cascades to its findings (§15.6 / v2.6).
+      [CH.monitorDismiss]: (_e, m) => {
+        if (isValidDismiss(m)) store.remove(m.eventId);
+      },
+      [CH.monitorDismissAll]: (_e, m) => {
+        if (isValidDismissAll(m)) store.clear();
       },
       [CH.agentInject]: (_e, m) => {
         if (isValidInject(m)) inject(m.text, { submit: m.submit });

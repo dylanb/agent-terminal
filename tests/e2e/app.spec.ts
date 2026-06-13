@@ -249,17 +249,16 @@ test('a finished command appears in history; Capture → command block → Inser
   ).toHaveCount(1, { timeout: 10_000 });
 });
 
-test('a printed Claude-style permission box becomes a permission-prompt block after quiet', async () => {
+test('a printed Claude-style permission box no longer produces a semantic block (v2.6)', async () => {
   await typeCommand(
     "printf '%s\\n' '╭──────────────────────────────╮' '│ Do you want to proceed?      │' '│ ❯ 1. Yes                     │' '│   2. No                      │' '╰──────────────────────────────╯'",
   );
   await expect(termRows()).toContainText('Do you want to proceed?');
-
-  const block = page.locator('.capture-block[data-type="permission-prompt"]');
-  await expect(block).toHaveCount(1, { timeout: 10_000 });
-  await expect(block).toContainText('Do you want to proceed?');
-  // The block carries the standard inject actions (§15.6).
-  await expect(block.getByRole('button', { name: 'Insert & submit' })).toBeVisible();
+  // Permission/question detection was removed; a box is chrome and (with shell
+  // integration on) its output is a gated command span — no report/permission block.
+  await expect(
+    page.locator('.capture-block[data-type="permission-prompt"], .capture-block[data-type="report"]'),
+  ).toHaveCount(0);
 });
 
 test('boring commands produce command history but zero agent-semantic badges (§15.8 budget)', async () => {
@@ -271,7 +270,7 @@ test('boring commands produce command history but zero agent-semantic badges (§
   });
   // No semantic block types should have been emitted by the scanner.
   const semantic = page.locator(
-    '.capture-block[data-type="agent-question"], .capture-block[data-type="permission-prompt"], .capture-block[data-type="tool-use"], .capture-block[data-type="diff"]',
+    '.capture-block[data-type="report"], .capture-block[data-type="finding"], .capture-block[data-type="tool-use"], .capture-block[data-type="diff"]',
   );
   await expect(semantic).toHaveCount(0);
 });
@@ -288,10 +287,10 @@ test('a captured command-output block survives a monitor reload (replay)', async
   await expect(page.locator('.capture-block[data-type="command-output"]')).toHaveCount(1);
 });
 
-test('a scanner-detected semantic block survives a monitor reload (scanner→store→replay)', async () => {
-  // Integration off: no command spans, so the generic heuristic detects the
-  // prompt-like line deterministically (no span-gating race) and the scanner→store
-  // →replay path is exercised end-to-end. Box/⏺ chars can't be typed via Playwright.
+test('a scanner-detected report block (with findings) survives a monitor reload (scanner→store→replay)', async () => {
+  // Integration off: no command spans, so the generic heuristic surfaces the printed
+  // report deterministically (no span-gating race) and the scanner→store→replay path
+  // is exercised end-to-end.
   await app.close();
   app = await electron.launch({
     args: ['out/main/index.js'],
@@ -300,12 +299,15 @@ test('a scanner-detected semantic block survives a monitor reload (scanner→sto
   page = await app.firstWindow();
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
-  await typeCommand("printf 'Do you want to proceed?\\n'");
-  const perm = page.locator('.capture-block[data-type="permission-prompt"]');
-  await expect(perm.first()).toBeVisible({ timeout: 10_000 });
+  await typeCommand(
+    "printf '%s\\n' 'Here is the summary of findings from this code review:' '- one important finding worth acting on' '- another finding to address before merge'",
+  );
+  const report = page.locator('.capture-block[data-type="report"]');
+  await expect(report.first()).toBeVisible({ timeout: 10_000 });
+  await expect(report.first().locator('.finding')).not.toHaveCount(0);
 
   await page.reload();
-  await expect(perm.first()).toBeVisible();
+  await expect(report.first()).toBeVisible();
 });
 
 test('APP_SHELL_INTEGRATION=0 disables command capture (no history entries)', async () => {

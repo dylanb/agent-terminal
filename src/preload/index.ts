@@ -33,6 +33,8 @@ const monitorApi: MonitorApi = {
   onCommandsChanged: (cb) => ipcRenderer.on(CH.monitorCommandsChanged, () => cb()),
   captureCommand: (commandId) =>
     ipcRenderer.send(CH.monitorCaptureCommand, { sessionId: SESSION_ID, commandId }),
+  dismiss: (eventId) => ipcRenderer.send(CH.monitorDismiss, { sessionId: SESSION_ID, eventId }),
+  dismissAll: () => ipcRenderer.send(CH.monitorDismissAll, { sessionId: SESSION_ID }),
   inject: (req) =>
     ipcRenderer.send(CH.agentInject, { sessionId: SESSION_ID, ...req } satisfies AgentInjectMsg),
 };

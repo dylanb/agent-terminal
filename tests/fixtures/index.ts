@@ -29,6 +29,15 @@ export const TOOL_USE =
 
 export const AGENT_QUESTION_BULLET = '⏺ Should I continue with the migration?\r\n';
 
+/** A ⏺ prose report: an intro paragraph, a top-level list, and a closing paragraph. */
+export const REPORT_BLOCK =
+  '⏺ Here is a summary of what the codebase review surfaced this pass:\r\n' +
+  '\r\n' +
+  '- principal: the project config still pins the spec at an older version\r\n' +
+  '- security: the navigation lockdown registers will-navigate but not will-redirect\r\n' +
+  '\r\n' +
+  'Overall the change looks solid and is ready to merge once those are fixed.\r\n';
+
 export const DIFF_BLOCK =
   '⏺ Update(src/foo.ts)\r\n' +
   '  ⎿  Updated src/foo.ts with 1 addition and 1 removal\r\n' +

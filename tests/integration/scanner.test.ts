@@ -15,15 +15,16 @@ const QUIET = 40;
 const goQuiet = () => sleep(220);
 
 // Trivial injected adapter (config injection, NOT an emulator mock — §15.8):
-// every line ending in '?' within the scan window is an agent-question.
-const questionAdapter: Adapter = {
-  id: 'test-question',
+// every line ending in '?' within the scan window becomes one region. The type is
+// irrelevant to the watermark/dedup mechanics under test here.
+const lineAdapter: Adapter = {
+  id: 'test-line',
   detect: ({ reader, startRow, endRow }) => {
     const out = [];
     for (let y = startRow; y <= endRow; y++) {
       const t = reader.lineText(y).trim();
       if (t.endsWith('?')) {
-        out.push({ type: 'agent-question' as const, source: 'shadow-scan' as const, text: t, startRow: y, endRow: y });
+        out.push({ type: 'report' as const, source: 'shadow-scan' as const, text: t, startRow: y, endRow: y });
       }
     }
     return out;
@@ -34,6 +35,11 @@ describe('semantic scanner (§15.2/§15.3 — quiet-triggered, watermarked, dedu
   let shadow: ReturnType<typeof createShadowModel>;
   let emitted: Parameters<ScannerEmit>[0][];
 
+  const collectingEmit: ScannerEmit = (e) => {
+    emitted.push(e);
+    return String(emitted.length);
+  };
+
   function setup(scrollback = 5000, rows = 24) {
     emitted = [];
     shadow = createShadowModel({ cols: 80, rows, scrollback, settleMs: SETTLE, quietMs: QUIET, onStatus: () => {} });
@@ -41,9 +47,10 @@ describe('semantic scanner (§15.2/§15.3 — quiet-triggered, watermarked, dedu
       reader: shadow.reader,
       addMarker: (r) => shadow.addMarker(r),
       onQuiet: (cb) => shadow.onQuiet(cb),
-      adapters: [questionAdapter],
+      adapters: [lineAdapter],
       dedupRetention: 200,
-      emit: (e) => emitted.push(e),
+      reportMinChars: 120,
+      emit: collectingEmit,
     });
   }
 
@@ -63,7 +70,7 @@ describe('semantic scanner (§15.2/§15.3 — quiet-triggered, watermarked, dedu
     expect(emitted.length).toBe(0); // still active — no scan yet
     await goQuiet();
     expect(emitted.length).toBe(1);
-    expect(emitted[0]).toMatchObject({ type: 'agent-question', text: 'Do you want to continue?' });
+    expect(emitted[0]).toMatchObject({ type: 'report', text: 'Do you want to continue?', parentId: null });
   });
 
   it('dedups an unchanged region across repeated quiet transitions', async () => {
@@ -71,7 +78,7 @@ describe('semantic scanner (§15.2/§15.3 — quiet-triggered, watermarked, dedu
     shadow.write('Continue?\r\n');
     await goQuiet();
     expect(emitted.length).toBe(1);
-    shadow.write('\r\n'); // new activity, but the question region is unchanged
+    shadow.write('\r\n'); // new activity, but the region is unchanged
     await goQuiet();
     expect(emitted.length).toBe(1);
   });
@@ -98,7 +105,7 @@ describe('semantic scanner (§15.2/§15.3 — quiet-triggered, watermarked, dedu
     expect(q2.truncated).toBe(true);
   });
 
-  function setupGeneric(closed: CommandSpanRange[] = []) {
+  function setupGeneric(closed: CommandSpanRange[] = [], reportMinChars = 20) {
     emitted = [];
     shadow = createShadowModel({ cols: 80, rows: 24, scrollback: 5000, settleMs: SETTLE, quietMs: QUIET, onStatus: () => {} });
     createScanner({
@@ -108,48 +115,56 @@ describe('semantic scanner (§15.2/§15.3 — quiet-triggered, watermarked, dedu
       adapters: [], // no specific adapter matches → degrade to the generic fallback (§15.3)
       fallback: createGenericAdapter(),
       dedupRetention: 200,
+      reportMinChars,
       closedSpans: () => closed,
-      emit: (e) => emitted.push(e),
+      emit: collectingEmit,
     });
   }
 
-  it('degrades to the generic fallback and labels its emissions heuristic', async () => {
+  it('degrades to the generic fallback: a long new region becomes one heuristic report with linked findings', async () => {
     setupGeneric();
-    shadow.write('Do you want to proceed?\r\nAre you sure?\r\n');
+    shadow.write('- principal needs a fix\r\n- security needs a fix\r\n\r\nThis is the closing note.\r\n');
     await goQuiet();
-    const text = (t: string) => emitted.filter((e) => e.type === t).map((e) => e.text);
-    expect(text('permission-prompt')).toContain('Do you want to proceed?'); // strong prompt
-    expect(text('agent-question')).toContain('Are you sure?'); // bare trailing ?
-    expect(emitted.every((e) => e.source === 'heuristic')).toBe(true);
+    const reports = emitted.filter((e) => e.type === 'report');
+    expect(reports.length).toBe(1);
+    expect(reports[0].source).toBe('heuristic');
+    expect(reports[0].parentId).toBeNull();
+    const findings = emitted.filter((e) => e.type === 'finding');
+    expect(findings.length).toBe(3);
+    expect(findings.every((f) => f.parentId === String(1))).toBe(true); // first emitted id
   });
 
-  it('suppresses an unchanged prompt-like line on re-scan but emits a newly-changed one', async () => {
-    setupGeneric();
-    shadow.write('Are you sure?\r\n');
-    await goQuiet();
-    expect(emitted.map((e) => e.text)).toEqual(['Are you sure?']);
-    shadow.write('All done now?\r\n'); // prior line stable (chrome), a new prompt-like line appears
-    await goQuiet();
-    expect(emitted.map((e) => e.text)).toEqual(['Are you sure?', 'All done now?']);
-  });
-
-  it('skips a prompt-like line that falls inside a closed command-output span (§15.6)', async () => {
-    setupGeneric([{ startRow: 0, endRow: 5 }]); // the prompt text lands on row 0 = command output
-    shadow.write('Are you sure?\r\n');
+  it('does not emit a report for short below-threshold output', async () => {
+    setupGeneric([], 500);
+    shadow.write('ok done\r\n');
     await goQuiet();
     expect(emitted).toEqual([]);
   });
 
-  it('runs on the alternate buffer without crashing and dedups identical screens', async () => {
-    setup();
-    shadow.write('\x1b[?1049h');
-    await sleep(10);
-    expect(() => shadow.write('Alt prompt?\r\n')).not.toThrow();
+  it('skips content that falls inside a closed command-output span so no report forms (§15.6)', async () => {
+    setupGeneric([{ startRow: 0, endRow: 5 }]);
+    shadow.write('- principal needs a fix\r\n- security needs a fix\r\n');
+    await goQuiet();
+    expect(emitted).toEqual([]);
+  });
+
+  it('does not re-emit a report for stable (unchanged) chrome on the next scan', async () => {
+    setupGeneric();
+    shadow.write('- principal needs a fix\r\n- security needs a fix\r\n\r\nThis is the closing note.\r\n');
     await goQuiet();
     const first = emitted.length;
-    expect(first).toBeGreaterThanOrEqual(1);
-    shadow.write('\r\n');
+    expect(first).toBeGreaterThan(0);
+    shadow.write('\r\n'); // no new content, prior lines stable
     await goQuiet();
-    expect(emitted.length).toBe(first); // same region deduped, no crash
+    expect(emitted.length).toBe(first);
+  });
+
+  it('emits nothing on the alternate buffer (precise alt parsing is out of scope §15.9)', async () => {
+    setupGeneric();
+    shadow.write('\x1b[?1049h');
+    await sleep(10);
+    expect(() => shadow.write('- principal needs a fix\r\n- security needs a fix\r\n')).not.toThrow();
+    await goQuiet();
+    expect(emitted).toEqual([]);
   });
 });

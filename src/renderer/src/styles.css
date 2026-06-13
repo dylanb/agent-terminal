@@ -134,10 +134,28 @@ button:hover {
   color: #9db8e0;
 }
 
-.capture-block[data-type='permission-prompt'] .capture-badge,
-.capture-block[data-type='agent-question'] .capture-badge {
+.capture-block[data-type='report'] .capture-badge {
   background: #4d3a1f;
   color: #dfc49f;
+}
+
+.capture-block[data-type='finding'] .capture-badge {
+  background: #1f3d2f;
+  color: #9fd9b8;
+}
+
+.blocks-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  padding: 6px 8px 0;
+}
+
+.blocks-toolbar:has(+ #monitor-blocks:empty) {
+  display: none;
+}
+
+#dismiss-all {
+  font-size: 11px;
 }
 
 .capture-block {
@@ -148,10 +166,49 @@ button:hover {
 }
 
 .capture-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   font-size: 11px;
   color: #888;
   padding: 4px 8px;
   border-bottom: 1px solid #2c2c2c;
+}
+
+.capture-meta .capture-time {
+  flex: 1;
+}
+
+button.dismiss {
+  border: none;
+  background: transparent;
+  color: #888;
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 4px;
+}
+
+button.dismiss:hover {
+  color: #e06c6c;
+}
+
+/* Findings nest inside a report group, indented from the group edge (§15.6). */
+.findings {
+  padding: 6px 8px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.finding {
+  border-left: 2px solid #2d3b52;
+  background: #181818;
+  border-radius: 3px;
+}
+
+.finding .capture-text {
+  max-height: 140px;
 }
 
 .capture-text {

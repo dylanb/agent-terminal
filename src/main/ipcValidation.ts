@@ -7,6 +7,8 @@ import {
   type AgentInjectMsg,
   type CaptureCommandMsg,
   type CommandsRequestMsg,
+  type DismissAllMsg,
+  type DismissMsg,
   type MonitorCaptureMsg,
   type PtyInputMsg,
   type PtyResizeMsg,
@@ -46,4 +48,12 @@ export function isValidCommandsRequest(m: unknown): m is CommandsRequestMsg {
 
 export function isValidCaptureCommand(m: unknown): m is CaptureCommandMsg {
   return isRecord(m) && isLiveSession(m) && typeof m.commandId === 'string';
+}
+
+export function isValidDismiss(m: unknown): m is DismissMsg {
+  return isRecord(m) && isLiveSession(m) && typeof m.eventId === 'string';
+}
+
+export function isValidDismissAll(m: unknown): m is DismissAllMsg {
+  return isRecord(m) && isLiveSession(m);
 }

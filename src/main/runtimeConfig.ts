@@ -10,6 +10,9 @@ const DEFAULTS = {
   maxCommandSummaries: 200,
   maxOpenSpans: 64,
   maxExtractedRows: 2000,
+  // Minimum report size (chars) a detector needs before emitting a `report`
+  // (§15.3): keeps trivial one-liners and short command output below threshold.
+  reportMinChars: 120,
 } as const;
 
 export interface RuntimeConfig {
@@ -20,6 +23,7 @@ export interface RuntimeConfig {
   maxCommandSummaries: number;
   maxOpenSpans: number;
   maxExtractedRows: number;
+  reportMinChars: number;
 }
 
 /** Parse a positive integer env value; fall back on unset/garbage/non-positive (§15.7). */
@@ -38,5 +42,6 @@ export function resolveRuntimeConfig(env: NodeJS.ProcessEnv): RuntimeConfig {
     maxCommandSummaries: posInt(env.APP_MAX_COMMAND_SUMMARIES, DEFAULTS.maxCommandSummaries),
     maxOpenSpans: posInt(env.APP_MAX_OPEN_SPANS, DEFAULTS.maxOpenSpans),
     maxExtractedRows: posInt(env.APP_MAX_EXTRACTED_ROWS, DEFAULTS.maxExtractedRows),
+    reportMinChars: posInt(env.APP_REPORT_MIN_CHARS, DEFAULTS.reportMinChars),
   };
 }

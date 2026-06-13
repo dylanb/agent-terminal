@@ -4,6 +4,8 @@ import {
   isValidCapture,
   isValidCaptureCommand,
   isValidCommandsRequest,
+  isValidDismiss,
+  isValidDismissAll,
   isValidInject,
   isValidInput,
   isValidResize,
@@ -55,5 +57,18 @@ describe('IPC payload validation (§6 — renderer-supplied input is untrusted)'
     expect(isValidCaptureCommand({ sessionId: sid, commandId: 7 })).toBe(false);
     expect(isValidCaptureCommand({ sessionId: sid })).toBe(false);
     expect(isValidCaptureCommand({ sessionId: 'other', commandId: 'abc' })).toBe(false);
+  });
+
+  it('accepts a dismiss request and rejects missing/non-string eventId or wrong session (§15.6)', () => {
+    expect(isValidDismiss({ sessionId: sid, eventId: 'abc' })).toBe(true);
+    expect(isValidDismiss({ sessionId: sid, eventId: 7 })).toBe(false);
+    expect(isValidDismiss({ sessionId: sid })).toBe(false);
+    expect(isValidDismiss({ sessionId: 'other', eventId: 'abc' })).toBe(false);
+  });
+
+  it('accepts a dismiss-all request and rejects a wrong sessionId (§15.6)', () => {
+    expect(isValidDismissAll({ sessionId: sid })).toBe(true);
+    expect(isValidDismissAll({ sessionId: 'other' })).toBe(false);
+    expect(isValidDismissAll(null)).toBe(false);
   });
 });

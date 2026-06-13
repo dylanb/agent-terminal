@@ -15,6 +15,15 @@ export interface AdapterContext {
   altScreen: boolean;
   /** Output ranges of finished commands, for generic span-gating (§15.6). */
   closedSpans: CommandSpanRange[];
+  /** Minimum report size (chars) before a `report` is emitted (§15.3 / §15.7). */
+  reportMinChars: number;
+}
+
+/** A finding inside a report — emitted as a child event linked by parentId (§15.6 / v2.6). */
+export interface DetectedChild {
+  type: MonitorEventType;
+  source: MonitorEventSource;
+  text: string;
 }
 
 export interface DetectedRegion {
@@ -23,6 +32,8 @@ export interface DetectedRegion {
   text: string;
   startRow: number;
   endRow: number;
+  /** Sub-events (report findings) emitted with parentId set to this region's id. */
+  children?: DetectedChild[];
 }
 
 export interface Adapter {
