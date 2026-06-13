@@ -12,6 +12,7 @@ import {
   type MonitorCaptureMsg,
   type PtyInputMsg,
   type PtyResizeMsg,
+  type UiSetSettingsMsg,
 } from '../shared/ipc';
 
 function isRecord(m: unknown): m is Record<string, unknown> {
@@ -56,4 +57,13 @@ export function isValidDismiss(m: unknown): m is DismissMsg {
 
 export function isValidDismissAll(m: unknown): m is DismissAllMsg {
   return isRecord(m) && isLiveSession(m);
+}
+
+/** Global UI prefs (§16.6) — no sessionId; validate only the present fields. */
+export function isValidSetSettings(m: unknown): m is UiSetSettingsMsg {
+  if (!isRecord(m) || !isRecord(m.settings)) return false;
+  const s = m.settings;
+  if ('splitRatio' in s && (typeof s.splitRatio !== 'number' || !Number.isFinite(s.splitRatio))) return false;
+  if ('lastTab' in s && s.lastTab !== 'capture' && s.lastTab !== 'todo') return false;
+  return true;
 }

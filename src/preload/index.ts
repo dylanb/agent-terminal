@@ -12,6 +12,7 @@ import {
   type PtyDataMsg,
   type PtyExitMsg,
   type TermApi,
+  type UiSettings,
 } from '../shared/ipc';
 
 const termApi: TermApi = {
@@ -37,6 +38,9 @@ const monitorApi: MonitorApi = {
   dismissAll: () => ipcRenderer.send(CH.monitorDismissAll, { sessionId: SESSION_ID }),
   inject: (req) =>
     ipcRenderer.send(CH.agentInject, { sessionId: SESSION_ID, ...req } satisfies AgentInjectMsg),
+  // Global UI prefs (§16.6) — no sessionId; app-wide, not per-session.
+  getSettings: () => ipcRenderer.invoke(CH.uiGetSettings) as Promise<UiSettings>,
+  setSettings: (settings) => ipcRenderer.send(CH.uiSetSettings, { settings }),
 };
 
 contextBridge.exposeInMainWorld('term', termApi);

@@ -21,7 +21,29 @@ export const CH = {
   monitorDismiss: 'monitor:dismiss',
   monitorDismissAll: 'monitor:dismissAll',
   agentInject: 'agent:inject',
+  uiGetSettings: 'ui:getSettings',
+  uiSetSettings: 'ui:setSettings',
 } as const;
+
+/** Action-window tabs (§16.1). */
+export type TabId = 'capture' | 'todo';
+
+/**
+ * Global UI preferences (§16.6) — the one piece of state outside the repo,
+ * persisted to userData. `splitRatio` is the terminal pane's width fraction.
+ * Carries no sessionId: these are app-wide, not per-session (deliberate §16.6
+ * exception to the §6 "every payload carries sessionId" rule).
+ */
+export interface UiSettings {
+  splitRatio: number;
+  lastTab: TabId;
+}
+
+export const DEFAULT_UI_SETTINGS: UiSettings = { splitRatio: 0.65, lastTab: 'capture' };
+
+export interface UiSetSettingsMsg {
+  settings: Partial<UiSettings>;
+}
 
 export interface PtyDataMsg {
   sessionId: SessionId;
@@ -193,6 +215,9 @@ export interface MonitorApi {
   /** Dismiss every captured event (§15.6). */
   dismissAll(): void;
   inject(req: Omit<AgentInjectMsg, 'sessionId'>): void;
+  /** Global UI prefs — split ratio + last tab (§16.6). */
+  getSettings(): Promise<UiSettings>;
+  setSettings(settings: Partial<UiSettings>): void;
 }
 
 declare global {

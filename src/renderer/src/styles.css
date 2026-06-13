@@ -17,10 +17,25 @@ body {
 }
 
 #terminal-pane {
-  flex: 1 1 65%;
+  flex: 0 0 65%;
   display: flex;
   flex-direction: column;
-  min-width: 0;
+  min-width: 320px; /* §16.6 terminal min width — JS clamp mirrors this (MIN_TERMINAL_PX) */
+}
+
+/* Draggable vertical divider (§16.6); focusable role="separator" nudged with ←/→. */
+#splitter {
+  flex: 0 0 6px;
+  cursor: col-resize;
+  background: #333;
+  border-left: 1px solid #2a2a2a;
+  border-right: 1px solid #2a2a2a;
+}
+
+#splitter:hover,
+#splitter:focus-visible {
+  background: #4a4d51;
+  outline: none;
 }
 
 #toolbar {
@@ -53,11 +68,10 @@ button:hover {
 }
 
 #monitor {
-  flex: 1 1 35%;
-  min-width: 280px;
+  flex: 1 1 0;
+  min-width: 280px; /* §16.6 action-window min width — JS clamp mirrors this (MIN_MONITOR_PX) */
   display: flex;
   flex-direction: column;
-  border-left: 1px solid #333;
   background: #232323;
 }
 

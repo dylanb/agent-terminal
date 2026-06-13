@@ -9,6 +9,7 @@ import {
   isValidInject,
   isValidInput,
   isValidResize,
+  isValidSetSettings,
 } from '../../src/main/ipcValidation';
 
 const sid = SESSION_ID;
@@ -70,5 +71,19 @@ describe('IPC payload validation (§6 — renderer-supplied input is untrusted)'
     expect(isValidDismissAll({ sessionId: sid })).toBe(true);
     expect(isValidDismissAll({ sessionId: 'other' })).toBe(false);
     expect(isValidDismissAll(null)).toBe(false);
+  });
+
+  // ui:setSettings is global (no sessionId — §16.6); validate the settings shape only.
+  it('accepts partial ui settings and rejects wrong-typed fields or a non-object payload', () => {
+    expect(isValidSetSettings({ settings: { splitRatio: 0.5 } })).toBe(true);
+    expect(isValidSetSettings({ settings: { lastTab: 'todo' } })).toBe(true);
+    expect(isValidSetSettings({ settings: { splitRatio: 0.5, lastTab: 'capture' } })).toBe(true);
+    expect(isValidSetSettings({ settings: {} })).toBe(true);
+    expect(isValidSetSettings({ settings: { lastTab: 'bogus' } })).toBe(false);
+    expect(isValidSetSettings({ settings: { splitRatio: 'wide' } })).toBe(false);
+    expect(isValidSetSettings({ settings: { splitRatio: Number.NaN } })).toBe(false);
+    expect(isValidSetSettings({ settings: null })).toBe(false);
+    expect(isValidSetSettings({})).toBe(false);
+    expect(isValidSetSettings(null)).toBe(false);
   });
 });

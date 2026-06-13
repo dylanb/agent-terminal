@@ -17,7 +17,9 @@ import {
   isValidInject,
   isValidInput,
   isValidResize,
+  isValidSetSettings,
 } from './ipcValidation';
+import { createUiSettingsStore } from './uiSettings';
 import { registerIpcListeners } from './sessionIpc';
 import { resolveRuntimeConfig } from './runtimeConfig';
 import { createCommandTracker } from './commandTracker';
@@ -47,6 +49,8 @@ async function createWindow(): Promise<void> {
     integrationScriptPath: config.shellIntegration ? SHELL_INTEGRATION_SCRIPT : undefined,
   });
   const store = createMonitorEventStore();
+  // Global UI prefs (§16.6) — the only state outside the repo (userData).
+  const uiSettings = createUiSettingsStore(path.join(app.getPath('userData'), 'ui-settings.json'));
 
   const send = <C extends SendChannel>(channel: C, payload: ChannelPayloads[C]): void => {
     if (!win.isDestroyed()) win.webContents.send(channel, payload);
@@ -161,9 +165,14 @@ async function createWindow(): Promise<void> {
       [CH.agentInject]: (_e, m) => {
         if (isValidInject(m)) inject(m.text, { submit: m.submit });
       },
+      // Global UI prefs (§16.6) — no sessionId; persisted to userData.
+      [CH.uiSetSettings]: (_e, m) => {
+        if (isValidSetSettings(m)) uiSettings.set(m.settings);
+      },
     },
     {
       [CH.monitorReplay]: () => store.list(),
+      [CH.uiGetSettings]: () => uiSettings.get(),
       [CH.monitorCommands]: (_e, m): CommandSummary[] =>
         isValidCommandsRequest(m)
           ? tracker.summaries().map((s) => ({ ...s, sessionId: SESSION_ID }))

@@ -18,6 +18,7 @@
     "src/shared/**/*.ts",
     "src/renderer/src/selectionModel.ts",
     "src/renderer/src/monitor.ts",
+    "src/renderer/src/layout.ts",
     "electron.vite.config.ts",
     "tests/unit/**/*.ts",
     "tests/integration/**/*.ts",
