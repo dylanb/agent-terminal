@@ -13,6 +13,9 @@ const DEFAULTS = {
   // Minimum report size (chars) a detector needs before emitting a `report`
   // (§15.3): keeps trivial one-liners and short command output below threshold.
   reportMinChars: 120,
+  // Window after an injection during which the echoed input is suppressed (§16.5);
+  // must exceed the active→quiet gap of the agent's reply (see §16.5 verification gap).
+  selfInjectWindowMs: 30_000,
 } as const;
 
 export interface RuntimeConfig {
@@ -24,6 +27,7 @@ export interface RuntimeConfig {
   maxOpenSpans: number;
   maxExtractedRows: number;
   reportMinChars: number;
+  selfInjectWindowMs: number;
 }
 
 /** Parse a positive integer env value; fall back on unset/garbage/non-positive (§15.7). */
@@ -43,5 +47,6 @@ export function resolveRuntimeConfig(env: NodeJS.ProcessEnv): RuntimeConfig {
     maxOpenSpans: posInt(env.APP_MAX_OPEN_SPANS, DEFAULTS.maxOpenSpans),
     maxExtractedRows: posInt(env.APP_MAX_EXTRACTED_ROWS, DEFAULTS.maxExtractedRows),
     reportMinChars: posInt(env.APP_REPORT_MIN_CHARS, DEFAULTS.reportMinChars),
+    selfInjectWindowMs: posInt(env.APP_SELF_INJECT_WINDOW_MS, DEFAULTS.selfInjectWindowMs),
   };
 }

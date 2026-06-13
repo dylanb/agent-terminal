@@ -3,6 +3,8 @@ import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createShadowModel } from '../../src/main/shadow';
 import { createScanner, type ScannerEmit } from '../../src/main/scanner';
+import { createInjector } from '../../src/main/inject';
+import { createInjectionSuppressor } from '../../src/main/injectionSuppression';
 import { createGenericAdapter } from '../../src/main/adapters/generic';
 import type { Adapter } from '../../src/main/adapters/types';
 import type { CommandSpanRange } from '../../src/main/spanTypes';
@@ -166,5 +168,89 @@ describe('semantic scanner (§15.2/§15.3 — quiet-triggered, watermarked, dedu
     expect(() => shadow.write('- principal needs a fix\r\n- security needs a fix\r\n')).not.toThrow();
     await goQuiet();
     expect(emitted).toEqual([]);
+  });
+
+  it('skips a region the suppressor flags, still emitting the rest (§16.5 seam)', async () => {
+    emitted = [];
+    shadow = createShadowModel({ cols: 80, rows: 24, scrollback: 5000, settleMs: SETTLE, quietMs: QUIET, onStatus: () => {} });
+    createScanner({
+      reader: shadow.reader,
+      addMarker: (r) => shadow.addMarker(r),
+      onQuiet: (cb) => shadow.onQuiet(cb),
+      adapters: [lineAdapter],
+      dedupRetention: 200,
+      reportMinChars: 120,
+      isSuppressed: (region) => region.startRow === 0, // echoed-input row, per the watermark
+      emit: collectingEmit,
+    });
+    shadow.write('Echoed input line?\r\nAgent reply line?\r\n');
+    await goQuiet();
+    expect(emitted.map((e) => e.text)).toEqual(['Agent reply line?']);
+  });
+});
+
+describe('self-injection suppression end-to-end (§16.5 — real shadow + injector + suppressor)', () => {
+  let shadow: ReturnType<typeof createShadowModel>;
+  let emitted: Parameters<ScannerEmit>[0][];
+  let ptyWrites: string[];
+  let inject: ReturnType<typeof createInjector>;
+
+  const collectingEmit: ScannerEmit = (e) => {
+    emitted.push(e);
+    return String(emitted.length);
+  };
+
+  function setup(now: () => number = () => 1000, windowMs = 30000) {
+    emitted = [];
+    ptyWrites = [];
+    shadow = createShadowModel({ cols: 80, rows: 24, scrollback: 5000, settleMs: SETTLE, quietMs: QUIET, onStatus: () => {} });
+    const suppressor = createInjectionSuppressor({
+      cursorRow: () => shadow.reader.cursor().y,
+      addMarker: (r) => shadow.addMarker(r),
+      now,
+      windowMs,
+    });
+    inject = createInjector({
+      write: (d) => ptyWrites.push(d),
+      isBracketedPaste: () => shadow.isBracketedPaste(),
+      submitDelayMs: 0,
+      onInject: () => suppressor.noteInjection(),
+    });
+    createScanner({
+      reader: shadow.reader,
+      addMarker: (r) => shadow.addMarker(r),
+      onQuiet: (cb) => shadow.onQuiet(cb),
+      adapters: [lineAdapter],
+      dedupRetention: 200,
+      reportMinChars: 120,
+      isSuppressed: (region) => suppressor.isSuppressed(region),
+      emit: collectingEmit,
+    });
+  }
+
+  afterEach(() => shadow?.dispose());
+
+  it('does not re-emit the echoed injected input, but still emits the agent reply', async () => {
+    setup();
+    // The app injects a prompt; the inject path seeds the watermark at the
+    // pre-echo cursor row (the injector writes to the PTY, not the shadow).
+    inject('Should I refactor this?', { submit: true });
+    // The session echoes the injected input, then the agent replies below it.
+    shadow.write('Should I refactor this?\r\n');
+    shadow.write('Yes, what about the tests?\r\n');
+    await goQuiet();
+    const texts = emitted.map((e) => e.text);
+    expect(texts).not.toContain('Should I refactor this?');
+    expect(texts).toContain('Yes, what about the tests?');
+  });
+
+  it('captures content at the watermark row once the suppression window has expired', async () => {
+    let t = 1000;
+    setup(() => t, 4000);
+    inject('Should I refactor this?', { submit: false });
+    t = 1000 + 5000; // window elapsed before the next quiet scan
+    shadow.write('Should I refactor this?\r\n');
+    await goQuiet();
+    expect(emitted.map((e) => e.text)).toContain('Should I refactor this?');
   });
 });

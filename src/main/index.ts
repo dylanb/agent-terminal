@@ -22,6 +22,7 @@ import { registerIpcListeners } from './sessionIpc';
 import { resolveRuntimeConfig } from './runtimeConfig';
 import { createCommandTracker } from './commandTracker';
 import { createScanner } from './scanner';
+import { createInjectionSuppressor } from './injectionSuppression';
 import { createClaudeCodeAdapter } from './adapters/claudeCode';
 import { createGenericAdapter } from './adapters/generic';
 import { SHELL_INTEGRATION_SCRIPT } from './shellIntegration';
@@ -69,6 +70,16 @@ async function createWindow(): Promise<void> {
   });
   // Command history is live off the OSC-133 marks, not §8.3 quiescence (§15.5).
   tracker.onChange(() => send(CH.monitorCommandsChanged, { sessionId: SESSION_ID }));
+  // Drops echoed self-injected input from re-capture (§16.5): the inject path seeds
+  // a watermark; the scanner consults it on the next quiet scan.
+  // TODO(dylan): the watermark→reply row separation and selfInjectWindowMs default
+  // are tuned against bash/scripted echo; verify against a real Claude Code
+  // `[Pasted text]` placeholder + reply in the §F e2e (plan PR5) — recorded gap.
+  const suppressor = createInjectionSuppressor({
+    cursorRow: () => shadow.reader.cursor().y,
+    addMarker: (r) => shadow.addMarker(r),
+    windowMs: config.selfInjectWindowMs,
+  });
   const scanner = createScanner({
     reader: shadow.reader,
     addMarker: (r) => shadow.addMarker(r),
@@ -78,6 +89,7 @@ async function createWindow(): Promise<void> {
     dedupRetention: config.dedupRetention,
     reportMinChars: config.reportMinChars,
     closedSpans: () => tracker.closedSpans(),
+    isSuppressed: (region) => suppressor.isSuppressed(region),
     emit: (e) => {
       const event = store.addEvent({
         sessionId: SESSION_ID,
@@ -96,6 +108,7 @@ async function createWindow(): Promise<void> {
   const inject = createInjector({
     write: (data) => ptyProcess.write(data),
     isBracketedPaste: () => shadow.isBracketedPaste(),
+    onInject: () => suppressor.noteInjection(),
   });
 
   // Flow A (§4): every output byte goes to the renderer AND the shadow tee.
@@ -162,6 +175,7 @@ async function createWindow(): Promise<void> {
     disposeIpc();
     ptyProcess.kill();
     scanner.dispose();
+    suppressor.dispose();
     tracker.dispose();
     shadow.dispose();
   });

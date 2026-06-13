@@ -33,6 +33,8 @@ export interface ScannerDeps {
   reportMinChars: number;
   emit: ScannerEmit;
   closedSpans?: () => CommandSpanRange[];
+  /** Drops echoed self-injected input from emission (§16.5); omitted ⇒ no suppression. */
+  isSuppressed?: (region: { startRow: number; endRow: number }) => boolean;
 }
 
 export interface Scanner {
@@ -89,6 +91,12 @@ export function createScanner(deps: ScannerDeps): Scanner {
       // report (and its findings) is skipped wholesale on the next scan.
       const key = dedupKey(region.type, region.text);
       if (seen.has(key)) continue;
+      // Echoed self-injected input: remember it so it never re-emits, but don't
+      // surface it; the agent's reply renders below the watermark and still does (§16.5).
+      if (deps.isSuppressed?.({ startRow: region.startRow, endRow: region.endRow })) {
+        remember(key);
+        continue;
+      }
       remember(key);
       const parentId = emit({ type: region.type, source: region.source, text: region.text, parentId: null, truncated });
       for (const child of region.children ?? []) {
