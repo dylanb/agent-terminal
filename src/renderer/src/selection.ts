@@ -5,6 +5,7 @@ import type { IDecoration, Terminal } from '@xterm/xterm';
 import type { BufferType } from '../../shared/ipc';
 import { stripPasteBreakout } from '../../shared/paste';
 import { cleanSelectionText, createSelectionModel } from './selectionModel';
+import { handleTerminalKey } from './keymap';
 
 // >=3:1 against the #1e1e1e background (WCAG 1.4.11); the native highlight is suppressed (§7.0).
 const SEL_COLOR = 'rgba(80, 140, 255, 0.7)';
@@ -96,13 +97,15 @@ export function wireSelection(term: Terminal): void {
 
   document.getElementById('clear-selection')!.addEventListener('click', clearSelection);
 
+  // xterm allows a single custom key handler, so the two key concerns share it:
   // Escape clears only when a selection is active; otherwise it belongs to the
-  // agent (interrupt in Claude Code) and must pass through (§7.5.1).
+  // agent (interrupt in Claude Code) and must pass through (§7.5.1). Everything
+  // else is routed through the agent key bindings (§7.5.2).
   term.attachCustomKeyEventHandler((e) => {
     if (e.type === 'keydown' && e.key === 'Escape' && model.get().active) {
       clearSelection();
       return false;
     }
-    return true;
+    return handleTerminalKey(e, (data) => window.term.input(data));
   });
 }

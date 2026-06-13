@@ -210,6 +210,29 @@ test('Escape clears an active selection but passes through to the agent otherwis
   await page.keyboard.press('Control+D');
 });
 
+test('Shift+Enter inserts a newline (ESC+CR) instead of submitting (§7.5.2)', async () => {
+  // cat -v echoes received control bytes visibly: ESC -> ^[. xterm's default for
+  // Shift+Enter is a bare CR (no ^[), so the rendered ^[ proves our handler ran.
+  await typeCommand('cat -v');
+  await page.locator('.xterm-screen').click();
+  await page.keyboard.press('Shift+Enter');
+  await expect(termRows()).toContainText('^[');
+  await page.keyboard.press('Control+C');
+});
+
+test('Option/Alt+Backspace deletes the whole previous word at the prompt (§7.5.2)', async () => {
+  // Functional, end-to-end: word-delete leaves `echo `, so `done` runs as `echo done`.
+  // A char-delete or no-op would instead run `echo foobadone` / `echo foobardone`.
+  await page.locator('.xterm-screen').click();
+  await page.keyboard.type('echo foobar');
+  await page.keyboard.press('Alt+Backspace');
+  await page.keyboard.type('done');
+  await page.keyboard.press('Enter');
+  await expect(
+    page.locator('.xterm-rows > div').filter({ hasText: /^\s*done\s*$/ }),
+  ).toHaveCount(1);
+});
+
 test('a todo persists in-repo across an app restart (§16.3)', async () => {
   await cdToTempDir('persist');
   await page.locator('#tab-todo').click();
