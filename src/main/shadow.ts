@@ -1,8 +1,8 @@
 // Shadow screen model (§8): every PTY byte is teed here. Owns the headless
 // terminal, the quiescence detector, and the debounced status publisher.
 
-import { Terminal as HeadlessTerminal } from '@xterm/headless';
-import type { AgentState } from '../shared/ipc';
+import { Terminal as HeadlessTerminal, type IDisposable, type IMarker } from '@xterm/headless';
+import type { AgentState, BufferType } from '../shared/ipc';
 import { createQuiescenceDetector, QUIET_MS } from './quiescence';
 
 export const SETTLE_MS = 80;
@@ -14,6 +14,28 @@ export interface ShadowStatus {
   quietSince: number | null;
 }
 
+/**
+ * Read-only window onto the headless buffer (§15.2 "public read path"). The
+ * terminal itself stays private to createShadowModel — the scanner/tracker only
+ * touch the buffer through these accessors, all in absolute-row coordinates.
+ */
+export interface ShadowReader {
+  bufferType(): BufferType;
+  /** Total buffer lines (scrollback + viewport). */
+  length(): number;
+  baseY(): number;
+  cols(): number;
+  rows(): number;
+  /** Absolute cursor position; y is a buffer line index (baseY + cursorY). */
+  cursor(): { x: number; y: number };
+  /** trimRight defaults true; pass false to keep a wrapped segment's full width (§15.2). */
+  lineText(y: number, trimRight?: boolean): string;
+  isLineWrapped(y: number): boolean;
+}
+
+/** A scrollback watermark; `line` goes -1 once its row trims (§15.2 / D2). */
+export type ShadowMarker = IMarker;
+
 export interface ShadowModel {
   write(data: string): void;
   resize(cols: number, rows: number): void;
@@ -21,6 +43,14 @@ export interface ShadowModel {
   isBracketedPaste(): boolean;
   /** Visible-buffer text via the public read path (capture substrate / debugging, §8.2). */
   snapshotText(): string;
+  /** Public read path for the semantic scanner (§15.2). */
+  reader: ShadowReader;
+  /** Fires on each active→quiet transition, after a parse-queue barrier so the buffer reflects all pre-transition bytes (§15.2). */
+  onQuiet(cb: () => void): () => void;
+  /** Place a watermark at an absolute buffer row; undefined on the alt buffer (§15.2 / D2). */
+  addMarker(absRow: number): ShadowMarker | undefined;
+  /** Register an OSC handler (e.g. 133 shell-integration marks, §15.5). */
+  onOsc(ident: number, cb: (data: string) => void): () => void;
   dispose(): void;
 }
 
@@ -44,13 +74,38 @@ export function createShadowModel(opts: {
   let last: ShadowStatus | null = null;
   let settleTimer: ReturnType<typeof setTimeout> | null = null;
   let disposed = false;
+  const quietCbs = new Set<() => void>();
+  const oscDisposables: IDisposable[] = [];
 
   const detector = createQuiescenceDetector({
     quietMs: opts.quietMs ?? QUIET_MS,
     now: opts.now,
-    // Transitions publish immediately — don't wait for the settle debounce (§8.3).
-    onTransition: () => publishStatus(),
+    onTransition: (state) => {
+      // Transitions publish immediately — don't wait for the settle debounce (§8.3).
+      publishStatus();
+      // A parse-queue barrier guarantees the buffer reflects all pre-transition bytes (§15.2).
+      if (state === 'quiet') term.write('', fireQuiet);
+    },
   });
+
+  function fireQuiet() {
+    if (disposed) return;
+    for (const cb of quietCbs) cb();
+  }
+
+  const reader: ShadowReader = {
+    bufferType: () => (term.buffer.active.type === 'alternate' ? 'alternate' : 'normal'),
+    length: () => term.buffer.active.length,
+    baseY: () => term.buffer.active.baseY,
+    cols: () => term.cols,
+    rows: () => term.rows,
+    cursor: () => ({
+      x: term.buffer.active.cursorX,
+      y: term.buffer.active.baseY + term.buffer.active.cursorY,
+    }),
+    lineText: (y, trimRight = true) => term.buffer.active.getLine(y)?.translateToString(trimRight) ?? '',
+    isLineWrapped: (y) => term.buffer.active.getLine(y)?.isWrapped ?? false,
+  };
 
   function currentStatus(): ShadowStatus {
     return {
@@ -99,9 +154,30 @@ export function createShadowModel(opts: {
       }
       return lines.join('\n');
     },
+    reader,
+    onQuiet(cb) {
+      quietCbs.add(cb);
+      return () => quietCbs.delete(cb);
+    },
+    addMarker(absRow) {
+      if (disposed || reader.bufferType() === 'alternate') return undefined;
+      const buf = term.buffer.active;
+      return term.registerMarker(absRow - (buf.baseY + buf.cursorY));
+    },
+    onOsc(ident, cb) {
+      // Handler fires mid-parse, so reader.cursor() in cb is the mark position (D4).
+      const d = term.parser.registerOscHandler(ident, (data) => {
+        cb(data);
+        return true;
+      });
+      oscDisposables.push(d);
+      return () => d.dispose();
+    },
     dispose() {
       disposed = true;
       if (settleTimer) clearTimeout(settleTimer);
+      for (const d of oscDisposables) d.dispose();
+      quietCbs.clear();
       detector.dispose();
       term.dispose();
     },

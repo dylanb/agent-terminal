@@ -5,6 +5,8 @@
 import {
   SESSION_ID,
   type AgentInjectMsg,
+  type CaptureCommandMsg,
+  type CommandsRequestMsg,
   type MonitorCaptureMsg,
   type PtyInputMsg,
   type PtyResizeMsg,
@@ -36,4 +38,12 @@ export function isValidInject(m: unknown): m is AgentInjectMsg {
 
 export function isValidCapture(m: unknown): m is MonitorCaptureMsg {
   return isRecord(m) && isLiveSession(m) && typeof m.text === 'string' && m.source === 'selection';
+}
+
+export function isValidCommandsRequest(m: unknown): m is CommandsRequestMsg {
+  return isRecord(m) && isLiveSession(m);
+}
+
+export function isValidCaptureCommand(m: unknown): m is CaptureCommandMsg {
+  return isRecord(m) && isLiveSession(m) && typeof m.commandId === 'string';
 }

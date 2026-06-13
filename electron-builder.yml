@@ -8,6 +8,8 @@ files:
   - package.json
 asarUnpack:
   - node_modules/node-pty/**
+  # Keep the sourced shell-integration script on disk so bash can read it (§15.5 / D3).
+  - out/main/**
 mac:
   target:
     - dmg

@@ -77,3 +77,45 @@ describe('buildSpawnConfig (§5)', () => {
     expect(cfg.options.env.PATH).toBe('/home/u/.local/bin:/usr/bin');
   });
 });
+
+const SCRIPT = '/app/out/main/shell-integration.bash';
+
+describe('shell-integration hook (§15.5 / D3 — PROMPT_COMMAND env seam, opt-out)', () => {
+  it('injects the PROMPT_COMMAND source hook when enabled and the shell is bash', () => {
+    const cfg = buildSpawnConfig({
+      platform: 'linux',
+      env: { HOME },
+      home: HOME,
+      integrationScriptPath: SCRIPT,
+    });
+    expect(cfg.options.env.APP_TERM_INTEGRATION).toBe(SCRIPT);
+    expect(cfg.options.env.PROMPT_COMMAND).toContain('source');
+    expect(cfg.options.env.PROMPT_COMMAND).toContain(SCRIPT);
+  });
+
+  it('omits the hook when APP_SHELL_INTEGRATION=0', () => {
+    const cfg = buildSpawnConfig({
+      platform: 'linux',
+      env: { HOME, APP_SHELL_INTEGRATION: '0' },
+      home: HOME,
+      integrationScriptPath: SCRIPT,
+    });
+    expect(cfg.options.env.APP_TERM_INTEGRATION).toBeUndefined();
+    expect(cfg.options.env.PROMPT_COMMAND).toBeUndefined();
+  });
+
+  it('omits the hook for a non-bash APP_SHELL', () => {
+    const cfg = buildSpawnConfig({
+      platform: 'linux',
+      env: { HOME, APP_SHELL: '/bin/zsh' },
+      home: HOME,
+      integrationScriptPath: SCRIPT,
+    });
+    expect(cfg.options.env.APP_TERM_INTEGRATION).toBeUndefined();
+  });
+
+  it('omits the hook when no script path is provided', () => {
+    const cfg = buildSpawnConfig({ platform: 'linux', env: { HOME }, home: HOME });
+    expect(cfg.options.env.APP_TERM_INTEGRATION).toBeUndefined();
+  });
+});

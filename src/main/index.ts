@@ -1,6 +1,6 @@
 import { app, BrowserWindow, ipcMain } from 'electron';
 import path from 'node:path';
-import { CH, SESSION_ID, type ChannelPayloads, type SendChannel } from '../shared/ipc';
+import { CH, SESSION_ID, type ChannelPayloads, type CommandSummary, type SendChannel } from '../shared/ipc';
 import { createInjector } from './inject';
 import { createMonitorEventStore } from './eventStore';
 import { createShadowModel } from './shadow';
@@ -8,8 +8,21 @@ import { spawnAgentShell } from './pty';
 import { createOutputGate } from './outputGate';
 import { resolveRendererTarget } from './rendererTarget';
 import { denyWindowOpen, preventForeignNavigation } from './windowGuards';
-import { isValidCapture, isValidInject, isValidInput, isValidResize } from './ipcValidation';
+import {
+  isValidCapture,
+  isValidCaptureCommand,
+  isValidCommandsRequest,
+  isValidInject,
+  isValidInput,
+  isValidResize,
+} from './ipcValidation';
 import { registerIpcListeners } from './sessionIpc';
+import { resolveRuntimeConfig } from './profiles';
+import { createCommandTracker } from './commandTracker';
+import { createScanner } from './scanner';
+import { createClaudeCodeAdapter } from './adapters/claudeCode';
+import { createGenericAdapter } from './adapters/generic';
+import { SHELL_INTEGRATION_SCRIPT } from './shellIntegration';
 
 async function createWindow(): Promise<void> {
   const win = new BrowserWindow({
@@ -27,7 +40,10 @@ async function createWindow(): Promise<void> {
   win.webContents.setWindowOpenHandler(denyWindowOpen);
   win.webContents.on('will-navigate', preventForeignNavigation);
 
-  const ptyProcess = await spawnAgentShell();
+  const config = resolveRuntimeConfig(process.env);
+  const ptyProcess = await spawnAgentShell({
+    integrationScriptPath: config.shellIntegration ? SHELL_INTEGRATION_SCRIPT : undefined,
+  });
   const store = createMonitorEventStore();
 
   const send = <C extends SendChannel>(channel: C, payload: ChannelPayloads[C]): void => {
@@ -38,7 +54,37 @@ async function createWindow(): Promise<void> {
   const outputGate = createOutputGate((data) => send(CH.ptyData, { sessionId: SESSION_ID, data }));
 
   const shadow = createShadowModel({
+    quietMs: config.quietMs,
     onStatus: (status) => send(CH.monitorUpdate, { sessionId: SESSION_ID, ...status }),
+  });
+
+  // Command-output capture (§15.5) and the agent-semantic scanner (§15.2/§15.3),
+  // both reading only the shadow's public read path — detection only, no autonomy.
+  const tracker = createCommandTracker({
+    reader: shadow.reader,
+    addMarker: (r) => shadow.addMarker(r),
+    onOsc: (id, cb) => shadow.onOsc(id, cb),
+    config,
+  });
+  const scanner = createScanner({
+    reader: shadow.reader,
+    addMarker: (r) => shadow.addMarker(r),
+    onQuiet: (cb) => shadow.onQuiet(cb),
+    adapters: config.adapterEnabled('claude-code') ? [createClaudeCodeAdapter()] : [],
+    fallback: createGenericAdapter(),
+    dedupRetention: config.dedupRetention,
+    closedSpans: () => tracker.closedSpans(),
+    emit: (e) => {
+      const event = store.addEvent({
+        sessionId: SESSION_ID,
+        type: e.type,
+        source: e.source,
+        text: e.text,
+        range: null,
+        truncated: e.truncated,
+      });
+      send(CH.monitorEvent, { sessionId: SESSION_ID, event });
+    },
   });
 
   const inject = createInjector({
@@ -69,16 +115,39 @@ async function createWindow(): Promise<void> {
       [CH.monitorCapture]: (_e, m) => {
         if (isValidCapture(m)) send(CH.monitorEvent, { sessionId: SESSION_ID, event: store.addCapture(m) });
       },
+      // Fail-closed: an unknown/stale/trimmed commandId materializes nothing (§15.4).
+      [CH.monitorCaptureCommand]: (_e, m) => {
+        if (!isValidCaptureCommand(m)) return;
+        const cap = tracker.capture(m.commandId);
+        if (!cap) return;
+        const event = store.addEvent({
+          sessionId: SESSION_ID,
+          type: 'command-output',
+          source: 'shell-integration',
+          text: cap.text,
+          range: null,
+          truncated: cap.truncated,
+        });
+        send(CH.monitorEvent, { sessionId: SESSION_ID, event });
+      },
       [CH.agentInject]: (_e, m) => {
         if (isValidInject(m)) inject(m.text, { submit: m.submit });
       },
     },
-    { [CH.monitorReplay]: () => store.list() },
+    {
+      [CH.monitorReplay]: () => store.list(),
+      [CH.monitorCommands]: (_e, m): CommandSummary[] =>
+        isValidCommandsRequest(m)
+          ? tracker.summaries().map((s) => ({ ...s, sessionId: SESSION_ID }))
+          : [],
+    },
   );
 
   win.on('closed', () => {
     disposeIpc();
     ptyProcess.kill();
+    scanner.dispose();
+    tracker.dispose();
     shadow.dispose();
   });
 

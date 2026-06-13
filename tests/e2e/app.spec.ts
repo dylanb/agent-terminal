@@ -225,3 +225,101 @@ test('shell exit notifies both panes', async () => {
   await expect(termRows()).toContainText('[process exited: 0]');
   await expect(page.locator('.status-chip[data-status="session"]')).toContainText('exited');
 });
+
+// ---- §15: command-output capture & semantic detection ----
+
+test('a finished command appears in history; Capture → command block → Insert & submit re-drives the shell', async () => {
+  await typeCommand("echo 'echo cmd-ok-456'");
+  await expect(termRows()).toContainText('echo cmd-ok-456');
+
+  // The command-history entry is pulled on the quiescence tick after the command finishes.
+  const entry = page.locator('.command-entry').filter({ hasText: 'cmd-ok-456' });
+  await expect(entry).toHaveCount(1, { timeout: 10_000 });
+  await expect(entry).toContainText('exit 0');
+
+  await entry.getByRole('button', { name: 'Capture' }).click();
+  const block = page.locator('.capture-block[data-type="command-output"]').last();
+  await expect(block).toContainText('echo cmd-ok-456');
+
+  // Insert & submit the captured output → bash runs `echo cmd-ok-456`.
+  await page.locator('#monitor').click();
+  await block.getByRole('button', { name: 'Insert & submit' }).click();
+  await expect(
+    page.locator('.xterm-rows > div').filter({ hasText: /^\s*cmd-ok-456\s*$/ }),
+  ).toHaveCount(1, { timeout: 10_000 });
+});
+
+test('a printed Claude-style permission box becomes a permission-prompt block after quiet', async () => {
+  await typeCommand(
+    "printf '%s\\n' '╭──────────────────────────────╮' '│ Do you want to proceed?      │' '│ ❯ 1. Yes                     │' '│   2. No                      │' '╰──────────────────────────────╯'",
+  );
+  await expect(termRows()).toContainText('Do you want to proceed?');
+
+  const block = page.locator('.capture-block[data-type="permission-prompt"]');
+  await expect(block).toHaveCount(1, { timeout: 10_000 });
+  await expect(block).toContainText('Do you want to proceed?');
+  // The block carries the standard inject actions (§15.6).
+  await expect(block.getByRole('button', { name: 'Insert & submit' })).toBeVisible();
+});
+
+test('boring commands produce command history but zero agent-semantic badges (§15.8 budget)', async () => {
+  await typeCommand('ls /');
+  await typeCommand('echo boring-done');
+  await expect(termRows()).toContainText('boring-done');
+  await expect(page.locator('.command-entry').filter({ hasText: 'ls /' })).toHaveCount(1, {
+    timeout: 10_000,
+  });
+  // No semantic block types should have been emitted by the scanner.
+  const semantic = page.locator(
+    '.capture-block[data-type="agent-question"], .capture-block[data-type="permission-prompt"], .capture-block[data-type="tool-use"], .capture-block[data-type="diff"]',
+  );
+  await expect(semantic).toHaveCount(0);
+});
+
+test('a captured command-output block survives a monitor reload (replay)', async () => {
+  await typeCommand("echo 'echo replay-cmd-out'");
+  await expect(termRows()).toContainText('echo replay-cmd-out');
+  const entry = page.locator('.command-entry').filter({ hasText: 'replay-cmd-out' });
+  await expect(entry).toHaveCount(1, { timeout: 10_000 });
+  await entry.getByRole('button', { name: 'Capture' }).click();
+  await expect(page.locator('.capture-block[data-type="command-output"]')).toHaveCount(1);
+
+  await page.reload();
+  await expect(page.locator('.capture-block[data-type="command-output"]')).toHaveCount(1);
+});
+
+test('a scanner-detected semantic block survives a monitor reload (scanner→store→replay)', async () => {
+  // Integration off: no command spans, so the generic heuristic detects the
+  // prompt-like line deterministically (no span-gating race) and the scanner→store
+  // →replay path is exercised end-to-end. Box/⏺ chars can't be typed via Playwright.
+  await app.close();
+  app = await electron.launch({
+    args: ['out/main/index.js'],
+    env: { ...process.env, APP_SUBMIT_DELAY_MS: '100', APP_SHELL_INTEGRATION: '0' },
+  });
+  page = await app.firstWindow();
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await typeCommand("printf 'Do you want to proceed?\\n'");
+  const perm = page.locator('.capture-block[data-type="permission-prompt"]');
+  await expect(perm.first()).toBeVisible({ timeout: 10_000 });
+
+  await page.reload();
+  await expect(perm.first()).toBeVisible();
+});
+
+test('APP_SHELL_INTEGRATION=0 disables command capture (no history entries)', async () => {
+  await app.close();
+  app = await electron.launch({
+    args: ['out/main/index.js'],
+    env: { ...process.env, APP_SUBMIT_DELAY_MS: '100', APP_SHELL_INTEGRATION: '0' },
+  });
+  page = await app.firstWindow();
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await typeCommand('echo no-marks-here');
+  await expect(termRows()).toContainText('no-marks-here');
+  // Give a quiescence tick a chance to pull commands, then assert none exist.
+  await page.waitForTimeout(2_000);
+  await expect(page.locator('.command-entry')).toHaveCount(0);
+});
