@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { wireMonitorPane, FOCUS_TERMINAL_EVENT } from '../../src/renderer/src/monitor';
+import { wireMonitorPane, FOCUS_TERMINAL_EVENT, TODO_UNDO_MS, TODOS_CHANGED_EVENT } from '../../src/renderer/src/monitor';
 import { DEFAULT_UI_SETTINGS } from '../../src/shared/ipc';
 import type { CommandSummary, MonitorEvent, TodoItem, UiSettings } from '../../src/shared/ipc';
 
@@ -88,7 +88,7 @@ describe('action window DOM (§16 — tabs, captures, command history, focus)', 
       onCwdChanged: vi.fn((cb) => (handlers.cwdChanged = cb)),
       replay: vi.fn(async () => []),
       commands: vi.fn(async () => []),
-      captureCommand: vi.fn(),
+      captureCommandText: vi.fn(async () => null),
       dismiss: vi.fn(),
       dismissAll: vi.fn(),
       clearCommands: vi.fn(),
@@ -172,10 +172,11 @@ describe('action window DOM (§16 — tabs, captures, command history, focus)', 
     expect(buttons.some((t) => t?.includes('Insert'))).toBe(false);
   });
 
-  it('Add to todo on a finding calls todoAdd(repoKey, text, source) and removes the block', async () => {
+  it('Add to todo on a finding calls todoAdd and reveals Undo in place, leaving the block', async () => {
     wireMonitorPane();
     await flush();
     handlers.cwdChanged!({ sessionId: 's1', cwd: '/repo/src', repoKey: '/repo' });
+    monitor.todoAdd.mockResolvedValue([makeTodo({ id: 'n1', repoKey: '/repo', text: 'finding one' })]);
     handlers.event!(makeEvent({ id: 'r', type: 'report', source: 'shadow-scan', text: 'report' }));
     handlers.event!(makeEvent({ id: 'f1', type: 'finding', parentId: 'r', text: 'finding one' }));
     const finding = blocks().querySelector('[data-event-id="f1"]') as HTMLElement;
@@ -183,7 +184,66 @@ describe('action window DOM (§16 — tabs, captures, command history, focus)', 
     addBtn.click();
     await flush();
     expect(monitor.todoAdd).toHaveBeenCalledWith('/repo', 'finding one', { type: 'finding', eventId: 'f1' });
-    expect(blocks().querySelector('[data-event-id="f1"]')).toBeNull();
+    // The block stays put until the undo window elapses; nothing dismissed yet.
+    expect(blocks().querySelector('[data-event-id="f1"]')).toBeTruthy();
+    expect(finding.querySelector('.undo-add-to-todo')).toBeTruthy();
+    expect(monitor.dismiss).not.toHaveBeenCalled();
+  });
+
+  it('Undo on a just-added capture deletes the new todo, restores Add to todo, and never dismisses', async () => {
+    wireMonitorPane();
+    await flush();
+    handlers.cwdChanged!({ sessionId: 's1', cwd: '/repo', repoKey: '/repo' });
+    monitor.todoAdd.mockResolvedValue([makeTodo({ id: 'n1', repoKey: '/repo', text: 'a note' })]);
+    monitor.todoDelete.mockResolvedValue([]);
+    handlers.event!(makeEvent({ id: 'c1', type: 'capture', text: 'a note' }));
+    const block = blocks().querySelector('[data-event-id="c1"]') as HTMLElement;
+    Array.from(block.querySelectorAll('button')).find((b) => b.textContent === 'Add to todo')!.click();
+    await flush();
+    (block.querySelector('.undo-add-to-todo') as HTMLButtonElement).click();
+    await flush();
+    expect(monitor.todoDelete).toHaveBeenCalledWith('/repo', 'n1');
+    expect(monitor.dismiss).not.toHaveBeenCalled();
+    expect(block.querySelector('.undo-add-to-todo')).toBeNull();
+    expect(Array.from(block.querySelectorAll('button')).some((b) => b.textContent === 'Add to todo')).toBe(true);
+  });
+
+  it('once the undo window elapses, the source block is dismissed and removed (§16.2)', async () => {
+    vi.useFakeTimers();
+    try {
+      wireMonitorPane();
+      await vi.advanceTimersByTimeAsync(0);
+      handlers.cwdChanged!({ sessionId: 's1', cwd: '/repo', repoKey: '/repo' });
+      monitor.todoAdd.mockResolvedValue([makeTodo({ id: 'n1', repoKey: '/repo', text: 'a note' })]);
+      handlers.event!(makeEvent({ id: 'c1', type: 'capture', text: 'a note' }));
+      const block = blocks().querySelector('[data-event-id="c1"]') as HTMLElement;
+      Array.from(block.querySelectorAll('button')).find((b) => b.textContent === 'Add to todo')!.click();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(blocks().querySelector('[data-event-id="c1"]')).toBeTruthy();
+      await vi.advanceTimersByTimeAsync(TODO_UNDO_MS);
+      expect(monitor.dismiss).toHaveBeenCalledWith('c1');
+      expect(blocks().querySelector('[data-event-id="c1"]')).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('re-pulls todos and updates the count when an external todo change is signaled (§16.2)', async () => {
+    wireMonitorPane();
+    await flush();
+    handlers.cwdChanged!({ sessionId: 's1', cwd: '/repo', repoKey: '/repo' });
+    await flush();
+    expect(byId('todo-count').textContent).toBe('0');
+    // A todo added elsewhere (e.g. the terminal pane's Capture selection button)
+    // signals the change; the action window must re-pull and refresh its count.
+    monitor.todoList.mockResolvedValue([
+      makeTodo({ id: 't1', status: 'active' }),
+      makeTodo({ id: 't2', status: 'active' }),
+    ]);
+    window.dispatchEvent(new CustomEvent(TODOS_CHANGED_EVENT));
+    await flush();
+    expect(monitor.todoList).toHaveBeenCalledWith('/repo');
+    expect(byId('todo-count').textContent).toBe('2');
   });
 
   it('Add to todo updates the Todo tab active count from the returned list', async () => {
@@ -210,18 +270,39 @@ describe('action window DOM (§16 — tabs, captures, command history, focus)', 
     expect(monitor.inject).toHaveBeenCalledWith({ text: 'hi', submit: true });
   });
 
-  it('renders a Clear commands action that calls clearCommands() and empties the list', async () => {
-    monitor.commands.mockResolvedValueOnce([makeCommand({ id: 'c1', command: 'ls' })]);
+  it('Clear commands calls clearCommands() without optimistically wiping a running command', async () => {
+    monitor.commands.mockResolvedValue([
+      makeCommand({ id: 'c1', command: 'ls', exitCode: 0 }),
+      makeCommand({ id: 'c2', command: 'sleep 5', running: true, exitCode: null }),
+    ]);
     wireMonitorPane();
     await flush();
     const clear = byId('clear-commands') as HTMLButtonElement;
     expect(clear).toBeTruthy();
     clear.click();
     expect(monitor.clearCommands).toHaveBeenCalled();
-    expect(history().querySelectorAll('.command-entry').length).toBe(0);
+    // No commandsChanged yet — the running command must stay visible (main is the source of truth).
+    const texts = Array.from(history().querySelectorAll('.command-text')).map((e) => e.textContent);
+    expect(texts).toContain('sleep 5');
   });
 
-  it('renders command-history entries newest-first with exit chips and a Capture button', async () => {
+  it('Clear commands re-renders to only the still-running commands once main reports the change', async () => {
+    monitor.commands.mockResolvedValue([
+      makeCommand({ id: 'c1', command: 'ls', exitCode: 0 }),
+      makeCommand({ id: 'c2', command: 'sleep 5', running: true, exitCode: null }),
+    ]);
+    wireMonitorPane();
+    await flush();
+    (byId('clear-commands') as HTMLButtonElement).click();
+    monitor.commands.mockResolvedValue([makeCommand({ id: 'c2', command: 'sleep 5', running: true, exitCode: null })]);
+    handlers.commandsChanged!();
+    await flush();
+    const entries = history().querySelectorAll('.command-entry');
+    expect(entries.length).toBe(1);
+    expect(entries[0].querySelector('.command-text')!.textContent).toBe('sleep 5');
+  });
+
+  it('renders command-history entries newest-first with exit chips and no per-entry Capture button', async () => {
     monitor.commands.mockResolvedValueOnce([
       makeCommand({ id: 'c1', command: 'ls', exitCode: 0 }),
       makeCommand({ id: 'c2', command: 'sleep 5', running: true, exitCode: null }),
@@ -232,17 +313,8 @@ describe('action window DOM (§16 — tabs, captures, command history, focus)', 
     expect(entries.length).toBe(2);
     expect((entries[0] as HTMLElement).dataset.commandId).toBe('c2');
     expect(entries[1].querySelector('.command-text')!.textContent).toBe('ls');
-    expect(entries[0].querySelector('button')!.textContent).toContain('Capture');
-  });
-
-  it('Capture click calls captureCommand(id) and renders no block optimistically (fail-closed)', async () => {
-    monitor.commands.mockResolvedValueOnce([makeCommand({ id: 'cX', command: 'whoami' })]);
-    wireMonitorPane();
-    await flush();
-    const before = blocks().querySelectorAll('.capture-block').length;
-    (history().querySelector('.command-entry button') as HTMLButtonElement).click();
-    expect(monitor.captureCommand).toHaveBeenCalledWith('cX');
-    expect(blocks().querySelectorAll('.capture-block').length).toBe(before);
+    // Command capture moved to the Capture-selection button (§16.2); no per-entry button.
+    expect(entries[0].querySelector('button')).toBeNull();
   });
 
   // ---- focus rule (§16.2) ----

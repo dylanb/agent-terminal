@@ -1,6 +1,13 @@
 import { app, BrowserWindow, ipcMain } from 'electron';
 import path from 'node:path';
-import { CH, SESSION_ID, type ChannelPayloads, type CommandSummary, type SendChannel } from '../shared/ipc';
+import {
+  CH,
+  SESSION_ID,
+  type ChannelPayloads,
+  type CommandCaptureResult,
+  type CommandSummary,
+  type SendChannel,
+} from '../shared/ipc';
 import { createInjector } from './inject';
 import { createMonitorEventStore } from './eventStore';
 import { createShadowModel } from './shadow';
@@ -157,22 +164,6 @@ async function createWindow(): Promise<void> {
       [CH.monitorCapture]: (_e, m) => {
         if (isValidCapture(m)) send(CH.monitorEvent, { sessionId: SESSION_ID, event: store.addCapture(m) });
       },
-      // Fail-closed: an unknown/stale/trimmed commandId materializes nothing (§15.4).
-      [CH.monitorCaptureCommand]: (_e, m) => {
-        if (!isValidCaptureCommand(m)) return;
-        const cap = tracker.capture(m.commandId);
-        if (!cap) return;
-        const event = store.addEvent({
-          sessionId: SESSION_ID,
-          type: 'command-output',
-          source: 'shell-integration',
-          text: cap.text,
-          range: null,
-          parentId: null,
-          truncated: cap.truncated,
-        });
-        send(CH.monitorEvent, { sessionId: SESSION_ID, event });
-      },
       // Dismiss removes from the store so a reloaded pane's replay won't resurrect it;
       // removing a report cascades to its findings (§15.6 / v2.6).
       [CH.monitorDismiss]: (_e, m) => {
@@ -201,6 +192,10 @@ async function createWindow(): Promise<void> {
         isValidCommandsRequest(m)
           ? tracker.summaries().map((s) => ({ ...s, sessionId: SESSION_ID }))
           : [],
+      // A command's output text for adding straight to a todo (§16.2); fail-closed to
+      // null on a malformed payload or an unknown/trimmed id.
+      [CH.monitorCaptureCommandText]: (_e, m): CommandCaptureResult | null =>
+        isValidCaptureCommand(m) ? (tracker.capture(m.commandId) ?? null) : null,
       // Todo CRUD (§16.4) — each returns the fresh repo list; fail-closed to [] on
       // a malformed payload so a bad message can never mutate another repo's list.
       [CH.todoList]: (_e, m) => (isValidTodoList(m) ? todoStore.list(m.repoKey) : []),

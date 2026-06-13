@@ -53,7 +53,7 @@ describe('Todo tab (§16.4 — active/Done, manual add, reorder, edit, lifecycle
       onCwdChanged: vi.fn((cb) => (handlers.cwdChanged = cb)),
       replay: vi.fn(async () => []),
       commands: vi.fn(async () => []),
-      captureCommand: vi.fn(),
+      captureCommandText: vi.fn(async () => null),
       dismiss: vi.fn(),
       dismissAll: vi.fn(),
       clearCommands: vi.fn(),

@@ -58,7 +58,7 @@ export interface CommandTrackerDeps {
 
 export interface CommandTracker {
   summaries(): CommandSpanSummary[];
-  /** Clear the whole history — Dismiss-all for commands (§16.2); disposes all markers. */
+  /** Drop finished commands, keeping any still-running one (§16.2); disposes the dropped markers. */
   clear(): void;
   capture(id: string): CommandCapture | undefined;
   /** Output ranges of finished spans, for scanner gating (§15.6). */
@@ -239,12 +239,13 @@ export function createCommandTracker(deps: CommandTrackerDeps): CommandTracker {
       }));
     },
     clear() {
-      if (pendingB) {
-        pendingB.marker.dispose();
-        pendingB = null;
+      // Clear only finished commands; a still-running command (and any in-flight
+      // command-start) survives until it finishes (§16.2).
+      for (let i = spans.length - 1; i >= 0; i--) {
+        if (spans[i].running) continue;
+        disposeSpan(spans[i]);
+        spans.splice(i, 1);
       }
-      for (const s of spans) disposeSpan(s);
-      spans.length = 0;
       emitChange();
     },
     capture(id) {

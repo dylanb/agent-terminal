@@ -17,7 +17,7 @@ export const CH = {
   monitorReplay: 'monitor:replay',
   monitorCommands: 'monitor:commands',
   monitorCommandsChanged: 'monitor:commandsChanged',
-  monitorCaptureCommand: 'monitor:captureCommand',
+  monitorCaptureCommandText: 'monitor:captureCommandText',
   monitorDismiss: 'monitor:dismiss',
   monitorDismissAll: 'monitor:dismissAll',
   agentInject: 'agent:inject',
@@ -219,6 +219,12 @@ export interface CaptureCommandMsg {
   commandId: string;
 }
 
+/** Output text of a captured command (§16.2); returned null when the id is unknown/trimmed. */
+export interface CommandCaptureResult {
+  text: string;
+  truncated: boolean;
+}
+
 /** Dismiss a captured event; dismissing a `report` cascades to its findings (§15.6 / v2.6). */
 export interface DismissMsg {
   sessionId: SessionId;
@@ -297,8 +303,8 @@ export interface MonitorApi {
   commands(): Promise<CommandSummary[]>;
   /** Mark-driven signal that a command span opened/closed; pane re-pulls history (§15.5). */
   onCommandsChanged(cb: () => void): void;
-  /** Materialize a command's output as a monitor:event block; fail-closed on unknown id (§15.4). */
-  captureCommand(commandId: string): void;
+  /** A command's output text, for adding straight to a todo (§16.2); null on unknown/trimmed id. */
+  captureCommandText(commandId: string): Promise<CommandCaptureResult | null>;
   /** Dismiss one captured event; dismissing a report cascades to its findings (§15.6). */
   dismiss(eventId: string): void;
   /** Dismiss every captured event (§15.6). */

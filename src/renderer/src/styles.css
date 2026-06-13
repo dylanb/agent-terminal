@@ -355,3 +355,8 @@ button.dismiss:hover {
   padding: 6px 8px;
   border-top: 1px solid #2c2c2c;
 }
+
+.capture-actions .added-note {
+  align-self: center;
+  color: #9a9a9a;
+}

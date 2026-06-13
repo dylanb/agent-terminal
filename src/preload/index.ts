@@ -3,6 +3,7 @@ import {
   CH,
   SESSION_ID,
   type AgentInjectMsg,
+  type CommandCaptureResult,
   type CommandSummary,
   type CwdChangedMsg,
   type MonitorApi,
@@ -36,8 +37,11 @@ const monitorApi: MonitorApi = {
   commands: () =>
     ipcRenderer.invoke(CH.monitorCommands, { sessionId: SESSION_ID }) as Promise<CommandSummary[]>,
   onCommandsChanged: (cb) => ipcRenderer.on(CH.monitorCommandsChanged, () => cb()),
-  captureCommand: (commandId) =>
-    ipcRenderer.send(CH.monitorCaptureCommand, { sessionId: SESSION_ID, commandId }),
+  captureCommandText: (commandId) =>
+    ipcRenderer.invoke(CH.monitorCaptureCommandText, {
+      sessionId: SESSION_ID,
+      commandId,
+    }) as Promise<CommandCaptureResult | null>,
   dismiss: (eventId) => ipcRenderer.send(CH.monitorDismiss, { sessionId: SESSION_ID, eventId }),
   dismissAll: () => ipcRenderer.send(CH.monitorDismissAll, { sessionId: SESSION_ID }),
   inject: (req) =>
