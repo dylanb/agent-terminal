@@ -47,6 +47,7 @@ describe('Todo tab (§16.4 — active/Done, manual add, reorder, edit, lifecycle
     settings = { ...DEFAULT_UI_SETTINGS };
     monitor = {
       onEvent: vi.fn(),
+      onEventRemoved: vi.fn(),
       onUpdate: vi.fn(),
       onExit: vi.fn(),
       onCommandsChanged: vi.fn(),

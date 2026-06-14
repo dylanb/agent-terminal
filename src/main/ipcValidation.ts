@@ -11,6 +11,7 @@ import {
   type DismissAllMsg,
   type DismissMsg,
   type MonitorCaptureMsg,
+  type MonitorLearnChromeMsg,
   type PtyInputMsg,
   type PtyResizeMsg,
   type TodoAddMsg,
@@ -74,6 +75,10 @@ export function isValidDismiss(m: unknown): m is DismissMsg {
 
 export function isValidDismissAll(m: unknown): m is DismissAllMsg {
   return isRecord(m) && isLiveSession(m);
+}
+
+export function isValidLearnChrome(m: unknown): m is MonitorLearnChromeMsg {
+  return isRecord(m) && isLiveSession(m) && typeof m.eventId === 'string' && typeof m.sample === 'string';
 }
 
 /** Global UI prefs (§16.6) — no sessionId; validate only the present fields. */

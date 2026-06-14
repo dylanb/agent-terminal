@@ -72,6 +72,7 @@ describe('action window DOM (§16 — tabs, captures, command history, focus)', 
     exit?: () => void;
     commandsChanged?: () => void;
     cwdChanged?: (m: { sessionId: string; cwd: string; repoKey: string }) => void;
+    eventRemoved?: (eventId: string) => void;
   };
   let settings: UiSettings;
   let monitor: Record<string, ReturnType<typeof vi.fn>>;
@@ -82,6 +83,7 @@ describe('action window DOM (§16 — tabs, captures, command history, focus)', 
     settings = { ...DEFAULT_UI_SETTINGS };
     monitor = {
       onEvent: vi.fn((cb) => (handlers.event = cb)),
+      onEventRemoved: vi.fn((cb) => (handlers.eventRemoved = cb)),
       onUpdate: vi.fn((cb) => (handlers.update = cb)),
       onExit: vi.fn((cb) => (handlers.exit = cb)),
       onCommandsChanged: vi.fn((cb) => (handlers.commandsChanged = cb)),
@@ -91,6 +93,7 @@ describe('action window DOM (§16 — tabs, captures, command history, focus)', 
       captureCommandText: vi.fn(async () => null),
       dismiss: vi.fn(),
       dismissAll: vi.fn(),
+      learnChrome: vi.fn(),
       clearCommands: vi.fn(),
       inject: vi.fn(),
       getSettings: vi.fn(async () => settings),
@@ -170,6 +173,19 @@ describe('action window DOM (§16 — tabs, captures, command history, focus)', 
     const buttons = Array.from(group.querySelectorAll('button')).map((b) => b.textContent);
     expect(buttons).toContain('Add to todo');
     expect(buttons.some((t) => t?.includes('Insert'))).toBe(false);
+  });
+
+  it('Mark as chrome on a block learns its glyphs and drops the block (§15.x)', async () => {
+    wireMonitorPane();
+    await flush();
+    handlers.event!(makeEvent({ id: 'n', type: 'report', source: 'shadow-scan', text: '✻ Baked for 10m 58s' }));
+    const block = blocks().querySelector('[data-event-id="n"]') as HTMLElement;
+    const markBtn = Array.from(block.querySelectorAll('button')).find((b) => b.textContent === 'Mark as chrome')!;
+    expect(markBtn).toBeTruthy();
+    markBtn.click();
+    expect(monitor.learnChrome).toHaveBeenCalledWith('n', '✻ Baked for 10m 58s');
+    // Optimistic local removal mirrors Dismiss; main also retracts via monitor:eventRemoved.
+    expect(blocks().querySelector('[data-event-id="n"]')).toBeNull();
   });
 
   it('Add to todo on a finding calls todoAdd and reveals Undo in place, leaving the block', async () => {
@@ -389,6 +405,17 @@ describe('action window DOM (§16 — tabs, captures, command history, focus)', 
     const group = blocks().querySelector('[data-event-id="r"]') as HTMLElement;
     (group.querySelector('.dismiss') as HTMLButtonElement).click();
     expect(monitor.dismiss).toHaveBeenCalledWith('r');
+    expect(blocks().querySelector('[data-event-id="r"]')).toBeNull();
+    expect(blocks().querySelector('[data-event-id="f1"]')).toBeNull();
+  });
+
+  it('removes a block and its findings when main signals the capture was superseded (§15.3)', async () => {
+    wireMonitorPane();
+    await flush();
+    handlers.event!(makeEvent({ id: 'r', type: 'report', source: 'shadow-scan', text: 'partial report' }));
+    handlers.event!(makeEvent({ id: 'f1', type: 'finding', parentId: 'r', text: 'one' }));
+    expect(blocks().querySelector('[data-event-id="r"]')).toBeTruthy();
+    handlers.eventRemoved!('r');
     expect(blocks().querySelector('[data-event-id="r"]')).toBeNull();
     expect(blocks().querySelector('[data-event-id="f1"]')).toBeNull();
   });

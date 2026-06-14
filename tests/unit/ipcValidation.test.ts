@@ -9,6 +9,7 @@ import {
   isValidDismissAll,
   isValidInject,
   isValidInput,
+  isValidLearnChrome,
   isValidResize,
   isValidSetSettings,
   isValidTodoAdd,
@@ -29,6 +30,14 @@ describe('IPC payload validation (§6 — renderer-supplied input is untrusted)'
     expect(isValidResize({ sessionId: sid, cols: 80.5, rows: 24 })).toBe(false);
     expect(isValidResize({ sessionId: sid, cols: Number.NaN, rows: 24 })).toBe(false);
     expect(isValidResize({ sessionId: sid, cols: 80 })).toBe(false);
+  });
+
+  it('accepts a well-formed learn-chrome and rejects missing/mistyped eventId or sample', () => {
+    expect(isValidLearnChrome({ sessionId: sid, eventId: 'e1', sample: '❯ chrome' })).toBe(true);
+    expect(isValidLearnChrome({ sessionId: sid, eventId: 'e1' })).toBe(false);
+    expect(isValidLearnChrome({ sessionId: sid, sample: '❯ chrome' })).toBe(false);
+    expect(isValidLearnChrome({ sessionId: sid, eventId: 7, sample: 'x' })).toBe(false);
+    expect(isValidLearnChrome({ sessionId: 'other', eventId: 'e1', sample: 'x' })).toBe(false);
   });
 
   it('rejects payloads whose sessionId does not match the live session', () => {

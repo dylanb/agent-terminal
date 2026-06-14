@@ -44,10 +44,31 @@ export const DIFF_BLOCK =
   '     + const x = 1\r\n' +
   '     - const y = 2\r\n';
 
+const RULE = '─'.repeat(78);
+
+/** The real Claude composer: full-width horizontal rules (no corners) frame the ❯
+ *  caret and the (growing) input, with the mode/status strip just below. All chrome —
+ *  the rules and glyphs are themeable, so detection must be structural, not literal. */
 export const INPUT_BOX =
-  '╭────────────────────────────────────────────╮\r\n' +
-  '│ > █                                          │\r\n' +
-  '╰────────────────────────────────────────────╯\r\n';
+  RULE + '\r\n' +
+  '❯ we now want to eliminate the noise from the capture so that the action window\r\n' +
+  '  only shows real agent output and never the input box or the status strip below it\r\n' +
+  '\r\n' +
+  '  [Pasted text #1 +6 lines]\r\n' +
+  RULE + '\r\n' +
+  '  ⏵⏵ auto mode on (shift+tab to cycle)   ✘ Auto-update failed · Run /doctor\r\n';
+
+/** Claude's idle spinner/status line; the glyph, verb, and elapsed time all change. */
+export const SPINNER_STATUS = '✻ Baked for 10m 58s\r\n';
+
+/** A slash-command echo: the ❯ command line and its ⎿ result/file lines — chrome that
+ *  sits in the transcript between the status line and the composer. */
+export const SLASH_ECHO =
+  '❯ /compact keep only the summary and my original instructions\r\n' +
+  '  ⎿  Compacted (ctrl+o to see full summary)\r\n' +
+  '  ⎿  Referenced file terminal-web-ui-spec.md\r\n' +
+  '  ⎿  Read tests/unit/todoTab.test.ts (222 lines)\r\n' +
+  '  ⎿  Read src/main/index.ts (243 lines)\r\n';
 
 // ---- Boring (false-positive-budget) fixtures ----
 

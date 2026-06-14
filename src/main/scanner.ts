@@ -7,6 +7,7 @@ import type { MonitorEventSource, MonitorEventType } from '../shared/ipc';
 import type { ShadowMarker, ShadowReader } from './shadow';
 import type { Adapter } from './adapters/types';
 import type { CommandSpanRange } from './spanTypes';
+import { DEFAULT_CHROME_MARKERS, composerTop, isChromeLine } from './chrome';
 
 export interface ScannerEmission {
   type: MonitorEventType;
@@ -32,34 +33,68 @@ export interface ScannerDeps {
   /** Minimum report size (chars) before a `report` is emitted (§15.3 / §15.7). */
   reportMinChars: number;
   emit: ScannerEmit;
+  /**
+   * Retract a previously-emitted top-level event when a later scan supersedes it
+   * (its text is an exact prefix of the new region's — §15.3). Omitted ⇒ no retraction.
+   */
+  remove?: (id: string) => void;
   closedSpans?: () => CommandSpanRange[];
   /** Drops echoed self-injected input from emission (§16.5); omitted ⇒ no suppression. */
   isSuppressed?: (region: { startRow: number; endRow: number }) => boolean;
+  /** Active chrome markers (§15.x) — leading glyphs that flag a line as agent-UI
+   *  furniture. Grown by the user "marking as chrome"; omitted ⇒ the stock seed. */
+  chromeMarkers?: () => readonly string[];
 }
 
 export interface Scanner {
   dispose(): void;
 }
 
+/** Whitespace-collapsed text so dedup is coordinate- and wrap-free (§15.3). */
+function normalize(text: string): string {
+  return text.trim().replace(/\s+/g, ' ');
+}
+
 /** Coordinate-free dedup key so a region survives scrollback trim (§15.3). */
-function dedupKey(type: MonitorEventType, text: string): string {
+function dedupKey(type: MonitorEventType, norm: string): string {
   // `::` cannot collide: MonitorEventType is a fixed kebab-case enum with no colons.
-  return `${type}::${text.trim().replace(/\s+/g, ' ')}`;
+  return `${type}::${norm}`;
+}
+
+/** True when `a` is a proper prefix of `b` ending on a word boundary — the shape a
+ *  report's earlier partial has against its later, fuller re-capture (§15.3). */
+function isPrefixAtBoundary(a: string, b: string): boolean {
+  return b.length > a.length && b.startsWith(a + ' ');
+}
+
+/** A captured top-level region retained for content dedup (exact + prefix). */
+interface Captured {
+  key: string;
+  type: MonitorEventType;
+  norm: string;
+  /** The emitted event id; absent for suppressed entries that were never surfaced (§16.5). */
+  id?: string;
 }
 
 export function createScanner(deps: ScannerDeps): Scanner {
   const { reader, addMarker, emit } = deps;
   let watermark: ShadowMarker | undefined;
-  const seen = new Set<string>();
+  const captured = new Map<string, Captured>();
   const order: string[] = [];
 
-  function remember(key: string) {
-    seen.add(key);
-    order.push(key);
+  function remember(entry: Captured) {
+    captured.set(entry.key, entry);
+    order.push(entry.key);
     while (order.length > deps.dedupRetention) {
       const evicted = order.shift();
-      if (evicted !== undefined) seen.delete(evicted);
+      if (evicted !== undefined) captured.delete(evicted);
     }
+  }
+
+  function forget(key: string) {
+    captured.delete(key);
+    const i = order.indexOf(key);
+    if (i >= 0) order.splice(i, 1);
   }
 
   function scan() {
@@ -80,7 +115,14 @@ export function createScanner(deps: ScannerDeps): Scanner {
     }
     const endRow = reader.length() - 1;
     const closedSpans = deps.closedSpans?.() ?? [];
-    const ctx = { reader, startRow, endRow, altScreen, closedSpans, reportMinChars: deps.reportMinChars };
+    // Chrome (§15.x): the bottom-anchored, rule-framed composer plus any line whose
+    // leading glyph is a profile marker. Both signals are theme-independent, so the
+    // adapters skip furniture without knowing a single literal glyph.
+    const markers = deps.chromeMarkers?.() ?? DEFAULT_CHROME_MARKERS;
+    const composerStart = composerTop(reader, startRow, endRow);
+    const isChrome = (row: number): boolean =>
+      row >= composerStart || isChromeLine(reader.lineText(row), markers);
+    const ctx = { reader, startRow, endRow, altScreen, closedSpans, reportMinChars: deps.reportMinChars, isChrome };
 
     // Select the first specific adapter that fingerprints this buffer; degrade to
     // the generic fallback when none match, never to silence (§15.3).
@@ -89,16 +131,33 @@ export function createScanner(deps: ScannerDeps): Scanner {
       // Dedup at the parent level only; findings ride on the parent so identical
       // finding text across different reports never collides, and an unchanged
       // report (and its findings) is skipped wholesale on the next scan.
-      const key = dedupKey(region.type, region.text);
-      if (seen.has(key)) continue;
+      const norm = normalize(region.text);
+      const key = dedupKey(region.type, norm);
+      if (captured.has(key)) continue; // exact match already captured — drop the second
+      // A prefix-subset of something already captured (e.g. a partial re-read of a
+      // report whose fuller form we already hold) adds nothing — drop it (§15.3).
+      let subsumed = false;
+      for (const c of captured.values()) {
+        if (c.type === region.type && isPrefixAtBoundary(norm, c.norm)) { subsumed = true; break; }
+      }
+      if (subsumed) continue;
       // Echoed self-injected input: remember it so it never re-emits, but don't
       // surface it; the agent's reply renders below the watermark and still does (§16.5).
       if (deps.isSuppressed?.({ startRow: region.startRow, endRow: region.endRow })) {
-        remember(key);
+        remember({ key, type: region.type, norm });
         continue;
       }
-      remember(key);
+      // This region supersedes earlier partial captures (their text is an exact prefix
+      // of it — a report that streamed across quiet scans, §8.3): retract them so the
+      // pane keeps only the complete capture (§15.3).
+      for (const c of [...captured.values()]) {
+        if (c.type === region.type && isPrefixAtBoundary(c.norm, norm)) {
+          if (c.id !== undefined) deps.remove?.(c.id);
+          forget(c.key);
+        }
+      }
       const parentId = emit({ type: region.type, source: region.source, text: region.text, parentId: null, truncated });
+      remember({ key, type: region.type, norm, id: parentId });
       for (const child of region.children ?? []) {
         emit({ type: child.type, source: child.source, text: child.text, parentId, truncated });
       }

@@ -21,7 +21,7 @@ export function createGenericAdapter(): Adapter {
     id: 'generic',
     matches: () => false, // fallback-only; never selected as a specific adapter
     detect(ctx: AdapterContext): DetectedRegion[] {
-      const { reader, startRow, endRow, altScreen, closedSpans, reportMinChars } = ctx;
+      const { reader, startRow, endRow, altScreen, closedSpans, reportMinChars, isChrome } = ctx;
       const curLines = new Set<string>();
       for (let y = startRow; y <= endRow; y++) curLines.add(reader.lineText(y).trim());
 
@@ -39,6 +39,7 @@ export function createGenericAdapter(): Adapter {
           continue;
         }
         if (insideClosedSpan(y, closedSpans)) continue;
+        if (isChrome(y)) continue; // composer/status/echo furniture (§15.x)
         if (prevLines.has(t)) continue; // stable chrome
         collected.push(raw);
       }

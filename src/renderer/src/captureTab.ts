@@ -34,13 +34,15 @@ function sourceTypeFor(type: MonitorEventType): TodoSourceType {
 export interface CaptureTab {
   /** Render a stored event (replay or live); deduped by id so each renders once. */
   appendBlock(event: MonitorEvent): void;
+  /** Drop a rendered block/finding by id when main retracts it (superseded, §15.3). */
+  removeBlock(eventId: string): void;
   renderCommands(commands: CommandSummary[]): void;
 }
 
 export interface CaptureTabDeps {
   blocksEl: HTMLElement;
   historyEl: HTMLElement;
-  monitor: Pick<MonitorApi, 'dismiss' | 'dismissAll' | 'clearCommands'>;
+  monitor: Pick<MonitorApi, 'dismiss' | 'dismissAll' | 'clearCommands' | 'learnChrome'>;
   todoSink: TodoSink;
 }
 
@@ -180,9 +182,19 @@ export function createCaptureTab(deps: CaptureTabDeps): CaptureTab {
     const timeEl = document.createElement('span');
     timeEl.className = 'capture-time';
     timeEl.textContent = time + (event.truncated ? ' · truncated' : '');
+    // Mark as chrome (§15.x): teach main this block is agent-UI furniture; main learns
+    // its glyphs and retracts it (we also drop it optimistically, like Dismiss).
+    const markChrome = document.createElement('button');
+    markChrome.className = 'mark-chrome';
+    markChrome.textContent = 'Mark as chrome';
+    markChrome.addEventListener('click', () => {
+      monitor.learnChrome(event.id, event.text);
+      block.remove();
+    });
     meta.append(
       badge,
       timeEl,
+      markChrome,
       dismissButton(`Dismiss ${badgeLabel(event.type)} at ${time}`, () => {
         monitor.dismiss(event.id); // main cascades to child findings (§15.6)
         block.remove();
@@ -228,6 +240,22 @@ export function createCaptureTab(deps: CaptureTabDeps): CaptureTab {
     if (pending) {
       orphans.delete(event.id);
       for (const f of pending) attachFinding(f);
+    }
+  }
+
+  /**
+   * Retraction (§15.3): the scanner superseded this event with a fuller capture, so
+   * drop its block. A report block contains its findings, so removing it cascades;
+   * also clears the dedup/orphan bookkeeping so a stale id can never linger.
+   */
+  function removeBlock(eventId: string): void {
+    rendered.delete(eventId);
+    orphans.delete(eventId);
+    for (const el of blocksEl.querySelectorAll('[data-event-id]')) {
+      if ((el as HTMLElement).dataset.eventId === eventId) {
+        el.remove();
+        return;
+      }
     }
   }
 
@@ -282,5 +310,5 @@ export function createCaptureTab(deps: CaptureTabDeps): CaptureTab {
   toolbar.appendChild(dismissAll);
   blocksEl.parentNode?.insertBefore(toolbar, blocksEl);
 
-  return { appendBlock, renderCommands };
+  return { appendBlock, removeBlock, renderCommands };
 }

@@ -54,6 +54,10 @@ export function wireMonitorPane(): void {
     if (activeTab !== 'capture') el.unreadDot.hidden = false;
   });
 
+  // Retraction (§15.3): the scanner replaced an earlier partial capture with a fuller
+  // one and asks the pane to drop the superseded block (its findings cascade with it).
+  window.monitor.onEventRemoved((eventId) => captureTab.removeBlock(eventId));
+
   window.monitor.onCommandsChanged(() => pullCommands());
 
   // Repo-scoped todos (§16.3): a repo-key change swaps the displayed list, unless a

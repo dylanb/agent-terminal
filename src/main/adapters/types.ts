@@ -17,6 +17,9 @@ export interface AdapterContext {
   closedSpans: CommandSpanRange[];
   /** Minimum report size (chars) before a `report` is emitted (§15.3 / §15.7). */
   reportMinChars: number;
+  /** True when the absolute row is agent-UI chrome (composer/status/echo) — never
+   *  content. Structural + profile-driven, so it survives theme customization (§15.x). */
+  isChrome(row: number): boolean;
 }
 
 /** A finding inside a report — emitted as a child event linked by parentId (§15.6 / v2.6). */

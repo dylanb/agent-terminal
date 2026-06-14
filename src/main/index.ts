@@ -24,6 +24,7 @@ import {
   isValidDismissAll,
   isValidInject,
   isValidInput,
+  isValidLearnChrome,
   isValidResize,
   isValidSetSettings,
   isValidTodoAdd,
@@ -40,6 +41,8 @@ import { resolveRuntimeConfig } from './runtimeConfig';
 import { createCommandTracker } from './commandTracker';
 import { createCwdTracker } from './cwdTracker';
 import { createScanner } from './scanner';
+import { createChromeProfileStore } from './chromeProfile';
+import { learnMarkers } from './chrome';
 import { createInjectionSuppressor } from './injectionSuppression';
 import { createClaudeCodeAdapter } from './adapters/claudeCode';
 import { createGenericAdapter } from './adapters/generic';
@@ -69,6 +72,8 @@ async function createWindow(): Promise<void> {
   const uiSettings = createUiSettingsStore(path.join(app.getPath('userData'), 'ui-settings.json'));
   // Repo-scoped todos (§16.3) — persisted in-repo, keyed by the cwd tracker's repo key.
   const todoStore = createTodoStore({ maxDoneTodos: config.maxDoneTodos });
+  // Learned chrome markers (§15.x) — seeded defaults ∪ the user's "mark as chrome" adds.
+  const chromeProfile = createChromeProfileStore(path.join(app.getPath('userData'), 'chrome-profile.json'));
 
   const send = <C extends SendChannel>(channel: C, payload: ChannelPayloads[C]): void => {
     if (!win.isDestroyed()) win.webContents.send(channel, payload);
@@ -120,6 +125,7 @@ async function createWindow(): Promise<void> {
     reportMinChars: config.reportMinChars,
     closedSpans: () => tracker.closedSpans(),
     isSuppressed: (region) => suppressor.isSuppressed(region),
+    chromeMarkers: () => chromeProfile.markers(),
     emit: (e) => {
       const event = store.addEvent({
         sessionId: SESSION_ID,
@@ -132,6 +138,13 @@ async function createWindow(): Promise<void> {
       });
       send(CH.monitorEvent, { sessionId: SESSION_ID, event });
       return event.id;
+    },
+    // Retraction (§15.3): a later scan superseded an earlier partial capture — drop it
+    // from the store (cascading to its findings) so replay won't resurrect it, and tell
+    // the pane to remove the block.
+    remove: (id) => {
+      store.remove(id);
+      send(CH.monitorEventRemoved, { sessionId: SESSION_ID, eventId: id });
     },
   });
 
@@ -171,6 +184,15 @@ async function createWindow(): Promise<void> {
       },
       [CH.monitorDismissAll]: (_e, m) => {
         if (isValidDismissAll(m)) store.clear();
+      },
+      // Mark as chrome (§15.x): learn the block's leading glyphs so future furniture is
+      // filtered, then retract this capture (cascading to findings) via the shared
+      // eventRemoved path so a reloaded pane's replay won't resurrect it.
+      [CH.monitorLearnChrome]: (_e, m) => {
+        if (!isValidLearnChrome(m)) return;
+        chromeProfile.learn(learnMarkers(m.sample));
+        store.remove(m.eventId);
+        send(CH.monitorEventRemoved, { sessionId: SESSION_ID, eventId: m.eventId });
       },
       // Clear commands (§16.2): drop the whole command history; tracker.onChange
       // notifies the pane to re-pull (now empty).

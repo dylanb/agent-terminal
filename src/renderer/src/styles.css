@@ -321,6 +321,20 @@ button.dismiss:hover {
   color: #e06c6c;
 }
 
+button.mark-chrome {
+  border: none;
+  background: transparent;
+  color: #888;
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 4px;
+}
+
+button.mark-chrome:hover {
+  color: #ccc;
+}
+
 /* Findings nest inside a report group, indented from the group edge (§15.6). */
 .findings {
   padding: 6px 8px 8px;

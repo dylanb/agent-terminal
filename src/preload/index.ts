@@ -10,6 +10,7 @@ import {
   type MonitorCaptureMsg,
   type MonitorEvent,
   type MonitorEventMsg,
+  type MonitorEventRemovedMsg,
   type MonitorUpdateMsg,
   type PtyDataMsg,
   type PtyExitMsg,
@@ -31,6 +32,8 @@ const monitorApi: MonitorApi = {
   capture: (block) =>
     ipcRenderer.send(CH.monitorCapture, { sessionId: SESSION_ID, ...block } satisfies MonitorCaptureMsg),
   onEvent: (cb) => ipcRenderer.on(CH.monitorEvent, (_e, m: MonitorEventMsg) => cb(m.event)),
+  onEventRemoved: (cb) =>
+    ipcRenderer.on(CH.monitorEventRemoved, (_e, m: MonitorEventRemovedMsg) => cb(m.eventId)),
   onUpdate: (cb) => ipcRenderer.on(CH.monitorUpdate, (_e, m: MonitorUpdateMsg) => cb(m)),
   onExit: (cb) => ipcRenderer.on(CH.ptyExit, (_e, m: PtyExitMsg) => cb(m)),
   replay: () => ipcRenderer.invoke(CH.monitorReplay) as Promise<MonitorEvent[]>,
@@ -44,6 +47,8 @@ const monitorApi: MonitorApi = {
     }) as Promise<CommandCaptureResult | null>,
   dismiss: (eventId) => ipcRenderer.send(CH.monitorDismiss, { sessionId: SESSION_ID, eventId }),
   dismissAll: () => ipcRenderer.send(CH.monitorDismissAll, { sessionId: SESSION_ID }),
+  learnChrome: (eventId, sample) =>
+    ipcRenderer.send(CH.monitorLearnChrome, { sessionId: SESSION_ID, eventId, sample }),
   inject: (req) =>
     ipcRenderer.send(CH.agentInject, { sessionId: SESSION_ID, ...req } satisfies AgentInjectMsg),
   // Global UI prefs (§16.6) — no sessionId; app-wide, not per-session.

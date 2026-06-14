@@ -13,6 +13,7 @@ export const CH = {
   ptyExit: 'pty:exit',
   monitorCapture: 'monitor:capture',
   monitorEvent: 'monitor:event',
+  monitorEventRemoved: 'monitor:eventRemoved',
   monitorUpdate: 'monitor:update',
   monitorReplay: 'monitor:replay',
   monitorCommands: 'monitor:commands',
@@ -20,6 +21,7 @@ export const CH = {
   monitorCaptureCommandText: 'monitor:captureCommandText',
   monitorDismiss: 'monitor:dismiss',
   monitorDismissAll: 'monitor:dismissAll',
+  monitorLearnChrome: 'monitor:learnChrome',
   agentInject: 'agent:inject',
   uiGetSettings: 'ui:getSettings',
   uiSetSettings: 'ui:setSettings',
@@ -247,6 +249,27 @@ export interface MonitorEventMsg {
 }
 
 /**
+ * A previously-emitted semantic event was retracted by the scanner because a later
+ * capture supersedes it (its text is an exact prefix of the newer one — §15.3). The
+ * pane drops the block; removing a `report` drops its nested findings with it.
+ */
+export interface MonitorEventRemovedMsg {
+  sessionId: SessionId;
+  eventId: string;
+}
+
+/**
+ * The user marked a captured block as chrome (§15.x): main learns its leading glyphs
+ * as chrome markers (so future furniture led by them is filtered) and retracts this
+ * capture via monitor:eventRemoved. `sample` is the block's text.
+ */
+export interface MonitorLearnChromeMsg {
+  sessionId: SessionId;
+  eventId: string;
+  sample: string;
+}
+
+/**
  * The agent's repo key changed (OSC 7 → §16.3); the action window re-pulls
  * `todo:list` for `repoKey`, blocking a swap while a todo edit is open (§16.3).
  */
@@ -277,6 +300,7 @@ export interface ChannelPayloads {
   'pty:data': PtyDataMsg;
   'pty:exit': PtyExitMsg;
   'monitor:event': MonitorEventMsg;
+  'monitor:eventRemoved': MonitorEventRemovedMsg;
   'monitor:update': MonitorUpdateMsg;
   'monitor:commandsChanged': CommandsChangedMsg;
   'cwd:changed': CwdChangedMsg;
@@ -296,6 +320,8 @@ export interface TermApi {
 export interface MonitorApi {
   capture(block: Omit<MonitorCaptureMsg, 'sessionId'>): void;
   onEvent(cb: (event: MonitorEvent) => void): void;
+  /** A prior semantic event was retracted (superseded by a fuller capture, §15.3); drop its block. */
+  onEventRemoved(cb: (eventId: string) => void): void;
   onUpdate(cb: (msg: MonitorUpdateMsg) => void): void;
   onExit(cb: (msg: PtyExitMsg) => void): void;
   replay(): Promise<MonitorEvent[]>;
@@ -309,6 +335,9 @@ export interface MonitorApi {
   dismiss(eventId: string): void;
   /** Dismiss every captured event (§15.6). */
   dismissAll(): void;
+  /** Mark a captured block as chrome (§15.x): learn its leading glyphs as markers so
+   *  future furniture is filtered, and retract this capture. */
+  learnChrome(eventId: string, sample: string): void;
   inject(req: Omit<AgentInjectMsg, 'sessionId'>): void;
   /** Global UI prefs — split ratio + last tab (§16.6). */
   getSettings(): Promise<UiSettings>;

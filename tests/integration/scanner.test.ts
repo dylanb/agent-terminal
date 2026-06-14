@@ -75,6 +75,44 @@ describe('semantic scanner (§15.2/§15.3 — quiet-triggered, watermarked, dedu
     expect(emitted[0]).toMatchObject({ type: 'report', text: 'Do you want to continue?', parentId: null });
   });
 
+  it('consults the live chrome-marker profile so a newly-learned glyph filters future furniture (§15.x)', async () => {
+    // Acceptance for "mark as chrome": once a custom glyph is learned, lines led by it
+    // stop being captured. Driven through the real generic adapter (which respects the
+    // scanner-supplied isChrome) so the assertion is on emitted events, not internals.
+    emitted = [];
+    const markers: string[] = [];
+    shadow = createShadowModel({ cols: 80, rows: 24, settleMs: SETTLE, quietMs: QUIET, onStatus: () => {} });
+    createScanner({
+      reader: shadow.reader,
+      addMarker: (r) => shadow.addMarker(r),
+      onQuiet: (cb) => shadow.onQuiet(cb),
+      adapters: [],
+      fallback: createGenericAdapter(),
+      dedupRetention: 200,
+      reportMinChars: 120,
+      emit: collectingEmit,
+      chromeMarkers: () => markers,
+    });
+
+    // Before learning, a block led by the custom glyph ◆ is captured (◆ is unknown).
+    shadow.write(
+      '◆ the custom themed status glyph shows progress and elapsed time as it works\r\n' +
+        '◆ and a second custom-glyph line keeps the running token and context in view\r\n',
+    );
+    await goQuiet();
+    expect(emitted.length).toBe(1);
+    expect(emitted[0].text).toContain('custom themed status glyph');
+
+    // The user marks it as chrome; the profile now yields ◆.
+    markers.push('◆');
+    shadow.write(
+      '◆ a completely different custom-glyph status line appears on the next scan now\r\n' +
+        '◆ with more custom-glyph furniture text that would also exceed the threshold ok\r\n',
+    );
+    await goQuiet();
+    expect(emitted.length).toBe(1); // the new ◆ furniture is filtered, not captured
+  });
+
   it('dedups an unchanged region across repeated quiet transitions', async () => {
     setup();
     shadow.write('Continue?\r\n');
@@ -168,6 +206,80 @@ describe('semantic scanner (§15.2/§15.3 — quiet-triggered, watermarked, dedu
     expect(() => shadow.write('- principal needs a fix\r\n- security needs a fix\r\n')).not.toThrow();
     await goQuiet();
     expect(emitted).toEqual([]);
+  });
+
+  it('drops a later capture that is a prefix-subset of one already captured (§15.3)', async () => {
+    emitted = [];
+    const removed: string[] = [];
+    let regionText = '';
+    shadow = createShadowModel({ cols: 80, rows: 24, scrollback: 5000, settleMs: SETTLE, quietMs: QUIET, onStatus: () => {} });
+    const oneRegion: Adapter = {
+      id: 'one-region',
+      detect: () =>
+        regionText ? [{ type: 'report', source: 'shadow-scan', text: regionText, startRow: 0, endRow: 0 }] : [],
+    };
+    createScanner({
+      reader: shadow.reader,
+      addMarker: (r) => shadow.addMarker(r),
+      onQuiet: (cb) => shadow.onQuiet(cb),
+      adapters: [oneRegion],
+      dedupRetention: 200,
+      reportMinChars: 120,
+      emit: collectingEmit,
+      remove: (id) => removed.push(id),
+    });
+
+    regionText = 'The codebase review found the auth flow sound and the migration path well covered overall';
+    shadow.write('a\r\n');
+    await goQuiet();
+    const after = emitted.length;
+
+    regionText = 'The codebase review found the auth flow';
+    shadow.write('b\r\n');
+    await goQuiet();
+
+    expect(emitted.length).toBe(after); // subset of an existing capture — not re-emitted
+    expect(removed).toEqual([]); // and nothing already-captured is retracted
+  });
+
+  it('retracts the earlier partial when a later scan supersedes it at a word boundary (§15.3)', async () => {
+    emitted = [];
+    const removed: string[] = [];
+    let regionText = '';
+    let n = 0;
+    shadow = createShadowModel({ cols: 80, rows: 24, scrollback: 5000, settleMs: SETTLE, quietMs: QUIET, onStatus: () => {} });
+    const oneRegion: Adapter = {
+      id: 'one-region',
+      detect: () =>
+        regionText ? [{ type: 'report', source: 'shadow-scan', text: regionText, startRow: 0, endRow: 0 }] : [],
+    };
+    createScanner({
+      reader: shadow.reader,
+      addMarker: (r) => shadow.addMarker(r),
+      onQuiet: (cb) => shadow.onQuiet(cb),
+      adapters: [oneRegion],
+      dedupRetention: 200,
+      reportMinChars: 120,
+      emit: (e) => {
+        emitted.push(e);
+        return String(++n);
+      },
+      remove: (id) => removed.push(id),
+    });
+
+    const partial = 'The codebase review found the auth flow sound and the migration path well covered overall';
+    regionText = partial;
+    shadow.write('a\r\n');
+    await goQuiet();
+    expect(emitted.map((e) => e.text)).toEqual([partial]); // earlier partial, id "1"
+
+    const full = partial + ' and the test suite gives good coverage of the new edge cases';
+    regionText = full;
+    shadow.write('b\r\n');
+    await goQuiet();
+
+    expect(emitted.some((e) => e.text === full)).toBe(true); // superseding report emitted
+    expect(removed).toEqual(['1']); // earlier partial retracted so the pane drops it
   });
 
   it('skips a region the suppressor flags, still emitting the rest (§16.5 seam)', async () => {
