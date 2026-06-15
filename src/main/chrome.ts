@@ -89,6 +89,22 @@ export function composerTop(
 }
 
 /**
+ * The stability frontier witnessed by a turn-complete composer (§15.3 / v2.22). When the
+ * agent has rendered its input composer at the bottom of the view, the turn is done and
+ * everything above the composer's top rule is final, so this returns `composerTop - 1` —
+ * the highest row sealed by that witness. Returns null when no composer frames the bottom:
+ * the turn may still be streaming, so nothing in the window is witnessed sealed.
+ */
+export function completedTurnFrontier(
+  reader: Pick<ShadowReader, 'cols' | 'baseY' | 'lineText'>,
+  startRow: number,
+  endRow: number,
+): number | null {
+  const top = composerTop(reader, startRow, endRow);
+  return top <= endRow ? top - 1 : null;
+}
+
+/**
  * A per-row chrome predicate over [startRow, endRow], folding both signals plus
  * **continuation**: a chrome marker line consumes the indented lines beneath it as
  * chrome too (a `❯ /command` echo and its `⎿` results). Crucially, a `⎿` under a

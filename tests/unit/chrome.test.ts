@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   DEFAULT_CHROME_MARKERS,
   chromeRows,
+  completedTurnFrontier,
   isChromeLine,
   isRuleLine,
   leadingMarker,
@@ -165,6 +166,30 @@ describe('chrome detection helpers (§15.x — customization-proof furniture)', 
       const isChrome = chromeRows(fakeReader(lines), 0, 2, DEFAULT_CHROME_MARKERS);
       // The boxed content must be capturable, not skipped as furniture.
       expect(isChrome(1)).toBe(false);
+    });
+  });
+
+  describe('completedTurnFrontier — the rows a turn-complete composer witnesses as done', () => {
+    const rule = '─'.repeat(78);
+
+    it('returns the highest content row above a bottom composer frame', () => {
+      const lines = [
+        'first content line', //  0
+        'second content line', // 1
+        'third content line', //  2
+        '', //                    3
+        rule, //                  4  composer top rule
+        '❯', //                   5
+        rule, //                  6  composer bottom rule
+        '  ⏵⏵ auto mode on', //   7  status tail
+      ];
+      // The composer frames the bottom, so everything above its top rule (row 4) is done.
+      expect(completedTurnFrontier(fakeReader(lines), 0, 7)).toBe(3);
+    });
+
+    it('returns null when no composer frames the bottom — the turn may still be streaming', () => {
+      const lines = ['streaming', 'report', 'text', 'with no', 'composer yet'];
+      expect(completedTurnFrontier(fakeReader(lines), 0, 4)).toBeNull();
     });
   });
 });
