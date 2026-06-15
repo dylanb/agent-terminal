@@ -58,6 +58,21 @@ export const INPUT_BOX =
   RULE + '\r\n' +
   '  ⏵⏵ auto mode on (shift+tab to cycle)   ✘ Auto-update failed · Run /doctor\r\n';
 
+/** A real permission prompt: full-width rules frame it (the ❯ selector lives inside),
+ *  with an option/help tail below the bottom rule. The whole bottom region is chrome. */
+export const PERMISSION_PROMPT =
+  '─'.repeat(78) + '\r\n' +
+  ' Would you like to proceed with running this command against the repository?\r\n' +
+  '\r\n' +
+  '❯ 1. Yes\r\n' +
+  '     Continue with the action.\r\n' +
+  '  2. No, tell me what to do differently\r\n' +
+  '  3. Type something else\r\n' +
+  '─'.repeat(78) + '\r\n' +
+  '  4. Chat about this instead\r\n' +
+  '\r\n' +
+  'Enter to select · ↑/↓ to navigate · Esc to cancel\r\n';
+
 /** Claude's idle spinner/status line; the glyph, verb, and elapsed time all change. */
 export const SPINNER_STATUS = '✻ Baked for 10m 58s\r\n';
 

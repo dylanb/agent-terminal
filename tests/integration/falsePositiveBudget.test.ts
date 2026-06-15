@@ -34,7 +34,7 @@ describe('false-positive budget (§15.8) — boring transcripts emit zero agent-
       addMarker: (r) => shadow.addMarker(r),
       onQuiet: (cb) => shadow.onQuiet(cb),
       adapters: [createClaudeCodeAdapter()],
-      fallback: createGenericAdapter(),
+      baseline: createGenericAdapter(),
       dedupRetention: 200,
       reportMinChars: resolveRuntimeConfig({}).reportMinChars,
       emit: (e) => {

@@ -120,7 +120,7 @@ async function createWindow(): Promise<void> {
     addMarker: (r) => shadow.addMarker(r),
     onQuiet: (cb) => shadow.onQuiet(cb),
     adapters: config.adapterEnabled('claude-code') ? [createClaudeCodeAdapter()] : [],
-    fallback: createGenericAdapter(),
+    baseline: createGenericAdapter(),
     dedupRetention: config.dedupRetention,
     reportMinChars: config.reportMinChars,
     closedSpans: () => tracker.closedSpans(),
@@ -209,6 +209,14 @@ async function createWindow(): Promise<void> {
     },
     {
       [CH.monitorReplay]: () => store.list(),
+      // §16.3: the pane queries the current repo on mount; the live cwd:changed
+      // broadcast fires only on key change, so a pane that missed the first OSC 7
+      // (emitted before it subscribed) learns the repo key only by asking.
+      [CH.monitorCurrentRepo]: () => {
+        const cwd = cwdTracker.cwd();
+        const repoKey = cwdTracker.repoKey();
+        return cwd !== null && repoKey !== null ? { cwd, repoKey } : null;
+      },
       [CH.uiGetSettings]: () => uiSettings.get(),
       [CH.monitorCommands]: (_e, m): CommandSummary[] =>
         isValidCommandsRequest(m)

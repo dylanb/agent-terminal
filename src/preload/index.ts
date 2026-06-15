@@ -14,6 +14,7 @@ import {
   type MonitorUpdateMsg,
   type PtyDataMsg,
   type PtyExitMsg,
+  type RepoInfo,
   type TermApi,
   type TodoItem,
   type TodoSource,
@@ -37,6 +38,8 @@ const monitorApi: MonitorApi = {
   onUpdate: (cb) => ipcRenderer.on(CH.monitorUpdate, (_e, m: MonitorUpdateMsg) => cb(m)),
   onExit: (cb) => ipcRenderer.on(CH.ptyExit, (_e, m: PtyExitMsg) => cb(m)),
   replay: () => ipcRenderer.invoke(CH.monitorReplay) as Promise<MonitorEvent[]>,
+  currentRepo: () =>
+    ipcRenderer.invoke(CH.monitorCurrentRepo, { sessionId: SESSION_ID }) as Promise<RepoInfo | null>,
   commands: () =>
     ipcRenderer.invoke(CH.monitorCommands, { sessionId: SESSION_ID }) as Promise<CommandSummary[]>,
   onCommandsChanged: (cb) => ipcRenderer.on(CH.monitorCommandsChanged, () => cb()),

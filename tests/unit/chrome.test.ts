@@ -1,11 +1,17 @@
 import { describe, expect, it } from 'vitest';
 import {
   DEFAULT_CHROME_MARKERS,
+  chromeRows,
   isChromeLine,
   isRuleLine,
   leadingMarker,
   learnMarkers,
 } from '../../src/main/chrome';
+
+/** A minimal reader over fixed lines — config injection, not an emulator mock (§15.8). */
+function fakeReader(lines: string[], cols = 80, baseY = 0) {
+  return { cols: () => cols, baseY: () => baseY, lineText: (y: number) => lines[y] ?? '' };
+}
 
 describe('chrome detection helpers (§15.x — customization-proof furniture)', () => {
   describe('isRuleLine — a full-width horizontal rule, any repeated glyph', () => {
@@ -75,6 +81,90 @@ describe('chrome detection helpers (§15.x — customization-proof furniture)', 
       expect(isChromeLine('⏵⏵ auto mode on', DEFAULT_CHROME_MARKERS)).toBe(true);
       // ⎿ continuations belong to ⏺ tool/diff blocks — never seeded as chrome
       expect(DEFAULT_CHROME_MARKERS).not.toContain('⎿');
+    });
+  });
+
+  describe('chromeRows — continuation-aware furniture over a window', () => {
+    it('a ❯ command echo consumes its indented ⎿ result lines as chrome', () => {
+      const lines = ['❯ /compact keep the summary', '  ⎿  Compacted', '  ⎿  Read file', 'Real prose follows here'];
+      const isChrome = chromeRows(fakeReader(lines), 0, 3, ['❯']);
+      expect(isChrome(0)).toBe(true); // the ❯ echo line
+      expect(isChrome(1)).toBe(true); // ⎿ continuation under chrome
+      expect(isChrome(2)).toBe(true);
+      expect(isChrome(3)).toBe(false); // back to real prose
+    });
+
+    it('a ⎿ under a non-chrome ⏺ tool head stays content (not chrome)', () => {
+      const lines = ['⏺ Read(src/x.ts)', '  ⎿  Read 93 lines'];
+      const isChrome = chromeRows(fakeReader(lines), 0, 1, DEFAULT_CHROME_MARKERS);
+      expect(isChrome(0)).toBe(false);
+      expect(isChrome(1)).toBe(false);
+    });
+
+    it('the bottom rule-framed composer region is chrome by geometry', () => {
+      const rule = '─'.repeat(78);
+      const lines = ['real report prose above the composer', rule, '❯', rule, '  ⏵⏵ auto mode on'];
+      const isChrome = chromeRows(fakeReader(lines), 0, 4, DEFAULT_CHROME_MARKERS);
+      expect(isChrome(0)).toBe(false);
+      expect(isChrome(1)).toBe(true);
+      expect(isChrome(4)).toBe(true);
+    });
+
+    it('a full-width-rule-framed permission prompt is chrome top-rule → bottom, tall tail and all', () => {
+      const rule = '─'.repeat(78);
+      const lines = [
+        'real report content above the prompt that must stay capturable as a finding here',
+        rule, //                                              1  prompt top rule
+        ' ☐ Proceed?', //                                     2
+        '', //                                                3
+        'Would you like to proceed?', //                      4
+        '', //                                                5
+        '❯ 1. Yes', //                                        6  selector lives inside the frame
+        '     Continue with the action.', //                 7
+        '  2. No', //                                         8
+        '  3. Type something.', //                            9
+        rule, //                                             10  prompt bottom rule
+        '  4. Chat about this', //                           11  tail below the bottom rule...
+        '  5. Always allow', //                              12
+        '', //                                               13
+        'Enter to select · up/down to navigate · Esc', //    14
+        'Press ? for shortcuts', //                          15
+      ];
+      const isChrome = chromeRows(fakeReader(lines), 0, 15, DEFAULT_CHROME_MARKERS);
+      expect(isChrome(0)).toBe(false); // report content above the frame is NOT chrome
+      expect(isChrome(1)).toBe(true); //  top rule
+      expect(isChrome(6)).toBe(true); //  prompt body (the ❯ selector)
+      expect(isChrome(10)).toBe(true); // bottom rule
+      expect(isChrome(15)).toBe(true); // the tall tail is chrome too (no BOTTOM_BAND limit)
+    });
+
+    it('a lone full-width rule in report content (composer below) does not make the report chrome', () => {
+      const rule = '─'.repeat(78);
+      const lines = [
+        'report intro paragraph that is long enough to be real content on its own here',
+        rule, //                          1  a content separator inside the report
+        'report tail paragraph still real content that continues after the separator', // 2
+        rule, //                          3  composer top rule
+        '❯', //                           4
+        rule, //                          5  composer bottom rule
+        '  ⏵⏵ auto mode on', //           6
+      ];
+      const isChrome = chromeRows(fakeReader(lines), 0, 6, DEFAULT_CHROME_MARKERS);
+      expect(isChrome(1)).toBe(false); // content separator — only the bottom-most pair frames chrome
+      expect(isChrome(2)).toBe(false); // report tail above the composer stays content
+      expect(isChrome(3)).toBe(true); //  composer top rule
+      expect(isChrome(6)).toBe(true); //  status tail
+    });
+
+    it('a box is NOT chrome — Claude encloses real report summaries in boxes', () => {
+      const lines = [
+        '╭────────────────────────────╮',
+        '│ Here is the summary text   │',
+        '╰────────────────────────────╯',
+      ];
+      const isChrome = chromeRows(fakeReader(lines), 0, 2, DEFAULT_CHROME_MARKERS);
+      // The boxed content must be capturable, not skipped as furniture.
+      expect(isChrome(1)).toBe(false);
     });
   });
 });

@@ -87,7 +87,7 @@ describe('semantic scanner (§15.2/§15.3 — quiet-triggered, watermarked, dedu
       addMarker: (r) => shadow.addMarker(r),
       onQuiet: (cb) => shadow.onQuiet(cb),
       adapters: [],
-      fallback: createGenericAdapter(),
+      baseline: createGenericAdapter(),
       dedupRetention: 200,
       reportMinChars: 120,
       emit: collectingEmit,
@@ -153,7 +153,7 @@ describe('semantic scanner (§15.2/§15.3 — quiet-triggered, watermarked, dedu
       addMarker: (r) => shadow.addMarker(r),
       onQuiet: (cb) => shadow.onQuiet(cb),
       adapters: [], // no specific adapter matches → degrade to the generic fallback (§15.3)
-      fallback: createGenericAdapter(),
+      baseline: createGenericAdapter(),
       dedupRetention: 200,
       reportMinChars,
       closedSpans: () => closed,
@@ -197,6 +197,106 @@ describe('semantic scanner (§15.2/§15.3 — quiet-triggered, watermarked, dedu
     shadow.write('\r\n'); // no new content, prior lines stable
     await goQuiet();
     expect(emitted.length).toBe(first);
+  });
+
+  it('does not re-emit a report each tick when a contiguous trailing line mutates (§15.3)', async () => {
+    // The inverted baseline gathers a free-form prose run; a live-updating line that
+    // sits contiguous with a report (a progress/elapsed line, or composer text with no
+    // rule/marker boundary above it) makes the run's text differ every quiet tick. That
+    // is not a clean append, so prefix-retraction misses it — without tail-mutation
+    // dedup it re-captures the same report over and over.
+    setupGeneric();
+    const body = 'principal: pin the spec version\r\nsecurity: lock down redirects\r\n';
+    const tail = (s: string) => `working on the follow-up, progress ${s} so far\r\n`;
+    shadow.write(body + tail('10pct'));
+    await goQuiet();
+    shadow.write('\x1b[1A\r' + tail('20pct')); // repaint the trailing line in place
+    await goQuiet();
+    shadow.write('\x1b[1A\r' + tail('30pct'));
+    await goQuiet();
+    const reports = emitted.filter((e) => e.type === 'report');
+    expect(reports).toHaveLength(1);
+  });
+
+  it('never re-emits a report once its rows are processed, even if they are rewritten in place (§15.3 positional)', async () => {
+    // The durable guarantee the user asked for: a captured paragraph's buffer position is
+    // marked processed and never revisited. An EARLY token mutating (3s→5s→7s) defeats
+    // exact/prefix/tail-mutation content dedup (common prefix is only "Status "), so this
+    // only stays at one capture if the scanner refuses to re-scan processed rows at all.
+    setupGeneric();
+    const report = (t: string) =>
+      `Status ${t}: the review is complete, all findings are listed below\r\n` +
+      `Finding: the auth flow looks sound and migration is well covered\r\n`;
+    shadow.write(report('3s'));
+    await goQuiet();
+    expect(emitted.filter((e) => e.type === 'report')).toHaveLength(1);
+    // Agent repaints the same two rows in place with an updated early token.
+    shadow.write('\x1b[2A\r' + report('5s'));
+    await goQuiet();
+    shadow.write('\x1b[2A\r' + report('7s'));
+    await goQuiet();
+    expect(emitted.filter((e) => e.type === 'report')).toHaveLength(1);
+  });
+
+  it('still supersedes a report that genuinely grows by a clean append (§15.3)', async () => {
+    // Guard: the tail-mutation dedup must not swallow real growth. A clean word-boundary
+    // append still retracts the partial and keeps the fuller capture.
+    setupGeneric();
+    shadow.write('the review found the auth flow sound and the migration well covered\r\n');
+    await goQuiet();
+    const first = emitted.filter((e) => e.type === 'report').length;
+    shadow.write('and the test suite gives good coverage of the new edge cases too\r\n');
+    await goQuiet();
+    const texts = emitted.filter((e) => e.type === 'report').map((e) => e.text);
+    expect(first).toBe(1);
+    // The fuller capture is present (clean append preserved, not skipped as churn).
+    expect(texts.some((t) => t.includes('edge cases'))).toBe(true);
+  });
+
+  it('merges a report streamed across a quiet pause into one capture, retracting the partial (§15.3 seal-on-witness)', async () => {
+    // Seal-on-witness (§15.3 / v2.22): a bottom-most unit with no witness below it — no
+    // following content and no turn-complete composer — is PROVISIONAL, not sealed. When the
+    // stream resumes and that same buffer position grows, the partial is retracted and the
+    // fuller capture replaces it: a report paused mid-stream is ONE capture, not two.
+    emitted = [];
+    const removed: string[] = [];
+    let n = 0;
+    shadow = createShadowModel({ cols: 80, rows: 24, settleMs: SETTLE, quietMs: QUIET, onStatus: () => {} });
+    createScanner({
+      reader: shadow.reader,
+      addMarker: (r) => shadow.addMarker(r),
+      onQuiet: (cb) => shadow.onQuiet(cb),
+      adapters: [],
+      baseline: createGenericAdapter(),
+      dedupRetention: 200,
+      reportMinChars: 120,
+      emit: (e) => {
+        emitted.push(e);
+        return String(++n);
+      },
+      remove: (id) => removed.push(id),
+    });
+
+    // Phase 1: a prose report streams partially, then the agent pauses (no composer below).
+    shadow.write(
+      'The authentication flow is sound and the migration path is well covered overall.\r\n' +
+        'The error handling around the network layer could be tightened up in a few spots.\r\n',
+    );
+    await goQuiet();
+    expect(emitted.filter((e) => e.type === 'report')).toHaveLength(1); // partial surfaced
+
+    // Phase 2: the SAME report resumes (clean append at the same position) and completes.
+    shadow.write(
+      'The test suite gives good coverage of the new branches and the edge cases here.\r\n' +
+        'FINAL CONCLUSION: approve the pull request once the network nits are addressed.\r\n',
+    );
+    await goQuiet();
+
+    expect(removed).toContain('1'); // the partial is retracted, not left as a duplicate
+    const merged = emitted.filter(
+      (e) => e.type === 'report' && e.text.includes('authentication flow') && e.text.includes('FINAL CONCLUSION'),
+    );
+    expect(merged).toHaveLength(1); // head + continuation become a single capture
   });
 
   it('emits nothing on the alternate buffer (precise alt parsing is out of scope §15.9)', async () => {

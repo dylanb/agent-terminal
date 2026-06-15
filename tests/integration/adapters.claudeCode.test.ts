@@ -8,6 +8,7 @@ import {
   DIFF_BLOCK,
   INPUT_BOX,
   PERMISSION_BOX,
+  PERMISSION_PROMPT,
   REPORT_BLOCK,
   SLASH_ECHO,
   SPINNER_STATUS,
@@ -21,10 +22,10 @@ describe('Claude Code adapter (§15.3 / v2.6) — asserts on emitted events only
   let shadow: ReturnType<typeof createShadowModel>;
   afterEach(() => shadow.dispose());
 
-  // withFallback mirrors production (§15.3): the generic heuristic is always present,
-  // so a chrome window claudeCode fails to claim is captured greedily by the fallback —
-  // exactly the leak the chrome tests must pin.
-  async function run(fixture: string, claudeEnabled = true, withFallback = false): Promise<ScannerEmission[]> {
+  // Mirrors production (§15.3): the Claude adapter is a classifier (tool-use/diff) and
+  // the glyph-agnostic baseline always runs, capturing prose as reports. `claudeEnabled`
+  // toggles only the classifier — the baseline is always present.
+  async function run(fixture: string, claudeEnabled = true): Promise<ScannerEmission[]> {
     const emitted: ScannerEmission[] = [];
     shadow = createShadowModel({ cols: 80, rows: 24, settleMs: 10, quietMs: 40, onStatus: () => {} });
     createScanner({
@@ -32,7 +33,7 @@ describe('Claude Code adapter (§15.3 / v2.6) — asserts on emitted events only
       addMarker: (r) => shadow.addMarker(r),
       onQuiet: (cb) => shadow.onQuiet(cb),
       adapters: claudeEnabled ? [createClaudeCodeAdapter()] : [],
-      fallback: withFallback ? createGenericAdapter() : undefined,
+      baseline: createGenericAdapter(),
       dedupRetention: 200,
       reportMinChars: 120,
       emit: (e) => {
@@ -45,8 +46,15 @@ describe('Claude Code adapter (§15.3 / v2.6) — asserts on emitted events only
     return emitted;
   }
 
-  it('no longer emits a permission box as a semantic event (v2.6 removed permission detection)', async () => {
+  it('captures corner-box content — a box is content, not chrome (Claude boxes real summaries, v2.17)', async () => {
+    // A corner/vertical box (a summary frame, a table) is NOT chrome: the frame is
+    // decorative but the text inside is real content and must be capturable.
     const events = await run(PERMISSION_BOX);
+    expect(events.some((e) => e.type === 'report')).toBe(true);
+  });
+
+  it('never captures a full-width-rule-framed permission prompt — it is bottom chrome (§15.x)', async () => {
+    const events = await run(PERMISSION_PROMPT);
     expect(events).toEqual([]);
   });
 
@@ -60,11 +68,11 @@ describe('Claude Code adapter (§15.3 / v2.6) — asserts on emitted events only
     expect(events.filter((e) => e.type === 'diff').length).toBe(1);
   });
 
-  it('detects a ⏺ prose block as one report with per-list-item and per-paragraph findings', async () => {
+  it('captures a ⏺ prose block as one report with per-list-item and per-paragraph findings', async () => {
     const events = await run(REPORT_BLOCK);
     const reports = events.filter((e) => e.type === 'report');
     expect(reports.length).toBe(1);
-    expect(reports[0].source).toBe('shadow-scan');
+    expect(reports[0].source).toBe('heuristic'); // the glyph-agnostic baseline, not the ⏺ adapter
     expect(reports[0].parentId ?? null).toBeNull();
     expect(reports[0].text).toContain('summary of what the codebase review');
     expect(reports[0].text).toContain('principal');
@@ -90,7 +98,7 @@ describe('Claude Code adapter (§15.3 / v2.6) — asserts on emitted events only
 
   it('never emits the rule-bounded input composer as content (it is chrome, §15.x)', async () => {
     // Even with the greedy generic fallback present, the composer is structural chrome.
-    const events = await run(INPUT_BOX, true, true);
+    const events = await run(INPUT_BOX, true);
     expect(events).toEqual([]);
   });
 
@@ -104,20 +112,148 @@ describe('Claude Code adapter (§15.3 / v2.6) — asserts on emitted events only
   });
 
   it('treats the spinner, slash-command echo, and composer all as chrome (§15.x)', async () => {
-    const events = await run(SPINNER_STATUS + SLASH_ECHO + INPUT_BOX, true, true);
+    const events = await run(SPINNER_STATUS + SLASH_ECHO + INPUT_BOX, true);
     expect(events).toEqual([]);
   });
 
-  it('emits nothing when the adapter is disabled (§15.7 escape hatch)', async () => {
-    const events = await run(REPORT_BLOCK, false);
-    expect(events.length).toBe(0);
+  it('the Claude classifier toggle gates only enrichment — the baseline still captures (§15.7)', async () => {
+    // Disabling the classifier drops tool-use/diff typing, but the glyph-agnostic
+    // baseline still captures prose reports — capture is never gated on the adapter.
+    const reportEvents = await run(REPORT_BLOCK, false);
+    expect(reportEvents.filter((e) => e.type === 'report').length).toBe(1);
+    const toolEvents = await run(TOOL_USE, false);
+    expect(toolEvents.filter((e) => e.type === 'tool-use').length).toBe(0);
   });
 
-  it('captures the whole report when it streams across two quiet scans and its ⏺ scrolls above the fold', async () => {
-    // Small viewport so the report's ⏺ scrolls out before the tail arrives; the
-    // second scan's window then opens below it (a headless continuation). The input
-    // box redrawn at the bottom is the real-session chrome that keeps the adapter
-    // selected on that scan — without it the bug hides behind the generic fallback.
+  it('REGRESSION: captures a review whose bullet glyph is ● (not ⏺) via the bullet-agnostic fallback', async () => {
+    // Claude Code v2.1.177 rendered the assistant bullet as ● here, and the verdict
+    // table's ┌ makes the Claude adapter claim the window via its box rule — yet it
+    // recognizes no ⏺ report, so capture must fall through to the generic fallback.
+    const RULE = '─'.repeat(78);
+    const REVIEW =
+      '● All 11 impl-loop reviewers have completed against PR #174. Here is the consolidated report.\r\n' +
+      '\r\n' +
+      '  Verdict summary\r\n' +
+      '  ┌─────────────────┬──────────┬──────────┐\r\n' +
+      '  │    Reviewer     │ Verdict  │ Findings │\r\n' +
+      '  ├─────────────────┼──────────┼──────────┤\r\n' +
+      '  │ intent          │ concerns │ 1 minor  │\r\n' +
+      '  └─────────────────┴──────────┴──────────┘\r\n' +
+      '\r\n' +
+      '  No blockers. One major (diagrams). Everything else is minor across the eleven lanes here.\r\n' +
+      '\r\n' +
+      '  Want me to apply any of these fixes to the branch before we open it up for human review?\r\n' +
+      '\r\n' +
+      '✻ Churned for 4m 35s\r\n' +
+      '\r\n' +
+      RULE + '\r\n' +
+      '❯\r\n' +
+      RULE + '\r\n' +
+      '  ⏵⏵ auto mode on (shift+tab to cycle) · PR #174 · ← for agents\r\n';
+    const events = await run(REVIEW, true);
+    const captured = events.filter((e) => e.type === 'report' || e.type === 'finding');
+    const text = captured.map((e) => e.text).join('\n');
+    expect(captured.length).toBeGreaterThanOrEqual(1);
+    expect(text).toContain('All 11 impl-loop reviewers have completed');
+    expect(text).toContain('Want me to apply any of these fixes');
+    // ...and the spinner + composer chrome must not bleed in.
+    expect(text).not.toContain('auto mode on');
+    expect(text).not.toContain('Churned for');
+  });
+
+  it('REGRESSION: captures a long ⏺ prose review sitting above the spinner + composer', async () => {
+    const RULE = '─'.repeat(78);
+    const REVIEW =
+      "⏺ Here's the consolidated PR review across all lanes:\r\n" +
+      '\r\n' +
+      '  Blockers\r\n' +
+      '\r\n' +
+      '- The committed scripts/dev-seed.ts imports @pundits/mcp-server/dev-seed, so a clean\r\n' +
+      "  checkout of HEAD can't resolve the module and dev-seed breaks. Stage and commit the\r\n" +
+      '  barrel + the package.json export together.\r\n' +
+      '\r\n' +
+      '  Recurring minors (multiple lanes agreed)\r\n' +
+      '\r\n' +
+      '- Cross-root commit ordering: runDevSeedCli nests a memory-root tx inside the auth-root\r\n' +
+      '  tx and commits memory first — reads atomic but is a best-effort two-phase write.\r\n' +
+      '  - dev.sh fail-closed asymmetry: make dev-seed lacks the explicit exit 1 breadcrumb its\r\n' +
+      '    migrate/zitadel siblings use. set -euo pipefail makes it fail-closed anyway.\r\n' +
+      '\r\n' +
+      '  Want me to action any of these — starting with committing the untracked dev-seed.ts?\r\n' +
+      '\r\n' +
+      '✻ Sautéed for 5m 22s\r\n' +
+      '\r\n' +
+      RULE + '\r\n' +
+      '❯\r\n' +
+      RULE + '\r\n' +
+      '  ⏵⏵ auto mode on (shift+tab to cycle) · PR #174 · ← for agents\r\n';
+    const events = await run(REVIEW, true);
+    const captured = events.filter((e) => e.type === 'report' || e.type === 'tool-use');
+    expect(captured.length).toBeGreaterThanOrEqual(1);
+    const text = captured.map((e) => e.text).join('\n');
+    expect(text).toContain('consolidated PR review');
+    expect(text).toContain('Want me to action any of these');
+    // ...and the composer/status chrome must not bleed into the capture.
+    expect(text).not.toContain('auto mode on');
+  });
+
+  it('REGRESSION: captures a streamed ⏺ review whose head scrolls off, above a spinner + composer', async () => {
+    const emitted: ScannerEmission[] = [];
+    const removed: string[] = [];
+    // Tiny viewport so the ⏺ head scrolls above the fold before the tail + chrome arrive.
+    shadow = createShadowModel({ cols: 80, rows: 6, settleMs: 10, quietMs: 40, onStatus: () => {} });
+    createScanner({
+      reader: shadow.reader,
+      addMarker: (r) => shadow.addMarker(r),
+      onQuiet: (cb) => shadow.onQuiet(cb),
+      adapters: [createClaudeCodeAdapter()],
+      baseline: createGenericAdapter(),
+      dedupRetention: 200,
+      reportMinChars: 120,
+      emit: (e) => {
+        emitted.push(e);
+        return String(emitted.length);
+      },
+      remove: (id) => removed.push(id),
+    });
+
+    // Phase 1: the ⏺ head + opening of the review prints, then pauses.
+    shadow.write(
+      "⏺ Here's the consolidated PR review across all lanes. The committed dev-seed.ts barrel\r\n" +
+        '  is untracked, so a clean checkout cannot resolve the module and dev-seed breaks here.\r\n',
+    );
+    await goQuiet();
+
+    // Phase 2: the review resumes (no new ⏺ — the head has scrolled off), with an indented
+    // sub-bullet, then the spinner and the rule-bounded composer redraw below it.
+    const RULE = '─'.repeat(78);
+    shadow.write(
+      '- Cross-root commit ordering nests a memory-root tx inside the auth-root tx and commits\r\n' +
+        '  - dev.sh fail-closed asymmetry: make dev-seed lacks the explicit exit 1 breadcrumb here\r\n' +
+        '  Want me to action any of these — starting with committing the untracked dev-seed barrel?\r\n' +
+        '\r\n' +
+        '✻ Sautéed for 5m 22s\r\n' +
+        '\r\n' +
+        RULE + '\r\n' +
+        '❯\r\n' +
+        RULE + '\r\n' +
+        '  ⏵⏵ auto mode on (shift+tab to cycle) · PR #174 · ← for agents\r\n',
+    );
+    await goQuiet();
+
+    const captured = emitted.filter((e) => e.type === 'report' || e.type === 'tool-use');
+    const survivors = captured.filter((e) => !removed.includes(String(emitted.indexOf(e) + 1)));
+    const text = survivors.map((e) => e.text).join('\n');
+    expect(text).toContain('Want me to action any of these');
+    expect(text).not.toContain('auto mode on');
+  });
+
+  it('merges a report that streams across a quiet pause into one capture, retracting the partial (§15.3 seal-on-witness)', async () => {
+    // Seal-on-witness (§15.3 / v2.22): the head captured at the first quiet pause has no
+    // witness below it (no following content, no turn-complete composer), so it stays
+    // PROVISIONAL — not sealed. When the tail streams in, the same buffer position grows; the
+    // partial is retracted and the fuller capture replaces it. The report paused mid-stream
+    // becomes ONE capture containing both head and conclusion, not two split fragments.
     const emitted: Array<ScannerEmission & { id: string }> = [];
     const removed: string[] = [];
     shadow = createShadowModel({ cols: 80, rows: 6, settleMs: 10, quietMs: 40, onStatus: () => {} });
@@ -126,6 +262,7 @@ describe('Claude Code adapter (§15.3 / v2.6) — asserts on emitted events only
       addMarker: (r) => shadow.addMarker(r),
       onQuiet: (cb) => shadow.onQuiet(cb),
       adapters: [createClaudeCodeAdapter()],
+      baseline: createGenericAdapter(),
       dedupRetention: 200,
       reportMinChars: 120,
       emit: (e) => {
@@ -154,15 +291,14 @@ describe('Claude Code adapter (§15.3 / v2.6) — asserts on emitted events only
     );
     await goQuiet();
 
-    // The complete report (with the tail that scrolled above the fold) is captured...
     const reports = emitted.filter((e) => e.type === 'report');
+    // The partial head is retracted, not left as a duplicate fragment (§15.3).
+    expect(removed).toContain('1');
     const survivors = reports.filter((r) => !removed.includes(r.id));
-    expect(survivors.length).toBe(1);
-    expect(survivors[0].text).toContain('FINAL CONCLUSION: approve the pull request');
-    // ...and the earlier partial (emitted before the tail arrived) is retracted, not
-    // left behind as a duplicate (§15.3).
-    const partial = reports.find((r) => !r.text.includes('FINAL CONCLUSION'));
-    expect(partial).toBeDefined();
-    expect(removed).toContain(partial!.id);
+    // One surviving capture holds the whole report — head and conclusion merged, not split.
+    const merged = survivors.filter(
+      (r) => r.text.includes('authentication flow is sound') && r.text.includes('FINAL CONCLUSION: approve the pull request'),
+    );
+    expect(merged).toHaveLength(1);
   });
 });

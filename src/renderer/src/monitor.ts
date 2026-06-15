@@ -63,6 +63,11 @@ export function wireMonitorPane(): void {
   // Repo-scoped todos (§16.3): a repo-key change swaps the displayed list, unless a
   // todo edit is open — then the Todo tab defers it until the edit resolves.
   window.monitor.onCwdChanged((m) => todoTab.onRepoChanged(m.repoKey));
+  // The live broadcast fires only on key *change*; the first OSC 7 may predate this
+  // subscription, so seed the repo key on mount or the todo actions silently no-op.
+  void window.monitor.currentRepo().then((r) => {
+    if (r) todoTab.onRepoChanged(r.repoKey);
+  });
 
   // A todo added from the terminal pane (Capture selection, §16.2) refreshes the count/list.
   window.addEventListener(TODOS_CHANGED_EVENT, () => todoTab.refresh());

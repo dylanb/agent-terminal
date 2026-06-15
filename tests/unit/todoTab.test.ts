@@ -52,6 +52,7 @@ describe('Todo tab (§16.4 — active/Done, manual add, reorder, edit, lifecycle
       onExit: vi.fn(),
       onCommandsChanged: vi.fn(),
       onCwdChanged: vi.fn((cb) => (handlers.cwdChanged = cb)),
+      currentRepo: vi.fn(async () => null),
       replay: vi.fn(async () => []),
       commands: vi.fn(async () => []),
       captureCommandText: vi.fn(async () => null),

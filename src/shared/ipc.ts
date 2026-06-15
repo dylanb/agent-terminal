@@ -16,6 +16,7 @@ export const CH = {
   monitorEventRemoved: 'monitor:eventRemoved',
   monitorUpdate: 'monitor:update',
   monitorReplay: 'monitor:replay',
+  monitorCurrentRepo: 'monitor:currentRepo',
   monitorCommands: 'monitor:commands',
   monitorCommandsChanged: 'monitor:commandsChanged',
   monitorCaptureCommandText: 'monitor:captureCommandText',
@@ -279,6 +280,14 @@ export interface CwdChangedMsg {
   repoKey: string;
 }
 
+/** The agent's current repo, queried on pane mount (§16.3); null before the first
+ *  OSC 7. The live `cwd:changed` broadcast fires only on key *change*, so a pane that
+ *  mounts after the initial broadcast learns the repo only by asking. */
+export interface RepoInfo {
+  cwd: string;
+  repoKey: string;
+}
+
 export type AgentState = 'active' | 'quiet';
 
 export interface MonitorUpdateMsg {
@@ -325,6 +334,9 @@ export interface MonitorApi {
   onUpdate(cb: (msg: MonitorUpdateMsg) => void): void;
   onExit(cb: (msg: PtyExitMsg) => void): void;
   replay(): Promise<MonitorEvent[]>;
+  /** The agent's current repo (§16.3), or null before the first OSC 7. Queried on mount
+   *  so the pane learns the repo key even when it missed the live `cwd:changed` broadcast. */
+  currentRepo(): Promise<RepoInfo | null>;
   /** Compact command history (§15.5); re-pulled on each monitor:update tick and commandsChanged signal. */
   commands(): Promise<CommandSummary[]>;
   /** Mark-driven signal that a command span opened/closed; pane re-pulls history (§15.5). */
