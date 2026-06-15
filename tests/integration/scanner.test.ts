@@ -6,6 +6,7 @@ import { createScanner, type ScannerEmit } from '../../src/main/scanner';
 import { createInjector } from '../../src/main/inject';
 import { createInjectionSuppressor } from '../../src/main/injectionSuppression';
 import { createGenericAdapter } from '../../src/main/adapters/generic';
+import { createClaudeCodeAdapter } from '../../src/main/adapters/claudeCode';
 import type { Adapter } from '../../src/main/adapters/types';
 import type { CommandSpanRange } from '../../src/main/spanTypes';
 
@@ -73,6 +74,51 @@ describe('semantic scanner (§15.2/§15.3 — quiet-triggered, watermarked, dedu
     await goQuiet();
     expect(emitted.length).toBe(1);
     expect(emitted[0]).toMatchObject({ type: 'report', text: 'Do you want to continue?', parentId: null });
+  });
+
+  it('stamps a top-level emission with its on-screen rows so the pane can cross-highlight (§15.4)', async () => {
+    setup();
+    shadow.write('Do you want to continue?\r\n');
+    await goQuiet();
+    expect(emitted.length).toBe(1);
+    // The lineAdapter reports this region at row 0; the scanner widens it into a range
+    // the renderer can scroll/highlight back to (absolute buffer coordinates).
+    expect(emitted[0].range).toMatchObject({
+      start: { y: 0 },
+      end: { y: 0 },
+      baseY: 0,
+      bufferType: 'normal',
+    });
+  });
+
+  it('stamps each finding with its own on-screen rows so a chunk highlights alone (§16.8)', async () => {
+    emitted = [];
+    shadow = createShadowModel({ cols: 80, rows: 24, settleMs: SETTLE, quietMs: QUIET, onStatus: () => {} });
+    createScanner({
+      reader: shadow.reader,
+      addMarker: (r) => shadow.addMarker(r),
+      onQuiet: (cb) => shadow.onQuiet(cb),
+      adapters: [],
+      baseline: createGenericAdapter(),
+      dedupRetention: 200,
+      reportMinChars: 40,
+      emit: collectingEmit,
+    });
+
+    // A two-item report spanning rows 0 and 1; the baseline captures it and splits findings.
+    shadow.write(
+      '- alpha finding worth acting on that is long enough to count\r\n' +
+        '- beta finding to address before merge that is also long enough\r\n',
+    );
+    await goQuiet();
+
+    const report = emitted.find((e) => e.type === 'report')!;
+    const findings = emitted.filter((e) => e.type === 'finding');
+    expect(report.range).toMatchObject({ start: { y: 0 }, end: { y: 1 } });
+    expect(findings.length).toBe(2);
+    // Each chunk maps to its own single row, not the whole report span.
+    expect(findings[0]).toMatchObject({ text: expect.stringContaining('alpha'), range: { start: { y: 0 }, end: { y: 0 } } });
+    expect(findings[1]).toMatchObject({ text: expect.stringContaining('beta'), range: { start: { y: 1 }, end: { y: 1 } } });
   });
 
   it('consults the live chrome-marker profile so a newly-learned glyph filters future furniture (§15.x)', async () => {
@@ -160,6 +206,42 @@ describe('semantic scanner (§15.2/§15.3 — quiet-triggered, watermarked, dedu
       emit: collectingEmit,
     });
   }
+
+  function setupClaude(reportMinChars = 80) {
+    emitted = [];
+    shadow = createShadowModel({ cols: 80, rows: 24, scrollback: 5000, settleMs: SETTLE, quietMs: QUIET, onStatus: () => {} });
+    createScanner({
+      reader: shadow.reader,
+      addMarker: (r) => shadow.addMarker(r),
+      onQuiet: (cb) => shadow.onQuiet(cb),
+      adapters: [createClaudeCodeAdapter()],
+      baseline: createGenericAdapter(),
+      dedupRetention: 200,
+      reportMinChars,
+      closedSpans: () => [],
+      emit: collectingEmit,
+    });
+  }
+
+  it("claims ●-bulleted tool calls (not only ⏺) so tool output is carved out, not folded into the report (§15.x)", async () => {
+    // Claude Code renders tool-call bullets as ● (U+25CF); the classifier used to hard-code
+    // ⏺ (U+23FA) and went dark, folding every tool block into the prose report. Capture must
+    // be bullet-glyph-agnostic for ANY output, not just PR reviews.
+    setupClaude();
+    shadow.write(
+      '● Bash(echo distinctive-tool-noise)\r\n' +
+        '  ⎿  distinctive-tool-noise\r\n' +
+        '\r\n' +
+        '● Here is the actual written analysis that should stand alone as the report, with ' +
+        'enough prose to clear the minimum and leave the tool noise above it behind.\r\n',
+    );
+    await goQuiet();
+    const reports = emitted.filter((e) => e.type === 'report');
+    expect(reports).toHaveLength(1);
+    expect(reports[0].text).toContain('actual written analysis');
+    expect(reports[0].text).not.toContain('distinctive-tool-noise');
+    expect(emitted.some((e) => e.type === 'tool-use')).toBe(true);
+  });
 
   it('degrades to the generic fallback: a long new region becomes one heuristic report with linked findings', async () => {
     setupGeneric();
@@ -297,6 +379,109 @@ describe('semantic scanner (§15.2/§15.3 — quiet-triggered, watermarked, dedu
       (e) => e.type === 'report' && e.text.includes('authentication flow') && e.text.includes('FINAL CONCLUSION'),
     );
     expect(merged).toHaveLength(1); // head + continuation become a single capture
+  });
+
+  it('merges a report TALLER than the viewport streamed across a pause into one capture (§15.3 — scrollback is not a seal)', async () => {
+    // Regression: a report that outgrows the viewport has its head scroll into scrollback.
+    // The bottom-most unit is still PROVISIONAL — the scrolled-off rows are immutable but the
+    // run must be re-gathered from its true start to merge. If the frontier is force-advanced
+    // to the viewport top (baseY) each scan, every screenful is sealed and re-emitted as a
+    // fresh report, splitting one logical report into many — the live capture bug.
+    emitted = [];
+    const removed: string[] = [];
+    let n = 0;
+    shadow = createShadowModel({ cols: 80, rows: 6, settleMs: SETTLE, quietMs: QUIET, onStatus: () => {} });
+    createScanner({
+      reader: shadow.reader,
+      addMarker: (r) => shadow.addMarker(r),
+      onQuiet: (cb) => shadow.onQuiet(cb),
+      adapters: [],
+      baseline: createGenericAdapter(),
+      dedupRetention: 200,
+      reportMinChars: 120,
+      emit: (e) => {
+        emitted.push(e);
+        return String(++n);
+      },
+      remove: (id) => removed.push(id),
+    });
+
+    // Phase 1: prose streams past the 6-row viewport, so its head scrolls into scrollback.
+    shadow.write(
+      'AUTHFLOW the authentication flow is sound across every reviewed module.\r\n' +
+        'The migration path is well covered by the integration suite overall.\r\n' +
+        'The error handling around the network layer needs tightening in spots.\r\n' +
+        'The retry policy looks consistent with the documented backoff strategy.\r\n' +
+        'Logging is structured and avoids leaking any secrets into the output.\r\n' +
+        'Configuration parsing rejects unknown keys with a clear actionable error.\r\n' +
+        'The cache invalidation path is exercised by two separate scenarios here.\r\n' +
+        'Connection pooling reuses sockets and closes them on idle as expected.\r\n',
+    );
+    await goQuiet();
+
+    // Phase 2: the SAME report resumes (clean append) and completes.
+    shadow.write(
+      'The test suite gives good coverage of the new branches and edge cases.\r\n' +
+        'Documentation was updated to match the new public API surface exactly.\r\n' +
+        'FINALVERDICT approve the pull request once the network nits are handled.\r\n',
+    );
+    await goQuiet();
+
+    const merged = emitted.filter(
+      (e) => e.type === 'report' && e.text.includes('AUTHFLOW') && e.text.includes('FINALVERDICT'),
+    );
+    expect(merged).toHaveLength(1); // head (in scrollback) + tail are ONE capture, not screen-by-screen splits
+    expect(removed).toContain('1'); // the partial is retracted, not orphaned as a duplicate
+  });
+
+  it('merges a report streamed with the input composer pinned below it, not one chunk per pause (§15.3 / v2.25)', async () => {
+    // Claude Code keeps its rule-framed composer (────/❯/────/strip) pinned at the viewport
+    // bottom WHILE STREAMING (the strip reads "esc to interrupt"). A composer below the output
+    // is therefore NOT proof the turn is done — the bottom unit can still grow. Sealing up to
+    // that composer each quiet pause shredded one streamed report into a chunk per pause (the
+    // live capture bug). The bottom-most unit must stay provisional even with a composer below.
+    emitted = [];
+    const removed: string[] = [];
+    const seen: { id: string; type: string; text: string }[] = [];
+    let n = 0;
+    shadow = createShadowModel({ cols: 80, rows: 10, settleMs: SETTLE, quietMs: QUIET, onStatus: () => {} });
+    createScanner({
+      reader: shadow.reader,
+      addMarker: (r) => shadow.addMarker(r),
+      onQuiet: (cb) => shadow.onQuiet(cb),
+      adapters: [],
+      baseline: createGenericAdapter(),
+      dedupRetention: 200,
+      reportMinChars: 80,
+      emit: (e) => {
+        const id = String(++n);
+        seen.push({ id, type: e.type, text: e.text });
+        return id;
+      },
+      remove: (id) => removed.push(id),
+    });
+
+    const RULE = '─'.repeat(78);
+    const composer = ['', RULE, '❯ ', RULE, '  ⏵⏵ auto mode on (shift+tab) · esc to interrupt'];
+    const bursts = [
+      ['REPORTHEAD the authentication flow is sound across the reviewed modules.', 'The migration path is well covered by the integration suite overall now.'],
+      ['The error handling around the network layer needs tightening in a spot.', 'The retry policy is consistent with the documented backoff strategy here.'],
+      ['Logging is structured and avoids leaking any secrets into the output now.', 'REPORTTAIL approve the pull request once the network nits are addressed.'],
+    ];
+    for (let i = 0; i < bursts.length; i++) {
+      // After the first burst, erase the prior composer (cursor up to its top, clear down),
+      // then stream the next lines and redraw the composer pinned below — exactly what the
+      // agent does as it streams: the composer is present at every quiet pause.
+      if (i > 0) shadow.write('\x1b[4A\r\x1b[J');
+      shadow.write(bursts[i].map((l) => l + '\r\n').join(''));
+      shadow.write(composer.join('\r\n'));
+      await goQuiet();
+    }
+
+    const live = seen.filter((r) => r.type === 'report' && !removed.includes(r.id));
+    const whole = live.filter((r) => r.text.includes('REPORTHEAD') && r.text.includes('REPORTTAIL'));
+    expect(whole).toHaveLength(1); // one capture spanning head..tail, not shredded per pause
+    expect(live).toHaveLength(1); // and no orphaned fragments left behind
   });
 
   it('emits nothing on the alternate buffer (precise alt parsing is out of scope §15.9)', async () => {

@@ -132,7 +132,7 @@ async function createWindow(): Promise<void> {
         type: e.type,
         source: e.source,
         text: e.text,
-        range: null,
+        range: e.range,
         parentId: e.parentId,
         truncated: e.truncated,
       });

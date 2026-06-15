@@ -18,9 +18,21 @@ function listIndent(line: string): number | null {
   return m ? m[1].length : null;
 }
 
-export function splitFindings(report: string): string[] {
+/**
+ * One finding plus its **line span** within the report (0-based, inclusive). The span is
+ * what lets a finding map back to its on-screen rows: the report text has one line per
+ * buffer row (§15.3), so `startLine`/`endLine` are row offsets from the report's startRow,
+ * the link the cross-highlight needs (§16.8).
+ */
+export interface Finding {
+  text: string;
+  startLine: number;
+  endLine: number;
+}
+
+export function splitFindings(report: string): Finding[] {
   const lines = report.split('\n');
-  const findings: string[] = [];
+  const findings: Finding[] = [];
   let i = 0;
   while (i < lines.length) {
     if (lines[i].trim() === '') {
@@ -38,7 +50,9 @@ export function splitFindings(report: string): string[] {
       i++;
     }
     const seg = lines.slice(start, i).join('\n');
-    if (seg.trim() !== '') findings.push(seg);
+    // The inner loop stops at the first blank/boundary, so lines[start..i-1] are all
+    // content — i-1 is the segment's last row.
+    if (seg.trim() !== '') findings.push({ text: seg, startLine: start, endLine: i - 1 });
   }
   return findings;
 }
@@ -55,6 +69,17 @@ export function buildReportRegion(
   endRow: number,
 ): DetectedRegion {
   const findings = splitFindings(text);
-  const children = findings.length >= 2 ? findings.map((f) => ({ type: 'finding' as const, source, text: f })) : [];
+  // Each finding's line span offsets from the report's startRow: the report text has one
+  // line per buffer row, so a chunk maps straight to its terminal rows for cross-highlight.
+  const children =
+    findings.length >= 2
+      ? findings.map((f) => ({
+          type: 'finding' as const,
+          source,
+          text: f.text,
+          startRow: startRow + f.startLine,
+          endRow: startRow + f.endLine,
+        }))
+      : [];
   return { type: 'report', source, text, startRow, endRow, children };
 }

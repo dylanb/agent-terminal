@@ -1,5 +1,5 @@
 // Claude Code classifier (§15.3). Enrichment only: it recognizes the structured blocks
-// Claude renders deterministically — `⏺ Name(args)` tool calls and `±` diffs — and
+// Claude renders deterministically — `● Name(args)` / `⏺ Name(args)` tool calls and `±` diffs — and
 // emits them as typed `tool-use` / `diff` events. The scanner carves their rows out of
 // the baseline so the same text isn't also captured as prose. It deliberately does NOT
 // detect reports: report capture is the glyph-agnostic baseline's job, so a themed or
@@ -9,13 +9,16 @@
 
 import type { Adapter, AdapterContext, DetectedRegion } from './types';
 
-const BULLET = '⏺';
+// Claude renders the tool/diff bullet as ● (U+25CF) or ⏺ (U+23FA) depending on
+// version/theme; the classifier must match either, or it goes dark and every tool
+// block folds into the prose report (§15.x). Capture stays glyph-agnostic.
+const BULLET = /^[●⏺]/u;
 const DIFF_LINE = /^[+-]\s/;
 // A tool invocation head looks like `Name(args)`; prose (a report) is left to the baseline.
 const TOOL_CALL = /^[A-Za-z][\w.]*\(/;
 
 function stripBullet(line: string): string {
-  return line.replace(/^⏺\s*/, '').trim();
+  return line.replace(/^[●⏺]\s*/u, '').trim();
 }
 
 export function createClaudeCodeAdapter(): Adapter {
@@ -26,7 +29,7 @@ export function createClaudeCodeAdapter(): Adapter {
       const regions: DetectedRegion[] = [];
 
       for (let y = startRow; y <= endRow; ) {
-        if (isChrome(y) || !reader.lineText(y).trim().startsWith(BULLET)) {
+        if (isChrome(y) || !BULLET.test(reader.lineText(y).trim())) {
           y++;
           continue;
         }
