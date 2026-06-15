@@ -181,6 +181,9 @@ export function createCaptureTab(deps: CaptureTabDeps): CaptureTab {
   }
 
   function appendBlock(event: MonitorEvent): void {
+    // tool-use / diff are emitted only to carve their rows out of reports (§15.x); they
+    // are agent furniture, not to-do candidates, so the pane never renders them as cards.
+    if (event.type === 'tool-use' || event.type === 'diff') return;
     // Replay (§8.4) and the live monitor:event stream can both deliver the same id;
     // render each stored event exactly once.
     if (rendered.has(event.id)) return;

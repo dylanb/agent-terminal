@@ -371,9 +371,9 @@ describe('action window DOM (§16 — tabs, captures, command history, focus)', 
   it('renders a known type with a type badge', async () => {
     wireMonitorPane();
     await flush();
-    handlers.event!(makeEvent({ type: 'tool-use', text: 'Read(x)' }));
+    handlers.event!(makeEvent({ type: 'command-output', text: 'Read(x)' }));
     const badge = blocks().querySelector('.capture-badge') as HTMLElement;
-    expect(badge.dataset.type).toBe('tool-use');
+    expect(badge.dataset.type).toBe('command-output');
     expect(blocks().querySelector('.capture-text')!.textContent).toBe('Read(x)');
   });
 
