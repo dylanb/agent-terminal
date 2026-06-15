@@ -2,12 +2,12 @@
 // highlight drawn via per-line decorations, send/capture/clear actions.
 
 import type { IDecoration, Terminal } from '@xterm/xterm';
-import type { BufferType } from '../../shared/ipc';
+import type { BufferType, SelectionRange } from '../../shared/ipc';
 import { stripPasteBreakout } from '../../shared/paste';
 import type { MonitorApi } from '../../shared/ipc';
 import { cleanSelectionText, createSelectionModel } from './selectionModel';
 import { handleTerminalKey } from './keymap';
-import { TODOS_CHANGED_EVENT } from './monitor';
+import { REVEAL_CAPTURE_EVENT, REVEAL_HIGHLIGHT_MS, REVEAL_TERMINAL_EVENT, TODOS_CHANGED_EVENT } from './monitor';
 
 /**
  * Capture straight to the repo-scoped Todo list (§16.2): the selected text when there is
@@ -38,6 +38,9 @@ export async function captureToTodo(
 
 // >=3:1 against the #1e1e1e background (WCAG 1.4.11); the native highlight is suppressed (§7.0).
 const SEL_COLOR = 'rgba(80, 140, 255, 0.7)';
+// Cross-highlight reveal (§16.8) — amber, distinct from the blue selection so a revealed
+// capture span reads differently from a user selection.
+const REVEAL_COLOR = 'rgba(255, 196, 84, 0.4)';
 
 export function wireSelection(term: Terminal): void {
   let decorations: IDecoration[] = [];
@@ -126,6 +129,63 @@ export function wireSelection(term: Terminal): void {
   });
 
   document.getElementById('clear-selection')!.addEventListener('click', clearSelection);
+
+  // ---- Cross-highlight between the terminal and the capture pane (§16.8) ----
+  // Decoupled via the window-event bus (paneActions), so neither pane imports the other.
+  // TODO(dylan): the xterm half of both directions (getSelectionPosition on the double-click
+  // mouseup; scrollToLine + reveal decorations) needs a real terminal, so it is verified only
+  // in the §F e2e ('capture ↔ terminal cross-highlight'), not under jsdom — recorded gap.
+
+  // Terminal → capture: report the double-clicked row so the pane reveals the capture that
+  // owns it. We key on a **capture-phase mouseup with detail === 2**, NOT the synthesized
+  // `dblclick`: xterm's SelectionService calls preventDefault on mousedown (which can suppress
+  // dblclick) and handles the gesture on the screen element, so a bubbling dblclick may never
+  // reach us. Capture phase runs before xterm and is immune to any stopPropagation; mouseup
+  // always fires. xterm has already word-selected by this mouseup, so getSelectionPosition()
+  // holds the word's absolute row (the same coordinate space the capture range carries).
+  term.element?.addEventListener(
+    'mouseup',
+    (e) => {
+      if ((e as MouseEvent).detail < 2) return; // single click — not a word/line select
+      let pos;
+      try {
+        pos = term.getSelectionPosition();
+      } catch {
+        return; // alt-buffer / mid-swap edge cases must never crash the renderer (§7.3)
+      }
+      if (!pos) return;
+      window.dispatchEvent(new CustomEvent(REVEAL_CAPTURE_EVENT, { detail: { row: pos.start.y } }));
+    },
+    true,
+  );
+
+  // Capture → terminal: scroll the block's rows into view and draw a self-clearing amber
+  // highlight over them, kept separate from the selection decorations so a clear of one
+  // never wipes the other.
+  let revealDecorations: IDecoration[] = [];
+  let revealTimer: ReturnType<typeof setTimeout> | null = null;
+  function clearReveal(): void {
+    for (const d of revealDecorations) d.dispose();
+    revealDecorations = [];
+  }
+  window.addEventListener(REVEAL_TERMINAL_EVENT, (e) => {
+    const { range } = (e as CustomEvent<{ range: SelectionRange }>).detail;
+    clearReveal();
+    if (revealTimer) clearTimeout(revealTimer);
+    term.scrollToLine(range.start.y);
+    for (let row = range.start.y; row <= range.end.y; row++) {
+      const marker = markerAtRow(row);
+      if (!marker) continue; // off-buffer / trimmed
+      const deco = term.registerDecoration({ marker, x: 0, width: term.cols, height: 1 });
+      if (!deco) continue; // undefined on the alt buffer (§7.4)
+      deco.onRender((el) => {
+        el.style.backgroundColor = REVEAL_COLOR;
+        el.classList.add('reveal-highlight');
+      });
+      revealDecorations.push(deco);
+    }
+    revealTimer = setTimeout(clearReveal, REVEAL_HIGHLIGHT_MS);
+  });
 
   // xterm allows a single custom key handler, so the two key concerns share it:
   // Escape clears only when a selection is active; otherwise it belongs to the

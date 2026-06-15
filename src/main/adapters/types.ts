@@ -28,11 +28,14 @@ export interface AdapterContext {
   isClaimed?(row: number): boolean;
 }
 
-/** A finding inside a report — emitted as a child event linked by parentId (§15.6 / v2.6). */
+/** A finding inside a report — emitted as a child event linked by parentId (§15.6 / v2.6).
+ *  Carries its own on-screen span (absolute rows) so a chunk can cross-highlight (§16.8). */
 export interface DetectedChild {
   type: MonitorEventType;
   source: MonitorEventSource;
   text: string;
+  startRow: number;
+  endRow: number;
 }
 
 export interface DetectedRegion {

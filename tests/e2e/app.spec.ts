@@ -356,6 +356,38 @@ test('a scanner-detected report block (with findings) survives a monitor reload 
   await expect(report.first()).toBeVisible();
 });
 
+test('capture ↔ terminal cross-highlight: double-click reveals each side (§16.8)', async () => {
+  // Integration off so the printed report surfaces deterministically (as in the replay test).
+  await app.close();
+  app = await electron.launch({
+    args: ['out/main/index.js'],
+    env: { ...process.env, APP_SUBMIT_DELAY_MS: '100', APP_SHELL_INTEGRATION: '0' },
+  });
+  page = await app.firstWindow();
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await typeCommand(
+    "printf '%s\\n' 'Here is the cross-highlight summary of findings below:' '- cross-highlight finding one worth acting on now' '- cross-highlight finding two to address before merge'",
+  );
+  const report = page.locator('.capture-block[data-type="report"]').first();
+  await expect(report).toBeVisible({ timeout: 10_000 });
+  // The two list items split into individually-actionable findings (chunks).
+  const findingOne = report.locator('.finding', { hasText: 'finding one worth acting on now' });
+  await expect(findingOne).toHaveCount(1);
+
+  // Capture → terminal: double-clicking a single finding draws the amber reveal decoration
+  // over just that chunk's terminal rows (a class distinct from the blue selection one).
+  await findingOne.dblclick();
+  await expect(page.locator('.xterm-decoration.reveal-highlight').first()).toBeVisible();
+
+  // Terminal → capture: double-clicking a word on that finding's terminal row reveals the
+  // specific chunk, not the whole report — the finding itself gets the outline.
+  const rowIdx = await findRowIndex('- cross-highlight finding one worth acting on now');
+  expect(rowIdx).toBeGreaterThanOrEqual(0);
+  await page.locator('.xterm-rows > div').nth(rowIdx).dblclick();
+  await expect(findingOne).toHaveClass(/revealed/);
+});
+
 test('APP_SHELL_INTEGRATION=0 disables command capture (no history entries)', async () => {
   await app.close();
   app = await electron.launch({

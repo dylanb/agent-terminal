@@ -1,8 +1,21 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { wireMonitorPane, FOCUS_TERMINAL_EVENT, TODO_UNDO_MS, TODOS_CHANGED_EVENT } from '../../src/renderer/src/monitor';
+import {
+  wireMonitorPane,
+  FOCUS_TERMINAL_EVENT,
+  REVEAL_CAPTURE_EVENT,
+  REVEAL_HIGHLIGHT_MS,
+  REVEAL_TERMINAL_EVENT,
+  TODO_UNDO_MS,
+  TODOS_CHANGED_EVENT,
+} from '../../src/renderer/src/monitor';
 import { DEFAULT_UI_SETTINGS } from '../../src/shared/ipc';
-import type { CommandSummary, MonitorEvent, TodoItem, UiSettings } from '../../src/shared/ipc';
+import type { CommandSummary, MonitorEvent, SelectionRange, TodoItem, UiSettings } from '../../src/shared/ipc';
+
+/** A capture's on-screen span (absolute buffer rows), the cross-highlight coordinate (§16.8). */
+function rangeRows(startRow: number, endRow: number): SelectionRange {
+  return { start: { x: 0, y: startRow }, end: { x: 80, y: endRow }, baseY: 0, bufferType: 'normal' };
+}
 
 const flush = () => new Promise((r) => setTimeout(r, 0));
 
@@ -79,6 +92,10 @@ describe('action window DOM (§16 — tabs, captures, command history, focus)', 
 
   beforeEach(() => {
     document.body.innerHTML = MONITOR_HTML;
+    // jsdom does not implement scrollIntoView; shim it so the cross-highlight reveal
+    // (§16.8) can call it. Also keeps stale listeners from prior wireMonitorPane() calls
+    // (the shared jsdom window accumulates them) from throwing on dispatch.
+    window.HTMLElement.prototype.scrollIntoView = () => {};
     handlers = {};
     settings = { ...DEFAULT_UI_SETTINGS };
     monitor = {
@@ -474,5 +491,115 @@ describe('action window DOM (§16 — tabs, captures, command history, focus)', 
     expect(blocks().querySelector('.capture-text')!.textContent).toBe('<script>alert(1)</script> & <img>');
     expect(history().querySelector('b')).toBeNull();
     expect(history().querySelector('.command-text')!.textContent).toBe('<b>&amp;</b>');
+  });
+
+  // ---- cross-highlight between the terminal and the capture pane (§16.8) ----
+
+  describe('capture ↔ terminal cross-highlight (§16.8)', () => {
+    const blockById = (id: string) => blocks().querySelector(`[data-event-id="${id}"]`) as HTMLElement;
+
+    it('a terminal double-click on a captured row scrolls to and highlights the covering block', async () => {
+      wireMonitorPane();
+      await flush();
+      handlers.event!(makeEvent({ id: 'r', type: 'report', source: 'shadow-scan', text: 'a report', range: rangeRows(10, 14) }));
+      const block = blockById('r');
+      const scrollSpy = vi.spyOn(block, 'scrollIntoView');
+
+      window.dispatchEvent(new CustomEvent(REVEAL_CAPTURE_EVENT, { detail: { row: 12 } }));
+
+      expect(block.classList.contains('revealed')).toBe(true);
+      expect(scrollSpy).toHaveBeenCalled();
+    });
+
+    it('the reveal highlight clears itself after REVEAL_HIGHLIGHT_MS', async () => {
+      vi.useFakeTimers();
+      try {
+        wireMonitorPane();
+        await vi.advanceTimersByTimeAsync(0);
+        handlers.event!(makeEvent({ id: 'r', type: 'report', source: 'shadow-scan', text: 'rep', range: rangeRows(0, 4) }));
+        const block = blockById('r');
+        window.dispatchEvent(new CustomEvent(REVEAL_CAPTURE_EVENT, { detail: { row: 2 } }));
+        expect(block.classList.contains('revealed')).toBe(true);
+        await vi.advanceTimersByTimeAsync(REVEAL_HIGHLIGHT_MS);
+        expect(block.classList.contains('revealed')).toBe(false);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('a terminal double-click on a row no capture covers highlights nothing', async () => {
+      wireMonitorPane();
+      await flush();
+      handlers.event!(makeEvent({ id: 'r', type: 'report', source: 'shadow-scan', text: 'rep', range: rangeRows(10, 14) }));
+      window.dispatchEvent(new CustomEvent(REVEAL_CAPTURE_EVENT, { detail: { row: 99 } }));
+      expect(blocks().querySelector('.revealed')).toBeNull();
+    });
+
+    it('double-clicking a capture block asks the terminal to reveal its rows', async () => {
+      wireMonitorPane();
+      await flush();
+      handlers.event!(makeEvent({ id: 'r', type: 'report', source: 'shadow-scan', text: 'rep', range: rangeRows(3, 7) }));
+      let detail: { range: SelectionRange } | null = null;
+      window.addEventListener(REVEAL_TERMINAL_EVENT, (e) => (detail = (e as CustomEvent).detail), { once: true });
+
+      blockById('r').dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+
+      expect(detail).toMatchObject({ range: { start: { y: 3 }, end: { y: 7 } } });
+    });
+
+    it("double-clicking a finding reveals the finding's own rows, not the whole report", async () => {
+      wireMonitorPane();
+      await flush();
+      handlers.event!(makeEvent({ id: 'r', type: 'report', source: 'shadow-scan', text: 'rep', range: rangeRows(3, 7) }));
+      handlers.event!(makeEvent({ id: 'f1', type: 'finding', parentId: 'r', text: 'one', range: rangeRows(5, 5) }));
+      // Collect every reveal so a finding click that bubbled up to the report would be caught.
+      const details: { range: SelectionRange }[] = [];
+      window.addEventListener(REVEAL_TERMINAL_EVENT, (e) => details.push((e as CustomEvent).detail));
+
+      (blocks().querySelector('[data-event-id="f1"]') as HTMLElement).dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+
+      // Exactly the finding's span is revealed; the report's full span (…end.y 7) never is.
+      expect(details.some((d) => d.range.start.y === 5 && d.range.end.y === 5)).toBe(true);
+      expect(details.some((d) => d.range.end.y === 7)).toBe(false);
+    });
+
+    it('a terminal double-click inside a finding highlights that chunk, not the whole report', async () => {
+      wireMonitorPane();
+      await flush();
+      handlers.event!(makeEvent({ id: 'r', type: 'report', source: 'shadow-scan', text: 'rep', range: rangeRows(3, 7) }));
+      handlers.event!(makeEvent({ id: 'f1', type: 'finding', parentId: 'r', text: 'one', range: rangeRows(5, 5) }));
+
+      window.dispatchEvent(new CustomEvent(REVEAL_CAPTURE_EVENT, { detail: { row: 5 } }));
+
+      expect((blocks().querySelector('[data-event-id="f1"]') as HTMLElement).classList.contains('revealed')).toBe(true);
+      // The chunk is revealed specifically — the enclosing report block is not the target.
+      expect(blockById('r').classList.contains('revealed')).toBe(false);
+    });
+
+    it('a reveal skips a dismissed block whose range lingers and highlights the live one', async () => {
+      wireMonitorPane();
+      await flush();
+      // A captured at rows 10–14, then dismissed via its × (removed from the DOM directly,
+      // so its range entry is not cleaned up by removeBlock).
+      handlers.event!(makeEvent({ id: 'a', type: 'report', source: 'shadow-scan', text: 'old', range: rangeRows(10, 14) }));
+      (blockById('a').querySelector('.dismiss') as HTMLButtonElement).click();
+      // A new capture reuses the same rows.
+      handlers.event!(makeEvent({ id: 'b', type: 'report', source: 'shadow-scan', text: 'new', range: rangeRows(10, 14) }));
+      const b = blockById('b');
+
+      window.dispatchEvent(new CustomEvent(REVEAL_CAPTURE_EVENT, { detail: { row: 12 } }));
+
+      expect(b.classList.contains('revealed')).toBe(true);
+    });
+
+    it('double-clicking a block with no range (manual capture) asks for nothing', async () => {
+      wireMonitorPane();
+      await flush();
+      handlers.event!(makeEvent({ id: 'c', type: 'capture', text: 'manual', range: null }));
+      let fired = false;
+      window.addEventListener(REVEAL_TERMINAL_EVENT, () => (fired = true), { once: true });
+      blockById('c').dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+      expect(fired).toBe(false);
+    });
   });
 });

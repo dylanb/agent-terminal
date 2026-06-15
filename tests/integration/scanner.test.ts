@@ -75,6 +75,51 @@ describe('semantic scanner (§15.2/§15.3 — quiet-triggered, watermarked, dedu
     expect(emitted[0]).toMatchObject({ type: 'report', text: 'Do you want to continue?', parentId: null });
   });
 
+  it('stamps a top-level emission with its on-screen rows so the pane can cross-highlight (§15.4)', async () => {
+    setup();
+    shadow.write('Do you want to continue?\r\n');
+    await goQuiet();
+    expect(emitted.length).toBe(1);
+    // The lineAdapter reports this region at row 0; the scanner widens it into a range
+    // the renderer can scroll/highlight back to (absolute buffer coordinates).
+    expect(emitted[0].range).toMatchObject({
+      start: { y: 0 },
+      end: { y: 0 },
+      baseY: 0,
+      bufferType: 'normal',
+    });
+  });
+
+  it('stamps each finding with its own on-screen rows so a chunk highlights alone (§16.8)', async () => {
+    emitted = [];
+    shadow = createShadowModel({ cols: 80, rows: 24, settleMs: SETTLE, quietMs: QUIET, onStatus: () => {} });
+    createScanner({
+      reader: shadow.reader,
+      addMarker: (r) => shadow.addMarker(r),
+      onQuiet: (cb) => shadow.onQuiet(cb),
+      adapters: [],
+      baseline: createGenericAdapter(),
+      dedupRetention: 200,
+      reportMinChars: 40,
+      emit: collectingEmit,
+    });
+
+    // A two-item report spanning rows 0 and 1; the baseline captures it and splits findings.
+    shadow.write(
+      '- alpha finding worth acting on that is long enough to count\r\n' +
+        '- beta finding to address before merge that is also long enough\r\n',
+    );
+    await goQuiet();
+
+    const report = emitted.find((e) => e.type === 'report')!;
+    const findings = emitted.filter((e) => e.type === 'finding');
+    expect(report.range).toMatchObject({ start: { y: 0 }, end: { y: 1 } });
+    expect(findings.length).toBe(2);
+    // Each chunk maps to its own single row, not the whole report span.
+    expect(findings[0]).toMatchObject({ text: expect.stringContaining('alpha'), range: { start: { y: 0 }, end: { y: 0 } } });
+    expect(findings[1]).toMatchObject({ text: expect.stringContaining('beta'), range: { start: { y: 1 }, end: { y: 1 } } });
+  });
+
   it('consults the live chrome-marker profile so a newly-learned glyph filters future furniture (§15.x)', async () => {
     // Acceptance for "mark as chrome": once a custom glyph is learned, lines led by it
     // stop being captured. Driven through the real generic adapter (which respects the

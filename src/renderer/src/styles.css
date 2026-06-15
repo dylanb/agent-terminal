@@ -291,6 +291,15 @@ button:hover {
   border-radius: 4px;
   margin-bottom: 10px;
   background: #1b1b1b;
+  transition: border-color 0.4s ease, box-shadow 0.4s ease;
+}
+
+/* Cross-highlight (§16.8): a block revealed from a terminal double-click gets an amber
+   border + glow (matching the terminal reveal-highlight) for REVEAL_HIGHLIGHT_MS, then
+   the class is removed and it fades back via the transition above. */
+.capture-block.revealed {
+  border-color: #ffc454;
+  box-shadow: 0 0 0 1px #ffc454, 0 0 10px rgba(255, 196, 84, 0.45);
 }
 
 .capture-meta {
@@ -347,6 +356,14 @@ button.mark-chrome:hover {
   border-left: 2px solid #2d3b52;
   background: #181818;
   border-radius: 3px;
+  transition: box-shadow 0.4s ease, border-color 0.4s ease;
+}
+
+/* Cross-highlight (§16.8): a finding revealed from a terminal double-click gets the same
+   amber cue as a revealed block, scoped to the single chunk. */
+.finding.revealed {
+  border-left-color: #ffc454;
+  box-shadow: 0 0 0 1px #ffc454, 0 0 8px rgba(255, 196, 84, 0.4);
 }
 
 .finding .capture-text {

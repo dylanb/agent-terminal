@@ -3,8 +3,8 @@
 // set via textContent, never innerHTML, so captured bytes cannot inject markup.
 // Reaches the Todo tab only through the narrow TodoSink (§16.2 Add to todo + Undo).
 
-import type { CommandSummary, MonitorApi, MonitorEvent, MonitorEventType, TodoSource, TodoSourceType } from '../../shared/ipc';
-import { dismissButton, doInject, TODO_UNDO_MS } from './paneActions';
+import type { CommandSummary, MonitorApi, MonitorEvent, MonitorEventType, SelectionRange, TodoSource, TodoSourceType } from '../../shared/ipc';
+import { dismissButton, doInject, REVEAL_HIGHLIGHT_MS, REVEAL_TERMINAL_EVENT, TODO_UNDO_MS } from './paneActions';
 import type { TodoSink } from './todoTab';
 
 /** Friendly badge labels; unknown future types fall back to the raw type, never dropped (§15.6). */
@@ -36,6 +36,9 @@ export interface CaptureTab {
   appendBlock(event: MonitorEvent): void;
   /** Drop a rendered block/finding by id when main retracts it (superseded, §15.3). */
   removeBlock(eventId: string): void;
+  /** Cross-highlight (§16.8): scroll to and border-highlight the block whose on-screen
+   *  span covers `absRow` (the terminal row the user double-clicked); a no-op if none. */
+  revealByRow(absRow: number): void;
   renderCommands(commands: CommandSummary[]): void;
 }
 
@@ -51,6 +54,10 @@ export function createCaptureTab(deps: CaptureTabDeps): CaptureTab {
   const rendered = new Set<string>();
   // Findings whose parent report has not rendered yet (replay/live ordering safety).
   const orphans = new Map<string, MonitorEvent[]>();
+  // Cross-highlight (§16.8): each top-level block's on-screen span, and the live
+  // self-clearing highlight timer per block (re-reveal resets it).
+  const ranges = new Map<string, SelectionRange>();
+  const revealTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
   function badgeLabel(type: MonitorEventType): string {
     return TYPE_LABELS[type] ?? type;
@@ -118,6 +125,17 @@ export function createCaptureTab(deps: CaptureTabDeps): CaptureTab {
     const el = document.createElement('div');
     el.className = 'finding';
     el.dataset.eventId = event.id;
+    // Cross-highlight (§16.8): a finding carries its own on-screen span, so double-clicking
+    // it reveals just that chunk's rows. stopPropagation keeps the click from bubbling to the
+    // enclosing report block (which would reveal the whole report instead).
+    if (event.range) {
+      ranges.set(event.id, event.range);
+      el.addEventListener('dblclick', (e) => {
+        e.stopPropagation();
+        const range = ranges.get(event.id);
+        if (range) window.dispatchEvent(new CustomEvent(REVEAL_TERMINAL_EVENT, { detail: { range } }));
+      });
+    }
     const pre = document.createElement('pre');
     pre.className = 'capture-text';
     pre.textContent = event.text;
@@ -138,6 +156,14 @@ export function createCaptureTab(deps: CaptureTabDeps): CaptureTab {
   function groupById(id: string): Element | null {
     for (const el of blocksEl.querySelectorAll('.capture-block')) {
       if ((el as HTMLElement).dataset.eventId === id) return el;
+    }
+    return null;
+  }
+
+  /** Any rendered event element (a top-level block or a nested finding) by id (§16.8). */
+  function elById(id: string): HTMLElement | null {
+    for (const el of blocksEl.querySelectorAll('[data-event-id]')) {
+      if ((el as HTMLElement).dataset.eventId === id) return el as HTMLElement;
     }
     return null;
   }
@@ -233,6 +259,17 @@ export function createCaptureTab(deps: CaptureTabDeps): CaptureTab {
       block.append(pre, actions);
     }
 
+    // Cross-highlight (§16.8): remember the block's on-screen span and let a double-click
+    // anywhere in it (nested findings included, via bubbling) reveal those terminal rows.
+    // Manual captures carry no range, so they simply don't participate.
+    if (event.range) {
+      ranges.set(event.id, event.range);
+      block.addEventListener('dblclick', () => {
+        const range = ranges.get(event.id);
+        if (range) window.dispatchEvent(new CustomEvent(REVEAL_TERMINAL_EVENT, { detail: { range } }));
+      });
+    }
+
     // Newest-first: prepend top-level blocks (§15.6 / v2.6).
     blocksEl.insertBefore(block, blocksEl.firstChild);
 
@@ -251,12 +288,52 @@ export function createCaptureTab(deps: CaptureTabDeps): CaptureTab {
   function removeBlock(eventId: string): void {
     rendered.delete(eventId);
     orphans.delete(eventId);
+    ranges.delete(eventId);
+    const timer = revealTimers.get(eventId);
+    if (timer) {
+      clearTimeout(timer);
+      revealTimers.delete(eventId);
+    }
     for (const el of blocksEl.querySelectorAll('[data-event-id]')) {
       if ((el as HTMLElement).dataset.eventId === eventId) {
         el.remove();
         return;
       }
     }
+  }
+
+  /** Scroll to + highlight the element whose span covers `absRow` for REVEAL_HIGHLIGHT_MS;
+   *  re-revealing restarts its timer (§16.8). When a finding and its report both cover the
+   *  row, the **most specific** (smallest span) wins, so a chunk highlights on its own. */
+  function revealByRow(absRow: number): void {
+    let bestId: string | null = null;
+    let bestSpan = Infinity;
+    for (const [id, range] of ranges) {
+      if (absRow < range.start.y || absRow > range.end.y) continue;
+      if (!elById(id)) {
+        ranges.delete(id); // element dismissed directly (not via removeBlock); self-heal
+        continue;
+      }
+      const span = range.end.y - range.start.y;
+      if (span < bestSpan) {
+        bestSpan = span;
+        bestId = id;
+      }
+    }
+    if (bestId === null) return;
+    const id = bestId;
+    const el = elById(id)!;
+    el.scrollIntoView({ block: 'nearest' });
+    el.classList.add('revealed');
+    const prev = revealTimers.get(id);
+    if (prev) clearTimeout(prev);
+    revealTimers.set(
+      id,
+      setTimeout(() => {
+        el.classList.remove('revealed');
+        revealTimers.delete(id);
+      }, REVEAL_HIGHLIGHT_MS),
+    );
   }
 
   function renderCommands(commands: CommandSummary[]): void {
@@ -310,5 +387,5 @@ export function createCaptureTab(deps: CaptureTabDeps): CaptureTab {
   toolbar.appendChild(dismissAll);
   blocksEl.parentNode?.insertBefore(toolbar, blocksEl);
 
-  return { appendBlock, removeBlock, renderCommands };
+  return { appendBlock, removeBlock, revealByRow, renderCommands };
 }

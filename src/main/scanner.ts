@@ -3,7 +3,7 @@
 // scrollback via a marker watermark, dispatches to adapters, dedups by content,
 // and emits widened MonitorEvents. Detection only — it never acts on an event.
 
-import type { MonitorEventSource, MonitorEventType } from '../shared/ipc';
+import type { MonitorEventSource, MonitorEventType, SelectionRange } from '../shared/ipc';
 import type { ShadowMarker, ShadowReader } from './shadow';
 import type { Adapter } from './adapters/types';
 import type { CommandSpanRange } from './spanTypes';
@@ -16,6 +16,10 @@ export interface ScannerEmission {
   /** A finding's parent report id; null for top-level events (§15.6 / v2.6). */
   parentId: string | null;
   truncated: boolean;
+  /** Where this region sits on screen (absolute buffer rows) so the pane can scroll/
+   *  highlight back to it (§15.4). Best-effort provenance — set for top-level regions,
+   *  null for findings (which ride their parent) and the alt buffer. */
+  range: SelectionRange | null;
 }
 
 /** Persists the emission and returns its stamped event id (so findings can link to a report). */
@@ -92,6 +96,15 @@ export function createScanner(deps: ScannerDeps): Scanner {
   let watermark: ShadowMarker | undefined;
   const captured = new Map<string, Captured>();
   const order: string[] = [];
+
+  // A region's on-screen span (absolute buffer rows) so the pane can scroll/highlight back
+  // to it (§16.8). Best-effort provenance — never used to re-extract content (§7.3/§8.4).
+  const rangeOf = (startRow: number, endRow: number): SelectionRange => ({
+    start: { x: 0, y: startRow },
+    end: { x: reader.cols(), y: endRow },
+    baseY: reader.baseY(),
+    bufferType: 'normal',
+  });
 
   // Dropping a capture means releasing its start-marker (an xterm IMarker): the single
   // place that knows what a Captured owns, so no removal path leaks a marker.
@@ -251,10 +264,26 @@ export function createScanner(deps: ScannerDeps): Scanner {
           remember({ key, type: region.type, norm });
           continue;
         }
-        const parentId = emit({ type: region.type, source: region.source, text: region.text, parentId: null, truncated });
+        // Stamp the region's on-screen span so the pane can scroll/highlight back to it
+        // (§15.4 / §16.8); each finding carries its own span so a chunk highlights alone.
+        const parentId = emit({
+          type: region.type,
+          source: region.source,
+          text: region.text,
+          parentId: null,
+          truncated,
+          range: rangeOf(region.startRow, region.endRow),
+        });
         remember({ key, type: region.type, norm, id: parentId, startMarker: addMarker(region.startRow) });
         for (const child of region.children ?? []) {
-          emit({ type: child.type, source: child.source, text: child.text, parentId, truncated });
+          emit({
+            type: child.type,
+            source: child.source,
+            text: child.text,
+            parentId,
+            truncated,
+            range: rangeOf(child.startRow, child.endRow),
+          });
         }
       }
     }
