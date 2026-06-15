@@ -1,183 +1,86 @@
-// Monitor pane (§9/§15.6): status strip + command history + captured/semantic
-// blocks + inject actions. Architectural rule (§9.1): talks ONLY to
-// window.monitor.* — never to the terminal pane, the renderer xterm, or the
-// selection model. All user-controlled text is set via textContent, never
-// innerHTML, so command/output bytes cannot inject markup.
+// Action window coordinator (§16): resolves the pane DOM, builds the status strip and
+// the Capture/Todo tabs, and routes the window.monitor.* event stream to them. The
+// per-feature DOM/state lives in statusStrip.ts, captureTab.ts, todoTab.ts; this file
+// only wires events and owns tab selection. Architectural rule (§9.1): talks ONLY to
+// window.monitor.* — never to the terminal pane, the renderer xterm, or selection.
 
-import type { CommandSummary, MonitorEvent, MonitorEventType, MonitorUpdateMsg } from '../../shared/ipc';
+import type { TabId } from '../../shared/ipc';
+import { resolveMonitorElements } from './dom';
+import { createStatusStrip } from './statusStrip';
+import { createTodoTab } from './todoTab';
+import { createCaptureTab } from './captureTab';
+import { TODOS_CHANGED_EVENT } from './paneActions';
 
-// While quiet, the "quiet for Ns" counter is re-rendered on this cadence (§8.3).
-const QUIET_TICK_MS = 1000;
-
-/** Friendly badge labels; unknown future types fall back to the raw type, never dropped (§15.6). */
-const TYPE_LABELS: Record<string, string> = {
-  capture: 'capture',
-  'agent-question': 'agent-question',
-  'permission-prompt': 'permission',
-  'tool-use': 'tool',
-  diff: 'diff',
-  completion: 'completion',
-  'command-output': 'command',
-};
+// Re-exported for callers that import these from the pane module (selection.ts, tests).
+export { FOCUS_TERMINAL_EVENT, TODOS_CHANGED_EVENT, TODO_UNDO_MS } from './paneActions';
 
 export function wireMonitorPane(): void {
-  const statusEl = document.getElementById('monitor-status')!;
-  const historyEl = document.getElementById('command-history')!;
-  const blocksEl = document.getElementById('monitor-blocks')!;
+  const el = resolveMonitorElements();
+  const status = createStatusStrip(el.status);
+  const todoTab = createTodoTab({ todoListEl: el.todoList, todoCountEl: el.todoCount, monitor: window.monitor });
+  const captureTab = createCaptureTab({
+    blocksEl: el.blocks,
+    historyEl: el.history,
+    monitor: window.monitor,
+    todoSink: todoTab,
+  });
 
-  let alive = true;
-  let last: MonitorUpdateMsg | null = null;
-  let quietTick: ReturnType<typeof setInterval> | null = null;
-  let quietCounterEl: HTMLElement | null = null;
-  const rendered = new Set<string>();
+  let activeTab: TabId = 'capture';
+  const pullCommands = (): void => void window.monitor.commands().then((c) => captureTab.renderCommands(c));
 
-  function renderStatus(): void {
-    const state = last?.agentState ?? 'quiet';
-    statusEl.innerHTML = '';
-    quietCounterEl = null;
-    const items: Array<[string, string, boolean]> = [
-      ['session', alive ? 'alive' : 'exited', alive],
-      ['agent', state === 'active' ? 'working' : 'quiet', state === 'active'],
-      ['full-screen', last?.altScreen ? 'yes' : 'no', !!last?.altScreen],
-      ['paste mode', last?.bracketedPaste ? 'on' : 'off', !!last?.bracketedPaste],
-    ];
-    for (const [label, value, on] of items) {
-      const chip = document.createElement('span');
-      chip.className = `status-chip${on ? ' on' : ''}`;
-      chip.dataset.status = label;
-      chip.textContent = `${label}: ${value}`;
-      // The "quiet for Ns" counter ticks every second; keeping it in an aria-hidden
-      // child stops the aria-live status region re-announcing on every tick (WCAG 4.1.3).
-      if (label === 'agent' && state === 'quiet') {
-        quietCounterEl = document.createElement('span');
-        quietCounterEl.className = 'quiet-counter';
-        quietCounterEl.setAttribute('aria-hidden', 'true');
-        chip.appendChild(quietCounterEl);
-      }
-      statusEl.appendChild(chip);
-    }
-    updateQuietCounter();
+  // ---- Tabs (§16.1) ----
+  function selectTab(tab: TabId, persist = true): void {
+    activeTab = tab;
+    const onCapture = tab === 'capture';
+    el.panelCapture.hidden = !onCapture;
+    el.panelTodo.hidden = onCapture;
+    el.tabCapture.setAttribute('aria-selected', String(onCapture));
+    el.tabTodo.setAttribute('aria-selected', String(!onCapture));
+    if (onCapture) el.unreadDot.hidden = true;
+    else todoTab.refresh();
+    if (persist) window.monitor.setSettings({ lastTab: tab });
   }
-
-  function updateQuietCounter(): void {
-    if (!quietCounterEl) return;
-    const since = last?.quietSince;
-    quietCounterEl.textContent = since
-      ? ` for ${Math.max(0, Math.round((Date.now() - since) / 1000))}s`
-      : '';
-  }
-
-  function renderCommands(commands: CommandSummary[]): void {
-    historyEl.innerHTML = '';
-    for (const c of commands) {
-      const entry = document.createElement('div');
-      entry.className = 'command-entry';
-      entry.dataset.commandId = c.id;
-
-      const cmd = document.createElement('span');
-      cmd.className = 'command-text';
-      cmd.textContent = c.command;
-
-      const chip = document.createElement('span');
-      chip.className = 'exit-chip';
-      chip.textContent = c.running ? 'running' : `exit ${c.exitCode ?? '?'}`;
-      if (c.truncated) chip.textContent += ' (truncated)';
-
-      const capture = document.createElement('button');
-      capture.textContent = 'Capture';
-      // Repeated "Capture" buttons need per-row accessible names (WCAG 2.4.6/4.1.2).
-      capture.setAttribute('aria-label', `Capture output of: ${c.command}`);
-      // Fail-closed: we ask main to materialize the block; it flows back via
-      // monitor:event only if the id is still valid (§15.4). No optimistic render.
-      capture.addEventListener('click', () => window.monitor.captureCommand(c.id));
-
-      entry.append(cmd, chip, capture);
-      historyEl.appendChild(entry);
-    }
-  }
-
-  function badgeLabel(type: MonitorEventType): string {
-    return TYPE_LABELS[type] ?? type;
-  }
-
-  function appendBlock(event: MonitorEvent): void {
-    // Replay (§8.4) and the live monitor:event stream can both deliver the same id;
-    // render each stored event exactly once.
-    if (rendered.has(event.id)) return;
-    rendered.add(event.id);
-    const time = new Date(event.capturedAt).toLocaleTimeString();
-    const block = document.createElement('div');
-    block.className = 'capture-block';
-    block.dataset.eventId = event.id;
-    block.dataset.type = event.type;
-    // Each block's buttons share a label, so scope them by capture time for screen readers (WCAG 2.4.6).
-    block.setAttribute('role', 'group');
-    block.setAttribute('aria-label', `${badgeLabel(event.type)} at ${time}`);
-
-    const meta = document.createElement('div');
-    meta.className = 'capture-meta';
-    const badge = document.createElement('span');
-    badge.className = 'capture-badge';
-    badge.dataset.type = event.type;
-    badge.textContent = badgeLabel(event.type);
-    const timeEl = document.createElement('span');
-    timeEl.className = 'capture-time';
-    timeEl.textContent = time + (event.truncated ? ' · truncated' : '');
-    meta.append(badge, timeEl);
-
-    const pre = document.createElement('pre');
-    pre.className = 'capture-text';
-    pre.textContent = event.text;
-
-    const actions = document.createElement('div');
-    actions.className = 'capture-actions';
-    const insert = document.createElement('button');
-    insert.textContent = 'Insert into agent';
-    insert.addEventListener('click', () => window.monitor.inject({ text: event.text, submit: false }));
-    const submit = document.createElement('button');
-    submit.textContent = 'Insert & submit';
-    submit.addEventListener('click', () => window.monitor.inject({ text: event.text, submit: true }));
-    actions.append(insert, submit);
-
-    block.append(meta, pre, actions);
-    blocksEl.appendChild(block);
-  }
-
-  function stopQuietTick(): void {
-    if (quietTick) clearInterval(quietTick);
-    quietTick = null;
-  }
-
-  function pullCommands(): void {
-    void window.monitor.commands().then(renderCommands);
-  }
+  el.tabCapture.addEventListener('click', () => selectTab('capture'));
+  el.tabTodo.addEventListener('click', () => selectTab('todo'));
 
   window.monitor.onUpdate((msg) => {
-    last = msg;
-    renderStatus();
-    // A finished command produces output → quiescence transition → this tick;
-    // re-pull the history so it stays live (§15.4).
+    status.update(msg);
     pullCommands();
-    stopQuietTick();
-    if (msg.agentState === 'quiet') quietTick = setInterval(updateQuietCounter, QUIET_TICK_MS);
   });
 
-  window.monitor.onEvent((event) => appendBlock(event));
+  window.monitor.onEvent((event) => {
+    captureTab.appendBlock(event);
+    // Unread dot (§16.1): a capture arrived while another tab was active.
+    if (activeTab !== 'capture') el.unreadDot.hidden = false;
+  });
 
-  // Mark-driven liveness (§15.5): command spans open/close independent of the §8.3
-  // quiescence machinery, so refresh history on the tracker's change signal too.
+  // Retraction (§15.3): the scanner replaced an earlier partial capture with a fuller
+  // one and asks the pane to drop the superseded block (its findings cascade with it).
+  window.monitor.onEventRemoved((eventId) => captureTab.removeBlock(eventId));
+
   window.monitor.onCommandsChanged(() => pullCommands());
 
-  window.monitor.onExit(() => {
-    alive = false;
-    renderStatus();
+  // Repo-scoped todos (§16.3): a repo-key change swaps the displayed list, unless a
+  // todo edit is open — then the Todo tab defers it until the edit resolves.
+  window.monitor.onCwdChanged((m) => todoTab.onRepoChanged(m.repoKey));
+  // The live broadcast fires only on key *change*; the first OSC 7 may predate this
+  // subscription, so seed the repo key on mount or the todo actions silently no-op.
+  void window.monitor.currentRepo().then((r) => {
+    if (r) todoTab.onRepoChanged(r.repoKey);
   });
 
-  // Replay events captured before this pane (re)loaded (§8.4), and load history.
+  // A todo added from the terminal pane (Capture selection, §16.2) refreshes the count/list.
+  window.addEventListener(TODOS_CHANGED_EVENT, () => todoTab.refresh());
+
+  window.monitor.onExit(() => status.setExited());
+
   void window.monitor.replay().then((events) => {
-    for (const e of events) appendBlock(e);
+    for (const e of events) captureTab.appendBlock(e);
   });
   pullCommands();
 
-  renderStatus();
+  // Restore the remembered tab (§16.1 / §16.6) before first paint of either panel.
+  void window.monitor.getSettings().then((s) => selectTab(s.lastTab, false));
+
+  status.render();
 }

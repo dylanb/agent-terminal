@@ -4,6 +4,7 @@
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
+import { FOCUS_TERMINAL_EVENT } from './monitor';
 
 export const RESIZE_DEBOUNCE_MS = 80;
 
@@ -29,6 +30,12 @@ export function createTerminalPane(container: HTMLElement): Terminal {
   window.term.onData((data) => term.write(data));
   term.onData((data) => window.term.input(data));
   window.term.onExit(({ code }) => term.write(`\r\n[process exited: ${code}]\r\n`));
+
+  // §16.2 focus rule: the action window asks (via a decoupled window event, never an
+  // import) for terminal focus after an Insert, so the user can finish/submit here.
+  // TODO(dylan): the Insert→focus loop through the real pane is verified in the §F
+  // e2e (plan PR5 5c) — recorded gap (xterm needs a real layout, not jsdom).
+  window.addEventListener(FOCUS_TERMINAL_EVENT, () => term.focus());
 
   // Debounced: a drag-resize during an output burst can otherwise leave the PTY,
   // renderer, and shadow wrapping at different widths (§7.1/§14).

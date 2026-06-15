@@ -11,6 +11,10 @@ export interface MonitorEventStore {
   addCapture(msg: MonitorCaptureMsg): MonitorEvent;
   /** Append a pre-typed semantic/command event; main stamps id/capturedAt (§15.4). */
   addEvent(event: NewMonitorEvent): MonitorEvent;
+  /** Drop an event and cascade to its child findings (§15.6 / v2.6). */
+  remove(id: string): void;
+  /** Drop every event (Dismiss-all, §15.6 / v2.6). */
+  clear(): void;
   list(): readonly MonitorEvent[];
 }
 
@@ -32,12 +36,21 @@ export function createMonitorEventStore(opts: { now?: () => Date } = {}): Monito
         source: msg.source,
         text: msg.text,
         range: msg.range,
+        parentId: null,
         truncated: false,
         capturedAt: now().toISOString(),
       });
     },
     addEvent(event) {
       return append({ ...event, id: randomUUID(), capturedAt: now().toISOString() });
+    },
+    remove(id) {
+      for (let i = events.length - 1; i >= 0; i--) {
+        if (events[i].id === id || events[i].parentId === id) events.splice(i, 1);
+      }
+    },
+    clear() {
+      events.length = 0;
     },
     list() {
       return events;

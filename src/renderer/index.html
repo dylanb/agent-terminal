@@ -19,10 +19,30 @@
         </div>
         <div id="terminal"></div>
       </main>
-      <aside id="monitor" aria-label="Monitor">
-        <div id="monitor-status" role="status" aria-live="polite"></div>
-        <div id="command-history" aria-label="Command history"></div>
-        <div id="monitor-blocks"></div>
+      <div
+        id="splitter"
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="Resize terminal and action window"
+        tabindex="0"
+      ></div>
+      <aside id="monitor" aria-label="Action window">
+        <div id="monitor-tabs" role="tablist" aria-label="Action window tabs">
+          <button id="tab-capture" role="tab" aria-selected="true" aria-controls="panel-capture">
+            Capture<span id="capture-unread" class="unread-dot" hidden aria-label="new captures"></span>
+          </button>
+          <button id="tab-todo" role="tab" aria-selected="false" aria-controls="panel-todo">
+            Todo <span id="todo-count" class="todo-count">0</span>
+          </button>
+        </div>
+        <section id="panel-capture" role="tabpanel" aria-labelledby="tab-capture">
+          <div id="monitor-status" role="status" aria-live="polite"></div>
+          <div id="command-history" aria-label="Command history"></div>
+          <div id="monitor-blocks"></div>
+        </section>
+        <section id="panel-todo" role="tabpanel" aria-labelledby="tab-todo" hidden>
+          <div id="todo-list" aria-label="Todo list"></div>
+        </section>
       </aside>
     </div>
     <script type="module" src="./src/index.ts"></script>

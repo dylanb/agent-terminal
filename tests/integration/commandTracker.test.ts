@@ -51,6 +51,30 @@ describe('command tracker (§15.5 — OSC 133 segmentation, detection only)', ()
     expect(s[0].truncated).toBe(false);
   });
 
+  it('clear() drops finished commands and fires a change (Clear commands, §16.2)', async () => {
+    setup();
+    shadow.write(runCmd('echo hi', 'hi\r\n', 0));
+    await sleep(60);
+    expect(tracker.summaries().length).toBe(1);
+    let changed = 0;
+    tracker.onChange(() => changed++);
+    tracker.clear();
+    expect(tracker.summaries()).toEqual([]);
+    expect(changed).toBe(1);
+  });
+
+  it('clear() keeps a still-running command, dropping only finished ones (§16.2)', async () => {
+    setup();
+    shadow.write(runCmd('echo done', 'x\r\n', 0)); // finished
+    shadow.write(osc('133;A') + '$ ' + osc('133;B') + 'tail -f\r\n' + osc('133;C') + 'live\r\n'); // running, no D
+    await sleep(60);
+    expect(tracker.summaries().map((c) => c.command)).toEqual(['echo done', 'tail -f']);
+    tracker.clear();
+    const s = tracker.summaries();
+    expect(s.map((c) => c.command)).toEqual(['tail -f']);
+    expect(s[0].running).toBe(true);
+  });
+
   it('captures a finished command output on demand', async () => {
     setup();
     shadow.write(runCmd('echo hi', 'hi\r\n', 0));

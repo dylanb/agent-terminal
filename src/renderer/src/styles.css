@@ -17,10 +17,25 @@ body {
 }
 
 #terminal-pane {
-  flex: 1 1 65%;
+  flex: 0 0 65%;
   display: flex;
   flex-direction: column;
-  min-width: 0;
+  min-width: 320px; /* §16.6 terminal min width — JS clamp mirrors this (MIN_TERMINAL_PX) */
+}
+
+/* Draggable vertical divider (§16.6); focusable role="separator" nudged with ←/→. */
+#splitter {
+  flex: 0 0 6px;
+  cursor: col-resize;
+  background: #333;
+  border-left: 1px solid #2a2a2a;
+  border-right: 1px solid #2a2a2a;
+}
+
+#splitter:hover,
+#splitter:focus-visible {
+  background: #4a4d51;
+  outline: none;
 }
 
 #toolbar {
@@ -53,12 +68,125 @@ button:hover {
 }
 
 #monitor {
-  flex: 1 1 35%;
-  min-width: 280px;
+  flex: 1 1 0;
+  min-width: 280px; /* §16.6 action-window min width — JS clamp mirrors this (MIN_MONITOR_PX) */
   display: flex;
   flex-direction: column;
-  border-left: 1px solid #333;
   background: #232323;
+}
+
+/* Tabs (§16.1) */
+#monitor-tabs {
+  display: flex;
+  border-bottom: 1px solid #333;
+}
+
+#monitor-tabs [role='tab'] {
+  flex: 1 1 0;
+  padding: 8px;
+  background: #2a2a2a;
+  color: #b0b0b0;
+  border: none;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+}
+
+#monitor-tabs [role='tab'][aria-selected='true'] {
+  background: #232323;
+  color: #e6e6e6;
+  border-bottom-color: #508cff;
+}
+
+.unread-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-left: 6px;
+  border-radius: 50%;
+  background: #508cff;
+}
+
+.todo-count {
+  margin-left: 6px;
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 8px;
+  background: #333;
+}
+
+/* :not([hidden]) so the `hidden` attribute (set by tab switching) still wins —
+   a bare `display: flex` would override the UA `[hidden] { display: none }` (§16.1). */
+#panel-capture:not([hidden]),
+#panel-todo:not([hidden]) {
+  flex: 1 1 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* Todo tab (§16.4) */
+#todo-list {
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.swap-blocked {
+  padding: 6px 8px;
+  border-radius: 4px;
+  background: #4d3a1f;
+  color: #f0d39f;
+  font-size: 12px;
+}
+
+.todo-add {
+  display: flex;
+  gap: 6px;
+}
+
+.todo-new {
+  flex: 1 1 0;
+  resize: vertical;
+  min-height: 2.2em;
+  font-family: inherit;
+}
+
+.todo-item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 6px;
+  border: 1px solid #333;
+  border-radius: 4px;
+}
+
+.todo-item.done {
+  opacity: 0.6;
+}
+
+.todo-item .todo-text {
+  flex: 1 1 120px;
+  white-space: pre-wrap;
+}
+
+.todo-edit-area {
+  flex: 1 1 100%;
+  resize: vertical;
+  font-family: inherit;
+}
+
+.drag-handle {
+  cursor: grab;
+  color: #777;
+}
+
+.todo-done summary {
+  cursor: pointer;
+  color: #b0b0b0;
+  padding: 4px 0;
 }
 
 #monitor-status {
@@ -134,10 +262,28 @@ button:hover {
   color: #9db8e0;
 }
 
-.capture-block[data-type='permission-prompt'] .capture-badge,
-.capture-block[data-type='agent-question'] .capture-badge {
+.capture-block[data-type='report'] .capture-badge {
   background: #4d3a1f;
   color: #dfc49f;
+}
+
+.capture-block[data-type='finding'] .capture-badge {
+  background: #1f3d2f;
+  color: #9fd9b8;
+}
+
+.blocks-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  padding: 6px 8px 0;
+}
+
+.blocks-toolbar:has(+ #monitor-blocks:empty) {
+  display: none;
+}
+
+#dismiss-all {
+  font-size: 11px;
 }
 
 .capture-block {
@@ -148,10 +294,63 @@ button:hover {
 }
 
 .capture-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   font-size: 11px;
   color: #888;
   padding: 4px 8px;
   border-bottom: 1px solid #2c2c2c;
+}
+
+.capture-meta .capture-time {
+  flex: 1;
+}
+
+button.dismiss {
+  border: none;
+  background: transparent;
+  color: #888;
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 4px;
+}
+
+button.dismiss:hover {
+  color: #e06c6c;
+}
+
+button.mark-chrome {
+  border: none;
+  background: transparent;
+  color: #888;
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 4px;
+}
+
+button.mark-chrome:hover {
+  color: #ccc;
+}
+
+/* Findings nest inside a report group, indented from the group edge (§15.6). */
+.findings {
+  padding: 6px 8px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.finding {
+  border-left: 2px solid #2d3b52;
+  background: #181818;
+  border-radius: 3px;
+}
+
+.finding .capture-text {
+  max-height: 140px;
 }
 
 .capture-text {
@@ -169,4 +368,9 @@ button:hover {
   gap: 8px;
   padding: 6px 8px;
   border-top: 1px solid #2c2c2c;
+}
+
+.capture-actions .added-note {
+  align-self: center;
+  color: #9a9a9a;
 }

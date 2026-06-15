@@ -99,4 +99,31 @@ describe('createInjector (§9.3)', () => {
     vi.advanceTimersByTime(1000);
     expect(written).toEqual([]);
   });
+
+  it('seeds the self-injection signal (onInject) once per non-empty inject (§16.5)', () => {
+    const marks: string[] = [];
+    const seeding = createInjector({
+      write: (data) => written.push(data),
+      isBracketedPaste: () => bracketed,
+      submitDelayMs: 50,
+      onInject: () => marks.push('seed'),
+    });
+    seeding('hi', { submit: true });
+    // Seeded at paste time (where the echo will land), not on the later submit \r.
+    expect(marks).toEqual(['seed']);
+    expect(written).toEqual(['hi']);
+    vi.advanceTimersByTime(1000);
+    expect(marks).toEqual(['seed']);
+  });
+
+  it('does not seed the self-injection signal for empty text (§16.5)', () => {
+    const marks: string[] = [];
+    const seeding = createInjector({
+      write: (data) => written.push(data),
+      isBracketedPaste: () => bracketed,
+      onInject: () => marks.push('seed'),
+    });
+    seeding('', { submit: true });
+    expect(marks).toEqual([]);
+  });
 });

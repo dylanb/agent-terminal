@@ -47,6 +47,22 @@ function inject(text: string, submit: boolean): Promise<void> {
   );
 }
 
+/**
+ * cd into a throwaway directory so repo-scoped todos (§16.3) land there, not in the
+ * project/HOME tree. Returns once the new prompt's OSC 7 has propagated the repo key
+ * to the renderer (the Todo count chip exists). `marker` keys distinct temp dirs.
+ */
+async function cdToTempDir(marker: string): Promise<void> {
+  const dir = `/tmp/agent-term-e2e-${marker}`;
+  await typeCommand(`mkdir -p "${dir}" && cd "${dir}" && pwd`);
+  // The exact pwd output row confirms the cd ran; waiting for quiescence guarantees
+  // the following OSC 7 (emitted at the next prompt) has been parsed → repo key live.
+  await expect(
+    page.locator('.xterm-rows > div').filter({ hasText: new RegExp(`^\\s*${dir}\\s*$`) }),
+  ).not.toHaveCount(0);
+  await expect(page.locator('.status-chip[data-status="agent"]')).toContainText('quiet', { timeout: 6_000 });
+}
+
 test.beforeEach(async () => {
   app = await electron.launch({
     args: ['out/main/index.js'],
@@ -55,6 +71,9 @@ test.beforeEach(async () => {
   page = await app.firstWindow();
   // Bash prompt is ready once the shell has produced any output.
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+  // lastTab persists globally (§16.6), so a prior test that opened the Todo tab would
+  // otherwise leave the Capture panel hidden here; reset to a known tab per test.
+  await page.locator('#tab-capture').click();
 });
 
 test.afterEach(async () => {
@@ -106,28 +125,24 @@ test('selection survives focus changes and draws the app-owned highlight', async
   await expect(page.locator('.xterm-decoration')).toHaveCount(0);
 });
 
-test('capture puts the selected text into the monitor pane; insert & submit drives the shell', async () => {
+test('manual selection capture routes to the Todo tab; Insert & submit drives the shell (§16.2)', async () => {
+  await cdToTempDir('inject');
   await typeCommand("echo 'echo injected-ok-123'");
   await expect(termRows()).toContainText('echo injected-ok-123');
 
+  // Capture selection → straight to the Todo list, NOT a Capture-tab block (§16.2).
   await selectRowContaining('echo injected-ok-123');
   await page.locator('#capture-selection').click();
-  const block = page.locator('.capture-block').last();
-  await expect(block).toContainText('echo injected-ok-123');
+  await page.locator('#tab-todo').click();
+  const item = page.locator('.todo-item').filter({ hasText: 'echo injected-ok-123' });
+  await expect(item).toHaveCount(1);
 
-  // Insert WITHOUT submit: lands at the prompt, runs nothing.
-  const outputRow = page.locator('.xterm-rows > div').filter({ hasText: /^\s*injected-ok-123\s*$/ });
-  await block.getByRole('button', { name: 'Insert into agent' }).click();
-  await page.waitForTimeout(500); // let the paste land before asserting nothing ran
-  await expect(outputRow).toHaveCount(0);
-
-  // Clear the pending input line, then submit with the terminal pane unfocused —
-  // the monitor path is renderer-independent (§4D).
-  await page.locator('.xterm-screen').click();
-  await page.keyboard.press('Control+U');
+  // Insert & submit from the todo drives the shell (focus stays in the action window).
   await page.locator('#monitor').click();
-  await block.getByRole('button', { name: 'Insert & submit' }).click();
-  await expect(outputRow).toHaveCount(1);
+  await item.getByRole('button', { name: 'Insert & submit' }).click();
+  await expect(
+    page.locator('.xterm-rows > div').filter({ hasText: /^\s*injected-ok-123\s*$/ }),
+  ).toHaveCount(1);
 });
 
 test('injection honors bracketed-paste mode read live from the shadow (§9.3)', async () => {
@@ -195,15 +210,46 @@ test('Escape clears an active selection but passes through to the agent otherwis
   await page.keyboard.press('Control+D');
 });
 
-test('captured blocks are replayed to a reloaded monitor pane (§8.4)', async () => {
-  await typeCommand("echo 'replay-me-block'");
-  await expect(termRows()).toContainText('replay-me-block');
-  await selectRowContaining('replay-me-block');
-  await page.locator('#capture-selection').click();
-  await expect(page.locator('.capture-block').last()).toContainText('replay-me-block');
+test('Shift+Enter inserts a newline (ESC+CR) instead of submitting (§7.5.2)', async () => {
+  // cat -v echoes received control bytes visibly: ESC -> ^[. xterm's default for
+  // Shift+Enter is a bare CR (no ^[), so the rendered ^[ proves our handler ran.
+  await typeCommand('cat -v');
+  await page.locator('.xterm-screen').click();
+  await page.keyboard.press('Shift+Enter');
+  await expect(termRows()).toContainText('^[');
+  await page.keyboard.press('Control+C');
+});
 
-  await page.reload();
-  await expect(page.locator('.capture-block').filter({ hasText: 'replay-me-block' })).toHaveCount(1);
+test('Option/Alt+Backspace deletes the whole previous word at the prompt (§7.5.2)', async () => {
+  // Functional, end-to-end: word-delete leaves `echo `, so `done` runs as `echo done`.
+  // A char-delete or no-op would instead run `echo foobadone` / `echo foobardone`.
+  await page.locator('.xterm-screen').click();
+  await page.keyboard.type('echo foobar');
+  await page.keyboard.press('Alt+Backspace');
+  await page.keyboard.type('done');
+  await page.keyboard.press('Enter');
+  await expect(
+    page.locator('.xterm-rows > div').filter({ hasText: /^\s*done\s*$/ }),
+  ).toHaveCount(1);
+});
+
+test('a todo persists in-repo across an app restart (§16.3)', async () => {
+  await cdToTempDir('persist');
+  await page.locator('#tab-todo').click();
+  await page.locator('#todo-new').fill('persist-this-todo');
+  await page.locator('#todo-add-btn').click();
+  await expect(page.locator('.todo-item').filter({ hasText: 'persist-this-todo' })).toHaveCount(1);
+
+  // Restart the whole app (fresh main process + PTY): the in-repo todos.json is reread
+  // when the agent cd's back into the repo, and the first OSC 7 re-broadcasts the key.
+  await app.close();
+  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SUBMIT_DELAY_MS: '100' } });
+  page = await app.firstWindow();
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await cdToTempDir('persist');
+  await page.locator('#tab-todo').click();
+  await expect(page.locator('.todo-item').filter({ hasText: 'persist-this-todo' })).toHaveCount(1);
 });
 
 test('monitor status strip tracks quiescence and alt-screen', async () => {
@@ -249,17 +295,16 @@ test('a finished command appears in history; Capture → command block → Inser
   ).toHaveCount(1, { timeout: 10_000 });
 });
 
-test('a printed Claude-style permission box becomes a permission-prompt block after quiet', async () => {
+test('a printed Claude-style permission box no longer produces a semantic block (v2.6)', async () => {
   await typeCommand(
     "printf '%s\\n' '╭──────────────────────────────╮' '│ Do you want to proceed?      │' '│ ❯ 1. Yes                     │' '│   2. No                      │' '╰──────────────────────────────╯'",
   );
   await expect(termRows()).toContainText('Do you want to proceed?');
-
-  const block = page.locator('.capture-block[data-type="permission-prompt"]');
-  await expect(block).toHaveCount(1, { timeout: 10_000 });
-  await expect(block).toContainText('Do you want to proceed?');
-  // The block carries the standard inject actions (§15.6).
-  await expect(block.getByRole('button', { name: 'Insert & submit' })).toBeVisible();
+  // Permission/question detection was removed; a box is chrome and (with shell
+  // integration on) its output is a gated command span — no report/permission block.
+  await expect(
+    page.locator('.capture-block[data-type="permission-prompt"], .capture-block[data-type="report"]'),
+  ).toHaveCount(0);
 });
 
 test('boring commands produce command history but zero agent-semantic badges (§15.8 budget)', async () => {
@@ -271,7 +316,7 @@ test('boring commands produce command history but zero agent-semantic badges (§
   });
   // No semantic block types should have been emitted by the scanner.
   const semantic = page.locator(
-    '.capture-block[data-type="agent-question"], .capture-block[data-type="permission-prompt"], .capture-block[data-type="tool-use"], .capture-block[data-type="diff"]',
+    '.capture-block[data-type="report"], .capture-block[data-type="finding"], .capture-block[data-type="tool-use"], .capture-block[data-type="diff"]',
   );
   await expect(semantic).toHaveCount(0);
 });
@@ -288,10 +333,10 @@ test('a captured command-output block survives a monitor reload (replay)', async
   await expect(page.locator('.capture-block[data-type="command-output"]')).toHaveCount(1);
 });
 
-test('a scanner-detected semantic block survives a monitor reload (scanner→store→replay)', async () => {
-  // Integration off: no command spans, so the generic heuristic detects the
-  // prompt-like line deterministically (no span-gating race) and the scanner→store
-  // →replay path is exercised end-to-end. Box/⏺ chars can't be typed via Playwright.
+test('a scanner-detected report block (with findings) survives a monitor reload (scanner→store→replay)', async () => {
+  // Integration off: no command spans, so the generic heuristic surfaces the printed
+  // report deterministically (no span-gating race) and the scanner→store→replay path
+  // is exercised end-to-end.
   await app.close();
   app = await electron.launch({
     args: ['out/main/index.js'],
@@ -300,12 +345,15 @@ test('a scanner-detected semantic block survives a monitor reload (scanner→sto
   page = await app.firstWindow();
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
-  await typeCommand("printf 'Do you want to proceed?\\n'");
-  const perm = page.locator('.capture-block[data-type="permission-prompt"]');
-  await expect(perm.first()).toBeVisible({ timeout: 10_000 });
+  await typeCommand(
+    "printf '%s\\n' 'Here is the summary of findings from this code review:' '- one important finding worth acting on' '- another finding to address before merge'",
+  );
+  const report = page.locator('.capture-block[data-type="report"]');
+  await expect(report.first()).toBeVisible({ timeout: 10_000 });
+  await expect(report.first().locator('.finding')).not.toHaveCount(0);
 
   await page.reload();
-  await expect(perm.first()).toBeVisible();
+  await expect(report.first()).toBeVisible();
 });
 
 test('APP_SHELL_INTEGRATION=0 disables command capture (no history entries)', async () => {
@@ -322,4 +370,71 @@ test('APP_SHELL_INTEGRATION=0 disables command capture (no history entries)', as
   // Give a quiescence tick a chance to pull commands, then assert none exist.
   await page.waitForTimeout(2_000);
   await expect(page.locator('.command-entry')).toHaveCount(0);
+});
+
+// ---- §16: action window — todo lists, focus rule, layout ----
+
+test('only the active tab’s panel is visible (§16.1)', async () => {
+  const capture = page.locator('#panel-capture');
+  const todo = page.locator('#panel-todo');
+
+  // beforeEach selects the Capture tab.
+  await expect(capture).toBeVisible();
+  await expect(todo).toBeHidden();
+
+  await page.locator('#tab-todo').click();
+  await expect(todo).toBeVisible();
+  await expect(capture).toBeHidden();
+
+  await page.locator('#tab-capture').click();
+  await expect(capture).toBeVisible();
+  await expect(todo).toBeHidden();
+});
+
+test('cd between directories swaps the repo-scoped todo list (§16.3)', async () => {
+  const todo = (text: string) => page.locator('.todo-item').filter({ hasText: text });
+
+  await cdToTempDir('repoA');
+  await page.locator('#tab-todo').click();
+  await page.locator('#todo-new').fill('A-side todo');
+  await page.locator('#todo-add-btn').click();
+  await expect(todo('A-side todo')).toHaveCount(1);
+
+  // cd elsewhere → the list swaps to that dir's (empty) list.
+  await cdToTempDir('repoB');
+  await expect(todo('A-side todo')).toHaveCount(0);
+
+  // cd back → A's todo returns (persisted in repoA/.agent-terminal/todos.json).
+  await typeCommand('cd "/tmp/agent-term-e2e-repoA"');
+  await expect(todo('A-side todo')).toHaveCount(1);
+});
+
+test('Insert (no submit) on a todo moves focus to the terminal (§16.2 focus rule)', async () => {
+  await cdToTempDir('focus');
+  await page.locator('#tab-todo').click();
+  await page.locator('#todo-new').fill('echo focus-payload');
+  await page.locator('#todo-add-btn').click();
+  const item = page.locator('.todo-item:not(.done)').filter({ hasText: 'echo focus-payload' });
+  await expect(item).toHaveCount(1);
+
+  // Focus already sits in the action window (we just used the add input). Insert
+  // (no submit) must move it to the terminal so the user can finish/submit there.
+  const insert = item.getByRole('button', { name: 'Insert into agent' });
+  await insert.scrollIntoViewIfNeeded();
+  await insert.click();
+  await expect(page.locator('.xterm-helper-textarea')).toBeFocused();
+});
+
+test('the split ratio persists across a reload (§16.6)', async () => {
+  const splitter = page.locator('#splitter');
+  const before = await splitter.getAttribute('aria-valuenow');
+  // Nudge the divider with the keyboard separator; the new ratio persists globally.
+  await splitter.focus();
+  await page.keyboard.press('ArrowLeft');
+  await page.keyboard.press('ArrowLeft');
+  await expect.poll(() => splitter.getAttribute('aria-valuenow')).not.toBe(before);
+  const after = await splitter.getAttribute('aria-valuenow');
+
+  await page.reload();
+  await expect.poll(() => page.locator('#splitter').getAttribute('aria-valuenow')).toBe(after);
 });

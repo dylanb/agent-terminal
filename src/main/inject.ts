@@ -29,6 +29,8 @@ export interface InjectorDeps {
   /** Read live at injection time — never cached (§9.3). */
   isBracketedPaste(): boolean;
   submitDelayMs?: number;
+  /** Seed the self-injection suppression signal at paste time, where the echo lands (§16.5). */
+  onInject?(): void;
 }
 
 export type Injector = (text: string, opts?: { submit?: boolean }) => void;
@@ -38,6 +40,8 @@ export function createInjector(deps: InjectorDeps): Injector {
   return (text, { submit = false } = {}) => {
     if (!text) return;
     deps.write(wrapForPaste(text, deps.isBracketedPaste()));
+    // Seed before the echo can return, so the watermark marks the pre-echo cursor row (§16.5).
+    deps.onInject?.();
     // The CR must land after the agent drains the paste, outside the markers (§9.3).
     if (submit) setTimeout(() => deps.write('\r'), delay);
   };
