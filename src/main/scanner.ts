@@ -117,6 +117,54 @@ export function createScanner(deps: ScannerDeps): Scanner {
     return undefined;
   }
 
+  /**
+   * Dedup decision for a freshly-detected region (§15.3 / v2.22). Mutation is the ground
+   * truth, not text similarity. Positional identity is primary — a live capture starting on
+   * this same row IS this unit re-detected:
+   *   unchanged     → already shown (null, drop);
+   *   clean growth  → the partial grew, supersede it ([pos], retract then re-emit);
+   *   any other edit → an in-place repaint (elapsed/progress token, reflow), keep the first
+   *                    stable capture (null, drop).
+   * With no positional match (a new unit, or one whose marker trimmed out of scrollback so
+   * its position is lost) it falls back to text identity: an exact or subsumed match drops;
+   * a clean word-boundary append supersedes every captured partial it completes.
+   *
+   * Returns the captures this region supersedes (to retract — possibly empty), or null when
+   * the region is already shown and should be dropped.
+   */
+  function supersededBy(type: MonitorEventType, startRow: number, norm: string, key: string): Captured[] | null {
+    const pos = positionMatch(type, startRow);
+    if (pos) {
+      if (pos.norm === norm) return null;
+      return isPrefixAtBoundary(pos.norm, norm) ? [pos] : null;
+    }
+    if (captured.has(key)) return null; // exact content match already captured
+    const retract: Captured[] = [];
+    for (const c of captured.values()) {
+      if (c.type !== type) continue;
+      if (isPrefixAtBoundary(norm, c.norm)) return null; // subsumed by a fuller capture — drop
+      if (isPrefixAtBoundary(c.norm, norm)) retract.push(c); // this region completes c
+    }
+    return retract;
+  }
+
+  /**
+   * The stability frontier (§15.3 / v2.22): the highest row PROVEN immutable this scan.
+   * It sits just above the turn-complete composer when one witnesses the rows above it as
+   * done; else just above the bottom-most provisional unit (which stays re-scannable so a
+   * paused report merges instead of splitting); else just above the scan window. Never below
+   * scrollback (`baseY-1`, no longer cursor-addressable) and never behind the watermark. The
+   * composer is consulted once. -1 ⇒ nothing to seal yet.
+   */
+  function computeSealRow(altScreen: boolean, startRow: number, endRow: number, bottomUnitStart: number): number {
+    const composerRow = !altScreen && startRow <= endRow ? composerTop(reader, startRow, endRow) : endRow + 1;
+    let sealRow: number;
+    if (composerRow <= endRow) sealRow = composerRow - 1;
+    else if (bottomUnitStart >= 0) sealRow = bottomUnitStart - 1;
+    else sealRow = startRow - 1; // nothing detected — don't advance into unscanned rows
+    return Math.max(sealRow, reader.baseY() - 1, watermark && watermark.line >= 0 ? watermark.line : -1);
+  }
+
   function scan() {
     const altScreen = reader.bufferType() === 'alternate';
     // Stability frontier (§15.3 / v2.22): the watermark marks the highest row PROVEN
@@ -185,38 +233,13 @@ export function createScanner(deps: ScannerDeps): Scanner {
         // report (and its findings) is skipped wholesale on the next scan.
         const norm = normalize(region.text);
         const key = dedupKey(region.type, norm);
-        // Positional identity (§15.3 / v2.22): a live capture starting on this same row is
-        // THIS unit re-detected. Mutation is the ground truth, not text similarity —
-        //   unchanged     → already shown, skip;
-        //   clean growth  → the partial grew, retract it and emit the fuller capture;
-        //   any other edit → an in-place repaint (an elapsed/progress token, reflow), keep
-        //                    the first stable capture rather than re-emit it every tick.
-        const pos = positionMatch(region.type, region.startRow);
-        if (pos) {
-          if (pos.norm === norm) continue;
-          if (isPrefixAtBoundary(pos.norm, norm)) {
-            if (pos.id !== undefined) deps.remove?.(pos.id);
-            forget(pos.key);
-          } else {
-            continue;
-          }
-        } else {
-          // Content backstop: no positional match (a new unit, or one whose marker trimmed
-          // out of scrollback so its position is lost). Fall back to text identity (§15.3).
-          if (captured.has(key)) continue; // exact match already captured — drop the second
-          let subsumed = false;
-          for (const c of captured.values()) {
-            if (c.type === region.type && isPrefixAtBoundary(norm, c.norm)) { subsumed = true; break; }
-          }
-          if (subsumed) continue;
-          // A clean word-boundary append over a captured partial whose position was lost:
-          // retract the partial so the pane keeps only the complete capture (§15.3).
-          for (const c of [...captured.values()]) {
-            if (c.type === region.type && isPrefixAtBoundary(c.norm, norm)) {
-              if (c.id !== undefined) deps.remove?.(c.id);
-              forget(c.key);
-            }
-          }
+        const superseded = supersededBy(region.type, region.startRow, norm, key);
+        if (superseded === null) continue; // already shown — drop this capture
+        // Retract every partial this region completes so the pane keeps only the
+        // fuller capture; happens before suppression so suppressed growth still cleans up.
+        for (const c of superseded) {
+          if (c.id !== undefined) deps.remove?.(c.id);
+          forget(c.key);
         }
         // Echoed self-injected input: remember it so it never re-emits, but don't
         // surface it; the agent's reply renders below the watermark and still does (§16.5).
@@ -232,22 +255,9 @@ export function createScanner(deps: ScannerDeps): Scanner {
       }
     }
 
-    // Advance the watermark to the stability frontier — the highest row PROVEN immutable,
-    // never backward (§15.3 / v2.22):
-    //   • scrollback (`baseY-1`) can no longer be cursor-addressed, so it is frozen;
-    //   • a turn-complete composer witnesses that everything above it is done;
-    //   • otherwise the bottom-most unit stays provisional (sealed only up to just above it),
-    //     so its next-scan growth merges in place instead of splitting off as a new capture.
+    // Advance the watermark to the stability frontier, never backward (§15.3 / v2.22).
     // On the alt buffer there is nothing to track — resume from the top when normal returns.
-    let sealRow: number;
-    if (!altScreen && startRow <= endRow && composerTop(reader, startRow, endRow) <= endRow) {
-      sealRow = composerTop(reader, startRow, endRow) - 1;
-    } else if (bottomUnitStart >= 0) {
-      sealRow = bottomUnitStart - 1;
-    } else {
-      sealRow = startRow - 1; // nothing detected — don't advance into unscanned rows
-    }
-    sealRow = Math.max(sealRow, reader.baseY() - 1, watermark && watermark.line >= 0 ? watermark.line : -1);
+    const sealRow = computeSealRow(altScreen, startRow, endRow, bottomUnitStart);
     watermark?.dispose();
     watermark = altScreen || sealRow < 0 ? undefined : addMarker(sealRow);
   }
