@@ -25,6 +25,16 @@ async function findRowIndex(needle: string): Promise<number> {
   return -1;
 }
 
+/** First visible row whose text contains `needle` (survives reflow wrapping a logical line). */
+async function findRowIndexContaining(needle: string): Promise<number> {
+  const rows = page.locator('.xterm-rows > div');
+  const count = await rows.count();
+  for (let i = 0; i < count; i++) {
+    if ((await rows.nth(i).textContent())?.includes(needle)) return i;
+  }
+  return -1;
+}
+
 /** Drag-select the whole visible row whose exact text is `needle`; returns its bounding box. */
 async function selectRowContaining(needle: string): Promise<{ x: number; y: number; width: number; height: number }> {
   // Wait for the exact output row to render — a preceding toContainText can match the
@@ -366,14 +376,21 @@ test('capture ↔ terminal cross-highlight: double-click reveals each side (§16
   page = await app.firstWindow();
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
-  await typeCommand(
-    "printf '%s\\n' 'Here is the cross-highlight summary of findings below:' '- cross-highlight finding one worth acting on now' '- cross-highlight finding two to address before merge'",
-  );
-  const report = page.locator('.capture-block[data-type="report"]').first();
-  await expect(report).toBeVisible({ timeout: 10_000 });
-  // The two list items split into individually-actionable findings (chunks).
-  const findingOne = report.locator('.finding', { hasText: 'finding one worth acting on now' });
+  // Feed the report through base64 so the finding phrases appear ONLY in the command's OUTPUT,
+  // never in its echoed input line. With shell integration off the scanner captures the echo
+  // region too, so a phrase typed literally would match twice (echo + output) and a terminal
+  // double-click could land on the echo. The decoded text is the same three-line report.
+  const reportB64 =
+    'SGVyZSBpcyB0aGUgY3Jvc3MtaGlnaGxpZ2h0IHN1bW1hcnkgb2YgZmluZGluZ3MgYmVsb3c6Ci0gY3Jvc3MtaGlnaGxpZ2h0IGZpbmRpbmcgb25lIHdvcnRoIGFjdGluZyBvbiBub3cKLSBjcm9zcy1oaWdobGlnaHQgZmluZGluZyB0d28gdG8gYWRkcmVzcyBiZWZvcmUgbWVyZ2UK';
+  await typeCommand(`echo '${reportB64}' | base64 -d`);
+
+  await expect(page.locator('.capture-block[data-type="report"]').first()).toBeVisible({ timeout: 10_000 });
+  // Each list item splits into an individually-actionable finding (chunk); the phrase is now
+  // unique to the output, so each matches exactly one finding.
+  const findingOne = page.locator('.finding', { hasText: 'finding one worth acting on now' });
+  const findingTwo = page.locator('.finding', { hasText: 'finding two to address before merge' });
   await expect(findingOne).toHaveCount(1);
+  await expect(findingTwo).toHaveCount(1);
 
   // Capture → terminal: double-clicking a single finding draws the amber reveal decoration
   // over just that chunk's terminal rows (a class distinct from the blue selection one).
@@ -386,6 +403,21 @@ test('capture ↔ terminal cross-highlight: double-click reveals each side (§16
   expect(rowIdx).toBeGreaterThanOrEqual(0);
   await page.locator('.xterm-rows > div').nth(rowIdx).dblclick();
   await expect(findingOne).toHaveClass(/revealed/);
+
+  // The regression guard: after a resize REFLOWS the transcript, the link must still resolve to
+  // the SAME content. Each capture's span is anchored to xterm markers (which move with their
+  // lines through reflow), so the scan-time absolute rows can't go stale and mis-target (§16.8).
+  // Narrow the window so the long echoed input line re-wraps and pushes the output findings to
+  // new absolute rows, then re-run terminal → capture against finding TWO: a stale-row mapping
+  // would now point at the wrong chunk or the whole report; the marker mapping still lands true.
+  await expect(findingOne).not.toHaveClass(/revealed/, { timeout: 12_000 }); // let the prior reveal self-clear
+  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(480, 600));
+  await expect.poll(() => findRowIndexContaining('finding two')).toBeGreaterThanOrEqual(0); // 80 ms debounce + reflow
+
+  const row2 = await findRowIndexContaining('finding two');
+  await page.locator('.xterm-rows > div').nth(row2).dblclick();
+  await expect(findingTwo).toHaveClass(/revealed/);
+  await expect(findingOne).not.toHaveClass(/revealed/);
 });
 
 test('APP_SHELL_INTEGRATION=0 disables command capture (no history entries)', async () => {

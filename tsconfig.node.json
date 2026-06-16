@@ -18,6 +18,7 @@
     "src/shared/**/*.ts",
     "src/renderer/src/selectionModel.ts",
     "src/renderer/src/selection.ts",
+    "src/renderer/src/reveal.ts",
     "src/renderer/src/keymap.ts",
     "src/renderer/src/dom.ts",
     "src/renderer/src/paneActions.ts",
