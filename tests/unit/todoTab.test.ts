@@ -127,7 +127,7 @@ describe('Todo tab (§24.1 mockup-exact — checkbox-done + Send)', () => {
     expect(monitor.todoSetStatus).toHaveBeenCalledWith('/repoA', 'd', 'active');
   });
 
-  it('Send on an active todo injects with submit and keeps focus in the action window', async () => {
+  it('Send on an active todo injects WITHOUT submit and moves focus to the terminal so the user can edit (§24.2.1)', async () => {
     wireMonitorPane();
     await flush();
     let focusFired = 0;
@@ -135,8 +135,8 @@ describe('Todo tab (§24.1 mockup-exact — checkbox-done + Send)', () => {
     await loadRepo('/repoA', [makeTodo({ id: 'a', text: 'task' })]);
     (rows()[0].querySelector('.todo-send') as HTMLButtonElement).click();
     await flush();
-    expect(monitor.inject).toHaveBeenCalledWith({ text: 'task', submit: true });
-    expect(focusFired).toBe(0);
+    expect(monitor.inject).toHaveBeenCalledWith({ text: 'task', submit: false });
+    expect(focusFired).toBe(1);
   });
 
   it('a done todo has no Send action', async () => {

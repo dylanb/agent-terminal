@@ -147,12 +147,16 @@ test('manual selection capture routes to the Todo tab; Send drives the shell (§
   const item = page.locator('.todo').filter({ hasText: 'echo injected-ok-123' });
   await expect(item).toHaveCount(1);
 
-  // Send from the todo drives the shell (submit; focus stays in the action window).
+  // Send pastes the todo at the prompt WITHOUT submitting, so the user can edit it (§24.2.1).
+  const outputRow = page.locator('.xterm-rows > div').filter({ hasText: /^\s*injected-ok-123\s*$/ });
   await page.locator('#drawer').click();
   await item.getByRole('button', { name: 'Send' }).click();
-  await expect(
-    page.locator('.xterm-rows > div').filter({ hasText: /^\s*injected-ok-123\s*$/ }),
-  ).toHaveCount(1);
+  // The command text is now at the prompt but has not run — no output row yet.
+  await expect(page.locator('.xterm-rows')).toContainText('echo injected-ok-123');
+  await expect(outputRow).toHaveCount(0);
+  // Submitting it (the user's choice) runs it and yields the echo output on its own row.
+  await page.keyboard.press('Enter');
+  await expect(outputRow).toHaveCount(1);
 });
 
 test('injection honors bracketed-paste mode read live from the shadow (§9.3)', async () => {

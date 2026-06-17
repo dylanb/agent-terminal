@@ -90,12 +90,14 @@ export function createTodoTab(deps: TodoTabDeps): TodoTab {
 
     row.append(chk, body);
 
-    // Active todos can be sent to the agent (submit; focus stays in the action window).
+    // Send pastes the todo into the agent's input WITHOUT submitting (§9.3 submit:false /
+    // §16.2 Insert), then moves focus to the terminal so the user can edit or augment it
+    // before submitting themselves (§24.2.1).
     if (!done) {
       const send = document.createElement('button');
       send.className = 'todo-send pill sm signal';
       send.textContent = 'Send';
-      send.addEventListener('click', () => doInject(t.text, true));
+      send.addEventListener('click', () => doInject(t.text, false));
       row.append(send);
     }
     return row;
