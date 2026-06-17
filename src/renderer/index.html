@@ -57,28 +57,10 @@
           </div>
         </div>
 
-        <!-- VIEW 2 — Artifacts (mocked fixture, §20.1) -->
+        <!-- VIEW 2 — Artifacts: file tree + viewer (§20.2). Built by createArtifacts; fed a
+             fixture artifact set in Phase 1 (real discovery is the §24.2 backlog). -->
         <div data-viewpane="2">
-          <div class="artsplit">
-            <div class="tree">
-              <div class="grp">This run</div>
-              <div class="f sel"><span class="ic">md</span> review.md <span class="tag">iter 03</span></div>
-              <div class="f"><span class="ic">md</span> plan.md <span class="tag">step 1</span></div>
-              <div class="f"><span class="ic">◆</span> diff · 6 files <span class="tag">code</span></div>
-              <div class="grp">GitHub</div>
-              <div class="f"><span class="ic">⌥</span> PR #42 <span class="tag">open</span></div>
-              <div class="f"><span class="ic">◷</span> CI · scanner <span class="tag">pass</span></div>
-            </div>
-            <div class="viewer">
-              <h1 class="vh serif">Review — capture pipeline</h1>
-              <div class="vmeta">review.md · iter 03 · <span class="vbadge">2 findings</span></div>
-              <p>The scanner now carves tool calls out of the report body, so a tool-heavy turn yields clean prose plus findings rather than a blob.</p>
-              <h2 class="vs serif">Stability frontier</h2>
-              <p>However, the frontier still <span class="marked">re-reads scrollback on every quiet pause</span>, which on a long session is measurable overhead. A second pass also <span class="marked">drops findings under the minimum-character floor</span> without flagging them.</p>
-              <h2 class="vs serif">Command-output capture</h2>
-              <p>Unchanged and behaves correctly across the test session. Select any passage to send it to the terminal or add it as a todo.</p>
-            </div>
-          </div>
+          <div id="artifacts"></div>
         </div>
 
         <!-- VIEW 3 — Todos + Review gate (mocked fixture, §19.3) -->

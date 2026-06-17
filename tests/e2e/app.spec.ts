@@ -452,6 +452,38 @@ test('switches views via hotkey and nav button, showing one pane at a time (§22
   await expect(v3).toBeHidden();
 });
 
+test('the artifact viewer renders a fixture artifact and sends a selection to a todo (§20.2/§24.1)', async () => {
+  await cdToTempDir('artifacts'); // establish a live repo key so Add-to-todo lands here
+
+  await page.keyboard.press('Control+2');
+  await expect(page.locator('[data-viewpane="2"]')).toBeVisible();
+
+  // The fixture file tree is populated (real discovery is the §24.2 backlog).
+  const tree = page.locator('#artifacts .tree');
+  await expect(tree).toContainText('review.md');
+  await expect(tree).toContainText('scanner.ts');
+
+  // The first artifact opens by default and renders as markdown, with its ```mermaid fence
+  // turned into a diagram (markdown-it + mermaid, §20.2).
+  const body = page.locator('#artifacts .vbody');
+  await expect(body.locator('h1')).toContainText('Review — capture pipeline');
+  await expect(body.locator('.mermaid')).not.toHaveCount(0);
+  await expect(body.locator('.mermaid svg')).toBeVisible({ timeout: 20_000 });
+
+  // Select a passage and Add-to-todo — the same §16.2 sink as the terminal-pane selection.
+  await body.locator('p').filter({ hasText: 'carves tool calls' }).selectText();
+  await page.locator('#artifacts .art-todo').click();
+  await page.locator('#tab-todo').click();
+  await expect(
+    page.locator('.todo').filter({ hasText: 'carves tool calls out of the report body' }),
+  ).toHaveCount(1);
+
+  // A code artifact renders read-only in CodeMirror (§20.2).
+  await tree.locator('.f').filter({ hasText: 'scanner.ts' }).click();
+  await expect(body.locator('.cm-editor')).toBeVisible();
+  await expect(body.locator('.cm-editor')).toContainText('captureLast');
+});
+
 test('the quick-send drawer docks and undocks without a scrim, keeping the terminal visible (§16.8/§22.2)', async () => {
   const appEl = page.locator('#app');
   await expect(appEl).toHaveClass(/drawer-open/); // docked by default

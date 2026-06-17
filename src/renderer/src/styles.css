@@ -55,6 +55,7 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible { outline:2px so
 .main { min-width:0; position:relative; }
 [data-viewpane] { position:absolute; inset:0; display:none; }
 [data-viewpane].on { display:block; }
+#artifacts { height:100%; }
 .artsplit { display:grid; grid-template-columns:248px 1fr; height:100%; }
 .artsplit .tree { padding:20px 16px; border-right:1px solid var(--hair); overflow:auto; }
 .twocol { display:grid; grid-template-columns:1fr 1fr; height:100%; }
@@ -107,20 +108,43 @@ button {
 button:hover { border-color:var(--dim); }
 
 /* ---- view 2/3: mocked artifacts + todos + gate ---- */
-.tree { font-size:13px; }
+.tree { font-size:13px; display:flex; flex-direction:column; gap:12px; }
+.treesearch { font:inherit; font-size:12px; color:var(--text); background:var(--hair2); border:1px solid var(--hair); border-radius:6px; padding:6px 9px; outline:none; }
+.treesearch:focus { border-color:var(--signal); }
+.treelist { overflow:auto; }
 .tree .grp { text-transform:uppercase; letter-spacing:.13em; font-size:9.5px; color:var(--dim); margin:14px 0 7px; }
 .tree .grp:first-child { margin-top:0; }
 .tree .f { display:flex; align-items:center; gap:9px; padding:6px 9px; border-radius:6px; cursor:pointer; color:var(--text); }
+.tree .f .fn { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .tree .f:hover { background:var(--hair2); }
 .tree .f.sel { background:var(--signal-wash); color:var(--signal); }
 .tree .f .ic { font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:11px; color:var(--dim); }
 .tree .f .tag { margin-left:auto; font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:9.5px; color:var(--dim); border:1px solid var(--hair); border-radius:4px; padding:1px 5px; }
-.viewer { padding:30px 38px; overflow:auto; height:100%; }
-.viewer h1.vh { font-family:"Fraunces",Georgia,serif; font-weight:500; font-size:30px; margin:0 0 6px; }
-.viewer .vmeta { font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:11.5px; color:var(--dim); margin-bottom:24px; }
-.viewer h2.vs { font-family:"Fraunces",Georgia,serif; font-weight:500; font-size:20px; margin:26px 0 10px; }
-.viewer p { font-size:15px; line-height:1.75; max-width:68ch; margin:0 0 14px; }
-.viewer .vbadge { display:inline-block; font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:10px; padding:2px 7px; border-radius:4px; background:var(--signal-wash); color:var(--signal); }
+
+/* Viewer: a title/action bar over a scrolling body (§20.2). */
+.viewer { display:flex; flex-direction:column; height:100%; overflow:hidden; }
+.viewer .vbar { display:flex; align-items:flex-start; gap:16px; padding:24px 38px 14px; border-bottom:1px solid var(--hair); }
+.viewer .vtitlewrap { flex:1; min-width:0; }
+.viewer .vtitle { font-size:24px; font-weight:500; margin:0; }
+.viewer .vmeta { font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:11.5px; color:var(--dim); margin-top:4px; }
+.viewer .vactions { display:flex; gap:8px; flex-shrink:0; }
+.viewer .vbody { padding:24px 38px; overflow:auto; flex:1; }
+
+/* markdown-it output (§20.2) — token-themed, so it follows light/dark. */
+.vbody.md h1 { font-family:"Fraunces",Georgia,serif; font-weight:500; font-size:28px; margin:0 0 8px; }
+.vbody.md h2 { font-family:"Fraunces",Georgia,serif; font-weight:500; font-size:19px; margin:26px 0 10px; }
+.vbody.md p { font-size:15px; line-height:1.75; max-width:68ch; margin:0 0 14px; }
+.vbody.md ul, .vbody.md ol { font-size:15px; line-height:1.7; max-width:68ch; margin:0 0 14px; padding-left:24px; }
+.vbody.md li { margin:3px 0; }
+.vbody.md em { color:var(--dim); }
+.vbody.md a { color:var(--signal); }
+.vbody.md code { font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:.88em; background:var(--hair2); border-radius:4px; padding:1px 5px; }
+.vbody.md pre { background:var(--hair2); border:1px solid var(--hair); border-radius:8px; padding:14px 16px; overflow:auto; }
+.vbody.md pre code { background:none; padding:0; }
+.vbody .mermaid { margin:0 0 18px; text-align:center; }
+.vbody .mermaid svg { max-width:100%; height:auto; }
+.vbody .cm-editor { height:100%; }
+.vbody .cm-scroller { font-family:"IBM Plex Mono",ui-monospace,monospace; }
 .marked { background:var(--signal-wash); border-bottom:2px solid var(--signal); padding:1px 3px; border-radius:2px; }
 .loop .lrow { display:flex; align-items:baseline; font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:12.5px; padding:1px 0; }
 .loop .lrow .lk { color:var(--dim); } .loop .lrow .ld { flex:1; border-bottom:1px dotted var(--hair); margin:0 8px 4px; }

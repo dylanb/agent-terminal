@@ -4,6 +4,10 @@ import { wireMonitorPane } from './monitor';
 import { createShell } from './shell';
 import { wireCrossHighlight } from './crossHighlight';
 import { SAMPLE_FLOW, flowLabel, renderFlow, renderRailStatus, createGatePanel } from './flow';
+import { createArtifacts } from './artifacts';
+import { renderMarkdownInto, renderCodeInto } from './viewerRender';
+import { doInject } from './paneActions';
+import { captureToTodo } from './selection';
 
 const term = createTerminalPane(document.getElementById('terminal')!);
 wireSelection(term);
@@ -32,3 +36,21 @@ const railStatus = document.getElementById('rail-flowstatus');
 if (railStatus) renderRailStatus(railStatus, SAMPLE_FLOW);
 const gatePanel = document.getElementById('gate-panel');
 if (gatePanel) createGatePanel(gatePanel, SAMPLE_FLOW);
+
+// View 2 — the artifact viewer (§20.2 / §24.1): a fixture artifact set rendered with the
+// real markdown-it+mermaid / CodeMirror stack; a selection routes to the same two sinks as
+// the terminal-pane selection — send-to-agent (inject, no submit, §9.3) and add-to-todo
+// (§16.2). Real discovery + provenance (`viewer:tree`) stays in the §24.2 backlog.
+const artifactsHost = document.getElementById('artifacts');
+if (artifactsHost) {
+  let repoKey: string | null = null;
+  window.monitor.onCwdChanged((m) => {
+    repoKey = m.repoKey;
+  });
+  createArtifacts(artifactsHost, {
+    renderMarkdown: renderMarkdownInto,
+    renderCode: renderCodeInto,
+    send: (text) => doInject(text, false),
+    addToTodo: (text) => captureToTodo(window.monitor, repoKey, text),
+  });
+}
