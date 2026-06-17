@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { wireMonitorPane, FOCUS_TERMINAL_EVENT } from '../../src/renderer/src/monitor';
+import { TODO_UNDO_MS } from '../../src/renderer/src/paneActions';
 import { DEFAULT_UI_SETTINGS } from '../../src/shared/ipc';
 import type { TodoItem, UiSettings } from '../../src/shared/ipc';
 
@@ -178,13 +179,76 @@ describe('Todo tab (§16.4 — active/Done, manual add, reorder, edit, lifecycle
     expect(monitor.todoReorder).toHaveBeenCalledWith('/repoA', ['b', 'a', 'c']);
   });
 
-  it('deleting a todo calls todoDelete', async () => {
+  it('clicking × asks for confirmation and deletes nothing yet', async () => {
     wireMonitorPane();
     await flush();
-    await loadRepo('/repoA', [makeTodo({ id: 'a' })]);
+    await loadRepo('/repoA', [makeTodo({ id: 'a', text: 'keep me' })]);
     btn(activeItems()[0], 'todo-delete').click();
     await flush();
-    expect(monitor.todoDelete).toHaveBeenCalledWith('/repoA', 'a');
+    expect(btn(items()[0], 'todo-delete-confirm')).toBeTruthy();
+    expect(monitor.todoDelete).not.toHaveBeenCalled();
+    expect(items()[0].querySelector('.todo-text')!.textContent).toBe('keep me');
+  });
+
+  it('Cancel on the confirm step keeps the todo and restores the × button', async () => {
+    wireMonitorPane();
+    await flush();
+    await loadRepo('/repoA', [makeTodo({ id: 'a', text: 'stay' })]);
+    btn(activeItems()[0], 'todo-delete').click();
+    await flush();
+    btn(items()[0], 'todo-delete-cancel').click();
+    await flush();
+    expect(btn(items()[0], 'todo-delete')).toBeTruthy();
+    expect(monitor.todoDelete).not.toHaveBeenCalled();
+    expect(items()[0].querySelector('.todo-text')!.textContent).toBe('stay');
+  });
+
+  it('confirming delete replaces the row with an Undo button and defers the actual delete', async () => {
+    wireMonitorPane();
+    await flush();
+    await loadRepo('/repoA', [makeTodo({ id: 'a', text: 'bye' })]);
+    btn(activeItems()[0], 'todo-delete').click();
+    await flush();
+    btn(items()[0], 'todo-delete-confirm').click();
+    await flush();
+    const row = todoList().querySelector('[data-todo-id="a"]') as HTMLElement;
+    expect(row.querySelector('.todo-undo')).toBeTruthy();
+    expect(row.querySelector('.todo-text')).toBeNull(); // normal content replaced by the Undo row
+    expect(monitor.todoDelete).not.toHaveBeenCalled(); // deferred until the window elapses
+  });
+
+  it('Undo within the window restores the todo and never deletes it', async () => {
+    wireMonitorPane();
+    await flush();
+    await loadRepo('/repoA', [makeTodo({ id: 'a', text: 'restore me' })]);
+    btn(activeItems()[0], 'todo-delete').click();
+    await flush();
+    btn(items()[0], 'todo-delete-confirm').click();
+    await flush();
+    (todoList().querySelector('.todo-undo') as HTMLButtonElement).click();
+    await flush();
+    expect(monitor.todoDelete).not.toHaveBeenCalled();
+    expect(items()[0].querySelector('.todo-text')!.textContent).toBe('restore me');
+  });
+
+  it('after the 60s undo window elapses, the deferred delete fires (§16.4)', async () => {
+    vi.useFakeTimers();
+    try {
+      wireMonitorPane();
+      await vi.advanceTimersByTimeAsync(0);
+      monitor.todoList.mockResolvedValue([makeTodo({ id: 'a', text: 'bye' })]);
+      handlers.cwdChanged!({ sessionId: 's1', cwd: '/repoA', repoKey: '/repoA' });
+      await vi.advanceTimersByTimeAsync(0);
+      btn(activeItems()[0], 'todo-delete').click();
+      await vi.advanceTimersByTimeAsync(0);
+      btn(items()[0], 'todo-delete-confirm').click();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(monitor.todoDelete).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(TODO_UNDO_MS);
+      expect(monitor.todoDelete).toHaveBeenCalledWith('/repoA', 'a');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('each active todo exposes a drag handle for reordering (§16.4 a11y dual path)', async () => {

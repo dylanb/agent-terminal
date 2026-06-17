@@ -5,7 +5,7 @@
 // narrow TodoSink surface, so the two tabs share state through one owner, not a scope.
 
 import type { MonitorApi, TodoItem, TodoSource } from '../../shared/ipc';
-import { doInject } from './paneActions';
+import { doInject, TODO_UNDO_MS } from './paneActions';
 
 /** The slice the Capture tab needs to push a capture into the list and undo it (§16.2). */
 export interface TodoSink {
@@ -39,6 +39,11 @@ export function createTodoTab(deps: TodoTabDeps): TodoTab {
   // applied once the edit resolves so the in-flight edit writes to its own repo.
   let editingId: string | null = null;
   let pendingRepoKey: string | null = null;
+  // Delete is a two-step, undoable action (§16.4): × asks to confirm; confirming hides the
+  // row behind an Undo for TODO_UNDO_MS and only then calls todoDelete. Both are render
+  // state (survive a re-render), and the actual delete is deferred so Undo needs no re-add.
+  let confirmingDeleteId: string | null = null;
+  const pendingDelete = new Map<string, ReturnType<typeof setTimeout>>();
 
   function updateTodoCount(): void {
     todoCountEl.textContent = String(todos.filter((t) => t.status === 'active').length);
@@ -134,7 +139,45 @@ export function createTodoTab(deps: TodoTabDeps): TodoTab {
     return item;
   }
 
+  // A confirmed-but-not-yet-committed delete: the row is an Undo affordance for the window.
+  function renderPendingDelete(t: TodoItem): HTMLElement {
+    const item = document.createElement('div');
+    item.className = 'todo-item pending-delete';
+    item.dataset.todoId = t.id;
+    const note = document.createElement('span');
+    note.className = 'deleted-note';
+    note.textContent = 'Deleted';
+    const undo = document.createElement('button');
+    undo.className = 'todo-undo';
+    undo.textContent = 'Undo';
+    undo.addEventListener('click', () => cancelPendingDelete(t.id));
+    item.append(note, undo);
+    return item;
+  }
+
+  function beginPendingDelete(t: TodoItem): void {
+    confirmingDeleteId = null;
+    // Capture the item's own repo (t.repoKey), not the live cwd, so a mid-window swap still
+    // deletes from the right list (§16.3); the delete fires only when the window elapses.
+    pendingDelete.set(
+      t.id,
+      setTimeout(() => {
+        pendingDelete.delete(t.id);
+        void monitor.todoDelete(t.repoKey, t.id).then(setTodos);
+      }, TODO_UNDO_MS),
+    );
+    renderTodos();
+  }
+
+  function cancelPendingDelete(id: string): void {
+    const timer = pendingDelete.get(id);
+    if (timer) clearTimeout(timer);
+    pendingDelete.delete(id);
+    renderTodos(); // restored from `todos` — the server delete never ran
+  }
+
   function renderTodoItem(t: TodoItem, ordered: TodoItem[], index: number): HTMLElement {
+    if (pendingDelete.has(t.id)) return renderPendingDelete(t);
     if (t.id === editingId) return renderEditing(t);
 
     const item = document.createElement('div');
@@ -177,12 +220,30 @@ export function createTodoTab(deps: TodoTabDeps): TodoTab {
       actions.append(up, down, edit);
     }
 
-    const del = document.createElement('button');
-    del.className = 'todo-delete dismiss';
-    del.textContent = '×';
-    del.setAttribute('aria-label', 'Delete todo');
-    del.addEventListener('click', async () => setTodos(await monitor.todoDelete(t.repoKey, t.id)));
-    actions.append(del);
+    if (t.id === confirmingDeleteId) {
+      const confirm = document.createElement('button');
+      confirm.className = 'todo-delete-confirm';
+      confirm.textContent = 'Confirm delete?';
+      confirm.addEventListener('click', () => beginPendingDelete(t));
+      const cancel = document.createElement('button');
+      cancel.className = 'todo-delete-cancel';
+      cancel.textContent = 'Cancel';
+      cancel.addEventListener('click', () => {
+        confirmingDeleteId = null;
+        renderTodos();
+      });
+      actions.append(confirm, cancel);
+    } else {
+      const del = document.createElement('button');
+      del.className = 'todo-delete dismiss';
+      del.textContent = '×';
+      del.setAttribute('aria-label', 'Delete todo');
+      del.addEventListener('click', () => {
+        confirmingDeleteId = t.id;
+        renderTodos();
+      });
+      actions.append(del);
+    }
 
     item.append(handle, text, todoInjectActions(t), actions);
     return item;

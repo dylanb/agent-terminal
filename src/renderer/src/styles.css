@@ -275,6 +275,8 @@ button:hover {
 .blocks-toolbar {
   display: flex;
   justify-content: flex-end;
+  align-items: center;
+  gap: 8px;
   padding: 6px 8px 0;
 }
 
@@ -282,8 +284,25 @@ button:hover {
   display: none;
 }
 
-#dismiss-all {
+.blocks-toolbar button {
   font-size: 11px;
+}
+
+.blocks-toolbar button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+/* Bulk Add-to-todo undo affordance (§16.2): lives in the toolbar beside the Add button. */
+.add-undo-slot {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+}
+
+.add-undo-slot .added-note {
+  color: #9a9a9a;
 }
 
 .capture-block {
@@ -390,4 +409,62 @@ button.mark-chrome:hover {
 .capture-actions .added-note {
   align-self: center;
   color: #9a9a9a;
+}
+
+/* Chunk selection (§16.2): a checkbox per finding / standalone chunk; the toolbar's bulk
+   Add-to-todo and Dismiss-selected act on every checked chunk. */
+.chunk-check {
+  cursor: pointer;
+  accent-color: #4a9eff;
+}
+
+.finding {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+.finding .chunk-check {
+  margin: 10px 0 0 8px;
+}
+
+.finding .capture-text {
+  flex: 1;
+  min-width: 0;
+}
+
+/* A standalone capture / a report before it splits carries its checkbox above its text. */
+.capture-block > .chunk-check {
+  margin: 8px 0 0 8px;
+}
+
+/* Committed to a pending Add-to-todo (§16.2): dimmed with its checkbox disabled until the
+   undo window commits (chunk is dismissed) or Undo restores it. */
+.chunk-processed {
+  opacity: 0.5;
+}
+
+/* Todo delete (§16.4): inline confirm, then a deferred-delete Undo row for the window. */
+.todo-delete-confirm {
+  color: #e06c6c;
+  font-size: 11px;
+  background: transparent;
+  border: 1px solid #5a2c2c;
+  border-radius: 3px;
+  cursor: pointer;
+}
+
+.todo-delete-cancel,
+.todo-undo {
+  font-size: 11px;
+}
+
+.todo-item.pending-delete {
+  justify-content: space-between;
+  opacity: 0.75;
+}
+
+.todo-item.pending-delete .deleted-note {
+  color: #9a9a9a;
+  font-style: italic;
 }

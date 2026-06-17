@@ -84,23 +84,25 @@ describe('Capture tab "Add to todo" button (§16.2 — capture block → todo)',
   });
 
   const blocks = () => document.getElementById('monitor-blocks')!;
+  const addSelected = () => document.getElementById('add-selected-todo') as HTMLButtonElement;
+  function checkChunk(eventId: string): void {
+    const cb = blocks().querySelector(`[data-event-id="${eventId}"] .chunk-check`) as HTMLInputElement;
+    cb.checked = true;
+    cb.dispatchEvent(new Event('change', { bubbles: true }));
+  }
 
-  it('clicking Add to todo on a captured report posts it to the current repo', async () => {
+  it('bulk Add to todo posts the checked chunk to the current repo', async () => {
     wireMonitorPane();
     await flush();
     handlers.cwdChanged!({ sessionId: 's1', cwd: '/repoA', repoKey: '/repoA' });
     await flush();
 
     handlers.event!(makeEvent({ id: 'e1', type: 'report', text: 'remember this finding' }));
-    const add = blocks().querySelector('.add-to-todo') as HTMLButtonElement;
-    expect(add).toBeTruthy();
-    add.click();
+    checkChunk('e1');
+    addSelected().click();
     await flush();
 
-    expect(monitor.todoAdd).toHaveBeenCalledWith('/repoA', 'remember this finding', {
-      type: 'report',
-      eventId: 'e1',
-    });
+    expect(monitor.todoAdd).toHaveBeenCalledWith('/repoA', 'remember this finding', { type: 'capture' });
   });
 
   it('works when the repo key was set before mount (initial cwd missed the live broadcast)', async () => {
@@ -111,12 +113,10 @@ describe('Capture tab "Add to todo" button (§16.2 — capture block → todo)',
     await flush(); // mount-time currentRepo() resolves; NO cwdChanged is ever fired
 
     handlers.event!(makeEvent({ id: 'e2', type: 'report', text: 'keep this one too' }));
-    (blocks().querySelector('.add-to-todo') as HTMLButtonElement).click();
+    checkChunk('e2');
+    addSelected().click();
     await flush();
 
-    expect(monitor.todoAdd).toHaveBeenCalledWith('/repoA', 'keep this one too', {
-      type: 'report',
-      eventId: 'e2',
-    });
+    expect(monitor.todoAdd).toHaveBeenCalledWith('/repoA', 'keep this one too', { type: 'capture' });
   });
 });

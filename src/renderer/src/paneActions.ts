@@ -12,12 +12,20 @@ export const FOCUS_TERMINAL_EVENT = 'app:focus-terminal';
 // bus as FOCUS_TERMINAL_EVENT, so neither pane imports the other's internals (§9.1).
 export const TODOS_CHANGED_EVENT = 'app:todos-changed';
 
-// Cross-highlight signals (§16.8): the same decoupled window-event bus carries the two
-// reveal directions between the panes, so neither imports the other (§9.1).
-//   • REVEAL_CAPTURE: terminal → capture pane; detail {row} (absolute buffer row the user
-//     double-clicked) → the pane scrolls to and border-highlights the covering block.
-//   • REVEAL_TERMINAL: capture pane → terminal; detail {range} (the block's on-screen span)
-//     → the terminal scrolls to and highlights those rows.
+// Cross-highlight signals (§16.8): the same decoupled window-event bus carries the reveal
+// directions between the panes, so neither imports the other (§9.1). The terminal pane owns
+// the coordinates — it marker-anchors every capture's span (xterm markers track reflow), so
+// a resize never stales the link. Reveals are therefore keyed by capture **id**, not raw rows.
+//   • CAPTURE_RANGE_ADD: capture pane → terminal; detail {id, range} — a ranged block/finding
+//     rendered; the terminal registers start/end markers so the span follows reflow.
+//   • CAPTURE_RANGE_REMOVE: capture pane → terminal; detail {id} — that block was dropped;
+//     the terminal disposes its markers.
+//   • REVEAL_CAPTURE: terminal → capture pane; detail {id} (the capture whose live span the
+//     double-clicked row fell in) → the pane scrolls to and border-highlights that block.
+//   • REVEAL_TERMINAL: capture pane → terminal; detail {id} (the double-clicked block) → the
+//     terminal reads that capture's live marker rows and highlights them.
+export const CAPTURE_RANGE_ADD_EVENT = 'app:capture-range-add';
+export const CAPTURE_RANGE_REMOVE_EVENT = 'app:capture-range-remove';
 export const REVEAL_CAPTURE_EVENT = 'app:reveal-capture';
 export const REVEAL_TERMINAL_EVENT = 'app:reveal-terminal';
 

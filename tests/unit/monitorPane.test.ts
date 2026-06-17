@@ -2,6 +2,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   wireMonitorPane,
+  CAPTURE_RANGE_ADD_EVENT,
+  CAPTURE_RANGE_REMOVE_EVENT,
   FOCUS_TERMINAL_EVENT,
   REVEAL_CAPTURE_EVENT,
   REVEAL_HIGHLIGHT_MS,
@@ -183,14 +185,15 @@ describe('action window DOM (§16 — tabs, captures, command history, focus)', 
 
   // ---- semantic captures: Add to todo + Dismiss, no inject (§16.2) ----
 
-  it('a report group offers Add to todo + Dismiss and no Insert', async () => {
+  it('a report chunk carries a checkbox; the toolbar offers Add to todo, never Insert', async () => {
     wireMonitorPane();
     await flush();
     handlers.event!(makeEvent({ id: 'r', type: 'report', source: 'shadow-scan', text: 'whole report' }));
     const group = blocks().querySelector('[data-event-id="r"]') as HTMLElement;
-    const buttons = Array.from(group.querySelectorAll('button')).map((b) => b.textContent);
-    expect(buttons).toContain('Add to todo');
-    expect(buttons.some((t) => t?.includes('Insert'))).toBe(false);
+    expect(group.querySelector('.chunk-check')).toBeTruthy();
+    expect(byId('add-selected-todo').textContent).toBe('Add to todo');
+    const capturePanelButtons = Array.from(byId('panel-capture').querySelectorAll('button')).map((b) => b.textContent);
+    expect(capturePanelButtons.some((t) => t?.includes('Insert'))).toBe(false);
   });
 
   it('Mark as chrome on a block learns its glyphs and drops the block (§15.x)', async () => {
@@ -206,43 +209,48 @@ describe('action window DOM (§16 — tabs, captures, command history, focus)', 
     expect(blocks().querySelector('[data-event-id="n"]')).toBeNull();
   });
 
-  it('Add to todo on a finding calls todoAdd and reveals Undo in place, leaving the block', async () => {
+  function checkChunk(eventId: string): void {
+    const cb = blocks().querySelector(`[data-event-id="${eventId}"] .chunk-check`) as HTMLInputElement;
+    cb.checked = true;
+    cb.dispatchEvent(new Event('change', { bubbles: true }));
+  }
+
+  it('checking a finding + bulk Add to todo calls todoAdd and reveals Undo, leaving the chunk', async () => {
     wireMonitorPane();
     await flush();
     handlers.cwdChanged!({ sessionId: 's1', cwd: '/repo/src', repoKey: '/repo' });
     monitor.todoAdd.mockResolvedValue([makeTodo({ id: 'n1', repoKey: '/repo', text: 'finding one' })]);
     handlers.event!(makeEvent({ id: 'r', type: 'report', source: 'shadow-scan', text: 'report' }));
     handlers.event!(makeEvent({ id: 'f1', type: 'finding', parentId: 'r', text: 'finding one' }));
-    const finding = blocks().querySelector('[data-event-id="f1"]') as HTMLElement;
-    const addBtn = Array.from(finding.querySelectorAll('button')).find((b) => b.textContent === 'Add to todo')!;
-    addBtn.click();
+    checkChunk('f1');
+    (byId('add-selected-todo') as HTMLButtonElement).click();
     await flush();
-    expect(monitor.todoAdd).toHaveBeenCalledWith('/repo', 'finding one', { type: 'finding', eventId: 'f1' });
-    // The block stays put until the undo window elapses; nothing dismissed yet.
+    expect(monitor.todoAdd).toHaveBeenCalledWith('/repo', 'finding one', { type: 'capture' });
+    // The chunk stays put until the undo window elapses; nothing dismissed yet.
     expect(blocks().querySelector('[data-event-id="f1"]')).toBeTruthy();
-    expect(finding.querySelector('.undo-add-to-todo')).toBeTruthy();
+    expect(byId('panel-capture').querySelector('.undo-add-to-todo')).toBeTruthy();
     expect(monitor.dismiss).not.toHaveBeenCalled();
   });
 
-  it('Undo on a just-added capture deletes the new todo, restores Add to todo, and never dismisses', async () => {
+  it('Undo after bulk add deletes the new todo, restores Add to todo, and never dismisses', async () => {
     wireMonitorPane();
     await flush();
     handlers.cwdChanged!({ sessionId: 's1', cwd: '/repo', repoKey: '/repo' });
     monitor.todoAdd.mockResolvedValue([makeTodo({ id: 'n1', repoKey: '/repo', text: 'a note' })]);
     monitor.todoDelete.mockResolvedValue([]);
     handlers.event!(makeEvent({ id: 'c1', type: 'capture', text: 'a note' }));
-    const block = blocks().querySelector('[data-event-id="c1"]') as HTMLElement;
-    Array.from(block.querySelectorAll('button')).find((b) => b.textContent === 'Add to todo')!.click();
+    checkChunk('c1');
+    (byId('add-selected-todo') as HTMLButtonElement).click();
     await flush();
-    (block.querySelector('.undo-add-to-todo') as HTMLButtonElement).click();
+    (byId('panel-capture').querySelector('.undo-add-to-todo') as HTMLButtonElement).click();
     await flush();
     expect(monitor.todoDelete).toHaveBeenCalledWith('/repo', 'n1');
     expect(monitor.dismiss).not.toHaveBeenCalled();
-    expect(block.querySelector('.undo-add-to-todo')).toBeNull();
-    expect(Array.from(block.querySelectorAll('button')).some((b) => b.textContent === 'Add to todo')).toBe(true);
+    expect(byId('panel-capture').querySelector('.undo-add-to-todo')).toBeNull();
+    expect((byId('add-selected-todo') as HTMLButtonElement).hidden).toBe(false);
   });
 
-  it('once the undo window elapses, the source block is dismissed and removed (§16.2)', async () => {
+  it('once the bulk-add undo window elapses, the checked chunks are dismissed and removed (§16.2)', async () => {
     vi.useFakeTimers();
     try {
       wireMonitorPane();
@@ -250,8 +258,8 @@ describe('action window DOM (§16 — tabs, captures, command history, focus)', 
       handlers.cwdChanged!({ sessionId: 's1', cwd: '/repo', repoKey: '/repo' });
       monitor.todoAdd.mockResolvedValue([makeTodo({ id: 'n1', repoKey: '/repo', text: 'a note' })]);
       handlers.event!(makeEvent({ id: 'c1', type: 'capture', text: 'a note' }));
-      const block = blocks().querySelector('[data-event-id="c1"]') as HTMLElement;
-      Array.from(block.querySelectorAll('button')).find((b) => b.textContent === 'Add to todo')!.click();
+      checkChunk('c1');
+      (byId('add-selected-todo') as HTMLButtonElement).click();
       await vi.advanceTimersByTimeAsync(0);
       expect(blocks().querySelector('[data-event-id="c1"]')).toBeTruthy();
       await vi.advanceTimersByTimeAsync(TODO_UNDO_MS);
@@ -280,14 +288,14 @@ describe('action window DOM (§16 — tabs, captures, command history, focus)', 
     expect(byId('todo-count').textContent).toBe('2');
   });
 
-  it('Add to todo updates the Todo tab active count from the returned list', async () => {
+  it('bulk Add to todo updates the Todo tab active count from the returned list', async () => {
     monitor.todoAdd.mockResolvedValueOnce([makeTodo({ id: 't1', status: 'active' })]);
     wireMonitorPane();
     await flush();
     handlers.cwdChanged!({ sessionId: 's1', cwd: '/repo', repoKey: '/repo' });
     handlers.event!(makeEvent({ id: 'c', type: 'capture', text: 'note' }));
-    const block = blocks().querySelector('[data-event-id="c"]') as HTMLElement;
-    (Array.from(block.querySelectorAll('button')).find((b) => b.textContent === 'Add to todo')!).click();
+    checkChunk('c');
+    (byId('add-selected-todo') as HTMLButtonElement).click();
     await flush();
     expect(byId('todo-count').textContent).toBe('1');
   });
@@ -405,26 +413,24 @@ describe('action window DOM (§16 — tabs, captures, command history, focus)', 
     expect((els[1] as HTMLElement).dataset.eventId).toBe('a');
   });
 
-  it('dismissing a block calls monitor.dismiss(id) and removes it from the DOM', async () => {
+  it('Dismiss selected dismisses a checked block via monitor.dismiss(id) and removes it', async () => {
     wireMonitorPane();
     await flush();
     handlers.event!(makeEvent({ id: 'x', type: 'capture', text: 'bye' }));
-    const block = blocks().querySelector('[data-event-id="x"]') as HTMLElement;
-    (block.querySelector('.dismiss') as HTMLButtonElement).click();
+    checkChunk('x');
+    (byId('dismiss-selected') as HTMLButtonElement).click();
     expect(monitor.dismiss).toHaveBeenCalledWith('x');
     expect(blocks().querySelector('[data-event-id="x"]')).toBeNull();
   });
 
-  it('dismissing a report removes the whole group and cascades via dismiss(reportId)', async () => {
+  it('Dismiss selected on a report-without-findings cascades via dismiss(reportId) and removes it', async () => {
     wireMonitorPane();
     await flush();
     handlers.event!(makeEvent({ id: 'r', type: 'report', source: 'shadow-scan', text: 'report' }));
-    handlers.event!(makeEvent({ id: 'f1', type: 'finding', parentId: 'r', text: 'one' }));
-    const group = blocks().querySelector('[data-event-id="r"]') as HTMLElement;
-    (group.querySelector('.dismiss') as HTMLButtonElement).click();
-    expect(monitor.dismiss).toHaveBeenCalledWith('r');
+    checkChunk('r');
+    (byId('dismiss-selected') as HTMLButtonElement).click();
+    expect(monitor.dismiss).toHaveBeenCalledWith('r'); // main cascades to child findings (§15.6)
     expect(blocks().querySelector('[data-event-id="r"]')).toBeNull();
-    expect(blocks().querySelector('[data-event-id="f1"]')).toBeNull();
   });
 
   it('removes a block and its findings when main signals the capture was superseded (§15.3)', async () => {
@@ -498,14 +504,18 @@ describe('action window DOM (§16 — tabs, captures, command history, focus)', 
   describe('capture ↔ terminal cross-highlight (§16.8)', () => {
     const blockById = (id: string) => blocks().querySelector(`[data-event-id="${id}"]`) as HTMLElement;
 
-    it('a terminal double-click on a captured row scrolls to and highlights the covering block', async () => {
+    // Terminal → capture is now id-keyed: the terminal pane owns the coordinates (marker-
+    // anchored, §16.8) and resolves the double-clicked row to a capture id, which it sends
+    // here. The pane just reveals that exact element. The row→id matching is unit-tested
+    // separately against pickRevealTarget (tests/unit/reveal.test.ts).
+    it('reveals the block named by app:reveal-capture {id}: scrolls to + highlights it', async () => {
       wireMonitorPane();
       await flush();
       handlers.event!(makeEvent({ id: 'r', type: 'report', source: 'shadow-scan', text: 'a report', range: rangeRows(10, 14) }));
       const block = blockById('r');
       const scrollSpy = vi.spyOn(block, 'scrollIntoView');
 
-      window.dispatchEvent(new CustomEvent(REVEAL_CAPTURE_EVENT, { detail: { row: 12 } }));
+      window.dispatchEvent(new CustomEvent(REVEAL_CAPTURE_EVENT, { detail: { id: 'r' } }));
 
       expect(block.classList.contains('revealed')).toBe(true);
       expect(scrollSpy).toHaveBeenCalled();
@@ -518,7 +528,7 @@ describe('action window DOM (§16 — tabs, captures, command history, focus)', 
         await vi.advanceTimersByTimeAsync(0);
         handlers.event!(makeEvent({ id: 'r', type: 'report', source: 'shadow-scan', text: 'rep', range: rangeRows(0, 4) }));
         const block = blockById('r');
-        window.dispatchEvent(new CustomEvent(REVEAL_CAPTURE_EVENT, { detail: { row: 2 } }));
+        window.dispatchEvent(new CustomEvent(REVEAL_CAPTURE_EVENT, { detail: { id: 'r' } }));
         expect(block.classList.contains('revealed')).toBe(true);
         await vi.advanceTimersByTimeAsync(REVEAL_HIGHLIGHT_MS);
         expect(block.classList.contains('revealed')).toBe(false);
@@ -527,69 +537,100 @@ describe('action window DOM (§16 — tabs, captures, command history, focus)', 
       }
     });
 
-    it('a terminal double-click on a row no capture covers highlights nothing', async () => {
+    it('an app:reveal-capture for an id with no rendered block highlights nothing', async () => {
       wireMonitorPane();
       await flush();
       handlers.event!(makeEvent({ id: 'r', type: 'report', source: 'shadow-scan', text: 'rep', range: rangeRows(10, 14) }));
-      window.dispatchEvent(new CustomEvent(REVEAL_CAPTURE_EVENT, { detail: { row: 99 } }));
+      window.dispatchEvent(new CustomEvent(REVEAL_CAPTURE_EVENT, { detail: { id: 'gone' } }));
       expect(blocks().querySelector('.revealed')).toBeNull();
     });
 
-    it('double-clicking a capture block asks the terminal to reveal its rows', async () => {
+    // Capture → terminal: the pane publishes the capture's span when it renders (so the
+    // terminal can marker-anchor it) and asks for a reveal by id on double-click.
+    it('publishes a ranged block as app:capture-range-add {id, range}', async () => {
+      wireMonitorPane();
+      await flush();
+      let detail: { id: string; range: SelectionRange } | null = null;
+      window.addEventListener(CAPTURE_RANGE_ADD_EVENT, (e) => (detail = (e as CustomEvent).detail), { once: true });
+
+      handlers.event!(makeEvent({ id: 'r', type: 'report', source: 'shadow-scan', text: 'rep', range: rangeRows(3, 7) }));
+
+      expect(detail).toMatchObject({ id: 'r', range: { start: { y: 3 }, end: { y: 7 } } });
+    });
+
+    it('publishes each finding with its own span', async () => {
+      wireMonitorPane();
+      await flush();
+      const adds: { id: string; range: SelectionRange }[] = [];
+      window.addEventListener(CAPTURE_RANGE_ADD_EVENT, (e) => adds.push((e as CustomEvent).detail));
+
+      handlers.event!(makeEvent({ id: 'r', type: 'report', source: 'shadow-scan', text: 'rep', range: rangeRows(3, 7) }));
+      handlers.event!(makeEvent({ id: 'f1', type: 'finding', parentId: 'r', text: 'one', range: rangeRows(5, 5) }));
+
+      expect(adds.some((d) => d.id === 'f1' && d.range.start.y === 5 && d.range.end.y === 5)).toBe(true);
+    });
+
+    it('a manual capture with no range publishes no span', async () => {
+      wireMonitorPane();
+      await flush();
+      let fired = false;
+      window.addEventListener(CAPTURE_RANGE_ADD_EVENT, () => (fired = true), { once: true });
+      handlers.event!(makeEvent({ id: 'c', type: 'capture', text: 'manual', range: null }));
+      expect(fired).toBe(false);
+    });
+
+    it('retracting a block publishes app:capture-range-remove {id}', async () => {
       wireMonitorPane();
       await flush();
       handlers.event!(makeEvent({ id: 'r', type: 'report', source: 'shadow-scan', text: 'rep', range: rangeRows(3, 7) }));
-      let detail: { range: SelectionRange } | null = null;
+      let detail: { id: string } | null = null;
+      window.addEventListener(CAPTURE_RANGE_REMOVE_EVENT, (e) => (detail = (e as CustomEvent).detail), { once: true });
+
+      handlers.eventRemoved!('r');
+
+      expect(detail).toEqual({ id: 'r' });
+    });
+
+    it('Dismiss selected publishes capture-range-remove for the dismissed chunk', async () => {
+      wireMonitorPane();
+      await flush();
+      handlers.event!(makeEvent({ id: 'r', type: 'report', source: 'shadow-scan', text: 'rep', range: rangeRows(3, 7) }));
+      const removed: string[] = [];
+      window.addEventListener(CAPTURE_RANGE_REMOVE_EVENT, (e) => removed.push((e as CustomEvent).detail.id));
+      const cb = blockById('r').querySelector('.chunk-check') as HTMLInputElement;
+      cb.checked = true;
+      cb.dispatchEvent(new Event('change', { bubbles: true }));
+
+      (byId('dismiss-selected') as HTMLButtonElement).click();
+
+      expect(removed).toContain('r');
+    });
+
+    it('double-clicking a capture block asks the terminal to reveal it by id', async () => {
+      wireMonitorPane();
+      await flush();
+      handlers.event!(makeEvent({ id: 'r', type: 'report', source: 'shadow-scan', text: 'rep', range: rangeRows(3, 7) }));
+      let detail: { id: string } | null = null;
       window.addEventListener(REVEAL_TERMINAL_EVENT, (e) => (detail = (e as CustomEvent).detail), { once: true });
 
       blockById('r').dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
 
-      expect(detail).toMatchObject({ range: { start: { y: 3 }, end: { y: 7 } } });
+      expect(detail).toEqual({ id: 'r' });
     });
 
-    it("double-clicking a finding reveals the finding's own rows, not the whole report", async () => {
+    it("double-clicking a finding reveals the finding's own id, not the report's", async () => {
       wireMonitorPane();
       await flush();
       handlers.event!(makeEvent({ id: 'r', type: 'report', source: 'shadow-scan', text: 'rep', range: rangeRows(3, 7) }));
       handlers.event!(makeEvent({ id: 'f1', type: 'finding', parentId: 'r', text: 'one', range: rangeRows(5, 5) }));
       // Collect every reveal so a finding click that bubbled up to the report would be caught.
-      const details: { range: SelectionRange }[] = [];
-      window.addEventListener(REVEAL_TERMINAL_EVENT, (e) => details.push((e as CustomEvent).detail));
+      const ids: string[] = [];
+      window.addEventListener(REVEAL_TERMINAL_EVENT, (e) => ids.push((e as CustomEvent).detail.id));
 
       (blocks().querySelector('[data-event-id="f1"]') as HTMLElement).dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
 
-      // Exactly the finding's span is revealed; the report's full span (…end.y 7) never is.
-      expect(details.some((d) => d.range.start.y === 5 && d.range.end.y === 5)).toBe(true);
-      expect(details.some((d) => d.range.end.y === 7)).toBe(false);
-    });
-
-    it('a terminal double-click inside a finding highlights that chunk, not the whole report', async () => {
-      wireMonitorPane();
-      await flush();
-      handlers.event!(makeEvent({ id: 'r', type: 'report', source: 'shadow-scan', text: 'rep', range: rangeRows(3, 7) }));
-      handlers.event!(makeEvent({ id: 'f1', type: 'finding', parentId: 'r', text: 'one', range: rangeRows(5, 5) }));
-
-      window.dispatchEvent(new CustomEvent(REVEAL_CAPTURE_EVENT, { detail: { row: 5 } }));
-
-      expect((blocks().querySelector('[data-event-id="f1"]') as HTMLElement).classList.contains('revealed')).toBe(true);
-      // The chunk is revealed specifically — the enclosing report block is not the target.
-      expect(blockById('r').classList.contains('revealed')).toBe(false);
-    });
-
-    it('a reveal skips a dismissed block whose range lingers and highlights the live one', async () => {
-      wireMonitorPane();
-      await flush();
-      // A captured at rows 10–14, then dismissed via its × (removed from the DOM directly,
-      // so its range entry is not cleaned up by removeBlock).
-      handlers.event!(makeEvent({ id: 'a', type: 'report', source: 'shadow-scan', text: 'old', range: rangeRows(10, 14) }));
-      (blockById('a').querySelector('.dismiss') as HTMLButtonElement).click();
-      // A new capture reuses the same rows.
-      handlers.event!(makeEvent({ id: 'b', type: 'report', source: 'shadow-scan', text: 'new', range: rangeRows(10, 14) }));
-      const b = blockById('b');
-
-      window.dispatchEvent(new CustomEvent(REVEAL_CAPTURE_EVENT, { detail: { row: 12 } }));
-
-      expect(b.classList.contains('revealed')).toBe(true);
+      expect(ids).toContain('f1');
+      expect(ids).not.toContain('r');
     });
 
     it('double-clicking a block with no range (manual capture) asks for nothing', async () => {
