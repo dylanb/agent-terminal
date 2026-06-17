@@ -87,6 +87,7 @@ export function isValidSetSettings(m: unknown): m is UiSetSettingsMsg {
   const s = m.settings;
   if ('splitRatio' in s && (typeof s.splitRatio !== 'number' || !Number.isFinite(s.splitRatio))) return false;
   if ('lastTab' in s && s.lastTab !== 'capture' && s.lastTab !== 'todo') return false;
+  if ('theme' in s && s.theme !== 'light' && s.theme !== 'dark') return false;
   return true;
 }
 

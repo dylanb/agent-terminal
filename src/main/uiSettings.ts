@@ -5,7 +5,7 @@
 
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
-import { DEFAULT_UI_SETTINGS, type TabId, type UiSettings } from '../shared/ipc';
+import { DEFAULT_UI_SETTINGS, type TabId, type Theme, type UiSettings } from '../shared/ipc';
 
 // Keep the persisted ratio away from the degenerate edges; the renderer applies a
 // px-based clamp on top (§16.6), but the store must never hand back a 0/1 ratio.
@@ -27,12 +27,17 @@ function coerceTab(raw: unknown, fallback: TabId): TabId {
   return raw === 'capture' || raw === 'todo' ? raw : fallback;
 }
 
+function coerceTheme(raw: unknown, fallback: Theme): Theme {
+  return raw === 'light' || raw === 'dark' ? raw : fallback;
+}
+
 /** Validate each field independently against `base`, so one bad field can't poison the rest. */
 function coerce(raw: unknown, base: UiSettings): UiSettings {
   const r = (typeof raw === 'object' && raw !== null ? raw : {}) as Record<string, unknown>;
   return {
     splitRatio: coerceRatio(r.splitRatio, base.splitRatio),
     lastTab: coerceTab(r.lastTab, base.lastTab),
+    theme: coerceTheme(r.theme, base.theme),
   };
 }
 

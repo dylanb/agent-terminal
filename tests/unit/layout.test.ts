@@ -13,7 +13,7 @@ const flush = () => new Promise((r) => setTimeout(r, 0));
 const W = 1000; // mocked container width
 
 function makeSettings(splitRatio = DEFAULT_SPLIT_RATIO) {
-  const state: UiSettings = { splitRatio, lastTab: 'capture' };
+  const state: UiSettings = { splitRatio, lastTab: 'capture', theme: 'light' };
   return {
     state,
     getSettings: vi.fn(async (): Promise<UiSettings> => ({ ...state })),

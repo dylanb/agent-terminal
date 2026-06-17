@@ -45,12 +45,15 @@ export type TabId = 'capture' | 'todo';
  * Carries no sessionId: these are app-wide, not per-session (deliberate §16.6
  * exception to the §6 "every payload carries sessionId" rule).
  */
+export type Theme = 'light' | 'dark';
+
 export interface UiSettings {
   splitRatio: number;
   lastTab: TabId;
+  theme: Theme;
 }
 
-export const DEFAULT_UI_SETTINGS: UiSettings = { splitRatio: 0.65, lastTab: 'capture' };
+export const DEFAULT_UI_SETTINGS: UiSettings = { splitRatio: 0.65, lastTab: 'capture', theme: 'light' };
 
 export interface UiSetSettingsMsg {
   settings: Partial<UiSettings>;

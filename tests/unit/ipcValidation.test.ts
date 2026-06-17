@@ -95,7 +95,10 @@ describe('IPC payload validation (§6 — renderer-supplied input is untrusted)'
     expect(isValidSetSettings({ settings: { lastTab: 'todo' } })).toBe(true);
     expect(isValidSetSettings({ settings: { splitRatio: 0.5, lastTab: 'capture' } })).toBe(true);
     expect(isValidSetSettings({ settings: {} })).toBe(true);
+    expect(isValidSetSettings({ settings: { theme: 'dark' } })).toBe(true);
+    expect(isValidSetSettings({ settings: { theme: 'light' } })).toBe(true);
     expect(isValidSetSettings({ settings: { lastTab: 'bogus' } })).toBe(false);
+    expect(isValidSetSettings({ settings: { theme: 'sepia' } })).toBe(false);
     expect(isValidSetSettings({ settings: { splitRatio: 'wide' } })).toBe(false);
     expect(isValidSetSettings({ settings: { splitRatio: Number.NaN } })).toBe(false);
     expect(isValidSetSettings({ settings: null })).toBe(false);
