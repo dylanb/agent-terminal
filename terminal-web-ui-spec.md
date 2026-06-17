@@ -1397,7 +1397,7 @@ Built **`design/shell/converged.html`** as the live renderer UI per the §24.1 r
 - [x] **Real cores reused behind the skin** — terminal + selection (view 1); the action window's Capture/Todo tabs + status strip relocated to the docked drawer and rail, element-id contracts unchanged so their shipped behaviour (and e2e) still holds.
 - [x] **`theme` added to `UiSettings`** (§16.6), validated + persisted; `<html data-theme>`.
 - [x] **Splitter removed** (§16.6) — replaced by the docked drawer; module + tests deleted (`splitRatio` left in the contract, unused).
-- [ ] **Widget reskin** — the reused capture/todo/status widget *internals* are functional but still on their old dark styling; reskin to Galley · Lit tokens. (Frame + cross-highlight visuals are done.)
+- [x] **Widget reskin** — the reused capture/todo/status widget CSS is on Galley · Lit tokens (both themes; no hardcoded colors outside the token blocks). A pixel-level polish pass with populated widgets is still worthwhile but not blocking.
 - [x] **Fixture-driven mocked widgets** — `flow.ts` renders the flow timeline, rail gate/loop status, and the view-3 gate panel from one typed `SAMPLE_FLOW` fixture; the gate's Approve / Request-changes buttons are clickable **stubs** that reflect a verdict locally and notify a handler but inject nothing (§19.2/§19.3). DOM-unit-tested; gate-stub wiring has an e2e.
 - [ ] **Artifact viewer** — view 2 is static fixture markup; wire the real CodeMirror/markdown viewer (§20.2) when it lands.
 
