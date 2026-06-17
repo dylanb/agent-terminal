@@ -1,6 +1,6 @@
 # Technical Specification — Agent Terminal: Foundation for a Coding-Agent Management Application
 
-**Document status:** Draft v2.31
+**Document status:** Draft v2.32
 **Scope:** Foundation / "walking skeleton" build (shipped) + semantic/command capture (shipped, §15–§16) + drafted requirements for the **task-flow management** phase (§17–§24)
 **Target platforms:** Linux and macOS (Windows out of scope for this version)
 
@@ -101,6 +101,8 @@
 
 ---
 
+> **Changelog v2.32:** **§24.1 drawer panels rebuilt to the converged mockup exactly** — the live Capture and Todo panels were structural carry-overs of the old §15/§16 components ("old UI with paint"); they now render the mockup's clean language: capture **findings** as `.t`/`.m`/`.linkbtn` cards under a source header, todos as a `.chk` checkbox-circle + `.body` + **Send** pill row. **Kept:** the double-click → terminal **row-range reveal** cross-highlight (§16.8). **Deferred to §24.2.1 as the next priority** (renderer dropped, main-process backing intact): todo **reorder / edit-in-place (with a better UI) / manual-add / delete** (§16.3/§16.4) and capture **Dismiss + Dismiss-all** (§15.6) and **Add-to-todo Undo** (§16.2). **Dropped, not backlogged:** command-history list (§15.5/§15.6), badges/timestamps/truncation (§15.6), Mark-as-chrome (§15.x), Insert/Insert&submit + Insert-without-submit (§16.2), Done section (§16.4). RED-first; tests for dropped behaviour removed, new structure pinned.
+>
 > **Changelog v2.31:** **§24.1C fixture-driven mocked widgets ✅** — `flow.ts` renders the flow timeline, rail gate/loop status, and the view-3 gate panel from one typed `SAMPLE_FLOW` fixture (replacing the static markup), with the gate's Approve / Request-changes buttons as clickable stubs that reflect a verdict but inject nothing (§19.2/§19.3). DOM-unit-tested + a gate-stub e2e. Remaining §24.1C polish: reskin the reused capture/todo/status widget internals to Galley · Lit tokens, and the real artifact viewer (§20.2).
 >
 > **Changelog v2.30:** **§24.1C Implement ✅** — the converged shell is the live renderer UI. `src/renderer/index.html` is now the rail · three views · docked drawer frame; the reused cores keep their element-id contracts and were relocated behind the new skin (terminal + selection → view 1; the action window's Capture/Todo tabs + status strip → the docked drawer and rail). New code, all RED-first: `shell.ts` (view switch, ⌘/Ctrl+1-3 and ⌘/Ctrl+K, drawer dock/undock, theme) and `crossHighlight.ts` (§16.8). **Decisions/changes:** (1) the old resizable **splitter (§16.6) was removed** — its module/tests deleted — and replaced by the docked drawer; `splitRatio` stays in `UiSettings` but is unused. (2) **View 3 = Todos + Review gate** (per the approved mockup), and **capture lives only in the drawer**, superseding the earlier §24.1 prose that put a capture widget in view 3. (3) `theme` added to `UiSettings` (§16.6), persisted; applied to `<html data-theme>`. (4) The shell intercepts its chords in the **capture phase** so xterm can't swallow ⌘K/⌘1-3 while the terminal is focused; the drawer broadcasts a `window` resize on dock/undock so the terminal **refits** (§7.1). **Gaps:** the reused capture/todo/status widgets are functional but **not yet reskinned** to Galley · Lit (tokens applied to the frame; widget internals are follow-on); the mocked flow timeline, rail gate/loop lines, and view-3 gate buttons are **static fixtures** (no flow-state object, actions stubbed) — the remainder of §24.1's "mocked" list. Three §15/§16 command-capture e2e are **pre-existing failures in this environment** (verified against the prior commit), not introduced here.
@@ -1421,3 +1423,20 @@ Everything below is real backing logic that Phase 1 mocks or omits. Each becomes
 - [ ] **Worktree + child-instance launcher** (§23.2) — `flow:openChild`; child launch seeds the expected `flow-state.yaml` at the right step.
 - [ ] **Cross-instance guard** (§23.3) — second open on the same repo+branch (or PR) warns.
 - [ ] **Flow-author skill** (§18.5) — separate deliverable; a skill, not app code.
+
+#### 24.2.1 Drawer-panel functionality deferred by the mockup-exact panels (prioritize next)
+
+The §24.1 drawer panels were rebuilt to the converged mockup exactly (v2.32), which is intentionally leaner than the shipped §15/§16 components. These controls existed and work in the codebase's main process; they were dropped from the **renderer** and are the **next priority** to restore — re-skinned into the mockup's card / checkbox / linkbtn language, not the old chrome. The IPC + main-process backing for each still exists.
+
+Todo panel:
+- [ ] **Reorder** (§16.4) — restore ↑/↓ + drag, persisted via `todoReorder`.
+- [ ] **Edit-in-place + a better edit UI** (§16.3) — restore editing via `todoUpdate` *and* design a better affordance than the old inline-textarea swap; keep the mid-edit repo-swap deferral.
+- [ ] **Manual add** (§16.4) — restore the hand-write-a-todo path (`todoAdd {type:'manual'}`).
+- [ ] **Delete** (§16.4) — restore per-todo delete (`todoDelete`).
+
+Capture panel:
+- [ ] **Dismiss + Dismiss all** (§15.6) — restore per-block dismiss and the bulk clear (`dismiss` / `dismissAll`).
+- [ ] **Add-to-todo Undo** (§16.2) — restore the in-place "Added / Undo" window (`TODO_UNDO_MS`) over the mockup's plain "Add to todo".
+- [ ] **Report prose / summary view** (§15.x) — the mockup-exact panel renders only carved **findings**, so a report with *no* findings now renders nothing. Give report prose a home (e.g. an expandable summary card, or a findings-fallback that shows the report body when it carves none) without reintroducing the blob.
+
+> **Retained from the old panels (not deferred):** the **double-click → terminal row-range reveal** cross-highlight (§16.8) stays in the mockup-exact capture panel. **Dropped and not currently backlogged** (call out if wanted): command-history list + Clear-commands (§15.5/§15.6), type badges + timestamps + truncation markers (§15.6), "Mark as chrome" (§15.x `learnChrome`), Insert/Insert&submit on command-output and the Insert-without-submit todo action (§16.2), the collapsible Done section (§16.4).

@@ -17,7 +17,6 @@ const MONITOR_HTML = `
   </div>
   <section id="panel-capture" role="tabpanel">
     <div id="monitor-status" role="status" aria-live="polite"></div>
-    <div id="command-history"></div>
     <div id="monitor-blocks"></div>
   </section>
   <section id="panel-todo" role="tabpanel" hidden>
@@ -85,20 +84,20 @@ describe('Capture tab "Add to todo" button (§16.2 — capture block → todo)',
 
   const blocks = () => document.getElementById('monitor-blocks')!;
 
-  it('clicking Add to todo on a captured report posts it to the current repo', async () => {
+  it('clicking Add to todo on a captured finding posts it to the current repo', async () => {
     wireMonitorPane();
     await flush();
     handlers.cwdChanged!({ sessionId: 's1', cwd: '/repoA', repoKey: '/repoA' });
     await flush();
 
-    handlers.event!(makeEvent({ id: 'e1', type: 'report', text: 'remember this finding' }));
+    handlers.event!(makeEvent({ id: 'e1', type: 'finding', parentId: null, text: 'remember this finding' }));
     const add = blocks().querySelector('.add-to-todo') as HTMLButtonElement;
     expect(add).toBeTruthy();
     add.click();
     await flush();
 
     expect(monitor.todoAdd).toHaveBeenCalledWith('/repoA', 'remember this finding', {
-      type: 'report',
+      type: 'finding',
       eventId: 'e1',
     });
   });
@@ -110,12 +109,12 @@ describe('Capture tab "Add to todo" button (§16.2 — capture block → todo)',
     wireMonitorPane();
     await flush(); // mount-time currentRepo() resolves; NO cwdChanged is ever fired
 
-    handlers.event!(makeEvent({ id: 'e2', type: 'report', text: 'keep this one too' }));
+    handlers.event!(makeEvent({ id: 'e2', type: 'finding', parentId: null, text: 'keep this one too' }));
     (blocks().querySelector('.add-to-todo') as HTMLButtonElement).click();
     await flush();
 
     expect(monitor.todoAdd).toHaveBeenCalledWith('/repoA', 'keep this one too', {
-      type: 'report',
+      type: 'finding',
       eventId: 'e2',
     });
   });

@@ -113,8 +113,10 @@
           <button class="iconbtn x" id="dclose" title="Close quick-send" aria-label="Close quick-send">✕</button>
         </div>
         <section id="panel-capture" class="panel" role="tabpanel" aria-labelledby="tab-capture">
-          <div id="command-history" aria-label="Command history"></div>
-          <div id="monitor-blocks"></div>
+          <div class="capture">
+            <div class="head"><span class="fname serif">Captures</span></div>
+            <div id="monitor-blocks" class="cap-list" aria-label="Captures"></div>
+          </div>
         </section>
         <section id="panel-todo" class="panel" role="tabpanel" aria-labelledby="tab-todo" hidden>
           <div id="todo-list" aria-label="Todo list"></div>

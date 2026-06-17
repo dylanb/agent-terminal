@@ -27,13 +27,10 @@ export function wireMonitorPane(): void {
   const todoTab = createTodoTab({ todoListEl: el.todoList, todoCountEl: el.todoCount, monitor: window.monitor });
   const captureTab = createCaptureTab({
     blocksEl: el.blocks,
-    historyEl: el.history,
-    monitor: window.monitor,
     todoSink: todoTab,
   });
 
   let activeTab: TabId = 'capture';
-  const pullCommands = (): void => void window.monitor.commands().then((c) => captureTab.renderCommands(c));
 
   // ---- Tabs (§16.1) ----
   function selectTab(tab: TabId, persist = true): void {
@@ -50,10 +47,7 @@ export function wireMonitorPane(): void {
   el.tabCapture.addEventListener('click', () => selectTab('capture'));
   el.tabTodo.addEventListener('click', () => selectTab('todo'));
 
-  window.monitor.onUpdate((msg) => {
-    status.update(msg);
-    pullCommands();
-  });
+  window.monitor.onUpdate((msg) => status.update(msg));
 
   window.monitor.onEvent((event) => {
     captureTab.appendBlock(event);
@@ -64,8 +58,6 @@ export function wireMonitorPane(): void {
   // Retraction (§15.3): the scanner replaced an earlier partial capture with a fuller
   // one and asks the pane to drop the superseded block (its findings cascade with it).
   window.monitor.onEventRemoved((eventId) => captureTab.removeBlock(eventId));
-
-  window.monitor.onCommandsChanged(() => pullCommands());
 
   // Repo-scoped todos (§16.3): a repo-key change swaps the displayed list, unless a
   // todo edit is open — then the Todo tab defers it until the edit resolves.
@@ -92,7 +84,6 @@ export function wireMonitorPane(): void {
   void window.monitor.replay().then((events) => {
     for (const e of events) captureTab.appendBlock(e);
   });
-  pullCommands();
 
   // Restore the remembered tab (§16.1 / §16.6) before first paint of either panel.
   void window.monitor.getSettings().then((s) => selectTab(s.lastTab, false));
