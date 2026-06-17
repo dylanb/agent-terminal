@@ -22,13 +22,25 @@ export interface ArtifactsDeps {
   renderCode?: (body: string, lang: string | undefined, into: HTMLElement) => void;
   /** Current selection text within the viewer body (defaults to the live DOM selection). */
   readSelection?: (viewer: HTMLElement) => string;
+  /** Persisted tree-pane width in px (§20.2); applied on load. */
+  initialWidth?: number;
+  /** Persist a new tree-pane width in px (debounced caller's concern). */
+  onWidthChange?: (px: number) => void;
 }
+
+const DEFAULT_TREE_W = 248;
+const MIN_TREE_W = 140;
+const MAX_TREE_W = 640;
+const WIDTH_STEP = 16;
+const clampWidth = (px: number): number => Math.min(MAX_TREE_W, Math.max(MIN_TREE_W, Math.round(px)));
 
 export interface Artifacts {
   /** Re-discover the tree (e.g. on a cwd change) and re-render. */
   refresh(): Promise<void>;
   open(relPath: string): Promise<void>;
   current(): string | null;
+  /** Apply a tree-pane width without persisting (e.g. the persisted value once settings load). */
+  setWidth(px: number): void;
   dispose(): void;
 }
 
@@ -88,7 +100,16 @@ export function createArtifacts(host: HTMLElement, deps: ArtifactsDeps): Artifac
   scopeBox.type = 'checkbox';
   scopeLabel.append(scopeBox, doc.createTextNode(' Show all repo files'));
   const list = el('div', 'treelist');
+  list.setAttribute('role', 'tree');
+  list.setAttribute('aria-label', 'Artifacts');
   tree.append(search, scopeLabel, list);
+
+  // Drag/keyboard-resizable edge between the tree and the viewer (§20.2).
+  const divider = el('div', 'artsplit-divider');
+  divider.setAttribute('role', 'separator');
+  divider.setAttribute('aria-orientation', 'vertical');
+  divider.setAttribute('aria-label', 'Resize file tree');
+  divider.tabIndex = 0;
 
   const viewer = el('div', 'viewer');
   const bar = el('div', 'vbar');
@@ -104,13 +125,44 @@ export function createArtifacts(host: HTMLElement, deps: ArtifactsDeps): Artifac
   const body = el('div', 'vbody');
   viewer.append(bar, body);
 
-  split.append(tree, viewer);
+  split.append(tree, divider, viewer);
   host.appendChild(split);
 
   let scope: ArtifactScope = 'curated';
   let current: string | null = null;
   let treeRoot = '';
+  let refreshSeq = 0; // a slow stale refresh must not overwrite a newer one (cwd sync race)
   const fileRows = new Map<string, HTMLElement>();
+
+  // --- Resizable tree pane (§20.2): drag the divider, or arrow-key it; width persists. ---
+  let width = clampWidth(deps.initialWidth ?? DEFAULT_TREE_W);
+  function applyWidth(px: number, persist: boolean): void {
+    width = clampWidth(px);
+    split.style.setProperty('--tree-w', `${width}px`);
+    divider.setAttribute('aria-valuenow', String(width));
+    if (persist) deps.onWidthChange?.(width);
+  }
+  applyWidth(width, false);
+  divider.addEventListener('mousedown', (e) => {
+    e.preventDefault();
+    const startX = (e as MouseEvent).clientX;
+    const startW = width;
+    const onMove = (ev: MouseEvent): void => applyWidth(startW + (ev.clientX - startX), false);
+    const onUp = (): void => {
+      doc.removeEventListener('mousemove', onMove);
+      doc.removeEventListener('mouseup', onUp);
+      deps.onWidthChange?.(width); // persist once at gesture end
+    };
+    doc.addEventListener('mousemove', onMove);
+    doc.addEventListener('mouseup', onUp);
+  });
+  divider.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowLeft') applyWidth(width - WIDTH_STEP, true);
+    else if (e.key === 'ArrowRight') applyWidth(width + WIDTH_STEP, true);
+    else return;
+    e.preventDefault();
+  });
+  divider.addEventListener('dblclick', () => applyWidth(DEFAULT_TREE_W, true));
   // A button click collapses the live DOM selection before its handler runs, so we remember
   // the last non-empty in-viewer selection and fall back to it at click time.
   let lastSelection = '';
@@ -127,6 +179,9 @@ export function createArtifacts(host: HTMLElement, deps: ArtifactsDeps): Artifac
       if (node.kind === 'dir') {
         const dir = el('div', 'dir');
         const head = el('div', 'dname', node.name);
+        head.title = node.relPath; // full path on hover (§20.2 truncation discoverability)
+        head.setAttribute('role', 'treeitem');
+        head.tabIndex = -1;
         head.addEventListener('click', () => dir.classList.toggle('collapsed'));
         const children = el('div', 'dchildren');
         renderNodes(node.children ?? [], children);
@@ -135,6 +190,9 @@ export function createArtifacts(host: HTMLElement, deps: ArtifactsDeps): Artifac
       } else {
         const row = el('div', 'f');
         row.dataset.rel = node.relPath;
+        row.title = node.relPath; // full path on hover, since the name truncates (§20.2)
+        row.setAttribute('role', 'treeitem');
+        row.tabIndex = -1;
         row.append(el('span', 'ic', node.relPath.endsWith('.md') ? 'md' : 'ƒ'), el('span', 'fn', node.name));
         for (const p of node.provenance ?? []) row.appendChild(el('span', `tag tag-${p}`, PROV_LABEL[p] ?? p));
         row.addEventListener('click', () => void open(node.relPath));
@@ -143,6 +201,54 @@ export function createArtifacts(host: HTMLElement, deps: ArtifactsDeps): Artifac
       }
     }
   }
+
+  /** Visible treeitems in DOM order — a row inside a collapsed directory is skipped (§20.1). */
+  function visibleItems(): HTMLElement[] {
+    return ([...list.querySelectorAll('[role="treeitem"]')] as HTMLElement[]).filter((row) => {
+      for (let p = row.parentElement; p && p !== list; p = p.parentElement) {
+        if (p.classList.contains('dchildren') && p.parentElement?.classList.contains('collapsed')) return false;
+      }
+      return true;
+    });
+  }
+
+  function focusItem(row: HTMLElement | undefined): void {
+    if (!row) return;
+    for (const r of list.querySelectorAll('[role="treeitem"]')) (r as HTMLElement).tabIndex = -1;
+    row.tabIndex = 0;
+    row.focus();
+  }
+
+  // WAI-ARIA tree keyboard nav (§20.2): a single handler on the tree, keyed off the focused row.
+  list.addEventListener('keydown', (e) => {
+    const row = (e.target as HTMLElement).closest('[role="treeitem"]') as HTMLElement | null;
+    if (!row) return;
+    const items = visibleItems();
+    const i = items.indexOf(row);
+    const isDir = row.classList.contains('dname');
+    const dir = row.parentElement; // the .dir wrapper, for dir rows
+    switch (e.key) {
+      case 'ArrowDown': focusItem(items[i + 1]); break;
+      case 'ArrowUp': focusItem(items[i - 1]); break;
+      case 'Home': focusItem(items[0]); break;
+      case 'End': focusItem(items[items.length - 1]); break;
+      case 'Enter':
+      case ' ':
+        if (isDir) dir?.classList.toggle('collapsed');
+        else void open(row.dataset.rel!);
+        break;
+      case 'ArrowRight':
+        if (isDir && dir?.classList.contains('collapsed')) dir.classList.remove('collapsed');
+        else if (isDir) focusItem(visibleItems()[i + 1]); // into first child
+        break;
+      case 'ArrowLeft':
+        if (isDir && !dir?.classList.contains('collapsed')) dir?.classList.add('collapsed');
+        else focusItem(row.closest('.dchildren')?.parentElement?.querySelector(':scope > .dname') as HTMLElement);
+        break;
+      default: return;
+    }
+    e.preventDefault();
+  });
 
   function applyFilter(): void {
     const q = search.value.trim().toLowerCase();
@@ -174,7 +280,9 @@ export function createArtifacts(host: HTMLElement, deps: ArtifactsDeps): Artifac
   }
 
   async function refresh(): Promise<void> {
+    const token = ++refreshSeq;
     const data = await deps.loadTree(scope);
+    if (token !== refreshSeq) return; // a newer refresh started while we awaited
     treeRoot = data.root;
     scope = data.scope;
     scopeBox.checked = scope === 'repo';
@@ -183,6 +291,8 @@ export function createArtifacts(host: HTMLElement, deps: ArtifactsDeps): Artifac
     list.replaceChildren();
     renderNodes(data.nodes, list);
     applyFilter();
+    const firstItem = visibleItems()[0]; // one row carries tabindex=0 so the tree is reachable
+    if (firstItem) firstItem.tabIndex = 0;
     const target = (current && fileRows.has(current) ? current : firstFile(data.nodes)?.relPath) ?? null;
     if (target) await open(target);
     else {
@@ -213,6 +323,7 @@ export function createArtifacts(host: HTMLElement, deps: ArtifactsDeps): Artifac
     refresh,
     open,
     current: () => current,
+    setWidth: (px) => applyWidth(px, false),
     dispose: () => {
       doc.removeEventListener('selectionchange', onSelectionChange);
       host.replaceChildren();

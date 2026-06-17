@@ -1,6 +1,9 @@
 /// <reference lib="dom" />
 // page.evaluate callbacks run in the renderer; DOM lib gives them window.monitor's type.
 import { _electron as electron, expect, test, type ElectronApplication, type Page } from '@playwright/test';
+import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import '../../src/shared/ipc';
 
 // Full-loop e2e (§12 acceptance): real Electron, real node-pty, real bash.
@@ -493,6 +496,24 @@ test('the artifact viewer discovers real repo files and sends a selection to a t
   await expect(body.locator('.cm-editor')).toContainText('QUIET');
 });
 
+test('the viewer starts in sync with the terminal cwd, before any cd (§20.1)', async () => {
+  // bash spawns in $HOME; the viewer must discover there from the first paint — not in the
+  // Electron process dir. Launch with a controlled HOME holding a marker file and assert the
+  // viewer shows it with no cd. (Relaunch our own app; afterEach closes the reassigned one.)
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-home-'));
+  writeFileSync(join(home, 'home-marker.md'), '# Home marker\n');
+  await app.close();
+  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
+  page = await app.firstWindow();
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await page.keyboard.press('Control+2');
+  await expect(page.locator('[data-viewpane="2"]')).toBeVisible();
+  const tree = page.locator('#artifacts .tree');
+  await expect(tree.locator('.f').filter({ hasText: 'home-marker.md' })).toHaveCount(1);
+  rmSync(home, { recursive: true, force: true });
+});
+
 test('outside a git repo the viewer shows the whole cwd tree (§20.1)', async () => {
   const dir = '/tmp/agent-term-e2e-plaindir';
   await typeCommand(`rm -rf "${dir}" && mkdir -p "${dir}" && cd "${dir}" && printf 'hello\\n' > scratch.md && pwd`);
@@ -504,6 +525,44 @@ test('outside a git repo the viewer shows the whole cwd tree (§20.1)', async ()
   await expect(tree.locator('.f').filter({ hasText: 'scratch.md' })).toHaveCount(1);
   // No curated/whole-repo distinction outside a repo — the scope toggle is hidden.
   await expect(page.locator('#artifacts .scope-toggle')).toBeHidden();
+});
+
+test('file names are rendered in full, not truncated with an ellipsis (§20.2)', async () => {
+  const dir = '/tmp/agent-term-e2e-longname';
+  const longName = 'a-really-extremely-long-artifact-file-name-that-exceeds-the-tree-pane-width.md';
+  await typeCommand(`rm -rf "${dir}" && mkdir -p "${dir}" && cd "${dir}" && git init -q && printf 'x\\n' > "${longName}" && pwd`);
+  await expect(page.locator('.xterm-rows > div').filter({ hasText: new RegExp(`^\\s*${dir}\\s*$`) })).not.toHaveCount(0);
+  await expect(page.locator('.status-chip[data-status="agent"]')).toContainText('quiet', { timeout: 6_000 });
+
+  await page.keyboard.press('Control+2');
+  const fn = page.locator('#artifacts .treelist .f .fn').first();
+  await expect(fn).toHaveText(longName);
+  // The name element is sized to its full content — nothing is clipped behind an ellipsis.
+  const clipped = await fn.evaluate((el) => el.scrollWidth - el.clientWidth);
+  expect(clipped).toBeLessThanOrEqual(1);
+});
+
+test('the artifact tree pane is resizable by dragging its edge, and the width persists (§20.2)', async () => {
+  await page.keyboard.press('Control+2');
+  await expect(page.locator('[data-viewpane="2"]')).toBeVisible();
+  const treeW = () => page.locator('#artifacts .artsplit').evaluate((el) => (el as HTMLElement).style.getPropertyValue('--tree-w'));
+
+  const div = page.locator('#artifacts .artsplit-divider');
+  const box = (await div.boundingBox())!;
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width / 2 + 70, box.y + box.height / 2, { steps: 8 });
+  await page.mouse.up();
+  await expect.poll(() => treeW()).toBe('318px'); // 248 default + 70
+
+  // Persisted via UiSettings — survives a renderer reload.
+  await page.reload();
+  await page.keyboard.press('Control+2');
+  await expect.poll(() => treeW()).toBe('318px');
+
+  // Reset to the default so the persisted width doesn't leak into later runs.
+  await page.locator('#artifacts .artsplit-divider').dblclick();
+  await expect.poll(() => treeW()).toBe('248px');
 });
 
 test('the quick-send drawer docks and undocks without a scrim, keeping the terminal visible (§16.8/§22.2)', async () => {

@@ -1,7 +1,17 @@
 import { describe, expect, it } from 'vitest';
-import { buildSpawnConfig, mergePaths } from '../../src/main/pty';
+import { buildSpawnConfig, mergePaths, spawnCwd } from '../../src/main/pty';
 
 const HOME = '/home/u';
+
+describe('spawnCwd (§5 — the dir bash is spawned in, also the viewer cwd fallback §20.1)', () => {
+  it('uses $HOME when set', () => {
+    expect(spawnCwd({ HOME }, '/fallback')).toBe(HOME);
+  });
+  it('falls back to the home arg when $HOME is unset or empty', () => {
+    expect(spawnCwd({}, '/fallback')).toBe('/fallback');
+    expect(spawnCwd({ HOME: '' }, '/fallback')).toBe('/fallback');
+  });
+});
 
 describe('mergePaths (§5 — GUI-launch PATH probe must not clobber the inherited env)', () => {
   it('appends probed-only entries after the inherited ones, preserving precedence', () => {

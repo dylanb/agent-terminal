@@ -54,9 +54,11 @@ export interface UiSettings {
   splitRatio: number;
   lastTab: TabId;
   theme: Theme;
+  /** Artifact viewer tree-pane width in px (§20.2), drag/keyboard-resizable & persisted. */
+  artifactTreeWidth: number;
 }
 
-export const DEFAULT_UI_SETTINGS: UiSettings = { splitRatio: 0.65, lastTab: 'capture', theme: 'light' };
+export const DEFAULT_UI_SETTINGS: UiSettings = { splitRatio: 0.65, lastTab: 'capture', theme: 'light', artifactTreeWidth: 248 };
 
 export interface UiSetSettingsMsg {
   settings: Partial<UiSettings>;

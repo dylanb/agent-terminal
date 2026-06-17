@@ -11,6 +11,9 @@ import { DEFAULT_UI_SETTINGS, type TabId, type Theme, type UiSettings } from '..
 // px-based clamp on top (§16.6), but the store must never hand back a 0/1 ratio.
 const MIN_RATIO = 0.05;
 const MAX_RATIO = 0.95;
+// Artifact tree-pane width clamp (§20.2) — wide enough to read names, never eats the viewer.
+const MIN_TREE_W = 140;
+const MAX_TREE_W = 640;
 
 export interface UiSettingsStore {
   get(): UiSettings;
@@ -21,6 +24,11 @@ export interface UiSettingsStore {
 function coerceRatio(raw: unknown, fallback: number): number {
   if (typeof raw !== 'number' || !Number.isFinite(raw)) return fallback;
   return Math.min(MAX_RATIO, Math.max(MIN_RATIO, raw));
+}
+
+function coerceWidth(raw: unknown, fallback: number): number {
+  if (typeof raw !== 'number' || !Number.isFinite(raw)) return fallback;
+  return Math.min(MAX_TREE_W, Math.max(MIN_TREE_W, Math.round(raw)));
 }
 
 function coerceTab(raw: unknown, fallback: TabId): TabId {
@@ -38,6 +46,7 @@ function coerce(raw: unknown, base: UiSettings): UiSettings {
     splitRatio: coerceRatio(r.splitRatio, base.splitRatio),
     lastTab: coerceTab(r.lastTab, base.lastTab),
     theme: coerceTheme(r.theme, base.theme),
+    artifactTreeWidth: coerceWidth(r.artifactTreeWidth, base.artifactTreeWidth),
   };
 }
 

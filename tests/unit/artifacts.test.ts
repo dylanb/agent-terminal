@@ -80,8 +80,15 @@ function mount(tree: ArtifactTree = TREE_CURATED, over: Partial<Parameters<typeo
     checkbox: () => host.querySelector('.scope-toggle input') as HTMLInputElement | null,
     scopeToggle: () => host.querySelector('.scope-toggle') as HTMLElement | null,
     search: () => host.querySelector('.treesearch') as HTMLInputElement,
+    treeitems: () => [...host.querySelectorAll('.treelist [role="treeitem"]')] as HTMLElement[],
+    divider: () => host.querySelector('.artsplit-divider') as HTMLElement,
+    artsplit: () => host.querySelector('.artsplit') as HTMLElement,
+    width: () => (host.querySelector('.artsplit') as HTMLElement).style.getPropertyValue('--tree-w'),
   };
 }
+
+const key = (k: string) => new KeyboardEvent('keydown', { key: k, bubbles: true });
+const mouse = (type: string, clientX: number) => new MouseEvent(type, { clientX, bubbles: true });
 
 beforeEach(() => { document.body.replaceChildren(); });
 
@@ -155,11 +162,119 @@ describe('artifact viewer (§20.1/§20.2 — real discovery)', () => {
     expect(v.addToTodo).toHaveBeenCalledWith('a passage');
   });
 
+  it('a stale in-flight refresh cannot overwrite a newer one (cwd sync race)', async () => {
+    // The newer refresh resolves first; the older one resolves LAST and must be ignored —
+    // otherwise the mount discovery (process-dir) clobbers the cwd:changed discovery.
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const resolvers: Array<(t: ArtifactTree) => void> = [];
+    const loadTree = vi.fn((_s: 'curated' | 'repo') => new Promise<ArtifactTree>((res) => resolvers.push(res)));
+    const api = createArtifacts(host, {
+      loadTree,
+      loadFile: async (relPath) => fileFor(relPath),
+      send: vi.fn(),
+      addToTodo: vi.fn(),
+      renderMarkdown: (b, into) => { into.textContent = b; },
+      renderCode: (b, _l, into) => { into.textContent = b; },
+      readSelection: () => '',
+    });
+    const older = api.refresh();
+    const newer = api.refresh();
+    resolvers[resolvers.length - 1](TREE_REPO); // newer settles first → wins
+    resolvers[resolvers.length - 2](TREE_CURATED); // older settles last → must be ignored
+    resolvers[0]?.(TREE_CURATED); // settle the mount refresh
+    await Promise.all([older, newer]);
+    const files = [...host.querySelectorAll('.tree .f')].map((r) => r.textContent);
+    expect(files.some((f) => f?.includes('b.ts'))).toBe(true); // TREE_REPO (the newer) is shown
+  });
+
   it('does nothing when there is no selection to send', async () => {
     const v = mount();
     await v.api.refresh();
     v.setSelection('');
     (v.host.querySelector('.art-send') as HTMLButtonElement).click();
     expect(v.send).not.toHaveBeenCalled();
+  });
+
+  // 1) Full name discoverable when truncated.
+  it('sets the full relative path as a title on each file row', async () => {
+    const v = mount();
+    await v.api.refresh();
+    const aTs = v.fileRows().find((r) => r.textContent?.includes('a.ts'))!;
+    expect(aTs.title).toContain('src/a.ts');
+  });
+
+  // 2) Keyboard navigation (WAI-ARIA tree).
+  it('exposes a tree with treeitem roles', async () => {
+    const v = mount();
+    await v.api.refresh();
+    expect(v.host.querySelector('.treelist')!.getAttribute('role')).toBe('tree');
+    expect(v.treeitems()[0].getAttribute('role')).toBe('treeitem');
+  });
+
+  it('ArrowDown/Up moves focus between visible tree rows', async () => {
+    const v = mount();
+    await v.api.refresh();
+    const items = v.treeitems();
+    items[0].focus();
+    items[0].dispatchEvent(key('ArrowDown'));
+    expect(document.activeElement).toBe(items[1]);
+    items[1].dispatchEvent(key('ArrowUp'));
+    expect(document.activeElement).toBe(items[0]);
+  });
+
+  it('Enter opens the focused file', async () => {
+    const v = mount();
+    await v.api.refresh();
+    const file = v.fileRows().find((r) => r.textContent?.includes('review.md'))!;
+    file.focus();
+    file.dispatchEvent(key('Enter'));
+    await Promise.resolve(); await Promise.resolve();
+    expect(v.loadFile).toHaveBeenCalledWith('review.md');
+  });
+
+  it('ArrowRight expands and ArrowLeft collapses a focused directory', async () => {
+    const v = mount();
+    await v.api.refresh();
+    const dir = v.host.querySelector('.tree .dir')!;
+    const head = dir.querySelector('.dname') as HTMLElement;
+    head.focus();
+    head.dispatchEvent(key('ArrowLeft'));
+    expect(dir.classList.contains('collapsed')).toBe(true);
+    head.dispatchEvent(key('ArrowRight'));
+    expect(dir.classList.contains('collapsed')).toBe(false);
+  });
+
+  // 3) Resizable tree pane via the edge.
+  it('renders a separator between the tree and the viewer', async () => {
+    const v = mount();
+    await v.api.refresh();
+    expect(v.divider().getAttribute('role')).toBe('separator');
+  });
+
+  it('applies the persisted initial width', async () => {
+    const v = mount(TREE_CURATED, { initialWidth: 320 });
+    await v.api.refresh();
+    expect(v.width()).toBe('320px');
+  });
+
+  it('dragging the separator changes the tree width and persists it', async () => {
+    const onWidthChange = vi.fn();
+    const v = mount(TREE_CURATED, { initialWidth: 248, onWidthChange });
+    await v.api.refresh();
+    v.divider().dispatchEvent(mouse('mousedown', 248));
+    document.dispatchEvent(mouse('mousemove', 300));
+    document.dispatchEvent(mouse('mouseup', 300));
+    expect(v.width()).toBe('300px');
+    expect(onWidthChange).toHaveBeenCalledWith(300);
+  });
+
+  it('ArrowRight/Left on the separator nudges and persists the width', async () => {
+    const onWidthChange = vi.fn();
+    const v = mount(TREE_CURATED, { initialWidth: 248, onWidthChange });
+    await v.api.refresh();
+    v.divider().dispatchEvent(key('ArrowRight'));
+    expect(v.width()).toBe('264px');
+    expect(onWidthChange).toHaveBeenCalledWith(264);
   });
 });

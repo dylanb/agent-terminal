@@ -56,8 +56,12 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible { outline:2px so
 [data-viewpane] { position:absolute; inset:0; display:none; }
 [data-viewpane].on { display:block; }
 #artifacts { height:100%; }
-.artsplit { display:grid; grid-template-columns:248px 1fr; height:100%; }
-.artsplit .tree { padding:20px 16px; border-right:1px solid var(--hair); overflow:auto; }
+.artsplit { display:grid; grid-template-columns:var(--tree-w,248px) 7px 1fr; height:100%; }
+.artsplit .tree { padding:20px 16px; overflow:auto; }
+/* Drag/keyboard-resizable edge between the tree and the viewer (§20.2). */
+.artsplit-divider { cursor:col-resize; background:var(--hair); transition:background .12s; }
+.artsplit-divider:hover, .artsplit-divider:focus-visible { background:var(--signal); outline:none; }
+.tree [role="treeitem"]:focus-visible { outline:2px solid var(--signal); outline-offset:-2px; border-radius:6px; }
 .twocol { display:grid; grid-template-columns:1fr 1fr; height:100%; }
 .pane { overflow:auto; padding:24px 26px; }
 .pane + .pane { border-left:1px solid var(--hair); background:var(--card); }
@@ -123,7 +127,7 @@ button:hover { border-color:var(--dim); }
 .tree .dchildren { margin-left:13px; border-left:1px solid var(--hair); padding-left:4px; }
 .tree .dir.collapsed > .dchildren { display:none; }
 .tree .f { display:flex; align-items:center; gap:8px; padding:5px 9px; border-radius:6px; cursor:pointer; color:var(--text); }
-.tree .f .fn { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.tree .f .fn { white-space:nowrap; } /* full name, never truncated — the pane scrolls horizontally to reach it (§20.2) */
 .tree .f:hover { background:var(--hair2); }
 .tree .f.sel { background:var(--signal-wash); color:var(--signal); }
 .tree .f .ic { font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:11px; color:var(--dim); }

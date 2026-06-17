@@ -25,14 +25,14 @@ describe('global UI settings store (§16.6 — first on-disk persistence, outsid
 
   it('persists a set and a fresh store reads it back (round-trip across restart)', () => {
     createUiSettingsStore(file).set({ splitRatio: 0.4, lastTab: 'todo' });
-    expect(createUiSettingsStore(file).get()).toEqual({ splitRatio: 0.4, lastTab: 'todo', theme: 'light' });
+    expect(createUiSettingsStore(file).get()).toEqual({ splitRatio: 0.4, lastTab: 'todo', theme: 'light', artifactTreeWidth: 248 });
   });
 
   it('merges a partial set, leaving untouched fields intact', () => {
     const store = createUiSettingsStore(file);
     store.set({ splitRatio: 0.5 });
     store.set({ lastTab: 'todo' });
-    expect(store.get()).toEqual({ splitRatio: 0.5, lastTab: 'todo', theme: 'light' });
+    expect(store.get()).toEqual({ splitRatio: 0.5, lastTab: 'todo', theme: 'light', artifactTreeWidth: 248 });
   });
 
   it('round-trips the theme and falls back to the default for a bogus value', () => {
@@ -64,10 +64,20 @@ describe('global UI settings store (§16.6 — first on-disk persistence, outsid
     expect(store.get().splitRatio).toBeGreaterThanOrEqual(0.05);
   });
 
+  it('round-trips and clamps the artifact tree width', () => {
+    const store = createUiSettingsStore(file);
+    store.set({ artifactTreeWidth: 320 });
+    expect(createUiSettingsStore(file).get().artifactTreeWidth).toBe(320);
+    store.set({ artifactTreeWidth: 9999 });
+    expect(store.get().artifactTreeWidth).toBeLessThanOrEqual(640);
+    store.set({ artifactTreeWidth: 10 });
+    expect(store.get().artifactTreeWidth).toBeGreaterThanOrEqual(140);
+  });
+
   it('writes atomically — leaves no stray temp file and the result is valid JSON', () => {
     createUiSettingsStore(file).set({ splitRatio: 0.42 });
     const written = readdirSync(join(dir, 'nested'));
     expect(written).toEqual(['ui-settings.json']);
-    expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual({ splitRatio: 0.42, lastTab: 'capture', theme: 'light' });
+    expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual({ splitRatio: 0.42, lastTab: 'capture', theme: 'light', artifactTreeWidth: 248 });
   });
 });

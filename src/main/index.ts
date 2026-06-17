@@ -1,5 +1,6 @@
 import { app, BrowserWindow, ipcMain } from 'electron';
 import path from 'node:path';
+import os from 'node:os';
 import {
   CH,
   SESSION_ID,
@@ -11,7 +12,7 @@ import {
 import { createInjector } from './inject';
 import { createMonitorEventStore } from './eventStore';
 import { createShadowModel } from './shadow';
-import { spawnAgentShell } from './pty';
+import { spawnAgentShell, spawnCwd } from './pty';
 import { createOutputGate } from './outputGate';
 import { resolveRendererTarget } from './rendererTarget';
 import { installNavigationGuards } from './windowGuards';
@@ -106,6 +107,9 @@ async function createWindow(): Promise<void> {
   // TODO(dylan): the full OSC-7 → cwd:changed → repo-list-swap loop through real
   // node-pty + bash is verified in the §F e2e (plan PR5 5c) — recorded gap.
   const cwdTracker = createCwdTracker({ onOsc: (id, cb) => shadow.onOsc(id, cb) });
+  // Before the first OSC 7 the viewer discovers against where bash was actually spawned
+  // (the terminal's start dir), not the Electron process dir — so it starts in sync (§20.1).
+  const viewerCwd = (): string => cwdTracker.cwd() ?? spawnCwd(process.env, os.homedir());
   cwdTracker.onChange(({ cwd, repoKey }) =>
     send(CH.cwdChanged, { sessionId: SESSION_ID, cwd, repoKey }),
   );
@@ -249,10 +253,8 @@ async function createWindow(): Promise<void> {
       [CH.todoDelete]: (_e, m) => (isValidTodoDelete(m) ? todoStore.delete(m.repoKey, m.id) : []),
       // Artifact viewer (§20.1/§20.2): discover/read against the session's live cwd (OSC 7),
       // falling back to the app's own dir before the first prompt. Read is path-escape-guarded.
-      [CH.viewerTree]: (_e, m) =>
-        isValidViewerTree(m) ? discover(cwdTracker.cwd() ?? process.cwd(), m.scope) : null,
-      [CH.viewerRead]: (_e, m) =>
-        isValidViewerRead(m) ? readArtifact(cwdTracker.cwd() ?? process.cwd(), m.relPath) : null,
+      [CH.viewerTree]: (_e, m) => (isValidViewerTree(m) ? discover(viewerCwd(), m.scope) : null),
+      [CH.viewerRead]: (_e, m) => (isValidViewerRead(m) ? readArtifact(viewerCwd(), m.relPath) : null),
     },
   );
 

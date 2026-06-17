@@ -51,9 +51,13 @@ if (artifactsHost) {
     renderCode: renderCodeInto,
     send: (text) => doInject(text, false),
     addToTodo: (text) => captureToTodo(window.monitor, repoKey, text),
+    onWidthChange: (px) => window.monitor.setSettings({ artifactTreeWidth: px }),
   });
   window.monitor.onCwdChanged((m) => {
     repoKey = m.repoKey;
     void artifacts.refresh(); // re-discover when the agent cd's into another repo/dir
   });
+  // Apply the persisted tree width once settings resolve (kept off the sync path above so a
+  // late getSettings can't make the viewer miss the first cwd:changed broadcast, §20.1).
+  void window.monitor.getSettings().then((s) => artifacts.setWidth(s.artifactTreeWidth));
 }
