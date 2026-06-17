@@ -22,25 +22,17 @@
             <button class="nav" data-viewbtn="3">Todos <span class="k">⌘3</span></button>
           </div>
         </nav>
-        <!-- mocked flow timeline (§19.2 — fixture) -->
+        <!-- mocked flow timeline (§19.2) — rendered from the fixture flow-state -->
         <div class="blk">
-          <div class="sect">Flow — step 3 / 4</div>
-          <div class="flow">
-            <span class="stn done"><span class="o"></span><span class="nm">Plan</span></span><span class="seg"></span>
-            <span class="stn done"><span class="o"></span><span class="nm">Code</span></span><span class="seg"></span>
-            <span class="stn active"><span class="o"></span><span class="nm">Review</span></span><span class="seg future"></span>
-            <span class="stn todo"><span class="o"></span><span class="nm">Ship</span></span>
-          </div>
+          <div class="sect" id="flow-label">Flow</div>
+          <div class="flow" id="flow-rail"></div>
         </div>
         <div class="blk" style="border-bottom:none">
           <div class="sect">Status</div>
           <!-- real status strip (§22.3) renders its chips here -->
           <div id="monitor-status" role="status" aria-live="polite"></div>
-          <!-- mocked gate/loop lines (§19.3 — fixture) -->
-          <div class="railstat" style="margin-top:10px">
-            <span class="stat"><span class="k">Gate</span><span class="v act">awaiting you</span></span>
-            <span class="stat"><span class="k">Loop</span><span class="v">iter 03 · 2 open</span></span>
-          </div>
+          <!-- mocked gate/loop lines (§19.3) — rendered from the fixture flow-state -->
+          <div class="railstat" id="rail-flowstatus" style="margin-top:10px"></div>
         </div>
         <div class="foot">
           <button class="pill signal" id="qs">⌘K Quick-send</button>
@@ -101,18 +93,9 @@
               </div>
             </div>
             <div class="pane">
-              <h2 class="serif">Review gate</h2><div class="sub">Review came back — won't inject over a running process (§19.3)</div>
-              <div class="gatebar">
-                <button class="pill app">Approve gate</button>
-                <button class="pill send">Request changes</button>
-                <button class="pill">Open report</button>
-              </div>
-              <div class="loop">
-                <div class="lrow"><span class="lk">iteration</span><span class="ld"></span><span class="lv">03</span></div>
-                <div class="lrow"><span class="lk">severity cycle</span><span class="ld"></span><span class="lv bad">high</span></div>
-                <div class="lrow"><span class="lk">open findings</span><span class="ld"></span><span class="lv">2</span></div>
-                <div class="lrow"><span class="lk">last verdict</span><span class="ld"></span><span class="lv bad">changes requested</span></div>
-              </div>
+              <h2 class="serif">Review gate</h2>
+              <!-- mocked gate panel (§19.3) — rendered from the fixture; actions stubbed -->
+              <div id="gate-panel"></div>
             </div>
           </div>
         </div>

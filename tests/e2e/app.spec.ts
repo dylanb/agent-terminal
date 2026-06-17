@@ -524,6 +524,16 @@ test('the terminal refits its PTY when the drawer docks/undocks (§7.1)', async 
     .toBeGreaterThan(docked);
 });
 
+test('the mocked Review gate renders from the fixture and its Approve stub reflects a verdict (§19.3)', async () => {
+  await page.keyboard.press('Control+3'); // Todos + gate view
+  const gate = page.locator('#gate-panel');
+  await expect(gate.locator('button.app')).toHaveText(/Approve/);
+  await expect(gate).toContainText('changes requested'); // fixture's prior verdict
+
+  await gate.locator('button.app').click(); // stubbed — no injection, reflects locally
+  await expect(gate).toContainText('approved');
+});
+
 test('the theme toggle flips light/dark and persists across a reload (§16.6)', async () => {
   const html = page.locator('html');
   await page.locator('#tg').click();

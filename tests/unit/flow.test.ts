@@ -1,0 +1,98 @@
+// @vitest-environment jsdom
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  SAMPLE_FLOW,
+  flowLabel,
+  renderFlow,
+  renderRailStatus,
+  createGatePanel,
+  type FlowState,
+} from '../../src/renderer/src/flow';
+
+// §24.1 mocked widgets: the flow timeline (§19.2), rail gate/loop status, and the
+// view-3 gate panel (§19.3) all render from ONE fixture flow-state. Gate actions are
+// stubbed (no real loop-command injection yet) but observably reflect a verdict.
+// Tests assert rendered output and the stub's observable effect, never internals.
+
+function fixture(over: Partial<FlowState> = {}): FlowState {
+  return {
+    steps: [
+      { name: 'Plan', status: 'done' },
+      { name: 'Code', status: 'done' },
+      { name: 'Review', status: 'active' },
+      { name: 'Ship', status: 'todo' },
+    ],
+    gate: { label: 'Review gate', status: 'awaiting', note: 'Review came back' },
+    loop: { iteration: 3, severity: 'high', openFindings: 2, lastVerdict: 'changes requested' },
+    ...over,
+  };
+}
+
+let host: HTMLElement;
+beforeEach(() => {
+  document.body.innerHTML = '<div id="host"></div>';
+  host = document.getElementById('host')!;
+});
+afterEach(() => {
+  document.body.innerHTML = '';
+});
+
+describe('flow timeline (§19.2)', () => {
+  it('renders one station per step with its status class, in order', () => {
+    renderFlow(host, fixture().steps);
+    const stns = host.querySelectorAll('.stn');
+    expect([...stns].map((s) => s.querySelector('.nm')!.textContent)).toEqual(['Plan', 'Code', 'Review', 'Ship']);
+    expect(stns[0].classList.contains('done')).toBe(true);
+    expect(stns[2].classList.contains('active')).toBe(true);
+    expect(stns[3].classList.contains('todo')).toBe(true);
+  });
+
+  it('puts a connector between stations but not after the last', () => {
+    renderFlow(host, fixture().steps);
+    expect(host.querySelectorAll('.seg').length).toBe(3);
+  });
+
+  it('labels the active step position', () => {
+    expect(flowLabel(fixture().steps)).toBe('step 3 / 4');
+  });
+});
+
+describe('rail gate/loop status', () => {
+  it('shows the gate state and loop summary from the fixture', () => {
+    renderRailStatus(host, fixture());
+    expect(host.textContent).toContain('awaiting');
+    expect(host.textContent).toContain('iter 03');
+    expect(host.textContent).toContain('2 open');
+  });
+});
+
+describe('view-3 gate panel (§19.3 — clickable, stubbed)', () => {
+  it('renders the three controls and the loop table from the fixture', () => {
+    createGatePanel(host, fixture());
+    expect(host.querySelector('button.app')!.textContent).toContain('Approve');
+    expect(host.querySelector('button.send')!.textContent).toContain('Request changes');
+    expect(host.textContent).toContain('changes requested');
+  });
+
+  it('approving reflects the verdict and calls the stub handler (no injection)', () => {
+    const onAct = vi.fn();
+    const panel = createGatePanel(host, fixture(), { onAct });
+    (host.querySelector('button.app') as HTMLButtonElement).click();
+    expect(onAct).toHaveBeenCalledWith('approve');
+    expect(panel.getStatus()).toBe('approved');
+    expect(host.textContent).toContain('approved');
+  });
+
+  it('requesting changes reflects that verdict', () => {
+    const panel = createGatePanel(host, fixture());
+    (host.querySelector('button.send') as HTMLButtonElement).click();
+    expect(panel.getStatus()).toBe('changes');
+  });
+});
+
+describe('SAMPLE_FLOW fixture', () => {
+  it('is a coherent in-progress review flow', () => {
+    expect(SAMPLE_FLOW.steps.some((s) => s.status === 'active')).toBe(true);
+    expect(SAMPLE_FLOW.gate.status).toBe('awaiting');
+  });
+});

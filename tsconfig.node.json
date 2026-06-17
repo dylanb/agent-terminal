@@ -27,6 +27,7 @@
     "src/renderer/src/monitor.ts",
     "src/renderer/src/shell.ts",
     "src/renderer/src/crossHighlight.ts",
+    "src/renderer/src/flow.ts",
     "electron.vite.config.ts",
     "tests/unit/**/*.ts",
     "tests/integration/**/*.ts",
