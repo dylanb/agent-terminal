@@ -147,6 +147,15 @@ describe('shell controller (§24.1C — views, hotkeys, docked drawer, theme)', 
       expect(shell.isDrawerOpen()).toBe(true);
       expect(shell.getTab()).toBe('todo');
     });
+
+    it('broadcasts a window resize when the dock width changes, so panes refit (§7.1)', () => {
+      const onResize = vi.fn();
+      window.addEventListener('resize', onResize);
+      shell.closeDrawer();
+      shell.openDrawer();
+      window.removeEventListener('resize', onResize);
+      expect(onResize).toHaveBeenCalledTimes(2);
+    });
   });
 
   describe('theme', () => {

@@ -1,48 +1,142 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="light">
   <head>
     <meta charset="UTF-8" />
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; style-src 'self' 'unsafe-inline'"
+      content="default-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'"
     />
     <title>Agent Terminal</title>
     <link rel="stylesheet" href="./src/styles.css" />
   </head>
   <body>
-    <div id="app">
-      <main id="terminal-pane" aria-label="Terminal">
-        <div id="toolbar" role="toolbar" aria-label="Selection actions">
-          <button id="send-selection">Send selection</button>
-          <button id="capture-selection">Capture selection</button>
-          <button id="clear-selection">Clear selection</button>
+    <div id="app" class="app drawer-open">
+      <!-- SLIM LEFT CHROME (§24.1C) -->
+      <aside class="rail" aria-label="Navigation and status">
+        <div class="mark serif">Agent <span class="sig">·—·</span> Terminal</div>
+        <nav class="blk" aria-label="Views">
+          <div class="sect">Views</div>
+          <div class="navlist">
+            <button class="nav on" data-viewbtn="1">Terminal <span class="k">⌘1</span></button>
+            <button class="nav" data-viewbtn="2">Artifacts <span class="k">⌘2</span></button>
+            <button class="nav" data-viewbtn="3">Todos <span class="k">⌘3</span></button>
+          </div>
+        </nav>
+        <!-- mocked flow timeline (§19.2 — fixture) -->
+        <div class="blk">
+          <div class="sect">Flow — step 3 / 4</div>
+          <div class="flow">
+            <span class="stn done"><span class="o"></span><span class="nm">Plan</span></span><span class="seg"></span>
+            <span class="stn done"><span class="o"></span><span class="nm">Code</span></span><span class="seg"></span>
+            <span class="stn active"><span class="o"></span><span class="nm">Review</span></span><span class="seg future"></span>
+            <span class="stn todo"><span class="o"></span><span class="nm">Ship</span></span>
+          </div>
         </div>
-        <div id="terminal"></div>
+        <div class="blk" style="border-bottom:none">
+          <div class="sect">Status</div>
+          <!-- real status strip (§22.3) renders its chips here -->
+          <div id="monitor-status" role="status" aria-live="polite"></div>
+          <!-- mocked gate/loop lines (§19.3 — fixture) -->
+          <div class="railstat" style="margin-top:10px">
+            <span class="stat"><span class="k">Gate</span><span class="v act">awaiting you</span></span>
+            <span class="stat"><span class="k">Loop</span><span class="v">iter 03 · 2 open</span></span>
+          </div>
+        </div>
+        <div class="foot">
+          <button class="pill signal" id="qs">⌘K Quick-send</button>
+          <div class="row">
+            <button class="iconbtn" id="tg" title="Toggle theme" aria-label="Toggle theme">◐</button>
+            <span class="mono" data-theme-label style="font-size:11px;color:var(--dim)">Light</span>
+          </div>
+        </div>
+      </aside>
+
+      <!-- FULL-BLEED MAIN -->
+      <main class="main">
+        <!-- VIEW 1 — Terminal (real xterm + selection, §7) -->
+        <div data-viewpane="1" class="on">
+          <div id="terminal-view">
+            <div id="toolbar" role="toolbar" aria-label="Selection actions">
+              <button id="send-selection">Send selection</button>
+              <button id="capture-selection">Capture selection</button>
+              <button id="clear-selection">Clear selection</button>
+            </div>
+            <div id="terminal"></div>
+          </div>
+        </div>
+
+        <!-- VIEW 2 — Artifacts (mocked fixture, §20.1) -->
+        <div data-viewpane="2">
+          <div class="artsplit">
+            <div class="tree">
+              <div class="grp">This run</div>
+              <div class="f sel"><span class="ic">md</span> review.md <span class="tag">iter 03</span></div>
+              <div class="f"><span class="ic">md</span> plan.md <span class="tag">step 1</span></div>
+              <div class="f"><span class="ic">◆</span> diff · 6 files <span class="tag">code</span></div>
+              <div class="grp">GitHub</div>
+              <div class="f"><span class="ic">⌥</span> PR #42 <span class="tag">open</span></div>
+              <div class="f"><span class="ic">◷</span> CI · scanner <span class="tag">pass</span></div>
+            </div>
+            <div class="viewer">
+              <h1 class="vh serif">Review — capture pipeline</h1>
+              <div class="vmeta">review.md · iter 03 · <span class="vbadge">2 findings</span></div>
+              <p>The scanner now carves tool calls out of the report body, so a tool-heavy turn yields clean prose plus findings rather than a blob.</p>
+              <h2 class="vs serif">Stability frontier</h2>
+              <p>However, the frontier still <span class="marked">re-reads scrollback on every quiet pause</span>, which on a long session is measurable overhead. A second pass also <span class="marked">drops findings under the minimum-character floor</span> without flagging them.</p>
+              <h2 class="vs serif">Command-output capture</h2>
+              <p>Unchanged and behaves correctly across the test session. Select any passage to send it to the terminal or add it as a todo.</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- VIEW 3 — Todos + Review gate (mocked fixture, §19.3) -->
+        <div data-viewpane="3">
+          <div class="twocol">
+            <div class="pane">
+              <h2 class="serif">Todos</h2><div class="sub">Curate, then send to the agent</div>
+              <div class="mock-todos">
+                <div class="todo"><span class="chk"></span><div class="body"><div class="tx">Bound the scrollback re-scan — don't re-read on every quiet pause</div><div class="meta"><span class="from">from review.md</span> · L42 · high</div></div></div>
+                <div class="todo"><span class="chk"></span><div class="body"><div class="tx">Flag sub-floor findings instead of dropping them silently</div><div class="meta"><span class="from">from review.md</span> · L44</div></div></div>
+                <div class="todo done"><span class="chk"></span><div class="body"><div class="tx">Carve tool calls out of the report body</div><div class="meta">done · §15.x</div></div></div>
+              </div>
+            </div>
+            <div class="pane">
+              <h2 class="serif">Review gate</h2><div class="sub">Review came back — won't inject over a running process (§19.3)</div>
+              <div class="gatebar">
+                <button class="pill app">Approve gate</button>
+                <button class="pill send">Request changes</button>
+                <button class="pill">Open report</button>
+              </div>
+              <div class="loop">
+                <div class="lrow"><span class="lk">iteration</span><span class="ld"></span><span class="lv">03</span></div>
+                <div class="lrow"><span class="lk">severity cycle</span><span class="ld"></span><span class="lv bad">high</span></div>
+                <div class="lrow"><span class="lk">open findings</span><span class="ld"></span><span class="lv">2</span></div>
+                <div class="lrow"><span class="lk">last verdict</span><span class="ld"></span><span class="lv bad">changes requested</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
       </main>
-      <div
-        id="splitter"
-        role="separator"
-        aria-orientation="vertical"
-        aria-label="Resize terminal and action window"
-        tabindex="0"
-      ></div>
-      <aside id="monitor" aria-label="Action window">
-        <div id="monitor-tabs" role="tablist" aria-label="Action window tabs">
-          <button id="tab-capture" role="tab" aria-selected="true" aria-controls="panel-capture">
-            Capture<span id="capture-unread" class="unread-dot" hidden aria-label="new captures"></span>
-          </button>
-          <button id="tab-todo" role="tab" aria-selected="false" aria-controls="panel-todo">
+
+      <!-- DOCKED, NON-BLURRING QUICK-SEND = the reused action window (§16) -->
+      <aside class="drawer" id="drawer" aria-label="Quick-send">
+        <div id="monitor-tabs" class="dhead" role="tablist" aria-label="Quick-send tabs">
+          <button id="tab-todo" class="dtab" role="tab" aria-selected="false" aria-controls="panel-todo">
             Todo <span id="todo-count" class="todo-count">0</span>
           </button>
+          <button id="tab-capture" class="dtab" role="tab" aria-selected="true" aria-controls="panel-capture">
+            Capture<span id="capture-unread" class="unread-dot" hidden aria-label="new captures"></span>
+          </button>
+          <button class="iconbtn x" id="dclose" title="Close quick-send" aria-label="Close quick-send">✕</button>
         </div>
-        <section id="panel-capture" role="tabpanel" aria-labelledby="tab-capture">
-          <div id="monitor-status" role="status" aria-live="polite"></div>
+        <section id="panel-capture" class="panel" role="tabpanel" aria-labelledby="tab-capture">
           <div id="command-history" aria-label="Command history"></div>
           <div id="monitor-blocks"></div>
         </section>
-        <section id="panel-todo" role="tabpanel" aria-labelledby="tab-todo" hidden>
+        <section id="panel-todo" class="panel" role="tabpanel" aria-labelledby="tab-todo" hidden>
           <div id="todo-list" aria-label="Todo list"></div>
         </section>
+        <div class="dhint"><span>hover a finding → reveal in terminal</span><span><span class="kbd">⌘K</span> toggle</span></div>
       </aside>
     </div>
     <script type="module" src="./src/index.ts"></script>

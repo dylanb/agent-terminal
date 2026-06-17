@@ -60,12 +60,23 @@ export function createShell(root: HTMLElement, deps: ShellDeps = {}): Shell {
     });
   }
 
+  // The dock is a layout column, so opening/closing it changes the main pane's width
+  // without a window resize. Broadcast one so width-sensitive panes (the terminal's
+  // FitAddon, §7.1) refit — the same decoupled signal the old splitter used.
+  const signalLayoutChange = (): void => {
+    doc.defaultView?.dispatchEvent(new Event('resize'));
+  };
+
   const isDrawerOpen = (): boolean => root.classList.contains('drawer-open');
   function openDrawer(t?: DrawerTab): void {
     root.classList.add('drawer-open');
     if (t) selectTab(t);
+    signalLayoutChange();
   }
-  const closeDrawer = (): void => root.classList.remove('drawer-open');
+  function closeDrawer(): void {
+    root.classList.remove('drawer-open');
+    signalLayoutChange();
+  }
   function toggleDrawer(t?: DrawerTab): void {
     if (isDrawerOpen()) closeDrawer();
     else openDrawer(t);
@@ -94,20 +105,25 @@ export function createShell(root: HTMLElement, deps: ShellDeps = {}): Shell {
     if (target.closest('#tg')) return setTheme(theme === 'dark' ? 'light' : 'dark');
   };
 
+  // Capture phase + stopPropagation: the terminal (xterm) would otherwise swallow
+  // ⌘/Ctrl+K (a control char) and ⌘/Ctrl+1-3 before they reach us, so the shell's
+  // own chords must be intercepted ahead of any focused descendant (§22.4).
   const onKeyDown = (e: KeyboardEvent): void => {
     if (!(e.metaKey || e.ctrlKey)) return;
     const k = e.key.toLowerCase();
     if (k === 'k') {
       e.preventDefault();
+      e.stopPropagation();
       toggleDrawer();
     } else if ((VIEWS as readonly string[]).includes(e.key)) {
       e.preventDefault();
+      e.stopPropagation();
       setView(e.key as ViewId);
     }
   };
 
   root.addEventListener('click', onClick);
-  doc.addEventListener('keydown', onKeyDown);
+  doc.addEventListener('keydown', onKeyDown, true);
 
   applyTheme(theme);
   if (deps.getTheme) void deps.getTheme().then(applyTheme);
@@ -125,7 +141,7 @@ export function createShell(root: HTMLElement, deps: ShellDeps = {}): Shell {
     getTheme: () => theme,
     dispose() {
       root.removeEventListener('click', onClick);
-      doc.removeEventListener('keydown', onKeyDown);
+      doc.removeEventListener('keydown', onKeyDown, true);
     },
   };
 }

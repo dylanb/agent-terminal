@@ -1,393 +1,196 @@
-* {
-  box-sizing: border-box;
-}
+/* Galley · Lit shell (§24.1C) — tokens + the converged three-view frame (rail · main ·
+   docked drawer), then the functional styles for the reused cores (terminal, monitor,
+   capture, todos, status strip) reskinned onto the tokens so they read in both themes.
+   Layout frames live here; widgets stay placement-agnostic (§22.4). */
 
-html,
+/* ---- tokens (design/shell/tokens.css) ---- */
+:root {
+  --board:#FBFCFE; --leaf:#FFFFFF; --rule:#E3E9F0; --rule-soft:#EEF2F7;
+  --ink:#11161D; --muted:#5E6B7A; --signal:#0098DB; --signal-wash:rgba(0,152,219,.12);
+  --attn:#E5484D; --pass:#1F9D6B;
+  --bg:var(--board); --card:var(--leaf); --hair:var(--rule); --hair2:var(--rule-soft);
+  --text:var(--ink); --dim:var(--muted);
+  --term-bg:#0E141B; --term-text:#D5DEE8; --term-dim:#6F7E8E;
+  --reveal:#F2A53C; --reveal-wash:rgba(242,165,60,.22);
+  --r:7px;
+}
+[data-theme="dark"] {
+  --bg:#0E141B; --card:#161E27; --hair:#26313C; --hair2:#1C2530;
+  --text:#E8EEF4; --dim:#8FA0B2; --signal:#22C7FF; --signal-wash:rgba(34,199,255,.14);
+  --attn:#FF6168; --pass:#3DDC97;
+  --term-bg:#0A0F15; --term-text:#D5DEE8; --term-dim:#65727F;
+  --reveal:#FFB454; --reveal-wash:rgba(255,180,84,.20);
+}
+* { box-sizing:border-box; }
+html, body { margin:0; height:100%; }
 body {
-  height: 100%;
-  margin: 0;
-  background: #1e1e1e;
-  color: #ddd;
-  font-family: system-ui, sans-serif;
+  background:var(--bg); color:var(--text);
+  font-family:"IBM Plex Sans",system-ui,sans-serif; line-height:1.5;
+  -webkit-font-smoothing:antialiased; overflow:hidden;
 }
+.serif { font-family:"Fraunces",Georgia,serif; }
+.mono { font-family:"IBM Plex Mono",ui-monospace,monospace; font-variant-numeric:tabular-nums; }
+button:focus-visible, a:focus-visible, [tabindex]:focus-visible { outline:2px solid var(--signal); outline-offset:2px; }
 
-#app {
-  display: flex;
-  height: 100vh;
-}
+/* ---- the frame: slim rail · full-bleed main · docked (no-scrim) drawer ---- */
+/* No column transition: the dock snaps so the terminal refits to the final width on
+   the shell's resize broadcast, never to a mid-animation width (§7.1). */
+.app { display:grid; grid-template-columns:200px 1fr 0; height:100vh; }
+.app.drawer-open { grid-template-columns:200px 1fr 384px; }
 
-#terminal-pane {
-  flex: 0 0 65%;
-  display: flex;
-  flex-direction: column;
-  min-width: 320px; /* §16.6 terminal min width — JS clamp mirrors this (MIN_TERMINAL_PX) */
-}
+.rail { background:var(--card); border-right:1px solid var(--hair); display:flex; flex-direction:column; padding:16px 14px; overflow:auto; }
+.rail .mark { font-weight:600; font-size:15px; margin-bottom:20px; white-space:nowrap; }
+.rail .mark .sig { color:var(--signal); }
+.rail .sect { text-transform:uppercase; letter-spacing:.14em; font-size:9px; color:var(--dim); margin:0 0 9px; }
+.rail .blk { margin-bottom:18px; padding-bottom:18px; border-bottom:1px solid var(--hair); }
+.navlist { display:flex; flex-direction:column; gap:2px; }
+.nav { display:flex; align-items:center; gap:9px; padding:8px 10px; border-radius:7px; color:var(--text); cursor:pointer; background:none; border:none; font-size:13px; font-weight:500; text-align:left; width:100%; }
+.nav:hover { background:var(--hair2); }
+.nav.on { background:var(--signal-wash); color:var(--signal); }
+.nav .k { margin-left:auto; font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:9.5px; color:var(--dim); }
+.nav.on .k { color:var(--signal); }
+.rail .foot { margin-top:auto; display:flex; flex-direction:column; gap:8px; padding-top:16px; }
+.rail .foot .row { display:flex; gap:8px; align-items:center; }
 
-/* Draggable vertical divider (§16.6); focusable role="separator" nudged with ←/→. */
-#splitter {
-  flex: 0 0 6px;
-  cursor: col-resize;
-  background: #333;
-  border-left: 1px solid #2a2a2a;
-  border-right: 1px solid #2a2a2a;
-}
+.main { min-width:0; position:relative; }
+[data-viewpane] { position:absolute; inset:0; display:none; }
+[data-viewpane].on { display:block; }
+.artsplit { display:grid; grid-template-columns:248px 1fr; height:100%; }
+.artsplit .tree { padding:20px 16px; border-right:1px solid var(--hair); overflow:auto; }
+.twocol { display:grid; grid-template-columns:1fr 1fr; height:100%; }
+.pane { overflow:auto; padding:24px 26px; }
+.pane + .pane { border-left:1px solid var(--hair); background:var(--card); }
+.pane h2 { font-family:"Fraunces",Georgia,serif; font-weight:500; font-size:21px; margin:0 0 3px; }
+.pane .sub { font-size:12px; color:var(--dim); margin-bottom:18px; }
+.gatebar { display:flex; gap:9px; align-items:center; flex-wrap:wrap; margin:10px 0 18px; }
 
-#splitter:hover,
-#splitter:focus-visible {
-  background: #4a4d51;
-  outline: none;
-}
+/* ---- buttons (tokens) ---- */
+.pill { display:inline-flex; align-items:center; justify-content:center; flex:none; height:34px; font-size:12.5px; font-weight:600; padding:0 15px; border-radius:999px; border:1px solid var(--hair); background:transparent; color:var(--text); cursor:pointer; white-space:nowrap; }
+.pill:hover { border-color:var(--dim); }
+.pill.signal { border-color:var(--signal); color:var(--signal); }
+.pill.send { background:var(--attn); color:#fff; border-color:transparent; }
+.pill.app { background:var(--pass); color:#fff; border-color:transparent; }
+.pill.sm { height:30px; font-size:11.5px; padding:0 12px; }
+.iconbtn { background:none; border:1px solid var(--hair); border-radius:6px; color:var(--dim); width:30px; height:30px; cursor:pointer; font-size:14px; }
+.iconbtn:hover { color:var(--text); border-color:var(--dim); }
+.linkbtn { font-size:11.5px; font-weight:600; background:none; border:none; color:var(--signal); cursor:pointer; padding:0; }
 
-#toolbar {
-  padding: 6px 8px;
-  display: flex;
-  gap: 8px;
-  background: #252526;
-  border-bottom: 1px solid #333;
-}
+/* ---- flow rail (vertical) ---- */
+.flow { display:flex; flex-direction:column; align-items:flex-start; }
+.flow .stn { display:flex; align-items:center; gap:8px; padding:9px 0; }
+.flow .stn .o { width:11px; height:11px; border-radius:50%; border:2px solid var(--dim); background:var(--card); flex:none; }
+.flow .stn.done .o { border-color:var(--signal); background:var(--signal); }
+.flow .stn.active .o { border-color:var(--signal); background:var(--card); box-shadow:0 0 0 4px var(--signal-wash); animation:beat 1.8s ease-in-out infinite; }
+@keyframes beat { 0%,100%{box-shadow:0 0 0 3px var(--signal-wash)} 50%{box-shadow:0 0 0 7px var(--signal-wash)} }
+.flow .stn .nm { font-size:12.5px; font-weight:500; }
+.flow .stn.active .nm { color:var(--signal); }
+.flow .stn.todo .nm, .flow .stn.todo .o { opacity:.5; }
+.flow .seg { width:2px; height:18px; margin:0 0 0 4px; background:var(--signal); opacity:.5; }
+.flow .seg.future { background:repeating-linear-gradient(180deg,var(--dim) 0 4px,transparent 4px 9px); }
+
+/* ---- mocked rail status (gate/loop fixture lines beside the real strip) ---- */
+.railstat { display:flex; flex-direction:column; gap:9px; }
+.railstat .stat { display:flex; flex-direction:column; gap:3px; }
+.railstat .stat .k { text-transform:uppercase; letter-spacing:.13em; font-size:9px; color:var(--dim); }
+.railstat .stat .v { font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:12px; }
+.railstat .stat .v.act { color:var(--attn); }
+.railstat .stat .v.sig { color:var(--signal); }
+
+/* ---- view 1: terminal ---- */
+#terminal-view { display:flex; flex-direction:column; height:100%; background:var(--term-bg); }
+#toolbar { padding:8px 12px; display:flex; gap:8px; background:var(--card); border-bottom:1px solid var(--hair); }
+#terminal { flex:1; min-height:0; padding:6px 8px; }
 
 button {
-  background: #3a3d41;
-  color: #ddd;
-  border: 1px solid #555;
-  border-radius: 3px;
-  padding: 4px 10px;
-  cursor: pointer;
-  font-size: 12px;
+  background:transparent; color:var(--text); border:1px solid var(--hair);
+  border-radius:6px; padding:5px 11px; cursor:pointer; font-size:12px;
 }
+button:hover { border-color:var(--dim); }
 
-button:hover {
-  background: #4a4d51;
-}
+/* ---- view 2/3: mocked artifacts + todos + gate ---- */
+.tree { font-size:13px; }
+.tree .grp { text-transform:uppercase; letter-spacing:.13em; font-size:9.5px; color:var(--dim); margin:14px 0 7px; }
+.tree .grp:first-child { margin-top:0; }
+.tree .f { display:flex; align-items:center; gap:9px; padding:6px 9px; border-radius:6px; cursor:pointer; color:var(--text); }
+.tree .f:hover { background:var(--hair2); }
+.tree .f.sel { background:var(--signal-wash); color:var(--signal); }
+.tree .f .ic { font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:11px; color:var(--dim); }
+.tree .f .tag { margin-left:auto; font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:9.5px; color:var(--dim); border:1px solid var(--hair); border-radius:4px; padding:1px 5px; }
+.viewer { padding:30px 38px; overflow:auto; height:100%; }
+.viewer h1.vh { font-family:"Fraunces",Georgia,serif; font-weight:500; font-size:30px; margin:0 0 6px; }
+.viewer .vmeta { font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:11.5px; color:var(--dim); margin-bottom:24px; }
+.viewer h2.vs { font-family:"Fraunces",Georgia,serif; font-weight:500; font-size:20px; margin:26px 0 10px; }
+.viewer p { font-size:15px; line-height:1.75; max-width:68ch; margin:0 0 14px; }
+.viewer .vbadge { display:inline-block; font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:10px; padding:2px 7px; border-radius:4px; background:var(--signal-wash); color:var(--signal); }
+.marked { background:var(--signal-wash); border-bottom:2px solid var(--signal); padding:1px 3px; border-radius:2px; }
+.loop .lrow { display:flex; align-items:baseline; font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:12.5px; padding:1px 0; }
+.loop .lrow .lk { color:var(--dim); } .loop .lrow .ld { flex:1; border-bottom:1px dotted var(--hair); margin:0 8px 4px; }
+.loop .lrow .lv.bad { color:var(--attn); }
+.mock-todos .todo { display:flex; gap:11px; align-items:flex-start; padding:12px 4px; border-bottom:1px solid var(--hair2); }
+.mock-todos .todo .chk { width:15px; height:15px; border:1.5px solid var(--dim); border-radius:4px; margin-top:2px; flex:none; }
+.mock-todos .todo.done .chk { background:var(--pass); border-color:var(--pass); }
+.mock-todos .todo.done .tx { text-decoration:line-through; color:var(--dim); }
+.mock-todos .todo .tx { font-size:13.5px; }
+.mock-todos .todo .meta { font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:10.5px; color:var(--dim); margin-top:4px; }
+.mock-todos .todo .meta .from { color:var(--signal); }
 
-/* Terminal fills the pane; FitAddon snaps it to whole cells. */
-#terminal {
-  flex: 1;
-  min-height: 0;
-  padding: 4px;
-}
+/* ---- docked drawer = the reused monitor (capture/todo) ---- */
+.drawer { background:var(--card); border-left:1px solid var(--hair); overflow:hidden; display:flex; flex-direction:column; min-width:0; }
+.dhead { display:flex; align-items:center; border-bottom:1px solid var(--hair); padding:0 6px 0 0; }
+.dtab { font-size:13px; font-weight:600; padding:13px 14px; color:var(--dim); background:none; border:none; border-bottom:2px solid transparent; cursor:pointer; }
+.dtab[aria-selected="true"] { color:var(--signal); border-bottom-color:var(--signal); }
+.dhead .x { margin-left:auto; }
+.unread-dot { display:inline-block; width:8px; height:8px; margin-left:6px; border-radius:50%; background:var(--signal); }
+.todo-count { margin-left:6px; font-size:11px; padding:1px 6px; border-radius:8px; background:var(--hair2); color:var(--dim); }
 
-#monitor {
-  flex: 1 1 0;
-  min-width: 280px; /* §16.6 action-window min width — JS clamp mirrors this (MIN_MONITOR_PX) */
-  display: flex;
-  flex-direction: column;
-  background: #232323;
-}
+#panel-capture:not([hidden]), #panel-todo:not([hidden]) { flex:1 1 0; display:flex; flex-direction:column; min-height:0; overflow-y:auto; }
 
-/* Tabs (§16.1) */
-#monitor-tabs {
-  display: flex;
-  border-bottom: 1px solid #333;
-}
+/* status strip (real) — lives in the rail */
+#monitor-status { display:flex; flex-wrap:wrap; gap:6px; }
+.status-chip { font-size:11px; padding:2px 8px; border-radius:10px; background:var(--hair2); color:var(--dim); }
+.status-chip.on { background:var(--signal-wash); color:var(--signal); }
 
-#monitor-tabs [role='tab'] {
-  flex: 1 1 0;
-  padding: 8px;
-  background: #2a2a2a;
-  color: #b0b0b0;
-  border: none;
-  border-bottom: 2px solid transparent;
-  cursor: pointer;
-}
+/* command history + capture blocks (reused core) */
+#command-history { max-height:30%; overflow-y:auto; padding:4px 12px; border-bottom:1px solid var(--hair); }
+#command-history:empty { display:none; }
+.command-entry { display:flex; align-items:center; gap:8px; padding:3px 0; font-size:12px; }
+.command-entry .command-text { font-family:"IBM Plex Mono",ui-monospace,monospace; flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.exit-chip { font-size:11px; color:var(--dim); white-space:nowrap; }
+#monitor-blocks { flex:1; overflow-y:auto; padding:12px; }
+.blocks-toolbar { display:flex; justify-content:flex-end; padding:6px 8px 0; }
+.blocks-toolbar:has(+ #monitor-blocks:empty) { display:none; }
+#dismiss-all { font-size:11px; }
+.capture-badge { display:inline-block; font-size:10px; text-transform:uppercase; letter-spacing:.04em; padding:1px 6px; margin-right:6px; border-radius:8px; background:var(--signal-wash); color:var(--signal); }
+.capture-block[data-type='report'] .capture-badge { background:rgba(242,165,60,.18); color:var(--reveal); }
+.capture-block { border:1px solid var(--hair); border-radius:6px; margin-bottom:10px; background:var(--bg); transition:border-color .4s ease, box-shadow .4s ease; }
+.capture-block.revealed { border-color:var(--reveal); box-shadow:0 0 0 1px var(--reveal), 0 0 10px var(--reveal-wash); }
+.capture-meta { display:flex; align-items:center; gap:6px; font-size:11px; color:var(--dim); padding:4px 8px; border-bottom:1px solid var(--hair); }
+.capture-meta .capture-time { flex:1; }
+button.dismiss { border:none; background:transparent; color:var(--dim); font-size:15px; line-height:1; cursor:pointer; padding:0 4px; }
+button.dismiss:hover { color:var(--attn); }
+button.mark-chrome { border:none; background:transparent; color:var(--dim); font-size:11px; line-height:1; cursor:pointer; padding:0 4px; }
+button.mark-chrome:hover { color:var(--text); }
+.findings { padding:6px 8px 8px; display:flex; flex-direction:column; gap:8px; }
+.finding { border-left:2px solid var(--signal); background:var(--bg); border-radius:3px; transition:box-shadow .4s ease, border-color .4s ease; }
+.finding.revealed { border-left-color:var(--reveal); box-shadow:0 0 0 1px var(--reveal), 0 0 8px var(--reveal-wash); }
+.finding .capture-text { max-height:140px; }
+.capture-text { font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:12px; margin:0; padding:8px; max-height:200px; overflow:auto; white-space:pre-wrap; }
+.capture-actions { display:flex; gap:8px; padding:6px 8px; border-top:1px solid var(--hair); }
+.capture-actions .added-note { align-self:center; color:var(--dim); }
 
-#monitor-tabs [role='tab'][aria-selected='true'] {
-  background: #232323;
-  color: #e6e6e6;
-  border-bottom-color: #508cff;
-}
+/* todo tab (reused core) */
+#todo-list { padding:8px 12px; display:flex; flex-direction:column; gap:8px; }
+.swap-blocked { padding:6px 8px; border-radius:4px; background:rgba(242,165,60,.18); color:var(--reveal); font-size:12px; }
+.todo-add { display:flex; gap:6px; }
+.todo-new { flex:1 1 0; resize:vertical; min-height:2.2em; font-family:inherit; background:var(--bg); color:var(--text); border:1px solid var(--hair); border-radius:6px; padding:6px; }
+.todo-item { display:flex; flex-wrap:wrap; align-items:center; gap:6px; padding:6px; border:1px solid var(--hair); border-radius:4px; }
+.todo-item.done { opacity:.6; }
+.todo-item .todo-text { flex:1 1 120px; white-space:pre-wrap; }
+.todo-edit-area { flex:1 1 100%; resize:vertical; font-family:inherit; background:var(--bg); color:var(--text); border:1px solid var(--hair); border-radius:6px; }
+.drag-handle { cursor:grab; color:var(--dim); }
+.todo-done summary { cursor:pointer; color:var(--dim); padding:4px 0; }
 
-.unread-dot {
-  display: inline-block;
-  width: 8px;
-  height: 8px;
-  margin-left: 6px;
-  border-radius: 50%;
-  background: #508cff;
-}
+.dhint { border-top:1px solid var(--hair); padding:9px 16px; font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:10px; color:var(--dim); display:flex; gap:14px; }
+.kbd { font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:9.5px; border:1px solid var(--hair); border-bottom-width:2px; border-radius:4px; padding:1px 5px; }
 
-.todo-count {
-  margin-left: 6px;
-  font-size: 11px;
-  padding: 1px 6px;
-  border-radius: 8px;
-  background: #333;
-}
-
-/* :not([hidden]) so the `hidden` attribute (set by tab switching) still wins —
-   a bare `display: flex` would override the UA `[hidden] { display: none }` (§16.1). */
-#panel-capture:not([hidden]),
-#panel-todo:not([hidden]) {
-  flex: 1 1 0;
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-  overflow-y: auto;
-}
-
-/* Todo tab (§16.4) */
-#todo-list {
-  padding: 8px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.swap-blocked {
-  padding: 6px 8px;
-  border-radius: 4px;
-  background: #4d3a1f;
-  color: #f0d39f;
-  font-size: 12px;
-}
-
-.todo-add {
-  display: flex;
-  gap: 6px;
-}
-
-.todo-new {
-  flex: 1 1 0;
-  resize: vertical;
-  min-height: 2.2em;
-  font-family: inherit;
-}
-
-.todo-item {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
-  padding: 6px;
-  border: 1px solid #333;
-  border-radius: 4px;
-}
-
-.todo-item.done {
-  opacity: 0.6;
-}
-
-.todo-item .todo-text {
-  flex: 1 1 120px;
-  white-space: pre-wrap;
-}
-
-.todo-edit-area {
-  flex: 1 1 100%;
-  resize: vertical;
-  font-family: inherit;
-}
-
-.drag-handle {
-  cursor: grab;
-  color: #777;
-}
-
-.todo-done summary {
-  cursor: pointer;
-  color: #b0b0b0;
-  padding: 4px 0;
-}
-
-#monitor-status {
-  padding: 8px;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  border-bottom: 1px solid #333;
-}
-
-.status-chip {
-  font-size: 11px;
-  padding: 2px 8px;
-  border-radius: 10px;
-  background: #333;
-  color: #b0b0b0; /* >=4.5:1 on #333 (WCAG 1.4.3); #999 measured 4.43:1 */
-}
-
-.status-chip.on {
-  background: #1f4d2e;
-  color: #9fdfb4;
-}
-
-#command-history {
-  max-height: 30%;
-  overflow-y: auto;
-  padding: 4px 8px;
-  border-bottom: 1px solid #333;
-}
-
-#command-history:empty {
-  display: none;
-}
-
-.command-entry {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 3px 0;
-  font-size: 12px;
-}
-
-.command-entry .command-text {
-  font-family: monospace;
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.exit-chip {
-  font-size: 11px;
-  color: #b0b0b0;
-  white-space: nowrap;
-}
-
-#monitor-blocks {
-  flex: 1;
-  overflow-y: auto;
-  padding: 8px;
-}
-
-.capture-badge {
-  display: inline-block;
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  padding: 1px 6px;
-  margin-right: 6px;
-  border-radius: 8px;
-  background: #2d3b52;
-  color: #9db8e0;
-}
-
-.capture-block[data-type='report'] .capture-badge {
-  background: #4d3a1f;
-  color: #dfc49f;
-}
-
-.capture-block[data-type='finding'] .capture-badge {
-  background: #1f3d2f;
-  color: #9fd9b8;
-}
-
-.blocks-toolbar {
-  display: flex;
-  justify-content: flex-end;
-  padding: 6px 8px 0;
-}
-
-.blocks-toolbar:has(+ #monitor-blocks:empty) {
-  display: none;
-}
-
-#dismiss-all {
-  font-size: 11px;
-}
-
-.capture-block {
-  border: 1px solid #3a3a3a;
-  border-radius: 4px;
-  margin-bottom: 10px;
-  background: #1b1b1b;
-  transition: border-color 0.4s ease, box-shadow 0.4s ease;
-}
-
-/* Cross-highlight (§16.8): a block revealed from a terminal double-click gets an amber
-   border + glow (matching the terminal reveal-highlight) for REVEAL_HIGHLIGHT_MS, then
-   the class is removed and it fades back via the transition above. */
-.capture-block.revealed {
-  border-color: #ffc454;
-  box-shadow: 0 0 0 1px #ffc454, 0 0 10px rgba(255, 196, 84, 0.45);
-}
-
-.capture-meta {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 11px;
-  color: #888;
-  padding: 4px 8px;
-  border-bottom: 1px solid #2c2c2c;
-}
-
-.capture-meta .capture-time {
-  flex: 1;
-}
-
-button.dismiss {
-  border: none;
-  background: transparent;
-  color: #888;
-  font-size: 15px;
-  line-height: 1;
-  cursor: pointer;
-  padding: 0 4px;
-}
-
-button.dismiss:hover {
-  color: #e06c6c;
-}
-
-button.mark-chrome {
-  border: none;
-  background: transparent;
-  color: #888;
-  font-size: 11px;
-  line-height: 1;
-  cursor: pointer;
-  padding: 0 4px;
-}
-
-button.mark-chrome:hover {
-  color: #ccc;
-}
-
-/* Findings nest inside a report group, indented from the group edge (§15.6). */
-.findings {
-  padding: 6px 8px 8px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.finding {
-  border-left: 2px solid #2d3b52;
-  background: #181818;
-  border-radius: 3px;
-  transition: box-shadow 0.4s ease, border-color 0.4s ease;
-}
-
-/* Cross-highlight (§16.8): a finding revealed from a terminal double-click gets the same
-   amber cue as a revealed block, scoped to the single chunk. */
-.finding.revealed {
-  border-left-color: #ffc454;
-  box-shadow: 0 0 0 1px #ffc454, 0 0 8px rgba(255, 196, 84, 0.4);
-}
-
-.finding .capture-text {
-  max-height: 140px;
-}
-
-.capture-text {
-  font-family: monospace;
-  font-size: 12px;
-  margin: 0;
-  padding: 8px;
-  max-height: 200px;
-  overflow: auto;
-  white-space: pre-wrap;
-}
-
-.capture-actions {
-  display: flex;
-  gap: 8px;
-  padding: 6px 8px;
-  border-top: 1px solid #2c2c2c;
-}
-
-.capture-actions .added-note {
-  align-self: center;
-  color: #9a9a9a;
-}
+@media (prefers-reduced-motion:reduce){ .flow .stn.active .o{animation:none} }

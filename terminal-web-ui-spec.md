@@ -1,6 +1,6 @@
 # Technical Specification — Agent Terminal: Foundation for a Coding-Agent Management Application
 
-**Document status:** Draft v2.29
+**Document status:** Draft v2.30
 **Scope:** Foundation / "walking skeleton" build (shipped) + semantic/command capture (shipped, §15–§16) + drafted requirements for the **task-flow management** phase (§17–§24)
 **Target platforms:** Linux and macOS (Windows out of scope for this version)
 
@@ -101,6 +101,8 @@
 
 ---
 
+> **Changelog v2.30:** **§24.1C Implement ✅** — the converged shell is the live renderer UI. `src/renderer/index.html` is now the rail · three views · docked drawer frame; the reused cores keep their element-id contracts and were relocated behind the new skin (terminal + selection → view 1; the action window's Capture/Todo tabs + status strip → the docked drawer and rail). New code, all RED-first: `shell.ts` (view switch, ⌘/Ctrl+1-3 and ⌘/Ctrl+K, drawer dock/undock, theme) and `crossHighlight.ts` (§16.8). **Decisions/changes:** (1) the old resizable **splitter (§16.6) was removed** — its module/tests deleted — and replaced by the docked drawer; `splitRatio` stays in `UiSettings` but is unused. (2) **View 3 = Todos + Review gate** (per the approved mockup), and **capture lives only in the drawer**, superseding the earlier §24.1 prose that put a capture widget in view 3. (3) `theme` added to `UiSettings` (§16.6), persisted; applied to `<html data-theme>`. (4) The shell intercepts its chords in the **capture phase** so xterm can't swallow ⌘K/⌘1-3 while the terminal is focused; the drawer broadcasts a `window` resize on dock/undock so the terminal **refits** (§7.1). **Gaps:** the reused capture/todo/status widgets are functional but **not yet reskinned** to Galley · Lit (tokens applied to the frame; widget internals are follow-on); the mocked flow timeline, rail gate/loop lines, and view-3 gate buttons are **static fixtures** (no flow-state object, actions stubbed) — the remainder of §24.1's "mocked" list. Three §15/§16 command-capture e2e are **pre-existing failures in this environment** (verified against the prior commit), not introduced here.
+>
 > **Changelog v2.29:** Marked **§24.1 Phase 1 progress** and recorded the design decisions. **24.1A Mood ✅** — chose **Galley · Lit** of four explored directions (`design/mood/`): a readable margin-proof model lit by a live cyan signal, light + dark, with saturated color spent only on *signal* (cyan = where/provenance, §16.8) and *act* (red = request changes). **24.1B Options ✅** — of three explored shell layouts (`design/shell/`, sharing widgets via `tokens.css` per §22.4) converged on **`design/shell/converged.html`** (slim left chrome + full-bleed main + a **docked, non-blurring** quick-send drawer); Reading-room dropped. The docked drawer **amends §22.2** for the Terminal view: quick-send *docks beside* the terminal rather than popping over it, so terminal↔capture **cross-highlight (§16.8)** works with both visible at once. **24.1C Implement** is next (build `converged.html` as real UI, RED-first). Design log: `design/README.md`.
 >
 > **Changelog v2.28:** Replaced the **§24 phased build plan** — dropped the bottom-up **W1–W19** ordering for a **UI-inwards** plan. **Phase 1 (§24.1)** stands up the complete three-view shell (§22) with every widget present and interactive, in **both light and dark themes**: **terminal, manual capture, todos, and the artifact viewer are reused as-is behind the new skin**; the status strip, gate panel, step timeline, flow runner, artifact discovery, and feedback-compose path are **mocked with fixtures**. Phase 1 runs as three design steps via the **`frontend-design`** skill — **§24.1A Mood** (converge on one look-and-feel direction), **§24.1B Options** (three light+dark mockups → converge to one), **§24.1C Implement** (build the chosen mockup as the live app, widgets kept placement-agnostic per §22.4, RED-first). **§24.2** is the backlog: every real subsystem Phase 1 mocks or omits (flow schema/loader, flow-state store, agent-loop bridge, flow runner, gate driver, step inputs, compose-with-agent, artifact discovery, GitHub bridge, todo templates, layout-config load, worktree launcher, cross-instance guard, flow-author skill), each tagged with its spec section and not yet assigned to a phase.
@@ -1349,13 +1351,13 @@ steps:
 
 ### 24.1 Phase 1 — the three-view UI, mocked
 
-> **Progress:** 24.1A Mood ✅ · 24.1B Options ✅ · 24.1C Implement ⏳ next. Design artifacts live in `design/` (`design/README.md` is the running log); mood studies in `design/mood/`, shell mockups in `design/shell/`.
+> **Progress:** 24.1A Mood ✅ · 24.1B Options ✅ · 24.1C Implement ✅ (shell is the live UI; widget reskin + fixture-driven mocked widgets are the remaining polish — see §24.1C). Design artifacts live in `design/` (`design/README.md` is the running log); mood studies in `design/mood/`, shell mockups in `design/shell/`.
 
 Deliver the full §22 shell: **view 1 Terminal**, **view 2 Artifacts** (file tree + viewer), **view 3 Todos + Status**, the **`Todo | Capture` quick-send overlay** (§22.2), the **status strip** (§22.3), and **Ctrl/Cmd+1/2/3 + Ctrl/Cmd+K** hotkeys (§22.4) — in **both light and dark themes** with a toggle. State is preserved across view switches.
 
 **Real (shipped cores, reused behind the new skin):**
 - **Terminal** — the xterm pane and app-owned selection (§7), the PTY/shadow loop (§5/§8), injection (§9.3).
-- **Capture** — manual single-slot "Capture last report" (`capture:last`, §21.1/§15/§16), finding → `todo:add`. The Capture tab of the overlay and the capture widget in view 3 are the **same widget**.
+- **Capture** — manual single-slot "Capture last report" (`capture:last`, §21.1/§15/§16), finding → `todo:add`. Capture lives in the **docked drawer's Capture tab** (view 3 shows Todos + the gate, not capture — §24.1C).
 - **Todos** — the todo data model, persistence, and interactions (§16.3/§16.4), select-and-send to the terminal. The Todo tab of the overlay and the todos widget in view 3 are the **same widget**.
 - **Artifact viewer** — CodeMirror 6 + markdown-it + mermaid.js rendering, select-to-send / `todo:add` (§20.2), fed in Phase 1 by a **fixture artifact set** (real discovery is mocked — see checklist).
 
@@ -1385,9 +1387,19 @@ From the chosen mood, produce mockups of the full three-view shell + overlay + s
   - **Docked, non-blurring quick-send** — the drawer is a real layout column (no scrim/blur), so the **terminal stays visible beside it**. This is required for **cross-highlight (§16.8)**: hovering a finding lights its source line in the terminal, both on screen at once. This amends the §22.2 "overlay pops over any view" framing for the Terminal view: quick-send **docks** rather than covers, specifically to preserve terminal↔capture cross-highlight.
   - ⌘1/2/3 views, ⌘K toggles the drawer; light + dark (theme applied in `<head>` to avoid FOUC).
 
-#### 24.1C Implement — ⏳ next
+#### 24.1C Implement — ✅ done (frame + cores; widget reskin/fixtures follow-on)
 
-Build **`design/shell/converged.html`** as the live app UI per the §24.1 real/mocked split, **both themes** with a toggle, widgets kept placement-agnostic (§22.4) so later phases can relocate them via config without touching widget code. RED-first throughout (view switching, drawer dock/undock, theme toggle, cross-highlight, and the real terminal/capture/todos/viewer reuse each tested at their observable boundary).
+Built **`design/shell/converged.html`** as the live renderer UI per the §24.1 real/mocked split, **both themes** with a toggle, RED-first throughout.
+
+- [x] **Frame** — `src/renderer/index.html` is the rail · three views · docked drawer; tokens + layout folded into `styles.css`. `shell.ts` owns view switching, ⌘/Ctrl+1-3, ⌘/Ctrl+K, drawer dock/undock, and theme; `crossHighlight.ts` does §16.8. Both are organisms per `UI-STANDARDS.md` (typed factory, host-only DOM, injected theme seam) with DOM-level unit tests; the frame behaviours have e2e (view switch, dock/undock without scrim, ⌘K through a focused terminal, theme persists, terminal refit on dock).
+- [x] **Real cores reused behind the skin** — terminal + selection (view 1); the action window's Capture/Todo tabs + status strip relocated to the docked drawer and rail, element-id contracts unchanged so their shipped behaviour (and e2e) still holds.
+- [x] **`theme` added to `UiSettings`** (§16.6), validated + persisted; `<html data-theme>`.
+- [x] **Splitter removed** (§16.6) — replaced by the docked drawer; module + tests deleted (`splitRatio` left in the contract, unused).
+- [ ] **Widget reskin** — the reused capture/todo/status widget *internals* are functional but still on their old dark styling; reskin to Galley · Lit tokens. (Frame + cross-highlight visuals are done.)
+- [ ] **Fixture-driven mocked widgets** — the flow timeline, rail gate/loop lines, and view-3 gate are **static fixtures**; drive them from one fixture flow-state object and make the gate buttons clickable stubs (§19.2/§19.3). This is the rest of §24.1's "mocked" list.
+- [ ] **Artifact viewer** — view 2 is static fixture markup; wire the real CodeMirror/markdown viewer (§20.2) when it lands.
+
+> **Known limitation:** ⌘K is intercepted in the capture phase so a focused xterm can't swallow it; the chord still cannot be globally rebound per-OS yet. Three §15/§16 command-capture e2e fail in some environments (shell-integration dependent) — pre-existing, verified against the prior commit.
 
 ### 24.2 Backlog — functionality not yet assigned to a phase
 

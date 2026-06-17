@@ -25,7 +25,6 @@
     "src/renderer/src/todoTab.ts",
     "src/renderer/src/captureTab.ts",
     "src/renderer/src/monitor.ts",
-    "src/renderer/src/layout.ts",
     "src/renderer/src/shell.ts",
     "src/renderer/src/crossHighlight.ts",
     "electron.vite.config.ts",

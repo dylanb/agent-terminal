@@ -116,8 +116,8 @@ test('selection survives focus changes and draws the app-owned highlight', async
     rowBox.height,
   );
 
-  // Focus independence (§7.0): clicking into the monitor pane must not clear it.
-  await page.locator('#monitor').click();
+  // Focus independence (§7.0): clicking into the docked action window must not clear it.
+  await page.locator('#drawer').click();
   await expect(deco).toBeVisible();
 
   // Explicit clear is the only way it goes away (§7.5.1).
@@ -138,7 +138,7 @@ test('manual selection capture routes to the Todo tab; Insert & submit drives th
   await expect(item).toHaveCount(1);
 
   // Insert & submit from the todo drives the shell (focus stays in the action window).
-  await page.locator('#monitor').click();
+  await page.locator('#drawer').click();
   await item.getByRole('button', { name: 'Insert & submit' }).click();
   await expect(
     page.locator('.xterm-rows > div').filter({ hasText: /^\s*injected-ok-123\s*$/ }),
@@ -288,7 +288,7 @@ test('a finished command appears in history; Capture → command block → Inser
   await expect(block).toContainText('echo cmd-ok-456');
 
   // Insert & submit the captured output → bash runs `echo cmd-ok-456`.
-  await page.locator('#monitor').click();
+  await page.locator('#drawer').click();
   await block.getByRole('button', { name: 'Insert & submit' }).click();
   await expect(
     page.locator('.xterm-rows > div').filter({ hasText: /^\s*cmd-ok-456\s*$/ }),
@@ -457,16 +457,83 @@ test('Insert (no submit) on a todo moves focus to the terminal (§16.2 focus rul
   await expect(page.locator('.xterm-helper-textarea')).toBeFocused();
 });
 
-test('the split ratio persists across a reload (§16.6)', async () => {
-  const splitter = page.locator('#splitter');
-  const before = await splitter.getAttribute('aria-valuenow');
-  // Nudge the divider with the keyboard separator; the new ratio persists globally.
-  await splitter.focus();
-  await page.keyboard.press('ArrowLeft');
-  await page.keyboard.press('ArrowLeft');
-  await expect.poll(() => splitter.getAttribute('aria-valuenow')).not.toBe(before);
-  const after = await splitter.getAttribute('aria-valuenow');
+// ---- §24.1C: the converged three-view shell (views, docked drawer, theme) ----
+
+test('switches views via hotkey and nav button, showing one pane at a time (§22.4)', async () => {
+  const v1 = page.locator('[data-viewpane="1"]');
+  const v3 = page.locator('[data-viewpane="3"]');
+  await expect(v1).toBeVisible();
+  await expect(v3).toBeHidden();
+
+  // ⌘/Ctrl+3 → Todos view.
+  await page.keyboard.press('Control+3');
+  await expect(v3).toBeVisible();
+  await expect(v1).toBeHidden();
+  await expect(page.locator('[data-viewbtn="3"]')).toHaveClass(/on/);
+
+  // The nav button switches back to the terminal.
+  await page.locator('[data-viewbtn="1"]').click();
+  await expect(v1).toBeVisible();
+  await expect(v3).toBeHidden();
+});
+
+test('the quick-send drawer docks and undocks without a scrim, keeping the terminal visible (§16.8/§22.2)', async () => {
+  const appEl = page.locator('#app');
+  await expect(appEl).toHaveClass(/drawer-open/); // docked by default
+
+  // ⌘/Ctrl+K undocks it; the terminal pane stays on screen (no overlay/scrim).
+  await page.keyboard.press('Control+k');
+  await expect(appEl).not.toHaveClass(/drawer-open/);
+  await expect(page.locator('.scrim, .backdrop')).toHaveCount(0);
+  await expect(page.locator('#terminal')).toBeVisible();
+
+  // The quick-send button re-docks; the close button undocks again.
+  await page.locator('#qs').click();
+  await expect(appEl).toHaveClass(/drawer-open/);
+  await expect(page.locator('#panel-capture')).toBeVisible();
+  await page.locator('#dclose').click();
+  await expect(appEl).not.toHaveClass(/drawer-open/);
+});
+
+test('⌘/Ctrl+K toggles the drawer even while the terminal is focused (§22.4)', async () => {
+  const appEl = page.locator('#app');
+  await page.locator('.xterm-screen').click(); // focus the terminal
+  await expect(appEl).toHaveClass(/drawer-open/);
+
+  // The shell intercepts the chord ahead of xterm, so the hotkey still reaches it.
+  await page.keyboard.press('Control+k');
+  await expect(appEl).not.toHaveClass(/drawer-open/);
+  await page.keyboard.press('Control+k');
+  await expect(appEl).toHaveClass(/drawer-open/);
+});
+
+test('the terminal refits its PTY when the drawer docks/undocks (§7.1)', async () => {
+  await typeCommand('echo cols-docked=$(tput cols)');
+  await expect(termRows()).toContainText(/cols-docked=\d+/);
+  const docked = Number((await termRows().innerText()).match(/cols-docked=(\d+)/)![1]);
+
+  // Undocking the drawer (close button — the terminal has focus, so ⌘K would be
+  // consumed by xterm) widens the terminal column; the PTY must follow (more cols).
+  await page.locator('#dclose').click();
+  await expect
+    .poll(async () => {
+      await typeCommand('echo cols-wide=$(tput cols)');
+      const m = (await termRows().innerText()).match(/cols-wide=(\d+)/g)?.at(-1);
+      return m ? Number(m.match(/\d+/)![0]) : docked;
+    })
+    .toBeGreaterThan(docked);
+});
+
+test('the theme toggle flips light/dark and persists across a reload (§16.6)', async () => {
+  const html = page.locator('html');
+  await page.locator('#tg').click();
+  const toggled = await html.getAttribute('data-theme');
+  expect(toggled).toBe('dark');
 
   await page.reload();
-  await expect.poll(() => page.locator('#splitter').getAttribute('aria-valuenow')).toBe(after);
+  await expect.poll(() => page.locator('html').getAttribute('data-theme')).toBe('dark');
+
+  // flip back so the persisted pref doesn't leak into later runs
+  await page.locator('#tg').click();
+  await expect(html).toHaveAttribute('data-theme', 'light');
 });
