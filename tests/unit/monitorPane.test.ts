@@ -2,6 +2,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   wireMonitorPane,
+  CAPTURE_RANGE_ADD_EVENT,
+  CAPTURE_RANGE_REMOVE_EVENT,
   FOCUS_TERMINAL_EVENT,
   REVEAL_CAPTURE_EVENT,
   REVEAL_HIGHLIGHT_MS,
@@ -323,17 +325,20 @@ describe('action window DOM (§16 / §24.1 — tabs, capture cards, focus)', () 
 
   // ---- cross-highlight between the terminal and the capture pane (§16.8) ----
 
+  // Resize-safe (§16.8, merged from origin/main): this pane deals only in capture ids. The
+  // terminal owns the coordinates — it marker-anchors each published span and resolves a
+  // double-clicked row to an id (row→id matching is unit-tested in reveal.test.ts).
   describe('capture ↔ terminal cross-highlight (§16.8)', () => {
     const blockById = (id: string) => blocks().querySelector(`[data-event-id="${id}"]`) as HTMLElement;
 
-    it('a terminal double-click on a captured row scrolls to and highlights the covering card', async () => {
+    it('reveals the card named by app:reveal-capture {id}: scrolls to + highlights it', async () => {
       wireMonitorPane();
       await flush();
       handlers.event!(makeEvent({ id: 'c', type: 'capture', text: 'a capture', range: rangeRows(10, 14) }));
       const card = blockById('c');
       const scrollSpy = vi.spyOn(card, 'scrollIntoView');
 
-      window.dispatchEvent(new CustomEvent(REVEAL_CAPTURE_EVENT, { detail: { row: 12 } }));
+      window.dispatchEvent(new CustomEvent(REVEAL_CAPTURE_EVENT, { detail: { id: 'c' } }));
 
       expect(card.classList.contains('revealed')).toBe(true);
       expect(scrollSpy).toHaveBeenCalled();
@@ -346,7 +351,7 @@ describe('action window DOM (§16 / §24.1 — tabs, capture cards, focus)', () 
         await vi.advanceTimersByTimeAsync(0);
         handlers.event!(makeEvent({ id: 'c', type: 'capture', text: 'cap', range: rangeRows(0, 4) }));
         const card = blockById('c');
-        window.dispatchEvent(new CustomEvent(REVEAL_CAPTURE_EVENT, { detail: { row: 2 } }));
+        window.dispatchEvent(new CustomEvent(REVEAL_CAPTURE_EVENT, { detail: { id: 'c' } }));
         expect(card.classList.contains('revealed')).toBe(true);
         await vi.advanceTimersByTimeAsync(REVEAL_HIGHLIGHT_MS);
         expect(card.classList.contains('revealed')).toBe(false);
@@ -355,36 +360,56 @@ describe('action window DOM (§16 / §24.1 — tabs, capture cards, focus)', () 
       }
     });
 
-    it('a terminal double-click on a row no capture covers highlights nothing', async () => {
+    it('an app:reveal-capture for an id with no rendered card highlights nothing', async () => {
       wireMonitorPane();
       await flush();
       handlers.event!(makeEvent({ id: 'c', type: 'capture', text: 'cap', range: rangeRows(10, 14) }));
-      window.dispatchEvent(new CustomEvent(REVEAL_CAPTURE_EVENT, { detail: { row: 99 } }));
+      window.dispatchEvent(new CustomEvent(REVEAL_CAPTURE_EVENT, { detail: { id: 'gone' } }));
       expect(blocks().querySelector('.revealed')).toBeNull();
     });
 
-    it('double-clicking a capture card asks the terminal to reveal its rows', async () => {
+    it('publishes a ranged card as app:capture-range-add {id, range} so the terminal can anchor it', async () => {
+      wireMonitorPane();
+      await flush();
+      let detail: { id: string; range: SelectionRange } | null = null;
+      window.addEventListener(CAPTURE_RANGE_ADD_EVENT, (e) => (detail = (e as CustomEvent).detail), { once: true });
+
+      handlers.event!(makeEvent({ id: 'f1', type: 'finding', parentId: null, text: 'one', range: rangeRows(3, 7) }));
+
+      expect(detail).toMatchObject({ id: 'f1', range: { start: { y: 3 }, end: { y: 7 } } });
+    });
+
+    it('a manual capture with no range publishes no span', async () => {
+      wireMonitorPane();
+      await flush();
+      let fired = false;
+      window.addEventListener(CAPTURE_RANGE_ADD_EVENT, () => (fired = true), { once: true });
+      handlers.event!(makeEvent({ id: 'c', type: 'capture', text: 'manual', range: null }));
+      expect(fired).toBe(false);
+    });
+
+    it('retracting a card publishes app:capture-range-remove {id} (§15.3 marker cleanup)', async () => {
+      wireMonitorPane();
+      await flush();
+      handlers.event!(makeEvent({ id: 'f1', type: 'finding', parentId: null, text: 'one', range: rangeRows(3, 7) }));
+      let detail: { id: string } | null = null;
+      window.addEventListener(CAPTURE_RANGE_REMOVE_EVENT, (e) => (detail = (e as CustomEvent).detail), { once: true });
+
+      handlers.eventRemoved!('f1');
+
+      expect(detail).toEqual({ id: 'f1' });
+    });
+
+    it('double-clicking a ranged card asks the terminal to reveal it by id', async () => {
       wireMonitorPane();
       await flush();
       handlers.event!(makeEvent({ id: 'c', type: 'capture', text: 'cap', range: rangeRows(3, 7) }));
-      let detail: { range: SelectionRange } | null = null;
+      let detail: { id: string } | null = null;
       window.addEventListener(REVEAL_TERMINAL_EVENT, (e) => (detail = (e as CustomEvent).detail), { once: true });
 
       blockById('c').dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
 
-      expect(detail).toMatchObject({ range: { start: { y: 3 }, end: { y: 7 } } });
-    });
-
-    it('when two captures cover the same row, the most specific (smallest span) wins', async () => {
-      wireMonitorPane();
-      await flush();
-      handlers.event!(makeEvent({ id: 'wide', type: 'capture', text: 'wide', range: rangeRows(3, 7) }));
-      handlers.event!(makeEvent({ id: 'narrow', type: 'capture', text: 'narrow', range: rangeRows(5, 5) }));
-
-      window.dispatchEvent(new CustomEvent(REVEAL_CAPTURE_EVENT, { detail: { row: 5 } }));
-
-      expect(blockById('narrow').classList.contains('revealed')).toBe(true);
-      expect(blockById('wide').classList.contains('revealed')).toBe(false);
+      expect(detail).toEqual({ id: 'c' });
     });
 
     it('double-clicking a card with no range (manual capture) asks for nothing', async () => {

@@ -13,6 +13,8 @@ import { REVEAL_CAPTURE_EVENT, TODOS_CHANGED_EVENT } from './paneActions';
 
 // Re-exported for callers that import these from the pane module (selection.ts, tests).
 export {
+  CAPTURE_RANGE_ADD_EVENT,
+  CAPTURE_RANGE_REMOVE_EVENT,
   FOCUS_TERMINAL_EVENT,
   REVEAL_CAPTURE_EVENT,
   REVEAL_HIGHLIGHT_MS,
@@ -71,12 +73,12 @@ export function wireMonitorPane(): void {
   // A todo added from the terminal pane (Capture selection, §16.2) refreshes the count/list.
   window.addEventListener(TODOS_CHANGED_EVENT, () => todoTab.refresh());
 
-  // Cross-highlight (§16.8): the terminal pane reports a double-clicked row; reveal the
-  // capture block whose on-screen span covers it. Decoupled via the window-event bus so
-  // the panes never import each other (§9.1).
+  // Cross-highlight (§16.8): the terminal pane resolved a double-clicked row to the capture
+  // that owns it (marker-anchored, so resize-safe) and names it by id; reveal that block.
+  // Decoupled via the window-event bus so the panes never import each other (§9.1).
   window.addEventListener(REVEAL_CAPTURE_EVENT, (e) => {
-    const detail = (e as CustomEvent<{ row: number }>).detail;
-    if (detail) captureTab.revealByRow(detail.row);
+    const detail = (e as CustomEvent<{ id: string }>).detail;
+    if (detail) captureTab.revealById(detail.id);
   });
 
   window.monitor.onExit(() => status.setExited());

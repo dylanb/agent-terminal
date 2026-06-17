@@ -1,16 +1,26 @@
-// Capture tab (§24.1 mockup-exact / §15 / §16.2): captured reports/findings/command
-// output rendered in the converged mockup's language — `.finding` cards with a title
-// (.t), a muted meta line (.m), and subtle linkbtn actions (.a). All user text is set
-// via textContent, never innerHTML, so captured bytes cannot inject markup. Reaches the
+// Capture tab (§24.1 mockup-exact / §15 / §16.2): captured findings/command output
+// rendered in the converged mockup's language — `.finding` cards with a title (.t), a
+// muted meta line (.m), and subtle linkbtn actions (.a). All user text is set via
+// textContent, never innerHTML, so captured bytes cannot inject markup. Reaches the
 // Todo tab only through the narrow TodoSink (§16.2 Add to todo).
 //
-// Kept from the prior panel: the double-click → terminal row-range reveal (§16.8) and
-// the retraction path (§15.3). Deferred to §24.2.1: Dismiss / Dismiss-all (§15.6) and
-// the Add-to-todo Undo window (§16.2). Dropped: type badges, timestamps, command
-// history, Mark-as-chrome.
+// Cross-highlight (§16.8, resize-safe): this pane deals only in capture **ids** — it
+// publishes each ranged card's span (CAPTURE_RANGE_ADD/REMOVE) so the terminal can
+// marker-anchor it (markers track reflow, so a resize can't stale the link), and reveals
+// by id. The terminal owns the coordinates and resolves a double-clicked row to an id.
+//
+// Deferred to §24.2.1: Dismiss / Dismiss-all (§15.6) and the Add-to-todo Undo (§16.2).
+// Dropped: type badges, timestamps, command history, Mark-as-chrome. Report blobs are
+// carved into findings (we render those, not the blob).
 
-import type { MonitorEvent, MonitorEventType, SelectionRange, TodoSourceType } from '../../shared/ipc';
-import { doInject, REVEAL_HIGHLIGHT_MS, REVEAL_TERMINAL_EVENT } from './paneActions';
+import type { MonitorEvent, MonitorEventType, TodoSourceType } from '../../shared/ipc';
+import {
+  CAPTURE_RANGE_ADD_EVENT,
+  CAPTURE_RANGE_REMOVE_EVENT,
+  doInject,
+  REVEAL_HIGHLIGHT_MS,
+  REVEAL_TERMINAL_EVENT,
+} from './paneActions';
 import type { TodoSink } from './todoTab';
 
 /** Muted meta-line label per type; unknown future types fall back to the raw type (§15.6). */
@@ -40,9 +50,9 @@ export interface CaptureTab {
   appendBlock(event: MonitorEvent): void;
   /** Drop a rendered card by id when main retracts it (superseded, §15.3). */
   removeBlock(eventId: string): void;
-  /** Cross-highlight (§16.8): scroll to and highlight the card whose on-screen span
-   *  covers `absRow` (the terminal row the user double-clicked); a no-op if none. */
-  revealByRow(absRow: number): void;
+  /** Cross-highlight (§16.8): scroll to and border-highlight the capture with this id (the
+   *  terminal pane resolved the double-clicked row to it); a no-op if it is no longer shown. */
+  revealById(id: string): void;
 }
 
 export interface CaptureTabDeps {
@@ -53,10 +63,22 @@ export interface CaptureTabDeps {
 export function createCaptureTab(deps: CaptureTabDeps): CaptureTab {
   const { blocksEl, todoSink } = deps;
   const rendered = new Set<string>();
-  // Cross-highlight (§16.8): each card's on-screen span, and the live self-clearing
-  // highlight timer per card (re-reveal resets it).
-  const ranges = new Map<string, SelectionRange>();
+  // Cross-highlight (§16.8): the live self-clearing reveal-highlight timer per element
+  // (re-reveal resets it). The coordinates live on the terminal side, which marker-anchors
+  // each span (so reflow can't stale it); this pane deals only in ids.
   const revealTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+  /** Publish a capture's span so the terminal can marker-anchor it for cross-highlight (§16.8). */
+  function publishRange(event: MonitorEvent): void {
+    if (!event.range) return;
+    window.dispatchEvent(new CustomEvent(CAPTURE_RANGE_ADD_EVENT, { detail: { id: event.id, range: event.range } }));
+  }
+
+  /** Ask the terminal to drop the marker for a removed card (§16.8). */
+  function unpublishRange(el: HTMLElement): void {
+    const id = el.dataset.eventId;
+    if (id) window.dispatchEvent(new CustomEvent(CAPTURE_RANGE_REMOVE_EVENT, { detail: { id } }));
+  }
 
   function badgeLabel(type: MonitorEventType): string {
     return TYPE_LABELS[type] ?? type;
@@ -96,14 +118,12 @@ export function createCaptureTab(deps: CaptureTabDeps): CaptureTab {
     if (event.parentId) el.dataset.parentId = event.parentId;
     el.setAttribute('role', 'group');
 
-    // Cross-highlight (§16.8): a card carries its on-screen span; double-clicking it
-    // reveals exactly those terminal rows. Manual captures carry no range — they simply
-    // don't participate. stopPropagation is unnecessary now that cards are flat (no nesting).
+    // Cross-highlight (§16.8): double-clicking a ranged card asks the terminal to reveal
+    // its rows; the terminal reads the card's live marker rows. Manual captures (no range)
+    // don't participate.
     if (event.range) {
-      ranges.set(event.id, event.range);
       el.addEventListener('dblclick', () => {
-        const range = ranges.get(event.id);
-        if (range) window.dispatchEvent(new CustomEvent(REVEAL_TERMINAL_EVENT, { detail: { range } }));
+        window.dispatchEvent(new CustomEvent(REVEAL_TERMINAL_EVENT, { detail: { id: event.id } }));
       });
     }
 
@@ -144,18 +164,21 @@ export function createCaptureTab(deps: CaptureTabDeps): CaptureTab {
 
     // Newest-first: prepend cards (§15.6 / v2.6).
     blocksEl.insertBefore(renderCard(event), blocksEl.firstChild);
+    publishRange(event); // anchor the terminal's marker for this span (§16.8)
   }
 
-  /** Drop a card by id, clearing its dedup/range/timer bookkeeping. */
+  /** Drop a card by id, clearing dedup/timer bookkeeping and the terminal's marker. */
   function forget(id: string, el: HTMLElement | null): void {
     rendered.delete(id);
-    ranges.delete(id);
     const timer = revealTimers.get(id);
     if (timer) {
       clearTimeout(timer);
       revealTimers.delete(id);
     }
-    el?.remove();
+    if (el) {
+      unpublishRange(el);
+      el.remove();
+    }
   }
 
   /**
@@ -171,27 +194,13 @@ export function createCaptureTab(deps: CaptureTabDeps): CaptureTab {
     }
   }
 
-  /** Scroll to + highlight the card whose span covers `absRow` for REVEAL_HIGHLIGHT_MS;
-   *  re-revealing restarts its timer (§16.8). When several cards cover the row, the
-   *  **most specific** (smallest span) wins, so a finding highlights on its own. */
-  function revealByRow(absRow: number): void {
-    let bestId: string | null = null;
-    let bestSpan = Infinity;
-    for (const [id, range] of ranges) {
-      if (absRow < range.start.y || absRow > range.end.y) continue;
-      if (!elById(id)) {
-        ranges.delete(id); // element gone but range lingered; self-heal
-        continue;
-      }
-      const span = range.end.y - range.start.y;
-      if (span < bestSpan) {
-        bestSpan = span;
-        bestId = id;
-      }
-    }
-    if (bestId === null) return;
-    const id = bestId;
-    const el = elById(id)!;
+  /** Scroll to + highlight the element with this id for REVEAL_HIGHLIGHT_MS; re-revealing
+   *  restarts its timer (§16.8). The terminal pane already resolved the double-clicked row to
+   *  the most-specific covering capture (pickRevealTarget), so here we just reveal that id; an
+   *  id with no rendered element (already dropped) is a no-op — best-effort provenance. */
+  function revealById(id: string): void {
+    const el = elById(id);
+    if (!el) return;
     el.scrollIntoView({ block: 'nearest' });
     el.classList.add('revealed');
     const prev = revealTimers.get(id);
@@ -205,5 +214,5 @@ export function createCaptureTab(deps: CaptureTabDeps): CaptureTab {
     );
   }
 
-  return { appendBlock, removeBlock, revealByRow };
+  return { appendBlock, removeBlock, revealById };
 }
