@@ -48,6 +48,10 @@ function sourceTypeFor(type: MonitorEventType): TodoSourceType {
 export interface CaptureTab {
   /** Render a stored event (replay or live); deduped by id so each renders once. */
   appendBlock(event: MonitorEvent): void;
+  /** Show the latest manually-captured report single-slot (§21.1): clear the prior report's
+   *  cards and render this one's findings (or the report itself if it has none), preserving
+   *  manual captures and command-output. `events` is [report, ...findings] from capture:last. */
+  showReport(events: MonitorEvent[]): void;
   /** Drop a rendered card by id when main retracts it (superseded, §15.3). */
   removeBlock(eventId: string): void;
   /** Cross-highlight (§16.8): scroll to and border-highlight the capture with this id (the
@@ -113,6 +117,9 @@ export function createCaptureTab(deps: CaptureTabDeps): CaptureTab {
     const el = document.createElement('div');
     el.className = 'finding';
     el.dataset.eventId = event.id;
+    // Tag the source type so single-slot replace (showReport) clears only report/finding
+    // cards, leaving manual captures and command-output in place (§21.1).
+    el.dataset.type = event.type;
     // Parent report id (§15.3): a report retraction must cascade to its findings, which
     // are flat top-level cards here (not DOM-nested), so removal is by this tag.
     if (event.parentId) el.dataset.parentId = event.parentId;
@@ -167,6 +174,24 @@ export function createCaptureTab(deps: CaptureTabDeps): CaptureTab {
     publishRange(event); // anchor the terminal's marker for this span (§16.8)
   }
 
+  /** Manual single-slot capture (§21.1): replace the shown report. Clears prior report/finding
+   *  cards (manual captures and command-output stay), then renders this report's findings in
+   *  document order — or the report itself when it produced none. */
+  function showReport(events: MonitorEvent[]): void {
+    for (const el of [...blocksEl.querySelectorAll<HTMLElement>('.finding')]) {
+      const t = el.dataset.type;
+      if (t === 'report' || t === 'finding') forget(el.dataset.eventId ?? '', el);
+    }
+    const findings = events.filter((e) => e.type === 'finding');
+    const toShow = findings.length > 0 ? findings : events.filter((e) => e.type === 'report');
+    for (const event of toShow) {
+      if (rendered.has(event.id)) continue;
+      rendered.add(event.id);
+      blocksEl.appendChild(renderCard(event)); // top-down order, not the newest-first append path
+      publishRange(event);
+    }
+  }
+
   /** Drop a card by id, clearing dedup/timer bookkeeping and the terminal's marker. */
   function forget(id: string, el: HTMLElement | null): void {
     rendered.delete(id);
@@ -214,5 +239,5 @@ export function createCaptureTab(deps: CaptureTabDeps): CaptureTab {
     );
   }
 
-  return { appendBlock, removeBlock, revealById };
+  return { appendBlock, showReport, removeBlock, revealById };
 }

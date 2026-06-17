@@ -48,6 +48,7 @@ const monitorApi: MonitorApi = {
       sessionId: SESSION_ID,
       commandId,
     }) as Promise<CommandCaptureResult | null>,
+  captureLast: () => ipcRenderer.invoke(CH.captureLast, { sessionId: SESSION_ID }) as Promise<MonitorEvent[]>,
   dismiss: (eventId) => ipcRenderer.send(CH.monitorDismiss, { sessionId: SESSION_ID, eventId }),
   dismissAll: () => ipcRenderer.send(CH.monitorDismissAll, { sessionId: SESSION_ID }),
   learnChrome: (eventId, sample) =>

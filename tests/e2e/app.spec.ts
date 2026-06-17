@@ -16,23 +16,17 @@ async function typeCommand(cmd: string): Promise<void> {
   await page.keyboard.press('Enter');
 }
 
+// Snapshot all row texts in ONE call: a resize reflow changes the row count, so a
+// count()-then-nth(i) loop can target a row that detached mid-iteration (a 30s nth timeout).
 async function findRowIndex(needle: string): Promise<number> {
-  const rows = page.locator('.xterm-rows > div');
-  const count = await rows.count();
-  for (let i = 0; i < count; i++) {
-    if ((await rows.nth(i).textContent())?.trim() === needle) return i;
-  }
-  return -1;
+  const texts = await page.locator('.xterm-rows > div').allTextContents();
+  return texts.findIndex((t) => t.trim() === needle);
 }
 
 /** First visible row whose text contains `needle` (survives reflow wrapping a logical line). */
 async function findRowIndexContaining(needle: string): Promise<number> {
-  const rows = page.locator('.xterm-rows > div');
-  const count = await rows.count();
-  for (let i = 0; i < count; i++) {
-    if ((await rows.nth(i).textContent())?.includes(needle)) return i;
-  }
-  return -1;
+  const texts = await page.locator('.xterm-rows > div').allTextContents();
+  return texts.findIndex((t) => t.includes(needle));
 }
 
 /** Drag-select the whole visible row whose exact text is `needle`; returns its bounding box. */
@@ -48,6 +42,12 @@ async function selectRowContaining(needle: string): Promise<{ x: number; y: numb
   await page.mouse.move(box.x + box.width - 2, cy, { steps: 10 });
   await page.mouse.up();
   return box;
+}
+
+/** Capture is manual + single-slot (§21.1): run report-detection on demand against the current
+ *  buffer. Nothing auto-emits, so every findings assertion is preceded by this click. */
+async function clickCaptureLast(): Promise<void> {
+  await page.locator('#capture-last').click();
 }
 
 function inject(text: string, submit: boolean): Promise<void> {
@@ -292,9 +292,9 @@ test('a printed Claude-style permission box produces no semantic capture card (v
     "printf '%s\\n' '╭──────────────────────────────╮' '│ Do you want to proceed?      │' '│ ❯ 1. Yes                     │' '│   2. No                      │' '╰──────────────────────────────╯'",
   );
   await expect(termRows()).toContainText('Do you want to proceed?');
-  // Permission/question detection was removed; a box is chrome and (with shell
-  // integration on) its output is a gated command span — no capture card appears.
-  await page.waitForTimeout(2_000);
+  // Permission/question detection was removed; a box is chrome and (with shell integration
+  // on) its output is a gated command span — capturing on demand surfaces no finding.
+  await clickCaptureLast();
   await expect(page.locator('#monitor-blocks .finding')).toHaveCount(0);
 });
 
@@ -302,13 +302,13 @@ test('boring commands produce zero agent-semantic captures (§15.8 budget)', asy
   await typeCommand('ls /');
   await typeCommand('echo boring-done');
   await expect(termRows()).toContainText('boring-done');
-  await page.waitForTimeout(2_000);
+  await clickCaptureLast();
   await expect(page.locator('#monitor-blocks .finding')).toHaveCount(0);
 });
 
-test('a scanner-detected report (with findings) survives a monitor reload (scanner→store→replay)', async () => {
+test('a captured report (with findings) survives a monitor reload (capture:last→store→replay)', async () => {
   // Integration off: no command spans, so the generic heuristic surfaces the printed
-  // report deterministically (no span-gating race) and the scanner→store→replay path
+  // report deterministically (no span-gating race) and the capture:last→store→replay path
   // is exercised end-to-end.
   await app.close();
   app = await electron.launch({
@@ -321,10 +321,13 @@ test('a scanner-detected report (with findings) survives a monitor reload (scann
   await typeCommand(
     "printf '%s\\n' 'Here is the summary of findings from this code review:' '- one important finding worth acting on' '- another finding to address before merge'",
   );
+  await expect(termRows()).toContainText('another finding to address before merge');
+  await clickCaptureLast(); // capture is manual now (§21.1)
   const findings = page.locator('#monitor-blocks .finding');
   await expect(findings.first()).toBeVisible({ timeout: 10_000 });
   expect(await findings.count()).toBeGreaterThan(0);
 
+  // The single captured report is stored, so a reloaded pane replays it (no re-click).
   await page.reload();
   await expect(page.locator('#monitor-blocks .finding').first()).toBeVisible();
 });
@@ -346,6 +349,8 @@ test('capture ↔ terminal cross-highlight: double-click reveals each side (§16
   const reportB64 =
     'SGVyZSBpcyB0aGUgY3Jvc3MtaGlnaGxpZ2h0IHN1bW1hcnkgb2YgZmluZGluZ3MgYmVsb3c6Ci0gY3Jvc3MtaGlnaGxpZ2h0IGZpbmRpbmcgb25lIHdvcnRoIGFjdGluZyBvbiBub3cKLSBjcm9zcy1oaWdobGlnaHQgZmluZGluZyB0d28gdG8gYWRkcmVzcyBiZWZvcmUgbWVyZ2UK';
   await typeCommand(`echo '${reportB64}' | base64 -d`);
+  await expect(termRows()).toContainText('finding two to address before merge');
+  await clickCaptureLast(); // capture is manual now (§21.1)
 
   // Each list item splits into an individually-actionable finding, rendered as a flat
   // .finding card (the report blob itself is never a card, §24.1). The phrase is unique to

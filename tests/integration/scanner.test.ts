@@ -651,3 +651,99 @@ describe('self-injection suppression end-to-end (§16.5 — real shadow + inject
     expect(emitted.map((e) => e.text)).toContain('Should I refactor this?');
   });
 });
+
+// Manual single-slot capture (§21.1 / v2.27): the auto-emit-on-quiet path is retired in the
+// app — the scanner only subscribes to onQuiet when one is supplied (tests still do, above).
+// A "Capture last report" button runs detection on demand via captureLast(), which reads the
+// current buffer fresh (no watermark/dedup) and returns the latest report with its findings.
+describe('manual capture on demand (§21.1 — captureLast, dormant auto-scan)', () => {
+  let shadow: ReturnType<typeof createShadowModel>;
+  let emitted: Parameters<ScannerEmit>[0][];
+
+  const collectingEmit: ScannerEmit = (e) => {
+    emitted.push(e);
+    return String(emitted.length);
+  };
+
+  afterEach(() => shadow?.dispose());
+
+  /** A scanner with NO onQuiet (dormant) — the app's wiring; captureLast is the only path. */
+  function dormant(adapters: Adapter[], baseline?: Adapter, reportMinChars = 40) {
+    emitted = [];
+    shadow = createShadowModel({ cols: 80, rows: 24, settleMs: SETTLE, quietMs: QUIET, onStatus: () => {} });
+    return createScanner({
+      reader: shadow.reader,
+      addMarker: (r) => shadow.addMarker(r),
+      adapters,
+      baseline,
+      dedupRetention: 200,
+      reportMinChars,
+      emit: collectingEmit,
+    });
+  }
+
+  it('returns the LATEST report (bottom-most region) on demand, with its on-screen range', async () => {
+    const scanner = dormant([lineAdapter]);
+    shadow.write('Is the first question ok?\r\nShould the second one win?\r\n');
+    await sleep(50); // let the parser flush; no quiet trigger drives capture
+    const result = scanner.captureLast();
+    expect(result).not.toBeNull();
+    expect(result!.report.type).toBe('report');
+    expect(result!.report.text).toBe('Should the second one win?');
+    expect(result!.report.range).toMatchObject({ start: { y: 1 }, end: { y: 1 }, baseY: 0 });
+  });
+
+  it('splits the captured report into findings, each with its own range (§15.7/§16.8)', async () => {
+    const scanner = dormant([], createGenericAdapter());
+    shadow.write(
+      '- alpha finding worth acting on that is long enough to count\r\n' +
+        '- beta finding to address before merge that is also long enough\r\n',
+    );
+    await sleep(50);
+    const result = scanner.captureLast()!;
+    expect(result.report.range).toMatchObject({ start: { y: 0 }, end: { y: 1 } });
+    expect(result.findings.map((f) => f.text)).toEqual([
+      expect.stringContaining('alpha'),
+      expect.stringContaining('beta'),
+    ]);
+    expect(result.findings[0].range).toMatchObject({ start: { y: 0 }, end: { y: 0 } });
+    expect(result.findings[1].range).toMatchObject({ start: { y: 1 }, end: { y: 1 } });
+  });
+
+  it('returns null when there is no report to capture', async () => {
+    const scanner = dormant([], createGenericAdapter(), 500);
+    shadow.write('ok done\r\n');
+    await sleep(50);
+    expect(scanner.captureLast()).toBeNull();
+  });
+
+  it('never auto-emits on a quiet transition (dormant — no onQuiet wired)', async () => {
+    const scanner = dormant([lineAdapter]);
+    shadow.write('Do you want to continue?\r\n');
+    await goQuiet();
+    expect(emitted.length).toBe(0); // nothing auto-emitted
+    expect(scanner.captureLast()).not.toBeNull(); // but on-demand still works
+  });
+
+  it('skips a candidate report that is just the echoed command line (§21.1)', async () => {
+    // With the command OUTPUT gated (a closed span), the only remaining report candidate is
+    // the long echoed command-input line — the user's own input, not a report. A capture
+    // against a tracked command must surface nothing.
+    emitted = [];
+    const cmd = "printf '%s' " + 'X'.repeat(140); // >reportMinChars so the baseline would capture it
+    shadow = createShadowModel({ cols: 200, rows: 24, settleMs: SETTLE, quietMs: QUIET, onStatus: () => {} });
+    const scanner = createScanner({
+      reader: shadow.reader,
+      addMarker: (r) => shadow.addMarker(r),
+      adapters: [],
+      baseline: createGenericAdapter(),
+      dedupRetention: 200,
+      reportMinChars: 120,
+      emit: collectingEmit,
+      commandTexts: () => [cmd],
+    });
+    shadow.write('user@host:~$ ' + cmd + '\r\n');
+    await sleep(50);
+    expect(scanner.captureLast()).toBeNull();
+  });
+});

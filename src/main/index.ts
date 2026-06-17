@@ -41,6 +41,7 @@ import { resolveRuntimeConfig } from './runtimeConfig';
 import { createCommandTracker } from './commandTracker';
 import { createCwdTracker } from './cwdTracker';
 import { createScanner } from './scanner';
+import { captureLastReport } from './captureLast';
 import { createChromeProfileStore } from './chromeProfile';
 import { learnMarkers } from './chrome';
 import { createInjectionSuppressor } from './injectionSuppression';
@@ -118,7 +119,9 @@ async function createWindow(): Promise<void> {
   const scanner = createScanner({
     reader: shadow.reader,
     addMarker: (r) => shadow.addMarker(r),
-    onQuiet: (cb) => shadow.onQuiet(cb),
+    // No onQuiet ⇒ capture is manual, on demand (§21.1): the scanner never auto-emits and its
+    // dedup/watermark machinery lies dormant. "Capture last report" (capture:last) is the only
+    // path; emit/remove below are retained for the dormant streaming path but never fire here.
     adapters: config.adapterEnabled('claude-code') ? [createClaudeCodeAdapter()] : [],
     baseline: createGenericAdapter(),
     dedupRetention: config.dedupRetention,
@@ -126,6 +129,7 @@ async function createWindow(): Promise<void> {
     closedSpans: () => tracker.closedSpans(),
     isSuppressed: (region) => suppressor.isSuppressed(region),
     chromeMarkers: () => chromeProfile.markers(),
+    commandTexts: () => tracker.summaries().map((s) => s.command),
     emit: (e) => {
       const event = store.addEvent({
         sessionId: SESSION_ID,
@@ -226,6 +230,11 @@ async function createWindow(): Promise<void> {
       // null on a malformed payload or an unknown/trimmed id.
       [CH.monitorCaptureCommandText]: (_e, m): CommandCaptureResult | null =>
         isValidCaptureCommand(m) ? (tracker.capture(m.commandId) ?? null) : null,
+      // "Capture last report" (§21.1): detect the latest report now and make it the pane's
+      // single captured report (replacing the prior in the store, so reload-replay stays
+      // single-slot). Returned to the caller, which renders it single-slot — not broadcast,
+      // since onEvent would prepend a duplicate rather than replace.
+      [CH.captureLast]: () => captureLastReport(SESSION_ID, store, scanner),
       // Todo CRUD (§16.4) — each returns the fresh repo list; fail-closed to [] on
       // a malformed payload so a bad message can never mutate another repo's list.
       [CH.todoList]: (_e, m) => (isValidTodoList(m) ? todoStore.list(m.repoKey) : []),

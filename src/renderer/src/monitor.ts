@@ -49,11 +49,18 @@ export function wireMonitorPane(): void {
   el.tabCapture.addEventListener('click', () => selectTab('capture'));
   el.tabTodo.addEventListener('click', () => selectTab('todo'));
 
+  // Capture is manual + single-slot (§21.1): run report-detection on demand and replace the
+  // shown report with the latest. Nothing auto-emits, so there is no unread dot to raise.
+  el.captureLast.addEventListener('click', () => {
+    void window.monitor.captureLast().then((events) => captureTab.showReport(events));
+  });
+
   window.monitor.onUpdate((msg) => status.update(msg));
 
+  // Live captures (manual selection, §16.2) still arrive on this channel; the scanner no
+  // longer auto-emits reports/findings (§21.1) — those come only via the button above.
   window.monitor.onEvent((event) => {
     captureTab.appendBlock(event);
-    // Unread dot (§16.1): a capture arrived while another tab was active.
     if (activeTab !== 'capture') el.unreadDot.hidden = false;
   });
 

@@ -17,6 +17,7 @@ const MONITOR_HTML = `
   </div>
   <section id="panel-capture" role="tabpanel">
     <div id="monitor-status" role="status" aria-live="polite"></div>
+    <button id="capture-last">Capture last report</button>
     <div id="monitor-blocks"></div>
   </section>
   <section id="panel-todo" role="tabpanel" hidden>
@@ -58,6 +59,7 @@ describe('Todo tab (§24.1 mockup-exact — checkbox-done + Send)', () => {
       replay: vi.fn(async () => []),
       commands: vi.fn(async () => []),
       captureCommandText: vi.fn(async () => null),
+      captureLast: vi.fn(async () => []),
       dismiss: vi.fn(),
       dismissAll: vi.fn(),
       clearCommands: vi.fn(),

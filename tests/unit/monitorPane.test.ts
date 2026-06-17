@@ -32,6 +32,7 @@ const MONITOR_HTML = `
   </div>
   <section id="panel-capture" role="tabpanel">
     <div id="monitor-status" role="status" aria-live="polite"></div>
+    <button id="capture-last">Capture last report</button>
     <div id="monitor-blocks"></div>
   </section>
   <section id="panel-todo" role="tabpanel" hidden>
@@ -94,6 +95,7 @@ describe('action window DOM (§16 / §24.1 — tabs, capture cards, focus)', () 
       replay: vi.fn(async () => []),
       commands: vi.fn(async () => []),
       captureCommandText: vi.fn(async () => null),
+      captureLast: vi.fn(async () => []),
       inject: vi.fn(),
       getSettings: vi.fn(async () => settings),
       setSettings: vi.fn((patch) => Object.assign(settings, patch)),

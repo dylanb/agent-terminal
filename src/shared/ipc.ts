@@ -20,6 +20,7 @@ export const CH = {
   monitorCommands: 'monitor:commands',
   monitorCommandsChanged: 'monitor:commandsChanged',
   monitorCaptureCommandText: 'monitor:captureCommandText',
+  captureLast: 'capture:last',
   monitorDismiss: 'monitor:dismiss',
   monitorDismissAll: 'monitor:dismissAll',
   monitorLearnChrome: 'monitor:learnChrome',
@@ -231,6 +232,12 @@ export interface CommandCaptureResult {
   truncated: boolean;
 }
 
+/** "Capture last report" (§21.1): run report-detection on demand; resolves to the single
+ *  latest report + findings (replacing the prior capture), or [] when none is detected. */
+export interface CaptureLastMsg {
+  sessionId: SessionId;
+}
+
 /** Dismiss a captured event; dismissing a `report` cascades to its findings (§15.6 / v2.6). */
 export interface DismissMsg {
   sessionId: SessionId;
@@ -346,6 +353,9 @@ export interface MonitorApi {
   onCommandsChanged(cb: () => void): void;
   /** A command's output text, for adding straight to a todo (§16.2); null on unknown/trimmed id. */
   captureCommandText(commandId: string): Promise<CommandCaptureResult | null>;
+  /** Run report-detection on demand and return the single latest report + findings (§21.1);
+   *  [] when none. The captured report replaces any prior — the pane holds one (§21.1). */
+  captureLast(): Promise<MonitorEvent[]>;
   /** Dismiss one captured event; dismissing a report cascades to its findings (§15.6). */
   dismiss(eventId: string): void;
   /** Dismiss every captured event (§15.6). */

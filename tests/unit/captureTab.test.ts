@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { wireMonitorPane } from '../../src/renderer/src/monitor';
+import { wireMonitorPane, REVEAL_TERMINAL_EVENT } from '../../src/renderer/src/monitor';
 import { DEFAULT_UI_SETTINGS } from '../../src/shared/ipc';
 import type { MonitorEvent, TodoItem, UiSettings } from '../../src/shared/ipc';
 
@@ -17,6 +17,7 @@ const MONITOR_HTML = `
   </div>
   <section id="panel-capture" role="tabpanel">
     <div id="monitor-status" role="status" aria-live="polite"></div>
+    <div class="head"><button id="capture-last">Capture last report</button></div>
     <div id="monitor-blocks"></div>
   </section>
   <section id="panel-todo" role="tabpanel" hidden>
@@ -58,6 +59,7 @@ describe('Capture tab "Add to todo" button (§16.2 — capture block → todo)',
       replay: vi.fn(async () => []),
       commands: vi.fn(async () => []),
       captureCommandText: vi.fn(async () => null),
+      captureLast: vi.fn(async () => []),
       dismiss: vi.fn(),
       dismissAll: vi.fn(),
       clearCommands: vi.fn(),
@@ -117,5 +119,99 @@ describe('Capture tab "Add to todo" button (§16.2 — capture block → todo)',
       type: 'finding',
       eventId: 'e2',
     });
+  });
+});
+
+// §21.1 / v2.27: capture is manual + single-slot — clicking "Capture last report" runs
+// detection on demand (capture:last) and the pane shows the one returned report's findings,
+// replacing whatever it showed before. Nothing auto-emits.
+describe('Capture last report button (§21.1 — manual single-slot)', () => {
+  let settings: UiSettings;
+  let monitor: Record<string, ReturnType<typeof vi.fn>>;
+
+  beforeEach(() => {
+    document.body.innerHTML = MONITOR_HTML;
+    settings = { ...DEFAULT_UI_SETTINGS };
+    monitor = {
+      onEvent: vi.fn(),
+      onEventRemoved: vi.fn(),
+      onUpdate: vi.fn(),
+      onExit: vi.fn(),
+      onCommandsChanged: vi.fn(),
+      onCwdChanged: vi.fn(),
+      currentRepo: vi.fn(async () => null),
+      replay: vi.fn(async () => []),
+      commands: vi.fn(async () => []),
+      captureCommandText: vi.fn(async () => null),
+      captureLast: vi.fn(async () => []),
+      dismiss: vi.fn(),
+      dismissAll: vi.fn(),
+      clearCommands: vi.fn(),
+      learnChrome: vi.fn(),
+      inject: vi.fn(),
+      getSettings: vi.fn(async () => settings),
+      setSettings: vi.fn(),
+      todoList: vi.fn(async () => []),
+      todoAdd: vi.fn(async () => []),
+      todoUpdate: vi.fn(async () => []),
+      todoReorder: vi.fn(async () => []),
+      todoSetStatus: vi.fn(async () => []),
+      todoDelete: vi.fn(async () => []),
+    };
+    (window as unknown as { monitor: typeof monitor }).monitor = monitor;
+  });
+
+  afterEach(() => {
+    document.body.innerHTML = '';
+    vi.restoreAllMocks();
+  });
+
+  const button = () => document.getElementById('capture-last') as HTMLButtonElement;
+  const findings = () => Array.from(document.getElementById('monitor-blocks')!.querySelectorAll('.finding')) as HTMLElement[];
+  const text = (el: HTMLElement) => el.querySelector('.t')!.textContent;
+
+  function report(id: string, t: string): MonitorEvent {
+    return makeEvent({ id, type: 'finding', parentId: 'r1', text: t, range: { start: { x: 0, y: 0 }, end: { x: 80, y: 0 }, baseY: 0, bufferType: 'normal' } });
+  }
+
+  it('clicking the button runs capture:last and renders the returned findings', async () => {
+    monitor.captureLast.mockResolvedValue([report('f1', 'first finding'), report('f2', 'second finding')]);
+    wireMonitorPane();
+    await flush();
+
+    button().click();
+    await flush();
+
+    expect(monitor.captureLast).toHaveBeenCalledTimes(1);
+    expect(findings().map(text)).toEqual(['first finding', 'second finding']);
+  });
+
+  it('a second capture replaces the prior findings (single-slot)', async () => {
+    monitor.captureLast.mockResolvedValueOnce([report('f1', 'old finding')]);
+    wireMonitorPane();
+    await flush();
+    button().click();
+    await flush();
+    expect(findings().map(text)).toEqual(['old finding']);
+
+    monitor.captureLast.mockResolvedValueOnce([report('f9', 'fresh finding')]);
+    button().click();
+    await flush();
+    expect(findings().map(text)).toEqual(['fresh finding']);
+  });
+
+  it('double-clicking a captured finding asks the terminal to reveal its rows (§16.8)', async () => {
+    monitor.captureLast.mockResolvedValue([report('f1', 'ranged finding')]);
+    wireMonitorPane();
+    await flush();
+    button().click();
+    await flush();
+
+    let revealedId: string | undefined;
+    window.addEventListener(REVEAL_TERMINAL_EVENT, (e) => {
+      revealedId = (e as CustomEvent<{ id: string }>).detail.id;
+    });
+    findings()[0].dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+    expect(revealedId).toBe('f1');
   });
 });
