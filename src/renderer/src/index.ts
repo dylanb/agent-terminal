@@ -44,13 +44,16 @@ if (gatePanel) createGatePanel(gatePanel, SAMPLE_FLOW);
 const artifactsHost = document.getElementById('artifacts');
 if (artifactsHost) {
   let repoKey: string | null = null;
-  window.monitor.onCwdChanged((m) => {
-    repoKey = m.repoKey;
-  });
-  createArtifacts(artifactsHost, {
+  const artifacts = createArtifacts(artifactsHost, {
+    loadTree: (scope) => window.viewer.tree(scope),
+    loadFile: (relPath) => window.viewer.read(relPath),
     renderMarkdown: renderMarkdownInto,
     renderCode: renderCodeInto,
     send: (text) => doInject(text, false),
     addToTodo: (text) => captureToTodo(window.monitor, repoKey, text),
+  });
+  window.monitor.onCwdChanged((m) => {
+    repoKey = m.repoKey;
+    void artifacts.refresh(); // re-discover when the agent cd's into another repo/dir
   });
 }

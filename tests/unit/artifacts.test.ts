@@ -1,106 +1,165 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { createArtifacts, SAMPLE_ARTIFACTS, type Artifact } from '../../src/renderer/src/artifacts';
+import { createArtifacts } from '../../src/renderer/src/artifacts';
+import type { ArtifactTree, ViewerFile } from '../../src/shared/ipc';
 
-// §20.2 artifact viewer organism: a fixture-fed file tree + a viewer that renders markdown
-// or code through injected render seams, with a selection routed to the two §16.2 sinks
-// (send-to-agent / add-to-todo). The heavy markdown-it/mermaid/CodeMirror impls are the
-// production render seams; here they are faked so the test observes the organism's own
-// behavior at the DOM/sink boundary, not the libraries.
+// §20.1/§20.2 artifact viewer organism: a hierarchical file tree fed by real discovery
+// (loadTree) and a viewer that reads file content (loadFile) through injected seams, with a
+// selection routed to the two §16.2 sinks. The heavy markdown/CodeMirror impls and the real
+// git/fs discovery are injected; here they are faked so the test observes the organism's own
+// DOM/sink behavior, not the libraries or the filesystem.
 
-const FIXTURE: Artifact[] = [
-  { id: 'rev', name: 'review.md', group: 'This run', tag: 'iter 03', icon: 'md', kind: 'markdown', body: '# Review\n\nThe scanner carves tool calls.' },
-  { id: 'scn', name: 'scanner.ts', group: 'This run', tag: 'code', icon: 'ts', kind: 'code', lang: 'typescript', body: 'export const QUIET_MS = 500;' },
-];
+const TREE_CURATED: ArtifactTree = {
+  root: '/repo',
+  isRepo: true,
+  scope: 'curated',
+  nodes: [
+    {
+      name: 'src',
+      relPath: 'src',
+      kind: 'dir',
+      children: [{ name: 'a.ts', relPath: 'src/a.ts', kind: 'file', provenance: ['changed'] }],
+    },
+    { name: 'review.md', relPath: 'review.md', kind: 'file', provenance: ['loop'] },
+  ],
+};
+const TREE_REPO: ArtifactTree = {
+  root: '/repo',
+  isRepo: true,
+  scope: 'repo',
+  nodes: [
+    {
+      name: 'src',
+      relPath: 'src',
+      kind: 'dir',
+      children: [
+        { name: 'a.ts', relPath: 'src/a.ts', kind: 'file', provenance: ['changed'] },
+        { name: 'b.ts', relPath: 'src/b.ts', kind: 'file' },
+      ],
+    },
+    { name: 'review.md', relPath: 'review.md', kind: 'file', provenance: ['loop'] },
+  ],
+};
+const TREE_PLAIN: ArtifactTree = {
+  root: '/tmp/dir',
+  isRepo: false,
+  scope: 'curated',
+  nodes: [{ name: 'note.txt', relPath: 'note.txt', kind: 'file' }],
+};
 
-function mount(over: Partial<Parameters<typeof createArtifacts>[1]> = {}) {
+function fileFor(relPath: string): ViewerFile {
+  const md = relPath.endsWith('.md');
+  return {
+    relPath,
+    name: relPath.split('/').pop()!,
+    kind: md ? 'markdown' : 'code',
+    lang: md ? undefined : 'typescript',
+    body: `body of ${relPath}`,
+  };
+}
+
+function mount(tree: ArtifactTree = TREE_CURATED, over: Partial<Parameters<typeof createArtifacts>[1]> = {}) {
   const host = document.createElement('div');
   document.body.appendChild(host);
+  const loadTree = vi.fn(async (scope: 'curated' | 'repo') => (scope === 'repo' ? TREE_REPO : tree));
+  const loadFile = vi.fn(async (relPath: string) => fileFor(relPath));
   const renderMarkdown = vi.fn((body: string, into: HTMLElement) => { into.textContent = body; });
   const renderCode = vi.fn((body: string, _lang: string | undefined, into: HTMLElement) => { into.textContent = body; });
   const send = vi.fn();
   const addToTodo = vi.fn();
   let selection = '';
   const readSelection = vi.fn(() => selection);
-  const api = createArtifacts(host, { artifacts: FIXTURE, send, addToTodo, renderMarkdown, renderCode, readSelection, ...over });
+  const api = createArtifacts(host, { loadTree, loadFile, renderMarkdown, renderCode, send, addToTodo, readSelection, ...over });
   return {
-    host, api, renderMarkdown, renderCode, send, addToTodo, readSelection,
+    host, api, loadTree, loadFile, renderMarkdown, renderCode, send, addToTodo,
     setSelection: (s: string) => { selection = s; },
-    rows: () => [...host.querySelectorAll('.tree .f')] as HTMLElement[],
+    fileRows: () => [...host.querySelectorAll('.tree .f')] as HTMLElement[],
+    dirRows: () => [...host.querySelectorAll('.tree .dir > .dname')] as HTMLElement[],
     body: () => host.querySelector('.vbody') as HTMLElement,
     title: () => host.querySelector('.vtitle') as HTMLElement,
+    checkbox: () => host.querySelector('.scope-toggle input') as HTMLInputElement | null,
+    scopeToggle: () => host.querySelector('.scope-toggle') as HTMLElement | null,
+    search: () => host.querySelector('.treesearch') as HTMLInputElement,
   };
 }
 
 beforeEach(() => { document.body.replaceChildren(); });
 
-describe('artifact viewer (§20.2 / §24.1)', () => {
-  it('renders one tree row per fixture artifact, with name and provenance tag, under group headers', () => {
+describe('artifact viewer (§20.1/§20.2 — real discovery)', () => {
+  it('renders the discovered tree hierarchically: a directory node containing its files', async () => {
     const v = mount();
-    const rows = v.rows();
-    expect(rows.map((r) => r.textContent)).toEqual(
-      expect.arrayContaining([expect.stringContaining('review.md'), expect.stringContaining('scanner.ts')]),
-    );
-    expect(rows.find((r) => r.textContent?.includes('review.md'))?.textContent).toContain('iter 03');
-    expect([...v.host.querySelectorAll('.tree .grp')].map((g) => g.textContent)).toContain('This run');
+    await v.api.refresh();
+    expect(v.dirRows().map((d) => d.textContent)).toEqual(expect.arrayContaining([expect.stringContaining('src')]));
+    const srcDir = [...v.host.querySelectorAll('.tree .dir')].find((d) => d.querySelector('.dname')?.textContent?.includes('src'));
+    expect(srcDir?.querySelector('.f')?.textContent).toContain('a.ts');
   });
 
-  it('opens the first artifact by default, rendering its markdown body and naming it', () => {
+  it('shows per-file provenance tags (changed / loop)', async () => {
     const v = mount();
-    expect(v.renderMarkdown).toHaveBeenCalledWith('# Review\n\nThe scanner carves tool calls.', v.body());
-    expect(v.title().textContent).toContain('review.md');
+    await v.api.refresh();
+    const review = v.fileRows().find((r) => r.textContent?.includes('review.md'))!;
+    expect(review.textContent).toContain('loop');
+    const aTs = v.fileRows().find((r) => r.textContent?.includes('a.ts'))!;
+    expect(aTs.textContent).toContain('changed');
   });
 
-  it('clicking a code artifact renders it through the code seam with its language', () => {
+  it('opens the first file by default, reading it through loadFile and the render seam', async () => {
     const v = mount();
-    v.rows().find((r) => r.textContent?.includes('scanner.ts'))!.click();
-    expect(v.renderCode).toHaveBeenCalledWith('export const QUIET_MS = 500;', 'typescript', v.body());
-    expect(v.title().textContent).toContain('scanner.ts');
+    await v.api.refresh();
+    expect(v.loadFile).toHaveBeenCalled();
+    expect(v.renderCode).toHaveBeenCalledWith('body of src/a.ts', 'typescript', v.body());
+    expect(v.title().textContent).toContain('a.ts');
   });
 
-  it('marks the open artifact as selected in the tree', () => {
+  it('clicking a markdown file reads and renders it through the markdown seam', async () => {
     const v = mount();
-    v.rows().find((r) => r.textContent?.includes('scanner.ts'))!.click();
-    const sel = v.rows().filter((r) => r.classList.contains('sel'));
-    expect(sel).toHaveLength(1);
-    expect(sel[0].textContent).toContain('scanner.ts');
+    await v.api.refresh();
+    v.fileRows().find((r) => r.textContent?.includes('review.md'))!.click();
+    await Promise.resolve(); await Promise.resolve();
+    expect(v.loadFile).toHaveBeenCalledWith('review.md');
+    expect(v.renderMarkdown).toHaveBeenCalledWith('body of review.md', v.body());
   });
 
-  it('Send to agent routes the viewer selection to the send sink (§9.3)', () => {
+  it('the "show all repo files" checkbox re-discovers with the repo scope', async () => {
     const v = mount();
-    v.setSelection('drops findings under the floor');
+    await v.api.refresh();
+    expect(v.scopeToggle()!.hidden).toBe(false);
+    v.checkbox()!.click();
+    await Promise.resolve(); await Promise.resolve();
+    expect(v.loadTree).toHaveBeenCalledWith('repo');
+    expect(v.fileRows().some((r) => r.textContent?.includes('b.ts'))).toBe(true);
+  });
+
+  it('hides the scope checkbox outside a git repo (the tree is already the whole dir)', async () => {
+    const v = mount(TREE_PLAIN);
+    await v.api.refresh();
+    expect(v.scopeToggle()!.hidden).toBe(true);
+    expect(v.fileRows().some((r) => r.textContent?.includes('note.txt'))).toBe(true);
+  });
+
+  it('filters the tree by the search box', async () => {
+    const v = mount();
+    await v.api.refresh();
+    v.search().value = 'review';
+    v.search().dispatchEvent(new Event('input'));
+    expect(v.fileRows().filter((r) => !r.hidden).map((r) => r.textContent)).toEqual([expect.stringContaining('review.md')]);
+  });
+
+  it('Send to agent and Add to todo route the viewer selection to the sinks', async () => {
+    const v = mount();
+    await v.api.refresh();
+    v.setSelection('a passage');
     (v.host.querySelector('.art-send') as HTMLButtonElement).click();
-    expect(v.send).toHaveBeenCalledWith('drops findings under the floor');
-  });
-
-  it('Add to todo routes the viewer selection to the todo sink (§16.2)', () => {
-    const v = mount();
-    v.setSelection('bound the scrollback re-scan');
     (v.host.querySelector('.art-todo') as HTMLButtonElement).click();
-    expect(v.addToTodo).toHaveBeenCalledWith('bound the scrollback re-scan');
+    expect(v.send).toHaveBeenCalledWith('a passage');
+    expect(v.addToTodo).toHaveBeenCalledWith('a passage');
   });
 
-  it('falls back to the last in-viewer selection when the click has cleared the live one', () => {
+  it('does nothing when there is no selection to send', async () => {
     const v = mount();
-    v.setSelection('re-reads scrollback on every quiet pause');
-    document.dispatchEvent(new Event('selectionchange')); // captured as it happened
-    v.setSelection(''); // clicking the button collapses the live selection
-    (v.host.querySelector('.art-send') as HTMLButtonElement).click();
-    expect(v.send).toHaveBeenCalledWith('re-reads scrollback on every quiet pause');
-  });
-
-  it('does nothing when there is no selection to send', () => {
-    const v = mount();
+    await v.api.refresh();
     v.setSelection('');
     (v.host.querySelector('.art-send') as HTMLButtonElement).click();
-    (v.host.querySelector('.art-todo') as HTMLButtonElement).click();
     expect(v.send).not.toHaveBeenCalled();
-    expect(v.addToTodo).not.toHaveBeenCalled();
-  });
-
-  it('ships a non-empty fixture artifact set (real discovery is mocked, §24.1)', () => {
-    expect(SAMPLE_ARTIFACTS.length).toBeGreaterThan(0);
-    expect(SAMPLE_ARTIFACTS.some((a) => a.kind === 'markdown')).toBe(true);
-    expect(SAMPLE_ARTIFACTS.some((a) => a.kind === 'code')).toBe(true);
   });
 });

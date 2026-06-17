@@ -452,36 +452,58 @@ test('switches views via hotkey and nav button, showing one pane at a time (§22
   await expect(v3).toBeHidden();
 });
 
-test('the artifact viewer renders a fixture artifact and sends a selection to a todo (§20.2/§24.1)', async () => {
-  await cdToTempDir('artifacts'); // establish a live repo key so Add-to-todo lands here
+test('the artifact viewer discovers real repo files and sends a selection to a todo (§20.1/§20.2)', async () => {
+  // Build a real git repo: doc.md is edited after commit (curated/changed); src/app.ts is
+  // committed-unchanged (whole-repo only). The trailing cd makes it the session's live cwd.
+  const dir = '/tmp/agent-term-e2e-artrepo';
+  await typeCommand(
+    `rm -rf "${dir}" && mkdir -p "${dir}/src" && cd "${dir}" && git init -q && ` +
+      `git config user.email t@t && git config user.name T && ` +
+      `printf '# Doc\\n\\nThe scanner carves tool calls.\\n' > doc.md && ` +
+      `printf 'export const QUIET = 1;\\n' > src/app.ts && ` +
+      `git add -A && git commit -qm init && printf 'more\\n' >> doc.md && pwd`,
+  );
+  await expect(page.locator('.xterm-rows > div').filter({ hasText: new RegExp(`^\\s*${dir}\\s*$`) })).not.toHaveCount(0);
+  await expect(page.locator('.status-chip[data-status="agent"]')).toContainText('quiet', { timeout: 6_000 });
 
   await page.keyboard.press('Control+2');
   await expect(page.locator('[data-viewpane="2"]')).toBeVisible();
 
-  // The fixture file tree is populated (real discovery is the §24.2 backlog).
+  // Curated discovery: the working-tree change is listed; the committed-unchanged file is not.
   const tree = page.locator('#artifacts .tree');
-  await expect(tree).toContainText('review.md');
-  await expect(tree).toContainText('scanner.ts');
+  await expect(tree.locator('.f').filter({ hasText: 'doc.md' })).toHaveCount(1);
+  await expect(tree.locator('.f').filter({ hasText: 'app.ts' })).toHaveCount(0);
+  await expect(tree.locator('.f').filter({ hasText: 'doc.md' })).toContainText('changed');
 
-  // The first artifact opens by default and renders as markdown, with its ```mermaid fence
-  // turned into a diagram (markdown-it + mermaid, §20.2).
+  // Open doc.md → rendered markdown; select a passage → Add-to-todo (§16.2 sink).
   const body = page.locator('#artifacts .vbody');
-  await expect(body.locator('h1')).toContainText('Review — capture pipeline');
-  await expect(body.locator('.mermaid')).not.toHaveCount(0);
-  await expect(body.locator('.mermaid svg')).toBeVisible({ timeout: 20_000 });
-
-  // Select a passage and Add-to-todo — the same §16.2 sink as the terminal-pane selection.
+  await tree.locator('.f').filter({ hasText: 'doc.md' }).click();
+  await expect(body.locator('h1')).toContainText('Doc');
   await body.locator('p').filter({ hasText: 'carves tool calls' }).selectText();
   await page.locator('#artifacts .art-todo').click();
   await page.locator('#tab-todo').click();
-  await expect(
-    page.locator('.todo').filter({ hasText: 'carves tool calls out of the report body' }),
-  ).toHaveCount(1);
+  await expect(page.locator('.todo').filter({ hasText: 'The scanner carves tool calls' })).toHaveCount(1);
 
-  // A code artifact renders read-only in CodeMirror (§20.2).
-  await tree.locator('.f').filter({ hasText: 'scanner.ts' }).click();
+  // "Show all repo files" reveals the committed file under its directory; it renders in CodeMirror.
+  await page.locator('#artifacts .scope-toggle input').check();
+  const appRow = tree.locator('.f').filter({ hasText: 'app.ts' });
+  await expect(appRow).toHaveCount(1);
+  await appRow.click();
   await expect(body.locator('.cm-editor')).toBeVisible();
-  await expect(body.locator('.cm-editor')).toContainText('captureLast');
+  await expect(body.locator('.cm-editor')).toContainText('QUIET');
+});
+
+test('outside a git repo the viewer shows the whole cwd tree (§20.1)', async () => {
+  const dir = '/tmp/agent-term-e2e-plaindir';
+  await typeCommand(`rm -rf "${dir}" && mkdir -p "${dir}" && cd "${dir}" && printf 'hello\\n' > scratch.md && pwd`);
+  await expect(page.locator('.xterm-rows > div').filter({ hasText: new RegExp(`^\\s*${dir}\\s*$`) })).not.toHaveCount(0);
+  await expect(page.locator('.status-chip[data-status="agent"]')).toContainText('quiet', { timeout: 6_000 });
+
+  await page.keyboard.press('Control+2');
+  const tree = page.locator('#artifacts .tree');
+  await expect(tree.locator('.f').filter({ hasText: 'scratch.md' })).toHaveCount(1);
+  // No curated/whole-repo distinction outside a repo — the scope toggle is hidden.
+  await expect(page.locator('#artifacts .scope-toggle')).toBeHidden();
 });
 
 test('the quick-send drawer docks and undocks without a scrim, keeping the terminal visible (§16.8/§22.2)', async () => {

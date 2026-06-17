@@ -22,6 +22,8 @@ import {
   type TodoSourceType,
   type TodoUpdateMsg,
   type UiSetSettingsMsg,
+  type ViewerReadMsg,
+  type ViewerTreeMsg,
 } from '../shared/ipc';
 
 const TODO_SOURCE_TYPES: readonly TodoSourceType[] = [
@@ -131,4 +133,14 @@ export function isValidTodoSetStatus(m: unknown): m is TodoSetStatusMsg {
 
 export function isValidTodoDelete(m: unknown): m is TodoDeleteMsg {
   return isTodoBase(m) && typeof m.id === 'string';
+}
+
+// ---- viewer:* validators (§20.1/§20.2). ----
+
+export function isValidViewerTree(m: unknown): m is ViewerTreeMsg {
+  return isRecord(m) && isLiveSession(m) && (m.scope === 'curated' || m.scope === 'repo');
+}
+
+export function isValidViewerRead(m: unknown): m is ViewerReadMsg {
+  return isRecord(m) && isLiveSession(m) && typeof m.relPath === 'string';
 }

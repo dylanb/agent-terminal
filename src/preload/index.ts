@@ -3,10 +3,14 @@ import {
   CH,
   SESSION_ID,
   type AgentInjectMsg,
+  type ArtifactScope,
+  type ArtifactTree,
   type CommandCaptureResult,
   type CommandSummary,
   type CwdChangedMsg,
   type MonitorApi,
+  type ViewerApi,
+  type ViewerFile,
   type MonitorCaptureMsg,
   type MonitorEvent,
   type MonitorEventMsg,
@@ -74,5 +78,13 @@ const monitorApi: MonitorApi = {
     ipcRenderer.invoke(CH.todoDelete, { sessionId: SESSION_ID, repoKey, id }) as Promise<TodoItem[]>,
 };
 
+const viewerApi: ViewerApi = {
+  tree: (scope: ArtifactScope) =>
+    ipcRenderer.invoke(CH.viewerTree, { sessionId: SESSION_ID, scope }) as Promise<ArtifactTree>,
+  read: (relPath) =>
+    ipcRenderer.invoke(CH.viewerRead, { sessionId: SESSION_ID, relPath }) as Promise<ViewerFile | null>,
+};
+
 contextBridge.exposeInMainWorld('term', termApi);
 contextBridge.exposeInMainWorld('monitor', monitorApi);
+contextBridge.exposeInMainWorld('viewer', viewerApi);

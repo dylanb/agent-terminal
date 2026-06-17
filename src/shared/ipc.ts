@@ -35,6 +35,8 @@ export const CH = {
   todoReorder: 'todo:reorder',
   todoSetStatus: 'todo:setStatus',
   todoDelete: 'todo:delete',
+  viewerTree: 'viewer:tree',
+  viewerRead: 'viewer:read',
 } as const;
 
 /** Action-window tabs (§16.1). */
@@ -327,6 +329,55 @@ export interface ChannelPayloads {
 
 export type SendChannel = keyof ChannelPayloads;
 
+// ---- Artifact viewer (§20.1/§20.2) ----
+
+/** Per-file provenance tags (D8): tracked-but-changed in the working tree, under the
+ *  agent-loop, or part of the current PR. Empty/omitted when none apply. */
+export type ArtifactProvenance = 'changed' | 'loop' | 'pr';
+
+/** One node of the hierarchical artifact tree (§20.1). A directory carries `children`;
+ *  a file carries its `provenance` tags. `relPath` is unique within a tree and is the
+ *  id the renderer passes back to `viewer:read`. */
+export interface ArtifactNode {
+  name: string;
+  relPath: string;
+  kind: 'file' | 'dir';
+  children?: ArtifactNode[];
+  provenance?: ArtifactProvenance[];
+}
+
+/** Curated (loop ∪ PR ∪ working-tree changes) vs. the whole repo (D8). */
+export type ArtifactScope = 'curated' | 'repo';
+
+export interface ArtifactTree {
+  /** Absolute discovery root: the repo root, or the cwd when outside a repo. */
+  root: string;
+  /** False outside a git repo — the tree is the whole cwd dir, no curated scope/provenance. */
+  isRepo: boolean;
+  scope: ArtifactScope;
+  nodes: ArtifactNode[];
+}
+
+export type ViewerFileKind = 'markdown' | 'code';
+
+export interface ViewerFile {
+  relPath: string;
+  name: string;
+  kind: ViewerFileKind;
+  lang?: string;
+  body: string;
+}
+
+export interface ViewerTreeMsg {
+  sessionId: SessionId;
+  scope: ArtifactScope;
+}
+
+export interface ViewerReadMsg {
+  sessionId: SessionId;
+  relPath: string;
+}
+
 // ---- Preload-exposed API surfaces (§6) ----
 
 export interface TermApi {
@@ -380,9 +431,19 @@ export interface MonitorApi {
   todoDelete(repoKey: string, id: string): Promise<TodoItem[]>;
 }
 
+/** Artifact viewer (§20): real, context-connected discovery + file read. Talks only to
+ *  the main process (the widget never touches the fs directly), keeping it relocatable. */
+export interface ViewerApi {
+  /** Discover the current repo's artifact tree (§20.1); outside a repo, the whole cwd tree. */
+  tree(scope: ArtifactScope): Promise<ArtifactTree>;
+  /** Read one file by its tree-relative path; null when missing, binary, or too large. */
+  read(relPath: string): Promise<ViewerFile | null>;
+}
+
 declare global {
   interface Window {
     term: TermApi;
     monitor: MonitorApi;
+    viewer: ViewerApi;
   }
 }
