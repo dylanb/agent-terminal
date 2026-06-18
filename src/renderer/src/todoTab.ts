@@ -379,6 +379,10 @@ export function createTodoTab(deps: TodoTabDeps): TodoTab {
     });
   }
 
+  // Render the panel immediately so the manual-add row is present from mount, before any repo
+  // key is known (refresh() is repo-gated; without this the Todo tab is blank until OSC 7).
+  renderTodos();
+
   return {
     onRepoChanged,
     refresh,

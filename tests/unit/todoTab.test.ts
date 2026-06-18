@@ -248,6 +248,15 @@ describe('Todo tab §24.2.1 — manual add', () => {
     expect(monitor.todoAdd).toHaveBeenCalledWith('/repoA', 'hand-written task', { type: 'manual' });
   });
 
+  it('shows the manual-add row on mount, before any repo key is known', async () => {
+    // currentRepo() resolves null and no cwd:changed has fired yet (e.g. before the first
+    // OSC 7) — the add affordance must still be present, not a blank panel.
+    wireMonitorPane();
+    await flush();
+    expect(document.getElementById('todo-new')).toBeTruthy();
+    expect(document.getElementById('todo-add-btn')).toBeTruthy();
+  });
+
   it('does not post an empty/whitespace todo', async () => {
     wireMonitorPane();
     await flush();
