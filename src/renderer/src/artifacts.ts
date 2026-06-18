@@ -413,7 +413,12 @@ export function createArtifacts(host: HTMLElement, deps: ArtifactsDeps): Artifac
 
   function applyFilter(): void {
     const q = search.value.trim().toLowerCase();
-    for (const [rel, row] of fileRows) row.hidden = q.length > 0 && !rel.toLowerCase().includes(q);
+    // Match the file's own name, not its path — else every file under a directory whose name
+    // contains the query would match (§20.2). Directories appear only as matching files' hierarchy.
+    for (const [rel, row] of fileRows) {
+      const name = rel.slice(rel.lastIndexOf('/') + 1).toLowerCase();
+      row.hidden = q.length > 0 && !name.includes(q);
+    }
     // A directory with no visible file collapses out of the way; expand all while filtering.
     for (const dir of list.querySelectorAll('.dir')) {
       const anyVisible = [...dir.querySelectorAll('.f')].some((f) => !(f as HTMLElement).hidden);

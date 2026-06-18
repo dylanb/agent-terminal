@@ -348,6 +348,33 @@ describe('artifact viewer (§20.1/§20.2 — real discovery)', () => {
     expect(v.fileRows().filter((r) => !r.hidden).map((r) => r.textContent)).toEqual([expect.stringContaining('review.md')]);
   });
 
+  it('filters by file name, not ancestor directory names (§20.2)', async () => {
+    // A directory whose name contains the query must not drag in its non-matching files.
+    const tree: ArtifactTree = {
+      root: '/repo',
+      isRepo: true,
+      scope: 'curated',
+      nodes: [
+        {
+          name: 'plans',
+          relPath: 'plans',
+          kind: 'dir',
+          children: [
+            { name: 'plan-a.md', relPath: 'plans/plan-a.md', kind: 'file' },
+            { name: 'notes.md', relPath: 'plans/notes.md', kind: 'file' },
+          ],
+        },
+      ],
+    };
+    const v = mount(tree);
+    await v.api.refresh();
+    v.search().value = 'plan';
+    v.search().dispatchEvent(new Event('input'));
+    const visible = v.fileRows().filter((r) => !r.hidden).map((r) => r.textContent);
+    expect(visible).toEqual([expect.stringContaining('plan-a.md')]); // notes.md is hidden despite living in plans/
+    expect((v.host.querySelector('.tree .dir') as HTMLElement).hidden).toBe(false); // hierarchy preserved
+  });
+
   it('Send to agent and Add to todo route the viewer selection to the sinks', async () => {
     const v = mount();
     await v.api.refresh();
