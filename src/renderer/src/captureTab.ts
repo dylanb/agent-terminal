@@ -20,10 +20,10 @@ import type { MonitorApi, MonitorEvent, MonitorEventType } from '../../shared/ip
 import {
   CAPTURE_RANGE_ADD_EVENT,
   CAPTURE_RANGE_REMOVE_EVENT,
-  doInject,
   REVEAL_HIGHLIGHT_MS,
   REVEAL_TERMINAL_EVENT,
   TODO_UNDO_MS,
+  type DoInject,
 } from './paneActions';
 import type { TodoSink } from './todoTab';
 
@@ -54,10 +54,12 @@ export interface CaptureTabDeps {
   blocksEl: HTMLElement;
   todoSink: TodoSink;
   monitor: Pick<MonitorApi, 'dismiss' | 'dismissAll'>;
+  /** Inject seam (§16.2 Insert at cursor) — injected, not reached from the window global. */
+  doInject: DoInject;
 }
 
 export function createCaptureTab(deps: CaptureTabDeps): CaptureTab {
-  const { blocksEl, todoSink, monitor } = deps;
+  const { blocksEl, todoSink, monitor, doInject } = deps;
   const rendered = new Set<string>();
   // Cross-highlight (§16.8): the live self-clearing reveal-highlight timer per element
   // (re-reveal resets it). The coordinates live on the terminal side, which marker-anchors

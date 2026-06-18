@@ -10,7 +10,7 @@ import { createStatusStrip } from './statusStrip';
 import { createTodoTab } from './todoTab';
 import { createCaptureTab } from './captureTab';
 import { createRepoContext, type RepoContext } from './repoContext';
-import { REVEAL_CAPTURE_EVENT, TODOS_CHANGED_EVENT } from './paneActions';
+import { doInject, REVEAL_CAPTURE_EVENT, TODOS_CHANGED_EVENT } from './paneActions';
 
 // Re-exported for callers that import these from the pane module (selection.ts, tests).
 export {
@@ -27,11 +27,17 @@ export {
 export function wireMonitorPane(repo: RepoContext = createRepoContext(window.monitor)): void {
   const el = resolveMonitorElements();
   const status = createStatusStrip(el.status);
-  const todoTab = createTodoTab({ todoListEl: el.todoList, todoCountEl: el.todoCount, monitor: window.monitor });
+  const todoTab = createTodoTab({
+    todoListEl: el.todoList,
+    todoCountEl: el.todoCount,
+    monitor: window.monitor,
+    doInject,
+  });
   const captureTab = createCaptureTab({
     blocksEl: el.blocks,
     todoSink: todoTab,
     monitor: window.monitor,
+    doInject,
   });
 
   let activeTab: TabId = 'capture';

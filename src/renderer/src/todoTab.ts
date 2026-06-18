@@ -15,7 +15,7 @@
 //    behind a Deleted/Undo row for TODO_UNDO_MS, capturing the item's own repoKey.
 
 import type { MonitorApi, TodoItem, TodoSource } from '../../shared/ipc';
-import { doInject, TODO_UNDO_MS } from './paneActions';
+import { TODO_UNDO_MS, type DoInject } from './paneActions';
 
 /** The slice the Capture tab needs to push a capture into the list and undo it (§16.2). */
 export interface TodoSink {
@@ -40,6 +40,8 @@ export interface TodoTabDeps {
     MonitorApi,
     'todoList' | 'todoAdd' | 'todoUpdate' | 'todoReorder' | 'todoSetStatus' | 'todoDelete'
   >;
+  /** Inject seam (§16.2 Send) — injected so the tab never reaches the window.monitor global. */
+  doInject: DoInject;
 }
 
 /** Provenance line for a todo: where it came from, in the mockup's `.src` voice. */
@@ -49,7 +51,7 @@ function provenanceText(source: TodoSource | undefined): string {
 }
 
 export function createTodoTab(deps: TodoTabDeps): TodoTab {
-  const { todoListEl, todoCountEl, monitor } = deps;
+  const { todoListEl, todoCountEl, monitor, doInject } = deps;
   let currentRepoKey: string | null = null;
   let todos: TodoItem[] = [];
   // A repo swap is blocked while a todo edit is open (§16.3); the pending key is applied
