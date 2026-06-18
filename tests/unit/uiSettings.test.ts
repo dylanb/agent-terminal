@@ -74,6 +74,17 @@ describe('global UI settings store (§16.6 — first on-disk persistence, outsid
     expect(store.get().artifactTreeWidth).toBeGreaterThanOrEqual(140);
   });
 
+  it('round-trips and clamps the full-screen tree width, absent by default (§20.2)', () => {
+    const store = createUiSettingsStore(file);
+    expect(store.get().artifactFullscreenTreeWidth).toBeUndefined(); // default is computed (30% vw) in the renderer
+    store.set({ artifactFullscreenTreeWidth: 720 });
+    expect(createUiSettingsStore(file).get().artifactFullscreenTreeWidth).toBe(720);
+    store.set({ artifactFullscreenTreeWidth: 99999 });
+    expect(store.get().artifactFullscreenTreeWidth!).toBeLessThanOrEqual(2000);
+    store.set({ artifactFullscreenTreeWidth: 10 });
+    expect(store.get().artifactFullscreenTreeWidth!).toBeGreaterThanOrEqual(200);
+  });
+
   it('writes atomically — leaves no stray temp file and the result is valid JSON', () => {
     createUiSettingsStore(file).set({ splitRatio: 0.42 });
     const written = readdirSync(join(dir, 'nested'));

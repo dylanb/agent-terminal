@@ -154,9 +154,44 @@ export function discover(cwd: string, scope: ArtifactScope, deps: DiscoverDeps =
   return { root, isRepo: true, scope, nodes: buildTree(rels, provenance) };
 }
 
+/** Current-file line numbers (1-based) parsed from the `+` side of a unified diff's hunk headers. */
+function addedLinesFromDiff(diff: string): number[] {
+  const lines: number[] = [];
+  for (const row of diff.split('\n')) {
+    const m = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/.exec(row);
+    if (!m) continue;
+    const start = Number(m[1]);
+    const count = m[2] === undefined ? 1 : Number(m[2]); // a `+c,0` (pure deletion) marks nothing
+    for (let i = 0; i < count; i++) lines.push(start + i);
+  }
+  return lines;
+}
+
+/** Lines in `rel`'s working-tree copy that differ from HEAD — added or modified, never deletions (§20.2). */
+function changedLinesOf(root: string, rel: string, body: string, git: (args: string[], cwd: string) => string): number[] {
+  let status: string;
+  try {
+    status = git(['status', '--porcelain', '-z', '--', rel], root);
+  } catch {
+    return [];
+  }
+  if (status.length === 0) return []; // matches HEAD and index → nothing to mark
+  if (status.startsWith('??')) {
+    // Untracked: HEAD has no version, so every content line is new. `git diff HEAD` would skip it.
+    const content = body.endsWith('\n') ? body.slice(0, -1) : body;
+    return content === '' ? [] : content.split('\n').map((_, i) => i + 1);
+  }
+  try {
+    return addedLinesFromDiff(git(['diff', '--no-color', '-U0', 'HEAD', '--', rel], root));
+  } catch {
+    return [];
+  }
+}
+
 export function readArtifact(cwd: string, relPath: string, deps: DiscoverDeps = {}): ViewerFile | null {
   const git = deps.git ?? defaultGit;
-  const root = gitRootOf(cwd, git) ?? path.resolve(cwd);
+  const gitRoot = gitRootOf(cwd, git);
+  const root = gitRoot ?? path.resolve(cwd);
   const abs = path.resolve(root, relPath);
   // Escape guard: the resolved path must stay within the discovery root (§20.2).
   if (abs !== root && !abs.startsWith(root + path.sep)) return null;
@@ -167,7 +202,13 @@ export function readArtifact(cwd: string, relPath: string, deps: DiscoverDeps = 
     if (body.includes(NUL)) return null; // binary
     const ext = path.extname(abs).toLowerCase();
     const kind: ViewerFileKind = ext === '.md' || ext === '.markdown' ? 'markdown' : 'code';
-    return { relPath: relPath.split(path.sep).join('/'), name: path.basename(abs), kind, lang: LANG_BY_EXT[ext], body };
+    const rel = relPath.split(path.sep).join('/');
+    const file: ViewerFile = { relPath: rel, name: path.basename(abs), kind, lang: LANG_BY_EXT[ext], body };
+    if (gitRoot && kind === 'code') {
+      const changed = changedLinesOf(gitRoot, rel, body, git);
+      if (changed.length) file.changedLines = changed;
+    }
+    return file;
   } catch {
     return null;
   }

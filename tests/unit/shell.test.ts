@@ -186,6 +186,41 @@ describe('shell controller (§24.1C — views, hotkeys, docked drawer, theme)', 
     });
   });
 
+  describe('viewer full screen (§20.2)', () => {
+    it('toggles the app-chrome class and signals the change through the contract', () => {
+      const onChange = vi.fn();
+      shell = createShell(app, { onViewerFullscreenChange: onChange });
+      shell.setViewerFullscreen(true);
+      expect(app.classList.contains('viewer-fullscreen')).toBe(true);
+      expect(shell.isViewerFullscreen()).toBe(true);
+      expect(onChange).toHaveBeenLastCalledWith(true);
+      shell.setViewerFullscreen(false);
+      expect(app.classList.contains('viewer-fullscreen')).toBe(false);
+      expect(onChange).toHaveBeenLastCalledWith(false);
+    });
+
+    it('Escape exits full screen (and is inert otherwise)', () => {
+      const onChange = vi.fn();
+      shell = createShell(app, { onViewerFullscreenChange: onChange });
+      key('Escape', false); // not in full screen → nothing to do
+      expect(onChange).not.toHaveBeenCalled();
+      shell.setViewerFullscreen(true);
+      key('Escape', false);
+      expect(app.classList.contains('viewer-fullscreen')).toBe(false);
+      expect(onChange).toHaveBeenLastCalledWith(false);
+    });
+
+    it('switching to another view exits full screen', () => {
+      const onChange = vi.fn();
+      shell = createShell(app, { onViewerFullscreenChange: onChange });
+      shell.setView('2');
+      shell.setViewerFullscreen(true);
+      shell.setView('1');
+      expect(app.classList.contains('viewer-fullscreen')).toBe(false);
+      expect(onChange).toHaveBeenLastCalledWith(false);
+    });
+  });
+
   describe('dispose', () => {
     it('removes global key listeners so hotkeys stop firing', () => {
       shell = createShell(app);

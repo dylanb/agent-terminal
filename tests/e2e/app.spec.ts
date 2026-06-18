@@ -542,6 +542,165 @@ test('file names are rendered in full, not truncated with an ellipsis (§20.2)',
   expect(clipped).toBeLessThanOrEqual(1);
 });
 
+test('the code viewer marks changed lines with a gutter stripe and a line tint (§20.2)', async () => {
+  // Commit a 3-line source file, then modify only line 2. The viewer must mark exactly that
+  // line — current-file position, not a diff — with both a gutter stripe and a line tint.
+  const dir = '/tmp/agent-term-e2e-changedlines';
+  await typeCommand(
+    `rm -rf "${dir}" && mkdir -p "${dir}/src" && cd "${dir}" && git init -q && ` +
+      `git config user.email t@t && git config user.name T && ` +
+      `printf 'const a = 1;\\nconst b = 2;\\nconst c = 3;\\n' > src/app.ts && ` +
+      `git add -A && git commit -qm init && ` +
+      `printf 'const a = 1;\\nconst b = 99;\\nconst c = 3;\\n' > src/app.ts && pwd`,
+  );
+  await expect(page.locator('.xterm-rows > div').filter({ hasText: new RegExp(`^\\s*${dir}\\s*$`) })).not.toHaveCount(0);
+  await expect(page.locator('.status-chip[data-status="agent"]')).toContainText('quiet', { timeout: 6_000 });
+
+  await page.keyboard.press('Control+2');
+  const row = page.locator('#artifacts .tree .f').filter({ hasText: 'app.ts' });
+  await expect(row).toHaveCount(1);
+  await row.click();
+  const body = page.locator('#artifacts .vbody');
+  await expect(body.locator('.cm-editor')).toBeVisible();
+  await expect(body.locator('.cm-editor')).toContainText('99');
+  // Line 2 is the only changed line → exactly one tinted line and one gutter stripe.
+  await expect(body.locator('.cm-changedLine')).toHaveCount(1);
+  await expect(body.locator('.cm-changedGutter')).toHaveCount(1);
+});
+
+test('the viewer gates the sinks on a selection and steps through changed sections (§20.2)', async () => {
+  // A 200-line file with two far-apart edits (lines 2 and 180): change 2 is off-screen at open,
+  // so the readout/controls must follow the viewport, not a static index.
+  const dir = '/tmp/agent-term-e2e-changenav';
+  await typeCommand(
+    `rm -rf "${dir}" && mkdir -p "${dir}/src" && cd "${dir}" && git init -q && ` +
+      `git config user.email t@t && git config user.name T && ` +
+      `seq 1 200 | sed 's|.*|// line &|' > src/app.ts && ` +
+      `git add -A && git commit -qm init && ` +
+      `sed -i '2s/$/ EDIT2/; 180s/$/ EDIT180/' src/app.ts && pwd`,
+  );
+  await expect(page.locator('.xterm-rows > div').filter({ hasText: new RegExp(`^\\s*${dir}\\s*$`) })).not.toHaveCount(0);
+  await expect(page.locator('.status-chip[data-status="agent"]')).toContainText('quiet', { timeout: 6_000 });
+
+  await page.keyboard.press('Control+2');
+  const row = page.locator('#artifacts .tree .f').filter({ hasText: 'app.ts' });
+  await expect(row).toHaveCount(1);
+  await row.click();
+  const body = page.locator('#artifacts .vbody');
+  await expect(body.locator('.cm-editor')).toBeVisible();
+
+  // Tweak 1: the sinks are disabled with nothing highlighted, and enable once a passage is selected.
+  const send = page.locator('#artifacts .art-send');
+  const todo = page.locator('#artifacts .art-todo');
+  await expect(send).toBeDisabled();
+  await expect(todo).toBeDisabled();
+
+  // Tweak 2: open at the top → only change 1 on screen; change 2 (line 180) is below the fold.
+  const count = page.locator('#artifacts .art-navcount');
+  const prev = page.locator('#artifacts .art-prev');
+  const next = page.locator('#artifacts .art-next');
+  await expect(count).toHaveText('1 / 2');
+  await expect(prev).toBeDisabled();
+  await expect(next).toBeEnabled();
+
+  await body.locator('.cm-line').filter({ hasText: 'EDIT2' }).selectText();
+  await expect(send).toBeEnabled();
+  await expect(todo).toBeEnabled();
+
+  // Next jumps to the off-screen change → readout follows, boundaries flip.
+  await next.click();
+  await expect(count).toHaveText('2 / 2');
+  await expect(next).toBeDisabled();
+  await expect(prev).toBeEnabled();
+  await prev.click();
+  await expect(count).toHaveText('1 / 2');
+});
+
+test('the viewer has a keyboard-accessible full-screen mode (§20.2)', async () => {
+  const dir = '/tmp/agent-term-e2e-fullscreen';
+  await typeCommand(
+    `rm -rf "${dir}" && mkdir -p "${dir}" && cd "${dir}" && git init -q && ` +
+      `printf '# Doc\\n\\nbody\\n' > doc.md && pwd`,
+  );
+  await expect(page.locator('.xterm-rows > div').filter({ hasText: new RegExp(`^\\s*${dir}\\s*$`) })).not.toHaveCount(0);
+  await expect(page.locator('.status-chip[data-status="agent"]')).toContainText('quiet', { timeout: 6_000 });
+
+  await page.keyboard.press('Control+2');
+  const appEl = page.locator('#app');
+  const rail = page.locator('#app .rail');
+  const drawer = page.locator('#app #drawer');
+  const split = page.locator('#artifacts .artsplit');
+  await expect(rail).toBeVisible();
+
+  // Enter full screen via the toolbar button → all app chrome hidden, header + tree collapsed.
+  await page.locator('#artifacts .art-fs').click();
+  await expect(appEl).toHaveClass(/viewer-fullscreen/);
+  await expect(rail).toBeHidden();
+  await expect(drawer).toBeHidden();
+  await expect(split).not.toHaveClass(/header-open/);
+  await expect(split).not.toHaveClass(/tree-open/);
+
+  // The edge strips pop the header and tree open and closed.
+  await page.locator('#artifacts .fs-strip-top').click();
+  await expect(split).toHaveClass(/header-open/);
+  await page.locator('#artifacts .fs-strip-left').click();
+  await expect(split).toHaveClass(/tree-open/);
+
+  // ESC exits → chrome returns.
+  await page.keyboard.press('Escape');
+  await expect(appEl).not.toHaveClass(/viewer-fullscreen/);
+  await expect(rail).toBeVisible();
+
+  // Keyboard path (§20.2 a11y): Enter on the focused toggle enters; on enter, focus lands on the
+  // top strip — Enter there pops the header open; the revealed exit button leaves full screen.
+  await page.locator('#artifacts .art-fs').focus();
+  await page.keyboard.press('Enter');
+  await expect(appEl).toHaveClass(/viewer-fullscreen/);
+  await page.keyboard.press('Enter'); // top strip is focused → opens the header
+  await expect(split).toHaveClass(/header-open/);
+  await page.locator('#artifacts .art-fs').click(); // the in-header exit control
+  await expect(appEl).not.toHaveClass(/viewer-fullscreen/);
+});
+
+test('the full-screen tree popout is resizable and remembers its width (§20.2)', async () => {
+  const dir = '/tmp/agent-term-e2e-fspopout';
+  await typeCommand(
+    `rm -rf "${dir}" && mkdir -p "${dir}" && cd "${dir}" && git init -q && printf '# Doc\\n' > doc.md && pwd`,
+  );
+  await expect(page.locator('.xterm-rows > div').filter({ hasText: new RegExp(`^\\s*${dir}\\s*$`) })).not.toHaveCount(0);
+  await expect(page.locator('.status-chip[data-status="agent"]')).toContainText('quiet', { timeout: 6_000 });
+
+  const split = page.locator('#artifacts .artsplit');
+  const fsW = () => split.evaluate((e) => parseFloat((e as HTMLElement).style.getPropertyValue('--tree-w-fs')));
+  const enterAndOpenTree = async (): Promise<void> => {
+    await page.keyboard.press('Control+2');
+    await page.locator('#artifacts .art-fs').click();
+    await expect(page.locator('#app')).toHaveClass(/viewer-fullscreen/);
+    await page.locator('#artifacts .fs-strip-left').click(); // pop the tree open
+    await expect(split).toHaveClass(/tree-open/);
+  };
+
+  await enterAndOpenTree();
+  const before = await fsW();
+  expect(before).toBeGreaterThanOrEqual(0.3 * (await page.evaluate(() => window.innerWidth))); // ≥30% default
+
+  // Drag the popout's resize handle wider.
+  const handle = page.locator('#artifacts .fs-tree-resize');
+  const box = (await handle.boundingBox())!;
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width / 2 + 90, box.y + box.height / 2, { steps: 8 });
+  await page.mouse.up();
+  await expect.poll(fsW).toBeGreaterThan(before + 50);
+  const resized = await fsW();
+
+  // The width survives a renderer reload (persisted, like the split tree).
+  await page.keyboard.press('Escape');
+  await page.reload();
+  await enterAndOpenTree();
+  await expect.poll(fsW).toBeGreaterThan(resized - 8);
+});
+
 test('the artifact tree pane is resizable by dragging its edge, and the width persists (§20.2)', async () => {
   await page.keyboard.press('Control+2');
   await expect(page.locator('[data-viewpane="2"]')).toBeVisible();

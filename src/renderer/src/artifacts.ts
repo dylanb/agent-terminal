@@ -8,6 +8,16 @@
 
 import type { ArtifactNode, ArtifactScope, ArtifactTree, ViewerFile } from '../../shared/ipc';
 
+/** Handle on a rendered code view, used to drive changed-section navigation (§20.2). */
+export interface CodeView {
+  /** Scroll the editor so 1-based `line` is in view. */
+  revealLine(line: number): void;
+  /** 1-based inclusive line range currently visible in the viewport. */
+  visibleLines(): { top: number; bottom: number };
+  /** Subscribe to viewport changes (scroll/resize); returns an unsubscribe. */
+  onViewportChange(listener: () => void): () => void;
+}
+
 /** Render seams, sinks, and the discovery/read data sources — all injected (UI-STANDARDS §2.2). */
 export interface ArtifactsDeps {
   /** Discover the current context's tree (real git/fs in production). */
@@ -19,13 +29,19 @@ export interface ArtifactsDeps {
   /** Add the selection to the repo-scoped todo list (§16.2). */
   addToTodo: (text: string) => void | Promise<void>;
   renderMarkdown?: (body: string, into: HTMLElement) => void;
-  renderCode?: (body: string, lang: string | undefined, into: HTMLElement) => void;
+  renderCode?: (body: string, lang: string | undefined, into: HTMLElement, changedLines?: number[]) => CodeView | void;
   /** Current selection text within the viewer body (defaults to the live DOM selection). */
   readSelection?: (viewer: HTMLElement) => string;
   /** Persisted tree-pane width in px (§20.2); applied on load. */
   initialWidth?: number;
   /** Persist a new tree-pane width in px (debounced caller's concern). */
   onWidthChange?: (px: number) => void;
+  /** Persisted full-screen tree-popout width in px (§20.2); when absent it defaults to 30% of the viewport. */
+  initialFullscreenWidth?: number;
+  /** Persist a new full-screen tree-popout width in px. */
+  onFullscreenWidthChange?: (px: number) => void;
+  /** Ask the app shell to enter/exit viewer full screen (§20.2); the shell calls setFullscreen back. */
+  onRequestFullscreen?: (on: boolean) => void;
 }
 
 const DEFAULT_TREE_W = 248;
@@ -41,6 +57,11 @@ export interface Artifacts {
   current(): string | null;
   /** Apply a tree-pane width without persisting (e.g. the persisted value once settings load). */
   setWidth(px: number): void;
+  /** Apply a persisted full-screen popout width without persisting (§20.2). */
+  setFullscreenWidth(px: number): void;
+  /** Reflect viewer full-screen state (§20.2); driven by the shell, never emits back. */
+  setFullscreen(on: boolean): void;
+  isFullscreen(): boolean;
   dispose(): void;
 }
 
@@ -118,14 +139,47 @@ export function createArtifacts(host: HTMLElement, deps: ArtifactsDeps): Artifac
   const actions = el('div', 'vactions');
   const sendBtn = el('button', 'art-send pill sm signal', 'Send to agent') as HTMLButtonElement;
   const todoBtn = el('button', 'art-todo pill sm', 'Add to todo') as HTMLButtonElement;
-  actions.append(sendBtn, todoBtn);
+  sendBtn.disabled = true; // inert until there is a highlight to act on (§20.2)
+  todoBtn.disabled = true;
+  // The sinks act on the live selection, which a button mousedown would otherwise collapse;
+  // preventDefault keeps it alive across the click so the handler still sees it (§20.2).
+  for (const b of [sendBtn, todoBtn]) b.addEventListener('mousedown', (e) => e.preventDefault());
+  // Step through the file's changed sections (§20.2), with a current/total readout.
+  const prevBtn = el('button', 'art-prev pill sm', '‹') as HTMLButtonElement;
+  const nextBtn = el('button', 'art-next pill sm', '›') as HTMLButtonElement;
+  prevBtn.setAttribute('aria-label', 'Previous changed section');
+  nextBtn.setAttribute('aria-label', 'Next changed section');
+  const navCount = el('span', 'art-navcount');
+  const nav = el('div', 'vnav');
+  nav.hidden = true;
+  nav.append(prevBtn, navCount, nextBtn);
+  // Full-screen toggle (§20.2): the same button enters and exits; in full screen it lives in the
+  // revealed header (the "top bar when visible") and Escape is the other exit.
+  const fsBtn = el('button', 'art-fs pill sm', '⛶') as HTMLButtonElement;
+  fsBtn.setAttribute('aria-label', 'Full screen');
+  fsBtn.setAttribute('aria-pressed', 'false');
+  actions.append(sendBtn, todoBtn, nav, fsBtn);
   const titleWrap = el('div', 'vtitlewrap');
   titleWrap.append(title, meta);
   bar.append(titleWrap, actions);
   const body = el('div', 'vbody');
   viewer.append(bar, body);
 
-  split.append(tree, divider, viewer);
+  // Thin edge strips that pop the collapsed header/tree open and closed in full screen (§20.2);
+  // hidden by CSS outside full screen. Real buttons → Tab-reachable, Enter/Space-operable.
+  const topStrip = el('button', 'fs-strip fs-strip-top') as HTMLButtonElement;
+  topStrip.setAttribute('aria-label', 'Show file header');
+  topStrip.setAttribute('aria-expanded', 'false');
+  const leftStrip = el('button', 'fs-strip fs-strip-left') as HTMLButtonElement;
+  leftStrip.setAttribute('aria-label', 'Show file tree');
+  leftStrip.setAttribute('aria-expanded', 'false');
+  // Resize handle on the full-screen tree popout's right edge (§20.2); drag or arrow-key.
+  const fsResize = el('div', 'fs-tree-resize');
+  fsResize.setAttribute('role', 'separator');
+  fsResize.setAttribute('aria-orientation', 'vertical');
+  fsResize.setAttribute('aria-label', 'Resize file tree');
+  fsResize.tabIndex = 0;
+  split.append(tree, divider, viewer, topStrip, leftStrip, fsResize);
   host.appendChild(split);
 
   let scope: ArtifactScope = 'curated';
@@ -162,15 +216,122 @@ export function createArtifacts(host: HTMLElement, deps: ArtifactsDeps): Artifac
     else return;
     e.preventDefault();
   });
+
+  // --- Full-screen tree popout: its own remembered width, defaulting to 30% of the viewport so it
+  // opens usefully wide; resized by dragging its right edge or arrow-keying it (§20.2). ---
+  const viewportW = (): number => doc.defaultView?.innerWidth ?? 1024;
+  const clampFsWidth = (px: number): number =>
+    Math.min(Math.round(viewportW() * 0.85), Math.max(200, Math.round(px)));
+  let fsWidth = clampFsWidth(deps.initialFullscreenWidth ?? Math.ceil(viewportW() * 0.3));
+  function applyFsWidth(px: number, persist: boolean): void {
+    fsWidth = clampFsWidth(px);
+    split.style.setProperty('--tree-w-fs', `${fsWidth}px`);
+    fsResize.setAttribute('aria-valuenow', String(fsWidth));
+    if (persist) deps.onFullscreenWidthChange?.(fsWidth);
+  }
+  applyFsWidth(fsWidth, false);
+  fsResize.addEventListener('mousedown', (e) => {
+    e.preventDefault();
+    const startX = (e as MouseEvent).clientX;
+    const startW = fsWidth;
+    const onMove = (ev: MouseEvent): void => applyFsWidth(startW + (ev.clientX - startX), false);
+    const onUp = (): void => {
+      doc.removeEventListener('mousemove', onMove);
+      doc.removeEventListener('mouseup', onUp);
+      deps.onFullscreenWidthChange?.(fsWidth);
+    };
+    doc.addEventListener('mousemove', onMove);
+    doc.addEventListener('mouseup', onUp);
+  });
+  fsResize.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowLeft') applyFsWidth(fsWidth - WIDTH_STEP, true);
+    else if (e.key === 'ArrowRight') applyFsWidth(fsWidth + WIDTH_STEP, true);
+    else return;
+    e.preventDefault();
+  });
   divider.addEventListener('dblclick', () => applyWidth(DEFAULT_TREE_W, true));
   // A button click collapses the live DOM selection before its handler runs, so we remember
   // the last non-empty in-viewer selection and fall back to it at click time.
   let lastSelection = '';
-  const onSelectionChange = (): void => {
+  function updateActions(): void {
     const text = readSelection(body);
     if (text) lastSelection = text;
+    sendBtn.disabled = text.length === 0;
+    todoBtn.disabled = text.length === 0;
+  }
+  doc.addEventListener('selectionchange', updateActions);
+
+  // --- Changed-section navigation (§20.2): viewport-driven. `sections` is the 1-based start
+  // line of each contiguous changed run; the readout and prev/next targets are read off what
+  // the editor currently shows, so scrolling updates them live. ---
+  let codeView: CodeView | null = null;
+  let sections: number[] = [];
+  let unsubViewport: (() => void) | null = null;
+  function changedSections(lines?: number[]): number[] {
+    if (!lines || lines.length === 0) return [];
+    const sorted = [...lines].sort((a, b) => a - b);
+    const starts: number[] = [];
+    let prev = Number.NEGATIVE_INFINITY;
+    for (const n of sorted) {
+      if (n !== prev + 1) starts.push(n);
+      prev = n;
+    }
+    return starts;
+  }
+  // Current = the last section scrolled onto/past the screen (≤ viewport bottom); prev/next
+  // target the nearest section strictly above the top / below the bottom of the viewport.
+  function navState(): { display: number; prevTo: number | null; nextTo: number | null } {
+    if (!codeView || sections.length === 0) return { display: 0, prevTo: null, nextTo: null };
+    const { top, bottom } = codeView.visibleLines();
+    let cur = -1;
+    let prevTo: number | null = null;
+    let nextTo: number | null = null;
+    for (let i = 0; i < sections.length; i++) {
+      if (sections[i] <= bottom) cur = i;
+      if (sections[i] < top) prevTo = sections[i];
+      if (nextTo === null && sections[i] > bottom) nextTo = sections[i];
+    }
+    return { display: Math.max(cur, 0) + 1, prevTo, nextTo };
+  }
+  function updateNav(): void {
+    nav.hidden = !codeView || sections.length === 0;
+    if (nav.hidden) return;
+    const s = navState();
+    navCount.textContent = `${s.display} / ${sections.length}`;
+    prevBtn.disabled = s.prevTo === null;
+    nextBtn.disabled = s.nextTo === null;
+  }
+  prevBtn.addEventListener('click', () => {
+    const { prevTo } = navState();
+    if (prevTo !== null) codeView?.revealLine(prevTo);
+  });
+  nextBtn.addEventListener('click', () => {
+    const { nextTo } = navState();
+    if (nextTo !== null) codeView?.revealLine(nextTo);
+  });
+
+  // --- Full-screen viewer (§20.2): the button requests the chrome change through the contract;
+  // the shell calls setFullscreen back. The header/tree slide off and the edge strips pop them
+  // open and closed. State lives on the .artsplit element so the styling is placement-agnostic. ---
+  let fullscreen = false;
+  fsBtn.addEventListener('click', () => deps.onRequestFullscreen?.(!fullscreen));
+  const toggleStrip = (strip: HTMLButtonElement, cls: string): void => {
+    const open = split.classList.toggle(cls);
+    strip.setAttribute('aria-expanded', String(open));
   };
-  doc.addEventListener('selectionchange', onSelectionChange);
+  topStrip.addEventListener('click', () => toggleStrip(topStrip, 'header-open'));
+  leftStrip.addEventListener('click', () => toggleStrip(leftStrip, 'tree-open'));
+  function setFullscreen(on: boolean): void {
+    if (on === fullscreen) return;
+    fullscreen = on;
+    split.classList.toggle('fullscreen', on);
+    if (on) split.classList.remove('header-open', 'tree-open'); // both collapsed on enter
+    topStrip.setAttribute('aria-expanded', 'false');
+    leftStrip.setAttribute('aria-expanded', 'false');
+    fsBtn.setAttribute('aria-pressed', String(on));
+    fsBtn.setAttribute('aria-label', on ? 'Exit full screen' : 'Full screen');
+    (on ? topStrip : fsBtn).focus(); // keep keyboard focus on a live control across the transition
+  }
 
   const PROV_LABEL: Record<string, string> = { changed: 'changed', loop: 'loop', pr: 'PR' };
 
@@ -275,8 +436,19 @@ export function createArtifacts(host: HTMLElement, deps: ArtifactsDeps): Artifac
     }
     title.textContent = file.name;
     meta.textContent = file.relPath;
-    if (file.kind === 'code') renderCode(file.body, file.lang, body);
-    else renderMarkdown(file.body, body);
+    unsubViewport?.();
+    unsubViewport = null;
+    codeView = null;
+    if (file.kind === 'code') {
+      codeView = renderCode(file.body, file.lang, body, file.changedLines) ?? null;
+      sections = changedSections(file.changedLines);
+      if (codeView) unsubViewport = codeView.onViewportChange(updateNav);
+    } else {
+      renderMarkdown(file.body, body);
+      sections = [];
+    }
+    updateNav();
+    updateActions();
   }
 
   async function refresh(): Promise<void> {
@@ -324,8 +496,12 @@ export function createArtifacts(host: HTMLElement, deps: ArtifactsDeps): Artifac
     open,
     current: () => current,
     setWidth: (px) => applyWidth(px, false),
+    setFullscreenWidth: (px) => applyFsWidth(px, false),
+    setFullscreen,
+    isFullscreen: () => fullscreen,
     dispose: () => {
-      doc.removeEventListener('selectionchange', onSelectionChange);
+      doc.removeEventListener('selectionchange', updateActions);
+      unsubViewport?.();
       host.replaceChildren();
     },
   };

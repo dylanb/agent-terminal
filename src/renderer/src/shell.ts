@@ -24,6 +24,9 @@ export interface Shell {
   getTab(): DrawerTab;
   setTheme(t: Theme): void;
   getTheme(): Theme;
+  /** Full-screen the viewer by hiding all app chrome (§20.2); Escape and a view change exit. */
+  setViewerFullscreen(on: boolean): void;
+  isViewerFullscreen(): boolean;
   dispose(): void;
 }
 
@@ -31,6 +34,8 @@ export interface Shell {
 export interface ShellDeps {
   getTheme?: () => Promise<Theme>;
   setTheme?: (t: Theme) => void;
+  /** Signalled when viewer full screen toggles (§20.2) so the viewer can collapse its chrome. */
+  onViewerFullscreenChange?: (on: boolean) => void;
 }
 
 export function createShell(root: HTMLElement, deps: ShellDeps = {}): Shell {
@@ -40,8 +45,10 @@ export function createShell(root: HTMLElement, deps: ShellDeps = {}): Shell {
   let view: ViewId = (root.querySelector('[data-viewpane].on')?.getAttribute('data-viewpane') as ViewId) ?? '1';
   let tab: DrawerTab = (root.querySelector('.drawer .tab.on')?.getAttribute('data-tab') as DrawerTab) ?? 'capture';
   let theme: Theme = themeTarget.getAttribute('data-theme') === 'dark' ? 'dark' : 'light';
+  let fullscreen = root.classList.contains('viewer-fullscreen');
 
   function setView(v: ViewId): void {
+    if (fullscreen && v !== '2') setViewerFullscreen(false); // chrome is hidden; leaving the viewer restores it
     view = v;
     root.querySelectorAll('[data-viewpane]').forEach((p) => p.classList.toggle('on', p.getAttribute('data-viewpane') === v));
     root.querySelectorAll('[data-viewbtn]').forEach((b) => {
@@ -94,6 +101,14 @@ export function createShell(root: HTMLElement, deps: ShellDeps = {}): Shell {
     deps.setTheme?.(t);
   }
 
+  function setViewerFullscreen(on: boolean): void {
+    if (on === fullscreen) return;
+    fullscreen = on;
+    root.classList.toggle('viewer-fullscreen', on);
+    deps.onViewerFullscreenChange?.(on);
+    signalLayoutChange(); // hiding/showing chrome changes the main width → refit width-sensitive panes
+  }
+
   const onClick = (e: Event): void => {
     const target = e.target as Element;
     const vb = target.closest('[data-viewbtn]');
@@ -109,6 +124,12 @@ export function createShell(root: HTMLElement, deps: ShellDeps = {}): Shell {
   // ⌘/Ctrl+K (a control char) and ⌘/Ctrl+1-3 before they reach us, so the shell's
   // own chords must be intercepted ahead of any focused descendant (§22.4).
   const onKeyDown = (e: KeyboardEvent): void => {
+    if (e.key === 'Escape' && fullscreen) {
+      e.preventDefault();
+      e.stopPropagation();
+      setViewerFullscreen(false);
+      return;
+    }
     if (!(e.metaKey || e.ctrlKey)) return;
     const k = e.key.toLowerCase();
     if (k === 'k') {
@@ -139,6 +160,8 @@ export function createShell(root: HTMLElement, deps: ShellDeps = {}): Shell {
     getTab: () => tab,
     setTheme,
     getTheme: () => theme,
+    setViewerFullscreen,
+    isViewerFullscreen: () => fullscreen,
     dispose() {
       root.removeEventListener('click', onClick);
       doc.removeEventListener('keydown', onKeyDown, true);

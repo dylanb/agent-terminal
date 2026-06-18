@@ -108,4 +108,35 @@ describe('artifact discovery (§20.1 / D8 — real git)', () => {
     expect(readArtifact(repo, '../../etc/passwd')).toBeNull();
     expect(readArtifact(repo, 'does-not-exist.md')).toBeNull();
   });
+
+  // §20.2: a code file carries the current-file line numbers that differ from HEAD — added or
+  // modified lines only (not a diff; deletions leave no current line to mark).
+  it('marks added lines of a modified code file by their current-file position', () => {
+    // a.ts was committed as a single line; append two more, leaving line 1 untouched.
+    writeFileSync(join(repo, 'src', 'a.ts'), 'export const x = 1;\nexport const y = 2;\nexport const z = 3;\n');
+    expect(readArtifact(repo, 'src/a.ts')?.changedLines).toEqual([2, 3]);
+  });
+
+  it('marks a modified line in place, not as a deletion', () => {
+    writeFileSync(join(repo, 'src', 'a.ts'), 'export const x = 99;\n');
+    expect(readArtifact(repo, 'src/a.ts')?.changedLines).toEqual([1]);
+  });
+
+  it('marks every line of an untracked (entirely new) code file', () => {
+    writeFileSync(join(repo, 'src', 'fresh.ts'), 'a\nb\nc\n');
+    expect(readArtifact(repo, 'src/fresh.ts')?.changedLines).toEqual([1, 2, 3]);
+  });
+
+  it('leaves changedLines unset for an unchanged code file', () => {
+    expect(readArtifact(repo, 'src/a.ts')?.changedLines).toBeUndefined();
+  });
+
+  it('does not compute changed lines for markdown files', () => {
+    expect(readArtifact(repo, 'committed.md')?.changedLines).toBeUndefined();
+  });
+
+  it('outside a git repo, code files carry no changed-line info', () => {
+    writeFileSync(join(plain, 'free.ts'), 'a\nb\n');
+    expect(readArtifact(plain, 'free.ts')?.changedLines).toBeUndefined();
+  });
 });

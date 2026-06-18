@@ -8,6 +8,9 @@
 // content are real selectable DOM), so neither path needs a bespoke selection reader.
 
 import type MarkdownItLib from 'markdown-it';
+import type { Extension } from '@codemirror/state';
+import type { Decoration as DecorationT, EditorView as EditorViewT } from '@codemirror/view';
+import type { CodeView } from './artifacts';
 
 let renderSeq = 0; // guards against a stale async render overwriting a newer one
 
@@ -54,17 +57,52 @@ export function renderMarkdownInto(body: string, into: HTMLElement): void {
   })();
 }
 
-/** Render code read-only and syntax-highlighted in a CodeMirror 6 editor. */
-export function renderCodeInto(body: string, lang: string | undefined, into: HTMLElement): void {
+/**
+ * Render code read-only and syntax-highlighted in a CodeMirror 6 editor. `changedLines` are
+ * 1-based current-file lines that differ from HEAD (§20.2); each is marked with both a gutter
+ * stripe and a line-background tint. The doc is read-only, so the decorations are static.
+ * Returns a handle for changed-section navigation; a reveal requested before the editor has
+ * finished its async build is replayed once it exists.
+ */
+export function renderCodeInto(
+  body: string,
+  lang: string | undefined,
+  into: HTMLElement,
+  changedLines?: number[],
+): CodeView {
   const token = ++renderSeq;
   into.classList.remove('md');
   into.textContent = '…';
+  let editor: EditorViewT | null = null;
+  let EV: typeof EditorViewT | null = null;
+  let pending: number | null = null;
+  const listeners = new Set<() => void>();
+  const notify = (): void => listeners.forEach((l) => l());
+  const reveal = (line: number): void => {
+    if (!editor || !EV) {
+      pending = line;
+      return;
+    }
+    const { doc } = editor.state;
+    if (line < 1 || line > doc.lines) return;
+    editor.dispatch({ effects: EV.scrollIntoView(doc.line(line).from, { y: 'center' }) });
+  };
+  const visibleLines = (): { top: number; bottom: number } => {
+    if (!editor) return { top: 1, bottom: 1 };
+    const sd = editor.scrollDOM;
+    const { doc } = editor.state;
+    const top = doc.lineAt(editor.lineBlockAtHeight(sd.scrollTop).from).number;
+    const bottom = doc.lineAt(editor.lineBlockAtHeight(sd.scrollTop + sd.clientHeight).from).number;
+    return { top, bottom };
+  };
   void (async () => {
-    const [{ EditorView, basicSetup }, { EditorState }, { javascript }] = await Promise.all([
-      import('codemirror'),
-      import('@codemirror/state'),
-      import('@codemirror/lang-javascript'),
-    ]);
+    const [{ EditorView, basicSetup }, { EditorState, StateField, RangeSetBuilder }, view, { javascript }] =
+      await Promise.all([
+        import('codemirror'),
+        import('@codemirror/state'),
+        import('@codemirror/view'),
+        import('@codemirror/lang-javascript'),
+      ]);
     if (token !== renderSeq) return;
     into.replaceChildren();
     // Chrome follows the app theme via tokens; basicSetup's default highlight stays (§24.1C polish).
@@ -72,10 +110,17 @@ export function renderCodeInto(body: string, lang: string | undefined, into: HTM
       '&': { backgroundColor: 'transparent', color: 'var(--ink)', fontSize: '13px' },
       '.cm-gutters': { backgroundColor: 'transparent', color: 'var(--muted)', border: 'none' },
       '.cm-activeLine, .cm-activeLineGutter': { backgroundColor: 'transparent' },
+      '.cm-changeGutter': { width: '3px', padding: '0' },
+      '.cm-changedGutter': { width: '3px', height: '100%', backgroundColor: 'var(--changed)' },
+      '.cm-changedLine': { backgroundColor: 'var(--changed-wash)' },
     });
+
+    const changed = new Set(changedLines ?? []);
+    const changeExt = buildChangeExtensions(changed, { EditorView, StateField, RangeSetBuilder }, view);
+
     const isTs = lang === 'typescript' || lang === 'ts' || lang === 'tsx';
     const isJsLike = isTs || lang === 'javascript' || lang === 'js' || lang === 'jsx';
-    new EditorView({
+    editor = new EditorView({
       parent: into,
       state: EditorState.create({
         doc: body,
@@ -85,8 +130,65 @@ export function renderCodeInto(body: string, lang: string | undefined, into: HTM
           EditorView.editable.of(false),
           EditorState.readOnly.of(true),
           cmTheme,
+          // Resize changes which lines are visible; scroll is caught on scrollDOM below (§20.2).
+          EditorView.updateListener.of((u) => { if (u.geometryChanged) notify(); }),
+          ...changeExt,
         ],
       }),
     });
+    EV = EditorView;
+    editor.scrollDOM.addEventListener('scroll', notify);
+    if (pending !== null) {
+      reveal(pending);
+      pending = null;
+    }
+    notify(); // the real viewport is only knowable now the editor is laid out
   })();
+  return {
+    revealLine: reveal,
+    visibleLines,
+    onViewportChange: (listener) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+  };
+}
+
+type CmState = typeof import('@codemirror/state');
+type CmView = typeof import('@codemirror/view');
+
+/** A gutter stripe + a line-background tint on each changed line. Empty set → no extensions. */
+function buildChangeExtensions(
+  changed: Set<number>,
+  s: { EditorView: CmView['EditorView']; StateField: CmState['StateField']; RangeSetBuilder: CmState['RangeSetBuilder'] },
+  view: CmView,
+): Extension[] {
+  if (changed.size === 0) return [];
+  const { Decoration, gutter, GutterMarker } = view;
+
+  const tintField = s.StateField.define({
+    create(state) {
+      const b = new s.RangeSetBuilder<DecorationT>();
+      for (let n = 1; n <= state.doc.lines; n++) {
+        if (changed.has(n)) b.add(state.doc.line(n).from, state.doc.line(n).from, Decoration.line({ class: 'cm-changedLine' }));
+      }
+      return b.finish();
+    },
+    update: (value) => value, // read-only doc: positions never shift
+    provide: (f) => s.EditorView.decorations.from(f),
+  });
+
+  const stripe = new (class extends GutterMarker {
+    toDOM(): Node {
+      const el = document.createElement('div');
+      el.className = 'cm-changedGutter';
+      return el;
+    }
+  })();
+  const changeGutter = gutter({
+    class: 'cm-changeGutter',
+    lineMarker: (v, line) => (changed.has(v.state.doc.lineAt(line.from).number) ? stripe : null),
+  });
+
+  return [tintField, changeGutter];
 }

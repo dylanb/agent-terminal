@@ -56,6 +56,8 @@ export interface UiSettings {
   theme: Theme;
   /** Artifact viewer tree-pane width in px (§20.2), drag/keyboard-resizable & persisted. */
   artifactTreeWidth: number;
+  /** Full-screen tree-popout width in px (§20.2); absent until set — default is 30% of the viewport. */
+  artifactFullscreenTreeWidth?: number;
 }
 
 export const DEFAULT_UI_SETTINGS: UiSettings = { splitRatio: 0.65, lastTab: 'capture', theme: 'light', artifactTreeWidth: 248 };
@@ -368,6 +370,8 @@ export interface ViewerFile {
   kind: ViewerFileKind;
   lang?: string;
   body: string;
+  /** 1-based current-file lines added/modified vs HEAD (code files in a repo; §20.2). Absent when none. */
+  changedLines?: number[];
 }
 
 export interface ViewerTreeMsg {

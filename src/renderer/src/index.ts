@@ -4,7 +4,7 @@ import { wireMonitorPane } from './monitor';
 import { createShell } from './shell';
 import { wireCrossHighlight } from './crossHighlight';
 import { SAMPLE_FLOW, flowLabel, renderFlow, renderRailStatus, createGatePanel } from './flow';
-import { createArtifacts } from './artifacts';
+import { createArtifacts, type Artifacts } from './artifacts';
 import { renderMarkdownInto, renderCodeInto } from './viewerRender';
 import { doInject } from './paneActions';
 import { captureToTodo } from './selection';
@@ -17,9 +17,13 @@ wireMonitorPane();
 // quick-send drawer, and the theme — with theme persisted through the global
 // UI-settings seam (§16.6). The drawer hosts the reused action window; no scrim,
 // so the terminal stays visible for cross-highlight (§16.8, §22.2 amendment).
-createShell(document.getElementById('app')!, {
+// Forward ref so the shell can drive the viewer's full-screen presentation (§20.2) without
+// reaching across organisms — the composition root wires the contract both ways.
+let artifacts: Artifacts | undefined;
+const shell = createShell(document.getElementById('app')!, {
   getTheme: () => window.monitor.getSettings().then((s) => s.theme),
   setTheme: (theme) => window.monitor.setSettings({ theme }),
+  onViewerFullscreenChange: (on) => artifacts?.setFullscreen(on),
 });
 
 // Cross-highlight wiring for any finding/source pairs that carry a data-find id
@@ -44,7 +48,7 @@ if (gatePanel) createGatePanel(gatePanel, SAMPLE_FLOW);
 const artifactsHost = document.getElementById('artifacts');
 if (artifactsHost) {
   let repoKey: string | null = null;
-  const artifacts = createArtifacts(artifactsHost, {
+  const view = createArtifacts(artifactsHost, {
     loadTree: (scope) => window.viewer.tree(scope),
     loadFile: (relPath) => window.viewer.read(relPath),
     renderMarkdown: renderMarkdownInto,
@@ -52,12 +56,18 @@ if (artifactsHost) {
     send: (text) => doInject(text, false),
     addToTodo: (text) => captureToTodo(window.monitor, repoKey, text),
     onWidthChange: (px) => window.monitor.setSettings({ artifactTreeWidth: px }),
+    onFullscreenWidthChange: (px) => window.monitor.setSettings({ artifactFullscreenTreeWidth: px }),
+    onRequestFullscreen: (on) => shell.setViewerFullscreen(on),
   });
+  artifacts = view;
   window.monitor.onCwdChanged((m) => {
     repoKey = m.repoKey;
-    void artifacts.refresh(); // re-discover when the agent cd's into another repo/dir
+    void view.refresh(); // re-discover when the agent cd's into another repo/dir
   });
   // Apply the persisted tree width once settings resolve (kept off the sync path above so a
   // late getSettings can't make the viewer miss the first cwd:changed broadcast, §20.1).
-  void window.monitor.getSettings().then((s) => artifacts.setWidth(s.artifactTreeWidth));
+  void window.monitor.getSettings().then((s) => {
+    view.setWidth(s.artifactTreeWidth);
+    if (s.artifactFullscreenTreeWidth !== undefined) view.setFullscreenWidth(s.artifactFullscreenTreeWidth);
+  });
 }

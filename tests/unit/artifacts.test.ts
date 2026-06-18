@@ -90,6 +90,26 @@ function mount(tree: ArtifactTree = TREE_CURATED, over: Partial<Parameters<typeo
 const key = (k: string) => new KeyboardEvent('keydown', { key: k, bubbles: true });
 const mouse = (type: string, clientX: number) => new MouseEvent(type, { clientX, bubbles: true });
 
+// A controllable stand-in for the CodeMirror viewport (§20.2): revealLine recentres a
+// fixed-height window on the target line; scrollTo simulates a manual scroll. Both notify
+// subscribers, exactly as the real editor's scroll events drive the organism's readout.
+function fakeCodeView(top: number, bottom: number) {
+  const win = bottom - top;
+  const listeners = new Set<() => void>();
+  const state = { top, bottom };
+  const notify = () => listeners.forEach((l) => l());
+  return {
+    revealLine: vi.fn((line: number) => {
+      state.top = Math.max(1, line - Math.floor(win / 2));
+      state.bottom = state.top + win;
+      notify();
+    }),
+    visibleLines: () => ({ top: state.top, bottom: state.bottom }),
+    onViewportChange: (cb: () => void) => { listeners.add(cb); return () => listeners.delete(cb); },
+    scrollTo: (t: number, b: number) => { state.top = t; state.bottom = b; notify(); },
+  };
+}
+
 beforeEach(() => { document.body.replaceChildren(); });
 
 describe('artifact viewer (§20.1/§20.2 — real discovery)', () => {
@@ -114,8 +134,184 @@ describe('artifact viewer (§20.1/§20.2 — real discovery)', () => {
     const v = mount();
     await v.api.refresh();
     expect(v.loadFile).toHaveBeenCalled();
-    expect(v.renderCode).toHaveBeenCalledWith('body of src/a.ts', 'typescript', v.body());
+    expect(v.renderCode).toHaveBeenCalledWith('body of src/a.ts', 'typescript', v.body(), undefined);
     expect(v.title().textContent).toContain('a.ts');
+  });
+
+  it('passes the file\'s changed lines to the code render seam (§20.2)', async () => {
+    const v = mount(undefined, {
+      loadFile: async (relPath: string) => ({ ...fileFor(relPath), changedLines: [2, 5] }),
+    });
+    await v.api.refresh();
+    expect(v.renderCode).toHaveBeenCalledWith('body of src/a.ts', 'typescript', v.body(), [2, 5]);
+  });
+
+  // Tweak 2: contiguous changed lines collapse into sections; the readout and prev/next are
+  // derived from the live viewport — current = the last section scrolled onto/past the screen,
+  // prev/next jump to the nearest section above/below the visible area (§20.2).
+  const navOf = (v: ReturnType<typeof mount>) => ({
+    count: v.host.querySelector('.art-navcount') as HTMLElement,
+    prev: v.host.querySelector('.art-prev') as HTMLButtonElement,
+    next: v.host.querySelector('.art-next') as HTMLButtonElement,
+  });
+
+  it('tracks the viewport, stepping prev/next to the nearest off-screen change (§20.2)', async () => {
+    const cv = fakeCodeView(1, 20); // [2,3] · [50] · [90,91]
+    const v = mount(undefined, {
+      loadFile: async (relPath: string) => ({ ...fileFor(relPath), changedLines: [2, 3, 50, 90, 91] }),
+      renderCode: vi.fn(() => cv),
+    });
+    await v.api.refresh();
+    const { count, prev, next } = navOf(v);
+    expect(count.textContent).toBe('1 / 3'); // open at top → only change 1 is on screen
+    expect(prev.disabled).toBe(true);
+    expect(next.disabled).toBe(false);
+    next.click();
+    expect(cv.revealLine).toHaveBeenLastCalledWith(50);
+    expect(count.textContent).toBe('2 / 3');
+    expect(prev.disabled).toBe(false);
+    expect(next.disabled).toBe(false);
+    next.click();
+    expect(cv.revealLine).toHaveBeenLastCalledWith(90);
+    expect(count.textContent).toBe('3 / 3');
+    expect(next.disabled).toBe(true); // last change → nowhere below
+    prev.click();
+    expect(cv.revealLine).toHaveBeenLastCalledWith(50);
+    expect(count.textContent).toBe('2 / 3');
+  });
+
+  it('reaches the only change with next when it is off-screen at open (§20.2)', async () => {
+    const cv = fakeCodeView(1, 20);
+    const v = mount(undefined, {
+      loadFile: async (relPath: string) => ({ ...fileFor(relPath), changedLines: [100] }),
+      renderCode: vi.fn(() => cv),
+    });
+    await v.api.refresh();
+    const { count, prev, next } = navOf(v);
+    expect(count.textContent).toBe('1 / 1');
+    expect(prev.disabled).toBe(true);
+    expect(next.disabled).toBe(false); // the single change is below the fold — reachable
+    next.click();
+    expect(cv.revealLine).toHaveBeenCalledWith(100);
+    expect(next.disabled).toBe(true); // now on screen → both ends exhausted
+    expect(prev.disabled).toBe(true);
+  });
+
+  it('updates the current number as changes scroll into view (§20.2)', async () => {
+    const cv = fakeCodeView(1, 20);
+    const v = mount(undefined, {
+      loadFile: async (relPath: string) => ({ ...fileFor(relPath), changedLines: [2, 50, 90] }),
+      renderCode: vi.fn(() => cv),
+    });
+    await v.api.refresh();
+    const { count } = navOf(v);
+    expect(count.textContent).toBe('1 / 3');
+    cv.scrollTo(45, 64); // change 2 (line 50) scrolls into view
+    expect(count.textContent).toBe('2 / 3');
+    cv.scrollTo(85, 104); // change 3 (line 90) scrolls into view
+    expect(count.textContent).toBe('3 / 3');
+  });
+
+  it('hides the changed-section controls for a file with no changes (§20.2)', async () => {
+    const v = mount(); // fileFor() carries no changedLines
+    await v.api.refresh();
+    expect((v.host.querySelector('.vnav') as HTMLElement).hidden).toBe(true);
+  });
+
+  // Full-screen viewer (§20.2): the organism owns the in-viewer presentation and the toggle
+  // button; it requests the chrome change through the contract and reflects state set back.
+  it('requests the full-screen toggle through the contract (§20.2)', async () => {
+    const onRequestFullscreen = vi.fn();
+    const v = mount(TREE_CURATED, { onRequestFullscreen });
+    await v.api.refresh();
+    const fs = v.host.querySelector('.art-fs') as HTMLButtonElement;
+    fs.click();
+    expect(onRequestFullscreen).toHaveBeenLastCalledWith(true);
+    v.api.setFullscreen(true);
+    fs.click();
+    expect(onRequestFullscreen).toHaveBeenLastCalledWith(false);
+  });
+
+  it('enters maximal view with the header and tree collapsed (§20.2)', async () => {
+    const v = mount();
+    await v.api.refresh();
+    const split = v.artsplit();
+    const fs = v.host.querySelector('.art-fs') as HTMLButtonElement;
+    v.api.setFullscreen(true);
+    expect(v.api.isFullscreen()).toBe(true);
+    expect(split.classList.contains('fullscreen')).toBe(true);
+    expect(split.classList.contains('header-open')).toBe(false);
+    expect(split.classList.contains('tree-open')).toBe(false);
+    expect(fs.getAttribute('aria-pressed')).toBe('true');
+    v.api.setFullscreen(false);
+    expect(split.classList.contains('fullscreen')).toBe(false);
+    expect(fs.getAttribute('aria-pressed')).toBe('false');
+  });
+
+  it('the edge strips pop the header and tree open and closed, reflecting aria-expanded (§20.2)', async () => {
+    const v = mount();
+    await v.api.refresh();
+    v.api.setFullscreen(true);
+    const split = v.artsplit();
+    const top = v.host.querySelector('.fs-strip-top') as HTMLButtonElement;
+    const left = v.host.querySelector('.fs-strip-left') as HTMLButtonElement;
+    expect(top.getAttribute('aria-expanded')).toBe('false');
+    top.click();
+    expect(split.classList.contains('header-open')).toBe(true);
+    expect(top.getAttribute('aria-expanded')).toBe('true');
+    top.click();
+    expect(split.classList.contains('header-open')).toBe(false);
+    expect(top.getAttribute('aria-expanded')).toBe('false');
+    left.click();
+    expect(split.classList.contains('tree-open')).toBe(true);
+    expect(left.getAttribute('aria-expanded')).toBe('true');
+  });
+
+  it('moves focus to a reveal strip on enter and back to the toggle on exit (§20.2 a11y)', async () => {
+    const v = mount();
+    await v.api.refresh();
+    v.api.setFullscreen(true);
+    expect(document.activeElement).toBe(v.host.querySelector('.fs-strip-top'));
+    v.api.setFullscreen(false);
+    expect(document.activeElement).toBe(v.host.querySelector('.art-fs'));
+  });
+
+  // The full-screen tree overlay is resizable with its own remembered width, defaulting wide.
+  const fsWidth = (v: ReturnType<typeof mount>) =>
+    parseFloat(v.artsplit().style.getPropertyValue('--tree-w-fs'));
+
+  it('the full-screen tree popout defaults to at least 30% of the viewport (§20.2)', async () => {
+    const v = mount();
+    await v.api.refresh();
+    expect(fsWidth(v)).toBeGreaterThanOrEqual(0.3 * window.innerWidth);
+  });
+
+  it('applies a persisted full-screen popout width over the default (§20.2)', async () => {
+    const v = mount(TREE_CURATED, { initialFullscreenWidth: 560 });
+    await v.api.refresh();
+    expect(v.artsplit().style.getPropertyValue('--tree-w-fs')).toBe('560px');
+  });
+
+  it('drag-resizes the full-screen tree popout and persists the width (§20.2)', async () => {
+    const onFullscreenWidthChange = vi.fn();
+    const v = mount(TREE_CURATED, { initialFullscreenWidth: 400, onFullscreenWidthChange });
+    await v.api.refresh();
+    const handle = v.host.querySelector('.fs-tree-resize') as HTMLElement;
+    handle.dispatchEvent(mouse('mousedown', 400));
+    document.dispatchEvent(mouse('mousemove', 520));
+    document.dispatchEvent(mouse('mouseup', 520));
+    expect(fsWidth(v)).toBeCloseTo(520, 0);
+    expect(onFullscreenWidthChange).toHaveBeenCalledWith(520);
+  });
+
+  it('arrow keys nudge the full-screen popout width and persist it (§20.2 a11y)', async () => {
+    const onFullscreenWidthChange = vi.fn();
+    const v = mount(TREE_CURATED, { initialFullscreenWidth: 400, onFullscreenWidthChange });
+    await v.api.refresh();
+    const handle = v.host.querySelector('.fs-tree-resize') as HTMLElement;
+    handle.dispatchEvent(key('ArrowRight'));
+    expect(fsWidth(v)).toBeGreaterThan(400);
+    expect(onFullscreenWidthChange).toHaveBeenCalled();
   });
 
   it('clicking a markdown file reads and renders it through the markdown seam', async () => {
@@ -156,10 +352,29 @@ describe('artifact viewer (§20.1/§20.2 — real discovery)', () => {
     const v = mount();
     await v.api.refresh();
     v.setSelection('a passage');
+    document.dispatchEvent(new Event('selectionchange'));
     (v.host.querySelector('.art-send') as HTMLButtonElement).click();
     (v.host.querySelector('.art-todo') as HTMLButtonElement).click();
     expect(v.send).toHaveBeenCalledWith('a passage');
     expect(v.addToTodo).toHaveBeenCalledWith('a passage');
+  });
+
+  // Tweak 1: the two sinks are inert until there is a highlight to act on.
+  it('disables Send to agent and Add to todo until something is highlighted (§20.2)', async () => {
+    const v = mount();
+    await v.api.refresh();
+    const send = v.host.querySelector('.art-send') as HTMLButtonElement;
+    const todo = v.host.querySelector('.art-todo') as HTMLButtonElement;
+    expect(send.disabled).toBe(true);
+    expect(todo.disabled).toBe(true);
+    v.setSelection('a passage');
+    document.dispatchEvent(new Event('selectionchange'));
+    expect(send.disabled).toBe(false);
+    expect(todo.disabled).toBe(false);
+    v.setSelection('');
+    document.dispatchEvent(new Event('selectionchange'));
+    expect(send.disabled).toBe(true);
+    expect(todo.disabled).toBe(true);
   });
 
   it('a stale in-flight refresh cannot overwrite a newer one (cwd sync race)', async () => {
