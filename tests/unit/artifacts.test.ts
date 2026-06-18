@@ -556,4 +556,22 @@ describe('artifact viewer (§20.1/§20.2 — real discovery)', () => {
     expect(v.width()).toBe('264px');
     expect(onWidthChange).toHaveBeenCalledWith(264);
   });
+
+  // §20.2: IPC reads can reject (main-process restart). The viewer must degrade gracefully,
+  // not throw an unhandled rejection from the `void open(...)` / `void refresh()` call sites.
+  it('open() treats a loadFile rejection as an unreadable file (no unhandled rejection)', async () => {
+    const v = mount(TREE_CURATED, { loadFile: vi.fn(async () => { throw new Error('ipc down'); }) });
+    await v.api.refresh(); // opens the first file → loadFile rejects
+    expect(v.host.textContent).toContain('Cannot display this file');
+  });
+
+  it('refresh() leaves the previous tree in place when loadTree rejects', async () => {
+    const v = mount(TREE_CURATED);
+    await v.api.refresh();
+    const before = v.fileRows().length;
+    expect(before).toBeGreaterThan(0);
+    v.loadTree.mockRejectedValueOnce(new Error('ipc down'));
+    await v.api.refresh(); // must not throw
+    expect(v.fileRows().length).toBe(before); // previous tree intact
+  });
 });
