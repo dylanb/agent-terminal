@@ -2,6 +2,7 @@
 // and single today, but unvalidated cols/rows reach native ptyProcess.resize and a
 // non-positive/NaN value throws an uncaught exception in the main process.
 
+import path from 'node:path';
 import {
   SESSION_ID,
   type AgentInjectMsg,
@@ -109,8 +110,14 @@ export function isValidFlowRequest(m: unknown): m is FlowRequestMsg {
 
 // ---- todo:* validators (§16.3 / §16.4). repoKey is threaded on every mutation. ----
 
+/** A repoKey is a main-derived absolute repo/cwd path; it becomes a filesystem write path
+ *  in todoStore, so reject non-absolute or traversal-laden keys at the boundary (§6). */
+function isSafeRepoKey(v: unknown): v is string {
+  return typeof v === 'string' && path.isAbsolute(v) && !v.split(/[/\\]/).includes('..');
+}
+
 function isTodoBase(m: unknown): m is Record<string, unknown> {
-  return isRecord(m) && isLiveSession(m) && typeof m.repoKey === 'string';
+  return isRecord(m) && isLiveSession(m) && isSafeRepoKey(m.repoKey);
 }
 
 function isValidSource(s: unknown): boolean {

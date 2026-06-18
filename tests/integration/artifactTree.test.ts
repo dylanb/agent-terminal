@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { discover, readArtifact, emptyTree } from '../../src/main/artifactTree';
@@ -125,6 +125,20 @@ describe('artifact discovery (§20.1 / D8 — real git)', () => {
   it('refuses to read outside the discovery root (path-escape guard)', () => {
     expect(readArtifact(repo, '../../etc/passwd')).toBeNull();
     expect(readArtifact(repo, 'does-not-exist.md')).toBeNull();
+  });
+
+  it('refuses to follow an in-root symlink that points outside the discovery root', () => {
+    // A symlink that lives inside the root but targets an outside file passes the lexical
+    // guard; the read must still refuse it (resolve real paths, not just the literal path).
+    const outside = mkdtempSync(join(tmpdir(), 'art-outside-'));
+    writeFileSync(join(outside, 'secret.md'), '# secret');
+    try {
+      symlinkSync(join(outside, 'secret.md'), join(plain, 'link.md'));
+    } catch {
+      return; // platform without symlink permission — skip
+    }
+    expect(readArtifact(plain, 'link.md')).toBeNull();
+    rmSync(outside, { recursive: true, force: true });
   });
 
   // §20.2: a code file carries the current-file line numbers that differ from HEAD — added or

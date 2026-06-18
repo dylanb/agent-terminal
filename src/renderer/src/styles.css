@@ -8,6 +8,8 @@
   --board:#FBFCFE; --leaf:#FFFFFF; --rule:#E3E9F0; --rule-soft:#EEF2F7;
   --ink:#11161D; --muted:#5E6B7A; --signal:#0098DB; --signal-wash:rgba(0,152,219,.12);
   --attn:#E5484D; --pass:#1F9D6B;
+  /* destructive-action text: darker than --attn so it clears 4.5:1 on the light panel bg (WCAG 1.4.3). */
+  --danger:#B11F26;
   --bg:var(--board); --card:var(--leaf); --hair:var(--rule); --hair2:var(--rule-soft);
   --text:var(--ink); --dim:var(--muted);
   --term-bg:#0E141B; --term-text:#D5DEE8; --term-dim:#6F7E8E;
@@ -20,6 +22,7 @@
   --bg:#0E141B; --card:#161E27; --hair:#26313C; --hair2:#1C2530;
   --text:#E8EEF4; --dim:#8FA0B2; --signal:#22C7FF; --signal-wash:rgba(34,199,255,.14);
   --attn:#FF6168; --pass:#3DDC97;
+  --danger:#FF8A8E; /* light red clears 4.5:1 on the dark panel bg */
   --term-bg:#0A0F15; --term-text:#D5DEE8; --term-dim:#65727F;
   --reveal:#FFB454; --reveal-wash:rgba(255,180,84,.20);
 }
@@ -277,6 +280,9 @@ button:hover { border-color:var(--dim); }
 .todos .todo.pending-delete { display:flex; gap:10px; align-items:center; justify-content:space-between; padding:12px 16px; border-bottom:1px solid var(--hair2); color:var(--dim); }
 .todos .todo.pending-delete .deleted-note { font-size:13px; font-style:italic; }
 .swap-blocked { padding:10px 16px; font-size:12px; color:var(--attn); background:var(--attn-wash, var(--hair2)); border-bottom:1px solid var(--hair); }
+/* Confirm-delete: outlined danger button (danger text + border on the panel bg), not
+   white-on-attn which falls below 4.5:1 at this text size — WCAG 1.4.3. */
+.todos .todo .todo-delete-confirm { background:transparent; color:var(--danger); border:1px solid var(--danger); }
 
 .dhint { border-top:1px solid var(--hair); padding:9px 16px; font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:10px; color:var(--dim); display:flex; gap:14px; }
 .kbd { font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:9.5px; border:1px solid var(--hair); border-bottom-width:2px; border-radius:4px; padding:1px 5px; }

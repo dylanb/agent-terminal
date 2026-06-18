@@ -97,13 +97,19 @@ export function createCaptureTab(deps: CaptureTabDeps): CaptureTab {
     return b;
   }
 
+  /** A short label fragment of a capture's text so its checkbox/group are distinguishable. */
+  function snippet(text: string): string {
+    const oneLine = text.replace(/\s+/g, ' ').trim();
+    return oneLine.length > 60 ? `${oneLine.slice(0, 57)}…` : oneLine;
+  }
+
   function makeChunkCheckbox(eventId: string, text: string): HTMLInputElement {
     chunkRegistry.set(eventId, { text, seq: chunkSeq++ });
     const cb = document.createElement('input');
     cb.type = 'checkbox';
     cb.className = 'chunk-check';
     cb.dataset.chunkId = eventId;
-    cb.setAttribute('aria-label', 'Select capture for bulk action');
+    cb.setAttribute('aria-label', `Select for bulk action: ${snippet(text)}`);
     cb.addEventListener('change', refreshSelectionUI);
     return cb;
   }
@@ -123,6 +129,7 @@ export function createCaptureTab(deps: CaptureTabDeps): CaptureTab {
     el.dataset.eventId = event.id;
     el.dataset.type = event.type;
     el.setAttribute('role', 'group');
+    el.setAttribute('aria-label', `Report: ${snippet(event.text)}`);
     dblclickReveal(el, event);
 
     const details = document.createElement('details');
@@ -148,6 +155,7 @@ export function createCaptureTab(deps: CaptureTabDeps): CaptureTab {
     el.dataset.type = event.type;
     if (event.parentId) el.dataset.parentId = event.parentId;
     el.setAttribute('role', 'group');
+    el.setAttribute('aria-label', `${badgeLabel(event.type)}: ${snippet(event.text)}`);
     dblclickReveal(el, event);
 
     const t = document.createElement('div');
@@ -298,6 +306,12 @@ export function createCaptureTab(deps: CaptureTabDeps): CaptureTab {
     setProcessed(ids, true);
     refreshSelectionUI();
     const added = await todoSink.addFromCapture(selected.map((c) => c.text).join('\n\n'), { type: 'capture' });
+    // The add silently failed (repo went away mid-flight): don't arm the commit, or the
+    // source chunks would be dismissed with nothing added to the todo list.
+    if (!added) {
+      endUndo();
+      return;
+    }
 
     undoSlot.replaceChildren();
     const note = document.createElement('span');

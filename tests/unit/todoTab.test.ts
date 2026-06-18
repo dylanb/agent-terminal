@@ -248,6 +248,15 @@ describe('Todo tab §24.2.1 — manual add', () => {
     expect(monitor.todoAdd).toHaveBeenCalledWith('/repoA', 'hand-written task', { type: 'manual' });
   });
 
+  it('shows the manual-add row on mount, before any repo key is known', async () => {
+    // currentRepo() resolves null and no cwd:changed has fired yet (e.g. before the first
+    // OSC 7) — the add affordance must still be present, not a blank panel.
+    wireMonitorPane();
+    await flush();
+    expect(document.getElementById('todo-new')).toBeTruthy();
+    expect(document.getElementById('todo-add-btn')).toBeTruthy();
+  });
+
   it('does not post an empty/whitespace todo', async () => {
     wireMonitorPane();
     await flush();
@@ -423,5 +432,79 @@ describe('Todo tab §24.2.1 — two-step undoable delete', () => {
     await vi.advanceTimersByTimeAsync(60_000);
     expect(monitor.todoDelete).not.toHaveBeenCalled();
     expect(rows()[0].querySelector('.tx')!.textContent).toBe('spare me');
+  });
+});
+
+// §24.2.1 review fixes: reorder must not disturb inline done rows; focus must follow the
+// edit/delete/confirm transitions (WCAG 2.4.3); the contenteditable field must be labelled;
+// the drag wiring must be exercised.
+describe('Todo tab §24.2.1 — review fixes (reorder stability, focus, a11y label, drag)', () => {
+  let handlers: { cwdChanged?: (m: { sessionId: string; cwd: string; repoKey: string }) => void };
+  let monitor: Record<string, ReturnType<typeof vi.fn>>;
+
+  beforeEach(() => {
+    document.body.innerHTML = MONITOR_HTML;
+    handlers = {};
+    monitor = baseMonitor(handlers);
+    (window as unknown as { monitor: typeof monitor }).monitor = monitor;
+  });
+  afterEach(() => {
+    document.body.innerHTML = '';
+    vi.restoreAllMocks();
+  });
+
+  const todoList = () => document.getElementById('todo-list')!;
+  const rows = () => Array.from(todoList().querySelectorAll('.todo')) as HTMLElement[];
+  async function loadRepo(repoKey: string, list: TodoItem[]): Promise<void> {
+    monitor.todoList.mockResolvedValue(list);
+    handlers.cwdChanged!({ sessionId: 's1', cwd: repoKey, repoKey });
+    await flush();
+  }
+
+  it('reordering an active todo past an inline done row leaves the done row in place', async () => {
+    wireMonitorPane();
+    await flush();
+    await loadRepo('/repoA', [
+      makeTodo({ id: 'a', text: 'A', order: 1 }),
+      makeTodo({ id: 'd', text: 'D', status: 'done', order: 2 }),
+      makeTodo({ id: 'c', text: 'C', order: 3 }),
+    ]);
+    // ↓ on the first active (A): it swaps with the next ACTIVE (C), skipping done D — and D
+    // must keep its slot in the persisted order, not get shoved to an end.
+    (rows()[0].querySelector('.todo-down') as HTMLButtonElement).click();
+    await flush();
+    expect(monitor.todoReorder).toHaveBeenCalledWith('/repoA', ['c', 'd', 'a']);
+  });
+
+  it('Edit moves focus into the editable text; the field is a labelled textbox', async () => {
+    wireMonitorPane();
+    await flush();
+    await loadRepo('/repoA', [makeTodo({ id: 'a', text: 'edit me' })]);
+    (rows()[0].querySelector('.todo-edit') as HTMLButtonElement).click();
+    const tx = rows()[0].querySelector('.tx') as HTMLElement;
+    expect(document.activeElement).toBe(tx);
+    expect(tx.getAttribute('role')).toBe('textbox');
+    expect(tx.getAttribute('aria-label')).toBeTruthy();
+  });
+
+  it('Delete moves focus to Confirm; confirming moves focus to Undo', async () => {
+    wireMonitorPane();
+    await flush();
+    await loadRepo('/repoA', [makeTodo({ id: 'a', text: 'del' })]);
+    (rows()[0].querySelector('.todo-delete') as HTMLButtonElement).click();
+    expect(document.activeElement).toBe(rows()[0].querySelector('.todo-delete-confirm'));
+    (rows()[0].querySelector('.todo-delete-confirm') as HTMLButtonElement).click();
+    expect(document.activeElement).toBe(rows()[0].querySelector('.todo-undo'));
+  });
+
+  it('dragging one todo onto another reorders via todoReorder (drag wiring)', async () => {
+    wireMonitorPane();
+    await flush();
+    await loadRepo('/repoA', [makeTodo({ id: 'a', order: 1 }), makeTodo({ id: 'b', order: 2 })]);
+    rows()[0].dispatchEvent(new Event('dragstart', { bubbles: true }));
+    rows()[1].dispatchEvent(new Event('dragover', { bubbles: true }));
+    rows()[1].dispatchEvent(new Event('drop', { bubbles: true }));
+    await flush();
+    expect(monitor.todoReorder).toHaveBeenCalledWith('/repoA', ['b', 'a']);
   });
 });

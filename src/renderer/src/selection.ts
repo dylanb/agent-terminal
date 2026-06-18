@@ -59,6 +59,12 @@ export function wireSelection(term: Terminal): void {
   window.monitor.onCwdChanged((m) => {
     repoKey = m.repoKey;
   });
+  // Seed on mount: cwd:changed fires only on a key *change* and the first OSC 7 can predate
+  // this subscription, so without this the selection→todo capture silently no-ops until the
+  // next cross-repo cd (§16.3, mirrors monitor.ts).
+  void window.monitor.currentRepo().then((r) => {
+    if (r && repoKey === null) repoKey = r.repoKey;
+  });
 
   function clearDecorations(): void {
     for (const d of decorations) d.dispose();
