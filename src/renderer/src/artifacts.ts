@@ -7,6 +7,7 @@
 // to the same two sinks as the terminal-pane selection (send-to-agent / add-to-todo).
 
 import type { ArtifactNode, ArtifactScope, ArtifactTree, ViewerFile } from '../../shared/ipc';
+import { setShown, setCollapsed } from './visibility';
 
 /** Handle on a rendered code view, used to drive changed-section navigation (§20.2). */
 export interface CodeView {
@@ -151,7 +152,7 @@ export function createArtifacts(host: HTMLElement, deps: ArtifactsDeps): Artifac
   nextBtn.setAttribute('aria-label', 'Next changed section');
   const navCount = el('span', 'art-navcount');
   const nav = el('div', 'vnav');
-  nav.hidden = true;
+  setShown(nav, false);
   nav.append(prevBtn, navCount, nextBtn);
   // Full-screen toggle (§20.2): the same button enters and exits; in full screen it lives in the
   // revealed header (the "top bar when visible") and Escape is the other exit.
@@ -296,8 +297,9 @@ export function createArtifacts(host: HTMLElement, deps: ArtifactsDeps): Artifac
     return { display: Math.max(cur, 0) + 1, prevTo, nextTo };
   }
   function updateNav(): void {
-    nav.hidden = !codeView || sections.length === 0;
-    if (nav.hidden) return;
+    const shown = codeView !== null && sections.length > 0;
+    setShown(nav, shown);
+    if (!shown) return;
     const s = navState();
     navCount.textContent = `${s.display} / ${sections.length}`;
     prevBtn.disabled = s.prevTo === null;
@@ -317,19 +319,24 @@ export function createArtifacts(host: HTMLElement, deps: ArtifactsDeps): Artifac
   // open and closed. State lives on the .artsplit element so the styling is placement-agnostic. ---
   let fullscreen = false;
   fsBtn.addEventListener('click', () => deps.onRequestFullscreen?.(!fullscreen));
-  const toggleStrip = (strip: HTMLButtonElement, cls: string): void => {
-    const open = split.classList.toggle(cls);
-    strip.setAttribute('aria-expanded', String(open));
+  // Each panel's open state lives as .is-collapsed on the panel itself, so a collapsed (slid-off)
+  // header/tree is inert — no tab stops inside hidden content (§A11Y).
+  const setHeaderOpen = (open: boolean): void => {
+    setCollapsed(bar, !open);
+    topStrip.setAttribute('aria-expanded', String(open));
   };
-  topStrip.addEventListener('click', () => toggleStrip(topStrip, 'header-open'));
-  leftStrip.addEventListener('click', () => toggleStrip(leftStrip, 'tree-open'));
+  const setTreeOpen = (open: boolean): void => {
+    setCollapsed(tree, !open);
+    leftStrip.setAttribute('aria-expanded', String(open));
+  };
+  topStrip.addEventListener('click', () => setHeaderOpen(bar.classList.contains('is-collapsed')));
+  leftStrip.addEventListener('click', () => setTreeOpen(tree.classList.contains('is-collapsed')));
   function setFullscreen(on: boolean): void {
     if (on === fullscreen) return;
     fullscreen = on;
     split.classList.toggle('fullscreen', on);
-    if (on) split.classList.remove('header-open', 'tree-open'); // both collapsed on enter
-    topStrip.setAttribute('aria-expanded', 'false');
-    leftStrip.setAttribute('aria-expanded', 'false');
+    setHeaderOpen(!on); // collapsed on enter; expanded on exit so the normal split shows them again
+    setTreeOpen(!on);
     fsBtn.setAttribute('aria-pressed', String(on));
     fsBtn.setAttribute('aria-label', on ? 'Exit full screen' : 'Full screen');
     (on ? topStrip : fsBtn).focus(); // keep keyboard focus on a live control across the transition

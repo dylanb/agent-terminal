@@ -257,14 +257,18 @@ describe('artifact viewer (§20.1/§20.2 — real discovery)', () => {
     await v.api.refresh();
     const split = v.artsplit();
     const fs = v.host.querySelector('.art-fs') as HTMLButtonElement;
+    const vbar = v.host.querySelector('.vbar') as HTMLElement;
+    const tree = v.host.querySelector('.tree') as HTMLElement;
     v.api.setFullscreen(true);
     expect(v.api.isFullscreen()).toBe(true);
     expect(split.classList.contains('fullscreen')).toBe(true);
-    expect(split.classList.contains('header-open')).toBe(false);
-    expect(split.classList.contains('tree-open')).toBe(false);
+    expect(vbar.classList.contains('is-collapsed')).toBe(true); // both collapsed (inert) on enter
+    expect(tree.classList.contains('is-collapsed')).toBe(true);
     expect(fs.getAttribute('aria-pressed')).toBe('true');
     v.api.setFullscreen(false);
     expect(split.classList.contains('fullscreen')).toBe(false);
+    expect(vbar.classList.contains('is-collapsed')).toBe(false); // restored for the normal split
+    expect(tree.classList.contains('is-collapsed')).toBe(false);
     expect(fs.getAttribute('aria-pressed')).toBe('false');
   });
 
@@ -272,18 +276,19 @@ describe('artifact viewer (§20.1/§20.2 — real discovery)', () => {
     const v = mount();
     await v.api.refresh();
     v.api.setFullscreen(true);
-    const split = v.artsplit();
+    const vbar = v.host.querySelector('.vbar') as HTMLElement;
+    const tree = v.host.querySelector('.tree') as HTMLElement;
     const top = v.host.querySelector('.fs-strip-top') as HTMLButtonElement;
     const left = v.host.querySelector('.fs-strip-left') as HTMLButtonElement;
     expect(top.getAttribute('aria-expanded')).toBe('false');
     top.click();
-    expect(split.classList.contains('header-open')).toBe(true);
+    expect(vbar.classList.contains('is-collapsed')).toBe(false); // header revealed (inert → visible)
     expect(top.getAttribute('aria-expanded')).toBe('true');
     top.click();
-    expect(split.classList.contains('header-open')).toBe(false);
+    expect(vbar.classList.contains('is-collapsed')).toBe(true);
     expect(top.getAttribute('aria-expanded')).toBe('false');
     left.click();
-    expect(split.classList.contains('tree-open')).toBe(true);
+    expect(tree.classList.contains('is-collapsed')).toBe(false);
     expect(left.getAttribute('aria-expanded')).toBe('true');
   });
 

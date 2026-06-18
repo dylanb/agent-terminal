@@ -119,6 +119,23 @@ describe('shell controller (§24.1C — views, hotkeys, docked drawer, theme)', 
       expect(shell.isDrawerOpen()).toBe(true);
     });
 
+    it('marks the drawer hidden when closed so its controls leave the tab order (§A11Y)', () => {
+      const drawer = document.querySelector('.drawer') as HTMLElement;
+      expect(drawer.hidden).toBe(false); // open from markup
+      shell.closeDrawer();
+      expect(drawer.hidden).toBe(true);
+      shell.openDrawer();
+      expect(drawer.hidden).toBe(false);
+    });
+
+    it('inits the drawer hidden when the markup starts closed (§22.2)', () => {
+      document.body.innerHTML = SHELL_HTML.replace('app drawer-open', 'app');
+      const a = document.getElementById('app')!;
+      shell = createShell(a);
+      expect(shell.isDrawerOpen()).toBe(false);
+      expect((a.querySelector('.drawer') as HTMLElement).hidden).toBe(true);
+    });
+
     it('opens via the quick-send button and closes via the close button', () => {
       shell.closeDrawer();
       (document.getElementById('qs') as HTMLElement).click();

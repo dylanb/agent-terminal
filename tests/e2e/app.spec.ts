@@ -60,6 +60,22 @@ function inject(text: string, submit: boolean): Promise<void> {
   );
 }
 
+/** Whether `sel` can take keyboard focus — the observable test for "inert when hidden" (§A11Y):
+ *  display:none / visibility:hidden elements refuse focus, so this is false for hidden content. */
+function canFocus(sel: string): Promise<boolean> {
+  return page.locator(sel).evaluate((e) => {
+    (e as HTMLElement).focus();
+    return document.activeElement === e;
+  });
+}
+
+/** Open the quick-send drawer (closed on startup, §22.2) on a known tab. Call after a relaunch or
+ *  reload, which both reset the drawer to closed. */
+async function openQuickSend(tab: 'capture' | 'todo' = 'capture'): Promise<void> {
+  await page.locator('#qs').click();
+  await page.locator(`#tab-${tab}`).click();
+}
+
 /**
  * cd into a throwaway directory so repo-scoped todos (§16.3) land there, not in the
  * project/HOME tree. Returns once the new prompt's OSC 7 has propagated the repo key
@@ -84,9 +100,10 @@ test.beforeEach(async () => {
   page = await app.firstWindow();
   // Bash prompt is ready once the shell has produced any output.
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
-  // lastTab persists globally (§16.6), so a prior test that opened the Todo tab would
-  // otherwise leave the Capture panel hidden here; reset to a known tab per test.
-  await page.locator('#tab-capture').click();
+  // The drawer starts closed (§22.2); the drawer-driven tests below assume it open on a known
+  // tab, so dock it and select Capture here. (The closed-on-startup default is asserted by its
+  // own test, which relaunches a fresh app.)
+  await openQuickSend('capture');
 });
 
 test.afterEach(async () => {
@@ -268,7 +285,7 @@ test('a todo persists in-repo across an app restart (§16.3)', async () => {
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   await cdToTempDir('persist');
-  await page.locator('#tab-todo').click();
+  await openQuickSend('todo'); // the drawer starts closed after a restart (§22.2)
   await expect(page.locator('.todo').filter({ hasText: 'persist-this-todo' })).toHaveCount(1);
 });
 
@@ -324,6 +341,7 @@ test('a captured report (with findings) survives a monitor reload (capture:last�
   });
   page = await app.firstWindow();
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+  await openQuickSend('capture'); // the drawer starts closed after a relaunch (§22.2)
 
   await typeCommand(
     "printf '%s\\n' 'Here is the summary of findings from this code review:' '- one important finding worth acting on' '- another finding to address before merge'",
@@ -336,6 +354,7 @@ test('a captured report (with findings) survives a monitor reload (capture:last�
 
   // The single captured report is stored, so a reloaded pane replays it (no re-click).
   await page.reload();
+  await openQuickSend('capture'); // reload resets the drawer to closed
   await expect(page.locator('#monitor-blocks .finding').first()).toBeVisible();
 });
 
@@ -348,6 +367,7 @@ test('capture ↔ terminal cross-highlight: double-click reveals each side (§16
   });
   page = await app.firstWindow();
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+  await openQuickSend('capture'); // the drawer starts closed after a relaunch (§22.2)
 
   // Feed the report through base64 so the finding phrases appear ONLY in the command's OUTPUT,
   // never in its echoed input line. With shell integration off the scanner captures the echo
@@ -629,22 +649,23 @@ test('the viewer has a keyboard-accessible full-screen mode (§20.2)', async () 
   const appEl = page.locator('#app');
   const rail = page.locator('#app .rail');
   const drawer = page.locator('#app #drawer');
-  const split = page.locator('#artifacts .artsplit');
   await expect(rail).toBeVisible();
 
-  // Enter full screen via the toolbar button → all app chrome hidden, header + tree collapsed.
+  // Enter full screen via the toolbar button → all app chrome hidden, header + tree collapsed (inert).
+  const vbar = page.locator('#artifacts .vbar');
+  const treePanel = page.locator('#artifacts .tree');
   await page.locator('#artifacts .art-fs').click();
   await expect(appEl).toHaveClass(/viewer-fullscreen/);
   await expect(rail).toBeHidden();
   await expect(drawer).toBeHidden();
-  await expect(split).not.toHaveClass(/header-open/);
-  await expect(split).not.toHaveClass(/tree-open/);
+  await expect(vbar).toHaveClass(/is-collapsed/);
+  await expect(treePanel).toHaveClass(/is-collapsed/);
 
   // The edge strips pop the header and tree open and closed.
   await page.locator('#artifacts .fs-strip-top').click();
-  await expect(split).toHaveClass(/header-open/);
+  await expect(vbar).not.toHaveClass(/is-collapsed/);
   await page.locator('#artifacts .fs-strip-left').click();
-  await expect(split).toHaveClass(/tree-open/);
+  await expect(treePanel).not.toHaveClass(/is-collapsed/);
 
   // ESC exits → chrome returns.
   await page.keyboard.press('Escape');
@@ -657,7 +678,7 @@ test('the viewer has a keyboard-accessible full-screen mode (§20.2)', async () 
   await page.keyboard.press('Enter');
   await expect(appEl).toHaveClass(/viewer-fullscreen/);
   await page.keyboard.press('Enter'); // top strip is focused → opens the header
-  await expect(split).toHaveClass(/header-open/);
+  await expect(vbar).not.toHaveClass(/is-collapsed/);
   await page.locator('#artifacts .art-fs').click(); // the in-header exit control
   await expect(appEl).not.toHaveClass(/viewer-fullscreen/);
 });
@@ -712,7 +733,7 @@ test('the full-screen tree popout is resizable and remembers its width (§20.2)'
     await page.locator('#artifacts .art-fs').click();
     await expect(page.locator('#app')).toHaveClass(/viewer-fullscreen/);
     await page.locator('#artifacts .fs-strip-left').click(); // pop the tree open
-    await expect(split).toHaveClass(/tree-open/);
+    await expect(page.locator('#artifacts .tree')).not.toHaveClass(/is-collapsed/);
   };
 
   await enterAndOpenTree();
@@ -734,6 +755,62 @@ test('the full-screen tree popout is resizable and remembers its width (§20.2)'
   await page.reload();
   await enterAndOpenTree();
   await expect.poll(fsW).toBeGreaterThan(resized - 8);
+});
+
+test('full-screen collapse keeps the header and tree out of the tab order (§A11Y)', async () => {
+  const dir = '/tmp/agent-term-e2e-fsinert';
+  await typeCommand(`rm -rf "${dir}" && mkdir -p "${dir}" && cd "${dir}" && git init -q && printf '# Doc\\n' > doc.md && pwd`);
+  await expect(page.locator('.xterm-rows > div').filter({ hasText: new RegExp(`^\\s*${dir}\\s*$`) })).not.toHaveCount(0);
+  await expect(page.locator('.status-chip[data-status="agent"]')).toContainText('quiet', { timeout: 6_000 });
+
+  await page.keyboard.press('Control+2');
+  await page.locator('#artifacts .art-fs').click(); // enter → header + tree collapsed
+  // Collapsed (slid-off) chrome is inert — its controls can't be tab-focused.
+  await expect.poll(() => canFocus('#artifacts .art-fs')).toBe(false);
+  await expect.poll(() => canFocus('#artifacts .treesearch')).toBe(false);
+  // Popping a panel open makes its controls reachable again.
+  await page.locator('#artifacts .fs-strip-top').click();
+  expect(await canFocus('#artifacts .art-fs')).toBe(true);
+  await page.locator('#artifacts .fs-strip-left').click();
+  expect(await canFocus('#artifacts .treesearch')).toBe(true);
+});
+
+test('the quick-send drawer is closed on startup and inert while closed (§22.2 / §A11Y)', async () => {
+  // beforeEach opens the drawer; relaunch a fresh app to observe the real startup default.
+  await app.close();
+  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SUBMIT_DELAY_MS: '100' } });
+  page = await app.firstWindow();
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  const appEl = page.locator('#app');
+  await expect(appEl).not.toHaveClass(/drawer-open/);     // closed on startup
+  await expect(page.locator('#drawer')).toBeHidden();
+  expect(await canFocus('#tab-capture')).toBe(false);     // closed → controls out of the tab order
+  await page.locator('#qs').click();                      // open it
+  await expect(appEl).toHaveClass(/drawer-open/);
+  expect(await canFocus('#tab-capture')).toBe(true);
+});
+
+test('the changed-section controls leave the tab order when the file has no changes (§A11Y)', async () => {
+  const dir = '/tmp/agent-term-e2e-navinert';
+  await typeCommand(
+    `rm -rf "${dir}" && mkdir -p "${dir}/src" && cd "${dir}" && git init -q && ` +
+      `git config user.email t@t && git config user.name T && ` +
+      `printf 'const a=1;\\nconst b=2;\\nconst c=3;\\n' > src/app.ts && git add -A && git commit -qm init && ` +
+      `printf 'const a=1;\\nconst b=99;\\nconst c=3;\\n' > src/app.ts && printf '# Doc\\n' > doc.md && pwd`,
+  );
+  await expect(page.locator('.xterm-rows > div').filter({ hasText: new RegExp(`^\\s*${dir}\\s*$`) })).not.toHaveCount(0);
+  await expect(page.locator('.status-chip[data-status="agent"]')).toContainText('quiet', { timeout: 6_000 });
+
+  await page.keyboard.press('Control+2');
+  const tree = page.locator('#artifacts .tree');
+  // Markdown has no changed-section nav → controls display:none and out of the tab order.
+  await tree.locator('.f').filter({ hasText: 'doc.md' }).click();
+  await expect(page.locator('#artifacts .vnav')).toBeHidden();
+  expect(await canFocus('#artifacts .art-prev')).toBe(false);
+  // A changed code file shows the controls again.
+  await tree.locator('.f').filter({ hasText: 'app.ts' }).click();
+  await expect(page.locator('#artifacts .vnav')).toBeVisible();
 });
 
 test('the artifact tree pane is resizable by dragging its edge, and the width persists (§20.2)', async () => {
@@ -761,7 +838,7 @@ test('the artifact tree pane is resizable by dragging its edge, and the width pe
 
 test('the quick-send drawer docks and undocks without a scrim, keeping the terminal visible (§16.8/§22.2)', async () => {
   const appEl = page.locator('#app');
-  await expect(appEl).toHaveClass(/drawer-open/); // docked by default
+  await expect(appEl).toHaveClass(/drawer-open/); // docked in setup (it starts closed, §22.2)
 
   // ⌘/Ctrl+K undocks it; the terminal pane stays on screen (no overlay/scrim).
   await page.keyboard.press('Control+k');

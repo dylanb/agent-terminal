@@ -21,6 +21,7 @@
     "src/renderer/src/reveal.ts",
     "src/renderer/src/keymap.ts",
     "src/renderer/src/dom.ts",
+    "src/renderer/src/visibility.ts",
     "src/renderer/src/paneActions.ts",
     "src/renderer/src/statusStrip.ts",
     "src/renderer/src/todoTab.ts",

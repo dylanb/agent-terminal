@@ -10,7 +10,7 @@
     <link rel="stylesheet" href="./src/styles.css" />
   </head>
   <body>
-    <div id="app" class="app drawer-open">
+    <div id="app" class="app">
       <!-- SLIM LEFT CHROME (§24.1C) -->
       <aside class="rail" aria-label="Navigation and status">
         <div class="mark serif">Agent <span class="sig">·—·</span> Terminal</div>
@@ -84,7 +84,7 @@
       </main>
 
       <!-- DOCKED, NON-BLURRING QUICK-SEND = the reused action window (§16) -->
-      <aside class="drawer" id="drawer" aria-label="Quick-send">
+      <aside class="drawer" id="drawer" aria-label="Quick-send" hidden>
         <div id="monitor-tabs" class="dhead" role="tablist" aria-label="Quick-send tabs">
           <button id="tab-todo" class="dtab" role="tab" aria-selected="false" aria-controls="panel-todo">
             Todo <span id="todo-count" class="todo-count">0</span>

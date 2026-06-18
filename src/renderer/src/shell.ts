@@ -7,6 +7,7 @@
 // beside the capture pane for cross-highlight (§16.8, amends §22.2 per v2.29).
 
 import type { Theme } from '../../shared/ipc';
+import { setShown } from './visibility';
 
 export type ViewId = '1' | '2' | '3';
 export type DrawerTab = 'todo' | 'capture';
@@ -74,14 +75,19 @@ export function createShell(root: HTMLElement, deps: ShellDeps = {}): Shell {
     doc.defaultView?.dispatchEvent(new Event('resize'));
   };
 
+  // The drawer is display:none when closed (via setShown), not just a 0-width column — otherwise its
+  // tabs/buttons stay in the tab order while invisible (§A11Y). The grid class sizes it when open.
+  const drawerEl = root.querySelector<HTMLElement>('.drawer');
   const isDrawerOpen = (): boolean => root.classList.contains('drawer-open');
   function openDrawer(t?: DrawerTab): void {
     root.classList.add('drawer-open');
+    if (drawerEl) setShown(drawerEl, true);
     if (t) selectTab(t);
     signalLayoutChange();
   }
   function closeDrawer(): void {
     root.classList.remove('drawer-open');
+    if (drawerEl) setShown(drawerEl, false);
     signalLayoutChange();
   }
   function toggleDrawer(t?: DrawerTab): void {
@@ -147,6 +153,7 @@ export function createShell(root: HTMLElement, deps: ShellDeps = {}): Shell {
   doc.addEventListener('keydown', onKeyDown, true);
 
   applyTheme(theme);
+  if (drawerEl) setShown(drawerEl, isDrawerOpen()); // match the drawer's inert state to its start class
   if (deps.getTheme) void deps.getTheme().then(applyTheme);
 
   return {
