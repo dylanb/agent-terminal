@@ -370,9 +370,21 @@ describe('artifact viewer (§20.1/§20.2 — real discovery)', () => {
     await v.api.refresh();
     v.search().value = 'plan';
     v.search().dispatchEvent(new Event('input'));
-    const visible = v.fileRows().filter((r) => !r.hidden).map((r) => r.textContent);
-    expect(visible).toEqual([expect.stringContaining('plan-a.md')]); // notes.md is hidden despite living in plans/
-    expect((v.host.querySelector('.tree .dir') as HTMLElement).hidden).toBe(false); // hierarchy preserved
+    // Only matching files are rendered at all (no reliance on a `hidden` attribute a CSS
+    // `display` rule could override) — notes.md is gone though it lives in plans/.
+    expect(v.fileRows().map((r) => r.textContent)).toEqual([expect.stringContaining('plan-a.md')]);
+    expect(v.dirRows().map((d) => d.textContent)).toEqual([expect.stringContaining('plans')]); // hierarchy kept
+  });
+
+  it('clearing the filter restores the full tree (§20.2)', async () => {
+    const v = mount();
+    await v.api.refresh();
+    v.search().value = 'review';
+    v.search().dispatchEvent(new Event('input'));
+    expect(v.fileRows()).toHaveLength(1);
+    v.search().value = '';
+    v.search().dispatchEvent(new Event('input'));
+    expect(v.fileRows().length).toBeGreaterThan(1);
   });
 
   it('Send to agent and Add to todo route the viewer selection to the sinks', async () => {

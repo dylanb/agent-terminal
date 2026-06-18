@@ -185,6 +185,7 @@ export function createArtifacts(host: HTMLElement, deps: ArtifactsDeps): Artifac
   let scope: ArtifactScope = 'curated';
   let current: string | null = null;
   let treeRoot = '';
+  let treeNodes: ArtifactNode[] = []; // the full discovered tree; the search re-renders a filtered view of it
   let refreshSeq = 0; // a slow stale refresh must not overwrite a newer one (cwd sync race)
   const fileRows = new Map<string, HTMLElement>();
 
@@ -411,20 +412,32 @@ export function createArtifacts(host: HTMLElement, deps: ArtifactsDeps): Artifac
     e.preventDefault();
   });
 
-  function applyFilter(): void {
+  // Keep a file iff its own name matches (not its path — else a directory whose name contains the
+  // query would drag in all its files); keep a directory iff it still has a matching descendant, so
+  // matches show with just their tree hierarchy (§20.2).
+  function filterNodes(nodes: ArtifactNode[], q: string): ArtifactNode[] {
+    const out: ArtifactNode[] = [];
+    for (const n of nodes) {
+      if (n.kind === 'dir') {
+        const kids = filterNodes(n.children ?? [], q);
+        if (kids.length) out.push({ ...n, children: kids });
+      } else if (n.name.toLowerCase().includes(q)) {
+        out.push(n);
+      }
+    }
+    return out;
+  }
+
+  // Render the tree from the discovered nodes, filtered to the current query — we re-render rather
+  // than toggle visibility so nothing non-matching is ever in the DOM (§20.2).
+  function renderTree(): void {
     const q = search.value.trim().toLowerCase();
-    // Match the file's own name, not its path — else every file under a directory whose name
-    // contains the query would match (§20.2). Directories appear only as matching files' hierarchy.
-    for (const [rel, row] of fileRows) {
-      const name = rel.slice(rel.lastIndexOf('/') + 1).toLowerCase();
-      row.hidden = q.length > 0 && !name.includes(q);
-    }
-    // A directory with no visible file collapses out of the way; expand all while filtering.
-    for (const dir of list.querySelectorAll('.dir')) {
-      const anyVisible = [...dir.querySelectorAll('.f')].some((f) => !(f as HTMLElement).hidden);
-      (dir as HTMLElement).hidden = q.length > 0 && !anyVisible;
-      if (q.length > 0) dir.classList.remove('collapsed');
-    }
+    fileRows.clear();
+    list.replaceChildren();
+    renderNodes(q ? filterNodes(treeNodes, q) : treeNodes, list);
+    if (current) fileRows.get(current)?.classList.add('sel');
+    const firstItem = visibleItems()[0]; // one row carries tabindex=0 so the tree is reachable
+    if (firstItem) firstItem.tabIndex = 0;
   }
 
   async function open(relPath: string): Promise<void> {
@@ -464,12 +477,8 @@ export function createArtifacts(host: HTMLElement, deps: ArtifactsDeps): Artifac
     scope = data.scope;
     scopeBox.checked = scope === 'repo';
     scopeLabel.hidden = !data.isRepo; // outside a repo the tree is already the whole dir
-    fileRows.clear();
-    list.replaceChildren();
-    renderNodes(data.nodes, list);
-    applyFilter();
-    const firstItem = visibleItems()[0]; // one row carries tabindex=0 so the tree is reachable
-    if (firstItem) firstItem.tabIndex = 0;
+    treeNodes = data.nodes;
+    renderTree();
     const target = (current && fileRows.has(current) ? current : firstFile(data.nodes)?.relPath) ?? null;
     if (target) await open(target);
     else {
@@ -488,7 +497,7 @@ export function createArtifacts(host: HTMLElement, deps: ArtifactsDeps): Artifac
 
   sendBtn.addEventListener('click', () => routeSelection(deps.send));
   todoBtn.addEventListener('click', () => routeSelection(deps.addToTodo));
-  search.addEventListener('input', applyFilter);
+  search.addEventListener('input', renderTree);
   scopeBox.addEventListener('change', () => {
     scope = scopeBox.checked ? 'repo' : 'curated';
     void refresh();
