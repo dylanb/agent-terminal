@@ -8,10 +8,14 @@ import { createArtifacts, type Artifacts } from './artifacts';
 import { renderMarkdownInto, renderCodeInto } from './viewerRender';
 import { doInject } from './paneActions';
 import { captureToTodo } from './selection';
+import { createRepoContext } from './repoContext';
 
 const term = createTerminalPane(document.getElementById('terminal')!);
-wireSelection(term);
-wireMonitorPane();
+// One shared OSC-7 repo provider (§16.3): seeds the repo key once and feeds the terminal
+// selection capture, the todo list, and the artifact viewer — so no consumer re-derives it.
+const repo = createRepoContext(window.monitor);
+wireSelection(term, repo);
+wireMonitorPane(repo);
 
 // The converged three-view shell (§24.1C): view switching, hotkeys, the docked
 // quick-send drawer, and the theme — with theme persisted through the global
@@ -47,29 +51,21 @@ if (gatePanel) createGatePanel(gatePanel, SAMPLE_FLOW);
 // (§16.2). Real discovery + provenance (`viewer:tree`) stays in the §24.2 backlog.
 const artifactsHost = document.getElementById('artifacts');
 if (artifactsHost) {
-  let repoKey: string | null = null;
   const view = createArtifacts(artifactsHost, {
     loadTree: (scope) => window.viewer.tree(scope),
     loadFile: (relPath) => window.viewer.read(relPath),
     renderMarkdown: renderMarkdownInto,
     renderCode: renderCodeInto,
     send: (text) => doInject(text, false),
-    addToTodo: (text) => captureToTodo(window.monitor, repoKey, text),
+    addToTodo: (text) => captureToTodo(window.monitor, repo.repoKey(), text),
     onWidthChange: (px) => window.monitor.setSettings({ artifactTreeWidth: px }),
     onFullscreenWidthChange: (px) => window.monitor.setSettings({ artifactFullscreenTreeWidth: px }),
     onRequestFullscreen: (on) => shell.setViewerFullscreen(on),
   });
   artifacts = view;
-  window.monitor.onCwdChanged((m) => {
-    repoKey = m.repoKey;
-    void view.refresh(); // re-discover when the agent cd's into another repo/dir
-  });
-  // Seed the repo key on mount: cwd:changed fires only on a key *change*, and the first OSC 7
-  // can predate this subscription — without this, add-to-todo silently no-ops until the next
-  // cross-repo cd (§16.3, mirrors monitor.ts).
-  void window.monitor.currentRepo().then((r) => {
-    if (r && repoKey === null) repoKey = r.repoKey;
-  });
+  // Re-discover when the agent cd's into another repo/dir (the shared context already holds
+  // the seeded key for add-to-todo).
+  repo.onChange(() => void view.refresh());
   // Apply the persisted tree width once settings resolve (kept off the sync path above so a
   // late getSettings can't make the viewer miss the first cwd:changed broadcast, §20.1).
   void window.monitor.getSettings().then((s) => {
