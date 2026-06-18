@@ -37,6 +37,9 @@ export const CH = {
   todoDelete: 'todo:delete',
   viewerTree: 'viewer:tree',
   viewerRead: 'viewer:read',
+  flowState: 'flow:state',
+  flowStart: 'flow:start',
+  flowAdvance: 'flow:advance',
 } as const;
 
 /** Action-window tabs (§16.1). */
@@ -384,6 +387,25 @@ export interface ViewerReadMsg {
   relPath: string;
 }
 
+// ---- Flow lifecycle (§18.2 / §24.2.2) ----
+
+/** A manual step's lifecycle: not started, being worked, or completed (terminal) — §18.2. */
+export type FlowStatus = 'not_started' | 'in_progress' | 'done';
+
+/** The flow's live view (§22.3 status strip): the current step's name, its 1-based
+ *  `position` within `total` steps, and its `status`. S1 has a single step (1/1). */
+export interface FlowStateView {
+  stepName: string;
+  position: number;
+  total: number;
+  status: FlowStatus;
+}
+
+/** flow:state/start/advance request — sessionId only; the flow is per-session (§6). */
+export interface FlowRequestMsg {
+  sessionId: SessionId;
+}
+
 // ---- Preload-exposed API surfaces (§6) ----
 
 export interface TermApi {
@@ -446,10 +468,21 @@ export interface ViewerApi {
   read(relPath: string): Promise<ViewerFile | null>;
 }
 
+/** Flow lifecycle (§24.2.2): drive the manual step's status strip + control. Each call
+ *  resolves to the resulting state so the strip re-renders from the response. */
+export interface FlowApi {
+  state(): Promise<FlowStateView>;
+  /** not_started → in_progress; rejects if not currently not_started. */
+  start(): Promise<FlowStateView>;
+  /** in_progress → done; rejects if not currently in_progress. */
+  advance(): Promise<FlowStateView>;
+}
+
 declare global {
   interface Window {
     term: TermApi;
     monitor: MonitorApi;
     viewer: ViewerApi;
+    flow: FlowApi;
   }
 }

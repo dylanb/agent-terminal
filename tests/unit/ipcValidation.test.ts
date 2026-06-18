@@ -7,6 +7,7 @@ import {
   isValidCommandsRequest,
   isValidDismiss,
   isValidDismissAll,
+  isValidFlowRequest,
   isValidInject,
   isValidInput,
   isValidLearnChrome,
@@ -118,6 +119,13 @@ describe('IPC payload validation (§6 — renderer-supplied input is untrusted)'
     expect(isValidClearCommands({ sessionId: sid })).toBe(true);
     expect(isValidClearCommands({ sessionId: 'other' })).toBe(false);
     expect(isValidClearCommands(null)).toBe(false);
+  });
+
+  it('accepts a flow request and rejects a wrong/absent sessionId (§24.2.2)', () => {
+    expect(isValidFlowRequest({ sessionId: sid })).toBe(true);
+    expect(isValidFlowRequest({ sessionId: 'other' })).toBe(false);
+    expect(isValidFlowRequest({})).toBe(false);
+    expect(isValidFlowRequest(null)).toBe(false);
   });
 
   // ---- todo:* validators (§16.3 / §16.4) ----

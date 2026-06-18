@@ -3,7 +3,8 @@ import { wireSelection } from './selection';
 import { wireMonitorPane } from './monitor';
 import { createShell } from './shell';
 import { wireCrossHighlight } from './crossHighlight';
-import { SAMPLE_FLOW, flowLabel, renderFlow, renderRailStatus, createGatePanel } from './flow';
+import { SAMPLE_FLOW, createGatePanel } from './flow';
+import { createFlowStrip } from './flowStrip';
 import { createArtifacts, type Artifacts } from './artifacts';
 import { renderMarkdownInto, renderCodeInto } from './viewerRender';
 import { doInject } from './paneActions';
@@ -30,14 +31,12 @@ const shell = createShell(document.getElementById('app')!, {
 // (the mocked artifact/finding markup today; real provenance spans in a later phase).
 wireCrossHighlight(document.getElementById('app')!);
 
-// Mocked flow widgets (§24.1 / §19.2–§19.3): one fixture flow-state drives the rail
-// timeline + status and the view-3 gate. Gate actions are stubbed (no loop injection).
-const flowLabelEl = document.getElementById('flow-label');
-if (flowLabelEl) flowLabelEl.textContent = `Flow — ${flowLabel(SAMPLE_FLOW.steps)}`;
-const flowRail = document.getElementById('flow-rail');
-if (flowRail) renderFlow(flowRail, SAMPLE_FLOW.steps);
-const railStatus = document.getElementById('rail-flowstatus');
-if (railStatus) renderRailStatus(railStatus, SAMPLE_FLOW);
+// Flow status strip (§22.3 / §24.2.2 S1): the real single-step lifecycle driven through
+// window.flow — Start → Advance → done. Retires the §24.1 fixture timeline + rail status.
+const flowStripHost = document.getElementById('flow-strip');
+if (flowStripHost) void createFlowStrip(flowStripHost, window.flow).refresh();
+
+// View-3 Review gate (§19.3) is still a fixture-driven, stubbed mock — out of S1 scope.
 const gatePanel = document.getElementById('gate-panel');
 if (gatePanel) createGatePanel(gatePanel, SAMPLE_FLOW);
 

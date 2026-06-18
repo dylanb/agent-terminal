@@ -128,25 +128,13 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible { outline:2px so
 .iconbtn:hover { color:var(--text); border-color:var(--dim); }
 .linkbtn { font-size:11.5px; font-weight:600; background:none; border:none; color:var(--signal); cursor:pointer; padding:0; }
 
-/* ---- flow rail (vertical) ---- */
-.flow { display:flex; flex-direction:column; align-items:flex-start; }
-.flow .stn { display:flex; align-items:center; gap:8px; padding:9px 0; }
-.flow .stn .o { width:11px; height:11px; border-radius:50%; border:2px solid var(--dim); background:var(--card); flex:none; }
-.flow .stn.done .o { border-color:var(--signal); background:var(--signal); }
-.flow .stn.active .o { border-color:var(--signal); background:var(--card); box-shadow:0 0 0 4px var(--signal-wash); }
-.flow .stn .nm { font-size:12.5px; font-weight:500; }
-.flow .stn.active .nm { color:var(--signal); }
-.flow .stn.todo .nm, .flow .stn.todo .o { opacity:.5; }
-.flow .seg { width:2px; height:18px; margin:0 0 0 4px; background:var(--signal); opacity:.5; }
-.flow .seg.future { background:repeating-linear-gradient(180deg,var(--dim) 0 4px,transparent 4px 9px); }
-
-/* ---- mocked rail status (gate/loop fixture lines beside the real strip) ---- */
-.railstat { display:flex; flex-direction:column; gap:9px; }
-.railstat .stat { display:flex; flex-direction:column; gap:3px; }
-.railstat .stat .k { text-transform:uppercase; letter-spacing:.13em; font-size:9px; color:var(--dim); }
-.railstat .stat .v { font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:12px; }
-.railstat .stat .v.act { color:var(--attn); }
-.railstat .stat .v.sig { color:var(--signal); }
+/* ---- flow status strip (§22.3 / §24.2.2 S1): step position + live status + control ---- */
+.flowstrip { display:flex; flex-direction:column; align-items:flex-start; gap:7px; }
+.flowstrip .flow-pos { font-size:12.5px; font-weight:500; }
+.flowstrip .flow-status { font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:12px; color:var(--dim); }
+.flowstrip .flow-status[data-status="in_progress"] { color:var(--signal); }
+.flowstrip .flow-status[data-status="done"] { color:var(--pass); }
+.flowstrip .flow-control { margin-top:2px; }
 
 /* ---- view 1: terminal ---- */
 #terminal-view { display:flex; flex-direction:column; height:100%; background:var(--term-bg); }

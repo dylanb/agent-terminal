@@ -8,6 +8,8 @@ import {
   type CommandCaptureResult,
   type CommandSummary,
   type CwdChangedMsg,
+  type FlowApi,
+  type FlowStateView,
   type MonitorApi,
   type ViewerApi,
   type ViewerFile,
@@ -85,6 +87,13 @@ const viewerApi: ViewerApi = {
     ipcRenderer.invoke(CH.viewerRead, { sessionId: SESSION_ID, relPath }) as Promise<ViewerFile | null>,
 };
 
+const flowApi: FlowApi = {
+  state: () => ipcRenderer.invoke(CH.flowState, { sessionId: SESSION_ID }) as Promise<FlowStateView>,
+  start: () => ipcRenderer.invoke(CH.flowStart, { sessionId: SESSION_ID }) as Promise<FlowStateView>,
+  advance: () => ipcRenderer.invoke(CH.flowAdvance, { sessionId: SESSION_ID }) as Promise<FlowStateView>,
+};
+
 contextBridge.exposeInMainWorld('term', termApi);
 contextBridge.exposeInMainWorld('monitor', monitorApi);
 contextBridge.exposeInMainWorld('viewer', viewerApi);
+contextBridge.exposeInMainWorld('flow', flowApi);

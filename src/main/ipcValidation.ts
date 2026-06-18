@@ -10,6 +10,7 @@ import {
   type CommandsRequestMsg,
   type DismissAllMsg,
   type DismissMsg,
+  type FlowRequestMsg,
   type MonitorCaptureMsg,
   type MonitorLearnChromeMsg,
   type PtyInputMsg,
@@ -98,6 +99,11 @@ export function isValidSetSettings(m: unknown): m is UiSetSettingsMsg {
 }
 
 export function isValidClearCommands(m: unknown): m is ClearCommandsMsg {
+  return isRecord(m) && isLiveSession(m);
+}
+
+/** Flow lifecycle (§24.2.2) — sessionId only; the read/start/advance calls carry no other input. */
+export function isValidFlowRequest(m: unknown): m is FlowRequestMsg {
   return isRecord(m) && isLiveSession(m);
 }
 

@@ -23,6 +23,7 @@ import {
   isValidCommandsRequest,
   isValidDismiss,
   isValidDismissAll,
+  isValidFlowRequest,
   isValidInject,
   isValidInput,
   isValidLearnChrome,
@@ -45,6 +46,7 @@ import { createCommandTracker } from './commandTracker';
 import { createCwdTracker } from './cwdTracker';
 import { createScanner } from './scanner';
 import { captureLastReport } from './captureLast';
+import { createFlowMachine } from './flow';
 import { discover, readArtifact, emptyTree } from './artifactTree';
 import { createChromeProfileStore } from './chromeProfile';
 import { learnMarkers } from './chrome';
@@ -79,6 +81,9 @@ async function createWindow(): Promise<void> {
   const todoStore = createTodoStore({ maxDoneTodos: config.maxDoneTodos });
   // Learned chrome markers (§15.x) — seeded defaults ∪ the user's "mark as chrome" adds.
   const chromeProfile = createChromeProfileStore(path.join(app.getPath('userData'), 'chrome-profile.json'));
+  // Flow lifecycle (§24.2.2 S1) — in-memory single-step state machine; the step is a
+  // hardcoded constant this slice (S2 sources it from flow.yaml), persistence is S3.
+  const flow = createFlowMachine();
 
   const send = <C extends SendChannel>(channel: C, payload: ChannelPayloads[C]): void => {
     if (!win.isDestroyed()) win.webContents.send(channel, payload);
@@ -255,6 +260,13 @@ async function createWindow(): Promise<void> {
       // falling back to the app's own dir before the first prompt. Read is path-escape-guarded.
       [CH.viewerTree]: (_e, m) => (isValidViewerTree(m) ? discover(viewerCwd(), m.scope) : emptyTree(viewerCwd())),
       [CH.viewerRead]: (_e, m) => (isValidViewerRead(m) ? readArtifact(viewerCwd(), m.relPath) : null),
+      // Flow lifecycle (§24.2.2 S1): read is unconditional; start/advance mutate only on a
+      // valid payload and return the resulting state, so the strip re-renders from it. An
+      // illegal transition throws (machine invariant) → the invoke rejects and the strip
+      // re-pulls the true state.
+      [CH.flowState]: () => flow.state(),
+      [CH.flowStart]: (_e, m) => (isValidFlowRequest(m) ? flow.start() : flow.state()),
+      [CH.flowAdvance]: (_e, m) => (isValidFlowRequest(m) ? flow.advance() : flow.state()),
     },
   );
 

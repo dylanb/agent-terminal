@@ -22,17 +22,15 @@
             <button class="nav" data-viewbtn="3">Todos <span class="k">⌘3</span></button>
           </div>
         </nav>
-        <!-- mocked flow timeline (§19.2) — rendered from the fixture flow-state -->
+        <!-- real flow status strip (§22.3 / §24.2.2 S1) — the manual step lifecycle + control -->
         <div class="blk">
-          <div class="sect" id="flow-label">Flow</div>
-          <div class="flow" id="flow-rail"></div>
+          <div class="sect">Flow</div>
+          <div class="flowstrip" id="flow-strip" role="status" aria-live="polite"></div>
         </div>
         <div class="blk" style="border-bottom:none">
           <div class="sect">Status</div>
           <!-- real status strip (§22.3) renders its chips here -->
           <div id="monitor-status" role="status" aria-live="polite"></div>
-          <!-- mocked gate/loop lines (§19.3) — rendered from the fixture flow-state -->
-          <div class="railstat" id="rail-flowstatus" style="margin-top:10px"></div>
         </div>
         <div class="foot">
           <button class="pill signal" id="qs">⌘K Quick-send</button>

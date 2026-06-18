@@ -954,6 +954,27 @@ test('the mocked Review gate renders from the fixture and its Approve stub refle
   await expect(gate).toContainText('approved');
 });
 
+test('the flow status strip drives a manual step from not started to done (§24.2.2 S1)', async () => {
+  // The rail's flow strip is the real single-step lifecycle, driven through window.flow:
+  // launch → not started → Start → in progress → Advance → done, no further control.
+  const status = page.locator('#flow-strip .flow-status');
+  const control = page.locator('#flow-strip .flow-control');
+  const position = page.locator('#flow-strip .flow-pos');
+
+  await expect(status).toHaveText('not started');
+  await expect(position).toContainText('1/1');
+  await expect(control).toHaveText('Start');
+
+  await control.click();
+  await expect(status).toHaveText('in progress');
+  await expect(control).toHaveText('Advance');
+
+  await control.click();
+  await expect(status).toHaveText('done');
+  // done is terminal — the control is gone, so a second Advance is impossible.
+  await expect(control).toHaveCount(0);
+});
+
 test('the theme toggle flips light/dark and persists across a reload (§16.6)', async () => {
   const html = page.locator('html');
   await page.locator('#tg').click();
