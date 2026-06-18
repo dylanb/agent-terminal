@@ -43,6 +43,7 @@ import { registerIpcListeners } from './sessionIpc';
 import { resolveRuntimeConfig } from './runtimeConfig';
 import { createCommandTracker } from './commandTracker';
 import { createCwdTracker } from './cwdTracker';
+import { currentRepoInfo } from './repoKey';
 import { createScanner } from './scanner';
 import { captureLastReport } from './captureLast';
 import { discover, readArtifact, emptyTree } from './artifactTree';
@@ -222,12 +223,11 @@ async function createWindow(): Promise<void> {
       [CH.monitorReplay]: () => store.list(),
       // §16.3: the pane queries the current repo on mount; the live cwd:changed
       // broadcast fires only on key change, so a pane that missed the first OSC 7
-      // (emitted before it subscribed) learns the repo key only by asking.
-      [CH.monitorCurrentRepo]: () => {
-        const cwd = cwdTracker.cwd();
-        const repoKey = cwdTracker.repoKey();
-        return cwd !== null && repoKey !== null ? { cwd, repoKey } : null;
-      },
+      // (emitted before it subscribed) learns the repo key only by asking. Falls back to
+      // the spawn cwd ($HOME) when nothing is tracked yet — without a key todos no-op, so
+      // the spawn directory must still scope to itself (mirrors viewerCwd, §20.1).
+      [CH.monitorCurrentRepo]: () =>
+        currentRepoInfo(cwdTracker.cwd(), cwdTracker.repoKey(), spawnCwd(process.env, os.homedir())),
       [CH.uiGetSettings]: () => uiSettings.get(),
       [CH.monitorCommands]: (_e, m): CommandSummary[] =>
         isValidCommandsRequest(m)
