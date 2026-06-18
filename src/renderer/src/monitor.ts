@@ -9,6 +9,7 @@ import { resolveMonitorElements } from './dom';
 import { createStatusStrip } from './statusStrip';
 import { createTodoTab } from './todoTab';
 import { createCaptureTab } from './captureTab';
+import { createRepoContext, type RepoContext } from './repoContext';
 import { REVEAL_CAPTURE_EVENT, TODOS_CHANGED_EVENT } from './paneActions';
 
 // Re-exported for callers that import these from the pane module (selection.ts, tests).
@@ -23,7 +24,7 @@ export {
   TODO_UNDO_MS,
 } from './paneActions';
 
-export function wireMonitorPane(): void {
+export function wireMonitorPane(repo: RepoContext = createRepoContext(window.monitor)): void {
   const el = resolveMonitorElements();
   const status = createStatusStrip(el.status);
   const todoTab = createTodoTab({ todoListEl: el.todoList, todoCountEl: el.todoCount, monitor: window.monitor });
@@ -69,14 +70,10 @@ export function wireMonitorPane(): void {
   // one and asks the pane to drop the superseded block (its findings cascade with it).
   window.monitor.onEventRemoved((eventId) => captureTab.removeBlock(eventId));
 
-  // Repo-scoped todos (§16.3): a repo-key change swaps the displayed list, unless a
-  // todo edit is open — then the Todo tab defers it until the edit resolves.
-  window.monitor.onCwdChanged((m) => todoTab.onRepoChanged(m.repoKey));
-  // The live broadcast fires only on key *change*; the first OSC 7 may predate this
-  // subscription, so seed the repo key on mount or the todo actions silently no-op.
-  void window.monitor.currentRepo().then((r) => {
-    if (r) todoTab.onRepoChanged(r.repoKey);
-  });
+  // Repo-scoped todos (§16.3): the shared repo context delivers the seeded key on mount and
+  // every subsequent cd; a repo-key change swaps the displayed list, unless a todo edit is
+  // open — then the Todo tab defers it until the edit resolves.
+  repo.onChange((info) => todoTab.onRepoChanged(info.repoKey));
 
   // A todo added from the terminal pane (Capture selection, §16.2) refreshes the count/list.
   window.addEventListener(TODOS_CHANGED_EVENT, () => todoTab.refresh());
