@@ -30,6 +30,7 @@ export function wireMonitorPane(): void {
   const captureTab = createCaptureTab({
     blocksEl: el.blocks,
     todoSink: todoTab,
+    monitor: window.monitor,
   });
 
   let activeTab: TabId = 'capture';

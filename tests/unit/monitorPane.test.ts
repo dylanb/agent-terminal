@@ -99,9 +99,14 @@ describe('action window DOM (§16 / §24.1 — tabs, capture cards, focus)', () 
       inject: vi.fn(),
       getSettings: vi.fn(async () => settings),
       setSettings: vi.fn((patch) => Object.assign(settings, patch)),
+      dismiss: vi.fn(),
+      dismissAll: vi.fn(),
       todoList: vi.fn(async () => []),
       todoAdd: vi.fn(async () => []),
+      todoUpdate: vi.fn(async () => []),
+      todoReorder: vi.fn(async () => []),
       todoSetStatus: vi.fn(async () => []),
+      todoDelete: vi.fn(async () => []),
     };
     (window as unknown as { monitor: typeof monitor }).monitor = monitor;
   });
@@ -161,32 +166,35 @@ describe('action window DOM (§16 / §24.1 — tabs, capture cards, focus)', () 
     expect(byId('capture-unread').hidden).toBe(true);
   });
 
-  // ---- capture cards: Add to todo, command-output inject (§16.2 / §24.1 mockup) ----
+  // ---- capture cards: bulk triage (checkbox + toolbar Add to todo), command-output inject
+  //      (§16.2 / §24.2.1) ----
 
-  it('a finding card offers Add to todo and no Insert (semantic captures are not injected)', async () => {
+  it('a finding card carries a selection checkbox and no per-card Add/Insert button', async () => {
     wireMonitorPane();
     await flush();
     handlers.event!(makeEvent({ id: 'f', type: 'finding', parentId: null, text: 'a finding' }));
     const card = blocks().querySelector('[data-event-id="f"]') as HTMLElement;
-    expect(cardButtons(card)).toContain('Add to todo');
+    expect(card.querySelector('.chunk-check')).toBeTruthy();
+    expect(cardButtons(card).some((t) => t?.includes('Add to todo'))).toBe(false);
     expect(cardButtons(card).some((t) => t?.includes('Insert'))).toBe(false);
+    // The bulk Add-to-todo lives in the pane toolbar.
+    expect(byId('add-selected-todo')).toBeTruthy();
   });
 
-  it('Add to todo posts the capture and confirms in place, leaving the card', async () => {
+  it('checking a finding and clicking the toolbar Add to todo posts it to the current repo', async () => {
     wireMonitorPane();
     await flush();
     handlers.cwdChanged!({ sessionId: 's1', cwd: '/repo/src', repoKey: '/repo' });
     monitor.todoAdd.mockResolvedValue([makeTodo({ id: 'n1', repoKey: '/repo', text: 'finding one' })]);
     handlers.event!(makeEvent({ id: 'f1', type: 'finding', parentId: null, text: 'finding one' }));
     const card = blocks().querySelector('[data-event-id="f1"]') as HTMLElement;
-    const add = Array.from(card.querySelectorAll('button')).find((b) => b.textContent === 'Add to todo')!;
-    add.click();
+    (card.querySelector('.chunk-check') as HTMLInputElement).click();
+    (byId('add-selected-todo') as HTMLButtonElement).click();
     await flush();
-    expect(monitor.todoAdd).toHaveBeenCalledWith('/repo', 'finding one', { type: 'finding', eventId: 'f1' });
-    // The card stays put; the action just confirms (Undo is deferred to §24.2.1).
+    expect(monitor.todoAdd).toHaveBeenCalledWith('/repo', 'finding one', { type: 'capture' });
+    // The card stays put during the undo window, dimmed as processed (§24.2.1).
     expect(blocks().querySelector('[data-event-id="f1"]')).toBeTruthy();
-    expect(add.textContent).toContain('Added');
-    expect(add.disabled).toBe(true);
+    expect(card.classList.contains('chunk-processed')).toBe(true);
   });
 
   it('Add to todo updates the Todo tab active count from the returned list', async () => {
@@ -196,7 +204,8 @@ describe('action window DOM (§16 / §24.1 — tabs, capture cards, focus)', () 
     handlers.cwdChanged!({ sessionId: 's1', cwd: '/repo', repoKey: '/repo' });
     handlers.event!(makeEvent({ id: 'c', type: 'capture', text: 'note' }));
     const card = blocks().querySelector('[data-event-id="c"]') as HTMLElement;
-    Array.from(card.querySelectorAll('button')).find((b) => b.textContent === 'Add to todo')!.click();
+    (card.querySelector('.chunk-check') as HTMLInputElement).click();
+    (byId('add-selected-todo') as HTMLButtonElement).click();
     await flush();
     expect(byId('todo-count').textContent).toBe('1');
   });

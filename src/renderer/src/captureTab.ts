@@ -1,25 +1,29 @@
-// Capture tab (§24.1 mockup-exact / §15 / §16.2): captured findings/command output
-// rendered in the converged mockup's language — `.finding` cards with a title (.t), a
-// muted meta line (.m), and subtle linkbtn actions (.a). All user text is set via
-// textContent, never innerHTML, so captured bytes cannot inject markup. Reaches the
-// Todo tab only through the narrow TodoSink (§16.2 Add to todo).
+// Capture tab (§24.1 mockup-exact / §15 / §16.2 / §24.2.1): captured findings/command
+// output rendered in the converged mockup's language — `.finding` cards with a title (.t),
+// a muted meta line (.m), a per-card selection checkbox (.chunk-check), and subtle linkbtn
+// actions (.a). All user text is set via textContent, never innerHTML, so captured bytes
+// cannot inject markup. Reaches the Todo tab only through the narrow TodoSink (§16.2).
+//
+// Bulk triage (§24.2.1): each card carries a checkbox; a toolbar concatenates the checked
+// chunks (appeared order, blank-line separated) into ONE todo with an Undo window + a
+// processed-chunk cue, and offers Dismiss selected / Dismiss all. This supersedes the
+// per-card "Add to todo" the mockup shipped, and subsumes Dismiss + Dismiss all.
+//
+// Report prose (§24.2.1): a report that carves no findings renders as an expandable summary
+// card (`.report-prose` + <details>) so its body has a home without a dominating blob.
 //
 // Cross-highlight (§16.8, resize-safe): this pane deals only in capture **ids** — it
 // publishes each ranged card's span (CAPTURE_RANGE_ADD/REMOVE) so the terminal can
-// marker-anchor it (markers track reflow, so a resize can't stale the link), and reveals
-// by id. The terminal owns the coordinates and resolves a double-clicked row to an id.
-//
-// Deferred to §24.2.1: Dismiss / Dismiss-all (§15.6) and the Add-to-todo Undo (§16.2).
-// Dropped: type badges, timestamps, command history, Mark-as-chrome. Report blobs are
-// carved into findings (we render those, not the blob).
+// marker-anchor it, and reveals by id. The terminal owns the coordinates.
 
-import type { MonitorEvent, MonitorEventType, TodoSourceType } from '../../shared/ipc';
+import type { MonitorApi, MonitorEvent, MonitorEventType } from '../../shared/ipc';
 import {
   CAPTURE_RANGE_ADD_EVENT,
   CAPTURE_RANGE_REMOVE_EVENT,
   doInject,
   REVEAL_HIGHLIGHT_MS,
   REVEAL_TERMINAL_EVENT,
+  TODO_UNDO_MS,
 } from './paneActions';
 import type { TodoSink } from './todoTab';
 
@@ -32,24 +36,11 @@ const TYPE_LABELS: Record<string, string> = {
   'command-output': 'command',
 };
 
-/** Map a captured event's type to a todo source type (§16.3); unknowns → 'capture'. */
-function sourceTypeFor(type: MonitorEventType): TodoSourceType {
-  switch (type) {
-    case 'report':
-    case 'finding':
-    case 'capture':
-    case 'command-output':
-      return type;
-    default:
-      return 'capture';
-  }
-}
-
 export interface CaptureTab {
   /** Render a stored event (replay or live); deduped by id so each renders once. */
   appendBlock(event: MonitorEvent): void;
   /** Show the latest manually-captured report single-slot (§21.1): clear the prior report's
-   *  cards and render this one's findings (or the report itself if it has none), preserving
+   *  cards and render this one's findings (or the report prose if it carves none), preserving
    *  manual captures and command-output. `events` is [report, ...findings] from capture:last. */
   showReport(events: MonitorEvent[]): void;
   /** Drop a rendered card by id when main retracts it (superseded, §15.3). */
@@ -62,15 +53,25 @@ export interface CaptureTab {
 export interface CaptureTabDeps {
   blocksEl: HTMLElement;
   todoSink: TodoSink;
+  monitor: Pick<MonitorApi, 'dismiss' | 'dismissAll'>;
 }
 
 export function createCaptureTab(deps: CaptureTabDeps): CaptureTab {
-  const { blocksEl, todoSink } = deps;
+  const { blocksEl, todoSink, monitor } = deps;
   const rendered = new Set<string>();
   // Cross-highlight (§16.8): the live self-clearing reveal-highlight timer per element
   // (re-reveal resets it). The coordinates live on the terminal side, which marker-anchors
   // each span (so reflow can't stale it); this pane deals only in ids.
   const revealTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+  // Bulk triage (§16.2 / §24.2.1): each selectable card is a chunk. `seq` is render order =
+  // appeared order so the bulk Add-to-todo concatenation reads oldest-first.
+  let chunkSeq = 0;
+  const chunkRegistry = new Map<string, { text: string; seq: number }>();
+  let undoPending = false;
+  // Chunks committed to the pending Add-to-todo: shown processed (dimmed + checkbox disabled)
+  // until the undo window commits (then they're dismissed) or Undo reverts them.
+  let processedIds: string[] = [];
 
   /** Publish a capture's span so the terminal can marker-anchor it for cross-highlight (§16.8). */
   function publishRange(event: MonitorEvent): void {
@@ -96,43 +97,58 @@ export function createCaptureTab(deps: CaptureTabDeps): CaptureTab {
     return b;
   }
 
-  /** Add to todo (§16.2): post the capture, then confirm in place. Undo is deferred (§24.2.1). */
-  function addToTodoButton(event: MonitorEvent): HTMLButtonElement {
-    const add = linkbtn('Add to todo', async () => {
-      if (!todoSink.currentRepoKey()) return;
-      const item = await todoSink.addFromCapture(event.text, {
-        type: sourceTypeFor(event.type),
-        eventId: event.id,
-      });
-      if (item) {
-        add.textContent = 'Added ✓';
-        add.disabled = true;
-      }
+  function makeChunkCheckbox(eventId: string, text: string): HTMLInputElement {
+    chunkRegistry.set(eventId, { text, seq: chunkSeq++ });
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.className = 'chunk-check';
+    cb.dataset.chunkId = eventId;
+    cb.setAttribute('aria-label', 'Select capture for bulk action');
+    cb.addEventListener('change', refreshSelectionUI);
+    return cb;
+  }
+
+  function dblclickReveal(el: HTMLElement, event: MonitorEvent): void {
+    if (!event.range) return;
+    el.addEventListener('dblclick', () => {
+      window.dispatchEvent(new CustomEvent(REVEAL_TERMINAL_EVENT, { detail: { id: event.id } }));
     });
-    add.classList.add('add-to-todo');
-    return add;
+  }
+
+  /** A report that carves no findings: an expandable summary card, prose tucked behind a
+   *  <details> so it doesn't dominate the pane as a blob (§24.2.1). */
+  function renderReportProse(event: MonitorEvent): HTMLElement {
+    const el = document.createElement('div');
+    el.className = 'finding report-prose';
+    el.dataset.eventId = event.id;
+    el.dataset.type = event.type;
+    el.setAttribute('role', 'group');
+    dblclickReveal(el, event);
+
+    const details = document.createElement('details');
+    const summary = document.createElement('summary');
+    summary.textContent = 'Report — no findings carved';
+    const prose = document.createElement('div');
+    prose.className = 't prose';
+    prose.textContent = event.text;
+    details.append(summary, prose);
+
+    el.append(makeChunkCheckbox(event.id, event.text), details);
+    return el;
   }
 
   function renderCard(event: MonitorEvent): HTMLElement {
+    if (event.type === 'report') return renderReportProse(event);
+
     const el = document.createElement('div');
     el.className = 'finding';
     el.dataset.eventId = event.id;
     // Tag the source type so single-slot replace (showReport) clears only report/finding
     // cards, leaving manual captures and command-output in place (§21.1).
     el.dataset.type = event.type;
-    // Parent report id (§15.3): a report retraction must cascade to its findings, which
-    // are flat top-level cards here (not DOM-nested), so removal is by this tag.
     if (event.parentId) el.dataset.parentId = event.parentId;
     el.setAttribute('role', 'group');
-
-    // Cross-highlight (§16.8): double-clicking a ranged card asks the terminal to reveal
-    // its rows; the terminal reads the card's live marker rows. Manual captures (no range)
-    // don't participate.
-    if (event.range) {
-      el.addEventListener('dblclick', () => {
-        window.dispatchEvent(new CustomEvent(REVEAL_TERMINAL_EVENT, { detail: { id: event.id } }));
-      });
-    }
+    dblclickReveal(el, event);
 
     const t = document.createElement('div');
     t.className = 't';
@@ -142,13 +158,15 @@ export function createCaptureTab(deps: CaptureTabDeps): CaptureTab {
     m.className = 'm';
     m.textContent = badgeLabel(event.type) + (event.truncated ? ' · truncated' : '');
 
-    const a = document.createElement('div');
-    a.className = 'a';
-    // command-output is the one inject-able capture (§16.2): Insert at cursor (no submit).
-    if (event.type === 'command-output') a.append(linkbtn('Insert at cursor', () => doInject(event.text, false)));
-    a.append(addToTodoButton(event));
+    el.append(makeChunkCheckbox(event.id, event.text), t, m);
 
-    el.append(t, m, a);
+    // command-output is the one inject-able capture (§16.2): Insert at cursor (no submit).
+    if (event.type === 'command-output') {
+      const a = document.createElement('div');
+      a.className = 'a';
+      a.append(linkbtn('Insert at cursor', () => doInject(event.text, false)));
+      el.append(a);
+    }
     return el;
   }
 
@@ -162,10 +180,10 @@ export function createCaptureTab(deps: CaptureTabDeps): CaptureTab {
 
   function appendBlock(event: MonitorEvent): void {
     // The pane shows actionable units only (§24.1 mockup): findings, manual/command
-    // captures, completions. report blobs are carved into findings (so we render those,
-    // not the blob); tool-use / diff are agent furniture that only carve report rows.
+    // captures, completions. report blobs are carved into findings (so we render those, not
+    // the blob — the prose fallback is reached only via showReport); tool-use / diff are
+    // agent furniture that only carve report rows.
     if (event.type === 'report' || event.type === 'tool-use' || event.type === 'diff') return;
-    // Replay (§8.4) and the live stream can both deliver the same id; render once.
     if (rendered.has(event.id)) return;
     rendered.add(event.id);
 
@@ -176,7 +194,7 @@ export function createCaptureTab(deps: CaptureTabDeps): CaptureTab {
 
   /** Manual single-slot capture (§21.1): replace the shown report. Clears prior report/finding
    *  cards (manual captures and command-output stay), then renders this report's findings in
-   *  document order — or the report itself when it produced none. */
+   *  document order — or the report prose card when it carves none (§24.2.1). */
   function showReport(events: MonitorEvent[]): void {
     for (const el of [...blocksEl.querySelectorAll<HTMLElement>('.finding')]) {
       const t = el.dataset.type;
@@ -190,11 +208,13 @@ export function createCaptureTab(deps: CaptureTabDeps): CaptureTab {
       blocksEl.appendChild(renderCard(event)); // top-down order, not the newest-first append path
       publishRange(event);
     }
+    refreshSelectionUI();
   }
 
-  /** Drop a card by id, clearing dedup/timer bookkeeping and the terminal's marker. */
+  /** Drop a card by id, clearing dedup/timer/chunk bookkeeping and the terminal's marker. */
   function forget(id: string, el: HTMLElement | null): void {
     rendered.delete(id);
+    chunkRegistry.delete(id);
     const timer = revealTimers.get(id);
     if (timer) {
       clearTimeout(timer);
@@ -209,20 +229,18 @@ export function createCaptureTab(deps: CaptureTabDeps): CaptureTab {
   /**
    * Retraction (§15.3): the scanner superseded this event with a fuller capture, so drop
    * its card. A retracted report cascades to its findings — flat cards tagged with the
-   * report's id — mirroring the old DOM-nested cascade; bookkeeping is cleared so no
-   * stale id lingers.
+   * report's id — mirroring the old DOM-nested cascade.
    */
   function removeBlock(eventId: string): void {
     forget(eventId, elById(eventId));
     for (const el of [...blocksEl.querySelectorAll<HTMLElement>('[data-parent-id]')]) {
       if (el.dataset.parentId === eventId) forget(el.dataset.eventId!, el);
     }
+    refreshSelectionUI();
   }
 
   /** Scroll to + highlight the element with this id for REVEAL_HIGHLIGHT_MS; re-revealing
-   *  restarts its timer (§16.8). The terminal pane already resolved the double-clicked row to
-   *  the most-specific covering capture (pickRevealTarget), so here we just reveal that id; an
-   *  id with no rendered element (already dropped) is a no-op — best-effort provenance. */
+   *  restarts its timer (§16.8). An id with no rendered element (already dropped) is a no-op. */
   function revealById(id: string): void {
     const el = elById(id);
     if (!el) return;
@@ -238,6 +256,122 @@ export function createCaptureTab(deps: CaptureTabDeps): CaptureTab {
       }, REVEAL_HIGHLIGHT_MS),
     );
   }
+
+  // ---- Bulk triage (§16.2 / §24.2.1) ----
+
+  function checkedChunks(): { id: string; text: string; seq: number }[] {
+    return Array.from(blocksEl.querySelectorAll<HTMLInputElement>('.chunk-check'))
+      .filter((c) => c.checked)
+      .map((c) => ({ id: c.dataset.chunkId!, ...chunkRegistry.get(c.dataset.chunkId!)! }))
+      .sort((a, b) => a.seq - b.seq);
+  }
+
+  function setProcessed(ids: string[], on: boolean): void {
+    for (const id of ids) {
+      const el = elById(id);
+      if (!el) continue;
+      el.classList.toggle('chunk-processed', on);
+      const cb = el.querySelector<HTMLInputElement>('.chunk-check');
+      if (cb) cb.disabled = on;
+    }
+  }
+
+  function removeChunk(id: string): void {
+    forget(id, elById(id));
+  }
+
+  function refreshSelectionUI(): void {
+    const any = blocksEl.querySelector('.chunk-check:checked') !== null;
+    addSelectedBtn.disabled = !any || undoPending;
+    dismissSelectedBtn.disabled = !any;
+  }
+
+  // One undoable todo from all checked chunks (§16.2). The chunks are dismissed only when the
+  // undo window elapses (commit); Undo deletes the just-added todo and leaves the chunks.
+  async function onAddSelected(): Promise<void> {
+    if (undoPending || !todoSink.currentRepoKey()) return;
+    const selected = checkedChunks();
+    if (selected.length === 0) return;
+    const ids = selected.map((c) => c.id);
+    undoPending = true;
+    processedIds = ids;
+    setProcessed(ids, true);
+    refreshSelectionUI();
+    const added = await todoSink.addFromCapture(selected.map((c) => c.text).join('\n\n'), { type: 'capture' });
+
+    undoSlot.replaceChildren();
+    const note = document.createElement('span');
+    note.className = 'added-note';
+    note.textContent = 'Added to todo';
+    const undo = document.createElement('button');
+    undo.className = 'undo-add-to-todo linkbtn';
+    undo.textContent = 'Undo';
+    const timer = setTimeout(() => {
+      for (const id of ids) {
+        monitor.dismiss(id);
+        removeChunk(id);
+      }
+      endUndo();
+    }, TODO_UNDO_MS);
+    undo.addEventListener('click', async () => {
+      clearTimeout(timer);
+      if (added) await todoSink.deleteTodo(added.repoKey, added.id); // chunks stay; nothing dismissed
+      endUndo();
+    });
+    undoSlot.append(note, undo);
+  }
+
+  function endUndo(): void {
+    undoPending = false;
+    setProcessed(processedIds, false); // no-op for committed chunks (already removed)
+    processedIds = [];
+    undoSlot.replaceChildren();
+    refreshSelectionUI();
+  }
+
+  // Toolbar (§16.2 / §24.2.1): bulk Add-to-todo (+ undo slot), Dismiss selected, Dismiss all.
+  // Add/Dismiss-selected stay disabled until at least one chunk is checked.
+  const toolbar = document.createElement('div');
+  toolbar.className = 'cap-toolbar';
+
+  const addSelectedBtn = document.createElement('button');
+  addSelectedBtn.id = 'add-selected-todo';
+  addSelectedBtn.className = 'pill sm signal';
+  addSelectedBtn.textContent = 'Add to todo';
+  addSelectedBtn.disabled = true;
+  addSelectedBtn.addEventListener('click', () => void onAddSelected());
+
+  const undoSlot = document.createElement('span');
+  undoSlot.className = 'add-undo-slot';
+
+  const dismissSelectedBtn = document.createElement('button');
+  dismissSelectedBtn.id = 'dismiss-selected';
+  dismissSelectedBtn.className = 'pill sm';
+  dismissSelectedBtn.textContent = 'Dismiss selected';
+  dismissSelectedBtn.disabled = true;
+  dismissSelectedBtn.addEventListener('click', () => {
+    for (const { id } of checkedChunks()) {
+      monitor.dismiss(id); // also drop from the store so replay won't resurrect it
+      removeChunk(id);
+    }
+    refreshSelectionUI();
+  });
+
+  const dismissAllBtn = document.createElement('button');
+  dismissAllBtn.id = 'dismiss-all';
+  dismissAllBtn.className = 'pill sm';
+  dismissAllBtn.textContent = 'Dismiss all';
+  dismissAllBtn.addEventListener('click', () => {
+    monitor.dismissAll();
+    for (const el of blocksEl.querySelectorAll<HTMLElement>('[data-event-id]')) unpublishRange(el);
+    blocksEl.replaceChildren();
+    rendered.clear();
+    chunkRegistry.clear();
+    refreshSelectionUI();
+  });
+
+  toolbar.append(addSelectedBtn, undoSlot, dismissSelectedBtn, dismissAllBtn);
+  blocksEl.parentNode?.insertBefore(toolbar, blocksEl);
 
   return { appendBlock, showReport, removeBlock, revealById };
 }

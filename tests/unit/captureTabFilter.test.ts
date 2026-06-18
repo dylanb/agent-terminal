@@ -28,7 +28,9 @@ describe('Capture pane rendering filter (§15.x — tool-call furniture is not a
       todoSink: {
         currentRepoKey: () => '/repo',
         addFromCapture: vi.fn(async () => null),
+        deleteTodo: vi.fn(async () => undefined),
       } as never,
+      monitor: { dismiss: vi.fn(), dismissAll: vi.fn() } as never,
     });
   }
 

@@ -455,6 +455,67 @@ test('cd between directories swaps the repo-scoped todo list (§16.3)', async ()
   await expect(todo('A-side todo')).toHaveCount(1);
 });
 
+// ---- §24.2.1: restored todo-panel functionality (manual add, reorder, two-step delete) ----
+
+test('a manually-added todo persists across a reload (§24.2.1 manual add)', async () => {
+  await cdToTempDir('manualadd');
+  await page.locator('#tab-todo').click();
+  await page.locator('#todo-new').fill('hand-written e2e todo');
+  await page.locator('#todo-add-btn').click();
+  const row = page.locator('.todo').filter({ hasText: 'hand-written e2e todo' });
+  await expect(row).toHaveCount(1);
+
+  // Full loop: it was written through todoAdd → the repo's todos.json, so a reloaded pane
+  // re-pulls it (currentRepo on mount → todoList).
+  await page.reload();
+  await openQuickSend('todo');
+  await expect(page.locator('.todo').filter({ hasText: 'hand-written e2e todo' })).toHaveCount(1);
+});
+
+test('two-step delete: Confirm then Undo keeps the todo, no server delete (§24.2.1)', async () => {
+  await cdToTempDir('deltodo');
+  await page.locator('#tab-todo').click();
+  await page.locator('#todo-new').fill('delete-me-e2e');
+  await page.locator('#todo-add-btn').click();
+  const row = page.locator('.todo').filter({ hasText: 'delete-me-e2e' });
+  await expect(row).toHaveCount(1);
+
+  await row.getByRole('button', { name: 'Delete todo' }).click();
+  await page.getByRole('button', { name: 'Confirm delete' }).click();
+  // The row collapses to a Deleted/Undo affordance during the window; Undo restores it.
+  await expect(page.locator('.todo-undo')).toBeVisible();
+  await page.locator('.todo-undo').click();
+  await expect(page.locator('.todo').filter({ hasText: 'delete-me-e2e' })).toHaveCount(1);
+
+  // The reverted delete never reached the store, so a reload still shows it.
+  await page.reload();
+  await openQuickSend('todo');
+  await expect(page.locator('.todo').filter({ hasText: 'delete-me-e2e' })).toHaveCount(1);
+});
+
+test('reorder: Move down swaps two todos and the new order persists (§24.2.1)', async () => {
+  await cdToTempDir('reorder');
+  await page.locator('#tab-todo').click();
+  const add = async (t: string) => {
+    await page.locator('#todo-new').fill(t);
+    await page.locator('#todo-add-btn').click();
+    await expect(page.locator('.todo').filter({ hasText: t })).toHaveCount(1);
+  };
+  await add('reorder-first-e2e');
+  await add('reorder-second-e2e');
+
+  const texts = () => page.locator('#panel-todo .todos .todo .tx').allInnerTexts();
+  expect(await texts()).toEqual(['reorder-first-e2e', 'reorder-second-e2e']);
+
+  await page.locator('.todo').filter({ hasText: 'reorder-first-e2e' }).getByRole('button', { name: 'Move down' }).click();
+  await expect.poll(texts).toEqual(['reorder-second-e2e', 'reorder-first-e2e']);
+
+  // Persisted via todoReorder → todos.json, so the swapped order survives a reload.
+  await page.reload();
+  await openQuickSend('todo');
+  await expect.poll(texts).toEqual(['reorder-second-e2e', 'reorder-first-e2e']);
+});
+
 // ---- §24.1C: the converged three-view shell (views, docked drawer, theme) ----
 
 test('switches views via hotkey and nav button, showing one pane at a time (§22.4)', async () => {
