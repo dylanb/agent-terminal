@@ -54,7 +54,14 @@ export function wireMonitorPane(repo: RepoContext = createRepoContext(window.mon
   // Capture is manual + single-slot (§21.1): run report-detection on demand and replace the
   // shown report with the latest. Nothing auto-emits, so there is no unread dot to raise.
   el.captureLast.addEventListener('click', () => {
-    void window.monitor.captureLast().then((events) => captureTab.showReport(events));
+    void window.monitor
+      .captureLast()
+      // [] means nothing was detected AND main kept the prior capture (a scrolled-away buffer
+      // must not wipe it) — so only replace the shown report when there's actually one (§21.1).
+      .then((events) => {
+        if (events.length > 0) captureTab.showReport(events);
+      })
+      .catch(() => {}); // a rejected invoke (main restart) must not be an unhandled rejection
   });
 
   window.monitor.onUpdate((msg) => status.update(msg));

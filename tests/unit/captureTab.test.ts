@@ -299,6 +299,33 @@ describe('Capture last report button (§21.1 — manual single-slot)', () => {
     findings()[0].dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
     expect(revealedId).toBe('f1');
   });
+
+  it('an empty result (nothing detected) leaves the shown report in place — does not clear it', async () => {
+    // capture:last returns [] when no report is detected AND main keeps the prior capture
+    // (a scrolled-away buffer must not wipe it), so the pane must not clear on [].
+    monitor.captureLast.mockResolvedValueOnce([report('f1', 'kept finding')]);
+    wireMonitorPane();
+    await flush();
+    button().click();
+    await flush();
+    expect(findings().map(text)).toEqual(['kept finding']);
+
+    monitor.captureLast.mockResolvedValueOnce([]);
+    button().click();
+    await flush();
+    expect(findings().map(text)).toEqual(['kept finding']); // unchanged
+  });
+
+  it('a rejected capture:last is handled, not an unhandled rejection', async () => {
+    // vitest fails the run on an unhandled rejection, so this passes only if the click handler
+    // catches a rejected invoke (e.g. main restart).
+    monitor.captureLast.mockRejectedValueOnce(new Error('main restarted'));
+    wireMonitorPane();
+    await flush();
+    button().click();
+    await flush();
+    expect(findings()).toHaveLength(0); // no crash, nothing rendered
+  });
 });
 
 // §24.2.1 report prose / summary view: the mockup carves only findings, so a report that

@@ -452,7 +452,14 @@ export function createArtifacts(host: HTMLElement, deps: ArtifactsDeps): Artifac
     current = relPath;
     lastSelection = '';
     for (const [rel, row] of fileRows) row.classList.toggle('sel', rel === relPath);
-    const file = await deps.loadFile(relPath);
+    // An IPC failure (e.g. main restart) reads as an unreadable file, not an unhandled
+    // rejection — the `if (!file)` path below renders the "Cannot display" state (§20.2).
+    let file: ViewerFile | null;
+    try {
+      file = await deps.loadFile(relPath);
+    } catch {
+      file = null;
+    }
     if (current !== relPath) return; // a newer open won the race
     body.setAttribute('aria-label', file?.name ?? relPath);
     if (!file) {
@@ -485,7 +492,14 @@ export function createArtifacts(host: HTMLElement, deps: ArtifactsDeps): Artifac
 
   async function refresh(): Promise<void> {
     const token = ++refreshSeq;
-    const data = await deps.loadTree(scope);
+    // Leave the previous tree/content in place on an IPC failure rather than blanking the
+    // viewer or surfacing an unhandled rejection (callers use `void refresh()`, §20.2).
+    let data: ArtifactTree;
+    try {
+      data = await deps.loadTree(scope);
+    } catch {
+      return;
+    }
     if (token !== refreshSeq) return; // a newer refresh started while we awaited
     treeRoot = data.root;
     scope = data.scope;
