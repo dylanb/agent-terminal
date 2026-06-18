@@ -662,6 +662,41 @@ test('the viewer has a keyboard-accessible full-screen mode (§20.2)', async () 
   await expect(appEl).not.toHaveClass(/viewer-fullscreen/);
 });
 
+test('the viewer is keyboard-focusable and scrollable (§20.2 a11y)', async () => {
+  // A tall markdown file and a tall code file so both scroll containers actually overflow.
+  const dir = '/tmp/agent-term-e2e-a11yscroll';
+  await typeCommand(
+    `rm -rf "${dir}" && mkdir -p "${dir}/src" && cd "${dir}" && git init -q && ` +
+      `{ echo '# Doc'; for i in $(seq 1 300); do echo "para line $i"; done; } > doc.md && ` +
+      `seq 1 300 | sed 's|.*|// line &|' > src/app.ts && pwd`,
+  );
+  await expect(page.locator('.xterm-rows > div').filter({ hasText: new RegExp(`^\\s*${dir}\\s*$`) })).not.toHaveCount(0);
+  await expect(page.locator('.status-chip[data-status="agent"]')).toContainText('quiet', { timeout: 6_000 });
+
+  await page.keyboard.press('Control+2');
+  const tree = page.locator('#artifacts .tree');
+  const body = page.locator('#artifacts .vbody');
+
+  // Markdown: the body itself is the focusable scroll region.
+  await tree.locator('.f').filter({ hasText: 'doc.md' }).click();
+  await expect(body.locator('p').first()).toBeVisible();
+  expect(await body.evaluate((e) => (e as HTMLElement).tabIndex)).toBe(0);
+  await body.focus();
+  expect(await body.evaluate((e) => document.activeElement === e)).toBe(true);
+  await page.keyboard.press('End');
+  await expect.poll(() => body.evaluate((e) => e.scrollTop)).toBeGreaterThan(0);
+
+  // Code: the editor's scroller is the focusable scroll region.
+  await page.locator('#artifacts .scope-toggle input').check();
+  await tree.locator('.f').filter({ hasText: 'app.ts' }).click();
+  const scroller = page.locator('#artifacts .cm-scroller');
+  await expect(scroller).toBeVisible();
+  expect(await scroller.evaluate((e) => (e as HTMLElement).tabIndex)).toBe(0);
+  await scroller.focus();
+  await page.keyboard.press('End');
+  await expect.poll(() => scroller.evaluate((e) => e.scrollTop)).toBeGreaterThan(0);
+});
+
 test('the full-screen tree popout is resizable and remembers its width (§20.2)', async () => {
   const dir = '/tmp/agent-term-e2e-fspopout';
   await typeCommand(

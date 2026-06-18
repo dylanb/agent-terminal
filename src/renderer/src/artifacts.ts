@@ -163,6 +163,7 @@ export function createArtifacts(host: HTMLElement, deps: ArtifactsDeps): Artifac
   titleWrap.append(title, meta);
   bar.append(titleWrap, actions);
   const body = el('div', 'vbody');
+  body.setAttribute('role', 'region'); // a labelled, keyboard-focusable scroll region (§20.2 a11y)
   viewer.append(bar, body);
 
   // Thin edge strips that pop the collapsed header/tree open and closed in full screen (§20.2);
@@ -446,9 +447,11 @@ export function createArtifacts(host: HTMLElement, deps: ArtifactsDeps): Artifac
     for (const [rel, row] of fileRows) row.classList.toggle('sel', rel === relPath);
     const file = await deps.loadFile(relPath);
     if (current !== relPath) return; // a newer open won the race
+    body.setAttribute('aria-label', file?.name ?? relPath);
     if (!file) {
       title.textContent = relPath;
       meta.textContent = 'Cannot display this file';
+      body.tabIndex = 0;
       plainInto('', body);
       return;
     }
@@ -458,10 +461,14 @@ export function createArtifacts(host: HTMLElement, deps: ArtifactsDeps): Artifac
     unsubViewport = null;
     codeView = null;
     if (file.kind === 'code') {
+      // The editor owns its own scroller (cm-scroller, focusable in viewerRender) — so the body
+      // steps out of the tab order to avoid a dead, unscrollable stop (§20.2 a11y).
+      body.tabIndex = -1;
       codeView = renderCode(file.body, file.lang, body, file.changedLines) ?? null;
       sections = changedSections(file.changedLines);
       if (codeView) unsubViewport = codeView.onViewportChange(updateNav);
     } else {
+      body.tabIndex = 0; // the body itself scrolls markdown → make it the focusable scroll region
       renderMarkdown(file.body, body);
       sections = [];
     }
@@ -485,6 +492,7 @@ export function createArtifacts(host: HTMLElement, deps: ArtifactsDeps): Artifac
       current = null;
       title.textContent = treeRoot ? 'No artifacts' : '';
       meta.textContent = '';
+      body.tabIndex = 0;
       plainInto('', body);
     }
   }

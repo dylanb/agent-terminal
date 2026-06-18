@@ -146,6 +146,26 @@ describe('artifact viewer (§20.1/§20.2 — real discovery)', () => {
     expect(v.renderCode).toHaveBeenCalledWith('body of src/a.ts', 'typescript', v.body(), [2, 5]);
   });
 
+  // Keyboard a11y (§20.2): the scrolling container must be tab-reachable so it can be scrolled by
+  // keyboard. For markdown that container is the body itself; for code it's the editor's scroller,
+  // so the body steps aside (tabindex -1) and the editor takes focus.
+  it('makes the viewer body a focusable, labelled scroll region for markdown', async () => {
+    const v = mount();
+    await v.api.refresh();
+    v.fileRows().find((r) => r.textContent?.includes('review.md'))!.click();
+    await Promise.resolve(); await Promise.resolve();
+    const body = v.body();
+    expect(body.tabIndex).toBe(0);
+    expect(body.getAttribute('role')).toBe('region');
+    expect(body.getAttribute('aria-label')).toContain('review.md');
+  });
+
+  it('defers focus to the editor scroller (body not a tab stop) for code files', async () => {
+    const v = mount();
+    await v.api.refresh(); // opens src/a.ts (code)
+    expect(v.body().tabIndex).toBe(-1);
+  });
+
   // Tweak 2: contiguous changed lines collapse into sections; the readout and prev/next are
   // derived from the live viewport — current = the last section scrolled onto/past the screen,
   // prev/next jump to the nearest section above/below the visible area (§20.2).

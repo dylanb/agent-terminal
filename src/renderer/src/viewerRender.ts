@@ -137,6 +137,11 @@ export function renderCodeInto(
       }),
     });
     EV = EditorView;
+    // The read-only editor isn't editable-focusable, so make its scroller a keyboard-reachable,
+    // labelled scroll region — otherwise there's no way to scroll the code by keyboard (§20.2 a11y).
+    editor.scrollDOM.tabIndex = 0;
+    editor.scrollDOM.setAttribute('role', 'region');
+    editor.scrollDOM.setAttribute('aria-label', 'File contents');
     editor.scrollDOM.addEventListener('scroll', notify);
     if (pending !== null) {
       reveal(pending);
