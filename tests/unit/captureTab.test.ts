@@ -186,6 +186,25 @@ describe('Capture tab §24.2.1 — bulk triage (checkbox + Add to todo / Dismiss
     expect(monitor.dismissAll).toHaveBeenCalledTimes(1);
     expect(cards()).toHaveLength(0);
   });
+
+  it('if the add silently fails (nothing returned), the source chunks are NOT dismissed', async () => {
+    await withRepo();
+    monitor.todoAdd.mockResolvedValue([]); // add yields no new item → addFromCapture returns null
+    handlers.event!(makeEvent({ id: 'f1', type: 'finding', parentId: null, text: 'alpha' }));
+    checkbox(cards()[0]).click();
+    addBtn().click();
+    await tick();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(monitor.dismiss).not.toHaveBeenCalled();
+    expect(blocks().querySelector('[data-event-id="f1"]')).toBeTruthy();
+  });
+
+  it('each chunk checkbox is distinguishable — its label carries the capture text', async () => {
+    await withRepo();
+    handlers.event!(makeEvent({ id: 'f1', type: 'finding', parentId: null, text: 'unbounded scrollback re-scan' }));
+    const label = checkbox(cards()[0]).getAttribute('aria-label') ?? '';
+    expect(label).toContain('unbounded scrollback re-scan');
+  });
 });
 
 // §21.1 / v2.27: capture is manual + single-slot — clicking "Capture last report" runs

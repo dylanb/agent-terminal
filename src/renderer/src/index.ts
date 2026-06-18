@@ -64,6 +64,12 @@ if (artifactsHost) {
     repoKey = m.repoKey;
     void view.refresh(); // re-discover when the agent cd's into another repo/dir
   });
+  // Seed the repo key on mount: cwd:changed fires only on a key *change*, and the first OSC 7
+  // can predate this subscription — without this, add-to-todo silently no-ops until the next
+  // cross-repo cd (§16.3, mirrors monitor.ts).
+  void window.monitor.currentRepo().then((r) => {
+    if (r && repoKey === null) repoKey = r.repoKey;
+  });
   // Apply the persisted tree width once settings resolve (kept off the sync path above so a
   // late getSettings can't make the viewer miss the first cwd:changed broadcast, §20.1).
   void window.monitor.getSettings().then((s) => {

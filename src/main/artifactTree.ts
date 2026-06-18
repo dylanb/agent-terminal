@@ -5,7 +5,7 @@
 // LoopDef `artifacts:` declarations wait on the agent-loop bridge (§24.2).
 
 import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from 'node:fs';
 import path from 'node:path';
 import type {
   ArtifactNode,
@@ -202,6 +202,11 @@ export function readArtifact(cwd: string, relPath: string, deps: DiscoverDeps = 
   // Escape guard: the resolved path must stay within the discovery root (§20.2).
   if (abs !== root && !abs.startsWith(root + path.sep)) return null;
   try {
+    // Resolve symlinks too: an in-root link pointing outside passes the lexical guard above,
+    // so re-check the real path against the real root before reading (§20.2).
+    const real = realpathSync(abs);
+    const realRoot = realpathSync(root);
+    if (real !== realRoot && !real.startsWith(realRoot + path.sep)) return null;
     const st = statSync(abs);
     if (!st.isFile() || st.size > MAX_FILE_BYTES) return null;
     const body = readFileSync(abs, 'utf8');

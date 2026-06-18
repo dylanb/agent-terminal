@@ -61,6 +61,10 @@ export function createTodoTab(deps: TodoTabDeps): TodoTab {
   // (survive a re-render); the actual delete is deferred so Undo needs no re-add.
   let confirmingDeleteId: string | null = null;
   const pendingDelete = new Map<string, ReturnType<typeof setTimeout>>();
+  // Focus is moved to the contextually-correct control after a re-render that destroys the
+  // control the user just activated (edit/delete/confirm), so a keyboard user is never dropped
+  // to <body> (WCAG 2.4.3). Consumed once per render.
+  let focusAfterRender: (() => void) | null = null;
 
   function updateTodoCount(): void {
     todoCountEl.textContent = String(todos.filter((t) => t.status === 'active').length);
@@ -112,24 +116,35 @@ export function createTodoTab(deps: TodoTabDeps): TodoTab {
     return b;
   }
 
-  function reorderBy(ordered: TodoItem[], from: number, to: number): void {
-    if (to < 0 || to >= ordered.length || !currentRepoKey) return;
-    const ids = ordered.map((t) => t.id);
-    const [moved] = ids.splice(from, 1);
-    ids.splice(to, 0, moved);
+  const activeOf = (ordered: TodoItem[]): TodoItem[] => ordered.filter((t) => t.status === 'active');
+
+  /** Persist a new ACTIVE ordering while leaving every done row in its display slot — the
+   *  active ids are slotted back into the positions actives occupied in the full order, so a
+   *  reorder never shoves an inline done row (§16.4). */
+  function commitActiveOrder(ordered: TodoItem[], newActive: TodoItem[]): void {
+    if (!currentRepoKey) return;
+    let k = 0;
+    const ids = ordered.map((t) => (t.status === 'active' ? newActive[k++].id : t.id));
     void monitor.todoReorder(currentRepoKey, ids).then(setTodos);
   }
 
-  /** The active row's nearest active neighbour in the full display order (skips done rows),
-   *  or -1 when none — so ↑/↓ move within the active run and never cross a done row. */
-  function neighbourActive(ordered: TodoItem[], index: number, dir: -1 | 1): number {
-    for (let i = index + dir; i >= 0 && i < ordered.length; i += dir) {
-      if (ordered[i].status === 'active') return i;
-    }
-    return -1;
+  /** Move an active item one slot up/down within the active run (skipping done rows). */
+  function moveActive(ordered: TodoItem[], item: TodoItem, dir: -1 | 1): void {
+    const active = activeOf(ordered);
+    const i = active.findIndex((t) => t.id === item.id);
+    const j = i + dir;
+    if (i < 0 || j < 0 || j >= active.length) return;
+    [active[i], active[j]] = [active[j], active[i]];
+    commitActiveOrder(ordered, active);
   }
 
-  function renderActions(t: TodoItem, ordered: TodoItem[], index: number): HTMLElement {
+  /** Re-render and move focus to the row's control matching `sel` (a11y, §WCAG 2.4.3). */
+  function rerenderFocusing(id: string, sel: string): void {
+    focusAfterRender = () => rowEl(id)?.querySelector<HTMLElement>(sel)?.focus();
+    renderTodos();
+  }
+
+  function renderActions(t: TodoItem, ordered: TodoItem[]): HTMLElement {
     const actions = document.createElement('div');
     actions.className = 'todo-actions';
 
@@ -137,23 +152,23 @@ export function createTodoTab(deps: TodoTabDeps): TodoTab {
     if (t.id === editingId) {
       actions.append(
         actionButton('todo-save pill sm signal', 'Save', 'Save todo', () => void commitEdit(t)),
-        actionButton('todo-cancel linkbtn', 'Cancel', 'Cancel edit', () => resolveEdit()),
+        actionButton('todo-cancel linkbtn', 'Cancel', 'Cancel edit', () =>
+          rerenderFocusingAfterResolve(t.id, () => resolveEdit()),
+        ),
       );
       return actions;
     }
 
     if (t.status === 'active') {
-      const up = actionButton('todo-up iconbtn', '↑', 'Move up', () =>
-        reorderBy(ordered, index, neighbourActive(ordered, index, -1)),
-      );
-      up.disabled = neighbourActive(ordered, index, -1) === -1;
-      const down = actionButton('todo-down iconbtn', '↓', 'Move down', () =>
-        reorderBy(ordered, index, neighbourActive(ordered, index, 1)),
-      );
-      down.disabled = neighbourActive(ordered, index, 1) === -1;
+      const active = activeOf(ordered);
+      const ai = active.findIndex((x) => x.id === t.id);
+      const up = actionButton('todo-up iconbtn', '↑', 'Move up', () => moveActive(ordered, t, -1));
+      up.disabled = ai <= 0;
+      const down = actionButton('todo-down iconbtn', '↓', 'Move down', () => moveActive(ordered, t, 1));
+      down.disabled = ai === active.length - 1;
       const edit = actionButton('todo-edit iconbtn', '✎', 'Edit todo', () => {
         editingId = t.id;
-        renderTodos();
+        rerenderFocusing(t.id, '.tx');
       });
       // Send pastes the todo into the agent's input WITHOUT submitting (§9.3 submit:false /
       // §16.2 Insert), then moves focus to the terminal so the user can edit or augment it
@@ -166,23 +181,29 @@ export function createTodoTab(deps: TodoTabDeps): TodoTab {
 
     if (t.id === confirmingDeleteId) {
       actions.append(
-        actionButton('todo-delete-confirm pill sm send', 'Confirm delete?', 'Confirm delete', () =>
+        actionButton('todo-delete-confirm pill sm', 'Confirm delete?', 'Confirm delete', () =>
           beginPendingDelete(t),
         ),
         actionButton('todo-delete-cancel linkbtn', 'Cancel', 'Cancel delete', () => {
           confirmingDeleteId = null;
-          renderTodos();
+          rerenderFocusing(t.id, '.todo-delete');
         }),
       );
     } else {
       actions.append(
         actionButton('todo-delete iconbtn', '×', 'Delete todo', () => {
           confirmingDeleteId = t.id;
-          renderTodos();
+          rerenderFocusing(t.id, '.todo-delete-confirm');
         }),
       );
     }
     return actions;
+  }
+
+  /** Run a resolve that re-renders, then focus `.todo-edit` of the row if it still exists. */
+  function rerenderFocusingAfterResolve(id: string, resolve: () => void): void {
+    focusAfterRender = () => rowEl(id)?.querySelector<HTMLElement>('.todo-edit')?.focus();
+    resolve();
   }
 
   async function commitEdit(t: TodoItem, el?: HTMLElement): Promise<void> {
@@ -191,6 +212,7 @@ export function createTodoTab(deps: TodoTabDeps): TodoTab {
     // The edit targets the list's own repo (t.repoKey), not the live cwd (§16.3).
     todos = await monitor.todoUpdate(t.repoKey, t.id, next);
     updateTodoCount();
+    focusAfterRender = () => rowEl(t.id)?.querySelector<HTMLElement>('.todo-edit')?.focus();
     resolveEdit();
   }
 
@@ -222,7 +244,7 @@ export function createTodoTab(deps: TodoTabDeps): TodoTab {
         void monitor.todoDelete(t.repoKey, t.id).then(setTodos);
       }, TODO_UNDO_MS),
     );
-    renderTodos();
+    rerenderFocusing(t.id, '.todo-undo');
   }
 
   function cancelPendingDelete(id: string): void {
@@ -232,7 +254,7 @@ export function createTodoTab(deps: TodoTabDeps): TodoTab {
     renderTodos(); // restored from `todos` — the server delete never ran
   }
 
-  function renderTodoRow(t: TodoItem, ordered: TodoItem[], index: number): HTMLElement {
+  function renderTodoRow(t: TodoItem, ordered: TodoItem[]): HTMLElement {
     if (pendingDelete.has(t.id)) return renderPendingDelete(t);
 
     const done = t.status === 'done';
@@ -257,7 +279,12 @@ export function createTodoTab(deps: TodoTabDeps): TodoTab {
     tx.textContent = t.text;
     if (t.id === editingId) {
       tx.contentEditable = 'true';
+      tx.tabIndex = 0; // make it programmatically focusable (a11y focus move on enter-edit)
       tx.classList.add('editing');
+      // Name the in-place editor for assistive tech (the ✎ that named the action is gone).
+      tx.setAttribute('role', 'textbox');
+      tx.setAttribute('aria-label', 'Edit todo text');
+      tx.setAttribute('aria-multiline', 'true');
       tx.addEventListener('keydown', (e) => {
         if (e.key === 'Enter' && !e.shiftKey) {
           e.preventDefault();
@@ -273,7 +300,7 @@ export function createTodoTab(deps: TodoTabDeps): TodoTab {
     src.textContent = provenanceText(t.source);
     body.append(tx, src);
 
-    row.append(chk, body, renderActions(t, ordered, index));
+    row.append(chk, body, renderActions(t, ordered));
     return row;
   }
 
@@ -320,16 +347,19 @@ export function createTodoTab(deps: TodoTabDeps): TodoTab {
     list.className = 'todos';
     // One flat list in stored order; done rows render inline (dimmed), not in a section.
     const ordered = [...todos].sort((a, b) => a.order - b.order);
-    ordered.forEach((t, i) => list.appendChild(renderTodoRow(t, ordered, i)));
+    ordered.forEach((t) => list.appendChild(renderTodoRow(t, ordered)));
     todoListEl.appendChild(list);
 
     wireDragReorder(list, ordered);
+
+    const focus = focusAfterRender;
+    focusAfterRender = null;
+    if (focus) focus();
   }
 
   // HTML5 drag reorder of the active rows (§16.4); the ↑/↓ buttons are the keyboard/a11y
-  // path. The reordered ids persist via todo:reorder.
-  // TODO(dylan): pointer drag is exercised only in the e2e (jsdom has no layout/DnD); the
-  // keyboard reorder path is unit-tested. Recorded gap.
+  // path. The reordered ids persist via todo:reorder. Reorders within the active run only, so
+  // dropping near an inline done row never shoves it (§16.4).
   function wireDragReorder(list: HTMLElement, ordered: TodoItem[]): void {
     let dragId: string | null = null;
     list.addEventListener('dragstart', (e) => {
@@ -339,11 +369,13 @@ export function createTodoTab(deps: TodoTabDeps): TodoTab {
     list.addEventListener('drop', (e) => {
       const targetId = (e.target as HTMLElement).closest<HTMLElement>('.todo')?.dataset.todoId;
       if (!dragId || !targetId || dragId === targetId) return;
-      const ids = ordered.map((t) => t.id);
-      const from = ids.indexOf(dragId);
-      const to = ids.indexOf(targetId);
+      const active = activeOf(ordered);
+      const from = active.findIndex((t) => t.id === dragId);
+      const to = active.findIndex((t) => t.id === targetId);
       if (from < 0 || to < 0) return;
-      reorderBy(ordered, from, to);
+      const [moved] = active.splice(from, 1);
+      active.splice(to, 0, moved);
+      commitActiveOrder(ordered, active);
     });
   }
 

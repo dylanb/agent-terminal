@@ -127,6 +127,11 @@ describe('IPC payload validation (§6 — renderer-supplied input is untrusted)'
     expect(isValidTodoList({ sessionId: sid, repoKey: 7 })).toBe(false);
     expect(isValidTodoList({ sessionId: sid })).toBe(false);
     expect(isValidTodoList({ sessionId: 'other', repoKey: '/repo' })).toBe(false);
+    // repoKey becomes a filesystem write path in todoStore — reject non-absolute or
+    // traversal-laden keys at the trust boundary (§6) so a buggy/hostile renderer can't
+    // write a todos.json outside the repo.
+    expect(isValidTodoList({ sessionId: sid, repoKey: 'relative/path' })).toBe(false);
+    expect(isValidTodoList({ sessionId: sid, repoKey: '/repo/../../etc' })).toBe(false);
   });
 
   it('accepts a todo:add with/without a source and rejects bad text or source', () => {
