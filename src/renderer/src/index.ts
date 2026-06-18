@@ -2,7 +2,6 @@ import { createTerminalPane } from './terminal';
 import { wireSelection } from './selection';
 import { wireMonitorPane } from './monitor';
 import { createShell } from './shell';
-import { wireCrossHighlight } from './crossHighlight';
 import { SAMPLE_FLOW, flowLabel, renderFlow, renderRailStatus, createGatePanel } from './flow';
 import { createArtifacts, type Artifacts } from './artifacts';
 import { renderMarkdownInto, renderCodeInto } from './viewerRender';
@@ -29,10 +28,6 @@ const shell = createShell(document.getElementById('app')!, {
   setTheme: (theme) => window.monitor.setSettings({ theme }),
   onViewerFullscreenChange: (on) => artifacts?.setFullscreen(on),
 });
-
-// Cross-highlight wiring for any finding/source pairs that carry a data-find id
-// (the mocked artifact/finding markup today; real provenance spans in a later phase).
-wireCrossHighlight(document.getElementById('app')!);
 
 // Mocked flow widgets (§24.1 / §19.2–§19.3): one fixture flow-state drives the rail
 // timeline + status and the view-3 gate. Gate actions are stubbed (no loop injection).

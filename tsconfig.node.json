@@ -29,7 +29,6 @@
     "src/renderer/src/captureTab.ts",
     "src/renderer/src/monitor.ts",
     "src/renderer/src/shell.ts",
-    "src/renderer/src/crossHighlight.ts",
     "src/renderer/src/flow.ts",
     "src/renderer/src/artifacts.ts",
     "electron.vite.config.ts",
