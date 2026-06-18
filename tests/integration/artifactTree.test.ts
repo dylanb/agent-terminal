@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { discover, readArtifact } from '../../src/main/artifactTree';
+import { discover, readArtifact, emptyTree } from '../../src/main/artifactTree';
 import type { ArtifactNode } from '../../src/shared/ipc';
 
 // Real git, real filesystem — no mocks (CLAUDE.md). Discovery (§20.1) is exercised against a
@@ -59,6 +59,10 @@ describe('artifact discovery (§20.1 / D8 — real git)', () => {
     mkdirSync(join(plain, 'docs'), { recursive: true });
     writeFileSync(join(plain, 'readme.md'), '# Readme');
     writeFileSync(join(plain, 'docs', 'note.txt'), 'note');
+    // Dotfiles/dirs that merely *start with* ".git" must not be mistaken for the literal .git dir.
+    writeFileSync(join(plain, '.gitignore'), 'node_modules\n');
+    mkdirSync(join(plain, '.github'), { recursive: true });
+    writeFileSync(join(plain, '.github', 'ci.yml'), 'name: ci\n');
   });
   afterEach(() => {
     rmSync(repo, { recursive: true, force: true });
@@ -95,6 +99,20 @@ describe('artifact discovery (§20.1 / D8 — real git)', () => {
     expect(tree.root).toBe(plain);
     expect(fileRelPaths(tree.nodes)).toEqual(expect.arrayContaining(['readme.md', 'docs/note.txt']));
     expect(findFile(tree.nodes, 'readme.md')?.provenance).toBeUndefined();
+  });
+
+  it('outside a git repo, includes dotfiles like .gitignore and .github/ (only the literal .git dir is skipped)', () => {
+    const tree = discover(plain, 'curated');
+    const files = fileRelPaths(tree.nodes);
+    expect(files).toEqual(expect.arrayContaining(['.gitignore', '.github/ci.yml']));
+  });
+
+  // viewer:tree must satisfy its Promise<ArtifactTree> contract even for an untrusted/invalid
+  // request — the handler returns this safe empty tree instead of null (which would crash the
+  // renderer's `data.root` read).
+  it('emptyTree() is a valid, empty ArtifactTree (the invalid-request fallback)', () => {
+    expect(emptyTree('/some/cwd')).toEqual({ root: '/some/cwd', isRepo: false, scope: 'curated', nodes: [] });
+    expect(emptyTree('/x', 'repo').scope).toBe('repo');
   });
 
   it('reads a file by tree-relative path, classifying markdown vs code', () => {

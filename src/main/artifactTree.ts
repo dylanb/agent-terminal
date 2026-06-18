@@ -85,7 +85,7 @@ function walkDir(dir: string, base = dir, acc: string[] = []): string[] {
   }
   for (const e of entries) {
     if (acc.length >= MAX_WALK_ENTRIES) break;
-    if (e.name.startsWith('.git') || IGNORED_DIRS.has(e.name)) continue;
+    if (IGNORED_DIRS.has(e.name)) continue; // skips the literal .git, not .gitignore/.github/…
     const abs = path.join(dir, e.name);
     if (e.isDirectory()) walkDir(abs, base, acc);
     else if (e.isFile()) acc.push(path.relative(base, abs));
@@ -128,6 +128,12 @@ function buildTree(relPaths: string[], prov: (rel: string) => ArtifactProvenance
   };
   sortNodes(root);
   return root;
+}
+
+/** A valid, empty tree (§20.1) — the viewer:tree fallback for an untrusted/invalid request,
+ *  so the `Promise<ArtifactTree>` contract holds (returning null would crash the renderer). */
+export function emptyTree(root: string, scope: ArtifactScope = 'curated'): ArtifactTree {
+  return { root, isRepo: false, scope, nodes: [] };
 }
 
 export function discover(cwd: string, scope: ArtifactScope, deps: DiscoverDeps = {}): ArtifactTree {

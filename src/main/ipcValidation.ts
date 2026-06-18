@@ -90,6 +90,10 @@ export function isValidSetSettings(m: unknown): m is UiSetSettingsMsg {
   if ('splitRatio' in s && (typeof s.splitRatio !== 'number' || !Number.isFinite(s.splitRatio))) return false;
   if ('lastTab' in s && s.lastTab !== 'capture' && s.lastTab !== 'todo') return false;
   if ('theme' in s && s.theme !== 'light' && s.theme !== 'dark') return false;
+  // Artifact viewer widths (§20.2) — finite numbers only, no NaN/Infinity/non-number.
+  for (const k of ['artifactTreeWidth', 'artifactFullscreenTreeWidth'] as const) {
+    if (k in s && (typeof s[k] !== 'number' || !Number.isFinite(s[k]))) return false;
+  }
   return true;
 }
 

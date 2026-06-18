@@ -154,7 +154,9 @@ export function createShell(root: HTMLElement, deps: ShellDeps = {}): Shell {
 
   applyTheme(theme);
   if (drawerEl) setShown(drawerEl, isDrawerOpen()); // match the drawer's inert state to its start class
-  if (deps.getTheme) void deps.getTheme().then(applyTheme);
+  // A failing IPC / main-process restart must not become an unhandled rejection; on failure
+  // keep the default theme.
+  if (deps.getTheme) void deps.getTheme().then(applyTheme).catch(() => {});
 
   return {
     setView,

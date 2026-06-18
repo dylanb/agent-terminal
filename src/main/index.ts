@@ -45,7 +45,7 @@ import { createCommandTracker } from './commandTracker';
 import { createCwdTracker } from './cwdTracker';
 import { createScanner } from './scanner';
 import { captureLastReport } from './captureLast';
-import { discover, readArtifact } from './artifactTree';
+import { discover, readArtifact, emptyTree } from './artifactTree';
 import { createChromeProfileStore } from './chromeProfile';
 import { learnMarkers } from './chrome';
 import { createInjectionSuppressor } from './injectionSuppression';
@@ -253,7 +253,7 @@ async function createWindow(): Promise<void> {
       [CH.todoDelete]: (_e, m) => (isValidTodoDelete(m) ? todoStore.delete(m.repoKey, m.id) : []),
       // Artifact viewer (§20.1/§20.2): discover/read against the session's live cwd (OSC 7),
       // falling back to the app's own dir before the first prompt. Read is path-escape-guarded.
-      [CH.viewerTree]: (_e, m) => (isValidViewerTree(m) ? discover(viewerCwd(), m.scope) : null),
+      [CH.viewerTree]: (_e, m) => (isValidViewerTree(m) ? discover(viewerCwd(), m.scope) : emptyTree(viewerCwd())),
       [CH.viewerRead]: (_e, m) => (isValidViewerRead(m) ? readArtifact(viewerCwd(), m.relPath) : null),
     },
   );
