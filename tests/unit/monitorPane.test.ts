@@ -156,6 +156,23 @@ describe('action window DOM (§16 / §24.1 — tabs, capture cards, focus)', () 
     expect(byId('tab-todo').getAttribute('aria-selected')).toBe('true');
   });
 
+  // A failing IPC / main-process restart must not become an unhandled rejection in the renderer;
+  // vitest fails the run on one, so these pass only if the detached invokes carry a catch (§16.x).
+  it('a rejected replay() is handled (no unhandled rejection) and the pane still wires', async () => {
+    monitor.replay.mockRejectedValueOnce(new Error('ipc down'));
+    wireMonitorPane();
+    await flush();
+    expect(byId('tab-capture').getAttribute('aria-selected')).toBe('true');
+  });
+
+  it('a rejected getSettings() is handled (no unhandled rejection) and keeps the default tab', async () => {
+    monitor.getSettings.mockRejectedValueOnce(new Error('ipc down'));
+    wireMonitorPane();
+    await flush();
+    expect(byId('panel-capture').hidden).toBe(false);
+    expect(byId('tab-capture').getAttribute('aria-selected')).toBe('true');
+  });
+
   it('shows an unread dot when an event arrives off the Capture tab, cleared on return', async () => {
     wireMonitorPane();
     await flush();

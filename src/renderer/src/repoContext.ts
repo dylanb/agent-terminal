@@ -34,9 +34,14 @@ export function createRepoContext(monitor: Pick<MonitorApi, 'onCwdChanged' | 'cu
   monitor.onCwdChanged((m: CwdChangedMsg) => set({ cwd: m.cwd, repoKey: m.repoKey }));
   // Seed once on mount. Only apply it if nothing was learned in the meantime, so a live
   // cwd:changed that arrives first is never clobbered by the (possibly stale) seed.
-  void monitor.currentRepo().then((r) => {
-    if (r && key === null) set(r);
-  });
+  void monitor
+    .currentRepo()
+    .then((r) => {
+      if (r && key === null) set(r);
+    })
+    // A rejected invoke (main restart) must not be an unhandled rejection; leave the key null
+    // until a cwd:changed arrives.
+    .catch(() => {});
 
   return {
     repoKey: () => key,

@@ -252,7 +252,8 @@ async function createWindow(): Promise<void> {
         isValidTodoSetStatus(m) ? todoStore.setStatus(m.repoKey, m.id, m.status) : [],
       [CH.todoDelete]: (_e, m) => (isValidTodoDelete(m) ? todoStore.delete(m.repoKey, m.id) : []),
       // Artifact viewer (§20.1/§20.2): discover/read against the session's live cwd (OSC 7),
-      // falling back to the app's own dir before the first prompt. Read is path-escape-guarded.
+      // falling back to the shell spawn directory ($HOME / os.homedir()) before the first prompt
+      // (see viewerCwd). Read is path-escape-guarded.
       [CH.viewerTree]: (_e, m) => (isValidViewerTree(m) ? discover(viewerCwd(), m.scope) : emptyTree(viewerCwd())),
       [CH.viewerRead]: (_e, m) => (isValidViewerRead(m) ? readArtifact(viewerCwd(), m.relPath) : null),
     },

@@ -10,19 +10,16 @@ import type { Theme } from '../../shared/ipc';
 import { setShown } from './visibility';
 
 export type ViewId = '1' | '2' | '3';
-export type DrawerTab = 'todo' | 'capture';
 
 const VIEWS: readonly ViewId[] = ['1', '2', '3'];
 
 export interface Shell {
   setView(v: ViewId): void;
   getView(): ViewId;
-  openDrawer(tab?: DrawerTab): void;
+  openDrawer(): void;
   closeDrawer(): void;
-  toggleDrawer(tab?: DrawerTab): void;
+  toggleDrawer(): void;
   isDrawerOpen(): boolean;
-  selectTab(tab: DrawerTab): void;
-  getTab(): DrawerTab;
   setTheme(t: Theme): void;
   getTheme(): Theme;
   /** Full-screen the viewer by hiding all app chrome (§20.2); Escape and a view change exit. */
@@ -44,7 +41,6 @@ export function createShell(root: HTMLElement, deps: ShellDeps = {}): Shell {
   const themeTarget = doc.documentElement;
 
   let view: ViewId = (root.querySelector('[data-viewpane].on')?.getAttribute('data-viewpane') as ViewId) ?? '1';
-  let tab: DrawerTab = (root.querySelector('.drawer .tab.on')?.getAttribute('data-tab') as DrawerTab) ?? 'capture';
   let theme: Theme = themeTarget.getAttribute('data-theme') === 'dark' ? 'dark' : 'light';
   let fullscreen = root.classList.contains('viewer-fullscreen');
 
@@ -60,13 +56,9 @@ export function createShell(root: HTMLElement, deps: ShellDeps = {}): Shell {
     });
   }
 
-  function selectTab(t: DrawerTab): void {
-    tab = t;
-    root.querySelectorAll('.drawer .tab').forEach((el) => el.classList.toggle('on', el.getAttribute('data-tab') === t));
-    root.querySelectorAll('[data-tabpanel]').forEach((el) => {
-      (el as HTMLElement).hidden = el.getAttribute('data-tabpanel') !== t;
-    });
-  }
+  // Drawer-tab selection is owned by the action-window coordinator (monitor.ts, §16.1),
+  // which keys off the real `role="tab"`/`aria-selected` contract and persists lastTab. The
+  // shell only docks/undocks the drawer column; it never touches the tabs inside it.
 
   // The dock is a layout column, so opening/closing it changes the main pane's width
   // without a window resize. Broadcast one so width-sensitive panes (the terminal's
@@ -79,10 +71,9 @@ export function createShell(root: HTMLElement, deps: ShellDeps = {}): Shell {
   // tabs/buttons stay in the tab order while invisible (§A11Y). The grid class sizes it when open.
   const drawerEl = root.querySelector<HTMLElement>('.drawer');
   const isDrawerOpen = (): boolean => root.classList.contains('drawer-open');
-  function openDrawer(t?: DrawerTab): void {
+  function openDrawer(): void {
     root.classList.add('drawer-open');
     if (drawerEl) setShown(drawerEl, true);
-    if (t) selectTab(t);
     signalLayoutChange();
   }
   function closeDrawer(): void {
@@ -90,9 +81,9 @@ export function createShell(root: HTMLElement, deps: ShellDeps = {}): Shell {
     if (drawerEl) setShown(drawerEl, false);
     signalLayoutChange();
   }
-  function toggleDrawer(t?: DrawerTab): void {
+  function toggleDrawer(): void {
     if (isDrawerOpen()) closeDrawer();
-    else openDrawer(t);
+    else openDrawer();
   }
 
   function applyTheme(t: Theme): void {
@@ -119,8 +110,6 @@ export function createShell(root: HTMLElement, deps: ShellDeps = {}): Shell {
     const target = e.target as Element;
     const vb = target.closest('[data-viewbtn]');
     if (vb && root.contains(vb)) return setView(vb.getAttribute('data-viewbtn') as ViewId);
-    const dt = target.closest('.drawer .tab');
-    if (dt && root.contains(dt)) return selectTab(dt.getAttribute('data-tab') as DrawerTab);
     if (target.closest('#qs')) return toggleDrawer();
     if (target.closest('#dclose')) return closeDrawer();
     if (target.closest('#tg')) return setTheme(theme === 'dark' ? 'light' : 'dark');
@@ -165,8 +154,6 @@ export function createShell(root: HTMLElement, deps: ShellDeps = {}): Shell {
     closeDrawer,
     toggleDrawer,
     isDrawerOpen,
-    selectTab,
-    getTab: () => tab,
     setTheme,
     getTheme: () => theme,
     setViewerFullscreen,

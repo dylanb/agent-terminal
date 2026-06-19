@@ -101,12 +101,19 @@ export function wireMonitorPane(repo: RepoContext = createRepoContext(window.mon
 
   window.monitor.onExit(() => status.setExited());
 
-  void window.monitor.replay().then((events) => {
-    for (const e of events) captureTab.appendBlock(e);
-  });
+  void window.monitor
+    .replay()
+    .then((events) => {
+      for (const e of events) captureTab.appendBlock(e);
+    })
+    .catch(() => {}); // a rejected invoke (main restart) must not be an unhandled rejection
 
   // Restore the remembered tab (§16.1 / §16.6) before first paint of either panel.
-  void window.monitor.getSettings().then((s) => selectTab(s.lastTab, false));
+  // On a rejected invoke, keep the markup default tab rather than crash with an unhandled rejection.
+  void window.monitor
+    .getSettings()
+    .then((s) => selectTab(s.lastTab, false))
+    .catch(() => {});
 
   status.render();
 }

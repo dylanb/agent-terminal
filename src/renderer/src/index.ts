@@ -40,10 +40,10 @@ if (railStatus) renderRailStatus(railStatus, SAMPLE_FLOW);
 const gatePanel = document.getElementById('gate-panel');
 if (gatePanel) createGatePanel(gatePanel, SAMPLE_FLOW);
 
-// View 2 — the artifact viewer (§20.2 / §24.1): a fixture artifact set rendered with the
+// View 2 — the artifact viewer (§20.2 / §24.1): real IPC-backed discovery/read
+// (`viewer:tree` / `viewer:read`, scoped to the session's live cwd) rendered with the
 // real markdown-it+mermaid / CodeMirror stack; a selection routes to the same two sinks as
-// the terminal-pane selection — send-to-agent (inject, no submit, §9.3) and add-to-todo
-// (§16.2). Real discovery + provenance (`viewer:tree`) stays in the §24.2 backlog.
+// the terminal-pane selection — send-to-agent (inject, no submit, §9.3) and add-to-todo (§16.2).
 const artifactsHost = document.getElementById('artifacts');
 if (artifactsHost) {
   const view = createArtifacts(artifactsHost, {
@@ -63,8 +63,13 @@ if (artifactsHost) {
   repo.onChange(() => void view.refresh());
   // Apply the persisted tree width once settings resolve (kept off the sync path above so a
   // late getSettings can't make the viewer miss the first cwd:changed broadcast, §20.1).
-  void window.monitor.getSettings().then((s) => {
-    view.setWidth(s.artifactTreeWidth);
-    if (s.artifactFullscreenTreeWidth !== undefined) view.setFullscreenWidth(s.artifactFullscreenTreeWidth);
-  });
+  void window.monitor
+    .getSettings()
+    .then((s) => {
+      view.setWidth(s.artifactTreeWidth);
+      if (s.artifactFullscreenTreeWidth !== undefined) view.setFullscreenWidth(s.artifactFullscreenTreeWidth);
+    })
+    // A rejected invoke (main restart) keeps the default computed widths; never an unhandled
+    // rejection (mirrors the tested monitor.ts getSettings catch).
+    .catch(() => {});
 }

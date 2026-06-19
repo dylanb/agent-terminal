@@ -31,6 +31,9 @@ export function renderMarkdownInto(body: string, into: HTMLElement): void {
   const token = ++renderSeq;
   into.classList.add('md');
   into.textContent = '…';
+  // TODO(viewer): the catch degrades a chunk-load/render failure to raw text instead of a stuck
+  // ellipsis. Untestable — markdown-it/mermaid are import()-ed here (no seam), so neither vitest
+  // nor e2e can force the import to reject without a production seam added only for the test.
   void (async () => {
     const md = await getMarkdownIt();
     if (token !== renderSeq) return; // a newer artifact was opened
@@ -54,7 +57,9 @@ export function renderMarkdownInto(body: string, into: HTMLElement): void {
         slot.textContent = def; // a malformed diagram degrades to its source, never crashes
       }
     }
-  })();
+  })().catch(() => {
+    if (token === renderSeq) into.textContent = body; // degrade to raw text, never an unhandled rejection
+  });
 }
 
 /**
@@ -73,6 +78,8 @@ export function renderCodeInto(
   const token = ++renderSeq;
   into.classList.remove('md');
   into.textContent = '…';
+  // TODO(viewer): see renderMarkdownInto — the trailing catch degrades a CodeMirror chunk-load
+  // failure to raw text instead of a stuck ellipsis; untestable for the same import()-seam reason.
   let editor: EditorViewT | null = null;
   let EV: typeof EditorViewT | null = null;
   let pending: number | null = null;
@@ -148,7 +155,9 @@ export function renderCodeInto(
       pending = null;
     }
     notify(); // the real viewport is only knowable now the editor is laid out
-  })();
+  })().catch(() => {
+    if (token === renderSeq) into.textContent = body; // degrade to raw text, never an unhandled rejection
+  });
   return {
     revealLine: reveal,
     visibleLines,

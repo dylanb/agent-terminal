@@ -60,6 +60,19 @@ describe('repoContext — shared OSC-7 repo provider', () => {
     expect(ctx.repoKey()).toBe('/live');
   });
 
+  it('a rejected currentRepo() is handled (no unhandled rejection) and leaves repoKey null until a cwd:changed arrives', async () => {
+    // A failing IPC / main-process restart must not become an unhandled rejection in the
+    // renderer; vitest fails the run on one, so this passes only if the seed pull has a catch.
+    const { monitor, fireCwd } = makeMonitor(async () => {
+      throw new Error('ipc down');
+    });
+    const ctx = createRepoContext(monitor as never);
+    await flush();
+    expect(ctx.repoKey()).toBeNull();
+    fireCwd('/later');
+    expect(ctx.repoKey()).toBe('/later');
+  });
+
   it('unsubscribe stops notifications', async () => {
     const { monitor, fireCwd } = makeMonitor(async () => null);
     const ctx = createRepoContext(monitor as never);
