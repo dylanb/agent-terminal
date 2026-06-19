@@ -17,6 +17,10 @@ export interface CodeView {
   visibleLines(): { top: number; bottom: number };
   /** Subscribe to viewport changes (scroll/resize); returns an unsubscribe. */
   onViewportChange(listener: () => void): () => void;
+  /** Release the underlying editor's document/window handlers on unmount (§20.2). Removing the
+   *  DOM alone does not free them, so the organism calls this in dispose(). Optional so a trivial
+   *  text-only renderCode fallback need not implement it. */
+  destroy?(): void;
 }
 
 /** Render seams, sinks, and the discovery/read data sources — all injected (UI-STANDARDS §2.2). */
@@ -545,6 +549,7 @@ export function createArtifacts(host: HTMLElement, deps: ArtifactsDeps): Artifac
     dispose: () => {
       doc.removeEventListener('selectionchange', updateActions);
       unsubViewport?.();
+      codeView?.destroy?.(); // free CodeMirror's handlers — DOM removal alone doesn't (§20.2)
       host.replaceChildren();
     },
   };

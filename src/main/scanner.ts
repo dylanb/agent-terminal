@@ -471,11 +471,13 @@ export function createScanner(deps: ScannerDeps): Scanner {
     const { allRegions } = detectRegions(0, endRow);
     // The echoed command line is substantial prose the baseline would capture, but it is the
     // user's own input, not a report (§21.1). The auto path's watermark seals past it; here we
-    // skip any candidate whose text contains a tracked command.
+    // skip a candidate that IS the echoed input line — the command sits at the END of the line
+    // (a prompt may precede it). Matching only the suffix (not a substring) keeps a real report
+    // that merely names a command in its prose ("…run npm test…", command mid-text).
     const commands = (deps.commandTexts?.() ?? []).map(normalize).filter((c) => c.length > 0);
     const isCommandEcho = (text: string): boolean => {
       const n = normalize(text);
-      return commands.some((c) => n.includes(c));
+      return commands.some((c) => n.endsWith(c));
     };
     let region: DetectedRegion | undefined;
     for (const r of allRegions) {

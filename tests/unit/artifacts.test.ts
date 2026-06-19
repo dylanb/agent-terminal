@@ -107,6 +107,7 @@ function fakeCodeView(top: number, bottom: number) {
     visibleLines: () => ({ top: state.top, bottom: state.bottom }),
     onViewportChange: (cb: () => void) => { listeners.add(cb); return () => listeners.delete(cb); },
     scrollTo: (t: number, b: number) => { state.top = t; state.bottom = b; notify(); },
+    destroy: vi.fn(),
   };
 }
 
@@ -173,6 +174,14 @@ describe('artifact viewer (§20.1/§20.2 — real discovery)', () => {
     count: v.host.querySelector('.art-navcount') as HTMLElement,
     prev: v.host.querySelector('.art-prev') as HTMLButtonElement,
     next: v.host.querySelector('.art-next') as HTMLButtonElement,
+  });
+
+  it('dispose() destroys the live code view so CodeMirror handlers are released (§20.2)', async () => {
+    const cv = fakeCodeView(1, 20);
+    const v = mount(undefined, { renderCode: vi.fn(() => cv) });
+    await v.api.refresh(); // opens the first (code) file → mounts the code view
+    v.api.dispose();
+    expect(cv.destroy).toHaveBeenCalledTimes(1);
   });
 
   it('tracks the viewport, stepping prev/next to the nearest off-screen change (§20.2)', async () => {

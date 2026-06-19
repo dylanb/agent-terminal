@@ -34,4 +34,14 @@ describe('viewerRender — EditorView lifecycle (no leak on re-render, §20.2)',
     renderMarkdownInto('# hi', host);
     await vi.waitFor(() => expect(destroy).toHaveBeenCalledTimes(1));
   });
+
+  it('the returned CodeView.destroy() tears down the editor (for the organism dispose path)', async () => {
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = renderCodeInto('const a = 1;', 'ts', host);
+    await vi.waitFor(() => expect(host.querySelector('.cm-editor')).toBeTruthy());
+    const destroy = vi.spyOn(EditorView.prototype, 'destroy');
+    view.destroy!();
+    expect(destroy).toHaveBeenCalledTimes(1);
+  });
 });

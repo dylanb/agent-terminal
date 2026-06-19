@@ -180,6 +180,10 @@ export function renderCodeInto(
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
+    destroy: () => {
+      renderSeq++; // a still-in-flight build bails at its token check before it mounts the editor
+      teardownView(into);
+    },
   };
 }
 
