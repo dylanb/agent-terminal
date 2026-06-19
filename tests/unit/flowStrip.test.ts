@@ -3,31 +3,31 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createFlowStrip } from '../../src/renderer/src/flowStrip';
 import type { FlowStateView, FlowStatus } from '../../src/shared/ipc';
 
-// §24.2.2 / §22.3 — the flow status strip renders with 100% fidelity to the §24.1 mockup
-// (design/shell/converged.html): a `Flow — step N / M` header + a vertical station rail
-// (`.flow.vert` → `.stn` with circle `.o` + name `.nm`). The rail brackets the real step with
-// two synthetic stations — "Not started" (active before the flow starts) and "Completed"
-// (active once it finishes) — so the rail is always [Not started] · <step> · [Completed].
-// The control follows the lifecycle: Start → Advance → Restart (re-running the step). A load
-// failure renders as a single `--danger` text line (the one mockup-gap, by decision).
-// Tests assert only rendered DOM + which dep method a click invokes.
+// §24.2.2 / §22.3 — the flow status strip renders the §24.1 mockup station rail (Not started ·
+// <step> · Completed) and a Start → Advance → Restart control. It FOLLOWS THE CWD: it holds the
+// current repoKey and re-pulls/re-renders on `onRepoChanged`, threading that key into every
+// window.flow call (mirroring the repo-scoped todo list). Before a repo key is known it renders
+// nothing. Tests assert rendered DOM + the repoKey threaded into the dep calls.
 
 function fakeFlow(initial: FlowStatus = 'not_started') {
-  let status = initial;
-  const view = (): FlowStateView => ({ stepName: 'Manual step', position: 1, total: 1, status });
+  const byKey = new Map<string, FlowStatus>();
+  const view = (repoKey: string): FlowStateView => {
+    const status = byKey.get(repoKey) ?? initial;
+    return { stepName: `${repoKey}-step`, position: 1, total: 1, status };
+  };
   return {
-    state: vi.fn(async () => view()),
-    start: vi.fn(async () => {
-      status = 'in_progress';
-      return view();
+    state: vi.fn(async (repoKey: string) => view(repoKey)),
+    start: vi.fn(async (repoKey: string) => {
+      byKey.set(repoKey, 'in_progress');
+      return view(repoKey);
     }),
-    advance: vi.fn(async () => {
-      status = 'done';
-      return view();
+    advance: vi.fn(async (repoKey: string) => {
+      byKey.set(repoKey, 'done');
+      return view(repoKey);
     }),
-    restart: vi.fn(async () => {
-      status = 'in_progress';
-      return view();
+    restart: vi.fn(async (repoKey: string) => {
+      byKey.set(repoKey, 'in_progress');
+      return view(repoKey);
     }),
   };
 }
@@ -41,9 +41,9 @@ afterEach(() => {
   document.body.innerHTML = '';
 });
 
-const sect = () => host.querySelector('.sect')!.textContent ?? '';
+const sect = () => host.querySelector('.sect')?.textContent ?? '';
 const stations = () => [...host.querySelectorAll<HTMLElement>('.flow.vert .stn')];
-const names = () => stations().map((s) => s.querySelector('.nm')!.textContent);
+const stepName = () => stations()[1]?.querySelector('.nm')?.textContent ?? ''; // station 1 = the real step
 const stateOf = (i: number) => {
   const cl = stations()[i].classList;
   return cl.contains('active') ? 'active' : cl.contains('done') ? 'done' : 'todo';
@@ -51,69 +51,72 @@ const stateOf = (i: number) => {
 const control = () => host.querySelector<HTMLButtonElement>('.flow-control');
 
 describe('flow status strip (§22.3 / §24.2.2)', () => {
-  it('brackets the real step with synthetic Not-started / Completed stations', async () => {
-    await createFlowStrip(host, fakeFlow()).refresh();
-    expect(names()).toEqual(['Not started', 'Manual step', 'Completed']);
+  it('renders nothing until a repo key is known (follows cwd)', async () => {
+    const deps = fakeFlow();
+    await createFlowStrip(host, deps).refresh();
+    expect(host.childElementCount).toBe(0);
+    expect(deps.state).not.toHaveBeenCalled();
   });
 
-  it('not_started: the synthetic Not-started station is active; control is Start', async () => {
-    await createFlowStrip(host, fakeFlow()).refresh();
-    expect(sect()).toBe('Flow — step 1 / 3');
+  it('on the current repo, brackets the step with Not-started / Completed stations + a Start control', async () => {
+    const deps = fakeFlow();
+    createFlowStrip(host, deps).onRepoChanged('/repo');
+    await vi.waitFor(() => expect(stations()).toHaveLength(3));
+    expect(deps.state).toHaveBeenCalledWith('/repo');
+    expect(stepName()).toBe('/repo-step');
     expect([stateOf(0), stateOf(1), stateOf(2)]).toEqual(['active', 'todo', 'todo']);
-    expect(host.querySelector('.flow.vert .stn .o')).not.toBeNull(); // station circles
+    expect(sect()).toBe('Flow — step 1 / 3');
     expect(control()!.textContent).toBe('Start');
   });
 
-  it('in_progress: the real step station is active; control is Advance', async () => {
-    await createFlowStrip(host, fakeFlow('in_progress')).refresh();
-    expect(sect()).toBe('Flow — step 2 / 3');
-    expect([stateOf(0), stateOf(1), stateOf(2)]).toEqual(['done', 'active', 'todo']);
-    expect(control()!.textContent).toBe('Advance');
-  });
-
-  it('done: the synthetic Completed station is active; control reappears as Restart', async () => {
-    await createFlowStrip(host, fakeFlow('done')).refresh();
-    expect(sect()).toBe('Flow — step 3 / 3');
-    expect([stateOf(0), stateOf(1), stateOf(2)]).toEqual(['done', 'done', 'active']);
-    expect(control()!.textContent).toBe('Restart');
-  });
-
-  it('Start invokes start() and moves the real step to active with an Advance control', async () => {
+  it('re-pulls and re-renders for the new repo when the cwd changes', async () => {
     const deps = fakeFlow();
-    await createFlowStrip(host, deps).refresh();
+    const strip = createFlowStrip(host, deps);
+    strip.onRepoChanged('/a');
+    await vi.waitFor(() => expect(stepName()).toBe('/a-step'));
+    strip.onRepoChanged('/b');
+    await vi.waitFor(() => expect(stepName()).toBe('/b-step'));
+    expect(deps.state).toHaveBeenCalledWith('/b');
+  });
+
+  it('Start invokes start() for the current repo and moves the step to active', async () => {
+    const deps = fakeFlow();
+    createFlowStrip(host, deps).onRepoChanged('/repo');
+    await vi.waitFor(() => expect(control()!.textContent).toBe('Start'));
     control()!.click();
     await vi.waitFor(() => expect(stateOf(1)).toBe('active'));
-    expect(deps.start).toHaveBeenCalledTimes(1);
+    expect(deps.start).toHaveBeenCalledWith('/repo');
     expect(control()!.textContent).toBe('Advance');
   });
 
-  it('Advance from in progress completes the flow (Completed active) and shows Restart', async () => {
+  it('Advance completes the flow (Completed active) and shows Restart, scoped to the repo', async () => {
     const deps = fakeFlow('in_progress');
-    await createFlowStrip(host, deps).refresh();
+    createFlowStrip(host, deps).onRepoChanged('/repo');
+    await vi.waitFor(() => expect(control()!.textContent).toBe('Advance'));
     control()!.click();
     await vi.waitFor(() => expect(stateOf(2)).toBe('active'));
-    expect(deps.advance).toHaveBeenCalledTimes(1);
+    expect(deps.advance).toHaveBeenCalledWith('/repo');
     expect(control()!.textContent).toBe('Restart');
   });
 
-  it('Restart from done invokes restart() and re-runs the step (active) with an Advance control', async () => {
+  it('Restart from done re-runs the step for the repo', async () => {
     const deps = fakeFlow('done');
-    await createFlowStrip(host, deps).refresh();
-    expect(control()!.textContent).toBe('Restart');
+    createFlowStrip(host, deps).onRepoChanged('/repo');
+    await vi.waitFor(() => expect(control()!.textContent).toBe('Restart'));
     control()!.click();
     await vi.waitFor(() => expect(stateOf(1)).toBe('active'));
-    expect(deps.restart).toHaveBeenCalledTimes(1);
+    expect(deps.restart).toHaveBeenCalledWith('/repo');
     expect(control()!.textContent).toBe('Advance');
   });
 
-  it('renders a clear --danger error line (the reason, no stations, no control) on load failure (§24.2.2 S2)', async () => {
+  it('renders a clear --danger error line (no stations, no control) on load failure', async () => {
     const deps = {
       state: vi.fn(
         async (): Promise<FlowStateView> => ({
           stepName: '',
           position: 0,
           total: 0,
-          status: 'error',
+          status: 'error' as FlowStatus,
           error: 'flow.yaml not found',
         }),
       ),
@@ -121,10 +124,9 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
       advance: vi.fn(),
       restart: vi.fn(),
     };
-    await createFlowStrip(host, deps).refresh();
-    const err = host.querySelector<HTMLElement>('.flow-error')!;
-    expect(err.textContent).toContain('flow.yaml not found');
-    expect(sect()).toBe('Flow'); // header with no position when there is no step
+    createFlowStrip(host, deps).onRepoChanged('/repo');
+    await vi.waitFor(() => expect(host.querySelector('.flow-error')).not.toBeNull());
+    expect(host.querySelector<HTMLElement>('.flow-error')!.textContent).toContain('flow.yaml not found');
     expect(stations()).toHaveLength(0);
     expect(control()).toBeNull();
   });

@@ -8,8 +8,11 @@
 // A load failure (§18.1) has no mockup counterpart; by decision it renders as a single
 // `--danger` text line under the header, with no station and no control.
 //
-// It reaches for nothing: the flow lifecycle is injected as `deps` (the window.flow IPC seam),
-// and each call returns the resulting state so the strip re-renders from the response.
+// It follows the terminal's cwd, mirroring the repo-scoped todo list (§16.3): it holds the
+// current repoKey, re-pulls/re-renders on `onRepoChanged`, and threads that key into every
+// window.flow call. Before a repo key is known it renders nothing. It reaches for nothing: the
+// flow lifecycle is injected as `deps` (the window.flow IPC seam), each call returning the
+// resulting state so the strip re-renders from the response.
 
 import type { FlowApi, FlowStateView, FlowStatus } from '../../shared/ipc';
 
@@ -41,8 +44,10 @@ function railStations(state: FlowStateView): Array<{ name: string; st: StationSt
 }
 
 export interface FlowStrip {
-  /** (Re)pull the flow state and repaint. Call once on mount. */
+  /** (Re)pull the current repo's flow state and repaint (no-op until a repo key is known). */
   refresh(): Promise<void>;
+  /** The terminal's repo changed (cd across a key boundary, §16.3): re-scope and re-pull. */
+  onRepoChanged(repoKey: string | null): void;
 }
 
 function header(text: string): HTMLElement {
@@ -53,6 +58,8 @@ function header(text: string): HTMLElement {
 }
 
 export function createFlowStrip(host: HTMLElement, deps: FlowApi): FlowStrip {
+  let repoKey: string | null = null;
+
   function render(state: FlowStateView): void {
     host.replaceChildren();
 
@@ -104,17 +111,29 @@ export function createFlowStrip(host: HTMLElement, deps: FlowApi): FlowStrip {
       // Disable while the transition is in flight so a double-click can't fire it twice
       // (the machine would reject the second call anyway — §24.2.2 — but this keeps the UI
       // honest). Re-render from the returned state.
+      if (repoKey === null) return;
+      const key = repoKey;
       button.disabled = true;
       const next =
-        control.act === 'start' ? deps.start() : control.act === 'advance' ? deps.advance() : deps.restart();
+        control.act === 'start' ? deps.start(key) : control.act === 'advance' ? deps.advance(key) : deps.restart(key);
       next.then(render).catch(() => void refresh());
     });
     host.append(button);
   }
 
   async function refresh(): Promise<void> {
-    render(await deps.state());
+    if (repoKey === null) {
+      host.replaceChildren(); // no repo yet → nothing to show (the strip follows the cwd)
+      return;
+    }
+    render(await deps.state(repoKey));
   }
 
-  return { refresh };
+  return {
+    refresh,
+    onRepoChanged(key) {
+      repoKey = key;
+      void refresh();
+    },
+  };
 }

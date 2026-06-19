@@ -103,9 +103,10 @@ export function isValidClearCommands(m: unknown): m is ClearCommandsMsg {
   return isRecord(m) && isLiveSession(m);
 }
 
-/** Flow lifecycle (§24.2.2) — sessionId only; the read/start/advance calls carry no other input. */
+/** Flow lifecycle (§24.2.2). `repoKey` scopes the flow to the terminal's current repo and becomes
+ *  a filesystem path in flowState, so it gets the same safe-path guard as the todo channels. */
 export function isValidFlowRequest(m: unknown): m is FlowRequestMsg {
-  return isRecord(m) && isLiveSession(m);
+  return isRecord(m) && isLiveSession(m) && isSafeRepoKey(m.repoKey);
 }
 
 // ---- todo:* validators (§16.3 / §16.4). repoKey is threaded on every mutation. ----

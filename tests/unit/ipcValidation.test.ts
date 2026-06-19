@@ -121,9 +121,13 @@ describe('IPC payload validation (§6 — renderer-supplied input is untrusted)'
     expect(isValidClearCommands(null)).toBe(false);
   });
 
-  it('accepts a flow request and rejects a wrong/absent sessionId (§24.2.2)', () => {
-    expect(isValidFlowRequest({ sessionId: sid })).toBe(true);
-    expect(isValidFlowRequest({ sessionId: 'other' })).toBe(false);
+  it('accepts a flow request with a safe repoKey and rejects a wrong session / unsafe key (§24.2.2)', () => {
+    expect(isValidFlowRequest({ sessionId: sid, repoKey: '/repo' })).toBe(true);
+    expect(isValidFlowRequest({ sessionId: sid })).toBe(false); // repoKey now required (follows cwd)
+    expect(isValidFlowRequest({ sessionId: 'other', repoKey: '/repo' })).toBe(false);
+    // repoKey becomes a filesystem path in flowState — same safe-path guard as todos.
+    expect(isValidFlowRequest({ sessionId: sid, repoKey: 'relative/path' })).toBe(false);
+    expect(isValidFlowRequest({ sessionId: sid, repoKey: '/repo/../../etc' })).toBe(false);
     expect(isValidFlowRequest({})).toBe(false);
     expect(isValidFlowRequest(null)).toBe(false);
   });

@@ -11,7 +11,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import yaml from 'js-yaml';
 import type { FlowStateView, FlowStatus } from '../shared/ipc';
-import type { FlowStateStore } from './flowState';
+import { createFlowStateStore, type FlowStateStore } from './flowState';
 
 /** A §18.1 step, minimal S2 shape: a manual step with an id and optional skill/template refs. */
 export interface FlowStepDef {
@@ -150,5 +150,46 @@ export function createFlowMachine(load: FlowLoad, store?: FlowStateStore): FlowM
     advance: () => transition('in_progress', 'done'),
     // Restart resets a completed flow back to its first step, in progress (§24.2.2).
     restart: () => transition('done', 'in_progress'),
+  };
+}
+
+/**
+ * The flow as the terminal sees it: keyed by `repoKey` (a git root, or a plain dir — the same
+ * `resolveRepoKey` scoping the todo list uses, §16.3), so progression follows the cwd and never
+ * leaks between repos. Each key lazily owns one machine: its DEFINITION resolves local-first
+ * then global (§18.1), its STATE persists to that key's `flow-state.yaml` (§19.1). Visiting a
+ * repo (`state`) only *reads* — no `.agent-terminal` dir is created until a transition writes.
+ */
+export interface FlowManager {
+  state(repoKey: string): FlowStateView;
+  start(repoKey: string): FlowStateView;
+  advance(repoKey: string): FlowStateView;
+  restart(repoKey: string): FlowStateView;
+}
+
+export interface FlowManagerDeps {
+  /** Global fallback dir for the DEFINITION only (e.g. $HOME); state is never global. */
+  globalDir: string;
+  loadDefinition?: (localDir: string, globalDir: string) => FlowLoad;
+  makeStore?: (repoKey: string) => FlowStateStore;
+}
+
+export function createFlowManager(deps: FlowManagerDeps): FlowManager {
+  const loadDef = deps.loadDefinition ?? loadFlowDefinitionLocalFirst;
+  const makeStore = deps.makeStore ?? createFlowStateStore;
+  const cache = new Map<string, FlowMachine>();
+  const machineFor = (repoKey: string): FlowMachine => {
+    let m = cache.get(repoKey);
+    if (!m) {
+      m = createFlowMachine(loadDef(repoKey, deps.globalDir), makeStore(repoKey));
+      cache.set(repoKey, m);
+    }
+    return m;
+  };
+  return {
+    state: (k) => machineFor(k).state(),
+    start: (k) => machineFor(k).start(),
+    advance: (k) => machineFor(k).advance(),
+    restart: (k) => machineFor(k).restart(),
   };
 }

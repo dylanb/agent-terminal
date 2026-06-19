@@ -35,10 +35,16 @@ const shell = createShell(document.getElementById('app')!, {
 // (the mocked artifact/finding markup today; real provenance spans in a later phase).
 wireCrossHighlight(document.getElementById('app')!);
 
-// Flow status strip (§22.3 / §24.2.2 S1): the real single-step lifecycle driven through
-// window.flow — Start → Advance → done. Retires the §24.1 fixture timeline + rail status.
+// Flow status strip (§22.3 / §24.2.2): the manual-step lifecycle driven through window.flow,
+// scoped to the terminal's current repo. Like the todo list, it follows the cwd — the shared
+// repo context delivers the seeded key on mount and every subsequent cd, and the strip re-pulls.
 const flowStripHost = document.getElementById('flow-strip');
-if (flowStripHost) void createFlowStrip(flowStripHost, window.flow).refresh();
+if (flowStripHost) {
+  const flowStrip = createFlowStrip(flowStripHost, window.flow);
+  repo.onChange((info) => flowStrip.onRepoChanged(info.repoKey));
+  const seededKey = repo.repoKey();
+  if (seededKey !== null) flowStrip.onRepoChanged(seededKey);
+}
 
 // View-3 Review gate (§19.3) is still a fixture-driven, stubbed mock — out of S1 scope.
 const gatePanel = document.getElementById('gate-panel');

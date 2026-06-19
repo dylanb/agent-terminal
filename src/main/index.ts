@@ -7,6 +7,7 @@ import {
   type ChannelPayloads,
   type CommandCaptureResult,
   type CommandSummary,
+  type FlowStateView,
   type SendChannel,
 } from '../shared/ipc';
 import { createInjector } from './inject';
@@ -44,11 +45,10 @@ import { registerIpcListeners } from './sessionIpc';
 import { resolveRuntimeConfig } from './runtimeConfig';
 import { createCommandTracker } from './commandTracker';
 import { createCwdTracker } from './cwdTracker';
-import { currentRepoInfo, resolveRepoKey } from './repoKey';
+import { currentRepoInfo } from './repoKey';
 import { createScanner } from './scanner';
 import { captureLastReport } from './captureLast';
-import { createFlowMachine, loadFlowDefinitionLocalFirst } from './flow';
-import { createFlowStateStore } from './flowState';
+import { createFlowManager } from './flow';
 import { discover, readArtifact, emptyTree } from './artifactTree';
 import { createChromeProfileStore } from './chromeProfile';
 import { learnMarkers } from './chrome';
@@ -83,17 +83,21 @@ async function createWindow(): Promise<void> {
   const todoStore = createTodoStore({ maxDoneTodos: config.maxDoneTodos });
   // Learned chrome markers (§15.x) — seeded defaults ∪ the user's "mark as chrome" adds.
   const chromeProfile = createChromeProfileStore(path.join(app.getPath('userData'), 'chrome-profile.json'));
-  // Flow lifecycle (§24.2.2 S3) — single-step state machine. The DEFINITION (flow.yaml, §18.1)
-  // resolves local-first then global: the repository's copy wins, falling back to a $HOME default
-  // only when the repo has none. The STATE (flow-state.yaml, §19.1) is **always repo-local**, so
-  // progression travels with the repo and is never written globally. The repo is the git root of
-  // the instance's launch dir, resolved like a todo scope key (§16.3). A missing/invalid
-  // definition is an inert error state, not a crash.
-  const repoDir = resolveRepoKey(process.cwd());
-  const flow = createFlowMachine(
-    loadFlowDefinitionLocalFirst(repoDir, spawnCwd(process.env, os.homedir())),
-    createFlowStateStore(repoDir),
-  );
+  // Flow lifecycle (§24.2.2) — repo-keyed so it follows the terminal's cwd, mirroring the todo
+  // scope (§16.3): each repoKey (from the renderer's OSC-7 repo context) lazily owns its machine.
+  // The DEFINITION (flow.yaml, §18.1) resolves local-first then global ($HOME); the STATE
+  // (flow-state.yaml, §19.1) is always repo-local, never global. A missing/invalid definition is
+  // an inert error state, not a crash.
+  const flow = createFlowManager({ globalDir: spawnCwd(process.env, os.homedir()) });
+  // A malformed flow request (e.g. before the renderer knows its repo key) fails closed to an
+  // inert error view rather than throwing across IPC.
+  const flowRequestError = (): FlowStateView => ({
+    stepName: '',
+    position: 0,
+    total: 0,
+    status: 'error',
+    error: 'invalid flow request',
+  });
 
   const send = <C extends SendChannel>(channel: C, payload: ChannelPayloads[C]): void => {
     if (!win.isDestroyed()) win.webContents.send(channel, payload);
@@ -269,14 +273,15 @@ async function createWindow(): Promise<void> {
       // falling back to the app's own dir before the first prompt. Read is path-escape-guarded.
       [CH.viewerTree]: (_e, m) => (isValidViewerTree(m) ? discover(viewerCwd(), m.scope) : emptyTree(viewerCwd())),
       [CH.viewerRead]: (_e, m) => (isValidViewerRead(m) ? readArtifact(viewerCwd(), m.relPath) : null),
-      // Flow lifecycle (§24.2.2 S3): read is unconditional; start/advance mutate only on a
-      // valid payload, persist to flow-state.yaml (§19.1), and return the resulting state so the
-      // strip re-renders from it. An illegal transition throws (machine invariant) → the invoke
-      // rejects and the strip re-pulls the true state.
-      [CH.flowState]: () => flow.state(),
-      [CH.flowStart]: (_e, m) => (isValidFlowRequest(m) ? flow.start() : flow.state()),
-      [CH.flowAdvance]: (_e, m) => (isValidFlowRequest(m) ? flow.advance() : flow.state()),
-      [CH.flowRestart]: (_e, m) => (isValidFlowRequest(m) ? flow.restart() : flow.state()),
+      // Flow lifecycle (§24.2.2): every call carries the terminal's current repoKey (§16.3), so
+      // the flow follows the cwd. start/advance/restart mutate only on a valid payload, persist
+      // to that repo's flow-state.yaml (§19.1), and return the resulting state so the strip
+      // re-renders from it. An illegal transition throws (machine invariant) → the invoke rejects
+      // and the strip re-pulls. A malformed payload fails closed to a benign error view.
+      [CH.flowState]: (_e, m) => (isValidFlowRequest(m) ? flow.state(m.repoKey) : flowRequestError()),
+      [CH.flowStart]: (_e, m) => (isValidFlowRequest(m) ? flow.start(m.repoKey) : flowRequestError()),
+      [CH.flowAdvance]: (_e, m) => (isValidFlowRequest(m) ? flow.advance(m.repoKey) : flowRequestError()),
+      [CH.flowRestart]: (_e, m) => (isValidFlowRequest(m) ? flow.restart(m.repoKey) : flowRequestError()),
     },
   );
 

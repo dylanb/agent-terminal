@@ -407,9 +407,11 @@ export interface FlowStateView {
   error?: string;
 }
 
-/** flow:state/start/advance/restart request — sessionId only; the flow is per-session (§6). */
+/** flow:state/start/advance/restart request. `repoKey` scopes the flow to the terminal's current
+ *  repo (§16.3), threaded like the todo channels so the flow follows the cwd (§6). */
 export interface FlowRequestMsg {
   sessionId: SessionId;
+  repoKey: string;
 }
 
 // ---- Preload-exposed API surfaces (§6) ----
@@ -477,13 +479,13 @@ export interface ViewerApi {
 /** Flow lifecycle (§24.2.2): drive the manual step's status strip + control. Each call
  *  resolves to the resulting state so the strip re-renders from the response. */
 export interface FlowApi {
-  state(): Promise<FlowStateView>;
+  state(repoKey: string): Promise<FlowStateView>;
   /** not_started → in_progress; rejects if not currently not_started. */
-  start(): Promise<FlowStateView>;
+  start(repoKey: string): Promise<FlowStateView>;
   /** in_progress → done; rejects if not currently in_progress. */
-  advance(): Promise<FlowStateView>;
+  advance(repoKey: string): Promise<FlowStateView>;
   /** done → in_progress; resets and re-runs the first step. Rejects if not currently done. */
-  restart(): Promise<FlowStateView>;
+  restart(repoKey: string): Promise<FlowStateView>;
 }
 
 declare global {
