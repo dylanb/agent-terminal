@@ -183,7 +183,12 @@ export function renderCodeInto(
     }
     notify(); // the real viewport is only knowable now the editor is laid out
   })().catch(() => {
-    if (token === tokenOf(into)) into.textContent = body; // degrade to raw text, never an unhandled rejection
+    if (token === tokenOf(into)) {
+      into.textContent = body; // degrade to raw text, never an unhandled rejection
+      // The editor never mounted, so the host (not a cm-scroller) is the scroll region — restore
+      // keyboard reachability (the caller set tabIndex=-1 assuming a real editor would own it, §20.2).
+      into.tabIndex = 0;
+    }
   });
   return {
     revealLine: reveal,
