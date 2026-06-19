@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createFlowStrip } from '../../src/renderer/src/flowStrip';
-import { TODOS_CHANGED_EVENT } from '../../src/renderer/src/paneActions';
+import { FLOW_CHANGED_EVENT } from '../../src/renderer/src/paneActions';
 import type { FlowStateView, FlowStatus } from '../../src/shared/ipc';
 
 // §24.2.2 / §22.3 — the flow status strip renders the §24.1 mockup station rail (Not started ·
@@ -30,8 +30,6 @@ function fakeFlow(initial: FlowStatus = 'not_started') {
       byKey.set(repoKey, 'in_progress');
       return view(repoKey);
     }),
-    listTemplates: vi.fn(async () => [] as { ref: string; name: string }[]),
-    instantiateTemplate: vi.fn(async () => []),
   };
 }
 
@@ -127,8 +125,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
       start: vi.fn(async (): Promise<FlowStateView> => notified),
       advance: vi.fn(),
       restart: vi.fn(),
-      listTemplates: vi.fn(async () => []),
-      instantiateTemplate: vi.fn(async () => []),
+
     };
     const strip = createFlowStrip(host, deps);
     strip.onRepoChanged('/repo');
@@ -143,82 +140,23 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     expect(host.querySelector('.flow-notice')).toBeNull();
   });
 
-  const templateAdd = () => host.querySelector<HTMLButtonElement>('.flow-template-add');
-  const templatePick = () => host.querySelector<HTMLSelectElement>('.flow-template-pick');
-
-  function pickerDeps(over: Partial<FlowStateView>, templates: { ref: string; name: string }[]) {
-    return {
-      state: vi.fn(
-        async (): Promise<FlowStateView> => ({ stepName: 's', position: 1, total: 1, status: 'in_progress', ...over }),
-      ),
-      start: vi.fn(),
-      advance: vi.fn(),
-      restart: vi.fn(),
-      listTemplates: vi.fn(async () => templates),
-      instantiateTemplate: vi.fn(async () => []),
-    };
-  }
-
-  it('offers a picker of the available templates while active, and instantiates the chosen one + signals (§4.1/§6)', async () => {
-    const deps = pickerDeps({}, [
-      { ref: 'ticket-grooming', name: 'Ticket grooming' },
-      { ref: 'pr-review', name: 'PR review checklist' },
-    ]);
-    const fired = vi.fn();
-    window.addEventListener(TODOS_CHANGED_EVENT, fired);
-
+  it('carries no template picker — that moved to the todo overlay (§4.1/§9.1)', async () => {
+    const deps = fakeFlow('in_progress');
     createFlowStrip(host, deps).onRepoChanged('/repo');
-    await vi.waitFor(() => expect(templatePick()).not.toBeNull());
-    expect(deps.listTemplates).toHaveBeenCalledWith('/repo');
-    // The picker lists every template by its user-facing name.
-    expect([...templatePick()!.options].map((o) => o.textContent)).toEqual(['Ticket grooming', 'PR review checklist']);
-
-    templatePick()!.value = 'pr-review'; // choose a non-default one
-    templateAdd()!.click();
-    await vi.waitFor(() => expect(deps.instantiateTemplate).toHaveBeenCalledWith('/repo', 'pr-review'));
-    await vi.waitFor(() => expect(fired).toHaveBeenCalledTimes(1)); // todo panel re-pulls
-    window.removeEventListener(TODOS_CHANGED_EVENT, fired);
+    await vi.waitFor(() => expect(control()!.textContent).toBe('Advance'));
+    expect(host.querySelector('.flow-template-pick')).toBeNull();
+    expect(host.querySelector('.flow-template-add')).toBeNull();
   });
 
-  it('defaults the picker to the step\'s bound template (§18.6)', async () => {
-    const deps = pickerDeps({ templateRef: 'pr-review' }, [
-      { ref: 'ticket-grooming', name: 'Ticket grooming' },
-      { ref: 'pr-review', name: 'PR review checklist' },
-    ]);
-    createFlowStrip(host, deps).onRepoChanged('/repo');
-    await vi.waitFor(() => expect(templatePick()).not.toBeNull());
-    expect(templatePick()!.value).toBe('pr-review');
-  });
-
-  it('shows no picker before the step is active, nor when no templates exist', async () => {
-    // not_started, even with templates available → no picker yet
-    const notStarted = {
-      ...pickerDeps({}, [{ ref: 't', name: 'T' }]),
-      state: vi.fn(async (): Promise<FlowStateView> => ({ stepName: 's', position: 1, total: 1, status: 'not_started' })),
-    };
-    createFlowStrip(host, notStarted).onRepoChanged('/r');
-    await vi.waitFor(() => expect(control()).not.toBeNull());
-    expect(templatePick()).toBeNull();
-
-    // in_progress but the library is empty → no picker
-    document.body.innerHTML = '<div id="host"></div>';
-    host = document.getElementById('host')!;
-    const empty = pickerDeps({}, []);
-    createFlowStrip(host, empty).onRepoChanged('/r');
-    await vi.waitFor(() => expect(control()).not.toBeNull());
-    await vi.waitFor(() => expect(empty.listTemplates).toHaveBeenCalled());
-    expect(templatePick()).toBeNull();
-  });
-
-  it('does not signal todos-changed merely from Start (entry no longer instantiates todos)', async () => {
+  it('signals flow-changed after a transition so the todo overlay re-pulls its picker (§4.1)', async () => {
     const fired = vi.fn();
-    window.addEventListener(TODOS_CHANGED_EVENT, fired);
+    window.addEventListener(FLOW_CHANGED_EVENT, fired);
     createFlowStrip(host, fakeFlow()).onRepoChanged('/repo');
     await vi.waitFor(() => expect(control()!.textContent).toBe('Start'));
-    control()!.click();
+    control()!.click(); // Start → in_progress
     await vi.waitFor(() => expect(control()!.textContent).toBe('Advance'));
-    expect(fired).not.toHaveBeenCalled();
-    window.removeEventListener(TODOS_CHANGED_EVENT, fired);
+    await vi.waitFor(() => expect(fired).toHaveBeenCalled());
+    window.removeEventListener(FLOW_CHANGED_EVENT, fired);
   });
 
   it('renders a clear --danger error line (no stations, no control) on load failure', async () => {
@@ -235,8 +173,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
       start: vi.fn(),
       advance: vi.fn(),
       restart: vi.fn(),
-      listTemplates: vi.fn(async () => []),
-      instantiateTemplate: vi.fn(),
+
     };
     createFlowStrip(host, deps).onRepoChanged('/repo');
     await vi.waitFor(() => expect(host.querySelector('.flow-error')).not.toBeNull());

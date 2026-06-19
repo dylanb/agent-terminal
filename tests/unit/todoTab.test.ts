@@ -65,6 +65,8 @@ function baseMonitor(handlers: {
     todoReorder: vi.fn(async () => []),
     todoSetStatus: vi.fn(async () => []),
     todoDelete: vi.fn(async () => []),
+    listTemplates: vi.fn(async () => ({ templates: [] })),
+    instantiateTemplate: vi.fn(async () => []),
   };
 }
 
@@ -104,6 +106,8 @@ describe('Todo tab (§24.1 mockup-exact — checkbox-done + Send)', () => {
       todoReorder: vi.fn(async () => []),
       todoSetStatus: vi.fn(async () => []),
       todoDelete: vi.fn(async () => []),
+      listTemplates: vi.fn(async () => ({ templates: [] })),
+      instantiateTemplate: vi.fn(async () => []),
     };
     (window as unknown as { monitor: typeof monitor }).monitor = monitor;
   });
@@ -506,5 +510,95 @@ describe('Todo tab §24.2.1 — review fixes (reorder stability, focus, a11y lab
     rows()[1].dispatchEvent(new Event('drop', { bubbles: true }));
     await flush();
     expect(monitor.todoReorder).toHaveBeenCalledWith('/repoA', ['b', 'a']);
+  });
+
+  // ---- On-demand todo-template picker in the overlay (§4.1/§6) ----
+  // The control relocated here from the flow strip: a collapsed "From template" disclosure that
+  // reveals a named-template picker, so the resting composer is just the manual-add field.
+  describe('template picker (§4.1)', () => {
+    const toggle = () => todoList().querySelector<HTMLButtonElement>('.tmpl-toggle');
+    const pick = () => todoList().querySelector<HTMLSelectElement>('.tmpl-pick');
+    const addBtn = () => todoList().querySelector<HTMLButtonElement>('.tmpl-add');
+    const txt = (el: HTMLElement) => el.querySelector('.tx')!.textContent;
+
+    async function loadRepoWithTemplates(
+      repoKey: string,
+      list: TodoItem[],
+      lib: { templates: { ref: string; name: string }[]; defaultRef?: string },
+    ): Promise<void> {
+      monitor.listTemplates.mockResolvedValue(lib);
+      await loadRepo(repoKey, list);
+    }
+
+    it('shows no template disclosure when the library is empty (gated to an active step)', async () => {
+      wireMonitorPane();
+      await flush();
+      await loadRepoWithTemplates('/repoA', [], { templates: [] });
+      expect(toggle()).toBeNull();
+    });
+
+    it('offers a collapsed "From template" disclosure when templates exist; the picker is hidden until opened', async () => {
+      wireMonitorPane();
+      await flush();
+      await loadRepoWithTemplates('/repoA', [], {
+        templates: [{ ref: 'ticket-grooming', name: 'Ticket grooming' }],
+        defaultRef: 'ticket-grooming',
+      });
+      expect(toggle()).not.toBeNull();
+      expect(toggle()!.getAttribute('aria-expanded')).toBe('false');
+      expect(pick()).toBeNull(); // collapsed → no picker on screen (anti-clutter)
+    });
+
+    it('opening the disclosure reveals the named picker, defaulting to the bound template', async () => {
+      wireMonitorPane();
+      await flush();
+      await loadRepoWithTemplates('/repoA', [], {
+        templates: [
+          { ref: 'pr-review', name: 'PR review checklist' },
+          { ref: 'ticket-grooming', name: 'Ticket grooming' },
+        ],
+        defaultRef: 'ticket-grooming',
+      });
+      toggle()!.click();
+      await flush();
+      expect(toggle()!.getAttribute('aria-expanded')).toBe('true');
+      expect([...pick()!.options].map((o) => o.textContent)).toEqual(['PR review checklist', 'Ticket grooming']);
+      expect(pick()!.value).toBe('ticket-grooming'); // the step's bound default
+    });
+
+    it('Add todos instantiates the chosen template and keeps the picker open', async () => {
+      wireMonitorPane();
+      await flush();
+      await loadRepoWithTemplates('/repoA', [], {
+        templates: [
+          { ref: 'pr-review', name: 'PR review checklist' },
+          { ref: 'ticket-grooming', name: 'Ticket grooming' },
+        ],
+        defaultRef: 'ticket-grooming',
+      });
+      monitor.instantiateTemplate.mockResolvedValue([makeTodo({ id: 'x', text: 'Check the diff' })]);
+      toggle()!.click();
+      await flush();
+      pick()!.value = 'pr-review';
+      addBtn()!.click();
+      await flush();
+      expect(monitor.instantiateTemplate).toHaveBeenCalledWith('/repoA', 'pr-review');
+      expect(rows().map(txt)).toContain('Check the diff'); // the list updated from the result
+      expect(pick()).not.toBeNull(); // stays open for another add (operator decision)
+    });
+
+    it('Escape inside the open picker collapses it and returns focus to the toggle', async () => {
+      wireMonitorPane();
+      await flush();
+      await loadRepoWithTemplates('/repoA', [], {
+        templates: [{ ref: 'ticket-grooming', name: 'Ticket grooming' }],
+      });
+      toggle()!.click();
+      await flush();
+      pick()!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+      await flush();
+      expect(pick()).toBeNull();
+      expect(document.activeElement).toBe(toggle());
+    });
   });
 });

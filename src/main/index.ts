@@ -211,8 +211,15 @@ async function createWindow(): Promise<void> {
     if (!load.ok) return todoStore.list(repoKey);
     const md = loadTodoTemplateFile(path.join(load.flowDir, 'todo-templates'), ref);
     if (md === null) return todoStore.list(repoKey);
+    // Silent dedup (operator decision): re-firing a template skips items already in the active
+    // list, so a repeat click never piles up duplicates.
+    const active = new Set(todoStore.list(repoKey).filter((t) => t.status === 'active').map((t) => t.text));
     let list = todoStore.list(repoKey);
-    for (const text of parseTodoTemplate(md)) list = todoStore.add(repoKey, text);
+    for (const text of parseTodoTemplate(md)) {
+      if (active.has(text)) continue;
+      list = todoStore.add(repoKey, text);
+      active.add(text);
+    }
     return list;
   };
 
@@ -314,12 +321,16 @@ async function createWindow(): Promise<void> {
       [CH.flowStart]: (_e, m) => (isValidFlowRequest(m) ? flow.start(m.repoKey) : flowRequestError()),
       [CH.flowAdvance]: (_e, m) => (isValidFlowRequest(m) ? flow.advance(m.repoKey) : flowRequestError()),
       [CH.flowRestart]: (_e, m) => (isValidFlowRequest(m) ? flow.restart(m.repoKey) : flowRequestError()),
-      // On-demand template picker (§6/§4.1): list the repo's co-located templates, and instantiate
-      // a chosen one. Both fail-closed to [] on a malformed payload or absent flow/templates.
+      // On-demand template picker (§6/§4.1), surfaced in the todo widget. `list` is GATED to a
+      // step that is in_progress (so the picker shows only while the step is active, the operator
+      // decision) and carries the bound template as the default; `instantiate` adds the chosen one.
       [CH.todoTemplateList]: (_e, m) => {
-        if (!isValidTemplateList(m)) return [];
+        if (!isValidTemplateList(m)) return { templates: [] };
+        if (flow.state(m.repoKey).status !== 'in_progress') return { templates: [] };
         const load = loadFlowDefinitionLocalFirst(m.repoKey, flowGlobalDir);
-        return load.ok ? listTodoTemplates(path.join(load.flowDir, 'todo-templates')) : [];
+        const templates = load.ok ? listTodoTemplates(path.join(load.flowDir, 'todo-templates')) : [];
+        const defaultRef = flow.state(m.repoKey).templateRef;
+        return defaultRef ? { templates, defaultRef } : { templates };
       },
       [CH.todoTemplateInstantiate]: (_e, m) =>
         isValidTemplateInstantiate(m) ? instantiateTemplate(m.repoKey, m.ref) : [],

@@ -14,8 +14,8 @@
 // flow lifecycle is injected as `deps` (the window.flow IPC seam), each call returning the
 // resulting state so the strip re-renders from the response.
 
-import type { FlowApi, FlowStateView, FlowStatus, TodoTemplateRef } from '../../shared/ipc';
-import { TODOS_CHANGED_EVENT } from './paneActions';
+import type { FlowApi, FlowStateView, FlowStatus } from '../../shared/ipc';
+import { FLOW_CHANGED_EVENT } from './paneActions';
 
 type StationState = 'todo' | 'active' | 'done';
 type Act = 'start' | 'advance' | 'restart';
@@ -60,43 +60,8 @@ function header(text: string): HTMLElement {
 
 export function createFlowStrip(host: HTMLElement, deps: FlowApi): FlowStrip {
   let repoKey: string | null = null;
-  // Bumped on every render so a slow async template fetch can't paint onto a host a newer render
-  // already replaced (stale-append guard).
-  let gen = 0;
-
-  // The on-demand picker (§4.1/§6): a select of templates by user-facing name (defaulting to the
-  // step's bound template) + a control that instantiates the chosen one and signals the todo panel.
-  function templatePicker(key: string, templates: TodoTemplateRef[], defaultRef?: string): HTMLElement {
-    const wrap = document.createElement('div');
-    wrap.className = 'flow-template';
-    const select = document.createElement('select');
-    select.className = 'flow-template-pick';
-    select.setAttribute('aria-label', 'Todo template');
-    for (const t of templates) {
-      const opt = document.createElement('option');
-      opt.value = t.ref;
-      opt.textContent = t.name;
-      select.append(opt);
-    }
-    if (defaultRef && templates.some((t) => t.ref === defaultRef)) select.value = defaultRef;
-    const add = document.createElement('button');
-    add.className = 'flow-template-add pill';
-    add.textContent = 'Add todos from template';
-    add.addEventListener('click', () => {
-      add.disabled = true;
-      deps
-        .instantiateTemplate(key, select.value)
-        .then(() => window.dispatchEvent(new CustomEvent(TODOS_CHANGED_EVENT)))
-        .finally(() => {
-          add.disabled = false;
-        });
-    });
-    wrap.append(select, add);
-    return wrap;
-  }
 
   function render(state: FlowStateView): void {
-    const myGen = ++gen;
     host.replaceChildren();
 
     if (state.status === 'error') {
@@ -152,23 +117,16 @@ export function createFlowStrip(host: HTMLElement, deps: FlowApi): FlowStrip {
       button.disabled = true;
       const next =
         control.act === 'start' ? deps.start(key) : control.act === 'advance' ? deps.advance(key) : deps.restart(key);
-      // Re-render from the response, surfacing any one-shot `notice` (§19.3 busy refusal). Entry
-      // no longer instantiates todos, so no todos-changed signal here.
-      next.then(render).catch(() => void refresh());
+      next
+        .then((view) => {
+          render(view); // re-render from the response, surfacing any one-shot `notice` (§19.3 refusal)
+          // The active-step status changed, so the todo overlay's on-demand template picker may
+          // appear/disappear — signal it to re-pull (the decoupled contract, §4.1/§9.1).
+          window.dispatchEvent(new CustomEvent(FLOW_CHANGED_EVENT));
+        })
+        .catch(() => void refresh());
     });
     host.append(button);
-
-    // On-demand todo-template picker (§4.1/§6): while the step is ACTIVE, fetch the templates
-    // co-located with its flow.yaml and, if any exist, offer a picker to instantiate a chosen one
-    // into the todo list — signalling the panel to re-pull (the contract, as selection.ts does).
-    // Templates are never auto-run; the fetch is async, so guard against a stale paint.
-    if (state.status === 'in_progress' && repoKey !== null) {
-      const key = repoKey;
-      void deps.listTemplates(key).then((templates) => {
-        if (myGen !== gen || templates.length === 0) return;
-        host.append(templatePicker(key, templates, state.templateRef));
-      });
-    }
 
     // The §19.3 busy refusal (and any other transient notice) rides the start/restart response
     // only; a later state() re-pull carries none, so the line self-clears.

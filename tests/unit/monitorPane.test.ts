@@ -107,6 +107,8 @@ describe('action window DOM (§16 / §24.1 — tabs, capture cards, focus)', () 
       todoReorder: vi.fn(async () => []),
       todoSetStatus: vi.fn(async () => []),
       todoDelete: vi.fn(async () => []),
+      listTemplates: vi.fn(async () => ({ templates: [] })),
+      instantiateTemplate: vi.fn(async () => []),
     };
     (window as unknown as { monitor: typeof monitor }).monitor = monitor;
   });

@@ -14,7 +14,7 @@
 //  • Delete (§16.4): two-step + undoable — × → Confirm/Cancel → a deferred `todoDelete`
 //    behind a Deleted/Undo row for TODO_UNDO_MS, capturing the item's own repoKey.
 
-import type { MonitorApi, TodoItem, TodoSource } from '../../shared/ipc';
+import type { MonitorApi, TodoItem, TodoSource, TodoTemplateRef } from '../../shared/ipc';
 import { doInject, TODO_UNDO_MS } from './paneActions';
 
 /** The slice the Capture tab needs to push a capture into the list and undo it (§16.2). */
@@ -38,7 +38,14 @@ export interface TodoTabDeps {
   todoCountEl: HTMLElement;
   monitor: Pick<
     MonitorApi,
-    'todoList' | 'todoAdd' | 'todoUpdate' | 'todoReorder' | 'todoSetStatus' | 'todoDelete'
+    | 'todoList'
+    | 'todoAdd'
+    | 'todoUpdate'
+    | 'todoReorder'
+    | 'todoSetStatus'
+    | 'todoDelete'
+    | 'listTemplates'
+    | 'instantiateTemplate'
   >;
 }
 
@@ -61,6 +68,13 @@ export function createTodoTab(deps: TodoTabDeps): TodoTab {
   // (survive a re-render); the actual delete is deferred so Undo needs no re-add.
   let confirmingDeleteId: string | null = null;
   const pendingDelete = new Map<string, ReturnType<typeof setTimeout>>();
+  // On-demand template picker (§4.1/§6): the library main offers for the active step (empty when
+  // none — main gates it), its bound default, the user's live selection, and whether the
+  // disclosure is open. Render state, so it survives re-renders (the picker stays open across an add).
+  let templates: TodoTemplateRef[] = [];
+  let templateDefault: string | undefined;
+  let templateSelected: string | undefined;
+  let templateOpen = false;
   // Focus is moved to the contextually-correct control after a re-render that destroys the
   // control the user just activated (edit/delete/confirm), so a keyboard user is never dropped
   // to <body> (WCAG 2.4.3). Consumed once per render.
@@ -79,6 +93,13 @@ export function createTodoTab(deps: TodoTabDeps): TodoTab {
   function refresh(): void {
     if (!currentRepoKey) return;
     void monitor.todoList(currentRepoKey).then(setTodos);
+    // Re-pull the template library too: main gates it to the active step, so it appears/disappears
+    // as the flow advances (the strip fires FLOW_CHANGED, which refreshes us — §4.1).
+    void monitor.listTemplates(currentRepoKey).then((lib) => {
+      templates = lib.templates;
+      templateDefault = lib.defaultRef;
+      renderTodos();
+    });
   }
 
   function applyRepoSwap(repoKey: string): void {
@@ -304,6 +325,80 @@ export function createTodoTab(deps: TodoTabDeps): TodoTab {
     return row;
   }
 
+  // The relocated template control (§4.1/§9.1): a collapsed "From template ▾" disclosure that
+  // reveals a named picker + Add — so the resting composer is just the manual-add field (anti-
+  // clutter). Rendered only when main offered templates (it gates them to an active step), so the
+  // toggle's mere presence means "a step is active and has templates."
+  function renderTemplatePicker(): void {
+    if (templates.length === 0) return;
+
+    const wrap = document.createElement('div');
+    wrap.className = `todo-tmpl${templateOpen ? ' open' : ''}`;
+
+    const toggle = document.createElement('button');
+    toggle.className = 'tmpl-toggle linkbtn';
+    toggle.setAttribute('aria-expanded', String(templateOpen));
+    toggle.setAttribute('aria-controls', 'todo-tmpl-picker');
+    toggle.setAttribute('aria-label', 'Add todos from a template');
+    const car = document.createElement('span');
+    car.className = 'car';
+    car.setAttribute('aria-hidden', 'true');
+    car.textContent = '▾';
+    toggle.append(document.createTextNode('From template '), car);
+    toggle.addEventListener('click', () => {
+      templateOpen = !templateOpen;
+      focusAfterRender = () =>
+        todoListEl.querySelector<HTMLElement>(templateOpen ? '.tmpl-pick' : '.tmpl-toggle')?.focus();
+      renderTodos();
+    });
+    wrap.append(toggle);
+
+    if (templateOpen) {
+      const group = document.createElement('div');
+      group.className = 'tmpl-picker';
+      group.id = 'todo-tmpl-picker';
+      group.setAttribute('role', 'group');
+      group.setAttribute('aria-label', 'Instantiate a todo template');
+      // Escape collapses the picker and returns focus to the toggle (keyboard, WCAG 2.1.2).
+      group.addEventListener('keydown', (e) => {
+        if (e.key !== 'Escape') return;
+        e.preventDefault();
+        templateOpen = false;
+        focusAfterRender = () => todoListEl.querySelector<HTMLElement>('.tmpl-toggle')?.focus();
+        renderTodos();
+      });
+
+      const select = document.createElement('select');
+      select.className = 'tmpl-pick';
+      select.setAttribute('aria-label', 'Todo template');
+      for (const t of templates) {
+        const opt = document.createElement('option');
+        opt.value = t.ref;
+        opt.textContent = t.name;
+        select.append(opt);
+      }
+      const sel = templateSelected ?? templateDefault;
+      if (sel && templates.some((t) => t.ref === sel)) select.value = sel;
+      select.addEventListener('change', () => (templateSelected = select.value));
+
+      const add = document.createElement('button');
+      add.className = 'tmpl-add pill sm signal';
+      add.textContent = 'Add todos';
+      add.addEventListener('click', () => {
+        if (!currentRepoKey) return;
+        add.disabled = true;
+        // Instantiate the chosen template; main silently skips already-present items. Keep the
+        // picker open (operator decision) — setTodos re-renders and the disclosure persists.
+        void monitor.instantiateTemplate(currentRepoKey, select.value).then(setTodos);
+      });
+
+      group.append(select, add);
+      wrap.append(group);
+    }
+
+    todoListEl.appendChild(wrap);
+  }
+
   function renderTodos(): void {
     todoListEl.replaceChildren();
 
@@ -342,6 +437,8 @@ export function createTodoTab(deps: TodoTabDeps): TodoTab {
     });
     addRow.append(input, addBtn);
     todoListEl.appendChild(addRow);
+
+    renderTemplatePicker();
 
     const list = document.createElement('div');
     list.className = 'todos';

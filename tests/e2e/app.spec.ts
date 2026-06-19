@@ -1154,10 +1154,11 @@ test('flow progression persists across a relaunch, per repo (§24.2.2 S3 / §19.
   rmSync(home, { recursive: true, force: true });
 });
 
-test('Start injects the skill on entry; todos come from the template ON DEMAND, not automatically (§4.1/§6/§18.6)', async () => {
-  // Fire: Start (skill injects on entry, no todos), then click "Add todos from template".
-  // Land: the skill invocation is typed into the real PTY on Start; the template todos appear
-  // ONLY after the on-demand control is clicked. Drives the real loop: bash + node-pty.
+test('Start injects the skill on entry; todos come from the template ON DEMAND in the todo overlay (§4.1/§6/§9.1)', async () => {
+  // Fire: Start (skill injects, no todos), then open the todo overlay and use its "From template"
+  // control. Land: the skill is typed into the real PTY on Start; the picker is NOT in the flow
+  // strip (it relocated to the todo overlay, §9.1); the template todos appear only after the
+  // on-demand control is used. Drives the real loop: bash + node-pty.
   const repo = seedFlowRepoWithEntry('agent-term-e2e-flow-s4-', 'groom-ticket', {
     skill: 'groomctl',
     templateItems: ['Groom the ticket scope', 'Confirm acceptance criteria'],
@@ -1173,16 +1174,19 @@ test('Start injects the skill on entry; todos come from the template ON DEMAND, 
   await expect(flowControl()).toHaveText('Start');
 
   await flowControl().click();
-  // Skill injected on entry (§18.6).
-  await expect(termRows()).toContainText('/groomctl');
-  // Todos are NOT auto-instantiated — the step is active and offers the on-demand control instead.
-  const groomTodo = page.locator('.todo').filter({ hasText: 'Groom the ticket scope' });
-  const addFromTemplate = page.locator('#flow-strip .flow-template-add');
-  await expect(addFromTemplate).toBeVisible();
-  await expect(groomTodo).toHaveCount(0);
+  await expect(termRows()).toContainText('/groomctl'); // skill injected on entry (§18.6)
+  // The flow strip carries NO template control — it moved to the todo overlay (§9.1).
+  await expect(page.locator('#flow-strip .flow-template-add')).toHaveCount(0);
+  await expect(page.locator('#flow-strip .flow-template-pick')).toHaveCount(0);
 
-  // Click the on-demand control → the template's items become todos (§21.2).
-  await addFromTemplate.click();
+  await openQuickSend('todo'); // the todo overlay now owns the picker
+  const groomTodo = page.locator('.todo').filter({ hasText: 'Groom the ticket scope' });
+  await expect(groomTodo).toHaveCount(0); // not auto-instantiated
+
+  const toggle = page.locator('#todo-list .tmpl-toggle');
+  await expect(toggle).toBeVisible({ timeout: 10_000 }); // disclosure present while the step is active
+  await toggle.click();
+  await page.locator('#todo-list .tmpl-add').click();
   await expect(groomTodo).toHaveCount(1, { timeout: 10_000 });
   await expect(page.locator('.todo').filter({ hasText: 'Confirm acceptance criteria' })).toHaveCount(1);
 
@@ -1190,10 +1194,10 @@ test('Start injects the skill on entry; todos come from the template ON DEMAND, 
   rmSync(home, { recursive: true, force: true });
 });
 
-test('the active step offers a picker of named templates; choosing one instantiates its todos (§4.1/§6)', async () => {
-  // Fire: Start, then choose a template from the picker. Land: the picker lists every co-located
-  // template by its H1 name, defaults to the step's bound template, and instantiating the CHOSEN
-  // one adds only its todos. Drives the real loop (bash + node-pty + the todoTemplate:* channels).
+test('the todo overlay offers a picker of named templates; choosing one instantiates its todos (§4.1/§6)', async () => {
+  // Fire: Start, open the todo overlay, disclose the picker, choose a template. Land: the picker
+  // lists every co-located template by its H1 name, defaults to the step's bound template, and
+  // instantiating the CHOSEN one adds only its todos. Real loop: bash + node-pty + todoTemplate:*.
   const repo = seedFlowRepoMultiTemplate('agent-term-e2e-flow-pick-', 'groom-ticket', {
     skill: 'groomctl',
     defaultRef: 'ticket-grooming',
@@ -1210,19 +1214,22 @@ test('the active step offers a picker of named templates; choosing one instantia
 
   await typeCommand(`cd "${repo}"`);
   await expect(flowStepName()).toHaveText('groom-ticket', { timeout: 10_000 });
-  await flowControl().click(); // Start → step active → picker appears
+  await flowControl().click(); // Start → step active
 
-  const pick = page.locator('#flow-strip .flow-template-pick');
-  await expect(pick).toBeVisible({ timeout: 10_000 });
-  await expect(pick.locator('option')).toHaveText(['PR review checklist', 'Ticket grooming']); // by-ref order, user-facing names
+  await openQuickSend('todo');
+  const toggle = page.locator('#todo-list .tmpl-toggle');
+  await expect(toggle).toBeVisible({ timeout: 10_000 });
+  await toggle.click();
+
+  const pick = page.locator('#todo-list .tmpl-pick');
+  await expect(pick.locator('option')).toHaveText(['PR review checklist', 'Ticket grooming']); // by-ref order, H1 names
   await expect(pick).toHaveValue('ticket-grooming'); // defaults to the step's bound template
 
   await pick.selectOption('pr-review'); // choose a different list
-  await page.locator('#flow-strip .flow-template-add').click();
+  await page.locator('#todo-list .tmpl-add').click();
   await expect(page.locator('.todo').filter({ hasText: 'Check the diff' })).toHaveCount(1, { timeout: 10_000 });
   await expect(page.locator('.todo').filter({ hasText: 'Verify the tests' })).toHaveCount(1);
-  // The non-chosen template's items were NOT added.
-  await expect(page.locator('.todo').filter({ hasText: 'Groom the ticket scope' })).toHaveCount(0);
+  await expect(page.locator('.todo').filter({ hasText: 'Groom the ticket scope' })).toHaveCount(0); // non-chosen not added
 
   rmSync(repo, { recursive: true, force: true });
   rmSync(home, { recursive: true, force: true });

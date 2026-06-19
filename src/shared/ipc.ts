@@ -430,6 +430,14 @@ export interface TodoTemplateRef {
   name: string;
 }
 
+/** todoTemplate:list response (§4.1/§6): the templates offered to the on-demand picker, plus the
+ *  active step's bound `todo_template:` as the picker's default selection. Main gates this to a
+ *  step that is `in_progress` (empty otherwise), so the todo widget needs no flow-state awareness. */
+export interface TodoTemplateList {
+  templates: TodoTemplateRef[];
+  defaultRef?: string;
+}
+
 /** todoTemplate:list request (§6): the templates co-located with the repo's flow.yaml (§18.6).
  *  `repoKey` resolves the flow dir local-first-then-global (deviates from the v2.27 global-only
  *  sketch, since templates are now co-located). */
@@ -497,6 +505,14 @@ export interface MonitorApi {
   todoReorder(repoKey: string, orderedIds: string[]): Promise<TodoItem[]>;
   todoSetStatus(repoKey: string, id: string, status: TodoStatus): Promise<TodoItem[]>;
   todoDelete(repoKey: string, id: string): Promise<TodoItem[]>;
+  // On-demand todo templates (§4.1/§6) — the picker lives in the todo widget (the monitor pane
+  // talks only to window.monitor.*, §9.1), so these are monitor methods, not flow methods.
+  /** Templates offered to the picker for the repo's active step (§4.1); empty when no step is
+   *  active or the library is empty. `defaultRef` is the step's bound template. */
+  listTemplates(repoKey: string): Promise<TodoTemplateList>;
+  /** Instantiate the named template into the repo's todo list (§21.2), skipping items already
+   *  present (silent dedup); resolves to the fresh list. */
+  instantiateTemplate(repoKey: string, ref: string): Promise<TodoItem[]>;
 }
 
 /** Artifact viewer (§20): real, context-connected discovery + file read. Talks only to
@@ -518,12 +534,6 @@ export interface FlowApi {
   advance(repoKey: string): Promise<FlowStateView>;
   /** done → in_progress; resets and re-runs the first step. Rejects if not currently done. */
   restart(repoKey: string): Promise<FlowStateView>;
-  /** The todo templates co-located with the repo's flow.yaml (§18.6), for the on-demand picker
-   *  (§4.1/§6); each carries a user-facing `name`. */
-  listTemplates(repoKey: string): Promise<TodoTemplateRef[]>;
-  /** Instantiate the named todo template (co-located with the flow.yaml, §18.6) into the repo's
-   *  todo list on demand (§6/§4.1); resolves to the fresh list. */
-  instantiateTemplate(repoKey: string, ref: string): Promise<TodoItem[]>;
 }
 
 declare global {
