@@ -91,6 +91,15 @@ describe('flow timeline (§19.2)', () => {
     expect(flowLabel(steps)).toBe('step 2 / 2');
   });
 
+  it('counts only the done PREFIX, not done steps after the first todo', () => {
+    const steps: FlowStep[] = [
+      { name: 'A', status: 'done' },
+      { name: 'B', status: 'todo' },
+      { name: 'C', status: 'done' },
+    ];
+    expect(flowLabel(steps)).toBe('step 2 / 3'); // next after the leading done, not done-count+1 (=3)
+  });
+
   it('reads "step 0 / 0" for an empty flow (the sole degenerate case; index ≥ 1 for any M > 0)', () => {
     expect(flowLabel([])).toBe('step 0 / 0');
   });

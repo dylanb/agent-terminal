@@ -38,8 +38,11 @@ const pad2 = (n: number): string => String(n).padStart(2, '0');
 export function flowLabel(steps: FlowStep[]): string {
   const n = steps.length;
   const active = steps.findIndex((s) => s.status === 'active');
-  const done = steps.filter((s) => s.status === 'done').length;
-  const at = n === 0 ? 0 : active >= 0 ? active + 1 : Math.min(done + 1, n);
+  // The done PREFIX (leading consecutive done steps), not the total done count — a done step after
+  // the first todo must not inflate the position (e.g. [done, todo, done] → step 2, not 3).
+  let donePrefix = 0;
+  while (donePrefix < n && steps[donePrefix].status === 'done') donePrefix++;
+  const at = n === 0 ? 0 : active >= 0 ? active + 1 : Math.min(donePrefix + 1, n);
   return `step ${at} / ${n}`;
 }
 
