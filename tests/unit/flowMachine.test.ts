@@ -1,5 +1,9 @@
-import { describe, it, expect } from 'vitest';
+import { afterEach, beforeEach, describe, it, expect } from 'vitest';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { createFlowMachine, type FlowLoad } from '../../src/main/flow';
+import { createFlowStateStore } from '../../src/main/flowState';
 
 // §24.2.2 S1 — the walking-skeleton workflow state machine. A single manual step with the
 // lifecycle not_started --start--> in_progress --advance--> done; done is terminal. Tests
@@ -44,5 +48,50 @@ describe('flow state machine (§24.2.2 S1)', () => {
     expect(() => flow.advance()).toThrow(); // done is terminal — a second Advance is impossible
     expect(() => flow.start()).toThrow();
     expect(flow.state().status).toBe('done');
+  });
+});
+
+// §24.2.2 S3 — the machine is backed by a real flow-state store: it restores its status from
+// disk on construction (so a relaunch resumes where it left off) and persists every transition.
+// Tests drive the real store over a temp dir; the observable contract is what a *fresh* machine
+// on the same store reads back — never which write happened internally.
+describe('flow machine persistence (§24.2.2 S3)', () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'flow-machine-'));
+  });
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('persists a transition so a fresh machine on the same store resumes it', () => {
+    createFlowMachine(LOAD, createFlowStateStore(dir)).start();
+    expect(createFlowMachine(LOAD, createFlowStateStore(dir)).state().status).toBe('in_progress');
+  });
+
+  it('resumes a completed flow as done across a relaunch', () => {
+    const first = createFlowMachine(LOAD, createFlowStateStore(dir));
+    first.start();
+    first.advance();
+    const resumed = createFlowMachine(LOAD, createFlowStateStore(dir));
+    expect(resumed.state().status).toBe('done');
+    expect(() => resumed.advance()).toThrow(); // still terminal after reload
+  });
+
+  it('ignores persisted state whose step id no longer matches the definition', () => {
+    createFlowMachine(LOAD, createFlowStateStore(dir)).start();
+    const otherDef: FlowLoad = {
+      ok: true,
+      definition: { name: 'f', steps: [{ id: 'different-step', kind: 'manual' }] },
+    };
+    expect(createFlowMachine(otherDef, createFlowStateStore(dir)).state().status).toBe('not_started');
+  });
+
+  it('an error load with a store stays inert and writes nothing to disk', () => {
+    const store = createFlowStateStore(dir);
+    const flow = createFlowMachine({ ok: false, error: 'no flow.yaml' }, store);
+    expect(flow.state().status).toBe('error');
+    flow.start();
+    expect(store.read()).toBeNull();
   });
 });

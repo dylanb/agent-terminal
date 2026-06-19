@@ -1004,6 +1004,48 @@ test('a missing flow.yaml surfaces a clear error state in the strip, not a crash
   rmSync(home, { recursive: true, force: true });
 });
 
+test('flow progression persists across a relaunch (§24.2.2 S3)', async () => {
+  // S3: start/advance write <worktree>/.agent-terminal/flow-state.yaml (§19.1), so a relaunch on
+  // the same worktree resumes where it left off. Seed a flow.yaml, drive a step partway, then
+  // relaunch the real app (same HOME) and assert the persisted status came back.
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-flow-persist-'));
+  mkdirSync(join(home, '.agent-terminal'), { recursive: true });
+  writeFileSync(
+    join(home, '.agent-terminal', 'flow.yaml'),
+    'name: feature-dev\nsteps:\n  - id: groom-ticket\n    kind: manual\n',
+  );
+  const env = { ...process.env, HOME: home, APP_SUBMIT_DELAY_MS: '100' };
+  const launch = async (): Promise<void> => {
+    app = await electron.launch({ args: ['out/main/index.js'], env });
+    page = await app.firstWindow();
+    await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+  };
+  const status = () => page.locator('#flow-strip .flow-status');
+  const control = () => page.locator('#flow-strip .flow-control');
+
+  await app.close();
+  await launch();
+  await expect(status()).toHaveText('not started');
+  await control().click(); // Start
+  await expect(status()).toHaveText('in progress');
+
+  // Relaunch: the step must resume as in_progress (the Advance control is still present).
+  await app.close();
+  await launch();
+  await expect(status()).toHaveText('in progress');
+  await expect(control()).toHaveText('Advance');
+
+  await control().click(); // Advance → done
+  await expect(status()).toHaveText('done');
+
+  // Relaunch again: done is persisted and stays terminal (no control).
+  await app.close();
+  await launch();
+  await expect(status()).toHaveText('done');
+  await expect(control()).toHaveCount(0);
+  rmSync(home, { recursive: true, force: true });
+});
+
 test('the theme toggle flips light/dark and persists across a reload (§16.6)', async () => {
   const html = page.locator('html');
   await page.locator('#tg').click();

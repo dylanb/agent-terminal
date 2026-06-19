@@ -11,6 +11,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import yaml from 'js-yaml';
 import type { FlowStateView, FlowStatus } from '../shared/ipc';
+import type { FlowStateStore } from './flowState';
 
 /** A §18.1 step, minimal S2 shape: a manual step with an id and optional skill/template refs. */
 export interface FlowStepDef {
@@ -85,7 +86,10 @@ export interface FlowMachine {
   advance(): FlowStateView;
 }
 
-export function createFlowMachine(load: FlowLoad): FlowMachine {
+// S3 (§19.1): an optional store backs the machine — its status is restored from disk on
+// construction (so a relaunch resumes) and every transition is persisted. Without a store the
+// machine is in-memory only (the S1/S2 contract), unchanged.
+export function createFlowMachine(load: FlowLoad, store?: FlowStateStore): FlowMachine {
   if (!load.ok) {
     const view = (): FlowStateView => ({
       stepName: '',
@@ -95,15 +99,22 @@ export function createFlowMachine(load: FlowLoad): FlowMachine {
       error: load.error,
     });
     // In the error state there is no step to drive: start/advance are inert (the strip shows
-    // no control), so a buggy/racing caller can neither throw nor escape the error.
+    // no control), so a buggy/racing caller can neither throw nor escape the error — and we
+    // never persist, so a bad flow.yaml can't overwrite a good progression.
     return { state: view, start: view, advance: view };
   }
 
   const def = load.definition;
+  const stepId = def.steps[0].id;
   let status: FlowStatus = 'not_started';
 
+  // Resume only progression that belongs to the *current* step: a changed flow.yaml (different
+  // step id) starts fresh rather than mis-applying a stale status.
+  const persisted = store?.read();
+  if (persisted && persisted.step === stepId) status = persisted.status;
+
   const view = (): FlowStateView => ({
-    stepName: def.steps[0].id,
+    stepName: stepId,
     position: 1,
     total: def.steps.length,
     status,
@@ -114,6 +125,7 @@ export function createFlowMachine(load: FlowLoad): FlowMachine {
       throw new Error(`illegal flow transition: ${status} cannot move to ${to}`);
     }
     status = to;
+    store?.write({ step: stepId, status });
     return view();
   };
 
