@@ -74,6 +74,9 @@ export function createCaptureTab(deps: CaptureTabDeps): CaptureTab {
   // Chunks committed to the pending Add-to-todo: shown processed (dimmed + checkbox disabled)
   // until the undo window commits (then they're dismissed) or Undo reverts them.
   let processedIds: string[] = [];
+  // The in-flight commit timer for the undo window — hoisted so endUndo() can cancel it (e.g. a
+  // Dismiss all during the window must not leave a pending commit that fires against gone chunks).
+  let undoTimer: ReturnType<typeof setTimeout> | null = null;
 
   /** Publish a capture's span so the terminal can marker-anchor it for cross-highlight (§16.8). */
   function publishRange(event: MonitorEvent): void {
@@ -329,7 +332,7 @@ export function createCaptureTab(deps: CaptureTabDeps): CaptureTab {
     const undo = document.createElement('button');
     undo.className = 'undo-add-to-todo linkbtn';
     undo.textContent = 'Undo';
-    const timer = setTimeout(() => {
+    undoTimer = setTimeout(() => {
       for (const id of ids) {
         monitor.dismiss(id);
         removeChunk(id);
@@ -337,7 +340,7 @@ export function createCaptureTab(deps: CaptureTabDeps): CaptureTab {
       endUndo();
     }, TODO_UNDO_MS);
     undo.addEventListener('click', async () => {
-      clearTimeout(timer);
+      if (undoTimer) { clearTimeout(undoTimer); undoTimer = null; } // stop the commit before awaiting
       try {
         if (added) await todoSink.deleteTodo(added.repoKey, added.id); // chunks stay; nothing dismissed
       } catch {
@@ -350,6 +353,7 @@ export function createCaptureTab(deps: CaptureTabDeps): CaptureTab {
   }
 
   function endUndo(): void {
+    if (undoTimer) { clearTimeout(undoTimer); undoTimer = null; }
     undoPending = false;
     setProcessed(processedIds, false); // no-op for committed chunks (already removed)
     processedIds = [];
@@ -390,6 +394,7 @@ export function createCaptureTab(deps: CaptureTabDeps): CaptureTab {
   dismissAllBtn.className = 'pill sm';
   dismissAllBtn.textContent = 'Dismiss all';
   dismissAllBtn.addEventListener('click', () => {
+    endUndo(); // a Dismiss all during the undo window must clear the stuck undo state + pending commit
     monitor.dismissAll();
     for (const el of blocksEl.querySelectorAll<HTMLElement>('[data-event-id]')) unpublishRange(el);
     blocksEl.replaceChildren();

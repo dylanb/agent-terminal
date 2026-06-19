@@ -432,6 +432,7 @@ describe('artifact viewer (§20.1/§20.2 — real discovery)', () => {
     expect(v.addToTodo).toHaveBeenCalledWith('a passage');
   });
 
+
   // Tweak 1: the two sinks are inert until there is a highlight to act on.
   it('disables Send to agent and Add to todo until something is highlighted (§20.2)', async () => {
     const v = mount();

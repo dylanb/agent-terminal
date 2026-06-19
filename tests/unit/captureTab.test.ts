@@ -227,6 +227,22 @@ describe('Capture tab §24.2.1 — bulk triage (checkbox + Add to todo / Dismiss
     expect(card.classList.contains('chunk-processed')).toBe(false);
   });
 
+  it('Dismiss all during the undo window ends the undo state (toolbar not left stuck)', async () => {
+    await withRepo();
+    handlers.event!(makeEvent({ id: 'f1', type: 'finding', parentId: null, text: 'alpha' }));
+    checkbox(cards()[0]).click();
+    addBtn().click();
+    await tick();
+    expect(document.querySelector('.undo-add-to-todo')).toBeTruthy(); // undo window open
+    dismissAll().click();
+    expect(document.querySelector('.undo-add-to-todo')).toBeNull(); // undo slot cleared
+    expect(addBtn().disabled).toBe(true); // no chunks left, but NOT stuck-disabled by undoPending
+    // The pending commit timer must not fire against already-removed chunks.
+    monitor.dismiss.mockClear();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(monitor.dismiss).not.toHaveBeenCalled();
+  });
+
   it('each chunk checkbox is distinguishable — its label carries the capture text', async () => {
     await withRepo();
     handlers.event!(makeEvent({ id: 'f1', type: 'finding', parentId: null, text: 'unbounded scrollback re-scan' }));

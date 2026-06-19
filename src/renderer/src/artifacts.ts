@@ -531,7 +531,9 @@ export function createArtifacts(host: HTMLElement, deps: ArtifactsDeps): Artifac
   function routeSelection(sink: (text: string) => void | Promise<void>): void {
     const text = readSelection(body) || lastSelection;
     if (!text) return;
-    void sink(text);
+    // The sink may be async (addToTodo crosses IPC); a rejected invoke (main restart) must not
+    // become an unhandled renderer rejection.
+    Promise.resolve(sink(text)).catch(() => {});
   }
 
   sendBtn.addEventListener('click', () => routeSelection(deps.send));
