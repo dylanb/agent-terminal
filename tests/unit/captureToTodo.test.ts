@@ -72,6 +72,27 @@ describe('Capture selection → todo (§16.2 — selection-or-latest-command, cr
     expect(signalled).toBe(0);
   });
 
+  it('a selection that cleans to empty is not persisted and signals nothing (empty-guard)', async () => {
+    listen();
+    const monitor = makeMonitor();
+    await captureToTodo(monitor as never, '/repo', '   \n  \t ');
+    expect(monitor.todoAdd).not.toHaveBeenCalled();
+    expect(signalled).toBe(0);
+  });
+
+  it('empty/whitespace command output is not persisted and signals nothing (empty-guard)', async () => {
+    listen();
+    const monitor = makeMonitor({
+      commands: vi.fn(async () => [
+        { id: 'c', sessionId: 's1', command: 'x', exitCode: 0, running: false, startedAt: 0, truncated: false },
+      ]),
+      captureCommandText: vi.fn(async () => ({ text: '   \n ', truncated: false })),
+    });
+    await captureToTodo(monitor as never, '/repo', null);
+    expect(monitor.todoAdd).not.toHaveBeenCalled();
+    expect(signalled).toBe(0);
+  });
+
   it('without a repo key: no-op (todos are repo-scoped)', async () => {
     listen();
     const monitor = makeMonitor();
