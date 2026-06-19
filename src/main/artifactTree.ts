@@ -96,7 +96,10 @@ function walkDir(dir: string, base = dir, acc: string[] = []): string[] {
 function loopFiles(root: string): Set<string> {
   const loopDir = path.join(root, '.agent-loop');
   if (!existsSync(loopDir)) return new Set();
-  return new Set(walkDir(loopDir, root));
+  // walkDir yields path.sep-separated paths; the provenance sets are keyed by the POSIX-normalized
+  // paths buildTree produces (and changed/tracked come from git, always '/'). Normalize so loop
+  // membership matches on Windows too, where path.sep is '\\' (§20.1).
+  return new Set(walkDir(loopDir, root).map((p) => p.split(path.sep).join('/')));
 }
 
 /** Build a hierarchical node tree from tree-relative file paths; dirs first, then name. */

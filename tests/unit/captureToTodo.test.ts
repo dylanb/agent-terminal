@@ -63,6 +63,15 @@ describe('Capture selection → todo (§16.2 — selection-or-latest-command, cr
     expect(signalled).toBe(0);
   });
 
+  it('a rejected IPC invoke is swallowed (no unhandled rejection) and no change is signalled', async () => {
+    // A main-process restart can reject todoAdd; the detached `void captureToTodo(...)` call sites
+    // must not surface an unhandled rejection. vitest fails the run on one, so this pins the catch.
+    listen();
+    const monitor = makeMonitor({ todoAdd: vi.fn(async () => { throw new Error('ipc down'); }) });
+    await expect(captureToTodo(monitor as never, '/repo', 'x')).resolves.toBeUndefined();
+    expect(signalled).toBe(0);
+  });
+
   it('without a repo key: no-op (todos are repo-scoped)', async () => {
     listen();
     const monitor = makeMonitor();

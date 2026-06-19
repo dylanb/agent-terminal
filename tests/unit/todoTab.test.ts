@@ -507,4 +507,69 @@ describe('Todo tab §24.2.1 — review fixes (reorder stability, focus, a11y lab
     await flush();
     expect(monitor.todoReorder).toHaveBeenCalledWith('/repoA', ['b', 'a']);
   });
+
+  // Every todo mutation crosses renderer→main IPC; a main-process restart rejects the invoke.
+  // None of these must surface as an unhandled renderer rejection (vitest fails the run on one),
+  // and each keeps the user's current UI state on failure (§16.4).
+  describe('IPC-rejection hardening (§16.4)', () => {
+    it('a rejected todoReorder leaves the displayed order unchanged', async () => {
+      wireMonitorPane();
+      await flush();
+      await loadRepo('/repoA', [makeTodo({ id: 'a', text: 'first', order: 1 }), makeTodo({ id: 'b', text: 'second', order: 2 })]);
+      monitor.todoReorder.mockRejectedValueOnce(new Error('ipc down'));
+      (rows()[0].querySelector('.todo-down') as HTMLButtonElement).click();
+      await flush();
+      expect(rows().map((r) => r.querySelector('.tx')!.textContent)).toEqual(['first', 'second']);
+    });
+
+    it('a rejected todoSetStatus (done toggle) is handled', async () => {
+      wireMonitorPane();
+      await flush();
+      await loadRepo('/repoA', [makeTodo({ id: 'a', text: 'task' })]);
+      monitor.todoSetStatus.mockRejectedValueOnce(new Error('ipc down'));
+      (rows()[0].querySelector('.chk') as HTMLButtonElement).click();
+      await flush();
+      expect(rows().map((r) => r.querySelector('.tx')!.textContent)).toEqual(['task']);
+    });
+
+    it('a rejected manual todoAdd keeps the typed text in the input', async () => {
+      wireMonitorPane();
+      await flush();
+      await loadRepo('/repoA', []);
+      const input = document.getElementById('todo-new') as HTMLTextAreaElement;
+      input.value = 'keep me';
+      monitor.todoAdd.mockRejectedValueOnce(new Error('ipc down'));
+      (document.getElementById('todo-add-btn') as HTMLButtonElement).click();
+      await flush();
+      expect((document.getElementById('todo-new') as HTMLTextAreaElement).value).toBe('keep me');
+    });
+
+    it('a rejected todoUpdate keeps the row in the edit state', async () => {
+      wireMonitorPane();
+      await flush();
+      await loadRepo('/repoA', [makeTodo({ id: 'a', text: 'task' })]);
+      (rows()[0].querySelector('.todo-edit') as HTMLButtonElement).click();
+      monitor.todoUpdate.mockRejectedValueOnce(new Error('ipc down'));
+      (rows()[0].querySelector('.todo-save') as HTMLButtonElement).click();
+      await flush();
+      expect((rows()[0].querySelector('.tx') as HTMLElement).contentEditable).toBe('true');
+    });
+
+    it('a rejected deferred todoDelete is handled', async () => {
+      vi.useFakeTimers();
+      try {
+        wireMonitorPane();
+        await vi.advanceTimersByTimeAsync(0);
+        monitor.todoList.mockResolvedValue([makeTodo({ id: 'a', text: 'task', repoKey: '/repoA' })]);
+        handlers.cwdChanged!({ sessionId: 's1', cwd: '/repoA', repoKey: '/repoA' });
+        await vi.advanceTimersByTimeAsync(0);
+        monitor.todoDelete.mockRejectedValueOnce(new Error('ipc down'));
+        (rows()[0].querySelector('.todo-delete') as HTMLButtonElement).click();
+        (rows()[0].querySelector('.todo-delete-confirm') as HTMLButtonElement).click();
+        await vi.advanceTimersByTimeAsync(60_000); // TODO_UNDO_MS → deferred delete fires and rejects
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
 });

@@ -127,7 +127,8 @@ export function createTodoTab(deps: TodoTabDeps): TodoTab {
     if (!currentRepoKey) return;
     let k = 0;
     const ids = ordered.map((t) => (t.status === 'active' ? newActive[k++].id : t.id));
-    void monitor.todoReorder(currentRepoKey, ids).then(setTodos);
+    // On a rejected invoke (main restart) keep the current order; never an unhandled rejection.
+    void monitor.todoReorder(currentRepoKey, ids).then(setTodos).catch(() => {});
   }
 
   /** Move an active item one slot up/down within the active run (skipping done rows). */
@@ -212,7 +213,13 @@ export function createTodoTab(deps: TodoTabDeps): TodoTab {
     const tx = (el ?? rowEl(t.id))?.querySelector<HTMLElement>('.tx');
     const next = (tx?.textContent ?? t.text).trim();
     // The edit targets the list's own repo (t.repoKey), not the live cwd (§16.3).
-    todos = await monitor.todoUpdate(t.repoKey, t.id, next);
+    let updated: TodoItem[];
+    try {
+      updated = await monitor.todoUpdate(t.repoKey, t.id, next);
+    } catch {
+      return; // IPC failure (main restart): keep the user in the edit state, list unchanged.
+    }
+    todos = updated;
     updateTodoCount();
     focusAfterRender = () => rowEl(t.id)?.querySelector<HTMLElement>('.todo-edit')?.focus();
     resolveEdit();
@@ -243,7 +250,8 @@ export function createTodoTab(deps: TodoTabDeps): TodoTab {
       t.id,
       setTimeout(() => {
         pendingDelete.delete(t.id);
-        void monitor.todoDelete(t.repoKey, t.id).then(setTodos);
+        // On a rejected invoke (main restart) keep the current list; never an unhandled rejection.
+        void monitor.todoDelete(t.repoKey, t.id).then(setTodos).catch(() => {});
       }, TODO_UNDO_MS),
     );
     rerenderFocusing(t.id, '.todo-undo');
@@ -271,7 +279,11 @@ export function createTodoTab(deps: TodoTabDeps): TodoTab {
     chk.setAttribute('aria-checked', String(done));
     chk.setAttribute('aria-label', done ? 'Mark todo active' : 'Mark todo done');
     chk.addEventListener('click', async () => {
-      setTodos(await monitor.todoSetStatus(t.repoKey, t.id, done ? 'active' : 'done'));
+      try {
+        setTodos(await monitor.todoSetStatus(t.repoKey, t.id, done ? 'active' : 'done'));
+      } catch {
+        // IPC failure (main restart): leave the UI unchanged, never an unhandled rejection.
+      }
     });
 
     const body = document.createElement('div');
@@ -332,7 +344,13 @@ export function createTodoTab(deps: TodoTabDeps): TodoTab {
     const submitAdd = async (): Promise<void> => {
       const text = input.value.trim();
       if (!text || !currentRepoKey) return;
-      setTodos(await monitor.todoAdd(currentRepoKey, text, { type: 'manual' }));
+      let list: TodoItem[];
+      try {
+        list = await monitor.todoAdd(currentRepoKey, text, { type: 'manual' });
+      } catch {
+        return; // IPC failure (main restart): keep the typed text and list unchanged.
+      }
+      setTodos(list);
       input.value = '';
     };
     addBtn.addEventListener('click', () => void submitAdd());

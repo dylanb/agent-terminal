@@ -16,7 +16,7 @@
 // publishes each ranged card's span (CAPTURE_RANGE_ADD/REMOVE) so the terminal can
 // marker-anchor it, and reveals by id. The terminal owns the coordinates.
 
-import type { MonitorApi, MonitorEvent, MonitorEventType } from '../../shared/ipc';
+import type { MonitorApi, MonitorEvent, MonitorEventType, TodoItem } from '../../shared/ipc';
 import {
   CAPTURE_RANGE_ADD_EVENT,
   CAPTURE_RANGE_REMOVE_EVENT,
@@ -307,8 +307,15 @@ export function createCaptureTab(deps: CaptureTabDeps): CaptureTab {
     processedIds = ids;
     setProcessed(ids, true);
     refreshSelectionUI();
-    const added = await todoSink.addFromCapture(selected.map((c) => c.text).join('\n\n'), { type: 'capture' });
-    // The add silently failed (repo went away mid-flight): don't arm the commit, or the
+    // A rejected invoke (main restart) is treated the same as a silent failure below — never an
+    // unhandled rejection, and the processed cue is cleared via endUndo().
+    let added: TodoItem | null = null;
+    try {
+      added = await todoSink.addFromCapture(selected.map((c) => c.text).join('\n\n'), { type: 'capture' });
+    } catch {
+      added = null;
+    }
+    // The add failed (repo went away mid-flight, or IPC down): don't arm the commit, or the
     // source chunks would be dismissed with nothing added to the todo list.
     if (!added) {
       endUndo();
@@ -331,8 +338,13 @@ export function createCaptureTab(deps: CaptureTabDeps): CaptureTab {
     }, TODO_UNDO_MS);
     undo.addEventListener('click', async () => {
       clearTimeout(timer);
-      if (added) await todoSink.deleteTodo(added.repoKey, added.id); // chunks stay; nothing dismissed
-      endUndo();
+      try {
+        if (added) await todoSink.deleteTodo(added.repoKey, added.id); // chunks stay; nothing dismissed
+      } catch {
+        // IPC failure (main restart): nothing dismissed; still end the window below.
+      } finally {
+        endUndo(); // always end the window, or processed chunks stay disabled forever
+      }
     });
     undoSlot.append(note, undo);
   }
