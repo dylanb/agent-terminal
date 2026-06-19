@@ -74,6 +74,13 @@ describe('view-3 gate panel (§19.3 — clickable, stubbed)', () => {
     expect(host.textContent).toContain('changes requested');
   });
 
+  it('renders "Open report" disabled (a Phase-1 stub with no behavior must not look actionable)', () => {
+    createGatePanel(host, fixture());
+    const open = Array.from(host.querySelectorAll('button')).find((b) => b.textContent === 'Open report');
+    expect(open).toBeTruthy();
+    expect((open as HTMLButtonElement).disabled).toBe(true);
+  });
+
   it('approving reflects the verdict and calls the stub handler (no injection)', () => {
     const onAct = vi.fn();
     const panel = createGatePanel(host, fixture(), { onAct });

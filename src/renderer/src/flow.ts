@@ -102,6 +102,7 @@ export function createGatePanel(
   const approve = el('button', 'pill app', 'Approve gate') as HTMLButtonElement;
   const request = el('button', 'pill send', 'Request changes') as HTMLButtonElement;
   const open = el('button', 'pill', 'Open report') as HTMLButtonElement;
+  open.disabled = true; // Phase-1 stub: no report wiring yet, so it must not present as actionable (§19.3)
   bar.append(approve, request, open);
 
   const set = (next: GateStatus, action: 'approve' | 'changes'): void => {

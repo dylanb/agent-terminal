@@ -208,8 +208,10 @@ function buildChangeExtensions(
   });
 
   const stripe = new (class extends GutterMarker {
-    toDOM(): Node {
-      const el = document.createElement('div');
+    // Create in the EditorView's own document, not the global one, so the marker is correct if the
+    // viewer is ever mounted in a different Document/iframe (host-document invariant, UI-STANDARDS).
+    toDOM(view: EditorViewT): Node {
+      const el = view.dom.ownerDocument.createElement('div');
       el.className = 'cm-changedGutter';
       return el;
     }
