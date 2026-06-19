@@ -7,6 +7,7 @@ import {
   SESSION_ID,
   type AgentInjectMsg,
   type CaptureCommandMsg,
+  type CaptureLastMsg,
   type ClearCommandsMsg,
   type CommandsRequestMsg,
   type DismissAllMsg,
@@ -70,6 +71,10 @@ export function isValidCommandsRequest(m: unknown): m is CommandsRequestMsg {
 
 export function isValidCaptureCommand(m: unknown): m is CaptureCommandMsg {
   return isRecord(m) && isLiveSession(m) && typeof m.commandId === 'string';
+}
+
+export function isValidCaptureLast(m: unknown): m is CaptureLastMsg {
+  return isRecord(m) && isLiveSession(m);
 }
 
 export function isValidDismiss(m: unknown): m is DismissMsg {

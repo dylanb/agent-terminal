@@ -68,7 +68,7 @@ export function createShell(root: HTMLElement, deps: ShellDeps = {}): Shell {
   };
 
   // The drawer is display:none when closed (via setShown), not just a 0-width column — otherwise its
-  // tabs/buttons stay in the tab order while invisible (§A11Y). The grid class sizes it when open.
+  // tabs/buttons stay in the tab order while invisible (§22.2). The grid class sizes it when open.
   const drawerEl = root.querySelector<HTMLElement>('.drawer');
   const isDrawerOpen = (): boolean => root.classList.contains('drawer-open');
   function openDrawer(): void {

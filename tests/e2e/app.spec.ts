@@ -60,7 +60,7 @@ function inject(text: string, submit: boolean): Promise<void> {
   );
 }
 
-/** Whether `sel` can take keyboard focus — the observable test for "inert when hidden" (§A11Y):
+/** Whether `sel` can take keyboard focus — the observable test for "inert when hidden" (§22.2):
  *  display:none / visibility:hidden elements refuse focus, so this is false for hidden content. */
 function canFocus(sel: string): Promise<boolean> {
   return page.locator(sel).evaluate((e) => {
@@ -818,7 +818,7 @@ test('the full-screen tree popout is resizable and remembers its width (§20.2)'
   await expect.poll(fsW).toBeGreaterThan(resized - 8);
 });
 
-test('full-screen collapse keeps the header and tree out of the tab order (§A11Y)', async () => {
+test('full-screen collapse keeps the header and tree out of the tab order (§22.2)', async () => {
   const dir = '/tmp/agent-term-e2e-fsinert';
   await typeCommand(`rm -rf "${dir}" && mkdir -p "${dir}" && cd "${dir}" && git init -q && printf '# Doc\\n' > doc.md && pwd`);
   await expect(page.locator('.xterm-rows > div').filter({ hasText: new RegExp(`^\\s*${dir}\\s*$`) })).not.toHaveCount(0);
@@ -836,7 +836,7 @@ test('full-screen collapse keeps the header and tree out of the tab order (§A11
   expect(await canFocus('#artifacts .treesearch')).toBe(true);
 });
 
-test('the quick-send drawer is closed on startup and inert while closed (§22.2 / §A11Y)', async () => {
+test('the quick-send drawer is closed on startup and inert while closed (§22.2)', async () => {
   // beforeEach opens the drawer; relaunch a fresh app to observe the real startup default.
   await app.close();
   app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SUBMIT_DELAY_MS: '100' } });
@@ -852,7 +852,7 @@ test('the quick-send drawer is closed on startup and inert while closed (§22.2 
   expect(await canFocus('#tab-capture')).toBe(true);
 });
 
-test('the changed-section controls leave the tab order when the file has no changes (§A11Y)', async () => {
+test('the changed-section controls leave the tab order when the file has no changes (§22.2)', async () => {
   const dir = '/tmp/agent-term-e2e-navinert';
   await typeCommand(
     `rm -rf "${dir}" && mkdir -p "${dir}/src" && cd "${dir}" && git init -q && ` +

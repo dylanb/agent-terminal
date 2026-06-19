@@ -115,7 +115,7 @@ describe('shell controller (§24.1C — views, hotkeys, docked drawer, theme)', 
       expect(shell.isDrawerOpen()).toBe(true);
     });
 
-    it('marks the drawer hidden when closed so its controls leave the tab order (§A11Y)', () => {
+    it('marks the drawer hidden when closed so its controls leave the tab order (§22.2)', () => {
       const drawer = document.querySelector('.drawer') as HTMLElement;
       expect(drawer.hidden).toBe(false); // open from markup
       shell.closeDrawer();

@@ -50,6 +50,23 @@ describe('repoContext — shared OSC-7 repo provider', () => {
     expect(seen).toEqual(['/repoB']);
   });
 
+  it('immediately notifies a subscriber that registers after the value is already known', async () => {
+    const { monitor } = makeMonitor(async () => ({ cwd: '/seed', repoKey: '/seed' }));
+    const ctx = createRepoContext(monitor as never);
+    await flush(); // seed resolves before this consumer subscribes
+    const seen: string[] = [];
+    ctx.onChange((info) => seen.push(info.repoKey));
+    expect(seen).toEqual(['/seed']); // a late subscriber must not stay uninitialised until the next cd
+  });
+
+  it('does not synchronously notify a subscriber when nothing is known yet', () => {
+    const { monitor } = makeMonitor(async () => null);
+    const ctx = createRepoContext(monitor as never);
+    const seen: string[] = [];
+    ctx.onChange((info) => seen.push(info.repoKey));
+    expect(seen).toEqual([]);
+  });
+
   it('a live cwd:changed is not clobbered by a late-resolving seed', async () => {
     let resolveSeed: (r: RepoInfo) => void = () => {};
     const { monitor, fireCwd } = makeMonitor(() => new Promise<RepoInfo>((res) => (resolveSeed = res)));

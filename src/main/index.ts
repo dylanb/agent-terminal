@@ -19,6 +19,7 @@ import { installNavigationGuards } from './windowGuards';
 import {
   isValidCapture,
   isValidCaptureCommand,
+  isValidCaptureLast,
   isValidClearCommands,
   isValidCommandsRequest,
   isValidDismiss,
@@ -241,7 +242,10 @@ async function createWindow(): Promise<void> {
       // single captured report (replacing the prior in the store, so reload-replay stays
       // single-slot). Returned to the caller, which renders it single-slot — not broadcast,
       // since onEvent would prepend a duplicate rather than replace.
-      [CH.captureLast]: () => captureLastReport(SESSION_ID, store, scanner),
+      // Fail-closed to [] on a malformed/wrong-session payload (the renderer treats [] as "nothing
+      // captured, keep the prior report"), enforcing the §6 live-session check like its siblings.
+      [CH.captureLast]: (_e, m) =>
+        isValidCaptureLast(m) ? captureLastReport(SESSION_ID, store, scanner) : [],
       // Todo CRUD (§16.4) — each returns the fresh repo list; fail-closed to [] on
       // a malformed payload so a bad message can never mutate another repo's list.
       [CH.todoList]: (_e, m) => (isValidTodoList(m) ? todoStore.list(m.repoKey) : []),

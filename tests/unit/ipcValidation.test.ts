@@ -3,6 +3,7 @@ import { SESSION_ID } from '../../src/shared/ipc';
 import {
   isValidCapture,
   isValidCaptureCommand,
+  isValidCaptureLast,
   isValidClearCommands,
   isValidCommandsRequest,
   isValidDismiss,
@@ -67,6 +68,12 @@ describe('IPC payload validation (§6 — renderer-supplied input is untrusted)'
     expect(isValidCommandsRequest({ sessionId: sid })).toBe(true);
     expect(isValidCommandsRequest({ sessionId: 'other' })).toBe(false);
     expect(isValidCommandsRequest(null)).toBe(false);
+  });
+
+  it('accepts a well-formed capture:last request and rejects a wrong/missing sessionId (§21.1)', () => {
+    expect(isValidCaptureLast({ sessionId: sid })).toBe(true);
+    expect(isValidCaptureLast({ sessionId: 'other' })).toBe(false);
+    expect(isValidCaptureLast(null)).toBe(false);
   });
 
   it('accepts a capture-command request and rejects missing/non-string commandId (§15.4)', () => {

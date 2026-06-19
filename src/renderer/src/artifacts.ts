@@ -320,7 +320,7 @@ export function createArtifacts(host: HTMLElement, deps: ArtifactsDeps): Artifac
   let fullscreen = false;
   fsBtn.addEventListener('click', () => deps.onRequestFullscreen?.(!fullscreen));
   // Each panel's open state lives as .is-collapsed on the panel itself, so a collapsed (slid-off)
-  // header/tree is inert — no tab stops inside hidden content (§A11Y).
+  // header/tree is inert — no tab stops inside hidden content (§22.2).
   const setHeaderOpen = (open: boolean): void => {
     setCollapsed(bar, !open);
     topStrip.setAttribute('aria-expanded', String(open));
