@@ -208,18 +208,29 @@ export function createArtifacts(host: HTMLElement, deps: ArtifactsDeps): Artifac
     if (persist) deps.onWidthChange?.(width);
   }
   applyWidth(width, false);
-  divider.addEventListener('mousedown', (e) => {
-    e.preventDefault();
-    const startX = (e as MouseEvent).clientX;
-    const startW = width;
-    const onMove = (ev: MouseEvent): void => applyWidth(startW + (ev.clientX - startX), false);
+
+  // A drag attaches document-level mousemove/mouseup; tracked in one outer slot so a mid-gesture
+  // dispose() (relocation/unmount) removes them deterministically and a new drag can't stack (§20.2).
+  let endDrag: (() => void) | null = null;
+  function beginDrag(startX: number, startW: number, apply: (px: number) => void, persist: () => void): void {
+    endDrag?.();
+    const onMove = (ev: MouseEvent): void => apply(startW + (ev.clientX - startX));
     const onUp = (): void => {
+      endDrag?.();
+      persist();
+    };
+    endDrag = (): void => {
       doc.removeEventListener('mousemove', onMove);
       doc.removeEventListener('mouseup', onUp);
-      deps.onWidthChange?.(width); // persist once at gesture end
+      endDrag = null;
     };
     doc.addEventListener('mousemove', onMove);
     doc.addEventListener('mouseup', onUp);
+  }
+
+  divider.addEventListener('mousedown', (e) => {
+    e.preventDefault();
+    beginDrag((e as MouseEvent).clientX, width, (px) => applyWidth(px, false), () => deps.onWidthChange?.(width));
   });
   divider.addEventListener('keydown', (e) => {
     if (e.key === 'ArrowLeft') applyWidth(width - WIDTH_STEP, true);
@@ -243,18 +254,14 @@ export function createArtifacts(host: HTMLElement, deps: ArtifactsDeps): Artifac
     if (persist) deps.onFullscreenWidthChange?.(fsWidth);
   }
   applyFsWidth(fsWidth, false);
+  // The clamp ceiling (aria-valuemax) is viewport-dependent, so re-apply on window resize to keep
+  // it (and the width) from going stale; cleaned up in dispose().
+  const win = doc.defaultView;
+  const onWindowResize = (): void => applyFsWidth(fsWidth, false);
+  win?.addEventListener('resize', onWindowResize);
   fsResize.addEventListener('mousedown', (e) => {
     e.preventDefault();
-    const startX = (e as MouseEvent).clientX;
-    const startW = fsWidth;
-    const onMove = (ev: MouseEvent): void => applyFsWidth(startW + (ev.clientX - startX), false);
-    const onUp = (): void => {
-      doc.removeEventListener('mousemove', onMove);
-      doc.removeEventListener('mouseup', onUp);
-      deps.onFullscreenWidthChange?.(fsWidth);
-    };
-    doc.addEventListener('mousemove', onMove);
-    doc.addEventListener('mouseup', onUp);
+    beginDrag((e as MouseEvent).clientX, fsWidth, (px) => applyFsWidth(px, false), () => deps.onFullscreenWidthChange?.(fsWidth));
   });
   fsResize.addEventListener('keydown', (e) => {
     if (e.key === 'ArrowLeft') applyFsWidth(fsWidth - WIDTH_STEP, true);
@@ -354,6 +361,12 @@ export function createArtifacts(host: HTMLElement, deps: ArtifactsDeps): Artifac
 
   const PROV_LABEL: Record<string, string> = { changed: 'changed', loop: 'loop', pr: 'PR' };
 
+  // Collapse/expand a directory and keep its treeitem's aria-expanded in sync (§20.2 a11y).
+  const setDirCollapsed = (dir: HTMLElement, head: HTMLElement, collapsed: boolean): void => {
+    dir.classList.toggle('collapsed', collapsed);
+    head.setAttribute('aria-expanded', String(!collapsed));
+  };
+
   function renderNodes(nodes: ArtifactNode[], into: HTMLElement): void {
     for (const node of nodes) {
       if (node.kind === 'dir') {
@@ -361,8 +374,9 @@ export function createArtifacts(host: HTMLElement, deps: ArtifactsDeps): Artifac
         const head = el('div', 'dname', node.name);
         head.title = node.relPath; // full path on hover (§20.2 truncation discoverability)
         head.setAttribute('role', 'treeitem');
+        head.setAttribute('aria-expanded', 'true'); // dirs render expanded; kept in sync on toggle
         head.tabIndex = -1;
-        head.addEventListener('click', () => dir.classList.toggle('collapsed'));
+        head.addEventListener('click', () => setDirCollapsed(dir, head, !dir.classList.contains('collapsed')));
         const children = el('div', 'dchildren');
         renderNodes(node.children ?? [], children);
         dir.append(head, children);
@@ -414,15 +428,15 @@ export function createArtifacts(host: HTMLElement, deps: ArtifactsDeps): Artifac
       case 'End': focusItem(items[items.length - 1]); break;
       case 'Enter':
       case ' ':
-        if (isDir) dir?.classList.toggle('collapsed');
+        if (isDir && dir) setDirCollapsed(dir, row, !dir.classList.contains('collapsed'));
         else void open(row.dataset.rel!);
         break;
       case 'ArrowRight':
-        if (isDir && dir?.classList.contains('collapsed')) dir.classList.remove('collapsed');
+        if (isDir && dir?.classList.contains('collapsed')) setDirCollapsed(dir, row, false);
         else if (isDir) focusItem(visibleItems()[i + 1]); // into first child
         break;
       case 'ArrowLeft':
-        if (isDir && !dir?.classList.contains('collapsed')) dir?.classList.add('collapsed');
+        if (isDir && dir && !dir.classList.contains('collapsed')) setDirCollapsed(dir, row, true);
         else focusItem(row.closest('.dchildren')?.parentElement?.querySelector(':scope > .dname') as HTMLElement);
         break;
       default: return;
@@ -556,6 +570,8 @@ export function createArtifacts(host: HTMLElement, deps: ArtifactsDeps): Artifac
     isFullscreen: () => fullscreen,
     dispose: () => {
       doc.removeEventListener('selectionchange', updateActions);
+      win?.removeEventListener('resize', onWindowResize);
+      endDrag?.(); // remove any document-level listeners from an in-flight resize drag (§20.2)
       unsubViewport?.();
       codeView?.destroy?.(); // free CodeMirror's handlers — DOM removal alone doesn't (§20.2)
       host.replaceChildren();

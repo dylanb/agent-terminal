@@ -574,6 +574,55 @@ describe('artifact viewer (§20.1/§20.2 — real discovery)', () => {
     expect(onWidthChange).toHaveBeenCalledWith(300);
   });
 
+  it('directory headers expose aria-expanded and sync it on click toggle', async () => {
+    const v = mount();
+    await v.api.refresh();
+    const head = v.dirRows()[0];
+    expect(head.getAttribute('aria-expanded')).toBe('true');
+    head.click();
+    expect(head.getAttribute('aria-expanded')).toBe('false');
+    head.click();
+    expect(head.getAttribute('aria-expanded')).toBe('true');
+  });
+
+  it('keyboard collapse/expand keeps the directory aria-expanded in sync', async () => {
+    const v = mount();
+    await v.api.refresh();
+    const head = v.dirRows()[0];
+    head.dispatchEvent(key('Enter')); // collapse
+    expect(head.getAttribute('aria-expanded')).toBe('false');
+    head.dispatchEvent(key('ArrowRight')); // expand
+    expect(head.getAttribute('aria-expanded')).toBe('true');
+    head.dispatchEvent(key('ArrowLeft')); // collapse
+    expect(head.getAttribute('aria-expanded')).toBe('false');
+  });
+
+  it('dispose() removes in-flight drag listeners (a mid-drag unmount stops resizing)', async () => {
+    const v = mount(TREE_CURATED, { initialWidth: 248 });
+    await v.api.refresh();
+    const split = v.artsplit();
+    v.divider().dispatchEvent(mouse('mousedown', 248));
+    v.api.dispose();
+    document.dispatchEvent(mouse('mousemove', 400)); // would resize to 400px if the listener leaked
+    expect(split.style.getPropertyValue('--tree-w')).toBe('248px');
+  });
+
+  it('recomputes the full-screen clamp ceiling on window resize (aria-valuemax not stale)', async () => {
+    const v = mount();
+    await v.api.refresh();
+    v.api.setFullscreen(true);
+    const handle = v.host.querySelector('.fs-tree-resize') as HTMLElement;
+    const before = Number(handle.getAttribute('aria-valuemax'));
+    const orig = window.innerWidth;
+    try {
+      (window as unknown as { innerWidth: number }).innerWidth = Math.round(orig / 2);
+      window.dispatchEvent(new Event('resize'));
+      expect(Number(handle.getAttribute('aria-valuemax'))).toBeLessThan(before);
+    } finally {
+      (window as unknown as { innerWidth: number }).innerWidth = orig;
+    }
+  });
+
   it('ArrowRight/Left on the separator nudges and persists the width', async () => {
     const onWidthChange = vi.fn();
     const v = mount(TREE_CURATED, { initialWidth: 248, onWidthChange });
