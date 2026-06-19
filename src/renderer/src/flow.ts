@@ -32,7 +32,9 @@ export const SAMPLE_FLOW: FlowState = {
 const pad2 = (n: number): string => String(n).padStart(2, '0');
 
 /** "step N / M" naming the active step's position (§19.2). With no active step, point at the next
- *  step after the done prefix, clamped to 1..M — so an all-todo flow reads "step 1 / M", not 0. */
+ *  step after the done prefix, clamped to 1..M — so an all-todo flow reads "step 1 / M", not 0.
+ *  An empty flow (M === 0, e.g. data temporarily unavailable) is the sole degenerate case and
+ *  reads "step 0 / 0"; for any M > 0 the index is always ≥ 1. */
 export function flowLabel(steps: FlowStep[]): string {
   const n = steps.length;
   const active = steps.findIndex((s) => s.status === 'active');

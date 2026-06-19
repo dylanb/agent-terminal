@@ -90,6 +90,10 @@ describe('flow timeline (§19.2)', () => {
     ];
     expect(flowLabel(steps)).toBe('step 2 / 2');
   });
+
+  it('reads "step 0 / 0" for an empty flow (the sole degenerate case; index ≥ 1 for any M > 0)', () => {
+    expect(flowLabel([])).toBe('step 0 / 0');
+  });
 });
 
 describe('rail gate/loop status', () => {
