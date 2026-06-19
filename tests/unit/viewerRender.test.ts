@@ -35,6 +35,20 @@ describe('viewerRender — EditorView lifecycle (no leak on re-render, §20.2)',
     await vi.waitFor(() => expect(destroy).toHaveBeenCalledTimes(1));
   });
 
+  it('concurrent renders into two different hosts do not invalidate each other (per-host token)', async () => {
+    // The stale-render guard must be per-host: a render started in host B must not cancel an
+    // in-flight render into host A. With a single global token, A would bail and never mount.
+    const a = document.createElement('div');
+    const b = document.createElement('div');
+    document.body.append(a, b);
+    renderCodeInto('const a = 1;', 'ts', a);
+    renderCodeInto('const b = 2;', 'ts', b); // started while A is still building
+    await vi.waitFor(() => {
+      expect(a.querySelector('.cm-editor')).toBeTruthy();
+      expect(b.querySelector('.cm-editor')).toBeTruthy();
+    });
+  });
+
   it('the returned CodeView.destroy() tears down the editor (for the organism dispose path)', async () => {
     const host = document.createElement('div');
     document.body.appendChild(host);

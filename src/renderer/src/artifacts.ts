@@ -53,6 +53,8 @@ const DEFAULT_TREE_W = 248;
 const MIN_TREE_W = 140;
 const MAX_TREE_W = 640;
 const WIDTH_STEP = 16;
+const FS_MIN_TREE_W = 200; // full-screen popout floor; ceiling is FS_MAX_VIEWPORT_FRAC of the viewport
+const FS_MAX_VIEWPORT_FRAC = 0.85;
 const clampWidth = (px: number): number => Math.min(MAX_TREE_W, Math.max(MIN_TREE_W, Math.round(px)));
 
 export interface Artifacts {
@@ -201,6 +203,8 @@ export function createArtifacts(host: HTMLElement, deps: ArtifactsDeps): Artifac
     width = clampWidth(px);
     split.style.setProperty('--tree-w', `${width}px`);
     divider.setAttribute('aria-valuenow', String(width));
+    divider.setAttribute('aria-valuemin', String(MIN_TREE_W)); // expose the clamp range for AT (§20.2)
+    divider.setAttribute('aria-valuemax', String(MAX_TREE_W));
     if (persist) deps.onWidthChange?.(width);
   }
   applyWidth(width, false);
@@ -227,13 +231,15 @@ export function createArtifacts(host: HTMLElement, deps: ArtifactsDeps): Artifac
   // --- Full-screen tree popout: its own remembered width, defaulting to 30% of the viewport so it
   // opens usefully wide; resized by dragging its right edge or arrow-keying it (§20.2). ---
   const viewportW = (): number => doc.defaultView?.innerWidth ?? 1024;
-  const clampFsWidth = (px: number): number =>
-    Math.min(Math.round(viewportW() * 0.85), Math.max(200, Math.round(px)));
+  const fsMaxWidth = (): number => Math.round(viewportW() * FS_MAX_VIEWPORT_FRAC);
+  const clampFsWidth = (px: number): number => Math.min(fsMaxWidth(), Math.max(FS_MIN_TREE_W, Math.round(px)));
   let fsWidth = clampFsWidth(deps.initialFullscreenWidth ?? Math.ceil(viewportW() * 0.3));
   function applyFsWidth(px: number, persist: boolean): void {
     fsWidth = clampFsWidth(px);
     split.style.setProperty('--tree-w-fs', `${fsWidth}px`);
     fsResize.setAttribute('aria-valuenow', String(fsWidth));
+    fsResize.setAttribute('aria-valuemin', String(FS_MIN_TREE_W)); // clamp range for AT (§20.2)
+    fsResize.setAttribute('aria-valuemax', String(fsMaxWidth())); // viewport-dependent ceiling
     if (persist) deps.onFullscreenWidthChange?.(fsWidth);
   }
   applyFsWidth(fsWidth, false);

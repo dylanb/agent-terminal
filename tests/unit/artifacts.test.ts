@@ -540,6 +540,22 @@ describe('artifact viewer (§20.1/§20.2 — real discovery)', () => {
     expect(v.divider().getAttribute('role')).toBe('separator');
   });
 
+  it('the tree separator exposes its clamp range to assistive tech (aria-valuemin/max)', async () => {
+    const v = mount();
+    await v.api.refresh();
+    expect(v.divider().getAttribute('aria-valuemin')).toBe('140');
+    expect(v.divider().getAttribute('aria-valuemax')).toBe('640');
+  });
+
+  it('the full-screen popout separator exposes its clamp range (aria-valuemin/max)', async () => {
+    const v = mount();
+    await v.api.refresh();
+    v.api.setFullscreen(true);
+    const handle = v.host.querySelector('.fs-tree-resize') as HTMLElement;
+    expect(handle.getAttribute('aria-valuemin')).toBe('200');
+    expect(Number(handle.getAttribute('aria-valuemax'))).toBeGreaterThan(200);
+  });
+
   it('applies the persisted initial width', async () => {
     const v = mount(TREE_CURATED, { initialWidth: 320 });
     await v.api.refresh();

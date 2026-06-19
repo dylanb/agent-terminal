@@ -12,7 +12,16 @@ import type { Extension } from '@codemirror/state';
 import type { Decoration as DecorationT, EditorView as EditorViewT } from '@codemirror/view';
 import type { CodeView } from './artifacts';
 
-let renderSeq = 0; // guards against a stale async render overwriting a newer one
+// Per-host render token: guards against a stale async render overwriting a newer one INTO THE SAME
+// host. Keyed by host element (not a single global counter) so a render into one placement never
+// invalidates an in-flight render into another (relocation / future side-by-side viewers, §20.2).
+const renderTokens = new WeakMap<HTMLElement, number>();
+const bumpToken = (into: HTMLElement): number => {
+  const next = (renderTokens.get(into) ?? 0) + 1;
+  renderTokens.set(into, next);
+  return next;
+};
+const tokenOf = (into: HTMLElement): number => renderTokens.get(into) ?? 0;
 
 // Each host holds at most one live CodeMirror view; the render seams reuse the same host across
 // file opens, so a re-render must destroy the prior view first — removing the DOM alone leaks the
@@ -40,7 +49,7 @@ let mermaidSeq = 0;
 
 /** Render markdown into `into`, then turn any ```mermaid fences into rendered SVG. */
 export function renderMarkdownInto(body: string, into: HTMLElement): void {
-  const token = ++renderSeq;
+  const token = bumpToken(into);
   teardownView(into); // switching to markdown disposes any code view this host held (§20.2)
   into.classList.add('md');
   into.textContent = '…';
@@ -49,7 +58,7 @@ export function renderMarkdownInto(body: string, into: HTMLElement): void {
   // nor e2e can force the import to reject without a production seam added only for the test.
   void (async () => {
     const md = await getMarkdownIt();
-    if (token !== renderSeq) return; // a newer artifact was opened
+    if (token !== tokenOf(into)) return; // a newer artifact was opened
     into.innerHTML = md.render(body);
     const fences = [...into.querySelectorAll('code.language-mermaid')];
     if (fences.length === 0) return;
@@ -57,21 +66,21 @@ export function renderMarkdownInto(body: string, into: HTMLElement): void {
     const mermaid = (await import('mermaid')).default;
     mermaid.initialize({ startOnLoad: false, theme, securityLevel: 'strict' });
     for (const code of fences) {
-      if (token !== renderSeq) return;
+      if (token !== tokenOf(into)) return;
       const def = code.textContent ?? '';
       const slot = into.ownerDocument.createElement('div');
       slot.className = 'mermaid';
       (code.closest('pre') ?? code).replaceWith(slot);
       try {
         const { svg } = await mermaid.render(`mmd-${++mermaidSeq}`, def);
-        if (token !== renderSeq) return;
+        if (token !== tokenOf(into)) return;
         slot.innerHTML = svg;
       } catch {
         slot.textContent = def; // a malformed diagram degrades to its source, never crashes
       }
     }
   })().catch(() => {
-    if (token === renderSeq) into.textContent = body; // degrade to raw text, never an unhandled rejection
+    if (token === tokenOf(into)) into.textContent = body; // degrade to raw text, never an unhandled rejection
   });
 }
 
@@ -88,7 +97,7 @@ export function renderCodeInto(
   into: HTMLElement,
   changedLines?: number[],
 ): CodeView {
-  const token = ++renderSeq;
+  const token = bumpToken(into);
   teardownView(into); // dispose the prior code view before mounting a new one into this host (§20.2)
   into.classList.remove('md');
   into.textContent = '…';
@@ -124,7 +133,7 @@ export function renderCodeInto(
         import('@codemirror/view'),
         import('@codemirror/lang-javascript'),
       ]);
-    if (token !== renderSeq) return;
+    if (token !== tokenOf(into)) return;
     into.replaceChildren();
     // Chrome follows the app theme via tokens; basicSetup's default highlight stays (§24.1C polish).
     const cmTheme = EditorView.theme({
@@ -171,7 +180,7 @@ export function renderCodeInto(
     }
     notify(); // the real viewport is only knowable now the editor is laid out
   })().catch(() => {
-    if (token === renderSeq) into.textContent = body; // degrade to raw text, never an unhandled rejection
+    if (token === tokenOf(into)) into.textContent = body; // degrade to raw text, never an unhandled rejection
   });
   return {
     revealLine: reveal,
@@ -181,7 +190,7 @@ export function renderCodeInto(
       return () => listeners.delete(listener);
     },
     destroy: () => {
-      renderSeq++; // a still-in-flight build bails at its token check before it mounts the editor
+      bumpToken(into); // a still-in-flight build bails at its token check before it mounts the editor
       teardownView(into);
     },
   };
@@ -202,8 +211,10 @@ function buildChangeExtensions(
   const tintField = s.StateField.define({
     create(state) {
       const b = new s.RangeSetBuilder<DecorationT>();
-      for (let n = 1; n <= state.doc.lines; n++) {
-        if (changed.has(n)) b.add(state.doc.line(n).from, state.doc.line(n).from, Decoration.line({ class: 'cm-changedLine' }));
+      // Iterate the changed line numbers (sorted — RangeSetBuilder needs ascending positions),
+      // not 1..doc.lines, so a few changes in a large file stay O(changes), not O(totalLines).
+      for (const n of [...changed].sort((a, z) => a - z)) {
+        if (n >= 1 && n <= state.doc.lines) b.add(state.doc.line(n).from, state.doc.line(n).from, Decoration.line({ class: 'cm-changedLine' }));
       }
       return b.finish();
     },
