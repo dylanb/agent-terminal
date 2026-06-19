@@ -306,7 +306,9 @@ export function createTodoTab(deps: TodoTabDeps): TodoTab {
           void commitEdit(t, row);
         } else if (e.key === 'Escape') {
           e.preventDefault();
-          resolveEdit();
+          // Re-render with a focus target (the row's edit button) so Escape-cancel doesn't drop
+          // focus to <body> — matches the Cancel button's behavior (WCAG 2.4.3, §16.4).
+          rerenderFocusingAfterResolve(t.id, () => resolveEdit());
         }
       });
     }

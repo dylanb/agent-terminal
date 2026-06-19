@@ -499,6 +499,18 @@ describe('Todo tab §24.2.1 — review fixes (reorder stability, focus, a11y lab
     expect(tx.getAttribute('aria-label')).toBeTruthy();
   });
 
+  it('Escape cancels the edit and moves focus to the edit button (not <body>)', async () => {
+    wireMonitorPane();
+    await flush();
+    await loadRepo('/repoA', [makeTodo({ id: 'a', text: 'edit me' })]);
+    (rows()[0].querySelector('.todo-edit') as HTMLButtonElement).click();
+    const tx = rows()[0].querySelector('.tx') as HTMLElement;
+    tx.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+    await flush();
+    expect(rows()[0].querySelector('.tx')!.getAttribute('contenteditable')).not.toBe('true'); // edit closed
+    expect(document.activeElement).toBe(rows()[0].querySelector('.todo-edit'));
+  });
+
   it('Delete moves focus to Confirm; confirming moves focus to Undo', async () => {
     wireMonitorPane();
     await flush();
