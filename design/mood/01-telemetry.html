@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mood 01 — Telemetry · Agent Terminal</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Saira+Semi+Condensed:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --ink-900:#0B0E14; --ink-800:#12161F; --ink-700:#1B212C; --line:#262E3B;
+    --mist-400:#8A97A8; --mist-200:#B7C2D0; --mist-100:#E6ECF3;
+    --active:#F2A53C; --ready:#4FD6B8; --block:#FF5C6C; --here:#5AA2FF;
+    --bg:var(--ink-900); --panel:var(--ink-800); --raised:var(--ink-700);
+    --hair:var(--line); --label:var(--mist-400); --text:var(--mist-100); --dim:var(--mist-200);
+  }
+  [data-theme="light"] {
+    --bg:#EEF1F6; --panel:#FFFFFF; --raised:#F4F7FB; --hair:#D6DEE8;
+    --label:#5A6675; --text:#0E1420; --dim:#3A4555;
+    --active:#C77A12; --ready:#0E9B7E; --block:#D62839; --here:#2563EB;
+  }
+  * { box-sizing:border-box; }
+  html,body { margin:0; }
+  body { background:var(--bg); color:var(--text); font-family:"IBM Plex Sans",system-ui,sans-serif; line-height:1.55; -webkit-font-smoothing:antialiased; }
+  .label,.eyebrow { font-family:"Saira Semi Condensed",sans-serif; text-transform:uppercase; letter-spacing:.16em; font-weight:600; color:var(--label); font-size:11px; }
+  .mono { font-family:"IBM Plex Mono",monospace; font-variant-numeric:tabular-nums; }
+  .wrap { max-width:1080px; margin:0 auto; padding:0 28px 80px; }
+
+  header { position:sticky; top:0; z-index:5; background:color-mix(in srgb,var(--bg) 88%,transparent); backdrop-filter:blur(8px); border-bottom:1px solid var(--hair); }
+  .bar { max-width:1080px; margin:0 auto; padding:14px 28px; display:flex; align-items:center; gap:16px; }
+  .mark { font-family:"Saira Semi Condensed",sans-serif; font-weight:600; letter-spacing:.04em; font-size:15px; }
+  .mark b { color:var(--active); }
+  .tick { flex:1; height:1px; background:repeating-linear-gradient(90deg,var(--hair) 0 1px,transparent 1px 9px); align-self:center; }
+  .back { color:var(--label); text-decoration:none; font-size:12px; }
+  .back:hover { color:var(--text); }
+  .toggle { font-family:"Saira Semi Condensed",sans-serif; text-transform:uppercase; letter-spacing:.12em; font-size:11px; font-weight:600; color:var(--label); background:var(--panel); border:1px solid var(--hair); border-radius:2px; padding:7px 12px; cursor:pointer; }
+  .toggle:hover { color:var(--text); border-color:var(--label); }
+  .toggle:focus-visible { outline:2px solid var(--here); outline-offset:2px; }
+
+  .hero { padding:64px 0 40px; }
+  .kicker { display:flex; align-items:baseline; gap:14px; margin-bottom:18px; }
+  .kicker .no { font-family:"Saira Semi Condensed",sans-serif; font-weight:600; font-size:13px; color:var(--active); letter-spacing:.1em; }
+  h1 { font-family:"Saira Semi Condensed",sans-serif; font-weight:600; font-size:clamp(34px,6vw,60px); line-height:1.02; margin:0 0 18px; letter-spacing:-.01em; }
+  .thesis { font-size:19px; max-width:60ch; color:var(--dim); }
+  .thesis em { color:var(--text); font-style:normal; border-bottom:2px solid var(--active); padding-bottom:1px; }
+
+  section { padding:38px 0; border-top:1px solid var(--hair); }
+  .sec-head { display:flex; align-items:baseline; gap:14px; margin-bottom:26px; }
+  .sec-head h2 { font-family:"Saira Semi Condensed",sans-serif; font-weight:600; font-size:15px; letter-spacing:.04em; margin:0; text-transform:uppercase; }
+  .sec-head .meta { color:var(--label); font-size:12px; }
+  .comp-label { font-family:"Saira Semi Condensed",sans-serif; text-transform:uppercase; letter-spacing:.16em; font-size:11px; font-weight:600; color:var(--label); margin:30px 0 12px; display:flex; align-items:center; gap:10px; }
+  .comp-label::before { content:""; width:18px; height:1px; background:var(--active); }
+  .comp-label:first-of-type { margin-top:0; }
+
+  /* palette */
+  .swatches { display:grid; grid-template-columns:repeat(auto-fit,minmax(132px,1fr)); gap:2px; }
+  .sw { padding:14px 14px 12px; aspect-ratio:1/.62; display:flex; flex-direction:column; justify-content:space-between; border:1px solid var(--hair); }
+  .sw .nm { font-size:11px; letter-spacing:.06em; text-transform:uppercase; font-family:"Saira Semi Condensed",sans-serif; font-weight:600; }
+  .sw .hx { font-size:11px; }
+  .lamp { display:flex; gap:18px; margin-top:16px; flex-wrap:wrap; }
+  .lamp div { display:flex; align-items:center; gap:9px; font-size:12px; color:var(--dim); }
+  .dot { width:10px; height:10px; border-radius:50%; box-shadow:0 0 0 4px color-mix(in srgb,currentColor 14%,transparent); }
+
+  /* type */
+  .type-row { display:grid; grid-template-columns:120px 1fr; gap:24px; padding:18px 0; border-top:1px solid var(--hair); align-items:baseline; }
+  .type-row:first-of-type { border-top:none; }
+  .type-row .role { color:var(--label); }
+  .type-row .role small { display:block; font-family:"IBM Plex Mono",monospace; font-size:11px; margin-top:4px; color:var(--label); text-transform:none; letter-spacing:0; }
+  .spec-display { font-family:"Saira Semi Condensed",sans-serif; font-weight:600; font-size:34px; line-height:1.05; }
+  .spec-body { font-size:17px; max-width:54ch; }
+  .spec-mono { font-family:"IBM Plex Mono",monospace; font-size:15px; }
+
+  /* A — status & flow */
+  .flowrail { display:flex; align-items:center; gap:0; background:var(--panel); border:1px solid var(--hair); border-bottom:none; padding:12px 18px; }
+  .stn { display:flex; align-items:center; gap:8px; font-family:"Saira Semi Condensed",sans-serif; text-transform:uppercase; letter-spacing:.1em; font-size:12px; font-weight:600; }
+  .stn .o { width:9px; height:9px; border-radius:50%; border:1.5px solid var(--label); }
+  .stn.done .o { background:var(--ready); border-color:var(--ready); }
+  .stn.active .o { background:var(--active); border-color:var(--active); box-shadow:0 0 0 4px color-mix(in srgb,var(--active) 20%,transparent); }
+  .stn.active { color:var(--active); }
+  .stn.todo { color:var(--label); }
+  .seg { width:30px; height:1px; background:var(--hair); margin:0 12px; }
+  .flowrail .spacer { flex:1; }
+  .flowrail .pos { font-family:"IBM Plex Mono",monospace; font-size:12px; color:var(--dim); }
+  .strip { display:grid; grid-template-columns:auto auto 1fr auto; align-items:stretch; background:var(--panel); border:1px solid var(--hair); }
+  .cell { padding:13px 18px; border-right:1px solid var(--hair); display:flex; flex-direction:column; gap:5px; justify-content:center; }
+  .cell:last-child { border-right:none; }
+  .cell .k { font-family:"Saira Semi Condensed",sans-serif; text-transform:uppercase; letter-spacing:.14em; font-size:10px; color:var(--label); }
+  .cell .v { font-family:"IBM Plex Mono",monospace; font-size:14px; font-weight:500; }
+  .step-v { display:flex; align-items:baseline; gap:8px; }
+  .step-v .of { color:var(--label); font-size:12px; }
+  .gate-v { color:var(--active); display:flex; align-items:center; gap:8px; }
+  .pip { width:8px; height:8px; border-radius:50%; background:var(--active); box-shadow:0 0 0 4px color-mix(in srgb,var(--active) 18%,transparent); }
+  .trace { display:flex; align-items:flex-end; gap:3px; height:30px; padding-left:4px; }
+  .trace i { width:3px; background:var(--ready); opacity:.85; animation:tr 1.1s ease-in-out infinite; }
+  .trace i:nth-child(2){animation-delay:.08s} .trace i:nth-child(3){animation-delay:.16s} .trace i:nth-child(4){animation-delay:.24s}
+  .trace i:nth-child(5){animation-delay:.32s} .trace i:nth-child(6){animation-delay:.40s} .trace i:nth-child(7){animation-delay:.48s}
+  .trace i:nth-child(8){animation-delay:.56s} .trace i:nth-child(9){animation-delay:.64s} .trace i:nth-child(10){animation-delay:.72s} .trace i:nth-child(11){animation-delay:.80s}
+  @keyframes tr { 0%,100%{height:5px} 50%{height:26px} }
+  .activity-cell .v { color:var(--ready); }
+
+  /* B/C — gate + loop */
+  .panelrow { display:grid; grid-template-columns:1fr 1fr; gap:2px; }
+  .pcell { background:var(--panel); border:1px solid var(--hair); padding:18px; }
+  .pcell h3 { font-family:"Saira Semi Condensed",sans-serif; text-transform:uppercase; letter-spacing:.14em; font-size:11px; color:var(--label); margin:0 0 14px; }
+  .readout { display:flex; flex-direction:column; gap:9px; }
+  .ro { display:flex; justify-content:space-between; font-family:"IBM Plex Mono",monospace; font-size:13px; }
+  .ro .rk { color:var(--label); }
+  .ro .rv.bad { color:var(--block); } .ro .rv.warn { color:var(--active); } .ro .rv.ok { color:var(--ready); }
+  .btns { display:flex; gap:10px; flex-wrap:wrap; }
+  .btn { font-family:"Saira Semi Condensed",sans-serif; text-transform:uppercase; letter-spacing:.1em; font-weight:600; font-size:12px; padding:10px 16px; border-radius:2px; border:1px solid var(--hair); background:transparent; color:var(--text); cursor:pointer; }
+  .btn.primary { background:var(--ready); color:#06231C; border-color:transparent; }
+  [data-theme="light"] .btn.primary { color:#fff; }
+  .btn.danger { border-color:var(--block); color:var(--block); }
+  .btn.ghost { color:var(--label); }
+  .btn:focus-visible { outline:2px solid var(--here); outline-offset:2px; }
+  .gate-note { font-family:"IBM Plex Mono",monospace; font-size:11px; color:var(--label); margin:0 0 14px; line-height:1.5; }
+  .gate-note .lock { color:var(--active); }
+
+  /* D — report + findings */
+  .doc { display:grid; grid-template-columns:1fr 312px; background:var(--panel); border:1px solid var(--hair); }
+  .doc .body { padding:22px 24px; border-right:1px solid var(--hair); }
+  .doc .head { display:flex; align-items:center; gap:10px; margin-bottom:16px; }
+  .doc .fname { font-family:"IBM Plex Mono",monospace; font-size:12px; color:var(--label); }
+  .report { font-size:15.5px; line-height:1.7; }
+  .report p { margin:0 0 13px; }
+  .marked { border-bottom:2px solid var(--here); background:color-mix(in srgb,var(--here) 12%,transparent); padding:1px 2px; cursor:pointer; }
+  .marked:hover { background:color-mix(in srgb,var(--here) 24%,transparent); }
+  .finds { padding:20px 20px; background:var(--raised); }
+  .finds .ttl { font-family:"Saira Semi Condensed",sans-serif; text-transform:uppercase; letter-spacing:.14em; font-size:10px; color:var(--label); margin-bottom:16px; }
+  .find { border-left:2px solid var(--here); padding:0 0 4px 13px; margin-bottom:18px; }
+  .find .t { font-size:13.5px; line-height:1.4; }
+  .find .m { font-family:"IBM Plex Mono",monospace; font-size:11px; color:var(--label); margin-top:6px; }
+  .find .m .sev-high { color:var(--active); }
+  .find .a { display:flex; gap:14px; margin-top:9px; }
+  .find .a button { font-family:"Saira Semi Condensed",sans-serif; text-transform:uppercase; letter-spacing:.08em; font-size:11px; font-weight:600; background:none; border:none; color:var(--here); cursor:pointer; padding:0; }
+  .find .a button.ok { color:var(--ready); }
+  .find .a button:focus-visible { outline:2px solid var(--here); outline-offset:2px; }
+
+  /* E — send-back */
+  .sendback { display:flex; align-items:center; justify-content:space-between; gap:18px; background:var(--panel); border:1px solid var(--hair); border-top:none; padding:14px 18px; }
+  .sendback .sum { font-family:"IBM Plex Mono",monospace; font-size:12px; color:var(--label); }
+  .sendback .sum b { color:var(--text); }
+
+  .caption { color:var(--label); font-size:12px; margin-top:16px; max-width:70ch; line-height:1.6; }
+
+  @media (max-width:680px){ .panelrow,.type-row,.doc{grid-template-columns:1fr} .strip{grid-template-columns:1fr 1fr} .cell{border-right:none;border-bottom:1px solid var(--hair)} .doc .body{border-right:none;border-bottom:1px solid var(--hair)} .flowrail{flex-wrap:wrap;gap:8px} .seg{display:none} }
+  @media (prefers-reduced-motion:reduce){ .trace i{animation:none;height:14px} .stn.active .o{box-shadow:none} }
+</style>
+</head>
+<body>
+<header>
+  <div class="bar">
+    <span class="mark">AGENT<b>·</b>TERMINAL</span>
+    <span class="tick"></span>
+    <a class="back" href="index.html">← directions</a>
+    <button class="toggle" id="tg" aria-label="Toggle light and dark">◐ Dark</button>
+  </div>
+</header>
+
+<div class="wrap">
+  <div class="hero">
+    <div class="kicker"><span class="no">01 / TELEMETRY</span><span class="label">Mood study</span></div>
+    <h1>The flight director's console.</h1>
+    <p class="thesis">You don't type the work — the agent does. You <em>watch the instruments</em> and act when one of them asks for you. Every readout is precise, glanceable, and quiet until it matters.</p>
+  </div>
+
+  <section>
+    <div class="sec-head"><h2>Palette</h2><span class="meta mono">cool ink · signal lamps</span></div>
+    <div class="swatches">
+      <div class="sw" style="background:#0B0E14;color:#E6ECF3"><span class="nm">ink 900</span><span class="hx mono">#0B0E14</span></div>
+      <div class="sw" style="background:#12161F;color:#E6ECF3"><span class="nm">ink 800</span><span class="hx mono">#12161F</span></div>
+      <div class="sw" style="background:#1B212C;color:#E6ECF3"><span class="nm">raised</span><span class="hx mono">#1B212C</span></div>
+      <div class="sw" style="background:#8A97A8;color:#0B0E14"><span class="nm">mist 400</span><span class="hx mono">#8A97A8</span></div>
+      <div class="sw" style="background:#E6ECF3;color:#0B0E14"><span class="nm">mist 100</span><span class="hx mono">#E6ECF3</span></div>
+    </div>
+    <div class="lamp">
+      <div><span class="dot" style="background:#F2A53C;color:#F2A53C"></span><b style="color:var(--text);font-weight:500">Active</b> · <span class="mono">#F2A53C</span></div>
+      <div><span class="dot" style="background:#4FD6B8;color:#4FD6B8"></span><b style="color:var(--text);font-weight:500">Ready</b> · <span class="mono">#4FD6B8</span></div>
+      <div><span class="dot" style="background:#FF5C6C;color:#FF5C6C"></span><b style="color:var(--text);font-weight:500">Blocked</b> · <span class="mono">#FF5C6C</span></div>
+      <div><span class="dot" style="background:#5AA2FF;color:#5AA2FF"></span><b style="color:var(--text);font-weight:500">Here</b> · <span class="mono">#5AA2FF</span></div>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head"><h2>Type</h2><span class="meta mono">condensed labels · plex body · plex data</span></div>
+    <div class="type-row"><div class="role label">Display<small>Saira Semi Cond.</small></div><div class="spec-display">Step 3 of 4 — Review</div></div>
+    <div class="type-row"><div class="role label">Body<small>IBM Plex Sans</small></div><div class="spec-body">The agent is working the review step. Nothing needs you yet — the gate stays closed until it goes quiet.</div></div>
+    <div class="type-row"><div class="role label">Data<small>IBM Plex Mono</small></div><div class="spec-mono">iter 03 · sev high · 2 open · verdict: changes-requested</div></div>
+  </section>
+
+  <section>
+    <div class="sec-head"><h2>The mockup</h2><span class="meta mono">same five components · agent at Review</span></div>
+
+    <div class="comp-label">A · Status &amp; flow <span class="mono" style="color:var(--label);font-weight:400;letter-spacing:0;text-transform:none">§22.3</span></div>
+    <div class="flowrail">
+      <span class="stn done"><span class="o"></span>Plan</span><span class="seg"></span>
+      <span class="stn done"><span class="o"></span>Code</span><span class="seg"></span>
+      <span class="stn active"><span class="o"></span>Review</span><span class="seg"></span>
+      <span class="stn todo"><span class="o"></span>Ship</span>
+      <span class="spacer"></span><span class="pos">step 3 / 4</span>
+    </div>
+    <div class="strip">
+      <div class="cell"><span class="k">Step</span><span class="v step-v">3<span class="of">/ 4</span> · Review</span></div>
+      <div class="cell"><span class="k">Gate</span><span class="v gate-v"><span class="pip"></span>Awaiting you</span></div>
+      <div class="cell activity-cell"><span class="k">Agent</span><span class="v">Active <span class="trace" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span></span></div>
+      <div class="cell"><span class="k">Loop</span><span class="v">iter 03 · 2 open</span></div>
+    </div>
+
+    <div class="comp-label">B · Gate &nbsp;&nbsp; C · Loop progress <span class="mono" style="color:var(--label);font-weight:400;letter-spacing:0;text-transform:none">§19.3 · §22.3</span></div>
+    <div class="panelrow">
+      <div class="pcell">
+        <h3>Review gate</h3>
+        <p class="gate-note">Review came back. <span class="lock">⊘ Locked while the agent is active</span> — won't inject over a running process; unlocks when it goes quiet.</p>
+        <div class="btns"><button class="btn primary">Approve gate</button><button class="btn danger">Request changes</button><button class="btn ghost">Open report</button></div>
+      </div>
+      <div class="pcell">
+        <h3>Loop progress</h3>
+        <div class="readout">
+          <div class="ro"><span class="rk">iteration</span><span class="rv">03</span></div>
+          <div class="ro"><span class="rk">severity cycle</span><span class="rv warn">high</span></div>
+          <div class="ro"><span class="rk">open findings</span><span class="rv warn">2</span></div>
+          <div class="ro"><span class="rk">last verdict</span><span class="rv bad">changes requested</span></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="comp-label">D · Captured report + findings <span class="mono" style="color:var(--label);font-weight:400;letter-spacing:0;text-transform:none">§21 · §16.8</span></div>
+    <div class="doc">
+      <div class="body">
+        <div class="head"><span class="label">Captured report</span><span class="fname">review.md · iter 03</span></div>
+        <div class="report">
+          <p>The scanner now carves tool calls out of the report body, so a tool-heavy turn yields clean prose plus findings rather than a blob.</p>
+          <p>However, the stability frontier still <span class="marked">re-reads scrollback on every quiet pause</span>, which on a long session is measurable overhead. A second pass also <span class="marked">drops findings under the minimum-character floor</span> without flagging them.</p>
+          <p>Command-output capture is unchanged and behaves correctly across the test session.</p>
+        </div>
+      </div>
+      <div class="finds">
+        <div class="ttl">Findings — kept for send-back</div>
+        <div class="find"><div class="t">Unbounded scrollback re-scan each quiet pause.</div><div class="m">L42 · <span class="sev-high">severity high</span> · §15.3</div><div class="a"><button>Add to todo</button><button>Insert at cursor</button></div></div>
+        <div class="find"><div class="t">Sub-floor findings dropped silently — needs a flag.</div><div class="m">L44 · severity med · §15.7</div><div class="a"><button>Add to todo</button><button class="ok">Mark resolved</button></div></div>
+      </div>
+    </div>
+
+    <div class="comp-label">E · Send-back <span class="mono" style="color:var(--label);font-weight:400;letter-spacing:0;text-transform:none">§19.4</span></div>
+    <div class="sendback">
+      <span class="sum"><b>2 findings</b> marked · compose into one request, or send verbatim</span>
+      <div class="btns"><button class="btn ghost">Compose with agent</button><button class="btn danger">Request changes</button><button class="btn primary">Approve gate</button></div>
+    </div>
+
+    <p class="caption">Five components, one glance each. The activity trace moves only while the agent is live — flat means quiet, which is also the cue that the gate is yours to act on. The “Here” blue marks provenance: the active step on the rail, and the captured phrase behind each finding (§16.8). Hide the strip for deep work; the lamps are the only thing that pulls your eye back.</p>
+  </section>
+</div>
+
+<script>
+  const tg=document.getElementById('tg'), root=document.documentElement;
+  function set(t){ root.setAttribute('data-theme',t); tg.textContent=(t==='dark'?'◐ Dark':'◑ Light'); }
+  if(matchMedia('(prefers-color-scheme:light)').matches) set('light');
+  tg.addEventListener('click',()=>set(root.getAttribute('data-theme')==='dark'?'light':'dark'));
+</script>
+</body>
+</html>

@@ -1,17 +1,28 @@
-// Todo tab (§16.3 / §16.4): persistent, repo-scoped todos with an active list, a
-// collapsible Done section, manual add, reorder (buttons + HTML5 drag), edit-in-place,
-// and the mid-edit repo-swap deferral. Owns all todo state (`todos`, `editingId`,
-// `pendingRepoKey`, `currentRepoKey`); the Capture tab reaches it only through the
-// narrow TodoSink surface, so the two tabs share state through one owner, not a scope.
+// Todo tab (§24.1 mockup-exact / §16.3 / §16.4 / §24.2.1): a flat, repo-scoped list of
+// todos in the converged mockup's language — a checkbox-circle (.chk) that toggles done,
+// a body (.tx text + .src provenance), and a row-action cluster (reorder ↑/↓, edit, Send,
+// delete) on the right. Owns the todo state (`todos`, `currentRepoKey`, edit/delete render
+// state); the Capture tab reaches it only through the narrow TodoSink surface, so the two
+// tabs share state through one owner, not a scope.
+//
+// The §24.2.1 restorations are re-skinned into this card language, not the old chrome:
+//  • Manual add (§16.4): a top add-row → `todoAdd {type:'manual'}`.
+//  • Reorder (§16.4): ↑/↓ buttons (keyboard/a11y path) + HTML5 drag → `todoReorder`. The
+//    full display order is sent so the flat list (done rows inline) stays stable.
+//  • Edit-in-place (§16.3): the better affordance — the `.tx` becomes contenteditable in
+//    place (no textarea-box swap) with Save/Cancel; a mid-edit repo swap is deferred.
+//  • Delete (§16.4): two-step + undoable — × → Confirm/Cancel → a deferred `todoDelete`
+//    behind a Deleted/Undo row for TODO_UNDO_MS, capturing the item's own repoKey.
 
 import type { MonitorApi, TodoItem, TodoSource } from '../../shared/ipc';
-import { doInject, TODO_UNDO_MS } from './paneActions';
+import { TODO_UNDO_MS, type DoInject } from './paneActions';
 
 /** The slice the Capture tab needs to push a capture into the list and undo it (§16.2). */
 export interface TodoSink {
   currentRepoKey(): string | null;
   /** Add from a capture action; returns the new item (for Undo) or null. Refreshes count + list. */
   addFromCapture(text: string, source: TodoSource): Promise<TodoItem | null>;
+  /** Undo a capture-driven add (§16.2): delete the item that was just added. */
   deleteTodo(repoKey: string, id: string): Promise<void>;
 }
 
@@ -29,21 +40,33 @@ export interface TodoTabDeps {
     MonitorApi,
     'todoList' | 'todoAdd' | 'todoUpdate' | 'todoReorder' | 'todoSetStatus' | 'todoDelete'
   >;
+  /** Inject seam (§16.2 Send) — injected so the tab never reaches the window.monitor global. */
+  doInject: DoInject;
+}
+
+/** Provenance line for a todo: where it came from, in the mockup's `.src` voice. */
+function provenanceText(source: TodoSource | undefined): string {
+  if (!source || source.type === 'manual') return 'manual';
+  return `from ${source.type}`;
 }
 
 export function createTodoTab(deps: TodoTabDeps): TodoTab {
-  const { todoListEl, todoCountEl, monitor } = deps;
+  const { todoListEl, todoCountEl, monitor, doInject } = deps;
   let currentRepoKey: string | null = null;
   let todos: TodoItem[] = [];
-  // A repo swap is blocked while a todo edit is open (§16.3); the pending key is
-  // applied once the edit resolves so the in-flight edit writes to its own repo.
+  // A repo swap is blocked while a todo edit is open (§16.3); the pending key is applied
+  // once the edit resolves so the in-flight edit writes to its own repo.
   let editingId: string | null = null;
   let pendingRepoKey: string | null = null;
-  // Delete is a two-step, undoable action (§16.4): × asks to confirm; confirming hides the
-  // row behind an Undo for TODO_UNDO_MS and only then calls todoDelete. Both are render
-  // state (survive a re-render), and the actual delete is deferred so Undo needs no re-add.
+  // Delete is a two-step, undoable action (§16.4): × → confirm; confirming hides the row
+  // behind an Undo for TODO_UNDO_MS and only then calls todoDelete. Both are render state
+  // (survive a re-render); the actual delete is deferred so Undo needs no re-add.
   let confirmingDeleteId: string | null = null;
   const pendingDelete = new Map<string, ReturnType<typeof setTimeout>>();
+  // Focus is moved to the contextually-correct control after a re-render that destroys the
+  // control the user just activated (edit/delete/confirm), so a keyboard user is never dropped
+  // to <body> (WCAG 2.4.3). Consumed once per render.
+  let focusAfterRender: (() => void) | null = null;
 
   function updateTodoCount(): void {
     todoCountEl.textContent = String(todos.filter((t) => t.status === 'active').length);
@@ -86,73 +109,138 @@ export function createTodoTab(deps: TodoTabDeps): TodoTab {
     }
   }
 
-  function todoInjectActions(t: TodoItem): HTMLElement {
+  function actionButton(cls: string, label: string, ariaLabel: string, onClick: () => void): HTMLButtonElement {
+    const b = document.createElement('button');
+    b.className = cls;
+    b.textContent = label;
+    b.setAttribute('aria-label', ariaLabel);
+    b.addEventListener('click', onClick);
+    return b;
+  }
+
+  const activeOf = (ordered: TodoItem[]): TodoItem[] => ordered.filter((t) => t.status === 'active');
+
+  /** Persist a new ACTIVE ordering while leaving every done row in its display slot — the
+   *  active ids are slotted back into the positions actives occupied in the full order, so a
+   *  reorder never shoves an inline done row (§16.4). */
+  function commitActiveOrder(ordered: TodoItem[], newActive: TodoItem[]): void {
+    if (!currentRepoKey) return;
+    let k = 0;
+    const ids = ordered.map((t) => (t.status === 'active' ? newActive[k++].id : t.id));
+    // On a rejected invoke (main restart) keep the current order; never an unhandled rejection.
+    void monitor.todoReorder(currentRepoKey, ids).then(setTodos).catch(() => {});
+  }
+
+  /** Move an active item one slot up/down within the active run (skipping done rows). */
+  function moveActive(ordered: TodoItem[], item: TodoItem, dir: -1 | 1): void {
+    const active = activeOf(ordered);
+    const i = active.findIndex((t) => t.id === item.id);
+    const j = i + dir;
+    if (i < 0 || j < 0 || j >= active.length) return;
+    [active[i], active[j]] = [active[j], active[i]];
+    commitActiveOrder(ordered, active);
+  }
+
+  /** Re-render and move focus to the row's control matching `sel` (a11y, §WCAG 2.4.3). */
+  function rerenderFocusing(id: string, sel: string): void {
+    focusAfterRender = () => rowEl(id)?.querySelector<HTMLElement>(sel)?.focus();
+    renderTodos();
+  }
+
+  function renderActions(t: TodoItem, ordered: TodoItem[]): HTMLElement {
     const actions = document.createElement('div');
-    actions.className = 'capture-actions';
-    // Active → completing the todo marks it done; done → re-copy moves it back (§16.4).
-    const nextStatus = t.status === 'active' ? 'done' : 'active';
-    const insert = document.createElement('button');
-    insert.className = 'todo-insert';
-    insert.textContent = 'Insert into agent';
-    insert.addEventListener('click', async () => {
-      doInject(t.text, false);
-      setTodos(await monitor.todoSetStatus(t.repoKey, t.id, nextStatus));
-    });
-    const submit = document.createElement('button');
-    submit.className = 'todo-submit';
-    submit.textContent = 'Insert & submit';
-    submit.addEventListener('click', async () => {
-      doInject(t.text, true);
-      setTodos(await monitor.todoSetStatus(t.repoKey, t.id, nextStatus));
-    });
-    actions.append(insert, submit);
+    actions.className = 'todo-actions';
+
+    // Editing: the `.tx` is contenteditable in place; the cluster is Save/Cancel only.
+    if (t.id === editingId) {
+      actions.append(
+        actionButton('todo-save pill sm signal', 'Save', 'Save todo', () => void commitEdit(t)),
+        actionButton('todo-cancel linkbtn', 'Cancel', 'Cancel edit', () =>
+          rerenderFocusingAfterResolve(t.id, () => resolveEdit()),
+        ),
+      );
+      return actions;
+    }
+
+    if (t.status === 'active') {
+      const active = activeOf(ordered);
+      const ai = active.findIndex((x) => x.id === t.id);
+      const up = actionButton('todo-up iconbtn', '↑', 'Move up', () => moveActive(ordered, t, -1));
+      up.disabled = ai <= 0;
+      const down = actionButton('todo-down iconbtn', '↓', 'Move down', () => moveActive(ordered, t, 1));
+      down.disabled = ai === active.length - 1;
+      const edit = actionButton('todo-edit iconbtn', '✎', 'Edit todo', () => {
+        editingId = t.id;
+        rerenderFocusing(t.id, '.tx');
+      });
+      // Send pastes the todo into the agent's input WITHOUT submitting (§9.3 submit:false /
+      // §16.2 Insert), then moves focus to the terminal so the user can edit or augment it
+      // before submitting themselves (§24.2.1).
+      const send = actionButton('todo-send pill sm signal', 'Send', 'Send todo to agent', () =>
+        doInject(t.text, false),
+      );
+      actions.append(up, down, edit, send);
+    }
+
+    if (t.id === confirmingDeleteId) {
+      actions.append(
+        actionButton('todo-delete-confirm pill sm', 'Confirm delete?', 'Confirm delete', () =>
+          beginPendingDelete(t),
+        ),
+        actionButton('todo-delete-cancel linkbtn', 'Cancel', 'Cancel delete', () => {
+          confirmingDeleteId = null;
+          rerenderFocusing(t.id, '.todo-delete');
+        }),
+      );
+    } else {
+      actions.append(
+        actionButton('todo-delete iconbtn', '×', 'Delete todo', () => {
+          confirmingDeleteId = t.id;
+          rerenderFocusing(t.id, '.todo-delete-confirm');
+        }),
+      );
+    }
     return actions;
   }
 
-  // Editing is render state, not a DOM mutation, so a mid-edit re-render (e.g. the
-  // blocked-swap notice) preserves the open editor (§16.3).
-  function renderEditing(t: TodoItem): HTMLElement {
-    const item = document.createElement('div');
-    item.className = 'todo-item editing';
-    item.dataset.todoId = t.id;
-    const textarea = document.createElement('textarea');
-    textarea.className = 'todo-edit-area';
-    textarea.value = t.text;
-    const actions = document.createElement('div');
-    actions.className = 'todo-actions';
-    const save = document.createElement('button');
-    save.className = 'todo-save';
-    save.textContent = 'Save';
-    save.addEventListener('click', async () => {
-      // The edit targets the list's own repo (t.repoKey), not the live cwd (§16.3).
-      const list = await monitor.todoUpdate(t.repoKey, t.id, textarea.value);
-      todos = list;
-      updateTodoCount();
-      resolveEdit();
-    });
-    const cancel = document.createElement('button');
-    cancel.className = 'todo-cancel';
-    cancel.textContent = 'Cancel';
-    cancel.addEventListener('click', () => resolveEdit());
-    actions.append(save, cancel);
-    item.append(textarea, actions);
-    return item;
+  /** Run a resolve that re-renders, then focus `.todo-edit` of the row if it still exists. */
+  function rerenderFocusingAfterResolve(id: string, resolve: () => void): void {
+    focusAfterRender = () => rowEl(id)?.querySelector<HTMLElement>('.todo-edit')?.focus();
+    resolve();
+  }
+
+  async function commitEdit(t: TodoItem, el?: HTMLElement): Promise<void> {
+    const tx = (el ?? rowEl(t.id))?.querySelector<HTMLElement>('.tx');
+    const next = (tx?.textContent ?? t.text).trim();
+    if (!next) return; // empty-guard (matches manual add): never persist a blank row; stay in edit
+    // The edit targets the list's own repo (t.repoKey), not the live cwd (§16.3).
+    let updated: TodoItem[];
+    try {
+      updated = await monitor.todoUpdate(t.repoKey, t.id, next);
+    } catch {
+      return; // IPC failure (main restart): keep the user in the edit state, list unchanged.
+    }
+    todos = updated;
+    updateTodoCount();
+    focusAfterRender = () => rowEl(t.id)?.querySelector<HTMLElement>('.todo-edit')?.focus();
+    resolveEdit();
+  }
+
+  function rowEl(id: string): HTMLElement | null {
+    return todoListEl.querySelector<HTMLElement>(`.todo[data-todo-id="${id}"]`);
   }
 
   // A confirmed-but-not-yet-committed delete: the row is an Undo affordance for the window.
   function renderPendingDelete(t: TodoItem): HTMLElement {
-    const item = document.createElement('div');
-    item.className = 'todo-item pending-delete';
-    item.dataset.todoId = t.id;
+    const row = document.createElement('div');
+    row.className = 'todo pending-delete';
+    row.dataset.todoId = t.id;
     const note = document.createElement('span');
     note.className = 'deleted-note';
     note.textContent = 'Deleted';
-    const undo = document.createElement('button');
-    undo.className = 'todo-undo';
-    undo.textContent = 'Undo';
-    undo.addEventListener('click', () => cancelPendingDelete(t.id));
-    item.append(note, undo);
-    return item;
+    const undo = actionButton('todo-undo linkbtn', 'Undo', 'Undo delete', () => cancelPendingDelete(t.id));
+    row.append(note, undo);
+    return row;
   }
 
   function beginPendingDelete(t: TodoItem): void {
@@ -163,10 +251,11 @@ export function createTodoTab(deps: TodoTabDeps): TodoTab {
       t.id,
       setTimeout(() => {
         pendingDelete.delete(t.id);
-        void monitor.todoDelete(t.repoKey, t.id).then(setTodos);
+        // On a rejected invoke (main restart) keep the current list; never an unhandled rejection.
+        void monitor.todoDelete(t.repoKey, t.id).then(setTodos).catch(() => {});
       }, TODO_UNDO_MS),
     );
-    renderTodos();
+    rerenderFocusing(t.id, '.todo-undo');
   }
 
   function cancelPendingDelete(id: string): void {
@@ -176,90 +265,64 @@ export function createTodoTab(deps: TodoTabDeps): TodoTab {
     renderTodos(); // restored from `todos` — the server delete never ran
   }
 
-  function renderTodoItem(t: TodoItem, ordered: TodoItem[], index: number): HTMLElement {
+  function renderTodoRow(t: TodoItem, ordered: TodoItem[]): HTMLElement {
     if (pendingDelete.has(t.id)) return renderPendingDelete(t);
-    if (t.id === editingId) return renderEditing(t);
 
-    const item = document.createElement('div');
-    item.className = `todo-item${t.status === 'done' ? ' done' : ''}`;
-    item.dataset.todoId = t.id;
+    const done = t.status === 'done';
+    const row = document.createElement('div');
+    row.className = `todo${done ? ' done' : ''}`;
+    row.dataset.todoId = t.id;
+    row.draggable = t.status === 'active' && editingId === null;
 
-    const handle = document.createElement('span');
-    handle.className = 'drag-handle';
-    handle.setAttribute('aria-hidden', 'true');
-    handle.textContent = '⠿';
-    item.draggable = t.status === 'active';
+    const chk = document.createElement('button');
+    chk.className = 'chk';
+    chk.setAttribute('role', 'checkbox');
+    chk.setAttribute('aria-checked', String(done));
+    chk.setAttribute('aria-label', done ? 'Mark todo active' : 'Mark todo done');
+    chk.addEventListener('click', async () => {
+      try {
+        setTodos(await monitor.todoSetStatus(t.repoKey, t.id, done ? 'active' : 'done'));
+      } catch {
+        // IPC failure (main restart): leave the UI unchanged, never an unhandled rejection.
+      }
+    });
 
-    const text = document.createElement('span');
-    text.className = 'todo-text';
-    text.textContent = t.text;
-
-    const actions = document.createElement('div');
-    actions.className = 'todo-actions';
-
-    if (t.status === 'active') {
-      const up = document.createElement('button');
-      up.className = 'todo-up';
-      up.textContent = '↑';
-      up.setAttribute('aria-label', 'Move up');
-      up.disabled = index === 0;
-      up.addEventListener('click', () => reorderBy(ordered, index, index - 1));
-      const down = document.createElement('button');
-      down.className = 'todo-down';
-      down.textContent = '↓';
-      down.setAttribute('aria-label', 'Move down');
-      down.disabled = index === ordered.length - 1;
-      down.addEventListener('click', () => reorderBy(ordered, index, index + 1));
-      const edit = document.createElement('button');
-      edit.className = 'todo-edit';
-      edit.textContent = 'Edit';
-      edit.addEventListener('click', () => {
-        editingId = t.id;
-        renderTodos();
+    const body = document.createElement('div');
+    body.className = 'body';
+    const tx = document.createElement('div');
+    tx.className = 'tx';
+    tx.textContent = t.text;
+    if (t.id === editingId) {
+      tx.contentEditable = 'true';
+      tx.tabIndex = 0; // make it programmatically focusable (a11y focus move on enter-edit)
+      tx.classList.add('editing');
+      // Name the in-place editor for assistive tech (the ✎ that named the action is gone).
+      tx.setAttribute('role', 'textbox');
+      tx.setAttribute('aria-label', 'Edit todo text');
+      tx.setAttribute('aria-multiline', 'true');
+      tx.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && !e.shiftKey) {
+          e.preventDefault();
+          void commitEdit(t, row);
+        } else if (e.key === 'Escape') {
+          e.preventDefault();
+          // Re-render with a focus target (the row's edit button) so Escape-cancel doesn't drop
+          // focus to <body> — matches the Cancel button's behavior (WCAG 2.4.3, §16.4).
+          rerenderFocusingAfterResolve(t.id, () => resolveEdit());
+        }
       });
-      actions.append(up, down, edit);
     }
+    const src = document.createElement('div');
+    src.className = 'src';
+    src.textContent = provenanceText(t.source);
+    body.append(tx, src);
 
-    if (t.id === confirmingDeleteId) {
-      const confirm = document.createElement('button');
-      confirm.className = 'todo-delete-confirm';
-      confirm.textContent = 'Confirm delete?';
-      confirm.addEventListener('click', () => beginPendingDelete(t));
-      const cancel = document.createElement('button');
-      cancel.className = 'todo-delete-cancel';
-      cancel.textContent = 'Cancel';
-      cancel.addEventListener('click', () => {
-        confirmingDeleteId = null;
-        renderTodos();
-      });
-      actions.append(confirm, cancel);
-    } else {
-      const del = document.createElement('button');
-      del.className = 'todo-delete dismiss';
-      del.textContent = '×';
-      del.setAttribute('aria-label', 'Delete todo');
-      del.addEventListener('click', () => {
-        confirmingDeleteId = t.id;
-        renderTodos();
-      });
-      actions.append(del);
-    }
-
-    item.append(handle, text, todoInjectActions(t), actions);
-    return item;
+    row.append(chk, body, renderActions(t, ordered));
+    return row;
   }
 
-  function reorderBy(ordered: TodoItem[], from: number, to: number): void {
-    if (to < 0 || to >= ordered.length || !currentRepoKey) return;
-    const ids = ordered.map((t) => t.id);
-    const [moved] = ids.splice(from, 1);
-    ids.splice(to, 0, moved);
-    void monitor.todoReorder(currentRepoKey, ids).then(setTodos);
-  }
-
-  // Manual-add row + active list + collapsible Done section (§16.4).
   function renderTodos(): void {
-    todoListEl.innerHTML = '';
+    todoListEl.replaceChildren();
 
     if (pendingRepoKey !== null) {
       const notice = document.createElement('div');
@@ -268,62 +331,80 @@ export function createTodoTab(deps: TodoTabDeps): TodoTab {
       todoListEl.appendChild(notice);
     }
 
+    // Manual add (§16.4): a hand-write row → todoAdd {type:'manual'}.
     const addRow = document.createElement('div');
     addRow.className = 'todo-add';
     const input = document.createElement('textarea');
     input.id = 'todo-new';
     input.className = 'todo-new';
+    input.rows = 1;
     input.setAttribute('aria-label', 'New todo');
+    input.placeholder = 'Add a todo…';
     const addBtn = document.createElement('button');
     addBtn.id = 'todo-add-btn';
+    addBtn.className = 'pill sm signal';
     addBtn.textContent = 'Add';
-    addBtn.addEventListener('click', async () => {
+    const submitAdd = async (): Promise<void> => {
       const text = input.value.trim();
       if (!text || !currentRepoKey) return;
-      setTodos(await monitor.todoAdd(currentRepoKey, text, { type: 'manual' }));
+      let list: TodoItem[];
+      try {
+        list = await monitor.todoAdd(currentRepoKey, text, { type: 'manual' });
+      } catch {
+        return; // IPC failure (main restart): keep the typed text and list unchanged.
+      }
+      setTodos(list);
       input.value = '';
+    };
+    addBtn.addEventListener('click', () => void submitAdd());
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        void submitAdd();
+      }
     });
     addRow.append(input, addBtn);
     todoListEl.appendChild(addRow);
 
-    const active = todos.filter((t) => t.status === 'active').sort((a, b) => a.order - b.order);
-    const activeList = document.createElement('div');
-    activeList.className = 'todo-active';
-    active.forEach((t, i) => activeList.appendChild(renderTodoItem(t, active, i)));
-    todoListEl.appendChild(activeList);
+    const list = document.createElement('div');
+    list.className = 'todos';
+    // One flat list in stored order; done rows render inline (dimmed), not in a section.
+    const ordered = [...todos].sort((a, b) => a.order - b.order);
+    ordered.forEach((t) => list.appendChild(renderTodoRow(t, ordered)));
+    todoListEl.appendChild(list);
 
-    const done = todos.filter((t) => t.status === 'done').sort((a, b) => a.order - b.order);
-    const doneSection = document.createElement('details');
-    doneSection.className = 'todo-done';
-    const summary = document.createElement('summary');
-    summary.textContent = `Done (${done.length})`;
-    doneSection.appendChild(summary);
-    done.forEach((t) => doneSection.appendChild(renderTodoItem(t, done, 0)));
-    todoListEl.appendChild(doneSection);
+    wireDragReorder(list, ordered);
 
-    wireDragReorder(activeList, active);
+    const focus = focusAfterRender;
+    focusAfterRender = null;
+    if (focus) focus();
   }
 
-  // HTML5 drag reorder of the active list (§16.4); the up/down buttons are the
-  // keyboard/a11y path. The reordered ids persist via todo:reorder.
-  // TODO(dylan): pointer drag is exercised only in the §F e2e (plan PR5 5c) — jsdom
-  // has no layout/DnD; the keyboard reorder path is unit-tested. Recorded gap.
+  // HTML5 drag reorder of the active rows (§16.4); the ↑/↓ buttons are the keyboard/a11y
+  // path. The reordered ids persist via todo:reorder. Reorders within the active run only, so
+  // dropping near an inline done row never shoves it (§16.4).
   function wireDragReorder(list: HTMLElement, ordered: TodoItem[]): void {
     let dragId: string | null = null;
     list.addEventListener('dragstart', (e) => {
-      dragId = (e.target as HTMLElement).closest<HTMLElement>('.todo-item')?.dataset.todoId ?? null;
+      dragId = (e.target as HTMLElement).closest<HTMLElement>('.todo')?.dataset.todoId ?? null;
     });
     list.addEventListener('dragover', (e) => e.preventDefault());
     list.addEventListener('drop', (e) => {
-      const targetId = (e.target as HTMLElement).closest<HTMLElement>('.todo-item')?.dataset.todoId;
+      const targetId = (e.target as HTMLElement).closest<HTMLElement>('.todo')?.dataset.todoId;
       if (!dragId || !targetId || dragId === targetId) return;
-      const ids = ordered.map((t) => t.id);
-      const from = ids.indexOf(dragId);
-      const to = ids.indexOf(targetId);
+      const active = activeOf(ordered);
+      const from = active.findIndex((t) => t.id === dragId);
+      const to = active.findIndex((t) => t.id === targetId);
       if (from < 0 || to < 0) return;
-      reorderBy(ordered, from, to);
+      const [moved] = active.splice(from, 1);
+      active.splice(to, 0, moved);
+      commitActiveOrder(ordered, active);
     });
   }
+
+  // Render the panel immediately so the manual-add row is present from mount, before any repo
+  // key is known (refresh() is repo-gated; without this the Todo tab is blank until OSC 7).
+  renderTodos();
 
   return {
     onRepoChanged,

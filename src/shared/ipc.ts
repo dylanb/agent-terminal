@@ -20,6 +20,7 @@ export const CH = {
   monitorCommands: 'monitor:commands',
   monitorCommandsChanged: 'monitor:commandsChanged',
   monitorCaptureCommandText: 'monitor:captureCommandText',
+  captureLast: 'capture:last',
   monitorDismiss: 'monitor:dismiss',
   monitorDismissAll: 'monitor:dismissAll',
   monitorLearnChrome: 'monitor:learnChrome',
@@ -34,6 +35,8 @@ export const CH = {
   todoReorder: 'todo:reorder',
   todoSetStatus: 'todo:setStatus',
   todoDelete: 'todo:delete',
+  viewerTree: 'viewer:tree',
+  viewerRead: 'viewer:read',
 } as const;
 
 /** Action-window tabs (§16.1). */
@@ -45,12 +48,19 @@ export type TabId = 'capture' | 'todo';
  * Carries no sessionId: these are app-wide, not per-session (deliberate §16.6
  * exception to the §6 "every payload carries sessionId" rule).
  */
+export type Theme = 'light' | 'dark';
+
 export interface UiSettings {
   splitRatio: number;
   lastTab: TabId;
+  theme: Theme;
+  /** Artifact viewer tree-pane width in px (§20.2), drag/keyboard-resizable & persisted. */
+  artifactTreeWidth: number;
+  /** Full-screen tree-popout width in px (§20.2); absent until set — default is 30% of the viewport. */
+  artifactFullscreenTreeWidth?: number;
 }
 
-export const DEFAULT_UI_SETTINGS: UiSettings = { splitRatio: 0.65, lastTab: 'capture' };
+export const DEFAULT_UI_SETTINGS: UiSettings = { splitRatio: 0.65, lastTab: 'capture', theme: 'light', artifactTreeWidth: 248 };
 
 export interface UiSetSettingsMsg {
   settings: Partial<UiSettings>;
@@ -228,6 +238,12 @@ export interface CommandCaptureResult {
   truncated: boolean;
 }
 
+/** "Capture last report" (§21.1): run report-detection on demand; resolves to the single
+ *  latest report + findings (replacing the prior capture), or [] when none is detected. */
+export interface CaptureLastMsg {
+  sessionId: SessionId;
+}
+
 /** Dismiss a captured event; dismissing a `report` cascades to its findings (§15.6 / v2.6). */
 export interface DismissMsg {
   sessionId: SessionId;
@@ -317,6 +333,57 @@ export interface ChannelPayloads {
 
 export type SendChannel = keyof ChannelPayloads;
 
+// ---- Artifact viewer (§20.1/§20.2) ----
+
+/** Per-file provenance tags (D8): tracked-but-changed in the working tree, under the
+ *  agent-loop, or part of the current PR. Empty/omitted when none apply. */
+export type ArtifactProvenance = 'changed' | 'loop' | 'pr';
+
+/** One node of the hierarchical artifact tree (§20.1). A directory carries `children`;
+ *  a file carries its `provenance` tags. `relPath` is unique within a tree and is the
+ *  id the renderer passes back to `viewer:read`. */
+export interface ArtifactNode {
+  name: string;
+  relPath: string;
+  kind: 'file' | 'dir';
+  children?: ArtifactNode[];
+  provenance?: ArtifactProvenance[];
+}
+
+/** Curated (loop ∪ PR ∪ working-tree changes) vs. the whole repo (D8). */
+export type ArtifactScope = 'curated' | 'repo';
+
+export interface ArtifactTree {
+  /** Absolute discovery root: the repo root, or the cwd when outside a repo. */
+  root: string;
+  /** False outside a git repo — the tree is the whole cwd dir, no curated scope/provenance. */
+  isRepo: boolean;
+  scope: ArtifactScope;
+  nodes: ArtifactNode[];
+}
+
+export type ViewerFileKind = 'markdown' | 'code';
+
+export interface ViewerFile {
+  relPath: string;
+  name: string;
+  kind: ViewerFileKind;
+  lang?: string;
+  body: string;
+  /** 1-based current-file lines added/modified vs HEAD (code files in a repo; §20.2). Absent when none. */
+  changedLines?: number[];
+}
+
+export interface ViewerTreeMsg {
+  sessionId: SessionId;
+  scope: ArtifactScope;
+}
+
+export interface ViewerReadMsg {
+  sessionId: SessionId;
+  relPath: string;
+}
+
 // ---- Preload-exposed API surfaces (§6) ----
 
 export interface TermApi {
@@ -334,15 +401,21 @@ export interface MonitorApi {
   onUpdate(cb: (msg: MonitorUpdateMsg) => void): void;
   onExit(cb: (msg: PtyExitMsg) => void): void;
   replay(): Promise<MonitorEvent[]>;
-  /** The agent's current repo (§16.3), or null before the first OSC 7. Queried on mount
-   *  so the pane learns the repo key even when it missed the live `cwd:changed` broadcast. */
+  /** The agent's current repo (§16.3). Queried on mount so the pane learns the repo key even when
+   *  it missed the live `cwd:changed` broadcast. Main backstops with the shell spawn cwd, so this
+   *  resolves to a RepoInfo even before the first OSC 7; the `| null` is reserved for an
+   *  unresolvable session (no live PTY) and is not the normal pre-OSC-7 case. */
   currentRepo(): Promise<RepoInfo | null>;
-  /** Compact command history (§15.5); re-pulled on each monitor:update tick and commandsChanged signal. */
+  /** Compact command history (§15.5), pulled on demand — Capture selection resolves the latest
+   *  command's output to a todo (§16.2). Callers decide when to pull; no polling is implied. */
   commands(): Promise<CommandSummary[]>;
-  /** Mark-driven signal that a command span opened/closed; pane re-pulls history (§15.5). */
+  /** Mark-driven signal that a command span opened/closed (§15.5). */
   onCommandsChanged(cb: () => void): void;
   /** A command's output text, for adding straight to a todo (§16.2); null on unknown/trimmed id. */
   captureCommandText(commandId: string): Promise<CommandCaptureResult | null>;
+  /** Run report-detection on demand and return the single latest report + findings (§21.1);
+   *  [] when none. The captured report replaces any prior — the pane holds one (§21.1). */
+  captureLast(): Promise<MonitorEvent[]>;
   /** Dismiss one captured event; dismissing a report cascades to its findings (§15.6). */
   dismiss(eventId: string): void;
   /** Dismiss every captured event (§15.6). */
@@ -367,9 +440,19 @@ export interface MonitorApi {
   todoDelete(repoKey: string, id: string): Promise<TodoItem[]>;
 }
 
+/** Artifact viewer (§20): real, context-connected discovery + file read. Talks only to
+ *  the main process (the widget never touches the fs directly), keeping it relocatable. */
+export interface ViewerApi {
+  /** Discover the current repo's artifact tree (§20.1); outside a repo, the whole cwd tree. */
+  tree(scope: ArtifactScope): Promise<ArtifactTree>;
+  /** Read one file by its tree-relative path; null when missing, binary, or too large. */
+  read(relPath: string): Promise<ViewerFile | null>;
+}
+
 declare global {
   interface Window {
     term: TermApi;
     monitor: MonitorApi;
+    viewer: ViewerApi;
   }
 }

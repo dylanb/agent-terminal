@@ -1,7 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { wireMonitorPane, FOCUS_TERMINAL_EVENT } from '../../src/renderer/src/monitor';
-import { TODO_UNDO_MS } from '../../src/renderer/src/paneActions';
 import { DEFAULT_UI_SETTINGS } from '../../src/shared/ipc';
 import type { TodoItem, UiSettings } from '../../src/shared/ipc';
 
@@ -18,7 +17,7 @@ const MONITOR_HTML = `
   </div>
   <section id="panel-capture" role="tabpanel">
     <div id="monitor-status" role="status" aria-live="polite"></div>
-    <div id="command-history"></div>
+    <button id="capture-last">Capture last report</button>
     <div id="monitor-blocks"></div>
   </section>
   <section id="panel-todo" role="tabpanel" hidden>
@@ -37,7 +36,42 @@ function makeTodo(over: Partial<TodoItem>): TodoItem {
   };
 }
 
-describe('Todo tab (§16.4 — active/Done, manual add, reorder, edit, lifecycle)', () => {
+/** A fully-stubbed window.monitor; tests override the methods they exercise. */
+function baseMonitor(handlers: {
+  cwdChanged?: (m: { sessionId: string; cwd: string; repoKey: string }) => void;
+}): Record<string, ReturnType<typeof vi.fn>> {
+  return {
+    onEvent: vi.fn(),
+    onEventRemoved: vi.fn(),
+    onUpdate: vi.fn(),
+    onExit: vi.fn(),
+    onCommandsChanged: vi.fn(),
+    onCwdChanged: vi.fn((cb) => (handlers.cwdChanged = cb)),
+    currentRepo: vi.fn(async () => null),
+    replay: vi.fn(async () => []),
+    commands: vi.fn(async () => []),
+    captureCommandText: vi.fn(async () => null),
+    captureLast: vi.fn(async () => []),
+    dismiss: vi.fn(),
+    dismissAll: vi.fn(),
+    clearCommands: vi.fn(),
+    learnChrome: vi.fn(),
+    inject: vi.fn(),
+    getSettings: vi.fn(async () => ({ ...DEFAULT_UI_SETTINGS })),
+    setSettings: vi.fn(),
+    todoList: vi.fn(async () => []),
+    todoAdd: vi.fn(async () => []),
+    todoUpdate: vi.fn(async () => []),
+    todoReorder: vi.fn(async () => []),
+    todoSetStatus: vi.fn(async () => []),
+    todoDelete: vi.fn(async () => []),
+  };
+}
+
+// §24.1 mockup-exact todo panel: a flat list of `.todo` rows, each a checkbox-circle
+// (.chk, toggles done), a body (.tx text + .src provenance), and a Send action on
+// active rows. Reorder / edit / manual-add / delete are deferred to §24.2.1.
+describe('Todo tab (§24.1 mockup-exact — checkbox-done + Send)', () => {
   let handlers: { cwdChanged?: (m: { sessionId: string; cwd: string; repoKey: string }) => void };
   let settings: UiSettings;
   let monitor: Record<string, ReturnType<typeof vi.fn>>;
@@ -57,6 +91,7 @@ describe('Todo tab (§16.4 — active/Done, manual add, reorder, edit, lifecycle
       replay: vi.fn(async () => []),
       commands: vi.fn(async () => []),
       captureCommandText: vi.fn(async () => null),
+      captureLast: vi.fn(async () => []),
       dismiss: vi.fn(),
       dismissAll: vi.fn(),
       clearCommands: vi.fn(),
@@ -79,9 +114,8 @@ describe('Todo tab (§16.4 — active/Done, manual add, reorder, edit, lifecycle
   });
 
   const todoList = () => document.getElementById('todo-list')!;
-  const items = () => Array.from(todoList().querySelectorAll('.todo-item')) as HTMLElement[];
-  const activeItems = () => items().filter((el) => !el.classList.contains('done'));
-  const btn = (el: HTMLElement, cls: string) => el.querySelector(`.${cls}`) as HTMLButtonElement;
+  const rows = () => Array.from(todoList().querySelectorAll('.todo')) as HTMLElement[];
+  const text = (el: HTMLElement) => el.querySelector('.tx')!.textContent;
 
   /** Load a repo's todos by firing the cwd-change the pane subscribes to. */
   async function loadRepo(repoKey: string, list: TodoItem[]): Promise<void> {
@@ -90,197 +124,476 @@ describe('Todo tab (§16.4 — active/Done, manual add, reorder, edit, lifecycle
     await flush();
   }
 
-  it('renders the active list in order', async () => {
+  it('renders todos in order, each with its text and a checkbox', async () => {
     wireMonitorPane();
     await flush();
     await loadRepo('/repoA', [makeTodo({ id: 'a', text: 'first', order: 1 }), makeTodo({ id: 'b', text: 'second', order: 2 })]);
-    expect(activeItems().map((el) => el.querySelector('.todo-text')!.textContent)).toEqual(['first', 'second']);
+    expect(rows().map(text)).toEqual(['first', 'second']);
+    expect(rows()[0].querySelector('.chk')).toBeTruthy();
   });
 
-  it('shows done todos in a separate Done section, filtered out of active', async () => {
+  it('shows done todos inline and dimmed (a .done row), not in a separate section', async () => {
     wireMonitorPane();
     await flush();
-    await loadRepo('/repoA', [makeTodo({ id: 'a', text: 'active one' }), makeTodo({ id: 'd', text: 'done one', status: 'done', order: 0 })]);
-    expect(activeItems().map((el) => el.querySelector('.todo-text')!.textContent)).toEqual(['active one']);
-    const done = todoList().querySelector('.todo-done')!;
-    expect(done.textContent).toContain('done one');
+    await loadRepo('/repoA', [makeTodo({ id: 'a', text: 'active one', order: 1 }), makeTodo({ id: 'd', text: 'done one', status: 'done', order: 2 })]);
+    expect(rows().map(text)).toEqual(['active one', 'done one']);
+    expect(rows()[1].classList.contains('done')).toBe(true);
+    expect(todoList().querySelector('.todo-done')).toBeNull();
   });
 
-  it('manual add posts the typed text with a manual source and clears the input', async () => {
+  it('clicking the checkbox on an active todo marks it done', async () => {
     wireMonitorPane();
     await flush();
-    await loadRepo('/repoA', []);
-    const input = document.getElementById('todo-new') as HTMLTextAreaElement | HTMLInputElement;
-    input.value = 'write the docs';
-    (document.getElementById('todo-add-btn') as HTMLButtonElement).click();
-    await flush();
-    expect(monitor.todoAdd).toHaveBeenCalledWith('/repoA', 'write the docs', { type: 'manual' });
-    expect(input.value).toBe('');
-  });
-
-  it('Insert on an active todo injects, marks it done, and moves focus to the terminal', async () => {
-    monitor.todoSetStatus.mockResolvedValue([makeTodo({ id: 'a', text: 'task', status: 'done' })]);
-    wireMonitorPane();
-    await flush();
-    let focusFired = 0;
-    window.addEventListener(FOCUS_TERMINAL_EVENT, () => focusFired++);
     await loadRepo('/repoA', [makeTodo({ id: 'a', text: 'task' })]);
-    btn(activeItems()[0], 'todo-insert').click();
+    (rows()[0].querySelector('.chk') as HTMLElement).click();
     await flush();
-    expect(monitor.inject).toHaveBeenCalledWith({ text: 'task', submit: false });
     expect(monitor.todoSetStatus).toHaveBeenCalledWith('/repoA', 'a', 'done');
-    expect(focusFired).toBe(1);
-    expect(activeItems().length).toBe(0);
   });
 
-  it('Insert & submit on a todo marks it done but keeps focus in the action window', async () => {
-    monitor.todoSetStatus.mockResolvedValue([makeTodo({ id: 'a', status: 'done' })]);
-    wireMonitorPane();
-    await flush();
-    let focusFired = 0;
-    window.addEventListener(FOCUS_TERMINAL_EVENT, () => focusFired++);
-    await loadRepo('/repoA', [makeTodo({ id: 'a', text: 'task' })]);
-    btn(activeItems()[0], 'todo-submit').click();
-    await flush();
-    expect(monitor.inject).toHaveBeenCalledWith({ text: 'task', submit: true });
-    expect(focusFired).toBe(0);
-  });
-
-  it('re-copying a done todo moves it back to active', async () => {
+  it('clicking the checkbox on a done todo re-activates it', async () => {
     wireMonitorPane();
     await flush();
     await loadRepo('/repoA', [makeTodo({ id: 'd', text: 'done task', status: 'done' })]);
-    const doneItem = items().find((el) => el.classList.contains('done'))!;
-    btn(doneItem, 'todo-insert').click();
+    (rows()[0].querySelector('.chk') as HTMLElement).click();
     await flush();
     expect(monitor.todoSetStatus).toHaveBeenCalledWith('/repoA', 'd', 'active');
   });
 
-  it('edit-in-place opens a textarea and Save persists via todoUpdate', async () => {
+  it('Send on an active todo injects WITHOUT submit and moves focus to the terminal so the user can edit (§24.2.1)', async () => {
+    wireMonitorPane();
+    await flush();
+    let focusFired = 0;
+    window.addEventListener(FOCUS_TERMINAL_EVENT, () => focusFired++);
+    await loadRepo('/repoA', [makeTodo({ id: 'a', text: 'task' })]);
+    (rows()[0].querySelector('.todo-send') as HTMLButtonElement).click();
+    await flush();
+    expect(monitor.inject).toHaveBeenCalledWith({ text: 'task', submit: false });
+    expect(focusFired).toBe(1);
+  });
+
+  it('a done todo has no Send action', async () => {
+    wireMonitorPane();
+    await flush();
+    await loadRepo('/repoA', [makeTodo({ id: 'd', status: 'done' })]);
+    expect(rows()[0].querySelector('.todo-send')).toBeNull();
+  });
+
+  it('renders provenance: a capture-sourced todo shows its origin, a manual one says manual', async () => {
+    wireMonitorPane();
+    await flush();
+    await loadRepo('/repoA', [
+      makeTodo({ id: 'a', text: 'from a finding', order: 1, source: { type: 'finding', eventId: 'e1' } }),
+      makeTodo({ id: 'm', text: 'typed by hand', order: 2, source: { type: 'manual' } }),
+    ]);
+    expect(rows()[0].querySelector('.src')!.textContent).toContain('finding');
+    expect(rows()[1].querySelector('.src')!.textContent!.toLowerCase()).toContain('manual');
+  });
+
+  it('the Todo tab count reflects the number of active todos', async () => {
+    wireMonitorPane();
+    await flush();
+    await loadRepo('/repoA', [makeTodo({ id: 'a' }), makeTodo({ id: 'b' }), makeTodo({ id: 'd', status: 'done' })]);
+    expect(document.getElementById('todo-count')!.textContent).toBe('2');
+  });
+
+  it('a repo change swaps the displayed list', async () => {
+    wireMonitorPane();
+    await flush();
+    await loadRepo('/repoA', [makeTodo({ id: 'a', text: 'repo A todo' })]);
+    expect(rows().map(text)).toEqual(['repo A todo']);
+    await loadRepo('/repoB', [makeTodo({ id: 'z', repoKey: '/repoB', text: 'repo B todo' })]);
+    expect(rows().map(text)).toEqual(['repo B todo']);
+  });
+});
+
+// §24.2.1 Todo-panel restorations, re-skinned into the mockup row language: manual add,
+// reorder (↑/↓ + drag), edit-in-place (better affordance — contenteditable, no box swap),
+// and a two-step undoable delete. Main-process IPC for all of these already exists.
+describe('Todo tab §24.2.1 — manual add', () => {
+  let handlers: { cwdChanged?: (m: { sessionId: string; cwd: string; repoKey: string }) => void };
+  let settings: UiSettings;
+  let monitor: Record<string, ReturnType<typeof vi.fn>>;
+
+  beforeEach(() => {
+    document.body.innerHTML = MONITOR_HTML;
+    handlers = {};
+    settings = { ...DEFAULT_UI_SETTINGS };
+    monitor = baseMonitor(handlers);
+    (window as unknown as { monitor: typeof monitor }).monitor = monitor;
+    void settings;
+  });
+  afterEach(() => {
+    document.body.innerHTML = '';
+    vi.restoreAllMocks();
+  });
+
+  const todoList = () => document.getElementById('todo-list')!;
+
+  async function loadRepo(repoKey: string, list: TodoItem[]): Promise<void> {
+    monitor.todoList.mockResolvedValue(list);
+    handlers.cwdChanged!({ sessionId: 's1', cwd: repoKey, repoKey });
+    await flush();
+  }
+
+  it('typing a new todo and clicking Add posts it as a manual todo to the current repo', async () => {
+    wireMonitorPane();
+    await flush();
+    await loadRepo('/repoA', []);
+    const input = todoList().querySelector('#todo-new') as HTMLTextAreaElement;
+    const addBtn = todoList().querySelector('#todo-add-btn') as HTMLButtonElement;
+    expect(input).toBeTruthy();
+    input.value = 'hand-written task';
+    addBtn.click();
+    await flush();
+    expect(monitor.todoAdd).toHaveBeenCalledWith('/repoA', 'hand-written task', { type: 'manual' });
+  });
+
+  it('shows the manual-add row on mount, before any repo key is known', async () => {
+    // currentRepo() resolves null and no cwd:changed has fired yet (e.g. before the first
+    // OSC 7) — the add affordance must still be present, not a blank panel.
+    wireMonitorPane();
+    await flush();
+    expect(document.getElementById('todo-new')).toBeTruthy();
+    expect(document.getElementById('todo-add-btn')).toBeTruthy();
+  });
+
+  it('does not post an empty/whitespace todo', async () => {
+    wireMonitorPane();
+    await flush();
+    await loadRepo('/repoA', []);
+    const input = todoList().querySelector('#todo-new') as HTMLTextAreaElement;
+    input.value = '   ';
+    (todoList().querySelector('#todo-add-btn') as HTMLButtonElement).click();
+    await flush();
+    expect(monitor.todoAdd).not.toHaveBeenCalled();
+  });
+});
+
+describe('Todo tab §24.2.1 — reorder', () => {
+  let handlers: { cwdChanged?: (m: { sessionId: string; cwd: string; repoKey: string }) => void };
+  let monitor: Record<string, ReturnType<typeof vi.fn>>;
+
+  beforeEach(() => {
+    document.body.innerHTML = MONITOR_HTML;
+    handlers = {};
+    monitor = baseMonitor(handlers);
+    (window as unknown as { monitor: typeof monitor }).monitor = monitor;
+  });
+  afterEach(() => {
+    document.body.innerHTML = '';
+    vi.restoreAllMocks();
+  });
+
+  const rows = () => Array.from(document.getElementById('todo-list')!.querySelectorAll('.todo')) as HTMLElement[];
+  async function loadRepo(repoKey: string, list: TodoItem[]): Promise<void> {
+    monitor.todoList.mockResolvedValue(list);
+    handlers.cwdChanged!({ sessionId: 's1', cwd: repoKey, repoKey });
+    await flush();
+  }
+
+  it('clicking ↓ on the first todo persists the swapped order via todoReorder', async () => {
+    wireMonitorPane();
+    await flush();
+    await loadRepo('/repoA', [makeTodo({ id: 'a', order: 1 }), makeTodo({ id: 'b', order: 2 })]);
+    (rows()[0].querySelector('.todo-down') as HTMLButtonElement).click();
+    await flush();
+    expect(monitor.todoReorder).toHaveBeenCalledWith('/repoA', ['b', 'a']);
+  });
+
+  it('↑ is disabled on the first todo and ↓ on the last', async () => {
+    wireMonitorPane();
+    await flush();
+    await loadRepo('/repoA', [makeTodo({ id: 'a', order: 1 }), makeTodo({ id: 'b', order: 2 })]);
+    expect((rows()[0].querySelector('.todo-up') as HTMLButtonElement).disabled).toBe(true);
+    expect((rows()[1].querySelector('.todo-down') as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('done todos do not carry reorder controls', async () => {
+    wireMonitorPane();
+    await flush();
+    await loadRepo('/repoA', [makeTodo({ id: 'd', status: 'done' })]);
+    expect(rows()[0].querySelector('.todo-up')).toBeNull();
+  });
+});
+
+describe('Todo tab §24.2.1 — edit-in-place', () => {
+  let handlers: { cwdChanged?: (m: { sessionId: string; cwd: string; repoKey: string }) => void };
+  let monitor: Record<string, ReturnType<typeof vi.fn>>;
+
+  beforeEach(() => {
+    document.body.innerHTML = MONITOR_HTML;
+    handlers = {};
+    monitor = baseMonitor(handlers);
+    (window as unknown as { monitor: typeof monitor }).monitor = monitor;
+  });
+  afterEach(() => {
+    document.body.innerHTML = '';
+    vi.restoreAllMocks();
+  });
+
+  const rows = () => Array.from(document.getElementById('todo-list')!.querySelectorAll('.todo')) as HTMLElement[];
+  async function loadRepo(repoKey: string, list: TodoItem[]): Promise<void> {
+    monitor.todoList.mockResolvedValue(list);
+    handlers.cwdChanged!({ sessionId: 's1', cwd: repoKey, repoKey });
+    await flush();
+  }
+
+  it('Edit makes the text editable in place (no textarea box swap) and Save persists via todoUpdate', async () => {
     wireMonitorPane();
     await flush();
     await loadRepo('/repoA', [makeTodo({ id: 'a', text: 'old text' })]);
-    btn(activeItems()[0], 'todo-edit').click();
-    const textarea = activeItems()[0].querySelector('textarea') as HTMLTextAreaElement;
-    expect(textarea).toBeTruthy();
-    expect(textarea.value).toBe('old text');
-    textarea.value = 'new text';
-    btn(activeItems()[0], 'todo-save').click();
+    (rows()[0].querySelector('.todo-edit') as HTMLButtonElement).click();
+    const tx = rows()[0].querySelector('.tx') as HTMLElement;
+    expect(tx.contentEditable).toBe('true');
+    expect(rows()[0].querySelector('textarea')).toBeNull();
+    tx.textContent = 'new text';
+    (rows()[0].querySelector('.todo-save') as HTMLButtonElement).click();
     await flush();
     expect(monitor.todoUpdate).toHaveBeenCalledWith('/repoA', 'a', 'new text');
   });
 
-  it('the down button reorders an active todo and persists the new order', async () => {
+  it('Saving an empty/whitespace edit does not persist and keeps the row in edit mode', async () => {
     wireMonitorPane();
     await flush();
-    await loadRepo('/repoA', [makeTodo({ id: 'a', order: 1 }), makeTodo({ id: 'b', order: 2 }), makeTodo({ id: 'c', order: 3 })]);
-    btn(activeItems()[0], 'todo-down').click(); // move 'a' down past 'b'
+    await loadRepo('/repoA', [makeTodo({ id: 'a', text: 'old text' })]);
+    (rows()[0].querySelector('.todo-edit') as HTMLButtonElement).click();
+    (rows()[0].querySelector('.tx') as HTMLElement).textContent = '   ';
+    (rows()[0].querySelector('.todo-save') as HTMLButtonElement).click();
     await flush();
-    expect(monitor.todoReorder).toHaveBeenCalledWith('/repoA', ['b', 'a', 'c']);
+    expect(monitor.todoUpdate).not.toHaveBeenCalled();
+    expect((rows()[0].querySelector('.tx') as HTMLElement).contentEditable).toBe('true');
   });
 
-  it('clicking × asks for confirmation and deletes nothing yet', async () => {
+  it('Cancel discards the edit without calling todoUpdate', async () => {
     wireMonitorPane();
     await flush();
     await loadRepo('/repoA', [makeTodo({ id: 'a', text: 'keep me' })]);
-    btn(activeItems()[0], 'todo-delete').click();
+    (rows()[0].querySelector('.todo-edit') as HTMLButtonElement).click();
+    (rows()[0].querySelector('.tx') as HTMLElement).textContent = 'unsaved';
+    (rows()[0].querySelector('.todo-cancel') as HTMLButtonElement).click();
     await flush();
-    expect(btn(items()[0], 'todo-delete-confirm')).toBeTruthy();
-    expect(monitor.todoDelete).not.toHaveBeenCalled();
-    expect(items()[0].querySelector('.todo-text')!.textContent).toBe('keep me');
+    expect(monitor.todoUpdate).not.toHaveBeenCalled();
+    expect((rows()[0].querySelector('.tx') as HTMLElement).textContent).toBe('keep me');
   });
 
-  it('Cancel on the confirm step keeps the todo and restores the × button', async () => {
+  it('a repo change while editing is deferred and surfaces a notice until the edit resolves', async () => {
     wireMonitorPane();
     await flush();
-    await loadRepo('/repoA', [makeTodo({ id: 'a', text: 'stay' })]);
-    btn(activeItems()[0], 'todo-delete').click();
-    await flush();
-    btn(items()[0], 'todo-delete-cancel').click();
-    await flush();
-    expect(btn(items()[0], 'todo-delete')).toBeTruthy();
-    expect(monitor.todoDelete).not.toHaveBeenCalled();
-    expect(items()[0].querySelector('.todo-text')!.textContent).toBe('stay');
-  });
-
-  it('confirming delete replaces the row with an Undo button and defers the actual delete', async () => {
-    wireMonitorPane();
-    await flush();
-    await loadRepo('/repoA', [makeTodo({ id: 'a', text: 'bye' })]);
-    btn(activeItems()[0], 'todo-delete').click();
-    await flush();
-    btn(items()[0], 'todo-delete-confirm').click();
-    await flush();
-    const row = todoList().querySelector('[data-todo-id="a"]') as HTMLElement;
-    expect(row.querySelector('.todo-undo')).toBeTruthy();
-    expect(row.querySelector('.todo-text')).toBeNull(); // normal content replaced by the Undo row
-    expect(monitor.todoDelete).not.toHaveBeenCalled(); // deferred until the window elapses
-  });
-
-  it('Undo within the window restores the todo and never deletes it', async () => {
-    wireMonitorPane();
-    await flush();
-    await loadRepo('/repoA', [makeTodo({ id: 'a', text: 'restore me' })]);
-    btn(activeItems()[0], 'todo-delete').click();
-    await flush();
-    btn(items()[0], 'todo-delete-confirm').click();
-    await flush();
-    (todoList().querySelector('.todo-undo') as HTMLButtonElement).click();
-    await flush();
-    expect(monitor.todoDelete).not.toHaveBeenCalled();
-    expect(items()[0].querySelector('.todo-text')!.textContent).toBe('restore me');
-  });
-
-  it('after the 60s undo window elapses, the deferred delete fires (§16.4)', async () => {
-    vi.useFakeTimers();
-    try {
-      wireMonitorPane();
-      await vi.advanceTimersByTimeAsync(0);
-      monitor.todoList.mockResolvedValue([makeTodo({ id: 'a', text: 'bye' })]);
-      handlers.cwdChanged!({ sessionId: 's1', cwd: '/repoA', repoKey: '/repoA' });
-      await vi.advanceTimersByTimeAsync(0);
-      btn(activeItems()[0], 'todo-delete').click();
-      await vi.advanceTimersByTimeAsync(0);
-      btn(items()[0], 'todo-delete-confirm').click();
-      await vi.advanceTimersByTimeAsync(0);
-      expect(monitor.todoDelete).not.toHaveBeenCalled();
-      await vi.advanceTimersByTimeAsync(TODO_UNDO_MS);
-      expect(monitor.todoDelete).toHaveBeenCalledWith('/repoA', 'a');
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it('each active todo exposes a drag handle for reordering (§16.4 a11y dual path)', async () => {
-    wireMonitorPane();
-    await flush();
-    await loadRepo('/repoA', [makeTodo({ id: 'a' })]);
-    expect(activeItems()[0].querySelector('.drag-handle')).toBeTruthy();
-  });
-
-  // ---- mid-edit swap block (§16.3 / plan 5b) ----
-
-  it('blocks a repo swap while an edit is open, then applies it once the edit resolves', async () => {
-    wireMonitorPane();
-    await flush();
-    await loadRepo('/repoA', [makeTodo({ id: 'a', text: 'editing me' })]);
-    btn(activeItems()[0], 'todo-edit').click();
-
-    // A cd to /repoB arrives mid-edit — the list must NOT swap.
-    monitor.todoList.mockClear();
+    await loadRepo('/repoA', [makeTodo({ id: 'a', text: 'editing this' })]);
+    (rows()[0].querySelector('.todo-edit') as HTMLButtonElement).click();
     monitor.todoList.mockResolvedValue([makeTodo({ id: 'z', repoKey: '/repoB', text: 'repo B todo' })]);
     handlers.cwdChanged!({ sessionId: 's1', cwd: '/repoB', repoKey: '/repoB' });
     await flush();
-    expect(monitor.todoList).not.toHaveBeenCalled(); // swap blocked
-    expect(todoList().querySelector('.swap-blocked')).toBeTruthy();
-
-    // Resolve the edit (Save) — the in-flight update targets /repoA, then the swap proceeds.
-    const textarea = activeItems()[0].querySelector('textarea') as HTMLTextAreaElement;
-    textarea.value = 'saved';
-    btn(activeItems()[0], 'todo-save').click();
+    expect(document.getElementById('todo-list')!.querySelector('.swap-blocked')).toBeTruthy();
+    expect(rows().some((r) => r.querySelector('.tx')!.textContent === 'editing this')).toBe(true);
+    (rows().find((r) => r.querySelector('.todo-cancel'))!.querySelector('.todo-cancel') as HTMLButtonElement).click();
     await flush();
-    expect(monitor.todoUpdate).toHaveBeenCalledWith('/repoA', 'a', 'saved');
-    expect(monitor.todoList).toHaveBeenCalledWith('/repoB');
-    expect(todoList().querySelector('.swap-blocked')).toBeNull();
+    expect(rows().map((r) => r.querySelector('.tx')!.textContent)).toEqual(['repo B todo']);
+  });
+});
+
+describe('Todo tab §24.2.1 — two-step undoable delete', () => {
+  let handlers: { cwdChanged?: (m: { sessionId: string; cwd: string; repoKey: string }) => void };
+  let monitor: Record<string, ReturnType<typeof vi.fn>>;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    document.body.innerHTML = MONITOR_HTML;
+    handlers = {};
+    monitor = baseMonitor(handlers);
+    (window as unknown as { monitor: typeof monitor }).monitor = monitor;
+  });
+  afterEach(() => {
+    document.body.innerHTML = '';
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
+
+  const rows = () => Array.from(document.getElementById('todo-list')!.querySelectorAll('.todo')) as HTMLElement[];
+  async function loadRepo(repoKey: string, list: TodoItem[]): Promise<void> {
+    monitor.todoList.mockResolvedValue(list);
+    handlers.cwdChanged!({ sessionId: 's1', cwd: repoKey, repoKey });
+    await vi.advanceTimersByTimeAsync(0);
+  }
+
+  it('× asks to confirm; confirming defers the delete behind an Undo and only fires todoDelete after TODO_UNDO_MS', async () => {
+    wireMonitorPane();
+    await vi.advanceTimersByTimeAsync(0);
+    await loadRepo('/repoA', [makeTodo({ id: 'a', text: 'delete me' })]);
+
+    (rows()[0].querySelector('.todo-delete') as HTMLButtonElement).click();
+    expect(rows()[0].querySelector('.todo-delete-confirm')).toBeTruthy();
+    (rows()[0].querySelector('.todo-delete-confirm') as HTMLButtonElement).click();
+
+    expect(rows()[0].querySelector('.todo-undo')).toBeTruthy();
+    expect(monitor.todoDelete).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(monitor.todoDelete).toHaveBeenCalledWith('/repoA', 'a');
+  });
+
+  it('Undo cancels the pending delete with no server round-trip', async () => {
+    wireMonitorPane();
+    await vi.advanceTimersByTimeAsync(0);
+    await loadRepo('/repoA', [makeTodo({ id: 'a', text: 'spare me' })]);
+
+    (rows()[0].querySelector('.todo-delete') as HTMLButtonElement).click();
+    (rows()[0].querySelector('.todo-delete-confirm') as HTMLButtonElement).click();
+    (rows()[0].querySelector('.todo-undo') as HTMLButtonElement).click();
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(monitor.todoDelete).not.toHaveBeenCalled();
+    expect(rows()[0].querySelector('.tx')!.textContent).toBe('spare me');
+  });
+});
+
+// §24.2.1 review fixes: reorder must not disturb inline done rows; focus must follow the
+// edit/delete/confirm transitions (WCAG 2.4.3); the contenteditable field must be labelled;
+// the drag wiring must be exercised.
+describe('Todo tab §24.2.1 — review fixes (reorder stability, focus, a11y label, drag)', () => {
+  let handlers: { cwdChanged?: (m: { sessionId: string; cwd: string; repoKey: string }) => void };
+  let monitor: Record<string, ReturnType<typeof vi.fn>>;
+
+  beforeEach(() => {
+    document.body.innerHTML = MONITOR_HTML;
+    handlers = {};
+    monitor = baseMonitor(handlers);
+    (window as unknown as { monitor: typeof monitor }).monitor = monitor;
+  });
+  afterEach(() => {
+    document.body.innerHTML = '';
+    vi.restoreAllMocks();
+  });
+
+  const todoList = () => document.getElementById('todo-list')!;
+  const rows = () => Array.from(todoList().querySelectorAll('.todo')) as HTMLElement[];
+  async function loadRepo(repoKey: string, list: TodoItem[]): Promise<void> {
+    monitor.todoList.mockResolvedValue(list);
+    handlers.cwdChanged!({ sessionId: 's1', cwd: repoKey, repoKey });
+    await flush();
+  }
+
+  it('reordering an active todo past an inline done row leaves the done row in place', async () => {
+    wireMonitorPane();
+    await flush();
+    await loadRepo('/repoA', [
+      makeTodo({ id: 'a', text: 'A', order: 1 }),
+      makeTodo({ id: 'd', text: 'D', status: 'done', order: 2 }),
+      makeTodo({ id: 'c', text: 'C', order: 3 }),
+    ]);
+    // ↓ on the first active (A): it swaps with the next ACTIVE (C), skipping done D — and D
+    // must keep its slot in the persisted order, not get shoved to an end.
+    (rows()[0].querySelector('.todo-down') as HTMLButtonElement).click();
+    await flush();
+    expect(monitor.todoReorder).toHaveBeenCalledWith('/repoA', ['c', 'd', 'a']);
+  });
+
+  it('Edit moves focus into the editable text; the field is a labelled textbox', async () => {
+    wireMonitorPane();
+    await flush();
+    await loadRepo('/repoA', [makeTodo({ id: 'a', text: 'edit me' })]);
+    (rows()[0].querySelector('.todo-edit') as HTMLButtonElement).click();
+    const tx = rows()[0].querySelector('.tx') as HTMLElement;
+    expect(document.activeElement).toBe(tx);
+    expect(tx.getAttribute('role')).toBe('textbox');
+    expect(tx.getAttribute('aria-label')).toBeTruthy();
+  });
+
+  it('Escape cancels the edit and moves focus to the edit button (not <body>)', async () => {
+    wireMonitorPane();
+    await flush();
+    await loadRepo('/repoA', [makeTodo({ id: 'a', text: 'edit me' })]);
+    (rows()[0].querySelector('.todo-edit') as HTMLButtonElement).click();
+    const tx = rows()[0].querySelector('.tx') as HTMLElement;
+    tx.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+    await flush();
+    expect(rows()[0].querySelector('.tx')!.getAttribute('contenteditable')).not.toBe('true'); // edit closed
+    expect(document.activeElement).toBe(rows()[0].querySelector('.todo-edit'));
+  });
+
+  it('Delete moves focus to Confirm; confirming moves focus to Undo', async () => {
+    wireMonitorPane();
+    await flush();
+    await loadRepo('/repoA', [makeTodo({ id: 'a', text: 'del' })]);
+    (rows()[0].querySelector('.todo-delete') as HTMLButtonElement).click();
+    expect(document.activeElement).toBe(rows()[0].querySelector('.todo-delete-confirm'));
+    (rows()[0].querySelector('.todo-delete-confirm') as HTMLButtonElement).click();
+    expect(document.activeElement).toBe(rows()[0].querySelector('.todo-undo'));
+  });
+
+  it('dragging one todo onto another reorders via todoReorder (drag wiring)', async () => {
+    wireMonitorPane();
+    await flush();
+    await loadRepo('/repoA', [makeTodo({ id: 'a', order: 1 }), makeTodo({ id: 'b', order: 2 })]);
+    rows()[0].dispatchEvent(new Event('dragstart', { bubbles: true }));
+    rows()[1].dispatchEvent(new Event('dragover', { bubbles: true }));
+    rows()[1].dispatchEvent(new Event('drop', { bubbles: true }));
+    await flush();
+    expect(monitor.todoReorder).toHaveBeenCalledWith('/repoA', ['b', 'a']);
+  });
+
+  // Every todo mutation crosses renderer→main IPC; a main-process restart rejects the invoke.
+  // None of these must surface as an unhandled renderer rejection (vitest fails the run on one),
+  // and each keeps the user's current UI state on failure (§16.4).
+  describe('IPC-rejection hardening (§16.4)', () => {
+    it('a rejected todoReorder leaves the displayed order unchanged', async () => {
+      wireMonitorPane();
+      await flush();
+      await loadRepo('/repoA', [makeTodo({ id: 'a', text: 'first', order: 1 }), makeTodo({ id: 'b', text: 'second', order: 2 })]);
+      monitor.todoReorder.mockRejectedValueOnce(new Error('ipc down'));
+      (rows()[0].querySelector('.todo-down') as HTMLButtonElement).click();
+      await flush();
+      expect(rows().map((r) => r.querySelector('.tx')!.textContent)).toEqual(['first', 'second']);
+    });
+
+    it('a rejected todoSetStatus (done toggle) is handled', async () => {
+      wireMonitorPane();
+      await flush();
+      await loadRepo('/repoA', [makeTodo({ id: 'a', text: 'task' })]);
+      monitor.todoSetStatus.mockRejectedValueOnce(new Error('ipc down'));
+      (rows()[0].querySelector('.chk') as HTMLButtonElement).click();
+      await flush();
+      expect(rows().map((r) => r.querySelector('.tx')!.textContent)).toEqual(['task']);
+    });
+
+    it('a rejected manual todoAdd keeps the typed text in the input', async () => {
+      wireMonitorPane();
+      await flush();
+      await loadRepo('/repoA', []);
+      const input = document.getElementById('todo-new') as HTMLTextAreaElement;
+      input.value = 'keep me';
+      monitor.todoAdd.mockRejectedValueOnce(new Error('ipc down'));
+      (document.getElementById('todo-add-btn') as HTMLButtonElement).click();
+      await flush();
+      expect((document.getElementById('todo-new') as HTMLTextAreaElement).value).toBe('keep me');
+    });
+
+    it('a rejected todoUpdate keeps the row in the edit state', async () => {
+      wireMonitorPane();
+      await flush();
+      await loadRepo('/repoA', [makeTodo({ id: 'a', text: 'task' })]);
+      (rows()[0].querySelector('.todo-edit') as HTMLButtonElement).click();
+      monitor.todoUpdate.mockRejectedValueOnce(new Error('ipc down'));
+      (rows()[0].querySelector('.todo-save') as HTMLButtonElement).click();
+      await flush();
+      expect((rows()[0].querySelector('.tx') as HTMLElement).contentEditable).toBe('true');
+    });
+
+    it('a rejected deferred todoDelete is handled', async () => {
+      vi.useFakeTimers();
+      try {
+        wireMonitorPane();
+        await vi.advanceTimersByTimeAsync(0);
+        monitor.todoList.mockResolvedValue([makeTodo({ id: 'a', text: 'task', repoKey: '/repoA' })]);
+        handlers.cwdChanged!({ sessionId: 's1', cwd: '/repoA', repoKey: '/repoA' });
+        await vi.advanceTimersByTimeAsync(0);
+        monitor.todoDelete.mockRejectedValueOnce(new Error('ipc down'));
+        (rows()[0].querySelector('.todo-delete') as HTMLButtonElement).click();
+        (rows()[0].querySelector('.todo-delete-confirm') as HTMLButtonElement).click();
+        await vi.advanceTimersByTimeAsync(60_000); // TODO_UNDO_MS → deferred delete fires and rejects
+      } finally {
+        vi.useRealTimers();
+      }
+    });
   });
 });

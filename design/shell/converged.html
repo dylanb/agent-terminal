@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Converged shell · Galley · Lit · Agent Terminal</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;0,9..144,600;1,9..144,400;1,9..144,500&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<script>(function(){var t=new URLSearchParams(location.search).get('theme');if(t)document.documentElement.setAttribute('data-theme',t);else if(matchMedia('(prefers-color-scheme:dark)').matches)document.documentElement.setAttribute('data-theme','dark');})();</script>
+<link rel="stylesheet" href="tokens.css">
+<style>
+  :root { --reveal:#F2A53C; --reveal-wash:rgba(242,165,60,.22); }
+  [data-theme="dark"] { --reveal:#FFB454; --reveal-wash:rgba(255,180,84,.20); }
+  /* slim left chrome + full-bleed main + docked (non-blurring) drawer */
+  .app { display:grid; grid-template-columns:200px 1fr 0; height:100vh; transition:grid-template-columns .2s ease; }
+  .app.drawer-open { grid-template-columns:200px 1fr 384px; }
+
+  .rail { background:var(--card); border-right:1px solid var(--hair); display:flex; flex-direction:column; padding:16px 14px; gap:0; overflow:auto; }
+  .rail .mark { font-family:"Fraunces",serif; font-weight:600; font-size:15px; margin-bottom:20px; white-space:nowrap; }
+  .rail .mark .sig { color:var(--signal); }
+  .rail .sect { text-transform:uppercase; letter-spacing:.14em; font-size:9px; color:var(--dim); margin:0 0 9px; }
+  .rail .blk { margin-bottom:18px; padding-bottom:18px; border-bottom:1px solid var(--hair); }
+  .navlist { display:flex; flex-direction:column; gap:2px; }
+  .nav { display:flex; align-items:center; gap:9px; padding:8px 10px; border-radius:7px; color:var(--text); cursor:pointer; background:none; border:none; font-size:13px; font-weight:500; text-align:left; width:100%; }
+  .nav:hover { background:var(--hair2); }
+  .nav.on { background:var(--signal-wash); color:var(--signal); }
+  .nav .k { margin-left:auto; font-family:"IBM Plex Mono",monospace; font-size:9.5px; color:var(--dim); }
+  .nav.on .k { color:var(--signal); }
+  .railstat { display:flex; flex-direction:column; gap:9px; }
+  .railstat .stat .v { font-size:12px; }
+  .rail .foot { margin-top:auto; display:flex; flex-direction:column; gap:8px; padding-top:16px; }
+  .rail .foot .pill { width:100%; }
+  .rail .foot .row { display:flex; gap:8px; align-items:center; }
+
+  .main { min-width:0; position:relative; }
+  [data-viewpane] { position:absolute; inset:0; }
+  .artsplit { display:grid; grid-template-columns:248px 1fr; height:100%; }
+  .artsplit .tree { padding:20px 16px; border-right:1px solid var(--hair); overflow:auto; }
+  .twocol { display:grid; grid-template-columns:1fr 1fr; height:100%; }
+  .pane { overflow:auto; padding:24px 26px; }
+  .pane + .pane { border-left:1px solid var(--hair); background:var(--card); }
+  .pane h2 { font-family:"Fraunces",serif; font-weight:500; font-size:21px; margin:0 0 3px; }
+  .pane .sub { font-size:12px; color:var(--dim); margin-bottom:18px; }
+  .gatebar { display:flex; gap:9px; align-items:center; flex-wrap:wrap; margin:10px 0 18px; }
+
+  /* terminal cross-highlight source spans (§16.8) */
+  .term .src { border-bottom:1px dotted var(--term-dim); cursor:pointer; }
+  .term .src.lit { background:var(--reveal-wash); border-bottom:2px solid var(--reveal); border-radius:2px; color:#fff; }
+
+  /* docked drawer — no scrim, terminal stays visible */
+  .drawer { background:var(--card); border-left:1px solid var(--hair); overflow:hidden; display:flex; flex-direction:column; }
+  .drawer .dhead { display:flex; align-items:center; border-bottom:1px solid var(--hair); padding:0 6px 0 4px; }
+  .drawer .tab { font-size:13px; font-weight:600; padding:13px 14px; color:var(--dim); background:none; border:none; border-bottom:2px solid transparent; cursor:pointer; }
+  .drawer .tab.on { color:var(--signal); border-bottom-color:var(--signal); }
+  .drawer .tab .ct { font-family:"IBM Plex Mono",monospace; font-size:10px; margin-left:5px; opacity:.7; }
+  .drawer .x { margin-left:auto; }
+  .drawer .panel { padding:14px 16px; overflow:auto; flex:1; }
+  .drawer .panel[hidden] { display:none; }
+  .drawer .dhint { border-top:1px solid var(--hair); padding:9px 16px; font-family:"IBM Plex Mono",monospace; font-size:10px; color:var(--dim); display:flex; gap:14px; }
+  /* finding that is revealing its source */
+  .finding.revealing { background:var(--reveal-wash); border-left-color:var(--reveal); border-radius:0 6px 6px 0; }
+  .finding.revealing::before { color:var(--reveal); }
+  .kbd { font-family:"IBM Plex Mono",monospace; font-size:9.5px; border:1px solid var(--hair); border-bottom-width:2px; border-radius:4px; padding:1px 5px; }
+
+  @media (max-width:900px){ .app,.app.drawer-open{ grid-template-columns:1fr } .rail,.drawer{ display:none } }
+</style>
+</head>
+<body>
+<div class="app drawer-open">
+  <!-- SLIM LEFT CHROME -->
+  <aside class="rail">
+    <div class="mark">Agent <span class="sig">·—·</span> Terminal</div>
+    <div class="blk">
+      <div class="sect">Views</div>
+      <div class="navlist">
+        <button class="nav on" data-viewbtn="1">Terminal <span class="k">⌘1</span></button>
+        <button class="nav" data-viewbtn="2">Artifacts <span class="k">⌘2</span></button>
+        <button class="nav" data-viewbtn="3">Todos <span class="k">⌘3</span></button>
+      </div>
+    </div>
+    <div class="blk">
+      <div class="sect">Flow — step 3 / 4</div>
+      <div class="flow vert">
+        <span class="stn done"><span class="o"></span><span class="nm">Plan</span></span><span class="seg"></span>
+        <span class="stn done"><span class="o"></span><span class="nm">Code</span></span><span class="seg"></span>
+        <span class="stn active"><span class="o"></span><span class="nm">Review</span></span><span class="seg future"></span>
+        <span class="stn todo"><span class="o"></span><span class="nm">Ship</span></span>
+      </div>
+    </div>
+    <div class="blk" style="border-bottom:none">
+      <div class="sect">Status</div>
+      <div class="railstat">
+        <span class="stat"><span class="k">Gate</span><span class="v act">awaiting you</span></span>
+        <span class="stat"><span class="k">Agent</span><span class="v sig">active<span class="trace"><i></i><i></i><i></i><i></i><i></i></span></span></span>
+        <span class="stat"><span class="k">Loop</span><span class="v">iter 03 · 2 open</span></span>
+      </div>
+    </div>
+    <div class="foot">
+      <button class="pill signal" id="qs">⌘K Quick-send</button>
+      <div class="row"><button class="iconbtn" id="tg" title="Toggle theme">◐</button><span class="stat"><span class="v" data-theme-label style="font-size:11px;color:var(--dim)">Light</span></span></div>
+    </div>
+  </aside>
+
+  <!-- FULL-BLEED MAIN -->
+  <main class="main">
+    <!-- VIEW 1 — Terminal -->
+    <div data-viewpane="1" class="on">
+      <div class="term" id="term">
+        <div class="dim">~/agent-terminal · feat/flow-shell</div>
+        <div><span class="u">$</span> claude</div>
+        <div>● Reviewing the capture pipeline for the Review gate…</div>
+        <div class="dim">  ● Read scanner.ts (482 lines)</div>
+        <div class="dim">  ● Bash(npm test -- scanner)  <span class="ok">24 passed</span></div>
+        <div>⏺ Two issues in the stability frontier. Full report written to <span class="u">review.md</span>:</div>
+        <div>  ▸ the frontier still <span class="src" data-find="f1">re-reads scrollback on every quiet pause</span></div>
+        <div>  ▸ a second pass <span class="src" data-find="f2">drops findings under the minimum-character floor</span> without flagging them</div>
+        <div style="margin-top:8px"><span class="u">$</span> <span class="cur">&nbsp;</span></div>
+        <div class="esc">esc to interrupt · ⌘K quick-send (keeps the terminal visible) · hover a finding to reveal its source here</div>
+      </div>
+    </div>
+    <!-- VIEW 2 — Artifacts -->
+    <div data-viewpane="2">
+      <div class="artsplit">
+        <div class="tree">
+          <div class="grp">This run</div>
+          <div class="f sel"><span class="ic">md</span> review.md <span class="tag">iter 03</span></div>
+          <div class="f"><span class="ic">md</span> plan.md <span class="tag">step 1</span></div>
+          <div class="f"><span class="ic">◆</span> diff · 6 files <span class="tag">code</span></div>
+          <div class="grp">GitHub</div>
+          <div class="f"><span class="ic">⌥</span> PR #42 <span class="tag">open</span></div>
+          <div class="f"><span class="ic">◷</span> CI · scanner <span class="tag">pass</span></div>
+        </div>
+        <div class="viewer scrolly">
+          <h1 class="vh">Review — capture pipeline</h1>
+          <div class="vmeta">review.md · iter 03 · <span class="vbadge">2 findings</span></div>
+          <p>The scanner now carves tool calls out of the report body, so a tool-heavy turn yields clean prose plus findings rather than a blob.</p>
+          <h2 class="vs">Stability frontier</h2>
+          <p>However, the frontier still <span class="marked">re-reads scrollback on every quiet pause</span>, which on a long session is measurable overhead. A second pass also <span class="marked">drops findings under the minimum-character floor</span> without flagging them.</p>
+          <h2 class="vs">Command-output capture</h2>
+          <p>Unchanged and behaves correctly across the test session. Select any passage to send it to the terminal or add it as a todo.</p>
+        </div>
+      </div>
+    </div>
+    <!-- VIEW 3 — Todos + gate -->
+    <div data-viewpane="3">
+      <div class="twocol">
+        <div class="pane">
+          <h2>Todos</h2><div class="sub">Curate, then send to the agent</div>
+          <div class="todos">
+            <div class="todo"><span class="chk"></span><div class="body"><div class="tx">Bound the scrollback re-scan — don't re-read on every quiet pause</div><div class="src"><span class="from">from review.md</span> · L42 · high</div></div><button class="linkbtn send">Send ↵</button></div>
+            <div class="todo"><span class="chk"></span><div class="body"><div class="tx">Flag sub-floor findings instead of dropping them silently</div><div class="src"><span class="from">from review.md</span> · L44</div></div><button class="linkbtn send">Send ↵</button></div>
+            <div class="todo"><span class="chk"></span><div class="body"><div class="tx">Re-run the scanner suite after the frontier fix</div><div class="src">manual</div></div><button class="linkbtn send">Send ↵</button></div>
+            <div class="todo done"><span class="chk"></span><div class="body"><div class="tx">Carve tool calls out of the report body</div><div class="src">done · §15.x</div></div></div>
+          </div>
+        </div>
+        <div class="pane">
+          <h2>Review gate</h2><div class="sub">Review came back — won't inject over a running process (§19.3)</div>
+          <div class="gatebar"><button class="pill app">Approve gate</button><button class="pill send">Request changes</button><button class="pill">Open report</button></div>
+          <div class="loop">
+            <div class="lrow"><span class="lk">iteration</span><span class="ld"></span><span class="lv">03</span></div>
+            <div class="lrow"><span class="lk">severity cycle</span><span class="ld"></span><span class="lv bad">high</span></div>
+            <div class="lrow"><span class="lk">open findings</span><span class="ld"></span><span class="lv">2</span></div>
+            <div class="lrow"><span class="lk">last verdict</span><span class="ld"></span><span class="lv bad">changes requested</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <!-- DOCKED, NON-BLURRING QUICK-SEND -->
+  <aside class="drawer" id="drawer">
+    <div class="dhead">
+      <button class="tab" data-tab="todo">Todo <span class="ct">3</span></button>
+      <button class="tab on" data-tab="capture">Capture <span class="ct">last</span></button>
+      <button class="iconbtn x" id="dclose" title="Close">✕</button>
+    </div>
+    <div class="panel" data-tabpanel="todo" hidden>
+      <div class="todos">
+        <div class="todo"><span class="chk"></span><div class="body"><div class="tx">Bound the scrollback re-scan</div><div class="src"><span class="from">review.md</span> · L42 · high</div></div><button class="pill sm signal">Send</button></div>
+        <div class="todo"><span class="chk"></span><div class="body"><div class="tx">Flag sub-floor dropped findings</div><div class="src"><span class="from">review.md</span> · L44</div></div><button class="pill sm signal">Send</button></div>
+        <div class="todo"><span class="chk"></span><div class="body"><div class="tx">Re-run the scanner suite</div><div class="src">manual</div></div><button class="pill sm signal">Send</button></div>
+      </div>
+    </div>
+    <div class="panel" data-tabpanel="capture">
+      <div class="capture">
+        <div class="head"><span class="fname">review.md · iter 03</span><button class="pill sm signal">Capture last report</button></div>
+        <div class="finding" data-find="f1"><div class="t">Unbounded scrollback re-scan each quiet pause.</div><div class="m">L42 · <span class="hi">severity high</span> · §15.3</div><div class="a"><button class="linkbtn">Add to todo</button><button class="linkbtn">Insert at cursor</button></div></div>
+        <div class="finding" data-find="f2"><div class="t">Sub-floor findings dropped silently.</div><div class="m">L44 · severity med · §15.7</div><div class="a"><button class="linkbtn">Add to todo</button><button class="linkbtn pass">Mark resolved</button></div></div>
+      </div>
+    </div>
+    <div class="dhint"><span>hover a finding → reveal in terminal</span><span><span class="kbd">⌘K</span> toggle</span></div>
+  </aside>
+</div>
+
+<script>
+  const root=document.documentElement, app=document.querySelector('.app');
+  if(matchMedia('(prefers-color-scheme:dark)').matches) root.setAttribute('data-theme','dark');
+  function setTheme(t){ root.setAttribute('data-theme',t); document.querySelectorAll('[data-theme-label]').forEach(e=>e.textContent=t==='dark'?'Dark':'Light'); }
+  setTheme(root.getAttribute('data-theme')||'light');
+  function setView(v){ document.querySelectorAll('[data-viewpane]').forEach(p=>p.classList.toggle('on',p.getAttribute('data-viewpane')===v)); document.querySelectorAll('[data-viewbtn]').forEach(b=>b.classList.toggle('on',b.getAttribute('data-viewbtn')===v)); }
+  function toggleDrawer(f){ app.classList.toggle('drawer-open'); if(f) selTab(f); }
+  function selTab(name){ document.querySelectorAll('.drawer .tab').forEach(t=>t.classList.toggle('on',t.getAttribute('data-tab')===name)); document.querySelectorAll('.drawer .panel').forEach(p=>p.hidden=p.getAttribute('data-tabpanel')!==name); }
+
+  document.addEventListener('click',e=>{
+    const vb=e.target.closest('[data-viewbtn]'); if(vb) setView(vb.getAttribute('data-viewbtn'));
+    const tb=e.target.closest('.drawer .tab'); if(tb) selTab(tb.getAttribute('data-tab'));
+    if(e.target.closest('#qs')) toggleDrawer();
+    if(e.target.closest('#dclose')) app.classList.remove('drawer-open');
+    if(e.target.closest('#tg')) setTheme(root.getAttribute('data-theme')==='dark'?'light':'dark');
+    const chk=e.target.closest('.todo .chk'); if(chk) chk.closest('.todo').classList.toggle('done');
+  });
+  document.addEventListener('keydown',e=>{ const m=e.metaKey||e.ctrlKey;
+    if(m&&e.key.toLowerCase()==='k'){e.preventDefault();toggleDrawer();}
+    else if(m&&['1','2','3'].includes(e.key)){e.preventDefault();setView(e.key);}
+  });
+  // cross-highlight (§16.8): finding <-> terminal source, both visible at once
+  function lit(id,on){ const s=document.querySelector('.term .src[data-find="'+id+'"]'); if(s) s.classList.toggle('lit',on); const f=document.querySelector('.finding[data-find="'+id+'"]'); if(f) f.classList.toggle('revealing',on); }
+  document.querySelectorAll('.finding[data-find]').forEach(f=>{ const id=f.getAttribute('data-find');
+    f.addEventListener('mouseenter',()=>lit(id,true)); f.addEventListener('mouseleave',()=>lit(id,false)); });
+  document.querySelectorAll('.term .src[data-find]').forEach(s=>{ const id=s.getAttribute('data-find');
+    s.addEventListener('mouseenter',()=>lit(id,true)); s.addEventListener('mouseleave',()=>lit(id,false)); });
+
+  // deep-link + demo state for review
+  const q=new URLSearchParams(location.search);
+  if(q.get('theme')) setTheme(q.get('theme'));
+  if(q.get('view')) setView(q.get('view'));
+  if(q.get('drawer')==='0') app.classList.remove('drawer-open');
+  if(q.get('reveal')) lit(q.get('reveal'),true);
+</script>
+</body>
+</html>

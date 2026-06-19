@@ -6,7 +6,7 @@
 import { appendFileSync, writeFileSync } from 'node:fs';
 import type { MonitorEventSource, MonitorEventType, SelectionRange } from '../shared/ipc';
 import type { ShadowMarker, ShadowReader } from './shadow';
-import type { Adapter } from './adapters/types';
+import type { Adapter, DetectedRegion } from './adapters/types';
 import type { CommandSpanRange } from './spanTypes';
 import { DEFAULT_CHROME_MARKERS, chromeRows, completedTurnFrontier } from './chrome';
 
@@ -50,7 +50,10 @@ export type ScannerEmit = (e: ScannerEmission) => string;
 export interface ScannerDeps {
   reader: ShadowReader;
   addMarker(absRow: number): ShadowMarker | undefined;
-  onQuiet(cb: () => void): () => void;
+  /** Subscribe to the active→quiet transition to AUTO-scan (the streaming-capture path,
+   *  §15.3). Omitted ⇒ the scanner is dormant: it never auto-emits and the dedup/watermark
+   *  machinery is never touched; capture happens only on demand via captureLast() (§21.1). */
+  onQuiet?(cb: () => void): () => void;
   /** Per-agent classifiers (enrichment): each carves out its structured blocks
    *  (tool-use / diff). Every classifier runs every scan — no fingerprint/selection. */
   adapters: Adapter[];
@@ -72,9 +75,24 @@ export interface ScannerDeps {
   /** Active chrome markers (§15.x) — leading glyphs that flag a line as agent-UI
    *  furniture. Grown by the user "marking as chrome"; omitted ⇒ the stock seed. */
   chromeMarkers?: () => readonly string[];
+  /** Text of the tracked shell commands (§15.5). captureLast (§21.1) skips a candidate report
+   *  that is just the echoed command line — the user's own input is not "the latest report".
+   *  The auto path doesn't need it (its watermark seals past the echo); omitted ⇒ no filter. */
+  commandTexts?: () => string[];
+}
+
+/** The latest report captured on demand (§21.1): the report region plus its split findings,
+ *  each with a stamped on-screen range. parentId is null on all — the caller links findings to
+ *  the report's stored id. */
+export interface CaptureLastResult {
+  report: ScannerEmission;
+  findings: ScannerEmission[];
 }
 
 export interface Scanner {
+  /** Run report-detection once against the CURRENT buffer and return the latest report (§21.1).
+   *  Stateless — no watermark, no cross-transition dedup; null when no report is present. */
+  captureLast(): CaptureLastResult | null;
   dispose(): void;
 }
 
@@ -266,6 +284,45 @@ export function createScanner(deps: ScannerDeps): Scanner {
     return { startRow: watermark.line + 1, truncated: false };
   }
 
+  /** The shared detection pass (§15.3): classifiers carve structured blocks, then the
+   *  glyph-agnostic baseline captures the remaining prose as reports. Pure — no watermark,
+   *  dedup or emission. Both the auto-scan (scan) and on-demand capture (captureLast) use it,
+   *  so detection is identical whichever trigger fired. Returns the supporting context too so
+   *  scan() can keep its per-row capture-trace dump. */
+  function detectRegions(startRow: number, endRow: number): {
+    allRegions: DetectedRegion[];
+    claimed: Set<number>;
+    isChrome: (row: number) => boolean;
+    markers: readonly string[];
+    closedSpans: CommandSpanRange[];
+  } {
+    const closedSpans = deps.closedSpans?.() ?? [];
+    // Chrome (§15.x): the bottom-anchored, rule-framed composer, any line whose leading
+    // glyph is a profile marker, and the indented continuations beneath such a line.
+    // All signals are theme-independent, so adapters skip furniture without a literal glyph.
+    const markers = deps.chromeMarkers?.() ?? DEFAULT_CHROME_MARKERS;
+    const isChrome = chromeRows(reader, startRow, endRow, markers);
+    const altScreen = reader.bufferType() === 'alternate';
+    const ctx = { reader, startRow, endRow, altScreen, closedSpans, reportMinChars: deps.reportMinChars, isChrome };
+
+    // Enrichment first: every classifier carves out its structured blocks (tool-use /
+    // diff). Their rows are claimed so the baseline won't also fold them into a report.
+    const claimed = new Set<number>();
+    const structured: DetectedRegion[] = [];
+    for (const adapter of deps.adapters) {
+      for (const region of adapter.detect(ctx)) {
+        structured.push(region);
+        for (let r = region.startRow; r <= region.endRow; r++) claimed.add(r);
+      }
+    }
+    // Then the always-on, glyph-agnostic baseline captures the remaining prose as
+    // reports. Capture never hinges on an agent's themeable bullet, so a `⏺`→`●` change
+    // (or any unrecognized structure) can't cost us a capture (§15.x).
+    const baseCtx = { ...ctx, isClaimed: (row: number) => claimed.has(row) };
+    const reports = deps.baseline?.detect(baseCtx) ?? [];
+    return { allRegions: [...structured, ...reports], claimed, isChrome, markers, closedSpans };
+  }
+
   let scanCount = 0;
   function scan() {
     const altScreen = reader.bufferType() === 'alternate';
@@ -287,31 +344,7 @@ export function createScanner(deps: ScannerDeps): Scanner {
     );
 
     if (!altScreen && startRow <= endRow) {
-      const closedSpans = deps.closedSpans?.() ?? [];
-      // Chrome (§15.x): the bottom-anchored, rule-framed composer, any line whose leading
-      // glyph is a profile marker, and the indented continuations beneath such a line.
-      // All signals are theme-independent, so adapters skip furniture without a literal glyph.
-      const markers = deps.chromeMarkers?.() ?? DEFAULT_CHROME_MARKERS;
-      const isChrome = chromeRows(reader, startRow, endRow, markers);
-      const ctx = { reader, startRow, endRow, altScreen, closedSpans, reportMinChars: deps.reportMinChars, isChrome };
-
-      // Enrichment first: every classifier carves out its structured blocks (tool-use /
-      // diff). Their rows are claimed so the baseline won't also fold them into a report.
-      const claimed = new Set<number>();
-      const structured: ReturnType<Adapter['detect']> = [];
-      for (const adapter of deps.adapters) {
-        for (const region of adapter.detect(ctx)) {
-          structured.push(region);
-          for (let r = region.startRow; r <= region.endRow; r++) claimed.add(r);
-        }
-      }
-      // Then the always-on, glyph-agnostic baseline captures the remaining prose as
-      // reports. Capture never hinges on an agent's themeable bullet, so a `⏺`→`●` change
-      // (or any unrecognized structure) can't cost us a capture (§15.x).
-      const baseCtx = { ...ctx, isClaimed: (row: number) => claimed.has(row) };
-      const reports = deps.baseline?.detect(baseCtx) ?? [];
-
-      const allRegions = [...structured, ...reports];
+      const { allRegions, claimed, isChrome, markers, closedSpans } = detectRegions(startRow, endRow);
       if (allRegions.length > 0) bottomUnitStart = Math.max(...allRegions.map((r) => r.startRow));
 
       if (SCANNER_DEBUG) {
@@ -424,9 +457,61 @@ export function createScanner(deps: ScannerDeps): Scanner {
     watermark = altScreen || sealRow < 0 ? undefined : addMarker(sealRow);
   }
 
-  const unsub = deps.onQuiet(scan);
+  // Auto-scan only when a quiet source is wired (the streaming path); the app omits it so
+  // capture is purely on demand (§21.1). No subscription ⇒ scan/dedup/watermark never run.
+  const unsub = deps.onQuiet ? deps.onQuiet(scan) : () => {};
+
+  /** Run detection once against the current buffer and return the latest report (§21.1).
+   *  Stateless: reads from the top of the buffer (scrollback included), picks the bottom-most
+   *  `report` region as "the latest", and stamps each finding's own range (§16.8). */
+  function captureLast(): CaptureLastResult | null {
+    if (reader.bufferType() === 'alternate') return null; // alt buffer is out of scope (§15.9)
+    const endRow = reader.length() - 1;
+    if (endRow < 0) return null;
+    const { allRegions } = detectRegions(0, endRow);
+    // The echoed command line is substantial prose the baseline would capture, but it is the
+    // user's own input, not a report (§21.1). The auto path's watermark seals past it; here we
+    // skip a candidate that IS the echoed input line: "<prompt> <command>", i.e. the command at the
+    // END preceded only by a shell prompt (or nothing). Requiring a prompt prefix — not just an
+    // endsWith — keeps real prose that merely names a command, even at the end ("…then run npm test").
+    const commands = (deps.commandTexts?.() ?? []).map(normalize).filter((c) => c.length > 0);
+    const isCommandEcho = (text: string): boolean => {
+      const n = normalize(text);
+      return commands.some((c) => {
+        if (!n.endsWith(c)) return false;
+        const prefix = n.slice(0, n.length - c.length);
+        // Empty, or just a shell prompt (…ending in $ # % > ❯ › » then optional space).
+        return prefix === '' || /[$#%>❯›»]\s*$/.test(prefix);
+      });
+    };
+    let region: DetectedRegion | undefined;
+    for (const r of allRegions) {
+      if (r.type !== 'report' || isCommandEcho(r.text)) continue;
+      if (!region || r.startRow > region.startRow) region = r;
+    }
+    if (!region) return null;
+    if (deps.isSuppressed?.({ startRow: region.startRow, endRow: region.endRow })) return null;
+    const report: ScannerEmission = {
+      type: region.type,
+      source: region.source,
+      text: region.text,
+      parentId: null,
+      truncated: false,
+      range: rangeOf(region.startRow, region.endRow),
+    };
+    const findings: ScannerEmission[] = (region.children ?? []).map((child) => ({
+      type: child.type,
+      source: child.source,
+      text: child.text,
+      parentId: null,
+      truncated: false,
+      range: rangeOf(child.startRow, child.endRow),
+    }));
+    return { report, findings };
+  }
 
   return {
+    captureLast,
     dispose() {
       unsub();
       watermark?.dispose();

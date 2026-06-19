@@ -24,7 +24,7 @@ export function resolveElements<K extends string>(
 /** The action window's element ids (§16.1) — the single declaration of the pane DOM contract. */
 export const MONITOR_ELEMENT_IDS = {
   status: 'monitor-status',
-  history: 'command-history',
+  captureLast: 'capture-last',
   blocks: 'monitor-blocks',
   tabCapture: 'tab-capture',
   tabTodo: 'tab-todo',

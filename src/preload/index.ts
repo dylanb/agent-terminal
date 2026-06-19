@@ -3,10 +3,14 @@ import {
   CH,
   SESSION_ID,
   type AgentInjectMsg,
+  type ArtifactScope,
+  type ArtifactTree,
   type CommandCaptureResult,
   type CommandSummary,
   type CwdChangedMsg,
   type MonitorApi,
+  type ViewerApi,
+  type ViewerFile,
   type MonitorCaptureMsg,
   type MonitorEvent,
   type MonitorEventMsg,
@@ -48,6 +52,7 @@ const monitorApi: MonitorApi = {
       sessionId: SESSION_ID,
       commandId,
     }) as Promise<CommandCaptureResult | null>,
+  captureLast: () => ipcRenderer.invoke(CH.captureLast, { sessionId: SESSION_ID }) as Promise<MonitorEvent[]>,
   dismiss: (eventId) => ipcRenderer.send(CH.monitorDismiss, { sessionId: SESSION_ID, eventId }),
   dismissAll: () => ipcRenderer.send(CH.monitorDismissAll, { sessionId: SESSION_ID }),
   learnChrome: (eventId, sample) =>
@@ -73,5 +78,13 @@ const monitorApi: MonitorApi = {
     ipcRenderer.invoke(CH.todoDelete, { sessionId: SESSION_ID, repoKey, id }) as Promise<TodoItem[]>,
 };
 
+const viewerApi: ViewerApi = {
+  tree: (scope: ArtifactScope) =>
+    ipcRenderer.invoke(CH.viewerTree, { sessionId: SESSION_ID, scope }) as Promise<ArtifactTree>,
+  read: (relPath) =>
+    ipcRenderer.invoke(CH.viewerRead, { sessionId: SESSION_ID, relPath }) as Promise<ViewerFile | null>,
+};
+
 contextBridge.exposeInMainWorld('term', termApi);
 contextBridge.exposeInMainWorld('monitor', monitorApi);
+contextBridge.exposeInMainWorld('viewer', viewerApi);

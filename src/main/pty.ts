@@ -22,6 +22,13 @@ function isBashShell(shellPath: string): boolean {
   return /(^|\/)bash$/.test(shellPath);
 }
 
+/** The directory bash is spawned in (§5): $HOME, else the home arg. Also the artifact
+ *  viewer's cwd fallback before the first OSC 7 (§20.1) — so the viewer starts where the
+ *  terminal starts, not in the Electron process dir. */
+export function spawnCwd(env: NodeJS.ProcessEnv, home: string): string {
+  return env.HOME || home;
+}
+
 export function buildSpawnConfig(input: {
   platform: NodeJS.Platform;
   env: NodeJS.ProcessEnv;
@@ -56,7 +63,7 @@ export function buildSpawnConfig(input: {
       name: 'xterm-256color',
       cols: 80,
       rows: 24,
-      cwd: env.HOME || home,
+      cwd: spawnCwd(env, home),
       env: {
         ...cleanEnv,
         ...(probedPath ? { PATH: probedPath } : {}),

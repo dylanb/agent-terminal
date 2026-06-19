@@ -20,35 +20,32 @@ function makeEvent(type: MonitorEventType, over: Partial<MonitorEvent> = {}): Mo
 
 describe('Capture pane rendering filter (§15.x — tool-call furniture is not a capture card)', () => {
   let blocksEl: HTMLElement;
-  let historyEl: HTMLElement;
 
   function makeTab() {
     blocksEl = document.createElement('div');
-    historyEl = document.createElement('div');
     return createCaptureTab({
       blocksEl,
-      historyEl,
-      monitor: { dismiss: vi.fn(), dismissAll: vi.fn(), clearCommands: vi.fn(), learnChrome: vi.fn() },
       todoSink: {
         currentRepoKey: () => '/repo',
-        addFromCapture: vi.fn(async () => ({ repoKey: '/repo', id: 't1' })),
-        deleteTodo: vi.fn(async () => {}),
+        addFromCapture: vi.fn(async () => null),
+        deleteTodo: vi.fn(async () => undefined),
       } as never,
+      monitor: { dismiss: vi.fn(), dismissAll: vi.fn() } as never,
+      doInject: vi.fn(),
     });
   }
 
   afterEach(() => vi.restoreAllMocks());
 
-  it('renders report blocks but never renders tool-use or diff blocks (they only carve report text, §15.x)', () => {
+  it('renders actionable findings but never report blobs, tool-use, or diff (§15.x / §24.1)', () => {
     const tab = makeTab();
-    tab.appendBlock(makeEvent('report'));
+    tab.appendBlock(makeEvent('finding'));
+    tab.appendBlock(makeEvent('report')); // carved into findings; the blob itself is not a card
     tab.appendBlock(makeEvent('tool-use'));
     tab.appendBlock(makeEvent('diff'));
 
-    const blocks = blocksEl.querySelectorAll('.capture-block');
-    expect(blocks).toHaveLength(1);
-    expect((blocks[0] as HTMLElement).dataset.type).toBe('report');
-    expect(blocksEl.querySelector('[data-type="tool-use"]')).toBeNull();
-    expect(blocksEl.querySelector('[data-type="diff"]')).toBeNull();
+    const cards = blocksEl.querySelectorAll('.finding');
+    expect(cards).toHaveLength(1);
+    expect(cards[0].querySelector('.t')!.textContent).toBe('finding body text');
   });
 });

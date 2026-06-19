@@ -1,5 +1,6 @@
 import { app, BrowserWindow, ipcMain } from 'electron';
 import path from 'node:path';
+import os from 'node:os';
 import {
   CH,
   SESSION_ID,
@@ -11,13 +12,14 @@ import {
 import { createInjector } from './inject';
 import { createMonitorEventStore } from './eventStore';
 import { createShadowModel } from './shadow';
-import { spawnAgentShell } from './pty';
+import { spawnAgentShell, spawnCwd } from './pty';
 import { createOutputGate } from './outputGate';
 import { resolveRendererTarget } from './rendererTarget';
 import { installNavigationGuards } from './windowGuards';
 import {
   isValidCapture,
   isValidCaptureCommand,
+  isValidCaptureLast,
   isValidClearCommands,
   isValidCommandsRequest,
   isValidDismiss,
@@ -33,6 +35,8 @@ import {
   isValidTodoReorder,
   isValidTodoSetStatus,
   isValidTodoUpdate,
+  isValidViewerRead,
+  isValidViewerTree,
 } from './ipcValidation';
 import { createTodoStore } from './todoStore';
 import { createUiSettingsStore } from './uiSettings';
@@ -40,7 +44,10 @@ import { registerIpcListeners } from './sessionIpc';
 import { resolveRuntimeConfig } from './runtimeConfig';
 import { createCommandTracker } from './commandTracker';
 import { createCwdTracker } from './cwdTracker';
+import { currentRepoInfo } from './repoKey';
 import { createScanner } from './scanner';
+import { captureLastReport } from './captureLast';
+import { discover, readArtifact, emptyTree } from './artifactTree';
 import { createChromeProfileStore } from './chromeProfile';
 import { learnMarkers } from './chrome';
 import { createInjectionSuppressor } from './injectionSuppression';
@@ -102,6 +109,9 @@ async function createWindow(): Promise<void> {
   // TODO(dylan): the full OSC-7 → cwd:changed → repo-list-swap loop through real
   // node-pty + bash is verified in the §F e2e (plan PR5 5c) — recorded gap.
   const cwdTracker = createCwdTracker({ onOsc: (id, cb) => shadow.onOsc(id, cb) });
+  // Before the first OSC 7 the viewer discovers against where bash was actually spawned
+  // (the terminal's start dir), not the Electron process dir — so it starts in sync (§20.1).
+  const viewerCwd = (): string => cwdTracker.cwd() ?? spawnCwd(process.env, os.homedir());
   cwdTracker.onChange(({ cwd, repoKey }) =>
     send(CH.cwdChanged, { sessionId: SESSION_ID, cwd, repoKey }),
   );
@@ -118,7 +128,9 @@ async function createWindow(): Promise<void> {
   const scanner = createScanner({
     reader: shadow.reader,
     addMarker: (r) => shadow.addMarker(r),
-    onQuiet: (cb) => shadow.onQuiet(cb),
+    // No onQuiet ⇒ capture is manual, on demand (§21.1): the scanner never auto-emits and its
+    // dedup/watermark machinery lies dormant. "Capture last report" (capture:last) is the only
+    // path; emit/remove below are retained for the dormant streaming path but never fire here.
     adapters: config.adapterEnabled('claude-code') ? [createClaudeCodeAdapter()] : [],
     baseline: createGenericAdapter(),
     dedupRetention: config.dedupRetention,
@@ -126,6 +138,7 @@ async function createWindow(): Promise<void> {
     closedSpans: () => tracker.closedSpans(),
     isSuppressed: (region) => suppressor.isSuppressed(region),
     chromeMarkers: () => chromeProfile.markers(),
+    commandTexts: () => tracker.summaries().map((s) => s.command),
     emit: (e) => {
       const event = store.addEvent({
         sessionId: SESSION_ID,
@@ -211,12 +224,11 @@ async function createWindow(): Promise<void> {
       [CH.monitorReplay]: () => store.list(),
       // §16.3: the pane queries the current repo on mount; the live cwd:changed
       // broadcast fires only on key change, so a pane that missed the first OSC 7
-      // (emitted before it subscribed) learns the repo key only by asking.
-      [CH.monitorCurrentRepo]: () => {
-        const cwd = cwdTracker.cwd();
-        const repoKey = cwdTracker.repoKey();
-        return cwd !== null && repoKey !== null ? { cwd, repoKey } : null;
-      },
+      // (emitted before it subscribed) learns the repo key only by asking. Falls back to
+      // the spawn cwd ($HOME) when nothing is tracked yet — without a key todos no-op, so
+      // the spawn directory must still scope to itself (mirrors viewerCwd, §20.1).
+      [CH.monitorCurrentRepo]: () =>
+        currentRepoInfo(cwdTracker.cwd(), cwdTracker.repoKey(), spawnCwd(process.env, os.homedir())),
       [CH.uiGetSettings]: () => uiSettings.get(),
       [CH.monitorCommands]: (_e, m): CommandSummary[] =>
         isValidCommandsRequest(m)
@@ -226,6 +238,14 @@ async function createWindow(): Promise<void> {
       // null on a malformed payload or an unknown/trimmed id.
       [CH.monitorCaptureCommandText]: (_e, m): CommandCaptureResult | null =>
         isValidCaptureCommand(m) ? (tracker.capture(m.commandId) ?? null) : null,
+      // "Capture last report" (§21.1): detect the latest report now and make it the pane's
+      // single captured report (replacing the prior in the store, so reload-replay stays
+      // single-slot). Returned to the caller, which renders it single-slot — not broadcast,
+      // since onEvent would prepend a duplicate rather than replace.
+      // Fail-closed to [] on a malformed/wrong-session payload (the renderer treats [] as "nothing
+      // captured, keep the prior report"), enforcing the §6 live-session check like its siblings.
+      [CH.captureLast]: (_e, m) =>
+        isValidCaptureLast(m) ? captureLastReport(SESSION_ID, store, scanner) : [],
       // Todo CRUD (§16.4) — each returns the fresh repo list; fail-closed to [] on
       // a malformed payload so a bad message can never mutate another repo's list.
       [CH.todoList]: (_e, m) => (isValidTodoList(m) ? todoStore.list(m.repoKey) : []),
@@ -235,6 +255,11 @@ async function createWindow(): Promise<void> {
       [CH.todoSetStatus]: (_e, m) =>
         isValidTodoSetStatus(m) ? todoStore.setStatus(m.repoKey, m.id, m.status) : [],
       [CH.todoDelete]: (_e, m) => (isValidTodoDelete(m) ? todoStore.delete(m.repoKey, m.id) : []),
+      // Artifact viewer (§20.1/§20.2): discover/read against the session's live cwd (OSC 7),
+      // falling back to the shell spawn directory ($HOME / os.homedir()) before the first prompt
+      // (see viewerCwd). Read is path-escape-guarded.
+      [CH.viewerTree]: (_e, m) => (isValidViewerTree(m) ? discover(viewerCwd(), m.scope) : emptyTree(viewerCwd())),
+      [CH.viewerRead]: (_e, m) => (isValidViewerRead(m) ? readArtifact(viewerCwd(), m.relPath) : null),
     },
   );
 

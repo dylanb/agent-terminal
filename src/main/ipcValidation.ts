@@ -2,10 +2,12 @@
 // and single today, but unvalidated cols/rows reach native ptyProcess.resize and a
 // non-positive/NaN value throws an uncaught exception in the main process.
 
+import path from 'node:path';
 import {
   SESSION_ID,
   type AgentInjectMsg,
   type CaptureCommandMsg,
+  type CaptureLastMsg,
   type ClearCommandsMsg,
   type CommandsRequestMsg,
   type DismissAllMsg,
@@ -22,6 +24,8 @@ import {
   type TodoSourceType,
   type TodoUpdateMsg,
   type UiSetSettingsMsg,
+  type ViewerReadMsg,
+  type ViewerTreeMsg,
 } from '../shared/ipc';
 
 const TODO_SOURCE_TYPES: readonly TodoSourceType[] = [
@@ -69,6 +73,10 @@ export function isValidCaptureCommand(m: unknown): m is CaptureCommandMsg {
   return isRecord(m) && isLiveSession(m) && typeof m.commandId === 'string';
 }
 
+export function isValidCaptureLast(m: unknown): m is CaptureLastMsg {
+  return isRecord(m) && isLiveSession(m);
+}
+
 export function isValidDismiss(m: unknown): m is DismissMsg {
   return isRecord(m) && isLiveSession(m) && typeof m.eventId === 'string';
 }
@@ -87,6 +95,11 @@ export function isValidSetSettings(m: unknown): m is UiSetSettingsMsg {
   const s = m.settings;
   if ('splitRatio' in s && (typeof s.splitRatio !== 'number' || !Number.isFinite(s.splitRatio))) return false;
   if ('lastTab' in s && s.lastTab !== 'capture' && s.lastTab !== 'todo') return false;
+  if ('theme' in s && s.theme !== 'light' && s.theme !== 'dark') return false;
+  // Artifact viewer widths (§20.2) — finite numbers only, no NaN/Infinity/non-number.
+  for (const k of ['artifactTreeWidth', 'artifactFullscreenTreeWidth'] as const) {
+    if (k in s && (typeof s[k] !== 'number' || !Number.isFinite(s[k]))) return false;
+  }
   return true;
 }
 
@@ -96,8 +109,14 @@ export function isValidClearCommands(m: unknown): m is ClearCommandsMsg {
 
 // ---- todo:* validators (§16.3 / §16.4). repoKey is threaded on every mutation. ----
 
+/** A repoKey is a main-derived absolute repo/cwd path; it becomes a filesystem write path
+ *  in todoStore, so reject non-absolute or traversal-laden keys at the boundary (§6). */
+function isSafeRepoKey(v: unknown): v is string {
+  return typeof v === 'string' && path.isAbsolute(v) && !v.split(/[/\\]/).includes('..');
+}
+
 function isTodoBase(m: unknown): m is Record<string, unknown> {
-  return isRecord(m) && isLiveSession(m) && typeof m.repoKey === 'string';
+  return isRecord(m) && isLiveSession(m) && isSafeRepoKey(m.repoKey);
 }
 
 function isValidSource(s: unknown): boolean {
@@ -130,4 +149,14 @@ export function isValidTodoSetStatus(m: unknown): m is TodoSetStatusMsg {
 
 export function isValidTodoDelete(m: unknown): m is TodoDeleteMsg {
   return isTodoBase(m) && typeof m.id === 'string';
+}
+
+// ---- viewer:* validators (§20.1/§20.2). ----
+
+export function isValidViewerTree(m: unknown): m is ViewerTreeMsg {
+  return isRecord(m) && isLiveSession(m) && (m.scope === 'curated' || m.scope === 'repo');
+}
+
+export function isValidViewerRead(m: unknown): m is ViewerReadMsg {
+  return isRecord(m) && isLiveSession(m) && typeof m.relPath === 'string';
 }

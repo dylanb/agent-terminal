@@ -9,7 +9,8 @@ import { resolveMonitorElements } from './dom';
 import { createStatusStrip } from './statusStrip';
 import { createTodoTab } from './todoTab';
 import { createCaptureTab } from './captureTab';
-import { REVEAL_CAPTURE_EVENT, TODOS_CHANGED_EVENT } from './paneActions';
+import { createRepoContext, type RepoContext } from './repoContext';
+import { doInject, REVEAL_CAPTURE_EVENT, TODOS_CHANGED_EVENT } from './paneActions';
 
 // Re-exported for callers that import these from the pane module (selection.ts, tests).
 export {
@@ -23,19 +24,23 @@ export {
   TODO_UNDO_MS,
 } from './paneActions';
 
-export function wireMonitorPane(): void {
+export function wireMonitorPane(repo: RepoContext = createRepoContext(window.monitor)): void {
   const el = resolveMonitorElements();
   const status = createStatusStrip(el.status);
-  const todoTab = createTodoTab({ todoListEl: el.todoList, todoCountEl: el.todoCount, monitor: window.monitor });
+  const todoTab = createTodoTab({
+    todoListEl: el.todoList,
+    todoCountEl: el.todoCount,
+    monitor: window.monitor,
+    doInject,
+  });
   const captureTab = createCaptureTab({
     blocksEl: el.blocks,
-    historyEl: el.history,
-    monitor: window.monitor,
     todoSink: todoTab,
+    monitor: window.monitor,
+    doInject,
   });
 
   let activeTab: TabId = 'capture';
-  const pullCommands = (): void => void window.monitor.commands().then((c) => captureTab.renderCommands(c));
 
   // ---- Tabs (§16.1) ----
   function selectTab(tab: TabId, persist = true): void {
@@ -52,14 +57,25 @@ export function wireMonitorPane(): void {
   el.tabCapture.addEventListener('click', () => selectTab('capture'));
   el.tabTodo.addEventListener('click', () => selectTab('todo'));
 
-  window.monitor.onUpdate((msg) => {
-    status.update(msg);
-    pullCommands();
+  // Capture is manual + single-slot (§21.1): run report-detection on demand and replace the
+  // shown report with the latest. Nothing auto-emits, so there is no unread dot to raise.
+  el.captureLast.addEventListener('click', () => {
+    void window.monitor
+      .captureLast()
+      // [] means nothing was detected AND main kept the prior capture (a scrolled-away buffer
+      // must not wipe it) — so only replace the shown report when there's actually one (§21.1).
+      .then((events) => {
+        if (events.length > 0) captureTab.showReport(events);
+      })
+      .catch(() => {}); // a rejected invoke (main restart) must not be an unhandled rejection
   });
 
+  window.monitor.onUpdate((msg) => status.update(msg));
+
+  // Live captures (manual selection, §16.2) still arrive on this channel; the scanner no
+  // longer auto-emits reports/findings (§21.1) — those come only via the button above.
   window.monitor.onEvent((event) => {
     captureTab.appendBlock(event);
-    // Unread dot (§16.1): a capture arrived while another tab was active.
     if (activeTab !== 'capture') el.unreadDot.hidden = false;
   });
 
@@ -67,16 +83,10 @@ export function wireMonitorPane(): void {
   // one and asks the pane to drop the superseded block (its findings cascade with it).
   window.monitor.onEventRemoved((eventId) => captureTab.removeBlock(eventId));
 
-  window.monitor.onCommandsChanged(() => pullCommands());
-
-  // Repo-scoped todos (§16.3): a repo-key change swaps the displayed list, unless a
-  // todo edit is open — then the Todo tab defers it until the edit resolves.
-  window.monitor.onCwdChanged((m) => todoTab.onRepoChanged(m.repoKey));
-  // The live broadcast fires only on key *change*; the first OSC 7 may predate this
-  // subscription, so seed the repo key on mount or the todo actions silently no-op.
-  void window.monitor.currentRepo().then((r) => {
-    if (r) todoTab.onRepoChanged(r.repoKey);
-  });
+  // Repo-scoped todos (§16.3): the shared repo context delivers the seeded key on mount and
+  // every subsequent cd; a repo-key change swaps the displayed list, unless a todo edit is
+  // open — then the Todo tab defers it until the edit resolves.
+  repo.onChange((info) => todoTab.onRepoChanged(info.repoKey));
 
   // A todo added from the terminal pane (Capture selection, §16.2) refreshes the count/list.
   window.addEventListener(TODOS_CHANGED_EVENT, () => todoTab.refresh());
@@ -91,13 +101,19 @@ export function wireMonitorPane(): void {
 
   window.monitor.onExit(() => status.setExited());
 
-  void window.monitor.replay().then((events) => {
-    for (const e of events) captureTab.appendBlock(e);
-  });
-  pullCommands();
+  void window.monitor
+    .replay()
+    .then((events) => {
+      for (const e of events) captureTab.appendBlock(e);
+    })
+    .catch(() => {}); // a rejected invoke (main restart) must not be an unhandled rejection
 
   // Restore the remembered tab (§16.1 / §16.6) before first paint of either panel.
-  void window.monitor.getSettings().then((s) => selectTab(s.lastTab, false));
+  // On a rejected invoke, keep the markup default tab rather than crash with an unhandled rejection.
+  void window.monitor
+    .getSettings()
+    .then((s) => selectTab(s.lastTab, false))
+    .catch(() => {});
 
   status.render();
 }

@@ -6,6 +6,7 @@
 
 import { existsSync } from 'node:fs';
 import path from 'node:path';
+import type { RepoInfo } from '../shared/ipc';
 
 export function resolveRepoKey(cwd: string): string {
   const start = path.resolve(cwd);
@@ -16,4 +17,20 @@ export function resolveRepoKey(cwd: string): string {
     if (parent === dir) return start; // reached filesystem root, no repo
     dir = parent;
   }
+}
+
+/**
+ * The repo to scope todos to (§16.3), backing `monitor:currentRepo`. Prefers the OSC 7-tracked
+ * cwd/key, but **falls back to the spawn cwd** (i.e. $HOME) when nothing is tracked yet — the
+ * same fallback the artifact viewer uses (§20.1). Without it, the todo path has a null repo key
+ * until the first OSC 7 (or forever, if integration is unavailable), so todos silently no-op in
+ * the spawn directory.
+ */
+export function currentRepoInfo(
+  trackedCwd: string | null,
+  trackedKey: string | null,
+  fallbackCwd: string,
+): RepoInfo {
+  const cwd = trackedCwd ?? fallbackCwd;
+  return { cwd, repoKey: trackedKey ?? resolveRepoKey(cwd) };
 }

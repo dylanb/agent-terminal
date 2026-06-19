@@ -3,6 +3,7 @@ import { SESSION_ID } from '../../src/shared/ipc';
 import {
   isValidCapture,
   isValidCaptureCommand,
+  isValidCaptureLast,
   isValidClearCommands,
   isValidCommandsRequest,
   isValidDismiss,
@@ -69,6 +70,12 @@ describe('IPC payload validation (§6 — renderer-supplied input is untrusted)'
     expect(isValidCommandsRequest(null)).toBe(false);
   });
 
+  it('accepts a well-formed capture:last request and rejects a wrong/missing sessionId (§21.1)', () => {
+    expect(isValidCaptureLast({ sessionId: sid })).toBe(true);
+    expect(isValidCaptureLast({ sessionId: 'other' })).toBe(false);
+    expect(isValidCaptureLast(null)).toBe(false);
+  });
+
   it('accepts a capture-command request and rejects missing/non-string commandId (§15.4)', () => {
     expect(isValidCaptureCommand({ sessionId: sid, commandId: 'abc' })).toBe(true);
     expect(isValidCaptureCommand({ sessionId: sid, commandId: 7 })).toBe(false);
@@ -95,9 +102,20 @@ describe('IPC payload validation (§6 — renderer-supplied input is untrusted)'
     expect(isValidSetSettings({ settings: { lastTab: 'todo' } })).toBe(true);
     expect(isValidSetSettings({ settings: { splitRatio: 0.5, lastTab: 'capture' } })).toBe(true);
     expect(isValidSetSettings({ settings: {} })).toBe(true);
+    expect(isValidSetSettings({ settings: { theme: 'dark' } })).toBe(true);
+    expect(isValidSetSettings({ settings: { theme: 'light' } })).toBe(true);
     expect(isValidSetSettings({ settings: { lastTab: 'bogus' } })).toBe(false);
+    expect(isValidSetSettings({ settings: { theme: 'sepia' } })).toBe(false);
     expect(isValidSetSettings({ settings: { splitRatio: 'wide' } })).toBe(false);
     expect(isValidSetSettings({ settings: { splitRatio: Number.NaN } })).toBe(false);
+    // Artifact viewer widths (§20.2) cross the renderer→main trust boundary too (§6):
+    // accept finite numbers, reject NaN/Infinity/non-numbers.
+    expect(isValidSetSettings({ settings: { artifactTreeWidth: 248 } })).toBe(true);
+    expect(isValidSetSettings({ settings: { artifactFullscreenTreeWidth: 600 } })).toBe(true);
+    expect(isValidSetSettings({ settings: { artifactTreeWidth: Number.NaN } })).toBe(false);
+    expect(isValidSetSettings({ settings: { artifactTreeWidth: Number.POSITIVE_INFINITY } })).toBe(false);
+    expect(isValidSetSettings({ settings: { artifactTreeWidth: '248' } })).toBe(false);
+    expect(isValidSetSettings({ settings: { artifactFullscreenTreeWidth: Number.NaN } })).toBe(false);
     expect(isValidSetSettings({ settings: null })).toBe(false);
     expect(isValidSetSettings({})).toBe(false);
     expect(isValidSetSettings(null)).toBe(false);
@@ -116,6 +134,11 @@ describe('IPC payload validation (§6 — renderer-supplied input is untrusted)'
     expect(isValidTodoList({ sessionId: sid, repoKey: 7 })).toBe(false);
     expect(isValidTodoList({ sessionId: sid })).toBe(false);
     expect(isValidTodoList({ sessionId: 'other', repoKey: '/repo' })).toBe(false);
+    // repoKey becomes a filesystem write path in todoStore — reject non-absolute or
+    // traversal-laden keys at the trust boundary (§6) so a buggy/hostile renderer can't
+    // write a todos.json outside the repo.
+    expect(isValidTodoList({ sessionId: sid, repoKey: 'relative/path' })).toBe(false);
+    expect(isValidTodoList({ sessionId: sid, repoKey: '/repo/../../etc' })).toBe(false);
   });
 
   it('accepts a todo:add with/without a source and rejects bad text or source', () => {

@@ -1,12 +1,145 @@
 # Technical Specification — Agent Terminal: Foundation for a Coding-Agent Management Application
 
-**Document status:** Draft v2.6
-**Scope:** Foundation / "walking skeleton" build only — plus drafted requirements for the next phase (§15)
+**Document status:** Draft v2.46
+**Scope:** Foundation / "walking skeleton" build (shipped) + semantic/command capture (shipped, §15–§16) + the **task-flow management** phase (§17–§24): requirements drafted, and **Phase 1 — the three-view UI shell with real cores and fixture-mocked machinery (§24.1) — shipped**
 **Target platforms:** Linux and macOS (Windows out of scope for this version)
 
-> **Changelog v2.28:** Fixed the **cross-highlight reveal pointing at the wrong content after a window resize** (§16.8), and made added chunks **read as processed** during the Add-to-todo undo window (§16.2). **Cross-highlight (resize fix):** a capture's `MonitorEvent.range` is in **scan-time absolute rows**; a resize **reflows** the transcript (lines re-wrap), so those rows then name different content and a double-click in either direction mis-highlighted. The cure is the §7.4 marker-anchoring guarantee applied to provenance: the terminal pane now **anchors an xterm marker** to each capture's first and last rows the moment the pane publishes its span (`app:capture-range-add {id, range}`), and disposes them when the block is dropped (`app:capture-range-remove {id}`). xterm markers track their buffer lines through scroll **and** reflow, so the link stays true across resizes. Reveals are now keyed by **capture id**, not raw rows: **terminal → capture** resolves the double-clicked row to the most-specific covering capture **from the markers' live lines** (`pickRevealTarget`, unit-tested) and dispatches `app:reveal-capture {id}`; **capture → terminal** dispatches `app:reveal-terminal {id}` and the terminal reads that capture's current marker rows to draw the amber decoration. The capture pane no longer holds any coordinates — it deals only in ids — keeping the panes decoupled (§9.1). A marker trimmed out of scrollback disposes itself ⇒ that capture simply reveals nothing (best-effort, §7.3). The §16.8 e2e gained a **resize step** (re-wrap the transcript, then re-reveal the correct finding); the matcher and the pane's id-based reveal/publish contract are unit-tested. **Processed chunks:** after **Add to todo**, the checked chunks are now **dimmed with their checkboxes disabled** for the undo window (a clear "in-flight" cue); Undo restores them to interactive, and on commit they are dismissed.
+---
+
+## Table of contents
+
+- [1. Purpose](#1-purpose)
+- [2. Scope](#2-scope)
+  - [In scope](#in-scope)
+  - [Out of scope (this version)](#out-of-scope-this-version)
+- [3. Technology stack](#3-technology-stack)
+- [4. Architecture](#4-architecture)
+  - [Data flows](#data-flows)
+- [5. Spawning bash with the user's configuration](#5-spawning-bash-with-the-users-configuration)
+- [6. IPC contract](#6-ipc-contract)
+- [7. Renderer behavior and the app-owned selection subsystem](#7-renderer-behavior-and-the-app-owned-selection-subsystem)
+  - [7.0 Why a custom selection mechanism](#70-why-a-custom-selection-mechanism)
+  - [7.1 Base terminal setup](#71-base-terminal-setup)
+  - [7.2 The selection model](#72-the-selection-model)
+  - [7.3 Capturing the gesture (focus-independent)](#73-capturing-the-gesture-focus-independent)
+  - [7.4 Rendering the highlight (our own, persistent)](#74-rendering-the-highlight-our-own-persistent)
+  - [7.5 Sending selection as input (bracketed-paste aware)](#75-sending-selection-as-input-bracketed-paste-aware)
+  - [7.5.1 Clear and lifecycle](#751-clear-and-lifecycle)
+  - [7.5.2 Agent key bindings (added v2.8)](#752-agent-key-bindings-added-v28)
+  - [7.6 Design decisions](#76-design-decisions)
+- [8. The shadow screen model (output tee) — main process](#8-the-shadow-screen-model-output-tee--main-process)
+  - [8.1 Why a shadow terminal, and why in main](#81-why-a-shadow-terminal-and-why-in-main)
+  - [8.2 Implementation sketch](#82-implementation-sketch)
+  - [8.3 Quiescence detection](#83-quiescence-detection)
+  - [8.4 Capture events (skeleton scope)](#84-capture-events-skeleton-scope)
+- [9. The monitor pane (second UI)](#9-the-monitor-pane-second-ui)
+  - [9.1 Architectural rule](#91-architectural-rule)
+  - [9.2 Skeleton UI](#92-skeleton-ui)
+  - [9.3 The main-process injection API](#93-the-main-process-injection-api)
+- [10. Project structure](#10-project-structure)
+- [11. Build, run, and packaging](#11-build-run-and-packaging)
+  - [Dependencies](#dependencies)
+  - [The native-module gotcha](#the-native-module-gotcha)
+  - [Run (dev)](#run-dev)
+  - [Package](#package)
+- [12. Acceptance criteria](#12-acceptance-criteria)
+- [13. Future extensions (explicitly deferred)](#13-future-extensions-explicitly-deferred)
+- [14. Risks and open questions](#14-risks-and-open-questions)
+- [15. Next phase — semantic capture & command-output capture (requirements)](#15-next-phase--semantic-capture--command-output-capture-requirements)
+  - [15.1 Goal & boundary](#151-goal--boundary)
+  - [15.2 Trigger, data source, and scan scope](#152-trigger-data-source-and-scan-scope)
+  - [15.3 Agent-semantic detection](#153-agent-semantic-detection)
+  - [15.4 Event contract](#154-event-contract)
+  - [15.5 Command-output capture (shell integration)](#155-command-output-capture-shell-integration)
+  - [15.6 Monitor pane](#156-monitor-pane)
+  - [15.7 Configuration & tuning](#157-configuration--tuning)
+  - [15.8 Testing](#158-testing)
+  - [15.9 Out of scope (this phase)](#159-out-of-scope-this-phase)
+- [16. Action window — tabs, todo lists, and layout (v2.7)](#16-action-window--tabs-todo-lists-and-layout-v27)
+  - [16.1 Tabs](#161-tabs)
+  - [16.2 Injection model (supersedes the §9.2 / §15.6 "every block injects" posture)](#162-injection-model-supersedes-the-92--156-every-block-injects-posture)
+  - [16.3 Todo data model, scope, and persistence](#163-todo-data-model-scope-and-persistence)
+  - [16.4 Todo tab interactions](#164-todo-tab-interactions)
+  - [16.5 Self-injection suppression (the capture fix — amends §15.3)](#165-self-injection-suppression-the-capture-fix--amends-153)
+  - [16.6 Layout — resizable splitter & global UI settings](#166-layout--resizable-splitter--global-ui-settings)
+  - [16.7 Out of scope (delta on §15.9)](#167-out-of-scope-delta-on-159)
+  - [16.8 Cross-highlight between the terminal and the capture pane (v2.23)](#168-cross-highlight-between-the-terminal-and-the-capture-pane-v223)
+- [17. Next phase — task-flow management (requirements)](#17-next-phase--task-flow-management-requirements)
+  - [17.1 Goal & boundary](#171-goal--boundary)
+  - [17.2 Two-layer ownership (D1/D2)](#172-two-layer-ownership-d1d2)
+  - [17.3 Reuse map (D4)](#173-reuse-map-d4)
+- [18. Flow definitions (`flow.yaml`)](#18-flow-definitions-flowyaml)
+  - [18.1 Shape & library (D10/D13/D14/D23)](#181-shape--library-d10d13d14d23)
+  - [18.2 Steps & kinds (D3/D7/D30)](#182-steps--kinds-d3d7d30)
+  - [18.3 Bootstrap is a per-step entry action (D15)](#183-bootstrap-is-a-per-step-entry-action-d15)
+  - [18.4 Typed step inputs (D29/D34)](#184-typed-step-inputs-d29d34)
+  - [18.5 Authoring is separate (D20)](#185-authoring-is-separate-d20)
+  - [18.6 Skill & template references — reference, never inline (D37)](#186-skill--template-references--reference-never-inline-d37)
+- [19. Flow progression, gates & feedback](#19-flow-progression-gates--feedback)
+  - [19.1 Flow-state & the agent-loop bridge (D1/D33)](#191-flow-state--the-agent-loop-bridge-d1d33)
+  - [19.2 Advance is user-driven, with a not-ready warning (D31)](#192-advance-is-user-driven-with-a-not-ready-warning-d31)
+  - [19.3 Gate driver & the running-process refusal (D2/D32)](#193-gate-driver--the-running-process-refusal-d2d32)
+  - [19.4 Request-changes feedback (D7/D9/D11)](#194-request-changes-feedback-d7d9d11)
+- [20. Artifacts & the built-in viewer](#20-artifacts--the-built-in-viewer)
+  - [20.1 Discovery & provenance (D8)](#201-discovery--provenance-d8)
+  - [20.2 Viewer (D25/D35)](#202-viewer-d25d35)
+  - [20.3 GitHub as markdown (D19/D24)](#203-github-as-markdown-d19d24)
+- [21. Manual capture & todo templates](#21-manual-capture--todo-templates)
+  - [21.1 Manual single-slot capture (D39 — reconciles §15/§16)](#211-manual-single-slot-capture-d39--reconciles-1516)
+  - [21.2 Todo templates (D12/D38)](#212-todo-templates-d12d38)
+- [22. UI shell — views, overlay, status strip, layout](#22-ui-shell--views-overlay-status-strip-layout)
+  - [22.1 Three full-screen views (D26)](#221-three-full-screen-views-d26)
+  - [22.2 Tabbed quick-send overlay (D26/D40)](#222-tabbed-quick-send-overlay-d26d40)
+  - [22.3 Status strip (D6/D27)](#223-status-strip-d6d27)
+  - [22.4 Layout is data, not code (D17/D28/D36)](#224-layout-is-data-not-code-d17d28d36)
+- [23. Multi-instance & epics](#23-multi-instance--epics)
+  - [23.1 One flow per instance, many instances (D5)](#231-one-flow-per-instance-many-instances-d5)
+  - [23.2 Epics = N instances over N worktrees (D18/D22/D23)](#232-epics--n-instances-over-n-worktrees-d18d22d23)
+  - [23.3 Cross-instance guard (D21)](#233-cross-instance-guard-d21)
+- [24. Phased build plan](#24-phased-build-plan)
+  - [24.1 First slice (walking skeleton)](#241-first-slice-walking-skeleton)
+
+---
+
+> **Changelog v2.46:** **Multi-lane impl-review fixes (security · correctness · a11y · spec-hygiene).** **Security:** `repoKey` is validated at the renderer→main boundary (`isTodoBase` → `isSafeRepoKey`: absolute, no `..` segments) since it becomes a `todoStore` write path; `readArtifact` now resolves symlinks (`realpathSync`) and re-checks containment so an in-root link can't escape the discovery root (the lexical guard alone missed it). **Correctness:** add-to-todo's `repoKey` is seeded from `currentRepo()` on mount in the artifact-viewer and terminal-selection wiring (it previously no-oped until the first cross-repo `cd`, since `cwd:changed` fires only on a key change — mirrors `monitor.ts`); todo **reorder** now operates on the active run only and slots active ids back into their positions, so moving an active past an inline **done** row no longer shoves the done row; the capture bulk Add-to-todo aborts (no dismiss) if the add returns nothing, so source chunks aren't lost on a silent failure. **a11y:** focus follows the todo edit/delete/confirm transitions (to the editor, then Confirm, then Undo — WCAG 2.4.3) instead of dropping to `<body>`; the in-place editor is a labelled `role=textbox` (`aria-label`/`aria-multiline`); capture cards/checkboxes carry text-derived labels so bulk-triage items are distinguishable; Confirm-delete uses an outlined `--danger` token that clears 4.5:1 (WCAG 1.4.3) instead of white-on-`--attn`. **Spec/doc hygiene:** `CLAUDE.md` pin → v2.46; §6 `viewer:read` preload snippet uses `relPath` (not `path`); §16.4 reflects the contenteditable editor + the dropped Done section; §16.6/§6 `UiSettings` lists `theme`/`artifactTreeWidth`/`artifactFullscreenTreeWidth`; the dangling `§A11Y` changelog tag now points at §22.2. RED-first for every behavioral change (ipcValidation repoKey cases, the symlink-escape integration test, reorder-past-done, bulk-add silent-fail, focus moves, the textbox label, distinguishable checkbox labels, and the now-covered drag-reorder wiring). **Deferred as follow-ups (pre-existing, out of this PR's scope):** the `doInject` injection-seam DI refactor, deleting the dead `crossHighlight.ts` mechanism, the captureTab toolbar-host contract, and the `selection.ts` import-source tidy.
 >
-> **Changelog v2.27:** Reworked **capture-pane triage and todo deletion** into bulk, undoable actions (§16.2 / §16.4). **Capture pane:** the per-chunk `×` and `Add to todo` buttons sprinkled across every finding/capture are replaced by a **checkbox per chunk** (each finding; a standalone capture; a report that never split) plus two **static toolbar buttons**. **Add to todo** concatenates the checked chunks — in **appeared order** (render order = oldest-first), **blank-line separated** — into a **single** todo, then shows an in-place **Undo** for `TODO_UNDO_MS`; on commit the checked chunks are dismissed, on Undo the new todo is deleted and the chunks stay. **Dismiss selected** drops the checked chunks immediately; **Dismiss all** is unchanged. Both bulk buttons are disabled until something is checked. A report keeps a block-level checkbox only until it splits — once findings arrive they become the chunks and the report's own checkbox/ fallback text retire. `tool-use`/`diff` remain unrendered (v2.26); the chunk checkbox uses `data-chunk-id` so it never collides with `[data-event-id]` lookups. **Todo deletion** is now two-step and recoverable: `×` → inline **Confirm delete?** (or Cancel); confirming **defers** the actual `todoDelete` and replaces the row with a **Deleted / Undo** affordance for `TODO_UNDO_MS`. Undo within the window restores the row with no server round-trip (the delete never ran); after it elapses the delete commits. The deferred delete captures the item's own `repoKey`, so a mid-window repo swap still deletes from the right list. The per-chunk-button DOM tests were updated to the checkbox/toolbar contract; new tests cover bulk concat order, the undo windows (both panes), and the confirm/cancel/defer/undo delete flow.
+> **Changelog v2.45:** **§24.2.1 drawer-panel functionality restored, re-skinned into the mockup card/row language.** The capabilities dropped by the mockup-exact rebuild (their main-process IPC was always intact) are back in the renderer. **Todo panel:** **manual add** (a top add-row → `todoAdd {type:'manual'}`); **reorder** (↑/↓ buttons as the keyboard/a11y path + HTML5 drag → `todoReorder`, sending the full display order so the flat done-inline list stays stable); **edit-in-place** with a **better affordance than the old textarea-box swap** — the `.tx` becomes `contenteditable` in place (Save/Cancel + Enter/Escape), with the mid-edit repo-swap deferral kept (a swap while editing surfaces a `.swap-blocked` notice and applies once the edit resolves); and a **two-step undoable delete** (× → inline **Confirm delete? / Cancel** → a **deferred** `todoDelete` behind a **Deleted / Undo** row for `TODO_UNDO_MS`, capturing the item's own `repoKey` so a mid-window repo swap still deletes from the right list). **Capture panel:** **bulk triage** — each card carries a selection checkbox; a pane toolbar concatenates the checked chunks (appeared order, blank-line separated) into **one** todo via **Add to todo** (with an **Undo** window + a **processed-chunk cue**: contributing cards dim and disable their checkbox until the window commits, then the chunks are dismissed, or Undo deletes the just-added todo and leaves them), plus **Dismiss selected** and **Dismiss all** — this **supersedes** the per-card "Add to todo" the mockup shipped and **subsumes** Dismiss + Dismiss-all; and a **report prose fallback** — a report that carves no findings renders as an expandable `.report-prose` summary card (`<details>`) so its body has a home without reintroducing the blob. RED-first throughout: todoTab unit tests (manual add incl. empty-guard, reorder + boundary-disabled, contenteditable edit + Save/Cancel + deferred-swap, two-step delete + Undo with fake timers); captureTab unit tests (per-card checkbox + no per-card Add, bulk concat, processed cue, Undo deletes + leaves, window-elapse dismisses, Dismiss selected/all, report-prose `<details>`); the three superseded monitorPane per-card tests were rewritten to the bulk-triage contract; and full-loop e2e for manual-add-persists-across-reload, two-step-delete Confirm→Undo-keeps, and reorder-persists.
+>
+> **Changelog v2.44:** **Reusable accessible show/hide + quick-send closed on startup (§22.2 — accessibility).** Hidden content kept trapping keyboard focus — focusable controls inside panels hidden by `transform` (full-screen header/tree), a 0-width `overflow:hidden` column (closed drawer), or a `[hidden]` attribute defeated by a `display` rule (`.vnav`) all stayed in the tab order. **(1)** A single reusable mechanism in **`src/renderer/src/visibility.ts`** — `setShown(el, shown)` (drives `[hidden]`) and `setCollapsed(el, collapsed)` (drives `.is-collapsed`) — backed by **one enforcement point** in CSS: `[hidden] { display:none !important }` (so no `display` rule can resurrect a hidden, still-focusable subtree) and `.is-collapsed { visibility:hidden }` (inert but still animatable). Hiding now always removes a subtree from layout, the tab order, and the a11y tree. **(2)** The full-screen header/tree collapse via `setCollapsed` (keeps the slide; inert when off-screen); the changed-section nav (`.vnav`) and the drawer route through `setShown`. **(3)** The **quick-send drawer now starts closed** (`index.html` drops `drawer-open`; the shell syncs the drawer's `hidden` to its open state and toggles it on open/close), and is inert while closed. RED-first: `visibility.ts` unit tests; a shell unit test that closing marks the drawer `hidden` (+ inits hidden when the markup starts closed); and full-loop e2e using a `canFocus` probe — full-screen collapse keeps the header/tree out of the tab order (reachable once popped open), the drawer is closed-and-inert on startup (relaunched fresh) then focusable once opened, and the changed-section controls leave the tab order for a file with no changes. The §20.2 full-screen tests now assert the panels' `.is-collapsed`/`aria-expanded` (semantic state) rather than the old layout classes.
+>
+> **Changelog v2.43:** **Full-screen viewer mode (§20.2).** A toolbar button (`⛶`) maximises the artifact viewer: **all app chrome is hidden** (the left rail — including the status strip — and the quick-send drawer) via an `app.viewer-fullscreen` class, leaving the viewer to fill the window. Entering collapses the **viewer header** off the top and the **file tree** off the left; each is reopened by a **thin focusable edge strip** (`aria-expanded`) that pops it open and closed (click or Enter/Space). The tree popout is **drag- and keyboard-resizable** at its right edge, with its own persisted width (`UiSettings.artifactFullscreenTreeWidth`, kept separate from the slim split-view width) that **defaults to ≥30% of the viewport**. Exit is the same button in the revealed header, or **Escape**; switching views (⌘1/⌘3) also exits. **Keyboard accessibility** is end-to-end: the strips and toggle are real buttons, focus moves to the top strip on enter and back to the toggle on exit, and Escape always exits. Architecture: the **shell** owns the chrome class, Escape, and exit-on-view-change (`Shell.setViewerFullscreen` / `isViewerFullscreen`, `ShellDeps.onViewerFullscreenChange`); the **viewer organism** owns its in-subtree presentation, strips, button, and focus (`Artifacts.setFullscreen` / `isFullscreen`, `ArtifactsDeps.onRequestFullscreen`) — the two coordinate **through the contract** wired at the composition root, never by reaching across organisms. RED-first: shell unit tests (class toggle + signal, Escape exits, view-change exits), organism unit tests (toggle requested through the contract, enter collapses both with `aria-pressed`, strips toggle with `aria-expanded`, focus moves on enter/exit), and a full-loop e2e (button enters → rail+drawer hidden + both collapsed; strips reveal; Escape exits; keyboard path: Enter enters → focused strip opens header → in-header button exits). The popout's resizability adds: a `UiSettings.artifactFullscreenTreeWidth` round-trip+clamp unit test, organism unit tests (default ≥30% of the viewport, a persisted width applied over it, drag + arrow-key resize persisting through `onFullscreenWidthChange`), and an e2e (in full screen, the open tree's handle drags wider and the width survives a reload).
+>
+> **Changelog v2.42:** **Viewer toolbar: gated sinks + viewport-driven changed-section navigation (§20.2).** Two tweaks to the artifact viewer's action bar. **(1)** **Send to agent** and **Add to todo** are now **disabled until something is highlighted** in the viewer — they start disabled and toggle on `selectionchange` against the live in-viewer selection; each button's `mousedown` is `preventDefault`ed so focusing it no longer collapses the selection it acts on (the `lastSelection` fallback stays as belt-and-suspenders). **(2)** New **‹ prev / next ›** controls with a **current / total** readout step through the file's **changed sections** — the contiguous runs of `ViewerFile.changedLines` (collapsed to per-section start lines in the organism, pure). The readout and the prev/next targets are **driven by the live viewport**, not a stored cursor: **current** = the last section scrolled onto/past the screen (≤ the viewport bottom; reads `1` above all of them), **next** = the nearest section starting below the visible area, **prev** = the nearest one above it. A button disables **only when no section exists in that direction** — so a single change off-screen at open is reachable (the bug this fixes), and scrolling a change on/off screen updates the number on its own. The `CodeView` handle returned by the `renderCode` seam (`renderCodeInto`) carries `revealLine` (`EditorView.scrollIntoView`, centred; a reveal before the async build is replayed once it exists), `visibleLines()` (1-based range via `lineBlockAtHeight`), and `onViewportChange()` (scrollDOM `scroll` + `geometryChanged`). On open the view stays at the top; the controls hide for a file with no changes. RED-first: organism unit tests with a controllable fake viewport (viewport-relative stepping; single off-screen change reachable via `next`; current updates as changes scroll in; nav hidden when unchanged) and a full-loop e2e (200-line file, edits at lines 2 & 180 → `1 / 2` with `next` reaching the off-screen change → `2 / 2`, boundary-disabled, sinks disabled→enabled on select).
+>
+> **Changelog v2.41:** **Changed-line markers in the code viewer (§20.2).** A source file opened in the viewer now shows which of its lines differ from `HEAD` — **added or modified lines in their current-file position**, never deletions (this is not a diff; deleted lines have no current line to mark). **(1)** `readArtifact` (main) computes `ViewerFile.changedLines` (1-based) for **code files in a git repo**: it parses the `+` side of `git diff --no-color -U0 HEAD -- <path>` hunk headers (a `+c,0` pure-deletion hunk marks nothing), and treats an **untracked** file as entirely new (every content line). Markdown files, unchanged files, and files outside a repo carry no markers. **(2)** `renderCodeInto` (renderer) renders each changed line with **both** a gutter **stripe** and a line-background **tint**, via a static CodeMirror 6 extension (a `gutter` marker + a line `Decoration` `StateField`; the doc is read-only so the decoration set never shifts). Colors are `--changed`/`--changed-wash` tokens, tied to the existing `changed` provenance hue. RED-first: integration tests for the added/modified/untracked/unchanged/markdown/outside-repo cases, an organism unit test that the changed lines reach the render seam, and an e2e asserting exactly one tinted line + one gutter stripe for a single modified line.
+>
+> **Changelog v2.40:** Artifact tree file names are **no longer truncated** (§20.2) — the v2.39 ellipsis is dropped so names render in full; the pane already scrolls horizontally (mouse + keyboard) to reach a long name, and the per-row `title` + drag-resize remain. RED-first: an e2e with a long-named file asserts the name element isn't clipped.
+>
+> **Changelog v2.39:** **Artifact viewer tree usability (§20.2):** three additions. **(1) Full names discoverable** — each file/dir row carries a `title` (the full relative path) so a name truncated by the column is shown on hover. **(2) Keyboard navigation** — the tree is a WAI-ARIA `tree` (`role="treeitem"` rows, roving `tabindex`): ↑/↓ move between visible rows, →/← expand/collapse a directory (or move to first child / parent), Enter/Space open a file or toggle a directory, Home/End jump to ends. **(3) Resizable tree pane** — a `role="separator"` divider between the tree and the viewer is **drag**-resizable (and arrow-key nudge / double-click-to-reset), clamped 140–640px; the width persists in a new `UiSettings.artifactTreeWidth` (default 248, clamped in the store) applied on load. `index.html`/`styles.css` drive the width via a `--tree-w` grid column. RED-first: organism unit tests for title/keyboard/resize, a `UiSettings` round-trip+clamp unit test, and a full-loop e2e (drag → width changes → persists across reload → reset).
+>
+> **Changelog v2.38:** **Viewer cwd starts in sync with the terminal (§20.1 fix).** The viewer discovered against `process.cwd()` (the Electron process dir, e.g. the project root in dev) until the first OSC 7, so it opened in the wrong place and a missed/stale initial refresh could keep it there until the next `cd`. **(1)** The discovery fallback is now the **terminal's spawn dir** (`spawnCwd(env, home)` = `$HOME || home`, the same dir bash is spawned in, §5) — extracted from `buildSpawnConfig` and reused by the `viewer:tree`/`viewer:read` handlers — so the viewer starts where the terminal starts. **(2)** `artifacts.refresh()` now carries a **sequence token**: a slow in-flight discovery can no longer overwrite a newer one (the mount refresh vs. the `cwd:changed` refresh race). Cross-repo `cd` sync was already correct (repo-key-change broadcast → refresh) and is unchanged. RED-first: `spawnCwd` unit, an out-of-order-refresh unit, and a full-loop e2e launching with a controlled `HOME` that asserts the viewer shows that dir's file before any `cd`.
+>
+> **Changelog v2.37:** **Real artifact discovery — the viewer is connected to its context** (promotes the §24.2 "Artifact discovery + provenance tree" item; the v2.36 viewer shipped against a renderer-local fixture set, which read as fake/disconnected). **(1)** New `src/main/artifactTree.ts` — `discover(cwd, scope)` and `readArtifact(cwd, relPath)` over **real git + fs** (no mocks; integration-tested against a temp git repo, per CLAUDE.md). In a repo: **curated** (default) = working-tree changes (`git status`) ∪ the `.agent-loop/` directory; **repo** (a checkbox) = all tracked + untracked-not-ignored files (`git ls-files`); per-file provenance tags `changed`/`loop`; built into a **hierarchical** node tree. Outside a repo it is the **cwd's directory tree** (no scope/provenance), per the request. Reads are **path-escape-guarded** to the discovery root and skip binary/oversized files. **(2) §6** gains `viewer:tree {scope:'curated'|'repo'} → ArtifactTree` and `viewer:read {relPath} → ViewerFile | null`, validated at the trust boundary; new `ViewerApi` exposed as `window.viewer` (preload). **(3)** `artifacts.ts` reworked from the fixture to a **data-driven** organism: hierarchical collapsible tree, provenance tags, a **"Show all repo files"** checkbox (hidden outside a repo), search filter, and **re-discovery on `cwd:changed`** so a `cd` repoints the viewer. `SAMPLE_ARTIFACTS` removed. **(4) Deferred (still §24.2):** the **PR** provenance tag (gh bridge) and LoopDef `artifacts:` declarations (agent-loop bridge). RED-first throughout: discovery integration tests + reworked artifact-organism unit tests + two full-loop e2e (real repo: curated-vs-whole-repo, open + select → todo, CodeMirror; and the outside-a-repo whole-tree case).
+>
+> **Changelog v2.36:** **Artifact viewer built — §24.1 Phase 1 is complete.** View 2 was static fixture markup; it is now the real §20.2 viewer and the last open §24.1C item. **(1)** `src/renderer/src/artifacts.ts` — a placement-agnostic organism (UI-STANDARDS §1.2): a fixture-fed **file tree** (searchable, provenance-tagged groups) beside a **viewer**, with the heavy render stack and the two §16.2 sinks taken as **injected seams** so the organism is library-agnostic and DOM-unit-tested with fakes. Fed by a renderer-local **fixture artifact set** (`SAMPLE_ARTIFACTS`); real discovery + provenance (`viewer:tree`, §20.1) stays in the §24.2 backlog. **(2)** `src/renderer/src/viewerRender.ts` — the production seams, **lazily** loaded (dynamic import → separate Vite chunks, so mermaid's weight costs nothing until a diagram renders): **markdown-it** for markdown, **mermaid** for ```mermaid fences (malformed diagrams degrade to their source, never crash), and a read-only **CodeMirror 6** editor for code. **(3)** Select-to-send: a selection in either view routes to **send-to-agent** (inject, `submit:false` — editable, §9.3, via `doInject`) or **add-to-todo** (`captureToTodo`, §16.2) — the same two sinks as the terminal-pane selection; the selection is captured on `selectionchange` and re-read at click, because focusing an action button collapses the live DOM selection first. **(4)** Wiring: `index.html` view 2 is now just `#artifacts`; `index.ts` builds the organism with the real seams + a live repo key; `styles.css` styles the tree/viewer/markdown/mermaid/CodeMirror on Galley · Lit tokens (both themes); `codemirror`, `@codemirror/lang-javascript`, `markdown-it`, `mermaid` added as deps. RED-first: artifact-organism unit tests + a full-loop e2e (real markdown/mermaid SVG/CodeMirror, select → todo) written and watched fail first. The status strip, gate panel, and flow runner remain **fixture-driven mocks by design** (§24.2), so Phase 1 closes with its mocked widgets still mocked — that is the §24-plan boundary, not a gap.
+>
+> **Changelog v2.35:** The todo **Send** pill now injects with **`submit: false`** — it pastes the todo into the agent's input box (no trailing `\r`) and moves focus to the terminal so the user can **edit or augment** the text before submitting it themselves. The mockup-exact rebuild (v2.32) had shipped a single Send pill that submitted; this restores the §9.3 "`submit: false` is the default posture" / §16.2 *Insert* (not *Insert & submit*) behaviour for the todo path (`src/renderer/src/todoTab.ts`). RED-first: the todoTab unit test and the full-loop todo-Send e2e were updated to the no-submit contract (paste appears at the prompt, output only after the user presses Enter) and watched fail before the one-line fix. Tracked + closed as the first **§24.2.1 Todo-panel** item.
+>
+> **Changelog v2.34:** **Manual single-slot capture (v2.27, §21.1) is now implemented** — the v2.27 amendment had been specced but never built; the §24.1 panel rebuild only restyled the old auto-emit list. Now: a **"Capture last report"** button (`#capture-last`, in the Capture panel head) invokes **`capture:last`**, which runs detection on demand and replaces the pane's single report. **(1)** The scanner's `onQuiet` subscription is **optional**; the app omits it, so nothing auto-emits and the dedup/watermark/seal machinery lies **dormant** (kept in place with its tests, per the "keep it dormant" decision — not deleted). A new stateless `Scanner.captureLast()` reads the current buffer fresh (scrollback included), picks the **bottom-most `report` region** as the latest, and returns it with its `splitFindings` children. **(2)** `capture:last` returns **`MonitorEvent[]`** (the stored report + findings, `[]` when none) rather than the v2.27 sketch's `{report, findings} | null`, so the renderer renders a button-capture and a `monitor:replay` identically; the main handler drops the prior `report` event from the store (cascading findings) before adding the new one, so reload-replay stays single-slot. **(3)** `captureLast` **skips a candidate report that is just the echoed command line** (matched against the tracked command text, new `commandTexts` scanner dep): with the command OUTPUT gated by a closed span, the long echoed INPUT would otherwise be the only remaining candidate — the auto path's watermark used to seal past it. **(4)** Nothing auto-emits, so the **unread dot** is no longer raised by reports/findings; the `monitor:event` → `appendBlock` path stays wired for any live capture (manual selection) and `monitor:replay` still rehydrates the single stored report. Double-click → terminal row-range cross-highlight (§16.8) is unchanged. RED-first throughout.
+
+> **Changelog v2.33:** Merged **origin/main** into the §24.1 branch. **Adopted:** the **resize-safe cross-highlight** (§16.8) — captures are now marker-anchored on the terminal side (xterm markers track reflow, so a window resize no longer stagnates the link), and the panes exchange capture **ids** (`app:capture-range-add/remove`, `app:reveal-capture/​reveal-terminal { id }`) via `pickRevealTarget`; the mockup-exact capture cards publish/​reveal on this contract (new `reveal.ts` + its tests came in with the merge). **Not adopted:** origin/main's **bulk-triage capture** (per-chunk checkboxes + Add-selected/Dismiss-selected toolbar) and **two-step undoable todo delete** — they are the pre-mockup chrome the §24.1 rebuild replaced; their capabilities are tracked in **§24.2.1** (Dismiss + Dismiss-all, Add-to-todo Undo, Delete). Those two upstream commits carried their own v2.27/v2.28 changelog numbers, which collided with this branch's; their content is captured here rather than renumbered.
+>
+> **Changelog v2.32:** **§24.1 drawer panels rebuilt to the converged mockup exactly** — the live Capture and Todo panels were structural carry-overs of the old §15/§16 components ("old UI with paint"); they now render the mockup's clean language: capture **findings** as `.t`/`.m`/`.linkbtn` cards under a source header, todos as a `.chk` checkbox-circle + `.body` + **Send** pill row. **Kept:** the double-click → terminal **row-range reveal** cross-highlight (§16.8). **Deferred to §24.2.1 as the next priority** (renderer dropped, main-process backing intact): todo **reorder / edit-in-place (with a better UI) / manual-add / delete** (§16.3/§16.4) and capture **Dismiss + Dismiss-all** (§15.6) and **Add-to-todo Undo** (§16.2). **Dropped, not backlogged:** command-history list (§15.5/§15.6), badges/timestamps/truncation (§15.6), Mark-as-chrome (§15.x), Insert/Insert&submit + Insert-without-submit (§16.2), Done section (§16.4). RED-first; tests for dropped behaviour removed, new structure pinned.
+>
+> **Changelog v2.31:** **§24.1C fixture-driven mocked widgets ✅** — `flow.ts` renders the flow timeline, rail gate/loop status, and the view-3 gate panel from one typed `SAMPLE_FLOW` fixture (replacing the static markup), with the gate's Approve / Request-changes buttons as clickable stubs that reflect a verdict but inject nothing (§19.2/§19.3). DOM-unit-tested + a gate-stub e2e. Remaining §24.1C polish: reskin the reused capture/todo/status widget internals to Galley · Lit tokens, and the real artifact viewer (§20.2).
+>
+> **Changelog v2.30:** **§24.1C Implement ✅** — the converged shell is the live renderer UI. `src/renderer/index.html` is now the rail · three views · docked drawer frame; the reused cores keep their element-id contracts and were relocated behind the new skin (terminal + selection → view 1; the action window's Capture/Todo tabs + status strip → the docked drawer and rail). New code, all RED-first: `shell.ts` (view switch, ⌘/Ctrl+1-3 and ⌘/Ctrl+K, drawer dock/undock, theme) and `crossHighlight.ts` (§16.8). **Decisions/changes:** (1) the old resizable **splitter (§16.6) was removed** — its module/tests deleted — and replaced by the docked drawer; `splitRatio` stays in `UiSettings` but is unused. (2) **View 3 = Todos + Review gate** (per the approved mockup), and **capture lives only in the drawer**, superseding the earlier §24.1 prose that put a capture widget in view 3. (3) `theme` added to `UiSettings` (§16.6), persisted; applied to `<html data-theme>`. (4) The shell intercepts its chords in the **capture phase** so xterm can't swallow ⌘K/⌘1-3 while the terminal is focused; the drawer broadcasts a `window` resize on dock/undock so the terminal **refits** (§7.1). **Gaps:** the reused capture/todo/status widgets are functional but **not yet reskinned** to Galley · Lit (tokens applied to the frame; widget internals are follow-on); the mocked flow timeline, rail gate/loop lines, and view-3 gate buttons are **static fixtures** (no flow-state object, actions stubbed) — the remainder of §24.1's "mocked" list. Three §15/§16 command-capture e2e are **pre-existing failures in this environment** (verified against the prior commit), not introduced here.
+>
+> **Changelog v2.29:** Marked **§24.1 Phase 1 progress** and recorded the design decisions. **24.1A Mood ✅** — chose **Galley · Lit** of four explored directions (`design/mood/`): a readable margin-proof model lit by a live cyan signal, light + dark, with saturated color spent only on *signal* (cyan = where/provenance, §16.8) and *act* (red = request changes). **24.1B Options ✅** — of three explored shell layouts (`design/shell/`, sharing widgets via `tokens.css` per §22.4) converged on **`design/shell/converged.html`** (slim left chrome + full-bleed main + a **docked, non-blurring** quick-send drawer); Reading-room dropped. The docked drawer **amends §22.2** for the Terminal view: quick-send *docks beside* the terminal rather than popping over it, so terminal↔capture **cross-highlight (§16.8)** works with both visible at once. **24.1C Implement** is next (build `converged.html` as real UI, RED-first). Design log: `design/README.md`.
+>
+> **Changelog v2.28:** Replaced the **§24 phased build plan** — dropped the bottom-up **W1–W19** ordering for a **UI-inwards** plan. **Phase 1 (§24.1)** stands up the complete three-view shell (§22) with every widget present and interactive, in **both light and dark themes**: **terminal, manual capture, todos, and the artifact viewer are reused as-is behind the new skin**; the status strip, gate panel, step timeline, flow runner, artifact discovery, and feedback-compose path are **mocked with fixtures**. Phase 1 runs as three design steps via the **`frontend-design`** skill — **§24.1A Mood** (converge on one look-and-feel direction), **§24.1B Options** (three light+dark mockups → converge to one), **§24.1C Implement** (build the chosen mockup as the live app, widgets kept placement-agnostic per §22.4, RED-first). **§24.2** is the backlog: every real subsystem Phase 1 mocks or omits (flow schema/loader, flow-state store, agent-loop bridge, flow runner, gate driver, step inputs, compose-with-agent, artifact discovery, GitHub bridge, todo templates, layout-config load, worktree launcher, cross-instance guard, flow-author skill), each tagged with its spec section and not yet assigned to a phase.
+>
+> **Changelog v2.27:** Folded the **task-flow management** design into the spec as **§17–§24** (the app's next phase: turning the terminal-host into a single-operator harness for driving a coding task end-to-end over the `agent-loop` engine), and **reconciled capture (§15/§16) to a manual, single-slot model**. **(1) New normative sections** §17 overview & two-layer ownership · §18 flow definitions (`flow.yaml`) · §19 progression, gates & request-changes feedback · §20 artifacts & the built-in viewer · §21 manual capture + todo templates · §22 UI shell (3 views, tabbed quick-send overlay, status strip, layout config) · §23 multi-instance & epics · §24 phased build plan. The decisions behind them (D1–D40) live in the rationale companion `flow-management-requirements.md`; **the spec is authoritative on any conflict.** **(2) Capture is now manual + single-slot (§15.1/§15.2/§16.1/§16.2 amended).** The scanner no longer **emits** reports/findings on the `active→quiet` transition; instead a **"Capture last report"** button runs report-detection **on demand** against the current shadow buffer (`capture:last`, §6) and the pane holds **one** captured report at a time — each capture **replaces** the prior one. The auto-emit wiring and the growing newest-first list + Dismiss-all/dedup/retraction UI are retired; report→findings splitting (§15.7 `splitFindings`) and the `/tmp/scanner.log` trace are kept. Command-output capture (`monitor:captureCommandText`) is unchanged. **(3) §6** gains `capture:last`, `flow:*`, `viewer:*`, and `todoTemplate:*` channels.
 >
 > **Changelog v2.26:** Cut **tool-call furniture out of captured reports** (§15.x) — the next layer of live-capture noise after the v2.24/v2.25 shredding fixes. Two causes, both general (not PR-review-specific). **(1) The Claude classifier had gone dark.** It hard-coded the tool/diff bullet as `⏺` (U+23FA), but Claude Code now renders it as `●` (U+25CF), so `claudeCode.ts` matched **nothing**, claimed **nothing**, and every `● Bash(…)` call + its `⎿` output fell through to the glyph-agnostic baseline and got folded into the prose report as one giant blob (confirmed via the capture-trace log: **zero `CLAIM` rows** across a tool-heavy scan). The classifier now matches **either bullet** (`/^[●⏺]/`), restoring the `isClaimed` carve-out for all output types — tool calls and diffs are excised from reports again. **(2) Tool/diff events were rendered as capture cards.** Once claimed they emit as typed `tool-use`/`diff` events; the capture pane was rendering them as their own blocks (with an *Add to todo* action), so the report-body noise just became card noise. The pane now **never renders `tool-use`/`diff` blocks** — they exist only to carve their rows out of reports, and are not to-do candidates. (Events are still emitted, so the false-positive budget and any future consumer are unaffected; the pre-existing badge test was repointed from `tool-use` to `command-output`.) Net: a tool-heavy agent turn yields a clean report (+ findings) instead of a blob plus a stack of tool cards. **Known residual (deferred):** a bare narration bullet (`● Let me verify…`) and orphaned expand-notices (`… +N lines (ctrl+o to expand)`, `Read 1 file (ctrl+o to expand)`) not under a claimed head still reach the baseline; they typically fall under `reportMinChars` and emit nothing, so the structural narration/notice stripper is held pending live confirmation.
 >
@@ -255,8 +388,8 @@ All payloads carry a `sessionId` (a single fixed id in this version). This costs
 | `pty:resize` | renderer → main | `{sessionId, cols, rows}` | Resize the PTY **and** the shadow terminal. |
 | `pty:exit` | main → renderer | `{sessionId, code: number}` | Shell exited. |
 | `monitor:capture` | renderer → main | `{sessionId, text, range, source: 'selection'}` | User captured a region; main stamps `{id, capturedAt}` and broadcasts it back on `monitor:event`. |
-| `monitor:event` | main → renderer | `{sessionId, event}` | Manual captures, semantic events, and command-output blocks. `event = {id, type, source, text, range, parentId, truncated, capturedAt}`; `type`/`source` are the §15.4 unions, `parentId` links a finding to its report (§15.4 / v2.6). |
-| `monitor:eventRemoved` | main → renderer | `{sessionId, eventId}` | The scanner retracted a prior semantic event because a later capture supersedes it (its text is an exact prefix of the newer one — §15.3 / v2.13); the pane drops the block, cascading to a report's findings. |
+| `monitor:event` | main → renderer | `{sessionId, event}` | Manual captures, semantic events, and command-output blocks. `event = {id, type, source, text, range, parentId, truncated, capturedAt}`; `type`/`source` are the §15.4 unions, `parentId` links a finding to its report (§15.4 / v2.6). **Amended v2.27 (§21/D39):** reports/findings no longer arrive on this push channel — they are pulled on demand via `capture:last`. The channel remains for any non-report event use. |
+| `monitor:eventRemoved` | main → renderer | `{sessionId, eventId}` | The scanner retracted a prior semantic event because a later capture supersedes it (its text is an exact prefix of the newer one — §15.3 / v2.13); the pane drops the block, cascading to a report's findings. **Retired v2.27 (§21/D39):** single-slot capture replaces in place, so cross-transition retraction is no longer used. |
 | `monitor:update` | main → renderer | `{sessionId, altScreen: boolean, bracketedPaste: boolean, agentState: 'active'\|'quiet', quietSince: number\|null}` | Debounced shadow-state and activity changes (live status indicators). **Status-only** — it carries no command data; the pane re-pulls `monitor:commands` on each tick for liveness (§15.4). |
 | `monitor:replay` | renderer → main (invoke) | `() → MonitorEvent[]` | A (re)loaded monitor pane requests the captures stamped so far (§8.4). |
 | `monitor:currentRepo` | renderer → main (invoke) | `{sessionId} → {cwd, repoKey} \| null` | The agent's current repo, queried on mount so the pane learns the key even when it missed the live `cwd:changed` broadcast (§16.3, v2.19). |
@@ -264,7 +397,7 @@ All payloads carry a `sessionId` (a single fixed id in this version). This costs
 | `monitor:commandsChanged` | main → renderer | `{sessionId}` | A command span opened or closed (OSC 133). Signal-only — the pane re-pulls `monitor:commands`. Keeps history live off the marks, independent of §8.3 quiescence (§15.5, added v2.5). |
 | `monitor:captureCommandText` | renderer → main | invoke `{sessionId, commandId} → {text, truncated} \| null` | A command's output **text**, for adding straight to a todo (§16.2). **Fail-closed**: an unknown/stale/trimmed id returns `null`. (Replaced `monitor:captureCommand`, which materialized a Capture-tab block, when the per-entry Capture button was removed — v2.11.) |
 | `monitor:dismiss` | renderer → main | `{sessionId, eventId}` | Remove a captured event from the store; dismissing a report cascades to its findings, so a reloaded pane's replay won't resurrect it (§15.6 / v2.6). |
-| `monitor:dismissAll` | renderer → main | `{sessionId}` | Clear every captured event from the store (Dismiss-all; §15.6 / v2.6). |
+| `monitor:dismissAll` | renderer → main | `{sessionId}` | Clear every captured event from the store (Dismiss-all; §15.6 / v2.6). **Retired v2.27 (§21/D39):** no capture list to clear under single-slot capture. |
 | `monitor:learnChrome` | renderer → main | `{sessionId, eventId, sample}` | **Mark as chrome** (§15.x / v2.14): learn the block's leading glyphs as chrome markers (persisted), then retract the capture via `monitor:eventRemoved` (cascading to findings). |
 | `agent:inject` | renderer → main | `{sessionId, text, submit: boolean}` | Action-window action: paste-wrap per live mode, write to PTY, optionally submit. Focus follows the §16.2 rule (renderer-side): Insert → terminal, Insert & submit → stays. |
 | `monitor:clearCommands` | renderer → main | `{sessionId}` | Clear **finished** commands from the history, keeping any still-running one (§16.2); fires `monitor:commandsChanged` so the pane re-renders. |
@@ -275,8 +408,22 @@ All payloads carry a `sessionId` (a single fixed id in this version). This costs
 | `todo:setStatus` | renderer → main (invoke) | `{sessionId, repoKey, id, status} → TodoItem[]` | Mark done (on inject) or re-activate a done item (§16.4). |
 | `todo:delete` | renderer → main (invoke) | `{sessionId, repoKey, id} → TodoItem[]` | Remove a todo (§16.4). |
 | `cwd:changed` | main → renderer | `{sessionId, repoKey, cwd}` | The agent's repo key changed (OSC 7 → §16.3); the pane re-pulls `todo:list`, blocking a swap mid-edit (§16.3). |
-| `ui:getSettings` | renderer → main (invoke) | `() → UiSettings` | Global UI prefs — `{splitRatio, lastTab}` (§16.6). |
+| `ui:getSettings` | renderer → main (invoke) | `() → UiSettings` | Global UI prefs — `{splitRatio, lastTab, theme, artifactTreeWidth, artifactFullscreenTreeWidth?}` (§16.6). |
 | `ui:setSettings` | renderer → main | `{settings: Partial<UiSettings>}` | Persist global UI prefs to userData (§16.6). |
+| `capture:last` | renderer → main (invoke) | `{sessionId} → MonitorEvent[]` | **(v2.27, §21/D39; shape v2.34)** Run report-detection (§15.3) **on demand** against the current shadow buffer and return the single latest report **followed by its findings** as stored `MonitorEvent`s — `[]` when none. Mirrors `monitor:replay`'s shape so the pane renders a button-capture and a replay identically; the handler replaces any prior `report` in the store first (single-slot). Skips a candidate that is just the echoed command line. Command-output capture stays on `monitor:captureCommandText`. |
+| `flow:list` | renderer → main (invoke) | `{sessionId} → FlowDef[]` | **(v2.27, §18)** The merged flow-definition library (global ∪ per-repo, repo wins on name clash — §18.4). |
+| `flow:start` | renderer → main (invoke) | `{sessionId, flowName, inputs} → FlowState` | **(v2.27, §19)** Instantiate the chosen definition, begin step 1, run its entry actions (incl. `bootstrap: pickup` if declared — §18.3). |
+| `flow:state` | renderer → main (invoke) | `{sessionId} → FlowState \| null` | **(v2.27, §19)** Current step, per-step status, gate state, derived loop progress (§19.1). |
+| `flow:advance` | renderer → main (invoke) | `{sessionId} → FlowState` | **(v2.27, §19.2)** User-driven advance to the next step. Warns (does not block) if the current gate is unsatisfied (`ready: false` in the result). |
+| `flow:gate` | renderer → main | `{sessionId, action: 'approve'\|'request-changes'\|'impasse', reason?}` | **(v2.27, §19.3)** Drive an agent-loop gate by **injecting** the matching slash command (§19.3); refuses while a process is running (§19.3/D32). |
+| `flow:composeFeedback` | renderer → main (invoke) | `{sessionId, todoIds, instructions?, mode: 'compose'\|'verbatim'} → string` | **(v2.27, §19.4)** Build request-changes feedback from selected review todos (+ optional instructions): agent-composed or submitted verbatim (D9/D11). |
+| `flow:openChild` | renderer → main (invoke) | `{sessionId, prRef, atStep} → {worktree, launched}` | **(v2.27, §23)** Create a git worktree for an epic child PR and launch a new instance, seeding its flow-state at the right step (D22). |
+| `flow:onStateChanged` | main → renderer | `{sessionId}` | **(v2.27, §19)** Flow-state or agent-loop state changed (file-watch); the pane re-pulls `flow:state`. |
+| `viewer:tree` | renderer → main (invoke) | `{sessionId, scope: 'curated'\|'repo'} → ArtifactTree` | **(v2.27/§20.1; built v2.37)** Hierarchical, provenance-tagged tree off the session cwd: curated (working-tree changes ∪ `.agent-loop/`) or whole repo, tagged `changed`/`loop` (`pr` deferred — D8); `ArtifactTree` wraps `nodes` + `root` + `isRepo` + `scope`, so outside a repo it returns the cwd tree with `isRepo:false`. |
+| `viewer:read` | renderer → main (invoke) | `{sessionId, relPath} → ViewerFile \| null` | **(v2.27/§20.2; built v2.37)** File content for the viewer (markdown / code), classified by extension; null on missing/binary/oversized/path-escape. **(v2.41)** `ViewerFile.changedLines` carries the code file's lines that differ from `HEAD` (added/modified, 1-based; absent when none). |
+| `viewer:ghRefresh` | renderer → main (invoke) | `{sessionId, ref} → {path}` | **(v2.27, §20.3)** Refresh a ticket/PR markdown via the `gh` CLI from main and update the cached artifact (D24). |
+| `todoTemplate:list` | renderer → main (invoke) | `{sessionId} → TodoTemplateRef[]` | **(v2.27, §21.2)** Global todo-template library (D12). |
+| `todoTemplate:instantiate` | renderer → main (invoke) | `{sessionId, repoKey, ref} → TodoItem[]` | **(v2.27, §21.2)** Parse a markdown-list template (named or file path — D37/D38) into todos and append them. |
 
 > Captures are routed **through main** (rather than renderer-internally, which would be simpler today) so the monitor pane has no dependency on the terminal pane. When the monitor pane later becomes a separate `WebContentsView`/web app, and when captures start originating from the shadow model instead of user selection, nothing about this contract changes.
 
@@ -311,6 +458,26 @@ contextBridge.exposeInMainWorld('monitor', {
   onCwdChanged: (cb) => ipcRenderer.on('cwd:changed', (_e, m) => cb(m)),
   getSettings: () => ipcRenderer.invoke('ui:getSettings'),
   setSettings: (settings) => ipcRenderer.send('ui:setSettings', { settings }),
+  captureLast: () => ipcRenderer.invoke('capture:last', { sessionId: SID }), // v2.27, §21
+});
+
+// v2.27 (§17–§24): task-flow management exposes two further namespaces, same narrow/typed pattern.
+contextBridge.exposeInMainWorld('flow', {
+  list:    () => ipcRenderer.invoke('flow:list', { sessionId: SID }),
+  start:   (flowName, inputs) => ipcRenderer.invoke('flow:start', { sessionId: SID, flowName, inputs }),
+  state:   () => ipcRenderer.invoke('flow:state', { sessionId: SID }),
+  advance: () => ipcRenderer.invoke('flow:advance', { sessionId: SID }),
+  gate:    (action, reason) => ipcRenderer.send('flow:gate', { sessionId: SID, action, reason }),
+  composeFeedback: (todoIds, instructions, mode) => ipcRenderer.invoke('flow:composeFeedback', { sessionId: SID, todoIds, instructions, mode }),
+  openChild: (prRef, atStep) => ipcRenderer.invoke('flow:openChild', { sessionId: SID, prRef, atStep }),
+  onStateChanged: (cb) => ipcRenderer.on('flow:onStateChanged', (_e, m) => cb(m)),
+  templateList: () => ipcRenderer.invoke('todoTemplate:list', { sessionId: SID }),
+  templateInstantiate: (repoKey, ref) => ipcRenderer.invoke('todoTemplate:instantiate', { sessionId: SID, repoKey, ref }),
+});
+contextBridge.exposeInMainWorld('viewer', {
+  tree: (scope) => ipcRenderer.invoke('viewer:tree', { sessionId: SID, scope }),
+  read: (relPath) => ipcRenderer.invoke('viewer:read', { sessionId: SID, relPath }),
+  ghRefresh: (ref) => ipcRenderer.invoke('viewer:ghRefresh', { sessionId: SID, ref }),
 });
 ```
 
@@ -853,6 +1020,8 @@ These shape choices above (the shadow model, the event schema, the `sessionId` f
 5. **Per-agent submit profiles.** Codify how each agent CLI accepts injected input and submission (paste-then-CR timing, multi-line semantics, interrupt keys) as small adapter configs consumed by the §9.3 injector.
 6. **Capture persistence and export.**
 
+> **v2.27:** items 2 (richer monitor UI / out-of-process pane) and 3 (multiple sessions) are now subsumed by the **task-flow management** phase — see **§17–§24**. That phase reuses §13's seams (shadow model, event schema, `sessionId`, main-process injection, the §9.1 relocation rule) rather than discarding them.
+
 ---
 
 ## 14. Risks and open questions
@@ -886,6 +1055,7 @@ These shape choices above (the shadow model, the event schema, the `sessionId` f
 
 ### 15.1 Goal & boundary
 
+- **Amended v2.27 (capture is manual + single-slot — §21/D39):** the recognition logic below still stands, but it is **no longer driven automatically**. Reports/findings are **not emitted on the `active→quiet` transition**; instead the user clicks **"Capture last report"** and the scanner runs **once, on demand**, against the current shadow buffer, returning the single latest report (`capture:last`, §6) which **replaces** any prior capture. Everywhere §15 says "emit on the quiet transition," read "detect on demand when the button is pressed." Detection, `splitFindings`, the chrome/classifier model, scrollback/watermark extraction, and the `SCANNER_DEBUG` trace are all retained; only the *trigger* and the *list/dismiss UI* change. The rest of §15 is preserved for the detection contract it specifies.
 - Automatically recognize meaningful regions of **agent output** — tool-use blocks, diffs, and (the primary target) **agent reports** — and surface them as typed blocks in the monitor pane, replacing the need for the user to manually select and capture them. **Amended v2.6:** permission-prompt / agent-question detection is **removed** — it false-positived on report prose and on code/diff lines that merely contain `?` or "do you want" while sitting in scrollback. A `report` is surfaced as a group whose **findings** (one per top-level list item, one per non-list paragraph) are individually actionable while remaining a single grouped finding (§15.3/§15.6).
 - Additionally, capture **ordinary command output** (e.g. `ls`, `git status`) as cleanly-delimited, on-demand capturable units (§15.5) — a segmentation problem, solved by shell-integration marks, not a recognition problem.
 - Manual selection capture (§7.5) remains and is unchanged; both new capture families are additive alongside it.
@@ -895,7 +1065,7 @@ These shape choices above (the shadow model, the event schema, the `sessionId` f
 
 ### 15.2 Trigger, data source, and scan scope
 
-- Agent-semantic scanning runs **only on the `active → quiet` quiescence transition** (§8.3) — never per output chunk, never on a polling timer. The transition callback the detector already exposes is the attachment point.
+- Agent-semantic scanning runs **only on the `active → quiet` quiescence transition** (§8.3) — never per output chunk, never on a polling timer. The transition callback the detector already exposes is the attachment point. **Amended v2.27 (§21/D39):** scanning is instead triggered **on demand** by the **"Capture last report"** action (`capture:last`, §6). The quiescence transition is no longer the scan trigger for reports/findings (it still drives the live status indicators of `monitor:update`, and command spans still key off OSC-133 marks). The scan still reads the same public shadow read-path under the same watermark/trim/wrapped-line rules; it just runs when the button is pressed rather than on every quiet gap.
 - The scanner reads **only the shadow model's public read path** (buffer rows via `getLine(y).translateToString(true)` or equivalent) — never the renderer's xterm, never the raw byte stream — and runs entirely in the **main process**: it must keep working when the renderer is unfocused, reloaded, or (later) out-of-process.
 - Reads must respect shadow write asynchrony (§8.2): a scan must observe a buffer that reflects all bytes written before the quiet transition (write callback or equivalent settling guarantee).
 - **Scan scope is the full buffer including scrollback, with a watermark.** The scanner tracks the absolute row it last scanned up to and processes everything from there to the current end on each quiet transition. This is what makes long reports that have scrolled off the viewport capturable in full (they sit contiguously in scrollback by the time the quiet transition fires), and it is the natural basis for dedup. Visible-region stability heuristics (§15.3) may inform *detection*, but *extraction* always reads scrollback.
@@ -910,7 +1080,7 @@ These shape choices above (the shadow model, the event schema, the `sessionId` f
   - **No adapter selection / fingerprinting.** Every classifier runs, then the baseline runs, every scan. There is no "pick one adapter," so a window can never be claimed-and-dropped. (The alt buffer still emits nothing — §15.9.)
 - **Findings (v2.6):** the baseline splits a report's text into findings via the shared `splitFindings` — one finding per top-level list item (sub-bullets/wrapped lines stay with their item) and one per non-list paragraph — and emit them as `finding` events linked to the report by `parentId`. Findings are emitted only when there are ≥2 (a single-segment report stands alone). Report emission is gated by a minimum size, `APP_REPORT_MIN_CHARS` (§15.7), so trivial one-liners and short command output stay below threshold.
 - **Alt-screen agents** (Codex TUI): the scanner must not crash or mis-capture. **Amended v2.6:** with permission/question detection removed, the alt buffer emits nothing this phase (precise alt-screen region parsing remains out of scope — §13.4 / §15.9).
-- **Deduplication:** the same region must not re-emit an event on every subsequent quiet transition while it remains unchanged; recognition state must survive scrollback trimming without re-firing. Dedup is keyed at the **report (parent) level** — findings ride on their parent, so an unchanged report and all its findings are skipped wholesale, and identical finding text across different reports never collides.
+- **Deduplication:** the same region must not re-emit an event on every subsequent quiet transition while it remains unchanged; recognition state must survive scrollback trimming without re-firing. Dedup is keyed at the **report (parent) level** — findings ride on their parent, so an unchanged report and all its findings are skipped wholesale, and identical finding text across different reports never collides. **Amended v2.27 (§21/D39):** with capture now manual and **single-slot** (each "Capture last report" **replaces** the prior capture), cross-transition dedup/retraction is **no longer load-bearing** — there is at most one captured report and re-clicking simply re-detects the current latest report. The dedup machinery (and `monitor:eventRemoved` retraction) is **retired** from the capture path; the detector need only return *the* latest report on demand.
 - **Quiescence refinement (conditional):** if no-op repaints (idle spinners, clocks) cause false `active` flips that starve or spam the scanner, implement the §8.3 screen-stability refinement — hash the visible shadow buffer after settle and count only screen-changing output as activity. This slots into the existing `noteOutputActivity` seam.
 
 ### 15.4 Event contract
@@ -937,8 +1107,8 @@ These shape choices above (the shadow model, the event schema, the `sessionId` f
 - Typed events render with a visible type badge; unknown future types render as a generic block, never dropped.
 - Semantic and command blocks get the same Insert / Insert & submit actions as manual captures (same `agent:inject` path, same sanitization — §9.3). **Amended v2.7 (§16.2):** semantic captures (`report`/`finding`) **no longer inject** — they offer **Add to todo** + **Dismiss**; command-history entries keep Insert / Insert & submit and gain **Clear commands**; injecting happens from the Todo tab (§16.4).
 - **Reports (v2.6):** a `report` renders as a group with whole-report actions; its `finding` children nest inside in natural order. A report with no findings shows its full text inline. **Amended v2.7:** the per-item action is **Add to todo** (a finding adds that finding; the report group adds the whole report — §16.2), not inject.
-- **Dismissal (v2.6):** every block, report group, and finding carries a dismiss control. Dismissing a report cascades to its findings; a **Dismiss-all** action clears the pane. Dismissal removes the event from main's store (`monitor:dismiss` / `monitor:dismissAll` — §6) so a reloaded pane's replay does not resurrect it. In-memory only — persistence remains out of scope (§15.9).
-- **Ordering (v2.6):** captured blocks **and** command history are shown newest-first; findings keep natural order within their report group.
+- **Dismissal (v2.6):** every block, report group, and finding carries a dismiss control. Dismissing a report cascades to its findings; a **Dismiss-all** action clears the pane. Dismissal removes the event from main's store (`monitor:dismiss` / `monitor:dismissAll` — §6) so a reloaded pane's replay does not resurrect it. In-memory only — persistence remains out of scope (§15.9). **Amended v2.27 (§21/D39):** the Capture tab no longer holds a *list*, so per-block Dismiss / Dismiss-all are **retired** — there is one captured report (with its findings) or none, and the next capture **replaces** it. The remaining per-finding action is **Add to todo** (§16.2).
+- **Ordering (v2.6):** captured blocks **and** command history are shown newest-first; findings keep natural order within their report group. **Amended v2.27:** "newest-first list" applies to **command history** only; the captured report is a single slot, findings in natural order.
 - The pane continues to talk only to `window.monitor.*` (§9.1) — no new coupling to the terminal pane.
 - Event volume stays readable via the dedup (§15.3) and capture-on-demand (§15.5) rules, not UI-side throttling.
 
@@ -974,10 +1144,11 @@ These shape choices above (the shadow model, the event schema, the `sessionId` f
 - Two tabs: **Capture** (live detection — reports, findings, command history; session-scoped, §15) and **Todo** (persistent, repo-scoped — §16.3).
 - The Capture tab shows an **unread dot** when a new `monitor:event` arrives while another tab is active; the Todo tab shows the **active-todo count**.
 - The last-selected tab is remembered **globally** (`UiSettings.lastTab`, §16.6), not per repo.
+- **Amended v2.27 (§21/§22, D39/D40):** the Capture tab becomes **manual single-slot** — a **"Capture last report"** button plus the one current captured report (findings individually Add-to-todo-able); no growing list, no unread dot driven by auto-emit (nothing auto-emits). In the **task-flow UI** (§22) these same two tabs (`Todo | Capture`) are the body of the **quick-send overlay** and of the Todos+Status view — placement-agnostic widgets positioned by layout config (§22.4).
 
 ### 16.2 Injection model (supersedes the §9.2 / §15.6 "every block injects" posture)
 
-- **Semantic captures** (`report`, `finding`): **no inject**. Each offers **Add to todo** (item-level — a finding adds that finding; a report group adds the whole report) and **Dismiss**. Add-to-todo appends a todo and then shows an **in-place Undo** on the block for `TODO_UNDO_MS` (60 000 ms). The block is **dismissed and removed only when that window elapses** (committing the add); clicking **Undo** within the window **deletes the just-added todo** (`todo:delete`, by the new item's own `repoKey`) and restores the block's **Add to todo** action — the source is **never dismissed on undo**.
+- **Semantic captures** (`report`, `finding`): **no inject**. Each offers **Add to todo** (item-level — a finding adds that finding; a report group adds the whole report) and **Dismiss**. Add-to-todo appends a todo and then shows an **in-place Undo** on the block for `TODO_UNDO_MS` (60 000 ms). The block is **dismissed and removed only when that window elapses** (committing the add); clicking **Undo** within the window **deletes the just-added todo** (`todo:delete`, by the new item's own `repoKey`) and restores the block's **Add to todo** action — the source is **never dismissed on undo**. **Amended v2.27 (§21/D39):** the captured report comes from the manual **"Capture last report"** action (`capture:last`, §6), is **single-slot** (a new capture replaces it), and **Dismiss** is dropped (replace, don't dismiss). **Add to todo + Undo** are unchanged; the Add-to-todo path is what feeds curated **review todos** into the request-changes feedback composer (§19.4).
 - **Manual selection capture** (§7.5): routes **straight to the Todo list** — it does not appear in the Capture tab. Because this add happens in the terminal pane (which owns the selection; §9.1), it signals the action window via a decoupled `app:todos-changed` window event (same bus as `app:focus-terminal`) so the repo-scoped **todo count/list refreshes immediately**; without it the count would lag until the next re-pull.
 - **Command history**: a compact, read-only list (command + exit chip), newest-first, plus a **Clear commands** action (`monitor:clearCommands`, §6). There is **no per-entry button** — command capture moved to the terminal pane's **Capture selection** button (below). Clear commands drops only **finished** commands; a **still-running** command (and any in-flight command-start) survives until it finishes. The renderer does not optimistically wipe — main drops the finished spans and the pane re-renders via `monitor:commandsChanged`, so a running command is never momentarily hidden.
 - **Capture (terminal pane, §7.5)** is the single capture surface → **straight to the Todo list**, never a Capture-tab block: with an active selection it adds the **selected text**; with **no selection** it captures the **latest command's output** (via `monitor:captureCommandText`, §6) and adds that. Either way it refreshes the action window via the `app:todos-changed` signal (above).
@@ -996,8 +1167,8 @@ These shape choices above (the shadow model, the event schema, the `sessionId` f
 
 - **Active list** (status `active`), newest **appended to the bottom**. **Manual add** creates a fresh todo from typed text.
 - **Reorder** via a **drag handle** *and* **up/down buttons** (keyboard / a11y); the new order persists (`todo:reorder`).
-- **Edit in place:** an auto-growing, scrolling textarea with native word-skip shortcuts (Cmd/Opt+Arrow); Save persists (`todo:update`). Edits are **todo-only** — independent of any source capture.
-- **Completion:** Insert / Insert & submit set the item `done`, which **filters it out** of the active list into a collapsible **Done** section. Re-copying a done item **moves it back to active**. The Done section is **capped** (`APP_MAX_DONE_TODOS`, §15.7-style config; oldest pruned).
+- **Edit in place:** the row's text becomes **`contenteditable` in place** (no textarea-box swap) with Save/Cancel + Enter-commits/Escape-cancels; Save persists (`todo:update`). Edits are **todo-only** — independent of any source capture. *(Amended §24.2.1/v2.45: replaced the original auto-growing-textarea affordance.)*
+- **Completion:** toggling the checkbox sets the item `done`. *(Amended §24.2.1/v2.32+v2.45: done todos render **inline (dimmed)** in the one flat list — the original collapsible **Done** section and its `APP_MAX_DONE_TODOS` cap were dropped, not backlogged.)*
 
 ### 16.5 Self-injection suppression (the capture fix — amends §15.3)
 
@@ -1009,7 +1180,7 @@ These shape choices above (the shadow model, the event schema, the `sessionId` f
 ### 16.6 Layout — resizable splitter & global UI settings
 
 - The terminal pane and action window are separated by a **draggable vertical splitter** that sets their width ratio. **Min widths** on both panes; **double-click** resets to the default ratio; the divider is a focusable `role="separator"` (`aria-valuenow` / `aria-valuemin` / `aria-valuemax`) movable with ←/→.
-- The split ratio and last tab are **global UI preferences** — `UiSettings = { splitRatio: number, lastTab: 'capture' | 'todo' }` — persisted to `app.getPath('userData')/ui-settings.json`, the one piece of state outside the repo (it is app-wide, not per-repo). Channels: `ui:getSettings` (invoke), `ui:setSettings` (§6).
+- The split ratio and last tab are **global UI preferences** — `UiSettings = { splitRatio: number, lastTab: 'capture' | 'todo', theme: 'light' | 'dark', artifactTreeWidth: number, artifactFullscreenTreeWidth?: number }` (grown over v2.30/v2.39/v2.43; `src/shared/ipc.ts` is the source of truth) — persisted to `app.getPath('userData')/ui-settings.json`, the one piece of state outside the repo (it is app-wide, not per-repo). Channels: `ui:getSettings` (invoke), `ui:setSettings` (§6).
 
 ### 16.7 Out of scope (delta on §15.9)
 
@@ -1025,3 +1196,285 @@ The capture pane and the terminal carry the **same content** at different statio
 - **Terminal → capture** (`app:reveal-capture { id }`): a double-click word-selects in xterm; the terminal pane reads the selected row (`getSelectionPosition().start.y`, absolute) and resolves it against the markers' **live** lines to the **most specific** capture whose span covers it — a **finding** in preference to its enclosing report (`pickRevealTarget`) — then dispatches that **id**. The capture pane **scrolls it into view** and gives it a **revealed** outline for `REVEAL_HIGHLIGHT_MS` (10 s); a row no capture covers, or an id no longer rendered, reveals nothing.
 - **Capture → terminal** (`app:reveal-terminal { id }`): double-clicking a **finding** dispatches that chunk's **id** (and stops there, so it does not bubble up to reveal the whole report); double-clicking elsewhere in a report dispatches the report's id. The terminal reads that capture's **current marker rows**, `scrollToLine`s to them, and draws a **self-clearing amber reveal decoration** over them — distinct from the blue selection highlight, and on its own decoration list so clearing one never wipes the other — for the same 10 s. A capture with no range (a manual capture made without a stored span) anchors no marker and asks for nothing.
 - **Best-effort.** Like all `SelectionRange` provenance (§7.3/§8.4) these coordinates are never used to re-extract content; a marker trimmed out of scrollback disposes itself, so a capture whose rows have scrolled away before the reveal simply highlights nothing.
+
+> **§24.1 note:** the mockup-exact capture panel (v2.32) renders findings as flat `.finding` cards, not report-nested ones, and publishes/​reveals exactly as above; a double-click on a finding card dispatches `app:reveal-terminal { id }`, and the terminal resolves a double-clicked row back to the covering card's id.
+
+---
+
+## 17. Next phase — task-flow management (requirements)
+
+> **Status:** requirements for the next build phase, drafted v2.27. Folds the design captured in the rationale companion `flow-management-requirements.md` (decisions **D1–D40**). It builds a **management layer** on top of the §1–§16 terminal host and the external **`agent-loop`** engine (config-driven loops with phases, gates, verdicts; state in `.agent-loop/state.yaml`). Like §15, nothing here changes the shipped §12 acceptance criteria until promoted; **on any conflict with the companion doc, the spec wins.**
+
+### 17.1 Goal & boundary
+
+- Turn the terminal host into a **single-operator harness** that drives one coding task **from input artifact to merged PR**. The app adds **flow** orchestration, **artifact** review, **todo/feedback** curation, and a **fast 3-view UI**; it does **not** reimplement `agent-loop`.
+- A **flow** starts from an input artifact (document(s) or a GitHub ticket) and is an ordered list of **steps**, each producing output artifacts and ending in a **gate** — a human "ready to transition" decision (D3).
+- **Configuration is authored outside the app** — by a Claude Code skill or by hand (§18.5/D20). The app **runs** definitions; there is no in-app flow-authoring UI.
+
+### 17.2 Two-layer ownership (D1/D2)
+
+- **The app owns flow-progression state** (`flow-state.yaml`); **agent-loop owns its per-step loop state** (`.agent-loop/state.yaml`). The app keeps the two in sync: it drives a gate, then re-reads loop state (§19.1).
+- **Gates are driven by injection, not a private API** (D2): the app types `/agent-loop-approve`, `/agent-loop-request-changes`, `/agent-loop-impasse`, … into the hosted terminal via the §9.3 path. The agent executes the transition; the app reconciles from `state.yaml`. One execution context, visible to the user.
+
+### 17.3 Reuse map (D4)
+
+- **Reused as-is/lightly:** PTY (§5), shadow + quiescence (§8), injection (§9.3), scanner **report-detection** (§15), todo store (§16), OSC-133 command tracker, the `sessionId` convention, the §9.1 relocation rule.
+- **Reshaped:** monitor pane → **Todo + Capture tabs** in the quick-send overlay / Todos+Status view (§22); capture → **manual single-slot** (§21.1); status indicators → the **status strip** (§22.3).
+- **New:** flow engine, artifact viewer + file tree, todo templates, feedback composer, 3-view shell + overlay + layout config, `gh` bridge, worktree/child-instance launcher, cross-instance guard.
+
+---
+
+## 18. Flow definitions (`flow.yaml`)
+
+### 18.1 Shape & library (D10/D13/D14/D23)
+
+- A flow definition is a **declarative YAML file** the app reads and watches. The **instantiated** definition for a run lives at `<worktree>/.agent-terminal/flow.yaml`; progression at `<worktree>/.agent-terminal/flow-state.yaml` (§19.1).
+- **Library:** definitions are chosen from a merged library — **global** `~/.config/agent-terminal/flows/*.yaml` ∪ **per-repo** `<repo>/.agent-terminal/flows/*.yaml`; **repo entries win on name clash** (`flow:list`).
+
+```yaml
+name: feature-dev
+steps:
+  - id: groom-ticket
+    kind: manual
+    skill: groom-ticket            # reference: skill name OR file path; injected on entry (§18.6)
+    todo_template: ticket-grooming # reference: template name OR file path (§18.6/§21.2)
+    inputs:  [{name: ticket, type: github-ticket, required: true}]   # §18.4
+    outputs: [{name: ticket, type: github-ticket}]
+  - id: plan
+    kind: loop
+    loop: plan-loop                # agent-loop LoopDef name
+    bootstrap: pickup              # on ENTRY to this step: `agent-loop pickup <ticket>` → PR (§18.3)
+    inputs:  [{name: ticket, type: github-ticket, required: true}]
+    outputs: [{name: pr, type: pr}, {name: plan, type: files, paths: [plan.md]}]
+  - id: implement
+    kind: loop
+    loop: impl-loop
+    inputs:  [{name: pr, type: pr, required: true}]
+    outputs: [{name: pr, type: pr}]
+  - id: open-for-review
+    kind: action
+    command: gh pr ready "$PR"     # declared shell command, run in the hosted terminal (§18.2/D30)
+    inputs:  [{name: pr, type: pr, required: true}]
+    outputs: [{name: pr, type: pr}]
+```
+
+### 18.2 Steps & kinds (D3/D7/D30)
+
+- Every step is **typed**: `loop` (runs an agent-loop), `manual` (a human produces an artifact), `action` (a declared side-effect). **All kinds end in a gate.**
+- **`loop`** binds a `loop:` LoopDef and may declare `bootstrap:` (§18.3). **Only loop steps** can be **sent back for more work** (request-changes — §19.4/D7); manual/action steps are done/not-done.
+- **`manual`** may bind `skill:` and `todo_template:` (§18.6); the human decides when done.
+- **`action`** declares a `command:` string run in the hosted terminal via the §9.3 path (subject to the running-process refusal of §19.3); e.g. `gh pr ready "$PR"`. No built-in typed-action catalog in v1.
+
+### 18.3 Bootstrap is a per-step entry action (D15)
+
+- `bootstrap: pickup` runs `agent-loop pickup <input>` **on entry to the step that declares it** — which may be **any** step, including the first. A flow whose first step needs a PR bootstraps at the very start; a flow opening with a `manual` step does not. Bootstrap is therefore **not intrinsically a "flow start" action**.
+- Worked example: step 1 `manual` groom-ticket (no PR yet) → on entering step 2 `loop plan-loop` with `bootstrap: pickup`, the app runs `agent-loop pickup <ticket>` to create the PR, then `agent-loop <pr> --loop plan-loop`; output may be a single PR (+ issues) or an epic of N PRs (§23.2).
+
+### 18.4 Typed step inputs (D29/D34)
+
+- Each step declares its required **typed inputs**; when an input isn't already available the app prompts with the matching **picker**. v1 catalog (extensible registry): `github-ticket`, `pr`, `files`, `free-text`. Outputs are likewise typed; agent-loop may **create** outputs (new PRs) not known up front.
+
+### 18.5 Authoring is separate (D20)
+
+- Definitions are authored by the **flow-author skill** (§24, W19) or by hand. The app only lists/starts/drives them.
+
+### 18.6 Skill & template references — reference, never inline (D37)
+
+- `skill:` and `todo_template:` are **always references** (a registered name **or** a file path), never inline bodies — they can be large and shared, and inlining would bloat the YAML. Resolution mirrors §18.4/D14: a known registered name is used, otherwise the value is a file path (repo-relative against the worktree).
+- `skill:` → a **Claude Code skill**; on step entry the app **injects the skill invocation** so the agent loads its playbook (distinct from the §18.5 flow-author skill, which runs once at config time).
+- `todo_template:` → a **markdown-list** template (§21.2).
+
+---
+
+## 19. Flow progression, gates & feedback
+
+### 19.1 Flow-state & the agent-loop bridge (D1/D33)
+
+- `flow-state.yaml` records the current step, per-step status, and gate state. A main-process **bridge** watches/parses `.agent-loop/state.yaml` and derives **loop progress** (iteration, severity cycle, latest verdict, open-findings count) for the status strip (§22.3); changes fire `flow:onStateChanged` and the pane re-pulls `flow:state`.
+- **VCS:** `flow-state.yaml` and the app-owned `.agent-terminal/` progression are **gitignored by default** (the app writes the ignore entry on first use); the user may **opt to commit** so progression travels with a branch.
+
+### 19.2 Advance is user-driven, with a not-ready warning (D31)
+
+- The flow **never auto-advances**. The app detects whether the current step's gate is satisfied and surfaces an **"Advance to <next step>"** control (status strip). Advancing on an unsatisfied gate **warns** ("not ready — <reason>") but **proceeds** (human override). `flow:advance` returns the new state with a `ready` flag; on entry it runs the next step's entry actions (§18.3/§18.6).
+
+### 19.3 Gate driver & the running-process refusal (D2/D32)
+
+- Gate actions inject the matching agent-loop slash command (`approve` / `request-changes` / `impasse`), then reconcile via the bridge (§19.1).
+- **Injection refuses while a foreground process is running** — the shell is not at a ready prompt (detected via §8.3 quiescence / OSC-133 marks). The app **stops and tells the user what to do** ("agent is busy — wait or interrupt, then retry") rather than typing over a live process. The same rule governs `action` commands (§18.2) and `bootstrap` (§18.3).
+
+### 19.4 Request-changes feedback (D7/D9/D11)
+
+- Only loop steps take request-changes. At the gate the user **selects which review todos** to include (a curated subset — sourced via §21.1 capture → Add-to-todo), optionally **adds free-text instructions**, and chooses **"Compose with agent"** (selected todos + instructions → agent writes the reason → inject `/agent-loop-request-changes`) **or "Submit todos as-is"** (verbatim). `flow:composeFeedback` builds the reason; the gate driver (§19.3) injects it.
+
+---
+
+## 20. Artifacts & the built-in viewer
+
+### 20.1 Discovery & provenance (D8)
+
+- Default review/search set = **agent-loop artifacts** (from the LoopDef `artifacts:` declarations ∪ `.agent-loop/`) ∪ **everything in the current PR** (changed files). A checkbox expands to **any file in the repo**, with **provenance tags**: changed-in-working-tree, part-of-agent-loop, part-of-PR. `viewer:tree` returns the tagged tree; the file tree is searchable and hierarchical.
+
+### 20.2 Viewer (D25/D35)
+
+- Renders **code** (read-only, syntax-highlighted), **markdown with Mermaid** blocks, and **standalone Mermaid** charts. Tech: **CodeMirror 6** (code; strong text-selection for select-to-send), **markdown-it**, **mermaid.js**. No dedicated diff/image/PDF view in v1.
+- **Changed-line markers (v2.41):** a source file in a git repo marks the lines that **differ from `HEAD`** — added or modified lines in their **current-file position** (not a diff: no deleted-line rows). Each marked line gets **both** a gutter **stripe** and a line-background **tint** (`--changed`/`--changed-wash`). An **untracked** file marks every line; markdown, unchanged files, and files outside a repo carry none. The set is computed in main (`ViewerFile.changedLines`, from `git diff -U0 HEAD`) and painted by a static CodeMirror extension.
+- **Select-to-send:** a selection in the viewer can be **sent to the agent** (inject, §9.3) or **added to a todo** — the same two sinks as the terminal-pane selection (§16.2). The two sink buttons are **disabled until something is highlighted** (v2.42); a button's `mousedown` is `preventDefault`ed so focusing it does not collapse the live selection it acts on.
+- **Changed-section navigation (v2.42):** alongside the sink buttons, **‹ prev / next ›** controls with a **current / total** readout step through the file's changed sections — the contiguous runs of `changedLines`. The readout and targets are **viewport-driven**: *current* is the last section scrolled onto/past the screen, *next/prev* jump to the nearest section below/above the visible area, and a control disables only when no section exists in that direction (so a change off-screen at open is reachable, and scrolling updates the number on its own). The code render seam returns a `CodeView` handle (`revealLine` / `visibleLines` / `onViewportChange`) the organism reads; the controls hide when the file has no changes.
+- **File tree (v2.39):** a WAI-ARIA `tree` — **keyboard-navigable** (↑/↓ rows, →/← expand·collapse / parent·child, Enter·Space open·toggle, Home/End). File names render **in full, never truncated** (v2.40); the pane scrolls horizontally to reach a long name, and each row also carries its full path as a `title`. The tree/viewer split is **drag-resizable** at the edge (also arrow-key nudge, double-click reset; clamped 140–640px), persisted in `UiSettings.artifactTreeWidth` (§16.6).
+- **Full-screen mode (v2.43):** a toolbar button (`⛶`, `aria-pressed`) maximises the viewer — **all app chrome is hidden** (left rail incl. the status strip, and the quick-send drawer) via `app.viewer-fullscreen`, and the viewer fills the window. On enter, the **viewer header** slides off the top and the **file tree** slides off the left, each reachable by a **thin edge strip** (a focusable button with `aria-expanded`) that pops it open and closed. The tree popout is **drag-resizable** at its right edge (also arrow-key nudge), with its **own remembered width** (`UiSettings.artifactFullscreenTreeWidth`, separate from the slim split-view width) that **defaults to ≥30% of the viewport** so it opens usefully wide. Exit via the same button in the (revealed) header or **Escape**; switching views also exits. The shell owns the chrome state, ESC, and exit-on-view-change; the viewer organism owns its header/tree slide, the strips, the toggle button, and focus (moved to the top strip on enter, back to the toggle on exit) — coordinated through the contract (`Shell.setViewerFullscreen` ↔ `ShellDeps.onViewerFullscreenChange` ↔ `Artifacts.setFullscreen` / `ArtifactsDeps.onRequestFullscreen`), no DOM reach-across.
+
+### 20.3 GitHub as markdown (D19/D24)
+
+- GitHub tickets and PR bodies are **markdown artifacts** shown in the viewer. The app **prefers agent/loop-written artifacts** (e.g. `pr-context.md`, `ticket.md`) and offers **"Refresh from GitHub"** (`gh` CLI from main, `viewer:ghRefresh`) to pull live state on demand and update the cached markdown.
+
+---
+
+## 21. Manual capture & todo templates
+
+### 21.1 Manual single-slot capture (D39 — reconciles §15/§16)
+
+- Capture is **completely manual**: a **"Capture last report"** button runs report-detection (§15.3) **on demand** against the current shadow buffer (`capture:last`, §6); the pane holds **one** captured report — each capture **replaces** the prior.
+- The captured report still **splits into findings** (§15.7 `splitFindings`), each individually **Add-to-todo**-able; the whole report can be added wholesale. **No auto-emit, no growing list, no Dismiss-all / dedup / retraction** (retired — §15.1/§15.2/§15.3/§15.6/§16.1/§16.2 amendments). Report-detection logic and the `SCANNER_DEBUG` `/tmp/scanner.log` trace are kept.
+- This is the engine of **review-todo curation**: capture last report → add the relevant findings as todos → curate the subset at the request-changes gate (§19.4).
+
+### 21.2 Todo templates (D12/D38)
+
+- Templates are **markdown lists** — named global templates in `~/.config/agent-terminal/todo-templates/`, or external files referenced by a step (§18.6). `todoTemplate:instantiate` maps each **top-level list item** to one **active** todo (`[ ]`/`[x]` marker ignored); **nested sub-bullets and wrapped lines fold into their item**; **headings/prose are ignored** (so a template can carry a title + instructions). Reuses the flat todo model (§16.3) — no new on-disk schema; instantiation just emits `todo:add`.
+
+---
+
+## 22. UI shell — views, overlay, status strip, layout
+
+### 22.1 Three full-screen views (D26)
+
+- **1 Terminal** (work with the agent), **2 Artifacts** (file tree + viewer, §20), **3 Todos + Status** (§21 + §22.3). Hotkey switching; each view's state is preserved across switches.
+
+### 22.2 Tabbed quick-send overlay (D26/D40)
+
+- A hotkey **overlay** pops over any view with two tabs — **`Todo | Capture`**: the Todo tab → pick a todo → send to the terminal; the Capture tab → "Capture last report" (§21.1) → Add-to-todo / Insert. The same two widgets are the body of view 3. This is the headline efficiency feature — curate-and-send without leaving the current view.
+
+### 22.3 Status strip (D6/D27)
+
+- A persistent slim strip shows, glanceably: **step position** (n/total + name), **gate state**, **agent activity** (active/quiet, §8.3), and **loop progress** (iteration, severity cycle, latest verdict + open-findings count) for loop steps. The strip is **hideable** ("deep work"); the full step timeline and the **gate controls** (a collapsible section) are one click away.
+- **Deferred (OPEN-10):** the precise meaning of "deep work mode" — strip-hidden-only vs. collapse-to-terminal-only, and its toggle — is left to user testing; v1 ships a strip-visibility toggle on the Terminal view, not a separate mode.
+
+### 22.4 Layout is data, not code (D17/D28/D36)
+
+- The UI is built from **placement-agnostic widgets** (terminal, viewer, file tree, todos, capture, gate panel, status strip, overlay) positioned by a **layout config** at `~/.config/agent-terminal/layout.json`: which view holds which widgets, what the overlay shows, the hotkeys. **No runtime drag-dock** in v1 — changing layout = editing config, not rewriting widgets. This is a **first-class architectural constraint** (clean widget boundaries), not a nice-to-have.
+- Hotkey defaults: **Ctrl/Cmd+1/2/3** (views) + **Ctrl/Cmd+K** (overlay), remappable via the config.
+
+---
+
+## 23. Multi-instance & epics
+
+### 23.1 One flow per instance, many instances (D5)
+
+- **One flow per app instance**; concurrency is achieved by **running many instances**, each driving its own terminal session, repo/branch/PR, and agent-loop chain. No in-app multi-flow dashboard.
+
+### 23.2 Epics = N instances over N worktrees (D18/D22/D23)
+
+- When a loop step produces N PRs (an epic), **all steps of the flow run on each PR** — each PR becomes its **own flow** in its **own git worktree** on its PR branch. There is no going back, so ancestry isn't tracked. The app **assists**: for each child PR it creates the worktree and launches a new instance, **seeding that worktree's flow-state** at the correct step (`flow:openChild`). Per-flow state lives in the worktree (§19.1).
+
+### 23.3 Cross-instance guard (D21)
+
+- Instances are independent, but if two target the **same repo+branch (or same PR)**, the second **warns** ("already managed elsewhere") to avoid clobbering agent-loop state.
+
+---
+
+## 24. Build plan — UI-inwards
+
+> **Build direction (supersedes the prior bottom-up W1–W19 plan).** We build the flow-management UI **from the skin inwards**: stand up the complete three-view shell (§22) first, with **every widget present and interactive**, then replace mocked backing with real subsystems phase by phase. The four widgets that already have shipped cores — **terminal** (§5–§9), **manual capture** (§15/§16/§21.1), **todos** (§16.3/§16.4/§21), and the **artifact viewer** (§20.2) — are reused **as-is behind the new skin**; everything else (flow runner, gates, status strip, step inputs, feedback compose, artifact discovery, GitHub bridge, multi-instance) is **mocked with fixtures** in Phase 1 and made real in later phases. The rationale: lock the look, feel, and widget boundaries (§22.4) before wiring deep machinery, so the visible product converges early and the §22.4 placement-agnostic-widget constraint is enforced from day one rather than retrofitted.
+>
+> **TDD applies unchanged (CLAUDE.md).** Design artifacts in §24.1A/B (mood studies, theme mockups) are non-code HTML and are outside the code-TDD rule. Everything built into the app in §24.1C and every later phase is code: RED-first, observable behavior, no emulator/PTY mocks. View switching, hotkeys, overlay open/close, theme toggle, and mocked-widget rendering are all observable at the DOM/e2e boundary and are tested there. Reuse of a shipped core behind the new skin starts with a **pinning test** asserting the core's existing observable behavior still holds through the new widget boundary.
+
+### 24.1 Phase 1 — the three-view UI, mocked
+
+> **Progress:** 24.1A Mood ✅ · 24.1B Options ✅ · 24.1C Implement ✅ — **Phase 1 is complete** (v2.36): the full three-view shell is the live UI with every widget present and interactive in both themes, the shipped cores (terminal, capture, todos) reused behind the skin, and the **artifact viewer** now real (markdown-it+mermaid / CodeMirror, §20.2). The §24.2.1 drawer-panel restorations are now **complete** (v2.45). What remains is **not Phase 1**: the §24.2 backlog of real flow machinery (status strip / gate / flow runner are intentionally still fixture-driven mocks). Design artifacts live in `design/` (`design/README.md` is the running log); mood studies in `design/mood/`, shell mockups in `design/shell/`.
+
+Deliver the full §22 shell: **view 1 Terminal**, **view 2 Artifacts** (file tree + viewer), **view 3 Todos + Status**, the **`Todo | Capture` quick-send overlay** (§22.2), the **status strip** (§22.3), and **Ctrl/Cmd+1/2/3 + Ctrl/Cmd+K** hotkeys (§22.4) — in **both light and dark themes** with a toggle. State is preserved across view switches.
+
+**Real (shipped cores, reused behind the new skin):**
+- **Terminal** — the xterm pane and app-owned selection (§7), the PTY/shadow loop (§5/§8), injection (§9.3).
+- **Capture** — manual single-slot "Capture last report" (`capture:last`, §21.1/§15/§16), finding → `todo:add`. Capture lives in the **docked drawer's Capture tab** (view 3 shows Todos + the gate, not capture — §24.1C).
+- **Todos** — the todo data model, persistence, and interactions (§16.3/§16.4), select-and-send to the terminal. The Todo tab of the overlay and the todos widget in view 3 are the **same widget**.
+- **Artifact viewer** — CodeMirror 6 + markdown-it + mermaid.js rendering, select-to-send / `todo:add` (§20.2), fed by **real git/fs discovery** (§20.1, v2.37) scoped to the session's live cwd.
+
+**Mocked (widget present and interactive; fixture data behind it):**
+- **Status strip** (§22.3) — step position n/total, gate state, agent activity, loop progress rendered from a fixture flow-state; hide/show real.
+- **Gate panel + step timeline** (§19.2/§19.3) — controls render and are clickable; actions are stubbed (no real injection of loop slash-commands yet).
+- **Flow runner / flow-state / agent-loop bridge** (§18.3/§19.1) — a hardcoded sample flow drives the timeline and strip; no `flow-state.yaml`, no `.agent-loop/state.yaml` watching.
+- ~~**Artifacts file tree** (§20.1) — populated from the fixture set; no real discovery/provenance.~~ **Now real (v2.37):** `viewer:tree`/`viewer:read` discover the session's repo (curated = working-tree changes ∪ `.agent-loop/`, whole-repo on a checkbox) or, outside a repo, the cwd tree — with `changed`/`loop` provenance tags. The **PR** provenance tag and the LoopDef `artifacts:` declarations still wait on the gh / agent-loop bridges (§24.2).
+- **Feedback compose path** (§19.4) — the compose-with-agent affordance is present but stubbed; verbatim select-and-send works (it rides the real todo/capture send).
+
+**Acceptance:** launch the app, switch views with hotkeys and persist state, toggle light/dark, open the overlay over any view and send a real todo / capture a real report, render a fixture artifact in the viewer and send a selection, drive a real agent in the terminal — all while the strip, timeline, and gate panel show coherent (mocked) flow state.
+
+#### 24.1A Mood — ✅ done
+
+Use the **`frontend-design`** skill to produce **mood studies** that fix the look-and-feel direction: a compact token system (palette as 4–6 named hex values, display/body/utility typefaces, layout concept, one signature element), grounded in this product's subject (a single-operator harness for driving coding agents). Output is a small set of non-code mood boards; **converge on one direction** before any mockups.
+
+- [x] Four directions explored (`design/mood/`): Telemetry, Galley, Schematic, Galley · Lit.
+- [x] **Chosen: Galley · Lit** (`design/mood/04-galley-lit.html`) — readable margin-proof model lit by a live cyan signal on a bright board; light + dark. **Rule:** saturated color is spent only on **signal** (cyan = where the work is / provenance link, §16.8) and **act** (red = request changes); everything else is quiet ink. Type: Fraunces / IBM Plex Sans / IBM Plex Mono. Tokens in `design/README.md`.
+
+#### 24.1B Options — ✅ done
+
+From the chosen mood, produce mockups of the full three-view shell + overlay + status strip, **each in light and dark**, then **converge to a single option** before implementation. Output is interactive HTML/CSS mockups (view switching, overlay, theme toggle; no app/backing wiring).
+
+- [x] Three layouts explored (`design/shell/`), sharing placement-agnostic widgets via `design/shell/tokens.css` (§22.4 — only the frame differs): **Console** (slim strip on top), **Cockpit** (persistent left rail + drawer), **Reading room** (document-first).
+- [x] **Converged on `design/shell/converged.html`** (Reading room dropped):
+  - **Slim left chrome** — Console's minimal feel as a ~200px left rail (views nav + vertical flow + compact status + quick-send/theme); main area full-bleed.
+  - **Docked, non-blurring quick-send** — the drawer is a real layout column (no scrim/blur), so the **terminal stays visible beside it**. This is required for **cross-highlight (§16.8)**: hovering a finding lights its source line in the terminal, both on screen at once. This amends the §22.2 "overlay pops over any view" framing for the Terminal view: quick-send **docks** rather than covers, specifically to preserve terminal↔capture cross-highlight.
+  - ⌘1/2/3 views, ⌘K toggles the drawer; light + dark (theme applied in `<head>` to avoid FOUC).
+
+#### 24.1C Implement — ✅ done (frame + cores + artifact viewer; §24.2.1 panel restorations follow-on)
+
+Built **`design/shell/converged.html`** as the live renderer UI per the §24.1 real/mocked split, **both themes** with a toggle, RED-first throughout.
+
+- [x] **Frame** — `src/renderer/index.html` is the rail · three views · docked drawer; tokens + layout folded into `styles.css`. `shell.ts` owns view switching, ⌘/Ctrl+1-3, ⌘/Ctrl+K, drawer dock/undock, and theme; `crossHighlight.ts` does §16.8. Both are organisms per `UI-STANDARDS.md` (typed factory, host-only DOM, injected theme seam) with DOM-level unit tests; the frame behaviours have e2e (view switch, dock/undock without scrim, ⌘K through a focused terminal, theme persists, terminal refit on dock).
+- [x] **Real cores reused behind the skin** — terminal + selection (view 1); the action window's Capture/Todo tabs + status strip relocated to the docked drawer and rail, element-id contracts unchanged so their shipped behaviour (and e2e) still holds.
+- [x] **`theme` added to `UiSettings`** (§16.6), validated + persisted; `<html data-theme>`.
+- [x] **Splitter removed** (§16.6) — replaced by the docked drawer; module + tests deleted (`splitRatio` left in the contract, unused).
+- [x] **Widget reskin** — the reused capture/todo/status widget CSS is on Galley · Lit tokens (both themes; no hardcoded colors outside the token blocks). A pixel-level polish pass with populated widgets is still worthwhile but not blocking.
+- [x] **Fixture-driven mocked widgets** — `flow.ts` renders the flow timeline, rail gate/loop status, and the view-3 gate panel from one typed `SAMPLE_FLOW` fixture; the gate's Approve / Request-changes buttons are clickable **stubs** that reflect a verdict locally and notify a handler but inject nothing (§19.2/§19.3). DOM-unit-tested; gate-stub wiring has an e2e.
+- [x] **Artifact viewer** — ✅ **done (v2.36), discovery made real (v2.37), since extended (v2.41–v2.44).** View 2 is the real viewer: `artifacts.ts` is a placement-agnostic organism (file tree + viewer, injected render seams + the two §16.2 sinks) fed by **real git/fs discovery** (`viewer:tree`/`viewer:read`, v2.37 — the fixture set is gone); `viewerRender.ts` lazily loads **markdown-it + mermaid** (markdown with rendered diagrams) and a read-only **CodeMirror 6** editor (highlighted code). A selection in either routes to **send-to-agent** (inject, no submit — §9.3) or **add-to-todo** (`captureToTodo`, §16.2), captured via `selectionchange`, and the sinks are disabled until there is a selection (v2.42). Subsequent §20.2 work: **changed-line markers** (v2.41), **viewport-driven changed-section navigation** (v2.42), a **full-screen mode** with a resizable tree popout (v2.43), a name-only tree filter that re-renders matching nodes, and **keyboard-accessible scrolling + reusable accessible show/hide** (v2.44). DOM-unit-tested (fakes for the libs) + full-loop e2e. Both themes via tokens.
+
+> **Known limitation:** ⌘K is intercepted in the capture phase so a focused xterm can't swallow it; the chord still cannot be globally rebound per-OS yet. Three §15/§16 command-capture e2e fail in some environments (shell-integration dependent) — pre-existing, verified against the prior commit.
+
+### 24.2 Backlog — functionality not yet assigned to a phase
+
+Everything below is real backing logic that Phase 1 mocks or omits. Each becomes (or joins) a later phase; none is in Phase 1. Spec sections in parentheses.
+
+- [ ] **Flow definition schema + loader** (§18.1) — `flow.yaml` JSON-Schema, parser/validator, library merge (global ∪ repo, repo wins).
+- [ ] **Flow-progression state store** (§19.1) — `flow-state.yaml` read/write per worktree; transitions persist + reload.
+- [ ] **agent-loop state bridge** (§19.1) — watch/parse `.agent-loop/state.yaml` → derived flow/gate/loop-progress.
+- [ ] **Flow runner** (§18.3/§19.2) — start; per-step entry actions (`bootstrap: pickup`, `skill:` injection); user-driven advance with not-ready warning; per-kind behavior. Replaces the Phase 1 hardcoded sample flow.
+- [ ] **Gate driver + running-process refusal** (§19.3) — inject loop slash-commands; refuse injection over a non-quiescent shell. Makes the Phase 1 gate panel real.
+- [ ] **Typed step-input prompts** (§18.4) — resolve declared inputs; prompt with the right picker only when unsatisfied.
+- [ ] **Feedback composer — compose-with-agent path** (§19.4) — select todos (+instructions) → compose-with-agent vs verbatim → gate driver. (Verbatim send already real in Phase 1.)
+- [x] **Artifact discovery + provenance tree** (§20.1) — ✅ **done (v2.37):** `src/main/artifactTree.ts` discovers the real tree off the session cwd (git in a repo, fs walk outside one) and reads files for the viewer (`viewer:tree`/`viewer:read`), replacing the fixture set. `changed` + `loop` provenance ship; the **PR** tag (needs the gh bridge) and LoopDef `artifacts:` declarations (need the agent-loop bridge) remain deferred.
+- [ ] **GitHub bridge** (§20.3) — prefer written artifacts; `gh` refresh; fallback to artifact when offline.
+- [ ] **Todo templates** (§21.2) — markdown-list parse, named + file templates; headings ignored, sub-bullets folded.
+- [ ] **Layout config system** (§22.4) — load `~/.config/agent-terminal/layout.json`; a config change relocates a widget with no widget-code change. (Phase 1 keeps widgets placement-agnostic but ships a hardcoded layout.)
+- [ ] **Worktree + child-instance launcher** (§23.2) — `flow:openChild`; child launch seeds the expected `flow-state.yaml` at the right step.
+- [ ] **Cross-instance guard** (§23.3) — second open on the same repo+branch (or PR) warns.
+- [ ] **Flow-author skill** (§18.5) — separate deliverable; a skill, not app code.
+
+#### 24.2.1 Drawer-panel functionality deferred by the mockup-exact panels — ✅ done (v2.45)
+
+The §24.1 drawer panels were rebuilt to the converged mockup exactly (v2.32), which is intentionally leaner than the shipped §15/§16 components. These controls existed and work in the codebase's main process; they were dropped from the **renderer** and are the **next priority** to restore — re-skinned into the mockup's card / checkbox / linkbtn language, not the old chrome. The IPC + main-process backing for each still exists.
+
+Todo panel:
+- [x] **Send must not submit** (§9.3/§16.2) — ✅ **done (v2.35).** The **Send** pill injects with `submit: false`: it pastes the todo content into the agent's input box (no trailing `\r`) and **leaves it there for the user to edit or augment** before they submit it themselves, moving focus to the terminal (the old §16.2 *Insert*, not *Insert & submit*). One-line renderer fix (`todoTab.ts` → `doInject(t.text, false)`); the `agent:inject {submit}` path already supported it.
+- [x] **Reorder** (§16.4) — ✅ **done (v2.45).** ↑/↓ buttons (keyboard/a11y path) + HTML5 drag, persisted via `todoReorder`; the full display order is sent so the flat done-inline list stays stable.
+- [x] **Edit-in-place + a better edit UI** (§16.3) — ✅ **done (v2.45).** Editing via `todoUpdate` with a better affordance than the old textarea swap: the `.tx` becomes `contenteditable` in place (Save/Cancel + Enter/Escape, no box swap); the mid-edit repo-swap deferral is kept (a swap while editing surfaces a `.swap-blocked` notice, applied once the edit resolves).
+- [x] **Manual add** (§16.4) — ✅ **done (v2.45).** A top add-row (`#todo-new` + Add) → `todoAdd {type:'manual'}` (empty/whitespace guarded).
+- [x] **Delete — recoverable, two-step** (§16.4) — ✅ **done (v2.45).** Per-todo `todoDelete` via the `origin/main` (commit `c992fe7`, v2.27) design, re-skinned into the mockup row: `×` → inline **Confirm delete? / Cancel**; confirming **defers** the `todoDelete` and shows a **Deleted / Undo** row for `TODO_UNDO_MS`; Undo restores with no round-trip; the deferred delete captures the item's own `repoKey` so a mid-window repo swap still deletes from the right list.
+
+Capture panel:
+- [x] **Bulk triage** (§16.2) — ✅ **done (v2.45).** A `.chunk-check` checkbox per card + a pane toolbar: **Add to todo** (concatenates the checked chunks in appeared order, blank-line separated, into **one** todo) and **Dismiss selected**, re-skinned from the `c992fe7` (v2.27) `chunk-check` / `add-selected` / `dismiss-selected` into the card language. **Supersedes** the per-card "Add to todo" the mockup shipped and subsumes **Dismiss + Dismiss all**.
+- [x] **Dismiss + Dismiss all** (§15.6) — ✅ **done (v2.45).** Toolbar **Dismiss selected** (`dismiss`) and **Dismiss all** (`dismissAll`); folded into **Bulk triage**.
+- [x] **Add-to-todo Undo + in-flight cue** (§16.2) — ✅ **done (v2.45).** The bulk Add-to-todo opens an in-place **Added / Undo** window (`TODO_UNDO_MS`); while pending the contributing chunks read as **processed** (dimmed, checkbox disabled) until the window commits (chunks dismissed) or Undo reverts (the just-added todo is deleted, chunks stay) — the `c992fe7` "processed chunk" behaviour.
+- [x] **Report prose / summary view** (§15.x) — ✅ **done (v2.45).** A report that carves no findings renders as an expandable `.report-prose` summary card (`<details>`) showing the report body — prose has a home without reintroducing the blob.
+
+> **Retained from the old panels (not deferred):** the **double-click → terminal reveal** cross-highlight (§16.8) stays in the mockup-exact capture panel — now **resize-safe** (marker-anchored, id-keyed) after merging `origin/main`. **Dropped and not currently backlogged** (call out if wanted): command-history list + Clear-commands (§15.5/§15.6), type badges + timestamps + truncation markers (§15.6), "Mark as chrome" (§15.x `learnChrome`), Insert/Insert&submit on command-output and the Insert-without-submit todo action (§16.2), the collapsible Done section (§16.4).
+>
+> **Reference implementation:** the deferred Capture/Todo usability (bulk triage, undoable delete, processed-chunk cue) shipped working + tested on `origin/main` in commit `c992fe7`; it lives in git history as the starting point for re-skinning into the mockup, rather than a from-scratch rebuild.
