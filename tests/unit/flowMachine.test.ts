@@ -92,6 +92,41 @@ describe('flow machine persistence (§24.2.2 S3)', () => {
     const flow = createFlowMachine({ ok: false, error: 'no flow.yaml' }, store);
     expect(flow.state().status).toBe('error');
     flow.start();
+    flow.restart();
     expect(store.read()).toBeNull();
+  });
+});
+
+// Restart from the completed state: reset and advance back to the first step (in_progress),
+// so the workflow can be re-run. Only legal from done; persisted like any other transition.
+describe('flow machine restart', () => {
+  it('restart() moves done → in_progress (re-running the first step)', () => {
+    const flow = createFlowMachine(LOAD);
+    flow.start();
+    flow.advance();
+    expect(flow.restart().status).toBe('in_progress');
+    expect(flow.state().status).toBe('in_progress');
+  });
+
+  it('is illegal before the flow is done and does not mutate state', () => {
+    const flow = createFlowMachine(LOAD);
+    expect(() => flow.restart()).toThrow(); // not_started
+    expect(flow.state().status).toBe('not_started');
+    flow.start();
+    expect(() => flow.restart()).toThrow(); // in_progress
+    expect(flow.state().status).toBe('in_progress');
+  });
+
+  it('persists the restart so a fresh machine resumes in_progress', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'flow-restart-'));
+    try {
+      const first = createFlowMachine(LOAD, createFlowStateStore(dir));
+      first.start();
+      first.advance();
+      first.restart();
+      expect(createFlowMachine(LOAD, createFlowStateStore(dir)).state().status).toBe('in_progress');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

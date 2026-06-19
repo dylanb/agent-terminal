@@ -40,6 +40,7 @@ export const CH = {
   flowState: 'flow:state',
   flowStart: 'flow:start',
   flowAdvance: 'flow:advance',
+  flowRestart: 'flow:restart',
 } as const;
 
 /** Action-window tabs (§16.1). */
@@ -406,7 +407,7 @@ export interface FlowStateView {
   error?: string;
 }
 
-/** flow:state/start/advance request — sessionId only; the flow is per-session (§6). */
+/** flow:state/start/advance/restart request — sessionId only; the flow is per-session (§6). */
 export interface FlowRequestMsg {
   sessionId: SessionId;
 }
@@ -481,6 +482,8 @@ export interface FlowApi {
   start(): Promise<FlowStateView>;
   /** in_progress → done; rejects if not currently in_progress. */
   advance(): Promise<FlowStateView>;
+  /** done → in_progress; resets and re-runs the first step. Rejects if not currently done. */
+  restart(): Promise<FlowStateView>;
 }
 
 declare global {

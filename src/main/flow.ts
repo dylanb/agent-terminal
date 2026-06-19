@@ -84,6 +84,9 @@ export interface FlowMachine {
   start(): FlowStateView;
   /** in_progress → done; throws on any other current status (inert in the error state). */
   advance(): FlowStateView;
+  /** done → in_progress; resets and re-runs the first step. Throws on any other current
+   *  status (inert in the error state). */
+  restart(): FlowStateView;
 }
 
 // S3 (§19.1): an optional store backs the machine — its status is restored from disk on
@@ -98,10 +101,10 @@ export function createFlowMachine(load: FlowLoad, store?: FlowStateStore): FlowM
       status: 'error',
       error: load.error,
     });
-    // In the error state there is no step to drive: start/advance are inert (the strip shows
-    // no control), so a buggy/racing caller can neither throw nor escape the error — and we
-    // never persist, so a bad flow.yaml can't overwrite a good progression.
-    return { state: view, start: view, advance: view };
+    // In the error state there is no step to drive: start/advance/restart are inert (the strip
+    // shows no control), so a buggy/racing caller can neither throw nor escape the error — and
+    // we never persist, so a bad flow.yaml can't overwrite a good progression.
+    return { state: view, start: view, advance: view, restart: view };
   }
 
   const def = load.definition;
@@ -133,5 +136,7 @@ export function createFlowMachine(load: FlowLoad, store?: FlowStateStore): FlowM
     state: view,
     start: () => transition('not_started', 'in_progress'),
     advance: () => transition('in_progress', 'done'),
+    // Restart resets a completed flow back to its first step, in progress (§24.2.2).
+    restart: () => transition('done', 'in_progress'),
   };
 }

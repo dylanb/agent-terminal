@@ -969,22 +969,32 @@ test('the flow strip reads its step from flow.yaml and drives it not started →
   page = await app.firstWindow();
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
-  const status = page.locator('#flow-strip .flow-status');
+  // The strip renders the §24.1 station rail (§22.3): the real step is bracketed by synthetic
+  // "Not started" / "Completed" stations, and the active station + control walk the lifecycle.
+  const stations = page.locator('#flow-strip .flow.vert .stn');
+  const notStarted = stations.nth(0);
+  const step = stations.nth(1);
+  const completed = stations.nth(2);
   const control = page.locator('#flow-strip .flow-control');
-  const position = page.locator('#flow-strip .flow-pos');
 
-  await expect(position).toContainText('groom-ticket'); // the step name comes from the file
-  await expect(status).toHaveText('not started');
+  await expect(stations).toHaveCount(3);
+  await expect(step.locator('.nm')).toHaveText('groom-ticket'); // the step name comes from the file
+  await expect(notStarted).toHaveClass(/\bactive\b/);
   await expect(control).toHaveText('Start');
 
   await control.click();
-  await expect(status).toHaveText('in progress');
+  await expect(step).toHaveClass(/\bactive\b/);
   await expect(control).toHaveText('Advance');
 
   await control.click();
-  await expect(status).toHaveText('done');
-  // done is terminal — the control is gone, so a second Advance is impossible.
-  await expect(control).toHaveCount(0);
+  await expect(completed).toHaveClass(/\bactive\b/);
+  // Completed: the control reappears as Restart (§24.2.2).
+  await expect(control).toHaveText('Restart');
+
+  // Restart resets and re-runs the first step (→ in progress).
+  await control.click();
+  await expect(step).toHaveClass(/\bactive\b/);
+  await expect(control).toHaveText('Advance');
   rmSync(home, { recursive: true, force: true });
 });
 
@@ -997,9 +1007,10 @@ test('a missing flow.yaml surfaces a clear error state in the strip, not a crash
   page = await app.firstWindow();
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
-  const errored = page.locator('#flow-strip .flow-status[data-status="error"]');
+  const errored = page.locator('#flow-strip .flow-error');
   await expect(errored).toHaveCount(1);
   await expect(errored).not.toHaveText('');
+  await expect(page.locator('#flow-strip .flow.vert .stn')).toHaveCount(0); // no station
   await expect(page.locator('#flow-strip .flow-control')).toHaveCount(0);
   rmSync(home, { recursive: true, force: true });
 });
@@ -1020,29 +1031,31 @@ test('flow progression persists across a relaunch (§24.2.2 S3)', async () => {
     page = await app.firstWindow();
     await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
   };
-  const status = () => page.locator('#flow-strip .flow-status');
+  // Synthetic-bracketed rail: station 1 is the real step, station 2 the "Completed" bookend.
+  const step = () => page.locator('#flow-strip .flow.vert .stn').nth(1);
+  const completed = () => page.locator('#flow-strip .flow.vert .stn').nth(2);
   const control = () => page.locator('#flow-strip .flow-control');
 
   await app.close();
   await launch();
-  await expect(status()).toHaveText('not started');
+  await expect(step()).toHaveClass(/\btodo\b/);
   await control().click(); // Start
-  await expect(status()).toHaveText('in progress');
+  await expect(step()).toHaveClass(/\bactive\b/);
 
-  // Relaunch: the step must resume as in_progress (the Advance control is still present).
+  // Relaunch: the step must resume as in_progress (active step station, Advance control).
   await app.close();
   await launch();
-  await expect(status()).toHaveText('in progress');
+  await expect(step()).toHaveClass(/\bactive\b/);
   await expect(control()).toHaveText('Advance');
 
   await control().click(); // Advance → done
-  await expect(status()).toHaveText('done');
+  await expect(completed()).toHaveClass(/\bactive\b/);
 
-  // Relaunch again: done is persisted and stays terminal (no control).
+  // Relaunch again: done is persisted — Completed stays active and the control is Restart.
   await app.close();
   await launch();
-  await expect(status()).toHaveText('done');
-  await expect(control()).toHaveCount(0);
+  await expect(completed()).toHaveClass(/\bactive\b/);
+  await expect(control()).toHaveText('Restart');
   rmSync(home, { recursive: true, force: true });
 });
 

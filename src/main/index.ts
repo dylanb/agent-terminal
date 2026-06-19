@@ -271,6 +271,7 @@ async function createWindow(): Promise<void> {
       [CH.flowState]: () => flow.state(),
       [CH.flowStart]: (_e, m) => (isValidFlowRequest(m) ? flow.start() : flow.state()),
       [CH.flowAdvance]: (_e, m) => (isValidFlowRequest(m) ? flow.advance() : flow.state()),
+      [CH.flowRestart]: (_e, m) => (isValidFlowRequest(m) ? flow.restart() : flow.state()),
     },
   );
 

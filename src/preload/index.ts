@@ -91,6 +91,7 @@ const flowApi: FlowApi = {
   state: () => ipcRenderer.invoke(CH.flowState, { sessionId: SESSION_ID }) as Promise<FlowStateView>,
   start: () => ipcRenderer.invoke(CH.flowStart, { sessionId: SESSION_ID }) as Promise<FlowStateView>,
   advance: () => ipcRenderer.invoke(CH.flowAdvance, { sessionId: SESSION_ID }) as Promise<FlowStateView>,
+  restart: () => ipcRenderer.invoke(CH.flowRestart, { sessionId: SESSION_ID }) as Promise<FlowStateView>,
 };
 
 contextBridge.exposeInMainWorld('term', termApi);
