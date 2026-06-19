@@ -49,6 +49,19 @@ describe('viewerRender — EditorView lifecycle (no leak on re-render, §20.2)',
     });
   });
 
+  it('destroy() removes the scrollDOM listener and clears subscribers so viewport callbacks stop', async () => {
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const view = renderCodeInto('const a = 1;\n'.repeat(40), 'ts', host);
+    await vi.waitFor(() => expect(host.querySelector('.cm-scroller')).toBeTruthy());
+    const scroller = host.querySelector('.cm-scroller') as HTMLElement;
+    let calls = 0;
+    view.onViewportChange(() => calls++);
+    view.destroy!();
+    scroller.dispatchEvent(new Event('scroll'));
+    expect(calls).toBe(0);
+  });
+
   it('the returned CodeView.destroy() tears down the editor (for the organism dispose path)', async () => {
     const host = document.createElement('div');
     document.body.appendChild(host);

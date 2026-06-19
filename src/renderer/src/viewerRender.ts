@@ -106,6 +106,7 @@ export function renderCodeInto(
   let editor: EditorViewT | null = null;
   let EV: typeof EditorViewT | null = null;
   let pending: number | null = null;
+  let detachScroll: (() => void) | null = null;
   const listeners = new Set<() => void>();
   const notify = (): void => listeners.forEach((l) => l());
   const reveal = (line: number): void => {
@@ -173,7 +174,9 @@ export function renderCodeInto(
     editor.scrollDOM.tabIndex = 0;
     editor.scrollDOM.setAttribute('role', 'region');
     editor.scrollDOM.setAttribute('aria-label', 'File contents');
-    editor.scrollDOM.addEventListener('scroll', notify);
+    const sd = editor.scrollDOM;
+    sd.addEventListener('scroll', notify);
+    detachScroll = () => sd.removeEventListener('scroll', notify); // removed in destroy() (§20.2)
     if (pending !== null) {
       reveal(pending);
       pending = null;
@@ -192,6 +195,9 @@ export function renderCodeInto(
     destroy: () => {
       bumpToken(into); // a still-in-flight build bails at its token check before it mounts the editor
       teardownView(into);
+      detachScroll?.(); // drop the scrollDOM listener so no viewport callback fires post-destroy
+      detachScroll = null;
+      listeners.clear();
     },
   };
 }
