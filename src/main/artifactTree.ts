@@ -203,7 +203,10 @@ function changedLinesOf(root: string, rel: string, body: string, git: (args: str
 export function pathWithin(base: string, target: string): boolean {
   if (target === base) return true;
   const rel = path.relative(base, target);
-  return rel !== '' && !rel.startsWith('..') && !path.isAbsolute(rel);
+  if (rel === '') return true; // identical after normalization
+  if (path.isAbsolute(rel)) return false; // different root/drive (Windows) → escape
+  // Only a leading `..` SEGMENT is an escape; a dir whose name merely starts with ".." is in-root.
+  return rel.split(path.sep)[0] !== '..';
 }
 
 export function readArtifact(cwd: string, relPath: string, deps: DiscoverDeps = {}): ViewerFile | null {

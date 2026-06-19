@@ -19,6 +19,9 @@ describe('pathWithin — escape guard', () => {
     expect(pathWithin('/repo', '/repo-2/a.ts')).toBe(false);
     expect(pathWithin('/repo/src', '/repo/secret')).toBe(false);
   });
+  it('accepts an in-root dir whose name merely starts with .. (only a leading .. SEGMENT escapes)', () => {
+    expect(pathWithin('/repo', '/repo/..abc/file.ts')).toBe(true);
+  });
   it('handles the filesystem root without the // double-separator bug', () => {
     expect(pathWithin('/', '/etc')).toBe(true);
     expect(pathWithin('/', '/')).toBe(true);
