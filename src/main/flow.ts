@@ -7,7 +7,7 @@
 // (no longer a hardcoded constant). A missing/malformed/invalid file is not a crash — it
 // becomes an inert `error` state the status strip renders (§22.3).
 
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import yaml from 'js-yaml';
 import type { FlowStateView, FlowStatus } from '../shared/ipc';
@@ -76,6 +76,18 @@ export function loadFlowDefinition(worktreeDir: string): FlowLoad {
     ...(typeof first.todo_template === 'string' ? { todoTemplate: first.todo_template } : {}),
   };
   return { ok: true, definition: { name: doc.name, steps: [step] } };
+}
+
+/**
+ * Resolve the flow DEFINITION local-first then global (§18.1): the repo's flow.yaml wins; a
+ * global default (e.g. $HOME) is used only when the repo has none. A present-but-invalid local
+ * file surfaces its own error rather than being masked by the global. (The flow STATE, by
+ * contrast, is always repo-local — see flowState.)
+ */
+export function loadFlowDefinitionLocalFirst(localDir: string, globalDir: string): FlowLoad {
+  if (existsSync(path.join(localDir, FLOW_REL))) return loadFlowDefinition(localDir);
+  const global = loadFlowDefinition(globalDir);
+  return global.ok ? global : loadFlowDefinition(localDir); // neither: report the local (absent) error
 }
 
 export interface FlowMachine {

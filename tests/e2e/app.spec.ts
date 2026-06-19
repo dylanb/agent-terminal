@@ -1070,6 +1070,36 @@ test('flow progression persists across a relaunch, stored in the repo not global
   rmSync(home, { recursive: true, force: true });
 });
 
+test('the definition falls back to the global flow.yaml, but state is still written local (§18.1/§19.1)', async () => {
+  // The DEFINITION resolves local-first then global: a repo with no flow.yaml falls back to the
+  // $HOME default. The STATE is always repo-local — so Starting writes flow-state.yaml into the
+  // repo, never into HOME, even though the definition came from HOME.
+  const repo = mkdtempSync(join(tmpdir(), 'agent-term-e2e-flow-global-repo-'));
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-flow-global-home-'));
+  mkdirSync(join(repo, '.git'), { recursive: true }); // a repo with NO flow.yaml
+  mkdirSync(join(home, '.agent-terminal'), { recursive: true });
+  writeFileSync(
+    join(home, '.agent-terminal', 'flow.yaml'),
+    'name: global-default\nsteps:\n  - id: global-step\n    kind: manual\n',
+  );
+  await app.close();
+  app = await electron.launch({ args: [join(process.cwd(), 'out/main/index.js')], cwd: repo, env: { ...process.env, HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
+  page = await app.firstWindow();
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  const step = page.locator('#flow-strip .flow.vert .stn').nth(1);
+  const control = page.locator('#flow-strip .flow-control');
+  await expect(step.locator('.nm')).toHaveText('global-step'); // definition came from the global $HOME file
+  await control.click(); // Start
+
+  await expect(step).toHaveClass(/\bactive\b/);
+  // State is repo-local even though the definition was global.
+  expect(existsSync(join(repo, '.agent-terminal', 'flow-state.yaml'))).toBe(true);
+  expect(existsSync(join(home, '.agent-terminal', 'flow-state.yaml'))).toBe(false);
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+});
+
 test('the theme toggle flips light/dark and persists across a reload (§16.6)', async () => {
   const html = page.locator('html');
   await page.locator('#tg').click();

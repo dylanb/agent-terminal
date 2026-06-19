@@ -47,7 +47,7 @@ import { createCwdTracker } from './cwdTracker';
 import { currentRepoInfo, resolveRepoKey } from './repoKey';
 import { createScanner } from './scanner';
 import { captureLastReport } from './captureLast';
-import { createFlowMachine, loadFlowDefinition } from './flow';
+import { createFlowMachine, loadFlowDefinitionLocalFirst } from './flow';
 import { createFlowStateStore } from './flowState';
 import { discover, readArtifact, emptyTree } from './artifactTree';
 import { createChromeProfileStore } from './chromeProfile';
@@ -83,13 +83,17 @@ async function createWindow(): Promise<void> {
   const todoStore = createTodoStore({ maxDoneTodos: config.maxDoneTodos });
   // Learned chrome markers (§15.x) — seeded defaults ∪ the user's "mark as chrome" adds.
   const chromeProfile = createChromeProfileStore(path.join(app.getPath('userData'), 'chrome-profile.json'));
-  // Flow lifecycle (§24.2.2 S3) — single-step state machine sourced from the worktree's
-  // .agent-terminal/flow.yaml (§18.1) and backed by flow-state.yaml (§19.1), so progression
-  // survives relaunch. Both files live in the **repository** (§18.1/§19.1) — the git root of the
-  // instance's launch dir, resolved like a todo scope key (§16.3) — never globally in $HOME. A
-  // missing/invalid definition is an inert error state, not a crash.
-  const flowDir = resolveRepoKey(process.cwd());
-  const flow = createFlowMachine(loadFlowDefinition(flowDir), createFlowStateStore(flowDir));
+  // Flow lifecycle (§24.2.2 S3) — single-step state machine. The DEFINITION (flow.yaml, §18.1)
+  // resolves local-first then global: the repository's copy wins, falling back to a $HOME default
+  // only when the repo has none. The STATE (flow-state.yaml, §19.1) is **always repo-local**, so
+  // progression travels with the repo and is never written globally. The repo is the git root of
+  // the instance's launch dir, resolved like a todo scope key (§16.3). A missing/invalid
+  // definition is an inert error state, not a crash.
+  const repoDir = resolveRepoKey(process.cwd());
+  const flow = createFlowMachine(
+    loadFlowDefinitionLocalFirst(repoDir, spawnCwd(process.env, os.homedir())),
+    createFlowStateStore(repoDir),
+  );
 
   const send = <C extends SendChannel>(channel: C, payload: ChannelPayloads[C]): void => {
     if (!win.isDestroyed()) win.webContents.send(channel, payload);

@@ -2,7 +2,12 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { loadFlowDefinition, createFlowMachine, type FlowLoad } from '../../src/main/flow';
+import {
+  loadFlowDefinition,
+  loadFlowDefinitionLocalFirst,
+  createFlowMachine,
+  type FlowLoad,
+} from '../../src/main/flow';
 
 // §24.2.2 S2 — the step definition is sourced from a real <worktree>/.agent-terminal/flow.yaml
 // (§18.1 minimal shape: name + one kind:manual step with id/skill/todo_template), no longer a
@@ -102,5 +107,51 @@ describe('flow machine sourced from a definition (§24.2.2 S2)', () => {
     // start/advance are inert in the error state — they neither throw nor leave it.
     expect(flow.start().status).toBe('error');
     expect(flow.advance().status).toBe('error');
+  });
+});
+
+// The flow DEFINITION resolves local-first then global: the repository's flow.yaml takes
+// precedence, falling back to a global (e.g. $HOME) default only when the repo has none. (The
+// flow STATE, by contrast, is always repo-local — see flowState.) A present-but-invalid local
+// flow.yaml surfaces its own error rather than being masked by the global file.
+describe('flow.yaml local-first-then-global resolution (§18.1)', () => {
+  let local: string;
+  let global: string;
+  const write = (dir: string, yaml: string): void => {
+    mkdirSync(join(dir, '.agent-terminal'), { recursive: true });
+    writeFileSync(join(dir, '.agent-terminal', 'flow.yaml'), yaml);
+  };
+  const VALID = (name: string): string => `name: ${name}\nsteps:\n  - id: ${name}-step\n    kind: manual\n`;
+  beforeEach(() => {
+    local = mkdtempSync(join(tmpdir(), 'flow-local-'));
+    global = mkdtempSync(join(tmpdir(), 'flow-global-'));
+  });
+  afterEach(() => {
+    rmSync(local, { recursive: true, force: true });
+    rmSync(global, { recursive: true, force: true });
+  });
+
+  it('prefers the local repo flow.yaml even when a global one exists', () => {
+    write(local, VALID('local'));
+    write(global, VALID('global'));
+    const load = loadFlowDefinitionLocalFirst(local, global);
+    expect(load.ok && load.definition.name).toBe('local');
+  });
+
+  it('falls back to the global flow.yaml when the repo has none', () => {
+    write(global, VALID('global'));
+    const load = loadFlowDefinitionLocalFirst(local, global);
+    expect(load.ok && load.definition.name).toBe('global');
+  });
+
+  it('errors when neither local nor global has a flow.yaml', () => {
+    expect(loadFlowDefinitionLocalFirst(local, global).ok).toBe(false);
+  });
+
+  it('surfaces a present-but-invalid local file rather than masking it with the global', () => {
+    write(local, 'name: feature\nsteps:\n  - id: x\n    kind: loop\n'); // invalid: not a manual step
+    write(global, VALID('global'));
+    const load = loadFlowDefinitionLocalFirst(local, global);
+    expect(load.ok).toBe(false); // the local error wins; the global is NOT used
   });
 });
