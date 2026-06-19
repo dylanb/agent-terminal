@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createArtifacts, selectionWithin } from '../../src/renderer/src/artifacts';
+import { FOCUS_VIEW_EVENT } from '../../src/renderer/src/paneActions';
 import type { ArtifactTree, ViewerFile } from '../../src/shared/ipc';
 
 // §20.1/§20.2 artifact viewer organism: a hierarchical file tree fed by real discovery
@@ -112,6 +113,24 @@ function fakeCodeView(top: number, bottom: number) {
 }
 
 beforeEach(() => { document.body.replaceChildren(); });
+
+describe('focus on view activation (§22.4)', () => {
+  const announce = (view: string) => window.dispatchEvent(new CustomEvent(FOCUS_VIEW_EVENT, { detail: { view } }));
+
+  it('focuses the first tree item when the Artifacts view is announced (keyboard nav is immediate)', async () => {
+    const v = mount();
+    await v.api.refresh();
+    announce('2');
+    expect(document.activeElement).toBe(v.treeitems()[0]);
+  });
+
+  it('ignores announcements for other views', async () => {
+    const v = mount();
+    await v.api.refresh();
+    announce('1');
+    expect(document.activeElement).not.toBe(v.treeitems()[0]);
+  });
+});
 
 describe('artifact viewer (§20.1/§20.2 — real discovery)', () => {
   it('renders the discovered tree hierarchically: a directory node containing its files', async () => {

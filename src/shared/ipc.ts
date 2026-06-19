@@ -74,7 +74,10 @@ export interface UiSetSettingsMsg {
 
 // ---- Todo lists (§16.3 / §16.4) ----
 
-export type TodoStatus = 'active' | 'done';
+// Tri-state lifecycle (§16.3): `active` (not started) → `in_progress` (Send marks it; renders a
+// mixed checkbox) → `done`. `in_progress` is "outstanding" like `active` — it counts and keeps
+// its row actions; only `done` is complete.
+export type TodoStatus = 'active' | 'in_progress' | 'done';
 
 /** Where a todo came from (§16.3): manual entry, a selection capture, or a semantic event. */
 export type TodoSourceType = 'manual' | 'selection' | 'report' | 'finding' | 'capture' | 'command-output';

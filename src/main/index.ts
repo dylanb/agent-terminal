@@ -212,9 +212,9 @@ async function createWindow(): Promise<void> {
     if (!load.ok) return todoStore.list(repoKey);
     const md = loadTodoTemplateFile(path.join(load.flowDir, 'todo-templates'), ref);
     if (md === null) return todoStore.list(repoKey);
-    // Silent dedup (operator decision): re-firing a template skips items already in the active
-    // list, so a repeat click never piles up duplicates.
-    const active = new Set(todoStore.list(repoKey).filter((t) => t.status === 'active').map((t) => t.text));
+    // Silent dedup (operator decision): re-firing a template skips items already outstanding
+    // (active or in_progress), so a repeat click never piles up duplicates.
+    const active = new Set(todoStore.list(repoKey).filter((t) => t.status !== 'done').map((t) => t.text));
     let list = todoStore.list(repoKey);
     for (const text of parseTodoTemplate(md)) {
       if (active.has(text)) continue;

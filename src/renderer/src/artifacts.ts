@@ -8,6 +8,10 @@
 
 import type { ArtifactNode, ArtifactScope, ArtifactTree, ViewerFile } from '../../shared/ipc';
 import { setShown, setCollapsed } from './visibility';
+import { FOCUS_VIEW_EVENT } from './paneActions';
+
+/** The artifact viewer is view 2 in the converged shell (§22.4 / §24.1C). */
+const ARTIFACTS_VIEW = '2';
 
 /** Handle on a rendered code view, used to drive changed-section navigation (§20.2). */
 export interface CodeView {
@@ -262,6 +266,14 @@ export function createArtifacts(host: HTMLElement, deps: ArtifactsDeps): Artifac
   const win = doc.defaultView;
   const onWindowResize = (): void => applyFsWidth(fsWidth, false);
   win?.addEventListener('resize', onWindowResize);
+
+  // §22.4 focus rule: when the shell switches to this view it announces it; we move keyboard
+  // focus to the first tree item so arrow-key navigation works without a click (the tree is the
+  // view's primary control). Other views are ignored. The roving tabindex is set by focusItem.
+  const onFocusView = (e: Event): void => {
+    if ((e as CustomEvent<{ view: string }>).detail.view === ARTIFACTS_VIEW) focusItem(visibleItems()[0]);
+  };
+  win?.addEventListener(FOCUS_VIEW_EVENT, onFocusView);
   fsResize.addEventListener('mousedown', (e) => {
     e.preventDefault();
     beginDrag((e as MouseEvent).clientX, fsWidth, (px) => applyFsWidth(px, false), () => deps.onFullscreenWidthChange?.(fsWidth));
@@ -586,6 +598,7 @@ export function createArtifacts(host: HTMLElement, deps: ArtifactsDeps): Artifac
     dispose: () => {
       doc.removeEventListener('selectionchange', updateActions);
       win?.removeEventListener('resize', onWindowResize);
+      win?.removeEventListener(FOCUS_VIEW_EVENT, onFocusView);
       endDrag?.(); // remove any document-level listeners from an in-flight resize drag (§20.2)
       unsubViewport?.();
       codeView?.destroy?.(); // free CodeMirror's handlers — DOM removal alone doesn't (§20.2)

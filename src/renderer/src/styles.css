@@ -271,9 +271,11 @@ button:hover { border-color:var(--dim); }
 #todo-list { padding:0; }
 .todos { display:flex; flex-direction:column; }
 .todos:empty::after { content:"No todos — add one from a capture."; display:block; padding:14px 16px; color:var(--dim); font-size:12px; }
-.todos .todo { display:flex; gap:11px; align-items:flex-start; padding:12px 16px; border-bottom:1px solid var(--hair2); }
+.todos .todo { display:flex; flex-wrap:wrap; gap:11px; align-items:flex-start; padding:12px 16px; border-bottom:1px solid var(--hair2); }
 .todos .todo .chk { width:16px; height:16px; border:1.5px solid var(--dim); border-radius:50%; margin-top:2px; flex:none; background:none; cursor:pointer; padding:0; }
 .todos .todo .chk:hover { border-color:var(--signal); }
+/* in_progress (§16.3): a centred dot — distinct from empty (active) and filled (done). */
+.todos .todo .chk[aria-checked="mixed"] { border-color:var(--signal); background:radial-gradient(var(--signal) 0 38%, transparent 42%); }
 .todos .todo.done .chk { background:var(--pass); border-color:var(--pass); }
 .todos .todo .body { flex:1; min-width:0; }
 .todos .todo .tx { font-size:13.5px; line-height:1.4; white-space:pre-wrap; word-break:break-word; }
@@ -307,6 +309,8 @@ button:hover { border-color:var(--dim); }
 /* Confirm-delete: outlined danger button (danger text + border on the panel bg), not
    white-on-attn which falls below 4.5:1 at this text size — WCAG 1.4.3. */
 .todos .todo .todo-delete-confirm { background:transparent; color:var(--danger); border:1px solid var(--danger); }
+/* Stacked below the cluster (full row) so the confirm never widens the button column (§16.4). */
+.todos .todo .todo-delete-bar { flex-basis:100%; display:flex; justify-content:flex-end; align-items:center; gap:8px; }
 
 .dhint { border-top:1px solid var(--hair); padding:9px 16px; font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:10px; color:var(--dim); display:flex; gap:14px; }
 .kbd { font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:9.5px; border:1px solid var(--hair); border-bottom-width:2px; border-radius:4px; padding:1px 5px; }

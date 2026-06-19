@@ -175,11 +175,80 @@ describe('Todo tab (§24.1 mockup-exact — checkbox-done + Send)', () => {
     expect(focusFired).toBe(1);
   });
 
-  it('a done todo has no Send action', async () => {
+  it('a done todo keeps its action buttons but disabled, so the row layout stays constant', async () => {
     wireMonitorPane();
     await flush();
     await loadRepo('/repoA', [makeTodo({ id: 'd', status: 'done' })]);
-    expect(rows()[0].querySelector('.todo-send')).toBeNull();
+    const row = rows()[0];
+    expect(row.querySelector('.todo-send')).not.toBeNull();
+    for (const sel of ['.todo-send', '.todo-edit', '.todo-up', '.todo-down']) {
+      expect((row.querySelector(sel) as HTMLButtonElement).disabled).toBe(true);
+    }
+    // Delete stays usable — you can still remove a completed todo.
+    expect((row.querySelector('.todo-delete') as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it('confirming a delete keeps the action cluster in place and stacks the confirm below (no width jump)', async () => {
+    wireMonitorPane();
+    await flush();
+    await loadRepo('/repoA', [makeTodo({ id: 'a', status: 'active' })]);
+    (rows()[0].querySelector('.todo-delete') as HTMLButtonElement).click();
+    const row = rows()[0];
+    expect(row.querySelector('.todo-delete-confirm')).not.toBeNull(); // confirm shown
+    expect(row.querySelector('.todo-send')).not.toBeNull(); // cluster NOT replaced
+    expect(row.querySelector('.todo-delete-bar')).not.toBeNull(); // in a separate stacked row
+  });
+
+  // Tri-state status (§16.3): active → (Send) → in_progress → (check) → done → (check) → active.
+  // The checkbox renders the three ARIA states (false / mixed / true); the box itself only ever
+  // marks not-done→done or done→active, and Send is the sole entry into in_progress.
+  describe('tri-state status', () => {
+    it('Send marks an active todo in-progress (checkbox goes mixed) and still injects without submit', async () => {
+      wireMonitorPane();
+      await flush();
+      await loadRepo('/repoA', [makeTodo({ id: 'a', text: 'task' })]);
+      monitor.todoSetStatus.mockResolvedValue([makeTodo({ id: 'a', text: 'task', status: 'in_progress' })]);
+      (rows()[0].querySelector('.todo-send') as HTMLButtonElement).click();
+      await flush();
+      expect(monitor.inject).toHaveBeenCalledWith({ text: 'task', submit: false });
+      expect(monitor.todoSetStatus).toHaveBeenCalledWith('/repoA', 'a', 'in_progress');
+      expect(rows()[0].querySelector('.chk')!.getAttribute('aria-checked')).toBe('mixed');
+    });
+
+    it('renders an in-progress todo with a mixed checkbox', async () => {
+      wireMonitorPane();
+      await flush();
+      await loadRepo('/repoA', [makeTodo({ id: 'a', status: 'in_progress' })]);
+      expect(rows()[0].querySelector('.chk')!.getAttribute('aria-checked')).toBe('mixed');
+    });
+
+    it('keeps the Send/edit/reorder actions on an in-progress todo (it is still outstanding)', async () => {
+      wireMonitorPane();
+      await flush();
+      await loadRepo('/repoA', [makeTodo({ id: 'a', status: 'in_progress' })]);
+      expect(rows()[0].querySelector('.todo-send')).not.toBeNull();
+      expect(rows()[0].querySelector('.todo-edit')).not.toBeNull();
+    });
+
+    it('clicking the checkbox on an in-progress todo marks it done', async () => {
+      wireMonitorPane();
+      await flush();
+      await loadRepo('/repoA', [makeTodo({ id: 'a', status: 'in_progress' })]);
+      (rows()[0].querySelector('.chk') as HTMLElement).click();
+      await flush();
+      expect(monitor.todoSetStatus).toHaveBeenCalledWith('/repoA', 'a', 'done');
+    });
+
+    it('counts in-progress todos as outstanding', async () => {
+      wireMonitorPane();
+      await flush();
+      await loadRepo('/repoA', [
+        makeTodo({ id: 'a', status: 'in_progress', order: 1 }),
+        makeTodo({ id: 'b', status: 'active', order: 2 }),
+        makeTodo({ id: 'd', status: 'done', order: 3 }),
+      ]);
+      expect(document.getElementById('todo-count')!.textContent).toBe('2');
+    });
   });
 
   it('renders provenance: a capture-sourced todo shows its origin, a manual one says manual', async () => {
@@ -312,11 +381,13 @@ describe('Todo tab §24.2.1 — reorder', () => {
     expect((rows()[1].querySelector('.todo-down') as HTMLButtonElement).disabled).toBe(true);
   });
 
-  it('done todos do not carry reorder controls', async () => {
+  it('done todos render reorder controls disabled (present but inert — constant layout)', async () => {
     wireMonitorPane();
     await flush();
     await loadRepo('/repoA', [makeTodo({ id: 'd', status: 'done' })]);
-    expect(rows()[0].querySelector('.todo-up')).toBeNull();
+    const up = rows()[0].querySelector('.todo-up') as HTMLButtonElement;
+    expect(up).not.toBeNull();
+    expect(up.disabled).toBe(true);
   });
 });
 

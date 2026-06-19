@@ -121,8 +121,8 @@ export function createTodoStore(deps: TodoStoreDeps): TodoStore {
       const item = state.items.find((t) => t.id === id);
       if (item) {
         item.status = status;
-        if (status === 'active') item.order = ++state.seq; // re-copy → bottom of active
-        else pruneDone(state);
+        // A status change never reorders — checking/unchecking keeps the row in place (§16.3).
+        if (status === 'done') pruneDone(state);
       }
       return persist(repoKey, state);
     },
