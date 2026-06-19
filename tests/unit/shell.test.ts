@@ -73,10 +73,9 @@ describe('shell controller (§24.1C — views, hotkeys, docked drawer, theme)', 
       expect(shell.getView()).toBe('3');
     });
 
-    it('switches view on Cmd/Ctrl+1/2/3 and prevents the default', () => {
+    it('switches view on Cmd+1/2/3', () => {
       key('2');
       expect(shell.getView()).toBe('2');
-      key('3', false); // works with Ctrl too (metaKey=false → ctrlKey path covered below)
     });
 
     it('switches view on Ctrl+1/2/3 (non-mac)', () => {

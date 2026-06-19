@@ -1,4 +1,4 @@
-// Accessible show/hide (UI-STANDARDS §A11Y) — the one place the app hides content. Hiding always
+// Accessible show/hide (spec §22.2 — accessibility) — the one place the app hides content. Hiding always
 // removes the subtree from layout, the tab order, AND the accessibility tree, so a hidden panel can
 // never trap keyboard focus. Paired with the CSS enforcement in styles.css:
 //   [hidden]      { display: none !important; }   // robust against any competing `display` rule

@@ -14,6 +14,18 @@ import type { CodeView } from './artifacts';
 
 let renderSeq = 0; // guards against a stale async render overwriting a newer one
 
+// Each host holds at most one live CodeMirror view; the render seams reuse the same host across
+// file opens, so a re-render must destroy the prior view first — removing the DOM alone leaks the
+// document/window handlers CM releases only in destroy() (§20.2).
+const mountedViews = new WeakMap<HTMLElement, EditorViewT>();
+function teardownView(into: HTMLElement): void {
+  const prev = mountedViews.get(into);
+  if (prev) {
+    prev.destroy();
+    mountedViews.delete(into);
+  }
+}
+
 // markdown-it instance is created once, then reused.
 let mdInstance: MarkdownItLib | null = null;
 async function getMarkdownIt(): Promise<MarkdownItLib> {
@@ -29,6 +41,7 @@ let mermaidSeq = 0;
 /** Render markdown into `into`, then turn any ```mermaid fences into rendered SVG. */
 export function renderMarkdownInto(body: string, into: HTMLElement): void {
   const token = ++renderSeq;
+  teardownView(into); // switching to markdown disposes any code view this host held (§20.2)
   into.classList.add('md');
   into.textContent = '…';
   // TODO(viewer): the catch degrades a chunk-load/render failure to raw text instead of a stuck
@@ -76,6 +89,7 @@ export function renderCodeInto(
   changedLines?: number[],
 ): CodeView {
   const token = ++renderSeq;
+  teardownView(into); // dispose the prior code view before mounting a new one into this host (§20.2)
   into.classList.remove('md');
   into.textContent = '…';
   // TODO(viewer): see renderMarkdownInto — the trailing catch degrades a CodeMirror chunk-load
@@ -144,6 +158,7 @@ export function renderCodeInto(
       }),
     });
     EV = EditorView;
+    mountedViews.set(into, editor); // tracked so the next render into this host disposes it (§20.2)
     // The read-only editor isn't editable-focusable, so make its scroller a keyboard-reachable,
     // labelled scroll region — otherwise there's no way to scroll the code by keyboard (§20.2 a11y).
     editor.scrollDOM.tabIndex = 0;
