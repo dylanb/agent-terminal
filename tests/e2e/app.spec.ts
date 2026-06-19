@@ -1,7 +1,7 @@
 /// <reference lib="dom" />
 // page.evaluate callbacks run in the renderer; DOM lib gives them window.monitor's type.
 import { _electron as electron, expect, test, type ElectronApplication, type Page } from '@playwright/test';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import '../../src/shared/ipc';
@@ -955,17 +955,19 @@ test('the mocked Review gate renders from the fixture and its Approve stub refle
 });
 
 test('the flow strip reads its step from flow.yaml and drives it not started → done (§24.2.2 S2)', async () => {
-  // S2: the step definition is sourced from <worktree>/.agent-terminal/flow.yaml (§18.1),
-  // not a hardcoded constant. Seed a worktree whose flow.yaml names the step, launch the app
-  // there (HOME = spawn cwd, §5/§20.1), and drive the real lifecycle through window.flow.
-  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-flow-'));
-  mkdirSync(join(home, '.agent-terminal'), { recursive: true });
+  // S2: the step definition is sourced from the repository's .agent-terminal/flow.yaml (§18.1) —
+  // the worktree (git root) the instance is launched in, NOT the global home dir. Seed a temp
+  // repo, launch the app with cwd there (HOME points elsewhere), and drive the lifecycle.
+  const repo = mkdtempSync(join(tmpdir(), 'agent-term-e2e-flow-repo-'));
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-flow-home-'));
+  mkdirSync(join(repo, '.git'), { recursive: true }); // mark the worktree root (§16.3 repo key)
+  mkdirSync(join(repo, '.agent-terminal'), { recursive: true });
   writeFileSync(
-    join(home, '.agent-terminal', 'flow.yaml'),
+    join(repo, '.agent-terminal', 'flow.yaml'),
     'name: feature-dev\nsteps:\n  - id: groom-ticket\n    kind: manual\n    skill: groom-ticket\n    todo_template: ticket-grooming\n',
   );
   await app.close();
-  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
+  app = await electron.launch({ args: [join(process.cwd(), 'out/main/index.js')], cwd: repo, env: { ...process.env, HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
   page = await app.firstWindow();
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
@@ -995,15 +997,17 @@ test('the flow strip reads its step from flow.yaml and drives it not started →
   await control.click();
   await expect(step).toHaveClass(/\bactive\b/);
   await expect(control).toHaveText('Advance');
+  rmSync(repo, { recursive: true, force: true });
   rmSync(home, { recursive: true, force: true });
 });
 
 test('a missing flow.yaml surfaces a clear error state in the strip, not a crash (§24.2.2 S2)', async () => {
-  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-flow-bad-'));
-  // No .agent-terminal/flow.yaml: the strip must show an error with no control — the rest of
-  // the app still launches (terminal renders), proving the load failure isn't a crash.
+  const repo = mkdtempSync(join(tmpdir(), 'agent-term-e2e-flow-bad-repo-'));
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-flow-bad-home-'));
+  // A repo with no .agent-terminal/flow.yaml: the strip must show an error with no control — the
+  // rest of the app still launches (terminal renders), proving the load failure isn't a crash.
   await app.close();
-  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
+  app = await electron.launch({ args: [join(process.cwd(), 'out/main/index.js')], cwd: repo, env: { ...process.env, HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
   page = await app.firstWindow();
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
@@ -1012,22 +1016,24 @@ test('a missing flow.yaml surfaces a clear error state in the strip, not a crash
   await expect(errored).not.toHaveText('');
   await expect(page.locator('#flow-strip .flow.vert .stn')).toHaveCount(0); // no station
   await expect(page.locator('#flow-strip .flow-control')).toHaveCount(0);
+  rmSync(repo, { recursive: true, force: true });
   rmSync(home, { recursive: true, force: true });
 });
 
-test('flow progression persists across a relaunch (§24.2.2 S3)', async () => {
-  // S3: start/advance write <worktree>/.agent-terminal/flow-state.yaml (§19.1), so a relaunch on
-  // the same worktree resumes where it left off. Seed a flow.yaml, drive a step partway, then
-  // relaunch the real app (same HOME) and assert the persisted status came back.
-  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-flow-persist-'));
-  mkdirSync(join(home, '.agent-terminal'), { recursive: true });
+test('flow progression persists across a relaunch, stored in the repo not globally (§24.2.2 S3 / §19.1)', async () => {
+  // S3: start/advance write <repo>/.agent-terminal/flow-state.yaml (§19.1) — in the repository,
+  // NEVER the global home dir — so a relaunch on the same repo resumes where it left off. Launch
+  // with cwd in a temp repo and HOME pointing elsewhere, so the file's location is itself a test.
+  const repo = mkdtempSync(join(tmpdir(), 'agent-term-e2e-flow-persist-repo-'));
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-flow-persist-home-'));
+  mkdirSync(join(repo, '.git'), { recursive: true });
+  mkdirSync(join(repo, '.agent-terminal'), { recursive: true });
   writeFileSync(
-    join(home, '.agent-terminal', 'flow.yaml'),
+    join(repo, '.agent-terminal', 'flow.yaml'),
     'name: feature-dev\nsteps:\n  - id: groom-ticket\n    kind: manual\n',
   );
-  const env = { ...process.env, HOME: home, APP_SUBMIT_DELAY_MS: '100' };
   const launch = async (): Promise<void> => {
-    app = await electron.launch({ args: ['out/main/index.js'], env });
+    app = await electron.launch({ args: [join(process.cwd(), 'out/main/index.js')], cwd: repo, env: { ...process.env, HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
     page = await app.firstWindow();
     await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
   };
@@ -1041,6 +1047,10 @@ test('flow progression persists across a relaunch (§24.2.2 S3)', async () => {
   await expect(step()).toHaveClass(/\btodo\b/);
   await control().click(); // Start
   await expect(step()).toHaveClass(/\bactive\b/);
+
+  // The state lives in the repository, not the global home dir (§19.1).
+  expect(existsSync(join(repo, '.agent-terminal', 'flow-state.yaml'))).toBe(true);
+  expect(existsSync(join(home, '.agent-terminal', 'flow-state.yaml'))).toBe(false);
 
   // Relaunch: the step must resume as in_progress (active step station, Advance control).
   await app.close();
@@ -1056,6 +1066,7 @@ test('flow progression persists across a relaunch (§24.2.2 S3)', async () => {
   await launch();
   await expect(completed()).toHaveClass(/\bactive\b/);
   await expect(control()).toHaveText('Restart');
+  rmSync(repo, { recursive: true, force: true });
   rmSync(home, { recursive: true, force: true });
 });
 

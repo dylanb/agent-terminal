@@ -44,7 +44,7 @@ import { registerIpcListeners } from './sessionIpc';
 import { resolveRuntimeConfig } from './runtimeConfig';
 import { createCommandTracker } from './commandTracker';
 import { createCwdTracker } from './cwdTracker';
-import { currentRepoInfo } from './repoKey';
+import { currentRepoInfo, resolveRepoKey } from './repoKey';
 import { createScanner } from './scanner';
 import { captureLastReport } from './captureLast';
 import { createFlowMachine, loadFlowDefinition } from './flow';
@@ -85,9 +85,10 @@ async function createWindow(): Promise<void> {
   const chromeProfile = createChromeProfileStore(path.join(app.getPath('userData'), 'chrome-profile.json'));
   // Flow lifecycle (§24.2.2 S3) — single-step state machine sourced from the worktree's
   // .agent-terminal/flow.yaml (§18.1) and backed by flow-state.yaml (§19.1), so progression
-  // survives relaunch. A missing/invalid definition is an inert error state, not a crash. Both
-  // files live at the spawn cwd (§5/§20.1).
-  const flowDir = spawnCwd(process.env, os.homedir());
+  // survives relaunch. Both files live in the **repository** (§18.1/§19.1) — the git root of the
+  // instance's launch dir, resolved like a todo scope key (§16.3) — never globally in $HOME. A
+  // missing/invalid definition is an inert error state, not a crash.
+  const flowDir = resolveRepoKey(process.cwd());
   const flow = createFlowMachine(loadFlowDefinition(flowDir), createFlowStateStore(flowDir));
 
   const send = <C extends SendChannel>(channel: C, payload: ChannelPayloads[C]): void => {
