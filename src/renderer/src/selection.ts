@@ -32,17 +32,25 @@ export async function captureToTodo(
   selectionText: string | null,
 ): Promise<void> {
   if (!repoKey) return;
-  if (selectionText !== null) {
-    await monitor.todoAdd(repoKey, cleanSelectionText(selectionText), { type: 'selection' });
-  } else {
-    const commands = await monitor.commands();
-    const latest = commands[commands.length - 1]; // newest-last (§15.5)
-    if (!latest) return;
-    const cap = await monitor.captureCommandText(latest.id);
-    if (!cap) return; // unknown/trimmed id — nothing to add
-    await monitor.todoAdd(repoKey, cap.text, { type: 'command-output' });
+  // The detached `void captureToTodo(...)` call sites must never see a rejection: a main-process
+  // restart can reject any of these invokes, so swallow it here (nothing added, no change signalled).
+  try {
+    if (selectionText !== null) {
+      const text = cleanSelectionText(selectionText);
+      if (!text) return; // empty-guard: never persist a blank todo (matches manual add / edit)
+      await monitor.todoAdd(repoKey, text, { type: 'selection' });
+    } else {
+      const commands = await monitor.commands();
+      const latest = commands[commands.length - 1]; // newest-last (§15.5)
+      if (!latest) return;
+      const cap = await monitor.captureCommandText(latest.id);
+      if (!cap || !cap.text.trim()) return; // unknown/trimmed id, or empty output — nothing to add
+      await monitor.todoAdd(repoKey, cap.text, { type: 'command-output' });
+    }
+    window.dispatchEvent(new CustomEvent(TODOS_CHANGED_EVENT));
+  } catch {
+    // IPC failure: leave the todo list unchanged and signal nothing.
   }
-  window.dispatchEvent(new CustomEvent(TODOS_CHANGED_EVENT));
 }
 
 // >=3:1 against the #1e1e1e background (WCAG 1.4.11); the native highlight is suppressed (§7.0).

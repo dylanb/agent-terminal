@@ -53,8 +53,8 @@
           </div>
         </div>
 
-        <!-- VIEW 2 — Artifacts: file tree + viewer (§20.2). Built by createArtifacts; fed a
-             fixture artifact set in Phase 1 (real discovery is the §24.2 backlog). -->
+        <!-- VIEW 2 — Artifacts: file tree + viewer (§20.2). Built by createArtifacts; fed real
+             IPC-backed discovery/read (viewer:tree / viewer:read, scoped to the live cwd). -->
         <div data-viewpane="2">
           <div id="artifacts"></div>
         </div>
@@ -99,7 +99,7 @@
         <section id="panel-todo" class="panel" role="tabpanel" aria-labelledby="tab-todo" hidden>
           <div id="todo-list" aria-label="Todo list"></div>
         </section>
-        <div class="dhint"><span>hover a finding → reveal in terminal</span><span><span class="kbd">⌘K</span> toggle</span></div>
+        <div class="dhint"><span>double-click a finding → reveal in terminal</span><span><span class="kbd">⌘K</span> toggle</span></div>
       </aside>
     </div>
     <script type="module" src="./src/index.ts"></script>

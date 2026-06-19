@@ -471,12 +471,15 @@ export interface MonitorApi {
   onUpdate(cb: (msg: MonitorUpdateMsg) => void): void;
   onExit(cb: (msg: PtyExitMsg) => void): void;
   replay(): Promise<MonitorEvent[]>;
-  /** The agent's current repo (§16.3), or null before the first OSC 7. Queried on mount
-   *  so the pane learns the repo key even when it missed the live `cwd:changed` broadcast. */
+  /** The agent's current repo (§16.3). Queried on mount so the pane learns the repo key even when
+   *  it missed the live `cwd:changed` broadcast. Main backstops with the shell spawn cwd, so this
+   *  resolves to a RepoInfo even before the first OSC 7; the `| null` is reserved for an
+   *  unresolvable session (no live PTY) and is not the normal pre-OSC-7 case. */
   currentRepo(): Promise<RepoInfo | null>;
-  /** Compact command history (§15.5); re-pulled on each monitor:update tick and commandsChanged signal. */
+  /** Compact command history (§15.5), pulled on demand — Capture selection resolves the latest
+   *  command's output to a todo (§16.2). Callers decide when to pull; no polling is implied. */
   commands(): Promise<CommandSummary[]>;
-  /** Mark-driven signal that a command span opened/closed; pane re-pulls history (§15.5). */
+  /** Mark-driven signal that a command span opened/closed (§15.5). */
   onCommandsChanged(cb: () => void): void;
   /** A command's output text, for adding straight to a todo (§16.2); null on unknown/trimmed id. */
   captureCommandText(commandId: string): Promise<CommandCaptureResult | null>;

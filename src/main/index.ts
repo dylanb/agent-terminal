@@ -20,6 +20,7 @@ import { installNavigationGuards } from './windowGuards';
 import {
   isValidCapture,
   isValidCaptureCommand,
+  isValidCaptureLast,
   isValidClearCommands,
   isValidCommandsRequest,
   isValidDismiss,
@@ -298,7 +299,10 @@ async function createWindow(): Promise<void> {
       // single captured report (replacing the prior in the store, so reload-replay stays
       // single-slot). Returned to the caller, which renders it single-slot — not broadcast,
       // since onEvent would prepend a duplicate rather than replace.
-      [CH.captureLast]: () => captureLastReport(SESSION_ID, store, scanner),
+      // Fail-closed to [] on a malformed/wrong-session payload (the renderer treats [] as "nothing
+      // captured, keep the prior report"), enforcing the §6 live-session check like its siblings.
+      [CH.captureLast]: (_e, m) =>
+        isValidCaptureLast(m) ? captureLastReport(SESSION_ID, store, scanner) : [],
       // Todo CRUD (§16.4) — each returns the fresh repo list; fail-closed to [] on
       // a malformed payload so a bad message can never mutate another repo's list.
       [CH.todoList]: (_e, m) => (isValidTodoList(m) ? todoStore.list(m.repoKey) : []),
@@ -309,7 +313,8 @@ async function createWindow(): Promise<void> {
         isValidTodoSetStatus(m) ? todoStore.setStatus(m.repoKey, m.id, m.status) : [],
       [CH.todoDelete]: (_e, m) => (isValidTodoDelete(m) ? todoStore.delete(m.repoKey, m.id) : []),
       // Artifact viewer (§20.1/§20.2): discover/read against the session's live cwd (OSC 7),
-      // falling back to the app's own dir before the first prompt. Read is path-escape-guarded.
+      // falling back to the shell spawn directory ($HOME / os.homedir()) before the first prompt
+      // (see viewerCwd). Read is path-escape-guarded.
       [CH.viewerTree]: (_e, m) => (isValidViewerTree(m) ? discover(viewerCwd(), m.scope) : emptyTree(viewerCwd())),
       [CH.viewerRead]: (_e, m) => (isValidViewerRead(m) ? readArtifact(viewerCwd(), m.relPath) : null),
       // Flow lifecycle (§24.2.2): every call carries the terminal's current repoKey (§16.3), so

@@ -16,14 +16,14 @@
 // publishes each ranged card's span (CAPTURE_RANGE_ADD/REMOVE) so the terminal can
 // marker-anchor it, and reveals by id. The terminal owns the coordinates.
 
-import type { MonitorApi, MonitorEvent, MonitorEventType } from '../../shared/ipc';
+import type { MonitorApi, MonitorEvent, MonitorEventType, TodoItem } from '../../shared/ipc';
 import {
   CAPTURE_RANGE_ADD_EVENT,
   CAPTURE_RANGE_REMOVE_EVENT,
-  doInject,
   REVEAL_HIGHLIGHT_MS,
   REVEAL_TERMINAL_EVENT,
   TODO_UNDO_MS,
+  type DoInject,
 } from './paneActions';
 import type { TodoSink } from './todoTab';
 
@@ -54,10 +54,12 @@ export interface CaptureTabDeps {
   blocksEl: HTMLElement;
   todoSink: TodoSink;
   monitor: Pick<MonitorApi, 'dismiss' | 'dismissAll'>;
+  /** Inject seam (§16.2 Insert at cursor) — injected, not reached from the window global. */
+  doInject: DoInject;
 }
 
 export function createCaptureTab(deps: CaptureTabDeps): CaptureTab {
-  const { blocksEl, todoSink, monitor } = deps;
+  const { blocksEl, todoSink, monitor, doInject } = deps;
   const rendered = new Set<string>();
   // Cross-highlight (§16.8): the live self-clearing reveal-highlight timer per element
   // (re-reveal resets it). The coordinates live on the terminal side, which marker-anchors
@@ -72,6 +74,9 @@ export function createCaptureTab(deps: CaptureTabDeps): CaptureTab {
   // Chunks committed to the pending Add-to-todo: shown processed (dimmed + checkbox disabled)
   // until the undo window commits (then they're dismissed) or Undo reverts them.
   let processedIds: string[] = [];
+  // The in-flight commit timer for the undo window — hoisted so endUndo() can cancel it (e.g. a
+  // Dismiss all during the window must not leave a pending commit that fires against gone chunks).
+  let undoTimer: ReturnType<typeof setTimeout> | null = null;
 
   /** Publish a capture's span so the terminal can marker-anchor it for cross-highlight (§16.8). */
   function publishRange(event: MonitorEvent): void {
@@ -305,8 +310,15 @@ export function createCaptureTab(deps: CaptureTabDeps): CaptureTab {
     processedIds = ids;
     setProcessed(ids, true);
     refreshSelectionUI();
-    const added = await todoSink.addFromCapture(selected.map((c) => c.text).join('\n\n'), { type: 'capture' });
-    // The add silently failed (repo went away mid-flight): don't arm the commit, or the
+    // A rejected invoke (main restart) is treated the same as a silent failure below — never an
+    // unhandled rejection, and the processed cue is cleared via endUndo().
+    let added: TodoItem | null = null;
+    try {
+      added = await todoSink.addFromCapture(selected.map((c) => c.text).join('\n\n'), { type: 'capture' });
+    } catch {
+      added = null;
+    }
+    // The add failed (repo went away mid-flight, or IPC down): don't arm the commit, or the
     // source chunks would be dismissed with nothing added to the todo list.
     if (!added) {
       endUndo();
@@ -320,7 +332,7 @@ export function createCaptureTab(deps: CaptureTabDeps): CaptureTab {
     const undo = document.createElement('button');
     undo.className = 'undo-add-to-todo linkbtn';
     undo.textContent = 'Undo';
-    const timer = setTimeout(() => {
+    undoTimer = setTimeout(() => {
       for (const id of ids) {
         monitor.dismiss(id);
         removeChunk(id);
@@ -328,14 +340,20 @@ export function createCaptureTab(deps: CaptureTabDeps): CaptureTab {
       endUndo();
     }, TODO_UNDO_MS);
     undo.addEventListener('click', async () => {
-      clearTimeout(timer);
-      if (added) await todoSink.deleteTodo(added.repoKey, added.id); // chunks stay; nothing dismissed
-      endUndo();
+      if (undoTimer) { clearTimeout(undoTimer); undoTimer = null; } // stop the commit before awaiting
+      try {
+        if (added) await todoSink.deleteTodo(added.repoKey, added.id); // chunks stay; nothing dismissed
+      } catch {
+        // IPC failure (main restart): nothing dismissed; still end the window below.
+      } finally {
+        endUndo(); // always end the window, or processed chunks stay disabled forever
+      }
     });
     undoSlot.append(note, undo);
   }
 
   function endUndo(): void {
+    if (undoTimer) { clearTimeout(undoTimer); undoTimer = null; }
     undoPending = false;
     setProcessed(processedIds, false); // no-op for committed chunks (already removed)
     processedIds = [];
@@ -376,6 +394,7 @@ export function createCaptureTab(deps: CaptureTabDeps): CaptureTab {
   dismissAllBtn.className = 'pill sm';
   dismissAllBtn.textContent = 'Dismiss all';
   dismissAllBtn.addEventListener('click', () => {
+    endUndo(); // a Dismiss all during the undo window must clear the stuck undo state + pending commit
     monitor.dismissAll();
     for (const el of blocksEl.querySelectorAll<HTMLElement>('[data-event-id]')) unpublishRange(el);
     blocksEl.replaceChildren();

@@ -45,11 +45,15 @@ export function requestTerminalFocus(): void {
   window.dispatchEvent(new CustomEvent(FOCUS_TERMINAL_EVENT));
 }
 
+/** The inject seam organisms receive via deps (so they don't reach the window.monitor global
+ *  directly — keeps them substitutable/relocatable, §9.1). The default impl is `doInject`. */
+export type DoInject = (text: string, submit: boolean) => void;
+
 /** §16.2 focus rule: Insert → terminal (user finishes there); Insert & submit → stays. */
-export function doInject(text: string, submit: boolean): void {
+export const doInject: DoInject = (text, submit) => {
   window.monitor.inject({ text, submit });
   if (!submit) requestTerminalFocus();
-}
+};
 
 export function dismissButton(label: string, onClick: () => void): HTMLButtonElement {
   const btn = document.createElement('button');

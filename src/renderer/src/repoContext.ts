@@ -11,38 +11,44 @@
 import type { CwdChangedMsg, MonitorApi, RepoInfo } from '../../shared/ipc';
 
 export interface RepoContext {
-  /** Current repo key; null only in the brief window before the mount seed resolves. */
+  /** Current repo key. Null before the first repo is known: the brief window before the mount
+   *  seed resolves, or indefinitely if `currentRepo()` rejects, until a `cwd:changed` arrives. */
   repoKey(): string | null;
   cwd(): string | null;
-  /** Subscribe to repo changes (including the mount seed, delivered once it resolves); the
-   *  returned function unsubscribes. */
+  /** Subscribe to repo changes. If a repo is already known at subscribe time (the seed or a
+   *  cwd:changed already arrived), the callback fires immediately with the current value, so a
+   *  late-mounted consumer is never left uninitialised until the next cd. Returns an unsubscribe. */
   onChange(cb: (info: RepoInfo) => void): () => void;
 }
 
 export function createRepoContext(monitor: Pick<MonitorApi, 'onCwdChanged' | 'currentRepo'>): RepoContext {
-  let cwd: string | null = null;
-  let key: string | null = null;
+  let current: RepoInfo | null = null;
   const cbs = new Set<(info: RepoInfo) => void>();
 
   function set(info: RepoInfo): void {
-    if (info.repoKey === key && info.cwd === cwd) return;
-    cwd = info.cwd;
-    key = info.repoKey;
+    if (current && info.repoKey === current.repoKey && info.cwd === current.cwd) return;
+    current = info;
     for (const cb of cbs) cb(info);
   }
 
   monitor.onCwdChanged((m: CwdChangedMsg) => set({ cwd: m.cwd, repoKey: m.repoKey }));
   // Seed once on mount. Only apply it if nothing was learned in the meantime, so a live
   // cwd:changed that arrives first is never clobbered by the (possibly stale) seed.
-  void monitor.currentRepo().then((r) => {
-    if (r && key === null) set(r);
-  });
+  void monitor
+    .currentRepo()
+    .then((r) => {
+      if (r && current === null) set(r);
+    })
+    // A rejected invoke (main restart) must not be an unhandled rejection; leave the key null
+    // until a cwd:changed arrives.
+    .catch(() => {});
 
   return {
-    repoKey: () => key,
-    cwd: () => cwd,
+    repoKey: () => current?.repoKey ?? null,
+    cwd: () => current?.cwd ?? null,
     onChange(cb) {
       cbs.add(cb);
+      if (current) cb(current); // late subscriber gets the current value at once
       return () => cbs.delete(cb);
     },
   };

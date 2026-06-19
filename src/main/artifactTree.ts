@@ -96,7 +96,10 @@ function walkDir(dir: string, base = dir, acc: string[] = []): string[] {
 function loopFiles(root: string): Set<string> {
   const loopDir = path.join(root, '.agent-loop');
   if (!existsSync(loopDir)) return new Set();
-  return new Set(walkDir(loopDir, root));
+  // walkDir yields path.sep-separated paths; the provenance sets are keyed by the POSIX-normalized
+  // paths buildTree produces (and changed/tracked come from git, always '/'). Normalize so loop
+  // membership matches on Windows too, where path.sep is '\\' (§20.1).
+  return new Set(walkDir(loopDir, root).map((p) => p.split(path.sep).join('/')));
 }
 
 /** Build a hierarchical node tree from tree-relative file paths; dirs first, then name. */
@@ -194,22 +197,38 @@ function changedLinesOf(root: string, rel: string, body: string, git: (args: str
   }
 }
 
+/** True if `target` is `base` or lives under it (§20.2 escape guard). path.relative-based, so the
+ *  filesystem root (`base === '/'`, where `base + sep` would be '//') and Windows cross-drive paths
+ *  resolve correctly — a startsWith(base + sep) check mishandles both. */
+export function pathWithin(base: string, target: string): boolean {
+  if (target === base) return true;
+  const rel = path.relative(base, target);
+  if (rel === '') return true; // identical after normalization
+  if (path.isAbsolute(rel)) return false; // different root/drive (Windows) → escape
+  // Only a leading `..` SEGMENT is an escape; a dir whose name merely starts with ".." is in-root.
+  return rel.split(path.sep)[0] !== '..';
+}
+
 export function readArtifact(cwd: string, relPath: string, deps: DiscoverDeps = {}): ViewerFile | null {
   const git = deps.git ?? defaultGit;
   const gitRoot = gitRootOf(cwd, git);
   const root = gitRoot ?? path.resolve(cwd);
   const abs = path.resolve(root, relPath);
   // Escape guard: the resolved path must stay within the discovery root (§20.2).
-  if (abs !== root && !abs.startsWith(root + path.sep)) return null;
+  if (!pathWithin(root, abs)) return null;
   try {
     // Resolve symlinks too: an in-root link pointing outside passes the lexical guard above,
     // so re-check the real path against the real root before reading (§20.2).
     const real = realpathSync(abs);
     const realRoot = realpathSync(root);
-    if (real !== realRoot && !real.startsWith(realRoot + path.sep)) return null;
-    const st = statSync(abs);
+    if (!pathWithin(realRoot, real)) return null;
+    // Stat/read the VALIDATED real path, not the original (possibly symlink) abs — otherwise a
+    // target swap between the realpath check and the read could bypass the guard (TOCTOU, §20.2).
+    // ext/name below are pure string ops on the user-navigated path (no fs access → no TOCTOU), and
+    // keeping them on relPath/abs matches the tree label the user clicked.
+    const st = statSync(real);
     if (!st.isFile() || st.size > MAX_FILE_BYTES) return null;
-    const body = readFileSync(abs, 'utf8');
+    const body = readFileSync(real, 'utf8');
     if (body.includes(NUL)) return null; // binary
     const ext = path.extname(abs).toLowerCase();
     const kind: ViewerFileKind = ext === '.md' || ext === '.markdown' ? 'markdown' : 'code';

@@ -201,6 +201,50 @@ describe('Capture tab §24.2.1 — bulk triage (checkbox + Add to todo / Dismiss
     expect(blocks().querySelector('[data-event-id="f1"]')).toBeTruthy();
   });
 
+  // A main-process restart rejects the underlying todo IPC; the click handlers must not surface
+  // an unhandled rejection (vitest fails on one) and must never leave the UI stuck (§16.2).
+  it('a rejected Add to todo is handled and does not leave the chunk stuck as processed', async () => {
+    await withRepo();
+    monitor.todoAdd.mockRejectedValueOnce(new Error('ipc down'));
+    handlers.event!(makeEvent({ id: 'f1', type: 'finding', parentId: null, text: 'alpha' }));
+    checkbox(cards()[0]).click();
+    addBtn().click();
+    await tick();
+    const card = blocks().querySelector('[data-event-id="f1"]') as HTMLElement;
+    expect(card.classList.contains('chunk-processed')).toBe(false);
+    expect(document.querySelector('.undo-add-to-todo')).toBeNull();
+  });
+
+  it('a rejected Undo (deleteTodo) still ends the undo window (chunks not left disabled)', async () => {
+    await withRepo();
+    handlers.event!(makeEvent({ id: 'f1', type: 'finding', parentId: null, text: 'alpha' }));
+    checkbox(cards()[0]).click();
+    addBtn().click();
+    await tick();
+    monitor.todoDelete.mockRejectedValueOnce(new Error('ipc down'));
+    (document.querySelector('.undo-add-to-todo') as HTMLButtonElement).click();
+    await tick();
+    expect(document.querySelector('.undo-add-to-todo')).toBeNull();
+    const card = blocks().querySelector('[data-event-id="f1"]') as HTMLElement;
+    expect(card.classList.contains('chunk-processed')).toBe(false);
+  });
+
+  it('Dismiss all during the undo window ends the undo state (toolbar not left stuck)', async () => {
+    await withRepo();
+    handlers.event!(makeEvent({ id: 'f1', type: 'finding', parentId: null, text: 'alpha' }));
+    checkbox(cards()[0]).click();
+    addBtn().click();
+    await tick();
+    expect(document.querySelector('.undo-add-to-todo')).toBeTruthy(); // undo window open
+    dismissAll().click();
+    expect(document.querySelector('.undo-add-to-todo')).toBeNull(); // undo slot cleared
+    expect(addBtn().disabled).toBe(true); // no chunks left, but NOT stuck-disabled by undoPending
+    // The pending commit timer must not fire against already-removed chunks.
+    monitor.dismiss.mockClear();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(monitor.dismiss).not.toHaveBeenCalled();
+  });
+
   it('each chunk checkbox is distinguishable — its label carries the capture text', async () => {
     await withRepo();
     handlers.event!(makeEvent({ id: 'f1', type: 'finding', parentId: null, text: 'unbounded scrollback re-scan' }));

@@ -17,6 +17,10 @@ export interface CodeView {
   visibleLines(): { top: number; bottom: number };
   /** Subscribe to viewport changes (scroll/resize); returns an unsubscribe. */
   onViewportChange(listener: () => void): () => void;
+  /** Release the underlying editor's document/window handlers on unmount (§20.2). Removing the
+   *  DOM alone does not free them, so the organism calls this in dispose(). Optional so a trivial
+   *  text-only renderCode fallback need not implement it. */
+  destroy?(): void;
 }
 
 /** Render seams, sinks, and the discovery/read data sources — all injected (UI-STANDARDS §2.2). */
@@ -49,6 +53,8 @@ const DEFAULT_TREE_W = 248;
 const MIN_TREE_W = 140;
 const MAX_TREE_W = 640;
 const WIDTH_STEP = 16;
+const FS_MIN_TREE_W = 200; // full-screen popout floor; ceiling is FS_MAX_VIEWPORT_FRAC of the viewport
+const FS_MAX_VIEWPORT_FRAC = 0.85;
 const clampWidth = (px: number): number => Math.min(MAX_TREE_W, Math.max(MIN_TREE_W, Math.round(px)));
 
 export interface Artifacts {
@@ -74,12 +80,15 @@ const plainInto = (body: string, into: HTMLElement): void => {
 };
 
 /** Selection text constrained to the viewer subtree, empty when the selection lies outside it. */
-function selectionWithin(viewer: HTMLElement): string {
+export function selectionWithin(viewer: HTMLElement): string {
   const sel = viewer.ownerDocument.getSelection();
   if (!sel || sel.isCollapsed || sel.rangeCount === 0) return '';
   const within = (n: Node | null): boolean => !!n && (n === viewer || viewer.contains(n));
   if (!within(sel.anchorNode) || !within(sel.focusNode)) return '';
-  return sel.toString().trim();
+  // Return the RAW selection so code indentation/trailing newlines survive (§16.2); only collapse a
+  // whitespace-only selection to empty (the disabled-until-highlight guard relies on that).
+  const text = sel.toString();
+  return text.trim() === '' ? '' : text;
 }
 
 /** First file (depth-first) in the tree, or null when there are none. */
@@ -197,21 +206,34 @@ export function createArtifacts(host: HTMLElement, deps: ArtifactsDeps): Artifac
     width = clampWidth(px);
     split.style.setProperty('--tree-w', `${width}px`);
     divider.setAttribute('aria-valuenow', String(width));
+    divider.setAttribute('aria-valuemin', String(MIN_TREE_W)); // expose the clamp range for AT (§20.2)
+    divider.setAttribute('aria-valuemax', String(MAX_TREE_W));
     if (persist) deps.onWidthChange?.(width);
   }
   applyWidth(width, false);
-  divider.addEventListener('mousedown', (e) => {
-    e.preventDefault();
-    const startX = (e as MouseEvent).clientX;
-    const startW = width;
-    const onMove = (ev: MouseEvent): void => applyWidth(startW + (ev.clientX - startX), false);
+
+  // A drag attaches document-level mousemove/mouseup; tracked in one outer slot so a mid-gesture
+  // dispose() (relocation/unmount) removes them deterministically and a new drag can't stack (§20.2).
+  let endDrag: (() => void) | null = null;
+  function beginDrag(startX: number, startW: number, apply: (px: number) => void, persist: () => void): void {
+    endDrag?.();
+    const onMove = (ev: MouseEvent): void => apply(startW + (ev.clientX - startX));
     const onUp = (): void => {
+      endDrag?.();
+      persist();
+    };
+    endDrag = (): void => {
       doc.removeEventListener('mousemove', onMove);
       doc.removeEventListener('mouseup', onUp);
-      deps.onWidthChange?.(width); // persist once at gesture end
+      endDrag = null;
     };
     doc.addEventListener('mousemove', onMove);
     doc.addEventListener('mouseup', onUp);
+  }
+
+  divider.addEventListener('mousedown', (e) => {
+    e.preventDefault();
+    beginDrag((e as MouseEvent).clientX, width, (px) => applyWidth(px, false), () => deps.onWidthChange?.(width));
   });
   divider.addEventListener('keydown', (e) => {
     if (e.key === 'ArrowLeft') applyWidth(width - WIDTH_STEP, true);
@@ -223,28 +245,26 @@ export function createArtifacts(host: HTMLElement, deps: ArtifactsDeps): Artifac
   // --- Full-screen tree popout: its own remembered width, defaulting to 30% of the viewport so it
   // opens usefully wide; resized by dragging its right edge or arrow-keying it (§20.2). ---
   const viewportW = (): number => doc.defaultView?.innerWidth ?? 1024;
-  const clampFsWidth = (px: number): number =>
-    Math.min(Math.round(viewportW() * 0.85), Math.max(200, Math.round(px)));
+  const fsMaxWidth = (): number => Math.round(viewportW() * FS_MAX_VIEWPORT_FRAC);
+  const clampFsWidth = (px: number): number => Math.min(fsMaxWidth(), Math.max(FS_MIN_TREE_W, Math.round(px)));
   let fsWidth = clampFsWidth(deps.initialFullscreenWidth ?? Math.ceil(viewportW() * 0.3));
   function applyFsWidth(px: number, persist: boolean): void {
     fsWidth = clampFsWidth(px);
     split.style.setProperty('--tree-w-fs', `${fsWidth}px`);
     fsResize.setAttribute('aria-valuenow', String(fsWidth));
+    fsResize.setAttribute('aria-valuemin', String(FS_MIN_TREE_W)); // clamp range for AT (§20.2)
+    fsResize.setAttribute('aria-valuemax', String(fsMaxWidth())); // viewport-dependent ceiling
     if (persist) deps.onFullscreenWidthChange?.(fsWidth);
   }
   applyFsWidth(fsWidth, false);
+  // The clamp ceiling (aria-valuemax) is viewport-dependent, so re-apply on window resize to keep
+  // it (and the width) from going stale; cleaned up in dispose().
+  const win = doc.defaultView;
+  const onWindowResize = (): void => applyFsWidth(fsWidth, false);
+  win?.addEventListener('resize', onWindowResize);
   fsResize.addEventListener('mousedown', (e) => {
     e.preventDefault();
-    const startX = (e as MouseEvent).clientX;
-    const startW = fsWidth;
-    const onMove = (ev: MouseEvent): void => applyFsWidth(startW + (ev.clientX - startX), false);
-    const onUp = (): void => {
-      doc.removeEventListener('mousemove', onMove);
-      doc.removeEventListener('mouseup', onUp);
-      deps.onFullscreenWidthChange?.(fsWidth);
-    };
-    doc.addEventListener('mousemove', onMove);
-    doc.addEventListener('mouseup', onUp);
+    beginDrag((e as MouseEvent).clientX, fsWidth, (px) => applyFsWidth(px, false), () => deps.onFullscreenWidthChange?.(fsWidth));
   });
   fsResize.addEventListener('keydown', (e) => {
     if (e.key === 'ArrowLeft') applyFsWidth(fsWidth - WIDTH_STEP, true);
@@ -320,7 +340,7 @@ export function createArtifacts(host: HTMLElement, deps: ArtifactsDeps): Artifac
   let fullscreen = false;
   fsBtn.addEventListener('click', () => deps.onRequestFullscreen?.(!fullscreen));
   // Each panel's open state lives as .is-collapsed on the panel itself, so a collapsed (slid-off)
-  // header/tree is inert — no tab stops inside hidden content (§A11Y).
+  // header/tree is inert — no tab stops inside hidden content (§22.2).
   const setHeaderOpen = (open: boolean): void => {
     setCollapsed(bar, !open);
     topStrip.setAttribute('aria-expanded', String(open));
@@ -344,6 +364,12 @@ export function createArtifacts(host: HTMLElement, deps: ArtifactsDeps): Artifac
 
   const PROV_LABEL: Record<string, string> = { changed: 'changed', loop: 'loop', pr: 'PR' };
 
+  // Collapse/expand a directory and keep its treeitem's aria-expanded in sync (§20.2 a11y).
+  const setDirCollapsed = (dir: HTMLElement, head: HTMLElement, collapsed: boolean): void => {
+    dir.classList.toggle('collapsed', collapsed);
+    head.setAttribute('aria-expanded', String(!collapsed));
+  };
+
   function renderNodes(nodes: ArtifactNode[], into: HTMLElement): void {
     for (const node of nodes) {
       if (node.kind === 'dir') {
@@ -351,9 +377,11 @@ export function createArtifacts(host: HTMLElement, deps: ArtifactsDeps): Artifac
         const head = el('div', 'dname', node.name);
         head.title = node.relPath; // full path on hover (§20.2 truncation discoverability)
         head.setAttribute('role', 'treeitem');
+        head.setAttribute('aria-expanded', 'true'); // dirs render expanded; kept in sync on toggle
         head.tabIndex = -1;
-        head.addEventListener('click', () => dir.classList.toggle('collapsed'));
+        head.addEventListener('click', () => setDirCollapsed(dir, head, !dir.classList.contains('collapsed')));
         const children = el('div', 'dchildren');
+        children.setAttribute('role', 'group'); // ARIA tree: a dir treeitem owns a group of children
         renderNodes(node.children ?? [], children);
         dir.append(head, children);
         into.appendChild(dir);
@@ -362,6 +390,7 @@ export function createArtifacts(host: HTMLElement, deps: ArtifactsDeps): Artifac
         row.dataset.rel = node.relPath;
         row.title = node.relPath; // full path on hover, since the name truncates (§20.2)
         row.setAttribute('role', 'treeitem');
+        row.setAttribute('aria-selected', 'false'); // single-select; the open file flips to true
         row.tabIndex = -1;
         row.append(el('span', 'ic', node.relPath.endsWith('.md') ? 'md' : 'ƒ'), el('span', 'fn', node.name));
         for (const p of node.provenance ?? []) row.appendChild(el('span', `tag tag-${p}`, PROV_LABEL[p] ?? p));
@@ -404,15 +433,15 @@ export function createArtifacts(host: HTMLElement, deps: ArtifactsDeps): Artifac
       case 'End': focusItem(items[items.length - 1]); break;
       case 'Enter':
       case ' ':
-        if (isDir) dir?.classList.toggle('collapsed');
+        if (isDir && dir) setDirCollapsed(dir, row, !dir.classList.contains('collapsed'));
         else void open(row.dataset.rel!);
         break;
       case 'ArrowRight':
-        if (isDir && dir?.classList.contains('collapsed')) dir.classList.remove('collapsed');
+        if (isDir && dir?.classList.contains('collapsed')) setDirCollapsed(dir, row, false);
         else if (isDir) focusItem(visibleItems()[i + 1]); // into first child
         break;
       case 'ArrowLeft':
-        if (isDir && !dir?.classList.contains('collapsed')) dir?.classList.add('collapsed');
+        if (isDir && dir && !dir.classList.contains('collapsed')) setDirCollapsed(dir, row, true);
         else focusItem(row.closest('.dchildren')?.parentElement?.querySelector(':scope > .dname') as HTMLElement);
         break;
       default: return;
@@ -443,15 +472,24 @@ export function createArtifacts(host: HTMLElement, deps: ArtifactsDeps): Artifac
     fileRows.clear();
     list.replaceChildren();
     renderNodes(q ? filterNodes(treeNodes, q) : treeNodes, list);
-    if (current) fileRows.get(current)?.classList.add('sel');
+    if (current) setSelectedRow(current);
     const firstItem = visibleItems()[0]; // one row carries tabindex=0 so the tree is reachable
     if (firstItem) firstItem.tabIndex = 0;
+  }
+
+  // Reflect single-select state both visually (.sel) and to assistive tech (aria-selected, §20.2).
+  function setSelectedRow(relPath: string): void {
+    for (const [rel, row] of fileRows) {
+      const on = rel === relPath;
+      row.classList.toggle('sel', on);
+      row.setAttribute('aria-selected', String(on));
+    }
   }
 
   async function open(relPath: string): Promise<void> {
     current = relPath;
     lastSelection = '';
-    for (const [rel, row] of fileRows) row.classList.toggle('sel', rel === relPath);
+    setSelectedRow(relPath);
     // An IPC failure (e.g. main restart) reads as an unreadable file, not an unhandled
     // rejection — the `if (!file)` path below renders the "Cannot display" state (§20.2).
     let file: ViewerFile | null;
@@ -475,10 +513,11 @@ export function createArtifacts(host: HTMLElement, deps: ArtifactsDeps): Artifac
     unsubViewport = null;
     codeView = null;
     if (file.kind === 'code') {
-      // The editor owns its own scroller (cm-scroller, focusable in viewerRender) — so the body
-      // steps out of the tab order to avoid a dead, unscrollable stop (§20.2 a11y).
-      body.tabIndex = -1;
       codeView = renderCode(file.body, file.lang, body, file.changedLines) ?? null;
+      // A real editor owns its own focusable scroller (cm-scroller), so the body steps out of the
+      // tab order to avoid a dead stop; but the plain-text fallback (no CodeView) makes the body
+      // itself the scroll container, so it must stay keyboard-reachable (§20.2 a11y).
+      body.tabIndex = codeView ? -1 : 0;
       sections = changedSections(file.changedLines);
       if (codeView) unsubViewport = codeView.onViewportChange(updateNav);
     } else {
@@ -521,7 +560,9 @@ export function createArtifacts(host: HTMLElement, deps: ArtifactsDeps): Artifac
   function routeSelection(sink: (text: string) => void | Promise<void>): void {
     const text = readSelection(body) || lastSelection;
     if (!text) return;
-    void sink(text);
+    // The sink may be async (addToTodo crosses IPC); a rejected invoke (main restart) must not
+    // become an unhandled renderer rejection.
+    Promise.resolve(sink(text)).catch(() => {});
   }
 
   sendBtn.addEventListener('click', () => routeSelection(deps.send));
@@ -544,7 +585,10 @@ export function createArtifacts(host: HTMLElement, deps: ArtifactsDeps): Artifac
     isFullscreen: () => fullscreen,
     dispose: () => {
       doc.removeEventListener('selectionchange', updateActions);
+      win?.removeEventListener('resize', onWindowResize);
+      endDrag?.(); // remove any document-level listeners from an in-flight resize drag (§20.2)
       unsubViewport?.();
+      codeView?.destroy?.(); // free CodeMirror's handlers — DOM removal alone doesn't (§20.2)
       host.replaceChildren();
     },
   };

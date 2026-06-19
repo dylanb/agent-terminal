@@ -23,20 +23,17 @@ const SHELL_HTML = `
     <div data-viewpane="3">todos</div>
   </main>
   <aside class="drawer">
-    <button class="tab" data-tab="todo">Todo</button>
-    <button class="tab on" data-tab="capture">Capture</button>
+    <button id="tab-todo" class="dtab" role="tab" aria-selected="false" aria-controls="panel-todo">Todo</button>
+    <button id="tab-capture" class="dtab" role="tab" aria-selected="true" aria-controls="panel-capture">Capture</button>
     <button id="dclose">x</button>
-    <div class="panel" data-tabpanel="todo" hidden>todo</div>
-    <div class="panel" data-tabpanel="capture">capture</div>
+    <section id="panel-capture" class="panel" role="tabpanel">capture</section>
+    <section id="panel-todo" class="panel" role="tabpanel" hidden>todo</section>
   </aside>
 </div>`;
 
 const flush = () => new Promise((r) => setTimeout(r, 0));
 const pane = (v: string) => document.querySelector(`[data-viewpane="${v}"]`)!;
 const navBtn = (v: string) => document.querySelector(`[data-viewbtn="${v}"]`)!;
-const drawerTab = (t: string) => document.querySelector(`.drawer .tab[data-tab="${t}"]`)!;
-const tabPanel = (t: string) => document.querySelector(`[data-tabpanel="${t}"]`) as HTMLElement;
-
 function key(k: string, meta = true): void {
   document.dispatchEvent(new KeyboardEvent('keydown', { key: k, metaKey: meta, bubbles: true, cancelable: true }));
 }
@@ -70,16 +67,22 @@ describe('shell controller (§24.1C — views, hotkeys, docked drawer, theme)', 
       expect(shell.getView()).toBe('2');
     });
 
+    it('syncs the active-view DOM contract on mount (aria-current on the inferred nav button)', () => {
+      // The active view is inferred from the markup `.on`, but aria-current is only applied by
+      // setView — so init must call it once, or assistive tech sees no current page until a switch.
+      expect(navBtn('1').getAttribute('aria-current')).toBe('page');
+      expect(navBtn('2').getAttribute('aria-current')).toBeNull();
+    });
+
     it('switches view on a nav-button click', () => {
       (navBtn('3') as HTMLElement).click();
       expect(pane('3').classList.contains('on')).toBe(true);
       expect(shell.getView()).toBe('3');
     });
 
-    it('switches view on Cmd/Ctrl+1/2/3 and prevents the default', () => {
+    it('switches view on Cmd+1/2/3', () => {
       key('2');
       expect(shell.getView()).toBe('2');
-      key('3', false); // works with Ctrl too (metaKey=false → ctrlKey path covered below)
     });
 
     it('switches view on Ctrl+1/2/3 (non-mac)', () => {
@@ -119,7 +122,7 @@ describe('shell controller (§24.1C — views, hotkeys, docked drawer, theme)', 
       expect(shell.isDrawerOpen()).toBe(true);
     });
 
-    it('marks the drawer hidden when closed so its controls leave the tab order (§A11Y)', () => {
+    it('marks the drawer hidden when closed so its controls leave the tab order (§22.2)', () => {
       const drawer = document.querySelector('.drawer') as HTMLElement;
       expect(drawer.hidden).toBe(false); // open from markup
       shell.closeDrawer();
@@ -144,26 +147,9 @@ describe('shell controller (§24.1C — views, hotkeys, docked drawer, theme)', 
       expect(shell.isDrawerOpen()).toBe(false);
     });
 
-    it('selects a drawer tab, showing its panel and hiding the others', () => {
-      shell.selectTab('todo');
-      expect(drawerTab('todo').classList.contains('on')).toBe(true);
-      expect(drawerTab('capture').classList.contains('on')).toBe(false);
-      expect(tabPanel('todo').hidden).toBe(false);
-      expect(tabPanel('capture').hidden).toBe(true);
-      expect(shell.getTab()).toBe('todo');
-    });
-
-    it('selects a tab on click', () => {
-      (drawerTab('todo') as HTMLElement).click();
-      expect(shell.getTab()).toBe('todo');
-    });
-
-    it('opening with a tab argument docks and selects that tab', () => {
-      shell.closeDrawer();
-      shell.openDrawer('todo');
-      expect(shell.isDrawerOpen()).toBe(true);
-      expect(shell.getTab()).toBe('todo');
-    });
+    // Drawer-tab selection is NOT a shell responsibility — the action-window coordinator
+    // (monitor.ts, §16.1) owns it via the real role="tab"/aria-selected contract and is
+    // covered in monitorPane.test.ts. The shell only docks/undocks the drawer column.
 
     it('broadcasts a window resize when the dock width changes, so panes refit (§7.1)', () => {
       const onResize = vi.fn();
@@ -197,6 +183,16 @@ describe('shell controller (§24.1C — views, hotkeys, docked drawer, theme)', 
 
     it('reads the persisted theme at startup', async () => {
       shell = createShell(app, { getTheme: () => Promise.resolve('dark') });
+      await flush();
+      expect(document.documentElement.getAttribute('data-theme')).toBe('dark');
+      expect(shell.getTheme()).toBe('dark');
+    });
+
+    it('a user theme toggle before the persisted getTheme resolves is not overwritten', async () => {
+      let resolveTheme: (t: 'light' | 'dark') => void = () => {};
+      shell = createShell(app, { getTheme: () => new Promise((res) => (resolveTheme = res)) });
+      shell.setTheme('dark'); // user toggles before the persisted value arrives
+      resolveTheme('light'); // late persisted value must NOT clobber the user's choice
       await flush();
       expect(document.documentElement.getAttribute('data-theme')).toBe('dark');
       expect(shell.getTheme()).toBe('dark');

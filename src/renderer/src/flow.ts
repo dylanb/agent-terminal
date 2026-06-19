@@ -33,12 +33,15 @@ export const SAMPLE_FLOW: FlowState = {
 
 const pad2 = (n: number): string => String(n).padStart(2, '0');
 
-function el(tag: string, className?: string, text?: string): HTMLElement {
-  const node = document.createElement(tag);
+// Build elements from the HOST's document, not the global one, so these widgets are correct if
+// ever mounted in another Document/iframe (host-document invariant, UI-STANDARDS).
+type El = (tag: string, className?: string, text?: string) => HTMLElement;
+const makeEl = (doc: Document): El => (tag, className, text) => {
+  const node = doc.createElement(tag);
   if (className) node.className = className;
   if (text !== undefined) node.textContent = text;
   return node;
-}
+};
 
 const GATE_TEXT: Record<GateStatus, string> = {
   awaiting: 'awaiting you',
@@ -57,6 +60,7 @@ export function createGatePanel(
   state: FlowState,
   handlers: { onAct?: (action: 'approve' | 'changes') => void } = {},
 ): GatePanel {
+  const el = makeEl(host.ownerDocument);
   let status: GateStatus = state.gate.status;
 
   // Before any action the row shows the loop's prior verdict; acting overwrites it.
@@ -71,6 +75,7 @@ export function createGatePanel(
   const approve = el('button', 'pill app', 'Approve gate') as HTMLButtonElement;
   const request = el('button', 'pill send', 'Request changes') as HTMLButtonElement;
   const open = el('button', 'pill', 'Open report') as HTMLButtonElement;
+  open.disabled = true; // Phase-1 stub: no report wiring yet, so it must not present as actionable (§19.3)
   bar.append(approve, request, open);
 
   const set = (next: GateStatus, action: 'approve' | 'changes'): void => {
@@ -89,7 +94,7 @@ export function createGatePanel(
   };
   loop.append(
     row('iteration', pad2(state.loop.iteration)),
-    row('severity cycle', state.loop.severity, true),
+    row('severity cycle', state.loop.severity, /^(high|critical)$/i.test(state.loop.severity)),
     row('open findings', String(state.loop.openFindings)),
   );
   const verdictRow = el('div', 'lrow');

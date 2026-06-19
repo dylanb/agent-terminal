@@ -33,6 +33,7 @@
     "src/renderer/src/flow.ts",
     "src/renderer/src/flowStrip.ts",
     "src/renderer/src/artifacts.ts",
+    "src/renderer/src/viewerRender.ts",
     "electron.vite.config.ts",
     "tests/unit/**/*.ts",
     "tests/integration/**/*.ts",

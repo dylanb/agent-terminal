@@ -36,7 +36,7 @@ body {
 .serif { font-family:"Fraunces",Georgia,serif; }
 .mono { font-family:"IBM Plex Mono",ui-monospace,monospace; font-variant-numeric:tabular-nums; }
 button:focus-visible, a:focus-visible, [tabindex]:focus-visible { outline:2px solid var(--signal); outline-offset:2px; }
-/* Accessible hiding (§A11Y / visibility.ts) — the single enforcement point. Hidden content must
+/* Accessible hiding (§22.2 / visibility.ts) — the single enforcement point. Hidden content must
    leave the tab order and the a11y tree; `!important` so no `display` rule can resurrect a hidden,
    still-focusable subtree (the trap we keep hitting). `.is-collapsed` is the animatable variant. */
 [hidden] { display:none !important; }
@@ -83,7 +83,7 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible { outline:2px so
 .artsplit.fullscreen .artsplit-divider { display:none; }
 .artsplit.fullscreen .viewer { position:absolute; inset:0; }
 /* Collapsed state uses .is-collapsed (visibility:hidden → inert) so the slid-off panel can't trap
-   focus; the visibility flips after the slide-out completes and immediately on slide-in (§A11Y). */
+   focus; the visibility flips after the slide-out completes and immediately on slide-in (§22.2). */
 .artsplit.fullscreen .vbar {
   position:absolute; top:0; left:0; right:0; z-index:5; background:var(--bg);
   transition:transform .18s ease, visibility 0s;

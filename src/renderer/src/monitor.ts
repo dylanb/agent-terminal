@@ -10,7 +10,7 @@ import { createStatusStrip } from './statusStrip';
 import { createTodoTab } from './todoTab';
 import { createCaptureTab } from './captureTab';
 import { createRepoContext, type RepoContext } from './repoContext';
-import { FLOW_CHANGED_EVENT, REVEAL_CAPTURE_EVENT, TODOS_CHANGED_EVENT } from './paneActions';
+import { doInject, FLOW_CHANGED_EVENT, REVEAL_CAPTURE_EVENT, TODOS_CHANGED_EVENT } from './paneActions';
 
 // Re-exported for callers that import these from the pane module (selection.ts, tests).
 export {
@@ -27,11 +27,17 @@ export {
 export function wireMonitorPane(repo: RepoContext = createRepoContext(window.monitor)): void {
   const el = resolveMonitorElements();
   const status = createStatusStrip(el.status);
-  const todoTab = createTodoTab({ todoListEl: el.todoList, todoCountEl: el.todoCount, monitor: window.monitor });
+  const todoTab = createTodoTab({
+    todoListEl: el.todoList,
+    todoCountEl: el.todoCount,
+    monitor: window.monitor,
+    doInject,
+  });
   const captureTab = createCaptureTab({
     blocksEl: el.blocks,
     todoSink: todoTab,
     monitor: window.monitor,
+    doInject,
   });
 
   let activeTab: TabId = 'capture';
@@ -100,12 +106,19 @@ export function wireMonitorPane(repo: RepoContext = createRepoContext(window.mon
 
   window.monitor.onExit(() => status.setExited());
 
-  void window.monitor.replay().then((events) => {
-    for (const e of events) captureTab.appendBlock(e);
-  });
+  void window.monitor
+    .replay()
+    .then((events) => {
+      for (const e of events) captureTab.appendBlock(e);
+    })
+    .catch(() => {}); // a rejected invoke (main restart) must not be an unhandled rejection
 
   // Restore the remembered tab (§16.1 / §16.6) before first paint of either panel.
-  void window.monitor.getSettings().then((s) => selectTab(s.lastTab, false));
+  // On a rejected invoke, keep the markup default tab rather than crash with an unhandled rejection.
+  void window.monitor
+    .getSettings()
+    .then((s) => selectTab(s.lastTab, false))
+    .catch(() => {});
 
   status.render();
 }

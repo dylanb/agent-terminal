@@ -3,8 +3,30 @@ import { execFileSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { discover, readArtifact, emptyTree } from '../../src/main/artifactTree';
+import { discover, readArtifact, emptyTree, pathWithin } from '../../src/main/artifactTree';
 import type { ArtifactNode } from '../../src/shared/ipc';
+
+// The path-escape guard (§20.2), as a pure function so the filesystem-root edge case is testable
+// without reading the real root. path.relative-based, so root='/' (where `root + sep` is '//') and
+// Windows cross-drive paths are handled correctly.
+describe('pathWithin — escape guard', () => {
+  it('accepts the root itself and paths under it', () => {
+    expect(pathWithin('/repo', '/repo')).toBe(true);
+    expect(pathWithin('/repo', '/repo/src/a.ts')).toBe(true);
+  });
+  it('rejects siblings and parent escapes', () => {
+    expect(pathWithin('/repo', '/other')).toBe(false);
+    expect(pathWithin('/repo', '/repo-2/a.ts')).toBe(false);
+    expect(pathWithin('/repo/src', '/repo/secret')).toBe(false);
+  });
+  it('accepts an in-root dir whose name merely starts with .. (only a leading .. SEGMENT escapes)', () => {
+    expect(pathWithin('/repo', '/repo/..abc/file.ts')).toBe(true);
+  });
+  it('handles the filesystem root without the // double-separator bug', () => {
+    expect(pathWithin('/', '/etc')).toBe(true);
+    expect(pathWithin('/', '/')).toBe(true);
+  });
+});
 
 // Real git, real filesystem — no mocks (CLAUDE.md). Discovery (§20.1) is exercised against a
 // temp repo we build with actual git commands, mirroring how scanner tests drive a real shadow.
@@ -139,6 +161,18 @@ describe('artifact discovery (§20.1 / D8 — real git)', () => {
     }
     expect(readArtifact(plain, 'link.md')).toBeNull();
     rmSync(outside, { recursive: true, force: true });
+  });
+
+  it('reads an in-root symlink that targets an in-root file (stat/read via the validated real path)', () => {
+    // The TOCTOU fix stats/reads the resolved real path; a legitimate in-root symlink must still
+    // read its target's content (regression pin for the abs→real switch).
+    writeFileSync(join(plain, 'target.md'), '# real target body');
+    try {
+      symlinkSync(join(plain, 'target.md'), join(plain, 'alias.md'));
+    } catch {
+      return; // platform without symlink permission — skip
+    }
+    expect(readArtifact(plain, 'alias.md')?.body).toBe('# real target body');
   });
 
   // §20.2: a code file carries the current-file line numbers that differ from HEAD — added or

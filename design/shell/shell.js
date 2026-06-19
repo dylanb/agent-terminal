@@ -11,8 +11,14 @@
 
   function setView(v) {
     document.querySelectorAll('[data-viewpane]').forEach(p => p.classList.toggle('on', p.getAttribute('data-viewpane') === v));
-    document.querySelectorAll('[data-viewbtn]').forEach(b => b.classList.toggle('on', b.getAttribute('data-viewbtn') === v));
-    document.querySelectorAll('[data-viewbtn]').forEach(b => b.setAttribute('aria-current', b.getAttribute('data-viewbtn') === v ? 'page' : 'false'));
+    document.querySelectorAll('[data-viewbtn]').forEach(b => {
+      const on = b.getAttribute('data-viewbtn') === v;
+      b.classList.toggle('on', on);
+      // aria-current goes only on the active item; remove it elsewhere (a literal "false" is
+      // announced inconsistently by AT) — mirrors the production shell.
+      if (on) b.setAttribute('aria-current', 'page');
+      else b.removeAttribute('aria-current');
+    });
   }
   window.setView = setView;
 

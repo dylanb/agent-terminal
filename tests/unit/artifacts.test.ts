@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { createArtifacts } from '../../src/renderer/src/artifacts';
+import { createArtifacts, selectionWithin } from '../../src/renderer/src/artifacts';
 import type { ArtifactTree, ViewerFile } from '../../src/shared/ipc';
 
 // §20.1/§20.2 artifact viewer organism: a hierarchical file tree fed by real discovery
@@ -107,6 +107,7 @@ function fakeCodeView(top: number, bottom: number) {
     visibleLines: () => ({ top: state.top, bottom: state.bottom }),
     onViewportChange: (cb: () => void) => { listeners.add(cb); return () => listeners.delete(cb); },
     scrollTo: (t: number, b: number) => { state.top = t; state.bottom = b; notify(); },
+    destroy: vi.fn(),
   };
 }
 
@@ -160,11 +161,9 @@ describe('artifact viewer (§20.1/§20.2 — real discovery)', () => {
     expect(body.getAttribute('aria-label')).toContain('review.md');
   });
 
-  it('defers focus to the editor scroller (body not a tab stop) for code files', async () => {
-    const v = mount();
-    await v.api.refresh(); // opens src/a.ts (code)
-    expect(v.body().tabIndex).toBe(-1);
-  });
+  // (body-tab-stop behavior for code files is covered by the renderCode-fallback vs editor-scroller
+  // pair below — a real editor owns its scroller so the body leaves the tab order; the plain
+  // fallback keeps the body focusable.)
 
   // Tweak 2: contiguous changed lines collapse into sections; the readout and prev/next are
   // derived from the live viewport — current = the last section scrolled onto/past the screen,
@@ -173,6 +172,14 @@ describe('artifact viewer (§20.1/§20.2 — real discovery)', () => {
     count: v.host.querySelector('.art-navcount') as HTMLElement,
     prev: v.host.querySelector('.art-prev') as HTMLButtonElement,
     next: v.host.querySelector('.art-next') as HTMLButtonElement,
+  });
+
+  it('dispose() destroys the live code view so CodeMirror handlers are released (§20.2)', async () => {
+    const cv = fakeCodeView(1, 20);
+    const v = mount(undefined, { renderCode: vi.fn(() => cv) });
+    await v.api.refresh(); // opens the first (code) file → mounts the code view
+    v.api.dispose();
+    expect(cv.destroy).toHaveBeenCalledTimes(1);
   });
 
   it('tracks the viewport, stepping prev/next to the nearest off-screen change (§20.2)', async () => {
@@ -412,6 +419,25 @@ describe('artifact viewer (§20.1/§20.2 — real discovery)', () => {
     expect(v.fileRows().length).toBeGreaterThan(1);
   });
 
+  it('selectionWithin preserves raw formatting (code indentation/newlines) but empties whitespace-only', () => {
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const sel = document.getSelection()!;
+    const range = document.createRange();
+
+    host.textContent = '    indented line\n';
+    range.selectNodeContents(host);
+    sel.removeAllRanges();
+    sel.addRange(range);
+    expect(selectionWithin(host)).toBe('    indented line\n'); // not trimmed
+
+    host.textContent = '   \n  ';
+    range.selectNodeContents(host);
+    sel.removeAllRanges();
+    sel.addRange(range);
+    expect(selectionWithin(host)).toBe(''); // whitespace-only → empty
+  });
+
   it('Send to agent and Add to todo route the viewer selection to the sinks', async () => {
     const v = mount();
     await v.api.refresh();
@@ -422,6 +448,7 @@ describe('artifact viewer (§20.1/§20.2 — real discovery)', () => {
     expect(v.send).toHaveBeenCalledWith('a passage');
     expect(v.addToTodo).toHaveBeenCalledWith('a passage');
   });
+
 
   // Tweak 1: the two sinks are inert until there is a highlight to act on.
   it('disables Send to agent and Add to todo until something is highlighted (§20.2)', async () => {
@@ -531,6 +558,22 @@ describe('artifact viewer (§20.1/§20.2 — real discovery)', () => {
     expect(v.divider().getAttribute('role')).toBe('separator');
   });
 
+  it('the tree separator exposes its clamp range to assistive tech (aria-valuemin/max)', async () => {
+    const v = mount();
+    await v.api.refresh();
+    expect(v.divider().getAttribute('aria-valuemin')).toBe('140');
+    expect(v.divider().getAttribute('aria-valuemax')).toBe('640');
+  });
+
+  it('the full-screen popout separator exposes its clamp range (aria-valuemin/max)', async () => {
+    const v = mount();
+    await v.api.refresh();
+    v.api.setFullscreen(true);
+    const handle = v.host.querySelector('.fs-tree-resize') as HTMLElement;
+    expect(handle.getAttribute('aria-valuemin')).toBe('200');
+    expect(Number(handle.getAttribute('aria-valuemax'))).toBeGreaterThan(200);
+  });
+
   it('applies the persisted initial width', async () => {
     const v = mount(TREE_CURATED, { initialWidth: 320 });
     await v.api.refresh();
@@ -546,6 +589,85 @@ describe('artifact viewer (§20.1/§20.2 — real discovery)', () => {
     document.dispatchEvent(mouse('mouseup', 300));
     expect(v.width()).toBe('300px');
     expect(onWidthChange).toHaveBeenCalledWith(300);
+  });
+
+  it('keeps the viewer body keyboard-focusable for code when renderCode has no editor (plain fallback)', async () => {
+    const v = mount(); // default renderCode returns void → the body itself is the scroll container
+    await v.api.refresh(); // opens the first (code) file
+    expect(v.body().tabIndex).toBe(0);
+  });
+
+  it('removes the body from the tab order for code when the editor owns its scroller', async () => {
+    const cv = fakeCodeView(1, 20);
+    const v = mount(undefined, { renderCode: vi.fn(() => cv) });
+    await v.api.refresh();
+    expect(v.body().tabIndex).toBe(-1);
+  });
+
+  it('reflects the selected file to assistive tech via aria-selected (single-select tree)', async () => {
+    const v = mount();
+    await v.api.refresh(); // opens the first file
+    const selected = v.fileRows().filter((r) => r.getAttribute('aria-selected') === 'true');
+    expect(selected).toHaveLength(1);
+    expect(selected[0].classList.contains('sel')).toBe(true);
+    expect(v.fileRows().every((r) => r.hasAttribute('aria-selected'))).toBe(true);
+  });
+
+  it('wraps directory children in a role="group" container (ARIA tree hierarchy)', async () => {
+    const v = mount();
+    await v.api.refresh();
+    const group = v.host.querySelector('.dchildren');
+    expect(group).toBeTruthy();
+    expect(group!.getAttribute('role')).toBe('group');
+  });
+
+  it('directory headers expose aria-expanded and sync it on click toggle', async () => {
+    const v = mount();
+    await v.api.refresh();
+    const head = v.dirRows()[0];
+    expect(head.getAttribute('aria-expanded')).toBe('true');
+    head.click();
+    expect(head.getAttribute('aria-expanded')).toBe('false');
+    head.click();
+    expect(head.getAttribute('aria-expanded')).toBe('true');
+  });
+
+  it('keyboard collapse/expand keeps the directory aria-expanded in sync', async () => {
+    const v = mount();
+    await v.api.refresh();
+    const head = v.dirRows()[0];
+    head.dispatchEvent(key('Enter')); // collapse
+    expect(head.getAttribute('aria-expanded')).toBe('false');
+    head.dispatchEvent(key('ArrowRight')); // expand
+    expect(head.getAttribute('aria-expanded')).toBe('true');
+    head.dispatchEvent(key('ArrowLeft')); // collapse
+    expect(head.getAttribute('aria-expanded')).toBe('false');
+  });
+
+  it('dispose() removes in-flight drag listeners (a mid-drag unmount stops resizing)', async () => {
+    const v = mount(TREE_CURATED, { initialWidth: 248 });
+    await v.api.refresh();
+    const split = v.artsplit();
+    v.divider().dispatchEvent(mouse('mousedown', 248));
+    v.api.dispose();
+    document.dispatchEvent(mouse('mousemove', 400)); // would resize to 400px if the listener leaked
+    expect(split.style.getPropertyValue('--tree-w')).toBe('248px');
+  });
+
+  it('recomputes the full-screen clamp ceiling on window resize (aria-valuemax not stale)', async () => {
+    const v = mount();
+    await v.api.refresh();
+    v.api.setFullscreen(true);
+    const handle = v.host.querySelector('.fs-tree-resize') as HTMLElement;
+    const before = Number(handle.getAttribute('aria-valuemax'));
+    const orig = window.innerWidth;
+    try {
+      (window as unknown as { innerWidth: number }).innerWidth = Math.round(orig / 2);
+      window.dispatchEvent(new Event('resize'));
+      expect(Number(handle.getAttribute('aria-valuemax'))).toBeLessThan(before);
+    } finally {
+      (window as unknown as { innerWidth: number }).innerWidth = orig;
+    }
   });
 
   it('ArrowRight/Left on the separator nudges and persists the width', async () => {

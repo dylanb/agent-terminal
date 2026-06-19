@@ -15,7 +15,7 @@
 //    behind a Deleted/Undo row for TODO_UNDO_MS, capturing the item's own repoKey.
 
 import type { MonitorApi, TodoItem, TodoSource, TodoTemplateRef } from '../../shared/ipc';
-import { doInject, TODO_UNDO_MS } from './paneActions';
+import { TODO_UNDO_MS, type DoInject } from './paneActions';
 
 /** The slice the Capture tab needs to push a capture into the list and undo it (§16.2). */
 export interface TodoSink {
@@ -47,6 +47,8 @@ export interface TodoTabDeps {
     | 'listTemplates'
     | 'instantiateTemplate'
   >;
+  /** Inject seam (§16.2 Send) — injected so the tab never reaches the window.monitor global. */
+  doInject: DoInject;
 }
 
 /** Provenance line for a todo: where it came from, in the mockup's `.src` voice. */
@@ -56,7 +58,7 @@ function provenanceText(source: TodoSource | undefined): string {
 }
 
 export function createTodoTab(deps: TodoTabDeps): TodoTab {
-  const { todoListEl, todoCountEl, monitor } = deps;
+  const { todoListEl, todoCountEl, monitor, doInject } = deps;
   let currentRepoKey: string | null = null;
   let todos: TodoItem[] = [];
   // A repo swap is blocked while a todo edit is open (§16.3); the pending key is applied
@@ -146,7 +148,8 @@ export function createTodoTab(deps: TodoTabDeps): TodoTab {
     if (!currentRepoKey) return;
     let k = 0;
     const ids = ordered.map((t) => (t.status === 'active' ? newActive[k++].id : t.id));
-    void monitor.todoReorder(currentRepoKey, ids).then(setTodos);
+    // On a rejected invoke (main restart) keep the current order; never an unhandled rejection.
+    void monitor.todoReorder(currentRepoKey, ids).then(setTodos).catch(() => {});
   }
 
   /** Move an active item one slot up/down within the active run (skipping done rows). */
@@ -230,8 +233,15 @@ export function createTodoTab(deps: TodoTabDeps): TodoTab {
   async function commitEdit(t: TodoItem, el?: HTMLElement): Promise<void> {
     const tx = (el ?? rowEl(t.id))?.querySelector<HTMLElement>('.tx');
     const next = (tx?.textContent ?? t.text).trim();
+    if (!next) return; // empty-guard (matches manual add): never persist a blank row; stay in edit
     // The edit targets the list's own repo (t.repoKey), not the live cwd (§16.3).
-    todos = await monitor.todoUpdate(t.repoKey, t.id, next);
+    let updated: TodoItem[];
+    try {
+      updated = await monitor.todoUpdate(t.repoKey, t.id, next);
+    } catch {
+      return; // IPC failure (main restart): keep the user in the edit state, list unchanged.
+    }
+    todos = updated;
     updateTodoCount();
     focusAfterRender = () => rowEl(t.id)?.querySelector<HTMLElement>('.todo-edit')?.focus();
     resolveEdit();
@@ -262,7 +272,8 @@ export function createTodoTab(deps: TodoTabDeps): TodoTab {
       t.id,
       setTimeout(() => {
         pendingDelete.delete(t.id);
-        void monitor.todoDelete(t.repoKey, t.id).then(setTodos);
+        // On a rejected invoke (main restart) keep the current list; never an unhandled rejection.
+        void monitor.todoDelete(t.repoKey, t.id).then(setTodos).catch(() => {});
       }, TODO_UNDO_MS),
     );
     rerenderFocusing(t.id, '.todo-undo');
@@ -290,7 +301,11 @@ export function createTodoTab(deps: TodoTabDeps): TodoTab {
     chk.setAttribute('aria-checked', String(done));
     chk.setAttribute('aria-label', done ? 'Mark todo active' : 'Mark todo done');
     chk.addEventListener('click', async () => {
-      setTodos(await monitor.todoSetStatus(t.repoKey, t.id, done ? 'active' : 'done'));
+      try {
+        setTodos(await monitor.todoSetStatus(t.repoKey, t.id, done ? 'active' : 'done'));
+      } catch {
+        // IPC failure (main restart): leave the UI unchanged, never an unhandled rejection.
+      }
     });
 
     const body = document.createElement('div');
@@ -312,7 +327,9 @@ export function createTodoTab(deps: TodoTabDeps): TodoTab {
           void commitEdit(t, row);
         } else if (e.key === 'Escape') {
           e.preventDefault();
-          resolveEdit();
+          // Re-render with a focus target (the row's edit button) so Escape-cancel doesn't drop
+          // focus to <body> — matches the Cancel button's behavior (WCAG 2.4.3, §16.4).
+          rerenderFocusingAfterResolve(t.id, () => resolveEdit());
         }
       });
     }
@@ -425,7 +442,13 @@ export function createTodoTab(deps: TodoTabDeps): TodoTab {
     const submitAdd = async (): Promise<void> => {
       const text = input.value.trim();
       if (!text || !currentRepoKey) return;
-      setTodos(await monitor.todoAdd(currentRepoKey, text, { type: 'manual' }));
+      let list: TodoItem[];
+      try {
+        list = await monitor.todoAdd(currentRepoKey, text, { type: 'manual' });
+      } catch {
+        return; // IPC failure (main restart): keep the typed text and list unchanged.
+      }
+      setTodos(list);
       input.value = '';
     };
     addBtn.addEventListener('click', () => void submitAdd());

@@ -12,7 +12,28 @@ import type { Extension } from '@codemirror/state';
 import type { Decoration as DecorationT, EditorView as EditorViewT } from '@codemirror/view';
 import type { CodeView } from './artifacts';
 
-let renderSeq = 0; // guards against a stale async render overwriting a newer one
+// Per-host render token: guards against a stale async render overwriting a newer one INTO THE SAME
+// host. Keyed by host element (not a single global counter) so a render into one placement never
+// invalidates an in-flight render into another (relocation / future side-by-side viewers, §20.2).
+const renderTokens = new WeakMap<HTMLElement, number>();
+const bumpToken = (into: HTMLElement): number => {
+  const next = (renderTokens.get(into) ?? 0) + 1;
+  renderTokens.set(into, next);
+  return next;
+};
+const tokenOf = (into: HTMLElement): number => renderTokens.get(into) ?? 0;
+
+// Each host holds at most one live CodeMirror view; the render seams reuse the same host across
+// file opens, so a re-render must destroy the prior view first — removing the DOM alone leaks the
+// document/window handlers CM releases only in destroy() (§20.2).
+const mountedViews = new WeakMap<HTMLElement, EditorViewT>();
+function teardownView(into: HTMLElement): void {
+  const prev = mountedViews.get(into);
+  if (prev) {
+    prev.destroy();
+    mountedViews.delete(into);
+  }
+}
 
 // markdown-it instance is created once, then reused.
 let mdInstance: MarkdownItLib | null = null;
@@ -28,12 +49,16 @@ let mermaidSeq = 0;
 
 /** Render markdown into `into`, then turn any ```mermaid fences into rendered SVG. */
 export function renderMarkdownInto(body: string, into: HTMLElement): void {
-  const token = ++renderSeq;
+  const token = bumpToken(into);
+  teardownView(into); // switching to markdown disposes any code view this host held (§20.2)
   into.classList.add('md');
   into.textContent = '…';
+  // TODO(viewer): the catch degrades a chunk-load/render failure to raw text instead of a stuck
+  // ellipsis. Untestable — markdown-it/mermaid are import()-ed here (no seam), so neither vitest
+  // nor e2e can force the import to reject without a production seam added only for the test.
   void (async () => {
     const md = await getMarkdownIt();
-    if (token !== renderSeq) return; // a newer artifact was opened
+    if (token !== tokenOf(into)) return; // a newer artifact was opened
     into.innerHTML = md.render(body);
     const fences = [...into.querySelectorAll('code.language-mermaid')];
     if (fences.length === 0) return;
@@ -41,20 +66,22 @@ export function renderMarkdownInto(body: string, into: HTMLElement): void {
     const mermaid = (await import('mermaid')).default;
     mermaid.initialize({ startOnLoad: false, theme, securityLevel: 'strict' });
     for (const code of fences) {
-      if (token !== renderSeq) return;
+      if (token !== tokenOf(into)) return;
       const def = code.textContent ?? '';
       const slot = into.ownerDocument.createElement('div');
       slot.className = 'mermaid';
       (code.closest('pre') ?? code).replaceWith(slot);
       try {
         const { svg } = await mermaid.render(`mmd-${++mermaidSeq}`, def);
-        if (token !== renderSeq) return;
+        if (token !== tokenOf(into)) return;
         slot.innerHTML = svg;
       } catch {
         slot.textContent = def; // a malformed diagram degrades to its source, never crashes
       }
     }
-  })();
+  })().catch(() => {
+    if (token === tokenOf(into)) into.textContent = body; // degrade to raw text, never an unhandled rejection
+  });
 }
 
 /**
@@ -70,12 +97,16 @@ export function renderCodeInto(
   into: HTMLElement,
   changedLines?: number[],
 ): CodeView {
-  const token = ++renderSeq;
+  const token = bumpToken(into);
+  teardownView(into); // dispose the prior code view before mounting a new one into this host (§20.2)
   into.classList.remove('md');
   into.textContent = '…';
+  // TODO(viewer): see renderMarkdownInto — the trailing catch degrades a CodeMirror chunk-load
+  // failure to raw text instead of a stuck ellipsis; untestable for the same import()-seam reason.
   let editor: EditorViewT | null = null;
   let EV: typeof EditorViewT | null = null;
   let pending: number | null = null;
+  let detachScroll: (() => void) | null = null;
   const listeners = new Set<() => void>();
   const notify = (): void => listeners.forEach((l) => l());
   const reveal = (line: number): void => {
@@ -103,7 +134,7 @@ export function renderCodeInto(
         import('@codemirror/view'),
         import('@codemirror/lang-javascript'),
       ]);
-    if (token !== renderSeq) return;
+    if (token !== tokenOf(into)) return;
     into.replaceChildren();
     // Chrome follows the app theme via tokens; basicSetup's default highlight stays (§24.1C polish).
     const cmTheme = EditorView.theme({
@@ -137,24 +168,41 @@ export function renderCodeInto(
       }),
     });
     EV = EditorView;
+    mountedViews.set(into, editor); // tracked so the next render into this host disposes it (§20.2)
     // The read-only editor isn't editable-focusable, so make its scroller a keyboard-reachable,
     // labelled scroll region — otherwise there's no way to scroll the code by keyboard (§20.2 a11y).
     editor.scrollDOM.tabIndex = 0;
     editor.scrollDOM.setAttribute('role', 'region');
     editor.scrollDOM.setAttribute('aria-label', 'File contents');
-    editor.scrollDOM.addEventListener('scroll', notify);
+    const sd = editor.scrollDOM;
+    sd.addEventListener('scroll', notify);
+    detachScroll = () => sd.removeEventListener('scroll', notify); // removed in destroy() (§20.2)
     if (pending !== null) {
       reveal(pending);
       pending = null;
     }
     notify(); // the real viewport is only knowable now the editor is laid out
-  })();
+  })().catch(() => {
+    if (token === tokenOf(into)) {
+      into.textContent = body; // degrade to raw text, never an unhandled rejection
+      // The editor never mounted, so the host (not a cm-scroller) is the scroll region — restore
+      // keyboard reachability (the caller set tabIndex=-1 assuming a real editor would own it, §20.2).
+      into.tabIndex = 0;
+    }
+  });
   return {
     revealLine: reveal,
     visibleLines,
     onViewportChange: (listener) => {
       listeners.add(listener);
       return () => listeners.delete(listener);
+    },
+    destroy: () => {
+      bumpToken(into); // a still-in-flight build bails at its token check before it mounts the editor
+      teardownView(into);
+      detachScroll?.(); // drop the scrollDOM listener so no viewport callback fires post-destroy
+      detachScroll = null;
+      listeners.clear();
     },
   };
 }
@@ -174,8 +222,10 @@ function buildChangeExtensions(
   const tintField = s.StateField.define({
     create(state) {
       const b = new s.RangeSetBuilder<DecorationT>();
-      for (let n = 1; n <= state.doc.lines; n++) {
-        if (changed.has(n)) b.add(state.doc.line(n).from, state.doc.line(n).from, Decoration.line({ class: 'cm-changedLine' }));
+      // Iterate the changed line numbers (sorted — RangeSetBuilder needs ascending positions),
+      // not 1..doc.lines, so a few changes in a large file stay O(changes), not O(totalLines).
+      for (const n of [...changed].sort((a, z) => a - z)) {
+        if (n >= 1 && n <= state.doc.lines) b.add(state.doc.line(n).from, state.doc.line(n).from, Decoration.line({ class: 'cm-changedLine' }));
       }
       return b.finish();
     },
@@ -184,8 +234,10 @@ function buildChangeExtensions(
   });
 
   const stripe = new (class extends GutterMarker {
-    toDOM(): Node {
-      const el = document.createElement('div');
+    // Create in the EditorView's own document, not the global one, so the marker is correct if the
+    // viewer is ever mounted in a different Document/iframe (host-document invariant, UI-STANDARDS).
+    toDOM(view: EditorViewT): Node {
+      const el = view.dom.ownerDocument.createElement('div');
       el.className = 'cm-changedGutter';
       return el;
     }
