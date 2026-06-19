@@ -1,12 +1,11 @@
 import { createTerminalPane } from './terminal';
-import { wireSelection } from './selection';
+import { wireSelection, captureToTodo } from './selection';
 import { wireMonitorPane } from './monitor';
 import { createShell } from './shell';
 import { SAMPLE_FLOW, flowLabel, renderFlow, renderRailStatus, createGatePanel } from './flow';
 import { createArtifacts, type Artifacts } from './artifacts';
 import { renderMarkdownInto, renderCodeInto } from './viewerRender';
 import { doInject } from './paneActions';
-import { captureToTodo } from './selection';
 import { createRepoContext } from './repoContext';
 
 const term = createTerminalPane(document.getElementById('terminal')!);
