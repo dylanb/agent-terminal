@@ -770,4 +770,28 @@ describe('manual capture on demand (§21.1 — captureLast, dormant auto-scan)',
     expect(result).not.toBeNull();
     expect(result!.report.text).toContain('FINAL CONCLUSION');
   });
+
+  it('keeps a prose report that ENDS with a command phrase (not a prompt+command echo, §21.1)', async () => {
+    // The echo is "<prompt> <command>" — only a prompt may precede the command. A report whose prose
+    // happens to end with the command (no prompt before it) must NOT be dropped.
+    emitted = [];
+    const report =
+      'FINAL CONCLUSION: the authentication flow looks solid and is well covered; before you merge this branch you should then run npm test';
+    shadow = createShadowModel({ cols: 200, rows: 24, settleMs: SETTLE, quietMs: QUIET, onStatus: () => {} });
+    const scanner = createScanner({
+      reader: shadow.reader,
+      addMarker: (r) => shadow.addMarker(r),
+      adapters: [],
+      baseline: createGenericAdapter(),
+      dedupRetention: 200,
+      reportMinChars: 120,
+      emit: collectingEmit,
+      commandTexts: () => ['npm test'],
+    });
+    shadow.write(report + '\r\n');
+    await sleep(50);
+    const result = scanner.captureLast();
+    expect(result).not.toBeNull();
+    expect(result!.report.text).toContain('FINAL CONCLUSION');
+  });
 });
