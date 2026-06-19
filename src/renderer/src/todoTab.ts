@@ -212,6 +212,7 @@ export function createTodoTab(deps: TodoTabDeps): TodoTab {
   async function commitEdit(t: TodoItem, el?: HTMLElement): Promise<void> {
     const tx = (el ?? rowEl(t.id))?.querySelector<HTMLElement>('.tx');
     const next = (tx?.textContent ?? t.text).trim();
+    if (!next) return; // empty-guard (matches manual add): never persist a blank row; stay in edit
     // The edit targets the list's own repo (t.repoKey), not the live cwd (§16.3).
     let updated: TodoItem[];
     try {

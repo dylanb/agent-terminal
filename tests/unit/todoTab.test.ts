@@ -352,6 +352,18 @@ describe('Todo tab §24.2.1 — edit-in-place', () => {
     expect(monitor.todoUpdate).toHaveBeenCalledWith('/repoA', 'a', 'new text');
   });
 
+  it('Saving an empty/whitespace edit does not persist and keeps the row in edit mode', async () => {
+    wireMonitorPane();
+    await flush();
+    await loadRepo('/repoA', [makeTodo({ id: 'a', text: 'old text' })]);
+    (rows()[0].querySelector('.todo-edit') as HTMLButtonElement).click();
+    (rows()[0].querySelector('.tx') as HTMLElement).textContent = '   ';
+    (rows()[0].querySelector('.todo-save') as HTMLButtonElement).click();
+    await flush();
+    expect(monitor.todoUpdate).not.toHaveBeenCalled();
+    expect((rows()[0].querySelector('.tx') as HTMLElement).contentEditable).toBe('true');
+  });
+
   it('Cancel discards the edit without calling todoUpdate', async () => {
     wireMonitorPane();
     await flush();

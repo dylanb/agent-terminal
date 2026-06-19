@@ -404,9 +404,10 @@ export interface MonitorApi {
   /** The agent's current repo (§16.3), or null before the first OSC 7. Queried on mount
    *  so the pane learns the repo key even when it missed the live `cwd:changed` broadcast. */
   currentRepo(): Promise<RepoInfo | null>;
-  /** Compact command history (§15.5); re-pulled on each monitor:update tick and commandsChanged signal. */
+  /** Compact command history (§15.5), pulled on demand — Capture selection resolves the latest
+   *  command's output to a todo (§16.2). Callers decide when to pull; no polling is implied. */
   commands(): Promise<CommandSummary[]>;
-  /** Mark-driven signal that a command span opened/closed; pane re-pulls history (§15.5). */
+  /** Mark-driven signal that a command span opened/closed (§15.5). */
   onCommandsChanged(cb: () => void): void;
   /** A command's output text, for adding straight to a todo (§16.2); null on unknown/trimmed id. */
   captureCommandText(commandId: string): Promise<CommandCaptureResult | null>;
