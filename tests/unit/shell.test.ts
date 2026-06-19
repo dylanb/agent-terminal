@@ -67,6 +67,13 @@ describe('shell controller (§24.1C — views, hotkeys, docked drawer, theme)', 
       expect(shell.getView()).toBe('2');
     });
 
+    it('syncs the active-view DOM contract on mount (aria-current on the inferred nav button)', () => {
+      // The active view is inferred from the markup `.on`, but aria-current is only applied by
+      // setView — so init must call it once, or assistive tech sees no current page until a switch.
+      expect(navBtn('1').getAttribute('aria-current')).toBe('page');
+      expect(navBtn('2').getAttribute('aria-current')).toBeNull();
+    });
+
     it('switches view on a nav-button click', () => {
       (navBtn('3') as HTMLElement).click();
       expect(pane('3').classList.contains('on')).toBe(true);

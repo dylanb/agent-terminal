@@ -142,6 +142,7 @@ export function createShell(root: HTMLElement, deps: ShellDeps = {}): Shell {
   doc.addEventListener('keydown', onKeyDown, true);
 
   applyTheme(theme);
+  setView(view); // sync the pane/nav classes + aria-current to the markup-inferred view on mount
   if (drawerEl) setShown(drawerEl, isDrawerOpen()); // match the drawer's inert state to its start class
   // A failing IPC / main-process restart must not become an unhandled rejection; on failure
   // keep the default theme.
