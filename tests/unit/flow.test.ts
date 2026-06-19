@@ -7,6 +7,7 @@ import {
   renderRailStatus,
   createGatePanel,
   type FlowState,
+  type FlowStep,
 } from '../../src/renderer/src/flow';
 
 // §24.1 mocked widgets: the flow timeline (§19.2), rail gate/loop status, and the
@@ -54,6 +55,31 @@ describe('flow timeline (§19.2)', () => {
 
   it('labels the active step position', () => {
     expect(flowLabel(fixture().steps)).toBe('step 3 / 4');
+  });
+
+  it('clamps an all-todo flow to step 1 / N (never step 0)', () => {
+    const steps: FlowStep[] = [
+      { name: 'A', status: 'todo' },
+      { name: 'B', status: 'todo' },
+    ];
+    expect(flowLabel(steps)).toBe('step 1 / 2');
+  });
+
+  it('with no active step, points at the next step after the done prefix', () => {
+    const steps: FlowStep[] = [
+      { name: 'A', status: 'done' },
+      { name: 'B', status: 'todo' },
+      { name: 'C', status: 'todo' },
+    ];
+    expect(flowLabel(steps)).toBe('step 2 / 3');
+  });
+
+  it('caps at the last step when every step is done', () => {
+    const steps: FlowStep[] = [
+      { name: 'A', status: 'done' },
+      { name: 'B', status: 'done' },
+    ];
+    expect(flowLabel(steps)).toBe('step 2 / 2');
   });
 });
 

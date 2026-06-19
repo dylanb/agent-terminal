@@ -31,11 +31,14 @@ export const SAMPLE_FLOW: FlowState = {
 
 const pad2 = (n: number): string => String(n).padStart(2, '0');
 
-/** "step N / M" naming the active step's position (§19.2). */
+/** "step N / M" naming the active step's position (§19.2). With no active step, point at the next
+ *  step after the done prefix, clamped to 1..M — so an all-todo flow reads "step 1 / M", not 0. */
 export function flowLabel(steps: FlowStep[]): string {
+  const n = steps.length;
   const active = steps.findIndex((s) => s.status === 'active');
-  const at = active >= 0 ? active + 1 : steps.filter((s) => s.status === 'done').length;
-  return `step ${at} / ${steps.length}`;
+  const done = steps.filter((s) => s.status === 'done').length;
+  const at = n === 0 ? 0 : active >= 0 ? active + 1 : Math.min(done + 1, n);
+  return `step ${at} / ${n}`;
 }
 
 function el(tag: string, className?: string, text?: string): HTMLElement {
