@@ -41,15 +41,19 @@ export function flowLabel(steps: FlowStep[]): string {
   return `step ${at} / ${n}`;
 }
 
-function el(tag: string, className?: string, text?: string): HTMLElement {
-  const node = document.createElement(tag);
+// Build elements from the HOST's document, not the global one, so these widgets are correct if
+// ever mounted in another Document/iframe (host-document invariant, UI-STANDARDS).
+type El = (tag: string, className?: string, text?: string) => HTMLElement;
+const makeEl = (doc: Document): El => (tag, className, text) => {
+  const node = doc.createElement(tag);
   if (className) node.className = className;
   if (text !== undefined) node.textContent = text;
   return node;
-}
+};
 
 /** Vertical flow rail: one `.stn` per step, `.seg` connectors between (not after last). */
 export function renderFlow(host: HTMLElement, steps: FlowStep[]): void {
+  const el = makeEl(host.ownerDocument);
   host.replaceChildren();
   steps.forEach((step, i) => {
     const stn = el('span', `stn ${step.status}`);
@@ -59,7 +63,7 @@ export function renderFlow(host: HTMLElement, steps: FlowStep[]): void {
   });
 }
 
-function statLine(key: string, value: string, valueClass = ''): HTMLElement {
+function statLine(el: El, key: string, value: string, valueClass = ''): HTMLElement {
   const stat = el('span', 'stat');
   stat.append(el('span', 'k', key), el('span', `v ${valueClass}`.trim(), value));
   return stat;
@@ -73,10 +77,11 @@ const GATE_TEXT: Record<GateStatus, string> = {
 
 /** Compact rail status: gate state + a one-line loop summary, from the fixture. */
 export function renderRailStatus(host: HTMLElement, state: FlowState): void {
+  const el = makeEl(host.ownerDocument);
   host.replaceChildren();
   host.append(
-    statLine('Gate', GATE_TEXT[state.gate.status], state.gate.status === 'awaiting' ? 'act' : 'sig'),
-    statLine('Loop', `iter ${pad2(state.loop.iteration)} · ${state.loop.openFindings} open`),
+    statLine(el, 'Gate', GATE_TEXT[state.gate.status], state.gate.status === 'awaiting' ? 'act' : 'sig'),
+    statLine(el, 'Loop', `iter ${pad2(state.loop.iteration)} · ${state.loop.openFindings} open`),
   );
 }
 
@@ -91,6 +96,7 @@ export function createGatePanel(
   state: FlowState,
   handlers: { onAct?: (action: 'approve' | 'changes') => void } = {},
 ): GatePanel {
+  const el = makeEl(host.ownerDocument);
   let status: GateStatus = state.gate.status;
 
   // Before any action the row shows the loop's prior verdict; acting overwrites it.

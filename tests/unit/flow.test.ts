@@ -48,6 +48,15 @@ describe('flow timeline (§19.2)', () => {
     expect(stns[3].classList.contains('todo')).toBe(true);
   });
 
+  it('builds nodes from the host document, not the global one (relocatability invariant)', () => {
+    const otherDoc = document.implementation.createHTMLDocument('other');
+    const otherHost = otherDoc.createElement('div');
+    const globalCreate = vi.spyOn(document, 'createElement');
+    renderFlow(otherHost, fixture().steps);
+    expect(otherHost.querySelector('.stn')).toBeTruthy(); // nodes were built…
+    expect(globalCreate).not.toHaveBeenCalled(); // …via otherDoc, never the global document
+  });
+
   it('puts a connector between stations but not after the last', () => {
     renderFlow(host, fixture().steps);
     expect(host.querySelectorAll('.seg').length).toBe(3);
