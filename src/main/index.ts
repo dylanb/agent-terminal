@@ -47,7 +47,7 @@ import { createCwdTracker } from './cwdTracker';
 import { currentRepoInfo } from './repoKey';
 import { createScanner } from './scanner';
 import { captureLastReport } from './captureLast';
-import { createFlowMachine } from './flow';
+import { createFlowMachine, loadFlowDefinition } from './flow';
 import { discover, readArtifact, emptyTree } from './artifactTree';
 import { createChromeProfileStore } from './chromeProfile';
 import { learnMarkers } from './chrome';
@@ -82,9 +82,10 @@ async function createWindow(): Promise<void> {
   const todoStore = createTodoStore({ maxDoneTodos: config.maxDoneTodos });
   // Learned chrome markers (§15.x) — seeded defaults ∪ the user's "mark as chrome" adds.
   const chromeProfile = createChromeProfileStore(path.join(app.getPath('userData'), 'chrome-profile.json'));
-  // Flow lifecycle (§24.2.2 S1) — in-memory single-step state machine; the step is a
-  // hardcoded constant this slice (S2 sources it from flow.yaml), persistence is S3.
-  const flow = createFlowMachine();
+  // Flow lifecycle (§24.2.2 S2) — in-memory single-step state machine sourced from the
+  // worktree's .agent-terminal/flow.yaml (§18.1); a missing/invalid file is an inert error
+  // state, not a crash. Read at the spawn cwd (§5/§20.1). Persistence is S3.
+  const flow = createFlowMachine(loadFlowDefinition(spawnCwd(process.env, os.homedir())));
 
   const send = <C extends SendChannel>(channel: C, payload: ChannelPayloads[C]): void => {
     if (!win.isDestroyed()) win.webContents.send(channel, payload);

@@ -11,13 +11,15 @@ const STATUS_TEXT: Record<FlowStatus, string> = {
   not_started: 'not started',
   in_progress: 'in progress',
   done: 'done',
+  error: 'error',
 };
 
-/** The control's label per status; null = no control (the step is done). */
+/** The control's label per status; null = no control (the step is done, or failed to load). */
 const CONTROL: Record<FlowStatus, { label: string; act: 'start' | 'advance' } | null> = {
   not_started: { label: 'Start', act: 'start' },
   in_progress: { label: 'Advance', act: 'advance' },
   done: null,
+  error: null,
 };
 
 export interface FlowStrip {
@@ -28,6 +30,17 @@ export interface FlowStrip {
 export function createFlowStrip(host: HTMLElement, deps: FlowApi): FlowStrip {
   function render(state: FlowStateView): void {
     host.replaceChildren();
+
+    // S2: a flow.yaml that is missing/malformed/invalid (§18.1) is an error state, not a
+    // crash — show the reason and no control (there is no step to drive).
+    if (state.status === 'error') {
+      const status = document.createElement('div');
+      status.className = 'flow-status';
+      status.dataset.status = 'error';
+      status.textContent = state.error ?? STATUS_TEXT.error;
+      host.append(status);
+      return;
+    }
 
     const position = document.createElement('div');
     position.className = 'flow-pos';

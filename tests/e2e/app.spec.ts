@@ -1,7 +1,7 @@
 /// <reference lib="dom" />
 // page.evaluate callbacks run in the renderer; DOM lib gives them window.monitor's type.
 import { _electron as electron, expect, test, type ElectronApplication, type Page } from '@playwright/test';
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import '../../src/shared/ipc';
@@ -954,15 +954,27 @@ test('the mocked Review gate renders from the fixture and its Approve stub refle
   await expect(gate).toContainText('approved');
 });
 
-test('the flow status strip drives a manual step from not started to done (§24.2.2 S1)', async () => {
-  // The rail's flow strip is the real single-step lifecycle, driven through window.flow:
-  // launch → not started → Start → in progress → Advance → done, no further control.
+test('the flow strip reads its step from flow.yaml and drives it not started → done (§24.2.2 S2)', async () => {
+  // S2: the step definition is sourced from <worktree>/.agent-terminal/flow.yaml (§18.1),
+  // not a hardcoded constant. Seed a worktree whose flow.yaml names the step, launch the app
+  // there (HOME = spawn cwd, §5/§20.1), and drive the real lifecycle through window.flow.
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-flow-'));
+  mkdirSync(join(home, '.agent-terminal'), { recursive: true });
+  writeFileSync(
+    join(home, '.agent-terminal', 'flow.yaml'),
+    'name: feature-dev\nsteps:\n  - id: groom-ticket\n    kind: manual\n    skill: groom-ticket\n    todo_template: ticket-grooming\n',
+  );
+  await app.close();
+  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
+  page = await app.firstWindow();
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
   const status = page.locator('#flow-strip .flow-status');
   const control = page.locator('#flow-strip .flow-control');
   const position = page.locator('#flow-strip .flow-pos');
 
+  await expect(position).toContainText('groom-ticket'); // the step name comes from the file
   await expect(status).toHaveText('not started');
-  await expect(position).toContainText('1/1');
   await expect(control).toHaveText('Start');
 
   await control.click();
@@ -973,6 +985,23 @@ test('the flow status strip drives a manual step from not started to done (§24.
   await expect(status).toHaveText('done');
   // done is terminal — the control is gone, so a second Advance is impossible.
   await expect(control).toHaveCount(0);
+  rmSync(home, { recursive: true, force: true });
+});
+
+test('a missing flow.yaml surfaces a clear error state in the strip, not a crash (§24.2.2 S2)', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-flow-bad-'));
+  // No .agent-terminal/flow.yaml: the strip must show an error with no control — the rest of
+  // the app still launches (terminal renders), proving the load failure isn't a crash.
+  await app.close();
+  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
+  page = await app.firstWindow();
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  const errored = page.locator('#flow-strip .flow-status[data-status="error"]');
+  await expect(errored).toHaveCount(1);
+  await expect(errored).not.toHaveText('');
+  await expect(page.locator('#flow-strip .flow-control')).toHaveCount(0);
+  rmSync(home, { recursive: true, force: true });
 });
 
 test('the theme toggle flips light/dark and persists across a reload (§16.6)', async () => {

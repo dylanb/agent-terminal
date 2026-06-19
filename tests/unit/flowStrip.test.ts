@@ -65,4 +65,25 @@ describe('flow status strip (§24.2.2 S1)', () => {
     expect(deps.advance).toHaveBeenCalledTimes(1);
     expect(control()).toBeNull();
   });
+
+  it('renders a clear error state (the reason, no control) when the definition failed to load (§24.2.2 S2)', async () => {
+    const deps = {
+      state: vi.fn(
+        async (): Promise<FlowStateView> => ({
+          stepName: '',
+          position: 0,
+          total: 0,
+          status: 'error',
+          error: 'flow.yaml not found',
+        }),
+      ),
+      start: vi.fn(),
+      advance: vi.fn(),
+    };
+    await createFlowStrip(host, deps).refresh();
+    const st = host.querySelector<HTMLElement>('.flow-status')!;
+    expect(st.dataset.status).toBe('error');
+    expect(st.textContent).toContain('flow.yaml not found');
+    expect(control()).toBeNull();
+  });
 });

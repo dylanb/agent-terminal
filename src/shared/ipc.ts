@@ -389,16 +389,21 @@ export interface ViewerReadMsg {
 
 // ---- Flow lifecycle (§18.2 / §24.2.2) ----
 
-/** A manual step's lifecycle: not started, being worked, or completed (terminal) — §18.2. */
-export type FlowStatus = 'not_started' | 'in_progress' | 'done';
+/** A manual step's lifecycle: not started, being worked, or completed (terminal) — §18.2.
+ *  `error` is not a step state but a load failure: the `flow.yaml` (§18.1) was absent,
+ *  malformed, or schema-invalid, so there is no step to drive (§24.2.2 S2). */
+export type FlowStatus = 'not_started' | 'in_progress' | 'done' | 'error';
 
 /** The flow's live view (§22.3 status strip): the current step's name, its 1-based
- *  `position` within `total` steps, and its `status`. S1 has a single step (1/1). */
+ *  `position` within `total` steps, and its `status`. S2 sources the step from
+ *  `<worktree>/.agent-terminal/flow.yaml` (§18.1); on a load failure `status` is
+ *  `error` and `error` carries the human-readable reason (position/total 0). */
 export interface FlowStateView {
   stepName: string;
   position: number;
   total: number;
   status: FlowStatus;
+  error?: string;
 }
 
 /** flow:state/start/advance request — sessionId only; the flow is per-session (§6). */
