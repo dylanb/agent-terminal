@@ -163,6 +163,18 @@ describe('artifact discovery (§20.1 / D8 — real git)', () => {
     rmSync(outside, { recursive: true, force: true });
   });
 
+  it('reads an in-root symlink that targets an in-root file (stat/read via the validated real path)', () => {
+    // The TOCTOU fix stats/reads the resolved real path; a legitimate in-root symlink must still
+    // read its target's content (regression pin for the abs→real switch).
+    writeFileSync(join(plain, 'target.md'), '# real target body');
+    try {
+      symlinkSync(join(plain, 'target.md'), join(plain, 'alias.md'));
+    } catch {
+      return; // platform without symlink permission — skip
+    }
+    expect(readArtifact(plain, 'alias.md')?.body).toBe('# real target body');
+  });
+
   // §20.2: a code file carries the current-file line numbers that differ from HEAD — added or
   // modified lines only (not a diff; deletions leave no current line to mark).
   it('marks added lines of a modified code file by their current-file position', () => {

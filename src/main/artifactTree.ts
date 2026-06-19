@@ -222,9 +222,13 @@ export function readArtifact(cwd: string, relPath: string, deps: DiscoverDeps = 
     const real = realpathSync(abs);
     const realRoot = realpathSync(root);
     if (!pathWithin(realRoot, real)) return null;
-    const st = statSync(abs);
+    // Stat/read the VALIDATED real path, not the original (possibly symlink) abs — otherwise a
+    // target swap between the realpath check and the read could bypass the guard (TOCTOU, §20.2).
+    // ext/name below are pure string ops on the user-navigated path (no fs access → no TOCTOU), and
+    // keeping them on relPath/abs matches the tree label the user clicked.
+    const st = statSync(real);
     if (!st.isFile() || st.size > MAX_FILE_BYTES) return null;
-    const body = readFileSync(abs, 'utf8');
+    const body = readFileSync(real, 'utf8');
     if (body.includes(NUL)) return null; // binary
     const ext = path.extname(abs).toLowerCase();
     const kind: ViewerFileKind = ext === '.md' || ext === '.markdown' ? 'markdown' : 'code';
