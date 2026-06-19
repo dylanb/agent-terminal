@@ -147,7 +147,15 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible { outline:2px so
 .flow.vert .stn { padding:9px 0; }
 .flow.vert .seg { width:2px; height:18px; margin:0 0 0 4px; }
 .flowstrip .flow-control { margin-top:8px; }
+/* On-demand template picker (§4.1) — a select of named templates + an instantiate control, under
+   the primary lifecycle control. */
+.flowstrip .flow-template { margin-top:10px; display:flex; flex-direction:column; gap:6px; align-items:flex-start; }
+.flowstrip .flow-template-pick { font-size:12px; padding:3px 6px; background:var(--card); color:var(--text); border:1px solid var(--hair); border-radius:6px; max-width:100%; }
+.flowstrip .flow-template-add { background:transparent; border:1px solid var(--hair); color:var(--text); font-size:12px; }
+.flowstrip .flow-template-add:hover { border-color:var(--signal); color:var(--signal); }
 .flowstrip .flow-error { font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:12px; color:var(--danger); }
+/* §19.3 busy refusal / one-shot transient notice — caution, not a hard load error (no mockup). */
+.flowstrip .flow-notice { font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:11.5px; color:var(--dim); margin-top:8px; line-height:1.35; }
 
 /* ---- view 1: terminal ---- */
 #terminal-view { display:flex; flex-direction:column; height:100%; background:var(--term-bg); }

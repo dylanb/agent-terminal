@@ -26,8 +26,12 @@ export interface FlowDefinition {
   steps: FlowStepDef[];
 }
 
-/** Result of reading <worktree>/.agent-terminal/flow.yaml: a validated definition or a reason. */
-export type FlowLoad = { ok: true; definition: FlowDefinition } | { ok: false; error: string };
+/** Result of reading <worktree>/.agent-terminal/flow.yaml: a validated definition or a reason.
+ *  On success `flowDir` is the directory that held the flow.yaml — the anchor for resolving the
+ *  step's co-located `todo_template` (§18.6). */
+export type FlowLoad =
+  | { ok: true; definition: FlowDefinition; flowDir: string }
+  | { ok: false; error: string };
 
 const FLOW_REL = path.join('.agent-terminal', 'flow.yaml');
 
@@ -75,7 +79,7 @@ export function loadFlowDefinition(worktreeDir: string): FlowLoad {
     ...(typeof first.skill === 'string' ? { skill: first.skill } : {}),
     ...(typeof first.todo_template === 'string' ? { todoTemplate: first.todo_template } : {}),
   };
-  return { ok: true, definition: { name: doc.name, steps: [step] } };
+  return { ok: true, definition: { name: doc.name, steps: [step] }, flowDir: path.dirname(file) };
 }
 
 /**
@@ -101,10 +105,20 @@ export interface FlowMachine {
   restart(): FlowStateView;
 }
 
+/** Run the step's entry actions on ENTRY (start/restart), returning a one-shot transient notice
+ *  to surface on the transition view — e.g. the §19.3 busy refusal (§24.2.2 S4). */
+export type FlowEnterStep = (step: FlowStepDef) => { notice?: string } | void;
+
 // S3 (§19.1): an optional store backs the machine — its status is restored from disk on
 // construction (so a relaunch resumes) and every transition is persisted. Without a store the
 // machine is in-memory only (the S1/S2 contract), unchanged.
-export function createFlowMachine(load: FlowLoad, store?: FlowStateStore): FlowMachine {
+// S4 (§18.6): an optional onEnter runs the step's entry actions on start/restart and its notice
+// rides the transition view (one-shot; never part of state()).
+export function createFlowMachine(
+  load: FlowLoad,
+  store?: FlowStateStore,
+  onEnter?: FlowEnterStep,
+): FlowMachine {
   if (!load.ok) {
     const view = (): FlowStateView => ({
       stepName: '',
@@ -120,7 +134,8 @@ export function createFlowMachine(load: FlowLoad, store?: FlowStateStore): FlowM
   }
 
   const def = load.definition;
-  const stepId = def.steps[0].id;
+  const step = def.steps[0];
+  const stepId = step.id;
   let status: FlowStatus = 'not_started';
 
   // Resume only progression that belongs to the *current* step: a changed flow.yaml (different
@@ -133,6 +148,7 @@ export function createFlowMachine(load: FlowLoad, store?: FlowStateStore): FlowM
     position: 1,
     total: def.steps.length,
     status,
+    ...(step.todoTemplate ? { templateRef: step.todoTemplate } : {}),
   });
 
   const transition = (from: FlowStatus, to: FlowStatus): FlowStateView => {
@@ -144,12 +160,20 @@ export function createFlowMachine(load: FlowLoad, store?: FlowStateStore): FlowM
     return view();
   };
 
+  // Entry actions fire AFTER the transition is persisted (state committed, then side effects);
+  // the returned notice is merged onto the transition view only.
+  const enter = (v: FlowStateView): FlowStateView => {
+    const r = onEnter?.(step);
+    return r && r.notice ? { ...v, notice: r.notice } : v;
+  };
+
   return {
     state: view,
-    start: () => transition('not_started', 'in_progress'),
+    start: () => enter(transition('not_started', 'in_progress')),
     advance: () => transition('in_progress', 'done'),
-    // Restart resets a completed flow back to its first step, in progress (§24.2.2).
-    restart: () => transition('done', 'in_progress'),
+    // Restart resets a completed flow back to its first step, in progress, re-running its
+    // entry actions (§24.2.2).
+    restart: () => enter(transition('done', 'in_progress')),
   };
 }
 
@@ -172,6 +196,9 @@ export interface FlowManagerDeps {
   globalDir: string;
   loadDefinition?: (localDir: string, globalDir: string) => FlowLoad;
   makeStore?: (repoKey: string) => FlowStateStore;
+  /** Run a step's entry action on entry (start/restart): inject its `skill` (§18.6/§19.3). The
+   *  one-shot notice rides the transition view. (Todo templates instantiate on demand, not here.) */
+  onEnterStep?: FlowEnterStep;
 }
 
 export function createFlowManager(deps: FlowManagerDeps): FlowManager {
@@ -181,7 +208,7 @@ export function createFlowManager(deps: FlowManagerDeps): FlowManager {
   const machineFor = (repoKey: string): FlowMachine => {
     let m = cache.get(repoKey);
     if (!m) {
-      m = createFlowMachine(loadDef(repoKey, deps.globalDir), makeStore(repoKey));
+      m = createFlowMachine(loadDef(repoKey, deps.globalDir), makeStore(repoKey), deps.onEnterStep);
       cache.set(repoKey, m);
     }
     return m;

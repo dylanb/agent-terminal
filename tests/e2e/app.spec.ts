@@ -966,9 +966,55 @@ function seedFlowRepo(prefix: string, stepId: string): string {
   return dir;
 }
 
+// Seed a flow repo with a manual step + MULTIPLE co-located named templates under
+// .agent-terminal/todo-templates/ (each given an H1 title so the picker shows a readable name).
+function seedFlowRepoMultiTemplate(
+  prefix: string,
+  stepId: string,
+  opts: { skill?: string; defaultRef?: string; templates: { ref: string; title: string; items: string[] }[] },
+): string {
+  const dir = mkdtempSync(join(tmpdir(), prefix));
+  mkdirSync(join(dir, '.git'), { recursive: true });
+  const td = join(dir, '.agent-terminal', 'todo-templates');
+  mkdirSync(td, { recursive: true });
+  for (const t of opts.templates) {
+    writeFileSync(join(td, `${t.ref}.md`), `# ${t.title}\n\n` + t.items.map((i) => `- ${i}`).join('\n') + '\n');
+  }
+  let step = `  - id: ${stepId}\n    kind: manual\n`;
+  if (opts.skill) step += `    skill: ${opts.skill}\n`;
+  if (opts.defaultRef) step += `    todo_template: ${opts.defaultRef}\n`;
+  writeFileSync(join(dir, '.agent-terminal', 'flow.yaml'), `name: ${stepId}-flow\nsteps:\n${step}`);
+  return dir;
+}
+
 const flowStation = (i: number) => page.locator('#flow-strip .flow.vert .stn').nth(i);
 const flowStepName = () => flowStation(1).locator('.nm'); // station 1 = the real step
 const flowControl = () => page.locator('#flow-strip .flow-control');
+
+// Seed a flow repo whose manual step declares entry actions (§18.6): an optional `skill` and an
+// optional `todo_template` whose markdown-list items are written to a repo-local file.
+function seedFlowRepoWithEntry(
+  prefix: string,
+  stepId: string,
+  opts: { skill?: string; templateItems?: string[] },
+): string {
+  const dir = mkdtempSync(join(tmpdir(), prefix));
+  mkdirSync(join(dir, '.git'), { recursive: true });
+  mkdirSync(join(dir, '.agent-terminal'), { recursive: true });
+  let step = `  - id: ${stepId}\n    kind: manual\n`;
+  if (opts.skill) step += `    skill: ${opts.skill}\n`;
+  if (opts.templateItems) {
+    // Templates live co-located with flow.yaml under todo-templates/ (§18.6); a bare ref gets `.md`.
+    mkdirSync(join(dir, '.agent-terminal', 'todo-templates'), { recursive: true });
+    writeFileSync(
+      join(dir, '.agent-terminal', 'todo-templates', 'tmpl.md'),
+      opts.templateItems.map((t) => `- ${t}`).join('\n') + '\n',
+    );
+    step += '    todo_template: tmpl\n';
+  }
+  writeFileSync(join(dir, '.agent-terminal', 'flow.yaml'), `name: ${stepId}-flow\nsteps:\n${step}`);
+  return dir;
+}
 
 test('the flow strip follows the cwd: cd into a repo shows its flow and drives it (§24.2.2)', async () => {
   // bash spawns in $HOME (spawnCwd, §5); the flow follows the terminal cwd like todos (§16.3).
@@ -1104,6 +1150,106 @@ test('flow progression persists across a relaunch, per repo (§24.2.2 S3 / §19.
   await launch();
   await expect(flowStation(1)).toHaveClass(/\bactive\b/);
   await expect(flowControl()).toHaveText('Advance');
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+});
+
+test('Start injects the skill on entry; todos come from the template ON DEMAND, not automatically (§4.1/§6/§18.6)', async () => {
+  // Fire: Start (skill injects on entry, no todos), then click "Add todos from template".
+  // Land: the skill invocation is typed into the real PTY on Start; the template todos appear
+  // ONLY after the on-demand control is clicked. Drives the real loop: bash + node-pty.
+  const repo = seedFlowRepoWithEntry('agent-term-e2e-flow-s4-', 'groom-ticket', {
+    skill: 'groomctl',
+    templateItems: ['Groom the ticket scope', 'Confirm acceptance criteria'],
+  });
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-flow-s4-home-'));
+  await app.close();
+  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
+  page = await app.firstWindow();
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await typeCommand(`cd "${repo}"`);
+  await expect(flowStepName()).toHaveText('groom-ticket', { timeout: 10_000 });
+  await expect(flowControl()).toHaveText('Start');
+
+  await flowControl().click();
+  // Skill injected on entry (§18.6).
+  await expect(termRows()).toContainText('/groomctl');
+  // Todos are NOT auto-instantiated — the step is active and offers the on-demand control instead.
+  const groomTodo = page.locator('.todo').filter({ hasText: 'Groom the ticket scope' });
+  const addFromTemplate = page.locator('#flow-strip .flow-template-add');
+  await expect(addFromTemplate).toBeVisible();
+  await expect(groomTodo).toHaveCount(0);
+
+  // Click the on-demand control → the template's items become todos (§21.2).
+  await addFromTemplate.click();
+  await expect(groomTodo).toHaveCount(1, { timeout: 10_000 });
+  await expect(page.locator('.todo').filter({ hasText: 'Confirm acceptance criteria' })).toHaveCount(1);
+
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+});
+
+test('the active step offers a picker of named templates; choosing one instantiates its todos (§4.1/§6)', async () => {
+  // Fire: Start, then choose a template from the picker. Land: the picker lists every co-located
+  // template by its H1 name, defaults to the step's bound template, and instantiating the CHOSEN
+  // one adds only its todos. Drives the real loop (bash + node-pty + the todoTemplate:* channels).
+  const repo = seedFlowRepoMultiTemplate('agent-term-e2e-flow-pick-', 'groom-ticket', {
+    skill: 'groomctl',
+    defaultRef: 'ticket-grooming',
+    templates: [
+      { ref: 'ticket-grooming', title: 'Ticket grooming', items: ['Groom the ticket scope', 'Confirm acceptance criteria'] },
+      { ref: 'pr-review', title: 'PR review checklist', items: ['Check the diff', 'Verify the tests'] },
+    ],
+  });
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-flow-pick-home-'));
+  await app.close();
+  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
+  page = await app.firstWindow();
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await typeCommand(`cd "${repo}"`);
+  await expect(flowStepName()).toHaveText('groom-ticket', { timeout: 10_000 });
+  await flowControl().click(); // Start → step active → picker appears
+
+  const pick = page.locator('#flow-strip .flow-template-pick');
+  await expect(pick).toBeVisible({ timeout: 10_000 });
+  await expect(pick.locator('option')).toHaveText(['PR review checklist', 'Ticket grooming']); // by-ref order, user-facing names
+  await expect(pick).toHaveValue('ticket-grooming'); // defaults to the step's bound template
+
+  await pick.selectOption('pr-review'); // choose a different list
+  await page.locator('#flow-strip .flow-template-add').click();
+  await expect(page.locator('.todo').filter({ hasText: 'Check the diff' })).toHaveCount(1, { timeout: 10_000 });
+  await expect(page.locator('.todo').filter({ hasText: 'Verify the tests' })).toHaveCount(1);
+  // The non-chosen template's items were NOT added.
+  await expect(page.locator('.todo').filter({ hasText: 'Groom the ticket scope' })).toHaveCount(0);
+
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+});
+
+test('Start refuses to inject the skill over a busy shell, showing the refusal (§19.3)', async () => {
+  // Fire: click Start while a foreground process holds the shell off its ready prompt.
+  // Land: the §19.3 refusal notice shows and nothing is injected.
+  const repo = seedFlowRepoWithEntry('agent-term-e2e-flow-s4busy-', 'groom-ticket', { skill: 'groomctl' });
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-flow-s4busy-home-'));
+  await app.close();
+  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
+  page = await app.firstWindow();
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await typeCommand(`cd "${repo}"`);
+  await expect(flowStepName()).toHaveText('groom-ticket', { timeout: 10_000 });
+
+  // `cat` blocks on stdin → a live OSC-133 command span (shell not at a ready prompt). The echo
+  // confirms the command is executing before we fire Start, so the busy probe sees the open span.
+  await typeCommand('echo BUSY_NOW; cat');
+  await expect(termRows()).toContainText('BUSY_NOW');
+
+  await flowControl().click();
+  await expect(page.locator('#flow-strip .flow-notice')).toContainText('busy', { timeout: 10_000 });
+  await expect(termRows()).not.toContainText('/groomctl'); // refused — nothing typed into the PTY
+
   rmSync(repo, { recursive: true, force: true });
   rmSync(home, { recursive: true, force: true });
 });

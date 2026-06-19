@@ -23,6 +23,7 @@ import {
   type RepoInfo,
   type TermApi,
   type TodoItem,
+  type TodoTemplateRef,
   type TodoSource,
   type TodoStatus,
   type UiSettings,
@@ -92,6 +93,10 @@ const flowApi: FlowApi = {
   start: (repoKey) => ipcRenderer.invoke(CH.flowStart, { sessionId: SESSION_ID, repoKey }) as Promise<FlowStateView>,
   advance: (repoKey) => ipcRenderer.invoke(CH.flowAdvance, { sessionId: SESSION_ID, repoKey }) as Promise<FlowStateView>,
   restart: (repoKey) => ipcRenderer.invoke(CH.flowRestart, { sessionId: SESSION_ID, repoKey }) as Promise<FlowStateView>,
+  listTemplates: (repoKey) =>
+    ipcRenderer.invoke(CH.todoTemplateList, { sessionId: SESSION_ID, repoKey }) as Promise<TodoTemplateRef[]>,
+  instantiateTemplate: (repoKey, ref) =>
+    ipcRenderer.invoke(CH.todoTemplateInstantiate, { sessionId: SESSION_ID, repoKey, ref }) as Promise<TodoItem[]>,
 };
 
 contextBridge.exposeInMainWorld('term', termApi);

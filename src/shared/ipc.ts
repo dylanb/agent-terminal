@@ -41,6 +41,8 @@ export const CH = {
   flowStart: 'flow:start',
   flowAdvance: 'flow:advance',
   flowRestart: 'flow:restart',
+  todoTemplateList: 'todoTemplate:list',
+  todoTemplateInstantiate: 'todoTemplate:instantiate',
 } as const;
 
 /** Action-window tabs (§16.1). */
@@ -405,6 +407,13 @@ export interface FlowStateView {
   total: number;
   status: FlowStatus;
   error?: string;
+  /** A one-shot transient notice carried only on a `start`/`restart` response — e.g. the §19.3
+   *  running-process refusal when a skill couldn't be injected over a busy shell (§24.2.2 S4).
+   *  Never part of `state()`: the strip shows it once, then a re-pull clears it. */
+  notice?: string;
+  /** The active step's bound `todo_template:` ref (§18.6), when it declares one — the default the
+   *  on-demand todo-template picker offers while the step is active (§6/§4.1). */
+  templateRef?: string;
 }
 
 /** flow:state/start/advance/restart request. `repoKey` scopes the flow to the terminal's current
@@ -412,6 +421,29 @@ export interface FlowStateView {
 export interface FlowRequestMsg {
   sessionId: SessionId;
   repoKey: string;
+}
+
+/** A discoverable todo template (§4.1/§21.2): `ref` is the instantiate id (filename without
+ *  `.md`); `name` is the user-facing label (its `# H1`, else a humanized filename). */
+export interface TodoTemplateRef {
+  ref: string;
+  name: string;
+}
+
+/** todoTemplate:list request (§6): the templates co-located with the repo's flow.yaml (§18.6).
+ *  `repoKey` resolves the flow dir local-first-then-global (deviates from the v2.27 global-only
+ *  sketch, since templates are now co-located). */
+export interface TodoTemplateListMsg {
+  sessionId: SessionId;
+  repoKey: string;
+}
+
+/** todoTemplate:instantiate request (§6/§21.2): instantiate the named template `ref` (resolved
+ *  co-located with the flow.yaml, §18.6) into `repoKey`'s todo list, returning the fresh list. */
+export interface TodoTemplateInstantiateMsg {
+  sessionId: SessionId;
+  repoKey: string;
+  ref: string;
 }
 
 // ---- Preload-exposed API surfaces (§6) ----
@@ -486,6 +518,12 @@ export interface FlowApi {
   advance(repoKey: string): Promise<FlowStateView>;
   /** done → in_progress; resets and re-runs the first step. Rejects if not currently done. */
   restart(repoKey: string): Promise<FlowStateView>;
+  /** The todo templates co-located with the repo's flow.yaml (§18.6), for the on-demand picker
+   *  (§4.1/§6); each carries a user-facing `name`. */
+  listTemplates(repoKey: string): Promise<TodoTemplateRef[]>;
+  /** Instantiate the named todo template (co-located with the flow.yaml, §18.6) into the repo's
+   *  todo list on demand (§6/§4.1); resolves to the fresh list. */
+  instantiateTemplate(repoKey: string, ref: string): Promise<TodoItem[]>;
 }
 
 declare global {

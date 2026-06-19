@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, it, expect } from 'vitest';
+import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -11,7 +11,7 @@ import { createFlowStateStore } from '../../src/main/flowState';
 // transitions (the machine's internals are free to change). S2 made the step's source a
 // loaded definition; these tests feed a valid one and assert the lifecycle is unchanged.
 
-const LOAD: FlowLoad = { ok: true, definition: { name: 'f', steps: [{ id: 'step-1', kind: 'manual' }] } };
+const LOAD: FlowLoad = { ok: true, definition: { name: 'f', steps: [{ id: 'step-1', kind: 'manual' }] }, flowDir: '/tmp/f/.agent-terminal' };
 
 describe('flow state machine (§24.2.2 S1)', () => {
   it('begins not_started at position 1/1 with a named step', () => {
@@ -83,6 +83,7 @@ describe('flow machine persistence (§24.2.2 S3)', () => {
     const otherDef: FlowLoad = {
       ok: true,
       definition: { name: 'f', steps: [{ id: 'different-step', kind: 'manual' }] },
+      flowDir: '/tmp/f/.agent-terminal',
     };
     expect(createFlowMachine(otherDef, createFlowStateStore(dir)).state().status).toBe('not_started');
   });
@@ -128,5 +129,58 @@ describe('flow machine restart', () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+// §24.2.2 S4 — the machine runs the step's entry actions on ENTRY (start/restart) via an injected
+// `onEnter(step)` callback, and merges any transient notice it returns onto the TRANSITION view
+// only (a one-shot — `state()` never carries it). Entry actions are a property of entering a step,
+// so advancing AWAY from a step does not fire them, and an inert error load never fires them.
+describe('flow machine entry actions (§24.2.2 S4)', () => {
+  it('fires onEnter with the step on start and merges its notice onto the returned view', () => {
+    const onEnter = vi.fn(() => ({ notice: 'busy' }));
+    const flow = createFlowMachine(LOAD, undefined, onEnter);
+    const view = flow.start();
+    expect(onEnter).toHaveBeenCalledWith(LOAD.definition.steps[0]);
+    expect(view.notice).toBe('busy');
+    expect(flow.state().notice).toBeUndefined(); // the notice is one-shot, not part of the state
+  });
+
+  it('fires onEnter on restart (the first step re-runs)', () => {
+    const onEnter = vi.fn(() => ({}));
+    const flow = createFlowMachine(LOAD, undefined, onEnter);
+    flow.start();
+    flow.advance();
+    onEnter.mockClear();
+    flow.restart();
+    expect(onEnter).toHaveBeenCalledWith(LOAD.definition.steps[0]);
+  });
+
+  it('does not fire onEnter on advance (leaving the step is not entering it)', () => {
+    const onEnter = vi.fn(() => ({}));
+    const flow = createFlowMachine(LOAD, undefined, onEnter);
+    flow.start();
+    onEnter.mockClear();
+    const view = flow.advance();
+    expect(onEnter).not.toHaveBeenCalled();
+    expect(view.notice).toBeUndefined();
+  });
+
+  it('never fires onEnter for an inert error load', () => {
+    const onEnter = vi.fn(() => ({}));
+    const flow = createFlowMachine({ ok: false, error: 'no flow.yaml' }, undefined, onEnter);
+    flow.start();
+    flow.restart();
+    expect(onEnter).not.toHaveBeenCalled();
+  });
+
+  it('surfaces the step\'s bound todo_template ref in the view, for the on-demand picker (§6/§4.1)', () => {
+    const templated: FlowLoad = {
+      ok: true,
+      definition: { name: 'f', steps: [{ id: 'groom', kind: 'manual', todoTemplate: 'ticket-grooming' }] },
+      flowDir: '/tmp/f/.agent-terminal',
+    };
+    expect(createFlowMachine(templated).state().templateRef).toBe('ticket-grooming');
+    expect(createFlowMachine(LOAD).state().templateRef).toBeUndefined(); // no binding → no ref
   });
 });

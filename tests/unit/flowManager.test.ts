@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -62,6 +62,16 @@ describe('flow manager (repo-keyed, follows cwd)', () => {
     } finally {
       rmSync(plain, { recursive: true, force: true });
     }
+  });
+
+  it('runs onEnterStep with the step on a start, surfacing its notice (skill injection §18.6/§19.3)', () => {
+    const onEnterStep = vi.fn(() => ({ notice: 'agent is busy' }));
+    const mgr = createFlowManager({ globalDir: home, onEnterStep });
+    const view = mgr.start(a);
+    expect(onEnterStep).toHaveBeenCalledWith(expect.objectContaining({ id: 'alpha-step', kind: 'manual' }));
+    expect(view.notice).toBe('agent is busy');
+    // Reading state afterwards never re-fires entry actions nor carries the one-shot notice.
+    expect(mgr.state(a).notice).toBeUndefined();
   });
 
   it('falls back to the global definition for a repo with no local flow.yaml, state still per-key', () => {

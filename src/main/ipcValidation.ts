@@ -12,6 +12,8 @@ import {
   type DismissAllMsg,
   type DismissMsg,
   type FlowRequestMsg,
+  type TodoTemplateListMsg,
+  type TodoTemplateInstantiateMsg,
   type MonitorCaptureMsg,
   type MonitorLearnChromeMsg,
   type PtyInputMsg,
@@ -107,6 +109,24 @@ export function isValidClearCommands(m: unknown): m is ClearCommandsMsg {
  *  a filesystem path in flowState, so it gets the same safe-path guard as the todo channels. */
 export function isValidFlowRequest(m: unknown): m is FlowRequestMsg {
   return isRecord(m) && isLiveSession(m) && isSafeRepoKey(m.repoKey);
+}
+
+/** todoTemplate:list (§6): a live session + a safe repoKey (the flow dir is resolved from it). */
+export function isValidTemplateList(m: unknown): m is TodoTemplateListMsg {
+  return isRecord(m) && isLiveSession(m) && isSafeRepoKey(m.repoKey);
+}
+
+/** todoTemplate:instantiate (§6/§21.2): a safe repoKey + a non-empty `ref` with no traversal
+ *  (the loader escape-guards too, but reject `..` at the boundary as defense-in-depth). */
+export function isValidTemplateInstantiate(m: unknown): m is TodoTemplateInstantiateMsg {
+  return (
+    isRecord(m) &&
+    isLiveSession(m) &&
+    isSafeRepoKey(m.repoKey) &&
+    typeof m.ref === 'string' &&
+    m.ref.length > 0 &&
+    !m.ref.split(/[/\\]/).includes('..')
+  );
 }
 
 // ---- todo:* validators (§16.3 / §16.4). repoKey is threaded on every mutation. ----

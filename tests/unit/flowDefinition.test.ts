@@ -57,6 +57,13 @@ describe('flow.yaml loader (§24.2.2 S2 / §18.1)', () => {
     }
   });
 
+  it('reports the directory holding the flow.yaml, for resolving co-located templates (§18.6)', () => {
+    writeFlow('name: f\nsteps:\n  - id: do-it\n    kind: manual\n');
+    const load = loadFlowDefinition(dir);
+    expect(load.ok).toBe(true);
+    if (load.ok) expect(load.flowDir).toBe(join(dir, '.agent-terminal'));
+  });
+
   it('reports a clear error when flow.yaml is absent', () => {
     const load = loadFlowDefinition(dir);
     expect(load.ok).toBe(false);
@@ -85,6 +92,7 @@ describe('flow machine sourced from a definition (§24.2.2 S2)', () => {
   const okLoad: FlowLoad = {
     ok: true,
     definition: { name: 'f', steps: [{ id: 'groom-ticket', kind: 'manual' }] },
+    flowDir: '/tmp/f/.agent-terminal',
   };
 
   it('takes its step name from the loaded definition', () => {

@@ -30,6 +30,8 @@ import {
   isValidLearnChrome,
   isValidResize,
   isValidSetSettings,
+  isValidTemplateInstantiate,
+  isValidTemplateList,
   isValidTodoAdd,
   isValidTodoDelete,
   isValidTodoList,
@@ -48,7 +50,9 @@ import { createCwdTracker } from './cwdTracker';
 import { currentRepoInfo } from './repoKey';
 import { createScanner } from './scanner';
 import { captureLastReport } from './captureLast';
-import { createFlowManager } from './flow';
+import { createFlowManager, loadFlowDefinitionLocalFirst } from './flow';
+import { createFlowEntryActions } from './flowEntryActions';
+import { listTodoTemplates, loadTodoTemplateFile, parseTodoTemplate } from './todoTemplate';
 import { discover, readArtifact, emptyTree } from './artifactTree';
 import { createChromeProfileStore } from './chromeProfile';
 import { learnMarkers } from './chrome';
@@ -83,12 +87,6 @@ async function createWindow(): Promise<void> {
   const todoStore = createTodoStore({ maxDoneTodos: config.maxDoneTodos });
   // Learned chrome markers (§15.x) — seeded defaults ∪ the user's "mark as chrome" adds.
   const chromeProfile = createChromeProfileStore(path.join(app.getPath('userData'), 'chrome-profile.json'));
-  // Flow lifecycle (§24.2.2) — repo-keyed so it follows the terminal's cwd, mirroring the todo
-  // scope (§16.3): each repoKey (from the renderer's OSC-7 repo context) lazily owns its machine.
-  // The DEFINITION (flow.yaml, §18.1) resolves local-first then global ($HOME); the STATE
-  // (flow-state.yaml, §19.1) is always repo-local, never global. A missing/invalid definition is
-  // an inert error state, not a crash.
-  const flow = createFlowManager({ globalDir: spawnCwd(process.env, os.homedir()) });
   // A malformed flow request (e.g. before the renderer knows its repo key) fails closed to an
   // inert error view rather than throwing across IPC.
   const flowRequestError = (): FlowStateView => ({
@@ -183,6 +181,40 @@ async function createWindow(): Promise<void> {
     isBracketedPaste: () => shadow.isBracketedPaste(),
     onInject: () => suppressor.noteInjection(),
   });
+
+  // Flow lifecycle (§24.2.2) — repo-keyed so it follows the terminal's cwd, mirroring the todo
+  // scope (§16.3): each repoKey (from the renderer's OSC-7 repo context) lazily owns its machine.
+  // The DEFINITION (flow.yaml, §18.1) resolves local-first then global ($HOME); the STATE
+  // (flow-state.yaml, §19.1) is always repo-local, never global. A missing/invalid definition is
+  // an inert error state, not a crash.
+  // §18.6/§19.3: on entry to a manual step (Start/Restart) the only automatic action is injecting
+  // the step's `skill` — refused over a busy shell (a live OSC-133 command span = not at a ready
+  // prompt, §19.3). Todo templates instantiate ON DEMAND via the todoTemplate:* picker (§6/§4.1),
+  // not on entry. Built here, after the injector + command tracker exist.
+  const flowEntryActions = createFlowEntryActions({
+    isShellBusy: () => tracker.summaries().some((s) => s.running),
+    inject: (text) => inject(text, { submit: false }),
+  });
+  // Templates resolve co-located with the flow.yaml (§18.6); this is the same global ($HOME)
+  // fallback dir the definition uses, so on-demand instantiation finds a global flow's templates.
+  const flowGlobalDir = spawnCwd(process.env, os.homedir());
+  const flow = createFlowManager({
+    globalDir: flowGlobalDir,
+    onEnterStep: (step) => flowEntryActions(step),
+  });
+  // todoTemplate:instantiate (§6/§4.1) — on demand, instantiate a named template (co-located with
+  // the flow.yaml under todo-templates/, §18.6) into the visited repo's todo list. Resolves the
+  // flow dir local-first-then-global so a global flow's templates work in any repo; a missing
+  // flow/template is a no-op returning the unchanged list.
+  const instantiateTemplate = (repoKey: string, ref: string): ReturnType<typeof todoStore.list> => {
+    const load = loadFlowDefinitionLocalFirst(repoKey, flowGlobalDir);
+    if (!load.ok) return todoStore.list(repoKey);
+    const md = loadTodoTemplateFile(path.join(load.flowDir, 'todo-templates'), ref);
+    if (md === null) return todoStore.list(repoKey);
+    let list = todoStore.list(repoKey);
+    for (const text of parseTodoTemplate(md)) list = todoStore.add(repoKey, text);
+    return list;
+  };
 
   // Flow A (§4): every output byte goes to the renderer AND the shadow tee.
   ptyProcess.onData((data) => {
@@ -282,6 +314,15 @@ async function createWindow(): Promise<void> {
       [CH.flowStart]: (_e, m) => (isValidFlowRequest(m) ? flow.start(m.repoKey) : flowRequestError()),
       [CH.flowAdvance]: (_e, m) => (isValidFlowRequest(m) ? flow.advance(m.repoKey) : flowRequestError()),
       [CH.flowRestart]: (_e, m) => (isValidFlowRequest(m) ? flow.restart(m.repoKey) : flowRequestError()),
+      // On-demand template picker (§6/§4.1): list the repo's co-located templates, and instantiate
+      // a chosen one. Both fail-closed to [] on a malformed payload or absent flow/templates.
+      [CH.todoTemplateList]: (_e, m) => {
+        if (!isValidTemplateList(m)) return [];
+        const load = loadFlowDefinitionLocalFirst(m.repoKey, flowGlobalDir);
+        return load.ok ? listTodoTemplates(path.join(load.flowDir, 'todo-templates')) : [];
+      },
+      [CH.todoTemplateInstantiate]: (_e, m) =>
+        isValidTemplateInstantiate(m) ? instantiateTemplate(m.repoKey, m.ref) : [],
     },
   );
 
