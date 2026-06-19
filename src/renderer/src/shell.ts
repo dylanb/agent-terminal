@@ -93,7 +93,9 @@ export function createShell(root: HTMLElement, deps: ShellDeps = {}): Shell {
       el.textContent = t === 'dark' ? 'Dark' : 'Light';
     });
   }
+  let themeUserSet = false; // a user toggle must not be clobbered by a late persisted getTheme (§16.6)
   function setTheme(t: Theme): void {
+    themeUserSet = true;
     applyTheme(t);
     deps.setTheme?.(t);
   }
@@ -146,7 +148,11 @@ export function createShell(root: HTMLElement, deps: ShellDeps = {}): Shell {
   if (drawerEl) setShown(drawerEl, isDrawerOpen()); // match the drawer's inert state to its start class
   // A failing IPC / main-process restart must not become an unhandled rejection; on failure
   // keep the default theme.
-  if (deps.getTheme) void deps.getTheme().then(applyTheme).catch(() => {});
+  if (deps.getTheme)
+    void deps
+      .getTheme()
+      .then((t) => { if (!themeUserSet) applyTheme(t); }) // skip if the user already chose a theme
+      .catch(() => {});
 
   return {
     setView,

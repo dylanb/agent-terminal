@@ -135,7 +135,7 @@ export function createGatePanel(
   };
   loop.append(
     row('iteration', pad2(state.loop.iteration)),
-    row('severity cycle', state.loop.severity, true),
+    row('severity cycle', state.loop.severity, /^(high|critical)$/i.test(state.loop.severity)),
     row('open findings', String(state.loop.openFindings)),
   );
   const verdictRow = el('div', 'lrow');

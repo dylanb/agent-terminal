@@ -122,6 +122,20 @@ describe('view-3 gate panel (§19.3 — clickable, stubbed)', () => {
     expect(host.textContent).toContain('changes requested');
   });
 
+  it('marks the severity row "bad" only for high/critical severity, reflecting the data', () => {
+    const sevLv = (h: HTMLElement): HTMLElement => {
+      const r = [...h.querySelectorAll('.lrow')].find((x) => x.querySelector('.lk')?.textContent === 'severity cycle')!;
+      return r.querySelector('.lv') as HTMLElement;
+    };
+    const high = document.createElement('div');
+    createGatePanel(high, fixture({ loop: { iteration: 1, severity: 'high', openFindings: 0, lastVerdict: 'x' } }));
+    expect(sevLv(high).classList.contains('bad')).toBe(true);
+
+    const low = document.createElement('div');
+    createGatePanel(low, fixture({ loop: { iteration: 1, severity: 'low', openFindings: 0, lastVerdict: 'x' } }));
+    expect(sevLv(low).classList.contains('bad')).toBe(false);
+  });
+
   it('renders "Open report" disabled (a Phase-1 stub with no behavior must not look actionable)', () => {
     createGatePanel(host, fixture());
     const open = Array.from(host.querySelectorAll('button')).find((b) => b.textContent === 'Open report');

@@ -188,6 +188,16 @@ describe('shell controller (§24.1C — views, hotkeys, docked drawer, theme)', 
       expect(shell.getTheme()).toBe('dark');
     });
 
+    it('a user theme toggle before the persisted getTheme resolves is not overwritten', async () => {
+      let resolveTheme: (t: 'light' | 'dark') => void = () => {};
+      shell = createShell(app, { getTheme: () => new Promise((res) => (resolveTheme = res)) });
+      shell.setTheme('dark'); // user toggles before the persisted value arrives
+      resolveTheme('light'); // late persisted value must NOT clobber the user's choice
+      await flush();
+      expect(document.documentElement.getAttribute('data-theme')).toBe('dark');
+      expect(shell.getTheme()).toBe('dark');
+    });
+
     it('a rejected getTheme() is handled (no unhandled rejection) and keeps the default theme', async () => {
       // A failing IPC / main-process restart must not become an unhandled rejection in the
       // renderer; vitest fails the run on one, so this passes only if the catch is present.
