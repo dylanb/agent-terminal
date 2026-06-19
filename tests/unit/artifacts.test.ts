@@ -585,6 +585,23 @@ describe('artifact viewer (§20.1/§20.2 — real discovery)', () => {
     expect(v.body().tabIndex).toBe(-1);
   });
 
+  it('reflects the selected file to assistive tech via aria-selected (single-select tree)', async () => {
+    const v = mount();
+    await v.api.refresh(); // opens the first file
+    const selected = v.fileRows().filter((r) => r.getAttribute('aria-selected') === 'true');
+    expect(selected).toHaveLength(1);
+    expect(selected[0].classList.contains('sel')).toBe(true);
+    expect(v.fileRows().every((r) => r.hasAttribute('aria-selected'))).toBe(true);
+  });
+
+  it('wraps directory children in a role="group" container (ARIA tree hierarchy)', async () => {
+    const v = mount();
+    await v.api.refresh();
+    const group = v.host.querySelector('.dchildren');
+    expect(group).toBeTruthy();
+    expect(group!.getAttribute('role')).toBe('group');
+  });
+
   it('directory headers expose aria-expanded and sync it on click toggle', async () => {
     const v = mount();
     await v.api.refresh();

@@ -378,6 +378,7 @@ export function createArtifacts(host: HTMLElement, deps: ArtifactsDeps): Artifac
         head.tabIndex = -1;
         head.addEventListener('click', () => setDirCollapsed(dir, head, !dir.classList.contains('collapsed')));
         const children = el('div', 'dchildren');
+        children.setAttribute('role', 'group'); // ARIA tree: a dir treeitem owns a group of children
         renderNodes(node.children ?? [], children);
         dir.append(head, children);
         into.appendChild(dir);
@@ -386,6 +387,7 @@ export function createArtifacts(host: HTMLElement, deps: ArtifactsDeps): Artifac
         row.dataset.rel = node.relPath;
         row.title = node.relPath; // full path on hover, since the name truncates (§20.2)
         row.setAttribute('role', 'treeitem');
+        row.setAttribute('aria-selected', 'false'); // single-select; the open file flips to true
         row.tabIndex = -1;
         row.append(el('span', 'ic', node.relPath.endsWith('.md') ? 'md' : 'ƒ'), el('span', 'fn', node.name));
         for (const p of node.provenance ?? []) row.appendChild(el('span', `tag tag-${p}`, PROV_LABEL[p] ?? p));
@@ -467,15 +469,24 @@ export function createArtifacts(host: HTMLElement, deps: ArtifactsDeps): Artifac
     fileRows.clear();
     list.replaceChildren();
     renderNodes(q ? filterNodes(treeNodes, q) : treeNodes, list);
-    if (current) fileRows.get(current)?.classList.add('sel');
+    if (current) setSelectedRow(current);
     const firstItem = visibleItems()[0]; // one row carries tabindex=0 so the tree is reachable
     if (firstItem) firstItem.tabIndex = 0;
+  }
+
+  // Reflect single-select state both visually (.sel) and to assistive tech (aria-selected, §20.2).
+  function setSelectedRow(relPath: string): void {
+    for (const [rel, row] of fileRows) {
+      const on = rel === relPath;
+      row.classList.toggle('sel', on);
+      row.setAttribute('aria-selected', String(on));
+    }
   }
 
   async function open(relPath: string): Promise<void> {
     current = relPath;
     lastSelection = '';
-    for (const [rel, row] of fileRows) row.classList.toggle('sel', rel === relPath);
+    setSelectedRow(relPath);
     // An IPC failure (e.g. main restart) reads as an unreadable file, not an unhandled
     // rejection — the `if (!file)` path below renders the "Cannot display" state (§20.2).
     let file: ViewerFile | null;
