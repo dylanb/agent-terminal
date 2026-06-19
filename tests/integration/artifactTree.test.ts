@@ -3,8 +3,27 @@ import { execFileSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { discover, readArtifact, emptyTree } from '../../src/main/artifactTree';
+import { discover, readArtifact, emptyTree, pathWithin } from '../../src/main/artifactTree';
 import type { ArtifactNode } from '../../src/shared/ipc';
+
+// The path-escape guard (§20.2), as a pure function so the filesystem-root edge case is testable
+// without reading the real root. path.relative-based, so root='/' (where `root + sep` is '//') and
+// Windows cross-drive paths are handled correctly.
+describe('pathWithin — escape guard', () => {
+  it('accepts the root itself and paths under it', () => {
+    expect(pathWithin('/repo', '/repo')).toBe(true);
+    expect(pathWithin('/repo', '/repo/src/a.ts')).toBe(true);
+  });
+  it('rejects siblings and parent escapes', () => {
+    expect(pathWithin('/repo', '/other')).toBe(false);
+    expect(pathWithin('/repo', '/repo-2/a.ts')).toBe(false);
+    expect(pathWithin('/repo/src', '/repo/secret')).toBe(false);
+  });
+  it('handles the filesystem root without the // double-separator bug', () => {
+    expect(pathWithin('/', '/etc')).toBe(true);
+    expect(pathWithin('/', '/')).toBe(true);
+  });
+});
 
 // Real git, real filesystem — no mocks (CLAUDE.md). Discovery (§20.1) is exercised against a
 // temp repo we build with actual git commands, mirroring how scanner tests drive a real shadow.

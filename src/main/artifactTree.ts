@@ -197,19 +197,28 @@ function changedLinesOf(root: string, rel: string, body: string, git: (args: str
   }
 }
 
+/** True if `target` is `base` or lives under it (§20.2 escape guard). path.relative-based, so the
+ *  filesystem root (`base === '/'`, where `base + sep` would be '//') and Windows cross-drive paths
+ *  resolve correctly — a startsWith(base + sep) check mishandles both. */
+export function pathWithin(base: string, target: string): boolean {
+  if (target === base) return true;
+  const rel = path.relative(base, target);
+  return rel !== '' && !rel.startsWith('..') && !path.isAbsolute(rel);
+}
+
 export function readArtifact(cwd: string, relPath: string, deps: DiscoverDeps = {}): ViewerFile | null {
   const git = deps.git ?? defaultGit;
   const gitRoot = gitRootOf(cwd, git);
   const root = gitRoot ?? path.resolve(cwd);
   const abs = path.resolve(root, relPath);
   // Escape guard: the resolved path must stay within the discovery root (§20.2).
-  if (abs !== root && !abs.startsWith(root + path.sep)) return null;
+  if (!pathWithin(root, abs)) return null;
   try {
     // Resolve symlinks too: an in-root link pointing outside passes the lexical guard above,
     // so re-check the real path against the real root before reading (§20.2).
     const real = realpathSync(abs);
     const realRoot = realpathSync(root);
-    if (real !== realRoot && !real.startsWith(realRoot + path.sep)) return null;
+    if (!pathWithin(realRoot, real)) return null;
     const st = statSync(abs);
     if (!st.isFile() || st.size > MAX_FILE_BYTES) return null;
     const body = readFileSync(abs, 'utf8');
