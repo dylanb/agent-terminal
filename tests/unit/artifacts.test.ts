@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { createArtifacts } from '../../src/renderer/src/artifacts';
+import { createArtifacts, selectionWithin } from '../../src/renderer/src/artifacts';
 import type { ArtifactTree, ViewerFile } from '../../src/shared/ipc';
 
 // §20.1/§20.2 artifact viewer organism: a hierarchical file tree fed by real discovery
@@ -417,6 +417,25 @@ describe('artifact viewer (§20.1/§20.2 — real discovery)', () => {
     v.search().value = '';
     v.search().dispatchEvent(new Event('input'));
     expect(v.fileRows().length).toBeGreaterThan(1);
+  });
+
+  it('selectionWithin preserves raw formatting (code indentation/newlines) but empties whitespace-only', () => {
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const sel = document.getSelection()!;
+    const range = document.createRange();
+
+    host.textContent = '    indented line\n';
+    range.selectNodeContents(host);
+    sel.removeAllRanges();
+    sel.addRange(range);
+    expect(selectionWithin(host)).toBe('    indented line\n'); // not trimmed
+
+    host.textContent = '   \n  ';
+    range.selectNodeContents(host);
+    sel.removeAllRanges();
+    sel.addRange(range);
+    expect(selectionWithin(host)).toBe(''); // whitespace-only → empty
   });
 
   it('Send to agent and Add to todo route the viewer selection to the sinks', async () => {

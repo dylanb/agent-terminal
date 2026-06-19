@@ -80,12 +80,15 @@ const plainInto = (body: string, into: HTMLElement): void => {
 };
 
 /** Selection text constrained to the viewer subtree, empty when the selection lies outside it. */
-function selectionWithin(viewer: HTMLElement): string {
+export function selectionWithin(viewer: HTMLElement): string {
   const sel = viewer.ownerDocument.getSelection();
   if (!sel || sel.isCollapsed || sel.rangeCount === 0) return '';
   const within = (n: Node | null): boolean => !!n && (n === viewer || viewer.contains(n));
   if (!within(sel.anchorNode) || !within(sel.focusNode)) return '';
-  return sel.toString().trim();
+  // Return the RAW selection so code indentation/trailing newlines survive (§16.2); only collapse a
+  // whitespace-only selection to empty (the disabled-until-highlight guard relies on that).
+  const text = sel.toString();
+  return text.trim() === '' ? '' : text;
 }
 
 /** First file (depth-first) in the tree, or null when there are none. */
