@@ -499,10 +499,11 @@ export function createArtifacts(host: HTMLElement, deps: ArtifactsDeps): Artifac
     unsubViewport = null;
     codeView = null;
     if (file.kind === 'code') {
-      // The editor owns its own scroller (cm-scroller, focusable in viewerRender) — so the body
-      // steps out of the tab order to avoid a dead, unscrollable stop (§20.2 a11y).
-      body.tabIndex = -1;
       codeView = renderCode(file.body, file.lang, body, file.changedLines) ?? null;
+      // A real editor owns its own focusable scroller (cm-scroller), so the body steps out of the
+      // tab order to avoid a dead stop; but the plain-text fallback (no CodeView) makes the body
+      // itself the scroll container, so it must stay keyboard-reachable (§20.2 a11y).
+      body.tabIndex = codeView ? -1 : 0;
       sections = changedSections(file.changedLines);
       if (codeView) unsubViewport = codeView.onViewportChange(updateNav);
     } else {

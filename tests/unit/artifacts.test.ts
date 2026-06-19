@@ -161,11 +161,9 @@ describe('artifact viewer (§20.1/§20.2 — real discovery)', () => {
     expect(body.getAttribute('aria-label')).toContain('review.md');
   });
 
-  it('defers focus to the editor scroller (body not a tab stop) for code files', async () => {
-    const v = mount();
-    await v.api.refresh(); // opens src/a.ts (code)
-    expect(v.body().tabIndex).toBe(-1);
-  });
+  // (body-tab-stop behavior for code files is covered by the renderCode-fallback vs editor-scroller
+  // pair below — a real editor owns its scroller so the body leaves the tab order; the plain
+  // fallback keeps the body focusable.)
 
   // Tweak 2: contiguous changed lines collapse into sections; the readout and prev/next are
   // derived from the live viewport — current = the last section scrolled onto/past the screen,
@@ -572,6 +570,19 @@ describe('artifact viewer (§20.1/§20.2 — real discovery)', () => {
     document.dispatchEvent(mouse('mouseup', 300));
     expect(v.width()).toBe('300px');
     expect(onWidthChange).toHaveBeenCalledWith(300);
+  });
+
+  it('keeps the viewer body keyboard-focusable for code when renderCode has no editor (plain fallback)', async () => {
+    const v = mount(); // default renderCode returns void → the body itself is the scroll container
+    await v.api.refresh(); // opens the first (code) file
+    expect(v.body().tabIndex).toBe(0);
+  });
+
+  it('removes the body from the tab order for code when the editor owns its scroller', async () => {
+    const cv = fakeCodeView(1, 20);
+    const v = mount(undefined, { renderCode: vi.fn(() => cv) });
+    await v.api.refresh();
+    expect(v.body().tabIndex).toBe(-1);
   });
 
   it('directory headers expose aria-expanded and sync it on click toggle', async () => {
