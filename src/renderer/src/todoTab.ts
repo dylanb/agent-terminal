@@ -59,6 +59,7 @@ function provenanceText(source: TodoSource | undefined): string {
 
 export function createTodoTab(deps: TodoTabDeps): TodoTab {
   const { todoListEl, todoCountEl, monitor, doInject } = deps;
+  const doc = todoListEl.ownerDocument;
   let currentRepoKey: string | null = null;
   let todos: TodoItem[] = [];
   // A repo swap is blocked while a todo edit is open (§16.3); the pending key is applied
@@ -135,7 +136,7 @@ export function createTodoTab(deps: TodoTabDeps): TodoTab {
   }
 
   function actionButton(cls: string, label: string, ariaLabel: string, onClick: () => void): HTMLButtonElement {
-    const b = document.createElement('button');
+    const b = doc.createElement('button');
     b.className = cls;
     b.textContent = label;
     b.setAttribute('aria-label', ariaLabel);
@@ -173,7 +174,7 @@ export function createTodoTab(deps: TodoTabDeps): TodoTab {
   }
 
   function renderActions(t: TodoItem, ordered: TodoItem[]): HTMLElement {
-    const actions = document.createElement('div');
+    const actions = doc.createElement('div');
     actions.className = 'todo-actions';
 
     // Editing: the `.tx` is contenteditable in place; the cluster is Save/Cancel only.
@@ -221,7 +222,7 @@ export function createTodoTab(deps: TodoTabDeps): TodoTab {
   /** Two-step delete confirmation, stacked BELOW the action cluster (a full-width row) so showing
    *  it never changes the cluster's width — the row just grows a line (§16.4, operator decision). */
   function renderDeleteBar(t: TodoItem): HTMLElement {
-    const bar = document.createElement('div');
+    const bar = doc.createElement('div');
     bar.className = 'todo-delete-bar';
     bar.append(
       actionButton('todo-delete-confirm pill sm', 'Confirm delete?', 'Confirm delete', () => beginPendingDelete(t)),
@@ -262,10 +263,10 @@ export function createTodoTab(deps: TodoTabDeps): TodoTab {
 
   // A confirmed-but-not-yet-committed delete: the row is an Undo affordance for the window.
   function renderPendingDelete(t: TodoItem): HTMLElement {
-    const row = document.createElement('div');
+    const row = doc.createElement('div');
     row.className = 'todo pending-delete';
     row.dataset.todoId = t.id;
-    const note = document.createElement('span');
+    const note = doc.createElement('span');
     note.className = 'deleted-note';
     note.textContent = 'Deleted';
     const undo = actionButton('todo-undo linkbtn', 'Undo', 'Undo delete', () => cancelPendingDelete(t.id));
@@ -299,12 +300,12 @@ export function createTodoTab(deps: TodoTabDeps): TodoTab {
     if (pendingDelete.has(t.id)) return renderPendingDelete(t);
 
     const done = t.status === 'done';
-    const row = document.createElement('div');
+    const row = doc.createElement('div');
     row.className = `todo${done ? ' done' : ''}${t.status === 'in_progress' ? ' in-progress' : ''}`;
     row.dataset.todoId = t.id;
     row.draggable = isOutstanding(t) && editingId === null;
 
-    const chk = document.createElement('button');
+    const chk = doc.createElement('button');
     chk.className = 'chk';
     chk.setAttribute('role', 'checkbox');
     // Tri-state (§16.3): done → true, in_progress → mixed, active → false.
@@ -318,9 +319,9 @@ export function createTodoTab(deps: TodoTabDeps): TodoTab {
       }
     });
 
-    const body = document.createElement('div');
+    const body = doc.createElement('div');
     body.className = 'body';
-    const tx = document.createElement('div');
+    const tx = doc.createElement('div');
     tx.className = 'tx';
     tx.textContent = t.text;
     if (t.id === editingId) {
@@ -343,7 +344,7 @@ export function createTodoTab(deps: TodoTabDeps): TodoTab {
         }
       });
     }
-    const src = document.createElement('div');
+    const src = doc.createElement('div');
     src.className = 'src';
     src.textContent = provenanceText(t.source);
     body.append(tx, src);
@@ -360,19 +361,19 @@ export function createTodoTab(deps: TodoTabDeps): TodoTab {
   function renderTemplatePicker(): void {
     if (templates.length === 0) return;
 
-    const wrap = document.createElement('div');
+    const wrap = doc.createElement('div');
     wrap.className = `todo-tmpl${templateOpen ? ' open' : ''}`;
 
-    const toggle = document.createElement('button');
+    const toggle = doc.createElement('button');
     toggle.className = 'tmpl-toggle linkbtn';
     toggle.setAttribute('aria-expanded', String(templateOpen));
     toggle.setAttribute('aria-controls', 'todo-tmpl-picker');
     toggle.setAttribute('aria-label', 'Add todos from a template');
-    const car = document.createElement('span');
+    const car = doc.createElement('span');
     car.className = 'car';
     car.setAttribute('aria-hidden', 'true');
     car.textContent = '▾';
-    toggle.append(document.createTextNode('From template '), car);
+    toggle.append(doc.createTextNode('From template '), car);
     toggle.addEventListener('click', () => {
       templateOpen = !templateOpen;
       focusAfterRender = () =>
@@ -382,7 +383,7 @@ export function createTodoTab(deps: TodoTabDeps): TodoTab {
     wrap.append(toggle);
 
     if (templateOpen) {
-      const group = document.createElement('div');
+      const group = doc.createElement('div');
       group.className = 'tmpl-picker';
       group.id = 'todo-tmpl-picker';
       group.setAttribute('role', 'group');
@@ -396,11 +397,11 @@ export function createTodoTab(deps: TodoTabDeps): TodoTab {
         renderTodos();
       });
 
-      const select = document.createElement('select');
+      const select = doc.createElement('select');
       select.className = 'tmpl-pick';
       select.setAttribute('aria-label', 'Todo template');
       for (const t of templates) {
-        const opt = document.createElement('option');
+        const opt = doc.createElement('option');
         opt.value = t.ref;
         opt.textContent = t.name;
         select.append(opt);
@@ -409,7 +410,7 @@ export function createTodoTab(deps: TodoTabDeps): TodoTab {
       if (sel && templates.some((t) => t.ref === sel)) select.value = sel;
       select.addEventListener('change', () => (templateSelected = select.value));
 
-      const add = document.createElement('button');
+      const add = doc.createElement('button');
       add.className = 'tmpl-add pill sm signal';
       add.textContent = 'Add todos';
       add.addEventListener('click', () => {
@@ -437,22 +438,22 @@ export function createTodoTab(deps: TodoTabDeps): TodoTab {
     todoListEl.replaceChildren();
 
     if (pendingRepoKey !== null) {
-      const notice = document.createElement('div');
+      const notice = doc.createElement('div');
       notice.className = 'swap-blocked';
       notice.textContent = 'Directory changed — save or cancel this edit to switch todo lists.';
       todoListEl.appendChild(notice);
     }
 
     // Manual add (§16.4): a hand-write row → todoAdd {type:'manual'}.
-    const addRow = document.createElement('div');
+    const addRow = doc.createElement('div');
     addRow.className = 'todo-add';
-    const input = document.createElement('textarea');
+    const input = doc.createElement('textarea');
     input.id = 'todo-new';
     input.className = 'todo-new';
     input.rows = 1;
     input.setAttribute('aria-label', 'New todo');
     input.placeholder = 'Add a todo…';
-    const addBtn = document.createElement('button');
+    const addBtn = doc.createElement('button');
     addBtn.id = 'todo-add-btn';
     addBtn.className = 'pill sm signal';
     addBtn.textContent = 'Add';
@@ -480,7 +481,7 @@ export function createTodoTab(deps: TodoTabDeps): TodoTab {
 
     renderTemplatePicker();
 
-    const list = document.createElement('div');
+    const list = doc.createElement('div');
     list.className = 'todos';
     // One flat list in stored order; done rows render inline (dimmed), not in a section.
     const ordered = [...todos].sort((a, b) => a.order - b.order);

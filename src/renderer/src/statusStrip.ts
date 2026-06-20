@@ -19,6 +19,7 @@ export interface StatusStrip {
 }
 
 export function createStatusStrip(statusEl: HTMLElement, now: () => number = Date.now): StatusStrip {
+  const doc = statusEl.ownerDocument;
   let last: MonitorUpdateMsg | null = null;
   let alive = true;
   let quietCounterEl: HTMLElement | null = null;
@@ -41,12 +42,12 @@ export function createStatusStrip(statusEl: HTMLElement, now: () => number = Dat
       ['paste mode', last?.bracketedPaste ? 'on' : 'off', !!last?.bracketedPaste],
     ];
     for (const [label, value, on] of items) {
-      const chip = document.createElement('span');
+      const chip = doc.createElement('span');
       chip.className = `status-chip${on ? ' on' : ''}`;
       chip.dataset.status = label;
       chip.textContent = `${label}: ${value}`;
       if (label === 'agent' && state === 'quiet') {
-        quietCounterEl = document.createElement('span');
+        quietCounterEl = doc.createElement('span');
         quietCounterEl.className = 'quiet-counter';
         quietCounterEl.setAttribute('aria-hidden', 'true');
         chip.appendChild(quietCounterEl);

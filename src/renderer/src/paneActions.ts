@@ -64,12 +64,3 @@ export const doInject: DoInject = (text, submit) => {
   window.monitor.inject({ text, submit });
   if (!submit) requestTerminalFocus();
 };
-
-export function dismissButton(label: string, onClick: () => void): HTMLButtonElement {
-  const btn = document.createElement('button');
-  btn.className = 'dismiss';
-  btn.textContent = '×';
-  btn.setAttribute('aria-label', label);
-  btn.addEventListener('click', onClick);
-  return btn;
-}

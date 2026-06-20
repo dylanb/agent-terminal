@@ -51,14 +51,15 @@ export interface FlowStrip {
   onRepoChanged(repoKey: string | null): void;
 }
 
-function header(text: string): HTMLElement {
-  const sect = document.createElement('div');
+function header(doc: Document, text: string): HTMLElement {
+  const sect = doc.createElement('div');
   sect.className = 'sect';
   sect.textContent = text;
   return sect;
 }
 
 export function createFlowStrip(host: HTMLElement, deps: FlowApi): FlowStrip {
+  const doc = host.ownerDocument;
   let repoKey: string | null = null;
 
   const runAct = (act: Act, key: string): Promise<FlowStateView> =>
@@ -74,7 +75,7 @@ export function createFlowStrip(host: HTMLElement, deps: FlowApi): FlowStrip {
    *  double-click can't fire it twice (the machine would reject the second anyway — §24.2.2 — but
    *  this keeps the UI honest), then re-renders from the returned state. `cls` is `undo`/`advance`/… */
   function controlButton(label: string, act: Act): HTMLButtonElement {
-    const button = document.createElement('button');
+    const button = doc.createElement('button');
     button.className = `flow-${act === 'undo' ? 'undo' : 'control'} pill`;
     button.textContent = label;
     button.addEventListener('click', () => {
@@ -100,8 +101,8 @@ export function createFlowStrip(host: HTMLElement, deps: FlowApi): FlowStrip {
     host.replaceChildren();
 
     if (state.status === 'error') {
-      host.append(header('Flow'));
-      const err = document.createElement('div');
+      host.append(header(doc, 'Flow'));
+      const err = doc.createElement('div');
       err.className = 'flow-error';
       err.textContent = state.error ?? 'flow failed to load';
       host.append(err);
@@ -112,25 +113,25 @@ export function createFlowStrip(host: HTMLElement, deps: FlowApi): FlowStrip {
     // header position — walks the synthetic-inclusive sequence: 1/3 → 2/3 → 3/3.
     const railStn = railStations(state);
     const activeIndex = railStn.findIndex((s) => s.st === 'active');
-    host.append(header(`Flow — step ${activeIndex + 1} / ${railStn.length}`));
+    host.append(header(doc, `Flow — step ${activeIndex + 1} / ${railStn.length}`));
 
     // The station rail (§24.1 mockup): a vertical `.flow` of `.stn` (circle `.o` + name `.nm`),
     // `.seg` connectors between (dashed `.future` ahead of a not-yet-reached station), exactly
     // as design/shell/converged.html.
-    const rail = document.createElement('div');
+    const rail = doc.createElement('div');
     rail.className = 'flow vert';
     railStn.forEach((s, i) => {
-      const stn = document.createElement('span');
+      const stn = doc.createElement('span');
       stn.className = `stn ${s.st}`;
-      const dot = document.createElement('span');
+      const dot = doc.createElement('span');
       dot.className = 'o';
-      const name = document.createElement('span');
+      const name = doc.createElement('span');
       name.className = 'nm';
       name.textContent = s.name;
       stn.append(dot, name);
       rail.append(stn);
       if (i < railStn.length - 1) {
-        const seg = document.createElement('span');
+        const seg = doc.createElement('span');
         seg.className = s.st === 'done' ? 'seg' : 'seg future';
         rail.append(seg);
       }
@@ -141,7 +142,7 @@ export function createFlowStrip(host: HTMLElement, deps: FlowApi): FlowStrip {
     // main and pushed via flow:onStateChanged. Present only while the step is in progress.
     if (state.status === 'in_progress' && state.derived) {
       const d = state.derived;
-      const line = document.createElement('div');
+      const line = doc.createElement('div');
       line.className = 'flow-derived';
       line.textContent = `${d.todosDone} / ${d.todosTotal} done · ${d.activity}`;
       host.append(line);
@@ -158,7 +159,7 @@ export function createFlowStrip(host: HTMLElement, deps: FlowApi): FlowStrip {
     // The §19.3 busy refusal (and any other transient notice) rides the start/restart response
     // only; a later state() re-pull carries none, so the line self-clears.
     if (state.notice) {
-      const notice = document.createElement('div');
+      const notice = doc.createElement('div');
       notice.className = 'flow-notice';
       notice.textContent = state.notice;
       host.append(notice);
@@ -172,7 +173,7 @@ export function createFlowStrip(host: HTMLElement, deps: FlowApi): FlowStrip {
     }
     // render() rebuilds the subtree, so a focused control would be dropped to <body> on a push-driven
     // re-render; capture which control held focus and restore it after (§22.4 keyboard order).
-    const active = document.activeElement;
+    const active = doc.activeElement;
     const refocus =
       active instanceof HTMLElement && host.contains(active)
         ? active.classList.contains('flow-undo')
