@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { listTodoTemplates } from '../../src/main/todoTemplate';
@@ -35,5 +35,19 @@ describe('listTodoTemplates (§4.1/§6)', () => {
     writeFileSync(join(dir, 'notes.txt'), 'not a template');
     expect(listTodoTemplates(dir)).toEqual([]);
     expect(listTodoTemplates(join(dir, 'nope'))).toEqual([]);
+  });
+
+  it('does not read or list a .md whose realpath escapes the templates dir (symlink guard)', () => {
+    const outside = mkdtempSync(join(tmpdir(), 'tmpl-outside-'));
+    try {
+      writeFileSync(join(outside, 'secret.md'), '# Leaked secret\n\n- x\n');
+      symlinkSync(join(outside, 'secret.md'), join(dir, 'evil.md')); // a symlink escaping the root
+      writeFileSync(join(dir, 'ok.md'), '# OK template\n\n- y\n');
+      // The escaping symlink's H1 must never be exposed (file-disclosure footgun); only the
+      // in-root template is listed — mirroring loadTodoTemplateFile's realpath/within-root guard.
+      expect(listTodoTemplates(dir)).toEqual([{ ref: 'ok', name: 'OK template' }]);
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
   });
 });

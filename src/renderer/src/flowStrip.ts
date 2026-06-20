@@ -49,6 +49,9 @@ export interface FlowStrip {
   refresh(): Promise<void>;
   /** The terminal's repo changed (cd across a key boundary, §16.3): re-scope and re-pull. */
   onRepoChanged(repoKey: string | null): void;
+  /** Unsubscribe from the flow:onStateChanged push so the strip leaks nothing on unmount/remount
+   *  (clean teardown — UI-STANDARDS §2.2). */
+  dispose(): void;
 }
 
 function header(doc: Document, text: string): HTMLElement {
@@ -144,6 +147,10 @@ export function createFlowStrip(host: HTMLElement, deps: FlowApi): FlowStrip {
       const d = state.derived;
       const line = doc.createElement('div');
       line.className = 'flow-derived';
+      // The live region rides this non-interactive text, not the strip container, which holds the
+      // focusable Start/Advance/Restart/Undo controls (a live region must not wrap them — a11y).
+      line.setAttribute('role', 'status');
+      line.setAttribute('aria-live', 'polite');
       line.textContent = `${d.todosDone} / ${d.todosTotal} done · ${d.activity}`;
       host.append(line);
     }
@@ -161,6 +168,8 @@ export function createFlowStrip(host: HTMLElement, deps: FlowApi): FlowStrip {
     if (state.notice) {
       const notice = doc.createElement('div');
       notice.className = 'flow-notice';
+      notice.setAttribute('role', 'status');
+      notice.setAttribute('aria-live', 'polite');
       notice.textContent = state.notice;
       host.append(notice);
     }
@@ -191,7 +200,7 @@ export function createFlowStrip(host: HTMLElement, deps: FlowApi): FlowStrip {
   // (derived is in_progress-only). Skipping it elsewhere keeps an unrelated activity flip from
   // wiping the done-state §19.2 one-shot notice (which a re-pull would clear) and from rebuilding
   // (losing focus) when nothing visible changed.
-  deps.onStateChanged(() => {
+  const unsubscribe = deps.onStateChanged(() => {
     if (lastStatus === 'in_progress') void refresh();
   });
 
@@ -201,5 +210,6 @@ export function createFlowStrip(host: HTMLElement, deps: FlowApi): FlowStrip {
       repoKey = key;
       void refresh();
     },
+    dispose: unsubscribe,
   };
 }

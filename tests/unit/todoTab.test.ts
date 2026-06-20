@@ -129,6 +129,18 @@ describe('Todo tab (§24.1 mockup-exact — checkbox-done + Send)', () => {
     await flush();
   }
 
+  it('a rejected refresh (main restart) renders empty and surfaces no unhandled rejection (§16.4)', async () => {
+    wireMonitorPane();
+    await flush();
+    monitor.todoList.mockRejectedValueOnce(new Error('ipc down'));
+    monitor.listTemplates.mockRejectedValueOnce(new Error('ipc down'));
+    handlers.cwdChanged!({ sessionId: 's1', cwd: '/repoA', repoKey: '/repoA' });
+    await flush();
+    // refresh()'s todoList/listTemplates rejections must be swallowed — vitest fails the run on an
+    // unhandled rejection (the §16.4 invariant every other IPC call in this file already keeps).
+    expect(rows()).toHaveLength(0);
+  });
+
   it('renders todos in order, each with its text and a checkbox', async () => {
     wireMonitorPane();
     await flush();

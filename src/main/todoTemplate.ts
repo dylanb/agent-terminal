@@ -52,19 +52,31 @@ function humanize(ref: string): string {
  * (or read error) → [] (never a throw).
  */
 export function listTodoTemplates(templatesDir: string): TodoTemplateRef[] {
+  const root = path.resolve(templatesDir);
   let files: string[];
+  let realRoot: string;
   try {
-    files = readdirSync(templatesDir);
+    files = readdirSync(root);
+    realRoot = realpathSync(root);
   } catch {
     return [];
   }
   const refs: TodoTemplateRef[] = [];
   for (const file of files.sort()) {
     if (!file.endsWith('.md')) continue;
+    // Skip any entry whose realpath escapes the templates dir: a symlink could point outside the
+    // repo and leak its H1 (file disclosure) — mirrors loadTodoTemplateFile's within-root guard.
+    let real: string;
+    try {
+      real = realpathSync(path.join(root, file));
+    } catch {
+      continue; // broken/unreadable link → not a listable template
+    }
+    if (real !== realRoot && !real.startsWith(realRoot + path.sep)) continue;
     const ref = file.slice(0, -'.md'.length);
     let name = humanize(ref);
     try {
-      const h1 = readFileSync(path.join(templatesDir, file), 'utf8').match(/^#\s+(.+?)\s*$/m);
+      const h1 = readFileSync(real, 'utf8').match(/^#\s+(.+?)\s*$/m); // read the validated real path
       if (h1) name = h1[1].trim();
     } catch {
       /* unreadable file → keep the humanized fallback */

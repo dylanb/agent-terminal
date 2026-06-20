@@ -372,4 +372,39 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     expect(stations()).toHaveLength(0);
     expect(control()).toBeNull();
   });
+
+  it('dispose() unsubscribes from the flow:onStateChanged push (clean teardown, UI-STANDARDS §2.2)', () => {
+    const unsub = vi.fn();
+    const deps = { ...fakeFlow(), onStateChanged: vi.fn((_cb: () => void) => unsub) };
+    const strip = createFlowStrip(host, deps);
+    expect(unsub).not.toHaveBeenCalled();
+    strip.dispose();
+    expect(unsub).toHaveBeenCalledTimes(1);
+  });
+
+  it('puts the live region on the non-interactive derived/notice text, not the interactive strip (a11y)', async () => {
+    const deps = {
+      state: vi.fn(
+        async (): Promise<FlowStateView> => ({
+          stepName: '/repo-step',
+          position: 1,
+          total: 1,
+          status: 'in_progress' as FlowStatus,
+          derived: { activity: 'quiet', todosDone: 0, todosTotal: 3, ready: false },
+        }),
+      ),
+      start: vi.fn(),
+      advance: vi.fn(),
+      restart: vi.fn(),
+      undo: vi.fn(),
+      onStateChanged: noopSub,
+    };
+    createFlowStrip(host, deps).onRepoChanged('/repo');
+    await vi.waitFor(() => expect(host.querySelector('.flow-derived')).not.toBeNull());
+    // The changing status text is the live region — not the container, which holds focusable
+    // Start/Advance/Restart/Undo controls (a live region must not wrap interactive controls).
+    const derived = host.querySelector<HTMLElement>('.flow-derived')!;
+    expect(derived.getAttribute('aria-live')).toBe('polite');
+    expect(host.getAttribute('aria-live')).toBeNull();
+  });
 });

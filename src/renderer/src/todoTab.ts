@@ -99,14 +99,18 @@ export function createTodoTab(deps: TodoTabDeps): TodoTab {
 
   function refresh(): void {
     if (!currentRepoKey) return;
-    void monitor.todoList(currentRepoKey).then(setTodos);
+    // On a rejected invoke (main restart) keep the current UI; never an unhandled rejection (§16.4).
+    void monitor.todoList(currentRepoKey).then(setTodos).catch(() => {});
     // Re-pull the template library too: main gates it to the active step, so it appears/disappears
     // as the flow advances (the strip fires FLOW_CHANGED, which refreshes us — §4.1).
-    void monitor.listTemplates(currentRepoKey).then((lib) => {
-      templates = lib.templates;
-      templateDefault = lib.defaultRef;
-      renderTodos();
-    });
+    void monitor
+      .listTemplates(currentRepoKey)
+      .then((lib) => {
+        templates = lib.templates;
+        templateDefault = lib.defaultRef;
+        renderTodos();
+      })
+      .catch(() => {});
   }
 
   function applyRepoSwap(repoKey: string): void {
