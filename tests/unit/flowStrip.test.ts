@@ -170,6 +170,39 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     expect(host.querySelector('.flow-notice')).toBeNull();
   });
 
+  it('recovers from a rejected transition by re-pulling state (the catch→refresh path)', async () => {
+    const deps = fakeFlow('in_progress');
+    deps.advance.mockRejectedValueOnce(new Error('illegal transition'));
+    createFlowStrip(host, deps).onRepoChanged('/repo');
+    await vi.waitFor(() => expect(control()!.textContent).toBe('Advance'));
+    const callsBefore = deps.state.mock.calls.length;
+
+    control()!.click();
+    // The rejected advance must trigger a re-pull and leave the strip on the real (in-progress)
+    // state, not a stale optimistic view.
+    await vi.waitFor(() => expect(deps.state.mock.calls.length).toBeGreaterThan(callsBefore));
+    expect(control()!.textContent).toBe('Advance');
+    expect(control()!.disabled).toBe(false);
+  });
+
+  it('disables the control while a transition is in flight and does not fire it twice', async () => {
+    let resolveAdvance!: (v: FlowStateView) => void;
+    const deps = fakeFlow('in_progress');
+    deps.advance.mockImplementationOnce(
+      () => new Promise<FlowStateView>((res) => { resolveAdvance = res; }),
+    );
+    createFlowStrip(host, deps).onRepoChanged('/repo');
+    await vi.waitFor(() => expect(control()!.textContent).toBe('Advance'));
+
+    control()!.click();
+    await vi.waitFor(() => expect(control()!.disabled).toBe(true));
+    control()!.click(); // a second click while disabled / in flight must be a no-op
+    expect(deps.advance).toHaveBeenCalledTimes(1);
+
+    resolveAdvance({ stepName: '/repo-step', position: 1, total: 1, status: 'done' });
+    await vi.waitFor(() => expect(control()!.textContent).toBe('Restart'));
+  });
+
   it('carries no template picker — that moved to the todo overlay (§4.1/§9.1)', async () => {
     const deps = fakeFlow('in_progress');
     createFlowStrip(host, deps).onRepoChanged('/repo');

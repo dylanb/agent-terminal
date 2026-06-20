@@ -188,6 +188,13 @@ export function isValidViewerTree(m: unknown): m is ViewerTreeMsg {
   return isRecord(m) && isLiveSession(m) && (m.scope === 'curated' || m.scope === 'repo');
 }
 
+/** viewer:read (§20.2): `relPath` joins onto the repo root in readArtifact (which escape-guards
+ *  too), but reject `..` at the boundary as defense-in-depth, mirroring the sibling validators. */
 export function isValidViewerRead(m: unknown): m is ViewerReadMsg {
-  return isRecord(m) && isLiveSession(m) && typeof m.relPath === 'string';
+  return (
+    isRecord(m) &&
+    isLiveSession(m) &&
+    typeof m.relPath === 'string' &&
+    !m.relPath.split(/[/\\]/).includes('..')
+  );
 }

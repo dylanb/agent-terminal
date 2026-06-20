@@ -6,7 +6,7 @@
 // to the whole repo (§20.1 / D8). Code renders read-only; a selection in either view routes
 // to the same two sinks as the terminal-pane selection (send-to-agent / add-to-todo).
 
-import type { ArtifactNode, ArtifactScope, ArtifactTree, ViewerFile } from '../../shared/ipc';
+import { DEFAULT_UI_SETTINGS, type ArtifactNode, type ArtifactScope, type ArtifactTree, type ViewerFile } from '../../shared/ipc';
 import { setShown, setCollapsed } from './visibility';
 import { FOCUS_VIEW_EVENT } from './paneActions';
 
@@ -53,7 +53,7 @@ export interface ArtifactsDeps {
   onRequestFullscreen?: (on: boolean) => void;
 }
 
-const DEFAULT_TREE_W = 248;
+const DEFAULT_TREE_W = DEFAULT_UI_SETTINGS.artifactTreeWidth; // single source of truth (§16.6)
 const MIN_TREE_W = 140;
 const MAX_TREE_W = 640;
 const WIDTH_STEP = 16;

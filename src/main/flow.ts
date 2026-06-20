@@ -26,6 +26,25 @@ export function deriveFlowView(view: FlowStateView, todos: TodoItem[], activity:
   return { ...view, derived: { activity, todosDone, todosTotal, ready: todosDone === todosTotal } };
 }
 
+/** §19.2 not-ready warning — spec refs are for code/review, never the UI (§24.2.2 v2.64). */
+export const ADVANCE_NOT_READY_NOTICE = 'Advanced with todos still outstanding.';
+
+/**
+ * §19.2 human-override advance: read gate readiness from the PRE-advance state (every todo done),
+ * advance, and ride a one-shot not-ready `notice` on the result when todos were still outstanding.
+ * It always completes — the warning never blocks.
+ */
+export function advanceWithReadinessGate(
+  flow: { state(repoKey: string): FlowStateView; advance(repoKey: string): FlowStateView },
+  repoKey: string,
+  todos: TodoItem[],
+  activity: AgentState,
+): FlowStateView {
+  const ready = deriveFlowView(flow.state(repoKey), todos, activity).derived?.ready ?? true;
+  const view = flow.advance(repoKey);
+  return ready ? view : { ...view, notice: ADVANCE_NOT_READY_NOTICE };
+}
+
 /** A §18.1 step, minimal S2 shape: a manual step with an id and optional skill/template refs. */
 export interface FlowStepDef {
   id: string;
@@ -83,6 +102,11 @@ export function loadFlowDefinition(worktreeDir: string): FlowLoad {
     return { ok: false, error: `flow.yaml step "${first.id}" is not a manual step (S2 supports manual only)` };
   if (first.skill !== undefined && typeof first.skill !== 'string')
     return { ok: false, error: `flow.yaml step "${first.id}" has a non-string skill` };
+  // The skill is injected into the PTY (§9.3); an embedded CR/LF or other control char would
+  // execute as a command line when bracketed-paste is off, so an untrusted repo's flow.yaml
+  // cannot smuggle line terminators into the injection path.
+  if (typeof first.skill === 'string' && /[\u0000-\u001f\u007f]/.test(first.skill))
+    return { ok: false, error: `flow.yaml step "${first.id}" skill has control characters` };
   if (first.todo_template !== undefined && typeof first.todo_template !== 'string')
     return { ok: false, error: `flow.yaml step "${first.id}" has a non-string todo_template` };
 

@@ -2,7 +2,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createArtifacts, selectionWithin } from '../../src/renderer/src/artifacts';
 import { FOCUS_VIEW_EVENT } from '../../src/renderer/src/paneActions';
-import type { ArtifactTree, ViewerFile } from '../../src/shared/ipc';
+import { DEFAULT_UI_SETTINGS, type ArtifactTree, type ViewerFile } from '../../src/shared/ipc';
 
 // §20.1/§20.2 artifact viewer organism: a hierarchical file tree fed by real discovery
 // (loadTree) and a viewer that reads file content (loadFile) through injected seams, with a
@@ -597,6 +597,12 @@ describe('artifact viewer (§20.1/§20.2 — real discovery)', () => {
     const v = mount(TREE_CURATED, { initialWidth: 320 });
     await v.api.refresh();
     expect(v.width()).toBe('320px');
+  });
+
+  it('defaults the tree width to the contract default (single source, no drift)', async () => {
+    const v = mount(TREE_CURATED); // no initialWidth → the built-in default
+    await v.api.refresh();
+    expect(v.width()).toBe(`${DEFAULT_UI_SETTINGS.artifactTreeWidth}px`);
   });
 
   it('dragging the separator changes the tree width and persists it', async () => {

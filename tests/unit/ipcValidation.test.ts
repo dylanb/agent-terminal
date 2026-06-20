@@ -20,6 +20,7 @@ import {
   isValidTodoReorder,
   isValidTodoSetStatus,
   isValidTodoUpdate,
+  isValidViewerRead,
 } from '../../src/main/ipcValidation';
 
 const sid = SESSION_ID;
@@ -137,6 +138,16 @@ describe('IPC payload validation (§6 — renderer-supplied input is untrusted)'
     expect(isValidFlowRequest({ sessionId: sid, repoKey: '/repo/../../etc' })).toBe(false);
     expect(isValidFlowRequest({})).toBe(false);
     expect(isValidFlowRequest(null)).toBe(false);
+  });
+
+  it('accepts a viewer:read and rejects a traversal relPath at the boundary (§20.2 defense-in-depth)', () => {
+    expect(isValidViewerRead({ sessionId: sid, relPath: 'src/main/index.ts' })).toBe(true);
+    expect(isValidViewerRead({ sessionId: sid, relPath: 7 })).toBe(false);
+    expect(isValidViewerRead({ sessionId: 'other', relPath: 'a' })).toBe(false);
+    // relPath joins onto the repo root in readArtifact — reject `..` at the boundary too, mirroring
+    // the sibling path validators, so the guard does not live solely below the trust boundary.
+    expect(isValidViewerRead({ sessionId: sid, relPath: '../etc/passwd' })).toBe(false);
+    expect(isValidViewerRead({ sessionId: sid, relPath: 'a/../../b' })).toBe(false);
   });
 
   // ---- todo:* validators (§16.3 / §16.4) ----

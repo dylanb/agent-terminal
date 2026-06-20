@@ -35,7 +35,18 @@ function teardownView(into: HTMLElement): void {
   }
 }
 
-// markdown-it instance is created once, then reused.
+// Editor chrome colours come from theme-ADAPTIVE tokens (--text/--dim, redefined under
+// [data-theme="dark"]) — never the raw --ink/--muted, which hold the light values in both themes
+// and would render code near-black on the dark background (WCAG 1.4.3, UI-STANDARDS theme-via-tokens).
+export const CM_THEME_STYLES: Record<string, Record<string, string>> = {
+  '&': { backgroundColor: 'transparent', color: 'var(--text)', fontSize: '13px' },
+  '.cm-gutters': { backgroundColor: 'transparent', color: 'var(--dim)', border: 'none' },
+  '.cm-activeLine, .cm-activeLineGutter': { backgroundColor: 'transparent' },
+  '.cm-changeGutter': { width: '3px', padding: '0' },
+  '.cm-changedGutter': { width: '3px', height: '100%', backgroundColor: 'var(--changed)' },
+  '.cm-changedLine': { backgroundColor: 'var(--changed-wash)' },
+};
+
 let mdInstance: MarkdownItLib | null = null;
 async function getMarkdownIt(): Promise<MarkdownItLib> {
   if (!mdInstance) {
@@ -137,14 +148,7 @@ export function renderCodeInto(
     if (token !== tokenOf(into)) return;
     into.replaceChildren();
     // Chrome follows the app theme via tokens; basicSetup's default highlight stays (§24.1C polish).
-    const cmTheme = EditorView.theme({
-      '&': { backgroundColor: 'transparent', color: 'var(--ink)', fontSize: '13px' },
-      '.cm-gutters': { backgroundColor: 'transparent', color: 'var(--muted)', border: 'none' },
-      '.cm-activeLine, .cm-activeLineGutter': { backgroundColor: 'transparent' },
-      '.cm-changeGutter': { width: '3px', padding: '0' },
-      '.cm-changedGutter': { width: '3px', height: '100%', backgroundColor: 'var(--changed)' },
-      '.cm-changedLine': { backgroundColor: 'var(--changed-wash)' },
-    });
+    const cmTheme = EditorView.theme(CM_THEME_STYLES);
 
     const changed = new Set(changedLines ?? []);
     const changeExt = buildChangeExtensions(changed, { EditorView, StateField, RangeSetBuilder }, view);

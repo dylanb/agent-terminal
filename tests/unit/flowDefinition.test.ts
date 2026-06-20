@@ -76,6 +76,15 @@ describe('flow.yaml loader (§24.2.2 S2 / §18.1)', () => {
     expect(load.ok).toBe(false);
   });
 
+  it('rejects a skill carrying control chars (PTY line-injection guard, §9.3)', () => {
+    // A skill value reaches inject() → the PTY; an embedded CR executes when bracketed-paste is
+    // off (the bare-prompt default), so an untrusted repo's flow.yaml could smuggle a command.
+    writeFlow('name: f\nsteps:\n  - id: x\n    kind: manual\n    skill: "groom\\rrm -rf ~"\n');
+    expect(loadFlowDefinition(dir).ok).toBe(false);
+    writeFlow('name: f\nsteps:\n  - id: x\n    kind: manual\n    skill: "a\\nb"\n');
+    expect(loadFlowDefinition(dir).ok).toBe(false);
+  });
+
   it('rejects schema-invalid definitions (no name / no steps / step missing id / not manual)', () => {
     writeFlow('steps:\n  - id: x\n    kind: manual\n'); // no top-level name
     expect(loadFlowDefinition(dir).ok).toBe(false);

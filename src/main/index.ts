@@ -52,7 +52,7 @@ import { createCwdTracker } from './cwdTracker';
 import { currentRepoInfo } from './repoKey';
 import { createScanner } from './scanner';
 import { captureLastReport } from './captureLast';
-import { createFlowManager, deriveFlowView, loadFlowDefinitionLocalFirst } from './flow';
+import { advanceWithReadinessGate, createFlowManager, deriveFlowView, loadFlowDefinitionLocalFirst } from './flow';
 import { createFlowEntryActions } from './flowEntryActions';
 import { listTodoTemplates, loadTodoTemplateFile, parseTodoTemplate } from './todoTemplate';
 import { discover, readArtifact, emptyTree } from './artifactTree';
@@ -363,12 +363,10 @@ async function createWindow(): Promise<void> {
         isValidFlowRequest(m) ? withDerived(m.repoKey, flow.start(m.repoKey)) : flowRequestError(),
       // Advancing while NOT ready (todos still outstanding) is a human override (§19.2): it warns
       // via a one-shot notice but still completes. Readiness is read from the pre-advance state.
-      [CH.flowAdvance]: (_e, m) => {
-        if (!isValidFlowRequest(m)) return flowRequestError();
-        const ready = withDerived(m.repoKey, flow.state(m.repoKey)).derived?.ready ?? true;
-        const view = flow.advance(m.repoKey);
-        return ready ? view : { ...view, notice: 'Advanced with todos still outstanding.' };
-      },
+      [CH.flowAdvance]: (_e, m) =>
+        isValidFlowRequest(m)
+          ? advanceWithReadinessGate(flow, m.repoKey, todoStore.list(m.repoKey), agentActivity)
+          : flowRequestError(),
       [CH.flowRestart]: (_e, m) =>
         isValidFlowRequest(m) ? withDerived(m.repoKey, flow.restart(m.repoKey)) : flowRequestError(),
       // Undo a manual advance: revert done → in_progress (no entry actions re-run). withDerived

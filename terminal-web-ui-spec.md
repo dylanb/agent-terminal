@@ -1,6 +1,6 @@
 # Technical Specification — Agent Terminal: Foundation for a Coding-Agent Management Application
 
-**Document status:** Draft v2.46
+**Document status:** Draft v2.64
 **Scope:** Foundation / "walking skeleton" build (shipped) + semantic/command capture (shipped, §15–§16) + the **task-flow management** phase (§17–§24): requirements drafted, and **Phase 1 — the three-view UI shell with real cores and fixture-mocked machinery (§24.1) — shipped**
 **Target platforms:** Linux and macOS (Windows out of scope for this version)
 
@@ -439,9 +439,10 @@ All payloads carry a `sessionId` (a single fixed id in this version). This costs
 | `ui:setSettings` | renderer → main | `{settings: Partial<UiSettings>}` | Persist global UI prefs to userData (§16.6). |
 | `capture:last` | renderer → main (invoke) | `{sessionId} → MonitorEvent[]` | **(v2.27, §21/D39; shape v2.34)** Run report-detection (§15.3) **on demand** against the current shadow buffer and return the single latest report **followed by its findings** as stored `MonitorEvent`s — `[]` when none. Mirrors `monitor:replay`'s shape so the pane renders a button-capture and a replay identically; the handler replaces any prior `report` in the store first (single-slot). Skips a candidate that is just the echoed command line. Command-output capture stays on `monitor:captureCommandText`. |
 | `flow:list` | renderer → main (invoke) | `{sessionId} → FlowDef[]` | **(v2.27, §18)** The merged flow-definition library (global ∪ per-repo, repo wins on name clash — §18.4). |
-| `flow:start` | renderer → main (invoke) | `{sessionId, flowName, inputs} → FlowState` | **(v2.27, §19)** Instantiate the chosen definition, begin step 1, run its entry actions (incl. `bootstrap: pickup` if declared — §18.3). |
-| `flow:state` | renderer → main (invoke) | `{sessionId} → FlowState \| null` | **(v2.27, §19)** Current step, per-step status, gate state, derived loop progress (§19.1). |
-| `flow:advance` | renderer → main (invoke) | `{sessionId} → FlowState` | **(v2.27, §19.2)** User-driven advance to the next step. Warns (does not block) if the current gate is unsatisfied (`ready: false` in the result). |
+| `flow:start` | renderer → main (invoke) | `{sessionId, repoKey} → FlowStateView` | **(built v2.48; repo-keyed v2.55, §24.2.2)** Begin the current step (`not_started → in_progress`) and run its entry actions (§18.6/§19.3); `repoKey` scopes the flow to the terminal's cwd. *(The richer `{flowName, inputs} → FlowState` instantiation is the v2.27/§19 target.)* `window.flow.start(repoKey)`. |
+| `flow:state` | renderer → main (invoke) | `{sessionId, repoKey} → FlowStateView` | **(built v2.48; repo-keyed v2.55, §24.2.2)** Current `FlowStateView` for the repo (step name, position/total, status; an `in_progress` view carries the derived `n/m done` + activity + readiness, §24.2.2 S5; an absent/invalid `flow.yaml` yields an `error` view). *(The full per-step/gate `FlowState` is the v2.27/§19 target.)* |
+| `flow:advance` | renderer → main (invoke) | `{sessionId, repoKey} → FlowStateView` | **(built v2.48; §19.2)** User-driven advance (`in_progress → done`). Warns (does not block) when the gate is unsatisfied — a one-shot `notice` (\"Advanced with todos still outstanding.\") rides the result; readiness comes from `derived.ready` on the pre-advance view. |
+| `flow:restart` | renderer → main (invoke) | `{sessionId, repoKey} → FlowStateView` | **(v2.52, §22.3/§24.2.2)** Reset a completed flow: `done → in_progress`, **re-running** the step's entry actions (distinct from `flow:undo`). Inert in the `error` state; rejects from any non-`done` status. `window.flow.restart(repoKey)`. |
 | `flow:undo` | renderer → main (invoke) | `{sessionId, repoKey} → FlowStateView` | **(v2.64, §24.2.2)** Revert a manual advance: `done → in_progress` **without** re-running the step's entry actions (distinct from `flow:restart`). `window.flow.undo(repoKey)`. |
 | `flow:gate` | renderer → main | `{sessionId, action: 'approve'\|'request-changes'\|'impasse', reason?}` | **(v2.27, §19.3)** Drive an agent-loop gate by **injecting** the matching slash command (§19.3); refuses while a process is running (§19.3/D32). |
 | `flow:composeFeedback` | renderer → main (invoke) | `{sessionId, todoIds, instructions?, mode: 'compose'\|'verbatim'} → string` | **(v2.27, §19.4)** Build request-changes feedback from selected review todos (+ optional instructions): agent-composed or submitted verbatim (D9/D11). |
@@ -492,9 +493,12 @@ contextBridge.exposeInMainWorld('monitor', {
 // v2.27 (§17–§24): task-flow management exposes two further namespaces, same narrow/typed pattern.
 contextBridge.exposeInMainWorld('flow', {
   list:    () => ipcRenderer.invoke('flow:list', { sessionId: SID }),
-  start:   (flowName, inputs) => ipcRenderer.invoke('flow:start', { sessionId: SID, flowName, inputs }),
-  state:   () => ipcRenderer.invoke('flow:state', { sessionId: SID }),
-  advance: () => ipcRenderer.invoke('flow:advance', { sessionId: SID }),
+  start:   (repoKey) => ipcRenderer.invoke('flow:start', { sessionId: SID, repoKey }),     // as-built (§24.2.2); v2.27 target threads {flowName, inputs}
+  state:   (repoKey) => ipcRenderer.invoke('flow:state', { sessionId: SID, repoKey }),
+  advance: (repoKey) => ipcRenderer.invoke('flow:advance', { sessionId: SID, repoKey }),
+  restart: (repoKey) => ipcRenderer.invoke('flow:restart', { sessionId: SID, repoKey }),
+  undo:    (repoKey) => ipcRenderer.invoke('flow:undo', { sessionId: SID, repoKey }),
+  onStateChanged: (cb) => { /* subscribe; returns an unsubscribe (§24.2.2 S5) */ },
   gate:    (action, reason) => ipcRenderer.send('flow:gate', { sessionId: SID, action, reason }),
   composeFeedback: (todoIds, instructions, mode) => ipcRenderer.invoke('flow:composeFeedback', { sessionId: SID, todoIds, instructions, mode }),
   openChild: (prRef, atStep) => ipcRenderer.invoke('flow:openChild', { sessionId: SID, prRef, atStep }),

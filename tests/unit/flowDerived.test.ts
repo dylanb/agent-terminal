@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { deriveFlowView } from '../../src/main/flow';
+import { ADVANCE_NOT_READY_NOTICE, advanceWithReadinessGate, deriveFlowView } from '../../src/main/flow';
 import type { FlowStateView, TodoItem, TodoStatus } from '../../src/shared/ipc';
 
 // §24.2.2 S5 — the in-progress status is DERIVED from live signals: agent activity (§8.3) + todo
@@ -50,5 +50,35 @@ describe('deriveFlowView (§24.2.2 S5 — derived live status)', () => {
     expect(deriveFlowView(notStarted, [todo('a', 'active')], 'active')).toEqual(notStarted);
     const done: FlowStateView = { stepName: 's', position: 1, total: 1, status: 'done' };
     expect(deriveFlowView(done, [], 'quiet').derived).toBeUndefined();
+  });
+});
+
+describe('advanceWithReadinessGate (§19.2 — advance is a human override)', () => {
+  const doneView: FlowStateView = { stepName: 's', position: 1, total: 1, status: 'done' };
+  const fakeFlow = (todos: TodoItem[]) => ({
+    state: () => inProgress,
+    advance: () => doneView,
+    todos,
+  });
+
+  it('attaches the not-ready warning when a todo is still outstanding', () => {
+    const flow = fakeFlow([todo('a', 'active')]);
+    const v = advanceWithReadinessGate(flow, '/r', flow.todos, 'quiet');
+    expect(v.status).toBe('done');
+    expect(v.notice).toBe(ADVANCE_NOT_READY_NOTICE);
+  });
+
+  it('attaches NO notice when every todo is done (ready)', () => {
+    const flow = fakeFlow([todo('a', 'done')]);
+    const v = advanceWithReadinessGate(flow, '/r', flow.todos, 'quiet');
+    expect(v.status).toBe('done');
+    expect(v.notice).toBeUndefined();
+  });
+
+  it('reads readiness from the PRE-advance state, not the post-advance done view', () => {
+    // The pre-advance view is in_progress with an outstanding todo → not ready → notice; if the
+    // gate read the post-advance (done) view, deriveFlowView would yield ready and drop the warning.
+    const flow = fakeFlow([todo('a', 'in_progress')]);
+    expect(advanceWithReadinessGate(flow, '/r', flow.todos, 'quiet').notice).toBe(ADVANCE_NOT_READY_NOTICE);
   });
 });

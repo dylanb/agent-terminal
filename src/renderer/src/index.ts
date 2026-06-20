@@ -2,7 +2,6 @@ import { createTerminalPane } from './terminal';
 import { wireSelection, captureToTodo } from './selection';
 import { wireMonitorPane } from './monitor';
 import { createShell } from './shell';
-import { wireCrossHighlight } from './crossHighlight';
 import { SAMPLE_FLOW, createGatePanel } from './flow';
 import { createFlowStrip } from './flowStrip';
 import { createArtifacts, type Artifacts } from './artifacts';
@@ -29,10 +28,6 @@ const shell = createShell(document.getElementById('app')!, {
   setTheme: (theme) => window.monitor.setSettings({ theme }),
   onViewerFullscreenChange: (on) => artifacts?.setFullscreen(on),
 });
-
-// Cross-highlight wiring for any finding/source pairs that carry a data-find id
-// (the mocked artifact/finding markup today; real provenance spans in a later phase).
-wireCrossHighlight(document.getElementById('app')!);
 
 // Flow status strip (§22.3 / §24.2.2): the manual-step lifecycle driven through window.flow,
 // scoped to the terminal's current repo. Like the todo list, it follows the cwd — the shared
