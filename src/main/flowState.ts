@@ -44,7 +44,12 @@ function ensureGitignored(worktreeDir: string): void {
   }
   if (existing.split('\n').some((l) => l.trim() === GITIGNORE_ENTRY)) return;
   const prefix = existing.length === 0 || existing.endsWith('\n') ? existing : `${existing}\n`;
-  writeFileSync(file, `${prefix}${GITIGNORE_ENTRY}\n`);
+  try {
+    writeFileSync(file, `${prefix}${GITIGNORE_ENTRY}\n`);
+  } catch {
+    // best-effort convenience (§19.1): the state write already succeeded; a non-writable
+    // .gitignore must not take down the transition.
+  }
 }
 
 export function createFlowStateStore(worktreeDir: string): FlowStateStore {

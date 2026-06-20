@@ -75,4 +75,13 @@ describe('flow-state store (§24.2.2 S3 / §19.1)', () => {
     const lines = readFileSync(join(dir, '.gitignore'), 'utf8').split('\n');
     expect(lines.filter((l) => l === GITIGNORE_ENTRY)).toHaveLength(1);
   });
+
+  it('fails open when .gitignore is not writable — state still persists, no throw (§19.1)', () => {
+    // gitignore is best-effort; the state write already succeeded. A non-writable .gitignore
+    // (here a directory in its place → EISDIR) must not take down the transition.
+    mkdirSync(join(dir, '.gitignore'), { recursive: true });
+    const store = createFlowStateStore(dir);
+    expect(() => store.write({ step: 'groom-ticket', status: 'in_progress' })).not.toThrow();
+    expect(store.read()).toEqual({ step: 'groom-ticket', status: 'in_progress' });
+  });
 });

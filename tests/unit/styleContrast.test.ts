@@ -24,7 +24,7 @@ const dark = tokenBlock('[data-theme="dark"]');
 const themeTokens = (mode: 'light' | 'dark'): Map<string, string> =>
   mode === 'dark' ? new Map([...root, ...dark]) : root;
 
-/** Resolve a CSS value (var chains + fallbacks) down to a #rrggbb. */
+/** Resolve a CSS value's var() chains + fallbacks down to a concrete colour (#rrggbb or rgba(...)). */
 function resolve(value: string, tokens: Map<string, string>): string {
   let v = value.trim();
   for (let i = 0; i < 10 && v.startsWith('var('); i++) {
