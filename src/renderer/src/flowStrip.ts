@@ -95,7 +95,13 @@ export function createFlowStrip(host: HTMLElement, deps: FlowApi): FlowStrip {
           // appear/disappear — signal it to re-pull (the decoupled contract, §4.1/§9.1).
           window.dispatchEvent(new CustomEvent(FLOW_CHANGED_EVENT));
         })
-        .catch(() => void refresh());
+        .catch(() => void refresh())
+        .finally(() => {
+          // If no re-render replaced this button (transition failed and the follow-up refresh also
+          // bailed on an IPC error), re-enable it so the user can retry (§16.4); a render() detaches
+          // it, in which case host.contains is false and this is a no-op.
+          if (host.contains(button)) button.disabled = false;
+        });
     });
     return button;
   }

@@ -408,6 +408,21 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     expect(stepName()).toBe('/repoB-step');
   });
 
+  it('re-enables the control button when a failed transition + failed refresh leave nothing re-rendered (retry, §16.4)', async () => {
+    const deps = fakeFlow(); // not_started → a Start control
+    const strip = createFlowStrip(host, deps);
+    strip.onRepoChanged('/repoA');
+    await vi.waitFor(() => expect(control()).not.toBeNull());
+    // Both the transition AND the follow-up refresh's state() fail → no re-render replaces the button.
+    deps.start.mockRejectedValueOnce(new Error('ipc down'));
+    deps.state.mockRejectedValueOnce(new Error('ipc down'));
+    const btn = control()!;
+    btn.click();
+    await new Promise((r) => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(btn.disabled).toBe(false); // re-enabled so the user can retry
+  });
+
   it('refresh() swallows an IPC rejection and keeps the prior UI (no unhandled rejection, §16.4)', async () => {
     const deps = fakeFlow();
     const strip = createFlowStrip(host, deps);

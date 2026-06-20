@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { wireMonitorPane } from '../../src/renderer/src/monitor';
+import { createTodoTab } from '../../src/renderer/src/todoTab';
 import { FOCUS_TERMINAL_EVENT, FLOW_CHANGED_EVENT } from '../../src/renderer/src/paneActions';
 import { DEFAULT_UI_SETTINGS } from '../../src/shared/ipc';
 import type { TodoItem, UiSettings } from '../../src/shared/ipc';
@@ -841,6 +842,48 @@ describe('Todo tab §24.2.1 — review fixes (reorder stability, focus, a11y lab
       } finally {
         vi.useRealTimers();
       }
+    });
+  });
+
+  // Two tabs in one document must not collide on the picker's aria-controls id (relocatability/a11y).
+  describe('template-picker id uniqueness across instances (§4.1 / UI-STANDARDS)', () => {
+    const flush = () => new Promise((r) => setTimeout(r, 0));
+    function makeTab() {
+      const todoListEl = document.createElement('div');
+      const todoCountEl = document.createElement('span');
+      document.body.append(todoListEl, todoCountEl);
+      const monitor = {
+        todoList: vi.fn(async () => []),
+        todoAdd: vi.fn(async () => []),
+        todoUpdate: vi.fn(async () => []),
+        todoReorder: vi.fn(async () => []),
+        todoSetStatus: vi.fn(async () => []),
+        todoDelete: vi.fn(async () => []),
+        listTemplates: vi.fn(async () => ({ templates: [{ ref: 'pr-review', name: 'PR review' }] })),
+        instantiateTemplate: vi.fn(async () => []),
+      } as never;
+      const tab = createTodoTab({ todoListEl, todoCountEl, monitor, doInject: vi.fn() });
+      return { tab, todoListEl };
+    }
+
+    it('gives each instance a distinct picker id and keeps aria-controls wired to its own group', async () => {
+      const a = makeTab();
+      const b = makeTab();
+      a.tab.onRepoChanged('/repoA');
+      b.tab.onRepoChanged('/repoB');
+      await flush();
+      const open = (el: HTMLElement) => el.querySelector<HTMLButtonElement>('.tmpl-toggle')!.click();
+      open(a.todoListEl);
+      open(b.todoListEl);
+      await flush();
+
+      const ctrlA = a.todoListEl.querySelector('.tmpl-toggle')!.getAttribute('aria-controls')!;
+      const ctrlB = b.todoListEl.querySelector('.tmpl-toggle')!.getAttribute('aria-controls')!;
+      const groupA = a.todoListEl.querySelector('.tmpl-picker')!.id;
+      const groupB = b.todoListEl.querySelector('.tmpl-picker')!.id;
+      expect(ctrlA).not.toBe(ctrlB); // no duplicate ID across panes
+      expect(groupA).toBe(ctrlA); // each toggle controls its OWN group
+      expect(groupB).toBe(ctrlB);
     });
   });
 });

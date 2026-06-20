@@ -57,9 +57,14 @@ function provenanceText(source: TodoSource | undefined): string {
   return `from ${source.type}`;
 }
 
+// Per-instance suffix for the template-picker's id/aria-controls pair, so two tabs in one document
+// (relocatability, UI-STANDARDS) never collide on a duplicate DOM id.
+let todoTabSeq = 0;
+
 export function createTodoTab(deps: TodoTabDeps): TodoTab {
   const { todoListEl, todoCountEl, monitor, doInject } = deps;
   const doc = todoListEl.ownerDocument;
+  const pickerId = `todo-tmpl-picker-${++todoTabSeq}`;
   let currentRepoKey: string | null = null;
   let todos: TodoItem[] = [];
   // A repo swap is blocked while a todo edit is open (§16.3); the pending key is applied
@@ -386,7 +391,7 @@ export function createTodoTab(deps: TodoTabDeps): TodoTab {
     const toggle = doc.createElement('button');
     toggle.className = 'tmpl-toggle linkbtn';
     toggle.setAttribute('aria-expanded', String(templateOpen));
-    toggle.setAttribute('aria-controls', 'todo-tmpl-picker');
+    toggle.setAttribute('aria-controls', pickerId);
     toggle.setAttribute('aria-label', 'Add todos from a template');
     const car = doc.createElement('span');
     car.className = 'car';
@@ -404,7 +409,7 @@ export function createTodoTab(deps: TodoTabDeps): TodoTab {
     if (templateOpen) {
       const group = doc.createElement('div');
       group.className = 'tmpl-picker';
-      group.id = 'todo-tmpl-picker';
+      group.id = pickerId;
       group.setAttribute('role', 'group');
       group.setAttribute('aria-label', 'Instantiate a todo template');
       // Escape collapses the picker and returns focus to the toggle (keyboard, WCAG 2.1.2).
