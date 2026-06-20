@@ -408,6 +408,27 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     expect(stepName()).toBe('/repoB-step');
   });
 
+  it('refresh() does not render a stale state when the repo changed before deps.state resolved (race)', async () => {
+    const flush = () => new Promise((r) => setTimeout(r, 0));
+    const deferred = new Map<string, () => void>();
+    const deps = fakeFlow();
+    deps.state.mockImplementation(
+      (repoKey: string) =>
+        new Promise<FlowStateView>((res) => {
+          deferred.set(repoKey, () => res({ stepName: `${repoKey}-step`, position: 1, total: 1, status: 'not_started' }));
+        }),
+    );
+    const strip = createFlowStrip(host, deps);
+    strip.onRepoChanged('/repoA'); // state('/repoA') pending
+    strip.onRepoChanged('/repoB'); // repoKey now /repoB; state('/repoB') pending
+    deferred.get('/repoB')!(); // current repo resolves and renders
+    await flush();
+    deferred.get('/repoA')!(); // the STALE /repoA resolves last
+    await flush();
+    await flush();
+    expect(stepName()).toBe('/repoB-step'); // must not be overwritten by the stale /repoA state
+  });
+
   it('puts the live region on the non-interactive derived/notice text, not the interactive strip (a11y)', async () => {
     const deps = {
       state: vi.fn(

@@ -99,13 +99,22 @@ export function createTodoTab(deps: TodoTabDeps): TodoTab {
 
   function refresh(): void {
     if (!currentRepoKey) return;
-    // On a rejected invoke (main restart) keep the current UI; never an unhandled rejection (§16.4).
-    void monitor.todoList(currentRepoKey).then(setTodos).catch(() => {});
+    const key = currentRepoKey;
+    // Ignore a response that resolves after the repo changed mid-flight, so repo A's list can't
+    // render over repo B's (§16.3 stale-response race). On a rejected invoke (main restart) keep the
+    // current UI; never an unhandled rejection (§16.4).
+    void monitor
+      .todoList(key)
+      .then((list) => {
+        if (currentRepoKey === key) setTodos(list);
+      })
+      .catch(() => {});
     // Re-pull the template library too: main gates it to the active step, so it appears/disappears
     // as the flow advances (the strip fires FLOW_CHANGED, which refreshes us — §4.1).
     void monitor
-      .listTemplates(currentRepoKey)
+      .listTemplates(key)
       .then((lib) => {
+        if (currentRepoKey !== key) return; // stale response for a now-switched repo
         templates = lib.templates;
         templateDefault = lib.defaultRef;
         // Gated off (the step left in_progress): drop open/selected picker state so a later step

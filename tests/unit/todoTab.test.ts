@@ -149,6 +149,26 @@ describe('Todo tab (§24.1 mockup-exact — checkbox-done + Send)', () => {
     expect(rows()[0].querySelector('.chk')).toBeTruthy();
   });
 
+  it('ignores a stale todoList response after the repo changed mid-flight (race)', async () => {
+    wireMonitorPane();
+    await flush();
+    const deferred = new Map<string, () => void>();
+    monitor.todoList.mockImplementation(
+      (repoKey: string) =>
+        new Promise((res) => {
+          deferred.set(repoKey, () => res([makeTodo({ id: repoKey, text: `todo for ${repoKey}`, repoKey })]));
+        }),
+    );
+    handlers.cwdChanged!({ sessionId: 's1', cwd: '/repoA', repoKey: '/repoA' }); // todoList('/repoA') pending
+    handlers.cwdChanged!({ sessionId: 's1', cwd: '/repoB', repoKey: '/repoB' }); // current repo now /repoB
+    deferred.get('/repoB')!(); // current repo resolves and renders
+    await flush();
+    deferred.get('/repoA')!(); // the STALE /repoA resolves last
+    await flush();
+    await flush();
+    expect(rows().map(text)).toEqual(['todo for /repoB']); // not overwritten by the stale /repoA list
+  });
+
   it('shows done todos inline and dimmed (a .done row), not in a separate section', async () => {
     wireMonitorPane();
     await flush();

@@ -183,6 +183,7 @@ export function createFlowStrip(host: HTMLElement, deps: FlowApi): FlowStrip {
       host.replaceChildren(); // no repo yet → nothing to show (the strip follows the cwd)
       return;
     }
+    const key = repoKey;
     // render() rebuilds the subtree, so a focused control would be dropped to <body> on a push-driven
     // re-render; capture which control held focus and restore it after (§22.4 keyboard order).
     const active = doc.activeElement;
@@ -192,7 +193,9 @@ export function createFlowStrip(host: HTMLElement, deps: FlowApi): FlowStrip {
           ? '.flow-undo'
           : '.flow-control'
         : null;
-    render(await deps.state(repoKey));
+    const view = await deps.state(key);
+    if (repoKey !== key) return; // repo changed mid-flight → a newer refresh owns the render
+    render(view);
     if (refocus) host.querySelector<HTMLElement>(refocus)?.focus();
   }
 
