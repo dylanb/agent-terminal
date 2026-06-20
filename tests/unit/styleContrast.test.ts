@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
+import { CM_THEME_STYLES } from '../../src/renderer/src/viewerRender';
 
 // WCAG 1.4.3 (UI-STANDARDS theme-via-tokens): real functional surfaces must clear 4.5:1 in BOTH
 // themes. This resolves the shipped tokens straight from styles.css and computes the actual ratio,
@@ -111,5 +112,32 @@ describe('functional-surface contrast (WCAG 1.4.3)', () => {
         expect(contrast(fg, bg)).toBeGreaterThanOrEqual(4.5);
       });
     }
+
+    // Signal-coloured interactive/label TEXT on the panel — must use the deepened --signal-ink so
+    // it clears 4.5:1 in light (raw --signal is ~3.2:1). Guards against the whack-a-mole regression.
+    for (const [name, sel] of [
+      ['signal pill', '.pill.signal'],
+      ['link button', '.linkbtn'],
+      ['active flow station name', '.flow .stn.active .nm'],
+      ['changed-file tag', '.tree .f .tag-changed'],
+      ['markdown link', '.vbody.md a'],
+      ['selected drawer tab', '.dtab[aria-selected="true"]'],
+      ['report-prose summary', '.finding.report-prose details > summary'],
+      ['template toggle', '.todo-tmpl .tmpl-toggle[aria-expanded="true"]'],
+    ] as const) {
+      it(`the ${name} text clears 4.5:1 on the panel in ${mode}`, () => {
+        const fg = resolve(ruleDecl(sel, 'color'), t);
+        expect(contrast(fg, card)).toBeGreaterThanOrEqual(4.5);
+      });
+    }
+
+    // The code viewer's editor background is transparent, so its text/gutter sit on the panel.
+    // This is the real-contrast regression test for the dark-mode near-black-code blocker.
+    it(`the code viewer text + gutter clear 4.5:1 on the panel in ${mode}`, () => {
+      const textFg = resolve(CM_THEME_STYLES['&'].color, t);
+      const gutterFg = resolve(CM_THEME_STYLES['.cm-gutters'].color, t);
+      expect(contrast(textFg, card)).toBeGreaterThanOrEqual(4.5);
+      expect(contrast(gutterFg, card)).toBeGreaterThanOrEqual(4.5);
+    });
   }
 });

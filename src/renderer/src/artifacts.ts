@@ -59,6 +59,7 @@ const MAX_TREE_W = 640;
 const WIDTH_STEP = 16;
 const FS_MIN_TREE_W = 200; // full-screen popout floor; ceiling is FS_MAX_VIEWPORT_FRAC of the viewport
 const FS_MAX_VIEWPORT_FRAC = 0.85;
+const FS_DEFAULT_VIEWPORT_FRAC = 0.3; // full-screen popout default width, as a fraction of the viewport
 const clampWidth = (px: number): number => Math.min(MAX_TREE_W, Math.max(MIN_TREE_W, Math.round(px)));
 
 export interface Artifacts {
@@ -251,7 +252,7 @@ export function createArtifacts(host: HTMLElement, deps: ArtifactsDeps): Artifac
   const viewportW = (): number => doc.defaultView?.innerWidth ?? 1024;
   const fsMaxWidth = (): number => Math.round(viewportW() * FS_MAX_VIEWPORT_FRAC);
   const clampFsWidth = (px: number): number => Math.min(fsMaxWidth(), Math.max(FS_MIN_TREE_W, Math.round(px)));
-  let fsWidth = clampFsWidth(deps.initialFullscreenWidth ?? Math.ceil(viewportW() * 0.3));
+  let fsWidth = clampFsWidth(deps.initialFullscreenWidth ?? Math.ceil(viewportW() * FS_DEFAULT_VIEWPORT_FRAC));
   function applyFsWidth(px: number, persist: boolean): void {
     fsWidth = clampFsWidth(px);
     split.style.setProperty('--tree-w-fs', `${fsWidth}px`);

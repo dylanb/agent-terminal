@@ -424,9 +424,9 @@ export interface FlowStateView {
   total: number;
   status: FlowStatus;
   error?: string;
-  /** A one-shot transient notice carried only on a `start`/`restart` response — e.g. the §19.3
-   *  running-process refusal when a skill couldn't be injected over a busy shell (§24.2.2 S4).
-   *  Never part of `state()`: the strip shows it once, then a re-pull clears it. */
+  /** A one-shot transient notice on a `start`/`restart` response (the §19.3 busy-shell refusal,
+   *  §24.2.2 S4) or an `advance` response (the §19.2 not-ready warning when advancing with
+   *  outstanding todos). Never part of `state()`: the strip shows it once, then a re-pull clears it. */
   notice?: string;
   /** The active step's bound `todo_template:` ref (§18.6), when it declares one — the default the
    *  on-demand todo-template picker offers while the step is active (§6/§4.1). */

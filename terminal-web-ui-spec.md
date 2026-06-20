@@ -290,6 +290,8 @@ flowchart LR
         CMD["command tracker<br/>(OSC 133 spans · §15.5)"]
         STORE["event store<br/>stamp + replay"]
         INJ["injection API<br/>wrapForPaste + submit"]
+        FLOW["flow state machine<br/>(per-repoKey · §18.2/§24.2.2)<br/>flow-state.yaml + flow.yaml"]
+        TODOS["todo store<br/>(repo-scoped · §16.3)"]
     end
     subgraph Renderer["Renderer process (Chromium)"]
         subgraph TermPane["Terminal pane"]
@@ -303,6 +305,7 @@ flowchart LR
             HIST["command history"]
             ACT["Insert / Insert & submit"]
         end
+        FLOWSTRIP["flow status strip<br/>+ todo tab (§22.3/§16.3)"]
     end
     Preload["preload.js<br/>(contextBridge API)"]
 
@@ -323,6 +326,13 @@ flowchart LR
     HIST -- "monitor:commands" --> Preload --> CMD
     CMD -- "captureCommandText {id} → output text" --> Preload
     ACT -- "agent:inject {text, submit}" --> Preload --> INJ --> PTY
+    FLOWSTRIP -- "flow:start/advance/undo/restart {repoKey}" --> Preload --> FLOW
+    FLOW -- "flow:state (derived n/m + readiness)" --> Preload --> FLOWSTRIP
+    FLOW -- "flow:onStateChanged (push)" --> Preload --> FLOWSTRIP
+    FLOWSTRIP -- "todo:* + todoTemplate:* {repoKey}" --> Preload --> TODOS
+    TODOS -- "count change fires onStateChanged" --> FLOW
+    SHADOW -- "active↔quiet stamps activity" --> FLOW
+    FLOW -- "skill-on-entry inject" --> INJ
 ```
 
 ### Data flows
@@ -498,7 +508,6 @@ contextBridge.exposeInMainWorld('flow', {
   advance: (repoKey) => ipcRenderer.invoke('flow:advance', { sessionId: SID, repoKey }),
   restart: (repoKey) => ipcRenderer.invoke('flow:restart', { sessionId: SID, repoKey }),
   undo:    (repoKey) => ipcRenderer.invoke('flow:undo', { sessionId: SID, repoKey }),
-  onStateChanged: (cb) => { /* subscribe; returns an unsubscribe (§24.2.2 S5) */ },
   gate:    (action, reason) => ipcRenderer.send('flow:gate', { sessionId: SID, action, reason }),
   composeFeedback: (todoIds, instructions, mode) => ipcRenderer.invoke('flow:composeFeedback', { sessionId: SID, todoIds, instructions, mode }),
   openChild: (prRef, atStep) => ipcRenderer.invoke('flow:openChild', { sessionId: SID, prRef, atStep }),

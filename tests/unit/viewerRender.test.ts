@@ -1,25 +1,11 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { readFileSync } from 'node:fs';
 import { EditorView } from '@codemirror/view';
-import { CM_THEME_STYLES, renderCodeInto, renderMarkdownInto } from '../../src/renderer/src/viewerRender';
+import { renderCodeInto, renderMarkdownInto } from '../../src/renderer/src/viewerRender';
 
-// §20.2 / WCAG 1.4.3: the code viewer's foreground colours must come from tokens that are
-// redefined under [data-theme="dark"] — otherwise code renders near-black on the dark background.
-describe('viewerRender — code chrome uses dark-adaptive tokens', () => {
-  const css = readFileSync('src/renderer/src/styles.css', 'utf8');
-  const darkBlock = css.slice(css.indexOf('[data-theme="dark"]'));
-  const darkAdaptive = new Set([...darkBlock.matchAll(/(--[\w-]+)\s*:/g)].map((m) => m[1]));
-
-  const refOf = (v: string): string => v.replace(/^var\((--[\w-]+)\b.*$/, '$1');
-
-  it('drives editor text + gutter colour from tokens redefined in the dark theme', () => {
-    for (const sel of ['&', '.cm-gutters'] as const) {
-      const token = refOf(CM_THEME_STYLES[sel].color);
-      expect(darkAdaptive.has(token), `${sel} color ${token} must adapt to dark theme`).toBe(true);
-    }
-  });
-});
+// WCAG 1.4.3 for the code viewer's text/gutter (the dark-mode near-black-code blocker) is pinned
+// by a REAL contrast assertion in tests/unit/styleContrast.test.ts, which resolves CM_THEME_STYLES
+// against the shipped tokens and computes the ratio — not just token-name membership.
 
 // §20.2: the render seams reuse the same host element across file opens. CodeMirror's EditorView
 // attaches document/window handlers released only by view.destroy() — removing the DOM is not
