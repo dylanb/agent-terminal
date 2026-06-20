@@ -1,7 +1,7 @@
 /// <reference lib="dom" />
 // page.evaluate callbacks run in the renderer; DOM lib gives them window.monitor's type.
 import { _electron as electron, expect, test, type ElectronApplication, type Page } from '@playwright/test';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import '../../src/shared/ipc';
@@ -1076,6 +1076,39 @@ function seedMultiStepFlowRepo(prefix: string, stepIds: string[]): string {
   return dir;
 }
 
+// §24.2.3 T3 — seed a 2-step manual flow whose SECOND step declares a `skill`. Entering step 2 by
+// Advance must fire its entry action (the skill injection) — entry-on-advance, the converse of T1's
+// "advance does not fire onEnter". Step 1 has no skill, so Start injects nothing.
+function seedSkillOnSecondStepFlowRepo(prefix: string, skill: string): string {
+  const dir = mkdtempSync(join(tmpdir(), prefix));
+  mkdirSync(join(dir, '.git'), { recursive: true });
+  mkdirSync(join(dir, '.agent-terminal'), { recursive: true });
+  writeFileSync(
+    join(dir, '.agent-terminal', 'flow.yaml'),
+    `name: entry-flow\nsteps:\n  - id: groom\n    kind: manual\n  - id: build\n    kind: manual\n    skill: ${skill}\n`,
+  );
+  return dir;
+}
+
+// §24.2.3 T3 — seed a 2-step flow whose SECOND step is a loop step with a `bootstrap: pickup` and a
+// required typed input (§18.3/§18.4). Entering it prompts for the input via the modal; Confirm then
+// injects `agent-loop pickup <input>` (subject to the §19.3 busy refusal) and persists the value.
+function seedBootstrapFlowRepo(prefix: string): string {
+  const dir = mkdtempSync(join(tmpdir(), prefix));
+  mkdirSync(join(dir, '.git'), { recursive: true });
+  mkdirSync(join(dir, '.agent-terminal'), { recursive: true });
+  writeFileSync(
+    join(dir, '.agent-terminal', 'flow.yaml'),
+    'name: dev-flow\nsteps:\n' +
+      '  - id: groom\n    kind: manual\n' +
+      '  - id: plan\n    kind: loop\n    loop: plan-loop\n    bootstrap: pickup\n' +
+      '    inputs:\n      - name: ticket\n        type: github-ticket\n        required: true\n',
+  );
+  return dir;
+}
+
+const inputModal = () => page.locator('#flow-modal-host .flow-modal');
+
 // §24.2.3 T2 — seed a repo whose step 2 is a `loop` step bound to a LoopDef, plus a real v4
 // agent-loop state.yaml the app mirrors read-only. Returns the state.yaml path so the test can
 // hand-edit it (the human driving agent-loop) and watch the strip update.
@@ -1206,6 +1239,102 @@ test('a multi-step flow walks the bookended rail: Start → Advance ×3 reaches 
   await expect(flowStation(4)).toHaveClass(/\bactive\b/); // Completed
   await expect(page.locator('#flow-strip .sect')).toHaveText('Flow — step 5 / 5');
   await expect(flowControl()).toHaveText('Restart'); // the Advance control is gone (now Restart)
+  await app.close(); // HOME=temp ⇒ Electron writes userData under it; stop writes before removing it
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+});
+
+test('advancing INTO a later step fires its entry action: the skill injects on Advance (§24.2.3 T3)', async () => {
+  // The T3 entry-on-advance fire (the converse of T1's "advance does not fire onEnter"): a 2-step
+  // flow whose step 2 declares a skill. Start enters step 1 (no skill → nothing typed); Advance
+  // enters step 2, whose skill is injected into the real PTY. Real loop: bash + node-pty + flow mgr.
+  const repo = seedSkillOnSecondStepFlowRepo('agent-term-e2e-flow-t3adv-', 'buildctl');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-flow-t3adv-home-'));
+  await app.close();
+  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
+  page = await app.firstWindow();
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await typeCommand(`cd "${repo}"`);
+  await expect(flowStepName()).toHaveText('groom', { timeout: 10_000 });
+
+  await flowControl().click(); // Start → step 1 (groom): no skill, nothing injected
+  await expect(flowStation(1)).toHaveClass(/\bactive\b/);
+  await expect(termRows()).not.toContainText('/buildctl');
+
+  await flowControl().click(); // Advance → step 2 (build): entry-on-advance injects its skill
+  await expect(flowStation(2)).toHaveClass(/\bactive\b/);
+  await expect(termRows()).toContainText('/buildctl', { timeout: 10_000 });
+
+  await app.close(); // HOME=temp ⇒ Electron writes userData under it; stop writes before removing it
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+});
+
+test('entering a bootstrap loop step prompts for its typed input; Confirm injects agent-loop pickup + persists (§24.2.3 T3)', async () => {
+  // The T3 fire (ready shell): advance into a loop step that needs a typed input → the modal prompts;
+  // typing the ticket + Confirm injects `agent-loop pickup <ticket>` at the ready prompt and persists
+  // the value to flow-state. Real loop: bash + node-pty + flow manager + the modal organism.
+  const repo = seedBootstrapFlowRepo('agent-term-e2e-flow-t3boot-');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-flow-t3boot-home-'));
+  await app.close();
+  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
+  page = await app.firstWindow();
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await typeCommand(`cd "${repo}"`);
+  await expect(flowStepName()).toHaveText('groom', { timeout: 10_000 });
+
+  await flowControl().click(); // Start → groom (manual): no prompt yet
+  await expect(flowStation(1)).toHaveClass(/\bactive\b/);
+  await expect(inputModal()).toHaveCount(0);
+
+  await flowControl().click(); // Advance → plan (loop, bootstrap): the typed-input modal opens
+  await expect(inputModal()).toBeVisible({ timeout: 10_000 });
+  await expect(inputModal().locator('.field .nm')).toHaveText('ticket');
+  await expect(inputModal().locator('.field .ty')).toHaveText('github-ticket');
+
+  await inputModal().locator('.field input').fill('176');
+  await inputModal().locator('.confirm').click();
+
+  await expect(termRows()).toContainText('agent-loop pickup 176', { timeout: 10_000 }); // bootstrap typed at the prompt
+  await expect(inputModal()).toHaveCount(0); // modal closes once the input is provided
+  // The value persists to flow-state.yaml so it threads to later steps and survives a relaunch.
+  await expect
+    .poll(() => readFileSync(join(repo, '.agent-terminal', 'flow-state.yaml'), 'utf8'), { timeout: 10_000 })
+    .toContain('176');
+
+  await app.close(); // HOME=temp ⇒ Electron writes userData under it; stop writes before removing it
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+});
+
+test('a busy shell refuses the bootstrap on Confirm: refusal notice, nothing injected (§19.3 / §24.2.3 T3)', async () => {
+  // The T3 fire (busy shell): the input still prompts, but Confirm over a foreground process refuses
+  // to inject the bootstrap — the §19.3 notice shows and nothing is typed into the PTY.
+  const repo = seedBootstrapFlowRepo('agent-term-e2e-flow-t3bootbusy-');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-flow-t3bootbusy-home-'));
+  await app.close();
+  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
+  page = await app.firstWindow();
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await typeCommand(`cd "${repo}"`);
+  await expect(flowStepName()).toHaveText('groom', { timeout: 10_000 });
+  await flowControl().click(); // Start → groom
+
+  // Hold the shell off its ready prompt before advancing (a live OSC-133 span = busy, §19.3).
+  await typeCommand('echo BUSY_NOW; cat');
+  await expect(termRows()).toContainText('BUSY_NOW');
+
+  await flowControl().click(); // Advance → plan: the modal still prompts (input resolution precedes the busy check)
+  await expect(inputModal()).toBeVisible({ timeout: 10_000 });
+  await inputModal().locator('.field input').fill('176');
+  await inputModal().locator('.confirm').click();
+
+  await expect(page.locator('#flow-strip .flow-notice')).toContainText('busy', { timeout: 10_000 });
+  await expect(termRows()).not.toContainText('agent-loop pickup'); // refused — nothing typed into the PTY
+
   await app.close(); // HOME=temp ⇒ Electron writes userData under it; stop writes before removing it
   rmSync(repo, { recursive: true, force: true });
   rmSync(home, { recursive: true, force: true });

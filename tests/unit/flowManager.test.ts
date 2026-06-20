@@ -68,7 +68,8 @@ describe('flow manager (repo-keyed, follows cwd)', () => {
     const onEnterStep = vi.fn(() => ({ notice: 'agent is busy' }));
     const mgr = createFlowManager({ globalDir: home, onEnterStep });
     const view = mgr.start(a);
-    expect(onEnterStep).toHaveBeenCalledWith(expect.objectContaining({ id: 'alpha-step', kind: 'manual' }));
+    // §24.2.3 T3: entry actions now receive (step, resolvedInputs); a fresh flow has resolved none.
+    expect(onEnterStep).toHaveBeenCalledWith(expect.objectContaining({ id: 'alpha-step', kind: 'manual' }), {});
     expect(view.notice).toBe('agent is busy');
     // Reading state afterwards never re-fires entry actions nor carries the one-shot notice.
     expect(mgr.state(a).notice).toBeUndefined();

@@ -35,6 +35,19 @@ describe('flow-state store (§24.2.2 S3 / §19.1)', () => {
     expect(createFlowStateStore(dir).read()).toBeNull();
   });
 
+  // §24.2.3 T3 — a step's resolved typed inputs (§18.4) persist alongside progression so they
+  // survive a relaunch and can be threaded to later steps (§18.1 output→input). Absent inputs
+  // round-trip as no `inputs` key (the §24.2.2 contract is unchanged when a flow has none).
+  it('round-trips resolved step inputs and survives a fresh store (§24.2.3 T3)', () => {
+    createFlowStateStore(dir).write({ step: 'plan', status: 'in_progress', inputs: { ticket: '176' } });
+    expect(createFlowStateStore(dir).read()).toEqual({ step: 'plan', status: 'in_progress', inputs: { ticket: '176' } });
+  });
+
+  it('omits the inputs key entirely when a flow resolved none', () => {
+    createFlowStateStore(dir).write({ step: 'groom', status: 'in_progress' });
+    expect(createFlowStateStore(dir).read()).toEqual({ step: 'groom', status: 'in_progress' });
+  });
+
   it('reads null on a corrupt/unparseable file rather than throwing', () => {
     mkdirSync(join(dir, '.agent-terminal'), { recursive: true });
     writeFileSync(join(dir, '.agent-terminal', 'flow-state.yaml'), 'status: : : broken\n\t- x');

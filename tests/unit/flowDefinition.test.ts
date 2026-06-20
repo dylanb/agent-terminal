@@ -143,6 +143,36 @@ describe('flow.yaml loader (§24.2.2 S2 / §18.1)', () => {
     writeFlow('name: f\nsteps:\n  - id: build\n    kind: loop\n');
     expect(loadFlowDefinition(dir).ok).toBe(false);
   });
+
+  // §24.2.3 T3 — a step may declare a `bootstrap: pickup` entry action (§18.3) and typed `inputs`
+  // (§18.4). The loader captures both so the entry action can prompt for an unsatisfied input and
+  // inject `agent-loop pickup <input>` once it is provided.
+  it('loads a step\'s bootstrap + typed inputs (§24.2.3 T3 / §18.3/§18.4)', () => {
+    writeFlow(
+      'name: feature-dev\nsteps:\n' +
+        '  - id: plan\n    kind: loop\n    loop: plan-loop\n    bootstrap: pickup\n' +
+        '    inputs:\n      - name: ticket\n        type: github-ticket\n        required: true\n',
+    );
+    const load = loadFlowDefinition(dir);
+    expect(load.ok).toBe(true);
+    if (load.ok) {
+      expect(load.definition.steps[0].bootstrap).toBe('pickup');
+      expect(load.definition.steps[0].inputs).toEqual([{ name: 'ticket', type: 'github-ticket', required: true }]);
+    }
+  });
+
+  it('defaults an input\'s required to false and rejects an unsupported bootstrap (§24.2.3 T3)', () => {
+    writeFlow(
+      'name: f\nsteps:\n  - id: plan\n    kind: loop\n    loop: plan-loop\n' +
+        '    inputs:\n      - name: note\n        type: free-text\n',
+    );
+    const load = loadFlowDefinition(dir);
+    expect(load.ok).toBe(true);
+    if (load.ok) expect(load.definition.steps[0].inputs).toEqual([{ name: 'note', type: 'free-text', required: false }]);
+
+    writeFlow('name: f\nsteps:\n  - id: plan\n    kind: loop\n    loop: plan-loop\n    bootstrap: teleport\n');
+    expect(loadFlowDefinition(dir).ok).toBe(false); // only `pickup` is in scope (§18.3)
+  });
 });
 
 describe('flow machine sourced from a definition (§24.2.2 S2)', () => {

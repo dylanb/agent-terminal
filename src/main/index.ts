@@ -27,6 +27,7 @@ import {
   isValidDismiss,
   isValidDismissAll,
   isValidFlowRequest,
+  isValidFlowProvideInput,
   isValidInject,
   isValidInput,
   isValidLearnChrome,
@@ -216,7 +217,7 @@ async function createWindow(): Promise<void> {
   const flowGlobalDir = spawnCwd(process.env, os.homedir());
   const flow = createFlowManager({
     globalDir: flowGlobalDir,
-    onEnterStep: (step) => flowEntryActions(step),
+    onEnterStep: (step, inputs) => flowEntryActions(step, inputs),
     // T2 (§24.2.3): a loop step mirrors its repo's agent-loop state.yaml, read-only and live.
     readLoopState: (repoKey) => parseAgentLoopState(repoKey),
     // …and resolves its bound LoopDef (§18.1) so readiness + the gate options are gate-driven: the
@@ -401,6 +402,13 @@ async function createWindow(): Promise<void> {
       // restores the in-progress derived line.
       [CH.flowUndo]: (_e, m) =>
         isValidFlowRequest(m) ? trackLoop(m.repoKey, withDerived(m.repoKey, flow.undo(m.repoKey))) : flowRequestError(),
+      // Provide a step's typed input (§18.4 / §24.2.3 T3): persist it + re-run the entry bootstrap
+      // (`agent-loop pickup <input>`, refused over a busy shell). The returned view's notice carries
+      // any §19.3 refusal; withDerived/trackLoop fold in the live derived + loop mirror like the rest.
+      [CH.flowProvideInput]: (_e, m) =>
+        isValidFlowProvideInput(m)
+          ? trackLoop(m.repoKey, withDerived(m.repoKey, flow.provideInput(m.repoKey, m.values)))
+          : flowRequestError(),
       // On-demand template picker (§6/§4.1), surfaced in the todo widget. `list` is GATED to a
       // step that is in_progress (so the picker shows only while the step is active, the operator
       // decision) and carries the bound template as the default; `instantiate` adds the chosen one.

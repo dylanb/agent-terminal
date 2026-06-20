@@ -10,7 +10,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import yaml from 'js-yaml';
-import type { AgentState, FlowStateView, FlowStatus, TodoItem } from '../shared/ipc';
+import type { AgentState, FlowPrompt, FlowStateView, FlowStatus, TodoItem } from '../shared/ipc';
 import { createFlowStateStore, type FlowStateStore } from './flowState';
 import type { AgentLoopState } from './agentLoopBridge';
 import { gateForStatus, type LoopDef } from './loopDef';
@@ -54,6 +54,15 @@ export function deriveLoopView(
 /** A §18.1 step. `manual`: a human produces an artifact (optional skill/template refs). `loop`
  *  (§24.2.3 T2): runs an agent-loop, binding its LoopDef by name (`loop`); the app mirrors that
  *  loop's state.yaml read-only. The `action` kind (§18.2) is a later phase. */
+/** A step's declared typed input (§18.4 / §24.2.3 T3): a named value of a catalog `type`
+ *  (`github-ticket`/`pr`/`files`/`free-text`). A `required` input must be resolved on step entry —
+ *  prompted for when unsatisfied — before the step's `bootstrap` can run. */
+export interface FlowInputDef {
+  name: string;
+  type: string;
+  required: boolean;
+}
+
 export interface FlowStepDef {
   id: string;
   kind: 'manual' | 'loop';
@@ -61,6 +70,11 @@ export interface FlowStepDef {
   todoTemplate?: string;
   /** The bound agent-loop LoopDef name (`loop` steps only) — which loop this step mirrors. */
   loop?: string;
+  /** A per-step entry bootstrap (§18.3): `pickup` runs `agent-loop pickup <input>` on entry. The
+   *  only kind in scope (§24.2.3 T3); the loader rejects any other value. */
+  bootstrap?: 'pickup';
+  /** Typed inputs the step requires on entry (§18.4); a required one prompts when unsatisfied. */
+  inputs?: FlowInputDef[];
 }
 
 export interface FlowDefinition {
@@ -79,6 +93,19 @@ const FLOW_REL = path.join('.agent-terminal', 'flow.yaml');
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
+}
+
+/** Validate a step's `inputs:` (§18.4): each entry needs a string name + type; `required` defaults
+ *  to false. Absent → []; a malformed entry → the sentinel 'invalid' so the loader can error. */
+function parseInputs(raw: unknown): FlowInputDef[] | 'invalid' {
+  if (raw === undefined) return [];
+  if (!Array.isArray(raw)) return 'invalid';
+  const out: FlowInputDef[] = [];
+  for (const item of raw) {
+    if (!isRecord(item) || typeof item.name !== 'string' || typeof item.type !== 'string') return 'invalid';
+    out.push({ name: item.name, type: item.type, required: item.required === true });
+  }
+  return out;
 }
 
 /** Read & validate <worktreeDir>/.agent-terminal/flow.yaml against the §18.1 minimal shape. */
@@ -119,12 +146,19 @@ export function loadFlowDefinition(worktreeDir: string): FlowLoad {
       return { ok: false, error: `flow.yaml step "${raw.id}" has a non-string skill` };
     if (raw.todo_template !== undefined && typeof raw.todo_template !== 'string')
       return { ok: false, error: `flow.yaml step "${raw.id}" has a non-string todo_template` };
+    if (raw.bootstrap !== undefined && raw.bootstrap !== 'pickup')
+      return { ok: false, error: `flow.yaml step "${raw.id}" has unsupported bootstrap "${String(raw.bootstrap)}" (supports: pickup)` };
+    const inputs = parseInputs(raw.inputs);
+    if (inputs === 'invalid')
+      return { ok: false, error: `flow.yaml step "${raw.id}" has malformed inputs (each needs name + type)` };
     steps.push({
       id: raw.id,
       kind: raw.kind,
       ...(typeof raw.skill === 'string' ? { skill: raw.skill } : {}),
       ...(typeof raw.todo_template === 'string' ? { todoTemplate: raw.todo_template } : {}),
       ...(raw.kind === 'loop' ? { loop: raw.loop as string } : {}),
+      ...(raw.bootstrap === 'pickup' ? { bootstrap: 'pickup' as const } : {}),
+      ...(inputs.length > 0 ? { inputs } : {}),
     });
   }
   return { ok: true, definition: { name: doc.name, steps }, flowDir: path.dirname(file) };
@@ -154,11 +188,16 @@ export interface FlowMachine {
   /** done → in_progress; reverts a manual advance WITHOUT re-running the step's entry actions
    *  (the inverse of advance, not a restart). Throws on any other status (inert on error). */
   undo(): FlowStateView;
+  /** Record the answer to a step-entry input prompt (§18.4 / §24.2.3 T3): merge `values` into the
+   *  flow's resolved inputs, persist, and RE-ENTER the current step so the now-satisfied bootstrap
+   *  runs. Legal only while a step is being worked (in_progress); inert on an error load. */
+  provideInput(values: Record<string, string>): FlowStateView;
 }
 
-/** Run the step's entry actions on ENTRY (start/restart), returning a one-shot transient notice
- *  to surface on the transition view — e.g. the §19.3 busy refusal (§24.2.2 S4). */
-export type FlowEnterStep = (step: FlowStepDef) => { notice?: string } | void;
+/** Run the step's entry actions on ENTRY (start/restart/advance-into), given the flow's resolved
+ *  typed inputs (§18.4). Returns a one-shot transient `notice` (e.g. the §19.3 busy refusal) and/or
+ *  a `prompt` for an unsatisfied required input, to surface on the transition view (§24.2.2 S4). */
+export type FlowEnterStep = (step: FlowStepDef, inputs: Record<string, string>) => { notice?: string; prompt?: FlowPrompt } | void;
 
 /** Read the current agent-loop state.yaml mirror for this flow's repo (§24.2.3 T2). Returns null
  *  for a missing/corrupt/unknown-version file; called on every view so the mirror is live. */
@@ -190,10 +229,10 @@ export function createFlowMachine(
       status: 'error',
       error: load.error,
     });
-    // In the error state there is no step to drive: start/advance/restart/undo are inert (the strip
-    // shows no control), so a buggy/racing caller can neither throw nor escape the error — and
-    // we never persist, so a bad flow.yaml can't overwrite a good progression.
-    return { state: view, start: view, advance: view, restart: view, undo: view };
+    // In the error state there is no step to drive: start/advance/restart/undo/provideInput are inert
+    // (the strip shows no control), so a buggy/racing caller can neither throw nor escape the error —
+    // and we never persist, so a bad flow.yaml can't overwrite a good progression.
+    return { state: view, start: view, advance: view, restart: view, undo: view, provideInput: view };
   }
 
   const def = load.definition;
@@ -215,6 +254,9 @@ export function createFlowMachine(
       status = persisted.status;
     }
   }
+  // The flow's resolved typed inputs (§18.4 / §24.2.3 T3), flow-wide so a value resolved at one step
+  // threads to later steps. Hydrated from flow-state so persisted answers survive a relaunch.
+  let inputs: Record<string, string> = persisted?.inputs ? { ...persisted.inputs } : {};
 
   const current = (): FlowStepDef => steps[index];
 
@@ -236,7 +278,8 @@ export function createFlowMachine(
     return deriveLoopView(base, readLoop?.() ?? null, loopDef);
   };
 
-  const persist = (): void => store?.write({ step: current().id, status });
+  const persist = (): void =>
+    store?.write({ step: current().id, status, ...(Object.keys(inputs).length > 0 ? { inputs } : {}) });
 
   const require = (expected: FlowStatus, action: string): void => {
     if (status !== expected) {
@@ -245,11 +288,16 @@ export function createFlowMachine(
   };
 
   // Entry actions fire AFTER state is committed (state, then side effects); the returned notice is
-  // merged onto the transition view only. T1 fires them on entering the FIRST step (start/restart);
-  // entry on advancing INTO a later step is T3 (§24.2.3) — advance stays inert here.
+  // merged onto the transition view only. They run on EVERY entry into a step — start/restart of the
+  // first, and advancing INTO a later step (§24.2.3 T3). Completing the flow (`done`) enters no step.
   const enter = (v: FlowStateView): FlowStateView => {
-    const r = onEnter?.(current());
-    return r && r.notice ? { ...v, notice: r.notice } : v;
+    const r = onEnter?.(current(), inputs);
+    if (!r) return v;
+    return {
+      ...v,
+      ...(r.notice ? { notice: r.notice } : {}),
+      ...(r.prompt ? { prompt: r.prompt } : {}),
+    };
   };
 
   return {
@@ -266,11 +314,12 @@ export function createFlowMachine(
       require('in_progress', 'advance');
       if (index < steps.length - 1) {
         index += 1;
-      } else {
-        status = 'done';
+        persist();
+        return enter(view()); // entry-on-advance: the step we just stepped INTO runs its entry actions
       }
+      status = 'done';
       persist();
-      return view();
+      return view(); // completing the flow enters no step
     },
     // Restart resets a completed flow back to its FIRST step, in progress, re-running its entry
     // actions (§24.2.2).
@@ -289,6 +338,15 @@ export function createFlowMachine(
       persist();
       return view();
     },
+    // The renderer's answer to an entry prompt (§18.4 / §24.2.3 T3): merge the resolved values, persist
+    // them, and RE-ENTER the current step so the now-satisfied bootstrap runs (or re-prompts if a
+    // required input is still missing). Legal only while a step is being worked.
+    provideInput: (values) => {
+      require('in_progress', 'provideInput');
+      inputs = { ...inputs, ...values };
+      persist();
+      return enter(view());
+    },
   };
 }
 
@@ -305,6 +363,7 @@ export interface FlowManager {
   advance(repoKey: string): FlowStateView;
   restart(repoKey: string): FlowStateView;
   undo(repoKey: string): FlowStateView;
+  provideInput(repoKey: string, values: Record<string, string>): FlowStateView;
 }
 
 export interface FlowManagerDeps {
@@ -347,5 +406,6 @@ export function createFlowManager(deps: FlowManagerDeps): FlowManager {
     advance: (k) => machineFor(k).advance(),
     restart: (k) => machineFor(k).restart(),
     undo: (k) => machineFor(k).undo(),
+    provideInput: (k, values) => machineFor(k).provideInput(values),
   };
 }

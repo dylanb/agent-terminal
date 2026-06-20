@@ -6,6 +6,7 @@ import { wireCrossHighlight } from './crossHighlight';
 import { SAMPLE_FLOW, createGatePanel } from './flow';
 import { createFlowStrip } from './flowStrip';
 import { createLoopPanel } from './loopPanel';
+import { createFlowInputModal } from './flowInputModal';
 import { createArtifacts, type Artifacts } from './artifacts';
 import { renderMarkdownInto, renderCodeInto } from './viewerRender';
 import { doInject } from './paneActions';
@@ -45,6 +46,11 @@ if (flowStripHost) {
   // seam, not a DOM reach-across), and the shell docks/undocks the column. No loop → clear + close.
   const loopPanelHost = document.getElementById('loop-panel');
   const loopPanel = loopPanelHost ? createLoopPanel(loopPanelHost) : undefined;
+  // The typed-input modal (§24.2.3 T3) is a sibling organism over its own fixed host. The strip is the
+  // single puller of flow state; on a step-entry prompt it hands the prompt + a submit closure here
+  // (the contract seam, not a DOM reach-across); the modal collects values and submit calls provideInput.
+  const modalHost = document.getElementById('flow-modal-host');
+  const inputModal = modalHost ? createFlowInputModal(modalHost) : undefined;
   const flowStrip = createFlowStrip(flowStripHost, {
     ...window.flow,
     onLoopState: (loop, title) => {
@@ -57,6 +63,7 @@ if (flowStripHost) {
         document.getElementById('loopstat')?.setAttribute('aria-expanded', String(shell.isLoopPanelOpen()));
       }
     },
+    onPrompt: (prompt, stepName, submit) => inputModal?.render(prompt, stepName, submit),
   });
   repo.onChange((info) => flowStrip.onRepoChanged(info.repoKey));
   const seededKey = repo.repoKey();

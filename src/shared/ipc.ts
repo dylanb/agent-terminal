@@ -42,6 +42,7 @@ export const CH = {
   flowAdvance: 'flow:advance',
   flowRestart: 'flow:restart',
   flowUndo: 'flow:undo',
+  flowProvideInput: 'flow:provideInput',
   flowOnStateChanged: 'flow:onStateChanged',
   todoTemplateList: 'todoTemplate:list',
   todoTemplateInstantiate: 'todoTemplate:instantiate',
@@ -431,6 +432,22 @@ export interface FlowLoopView {
   gateOptions?: string[];
 }
 
+/** One typed input the renderer's modal must collect (§18.4 / §24.2.3 T3): the field `name` and its
+ *  catalog `type` (`github-ticket`/`pr`/`files`/`free-text`), which labels and shapes the picker. */
+export interface FlowInputSpec {
+  name: string;
+  type: string;
+}
+
+/** A step-entry prompt for unsatisfied required inputs (§18.4 / §24.2.3 T3): carried on a transition
+ *  view when entering a step whose `bootstrap` needs an input that isn't resolved yet. `inputs` are
+ *  the fields to collect; `bootstrap` names the command they feed (e.g. `agent-loop pickup`) for the
+ *  modal's helper text. The renderer opens its modal, collects values, and calls `flow:provideInput`. */
+export interface FlowPrompt {
+  inputs: FlowInputSpec[];
+  bootstrap: string;
+}
+
 /** The flow's live view (§22.3 status strip): the current step's name, its 1-based
  *  `position` within `total` steps, and its `status`. S2 sources the step from
  *  `<worktree>/.agent-terminal/flow.yaml` (§18.1); on a load failure `status` is
@@ -458,6 +475,10 @@ export interface FlowStateView {
    *  parseable v4 state.yaml. Parallel to `derived` (NOT nested) — loop state outlives the manual
    *  in_progress window that gates `derived`. */
   loop?: FlowLoopView;
+  /** A one-shot step-entry input prompt (§18.4 / §24.2.3 T3): present on a `start`/`restart`/`advance`
+   *  response when the entered step's `bootstrap` needs an unsatisfied required input. The renderer
+   *  opens its modal and answers via `flow:provideInput`. Like `notice`, never part of `state()`. */
+  prompt?: FlowPrompt;
 }
 
 /** flow:onStateChanged broadcast (§24.2.2 S5): main signals that a flow-relevant input changed
@@ -472,6 +493,15 @@ export interface FlowStateChangedMsg {
 export interface FlowRequestMsg {
   sessionId: SessionId;
   repoKey: string;
+}
+
+/** flow:provideInput request (§18.4 / §24.2.3 T3): the renderer's answer to a step-entry `prompt`.
+ *  `values` maps each prompted input name to the user's typed value; main persists them to flow-state
+ *  and re-runs the entry bootstrap (`agent-loop pickup <input>`) now that the input is resolved. */
+export interface FlowProvideInputMsg {
+  sessionId: SessionId;
+  repoKey: string;
+  values: Record<string, string>;
 }
 
 /** A discoverable todo template (§4.1/§21.2): `ref` is the instantiate id (filename without
@@ -591,6 +621,10 @@ export interface FlowApi {
   /** done → in_progress; reverts a manual advance WITHOUT re-running the step's entry actions
    *  (unlike restart). Rejects if not currently done. */
   undo(repoKey: string): Promise<FlowStateView>;
+  /** Answer a step-entry input `prompt` (§18.4 / §24.2.3 T3): persist the typed `values` to
+   *  flow-state and re-run the entry bootstrap (`agent-loop pickup <input>`), returning the new
+   *  view (its `notice` carries any §19.3 busy refusal). */
+  provideInput(repoKey: string, values: Record<string, string>): Promise<FlowStateView>;
   /** Subscribe to main's flow:onStateChanged push (§24.2.2 S5): `cb` fires when a flow-relevant
    *  input changed (todo/activity), prompting a `state()` re-pull. Returns an unsubscribe. */
   onStateChanged(cb: () => void): () => void;

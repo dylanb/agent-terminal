@@ -14,7 +14,7 @@
 // flow lifecycle is injected as `deps` (the window.flow IPC seam), each call returning the
 // resulting state so the strip re-renders from the response.
 
-import type { FlowApi, FlowStateView, FlowStatus, FlowLoopView } from '../../shared/ipc';
+import type { FlowApi, FlowStateView, FlowStatus, FlowLoopView, FlowPrompt } from '../../shared/ipc';
 import { FLOW_CHANGED_EVENT } from './paneActions';
 import { spillTone, toneLabel } from './loopStatus';
 
@@ -67,6 +67,10 @@ export interface FlowStrip {
  *  reaching across organisms. Fired on every render: `null` when the step has no loop mirror. */
 export type FlowStripDeps = FlowApi & {
   onLoopState?: (loop: FlowLoopView | null, title: string) => void;
+  /** Hand a step-entry input prompt (§24.2.3 T3) to the composition root, which opens its modal
+   *  organism. `submit` records the typed values (provideInput) and re-renders. `null` closes the
+   *  modal (no prompt on this view). The strip never reaches across to the modal directly. */
+  onPrompt?: (prompt: FlowPrompt | null, stepName: string, submit: (values: Record<string, string>) => void) => void;
 };
 
 function header(text: string): HTMLElement {
@@ -139,7 +143,9 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
       button.disabled = true;
       runAct(act, key)
         .then((view) => {
-          render(view); // re-render from the response, surfacing any one-shot `notice` (§19.3 refusal)
+          // Re-render from the response, surfacing any one-shot `notice` (§19.3 refusal) and routing a
+          // step-entry input prompt to the modal (§24.2.3 T3) — both ride the transition, not state().
+          applyTransition(view);
           // The active-step status changed, so the todo overlay's on-demand template picker may
           // appear/disappear — signal it to re-pull (the decoupled contract, §4.1/§9.1).
           window.dispatchEvent(new CustomEvent(FLOW_CHANGED_EVENT));
@@ -225,6 +231,25 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
       notice.textContent = state.notice;
       host.append(notice);
     }
+  }
+
+  /** Hand a step-entry input prompt (§24.2.3 T3) to the composition root's modal via the contract
+   *  seam. The prompt is TRANSITION-driven (one-shot, like `notice`): only `applyTransition` calls
+   *  this, never a passive `state()` re-pull — a flow:onStateChanged refresh must NOT close an open
+   *  modal. `submit` records the typed values (provideInput) and re-applies the response. */
+  function emitPrompt(state: FlowStateView): void {
+    deps.onPrompt?.(state.prompt ?? null, state.stepName, (values) => {
+      if (repoKey === null) return;
+      deps.provideInput(repoKey, values).then(applyTransition).catch(() => void refresh());
+    });
+  }
+
+  /** Repaint from a TRANSITION response and route its one-shot prompt to the modal (open if present,
+   *  close if absent). Distinct from a plain render: a `state()` re-pull repaints without touching
+   *  the modal. */
+  function applyTransition(view: FlowStateView): void {
+    render(view);
+    emitPrompt(view);
   }
 
   async function refresh(): Promise<void> {

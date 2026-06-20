@@ -98,6 +98,8 @@ const flowApi: FlowApi = {
   advance: (repoKey) => ipcRenderer.invoke(CH.flowAdvance, { sessionId: SESSION_ID, repoKey }) as Promise<FlowStateView>,
   restart: (repoKey) => ipcRenderer.invoke(CH.flowRestart, { sessionId: SESSION_ID, repoKey }) as Promise<FlowStateView>,
   undo: (repoKey) => ipcRenderer.invoke(CH.flowUndo, { sessionId: SESSION_ID, repoKey }) as Promise<FlowStateView>,
+  provideInput: (repoKey, values) =>
+    ipcRenderer.invoke(CH.flowProvideInput, { sessionId: SESSION_ID, repoKey, values }) as Promise<FlowStateView>,
   onStateChanged: (cb) => {
     const handler = (): void => cb();
     ipcRenderer.on(CH.flowOnStateChanged, handler);

@@ -116,6 +116,10 @@
         <div class="dhint"><span>double-click a finding → reveal in terminal</span><span><span class="kbd">⌘K</span> toggle</span></div>
       </aside>
     </div>
+    <!-- Typed-input modal host (§24.2.3 T3): the createFlowInputModal organism renders the one
+         deliberate blocking surface here, overlaying the app via fixed positioning when a step entry
+         needs a required input. Empty until a prompt opens it. -->
+    <div id="flow-modal-host"></div>
     <script type="module" src="./src/index.ts"></script>
   </body>
 </html>

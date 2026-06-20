@@ -333,7 +333,7 @@ describe('flow machine entry actions (§24.2.2 S4)', () => {
     const onEnter = vi.fn(() => ({ notice: 'busy' }));
     const flow = createFlowMachine(LOAD, undefined, onEnter);
     const view = flow.start();
-    expect(onEnter).toHaveBeenCalledWith(LOAD.definition.steps[0]);
+    expect(onEnter).toHaveBeenCalledWith(LOAD.definition.steps[0], {}); // step + resolved inputs (§24.2.3 T3)
     expect(view.notice).toBe('busy');
     expect(flow.state().notice).toBeUndefined(); // the notice is one-shot, not part of the state
   });
@@ -345,10 +345,12 @@ describe('flow machine entry actions (§24.2.2 S4)', () => {
     flow.advance();
     onEnter.mockClear();
     flow.restart();
-    expect(onEnter).toHaveBeenCalledWith(LOAD.definition.steps[0]);
+    expect(onEnter).toHaveBeenCalledWith(LOAD.definition.steps[0], {});
   });
 
-  it('does not fire onEnter on advance (leaving the step is not entering it)', () => {
+  it('does not fire onEnter when advancing completes the flow (done enters no step)', () => {
+    // A single-step flow: Advance goes step-1 → done. No new step is entered, so entry actions
+    // do not fire (T3's entry-on-advance is "entering a step", and `done` is not a step).
     const onEnter = vi.fn(() => ({}));
     const flow = createFlowMachine(LOAD, undefined, onEnter);
     flow.start();
@@ -374,5 +376,121 @@ describe('flow machine entry actions (§24.2.2 S4)', () => {
     };
     expect(createFlowMachine(templated).state().templateRef).toBe('ticket-grooming');
     expect(createFlowMachine(LOAD).state().templateRef).toBeUndefined(); // no binding → no ref
+  });
+});
+
+// §24.2.3 T3 — entry actions fire on EVERY entry into a step, not only start/restart of the first
+// (the deferral T1 left explicit). Advancing from step i INTO step i+1 enters that step, so its
+// `onEnter` runs (a later step's skill / bootstrap injects when you reach it); the notice it returns
+// merges onto the advance view. Advancing past the LAST step reaches `done`, which enters no step.
+describe('flow machine entry-on-advance (§24.2.3 T3)', () => {
+  const TWO: FlowLoad = {
+    ok: true,
+    definition: { name: 'f', steps: [{ id: 'groom', kind: 'manual' }, { id: 'plan', kind: 'manual' }] },
+    flowDir: '/tmp/f/.agent-terminal',
+  };
+
+  it('fires onEnter for the step being advanced INTO, merging its notice', () => {
+    const onEnter = vi.fn(() => ({ notice: 'busy' }));
+    const flow = createFlowMachine(TWO, undefined, onEnter);
+    flow.start();
+    onEnter.mockClear();
+    const view = flow.advance(); // groom → plan: entering `plan` runs its entry actions
+    expect(onEnter).toHaveBeenCalledWith(TWO.definition.steps[1], {});
+    expect(view.notice).toBe('busy');
+    expect(flow.state().notice).toBeUndefined(); // one-shot, never part of state()
+  });
+
+  it('does not fire onEnter when the last Advance completes the flow', () => {
+    const onEnter = vi.fn(() => ({}));
+    const flow = createFlowMachine(TWO, undefined, onEnter);
+    flow.start();
+    flow.advance(); // → plan (fires)
+    onEnter.mockClear();
+    const view = flow.advance(); // plan (last) → done: no step entered
+    expect(view.status).toBe('done');
+    expect(onEnter).not.toHaveBeenCalled();
+  });
+});
+
+// §24.2.3 T3 — typed-input bootstrap (§18.4). The machine threads the flow's resolved inputs into
+// `onEnter`, merges a returned `prompt` onto the transition view (one-shot, like `notice`), and
+// `provideInput(values)` records the answer, persists it, and RE-ENTERS the step so the now-satisfied
+// bootstrap runs. The machine itself injects nothing — it only routes inputs to the entry action.
+describe('flow machine typed-input bootstrap (§24.2.3 T3)', () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'flow-machine-t3-'));
+  });
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  const PROMPT = { inputs: [{ name: 'ticket', type: 'github-ticket' }], bootstrap: 'agent-loop pickup' };
+  // A fake entry action: prompts until `ticket` is resolved, then "boots" (records the value).
+  const bootEnter = vi.fn((_step, inputs: Record<string, string> = {}) =>
+    inputs.ticket ? { notice: `booted:${inputs.ticket}` } : { prompt: PROMPT },
+  );
+
+  it('merges the entry prompt onto the start view when the input is unsatisfied', () => {
+    bootEnter.mockClear();
+    const flow = createFlowMachine(LOAD, undefined, bootEnter);
+    const view = flow.start();
+    expect(bootEnter).toHaveBeenCalledWith(LOAD.definition.steps[0], {}); // no inputs resolved yet
+    expect(view.prompt).toEqual(PROMPT);
+    expect(view.notice).toBeUndefined();
+    expect(flow.state().prompt).toBeUndefined(); // one-shot, never part of state()
+  });
+
+  it('provideInput threads the value into re-entry, persists it, and clears the prompt', () => {
+    const store = createFlowStateStore(dir);
+    const flow = createFlowMachine(LOAD, store, bootEnter);
+    flow.start();
+    bootEnter.mockClear();
+    const view = flow.provideInput({ ticket: '176' });
+    expect(bootEnter).toHaveBeenCalledWith(LOAD.definition.steps[0], { ticket: '176' }); // re-entry sees the value
+    expect(view.notice).toBe('booted:176'); // the now-satisfied bootstrap ran
+    expect(view.prompt).toBeUndefined();
+    expect(store.read()?.inputs).toEqual({ ticket: '176' }); // persisted for threading + relaunch
+  });
+
+  it('hydrates persisted inputs so a re-entered step no longer prompts', () => {
+    createFlowStateStore(dir).write({ step: 'step-1', status: 'done', inputs: { ticket: '176' } });
+    bootEnter.mockClear();
+    const resumed = createFlowMachine(LOAD, createFlowStateStore(dir), bootEnter);
+    // Restart re-enters the first step; the persisted ticket means the bootstrap fires, no prompt.
+    const view = resumed.restart();
+    expect(bootEnter).toHaveBeenCalledWith(LOAD.definition.steps[0], { ticket: '176' });
+    expect(view.prompt).toBeUndefined();
+    expect(view.notice).toBe('booted:176');
+  });
+
+  it('threads a value resolved at one step into a LATER step\'s same-named input (§18.1 output→input)', () => {
+    // Two bootstrap steps both needing `ticket`. Resolving it at step 1 means entering step 2 by
+    // Advance no longer prompts — the flow-wide inputs carry the value forward (§24.2.3 T3 threading).
+    const TWO_BOOT: FlowLoad = {
+      ok: true,
+      definition: {
+        name: 'f',
+        steps: [
+          { id: 'plan', kind: 'loop', loop: 'plan-loop', bootstrap: 'pickup', inputs: [{ name: 'ticket', type: 'github-ticket', required: true }] },
+          { id: 'impl', kind: 'loop', loop: 'impl-loop', bootstrap: 'pickup', inputs: [{ name: 'ticket', type: 'github-ticket', required: true }] },
+        ],
+      },
+      flowDir: '/tmp/f/.agent-terminal',
+    };
+    const flow = createFlowMachine(TWO_BOOT, createFlowStateStore(dir), bootEnter);
+    expect(flow.start().prompt).toEqual(PROMPT); // step 1 needs the ticket
+    flow.provideInput({ ticket: '176' }); // resolved at step 1
+    bootEnter.mockClear();
+    const view = flow.advance(); // → step 2 (impl): same-named input already satisfied
+    expect(bootEnter).toHaveBeenCalledWith(TWO_BOOT.definition.steps[1], { ticket: '176' });
+    expect(view.prompt).toBeUndefined(); // no re-prompt — the value threaded forward
+    expect(view.notice).toBe('booted:176');
+  });
+
+  it('provideInput is illegal unless a step is being worked (in_progress)', () => {
+    const flow = createFlowMachine(LOAD, undefined, bootEnter);
+    expect(() => flow.provideInput({ ticket: '176' })).toThrow(); // not_started — nothing to bootstrap
   });
 });

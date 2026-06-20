@@ -13,6 +13,7 @@ import {
   type DismissAllMsg,
   type DismissMsg,
   type FlowRequestMsg,
+  type FlowProvideInputMsg,
   type TodoTemplateListMsg,
   type TodoTemplateInstantiateMsg,
   type MonitorCaptureMsg,
@@ -114,6 +115,19 @@ export function isValidClearCommands(m: unknown): m is ClearCommandsMsg {
  *  a filesystem path in flowState, so it gets the same safe-path guard as the todo channels. */
 export function isValidFlowRequest(m: unknown): m is FlowRequestMsg {
   return isRecord(m) && isLiveSession(m) && isSafeRepoKey(m.repoKey);
+}
+
+/** flow:provideInput (§18.4 / §24.2.3 T3): a flow request plus a `values` record whose every value
+ *  is a string (the typed input answers persisted to flow-state). */
+export function isValidFlowProvideInput(m: unknown): m is FlowProvideInputMsg {
+  return (
+    isRecord(m) &&
+    isLiveSession(m) &&
+    isSafeRepoKey(m.repoKey) &&
+    isRecord(m.values) &&
+    !Array.isArray(m.values) &&
+    Object.values(m.values).every((v) => typeof v === 'string')
+  );
 }
 
 /** todoTemplate:list (§6): a live session + a safe repoKey (the flow dir is resolved from it). */

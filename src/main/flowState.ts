@@ -12,10 +12,13 @@ import path from 'node:path';
 import yaml from 'js-yaml';
 import type { FlowStatus } from '../shared/ipc';
 
-/** The persisted progression: which step is current and its lifecycle status (§19.1). */
+/** The persisted progression: which step is current and its lifecycle status (§19.1), plus the
+ *  flow's resolved typed inputs (§18.4 / §24.2.3 T3) — kept flow-wide (not per-step) so a value
+ *  resolved at one step threads to later steps' inputs (§18.1 output→input). */
 export interface PersistedFlowState {
   step: string;
   status: FlowStatus;
+  inputs?: Record<string, string>;
 }
 
 export interface FlowStateStore {
@@ -31,6 +34,15 @@ const PERSISTABLE: ReadonlySet<FlowStatus> = new Set(['not_started', 'in_progres
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
+}
+
+/** Read the persisted `inputs:` map, keeping only string→string entries; null when absent/empty so
+ *  the round-trip omits the key entirely for a flow that resolved none (§24.2.3 T3). */
+function readInputs(raw: unknown): Record<string, string> | null {
+  if (!isRecord(raw)) return null;
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(raw)) if (typeof v === 'string') out[k] = v;
+  return Object.keys(out).length > 0 ? out : null;
 }
 
 /** Append GITIGNORE_ENTRY to <dir>/.gitignore unless it is already ignored there (idempotent). */
@@ -59,12 +71,14 @@ export function createFlowStateStore(worktreeDir: string): FlowStateStore {
       }
       if (!isRecord(doc) || typeof doc.step !== 'string' || doc.step.length === 0) return null;
       if (typeof doc.status !== 'string' || !PERSISTABLE.has(doc.status as FlowStatus)) return null;
-      return { step: doc.step, status: doc.status as FlowStatus };
+      const inputs = readInputs(doc.inputs);
+      return { step: doc.step, status: doc.status as FlowStatus, ...(inputs ? { inputs } : {}) };
     },
     write(state) {
       mkdirSync(path.dirname(file), { recursive: true });
       const tmp = `${file}.tmp`;
-      writeFileSync(tmp, yaml.dump({ step: state.step, status: state.status }));
+      const hasInputs = state.inputs && Object.keys(state.inputs).length > 0;
+      writeFileSync(tmp, yaml.dump({ step: state.step, status: state.status, ...(hasInputs ? { inputs: state.inputs } : {}) }));
       renameSync(tmp, file);
       ensureGitignored(worktreeDir);
     },

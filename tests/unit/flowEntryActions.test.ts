@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { createFlowEntryActions, skillInvocation, BUSY_NOTICE } from '../../src/main/flowEntryActions';
+import { createFlowEntryActions, skillInvocation, BUSY_NOTICE, BOOTSTRAP_PICKUP } from '../../src/main/flowEntryActions';
 import type { FlowStepDef } from '../../src/main/flow';
 
 // §18.6/§19.3 — on entry to a manual step (Start/Restart) the ONLY automatic action is injecting
@@ -45,6 +45,47 @@ describe('flow entry actions (§18.6/§19.3 — skill-only)', () => {
     const result = createFlowEntryActions(d)(step({ todoTemplate: 'ticket-grooming' }));
     expect(d.inject).not.toHaveBeenCalled();
     expect(result.notice).toBeUndefined();
+  });
+});
+
+// §24.2.3 T3 — a step with `bootstrap: pickup` resolves its required typed inputs (§18.4) on entry.
+// When a required input is unsatisfied the action returns a `prompt` (the modal collects it) and
+// injects nothing; once every required input is provided it injects `agent-loop pickup <input>`
+// (§18.3), subject to the same §19.3 busy refusal as the skill. The resolved inputs arrive as the
+// second argument (threaded by the machine from flow-state).
+describe('flow entry actions — bootstrap pickup (§24.2.3 T3 / §18.3/§18.4)', () => {
+  const planStep = (over: Partial<FlowStepDef> = {}): FlowStepDef =>
+    step({ id: 'plan', kind: 'loop', loop: 'plan-loop', bootstrap: 'pickup', inputs: [{ name: 'ticket', type: 'github-ticket', required: true }], ...over });
+
+  it('prompts for an unsatisfied required input and injects nothing', () => {
+    const d = deps();
+    const result = createFlowEntryActions(d)(planStep(), {});
+    expect(d.inject).not.toHaveBeenCalled();
+    expect(result.prompt).toEqual({ inputs: [{ name: 'ticket', type: 'github-ticket' }], bootstrap: BOOTSTRAP_PICKUP });
+    expect(result.notice).toBeUndefined();
+  });
+
+  it('injects `agent-loop pickup <input>` once the required input is provided', () => {
+    const d = deps();
+    const result = createFlowEntryActions(d)(planStep(), { ticket: '176' });
+    expect(d.inject).toHaveBeenCalledWith('agent-loop pickup 176');
+    expect(result.prompt).toBeUndefined();
+    expect(result.notice).toBeUndefined();
+  });
+
+  it('refuses the bootstrap over a busy shell, injecting nothing (§19.3)', () => {
+    const d = deps({ isShellBusy: vi.fn(() => true) });
+    const result = createFlowEntryActions(d)(planStep(), { ticket: '176' });
+    expect(d.inject).not.toHaveBeenCalled();
+    expect(result.notice).toBe(BUSY_NOTICE);
+    expect(result.prompt).toBeUndefined();
+  });
+
+  it('does not prompt for an optional (non-required) input', () => {
+    const d = deps();
+    const result = createFlowEntryActions(d)(planStep({ inputs: [{ name: 'note', type: 'free-text', required: false }] }), {});
+    expect(result.prompt).toBeUndefined();
+    expect(d.inject).toHaveBeenCalledWith('agent-loop pickup'); // no required input to append
   });
 });
 

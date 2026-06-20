@@ -37,6 +37,7 @@ function fakeFlow(initial: FlowStatus = 'not_started') {
       byKey.set(repoKey, 'in_progress');
       return view(repoKey);
     }),
+    provideInput: vi.fn(async (repoKey: string) => view(repoKey)),
     onStateChanged: vi.fn((_cb: () => void) => () => {}),
   };
 }
@@ -159,6 +160,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
       advance: vi.fn(),
       restart: vi.fn(),
       undo: vi.fn(),
+      provideInput: vi.fn(),
       onStateChanged: noopSub,
     };
     const strip = createFlowStrip(host, deps);
@@ -209,6 +211,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
       advance: vi.fn(),
       restart: vi.fn(),
       undo: vi.fn(),
+      provideInput: vi.fn(),
       onStateChanged: noopSub,
     };
     createFlowStrip(host, deps).onRepoChanged('/repo');
@@ -236,6 +239,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
       advance: vi.fn(),
       restart: vi.fn(),
       undo: vi.fn(),
+      provideInput: vi.fn(),
       onStateChanged: vi.fn((cb: () => void) => {
         fire = cb;
         return () => {};
@@ -268,6 +272,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
       advance: vi.fn(),
       restart: vi.fn(),
       undo: vi.fn(),
+      provideInput: vi.fn(),
       onStateChanged: noopSub,
     };
     createFlowStrip(host, deps).onRepoChanged('/repo');
@@ -306,6 +311,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
       advance: vi.fn(),
       restart: vi.fn(),
       undo: vi.fn(),
+      provideInput: vi.fn(),
       onStateChanged: noopSub,
     };
     createFlowStrip(host, deps).onRepoChanged('/repo');
@@ -337,6 +343,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
       advance: vi.fn(),
       restart: vi.fn(),
       undo: vi.fn(),
+      provideInput: vi.fn(),
       onStateChanged: noopSub,
     });
     const toneFor = async (status: string): Promise<string> => {
@@ -375,6 +382,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
       advance: vi.fn(),
       restart: vi.fn(),
       undo: vi.fn(),
+      provideInput: vi.fn(),
       onStateChanged: noopSub,
       onLoopState: (loop: FlowStateView['loop'] | null, title: string) => seen.push({ status: loop?.status, title }),
     };
@@ -387,6 +395,63 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     const seen: Array<FlowStateView['loop'] | null> = [];
     const deps = { ...fakeFlow('in_progress'), onLoopState: (loop: FlowStateView['loop'] | null) => seen.push(loop) };
     createFlowStrip(host, deps).onRepoChanged('/repo');
+    await vi.waitFor(() => expect(control()!.textContent).toBe('Advance'));
+    expect(seen.at(-1)).toBeNull();
+  });
+
+  // §24.2.3 T3 — when a TRANSITION response carries an input `prompt`, the strip hands it to the
+  // composition root via `onPrompt` (the contract seam, not a DOM reach-across), along with a
+  // `submit` that calls provideInput for the current repo. The prompt is transition-driven (one-shot,
+  // like `notice`): a passive `state()` re-pull must NOT pop it (a flow:onStateChanged refresh would
+  // otherwise reopen/close the modal under the user).
+  it('hands a step-entry input prompt to the composition root on a transition, and submit calls provideInput (§24.2.3 T3)', async () => {
+    const seen: Array<{ names: string[]; stepName: string }> = [];
+    let lastSubmit: ((v: Record<string, string>) => void) | undefined;
+    const promptView: FlowStateView = {
+      stepName: 'plan',
+      steps: ['plan'],
+      position: 1,
+      total: 1,
+      status: 'in_progress',
+      prompt: { inputs: [{ name: 'ticket', type: 'github-ticket' }], bootstrap: 'agent-loop pickup' },
+    };
+    const provideInput = vi.fn(async (): Promise<FlowStateView> => ({ ...promptView, prompt: undefined, notice: 'booted' }));
+    const deps = {
+      state: vi.fn(async (): Promise<FlowStateView> => ({ ...promptView, status: 'not_started', prompt: undefined })),
+      start: vi.fn(async (): Promise<FlowStateView> => promptView), // Start enters the step → prompt
+      advance: vi.fn(),
+      restart: vi.fn(),
+      undo: vi.fn(),
+      provideInput,
+      onStateChanged: noopSub,
+      onPrompt: (prompt: FlowStateView['prompt'] | null, stepName: string, submit: (v: Record<string, string>) => void) => {
+        if (prompt) {
+          seen.push({ names: prompt.inputs.map((i) => i.name), stepName });
+          lastSubmit = submit;
+        }
+      },
+    };
+    createFlowStrip(host, deps).onRepoChanged('/repo');
+    await vi.waitFor(() => expect(control()!.textContent).toBe('Start'));
+    expect(seen).toHaveLength(0); // a passive state() pull does NOT pop the prompt
+
+    control()!.click(); // Start = the transition into the step that needs the input
+    await vi.waitFor(() => expect(seen.length).toBeGreaterThan(0));
+    expect(seen.at(-1)).toEqual({ names: ['ticket'], stepName: 'plan' });
+
+    lastSubmit!({ ticket: '176' });
+    expect(provideInput).toHaveBeenCalledWith('/repo', { ticket: '176' });
+  });
+
+  it('signals onPrompt(null) on a transition with no input prompt, closing the modal (§24.2.3 T3)', async () => {
+    const seen: Array<FlowStateView['prompt'] | null> = [];
+    const deps = {
+      ...fakeFlow('not_started'),
+      onPrompt: (prompt: FlowStateView['prompt'] | null) => seen.push(prompt),
+    };
+    createFlowStrip(host, deps).onRepoChanged('/repo');
+    await vi.waitFor(() => expect(control()!.textContent).toBe('Start'));
+    control()!.click(); // Start → in_progress, a prompt-less transition
     await vi.waitFor(() => expect(control()!.textContent).toBe('Advance'));
     expect(seen.at(-1)).toBeNull();
   });
@@ -407,6 +472,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
       advance: vi.fn(),
       restart: vi.fn(),
       undo: vi.fn(),
+      provideInput: vi.fn(),
       onStateChanged: noopSub,
     };
     createFlowStrip(host, deps).onRepoChanged('/repo');

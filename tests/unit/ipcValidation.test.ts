@@ -9,6 +9,7 @@ import {
   isValidDismiss,
   isValidDismissAll,
   isValidFlowRequest,
+  isValidFlowProvideInput,
   isValidInject,
   isValidInput,
   isValidLearnChrome,
@@ -137,6 +138,17 @@ describe('IPC payload validation (§6 — renderer-supplied input is untrusted)'
     expect(isValidFlowRequest({ sessionId: sid, repoKey: '/repo/../../etc' })).toBe(false);
     expect(isValidFlowRequest({})).toBe(false);
     expect(isValidFlowRequest(null)).toBe(false);
+  });
+
+  it('accepts a flow:provideInput with a string→string values map, rejecting bad shapes (§24.2.3 T3)', () => {
+    expect(isValidFlowProvideInput({ sessionId: sid, repoKey: '/repo', values: { ticket: '176' } })).toBe(true);
+    expect(isValidFlowProvideInput({ sessionId: sid, repoKey: '/repo', values: {} })).toBe(true); // empty is fine
+    expect(isValidFlowProvideInput({ sessionId: sid, repoKey: '/repo', values: { ticket: 176 } })).toBe(false); // non-string value
+    expect(isValidFlowProvideInput({ sessionId: sid, repoKey: '/repo' })).toBe(false); // values required
+    expect(isValidFlowProvideInput({ sessionId: sid, repoKey: '/repo', values: [] })).toBe(false); // not a record
+    expect(isValidFlowProvideInput({ sessionId: sid, repoKey: 'relative', values: {} })).toBe(false); // unsafe key
+    expect(isValidFlowProvideInput({ sessionId: 'other', repoKey: '/repo', values: {} })).toBe(false);
+    expect(isValidFlowProvideInput(null)).toBe(false);
   });
 
   // ---- todo:* validators (§16.3 / §16.4) ----
