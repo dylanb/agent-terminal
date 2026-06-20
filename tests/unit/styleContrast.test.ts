@@ -148,3 +148,14 @@ describe('functional-surface contrast (WCAG 1.4.3)', () => {
     });
   }
 });
+
+describe('flow rail dashed connector orientation (§24.1)', () => {
+  it('uses a vertical-direction dashed gradient for a future segment in the vertical rail', () => {
+    // The rail renders vertically (.flow.vert); a 90deg (horizontal) gradient on a 2px-wide column
+    // renders as a solid line, so the future connector must declare a vertical-direction gradient.
+    const bg = ruleDecl('.flow.vert .seg.future', 'background');
+    expect(bg).toContain('repeating-linear-gradient');
+    expect(bg).toMatch(/\b(0deg|180deg|to (top|bottom))\b/);
+    expect(bg).not.toContain('90deg');
+  });
+});

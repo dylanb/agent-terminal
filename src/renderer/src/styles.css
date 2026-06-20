@@ -154,6 +154,9 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible { outline:2px so
 .flow.vert { flex-direction:column; align-items:flex-start; gap:0; }
 .flow.vert .stn { padding:9px 0; }
 .flow.vert .seg { width:2px; height:18px; margin:0 0 0 4px; }
+/* The future-segment dash must run along the rail; the horizontal rail's 90deg gradient would
+   render solid on a 2px-wide vertical segment, so the vertical rail dashes top-to-bottom. */
+.flow.vert .seg.future { background:repeating-linear-gradient(180deg,var(--dim) 0 4px,transparent 4px 9px); }
 /* §24.2.2 S5 — live derived status (n/m done · activity); compact, muted (no mockup counterpart). */
 .flowstrip .flow-derived { margin-top:8px; font-size:11px; letter-spacing:.04em; color:var(--dim); text-transform:lowercase; }
 .flowstrip .flow-control { margin-top:8px; }

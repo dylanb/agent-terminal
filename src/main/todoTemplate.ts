@@ -14,15 +14,14 @@ const ANY_BULLET = /^[-*+]\s+|^\d+[.)]\s+/; // marker to strip when an indented 
 const CHECKBOX = /^\[[ xX]\]\s*/; // ignored task-list marker at the head of an item (text optional, so `- [ ]` collapses to empty)
 
 /**
- * Resolve a step's `todo_template` ref to a file CO-LOCATED with the flow.yaml that declared it
- * (§18.6/§21.2): `flowDir` is the directory holding flow.yaml, and the ref is read relative to it
- * — so a global ~/.agent-terminal/flow.yaml's template lives in ~/.agent-terminal/, a repo-local
- * one in <repo>/.agent-terminal/. A bare name resolves with `.md` appended. Returns the markdown
- * or null; a missing file or a path escaping `flowDir` both degrade to null (never a throw),
- * mirroring readArtifact's escape guard (§20.2).
+ * Resolve a step's `todo_template` ref to a file under `templatesDir` (§18.6/§21.2): the templates
+ * root is the flow's co-located `todo-templates/` dir (`<flowDir>/todo-templates`, as the call site
+ * passes), and the ref is read relative to it. A bare name resolves with `.md` appended. Returns the
+ * markdown or null; a missing file or a path escaping `templatesDir` both degrade to null (never a
+ * throw), mirroring readArtifact's escape guard (§20.2).
  */
-export function loadTodoTemplateFile(flowDir: string, ref: string): string | null {
-  const root = path.resolve(flowDir);
+export function loadTodoTemplateFile(templatesDir: string, ref: string): string | null {
+  const root = path.resolve(templatesDir);
   const read = (candidate: string): string | null => {
     const abs = path.resolve(root, candidate);
     if (abs !== root && !abs.startsWith(root + path.sep)) return null; // lexical escape guard
