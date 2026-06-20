@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { wireMonitorPane, FOCUS_TERMINAL_EVENT } from '../../src/renderer/src/monitor';
+import { wireMonitorPane } from '../../src/renderer/src/monitor';
+import { FOCUS_TERMINAL_EVENT } from '../../src/renderer/src/paneActions';
 import { DEFAULT_UI_SETTINGS } from '../../src/shared/ipc';
 import type { TodoItem, UiSettings } from '../../src/shared/ipc';
 

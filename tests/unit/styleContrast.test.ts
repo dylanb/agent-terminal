@@ -124,6 +124,8 @@ describe('functional-surface contrast (WCAG 1.4.3)', () => {
       ['selected drawer tab', '.dtab[aria-selected="true"]'],
       ['report-prose summary', '.finding.report-prose details > summary'],
       ['template toggle', '.todo-tmpl .tmpl-toggle[aria-expanded="true"]'],
+      ['provenance from-label', '.mock-todos .todo .meta .from'],
+      ['gate verdict (bad)', '.loop .lrow .lv.bad'],
     ] as const) {
       it(`the ${name} text clears 4.5:1 on the panel in ${mode}`, () => {
         const fg = resolve(ruleDecl(sel, 'color'), t);

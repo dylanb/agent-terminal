@@ -229,14 +229,14 @@ button:hover { border-color:var(--dim); }
 .marked { background:var(--signal-wash); border-bottom:2px solid var(--signal); padding:1px 3px; border-radius:2px; }
 .loop .lrow { display:flex; align-items:baseline; font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:12.5px; padding:1px 0; }
 .loop .lrow .lk { color:var(--dim); } .loop .lrow .ld { flex:1; border-bottom:1px dotted var(--hair); margin:0 8px 4px; }
-.loop .lrow .lv.bad { color:var(--attn); }
+.loop .lrow .lv.bad { color:var(--danger); }
 .mock-todos .todo { display:flex; gap:11px; align-items:flex-start; padding:12px 4px; border-bottom:1px solid var(--hair2); }
 .mock-todos .todo .chk { width:15px; height:15px; border:1.5px solid var(--dim); border-radius:4px; margin-top:2px; flex:none; }
 .mock-todos .todo.done .chk { background:var(--pass); border-color:var(--pass); }
 .mock-todos .todo.done .tx { text-decoration:line-through; color:var(--dim); }
 .mock-todos .todo .tx { font-size:13.5px; }
 .mock-todos .todo .meta { font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:10.5px; color:var(--dim); margin-top:4px; }
-.mock-todos .todo .meta .from { color:var(--signal); }
+.mock-todos .todo .meta .from { color:var(--signal-ink); }
 
 /* ---- docked drawer = the reused monitor (capture/todo) ---- */
 .drawer { background:var(--card); border-left:1px solid var(--hair); overflow:hidden; display:flex; flex-direction:column; min-width:0; }

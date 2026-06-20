@@ -16,7 +16,7 @@ import {
   REVEAL_HIGHLIGHT_MS,
   REVEAL_TERMINAL_EVENT,
   TODOS_CHANGED_EVENT,
-} from './monitor';
+} from './paneActions';
 
 /**
  * Capture straight to the repo-scoped Todo list (§16.2): the selected text when there is

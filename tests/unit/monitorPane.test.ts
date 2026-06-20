@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { wireMonitorPane } from '../../src/renderer/src/monitor';
 import {
-  wireMonitorPane,
   CAPTURE_RANGE_ADD_EVENT,
   CAPTURE_RANGE_REMOVE_EVENT,
   FOCUS_TERMINAL_EVENT,
@@ -9,7 +9,7 @@ import {
   REVEAL_HIGHLIGHT_MS,
   REVEAL_TERMINAL_EVENT,
   TODOS_CHANGED_EVENT,
-} from '../../src/renderer/src/monitor';
+} from '../../src/renderer/src/paneActions';
 import { DEFAULT_UI_SETTINGS } from '../../src/shared/ipc';
 import type { MonitorEvent, SelectionRange, TodoItem, UiSettings } from '../../src/shared/ipc';
 

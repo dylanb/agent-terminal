@@ -12,18 +12,6 @@ import { createCaptureTab } from './captureTab';
 import { createRepoContext, type RepoContext } from './repoContext';
 import { doInject, FLOW_CHANGED_EVENT, REVEAL_CAPTURE_EVENT, TODOS_CHANGED_EVENT } from './paneActions';
 
-// Re-exported for callers that import these from the pane module (selection.ts, tests).
-export {
-  CAPTURE_RANGE_ADD_EVENT,
-  CAPTURE_RANGE_REMOVE_EVENT,
-  FOCUS_TERMINAL_EVENT,
-  REVEAL_CAPTURE_EVENT,
-  REVEAL_HIGHLIGHT_MS,
-  REVEAL_TERMINAL_EVENT,
-  TODOS_CHANGED_EVENT,
-  TODO_UNDO_MS,
-} from './paneActions';
-
 export function wireMonitorPane(repo: RepoContext = createRepoContext(window.monitor)): void {
   const el = resolveMonitorElements();
   const status = createStatusStrip(el.status);
