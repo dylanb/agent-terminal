@@ -45,8 +45,11 @@ export function createFlowInputModal(host: HTMLElement): FlowInputModal {
   return {
     render(prompt, stepName, submit) {
       if (!prompt) return close(); // the strip dismissing the modal (incl. the submit path) restores focus
+      const wasOpen = host.firstChild !== null;
       host.replaceChildren();
-      opener = doc.activeElement as HTMLElement | null;
+      // Capture the opener only on the FIRST open; a re-render over an already-open modal would else
+      // grab the just-detached modal child (activeElement → <body>) and strand focus there at close.
+      if (!wasOpen) opener = doc.activeElement as HTMLElement | null;
 
       const scrim = doc.createElement('div');
       scrim.className = 'flow-scrim';

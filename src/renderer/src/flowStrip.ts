@@ -144,6 +144,9 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
       button.disabled = true;
       runAct(act, key)
         .then((view) => {
+          // The cwd may have moved while the transition was in flight; the awaited view belongs to
+          // `key`, so drop it (don't repaint or open a prompt for the prior repo) — mirrors emitPrompt.
+          if (repoKey !== key) return;
           // Re-render from the response, surfacing any one-shot `notice` (§19.3 refusal) and routing a
           // step-entry input prompt to the modal (§24.2.3 T3) — both ride the transition, not state().
           applyTransition(view);

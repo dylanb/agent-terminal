@@ -152,6 +152,20 @@ describe('typed-input modal (§24.2.3 T3 / §18.4)', () => {
     expect(document.activeElement).toBe(opener);
   });
 
+  it('keeps the original opener when re-rendered with a new prompt while already open (WCAG 2.4.3)', () => {
+    // A fresh transition can render a new prompt over an already-open modal; capturing the opener
+    // again would grab the (about-to-be-detached) modal child, stranding focus on <body> at close.
+    const opener = document.createElement('button');
+    document.body.appendChild(opener);
+    opener.focus();
+    const modal = createFlowInputModal(host);
+    modal.render(prompt(), 'plan', vi.fn());
+    expect(document.activeElement).not.toBe(opener); // focus is inside the first modal
+    modal.render(prompt({ inputs: [{ name: 'note', type: 'free-text' }] }), 'build', vi.fn()); // re-render while open
+    modal.render(null, '', vi.fn()); // close
+    expect(document.activeElement).toBe(opener); // restored to the ORIGINAL opener, not <body>
+  });
+
   it('traps Tab focus within the dialog (WCAG 2.4.3): last wraps to first, first wraps to last', () => {
     createFlowInputModal(host).render(prompt(), 'plan', vi.fn());
     const modal = host.querySelector('.flow-modal') as HTMLElement;

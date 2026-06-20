@@ -12,7 +12,7 @@
   --danger:#B11F26;
   /* accessible small-text foregrounds: the bright accents above are kept for borders/dots/washes,
      but status text on --card needs ≥4.5:1, so these darker tones carry it (WCAG 1.4.3). */
-  --signal-text:#0072A6; --pass-text:#157F54; --attn-text:#C02A2F;
+  --signal-text:#006699; --pass-text:#157F54; --attn-text:#C02A2F;
   --bg:var(--board); --card:var(--leaf); --hair:var(--rule); --hair2:var(--rule-soft);
   --text:var(--ink); --dim:var(--muted);
   --term-bg:#0E141B; --term-text:#D5DEE8; --term-dim:#6F7E8E;
@@ -177,7 +177,7 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible { outline:2px so
 .flowstrip .loopstat[aria-expanded="true"] { background:var(--signal-wash); }
 .flowstrip .loopstat .k { text-transform:uppercase; letter-spacing:.14em; font-size:9px; color:var(--dim); }
 .flowstrip .loopstat .v { display:flex; align-items:center; gap:6px; }
-.flowstrip .loopstat .loop-iter { font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:11px; color:var(--dim); }
+.flowstrip .loopstat .loop-iter { font-size:11px; color:var(--dim); }
 .flowstrip .loopstat .car { font-size:8px; color:var(--dim); margin-left:auto; }
 
 /* generic status pill — an arbitrary per-LoopDef status maps onto one of three tones, never an

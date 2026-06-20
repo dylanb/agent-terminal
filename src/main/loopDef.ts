@@ -52,15 +52,16 @@ function resolveLoopDefPath(repoDir: string, name: string, configDir?: string): 
       if (target === root || target.startsWith(root + path.sep)) {
         try {
           // Re-check the realpath so an in-repo symlink can't point OUT of the repo (CWE-59) — the
-          // lexical guard above only sees the symlink's own in-repo path. A dangling/unreadable
-          // target throws here and we keep `target` so the parser yields null (existence is its job).
+          // lexical guard above only sees the symlink's own in-repo path — and RETURN that validated
+          // real path so the later read can't be redirected by a target swap (CWE-367 TOCTOU,
+          // mirroring readArtifact). An escaping symlink falls through to the trusted config copy.
           const real = realpathSync(target);
           const realRoot = realpathSync(root);
-          if (real !== realRoot && !real.startsWith(realRoot + path.sep)) return path.join(configLoopsDir(configDir), name, `${name}.yaml`);
+          if (real === realRoot || real.startsWith(realRoot + path.sep)) return real;
+          return path.join(configLoopsDir(configDir), name, `${name}.yaml`);
         } catch {
-          // dangling in-repo override → fall through to the return below (parser → null)
+          return target; // dangling/unreadable in-repo override → let the parser yield null
         }
-        return target;
       }
     }
   } catch {

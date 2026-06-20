@@ -71,3 +71,32 @@ describe('control text contrast (WCAG 1.4.3 AA)', () => {
     });
   }
 });
+
+// When the loop panel is open, `.loopstat[aria-expanded="true"]` paints `--signal-wash` and the
+// `.spill.work` pill inside paints `--signal-wash` again — so the working-status text sits on TWO
+// stacked translucent washes over the card, not on the bare card the test above checks. Alpha-
+// composite both layers and assert the work-tone text still clears 4.5:1 on that real background.
+type RGBA = [number, number, number, number];
+function parseColor(v: string): RGBA {
+  const rgba = v.match(/rgba?\(([^)]+)\)/);
+  if (rgba) {
+    const p = rgba[1].split(',').map((s) => parseFloat(s.trim()));
+    return [p[0], p[1], p[2], p[3] ?? 1];
+  }
+  const h = v.replace('#', '');
+  return [parseInt(h.slice(0, 2), 16), parseInt(h.slice(2, 4), 16), parseInt(h.slice(4, 6), 16), 1];
+}
+const over = (fg: RGBA, bg: RGBA): RGBA =>
+  [fg[0] * fg[3] + bg[0] * (1 - fg[3]), fg[1] * fg[3] + bg[1] * (1 - fg[3]), fg[2] * fg[3] + bg[2] * (1 - fg[3]), 1];
+const toHex = (c: RGBA): string => '#' + c.slice(0, 3).map((x) => Math.round(x).toString(16).padStart(2, '0')).join('');
+
+describe('expanded loop read-out contrast (WCAG 1.4.3 AA)', () => {
+  for (const [themeName, map] of [['light', light], ['dark', dark]] as const) {
+    it(`${themeName}: .spill.work text clears 4.5:1 over the doubled --signal-wash (panel open)`, () => {
+      const card = parseColor(resolve(map, '--card'));
+      const wash = parseColor(resolve(map, '--signal-wash'));
+      const bg = over(wash, over(wash, card)); // spill wash over loopstat wash over card
+      expect(contrast(resolve(map, '--signal-text'), toHex(bg))).toBeGreaterThanOrEqual(4.5);
+    });
+  }
+});

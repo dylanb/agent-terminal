@@ -133,6 +133,15 @@ describe('LoopDef resolver (§24.2.3 T2 folded / §18.1)', () => {
     rmSync(outside, { recursive: true, force: true });
   });
 
+  it('resolves a valid in-repo symlink override (reads the symlink target through the realpath)', () => {
+    // A contained symlink to an in-repo LoopDef is legitimate; the realpath re-check must accept it
+    // and the read lands on the validated real path (CWE-367-hardened, mirroring readArtifact).
+    writeFileSync(join(repo, 'real-impl-loop.yaml'), IMPL_LOOP);
+    symlinkSync(join(repo, 'real-impl-loop.yaml'), join(repo, 'link.yaml'));
+    writeRegistry('  impl-loop: ./link.yaml\n');
+    expect(parseLoopDef(repo, 'impl-loop', configDir)?.name).toBe('impl-loop');
+  });
+
   it('a dangling in-repo override resolves to null (does NOT fall through to the config copy)', () => {
     // An in-repo override pointing at a not-yet-created file is contained, so the symlink re-check
     // can't realpath it — that must still yield null (the parser can't read it), distinct from a

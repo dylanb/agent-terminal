@@ -481,6 +481,41 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     expect(provideInput).not.toHaveBeenCalled();
   });
 
+  it('does not open a prompt for the prior repo if the cwd moved during a slow transition', async () => {
+    // The control handler awaits the transition, then renders/opens-prompt; if the cwd moved while
+    // start()/advance() was in flight, the awaited view belongs to the old repo and must be dropped.
+    let resolveStart: (v: FlowStateView) => void = () => {};
+    const promptView: FlowStateView = {
+      stepName: 'plan',
+      steps: ['plan'],
+      position: 1,
+      total: 1,
+      status: 'in_progress',
+      prompt: { inputs: [{ name: 'ticket', type: 'github-ticket' }], bootstrap: 'agent-loop pickup' },
+    };
+    const seen: Array<FlowStateView['prompt'] | null> = [];
+    const deps = {
+      state: vi.fn(async (): Promise<FlowStateView> => ({ ...promptView, status: 'not_started' as FlowStatus, prompt: undefined })),
+      start: vi.fn((): Promise<FlowStateView> => new Promise((r) => { resolveStart = r; })),
+      advance: vi.fn(),
+      restart: vi.fn(),
+      undo: vi.fn(),
+      provideInput: vi.fn(),
+      onStateChanged: noopSub,
+      onPrompt: (prompt: FlowStateView['prompt'] | null) => seen.push(prompt),
+    };
+    const strip = createFlowStrip(host, deps);
+    strip.onRepoChanged('/repo');
+    await vi.waitFor(() => expect(control()!.textContent).toBe('Start'));
+    control()!.click(); // start() is now pending
+    strip.onRepoChanged('/other'); // cwd moves before start resolves
+    await vi.waitFor(() => expect(deps.state).toHaveBeenCalledWith('/other'));
+
+    resolveStart(promptView); // the stale /repo transition finally resolves
+    await new Promise((r) => setTimeout(r, 0));
+    expect(seen.filter(Boolean)).toHaveLength(0); // no prompt opened for the prior repo
+  });
+
   it('keeps keyboard focus on the rail Loop read-out across a background state push (WCAG 2.4.3)', async () => {
     let fire = (): void => {};
     const loopView: FlowStateView = {
