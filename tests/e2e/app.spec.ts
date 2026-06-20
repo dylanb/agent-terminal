@@ -876,14 +876,26 @@ test('the full-screen tree popout is resizable and remembers its width (§20.2)'
   const before = await fsW();
   expect(before).toBeGreaterThanOrEqual(0.3 * (await page.evaluate(() => window.innerWidth))); // ≥30% default
 
-  // Drag the popout's resize handle wider.
+  // Drag the popout's resize handle by `dx` (re-reading its box each time — it moves with the width).
   const handle = page.locator('#artifacts .fs-tree-resize');
-  const box = (await handle.boundingBox())!;
-  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
-  await page.mouse.down();
-  await page.mouse.move(box.x + box.width / 2 + 90, box.y + box.height / 2, { steps: 8 });
-  await page.mouse.up();
-  await expect.poll(fsW).toBeGreaterThan(before + 50);
+  const dragHandleBy = async (dx: number): Promise<void> => {
+    const box = (await handle.boundingBox())!;
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(box.x + box.width / 2 + dx, box.y + box.height / 2, { steps: 8 });
+    await page.mouse.up();
+  };
+
+  // The start width may sit at the viewport-dependent ceiling (a persisted width clamps to
+  // FS_MAX_VIEWPORT_FRAC × innerWidth), which would leave a rightward drag no room to grow. So
+  // shrink first to a known-narrower baseline (guaranteed room — `before` is ≥30% of the viewport,
+  // well above the floor), then assert the rightward drag widens it from there.
+  await dragHandleBy(-200);
+  await expect.poll(fsW).toBeLessThan(before);
+  const narrow = await fsW();
+
+  await dragHandleBy(120);
+  await expect.poll(fsW).toBeGreaterThan(narrow + 50);
   const resized = await fsW();
 
   // The width survives a renderer reload (persisted, like the split tree).
@@ -1682,10 +1694,14 @@ test('Start refuses to inject the skill over a busy shell, showing the refusal (
   await typeCommand(`cd "${repo}"`);
   await expect(flowStepName()).toHaveText('groom-ticket', { timeout: 10_000 });
 
-  // `cat` blocks on stdin → a live OSC-133 command span (shell not at a ready prompt). The echo
-  // confirms the command is executing before we fire Start, so the busy probe sees the open span.
-  await typeCommand('echo BUSY_NOW; cat');
+  // A busy shell that keeps OUTPUT flowing (printf every 0.2s < QUIET_MS 1s), not a silent `cat`:
+  // the running loop holds the OSC-133 command span open (so isShellBusy refuses Start) AND keeps the
+  // agent stably 'active'. That matters because the §19.3 notice is transition-driven and any
+  // flow:onStateChanged sweeps it — a silent block flips active→quiet, fires one, and clears the
+  // notice before we can assert it (the flake). Staying active fires no flip, so the notice persists.
+  await typeCommand('while true; do printf "BUSY_NOW "; sleep 0.2; done');
   await expect(termRows()).toContainText('BUSY_NOW');
+  await expect(page.locator('.status-chip[data-status="agent"]')).toContainText('working', { timeout: 6_000 });
 
   await flowControl().click();
   await expect(page.locator('#flow-strip .flow-notice')).toContainText('busy', { timeout: 10_000 });
