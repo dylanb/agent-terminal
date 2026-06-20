@@ -140,16 +140,19 @@ jsdom (and the DOM spec) **auto-adopts** appended nodes: a node created via the 
 placements live in the same (global) document, the assertions pass *even when the organism
 reached for the global* — a test that's green while the rule (§2.2.1) is broken. Asserting
 `ownerDocument` after render is for the same reason **not** sufficient. To make the latent reach
-observable, mount into a host in a **foreign document** with the global `document.createElement`
-**poisoned to throw**:
+observable, mount into a host in a **foreign document** with the global document node factories
+(`createElement` **and** `createTextNode` — every ambient-global factory §2.2 forbids) **poisoned to
+throw**:
 
 ```
 function foreignDocWithHostileGlobal(): Document {
   const foreign = document.implementation.createHTMLDocument('relocated');
-  vi.spyOn(document, 'createElement').mockImplementation(() => {
-    throw new Error('organism reached for the ambient global document instead of its host');
-  });
-  return foreign;                       // restore the spy in afterEach
+  const hostile = (factory) => () => {
+    throw new Error(`organism reached for the ambient global document.${factory} instead of its host`);
+  };
+  vi.spyOn(document, 'createElement').mockImplementation(hostile('createElement'));
+  vi.spyOn(document, 'createTextNode').mockImplementation(hostile('createTextNode'));
+  return foreign;                       // restore the spies in afterEach
 }
 // const host = foreign.createElement('div'); mount the organism on it, drive a render,
 // then assert the visible DOM appears in `host` — a clean organism renders, a reaching one throws.
