@@ -11,6 +11,7 @@ import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import yaml from 'js-yaml';
 import type { FlowStatus } from '../shared/ipc';
+import { isRecord } from './yamlRecord';
 
 /** The persisted progression: which step is current and its lifecycle status (§19.1), plus the
  *  flow's resolved typed inputs (§18.4 / §24.2.3 T3) — kept flow-wide (not per-step) so a value
@@ -31,10 +32,6 @@ export interface FlowStateStore {
 const STATE_REL = path.join('.agent-terminal', 'flow-state.yaml');
 const GITIGNORE_ENTRY = '.agent-terminal/flow-state.yaml';
 const PERSISTABLE: ReadonlySet<FlowStatus> = new Set(['not_started', 'in_progress', 'done']);
-
-function isRecord(v: unknown): v is Record<string, unknown> {
-  return typeof v === 'object' && v !== null && !Array.isArray(v);
-}
 
 /** Read the persisted `inputs:` map, keeping only string→string entries; null when absent/empty so
  *  the round-trip omits the key entirely for a flow that resolved none (§24.2.3 T3). */

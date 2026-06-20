@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createFlowStrip } from '../../src/renderer/src/flowStrip';
+import { assertRendersFromHostDocument } from './relocatable';
 import { FLOW_CHANGED_EVENT } from '../../src/renderer/src/paneActions';
 import type { FlowStateView, FlowStatus } from '../../src/shared/ipc';
 
@@ -480,5 +481,34 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     expect(host.querySelector<HTMLElement>('.flow-error')!.textContent).toContain('flow.yaml not found');
     expect(stations()).toHaveLength(0);
     expect(control()).toBeNull();
+  });
+
+  it('builds from host.ownerDocument, not the global document (UI-STANDARDS §3.3)', async () => {
+    await assertRendersFromHostDocument(async (h) => {
+      const strip = createFlowStrip(h, fakeFlow('in_progress'));
+      strip.onRepoChanged('/repo');
+      await strip.refresh();
+    });
+  });
+
+  it('builds the loop read-out from host.ownerDocument too (covers the loopReadout branch, §3.3)', async () => {
+    const loopDeps = {
+      ...fakeFlow('in_progress'),
+      state: vi.fn(
+        async (): Promise<FlowStateView> => ({
+          stepName: 'build',
+          steps: ['build'],
+          position: 1,
+          total: 1,
+          status: 'in_progress' as FlowStatus,
+          loop: { status: 'impl-review', iteration: 3, pr: 12, branch: 'agent-loop/x', ready: false },
+        }),
+      ),
+    };
+    await assertRendersFromHostDocument(async (h) => {
+      const strip = createFlowStrip(h, loopDeps);
+      strip.onRepoChanged('/repo');
+      await strip.refresh();
+    });
   });
 });

@@ -10,6 +10,7 @@ import { readFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import yaml from 'js-yaml';
+import { isRecord } from './yamlRecord';
 
 /** One gate of a LoopDef. `id` doubles as the agent-loop `status` it gates (e.g.
  *  `awaiting-human-pr-approval`); `humanOptions` is that gate's `human_options` (the gate UI's
@@ -30,10 +31,6 @@ export interface LoopDef {
 
 const SCHEMA_VERSION = '4';
 
-function isRecord(v: unknown): v is Record<string, unknown> {
-  return typeof v === 'object' && v !== null && !Array.isArray(v);
-}
-
 /** The engine reads `$CLAUDE_CONFIG_DIR/loops/`, defaulting to `~/.claude` (`agent-loop list`). */
 function configLoopsDir(configDir?: string): string {
   const base = configDir ?? process.env.CLAUDE_CONFIG_DIR ?? path.join(os.homedir(), '.claude');
@@ -48,7 +45,11 @@ function resolveLoopDefPath(repoDir: string, name: string, configDir?: string): 
     const raw = readFileSync(path.join(repoDir, '.agent-loop.yaml'), 'utf8');
     const doc = yaml.load(raw);
     if (isRecord(doc) && isRecord(doc.loops) && typeof doc.loops[name] === 'string') {
-      return path.resolve(repoDir, doc.loops[name]);
+      const root = path.resolve(repoDir);
+      const target = path.resolve(root, doc.loops[name]);
+      // Refuse an override that escapes the repo (CWE-22), mirroring the todoTemplate loader (§20.2):
+      // fall through to the trusted config-dir copy rather than read an arbitrary path.
+      if (target === root || target.startsWith(root + path.sep)) return target;
     }
   } catch {
     // no/unreadable .agent-loop.yaml → fall through to the config-dir copy

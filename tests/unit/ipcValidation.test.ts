@@ -10,6 +10,8 @@ import {
   isValidDismissAll,
   isValidFlowRequest,
   isValidFlowProvideInput,
+  isValidTemplateList,
+  isValidTemplateInstantiate,
   isValidInject,
   isValidInput,
   isValidLearnChrome,
@@ -149,6 +151,27 @@ describe('IPC payload validation (§6 — renderer-supplied input is untrusted)'
     expect(isValidFlowProvideInput({ sessionId: sid, repoKey: 'relative', values: {} })).toBe(false); // unsafe key
     expect(isValidFlowProvideInput({ sessionId: 'other', repoKey: '/repo', values: {} })).toBe(false);
     expect(isValidFlowProvideInput(null)).toBe(false);
+  });
+
+  it('accepts a todoTemplate:list with a safe repoKey and rejects an unsafe key / wrong session', () => {
+    expect(isValidTemplateList({ sessionId: sid, repoKey: '/repo' })).toBe(true);
+    expect(isValidTemplateList({ sessionId: sid, repoKey: 'relative' })).toBe(false);
+    expect(isValidTemplateList({ sessionId: sid, repoKey: '/repo/../../etc' })).toBe(false);
+    expect(isValidTemplateList({ sessionId: sid })).toBe(false);
+    expect(isValidTemplateList({ sessionId: 'other', repoKey: '/repo' })).toBe(false);
+    expect(isValidTemplateList(null)).toBe(false);
+  });
+
+  it('accepts a todoTemplate:instantiate and rejects traversal/empty/non-string ref (§21.2 boundary guard)', () => {
+    expect(isValidTemplateInstantiate({ sessionId: sid, repoKey: '/repo', ref: 'impl-loop-review' })).toBe(true);
+    expect(isValidTemplateInstantiate({ sessionId: sid, repoKey: '/repo', ref: '' })).toBe(false); // empty
+    expect(isValidTemplateInstantiate({ sessionId: sid, repoKey: '/repo', ref: '../x' })).toBe(false); // traversal
+    expect(isValidTemplateInstantiate({ sessionId: sid, repoKey: '/repo', ref: 'a/../b' })).toBe(false); // traversal
+    expect(isValidTemplateInstantiate({ sessionId: sid, repoKey: '/repo', ref: 'a\\..\\b' })).toBe(false); // backslash traversal
+    expect(isValidTemplateInstantiate({ sessionId: sid, repoKey: '/repo', ref: 7 })).toBe(false); // non-string
+    expect(isValidTemplateInstantiate({ sessionId: sid, repoKey: 'relative', ref: 'x' })).toBe(false); // unsafe key
+    expect(isValidTemplateInstantiate({ sessionId: 'other', repoKey: '/repo', ref: 'x' })).toBe(false);
+    expect(isValidTemplateInstantiate(null)).toBe(false);
   });
 
   // ---- todo:* validators (§16.3 / §16.4) ----

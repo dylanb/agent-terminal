@@ -239,6 +239,16 @@ describe('shell controller (§24.1C — views, hotkeys, docked drawer, theme)', 
       expect(shell.isLoopPanelOpen()).toBe(false);
     });
 
+    it('activates the role=button Loop read-out by keyboard (Enter and Space), WCAG 2.1.1', () => {
+      const loopstat = document.getElementById('loopstat') as HTMLElement;
+      const press = (key: string) =>
+        loopstat.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }));
+      press('Enter');
+      expect(shell.isLoopPanelOpen()).toBe(true);
+      press(' ');
+      expect(shell.isLoopPanelOpen()).toBe(false);
+    });
+
     it('closes on Escape when open', () => {
       shell.openLoopPanel();
       document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));

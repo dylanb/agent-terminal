@@ -100,4 +100,28 @@ describe('LoopDef resolver (§24.2.3 T2 folded / §18.1)', () => {
     writeConfigLoop('impl-loop', 'name: impl-loop\nschema_version: "4"\n');
     expect(parseLoopDef(repo, 'impl-loop', configDir)).toBeNull();
   });
+
+  it('ignores a repo registry override that escapes the repo dir (CWE-22 path traversal), falling through to config', () => {
+    // A hostile/buggy committed .agent-loop.yaml points the loop at a file OUTSIDE the repo; the
+    // resolver must refuse the override (like the sibling todoTemplate loader, §20.2) and fall
+    // through to the trusted config-dir copy rather than read+parse the escaped path.
+    const outside = mkdtempSync(join(tmpdir(), 'loopdef-outside-'));
+    writeFileSync(join(outside, 'evil.yaml'), IMPL_LOOP.replace('name: impl-loop', 'name: evil-loop'));
+    writeConfigLoop('impl-loop', IMPL_LOOP); // the legit config copy
+
+    writeRegistry(`  impl-loop: ${join(outside, 'evil.yaml')}\n`); // absolute escape
+    expect(parseLoopDef(repo, 'impl-loop', configDir)?.name).toBe('impl-loop');
+
+    writeRegistry('  impl-loop: ../../../../../../etc/passwd\n'); // relative traversal escape
+    expect(parseLoopDef(repo, 'impl-loop', configDir)?.name).toBe('impl-loop');
+
+    rmSync(outside, { recursive: true, force: true });
+  });
+
+  it('still honors an in-repo registry override in a subdirectory (containment guard is not over-broad)', () => {
+    mkdirSync(join(repo, 'loops'), { recursive: true });
+    writeFileSync(join(repo, 'loops', 'my-impl-loop.yaml'), IMPL_LOOP);
+    writeRegistry('  impl-loop: ./loops/my-impl-loop.yaml\n');
+    expect(parseLoopDef(repo, 'impl-loop', configDir)?.name).toBe('impl-loop');
+  });
 });

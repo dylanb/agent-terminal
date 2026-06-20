@@ -170,6 +170,14 @@ export function createShell(root: HTMLElement, deps: ShellDeps = {}): Shell {
       closeLoopPanel();
       return;
     }
+    // The rail Loop read-out is a role=button span (§24.2.3); make it operable by keyboard like a
+    // native button — Enter/Space toggle the panel (WCAG 2.1.1). Space is prevented to avoid scroll.
+    if ((e.key === 'Enter' || e.key === ' ') && (e.target as Element | null)?.closest?.('#loopstat')) {
+      e.preventDefault();
+      e.stopPropagation();
+      toggleLoopPanel();
+      return;
+    }
     if (!(e.metaKey || e.ctrlKey)) return;
     const k = e.key.toLowerCase();
     if (k === 'k') {

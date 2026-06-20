@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createLoopPanel } from '../../src/renderer/src/loopPanel';
+import { assertRendersFromHostDocument } from './relocatable';
 import type { FlowLoopView } from '../../src/shared/ipc';
 
 // §24.2.3 T2 — the docked loop panel organism (UI-STANDARDS §1.2): the EXPANDED read-only state
@@ -83,5 +84,9 @@ describe('docked loop panel (§24.2.3 T2)', () => {
     createLoopPanel(a).render(loop(), 'build');
     createLoopPanel(b).render(loop(), 'build');
     expect(a.innerHTML).toBe(b.innerHTML);
+  });
+
+  it('builds from host.ownerDocument, not the global document (UI-STANDARDS §3.3)', async () => {
+    await assertRendersFromHostDocument((h) => createLoopPanel(h).render(loop(), 'build'));
   });
 });

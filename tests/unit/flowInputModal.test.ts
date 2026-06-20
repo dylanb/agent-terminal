@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createFlowInputModal } from '../../src/renderer/src/flowInputModal';
+import { assertRendersFromHostDocument } from './relocatable';
 import type { FlowPrompt } from '../../src/shared/ipc';
 
 // §24.2.3 T3 — the typed-input modal organism (UI-STANDARDS §1.2): the one deliberate blocking
@@ -91,5 +92,43 @@ describe('typed-input modal (§24.2.3 T3 / §18.4)', () => {
     createFlowInputModal(a).render(prompt(), 'plan', vi.fn());
     createFlowInputModal(b).render(prompt(), 'plan', vi.fn());
     expect(a.innerHTML).toBe(b.innerHTML);
+  });
+
+  it('builds from host.ownerDocument, not the global document (UI-STANDARDS §3.3)', async () => {
+    await assertRendersFromHostDocument((h) => createFlowInputModal(h).render(prompt(), 'plan', vi.fn()));
+  });
+
+  it('names the dialog via aria-labelledby pointing at its heading (WCAG 4.1.2)', () => {
+    createFlowInputModal(host).render(prompt(), 'plan', vi.fn());
+    const dialog = host.querySelector('.flow-modal')!;
+    const labelledby = dialog.getAttribute('aria-labelledby');
+    expect(labelledby).toBeTruthy();
+    expect(host.querySelector(`#${labelledby}`)?.textContent).toBe(dialog.querySelector('h3')?.textContent);
+  });
+
+  it('restores focus to the opener element when the modal closes (WCAG 2.4.3)', () => {
+    const opener = document.createElement('button');
+    document.body.appendChild(opener);
+    opener.focus();
+    expect(document.activeElement).toBe(opener);
+    const modal = createFlowInputModal(host);
+    modal.render(prompt(), 'plan', vi.fn());
+    expect(document.activeElement).not.toBe(opener); // focus moved into the dialog
+    (host.querySelector('.flow-modal .cancel') as HTMLButtonElement).click();
+    expect(document.activeElement).toBe(opener);
+  });
+
+  it('traps Tab focus within the dialog (WCAG 2.4.3): last wraps to first, first wraps to last', () => {
+    createFlowInputModal(host).render(prompt(), 'plan', vi.fn());
+    const modal = host.querySelector('.flow-modal') as HTMLElement;
+    const focusables = [...modal.querySelectorAll<HTMLElement>('input,button')];
+    const first = focusables[0];
+    const last = focusables[focusables.length - 1];
+    last.focus();
+    last.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true }));
+    expect(document.activeElement).toBe(first);
+    first.focus();
+    first.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', shiftKey: true, bubbles: true, cancelable: true }));
+    expect(document.activeElement).toBe(last);
   });
 });

@@ -14,6 +14,7 @@ import type { AgentState, FlowPrompt, FlowStateView, FlowStatus, TodoItem } from
 import { createFlowStateStore, type FlowStateStore } from './flowState';
 import type { AgentLoopState } from './agentLoopBridge';
 import { gateForStatus, type LoopDef } from './loopDef';
+import { isRecord } from './yamlRecord';
 
 /**
  * Derive the live in-progress status (§22.3 / §24.2.2 S5): a PURE function of the flow view, the
@@ -91,9 +92,6 @@ export type FlowLoad =
 
 const FLOW_REL = path.join('.agent-terminal', 'flow.yaml');
 
-function isRecord(v: unknown): v is Record<string, unknown> {
-  return typeof v === 'object' && v !== null && !Array.isArray(v);
-}
 
 /** Validate a step's `inputs:` (§18.4): each entry needs a string name + type; `required` defaults
  *  to false. Absent → []; a malformed entry → the sentinel 'invalid' so the loader can error. */

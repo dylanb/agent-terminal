@@ -14,58 +14,85 @@ export interface FlowInputModal {
   render(prompt: FlowPrompt | null, stepName: string, submit: (values: Record<string, string>) => void): void;
 }
 
-function inputField(spec: { name: string; type: string }): { field: HTMLElement; read: () => string } {
-  const field = document.createElement('div');
+function inputField(doc: Document, spec: { name: string; type: string }): { field: HTMLElement; read: () => string } {
+  const field = doc.createElement('div');
   field.className = 'field';
-  const lab = document.createElement('div');
+  const lab = doc.createElement('div');
   lab.className = 'flab';
-  const nm = document.createElement('span');
+  const nm = doc.createElement('span');
   nm.className = 'nm';
   nm.textContent = spec.name;
-  const ty = document.createElement('span');
+  const ty = doc.createElement('span');
   ty.className = 'ty';
   ty.textContent = spec.type;
   lab.append(nm, ty);
-  const input = document.createElement('input');
+  const input = doc.createElement('input');
   input.setAttribute('aria-label', spec.name);
   field.append(lab, input);
   return { field, read: () => input.value.trim() };
 }
 
+const TITLE_ID = 'flow-modal-title'; // names the dialog (aria-labelledby → the heading), WCAG 4.1.2
+
 export function createFlowInputModal(host: HTMLElement): FlowInputModal {
-  const close = (): void => host.replaceChildren();
+  const doc = host.ownerDocument; // build from the host's document so the modal relocates (UI §2.2.1)
+  let opener: HTMLElement | null = null; // the element focused when the modal opened (§2.4.3 restore)
+  const close = (): void => {
+    host.replaceChildren();
+    opener?.focus(); // return focus to whoever opened the dialog
+    opener = null;
+  };
   return {
     render(prompt, stepName, submit) {
       host.replaceChildren();
       if (!prompt) return;
+      opener = doc.activeElement as HTMLElement | null;
 
-      const scrim = document.createElement('div');
+      const scrim = doc.createElement('div');
       scrim.className = 'flow-scrim';
       scrim.addEventListener('click', close);
 
-      const modal = document.createElement('div');
+      const modal = doc.createElement('div');
       modal.className = 'flow-modal';
       modal.setAttribute('role', 'dialog');
       modal.setAttribute('aria-modal', 'true');
+      modal.setAttribute('aria-labelledby', TITLE_ID);
       modal.addEventListener('keydown', (e) => {
-        if (e.key === 'Escape') close();
+        if (e.key === 'Escape') return close();
+        // Trap Tab within the dialog (WCAG 2.4.3): wrap last→first and (shift) first→last so focus
+        // never escapes the modal into the inert content behind the scrim.
+        if (e.key === 'Tab') {
+          const f = [...modal.querySelectorAll<HTMLElement>('input,button')].filter((el) => !el.hasAttribute('disabled'));
+          if (f.length === 0) return;
+          const first = f[0];
+          const last = f[f.length - 1];
+          const active = doc.activeElement;
+          if (e.shiftKey && active === first) {
+            e.preventDefault();
+            last.focus();
+          } else if (!e.shiftKey && active === last) {
+            e.preventDefault();
+            first.focus();
+          }
+        }
       });
 
-      const card = document.createElement('div');
+      const card = doc.createElement('div');
       card.className = 'card';
-      const h3 = document.createElement('h3');
+      const h3 = doc.createElement('h3');
       h3.className = 'serif';
+      h3.id = TITLE_ID;
       h3.textContent = `${stepName} needs an input`;
-      const ph = document.createElement('p');
+      const ph = doc.createElement('p');
       ph.className = 'ph';
       ph.textContent = `Entering the ${stepName} step — provide its required input to bootstrap the loop.`;
       card.append(h3, ph);
 
       const reads: Array<{ name: string; read: () => string }> = [];
       prompt.inputs.forEach((spec) => {
-        const { field, read } = inputField(spec);
+        const { field, read } = inputField(doc, spec);
         if (reads.length === 0) {
-          const help = document.createElement('div');
+          const help = doc.createElement('div');
           help.className = 'help';
           help.textContent = `Bootstraps \`${prompt.bootstrap} <${spec.name}>\` on entry (§18.3). Threaded to later steps' inputs.`;
           field.append(help);
@@ -74,13 +101,13 @@ export function createFlowInputModal(host: HTMLElement): FlowInputModal {
         card.append(field);
       });
 
-      const foot = document.createElement('div');
+      const foot = doc.createElement('div');
       foot.className = 'mfoot';
-      const cancel = document.createElement('button');
+      const cancel = doc.createElement('button');
       cancel.className = 'pill cancel';
       cancel.textContent = 'Cancel';
       cancel.addEventListener('click', close);
-      const confirm = document.createElement('button');
+      const confirm = doc.createElement('button');
       confirm.className = 'pill signal confirm';
       confirm.textContent = 'Confirm & bootstrap';
       confirm.addEventListener('click', () => {

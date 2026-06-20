@@ -5,11 +5,13 @@
 
 export type SpillTone = 'await' | 'work' | 'settle';
 
-const SETTLE = /^(merged|approved|done|complete|completed|shipped|closed|terminated)$/;
+// `awaiting-team-review` is the impl-loop's kind:terminal gate (the loop is done, handed to the team)
+// — settled, not human-needed; keep it ahead of the awaiting-* prefix below.
+const SETTLE = /^(awaiting-team-review|merged|approved|done|complete|completed|shipped|closed|terminated)$/;
 
 export function spillTone(status: string): SpillTone {
-  if (status.startsWith('awaiting-human') || status === 'impasse') return 'await';
   if (SETTLE.test(status)) return 'settle';
+  if (status.startsWith('awaiting-human') || status === 'impasse') return 'await';
   return 'work';
 }
 

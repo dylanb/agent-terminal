@@ -23,15 +23,15 @@ export interface LoopPanel {
   render(loop: FlowLoopView | null, title: string): void;
 }
 
-function detailRow(key: string, value: string, valueClass = ''): HTMLElement {
-  const r = document.createElement('div');
+function detailRow(doc: Document, key: string, value: string, valueClass = ''): HTMLElement {
+  const r = doc.createElement('div');
   r.className = 'lrow';
-  const k = document.createElement('span');
+  const k = doc.createElement('span');
   k.className = 'lk';
   k.textContent = key;
-  const lead = document.createElement('span'); // the dotted leader between key and value
+  const lead = doc.createElement('span'); // the dotted leader between key and value
   lead.className = 'ld';
-  const v = document.createElement('span');
+  const v = doc.createElement('span');
   v.className = valueClass ? `lv ${valueClass}` : 'lv';
   v.textContent = value;
   r.append(k, lead, v);
@@ -39,22 +39,23 @@ function detailRow(key: string, value: string, valueClass = ''): HTMLElement {
 }
 
 export function createLoopPanel(host: HTMLElement): LoopPanel {
+  const doc = host.ownerDocument; // build from the host's document so the panel relocates (UI §2.2.1)
   return {
     render(loop, title) {
       host.replaceChildren();
       if (!loop) return;
 
-      const head = document.createElement('div');
+      const head = doc.createElement('div');
       head.className = 'lhead';
-      const mark = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      const mark = doc.createElementNS('http://www.w3.org/2000/svg', 'svg');
       mark.setAttribute('class', 'loopmark');
-      const use = document.createElementNS('http://www.w3.org/2000/svg', 'use');
+      const use = doc.createElementNS('http://www.w3.org/2000/svg', 'use');
       use.setAttribute('href', '#loop-orbit');
       mark.append(use);
-      const h3 = document.createElement('h3');
+      const h3 = doc.createElement('h3');
       h3.className = 'serif';
       h3.textContent = title;
-      const close = document.createElement('button');
+      const close = doc.createElement('button');
       close.className = 'iconbtn x';
       close.id = 'lclose';
       close.title = 'Close loop panel';
@@ -63,26 +64,26 @@ export function createLoopPanel(host: HTMLElement): LoopPanel {
       head.append(mark, h3, close);
       host.append(head);
 
-      const body = document.createElement('div');
+      const body = doc.createElement('div');
       body.className = 'lbody';
-      const segH = document.createElement('div');
+      const segH = doc.createElement('div');
       segH.className = 'seg-h';
       segH.textContent = 'State · .agent-loop/state.yaml (v4)';
       body.append(segH);
 
-      const ldl = document.createElement('div');
+      const ldl = doc.createElement('div');
       ldl.className = 'ldl';
       // An awaiting-human status still needs the human — the §22.3 "act" tone (`bad`).
-      ldl.append(detailRow('status', loop.status, spillTone(loop.status) === 'await' ? 'bad' : ''));
-      ldl.append(detailRow('iteration', String(loop.iteration)));
-      if (loop.pr !== null) ldl.append(detailRow('pr', `#${loop.pr}`, 'sig'));
-      if (loop.branch !== null) ldl.append(detailRow('branch', loop.branch));
+      ldl.append(detailRow(doc, 'status', loop.status, spillTone(loop.status) === 'await' ? 'bad' : ''));
+      ldl.append(detailRow(doc, 'iteration', String(loop.iteration)));
+      if (loop.pr !== null) ldl.append(detailRow(doc, 'pr', `#${loop.pr}`, 'sig'));
+      if (loop.branch !== null) ldl.append(detailRow(doc, 'branch', loop.branch));
       // The current gate's human_options (§18.1/§19.4) — present only at an awaiting gate. The actual
       // decision buttons are T5/T6; this row just surfaces what the gate will offer.
       if (loop.gateOptions && loop.gateOptions.length > 0)
-        ldl.append(detailRow('gate options', loop.gateOptions.map(gateOptionLabel).join(' · ')));
+        ldl.append(detailRow(doc, 'gate options', loop.gateOptions.map(gateOptionLabel).join(' · ')));
 
-      const grow = document.createElement('div');
+      const grow = doc.createElement('div');
       grow.className = 'grow';
       grow.textContent = '+ extensible — reviewer count, last verdict, timings slot in here as the bridge derives them.';
       ldl.append(grow);

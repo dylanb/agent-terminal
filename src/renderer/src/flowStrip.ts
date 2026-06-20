@@ -73,8 +73,8 @@ export type FlowStripDeps = FlowApi & {
   onPrompt?: (prompt: FlowPrompt | null, stepName: string, submit: (values: Record<string, string>) => void) => void;
 };
 
-function header(text: string): HTMLElement {
-  const sect = document.createElement('div');
+function header(doc: Document, text: string): HTMLElement {
+  const sect = doc.createElement('div');
   sect.className = 'sect';
   sect.textContent = text;
   return sect;
@@ -83,8 +83,8 @@ function header(text: string): HTMLElement {
 /** The compact read-only loop read-out (§24.2.3 T2) shown in the rail: a 3-tone status pill (the
  *  one-word tone, not the unbounded status) + the iteration, framed as a `role=button` that opens
  *  the docked panel (the shell wires the click). The exact v4 vocabulary lives in that panel. */
-function loopReadout(loop: FlowLoopView): HTMLElement {
-  const stat = document.createElement('span');
+function loopReadout(doc: Document, loop: FlowLoopView): HTMLElement {
+  const stat = doc.createElement('span');
   stat.className = 'stat loopstat';
   stat.id = 'loopstat';
   stat.setAttribute('role', 'button');
@@ -92,23 +92,23 @@ function loopReadout(loop: FlowLoopView): HTMLElement {
   stat.setAttribute('aria-expanded', 'false');
   stat.setAttribute('aria-controls', 'loop-panel');
 
-  const k = document.createElement('span');
+  const k = doc.createElement('span');
   k.className = 'k';
   k.textContent = 'Loop';
 
-  const v = document.createElement('span');
+  const v = doc.createElement('span');
   v.className = 'v';
-  const pill = document.createElement('span');
+  const pill = doc.createElement('span');
   pill.className = `spill ${spillTone(loop.status)}`;
-  const dot = document.createElement('span');
+  const dot = doc.createElement('span');
   dot.className = 'pdot';
-  const label = document.createElement('span');
+  const label = doc.createElement('span');
   label.textContent = toneLabel(loop.status);
   pill.append(dot, label);
-  const iter = document.createElement('span');
+  const iter = doc.createElement('span');
   iter.className = 'mono loop-iter';
   iter.textContent = `iter ${loop.iteration}`;
-  const car = document.createElement('span');
+  const car = doc.createElement('span');
   car.className = 'car';
   car.setAttribute('aria-hidden', 'true');
   car.textContent = '▸';
@@ -119,6 +119,7 @@ function loopReadout(loop: FlowLoopView): HTMLElement {
 }
 
 export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStrip {
+  const doc = host.ownerDocument; // build from the host's document so the strip relocates (UI §2.2.1)
   let repoKey: string | null = null;
 
   const runAct = (act: Act, key: string): Promise<FlowStateView> =>
@@ -132,9 +133,9 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
 
   /** A lifecycle control button: fires its transition, disabling itself while in flight so a
    *  double-click can't fire it twice (the machine would reject the second anyway — §24.2.2 — but
-   *  this keeps the UI honest), then re-renders from the returned state. `cls` is `undo`/`advance`/… */
+   *  this keeps the UI honest), then re-renders from the returned state. */
   function controlButton(label: string, act: Act): HTMLButtonElement {
-    const button = document.createElement('button');
+    const button = doc.createElement('button');
     button.className = `flow-${act === 'undo' ? 'undo' : 'control'} pill`;
     button.textContent = label;
     button.addEventListener('click', () => {
@@ -159,8 +160,8 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
     host.replaceChildren();
 
     if (state.status === 'error') {
-      host.append(header('Flow'));
-      const err = document.createElement('div');
+      host.append(header(doc, 'Flow'));
+      const err = doc.createElement('div');
       err.className = 'flow-error';
       err.textContent = state.error ?? 'flow failed to load';
       host.append(err);
@@ -173,25 +174,25 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
     // 1/5 → … → 5/5 for three).
     const railStn = railStations(state);
     const activeIndex = railStn.findIndex((s) => s.st === 'active');
-    host.append(header(`Flow — step ${activeIndex + 1} / ${railStn.length}`));
+    host.append(header(doc, `Flow — step ${activeIndex + 1} / ${railStn.length}`));
 
     // The station rail (§24.1 mockup): a vertical `.flow` of `.stn` (circle `.o` + name `.nm`),
     // `.seg` connectors between (dashed `.future` ahead of a not-yet-reached station), exactly
     // as design/shell/converged.html.
-    const rail = document.createElement('div');
+    const rail = doc.createElement('div');
     rail.className = 'flow vert';
     railStn.forEach((s, i) => {
-      const stn = document.createElement('span');
+      const stn = doc.createElement('span');
       stn.className = `stn ${s.st}`;
-      const dot = document.createElement('span');
+      const dot = doc.createElement('span');
       dot.className = 'o';
-      const name = document.createElement('span');
+      const name = doc.createElement('span');
       name.className = 'nm';
       name.textContent = s.name;
       stn.append(dot, name);
       rail.append(stn);
       if (i < railStn.length - 1) {
-        const seg = document.createElement('span');
+        const seg = doc.createElement('span');
         seg.className = s.st === 'done' ? 'seg' : 'seg future';
         rail.append(seg);
       }
@@ -202,14 +203,14 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
     // read-out that opens the docked panel, and the full mirror is handed to that panel via onLoopState.
     // The loop's own status is the live signal, so it supersedes the todo-derived line (todos don't
     // drive a loop). null clears + closes the panel on a non-loop step.
-    if (state.loop) host.append(loopReadout(state.loop));
+    if (state.loop) host.append(loopReadout(doc, state.loop));
     deps.onLoopState?.(state.loop ?? null, state.stepName);
 
     // Live derived status (§24.2.2 S5): n/m todos done + the §8.3 agent activity, recomputed by
     // main and pushed via flow:onStateChanged. Present only while the step is in progress.
     if (state.status === 'in_progress' && state.derived && !state.loop) {
       const d = state.derived;
-      const line = document.createElement('div');
+      const line = doc.createElement('div');
       line.className = 'flow-derived';
       line.textContent = `${d.todosDone} / ${d.todosTotal} done · ${d.activity}`;
       host.append(line);
@@ -226,7 +227,7 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
     // The §19.3 busy refusal (and any other transient notice) rides the start/restart response
     // only; a later state() re-pull carries none, so the line self-clears.
     if (state.notice) {
-      const notice = document.createElement('div');
+      const notice = doc.createElement('div');
       notice.className = 'flow-notice';
       notice.textContent = state.notice;
       host.append(notice);

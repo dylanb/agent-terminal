@@ -7,6 +7,7 @@
 import { readFileSync, watch, type FSWatcher } from 'node:fs';
 import path from 'node:path';
 import yaml from 'js-yaml';
+import { isRecord } from './yamlRecord';
 
 const STATE_REL = path.join('.agent-loop', 'state.yaml');
 
@@ -22,10 +23,6 @@ export interface AgentLoopState {
 // Compared by VALUE, not YAML scalar type: state.yaml writes a bare `4`, LoopDefs a quoted `"4"`
 // (loopDef.ts). The same coercing guard works for either engine file.
 const SCHEMA_VERSION = '4';
-
-function isRecord(v: unknown): v is Record<string, unknown> {
-  return typeof v === 'object' && v !== null && !Array.isArray(v);
-}
 
 /** Read & validate <repoDir>/.agent-loop/state.yaml. Returns the mirrored slice, or null for any
  *  missing / unknown-version / corrupt / ill-typed file (never throws). */
