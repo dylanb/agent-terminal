@@ -678,6 +678,18 @@ describe('Todo tab §24.2.1 — review fixes (reorder stability, focus, a11y lab
       expect(pick()).toBeNull(); // collapsed → no picker on screen (anti-clutter)
     });
 
+    it('sets aria-controls only while the picker is open (no dangling idref when collapsed)', async () => {
+      wireMonitorPane();
+      await flush();
+      await loadRepoWithTemplates('/repoA', [], { templates: [{ ref: 'pr-review', name: 'PR review' }] });
+      expect(toggle()!.hasAttribute('aria-controls')).toBe(false); // collapsed → no idref to a non-existent group
+      toggle()!.click();
+      await flush();
+      const ctrl = toggle()!.getAttribute('aria-controls');
+      expect(ctrl).toBeTruthy();
+      expect(document.getElementById(ctrl!)).not.toBeNull(); // points at the now-rendered group
+    });
+
     it('opening the disclosure reveals the named picker, defaulting to the bound template', async () => {
       wireMonitorPane();
       await flush();

@@ -10,8 +10,10 @@ const css = readFileSync('src/renderer/src/styles.css', 'utf8');
 
 function tokenBlock(anchor: string): Map<string, string> {
   const start = css.indexOf(anchor);
+  if (start === -1) throw new Error(`tokenBlock: anchor not found in styles.css: ${anchor}`);
   const open = css.indexOf('{', start);
   const close = css.indexOf('}', open);
+  if (open === -1 || close === -1) throw new Error(`tokenBlock: no { } block after anchor: ${anchor}`);
   const map = new Map<string, string>();
   for (const m of css.slice(open + 1, close).matchAll(/(--[\w-]+)\s*:\s*([^;]+);/g)) {
     map.set(m[1], m[2].trim());

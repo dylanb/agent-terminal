@@ -391,7 +391,9 @@ export function createTodoTab(deps: TodoTabDeps): TodoTab {
     const toggle = doc.createElement('button');
     toggle.className = 'tmpl-toggle linkbtn';
     toggle.setAttribute('aria-expanded', String(templateOpen));
-    toggle.setAttribute('aria-controls', pickerId);
+    // aria-controls must reference a live element; the group only exists while open, so only point
+    // at it then (a dangling idref when collapsed confuses AT).
+    if (templateOpen) toggle.setAttribute('aria-controls', pickerId);
     toggle.setAttribute('aria-label', 'Add todos from a template');
     const car = doc.createElement('span');
     car.className = 'car';
