@@ -485,6 +485,35 @@ describe('Todo tab §24.2.1 — edit-in-place', () => {
     expect((rows()[0].querySelector('.tx') as HTMLElement).textContent).toBe('keep me');
   });
 
+  it('an external refresh (FLOW_CHANGED) while editing does not discard the unsaved edit text', async () => {
+    wireMonitorPane();
+    await flush();
+    await loadRepo('/repoA', [makeTodo({ id: 'a', text: 'persisted text' })]);
+    (rows()[0].querySelector('.todo-edit') as HTMLButtonElement).click();
+    const tx = rows()[0].querySelector('.tx') as HTMLElement;
+    tx.textContent = 'unsaved typing'; // user has typed but not saved
+    // An external refresh trigger (flow advanced, etc.) must not re-render the row from persisted
+    // text and wipe the in-progress edit — the repo-swap path already defers for this reason.
+    window.dispatchEvent(new Event(FLOW_CHANGED_EVENT));
+    await flush();
+    expect((rows()[0].querySelector('.tx') as HTMLElement).textContent).toBe('unsaved typing');
+    expect((rows()[0].querySelector('.tx') as HTMLElement).contentEditable).toBe('true'); // still editing
+  });
+
+  it('a deferred external refresh during an edit is applied once the edit resolves', async () => {
+    wireMonitorPane();
+    await flush();
+    await loadRepo('/repoA', [makeTodo({ id: 'a', text: 'one' })]);
+    (rows()[0].querySelector('.todo-edit') as HTMLButtonElement).click();
+    // New data arrives while editing; deferred, then applied on Cancel (edit resolved).
+    monitor.todoList.mockResolvedValue([makeTodo({ id: 'a', text: 'one' }), makeTodo({ id: 'b', text: 'two' })]);
+    window.dispatchEvent(new Event(FLOW_CHANGED_EVENT));
+    await flush();
+    (rows()[0].querySelector('.todo-cancel') as HTMLButtonElement).click();
+    await flush();
+    expect(rows().map((r) => r.querySelector('.tx')!.textContent)).toEqual(['one', 'two']);
+  });
+
   it('a repo change while editing is deferred and surfaces a notice until the edit resolves', async () => {
     wireMonitorPane();
     await flush();

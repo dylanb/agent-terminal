@@ -68,9 +68,12 @@ export function createTodoTab(deps: TodoTabDeps): TodoTab {
   let currentRepoKey: string | null = null;
   let todos: TodoItem[] = [];
   // A repo swap is blocked while a todo edit is open (§16.3); the pending key is applied
-  // once the edit resolves so the in-flight edit writes to its own repo.
+  // once the edit resolves so the in-flight edit writes to its own repo. An external refresh
+  // (FLOW_CHANGED / TODOS_CHANGED) is likewise deferred so it can't re-render the contenteditable
+  // row from persisted text and discard unsaved typing — applied once the edit resolves.
   let editingId: string | null = null;
   let pendingRepoKey: string | null = null;
+  let pendingRefresh = false;
   // Delete is a two-step, undoable action (§16.4): × → confirm; confirming hides the row
   // behind an Undo for TODO_UNDO_MS and only then calls todoDelete. Both are render state
   // (survive a re-render); the actual delete is deferred so Undo needs no re-add.
@@ -104,6 +107,10 @@ export function createTodoTab(deps: TodoTabDeps): TodoTab {
 
   function refresh(): void {
     if (!currentRepoKey) return;
+    if (editingId !== null) {
+      pendingRefresh = true; // defer: an edit's unsaved DOM text must survive (applied on resolveEdit)
+      return;
+    }
     const key = currentRepoKey;
     // Ignore a response that resolves after the repo changed mid-flight, so repo A's list can't
     // render over repo B's (§16.3 stale-response race). On a rejected invoke (main restart) keep the
@@ -150,10 +157,14 @@ export function createTodoTab(deps: TodoTabDeps): TodoTab {
   // After Save/Cancel: drop edit state and apply any swap that was blocked.
   function resolveEdit(): void {
     editingId = null;
+    const refreshPending = pendingRefresh;
+    pendingRefresh = false;
     if (pendingRepoKey !== null) {
       const next = pendingRepoKey;
       pendingRepoKey = null;
-      applyRepoSwap(next);
+      applyRepoSwap(next); // refreshes the new repo, subsuming any pending refresh
+    } else if (refreshPending) {
+      refresh(); // apply the update that arrived during the edit
     } else {
       renderTodos();
     }
