@@ -11,7 +11,7 @@ import type { TodoTemplateRef } from '../shared/ipc';
 const TOP_LEVEL_BULLET = /^([-*+]|\d+[.)])\s+/; // col-0 list marker (unordered or ordered)
 const INDENTED = /^\s+\S/; // a continuation/sub-item folds into the current todo
 const ANY_BULLET = /^[-*+]\s+|^\d+[.)]\s+/; // marker to strip when an indented line is itself a bullet
-const CHECKBOX = /^\[[ xX]\]\s+/; // ignored task-list marker at the head of an item
+const CHECKBOX = /^\[[ xX]\]\s*/; // ignored task-list marker at the head of an item (text optional, so `- [ ]` collapses to empty)
 
 /**
  * Resolve a step's `todo_template` ref to a file CO-LOCATED with the flow.yaml that declared it
@@ -99,5 +99,7 @@ export function parseTodoTemplate(markdown: string): string[] {
     }
     // Headings, blank lines, and col-0 prose are ignored (they neither start nor extend a todo).
   }
-  return todos;
+  // Drop genuinely-empty items (a bare `-` / `- [ ]` / whitespace-only bullet) so they never persist
+  // as blank rows. Filtered AFTER folding, so a bullet made non-empty by a sub-line still survives.
+  return todos.filter((t) => t.length > 0);
 }

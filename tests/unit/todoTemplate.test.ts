@@ -42,4 +42,15 @@ describe('parseTodoTemplate (§21.2)', () => {
     expect(parseTodoTemplate('# Title\n\nJust prose, no list.')).toEqual([]);
     expect(parseTodoTemplate('')).toEqual([]);
   });
+
+  it('drops empty items (bare bullet / empty checkbox / whitespace) so no blank todo is created', () => {
+    // A bullet with no text would otherwise persist as a blank row.
+    expect(parseTodoTemplate('-\n- [ ]\n-   \n- real one')).toEqual(['real one']);
+  });
+
+  it('keeps an initially-empty bullet that becomes non-empty after folding a sub-line', () => {
+    // The empty top-level item ('- ' with no text) gains text from its indented continuation — it
+    // must survive the empty-item filter (filtering happens after folding, not at push time).
+    expect(parseTodoTemplate(['- ', '  folded text', '- second'].join('\n'))).toEqual(['folded text', 'second']);
+  });
 });
