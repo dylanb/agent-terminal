@@ -44,12 +44,22 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible { outline:2px so
 
 /* ---- the frame: slim rail · full-bleed main · docked (no-scrim) drawer ---- */
 /* No column transition: the dock snaps so the terminal refits to the final width on
-   the shell's resize broadcast, never to a mid-animation width (§7.1). */
-.app { display:grid; grid-template-columns:200px 1fr 0; height:100vh; }
-.app.drawer-open { grid-template-columns:200px 1fr 384px; }
+   the shell's resize broadcast, never to a mid-animation width (§7.1). Columns are
+   rail | loop-panel | main | drawer; the two dock widths compose via independent vars
+   so the loop panel (§24.2.3) and the quick-send drawer can be open at once. */
+.app { display:grid; grid-template-columns:200px var(--loop-w,0) 1fr var(--drawer-w,0); height:100vh; }
+.app.loop-open { --loop-w:372px; }
+.app.drawer-open { --drawer-w:384px; }
+/* Explicit column placement so a docked panel hidden via display:none (§22.2) collapses its own
+   track without reflowing the others into the wrong columns (the loop panel is NOT the last child). */
+.app > .rail { grid-column:1; }
+.app > .loop-panel { grid-column:2; }
+.app > .main { grid-column:3; }
+.app > .drawer { grid-column:4; }
 /* Full-screen viewer (§20.2): all app chrome hidden, the main pane fills the window. */
 .app.viewer-fullscreen { grid-template-columns:1fr; }
-.app.viewer-fullscreen > .rail, .app.viewer-fullscreen > .drawer { display:none; }
+.app.viewer-fullscreen > .main { grid-column:1; }
+.app.viewer-fullscreen > .rail, .app.viewer-fullscreen > .drawer, .app.viewer-fullscreen > .loop-panel { display:none; }
 
 .rail { background:var(--card); border-right:1px solid var(--hair); display:flex; flex-direction:column; padding:16px 14px; overflow:auto; }
 .rail .mark { font-weight:600; font-size:15px; margin-bottom:20px; white-space:nowrap; }
@@ -154,6 +164,40 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible { outline:2px so
 .flowstrip .flow-error { font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:12px; color:var(--danger); }
 /* §19.3 busy refusal / one-shot transient notice — caution, not a hard load error (no mockup). */
 .flowstrip .flow-notice { font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:11.5px; color:var(--dim); margin-top:8px; line-height:1.35; }
+/* §24.2.3 T2 — the read-only agent-loop mirror (design/shell/loop-flow.html). The rail shows a
+   COMPACT Loop read-out (a 3-tone status pill + iteration) that opens the docked panel; the full
+   v4 vocabulary lives in that panel. */
+.flowstrip .loopstat { margin-top:9px; cursor:pointer; border:1px solid transparent; border-radius:7px; padding:6px 7px; margin-left:-7px; margin-right:-7px; display:flex; flex-direction:column; gap:6px; }
+.flowstrip .loopstat:hover { background:var(--hair2); }
+.flowstrip .loopstat[aria-expanded="true"] { background:var(--signal-wash); }
+.flowstrip .loopstat .k { text-transform:uppercase; letter-spacing:.14em; font-size:9px; color:var(--dim); }
+.flowstrip .loopstat .v { display:flex; align-items:center; gap:6px; }
+.flowstrip .loopstat .loop-iter { font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:11px; color:var(--dim); }
+.flowstrip .loopstat .car { font-size:8px; color:var(--dim); margin-left:auto; }
+
+/* generic status pill — an arbitrary per-LoopDef status maps onto one of three tones, never an
+   enumerated set: await=act(red), work=signal(cyan), settle=pass(green). Shared by rail + panel. */
+.spill { display:inline-flex; align-items:center; gap:5px; font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:11px; font-weight:500; padding:2px 9px; border-radius:999px; border:1px solid var(--hair); color:var(--text); white-space:nowrap; }
+.spill .pdot { width:6px; height:6px; border-radius:50%; background:currentColor; flex:none; }
+.spill.await { color:var(--attn); border-color:color-mix(in srgb,var(--attn) 45%,var(--hair)); background:color-mix(in srgb,var(--attn) 8%,transparent); }
+.spill.work { color:var(--signal); border-color:color-mix(in srgb,var(--signal) 45%,var(--hair)); background:var(--signal-wash); }
+.spill.settle { color:var(--pass); border-color:color-mix(in srgb,var(--pass) 45%,var(--hair)); }
+
+/* (§24.2.3 T2) FULL-HEIGHT docked loop panel — the expanded state mirror; "makes room" via the grid
+   column, internally scrollable so it never truncates. The gate decision section is T5/T6. */
+.loop-panel { background:var(--card); border-right:1px solid var(--hair); overflow:hidden; display:flex; flex-direction:column; min-width:0; }
+.loop-panel .lhead { display:flex; align-items:center; gap:9px; padding:15px 15px 13px; border-bottom:1px solid var(--hair); flex:none; }
+.loop-panel .lhead .loopmark { width:17px; height:17px; flex:none; color:var(--signal); }
+.loop-panel .lhead h3 { font-weight:500; font-size:17px; margin:0; }
+.loop-panel .lhead .x { margin-left:auto; }
+.loop-panel .lbody { padding:16px; overflow:auto; flex:1; }
+.loop-panel .seg-h { text-transform:uppercase; letter-spacing:.14em; font-size:9px; color:var(--dim); margin:0 0 9px; }
+.loop-panel .ldl .lrow { display:flex; align-items:baseline; font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:12px; padding:3px 0; }
+.loop-panel .ldl .lrow .lk { color:var(--dim); }
+.loop-panel .ldl .lrow .ld { flex:1; border-bottom:1px dotted var(--hair); margin:0 8px 4px; }
+.loop-panel .ldl .lrow .lv.sig { color:var(--signal); }
+.loop-panel .ldl .lrow .lv.bad { color:var(--attn); }
+.loop-panel .ldl .grow { font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:10px; color:var(--dim); margin-top:9px; line-height:1.45; }
 
 /* ---- view 1: terminal ---- */
 #terminal-view { display:flex; flex-direction:column; height:100%; background:var(--term-bg); }

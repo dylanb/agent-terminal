@@ -10,6 +10,15 @@
     <link rel="stylesheet" href="./src/styles.css" />
   </head>
   <body>
+    <!-- bespoke loop-step mark (§24.2.3): a node orbiting a centre point (iteration), reused by the
+         docked loop panel header. Same-document symbol → allowed under the strict CSP. -->
+    <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+      <symbol id="loop-orbit" viewBox="0 0 16 16">
+        <ellipse cx="8" cy="8" rx="6.2" ry="3" transform="rotate(-28 8 8)" fill="none" stroke="currentColor" stroke-width="1.4" />
+        <circle cx="8" cy="8" r="1.7" fill="currentColor" />
+        <circle cx="13.5" cy="5.1" r="1.6" fill="currentColor" />
+      </symbol>
+    </svg>
     <div id="app" class="app">
       <!-- SLIM LEFT CHROME (§24.1C) -->
       <aside class="rail" aria-label="Navigation and status">
@@ -38,6 +47,11 @@
           </div>
         </div>
       </aside>
+
+      <!-- FULL-HEIGHT DOCKED loop panel (§24.2.3 T2): the expanded read-only state mirror the rail
+           Loop read-out opens. "Makes room" via the grid column (no scrim), internally scrollable.
+           Filled by createLoopPanel; the gate decision section is T5/T6. -->
+      <aside class="loop-panel" id="loop-panel" aria-label="Loop and gate" hidden></aside>
 
       <!-- FULL-BLEED MAIN -->
       <main class="main">

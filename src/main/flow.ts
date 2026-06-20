@@ -12,6 +12,8 @@ import path from 'node:path';
 import yaml from 'js-yaml';
 import type { AgentState, FlowStateView, FlowStatus, TodoItem } from '../shared/ipc';
 import { createFlowStateStore, type FlowStateStore } from './flowState';
+import type { AgentLoopState } from './agentLoopBridge';
+import { gateForStatus, type LoopDef } from './loopDef';
 
 /**
  * Derive the live in-progress status (§22.3 / §24.2.2 S5): a PURE function of the flow view, the
@@ -26,12 +28,39 @@ export function deriveFlowView(view: FlowStateView, todos: TodoItem[], activity:
   return { ...view, derived: { activity, todosDone, todosTotal, ready: todosDone === todosTotal } };
 }
 
-/** A §18.1 step, minimal S2 shape: a manual step with an id and optional skill/template refs. */
+/**
+ * Fold the read-only agent-loop state.yaml mirror (§24.2.3 T2) onto a flow view as a `loop` field
+ * PARALLEL to S5's `derived` (loop state outlives the manual `in_progress` window, so it is never
+ * nested inside `derived`). A null mirror (non-loop step, or a missing/corrupt/unknown state.yaml)
+ * passes the view through untouched. `ready` is the §19.2 advance gate.
+ *
+ * When the bound LoopDef resolves, readiness + options are GATE-DRIVEN (§18.1): `ready` is true only
+ * at a TERMINAL gate (the loop reached its exit status — §19.2's "approved/terminal"), and
+ * `gateOptions` mirrors the current status's gate `human_options`. With no LoopDef it degrades to the
+ * documented `awaiting-human-*` "needs you" family and offers no options. The input is never mutated.
+ */
+export function deriveLoopView(
+  view: FlowStateView,
+  loop: AgentLoopState | null,
+  loopDef: LoopDef | null = null,
+): FlowStateView {
+  if (!loop) return view;
+  const gate = loopDef ? gateForStatus(loopDef, loop.status) : undefined;
+  const ready = loopDef ? gate?.terminal === true : !loop.status.startsWith('awaiting-human');
+  const gateOptions = gate && gate.humanOptions.length > 0 ? gate.humanOptions : undefined;
+  return { ...view, loop: { ...loop, ready, ...(gateOptions ? { gateOptions } : {}) } };
+}
+
+/** A §18.1 step. `manual`: a human produces an artifact (optional skill/template refs). `loop`
+ *  (§24.2.3 T2): runs an agent-loop, binding its LoopDef by name (`loop`); the app mirrors that
+ *  loop's state.yaml read-only. The `action` kind (§18.2) is a later phase. */
 export interface FlowStepDef {
   id: string;
-  kind: 'manual';
+  kind: 'manual' | 'loop';
   skill?: string;
   todoTemplate?: string;
+  /** The bound agent-loop LoopDef name (`loop` steps only) — which loop this step mirrors. */
+  loop?: string;
 }
 
 export interface FlowDefinition {
@@ -75,24 +104,30 @@ export function loadFlowDefinition(worktreeDir: string): FlowLoad {
   if (!Array.isArray(doc.steps) || doc.steps.length === 0)
     return { ok: false, error: 'flow.yaml has no steps' };
 
-  // S2 scope is the manual kind only (§24.2.2): validate the first step is a manual step.
-  const first = doc.steps[0];
-  if (!isRecord(first) || typeof first.id !== 'string' || first.id.length === 0)
-    return { ok: false, error: 'flow.yaml step is missing an id' };
-  if (first.kind !== 'manual')
-    return { ok: false, error: `flow.yaml step "${first.id}" is not a manual step (S2 supports manual only)` };
-  if (first.skill !== undefined && typeof first.skill !== 'string')
-    return { ok: false, error: `flow.yaml step "${first.id}" has a non-string skill` };
-  if (first.todo_template !== undefined && typeof first.todo_template !== 'string')
-    return { ok: false, error: `flow.yaml step "${first.id}" has a non-string todo_template` };
-
-  const step: FlowStepDef = {
-    id: first.id,
-    kind: 'manual',
-    ...(typeof first.skill === 'string' ? { skill: first.skill } : {}),
-    ...(typeof first.todo_template === 'string' ? { todoTemplate: first.todo_template } : {}),
-  };
-  return { ok: true, definition: { name: doc.name, steps: [step] }, flowDir: path.dirname(file) };
+  // T1 (§24.2.3) loads EVERY step, in order — the single-step assumption is retired. Each step is
+  // validated against the §18.1 minimal shape. T2 adds the `loop` kind (binding a LoopDef by name);
+  // the `action` kind (§18.2) is still out of scope, so any other kind is rejected.
+  const steps: FlowStepDef[] = [];
+  for (const raw of doc.steps) {
+    if (!isRecord(raw) || typeof raw.id !== 'string' || raw.id.length === 0)
+      return { ok: false, error: 'flow.yaml step is missing an id' };
+    if (raw.kind !== 'manual' && raw.kind !== 'loop')
+      return { ok: false, error: `flow.yaml step "${raw.id}" has unsupported kind "${String(raw.kind)}" (supports: manual, loop)` };
+    if (raw.kind === 'loop' && (typeof raw.loop !== 'string' || raw.loop.length === 0))
+      return { ok: false, error: `flow.yaml loop step "${raw.id}" is missing its loop: LoopDef name` };
+    if (raw.skill !== undefined && typeof raw.skill !== 'string')
+      return { ok: false, error: `flow.yaml step "${raw.id}" has a non-string skill` };
+    if (raw.todo_template !== undefined && typeof raw.todo_template !== 'string')
+      return { ok: false, error: `flow.yaml step "${raw.id}" has a non-string todo_template` };
+    steps.push({
+      id: raw.id,
+      kind: raw.kind,
+      ...(typeof raw.skill === 'string' ? { skill: raw.skill } : {}),
+      ...(typeof raw.todo_template === 'string' ? { todoTemplate: raw.todo_template } : {}),
+      ...(raw.kind === 'loop' ? { loop: raw.loop as string } : {}),
+    });
+  }
+  return { ok: true, definition: { name: doc.name, steps }, flowDir: path.dirname(file) };
 }
 
 /**
@@ -125,6 +160,15 @@ export interface FlowMachine {
  *  to surface on the transition view — e.g. the §19.3 busy refusal (§24.2.2 S4). */
 export type FlowEnterStep = (step: FlowStepDef) => { notice?: string } | void;
 
+/** Read the current agent-loop state.yaml mirror for this flow's repo (§24.2.3 T2). Returns null
+ *  for a missing/corrupt/unknown-version file; called on every view so the mirror is live. */
+export type FlowReadLoop = () => AgentLoopState | null;
+
+/** Resolve the bound LoopDef by name (§24.2.3 T2 / §18.1): the gate model behind the loop step's
+ *  `loop:` binding. Returns null for an unresolvable/corrupt LoopDef — readiness then degrades to
+ *  the awaiting-human-* family and no gate options are offered. */
+export type FlowReadLoopDef = (name: string) => LoopDef | null;
+
 // S3 (§19.1): an optional store backs the machine — its status is restored from disk on
 // construction (so a relaunch resumes) and every transition is persisted. Without a store the
 // machine is in-memory only (the S1/S2 contract), unchanged.
@@ -134,10 +178,13 @@ export function createFlowMachine(
   load: FlowLoad,
   store?: FlowStateStore,
   onEnter?: FlowEnterStep,
+  readLoop?: FlowReadLoop,
+  readLoopDef?: FlowReadLoopDef,
 ): FlowMachine {
   if (!load.ok) {
     const view = (): FlowStateView => ({
       stepName: '',
+      steps: [],
       position: 0,
       total: 0,
       status: 'error',
@@ -150,49 +197,98 @@ export function createFlowMachine(
   }
 
   const def = load.definition;
-  const step = def.steps[0];
-  const stepId = step.id;
+  const steps = def.steps;
+  const names = steps.map((s) => s.id);
+  // The walking skeleton (§24.2.3 T1): a current-step index plus a lifecycle status. `index` is the
+  // step being (or about to be) worked; `status` is the flow's phase at that step. `done` means the
+  // last step's Advance completed the whole flow.
+  let index = 0;
   let status: FlowStatus = 'not_started';
 
-  // Resume only progression that belongs to the *current* step: a changed flow.yaml (different
-  // step id) starts fresh rather than mis-applying a stale status.
+  // Resume only progression that names a step still in *this* definition (§19.1): the persisted
+  // step id locates the index; a changed flow.yaml whose step is gone starts fresh.
   const persisted = store?.read();
-  if (persisted && persisted.step === stepId) status = persisted.status;
-
-  const view = (): FlowStateView => ({
-    stepName: stepId,
-    position: 1,
-    total: def.steps.length,
-    status,
-    ...(step.todoTemplate ? { templateRef: step.todoTemplate } : {}),
-  });
-
-  const transition = (from: FlowStatus, to: FlowStatus): FlowStateView => {
-    if (status !== from) {
-      throw new Error(`illegal flow transition: ${status} cannot move to ${to}`);
+  if (persisted) {
+    const i = names.indexOf(persisted.step);
+    if (i >= 0) {
+      index = i;
+      status = persisted.status;
     }
-    status = to;
-    store?.write({ step: stepId, status });
-    return view();
+  }
+
+  const current = (): FlowStepDef => steps[index];
+
+  const view = (): FlowStateView => {
+    const step = current();
+    const base: FlowStateView = {
+      stepName: step.id,
+      steps: names,
+      position: index + 1,
+      total: steps.length,
+      status,
+      ...(step.todoTemplate ? { templateRef: step.todoTemplate } : {}),
+    };
+    // A loop step mirrors its agent-loop state.yaml, read live on every view (§24.2.3 T2), and
+    // resolves its bound LoopDef so readiness + gate options are gate-driven. Only loop steps
+    // mirror; a missing/corrupt file folds to nothing (deriveLoopView passes through).
+    if (step.kind !== 'loop') return base;
+    const loopDef = step.loop ? (readLoopDef?.(step.loop) ?? null) : null;
+    return deriveLoopView(base, readLoop?.() ?? null, loopDef);
   };
 
-  // Entry actions fire AFTER the transition is persisted (state committed, then side effects);
-  // the returned notice is merged onto the transition view only.
+  const persist = (): void => store?.write({ step: current().id, status });
+
+  const require = (expected: FlowStatus, action: string): void => {
+    if (status !== expected) {
+      throw new Error(`illegal flow transition: cannot ${action} from ${status}`);
+    }
+  };
+
+  // Entry actions fire AFTER state is committed (state, then side effects); the returned notice is
+  // merged onto the transition view only. T1 fires them on entering the FIRST step (start/restart);
+  // entry on advancing INTO a later step is T3 (§24.2.3) — advance stays inert here.
   const enter = (v: FlowStateView): FlowStateView => {
-    const r = onEnter?.(step);
+    const r = onEnter?.(current());
     return r && r.notice ? { ...v, notice: r.notice } : v;
   };
 
   return {
     state: view,
-    start: () => enter(transition('not_started', 'in_progress')),
-    advance: () => transition('in_progress', 'done'),
-    // Restart resets a completed flow back to its first step, in progress, re-running its
-    // entry actions (§24.2.2).
-    restart: () => enter(transition('done', 'in_progress')),
-    // Undo reverts a manual advance back to in_progress WITHOUT re-entering the step (no entry
-    // actions) — it takes back the advance, it does not re-run the work.
-    undo: () => transition('done', 'in_progress'),
+    start: () => {
+      require('not_started', 'start');
+      status = 'in_progress';
+      persist();
+      return enter(view());
+    },
+    // Advance walks across steps: each call moves to the next step (still in progress) until the
+    // last, whose Advance completes the flow (`done`). `done` is reachable only past the last step.
+    advance: () => {
+      require('in_progress', 'advance');
+      if (index < steps.length - 1) {
+        index += 1;
+      } else {
+        status = 'done';
+      }
+      persist();
+      return view();
+    },
+    // Restart resets a completed flow back to its FIRST step, in progress, re-running its entry
+    // actions (§24.2.2).
+    restart: () => {
+      require('done', 'restart');
+      index = 0;
+      status = 'in_progress';
+      persist();
+      return enter(view());
+    },
+    // Undo reverts the advance that completed the flow (last step → done) back to in_progress on the
+    // last step, WITHOUT re-entering it (no entry actions) — it takes back the advance, not the work.
+    undo: () => {
+      require('done', 'undo');
+      status = 'in_progress';
+      persist();
+      return view();
+    },
   };
 }
 
@@ -219,6 +315,12 @@ export interface FlowManagerDeps {
   /** Run a step's entry action on entry (start/restart): inject its `skill` (§18.6/§19.3). The
    *  one-shot notice rides the transition view. (Todo templates instantiate on demand, not here.) */
   onEnterStep?: FlowEnterStep;
+  /** Read the agent-loop state.yaml mirror for a repo (§24.2.3 T2): the manager folds it onto a
+   *  loop step's views, live. Omitted → loop steps render with no mirror. */
+  readLoopState?: (repoKey: string) => AgentLoopState | null;
+  /** Resolve a loop step's bound LoopDef (§24.2.3 T2 / §18.1) for a repo: drives gate-derived
+   *  readiness + the gate options. Omitted → readiness degrades to the awaiting-human-* family. */
+  readLoopDef?: (repoKey: string, name: string) => LoopDef | null;
 }
 
 export function createFlowManager(deps: FlowManagerDeps): FlowManager {
@@ -228,7 +330,13 @@ export function createFlowManager(deps: FlowManagerDeps): FlowManager {
   const machineFor = (repoKey: string): FlowMachine => {
     let m = cache.get(repoKey);
     if (!m) {
-      m = createFlowMachine(loadDef(repoKey, deps.globalDir), makeStore(repoKey), deps.onEnterStep);
+      m = createFlowMachine(
+        loadDef(repoKey, deps.globalDir),
+        makeStore(repoKey),
+        deps.onEnterStep,
+        deps.readLoopState ? () => deps.readLoopState!(repoKey) : undefined,
+        deps.readLoopDef ? (name) => deps.readLoopDef!(repoKey, name) : undefined,
+      );
       cache.set(repoKey, m);
     }
     return m;

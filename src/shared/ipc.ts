@@ -414,12 +414,32 @@ export interface FlowDerived {
   ready: boolean;
 }
 
+/** The read-only mirror of a loop step's agent-loop v4 state.yaml (§24.2.3 T2): the live engine
+ *  vocabulary the app surfaces. `status` is the per-LoopDef state-machine string (unbounded — the
+ *  strip maps it onto a generic 3-tone pill, never an enum); `pr`/`branch` are null before the loop
+ *  has a PR. `ready` is the §19.2 advance gate — gate-driven when the bound LoopDef resolves (true
+ *  only at a TERMINAL gate, the loop's exit), else the documented awaiting-human-* family. */
+export interface FlowLoopView {
+  status: string;
+  iteration: number;
+  pr: number | null;
+  branch: string | null;
+  ready: boolean;
+  /** The current status's gate `human_options` (§18.1/§19.4) — the gate UI's variable option set
+   *  (`approve`/`request-changes`/`impasse`). Present only at an awaiting gate with a resolvable
+   *  LoopDef; absent mid-work, at a terminal gate, or when the LoopDef does not resolve. */
+  gateOptions?: string[];
+}
+
 /** The flow's live view (§22.3 status strip): the current step's name, its 1-based
  *  `position` within `total` steps, and its `status`. S2 sources the step from
  *  `<worktree>/.agent-terminal/flow.yaml` (§18.1); on a load failure `status` is
  *  `error` and `error` carries the human-readable reason (position/total 0). */
 export interface FlowStateView {
   stepName: string;
+  /** Every step's name, in flow order (§24.2.3 T1) — the §22.3 rail renders one station per entry;
+   *  `stepName` is `steps[position - 1]`. Empty on an `error` view (no steps to show). */
+  steps: string[];
   position: number;
   total: number;
   status: FlowStatus;
@@ -434,6 +454,10 @@ export interface FlowStateView {
   /** Live derived status (§22.3 / §24.2.2 S5): agent activity + todo completion + gate readiness.
    *  Present only on an `in_progress` view (computed by main from the repo's todos + §8.3 activity). */
   derived?: FlowDerived;
+  /** Read-only agent-loop state.yaml mirror (§24.2.3 T2): present only on a `loop` step with a
+   *  parseable v4 state.yaml. Parallel to `derived` (NOT nested) — loop state outlives the manual
+   *  in_progress window that gates `derived`. */
+  loop?: FlowLoopView;
 }
 
 /** flow:onStateChanged broadcast (§24.2.2 S5): main signals that a flow-relevant input changed

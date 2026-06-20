@@ -1063,8 +1063,48 @@ function seedFlowRepoMultiTemplate(
 }
 
 const flowStation = (i: number) => page.locator('#flow-strip .flow.vert .stn').nth(i);
-const flowStepName = () => flowStation(1).locator('.nm'); // station 1 = the real step
+const flowStepName = () => flowStation(1).locator('.nm'); // station 1 = the first real step (Not-started bookend at 0)
 const flowControl = () => page.locator('#flow-strip .flow-control');
+
+// Seed a temp git repo with a MULTI-step flow.yaml (§24.2.3 T1): N manual steps named by `stepIds`.
+function seedMultiStepFlowRepo(prefix: string, stepIds: string[]): string {
+  const dir = mkdtempSync(join(tmpdir(), prefix));
+  mkdirSync(join(dir, '.git'), { recursive: true });
+  mkdirSync(join(dir, '.agent-terminal'), { recursive: true });
+  const steps = stepIds.map((id) => `  - id: ${id}\n    kind: manual\n`).join('');
+  writeFileSync(join(dir, '.agent-terminal', 'flow.yaml'), `name: multi-flow\nsteps:\n${steps}`);
+  return dir;
+}
+
+// §24.2.3 T2 — seed a repo whose step 2 is a `loop` step bound to a LoopDef, plus a real v4
+// agent-loop state.yaml the app mirrors read-only. Returns the state.yaml path so the test can
+// hand-edit it (the human driving agent-loop) and watch the strip update.
+function seedLoopFlowRepo(prefix: string): { dir: string; stateFile: string } {
+  const dir = mkdtempSync(join(tmpdir(), prefix));
+  mkdirSync(join(dir, '.git'), { recursive: true });
+  mkdirSync(join(dir, '.agent-terminal'), { recursive: true });
+  writeFileSync(
+    join(dir, '.agent-terminal', 'flow.yaml'),
+    'name: dev-flow\nsteps:\n  - id: groom\n    kind: manual\n  - id: build\n    kind: loop\n    loop: impl-loop\n',
+  );
+  // Hermetic LoopDef resolution (§18.1): a repo-local .agent-loop.yaml loops: registry override
+  // points at a working-tree LoopDef copy, so the gate model resolves without depending on the
+  // machine's ~/.claude/loops install. Its gates drive the gate-options row + gate-driven readiness.
+  writeFileSync(join(dir, '.agent-loop.yaml'), 'loops:\n  impl-loop: ./impl-loop.yaml\n');
+  writeFileSync(
+    join(dir, 'impl-loop.yaml'),
+    'name: impl-loop\nschema_version: "4"\ngates:\n' +
+      '  - id: awaiting-human-pr-approval\n    kind: approve-required\n    human_options: [approve, request-changes, impasse]\n    next_status_on_approve: awaiting-team-review\n' +
+      '  - id: awaiting-human-impl-triage\n    kind: triage\n    human_options: [approve, request-changes, impasse]\n    next_status_on_approve: awaiting-team-review\n' +
+      '  - id: awaiting-team-review\n    kind: terminal\n    human_options: []\n',
+  );
+  const loopDir = join(dir, '.agent-loop');
+  mkdirSync(loopDir, { recursive: true });
+  return { dir, stateFile: join(loopDir, 'state.yaml') };
+}
+
+const loopReadout = () => page.locator('#flow-strip #loopstat'); // compact rail read-out (opens the panel)
+const loopPanel = () => page.locator('#loop-panel'); // the docked expanded state mirror
 
 // Seed a flow repo whose manual step declares entry actions (§18.6): an optional `skill` and an
 // optional `todo_template` whose markdown-list items are written to a repo-local file.
@@ -1117,6 +1157,117 @@ test('the flow strip follows the cwd: cd into a repo shows its flow and drives i
   await flowControl().click(); // Restart re-runs the first step
   await expect(flowStation(1)).toHaveClass(/\bactive\b/);
   await expect(flowControl()).toHaveText('Advance');
+  await app.close(); // HOME=temp ⇒ Electron writes userData under it; stop writes before removing it
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+});
+
+test('a multi-step flow walks the bookended rail: Start → Advance ×3 reaches done (§24.2.3 T1)', async () => {
+  // The T1 fire: a 3-manual-step flow.yaml. The rail brackets the three real steps with the
+  // Not-started / Completed bookends, so it has FIVE stations; Start lights step 1, each Advance
+  // lights the next and marks the prior done, and the final Advance lights "Completed" with the
+  // Advance control gone. Real loop: bash + node-pty + the flow manager + the rendered strip.
+  const repo = seedMultiStepFlowRepo('agent-term-e2e-flow-multi-', ['groom', 'plan', 'implement']);
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-flow-multi-home-'));
+  await app.close();
+  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
+  page = await app.firstWindow();
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await typeCommand(`cd "${repo}"`);
+  // Five stations: [Not started] · groom · plan · implement · [Completed]; before Start, Not-started active.
+  await expect(page.locator('#flow-strip .flow.vert .stn')).toHaveCount(5, { timeout: 10_000 });
+  await expect(flowStation(1).locator('.nm')).toHaveText('groom');
+  await expect(flowStation(3).locator('.nm')).toHaveText('implement');
+  await expect(flowStation(0)).toHaveClass(/\bactive\b/); // Not started
+  await expect(page.locator('#flow-strip .sect')).toHaveText('Flow — step 1 / 5');
+  await expect(flowControl()).toHaveText('Start');
+
+  await flowControl().click(); // Start → step 1 (groom) active
+  await expect(flowStation(1)).toHaveClass(/\bactive\b/);
+  await expect(page.locator('#flow-strip .sect')).toHaveText('Flow — step 2 / 5');
+  await expect(flowControl()).toHaveText('Advance');
+
+  await flowControl().click(); // Advance → step 2 (plan) active, groom done
+  await expect(flowStation(1)).toHaveClass(/\bdone\b/);
+  await expect(flowStation(2)).toHaveClass(/\bactive\b/);
+  await expect(page.locator('#flow-strip .sect')).toHaveText('Flow — step 3 / 5');
+
+  await flowControl().click(); // Advance → step 3 (implement) active
+  await expect(flowStation(2)).toHaveClass(/\bdone\b/);
+  await expect(flowStation(3)).toHaveClass(/\bactive\b/);
+  await expect(page.locator('#flow-strip .sect')).toHaveText('Flow — step 4 / 5');
+  await expect(flowControl()).toHaveText('Advance'); // still Advance — not yet past the last step
+
+  await flowControl().click(); // final Advance → done: every real step done, "Completed" active
+  await expect(flowStation(1)).toHaveClass(/\bdone\b/);
+  await expect(flowStation(2)).toHaveClass(/\bdone\b/);
+  await expect(flowStation(3)).toHaveClass(/\bdone\b/);
+  await expect(flowStation(4)).toHaveClass(/\bactive\b/); // Completed
+  await expect(page.locator('#flow-strip .sect')).toHaveText('Flow — step 5 / 5');
+  await expect(flowControl()).toHaveText('Restart'); // the Advance control is gone (now Restart)
+  await app.close(); // HOME=temp ⇒ Electron writes userData under it; stop writes before removing it
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+});
+
+test('a loop step shows a Loop read-out that expands a docked state-mirror panel, live; advancing early warns (§24.2.3 T2)', async () => {
+  // The T2 fire: a flow whose step 2 is kind:loop, with a real v4 state.yaml. The app DRIVES NOTHING
+  // — it mirrors agent-loop's state. The rail shows a compact Loop read-out; clicking it opens the
+  // docked panel with the full v4 vocabulary, which updates live as the file changes. Real loop:
+  // bash + node-pty + the bridge watcher + the flow manager + the rendered strip + the docked panel.
+  const { dir: repo, stateFile } = seedLoopFlowRepo('agent-term-e2e-loop-');
+  writeFileSync(
+    stateFile,
+    'schema_version: 4\npr: 179\nbranch: agent-loop/issue-176\niteration: 9\nstatus: awaiting-human-pr-approval\n',
+  );
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-loop-home-'));
+  await app.close();
+  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
+  page = await app.firstWindow();
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await typeCommand(`cd "${repo}"`);
+  // Rail: [Not started] · groom · build · [Completed] — 4 stations; no Loop read-out on the manual step.
+  await expect(page.locator('#flow-strip .flow.vert .stn')).toHaveCount(4, { timeout: 10_000 });
+  await expect(flowStation(2).locator('.nm')).toHaveText('build');
+  await expect(loopReadout()).toHaveCount(0);
+
+  await flowControl().click(); // Start → groom (manual) active
+  await expect(flowStation(1)).toHaveClass(/\bactive\b/);
+  await expect(loopReadout()).toHaveCount(0); // still manual — no read-out
+
+  await flowControl().click(); // Advance → build (loop) active: the compact Loop read-out appears
+  await expect(flowStation(2)).toHaveClass(/\bactive\b/);
+  await expect(loopReadout().locator('.spill')).toHaveText('awaiting', { timeout: 10_000 }); // compact tone label
+  await expect(loopReadout().locator('.spill')).toHaveClass(/\bawait\b/); // awaiting-human → needs-you tone
+  await expect(loopReadout()).toContainText('iter 9');
+
+  // The docked panel starts closed; clicking the read-out opens it and reveals the full v4 vocabulary.
+  await expect(page.locator('#app')).not.toHaveClass(/\bloop-open\b/);
+  await loopReadout().click();
+  await expect(page.locator('#app')).toHaveClass(/\bloop-open\b/);
+  await expect(loopPanel()).toContainText('awaiting-human-pr-approval'); // exact status, not the tone
+  await expect(loopPanel()).toContainText('#179');
+  await expect(loopPanel()).toContainText('agent-loop/issue-176');
+  // The bound LoopDef (resolved via the repo's .agent-loop.yaml registry) drives the gate-options
+  // row: this gate's human_options [approve, request-changes, impasse], rendered "approve · changes · impasse".
+  const gateRow = loopPanel().locator('.ldl .lrow', { has: page.locator('.lk', { hasText: 'gate options' }) });
+  await expect(gateRow.locator('.lv')).toHaveText('approve · changes · impasse');
+
+  // The human edits state.yaml by hand → the open panel re-pulls live over flow:onStateChanged (no
+  // app write, no user action). Still an awaiting-human status, so the step stays not-ready.
+  writeFileSync(stateFile, 'schema_version: 4\npr: 179\nbranch: agent-loop/issue-176\niteration: 11\nstatus: awaiting-human-impl-triage\n');
+  await expect(loopPanel()).toContainText('awaiting-human-impl-triage', { timeout: 10_000 });
+  await expect(loopPanel()).toContainText('11');
+
+  // Advancing the loop step while it still needs a human is a §19.2 override: it warns but proceeds.
+  await flowControl().click();
+  await expect(page.locator('#flow-strip .flow-notice')).toContainText('still needs you', { timeout: 10_000 });
+  await expect(flowStation(3)).toHaveClass(/\bactive\b/); // Completed — the flow advanced anyway
+  await expect(flowControl()).toHaveText('Restart');
+
+  await app.close(); // HOME=temp ⇒ Electron writes userData under it; stop writes before removing it
   rmSync(repo, { recursive: true, force: true });
   rmSync(home, { recursive: true, force: true });
 });
@@ -1151,6 +1302,7 @@ test('changing directories swaps flow state; each repo is independent and visiti
   expect(existsSync(join(repoA, '.agent-terminal', 'flow-state.yaml'))).toBe(true);
   expect(existsSync(join(repoB, '.agent-terminal', 'flow-state.yaml'))).toBe(false);
   expect(existsSync(join(home, '.agent-terminal', 'flow-state.yaml'))).toBe(false);
+  await app.close(); // HOME=temp ⇒ Electron writes userData under it; stop writes before removing it
   rmSync(repoA, { recursive: true, force: true });
   rmSync(repoB, { recursive: true, force: true });
   rmSync(home, { recursive: true, force: true });
@@ -1173,6 +1325,7 @@ test('cd into a directory with no flow.yaml shows an error and creates no .agent
   await expect(page.locator('#flow-strip .flow.vert .stn')).toHaveCount(0);
   await expect(flowControl()).toHaveCount(0);
   expect(existsSync(join(plain, '.agent-terminal'))).toBe(false); // visiting wrote nothing
+  await app.close(); // HOME=temp ⇒ Electron writes userData under it; stop writes before removing it
   rmSync(plain, { recursive: true, force: true });
   rmSync(home, { recursive: true, force: true });
 });
@@ -1200,6 +1353,7 @@ test('the definition falls back to the global flow.yaml, but state is still writ
 
   expect(existsSync(join(repo, '.agent-terminal', 'flow-state.yaml'))).toBe(true);
   expect(existsSync(join(home, '.agent-terminal', 'flow-state.yaml'))).toBe(false);
+  await app.close(); // HOME=temp ⇒ Electron writes userData under it; stop writes before removing it
   rmSync(repo, { recursive: true, force: true });
   rmSync(home, { recursive: true, force: true });
 });
@@ -1225,6 +1379,7 @@ test('flow progression persists across a relaunch, per repo (§24.2.2 S3 / §19.
   await launch();
   await expect(flowStation(1)).toHaveClass(/\bactive\b/);
   await expect(flowControl()).toHaveText('Advance');
+  await app.close(); // HOME=temp ⇒ Electron writes userData under it; stop writes before removing it
   rmSync(repo, { recursive: true, force: true });
   rmSync(home, { recursive: true, force: true });
 });
@@ -1288,7 +1443,7 @@ test('advancing with todos outstanding warns but still completes, and is undoabl
   const notice = page.locator('#flow-strip .flow-notice');
   await expect(notice).toContainText('outstanding', { timeout: 10_000 });
   await expect(notice).not.toContainText('§'); // no internal spec-section reference leaks to the UI
-  await expect(flowStation(2)).toHaveClass(/\bactive\b/); // still reached done
+  await expect(flowStation(2)).toHaveClass(/\bactive\b/); // synthetic "Completed" active — still reached done
   await expect(flowControl()).toHaveText('Restart');
 
   // Undo takes the advance back: the step returns to in-progress (its derived count is back).
@@ -1338,6 +1493,7 @@ test('Start injects the skill on entry; todos come from the template ON DEMAND i
   await expect(groomTodo).toHaveCount(1, { timeout: 10_000 });
   await expect(page.locator('.todo').filter({ hasText: 'Confirm acceptance criteria' })).toHaveCount(1);
 
+  await app.close(); // HOME=temp ⇒ Electron writes userData under it; stop writes before removing it
   rmSync(repo, { recursive: true, force: true });
   rmSync(home, { recursive: true, force: true });
 });
@@ -1379,6 +1535,7 @@ test('the todo overlay offers a picker of named templates; choosing one instanti
   await expect(page.locator('.todo').filter({ hasText: 'Verify the tests' })).toHaveCount(1);
   await expect(page.locator('.todo').filter({ hasText: 'Groom the ticket scope' })).toHaveCount(0); // non-chosen not added
 
+  await app.close(); // HOME=temp ⇒ Electron writes userData under it; stop writes before removing it
   rmSync(repo, { recursive: true, force: true });
   rmSync(home, { recursive: true, force: true });
 });
@@ -1405,6 +1562,7 @@ test('Start refuses to inject the skill over a busy shell, showing the refusal (
   await expect(page.locator('#flow-strip .flow-notice')).toContainText('busy', { timeout: 10_000 });
   await expect(termRows()).not.toContainText('/groomctl'); // refused — nothing typed into the PTY
 
+  await app.close(); // HOME=temp ⇒ Electron writes userData under it; stop writes before removing it
   rmSync(repo, { recursive: true, force: true });
   rmSync(home, { recursive: true, force: true });
 });

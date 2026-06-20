@@ -5,6 +5,7 @@ import { createShell } from './shell';
 import { wireCrossHighlight } from './crossHighlight';
 import { SAMPLE_FLOW, createGatePanel } from './flow';
 import { createFlowStrip } from './flowStrip';
+import { createLoopPanel } from './loopPanel';
 import { createArtifacts, type Artifacts } from './artifacts';
 import { renderMarkdownInto, renderCodeInto } from './viewerRender';
 import { doInject } from './paneActions';
@@ -39,7 +40,24 @@ wireCrossHighlight(document.getElementById('app')!);
 // repo context delivers the seeded key on mount and every subsequent cd, and the strip re-pulls.
 const flowStripHost = document.getElementById('flow-strip');
 if (flowStripHost) {
-  const flowStrip = createFlowStrip(flowStripHost, window.flow);
+  // The docked loop panel (§24.2.3 T2) is a sibling organism in its own grid column. The strip is
+  // the single puller of flow state; it hands the current loop mirror to the panel here (the contract
+  // seam, not a DOM reach-across), and the shell docks/undocks the column. No loop → clear + close.
+  const loopPanelHost = document.getElementById('loop-panel');
+  const loopPanel = loopPanelHost ? createLoopPanel(loopPanelHost) : undefined;
+  const flowStrip = createFlowStrip(flowStripHost, {
+    ...window.flow,
+    onLoopState: (loop, title) => {
+      loopPanel?.render(loop, title);
+      if (!loop) {
+        shell.closeLoopPanel(); // the read-out is gone; never leave an empty panel docked
+      } else {
+        // The strip just re-rendered a fresh #loopstat (default aria-expanded=false); if the panel
+        // is open, re-sync the read-out so it doesn't read collapsed while the column is docked.
+        document.getElementById('loopstat')?.setAttribute('aria-expanded', String(shell.isLoopPanelOpen()));
+      }
+    },
+  });
   repo.onChange((info) => flowStrip.onRepoChanged(info.repoKey));
   const seededKey = repo.repoKey();
   if (seededKey !== null) flowStrip.onRepoChanged(seededKey);

@@ -17,7 +17,9 @@ const SHELL_HTML = `
     <button id="qs">Quick-send</button>
     <button id="tg">theme</button>
     <span data-theme-label>Light</span>
+    <span id="loopstat" role="button" tabindex="0" aria-expanded="false" aria-controls="loop-panel">Loop</span>
   </aside>
+  <aside class="loop-panel" id="loop-panel"><button id="lclose">x</button></aside>
   <main class="main">
     <div data-viewpane="1" class="on">term</div>
     <div data-viewpane="2">artifacts</div>
@@ -199,6 +201,55 @@ describe('shell controller (§24.1C — views, hotkeys, docked drawer, theme)', 
       window.addEventListener('resize', onResize);
       shell.closeDrawer();
       shell.openDrawer();
+      window.removeEventListener('resize', onResize);
+      expect(onResize).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  // §24.2.3 T2 — the full-height docked loop+gate panel "makes room" via a grid column exactly like
+  // the drawer (no scrim). The rail's Loop read-out (#loopstat) opens it; its close button and Escape
+  // dismiss it. The shell only docks/undocks the column — the panel's content is a sibling organism.
+  describe('docked loop panel', () => {
+    beforeEach(() => {
+      shell = createShell(app);
+    });
+
+    it('starts closed and hidden, leaving its controls out of the tab order (§22.2)', () => {
+      expect(shell.isLoopPanelOpen()).toBe(false);
+      expect((document.getElementById('loop-panel') as HTMLElement).hidden).toBe(true);
+    });
+
+    it('toggles the dock column open/closed without a scrim, marking the read-out expanded', () => {
+      const loopstat = document.getElementById('loopstat') as HTMLElement;
+      shell.toggleLoopPanel();
+      expect(app.classList.contains('loop-open')).toBe(true);
+      expect(shell.isLoopPanelOpen()).toBe(true);
+      expect((document.getElementById('loop-panel') as HTMLElement).hidden).toBe(false);
+      expect(loopstat.getAttribute('aria-expanded')).toBe('true');
+      expect(document.querySelector('.scrim, .backdrop')).toBeNull();
+      shell.toggleLoopPanel();
+      expect(shell.isLoopPanelOpen()).toBe(false);
+      expect(loopstat.getAttribute('aria-expanded')).toBe('false');
+    });
+
+    it('opens by clicking the rail Loop read-out and closes via the panel close button', () => {
+      (document.getElementById('loopstat') as HTMLElement).click();
+      expect(shell.isLoopPanelOpen()).toBe(true);
+      (document.getElementById('lclose') as HTMLElement).click();
+      expect(shell.isLoopPanelOpen()).toBe(false);
+    });
+
+    it('closes on Escape when open', () => {
+      shell.openLoopPanel();
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+      expect(shell.isLoopPanelOpen()).toBe(false);
+    });
+
+    it('broadcasts a window resize when the panel width changes, so panes refit (§7.1)', () => {
+      const onResize = vi.fn();
+      window.addEventListener('resize', onResize);
+      shell.openLoopPanel();
+      shell.closeLoopPanel();
       window.removeEventListener('resize', onResize);
       expect(onResize).toHaveBeenCalledTimes(2);
     });

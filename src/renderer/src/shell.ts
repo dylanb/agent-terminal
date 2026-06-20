@@ -21,6 +21,12 @@ export interface Shell {
   closeDrawer(): void;
   toggleDrawer(): void;
   isDrawerOpen(): boolean;
+  /** The full-height docked loop+gate panel (§24.2.3): a grid column that "makes room" like the
+   *  drawer, opened from the rail Loop read-out and dismissed by its close button or Escape. */
+  openLoopPanel(): void;
+  closeLoopPanel(): void;
+  toggleLoopPanel(): void;
+  isLoopPanelOpen(): boolean;
   setTheme(t: Theme): void;
   getTheme(): Theme;
   /** Full-screen the viewer by hiding all app chrome (§20.2); Escape and a view change exit. */
@@ -91,6 +97,30 @@ export function createShell(root: HTMLElement, deps: ShellDeps = {}): Shell {
     else openDrawer();
   }
 
+  // The loop+gate panel docks as another layout column (§24.2.3), between the rail and main.
+  // Like the drawer it is display:none when closed (so its close button leaves the tab order),
+  // and its read-out (#loopstat) carries the aria-expanded state for assistive tech.
+  const loopPanelEl = root.querySelector<HTMLElement>('.loop-panel');
+  const isLoopPanelOpen = (): boolean => root.classList.contains('loop-open');
+  const syncLoopReadout = (on: boolean): void =>
+    root.querySelector('#loopstat')?.setAttribute('aria-expanded', String(on));
+  function openLoopPanel(): void {
+    root.classList.add('loop-open');
+    if (loopPanelEl) setShown(loopPanelEl, true);
+    syncLoopReadout(true);
+    signalLayoutChange();
+  }
+  function closeLoopPanel(): void {
+    root.classList.remove('loop-open');
+    if (loopPanelEl) setShown(loopPanelEl, false);
+    syncLoopReadout(false);
+    signalLayoutChange();
+  }
+  function toggleLoopPanel(): void {
+    if (isLoopPanelOpen()) closeLoopPanel();
+    else openLoopPanel();
+  }
+
   function applyTheme(t: Theme): void {
     theme = t;
     themeTarget.setAttribute('data-theme', t);
@@ -119,6 +149,8 @@ export function createShell(root: HTMLElement, deps: ShellDeps = {}): Shell {
     if (vb && root.contains(vb)) return setView(vb.getAttribute('data-viewbtn') as ViewId);
     if (target.closest('#qs')) return toggleDrawer();
     if (target.closest('#dclose')) return closeDrawer();
+    if (target.closest('#loopstat')) return toggleLoopPanel();
+    if (target.closest('#lclose')) return closeLoopPanel();
     if (target.closest('#tg')) return setTheme(theme === 'dark' ? 'light' : 'dark');
   };
 
@@ -130,6 +162,12 @@ export function createShell(root: HTMLElement, deps: ShellDeps = {}): Shell {
       e.preventDefault();
       e.stopPropagation();
       setViewerFullscreen(false);
+      return;
+    }
+    if (e.key === 'Escape' && isLoopPanelOpen()) {
+      e.preventDefault();
+      e.stopPropagation();
+      closeLoopPanel();
       return;
     }
     if (!(e.metaKey || e.ctrlKey)) return;
@@ -159,6 +197,7 @@ export function createShell(root: HTMLElement, deps: ShellDeps = {}): Shell {
   applyTheme(theme);
   setView(view); // sync the pane/nav classes + aria-current to the markup-inferred view on mount
   if (drawerEl) setShown(drawerEl, isDrawerOpen()); // match the drawer's inert state to its start class
+  if (loopPanelEl) setShown(loopPanelEl, isLoopPanelOpen()); // same for the loop panel (starts closed)
   // A failing IPC / main-process restart must not become an unhandled rejection; on failure
   // keep the default theme.
   if (deps.getTheme)
@@ -174,6 +213,10 @@ export function createShell(root: HTMLElement, deps: ShellDeps = {}): Shell {
     closeDrawer,
     toggleDrawer,
     isDrawerOpen,
+    openLoopPanel,
+    closeLoopPanel,
+    toggleLoopPanel,
+    isLoopPanelOpen,
     setTheme,
     getTheme: () => theme,
     setViewerFullscreen,

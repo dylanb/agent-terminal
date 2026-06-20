@@ -51,6 +51,148 @@ describe('flow state machine (§24.2.2 S1)', () => {
   });
 });
 
+// §24.2.3 T1 — the multi-step walking skeleton. The machine tracks a current-step index and
+// advances ACROSS steps: each Advance moves to the next step (staying in_progress) until the last,
+// whose Advance reaches `done`. position/stepName walk the real steps; `done` is reachable only
+// past the last step. Manual-only, no new backing (T1). The observable contract is the state view
+// and thrown errors — never the internal index variable.
+describe('flow state machine — multi-step (§24.2.3 T1)', () => {
+  const THREE: FlowLoad = {
+    ok: true,
+    definition: {
+      name: 'f',
+      steps: [
+        { id: 'groom', kind: 'manual' },
+        { id: 'plan', kind: 'manual' },
+        { id: 'implement', kind: 'manual' },
+      ],
+    },
+    flowDir: '/tmp/f/.agent-terminal',
+  };
+
+  it('begins not_started at the first of N steps (1/3)', () => {
+    const s = createFlowMachine(THREE).state();
+    expect(s.status).toBe('not_started');
+    expect(s.position).toBe(1);
+    expect(s.total).toBe(3);
+    expect(s.stepName).toBe('groom');
+  });
+
+  it('Advance walks across the steps, reaching done only past the last', () => {
+    const flow = createFlowMachine(THREE);
+    flow.start();
+    expect([flow.state().position, flow.state().stepName, flow.state().status]).toEqual([1, 'groom', 'in_progress']);
+
+    let v = flow.advance(); // step 1 → step 2 (still in progress)
+    expect([v.position, v.stepName, v.status]).toEqual([2, 'plan', 'in_progress']);
+
+    v = flow.advance(); // step 2 → step 3
+    expect([v.position, v.stepName, v.status]).toEqual([3, 'implement', 'in_progress']);
+
+    v = flow.advance(); // step 3 (last) → done
+    expect(v.status).toBe('done');
+    expect(v.position).toBe(3);
+  });
+
+  it('refuses to advance once done (done is terminal past the last step)', () => {
+    const flow = createFlowMachine(THREE);
+    flow.start();
+    flow.advance();
+    flow.advance();
+    flow.advance(); // now done
+    expect(() => flow.advance()).toThrow();
+    expect(flow.state().status).toBe('done');
+  });
+
+  it('restart returns a completed multi-step flow to its first step, in progress', () => {
+    const flow = createFlowMachine(THREE);
+    flow.start();
+    flow.advance();
+    flow.advance();
+    flow.advance();
+    const v = flow.restart();
+    expect([v.position, v.stepName, v.status]).toEqual([1, 'groom', 'in_progress']);
+  });
+
+  it('persists the current step so a fresh machine resumes mid-flow, on the right step', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'flow-multi-'));
+    try {
+      const first = createFlowMachine(THREE, createFlowStateStore(dir));
+      first.start();
+      first.advance(); // now on step 2 (plan), in progress
+      const resumed = createFlowMachine(THREE, createFlowStateStore(dir)).state();
+      expect([resumed.position, resumed.stepName, resumed.status]).toEqual([2, 'plan', 'in_progress']);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// §24.2.3 T2 — a loop step mirrors its agent-loop state.yaml. The machine folds the read-only
+// mirror (via an injected readLoop) onto every view of a loop step, as a `loop` field parallel to
+// derived; a manual step never mirrors. readLoop is read on each view so the mirror is live. The
+// observable contract is the view's `loop` field — never how the machine reads the file.
+describe('flow state machine — loop-step state.yaml mirror (§24.2.3 T2)', () => {
+  const MIXED: FlowLoad = {
+    ok: true,
+    definition: {
+      name: 'f',
+      steps: [
+        { id: 'groom', kind: 'manual' },
+        { id: 'build', kind: 'loop', loop: 'impl-loop' },
+      ],
+    },
+    flowDir: '/tmp/f/.agent-terminal',
+  };
+  const mirror = { status: 'awaiting-human-pr-approval', iteration: 9, pr: 179, branch: 'b' };
+
+  it('folds the mirror onto a loop step view but NOT a manual step view', () => {
+    const flow = createFlowMachine(MIXED, undefined, undefined, () => mirror);
+    expect(flow.state().loop).toBeUndefined(); // step 1 is manual — no mirror
+    flow.start();
+    const v = flow.advance(); // → step 2 (loop)
+    expect(v.loop).toMatchObject({ status: 'awaiting-human-pr-approval', iteration: 9, pr: 179 });
+  });
+
+  it('omits loop when the mirror is unavailable (missing/corrupt state.yaml → null)', () => {
+    const flow = createFlowMachine(MIXED, undefined, undefined, () => null);
+    flow.start();
+    expect(flow.advance().loop).toBeUndefined();
+  });
+
+  it('reflects the live mirror — a later read sees the updated state.yaml', () => {
+    let live = mirror;
+    const flow = createFlowMachine(MIXED, undefined, undefined, () => live);
+    flow.start();
+    flow.advance();
+    expect(flow.state().loop?.status).toBe('awaiting-human-pr-approval');
+    live = { status: 'awaiting-team-review', iteration: 10, pr: 179, branch: 'b' };
+    expect(flow.state().loop?.status).toBe('awaiting-team-review');
+    expect(flow.state().loop?.iteration).toBe(10);
+  });
+
+  it('resolves the step\'s bound LoopDef so readiness + gate options are gate-driven', () => {
+    const def = {
+      name: 'impl-loop',
+      gates: [
+        { id: 'awaiting-human-pr-approval', kind: 'approve-required', humanOptions: ['approve', 'request-changes', 'impasse'], terminal: false },
+        { id: 'awaiting-team-review', kind: 'terminal', humanOptions: [], terminal: true },
+      ],
+    };
+    let live = mirror;
+    const flow = createFlowMachine(MIXED, undefined, undefined, () => live, (name) => (name === 'impl-loop' ? def : null));
+    flow.start();
+    flow.advance(); // → step 2 (loop, bound to impl-loop)
+    // At the awaiting gate: not ready, gate options surfaced from the gate's human_options.
+    expect(flow.state().loop?.ready).toBe(false);
+    expect(flow.state().loop?.gateOptions).toEqual(['approve', 'request-changes', 'impasse']);
+    // At the terminal gate: ready, no options.
+    live = { status: 'awaiting-team-review', iteration: 10, pr: 179, branch: 'b' };
+    expect(flow.state().loop?.ready).toBe(true);
+    expect(flow.state().loop?.gateOptions).toBeUndefined();
+  });
+});
+
 // §24.2.2 S3 — the machine is backed by a real flow-state store: it restores its status from
 // disk on construction (so a relaunch resumes where it left off) and persists every transition.
 // Tests drive the real store over a temp dir; the observable contract is what a *fresh* machine

@@ -54,6 +54,8 @@ import { createScanner } from './scanner';
 import { captureLastReport } from './captureLast';
 import { createFlowManager, deriveFlowView, loadFlowDefinitionLocalFirst } from './flow';
 import { createFlowEntryActions } from './flowEntryActions';
+import { parseAgentLoopState, watchAgentLoopState } from './agentLoopBridge';
+import { parseLoopDef } from './loopDef';
 import { listTodoTemplates, loadTodoTemplateFile, parseTodoTemplate } from './todoTemplate';
 import { discover, readArtifact, emptyTree } from './artifactTree';
 import { createChromeProfileStore } from './chromeProfile';
@@ -93,6 +95,7 @@ async function createWindow(): Promise<void> {
   // inert error view rather than throwing across IPC.
   const flowRequestError = (): FlowStateView => ({
     stepName: '',
+    steps: [],
     position: 0,
     total: 0,
     status: 'error',
@@ -214,7 +217,24 @@ async function createWindow(): Promise<void> {
   const flow = createFlowManager({
     globalDir: flowGlobalDir,
     onEnterStep: (step) => flowEntryActions(step),
+    // T2 (§24.2.3): a loop step mirrors its repo's agent-loop state.yaml, read-only and live.
+    readLoopState: (repoKey) => parseAgentLoopState(repoKey),
+    // …and resolves its bound LoopDef (§18.1) so readiness + the gate options are gate-driven: the
+    // §19.2 advance warning fires until the loop reaches a TERMINAL gate, not just past awaiting-human.
+    readLoopDef: (repoKey, name) => parseLoopDef(repoKey, name),
   });
+
+  // T2 (§24.2.3): once a repo surfaces a loop-state mirror, watch its state.yaml so a hand-edit
+  // (the human driving agent-loop) re-pushes the strip over the EXISTING flow:onStateChanged seam
+  // (§24.2.2 S5) — no new plumbing. One watcher per repo, established lazily on first sight of a
+  // loop view; pushFlowChanged makes the strip re-pull, so duplicate file events are harmless.
+  const loopWatchers = new Map<string, () => void>();
+  const trackLoop = (repoKey: string, view: FlowStateView): FlowStateView => {
+    if (view.loop && !loopWatchers.has(repoKey)) {
+      loopWatchers.set(repoKey, watchAgentLoopState(repoKey, pushFlowChanged));
+    }
+    return view;
+  };
   // todoTemplate:instantiate (§6/§4.1) — on demand, instantiate a named template (co-located with
   // the flow.yaml under todo-templates/, §18.6) into the visited repo's todo list. Resolves the
   // flow dir local-first-then-global so a global flow's templates work in any repo; a missing
@@ -358,23 +378,29 @@ async function createWindow(): Promise<void> {
       // S5 (§24.2.2): an in_progress view is augmented with its DERIVED live status (n/m done +
       // §8.3 activity + gate readiness) folded in from the repo's todos and the latest activity.
       [CH.flowState]: (_e, m) =>
-        isValidFlowRequest(m) ? withDerived(m.repoKey, flow.state(m.repoKey)) : flowRequestError(),
+        isValidFlowRequest(m) ? trackLoop(m.repoKey, withDerived(m.repoKey, flow.state(m.repoKey))) : flowRequestError(),
       [CH.flowStart]: (_e, m) =>
-        isValidFlowRequest(m) ? withDerived(m.repoKey, flow.start(m.repoKey)) : flowRequestError(),
-      // Advancing while NOT ready (todos still outstanding) is a human override (§19.2): it warns
-      // via a one-shot notice but still completes. Readiness is read from the pre-advance state.
+        isValidFlowRequest(m) ? trackLoop(m.repoKey, withDerived(m.repoKey, flow.start(m.repoKey))) : flowRequestError(),
+      // Advancing while NOT ready is a human override (§19.2): it warns via a one-shot notice but
+      // still completes. Readiness is read from the pre-advance state — for a loop step from the
+      // mirrored loop (it still needs a human while `awaiting-*`), else from the todo gate (S5).
       [CH.flowAdvance]: (_e, m) => {
         if (!isValidFlowRequest(m)) return flowRequestError();
-        const ready = withDerived(m.repoKey, flow.state(m.repoKey)).derived?.ready ?? true;
+        const pre = withDerived(m.repoKey, flow.state(m.repoKey));
+        const ready = pre.loop ? pre.loop.ready : (pre.derived?.ready ?? true);
         const view = flow.advance(m.repoKey);
-        return ready ? view : { ...view, notice: 'Advanced with todos still outstanding.' };
+        if (ready) return trackLoop(m.repoKey, view);
+        const notice = pre.loop
+          ? 'Advanced while the loop still needs you.'
+          : 'Advanced with todos still outstanding.';
+        return trackLoop(m.repoKey, { ...view, notice });
       },
       [CH.flowRestart]: (_e, m) =>
-        isValidFlowRequest(m) ? withDerived(m.repoKey, flow.restart(m.repoKey)) : flowRequestError(),
+        isValidFlowRequest(m) ? trackLoop(m.repoKey, withDerived(m.repoKey, flow.restart(m.repoKey))) : flowRequestError(),
       // Undo a manual advance: revert done → in_progress (no entry actions re-run). withDerived
       // restores the in-progress derived line.
       [CH.flowUndo]: (_e, m) =>
-        isValidFlowRequest(m) ? withDerived(m.repoKey, flow.undo(m.repoKey)) : flowRequestError(),
+        isValidFlowRequest(m) ? trackLoop(m.repoKey, withDerived(m.repoKey, flow.undo(m.repoKey))) : flowRequestError(),
       // On-demand template picker (§6/§4.1), surfaced in the todo widget. `list` is GATED to a
       // step that is in_progress (so the picker shows only while the step is active, the operator
       // decision) and carries the bound template as the default; `instantiate` adds the chosen one.
@@ -403,6 +429,8 @@ async function createWindow(): Promise<void> {
     cwdTracker.dispose();
     tracker.dispose();
     shadow.dispose();
+    for (const stop of loopWatchers.values()) stop();
+    loopWatchers.clear();
   });
 
   const target = resolveRendererTarget({

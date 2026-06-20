@@ -76,14 +76,71 @@ describe('flow.yaml loader (§24.2.2 S2 / §18.1)', () => {
     expect(load.ok).toBe(false);
   });
 
-  it('rejects schema-invalid definitions (no name / no steps / step missing id / not manual)', () => {
+  it('rejects schema-invalid definitions (no name / no steps / step missing id / unsupported kind)', () => {
     writeFlow('steps:\n  - id: x\n    kind: manual\n'); // no top-level name
     expect(loadFlowDefinition(dir).ok).toBe(false);
     writeFlow('name: f\nsteps: []\n'); // no steps
     expect(loadFlowDefinition(dir).ok).toBe(false);
     writeFlow('name: f\nsteps:\n  - kind: manual\n'); // step missing id
     expect(loadFlowDefinition(dir).ok).toBe(false);
-    writeFlow('name: f\nsteps:\n  - id: x\n    kind: loop\n'); // not a manual step (out of S2 scope)
+    writeFlow('name: f\nsteps:\n  - id: x\n    kind: action\n'); // action is a later phase (§18.2)
+    expect(loadFlowDefinition(dir).ok).toBe(false);
+  });
+
+  // §24.2.3 T1 — the loader retires the single-step assumption: it loads ALL steps, in order,
+  // not just the first. Every step is validated (manual-only in T1 scope), with per-step
+  // skill/template refs preserved.
+  it('loads every step of a multi-step manual flow, in order, with each step\'s refs', () => {
+    writeFlow(
+      'name: feature-dev\n' +
+        'steps:\n' +
+        '  - id: groom\n' +
+        '    kind: manual\n' +
+        '    skill: groom-ticket\n' +
+        '  - id: plan\n' +
+        '    kind: manual\n' +
+        '    todo_template: planning\n' +
+        '  - id: implement\n' +
+        '    kind: manual\n',
+    );
+    const load = loadFlowDefinition(dir);
+    expect(load.ok).toBe(true);
+    if (load.ok) {
+      expect(load.definition.steps.map((s) => s.id)).toEqual(['groom', 'plan', 'implement']);
+      expect(load.definition.steps[0].skill).toBe('groom-ticket');
+      expect(load.definition.steps[1].todoTemplate).toBe('planning');
+      expect(load.definition.steps[2].skill).toBeUndefined();
+    }
+  });
+
+  it('rejects a flow where ANY step (not just the first) has an out-of-scope kind', () => {
+    writeFlow(
+      'name: f\nsteps:\n' +
+        '  - id: groom\n    kind: manual\n' +
+        '  - id: ship\n    kind: action\n', // action is a later phase (§18.2)
+    );
+    expect(loadFlowDefinition(dir).ok).toBe(false);
+  });
+
+  // §24.2.3 T2 — the loader gains the `loop` kind: a step binding an agent-loop LoopDef by name.
+  // The app still drives nothing (T2 is a read-only state.yaml mirror); the binding is captured so
+  // the bridge knows which loop the step mirrors.
+  it('loads a loop step binding its LoopDef name (§24.2.3 T2)', () => {
+    writeFlow(
+      'name: feature-dev\nsteps:\n' +
+        '  - id: groom\n    kind: manual\n' +
+        '  - id: build\n    kind: loop\n    loop: impl-loop\n',
+    );
+    const load = loadFlowDefinition(dir);
+    expect(load.ok).toBe(true);
+    if (load.ok) {
+      expect(load.definition.steps.map((s) => s.kind)).toEqual(['manual', 'loop']);
+      expect(load.definition.steps[1].loop).toBe('impl-loop');
+    }
+  });
+
+  it('rejects a loop step that names no loop: LoopDef binding (§24.2.3 T2)', () => {
+    writeFlow('name: f\nsteps:\n  - id: build\n    kind: loop\n');
     expect(loadFlowDefinition(dir).ok).toBe(false);
   });
 });
@@ -157,7 +214,7 @@ describe('flow.yaml local-first-then-global resolution (§18.1)', () => {
   });
 
   it('surfaces a present-but-invalid local file rather than masking it with the global', () => {
-    write(local, 'name: feature\nsteps:\n  - id: x\n    kind: loop\n'); // invalid: not a manual step
+    write(local, 'name: feature\nsteps:\n  - id: x\n    kind: action\n'); // invalid: out-of-scope kind
     write(global, VALID('global'));
     const load = loadFlowDefinitionLocalFirst(local, global);
     expect(load.ok).toBe(false); // the local error wins; the global is NOT used
