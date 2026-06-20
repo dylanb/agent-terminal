@@ -59,3 +59,35 @@ This is the §24 "UI-inwards" build direction applied feature by feature: stand 
 - The monitor pane talks only to `window.monitor.*` (§9.1). It must never import from terminal/selection modules or touch renderer xterm state, even though they share a document — this is what keeps it relocatable to a separate process. It is the canonical example of the `UI-STANDARDS.md` stable-interface rule.
 - Timing values are named and configurable where the spec says so: `SUBMIT_DELAY_MS` via `APP_SUBMIT_DELAY_MS`, `QUIET_MS`, the 80 ms resize/settle debounces (§7.1, §8.2, §9.3). No new magic-number sleeps.
 - Every IPC payload carries `sessionId` (§6), even while there is only one session.
+
+## PR review discipline (Copilot)
+
+A pushed fix that never triggers a new review round is a **stalled PR**. After pushing fixes, you MUST re-trigger Copilot — it does **not** auto-re-review new commits.
+
+**Re-triggering is the part that bites — a plain re-add is a silent no-op.** If `copilot-pull-request-reviewer[bot]` is already in the requested-reviewers list (the normal case after the first round), re-adding does nothing. To force a fresh round you MUST remove, *then* re-add:
+
+```bash
+gh pr edit <PR#> --remove-reviewer "copilot-pull-request-reviewer[bot]"
+gh pr edit <PR#> --add-reviewer "copilot-pull-request-reviewer[bot]"
+```
+
+The API form is equivalent and handy in scripts:
+
+```bash
+gh api --method POST repos/dylanb/agent-terminal/pulls/<PR#>/requested_reviewers \
+  -f 'reviewers[]=copilot-pull-request-reviewer[bot]'
+```
+
+**Always verify the request actually landed** before considering the round kicked off:
+
+```bash
+gh api repos/dylanb/agent-terminal/pulls/<PR#> --jq '.requested_reviewers[].login'
+```
+
+**Reading the result — the login differs by API surface (the `[bot]` gotcha):**
+- `/pulls/<PR#>/reviews` → the review's author login is `copilot-pull-request-reviewer[bot]` (**with** the `[bot]` suffix); state is `COMMENTED` or `CHANGES_REQUESTED`. Filtering on the bare `copilot-pull-request-reviewer` is a **false negative** — match with `endswith("[bot]")` or the exact login.
+- `/pulls/<PR#>/comments` → the inline findings' author login is `Copilot` (capital C, **no** suffix). **The actual findings arrive as inline comments here, not in the review body — always fetch both.**
+
+**"Clean" means:** a Copilot review whose `commit_id` equals the current HEAD with zero open inline comments. A review against an older commit is stale — re-request after the latest push.
+
+**Responding to findings:** fix the valid, non-scope-creep ones RED-first (the TDD ladder above applies — wiring included), then reply to each thread citing the fix commit, and resolve the thread (`resolveReviewThread` via GraphQL). A finding you decline is still answered and resolved, with the reason and any follow-up named. When committing+pushing, also rewrite the PR description to reflect the full implemented scope.
