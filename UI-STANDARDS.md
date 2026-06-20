@@ -77,7 +77,11 @@ required services (injected `deps`) are all named. Nothing reaches outside it.
 
 ### 2.2 The hard rules an organism must obey to be relocatable
 1. **It touches only its host element and that element's subtree.** No `document.querySelector`
-   into siblings, no global IDs, no assuming a parent class exists.
+   into siblings, no global IDs, no assuming a parent class exists. **Every node it creates or
+   inspects comes from `host.ownerDocument`** — `createElement`, `createTextNode`,
+   `activeElement`, `getSelection`, … — **never the ambient global `document`.** A relocated
+   organism lives in a different document (another frame/process); the global `document` is not
+   its own. Idiom: `const doc = host.ownerDocument;` at the top of the factory, then `doc.*`.
 2. **It assumes nothing about its size, position, or neighbors.** It fills the bounded region
    it's handed and is responsive within it. No fixed positioning tied to one frame.
 3. **Services are injected, never reached for.** Take `deps` as a parameter; do not import a
@@ -130,6 +134,30 @@ mount(createArtifactExplorer, frameB-host)  → same assertions pass, zero impl 
 If the assertions need different setup per placement beyond "a different host element + the
 same wired contract," the contract has leaked — fix the component, not the test.
 
+**The two-placement test alone does NOT catch a global-`document` reach — give it teeth.**
+jsdom (and the DOM spec) **auto-adopts** appended nodes: a node created via the global
+`document` and then appended into a host re-acquires that host's `ownerDocument`. So if both
+placements live in the same (global) document, the assertions pass *even when the organism
+reached for the global* — a test that's green while the rule (§2.2.1) is broken. Asserting
+`ownerDocument` after render is for the same reason **not** sufficient. To make the latent reach
+observable, mount into a host in a **foreign document** with the global `document.createElement`
+**poisoned to throw**:
+
+```
+function foreignDocWithHostileGlobal(): Document {
+  const foreign = document.implementation.createHTMLDocument('relocated');
+  vi.spyOn(document, 'createElement').mockImplementation(() => {
+    throw new Error('organism reached for the ambient global document instead of its host');
+  });
+  return foreign;                       // restore the spy in afterEach
+}
+// const host = foreign.createElement('div'); mount the organism on it, drive a render,
+// then assert the visible DOM appears in `host` — a clean organism renders, a reaching one throws.
+```
+
+A clean organism renders from `host.ownerDocument` regardless; one that touches the global
+produces nothing. Reference implementation: `tests/unit/relocatable.test.ts`.
+
 ---
 
 ## 4. Conventions
@@ -146,8 +174,8 @@ same wired contract," the contract has leaked — fix the component, not the tes
 ## 5. Definition of done (per component)
 - [ ] Correct tier, and obeys that tier's dependency limits (UI §1).
 - [ ] Typed interface; all inputs/outputs/services on it (organisms: UI §2.1).
-- [ ] Touches only its host subtree; services injected, not reached for (UI §2.2).
+- [ ] Touches only its host subtree; builds DOM from `host.ownerDocument`; services injected, not reached for (UI §2.2).
 - [ ] Styled via `tokens.css`; light + dark both correct.
 - [ ] `dispose()` leaves nothing behind.
 - [ ] RED-first DOM unit tests of observable behavior (UI §3.1).
-- [ ] Organisms: e2e + a passing relocation test in ≥2 placements (UI §3.2–3.3).
+- [ ] Organisms: e2e + a relocation test against a foreign-document host with a hostile global `document` (UI §3.2–3.3).
