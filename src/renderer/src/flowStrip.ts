@@ -193,7 +193,12 @@ export function createFlowStrip(host: HTMLElement, deps: FlowApi): FlowStrip {
           ? '.flow-undo'
           : '.flow-control'
         : null;
-    const view = await deps.state(key);
+    let view: FlowStateView;
+    try {
+      view = await deps.state(key);
+    } catch {
+      return; // IPC failure (main restart): keep the prior UI, never an unhandled rejection (§16.4)
+    }
     if (repoKey !== key) return; // repo changed mid-flight → a newer refresh owns the render
     render(view);
     if (refocus) host.querySelector<HTMLElement>(refocus)?.focus();

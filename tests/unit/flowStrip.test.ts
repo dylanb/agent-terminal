@@ -408,6 +408,20 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     expect(stepName()).toBe('/repoB-step');
   });
 
+  it('refresh() swallows an IPC rejection and keeps the prior UI (no unhandled rejection, §16.4)', async () => {
+    const deps = fakeFlow();
+    const strip = createFlowStrip(host, deps);
+    strip.onRepoChanged('/repoA');
+    await vi.waitFor(() => expect(stepName()).toBe('/repoA-step'));
+    // The push path / onRepoChanged fire `void refresh()`; if state() rejects (main restart) without
+    // an internal catch it becomes an unhandled rejection — vitest fails the run on one (§16.4).
+    deps.state.mockRejectedValueOnce(new Error('ipc down'));
+    strip.onRepoChanged('/repoA');
+    await new Promise((r) => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(stepName()).toBe('/repoA-step'); // prior UI preserved
+  });
+
   it('refresh() does not render a stale state when the repo changed before deps.state resolved (race)', async () => {
     const flush = () => new Promise((r) => setTimeout(r, 0));
     const deferred = new Map<string, () => void>();
