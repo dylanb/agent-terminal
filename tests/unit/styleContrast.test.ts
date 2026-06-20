@@ -41,7 +41,10 @@ function resolve(value: string, tokens: Map<string, string>): string {
 
 function ruleDecl(selector: string, prop: string): string {
   const at = css.indexOf(selector + ' {');
-  const block = css.slice(at, css.indexOf('}', at));
+  if (at === -1) throw new Error(`ruleDecl: selector not found in styles.css: ${selector}`);
+  const end = css.indexOf('}', at);
+  if (end === -1) throw new Error(`ruleDecl: unterminated rule block for ${selector}`);
+  const block = css.slice(at, end);
   const m = block.match(new RegExp(`(?:^|[;{])\\s*${prop}\\s*:\\s*([^;]+);`));
   if (!m) throw new Error(`no ${prop} on ${selector}`);
   return m[1].trim();
