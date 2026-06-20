@@ -52,9 +52,6 @@ export function deriveLoopView(
   return { ...view, loop: { ...loop, ready, ...(gateOptions ? { gateOptions } : {}) } };
 }
 
-/** A §18.1 step. `manual`: a human produces an artifact (optional skill/template refs). `loop`
- *  (§24.2.3 T2): runs an agent-loop, binding its LoopDef by name (`loop`); the app mirrors that
- *  loop's state.yaml read-only. The `action` kind (§18.2) is a later phase. */
 /** A step's declared typed input (§18.4 / §24.2.3 T3): a named value of a catalog `type`
  *  (`github-ticket`/`pr`/`files`/`free-text`). A `required` input must be resolved on step entry —
  *  prompted for when unsatisfied — before the step's `bootstrap` can run. */
@@ -64,6 +61,9 @@ export interface FlowInputDef {
   required: boolean;
 }
 
+/** A §18.1 step. `manual`: a human produces an artifact (optional skill/template refs). `loop`
+ *  (§24.2.3 T2): runs an agent-loop, binding its LoopDef by name (`loop`); the app mirrors that
+ *  loop's state.yaml read-only. The `action` kind (§18.2) is a later phase. */
 export interface FlowStepDef {
   id: string;
   kind: 'manual' | 'loop';
@@ -91,7 +91,6 @@ export type FlowLoad =
   | { ok: false; error: string };
 
 const FLOW_REL = path.join('.agent-terminal', 'flow.yaml');
-
 
 /** Validate a step's `inputs:` (§18.4): each entry needs a string name + type; `required` defaults
  *  to false. Absent → []; a malformed entry → the sentinel 'invalid' so the loader can error. */
@@ -279,7 +278,7 @@ export function createFlowMachine(
   const persist = (): void =>
     store?.write({ step: current().id, status, ...(Object.keys(inputs).length > 0 ? { inputs } : {}) });
 
-  const require = (expected: FlowStatus, action: string): void => {
+  const requireStatus = (expected: FlowStatus, action: string): void => {
     if (status !== expected) {
       throw new Error(`illegal flow transition: cannot ${action} from ${status}`);
     }
@@ -301,7 +300,7 @@ export function createFlowMachine(
   return {
     state: view,
     start: () => {
-      require('not_started', 'start');
+      requireStatus('not_started', 'start');
       status = 'in_progress';
       persist();
       return enter(view());
@@ -309,7 +308,7 @@ export function createFlowMachine(
     // Advance walks across steps: each call moves to the next step (still in progress) until the
     // last, whose Advance completes the flow (`done`). `done` is reachable only past the last step.
     advance: () => {
-      require('in_progress', 'advance');
+      requireStatus('in_progress', 'advance');
       if (index < steps.length - 1) {
         index += 1;
         persist();
@@ -322,7 +321,7 @@ export function createFlowMachine(
     // Restart resets a completed flow back to its FIRST step, in progress, re-running its entry
     // actions (§24.2.2).
     restart: () => {
-      require('done', 'restart');
+      requireStatus('done', 'restart');
       index = 0;
       status = 'in_progress';
       persist();
@@ -331,7 +330,7 @@ export function createFlowMachine(
     // Undo reverts the advance that completed the flow (last step → done) back to in_progress on the
     // last step, WITHOUT re-entering it (no entry actions) — it takes back the advance, not the work.
     undo: () => {
-      require('done', 'undo');
+      requireStatus('done', 'undo');
       status = 'in_progress';
       persist();
       return view();
@@ -340,7 +339,7 @@ export function createFlowMachine(
     // them, and RE-ENTER the current step so the now-satisfied bootstrap runs (or re-prompts if a
     // required input is still missing). Legal only while a step is being worked.
     provideInput: (values) => {
-      require('in_progress', 'provideInput');
+      requireStatus('in_progress', 'provideInput');
       inputs = { ...inputs, ...values };
       persist();
       return enter(view());

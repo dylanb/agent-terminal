@@ -165,6 +165,9 @@ export function createShell(root: HTMLElement, deps: ShellDeps = {}): Shell {
       return;
     }
     if (e.key === 'Escape' && isLoopPanelOpen()) {
+      // Defer to an open dialog (e.g. the typed-input modal): Escape should dismiss the topmost
+      // surface, not the panel behind it (WCAG 2.4.3). The modal's own handler closes it.
+      if ((e.target as Element | null)?.closest?.('[role="dialog"]')) return;
       e.preventDefault();
       e.stopPropagation();
       closeLoopPanel();

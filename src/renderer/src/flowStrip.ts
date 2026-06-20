@@ -157,6 +157,9 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
   }
 
   function render(state: FlowStateView): void {
+    // A background push repaints the whole rail; if the keyboard user was on the Loop read-out, carry
+    // their focus across the rebuild rather than dropping it to <body> (WCAG 2.4.3).
+    const keepLoopFocus = doc.activeElement instanceof HTMLElement && doc.activeElement.id === 'loopstat' && host.contains(doc.activeElement);
     host.replaceChildren();
 
     if (state.status === 'error') {
@@ -203,7 +206,10 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
     // read-out that opens the docked panel, and the full mirror is handed to that panel via onLoopState.
     // The loop's own status is the live signal, so it supersedes the todo-derived line (todos don't
     // drive a loop). null clears + closes the panel on a non-loop step.
-    if (state.loop) host.append(loopReadout(doc, state.loop));
+    if (state.loop) {
+      host.append(loopReadout(doc, state.loop));
+      if (keepLoopFocus) host.querySelector<HTMLElement>('#loopstat')?.focus();
+    }
     deps.onLoopState?.(state.loop ?? null, state.stepName);
 
     // Live derived status (§24.2.2 S5): n/m todos done + the §8.3 agent activity, recomputed by
@@ -239,9 +245,12 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
    *  this, never a passive `state()` re-pull — a flow:onStateChanged refresh must NOT close an open
    *  modal. `submit` records the typed values (provideInput) and re-applies the response. */
   function emitPrompt(state: FlowStateView): void {
+    const boundRepo = repoKey; // bind the submit to the repo the prompt was raised for
     deps.onPrompt?.(state.prompt ?? null, state.stepName, (values) => {
-      if (repoKey === null) return;
-      deps.provideInput(repoKey, values).then(applyTransition).catch(() => void refresh());
+      // The cwd may move while the (blocking) modal is open; a stale submit must not land the value
+      // on the now-current repo — drop it rather than write to the wrong flow.
+      if (boundRepo === null || repoKey !== boundRepo) return;
+      deps.provideInput(boundRepo, values).then(applyTransition).catch(() => void refresh());
     });
   }
 

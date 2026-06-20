@@ -255,6 +255,17 @@ describe('shell controller (§24.1C — views, hotkeys, docked drawer, theme)', 
       expect(shell.isLoopPanelOpen()).toBe(false);
     });
 
+    it('defers Escape to an open dialog instead of closing the panel behind it (WCAG 2.4.3)', () => {
+      shell.openLoopPanel();
+      const dialog = document.createElement('div');
+      dialog.setAttribute('role', 'dialog');
+      const inp = document.createElement('input');
+      dialog.appendChild(inp);
+      document.body.appendChild(dialog);
+      inp.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+      expect(shell.isLoopPanelOpen()).toBe(true); // the modal owns Escape; the panel stays open
+    });
+
     it('broadcasts a window resize when the panel width changes, so panes refit (§7.1)', () => {
       const onResize = vi.fn();
       window.addEventListener('resize', onResize);

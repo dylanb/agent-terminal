@@ -77,6 +77,27 @@ describe('typed-input modal (§24.2.3 T3 / §18.4)', () => {
     expect(host.querySelector('.flow-modal')).toBeNull();
   });
 
+  it('scrim click closes the modal without submitting', () => {
+    const submit = vi.fn();
+    createFlowInputModal(host).render(prompt(), 'plan', submit);
+    (host.querySelector('.flow-scrim') as HTMLElement).click();
+    expect(submit).not.toHaveBeenCalled();
+    expect(host.querySelector('.flow-modal')).toBeNull();
+  });
+
+  it('does not submit while a required field is empty (no junk empty value persisted, §18.4)', () => {
+    // Every prompted input is required (the entry action only prompts for unsatisfied required inputs);
+    // an empty Confirm would persist `''` and silently re-prompt, so it must be a no-op until filled.
+    const submit = vi.fn();
+    createFlowInputModal(host).render(prompt(), 'plan', submit);
+    (host.querySelector('.flow-modal .confirm') as HTMLButtonElement).click();
+    expect(submit).not.toHaveBeenCalled();
+    expect(host.querySelector('.flow-modal')).toBeTruthy(); // stays open
+    (field('ticket')!.querySelector('input') as HTMLInputElement).value = '176';
+    (host.querySelector('.flow-modal .confirm') as HTMLButtonElement).click();
+    expect(submit).toHaveBeenCalledWith({ ticket: '176' });
+  });
+
   it('render(null) closes any open modal', () => {
     const modal = createFlowInputModal(host);
     modal.render(prompt(), 'plan', vi.fn());
@@ -115,6 +136,19 @@ describe('typed-input modal (§24.2.3 T3 / §18.4)', () => {
     modal.render(prompt(), 'plan', vi.fn());
     expect(document.activeElement).not.toBe(opener); // focus moved into the dialog
     (host.querySelector('.flow-modal .cancel') as HTMLButtonElement).click();
+    expect(document.activeElement).toBe(opener);
+  });
+
+  it('restores opener focus when the strip closes it via render(null) — the submit path (WCAG 2.4.3)', () => {
+    // Confirm → provideInput → the strip calls render(null) to dismiss; that path must restore focus
+    // just like Cancel/Escape/scrim, not strand it on <body>.
+    const opener = document.createElement('button');
+    document.body.appendChild(opener);
+    opener.focus();
+    const modal = createFlowInputModal(host);
+    modal.render(prompt(), 'plan', vi.fn());
+    expect(document.activeElement).not.toBe(opener);
+    modal.render(null, '', vi.fn());
     expect(document.activeElement).toBe(opener);
   });
 

@@ -44,8 +44,8 @@ export function createFlowInputModal(host: HTMLElement): FlowInputModal {
   };
   return {
     render(prompt, stepName, submit) {
+      if (!prompt) return close(); // the strip dismissing the modal (incl. the submit path) restores focus
       host.replaceChildren();
-      if (!prompt) return;
       opener = doc.activeElement as HTMLElement | null;
 
       const scrim = doc.createElement('div');
@@ -115,6 +115,9 @@ export function createFlowInputModal(host: HTMLElement): FlowInputModal {
         reads.forEach((r) => {
           values[r.name] = r.read();
         });
+        // Every prompted input is required (the entry action only prompts for unsatisfied required
+        // inputs, §18.4); refuse a submit that would persist an empty value and silently re-prompt.
+        if (reads.some((r) => values[r.name].length === 0)) return;
         submit(values);
       });
       foot.append(cancel, confirm);

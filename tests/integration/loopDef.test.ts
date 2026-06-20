@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { parseLoopDef, gateForStatus } from '../../src/main/loopDef';
@@ -116,6 +116,30 @@ describe('LoopDef resolver (§24.2.3 T2 folded / §18.1)', () => {
     expect(parseLoopDef(repo, 'impl-loop', configDir)?.name).toBe('impl-loop');
 
     rmSync(outside, { recursive: true, force: true });
+  });
+
+  it('refuses an in-repo symlink whose target escapes the repo (CWE-59), falling through to config', () => {
+    // The lexical containment guard passes for a symlink that LIVES inside the repo, so the resolver
+    // must also re-check the realpath (like the sibling todoTemplate loader, §20.2): an in-repo
+    // `link.yaml` → an outside file must be refused, not followed.
+    const outside = mkdtempSync(join(tmpdir(), 'loopdef-outside-'));
+    writeFileSync(join(outside, 'evil.yaml'), IMPL_LOOP.replace('name: impl-loop', 'name: evil-loop'));
+    symlinkSync(join(outside, 'evil.yaml'), join(repo, 'link.yaml'));
+    writeConfigLoop('impl-loop', IMPL_LOOP); // the legit config copy
+
+    writeRegistry('  impl-loop: ./link.yaml\n');
+    expect(parseLoopDef(repo, 'impl-loop', configDir)?.name).toBe('impl-loop');
+
+    rmSync(outside, { recursive: true, force: true });
+  });
+
+  it('a dangling in-repo override resolves to null (does NOT fall through to the config copy)', () => {
+    // An in-repo override pointing at a not-yet-created file is contained, so the symlink re-check
+    // can't realpath it — that must still yield null (the parser can't read it), distinct from a
+    // repo-ESCAPING override which deliberately falls through to the trusted config copy.
+    writeConfigLoop('impl-loop', IMPL_LOOP); // a config copy exists, to prove we don't fall back to it
+    writeRegistry('  impl-loop: ./not-created-yet.yaml\n');
+    expect(parseLoopDef(repo, 'impl-loop', configDir)).toBeNull();
   });
 
   it('still honors an in-repo registry override in a subdirectory (containment guard is not over-broad)', () => {

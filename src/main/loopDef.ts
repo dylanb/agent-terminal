@@ -6,7 +6,7 @@
 // registry override wins, else `$CLAUDE_CONFIG_DIR/loops/<name>/<name>.yaml` (default ~/.claude).
 // Like the §19.1 store it NEVER throws — a missing / corrupt / wrong-schema / unknown LoopDef → null.
 
-import { readFileSync } from 'node:fs';
+import { readFileSync, realpathSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import yaml from 'js-yaml';
@@ -49,7 +49,19 @@ function resolveLoopDefPath(repoDir: string, name: string, configDir?: string): 
       const target = path.resolve(root, doc.loops[name]);
       // Refuse an override that escapes the repo (CWE-22), mirroring the todoTemplate loader (§20.2):
       // fall through to the trusted config-dir copy rather than read an arbitrary path.
-      if (target === root || target.startsWith(root + path.sep)) return target;
+      if (target === root || target.startsWith(root + path.sep)) {
+        try {
+          // Re-check the realpath so an in-repo symlink can't point OUT of the repo (CWE-59) — the
+          // lexical guard above only sees the symlink's own in-repo path. A dangling/unreadable
+          // target throws here and we keep `target` so the parser yields null (existence is its job).
+          const real = realpathSync(target);
+          const realRoot = realpathSync(root);
+          if (real !== realRoot && !real.startsWith(realRoot + path.sep)) return path.join(configLoopsDir(configDir), name, `${name}.yaml`);
+        } catch {
+          // dangling in-repo override → fall through to the return below (parser → null)
+        }
+        return target;
+      }
     }
   } catch {
     // no/unreadable .agent-loop.yaml → fall through to the config-dir copy

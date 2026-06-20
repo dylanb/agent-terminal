@@ -173,6 +173,16 @@ describe('flow.yaml loader (§24.2.2 S2 / §18.1)', () => {
     writeFlow('name: f\nsteps:\n  - id: plan\n    kind: loop\n    loop: plan-loop\n    bootstrap: teleport\n');
     expect(loadFlowDefinition(dir).ok).toBe(false); // only `pickup` is in scope (§18.3)
   });
+
+  it('rejects malformed inputs: a non-array inputs: or an entry missing name/type (§24.2.3 T3)', () => {
+    // The loader must surface an error state (never silently accept) when `inputs:` is not a list of
+    // {name, type} entries — otherwise a bootstrap could run with an unvalidated input shape.
+    writeFlow('name: f\nsteps:\n  - id: plan\n    kind: loop\n    loop: plan-loop\n    inputs: ticket\n');
+    expect(loadFlowDefinition(dir).ok).toBe(false); // inputs: is not an array
+
+    writeFlow('name: f\nsteps:\n  - id: plan\n    kind: loop\n    loop: plan-loop\n    inputs:\n      - name: ticket\n');
+    expect(loadFlowDefinition(dir).ok).toBe(false); // entry missing `type`
+  });
 });
 
 describe('flow machine sourced from a definition (§24.2.2 S2)', () => {

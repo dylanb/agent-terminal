@@ -49,3 +49,25 @@ describe('status-text token contrast (WCAG 1.4.3 AA)', () => {
     }
   }
 });
+
+// The modal's primary "Confirm & bootstrap" button is `.pill.signal` on the modal card (--card). Its
+// foreground must clear 4.5:1 too — the raw bright `--signal` accent does not in the light theme, so
+// the rule must resolve the accessible `--signal-text` token (memory wcag-overrides-locked-mood).
+function ruleColor(escapedSelector: string): string {
+  const m = css.match(new RegExp(`${escapedSelector}\\s*\\{([^}]*)\\}`));
+  if (!m) throw new Error(`rule ${escapedSelector} not found`);
+  const c = m[1].match(/(?:^|;)\s*color\s*:\s*([^;]+);/);
+  if (!c) throw new Error(`rule ${escapedSelector} has no color`);
+  return c[1].trim();
+}
+
+describe('control text contrast (WCAG 1.4.3 AA)', () => {
+  for (const [themeName, map] of [['light', light], ['dark', dark]] as const) {
+    it(`${themeName}: .pill.signal text clears 4.5:1 on --card (modal Confirm button)`, () => {
+      const color = ruleColor('\\.pill\\.signal');
+      const ref = color.match(/^var\(\s*(--[\w-]+)\s*\)$/);
+      const fg = ref ? resolve(map, ref[1]) : color;
+      expect(contrast(fg, resolve(map, '--card'))).toBeGreaterThanOrEqual(4.5);
+    });
+  }
+});

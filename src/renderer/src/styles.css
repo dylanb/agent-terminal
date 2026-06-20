@@ -136,7 +136,7 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible { outline:2px so
 /* ---- buttons (tokens) ---- */
 .pill { display:inline-flex; align-items:center; justify-content:center; flex:none; height:34px; font-size:12.5px; font-weight:600; padding:0 15px; border-radius:999px; border:1px solid var(--hair); background:transparent; color:var(--text); cursor:pointer; white-space:nowrap; }
 .pill:hover { border-color:var(--dim); }
-.pill.signal { border-color:var(--signal); color:var(--signal); }
+.pill.signal { border-color:var(--signal); color:var(--signal-text); }
 .pill.send { background:var(--attn); color:#fff; border-color:transparent; }
 .pill.app { background:var(--pass); color:#fff; border-color:transparent; }
 .pill.sm { height:30px; font-size:11.5px; padding:0 12px; }

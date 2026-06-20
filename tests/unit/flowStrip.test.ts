@@ -444,6 +444,76 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     expect(provideInput).toHaveBeenCalledWith('/repo', { ticket: '176' });
   });
 
+  it('drops a modal submit if the cwd moved to another repo while it was open (§24.2.3 T3)', async () => {
+    // The modal binds its submit to the repo the prompt was raised for; if the agent cd's away while
+    // the modal is open, Confirm must not land the value on the now-current (wrong) repo.
+    let lastSubmit: ((v: Record<string, string>) => void) | undefined;
+    const promptView: FlowStateView = {
+      stepName: 'plan',
+      steps: ['plan'],
+      position: 1,
+      total: 1,
+      status: 'in_progress',
+      prompt: { inputs: [{ name: 'ticket', type: 'github-ticket' }], bootstrap: 'agent-loop pickup' },
+    };
+    const provideInput = vi.fn(async (): Promise<FlowStateView> => ({ ...promptView, prompt: undefined }));
+    const deps = {
+      state: vi.fn(async (): Promise<FlowStateView> => ({ ...promptView, status: 'not_started' as FlowStatus, prompt: undefined })),
+      start: vi.fn(async (): Promise<FlowStateView> => promptView),
+      advance: vi.fn(),
+      restart: vi.fn(),
+      undo: vi.fn(),
+      provideInput,
+      onStateChanged: noopSub,
+      onPrompt: (prompt: FlowStateView['prompt'] | null, _stepName: string, submit: (v: Record<string, string>) => void) => {
+        if (prompt) lastSubmit = submit;
+      },
+    };
+    const strip = createFlowStrip(host, deps);
+    strip.onRepoChanged('/repo');
+    await vi.waitFor(() => expect(control()!.textContent).toBe('Start'));
+    control()!.click();
+    await vi.waitFor(() => expect(lastSubmit).toBeTruthy());
+
+    strip.onRepoChanged('/other'); // cwd moves while the modal is open
+    await vi.waitFor(() => expect(deps.state).toHaveBeenCalledWith('/other'));
+    lastSubmit!({ ticket: '176' });
+    expect(provideInput).not.toHaveBeenCalled();
+  });
+
+  it('keeps keyboard focus on the rail Loop read-out across a background state push (WCAG 2.4.3)', async () => {
+    let fire = (): void => {};
+    const loopView: FlowStateView = {
+      stepName: 'build',
+      steps: ['build'],
+      position: 1,
+      total: 1,
+      status: 'in_progress',
+      loop: { status: 'awaiting-human-pr-approval', iteration: 9, pr: 179, branch: 'b', ready: false },
+    };
+    const deps = {
+      state: vi.fn(async (): Promise<FlowStateView> => loopView),
+      start: vi.fn(),
+      advance: vi.fn(),
+      restart: vi.fn(),
+      undo: vi.fn(),
+      provideInput: vi.fn(),
+      onStateChanged: vi.fn((cb: () => void) => {
+        fire = cb;
+        return () => {};
+      }),
+    };
+    createFlowStrip(host, deps).onRepoChanged('/repo');
+    await vi.waitFor(() => expect(host.querySelector('#loopstat')).not.toBeNull());
+    const oldReadout = host.querySelector<HTMLElement>('#loopstat')!;
+    oldReadout.focus();
+    expect(document.activeElement).toBe(oldReadout);
+
+    fire(); // main pushes flow:onStateChanged → the strip repaints the whole rail, rebuilding #loopstat
+    await vi.waitFor(() => expect(host.querySelector('#loopstat')).not.toBe(oldReadout)); // repaint landed
+    expect(document.activeElement).toBe(host.querySelector('#loopstat')); // focus rode the repaint
+  });
+
   it('signals onPrompt(null) on a transition with no input prompt, closing the modal (§24.2.3 T3)', async () => {
     const seen: Array<FlowStateView['prompt'] | null> = [];
     const deps = {
