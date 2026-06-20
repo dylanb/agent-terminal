@@ -494,6 +494,9 @@ contextBridge.exposeInMainWorld('monitor', {
   todoReorder:(repoKey, orderedIds) => ipcRenderer.invoke('todo:reorder', { sessionId: SID, repoKey, orderedIds }),
   todoSetStatus:(repoKey, id, status) => ipcRenderer.invoke('todo:setStatus', { sessionId: SID, repoKey, id, status }),
   todoDelete: (repoKey, id) => ipcRenderer.invoke('todo:delete', { sessionId: SID, repoKey, id }),
+  // On-demand template picker (§4.1/§9.1) — on window.monitor so the todo widget never imports flow
+  listTemplates:       (repoKey) => ipcRenderer.invoke('todoTemplate:list', { sessionId: SID, repoKey }),
+  instantiateTemplate: (repoKey, ref) => ipcRenderer.invoke('todoTemplate:instantiate', { sessionId: SID, repoKey, ref }),
   onCwdChanged: (cb) => ipcRenderer.on('cwd:changed', (_e, m) => cb(m)),
   getSettings: () => ipcRenderer.invoke('ui:getSettings'),
   setSettings: (settings) => ipcRenderer.send('ui:setSettings', { settings }),
@@ -511,9 +514,8 @@ contextBridge.exposeInMainWorld('flow', {
   gate:    (action, reason) => ipcRenderer.send('flow:gate', { sessionId: SID, action, reason }),
   composeFeedback: (todoIds, instructions, mode) => ipcRenderer.invoke('flow:composeFeedback', { sessionId: SID, todoIds, instructions, mode }),
   openChild: (prRef, atStep) => ipcRenderer.invoke('flow:openChild', { sessionId: SID, prRef, atStep }),
-  onStateChanged: (cb) => ipcRenderer.on('flow:onStateChanged', (_e, m) => cb(m)),
-  templateList: () => ipcRenderer.invoke('todoTemplate:list', { sessionId: SID }),
-  templateInstantiate: (repoKey, ref) => ipcRenderer.invoke('todoTemplate:instantiate', { sessionId: SID, repoKey, ref }),
+  onStateChanged: (cb) => { const h = () => cb(); ipcRenderer.on('flow:onStateChanged', h); return () => ipcRenderer.removeListener('flow:onStateChanged', h); }, // returns an unsubscribe (§24.2.2 S5)
+  // template picker channels live on window.monitor (§9.1), not here — see the monitor block above
 });
 contextBridge.exposeInMainWorld('viewer', {
   tree: (scope) => ipcRenderer.invoke('viewer:tree', { sessionId: SID, scope }),

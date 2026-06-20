@@ -10,10 +10,10 @@
   --attn:#E5484D; --pass:#1F9D6B;
   /* destructive-action text: darker than --attn so it clears 4.5:1 on the light panel bg (WCAG 1.4.3). */
   --danger:#B11F26;
-  --act:#c0392b; /* PR provenance-tag accent (§20.2); adapts in dark below */
+  --act:#C0392B; /* PR provenance-tag accent (§20.2); adapts in dark below */
   /* active-state text on --signal-wash; deepened so it clears 4.5:1 on the tint (WCAG 1.4.3) */
   --signal-ink:#015F8A;
-  --on-accent:#fff; /* text on a filled accent button */
+  --on-accent:#FFFFFF; /* text on a filled accent button */
   /* filled-button backgrounds darkened so --on-accent clears 4.5:1 (WCAG 1.4.3) */
   --attn-strong:#BC2F35; --pass-strong:#178052;
   --bg:var(--board); --card:var(--leaf); --hair:var(--rule); --hair2:var(--rule-soft);

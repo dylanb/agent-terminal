@@ -103,6 +103,17 @@ describe('todoStore (§16.3 / §16.4 — repo-scoped CRUD + persistence)', () =>
     expect(list.map((t) => t.text)).toEqual(['b']);
   });
 
+  it('is a no-op (unchanged list, no throw) for update/delete/reorder on an unknown id', () => {
+    const store = makeStore();
+    store.add(repoA, 'a');
+    store.add(repoA, 'b');
+    const before = store.list(repoA).map((t) => ({ text: t.text, order: t.order }));
+    expect(store.update(repoA, 'nope', 'x').map((t) => t.text)).toEqual(['a', 'b']);
+    expect(store.delete(repoA, 'nope').map((t) => t.text)).toEqual(['a', 'b']);
+    store.reorder(repoA, ['nope']); // a bogus id leaves the order intact
+    expect(store.list(repoA).map((t) => ({ text: t.text, order: t.order }))).toEqual(before);
+  });
+
   it('caps the Done section, pruning the oldest done items', () => {
     const store = makeStore({ maxDoneTodos: 2 });
     const items = [store.add(repoA, '1')[0], store.add(repoA, '2')[1], store.add(repoA, '3')[2]];

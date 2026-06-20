@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { loadTodoTemplateFile } from '../../src/main/todoTemplate';
@@ -37,5 +37,16 @@ describe('loadTodoTemplateFile (§18.6 — co-located with flow.yaml)', () => {
   it('refuses a path that escapes the flow directory (returns null)', () => {
     writeFileSync(join(flowDir, '..', 'outside.md'), '- leaked\n');
     expect(loadTodoTemplateFile(flowDir, '../outside.md')).toBeNull();
+  });
+
+  it('refuses a symlink whose real path escapes the flow directory (returns null)', () => {
+    writeFileSync(join(flowDir, '..', 'secret.md'), '- leaked\n');
+    symlinkSync(join(flowDir, '..', 'secret.md'), join(flowDir, 'link.md'));
+    expect(loadTodoTemplateFile(flowDir, 'link.md')).toBeNull();
+  });
+
+  it('reads a template through a symlink that stays inside the flow directory (the validated path)', () => {
+    symlinkSync(join(flowDir, 'ticket-grooming.md'), join(flowDir, 'alias.md'));
+    expect(loadTodoTemplateFile(flowDir, 'alias.md')).toBe('- one\n- two\n');
   });
 });

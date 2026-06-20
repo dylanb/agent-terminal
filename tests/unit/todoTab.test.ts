@@ -682,6 +682,22 @@ describe('Todo tab §24.2.1 — review fixes (reorder stability, focus, a11y lab
       expect(pick()).not.toBeNull(); // stays open for another add (operator decision)
     });
 
+    it('a rejected Add todos re-enables the button and does not surface an unhandled rejection (§16.4)', async () => {
+      wireMonitorPane();
+      await flush();
+      await loadRepoWithTemplates('/repoA', [], {
+        templates: [{ ref: 'pr-review', name: 'PR review checklist' }],
+      });
+      toggle()!.click();
+      await flush();
+      monitor.instantiateTemplate.mockRejectedValueOnce(new Error('ipc down'));
+      addBtn()!.click();
+      await flush();
+      // On a main-process restart the invoke rejects; the button must re-enable so the user can
+      // retry, and the rejection must not bubble (vitest fails the run on an unhandled rejection).
+      expect(addBtn()!.disabled).toBe(false);
+    });
+
     it('Escape inside the open picker collapses it and returns focus to the toggle', async () => {
       wireMonitorPane();
       await flush();

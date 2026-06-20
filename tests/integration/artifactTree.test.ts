@@ -149,6 +149,13 @@ describe('artifact discovery (§20.1 / D8 — real git)', () => {
     expect(readArtifact(repo, 'does-not-exist.md')).toBeNull();
   });
 
+  it('returns null for a binary file and an oversize file (§20.2 content guards)', () => {
+    writeFileSync(join(plain, 'bin.md'), Buffer.from([0x41, 0x00, 0x42])); // NUL → binary
+    expect(readArtifact(plain, 'bin.md')).toBeNull();
+    writeFileSync(join(plain, 'huge.md'), 'x'.repeat(512 * 1024 + 1)); // > MAX_FILE_BYTES
+    expect(readArtifact(plain, 'huge.md')).toBeNull();
+  });
+
   it('refuses to follow an in-root symlink that points outside the discovery root', () => {
     // A symlink that lives inside the root but targets an outside file passes the lexical
     // guard; the read must still refuse it (resolve real paths, not just the literal path).

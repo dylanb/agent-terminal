@@ -416,8 +416,14 @@ export function createTodoTab(deps: TodoTabDeps): TodoTab {
         if (!currentRepoKey) return;
         add.disabled = true;
         // Instantiate the chosen template; main silently skips already-present items. Keep the
-        // picker open (operator decision) — setTodos re-renders and the disclosure persists.
-        void monitor.instantiateTemplate(currentRepoKey, select.value).then(setTodos);
+        // picker open (operator decision) — setTodos re-renders and the disclosure persists. A
+        // rejected invoke (main restart) re-enables the button so the user can retry (§16.4).
+        void monitor
+          .instantiateTemplate(currentRepoKey, select.value)
+          .then(setTodos)
+          .catch(() => {
+            add.disabled = false;
+          });
       });
 
       group.append(select, add);
