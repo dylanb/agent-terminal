@@ -1,7 +1,6 @@
 // Shared action-window primitives (§16.2) used by both the Capture and Todo tabs.
-// Kept out of monitor.ts so the sub-tabs depend on this leaf module, not on the
-// coordinator that imports them (no import cycle). monitor.ts re-exports the
-// constants for callers that already import them from there (selection.ts, tests).
+// This is the shared leaf: the sub-tabs and selection.ts import these constants from
+// here, not from the monitor coordinator that imports them, so there is no cycle (§9.1).
 
 // Decoupled focus signal (§16.2): the monitor pane must not import terminal modules,
 // so it asks for terminal focus via a window event the terminal pane subscribes to.

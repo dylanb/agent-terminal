@@ -265,7 +265,6 @@ button:hover { border-color:var(--dim); }
 .finding.revealed { border-color:var(--reveal); box-shadow:0 0 0 1px var(--reveal), 0 0 12px var(--reveal-wash); }
 .finding .t { font-size:13px; line-height:1.45; white-space:pre-wrap; word-break:break-word; }
 .finding .m { font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:10.5px; color:var(--dim); margin-top:5px; }
-.finding .m .hi { color:var(--attn); }
 .finding .a { display:flex; gap:14px; margin-top:9px; }
 .finding .a .linkbtn:disabled { color:var(--dim); cursor:default; }
 
