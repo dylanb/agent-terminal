@@ -63,7 +63,10 @@ export interface FlowDefinition {
  *  step's co-located `todo_template` (§18.6). */
 export type FlowLoad =
   | { ok: true; definition: FlowDefinition; flowDir: string }
-  | { ok: false; error: string };
+  // `kind` is the structured failure discriminator: 'absent' (ENOENT — no flow.yaml here),
+  // 'read_error' (a real IO failure), 'invalid' (present but malformed). Local-first resolution
+  // routes on `kind`, never on the error text (§18.1).
+  | { ok: false; kind: 'absent' | 'read_error' | 'invalid'; error: string };
 
 const FLOW_REL = path.join('.agent-terminal', 'flow.yaml');
 
@@ -80,38 +83,39 @@ export function loadFlowDefinition(worktreeDir: string): FlowLoad {
   } catch (e) {
     // Absence is the common "no flow here" case; any other failure (EACCES/EPERM/EISDIR) is a real
     // read error and must be surfaced, not masked as "not found" (§18.1 — a clear error view).
-    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return { ok: false, error: `no flow.yaml found at ${FLOW_REL}` };
-    return { ok: false, error: `cannot read ${FLOW_REL}: ${(e as Error).message}` };
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT')
+      return { ok: false, kind: 'absent', error: `no flow.yaml found at ${FLOW_REL}` };
+    return { ok: false, kind: 'read_error', error: `cannot read ${FLOW_REL}: ${(e as Error).message}` };
   }
 
   let doc: unknown;
   try {
     doc = yaml.load(raw);
   } catch (e) {
-    return { ok: false, error: `flow.yaml is not valid YAML: ${(e as Error).message}` };
+    return { ok: false, kind: 'invalid', error: `flow.yaml is not valid YAML: ${(e as Error).message}` };
   }
 
-  if (!isRecord(doc)) return { ok: false, error: 'flow.yaml must be a mapping with name + steps' };
+  if (!isRecord(doc)) return { ok: false, kind: 'invalid', error: 'flow.yaml must be a mapping with name + steps' };
   if (typeof doc.name !== 'string' || doc.name.length === 0)
-    return { ok: false, error: 'flow.yaml is missing a name' };
+    return { ok: false, kind: 'invalid', error: 'flow.yaml is missing a name' };
   if (!Array.isArray(doc.steps) || doc.steps.length === 0)
-    return { ok: false, error: 'flow.yaml has no steps' };
+    return { ok: false, kind: 'invalid', error: 'flow.yaml has no steps' };
 
   // S2 scope is the manual kind only (§24.2.2): validate the first step is a manual step.
   const first = doc.steps[0];
   if (!isRecord(first) || typeof first.id !== 'string' || first.id.length === 0)
-    return { ok: false, error: 'flow.yaml step is missing an id' };
+    return { ok: false, kind: 'invalid', error: 'flow.yaml step is missing an id' };
   if (first.kind !== 'manual')
-    return { ok: false, error: `flow.yaml step "${first.id}" is not a manual step (S2 supports manual only)` };
+    return { ok: false, kind: 'invalid', error: `flow.yaml step "${first.id}" is not a manual step (S2 supports manual only)` };
   if (first.skill !== undefined && typeof first.skill !== 'string')
-    return { ok: false, error: `flow.yaml step "${first.id}" has a non-string skill` };
+    return { ok: false, kind: 'invalid', error: `flow.yaml step "${first.id}" has a non-string skill` };
   // The skill is injected into the PTY (§9.3); an embedded CR/LF or other control char would
   // execute as a command line when bracketed-paste is off, so an untrusted repo's flow.yaml
   // cannot smuggle line terminators into the injection path.
   if (typeof first.skill === 'string' && /[\u0000-\u001f\u007f]/.test(first.skill))
-    return { ok: false, error: `flow.yaml step "${first.id}" skill has control characters` };
+    return { ok: false, kind: 'invalid', error: `flow.yaml step "${first.id}" skill has control characters` };
   if (first.todo_template !== undefined && typeof first.todo_template !== 'string')
-    return { ok: false, error: `flow.yaml step "${first.id}" has a non-string todo_template` };
+    return { ok: false, kind: 'invalid', error: `flow.yaml step "${first.id}" has a non-string todo_template` };
 
   const step: FlowStepDef = {
     id: first.id,
@@ -132,9 +136,9 @@ export function loadFlowDefinitionLocalFirst(localDir: string, globalDir: string
   const local = loadFlowDefinition(localDir);
   if (local.ok) return local;
   // Fall back to the global default only when the local file is genuinely ABSENT. A present-but-
-  // unreadable local file (EACCES/ELOOP/…) surfaces its own error — existsSync() returns false on
-  // those IO errors too, so gating on it would silently mask them behind the global.
-  if (!local.error.startsWith('no flow.yaml found')) return local;
+  // unreadable (read_error) or malformed (invalid) local file surfaces its own error, never masked
+  // by the global. Routing on the structured `kind`, not error text, keeps it copy-change-proof.
+  if (local.kind !== 'absent') return local;
   const global = loadFlowDefinition(globalDir);
   return global.ok ? global : local; // neither present: report the local (absent) error
 }

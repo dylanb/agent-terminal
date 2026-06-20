@@ -225,9 +225,10 @@ async function createWindow(): Promise<void> {
     const md = loadTodoTemplateFile(path.join(load.flowDir, 'todo-templates'), ref);
     if (md === null) return todoStore.list(repoKey);
     // Silent dedup (operator decision): re-firing a template skips items already outstanding
-    // (active or in_progress), so a repeat click never piles up duplicates.
-    const active = new Set(todoStore.list(repoKey).filter((t) => t.status !== 'done').map((t) => t.text));
+    // (active or in_progress), so a repeat click never piles up duplicates. One list snapshot
+    // seeds both the dedup set and the return value (list() sorts on every call).
     let list = todoStore.list(repoKey);
+    const active = new Set(list.filter((t) => t.status !== 'done').map((t) => t.text));
     for (const text of parseTodoTemplate(md)) {
       if (active.has(text)) continue;
       list = todoStore.add(repoKey, text);
@@ -378,10 +379,11 @@ async function createWindow(): Promise<void> {
       // decision) and carries the bound template as the default; `instantiate` adds the chosen one.
       [CH.todoTemplateList]: (_e, m) => {
         if (!isValidTemplateList(m)) return { templates: [] };
-        if (flow.state(m.repoKey).status !== 'in_progress') return { templates: [] };
+        const state = flow.state(m.repoKey); // one read: state() lazily inits per repo on first use
+        if (state.status !== 'in_progress') return { templates: [] };
         const load = loadFlowDefinitionLocalFirst(m.repoKey, flowGlobalDir);
         const templates = load.ok ? listTodoTemplates(path.join(load.flowDir, 'todo-templates')) : [];
-        const defaultRef = flow.state(m.repoKey).templateRef;
+        const defaultRef = state.templateRef;
         return defaultRef ? { templates, defaultRef } : { templates };
       },
       [CH.todoTemplateInstantiate]: (_e, m) => {

@@ -102,6 +102,26 @@ describe('flow.yaml loader (§24.2.2 S2 / §18.1)', () => {
     if (!load.ok) expect(load.error).toContain('no flow.yaml found');
   });
 
+  it('tags each failure with a structured kind (absent / read_error / invalid) so routing never keys off error text', () => {
+    const absent = loadFlowDefinition(dir); // ENOENT
+    expect(absent.ok).toBe(false);
+    if (!absent.ok) expect(absent.kind).toBe('absent');
+
+    const ag = join(dir, '.agent-terminal');
+    mkdirSync(ag, { recursive: true });
+    const link = join(ag, 'flow.yaml');
+    symlinkSync(link, link); // self-referential → ELOOP read failure
+    const readErr = loadFlowDefinition(dir);
+    expect(readErr.ok).toBe(false);
+    if (!readErr.ok) expect(readErr.kind).toBe('read_error');
+    rmSync(link, { force: true });
+
+    writeFileSync(link, 'name: f\nsteps:\n  - id: x\n    kind: loop\n'); // schema-invalid
+    const invalid = loadFlowDefinition(dir);
+    expect(invalid.ok).toBe(false);
+    if (!invalid.ok) expect(invalid.kind).toBe('invalid');
+  });
+
   it('surfaces a non-ENOENT read failure instead of masking it as "not found" (EACCES/EISDIR)', () => {
     // A directory where flow.yaml should be makes readFileSync throw EISDIR — a real read failure,
     // not absence. The error must reflect the underlying cause so EACCES/EPERM aren't hidden.
@@ -135,7 +155,7 @@ describe('flow machine sourced from a definition (§24.2.2 S2)', () => {
   });
 
   it('surfaces an inert error state (no throw, no transition) when the load failed', () => {
-    const flow = createFlowMachine({ ok: false, error: 'flow.yaml not found' });
+    const flow = createFlowMachine({ ok: false, kind: 'absent', error: 'flow.yaml not found' });
     const s = flow.state();
     expect(s.status).toBe('error');
     expect(s.error).toContain('not found');

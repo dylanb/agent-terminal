@@ -90,7 +90,7 @@ describe('flow machine persistence (§24.2.2 S3)', () => {
 
   it('an error load with a store stays inert and writes nothing to disk', () => {
     const store = createFlowStateStore(dir);
-    const flow = createFlowMachine({ ok: false, error: 'no flow.yaml' }, store);
+    const flow = createFlowMachine({ ok: false, kind: 'absent', error: 'no flow.yaml' }, store);
     expect(flow.state().status).toBe('error');
     flow.start();
     flow.restart();
@@ -177,7 +177,7 @@ describe('flow machine undo (revert an advance)', () => {
   });
 
   it('is inert on an error load', () => {
-    const flow = createFlowMachine({ ok: false, error: 'no flow.yaml' });
+    const flow = createFlowMachine({ ok: false, kind: 'absent', error: 'no flow.yaml' });
     expect(flow.undo().status).toBe('error'); // inert, never throws
   });
 });
@@ -218,7 +218,7 @@ describe('flow machine entry actions (§24.2.2 S4)', () => {
 
   it('never fires onEnter for an inert error load', () => {
     const onEnter = vi.fn(() => ({}));
-    const flow = createFlowMachine({ ok: false, error: 'no flow.yaml' }, undefined, onEnter);
+    const flow = createFlowMachine({ ok: false, kind: 'absent', error: 'no flow.yaml' }, undefined, onEnter);
     flow.start();
     flow.restart();
     expect(onEnter).not.toHaveBeenCalled();
