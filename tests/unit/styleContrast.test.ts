@@ -44,8 +44,22 @@ function ruleDecl(selector: string, prop: string): string {
   return m[1].trim();
 }
 
+/** Composite a possibly-translucent resolved colour over an opaque base hex → #rrggbb. */
+function flatten(value: string, baseHex: string): string {
+  const m = value.match(/rgba?\(([^)]+)\)/);
+  if (!m) return value; // already an opaque hex
+  const [r, g, b, a = '1'] = m[1].split(',').map((s) => parseFloat(s));
+  const base = baseHex.replace('#', '');
+  const mix = [0, 2, 4].map((i, k) => {
+    const bc = parseInt(base.slice(i, i + 2), 16);
+    return Math.round([r, g, b][k] * Number(a) + bc * (1 - Number(a)));
+  });
+  return '#' + mix.map((c) => c.toString(16).padStart(2, '0')).join('');
+}
+
 function relLum(hex: string): number {
-  const h = hex.replace('#', '');
+  let h = hex.replace('#', '');
+  if (h.length === 3) h = [...h].map((c) => c + c).join(''); // #fff → #ffffff
   const ch = [0, 2, 4].map((i) => {
     const c = parseInt(h.slice(i, i + 2), 16) / 255;
     return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
@@ -72,5 +86,30 @@ describe('functional-surface contrast (WCAG 1.4.3)', () => {
       const fg = resolve(ruleDecl('.tree .f .tag-pr', 'color'), t);
       expect(contrast(fg, resolve('var(--card)', t))).toBeGreaterThanOrEqual(4.5);
     });
+
+    // Active-state surfaces: signal text on the translucent signal-wash, composited over the panel.
+    const card = resolve('var(--card)', t);
+    for (const [name, sel] of [
+      ['active nav item', '.nav.on'],
+      ['active status chip', '.status-chip.on'],
+      ['selected file row', '.tree .f.sel'],
+    ] as const) {
+      it(`the ${name} clears 4.5:1 in ${mode}`, () => {
+        const fg = resolve(ruleDecl(sel, 'color'), t);
+        const bg = flatten(resolve(ruleDecl(sel, 'background'), t), card);
+        expect(contrast(fg, bg)).toBeGreaterThanOrEqual(4.5);
+      });
+    }
+
+    for (const [name, sel] of [
+      ['send gate button', '.pill.send'],
+      ['approve gate button', '.pill.app'],
+    ] as const) {
+      it(`the ${name} clears 4.5:1 in ${mode}`, () => {
+        const fg = resolve(ruleDecl(sel, 'color'), t);
+        const bg = resolve(ruleDecl(sel, 'background'), t);
+        expect(contrast(fg, bg)).toBeGreaterThanOrEqual(4.5);
+      });
+    }
   }
 });
