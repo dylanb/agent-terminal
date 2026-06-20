@@ -32,7 +32,7 @@ describe('statusStrip — live quiet counter (§8.3)', () => {
 
   it('renders the quiet counter and increments it on each tick', () => {
     let t = 10_000;
-    const strip = createStatusStrip(el, () => t);
+    const strip = createStatusStrip(el, { now: () => t });
     strip.update(upd({ agentState: 'quiet', quietSince: 10_000 }));
     expect(counter()).not.toBeNull();
     expect(counter()!.textContent).toBe(' for 0s');
@@ -44,7 +44,7 @@ describe('statusStrip — live quiet counter (§8.3)', () => {
 
   it('removes the counter and stops ticking when the agent goes active', () => {
     let t = 0;
-    const strip = createStatusStrip(el, () => t);
+    const strip = createStatusStrip(el, { now: () => t });
     strip.update(upd({ agentState: 'quiet', quietSince: 0 }));
     expect(counter()).not.toBeNull();
 
@@ -59,7 +59,7 @@ describe('statusStrip — live quiet counter (§8.3)', () => {
 
   it('dispose stops the quiet tick (no counter update after disposal)', () => {
     let t = 1_000;
-    const strip = createStatusStrip(el, () => t);
+    const strip = createStatusStrip(el, { now: () => t });
     strip.update(upd({ agentState: 'quiet', quietSince: 1_000 }));
     expect(counter()!.textContent).toBe(' for 0s');
     strip.dispose();

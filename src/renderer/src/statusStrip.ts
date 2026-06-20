@@ -18,8 +18,14 @@ export interface StatusStrip {
   dispose(): void;
 }
 
-export function createStatusStrip(statusEl: HTMLElement, now: () => number = Date.now): StatusStrip {
+/** Injected seams (UI-STANDARDS §2.2): the clock is overridable so the quiet counter is testable. */
+export interface StatusStripDeps {
+  now?: () => number;
+}
+
+export function createStatusStrip(statusEl: HTMLElement, deps: StatusStripDeps = {}): StatusStrip {
   const doc = statusEl.ownerDocument;
+  const now = deps.now ?? Date.now;
   let last: MonitorUpdateMsg | null = null;
   let alive = true;
   let quietCounterEl: HTMLElement | null = null;
