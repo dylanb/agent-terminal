@@ -10,8 +10,21 @@
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import yaml from 'js-yaml';
-import type { FlowStateView, FlowStatus } from '../shared/ipc';
+import type { AgentState, FlowStateView, FlowStatus, TodoItem } from '../shared/ipc';
 import { createFlowStateStore, type FlowStateStore } from './flowState';
+
+/**
+ * Derive the live in-progress status (§22.3 / §24.2.2 S5): a PURE function of the flow view, the
+ * repo's todos, and the §8.3 agent activity. An `in_progress` view gains `derived`
+ * (activity + n/m done + gate readiness — every todo done); any other status passes through
+ * untouched (no step is being worked). The input view is never mutated.
+ */
+export function deriveFlowView(view: FlowStateView, todos: TodoItem[], activity: AgentState): FlowStateView {
+  if (view.status !== 'in_progress') return view;
+  const todosTotal = todos.length;
+  const todosDone = todos.filter((t) => t.status === 'done').length;
+  return { ...view, derived: { activity, todosDone, todosTotal, ready: todosDone === todosTotal } };
+}
 
 /** A §18.1 step, minimal S2 shape: a manual step with an id and optional skill/template refs. */
 export interface FlowStepDef {
@@ -103,6 +116,9 @@ export interface FlowMachine {
   /** done → in_progress; resets and re-runs the first step. Throws on any other current
    *  status (inert in the error state). */
   restart(): FlowStateView;
+  /** done → in_progress; reverts a manual advance WITHOUT re-running the step's entry actions
+   *  (the inverse of advance, not a restart). Throws on any other status (inert on error). */
+  undo(): FlowStateView;
 }
 
 /** Run the step's entry actions on ENTRY (start/restart), returning a one-shot transient notice
@@ -127,10 +143,10 @@ export function createFlowMachine(
       status: 'error',
       error: load.error,
     });
-    // In the error state there is no step to drive: start/advance/restart are inert (the strip
+    // In the error state there is no step to drive: start/advance/restart/undo are inert (the strip
     // shows no control), so a buggy/racing caller can neither throw nor escape the error — and
     // we never persist, so a bad flow.yaml can't overwrite a good progression.
-    return { state: view, start: view, advance: view, restart: view };
+    return { state: view, start: view, advance: view, restart: view, undo: view };
   }
 
   const def = load.definition;
@@ -174,6 +190,9 @@ export function createFlowMachine(
     // Restart resets a completed flow back to its first step, in progress, re-running its
     // entry actions (§24.2.2).
     restart: () => enter(transition('done', 'in_progress')),
+    // Undo reverts a manual advance back to in_progress WITHOUT re-entering the step (no entry
+    // actions) — it takes back the advance, it does not re-run the work.
+    undo: () => transition('done', 'in_progress'),
   };
 }
 
@@ -189,6 +208,7 @@ export interface FlowManager {
   start(repoKey: string): FlowStateView;
   advance(repoKey: string): FlowStateView;
   restart(repoKey: string): FlowStateView;
+  undo(repoKey: string): FlowStateView;
 }
 
 export interface FlowManagerDeps {
@@ -218,5 +238,6 @@ export function createFlowManager(deps: FlowManagerDeps): FlowManager {
     start: (k) => machineFor(k).start(),
     advance: (k) => machineFor(k).advance(),
     restart: (k) => machineFor(k).restart(),
+    undo: (k) => machineFor(k).undo(),
   };
 }

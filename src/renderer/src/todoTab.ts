@@ -83,8 +83,12 @@ export function createTodoTab(deps: TodoTabDeps): TodoTab {
   let focusAfterRender: (() => void) | null = null;
 
   function updateTodoCount(): void {
-    todoCountEl.textContent = String(todos.filter((t) => t.status === 'active').length);
+    todoCountEl.textContent = String(todos.filter((t) => t.status !== 'done').length); // active + in_progress
   }
+
+  /** Outstanding = not done (active or in_progress): the reorderable top run that carries the
+   *  row-action cluster; only `done` rows drop out (§16.3 tri-state). */
+  const isOutstanding = (t: TodoItem): boolean => t.status !== 'done';
 
   function setTodos(list: TodoItem[]): void {
     todos = list;
@@ -139,7 +143,7 @@ export function createTodoTab(deps: TodoTabDeps): TodoTab {
     return b;
   }
 
-  const activeOf = (ordered: TodoItem[]): TodoItem[] => ordered.filter((t) => t.status === 'active');
+  const activeOf = (ordered: TodoItem[]): TodoItem[] => ordered.filter(isOutstanding);
 
   /** Persist a new ACTIVE ordering while leaving every done row in its display slot — the
    *  active ids are slotted back into the positions actives occupied in the full order, so a
@@ -147,7 +151,7 @@ export function createTodoTab(deps: TodoTabDeps): TodoTab {
   function commitActiveOrder(ordered: TodoItem[], newActive: TodoItem[]): void {
     if (!currentRepoKey) return;
     let k = 0;
-    const ids = ordered.map((t) => (t.status === 'active' ? newActive[k++].id : t.id));
+    const ids = ordered.map((t) => (isOutstanding(t) ? newActive[k++].id : t.id));
     // On a rejected invoke (main restart) keep the current order; never an unhandled rejection.
     void monitor.todoReorder(currentRepoKey, ids).then(setTodos).catch(() => {});
   }
@@ -183,45 +187,50 @@ export function createTodoTab(deps: TodoTabDeps): TodoTab {
       return actions;
     }
 
-    if (t.status === 'active') {
-      const active = activeOf(ordered);
-      const ai = active.findIndex((x) => x.id === t.id);
-      const up = actionButton('todo-up iconbtn', '↑', 'Move up', () => moveActive(ordered, t, -1));
-      up.disabled = ai <= 0;
-      const down = actionButton('todo-down iconbtn', '↓', 'Move down', () => moveActive(ordered, t, 1));
-      down.disabled = ai === active.length - 1;
-      const edit = actionButton('todo-edit iconbtn', '✎', 'Edit todo', () => {
-        editingId = t.id;
-        rerenderFocusing(t.id, '.tx');
-      });
-      // Send pastes the todo into the agent's input WITHOUT submitting (§9.3 submit:false /
-      // §16.2 Insert), then moves focus to the terminal so the user can edit or augment it
-      // before submitting themselves (§24.2.1).
-      const send = actionButton('todo-send pill sm signal', 'Send', 'Send todo to agent', () =>
-        doInject(t.text, false),
-      );
-      actions.append(up, down, edit, send);
-    }
-
-    if (t.id === confirmingDeleteId) {
-      actions.append(
-        actionButton('todo-delete-confirm pill sm', 'Confirm delete?', 'Confirm delete', () =>
-          beginPendingDelete(t),
-        ),
-        actionButton('todo-delete-cancel linkbtn', 'Cancel', 'Cancel delete', () => {
-          confirmingDeleteId = null;
-          rerenderFocusing(t.id, '.todo-delete');
-        }),
-      );
-    } else {
-      actions.append(
-        actionButton('todo-delete iconbtn', '×', 'Delete todo', () => {
-          confirmingDeleteId = t.id;
-          rerenderFocusing(t.id, '.todo-delete-confirm');
-        }),
-      );
-    }
+    // The cluster is rendered for every row and only DISABLED when done — so completing a todo
+    // never changes the row's width/contents (operator decision). Done rows keep Delete usable.
+    const outstanding = isOutstanding(t);
+    const active = activeOf(ordered);
+    const ai = active.findIndex((x) => x.id === t.id);
+    const up = actionButton('todo-up iconbtn', '↑', 'Move up', () => moveActive(ordered, t, -1));
+    up.disabled = !outstanding || ai <= 0;
+    const down = actionButton('todo-down iconbtn', '↓', 'Move down', () => moveActive(ordered, t, 1));
+    down.disabled = !outstanding || ai === active.length - 1;
+    const edit = actionButton('todo-edit iconbtn', '✎', 'Edit todo', () => {
+      editingId = t.id;
+      rerenderFocusing(t.id, '.tx');
+    });
+    edit.disabled = !outstanding;
+    // Send pastes the todo into the agent's input WITHOUT submitting (§9.3 submit:false /
+    // §16.2 Insert), then moves focus to the terminal so the user can edit or augment it before
+    // submitting themselves (§24.2.1). It also marks the todo in_progress (mixed) — the sole entry
+    // into that state (§16.3) — so the list shows what's been handed to the agent.
+    const send = actionButton('todo-send pill sm signal', 'Send', 'Send todo to agent', () => {
+      doInject(t.text, false);
+      if (t.status !== 'in_progress') void monitor.todoSetStatus(t.repoKey, t.id, 'in_progress').then(setTodos).catch(() => {});
+    });
+    send.disabled = !outstanding;
+    const del = actionButton('todo-delete iconbtn', '×', 'Delete todo', () => {
+      confirmingDeleteId = t.id;
+      rerenderFocusing(t.id, '.todo-delete-confirm');
+    });
+    actions.append(up, down, edit, send, del);
     return actions;
+  }
+
+  /** Two-step delete confirmation, stacked BELOW the action cluster (a full-width row) so showing
+   *  it never changes the cluster's width — the row just grows a line (§16.4, operator decision). */
+  function renderDeleteBar(t: TodoItem): HTMLElement {
+    const bar = document.createElement('div');
+    bar.className = 'todo-delete-bar';
+    bar.append(
+      actionButton('todo-delete-confirm pill sm', 'Confirm delete?', 'Confirm delete', () => beginPendingDelete(t)),
+      actionButton('todo-delete-cancel linkbtn', 'Cancel', 'Cancel delete', () => {
+        confirmingDeleteId = null;
+        rerenderFocusing(t.id, '.todo-delete');
+      }),
+    );
+    return bar;
   }
 
   /** Run a resolve that re-renders, then focus `.todo-edit` of the row if it still exists. */
@@ -291,14 +300,15 @@ export function createTodoTab(deps: TodoTabDeps): TodoTab {
 
     const done = t.status === 'done';
     const row = document.createElement('div');
-    row.className = `todo${done ? ' done' : ''}`;
+    row.className = `todo${done ? ' done' : ''}${t.status === 'in_progress' ? ' in-progress' : ''}`;
     row.dataset.todoId = t.id;
-    row.draggable = t.status === 'active' && editingId === null;
+    row.draggable = isOutstanding(t) && editingId === null;
 
     const chk = document.createElement('button');
     chk.className = 'chk';
     chk.setAttribute('role', 'checkbox');
-    chk.setAttribute('aria-checked', String(done));
+    // Tri-state (§16.3): done → true, in_progress → mixed, active → false.
+    chk.setAttribute('aria-checked', done ? 'true' : t.status === 'in_progress' ? 'mixed' : 'false');
     chk.setAttribute('aria-label', done ? 'Mark todo active' : 'Mark todo done');
     chk.addEventListener('click', async () => {
       try {
@@ -339,6 +349,7 @@ export function createTodoTab(deps: TodoTabDeps): TodoTab {
     body.append(tx, src);
 
     row.append(chk, body, renderActions(t, ordered));
+    if (t.id === confirmingDeleteId && t.id !== editingId) row.append(renderDeleteBar(t));
     return row;
   }
 

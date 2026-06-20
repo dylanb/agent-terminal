@@ -516,6 +516,28 @@ test('reorder: Move down swaps two todos and the new order persists (§24.2.1)',
   await expect.poll(texts).toEqual(['reorder-second-e2e', 'reorder-first-e2e']);
 });
 
+test('tri-state: Send marks a todo in-progress (mixed), then the checkbox cycles it to done (§16.3)', async () => {
+  await cdToTempDir('tristate');
+  await page.locator('#tab-todo').click();
+  await page.locator('#todo-new').fill('tri-state-e2e');
+  await page.locator('#todo-add-btn').click();
+  const row = page.locator('.todo').filter({ hasText: 'tri-state-e2e' });
+  const chk = row.locator('.chk');
+  await expect(chk).toHaveAttribute('aria-checked', 'false'); // starts active (not started)
+
+  // Send hands it to the agent AND marks it in_progress → the checkbox renders mixed.
+  await row.getByRole('button', { name: 'Send todo to agent' }).click();
+  await page.locator('#tab-todo').click(); // Send revealed the terminal (F2); return to the list
+  await expect(chk).toHaveAttribute('aria-checked', 'mixed');
+
+  // A checkbox click on an in-progress todo completes it; the change persists through todoSetStatus.
+  await chk.click();
+  await expect(chk).toHaveAttribute('aria-checked', 'true');
+  await page.reload();
+  await openQuickSend('todo');
+  await expect(page.locator('.todo').filter({ hasText: 'tri-state-e2e' }).locator('.chk')).toHaveAttribute('aria-checked', 'true');
+});
+
 // ---- §24.1C: the converged three-view shell (views, docked drawer, theme) ----
 
 test('switches views via hotkey and nav button, showing one pane at a time (§22.4)', async () => {
@@ -534,6 +556,59 @@ test('switches views via hotkey and nav button, showing one pane at a time (§22
   await page.locator('[data-viewbtn="1"]').click();
   await expect(v1).toBeVisible();
   await expect(v3).toBeHidden();
+});
+
+test('switching to the terminal view focuses it, so the keyboard lands there to keep typing (§22.4)', async () => {
+  // Park focus off the terminal: go to the Todos view (its pane, not the terminal, is shown).
+  await page.keyboard.press('Control+3');
+  await expect(page.locator('[data-viewpane="3"]')).toBeVisible();
+  await expect(page.locator('.xterm-helper-textarea')).not.toBeFocused();
+
+  // ⌘/Ctrl+1 returns to the terminal view AND hands it keyboard focus (xterm's input textarea).
+  await page.keyboard.press('Control+1');
+  await expect(page.locator('[data-viewpane="1"]')).toBeVisible();
+  await expect(page.locator('.xterm-helper-textarea')).toBeFocused();
+});
+
+test('Send from a todo reveals + focuses the terminal so you can finish typing there (§16.2/§22.4)', async () => {
+  await cdToTempDir('sendfocus');
+  await page.locator('#tab-todo').click(); // drawer is already docked by beforeEach — just switch tab
+  await page.locator('#todo-new').fill('send-focus-e2e');
+  await page.locator('#todo-add-btn').click();
+  const row = page.locator('.todo').filter({ hasText: 'send-focus-e2e' });
+  await expect(row).toHaveCount(1);
+
+  // Park on another view so a naive focus() would land on a hidden terminal.
+  await page.keyboard.press('Control+2');
+  await expect(page.locator('[data-viewpane="2"]')).toBeVisible();
+  await expect(page.locator('.xterm-helper-textarea')).not.toBeFocused();
+
+  // Send injects the text WITHOUT submitting, brings the terminal view forward, and focuses it.
+  await row.getByRole('button', { name: 'Send todo to agent' }).click();
+  await expect(page.locator('[data-viewpane="1"]')).toBeVisible();
+  await expect(page.locator('.xterm-helper-textarea')).toBeFocused();
+  await expect(termRows()).toContainText('send-focus-e2e'); // injected at the prompt, not run
+});
+
+test('switching to the Artifacts view focuses the file tree for immediate keyboard nav (§22.4)', async () => {
+  const dir = '/tmp/agent-term-e2e-artfocus';
+  await typeCommand(
+    `rm -rf "${dir}" && mkdir -p "${dir}" && cd "${dir}" && git init -q && ` +
+      `git config user.email t@t && git config user.name T && printf 'x\\n' > a.md && ` +
+      `git add -A && git commit -qm init && printf 'more\\n' >> a.md && pwd`,
+  );
+  await expect(page.locator('.xterm-rows > div').filter({ hasText: new RegExp(`^\\s*${dir}\\s*$`) })).not.toHaveCount(0);
+  await expect(page.locator('.status-chip[data-status="agent"]')).toContainText('quiet', { timeout: 6_000 });
+
+  // First visit populates the tree (discovery is async, so focus has nothing to land on yet).
+  await page.keyboard.press('Control+2');
+  await expect(page.locator('#artifacts .tree .f').filter({ hasText: 'a.md' })).toHaveCount(1);
+
+  // Returning to the view (tree already loaded) lands keyboard focus on the tree, not nowhere.
+  await page.keyboard.press('Control+1');
+  await expect(page.locator('.xterm-helper-textarea')).toBeFocused();
+  await page.keyboard.press('Control+2');
+  await expect(page.locator('#artifacts [role="treeitem"]').first()).toBeFocused();
 });
 
 test('the artifact viewer discovers real repo files and sends a selection to a todo (§20.1/§20.2)', async () => {
@@ -1150,6 +1225,79 @@ test('flow progression persists across a relaunch, per repo (§24.2.2 S3 / §19.
   await launch();
   await expect(flowStation(1)).toHaveClass(/\bactive\b/);
   await expect(flowControl()).toHaveText('Advance');
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+});
+
+const flowDerived = () => page.locator('#flow-strip .flow-derived');
+
+test("the flow strip's derived n/m done moves as todos are checked, pushed live (§24.2.2 S5)", async () => {
+  // Fire: Start the step, add two todos, check one. Land: the strip's "n / m done" count moves on
+  // its own — no manual refresh — proving the flow:onStateChanged push path. Real loop: bash +
+  // node-pty + the todo store + the flow manager.
+  const repo = seedFlowRepo('agent-term-e2e-flow-s5-', 'groom-ticket');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-flow-s5-home-'));
+  await app.close();
+  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
+  page = await app.firstWindow();
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await typeCommand(`cd "${repo}"`);
+  await expect(flowStepName()).toHaveText('groom-ticket', { timeout: 10_000 });
+  await flowControl().click(); // Start → in progress
+  await expect(flowStation(1)).toHaveClass(/\bactive\b/);
+  await expect(flowDerived()).toContainText('0 / 0', { timeout: 10_000 }); // derived live status, no todos yet
+
+  await openQuickSend('todo');
+  await page.locator('#todo-new').fill('s5 first todo');
+  await page.locator('#todo-add-btn').click();
+  await page.locator('#todo-new').fill('s5 second todo');
+  await page.locator('#todo-add-btn').click();
+  await expect(flowDerived()).toContainText('0 / 2', { timeout: 10_000 }); // total moved via the push
+
+  // Check the first todo — the strip count moves on its own; the test never refreshes the strip.
+  await page.locator('.todo').filter({ hasText: 's5 first todo' }).locator('.chk').click();
+  await expect(flowDerived()).toContainText('1 / 2', { timeout: 10_000 });
+
+  await app.close(); // HOME=temp ⇒ Electron writes userData under it; stop writes before removing it
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+});
+
+test('advancing with todos outstanding warns but still completes, and is undoable (§19.2 / §24.2.2 S5)', async () => {
+  // Fire: Start, add a todo (left unchecked), click Advance, then Undo. Land: a one-shot warning
+  // notice surfaces (with NO spec-section jargon) AND the flow reaches done — the §19.2 human
+  // override — and Undo takes the advance back to in-progress.
+  const repo = seedFlowRepo('agent-term-e2e-flow-s5warn-', 'groom-ticket');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-flow-s5warn-home-'));
+  await app.close();
+  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
+  page = await app.firstWindow();
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await typeCommand(`cd "${repo}"`);
+  await expect(flowStepName()).toHaveText('groom-ticket', { timeout: 10_000 });
+  await flowControl().click(); // Start
+
+  await openQuickSend('todo');
+  await page.locator('#todo-new').fill('still outstanding');
+  await page.locator('#todo-add-btn').click();
+  await expect(flowDerived()).toContainText('0 / 1', { timeout: 10_000 }); // not ready
+
+  await flowControl().click(); // Advance while NOT ready
+  const notice = page.locator('#flow-strip .flow-notice');
+  await expect(notice).toContainText('outstanding', { timeout: 10_000 });
+  await expect(notice).not.toContainText('§'); // no internal spec-section reference leaks to the UI
+  await expect(flowStation(2)).toHaveClass(/\bactive\b/); // still reached done
+  await expect(flowControl()).toHaveText('Restart');
+
+  // Undo takes the advance back: the step returns to in-progress (its derived count is back).
+  await page.locator('#flow-strip .flow-undo').click();
+  await expect(flowStation(1)).toHaveClass(/\bactive\b/);
+  await expect(flowControl()).toHaveText('Advance');
+  await expect(flowDerived()).toContainText('0 / 1', { timeout: 10_000 });
+
+  await app.close(); // HOME=temp ⇒ Electron writes userData under it; stop writes before removing it
   rmSync(repo, { recursive: true, force: true });
   rmSync(home, { recursive: true, force: true });
 });

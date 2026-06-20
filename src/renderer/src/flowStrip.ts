@@ -18,7 +18,7 @@ import type { FlowApi, FlowStateView, FlowStatus } from '../../shared/ipc';
 import { FLOW_CHANGED_EVENT } from './paneActions';
 
 type StationState = 'todo' | 'active' | 'done';
-type Act = 'start' | 'advance' | 'restart';
+type Act = 'start' | 'advance' | 'restart' | 'undo';
 
 /** The control per status; null = no control (load failure). The Start control reappears
  *  in `done` relabeled "Restart" — re-running the step (§24.2.2). */
@@ -61,6 +61,38 @@ function header(text: string): HTMLElement {
 export function createFlowStrip(host: HTMLElement, deps: FlowApi): FlowStrip {
   let repoKey: string | null = null;
 
+  const runAct = (act: Act, key: string): Promise<FlowStateView> =>
+    act === 'start'
+      ? deps.start(key)
+      : act === 'advance'
+        ? deps.advance(key)
+        : act === 'restart'
+          ? deps.restart(key)
+          : deps.undo(key);
+
+  /** A lifecycle control button: fires its transition, disabling itself while in flight so a
+   *  double-click can't fire it twice (the machine would reject the second anyway — §24.2.2 — but
+   *  this keeps the UI honest), then re-renders from the returned state. `cls` is `undo`/`advance`/… */
+  function controlButton(label: string, act: Act): HTMLButtonElement {
+    const button = document.createElement('button');
+    button.className = `flow-${act === 'undo' ? 'undo' : 'control'} pill`;
+    button.textContent = label;
+    button.addEventListener('click', () => {
+      if (repoKey === null) return;
+      const key = repoKey;
+      button.disabled = true;
+      runAct(act, key)
+        .then((view) => {
+          render(view); // re-render from the response, surfacing any one-shot `notice` (§19.3 refusal)
+          // The active-step status changed, so the todo overlay's on-demand template picker may
+          // appear/disappear — signal it to re-pull (the decoupled contract, §4.1/§9.1).
+          window.dispatchEvent(new CustomEvent(FLOW_CHANGED_EVENT));
+        })
+        .catch(() => void refresh());
+    });
+    return button;
+  }
+
   function render(state: FlowStateView): void {
     host.replaceChildren();
 
@@ -102,31 +134,23 @@ export function createFlowStrip(host: HTMLElement, deps: FlowApi): FlowStrip {
     });
     host.append(rail);
 
+    // Live derived status (§24.2.2 S5): n/m todos done + the §8.3 agent activity, recomputed by
+    // main and pushed via flow:onStateChanged. Present only while the step is in progress.
+    if (state.status === 'in_progress' && state.derived) {
+      const d = state.derived;
+      const line = document.createElement('div');
+      line.className = 'flow-derived';
+      line.textContent = `${d.todosDone} / ${d.todosTotal} done · ${d.activity}`;
+      host.append(line);
+    }
+
     const control = CONTROL[state.status];
     if (!control) return;
 
-    const button = document.createElement('button');
-    button.className = 'flow-control pill';
-    button.textContent = control.label;
-    button.addEventListener('click', () => {
-      // Disable while the transition is in flight so a double-click can't fire it twice
-      // (the machine would reject the second call anyway — §24.2.2 — but this keeps the UI
-      // honest). Re-render from the returned state.
-      if (repoKey === null) return;
-      const key = repoKey;
-      button.disabled = true;
-      const next =
-        control.act === 'start' ? deps.start(key) : control.act === 'advance' ? deps.advance(key) : deps.restart(key);
-      next
-        .then((view) => {
-          render(view); // re-render from the response, surfacing any one-shot `notice` (§19.3 refusal)
-          // The active-step status changed, so the todo overlay's on-demand template picker may
-          // appear/disappear — signal it to re-pull (the decoupled contract, §4.1/§9.1).
-          window.dispatchEvent(new CustomEvent(FLOW_CHANGED_EVENT));
-        })
-        .catch(() => void refresh());
-    });
-    host.append(button);
+    // A completed (manual-advanced) step can always be undone back to in-progress — taking back the
+    // advance WITHOUT re-running the step's entry actions (distinct from Restart, which re-runs them).
+    if (state.status === 'done') host.append(controlButton('Undo', 'undo'));
+    host.append(controlButton(control.label, control.act));
 
     // The §19.3 busy refusal (and any other transient notice) rides the start/restart response
     // only; a later state() re-pull carries none, so the line self-clears.
@@ -145,6 +169,11 @@ export function createFlowStrip(host: HTMLElement, deps: FlowApi): FlowStrip {
     }
     render(await deps.state(repoKey));
   }
+
+  // The push path (§24.2.2 S5): main fires flow:onStateChanged when a flow-relevant input changed
+  // (a todo mutated, the agent flipped active/quiet); the strip re-pulls its own repo's state so the
+  // derived n/m + activity move with no user action. Lives for the strip's lifetime (app-long).
+  deps.onStateChanged(() => void refresh());
 
   return {
     refresh,

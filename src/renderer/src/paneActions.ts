@@ -17,6 +17,12 @@ export const TODOS_CHANGED_EVENT = 'app:todos-changed';
 // active step) — without the monitor pane importing the flow subsystem. Same window-event bus.
 export const FLOW_CHANGED_EVENT = 'app:flow-changed';
 
+// Decoupled view-focus signal (§22.4): the shell announces the now-active view (after it shows
+// the pane) so that view's organism can focus its own primary control — the shell never reaches
+// into a sibling view to focus it. `detail.view` is the ViewId ('1' | '2' | '3'), kept as a
+// string here so this leaf module doesn't depend on the shell. Same window-event bus.
+export const FOCUS_VIEW_EVENT = 'app:focus-view';
+
 // Cross-highlight signals (§16.8): the same decoupled window-event bus carries the reveal
 // directions between the panes, so neither imports the other (§9.1). The terminal pane owns
 // the coordinates — it marker-anchors every capture's span (xterm markers track reflow), so
@@ -43,6 +49,11 @@ export const TODO_UNDO_MS = 60_000;
 
 export function requestTerminalFocus(): void {
   window.dispatchEvent(new CustomEvent(FOCUS_TERMINAL_EVENT));
+}
+
+/** Announce that `view` is now the active view so its organism focuses its primary control (§22.4). */
+export function announceViewFocus(view: string): void {
+  window.dispatchEvent(new CustomEvent(FOCUS_VIEW_EVENT, { detail: { view } }));
 }
 
 /** The inject seam organisms receive via deps (so they don't reach the window.monitor global

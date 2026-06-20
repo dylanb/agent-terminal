@@ -4,9 +4,12 @@
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
-import { FOCUS_TERMINAL_EVENT } from './monitor';
+import { FOCUS_VIEW_EVENT } from './paneActions';
 
 export const RESIZE_DEBOUNCE_MS = 80;
+
+/** The terminal is view 1 in the converged shell (§22.4 / §24.1C). */
+const TERMINAL_VIEW = '1';
 
 export function createTerminalPane(container: HTMLElement): Terminal {
   const term = new Terminal({
@@ -31,11 +34,14 @@ export function createTerminalPane(container: HTMLElement): Terminal {
   term.onData((data) => window.term.input(data));
   window.term.onExit(({ code }) => term.write(`\r\n[process exited: ${code}]\r\n`));
 
-  // §16.2 focus rule: the action window asks (via a decoupled window event, never an
-  // import) for terminal focus after an Insert, so the user can finish/submit here.
-  // TODO(dylan): the Insert→focus loop through the real pane is verified in the §F
-  // e2e (plan PR5 5c) — recorded gap (xterm needs a real layout, not jsdom).
-  window.addEventListener(FOCUS_TERMINAL_EVENT, () => term.focus());
+  // §16.2/§22.4 focus rule: a Send asks for terminal focus on the decoupled bus; the shell turns
+  // that into a reveal of the terminal view and announces it here, and ⌘1 announces it directly.
+  // Either way we focus xterm so the user can keep typing without a click. Other views are ignored.
+  // TODO(dylan): the Send→reveal→focus loop through the real pane is verified in the §F e2e
+  // (recorded gap — xterm focus needs a real layout, not jsdom).
+  window.addEventListener(FOCUS_VIEW_EVENT, (e) => {
+    if ((e as CustomEvent<{ view: string }>).detail.view === TERMINAL_VIEW) term.focus();
+  });
 
   // Debounced: a drag-resize during an output burst can otherwise leave the PTY,
   // renderer, and shadow wrapping at different widths (§7.1/§14).

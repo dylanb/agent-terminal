@@ -86,13 +86,13 @@ describe('todoStore (§16.3 / §16.4 — repo-scoped CRUD + persistence)', () =>
     expect(done.map((t) => t.text)).toEqual(['a']);
   });
 
-  it('re-copies a done todo back to the bottom of the active list', () => {
+  it('keeps a todo in its original position when checked then unchecked (no reorder — §16.3)', () => {
     const store = makeStore();
     const [a] = store.add(repoA, 'a');
     store.add(repoA, 'b');
     store.setStatus(repoA, a.id, 'done');
     const list = store.setStatus(repoA, a.id, 'active');
-    expect(list.filter((t) => t.status === 'active').map((t) => t.text)).toEqual(['b', 'a']);
+    expect(list.filter((t) => t.status === 'active').map((t) => t.text)).toEqual(['a', 'b']);
   });
 
   it('deletes a todo', () => {

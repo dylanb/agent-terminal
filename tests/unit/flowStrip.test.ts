@@ -30,8 +30,15 @@ function fakeFlow(initial: FlowStatus = 'not_started') {
       byKey.set(repoKey, 'in_progress');
       return view(repoKey);
     }),
+    undo: vi.fn(async (repoKey: string) => {
+      byKey.set(repoKey, 'in_progress');
+      return view(repoKey);
+    }),
+    onStateChanged: vi.fn((_cb: () => void) => () => {}),
   };
 }
+
+const noopSub = vi.fn((_cb: () => void) => () => {});
 
 let host: HTMLElement;
 beforeEach(() => {
@@ -110,6 +117,28 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     expect(control()!.textContent).toBe('Advance');
   });
 
+  it('done offers an Undo (revert the advance) alongside Restart; Undo returns to in-progress', async () => {
+    const deps = fakeFlow('done');
+    createFlowStrip(host, deps).onRepoChanged('/repo');
+    await vi.waitFor(() => expect(control()!.textContent).toBe('Restart'));
+    const undo = host.querySelector<HTMLButtonElement>('.flow-undo');
+    expect(undo).not.toBeNull(); // every completed (manual-advanced) step can be undone
+    expect(undo!.textContent).toBe('Undo');
+
+    undo!.click();
+    await vi.waitFor(() => expect(stateOf(1)).toBe('active')); // back to in-progress
+    expect(deps.undo).toHaveBeenCalledWith('/repo');
+    expect(deps.restart).not.toHaveBeenCalled();
+    expect(host.querySelector('.flow-undo')).toBeNull(); // no longer done → no Undo
+  });
+
+  it('shows no Undo outside the done state', async () => {
+    const deps = fakeFlow('in_progress');
+    createFlowStrip(host, deps).onRepoChanged('/repo');
+    await vi.waitFor(() => expect(control()!.textContent).toBe('Advance'));
+    expect(host.querySelector('.flow-undo')).toBeNull();
+  });
+
   it('renders a one-shot notice returned by start(), and a re-pull clears it (§24.2.2 S4)', async () => {
     const notified: FlowStateView = {
       stepName: '/repo-step',
@@ -125,7 +154,8 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
       start: vi.fn(async (): Promise<FlowStateView> => notified),
       advance: vi.fn(),
       restart: vi.fn(),
-
+      undo: vi.fn(),
+      onStateChanged: noopSub,
     };
     const strip = createFlowStrip(host, deps);
     strip.onRepoChanged('/repo');
@@ -159,6 +189,61 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     window.removeEventListener(FLOW_CHANGED_EVENT, fired);
   });
 
+  it('renders the derived n/m done + agent activity while in_progress (§24.2.2 S5)', async () => {
+    const deps = {
+      state: vi.fn(
+        async (): Promise<FlowStateView> => ({
+          stepName: '/repo-step',
+          position: 1,
+          total: 1,
+          status: 'in_progress',
+          derived: { activity: 'active', todosDone: 2, todosTotal: 5, ready: false },
+        }),
+      ),
+      start: vi.fn(),
+      advance: vi.fn(),
+      restart: vi.fn(),
+      undo: vi.fn(),
+      onStateChanged: noopSub,
+    };
+    createFlowStrip(host, deps).onRepoChanged('/repo');
+    await vi.waitFor(() => expect(host.querySelector('.flow-derived')).not.toBeNull());
+    const text = host.querySelector<HTMLElement>('.flow-derived')!.textContent ?? '';
+    expect(text).toContain('2 / 5');
+    expect(text.toLowerCase()).toContain('active');
+  });
+
+  it('re-pulls flow:state when main emits flow:onStateChanged — the push path (§24.2.2 S5)', async () => {
+    let fire = (): void => {};
+    let done = 0;
+    const deps = {
+      state: vi.fn(
+        async (): Promise<FlowStateView> => ({
+          stepName: '/repo-step',
+          position: 1,
+          total: 1,
+          status: 'in_progress',
+          derived: { activity: 'quiet', todosDone: done, todosTotal: 3, ready: false },
+        }),
+      ),
+      start: vi.fn(),
+      advance: vi.fn(),
+      restart: vi.fn(),
+      undo: vi.fn(),
+      onStateChanged: vi.fn((cb: () => void) => {
+        fire = cb;
+        return () => {};
+      }),
+    };
+    createFlowStrip(host, deps).onRepoChanged('/repo');
+    await vi.waitFor(() => expect(host.querySelector('.flow-derived')!.textContent).toContain('0 / 3'));
+
+    done = 2;
+    fire(); // main pushed a change — the strip re-pulls with NO user action and NO manual refresh
+    await vi.waitFor(() => expect(host.querySelector('.flow-derived')!.textContent).toContain('2 / 3'));
+    expect(deps.state.mock.calls.length).toBeGreaterThanOrEqual(2);
+  });
+
   it('renders a clear --danger error line (no stations, no control) on load failure', async () => {
     const deps = {
       state: vi.fn(
@@ -173,7 +258,8 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
       start: vi.fn(),
       advance: vi.fn(),
       restart: vi.fn(),
-
+      undo: vi.fn(),
+      onStateChanged: noopSub,
     };
     createFlowStrip(host, deps).onRepoChanged('/repo');
     await vi.waitFor(() => expect(host.querySelector('.flow-error')).not.toBeNull());

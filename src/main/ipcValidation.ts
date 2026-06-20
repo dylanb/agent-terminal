@@ -171,7 +171,11 @@ export function isValidTodoReorder(m: unknown): m is TodoReorderMsg {
 }
 
 export function isValidTodoSetStatus(m: unknown): m is TodoSetStatusMsg {
-  return isTodoBase(m) && typeof m.id === 'string' && (m.status === 'active' || m.status === 'done');
+  return (
+    isTodoBase(m) &&
+    typeof m.id === 'string' &&
+    (m.status === 'active' || m.status === 'in_progress' || m.status === 'done')
+  );
 }
 
 export function isValidTodoDelete(m: unknown): m is TodoDeleteMsg {

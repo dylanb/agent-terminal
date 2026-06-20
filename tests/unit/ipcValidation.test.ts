@@ -179,6 +179,7 @@ describe('IPC payload validation (§6 — renderer-supplied input is untrusted)'
   it('accepts a todo:setStatus with a valid status and rejects anything else', () => {
     expect(isValidTodoSetStatus({ sessionId: sid, repoKey: '/r', id: 'a', status: 'done' })).toBe(true);
     expect(isValidTodoSetStatus({ sessionId: sid, repoKey: '/r', id: 'a', status: 'active' })).toBe(true);
+    expect(isValidTodoSetStatus({ sessionId: sid, repoKey: '/r', id: 'a', status: 'in_progress' })).toBe(true);
     expect(isValidTodoSetStatus({ sessionId: sid, repoKey: '/r', id: 'a', status: 'maybe' })).toBe(false);
     expect(isValidTodoSetStatus({ sessionId: sid, repoKey: '/r', id: 'a' })).toBe(false);
   });
