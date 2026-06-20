@@ -6,8 +6,12 @@
 // to the whole repo (§20.1 / D8). Code renders read-only; a selection in either view routes
 // to the same two sinks as the terminal-pane selection (send-to-agent / add-to-todo).
 
-import type { ArtifactNode, ArtifactScope, ArtifactTree, ViewerFile } from '../../shared/ipc';
+import { DEFAULT_UI_SETTINGS, type ArtifactNode, type ArtifactScope, type ArtifactTree, type ViewerFile } from '../../shared/ipc';
 import { setShown, setCollapsed } from './visibility';
+import { FOCUS_VIEW_EVENT } from './paneActions';
+
+/** The artifact viewer is view 2 in the converged shell (§22.4 / §24.1C). */
+const ARTIFACTS_VIEW = '2';
 
 /** Handle on a rendered code view, used to drive changed-section navigation (§20.2). */
 export interface CodeView {
@@ -49,12 +53,13 @@ export interface ArtifactsDeps {
   onRequestFullscreen?: (on: boolean) => void;
 }
 
-const DEFAULT_TREE_W = 248;
+const DEFAULT_TREE_W = DEFAULT_UI_SETTINGS.artifactTreeWidth; // single source of truth (§16.6)
 const MIN_TREE_W = 140;
 const MAX_TREE_W = 640;
 const WIDTH_STEP = 16;
 const FS_MIN_TREE_W = 200; // full-screen popout floor; ceiling is FS_MAX_VIEWPORT_FRAC of the viewport
 const FS_MAX_VIEWPORT_FRAC = 0.85;
+const FS_DEFAULT_VIEWPORT_FRAC = 0.3; // full-screen popout default width, as a fraction of the viewport
 const clampWidth = (px: number): number => Math.min(MAX_TREE_W, Math.max(MIN_TREE_W, Math.round(px)));
 
 export interface Artifacts {
@@ -247,7 +252,7 @@ export function createArtifacts(host: HTMLElement, deps: ArtifactsDeps): Artifac
   const viewportW = (): number => doc.defaultView?.innerWidth ?? 1024;
   const fsMaxWidth = (): number => Math.round(viewportW() * FS_MAX_VIEWPORT_FRAC);
   const clampFsWidth = (px: number): number => Math.min(fsMaxWidth(), Math.max(FS_MIN_TREE_W, Math.round(px)));
-  let fsWidth = clampFsWidth(deps.initialFullscreenWidth ?? Math.ceil(viewportW() * 0.3));
+  let fsWidth = clampFsWidth(deps.initialFullscreenWidth ?? Math.ceil(viewportW() * FS_DEFAULT_VIEWPORT_FRAC));
   function applyFsWidth(px: number, persist: boolean): void {
     fsWidth = clampFsWidth(px);
     split.style.setProperty('--tree-w-fs', `${fsWidth}px`);
@@ -262,6 +267,14 @@ export function createArtifacts(host: HTMLElement, deps: ArtifactsDeps): Artifac
   const win = doc.defaultView;
   const onWindowResize = (): void => applyFsWidth(fsWidth, false);
   win?.addEventListener('resize', onWindowResize);
+
+  // §22.4 focus rule: when the shell switches to this view it announces it; we move keyboard
+  // focus to the first tree item so arrow-key navigation works without a click (the tree is the
+  // view's primary control). Other views are ignored. The roving tabindex is set by focusItem.
+  const onFocusView = (e: Event): void => {
+    if ((e as CustomEvent<{ view: string }>).detail.view === ARTIFACTS_VIEW) focusItem(visibleItems()[0]);
+  };
+  win?.addEventListener(FOCUS_VIEW_EVENT, onFocusView);
   fsResize.addEventListener('mousedown', (e) => {
     e.preventDefault();
     beginDrag((e as MouseEvent).clientX, fsWidth, (px) => applyFsWidth(px, false), () => deps.onFullscreenWidthChange?.(fsWidth));
@@ -586,6 +599,7 @@ export function createArtifacts(host: HTMLElement, deps: ArtifactsDeps): Artifac
     dispose: () => {
       doc.removeEventListener('selectionchange', updateActions);
       win?.removeEventListener('resize', onWindowResize);
+      win?.removeEventListener(FOCUS_VIEW_EVENT, onFocusView);
       endDrag?.(); // remove any document-level listeners from an in-flight resize drag (§20.2)
       unsubViewport?.();
       codeView?.destroy?.(); // free CodeMirror's handlers — DOM removal alone doesn't (§20.2)

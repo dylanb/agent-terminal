@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { captureToTodo } from '../../src/renderer/src/selection';
-import { TODOS_CHANGED_EVENT } from '../../src/renderer/src/monitor';
+import { TODOS_CHANGED_EVENT } from '../../src/renderer/src/paneActions';
 import { cleanSelectionText } from '../../src/renderer/src/selectionModel';
 
 function makeMonitor(over: Partial<Record<string, ReturnType<typeof vi.fn>>> = {}) {

@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createArtifacts, selectionWithin } from '../../src/renderer/src/artifacts';
-import type { ArtifactTree, ViewerFile } from '../../src/shared/ipc';
+import { FOCUS_VIEW_EVENT } from '../../src/renderer/src/paneActions';
+import { DEFAULT_UI_SETTINGS, type ArtifactTree, type ViewerFile } from '../../src/shared/ipc';
 
 // §20.1/§20.2 artifact viewer organism: a hierarchical file tree fed by real discovery
 // (loadTree) and a viewer that reads file content (loadFile) through injected seams, with a
@@ -112,6 +113,24 @@ function fakeCodeView(top: number, bottom: number) {
 }
 
 beforeEach(() => { document.body.replaceChildren(); });
+
+describe('focus on view activation (§22.4)', () => {
+  const announce = (view: string) => window.dispatchEvent(new CustomEvent(FOCUS_VIEW_EVENT, { detail: { view } }));
+
+  it('focuses the first tree item when the Artifacts view is announced (keyboard nav is immediate)', async () => {
+    const v = mount();
+    await v.api.refresh();
+    announce('2');
+    expect(document.activeElement).toBe(v.treeitems()[0]);
+  });
+
+  it('ignores announcements for other views', async () => {
+    const v = mount();
+    await v.api.refresh();
+    announce('1');
+    expect(document.activeElement).not.toBe(v.treeitems()[0]);
+  });
+});
 
 describe('artifact viewer (§20.1/§20.2 — real discovery)', () => {
   it('renders the discovered tree hierarchically: a directory node containing its files', async () => {
@@ -578,6 +597,12 @@ describe('artifact viewer (§20.1/§20.2 — real discovery)', () => {
     const v = mount(TREE_CURATED, { initialWidth: 320 });
     await v.api.refresh();
     expect(v.width()).toBe('320px');
+  });
+
+  it('defaults the tree width to the contract default (single source, no drift)', async () => {
+    const v = mount(TREE_CURATED); // no initialWidth → the built-in default
+    await v.api.refresh();
+    expect(v.width()).toBe(`${DEFAULT_UI_SETTINGS.artifactTreeWidth}px`);
   });
 
   it('dragging the separator changes the tree width and persists it', async () => {

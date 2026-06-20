@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { wireMonitorPane, REVEAL_TERMINAL_EVENT } from '../../src/renderer/src/monitor';
+import { wireMonitorPane } from '../../src/renderer/src/monitor';
+import { REVEAL_TERMINAL_EVENT } from '../../src/renderer/src/paneActions';
 import { DEFAULT_UI_SETTINGS } from '../../src/shared/ipc';
 import type { MonitorEvent, TodoItem, UiSettings } from '../../src/shared/ipc';
 
@@ -76,6 +77,8 @@ describe('Capture tab §24.2.1 — bulk triage (checkbox + Add to todo / Dismiss
       todoReorder: vi.fn(async () => []),
       todoSetStatus: vi.fn(async () => []),
       todoDelete: vi.fn(async () => []),
+      listTemplates: vi.fn(async () => ({ templates: [] })),
+      instantiateTemplate: vi.fn(async () => []),
     };
   }
 
@@ -286,6 +289,8 @@ describe('Capture last report button (§21.1 — manual single-slot)', () => {
       todoReorder: vi.fn(async () => []),
       todoSetStatus: vi.fn(async () => []),
       todoDelete: vi.fn(async () => []),
+      listTemplates: vi.fn(async () => ({ templates: [] })),
+      instantiateTemplate: vi.fn(async () => []),
     };
     (window as unknown as { monitor: typeof monitor }).monitor = monitor;
   });
@@ -313,6 +318,30 @@ describe('Capture last report button (§21.1 — manual single-slot)', () => {
 
     expect(monitor.captureLast).toHaveBeenCalledTimes(1);
     expect(findings().map(text)).toEqual(['first finding', 'second finding']);
+  });
+
+  it('a single-slot report replace preserves manual captures and command-output (§21.1)', async () => {
+    let onEvent: (e: MonitorEvent) => void = () => {};
+    monitor.onEvent = vi.fn((cb) => { onEvent = cb; });
+    monitor.captureLast.mockResolvedValueOnce([report('f1', 'fresh finding')]);
+    wireMonitorPane();
+    await flush();
+    // Seed a manual capture and a command-output card (neither is a report/finding).
+    onEvent(makeEvent({ id: 'c1', type: 'capture', text: 'manual snippet', parentId: null }));
+    onEvent(makeEvent({ id: 'o1', type: 'command-output', text: 'ls output', parentId: null }));
+    await flush();
+    const typesShown = () =>
+      Array.from(document.getElementById('monitor-blocks')!.querySelectorAll<HTMLElement>('.finding')).map(
+        (el) => el.dataset.type,
+      );
+    expect(typesShown()).toEqual(expect.arrayContaining(['capture', 'command-output']));
+
+    button().click();
+    await flush();
+
+    // The fresh report's finding renders, but the manual capture + command-output survive the replace.
+    expect(typesShown()).toEqual(expect.arrayContaining(['capture', 'command-output']));
+    expect(findings().map(text)).toContain('fresh finding');
   });
 
   it('a second capture replaces the prior findings (single-slot)', async () => {
@@ -405,6 +434,8 @@ describe('Capture tab §24.2.1 — report prose fallback (report with no finding
       todoReorder: vi.fn(async () => []),
       todoSetStatus: vi.fn(async () => []),
       todoDelete: vi.fn(async () => []),
+      listTemplates: vi.fn(async () => ({ templates: [] })),
+      instantiateTemplate: vi.fn(async () => []),
     };
     (window as unknown as { monitor: typeof monitor }).monitor = monitor;
   });

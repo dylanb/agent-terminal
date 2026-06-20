@@ -3,6 +3,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { EditorView } from '@codemirror/view';
 import { renderCodeInto, renderMarkdownInto } from '../../src/renderer/src/viewerRender';
 
+// WCAG 1.4.3 for the code viewer's text/gutter (the dark-mode near-black-code blocker) is pinned
+// by a REAL contrast assertion in tests/unit/styleContrast.test.ts, which resolves CM_THEME_STYLES
+// against the shipped tokens and computes the ratio — not just token-name membership.
+
 // §20.2: the render seams reuse the same host element across file opens. CodeMirror's EditorView
 // attaches document/window handlers released only by view.destroy() — removing the DOM is not
 // enough — so re-rendering into a host that already holds a view must destroy the old one first,

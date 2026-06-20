@@ -2,7 +2,8 @@ import { createTerminalPane } from './terminal';
 import { wireSelection, captureToTodo } from './selection';
 import { wireMonitorPane } from './monitor';
 import { createShell } from './shell';
-import { SAMPLE_FLOW, flowLabel, renderFlow, renderRailStatus, createGatePanel } from './flow';
+import { SAMPLE_FLOW, createGatePanel } from './flow';
+import { createFlowStrip } from './flowStrip';
 import { createArtifacts, type Artifacts } from './artifacts';
 import { renderMarkdownInto, renderCodeInto } from './viewerRender';
 import { doInject } from './paneActions';
@@ -28,14 +29,18 @@ const shell = createShell(document.getElementById('app')!, {
   onViewerFullscreenChange: (on) => artifacts?.setFullscreen(on),
 });
 
-// Mocked flow widgets (§24.1 / §19.2–§19.3): one fixture flow-state drives the rail
-// timeline + status and the view-3 gate. Gate actions are stubbed (no loop injection).
-const flowLabelEl = document.getElementById('flow-label');
-if (flowLabelEl) flowLabelEl.textContent = `Flow — ${flowLabel(SAMPLE_FLOW.steps)}`;
-const flowRail = document.getElementById('flow-rail');
-if (flowRail) renderFlow(flowRail, SAMPLE_FLOW.steps);
-const railStatus = document.getElementById('rail-flowstatus');
-if (railStatus) renderRailStatus(railStatus, SAMPLE_FLOW);
+// Flow status strip (§22.3 / §24.2.2): the manual-step lifecycle driven through window.flow,
+// scoped to the terminal's current repo. Like the todo list, it follows the cwd — the shared
+// repo context delivers the seeded key on mount and every subsequent cd, and the strip re-pulls.
+const flowStripHost = document.getElementById('flow-strip');
+if (flowStripHost) {
+  const flowStrip = createFlowStrip(flowStripHost, window.flow);
+  repo.onChange((info) => flowStrip.onRepoChanged(info.repoKey));
+  const seededKey = repo.repoKey();
+  if (seededKey !== null) flowStrip.onRepoChanged(seededKey);
+}
+
+// View-3 Review gate (§19.3) is still a fixture-driven, stubbed mock — out of S1 scope.
 const gatePanel = document.getElementById('gate-panel');
 if (gatePanel) createGatePanel(gatePanel, SAMPLE_FLOW);
 

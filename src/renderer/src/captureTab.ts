@@ -60,6 +60,7 @@ export interface CaptureTabDeps {
 
 export function createCaptureTab(deps: CaptureTabDeps): CaptureTab {
   const { blocksEl, todoSink, monitor, doInject } = deps;
+  const doc = blocksEl.ownerDocument;
   const rendered = new Set<string>();
   // Cross-highlight (§16.8): the live self-clearing reveal-highlight timer per element
   // (re-reveal resets it). The coordinates live on the terminal side, which marker-anchors
@@ -95,7 +96,7 @@ export function createCaptureTab(deps: CaptureTabDeps): CaptureTab {
   }
 
   function linkbtn(label: string, onClick: () => void): HTMLButtonElement {
-    const b = document.createElement('button');
+    const b = doc.createElement('button');
     b.className = 'linkbtn';
     b.textContent = label;
     b.addEventListener('click', onClick);
@@ -110,7 +111,7 @@ export function createCaptureTab(deps: CaptureTabDeps): CaptureTab {
 
   function makeChunkCheckbox(eventId: string, text: string): HTMLInputElement {
     chunkRegistry.set(eventId, { text, seq: chunkSeq++ });
-    const cb = document.createElement('input');
+    const cb = doc.createElement('input');
     cb.type = 'checkbox';
     cb.className = 'chunk-check';
     cb.dataset.chunkId = eventId;
@@ -129,7 +130,7 @@ export function createCaptureTab(deps: CaptureTabDeps): CaptureTab {
   /** A report that carves no findings: an expandable summary card, prose tucked behind a
    *  <details> so it doesn't dominate the pane as a blob (§24.2.1). */
   function renderReportProse(event: MonitorEvent): HTMLElement {
-    const el = document.createElement('div');
+    const el = doc.createElement('div');
     el.className = 'finding report-prose';
     el.dataset.eventId = event.id;
     el.dataset.type = event.type;
@@ -137,10 +138,10 @@ export function createCaptureTab(deps: CaptureTabDeps): CaptureTab {
     el.setAttribute('aria-label', `Report: ${snippet(event.text)}`);
     dblclickReveal(el, event);
 
-    const details = document.createElement('details');
-    const summary = document.createElement('summary');
+    const details = doc.createElement('details');
+    const summary = doc.createElement('summary');
     summary.textContent = 'Report — no findings carved';
-    const prose = document.createElement('div');
+    const prose = doc.createElement('div');
     prose.className = 't prose';
     prose.textContent = event.text;
     details.append(summary, prose);
@@ -152,7 +153,7 @@ export function createCaptureTab(deps: CaptureTabDeps): CaptureTab {
   function renderCard(event: MonitorEvent): HTMLElement {
     if (event.type === 'report') return renderReportProse(event);
 
-    const el = document.createElement('div');
+    const el = doc.createElement('div');
     el.className = 'finding';
     el.dataset.eventId = event.id;
     // Tag the source type so single-slot replace (showReport) clears only report/finding
@@ -163,11 +164,11 @@ export function createCaptureTab(deps: CaptureTabDeps): CaptureTab {
     el.setAttribute('aria-label', `${badgeLabel(event.type)}: ${snippet(event.text)}`);
     dblclickReveal(el, event);
 
-    const t = document.createElement('div');
+    const t = doc.createElement('div');
     t.className = 't';
     t.textContent = event.text;
 
-    const m = document.createElement('div');
+    const m = doc.createElement('div');
     m.className = 'm';
     m.textContent = badgeLabel(event.type) + (event.truncated ? ' · truncated' : '');
 
@@ -175,7 +176,7 @@ export function createCaptureTab(deps: CaptureTabDeps): CaptureTab {
 
     // command-output is the one inject-able capture (§16.2): Insert at cursor (no submit).
     if (event.type === 'command-output') {
-      const a = document.createElement('div');
+      const a = doc.createElement('div');
       a.className = 'a';
       a.append(linkbtn('Insert at cursor', () => doInject(event.text, false)));
       el.append(a);
@@ -326,10 +327,10 @@ export function createCaptureTab(deps: CaptureTabDeps): CaptureTab {
     }
 
     undoSlot.replaceChildren();
-    const note = document.createElement('span');
+    const note = doc.createElement('span');
     note.className = 'added-note';
     note.textContent = 'Added to todo';
-    const undo = document.createElement('button');
+    const undo = doc.createElement('button');
     undo.className = 'undo-add-to-todo linkbtn';
     undo.textContent = 'Undo';
     undoTimer = setTimeout(() => {
@@ -363,20 +364,20 @@ export function createCaptureTab(deps: CaptureTabDeps): CaptureTab {
 
   // Toolbar (§16.2 / §24.2.1): bulk Add-to-todo (+ undo slot), Dismiss selected, Dismiss all.
   // Add/Dismiss-selected stay disabled until at least one chunk is checked.
-  const toolbar = document.createElement('div');
+  const toolbar = doc.createElement('div');
   toolbar.className = 'cap-toolbar';
 
-  const addSelectedBtn = document.createElement('button');
+  const addSelectedBtn = doc.createElement('button');
   addSelectedBtn.id = 'add-selected-todo';
   addSelectedBtn.className = 'pill sm signal';
   addSelectedBtn.textContent = 'Add to todo';
   addSelectedBtn.disabled = true;
   addSelectedBtn.addEventListener('click', () => void onAddSelected());
 
-  const undoSlot = document.createElement('span');
+  const undoSlot = doc.createElement('span');
   undoSlot.className = 'add-undo-slot';
 
-  const dismissSelectedBtn = document.createElement('button');
+  const dismissSelectedBtn = doc.createElement('button');
   dismissSelectedBtn.id = 'dismiss-selected';
   dismissSelectedBtn.className = 'pill sm';
   dismissSelectedBtn.textContent = 'Dismiss selected';
@@ -389,7 +390,7 @@ export function createCaptureTab(deps: CaptureTabDeps): CaptureTab {
     refreshSelectionUI();
   });
 
-  const dismissAllBtn = document.createElement('button');
+  const dismissAllBtn = doc.createElement('button');
   dismissAllBtn.id = 'dismiss-all';
   dismissAllBtn.className = 'pill sm';
   dismissAllBtn.textContent = 'Dismiss all';

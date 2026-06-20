@@ -34,6 +34,18 @@ describe('captureLastReport (§21.1 — manual single-slot)', () => {
     expect(store.list().map((e) => e.text)).toEqual(['the report', 'one', 'two']);
   });
 
+  it('carries the scanner range, truncated flag, and sessionId onto the stored event (§16.8 reveal)', () => {
+    const store = createMonitorEventStore();
+    const customRange: SelectionRange = { start: { x: 2, y: 3 }, end: { x: 9, y: 5 }, baseY: 1, bufferType: 'normal' };
+    const report = { type: 'report' as const, source: 'heuristic' as const, text: 'r', parentId: null, truncated: true, range: customRange };
+
+    const events = captureLastReport('sess-X', store, fakeScanner({ report, findings: [] }));
+
+    expect(events[0].range).toEqual(customRange);
+    expect(events[0].truncated).toBe(true);
+    expect(events[0].sessionId).toBe('sess-X');
+  });
+
   it('replaces the prior captured report (single-slot) on a second capture', () => {
     const store = createMonitorEventStore();
     captureLastReport('s1', store, fakeScanner({ report: emission('old report'), findings: [finding('old finding')] }));

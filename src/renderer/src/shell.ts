@@ -8,6 +8,7 @@
 
 import type { Theme } from '../../shared/ipc';
 import { setShown } from './visibility';
+import { announceViewFocus, FOCUS_TERMINAL_EVENT } from './paneActions';
 
 export type ViewId = '1' | '2' | '3';
 
@@ -54,6 +55,10 @@ export function createShell(root: HTMLElement, deps: ShellDeps = {}): Shell {
       if (on) b.setAttribute('aria-current', 'page');
       else b.removeAttribute('aria-current');
     });
+    // The pane is now visible; hand focus to its organism so the keyboard lands in the view the
+    // user just switched to (the terminal, so they can keep typing). The shell never focuses a
+    // sibling's controls itself — it announces, the organism focuses (§22.4).
+    announceViewFocus(v);
   }
 
   // Drawer-tab selection is owned by the action-window coordinator (monitor.ts, §16.1),
@@ -140,6 +145,14 @@ export function createShell(root: HTMLElement, deps: ShellDeps = {}): Shell {
     }
   };
 
+  // A Send (todo/capture/artifact) asks for terminal focus on the decoupled bus (§16.2). From
+  // another view that focus would hit a hidden xterm, so the shell reveals the terminal view;
+  // setView then announces it and the terminal organism focuses (§22.4). Owning the reveal here
+  // keeps the focus path single — the terminal no longer listens for this event itself.
+  const onFocusTerminal = (): void => setView('1');
+  const win = doc.defaultView;
+  win?.addEventListener(FOCUS_TERMINAL_EVENT, onFocusTerminal);
+
   root.addEventListener('click', onClick);
   doc.addEventListener('keydown', onKeyDown, true);
 
@@ -168,6 +181,7 @@ export function createShell(root: HTMLElement, deps: ShellDeps = {}): Shell {
     dispose() {
       root.removeEventListener('click', onClick);
       doc.removeEventListener('keydown', onKeyDown, true);
+      win?.removeEventListener(FOCUS_TERMINAL_EVENT, onFocusTerminal);
     },
   };
 }

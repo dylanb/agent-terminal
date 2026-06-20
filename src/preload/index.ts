@@ -8,6 +8,8 @@ import {
   type CommandCaptureResult,
   type CommandSummary,
   type CwdChangedMsg,
+  type FlowApi,
+  type FlowStateView,
   type MonitorApi,
   type ViewerApi,
   type ViewerFile,
@@ -21,6 +23,7 @@ import {
   type RepoInfo,
   type TermApi,
   type TodoItem,
+  type TodoTemplateList,
   type TodoSource,
   type TodoStatus,
   type UiSettings,
@@ -76,6 +79,10 @@ const monitorApi: MonitorApi = {
     ipcRenderer.invoke(CH.todoSetStatus, { sessionId: SESSION_ID, repoKey, id, status }) as Promise<TodoItem[]>,
   todoDelete: (repoKey, id) =>
     ipcRenderer.invoke(CH.todoDelete, { sessionId: SESSION_ID, repoKey, id }) as Promise<TodoItem[]>,
+  listTemplates: (repoKey) =>
+    ipcRenderer.invoke(CH.todoTemplateList, { sessionId: SESSION_ID, repoKey }) as Promise<TodoTemplateList>,
+  instantiateTemplate: (repoKey, ref) =>
+    ipcRenderer.invoke(CH.todoTemplateInstantiate, { sessionId: SESSION_ID, repoKey, ref }) as Promise<TodoItem[]>,
 };
 
 const viewerApi: ViewerApi = {
@@ -85,6 +92,20 @@ const viewerApi: ViewerApi = {
     ipcRenderer.invoke(CH.viewerRead, { sessionId: SESSION_ID, relPath }) as Promise<ViewerFile | null>,
 };
 
+const flowApi: FlowApi = {
+  state: (repoKey) => ipcRenderer.invoke(CH.flowState, { sessionId: SESSION_ID, repoKey }) as Promise<FlowStateView>,
+  start: (repoKey) => ipcRenderer.invoke(CH.flowStart, { sessionId: SESSION_ID, repoKey }) as Promise<FlowStateView>,
+  advance: (repoKey) => ipcRenderer.invoke(CH.flowAdvance, { sessionId: SESSION_ID, repoKey }) as Promise<FlowStateView>,
+  restart: (repoKey) => ipcRenderer.invoke(CH.flowRestart, { sessionId: SESSION_ID, repoKey }) as Promise<FlowStateView>,
+  undo: (repoKey) => ipcRenderer.invoke(CH.flowUndo, { sessionId: SESSION_ID, repoKey }) as Promise<FlowStateView>,
+  onStateChanged: (cb) => {
+    const handler = (): void => cb();
+    ipcRenderer.on(CH.flowOnStateChanged, handler);
+    return () => ipcRenderer.removeListener(CH.flowOnStateChanged, handler);
+  },
+};
+
 contextBridge.exposeInMainWorld('term', termApi);
 contextBridge.exposeInMainWorld('monitor', monitorApi);
 contextBridge.exposeInMainWorld('viewer', viewerApi);
+contextBridge.exposeInMainWorld('flow', flowApi);

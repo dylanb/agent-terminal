@@ -62,6 +62,31 @@
   .finding.revealing::before { color:var(--reveal); }
   .kbd { font-family:"IBM Plex Mono",monospace; font-size:9.5px; border:1px solid var(--hair); border-bottom-width:2px; border-radius:4px; padding:1px 5px; }
 
+  /* ---- "build your todo list" composer (manual add · from-template · reorder are facets of one toolbar) ---- */
+  .compose { border:1px solid var(--hair); border-radius:var(--r); background:var(--card); margin-bottom:14px; }
+  .compose .row { display:flex; gap:8px; align-items:center; padding:9px 10px; }
+  .compose .new { flex:1; min-width:0; resize:none; font:inherit; font-size:13px; line-height:1.4; color:var(--text); background:var(--bg); border:1px solid var(--hair); border-radius:6px; padding:7px 9px; }
+  .compose .new:focus-visible { outline:2px solid var(--signal); outline-offset:-1px; }
+  /* the from-template disclosure: an icon toggle that opens the picker drawer below */
+  .compose .tmpl-toggle { display:inline-flex; align-items:center; gap:6px; height:30px; padding:0 11px; font-size:11.5px; font-weight:600; border:1px solid var(--hair); border-radius:999px; background:transparent; color:var(--dim); cursor:pointer; white-space:nowrap; }
+  .compose .tmpl-toggle:hover { color:var(--text); border-color:var(--dim); }
+  .compose .tmpl-toggle[aria-expanded="true"] { color:var(--signal); border-color:var(--signal); background:var(--signal-wash); }
+  .compose .tmpl-toggle .car { font-size:9px; transition:transform .15s ease; }
+  .compose .tmpl-toggle[aria-expanded="true"] .car { transform:rotate(180deg); }
+  /* the revealed picker — a second row inside the same card, so it reads as one composer */
+  .compose .tmpl { display:none; gap:8px; align-items:center; padding:0 10px 10px; border-top:1px solid var(--hair2); margin-top:-1px; padding-top:10px; }
+  .compose .tmpl.open { display:flex; }
+  .compose .tmpl .lab { font-size:10px; text-transform:uppercase; letter-spacing:.13em; color:var(--dim); flex:none; }
+  .compose .tmpl-pick { flex:1; min-width:0; font:inherit; font-size:12.5px; color:var(--text); background:var(--bg); border:1px solid var(--hair); border-radius:6px; padding:6px 8px; }
+  .compose .tmpl-pick:focus-visible { outline:2px solid var(--signal); outline-offset:-1px; }
+  @media (prefers-reduced-motion:reduce){ .compose .tmpl-toggle .car{ transition:none } }
+
+  /* per-item reorder + send cluster — quiet until the row is hovered/focused (no wall of buttons) */
+  .todo .acts { display:flex; gap:5px; align-items:center; align-self:center; flex:none; margin-left:auto; opacity:0; }
+  .todo:hover .acts, .todo:focus-within .acts { opacity:1; }
+  .todo .acts .iconbtn { width:26px; height:26px; font-size:12px; display:inline-flex; align-items:center; justify-content:center; }
+  .todo .acts .iconbtn:disabled { opacity:.3; cursor:default; }
+
   @media (max-width:900px){ .app,.app.drawer-open{ grid-template-columns:1fr } .rail,.drawer{ display:none } }
 </style>
 </head>
@@ -145,12 +170,28 @@
     <div data-viewpane="3">
       <div class="twocol">
         <div class="pane">
-          <h2>Todos</h2><div class="sub">Curate, then send to the agent</div>
+          <h2>Todos</h2><div class="sub">Build your list, then send to the agent</div>
+          <div class="compose">
+            <div class="row">
+              <textarea class="new" rows="1" aria-label="New todo" placeholder="Add a todo…"></textarea>
+              <button class="tmpl-toggle" aria-expanded="false" aria-controls="tmpl-v3" aria-label="Add todos from a template">From template <span class="car" aria-hidden="true">▾</span></button>
+              <button class="pill sm signal">Add</button>
+            </div>
+            <div class="tmpl" id="tmpl-v3" role="group" aria-label="Add todos from template">
+              <span class="lab">Template</span>
+              <select class="tmpl-pick" aria-label="Todo template">
+                <option value="ticket-grooming" selected>Ticket grooming</option>
+                <option value="review-checklist">Review checklist</option>
+                <option value="release-prep">Release prep</option>
+              </select>
+              <button class="pill sm signal">Add todos</button>
+            </div>
+          </div>
           <div class="todos">
-            <div class="todo"><span class="chk"></span><div class="body"><div class="tx">Bound the scrollback re-scan — don't re-read on every quiet pause</div><div class="src"><span class="from">from review.md</span> · L42 · high</div></div><button class="linkbtn send">Send ↵</button></div>
-            <div class="todo"><span class="chk"></span><div class="body"><div class="tx">Flag sub-floor findings instead of dropping them silently</div><div class="src"><span class="from">from review.md</span> · L44</div></div><button class="linkbtn send">Send ↵</button></div>
-            <div class="todo"><span class="chk"></span><div class="body"><div class="tx">Re-run the scanner suite after the frontier fix</div><div class="src">manual</div></div><button class="linkbtn send">Send ↵</button></div>
-            <div class="todo done"><span class="chk"></span><div class="body"><div class="tx">Carve tool calls out of the report body</div><div class="src">done · §15.x</div></div></div>
+            <div class="todo" tabindex="-1"><span class="chk"></span><div class="body"><div class="tx">Bound the scrollback re-scan — don't re-read on every quiet pause</div><div class="src"><span class="from">from review.md</span> · L42 · high</div></div><div class="acts"><button class="iconbtn" aria-label="Move up" disabled>↑</button><button class="iconbtn" aria-label="Move down">↓</button><button class="iconbtn" aria-label="Edit todo">✎</button><button class="pill sm signal" aria-label="Send todo to agent">Send</button></div></div>
+            <div class="todo" tabindex="-1"><span class="chk"></span><div class="body"><div class="tx">Flag sub-floor findings instead of dropping them silently</div><div class="src"><span class="from">from review.md</span> · L44</div></div><div class="acts"><button class="iconbtn" aria-label="Move up">↑</button><button class="iconbtn" aria-label="Move down">↓</button><button class="iconbtn" aria-label="Edit todo">✎</button><button class="pill sm signal" aria-label="Send todo to agent">Send</button></div></div>
+            <div class="todo" tabindex="-1"><span class="chk"></span><div class="body"><div class="tx">Re-run the scanner suite after the frontier fix</div><div class="src">manual</div></div><div class="acts"><button class="iconbtn" aria-label="Move up">↑</button><button class="iconbtn" aria-label="Move down" disabled>↓</button><button class="iconbtn" aria-label="Edit todo">✎</button><button class="pill sm signal" aria-label="Send todo to agent">Send</button></div></div>
+            <div class="todo done" tabindex="-1"><span class="chk"></span><div class="body"><div class="tx">Carve tool calls out of the report body</div><div class="src">done · §15.x</div></div></div>
           </div>
         </div>
         <div class="pane">
@@ -175,10 +216,26 @@
       <button class="iconbtn x" id="dclose" title="Close">✕</button>
     </div>
     <div class="panel" data-tabpanel="todo" hidden>
+      <div class="compose">
+        <div class="row">
+          <textarea class="new" rows="1" aria-label="New todo" placeholder="Add a todo…"></textarea>
+          <button class="tmpl-toggle" aria-expanded="false" aria-controls="tmpl-drawer" aria-label="Add todos from a template"><span class="car" aria-hidden="true">▾</span></button>
+          <button class="pill sm signal">Add</button>
+        </div>
+        <div class="tmpl" id="tmpl-drawer" role="group" aria-label="Add todos from template">
+          <span class="lab">Template</span>
+          <select class="tmpl-pick" aria-label="Todo template">
+            <option value="ticket-grooming" selected>Ticket grooming</option>
+            <option value="review-checklist">Review checklist</option>
+            <option value="release-prep">Release prep</option>
+          </select>
+          <button class="pill sm signal">Add todos</button>
+        </div>
+      </div>
       <div class="todos">
-        <div class="todo"><span class="chk"></span><div class="body"><div class="tx">Bound the scrollback re-scan</div><div class="src"><span class="from">review.md</span> · L42 · high</div></div><button class="pill sm signal">Send</button></div>
-        <div class="todo"><span class="chk"></span><div class="body"><div class="tx">Flag sub-floor dropped findings</div><div class="src"><span class="from">review.md</span> · L44</div></div><button class="pill sm signal">Send</button></div>
-        <div class="todo"><span class="chk"></span><div class="body"><div class="tx">Re-run the scanner suite</div><div class="src">manual</div></div><button class="pill sm signal">Send</button></div>
+        <div class="todo" tabindex="-1"><span class="chk"></span><div class="body"><div class="tx">Bound the scrollback re-scan</div><div class="src"><span class="from">review.md</span> · L42 · high</div></div><div class="acts"><button class="iconbtn" aria-label="Move up" disabled>↑</button><button class="iconbtn" aria-label="Move down">↓</button><button class="iconbtn" aria-label="Edit todo">✎</button><button class="pill sm signal" aria-label="Send todo to agent">Send</button></div></div>
+        <div class="todo" tabindex="-1"><span class="chk"></span><div class="body"><div class="tx">Flag sub-floor dropped findings</div><div class="src"><span class="from">review.md</span> · L44</div></div><div class="acts"><button class="iconbtn" aria-label="Move up">↑</button><button class="iconbtn" aria-label="Move down">↓</button><button class="iconbtn" aria-label="Edit todo">✎</button><button class="pill sm signal" aria-label="Send todo to agent">Send</button></div></div>
+        <div class="todo" tabindex="-1"><span class="chk"></span><div class="body"><div class="tx">Re-run the scanner suite</div><div class="src">manual</div></div><div class="acts"><button class="iconbtn" aria-label="Move up">↑</button><button class="iconbtn" aria-label="Move down" disabled>↓</button><button class="iconbtn" aria-label="Edit todo">✎</button><button class="pill sm signal" aria-label="Send todo to agent">Send</button></div></div>
       </div>
     </div>
     <div class="panel" data-tabpanel="capture">
@@ -208,10 +265,17 @@
     if(e.target.closest('#dclose')) app.classList.remove('drawer-open');
     if(e.target.closest('#tg')) setTheme(root.getAttribute('data-theme')==='dark'?'light':'dark');
     const chk=e.target.closest('.todo .chk'); if(chk) chk.closest('.todo').classList.toggle('done');
+    // "From template" disclosure: reveal the picker row in the same composer card.
+    const tt=e.target.closest('.tmpl-toggle');
+    if(tt){ const open=tt.getAttribute('aria-expanded')==='true'; tt.setAttribute('aria-expanded',String(!open));
+      const pick=tt.closest('.compose').querySelector('.tmpl'); pick.classList.toggle('open',!open);
+      if(!open) pick.querySelector('.tmpl-pick').focus(); }
   });
   document.addEventListener('keydown',e=>{ const m=e.metaKey||e.ctrlKey;
     if(m&&e.key.toLowerCase()==='k'){e.preventDefault();toggleDrawer();}
     else if(m&&['1','2','3'].includes(e.key)){e.preventDefault();setView(e.key);}
+    // Escape inside an open template picker collapses it and returns focus to its toggle.
+    else if(e.key==='Escape'){ const t=e.target.closest('.compose .tmpl.open'); if(t){ const tog=t.closest('.compose').querySelector('.tmpl-toggle'); t.classList.remove('open'); tog.setAttribute('aria-expanded','false'); tog.focus(); } }
   });
   // cross-highlight (§16.8): finding <-> terminal source, both visible at once
   function lit(id,on){ const s=document.querySelector('.term .src[data-find="'+id+'"]'); if(s) s.classList.toggle('lit',on); const f=document.querySelector('.finding[data-find="'+id+'"]'); if(f) f.classList.toggle('revealing',on); }

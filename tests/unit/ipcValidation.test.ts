@@ -8,6 +8,7 @@ import {
   isValidCommandsRequest,
   isValidDismiss,
   isValidDismissAll,
+  isValidFlowRequest,
   isValidInject,
   isValidInput,
   isValidLearnChrome,
@@ -19,6 +20,8 @@ import {
   isValidTodoReorder,
   isValidTodoSetStatus,
   isValidTodoUpdate,
+  isValidTemplateInstantiate,
+  isValidViewerRead,
 } from '../../src/main/ipcValidation';
 
 const sid = SESSION_ID;
@@ -127,6 +130,41 @@ describe('IPC payload validation (§6 — renderer-supplied input is untrusted)'
     expect(isValidClearCommands(null)).toBe(false);
   });
 
+  it('accepts a flow request with a safe repoKey and rejects a wrong session / unsafe key (§24.2.2)', () => {
+    expect(isValidFlowRequest({ sessionId: sid, repoKey: '/repo' })).toBe(true);
+    expect(isValidFlowRequest({ sessionId: sid })).toBe(false); // repoKey now required (follows cwd)
+    expect(isValidFlowRequest({ sessionId: 'other', repoKey: '/repo' })).toBe(false);
+    // repoKey becomes a filesystem path in flowState — same safe-path guard as todos.
+    expect(isValidFlowRequest({ sessionId: sid, repoKey: 'relative/path' })).toBe(false);
+    expect(isValidFlowRequest({ sessionId: sid, repoKey: '/repo/../../etc' })).toBe(false);
+    expect(isValidFlowRequest({})).toBe(false);
+    expect(isValidFlowRequest(null)).toBe(false);
+  });
+
+  it('accepts a single-segment template ref and rejects path separators / traversal (§21.2)', () => {
+    expect(isValidTemplateInstantiate({ sessionId: sid, repoKey: '/repo', ref: 'pr-review' })).toBe(true);
+    expect(isValidTemplateInstantiate({ sessionId: sid, repoKey: '/repo', ref: 'ticket-grooming.md' })).toBe(true);
+    expect(isValidTemplateInstantiate({ sessionId: sid, repoKey: '/repo', ref: '' })).toBe(false);
+    expect(isValidTemplateInstantiate({ sessionId: sid, repoKey: '/repo', ref: 7 })).toBe(false);
+    expect(isValidTemplateInstantiate({ sessionId: 'other', repoKey: '/repo', ref: 'pr-review' })).toBe(false);
+    // `ref` is a filename without .md used as ONE path segment under <flowDir>/todo-templates/:
+    // reject embedded separators so it can't widen the read surface beyond that single segment.
+    expect(isValidTemplateInstantiate({ sessionId: sid, repoKey: '/repo', ref: 'a/b' })).toBe(false);
+    expect(isValidTemplateInstantiate({ sessionId: sid, repoKey: '/repo', ref: 'a\\b' })).toBe(false);
+    expect(isValidTemplateInstantiate({ sessionId: sid, repoKey: '/repo', ref: '../secret' })).toBe(false);
+    expect(isValidTemplateInstantiate({ sessionId: sid, repoKey: '/repo', ref: '..' })).toBe(false);
+  });
+
+  it('accepts a viewer:read and rejects a traversal relPath at the boundary (§20.2 defense-in-depth)', () => {
+    expect(isValidViewerRead({ sessionId: sid, relPath: 'src/main/index.ts' })).toBe(true);
+    expect(isValidViewerRead({ sessionId: sid, relPath: 7 })).toBe(false);
+    expect(isValidViewerRead({ sessionId: 'other', relPath: 'a' })).toBe(false);
+    // relPath joins onto the repo root in readArtifact — reject `..` at the boundary too, mirroring
+    // the sibling path validators, so the guard does not live solely below the trust boundary.
+    expect(isValidViewerRead({ sessionId: sid, relPath: '../etc/passwd' })).toBe(false);
+    expect(isValidViewerRead({ sessionId: sid, relPath: 'a/../../b' })).toBe(false);
+  });
+
   // ---- todo:* validators (§16.3 / §16.4) ----
 
   it('accepts a todo:list and rejects a missing/non-string repoKey or wrong session', () => {
@@ -167,6 +205,7 @@ describe('IPC payload validation (§6 — renderer-supplied input is untrusted)'
   it('accepts a todo:setStatus with a valid status and rejects anything else', () => {
     expect(isValidTodoSetStatus({ sessionId: sid, repoKey: '/r', id: 'a', status: 'done' })).toBe(true);
     expect(isValidTodoSetStatus({ sessionId: sid, repoKey: '/r', id: 'a', status: 'active' })).toBe(true);
+    expect(isValidTodoSetStatus({ sessionId: sid, repoKey: '/r', id: 'a', status: 'in_progress' })).toBe(true);
     expect(isValidTodoSetStatus({ sessionId: sid, repoKey: '/r', id: 'a', status: 'maybe' })).toBe(false);
     expect(isValidTodoSetStatus({ sessionId: sid, repoKey: '/r', id: 'a' })).toBe(false);
   });

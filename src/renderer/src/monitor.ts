@@ -10,19 +10,7 @@ import { createStatusStrip } from './statusStrip';
 import { createTodoTab } from './todoTab';
 import { createCaptureTab } from './captureTab';
 import { createRepoContext, type RepoContext } from './repoContext';
-import { doInject, REVEAL_CAPTURE_EVENT, TODOS_CHANGED_EVENT } from './paneActions';
-
-// Re-exported for callers that import these from the pane module (selection.ts, tests).
-export {
-  CAPTURE_RANGE_ADD_EVENT,
-  CAPTURE_RANGE_REMOVE_EVENT,
-  FOCUS_TERMINAL_EVENT,
-  REVEAL_CAPTURE_EVENT,
-  REVEAL_HIGHLIGHT_MS,
-  REVEAL_TERMINAL_EVENT,
-  TODOS_CHANGED_EVENT,
-  TODO_UNDO_MS,
-} from './paneActions';
+import { doInject, FLOW_CHANGED_EVENT, REVEAL_CAPTURE_EVENT, TODOS_CHANGED_EVENT } from './paneActions';
 
 export function wireMonitorPane(repo: RepoContext = createRepoContext(window.monitor)): void {
   const el = resolveMonitorElements();
@@ -90,6 +78,11 @@ export function wireMonitorPane(repo: RepoContext = createRepoContext(window.mon
 
   // A todo added from the terminal pane (Capture selection, §16.2) refreshes the count/list.
   window.addEventListener(TODOS_CHANGED_EVENT, () => todoTab.refresh());
+
+  // The flow's active step changed (§4.1): re-pull so the on-demand template picker appears/
+  // disappears (main gates the template list to an in_progress step). Decoupled via the event
+  // bus — the monitor pane never imports the flow subsystem (§9.1).
+  window.addEventListener(FLOW_CHANGED_EVENT, () => todoTab.refresh());
 
   // Cross-highlight (§16.8): the terminal pane resolved a double-clicked row to the capture
   // that owns it (marker-anchored, so resize-safe) and names it by id; reveal that block.

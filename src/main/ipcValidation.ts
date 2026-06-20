@@ -12,6 +12,9 @@ import {
   type CommandsRequestMsg,
   type DismissAllMsg,
   type DismissMsg,
+  type FlowRequestMsg,
+  type TodoTemplateListMsg,
+  type TodoTemplateInstantiateMsg,
   type MonitorCaptureMsg,
   type MonitorLearnChromeMsg,
   type PtyInputMsg,
@@ -107,6 +110,33 @@ export function isValidClearCommands(m: unknown): m is ClearCommandsMsg {
   return isRecord(m) && isLiveSession(m);
 }
 
+/** Flow lifecycle (§24.2.2). `repoKey` scopes the flow to the terminal's current repo and becomes
+ *  a filesystem path in flowState, so it gets the same safe-path guard as the todo channels. */
+export function isValidFlowRequest(m: unknown): m is FlowRequestMsg {
+  return isRecord(m) && isLiveSession(m) && isSafeRepoKey(m.repoKey);
+}
+
+/** todoTemplate:list (§6): a live session + a safe repoKey (the flow dir is resolved from it). */
+export function isValidTemplateList(m: unknown): m is TodoTemplateListMsg {
+  return isRecord(m) && isLiveSession(m) && isSafeRepoKey(m.repoKey);
+}
+
+/** todoTemplate:instantiate (§6/§21.2): a safe repoKey + a non-empty `ref` that is a SINGLE path
+ *  segment. `ref` is a filename (with/without .md) read as one segment under <flowDir>/todo-templates/,
+ *  so reject any separator or traversal at the boundary — don't widen the read surface (the loader
+ *  escape-guards too, this is defense-in-depth). */
+export function isValidTemplateInstantiate(m: unknown): m is TodoTemplateInstantiateMsg {
+  return (
+    isRecord(m) &&
+    isLiveSession(m) &&
+    isSafeRepoKey(m.repoKey) &&
+    typeof m.ref === 'string' &&
+    m.ref.length > 0 &&
+    !/[/\\]/.test(m.ref) &&
+    m.ref !== '..'
+  );
+}
+
 // ---- todo:* validators (§16.3 / §16.4). repoKey is threaded on every mutation. ----
 
 /** A repoKey is a main-derived absolute repo/cwd path; it becomes a filesystem write path
@@ -144,7 +174,11 @@ export function isValidTodoReorder(m: unknown): m is TodoReorderMsg {
 }
 
 export function isValidTodoSetStatus(m: unknown): m is TodoSetStatusMsg {
-  return isTodoBase(m) && typeof m.id === 'string' && (m.status === 'active' || m.status === 'done');
+  return (
+    isTodoBase(m) &&
+    typeof m.id === 'string' &&
+    (m.status === 'active' || m.status === 'in_progress' || m.status === 'done')
+  );
 }
 
 export function isValidTodoDelete(m: unknown): m is TodoDeleteMsg {
@@ -157,6 +191,13 @@ export function isValidViewerTree(m: unknown): m is ViewerTreeMsg {
   return isRecord(m) && isLiveSession(m) && (m.scope === 'curated' || m.scope === 'repo');
 }
 
+/** viewer:read (§20.2): `relPath` joins onto the repo root in readArtifact (which escape-guards
+ *  too), but reject `..` at the boundary as defense-in-depth, mirroring the sibling validators. */
 export function isValidViewerRead(m: unknown): m is ViewerReadMsg {
-  return isRecord(m) && isLiveSession(m) && typeof m.relPath === 'string';
+  return (
+    isRecord(m) &&
+    isLiveSession(m) &&
+    typeof m.relPath === 'string' &&
+    !m.relPath.split(/[/\\]/).includes('..')
+  );
 }

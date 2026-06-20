@@ -1,8 +1,10 @@
-// Mocked flow widgets (§24.1 / §19.2–§19.3): the flow timeline, rail gate/loop status,
-// and the view-3 gate panel all render from ONE fixture FlowState. Phase 1 has no real
-// flow-state.yaml / agent-loop bridge (§18.3/§19.1) — gate actions are stubbed: they
-// reflect a verdict locally and notify an optional handler, but inject nothing. These
-// are placement-agnostic widgets (UI-STANDARDS §1.2) — each takes a host + data.
+// Mocked Review-gate widget (§19.3): the view-3 gate panel renders from ONE fixture
+// FlowState; its actions are stubbed — they reflect a verdict locally and notify an
+// optional handler, but inject nothing (no agent-loop bridge yet, §18.3/§19.1). It is a
+// placement-agnostic widget (UI-STANDARDS §1.2) — it takes a host + data.
+//
+// The fixture flow timeline + rail status that lived here were retired by §24.2.2 S1:
+// the rail's flow status strip is now real (`flowStrip.ts`, driven by window.flow).
 
 export type StepStatus = 'done' | 'active' | 'todo';
 export interface FlowStep {
@@ -31,21 +33,6 @@ export const SAMPLE_FLOW: FlowState = {
 
 const pad2 = (n: number): string => String(n).padStart(2, '0');
 
-/** "step N / M" naming the active step's position (§19.2). With no active step, point at the next
- *  step after the done prefix, clamped to 1..M — so an all-todo flow reads "step 1 / M", not 0.
- *  An empty flow (M === 0, e.g. data temporarily unavailable) is the sole degenerate case and
- *  reads "step 0 / 0"; for any M > 0 the index is always ≥ 1. */
-export function flowLabel(steps: FlowStep[]): string {
-  const n = steps.length;
-  const active = steps.findIndex((s) => s.status === 'active');
-  // The done PREFIX (leading consecutive done steps), not the total done count — a done step after
-  // the first todo must not inflate the position (e.g. [done, todo, done] → step 2, not 3).
-  let donePrefix = 0;
-  while (donePrefix < n && steps[donePrefix].status === 'done') donePrefix++;
-  const at = n === 0 ? 0 : active >= 0 ? active + 1 : Math.min(donePrefix + 1, n);
-  return `step ${at} / ${n}`;
-}
-
 // Build elements from the HOST's document, not the global one, so these widgets are correct if
 // ever mounted in another Document/iframe (host-document invariant, UI-STANDARDS).
 type El = (tag: string, className?: string, text?: string) => HTMLElement;
@@ -56,39 +43,11 @@ const makeEl = (doc: Document): El => (tag, className, text) => {
   return node;
 };
 
-/** Vertical flow rail: one `.stn` per step, `.seg` connectors between (not after last). */
-export function renderFlow(host: HTMLElement, steps: FlowStep[]): void {
-  const el = makeEl(host.ownerDocument);
-  host.replaceChildren();
-  steps.forEach((step, i) => {
-    const stn = el('span', `stn ${step.status}`);
-    stn.append(el('span', 'o'), el('span', 'nm', step.name));
-    host.append(stn);
-    if (i < steps.length - 1) host.append(el('span', step.status === 'done' ? 'seg' : 'seg future'));
-  });
-}
-
-function statLine(el: El, key: string, value: string, valueClass = ''): HTMLElement {
-  const stat = el('span', 'stat');
-  stat.append(el('span', 'k', key), el('span', `v ${valueClass}`.trim(), value));
-  return stat;
-}
-
 const GATE_TEXT: Record<GateStatus, string> = {
   awaiting: 'awaiting you',
   approved: 'approved',
   changes: 'changes requested',
 };
-
-/** Compact rail status: gate state + a one-line loop summary, from the fixture. */
-export function renderRailStatus(host: HTMLElement, state: FlowState): void {
-  const el = makeEl(host.ownerDocument);
-  host.replaceChildren();
-  host.append(
-    statLine(el, 'Gate', GATE_TEXT[state.gate.status], state.gate.status === 'awaiting' ? 'act' : 'sig'),
-    statLine(el, 'Loop', `iter ${pad2(state.loop.iteration)} · ${state.loop.openFindings} open`),
-  );
-}
 
 export interface GatePanel {
   getStatus(): GateStatus;

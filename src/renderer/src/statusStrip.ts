@@ -18,7 +18,14 @@ export interface StatusStrip {
   dispose(): void;
 }
 
-export function createStatusStrip(statusEl: HTMLElement, now: () => number = Date.now): StatusStrip {
+/** Injected seams (UI-STANDARDS §2.2): the clock is overridable so the quiet counter is testable. */
+export interface StatusStripDeps {
+  now?: () => number;
+}
+
+export function createStatusStrip(statusEl: HTMLElement, deps: StatusStripDeps = {}): StatusStrip {
+  const doc = statusEl.ownerDocument;
+  const now = deps.now ?? Date.now;
   let last: MonitorUpdateMsg | null = null;
   let alive = true;
   let quietCounterEl: HTMLElement | null = null;
@@ -41,12 +48,12 @@ export function createStatusStrip(statusEl: HTMLElement, now: () => number = Dat
       ['paste mode', last?.bracketedPaste ? 'on' : 'off', !!last?.bracketedPaste],
     ];
     for (const [label, value, on] of items) {
-      const chip = document.createElement('span');
+      const chip = doc.createElement('span');
       chip.className = `status-chip${on ? ' on' : ''}`;
       chip.dataset.status = label;
       chip.textContent = `${label}: ${value}`;
       if (label === 'agent' && state === 'quiet') {
-        quietCounterEl = document.createElement('span');
+        quietCounterEl = doc.createElement('span');
         quietCounterEl.className = 'quiet-counter';
         quietCounterEl.setAttribute('aria-hidden', 'true');
         chip.appendChild(quietCounterEl);

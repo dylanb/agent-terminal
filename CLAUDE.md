@@ -2,7 +2,7 @@
 
 Agent Terminal — Electron app that hosts coding agents (Claude Code, Codex, …) in a PTY-attached bash session, renders it with xterm.js, tees output into a main-process `@xterm/headless` shadow screen model, and provides a monitor pane that captures output and injects input back into the agent.
 
-`terminal-web-ui-spec.md` (v2.46) is the authoritative spec. Every subsystem implements a numbered section of it; when code and spec disagree, the spec wins — or the spec gets a changelog entry. Cite spec sections (e.g. §9.3) in code review discussion rather than re-arguing settled design decisions.
+`terminal-web-ui-spec.md` (v2.64) is the authoritative spec. Every subsystem implements a numbered section of it; when code and spec disagree, the spec wins — or the spec gets a changelog entry. Cite spec sections (e.g. §9.3) in code review discussion rather than re-arguing settled design decisions.
 
 ## Commands
 
@@ -34,6 +34,21 @@ npm run test:e2e    # playwright _electron e2e (requires a display; real PTY)
 - **Comments carry invariants, not narration — and stay short.** A comment earns its place only by recording *why*: an invariant a reader cannot derive from the code, a non-obvious constraint, or a spec cross-reference (§n). Never narrate *what* the next line does or restate the code in prose. Prefer a precise name, a named test, or a spec citation over a paragraph. Use the fewest words that carry the invariant — one line wherever possible; multi-line only for a genuinely load-bearing contract, and then point at the spec section rather than re-explaining it. Delete any comment a behavior-preserving refactor would invalidate. Always allowed: doc-comments on exported identifiers (1–2 lines) and `// TODO(owner): …` tags.
 - **No mocks for the terminal emulator or the PTY.** Integration tests drive the real `@xterm/headless` shadow module with scripted byte streams (it is pure JS and runs under vitest/node). Full-loop behavior (real node-pty, real bash, real renderer) is covered by Playwright `_electron` e2e — never by mocking node-pty. Fake timers/clocks are fine (the quiescence detector takes injectable timers for exactly this); mocking the VT parser is not.
 
+## Tracer-bullet development (mandatory planning requirement)
+
+**Every implementation plan for §24.2 backlog work MUST be decomposed into tracer-bullet slices before any code is written. This is a planning gate: a plan that is not sliced this way is incomplete and implementation does not start.**
+
+A **tracer bullet** is a thin but *complete* vertical slice that passes through **every layer the feature touches** — main-process logic → the typed IPC contract (`src/shared/ipc.ts`, §6) → preload bridge → renderer widget → visible, interactive UI — and does the **smallest real end-to-end thing** with **real backing, not a fixture**. Like a tracer round, you fire it through the running app and watch where it lands: each slice is hand-testable through the UI (`npm run dev`) and demoable on its own.
+
+Each slice MUST satisfy all of:
+
+1. **Back-to-front, never layer-by-layer.** A slice spans main, `ipc.ts`, preload, and renderer as far as that increment needs, so it is exercisable from the UI. Building a whole horizontal layer — the complete main-process subsystem, the entire IPC surface, or a data store — as its own phase with nothing in the UI to fire it is **forbidden**. If a slice cannot be fired from the UI, it is cut too wide or wrong; narrow it until it can.
+2. **Replaces one mock with real backing, incrementally.** §24.1 stands the widgets up fixture-driven (§24); a slice swaps **one** fixture path for its real subsystem and leaves the app still running and the visible product never regressed.
+3. **Ends testable through the UI, RED-first.** Each slice carries the full **Test-driven development** ladder above (failing test first, observed), and that ladder MUST include a **Playwright `_electron` e2e that drives the real loop** (real PTY, main, renderer) — because the slice's contract *is* "a user does X in the app and sees Y." Main-process integration tests and renderer DOM unit tests sit underneath it.
+4. **Named in the plan.** For every slice the plan states three things: the **user-visible action** that fires the bullet, the **observable result in the UI**, and the **e2e that proves it**. A slice missing any of the three is not yet planned.
+
+This is the §24 "UI-inwards" build direction applied feature by feature: stand the skin up, then drive real subsystems through it one fireable slice at a time. Horizontal "finish the backend, then wire the UI later" plans are a planning-level defect — reject and re-slice.
+
 ## Code standards
 
 - TypeScript, `strict: true`. No `any` in `src/shared/ipc.ts` — the IPC contract is the part TS exists to protect.
@@ -44,3 +59,29 @@ npm run test:e2e    # playwright _electron e2e (requires a display; real PTY)
 - The monitor pane talks only to `window.monitor.*` (§9.1). It must never import from terminal/selection modules or touch renderer xterm state, even though they share a document — this is what keeps it relocatable to a separate process. It is the canonical example of the `UI-STANDARDS.md` stable-interface rule.
 - Timing values are named and configurable where the spec says so: `SUBMIT_DELAY_MS` via `APP_SUBMIT_DELAY_MS`, `QUIET_MS`, the 80 ms resize/settle debounces (§7.1, §8.2, §9.3). No new magic-number sleeps.
 - Every IPC payload carries `sessionId` (§6), even while there is only one session.
+
+## PR review discipline (Copilot)
+
+A pushed fix that never triggers a new review round is a **stalled PR**. After pushing fixes, you MUST re-trigger Copilot — it does **not** auto-re-review new commits.
+
+**Re-triggering is the part that bites.** Two traps: (1) if `copilot-pull-request-reviewer[bot]` is already in the requested-reviewers list (the normal case after the first round), re-adding it is a silent no-op — you must remove first; (2) `gh pr edit --add-reviewer` **cannot resolve the bot login** (`Could not resolve user with login 'copilot-pull-request-reviewer[bot]'`) — only the REST API form actually re-adds it. So the reliable sequence is: remove via the CLI, re-add via the API.
+
+```bash
+gh pr edit <PR#> --remove-reviewer "copilot-pull-request-reviewer[bot]"   # CLI removal works
+gh api --method POST repos/dylanb/agent-terminal/pulls/<PR#>/requested_reviewers \
+  -f 'reviewers[]=copilot-pull-request-reviewer[bot]'                     # API re-add (CLI --add-reviewer fails)
+```
+
+**Always verify the request actually landed** before considering the round kicked off:
+
+```bash
+gh api repos/dylanb/agent-terminal/pulls/<PR#> --jq '.requested_reviewers[].login'
+```
+
+**Reading the result — the login differs by API surface (the `[bot]` gotcha):**
+- `/pulls/<PR#>/reviews` → the review's author login is `copilot-pull-request-reviewer[bot]` (**with** the `[bot]` suffix); state is `COMMENTED` or `CHANGES_REQUESTED`. Filtering on the bare `copilot-pull-request-reviewer` is a **false negative** — match with `endswith("[bot]")` or the exact login.
+- `/pulls/<PR#>/comments` → the inline findings' author login is `Copilot` (capital C, **no** suffix). **The actual findings arrive as inline comments here, not in the review body — always fetch both.**
+
+**"Clean" means:** a Copilot review whose `commit_id` equals the current HEAD with zero open inline comments. A review against an older commit is stale — re-request after the latest push.
+
+**Responding to findings:** fix the valid, non-scope-creep ones RED-first (the TDD ladder above applies — wiring included), then reply to each thread citing the fix commit, and resolve the thread (`resolveReviewThread` via GraphQL). A finding you decline is still answered and resolved, with the reason and any follow-up named. When committing+pushing, also rewrite the PR description to reflect the full implemented scope.
