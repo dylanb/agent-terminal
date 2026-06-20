@@ -33,6 +33,17 @@ Design study for the next phase (loop steps + the agent-loop bridge + gates), bu
 
 **Open for confirmation:** the `↻` loop glyph vs a ring treatment; whether the input modal should be avoidable (inline fallback) for keyboard-only flows; exact OS-notification trigger policy (always vs unfocused-only).
 
+### Reconcile against the shipped S5 (T0 done — spec v2.66)
+
+S5 landed (`flow:onStateChanged` + the pure `deriveFlowView` → `FlowDerived {activity, todosDone, todosTotal, ready}`). Read against these mockups, the design holds; four rulings carry into T1/T2:
+
+1. **The live-push seam is real and reusable.** `flow:onStateChanged` exists exactly as the plan assumed — the loop-state mirror rides it; **no new push plumbing** in T2.
+2. **`loop?` rides parallel to `derived?`, not nested.** S5 gates `derived` to `in_progress` only; loop state outlives that window (it sits in `awaiting-*` states that aren't the manual lifecycle), so the v4 mirror is a **separate `loop?` field on `FlowStateView`**.
+3. **The 3-tone status pill is loop `status`, not agent `activity`.** S5's `activity` is **binary** (`active`/`quiet`); the mockup's `.spill` await/work/settle pill maps to the per-LoopDef **`status`** string (T2, from `state.yaml`). The mockup had conflated two distinct signals — keep them separate.
+4. **`severity` / `openFindings` / `lastVerdict` are kept as design slots** (operator decision — the information genuinely exists, in per-iteration review artifacts, just not in `state.yaml` v4). They stay in the mockup; their live backing becomes an **agent-loop exposure requirement surfaced during T2** (aggregate from artifacts, or extend the schema/engine to record `lastVerdict`). Until wired they render empty/placeholder — shown as design intent, never invented data.
+
+The three "open for confirmation" items above remain open; T0 is otherwise done and unblocks T1.
+
 ## Viewing
 
 Open `mood/index.html` in a browser. Light/dark toggle is top-right on every page. The §24.2.3 study is `shell/loop-flow.html`.
