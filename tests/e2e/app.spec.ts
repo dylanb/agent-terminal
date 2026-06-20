@@ -1229,6 +1229,79 @@ test('flow progression persists across a relaunch, per repo (§24.2.2 S3 / §19.
   rmSync(home, { recursive: true, force: true });
 });
 
+const flowDerived = () => page.locator('#flow-strip .flow-derived');
+
+test("the flow strip's derived n/m done moves as todos are checked, pushed live (§24.2.2 S5)", async () => {
+  // Fire: Start the step, add two todos, check one. Land: the strip's "n / m done" count moves on
+  // its own — no manual refresh — proving the flow:onStateChanged push path. Real loop: bash +
+  // node-pty + the todo store + the flow manager.
+  const repo = seedFlowRepo('agent-term-e2e-flow-s5-', 'groom-ticket');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-flow-s5-home-'));
+  await app.close();
+  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
+  page = await app.firstWindow();
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await typeCommand(`cd "${repo}"`);
+  await expect(flowStepName()).toHaveText('groom-ticket', { timeout: 10_000 });
+  await flowControl().click(); // Start → in progress
+  await expect(flowStation(1)).toHaveClass(/\bactive\b/);
+  await expect(flowDerived()).toContainText('0 / 0', { timeout: 10_000 }); // derived live status, no todos yet
+
+  await openQuickSend('todo');
+  await page.locator('#todo-new').fill('s5 first todo');
+  await page.locator('#todo-add-btn').click();
+  await page.locator('#todo-new').fill('s5 second todo');
+  await page.locator('#todo-add-btn').click();
+  await expect(flowDerived()).toContainText('0 / 2', { timeout: 10_000 }); // total moved via the push
+
+  // Check the first todo — the strip count moves on its own; the test never refreshes the strip.
+  await page.locator('.todo').filter({ hasText: 's5 first todo' }).locator('.chk').click();
+  await expect(flowDerived()).toContainText('1 / 2', { timeout: 10_000 });
+
+  await app.close(); // HOME=temp ⇒ Electron writes userData under it; stop writes before removing it
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+});
+
+test('advancing with todos outstanding warns but still completes, and is undoable (§19.2 / §24.2.2 S5)', async () => {
+  // Fire: Start, add a todo (left unchecked), click Advance, then Undo. Land: a one-shot warning
+  // notice surfaces (with NO spec-section jargon) AND the flow reaches done — the §19.2 human
+  // override — and Undo takes the advance back to in-progress.
+  const repo = seedFlowRepo('agent-term-e2e-flow-s5warn-', 'groom-ticket');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-flow-s5warn-home-'));
+  await app.close();
+  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
+  page = await app.firstWindow();
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await typeCommand(`cd "${repo}"`);
+  await expect(flowStepName()).toHaveText('groom-ticket', { timeout: 10_000 });
+  await flowControl().click(); // Start
+
+  await openQuickSend('todo');
+  await page.locator('#todo-new').fill('still outstanding');
+  await page.locator('#todo-add-btn').click();
+  await expect(flowDerived()).toContainText('0 / 1', { timeout: 10_000 }); // not ready
+
+  await flowControl().click(); // Advance while NOT ready
+  const notice = page.locator('#flow-strip .flow-notice');
+  await expect(notice).toContainText('outstanding', { timeout: 10_000 });
+  await expect(notice).not.toContainText('§'); // no internal spec-section reference leaks to the UI
+  await expect(flowStation(2)).toHaveClass(/\bactive\b/); // still reached done
+  await expect(flowControl()).toHaveText('Restart');
+
+  // Undo takes the advance back: the step returns to in-progress (its derived count is back).
+  await page.locator('#flow-strip .flow-undo').click();
+  await expect(flowStation(1)).toHaveClass(/\bactive\b/);
+  await expect(flowControl()).toHaveText('Advance');
+  await expect(flowDerived()).toContainText('0 / 1', { timeout: 10_000 });
+
+  await app.close(); // HOME=temp ⇒ Electron writes userData under it; stop writes before removing it
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+});
+
 test('Start injects the skill on entry; todos come from the template ON DEMAND in the todo overlay (§4.1/§6/§9.1)', async () => {
   // Fire: Start (skill injects, no todos), then open the todo overlay and use its "From template"
   // control. Land: the skill is typed into the real PTY on Start; the picker is NOT in the flow

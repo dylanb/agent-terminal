@@ -97,6 +97,12 @@ const flowApi: FlowApi = {
   start: (repoKey) => ipcRenderer.invoke(CH.flowStart, { sessionId: SESSION_ID, repoKey }) as Promise<FlowStateView>,
   advance: (repoKey) => ipcRenderer.invoke(CH.flowAdvance, { sessionId: SESSION_ID, repoKey }) as Promise<FlowStateView>,
   restart: (repoKey) => ipcRenderer.invoke(CH.flowRestart, { sessionId: SESSION_ID, repoKey }) as Promise<FlowStateView>,
+  undo: (repoKey) => ipcRenderer.invoke(CH.flowUndo, { sessionId: SESSION_ID, repoKey }) as Promise<FlowStateView>,
+  onStateChanged: (cb) => {
+    const handler = (): void => cb();
+    ipcRenderer.on(CH.flowOnStateChanged, handler);
+    return () => ipcRenderer.removeListener(CH.flowOnStateChanged, handler);
+  },
 };
 
 contextBridge.exposeInMainWorld('term', termApi);

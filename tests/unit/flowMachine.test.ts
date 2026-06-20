@@ -132,6 +132,56 @@ describe('flow machine restart', () => {
   });
 });
 
+// Undo a manual advance: revert done → in_progress so a too-eager Advance can be taken back. It is
+// the inverse of advance(), NOT a restart — it must NOT re-run the step's entry actions. Only legal
+// from done; persisted like any other transition.
+describe('flow machine undo (revert an advance)', () => {
+  it('undo() moves done → in_progress', () => {
+    const flow = createFlowMachine(LOAD);
+    flow.start();
+    flow.advance();
+    expect(flow.undo().status).toBe('in_progress');
+    expect(flow.state().status).toBe('in_progress');
+  });
+
+  it('is illegal anywhere but done and does not mutate state', () => {
+    const flow = createFlowMachine(LOAD);
+    expect(() => flow.undo()).toThrow(); // not_started
+    expect(flow.state().status).toBe('not_started');
+    flow.start();
+    expect(() => flow.undo()).toThrow(); // in_progress
+    expect(flow.state().status).toBe('in_progress');
+  });
+
+  it('does NOT re-run the step entry actions (unlike restart)', () => {
+    const onEnter = vi.fn(() => ({}));
+    const flow = createFlowMachine(LOAD, undefined, onEnter);
+    flow.start();
+    flow.advance();
+    onEnter.mockClear();
+    flow.undo();
+    expect(onEnter).not.toHaveBeenCalled(); // undo reverts the state; it does not enter the step
+  });
+
+  it('persists the undo so a fresh machine resumes in_progress', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'flow-undo-'));
+    try {
+      const first = createFlowMachine(LOAD, createFlowStateStore(dir));
+      first.start();
+      first.advance();
+      first.undo();
+      expect(createFlowMachine(LOAD, createFlowStateStore(dir)).state().status).toBe('in_progress');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('is inert on an error load', () => {
+    const flow = createFlowMachine({ ok: false, error: 'no flow.yaml' });
+    expect(flow.undo().status).toBe('error'); // inert, never throws
+  });
+});
+
 // §24.2.2 S4 — the machine runs the step's entry actions on ENTRY (start/restart) via an injected
 // `onEnter(step)` callback, and merges any transient notice it returns onto the TRANSITION view
 // only (a one-shot — `state()` never carries it). Entry actions are a property of entering a step,

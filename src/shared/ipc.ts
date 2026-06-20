@@ -41,6 +41,8 @@ export const CH = {
   flowStart: 'flow:start',
   flowAdvance: 'flow:advance',
   flowRestart: 'flow:restart',
+  flowUndo: 'flow:undo',
+  flowOnStateChanged: 'flow:onStateChanged',
   todoTemplateList: 'todoTemplate:list',
   todoTemplateInstantiate: 'todoTemplate:instantiate',
 } as const;
@@ -338,6 +340,7 @@ export interface ChannelPayloads {
   'monitor:update': MonitorUpdateMsg;
   'monitor:commandsChanged': CommandsChangedMsg;
   'cwd:changed': CwdChangedMsg;
+  'flow:onStateChanged': FlowStateChangedMsg;
 }
 
 export type SendChannel = keyof ChannelPayloads;
@@ -400,6 +403,17 @@ export interface ViewerReadMsg {
  *  malformed, or schema-invalid, so there is no step to drive (§24.2.2 S2). */
 export type FlowStatus = 'not_started' | 'in_progress' | 'done' | 'error';
 
+/** The live, derived status of an in-progress step (§22.3 / §24.2.2 S5): a pure function of the
+ *  flow state, the repo's todo list, and the §8.3 agent activity — recomputed and pushed to the
+ *  strip on every todo/activity change. `ready` is the gate-readiness signal: every todo is done.
+ *  Present only while `status === 'in_progress'` (no step is being worked otherwise). */
+export interface FlowDerived {
+  activity: AgentState;
+  todosDone: number;
+  todosTotal: number;
+  ready: boolean;
+}
+
 /** The flow's live view (§22.3 status strip): the current step's name, its 1-based
  *  `position` within `total` steps, and its `status`. S2 sources the step from
  *  `<worktree>/.agent-terminal/flow.yaml` (§18.1); on a load failure `status` is
@@ -417,6 +431,16 @@ export interface FlowStateView {
   /** The active step's bound `todo_template:` ref (§18.6), when it declares one — the default the
    *  on-demand todo-template picker offers while the step is active (§6/§4.1). */
   templateRef?: string;
+  /** Live derived status (§22.3 / §24.2.2 S5): agent activity + todo completion + gate readiness.
+   *  Present only on an `in_progress` view (computed by main from the repo's todos + §8.3 activity). */
+  derived?: FlowDerived;
+}
+
+/** flow:onStateChanged broadcast (§24.2.2 S5): main signals that a flow-relevant input changed
+ *  (a todo mutated, the agent flipped active/quiet); the strip re-pulls `flow:state`. Carries no
+ *  payload beyond the session — the strip re-pulls for its own current repoKey (§16.3). */
+export interface FlowStateChangedMsg {
+  sessionId: SessionId;
 }
 
 /** flow:state/start/advance/restart request. `repoKey` scopes the flow to the terminal's current
@@ -540,6 +564,12 @@ export interface FlowApi {
   advance(repoKey: string): Promise<FlowStateView>;
   /** done → in_progress; resets and re-runs the first step. Rejects if not currently done. */
   restart(repoKey: string): Promise<FlowStateView>;
+  /** done → in_progress; reverts a manual advance WITHOUT re-running the step's entry actions
+   *  (unlike restart). Rejects if not currently done. */
+  undo(repoKey: string): Promise<FlowStateView>;
+  /** Subscribe to main's flow:onStateChanged push (§24.2.2 S5): `cb` fires when a flow-relevant
+   *  input changed (todo/activity), prompting a `state()` re-pull. Returns an unsubscribe. */
+  onStateChanged(cb: () => void): () => void;
 }
 
 declare global {
