@@ -87,6 +87,9 @@ export function createFlowStrip(host: HTMLElement, deps: FlowApi): FlowStrip {
       button.disabled = true;
       runAct(act, key)
         .then((view) => {
+          // The repo can change mid-flight (user cd's into another repo); a stale transition must
+          // not clobber the current cwd's view — re-pull the now-current repo instead.
+          if (repoKey !== key) return void refresh();
           render(view); // re-render from the response, surfacing any one-shot `notice` (§19.3 refusal)
           // The active-step status changed, so the todo overlay's on-demand template picker may
           // appear/disappear — signal it to re-pull (the decoupled contract, §4.1/§9.1).

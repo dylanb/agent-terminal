@@ -7,7 +7,7 @@
 // (no longer a hardcoded constant). A missing/malformed/invalid file is not a crash — it
 // becomes an inert `error` state the status strip renders (§22.3).
 
-import { existsSync, readFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import yaml from 'js-yaml';
 import type { AgentState, FlowStateView, FlowStatus, TodoItem } from '../shared/ipc';
@@ -129,9 +129,14 @@ export function loadFlowDefinition(worktreeDir: string): FlowLoad {
  * contrast, is always repo-local — see flowState.)
  */
 export function loadFlowDefinitionLocalFirst(localDir: string, globalDir: string): FlowLoad {
-  if (existsSync(path.join(localDir, FLOW_REL))) return loadFlowDefinition(localDir);
+  const local = loadFlowDefinition(localDir);
+  if (local.ok) return local;
+  // Fall back to the global default only when the local file is genuinely ABSENT. A present-but-
+  // unreadable local file (EACCES/ELOOP/…) surfaces its own error — existsSync() returns false on
+  // those IO errors too, so gating on it would silently mask them behind the global.
+  if (!local.error.startsWith('no flow.yaml found')) return local;
   const global = loadFlowDefinition(globalDir);
-  return global.ok ? global : loadFlowDefinition(localDir); // neither: report the local (absent) error
+  return global.ok ? global : local; // neither present: report the local (absent) error
 }
 
 export interface FlowMachine {

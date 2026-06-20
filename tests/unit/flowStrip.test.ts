@@ -382,6 +382,32 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     expect(unsub).toHaveBeenCalledTimes(1);
   });
 
+  it('does not render a stale transition view when the repo changed mid-flight (race)', async () => {
+    const flush = () => new Promise((r) => setTimeout(r, 0));
+    let resolveStart!: () => void;
+    const deps = fakeFlow();
+    // Make Start hang so the repo can change before its promise resolves.
+    deps.start.mockImplementation(
+      (repoKey: string) =>
+        new Promise<FlowStateView>((res) => {
+          resolveStart = () => res({ stepName: `${repoKey}-step`, position: 1, total: 1, status: 'in_progress' });
+        }),
+    );
+    const strip = createFlowStrip(host, deps);
+    strip.onRepoChanged('/repoA');
+    await vi.waitFor(() => expect(stepName()).toBe('/repoA-step'));
+
+    control()!.click(); // fire Start on /repoA — its promise is pending
+    strip.onRepoChanged('/repoB'); // user cd's into /repoB before Start resolves
+    await vi.waitFor(() => expect(stepName()).toBe('/repoB-step'));
+
+    resolveStart(); // the stale /repoA transition now resolves
+    await flush();
+    await flush();
+    // It must NOT clobber the current /repoB view with the old repo's state.
+    expect(stepName()).toBe('/repoB-step');
+  });
+
   it('puts the live region on the non-interactive derived/notice text, not the interactive strip (a11y)', async () => {
     const deps = {
       state: vi.fn(

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -188,5 +188,16 @@ describe('flow.yaml local-first-then-global resolution (§18.1)', () => {
     write(global, VALID('global'));
     const load = loadFlowDefinitionLocalFirst(local, global);
     expect(load.ok).toBe(false); // the local error wins; the global is NOT used
+  });
+
+  it('surfaces a present-but-UNREADABLE local file rather than masking it with the global', () => {
+    // A self-referential symlink makes readFileSync throw ELOOP (a real read failure, not absence)
+    // while existsSync returns false — the exact case an existsSync gate would mis-route to global.
+    mkdirSync(join(local, '.agent-terminal'), { recursive: true });
+    const link = join(local, '.agent-terminal', 'flow.yaml');
+    symlinkSync(link, link);
+    write(global, VALID('global'));
+    const load = loadFlowDefinitionLocalFirst(local, global);
+    expect(load.ok).toBe(false); // the local read error wins; the valid global must NOT mask it
   });
 });
