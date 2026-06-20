@@ -277,6 +277,78 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     expect(deps.state.mock.calls.length).toBeGreaterThanOrEqual(2);
   });
 
+  it('a push does not re-pull (or wipe the one-shot notice) outside in_progress (§19.2)', async () => {
+    let fire = (): void => {};
+    const deps = {
+      state: vi.fn(
+        async (): Promise<FlowStateView> => ({ stepName: '/repo-step', position: 1, total: 1, status: 'in_progress' }),
+      ),
+      start: vi.fn(),
+      advance: vi.fn(
+        async (): Promise<FlowStateView> => ({
+          stepName: '/repo-step',
+          position: 1,
+          total: 1,
+          status: 'done',
+          notice: 'Advanced with todos still outstanding.',
+        }),
+      ),
+      restart: vi.fn(),
+      undo: vi.fn(),
+      onStateChanged: vi.fn((cb: () => void) => {
+        fire = cb;
+        return () => {};
+      }),
+    };
+    createFlowStrip(host, deps).onRepoChanged('/repo');
+    await vi.waitFor(() => expect(control()!.textContent).toBe('Advance'));
+    control()!.click(); // advance → done, surfacing the §19.2 not-ready notice
+    await vi.waitFor(() => expect(host.querySelector('.flow-notice')?.textContent).toContain('outstanding'));
+    const stateCalls = deps.state.mock.calls.length;
+
+    fire(); // an unrelated activity-flip push arrives while the flow is done
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // The done-state strip must NOT re-pull flow:state (which carries no notice), so the one-shot
+    // warning survives until the user acts — a push only refreshes a live in_progress step.
+    expect(deps.state.mock.calls.length).toBe(stateCalls);
+    expect(host.querySelector('.flow-notice')?.textContent).toContain('outstanding');
+  });
+
+  it('keeps keyboard focus on the control across a push-driven re-render (§22.4 a11y)', async () => {
+    let fire = (): void => {};
+    let done = 0;
+    const deps = {
+      state: vi.fn(
+        async (): Promise<FlowStateView> => ({
+          stepName: '/repo-step',
+          position: 1,
+          total: 1,
+          status: 'in_progress',
+          derived: { activity: 'quiet', todosDone: done, todosTotal: 3, ready: false },
+        }),
+      ),
+      start: vi.fn(),
+      advance: vi.fn(),
+      restart: vi.fn(),
+      undo: vi.fn(),
+      onStateChanged: vi.fn((cb: () => void) => {
+        fire = cb;
+        return () => {};
+      }),
+    };
+    createFlowStrip(host, deps).onRepoChanged('/repo');
+    await vi.waitFor(() => expect(control()).not.toBeNull());
+    control()!.focus();
+    expect(document.activeElement).toBe(control());
+
+    done = 1;
+    fire(); // a push rebuilds the strip; focus must land back on the control, not be dropped to body
+    await vi.waitFor(() => expect(host.querySelector('.flow-derived')!.textContent).toContain('1 / 3'));
+    expect(document.activeElement).toBe(control());
+  });
+
   it('renders a clear --danger error line (no stations, no control) on load failure', async () => {
     const deps = {
       state: vi.fn(

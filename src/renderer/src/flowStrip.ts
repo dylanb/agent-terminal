@@ -93,7 +93,10 @@ export function createFlowStrip(host: HTMLElement, deps: FlowApi): FlowStrip {
     return button;
   }
 
+  let lastStatus: FlowStateView['status'] | null = null;
+
   function render(state: FlowStateView): void {
+    lastStatus = state.status;
     host.replaceChildren();
 
     if (state.status === 'error') {
@@ -167,13 +170,29 @@ export function createFlowStrip(host: HTMLElement, deps: FlowApi): FlowStrip {
       host.replaceChildren(); // no repo yet → nothing to show (the strip follows the cwd)
       return;
     }
+    // render() rebuilds the subtree, so a focused control would be dropped to <body> on a push-driven
+    // re-render; capture which control held focus and restore it after (§22.4 keyboard order).
+    const active = document.activeElement;
+    const refocus =
+      active instanceof HTMLElement && host.contains(active)
+        ? active.classList.contains('flow-undo')
+          ? '.flow-undo'
+          : '.flow-control'
+        : null;
     render(await deps.state(repoKey));
+    if (refocus) host.querySelector<HTMLElement>(refocus)?.focus();
   }
 
   // The push path (§24.2.2 S5): main fires flow:onStateChanged when a flow-relevant input changed
   // (a todo mutated, the agent flipped active/quiet); the strip re-pulls its own repo's state so the
   // derived n/m + activity move with no user action. Lives for the strip's lifetime (app-long).
-  deps.onStateChanged(() => void refresh());
+  // Only re-pull while a step is in_progress — that is the sole state whose view a push can change
+  // (derived is in_progress-only). Skipping it elsewhere keeps an unrelated activity flip from
+  // wiping the done-state §19.2 one-shot notice (which a re-pull would clear) and from rebuilding
+  // (losing focus) when nothing visible changed.
+  deps.onStateChanged(() => {
+    if (lastStatus === 'in_progress') void refresh();
+  });
 
   return {
     refresh,
