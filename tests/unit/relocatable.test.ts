@@ -9,20 +9,23 @@ import type { FlowStateView, MonitorEvent, TodoItem } from '../../src/shared/ipc
 // UI-STANDARDS §1.2 / §9.1: every renderer organism builds its DOM from its HOST's document
 // (`host.ownerDocument`), never the ambient global `document`, so it stays relocatable into
 // another frame/process. We prove it observably: the host lives in a FOREIGN document and the
-// global `document.createElement` is made hostile (throws). A clean organism renders its visible
-// DOM into the foreign host regardless; one that reaches for the global produces nothing.
-// (jsdom auto-adopts appended nodes, so post-render ownerDocument cannot discriminate — the
-// hostile global is what makes the otherwise-latent reach observable.)
+// global document NODE FACTORIES (createElement + createTextNode) are made hostile (throw). A clean
+// organism renders its visible DOM into the foreign host regardless; one that reaches for any global
+// factory produces nothing. (jsdom auto-adopts appended nodes, so post-render ownerDocument cannot
+// discriminate — the hostile global is what makes the otherwise-latent reach observable.)
 
 const flush = (): Promise<void> => new Promise((r) => setTimeout(r, 0));
 
-/** A host in a foreign document, with the global document.createElement poisoned so any organism
- *  that reaches for it instead of `host.ownerDocument` fails to render. Restored in afterEach. */
+/** A host in a foreign document, with the global document node factories (createElement AND
+ *  createTextNode) poisoned so any organism that reaches for the ambient global instead of
+ *  `host.ownerDocument` fails to render. Restored in afterEach. */
 function foreignDocWithHostileGlobal(): Document {
   const foreign = document.implementation.createHTMLDocument('relocated');
-  vi.spyOn(document, 'createElement').mockImplementation(() => {
-    throw new Error('organism reached for the ambient global document instead of its host');
-  });
+  const hostile = (factory: string) => () => {
+    throw new Error(`organism reached for the ambient global document.${factory} instead of its host`);
+  };
+  vi.spyOn(document, 'createElement').mockImplementation(hostile('createElement'));
+  vi.spyOn(document, 'createTextNode').mockImplementation(hostile('createTextNode'));
   return foreign;
 }
 
@@ -95,12 +98,15 @@ describe('renderer organisms are relocatable — render against host.ownerDocume
       todoCountEl,
       monitor: {
         todoList: vi.fn(async () => todos),
-        listTemplates: vi.fn(async () => ({ templates: [] })),
+        // A non-empty library renders the "From template" toggle, whose label uses
+        // doc.createTextNode — exercising the createTextNode arm of the hostile-global guard.
+        listTemplates: vi.fn(async () => ({ templates: [{ ref: 'r', name: 'R' }] })),
       } as never,
       doInject: vi.fn(),
     });
     tab.onRepoChanged('/repo');
     await flush();
     expect(todoListEl.querySelector('.todo')).toBeTruthy();
+    expect(todoListEl.querySelector('.tmpl-toggle')).toBeTruthy(); // createTextNode path rendered
   });
 });
