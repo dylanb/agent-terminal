@@ -64,18 +64,12 @@ This is the §24 "UI-inwards" build direction applied feature by feature: stand 
 
 A pushed fix that never triggers a new review round is a **stalled PR**. After pushing fixes, you MUST re-trigger Copilot — it does **not** auto-re-review new commits.
 
-**Re-triggering is the part that bites — a plain re-add is a silent no-op.** If `copilot-pull-request-reviewer[bot]` is already in the requested-reviewers list (the normal case after the first round), re-adding does nothing. To force a fresh round you MUST remove, *then* re-add:
+**Re-triggering is the part that bites.** Two traps: (1) if `copilot-pull-request-reviewer[bot]` is already in the requested-reviewers list (the normal case after the first round), re-adding it is a silent no-op — you must remove first; (2) `gh pr edit --add-reviewer` **cannot resolve the bot login** (`Could not resolve user with login 'copilot-pull-request-reviewer[bot]'`) — only the REST API form actually re-adds it. So the reliable sequence is: remove via the CLI, re-add via the API.
 
 ```bash
-gh pr edit <PR#> --remove-reviewer "copilot-pull-request-reviewer[bot]"
-gh pr edit <PR#> --add-reviewer "copilot-pull-request-reviewer[bot]"
-```
-
-The API form is equivalent and handy in scripts:
-
-```bash
+gh pr edit <PR#> --remove-reviewer "copilot-pull-request-reviewer[bot]"   # CLI removal works
 gh api --method POST repos/dylanb/agent-terminal/pulls/<PR#>/requested_reviewers \
-  -f 'reviewers[]=copilot-pull-request-reviewer[bot]'
+  -f 'reviewers[]=copilot-pull-request-reviewer[bot]'                     # API re-add (CLI --add-reviewer fails)
 ```
 
 **Always verify the request actually landed** before considering the round kicked off:
