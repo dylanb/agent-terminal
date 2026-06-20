@@ -3,6 +3,7 @@ import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createFlowStateStore } from '../../src/main/flowState';
+import type { FlowStatus } from '../../src/shared/ipc';
 
 // §24.2.2 S3 / §19.1 — flow progression persists to <worktree>/.agent-terminal/flow-state.yaml.
 // Tests drive the real store against real temp dirs (no fs mocks): the observable contract is
@@ -74,6 +75,15 @@ describe('flow-state store (§24.2.2 S3 / §19.1)', () => {
     createFlowStateStore(dir).write({ step: 'groom-ticket', status: 'done' });
     const lines = readFileSync(join(dir, '.gitignore'), 'utf8').split('\n');
     expect(lines.filter((l) => l === GITIGNORE_ENTRY)).toHaveLength(1);
+  });
+
+  it('does not persist a non-persistable status (error), keeping the last good state readable', () => {
+    // read() only accepts not_started/in_progress/done; writing `error` would create a file read()
+    // can never parse back. write() must reject it so the last good progression survives.
+    const store = createFlowStateStore(dir);
+    store.write({ step: 'groom-ticket', status: 'in_progress' });
+    store.write({ step: 'groom-ticket', status: 'error' as FlowStatus });
+    expect(store.read()).toEqual({ step: 'groom-ticket', status: 'in_progress' });
   });
 
   it('fails open when .gitignore is not writable — state still persists, no throw (§19.1)', () => {

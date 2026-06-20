@@ -67,6 +67,9 @@ export function createFlowStateStore(worktreeDir: string): FlowStateStore {
       return { step: doc.step, status: doc.status as FlowStatus };
     },
     write(state) {
+      // Only persist progression read() can accept (§19.1): writing a non-persistable status (e.g.
+      // 'error') would create a file read() always rejects, silently dropping the last good state.
+      if (!PERSISTABLE.has(state.status)) return;
       mkdirSync(path.dirname(file), { recursive: true });
       const tmp = `${file}.tmp`;
       writeFileSync(tmp, yaml.dump({ step: state.step, status: state.status }));

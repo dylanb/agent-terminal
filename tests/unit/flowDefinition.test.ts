@@ -203,6 +203,18 @@ describe('flow.yaml local-first-then-global resolution (§18.1)', () => {
     expect(loadFlowDefinitionLocalFirst(local, global).ok).toBe(false);
   });
 
+  it('surfaces a present-but-broken GLOBAL error when local is absent (not a misleading "not found")', () => {
+    // local absent; global present but malformed → the caller must see the global's real error,
+    // not the local "no flow.yaml found".
+    write(global, 'name: feature\nsteps:\n  - id: x\n    kind: loop\n'); // invalid global
+    const load = loadFlowDefinitionLocalFirst(local, global);
+    expect(load.ok).toBe(false);
+    if (!load.ok) {
+      expect(load.kind).toBe('invalid'); // the global's failure, not 'absent'
+      expect(load.error).not.toContain('no flow.yaml found');
+    }
+  });
+
   it('surfaces a present-but-invalid local file rather than masking it with the global', () => {
     write(local, 'name: feature\nsteps:\n  - id: x\n    kind: loop\n'); // invalid: not a manual step
     write(global, VALID('global'));

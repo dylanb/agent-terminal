@@ -140,7 +140,10 @@ export function loadFlowDefinitionLocalFirst(localDir: string, globalDir: string
   // by the global. Routing on the structured `kind`, not error text, keeps it copy-change-proof.
   if (local.kind !== 'absent') return local;
   const global = loadFlowDefinition(globalDir);
-  return global.ok ? global : local; // neither present: report the local (absent) error
+  if (global.ok) return global;
+  // Neither loaded: a present-but-broken global (invalid/read_error) surfaces its own error; only
+  // when the global is also merely absent is the local "no flow.yaml found" the right message.
+  return global.kind === 'absent' ? local : global;
 }
 
 export interface FlowMachine {
