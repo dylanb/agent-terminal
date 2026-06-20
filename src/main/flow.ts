@@ -77,8 +77,11 @@ export function loadFlowDefinition(worktreeDir: string): FlowLoad {
   let raw: string;
   try {
     raw = readFileSync(file, 'utf8');
-  } catch {
-    return { ok: false, error: `no flow.yaml found at ${FLOW_REL}` };
+  } catch (e) {
+    // Absence is the common "no flow here" case; any other failure (EACCES/EPERM/EISDIR) is a real
+    // read error and must be surfaced, not masked as "not found" (§18.1 — a clear error view).
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return { ok: false, error: `no flow.yaml found at ${FLOW_REL}` };
+    return { ok: false, error: `cannot read ${FLOW_REL}: ${(e as Error).message}` };
   }
 
   let doc: unknown;

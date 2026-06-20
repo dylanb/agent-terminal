@@ -95,6 +95,24 @@ describe('flow.yaml loader (§24.2.2 S2 / §18.1)', () => {
     writeFlow('name: f\nsteps:\n  - id: x\n    kind: loop\n'); // not a manual step (out of S2 scope)
     expect(loadFlowDefinition(dir).ok).toBe(false);
   });
+
+  it('reports "no flow.yaml found" only for an absent file (ENOENT)', () => {
+    const load = loadFlowDefinition(dir); // nothing written → ENOENT
+    expect(load.ok).toBe(false);
+    if (!load.ok) expect(load.error).toContain('no flow.yaml found');
+  });
+
+  it('surfaces a non-ENOENT read failure instead of masking it as "not found" (EACCES/EISDIR)', () => {
+    // A directory where flow.yaml should be makes readFileSync throw EISDIR — a real read failure,
+    // not absence. The error must reflect the underlying cause so EACCES/EPERM aren't hidden.
+    mkdirSync(join(dir, '.agent-terminal', 'flow.yaml'), { recursive: true });
+    const load = loadFlowDefinition(dir);
+    expect(load.ok).toBe(false);
+    if (!load.ok) {
+      expect(load.error).not.toContain('no flow.yaml found');
+      expect(load.error).toMatch(/EISDIR/);
+    }
+  });
 });
 
 describe('flow machine sourced from a definition (§24.2.2 S2)', () => {

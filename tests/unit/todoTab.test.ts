@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { wireMonitorPane } from '../../src/renderer/src/monitor';
-import { FOCUS_TERMINAL_EVENT } from '../../src/renderer/src/paneActions';
+import { FOCUS_TERMINAL_EVENT, FLOW_CHANGED_EVENT } from '../../src/renderer/src/paneActions';
 import { DEFAULT_UI_SETTINGS } from '../../src/shared/ipc';
 import type { TodoItem, UiSettings } from '../../src/shared/ipc';
 
@@ -709,6 +709,39 @@ describe('Todo tab §24.2.1 — review fixes (reorder stability, focus, a11y lab
       // On a main-process restart the invoke rejects; the button must re-enable so the user can
       // retry, and the rejection must not bubble (vitest fails the run on an unhandled rejection).
       expect(addBtn()!.disabled).toBe(false);
+    });
+
+    it('drops open/selected state when templates are gated off, so it never reappears stale across a flow transition', async () => {
+      wireMonitorPane();
+      await flush();
+      const lib = {
+        templates: [
+          { ref: 'pr-review', name: 'PR review checklist' },
+          { ref: 'ticket-grooming', name: 'Ticket grooming' },
+        ],
+        defaultRef: 'ticket-grooming',
+      };
+      await loadRepoWithTemplates('/repoA', [], lib);
+      toggle()!.click(); // open it
+      await flush();
+      pick()!.value = 'pr-review'; // pick a NON-default
+      pick()!.dispatchEvent(new Event('change'));
+
+      // Flow advances out of in_progress → main gates the library off (templates: []).
+      monitor.listTemplates.mockResolvedValue({ templates: [] });
+      window.dispatchEvent(new Event(FLOW_CHANGED_EVENT));
+      await flush();
+      expect(toggle()).toBeNull(); // disclosure gone
+
+      // Flow re-enters a step with templates → the disclosure must return COLLAPSED with the bound
+      // default, not reopened with the stale 'pr-review' selection (the state leak).
+      monitor.listTemplates.mockResolvedValue(lib);
+      window.dispatchEvent(new Event(FLOW_CHANGED_EVENT));
+      await flush();
+      expect(toggle()!.getAttribute('aria-expanded')).toBe('false');
+      toggle()!.click();
+      await flush();
+      expect(pick()!.value).toBe('ticket-grooming'); // bound default, not the stale 'pr-review'
     });
 
     it('Escape inside the open picker collapses it and returns focus to the toggle', async () => {

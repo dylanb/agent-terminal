@@ -121,8 +121,10 @@ export function isValidTemplateList(m: unknown): m is TodoTemplateListMsg {
   return isRecord(m) && isLiveSession(m) && isSafeRepoKey(m.repoKey);
 }
 
-/** todoTemplate:instantiate (§6/§21.2): a safe repoKey + a non-empty `ref` with no traversal
- *  (the loader escape-guards too, but reject `..` at the boundary as defense-in-depth). */
+/** todoTemplate:instantiate (§6/§21.2): a safe repoKey + a non-empty `ref` that is a SINGLE path
+ *  segment. `ref` is a filename (with/without .md) read as one segment under <flowDir>/todo-templates/,
+ *  so reject any separator or traversal at the boundary — don't widen the read surface (the loader
+ *  escape-guards too, this is defense-in-depth). */
 export function isValidTemplateInstantiate(m: unknown): m is TodoTemplateInstantiateMsg {
   return (
     isRecord(m) &&
@@ -130,7 +132,8 @@ export function isValidTemplateInstantiate(m: unknown): m is TodoTemplateInstant
     isSafeRepoKey(m.repoKey) &&
     typeof m.ref === 'string' &&
     m.ref.length > 0 &&
-    !m.ref.split(/[/\\]/).includes('..')
+    !/[/\\]/.test(m.ref) &&
+    m.ref !== '..'
   );
 }
 

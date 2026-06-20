@@ -108,6 +108,12 @@ export function createTodoTab(deps: TodoTabDeps): TodoTab {
       .then((lib) => {
         templates = lib.templates;
         templateDefault = lib.defaultRef;
+        // Gated off (the step left in_progress): drop open/selected picker state so a later step
+        // that re-enables templates doesn't reappear already-open with a stale selection.
+        if (templates.length === 0) {
+          templateOpen = false;
+          templateSelected = undefined;
+        }
         renderTodos();
       })
       .catch(() => {});

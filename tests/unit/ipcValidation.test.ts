@@ -20,6 +20,7 @@ import {
   isValidTodoReorder,
   isValidTodoSetStatus,
   isValidTodoUpdate,
+  isValidTemplateInstantiate,
   isValidViewerRead,
 } from '../../src/main/ipcValidation';
 
@@ -138,6 +139,20 @@ describe('IPC payload validation (§6 — renderer-supplied input is untrusted)'
     expect(isValidFlowRequest({ sessionId: sid, repoKey: '/repo/../../etc' })).toBe(false);
     expect(isValidFlowRequest({})).toBe(false);
     expect(isValidFlowRequest(null)).toBe(false);
+  });
+
+  it('accepts a single-segment template ref and rejects path separators / traversal (§21.2)', () => {
+    expect(isValidTemplateInstantiate({ sessionId: sid, repoKey: '/repo', ref: 'pr-review' })).toBe(true);
+    expect(isValidTemplateInstantiate({ sessionId: sid, repoKey: '/repo', ref: 'ticket-grooming.md' })).toBe(true);
+    expect(isValidTemplateInstantiate({ sessionId: sid, repoKey: '/repo', ref: '' })).toBe(false);
+    expect(isValidTemplateInstantiate({ sessionId: sid, repoKey: '/repo', ref: 7 })).toBe(false);
+    expect(isValidTemplateInstantiate({ sessionId: 'other', repoKey: '/repo', ref: 'pr-review' })).toBe(false);
+    // `ref` is a filename without .md used as ONE path segment under <flowDir>/todo-templates/:
+    // reject embedded separators so it can't widen the read surface beyond that single segment.
+    expect(isValidTemplateInstantiate({ sessionId: sid, repoKey: '/repo', ref: 'a/b' })).toBe(false);
+    expect(isValidTemplateInstantiate({ sessionId: sid, repoKey: '/repo', ref: 'a\\b' })).toBe(false);
+    expect(isValidTemplateInstantiate({ sessionId: sid, repoKey: '/repo', ref: '../secret' })).toBe(false);
+    expect(isValidTemplateInstantiate({ sessionId: sid, repoKey: '/repo', ref: '..' })).toBe(false);
   });
 
   it('accepts a viewer:read and rejects a traversal relPath at the boundary (§20.2 defense-in-depth)', () => {
