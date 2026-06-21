@@ -91,6 +91,25 @@ describe('attention cue (§24.2.3 T4)', () => {
     expect(shown(host)).toBe(true);
   });
 
+  it('signals a layout change (resize) only when its shown/hidden state flips, so the terminal refits', () => {
+    const { cue } = mount();
+    let resizes = 0;
+    const onResize = (): void => {
+      resizes += 1;
+    };
+    window.addEventListener('resize', onResize);
+    try {
+      cue.render(human()); // hidden → shown: the viewport shrank
+      expect(resizes).toBe(1);
+      cue.render(human({ status: 'awaiting-human-impl-triage', iteration: 11 })); // still shown: no flip
+      expect(resizes).toBe(1);
+      cue.render(null); // shown → hidden: the viewport grew
+      expect(resizes).toBe(2);
+    } finally {
+      window.removeEventListener('resize', onResize);
+    }
+  });
+
   it('renders from the host document (relocatable, UI-STANDARDS §2.2)', async () => {
     await assertRendersFromHostDocument((host) => createAttentionCue(host).render(human()));
   });

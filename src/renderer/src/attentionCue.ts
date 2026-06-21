@@ -38,15 +38,24 @@ export function createAttentionCue(host: HTMLElement): AttentionCue {
   let dismissed: Occurrence | null = null;
   let shown: Occurrence | null = null;
 
+  // Showing/hiding the cue resizes the main viewport (it makes room above the active view), so the
+  // width/height-sensitive panes — the terminal's FitAddon (§7.1) — must refit. The shell uses this
+  // same decoupled resize signal for its drawer/loop-panel/full-screen layout changes.
+  const signalLayout = (): void => {
+    doc.defaultView?.dispatchEvent(new Event('resize'));
+  };
+
   const hide = (): void => {
     if (shown === null) return;
     shown = null;
     host.replaceChildren();
     setShown(host, false);
+    signalLayout();
   };
 
   const show = (loop: FlowLoopView, occ: Occurrence): void => {
     if (sameOcc(shown, occ)) return; // already announcing this occurrence — do not rebuild/re-announce
+    const wasHidden = shown === null;
     shown = occ;
 
     const dot = doc.createElement('span');
@@ -79,6 +88,7 @@ export function createAttentionCue(host: HTMLElement): AttentionCue {
 
     host.replaceChildren(dot, msg, dismiss);
     setShown(host, true);
+    if (wasHidden) signalLayout(); // only a hidden→shown flip changes the layout; an occ swap does not
   };
 
   return {
