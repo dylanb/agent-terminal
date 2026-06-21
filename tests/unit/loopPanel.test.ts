@@ -91,6 +91,11 @@ describe('docked loop panel (§24.2.3 T2)', () => {
     expect(host.childElementCount).toBe(0);
   });
 
+  it('does not render the placeholder dev-note copy (no real data feeds it)', () => {
+    createLoopPanel(host).render(loop(), 'build');
+    expect(host.textContent).not.toContain('extensible');
+  });
+
   it('dispose() leaves nothing behind: the host is emptied (UI-STANDARDS clean teardown)', () => {
     const panel = createLoopPanel(host);
     panel.render(loop(), 'build');

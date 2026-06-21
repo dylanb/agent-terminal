@@ -99,11 +99,11 @@ export function createShell(root: HTMLElement, deps: ShellDeps = {}): Shell {
 
   // The loop+gate panel docks as another layout column (§24.2.3), between the rail and main.
   // Like the drawer it is display:none when closed (so its close button leaves the tab order),
-  // and its read-out (#loopstat) carries the aria-expanded state for assistive tech.
+  // and its read-out (.loopstat) carries the aria-expanded state for assistive tech.
   const loopPanelEl = root.querySelector<HTMLElement>('.loop-panel');
   const isLoopPanelOpen = (): boolean => root.classList.contains('loop-open');
   const syncLoopReadout = (on: boolean): void =>
-    root.querySelector('#loopstat')?.setAttribute('aria-expanded', String(on));
+    root.querySelector('.loopstat')?.setAttribute('aria-expanded', String(on));
   function openLoopPanel(): void {
     root.classList.add('loop-open');
     if (loopPanelEl) setShown(loopPanelEl, true);
@@ -149,7 +149,7 @@ export function createShell(root: HTMLElement, deps: ShellDeps = {}): Shell {
     if (vb && root.contains(vb)) return setView(vb.getAttribute('data-viewbtn') as ViewId);
     if (target.closest('#qs')) return toggleDrawer();
     if (target.closest('#dclose')) return closeDrawer();
-    if (target.closest('#loopstat')) return toggleLoopPanel();
+    if (target.closest('.loopstat')) return toggleLoopPanel();
     if (target.closest('[data-loop-close]')) return closeLoopPanel();
     if (target.closest('#tg')) return setTheme(theme === 'dark' ? 'light' : 'dark');
   };
@@ -175,7 +175,7 @@ export function createShell(root: HTMLElement, deps: ShellDeps = {}): Shell {
     }
     // The rail Loop read-out is a role=button span (§24.2.3); make it operable by keyboard like a
     // native button — Enter/Space toggle the panel (WCAG 2.1.1). Space is prevented to avoid scroll.
-    if ((e.key === 'Enter' || e.key === ' ') && (e.target as Element | null)?.closest?.('#loopstat')) {
+    if ((e.key === 'Enter' || e.key === ' ') && (e.target as Element | null)?.closest?.('.loopstat')) {
       e.preventDefault();
       e.stopPropagation();
       toggleLoopPanel();

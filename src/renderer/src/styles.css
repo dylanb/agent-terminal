@@ -204,7 +204,6 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible { outline:2px so
 .loop-panel .ldl .lrow .ld { flex:1; border-bottom:1px dotted var(--hair); margin:0 8px 4px; }
 .loop-panel .ldl .lrow .lv.sig { color:var(--signal-text); }
 .loop-panel .ldl .lrow .lv.bad { color:var(--attn-text); }
-.loop-panel .ldl .grow { font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:10px; color:var(--dim); margin-top:9px; line-height:1.45; }
 
 /* ---- view 1: terminal ---- */
 #terminal-view { display:flex; flex-direction:column; height:100%; background:var(--term-bg); }

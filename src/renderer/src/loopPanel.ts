@@ -86,10 +86,6 @@ export function createLoopPanel(host: HTMLElement): LoopPanel {
       if (loop.gateOptions && loop.gateOptions.length > 0)
         ldl.append(detailRow(doc, 'gate options', loop.gateOptions.map(gateOptionLabel).join(' · ')));
 
-      const grow = doc.createElement('div');
-      grow.className = 'grow';
-      grow.textContent = '+ extensible — reviewer count, last verdict, timings slot in here as the bridge derives them.';
-      ldl.append(grow);
       body.append(ldl);
       host.append(body);
     },
