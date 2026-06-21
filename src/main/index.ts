@@ -256,7 +256,7 @@ async function createWindow(): Promise<void> {
     if (view.loop && !loopWatchers.has(repoKey)) {
       loopWatchers.set(repoKey, watchAgentLoopState(repoKey, pushFlowChanged));
     }
-    loopNotifier.observe(view);
+    loopNotifier.observe(repoKey, view);
     return view;
   };
   // todoTemplate:instantiate (§6/§4.1) — on demand, instantiate a named template (co-located with

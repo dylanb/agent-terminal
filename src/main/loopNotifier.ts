@@ -27,34 +27,44 @@ export interface LoopNotifierDeps {
 }
 
 export interface LoopNotifier {
-  /** Observe a flow view and raise / dedup / clear the OS notification accordingly. */
-  observe(view: FlowStateView): void;
+  /** Observe a repo's flow view and raise / dedup / clear the OS notification accordingly. */
+  observe(repoKey: string, view: FlowStateView): void;
 }
 
 export function createLoopNotifier(deps: LoopNotifierDeps): LoopNotifier {
-  // The single carried distinct-entry identity (§24.2.3 T4): the last human-needed (status,iteration)
-  // signalled. Held across non-human-needed views so a repeat of an already-signalled occurrence stays
-  // deduped; a different (status,iteration) is a distinct entry. Null until the first entry, so the
-  // initial human-needed view at app start / flow-open is by definition distinct.
-  let lastSignalled: { status: string; iteration: number } | null = null;
+  // The single carried distinct-entry identity (§24.2.3 T4): the last human-needed
+  // (repoKey,status,iteration) signalled. Keyed by repo because the loop is repo-scoped (§16.3) — two
+  // repos coincidentally at the same status+iteration are distinct loops, not a repeat. Held across
+  // non-human-needed views so a repeat of an already-signalled occurrence stays deduped. Null until the
+  // first entry, so the initial human-needed view at app start / flow-open is by definition distinct.
+  let lastSignalled: { repoKey: string; status: string; iteration: number } | null = null;
   let closeActive: (() => void) | null = null;
+  let activeRepoKey: string | null = null;
 
   const clearActive = (): void => {
     closeActive?.();
     closeActive = null;
+    activeRepoKey = null;
   };
 
   return {
-    observe(view) {
+    observe(repoKey, view) {
       const loop = view.loop;
       if (!loop || loop.humanNeeded !== true) {
-        clearActive(); // null / non-human mirror: dismiss any showing notification (the carried id stays)
+        // null / non-human mirror: dismiss only THIS repo's showing notification — a different repo's
+        // still-valid one must survive a glance at a non-loop repo (the carried id stays).
+        if (activeRepoKey === repoKey) clearActive();
         return;
       }
-      if (lastSignalled !== null && lastSignalled.status === loop.status && lastSignalled.iteration === loop.iteration) {
+      if (
+        lastSignalled !== null &&
+        lastSignalled.repoKey === repoKey &&
+        lastSignalled.status === loop.status &&
+        lastSignalled.iteration === loop.iteration
+      ) {
         return; // a repeat of the already-signalled occurrence — no re-raise
       }
-      lastSignalled = { status: loop.status, iteration: loop.iteration };
+      lastSignalled = { repoKey, status: loop.status, iteration: loop.iteration };
       clearActive(); // the prior occurrence's notification is now stale
       if (deps.isFocused()) return; // unfocused-only raise — the user is present, the in-app cue suffices
       closeActive = deps.notify({
@@ -65,6 +75,7 @@ export function createLoopNotifier(deps: LoopNotifierDeps): LoopNotifier {
           deps.reveal();
         },
       });
+      activeRepoKey = repoKey;
     },
   };
 }

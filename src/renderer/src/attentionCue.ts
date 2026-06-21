@@ -10,21 +10,29 @@
 import type { FlowLoopView } from '../../shared/ipc';
 import { setShown } from './visibility';
 
+export interface AttentionCueDeps {
+  /** Called after a dismiss that removed the focused control, so the composition root can land focus on
+   *  a logical target instead of letting it drop to `<body>` (WCAG 2.4.3). The cue owns only its host
+   *  subtree, so it signals focus placement across the contract rather than reaching across organisms. */
+  onDismiss?: () => void;
+}
+
 export interface AttentionCue {
-  /** Repaint from the current loop mirror; `null` (no loop / non-human-needed / null mirror) clears it. */
-  render(loop: FlowLoopView | null): void;
+  /** Repaint from `repoKey`'s loop mirror; `null` (no loop / non-human-needed / null mirror) clears it. */
+  render(loop: FlowLoopView | null, repoKey: string | null): void;
   /** Remove everything the cue created (UI-STANDARDS clean teardown). */
   dispose(): void;
 }
 
 interface Occurrence {
+  repoKey: string | null;
   status: string;
   iteration: number;
 }
 const sameOcc = (a: Occurrence | null, b: Occurrence | null): boolean =>
-  a !== null && b !== null && a.status === b.status && a.iteration === b.iteration;
+  a !== null && b !== null && a.repoKey === b.repoKey && a.status === b.status && a.iteration === b.iteration;
 
-export function createAttentionCue(host: HTMLElement): AttentionCue {
+export function createAttentionCue(host: HTMLElement, deps: AttentionCueDeps = {}): AttentionCue {
   const doc = host.ownerDocument; // build from the host's document so the cue relocates (UI §2.2.1)
   // Assertive (interrupting) live region (WCAG 4.1.3): the alert must reach AT at once. It is set on
   // the persistent host so the announcement fires when its content is populated, never on a hidden node.
@@ -80,24 +88,28 @@ export function createAttentionCue(host: HTMLElement): AttentionCue {
     dismiss.setAttribute('aria-label', 'Dismiss attention cue');
     dismiss.textContent = '✕';
     // Dismiss only hides THIS occurrence (§24.2.3 T4 non-goal: it is not a gate decision, injects
-    // nothing, changes no loop state). A distinct occurrence no longer matches and re-shows.
+    // nothing, changes no loop state). A distinct occurrence no longer matches and re-shows. Removing
+    // the focused control would drop focus to <body> (WCAG 2.4.3), so when focus was on the cue we hand
+    // it back to the composition root to land on a logical target.
     dismiss.addEventListener('click', () => {
+      const hadFocus = host.contains(doc.activeElement);
       dismissed = shown;
       hide();
+      if (hadFocus) deps.onDismiss?.();
     });
 
+    if (wasHidden) setShown(host, true); // reveal first so the role=alert mutation fires on a visible region (WCAG 4.1.3)
     host.replaceChildren(dot, msg, dismiss);
-    setShown(host, true);
     if (wasHidden) signalLayout(); // only a hidden→shown flip changes the layout; an occ swap does not
   };
 
   return {
-    render(loop) {
+    render(loop, repoKey) {
       if (!loop || loop.humanNeeded !== true) {
         hide();
         return;
       }
-      const occ: Occurrence = { status: loop.status, iteration: loop.iteration };
+      const occ: Occurrence = { repoKey, status: loop.status, iteration: loop.iteration };
       if (sameOcc(dismissed, occ)) {
         hide();
         return;

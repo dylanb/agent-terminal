@@ -43,7 +43,17 @@ wireCrossHighlight(document.getElementById('app')!);
 // activation pushes flow:revealLoop; the renderer responds by landing the user on the loop read-out
 // through the real Shell seams (exit fullscreen → Terminal view → open the docked panel).
 const attnCueHost = document.getElementById('attn-cue');
-const attentionCue = attnCueHost ? createAttentionCue(attnCueHost) : undefined;
+const attentionCue = attnCueHost
+  ? createAttentionCue(attnCueHost, {
+      // After a dismiss removes the focused control, land focus on the loop read-out toggle (same loop)
+      // or the Terminal nav button — never let it drop to <body> (WCAG 2.4.3).
+      onDismiss: () =>
+        (
+          document.querySelector<HTMLElement>('.loopstat') ??
+          document.querySelector<HTMLElement>('[data-viewbtn="1"]')
+        )?.focus(),
+    })
+  : undefined;
 window.flow.onRevealLoop(() => revealLoopReadout(shell));
 
 // Flow status strip (§22.3 / §24.2.2): the manual-step lifecycle driven through window.flow,
@@ -66,7 +76,7 @@ if (flowStripHost) {
     loopPanelId: loopPanelHost?.id, // inject the controlled panel id (instance-scoped aria-controls)
     onLoopState: (loop, title) => {
       loopPanel?.render(loop, title);
-      attentionCue?.render(loop ?? null); // human-needed → the cue shows; else it self-clears
+      attentionCue?.render(loop ?? null, repo.repoKey()); // human-needed → the cue shows; else it self-clears
       if (!loop) {
         shell.closeLoopPanel(); // the read-out is gone; never leave an empty panel docked
       } else {
