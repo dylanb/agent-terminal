@@ -1,14 +1,18 @@
-// The awaiting-human attention cue (§24.2.3 T4) — a placement-agnostic organism (UI-STANDARDS §1.2)
+// The awaiting-human attention cue (§24.2.3 T4) — a placement-agnostic organism (UI-STANDARDS §1.3)
 // pinned to the always-visible main region so a hidden "deep-work" strip can never suppress it. It
 // renders with fidelity to design/shell/loop-flow.html's `.attn-bar`: an alert dot, a message naming
 // the loop's current human-needed status, and a dismiss control. Visibility is a PURE function of the
 // mirrored loop view — shown when the view is human-needed and the user has not dismissed THIS
-// `(status, iteration)` occurrence — so it holds no dedup tracker of its own (its only state is the
-// dismissed occurrence). It announces assertively (WCAG 4.1.3) but never re-announces an unchanged
-// occurrence. Dismissing only hides it; it injects nothing and changes no loop state.
+// `(repoKey, status, iteration)` occurrence — so it holds no dedup tracker of its own (its only state
+// is the per-repo dismissed occurrence). It announces assertively (WCAG 4.1.3) but never re-announces an
+// unchanged occurrence. Dismissing only hides it; it injects nothing and changes no loop state.
+//
+// The host is a PERSISTENT role=alert live region (never [hidden]/display:none): the empty state
+// collapses purely via CSS (`.attn-bar:empty`), keeping the region in the a11y tree across hide/show so
+// injected content is reliably announced (WAI-ARIA Alert pattern, WCAG 4.1.3). The empty state has no
+// focusable descendants, so this never reintroduces the v2.44 hidden-but-focusable trap.
 
 import type { FlowLoopView } from '../../shared/ipc';
-import { setShown } from './visibility';
 
 export interface AttentionCueDeps {
   /** Called after a dismiss that removed the focused control, so the composition root can land focus on
@@ -34,16 +38,17 @@ const sameOcc = (a: Occurrence | null, b: Occurrence | null): boolean =>
 
 export function createAttentionCue(host: HTMLElement, deps: AttentionCueDeps = {}): AttentionCue {
   const doc = host.ownerDocument; // build from the host's document so the cue relocates (UI §2.2.1)
-  // Assertive (interrupting) live region (WCAG 4.1.3): the alert must reach AT at once. It is set on
-  // the persistent host so the announcement fires when its content is populated, never on a hidden node.
+  // Assertive (interrupting) live region (WCAG 4.1.3): the alert must reach AT at once. Set once on the
+  // persistent host; the region stays in the a11y tree even when empty (CSS `.attn-bar:empty` collapses
+  // it), so content injection — not a display:none→visible flip — is what triggers the announcement.
   host.setAttribute('role', 'alert');
   host.setAttribute('aria-live', 'assertive');
-  setShown(host, false);
 
-  // The ONLY state is the dismissed occurrence; visibility is otherwise a pure function of the view.
-  // `shown` tracks what is currently displayed solely to avoid rebuilding (and thus re-announcing) an
-  // unchanged occurrence (WCAG 4.1.3, the §15/§22.2 monitor-status re-announce correction).
-  let dismissed: Occurrence | null = null;
+  // The ONLY state is the dismissed occurrence, keyed per repo (§16.3) so a detour to another repo can
+  // never overwrite a repo's dismissal; visibility is otherwise a pure function of the view. `shown`
+  // tracks what is currently displayed solely to avoid rebuilding (and thus re-announcing) an unchanged
+  // occurrence (WCAG 4.1.3, the §15/§22.2 monitor-status re-announce correction).
+  const dismissed = new Map<string | null, Occurrence>();
   let shown: Occurrence | null = null;
 
   // Showing/hiding the cue resizes the main viewport (it makes room above the active view), so the
@@ -56,8 +61,7 @@ export function createAttentionCue(host: HTMLElement, deps: AttentionCueDeps = {
   const hide = (): void => {
     if (shown === null) return;
     shown = null;
-    host.replaceChildren();
-    setShown(host, false);
+    host.replaceChildren(); // empties the persistent region → CSS `.attn-bar:empty` collapses it
     signalLayout();
   };
 
@@ -93,13 +97,12 @@ export function createAttentionCue(host: HTMLElement, deps: AttentionCueDeps = {
     // it back to the composition root to land on a logical target.
     dismiss.addEventListener('click', () => {
       const hadFocus = host.contains(doc.activeElement);
-      dismissed = shown;
+      dismissed.set(occ.repoKey, occ);
       hide();
       if (hadFocus) deps.onDismiss?.();
     });
 
-    if (wasHidden) setShown(host, true); // reveal first so the role=alert mutation fires on a visible region (WCAG 4.1.3)
-    host.replaceChildren(dot, msg, dismiss);
+    host.replaceChildren(dot, msg, dismiss); // populate the persistent live region → announce (WCAG 4.1.3)
     if (wasHidden) signalLayout(); // only a hidden→shown flip changes the layout; an occ swap does not
   };
 
@@ -110,7 +113,7 @@ export function createAttentionCue(host: HTMLElement, deps: AttentionCueDeps = {
         return;
       }
       const occ: Occurrence = { repoKey, status: loop.status, iteration: loop.iteration };
-      if (sameOcc(dismissed, occ)) {
+      if (sameOcc(dismissed.get(repoKey) ?? null, occ)) {
         hide();
         return;
       }

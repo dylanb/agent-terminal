@@ -32,12 +32,12 @@ export interface LoopNotifier {
 }
 
 export function createLoopNotifier(deps: LoopNotifierDeps): LoopNotifier {
-  // The single carried distinct-entry identity (§24.2.3 T4): the last human-needed
-  // (repoKey,status,iteration) signalled. Keyed by repo because the loop is repo-scoped (§16.3) — two
-  // repos coincidentally at the same status+iteration are distinct loops, not a repeat. Held across
-  // non-human-needed views so a repeat of an already-signalled occurrence stays deduped. Null until the
-  // first entry, so the initial human-needed view at app start / flow-open is by definition distinct.
-  let lastSignalled: { repoKey: string; status: string; iteration: number } | null = null;
+  // The distinct-entry identity (§24.2.3 T4), keyed per repo because the loop is repo-scoped (§16.3): a
+  // map of repoKey → the last human-needed (status, iteration) signalled for THAT repo. Per-repo keying
+  // is what lets a same-repo return visit (cd A→B→A) stay deduped — a single global slot would be
+  // overwritten by B and treat A's return as fresh. A repo absent from the map has never been signalled,
+  // so the initial human-needed view at app start / flow-open is by definition distinct.
+  const lastSignalled = new Map<string, { status: string; iteration: number }>();
   let closeActive: (() => void) | null = null;
   let activeRepoKey: string | null = null;
 
@@ -56,15 +56,11 @@ export function createLoopNotifier(deps: LoopNotifierDeps): LoopNotifier {
         if (activeRepoKey === repoKey) clearActive();
         return;
       }
-      if (
-        lastSignalled !== null &&
-        lastSignalled.repoKey === repoKey &&
-        lastSignalled.status === loop.status &&
-        lastSignalled.iteration === loop.iteration
-      ) {
-        return; // a repeat of the already-signalled occurrence — no re-raise
+      const prev = lastSignalled.get(repoKey);
+      if (prev && prev.status === loop.status && prev.iteration === loop.iteration) {
+        return; // a repeat of this repo's already-signalled occurrence — no re-raise
       }
-      lastSignalled = { repoKey, status: loop.status, iteration: loop.iteration };
+      lastSignalled.set(repoKey, { status: loop.status, iteration: loop.iteration });
       clearActive(); // the prior occurrence's notification is now stale
       if (deps.isFocused()) return; // unfocused-only raise — the user is present, the in-app cue suffices
       closeActive = deps.notify({
