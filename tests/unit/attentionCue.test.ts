@@ -121,6 +121,32 @@ describe('attention cue (§24.2.3 T4)', () => {
     expect(shown(host)).toBe(true);
   });
 
+  it('keeps repo A dismissed after a detour to repo B at the same occurrence (per-repo dismissal store)', () => {
+    // §16.3: the dismissed store is keyed per repo. cd A→B→A must not forget A's dismissal when B's
+    // dismissal is recorded — a single global slot would overwrite A and wrongly re-show it on return.
+    const { host, render } = mount();
+    render(human(), '/repoA');
+    dismissBtn(host).click();
+    render(human(), '/repoB'); // distinct loop — shows
+    expect(shown(host)).toBe(true);
+    dismissBtn(host).click(); // dismiss B
+    render(human(), '/repoA'); // back to A at the unchanged occurrence — still dismissed
+    expect(shown(host)).toBe(false);
+  });
+
+  it('keeps the role=alert live region attached and not [hidden] when empty so injected content announces (WCAG 4.1.3)', () => {
+    // WAI-ARIA Alert pattern: the live region must already be in the a11y tree when content is injected,
+    // else AT registering regions at paint-time can drop the announcement. The empty state collapses via
+    // CSS (:empty), never display:none/[hidden], so the region persists across hide/show cycles.
+    const { host, render } = mount();
+    expect(host.getAttribute('role')).toBe('alert');
+    expect(host.hidden).toBe(false);
+    render(human());
+    render(null);
+    expect(host.childElementCount).toBe(0);
+    expect(host.hidden).toBe(false);
+  });
+
   it('moves focus off the cue on dismiss so it does not drop to <body> (WCAG 2.4.3)', () => {
     const onDismiss = vi.fn();
     const { host, render } = mount({ onDismiss });

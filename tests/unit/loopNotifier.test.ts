@@ -93,6 +93,25 @@ describe('createLoopNotifier (§24.2.3 T4)', () => {
     expect(notify).toHaveBeenCalledTimes(2);
   });
 
+  it('does not re-fire on a same-repo return visit after a detour to another repo (per-repo dedup)', () => {
+    // §16.3: dedup is keyed per repo. cd A→B→A at the unchanged occurrence must stay deduped for A — a
+    // single global slot would be overwritten by B and treat A's return as a fresh, distinct entry.
+    const { notifier, notify } = harness();
+    const occ = { status: 'awaiting-human-pr-approval', iteration: 9 };
+    notifier.observe('/repoA', loopView(occ));
+    notifier.observe('/repoB', loopView(occ));
+    notifier.observe('/repoA', loopView(occ));
+    expect(notify).toHaveBeenCalledTimes(2);
+  });
+
+  it('closes a showing repo-A notification when a distinct repo-B entry is observed (tracked closer)', () => {
+    const close = vi.fn();
+    const { notifier } = harness({ notify: () => close });
+    notifier.observe('/repoA', loopView({ status: 'awaiting-human-pr-approval', iteration: 9 }));
+    notifier.observe('/repoB', loopView({ status: 'awaiting-human-pr-approval', iteration: 9 }));
+    expect(close).toHaveBeenCalledTimes(1);
+  });
+
   it('closes the showing notification on a non-human-needed view', () => {
     const close = vi.fn();
     const { notifier } = harness({ notify: () => close });
