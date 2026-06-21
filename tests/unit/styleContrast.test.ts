@@ -108,6 +108,62 @@ function ruleBackground(escapedSelector: string): string | null {
   return b ? b[1].trim() : null;
 }
 
+// The attn-bar dismiss button (§24.2.3 T4) is a focusable control sitting on the bar's reddish wash
+// (`color-mix(in srgb, var(--attn) 10%, var(--card))`), not the plain card. Its focus ring is a non-text
+// UI indicator and must clear 3:1 on that actual background (WCAG 2.1 SC 1.4.11). The global
+// `button:focus-visible` outline (`--signal`) clears 3:1 only on `--card`; on the tinted bar it falls
+// short in light theme — so the bar scopes its own focus-ring color. This resolves the effective outline
+// color from the cascade and the composited bar background, then asserts the ratio.
+function blockBody(re: RegExp): string | null {
+  const m = css.match(re);
+  return m ? m[1] : null;
+}
+function outlineColor(body: string): string | null {
+  const oc = body.match(/(?:^|;)\s*outline-color\s*:\s*([^;]+);/);
+  if (oc) return oc[1].trim();
+  const sh = body.match(/(?:^|;)\s*outline\s*:\s*([^;]+);/);
+  const c = sh ? sh[1].match(/var\(\s*--[\w-]+\s*\)|#[0-9a-fA-F]{3,8}|rgba?\([^)]+\)/) : null;
+  return c ? c[0] : null;
+}
+/** The outline color that actually paints on the attn-bar dismiss button: a scoped
+ *  `.attn-bar …:focus-visible` rule wins over the global `button:focus-visible` outline. */
+function attnFocusOutline(): string {
+  const scoped = blockBody(/\.attn-bar (?:button|\.x):focus-visible\s*\{([^}]*)\}/);
+  if (scoped) {
+    const c = outlineColor(scoped);
+    if (c) return c;
+  }
+  const global = blockBody(/button:focus-visible,\s*a:focus-visible[^{]*\{([^}]*)\}/);
+  if (!global) throw new Error('global focus-visible rule not found');
+  const c = outlineColor(global);
+  if (!c) throw new Error('global focus-visible rule has no outline color');
+  return c;
+}
+/** Resolve `color-mix(in srgb, var(--a) N%, var(--b))` of two opaque tokens to a hex string. */
+function resolveOpaqueMix(map: Record<string, string>, expr: string): string {
+  const mix = expr.match(
+    /color-mix\(\s*in srgb\s*,\s*var\(\s*(--[\w-]+)\s*\)\s*([\d.]+)%\s*,\s*var\(\s*(--[\w-]+)\s*\)\s*\)/,
+  );
+  if (!mix) throw new Error(`not an opaque color-mix: ${expr}`);
+  const a = parseColor(resolve(map, mix[1]));
+  const b = parseColor(resolve(map, mix[3]));
+  const p = parseFloat(mix[2]) / 100;
+  return toHex([a[0] * p + b[0] * (1 - p), a[1] * p + b[1] * (1 - p), a[2] * p + b[2] * (1 - p), 1]);
+}
+
+describe('attn-bar dismiss focus ring contrast (WCAG 2.1 SC 1.4.11)', () => {
+  const barBgExpr = ruleBackground('\\.attn-bar');
+  if (!barBgExpr) throw new Error('.attn-bar background not found');
+  const outline = attnFocusOutline();
+  for (const [themeName, map] of [['light', light], ['dark', dark]] as const) {
+    it(`${themeName}: dismiss focus ring clears 3:1 on the attn-bar background`, () => {
+      const ref = outline.match(/^var\(\s*(--[\w-]+)\s*\)$/);
+      const ringHex = ref ? resolve(map, ref[1]) : outline;
+      expect(contrast(ringHex, resolveOpaqueMix(map, barBgExpr))).toBeGreaterThanOrEqual(3);
+    });
+  }
+});
+
 describe('expanded loop read-out contrast (WCAG 1.4.3 AA)', () => {
   const readoutBgExpr = ruleBackground('\\.flowstrip \\.loopstat\\[aria-expanded="true"\\]');
   for (const [themeName, map] of [['light', light], ['dark', dark]] as const) {
