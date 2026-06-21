@@ -88,7 +88,6 @@ function header(doc: Document, text: string): HTMLElement {
 function loopReadout(doc: Document, loop: FlowLoopView): HTMLElement {
   const stat = doc.createElement('span');
   stat.className = 'stat loopstat';
-  stat.id = 'loopstat';
   stat.setAttribute('role', 'button');
   stat.tabIndex = 0;
   stat.setAttribute('aria-expanded', 'false');
@@ -170,7 +169,7 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
   function render(state: FlowStateView): void {
     // A background push repaints the whole rail; if the keyboard user was on the Loop read-out, carry
     // their focus across the rebuild rather than dropping it to <body> (WCAG 2.4.3).
-    const keepLoopFocus = doc.activeElement instanceof HTMLElement && doc.activeElement.id === 'loopstat' && host.contains(doc.activeElement);
+    const keepLoopFocus = doc.activeElement instanceof HTMLElement && doc.activeElement.classList.contains('loopstat') && host.contains(doc.activeElement);
     host.replaceChildren();
 
     if (state.status === 'error') {
@@ -219,7 +218,7 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
     // drive a loop). null clears + closes the panel on a non-loop step.
     if (state.loop) {
       host.append(loopReadout(doc, state.loop));
-      if (keepLoopFocus) host.querySelector<HTMLElement>('#loopstat')?.focus();
+      if (keepLoopFocus) host.querySelector<HTMLElement>('.loopstat')?.focus();
     }
     deps.onLoopState?.(state.loop ?? null, state.stepName);
 

@@ -316,8 +316,8 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
       onStateChanged: noopSub,
     };
     createFlowStrip(host, deps).onRepoChanged('/repo');
-    await vi.waitFor(() => expect(host.querySelector('#loopstat')).not.toBeNull());
-    const readout = host.querySelector<HTMLElement>('#loopstat')!;
+    await vi.waitFor(() => expect(host.querySelector('.loopstat')).not.toBeNull());
+    const readout = host.querySelector<HTMLElement>('.loopstat')!;
     expect(readout.getAttribute('role')).toBe('button'); // a keyboard-reachable open control
     expect(readout.getAttribute('aria-controls')).toBe('loop-panel');
     const pill = readout.querySelector<HTMLElement>('.spill')!;
@@ -350,8 +350,8 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     const toneFor = async (status: string): Promise<string> => {
       host.replaceChildren();
       createFlowStrip(host, make(status)).onRepoChanged('/repo');
-      await vi.waitFor(() => expect(host.querySelector('#loopstat .spill')).not.toBeNull());
-      const cl = host.querySelector<HTMLElement>('#loopstat .spill')!.classList;
+      await vi.waitFor(() => expect(host.querySelector('.loopstat .spill')).not.toBeNull());
+      const cl = host.querySelector<HTMLElement>('.loopstat .spill')!.classList;
       return cl.contains('await') ? 'await' : cl.contains('settle') ? 'settle' : 'work';
     };
     expect(await toneFor('awaiting-human-pr-approval')).toBe('await');
@@ -364,7 +364,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     const deps = fakeFlow('in_progress');
     createFlowStrip(host, deps).onRepoChanged('/repo');
     await vi.waitFor(() => expect(control()!.textContent).toBe('Advance'));
-    expect(host.querySelector('#loopstat')).toBeNull();
+    expect(host.querySelector('.loopstat')).toBeNull();
   });
 
   it('hands the loop mirror to the composition root via onLoopState, for the docked panel (§24.2.3 T2)', async () => {
@@ -618,14 +618,14 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
       }),
     };
     createFlowStrip(host, deps).onRepoChanged('/repo');
-    await vi.waitFor(() => expect(host.querySelector('#loopstat')).not.toBeNull());
-    const oldReadout = host.querySelector<HTMLElement>('#loopstat')!;
+    await vi.waitFor(() => expect(host.querySelector('.loopstat')).not.toBeNull());
+    const oldReadout = host.querySelector<HTMLElement>('.loopstat')!;
     oldReadout.focus();
     expect(document.activeElement).toBe(oldReadout);
 
-    fire(); // main pushes flow:onStateChanged → the strip repaints the whole rail, rebuilding #loopstat
-    await vi.waitFor(() => expect(host.querySelector('#loopstat')).not.toBe(oldReadout)); // repaint landed
-    expect(document.activeElement).toBe(host.querySelector('#loopstat')); // focus rode the repaint
+    fire(); // main pushes flow:onStateChanged → the strip repaints the whole rail, rebuilding the read-out
+    await vi.waitFor(() => expect(host.querySelector('.loopstat')).not.toBe(oldReadout)); // repaint landed
+    expect(document.activeElement).toBe(host.querySelector('.loopstat')); // focus rode the repaint
   });
 
   it('signals onPrompt(null) on a transition with no input prompt, closing the modal (§24.2.3 T3)', async () => {

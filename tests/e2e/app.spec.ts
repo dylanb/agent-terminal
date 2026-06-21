@@ -1176,7 +1176,7 @@ function seedLoopFlowRepo(prefix: string): { dir: string; stateFile: string } {
   return { dir, stateFile: join(loopDir, 'state.yaml') };
 }
 
-const loopReadout = () => page.locator('#flow-strip #loopstat'); // compact rail read-out (opens the panel)
+const loopReadout = () => page.locator('#flow-strip .loopstat'); // compact rail read-out (opens the panel)
 const loopPanel = () => page.locator('#loop-panel'); // the docked expanded state mirror
 
 // Seed a flow repo whose manual step declares entry actions (§18.6): an optional `skill` and an

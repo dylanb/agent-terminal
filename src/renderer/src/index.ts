@@ -58,9 +58,9 @@ if (flowStripHost) {
       if (!loop) {
         shell.closeLoopPanel(); // the read-out is gone; never leave an empty panel docked
       } else {
-        // The strip just re-rendered a fresh #loopstat (default aria-expanded=false); if the panel
+        // The strip just re-rendered a fresh .loopstat (default aria-expanded=false); if the panel
         // is open, re-sync the read-out so it doesn't read collapsed while the column is docked.
-        document.getElementById('loopstat')?.setAttribute('aria-expanded', String(shell.isLoopPanelOpen()));
+        document.querySelector('.loopstat')?.setAttribute('aria-expanded', String(shell.isLoopPanelOpen()));
       }
     },
     onPrompt: (prompt, stepName, submit) => inputModal?.render(prompt, stepName, submit),

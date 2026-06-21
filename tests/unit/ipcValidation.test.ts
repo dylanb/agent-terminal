@@ -142,6 +142,11 @@ describe('IPC payload validation (§6 — renderer-supplied input is untrusted)'
     expect(isValidFlowRequest({ sessionId: sid, repoKey: '/repo/../../etc' })).toBe(false);
     expect(isValidFlowRequest({})).toBe(false);
     expect(isValidFlowRequest(null)).toBe(false);
+    // An array carrying the required props must not pass the trust boundary (arrays are not records).
+    const arr: any = [];
+    arr.sessionId = sid;
+    arr.repoKey = '/repo';
+    expect(isValidFlowRequest(arr)).toBe(false);
   });
 
   it('accepts a flow:provideInput with a string→string values map, rejecting bad shapes (§24.2.3 T3)', () => {
@@ -153,6 +158,18 @@ describe('IPC payload validation (§6 — renderer-supplied input is untrusted)'
     expect(isValidFlowProvideInput({ sessionId: sid, repoKey: 'relative', values: {} })).toBe(false); // unsafe key
     expect(isValidFlowProvideInput({ sessionId: 'other', repoKey: '/repo', values: {} })).toBe(false);
     expect(isValidFlowProvideInput(null)).toBe(false);
+    // An array carrying the required props must not pass the trust boundary (arrays are not records).
+    const arr: any = [];
+    arr.sessionId = sid;
+    arr.repoKey = '/repo';
+    arr.values = {};
+    expect(isValidFlowProvideInput(arr)).toBe(false);
+  });
+
+  it('rejects array-shaped payloads at the trust boundary (arrays are not records)', () => {
+    const a: any = [];
+    a.sessionId = sid;
+    expect(isValidCommandsRequest(a)).toBe(false);
   });
 
   it('accepts a todoTemplate:list with a safe repoKey and rejects an unsafe key / wrong session', () => {
