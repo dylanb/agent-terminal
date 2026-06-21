@@ -103,6 +103,9 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible { outline:2px so
 .attn-bar .msg b { font-weight:600; }
 .attn-bar .msg .it { font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:11px; color:var(--attn-text); }
 .attn-bar .x { margin-left:auto; color:var(--dim); width:24px; height:24px; }
+/* The global focus ring (--signal) clears 3:1 only on --card; on the bar's tinted wash it falls below
+   in light theme, so scope the ring to --attn-text, which clears 3:1 on the wash in both themes (WCAG 2.1 SC 1.4.11). */
+.attn-bar button:focus-visible { outline-color:var(--attn-text); }
 #artifacts { height:100%; }
 .artsplit { display:grid; grid-template-columns:var(--tree-w,248px) 7px 1fr; height:100%; }
 .artsplit .tree { padding:20px 16px; overflow:auto; }
