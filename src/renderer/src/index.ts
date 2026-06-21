@@ -12,7 +12,7 @@ import { renderMarkdownInto, renderCodeInto } from './viewerRender';
 import { doInject } from './paneActions';
 import { createRepoContext } from './repoContext';
 
-const term = createTerminalPane(document.getElementById('terminal')!);
+const { terminal: term } = createTerminalPane(document.getElementById('terminal')!);
 // One shared OSC-7 repo provider (§16.3): seeds the repo key once and feeds the terminal
 // selection capture, the todo list, and the artifact viewer — so no consumer re-derives it.
 const repo = createRepoContext(window.monitor);
