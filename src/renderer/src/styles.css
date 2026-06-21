@@ -10,6 +10,9 @@
   --attn:#E5484D; --pass:#1F9D6B;
   /* destructive-action text: darker than --attn so it clears 4.5:1 on the light panel bg (WCAG 1.4.3). */
   --danger:#B11F26;
+  /* accessible small-text foregrounds: the bright accents above are kept for borders/dots/washes,
+     but status text on --card needs ≥4.5:1, so these darker tones carry it (WCAG 1.4.3). */
+  --signal-text:#006699; --pass-text:#157F54; --attn-text:#C02A2F;
   --bg:var(--board); --card:var(--leaf); --hair:var(--rule); --hair2:var(--rule-soft);
   --text:var(--ink); --dim:var(--muted);
   --term-bg:#0E141B; --term-text:#D5DEE8; --term-dim:#6F7E8E;
@@ -23,6 +26,8 @@
   --text:#E8EEF4; --dim:#8FA0B2; --signal:#22C7FF; --signal-wash:rgba(34,199,255,.14);
   --attn:#FF6168; --pass:#3DDC97;
   --danger:#FF8A8E; /* light red clears 4.5:1 on the dark panel bg */
+  /* on the dark panel the bright accents already clear 4.5:1, so the text tokens reuse them. */
+  --signal-text:var(--signal); --pass-text:var(--pass); --attn-text:var(--attn);
   --term-bg:#0A0F15; --term-text:#D5DEE8; --term-dim:#65727F;
   --reveal:#FFB454; --reveal-wash:rgba(255,180,84,.20);
 }
@@ -44,12 +49,22 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible { outline:2px so
 
 /* ---- the frame: slim rail · full-bleed main · docked (no-scrim) drawer ---- */
 /* No column transition: the dock snaps so the terminal refits to the final width on
-   the shell's resize broadcast, never to a mid-animation width (§7.1). */
-.app { display:grid; grid-template-columns:200px 1fr 0; height:100vh; }
-.app.drawer-open { grid-template-columns:200px 1fr 384px; }
+   the shell's resize broadcast, never to a mid-animation width (§7.1). Columns are
+   rail | loop-panel | main | drawer; the two dock widths compose via independent vars
+   so the loop panel (§24.2.3) and the quick-send drawer can be open at once. */
+.app { display:grid; grid-template-columns:200px var(--loop-w,0) 1fr var(--drawer-w,0); height:100vh; }
+.app.loop-open { --loop-w:372px; }
+.app.drawer-open { --drawer-w:384px; }
+/* Explicit column placement so a docked panel hidden via display:none (§22.2) collapses its own
+   track without reflowing the others into the wrong columns (the loop panel is NOT the last child). */
+.app > .rail { grid-column:1; }
+.app > .loop-panel { grid-column:2; }
+.app > .main { grid-column:3; }
+.app > .drawer { grid-column:4; }
 /* Full-screen viewer (§20.2): all app chrome hidden, the main pane fills the window. */
 .app.viewer-fullscreen { grid-template-columns:1fr; }
-.app.viewer-fullscreen > .rail, .app.viewer-fullscreen > .drawer { display:none; }
+.app.viewer-fullscreen > .main { grid-column:1; }
+.app.viewer-fullscreen > .rail, .app.viewer-fullscreen > .drawer, .app.viewer-fullscreen > .loop-panel { display:none; }
 
 .rail { background:var(--card); border-right:1px solid var(--hair); display:flex; flex-direction:column; padding:16px 14px; overflow:auto; }
 .rail .mark { font-weight:600; font-size:15px; margin-bottom:20px; white-space:nowrap; }
@@ -121,7 +136,7 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible { outline:2px so
 /* ---- buttons (tokens) ---- */
 .pill { display:inline-flex; align-items:center; justify-content:center; flex:none; height:34px; font-size:12.5px; font-weight:600; padding:0 15px; border-radius:999px; border:1px solid var(--hair); background:transparent; color:var(--text); cursor:pointer; white-space:nowrap; }
 .pill:hover { border-color:var(--dim); }
-.pill.signal { border-color:var(--signal); color:var(--signal); }
+.pill.signal { border-color:var(--signal); color:var(--signal-text); }
 .pill.send { background:var(--attn); color:#fff; border-color:transparent; }
 .pill.app { background:var(--pass); color:#fff; border-color:transparent; }
 .pill.sm { height:30px; font-size:11.5px; padding:0 12px; }
@@ -131,25 +146,64 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible { outline:2px so
 .iconbtn:hover { color:var(--text); border-color:var(--dim); }
 .linkbtn { font-size:11.5px; font-weight:600; background:none; border:none; color:var(--signal); cursor:pointer; padding:0; }
 
-/* ---- flow rail (vertical) ---- */
-.flow { display:flex; flex-direction:column; align-items:flex-start; }
-.flow .stn { display:flex; align-items:center; gap:8px; padding:9px 0; }
+/* ---- flow status strip (§22.3 / §24.2.2): the §24.1 station rail + manual-step control.
+   The rail vocabulary is carried verbatim from design/shell/tokens.css for mockup fidelity. */
+.flow { display:flex; align-items:center; }
+.flow .stn { display:flex; align-items:center; gap:8px; }
 .flow .stn .o { width:11px; height:11px; border-radius:50%; border:2px solid var(--dim); background:var(--card); flex:none; }
 .flow .stn.done .o { border-color:var(--signal); background:var(--signal); }
 .flow .stn.active .o { border-color:var(--signal); background:var(--card); box-shadow:0 0 0 4px var(--signal-wash); }
 .flow .stn .nm { font-size:12.5px; font-weight:500; }
 .flow .stn.active .nm { color:var(--signal); }
 .flow .stn.todo .nm, .flow .stn.todo .o { opacity:.5; }
-.flow .seg { width:2px; height:18px; margin:0 0 0 4px; background:var(--signal); opacity:.5; }
-.flow .seg.future { background:repeating-linear-gradient(180deg,var(--dim) 0 4px,transparent 4px 9px); }
+.flow .seg { height:2px; width:30px; margin:0 11px; background:var(--signal); opacity:.5; }
+.flow .seg.future { background:repeating-linear-gradient(90deg,var(--dim) 0 4px,transparent 4px 9px); opacity:.5; }
+.flow.vert { flex-direction:column; align-items:flex-start; gap:0; }
+.flow.vert .stn { padding:9px 0; }
+.flow.vert .seg { width:2px; height:18px; margin:0 0 0 4px; }
+/* §24.2.2 S5 — live derived status (n/m done · activity); compact, muted (no mockup counterpart). */
+.flowstrip .flow-derived { margin-top:8px; font-size:11px; letter-spacing:.04em; color:var(--dim); text-transform:lowercase; }
+.flowstrip .flow-control { margin-top:8px; }
+/* Undo a manual advance (§24.2.2) — secondary to Restart: same outline pill, muted label. */
+.flowstrip .flow-undo { margin-top:8px; color:var(--dim); }
+.flowstrip .flow-error { font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:12px; color:var(--danger); }
+/* §19.3 busy refusal / one-shot transient notice — caution, not a hard load error (no mockup). */
+.flowstrip .flow-notice { font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:11.5px; color:var(--dim); margin-top:8px; line-height:1.35; }
+/* §24.2.3 T2 — the read-only agent-loop mirror (design/shell/loop-flow.html). The rail shows a
+   COMPACT Loop read-out (a 3-tone status pill + iteration) that opens the docked panel; the full
+   v4 vocabulary lives in that panel. */
+.flowstrip .loopstat { margin-top:9px; cursor:pointer; border:1px solid transparent; border-radius:7px; padding:6px 7px; margin-left:-7px; margin-right:-7px; display:flex; flex-direction:column; gap:6px; }
+.flowstrip .loopstat:hover { background:var(--hair2); }
+/* Open-state cue is a signal border, NOT a background wash: a wash would stack under the spill pill's
+   own wash and drop its text below 4.5:1 on the doubled layer (WCAG 1.4.3, see styleContrast). */
+.flowstrip .loopstat[aria-expanded="true"] { border-color:var(--signal); }
+.flowstrip .loopstat .k { text-transform:uppercase; letter-spacing:.14em; font-size:9px; color:var(--dim); }
+.flowstrip .loopstat .v { display:flex; align-items:center; gap:6px; }
+.flowstrip .loopstat .loop-iter { font-size:11px; color:var(--dim); }
+.flowstrip .loopstat .car { font-size:8px; color:var(--dim); margin-left:auto; }
 
-/* ---- mocked rail status (gate/loop fixture lines beside the real strip) ---- */
-.railstat { display:flex; flex-direction:column; gap:9px; }
-.railstat .stat { display:flex; flex-direction:column; gap:3px; }
-.railstat .stat .k { text-transform:uppercase; letter-spacing:.13em; font-size:9px; color:var(--dim); }
-.railstat .stat .v { font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:12px; }
-.railstat .stat .v.act { color:var(--attn); }
-.railstat .stat .v.sig { color:var(--signal); }
+/* generic status pill — an arbitrary per-LoopDef status maps onto one of three tones, never an
+   enumerated set: await=act(red), work=signal(cyan), settle=pass(green). Shared by rail + panel. */
+.spill { display:inline-flex; align-items:center; gap:5px; font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:11px; font-weight:500; padding:2px 9px; border-radius:999px; border:1px solid var(--hair); color:var(--text); white-space:nowrap; }
+.spill .pdot { width:6px; height:6px; border-radius:50%; background:currentColor; flex:none; }
+.spill.await { color:var(--attn-text); border-color:color-mix(in srgb,var(--attn) 45%,var(--hair)); background:color-mix(in srgb,var(--attn) 8%,transparent); }
+.spill.work { color:var(--signal-text); border-color:color-mix(in srgb,var(--signal) 45%,var(--hair)); background:var(--signal-wash); }
+.spill.settle { color:var(--pass-text); border-color:color-mix(in srgb,var(--pass) 45%,var(--hair)); }
+
+/* (§24.2.3 T2) FULL-HEIGHT docked loop panel — the expanded state mirror; "makes room" via the grid
+   column, internally scrollable so it never truncates. The gate decision section is T5/T6. */
+.loop-panel { background:var(--card); border-right:1px solid var(--hair); overflow:hidden; display:flex; flex-direction:column; min-width:0; }
+.loop-panel .lhead { display:flex; align-items:center; gap:9px; padding:15px 15px 13px; border-bottom:1px solid var(--hair); flex:none; }
+.loop-panel .lhead .loopmark { width:17px; height:17px; flex:none; color:var(--signal); }
+.loop-panel .lhead h3 { font-weight:500; font-size:17px; margin:0; }
+.loop-panel .lhead .x { margin-left:auto; }
+.loop-panel .lbody { padding:16px; overflow:auto; flex:1; }
+.loop-panel .seg-h { text-transform:uppercase; letter-spacing:.14em; font-size:9px; color:var(--dim); margin:0 0 9px; }
+.loop-panel .ldl .lrow { display:flex; align-items:baseline; font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:12px; padding:3px 0; }
+.loop-panel .ldl .lrow .lk { color:var(--dim); }
+.loop-panel .ldl .lrow .ld { flex:1; border-bottom:1px dotted var(--hair); margin:0 8px 4px; }
+.loop-panel .ldl .lrow .lv.sig { color:var(--signal-text); }
+.loop-panel .ldl .lrow .lv.bad { color:var(--attn-text); }
 
 /* ---- view 1: terminal ---- */
 #terminal-view { display:flex; flex-direction:column; height:100%; background:var(--term-bg); }
@@ -217,7 +271,7 @@ button:hover { border-color:var(--dim); }
 .marked { background:var(--signal-wash); border-bottom:2px solid var(--signal); padding:1px 3px; border-radius:2px; }
 .loop .lrow { display:flex; align-items:baseline; font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:12.5px; padding:1px 0; }
 .loop .lrow .lk { color:var(--dim); } .loop .lrow .ld { flex:1; border-bottom:1px dotted var(--hair); margin:0 8px 4px; }
-.loop .lrow .lv.bad { color:var(--attn); }
+.loop .lrow .lv.bad { color:var(--attn-text); }
 .mock-todos .todo { display:flex; gap:11px; align-items:flex-start; padding:12px 4px; border-bottom:1px solid var(--hair2); }
 .mock-todos .todo .chk { width:15px; height:15px; border:1.5px solid var(--dim); border-radius:4px; margin-top:2px; flex:none; }
 .mock-todos .todo.done .chk { background:var(--pass); border-color:var(--pass); }
@@ -271,9 +325,11 @@ button:hover { border-color:var(--dim); }
 #todo-list { padding:0; }
 .todos { display:flex; flex-direction:column; }
 .todos:empty::after { content:"No todos — add one from a capture."; display:block; padding:14px 16px; color:var(--dim); font-size:12px; }
-.todos .todo { display:flex; gap:11px; align-items:flex-start; padding:12px 16px; border-bottom:1px solid var(--hair2); }
+.todos .todo { display:flex; flex-wrap:wrap; gap:11px; align-items:flex-start; padding:12px 16px; border-bottom:1px solid var(--hair2); }
 .todos .todo .chk { width:16px; height:16px; border:1.5px solid var(--dim); border-radius:50%; margin-top:2px; flex:none; background:none; cursor:pointer; padding:0; }
 .todos .todo .chk:hover { border-color:var(--signal); }
+/* in_progress (§16.3): a centred dot — distinct from empty (active) and filled (done). */
+.todos .todo .chk[aria-checked="mixed"] { border-color:var(--signal); background:radial-gradient(var(--signal) 0 38%, transparent 42%); }
 .todos .todo.done .chk { background:var(--pass); border-color:var(--pass); }
 .todos .todo .body { flex:1; min-width:0; }
 .todos .todo .tx { font-size:13.5px; line-height:1.4; white-space:pre-wrap; word-break:break-word; }
@@ -285,6 +341,18 @@ button:hover { border-color:var(--dim); }
 .todo-add { display:flex; gap:8px; align-items:flex-start; padding:12px 16px; border-bottom:1px solid var(--hair); }
 .todo-add .todo-new { flex:1; min-width:0; resize:none; font:inherit; font-size:13px; line-height:1.4; color:var(--text); background:var(--bg); border:1px solid var(--hair); border-radius:6px; padding:7px 9px; }
 .todo-add .todo-new:focus-visible { outline:2px solid var(--signal); outline-offset:-1px; }
+/* On-demand template control (§4.1) — a collapsed disclosure that reveals a named picker, so the
+   resting composer is just the manual-add field (anti-clutter). Relocated from the flow strip. */
+.todo-tmpl { padding:8px 16px 12px; border-bottom:1px solid var(--hair); }
+.todo-tmpl .tmpl-toggle { display:inline-flex; align-items:center; gap:6px; font-size:11.5px; color:var(--dim); background:none; border:none; padding:2px 0; cursor:pointer; }
+.todo-tmpl .tmpl-toggle:hover { color:var(--text); }
+.todo-tmpl .tmpl-toggle[aria-expanded="true"] { color:var(--signal); }
+.todo-tmpl .tmpl-toggle .car { font-size:9px; transition:transform .15s ease; }
+.todo-tmpl.open .tmpl-toggle .car { transform:rotate(180deg); }
+.todo-tmpl .tmpl-picker { display:flex; gap:8px; align-items:center; margin-top:8px; }
+.todo-tmpl .tmpl-pick { flex:1; min-width:0; font-size:12px; padding:5px 7px; background:var(--card); color:var(--text); border:1px solid var(--hair); border-radius:6px; }
+.todo-tmpl .tmpl-pick:focus-visible { outline:2px solid var(--signal); outline-offset:-1px; }
+@media (prefers-reduced-motion: reduce) { .todo-tmpl .tmpl-toggle .car { transition:none; } }
 .todos .todo .todo-actions { display:flex; gap:6px; align-items:center; align-self:center; flex:none; }
 .todos .todo .todo-actions .iconbtn { width:26px; height:26px; font-size:12px; display:inline-flex; align-items:center; justify-content:center; }
 .todos .todo .todo-actions .iconbtn:disabled { opacity:.3; cursor:default; }
@@ -295,6 +363,24 @@ button:hover { border-color:var(--dim); }
 /* Confirm-delete: outlined danger button (danger text + border on the panel bg), not
    white-on-attn which falls below 4.5:1 at this text size — WCAG 1.4.3. */
 .todos .todo .todo-delete-confirm { background:transparent; color:var(--danger); border:1px solid var(--danger); }
+/* Stacked below the cluster (full row) so the confirm never widens the button column (§16.4). */
+.todos .todo .todo-delete-bar { flex-basis:100%; display:flex; justify-content:flex-end; align-items:center; gap:8px; }
 
 .dhint { border-top:1px solid var(--hair); padding:9px 16px; font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:10px; color:var(--dim); display:flex; gap:14px; }
 .kbd { font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:9.5px; border:1px solid var(--hair); border-bottom-width:2px; border-radius:4px; padding:1px 5px; }
+
+/* §24.2.3 T3 — the typed-input modal (design/shell/loop-flow.html surface 5): the one deliberate
+   blocking surface. createFlowInputModal renders .flow-scrim + .flow-modal into #flow-modal-host. */
+.flow-scrim { position:fixed; inset:0; background:rgba(8,12,18,.42); backdrop-filter:blur(2px); z-index:40; }
+.flow-modal { position:fixed; inset:0; display:flex; align-items:center; justify-content:center; z-index:60; }
+.flow-modal .card { width:440px; max-width:92vw; background:var(--card); border:1px solid var(--hair); border-radius:10px; box-shadow:0 30px 80px rgba(8,16,28,.34); padding:22px; }
+.flow-modal h3 { font-family:"Fraunces",serif; font-weight:500; font-size:19px; margin:0 0 4px; }
+.flow-modal .ph { font-size:12.5px; color:var(--dim); margin:0 0 16px; }
+.flow-modal .field { margin-bottom:14px; }
+.flow-modal .field .flab { display:flex; align-items:center; gap:8px; margin-bottom:6px; }
+.flow-modal .field .flab .nm { font-size:12px; font-weight:600; }
+.flow-modal .field .flab .ty { font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:10px; color:var(--signal-text); border:1px solid var(--signal); border-radius:999px; padding:1px 7px; }
+.flow-modal .field input { width:100%; box-sizing:border-box; font:inherit; font-size:13.5px; color:var(--text); background:var(--bg); border:1px solid var(--hair); border-radius:7px; padding:9px 11px; }
+.flow-modal .field input:focus-visible { outline:2px solid var(--signal); outline-offset:-1px; }
+.flow-modal .field .help { font-size:11px; color:var(--dim); margin-top:7px; line-height:1.4; }
+.flow-modal .mfoot { display:flex; justify-content:flex-end; gap:9px; margin-top:20px; }

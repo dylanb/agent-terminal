@@ -4,9 +4,11 @@ import os from 'node:os';
 import {
   CH,
   SESSION_ID,
+  type AgentState,
   type ChannelPayloads,
   type CommandCaptureResult,
   type CommandSummary,
+  type FlowStateView,
   type SendChannel,
 } from '../shared/ipc';
 import { createInjector } from './inject';
@@ -24,11 +26,15 @@ import {
   isValidCommandsRequest,
   isValidDismiss,
   isValidDismissAll,
+  isValidFlowRequest,
+  isValidFlowProvideInput,
   isValidInject,
   isValidInput,
   isValidLearnChrome,
   isValidResize,
   isValidSetSettings,
+  isValidTemplateInstantiate,
+  isValidTemplateList,
   isValidTodoAdd,
   isValidTodoDelete,
   isValidTodoList,
@@ -47,6 +53,11 @@ import { createCwdTracker } from './cwdTracker';
 import { currentRepoInfo } from './repoKey';
 import { createScanner } from './scanner';
 import { captureLastReport } from './captureLast';
+import { createFlowManager, deriveFlowView, loadFlowDefinitionLocalFirst } from './flow';
+import { createFlowEntryActions } from './flowEntryActions';
+import { parseAgentLoopState, watchAgentLoopState } from './agentLoopBridge';
+import { parseLoopDef } from './loopDef';
+import { listTodoTemplates, loadTodoTemplateFile, parseTodoTemplate } from './todoTemplate';
 import { discover, readArtifact, emptyTree } from './artifactTree';
 import { createChromeProfileStore } from './chromeProfile';
 import { learnMarkers } from './chrome';
@@ -81,17 +92,38 @@ async function createWindow(): Promise<void> {
   const todoStore = createTodoStore({ maxDoneTodos: config.maxDoneTodos });
   // Learned chrome markers (§15.x) — seeded defaults ∪ the user's "mark as chrome" adds.
   const chromeProfile = createChromeProfileStore(path.join(app.getPath('userData'), 'chrome-profile.json'));
+  // A malformed flow request (e.g. before the renderer knows its repo key) fails closed to an
+  // inert error view rather than throwing across IPC.
+  const flowRequestError = (): FlowStateView => ({
+    stepName: '',
+    steps: [],
+    position: 0,
+    total: 0,
+    status: 'error',
+    error: 'invalid flow request',
+  });
 
   const send = <C extends SendChannel>(channel: C, payload: ChannelPayloads[C]): void => {
     if (!win.isDestroyed()) win.webContents.send(channel, payload);
   };
+
+  // S5 (§24.2.2): the flow's derived in-progress status (n/m done + agent activity) is PUSHED to
+  // the strip — main fires flow:onStateChanged on any flow-relevant change (a todo mutated, the
+  // agent flipped active/quiet) and the strip re-pulls flow:state. `agentActivity` holds the latest
+  // §8.3 activity so flow:state can fold it into the derived view without re-deriving it.
+  let agentActivity: AgentState = 'quiet';
+  const pushFlowChanged = (): void => send(CH.flowOnStateChanged, { sessionId: SESSION_ID });
 
   // Hold early PTY output until the renderer has registered its pty:data listener (§8.1).
   const outputGate = createOutputGate((data) => send(CH.ptyData, { sessionId: SESSION_ID, data }));
 
   const shadow = createShadowModel({
     quietMs: config.quietMs,
-    onStatus: (status) => send(CH.monitorUpdate, { sessionId: SESSION_ID, ...status }),
+    onStatus: (status) => {
+      agentActivity = status.agentState;
+      send(CH.monitorUpdate, { sessionId: SESSION_ID, ...status });
+      pushFlowChanged(); // the active→quiet flip moves the strip's derived activity (§24.2.2 S5)
+    },
   });
 
   // Command-output capture (§15.5) and the agent-semantic scanner (§15.2/§15.3),
@@ -166,6 +198,69 @@ async function createWindow(): Promise<void> {
     isBracketedPaste: () => shadow.isBracketedPaste(),
     onInject: () => suppressor.noteInjection(),
   });
+
+  // Flow lifecycle (§24.2.2) — repo-keyed so it follows the terminal's cwd, mirroring the todo
+  // scope (§16.3): each repoKey (from the renderer's OSC-7 repo context) lazily owns its machine.
+  // The DEFINITION (flow.yaml, §18.1) resolves local-first then global ($HOME); the STATE
+  // (flow-state.yaml, §19.1) is always repo-local, never global. A missing/invalid definition is
+  // an inert error state, not a crash.
+  // §18.6/§19.3: on entry to a manual step (Start/Restart) the only automatic action is injecting
+  // the step's `skill` — refused over a busy shell (a live OSC-133 command span = not at a ready
+  // prompt, §19.3). Todo templates instantiate ON DEMAND via the todoTemplate:* picker (§6/§4.1),
+  // not on entry. Built here, after the injector + command tracker exist.
+  const flowEntryActions = createFlowEntryActions({
+    isShellBusy: () => tracker.summaries().some((s) => s.running),
+    inject: (text) => inject(text, { submit: false }),
+  });
+  // Templates resolve co-located with the flow.yaml (§18.6); this is the same global ($HOME)
+  // fallback dir the definition uses, so on-demand instantiation finds a global flow's templates.
+  const flowGlobalDir = spawnCwd(process.env, os.homedir());
+  const flow = createFlowManager({
+    globalDir: flowGlobalDir,
+    onEnterStep: (step, inputs) => flowEntryActions(step, inputs),
+    // T2 (§24.2.3): a loop step mirrors its repo's agent-loop state.yaml, read-only and live.
+    readLoopState: (repoKey) => parseAgentLoopState(repoKey),
+    // …and resolves its bound LoopDef (§18.1) so readiness + the gate options are gate-driven: the
+    // §19.2 advance warning fires until the loop reaches a TERMINAL gate, not just past awaiting-human.
+    readLoopDef: (repoKey, name) => parseLoopDef(repoKey, name),
+  });
+
+  // T2 (§24.2.3): once a repo surfaces a loop-state mirror, watch its state.yaml so a hand-edit
+  // (the human driving agent-loop) re-pushes the strip over the EXISTING flow:onStateChanged seam
+  // (§24.2.2 S5) — no new plumbing. One watcher per repo, established lazily on first sight of a
+  // loop view; pushFlowChanged makes the strip re-pull, so duplicate file events are harmless.
+  const loopWatchers = new Map<string, () => void>();
+  const trackLoop = (repoKey: string, view: FlowStateView): FlowStateView => {
+    if (view.loop && !loopWatchers.has(repoKey)) {
+      loopWatchers.set(repoKey, watchAgentLoopState(repoKey, pushFlowChanged));
+    }
+    return view;
+  };
+  // todoTemplate:instantiate (§6/§4.1) — on demand, instantiate a named template (co-located with
+  // the flow.yaml under todo-templates/, §18.6) into the visited repo's todo list. Resolves the
+  // flow dir local-first-then-global so a global flow's templates work in any repo; a missing
+  // flow/template is a no-op returning the unchanged list.
+  const instantiateTemplate = (repoKey: string, ref: string): ReturnType<typeof todoStore.list> => {
+    const load = loadFlowDefinitionLocalFirst(repoKey, flowGlobalDir);
+    if (!load.ok) return todoStore.list(repoKey);
+    const md = loadTodoTemplateFile(path.join(load.flowDir, 'todo-templates'), ref);
+    if (md === null) return todoStore.list(repoKey);
+    // Silent dedup (operator decision): re-firing a template skips items already outstanding
+    // (active or in_progress), so a repeat click never piles up duplicates.
+    const active = new Set(todoStore.list(repoKey).filter((t) => t.status !== 'done').map((t) => t.text));
+    let list = todoStore.list(repoKey);
+    for (const text of parseTodoTemplate(md)) {
+      if (active.has(text)) continue;
+      list = todoStore.add(repoKey, text);
+      active.add(text);
+    }
+    return list;
+  };
+
+  // S5 (§24.2.2): fold the live derived status into a flow view from the repo's todos + the latest
+  // §8.3 activity. A no-op on any non-in_progress view (deriveFlowView passes those through).
+  const withDerived = (repoKey: string, view: FlowStateView): FlowStateView =>
+    deriveFlowView(view, todoStore.list(repoKey), agentActivity);
 
   // Flow A (§4): every output byte goes to the renderer AND the shadow tee.
   ptyProcess.onData((data) => {
@@ -248,18 +343,89 @@ async function createWindow(): Promise<void> {
         isValidCaptureLast(m) ? captureLastReport(SESSION_ID, store, scanner) : [],
       // Todo CRUD (§16.4) — each returns the fresh repo list; fail-closed to [] on
       // a malformed payload so a bad message can never mutate another repo's list.
+      // A todo mutation that changes the n/m completion (add/setStatus/delete) pushes
+      // flow:onStateChanged so the strip's derived count moves without a manual refresh (§24.2.2 S5).
       [CH.todoList]: (_e, m) => (isValidTodoList(m) ? todoStore.list(m.repoKey) : []),
-      [CH.todoAdd]: (_e, m) => (isValidTodoAdd(m) ? todoStore.add(m.repoKey, m.text, m.source) : []),
+      [CH.todoAdd]: (_e, m) => {
+        if (!isValidTodoAdd(m)) return [];
+        const list = todoStore.add(m.repoKey, m.text, m.source);
+        pushFlowChanged();
+        return list;
+      },
       [CH.todoUpdate]: (_e, m) => (isValidTodoUpdate(m) ? todoStore.update(m.repoKey, m.id, m.text) : []),
       [CH.todoReorder]: (_e, m) => (isValidTodoReorder(m) ? todoStore.reorder(m.repoKey, m.orderedIds) : []),
-      [CH.todoSetStatus]: (_e, m) =>
-        isValidTodoSetStatus(m) ? todoStore.setStatus(m.repoKey, m.id, m.status) : [],
-      [CH.todoDelete]: (_e, m) => (isValidTodoDelete(m) ? todoStore.delete(m.repoKey, m.id) : []),
+      [CH.todoSetStatus]: (_e, m) => {
+        if (!isValidTodoSetStatus(m)) return [];
+        const list = todoStore.setStatus(m.repoKey, m.id, m.status);
+        pushFlowChanged();
+        return list;
+      },
+      [CH.todoDelete]: (_e, m) => {
+        if (!isValidTodoDelete(m)) return [];
+        const list = todoStore.delete(m.repoKey, m.id);
+        pushFlowChanged();
+        return list;
+      },
       // Artifact viewer (§20.1/§20.2): discover/read against the session's live cwd (OSC 7),
       // falling back to the shell spawn directory ($HOME / os.homedir()) before the first prompt
       // (see viewerCwd). Read is path-escape-guarded.
       [CH.viewerTree]: (_e, m) => (isValidViewerTree(m) ? discover(viewerCwd(), m.scope) : emptyTree(viewerCwd())),
       [CH.viewerRead]: (_e, m) => (isValidViewerRead(m) ? readArtifact(viewerCwd(), m.relPath) : null),
+      // Flow lifecycle (§24.2.2): every call carries the terminal's current repoKey (§16.3), so
+      // the flow follows the cwd. start/advance/restart mutate only on a valid payload, persist
+      // to that repo's flow-state.yaml (§19.1), and return the resulting state so the strip
+      // re-renders from it. An illegal transition throws (machine invariant) → the invoke rejects
+      // and the strip re-pulls. A malformed payload fails closed to a benign error view.
+      // S5 (§24.2.2): an in_progress view is augmented with its DERIVED live status (n/m done +
+      // §8.3 activity + gate readiness) folded in from the repo's todos and the latest activity.
+      [CH.flowState]: (_e, m) =>
+        isValidFlowRequest(m) ? trackLoop(m.repoKey, withDerived(m.repoKey, flow.state(m.repoKey))) : flowRequestError(),
+      [CH.flowStart]: (_e, m) =>
+        isValidFlowRequest(m) ? trackLoop(m.repoKey, withDerived(m.repoKey, flow.start(m.repoKey))) : flowRequestError(),
+      // Advancing while NOT ready is a human override (§19.2): it warns via a one-shot notice but
+      // still completes. Readiness is read from the pre-advance state — for a loop step from the
+      // mirrored loop (it still needs a human while `awaiting-*`), else from the todo gate (S5).
+      [CH.flowAdvance]: (_e, m) => {
+        if (!isValidFlowRequest(m)) return flowRequestError();
+        const pre = withDerived(m.repoKey, flow.state(m.repoKey));
+        const ready = pre.loop ? pre.loop.ready : (pre.derived?.ready ?? true);
+        const view = flow.advance(m.repoKey);
+        if (ready) return trackLoop(m.repoKey, view);
+        const notice = pre.loop
+          ? 'Advanced while the loop still needs you.'
+          : 'Advanced with todos still outstanding.';
+        return trackLoop(m.repoKey, { ...view, notice });
+      },
+      [CH.flowRestart]: (_e, m) =>
+        isValidFlowRequest(m) ? trackLoop(m.repoKey, withDerived(m.repoKey, flow.restart(m.repoKey))) : flowRequestError(),
+      // Undo a manual advance: revert done → in_progress (no entry actions re-run). withDerived
+      // restores the in-progress derived line.
+      [CH.flowUndo]: (_e, m) =>
+        isValidFlowRequest(m) ? trackLoop(m.repoKey, withDerived(m.repoKey, flow.undo(m.repoKey))) : flowRequestError(),
+      // Provide a step's typed input (§18.4 / §24.2.3 T3): persist it + re-run the entry bootstrap
+      // (`agent-loop pickup <input>`, refused over a busy shell). The returned view's notice carries
+      // any §19.3 refusal; withDerived/trackLoop fold in the live derived + loop mirror like the rest.
+      [CH.flowProvideInput]: (_e, m) =>
+        isValidFlowProvideInput(m)
+          ? trackLoop(m.repoKey, withDerived(m.repoKey, flow.provideInput(m.repoKey, m.values)))
+          : flowRequestError(),
+      // On-demand template picker (§6/§4.1), surfaced in the todo widget. `list` is GATED to a
+      // step that is in_progress (so the picker shows only while the step is active, the operator
+      // decision) and carries the bound template as the default; `instantiate` adds the chosen one.
+      [CH.todoTemplateList]: (_e, m) => {
+        if (!isValidTemplateList(m)) return { templates: [] };
+        if (flow.state(m.repoKey).status !== 'in_progress') return { templates: [] };
+        const load = loadFlowDefinitionLocalFirst(m.repoKey, flowGlobalDir);
+        const templates = load.ok ? listTodoTemplates(path.join(load.flowDir, 'todo-templates')) : [];
+        const defaultRef = flow.state(m.repoKey).templateRef;
+        return defaultRef ? { templates, defaultRef } : { templates };
+      },
+      [CH.todoTemplateInstantiate]: (_e, m) => {
+        if (!isValidTemplateInstantiate(m)) return [];
+        const list = instantiateTemplate(m.repoKey, m.ref);
+        pushFlowChanged(); // instantiation can add todos → the strip's n/m total moves (§24.2.2 S5)
+        return list;
+      },
     },
   );
 
@@ -271,6 +437,8 @@ async function createWindow(): Promise<void> {
     cwdTracker.dispose();
     tracker.dispose();
     shadow.dispose();
+    for (const stop of loopWatchers.values()) stop();
+    loopWatchers.clear();
   });
 
   const target = resolveRendererTarget({

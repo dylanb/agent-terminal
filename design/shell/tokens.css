@@ -45,8 +45,7 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible { outline:2px so
 .flow .stn { display:flex; align-items:center; gap:8px; }
 .flow .stn .o { width:11px; height:11px; border-radius:50%; border:2px solid var(--dim); background:var(--card); flex:none; }
 .flow .stn.done .o { border-color:var(--signal); background:var(--signal); }
-.flow .stn.active .o { border-color:var(--signal); background:var(--card); box-shadow:0 0 0 4px var(--signal-wash); animation:beat 1.8s ease-in-out infinite; }
-@keyframes beat { 0%,100%{box-shadow:0 0 0 3px var(--signal-wash)} 50%{box-shadow:0 0 0 7px var(--signal-wash)} }
+.flow .stn.active .o { border-color:var(--signal); background:var(--card); box-shadow:0 0 0 4px var(--signal-wash); }
 .flow .stn .nm { font-size:12.5px; font-weight:500; }
 .flow .stn.active .nm { color:var(--signal); }
 .flow .stn.todo .nm, .flow .stn.todo .o { opacity:.5; }
@@ -148,4 +147,4 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible { outline:2px so
 .hair { border:1px solid var(--hair); }
 .cardbox { background:var(--card); border:1px solid var(--hair); border-radius:var(--r); }
 
-@media (prefers-reduced-motion:reduce){ .flow .stn.active .o,.trace i,.term .cur{animation:none} }
+@media (prefers-reduced-motion:reduce){ .trace i,.term .cur{animation:none} }

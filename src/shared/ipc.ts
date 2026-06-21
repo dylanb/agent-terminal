@@ -37,6 +37,15 @@ export const CH = {
   todoDelete: 'todo:delete',
   viewerTree: 'viewer:tree',
   viewerRead: 'viewer:read',
+  flowState: 'flow:state',
+  flowStart: 'flow:start',
+  flowAdvance: 'flow:advance',
+  flowRestart: 'flow:restart',
+  flowUndo: 'flow:undo',
+  flowProvideInput: 'flow:provideInput',
+  flowOnStateChanged: 'flow:onStateChanged',
+  todoTemplateList: 'todoTemplate:list',
+  todoTemplateInstantiate: 'todoTemplate:instantiate',
 } as const;
 
 /** Action-window tabs (§16.1). */
@@ -68,7 +77,10 @@ export interface UiSetSettingsMsg {
 
 // ---- Todo lists (§16.3 / §16.4) ----
 
-export type TodoStatus = 'active' | 'done';
+// Tri-state lifecycle (§16.3): `active` (not started) → `in_progress` (Send marks it; renders a
+// mixed checkbox) → `done`. `in_progress` is "outstanding" like `active` — it counts and keeps
+// its row actions; only `done` is complete.
+export type TodoStatus = 'active' | 'in_progress' | 'done';
 
 /** Where a todo came from (§16.3): manual entry, a selection capture, or a semantic event. */
 export type TodoSourceType = 'manual' | 'selection' | 'report' | 'finding' | 'capture' | 'command-output';
@@ -329,6 +341,7 @@ export interface ChannelPayloads {
   'monitor:update': MonitorUpdateMsg;
   'monitor:commandsChanged': CommandsChangedMsg;
   'cwd:changed': CwdChangedMsg;
+  'flow:onStateChanged': FlowStateChangedMsg;
 }
 
 export type SendChannel = keyof ChannelPayloads;
@@ -384,11 +397,149 @@ export interface ViewerReadMsg {
   relPath: string;
 }
 
+// ---- Flow lifecycle (§18.2 / §24.2.2) ----
+
+/** A manual step's lifecycle: not started, being worked, or completed (terminal) — §18.2.
+ *  `error` is not a step state but a load failure: the `flow.yaml` (§18.1) was absent,
+ *  malformed, or schema-invalid, so there is no step to drive (§24.2.2 S2). */
+export type FlowStatus = 'not_started' | 'in_progress' | 'done' | 'error';
+
+/** The live, derived status of an in-progress step (§22.3 / §24.2.2 S5): a pure function of the
+ *  flow state, the repo's todo list, and the §8.3 agent activity — recomputed and pushed to the
+ *  strip on every todo/activity change. `ready` is the gate-readiness signal: every todo is done.
+ *  Present only while `status === 'in_progress'` (no step is being worked otherwise). */
+export interface FlowDerived {
+  activity: AgentState;
+  todosDone: number;
+  todosTotal: number;
+  ready: boolean;
+}
+
+/** The read-only mirror of a loop step's agent-loop v4 state.yaml (§24.2.3 T2): the live engine
+ *  vocabulary the app surfaces. `status` is the per-LoopDef state-machine string (unbounded — the
+ *  strip maps it onto a generic 3-tone pill, never an enum); `pr`/`branch` are null before the loop
+ *  has a PR. `ready` is the §19.2 advance gate — gate-driven when the bound LoopDef resolves (true
+ *  only at a TERMINAL gate, the loop's exit), else the documented awaiting-human-* family. */
+export interface FlowLoopView {
+  status: string;
+  iteration: number;
+  pr: number | null;
+  branch: string | null;
+  ready: boolean;
+  /** The current status's gate `human_options` (§18.1/§19.4) — the gate UI's variable option set
+   *  (`approve`/`request-changes`/`impasse`). Present only at an awaiting gate with a resolvable
+   *  LoopDef; absent mid-work, at a terminal gate, or when the LoopDef does not resolve. */
+  gateOptions?: string[];
+}
+
+/** One typed input the renderer's modal must collect (§18.4 / §24.2.3 T3): the field `name` and its
+ *  catalog `type` (`github-ticket`/`pr`/`files`/`free-text`), which labels and shapes the picker. */
+export interface FlowInputSpec {
+  name: string;
+  type: string;
+}
+
+/** A step-entry prompt for unsatisfied required inputs (§18.4 / §24.2.3 T3): carried on a transition
+ *  view when entering a step whose `bootstrap` needs an input that isn't resolved yet. `inputs` are
+ *  the fields to collect; `bootstrap` names the command they feed (e.g. `agent-loop pickup`) for the
+ *  modal's helper text. The renderer opens its modal, collects values, and calls `flow:provideInput`. */
+export interface FlowPrompt {
+  inputs: FlowInputSpec[];
+  bootstrap: string;
+}
+
+/** The flow's live view (§22.3 status strip): the current step's name, its 1-based
+ *  `position` within `total` steps, and its `status`. S2 sources the step from
+ *  `<worktree>/.agent-terminal/flow.yaml` (§18.1); on a load failure `status` is
+ *  `error` and `error` carries the human-readable reason (position/total 0). */
+export interface FlowStateView {
+  stepName: string;
+  /** Every step's name, in flow order (§24.2.3 T1) — the §22.3 rail renders one station per entry;
+   *  `stepName` is `steps[position - 1]`. Empty on an `error` view (no steps to show). */
+  steps: string[];
+  position: number;
+  total: number;
+  status: FlowStatus;
+  error?: string;
+  /** A one-shot transient notice carried only on a `start`/`restart` response — e.g. the §19.3
+   *  running-process refusal when a skill couldn't be injected over a busy shell (§24.2.2 S4).
+   *  Never part of `state()`: the strip shows it once, then a re-pull clears it. */
+  notice?: string;
+  /** The active step's bound `todo_template:` ref (§18.6), when it declares one — the default the
+   *  on-demand todo-template picker offers while the step is active (§6/§4.1). */
+  templateRef?: string;
+  /** Live derived status (§22.3 / §24.2.2 S5): agent activity + todo completion + gate readiness.
+   *  Present only on an `in_progress` view (computed by main from the repo's todos + §8.3 activity). */
+  derived?: FlowDerived;
+  /** Read-only agent-loop state.yaml mirror (§24.2.3 T2): present only on a `loop` step with a
+   *  parseable v4 state.yaml. Parallel to `derived` (NOT nested) — loop state outlives the manual
+   *  in_progress window that gates `derived`. */
+  loop?: FlowLoopView;
+  /** A one-shot step-entry input prompt (§18.4 / §24.2.3 T3): present on a `start`/`restart`/`advance`
+   *  response when the entered step's `bootstrap` needs an unsatisfied required input. The renderer
+   *  opens its modal and answers via `flow:provideInput`. Like `notice`, never part of `state()`. */
+  prompt?: FlowPrompt;
+}
+
+/** flow:onStateChanged broadcast (§24.2.2 S5): main signals that a flow-relevant input changed
+ *  (a todo mutated, the agent flipped active/quiet); the strip re-pulls `flow:state`. Carries no
+ *  payload beyond the session — the strip re-pulls for its own current repoKey (§16.3). */
+export interface FlowStateChangedMsg {
+  sessionId: SessionId;
+}
+
+/** flow:state/start/advance/restart request. `repoKey` scopes the flow to the terminal's current
+ *  repo (§16.3), threaded like the todo channels so the flow follows the cwd (§6). */
+export interface FlowRequestMsg {
+  sessionId: SessionId;
+  repoKey: string;
+}
+
+/** flow:provideInput request (§18.4 / §24.2.3 T3): the renderer's answer to a step-entry `prompt`.
+ *  `values` maps each prompted input name to the user's typed value; main persists them to flow-state
+ *  and re-runs the entry bootstrap (`agent-loop pickup <input>`) now that the input is resolved. */
+export interface FlowProvideInputMsg {
+  sessionId: SessionId;
+  repoKey: string;
+  values: Record<string, string>;
+}
+
+/** A discoverable todo template (§4.1/§21.2): `ref` is the instantiate id (filename without
+ *  `.md`); `name` is the user-facing label (its `# H1`, else a humanized filename). */
+export interface TodoTemplateRef {
+  ref: string;
+  name: string;
+}
+
+/** todoTemplate:list response (§4.1/§6): the templates offered to the on-demand picker, plus the
+ *  active step's bound `todo_template:` as the picker's default selection. Main gates this to a
+ *  step that is `in_progress` (empty otherwise), so the todo widget needs no flow-state awareness. */
+export interface TodoTemplateList {
+  templates: TodoTemplateRef[];
+  defaultRef?: string;
+}
+
+/** todoTemplate:list request (§6): the templates co-located with the repo's flow.yaml (§18.6).
+ *  `repoKey` resolves the flow dir local-first-then-global (deviates from the v2.27 global-only
+ *  sketch, since templates are now co-located). */
+export interface TodoTemplateListMsg {
+  sessionId: SessionId;
+  repoKey: string;
+}
+
+/** todoTemplate:instantiate request (§6/§21.2): instantiate the named template `ref` (resolved
+ *  co-located with the flow.yaml, §18.6) into `repoKey`'s todo list, returning the fresh list. */
+export interface TodoTemplateInstantiateMsg {
+  sessionId: SessionId;
+  repoKey: string;
+  ref: string;
+}
+
 // ---- Preload-exposed API surfaces (§6) ----
 
 export interface TermApi {
-  onData(cb: (data: string) => void): void;
-  onExit(cb: (msg: PtyExitMsg) => void): void;
+  onData(cb: (data: string) => void): () => void;
+  onExit(cb: (msg: PtyExitMsg) => void): () => void;
   input(data: string): void;
   resize(size: { cols: number; rows: number }): void;
 }
@@ -438,6 +589,14 @@ export interface MonitorApi {
   todoReorder(repoKey: string, orderedIds: string[]): Promise<TodoItem[]>;
   todoSetStatus(repoKey: string, id: string, status: TodoStatus): Promise<TodoItem[]>;
   todoDelete(repoKey: string, id: string): Promise<TodoItem[]>;
+  // On-demand todo templates (§4.1/§6) — the picker lives in the todo widget (the monitor pane
+  // talks only to window.monitor.*, §9.1), so these are monitor methods, not flow methods.
+  /** Templates offered to the picker for the repo's active step (§4.1); empty when no step is
+   *  active or the library is empty. `defaultRef` is the step's bound template. */
+  listTemplates(repoKey: string): Promise<TodoTemplateList>;
+  /** Instantiate the named template into the repo's todo list (§21.2), skipping items already
+   *  present (silent dedup); resolves to the fresh list. */
+  instantiateTemplate(repoKey: string, ref: string): Promise<TodoItem[]>;
 }
 
 /** Artifact viewer (§20): real, context-connected discovery + file read. Talks only to
@@ -449,10 +608,33 @@ export interface ViewerApi {
   read(relPath: string): Promise<ViewerFile | null>;
 }
 
+/** Flow lifecycle (§24.2.2): drive the manual step's status strip + control. Each call
+ *  resolves to the resulting state so the strip re-renders from the response. */
+export interface FlowApi {
+  state(repoKey: string): Promise<FlowStateView>;
+  /** not_started → in_progress; rejects if not currently not_started. */
+  start(repoKey: string): Promise<FlowStateView>;
+  /** in_progress → done; rejects if not currently in_progress. */
+  advance(repoKey: string): Promise<FlowStateView>;
+  /** done → in_progress; resets and re-runs the first step. Rejects if not currently done. */
+  restart(repoKey: string): Promise<FlowStateView>;
+  /** done → in_progress; reverts a manual advance WITHOUT re-running the step's entry actions
+   *  (unlike restart). Rejects if not currently done. */
+  undo(repoKey: string): Promise<FlowStateView>;
+  /** Answer a step-entry input `prompt` (§18.4 / §24.2.3 T3): persist the typed `values` to
+   *  flow-state and re-run the entry bootstrap (`agent-loop pickup <input>`), returning the new
+   *  view (its `notice` carries any §19.3 busy refusal). */
+  provideInput(repoKey: string, values: Record<string, string>): Promise<FlowStateView>;
+  /** Subscribe to main's flow:onStateChanged push (§24.2.2 S5): `cb` fires when a flow-relevant
+   *  input changed (todo/activity), prompting a `state()` re-pull. Returns an unsubscribe. */
+  onStateChanged(cb: () => void): () => void;
+}
+
 declare global {
   interface Window {
     term: TermApi;
     monitor: MonitorApi;
     viewer: ViewerApi;
+    flow: FlowApi;
   }
 }

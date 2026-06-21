@@ -12,6 +12,10 @@ import {
   type CommandsRequestMsg,
   type DismissAllMsg,
   type DismissMsg,
+  type FlowRequestMsg,
+  type FlowProvideInputMsg,
+  type TodoTemplateListMsg,
+  type TodoTemplateInstantiateMsg,
   type MonitorCaptureMsg,
   type MonitorLearnChromeMsg,
   type PtyInputMsg,
@@ -38,7 +42,7 @@ const TODO_SOURCE_TYPES: readonly TodoSourceType[] = [
 ];
 
 function isRecord(m: unknown): m is Record<string, unknown> {
-  return typeof m === 'object' && m !== null;
+  return typeof m === 'object' && m !== null && !Array.isArray(m);
 }
 
 function isLiveSession(m: Record<string, unknown>): boolean {
@@ -107,6 +111,43 @@ export function isValidClearCommands(m: unknown): m is ClearCommandsMsg {
   return isRecord(m) && isLiveSession(m);
 }
 
+/** Flow lifecycle (§24.2.2). `repoKey` scopes the flow to the terminal's current repo and becomes
+ *  a filesystem path in flowState, so it gets the same safe-path guard as the todo channels. */
+export function isValidFlowRequest(m: unknown): m is FlowRequestMsg {
+  return isRecord(m) && isLiveSession(m) && isSafeRepoKey(m.repoKey);
+}
+
+/** flow:provideInput (§18.4 / §24.2.3 T3): a flow request plus a `values` record whose every value
+ *  is a string (the typed input answers persisted to flow-state). */
+export function isValidFlowProvideInput(m: unknown): m is FlowProvideInputMsg {
+  return (
+    isRecord(m) &&
+    isLiveSession(m) &&
+    isSafeRepoKey(m.repoKey) &&
+    isRecord(m.values) &&
+    !Array.isArray(m.values) &&
+    Object.values(m.values).every((v) => typeof v === 'string')
+  );
+}
+
+/** todoTemplate:list (§6): a live session + a safe repoKey (the flow dir is resolved from it). */
+export function isValidTemplateList(m: unknown): m is TodoTemplateListMsg {
+  return isRecord(m) && isLiveSession(m) && isSafeRepoKey(m.repoKey);
+}
+
+/** todoTemplate:instantiate (§6/§21.2): a safe repoKey + a non-empty `ref` with no traversal
+ *  (the loader escape-guards too, but reject `..` at the boundary as defense-in-depth). */
+export function isValidTemplateInstantiate(m: unknown): m is TodoTemplateInstantiateMsg {
+  return (
+    isRecord(m) &&
+    isLiveSession(m) &&
+    isSafeRepoKey(m.repoKey) &&
+    typeof m.ref === 'string' &&
+    m.ref.length > 0 &&
+    !m.ref.split(/[/\\]/).includes('..')
+  );
+}
+
 // ---- todo:* validators (§16.3 / §16.4). repoKey is threaded on every mutation. ----
 
 /** A repoKey is a main-derived absolute repo/cwd path; it becomes a filesystem write path
@@ -144,7 +185,11 @@ export function isValidTodoReorder(m: unknown): m is TodoReorderMsg {
 }
 
 export function isValidTodoSetStatus(m: unknown): m is TodoSetStatusMsg {
-  return isTodoBase(m) && typeof m.id === 'string' && (m.status === 'active' || m.status === 'done');
+  return (
+    isTodoBase(m) &&
+    typeof m.id === 'string' &&
+    (m.status === 'active' || m.status === 'in_progress' || m.status === 'done')
+  );
 }
 
 export function isValidTodoDelete(m: unknown): m is TodoDeleteMsg {

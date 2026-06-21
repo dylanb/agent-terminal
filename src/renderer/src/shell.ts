@@ -8,6 +8,7 @@
 
 import type { Theme } from '../../shared/ipc';
 import { setShown } from './visibility';
+import { announceViewFocus, FOCUS_TERMINAL_EVENT } from './paneActions';
 
 export type ViewId = '1' | '2' | '3';
 
@@ -20,6 +21,12 @@ export interface Shell {
   closeDrawer(): void;
   toggleDrawer(): void;
   isDrawerOpen(): boolean;
+  /** The full-height docked loop+gate panel (§24.2.3): a grid column that "makes room" like the
+   *  drawer, opened from the rail Loop read-out and dismissed by its close button or Escape. */
+  openLoopPanel(): void;
+  closeLoopPanel(): void;
+  toggleLoopPanel(): void;
+  isLoopPanelOpen(): boolean;
   setTheme(t: Theme): void;
   getTheme(): Theme;
   /** Full-screen the viewer by hiding all app chrome (§20.2); Escape and a view change exit. */
@@ -54,6 +61,10 @@ export function createShell(root: HTMLElement, deps: ShellDeps = {}): Shell {
       if (on) b.setAttribute('aria-current', 'page');
       else b.removeAttribute('aria-current');
     });
+    // The pane is now visible; hand focus to its organism so the keyboard lands in the view the
+    // user just switched to (the terminal, so they can keep typing). The shell never focuses a
+    // sibling's controls itself — it announces, the organism focuses (§22.4).
+    announceViewFocus(v);
   }
 
   // Drawer-tab selection is owned by the action-window coordinator (monitor.ts, §16.1),
@@ -86,6 +97,30 @@ export function createShell(root: HTMLElement, deps: ShellDeps = {}): Shell {
     else openDrawer();
   }
 
+  // The loop+gate panel docks as another layout column (§24.2.3), between the rail and main.
+  // Like the drawer it is display:none when closed (so its close button leaves the tab order),
+  // and its read-out (.loopstat) carries the aria-expanded state for assistive tech.
+  const loopPanelEl = root.querySelector<HTMLElement>('.loop-panel');
+  const isLoopPanelOpen = (): boolean => root.classList.contains('loop-open');
+  const syncLoopReadout = (on: boolean): void =>
+    root.querySelector('.loopstat')?.setAttribute('aria-expanded', String(on));
+  function openLoopPanel(): void {
+    root.classList.add('loop-open');
+    if (loopPanelEl) setShown(loopPanelEl, true);
+    syncLoopReadout(true);
+    signalLayoutChange();
+  }
+  function closeLoopPanel(): void {
+    root.classList.remove('loop-open');
+    if (loopPanelEl) setShown(loopPanelEl, false);
+    syncLoopReadout(false);
+    signalLayoutChange();
+  }
+  function toggleLoopPanel(): void {
+    if (isLoopPanelOpen()) closeLoopPanel();
+    else openLoopPanel();
+  }
+
   function applyTheme(t: Theme): void {
     theme = t;
     themeTarget.setAttribute('data-theme', t);
@@ -114,6 +149,8 @@ export function createShell(root: HTMLElement, deps: ShellDeps = {}): Shell {
     if (vb && root.contains(vb)) return setView(vb.getAttribute('data-viewbtn') as ViewId);
     if (target.closest('#qs')) return toggleDrawer();
     if (target.closest('#dclose')) return closeDrawer();
+    if (target.closest('.loopstat')) return toggleLoopPanel();
+    if (target.closest('[data-loop-close]')) return closeLoopPanel();
     if (target.closest('#tg')) return setTheme(theme === 'dark' ? 'light' : 'dark');
   };
 
@@ -125,6 +162,23 @@ export function createShell(root: HTMLElement, deps: ShellDeps = {}): Shell {
       e.preventDefault();
       e.stopPropagation();
       setViewerFullscreen(false);
+      return;
+    }
+    if (e.key === 'Escape' && isLoopPanelOpen()) {
+      // Defer to an open dialog (e.g. the typed-input modal): Escape should dismiss the topmost
+      // surface, not the panel behind it (WCAG 2.4.3). The modal's own handler closes it.
+      if ((e.target as Element | null)?.closest?.('[role="dialog"]')) return;
+      e.preventDefault();
+      e.stopPropagation();
+      closeLoopPanel();
+      return;
+    }
+    // The rail Loop read-out is a role=button span (§24.2.3); make it operable by keyboard like a
+    // native button — Enter/Space toggle the panel (WCAG 2.1.1). Space is prevented to avoid scroll.
+    if ((e.key === 'Enter' || e.key === ' ') && (e.target as Element | null)?.closest?.('.loopstat')) {
+      e.preventDefault();
+      e.stopPropagation();
+      toggleLoopPanel();
       return;
     }
     if (!(e.metaKey || e.ctrlKey)) return;
@@ -140,12 +194,21 @@ export function createShell(root: HTMLElement, deps: ShellDeps = {}): Shell {
     }
   };
 
+  // A Send (todo/capture/artifact) asks for terminal focus on the decoupled bus (§16.2). From
+  // another view that focus would hit a hidden xterm, so the shell reveals the terminal view;
+  // setView then announces it and the terminal organism focuses (§22.4). Owning the reveal here
+  // keeps the focus path single — the terminal no longer listens for this event itself.
+  const onFocusTerminal = (): void => setView('1');
+  const win = doc.defaultView;
+  win?.addEventListener(FOCUS_TERMINAL_EVENT, onFocusTerminal);
+
   root.addEventListener('click', onClick);
   doc.addEventListener('keydown', onKeyDown, true);
 
   applyTheme(theme);
   setView(view); // sync the pane/nav classes + aria-current to the markup-inferred view on mount
   if (drawerEl) setShown(drawerEl, isDrawerOpen()); // match the drawer's inert state to its start class
+  if (loopPanelEl) setShown(loopPanelEl, isLoopPanelOpen()); // same for the loop panel (starts closed)
   // A failing IPC / main-process restart must not become an unhandled rejection; on failure
   // keep the default theme.
   if (deps.getTheme)
@@ -161,6 +224,10 @@ export function createShell(root: HTMLElement, deps: ShellDeps = {}): Shell {
     closeDrawer,
     toggleDrawer,
     isDrawerOpen,
+    openLoopPanel,
+    closeLoopPanel,
+    toggleLoopPanel,
+    isLoopPanelOpen,
     setTheme,
     getTheme: () => theme,
     setViewerFullscreen,
@@ -168,6 +235,7 @@ export function createShell(root: HTMLElement, deps: ShellDeps = {}): Shell {
     dispose() {
       root.removeEventListener('click', onClick);
       doc.removeEventListener('keydown', onKeyDown, true);
+      win?.removeEventListener(FOCUS_TERMINAL_EVENT, onFocusTerminal);
     },
   };
 }

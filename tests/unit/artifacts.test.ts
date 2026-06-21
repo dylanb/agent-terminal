@@ -1,7 +1,9 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createArtifacts, selectionWithin } from '../../src/renderer/src/artifacts';
+import { FOCUS_VIEW_EVENT } from '../../src/renderer/src/paneActions';
 import type { ArtifactTree, ViewerFile } from '../../src/shared/ipc';
+import { assertRendersFromHostDocument } from './relocatable';
 
 // §20.1/§20.2 artifact viewer organism: a hierarchical file tree fed by real discovery
 // (loadTree) and a viewer that reads file content (loadFile) through injected seams, with a
@@ -112,6 +114,33 @@ function fakeCodeView(top: number, bottom: number) {
 }
 
 beforeEach(() => { document.body.replaceChildren(); });
+
+describe('focus on view activation (§22.4)', () => {
+  const announce = (view: string) => window.dispatchEvent(new CustomEvent(FOCUS_VIEW_EVENT, { detail: { view } }));
+
+  it('focuses the first tree item when the Artifacts view is announced (keyboard nav is immediate)', async () => {
+    const v = mount();
+    await v.api.refresh();
+    announce('2');
+    expect(document.activeElement).toBe(v.treeitems()[0]);
+  });
+
+  it('ignores announcements for other views', async () => {
+    const v = mount();
+    await v.api.refresh();
+    announce('1');
+    expect(document.activeElement).not.toBe(v.treeitems()[0]);
+  });
+
+  it('treats a FOCUS_VIEW_EVENT with no detail as a safe no-op (does not throw)', async () => {
+    const v = mount();
+    await v.api.refresh();
+    const focusedBefore = document.activeElement;
+    // CustomEvent with no init → detail is null; the handler must not deref it and throw.
+    expect(() => window.dispatchEvent(new CustomEvent(FOCUS_VIEW_EVENT))).not.toThrow();
+    expect(document.activeElement).toBe(focusedBefore); // no unintended tree focus
+  });
+});
 
 describe('artifact viewer (§20.1/§20.2 — real discovery)', () => {
   it('renders the discovered tree hierarchically: a directory node containing its files', async () => {
@@ -685,6 +714,21 @@ describe('artifact viewer (§20.1/§20.2 — real discovery)', () => {
     const v = mount(TREE_CURATED, { loadFile: vi.fn(async () => { throw new Error('ipc down'); }) });
     await v.api.refresh(); // opens the first file → loadFile rejects
     expect(v.host.textContent).toContain('Cannot display this file');
+  });
+
+  it('builds from host.ownerDocument, not the global document (UI-STANDARDS §3.3)', async () => {
+    await assertRendersFromHostDocument(async (host) => {
+      const api = createArtifacts(host, {
+        loadTree: async (scope) => (scope === 'repo' ? TREE_REPO : TREE_CURATED),
+        loadFile: async (relPath) => fileFor(relPath),
+        renderMarkdown: (body, into) => { into.textContent = body; },
+        renderCode: (body, _lang, into) => { into.textContent = body; },
+        send: vi.fn(),
+        addToTodo: vi.fn(),
+        readSelection: () => '',
+      });
+      await api.refresh(); // drives a tree render under the host
+    });
   });
 
   it('refresh() leaves the previous tree in place when loadTree rejects', async () => {

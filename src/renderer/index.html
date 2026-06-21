@@ -10,6 +10,15 @@
     <link rel="stylesheet" href="./src/styles.css" />
   </head>
   <body>
+    <!-- bespoke loop-step mark (§24.2.3): a node orbiting a centre point (iteration), reused by the
+         docked loop panel header. Same-document symbol → allowed under the strict CSP. -->
+    <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+      <symbol id="loop-orbit" viewBox="0 0 16 16">
+        <ellipse cx="8" cy="8" rx="6.2" ry="3" transform="rotate(-28 8 8)" fill="none" stroke="currentColor" stroke-width="1.4" />
+        <circle cx="8" cy="8" r="1.7" fill="currentColor" />
+        <circle cx="13.5" cy="5.1" r="1.6" fill="currentColor" />
+      </symbol>
+    </svg>
     <div id="app" class="app">
       <!-- SLIM LEFT CHROME (§24.1C) -->
       <aside class="rail" aria-label="Navigation and status">
@@ -22,17 +31,13 @@
             <button class="nav" data-viewbtn="3">Todos <span class="k">⌘3</span></button>
           </div>
         </nav>
-        <!-- mocked flow timeline (§19.2) — rendered from the fixture flow-state -->
-        <div class="blk">
-          <div class="sect" id="flow-label">Flow</div>
-          <div class="flow" id="flow-rail"></div>
-        </div>
+        <!-- real flow status strip (§22.3) — the §24.1 station rail + manual-step control.
+             The strip owns the whole block (header carries the step position), §24.2.2. -->
+        <div class="blk flowstrip" id="flow-strip" role="status" aria-live="polite"></div>
         <div class="blk" style="border-bottom:none">
           <div class="sect">Status</div>
           <!-- real status strip (§22.3) renders its chips here -->
           <div id="monitor-status" role="status" aria-live="polite"></div>
-          <!-- mocked gate/loop lines (§19.3) — rendered from the fixture flow-state -->
-          <div class="railstat" id="rail-flowstatus" style="margin-top:10px"></div>
         </div>
         <div class="foot">
           <button class="pill signal" id="qs">⌘K Quick-send</button>
@@ -42,6 +47,11 @@
           </div>
         </div>
       </aside>
+
+      <!-- FULL-HEIGHT DOCKED loop panel (§24.2.3 T2): the expanded read-only state mirror the rail
+           Loop read-out opens. "Makes room" via the grid column (no scrim), internally scrollable.
+           Filled by createLoopPanel; the gate decision section is T5/T6. -->
+      <aside class="loop-panel" id="loop-panel" aria-label="Loop and gate" hidden></aside>
 
       <!-- FULL-BLEED MAIN -->
       <main class="main">
@@ -106,6 +116,10 @@
         <div class="dhint"><span>double-click a finding → reveal in terminal</span><span><span class="kbd">⌘K</span> toggle</span></div>
       </aside>
     </div>
+    <!-- Typed-input modal host (§24.2.3 T3): the createFlowInputModal organism renders the one
+         deliberate blocking surface here, overlaying the app via fixed positioning when a step entry
+         needs a required input. Empty until a prompt opens it. -->
+    <div id="flow-modal-host"></div>
     <script type="module" src="./src/index.ts"></script>
   </body>
 </html>

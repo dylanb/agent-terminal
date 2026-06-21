@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createShell, type Shell } from '../../src/renderer/src/shell';
+import { FOCUS_VIEW_EVENT, FOCUS_TERMINAL_EVENT } from '../../src/renderer/src/paneActions';
 
 // The converged shell (§22.4 / §24.1C): slim left rail + three view panes + a
 // docked drawer. These tests drive the controller through its public interface and
@@ -16,7 +17,9 @@ const SHELL_HTML = `
     <button id="qs">Quick-send</button>
     <button id="tg">theme</button>
     <span data-theme-label>Light</span>
+    <span class="stat loopstat" role="button" tabindex="0" aria-expanded="false" aria-controls="loop-panel">Loop</span>
   </aside>
+  <aside class="loop-panel" id="loop-panel"><button data-loop-close>x</button></aside>
   <main class="main">
     <div data-viewpane="1" class="on">term</div>
     <div data-viewpane="2">artifacts</div>
@@ -96,6 +99,48 @@ describe('shell controller (§24.1C — views, hotkeys, docked drawer, theme)', 
     });
   });
 
+  // The shell must not reach into a sibling view's internals to focus it (§22.4); instead it
+  // announces the now-active view on the decoupled bus and each view organism focuses its own
+  // primary control. So the shell's observable focus contract is the FOCUS_VIEW_EVENT it emits.
+  describe('focus routing on view switch (§22.4)', () => {
+    let seen: string[];
+    let onFocusView: (e: Event) => void;
+    beforeEach(() => {
+      shell = createShell(app);
+      seen = [];
+      onFocusView = (e) => seen.push((e as CustomEvent<{ view: string }>).detail.view);
+      window.addEventListener(FOCUS_VIEW_EVENT, onFocusView);
+    });
+    afterEach(() => window.removeEventListener(FOCUS_VIEW_EVENT, onFocusView));
+
+    it('announces the destination view so it can take focus, on setView', () => {
+      shell.setView('2');
+      expect(seen).toEqual(['2']);
+    });
+
+    it('announces the destination on Cmd/Ctrl+number (keyboard switch)', () => {
+      key('3');
+      expect(seen).toEqual(['3']);
+    });
+
+    it('announces the destination on a nav-button click', () => {
+      (navBtn('2') as HTMLElement).click();
+      expect(seen).toEqual(['2']);
+    });
+
+    // A Send (todo/capture/artifact) injects without submitting and asks for terminal focus so
+    // the user can finish there (§16.2). From another view that focus would land on a hidden
+    // xterm, so the shell first reveals the terminal view; the terminal then focuses via F1.
+    it('reveals and activates the terminal view when a Send requests terminal focus', () => {
+      shell.setView('2');
+      seen.length = 0;
+      window.dispatchEvent(new CustomEvent(FOCUS_TERMINAL_EVENT));
+      expect(shell.getView()).toBe('1');
+      expect(pane('1').classList.contains('on')).toBe(true);
+      expect(seen).toContain('1'); // and it announces view 1 so the terminal organism focuses
+    });
+  });
+
   describe('docked drawer', () => {
     beforeEach(() => {
       shell = createShell(app);
@@ -156,6 +201,76 @@ describe('shell controller (§24.1C — views, hotkeys, docked drawer, theme)', 
       window.addEventListener('resize', onResize);
       shell.closeDrawer();
       shell.openDrawer();
+      window.removeEventListener('resize', onResize);
+      expect(onResize).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  // §24.2.3 T2 — the full-height docked loop+gate panel "makes room" via a grid column exactly like
+  // the drawer (no scrim). The rail's Loop read-out (#loopstat) opens it; its close button and Escape
+  // dismiss it. The shell only docks/undocks the column — the panel's content is a sibling organism.
+  describe('docked loop panel', () => {
+    beforeEach(() => {
+      shell = createShell(app);
+    });
+
+    it('starts closed and hidden, leaving its controls out of the tab order (§22.2)', () => {
+      expect(shell.isLoopPanelOpen()).toBe(false);
+      expect((document.getElementById('loop-panel') as HTMLElement).hidden).toBe(true);
+    });
+
+    it('toggles the dock column open/closed without a scrim, marking the read-out expanded', () => {
+      const loopstat = document.querySelector('.loopstat') as HTMLElement;
+      shell.toggleLoopPanel();
+      expect(app.classList.contains('loop-open')).toBe(true);
+      expect(shell.isLoopPanelOpen()).toBe(true);
+      expect((document.getElementById('loop-panel') as HTMLElement).hidden).toBe(false);
+      expect(loopstat.getAttribute('aria-expanded')).toBe('true');
+      expect(document.querySelector('.scrim, .backdrop')).toBeNull();
+      shell.toggleLoopPanel();
+      expect(shell.isLoopPanelOpen()).toBe(false);
+      expect(loopstat.getAttribute('aria-expanded')).toBe('false');
+    });
+
+    it('opens by clicking the rail Loop read-out and closes via the panel close button', () => {
+      (document.querySelector('.loopstat') as HTMLElement).click();
+      expect(shell.isLoopPanelOpen()).toBe(true);
+      (document.querySelector('[data-loop-close]') as HTMLElement).click();
+      expect(shell.isLoopPanelOpen()).toBe(false);
+    });
+
+    it('activates the role=button Loop read-out by keyboard (Enter and Space), WCAG 2.1.1', () => {
+      const loopstat = document.querySelector('.loopstat') as HTMLElement;
+      const press = (key: string) =>
+        loopstat.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }));
+      press('Enter');
+      expect(shell.isLoopPanelOpen()).toBe(true);
+      press(' ');
+      expect(shell.isLoopPanelOpen()).toBe(false);
+    });
+
+    it('closes on Escape when open', () => {
+      shell.openLoopPanel();
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+      expect(shell.isLoopPanelOpen()).toBe(false);
+    });
+
+    it('defers Escape to an open dialog instead of closing the panel behind it (WCAG 2.4.3)', () => {
+      shell.openLoopPanel();
+      const dialog = document.createElement('div');
+      dialog.setAttribute('role', 'dialog');
+      const inp = document.createElement('input');
+      dialog.appendChild(inp);
+      document.body.appendChild(dialog);
+      inp.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+      expect(shell.isLoopPanelOpen()).toBe(true); // the modal owns Escape; the panel stays open
+    });
+
+    it('broadcasts a window resize when the panel width changes, so panes refit (§7.1)', () => {
+      const onResize = vi.fn();
+      window.addEventListener('resize', onResize);
+      shell.openLoopPanel();
+      shell.closeLoopPanel();
       window.removeEventListener('resize', onResize);
       expect(onResize).toHaveBeenCalledTimes(2);
     });
@@ -250,5 +365,40 @@ describe('shell controller (§24.1C — views, hotkeys, docked drawer, theme)', 
       key('2');
       expect(shell.getView()).toBe('1');
     });
+  });
+
+  // UI-STANDARDS §3.3: the shell must read and write through root.ownerDocument, never the ambient
+  // global `document`. The shell controls pre-existing markup rather than creating much DOM, so the
+  // childElementCount recipe (assertRendersFromHostDocument) does not fit; instead mount it on a root
+  // that lives in a FOREIGN document with the global createElement(NS) starved, drive its public
+  // interface, and assert (a) it does not reach the global document (no throw) and (b) its theme
+  // attribute lands on the FOREIGN documentElement — never the global one.
+  it('operates through root.ownerDocument, not the global document (UI-STANDARDS §3.3)', () => {
+    const foreign = document.implementation.createHTMLDocument();
+    foreign.body.innerHTML = SHELL_HTML;
+    const foreignApp = foreign.getElementById('app')!;
+    const reach = (api: string) => () => {
+      throw new Error(`shell reached for the global document.${api} instead of root.ownerDocument`);
+    };
+    const ce = vi.spyOn(document, 'createElement').mockImplementation(reach('createElement'));
+    const cens = vi.spyOn(document, 'createElementNS').mockImplementation(reach('createElementNS'));
+    try {
+      shell = createShell(foreignApp);
+      // Drive the public interface: view switch, drawer + loop toggles, and a theme toggle.
+      shell.setView('2');
+      shell.toggleDrawer();
+      shell.toggleLoopPanel();
+      shell.setTheme('dark');
+      // Discriminating: the theme attribute landed on the FOREIGN documentElement, and the global
+      // one was left untouched (a reach to the global `document` would have hit it instead).
+      expect(foreign.documentElement.getAttribute('data-theme')).toBe('dark');
+      expect(document.documentElement.getAttribute('data-theme')).toBeNull();
+      expect(foreignApp.classList.contains('drawer-open')).toBe(false);
+      expect(foreignApp.classList.contains('loop-open')).toBe(true);
+      expect((foreignApp.querySelector('[data-viewpane="2"]') as HTMLElement).classList.contains('on')).toBe(true);
+    } finally {
+      ce.mockRestore();
+      cens.mockRestore();
+    }
   });
 });

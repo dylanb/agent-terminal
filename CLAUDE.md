@@ -2,7 +2,7 @@
 
 Agent Terminal — Electron app that hosts coding agents (Claude Code, Codex, …) in a PTY-attached bash session, renders it with xterm.js, tees output into a main-process `@xterm/headless` shadow screen model, and provides a monitor pane that captures output and injects input back into the agent.
 
-`terminal-web-ui-spec.md` (v2.46) is the authoritative spec. Every subsystem implements a numbered section of it; when code and spec disagree, the spec wins — or the spec gets a changelog entry. Cite spec sections (e.g. §9.3) in code review discussion rather than re-arguing settled design decisions.
+`terminal-web-ui-spec.md` (v2.55) is the authoritative spec. Every subsystem implements a numbered section of it; when code and spec disagree, the spec wins — or the spec gets a changelog entry. Cite spec sections (e.g. §9.3) in code review discussion rather than re-arguing settled design decisions.
 
 ## Commands
 
@@ -15,6 +15,10 @@ npm run test:e2e    # playwright _electron e2e (requires a display; real PTY)
 ```
 
 `node-pty` is a native module compiled against Electron's ABI. If main-process startup fails with a NODE_MODULE_VERSION error, run `npm run rebuild`.
+
+## Requesting / awaiting a Copilot PR review
+
+Use `scripts/await-copilot-review.sh <pr> [--request] [--check]` (portable bash; macOS + Linux, no `jq`) — never hand-roll a poll. Two non-obvious traps it removes: the Copilot reviewer's login is `copilot-pull-request-reviewer[bot]` on `/pulls/{n}/reviews` but `Copilot` on `/pulls/{n}/comments`, so a single exact-login filter silently matches zero; and a wrong poll predicate is indistinguishable from "review not posted yet", so the script baselines the matched count and (`--check`) validates the predicate against the reviews already on the PR before waiting. If you must filter reviews yourself, match `user.type=="Bot"` + a case-insensitive `copilot`, not an exact login.
 
 ## Architecture (orientation only — details in the spec)
 
@@ -33,6 +37,21 @@ npm run test:e2e    # playwright _electron e2e (requires a display; real PTY)
 - **Tests MUST exercise observable behavior, NOT implementation.** **Treating this as optional is a blocker-level violation.** A test asserts what a caller of the unit-under-test can observe from the outside: return values, thrown errors, bytes written to the PTY, IPC payloads emitted on a contract channel (§6), text read back out of the shadow buffer through its public read path, DOM state the user can see. A test MUST NOT assert: which private method was called, in what order, how many times; the internal data structure shape; the exact escape-sequence parsing steps; the names of intermediate variables; or anything else that a behavior-preserving refactor would legitimately change. **Tests that bind to implementation are worse than no test** — they pass while the system is broken, fail while the system is correct, and convert every refactor into a test rewrite that silently re-encodes the same assumption. The litmus test: *"Could a teammate rewrite this unit's internals from scratch — different functions, different data structures, different control flow — and keep my tests passing as long as the externally-observable behavior is unchanged?"* If no, the test is testing implementation and must be rewritten before merge. Mock-heavy tests, snapshot tests of internal structures, and assertions that re-spell the source code are the common shapes of this violation. Asserting on exact byte sequences is legitimate only where the bytes ARE the contract (e.g. `ESC[200~…ESC[201~` paste framing, `\r` submit — §9.3), not as a transcript of internal calls.
 - **Comments carry invariants, not narration — and stay short.** A comment earns its place only by recording *why*: an invariant a reader cannot derive from the code, a non-obvious constraint, or a spec cross-reference (§n). Never narrate *what* the next line does or restate the code in prose. Prefer a precise name, a named test, or a spec citation over a paragraph. Use the fewest words that carry the invariant — one line wherever possible; multi-line only for a genuinely load-bearing contract, and then point at the spec section rather than re-explaining it. Delete any comment a behavior-preserving refactor would invalidate. Always allowed: doc-comments on exported identifiers (1–2 lines) and `// TODO(owner): …` tags.
 - **No mocks for the terminal emulator or the PTY.** Integration tests drive the real `@xterm/headless` shadow module with scripted byte streams (it is pure JS and runs under vitest/node). Full-loop behavior (real node-pty, real bash, real renderer) is covered by Playwright `_electron` e2e — never by mocking node-pty. Fake timers/clocks are fine (the quiescence detector takes injectable timers for exactly this); mocking the VT parser is not.
+
+## Tracer-bullet development (mandatory planning requirement)
+
+**Every implementation plan for §24.2 backlog work MUST be decomposed into tracer-bullet slices before any code is written. This is a planning gate: a plan that is not sliced this way is incomplete and implementation does not start.**
+
+A **tracer bullet** is a thin but *complete* vertical slice that passes through **every layer the feature touches** — main-process logic → the typed IPC contract (`src/shared/ipc.ts`, §6) → preload bridge → renderer widget → visible, interactive UI — and does the **smallest real end-to-end thing** with **real backing, not a fixture**. Like a tracer round, you fire it through the running app and watch where it lands: each slice is hand-testable through the UI (`npm run dev`) and demoable on its own.
+
+Each slice MUST satisfy all of:
+
+1. **Back-to-front, never layer-by-layer.** A slice spans main, `ipc.ts`, preload, and renderer as far as that increment needs, so it is exercisable from the UI. Building a whole horizontal layer — the complete main-process subsystem, the entire IPC surface, or a data store — as its own phase with nothing in the UI to fire it is **forbidden**. If a slice cannot be fired from the UI, it is cut too wide or wrong; narrow it until it can.
+2. **Replaces one mock with real backing, incrementally.** §24.1 stands the widgets up fixture-driven (§24); a slice swaps **one** fixture path for its real subsystem and leaves the app still running and the visible product never regressed.
+3. **Ends testable through the UI, RED-first.** Each slice carries the full **Test-driven development** ladder above (failing test first, observed), and that ladder MUST include a **Playwright `_electron` e2e that drives the real loop** (real PTY, main, renderer) — because the slice's contract *is* "a user does X in the app and sees Y." Main-process integration tests and renderer DOM unit tests sit underneath it.
+4. **Named in the plan.** For every slice the plan states three things: the **user-visible action** that fires the bullet, the **observable result in the UI**, and the **e2e that proves it**. A slice missing any of the three is not yet planned.
+
+This is the §24 "UI-inwards" build direction applied feature by feature: stand the skin up, then drive real subsystems through it one fireable slice at a time. Horizontal "finish the backend, then wire the UI later" plans are a planning-level defect — reject and re-slice.
 
 ## Code standards
 

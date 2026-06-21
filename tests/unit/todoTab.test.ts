@@ -1,6 +1,8 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { wireMonitorPane, FOCUS_TERMINAL_EVENT } from '../../src/renderer/src/monitor';
+import { createTodoTab, type TodoTabDeps } from '../../src/renderer/src/todoTab';
+import { assertRendersFromHostDocument } from './relocatable';
 import { DEFAULT_UI_SETTINGS } from '../../src/shared/ipc';
 import type { TodoItem, UiSettings } from '../../src/shared/ipc';
 
@@ -65,6 +67,8 @@ function baseMonitor(handlers: {
     todoReorder: vi.fn(async () => []),
     todoSetStatus: vi.fn(async () => []),
     todoDelete: vi.fn(async () => []),
+    listTemplates: vi.fn(async () => ({ templates: [] })),
+    instantiateTemplate: vi.fn(async () => []),
   };
 }
 
@@ -104,6 +108,8 @@ describe('Todo tab (§24.1 mockup-exact — checkbox-done + Send)', () => {
       todoReorder: vi.fn(async () => []),
       todoSetStatus: vi.fn(async () => []),
       todoDelete: vi.fn(async () => []),
+      listTemplates: vi.fn(async () => ({ templates: [] })),
+      instantiateTemplate: vi.fn(async () => []),
     };
     (window as unknown as { monitor: typeof monitor }).monitor = monitor;
   });
@@ -171,11 +177,80 @@ describe('Todo tab (§24.1 mockup-exact — checkbox-done + Send)', () => {
     expect(focusFired).toBe(1);
   });
 
-  it('a done todo has no Send action', async () => {
+  it('a done todo keeps its action buttons but disabled, so the row layout stays constant', async () => {
     wireMonitorPane();
     await flush();
     await loadRepo('/repoA', [makeTodo({ id: 'd', status: 'done' })]);
-    expect(rows()[0].querySelector('.todo-send')).toBeNull();
+    const row = rows()[0];
+    expect(row.querySelector('.todo-send')).not.toBeNull();
+    for (const sel of ['.todo-send', '.todo-edit', '.todo-up', '.todo-down']) {
+      expect((row.querySelector(sel) as HTMLButtonElement).disabled).toBe(true);
+    }
+    // Delete stays usable — you can still remove a completed todo.
+    expect((row.querySelector('.todo-delete') as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it('confirming a delete keeps the action cluster in place and stacks the confirm below (no width jump)', async () => {
+    wireMonitorPane();
+    await flush();
+    await loadRepo('/repoA', [makeTodo({ id: 'a', status: 'active' })]);
+    (rows()[0].querySelector('.todo-delete') as HTMLButtonElement).click();
+    const row = rows()[0];
+    expect(row.querySelector('.todo-delete-confirm')).not.toBeNull(); // confirm shown
+    expect(row.querySelector('.todo-send')).not.toBeNull(); // cluster NOT replaced
+    expect(row.querySelector('.todo-delete-bar')).not.toBeNull(); // in a separate stacked row
+  });
+
+  // Tri-state status (§16.3): active → (Send) → in_progress → (check) → done → (check) → active.
+  // The checkbox renders the three ARIA states (false / mixed / true); the box itself only ever
+  // marks not-done→done or done→active, and Send is the sole entry into in_progress.
+  describe('tri-state status', () => {
+    it('Send marks an active todo in-progress (checkbox goes mixed) and still injects without submit', async () => {
+      wireMonitorPane();
+      await flush();
+      await loadRepo('/repoA', [makeTodo({ id: 'a', text: 'task' })]);
+      monitor.todoSetStatus.mockResolvedValue([makeTodo({ id: 'a', text: 'task', status: 'in_progress' })]);
+      (rows()[0].querySelector('.todo-send') as HTMLButtonElement).click();
+      await flush();
+      expect(monitor.inject).toHaveBeenCalledWith({ text: 'task', submit: false });
+      expect(monitor.todoSetStatus).toHaveBeenCalledWith('/repoA', 'a', 'in_progress');
+      expect(rows()[0].querySelector('.chk')!.getAttribute('aria-checked')).toBe('mixed');
+    });
+
+    it('renders an in-progress todo with a mixed checkbox', async () => {
+      wireMonitorPane();
+      await flush();
+      await loadRepo('/repoA', [makeTodo({ id: 'a', status: 'in_progress' })]);
+      expect(rows()[0].querySelector('.chk')!.getAttribute('aria-checked')).toBe('mixed');
+    });
+
+    it('keeps the Send/edit/reorder actions on an in-progress todo (it is still outstanding)', async () => {
+      wireMonitorPane();
+      await flush();
+      await loadRepo('/repoA', [makeTodo({ id: 'a', status: 'in_progress' })]);
+      expect(rows()[0].querySelector('.todo-send')).not.toBeNull();
+      expect(rows()[0].querySelector('.todo-edit')).not.toBeNull();
+    });
+
+    it('clicking the checkbox on an in-progress todo marks it done', async () => {
+      wireMonitorPane();
+      await flush();
+      await loadRepo('/repoA', [makeTodo({ id: 'a', status: 'in_progress' })]);
+      (rows()[0].querySelector('.chk') as HTMLElement).click();
+      await flush();
+      expect(monitor.todoSetStatus).toHaveBeenCalledWith('/repoA', 'a', 'done');
+    });
+
+    it('counts in-progress todos as outstanding', async () => {
+      wireMonitorPane();
+      await flush();
+      await loadRepo('/repoA', [
+        makeTodo({ id: 'a', status: 'in_progress', order: 1 }),
+        makeTodo({ id: 'b', status: 'active', order: 2 }),
+        makeTodo({ id: 'd', status: 'done', order: 3 }),
+      ]);
+      expect(document.getElementById('todo-count')!.textContent).toBe('2');
+    });
   });
 
   it('renders provenance: a capture-sourced todo shows its origin, a manual one says manual', async () => {
@@ -308,11 +383,13 @@ describe('Todo tab §24.2.1 — reorder', () => {
     expect((rows()[1].querySelector('.todo-down') as HTMLButtonElement).disabled).toBe(true);
   });
 
-  it('done todos do not carry reorder controls', async () => {
+  it('done todos render reorder controls disabled (present but inert — constant layout)', async () => {
     wireMonitorPane();
     await flush();
     await loadRepo('/repoA', [makeTodo({ id: 'd', status: 'done' })]);
-    expect(rows()[0].querySelector('.todo-up')).toBeNull();
+    const up = rows()[0].querySelector('.todo-up') as HTMLButtonElement;
+    expect(up).not.toBeNull();
+    expect(up.disabled).toBe(true);
   });
 });
 
@@ -532,6 +609,96 @@ describe('Todo tab §24.2.1 — review fixes (reorder stability, focus, a11y lab
     expect(monitor.todoReorder).toHaveBeenCalledWith('/repoA', ['b', 'a']);
   });
 
+  // ---- On-demand todo-template picker in the overlay (§4.1/§6) ----
+  // The control relocated here from the flow strip: a collapsed "From template" disclosure that
+  // reveals a named-template picker, so the resting composer is just the manual-add field.
+  describe('template picker (§4.1)', () => {
+    const toggle = () => todoList().querySelector<HTMLButtonElement>('.tmpl-toggle');
+    const pick = () => todoList().querySelector<HTMLSelectElement>('.tmpl-pick');
+    const addBtn = () => todoList().querySelector<HTMLButtonElement>('.tmpl-add');
+    const txt = (el: HTMLElement) => el.querySelector('.tx')!.textContent;
+
+    async function loadRepoWithTemplates(
+      repoKey: string,
+      list: TodoItem[],
+      lib: { templates: { ref: string; name: string }[]; defaultRef?: string },
+    ): Promise<void> {
+      monitor.listTemplates.mockResolvedValue(lib);
+      await loadRepo(repoKey, list);
+    }
+
+    it('shows no template disclosure when the library is empty (gated to an active step)', async () => {
+      wireMonitorPane();
+      await flush();
+      await loadRepoWithTemplates('/repoA', [], { templates: [] });
+      expect(toggle()).toBeNull();
+    });
+
+    it('offers a collapsed "From template" disclosure when templates exist; the picker is hidden until opened', async () => {
+      wireMonitorPane();
+      await flush();
+      await loadRepoWithTemplates('/repoA', [], {
+        templates: [{ ref: 'ticket-grooming', name: 'Ticket grooming' }],
+        defaultRef: 'ticket-grooming',
+      });
+      expect(toggle()).not.toBeNull();
+      expect(toggle()!.getAttribute('aria-expanded')).toBe('false');
+      expect(pick()).toBeNull(); // collapsed → no picker on screen (anti-clutter)
+    });
+
+    it('opening the disclosure reveals the named picker, defaulting to the bound template', async () => {
+      wireMonitorPane();
+      await flush();
+      await loadRepoWithTemplates('/repoA', [], {
+        templates: [
+          { ref: 'pr-review', name: 'PR review checklist' },
+          { ref: 'ticket-grooming', name: 'Ticket grooming' },
+        ],
+        defaultRef: 'ticket-grooming',
+      });
+      toggle()!.click();
+      await flush();
+      expect(toggle()!.getAttribute('aria-expanded')).toBe('true');
+      expect([...pick()!.options].map((o) => o.textContent)).toEqual(['PR review checklist', 'Ticket grooming']);
+      expect(pick()!.value).toBe('ticket-grooming'); // the step's bound default
+    });
+
+    it('Add todos instantiates the chosen template and keeps the picker open', async () => {
+      wireMonitorPane();
+      await flush();
+      await loadRepoWithTemplates('/repoA', [], {
+        templates: [
+          { ref: 'pr-review', name: 'PR review checklist' },
+          { ref: 'ticket-grooming', name: 'Ticket grooming' },
+        ],
+        defaultRef: 'ticket-grooming',
+      });
+      monitor.instantiateTemplate.mockResolvedValue([makeTodo({ id: 'x', text: 'Check the diff' })]);
+      toggle()!.click();
+      await flush();
+      pick()!.value = 'pr-review';
+      addBtn()!.click();
+      await flush();
+      expect(monitor.instantiateTemplate).toHaveBeenCalledWith('/repoA', 'pr-review');
+      expect(rows().map(txt)).toContain('Check the diff'); // the list updated from the result
+      expect(pick()).not.toBeNull(); // stays open for another add (operator decision)
+    });
+
+    it('Escape inside the open picker collapses it and returns focus to the toggle', async () => {
+      wireMonitorPane();
+      await flush();
+      await loadRepoWithTemplates('/repoA', [], {
+        templates: [{ ref: 'ticket-grooming', name: 'Ticket grooming' }],
+      });
+      toggle()!.click();
+      await flush();
+      pick()!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+      await flush();
+      expect(pick()).toBeNull();
+      expect(document.activeElement).toBe(toggle());
+    });
+  });
+
   // Every todo mutation crosses renderer→main IPC; a main-process restart rejects the invoke.
   // None of these must surface as an unhandled renderer rejection (vitest fails the run on one),
   // and each keeps the user's current UI state on failure (§16.4).
@@ -594,6 +761,131 @@ describe('Todo tab §24.2.1 — review fixes (reorder stability, focus, a11y lab
       } finally {
         vi.useRealTimers();
       }
+    });
+
+    // A rejected refresh (todoList/listTemplates reject on a main restart) must not surface as an
+    // unhandled renderer rejection (vitest fails the run on one — that is the RED signal here) and
+    // must leave the displayed list and count unchanged (§16.4).
+    it('a rejected refresh (todoList + listTemplates) leaves the list intact', async () => {
+      wireMonitorPane();
+      await flush();
+      await loadRepo('/repoA', [makeTodo({ id: 'a', text: 'task' })]);
+      monitor.todoList.mockRejectedValueOnce(new Error('ipc down'));
+      monitor.listTemplates.mockRejectedValueOnce(new Error('ipc down'));
+      handlers.cwdChanged!({ sessionId: 's1', cwd: '/repoA', repoKey: '/repoA' }); // re-fire → refresh()
+      await flush();
+      expect(rows().map((r) => r.querySelector('.tx')!.textContent)).toEqual(['task']);
+      expect(document.getElementById('todo-count')!.textContent).toBe('1');
+    });
+
+    it('a rejected instantiateTemplate re-enables the Add todos button', async () => {
+      wireMonitorPane();
+      await flush();
+      monitor.listTemplates.mockResolvedValue({
+        templates: [{ ref: 'pr-review', name: 'PR review checklist' }],
+        defaultRef: 'pr-review',
+      });
+      await loadRepo('/repoA', []);
+      const toggle = todoList().querySelector<HTMLButtonElement>('.tmpl-toggle')!;
+      toggle.click();
+      await flush();
+      monitor.instantiateTemplate.mockRejectedValueOnce(new Error('ipc down'));
+      const add = todoList().querySelector<HTMLButtonElement>('.tmpl-add')!;
+      add.click();
+      await flush();
+      expect(todoList().querySelector<HTMLButtonElement>('.tmpl-add')!.disabled).toBe(false);
+    });
+  });
+});
+
+// UI-STANDARDS §2.2 rule 1: no global ids — two todoTab instances in one document must not
+// collide. The template picker's container id (and the toggle's aria-controls pointing at it)
+// must be instance-unique, the same per-instance pattern flowInputModal uses for its title id.
+describe('Todo tab — template picker id is instance-unique (UI-STANDARDS §2.2 rule 1)', () => {
+  function tmplMonitor(): TodoTabDeps['monitor'] {
+    return {
+      todoList: vi.fn(async () => []),
+      todoAdd: vi.fn(async () => []),
+      todoUpdate: vi.fn(async () => []),
+      todoReorder: vi.fn(async () => []),
+      todoSetStatus: vi.fn(async () => []),
+      todoDelete: vi.fn(async () => []),
+      listTemplates: vi.fn(async () => ({
+        templates: [{ ref: 'pr-review', name: 'PR review checklist' }],
+        defaultRef: 'pr-review',
+      })),
+      instantiateTemplate: vi.fn(async () => []),
+    } as unknown as TodoTabDeps['monitor'];
+  }
+
+  function mountInstance(): { host: HTMLElement; tab: ReturnType<typeof createTodoTab> } {
+    const host = document.createElement('div');
+    const list = document.createElement('div');
+    const count = document.createElement('span');
+    host.append(list, count);
+    document.body.appendChild(host);
+    const tab = createTodoTab({ todoListEl: list, todoCountEl: count, monitor: tmplMonitor(), doInject: () => {} });
+    return { host, tab };
+  }
+
+  afterEach(() => {
+    document.body.innerHTML = '';
+    vi.restoreAllMocks();
+  });
+
+  it('two instances in one document get DIFFERENT picker ids, each matching its own toggle aria-controls', async () => {
+    const a = mountInstance();
+    const b = mountInstance();
+    // Drive a repo so listTemplates is pulled and the disclosure renders.
+    a.tab.onRepoChanged('/repoA');
+    b.tab.onRepoChanged('/repoB');
+    await flush();
+
+    const toggleA = a.host.querySelector<HTMLButtonElement>('.tmpl-toggle')!;
+    const toggleB = b.host.querySelector<HTMLButtonElement>('.tmpl-toggle')!;
+    expect(toggleA).not.toBeNull();
+    expect(toggleB).not.toBeNull();
+    toggleA.click();
+    toggleB.click();
+    await flush();
+
+    const pickerA = a.host.querySelector<HTMLElement>('.tmpl-picker')!;
+    const pickerB = b.host.querySelector<HTMLElement>('.tmpl-picker')!;
+    expect(pickerA).not.toBeNull();
+    expect(pickerB).not.toBeNull();
+
+    // (a) the two container ids must differ across instances …
+    expect(pickerA.id).not.toBe(pickerB.id);
+    expect(pickerA.id).toBeTruthy();
+
+    // (b) … and within each instance, the toggle points at ITS OWN picker, both inside its host.
+    expect(toggleA.getAttribute('aria-controls')).toBe(pickerA.id);
+    expect(toggleB.getAttribute('aria-controls')).toBe(pickerB.id);
+    expect(a.host.querySelector(`#${pickerA.id}`)).toBe(pickerA);
+    expect(b.host.querySelector(`#${pickerB.id}`)).toBe(pickerB);
+  });
+});
+
+// UI-STANDARDS §3.3 / §2.2 rule 1: the organism must build its DOM from the host's
+// ownerDocument, never the ambient global document — else it is not relocatable to a
+// separate-process pane. See memory jsdom-adoption-masks-global-document.
+describe('Todo tab — relocation (UI-STANDARDS §3.3)', () => {
+  it('renders the composer/list from host.ownerDocument, not the global document', async () => {
+    const noopMonitor = {
+      todoList: vi.fn(async () => []),
+      todoAdd: vi.fn(async () => []),
+      todoUpdate: vi.fn(async () => []),
+      todoReorder: vi.fn(async () => []),
+      todoSetStatus: vi.fn(async () => []),
+      todoDelete: vi.fn(async () => []),
+      listTemplates: vi.fn(async () => ({ templates: [] })),
+      instantiateTemplate: vi.fn(async () => []),
+    } as unknown as TodoTabDeps['monitor'];
+    await assertRendersFromHostDocument((h) => {
+      const list = h.ownerDocument.createElement('div');
+      const count = h.ownerDocument.createElement('span');
+      h.append(list, count);
+      createTodoTab({ todoListEl: list, todoCountEl: count, monitor: noopMonitor, doInject: () => {} });
     });
   });
 });

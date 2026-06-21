@@ -8,6 +8,10 @@ import {
   isValidCommandsRequest,
   isValidDismiss,
   isValidDismissAll,
+  isValidFlowRequest,
+  isValidFlowProvideInput,
+  isValidTemplateList,
+  isValidTemplateInstantiate,
   isValidInject,
   isValidInput,
   isValidLearnChrome,
@@ -19,6 +23,8 @@ import {
   isValidTodoReorder,
   isValidTodoSetStatus,
   isValidTodoUpdate,
+  isValidViewerTree,
+  isValidViewerRead,
 } from '../../src/main/ipcValidation';
 
 const sid = SESSION_ID;
@@ -127,6 +133,66 @@ describe('IPC payload validation (§6 — renderer-supplied input is untrusted)'
     expect(isValidClearCommands(null)).toBe(false);
   });
 
+  it('accepts a flow request with a safe repoKey and rejects a wrong session / unsafe key (§24.2.2)', () => {
+    expect(isValidFlowRequest({ sessionId: sid, repoKey: '/repo' })).toBe(true);
+    expect(isValidFlowRequest({ sessionId: sid })).toBe(false); // repoKey now required (follows cwd)
+    expect(isValidFlowRequest({ sessionId: 'other', repoKey: '/repo' })).toBe(false);
+    // repoKey becomes a filesystem path in flowState — same safe-path guard as todos.
+    expect(isValidFlowRequest({ sessionId: sid, repoKey: 'relative/path' })).toBe(false);
+    expect(isValidFlowRequest({ sessionId: sid, repoKey: '/repo/../../etc' })).toBe(false);
+    expect(isValidFlowRequest({})).toBe(false);
+    expect(isValidFlowRequest(null)).toBe(false);
+    // An array carrying the required props must not pass the trust boundary (arrays are not records).
+    const arr: any = [];
+    arr.sessionId = sid;
+    arr.repoKey = '/repo';
+    expect(isValidFlowRequest(arr)).toBe(false);
+  });
+
+  it('accepts a flow:provideInput with a string→string values map, rejecting bad shapes (§24.2.3 T3)', () => {
+    expect(isValidFlowProvideInput({ sessionId: sid, repoKey: '/repo', values: { ticket: '176' } })).toBe(true);
+    expect(isValidFlowProvideInput({ sessionId: sid, repoKey: '/repo', values: {} })).toBe(true); // empty is fine
+    expect(isValidFlowProvideInput({ sessionId: sid, repoKey: '/repo', values: { ticket: 176 } })).toBe(false); // non-string value
+    expect(isValidFlowProvideInput({ sessionId: sid, repoKey: '/repo' })).toBe(false); // values required
+    expect(isValidFlowProvideInput({ sessionId: sid, repoKey: '/repo', values: [] })).toBe(false); // not a record
+    expect(isValidFlowProvideInput({ sessionId: sid, repoKey: 'relative', values: {} })).toBe(false); // unsafe key
+    expect(isValidFlowProvideInput({ sessionId: 'other', repoKey: '/repo', values: {} })).toBe(false);
+    expect(isValidFlowProvideInput(null)).toBe(false);
+    // An array carrying the required props must not pass the trust boundary (arrays are not records).
+    const arr: any = [];
+    arr.sessionId = sid;
+    arr.repoKey = '/repo';
+    arr.values = {};
+    expect(isValidFlowProvideInput(arr)).toBe(false);
+  });
+
+  it('rejects array-shaped payloads at the trust boundary (arrays are not records)', () => {
+    const a: any = [];
+    a.sessionId = sid;
+    expect(isValidCommandsRequest(a)).toBe(false);
+  });
+
+  it('accepts a todoTemplate:list with a safe repoKey and rejects an unsafe key / wrong session', () => {
+    expect(isValidTemplateList({ sessionId: sid, repoKey: '/repo' })).toBe(true);
+    expect(isValidTemplateList({ sessionId: sid, repoKey: 'relative' })).toBe(false);
+    expect(isValidTemplateList({ sessionId: sid, repoKey: '/repo/../../etc' })).toBe(false);
+    expect(isValidTemplateList({ sessionId: sid })).toBe(false);
+    expect(isValidTemplateList({ sessionId: 'other', repoKey: '/repo' })).toBe(false);
+    expect(isValidTemplateList(null)).toBe(false);
+  });
+
+  it('accepts a todoTemplate:instantiate and rejects traversal/empty/non-string ref (§21.2 boundary guard)', () => {
+    expect(isValidTemplateInstantiate({ sessionId: sid, repoKey: '/repo', ref: 'impl-loop-review' })).toBe(true);
+    expect(isValidTemplateInstantiate({ sessionId: sid, repoKey: '/repo', ref: '' })).toBe(false); // empty
+    expect(isValidTemplateInstantiate({ sessionId: sid, repoKey: '/repo', ref: '../x' })).toBe(false); // traversal
+    expect(isValidTemplateInstantiate({ sessionId: sid, repoKey: '/repo', ref: 'a/../b' })).toBe(false); // traversal
+    expect(isValidTemplateInstantiate({ sessionId: sid, repoKey: '/repo', ref: 'a\\..\\b' })).toBe(false); // backslash traversal
+    expect(isValidTemplateInstantiate({ sessionId: sid, repoKey: '/repo', ref: 7 })).toBe(false); // non-string
+    expect(isValidTemplateInstantiate({ sessionId: sid, repoKey: 'relative', ref: 'x' })).toBe(false); // unsafe key
+    expect(isValidTemplateInstantiate({ sessionId: 'other', repoKey: '/repo', ref: 'x' })).toBe(false);
+    expect(isValidTemplateInstantiate(null)).toBe(false);
+  });
+
   // ---- todo:* validators (§16.3 / §16.4) ----
 
   it('accepts a todo:list and rejects a missing/non-string repoKey or wrong session', () => {
@@ -167,6 +233,7 @@ describe('IPC payload validation (§6 — renderer-supplied input is untrusted)'
   it('accepts a todo:setStatus with a valid status and rejects anything else', () => {
     expect(isValidTodoSetStatus({ sessionId: sid, repoKey: '/r', id: 'a', status: 'done' })).toBe(true);
     expect(isValidTodoSetStatus({ sessionId: sid, repoKey: '/r', id: 'a', status: 'active' })).toBe(true);
+    expect(isValidTodoSetStatus({ sessionId: sid, repoKey: '/r', id: 'a', status: 'in_progress' })).toBe(true);
     expect(isValidTodoSetStatus({ sessionId: sid, repoKey: '/r', id: 'a', status: 'maybe' })).toBe(false);
     expect(isValidTodoSetStatus({ sessionId: sid, repoKey: '/r', id: 'a' })).toBe(false);
   });
@@ -174,5 +241,26 @@ describe('IPC payload validation (§6 — renderer-supplied input is untrusted)'
   it('accepts a todo:delete and rejects a missing id', () => {
     expect(isValidTodoDelete({ sessionId: sid, repoKey: '/r', id: 'a' })).toBe(true);
     expect(isValidTodoDelete({ sessionId: sid, repoKey: '/r' })).toBe(false);
+  });
+
+  // ---- viewer:* validators (§20.1 / §20.2) ----
+
+  it('accepts a viewer:tree with a known scope and rejects a bad/missing scope or wrong session', () => {
+    expect(isValidViewerTree({ sessionId: sid, scope: 'curated' })).toBe(true);
+    expect(isValidViewerTree({ sessionId: sid, scope: 'repo' })).toBe(true);
+    expect(isValidViewerTree({ sessionId: sid, scope: 'bogus' })).toBe(false);
+    expect(isValidViewerTree({ sessionId: sid, scope: 7 })).toBe(false);
+    expect(isValidViewerTree({ sessionId: sid })).toBe(false); // scope required
+    expect(isValidViewerTree({ sessionId: 'other', scope: 'curated' })).toBe(false);
+    expect(isValidViewerTree(null)).toBe(false);
+  });
+
+  it('accepts a viewer:read with a string relPath and rejects missing/non-string relPath or wrong session', () => {
+    expect(isValidViewerRead({ sessionId: sid, relPath: 'src/a.ts' })).toBe(true);
+    expect(isValidViewerRead({ sessionId: sid, relPath: '' })).toBe(true); // emptiness is the loader's concern; the boundary only types it
+    expect(isValidViewerRead({ sessionId: sid, relPath: 7 })).toBe(false);
+    expect(isValidViewerRead({ sessionId: sid })).toBe(false); // relPath required
+    expect(isValidViewerRead({ sessionId: 'other', relPath: 'src/a.ts' })).toBe(false);
+    expect(isValidViewerRead(null)).toBe(false);
   });
 });
