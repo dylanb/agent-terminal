@@ -48,6 +48,21 @@ describe('typed-input modal (§24.2.3 T3 / §18.4)', () => {
     expect(submit).toHaveBeenCalledWith({ ticket: '176' });
   });
 
+  it('collects an input named __proto__ as own data without prototype pollution', () => {
+    let submitted: Record<string, string> | undefined;
+    createFlowInputModal(host).render(
+      prompt({ inputs: [{ name: '__proto__', type: 'free-text' }] }),
+      'plan',
+      (v) => (submitted = v),
+    );
+    (field('__proto__')!.querySelector('input') as HTMLInputElement).value = 'PWNED';
+    (host.querySelector('.flow-modal .confirm') as HTMLButtonElement).click();
+    expect(submitted).toBeTruthy();
+    expect(Object.prototype.hasOwnProperty.call(submitted, '__proto__')).toBe(true);
+    expect(submitted!['__proto__']).toBe('PWNED');
+    expect(({} as Record<string, unknown>).PWNED).toBeUndefined(); // no global pollution
+  });
+
   it('collects every field for a multi-input prompt', () => {
     const submit = vi.fn();
     createFlowInputModal(host).render(

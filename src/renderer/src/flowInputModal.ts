@@ -117,7 +117,9 @@ export function createFlowInputModal(host: HTMLElement): FlowInputModal {
       confirm.className = 'pill signal confirm';
       confirm.textContent = 'Confirm & bootstrap';
       confirm.addEventListener('click', () => {
-        const values: Record<string, string> = {};
+        // Null-prototype map: an input named `__proto__` must store as own data, not hit the
+        // prototype setter (which would drop the value and is a prototype-pollution vector, §18.4).
+        const values: Record<string, string> = Object.create(null);
         reads.forEach((r) => {
           values[r.name] = r.read();
         });

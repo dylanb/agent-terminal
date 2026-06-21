@@ -37,7 +37,9 @@ const PERSISTABLE: ReadonlySet<FlowStatus> = new Set(['not_started', 'in_progres
  *  the round-trip omits the key entirely for a flow that resolved none (§24.2.3 T3). */
 function readInputs(raw: unknown): Record<string, string> | null {
   if (!isRecord(raw)) return null;
-  const out: Record<string, string> = {};
+  // Null-prototype map: an inputs key like `__proto__` must be stored as own data, not hit the
+  // prototype setter (data loss / prototype-pollution vector) — keys here come from parsed YAML.
+  const out: Record<string, string> = Object.create(null);
   for (const [k, v] of Object.entries(raw)) if (typeof v === 'string') out[k] = v;
   return Object.keys(out).length > 0 ? out : null;
 }
