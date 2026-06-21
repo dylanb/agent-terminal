@@ -2,8 +2,15 @@
 // data-find id; hovering either lights both, with both on screen at once (the drawer
 // docks, never covers — §22.2 amendment, v2.29). This is the contract seam between
 // the terminal and capture organisms (UI-STANDARDS §2.2): neither pokes the other's
-// DOM directly — both register their data-find spans with this wiring inside a shared
-// host, and a `reveal(id, on)` call lights the pair from either side or a deep-link.
+// DOM directly — the pair is lit only via `reveal(id, on)` (from a hover on either end
+// or a deep-link).
+//
+// Wiring is a one-time scan: `wireCrossHighlight(host)` snapshots the `data-find` spans
+// present under `host` at call time and binds hover handlers to exactly those. Spans
+// added after wiring are NOT picked up. This is sufficient today because no organism
+// emits `data-find` markup yet (the call site mounts it against the static mock); when
+// real provenance spans arrive dynamically, this must move to event delegation on the
+// host or per-pane re-wiring, or those later spans will be dropped.
 
 export interface CrossHighlight {
   /** Light (or clear) both ends of a finding/source pair by its data-find id. */

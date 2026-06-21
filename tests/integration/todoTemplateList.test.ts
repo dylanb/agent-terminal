@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { listTodoTemplates } from '../../src/main/todoTemplate';
@@ -35,5 +35,21 @@ describe('listTodoTemplates (§4.1/§6)', () => {
     writeFileSync(join(dir, 'notes.txt'), 'not a template');
     expect(listTodoTemplates(dir)).toEqual([]);
     expect(listTodoTemplates(join(dir, 'nope'))).toEqual([]);
+  });
+
+  it('excludes an in-dir symlink whose target escapes the templates root', () => {
+    // A symlink living inside the templates dir but pointing OUTSIDE the root passes a lexical
+    // check; the picker must still refuse to read it (resolve real paths, mirror loadTodoTemplateFile).
+    writeFileSync(join(dir, 'normal.md'), '# Normal template\n\n- a\n');
+    const outside = mkdtempSync(join(tmpdir(), 'tmpl-list-outside-'));
+    writeFileSync(join(outside, 'secret.md'), '# Leaked secret\n\n- x\n');
+    try {
+      symlinkSync(join(outside, 'secret.md'), join(dir, 'escape.md'));
+    } catch {
+      rmSync(outside, { recursive: true, force: true });
+      return; // platform without symlink permission — skip
+    }
+    expect(listTodoTemplates(dir)).toEqual([{ ref: 'normal', name: 'Normal template' }]);
+    rmSync(outside, { recursive: true, force: true });
   });
 });

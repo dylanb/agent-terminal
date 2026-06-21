@@ -21,17 +21,31 @@ const CHECKBOX = /^\[[ xX]\]\s+/; // ignored task-list marker at the head of an 
  * or null; a missing file or a path escaping `flowDir` both degrade to null (never a throw),
  * mirroring readArtifact's escape guard (§20.2).
  */
+/**
+ * Resolve `candidate` against `root` and return the VALIDATED real path that may be read, or null
+ * if it escapes the root. Lexical check first, then realpath containment so an in-root symlink that
+ * targets a file outside the root is refused; callers read the returned real path (not the literal
+ * abs) to close the realpath→read TOCTOU window (CWE-367, §20.2; mirrors readArtifact).
+ */
+function resolveContained(root: string, candidate: string): string | null {
+  const abs = path.resolve(root, candidate);
+  if (abs !== root && !abs.startsWith(root + path.sep)) return null; // lexical escape guard
+  try {
+    const real = realpathSync(abs);
+    const realRoot = realpathSync(root);
+    if (real !== realRoot && !real.startsWith(realRoot + path.sep)) return null; // symlink escape
+    return real;
+  } catch {
+    return null;
+  }
+}
+
 export function loadTodoTemplateFile(flowDir: string, ref: string): string | null {
   const root = path.resolve(flowDir);
   const read = (candidate: string): string | null => {
-    const abs = path.resolve(root, candidate);
-    if (abs !== root && !abs.startsWith(root + path.sep)) return null; // lexical escape guard
+    const real = resolveContained(root, candidate);
+    if (real === null) return null;
     try {
-      const real = realpathSync(abs);
-      const realRoot = realpathSync(root);
-      if (real !== realRoot && !real.startsWith(realRoot + path.sep)) return null; // symlink escape
-      // Read the VALIDATED real path, not the literal abs: a target swap between the realpath
-      // check and the read would otherwise bypass the guard (TOCTOU/CWE-367, §20.2; mirrors readArtifact).
       return readFileSync(real, 'utf8');
     } catch {
       return null;
@@ -60,13 +74,18 @@ export function listTodoTemplates(templatesDir: string): TodoTemplateRef[] {
   } catch {
     return [];
   }
+  const root = path.resolve(templatesDir);
   const refs: TodoTemplateRef[] = [];
   for (const file of files.sort()) {
     if (!file.endsWith('.md')) continue;
+    // Refuse an in-dir symlink whose real target escapes the root (mirrors loadTodoTemplateFile's
+    // containment guard); skip the entry entirely rather than read an arbitrary file (§20.2).
+    const real = resolveContained(root, file);
+    if (real === null) continue;
     const ref = file.slice(0, -'.md'.length);
     let name = humanize(ref);
     try {
-      const h1 = readFileSync(path.join(templatesDir, file), 'utf8').match(/^#\s+(.+?)\s*$/m);
+      const h1 = readFileSync(real, 'utf8').match(/^#\s+(.+?)\s*$/m);
       if (h1) name = h1[1].trim();
     } catch {
       /* unreadable file → keep the humanized fallback */

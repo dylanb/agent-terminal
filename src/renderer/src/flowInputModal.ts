@@ -32,10 +32,11 @@ function inputField(doc: Document, spec: { name: string; type: string }): { fiel
   return { field, read: () => input.value.trim() };
 }
 
-const TITLE_ID = 'flow-modal-title'; // names the dialog (aria-labelledby → the heading), WCAG 4.1.2
+let modalSeq = 0; // instance-unique title ids: two modals in one document must not collide (WCAG 4.1.2)
 
 export function createFlowInputModal(host: HTMLElement): FlowInputModal {
   const doc = host.ownerDocument; // build from the host's document so the modal relocates (UI §2.2.1)
+  const titleId = `flow-modal-title-${modalSeq++}`; // names the dialog (aria-labelledby → the heading)
   let opener: HTMLElement | null = null; // the element focused when the modal opened (§2.4.3 restore)
   const close = (): void => {
     host.replaceChildren();
@@ -59,7 +60,7 @@ export function createFlowInputModal(host: HTMLElement): FlowInputModal {
       modal.className = 'flow-modal';
       modal.setAttribute('role', 'dialog');
       modal.setAttribute('aria-modal', 'true');
-      modal.setAttribute('aria-labelledby', TITLE_ID);
+      modal.setAttribute('aria-labelledby', titleId);
       modal.addEventListener('keydown', (e) => {
         if (e.key === 'Escape') return close();
         // Trap Tab within the dialog (WCAG 2.4.3): wrap last→first and (shift) first→last so focus
@@ -84,7 +85,7 @@ export function createFlowInputModal(host: HTMLElement): FlowInputModal {
       card.className = 'card';
       const h3 = doc.createElement('h3');
       h3.className = 'serif';
-      h3.id = TITLE_ID;
+      h3.id = titleId;
       h3.textContent = `${stepName} needs an input`;
       const ph = doc.createElement('p');
       ph.className = 'ph';

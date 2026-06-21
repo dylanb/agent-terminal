@@ -599,6 +599,23 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     expect(stepName()).toBe('/repo-step'); // the prior UI is preserved, host not cleared
   });
 
+  it('re-enables a control button when BOTH the action and the refresh() repaint reject (§18.1)', async () => {
+    // The handler disables the button in flight, then on failure falls back to refresh(); if state()
+    // also rejects (refresh swallows + keeps the last UI), the button must not be left permanently
+    // disabled — re-enable it so the user can retry.
+    const deps = fakeFlow('in_progress');
+    const strip = createFlowStrip(host, deps);
+    strip.onRepoChanged('/repo');
+    await vi.waitFor(() => expect(control()!.textContent).toBe('Advance'));
+    const button = control()!;
+
+    deps.advance.mockRejectedValueOnce(new Error('advance failed')); // the action rejects
+    deps.state.mockRejectedValueOnce(new Error('ipc down')); // and the catch→refresh repaint can't repaint
+    button.click();
+
+    await vi.waitFor(() => expect(button.disabled).toBe(false)); // not stuck disabled — retry is possible
+  });
+
   it('builds from host.ownerDocument, not the global document (UI-STANDARDS §3.3)', async () => {
     await assertRendersFromHostDocument(async (h) => {
       const strip = createFlowStrip(h, fakeFlow('in_progress'));

@@ -112,7 +112,10 @@ describe('typed-input modal (§24.2.3 T3 / §18.4)', () => {
     const b = document.getElementById('b')!;
     createFlowInputModal(a).render(prompt(), 'plan', vi.fn());
     createFlowInputModal(b).render(prompt(), 'plan', vi.fn());
-    expect(a.innerHTML).toBe(b.innerHTML);
+    // Identical structure apart from the per-instance title id (unique by design so two modals in one
+    // document keep valid HTML / aria-labelledby, WCAG 4.1.2); normalize it before comparing.
+    const norm = (html: string): string => html.replace(/flow-modal-title-\d+/g, 'flow-modal-title');
+    expect(norm(a.innerHTML)).toBe(norm(b.innerHTML));
   });
 
   it('builds from host.ownerDocument, not the global document (UI-STANDARDS §3.3)', async () => {
@@ -164,6 +167,24 @@ describe('typed-input modal (§24.2.3 T3 / §18.4)', () => {
     modal.render(prompt({ inputs: [{ name: 'note', type: 'free-text' }] }), 'build', vi.fn()); // re-render while open
     modal.render(null, '', vi.fn()); // close
     expect(document.activeElement).toBe(opener); // restored to the ORIGINAL opener, not <body>
+  });
+
+  it('gives each instance a unique title id so two modals in one document keep valid aria-labelledby (WCAG 4.1.2)', () => {
+    document.body.innerHTML = '<div id="a"></div><div id="b"></div>';
+    const a = document.getElementById('a')!;
+    const b = document.getElementById('b')!;
+    createFlowInputModal(a).render(prompt(), 'plan', vi.fn());
+    createFlowInputModal(b).render(prompt(), 'build', vi.fn());
+    const dialogA = a.querySelector('.flow-modal')!;
+    const dialogB = b.querySelector('.flow-modal')!;
+    const idA = dialogA.querySelector('h3')!.id;
+    const idB = dialogB.querySelector('h3')!.id;
+    expect(idA).not.toBe(idB); // distinct ids → valid HTML with both mounted
+    // each dialog's aria-labelledby resolves to ITS OWN heading inside ITS OWN subtree
+    expect(dialogA.getAttribute('aria-labelledby')).toBe(idA);
+    expect(dialogB.getAttribute('aria-labelledby')).toBe(idB);
+    expect(a.querySelector(`#${idA}`)).toBe(dialogA.querySelector('h3'));
+    expect(b.querySelector(`#${idB}`)).toBe(dialogB.querySelector('h3'));
   });
 
   it('traps Tab focus within the dialog (WCAG 2.4.3): last wraps to first, first wraps to last', () => {

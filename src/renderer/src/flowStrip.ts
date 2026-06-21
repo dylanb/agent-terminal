@@ -154,7 +154,13 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
           // appear/disappear — signal it to re-pull (the decoupled contract, §4.1/§9.1).
           window.dispatchEvent(new CustomEvent(FLOW_CHANGED_EVENT));
         })
-        .catch(() => void refresh());
+        .catch(() => void refresh())
+        // If both the action and refresh()'s state() reject, refresh keeps the last UI without
+        // repainting this button — re-enable it so retry is possible. Harmless on success: the
+        // replaceChildren repaint has already detached this button.
+        .finally(() => {
+          button.disabled = false;
+        });
     });
     return button;
   }
