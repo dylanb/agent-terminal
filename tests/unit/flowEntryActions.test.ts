@@ -87,6 +87,31 @@ describe('flow entry actions — bootstrap pickup (§24.2.3 T3 / §18.3/§18.4)'
     expect(result.prompt).toBeUndefined();
     expect(d.inject).toHaveBeenCalledWith('agent-loop pickup'); // no required input to append
   });
+
+  it('treats a reserved prototype-chain input name as unsatisfied (no [object Object] injection)', () => {
+    const d = deps();
+    // `inputs['__proto__']` is truthy via the prototype chain even though nothing was resolved; an
+    // own-property check must still see it as missing and prompt, never inject `[object Object]`.
+    const result = createFlowEntryActions(d)(
+      planStep({ inputs: [{ name: '__proto__', type: 'free-text', required: true }] }),
+      {},
+    );
+    expect(d.inject).not.toHaveBeenCalled();
+    expect(result.prompt).toEqual({ inputs: [{ name: '__proto__', type: 'free-text' }], bootstrap: BOOTSTRAP_PICKUP });
+  });
+
+  it('trims a resolved input value before injecting it', () => {
+    const d = deps();
+    createFlowEntryActions(d)(planStep(), { ticket: '  176  ' });
+    expect(d.inject).toHaveBeenCalledWith('agent-loop pickup 176');
+  });
+
+  it('prompts when a required input is present but blank/whitespace-only', () => {
+    const d = deps();
+    const result = createFlowEntryActions(d)(planStep(), { ticket: '   ' });
+    expect(d.inject).not.toHaveBeenCalled();
+    expect(result.prompt).toEqual({ inputs: [{ name: 'ticket', type: 'github-ticket' }], bootstrap: BOOTSTRAP_PICKUP });
+  });
 });
 
 describe('skillInvocation', () => {
