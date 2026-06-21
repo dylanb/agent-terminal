@@ -51,23 +51,23 @@ describe('loop notifier driven from real state.yaml (§24.2.3 T4)', () => {
   it('raises on a real awaiting-human state.yaml when unfocused', () => {
     writeState('awaiting-human-pr-approval', 9);
     const { notifier, notify } = spyNotifier();
-    notifier.observe(viewNow());
+    notifier.observe(repo, viewNow());
     expect(notify).toHaveBeenCalledTimes(1);
   });
 
   it('does not raise on a real terminal hand-off state.yaml', () => {
     writeState('awaiting-team-review', 9);
     const { notifier, notify } = spyNotifier();
-    notifier.observe(viewNow());
+    notifier.observe(repo, viewNow());
     expect(notify).not.toHaveBeenCalled();
   });
 
   it('re-raises when the human-needed status advances in a later iteration', () => {
     const { notifier, notify } = spyNotifier();
     writeState('awaiting-human-pr-approval', 9);
-    notifier.observe(viewNow());
+    notifier.observe(repo, viewNow());
     writeState('awaiting-human-impl-triage', 11);
-    notifier.observe(viewNow());
+    notifier.observe(repo, viewNow());
     expect(notify).toHaveBeenCalledTimes(2);
   });
 
@@ -76,9 +76,9 @@ describe('loop notifier driven from real state.yaml (§24.2.3 T4)', () => {
     const notify = vi.fn<(o: LoopNotifyOpts) => () => void>(() => close);
     const notifier = createLoopNotifier({ isFocused: () => false, notify, focusWindow: vi.fn(), reveal: vi.fn() });
     writeState('awaiting-human-pr-approval', 9);
-    notifier.observe(viewNow());
+    notifier.observe(repo, viewNow());
     writeFileSync(join(repo, '.agent-loop', 'state.yaml'), 'schema_version: 99\n: not: valid');
-    notifier.observe(viewNow()); // null mirror → no loop on the view
+    notifier.observe(repo, viewNow()); // null mirror → no loop on the view
     expect(close).toHaveBeenCalledTimes(1);
   });
 });

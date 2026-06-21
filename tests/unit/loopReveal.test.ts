@@ -41,6 +41,14 @@ describe('revealLoopReadout (§24.2.3 T4)', () => {
     expect(shell.isLoopPanelOpen()).toBe(true);
   });
 
+  it('opens the read-out when already on the Terminal view with the panel closed', () => {
+    expect(shell.getView()).toBe('1');
+    expect(shell.isLoopPanelOpen()).toBe(false);
+    revealLoopReadout(shell);
+    expect(shell.getView()).toBe('1');
+    expect(shell.isLoopPanelOpen()).toBe(true);
+  });
+
   it('exits viewer-fullscreen and lands on the Terminal view with the read-out open', () => {
     shell.setView('2');
     shell.setViewerFullscreen(true);
