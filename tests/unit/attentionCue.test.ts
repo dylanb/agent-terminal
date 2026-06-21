@@ -74,6 +74,18 @@ describe('attention cue (§24.2.3 T4)', () => {
     expect(host.textContent).toContain('awaiting-human-impl-triage');
   });
 
+  it('re-announces when the human-needed status changes within the SAME iteration', () => {
+    // AC: moving directly from one human-needed status to a different one within one iteration is a
+    // distinct entry — the cue must rebuild and name the new status, not silently keep the old one.
+    const { host, cue } = mount();
+    cue.render(human({ status: 'awaiting-human-pr-approval', iteration: 9 }));
+    const first = host.querySelector('[data-attn-msg]');
+    cue.render(human({ status: 'awaiting-human-impl-triage', iteration: 9 }));
+    expect(shown(host)).toBe(true);
+    expect(host.textContent).toContain('awaiting-human-impl-triage');
+    expect(host.querySelector('[data-attn-msg]')).not.toBe(first); // rebuilt → re-announced
+  });
+
   it('stays hidden for the dismissed occurrence, even when the same view is pushed again', () => {
     const { host, cue } = mount();
     cue.render(human());
