@@ -538,8 +538,8 @@ export interface TodoTemplateInstantiateMsg {
 // ---- Preload-exposed API surfaces (§6) ----
 
 export interface TermApi {
-  onData(cb: (data: string) => void): void;
-  onExit(cb: (msg: PtyExitMsg) => void): void;
+  onData(cb: (data: string) => void): () => void;
+  onExit(cb: (msg: PtyExitMsg) => void): () => void;
   input(data: string): void;
   resize(size: { cols: number; rows: number }): void;
 }

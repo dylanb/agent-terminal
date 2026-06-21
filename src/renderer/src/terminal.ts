@@ -61,9 +61,9 @@ export function createTerminalPane(container: HTMLElement): TerminalPane {
   term.open(container);
   fit.fit();
 
-  window.term.onData((data) => term.write(data));
+  const offData = window.term.onData((data) => term.write(data));
   term.onData((data) => window.term.input(data));
-  window.term.onExit(({ code }) => term.write(`\r\n[process exited: ${code}]\r\n`));
+  const offExit = window.term.onExit(({ code }) => term.write(`\r\n[process exited: ${code}]\r\n`));
 
   // §16.2/§22.4 focus rule: a Send asks for terminal focus on the decoupled bus; the shell turns
   // that into a reveal of the terminal view and announces it here, and ⌘1 announces it directly.
@@ -82,6 +82,8 @@ export function createTerminalPane(container: HTMLElement): TerminalPane {
   return {
     terminal: term,
     dispose() {
+      offData();
+      offExit();
       unwire();
       term.dispose();
     },

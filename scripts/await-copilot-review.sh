@@ -41,17 +41,17 @@ COPILOT_BOT="copilot-pull-request-reviewer[bot]"
 # (the "i" flag makes the whole substring case-insensitive, not just the first letter).
 PRED='select(.user.type=="Bot" and (.user.login|test("copilot";"i")))'
 
+need_value() { [ $# -ge 2 ] || { echo "$1 requires a value" >&2; exit 2; }; }
 while [ $# -gt 0 ]; do
   case "$1" in
-    --request) DO_REQUEST=1 ;;
-    --check) CHECK_ONLY=1 ;;
-    --timeout-min) shift; TIMEOUT_MIN="${1:-}" ;;
-    --interval-sec) shift; INTERVAL_SEC="${1:-}" ;;
+    --request) DO_REQUEST=1; shift ;;
+    --check) CHECK_ONLY=1; shift ;;
+    --timeout-min) need_value "$@"; TIMEOUT_MIN="$2"; shift 2 ;;
+    --interval-sec) need_value "$@"; INTERVAL_SEC="$2"; shift 2 ;;
     -h|--help) sed -n '2,30p' "$0"; exit 0 ;;
     -*) echo "unknown flag: $1" >&2; exit 2 ;;
-    *) if [ -z "$PR" ]; then PR="$1"; else echo "unexpected arg: $1" >&2; exit 2; fi ;;
+    *) if [ -z "$PR" ]; then PR="$1"; shift; else echo "unexpected arg: $1" >&2; exit 2; fi ;;
   esac
-  shift
 done
 
 [ -n "$PR" ] || { echo "usage: $0 <pr> [--request] [--check] [--timeout-min N] [--interval-sec N]" >&2; exit 2; }
