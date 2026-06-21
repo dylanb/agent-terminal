@@ -33,15 +33,15 @@ function resolveContained(root: string, candidate: string): string | null {
 }
 
 /**
- * Resolve a step's `todo_template` ref to a file CO-LOCATED with the flow.yaml that declared it
- * (§18.6/§21.2): `flowDir` is the directory holding flow.yaml, and the ref is read relative to it
- * — so a global ~/.agent-terminal/flow.yaml's template lives in ~/.agent-terminal/, a repo-local
- * one in <repo>/.agent-terminal/. A bare name resolves with `.md` appended. Returns the markdown
- * or null; a missing file or a path escaping `flowDir` both degrade to null (never a throw),
- * mirroring readArtifact's escape guard (§20.2).
+ * Resolve a step's `todo_template` ref to a file inside `baseDir`, the templates directory the ref
+ * resolves within (§18.6/§21.2). Callers pass `<flowDir>/todo-templates` (see index.ts) — the
+ * `todo-templates/` subdir co-located with the flow.yaml that declared the step, NOT the flow dir
+ * itself. A bare name resolves with `.md` appended. Returns the markdown or null; a missing file or
+ * a path escaping `baseDir` both degrade to null (never a throw), mirroring readArtifact's escape
+ * guard (§20.2).
  */
-export function loadTodoTemplateFile(flowDir: string, ref: string): string | null {
-  const root = path.resolve(flowDir);
+export function loadTodoTemplateFile(baseDir: string, ref: string): string | null {
+  const root = path.resolve(baseDir);
   const read = (candidate: string): string | null => {
     const real = resolveContained(root, candidate);
     if (real === null) return null;
@@ -108,5 +108,7 @@ export function parseTodoTemplate(markdown: string): string[] {
     }
     // Headings, blank lines, and col-0 prose are ignored (they neither start nor extend a todo).
   }
-  return todos;
+  // Drop empties: a bare marker or empty checkbox (`-` / `- [ ]`) must not instantiate a blank todo
+  // (a folded continuation can still have filled an otherwise-empty item above, so filter at the end).
+  return todos.filter((t) => t.length > 0);
 }

@@ -73,6 +73,21 @@ describe('cross-highlight (§16.8 — terminal source ↔ capture finding)', () 
     expect(document.querySelector('.finding[data-find="f1"]')).not.toBeNull();
   });
 
+  it('reveal() tolerates ids with selector-significant characters (no DOMException)', () => {
+    const weird = 'f"]:x'; // a quote + bracket + pseudo-class char would break a raw selector
+    document.body.innerHTML = `
+      <div id="h2">
+        <div class="term"><span class="src" data-find='${weird}'>s</span></div>
+        <div class="capture"><div class="finding" data-find='${weird}'>f</div></div>
+      </div>`;
+    const h2 = document.getElementById('h2')!;
+    const ch2 = wireCrossHighlight(h2);
+    expect(() => ch2.reveal(weird, true)).not.toThrow();
+    expect(h2.querySelector('.finding')!.classList.contains('revealing')).toBe(true);
+    expect(h2.querySelector('.term .src')!.classList.contains('lit')).toBe(true);
+    ch2.dispose();
+  });
+
   it('after dispose, hovering no longer lights anything', () => {
     ch.dispose();
     enter(finding('f1'));

@@ -131,6 +131,15 @@ describe('focus on view activation (§22.4)', () => {
     announce('1');
     expect(document.activeElement).not.toBe(v.treeitems()[0]);
   });
+
+  it('treats a FOCUS_VIEW_EVENT with no detail as a safe no-op (does not throw)', async () => {
+    const v = mount();
+    await v.api.refresh();
+    const focusedBefore = document.activeElement;
+    // CustomEvent with no init → detail is null; the handler must not deref it and throw.
+    expect(() => window.dispatchEvent(new CustomEvent(FOCUS_VIEW_EVENT))).not.toThrow();
+    expect(document.activeElement).toBe(focusedBefore); // no unintended tree focus
+  });
 });
 
 describe('artifact viewer (§20.1/§20.2 — real discovery)', () => {

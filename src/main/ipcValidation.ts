@@ -42,7 +42,7 @@ const TODO_SOURCE_TYPES: readonly TodoSourceType[] = [
 ];
 
 function isRecord(m: unknown): m is Record<string, unknown> {
-  return typeof m === 'object' && m !== null;
+  return typeof m === 'object' && m !== null && !Array.isArray(m);
 }
 
 function isLiveSession(m: Record<string, unknown>): boolean {

@@ -17,9 +17,9 @@ const SHELL_HTML = `
     <button id="qs">Quick-send</button>
     <button id="tg">theme</button>
     <span data-theme-label>Light</span>
-    <span id="loopstat" role="button" tabindex="0" aria-expanded="false" aria-controls="loop-panel">Loop</span>
+    <span class="stat loopstat" role="button" tabindex="0" aria-expanded="false" aria-controls="loop-panel">Loop</span>
   </aside>
-  <aside class="loop-panel" id="loop-panel"><button id="lclose">x</button></aside>
+  <aside class="loop-panel" id="loop-panel"><button data-loop-close>x</button></aside>
   <main class="main">
     <div data-viewpane="1" class="on">term</div>
     <div data-viewpane="2">artifacts</div>
@@ -220,7 +220,7 @@ describe('shell controller (§24.1C — views, hotkeys, docked drawer, theme)', 
     });
 
     it('toggles the dock column open/closed without a scrim, marking the read-out expanded', () => {
-      const loopstat = document.getElementById('loopstat') as HTMLElement;
+      const loopstat = document.querySelector('.loopstat') as HTMLElement;
       shell.toggleLoopPanel();
       expect(app.classList.contains('loop-open')).toBe(true);
       expect(shell.isLoopPanelOpen()).toBe(true);
@@ -233,14 +233,14 @@ describe('shell controller (§24.1C — views, hotkeys, docked drawer, theme)', 
     });
 
     it('opens by clicking the rail Loop read-out and closes via the panel close button', () => {
-      (document.getElementById('loopstat') as HTMLElement).click();
+      (document.querySelector('.loopstat') as HTMLElement).click();
       expect(shell.isLoopPanelOpen()).toBe(true);
-      (document.getElementById('lclose') as HTMLElement).click();
+      (document.querySelector('[data-loop-close]') as HTMLElement).click();
       expect(shell.isLoopPanelOpen()).toBe(false);
     });
 
     it('activates the role=button Loop read-out by keyboard (Enter and Space), WCAG 2.1.1', () => {
-      const loopstat = document.getElementById('loopstat') as HTMLElement;
+      const loopstat = document.querySelector('.loopstat') as HTMLElement;
       const press = (key: string) =>
         loopstat.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }));
       press('Enter');

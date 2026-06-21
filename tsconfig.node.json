@@ -37,6 +37,8 @@
     "src/renderer/src/flowInputModal.ts",
     "src/renderer/src/artifacts.ts",
     "src/renderer/src/viewerRender.ts",
+    "src/renderer/src/terminal.ts",
+    "src/renderer/src/env.d.ts",
     "electron.vite.config.ts",
     "tests/unit/**/*.ts",
     "tests/integration/**/*.ts",

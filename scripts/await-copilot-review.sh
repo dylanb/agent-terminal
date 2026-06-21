@@ -37,20 +37,21 @@ CHECK_ONLY=0
 TIMEOUT_MIN=30
 INTERVAL_SEC=20
 COPILOT_BOT="copilot-pull-request-reviewer[bot]"
-# Representation-robust matcher (trap #1): a Bot whose login contains "copilot", any case.
-PRED='select(.user.type=="Bot" and (.user.login|test("[Cc]opilot")))'
+# Representation-robust matcher (trap #1): a Bot whose login contains "copilot", any case
+# (the "i" flag makes the whole substring case-insensitive, not just the first letter).
+PRED='select(.user.type=="Bot" and (.user.login|test("copilot";"i")))'
 
+need_value() { [ $# -ge 2 ] || { echo "$1 requires a value" >&2; exit 2; }; }
 while [ $# -gt 0 ]; do
   case "$1" in
-    --request) DO_REQUEST=1 ;;
-    --check) CHECK_ONLY=1 ;;
-    --timeout-min) shift; TIMEOUT_MIN="${1:-}" ;;
-    --interval-sec) shift; INTERVAL_SEC="${1:-}" ;;
+    --request) DO_REQUEST=1; shift ;;
+    --check) CHECK_ONLY=1; shift ;;
+    --timeout-min) need_value "$@"; TIMEOUT_MIN="$2"; shift 2 ;;
+    --interval-sec) need_value "$@"; INTERVAL_SEC="$2"; shift 2 ;;
     -h|--help) sed -n '2,30p' "$0"; exit 0 ;;
     -*) echo "unknown flag: $1" >&2; exit 2 ;;
-    *) if [ -z "$PR" ]; then PR="$1"; else echo "unexpected arg: $1" >&2; exit 2; fi ;;
+    *) if [ -z "$PR" ]; then PR="$1"; shift; else echo "unexpected arg: $1" >&2; exit 2; fi ;;
   esac
-  shift
 done
 
 [ -n "$PR" ] || { echo "usage: $0 <pr> [--request] [--check] [--timeout-min N] [--interval-sec N]" >&2; exit 2; }
@@ -92,7 +93,9 @@ echo "waiting for review #$(( BASE_N + 1 )) (poll ${INTERVAL_SEC}s, up to ${TIME
 i=0
 while [ "$i" -lt "$ITERS" ]; do
   i=$(( i + 1 ))
-  N=$(copilot_reviews 2>/dev/null | count_lines)
+  # A transient gh/network failure must not kill the wait (set -euo pipefail would otherwise exit
+  # on the failed pipeline): treat a failed poll as "no change yet" and try again next interval.
+  N=$(copilot_reviews 2>/dev/null | count_lines) || N="$BASE_N"
   if [ "$N" -gt "$BASE_N" ]; then
     NEW_ID=$(gh api "repos/$REPO/pulls/$PR/reviews?per_page=100" \
       --jq "map($PRED) | max_by(.submitted_at) | .id")

@@ -20,8 +20,12 @@ export interface CrossHighlight {
 
 export function wireCrossHighlight(host: HTMLElement): CrossHighlight {
   function reveal(id: string, on: boolean): void {
-    host.querySelector(`.term .src[data-find="${id}"]`)?.classList.toggle('lit', on);
-    host.querySelector(`.finding[data-find="${id}"]`)?.classList.toggle('revealing', on);
+    // Escape the id for a quoted attribute selector (only " and \ are special inside the quotes):
+    // a data-find value with selector-significant chars would otherwise make querySelector throw a
+    // DOMException and break cross-highlight. Done inline (not CSS.escape) so it holds under jsdom too.
+    const find = id.replace(/["\\]/g, '\\$&');
+    host.querySelector(`.term .src[data-find="${find}"]`)?.classList.toggle('lit', on);
+    host.querySelector(`.finding[data-find="${find}"]`)?.classList.toggle('revealing', on);
   }
 
   const cleanups: Array<() => void> = [];

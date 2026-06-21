@@ -44,18 +44,26 @@ export type FlowEntryActions = (step: FlowStepDef, inputs?: Record<string, strin
 
 export function createFlowEntryActions(deps: FlowEntryActionDeps): FlowEntryActions {
   return (step, inputs = {}) => {
+    // Resolve a typed input by OWN property only, trimmed: a plain `inputs[name]` truthiness check is
+    // fooled by prototype-chain keys (e.g. an input named `__proto__` would read as a truthy object and
+    // inject `[object Object]`), and a blank/whitespace value must count as unsatisfied (§18.4).
+    const resolved = (name: string): string => {
+      if (!Object.prototype.hasOwnProperty.call(inputs, name)) return '';
+      const v = inputs[name];
+      return typeof v === 'string' ? v.trim() : '';
+    };
     if (step.skill) {
       if (deps.isShellBusy()) return { notice: BUSY_NOTICE };
       deps.inject(skillInvocation(step.skill));
     }
     if (step.bootstrap === 'pickup') {
       const required = (step.inputs ?? []).filter((i) => i.required);
-      const missing = required.filter((i) => !inputs[i.name]);
+      const missing = required.filter((i) => resolved(i.name) === '');
       if (missing.length > 0) {
         return { prompt: { inputs: missing.map(({ name, type }) => ({ name, type })), bootstrap: BOOTSTRAP_PICKUP } };
       }
       if (deps.isShellBusy()) return { notice: BUSY_NOTICE };
-      deps.inject([BOOTSTRAP_PICKUP, ...required.map((i) => inputs[i.name])].join(' '));
+      deps.inject([BOOTSTRAP_PICKUP, ...required.map((i) => resolved(i.name))].join(' '));
     }
     return {};
   };

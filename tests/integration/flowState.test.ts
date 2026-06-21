@@ -88,4 +88,20 @@ describe('flow-state store (§24.2.2 S3 / §19.1)', () => {
     const lines = readFileSync(join(dir, '.gitignore'), 'utf8').split('\n');
     expect(lines.filter((l) => l === GITIGNORE_ENTRY)).toHaveLength(1);
   });
+
+  it('reads a __proto__ inputs key as own data without prototype pollution', () => {
+    mkdirSync(join(dir, '.agent-terminal'), { recursive: true });
+    // An adversarial / hand-edited flow-state.yaml whose inputs map carries a reserved key.
+    writeFileSync(
+      join(dir, '.agent-terminal', 'flow-state.yaml'),
+      'step: plan\nstatus: in_progress\ninputs:\n  __proto__: PWNED\n  ticket: "5"\n',
+    );
+    const state = createFlowStateStore(dir).read();
+    expect(state).not.toBeNull();
+    // The reserved key must round-trip as own data, not vanish into the prototype setter.
+    expect(Object.prototype.hasOwnProperty.call(state!.inputs, '__proto__')).toBe(true);
+    expect(state!.inputs!['__proto__']).toBe('PWNED');
+    expect(state!.inputs!.ticket).toBe('5');
+    expect(({} as Record<string, unknown>).PWNED).toBeUndefined(); // no global pollution
+  });
 });

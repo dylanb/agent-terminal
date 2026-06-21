@@ -68,6 +68,10 @@ export interface FlowStrip {
  *  composition root (§24.2.3 T2) — it routes the data to the sibling docked panel without the strip
  *  reaching across organisms. Fired on every render: `null` when the step has no loop mirror. */
 export type FlowStripDeps = FlowApi & {
+  /** The docked loop panel's element id, injected by the composition root so the read-out's
+   *  `aria-controls` is instance-scoped — the organism never bakes in a document-level id
+   *  (UI-STANDARDS §2.2 rule 1). Omitted → no aria-controls (aria-expanded still conveys state). */
+  loopPanelId?: string;
   onLoopState?: (loop: FlowLoopView | null, title: string) => void;
   /** Hand a step-entry input prompt (§24.2.3 T3) to the composition root, which opens its modal
    *  organism. `submit` records the typed values (provideInput) and re-renders. `null` closes the
@@ -85,14 +89,13 @@ function header(doc: Document, text: string): HTMLElement {
 /** The compact read-only loop read-out (§24.2.3 T2) shown in the rail: a 3-tone status pill (the
  *  one-word tone, not the unbounded status) + the iteration, framed as a `role=button` that opens
  *  the docked panel (the shell wires the click). The exact v4 vocabulary lives in that panel. */
-function loopReadout(doc: Document, loop: FlowLoopView): HTMLElement {
+function loopReadout(doc: Document, loop: FlowLoopView, controlsId?: string): HTMLElement {
   const stat = doc.createElement('span');
   stat.className = 'stat loopstat';
-  stat.id = 'loopstat';
   stat.setAttribute('role', 'button');
   stat.tabIndex = 0;
   stat.setAttribute('aria-expanded', 'false');
-  stat.setAttribute('aria-controls', 'loop-panel');
+  if (controlsId) stat.setAttribute('aria-controls', controlsId); // instance-scoped; never a baked-in id
 
   const k = doc.createElement('span');
   k.className = 'k';
@@ -170,7 +173,7 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
   function render(state: FlowStateView): void {
     // A background push repaints the whole rail; if the keyboard user was on the Loop read-out, carry
     // their focus across the rebuild rather than dropping it to <body> (WCAG 2.4.3).
-    const keepLoopFocus = doc.activeElement instanceof HTMLElement && doc.activeElement.id === 'loopstat' && host.contains(doc.activeElement);
+    const keepLoopFocus = doc.activeElement instanceof HTMLElement && doc.activeElement.classList.contains('loopstat') && host.contains(doc.activeElement);
     host.replaceChildren();
 
     if (state.status === 'error') {
@@ -218,8 +221,8 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
     // The loop's own status is the live signal, so it supersedes the todo-derived line (todos don't
     // drive a loop). null clears + closes the panel on a non-loop step.
     if (state.loop) {
-      host.append(loopReadout(doc, state.loop));
-      if (keepLoopFocus) host.querySelector<HTMLElement>('#loopstat')?.focus();
+      host.append(loopReadout(doc, state.loop, deps.loopPanelId));
+      if (keepLoopFocus) host.querySelector<HTMLElement>('.loopstat')?.focus();
     }
     deps.onLoopState?.(state.loop ?? null, state.stepName);
 
@@ -261,7 +264,15 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
       // The cwd may move while the (blocking) modal is open; a stale submit must not land the value
       // on the now-current repo — drop it rather than write to the wrong flow.
       if (boundRepo === null || repoKey !== boundRepo) return;
-      deps.provideInput(boundRepo, values).then(applyTransition).catch(() => void refresh());
+      deps
+        .provideInput(boundRepo, values)
+        .then((view) => {
+          // The cwd may also move WHILE provideInput is in flight; the awaited view belongs to
+          // boundRepo, so drop it if we've since moved (mirrors controlButton's post-await guard).
+          if (repoKey !== boundRepo) return;
+          applyTransition(view);
+        })
+        .catch(() => void refresh());
     });
   }
 

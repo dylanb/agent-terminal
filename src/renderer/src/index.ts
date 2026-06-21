@@ -12,7 +12,7 @@ import { renderMarkdownInto, renderCodeInto } from './viewerRender';
 import { doInject } from './paneActions';
 import { createRepoContext } from './repoContext';
 
-const term = createTerminalPane(document.getElementById('terminal')!);
+const { terminal: term } = createTerminalPane(document.getElementById('terminal')!);
 // One shared OSC-7 repo provider (§16.3): seeds the repo key once and feeds the terminal
 // selection capture, the todo list, and the artifact viewer — so no consumer re-derives it.
 const repo = createRepoContext(window.monitor);
@@ -53,14 +53,15 @@ if (flowStripHost) {
   const inputModal = modalHost ? createFlowInputModal(modalHost) : undefined;
   const flowStrip = createFlowStrip(flowStripHost, {
     ...window.flow,
+    loopPanelId: loopPanelHost?.id, // inject the controlled panel id (instance-scoped aria-controls)
     onLoopState: (loop, title) => {
       loopPanel?.render(loop, title);
       if (!loop) {
         shell.closeLoopPanel(); // the read-out is gone; never leave an empty panel docked
       } else {
-        // The strip just re-rendered a fresh #loopstat (default aria-expanded=false); if the panel
+        // The strip just re-rendered a fresh .loopstat (default aria-expanded=false); if the panel
         // is open, re-sync the read-out so it doesn't read collapsed while the column is docked.
-        document.getElementById('loopstat')?.setAttribute('aria-expanded', String(shell.isLoopPanelOpen()));
+        document.querySelector('.loopstat')?.setAttribute('aria-expanded', String(shell.isLoopPanelOpen()));
       }
     },
     onPrompt: (prompt, stepName, submit) => inputModal?.render(prompt, stepName, submit),

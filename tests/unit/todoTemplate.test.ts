@@ -38,6 +38,10 @@ describe('parseTodoTemplate (§21.2)', () => {
     expect(parseTodoTemplate(md)).toEqual(['first item', 'second item', 'third item']);
   });
 
+  it('drops empty items so a bare marker or empty checkbox makes no blank todo', () => {
+    expect(parseTodoTemplate('- first\n- \n- [ ] \n- second')).toEqual(['first', 'second']);
+  });
+
   it('returns no todos for a template with no list items', () => {
     expect(parseTodoTemplate('# Title\n\nJust prose, no list.')).toEqual([]);
     expect(parseTodoTemplate('')).toEqual([]);

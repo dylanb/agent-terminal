@@ -29,9 +29,17 @@ import {
   type UiSettings,
 } from '../shared/ipc';
 
-const termApi: TermApi = {
-  onData: (cb) => ipcRenderer.on(CH.ptyData, (_e, m: PtyDataMsg) => cb(m.data)),
-  onExit: (cb) => ipcRenderer.on(CH.ptyExit, (_e, m: PtyExitMsg) => cb(m)),
+export const termApi: TermApi = {
+  onData: (cb) => {
+    const h = (_e: unknown, m: PtyDataMsg): void => cb(m.data);
+    ipcRenderer.on(CH.ptyData, h);
+    return () => ipcRenderer.removeListener(CH.ptyData, h);
+  },
+  onExit: (cb) => {
+    const h = (_e: unknown, m: PtyExitMsg): void => cb(m);
+    ipcRenderer.on(CH.ptyExit, h);
+    return () => ipcRenderer.removeListener(CH.ptyExit, h);
+  },
   input: (data) => ipcRenderer.send(CH.ptyInput, { sessionId: SESSION_ID, data }),
   resize: (size) => ipcRenderer.send(CH.ptyResize, { sessionId: SESSION_ID, ...size }),
 };
