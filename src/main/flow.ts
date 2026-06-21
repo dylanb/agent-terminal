@@ -240,20 +240,29 @@ export function createFlowMachine(
   // last step's Advance completed the whole flow.
   let index = 0;
   let status: FlowStatus = 'not_started';
+  // The flow's resolved typed inputs (§18.4 / §24.2.3 T3), flow-wide so a value resolved at one step
+  // threads to later steps.
+  let inputs: Record<string, string> = {};
 
-  // Resume only progression that names a step still in *this* definition (§19.1): the persisted
-  // step id locates the index; a changed flow.yaml whose step is gone starts fresh.
-  const persisted = store?.read();
-  if (persisted) {
+  // Re-read the persisted progression from the store (§19.1: flow-state.yaml is the source of truth).
+  // Run at construction AND on every state() query, so an external advance — the agent-loop CLI moving
+  // the flow, or a manual edit — is reflected live, not frozen at first read. Resume only a step still
+  // in *this* definition: a changed flow.yaml whose persisted step is gone starts fresh.
+  const hydrate = (): void => {
+    if (!store) return; // no backing store (tests / transient): in-memory state is authoritative
+    index = 0;
+    status = 'not_started';
+    inputs = {};
+    const persisted = store.read();
+    if (!persisted) return;
     const i = names.indexOf(persisted.step);
     if (i >= 0) {
       index = i;
       status = persisted.status;
     }
-  }
-  // The flow's resolved typed inputs (§18.4 / §24.2.3 T3), flow-wide so a value resolved at one step
-  // threads to later steps. Hydrated from flow-state so persisted answers survive a relaunch.
-  let inputs: Record<string, string> = persisted?.inputs ? { ...persisted.inputs } : {};
+    if (persisted.inputs) inputs = { ...persisted.inputs };
+  };
+  hydrate();
 
   const current = (): FlowStepDef => steps[index];
 
@@ -298,7 +307,10 @@ export function createFlowMachine(
   };
 
   return {
-    state: view,
+    state: () => {
+      hydrate(); // §19.1: reflect the on-disk progression, not the construction-time snapshot
+      return view();
+    },
     start: () => {
       requireStatus('not_started', 'start');
       status = 'in_progress';
