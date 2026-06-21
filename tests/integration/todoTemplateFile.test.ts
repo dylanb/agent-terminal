@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { loadTodoTemplateFile } from '../../src/main/todoTemplate';
@@ -37,5 +37,19 @@ describe('loadTodoTemplateFile (§18.6 — co-located with flow.yaml)', () => {
   it('refuses a path that escapes the flow directory (returns null)', () => {
     writeFileSync(join(flowDir, '..', 'outside.md'), '- leaked\n');
     expect(loadTodoTemplateFile(flowDir, '../outside.md')).toBeNull();
+  });
+
+  it('refuses an in-root symlink that targets a file outside the flow directory (returns null)', () => {
+    // A symlink that lives inside flowDir but points outside it passes the lexical guard;
+    // the loader must still refuse it (resolve real paths, not just the literal path).
+    const outside = mkdtempSync(join(tmpdir(), 'todo-tmpl-outside-'));
+    writeFileSync(join(outside, 'secret.md'), '- leaked secret\n');
+    try {
+      symlinkSync(join(outside, 'secret.md'), join(flowDir, 'link.md'));
+    } catch {
+      return; // platform without symlink permission — skip
+    }
+    expect(loadTodoTemplateFile(flowDir, 'link.md')).toBeNull();
+    rmSync(outside, { recursive: true, force: true });
   });
 });

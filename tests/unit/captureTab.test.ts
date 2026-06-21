@@ -1,6 +1,8 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { wireMonitorPane, REVEAL_TERMINAL_EVENT } from '../../src/renderer/src/monitor';
+import { createCaptureTab } from '../../src/renderer/src/captureTab';
+import { assertRendersFromHostDocument } from './relocatable';
 import { DEFAULT_UI_SETTINGS } from '../../src/shared/ipc';
 import type { MonitorEvent, TodoItem, UiSettings } from '../../src/shared/ipc';
 
@@ -432,5 +434,34 @@ describe('Capture tab §24.2.1 — report prose fallback (report with no finding
     expect(card).toBeTruthy();
     expect(card.querySelector('details')).toBeTruthy();
     expect(card.textContent).toContain('watch the scrollback bound');
+  });
+});
+
+// UI-STANDARDS §3.3 / §2.2 rule 1: the organism must build its DOM from the host's
+// ownerDocument, never the ambient global document — else it is not relocatable to a
+// separate-process pane. See memory jsdom-adoption-masks-global-document.
+describe('Capture tab — relocation (UI-STANDARDS §3.3)', () => {
+  it('builds toolbar + cards from host.ownerDocument, not the global document', async () => {
+    await assertRendersFromHostDocument((h) => {
+      const blocks = h.ownerDocument.createElement('div');
+      h.appendChild(blocks);
+      const tab = createCaptureTab({
+        blocksEl: blocks,
+        todoSink: { currentRepoKey: () => null, addFromCapture: async () => null, deleteTodo: async () => {} },
+        monitor: { dismiss: () => {}, dismissAll: () => {} },
+        doInject: () => {},
+      });
+      tab.appendBlock({
+        id: 'e1',
+        sessionId: 's1',
+        type: 'finding',
+        source: 'selection',
+        text: 'a finding worth keeping',
+        range: null,
+        parentId: null,
+        truncated: false,
+        capturedAt: '2026-06-12T10:00:00.000Z',
+      } as MonitorEvent);
+    });
   });
 });

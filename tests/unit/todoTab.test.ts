@@ -1,6 +1,8 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { wireMonitorPane, FOCUS_TERMINAL_EVENT } from '../../src/renderer/src/monitor';
+import { createTodoTab, type TodoTabDeps } from '../../src/renderer/src/todoTab';
+import { assertRendersFromHostDocument } from './relocatable';
 import { DEFAULT_UI_SETTINGS } from '../../src/shared/ipc';
 import type { TodoItem, UiSettings } from '../../src/shared/ipc';
 
@@ -759,6 +761,30 @@ describe('Todo tab §24.2.1 — review fixes (reorder stability, focus, a11y lab
       } finally {
         vi.useRealTimers();
       }
+    });
+  });
+});
+
+// UI-STANDARDS §3.3 / §2.2 rule 1: the organism must build its DOM from the host's
+// ownerDocument, never the ambient global document — else it is not relocatable to a
+// separate-process pane. See memory jsdom-adoption-masks-global-document.
+describe('Todo tab — relocation (UI-STANDARDS §3.3)', () => {
+  it('renders the composer/list from host.ownerDocument, not the global document', async () => {
+    const noopMonitor = {
+      todoList: vi.fn(async () => []),
+      todoAdd: vi.fn(async () => []),
+      todoUpdate: vi.fn(async () => []),
+      todoReorder: vi.fn(async () => []),
+      todoSetStatus: vi.fn(async () => []),
+      todoDelete: vi.fn(async () => []),
+      listTemplates: vi.fn(async () => ({ templates: [] })),
+      instantiateTemplate: vi.fn(async () => []),
+    } as unknown as TodoTabDeps['monitor'];
+    await assertRendersFromHostDocument((h) => {
+      const list = h.ownerDocument.createElement('div');
+      const count = h.ownerDocument.createElement('span');
+      h.append(list, count);
+      createTodoTab({ todoListEl: list, todoCountEl: count, monitor: noopMonitor, doInject: () => {} });
     });
   });
 });

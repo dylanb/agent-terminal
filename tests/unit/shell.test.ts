@@ -366,4 +366,39 @@ describe('shell controller (§24.1C — views, hotkeys, docked drawer, theme)', 
       expect(shell.getView()).toBe('1');
     });
   });
+
+  // UI-STANDARDS §3.3: the shell must read and write through root.ownerDocument, never the ambient
+  // global `document`. The shell controls pre-existing markup rather than creating much DOM, so the
+  // childElementCount recipe (assertRendersFromHostDocument) does not fit; instead mount it on a root
+  // that lives in a FOREIGN document with the global createElement(NS) starved, drive its public
+  // interface, and assert (a) it does not reach the global document (no throw) and (b) its theme
+  // attribute lands on the FOREIGN documentElement — never the global one.
+  it('operates through root.ownerDocument, not the global document (UI-STANDARDS §3.3)', () => {
+    const foreign = document.implementation.createHTMLDocument();
+    foreign.body.innerHTML = SHELL_HTML;
+    const foreignApp = foreign.getElementById('app')!;
+    const reach = (api: string) => () => {
+      throw new Error(`shell reached for the global document.${api} instead of root.ownerDocument`);
+    };
+    const ce = vi.spyOn(document, 'createElement').mockImplementation(reach('createElement'));
+    const cens = vi.spyOn(document, 'createElementNS').mockImplementation(reach('createElementNS'));
+    try {
+      shell = createShell(foreignApp);
+      // Drive the public interface: view switch, drawer + loop toggles, and a theme toggle.
+      shell.setView('2');
+      shell.toggleDrawer();
+      shell.toggleLoopPanel();
+      shell.setTheme('dark');
+      // Discriminating: the theme attribute landed on the FOREIGN documentElement, and the global
+      // one was left untouched (a reach to the global `document` would have hit it instead).
+      expect(foreign.documentElement.getAttribute('data-theme')).toBe('dark');
+      expect(document.documentElement.getAttribute('data-theme')).toBeNull();
+      expect(foreignApp.classList.contains('drawer-open')).toBe(false);
+      expect(foreignApp.classList.contains('loop-open')).toBe(true);
+      expect((foreignApp.querySelector('[data-viewpane="2"]') as HTMLElement).classList.contains('on')).toBe(true);
+    } finally {
+      ce.mockRestore();
+      cens.mockRestore();
+    }
+  });
 });

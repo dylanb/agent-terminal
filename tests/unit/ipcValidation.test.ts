@@ -23,6 +23,8 @@ import {
   isValidTodoReorder,
   isValidTodoSetStatus,
   isValidTodoUpdate,
+  isValidViewerTree,
+  isValidViewerRead,
 } from '../../src/main/ipcValidation';
 
 const sid = SESSION_ID;
@@ -222,5 +224,26 @@ describe('IPC payload validation (§6 — renderer-supplied input is untrusted)'
   it('accepts a todo:delete and rejects a missing id', () => {
     expect(isValidTodoDelete({ sessionId: sid, repoKey: '/r', id: 'a' })).toBe(true);
     expect(isValidTodoDelete({ sessionId: sid, repoKey: '/r' })).toBe(false);
+  });
+
+  // ---- viewer:* validators (§20.1 / §20.2) ----
+
+  it('accepts a viewer:tree with a known scope and rejects a bad/missing scope or wrong session', () => {
+    expect(isValidViewerTree({ sessionId: sid, scope: 'curated' })).toBe(true);
+    expect(isValidViewerTree({ sessionId: sid, scope: 'repo' })).toBe(true);
+    expect(isValidViewerTree({ sessionId: sid, scope: 'bogus' })).toBe(false);
+    expect(isValidViewerTree({ sessionId: sid, scope: 7 })).toBe(false);
+    expect(isValidViewerTree({ sessionId: sid })).toBe(false); // scope required
+    expect(isValidViewerTree({ sessionId: 'other', scope: 'curated' })).toBe(false);
+    expect(isValidViewerTree(null)).toBe(false);
+  });
+
+  it('accepts a viewer:read with a string relPath and rejects missing/non-string relPath or wrong session', () => {
+    expect(isValidViewerRead({ sessionId: sid, relPath: 'src/a.ts' })).toBe(true);
+    expect(isValidViewerRead({ sessionId: sid, relPath: '' })).toBe(true); // emptiness is the loader's concern; the boundary only types it
+    expect(isValidViewerRead({ sessionId: sid, relPath: 7 })).toBe(false);
+    expect(isValidViewerRead({ sessionId: sid })).toBe(false); // relPath required
+    expect(isValidViewerRead({ sessionId: 'other', relPath: 'src/a.ts' })).toBe(false);
+    expect(isValidViewerRead(null)).toBe(false);
   });
 });

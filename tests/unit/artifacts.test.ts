@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createArtifacts, selectionWithin } from '../../src/renderer/src/artifacts';
 import { FOCUS_VIEW_EVENT } from '../../src/renderer/src/paneActions';
 import type { ArtifactTree, ViewerFile } from '../../src/shared/ipc';
+import { assertRendersFromHostDocument } from './relocatable';
 
 // §20.1/§20.2 artifact viewer organism: a hierarchical file tree fed by real discovery
 // (loadTree) and a viewer that reads file content (loadFile) through injected seams, with a
@@ -704,6 +705,21 @@ describe('artifact viewer (§20.1/§20.2 — real discovery)', () => {
     const v = mount(TREE_CURATED, { loadFile: vi.fn(async () => { throw new Error('ipc down'); }) });
     await v.api.refresh(); // opens the first file → loadFile rejects
     expect(v.host.textContent).toContain('Cannot display this file');
+  });
+
+  it('builds from host.ownerDocument, not the global document (UI-STANDARDS §3.3)', async () => {
+    await assertRendersFromHostDocument(async (host) => {
+      const api = createArtifacts(host, {
+        loadTree: async (scope) => (scope === 'repo' ? TREE_REPO : TREE_CURATED),
+        loadFile: async (relPath) => fileFor(relPath),
+        renderMarkdown: (body, into) => { into.textContent = body; },
+        renderCode: (body, _lang, into) => { into.textContent = body; },
+        send: vi.fn(),
+        addToTodo: vi.fn(),
+        readSelection: () => '',
+      });
+      await api.refresh(); // drives a tree render under the host
+    });
   });
 
   it('refresh() leaves the previous tree in place when loadTree rejects', async () => {
