@@ -44,6 +44,7 @@ export const CH = {
   flowUndo: 'flow:undo',
   flowProvideInput: 'flow:provideInput',
   flowOnStateChanged: 'flow:onStateChanged',
+  flowRevealLoop: 'flow:revealLoop',
   todoTemplateList: 'todoTemplate:list',
   todoTemplateInstantiate: 'todoTemplate:instantiate',
 } as const;
@@ -342,6 +343,7 @@ export interface ChannelPayloads {
   'monitor:commandsChanged': CommandsChangedMsg;
   'cwd:changed': CwdChangedMsg;
   'flow:onStateChanged': FlowStateChangedMsg;
+  'flow:revealLoop': FlowRevealLoopMsg;
 }
 
 export type SendChannel = keyof ChannelPayloads;
@@ -430,6 +432,12 @@ export interface FlowLoopView {
    *  (`approve`/`request-changes`/`impasse`). Present only at an awaiting gate with a resolvable
    *  LoopDef; absent mid-work, at a terminal gate, or when the LoopDef does not resolve. */
   gateOptions?: string[];
+  /** Observable "the loop is blocked awaiting a human" classification (§24.2.3 T4): true at a
+   *  LoopDef human-decision gate (or, with no resolvable LoopDef, the shared awaiting-human/impasse
+   *  family), false at a terminal hand-off or mid-work. Computed by main (where the LoopDef
+   *  resolves); the renderer reads it rather than re-deriving the gate/awaiting logic. Always set on
+   *  a derived loop view — the `?` is for hand-constructed views only. */
+  humanNeeded?: boolean;
 }
 
 /** One typed input the renderer's modal must collect (§18.4 / §24.2.3 T3): the field `name` and its
@@ -485,6 +493,14 @@ export interface FlowStateView {
  *  (a todo mutated, the agent flipped active/quiet); the strip re-pulls `flow:state`. Carries no
  *  payload beyond the session — the strip re-pulls for its own current repoKey (§16.3). */
 export interface FlowStateChangedMsg {
+  sessionId: SessionId;
+}
+
+/** flow:revealLoop push (§24.2.3 T4): main signals that the OS attention notification was activated
+ *  and the loop read-out must be revealed. The renderer responds by exiting viewer-fullscreen if
+ *  active, switching to the Terminal view, and opening the docked loop read-out. Window focus is a
+ *  main-side effect; carries no payload beyond the session. */
+export interface FlowRevealLoopMsg {
   sessionId: SessionId;
 }
 
@@ -628,6 +644,9 @@ export interface FlowApi {
   /** Subscribe to main's flow:onStateChanged push (§24.2.2 S5): `cb` fires when a flow-relevant
    *  input changed (todo/activity), prompting a `state()` re-pull. Returns an unsubscribe. */
   onStateChanged(cb: () => void): () => void;
+  /** Subscribe to main's flow:revealLoop push (§24.2.3 T4): `cb` fires when the OS attention
+   *  notification was activated and the loop read-out must be revealed. Returns an unsubscribe. */
+  onRevealLoop(cb: () => void): () => void;
 }
 
 declare global {

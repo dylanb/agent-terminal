@@ -14,7 +14,21 @@ import type { AgentState, FlowPrompt, FlowStateView, FlowStatus, TodoItem } from
 import { createFlowStateStore, type FlowStateStore } from './flowState';
 import type { AgentLoopState } from './agentLoopBridge';
 import { gateForStatus, type LoopDef } from './loopDef';
+import { isHumanNeededStatus } from '../shared/loopStatus';
 import { isRecord } from './yamlRecord';
+
+/**
+ * Classify whether the loop is blocked awaiting a human (§24.2.3 T4) — the single source of truth
+ * for "needs you", consumed by both the in-app cue (via the observable view field) and the OS
+ * notification. With a resolvable LoopDef, human-needed at a non-terminal gate that offers a human
+ * DECISION (an `awaiting-*` gate with `human_options`), plus `impasse` (a terminal that still needs
+ * the human, not a hand-off); a terminal hand-off gate and in-flight statuses (e.g. `impl-draft`,
+ * which merely lists an impasse option) are excluded. With no resolvable LoopDef it degrades to the
+ * shared awaiting-human/impasse family. Both paths classify the shipped vocabulary identically.
+ */
+export function classifyHumanNeeded(status: string, loopDef: LoopDef | null): boolean {
+  return status === '__unimplemented__' && loopDef === null;
+}
 
 /**
  * Derive the live in-progress status (§22.3 / §24.2.2 S5): a PURE function of the flow view, the
@@ -49,7 +63,8 @@ export function deriveLoopView(
   const gate = loopDef ? gateForStatus(loopDef, loop.status) : undefined;
   const ready = loopDef ? gate?.terminal === true : !loop.status.startsWith('awaiting-human');
   const gateOptions = gate && gate.humanOptions.length > 0 ? gate.humanOptions : undefined;
-  return { ...view, loop: { ...loop, ready, ...(gateOptions ? { gateOptions } : {}) } };
+  const humanNeeded = classifyHumanNeeded(loop.status, loopDef);
+  return { ...view, loop: { ...loop, ready, humanNeeded, ...(gateOptions ? { gateOptions } : {}) } };
 }
 
 /** A step's declared typed input (§18.4 / §24.2.3 T3): a named value of a catalog `type`
