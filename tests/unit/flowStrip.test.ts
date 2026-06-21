@@ -444,6 +444,39 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     expect(provideInput).toHaveBeenCalledWith('/repo', { ticket: '176' });
   });
 
+  it('focuses a real flow control before opening the prompt, so the modal does not capture <body> as opener (WCAG 2.4.3)', async () => {
+    // render() rebuilds the rail (replaceChildren), detaching the just-clicked control so focus falls
+    // to <body>; the modal captures its opener from activeElement on open, so the strip must re-anchor
+    // focus on a real control BEFORE emitting the prompt, or focus restores to <body> on close.
+    let openerAtPrompt: Element | null = null;
+    const promptView: FlowStateView = {
+      stepName: 'plan',
+      steps: ['plan'],
+      position: 1,
+      total: 1,
+      status: 'in_progress',
+      prompt: { inputs: [{ name: 'ticket', type: 'github-ticket' }], bootstrap: 'agent-loop pickup' },
+    };
+    const deps = {
+      state: vi.fn(async (): Promise<FlowStateView> => ({ ...promptView, status: 'not_started' as FlowStatus, prompt: undefined })),
+      start: vi.fn(async (): Promise<FlowStateView> => promptView),
+      advance: vi.fn(),
+      restart: vi.fn(),
+      undo: vi.fn(),
+      provideInput: vi.fn(),
+      onStateChanged: noopSub,
+      onPrompt: (prompt: FlowStateView['prompt'] | null) => {
+        if (prompt) openerAtPrompt = host.ownerDocument.activeElement;
+      },
+    };
+    createFlowStrip(host, deps).onRepoChanged('/repo');
+    await vi.waitFor(() => expect(control()!.textContent).toBe('Start'));
+    control()!.click();
+    await vi.waitFor(() => expect(openerAtPrompt).toBeTruthy());
+    expect(host.contains(openerAtPrompt)).toBe(true); // a real control, not <body>
+    expect(openerAtPrompt!.className).toMatch(/flow-control|flow-undo/);
+  });
+
   it('drops a modal submit if the cwd moved to another repo while it was open (§24.2.3 T3)', async () => {
     // The modal binds its submit to the repo the prompt was raised for; if the agent cd's away while
     // the modal is open, Confirm must not land the value on the now-current (wrong) repo.

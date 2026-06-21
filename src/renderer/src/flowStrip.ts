@@ -270,6 +270,12 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
    *  the modal. */
   function applyTransition(view: FlowStateView): void {
     render(view);
+    // render() rebuilt the rail (replaceChildren), detaching the just-clicked control so focus fell
+    // to <body>. Before the prompt opens, re-anchor focus on a real control so the modal captures a
+    // stable opener and restores focus there on close, not <body> (WCAG 2.4.3).
+    if (view.prompt && !host.contains(doc.activeElement)) {
+      host.querySelector<HTMLElement>('.flow-control, .flow-undo')?.focus();
+    }
     emitPrompt(view);
   }
 
