@@ -145,6 +145,8 @@ describe('attention cue (§24.2.3 T4)', () => {
     render(null);
     expect(host.childElementCount).toBe(0);
     expect(host.hidden).toBe(false);
+    // empty ⟺ no focusable descendant — the persistent region must not reintroduce the v2.44 trap.
+    expect(host.querySelector('button, [tabindex]')).toBeNull();
   });
 
   it('moves focus off the cue on dismiss so it does not drop to <body> (WCAG 2.4.3)', () => {
