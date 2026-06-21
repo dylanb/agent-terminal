@@ -10,6 +10,12 @@ import '../../src/shared/ipc';
 
 let app: ElectronApplication;
 let page: Page;
+// Isolate Electron's userData (ui-settings.json) per test so persisted UI state — split ratio,
+// last tab, and the full-screen tree width (§20.2) — never bleeds across runs or scribbles on the
+// developer's real ~/.config/Electron. Tests that relaunch reuse this same dir so within-test
+// persistence still holds; the HOME=temp tests isolate userData under their own temp HOME instead.
+let userDataDir: string;
+const launchArgs = (): string[] => ['out/main/index.js', `--user-data-dir=${userDataDir}`];
 
 const termRows = () => page.locator('.xterm-rows');
 
@@ -81,9 +87,15 @@ async function openQuickSend(tab: 'capture' | 'todo' = 'capture'): Promise<void>
  * project/HOME tree. Returns once the new prompt's OSC 7 has propagated the repo key
  * to the renderer (the Todo count chip exists). `marker` keys distinct temp dirs.
  */
+// Markers whose repo dir was already wiped THIS test — so a within-test relaunch (the persistence
+// tests cd back after restarting the app) keeps the repo's todos.json, while each new test starts
+// from a clean repo no matter what a prior run left in the fixed /tmp path. Reset in beforeEach.
+let freshenedDirs: Set<string>;
 async function cdToTempDir(marker: string): Promise<void> {
   const dir = `/tmp/agent-term-e2e-${marker}`;
-  await typeCommand(`mkdir -p "${dir}" && cd "${dir}" && pwd`);
+  const wipe = freshenedDirs.has(marker) ? '' : `rm -rf "${dir}" && `; // clean once per test, not on re-entry
+  freshenedDirs.add(marker);
+  await typeCommand(`${wipe}mkdir -p "${dir}" && cd "${dir}" && pwd`);
   // The exact pwd output row confirms the cd ran; waiting for quiescence guarantees
   // the following OSC 7 (emitted at the next prompt) has been parsed → repo key live.
   await expect(
@@ -93,8 +105,10 @@ async function cdToTempDir(marker: string): Promise<void> {
 }
 
 test.beforeEach(async () => {
+  freshenedDirs = new Set();
+  userDataDir = mkdtempSync(join(tmpdir(), 'agent-term-e2e-ud-'));
   app = await electron.launch({
-    args: ['out/main/index.js'],
+    args: launchArgs(),
     env: { ...process.env, APP_SUBMIT_DELAY_MS: '100' },
   });
   page = await app.firstWindow();
@@ -107,7 +121,8 @@ test.beforeEach(async () => {
 });
 
 test.afterEach(async () => {
-  await app.close();
+  await app.close(); // stop writes before removing the userData dir
+  rmSync(userDataDir, { recursive: true, force: true });
 });
 
 test('runs commands in an interactive bash with the right terminal identity', async () => {
@@ -280,7 +295,7 @@ test('a todo persists in-repo across an app restart (§16.3)', async () => {
   // Restart the whole app (fresh main process + PTY): the in-repo todos.json is reread
   // when the agent cd's back into the repo, and the first OSC 7 re-broadcasts the key.
   await app.close();
-  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SUBMIT_DELAY_MS: '100' } });
+  app = await electron.launch({ args: launchArgs(), env: { ...process.env, APP_SUBMIT_DELAY_MS: '100' } });
   page = await app.firstWindow();
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
@@ -293,7 +308,10 @@ test('monitor status strip tracks quiescence and alt-screen', async () => {
   const agentChip = page.locator('.status-chip[data-status="agent"]');
   const fsChip = page.locator('.status-chip[data-status="full-screen"]');
 
-  await typeCommand('echo burst');
+  // A single instantaneous echo can flip working→quiet inside one poll cycle (the chip was only ever
+  // sampled as "quiet for Ns"); emit output over ~1s so the "working" state is reliably observable,
+  // then assert it quiesces. QUIET_MS is 1000 ms, so the 0.2s cadence keeps it "working" throughout.
+  await typeCommand('for i in 1 2 3 4 5; do echo burst; sleep 0.2; done');
   await expect(agentChip).toContainText('working');
   await expect(agentChip).toContainText('quiet', { timeout: 5_000 });
 
@@ -336,7 +354,7 @@ test('a captured report (with findings) survives a monitor reload (capture:last�
   // is exercised end-to-end.
   await app.close();
   app = await electron.launch({
-    args: ['out/main/index.js'],
+    args: launchArgs(),
     env: { ...process.env, APP_SUBMIT_DELAY_MS: '100', APP_SHELL_INTEGRATION: '0' },
   });
   page = await app.firstWindow();
@@ -362,7 +380,7 @@ test('capture ↔ terminal cross-highlight: double-click reveals each side (§16
   // Integration off so the printed report surfaces deterministically (as in the replay test).
   await app.close();
   app = await electron.launch({
-    args: ['out/main/index.js'],
+    args: launchArgs(),
     env: { ...process.env, APP_SUBMIT_DELAY_MS: '100', APP_SHELL_INTEGRATION: '0' },
   });
   page = await app.firstWindow();
@@ -407,12 +425,21 @@ test('capture ↔ terminal cross-highlight: double-click reveals each side (§16
   // would now point at the wrong chunk or the whole report; the marker mapping still lands true.
   await expect(findingOne).not.toHaveClass(/revealed/, { timeout: 12_000 }); // let the prior reveal self-clear
   await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(480, 600));
-  await expect.poll(() => findRowIndexContaining('finding two')).toBeGreaterThanOrEqual(0); // 80 ms debounce + reflow
-
-  const row2 = await findRowIndexContaining('finding two');
-  await page.locator('.xterm-rows > div').nth(row2).dblclick();
-  await expect(findingTwo).toHaveClass(/revealed/);
-  await expect(findingOne).not.toHaveClass(/revealed/);
+  // Reflow settles over the 80 ms debounce and can keep shifting absolute rows, and one double-click
+  // can land between rows mid-reflow — so retry find→dblclick→reveal as a single unit until finding
+  // TWO's chunk resolves (the marker mapping surviving the reflow is what this guards, §16.8).
+  await expect
+    .poll(
+      async () => {
+        const r = await findRowIndexContaining('finding two');
+        if (r < 0) return false;
+        await page.locator('.xterm-rows > div').nth(r).dblclick();
+        return ((await findingTwo.getAttribute('class')) ?? '').includes('revealed');
+      },
+      { timeout: 15_000 },
+    )
+    .toBe(true);
+  await expect(findingOne).not.toHaveClass(/revealed/); // mapped to TWO's chunk, not the whole report
 });
 
 // ---- §16: action window — todo lists, focus rule, layout ----
@@ -667,6 +694,7 @@ test('the viewer starts in sync with the terminal cwd, before any cd (§20.1)', 
   await expect(page.locator('[data-viewpane="2"]')).toBeVisible();
   const tree = page.locator('#artifacts .tree');
   await expect(tree.locator('.f').filter({ hasText: 'home-marker.md' })).toHaveCount(1);
+  await app.close(); // HOME=temp ⇒ Electron writes userData under it; stop writes before removing it
   rmSync(home, { recursive: true, force: true });
 });
 
@@ -926,7 +954,7 @@ test('full-screen collapse keeps the header and tree out of the tab order (§22.
 test('the quick-send drawer is closed on startup and inert while closed (§22.2)', async () => {
   // beforeEach opens the drawer; relaunch a fresh app to observe the real startup default.
   await app.close();
-  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SUBMIT_DELAY_MS: '100' } });
+  app = await electron.launch({ args: launchArgs(), env: { ...process.env, APP_SUBMIT_DELAY_MS: '100' } });
   page = await app.firstWindow();
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
