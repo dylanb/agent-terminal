@@ -72,10 +72,11 @@ describe('control text contrast (WCAG 1.4.3 AA)', () => {
   }
 });
 
-// When the loop panel is open, `.loopstat[aria-expanded="true"]` paints `--signal-wash` and the
-// `.spill.work` pill inside paints `--signal-wash` again — so the working-status text sits on TWO
-// stacked translucent washes over the card, not on the bare card the test above checks. Alpha-
-// composite both layers and assert the work-tone text still clears 4.5:1 on that real background.
+// When the loop panel is open, EVERY spill tone (await/work/settle) is reachable in the rail read-out
+// and must clear 4.5:1 on the background it actually sits on. That background is the spill's own wash
+// composited over the `.loopstat[aria-expanded="true"]` background over the card — so if the read-out
+// stacks its OWN wash under the spill's wash, the text sits on a doubled wash that fails. This test
+// reads the real backgrounds from CSS and alpha-composites them, so it discriminates that doubling.
 type RGBA = [number, number, number, number];
 function parseColor(v: string): RGBA {
   const rgba = v.match(/rgba?\(([^)]+)\)/);
@@ -90,13 +91,34 @@ const over = (fg: RGBA, bg: RGBA): RGBA =>
   [fg[0] * fg[3] + bg[0] * (1 - fg[3]), fg[1] * fg[3] + bg[1] * (1 - fg[3]), fg[2] * fg[3] + bg[2] * (1 - fg[3]), 1];
 const toHex = (c: RGBA): string => '#' + c.slice(0, 3).map((x) => Math.round(x).toString(16).padStart(2, '0')).join('');
 
+/** Resolve a CSS background expression to an RGBA. Handles `var(--x)`, the `color-mix(in srgb,
+ *  var(--x) N%, transparent)` form the spills use, a bare color, and transparent/absent (alpha 0). */
+function resolveBg(map: Record<string, string>, expr: string | null): RGBA {
+  if (!expr || expr === 'transparent') return [0, 0, 0, 0];
+  const mix = expr.match(/color-mix\(\s*in srgb\s*,\s*var\(\s*(--[\w-]+)\s*\)\s*([\d.]+)%\s*,\s*transparent\s*\)/);
+  if (mix) return [...(parseColor(resolve(map, mix[1])).slice(0, 3) as [number, number, number]), parseFloat(mix[2]) / 100];
+  const ref = expr.match(/^var\(\s*(--[\w-]+)\s*\)$/);
+  return parseColor(ref ? resolve(map, ref[1]) : expr);
+}
+/** The `background:` value of a CSS rule, or null when the rule or its background is absent. */
+function ruleBackground(escapedSelector: string): string | null {
+  const m = css.match(new RegExp(`${escapedSelector}\\s*\\{([^}]*)\\}`));
+  if (!m) return null;
+  const b = m[1].match(/(?:^|;)\s*background\s*:\s*([^;]+);/);
+  return b ? b[1].trim() : null;
+}
+
 describe('expanded loop read-out contrast (WCAG 1.4.3 AA)', () => {
+  const readoutBgExpr = ruleBackground('\\.flowstrip \\.loopstat\\[aria-expanded="true"\\]');
   for (const [themeName, map] of [['light', light], ['dark', dark]] as const) {
-    it(`${themeName}: .spill.work text clears 4.5:1 over the doubled --signal-wash (panel open)`, () => {
-      const card = parseColor(resolve(map, '--card'));
-      const wash = parseColor(resolve(map, '--signal-wash'));
-      const bg = over(wash, over(wash, card)); // spill wash over loopstat wash over card
-      expect(contrast(resolve(map, '--signal-text'), toHex(bg))).toBeGreaterThanOrEqual(4.5);
-    });
+    const card = parseColor(resolve(map, '--card'));
+    const underSpill = over(resolveBg(map, readoutBgExpr), card); // the read-out bg over the card
+    for (const tone of ['await', 'work', 'settle'] as const) {
+      const token = tone === 'await' ? '--attn-text' : tone === 'work' ? '--signal-text' : '--pass-text';
+      it(`${themeName}: .spill.${tone} text clears 4.5:1 when the read-out is expanded (panel open)`, () => {
+        const spillBg = over(resolveBg(map, ruleBackground(`\\.spill\\.${tone}`)), underSpill);
+        expect(contrast(resolve(map, token), toHex(spillBg))).toBeGreaterThanOrEqual(4.5);
+      });
+    }
   }
 });

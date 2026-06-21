@@ -174,7 +174,9 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible { outline:2px so
    v4 vocabulary lives in that panel. */
 .flowstrip .loopstat { margin-top:9px; cursor:pointer; border:1px solid transparent; border-radius:7px; padding:6px 7px; margin-left:-7px; margin-right:-7px; display:flex; flex-direction:column; gap:6px; }
 .flowstrip .loopstat:hover { background:var(--hair2); }
-.flowstrip .loopstat[aria-expanded="true"] { background:var(--signal-wash); }
+/* Open-state cue is a signal border, NOT a background wash: a wash would stack under the spill pill's
+   own wash and drop its text below 4.5:1 on the doubled layer (WCAG 1.4.3, see styleContrast). */
+.flowstrip .loopstat[aria-expanded="true"] { border-color:var(--signal); }
 .flowstrip .loopstat .k { text-transform:uppercase; letter-spacing:.14em; font-size:9px; color:var(--dim); }
 .flowstrip .loopstat .v { display:flex; align-items:center; gap:6px; }
 .flowstrip .loopstat .loop-iter { font-size:11px; color:var(--dim); }
