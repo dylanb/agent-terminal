@@ -7,3 +7,4 @@ playwright-report/
 *.log
 *.tsbuildinfo
 plan.md
+.agent-terminal/
