@@ -1480,6 +1480,8 @@ test('the awaiting-human cue appears, re-fires after dismiss, and clears as the 
   await attnCue().locator('[data-attn-dismiss]').click();
   await expect(attnCue()).toBeHidden();
   await expect(loopReadout()).toHaveCount(1);
+  // Dismiss must not strand keyboard focus on <body> (WCAG 2.4.3): it lands on the loop read-out toggle.
+  await expect(loopReadout()).toBeFocused();
 
   // A distinct human-needed entry (new status, later iteration) re-fires the cue, even after dismiss.
   writeFileSync(stateFile, 'schema_version: 4\npr: 179\nbranch: agent-loop/issue-176\niteration: 11\nstatus: awaiting-human-impl-triage\n');
