@@ -37,6 +37,15 @@ describe('terminal pane listeners (§7.1 / clean teardown)', () => {
     expect(resize).toHaveBeenCalledTimes(1); // no further fire after teardown
   });
 
+  it('treats a FOCUS_VIEW_EVENT with no detail as a safe no-op (does not throw)', () => {
+    const focusView = vi.fn();
+    const dispose = wireTerminalPaneListeners({ focusView, resize: vi.fn() });
+    // CustomEvent with no init → detail is null; the handler must not deref it and throw.
+    expect(() => window.dispatchEvent(new CustomEvent(FOCUS_VIEW_EVENT))).not.toThrow();
+    expect(focusView).not.toHaveBeenCalled();
+    dispose();
+  });
+
   it('removes the focus-on-view listener on dispose()', () => {
     const focusView = vi.fn();
     const dispose = wireTerminalPaneListeners({ focusView, resize: vi.fn() });

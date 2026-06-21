@@ -798,6 +798,74 @@ describe('Todo tab §24.2.1 — review fixes (reorder stability, focus, a11y lab
   });
 });
 
+// UI-STANDARDS §2.2 rule 1: no global ids — two todoTab instances in one document must not
+// collide. The template picker's container id (and the toggle's aria-controls pointing at it)
+// must be instance-unique, the same per-instance pattern flowInputModal uses for its title id.
+describe('Todo tab — template picker id is instance-unique (UI-STANDARDS §2.2 rule 1)', () => {
+  function tmplMonitor(): TodoTabDeps['monitor'] {
+    return {
+      todoList: vi.fn(async () => []),
+      todoAdd: vi.fn(async () => []),
+      todoUpdate: vi.fn(async () => []),
+      todoReorder: vi.fn(async () => []),
+      todoSetStatus: vi.fn(async () => []),
+      todoDelete: vi.fn(async () => []),
+      listTemplates: vi.fn(async () => ({
+        templates: [{ ref: 'pr-review', name: 'PR review checklist' }],
+        defaultRef: 'pr-review',
+      })),
+      instantiateTemplate: vi.fn(async () => []),
+    } as unknown as TodoTabDeps['monitor'];
+  }
+
+  function mountInstance(): { host: HTMLElement; tab: ReturnType<typeof createTodoTab> } {
+    const host = document.createElement('div');
+    const list = document.createElement('div');
+    const count = document.createElement('span');
+    host.append(list, count);
+    document.body.appendChild(host);
+    const tab = createTodoTab({ todoListEl: list, todoCountEl: count, monitor: tmplMonitor(), doInject: () => {} });
+    return { host, tab };
+  }
+
+  afterEach(() => {
+    document.body.innerHTML = '';
+    vi.restoreAllMocks();
+  });
+
+  it('two instances in one document get DIFFERENT picker ids, each matching its own toggle aria-controls', async () => {
+    const a = mountInstance();
+    const b = mountInstance();
+    // Drive a repo so listTemplates is pulled and the disclosure renders.
+    a.tab.onRepoChanged('/repoA');
+    b.tab.onRepoChanged('/repoB');
+    await flush();
+
+    const toggleA = a.host.querySelector<HTMLButtonElement>('.tmpl-toggle')!;
+    const toggleB = b.host.querySelector<HTMLButtonElement>('.tmpl-toggle')!;
+    expect(toggleA).not.toBeNull();
+    expect(toggleB).not.toBeNull();
+    toggleA.click();
+    toggleB.click();
+    await flush();
+
+    const pickerA = a.host.querySelector<HTMLElement>('.tmpl-picker')!;
+    const pickerB = b.host.querySelector<HTMLElement>('.tmpl-picker')!;
+    expect(pickerA).not.toBeNull();
+    expect(pickerB).not.toBeNull();
+
+    // (a) the two container ids must differ across instances …
+    expect(pickerA.id).not.toBe(pickerB.id);
+    expect(pickerA.id).toBeTruthy();
+
+    // (b) … and within each instance, the toggle points at ITS OWN picker, both inside its host.
+    expect(toggleA.getAttribute('aria-controls')).toBe(pickerA.id);
+    expect(toggleB.getAttribute('aria-controls')).toBe(pickerB.id);
+    expect(a.host.querySelector(`#${pickerA.id}`)).toBe(pickerA);
+    expect(b.host.querySelector(`#${pickerB.id}`)).toBe(pickerB);
+  });
+});
+
 // UI-STANDARDS §3.3 / §2.2 rule 1: the organism must build its DOM from the host's
 // ownerDocument, never the ambient global document — else it is not relocatable to a
 // separate-process pane. See memory jsdom-adoption-masks-global-document.

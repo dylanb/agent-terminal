@@ -271,7 +271,7 @@ export function createArtifacts(host: HTMLElement, deps: ArtifactsDeps): Artifac
   // focus to the first tree item so arrow-key navigation works without a click (the tree is the
   // view's primary control). Other views are ignored. The roving tabindex is set by focusItem.
   const onFocusView = (e: Event): void => {
-    if ((e as CustomEvent<{ view: string }>).detail.view === ARTIFACTS_VIEW) focusItem(visibleItems()[0]);
+    if ((e as CustomEvent<{ view: string }>).detail?.view === ARTIFACTS_VIEW) focusItem(visibleItems()[0]);
   };
   win?.addEventListener(FOCUS_VIEW_EVENT, onFocusView);
   fsResize.addEventListener('mousedown', (e) => {

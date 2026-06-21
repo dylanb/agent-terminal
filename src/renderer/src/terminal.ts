@@ -24,7 +24,7 @@ export interface TerminalPane {
  *  need a real DOM; the §F e2e covers those). */
 export function wireTerminalPaneListeners(opts: { focusView: () => void; resize: () => void }): () => void {
   const onFocusView = (e: Event): void => {
-    if ((e as CustomEvent<{ view: string }>).detail.view === TERMINAL_VIEW) opts.focusView();
+    if ((e as CustomEvent<{ view: string }>).detail?.view === TERMINAL_VIEW) opts.focusView();
   };
   window.addEventListener(FOCUS_VIEW_EVENT, onFocusView);
 
