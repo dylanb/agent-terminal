@@ -261,7 +261,15 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
       // The cwd may move while the (blocking) modal is open; a stale submit must not land the value
       // on the now-current repo — drop it rather than write to the wrong flow.
       if (boundRepo === null || repoKey !== boundRepo) return;
-      deps.provideInput(boundRepo, values).then(applyTransition).catch(() => void refresh());
+      deps
+        .provideInput(boundRepo, values)
+        .then((view) => {
+          // The cwd may also move WHILE provideInput is in flight; the awaited view belongs to
+          // boundRepo, so drop it if we've since moved (mirrors controlButton's post-await guard).
+          if (repoKey !== boundRepo) return;
+          applyTransition(view);
+        })
+        .catch(() => void refresh());
     });
   }
 

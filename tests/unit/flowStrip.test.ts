@@ -549,6 +549,52 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     expect(seen.filter(Boolean)).toHaveLength(0); // no prompt opened for the prior repo
   });
 
+  it('drops the modal-submit transition if the cwd moved while provideInput was in-flight', async () => {
+    // The submit guards repoKey BEFORE calling provideInput, but the awaited response must ALSO be
+    // dropped if the cwd moved while it was in flight (mirrors controlButton's post-await guard) —
+    // else a stale transition repaints / re-prompts the wrong repo.
+    let resolveProvide: (v: FlowStateView) => void = () => {};
+    let lastSubmit: ((v: Record<string, string>) => void) | undefined;
+    const promptView: FlowStateView = {
+      stepName: 'plan',
+      steps: ['plan'],
+      position: 1,
+      total: 1,
+      status: 'in_progress',
+      prompt: { inputs: [{ name: 'ticket', type: 'github-ticket' }], bootstrap: 'agent-loop pickup' },
+    };
+    const seen: Array<FlowStateView['prompt'] | null> = [];
+    const deps = {
+      state: vi.fn(async (): Promise<FlowStateView> => ({ ...promptView, status: 'not_started' as FlowStatus, prompt: undefined })),
+      start: vi.fn(async (): Promise<FlowStateView> => promptView),
+      advance: vi.fn(),
+      restart: vi.fn(),
+      undo: vi.fn(),
+      provideInput: vi.fn((): Promise<FlowStateView> => new Promise((r) => { resolveProvide = r; })),
+      onStateChanged: noopSub,
+      onPrompt: (prompt: FlowStateView['prompt'] | null, _s: string, submit: (v: Record<string, string>) => void) => {
+        seen.push(prompt);
+        if (prompt) lastSubmit = submit;
+      },
+    };
+    const strip = createFlowStrip(host, deps);
+    strip.onRepoChanged('/repo');
+    await vi.waitFor(() => expect(control()!.textContent).toBe('Start'));
+    control()!.click();
+    await vi.waitFor(() => expect(lastSubmit).toBeTruthy());
+    const seenBefore = seen.filter(Boolean).length;
+
+    lastSubmit!({ ticket: '176' }); // provideInput now pending for /repo
+    expect(deps.provideInput).toHaveBeenCalledWith('/repo', { ticket: '176' });
+    strip.onRepoChanged('/other'); // cwd moves while provideInput is in flight
+    await vi.waitFor(() => expect(deps.state).toHaveBeenCalledWith('/other'));
+
+    resolveProvide({ ...promptView, stepName: 'STALE' }); // the stale /repo transition resolves
+    await new Promise((r) => setTimeout(r, 0));
+    expect(host.textContent).not.toContain('STALE'); // not repainted for the prior repo
+    expect(seen.filter(Boolean).length).toBe(seenBefore); // no new prompt re-opened
+  });
+
   it('keeps keyboard focus on the rail Loop read-out across a background state push (WCAG 2.4.3)', async () => {
     let fire = (): void => {};
     const loopView: FlowStateView = {
