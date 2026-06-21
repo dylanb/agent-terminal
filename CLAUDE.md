@@ -16,6 +16,10 @@ npm run test:e2e    # playwright _electron e2e (requires a display; real PTY)
 
 `node-pty` is a native module compiled against Electron's ABI. If main-process startup fails with a NODE_MODULE_VERSION error, run `npm run rebuild`.
 
+## Requesting / awaiting a Copilot PR review
+
+Use `scripts/await-copilot-review.sh <pr> [--request] [--check]` (portable bash; macOS + Linux, no `jq`) — never hand-roll a poll. Two non-obvious traps it removes: the Copilot reviewer's login is `copilot-pull-request-reviewer[bot]` on `/pulls/{n}/reviews` but `Copilot` on `/pulls/{n}/comments`, so a single exact-login filter silently matches zero; and a wrong poll predicate is indistinguishable from "review not posted yet", so the script baselines the matched count and (`--check`) validates the predicate against the reviews already on the PR before waiting. If you must filter reviews yourself, match `user.type=="Bot"` + a case-insensitive `copilot`, not an exact login.
+
 ## Architecture (orientation only — details in the spec)
 
 - `src/main/` — PTY lifecycle (§5), shadow terminal + quiescence (§8), injection API (§9.3), IPC handlers. node-pty and the shadow live here, never in the renderer.
