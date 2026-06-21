@@ -60,6 +60,11 @@ export function createTodoStore(deps: TodoStoreDeps): TodoStore {
     } catch {
       items = []; // missing/corrupt → empty (§16.3)
     }
+    // The file IS the bucket (§16.3): an item belongs to the repo whose file it lives in. A
+    // stale stamp (dir copied between checkouts / worktree seeded from another) would misroute
+    // the renderer's per-item mutations to a foreign file; re-stamp on load so every item the
+    // store hands out — and persists back — names this repo. Self-heals on the next write.
+    for (const t of items) t.repoKey = repoKey;
     const seq = items.reduce((max, t) => Math.max(max, t.order), 0);
     const state: RepoState = { items, seq };
     cache.set(repoKey, state);
