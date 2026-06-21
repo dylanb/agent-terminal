@@ -21,6 +21,9 @@ export interface LoopPanel {
   /** Repaint from the current loop mirror; `null` (no loop step / no parseable state.yaml) clears it.
    *  `title` identifies which loop step the panel mirrors (the rail step name). */
   render(loop: FlowLoopView | null, title: string): void;
+  /** Remove everything the panel created (UI-STANDARDS clean teardown). It only builds DOM into
+   *  its host — no document/window listeners or timers — so emptying the host frees it all. */
+  dispose(): void;
 }
 
 function detailRow(doc: Document, key: string, value: string, valueClass = ''): HTMLElement {
@@ -89,6 +92,9 @@ export function createLoopPanel(host: HTMLElement): LoopPanel {
       ldl.append(grow);
       body.append(ldl);
       host.append(body);
+    },
+    dispose() {
+      host.replaceChildren();
     },
   };
 }

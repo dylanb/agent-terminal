@@ -60,6 +60,8 @@ export interface FlowStrip {
   refresh(): Promise<void>;
   /** The terminal's repo changed (cd across a key boundary, §16.3): re-scope and re-pull. */
   onRepoChanged(repoKey: string | null): void;
+  /** Tear down: unsubscribe the flow:onStateChanged push and clear the host (UI-STANDARDS clean teardown). */
+  dispose(): void;
 }
 
 /** The strip's deps: the flow IPC seam plus an optional hand-off of the current loop mirror to the
@@ -288,13 +290,24 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
   // The push path (§24.2.2 S5): main fires flow:onStateChanged when a flow-relevant input changed
   // (a todo mutated, the agent flipped active/quiet); the strip re-pulls its own repo's state so the
   // derived n/m + activity move with no user action. Lives for the strip's lifetime (app-long).
-  deps.onStateChanged(() => void refresh());
+  let disposed = false;
+  // Unsubscribe stops future pushes, but a push already dispatched (or held by a stale ref) must not
+  // repaint a disposed strip — guard the handler too (UI-STANDARDS clean teardown).
+  const unsubscribe = deps.onStateChanged(() => {
+    if (disposed) return;
+    void refresh();
+  });
 
   return {
     refresh,
     onRepoChanged(key) {
       repoKey = key;
       void refresh();
+    },
+    dispose() {
+      disposed = true;
+      unsubscribe();
+      host.replaceChildren();
     },
   };
 }

@@ -14,14 +14,6 @@ const ANY_BULLET = /^[-*+]\s+|^\d+[.)]\s+/; // marker to strip when an indented 
 const CHECKBOX = /^\[[ xX]\]\s+/; // ignored task-list marker at the head of an item
 
 /**
- * Resolve a step's `todo_template` ref to a file CO-LOCATED with the flow.yaml that declared it
- * (§18.6/§21.2): `flowDir` is the directory holding flow.yaml, and the ref is read relative to it
- * — so a global ~/.agent-terminal/flow.yaml's template lives in ~/.agent-terminal/, a repo-local
- * one in <repo>/.agent-terminal/. A bare name resolves with `.md` appended. Returns the markdown
- * or null; a missing file or a path escaping `flowDir` both degrade to null (never a throw),
- * mirroring readArtifact's escape guard (§20.2).
- */
-/**
  * Resolve `candidate` against `root` and return the VALIDATED real path that may be read, or null
  * if it escapes the root. Lexical check first, then realpath containment so an in-root symlink that
  * targets a file outside the root is refused; callers read the returned real path (not the literal
@@ -40,6 +32,14 @@ function resolveContained(root: string, candidate: string): string | null {
   }
 }
 
+/**
+ * Resolve a step's `todo_template` ref to a file CO-LOCATED with the flow.yaml that declared it
+ * (§18.6/§21.2): `flowDir` is the directory holding flow.yaml, and the ref is read relative to it
+ * — so a global ~/.agent-terminal/flow.yaml's template lives in ~/.agent-terminal/, a repo-local
+ * one in <repo>/.agent-terminal/. A bare name resolves with `.md` appended. Returns the markdown
+ * or null; a missing file or a path escaping `flowDir` both degrade to null (never a throw),
+ * mirroring readArtifact's escape guard (§20.2).
+ */
 export function loadTodoTemplateFile(flowDir: string, ref: string): string | null {
   const root = path.resolve(flowDir);
   const read = (candidate: string): string | null => {

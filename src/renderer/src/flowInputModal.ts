@@ -12,6 +12,8 @@ export interface FlowInputModal {
   /** Open the modal for `prompt`, entering `stepName`; `submit` receives the name→value map on
    *  Confirm. `null` closes any open modal. */
   render(prompt: FlowPrompt | null, stepName: string, submit: (values: Record<string, string>) => void): void;
+  /** Tear down: clear the host subtree and drop captured state on unmount/relocation (UI §2.2.1). */
+  dispose(): void;
 }
 
 function inputField(doc: Document, spec: { name: string; type: string }): { field: HTMLElement; read: () => string } {
@@ -130,6 +132,13 @@ export function createFlowInputModal(host: HTMLElement): FlowInputModal {
       modal.append(card);
       host.append(scrim, modal);
       (card.querySelector('input') as HTMLInputElement | null)?.focus();
+    },
+    // Every listener sits on a node inside the host subtree (scrim/modal/buttons) and dies with it;
+    // nothing is attached to document/window. So teardown is: drop the host subtree and the only
+    // captured state (opener) — without calling close(), which would restore focus to it (§2.2.1).
+    dispose() {
+      host.replaceChildren();
+      opener = null;
     },
   };
 }

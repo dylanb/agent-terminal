@@ -78,6 +78,14 @@ describe('docked loop panel (§24.2.3 T2)', () => {
     expect(host.childElementCount).toBe(0);
   });
 
+  it('dispose() leaves nothing behind: the host is emptied (UI-STANDARDS clean teardown)', () => {
+    const panel = createLoopPanel(host);
+    panel.render(loop(), 'build');
+    expect(host.childElementCount).toBeGreaterThan(0);
+    panel.dispose();
+    expect(host.childElementCount).toBe(0);
+  });
+
   it('relocates unchanged: identical render in two different hosts (UI-STANDARDS organism rule)', () => {
     const a = document.createElement('aside');
     const b = document.createElement('aside');

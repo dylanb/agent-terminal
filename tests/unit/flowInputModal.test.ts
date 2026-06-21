@@ -187,6 +187,28 @@ describe('typed-input modal (§24.2.3 T3 / §18.4)', () => {
     expect(b.querySelector(`#${idB}`)).toBe(dialogB.querySelector('h3'));
   });
 
+  it('dispose() leaves nothing behind: clears the host subtree and drops captured opener state', () => {
+    const opener = document.createElement('button');
+    document.body.appendChild(opener);
+    opener.focus();
+    const modal = createFlowInputModal(host);
+    modal.render(prompt(), 'plan', vi.fn());
+    expect(host.childElementCount).toBeGreaterThan(0); // open
+
+    modal.dispose();
+    expect(host.childElementCount).toBe(0); // host subtree cleared
+
+    // After dispose the captured opener must be dropped: a later close path must not steal focus
+    // back to it. Move focus elsewhere, then drive every close path — none may resurrect the opener.
+    const other = document.createElement('button');
+    document.body.appendChild(other);
+    other.focus();
+    expect(document.activeElement).toBe(other);
+    modal.render(null, '', vi.fn()); // close path after dispose: must be a harmless no-op
+    expect(document.activeElement).toBe(other); // focus NOT yanked to the stale opener
+    expect(host.childElementCount).toBe(0);
+  });
+
   it('traps Tab focus within the dialog (WCAG 2.4.3): last wraps to first, first wraps to last', () => {
     createFlowInputModal(host).render(prompt(), 'plan', vi.fn());
     const modal = host.querySelector('.flow-modal') as HTMLElement;

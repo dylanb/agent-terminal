@@ -616,6 +616,32 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     await vi.waitFor(() => expect(button.disabled).toBe(false)); // not stuck disabled — retry is possible
   });
 
+  it('dispose() unsubscribes the push handler and clears the host (UI-STANDARDS clean teardown)', async () => {
+    let fire = (): void => {};
+    const unsubscribe = vi.fn();
+    const deps = {
+      ...fakeFlow('in_progress'),
+      onStateChanged: vi.fn((cb: () => void) => {
+        fire = cb;
+        return unsubscribe;
+      }),
+    };
+    const strip = createFlowStrip(host, deps);
+    strip.onRepoChanged('/repo');
+    await vi.waitFor(() => expect(stepName()).toBe('/repo-step')); // a render is on screen
+
+    const callsBeforeDispose = deps.state.mock.calls.length;
+    strip.dispose();
+
+    expect(unsubscribe).toHaveBeenCalledTimes(1); // the subscription was torn down
+    expect(host.childElementCount).toBe(0); // dispose leaves nothing behind
+
+    fire(); // a post-dispose push must NOT trigger another state() re-pull
+    await new Promise((r) => setTimeout(r, 0));
+    expect(deps.state.mock.calls.length).toBe(callsBeforeDispose);
+    expect(host.childElementCount).toBe(0); // and must not repaint into the host
+  });
+
   it('builds from host.ownerDocument, not the global document (UI-STANDARDS §3.3)', async () => {
     await assertRendersFromHostDocument(async (h) => {
       const strip = createFlowStrip(h, fakeFlow('in_progress'));
