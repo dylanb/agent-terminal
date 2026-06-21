@@ -7,7 +7,9 @@ import { stripPasteBreakout } from '../../shared/paste';
 import type { MonitorApi } from '../../shared/ipc';
 import { cleanSelectionText, createSelectionModel } from './selectionModel';
 import { createRepoContext, type RepoContext } from './repoContext';
-import { handleTerminalKey } from './keymap';
+import { handleTerminalKey, type KeyActions } from './keymap';
+import { resolveKeymap, type Keymap } from '../../shared/keymap';
+import type { TerminalClipboard } from './menuActions';
 import { pickRevealTarget, type RevealSpan } from './reveal';
 import {
   CAPTURE_RANGE_ADD_EVENT,
@@ -59,7 +61,11 @@ const SEL_COLOR = 'rgba(80, 140, 255, 0.7)';
 // capture span reads differently from a user selection.
 const REVEAL_COLOR = 'rgba(255, 196, 84, 0.4)';
 
-export function wireSelection(term: Terminal, repo: RepoContext = createRepoContext(window.monitor)): void {
+export function wireSelection(
+  term: Terminal,
+  repo: RepoContext = createRepoContext(window.monitor),
+  getKeymap: () => Keymap = () => resolveKeymap(window.term.platform === 'darwin' ? 'mac' : 'pc'),
+): TerminalClipboard {
   let decorations: IDecoration[] = [];
   const model = createSelectionModel(() => renderSelection());
   // Manual selection capture routes straight to the repo-scoped Todo list (§16.2); the repo
@@ -243,11 +249,34 @@ export function wireSelection(term: Terminal, repo: RepoContext = createRepoCont
   // Escape clears only when a selection is active; otherwise it belongs to the
   // agent (interrupt in Claude Code) and must pass through (§7.5.1). Everything
   // else is routed through the agent key bindings (§7.5.2).
+  // The active keymap (§7.7) is read live via getKeymap() so a profile switch takes effect with no
+  // rewire. Copy uses the app-owned selection (§7), not xterm's hidden native one.
+  const copy = (): void => {
+    const s = model.get();
+    if (s.active) window.term.clipboardWrite(cleanSelectionText(s.text));
+  };
+  // Paste through OUR path so the §9.3 breakout sanitization always runs (the browser/xterm native
+  // paste would leak an embedded ESC[201~). term.paste() honors the foreground app's bracketed-paste
+  // mode live (§7.5). preventDefault in the dispatch suppresses the browser's duplicate paste.
+  const paste = (): void => {
+    void window.term
+      .clipboardRead()
+      .then((text) => term.paste(stripPasteBreakout(text)))
+      .catch(() => {}); // a rejected invoke (main restart) must not be an unhandled rejection
+  };
+  // Select-all feeds the app-owned model (§7) via the onSelectionChange listener above, so the
+  // highlight and Copy both reflect the whole buffer with no extra sync.
+  const selectAll = (): void => term.selectAll();
+
+  const keyActions: KeyActions = { send: (data) => window.term.input(data), copy, paste, selectAll };
   term.attachCustomKeyEventHandler((e) => {
     if (e.type === 'keydown' && e.key === 'Escape' && model.get().active) {
       clearSelection();
       return false;
     }
-    return handleTerminalKey(e, (data) => window.term.input(data));
+    return handleTerminalKey(e, getKeymap(), keyActions);
   });
+
+  // Exposed so the macOS Edit menu can drive the terminal's clipboard actions (§7.7).
+  return { copy, paste, selectAll };
 }

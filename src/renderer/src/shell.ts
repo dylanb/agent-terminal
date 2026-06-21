@@ -9,10 +9,9 @@
 import type { Theme } from '../../shared/ipc';
 import { setShown } from './visibility';
 import { announceViewFocus, FOCUS_TERMINAL_EVENT } from './paneActions';
+import { matchChord, MAC_DEFAULTS, type Keymap } from '../../shared/keymap';
 
 export type ViewId = '1' | '2' | '3';
-
-const VIEWS: readonly ViewId[] = ['1', '2', '3'];
 
 export interface Shell {
   setView(v: ViewId): void;
@@ -41,10 +40,14 @@ export interface ShellDeps {
   setTheme?: (t: Theme) => void;
   /** Signalled when viewer full screen toggles (§20.2) so the viewer can collapse its chrome. */
   onViewerFullscreenChange?: (on: boolean) => void;
+  /** The active keymap (§7.7), read live so the app-nav chords follow the user's profile/overrides.
+   *  Defaults to the macOS profile when unset (the app always injects the resolved one). */
+  getKeymap?: () => Keymap;
 }
 
 export function createShell(root: HTMLElement, deps: ShellDeps = {}): Shell {
   const doc = root.ownerDocument;
+  const getKeymap = deps.getKeymap ?? ((): Keymap => MAC_DEFAULTS);
   const themeTarget = doc.documentElement;
 
   let view: ViewId = (root.querySelector('[data-viewpane].on')?.getAttribute('data-viewpane') as ViewId) ?? '1';
@@ -181,16 +184,21 @@ export function createShell(root: HTMLElement, deps: ShellDeps = {}): Shell {
       toggleLoopPanel();
       return;
     }
-    if (!(e.metaKey || e.ctrlKey)) return;
-    const k = e.key.toLowerCase();
-    if (k === 'k') {
+    // App-nav chords come from the shared keymap (§7.7) so they follow the profile and are rebindable
+    // — and so the PC default keeps bare Ctrl+K free for the terminal (readline kill-line) by binding
+    // the drawer to Ctrl+Shift+K instead. Only the four app actions are claimed here; everything else
+    // (terminal chords, plain keys) propagates to the focused descendant.
+    const action = matchChord(e, getKeymap());
+    const view: ViewId | null =
+      action === 'viewTerminal' ? '1' : action === 'viewArtifacts' ? '2' : action === 'viewTodos' ? '3' : null;
+    if (action === 'toggleDrawer') {
       e.preventDefault();
       e.stopPropagation();
       toggleDrawer();
-    } else if ((VIEWS as readonly string[]).includes(e.key)) {
+    } else if (view) {
       e.preventDefault();
       e.stopPropagation();
-      setView(e.key as ViewId);
+      setView(view);
     }
   };
 

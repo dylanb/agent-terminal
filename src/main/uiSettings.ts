@@ -5,7 +5,8 @@
 
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
-import { DEFAULT_UI_SETTINGS, type TabId, type Theme, type UiSettings } from '../shared/ipc';
+import { DEFAULT_UI_SETTINGS, type KeymapProfileSetting, type TabId, type Theme, type UiSettings } from '../shared/ipc';
+import { KEY_ACTION_IDS, type Chord, type KeyActionId } from '../shared/keymap';
 
 // Keep the persisted ratio away from the degenerate edges; the renderer applies a
 // px-based clamp on top (§16.6), but the store must never hand back a 0/1 ratio.
@@ -48,6 +49,38 @@ function coerceTheme(raw: unknown, fallback: Theme): Theme {
   return raw === 'light' || raw === 'dark' ? raw : fallback;
 }
 
+function coerceKeymapProfile(raw: unknown, fallback: KeymapProfileSetting): KeymapProfileSetting {
+  return raw === 'auto' || raw === 'mac' || raw === 'pc' ? raw : fallback;
+}
+
+function isRec(m: unknown): m is Record<string, unknown> {
+  return typeof m === 'object' && m !== null && !Array.isArray(m);
+}
+
+function coerceChord(raw: unknown): Chord | null {
+  if (!isRec(raw) || typeof raw.key !== 'string') return null;
+  const c: Chord = { key: raw.key };
+  if (raw.ctrl === true) c.ctrl = true;
+  if (raw.alt === true) c.alt = true;
+  if (raw.shift === true) c.shift = true;
+  if (raw.meta === true) c.meta = true;
+  return c;
+}
+
+/** Keep only known actions mapped to non-empty arrays of well-formed chords (§7.7); return undefined
+ *  when nothing valid remains so the field is omitted rather than persisted empty/garbage. */
+function coerceKeymapOverrides(raw: unknown): Partial<Record<KeyActionId, Chord[]>> | undefined {
+  if (!isRec(raw)) return undefined;
+  const out: Partial<Record<KeyActionId, Chord[]>> = {};
+  for (const action of KEY_ACTION_IDS) {
+    const v = raw[action];
+    if (!Array.isArray(v)) continue;
+    const chords = v.map(coerceChord).filter((c): c is Chord => c !== null);
+    if (chords.length > 0) out[action] = chords;
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
 /** Validate each field independently against `base`, so one bad field can't poison the rest. */
 function coerce(raw: unknown, base: UiSettings): UiSettings {
   const r = (typeof raw === 'object' && raw !== null ? raw : {}) as Record<string, unknown>;
@@ -56,9 +89,12 @@ function coerce(raw: unknown, base: UiSettings): UiSettings {
     lastTab: coerceTab(r.lastTab, base.lastTab),
     theme: coerceTheme(r.theme, base.theme),
     artifactTreeWidth: coerceWidth(r.artifactTreeWidth, base.artifactTreeWidth),
+    keymapProfile: coerceKeymapProfile(r.keymapProfile, base.keymapProfile),
   };
   const fs = coerceFsWidth(r.artifactFullscreenTreeWidth, base.artifactFullscreenTreeWidth);
   if (fs !== undefined) out.artifactFullscreenTreeWidth = fs; // omit when unset so it never persists as null
+  const overrides = coerceKeymapOverrides(r.keymapOverrides);
+  if (overrides) out.keymapOverrides = overrides; // omit when none, like the fullscreen width
   return out;
 }
 

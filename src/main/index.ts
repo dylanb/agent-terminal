@@ -1,4 +1,5 @@
-import { app, BrowserWindow, ipcMain } from 'electron';
+import { app, BrowserWindow, clipboard, ipcMain, Menu } from 'electron';
+import { buildMenuTemplate } from './appMenu';
 import path from 'node:path';
 import os from 'node:os';
 import {
@@ -29,6 +30,7 @@ import {
   isValidFlowRequest,
   isValidFlowProvideInput,
   isValidInject,
+  isValidClipboardWrite,
   isValidInput,
   isValidLearnChrome,
   isValidResize,
@@ -106,6 +108,13 @@ async function createWindow(): Promise<void> {
   const send = <C extends SendChannel>(channel: C, payload: ChannelPayloads[C]): void => {
     if (!win.isDestroyed()) win.webContents.send(channel, payload);
   };
+
+  // macOS Edit menu (§7.7): route ⌘C/⌘V/⌘A to our renderer actions so they don't operate on xterm's
+  // hidden native selection. Off darwin buildMenuTemplate returns null and we leave the default menu.
+  // TODO(keymap): the menu-accelerator→IPC dispatch is macOS-only, so it has no Linux e2e; the pure
+  // template (appMenu.test) and the renderer router (menuActions.test) are unit/DOM covered.
+  const menuTemplate = buildMenuTemplate(process.platform, (action) => send(CH.menuEdit, { action }));
+  if (menuTemplate) Menu.setApplicationMenu(Menu.buildFromTemplate(menuTemplate));
 
   // S5 (§24.2.2): the flow's derived in-progress status (n/m done + agent activity) is PUSHED to
   // the strip — main fires flow:onStateChanged on any flow-relevant change (a todo mutated, the
@@ -310,6 +319,10 @@ async function createWindow(): Promise<void> {
       [CH.agentInject]: (_e, m) => {
         if (isValidInject(m)) inject(m.text, { submit: m.submit });
       },
+      // Clipboard is an OS resource owned by main (§7.7); the sandboxed preload can't reach it.
+      [CH.clipboardWrite]: (_e, m) => {
+        if (isValidClipboardWrite(m)) clipboard.writeText(m.text);
+      },
       // Global UI prefs (§16.6) — no sessionId; persisted to userData.
       [CH.uiSetSettings]: (_e, m) => {
         if (isValidSetSettings(m)) uiSettings.set(m.settings);
@@ -325,6 +338,7 @@ async function createWindow(): Promise<void> {
       [CH.monitorCurrentRepo]: () =>
         currentRepoInfo(cwdTracker.cwd(), cwdTracker.repoKey(), spawnCwd(process.env, os.homedir())),
       [CH.uiGetSettings]: () => uiSettings.get(),
+      [CH.clipboardRead]: (): string => clipboard.readText(), // Paste source (§7.7)
       [CH.monitorCommands]: (_e, m): CommandSummary[] =>
         isValidCommandsRequest(m)
           ? tracker.summaries().map((s) => ({ ...s, sessionId: SESSION_ID }))

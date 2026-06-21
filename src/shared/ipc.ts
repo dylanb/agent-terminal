@@ -1,6 +1,8 @@
 // Typed IPC contract (spec §6) — single source of truth for channel names and payloads.
 // Every payload carries sessionId so multi-session support is additive later.
 
+import type { Chord, KeyActionId } from './keymap';
+
 export type SessionId = string;
 
 /** The single fixed session id in this version (§6). */
@@ -27,6 +29,9 @@ export const CH = {
   agentInject: 'agent:inject',
   uiGetSettings: 'ui:getSettings',
   uiSetSettings: 'ui:setSettings',
+  clipboardWrite: 'term:clipboardWrite',
+  clipboardRead: 'term:clipboardRead',
+  menuEdit: 'menu:edit',
   cwdChanged: 'cwd:changed',
   monitorClearCommands: 'monitor:clearCommands',
   todoList: 'todo:list',
@@ -59,6 +64,10 @@ export type TabId = 'capture' | 'todo';
  */
 export type Theme = 'light' | 'dark';
 
+/** The user's keymap profile choice (§7.7): `auto` resolves to `mac` on macOS else `pc`; `mac`/`pc`
+ *  force that profile regardless of OS (e.g. a Mac keyboard on Linux). */
+export type KeymapProfileSetting = 'auto' | 'mac' | 'pc';
+
 export interface UiSettings {
   splitRatio: number;
   lastTab: TabId;
@@ -67,12 +76,36 @@ export interface UiSettings {
   artifactTreeWidth: number;
   /** Full-screen tree-popout width in px (§20.2); absent until set — default is 30% of the viewport. */
   artifactFullscreenTreeWidth?: number;
+  /** Keyboard layout profile (§7.7); `auto` follows the OS. */
+  keymapProfile: KeymapProfileSetting;
+  /** Per-action chord overrides merged over the profile (§7.7); absent when none are set. */
+  keymapOverrides?: Partial<Record<KeyActionId, Chord[]>>;
 }
 
-export const DEFAULT_UI_SETTINGS: UiSettings = { splitRatio: 0.65, lastTab: 'capture', theme: 'light', artifactTreeWidth: 248 };
+export const DEFAULT_UI_SETTINGS: UiSettings = {
+  splitRatio: 0.65,
+  lastTab: 'capture',
+  theme: 'light',
+  artifactTreeWidth: 248,
+  keymapProfile: 'auto',
+};
 
 export interface UiSetSettingsMsg {
   settings: Partial<UiSettings>;
+}
+
+/** Copy payload (§7.7): clipboard is an OS resource owned by main, so the renderer routes through it.
+ *  App-global like UiSettings — no sessionId. */
+export interface ClipboardWriteMsg {
+  text: string;
+}
+
+/** The three clipboard editing actions the macOS Edit menu routes to the renderer (§7.7). */
+export type EditAction = 'copy' | 'paste' | 'selectAll';
+
+/** menu:edit broadcast (§7.7): a macOS Edit-menu item fired; the renderer routes by focus. */
+export interface MenuEditMsg {
+  action: EditAction;
 }
 
 // ---- Todo lists (§16.3 / §16.4) ----
@@ -342,6 +375,7 @@ export interface ChannelPayloads {
   'monitor:commandsChanged': CommandsChangedMsg;
   'cwd:changed': CwdChangedMsg;
   'flow:onStateChanged': FlowStateChangedMsg;
+  'menu:edit': MenuEditMsg;
 }
 
 export type SendChannel = keyof ChannelPayloads;
@@ -537,11 +571,22 @@ export interface TodoTemplateInstantiateMsg {
 
 // ---- Preload-exposed API surfaces (§6) ----
 
+/** Host OS, exposed to the renderer so it can resolve the `auto` keymap profile (§7.7). */
+export type OsPlatform = 'darwin' | 'win32' | 'linux';
+
 export interface TermApi {
   onData(cb: (data: string) => void): () => void;
   onExit(cb: (msg: PtyExitMsg) => void): () => void;
   input(data: string): void;
   resize(size: { cols: number; rows: number }): void;
+  /** Write text to the OS clipboard — backs the Copy action (§7.7). */
+  clipboardWrite(text: string): void;
+  /** Read text from the OS clipboard — backs the Paste action (§7.7). */
+  clipboardRead(): Promise<string>;
+  /** The host OS, for resolving the `auto` keymap profile in the renderer (§7.7). */
+  platform: OsPlatform;
+  /** Subscribe to macOS Edit-menu actions (§7.7); the renderer routes them by focus. */
+  onMenuAction(cb: (action: EditAction) => void): () => void;
 }
 
 export interface MonitorApi {

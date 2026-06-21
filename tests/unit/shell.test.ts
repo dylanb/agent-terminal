@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createShell, type Shell } from '../../src/renderer/src/shell';
 import { FOCUS_VIEW_EVENT, FOCUS_TERMINAL_EVENT } from '../../src/renderer/src/paneActions';
+import { resolveKeymap } from '../../src/shared/keymap';
 
 // The converged shell (§22.4 / §24.1C): slim left rail + three view panes + a
 // docked drawer. These tests drive the controller through its public interface and
@@ -88,7 +89,9 @@ describe('shell controller (§24.1C — views, hotkeys, docked drawer, theme)', 
       expect(shell.getView()).toBe('2');
     });
 
-    it('switches view on Ctrl+1/2/3 (non-mac)', () => {
+    it('switches view on Ctrl+1/2/3 under the PC profile (§7.7)', () => {
+      shell.dispose();
+      shell = createShell(app, { getKeymap: () => resolveKeymap('pc') });
       document.dispatchEvent(new KeyboardEvent('keydown', { key: '3', ctrlKey: true, cancelable: true }));
       expect(shell.getView()).toBe('3');
     });
@@ -160,11 +163,20 @@ describe('shell controller (§24.1C — views, hotkeys, docked drawer, theme)', 
       expect(document.querySelector('.scrim, .backdrop')).toBeNull();
     });
 
-    it('toggles on Cmd/Ctrl+K', () => {
+    it('toggles on Cmd+K under the mac profile', () => {
       key('k');
       expect(shell.isDrawerOpen()).toBe(false);
       key('K');
       expect(shell.isDrawerOpen()).toBe(true);
+    });
+
+    it('under the PC profile uses Ctrl+Shift+K and leaves bare Ctrl+K for readline kill-line (§7.7)', () => {
+      shell.dispose();
+      shell = createShell(app, { getKeymap: () => resolveKeymap('pc') }); // starts open from markup
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', ctrlKey: true, cancelable: true, bubbles: true }));
+      expect(shell.isDrawerOpen()).toBe(true); // bare Ctrl+K is NOT the drawer — unchanged
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'K', ctrlKey: true, shiftKey: true, cancelable: true, bubbles: true }));
+      expect(shell.isDrawerOpen()).toBe(false); // Ctrl+Shift+K toggled it
     });
 
     it('marks the drawer hidden when closed so its controls leave the tab order (§22.2)', () => {

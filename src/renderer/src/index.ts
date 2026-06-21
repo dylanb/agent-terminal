@@ -11,12 +11,47 @@ import { createArtifacts, type Artifacts } from './artifacts';
 import { renderMarkdownInto, renderCodeInto } from './viewerRender';
 import { doInject } from './paneActions';
 import { createRepoContext } from './repoContext';
+import { createKeymapController } from './keymapController';
+import { createKeyboardSettings } from './keyboardSettings';
+import { runMenuEditAction } from './menuActions';
 
 const { terminal: term } = createTerminalPane(document.getElementById('terminal')!);
 // One shared OSC-7 repo provider (§16.3): seeds the repo key once and feeds the terminal
 // selection capture, the todo list, and the artifact viewer — so no consumer re-derives it.
 const repo = createRepoContext(window.monitor);
-wireSelection(term, repo);
+
+// Keyboard layout (§7.7): one controller holds the active keymap; the terminal dispatch reads it live
+// and the settings selector switches it. Starts at the markup default and hydrates from the persisted
+// profile once getSettings resolves (a Mac keyboard on Linux can force 'mac' there).
+let keyboardUi: { refresh(): void } | undefined;
+const keymap = createKeymapController({
+  platform: window.term.platform,
+  initial: 'auto',
+  persist: (p) => window.monitor.setSettings({ keymapProfile: p }),
+  persistOverrides: (o) => window.monitor.setSettings({ keymapOverrides: o }),
+  onChange: () => keyboardUi?.refresh(),
+});
+const terminalClipboard = wireSelection(term, repo, () => keymap.current());
+// macOS Edit-menu actions (§7.7) route to the terminal's clipboard actions, or a focused input's
+// native editing. Off macOS this never fires (no menu is installed).
+window.term.onMenuAction((action) => runMenuEditAction(action, document, terminalClipboard, () => window.term.clipboardRead()));
+keyboardUi = createKeyboardSettings(document.getElementById('kb-settings')!, {
+  getProfile: () => keymap.profile(),
+  onProfileChange: (p) => keymap.setProfile(p),
+  getKeymap: () => keymap.current(),
+  onRebind: (action, chord) => keymap.setOverride(action, [chord]),
+});
+void window.monitor
+  .getSettings()
+  .then((s) => {
+    // Hydrate persisted overrides first, then the profile (which re-resolves and refreshes the UI).
+    for (const [action, chords] of Object.entries(s.keymapOverrides ?? {})) {
+      if (chords) keymap.setOverride(action as never, chords);
+    }
+    keymap.setProfile(s.keymapProfile);
+  })
+  .catch(() => {}); // a rejected invoke (main restart) must not be an unhandled rejection
+
 wireMonitorPane(repo);
 
 // The converged three-view shell (§24.1C): view switching, hotkeys, the docked
@@ -30,6 +65,7 @@ const shell = createShell(document.getElementById('app')!, {
   getTheme: () => window.monitor.getSettings().then((s) => s.theme),
   setTheme: (theme) => window.monitor.setSettings({ theme }),
   onViewerFullscreenChange: (on) => artifacts?.setFullscreen(on),
+  getKeymap: () => keymap.current(), // §7.7: app-nav chords follow the active profile/overrides
 });
 
 // Cross-highlight wiring for any finding/source pairs that carry a data-find id

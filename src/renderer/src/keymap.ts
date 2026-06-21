@@ -1,60 +1,44 @@
-// Agent key bindings (§7.5.2): translate editor-style chords into the exact byte
-// sequences Claude Code / readline expect, so the input box behaves like a normal
-// editor (newline-without-submit, word motion, word delete) instead of submitting.
-//
-// The bytes ARE the contract:
-//  - ESC+CR (`\x1b\r`) is the Meta+Enter "insert newline" form Claude Code reads.
-//    xterm.js 5.5 has no kitty-keyboard protocol, so the CSI-u form (`\x1b[13;2u`)
-//    would leak into the prompt as literal text — ESC+CR is the portable choice.
-//  - meta-b / meta-f / ESC+DEL are the readline word forms understood by both bash
-//    and Claude Code without any inputrc configuration.
-// DOM events always report Option (macOS) as `altKey`, so one rule covers both.
+// Renderer-side terminal key dispatch (§7.7): resolve a DOM key event against the active keymap and
+// run the action. Motions emit byte sequences (the bytes ARE the contract — see src/shared/keymap.ts);
+// clipboard actions are injected side effects so this stays the single, testable dispatch seam.
+// An unbound key (matchChord → null) passes through to xterm/PTY untouched — that is how Ctrl+C
+// stays SIGINT and plain Enter stays submit.
 
-export interface KeyEventLike {
-  type: string;
-  key: string;
-  shiftKey: boolean;
-  altKey: boolean;
-  ctrlKey: boolean;
-  metaKey: boolean;
-}
+import { matchChord, BYTES_FOR, type Keymap, type KeyEventLike } from '../../shared/keymap';
 
-/** The bytes to send for a chord, or `null` to let xterm handle the key normally. */
-export function keyEventToBytes(e: KeyEventLike): string | null {
-  if (e.type !== 'keydown') return null;
+export type { KeyEventLike } from '../../shared/keymap';
 
-  // Shift+Enter / Alt+Enter: newline without submitting. Plain Enter (no modifier)
-  // falls through to null so xterm sends bare CR and the line is submitted.
-  if (e.key === 'Enter' && (e.shiftKey || e.altKey) && !e.ctrlKey && !e.metaKey) {
-    return '\x1b\r';
-  }
-
-  if (e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey) {
-    switch (e.key) {
-      case 'ArrowLeft':
-        return '\x1bb';
-      case 'ArrowRight':
-        return '\x1bf';
-      case 'Backspace':
-        return '\x1b\x7f';
-    }
-  }
-
-  return null;
+/** Side effects the dispatch invokes for non-byte actions. `paste`/`selectAll` are optional so a
+ *  slice can wire `copy` before the rest; an unwired action simply passes through. */
+export interface KeyActions {
+  send(data: string): void;
+  copy(): void;
+  paste?(): void;
+  selectAll?(): void;
 }
 
 /**
- * xterm `attachCustomKeyEventHandler` callback body: returns `true` to let xterm
- * process the key, `false` to suppress it after we've sent our own bytes. When we
- * handle a chord we also `preventDefault` so the hidden textarea doesn't double-edit.
+ * xterm `attachCustomKeyEventHandler` body: returns `true` to let xterm process the key, `false`
+ * once we've handled it ourselves (and we `preventDefault` so the hidden textarea doesn't double-edit).
  */
 export function handleTerminalKey(
   e: KeyEventLike & { preventDefault?: () => void },
-  send: (data: string) => void,
+  keymap: Keymap,
+  actions: KeyActions,
 ): boolean {
-  const bytes = keyEventToBytes(e);
-  if (bytes === null) return true;
+  const action = matchChord(e, keymap);
+  if (action === null) return true;
+
+  const bytes = BYTES_FOR[action];
+  if (bytes !== undefined) {
+    e.preventDefault?.();
+    actions.send(bytes);
+    return false;
+  }
+  const effect =
+    action === 'copy' ? actions.copy : action === 'paste' ? actions.paste : action === 'selectAll' ? actions.selectAll : undefined;
+  if (!effect) return true; // resolved to an action not wired here yet: leave it to xterm/PTY
   e.preventDefault?.();
-  send(bytes);
+  effect();
   return false;
 }

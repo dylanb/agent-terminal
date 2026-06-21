@@ -282,6 +282,106 @@ test('Option/Alt+Backspace deletes the whole previous word at the prompt (§7.5.
   ).toHaveCount(1);
 });
 
+test('the copy chord writes the terminal selection to the OS clipboard (§7.7)', async () => {
+  // On Linux the resolved profile is PC-style → copy is Ctrl+Shift+C (the suite runs on Linux,
+  // like the Control+1/2/3 tests). The selection is the app-owned one (§7), set by the drag.
+  await typeCommand('echo copyme-12345');
+  // Wait for quiescence so the OUTPUT row (not just the echoed command line) has rendered before
+  // the exact-row drag-select runs.
+  await expect(page.locator('.status-chip[data-status="agent"]')).toContainText('quiet', { timeout: 6_000 });
+  await selectRowContaining('copyme-12345');
+  // Focus the terminal (not a click — that would clear the app-owned selection) so the chord's
+  // keydown reaches xterm's handler. The selection survives focus changes (§7.0).
+  await page.locator('.xterm-helper-textarea').focus();
+  await page.keyboard.press('Control+Shift+C');
+  await expect
+    .poll(() => app.evaluate(({ clipboard }) => clipboard.readText()), { timeout: 5_000 })
+    .toContain('copyme-12345');
+});
+
+test('Ctrl+C still interrupts the foreground process — copy never hijacks it (§7.7)', async () => {
+  // If Ctrl+C were intercepted as copy, `sleep 30` would keep running and the echo below could
+  // not produce its own output row within the assertion timeout. Real SIGINT, end-to-end.
+  await page.locator('.xterm-screen').click();
+  await page.keyboard.type('sleep 30');
+  await page.keyboard.press('Enter');
+  await page.keyboard.press('Control+C');
+  await typeCommand('echo aftersigint');
+  await expect(page.locator('.xterm-rows > div').filter({ hasText: /^\s*aftersigint\s*$/ })).toHaveCount(1);
+});
+
+test('the paste chord routes through our sanitized path, not the unsanitized native paste (§7.7/§9.3)', async () => {
+  // The browser's native paste would leak an embedded bracketed-paste END marker straight to the PTY;
+  // our handler runs stripPasteBreakout first. `cat -v` visualizes received control bytes (ESC -> ^[),
+  // so a leaked marker would render as ^[[201~. The discriminator: our path joins the halves cleanly.
+  await typeCommand('cat -v');
+  await expect(page.locator('.status-chip[data-status="agent"]')).toContainText('quiet', { timeout: 6_000 });
+  await app.evaluate(({ clipboard }) => clipboard.writeText('AAA\x1b[201~BBB'));
+  await page.locator('.xterm-screen').click();
+  await page.keyboard.press('Control+Shift+V');
+  await expect(termRows()).toContainText('AAABBB'); // marker stripped, halves joined
+  await expect(termRows()).not.toContainText('201~'); // the breakout never reached the PTY
+  await page.keyboard.press('Control+C'); // leave cat
+});
+
+test('the select-all chord selects the whole buffer, which is then copyable (§7.7)', async () => {
+  await typeCommand('echo selA-marker-one');
+  await typeCommand('echo selB-marker-two');
+  await expect(page.locator('.status-chip[data-status="agent"]')).toContainText('quiet', { timeout: 6_000 });
+  await page.locator('.xterm-screen').click();
+  await page.keyboard.press('Control+Shift+A'); // select all (PC profile)
+  await page.keyboard.press('Control+Shift+C'); // copy the selection
+  const clip = await (async () => {
+    let text = '';
+    await expect.poll(async () => (text = await app.evaluate(({ clipboard }) => clipboard.readText()))).toContain('selA-marker-one');
+    return text;
+  })();
+  expect(clip).toContain('selB-marker-two'); // both rows are in the whole-buffer selection
+});
+
+test('switching the keyboard profile to macOS-style makes Cmd+C copy on Linux (§7.7)', async () => {
+  await app.evaluate(({ clipboard }) => clipboard.writeText('sentinel-unchanged'));
+  await typeCommand('echo macprofile-7');
+  await expect(page.locator('.status-chip[data-status="agent"]')).toContainText('quiet', { timeout: 6_000 });
+  await selectRowContaining('macprofile-7');
+  // The default profile on Linux is PC-style, where Meta+C (⌘C) is unbound. Forcing macOS-style via
+  // the setting is the only reason ⌘C copies here — so a passing copy proves the switch took effect.
+  await page.locator('#kb-settings select').selectOption('mac');
+  await page.locator('.xterm-helper-textarea').focus();
+  await page.keyboard.press('Meta+c');
+  await expect
+    .poll(() => app.evaluate(({ clipboard }) => clipboard.readText()), { timeout: 5_000 })
+    .toContain('macprofile-7');
+});
+
+test('rebinding the copy action to a custom chord takes effect (§7.7)', async () => {
+  await app.evaluate(({ clipboard }) => clipboard.writeText('sentinel-rebind'));
+  await typeCommand('echo rebindme-5');
+  await expect(page.locator('.status-chip[data-status="agent"]')).toContainText('quiet', { timeout: 6_000 });
+  await selectRowContaining('rebindme-5');
+  // Record a custom copy chord (no profile binds Ctrl+Shift+Y by default). Recording happens with the
+  // Record button focused, so the keypress is captured by the settings UI, not the terminal.
+  await page.locator('[data-action="copy"] button').click();
+  await page.keyboard.press('Control+Shift+Y');
+  // The recorded chord now copies the (still-active) selection from the terminal.
+  await page.locator('.xterm-helper-textarea').focus();
+  await page.keyboard.press('Control+Shift+Y');
+  await expect
+    .poll(() => app.evaluate(({ clipboard }) => clipboard.readText()), { timeout: 5_000 })
+    .toContain('rebindme-5');
+});
+
+test('the drawer toggles on Ctrl+Shift+K; bare Ctrl+K is left to the terminal as kill-line (§7.7)', async () => {
+  const appEl = page.locator('#app');
+  const isOpen = () => appEl.evaluate((el) => el.classList.contains('drawer-open'));
+  await page.locator('.xterm-screen').click();
+  const before = await isOpen();
+  await page.keyboard.press('Control+K'); // readline kill-line — must NOT toggle the drawer
+  expect(await isOpen()).toBe(before);
+  await page.keyboard.press('Control+Shift+K'); // the PC-profile drawer chord
+  expect(await isOpen()).toBe(!before);
+});
+
 test('a todo persists in-repo across an app restart (§16.3)', async () => {
   await cdToTempDir('persist');
   // Seed a todo via Capture selection (manual add is deferred to §24.2.1).
@@ -1016,8 +1116,8 @@ test('the quick-send drawer docks and undocks without a scrim, keeping the termi
   const appEl = page.locator('#app');
   await expect(appEl).toHaveClass(/drawer-open/); // docked in setup (it starts closed, §22.2)
 
-  // ⌘/Ctrl+K undocks it; the terminal pane stays on screen (no overlay/scrim).
-  await page.keyboard.press('Control+k');
+  // Ctrl+Shift+K undocks it (the PC drawer chord, §7.7); the terminal pane stays on screen (no scrim).
+  await page.keyboard.press('Control+Shift+K');
   await expect(appEl).not.toHaveClass(/drawer-open/);
   await expect(page.locator('.scrim, .backdrop')).toHaveCount(0);
   await expect(page.locator('#terminal')).toBeVisible();
@@ -1030,15 +1130,15 @@ test('the quick-send drawer docks and undocks without a scrim, keeping the termi
   await expect(appEl).not.toHaveClass(/drawer-open/);
 });
 
-test('⌘/Ctrl+K toggles the drawer even while the terminal is focused (§22.4)', async () => {
+test('Ctrl+Shift+K toggles the drawer even while the terminal is focused (§22.4 / §7.7)', async () => {
   const appEl = page.locator('#app');
   await page.locator('.xterm-screen').click(); // focus the terminal
   await expect(appEl).toHaveClass(/drawer-open/);
 
-  // The shell intercepts the chord ahead of xterm, so the hotkey still reaches it.
-  await page.keyboard.press('Control+k');
+  // The shell intercepts the chord (capture phase) ahead of xterm, so the hotkey still reaches it.
+  await page.keyboard.press('Control+Shift+K');
   await expect(appEl).not.toHaveClass(/drawer-open/);
-  await page.keyboard.press('Control+k');
+  await page.keyboard.press('Control+Shift+K');
   await expect(appEl).toHaveClass(/drawer-open/);
 });
 

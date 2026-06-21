@@ -1,86 +1,79 @@
 import { describe, expect, it, vi } from 'vitest';
-import { keyEventToBytes, handleTerminalKey, type KeyEventLike } from '../../src/renderer/src/keymap';
+import { handleTerminalKey, type KeyActions } from '../../src/renderer/src/keymap';
+import { MAC_DEFAULTS, PC_DEFAULTS, type KeyEventLike } from '../../src/shared/keymap';
 
-// Agent key bindings (§7.5.2): map editor-style chords to the exact byte sequences
-// Claude Code / readline expect. These bytes ARE the contract, so we assert them literally.
-function ev(over: Partial<KeyEventLike>): KeyEventLike {
-  return {
-    type: 'keydown',
-    key: 'a',
-    shiftKey: false,
-    altKey: false,
-    ctrlKey: false,
-    metaKey: false,
-    ...over,
-  };
+// The renderer's xterm key dispatch (§7.7): resolve the event against the active keymap and run the
+// action — send bytes for motions (the bytes ARE the contract), or invoke a clipboard side effect.
+// null/unbound passes through (Ctrl+C → SIGINT, plain Enter → submit).
+function ev(over: Partial<KeyEventLike>): KeyEventLike & { preventDefault?: () => void } {
+  return { type: 'keydown', key: 'a', shiftKey: false, altKey: false, ctrlKey: false, metaKey: false, ...over };
 }
 
-describe('keyEventToBytes (§7.5.2 agent key bindings)', () => {
-  it('Shift+Enter sends ESC+CR (insert newline, do not submit)', () => {
-    expect(keyEventToBytes(ev({ key: 'Enter', shiftKey: true }))).toBe('\x1b\r');
-  });
+function actions(over: Partial<KeyActions> = {}): KeyActions {
+  return { send: vi.fn(), copy: vi.fn(), paste: vi.fn(), selectAll: vi.fn(), ...over };
+}
 
-  it('Alt+Enter also sends ESC+CR (Meta+Enter newline convention)', () => {
-    expect(keyEventToBytes(ev({ key: 'Enter', altKey: true }))).toBe('\x1b\r');
-  });
-
-  it('plain Enter is passed through (null) so xterm sends bare CR to submit', () => {
-    expect(keyEventToBytes(ev({ key: 'Enter' }))).toBeNull();
-  });
-
-  it('Alt+Left sends meta-b (backward-word)', () => {
-    expect(keyEventToBytes(ev({ key: 'ArrowLeft', altKey: true }))).toBe('\x1bb');
-  });
-
-  it('Alt+Right sends meta-f (forward-word)', () => {
-    expect(keyEventToBytes(ev({ key: 'ArrowRight', altKey: true }))).toBe('\x1bf');
-  });
-
-  it('Alt+Backspace sends ESC+DEL (backward-kill-word)', () => {
-    expect(keyEventToBytes(ev({ key: 'Backspace', altKey: true }))).toBe('\x1b\x7f');
-  });
-
-  it('plain Left/Right/Backspace are passed through (null)', () => {
-    expect(keyEventToBytes(ev({ key: 'ArrowLeft' }))).toBeNull();
-    expect(keyEventToBytes(ev({ key: 'ArrowRight' }))).toBeNull();
-    expect(keyEventToBytes(ev({ key: 'Backspace' }))).toBeNull();
-  });
-
-  it('does not hijack chords that also hold Ctrl or Meta', () => {
-    expect(keyEventToBytes(ev({ key: 'ArrowLeft', altKey: true, ctrlKey: true }))).toBeNull();
-    expect(keyEventToBytes(ev({ key: 'Backspace', altKey: true, metaKey: true }))).toBeNull();
-    expect(keyEventToBytes(ev({ key: 'Enter', shiftKey: true, ctrlKey: true }))).toBeNull();
-  });
-
-  it('only fires on keydown, never on keyup (avoids double-send)', () => {
-    expect(keyEventToBytes(ev({ type: 'keyup', key: 'Enter', shiftKey: true }))).toBeNull();
-    expect(keyEventToBytes(ev({ type: 'keyup', key: 'Backspace', altKey: true }))).toBeNull();
-  });
-
-  it('passes ordinary typing through untouched', () => {
-    expect(keyEventToBytes(ev({ key: 'a' }))).toBeNull();
-    expect(keyEventToBytes(ev({ key: 'b', altKey: true, shiftKey: true }))).toBeNull();
-  });
-});
-
-describe('handleTerminalKey (§7.5.2 — send + suppress xterm default)', () => {
-  it('sends the mapped bytes, suppresses the default, and prevents the browser default', () => {
-    const send = vi.fn();
+describe('handleTerminalKey — keymap-driven dispatch (§7.7)', () => {
+  it('copies the selection on the copy chord, suppresses the key, prevents the browser default', () => {
+    const a = actions();
     const preventDefault = vi.fn();
-    const e = { ...ev({ key: 'Backspace', altKey: true }), preventDefault } as unknown as KeyEventLike;
-
-    const keep = handleTerminalKey(e, send);
-
-    expect(send).toHaveBeenCalledWith('\x1b\x7f');
-    expect(keep).toBe(false); // xterm must NOT also process the key
+    const keep = handleTerminalKey({ ...ev({ key: 'c', metaKey: true }), preventDefault }, MAC_DEFAULTS, a);
+    expect(a.copy).toHaveBeenCalled();
+    expect(a.send).not.toHaveBeenCalled();
+    expect(keep).toBe(false);
     expect(preventDefault).toHaveBeenCalled();
   });
 
-  it('leaves unmapped keys to xterm and sends nothing', () => {
-    const send = vi.fn();
-    const keep = handleTerminalKey(ev({ key: 'a' }), send);
+  it('passes Ctrl+C through to the PTY as SIGINT — never intercepted as copy', () => {
+    const a = actions();
+    expect(handleTerminalKey(ev({ key: 'c', ctrlKey: true }), MAC_DEFAULTS, a)).toBe(true);
+    expect(handleTerminalKey(ev({ key: 'c', ctrlKey: true }), PC_DEFAULTS, a)).toBe(true);
+    expect(a.copy).not.toHaveBeenCalled();
+    expect(a.send).not.toHaveBeenCalled();
+  });
 
-    expect(send).not.toHaveBeenCalled();
-    expect(keep).toBe(true);
+  it('sends the byte sequence for a motion chord (Alt+Backspace → ESC+DEL)', () => {
+    const a = actions();
+    expect(handleTerminalKey(ev({ key: 'Backspace', altKey: true }), MAC_DEFAULTS, a)).toBe(false);
+    expect(a.send).toHaveBeenCalledWith('\x1b\x7f');
+  });
+
+  it('inserts a newline without submitting on Shift+Enter and Alt+Enter', () => {
+    const a = actions();
+    handleTerminalKey(ev({ key: 'Enter', shiftKey: true }), PC_DEFAULTS, a);
+    handleTerminalKey(ev({ key: 'Enter', altKey: true }), PC_DEFAULTS, a);
+    expect(a.send).toHaveBeenNthCalledWith(1, '\x1b\r');
+    expect(a.send).toHaveBeenNthCalledWith(2, '\x1b\r');
+  });
+
+  it('passes plain Enter through so xterm submits with a bare CR', () => {
+    const a = actions();
+    expect(handleTerminalKey(ev({ key: 'Enter' }), PC_DEFAULTS, a)).toBe(true);
+    expect(a.send).not.toHaveBeenCalled();
+  });
+
+  it('passes ordinary typing through untouched', () => {
+    const a = actions();
+    expect(handleTerminalKey(ev({ key: 'a' }), MAC_DEFAULTS, a)).toBe(true);
+    expect(a.send).not.toHaveBeenCalled();
+  });
+
+  it('pastes on the paste chord when the handler is wired, suppressing the key', () => {
+    const a = actions();
+    const keep = handleTerminalKey(ev({ key: 'v', metaKey: true }), MAC_DEFAULTS, a);
+    expect(a.paste).toHaveBeenCalled();
+    expect(keep).toBe(false);
+  });
+
+  it('selects all on the select-all chord when the handler is wired', () => {
+    const a = actions();
+    const keep = handleTerminalKey(ev({ key: 'a', metaKey: true }), MAC_DEFAULTS, a);
+    expect(a.selectAll).toHaveBeenCalled();
+    expect(keep).toBe(false);
+  });
+
+  it('passes a resolved action through unhandled when its handler is not wired', () => {
+    const a: KeyActions = { send: vi.fn(), copy: vi.fn() }; // paste/selectAll not provided
+    expect(handleTerminalKey(ev({ key: 'v', metaKey: true }), MAC_DEFAULTS, a)).toBe(true);
   });
 });
