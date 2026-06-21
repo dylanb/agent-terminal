@@ -314,18 +314,44 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
       undo: vi.fn(),
       provideInput: vi.fn(),
       onStateChanged: noopSub,
+      loopPanelId: 'loop-panel', // the controlled panel id is injected by the composition root
     };
     createFlowStrip(host, deps).onRepoChanged('/repo');
     await vi.waitFor(() => expect(host.querySelector('.loopstat')).not.toBeNull());
     const readout = host.querySelector<HTMLElement>('.loopstat')!;
     expect(readout.getAttribute('role')).toBe('button'); // a keyboard-reachable open control
-    expect(readout.getAttribute('aria-controls')).toBe('loop-panel');
+    expect(readout.getAttribute('aria-controls')).toBe('loop-panel'); // from the injected id, not hard-coded
     const pill = readout.querySelector<HTMLElement>('.spill')!;
     expect(pill.classList.contains('await')).toBe(true); // awaiting-human → needs-you tone
     expect(pill.textContent).toContain('awaiting'); // the compact tone label, not the full status
     expect(readout.textContent).toContain('iter 9');
     // The exact status/pr/branch live in the docked panel, not the compact read-out.
     expect(readout.textContent).not.toContain('#179');
+  });
+
+  it('omits aria-controls on the loop read-out when no panel id is injected (no hard-coded global id)', async () => {
+    const deps = {
+      state: vi.fn(
+        async (): Promise<FlowStateView> => ({
+          stepName: 'build',
+          steps: ['build'],
+          position: 1,
+          total: 1,
+          status: 'in_progress' as FlowStatus,
+          loop: { status: 'impl-review', iteration: 3, pr: 12, branch: 'agent-loop/x', ready: false },
+        }),
+      ),
+      start: vi.fn(),
+      advance: vi.fn(),
+      restart: vi.fn(),
+      undo: vi.fn(),
+      provideInput: vi.fn(),
+      onStateChanged: noopSub,
+      // no loopPanelId → the strip must not bake in a document-level id (UI-STANDARDS §2.2 rule 1)
+    };
+    createFlowStrip(host, deps).onRepoChanged('/repo');
+    await vi.waitFor(() => expect(host.querySelector('.loopstat')).not.toBeNull());
+    expect(host.querySelector<HTMLElement>('.loopstat')!.hasAttribute('aria-controls')).toBe(false);
   });
 
   it('maps an arbitrary per-LoopDef status onto one of three tones (await/work/settle)', async () => {

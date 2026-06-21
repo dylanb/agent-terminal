@@ -53,6 +53,7 @@ if (flowStripHost) {
   const inputModal = modalHost ? createFlowInputModal(modalHost) : undefined;
   const flowStrip = createFlowStrip(flowStripHost, {
     ...window.flow,
+    loopPanelId: loopPanelHost?.id, // inject the controlled panel id (instance-scoped aria-controls)
     onLoopState: (loop, title) => {
       loopPanel?.render(loop, title);
       if (!loop) {
