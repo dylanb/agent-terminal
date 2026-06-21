@@ -150,7 +150,7 @@ export function createShell(root: HTMLElement, deps: ShellDeps = {}): Shell {
     if (target.closest('#qs')) return toggleDrawer();
     if (target.closest('#dclose')) return closeDrawer();
     if (target.closest('#loopstat')) return toggleLoopPanel();
-    if (target.closest('#lclose')) return closeLoopPanel();
+    if (target.closest('[data-loop-close]')) return closeLoopPanel();
     if (target.closest('#tg')) return setTheme(theme === 'dark' ? 'light' : 'dark');
   };
 

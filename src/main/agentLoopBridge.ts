@@ -51,6 +51,13 @@ export function parseAgentLoopState(repoDir: string): AgentLoopState | null {
   };
 }
 
+/** True for a state.yaml fs.watch event. `filename` is `string | Buffer | null`: it is a Buffer on
+ *  some platforms/encodings (a raw `===` against the string would miss it), and null on platforms
+ *  that omit it — both must count, or a real edit would silently not fire onChange. */
+export function isStateFileEvent(filename: string | Buffer | null): boolean {
+  return filename === null || filename.toString() === 'state.yaml';
+}
+
 /** Watch <repoDir>/.agent-loop/state.yaml for changes, calling `onChange` on each. Watches the
  *  containing directory (so an atomic rename-replace is caught), filtering to state.yaml. Returns
  *  an unsubscribe; if the directory can't be watched (e.g. it doesn't exist yet) it is a no-op. */
@@ -58,8 +65,7 @@ export function watchAgentLoopState(repoDir: string, onChange: () => void): () =
   let watcher: FSWatcher | undefined;
   try {
     watcher = watch(path.join(repoDir, '.agent-loop'), (_event, filename) => {
-      // Some platforms report a null filename; treat that (and a state.yaml event) as a change.
-      if (filename === null || filename === 'state.yaml') onChange();
+      if (isStateFileEvent(filename)) onChange();
     });
   } catch {
     return () => {};

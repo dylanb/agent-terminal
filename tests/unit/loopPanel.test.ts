@@ -43,7 +43,20 @@ describe('docked loop panel (§24.2.3 T2)', () => {
   it('renders the panel header title + a close button the shell can dismiss', () => {
     createLoopPanel(host).render(loop(), 'build');
     expect(host.querySelector('.lhead h3')?.textContent).toBe('build');
-    expect(host.querySelector('#lclose')).not.toBeNull();
+    expect(host.querySelector('[data-loop-close]')).not.toBeNull();
+  });
+
+  it('locates the close control by a hook attribute, never a global id (two panels, one document)', () => {
+    const a = document.createElement('aside');
+    const b = document.createElement('aside');
+    document.body.append(a, b);
+    createLoopPanel(a).render(loop(), 'build');
+    createLoopPanel(b).render(loop(), 'build');
+    // Two panels in one document must not collide on a global id (invalid HTML, ambiguous selectors).
+    expect(document.querySelectorAll('#lclose').length).toBe(0);
+    expect(document.querySelectorAll('[data-loop-close]').length).toBe(2);
+    expect(a.querySelectorAll('[data-loop-close]').length).toBe(1);
+    expect(b.querySelectorAll('[data-loop-close]').length).toBe(1);
   });
 
   it('flags an awaiting-human status as needs-you (the §22.3 act tone)', () => {

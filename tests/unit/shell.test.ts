@@ -19,7 +19,7 @@ const SHELL_HTML = `
     <span data-theme-label>Light</span>
     <span id="loopstat" role="button" tabindex="0" aria-expanded="false" aria-controls="loop-panel">Loop</span>
   </aside>
-  <aside class="loop-panel" id="loop-panel"><button id="lclose">x</button></aside>
+  <aside class="loop-panel" id="loop-panel"><button data-loop-close>x</button></aside>
   <main class="main">
     <div data-viewpane="1" class="on">term</div>
     <div data-viewpane="2">artifacts</div>
@@ -235,7 +235,7 @@ describe('shell controller (§24.1C — views, hotkeys, docked drawer, theme)', 
     it('opens by clicking the rail Loop read-out and closes via the panel close button', () => {
       (document.getElementById('loopstat') as HTMLElement).click();
       expect(shell.isLoopPanelOpen()).toBe(true);
-      (document.getElementById('lclose') as HTMLElement).click();
+      (document.querySelector('[data-loop-close]') as HTMLElement).click();
       expect(shell.isLoopPanelOpen()).toBe(false);
     });
 

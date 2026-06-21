@@ -92,7 +92,9 @@ echo "waiting for review #$(( BASE_N + 1 )) (poll ${INTERVAL_SEC}s, up to ${TIME
 i=0
 while [ "$i" -lt "$ITERS" ]; do
   i=$(( i + 1 ))
-  N=$(copilot_reviews 2>/dev/null | count_lines)
+  # A transient gh/network failure must not kill the wait (set -euo pipefail would otherwise exit
+  # on the failed pipeline): treat a failed poll as "no change yet" and try again next interval.
+  N=$(copilot_reviews 2>/dev/null | count_lines) || N="$BASE_N"
   if [ "$N" -gt "$BASE_N" ]; then
     NEW_ID=$(gh api "repos/$REPO/pulls/$PR/reviews?per_page=100" \
       --jq "map($PRED) | max_by(.submitted_at) | .id")

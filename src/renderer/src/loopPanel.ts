@@ -60,7 +60,7 @@ export function createLoopPanel(host: HTMLElement): LoopPanel {
       h3.textContent = title;
       const close = doc.createElement('button');
       close.className = 'iconbtn x';
-      close.id = 'lclose';
+      close.dataset.loopClose = ''; // behavioral hook for the shell — not a global id (collides across panels)
       close.title = 'Close loop panel';
       close.setAttribute('aria-label', 'Close loop panel');
       close.textContent = '✕';
