@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain } from 'electron';
+import { app, BrowserWindow, ipcMain, Notification } from 'electron';
 import path from 'node:path';
 import os from 'node:os';
 import {
@@ -56,6 +56,7 @@ import { captureLastReport } from './captureLast';
 import { createFlowManager, deriveFlowView, loadFlowDefinitionLocalFirst } from './flow';
 import { createFlowEntryActions } from './flowEntryActions';
 import { parseAgentLoopState, watchAgentLoopState } from './agentLoopBridge';
+import { createLoopNotifier } from './loopNotifier';
 import { parseLoopDef } from './loopDef';
 import { listTodoTemplates, loadTodoTemplateFile, parseTodoTemplate } from './todoTemplate';
 import { discover, readArtifact, emptyTree } from './artifactTree';
@@ -230,10 +231,32 @@ async function createWindow(): Promise<void> {
   // (§24.2.2 S5) — no new plumbing. One watcher per repo, established lazily on first sight of a
   // loop view; pushFlowChanged makes the strip re-pull, so duplicate file events are harmless.
   const loopWatchers = new Map<string, () => void>();
+  // T4 (§24.2.3): observe every loop view for a distinct human-needed entry and raise an OS
+  // notification when the window is unfocused — activating it focuses the window and pushes the
+  // renderer reveal signal over flow:revealLoop. The notifier owns the (status,iteration) dedup; the
+  // Notification surface is created here (the untestable Electron glue; the decision is unit/integration
+  // tested in loopNotifier).
+  const loopNotifier = createLoopNotifier({
+    isFocused: () => !win.isDestroyed() && win.isFocused(),
+    focusWindow: () => {
+      if (win.isDestroyed()) return;
+      if (win.isMinimized()) win.restore();
+      win.focus();
+    },
+    reveal: () => send(CH.flowRevealLoop, { sessionId: SESSION_ID }),
+    notify: ({ title, body, onActivate }) => {
+      if (!Notification.isSupported()) return () => {};
+      const notification = new Notification({ title, body });
+      notification.on('click', onActivate);
+      notification.show();
+      return () => notification.close();
+    },
+  });
   const trackLoop = (repoKey: string, view: FlowStateView): FlowStateView => {
     if (view.loop && !loopWatchers.has(repoKey)) {
       loopWatchers.set(repoKey, watchAgentLoopState(repoKey, pushFlowChanged));
     }
+    loopNotifier.observe(view);
     return view;
   };
   // todoTemplate:instantiate (§6/§4.1) — on demand, instantiate a named template (co-located with

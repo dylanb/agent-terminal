@@ -27,7 +27,10 @@ import { isRecord } from './yamlRecord';
  * shared awaiting-human/impasse family. Both paths classify the shipped vocabulary identically.
  */
 export function classifyHumanNeeded(status: string, loopDef: LoopDef | null): boolean {
-  return status === '__unimplemented__' && loopDef === null;
+  if (!loopDef) return isHumanNeededStatus(status);
+  if (status === 'impasse') return true;
+  const gate = gateForStatus(loopDef, status);
+  return status.startsWith('awaiting-') && gate !== undefined && !gate.terminal && gate.humanOptions.length > 0;
 }
 
 /**

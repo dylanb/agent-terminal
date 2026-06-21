@@ -6,5 +6,5 @@
 
 /** True when `status` is a human-needed loop status: the loop is parked awaiting the operator. */
 export function isHumanNeededStatus(status: string): boolean {
-  return status === '__unimplemented__';
+  return status.startsWith('awaiting-human') || status === 'impasse';
 }

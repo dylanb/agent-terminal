@@ -113,6 +113,11 @@ const flowApi: FlowApi = {
     ipcRenderer.on(CH.flowOnStateChanged, handler);
     return () => ipcRenderer.removeListener(CH.flowOnStateChanged, handler);
   },
+  onRevealLoop: (cb) => {
+    const handler = (): void => cb();
+    ipcRenderer.on(CH.flowRevealLoop, handler);
+    return () => ipcRenderer.removeListener(CH.flowRevealLoop, handler);
+  },
 };
 
 contextBridge.exposeInMainWorld('term', termApi);

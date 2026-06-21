@@ -31,6 +31,40 @@ export interface LoopNotifier {
   observe(view: FlowStateView): void;
 }
 
-export function createLoopNotifier(_deps: LoopNotifierDeps): LoopNotifier {
-  return { observe: () => {} };
+export function createLoopNotifier(deps: LoopNotifierDeps): LoopNotifier {
+  // The single carried distinct-entry identity (§24.2.3 T4): the last human-needed (status,iteration)
+  // signalled. Held across non-human-needed views so a repeat of an already-signalled occurrence stays
+  // deduped; a different (status,iteration) is a distinct entry. Null until the first entry, so the
+  // initial human-needed view at app start / flow-open is by definition distinct.
+  let lastSignalled: { status: string; iteration: number } | null = null;
+  let closeActive: (() => void) | null = null;
+
+  const clearActive = (): void => {
+    closeActive?.();
+    closeActive = null;
+  };
+
+  return {
+    observe(view) {
+      const loop = view.loop;
+      if (!loop || loop.humanNeeded !== true) {
+        clearActive(); // null / non-human mirror: dismiss any showing notification (the carried id stays)
+        return;
+      }
+      if (lastSignalled !== null && lastSignalled.status === loop.status && lastSignalled.iteration === loop.iteration) {
+        return; // a repeat of the already-signalled occurrence — no re-raise
+      }
+      lastSignalled = { status: loop.status, iteration: loop.iteration };
+      clearActive(); // the prior occurrence's notification is now stale
+      if (deps.isFocused()) return; // unfocused-only raise — the user is present, the in-app cue suffices
+      closeActive = deps.notify({
+        title: 'Agent loop needs you',
+        body: `${loop.status} · iter ${loop.iteration}`,
+        onActivate: () => {
+          deps.focusWindow();
+          deps.reveal();
+        },
+      });
+    },
+  };
 }

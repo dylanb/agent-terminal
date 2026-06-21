@@ -4,7 +4,7 @@ import { _electron as electron, expect, test, type ElectronApplication, type Pag
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import '../../src/shared/ipc';
+import { CH, SESSION_ID } from '../../src/shared/ipc';
 
 // Full-loop e2e (§12 acceptance): real Electron, real node-pty, real bash.
 
@@ -1178,6 +1178,18 @@ function seedLoopFlowRepo(prefix: string): { dir: string; stateFile: string } {
 
 const loopReadout = () => page.locator('#flow-strip .loopstat'); // compact rail read-out (opens the panel)
 const loopPanel = () => page.locator('#loop-panel'); // the docked expanded state mirror
+const attnCue = () => page.locator('#attn-cue'); // the awaiting-human attention cue (§24.2.3 T4)
+
+// Fire main's flow:revealLoop push directly (§24.2.3 T4): the real renderer reveal path runs (preload
+// onRevealLoop → revealLoopReadout → Shell seams). The OS-notification CLICK that emits this in
+// production is the untestable Electron glue (the decision + activation are covered at the main
+// integration layer in loopNotifier); this exercises everything downstream of it.
+const fireRevealLoop = (): Promise<void> =>
+  app.evaluate(
+    ({ BrowserWindow }, { ch, sid }) =>
+      BrowserWindow.getAllWindows()[0].webContents.send(ch, { sessionId: sid }),
+    { ch: CH.flowRevealLoop, sid: SESSION_ID },
+  );
 
 // Seed a flow repo whose manual step declares entry actions (§18.6): an optional `skill` and an
 // optional `todo_template` whose markdown-list items are written to a repo-local file.
@@ -1435,6 +1447,99 @@ test('a loop step shows a Loop read-out that expands a docked state-mirror panel
   await expect(page.locator('#flow-strip .flow-notice')).toContainText('still needs you', { timeout: 10_000 });
   await expect(flowStation(3)).toHaveClass(/\bactive\b/); // Completed — the flow advanced anyway
   await expect(flowControl()).toHaveText('Restart');
+
+  await app.close(); // HOME=temp ⇒ Electron writes userData under it; stop writes before removing it
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+});
+
+test('the awaiting-human cue appears, re-fires after dismiss, and clears as the loop state changes (§24.2.3 T4)', async () => {
+  // The T4 fire: drive a real v4 state.yaml to a human-needed status → the in-app cue shows with no
+  // manual refresh; bump the iteration + status → it re-fires (even after a dismiss); a non-human
+  // status clears it. Real loop: bash + node-pty + the bridge watcher + the flow manager + the cue.
+  const { dir: repo, stateFile } = seedLoopFlowRepo('agent-term-e2e-cue-');
+  writeFileSync(stateFile, 'schema_version: 4\npr: 179\nbranch: agent-loop/issue-176\niteration: 9\nstatus: awaiting-human-pr-approval\n');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-cue-home-'));
+  await app.close();
+  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
+  page = await app.firstWindow();
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await typeCommand(`cd "${repo}"`);
+  await expect(flowStepName()).toHaveText('groom', { timeout: 10_000 });
+  await expect(attnCue()).toBeHidden(); // a manual step is not human-needed
+
+  await flowControl().click(); // Start → groom (manual): still not human-needed
+  await expect(attnCue()).toBeHidden();
+
+  await flowControl().click(); // Advance → build (loop) active at awaiting-human-pr-approval
+  await expect(attnCue()).toBeVisible({ timeout: 10_000 });
+  await expect(attnCue()).toContainText('awaiting-human-pr-approval'); // the announcement names the status
+
+  // Dismiss only hides it — it changes no loop state (the read-out stays) and injects nothing.
+  await attnCue().locator('[data-attn-dismiss]').click();
+  await expect(attnCue()).toBeHidden();
+  await expect(loopReadout()).toHaveCount(1);
+
+  // A distinct human-needed entry (new status, later iteration) re-fires the cue, even after dismiss.
+  writeFileSync(stateFile, 'schema_version: 4\npr: 179\nbranch: agent-loop/issue-176\niteration: 11\nstatus: awaiting-human-impl-triage\n');
+  await expect(attnCue()).toBeVisible({ timeout: 10_000 });
+  await expect(attnCue()).toContainText('awaiting-human-impl-triage');
+
+  // A terminal hand-off (not human-needed) clears the cue.
+  writeFileSync(stateFile, 'schema_version: 4\npr: 179\nbranch: agent-loop/issue-176\niteration: 11\nstatus: awaiting-team-review\n');
+  await expect(attnCue()).toBeHidden({ timeout: 10_000 });
+
+  await app.close(); // HOME=temp ⇒ Electron writes userData under it; stop writes before removing it
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+});
+
+test('the reveal signal lands the user on the loop read-out, from another view and from viewer-fullscreen with the strip hidden (§24.2.3 T4)', async () => {
+  // Activating the OS notification pushes flow:revealLoop; the renderer must land the user on the loop
+  // read-out in every case — exit viewer-fullscreen, switch to the Terminal view, open the docked
+  // panel. A real git repo so the artifact viewer's full-screen (which hides the rail/strip) works.
+  const { dir: repo, stateFile } = seedLoopFlowRepo('agent-term-e2e-reveal-');
+  writeFileSync(stateFile, 'schema_version: 4\npr: 179\nbranch: agent-loop/issue-176\niteration: 9\nstatus: awaiting-human-pr-approval\n');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-reveal-home-'));
+  await app.close();
+  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
+  page = await app.firstWindow();
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await typeCommand(
+    `cd "${repo}" && rm -rf .git && git init -q && git config user.email t@t && git config user.name T && ` +
+      `git add -A && git commit -qm init && printf '# Doc\\n' > doc.md && pwd`,
+  );
+  await expect(flowStepName()).toHaveText('groom', { timeout: 10_000 });
+  await flowControl().click(); // Start → groom
+  await flowControl().click(); // Advance → build (loop) active, human-needed
+  await expect(loopReadout()).toHaveCount(1, { timeout: 10_000 });
+  await expect(attnCue()).toBeVisible();
+  await expect(page.locator('#app')).not.toHaveClass(/\bloop-open\b/); // the docked panel starts closed
+
+  // Reveal from a NON-Terminal view: switch to Todos, fire the signal → lands on Terminal, read-out open.
+  await page.keyboard.press('Control+3');
+  await expect(page.locator('[data-viewpane="3"]')).toBeVisible();
+  await fireRevealLoop();
+  await expect(page.locator('[data-viewpane="1"]')).toBeVisible();
+  await expect(page.locator('#app')).toHaveClass(/\bloop-open\b/);
+  await expect(loopPanel()).toContainText('awaiting-human-pr-approval');
+
+  // Close the read-out, then reveal from VIEWER-FULLSCREEN (rail/strip hidden): the cue stays
+  // perceivable in the main region, and reveal exits full-screen and re-opens the read-out on Terminal.
+  await loopReadout().click();
+  await expect(page.locator('#app')).not.toHaveClass(/\bloop-open\b/);
+  await page.keyboard.press('Control+2');
+  await page.locator('#artifacts .art-fs').click();
+  await expect(page.locator('#app')).toHaveClass(/\bviewer-fullscreen\b/);
+  await expect(page.locator('#app .rail')).toBeHidden(); // the strip lives in the hidden rail…
+  await expect(attnCue()).toBeVisible(); // …yet the cue is still perceivable in the main region
+
+  await fireRevealLoop();
+  await expect(page.locator('#app')).not.toHaveClass(/\bviewer-fullscreen\b/);
+  await expect(page.locator('[data-viewpane="1"]')).toBeVisible();
+  await expect(page.locator('#app')).toHaveClass(/\bloop-open\b/);
 
   await app.close(); // HOME=temp ⇒ Electron writes userData under it; stop writes before removing it
   rmSync(repo, { recursive: true, force: true });

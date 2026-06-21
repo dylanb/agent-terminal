@@ -7,6 +7,8 @@ import { SAMPLE_FLOW, createGatePanel } from './flow';
 import { createFlowStrip } from './flowStrip';
 import { createLoopPanel } from './loopPanel';
 import { createFlowInputModal } from './flowInputModal';
+import { createAttentionCue } from './attentionCue';
+import { revealLoopReadout } from './loopReveal';
 import { createArtifacts, type Artifacts } from './artifacts';
 import { renderMarkdownInto, renderCodeInto } from './viewerRender';
 import { doInject } from './paneActions';
@@ -36,6 +38,14 @@ const shell = createShell(document.getElementById('app')!, {
 // (the mocked artifact/finding markup today; real provenance spans in a later phase).
 wireCrossHighlight(document.getElementById('app')!);
 
+// Awaiting-human attention cue (§24.2.3 T4): an always-visible main-region organism the flow strip
+// feeds the current loop mirror (below), shown when the loop is human-needed. The OS notification's
+// activation pushes flow:revealLoop; the renderer responds by landing the user on the loop read-out
+// through the real Shell seams (exit fullscreen → Terminal view → open the docked panel).
+const attnCueHost = document.getElementById('attn-cue');
+const attentionCue = attnCueHost ? createAttentionCue(attnCueHost) : undefined;
+window.flow.onRevealLoop(() => revealLoopReadout(shell));
+
 // Flow status strip (§22.3 / §24.2.2): the manual-step lifecycle driven through window.flow,
 // scoped to the terminal's current repo. Like the todo list, it follows the cwd — the shared
 // repo context delivers the seeded key on mount and every subsequent cd, and the strip re-pulls.
@@ -56,6 +66,7 @@ if (flowStripHost) {
     loopPanelId: loopPanelHost?.id, // inject the controlled panel id (instance-scoped aria-controls)
     onLoopState: (loop, title) => {
       loopPanel?.render(loop, title);
+      attentionCue?.render(loop ?? null); // human-needed → the cue shows; else it self-clears
       if (!loop) {
         shell.closeLoopPanel(); // the read-out is gone; never leave an empty panel docked
       } else {

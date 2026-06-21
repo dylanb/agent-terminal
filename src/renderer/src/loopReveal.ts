@@ -7,4 +7,8 @@
 import type { Shell } from './shell';
 
 /** Exit viewer-fullscreen, switch to the Terminal view, and open the docked loop read-out. */
-export function revealLoopReadout(_shell: Shell): void {}
+export function revealLoopReadout(shell: Shell): void {
+  shell.setViewerFullscreen(false);
+  shell.setView('1');
+  shell.openLoopPanel();
+}

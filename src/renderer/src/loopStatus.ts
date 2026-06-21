@@ -3,6 +3,8 @@
 // human (the `awaiting-human-*` family / impasse), `settle` = a terminal/approved end, `work` =
 // anything else (in motion). The rail read-out and the docked panel both derive from this one map.
 
+import { isHumanNeededStatus } from '../../shared/loopStatus';
+
 export type SpillTone = 'await' | 'work' | 'settle';
 
 // `awaiting-team-review` is the impl-loop's kind:terminal gate (the loop is done, handed to the team)
@@ -11,7 +13,7 @@ const SETTLE = /^(awaiting-team-review|merged|approved|done|complete|completed|s
 
 export function spillTone(status: string): SpillTone {
   if (SETTLE.test(status)) return 'settle';
-  if (status.startsWith('awaiting-human') || status === 'impasse') return 'await';
+  if (isHumanNeededStatus(status)) return 'await';
   return 'work';
 }
 

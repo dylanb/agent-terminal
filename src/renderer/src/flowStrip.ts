@@ -66,8 +66,10 @@ export interface FlowStrip {
 
 /** The strip's deps: the flow IPC seam plus an optional hand-off of the current loop mirror to the
  *  composition root (§24.2.3 T2) — it routes the data to the sibling docked panel without the strip
- *  reaching across organisms. Fired on every render: `null` when the step has no loop mirror. */
-export type FlowStripDeps = FlowApi & {
+ *  reaching across organisms. Fired on every render: `null` when the step has no loop mirror.
+ *  `onRevealLoop` is omitted: the OS-notification reveal (§24.2.3 T4) is wired at the composition root
+ *  on window.flow, not through the strip (interface segregation — the strip never reveals). */
+export type FlowStripDeps = Omit<FlowApi, 'onRevealLoop'> & {
   /** The docked loop panel's element id, injected by the composition root so the read-out's
    *  `aria-controls` is instance-scoped — the organism never bakes in a document-level id
    *  (UI-STANDARDS §2.2 rule 1). Omitted → no aria-controls (aria-expanded still conveys state). */

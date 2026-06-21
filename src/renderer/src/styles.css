@@ -80,9 +80,25 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible { outline:2px so
 .rail .foot { margin-top:auto; display:flex; flex-direction:column; gap:8px; padding-top:16px; }
 .rail .foot .row { display:flex; gap:8px; align-items:center; }
 
-.main { min-width:0; position:relative; }
+.main { min-width:0; display:flex; flex-direction:column; }
+/* The viewport holds the absolutely-stacked view panes; the attention cue (§24.2.3 T4) sits above it
+   as a flex sibling so a shown cue "makes room" (pushes the active view down), never overlays it. */
+.viewport { position:relative; flex:1; min-height:0; }
 [data-viewpane] { position:absolute; inset:0; display:none; }
 [data-viewpane].on { display:block; }
+
+/* awaiting-human attention cue (§24.2.3 T4) — design/shell/loop-flow.html .attn-bar: a red alert bar
+   pinned atop the active view. Hidden via [hidden] (visibility.ts) when not human-needed, so it leaves
+   the layout AND the a11y tree. Small text stays on --text/--attn-text for WCAG 1.4.3 on the wash. */
+.attn-bar { display:flex; align-items:center; gap:12px; padding:9px 16px; flex:none;
+  background:color-mix(in srgb, var(--attn) 10%, var(--card));
+  border-bottom:1px solid color-mix(in srgb, var(--attn) 38%, var(--hair)); }
+.attn-bar .dot { width:8px; height:8px; border-radius:50%; background:var(--attn); flex:none;
+  box-shadow:0 0 0 4px color-mix(in srgb, var(--attn) 18%, transparent); }
+.attn-bar .msg { font-size:12.5px; color:var(--text); }
+.attn-bar .msg b { font-weight:600; }
+.attn-bar .msg .it { font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:11px; color:var(--attn-text); }
+.attn-bar .x { margin-left:auto; color:var(--dim); width:24px; height:24px; }
 #artifacts { height:100%; }
 .artsplit { display:grid; grid-template-columns:var(--tree-w,248px) 7px 1fr; height:100%; }
 .artsplit .tree { padding:20px 16px; overflow:auto; }

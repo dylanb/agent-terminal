@@ -8,6 +8,7 @@
 // occurrence. Dismissing only hides it; it injects nothing and changes no loop state.
 
 import type { FlowLoopView } from '../../shared/ipc';
+import { setShown } from './visibility';
 
 export interface AttentionCue {
   /** Repaint from the current loop mirror; `null` (no loop / non-human-needed / null mirror) clears it. */
@@ -16,6 +17,85 @@ export interface AttentionCue {
   dispose(): void;
 }
 
-export function createAttentionCue(_host: HTMLElement): AttentionCue {
-  return { render: () => {}, dispose: () => {} };
+interface Occurrence {
+  status: string;
+  iteration: number;
+}
+const sameOcc = (a: Occurrence | null, b: Occurrence | null): boolean =>
+  a !== null && b !== null && a.status === b.status && a.iteration === b.iteration;
+
+export function createAttentionCue(host: HTMLElement): AttentionCue {
+  const doc = host.ownerDocument; // build from the host's document so the cue relocates (UI §2.2.1)
+  // Assertive (interrupting) live region (WCAG 4.1.3): the alert must reach AT at once. It is set on
+  // the persistent host so the announcement fires when its content is populated, never on a hidden node.
+  host.setAttribute('role', 'alert');
+  host.setAttribute('aria-live', 'assertive');
+  setShown(host, false);
+
+  // The ONLY state is the dismissed occurrence; visibility is otherwise a pure function of the view.
+  // `shown` tracks what is currently displayed solely to avoid rebuilding (and thus re-announcing) an
+  // unchanged occurrence (WCAG 4.1.3, the §15/§22.2 monitor-status re-announce correction).
+  let dismissed: Occurrence | null = null;
+  let shown: Occurrence | null = null;
+
+  const hide = (): void => {
+    if (shown === null) return;
+    shown = null;
+    host.replaceChildren();
+    setShown(host, false);
+  };
+
+  const show = (loop: FlowLoopView, occ: Occurrence): void => {
+    if (sameOcc(shown, occ)) return; // already announcing this occurrence — do not rebuild/re-announce
+    shown = occ;
+
+    const dot = doc.createElement('span');
+    dot.className = 'dot';
+    dot.setAttribute('aria-hidden', 'true');
+
+    const msg = doc.createElement('span');
+    msg.className = 'msg';
+    msg.dataset.attnMsg = '';
+    const lead = doc.createElement('b');
+    lead.textContent = 'Loop needs you';
+    const detail = doc.createElement('span');
+    detail.className = 'it';
+    const pr = loop.pr !== null ? ` · PR #${loop.pr}` : '';
+    detail.textContent = `${loop.status} · iter ${loop.iteration}${pr}`;
+    msg.append(lead, doc.createTextNode(' — '), detail);
+
+    const dismiss = doc.createElement('button');
+    dismiss.className = 'iconbtn x';
+    dismiss.dataset.attnDismiss = '';
+    dismiss.title = 'Dismiss';
+    dismiss.setAttribute('aria-label', 'Dismiss attention cue');
+    dismiss.textContent = '✕';
+    // Dismiss only hides THIS occurrence (§24.2.3 T4 non-goal: it is not a gate decision, injects
+    // nothing, changes no loop state). A distinct occurrence no longer matches and re-shows.
+    dismiss.addEventListener('click', () => {
+      dismissed = shown;
+      hide();
+    });
+
+    host.replaceChildren(dot, msg, dismiss);
+    setShown(host, true);
+  };
+
+  return {
+    render(loop) {
+      if (!loop || loop.humanNeeded !== true) {
+        hide();
+        return;
+      }
+      const occ: Occurrence = { status: loop.status, iteration: loop.iteration };
+      if (sameOcc(dismissed, occ)) {
+        hide();
+        return;
+      }
+      show(loop, occ);
+    },
+    dispose() {
+      host.replaceChildren();
+    },
+  };
 }
