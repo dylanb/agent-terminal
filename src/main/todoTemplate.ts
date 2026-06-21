@@ -108,5 +108,7 @@ export function parseTodoTemplate(markdown: string): string[] {
     }
     // Headings, blank lines, and col-0 prose are ignored (they neither start nor extend a todo).
   }
-  return todos;
+  // Drop empties: a bare marker or empty checkbox (`-` / `- [ ]`) must not instantiate a blank todo
+  // (a folded continuation can still have filled an otherwise-empty item above, so filter at the end).
+  return todos.filter((t) => t.length > 0);
 }

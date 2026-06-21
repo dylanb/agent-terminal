@@ -37,8 +37,9 @@ CHECK_ONLY=0
 TIMEOUT_MIN=30
 INTERVAL_SEC=20
 COPILOT_BOT="copilot-pull-request-reviewer[bot]"
-# Representation-robust matcher (trap #1): a Bot whose login contains "copilot", any case.
-PRED='select(.user.type=="Bot" and (.user.login|test("[Cc]opilot")))'
+# Representation-robust matcher (trap #1): a Bot whose login contains "copilot", any case
+# (the "i" flag makes the whole substring case-insensitive, not just the first letter).
+PRED='select(.user.type=="Bot" and (.user.login|test("copilot";"i")))'
 
 while [ $# -gt 0 ]; do
   case "$1" in
