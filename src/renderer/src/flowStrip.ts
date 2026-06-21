@@ -270,7 +270,13 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
       host.replaceChildren(); // no repo yet → nothing to show (the strip follows the cwd)
       return;
     }
-    render(await deps.state(repoKey));
+    // A state() IPC rejection must not escape as an unhandled rejection (callers fire `void refresh()`);
+    // swallow it and keep the last rendered rail rather than clearing to a blank pane (§18.1).
+    try {
+      render(await deps.state(repoKey));
+    } catch {
+      /* keep the last rendered UI */
+    }
   }
 
   // The push path (§24.2.2 S5): main fires flow:onStateChanged when a flow-relevant input changed

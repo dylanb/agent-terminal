@@ -762,6 +762,39 @@ describe('Todo tab §24.2.1 — review fixes (reorder stability, focus, a11y lab
         vi.useRealTimers();
       }
     });
+
+    // A rejected refresh (todoList/listTemplates reject on a main restart) must not surface as an
+    // unhandled renderer rejection (vitest fails the run on one — that is the RED signal here) and
+    // must leave the displayed list and count unchanged (§16.4).
+    it('a rejected refresh (todoList + listTemplates) leaves the list intact', async () => {
+      wireMonitorPane();
+      await flush();
+      await loadRepo('/repoA', [makeTodo({ id: 'a', text: 'task' })]);
+      monitor.todoList.mockRejectedValueOnce(new Error('ipc down'));
+      monitor.listTemplates.mockRejectedValueOnce(new Error('ipc down'));
+      handlers.cwdChanged!({ sessionId: 's1', cwd: '/repoA', repoKey: '/repoA' }); // re-fire → refresh()
+      await flush();
+      expect(rows().map((r) => r.querySelector('.tx')!.textContent)).toEqual(['task']);
+      expect(document.getElementById('todo-count')!.textContent).toBe('1');
+    });
+
+    it('a rejected instantiateTemplate re-enables the Add todos button', async () => {
+      wireMonitorPane();
+      await flush();
+      monitor.listTemplates.mockResolvedValue({
+        templates: [{ ref: 'pr-review', name: 'PR review checklist' }],
+        defaultRef: 'pr-review',
+      });
+      await loadRepo('/repoA', []);
+      const toggle = todoList().querySelector<HTMLButtonElement>('.tmpl-toggle')!;
+      toggle.click();
+      await flush();
+      monitor.instantiateTemplate.mockRejectedValueOnce(new Error('ipc down'));
+      const add = todoList().querySelector<HTMLButtonElement>('.tmpl-add')!;
+      add.click();
+      await flush();
+      expect(todoList().querySelector<HTMLButtonElement>('.tmpl-add')!.disabled).toBe(false);
+    });
   });
 });
 

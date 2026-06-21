@@ -30,7 +30,9 @@ export function loadTodoTemplateFile(flowDir: string, ref: string): string | nul
       const real = realpathSync(abs);
       const realRoot = realpathSync(root);
       if (real !== realRoot && !real.startsWith(realRoot + path.sep)) return null; // symlink escape
-      return readFileSync(abs, 'utf8');
+      // Read the VALIDATED real path, not the literal abs: a target swap between the realpath
+      // check and the read would otherwise bypass the guard (TOCTOU/CWE-367, §20.2; mirrors readArtifact).
+      return readFileSync(real, 'utf8');
     } catch {
       return null;
     }

@@ -101,14 +101,18 @@ export function createTodoTab(deps: TodoTabDeps): TodoTab {
 
   function refresh(): void {
     if (!currentRepoKey) return;
-    void monitor.todoList(currentRepoKey).then(setTodos);
+    // On a rejected invoke (main restart) keep the current UI; never an unhandled rejection.
+    void monitor.todoList(currentRepoKey).then(setTodos).catch(() => {});
     // Re-pull the template library too: main gates it to the active step, so it appears/disappears
     // as the flow advances (the strip fires FLOW_CHANGED, which refreshes us — §4.1).
-    void monitor.listTemplates(currentRepoKey).then((lib) => {
-      templates = lib.templates;
-      templateDefault = lib.defaultRef;
-      renderTodos();
-    });
+    void monitor
+      .listTemplates(currentRepoKey)
+      .then((lib) => {
+        templates = lib.templates;
+        templateDefault = lib.defaultRef;
+        renderTodos();
+      })
+      .catch(() => {});
   }
 
   function applyRepoSwap(repoKey: string): void {
@@ -419,8 +423,14 @@ export function createTodoTab(deps: TodoTabDeps): TodoTab {
         if (!currentRepoKey) return;
         add.disabled = true;
         // Instantiate the chosen template; main silently skips already-present items. Keep the
-        // picker open (operator decision) — setTodos re-renders and the disclosure persists.
-        void monitor.instantiateTemplate(currentRepoKey, select.value).then(setTodos);
+        // picker open (operator decision) — setTodos re-renders and the disclosure persists. On a
+        // rejected invoke (main restart) re-enable the button and leave the list unchanged.
+        void monitor
+          .instantiateTemplate(currentRepoKey, select.value)
+          .then(setTodos)
+          .catch(() => {
+            add.disabled = false;
+          });
       });
 
       group.append(select, add);

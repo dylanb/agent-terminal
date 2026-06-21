@@ -52,4 +52,17 @@ describe('loadTodoTemplateFile (§18.6 — co-located with flow.yaml)', () => {
     expect(loadTodoTemplateFile(flowDir, 'link.md')).toBeNull();
     rmSync(outside, { recursive: true, force: true });
   });
+
+  it('reads an in-root symlink that targets an in-root file (read via the validated real path)', () => {
+    // The CWE-367 fix reads the resolved real path, not the literal symlink abs; a legitimate
+    // in-root symlink must still return its target's content (regression pin for the abs→real
+    // switch, mirroring readArtifact/loopDef, §20.2).
+    writeFileSync(join(flowDir, 'target.md'), '- real target body\n');
+    try {
+      symlinkSync(join(flowDir, 'target.md'), join(flowDir, 'alias.md'));
+    } catch {
+      return; // platform without symlink permission — skip
+    }
+    expect(loadTodoTemplateFile(flowDir, 'alias.md')).toBe('- real target body\n');
+  });
 });

@@ -588,6 +588,17 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     expect(control()).toBeNull();
   });
 
+  it('survives a state() IPC rejection on refresh: resolves and keeps the last rendered rail (§18.1)', async () => {
+    const deps = fakeFlow('in_progress');
+    const strip = createFlowStrip(host, deps);
+    strip.onRepoChanged('/repo');
+    await vi.waitFor(() => expect(stepName()).toBe('/repo-step')); // a good render is on screen
+
+    deps.state.mockRejectedValueOnce(new Error('ipc down')); // the next pull fails
+    await expect(strip.refresh()).resolves.toBeUndefined(); // the rejection is swallowed, not propagated
+    expect(stepName()).toBe('/repo-step'); // the prior UI is preserved, host not cleared
+  });
+
   it('builds from host.ownerDocument, not the global document (UI-STANDARDS §3.3)', async () => {
     await assertRendersFromHostDocument(async (h) => {
       const strip = createFlowStrip(h, fakeFlow('in_progress'));
