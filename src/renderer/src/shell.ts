@@ -183,7 +183,7 @@ export function createShell(root: HTMLElement, deps: ShellDeps = {}): Shell {
     // the drawer to Ctrl+Shift+K instead. Only the four app actions are claimed here; everything else
     // (terminal chords, plain keys) propagates to the focused descendant.
     const action = matchChord(e, getKeymap());
-    const view: ViewId | null =
+    const targetView: ViewId | null =
       action === 'viewTerminal' ? '1'
       : action === 'viewArtifacts' ? '2'
       : action === 'viewTodos' ? '3'
@@ -193,10 +193,10 @@ export function createShell(root: HTMLElement, deps: ShellDeps = {}): Shell {
       e.preventDefault();
       e.stopPropagation();
       toggleDrawer();
-    } else if (view) {
+    } else if (targetView) {
       e.preventDefault();
       e.stopPropagation();
-      setView(view);
+      setView(targetView);
     }
   };
 

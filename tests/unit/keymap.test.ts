@@ -38,6 +38,12 @@ describe('handleTerminalKey — keymap-driven dispatch (§7.7)', () => {
     expect(a.send).toHaveBeenCalledWith('\x1b\x7f');
   });
 
+  it('sends the kill-to-line-start byte for the delete-line chord (Cmd+Backspace → Ctrl+U)', () => {
+    const a = actions();
+    expect(handleTerminalKey(ev({ key: 'Backspace', metaKey: true }), MAC_DEFAULTS, a)).toBe(false);
+    expect(a.send).toHaveBeenCalledWith('\x15');
+  });
+
   it('inserts a newline without submitting on Shift+Enter and Alt+Enter', () => {
     const a = actions();
     handleTerminalKey(ev({ key: 'Enter', shiftKey: true }), PC_DEFAULTS, a);

@@ -120,7 +120,7 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible { outline:2px so
 .kprofile .kp-help { font-size:12px; color:var(--dim); margin-top:3px; max-width:34ch; }
 .seg { display:inline-flex; background:var(--hair2); border:1px solid var(--hair); border-radius:999px; padding:3px; flex:none; }
 .seg .seg-opt { border:none; background:none; font-family:inherit; font-size:12.5px; font-weight:600; color:var(--dim); padding:6px 16px; border-radius:999px; cursor:pointer; }
-.seg .seg-opt.on { background:var(--card); color:var(--signal); box-shadow:0 1px 2px rgba(8,16,28,.13); }
+.seg .seg-opt.on { background:var(--card); color:var(--signal-text); box-shadow:0 1px 2px rgba(8,16,28,.13); }
 .kgroup { padding:22px 0 6px; }
 .kgroup + .kgroup { border-top:1px solid var(--hair); }
 .kgroup > .eyebrow { display:block; margin:0 0 6px; }
@@ -132,7 +132,7 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible { outline:2px so
 .kr-chord .kc { display:inline-flex; align-items:center; justify-content:center; min-width:27px; height:27px; padding:0 8px; font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:12.5px; font-weight:500; color:var(--text); background:var(--card); border:1px solid var(--hair); border-bottom-width:2px; border-radius:6px; }
 [data-theme="dark"] .kr-chord .kc { background:#1B2530; }
 .kr-chord .kr-unset { font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:11.5px; color:var(--dim); }
-.kr-chord .kcapture { display:inline-flex; align-items:center; height:27px; padding:0 13px; border-radius:999px; white-space:nowrap; font-size:12px; font-weight:600; color:var(--signal); background:var(--signal-wash); border:1px solid var(--signal); animation:kpulse 1.3s ease-in-out infinite; }
+.kr-chord .kcapture { display:inline-flex; align-items:center; height:27px; padding:0 13px; border-radius:999px; white-space:nowrap; font-size:12px; font-weight:600; color:var(--signal-text); background:var(--signal-wash); border:1px solid var(--signal); animation:kpulse 1.3s ease-in-out infinite; }
 @keyframes kpulse { 0%,100% { box-shadow:0 0 0 3px var(--signal-wash); } 50% { box-shadow:0 0 0 6px transparent; } }
 .kr-chord .kcapture.bad { color:var(--attn-text); background:color-mix(in srgb,var(--attn) 12%,transparent); border-color:var(--attn); animation:none; }
 .krow.mod { border-left:2px solid var(--signal); margin-left:-12px; padding-left:10px; }
@@ -140,6 +140,8 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible { outline:2px so
 .krow .kr-ctl .linkbtn { opacity:0; }
 .krow:hover .kr-ctl .linkbtn, .krow:focus-within .kr-ctl .linkbtn, .krow.mod .kr-ctl .linkbtn, .krow.live .kr-ctl .linkbtn { opacity:1; }
 @media (prefers-reduced-motion:reduce) { .kr-chord .kcapture { animation:none; } }
+/* Screen-reader-only live region (WCAG 4.1.3): the visible .kcapture pill carries the same text. */
+.kstatus-live { position:absolute; width:1px; height:1px; margin:-1px; padding:0; overflow:hidden; clip:rect(0 0 0 0); white-space:nowrap; border:0; }
 .artsplit { display:grid; grid-template-columns:var(--tree-w,248px) 7px 1fr; height:100%; }
 .artsplit .tree { padding:20px 16px; overflow:auto; }
 /* Drag/keyboard-resizable edge between the tree and the viewer (§20.2). */

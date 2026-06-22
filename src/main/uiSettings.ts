@@ -5,6 +5,7 @@ import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { DEFAULT_UI_SETTINGS, type KeymapProfileSetting, type TabId, type Theme, type UiSettings } from '../shared/ipc';
 import { KEY_ACTION_IDS, type Chord, type KeyActionId } from '../shared/keymap';
+import { isRecord } from './yamlRecord';
 
 // §16.6: the store must never hand back a 0/1 ratio (the renderer adds a px-based clamp).
 const MIN_RATIO = 0.05;
@@ -49,12 +50,8 @@ function coerceKeymapProfile(raw: unknown, fallback: KeymapProfileSetting): Keym
   return raw === 'auto' || raw === 'mac' || raw === 'pc' ? raw : fallback;
 }
 
-function isRec(m: unknown): m is Record<string, unknown> {
-  return typeof m === 'object' && m !== null && !Array.isArray(m);
-}
-
 function coerceChord(raw: unknown): Chord | null {
-  if (!isRec(raw) || typeof raw.key !== 'string') return null;
+  if (!isRecord(raw) || typeof raw.key !== 'string') return null;
   const c: Chord = { key: raw.key };
   if (raw.ctrl === true) c.ctrl = true;
   if (raw.alt === true) c.alt = true;
@@ -66,7 +63,7 @@ function coerceChord(raw: unknown): Chord | null {
 /** Keep only known actions mapped to non-empty arrays of well-formed chords (§7.7); return undefined
  *  when nothing valid remains so the field is omitted rather than persisted empty/garbage. */
 function coerceKeymapOverrides(raw: unknown): Partial<Record<KeyActionId, Chord[]>> | undefined {
-  if (!isRec(raw)) return undefined;
+  if (!isRecord(raw)) return undefined;
   const out: Partial<Record<KeyActionId, Chord[]>> = {};
   for (const action of KEY_ACTION_IDS) {
     const v = raw[action];

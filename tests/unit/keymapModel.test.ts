@@ -100,6 +100,14 @@ describe('keymap model — open settings action (§7.7)', () => {
   });
 });
 
+describe('keymap model — delete-line action (§7.7)', () => {
+  it('binds Cmd+Backspace to deleteLine on macOS and leaves it unbound on PC', () => {
+    expect(matchChord(keydown({ key: 'Backspace', metaKey: true }), MAC_DEFAULTS)).toBe('deleteLine');
+    expect(resolveKeymap('pc').deleteLine).toEqual([]); // no portable PC chord — users press Ctrl+U
+    expect(matchChord(keydown({ key: 'Backspace', metaKey: true }), PC_DEFAULTS)).toBeNull();
+  });
+});
+
 describe('keymap model — findChordOwner (§7.7 conflict detection)', () => {
   it('returns the action a chord is already bound to', () => {
     expect(findChordOwner(MAC_DEFAULTS, { key: 'c', meta: true })).toBe('copy');

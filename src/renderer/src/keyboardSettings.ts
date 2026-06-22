@@ -14,6 +14,16 @@ import {
   type Keymap,
 } from '../../shared/keymap';
 import type { KeymapProfileSetting } from '../../shared/ipc';
+import { FOCUS_VIEW_EVENT } from './paneActions';
+
+// This organism backs shell view 4 (§7.7); it focuses its primary control when the shell announces
+// that view, mirroring terminal.ts/artifacts.ts (§22.4 / WCAG 2.4.3).
+const SETTINGS_VIEW = '4';
+
+// Spell named keys out for the chord's accessible name (WCAG 1.1.1) — the visible keycaps are glyphs.
+const KEY_NAMES: Record<string, string> = {
+  ArrowLeft: 'Left arrow', ArrowRight: 'Right arrow', ArrowUp: 'Up arrow', ArrowDown: 'Down arrow', ' ': 'Space',
+};
 
 export interface KeyboardSettingsDeps {
   getProfile(): KeymapProfileSetting;
@@ -103,6 +113,11 @@ export function createKeyboardSettings(host: HTMLElement, deps: KeyboardSettings
     conflict = null;
   };
 
+  // Record on the window in the capture phase, NOT the document: a window-capture listener fires
+  // ahead of any document-level capture listener (the shell's app-nav handler, §22.4), so an app-nav
+  // chord pressed mid-recording is swallowed here and never also fires navigation behind the view.
+  const captureTarget: EventTarget = doc.defaultView ?? doc;
+
   function startCapture(action: KeyActionId): void {
     endCapture();
     capturing = action;
@@ -116,6 +131,7 @@ export function createKeyboardSettings(host: HTMLElement, deps: KeyboardSettings
       if (e.key === 'Escape') {
         endCapture();
         render();
+        focusRowButton(action); // WCAG 2.4.3: the row rebuilt — keep focus on its control
         return;
       }
       const chord = eventToChord(e);
@@ -123,15 +139,35 @@ export function createKeyboardSettings(host: HTMLElement, deps: KeyboardSettings
       if (owner) {
         conflict = `${chordToCaps(chord, deps.isMac()).join('')} already maps to ${ACTION_LABELS[owner]}`;
         render(); // stay live; old binding is kept
+        focusRowButton(action);
         return;
       }
       endCapture();
       deps.onRebind(action, chord);
       render();
+      focusRowButton(action);
     };
-    doc.addEventListener('keydown', onKey, true);
-    stopCapture = () => doc.removeEventListener('keydown', onKey, true);
+    captureTarget.addEventListener('keydown', onKey as EventListener, true);
+    stopCapture = () => captureTarget.removeEventListener('keydown', onKey as EventListener, true);
     render();
+  }
+
+  /** Focus a row's Set/Cancel/Reset control after a render() rebuilt it, so keyboard focus never
+   *  drops to <body> mid-task (WCAG 2.4.3). */
+  function focusRowButton(action: KeyActionId): void {
+    groupsHost.querySelector<HTMLButtonElement>(`[data-action="${action}"] .kr-ctl button`)?.focus();
+  }
+
+  /** A chord's spelled-out accessible name (WCAG 1.1.1): the visible keycaps are glyphs an SR can't
+   *  reliably verbalize, so the chord cell carries this as its label. */
+  function chordAria(chord: Chord): string {
+    const parts: string[] = [];
+    if (chord.ctrl) parts.push('Control');
+    if (chord.alt) parts.push(deps.isMac() ? 'Option' : 'Alt');
+    if (chord.shift) parts.push('Shift');
+    if (chord.meta) parts.push(deps.isMac() ? 'Command' : 'Windows');
+    parts.push(KEY_NAMES[chord.key] ?? (chord.key.length === 1 ? chord.key.toUpperCase() : chord.key));
+    return parts.join(' ');
   }
 
   // --- static chrome (header + profile) ---
@@ -156,9 +192,26 @@ export function createKeyboardSettings(host: HTMLElement, deps: KeyboardSettings
   });
   profile.append(profileText, seg);
 
+  // A persistent live region (WCAG 4.1.3): it lives OUTSIDE groupsHost so render()'s replaceChildren
+  // never destroys it, and its text mutation (set in render()) announces recording start / a conflict.
+  const liveRegion = el('div', 'kstatus-live');
+  liveRegion.setAttribute('role', 'status');
+  liveRegion.setAttribute('aria-live', 'assertive');
+
   const groupsHost = el('div', 'kgroups');
-  viewRoot.append(head, profile, groupsHost);
+  viewRoot.append(head, profile, liveRegion, groupsHost);
   host.appendChild(viewRoot);
+
+  /** Focus the view's primary control (the active profile segment) — called when the shell announces
+   *  this view, so opening Settings never strands focus on <body> (§22.4 / WCAG 2.4.3). */
+  function focusPrimary(): void {
+    (segButtons.find((s) => s.value === deps.getProfile())?.btn ?? segButtons[0].btn).focus();
+  }
+  const win = doc.defaultView;
+  const onFocusView = (e: Event): void => {
+    if ((e as CustomEvent<{ view?: string }>).detail?.view === SETTINGS_VIEW) focusPrimary();
+  };
+  win?.addEventListener(FOCUS_VIEW_EVENT, onFocusView);
 
   function syncProfile(): void {
     const active = deps.getProfile();
@@ -188,6 +241,9 @@ export function createKeyboardSettings(host: HTMLElement, deps: KeyboardSettings
       if (chords.length === 0) {
         chordCell.appendChild(el('span', 'kr-unset', 'Not set'));
       } else {
+        // The keycaps are decorative glyphs; the cell carries the spelled-out chord as its name (WCAG 1.1.1).
+        chordCell.setAttribute('role', 'img');
+        chordCell.setAttribute('aria-label', chordAria(chords[0]));
         for (const c of chordToCaps(chords[0], deps.isMac())) chordCell.appendChild(el('span', 'kc', c));
       }
     }
@@ -198,15 +254,15 @@ export function createKeyboardSettings(host: HTMLElement, deps: KeyboardSettings
     if (capturing === action) {
       btn.textContent = 'Cancel';
       btn.setAttribute('aria-label', `Cancel recording ${ACTION_LABELS[action]}`);
-      btn.addEventListener('click', () => { endCapture(); render(); });
+      btn.addEventListener('click', () => { endCapture(); render(); focusRowButton(action); });
     } else if (overridden) {
       btn.textContent = 'Reset';
       btn.setAttribute('aria-label', `Reset ${ACTION_LABELS[action]} to its default`);
-      btn.addEventListener('click', () => deps.onReset(action));
+      btn.addEventListener('click', () => { deps.onReset(action); focusRowButton(action); });
     } else {
       btn.textContent = 'Set';
       btn.setAttribute('aria-label', `Record a new shortcut for ${ACTION_LABELS[action]}`);
-      btn.addEventListener('click', () => startCapture(action));
+      btn.addEventListener('click', () => { startCapture(action); focusRowButton(action); });
     }
     ctl.appendChild(btn);
 
@@ -216,6 +272,10 @@ export function createKeyboardSettings(host: HTMLElement, deps: KeyboardSettings
 
   function render(): void {
     syncProfile();
+    // Announce recording state via the persistent live region (WCAG 4.1.3); cleared when idle.
+    liveRegion.textContent = capturing
+      ? (conflict ?? `Recording ${ACTION_LABELS[capturing]}. Press a shortcut, or Escape to cancel.`)
+      : '';
     groupsHost.replaceChildren();
     for (const group of GROUPS) {
       const section = el('section', 'kgroup');
@@ -231,6 +291,7 @@ export function createKeyboardSettings(host: HTMLElement, deps: KeyboardSettings
     refresh: render,
     dispose: () => {
       endCapture();
+      win?.removeEventListener(FOCUS_VIEW_EVENT, onFocusView);
       host.replaceChildren();
     },
   };
