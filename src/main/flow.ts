@@ -394,20 +394,27 @@ export interface FlowManagerDeps {
 export function createFlowManager(deps: FlowManagerDeps): FlowManager {
   const loadDef = deps.loadDefinition ?? loadFlowDefinitionLocalFirst;
   const makeStore = deps.makeStore ?? createFlowStateStore;
-  const cache = new Map<string, FlowMachine>();
+  // Cache the machine AND a signature of the definition it was built from. The DEFINITION (flow.yaml)
+  // is re-read on every access — like the §19.1 state re-read — and the machine is rebuilt only when
+  // that definition changed, so a flow.yaml added/edited/removed while the app runs is picked up on
+  // the next directory entry. A cached "no flow.yaml" error no longer sticks (the reported bug).
+  const cache = new Map<string, { sig: string; machine: FlowMachine }>();
   const machineFor = (repoKey: string): FlowMachine => {
-    let m = cache.get(repoKey);
-    if (!m) {
-      m = createFlowMachine(
-        loadDef(repoKey, deps.globalDir),
-        makeStore(repoKey),
-        deps.onEnterStep,
-        deps.readLoopState ? () => deps.readLoopState!(repoKey) : undefined,
-        deps.readLoopDef ? (name) => deps.readLoopDef!(repoKey, name) : undefined,
-      );
-      cache.set(repoKey, m);
-    }
-    return m;
+    const load = loadDef(repoKey, deps.globalDir);
+    const sig = JSON.stringify(load);
+    const cached = cache.get(repoKey);
+    if (cached && cached.sig === sig) return cached.machine;
+    // Definition changed (or first visit): rebuild. Progression survives in flow-state.yaml, which
+    // the fresh machine re-hydrates at construction — a step no longer in the new definition starts fresh.
+    const machine = createFlowMachine(
+      load,
+      makeStore(repoKey),
+      deps.onEnterStep,
+      deps.readLoopState ? () => deps.readLoopState!(repoKey) : undefined,
+      deps.readLoopDef ? (name) => deps.readLoopDef!(repoKey, name) : undefined,
+    );
+    cache.set(repoKey, { sig, machine });
+    return machine;
   };
   return {
     state: (k) => machineFor(k).state(),
