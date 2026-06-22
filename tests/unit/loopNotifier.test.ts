@@ -43,6 +43,17 @@ describe('createLoopNotifier (§24.2.3 T4)', () => {
     expect(notify.mock.calls[0][0].body).toContain('9');
   });
 
+  it('bounds length and strips control characters from a foreign status before the OS notification body', () => {
+    // CWE-117: `status` is read from an arbitrary repo's untrusted `.agent-loop/state.yaml` (§16.3),
+    // so it must reach the OS notification sink length-bounded and free of control characters.
+    const { notifier, notify } = harness();
+    const hostile = `awaiting-human\n${'x'.repeat(500)}`;
+    notifier.observe(REPO, loopView({ status: hostile, iteration: 9 }));
+    const { body } = notify.mock.calls[0][0];
+    expect(body).not.toContain('\n');
+    expect(body.length).toBeLessThanOrEqual(100);
+  });
+
   it('does not raise when the window is focused', () => {
     const { notifier, notify } = harness({ isFocused: () => true });
     notifier.observe(REPO, loopView({ status: 'awaiting-human-pr-approval', iteration: 9 }));

@@ -22,6 +22,12 @@ export interface LoopNotifier {
   observe(repoKey: string, view: FlowStateView): void;
 }
 
+// CWE-117: `status` originates in an arbitrary repo's untrusted `.agent-loop/state.yaml` (§16.3);
+// bound its length and strip control characters before it reaches the OS notification sink.
+const STATUS_MAX = 80;
+const sanitizeStatus = (status: string): string =>
+  status.replace(/[\x00-\x1f\x7f]/g, ' ').slice(0, STATUS_MAX);
+
 export function createLoopNotifier(deps: LoopNotifierDeps): LoopNotifier {
   // Per repo (§16.3): a same-repo return visit after a detour to another repo must stay deduped; a
   // single shared slot would re-fire it.
@@ -49,7 +55,7 @@ export function createLoopNotifier(deps: LoopNotifierDeps): LoopNotifier {
       if (deps.isFocused()) return;
       closeActive = deps.notify({
         title: 'Agent loop needs you',
-        body: `${loop.status} · iter ${loop.iteration}`,
+        body: `${sanitizeStatus(loop.status)} · iter ${loop.iteration}`,
         onActivate: () => {
           deps.focusWindow();
           deps.reveal();
