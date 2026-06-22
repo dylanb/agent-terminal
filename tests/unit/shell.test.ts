@@ -19,12 +19,14 @@ const SHELL_HTML = `
     <button id="tg">theme</button>
     <span data-theme-label>Light</span>
     <span class="stat loopstat" role="button" tabindex="0" aria-expanded="false" aria-controls="loop-panel">Loop</span>
+    <button class="nav" data-viewbtn="4">Settings</button>
   </aside>
   <aside class="loop-panel" id="loop-panel"><button data-loop-close>x</button></aside>
   <main class="main">
     <div data-viewpane="1" class="on">term</div>
     <div data-viewpane="2">artifacts</div>
     <div data-viewpane="3">todos</div>
+    <div data-viewpane="4">settings</div>
   </main>
   <aside class="drawer">
     <button id="tab-todo" class="dtab" role="tab" aria-selected="false" aria-controls="panel-todo">Todo</button>
@@ -99,6 +101,24 @@ describe('shell controller (§24.1C — views, hotkeys, docked drawer, theme)', 
     it('ignores a bare number key with no modifier', () => {
       document.dispatchEvent(new KeyboardEvent('keydown', { key: '2' }));
       expect(shell.getView()).toBe('1');
+    });
+
+    it('opens the Settings view (4) from the rail gear and from the openSettings chord (§7.7)', () => {
+      (navBtn('4') as HTMLElement).click();
+      expect(shell.getView()).toBe('4');
+      expect(pane('4').classList.contains('on')).toBe(true);
+      expect(pane('1').classList.contains('on')).toBe(false);
+
+      shell.setView('1');
+      key(','); // ⌘, (mac default) → openSettings → view 4
+      expect(shell.getView()).toBe('4');
+    });
+
+    it('opens Settings on Ctrl+, under the PC profile (§7.7)', () => {
+      shell.dispose();
+      shell = createShell(app, { getKeymap: () => resolveKeymap('pc') });
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: ',', ctrlKey: true, cancelable: true }));
+      expect(shell.getView()).toBe('4');
     });
   });
 

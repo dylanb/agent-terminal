@@ -16,6 +16,8 @@ export interface KeymapController {
   setProfile(p: KeymapProfileSetting): void;
   /** Rebind one action's chords: merge, re-resolve, persist the overrides, and notify (§7.7). */
   setOverride(action: KeyActionId, chords: Chord[]): void;
+  /** Drop one action's override, restoring its profile default: re-resolve, persist, and notify. */
+  clearOverride(action: KeyActionId): void;
 }
 
 /** The concrete base profile a setting resolves to: `auto` follows the OS, `mac`/`pc` force it. */
@@ -50,6 +52,13 @@ export function createKeymapController(deps: {
     },
     setOverride: (action, chords) => {
       overrides = { ...overrides, [action]: chords };
+      reresolve();
+      deps.persistOverrides?.(overrides);
+    },
+    clearOverride: (action) => {
+      const next = { ...overrides };
+      delete next[action];
+      overrides = next;
       reresolve();
       deps.persistOverrides?.(overrides);
     },

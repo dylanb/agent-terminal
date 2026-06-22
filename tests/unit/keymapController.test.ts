@@ -66,4 +66,21 @@ describe('keymap controller — per-action overrides (§7.7)', () => {
     expect(persistOverrides).toHaveBeenCalledWith({ copy: [{ key: 'j', meta: true }] });
     expect(c.overrides()).toEqual({ copy: [{ key: 'j', meta: true }] });
   });
+
+  it('clearOverride restores the default binding, drops the override, and persists', () => {
+    const persistOverrides = vi.fn();
+    const c = createKeymapController({
+      platform: 'linux',
+      initial: 'auto',
+      persist: vi.fn(),
+      initialOverrides: { copy: [{ key: 'j', meta: true }] },
+      persistOverrides,
+    });
+    c.clearOverride('copy');
+    // back to the PC default (Ctrl+Shift+C); the custom Meta+J no longer copies.
+    expect(matchChord(keydown('c', { ctrl: true, shift: true }), c.current())).toBe('copy');
+    expect(matchChord(keydown('j', { meta: true }), c.current())).toBeNull();
+    expect(c.overrides()).toEqual({});
+    expect(persistOverrides).toHaveBeenLastCalledWith({});
+  });
 });

@@ -3,9 +3,12 @@ import {
   MAC_DEFAULTS,
   PC_DEFAULTS,
   KEY_ACTION_IDS,
+  APP_ACTION_IDS,
   matchChord,
   resolveKeymap,
   eventToChord,
+  findChordOwner,
+  chordToCaps,
   type KeyEventLike,
 } from '../../src/shared/keymap';
 
@@ -85,6 +88,50 @@ describe('keymap model — app navigation actions (§7.7 / §24.1C)', () => {
     expect(matchChord(keydown({ key: '1', ctrlKey: true }), PC_DEFAULTS)).toBe('viewTerminal');
     expect(matchChord(keydown({ key: '2', metaKey: true }), MAC_DEFAULTS)).toBe('viewArtifacts');
     expect(matchChord(keydown({ key: '3', ctrlKey: true }), PC_DEFAULTS)).toBe('viewTodos');
+  });
+});
+
+describe('keymap model — open settings action (§7.7)', () => {
+  it('binds Cmd+, on macOS and Ctrl+, on PC, and is a shell-owned app action', () => {
+    expect(matchChord(keydown({ key: ',', metaKey: true }), MAC_DEFAULTS)).toBe('openSettings');
+    expect(matchChord(keydown({ key: ',', ctrlKey: true }), PC_DEFAULTS)).toBe('openSettings');
+    expect(APP_ACTION_IDS).toContain('openSettings');
+    expect(KEY_ACTION_IDS).toContain('openSettings');
+  });
+});
+
+describe('keymap model — findChordOwner (§7.7 conflict detection)', () => {
+  it('returns the action a chord is already bound to', () => {
+    expect(findChordOwner(MAC_DEFAULTS, { key: 'c', meta: true })).toBe('copy');
+  });
+
+  it('returns null when no action holds the chord', () => {
+    expect(findChordOwner(MAC_DEFAULTS, { key: 'q', meta: true, shift: true })).toBeNull();
+  });
+
+  it('excludes the action being rebound, so re-recording its own chord is not a conflict', () => {
+    expect(findChordOwner(MAC_DEFAULTS, { key: 'c', meta: true }, 'copy')).toBeNull();
+  });
+
+  it('treats an omitted modifier as "must not be held" (Meta+C is not Meta+Shift+C)', () => {
+    expect(findChordOwner(MAC_DEFAULTS, { key: 'c', meta: true, shift: true })).toBeNull();
+  });
+});
+
+describe('keymap model — chordToCaps (§7.7 keycap rendering)', () => {
+  it('renders mac modifier glyphs in ⌃⌥⇧⌘ order plus the uppercased key', () => {
+    expect(chordToCaps({ key: 'c', meta: true }, true)).toEqual(['⌘', 'C']);
+    expect(chordToCaps({ key: 'a', ctrl: true, alt: true, shift: true, meta: true }, true)).toEqual(['⌃', '⌥', '⇧', '⌘', 'A']);
+  });
+
+  it('renders PC modifier words when not mac', () => {
+    expect(chordToCaps({ key: 'c', ctrl: true, shift: true }, false)).toEqual(['Ctrl', 'Shift', 'C']);
+  });
+
+  it('maps named keys to glyphs (Enter/Backspace/arrows/space)', () => {
+    expect(chordToCaps({ key: 'Enter', shift: true }, true)).toEqual(['⇧', '⏎']);
+    expect(chordToCaps({ key: 'Backspace', alt: true }, true)).toEqual(['⌥', '⌫']);
+    expect(chordToCaps({ key: 'ArrowLeft', alt: true }, true)).toEqual(['⌥', '←']);
   });
 });
 

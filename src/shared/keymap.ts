@@ -19,7 +19,8 @@ export type KeyActionId =
   | 'toggleDrawer'
   | 'viewTerminal'
   | 'viewArtifacts'
-  | 'viewTodos';
+  | 'viewTodos'
+  | 'openSettings';
 
 /** A normalized chord: a `key` (lower-cased letter, or a DOM key name like `Enter`/`ArrowLeft`/
  *  `Backspace`) plus the modifiers that must be held. An omitted modifier means "must NOT be held". */
@@ -47,10 +48,17 @@ export const KEY_ACTION_IDS: KeyActionId[] = [
   'viewTerminal',
   'viewArtifacts',
   'viewTodos',
+  'openSettings',
 ];
 
 /** The app-navigation actions the shell owns (§24.1C) — the terminal dispatch ignores these. */
-export const APP_ACTION_IDS: readonly KeyActionId[] = ['toggleDrawer', 'viewTerminal', 'viewArtifacts', 'viewTodos'];
+export const APP_ACTION_IDS: readonly KeyActionId[] = [
+  'toggleDrawer',
+  'viewTerminal',
+  'viewArtifacts',
+  'viewTodos',
+  'openSettings',
+];
 
 export type KeymapProfile = 'mac' | 'pc';
 
@@ -96,6 +104,7 @@ export const MAC_DEFAULTS: Keymap = {
   viewTerminal: [{ key: '1', meta: true }],
   viewArtifacts: [{ key: '2', meta: true }],
   viewTodos: [{ key: '3', meta: true }],
+  openSettings: [{ key: ',', meta: true }], // ⌘, — the macOS Preferences convention
   ...MOTIONS,
 };
 
@@ -109,6 +118,7 @@ export const PC_DEFAULTS: Keymap = {
   viewTerminal: [{ key: '1', ctrl: true }],
   viewArtifacts: [{ key: '2', ctrl: true }],
   viewTodos: [{ key: '3', ctrl: true }],
+  openSettings: [{ key: ',', ctrl: true }], // Ctrl+, — the GTK/VS Code Preferences convention
   ...MOTIONS,
 };
 
@@ -149,6 +159,49 @@ export function eventToChord(e: KeyEventLike): Chord {
   if (e.shiftKey) chord.shift = true;
   if (e.metaKey) chord.meta = true;
   return chord;
+}
+
+/** Two chords are equal when their normalized key and all four modifier flags match (an omitted
+ *  modifier means "not held"). Distinct from chordMatches, which compares a chord to a live event. */
+function chordsEqual(a: Chord, b: Chord): boolean {
+  return (
+    normKey(a.key) === normKey(b.key) &&
+    (a.ctrl ?? false) === (b.ctrl ?? false) &&
+    (a.alt ?? false) === (b.alt ?? false) &&
+    (a.shift ?? false) === (b.shift ?? false) &&
+    (a.meta ?? false) === (b.meta ?? false)
+  );
+}
+
+/** The action currently bound to `chord` in `keymap`, or null if none holds it (§7.7 conflict
+ *  detection). `except` skips one action, so re-recording an action's own chord is not a conflict. */
+export function findChordOwner(keymap: Keymap, chord: Chord, except?: KeyActionId): KeyActionId | null {
+  for (const action of Object.keys(keymap) as KeyActionId[]) {
+    if (action === except) continue;
+    if (keymap[action].some((c) => chordsEqual(c, chord))) return action;
+  }
+  return null;
+}
+
+const MAC_MODS = { ctrl: '⌃', alt: '⌥', shift: '⇧', meta: '⌘' } as const;
+const PC_MODS = { ctrl: 'Ctrl', alt: 'Alt', shift: 'Shift', meta: 'Win' } as const;
+const KEY_GLYPHS: Record<string, string> = {
+  Enter: '⏎', Backspace: '⌫', Delete: '⌦', Escape: 'Esc', Tab: 'Tab', ' ': 'Space',
+  ArrowLeft: '←', ArrowRight: '→', ArrowUp: '↑', ArrowDown: '↓',
+};
+
+/** Render a chord as an ordered list of keycap labels for the settings UI (§7.7). `mac` chooses the
+ *  glyph set: macOS modifier symbols in ⌃⌥⇧⌘ order, else spelled-out PC modifier names. Named keys
+ *  map to glyphs (Enter→⏎, Backspace→⌫, arrows); single characters are upper-cased. */
+export function chordToCaps(chord: Chord, mac: boolean): string[] {
+  const mods = mac ? MAC_MODS : PC_MODS;
+  const caps: string[] = [];
+  if (chord.ctrl) caps.push(mods.ctrl);
+  if (chord.alt) caps.push(mods.alt);
+  if (chord.shift) caps.push(mods.shift);
+  if (chord.meta) caps.push(mods.meta);
+  caps.push(KEY_GLYPHS[chord.key] ?? (chord.key.length === 1 ? chord.key.toUpperCase() : chord.key));
+  return caps;
 }
 
 /** The effective keymap: per-action user overrides merged over a base profile (§7.7). An override

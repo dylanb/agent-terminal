@@ -40,13 +40,13 @@
           <div id="monitor-status" role="status" aria-live="polite"></div>
         </div>
         <div class="foot">
+          <!-- Settings is view 4 (§7.7): the gear switches to it; ⌘, opens it via the keymap. -->
+          <button class="nav" data-viewbtn="4"><span class="navic" aria-hidden="true">⚙</span> Settings <span class="k">⌘,</span></button>
           <button class="pill signal" id="qs">⌘K Quick-send</button>
           <div class="row">
             <button class="iconbtn" id="tg" title="Toggle theme" aria-label="Toggle theme">◐</button>
             <span class="mono" data-theme-label style="font-size:11px;color:var(--dim)">Light</span>
           </div>
-          <!-- Keyboard layout profile (§7.7): the keyboard settings organism mounts its selector here. -->
-          <div id="kb-settings" class="row"></div>
         </div>
       </aside>
 
@@ -73,6 +73,12 @@
              IPC-backed discovery/read (viewer:tree / viewer:read, scoped to the live cwd). -->
         <div data-viewpane="2">
           <div id="artifacts"></div>
+        </div>
+
+        <!-- VIEW 4 — Keyboard settings (§7.7). Built by createKeyboardSettings; reachable via the
+             rail gear and ⌘, (openSettings). The pane scrolls; the view centres its own column. -->
+        <div data-viewpane="4">
+          <div id="kb-settings-view"></div>
         </div>
 
         <!-- VIEW 3 — Todos + Review gate (mocked fixture, §19.3) -->

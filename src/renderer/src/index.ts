@@ -11,7 +11,7 @@ import { createArtifacts, type Artifacts } from './artifacts';
 import { renderMarkdownInto, renderCodeInto } from './viewerRender';
 import { doInject } from './paneActions';
 import { createRepoContext } from './repoContext';
-import { createKeymapController } from './keymapController';
+import { createKeymapController, resolveBase } from './keymapController';
 import { createKeyboardSettings } from './keyboardSettings';
 import { runMenuEditAction } from './menuActions';
 
@@ -35,11 +35,14 @@ const terminalClipboard = wireSelection(term, repo, () => keymap.current());
 // macOS Edit-menu actions (§7.7) route to the terminal's clipboard actions, or a focused input's
 // native editing. Off macOS this never fires (no menu is installed).
 window.term.onMenuAction((action) => runMenuEditAction(action, document, terminalClipboard, () => window.term.clipboardRead()));
-keyboardUi = createKeyboardSettings(document.getElementById('kb-settings')!, {
+keyboardUi = createKeyboardSettings(document.getElementById('kb-settings-view')!, {
   getProfile: () => keymap.profile(),
   onProfileChange: (p) => keymap.setProfile(p),
   getKeymap: () => keymap.current(),
+  getOverrides: () => keymap.overrides(),
+  isMac: () => resolveBase(keymap.profile(), window.term.platform) === 'mac',
   onRebind: (action, chord) => keymap.setOverride(action, [chord]),
+  onReset: (action) => keymap.clearOverride(action),
 });
 void window.monitor
   .getSettings()

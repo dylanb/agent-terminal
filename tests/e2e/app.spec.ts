@@ -374,7 +374,9 @@ test('switching the keyboard profile to macOS-style makes Cmd+C copy on Linux (�
   await selectRowContaining('macprofile-7');
   // The default profile on Linux is PC-style, where Meta+C (⌘C) is unbound. Forcing macOS-style via
   // the setting is the only reason ⌘C copies here — so a passing copy proves the switch took effect.
-  await page.locator('#kb-settings select').selectOption('mac');
+  await page.locator('[data-viewbtn="4"]').click(); // open the Keyboard settings view
+  await page.locator('.seg').getByRole('button', { name: 'macOS' }).click();
+  await page.locator('[data-viewbtn="1"]').click(); // back to the terminal (selection survives, §7.0)
   await page.locator('.xterm-helper-textarea').focus();
   await page.keyboard.press('Meta+c');
   await expect
@@ -387,11 +389,13 @@ test('rebinding the copy action to a custom chord takes effect (§7.7)', async (
   await typeCommand('echo rebindme-5');
   await expect(page.locator('.status-chip[data-status="agent"]')).toContainText('quiet', { timeout: 6_000 });
   await selectRowContaining('rebindme-5');
-  // Record a custom copy chord (no profile binds Ctrl+Shift+Y by default). Recording happens with the
-  // Record button focused, so the keypress is captured by the settings UI, not the terminal.
+  // Record a custom copy chord (no profile binds Ctrl+Shift+Y by default). The settings view captures
+  // the keypress at the document level, so it never reaches the terminal while recording.
+  await page.locator('[data-viewbtn="4"]').click(); // open the Keyboard settings view
   await page.locator('[data-action="copy"] button').click();
   await page.keyboard.press('Control+Shift+Y');
   // The recorded chord now copies the (still-active) selection from the terminal.
+  await page.locator('[data-viewbtn="1"]').click(); // back to the terminal (selection survives, §7.0)
   await page.locator('.xterm-helper-textarea').focus();
   await page.keyboard.press('Control+Shift+Y');
   await expect
@@ -408,6 +412,33 @@ test('the drawer toggles on Ctrl+Shift+K; bare Ctrl+K is left to the terminal as
   expect(await isOpen()).toBe(before);
   await page.keyboard.press('Control+Shift+K'); // the PC-profile drawer chord
   expect(await isOpen()).toBe(!before);
+});
+
+test('the Keyboard settings view opens from the gear and Ctrl+,, rebinds live, and blocks conflicts (§7.7)', async () => {
+  // Opens from the rail gear → view 4.
+  await page.locator('[data-viewbtn="4"]').click();
+  await expect(page.locator('[data-viewpane="4"]')).toBeVisible();
+  await expect(page.locator('#kb-settings-view')).toContainText('Keyboard');
+  await expect(page.locator('#kb-settings-view')).toContainText('Clipboard');
+
+  // Return to the terminal, then reopen via the keyboard chord (Linux → PC profile → Ctrl+,).
+  await page.locator('[data-viewbtn="1"]').click();
+  await expect(page.locator('[data-viewpane="4"]')).toBeHidden();
+  await page.keyboard.press('Control+Comma');
+  await expect(page.locator('[data-viewpane="4"]')).toBeVisible();
+
+  // Rebind "Word left" to Ctrl+Shift+B — its keycaps update live.
+  const wordBack = page.locator('[data-action="wordBack"]');
+  await wordBack.getByRole('button', { name: /record a new shortcut/i }).click();
+  await expect(wordBack.locator('.kcapture')).toBeVisible();
+  await page.keyboard.press('Control+Shift+B');
+  await expect(wordBack.locator('.kc')).toHaveText(['Ctrl', 'Shift', 'B']);
+
+  // Recording Copy's chord (Ctrl+Shift+C) for Paste is blocked and named — no rebind happens.
+  const paste = page.locator('[data-action="paste"]');
+  await paste.getByRole('button', { name: /record a new shortcut/i }).click();
+  await page.keyboard.press('Control+Shift+C');
+  await expect(paste.locator('.kcapture.bad')).toContainText('already maps to Copy');
 });
 
 test('a todo persists in-repo across an app restart (§16.3)', async () => {

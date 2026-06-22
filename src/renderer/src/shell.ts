@@ -11,7 +11,7 @@ import { setShown } from './visibility';
 import { announceViewFocus, FOCUS_TERMINAL_EVENT } from './paneActions';
 import { matchChord, MAC_DEFAULTS, type Keymap } from '../../shared/keymap';
 
-export type ViewId = '1' | '2' | '3';
+export type ViewId = '1' | '2' | '3' | '4'; // 4 = the Settings view (§7.7), reached via the gear / ⌘,
 
 export interface Shell {
   setView(v: ViewId): void;
@@ -190,7 +190,11 @@ export function createShell(root: HTMLElement, deps: ShellDeps = {}): Shell {
     // (terminal chords, plain keys) propagates to the focused descendant.
     const action = matchChord(e, getKeymap());
     const view: ViewId | null =
-      action === 'viewTerminal' ? '1' : action === 'viewArtifacts' ? '2' : action === 'viewTodos' ? '3' : null;
+      action === 'viewTerminal' ? '1'
+      : action === 'viewArtifacts' ? '2'
+      : action === 'viewTodos' ? '3'
+      : action === 'openSettings' ? '4'
+      : null;
     if (action === 'toggleDrawer') {
       e.preventDefault();
       e.stopPropagation();
