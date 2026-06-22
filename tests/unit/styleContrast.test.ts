@@ -3,9 +3,8 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 // WCAG 1.4.3 pinning test for the small status-text tokens (§24.2.3 rail/panel/modal). The locked
-// "Galley · Lit" mood keeps bright accent hues for borders/dots/washes, but small text on them must
-// clear 4.5:1 — so dedicated `--*-text` tokens carry the accessible foreground. This reads the real
-// styles.css, resolves the token cascade per theme, and asserts the ratio (memory wcag-overrides-locked-mood).
+// "Galley · Lit" mood keeps bright accent hues, so dedicated `--*-text` tokens carry the accessible
+// foreground that clears 4.5:1 (memory wcag-overrides-locked-mood).
 
 const css = readFileSync(path.join(__dirname, '../../src/renderer/src/styles.css'), 'utf8');
 
@@ -72,11 +71,10 @@ describe('control text contrast (WCAG 1.4.3 AA)', () => {
   }
 });
 
-// When the loop panel is open, EVERY spill tone (await/work/settle) is reachable in the rail read-out
-// and must clear 4.5:1 on the background it actually sits on. That background is the spill's own wash
-// composited over the `.loopstat[aria-expanded="true"]` background over the card — so if the read-out
-// stacks its OWN wash under the spill's wash, the text sits on a doubled wash that fails. This test
-// reads the real backgrounds from CSS and alpha-composites them, so it discriminates that doubling.
+// When the loop panel is open, every spill tone must clear 4.5:1 on its ACTUAL background: the spill
+// wash over the `.loopstat[aria-expanded="true"]` background over the card. If the read-out stacks its
+// OWN wash under the spill's, the text sits on a failing doubled wash — so this composites the real
+// backgrounds to discriminate that doubling (WCAG 1.4.3).
 type RGBA = [number, number, number, number];
 function parseColor(v: string): RGBA {
   const rgba = v.match(/rgba?\(([^)]+)\)/);
@@ -108,12 +106,9 @@ function ruleBackground(escapedSelector: string): string | null {
   return b ? b[1].trim() : null;
 }
 
-// The attn-bar dismiss button (§24.2.3 T4) is a focusable control sitting on the bar's reddish wash
-// (`color-mix(in srgb, var(--attn) 10%, var(--card))`), not the plain card. Its focus ring is a non-text
-// UI indicator and must clear 3:1 on that actual background (WCAG 2.1 SC 1.4.11). The global
-// `button:focus-visible` outline (`--signal`) clears 3:1 only on `--card`; on the tinted bar it falls
-// short in light theme — so the bar scopes its own focus-ring color. This resolves the effective outline
-// color from the cascade and the composited bar background, then asserts the ratio.
+// The attn-bar dismiss focus ring is a non-text indicator that must clear 3:1 on the bar's tinted wash,
+// not the plain card (WCAG 2.1 SC 1.4.11). The global `button:focus-visible` `--signal` outline clears
+// 3:1 only on `--card` and falls short on the tinted bar in light theme, so the bar scopes its own ring.
 function blockBody(re: RegExp): string | null {
   const m = css.match(re);
   return m ? m[1] : null;
@@ -168,7 +163,7 @@ describe('expanded loop read-out contrast (WCAG 1.4.3 AA)', () => {
   const readoutBgExpr = ruleBackground('\\.flowstrip \\.loopstat\\[aria-expanded="true"\\]');
   for (const [themeName, map] of [['light', light], ['dark', dark]] as const) {
     const card = parseColor(resolve(map, '--card'));
-    const underSpill = over(resolveBg(map, readoutBgExpr), card); // the read-out bg over the card
+    const underSpill = over(resolveBg(map, readoutBgExpr), card);
     for (const tone of ['await', 'work', 'settle'] as const) {
       const token = tone === 'await' ? '--attn-text' : tone === 'work' ? '--signal-text' : '--pass-text';
       it(`${themeName}: .spill.${tone} text clears 4.5:1 when the read-out is expanded (panel open)`, () => {

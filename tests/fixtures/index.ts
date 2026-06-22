@@ -29,7 +29,6 @@ export const TOOL_USE =
 
 export const AGENT_QUESTION_BULLET = '⏺ Should I continue with the migration?\r\n';
 
-/** A ⏺ prose report: an intro paragraph, a top-level list, and a closing paragraph. */
 export const REPORT_BLOCK =
   '⏺ Here is a summary of what the codebase review surfaced this pass:\r\n' +
   '\r\n' +
@@ -46,9 +45,8 @@ export const DIFF_BLOCK =
 
 const RULE = '─'.repeat(78);
 
-/** The real Claude composer: full-width horizontal rules (no corners) frame the ❯
- *  caret and the (growing) input, with the mode/status strip just below. All chrome —
- *  the rules and glyphs are themeable, so detection must be structural, not literal. */
+/** The real Claude composer. The rules and glyphs are themeable, so detection must be structural,
+ *  not literal. */
 export const INPUT_BOX =
   RULE + '\r\n' +
   '❯ we now want to eliminate the noise from the capture so that the action window\r\n' +
@@ -58,8 +56,8 @@ export const INPUT_BOX =
   RULE + '\r\n' +
   '  ⏵⏵ auto mode on (shift+tab to cycle)   ✘ Auto-update failed · Run /doctor\r\n';
 
-/** A real permission prompt: full-width rules frame it (the ❯ selector lives inside),
- *  with an option/help tail below the bottom rule. The whole bottom region is chrome. */
+/** A real permission prompt; the whole bottom region (including the option/help tail below the bottom
+ *  rule) is chrome. */
 export const PERMISSION_PROMPT =
   '─'.repeat(78) + '\r\n' +
   ' Would you like to proceed with running this command against the repository?\r\n' +
@@ -73,11 +71,10 @@ export const PERMISSION_PROMPT =
   '\r\n' +
   'Enter to select · ↑/↓ to navigate · Esc to cancel\r\n';
 
-/** Claude's idle spinner/status line; the glyph, verb, and elapsed time all change. */
+/** Claude's idle spinner/status line — glyph, verb, and elapsed time all vary, so detection can't be literal. */
 export const SPINNER_STATUS = '✻ Baked for 10m 58s\r\n';
 
-/** A slash-command echo: the ❯ command line and its ⎿ result/file lines — chrome that
- *  sits in the transcript between the status line and the composer. */
+/** A slash-command echo (❯ line + its ⎿ result lines) — chrome in the transcript, not agent output. */
 export const SLASH_ECHO =
   '❯ /compact keep only the summary and my original instructions\r\n' +
   '  ⎿  Compacted (ctrl+o to see full summary)\r\n' +

@@ -61,7 +61,7 @@ describe('deriveLoopView (§24.2.3 T2)', () => {
     // heuristic wrongly called this ready; the gate model does not.
     const v = deriveLoopView(base, loop('impl-draft'), DEF);
     expect(v.loop?.ready).toBe(false);
-    expect(v.loop?.gateOptions).toBeUndefined(); // no gate → no options
+    expect(v.loop?.gateOptions).toBeUndefined();
   });
 
   it('marks the step ready only at a TERMINAL gate, with no gate options to offer', () => {

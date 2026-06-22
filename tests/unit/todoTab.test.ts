@@ -72,9 +72,7 @@ function baseMonitor(handlers: {
   };
 }
 
-// §24.1 mockup-exact todo panel: a flat list of `.todo` rows, each a checkbox-circle
-// (.chk, toggles done), a body (.tx text + .src provenance), and a Send action on
-// active rows. Reorder / edit / manual-add / delete are deferred to §24.2.1.
+// §24.1 mockup-exact todo panel. Reorder / edit / manual-add / delete are deferred to §24.2.1.
 describe('Todo tab (§24.1 mockup-exact — checkbox-done + Send)', () => {
   let handlers: { cwdChanged?: (m: { sessionId: string; cwd: string; repoKey: string }) => void };
   let settings: UiSettings;
@@ -186,7 +184,6 @@ describe('Todo tab (§24.1 mockup-exact — checkbox-done + Send)', () => {
     for (const sel of ['.todo-send', '.todo-edit', '.todo-up', '.todo-down']) {
       expect((row.querySelector(sel) as HTMLButtonElement).disabled).toBe(true);
     }
-    // Delete stays usable — you can still remove a completed todo.
     expect((row.querySelector('.todo-delete') as HTMLButtonElement).disabled).toBe(false);
   });
 
@@ -196,14 +193,13 @@ describe('Todo tab (§24.1 mockup-exact — checkbox-done + Send)', () => {
     await loadRepo('/repoA', [makeTodo({ id: 'a', status: 'active' })]);
     (rows()[0].querySelector('.todo-delete') as HTMLButtonElement).click();
     const row = rows()[0];
-    expect(row.querySelector('.todo-delete-confirm')).not.toBeNull(); // confirm shown
-    expect(row.querySelector('.todo-send')).not.toBeNull(); // cluster NOT replaced
-    expect(row.querySelector('.todo-delete-bar')).not.toBeNull(); // in a separate stacked row
+    expect(row.querySelector('.todo-delete-confirm')).not.toBeNull();
+    expect(row.querySelector('.todo-send')).not.toBeNull();
+    expect(row.querySelector('.todo-delete-bar')).not.toBeNull();
   });
 
   // Tri-state status (§16.3): active → (Send) → in_progress → (check) → done → (check) → active.
-  // The checkbox renders the three ARIA states (false / mixed / true); the box itself only ever
-  // marks not-done→done or done→active, and Send is the sole entry into in_progress.
+  // Send is the sole entry into in_progress; the checkbox only ever marks not-done→done or done→active.
   describe('tri-state status', () => {
     it('Send marks an active todo in-progress (checkbox goes mixed) and still injects without submit', async () => {
       wireMonitorPane();
@@ -281,9 +277,8 @@ describe('Todo tab (§24.1 mockup-exact — checkbox-done + Send)', () => {
   });
 });
 
-// §24.2.1 Todo-panel restorations, re-skinned into the mockup row language: manual add,
-// reorder (↑/↓ + drag), edit-in-place (better affordance — contenteditable, no box swap),
-// and a two-step undoable delete. Main-process IPC for all of these already exists.
+// §24.2.1 Todo-panel restorations re-skinned into the mockup row language. The main-process IPC for
+// all of these already exists.
 describe('Todo tab §24.2.1 — manual add', () => {
   let handlers: { cwdChanged?: (m: { sessionId: string; cwd: string; repoKey: string }) => void };
   let settings: UiSettings;
@@ -525,8 +520,7 @@ describe('Todo tab §24.2.1 — two-step undoable delete', () => {
 });
 
 // §24.2.1 review fixes: reorder must not disturb inline done rows; focus must follow the
-// edit/delete/confirm transitions (WCAG 2.4.3); the contenteditable field must be labelled;
-// the drag wiring must be exercised.
+// edit/delete/confirm transitions (WCAG 2.4.3); the contenteditable field must be labelled.
 describe('Todo tab §24.2.1 — review fixes (reorder stability, focus, a11y label, drag)', () => {
   let handlers: { cwdChanged?: (m: { sessionId: string; cwd: string; repoKey: string }) => void };
   let monitor: Record<string, ReturnType<typeof vi.fn>>;
@@ -558,8 +552,7 @@ describe('Todo tab §24.2.1 — review fixes (reorder stability, focus, a11y lab
       makeTodo({ id: 'd', text: 'D', status: 'done', order: 2 }),
       makeTodo({ id: 'c', text: 'C', order: 3 }),
     ]);
-    // ↓ on the first active (A): it swaps with the next ACTIVE (C), skipping done D — and D
-    // must keep its slot in the persisted order, not get shoved to an end.
+    // ↓ swaps A with the next ACTIVE (C), skipping done D; D must keep its slot in the persisted order.
     (rows()[0].querySelector('.todo-down') as HTMLButtonElement).click();
     await flush();
     expect(monitor.todoReorder).toHaveBeenCalledWith('/repoA', ['c', 'd', 'a']);
@@ -584,7 +577,7 @@ describe('Todo tab §24.2.1 — review fixes (reorder stability, focus, a11y lab
     const tx = rows()[0].querySelector('.tx') as HTMLElement;
     tx.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
     await flush();
-    expect(rows()[0].querySelector('.tx')!.getAttribute('contenteditable')).not.toBe('true'); // edit closed
+    expect(rows()[0].querySelector('.tx')!.getAttribute('contenteditable')).not.toBe('true');
     expect(document.activeElement).toBe(rows()[0].querySelector('.todo-edit'));
   });
 
@@ -609,9 +602,8 @@ describe('Todo tab §24.2.1 — review fixes (reorder stability, focus, a11y lab
     expect(monitor.todoReorder).toHaveBeenCalledWith('/repoA', ['b', 'a']);
   });
 
-  // ---- On-demand todo-template picker in the overlay (§4.1/§6) ----
-  // The control relocated here from the flow strip: a collapsed "From template" disclosure that
-  // reveals a named-template picker, so the resting composer is just the manual-add field.
+  // On-demand todo-template picker (§4.1/§6): relocated here from the flow strip as a collapsed
+  // "From template" disclosure, so the resting composer is just the manual-add field.
   describe('template picker (§4.1)', () => {
     const toggle = () => todoList().querySelector<HTMLButtonElement>('.tmpl-toggle');
     const pick = () => todoList().querySelector<HTMLSelectElement>('.tmpl-pick');
@@ -643,7 +635,7 @@ describe('Todo tab §24.2.1 — review fixes (reorder stability, focus, a11y lab
       });
       expect(toggle()).not.toBeNull();
       expect(toggle()!.getAttribute('aria-expanded')).toBe('false');
-      expect(pick()).toBeNull(); // collapsed → no picker on screen (anti-clutter)
+      expect(pick()).toBeNull();
     });
 
     it('opening the disclosure reveals the named picker, defaulting to the bound template', async () => {
@@ -660,7 +652,7 @@ describe('Todo tab §24.2.1 — review fixes (reorder stability, focus, a11y lab
       await flush();
       expect(toggle()!.getAttribute('aria-expanded')).toBe('true');
       expect([...pick()!.options].map((o) => o.textContent)).toEqual(['PR review checklist', 'Ticket grooming']);
-      expect(pick()!.value).toBe('ticket-grooming'); // the step's bound default
+      expect(pick()!.value).toBe('ticket-grooming');
     });
 
     it('Add todos instantiates the chosen template and keeps the picker open', async () => {
@@ -680,7 +672,7 @@ describe('Todo tab §24.2.1 — review fixes (reorder stability, focus, a11y lab
       addBtn()!.click();
       await flush();
       expect(monitor.instantiateTemplate).toHaveBeenCalledWith('/repoA', 'pr-review');
-      expect(rows().map(txt)).toContain('Check the diff'); // the list updated from the result
+      expect(rows().map(txt)).toContain('Check the diff');
       expect(pick()).not.toBeNull(); // stays open for another add (operator decision)
     });
 
@@ -757,22 +749,19 @@ describe('Todo tab §24.2.1 — review fixes (reorder stability, focus, a11y lab
         monitor.todoDelete.mockRejectedValueOnce(new Error('ipc down'));
         (rows()[0].querySelector('.todo-delete') as HTMLButtonElement).click();
         (rows()[0].querySelector('.todo-delete-confirm') as HTMLButtonElement).click();
-        await vi.advanceTimersByTimeAsync(60_000); // TODO_UNDO_MS → deferred delete fires and rejects
+        await vi.advanceTimersByTimeAsync(60_000); // past TODO_UNDO_MS → the deferred delete fires
       } finally {
         vi.useRealTimers();
       }
     });
 
-    // A rejected refresh (todoList/listTemplates reject on a main restart) must not surface as an
-    // unhandled renderer rejection (vitest fails the run on one — that is the RED signal here) and
-    // must leave the displayed list and count unchanged (§16.4).
     it('a rejected refresh (todoList + listTemplates) leaves the list intact', async () => {
       wireMonitorPane();
       await flush();
       await loadRepo('/repoA', [makeTodo({ id: 'a', text: 'task' })]);
       monitor.todoList.mockRejectedValueOnce(new Error('ipc down'));
       monitor.listTemplates.mockRejectedValueOnce(new Error('ipc down'));
-      handlers.cwdChanged!({ sessionId: 's1', cwd: '/repoA', repoKey: '/repoA' }); // re-fire → refresh()
+      handlers.cwdChanged!({ sessionId: 's1', cwd: '/repoA', repoKey: '/repoA' });
       await flush();
       expect(rows().map((r) => r.querySelector('.tx')!.textContent)).toEqual(['task']);
       expect(document.getElementById('todo-count')!.textContent).toBe('1');
@@ -836,7 +825,6 @@ describe('Todo tab — template picker id is instance-unique (UI-STANDARDS §2.2
   it('two instances in one document get DIFFERENT picker ids, each matching its own toggle aria-controls', async () => {
     const a = mountInstance();
     const b = mountInstance();
-    // Drive a repo so listTemplates is pulled and the disclosure renders.
     a.tab.onRepoChanged('/repoA');
     b.tab.onRepoChanged('/repoB');
     await flush();
@@ -854,11 +842,10 @@ describe('Todo tab — template picker id is instance-unique (UI-STANDARDS §2.2
     expect(pickerA).not.toBeNull();
     expect(pickerB).not.toBeNull();
 
-    // (a) the two container ids must differ across instances …
     expect(pickerA.id).not.toBe(pickerB.id);
     expect(pickerA.id).toBeTruthy();
 
-    // (b) … and within each instance, the toggle points at ITS OWN picker, both inside its host.
+    // Each toggle points at ITS OWN picker, inside its own host (no cross-instance leakage).
     expect(toggleA.getAttribute('aria-controls')).toBe(pickerA.id);
     expect(toggleB.getAttribute('aria-controls')).toBe(pickerB.id);
     expect(a.host.querySelector(`#${pickerA.id}`)).toBe(pickerA);

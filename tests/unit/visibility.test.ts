@@ -2,9 +2,8 @@
 import { describe, it, expect } from 'vitest';
 import { setShown, setCollapsed } from '../../src/renderer/src/visibility';
 
-// The reusable accessible show/hide helpers (§22.2). The CSS enforcement ([hidden] →
-// display:none !important, .is-collapsed → visibility:hidden) is verified in the e2e tab-order
-// tests; here we pin the DOM contract the helpers expose.
+// §22.2 accessible show/hide helpers. The CSS enforcement ([hidden], .is-collapsed) is verified in the
+// e2e tab-order tests; this unit pins only the DOM contract the helpers set.
 describe('accessible visibility helpers (§22.2)', () => {
   it('setShown drives the hidden attribute (display:none is enforced in CSS)', () => {
     const el = document.createElement('div');

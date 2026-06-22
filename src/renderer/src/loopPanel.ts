@@ -1,12 +1,9 @@
-// The docked loop+gate panel (§24.2.3 T2) — a placement-agnostic organism (UI-STANDARDS §1.2) that
-// renders the EXPANDED read-only agent-loop state mirror the rail's compact Loop read-out opens. It
-// reproduces design/shell/loop-flow.html's State section at fidelity: a `.lhead` title + the v4
-// `.ldl` detail rows (status / iteration / pr / branch). It touches only its host subtree and renders
-// identically wherever mounted. The shell owns docking the column; the read-out owns the open toggle.
+// The docked loop+gate panel (§24.2.3 T2) — a placement-agnostic organism (UI-STANDARDS §1.2)
+// rendering the EXPANDED read-only agent-loop state mirror the rail's compact read-out opens.
 //
-// Scope (T2): the state mirror + the read-only "gate options" row (the current gate's `human_options`,
-// resolved from the bound LoopDef). The Review-gate DECISION section (the actual approve /
-// request-changes / impasse buttons + the §19.4 composer) is the gate slice T5/T6 — not built here.
+// Scope (T2): the state mirror + the read-only "gate options" row. The Review-gate DECISION section
+// (the approve / request-changes / impasse buttons + the §19.4 composer) is the gate slice T5/T6 —
+// not built here.
 
 import type { FlowLoopView } from '../../shared/ipc';
 import { spillTone } from './loopStatus';
@@ -21,8 +18,7 @@ export interface LoopPanel {
   /** Repaint from the current loop mirror; `null` (no loop step / no parseable state.yaml) clears it.
    *  `title` identifies which loop step the panel mirrors (the rail step name). */
   render(loop: FlowLoopView | null, title: string): void;
-  /** Remove everything the panel created (UI-STANDARDS clean teardown). It only builds DOM into
-   *  its host — no document/window listeners or timers — so emptying the host frees it all. */
+  /** Clean teardown (UI-STANDARDS). */
   dispose(): void;
 }
 
@@ -32,7 +28,7 @@ function detailRow(doc: Document, key: string, value: string, valueClass = ''): 
   const k = doc.createElement('span');
   k.className = 'lk';
   k.textContent = key;
-  const lead = doc.createElement('span'); // the dotted leader between key and value
+  const lead = doc.createElement('span');
   lead.className = 'ld';
   const v = doc.createElement('span');
   v.className = valueClass ? `lv ${valueClass}` : 'lv';
@@ -60,7 +56,7 @@ export function createLoopPanel(host: HTMLElement): LoopPanel {
       h3.textContent = title;
       const close = doc.createElement('button');
       close.className = 'iconbtn x';
-      close.dataset.loopClose = ''; // behavioral hook for the shell — not a global id (collides across panels)
+      close.dataset.loopClose = ''; // shell's close hook — not a global id (would collide across panels)
       close.title = 'Close loop panel';
       close.setAttribute('aria-label', 'Close loop panel');
       close.textContent = '✕';
@@ -81,8 +77,8 @@ export function createLoopPanel(host: HTMLElement): LoopPanel {
       ldl.append(detailRow(doc, 'iteration', String(loop.iteration)));
       if (loop.pr !== null) ldl.append(detailRow(doc, 'pr', `#${loop.pr}`, 'sig'));
       if (loop.branch !== null) ldl.append(detailRow(doc, 'branch', loop.branch));
-      // The current gate's human_options (§18.1/§19.4) — present only at an awaiting gate. The actual
-      // decision buttons are T5/T6; this row just surfaces what the gate will offer.
+      // The current gate's human_options (§18.1/§19.4), present only at an awaiting gate; the decision
+      // buttons are T5/T6 — this row only surfaces what the gate will offer.
       if (loop.gateOptions && loop.gateOptions.length > 0)
         ldl.append(detailRow(doc, 'gate options', loop.gateOptions.map(gateOptionLabel).join(' · ')));
 

@@ -3,11 +3,9 @@ import { expect, vi } from 'vitest';
 // Discriminating relocation check (UI-STANDARDS §3.3 / §2.2 rule 1): an organism must build its DOM
 // from the host's `ownerDocument`, never the ambient global `document`. Asserting `ownerDocument`
 // after render does NOT discriminate — jsdom auto-adopts an appended node into the parent's document,
-// so a globally-created element re-acquires the host's document once inserted, and two hosts in the
-// same global document both pass with the bug. The recipe that DOES discriminate: mount the organism
-// on a host in a FOREIGN document with the global `document.createElement(NS)` starved (spied to
-// throw). A clean organism still renders from its host's document; a reaching one renders nothing (or
-// throws). See memory jsdom-adoption-masks-global-document.
+// masking a global reach. So this mounts on a FOREIGN-document host with global createElement(NS)
+// starved: a reaching organism renders nothing or throws. See memory
+// jsdom-adoption-masks-global-document.
 export async function assertRendersFromHostDocument(
   mount: (host: HTMLElement) => void | Promise<void>,
 ): Promise<void> {

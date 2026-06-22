@@ -10,9 +10,8 @@ import {
 } from '../../src/main/flow';
 
 // §24.2.2 S2 — the step definition is sourced from a real <worktree>/.agent-terminal/flow.yaml
-// (§18.1 minimal shape: name + one kind:manual step with id/skill/todo_template), no longer a
-// hardcoded constant. The loader runs against real temp dirs (no fs mocks); the machine
-// surfaces a clear error state — never a crash — on a missing/malformed/invalid file.
+// (§18.1). The loader runs against real temp dirs (no fs mocks) and surfaces a clear error state —
+// never a crash — on a missing/malformed/invalid file.
 
 describe('flow.yaml loader (§24.2.2 S2 / §18.1)', () => {
   let dir: string;
@@ -83,13 +82,11 @@ describe('flow.yaml loader (§24.2.2 S2 / §18.1)', () => {
     expect(loadFlowDefinition(dir).ok).toBe(false);
     writeFlow('name: f\nsteps:\n  - kind: manual\n'); // step missing id
     expect(loadFlowDefinition(dir).ok).toBe(false);
-    writeFlow('name: f\nsteps:\n  - id: x\n    kind: action\n'); // action is a later phase (§18.2)
+    writeFlow('name: f\nsteps:\n  - id: x\n    kind: action\n'); // `action` is a later phase (§18.2)
     expect(loadFlowDefinition(dir).ok).toBe(false);
   });
 
-  // §24.2.3 T1 — the loader retires the single-step assumption: it loads ALL steps, in order,
-  // not just the first. Every step is validated (manual-only in T1 scope), with per-step
-  // skill/template refs preserved.
+  // §24.2.3 T1 — the loader loads ALL steps in order, not just the first, validating each.
   it('loads every step of a multi-step manual flow, in order, with each step\'s refs', () => {
     writeFlow(
       'name: feature-dev\n' +
@@ -122,9 +119,8 @@ describe('flow.yaml loader (§24.2.2 S2 / §18.1)', () => {
     expect(loadFlowDefinition(dir).ok).toBe(false);
   });
 
-  // §24.2.3 T2 — the loader gains the `loop` kind: a step binding an agent-loop LoopDef by name.
-  // The app still drives nothing (T2 is a read-only state.yaml mirror); the binding is captured so
-  // the bridge knows which loop the step mirrors.
+  // §24.2.3 T2 — the loader gains the `loop` kind: a step binding an agent-loop LoopDef by name. T2 is
+  // a read-only state.yaml mirror, so the binding is only captured, never driven.
   it('loads a loop step binding its LoopDef name (§24.2.3 T2)', () => {
     writeFlow(
       'name: feature-dev\nsteps:\n' +
@@ -145,8 +141,7 @@ describe('flow.yaml loader (§24.2.2 S2 / §18.1)', () => {
   });
 
   // §24.2.3 T3 — a step may declare a `bootstrap: pickup` entry action (§18.3) and typed `inputs`
-  // (§18.4). The loader captures both so the entry action can prompt for an unsatisfied input and
-  // inject `agent-loop pickup <input>` once it is provided.
+  // (§18.4); the loader captures both.
   it('loads a step\'s bootstrap + typed inputs (§24.2.3 T3 / §18.3/§18.4)', () => {
     writeFlow(
       'name: feature-dev\nsteps:\n' +
@@ -215,10 +210,9 @@ describe('flow machine sourced from a definition (§24.2.2 S2)', () => {
   });
 });
 
-// The flow DEFINITION resolves local-first then global: the repository's flow.yaml takes
-// precedence, falling back to a global (e.g. $HOME) default only when the repo has none. (The
-// flow STATE, by contrast, is always repo-local — see flowState.) A present-but-invalid local
-// flow.yaml surfaces its own error rather than being masked by the global file.
+// The flow DEFINITION resolves local-first then global (the flow STATE, by contrast, is always
+// repo-local — see flowState). A present-but-invalid local flow.yaml surfaces its own error rather
+// than being masked by the global file.
 describe('flow.yaml local-first-then-global resolution (§18.1)', () => {
   let local: string;
   let global: string;

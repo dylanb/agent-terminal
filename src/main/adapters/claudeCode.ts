@@ -1,20 +1,13 @@
-// Claude Code classifier (§15.3). Enrichment only: it recognizes the structured blocks
-// Claude renders deterministically — `● Name(args)` / `⏺ Name(args)` tool calls and `±` diffs — and
-// emits them as typed `tool-use` / `diff` events. The scanner carves their rows out of
-// the baseline so the same text isn't also captured as prose. It deliberately does NOT
-// detect reports: report capture is the glyph-agnostic baseline's job, so a themed or
-// version-changed bullet (⏺ vs ●) can never cost us a capture. Chrome rows are skipped
-// (never classified). Assertions are on emitted events, so the patterns here can change
-// as long as the detected types/text stay stable.
+// Claude Code classifier (§15.3). Enrichment only — it deliberately does NOT detect reports: that
+// is the glyph-agnostic baseline's job, so a themed or version-changed bullet can never cost a
+// capture.
 
 import type { Adapter, AdapterContext, DetectedRegion } from './types';
 
-// Claude renders the tool/diff bullet as ● (U+25CF) or ⏺ (U+23FA) depending on
-// version/theme; the classifier must match either, or it goes dark and every tool
-// block folds into the prose report (§15.x). Capture stays glyph-agnostic.
+// Claude renders the tool/diff bullet as ● (U+25CF) or ⏺ (U+23FA) by version/theme; match either,
+// or the classifier goes dark and every tool block folds into the prose report (§15.x).
 const BULLET = /^[●⏺]/u;
 const DIFF_LINE = /^[+-]\s/;
-// A tool invocation head looks like `Name(args)`; prose (a report) is left to the baseline.
 const TOOL_CALL = /^[A-Za-z][\w.]*\(/;
 
 function stripBullet(line: string): string {
@@ -34,7 +27,6 @@ export function createClaudeCodeAdapter(): Adapter {
           continue;
         }
         const head = stripBullet(reader.lineText(y).trim());
-        // A tool-use / diff block carries indented (⎿ / further-indented) continuations.
         let j = y + 1;
         while (j <= endRow && /^\s+\S/.test(reader.lineText(j))) j++;
         const block: string[] = [];
@@ -46,7 +38,6 @@ export function createClaudeCodeAdapter(): Adapter {
         } else if (TOOL_CALL.test(head)) {
           regions.push({ type: 'tool-use', source: 'shadow-scan', text: block.join('\n'), startRow: y, endRow: j - 1 });
         }
-        // A prose `⏺` block (a report) is intentionally left for the baseline.
         y = j;
       }
 

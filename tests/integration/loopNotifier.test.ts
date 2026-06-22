@@ -9,9 +9,8 @@ import { createLoopNotifier, type LoopNotifyOpts } from '../../src/main/loopNoti
 import type { FlowStateView } from '../../src/shared/ipc';
 
 // §24.2.3 T4 — the OS-notification decision driven END-TO-END from a real state.yaml + LoopDef on
-// disk: parse the v4 mirror, resolve the bound LoopDef, derive the human-needed classification, and
-// observe it. Real temp files (no mocks of the parser/derivation); only the OS-notification surface
-// is spied (CLAUDE.md permits it). Asserts the file content alone drives the raise/dedup/clear.
+// disk, asserting the file content alone drives raise/dedup/clear. Real temp files (parser and
+// derivation unmocked); only the OS-notification surface is spied (CLAUDE.md permits it).
 
 const IMPL_LOOP =
   'name: impl-loop\n' +

@@ -39,10 +39,9 @@ describe('flow manager (repo-keyed, follows cwd)', () => {
 
   it('keeps progression independent per repo key (the cwd-switch bug)', () => {
     const mgr = createFlowManager({ globalDir: home });
-    mgr.start(a); // repo A → in_progress
+    mgr.start(a);
     // Switching to repo B must NOT inherit A's progression.
     expect(mgr.state(b).status).toBe('not_started');
-    // ...and A is unchanged when we come back.
     expect(mgr.state(a).status).toBe('in_progress');
   });
 
@@ -68,10 +67,10 @@ describe('flow manager (repo-keyed, follows cwd)', () => {
     const onEnterStep = vi.fn(() => ({ notice: 'agent is busy' }));
     const mgr = createFlowManager({ globalDir: home, onEnterStep });
     const view = mgr.start(a);
-    // §24.2.3 T3: entry actions now receive (step, resolvedInputs); a fresh flow has resolved none.
+    // §24.2.3 T3: entry actions receive (step, resolvedInputs); a fresh flow has resolved none.
     expect(onEnterStep).toHaveBeenCalledWith(expect.objectContaining({ id: 'alpha-step', kind: 'manual' }), {});
     expect(view.notice).toBe('agent is busy');
-    // Reading state afterwards never re-fires entry actions nor carries the one-shot notice.
+    // Reading state never re-fires entry actions nor carries the one-shot notice.
     expect(mgr.state(a).notice).toBeUndefined();
   });
 
@@ -80,7 +79,7 @@ describe('flow manager (repo-keyed, follows cwd)', () => {
     const plain = mkdtempSync(join(tmpdir(), 'flow-mgr-plain-'));
     try {
       const mgr = createFlowManager({ globalDir: home });
-      expect(mgr.state(plain).stepName).toBe('global-step'); // definition from global
+      expect(mgr.state(plain).stepName).toBe('global-step');
       mgr.start(plain);
       // State is the plain dir's own — it does not touch the global dir's progression.
       expect(createFlowManager({ globalDir: home }).state(plain).status).toBe('in_progress');

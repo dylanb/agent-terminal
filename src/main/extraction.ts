@@ -1,6 +1,5 @@
-// Text extraction over the shadow's public read path (§15.2). Rejoins wrapped
-// rows into their original logical lines (same behavior as getSelection() on the
-// manual path) and slices off start/end columns for mark-bounded spans.
+// Text extraction over the shadow's public read path (§15.2). Must rejoin wrapped rows
+// the same way getSelection() does on the manual path, or the two paths diverge.
 
 import type { ShadowReader } from './shadow';
 
@@ -21,7 +20,6 @@ export function extractText(reader: ShadowReader, range: ExtractRange): string {
   const logical: string[] = [];
 
   for (let y = startRow; y <= endRow; y++) {
-    // A row whose successor wraps is a non-final segment; keep its full width.
     const nextWraps = y < endRow && reader.isLineWrapped(y + 1);
     let text = reader.lineText(y, !nextWraps);
     if (y === endRow && endCol !== undefined) text = text.slice(0, endCol);

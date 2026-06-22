@@ -4,10 +4,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { listTodoTemplates } from '../../src/main/todoTemplate';
 
-// §4.1/§6/§21.2 — the on-demand picker lists the templates co-located with the flow.yaml under
-// todo-templates/. Each entry has a `ref` (the instantiate id = filename without .md) and a
-// user-understandable `name`: the template's first `# H1` heading, falling back to a humanized
-// filename. Discovery runs against the real fs (no mocks); a missing dir → [].
+// §4.1/§6/§21.2 — the picker lists co-located templates as { ref (filename without .md), name }.
+// `name` is the first `# H1` heading, falling back to a humanized filename; a missing dir → [].
+// Real fs, no mocks.
 
 describe('listTodoTemplates (§4.1/§6)', () => {
   let dir: string;
@@ -38,8 +37,8 @@ describe('listTodoTemplates (§4.1/§6)', () => {
   });
 
   it('excludes an in-dir symlink whose target escapes the templates root', () => {
-    // A symlink living inside the templates dir but pointing OUTSIDE the root passes a lexical
-    // check; the picker must still refuse to read it (resolve real paths, mirror loadTodoTemplateFile).
+    // An in-dir symlink pointing outside the root passes the lexical check; the picker must still
+    // refuse it (resolve real paths, mirror loadTodoTemplateFile).
     writeFileSync(join(dir, 'normal.md'), '# Normal template\n\n- a\n');
     const outside = mkdtempSync(join(tmpdir(), 'tmpl-list-outside-'));
     writeFileSync(join(outside, 'secret.md'), '# Leaked secret\n\n- x\n');

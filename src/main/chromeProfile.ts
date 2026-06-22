@@ -1,8 +1,6 @@
-// Chrome profile store (§15.x) — persists the markers the user has "marked as chrome"
-// (app.getPath('userData')/chrome-profile.json). Only the learned additions are stored;
-// the seeded DEFAULT_CHROME_MARKERS are merged in at read time, so changing the seed
-// later doesn't fossilize an old copy. Atomic writes; a corrupt file degrades to the
-// seed, never a throw — a bad profile can't wedge the scanner.
+// Chrome profile store (§15.x). Only learned additions are persisted, never the seed —
+// so a later seed change can't fossilize an old copy. A corrupt file MUST degrade to the
+// seed, never throw: a bad profile can't be allowed to wedge the scanner.
 
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';

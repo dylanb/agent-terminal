@@ -4,11 +4,8 @@ import { createAttentionCue, type AttentionCueDeps } from '../../src/renderer/sr
 import { assertRendersFromHostDocument } from './relocatable';
 import type { FlowLoopView } from '../../src/shared/ipc';
 
-// §24.2.3 T4 — the awaiting-human attention cue. These assert only what a user/AT can observe: whether
-// the cue is shown (visible, not display:none), the text it announces, that it announces assertively,
-// that it self-clears on a non-human-needed/null view, that dismiss hides THIS occurrence while a
-// distinct occurrence re-shows, and that dismiss does not drop keyboard focus to <body>. Visibility is
-// a pure function of the loop view; the cue's only state is the dismissed occurrence, keyed per-repo.
+// §24.2.3 T4 — the awaiting-human attention cue. Visibility is a pure function of the loop view; the
+// cue's only state is the dismissed occurrence, keyed per-repo (§16.3).
 
 const REPO = '/repo';
 
@@ -75,7 +72,7 @@ describe('attention cue (§24.2.3 T4)', () => {
   it('re-shows on a distinct (status, iteration) occurrence', () => {
     const { host, render } = mount();
     render(human());
-    render(human({ status: 'impl-draft', humanNeeded: false })); // leaves human-needed
+    render(human({ status: 'impl-draft', humanNeeded: false }));
     render(human({ status: 'awaiting-human-impl-triage', iteration: 11 }));
     expect(shown(host)).toBe(true);
     expect(host.textContent).toContain('awaiting-human-impl-triage');

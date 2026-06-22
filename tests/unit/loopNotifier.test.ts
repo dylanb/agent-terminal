@@ -2,11 +2,9 @@ import { describe, expect, it, vi } from 'vitest';
 import { createLoopNotifier, type LoopNotifierDeps, type LoopNotifyOpts } from '../../src/main/loopNotifier';
 import type { FlowLoopView, FlowStateView } from '../../src/shared/ipc';
 
-// §24.2.3 T4 — the OS attention notification decision. Behavior under test = whether observing a flow
-// view raises / dedups / clears the notification, and what activation does. The notification surface
-// is injected (CLAUDE.md permits spying it — it is not the emulator/PTY), so these assert observable
-// outputs: notify calls, their payload, the close calls, and the activation side effects. The
-// occurrence identity is per-repo (`repoKey, status, iteration`) — the loop is repo-scoped (§16.3).
+// §24.2.3 T4 — the OS attention notification decision (raise / dedup / clear / activate). The
+// notification surface is injected, not the emulator/PTY, so spying it is permitted. Occurrence
+// identity is per-repo (`repoKey, status, iteration`) — the loop is repo-scoped (§16.3).
 
 const REPO = '/repo';
 

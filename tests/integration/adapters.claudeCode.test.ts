@@ -22,9 +22,7 @@ describe('Claude Code adapter (§15.3 / v2.6) — asserts on emitted events only
   let shadow: ReturnType<typeof createShadowModel>;
   afterEach(() => shadow.dispose());
 
-  // Mirrors production (§15.3): the Claude adapter is a classifier (tool-use/diff) and
-  // the glyph-agnostic baseline always runs, capturing prose as reports. `claudeEnabled`
-  // toggles only the classifier — the baseline is always present.
+  // §15.3: `claudeEnabled` toggles only the classifier; the glyph-agnostic baseline always runs.
   async function run(fixture: string, claudeEnabled = true): Promise<ScannerEmission[]> {
     const emitted: ScannerEmission[] = [];
     shadow = createShadowModel({ cols: 80, rows: 24, settleMs: 10, quietMs: 40, onStatus: () => {} });
@@ -47,8 +45,6 @@ describe('Claude Code adapter (§15.3 / v2.6) — asserts on emitted events only
   }
 
   it('captures corner-box content — a box is content, not chrome (Claude boxes real summaries, v2.17)', async () => {
-    // A corner/vertical box (a summary frame, a table) is NOT chrome: the frame is
-    // decorative but the text inside is real content and must be capturable.
     const events = await run(PERMISSION_BOX);
     expect(events.some((e) => e.type === 'report')).toBe(true);
   });
@@ -97,7 +93,6 @@ describe('Claude Code adapter (§15.3 / v2.6) — asserts on emitted events only
   });
 
   it('never emits the rule-bounded input composer as content (it is chrome, §15.x)', async () => {
-    // Even with the greedy generic fallback present, the composer is structural chrome.
     const events = await run(INPUT_BOX, true);
     expect(events).toEqual([]);
   });
@@ -106,7 +101,6 @@ describe('Claude Code adapter (§15.3 / v2.6) — asserts on emitted events only
     const events = await run(REPORT_BLOCK + INPUT_BOX);
     const reports = events.filter((e) => e.type === 'report');
     expect(reports.length).toBe(1);
-    // The composer text must not bleed into the report body.
     expect(reports[0].text).not.toContain('eliminate the noise');
     expect(reports[0].text).not.toContain('auto mode on');
   });
@@ -117,8 +111,6 @@ describe('Claude Code adapter (§15.3 / v2.6) — asserts on emitted events only
   });
 
   it('the Claude classifier toggle gates only enrichment — the baseline still captures (§15.7)', async () => {
-    // Disabling the classifier drops tool-use/diff typing, but the glyph-agnostic
-    // baseline still captures prose reports — capture is never gated on the adapter.
     const reportEvents = await run(REPORT_BLOCK, false);
     expect(reportEvents.filter((e) => e.type === 'report').length).toBe(1);
     const toolEvents = await run(TOOL_USE, false);
@@ -156,7 +148,6 @@ describe('Claude Code adapter (§15.3 / v2.6) — asserts on emitted events only
     expect(captured.length).toBeGreaterThanOrEqual(1);
     expect(text).toContain('All 11 impl-loop reviewers have completed');
     expect(text).toContain('Want me to apply any of these fixes');
-    // ...and the spinner + composer chrome must not bleed in.
     expect(text).not.toContain('auto mode on');
     expect(text).not.toContain('Churned for');
   });
@@ -193,7 +184,6 @@ describe('Claude Code adapter (§15.3 / v2.6) — asserts on emitted events only
     const text = captured.map((e) => e.text).join('\n');
     expect(text).toContain('consolidated PR review');
     expect(text).toContain('Want me to action any of these');
-    // ...and the composer/status chrome must not bleed into the capture.
     expect(text).not.toContain('auto mode on');
   });
 
@@ -217,15 +207,14 @@ describe('Claude Code adapter (§15.3 / v2.6) — asserts on emitted events only
       remove: (id) => removed.push(id),
     });
 
-    // Phase 1: the ⏺ head + opening of the review prints, then pauses.
+    // Phase 1: the ⏺ head + opening prints, then pauses.
     shadow.write(
       "⏺ Here's the consolidated PR review across all lanes. The committed dev-seed.ts barrel\r\n" +
         '  is untracked, so a clean checkout cannot resolve the module and dev-seed breaks here.\r\n',
     );
     await goQuiet();
 
-    // Phase 2: the review resumes (no new ⏺ — the head has scrolled off), with an indented
-    // sub-bullet, then the spinner and the rule-bounded composer redraw below it.
+    // Phase 2: the review resumes with no new ⏺ (the head has scrolled off), then chrome redraws below.
     const RULE = '─'.repeat(78);
     shadow.write(
       '- Cross-root commit ordering nests a memory-root tx inside the auth-root tx and commits\r\n' +
@@ -249,11 +238,9 @@ describe('Claude Code adapter (§15.3 / v2.6) — asserts on emitted events only
   });
 
   it('merges a report that streams across a quiet pause into one capture, retracting the partial (§15.3 seal-on-witness)', async () => {
-    // Seal-on-witness (§15.3 / v2.22): the head captured at the first quiet pause has no
-    // witness below it (no following content, no turn-complete composer), so it stays
-    // PROVISIONAL — not sealed. When the tail streams in, the same buffer position grows; the
-    // partial is retracted and the fuller capture replaces it. The report paused mid-stream
-    // becomes ONE capture containing both head and conclusion, not two split fragments.
+    // Seal-on-witness (§15.3 / v2.22): a bottom-most unit with no witness below it (no following
+    // content, no turn-complete composer) stays PROVISIONAL; when the tail grows the same position,
+    // the partial is retracted and the fuller capture replaces it — one capture, not two.
     const emitted: Array<ScannerEmission & { id: string }> = [];
     const removed: string[] = [];
     shadow = createShadowModel({ cols: 80, rows: 6, settleMs: 10, quietMs: 40, onStatus: () => {} });
@@ -273,7 +260,7 @@ describe('Claude Code adapter (§15.3 / v2.6) — asserts on emitted events only
       remove: (id) => removed.push(id),
     });
 
-    // Phase 1: the agent prints the head + opening of a prose report, then pauses.
+    // Phase 1: the head + opening of a prose report prints, then pauses.
     shadow.write(
       '⏺ Here is the pull-request review the codebase scan surfaced this pass:\r\n' +
         '\r\n' +
@@ -282,8 +269,7 @@ describe('Claude Code adapter (§15.3 / v2.6) — asserts on emitted events only
     );
     await goQuiet();
 
-    // Phase 2: the agent resumes the same block (no new ⏺) — by now the bullet has
-    // scrolled above the 6-row viewport — then redraws the input box below it.
+    // Phase 2: the same block resumes with no new ⏺ (the bullet has scrolled off), then the input box redraws below.
     shadow.write(
       'The test suite gives good coverage of the new branches and edge cases here.\r\n' +
         'FINAL CONCLUSION: approve the pull request once the network nits are fixed.\r\n' +
@@ -292,10 +278,8 @@ describe('Claude Code adapter (§15.3 / v2.6) — asserts on emitted events only
     await goQuiet();
 
     const reports = emitted.filter((e) => e.type === 'report');
-    // The partial head is retracted, not left as a duplicate fragment (§15.3).
-    expect(removed).toContain('1');
+    expect(removed).toContain('1'); // partial head retracted, not left as a duplicate (§15.3)
     const survivors = reports.filter((r) => !removed.includes(r.id));
-    // One surviving capture holds the whole report — head and conclusion merged, not split.
     const merged = survivors.filter(
       (r) => r.text.includes('authentication flow is sound') && r.text.includes('FINAL CONCLUSION: approve the pull request'),
     );

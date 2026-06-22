@@ -1,6 +1,5 @@
-// App-owned selection model (§7.2–§7.3): first-class application state in absolute
-// buffer coordinates, decoupled from browser focus. Text extracted at gesture time
-// is the durable payload; coordinates are provenance only.
+// App-owned selection model (§7.2–§7.3), decoupled from browser focus. Text extracted at gesture
+// time is the durable payload; coordinates are provenance only.
 
 import type { BufferType, Cell } from '../../shared/ipc';
 

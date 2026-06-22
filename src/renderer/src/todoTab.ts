@@ -1,18 +1,10 @@
-// Todo tab (§24.1 mockup-exact / §16.3 / §16.4 / §24.2.1): a flat, repo-scoped list of
-// todos in the converged mockup's language — a checkbox-circle (.chk) that toggles done,
-// a body (.tx text + .src provenance), and a row-action cluster (reorder ↑/↓, edit, Send,
-// delete) on the right. Owns the todo state (`todos`, `currentRepoKey`, edit/delete render
-// state); the Capture tab reaches it only through the narrow TodoSink surface, so the two
-// tabs share state through one owner, not a scope.
+// Todo tab (§24.1 mockup-exact / §16.3 / §16.4 / §24.2.1): a flat, repo-scoped todo list. Owns the
+// todo state; the Capture tab reaches it only through the narrow TodoSink surface, so the two tabs
+// share state through one owner, not a scope.
 //
-// The §24.2.1 restorations are re-skinned into this card language, not the old chrome:
-//  • Manual add (§16.4): a top add-row → `todoAdd {type:'manual'}`.
-//  • Reorder (§16.4): ↑/↓ buttons (keyboard/a11y path) + HTML5 drag → `todoReorder`. The
-//    full display order is sent so the flat list (done rows inline) stays stable.
-//  • Edit-in-place (§16.3): the better affordance — the `.tx` becomes contenteditable in
-//    place (no textarea-box swap) with Save/Cancel; a mid-edit repo swap is deferred.
-//  • Delete (§16.4): two-step + undoable — × → Confirm/Cancel → a deferred `todoDelete`
-//    behind a Deleted/Undo row for TODO_UNDO_MS, capturing the item's own repoKey.
+// The §24.2.1 restorations: manual add (§16.4), reorder (§16.4: ↑/↓ for keyboard + HTML5 drag),
+// edit-in-place (§16.3: contenteditable, not a textarea swap; a mid-edit repo swap defers), and a
+// two-step undoable delete (§16.4).
 
 import type { MonitorApi, TodoItem, TodoSource, TodoTemplateRef } from '../../shared/ipc';
 import { TODO_UNDO_MS, type DoInject } from './paneActions';
@@ -64,32 +56,28 @@ export function createTodoTab(deps: TodoTabDeps): TodoTab {
   // Build all DOM from the host's document, never the ambient global — keeps the pane
   // relocatable to a separate-process window (UI-STANDARDS §3.3).
   const doc = todoListEl.ownerDocument;
-  const pickerId = `todo-tmpl-picker-${todoSeq++}`; // names the picker (toggle aria-controls → it)
+  const pickerId = `todo-tmpl-picker-${todoSeq++}`; // toggle's aria-controls target
   let currentRepoKey: string | null = null;
   let todos: TodoItem[] = [];
-  // A repo swap is blocked while a todo edit is open (§16.3); the pending key is applied
-  // once the edit resolves so the in-flight edit writes to its own repo.
+  // A repo swap defers while an edit is open so the in-flight edit writes to its own repo (§16.3).
   let editingId: string | null = null;
   let pendingRepoKey: string | null = null;
-  // Delete is a two-step, undoable action (§16.4): × → confirm; confirming hides the row
-  // behind an Undo for TODO_UNDO_MS and only then calls todoDelete. Both are render state
-  // (survive a re-render); the actual delete is deferred so Undo needs no re-add.
+  // The delete is deferred for TODO_UNDO_MS so Undo needs no re-add (§16.4). Both vars are render
+  // state (survive a re-render).
   let confirmingDeleteId: string | null = null;
   const pendingDelete = new Map<string, ReturnType<typeof setTimeout>>();
-  // On-demand template picker (§4.1/§6): the library main offers for the active step (empty when
-  // none — main gates it), its bound default, the user's live selection, and whether the
-  // disclosure is open. Render state, so it survives re-renders (the picker stays open across an add).
+  // On-demand template picker (§4.1/§6): main gates the library to the active step (empty when none).
+  // Render state, so the open disclosure survives a re-render (it stays open across an add).
   let templates: TodoTemplateRef[] = [];
   let templateDefault: string | undefined;
   let templateSelected: string | undefined;
   let templateOpen = false;
-  // Focus is moved to the contextually-correct control after a re-render that destroys the
-  // control the user just activated (edit/delete/confirm), so a keyboard user is never dropped
-  // to <body> (WCAG 2.4.3). Consumed once per render.
+  // Refocus the contextually-correct control after a re-render destroyed the one the user just
+  // activated, so a keyboard user is never dropped to <body> (WCAG 2.4.3). Consumed once per render.
   let focusAfterRender: (() => void) | null = null;
 
   function updateTodoCount(): void {
-    todoCountEl.textContent = String(todos.filter((t) => t.status !== 'done').length); // active + in_progress
+    todoCountEl.textContent = String(todos.filter((t) => t.status !== 'done').length);
   }
 
   /** Outstanding = not done (active or in_progress): the reorderable top run that carries the
@@ -104,10 +92,10 @@ export function createTodoTab(deps: TodoTabDeps): TodoTab {
 
   function refresh(): void {
     if (!currentRepoKey) return;
-    // On a rejected invoke (main restart) keep the current UI; never an unhandled rejection.
+    // A rejected invoke (main restart) keeps the current UI, never an unhandled rejection.
     void monitor.todoList(currentRepoKey).then(setTodos).catch(() => {});
-    // Re-pull the template library too: main gates it to the active step, so it appears/disappears
-    // as the flow advances (the strip fires FLOW_CHANGED, which refreshes us — §4.1).
+    // Re-pull the template library: main gates it to the active step, and the flow strip fires
+    // FLOW_CHANGED (which refreshes us) as the step advances (§4.1).
     void monitor
       .listTemplates(currentRepoKey)
       .then((lib) => {
@@ -132,7 +120,6 @@ export function createTodoTab(deps: TodoTabDeps): TodoTab {
     applyRepoSwap(repoKey);
   }
 
-  // After Save/Cancel: drop edit state and apply any swap that was blocked.
   function resolveEdit(): void {
     editingId = null;
     if (pendingRepoKey !== null) {
@@ -162,7 +149,7 @@ export function createTodoTab(deps: TodoTabDeps): TodoTab {
     if (!currentRepoKey) return;
     let k = 0;
     const ids = ordered.map((t) => (isOutstanding(t) ? newActive[k++].id : t.id));
-    // On a rejected invoke (main restart) keep the current order; never an unhandled rejection.
+    // A rejected invoke (main restart) keeps the current order, never an unhandled rejection.
     void monitor.todoReorder(currentRepoKey, ids).then(setTodos).catch(() => {});
   }
 
@@ -186,7 +173,6 @@ export function createTodoTab(deps: TodoTabDeps): TodoTab {
     const actions = doc.createElement('div');
     actions.className = 'todo-actions';
 
-    // Editing: the `.tx` is contenteditable in place; the cluster is Save/Cancel only.
     if (t.id === editingId) {
       actions.append(
         actionButton('todo-save pill sm signal', 'Save', 'Save todo', () => void commitEdit(t)),
@@ -197,8 +183,8 @@ export function createTodoTab(deps: TodoTabDeps): TodoTab {
       return actions;
     }
 
-    // The cluster is rendered for every row and only DISABLED when done — so completing a todo
-    // never changes the row's width/contents (operator decision). Done rows keep Delete usable.
+    // The cluster is rendered for every row and only DISABLED when done, so completing a todo never
+    // changes the row's width (operator decision); Delete stays usable on done rows.
     const outstanding = isOutstanding(t);
     const active = activeOf(ordered);
     const ai = active.findIndex((x) => x.id === t.id);
@@ -211,10 +197,8 @@ export function createTodoTab(deps: TodoTabDeps): TodoTab {
       rerenderFocusing(t.id, '.tx');
     });
     edit.disabled = !outstanding;
-    // Send pastes the todo into the agent's input WITHOUT submitting (§9.3 submit:false /
-    // §16.2 Insert), then moves focus to the terminal so the user can edit or augment it before
-    // submitting themselves (§24.2.1). It also marks the todo in_progress (mixed) — the sole entry
-    // into that state (§16.3) — so the list shows what's been handed to the agent.
+    // Send pastes into the agent's input WITHOUT submitting (§9.3 submit:false / §16.2 Insert) and
+    // marks the todo in_progress — the sole entry into that state (§16.3).
     const send = actionButton('todo-send pill sm signal', 'Send', 'Send todo to agent', () => {
       doInject(t.text, false);
       if (t.status !== 'in_progress') void monitor.todoSetStatus(t.repoKey, t.id, 'in_progress').then(setTodos).catch(() => {});
@@ -228,8 +212,8 @@ export function createTodoTab(deps: TodoTabDeps): TodoTab {
     return actions;
   }
 
-  /** Two-step delete confirmation, stacked BELOW the action cluster (a full-width row) so showing
-   *  it never changes the cluster's width — the row just grows a line (§16.4, operator decision). */
+  /** Two-step delete confirmation, stacked BELOW the action cluster so showing it never changes the
+   *  cluster's width — the row just grows a line (§16.4, operator decision). */
   function renderDeleteBar(t: TodoItem): HTMLElement {
     const bar = doc.createElement('div');
     bar.className = 'todo-delete-bar';
@@ -270,7 +254,6 @@ export function createTodoTab(deps: TodoTabDeps): TodoTab {
     return todoListEl.querySelector<HTMLElement>(`.todo[data-todo-id="${id}"]`);
   }
 
-  // A confirmed-but-not-yet-committed delete: the row is an Undo affordance for the window.
   function renderPendingDelete(t: TodoItem): HTMLElement {
     const row = doc.createElement('div');
     row.className = 'todo pending-delete';
@@ -285,13 +268,13 @@ export function createTodoTab(deps: TodoTabDeps): TodoTab {
 
   function beginPendingDelete(t: TodoItem): void {
     confirmingDeleteId = null;
-    // Capture the item's own repo (t.repoKey), not the live cwd, so a mid-window swap still
-    // deletes from the right list (§16.3); the delete fires only when the window elapses.
+    // The delete targets the item's own repo (t.repoKey), not the live cwd, so a mid-window swap
+    // still deletes from the right list (§16.3).
     pendingDelete.set(
       t.id,
       setTimeout(() => {
         pendingDelete.delete(t.id);
-        // On a rejected invoke (main restart) keep the current list; never an unhandled rejection.
+        // A rejected invoke (main restart) keeps the current list, never an unhandled rejection.
         void monitor.todoDelete(t.repoKey, t.id).then(setTodos).catch(() => {});
       }, TODO_UNDO_MS),
     );
@@ -317,7 +300,7 @@ export function createTodoTab(deps: TodoTabDeps): TodoTab {
     const chk = doc.createElement('button');
     chk.className = 'chk';
     chk.setAttribute('role', 'checkbox');
-    // Tri-state (§16.3): done → true, in_progress → mixed, active → false.
+    // Tri-state checkbox (§16.3).
     chk.setAttribute('aria-checked', done ? 'true' : t.status === 'in_progress' ? 'mixed' : 'false');
     chk.setAttribute('aria-label', done ? 'Mark todo active' : 'Mark todo done');
     chk.addEventListener('click', async () => {
@@ -335,9 +318,9 @@ export function createTodoTab(deps: TodoTabDeps): TodoTab {
     tx.textContent = t.text;
     if (t.id === editingId) {
       tx.contentEditable = 'true';
-      tx.tabIndex = 0; // make it programmatically focusable (a11y focus move on enter-edit)
+      tx.tabIndex = 0; // focusable so enter-edit can move focus here (a11y)
       tx.classList.add('editing');
-      // Name the in-place editor for assistive tech (the ✎ that named the action is gone).
+      // Name the in-place editor for AT — the ✎ that named the action is gone in edit mode.
       tx.setAttribute('role', 'textbox');
       tx.setAttribute('aria-label', 'Edit todo text');
       tx.setAttribute('aria-multiline', 'true');
@@ -347,8 +330,7 @@ export function createTodoTab(deps: TodoTabDeps): TodoTab {
           void commitEdit(t, row);
         } else if (e.key === 'Escape') {
           e.preventDefault();
-          // Re-render with a focus target (the row's edit button) so Escape-cancel doesn't drop
-          // focus to <body> — matches the Cancel button's behavior (WCAG 2.4.3, §16.4).
+          // Escape-cancel restores focus to the row's edit button, not <body> (WCAG 2.4.3, §16.4).
           rerenderFocusingAfterResolve(t.id, () => resolveEdit());
         }
       });
@@ -363,10 +345,9 @@ export function createTodoTab(deps: TodoTabDeps): TodoTab {
     return row;
   }
 
-  // The relocated template control (§4.1/§9.1): a collapsed "From template ▾" disclosure that
-  // reveals a named picker + Add — so the resting composer is just the manual-add field (anti-
-  // clutter). Rendered only when main offered templates (it gates them to an active step), so the
-  // toggle's mere presence means "a step is active and has templates."
+  // The relocated template control (§4.1/§9.1): a collapsed disclosure, so the resting composer is
+  // just the manual-add field. Rendered only when main offered templates (it gates them to an active
+  // step), so the toggle's mere presence means "a step is active and has templates."
   function renderTemplatePicker(): void {
     if (templates.length === 0) return;
 
@@ -425,9 +406,8 @@ export function createTodoTab(deps: TodoTabDeps): TodoTab {
       add.addEventListener('click', () => {
         if (!currentRepoKey) return;
         add.disabled = true;
-        // Instantiate the chosen template; main silently skips already-present items. Keep the
-        // picker open (operator decision) — setTodos re-renders and the disclosure persists. On a
-        // rejected invoke (main restart) re-enable the button and leave the list unchanged.
+        // Main silently skips already-present items. The picker stays open (operator decision). A
+        // rejected invoke (main restart) re-enables the button and leaves the list unchanged.
         void monitor
           .instantiateTemplate(currentRepoKey, select.value)
           .then(setTodos)
@@ -453,7 +433,6 @@ export function createTodoTab(deps: TodoTabDeps): TodoTab {
       todoListEl.appendChild(notice);
     }
 
-    // Manual add (§16.4): a hand-write row → todoAdd {type:'manual'}.
     const addRow = doc.createElement('div');
     addRow.className = 'todo-add';
     const input = doc.createElement('textarea');
@@ -504,9 +483,8 @@ export function createTodoTab(deps: TodoTabDeps): TodoTab {
     if (focus) focus();
   }
 
-  // HTML5 drag reorder of the active rows (§16.4); the ↑/↓ buttons are the keyboard/a11y
-  // path. The reordered ids persist via todo:reorder. Reorders within the active run only, so
-  // dropping near an inline done row never shoves it (§16.4).
+  // HTML5 drag reorder of the active rows (§16.4); ↑/↓ are the keyboard path. Reorders within the
+  // active run only, so dropping near an inline done row never shoves it.
   function wireDragReorder(list: HTMLElement, ordered: TodoItem[]): void {
     let dragId: string | null = null;
     list.addEventListener('dragstart', (e) => {
@@ -526,8 +504,8 @@ export function createTodoTab(deps: TodoTabDeps): TodoTab {
     });
   }
 
-  // Render the panel immediately so the manual-add row is present from mount, before any repo
-  // key is known (refresh() is repo-gated; without this the Todo tab is blank until OSC 7).
+  // Render immediately so the add row shows from mount: refresh() is repo-gated, so without this
+  // the tab is blank until the first OSC 7.
   renderTodos();
 
   return {

@@ -1,9 +1,7 @@
-// Accessible show/hide (spec §22.2 — accessibility) — the one place the app hides content. Hiding always
-// removes the subtree from layout, the tab order, AND the accessibility tree, so a hidden panel can
-// never trap keyboard focus. Paired with the CSS enforcement in styles.css:
-//   [hidden]      { display: none !important; }   // robust against any competing `display` rule
-//   .is-collapsed { visibility: hidden; }          // inert, but still able to run a CSS transition
-// Never hide focusable content with display/transform/opacity/width tricks that leave it tabbable.
+// Accessible show/hide (§22.2) — the one place the app hides content, so a hidden panel never traps
+// focus. Paired with the CSS enforcement in styles.css (`[hidden]{display:none!important}`,
+// `.is-collapsed{visibility:hidden}`); never hide focusable content with display/opacity/width tricks
+// that leave it tabbable.
 
 /** Fully show or remove `el` (display:none when hidden). The default, non-animated show/hide. */
 export function setShown(el: HTMLElement, shown: boolean): void {

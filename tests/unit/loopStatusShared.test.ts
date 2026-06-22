@@ -1,10 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { isHumanNeededStatus } from '../../src/shared/loopStatus';
 
-// §24.2.3 T4 / §19.1 — the shared human-needed family predicate is the SINGLE definition of "the loop
-// is blocked awaiting a human", bound by both the renderer presentation and the main classifier so
-// they cannot drift. Behavior under test = whether a status is in the family: the awaiting-human-*
-// statuses and impasse are human-needed; the terminal hand-off and in-motion statuses are not.
+// §24.2.3 T4 / §19.1 — the shared human-needed predicate is the SINGLE definition bound by both the
+// renderer presentation and the main classifier; if it drifts, the two disagree on what blocks.
 
 describe('isHumanNeededStatus (shared family, §24.2.3 T4)', () => {
   it('counts the awaiting-human-* family as human-needed', () => {

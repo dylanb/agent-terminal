@@ -1,9 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { isRecord } from '../../src/main/yamlRecord';
 
-// The shared yaml-parse guard used by every main-process LoopDef/flow/state parser: a value is a
-// usable record iff it is a non-null, non-array object. Arrays must be excluded because js-yaml
-// loads a `- a\n- b` document as an array, which would otherwise pass a bare `typeof === 'object'`.
+// Arrays must be rejected because js-yaml loads a `- a\n- b` document as an array, which would
+// otherwise pass a bare `typeof === 'object'` guard.
 describe('isRecord (shared yaml record guard)', () => {
   it('accepts a plain object', () => {
     expect(isRecord({})).toBe(true);

@@ -3,10 +3,9 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createShell, type Shell } from '../../src/renderer/src/shell';
 import { revealLoopReadout } from '../../src/renderer/src/loopReveal';
 
-// §24.2.3 T4 — revealLoopReadout is the renderer's response to the OS-notification activation. It binds
-// to the shipped Shell seams; these drive a REAL shell over the app DOM and assert the observable
-// landing: viewer-fullscreen exited, the Terminal view active, the docked loop read-out open. The cue
-// can never cry "open the gate" only to leave the user on the wrong view or behind hidden chrome.
+// §24.2.3 T4 — revealLoopReadout is the renderer's response to OS-notification activation. Drives a
+// REAL shell and asserts the landing (viewer-fullscreen exited, Terminal view active, loop read-out
+// open): the cue must never open the gate yet leave the user on the wrong view or behind hidden chrome.
 
 const APP_HTML = `
 <div class="app" id="app">

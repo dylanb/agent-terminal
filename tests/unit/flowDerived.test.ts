@@ -2,10 +2,8 @@ import { describe, it, expect } from 'vitest';
 import { deriveFlowView } from '../../src/main/flow';
 import type { FlowStateView, TodoItem, TodoStatus } from '../../src/shared/ipc';
 
-// §24.2.2 S5 — the in-progress status is DERIVED from live signals: agent activity (§8.3) + todo
-// completion (n/m done) + gate readiness (every todo done). It must be a PURE function of its
-// three inputs (flow-state, todos, activity), so the same inputs always yield the same view and
-// nothing is mutated. Tests assert only the returned view (the public contract).
+// §24.2.2 S5 — in-progress status is derived from live signals: agent activity (§8.3) + todo
+// completion + gate readiness. Pure function of (flow-state, todos, activity).
 
 const todo = (id: string, status: TodoStatus): TodoItem => ({
   id,

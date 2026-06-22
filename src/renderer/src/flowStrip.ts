@@ -1,18 +1,8 @@
 // Flow status strip (§22.3 / §24.2.2) — a placement-agnostic organism (UI-STANDARDS §1.2)
-// that renders with 100% fidelity to the §24.1 mockup (design/shell/converged.html): a
-// `Flow — step N / M` section header and a vertical station rail (`.flow.vert` → `.stn` with
-// circle `.o` + name `.nm`, `.seg` connectors between). The real step is bracketed by two
-// synthetic stations — "Not started" (active before the flow starts) and "Completed" (active
-// once it finishes) — so the rail is always [Not started] · <step> · [Completed]. Below it
-// sits one control following the lifecycle — Start → Advance → Restart (re-running the step).
-// A load failure (§18.1) has no mockup counterpart; by decision it renders as a single
-// `--danger` text line under the header, with no station and no control.
-//
-// It follows the terminal's cwd, mirroring the repo-scoped todo list (§16.3): it holds the
-// current repoKey, re-pulls/re-renders on `onRepoChanged`, and threads that key into every
-// window.flow call. Before a repo key is known it renders nothing. It reaches for nothing: the
-// flow lifecycle is injected as `deps` (the window.flow IPC seam), each call returning the
-// resulting state so the strip re-renders from the response.
+// rendering with 100% fidelity to the §24.1 mockup (design/shell/converged.html). A load failure
+// has no mockup counterpart; by decision it renders as a single `--danger` text line, no station,
+// no control (§18.1). It follows the terminal's cwd, mirroring the repo-scoped todo list (§16.3):
+// before a repo key is known it renders nothing.
 
 import type { FlowApi, FlowStateView, FlowStatus, FlowLoopView, FlowPrompt } from '../../shared/ipc';
 import { FLOW_CHANGED_EVENT } from './paneActions';
@@ -32,11 +22,10 @@ const CONTROL: Record<FlowStatus, { label: string; act: Act } | null> = {
 
 /** The rail brackets the real steps with two synthetic stations: "Not started" (active before the
  *  flow starts) and "Completed" (active once it finishes), so the rail reads [Not started] · step₁ ·
- *  … · stepₙ · [Completed] (§24.2.3 T1 generalized the bookends across N real steps). Station states
- *  are a pure function of the current step's `position` and the lifecycle status. */
+ *  … · stepₙ · [Completed] (§24.2.3 T1 generalized the bookends across N real steps). */
 function railStations(state: FlowStateView): Array<{ name: string; st: StationState }> {
   const status = state.status as Exclude<FlowStatus, 'error'>;
-  const currentIndex = state.position - 1; // 0-based index of the current real step
+  const currentIndex = state.position - 1;
   const notStarted: StationState = status === 'not_started' ? 'active' : 'done';
   const steps: Array<{ name: string; st: StationState }> = state.steps.map((name, i) => {
     const st: StationState =
@@ -60,6 +49,9 @@ export interface FlowStrip {
   refresh(): Promise<void>;
   /** The terminal's repo changed (cd across a key boundary, §16.3): re-scope and re-pull. */
   onRepoChanged(repoKey: string | null): void;
+  /** Focus the loop read-out if one is shown, returning whether it did (so the root can fall back),
+   *  so the root needn't reach into the strip's markup (WCAG 2.4.3). */
+  focusLoopReadout(): boolean;
   /** Tear down: unsubscribe the flow:onStateChanged push and clear the host (UI-STANDARDS clean teardown). */
   dispose(): void;
 }
@@ -152,19 +144,16 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
       runAct(act, key)
         .then((view) => {
           // The cwd may have moved while the transition was in flight; the awaited view belongs to
-          // `key`, so drop it (don't repaint or open a prompt for the prior repo) — mirrors emitPrompt.
+          // `key`, so drop it rather than repaint the now-current repo (mirrors emitPrompt).
           if (repoKey !== key) return;
-          // Re-render from the response, surfacing any one-shot `notice` (§19.3 refusal) and routing a
-          // step-entry input prompt to the modal (§24.2.3 T3) — both ride the transition, not state().
           applyTransition(view);
-          // The active-step status changed, so the todo overlay's on-demand template picker may
-          // appear/disappear — signal it to re-pull (the decoupled contract, §4.1/§9.1).
+          // Signal the todo overlay to re-pull: its template picker is gated to the active step,
+          // which this transition may have changed (decoupled contract, §4.1/§9.1).
           window.dispatchEvent(new CustomEvent(FLOW_CHANGED_EVENT));
         })
         .catch(() => void refresh())
-        // If both the action and refresh()'s state() reject, refresh keeps the last UI without
-        // repainting this button — re-enable it so retry is possible. Harmless on success: the
-        // replaceChildren repaint has already detached this button.
+        // Re-enable so retry is possible if both the action and refresh()'s state() reject (no
+        // repaint detached this button). Harmless on success: the repaint already replaced it.
         .finally(() => {
           button.disabled = false;
         });
@@ -173,8 +162,8 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
   }
 
   function render(state: FlowStateView): void {
-    // A background push repaints the whole rail; if the keyboard user was on the Loop read-out, carry
-    // their focus across the rebuild rather than dropping it to <body> (WCAG 2.4.3).
+    // Carry focus across the rebuild if the keyboard user was on the Loop read-out, rather than
+    // dropping it to <body> (WCAG 2.4.3).
     const keepLoopFocus = doc.activeElement instanceof HTMLElement && doc.activeElement.classList.contains('loopstat') && host.contains(doc.activeElement);
     host.replaceChildren();
 
@@ -188,16 +177,12 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
       return;
     }
 
-    // The rail brackets the real steps with synthetic bookends, so its active station — and the
-    // header position — walks the synthetic-inclusive sequence (e.g. 1/3 → 2/3 → 3/3 for one step,
-    // 1/5 → … → 5/5 for three).
+    // The header position counts the synthetic bookends too (e.g. 1/3 → 3/3 for one real step).
     const railStn = railStations(state);
     const activeIndex = railStn.findIndex((s) => s.st === 'active');
     host.append(header(doc, `Flow — step ${activeIndex + 1} / ${railStn.length}`));
 
-    // The station rail (§24.1 mockup): a vertical `.flow` of `.stn` (circle `.o` + name `.nm`),
-    // `.seg` connectors between (dashed `.future` ahead of a not-yet-reached station), exactly
-    // as design/shell/converged.html.
+    // The station rail, 100%-fidelity to the §24.1 mockup (design/shell/converged.html).
     const rail = doc.createElement('div');
     rail.className = 'flow vert';
     railStn.forEach((s, i) => {
@@ -218,18 +203,17 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
     });
     host.append(rail);
 
-    // A loop step mirrors its agent-loop state.yaml read-only (§24.2.3 T2): the rail shows a compact
-    // read-out that opens the docked panel, and the full mirror is handed to that panel via onLoopState.
-    // The loop's own status is the live signal, so it supersedes the todo-derived line (todos don't
-    // drive a loop). null clears + closes the panel on a non-loop step.
+    // A loop step mirrors its agent-loop state.yaml read-only (§24.2.3 T2): the full mirror is handed
+    // to the docked panel via onLoopState (null clears + closes it). The loop's own status supersedes
+    // the todo-derived line below.
     if (state.loop) {
       host.append(loopReadout(doc, state.loop, deps.loopPanelId));
       if (keepLoopFocus) host.querySelector<HTMLElement>('.loopstat')?.focus();
     }
     deps.onLoopState?.(state.loop ?? null, state.stepName);
 
-    // Live derived status (§24.2.2 S5): n/m todos done + the §8.3 agent activity, recomputed by
-    // main and pushed via flow:onStateChanged. Present only while the step is in progress.
+    // Live derived status (§24.2.2 S5): n/m todos done + the §8.3 agent activity, recomputed by main
+    // and pushed via flow:onStateChanged.
     if (state.status === 'in_progress' && state.derived && !state.loop) {
       const d = state.derived;
       const line = doc.createElement('div');
@@ -241,13 +225,13 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
     const control = CONTROL[state.status];
     if (!control) return;
 
-    // A completed (manual-advanced) step can always be undone back to in-progress — taking back the
-    // advance WITHOUT re-running the step's entry actions (distinct from Restart, which re-runs them).
+    // Undo takes the advance back to in-progress WITHOUT re-running the step's entry actions —
+    // distinct from Restart, which re-runs them.
     if (state.status === 'done') host.append(controlButton('Undo', 'undo'));
     host.append(controlButton(control.label, control.act));
 
-    // The §19.3 busy refusal (and any other transient notice) rides the start/restart response
-    // only; a later state() re-pull carries none, so the line self-clears.
+    // The §19.3 busy refusal (and any transient notice) rides the transition response only; a later
+    // state() re-pull carries none, so the line self-clears.
     if (state.notice) {
       const notice = doc.createElement('div');
       notice.className = 'flow-notice';
@@ -263,14 +247,12 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
   function emitPrompt(state: FlowStateView): void {
     const boundRepo = repoKey; // bind the submit to the repo the prompt was raised for
     deps.onPrompt?.(state.prompt ?? null, state.stepName, (values) => {
-      // The cwd may move while the (blocking) modal is open; a stale submit must not land the value
-      // on the now-current repo — drop it rather than write to the wrong flow.
+      // A stale submit (cwd moved while the modal was open) must not land on the now-current repo.
       if (boundRepo === null || repoKey !== boundRepo) return;
       deps
         .provideInput(boundRepo, values)
         .then((view) => {
-          // The cwd may also move WHILE provideInput is in flight; the awaited view belongs to
-          // boundRepo, so drop it if we've since moved (mirrors controlButton's post-await guard).
+          // The cwd may also move while provideInput is in flight (mirrors controlButton's guard).
           if (repoKey !== boundRepo) return;
           applyTransition(view);
         })
@@ -283,9 +265,8 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
    *  the modal. */
   function applyTransition(view: FlowStateView): void {
     render(view);
-    // render() rebuilt the rail (replaceChildren), detaching the just-clicked control so focus fell
-    // to <body>. Before the prompt opens, re-anchor focus on a real control so the modal captures a
-    // stable opener and restores focus there on close, not <body> (WCAG 2.4.3).
+    // The repaint detached the just-clicked control, dropping focus to <body>. Re-anchor it on a
+    // real control before the prompt opens so the modal restores focus there on close (WCAG 2.4.3).
     if (view.prompt && !host.contains(doc.activeElement)) {
       host.querySelector<HTMLElement>('.flow-control, .flow-undo')?.focus();
     }
@@ -294,11 +275,11 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
 
   async function refresh(): Promise<void> {
     if (repoKey === null) {
-      host.replaceChildren(); // no repo yet → nothing to show (the strip follows the cwd)
+      host.replaceChildren();
       return;
     }
-    // A state() IPC rejection must not escape as an unhandled rejection (callers fire `void refresh()`);
-    // swallow it and keep the last rendered rail rather than clearing to a blank pane (§18.1).
+    // A state() IPC rejection keeps the last rendered rail rather than escaping as an unhandled
+    // rejection or clearing to a blank pane (callers fire `void refresh()`, §18.1).
     try {
       render(await deps.state(repoKey));
     } catch {
@@ -306,12 +287,11 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
     }
   }
 
-  // The push path (§24.2.2 S5): main fires flow:onStateChanged when a flow-relevant input changed
-  // (a todo mutated, the agent flipped active/quiet); the strip re-pulls its own repo's state so the
-  // derived n/m + activity move with no user action. Lives for the strip's lifetime (app-long).
+  // The push path (§24.2.2 S5): main fires flow:onStateChanged when a flow-relevant input changed,
+  // so the derived n/m + activity move with no user action.
   let disposed = false;
-  // Unsubscribe stops future pushes, but a push already dispatched (or held by a stale ref) must not
-  // repaint a disposed strip — guard the handler too (UI-STANDARDS clean teardown).
+  // A push already dispatched (or held by a stale ref) must not repaint a disposed strip — guard
+  // the handler as well as unsubscribing (UI-STANDARDS clean teardown).
   const unsubscribe = deps.onStateChanged(() => {
     if (disposed) return;
     void refresh();
@@ -322,6 +302,11 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
     onRepoChanged(key) {
       repoKey = key;
       void refresh();
+    },
+    focusLoopReadout() {
+      const el = host.querySelector<HTMLElement>('.loopstat');
+      el?.focus();
+      return el !== null;
     },
     dispose() {
       disposed = true;

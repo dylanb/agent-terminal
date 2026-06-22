@@ -1,8 +1,5 @@
-// Artifact discovery (§20.1 / D8): turn the session's current directory into the viewer's
-// file tree. In a git repo the curated default is working-tree changes ∪ the agent-loop
-// directory, with a whole-repo scope on demand and per-file provenance tags; outside a repo
-// it is simply the cwd's directory tree. Real git + real fs — the PR provenance tag and the
-// LoopDef `artifacts:` declarations wait on the agent-loop bridge (§24.2).
+// Artifact discovery (§20.1 / D8): the session's cwd as the viewer's file tree.
+// TODO(agent-loop bridge, §24.2): PR provenance tag + LoopDef `artifacts:` declarations.
 
 import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from 'node:fs';
@@ -56,14 +53,14 @@ function gitRootOf(cwd: string, git: (args: string[], cwd: string) => string): s
 function changedFiles(root: string, git: (args: string[], cwd: string) => string): Set<string> {
   const out = git(['status', '--porcelain', '-z'], root);
   const set = new Set<string>();
-  // NUL-separated; a rename record is "R  old\0new", so an R/C status pairs with the next field.
+  // git -z rename/copy record is "R  old\0new": the R/C entry pairs with the next NUL field.
   const parts = out.split(NUL).filter((p) => p.length > 0);
   for (let i = 0; i < parts.length; i++) {
     const entry = parts[i];
     const status = entry.slice(0, 2);
     let file = entry.slice(3);
     if (status[0] === 'R' || status[0] === 'C') {
-      file = parts[++i] ?? file; // the destination path is the next NUL field
+      file = parts[++i] ?? file;
     }
     if (file) set.add(file);
   }
@@ -96,13 +93,11 @@ function walkDir(dir: string, base = dir, acc: string[] = []): string[] {
 function loopFiles(root: string): Set<string> {
   const loopDir = path.join(root, '.agent-loop');
   if (!existsSync(loopDir)) return new Set();
-  // walkDir yields path.sep-separated paths; the provenance sets are keyed by the POSIX-normalized
-  // paths buildTree produces (and changed/tracked come from git, always '/'). Normalize so loop
-  // membership matches on Windows too, where path.sep is '\\' (§20.1).
+  // MUST POSIX-normalize: provenance is matched against buildTree's '/'-keyed paths, so on Windows
+  // (path.sep '\\') unnormalized loop paths would silently never match (§20.1).
   return new Set(walkDir(loopDir, root).map((p) => p.split(path.sep).join('/')));
 }
 
-/** Build a hierarchical node tree from tree-relative file paths; dirs first, then name. */
 function buildTree(relPaths: string[], prov: (rel: string) => ArtifactProvenance[] | undefined): ArtifactNode[] {
   const root: ArtifactNode[] = [];
   const dirIndex = new Map<string, ArtifactNode[]>([['', root]]);
@@ -133,8 +128,8 @@ function buildTree(relPaths: string[], prov: (rel: string) => ArtifactProvenance
   return root;
 }
 
-/** A valid, empty tree (§20.1) — the viewer:tree fallback for an untrusted/invalid request,
- *  so the `Promise<ArtifactTree>` contract holds (returning null would crash the renderer). */
+/** The viewer:tree fallback for an invalid request: an empty tree, never null — the renderer
+ *  consumes `ArtifactTree` and would crash on null (§20.1). */
 export function emptyTree(root: string, scope: ArtifactScope = 'curated'): ArtifactTree {
   return { root, isRepo: false, scope, nodes: [] };
 }
@@ -170,7 +165,7 @@ function addedLinesFromDiff(diff: string): number[] {
     const m = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/.exec(row);
     if (!m) continue;
     const start = Number(m[1]);
-    const count = m[2] === undefined ? 1 : Number(m[2]); // a `+c,0` (pure deletion) marks nothing
+    const count = m[2] === undefined ? 1 : Number(m[2]); // `+c,0` (pure deletion) marks nothing
     for (let i = 0; i < count; i++) lines.push(start + i);
   }
   return lines;
@@ -184,9 +179,9 @@ function changedLinesOf(root: string, rel: string, body: string, git: (args: str
   } catch {
     return [];
   }
-  if (status.length === 0) return []; // matches HEAD and index → nothing to mark
+  if (status.length === 0) return [];
   if (status.startsWith('??')) {
-    // Untracked: HEAD has no version, so every content line is new. `git diff HEAD` would skip it.
+    // Untracked: `git diff HEAD` skips it, so mark every content line as new.
     const content = body.endsWith('\n') ? body.slice(0, -1) : body;
     return content === '' ? [] : content.split('\n').map((_, i) => i + 1);
   }
@@ -197,15 +192,14 @@ function changedLinesOf(root: string, rel: string, body: string, git: (args: str
   }
 }
 
-/** True if `target` is `base` or lives under it (§20.2 escape guard). path.relative-based, so the
- *  filesystem root (`base === '/'`, where `base + sep` would be '//') and Windows cross-drive paths
- *  resolve correctly — a startsWith(base + sep) check mishandles both. */
+/** True if `target` is `base` or lives under it (§20.2 escape guard). MUST stay path.relative-based,
+ *  not startsWith(base + sep): the latter mishandles the filesystem root and Windows cross-drive paths. */
 export function pathWithin(base: string, target: string): boolean {
   if (target === base) return true;
   const rel = path.relative(base, target);
-  if (rel === '') return true; // identical after normalization
-  if (path.isAbsolute(rel)) return false; // different root/drive (Windows) → escape
-  // Only a leading `..` SEGMENT is an escape; a dir whose name merely starts with ".." is in-root.
+  if (rel === '') return true;
+  if (path.isAbsolute(rel)) return false; // different root/drive → escape
+  // Only a leading `..` SEGMENT escapes; a dir whose name merely starts with ".." is in-root.
   return rel.split(path.sep)[0] !== '..';
 }
 
@@ -214,22 +208,18 @@ export function readArtifact(cwd: string, relPath: string, deps: DiscoverDeps = 
   const gitRoot = gitRootOf(cwd, git);
   const root = gitRoot ?? path.resolve(cwd);
   const abs = path.resolve(root, relPath);
-  // Escape guard: the resolved path must stay within the discovery root (§20.2).
-  if (!pathWithin(root, abs)) return null;
+  if (!pathWithin(root, abs)) return null; // §20.2 escape guard
   try {
-    // Resolve symlinks too: an in-root link pointing outside passes the lexical guard above,
-    // so re-check the real path against the real root before reading (§20.2).
+    // §20.2: re-check the realpath (an in-root symlink can point out), then stat/read the validated
+    // real path — not abs — so a post-check target swap can't bypass the guard (TOCTOU). ext/name
+    // stay on relPath/abs (pure string ops, no fs) to match the tree label the user clicked.
     const real = realpathSync(abs);
     const realRoot = realpathSync(root);
     if (!pathWithin(realRoot, real)) return null;
-    // Stat/read the VALIDATED real path, not the original (possibly symlink) abs — otherwise a
-    // target swap between the realpath check and the read could bypass the guard (TOCTOU, §20.2).
-    // ext/name below are pure string ops on the user-navigated path (no fs access → no TOCTOU), and
-    // keeping them on relPath/abs matches the tree label the user clicked.
     const st = statSync(real);
     if (!st.isFile() || st.size > MAX_FILE_BYTES) return null;
     const body = readFileSync(real, 'utf8');
-    if (body.includes(NUL)) return null; // binary
+    if (body.includes(NUL)) return null;
     const ext = path.extname(abs).toLowerCase();
     const kind: ViewerFileKind = ext === '.md' || ext === '.markdown' ? 'markdown' : 'code';
     const rel = relPath.split(path.sep).join('/');
