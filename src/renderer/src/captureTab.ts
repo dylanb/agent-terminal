@@ -275,9 +275,11 @@ export function createCaptureTab(deps: CaptureTabDeps): CaptureTab {
 
   // ---- Bulk triage (§16.2 / §24.2.1) ----
 
+  // Already-processed chunks stay checked-but-disabled during the undo window; they are excluded
+  // so a fresh Add to todo never re-adds a prior batch (§16.2).
   function checkedChunks(): { id: string; text: string; seq: number }[] {
     return Array.from(blocksEl.querySelectorAll<HTMLInputElement>('.chunk-check'))
-      .filter((c) => c.checked)
+      .filter((c) => c.checked && !c.disabled)
       .map((c) => ({ id: c.dataset.chunkId!, ...chunkRegistry.get(c.dataset.chunkId!)! }))
       .sort((a, b) => a.seq - b.seq);
   }
@@ -297,62 +299,74 @@ export function createCaptureTab(deps: CaptureTabDeps): CaptureTab {
   }
 
   function refreshSelectionUI(): void {
-    const any = blocksEl.querySelector('.chunk-check:checked') !== null;
-    addSelectedBtn.disabled = !any || undoPending;
+    const any = blocksEl.querySelector('.chunk-check:checked:not(:disabled)') !== null;
+    addSelectedBtn.disabled = !any;
     dismissSelectedBtn.disabled = !any;
   }
 
-  // One undoable todo from all checked chunks (§16.2). The chunks are dismissed only when the
-  // undo window elapses (commit); Undo deletes the just-added todo and leaves the chunks.
+  // Commit the pending batch: dismiss its source chunks (so replay won't resurrect them) and end
+  // the undo window. Fired by the elapsed timer, or eagerly when a new add supersedes it (§16.2).
+  function commitPending(): void {
+    for (const id of processedIds) {
+      monitor.dismiss(id);
+      removeChunk(id);
+    }
+    endUndo();
+  }
+
+  // One undoable todo from all freshly-checked chunks (§16.2). The chunks are dismissed only when
+  // the undo window elapses (commit); Undo deletes the just-added todo and leaves the chunks. A new
+  // add finalizes any prior still-undoable batch, so the undo applies only to the latest add.
+  let adding = false;
   async function onAddSelected(): Promise<void> {
-    if (undoPending || !todoSink.currentRepoKey()) return;
+    if (adding || !todoSink.currentRepoKey()) return;
     const selected = checkedChunks();
     if (selected.length === 0) return;
-    const ids = selected.map((c) => c.id);
-    undoPending = true;
-    processedIds = ids;
-    setProcessed(ids, true);
-    refreshSelectionUI();
-    // A rejected invoke (main restart) is treated the same as a silent failure below — never an
-    // unhandled rejection, and the processed cue is cleared via endUndo().
-    let added: TodoItem | null = null;
+    adding = true;
     try {
-      added = await todoSink.addFromCapture(selected.map((c) => c.text).join('\n\n'), { type: 'capture' });
-    } catch {
-      added = null;
-    }
-    // The add failed (repo went away mid-flight, or IPC down): don't arm the commit, or the
-    // source chunks would be dismissed with nothing added to the todo list.
-    if (!added) {
-      endUndo();
-      return;
-    }
-
-    undoSlot.replaceChildren();
-    const note = doc.createElement('span');
-    note.className = 'added-note';
-    note.textContent = 'Added to todo';
-    const undo = doc.createElement('button');
-    undo.className = 'undo-add-to-todo linkbtn';
-    undo.textContent = 'Undo';
-    undoTimer = setTimeout(() => {
-      for (const id of ids) {
-        monitor.dismiss(id);
-        removeChunk(id);
-      }
-      endUndo();
-    }, TODO_UNDO_MS);
-    undo.addEventListener('click', async () => {
-      if (undoTimer) { clearTimeout(undoTimer); undoTimer = null; } // stop the commit before awaiting
+      if (undoPending) commitPending();
+      const ids = selected.map((c) => c.id);
+      undoPending = true;
+      processedIds = ids;
+      setProcessed(ids, true);
+      refreshSelectionUI();
+      // A rejected invoke (main restart) is treated the same as a silent failure below — never an
+      // unhandled rejection, and the processed cue is cleared via endUndo().
+      let added: TodoItem | null = null;
       try {
-        if (added) await todoSink.deleteTodo(added.repoKey, added.id); // chunks stay; nothing dismissed
+        added = await todoSink.addFromCapture(selected.map((c) => c.text).join('\n\n'), { type: 'capture' });
       } catch {
-        // IPC failure (main restart): nothing dismissed; still end the window below.
-      } finally {
-        endUndo(); // always end the window, or processed chunks stay disabled forever
+        added = null;
       }
-    });
-    undoSlot.append(note, undo);
+      // The add failed (repo went away mid-flight, or IPC down): don't arm the commit, or the
+      // source chunks would be dismissed with nothing added to the todo list.
+      if (!added) {
+        endUndo();
+        return;
+      }
+
+      undoSlot.replaceChildren();
+      const note = doc.createElement('span');
+      note.className = 'added-note';
+      note.textContent = 'Added to todo';
+      const undo = doc.createElement('button');
+      undo.className = 'undo-add-to-todo linkbtn';
+      undo.textContent = 'Undo';
+      undoTimer = setTimeout(commitPending, TODO_UNDO_MS);
+      undo.addEventListener('click', async () => {
+        if (undoTimer) { clearTimeout(undoTimer); undoTimer = null; } // stop the commit before awaiting
+        try {
+          if (added) await todoSink.deleteTodo(added.repoKey, added.id); // chunks stay; nothing dismissed
+        } catch {
+          // IPC failure (main restart): nothing dismissed; still end the window below.
+        } finally {
+          endUndo(); // always end the window, or processed chunks stay disabled forever
+        }
+      });
+      undoSlot.append(note, undo);
+    } finally {
+      adding = false;
+    }
   }
 
   function endUndo(): void {
