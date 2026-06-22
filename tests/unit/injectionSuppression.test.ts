@@ -2,8 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { createInjectionSuppressor, SELF_INJECT_WINDOW_MS } from '../../src/main/injectionSuppression';
 import type { ShadowMarker } from '../../src/main/shadow';
 
-// A stand-in for a real @xterm marker (§15.2): mutable `line`, goes -1 on trim.
-// NOT an emulator mock — the suppressor's contract is purely (row, time) bookkeeping.
+// @xterm marker stand-in (§15.2): `line` goes -1 on trim. Not an emulator mock — the
+// suppressor's contract is purely (row, time) bookkeeping, so this is data, not the VT parser.
 interface FakeMarker {
   line: number;
   disposed: boolean;

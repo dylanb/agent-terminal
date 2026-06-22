@@ -85,7 +85,7 @@ describe('flow entry actions — bootstrap pickup (§24.2.3 T3 / §18.3/§18.4)'
     const d = deps();
     const result = createFlowEntryActions(d)(planStep({ inputs: [{ name: 'note', type: 'free-text', required: false }] }), {});
     expect(result.prompt).toBeUndefined();
-    expect(d.inject).toHaveBeenCalledWith('agent-loop pickup'); // no required input to append
+    expect(d.inject).toHaveBeenCalledWith('agent-loop pickup');
   });
 
   it('treats a reserved prototype-chain input name as unsatisfied (no [object Object] injection)', () => {

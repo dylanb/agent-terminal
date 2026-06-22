@@ -1,5 +1,4 @@
-// Selection subsystem wiring (§7): gesture sourced from xterm, state app-owned,
-// highlight drawn via per-line decorations, send/capture/clear actions.
+// Selection subsystem wiring (§7): gesture sourced from xterm, but the selection state is app-owned.
 
 import type { IDecoration, IMarker, Terminal } from '@xterm/xterm';
 import type { BufferType, SelectionRange } from '../../shared/ipc';
@@ -19,12 +18,10 @@ import {
 } from './monitor';
 
 /**
- * Capture straight to the repo-scoped Todo list (§16.2): the selected text when there is
- * a selection, otherwise the latest command's output (the only command-capture surface
- * now the per-entry button is gone). Then signal the action window — which owns the todo
- * count/list — to refresh, since it can't see this add otherwise (separate pane; §9.1).
- * Awaits `todo:add` before signalling so the re-pull sees the new item. Repo-scoped:
- * a no-op without a known repo key, or when there is nothing to capture.
+ * Capture straight to the repo-scoped Todo list (§16.2): the selected text, else the latest
+ * command's output. A no-op without a repo key or with nothing to capture. Signals the action
+ * window (a separate pane, §9.1) to refresh after `todo:add` resolves — it can't see this add
+ * otherwise, and the await ensures its re-pull sees the new item.
  */
 export async function captureToTodo(
   monitor: MonitorApi,
@@ -32,8 +29,8 @@ export async function captureToTodo(
   selectionText: string | null,
 ): Promise<void> {
   if (!repoKey) return;
-  // The detached `void captureToTodo(...)` call sites must never see a rejection: a main-process
-  // restart can reject any of these invokes, so swallow it here (nothing added, no change signalled).
+  // The detached `void captureToTodo(...)` call sites must never see a rejection (a main restart
+  // can reject any of these invokes).
   try {
     if (selectionText !== null) {
       const text = cleanSelectionText(selectionText);
@@ -55,15 +52,12 @@ export async function captureToTodo(
 
 // >=3:1 against the #1e1e1e background (WCAG 1.4.11); the native highlight is suppressed (§7.0).
 const SEL_COLOR = 'rgba(80, 140, 255, 0.7)';
-// Cross-highlight reveal (§16.8) — amber, distinct from the blue selection so a revealed
-// capture span reads differently from a user selection.
+// Cross-highlight reveal (§16.8) — amber, distinct from the blue selection so the two read apart.
 const REVEAL_COLOR = 'rgba(255, 196, 84, 0.4)';
 
 export function wireSelection(term: Terminal, repo: RepoContext = createRepoContext(window.monitor)): void {
   let decorations: IDecoration[] = [];
   const model = createSelectionModel(() => renderSelection());
-  // Manual selection capture routes straight to the repo-scoped Todo list (§16.2); the repo
-  // key comes from the shared context (seeded on mount, §16.3) — read live at capture time.
 
   function clearDecorations(): void {
     for (const d of decorations) d.dispose();
@@ -130,8 +124,6 @@ export function wireSelection(term: Terminal, repo: RepoContext = createRepoCont
     term.paste(stripPasteBreakout(cleanSelectionText(s.text)));
   });
 
-  // Capture → Todo list (§16.2): selected text if any, else the latest command's output.
-  // The routing (captureToTodo) is unit-tested; reading the live selection here is glue.
   // TODO(dylan): the real xterm selection → captureToTodo path (and the no-selection
   // command-capture branch) is verified only in the §F e2e (plan PR5 5c) — jsdom can't
   // drive an xterm selection and the emulator must not be mocked (CLAUDE.md). Recorded gap.
@@ -146,13 +138,10 @@ export function wireSelection(term: Terminal, repo: RepoContext = createRepoCont
   // ---- Cross-highlight between the terminal and the capture pane (§16.8) ----
   // Decoupled via the window-event bus (paneActions), so neither pane imports the other.
   //
-  // The terminal owns the coordinates. When the capture pane publishes a capture's span we
-  // anchor **xterm markers** to its first/last rows; markers track the buffer through scroll
-  // AND reflow, so a window resize that re-wraps the transcript can no longer stale the link
-  // (this is the §7.4 marker-anchoring guarantee, now applied to provenance, not just the
-  // highlight). Reveals are keyed by capture id; the marker's *current* `line` is read at
-  // gesture time. A marker trimmed out of scrollback disposes itself → that capture simply
-  // reveals nothing (best-effort, §7.3).
+  // The terminal owns the coordinates: a published span is anchored to xterm markers, which track
+  // the buffer through scroll AND reflow, so a resize that re-wraps the transcript can't stale the
+  // link (the §7.4 marker-anchoring guarantee). A marker trimmed out of scrollback disposes itself
+  // → that capture reveals nothing (best-effort, §7.3).
   //
   // TODO(dylan): the marker layer (registerMarker/`.line` after reflow, scrollToLine + reveal
   // decorations, getSelectionPosition on the double-click mouseup) needs a real terminal, so
@@ -178,13 +167,12 @@ export function wireSelection(term: Terminal, repo: RepoContext = createRepoCont
     disposeMarkers((e as CustomEvent<{ id: string }>).detail.id);
   });
 
-  // Terminal → capture: resolve the double-clicked row to the capture that owns it (via the
-  // markers' live lines) and name it to the pane. We key on a **capture-phase mouseup with
-  // detail === 2**, NOT the synthesized `dblclick`: xterm's SelectionService calls
-  // preventDefault on mousedown (which can suppress dblclick) and handles the gesture on the
-  // screen element, so a bubbling dblclick may never reach us. Capture phase runs before xterm
-  // and is immune to any stopPropagation; mouseup always fires. xterm has already word-selected
-  // by this mouseup, so getSelectionPosition() holds the word's current absolute row.
+  // Terminal → capture: resolve the double-clicked row to the capture that owns it. Key on a
+  // capture-phase mouseup with detail === 2, NOT the synthesized dblclick: xterm's SelectionService
+  // preventDefaults mousedown (which can suppress dblclick) and handles the gesture on the screen
+  // element, so a bubbling dblclick may never reach us. Capture phase runs before xterm and is
+  // immune to stopPropagation. xterm has word-selected by this mouseup, so getSelectionPosition()
+  // holds the word's current absolute row.
   term.element?.addEventListener(
     'mouseup',
     (e) => {
@@ -207,9 +195,8 @@ export function wireSelection(term: Terminal, repo: RepoContext = createRepoCont
     true,
   );
 
-  // Capture → terminal: read the capture's current marker rows, scroll them into view and draw
-  // a self-clearing amber highlight over them, kept separate from the selection decorations so
-  // a clear of one never wipes the other.
+  // Capture → terminal reveal: a separate decoration set from the selection's, so a clear of one
+  // never wipes the other.
   let revealDecorations: IDecoration[] = [];
   let revealTimer: ReturnType<typeof setTimeout> | null = null;
   function clearReveal(): void {
@@ -239,10 +226,9 @@ export function wireSelection(term: Terminal, repo: RepoContext = createRepoCont
     revealTimer = setTimeout(clearReveal, REVEAL_HIGHLIGHT_MS);
   });
 
-  // xterm allows a single custom key handler, so the two key concerns share it:
-  // Escape clears only when a selection is active; otherwise it belongs to the
-  // agent (interrupt in Claude Code) and must pass through (§7.5.1). Everything
-  // else is routed through the agent key bindings (§7.5.2).
+  // xterm allows a single custom key handler, so both key concerns share it. Escape clears only
+  // when a selection is active; otherwise it belongs to the agent and must pass through (§7.5.1).
+  // Everything else routes through the agent key bindings (§7.5.2).
   term.attachCustomKeyEventHandler((e) => {
     if (e.type === 'keydown' && e.key === 'Escape' && model.get().active) {
       clearSelection();

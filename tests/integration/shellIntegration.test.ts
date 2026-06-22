@@ -10,11 +10,9 @@ const SCRIPT = path.resolve(__dirname, '../../src/main/assets/shell-integration.
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /**
- * Drive REAL bash with the integration script sourced, under a PTY allocated by
- * `script(1)` — bash only emits the PS0/PS1 (C/B) marks with a terminal. The full
- * real-PTY path is also exercised by the phase-10 e2e; this proves the bash script
- * itself produces correct OSC-133 marks (no node-pty here: it is ABI-locked to
- * Electron and won't load under the vitest/node ABI — §test rules).
+ * Drive REAL bash under a PTY allocated by `script(1)` — bash only emits the C/B marks with a
+ * terminal. node-pty can't be used here: it is ABI-locked to Electron and won't load under the
+ * vitest/node ABI (§test rules); the full real-PTY path is covered by the phase-10 e2e.
  */
 function runBashSession(input: string): string {
   try {
@@ -47,7 +45,7 @@ describe('shell integration script (§15.5 / D3) — real bash under a PTY', () 
 
   it('emits OSC-133 marks so `echo hi` is captured with exit 0 and output "hi"', async () => {
     const output = runBashSession('echo hi\nexit\n');
-    expect(output).toContain('\x1b]133;C'); // PTY produced the output-start mark
+    expect(output).toContain('\x1b]133;C');
 
     shadow = createShadowModel({ cols: 80, rows: 24, settleMs: 5, quietMs: 20, onStatus: () => {} });
     tracker = createCommandTracker({
@@ -67,7 +65,7 @@ describe('shell integration script (§15.5 / D3) — real bash under a PTY', () 
 
   it('emits OSC 7 on each prompt so the cwd tracker follows a real `cd` (§16.3)', async () => {
     const output = runBashSession('cd /tmp\nexit\n');
-    expect(output).toMatch(/\x1b]7;file:\/\//); // PTY produced an OSC 7 cwd mark
+    expect(output).toMatch(/\x1b]7;file:\/\//);
 
     shadow = createShadowModel({ cols: 80, rows: 24, settleMs: 5, quietMs: 20, onStatus: () => {} });
     const cwdTracker = createCwdTracker({ onOsc: (id, cb) => shadow.onOsc(id, cb), resolveRepoKey: (c) => c });

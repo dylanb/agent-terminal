@@ -5,10 +5,7 @@ import { assertRendersFromHostDocument } from './relocatable';
 import type { FlowPrompt } from '../../src/shared/ipc';
 
 // §24.2.3 T3 — the typed-input modal organism (UI-STANDARDS §1.2): the one deliberate blocking
-// surface (§18.4), rendering design/shell/loop-flow.html's input modal. For each required input it
-// shows the field name + its catalog type and an entry box; Confirm collects the typed values and
-// calls the submit callback; Cancel / Escape / scrim close it without submitting. It is
-// placement-agnostic — it touches only its host subtree and renders identically wherever mounted.
+// surface (§18.4). Placement-agnostic — it touches only its host subtree.
 
 const prompt = (over: Partial<FlowPrompt> = {}): FlowPrompt => ({
   inputs: [{ name: 'ticket', type: 'github-ticket' }],
@@ -35,7 +32,7 @@ describe('typed-input modal (§24.2.3 T3 / §18.4)', () => {
     expect(f).toBeTruthy();
     expect(f!.querySelector('.ty')?.textContent).toBe('github-ticket');
     expect(f!.querySelector('input')).toBeTruthy();
-    // The heading names the step being entered, and the helper names the bootstrap command (§18.3).
+    // The helper surfaces the bootstrap command to the operator (§18.3).
     expect(host.querySelector('.flow-modal h3')?.textContent).toContain('plan');
     expect(host.textContent).toContain('agent-loop pickup');
   });
@@ -60,7 +57,7 @@ describe('typed-input modal (§24.2.3 T3 / §18.4)', () => {
     expect(submitted).toBeTruthy();
     expect(Object.prototype.hasOwnProperty.call(submitted, '__proto__')).toBe(true);
     expect(submitted!['__proto__']).toBe('PWNED');
-    expect(({} as Record<string, unknown>).PWNED).toBeUndefined(); // no global pollution
+    expect(({} as Record<string, unknown>).PWNED).toBeUndefined();
   });
 
   it('collects every field for a multi-input prompt', () => {
@@ -81,7 +78,7 @@ describe('typed-input modal (§24.2.3 T3 / §18.4)', () => {
     createFlowInputModal(host).render(prompt(), 'plan', submit);
     (host.querySelector('.flow-modal .cancel') as HTMLButtonElement).click();
     expect(submit).not.toHaveBeenCalled();
-    expect(host.querySelector('.flow-modal')).toBeNull(); // closed
+    expect(host.querySelector('.flow-modal')).toBeNull();
   });
 
   it('Escape closes the modal without submitting', () => {
@@ -107,7 +104,7 @@ describe('typed-input modal (§24.2.3 T3 / §18.4)', () => {
     createFlowInputModal(host).render(prompt(), 'plan', submit);
     (host.querySelector('.flow-modal .confirm') as HTMLButtonElement).click();
     expect(submit).not.toHaveBeenCalled();
-    expect(host.querySelector('.flow-modal')).toBeTruthy(); // stays open
+    expect(host.querySelector('.flow-modal')).toBeTruthy();
     (field('ticket')!.querySelector('input') as HTMLInputElement).value = '176';
     (host.querySelector('.flow-modal .confirm') as HTMLButtonElement).click();
     expect(submit).toHaveBeenCalledWith({ ticket: '176' });
@@ -152,7 +149,7 @@ describe('typed-input modal (§24.2.3 T3 / §18.4)', () => {
     expect(document.activeElement).toBe(opener);
     const modal = createFlowInputModal(host);
     modal.render(prompt(), 'plan', vi.fn());
-    expect(document.activeElement).not.toBe(opener); // focus moved into the dialog
+    expect(document.activeElement).not.toBe(opener);
     (host.querySelector('.flow-modal .cancel') as HTMLButtonElement).click();
     expect(document.activeElement).toBe(opener);
   });
@@ -178,10 +175,10 @@ describe('typed-input modal (§24.2.3 T3 / §18.4)', () => {
     opener.focus();
     const modal = createFlowInputModal(host);
     modal.render(prompt(), 'plan', vi.fn());
-    expect(document.activeElement).not.toBe(opener); // focus is inside the first modal
-    modal.render(prompt({ inputs: [{ name: 'note', type: 'free-text' }] }), 'build', vi.fn()); // re-render while open
-    modal.render(null, '', vi.fn()); // close
-    expect(document.activeElement).toBe(opener); // restored to the ORIGINAL opener, not <body>
+    expect(document.activeElement).not.toBe(opener);
+    modal.render(prompt({ inputs: [{ name: 'note', type: 'free-text' }] }), 'build', vi.fn());
+    modal.render(null, '', vi.fn());
+    expect(document.activeElement).toBe(opener);
   });
 
   it('gives each instance a unique title id so two modals in one document keep valid aria-labelledby (WCAG 4.1.2)', () => {
@@ -194,8 +191,7 @@ describe('typed-input modal (§24.2.3 T3 / §18.4)', () => {
     const dialogB = b.querySelector('.flow-modal')!;
     const idA = dialogA.querySelector('h3')!.id;
     const idB = dialogB.querySelector('h3')!.id;
-    expect(idA).not.toBe(idB); // distinct ids → valid HTML with both mounted
-    // each dialog's aria-labelledby resolves to ITS OWN heading inside ITS OWN subtree
+    expect(idA).not.toBe(idB);
     expect(dialogA.getAttribute('aria-labelledby')).toBe(idA);
     expect(dialogB.getAttribute('aria-labelledby')).toBe(idB);
     expect(a.querySelector(`#${idA}`)).toBe(dialogA.querySelector('h3'));
@@ -208,19 +204,18 @@ describe('typed-input modal (§24.2.3 T3 / §18.4)', () => {
     opener.focus();
     const modal = createFlowInputModal(host);
     modal.render(prompt(), 'plan', vi.fn());
-    expect(host.childElementCount).toBeGreaterThan(0); // open
+    expect(host.childElementCount).toBeGreaterThan(0);
 
     modal.dispose();
-    expect(host.childElementCount).toBe(0); // host subtree cleared
+    expect(host.childElementCount).toBe(0);
 
-    // After dispose the captured opener must be dropped: a later close path must not steal focus
-    // back to it. Move focus elsewhere, then drive every close path — none may resurrect the opener.
+    // After dispose the captured opener must be dropped: a later close path must not steal focus back.
     const other = document.createElement('button');
     document.body.appendChild(other);
     other.focus();
     expect(document.activeElement).toBe(other);
-    modal.render(null, '', vi.fn()); // close path after dispose: must be a harmless no-op
-    expect(document.activeElement).toBe(other); // focus NOT yanked to the stale opener
+    modal.render(null, '', vi.fn());
+    expect(document.activeElement).toBe(other);
     expect(host.childElementCount).toBe(0);
   });
 

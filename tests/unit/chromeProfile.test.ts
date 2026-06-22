@@ -25,7 +25,7 @@ describe('chrome profile store (§15.x — learned, persisted chrome markers)', 
 
   it('learn() adds new markers on top of the defaults and dedupes', () => {
     const store = createChromeProfileStore(file);
-    const after = store.learn(['◆', '◆', '✻']); // ✻ already a default; ◆ is new
+    const after = store.learn(['◆', '◆', '✻']);
     expect(after).toContain('◆');
     expect(after.filter((m) => m === '◆')).toHaveLength(1);
     expect(after.filter((m) => m === '✻')).toHaveLength(1);

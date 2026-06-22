@@ -1,16 +1,11 @@
-// Cross-highlight (§16.8): a capture finding and its terminal source line share a
-// data-find id; hovering either lights both, with both on screen at once (the drawer
-// docks, never covers — §22.2 amendment, v2.29). This is the contract seam between
-// the terminal and capture organisms (UI-STANDARDS §2.2): neither pokes the other's
-// DOM directly — the pair is lit only via `reveal(id, on)` (from a hover on either end
-// or a deep-link).
+// Cross-highlight (§16.8): a finding and its terminal source line share a data-find id; the pair is
+// lit only via `reveal(id, on)`, the contract seam between the terminal and capture organisms
+// (UI-STANDARDS §2.2) — neither pokes the other's DOM.
 //
-// Wiring is a one-time scan: `wireCrossHighlight(host)` snapshots the `data-find` spans
-// present under `host` at call time and binds hover handlers to exactly those. Spans
-// added after wiring are NOT picked up. This is sufficient today because no organism
-// emits `data-find` markup yet (the call site mounts it against the static mock); when
-// real provenance spans arrive dynamically, this must move to event delegation on the
-// host or per-pane re-wiring, or those later spans will be dropped.
+// GAP: wiring is a one-time scan of the `data-find` spans present at call time; spans added later are
+// NOT picked up. Fine today (no organism emits `data-find` yet — the call site mounts the static
+// mock); when real provenance spans arrive dynamically this must move to event delegation or per-pane
+// re-wiring, or those spans are dropped.
 
 export interface CrossHighlight {
   /** Light (or clear) both ends of a finding/source pair by its data-find id. */
@@ -20,9 +15,8 @@ export interface CrossHighlight {
 
 export function wireCrossHighlight(host: HTMLElement): CrossHighlight {
   function reveal(id: string, on: boolean): void {
-    // Escape the id for a quoted attribute selector (only " and \ are special inside the quotes):
-    // a data-find value with selector-significant chars would otherwise make querySelector throw a
-    // DOMException and break cross-highlight. Done inline (not CSS.escape) so it holds under jsdom too.
+    // Escape " and \ for the quoted attribute selector, else a selector-significant id makes
+    // querySelector throw. Inline, not CSS.escape, so it holds under jsdom too.
     const find = id.replace(/["\\]/g, '\\$&');
     host.querySelector(`.term .src[data-find="${find}"]`)?.classList.toggle('lit', on);
     host.querySelector(`.finding[data-find="${find}"]`)?.classList.toggle('revealing', on);

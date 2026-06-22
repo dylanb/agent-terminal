@@ -11,15 +11,13 @@ import type { Adapter } from '../../src/main/adapters/types';
 import type { CommandSpanRange } from '../../src/main/spanTypes';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-// Generous margins: vitest runs files in parallel workers, so setTimeout-based
-// quiet transitions can be delayed well past quietMs under CPU contention.
+// Generous margins: vitest's parallel workers can delay setTimeout-based quiet transitions
+// well past quietMs under CPU contention.
 const SETTLE = 10;
 const QUIET = 40;
 const goQuiet = () => sleep(220);
 
-// Trivial injected adapter (config injection, NOT an emulator mock — §15.8):
-// every line ending in '?' within the scan window becomes one region. The type is
-// irrelevant to the watermark/dedup mechanics under test here.
+// Config injection, NOT an emulator mock (§15.8).
 const lineAdapter: Adapter = {
   id: 'test-line',
   detect: ({ reader, startRow, endRow }) => {
@@ -70,7 +68,7 @@ describe('semantic scanner (§15.2/§15.3 — quiet-triggered, watermarked, dedu
   it('emits only on the quiet transition, never per output chunk', async () => {
     setup();
     shadow.write('Do you want to continue?\r\n');
-    expect(emitted.length).toBe(0); // still active — no scan yet
+    expect(emitted.length).toBe(0);
     await goQuiet();
     expect(emitted.length).toBe(1);
     expect(emitted[0]).toMatchObject({ type: 'report', text: 'Do you want to continue?', parentId: null });
@@ -81,8 +79,6 @@ describe('semantic scanner (§15.2/§15.3 — quiet-triggered, watermarked, dedu
     shadow.write('Do you want to continue?\r\n');
     await goQuiet();
     expect(emitted.length).toBe(1);
-    // The lineAdapter reports this region at row 0; the scanner widens it into a range
-    // the renderer can scroll/highlight back to (absolute buffer coordinates).
     expect(emitted[0].range).toMatchObject({
       start: { y: 0 },
       end: { y: 0 },
@@ -105,7 +101,6 @@ describe('semantic scanner (§15.2/§15.3 — quiet-triggered, watermarked, dedu
       emit: collectingEmit,
     });
 
-    // A two-item report spanning rows 0 and 1; the baseline captures it and splits findings.
     shadow.write(
       '- alpha finding worth acting on that is long enough to count\r\n' +
         '- beta finding to address before merge that is also long enough\r\n',
@@ -116,15 +111,12 @@ describe('semantic scanner (§15.2/§15.3 — quiet-triggered, watermarked, dedu
     const findings = emitted.filter((e) => e.type === 'finding');
     expect(report.range).toMatchObject({ start: { y: 0 }, end: { y: 1 } });
     expect(findings.length).toBe(2);
-    // Each chunk maps to its own single row, not the whole report span.
     expect(findings[0]).toMatchObject({ text: expect.stringContaining('alpha'), range: { start: { y: 0 }, end: { y: 0 } } });
     expect(findings[1]).toMatchObject({ text: expect.stringContaining('beta'), range: { start: { y: 1 }, end: { y: 1 } } });
   });
 
   it('consults the live chrome-marker profile so a newly-learned glyph filters future furniture (§15.x)', async () => {
-    // Acceptance for "mark as chrome": once a custom glyph is learned, lines led by it
-    // stop being captured. Driven through the real generic adapter (which respects the
-    // scanner-supplied isChrome) so the assertion is on emitted events, not internals.
+    // Acceptance for "mark as chrome": once a custom glyph is learned, lines led by it stop being captured.
     emitted = [];
     const markers: string[] = [];
     shadow = createShadowModel({ cols: 80, rows: 24, settleMs: SETTLE, quietMs: QUIET, onStatus: () => {} });
@@ -140,7 +132,6 @@ describe('semantic scanner (§15.2/§15.3 — quiet-triggered, watermarked, dedu
       chromeMarkers: () => markers,
     });
 
-    // Before learning, a block led by the custom glyph ◆ is captured (◆ is unknown).
     shadow.write(
       '◆ the custom themed status glyph shows progress and elapsed time as it works\r\n' +
         '◆ and a second custom-glyph line keeps the running token and context in view\r\n',
@@ -149,8 +140,8 @@ describe('semantic scanner (§15.2/§15.3 — quiet-triggered, watermarked, dedu
     expect(emitted.length).toBe(1);
     expect(emitted[0].text).toContain('custom themed status glyph');
 
-    // The user marks it as chrome; the profile now yields ◆.
-    markers.push('◆');
+    markers.push('◆'); // user marks ◆ as chrome
+
     shadow.write(
       '◆ a completely different custom-glyph status line appears on the next scan now\r\n' +
         '◆ with more custom-glyph furniture text that would also exceed the threshold ok\r\n',
@@ -198,7 +189,7 @@ describe('semantic scanner (§15.2/§15.3 — quiet-triggered, watermarked, dedu
       reader: shadow.reader,
       addMarker: (r) => shadow.addMarker(r),
       onQuiet: (cb) => shadow.onQuiet(cb),
-      adapters: [], // no specific adapter matches → degrade to the generic fallback (§15.3)
+      adapters: [], // generic fallback only (§15.3)
       baseline: createGenericAdapter(),
       dedupRetention: 200,
       reportMinChars,
@@ -224,9 +215,8 @@ describe('semantic scanner (§15.2/§15.3 — quiet-triggered, watermarked, dedu
   }
 
   it("claims ●-bulleted tool calls (not only ⏺) so tool output is carved out, not folded into the report (§15.x)", async () => {
-    // Claude Code renders tool-call bullets as ● (U+25CF); the classifier used to hard-code
-    // ⏺ (U+23FA) and went dark, folding every tool block into the prose report. Capture must
-    // be bullet-glyph-agnostic for ANY output, not just PR reviews.
+    // Regression: the classifier hard-coded ⏺ (U+23FA), so Claude Code's ● (U+25CF) tool bullets
+    // went dark and folded into the prose report. Capture must be bullet-glyph-agnostic.
     setupClaude();
     shadow.write(
       '● Bash(echo distinctive-tool-noise)\r\n' +
@@ -253,7 +243,7 @@ describe('semantic scanner (§15.2/§15.3 — quiet-triggered, watermarked, dedu
     expect(reports[0].parentId).toBeNull();
     const findings = emitted.filter((e) => e.type === 'finding');
     expect(findings.length).toBe(3);
-    expect(findings.every((f) => f.parentId === String(1))).toBe(true); // first emitted id
+    expect(findings.every((f) => f.parentId === String(1))).toBe(true);
   });
 
   it('does not emit a report for short below-threshold output', async () => {
@@ -276,7 +266,7 @@ describe('semantic scanner (§15.2/§15.3 — quiet-triggered, watermarked, dedu
     await goQuiet();
     const first = emitted.length;
     expect(first).toBeGreaterThan(0);
-    shadow.write('\r\n'); // no new content, prior lines stable
+    shadow.write('\r\n');
     await goQuiet();
     expect(emitted.length).toBe(first);
   });
@@ -292,7 +282,7 @@ describe('semantic scanner (§15.2/§15.3 — quiet-triggered, watermarked, dedu
     const tail = (s: string) => `working on the follow-up, progress ${s} so far\r\n`;
     shadow.write(body + tail('10pct'));
     await goQuiet();
-    shadow.write('\x1b[1A\r' + tail('20pct')); // repaint the trailing line in place
+    shadow.write('\x1b[1A\r' + tail('20pct'));
     await goQuiet();
     shadow.write('\x1b[1A\r' + tail('30pct'));
     await goQuiet();
@@ -312,7 +302,6 @@ describe('semantic scanner (§15.2/§15.3 — quiet-triggered, watermarked, dedu
     shadow.write(report('3s'));
     await goQuiet();
     expect(emitted.filter((e) => e.type === 'report')).toHaveLength(1);
-    // Agent repaints the same two rows in place with an updated early token.
     shadow.write('\x1b[2A\r' + report('5s'));
     await goQuiet();
     shadow.write('\x1b[2A\r' + report('7s'));
@@ -331,7 +320,6 @@ describe('semantic scanner (§15.2/§15.3 — quiet-triggered, watermarked, dedu
     await goQuiet();
     const texts = emitted.filter((e) => e.type === 'report').map((e) => e.text);
     expect(first).toBe(1);
-    // The fuller capture is present (clean append preserved, not skipped as churn).
     expect(texts.some((t) => t.includes('edge cases'))).toBe(true);
   });
 
@@ -359,26 +347,26 @@ describe('semantic scanner (§15.2/§15.3 — quiet-triggered, watermarked, dedu
       remove: (id) => removed.push(id),
     });
 
-    // Phase 1: a prose report streams partially, then the agent pauses (no composer below).
+    // Phase 1: a prose report streams partially, then pauses (no composer below → no witness).
     shadow.write(
       'The authentication flow is sound and the migration path is well covered overall.\r\n' +
         'The error handling around the network layer could be tightened up in a few spots.\r\n',
     );
     await goQuiet();
-    expect(emitted.filter((e) => e.type === 'report')).toHaveLength(1); // partial surfaced
+    expect(emitted.filter((e) => e.type === 'report')).toHaveLength(1);
 
-    // Phase 2: the SAME report resumes (clean append at the same position) and completes.
+    // Phase 2: the same report resumes (clean append at the same position).
     shadow.write(
       'The test suite gives good coverage of the new branches and the edge cases here.\r\n' +
         'FINAL CONCLUSION: approve the pull request once the network nits are addressed.\r\n',
     );
     await goQuiet();
 
-    expect(removed).toContain('1'); // the partial is retracted, not left as a duplicate
+    expect(removed).toContain('1'); // partial retracted, not left as a duplicate
     const merged = emitted.filter(
       (e) => e.type === 'report' && e.text.includes('authentication flow') && e.text.includes('FINAL CONCLUSION'),
     );
-    expect(merged).toHaveLength(1); // head + continuation become a single capture
+    expect(merged).toHaveLength(1);
   });
 
   it('merges a report TALLER than the viewport streamed across a pause into one capture (§15.3 — scrollback is not a seal)', async () => {
@@ -419,7 +407,7 @@ describe('semantic scanner (§15.2/§15.3 — quiet-triggered, watermarked, dedu
     );
     await goQuiet();
 
-    // Phase 2: the SAME report resumes (clean append) and completes.
+    // Phase 2: the same report resumes (clean append) and completes.
     shadow.write(
       'The test suite gives good coverage of the new branches and edge cases.\r\n' +
         'Documentation was updated to match the new public API surface exactly.\r\n' +
@@ -430,8 +418,8 @@ describe('semantic scanner (§15.2/§15.3 — quiet-triggered, watermarked, dedu
     const merged = emitted.filter(
       (e) => e.type === 'report' && e.text.includes('AUTHFLOW') && e.text.includes('FINALVERDICT'),
     );
-    expect(merged).toHaveLength(1); // head (in scrollback) + tail are ONE capture, not screen-by-screen splits
-    expect(removed).toContain('1'); // the partial is retracted, not orphaned as a duplicate
+    expect(merged).toHaveLength(1); // scrollback head + tail are ONE capture, not screen-by-screen splits
+    expect(removed).toContain('1');
   });
 
   it('merges a report streamed with the input composer pinned below it, not one chunk per pause (§15.3 / v2.25)', async () => {
@@ -469,9 +457,8 @@ describe('semantic scanner (§15.2/§15.3 — quiet-triggered, watermarked, dedu
       ['Logging is structured and avoids leaking any secrets into the output now.', 'REPORTTAIL approve the pull request once the network nits are addressed.'],
     ];
     for (let i = 0; i < bursts.length; i++) {
-      // After the first burst, erase the prior composer (cursor up to its top, clear down),
-      // then stream the next lines and redraw the composer pinned below — exactly what the
-      // agent does as it streams: the composer is present at every quiet pause.
+      // Mirror the agent: erase the prior composer, stream more, redraw it pinned below — so a
+      // composer is present at every quiet pause.
       if (i > 0) shadow.write('\x1b[4A\r\x1b[J');
       shadow.write(bursts[i].map((l) => l + '\r\n').join(''));
       shadow.write(composer.join('\r\n'));
@@ -481,7 +468,7 @@ describe('semantic scanner (§15.2/§15.3 — quiet-triggered, watermarked, dedu
     const live = seen.filter((r) => r.type === 'report' && !removed.includes(r.id));
     const whole = live.filter((r) => r.text.includes('REPORTHEAD') && r.text.includes('REPORTTAIL'));
     expect(whole).toHaveLength(1); // one capture spanning head..tail, not shredded per pause
-    expect(live).toHaveLength(1); // and no orphaned fragments left behind
+    expect(live).toHaveLength(1);
   });
 
   it('emits nothing on the alternate buffer (precise alt parsing is out of scope §15.9)', async () => {
@@ -524,7 +511,7 @@ describe('semantic scanner (§15.2/§15.3 — quiet-triggered, watermarked, dedu
     await goQuiet();
 
     expect(emitted.length).toBe(after); // subset of an existing capture — not re-emitted
-    expect(removed).toEqual([]); // and nothing already-captured is retracted
+    expect(removed).toEqual([]);
   });
 
   it('retracts the earlier partial when a later scan supersedes it at a word boundary (§15.3)', async () => {
@@ -556,14 +543,14 @@ describe('semantic scanner (§15.2/§15.3 — quiet-triggered, watermarked, dedu
     regionText = partial;
     shadow.write('a\r\n');
     await goQuiet();
-    expect(emitted.map((e) => e.text)).toEqual([partial]); // earlier partial, id "1"
+    expect(emitted.map((e) => e.text)).toEqual([partial]); // emitted as id "1"
 
     const full = partial + ' and the test suite gives good coverage of the new edge cases';
     regionText = full;
     shadow.write('b\r\n');
     await goQuiet();
 
-    expect(emitted.some((e) => e.text === full)).toBe(true); // superseding report emitted
+    expect(emitted.some((e) => e.text === full)).toBe(true);
     expect(removed).toEqual(['1']); // earlier partial retracted so the pane drops it
   });
 
@@ -629,12 +616,9 @@ describe('self-injection suppression end-to-end (§16.5 — real shadow + inject
 
   it('does not re-emit the echoed injected input, but still emits the agent reply', async () => {
     setup();
-    // The app injects a prompt; the inject path seeds the watermark at the
-    // pre-echo cursor row (the injector writes to the PTY, not the shadow).
     inject('Should I refactor this?', { submit: true });
-    // The session echoes the injected input, then the agent replies below it.
-    shadow.write('Should I refactor this?\r\n');
-    shadow.write('Yes, what about the tests?\r\n');
+    shadow.write('Should I refactor this?\r\n'); // session echoes the injected input
+    shadow.write('Yes, what about the tests?\r\n'); // agent reply below it
     await goQuiet();
     const texts = emitted.map((e) => e.text);
     expect(texts).not.toContain('Should I refactor this?');
@@ -652,10 +636,9 @@ describe('self-injection suppression end-to-end (§16.5 — real shadow + inject
   });
 });
 
-// Manual single-slot capture (§21.1 / v2.27): the auto-emit-on-quiet path is retired in the
-// app — the scanner only subscribes to onQuiet when one is supplied (tests still do, above).
-// A "Capture last report" button runs detection on demand via captureLast(), which reads the
-// current buffer fresh (no watermark/dedup) and returns the latest report with its findings.
+// §21.1 / v2.27: the app retired auto-emit-on-quiet — a "Capture last report" button drives
+// captureLast() on demand. The scanner only subscribes to onQuiet when one is supplied (tests
+// still do, above), so these dormant scanners prove the button path alone.
 describe('manual capture on demand (§21.1 — captureLast, dormant auto-scan)', () => {
   let shadow: ReturnType<typeof createShadowModel>;
   let emitted: Parameters<ScannerEmit>[0][];
@@ -685,7 +668,7 @@ describe('manual capture on demand (§21.1 — captureLast, dormant auto-scan)',
   it('returns the LATEST report (bottom-most region) on demand, with its on-screen range', async () => {
     const scanner = dormant([lineAdapter]);
     shadow.write('Is the first question ok?\r\nShould the second one win?\r\n');
-    await sleep(50); // let the parser flush; no quiet trigger drives capture
+    await sleep(50); // flush the parser; no quiet trigger drives capture here
     const result = scanner.captureLast();
     expect(result).not.toBeNull();
     expect(result!.report.type).toBe('report');
@@ -721,14 +704,13 @@ describe('manual capture on demand (§21.1 — captureLast, dormant auto-scan)',
     const scanner = dormant([lineAdapter]);
     shadow.write('Do you want to continue?\r\n');
     await goQuiet();
-    expect(emitted.length).toBe(0); // nothing auto-emitted
-    expect(scanner.captureLast()).not.toBeNull(); // but on-demand still works
+    expect(emitted.length).toBe(0);
+    expect(scanner.captureLast()).not.toBeNull();
   });
 
   it('skips a candidate report that is just the echoed command line (§21.1)', async () => {
-    // With the command OUTPUT gated (a closed span), the only remaining report candidate is
-    // the long echoed command-input line — the user's own input, not a report. A capture
-    // against a tracked command must surface nothing.
+    // The only report candidate left (output gated by a closed span) is the echoed command-input
+    // line — the user's own input, not a report — so capture must surface nothing.
     emitted = [];
     const cmd = "printf '%s' " + 'X'.repeat(140); // >reportMinChars so the baseline would capture it
     shadow = createShadowModel({ cols: 200, rows: 24, settleMs: SETTLE, quietMs: QUIET, onStatus: () => {} });

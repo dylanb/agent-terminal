@@ -1,8 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createShadowModel, type ShadowStatus } from '../../src/main/shadow';
 
-// Real @xterm/headless, real timers. Thresholds shrunk so quiet transitions
-// happen in milliseconds; semantics are identical to the production values.
+// Real @xterm/headless, real timers; thresholds shrunk to milliseconds (semantics unchanged).
 const SETTLE_MS = 10;
 const QUIET_MS = 40;
 
@@ -151,7 +150,7 @@ describe('shadow read API for semantic capture (§15.2 / D1)', () => {
     for (let i = 1; i <= 50; i++) lines += `r${i}\r\n`;
     shadow.write(lines);
     await settle();
-    expect(watermark.line).toBe(-1); // trimmed past scrollback → disposed (conservative truncation)
+    expect(watermark.line).toBe(-1); // trimmed past scrollback → disposed (conservative truncation, D2)
   });
 
   it('a marker on a row still in scrollback survives with a shifted line index (D2)', async () => {

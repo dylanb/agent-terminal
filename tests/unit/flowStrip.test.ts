@@ -5,14 +5,8 @@ import { assertRendersFromHostDocument } from './relocatable';
 import { FLOW_CHANGED_EVENT } from '../../src/renderer/src/paneActions';
 import type { FlowStateView, FlowStatus } from '../../src/shared/ipc';
 
-// §24.2.2 / §24.2.3 T1 / §22.3 — the flow status strip renders the §24.1 mockup station rail: the
-// real steps bracketed by two synthetic bookend stations, "Not started" (active before the flow
-// starts) and "Completed" (active once it finishes), so the rail reads [Not started] · step₁ · …
-// · stepₙ · [Completed] (§24.2.3 T1 generalized the bookends across N real steps). Control is
-// Start → Advance → Restart. It FOLLOWS THE CWD: it holds the current repoKey and re-pulls/re-renders
-// on `onRepoChanged`, threading that key into every window.flow call (mirroring the repo-scoped todo
-// list). Before a repo key is known it renders nothing. Tests assert rendered DOM + the repoKey
-// threaded into the dep calls.
+// §24.2.2 / §24.2.3 T1 / §22.3 — the flow status strip. It follows the cwd: every window.flow call
+// must carry the current repoKey, so a stale-repo response must never repaint the rail (§16.3).
 
 function fakeFlow(initial: FlowStatus = 'not_started') {
   const byKey = new Map<string, FlowStatus>();
@@ -56,7 +50,7 @@ afterEach(() => {
 
 const sect = () => host.querySelector('.sect')?.textContent ?? '';
 const stations = () => [...host.querySelectorAll<HTMLElement>('.flow.vert .stn')];
-const stepName = () => stations()[1]?.querySelector('.nm')?.textContent ?? ''; // station 1 = the first real step (bookend at 0)
+const stepName = () => stations()[1]?.querySelector('.nm')?.textContent ?? ''; // station 0 is the bookend
 const stateOf = (i: number) => {
   const cl = stations()[i].classList;
   return cl.contains('active') ? 'active' : cl.contains('done') ? 'done' : 'todo';
@@ -77,8 +71,8 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     await vi.waitFor(() => expect(stations()).toHaveLength(3));
     expect(deps.state).toHaveBeenCalledWith('/repo');
     expect(stepName()).toBe('/repo-step');
-    expect([stateOf(0), stateOf(1), stateOf(2)]).toEqual(['active', 'todo', 'todo']); // Not started active
-    expect(sect()).toBe('Flow — step 1 / 3'); // synthetic-inclusive position
+    expect([stateOf(0), stateOf(1), stateOf(2)]).toEqual(['active', 'todo', 'todo']);
+    expect(sect()).toBe('Flow — step 1 / 3'); // synthetic-inclusive: the bookends count toward the total
     expect(control()!.textContent).toBe('Start');
   });
 
@@ -107,7 +101,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     createFlowStrip(host, deps).onRepoChanged('/repo');
     await vi.waitFor(() => expect(control()!.textContent).toBe('Advance'));
     control()!.click();
-    await vi.waitFor(() => expect(stateOf(2)).toBe('active')); // synthetic "Completed" active
+    await vi.waitFor(() => expect(stateOf(2)).toBe('active'));
     expect(deps.advance).toHaveBeenCalledWith('/repo');
     expect(control()!.textContent).toBe('Restart');
   });
@@ -131,10 +125,10 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     expect(undo!.textContent).toBe('Undo');
 
     undo!.click();
-    await vi.waitFor(() => expect(stateOf(1)).toBe('active')); // back to in-progress
+    await vi.waitFor(() => expect(stateOf(1)).toBe('active'));
     expect(deps.undo).toHaveBeenCalledWith('/repo');
     expect(deps.restart).not.toHaveBeenCalled();
-    expect(host.querySelector('.flow-undo')).toBeNull(); // no longer done → no Undo
+    expect(host.querySelector('.flow-undo')).toBeNull();
   });
 
   it('shows no Undo outside the done state', async () => {
@@ -173,7 +167,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
       expect(host.querySelector('.flow-notice')?.textContent).toContain('agent is busy'),
     );
 
-    await strip.refresh(); // a re-pull (state() carries no notice) clears the one-shot line
+    await strip.refresh(); // state() carries no notice → the one-shot line clears (§24.2.2 S4)
     expect(host.querySelector('.flow-notice')).toBeNull();
   });
 
@@ -256,9 +250,6 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
   });
 
   it('brackets N real steps with the Not-started / Completed bookends, lit by position/status (§24.2.3 T1)', async () => {
-    // The multi-step rail: the real steps sit between the two synthetic bookends — steps before the
-    // current one are done, the current one active, later ones todo; the header walks the
-    // synthetic-inclusive sequence (so working step 2 of 3 reads 3 / 5).
     const deps = {
       state: vi.fn(
         async (): Promise<FlowStateView> => ({
@@ -286,13 +277,13 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
       'Completed',
     ]);
     expect([stateOf(0), stateOf(1), stateOf(2), stateOf(3), stateOf(4)]).toEqual([
-      'done', // Not started — the flow has begun
-      'done', // groom — already passed
-      'active', // plan — current
-      'todo', // implement — ahead
-      'todo', // Completed — not yet
+      'done',
+      'done',
+      'active',
+      'todo',
+      'todo',
     ]);
-    expect(sect()).toBe('Flow — step 3 / 5'); // synthetic-inclusive position
+    expect(sect()).toBe('Flow — step 3 / 5'); // synthetic-inclusive: the bookends count toward the total
     expect(control()!.textContent).toBe('Advance');
   });
 
@@ -314,16 +305,16 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
       undo: vi.fn(),
       provideInput: vi.fn(),
       onStateChanged: noopSub,
-      loopPanelId: 'loop-panel', // the controlled panel id is injected by the composition root
+      loopPanelId: 'loop-panel',
     };
     createFlowStrip(host, deps).onRepoChanged('/repo');
     await vi.waitFor(() => expect(host.querySelector('.loopstat')).not.toBeNull());
     const readout = host.querySelector<HTMLElement>('.loopstat')!;
-    expect(readout.getAttribute('role')).toBe('button'); // a keyboard-reachable open control
-    expect(readout.getAttribute('aria-controls')).toBe('loop-panel'); // from the injected id, not hard-coded
+    expect(readout.getAttribute('role')).toBe('button');
+    expect(readout.getAttribute('aria-controls')).toBe('loop-panel'); // the injected id, never hard-coded (UI-STANDARDS §2.2 rule 1)
     const pill = readout.querySelector<HTMLElement>('.spill')!;
-    expect(pill.classList.contains('await')).toBe(true); // awaiting-human → needs-you tone
-    expect(pill.textContent).toContain('awaiting'); // the compact tone label, not the full status
+    expect(pill.classList.contains('await')).toBe(true);
+    expect(pill.textContent).toContain('awaiting');
     expect(readout.textContent).toContain('iter 9');
     // The exact status/pr/branch live in the docked panel, not the compact read-out.
     expect(readout.textContent).not.toContain('#179');
@@ -352,6 +343,47 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     createFlowStrip(host, deps).onRepoChanged('/repo');
     await vi.waitFor(() => expect(host.querySelector('.loopstat')).not.toBeNull());
     expect(host.querySelector<HTMLElement>('.loopstat')!.hasAttribute('aria-controls')).toBe(false);
+  });
+
+  // A focus-landing seam for the composition root (WCAG 2.4.3): the root lands focus via this contract
+  // rather than reaching into the strip's private `.loopstat`. The boolean return lets it fall back
+  // when no loop is shown.
+  describe('focusLoopReadout (focus-landing seam, §24.2.3 T4 / WCAG 2.4.3)', () => {
+    const loopDeps = () => ({
+      state: vi.fn(
+        async (): Promise<FlowStateView> => ({
+          stepName: 'build',
+          steps: ['build'],
+          position: 1,
+          total: 1,
+          status: 'in_progress' as FlowStatus,
+          loop: { status: 'awaiting-human-pr-approval', iteration: 9, pr: 179, branch: 'b', ready: false },
+        }),
+      ),
+      start: vi.fn(),
+      advance: vi.fn(),
+      restart: vi.fn(),
+      undo: vi.fn(),
+      provideInput: vi.fn(),
+      onStateChanged: noopSub,
+    });
+
+    it('focuses the loop read-out and reports it did when a loop is shown', async () => {
+      const strip = createFlowStrip(host, loopDeps());
+      strip.onRepoChanged('/repo');
+      await vi.waitFor(() => expect(host.querySelector('.loopstat')).not.toBeNull());
+      expect(strip.focusLoopReadout()).toBe(true);
+      expect(document.activeElement).toBe(host.querySelector('.loopstat'));
+    });
+
+    it('reports it did not, and moves no focus, when no loop is shown', async () => {
+      const strip = createFlowStrip(host, fakeFlow('in_progress'));
+      strip.onRepoChanged('/repo');
+      await vi.waitFor(() => expect(host.querySelector('.flow.vert')).not.toBeNull());
+      const before = document.activeElement;
+      expect(strip.focusLoopReadout()).toBe(false);
+      expect(document.activeElement).toBe(before);
+    });
   });
 
   it('maps an arbitrary per-LoopDef status onto one of three tones (await/work/settle)', async () => {
@@ -415,7 +447,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     };
     createFlowStrip(host, deps).onRepoChanged('/repo');
     await vi.waitFor(() => expect(seen.some((s) => s.status === 'awaiting-human-pr-approval')).toBe(true));
-    expect(seen.at(-1)!.title).toBe('build'); // the panel is told which loop step it mirrors
+    expect(seen.at(-1)!.title).toBe('build');
   });
 
   it('signals onLoopState(null) for a non-loop step so the panel clears and closes', async () => {
@@ -426,11 +458,8 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     expect(seen.at(-1)).toBeNull();
   });
 
-  // §24.2.3 T3 — when a TRANSITION response carries an input `prompt`, the strip hands it to the
-  // composition root via `onPrompt` (the contract seam, not a DOM reach-across), along with a
-  // `submit` that calls provideInput for the current repo. The prompt is transition-driven (one-shot,
-  // like `notice`): a passive `state()` re-pull must NOT pop it (a flow:onStateChanged refresh would
-  // otherwise reopen/close the modal under the user).
+  // §24.2.3 T3 — the prompt is transition-driven and one-shot (like `notice`): a passive `state()`
+  // re-pull must NOT pop it, else a background flow:onStateChanged refresh reopens the modal under the user.
   it('hands a step-entry input prompt to the composition root on a transition, and submit calls provideInput (§24.2.3 T3)', async () => {
     const seen: Array<{ names: string[]; stepName: string }> = [];
     let lastSubmit: ((v: Record<string, string>) => void) | undefined;
@@ -445,7 +474,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     const provideInput = vi.fn(async (): Promise<FlowStateView> => ({ ...promptView, prompt: undefined, notice: 'booted' }));
     const deps = {
       state: vi.fn(async (): Promise<FlowStateView> => ({ ...promptView, status: 'not_started', prompt: undefined })),
-      start: vi.fn(async (): Promise<FlowStateView> => promptView), // Start enters the step → prompt
+      start: vi.fn(async (): Promise<FlowStateView> => promptView),
       advance: vi.fn(),
       restart: vi.fn(),
       undo: vi.fn(),
@@ -462,7 +491,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     await vi.waitFor(() => expect(control()!.textContent).toBe('Start'));
     expect(seen).toHaveLength(0); // a passive state() pull does NOT pop the prompt
 
-    control()!.click(); // Start = the transition into the step that needs the input
+    control()!.click();
     await vi.waitFor(() => expect(seen.length).toBeGreaterThan(0));
     expect(seen.at(-1)).toEqual({ names: ['ticket'], stepName: 'plan' });
 
@@ -471,9 +500,9 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
   });
 
   it('focuses a real flow control before opening the prompt, so the modal does not capture <body> as opener (WCAG 2.4.3)', async () => {
-    // render() rebuilds the rail (replaceChildren), detaching the just-clicked control so focus falls
-    // to <body>; the modal captures its opener from activeElement on open, so the strip must re-anchor
-    // focus on a real control BEFORE emitting the prompt, or focus restores to <body> on close.
+    // Coupling with flowInputModal: it captures its opener from activeElement on open. The rail rebuild
+    // detaches the clicked control (focus → <body>), so the strip must re-anchor focus on a real control
+    // BEFORE emitting the prompt, or focus restores to <body> on close.
     let openerAtPrompt: Element | null = null;
     const promptView: FlowStateView = {
       stepName: 'plan',
@@ -499,13 +528,13 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     await vi.waitFor(() => expect(control()!.textContent).toBe('Start'));
     control()!.click();
     await vi.waitFor(() => expect(openerAtPrompt).toBeTruthy());
-    expect(host.contains(openerAtPrompt)).toBe(true); // a real control, not <body>
+    expect(host.contains(openerAtPrompt)).toBe(true);
     expect(openerAtPrompt!.className).toMatch(/flow-control|flow-undo/);
   });
 
   it('drops a modal submit if the cwd moved to another repo while it was open (§24.2.3 T3)', async () => {
-    // The modal binds its submit to the repo the prompt was raised for; if the agent cd's away while
-    // the modal is open, Confirm must not land the value on the now-current (wrong) repo.
+    // The submit binds to the repo the prompt was raised for: a cd away before Confirm must not land
+    // the value on the now-current (wrong) repo (§16.3).
     let lastSubmit: ((v: Record<string, string>) => void) | undefined;
     const promptView: FlowStateView = {
       stepName: 'plan',
@@ -534,15 +563,15 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     control()!.click();
     await vi.waitFor(() => expect(lastSubmit).toBeTruthy());
 
-    strip.onRepoChanged('/other'); // cwd moves while the modal is open
+    strip.onRepoChanged('/other');
     await vi.waitFor(() => expect(deps.state).toHaveBeenCalledWith('/other'));
     lastSubmit!({ ticket: '176' });
     expect(provideInput).not.toHaveBeenCalled();
   });
 
   it('does not open a prompt for the prior repo if the cwd moved during a slow transition', async () => {
-    // The control handler awaits the transition, then renders/opens-prompt; if the cwd moved while
-    // start()/advance() was in flight, the awaited view belongs to the old repo and must be dropped.
+    // The handler awaits the transition before opening the prompt: if the cwd moved while start()/advance()
+    // was in flight, the awaited view belongs to the old repo and must be dropped (§16.3).
     let resolveStart: (v: FlowStateView) => void = () => {};
     const promptView: FlowStateView = {
       stepName: 'plan',
@@ -572,13 +601,12 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
 
     resolveStart(promptView); // the stale /repo transition finally resolves
     await new Promise((r) => setTimeout(r, 0));
-    expect(seen.filter(Boolean)).toHaveLength(0); // no prompt opened for the prior repo
+    expect(seen.filter(Boolean)).toHaveLength(0);
   });
 
   it('drops the modal-submit transition if the cwd moved while provideInput was in-flight', async () => {
-    // The submit guards repoKey BEFORE calling provideInput, but the awaited response must ALSO be
-    // dropped if the cwd moved while it was in flight (mirrors controlButton's post-await guard) —
-    // else a stale transition repaints / re-prompts the wrong repo.
+    // The post-await guard: even after the pre-call repoKey check, the awaited provideInput response
+    // must be dropped if the cwd moved in flight, else a stale transition repaints the wrong repo (§16.3).
     let resolveProvide: (v: FlowStateView) => void = () => {};
     let lastSubmit: ((v: Record<string, string>) => void) | undefined;
     const promptView: FlowStateView = {
@@ -615,10 +643,10 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     strip.onRepoChanged('/other'); // cwd moves while provideInput is in flight
     await vi.waitFor(() => expect(deps.state).toHaveBeenCalledWith('/other'));
 
-    resolveProvide({ ...promptView, stepName: 'STALE' }); // the stale /repo transition resolves
+    resolveProvide({ ...promptView, stepName: 'STALE' });
     await new Promise((r) => setTimeout(r, 0));
-    expect(host.textContent).not.toContain('STALE'); // not repainted for the prior repo
-    expect(seen.filter(Boolean).length).toBe(seenBefore); // no new prompt re-opened
+    expect(host.textContent).not.toContain('STALE');
+    expect(seen.filter(Boolean).length).toBe(seenBefore);
   });
 
   it('keeps keyboard focus on the rail Loop read-out across a background state push (WCAG 2.4.3)', async () => {
@@ -649,9 +677,9 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     oldReadout.focus();
     expect(document.activeElement).toBe(oldReadout);
 
-    fire(); // main pushes flow:onStateChanged → the strip repaints the whole rail, rebuilding the read-out
-    await vi.waitFor(() => expect(host.querySelector('.loopstat')).not.toBe(oldReadout)); // repaint landed
-    expect(document.activeElement).toBe(host.querySelector('.loopstat')); // focus rode the repaint
+    fire(); // main pushes flow:onStateChanged → the rail repaints, rebuilding the read-out
+    await vi.waitFor(() => expect(host.querySelector('.loopstat')).not.toBe(oldReadout));
+    expect(document.activeElement).toBe(host.querySelector('.loopstat')); // focus rode the repaint (WCAG 2.4.3)
   });
 
   it('signals onPrompt(null) on a transition with no input prompt, closing the modal (§24.2.3 T3)', async () => {
@@ -662,7 +690,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     };
     createFlowStrip(host, deps).onRepoChanged('/repo');
     await vi.waitFor(() => expect(control()!.textContent).toBe('Start'));
-    control()!.click(); // Start → in_progress, a prompt-less transition
+    control()!.click(); // a prompt-less transition
     await vi.waitFor(() => expect(control()!.textContent).toBe('Advance'));
     expect(seen.at(-1)).toBeNull();
   });
@@ -697,28 +725,27 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     const deps = fakeFlow('in_progress');
     const strip = createFlowStrip(host, deps);
     strip.onRepoChanged('/repo');
-    await vi.waitFor(() => expect(stepName()).toBe('/repo-step')); // a good render is on screen
+    await vi.waitFor(() => expect(stepName()).toBe('/repo-step'));
 
-    deps.state.mockRejectedValueOnce(new Error('ipc down')); // the next pull fails
-    await expect(strip.refresh()).resolves.toBeUndefined(); // the rejection is swallowed, not propagated
-    expect(stepName()).toBe('/repo-step'); // the prior UI is preserved, host not cleared
+    deps.state.mockRejectedValueOnce(new Error('ipc down'));
+    await expect(strip.refresh()).resolves.toBeUndefined(); // swallowed, not propagated (§18.1)
+    expect(stepName()).toBe('/repo-step'); // prior UI preserved, host not cleared
   });
 
   it('re-enables a control button when BOTH the action and the refresh() repaint reject (§18.1)', async () => {
-    // The handler disables the button in flight, then on failure falls back to refresh(); if state()
-    // also rejects (refresh swallows + keeps the last UI), the button must not be left permanently
-    // disabled — re-enable it so the user can retry.
+    // The in-flight button is disabled, then re-enabled on the catch→refresh path; if state() ALSO
+    // rejects, the button must not be stranded disabled — the user can still retry.
     const deps = fakeFlow('in_progress');
     const strip = createFlowStrip(host, deps);
     strip.onRepoChanged('/repo');
     await vi.waitFor(() => expect(control()!.textContent).toBe('Advance'));
     const button = control()!;
 
-    deps.advance.mockRejectedValueOnce(new Error('advance failed')); // the action rejects
-    deps.state.mockRejectedValueOnce(new Error('ipc down')); // and the catch→refresh repaint can't repaint
+    deps.advance.mockRejectedValueOnce(new Error('advance failed'));
+    deps.state.mockRejectedValueOnce(new Error('ipc down'));
     button.click();
 
-    await vi.waitFor(() => expect(button.disabled).toBe(false)); // not stuck disabled — retry is possible
+    await vi.waitFor(() => expect(button.disabled).toBe(false)); // not stranded disabled
   });
 
   it('dispose() unsubscribes the push handler and clears the host (UI-STANDARDS clean teardown)', async () => {
@@ -733,18 +760,18 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     };
     const strip = createFlowStrip(host, deps);
     strip.onRepoChanged('/repo');
-    await vi.waitFor(() => expect(stepName()).toBe('/repo-step')); // a render is on screen
+    await vi.waitFor(() => expect(stepName()).toBe('/repo-step'));
 
     const callsBeforeDispose = deps.state.mock.calls.length;
     strip.dispose();
 
-    expect(unsubscribe).toHaveBeenCalledTimes(1); // the subscription was torn down
-    expect(host.childElementCount).toBe(0); // dispose leaves nothing behind
+    expect(unsubscribe).toHaveBeenCalledTimes(1);
+    expect(host.childElementCount).toBe(0);
 
-    fire(); // a post-dispose push must NOT trigger another state() re-pull
+    fire(); // a post-dispose push must NOT re-pull or repaint
     await new Promise((r) => setTimeout(r, 0));
     expect(deps.state.mock.calls.length).toBe(callsBeforeDispose);
-    expect(host.childElementCount).toBe(0); // and must not repaint into the host
+    expect(host.childElementCount).toBe(0);
   });
 
   it('builds from host.ownerDocument, not the global document (UI-STANDARDS §3.3)', async () => {

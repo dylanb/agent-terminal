@@ -1,7 +1,5 @@
-// Status strip (§8.3 / §16.1): the session/agent/full-screen/paste chips plus the
-// live "quiet for Ns" counter. Owns its own `last`/`alive` state and the 1 s tick;
-// the counter is an aria-hidden child so the live region (WCAG 4.1.3) is not
-// re-announced every second. Talks to nothing but its host element.
+// Status strip (§8.3 / §16.1): the status chips plus the live "quiet for Ns" counter. The counter is
+// an aria-hidden child so the live region (WCAG 4.1.3) is not re-announced every second.
 
 import type { MonitorUpdateMsg } from '../../shared/ipc';
 

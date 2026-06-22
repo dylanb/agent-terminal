@@ -1,10 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { parseTodoTemplate } from '../../src/main/todoTemplate';
 
-// §21.2 — a todo template is a markdown list. `parseTodoTemplate` maps each TOP-LEVEL list item
-// to one todo text; `[ ]`/`[x]` checkbox markers are ignored; nested sub-bullets and indented
-// wrapped lines fold into their item; headings and col-0 prose are ignored (so a template can
-// carry a title + instructions). Tests assert only the returned texts — the observable contract.
+// §21.2 — todo-template (markdown list) parse contract.
 
 describe('parseTodoTemplate (§21.2)', () => {
   it('maps each top-level list item to one todo text', () => {

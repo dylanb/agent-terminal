@@ -1,6 +1,4 @@
-// Runtime configuration seam (§15.7). Every threshold the scanner/tracker would
-// otherwise hardcode resolves here, env-overridable like APP_SUBMIT_DELAY_MS — so
-// no magic numbers leak downstream.
+// Runtime configuration seam (§15.7): env-overridable thresholds, no magic numbers downstream.
 // TODO(dylan): a per-agent profile table (D10) is the intended future seam to
 // replace these env lookups without touching call sites.
 
@@ -10,14 +8,10 @@ const DEFAULTS = {
   maxCommandSummaries: 200,
   maxOpenSpans: 64,
   maxExtractedRows: 2000,
-  // Minimum report size (chars) a detector needs before emitting a `report`
-  // (§15.3): keeps trivial one-liners and short command output below threshold.
-  reportMinChars: 120,
-  // Window after an injection during which the echoed input is suppressed (§16.5);
-  // must exceed the active→quiet gap of the agent's reply (see §16.5 verification gap).
+  reportMinChars: 120, // §15.3
+  // §16.5: must exceed the active→quiet gap of the agent's reply, or the reply gets suppressed too.
   selfInjectWindowMs: 30_000,
-  // Max retained done todos per repo (§16.4); oldest pruned beyond this.
-  maxDoneTodos: 50,
+  maxDoneTodos: 50, // §16.4
 } as const;
 
 export interface RuntimeConfig {

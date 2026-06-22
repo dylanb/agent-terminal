@@ -4,15 +4,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { parseLoopDef, gateForStatus } from '../../src/main/loopDef';
 
-// §24.2.3 T2 (folded) — the read-only LoopDef resolver. A flow step binds an agent-loop by name
-// (`loop: impl-loop`, §18.1); this resolves that name to the engine's real LoopDef yaml and reads
-// its `gates:` — each gate's `id` IS a status string and carries `human_options` + `kind`. Resolution
-// mirrors `agent-loop list`: a repo-local `.agent-loop.yaml` `loops:` registry override wins, else
-// `$CLAUDE_CONFIG_DIR/loops/<name>/<name>.yaml` (default ~/.claude). Like the §19.1 store it NEVER
-// throws: a missing / corrupt / wrong-schema / unknown-name LoopDef degrades to null. Real temp files.
+// §24.2.3 T2 (folded) / §18.1 — the read-only LoopDef resolver. Each gate's `id` IS a status string,
+// carrying `human_options` + `kind`. Resolution mirrors `agent-loop list`: a repo `.agent-loop.yaml`
+// `loops:` registry override wins, else `$CLAUDE_CONFIG_DIR/loops/<name>/<name>.yaml` (default ~/.claude).
+// Like the §19.1 store it NEVER throws — missing / corrupt / wrong-schema / unknown-name degrades to null.
 
-// A minimal but real-shaped LoopDef (the gate fields the app reads; the engine's other keys are
-// irrelevant to the bridge and intentionally omitted).
+// A minimal real-shaped LoopDef: only the gate fields the app reads (engine's other keys omitted).
 const IMPL_LOOP =
   'name: impl-loop\n' +
   'schema_version: "4"\n' +
@@ -59,7 +56,6 @@ describe('LoopDef resolver (§24.2.3 T2 folded / §18.1)', () => {
       humanOptions: ['approve', 'request-changes', 'impasse'],
       terminal: false,
     });
-    // the gate whose id matches a status is found by status, with its human_options exposed
     const gate = gateForStatus(def!, 'awaiting-human-pr-approval');
     expect(gate?.humanOptions).toEqual(['approve', 'request-changes', 'impasse']);
   });
@@ -102,9 +98,8 @@ describe('LoopDef resolver (§24.2.3 T2 folded / §18.1)', () => {
   });
 
   it('ignores a repo registry override that escapes the repo dir (CWE-22 path traversal), falling through to config', () => {
-    // A hostile/buggy committed .agent-loop.yaml points the loop at a file OUTSIDE the repo; the
-    // resolver must refuse the override (like the sibling todoTemplate loader, §20.2) and fall
-    // through to the trusted config-dir copy rather than read+parse the escaped path.
+    // A repo-escaping override must be refused (mirrors the todoTemplate loader, §20.2) and fall
+    // through to the trusted config copy, not read+parse the escaped path.
     const outside = mkdtempSync(join(tmpdir(), 'loopdef-outside-'));
     writeFileSync(join(outside, 'evil.yaml'), IMPL_LOOP.replace('name: impl-loop', 'name: evil-loop'));
     writeConfigLoop('impl-loop', IMPL_LOOP); // the legit config copy
@@ -119,9 +114,8 @@ describe('LoopDef resolver (§24.2.3 T2 folded / §18.1)', () => {
   });
 
   it('refuses an in-repo symlink whose target escapes the repo (CWE-59), falling through to config', () => {
-    // The lexical containment guard passes for a symlink that LIVES inside the repo, so the resolver
-    // must also re-check the realpath (like the sibling todoTemplate loader, §20.2): an in-repo
-    // `link.yaml` → an outside file must be refused, not followed.
+    // A symlink that LIVES inside the repo passes the lexical guard, so the realpath must also be
+    // re-checked (mirrors the todoTemplate loader, §20.2): an in-repo link to an outside file is refused.
     const outside = mkdtempSync(join(tmpdir(), 'loopdef-outside-'));
     writeFileSync(join(outside, 'evil.yaml'), IMPL_LOOP.replace('name: impl-loop', 'name: evil-loop'));
     symlinkSync(join(outside, 'evil.yaml'), join(repo, 'link.yaml'));
@@ -134,8 +128,8 @@ describe('LoopDef resolver (§24.2.3 T2 folded / §18.1)', () => {
   });
 
   it('resolves a valid in-repo symlink override (reads the symlink target through the realpath)', () => {
-    // A contained symlink to an in-repo LoopDef is legitimate; the realpath re-check must accept it
-    // and the read lands on the validated real path (CWE-367-hardened, mirroring readArtifact).
+    // A contained symlink to an in-repo LoopDef is legitimate and must be accepted (CWE-367-hardened,
+    // mirroring readArtifact) — regression pin for the abs→real-path switch.
     writeFileSync(join(repo, 'real-impl-loop.yaml'), IMPL_LOOP);
     symlinkSync(join(repo, 'real-impl-loop.yaml'), join(repo, 'link.yaml'));
     writeRegistry('  impl-loop: ./link.yaml\n');
@@ -143,10 +137,9 @@ describe('LoopDef resolver (§24.2.3 T2 folded / §18.1)', () => {
   });
 
   it('a dangling in-repo override resolves to null (does NOT fall through to the config copy)', () => {
-    // An in-repo override pointing at a not-yet-created file is contained, so the symlink re-check
-    // can't realpath it — that must still yield null (the parser can't read it), distinct from a
-    // repo-ESCAPING override which deliberately falls through to the trusted config copy.
-    writeConfigLoop('impl-loop', IMPL_LOOP); // a config copy exists, to prove we don't fall back to it
+    // A contained-but-missing override yields null (unreadable), distinct from a repo-ESCAPING
+    // override which deliberately falls through to the trusted config copy.
+    writeConfigLoop('impl-loop', IMPL_LOOP); // present, to prove we don't fall back to it
     writeRegistry('  impl-loop: ./not-created-yet.yaml\n');
     expect(parseLoopDef(repo, 'impl-loop', configDir)).toBeNull();
   });

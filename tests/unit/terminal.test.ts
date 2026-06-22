@@ -3,10 +3,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { wireTerminalPaneListeners, RESIZE_DEBOUNCE_MS } from '../../src/renderer/src/terminal';
 import { FOCUS_VIEW_EVENT } from '../../src/renderer/src/paneActions';
 
-// §7.1 / UI-STANDARDS clean teardown — the terminal pane registers window-level listeners
-// (focus-on-view + debounced resize) that must be removable on unmount/relocation. The xterm
-// construction itself needs a real layout and is covered by the §F e2e (recorded gap); this unit
-// pins the listener wiring + its disposer, the observable boundary of the teardown change.
+// §7.1 / UI-STANDARDS clean teardown. xterm construction needs a real layout and is covered by the
+// §F e2e (recorded gap); this unit pins listener wiring + disposer, the teardown boundary.
 describe('terminal pane listeners (§7.1 / clean teardown)', () => {
   afterEach(() => vi.useRealTimers());
 
@@ -30,17 +28,16 @@ describe('terminal pane listeners (§7.1 / clean teardown)', () => {
     window.dispatchEvent(new Event('resize'));
     window.dispatchEvent(new Event('resize'));
     vi.advanceTimersByTime(RESIZE_DEBOUNCE_MS);
-    expect(resize).toHaveBeenCalledTimes(1); // coalesced to one
+    expect(resize).toHaveBeenCalledTimes(1);
     dispose();
     window.dispatchEvent(new Event('resize'));
     vi.advanceTimersByTime(RESIZE_DEBOUNCE_MS);
-    expect(resize).toHaveBeenCalledTimes(1); // no further fire after teardown
+    expect(resize).toHaveBeenCalledTimes(1);
   });
 
   it('treats a FOCUS_VIEW_EVENT with no detail as a safe no-op (does not throw)', () => {
     const focusView = vi.fn();
     const dispose = wireTerminalPaneListeners({ focusView, resize: vi.fn() });
-    // CustomEvent with no init → detail is null; the handler must not deref it and throw.
     expect(() => window.dispatchEvent(new CustomEvent(FOCUS_VIEW_EVENT))).not.toThrow();
     expect(focusView).not.toHaveBeenCalled();
     dispose();

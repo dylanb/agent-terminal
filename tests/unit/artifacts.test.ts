@@ -5,11 +5,8 @@ import { FOCUS_VIEW_EVENT } from '../../src/renderer/src/paneActions';
 import type { ArtifactTree, ViewerFile } from '../../src/shared/ipc';
 import { assertRendersFromHostDocument } from './relocatable';
 
-// §20.1/§20.2 artifact viewer organism: a hierarchical file tree fed by real discovery
-// (loadTree) and a viewer that reads file content (loadFile) through injected seams, with a
-// selection routed to the two §16.2 sinks. The heavy markdown/CodeMirror impls and the real
-// git/fs discovery are injected; here they are faked so the test observes the organism's own
-// DOM/sink behavior, not the libraries or the filesystem.
+// §20.1/§20.2 artifact viewer organism. Markdown/CodeMirror and git/fs discovery are injected seams,
+// faked so the test observes the organism's own DOM/sink behavior, not the libraries or the filesystem.
 
 const TREE_CURATED: ArtifactTree = {
   root: '/repo',
@@ -92,9 +89,8 @@ function mount(tree: ArtifactTree = TREE_CURATED, over: Partial<Parameters<typeo
 const key = (k: string) => new KeyboardEvent('keydown', { key: k, bubbles: true });
 const mouse = (type: string, clientX: number) => new MouseEvent(type, { clientX, bubbles: true });
 
-// A controllable stand-in for the CodeMirror viewport (§20.2): revealLine recentres a
-// fixed-height window on the target line; scrollTo simulates a manual scroll. Both notify
-// subscribers, exactly as the real editor's scroll events drive the organism's readout.
+// Stands in for the CodeMirror viewport (§20.2): its scroll notifications drive the readout exactly
+// as the real editor's do.
 function fakeCodeView(top: number, bottom: number) {
   const win = bottom - top;
   const listeners = new Set<() => void>();
@@ -136,9 +132,8 @@ describe('focus on view activation (§22.4)', () => {
     const v = mount();
     await v.api.refresh();
     const focusedBefore = document.activeElement;
-    // CustomEvent with no init → detail is null; the handler must not deref it and throw.
     expect(() => window.dispatchEvent(new CustomEvent(FOCUS_VIEW_EVENT))).not.toThrow();
-    expect(document.activeElement).toBe(focusedBefore); // no unintended tree focus
+    expect(document.activeElement).toBe(focusedBefore);
   });
 });
 
@@ -176,9 +171,8 @@ describe('artifact viewer (§20.1/§20.2 — real discovery)', () => {
     expect(v.renderCode).toHaveBeenCalledWith('body of src/a.ts', 'typescript', v.body(), [2, 5]);
   });
 
-  // Keyboard a11y (§20.2): the scrolling container must be tab-reachable so it can be scrolled by
-  // keyboard. For markdown that container is the body itself; for code it's the editor's scroller,
-  // so the body steps aside (tabindex -1) and the editor takes focus.
+  // Keyboard a11y (§20.2): the scrolling container must be tab-reachable. For markdown that is the
+  // body; for code the editor owns its scroller, so the body steps aside (tabindex -1).
   it('makes the viewer body a focusable, labelled scroll region for markdown', async () => {
     const v = mount();
     await v.api.refresh();
@@ -190,13 +184,7 @@ describe('artifact viewer (§20.1/§20.2 — real discovery)', () => {
     expect(body.getAttribute('aria-label')).toContain('review.md');
   });
 
-  // (body-tab-stop behavior for code files is covered by the renderCode-fallback vs editor-scroller
-  // pair below — a real editor owns its scroller so the body leaves the tab order; the plain
-  // fallback keeps the body focusable.)
-
-  // Tweak 2: contiguous changed lines collapse into sections; the readout and prev/next are
-  // derived from the live viewport — current = the last section scrolled onto/past the screen,
-  // prev/next jump to the nearest section above/below the visible area (§20.2).
+  // §20.2: "current" is the last changed section scrolled onto or past the screen (viewport-derived).
   const navOf = (v: ReturnType<typeof mount>) => ({
     count: v.host.querySelector('.art-navcount') as HTMLElement,
     prev: v.host.querySelector('.art-prev') as HTMLButtonElement,
@@ -206,20 +194,20 @@ describe('artifact viewer (§20.1/§20.2 — real discovery)', () => {
   it('dispose() destroys the live code view so CodeMirror handlers are released (§20.2)', async () => {
     const cv = fakeCodeView(1, 20);
     const v = mount(undefined, { renderCode: vi.fn(() => cv) });
-    await v.api.refresh(); // opens the first (code) file → mounts the code view
+    await v.api.refresh();
     v.api.dispose();
     expect(cv.destroy).toHaveBeenCalledTimes(1);
   });
 
   it('tracks the viewport, stepping prev/next to the nearest off-screen change (§20.2)', async () => {
-    const cv = fakeCodeView(1, 20); // [2,3] · [50] · [90,91]
+    const cv = fakeCodeView(1, 20);
     const v = mount(undefined, {
       loadFile: async (relPath: string) => ({ ...fileFor(relPath), changedLines: [2, 3, 50, 90, 91] }),
       renderCode: vi.fn(() => cv),
     });
     await v.api.refresh();
     const { count, prev, next } = navOf(v);
-    expect(count.textContent).toBe('1 / 3'); // open at top → only change 1 is on screen
+    expect(count.textContent).toBe('1 / 3');
     expect(prev.disabled).toBe(true);
     expect(next.disabled).toBe(false);
     next.click();
@@ -230,7 +218,7 @@ describe('artifact viewer (§20.1/§20.2 — real discovery)', () => {
     next.click();
     expect(cv.revealLine).toHaveBeenLastCalledWith(90);
     expect(count.textContent).toBe('3 / 3');
-    expect(next.disabled).toBe(true); // last change → nowhere below
+    expect(next.disabled).toBe(true);
     prev.click();
     expect(cv.revealLine).toHaveBeenLastCalledWith(50);
     expect(count.textContent).toBe('2 / 3');
@@ -246,10 +234,10 @@ describe('artifact viewer (§20.1/§20.2 — real discovery)', () => {
     const { count, prev, next } = navOf(v);
     expect(count.textContent).toBe('1 / 1');
     expect(prev.disabled).toBe(true);
-    expect(next.disabled).toBe(false); // the single change is below the fold — reachable
+    expect(next.disabled).toBe(false);
     next.click();
     expect(cv.revealLine).toHaveBeenCalledWith(100);
-    expect(next.disabled).toBe(true); // now on screen → both ends exhausted
+    expect(next.disabled).toBe(true);
     expect(prev.disabled).toBe(true);
   });
 
@@ -262,20 +250,18 @@ describe('artifact viewer (§20.1/§20.2 — real discovery)', () => {
     await v.api.refresh();
     const { count } = navOf(v);
     expect(count.textContent).toBe('1 / 3');
-    cv.scrollTo(45, 64); // change 2 (line 50) scrolls into view
+    cv.scrollTo(45, 64);
     expect(count.textContent).toBe('2 / 3');
-    cv.scrollTo(85, 104); // change 3 (line 90) scrolls into view
+    cv.scrollTo(85, 104);
     expect(count.textContent).toBe('3 / 3');
   });
 
   it('hides the changed-section controls for a file with no changes (§20.2)', async () => {
-    const v = mount(); // fileFor() carries no changedLines
+    const v = mount();
     await v.api.refresh();
     expect((v.host.querySelector('.vnav') as HTMLElement).hidden).toBe(true);
   });
 
-  // Full-screen viewer (§20.2): the organism owns the in-viewer presentation and the toggle
-  // button; it requests the chrome change through the contract and reflects state set back.
   it('requests the full-screen toggle through the contract (§20.2)', async () => {
     const onRequestFullscreen = vi.fn();
     const v = mount(TREE_CURATED, { onRequestFullscreen });
@@ -298,12 +284,12 @@ describe('artifact viewer (§20.1/§20.2 — real discovery)', () => {
     v.api.setFullscreen(true);
     expect(v.api.isFullscreen()).toBe(true);
     expect(split.classList.contains('fullscreen')).toBe(true);
-    expect(vbar.classList.contains('is-collapsed')).toBe(true); // both collapsed (inert) on enter
+    expect(vbar.classList.contains('is-collapsed')).toBe(true);
     expect(tree.classList.contains('is-collapsed')).toBe(true);
     expect(fs.getAttribute('aria-pressed')).toBe('true');
     v.api.setFullscreen(false);
     expect(split.classList.contains('fullscreen')).toBe(false);
-    expect(vbar.classList.contains('is-collapsed')).toBe(false); // restored for the normal split
+    expect(vbar.classList.contains('is-collapsed')).toBe(false);
     expect(tree.classList.contains('is-collapsed')).toBe(false);
     expect(fs.getAttribute('aria-pressed')).toBe('false');
   });
@@ -318,7 +304,7 @@ describe('artifact viewer (§20.1/§20.2 — real discovery)', () => {
     const left = v.host.querySelector('.fs-strip-left') as HTMLButtonElement;
     expect(top.getAttribute('aria-expanded')).toBe('false');
     top.click();
-    expect(vbar.classList.contains('is-collapsed')).toBe(false); // header revealed (inert → visible)
+    expect(vbar.classList.contains('is-collapsed')).toBe(false);
     expect(top.getAttribute('aria-expanded')).toBe('true');
     top.click();
     expect(vbar.classList.contains('is-collapsed')).toBe(true);
@@ -337,7 +323,6 @@ describe('artifact viewer (§20.1/§20.2 — real discovery)', () => {
     expect(document.activeElement).toBe(v.host.querySelector('.art-fs'));
   });
 
-  // The full-screen tree overlay is resizable with its own remembered width, defaulting wide.
   const fsWidth = (v: ReturnType<typeof mount>) =>
     parseFloat(v.artsplit().style.getPropertyValue('--tree-w-fs'));
 
@@ -431,10 +416,9 @@ describe('artifact viewer (§20.1/§20.2 — real discovery)', () => {
     await v.api.refresh();
     v.search().value = 'plan';
     v.search().dispatchEvent(new Event('input'));
-    // Only matching files are rendered at all (no reliance on a `hidden` attribute a CSS
-    // `display` rule could override) — notes.md is gone though it lives in plans/.
+    // Asserts on rendered rows, not a `hidden` attribute a CSS `display` rule could override.
     expect(v.fileRows().map((r) => r.textContent)).toEqual([expect.stringContaining('plan-a.md')]);
-    expect(v.dirRows().map((d) => d.textContent)).toEqual([expect.stringContaining('plans')]); // hierarchy kept
+    expect(v.dirRows().map((d) => d.textContent)).toEqual([expect.stringContaining('plans')]);
   });
 
   it('clearing the filter restores the full tree (§20.2)', async () => {
@@ -458,13 +442,13 @@ describe('artifact viewer (§20.1/§20.2 — real discovery)', () => {
     range.selectNodeContents(host);
     sel.removeAllRanges();
     sel.addRange(range);
-    expect(selectionWithin(host)).toBe('    indented line\n'); // not trimmed
+    expect(selectionWithin(host)).toBe('    indented line\n');
 
     host.textContent = '   \n  ';
     range.selectNodeContents(host);
     sel.removeAllRanges();
     sel.addRange(range);
-    expect(selectionWithin(host)).toBe(''); // whitespace-only → empty
+    expect(selectionWithin(host)).toBe('');
   });
 
   it('Send to agent and Add to todo route the viewer selection to the sinks', async () => {
@@ -479,7 +463,6 @@ describe('artifact viewer (§20.1/§20.2 — real discovery)', () => {
   });
 
 
-  // Tweak 1: the two sinks are inert until there is a highlight to act on.
   it('disables Send to agent and Add to todo until something is highlighted (§20.2)', async () => {
     const v = mount();
     await v.api.refresh();
@@ -515,12 +498,12 @@ describe('artifact viewer (§20.1/§20.2 — real discovery)', () => {
     });
     const older = api.refresh();
     const newer = api.refresh();
-    resolvers[resolvers.length - 1](TREE_REPO); // newer settles first → wins
+    resolvers[resolvers.length - 1](TREE_REPO); // newer settles first
     resolvers[resolvers.length - 2](TREE_CURATED); // older settles last → must be ignored
-    resolvers[0]?.(TREE_CURATED); // settle the mount refresh
+    resolvers[0]?.(TREE_CURATED);
     await Promise.all([older, newer]);
     const files = [...host.querySelectorAll('.tree .f')].map((r) => r.textContent);
-    expect(files.some((f) => f?.includes('b.ts'))).toBe(true); // TREE_REPO (the newer) is shown
+    expect(files.some((f) => f?.includes('b.ts'))).toBe(true);
   });
 
   it('does nothing when there is no selection to send', async () => {
@@ -531,7 +514,6 @@ describe('artifact viewer (§20.1/§20.2 — real discovery)', () => {
     expect(v.send).not.toHaveBeenCalled();
   });
 
-  // 1) Full name discoverable when truncated.
   it('sets the full relative path as a title on each file row', async () => {
     const v = mount();
     await v.api.refresh();
@@ -539,7 +521,6 @@ describe('artifact viewer (§20.1/§20.2 — real discovery)', () => {
     expect(aTs.title).toContain('src/a.ts');
   });
 
-  // 2) Keyboard navigation (WAI-ARIA tree).
   it('exposes a tree with treeitem roles', async () => {
     const v = mount();
     await v.api.refresh();
@@ -580,7 +561,6 @@ describe('artifact viewer (§20.1/§20.2 — real discovery)', () => {
     expect(dir.classList.contains('collapsed')).toBe(false);
   });
 
-  // 3) Resizable tree pane via the edge.
   it('renders a separator between the tree and the viewer', async () => {
     const v = mount();
     await v.api.refresh();
@@ -621,8 +601,8 @@ describe('artifact viewer (§20.1/§20.2 — real discovery)', () => {
   });
 
   it('keeps the viewer body keyboard-focusable for code when renderCode has no editor (plain fallback)', async () => {
-    const v = mount(); // default renderCode returns void → the body itself is the scroll container
-    await v.api.refresh(); // opens the first (code) file
+    const v = mount(); // default renderCode returns void → the body is the scroll container
+    await v.api.refresh();
     expect(v.body().tabIndex).toBe(0);
   });
 
@@ -635,7 +615,7 @@ describe('artifact viewer (§20.1/§20.2 — real discovery)', () => {
 
   it('reflects the selected file to assistive tech via aria-selected (single-select tree)', async () => {
     const v = mount();
-    await v.api.refresh(); // opens the first file
+    await v.api.refresh();
     const selected = v.fileRows().filter((r) => r.getAttribute('aria-selected') === 'true');
     expect(selected).toHaveLength(1);
     expect(selected[0].classList.contains('sel')).toBe(true);
@@ -665,11 +645,11 @@ describe('artifact viewer (§20.1/§20.2 — real discovery)', () => {
     const v = mount();
     await v.api.refresh();
     const head = v.dirRows()[0];
-    head.dispatchEvent(key('Enter')); // collapse
+    head.dispatchEvent(key('Enter'));
     expect(head.getAttribute('aria-expanded')).toBe('false');
-    head.dispatchEvent(key('ArrowRight')); // expand
+    head.dispatchEvent(key('ArrowRight'));
     expect(head.getAttribute('aria-expanded')).toBe('true');
-    head.dispatchEvent(key('ArrowLeft')); // collapse
+    head.dispatchEvent(key('ArrowLeft'));
     expect(head.getAttribute('aria-expanded')).toBe('false');
   });
 
@@ -679,7 +659,7 @@ describe('artifact viewer (§20.1/§20.2 — real discovery)', () => {
     const split = v.artsplit();
     v.divider().dispatchEvent(mouse('mousedown', 248));
     v.api.dispose();
-    document.dispatchEvent(mouse('mousemove', 400)); // would resize to 400px if the listener leaked
+    document.dispatchEvent(mouse('mousemove', 400)); // would resize if the drag listener leaked
     expect(split.style.getPropertyValue('--tree-w')).toBe('248px');
   });
 
@@ -712,7 +692,7 @@ describe('artifact viewer (§20.1/§20.2 — real discovery)', () => {
   // not throw an unhandled rejection from the `void open(...)` / `void refresh()` call sites.
   it('open() treats a loadFile rejection as an unreadable file (no unhandled rejection)', async () => {
     const v = mount(TREE_CURATED, { loadFile: vi.fn(async () => { throw new Error('ipc down'); }) });
-    await v.api.refresh(); // opens the first file → loadFile rejects
+    await v.api.refresh();
     expect(v.host.textContent).toContain('Cannot display this file');
   });
 
@@ -727,7 +707,7 @@ describe('artifact viewer (§20.1/§20.2 — real discovery)', () => {
         addToTodo: vi.fn(),
         readSelection: () => '',
       });
-      await api.refresh(); // drives a tree render under the host
+      await api.refresh();
     });
   });
 
@@ -737,7 +717,7 @@ describe('artifact viewer (§20.1/§20.2 — real discovery)', () => {
     const before = v.fileRows().length;
     expect(before).toBeGreaterThan(0);
     v.loadTree.mockRejectedValueOnce(new Error('ipc down'));
-    await v.api.refresh(); // must not throw
-    expect(v.fileRows().length).toBe(before); // previous tree intact
+    await v.api.refresh();
+    expect(v.fileRows().length).toBe(before);
   });
 });

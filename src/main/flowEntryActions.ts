@@ -1,13 +1,7 @@
-// Per-step entry action (§18.3/§18.6/§19.3) — run on entry to a step (Start/Restart/Advance-into).
-// Two automatic actions: injecting the step's `skill` invocation (§9.3), and running a `bootstrap:
-// pickup` (§18.3 — inject `agent-loop pickup <input>`). Both refuse over a busy shell (§19.3): the
-// shell is not at a ready prompt while a foreground process runs, so we stop and tell the user
-// rather than typing over it. A `bootstrap` whose required typed input (§18.4) is unsatisfied does
-// not inject — it returns a `prompt` so the renderer's modal collects the value first (flow:provideInput
-// re-enters once it is provided). Todo templates are NOT instantiated here — they are instantiated
-// ON DEMAND via the todoTemplate:* picker while the step is active (spec §6/§4.1, §21.2).
-// The runner is pure orchestration over injected primitives so it unit-tests with fakes; the
-// wiring layer (index.ts) supplies the real busy probe and injector.
+// Per-step entry action (§18.3/§18.6/§19.3) — run on entry to a step. Injects a `skill` invocation
+// (§9.3) or a `bootstrap: pickup` command, both refusing over a busy shell (§19.3). An unsatisfied
+// required typed input (§18.4) returns a `prompt` instead of injecting. Todo templates are NOT
+// instantiated here — they are on-demand via the todoTemplate:* picker (§6/§4.1, §21.2).
 
 import type { FlowStepDef } from './flow';
 import type { FlowPrompt } from '../shared/ipc';
@@ -44,9 +38,8 @@ export type FlowEntryActions = (step: FlowStepDef, inputs?: Record<string, strin
 
 export function createFlowEntryActions(deps: FlowEntryActionDeps): FlowEntryActions {
   return (step, inputs = {}) => {
-    // Resolve a typed input by OWN property only, trimmed: a plain `inputs[name]` truthiness check is
-    // fooled by prototype-chain keys (e.g. an input named `__proto__` would read as a truthy object and
-    // inject `[object Object]`), and a blank/whitespace value must count as unsatisfied (§18.4).
+    // OWN property only: a prototype-chain key (e.g. an input named `__proto__`) must not resolve to a
+    // truthy object and inject `[object Object]`. A blank/whitespace value counts as unsatisfied (§18.4).
     const resolved = (name: string): string => {
       if (!Object.prototype.hasOwnProperty.call(inputs, name)) return '';
       const v = inputs[name];

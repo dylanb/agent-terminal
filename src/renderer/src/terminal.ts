@@ -65,11 +65,8 @@ export function createTerminalPane(container: HTMLElement): TerminalPane {
   term.onData((data) => window.term.input(data));
   const offExit = window.term.onExit(({ code }) => term.write(`\r\n[process exited: ${code}]\r\n`));
 
-  // §16.2/§22.4 focus rule: a Send asks for terminal focus on the decoupled bus; the shell turns
-  // that into a reveal of the terminal view and announces it here, and ⌘1 announces it directly.
-  // Either way we focus xterm so the user can keep typing without a click. Other views are ignored.
-  // Debounced resize: a drag-resize during an output burst can otherwise leave the PTY, renderer,
-  // and shadow wrapping at different widths (§7.1/§14).
+  // Debounced resize: a drag-resize during an output burst can otherwise leave the PTY, renderer, and
+  // shadow wrapping at different widths (§7.1/§14).
   // TODO(dylan): the Send→reveal→focus loop through the real pane is verified in the §F e2e
   // (recorded gap — xterm focus needs a real layout, not jsdom); the listener teardown is unit-tested.
   const sendResize = (): void => {

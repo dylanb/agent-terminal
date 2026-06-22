@@ -2,10 +2,8 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { wireCrossHighlight, type CrossHighlight } from '../../src/renderer/src/crossHighlight';
 
-// §16.8 cross-highlight: a finding in the capture pane and its source line in the
-// terminal share a data-find id. Hovering either lights both, and both stay on
-// screen (the drawer docks rather than covering — see shell.test). Tests assert the
-// observable highlight state on both ends, never the listener wiring.
+// §16.8 cross-highlight: a finding in the capture pane and its source line in the terminal share a
+// data-find id; hovering either lights both, and both stay on screen (the drawer docks, not covers).
 
 const HTML = `
 <div id="host">
@@ -40,7 +38,6 @@ describe('cross-highlight (§16.8 — terminal source ↔ capture finding)', () 
     enter(finding('f1'));
     expect(finding('f1').classList.contains('revealing')).toBe(true);
     expect(src('f1').classList.contains('lit')).toBe(true);
-    // the other pair is untouched
     expect(finding('f2').classList.contains('revealing')).toBe(false);
     expect(src('f2').classList.contains('lit')).toBe(false);
   });
@@ -74,7 +71,7 @@ describe('cross-highlight (§16.8 — terminal source ↔ capture finding)', () 
   });
 
   it('reveal() tolerates ids with selector-significant characters (no DOMException)', () => {
-    const weird = 'f"]:x'; // a quote + bracket + pseudo-class char would break a raw selector
+    const weird = 'f"]:x'; // quote + bracket + pseudo-class: breaks a raw `[data-find="${id}"]` selector
     document.body.innerHTML = `
       <div id="h2">
         <div class="term"><span class="src" data-find='${weird}'>s</span></div>

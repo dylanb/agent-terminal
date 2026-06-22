@@ -1,7 +1,5 @@
-// Semantic scanner (§15.2/§15.3 / D2/D7). Runs ONLY on the active→quiet
-// transition (never per chunk, never on a timer), reads the full buffer including
-// scrollback via a marker watermark, dispatches to adapters, dedups by content,
-// and emits widened MonitorEvents. Detection only — it never acts on an event.
+// Semantic scanner (§15.2/§15.3 / D2/D7). Runs ONLY on the active→quiet transition (never per
+// chunk, never on a timer). Detection only — it never acts on an event.
 
 import { appendFileSync, writeFileSync } from 'node:fs';
 import type { MonitorEventSource, MonitorEventType, SelectionRange } from '../shared/ipc';
@@ -10,12 +8,8 @@ import type { Adapter, DetectedRegion } from './adapters/types';
 import type { CommandSpanRange } from './spanTypes';
 import { DEFAULT_CHROME_MARKERS, chromeRows, completedTurnFrontier } from './chrome';
 
-// Capture-trace diagnostics: dumps every scan's window, per-row classification, detected
-// regions, dedup verdicts and seal to a file — the ground truth for debugging why a report
-// split, merged, or dropped a line. Opt-in via DEBUG=1 (then /tmp/scanner.log, or a
-// SCANNER_DEBUG=<path> override); off otherwise, and always off under vitest (VITEST is
-// set) so the suite never writes it. The file truncates fresh each app launch (see
-// createScanner). Logging never throws into the capture path.
+// Capture-trace diagnostics path, opt-in via DEBUG=1 (then /tmp/scanner.log, or a SCANNER_DEBUG=<path>
+// override). Always off under vitest (VITEST set) so the suite never writes the trace file.
 export function resolveScannerDebugPath(env: NodeJS.ProcessEnv): string | undefined {
   if (env.VITEST) return undefined;
   if (env.DEBUG !== '1') return undefined;
@@ -137,7 +131,6 @@ export function createScanner(deps: ScannerDeps): Scanner {
   const captured = new Map<string, Captured>();
   const order: string[] = [];
 
-  // Start each app session with a fresh capture-trace log (see SCANNER_DEBUG).
   if (SCANNER_DEBUG) {
     try {
       writeFileSync(SCANNER_DEBUG, `=== scanner session start ${new Date().toISOString()} -> ${SCANNER_DEBUG} ===\n`);
@@ -146,8 +139,7 @@ export function createScanner(deps: ScannerDeps): Scanner {
     }
   }
 
-  // A region's on-screen span (absolute buffer rows) so the pane can scroll/highlight back
-  // to it (§16.8). Best-effort provenance — never used to re-extract content (§7.3/§8.4).
+  // Best-effort provenance only — never used to re-extract content (§7.3/§8.4 / §16.8).
   const rangeOf = (startRow: number, endRow: number): SelectionRange => ({
     start: { x: 0, y: startRow },
     end: { x: reader.cols(), y: endRow },
@@ -155,8 +147,8 @@ export function createScanner(deps: ScannerDeps): Scanner {
     bufferType: 'normal',
   });
 
-  // Dropping a capture means releasing its start-marker (an xterm IMarker): the single
-  // place that knows what a Captured owns, so no removal path leaks a marker.
+  // The sole disposer of a Captured's start-marker (an xterm IMarker) — every removal path routes
+  // here so none leaks a marker.
   function drop(key: string) {
     captured.get(key)?.startMarker?.dispose();
     captured.delete(key);
@@ -183,16 +175,11 @@ export function createScanner(deps: ScannerDeps): Scanner {
   }
 
   /**
-   * Dedup decision for a freshly-detected region (§15.3 / v2.22). Mutation is the ground
-   * truth, not text similarity. Positional identity is primary — a live capture starting on
-   * this same row IS this unit re-detected:
-   *   unchanged     → already shown (drop);
-   *   clean growth  → the partial grew, supersede it (emit, retracting the partial);
-   *   any other edit → an in-place repaint (elapsed/progress token, reflow), keep the first
-   *                    stable capture (drop).
-   * With no positional match (a new unit, or one whose marker trimmed out of scrollback so
-   * its position is lost) it falls back to text identity: an exact or subsumed match drops;
-   * a clean word-boundary append supersedes every captured partial it completes.
+   * Dedup decision for a freshly-detected region (§15.3 / v2.22). Positional identity is primary —
+   * a live capture starting on this same row IS this unit re-detected, so only a clean
+   * word-boundary growth supersedes; any other edit is an in-place repaint and keeps the first
+   * stable capture. With no positional match (new unit, or marker trimmed out of scrollback) it
+   * falls back to text identity: exact/subsumed drops; a clean append supersedes the partials it completes.
    */
   function classify(type: MonitorEventType, startRow: number, norm: string, key: string): DedupVerdict {
     const pos = positionMatch(type, startRow);
@@ -213,16 +200,16 @@ export function createScanner(deps: ScannerDeps): Scanner {
     }
     if (captured.has(key)) {
       dbg(`    classify[row ${startRow}]: no positional match, but EXACT content key already captured -> DROP`);
-      return { emit: false }; // exact content match already captured
+      return { emit: false };
     }
     const retract: Captured[] = [];
     for (const c of captured.values()) {
       if (c.type !== type) continue;
       if (isPrefixAtBoundary(norm, c.norm)) {
         dbg(`    classify[row ${startRow}]: no positional match, SUBSUMED by fuller capture id=${c.id} -> DROP`);
-        return { emit: false }; // subsumed by a fuller capture
+        return { emit: false };
       }
-      if (isPrefixAtBoundary(c.norm, norm)) retract.push(c); // this region completes c
+      if (isPrefixAtBoundary(c.norm, norm)) retract.push(c);
     }
     dbg(
       `    classify[row ${startRow}]: NEW unit (no positional match, marker lost or never seen), retract ${retract.length} partial(s)=[${retract.map((c) => c.id).join(',')}] -> EMIT`,
@@ -231,31 +218,24 @@ export function createScanner(deps: ScannerDeps): Scanner {
   }
 
   /**
-   * The stability frontier (§15.3 / v2.22, v2.25): the highest row PROVEN immutable this scan.
-   * It sits just above the bottom-most detected unit (which stays PROVISIONAL — re-scannable —
-   * so a streaming report merges instead of splitting); else, with no content unit below it,
-   * just above the turn-complete composer it witnesses; else just above the scan window.
+   * The stability frontier (§15.3 / v2.22, v2.25): the highest row PROVEN immutable this scan,
+   * never behind the watermark. The bottom-most detected unit stays PROVISIONAL so a streaming
+   * report merges instead of splitting.
    *
    * The bottom unit takes priority over the composer witness (v2.25): Claude Code keeps its
-   * rule-framed input composer pinned at the viewport bottom **while it is still streaming**
-   * (the strip reads "esc to interrupt"), so a composer below the content is NOT proof the
-   * turn is done and the bottom unit can still grow. Sealing up to that composer each quiet
-   * pause is what shredded a streamed report into one chunk per pause. The witness now only
-   * advances the frontier past TRAILING CHROME when no content unit sits above it.
-   *
-   * Advances only (never behind the watermark). Scrolled-off rows are NOT auto-sealed: a
-   * provisional report taller than the viewport keeps its head in scrollback, where its marker
-   * stays valid until trimmed — so it re-gathers whole and merges instead of splitting per
-   * screen (the removed `baseY-1` floor used to seal every screenful into its own report).
-   * Trim is handled separately by planScan (watermark.line < 0 ⇒ re-scan, truncated).
-   * -1 ⇒ nothing to seal yet.
+   * rule-framed input composer pinned at the viewport bottom **while it is still streaming** (the
+   * strip reads "esc to interrupt"), so a composer below the content is NOT proof the turn is done
+   * and the bottom unit can still grow — sealing up to it each quiet pause shredded a streamed
+   * report into one chunk per pause. Scrolled-off rows are likewise NOT auto-sealed: a provisional
+   * report taller than the viewport keeps its head in scrollback so it re-gathers whole. Trim is
+   * handled separately by planScan (watermark.line < 0 ⇒ re-scan, truncated). -1 ⇒ nothing to seal.
    */
   function computeSealRow(altScreen: boolean, startRow: number, endRow: number, bottomUnitStart: number): number {
     const witnessed = altScreen || startRow > endRow ? null : completedTurnFrontier(reader, startRow, endRow);
     let sealRow: number;
-    if (bottomUnitStart >= 0) sealRow = bottomUnitStart - 1; // keep the bottom unit provisional
-    else if (witnessed !== null) sealRow = witnessed; // no content unit — seal trailing chrome
-    else sealRow = startRow - 1; // nothing detected — don't advance into unscanned rows
+    if (bottomUnitStart >= 0) sealRow = bottomUnitStart - 1;
+    else if (witnessed !== null) sealRow = witnessed;
+    else sealRow = startRow - 1;
     return Math.max(sealRow, watermark && watermark.line >= 0 ? watermark.line : -1);
   }
 
@@ -297,16 +277,12 @@ export function createScanner(deps: ScannerDeps): Scanner {
     closedSpans: CommandSpanRange[];
   } {
     const closedSpans = deps.closedSpans?.() ?? [];
-    // Chrome (§15.x): the bottom-anchored, rule-framed composer, any line whose leading
-    // glyph is a profile marker, and the indented continuations beneath such a line.
-    // All signals are theme-independent, so adapters skip furniture without a literal glyph.
     const markers = deps.chromeMarkers?.() ?? DEFAULT_CHROME_MARKERS;
     const isChrome = chromeRows(reader, startRow, endRow, markers);
     const altScreen = reader.bufferType() === 'alternate';
     const ctx = { reader, startRow, endRow, altScreen, closedSpans, reportMinChars: deps.reportMinChars, isChrome };
 
-    // Enrichment first: every classifier carves out its structured blocks (tool-use /
-    // diff). Their rows are claimed so the baseline won't also fold them into a report.
+    // Classifier rows are claimed so the baseline won't also fold them into a report.
     const claimed = new Set<number>();
     const structured: DetectedRegion[] = [];
     for (const adapter of deps.adapters) {
@@ -315,9 +291,6 @@ export function createScanner(deps: ScannerDeps): Scanner {
         for (let r = region.startRow; r <= region.endRow; r++) claimed.add(r);
       }
     }
-    // Then the always-on, glyph-agnostic baseline captures the remaining prose as
-    // reports. Capture never hinges on an agent's themeable bullet, so a `⏺`→`●` change
-    // (or any unrecognized structure) can't cost us a capture (§15.x).
     const baseCtx = { ...ctx, isClaimed: (row: number) => claimed.has(row) };
     const reports = deps.baseline?.detect(baseCtx) ?? [];
     return { allRegions: [...structured, ...reports], claimed, isChrome, markers, closedSpans };
@@ -326,16 +299,9 @@ export function createScanner(deps: ScannerDeps): Scanner {
   let scanCount = 0;
   function scan() {
     const altScreen = reader.bufferType() === 'alternate';
-    // Stability frontier (§15.3 / v2.22): the scan opens strictly past the watermark — the
-    // highest row PROVEN immutable. The bottom-most unit with no turn-complete witness stays
-    // PROVISIONAL (re-scanned, not sealed), so a report paused mid-stream merges instead of
-    // splitting; re-examination is positional, with content dedup as the scrollback backstop.
     const { startRow, truncated } = planScan();
     const endRow = reader.length() - 1;
-    // The lowest row of the bottom-most unit we own this scan — everything ABOVE it is
-    // witnessed done (more content follows) and gets sealed; this unit itself stays
-    // provisional unless a composer proves the turn complete. -1 ⇒ nothing detected.
-    let bottomUnitStart = -1;
+    let bottomUnitStart = -1; // -1 ⇒ nothing detected; see computeSealRow
 
     const n = ++scanCount;
     dbg(
@@ -355,7 +321,6 @@ export function createScanner(deps: ScannerDeps): Scanner {
             `    id=${c.id ?? '(suppressed)'} type=${c.type} marker@${c.startMarker ? c.startMarker.line : 'none'} normLen=${c.norm.length} norm="${c.norm.slice(0, 50)}"`,
           );
         }
-        // Per-row window dump (capped so a from-top rescan can't flood the log).
         const CAP = 250;
         const dump = (y: number) => {
           const t = reader.lineText(y);
@@ -390,32 +355,28 @@ export function createScanner(deps: ScannerDeps): Scanner {
       }
 
       for (const region of allRegions) {
-        // Dedup at the parent level only; findings ride on the parent so identical
-        // finding text across different reports never collides, and an unchanged
-        // report (and its findings) is skipped wholesale on the next scan.
+        // Dedup at the parent level only; findings ride on the parent so identical finding text
+        // across different reports never collides (§15.6).
         const norm = normalize(region.text);
         const key = dedupKey(region.type, norm);
         const verdict = classify(region.type, region.startRow, norm, key);
         if (!verdict.emit) {
           dbg(`  DROP  [${region.startRow}..${region.endRow}] (not surfaced this scan)`);
-          continue; // already shown — drop this capture
+          continue;
         }
-        // Retract every partial this region completes so the pane keeps only the
-        // fuller capture; happens before suppression so suppressed growth still cleans up.
+        // Retract before suppression so suppressed growth still cleans up the partials it completes.
         for (const c of verdict.retract) {
           dbg(`  RETRACT id=${c.id} (superseded by row ${region.startRow})`);
           if (c.id !== undefined) deps.remove?.(c.id);
           drop(c.key);
         }
-        // Echoed self-injected input: remember it so it never re-emits, but don't
-        // surface it; the agent's reply renders below the watermark and still does (§16.5).
+        // Echoed self-injected input: remember it so it never re-emits, but don't surface it (§16.5).
         if (deps.isSuppressed?.({ startRow: region.startRow, endRow: region.endRow })) {
           dbg(`  SUPPRESSED [${region.startRow}..${region.endRow}] ${JSON.stringify(region.text.slice(0, 60))}`);
           remember({ key, type: region.type, norm });
           continue;
         }
-        // Stamp the region's on-screen span so the pane can scroll/highlight back to it
-        // (§15.4 / §16.8); each finding carries its own span so a chunk highlights alone.
+        // Each finding carries its own range so a chunk highlights alone (§15.4 / §16.8).
         const parentId = emit({
           type: region.type,
           source: region.source,
@@ -444,8 +405,7 @@ export function createScanner(deps: ScannerDeps): Scanner {
       dbg(`  (skipped detection: altScreen=${altScreen} startRow=${startRow} endRow=${endRow})`);
     }
 
-    // Advance the watermark to the stability frontier, never backward (§15.3 / v2.22).
-    // On the alt buffer there is nothing to track — resume from the top when normal returns.
+    // On the alt buffer there is nothing to track — resume from the top when normal returns (§15.3).
     const witnessed =
       altScreen || startRow > endRow ? null : completedTurnFrontier(reader, startRow, endRow);
     const sealRow = computeSealRow(altScreen, startRow, endRow, bottomUnitStart);
@@ -457,8 +417,7 @@ export function createScanner(deps: ScannerDeps): Scanner {
     watermark = altScreen || sealRow < 0 ? undefined : addMarker(sealRow);
   }
 
-  // Auto-scan only when a quiet source is wired (the streaming path); the app omits it so
-  // capture is purely on demand (§21.1). No subscription ⇒ scan/dedup/watermark never run.
+  // No quiet source wired ⇒ scan/dedup/watermark never run; capture is purely on demand (§21.1).
   const unsub = deps.onQuiet ? deps.onQuiet(scan) : () => {};
 
   /** Run detection once against the current buffer and return the latest report (§21.1).
@@ -469,18 +428,15 @@ export function createScanner(deps: ScannerDeps): Scanner {
     const endRow = reader.length() - 1;
     if (endRow < 0) return null;
     const { allRegions } = detectRegions(0, endRow);
-    // The echoed command line is substantial prose the baseline would capture, but it is the
-    // user's own input, not a report (§21.1). The auto path's watermark seals past it; here we
-    // skip a candidate that IS the echoed input line: "<prompt> <command>", i.e. the command at the
-    // END preceded only by a shell prompt (or nothing). Requiring a prompt prefix — not just an
-    // endsWith — keeps real prose that merely names a command, even at the end ("…then run npm test").
+    // Skip a candidate that IS the echoed command line — the user's own input, not a report (§21.1).
+    // Requiring a shell-prompt prefix (not just endsWith) keeps real prose that merely names a
+    // command at the end ("…then run npm test").
     const commands = (deps.commandTexts?.() ?? []).map(normalize).filter((c) => c.length > 0);
     const isCommandEcho = (text: string): boolean => {
       const n = normalize(text);
       return commands.some((c) => {
         if (!n.endsWith(c)) return false;
         const prefix = n.slice(0, n.length - c.length);
-        // Empty, or just a shell prompt (…ending in $ # % > ❯ › » then optional space).
         return prefix === '' || /[$#%>❯›»]\s*$/.test(prefix);
       });
     };

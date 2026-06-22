@@ -1,5 +1,5 @@
-// Typed IPC contract (spec §6) — single source of truth for channel names and payloads.
-// Every payload carries sessionId so multi-session support is additive later.
+// Typed IPC contract (§6) — single source of truth for channel names and payloads. Every payload
+// carries sessionId so multi-session support is additive later.
 
 export type SessionId = string;
 
@@ -44,6 +44,7 @@ export const CH = {
   flowUndo: 'flow:undo',
   flowProvideInput: 'flow:provideInput',
   flowOnStateChanged: 'flow:onStateChanged',
+  flowRevealLoop: 'flow:revealLoop',
   todoTemplateList: 'todoTemplate:list',
   todoTemplateInstantiate: 'todoTemplate:instantiate',
 } as const;
@@ -51,19 +52,18 @@ export const CH = {
 /** Action-window tabs (§16.1). */
 export type TabId = 'capture' | 'todo';
 
-/**
- * Global UI preferences (§16.6) — the one piece of state outside the repo,
- * persisted to userData. `splitRatio` is the terminal pane's width fraction.
- * Carries no sessionId: these are app-wide, not per-session (deliberate §16.6
- * exception to the §6 "every payload carries sessionId" rule).
- */
 export type Theme = 'light' | 'dark';
 
+/**
+ * Global UI preferences (§16.6) — app-wide state persisted to userData, carrying no sessionId
+ * (deliberate §16.6 exception to the §6 "every payload carries sessionId" rule). `splitRatio` is
+ * the terminal pane's width fraction.
+ */
 export interface UiSettings {
   splitRatio: number;
   lastTab: TabId;
   theme: Theme;
-  /** Artifact viewer tree-pane width in px (§20.2), drag/keyboard-resizable & persisted. */
+  /** Artifact viewer tree-pane width in px (§20.2). */
   artifactTreeWidth: number;
   /** Full-screen tree-popout width in px (§20.2); absent until set — default is 30% of the viewport. */
   artifactFullscreenTreeWidth?: number;
@@ -77,12 +77,10 @@ export interface UiSetSettingsMsg {
 
 // ---- Todo lists (§16.3 / §16.4) ----
 
-// Tri-state lifecycle (§16.3): `active` (not started) → `in_progress` (Send marks it; renders a
-// mixed checkbox) → `done`. `in_progress` is "outstanding" like `active` — it counts and keeps
-// its row actions; only `done` is complete.
+// Tri-state lifecycle (§16.3): `active` and `in_progress` are both "outstanding" — they count and
+// keep their row actions; only `done` is complete.
 export type TodoStatus = 'active' | 'in_progress' | 'done';
 
-/** Where a todo came from (§16.3): manual entry, a selection capture, or a semantic event. */
 export type TodoSourceType = 'manual' | 'selection' | 'report' | 'finding' | 'capture' | 'command-output';
 
 export interface TodoSource {
@@ -92,8 +90,8 @@ export interface TodoSource {
 }
 
 /**
- * A persistent, repo-scoped todo (§16.3). `order` is the sort key within a status
- * group (active list / Done section). Strict-typed, no `any`, per CLAUDE.md.
+ * A persistent, repo-scoped todo (§16.3). `order` is the sort key within a status group (active
+ * list / Done section).
  */
 export interface TodoItem {
   id: string;
@@ -187,10 +185,9 @@ export interface MonitorCaptureMsg {
 }
 
 /**
- * Typed semantic/command regions plus the manual `capture` (§15.4 / v2.6).
- * `report` is an agent report group; `finding` is one individually-actionable
- * item inside it (linked via `parentId`). Permission/question detection was
- * removed in v2.6 (false-positive-prone); `completion` stays reserved/unused.
+ * Typed semantic/command regions plus the manual `capture` (§15.4 / v2.6). `report` is an agent
+ * report group; `finding` is one individually-actionable item inside it (linked via `parentId`).
+ * `completion` is reserved/unused — permission/question detection was removed in v2.6.
  */
 export type MonitorEventType =
   | 'capture'
@@ -278,9 +275,8 @@ export interface MonitorEventMsg {
 }
 
 /**
- * A previously-emitted semantic event was retracted by the scanner because a later
- * capture supersedes it (its text is an exact prefix of the newer one — §15.3). The
- * pane drops the block; removing a `report` drops its nested findings with it.
+ * A previously-emitted semantic event was retracted because a later capture supersedes it (§15.3).
+ * The pane drops the block; removing a `report` drops its nested findings with it.
  */
 export interface MonitorEventRemovedMsg {
   sessionId: SessionId;
@@ -288,9 +284,8 @@ export interface MonitorEventRemovedMsg {
 }
 
 /**
- * The user marked a captured block as chrome (§15.x): main learns its leading glyphs
- * as chrome markers (so future furniture led by them is filtered) and retracts this
- * capture via monitor:eventRemoved. `sample` is the block's text.
+ * Mark a captured block as chrome (§15.x): main learns its leading glyphs as chrome markers (so
+ * future furniture led by them is filtered) and retracts this capture. `sample` is the block's text.
  */
 export interface MonitorLearnChromeMsg {
   sessionId: SessionId;
@@ -298,10 +293,7 @@ export interface MonitorLearnChromeMsg {
   sample: string;
 }
 
-/**
- * The agent's repo key changed (OSC 7 → §16.3); the action window re-pulls
- * `todo:list` for `repoKey`, blocking a swap while a todo edit is open (§16.3).
- */
+/** The agent's repo key changed (OSC 7 → §16.3); the action window re-pulls its todo list. */
 export interface CwdChangedMsg {
   sessionId: SessionId;
   cwd: string;
@@ -342,6 +334,7 @@ export interface ChannelPayloads {
   'monitor:commandsChanged': CommandsChangedMsg;
   'cwd:changed': CwdChangedMsg;
   'flow:onStateChanged': FlowStateChangedMsg;
+  'flow:revealLoop': FlowRevealLoopMsg;
 }
 
 export type SendChannel = keyof ChannelPayloads;
@@ -405,9 +398,8 @@ export interface ViewerReadMsg {
 export type FlowStatus = 'not_started' | 'in_progress' | 'done' | 'error';
 
 /** The live, derived status of an in-progress step (§22.3 / §24.2.2 S5): a pure function of the
- *  flow state, the repo's todo list, and the §8.3 agent activity — recomputed and pushed to the
- *  strip on every todo/activity change. `ready` is the gate-readiness signal: every todo is done.
- *  Present only while `status === 'in_progress'` (no step is being worked otherwise). */
+ *  flow state, the repo's todo list, and the §8.3 agent activity. `ready` (every todo is done) is
+ *  the gate-readiness signal. Present only while `status === 'in_progress'`. */
 export interface FlowDerived {
   activity: AgentState;
   todosDone: number;
@@ -430,6 +422,12 @@ export interface FlowLoopView {
    *  (`approve`/`request-changes`/`impasse`). Present only at an awaiting gate with a resolvable
    *  LoopDef; absent mid-work, at a terminal gate, or when the LoopDef does not resolve. */
   gateOptions?: string[];
+  /** Observable "the loop is blocked awaiting a human" classification (§24.2.3 T4): true at a
+   *  LoopDef human-decision gate (or, with no resolvable LoopDef, the shared awaiting-human/impasse
+   *  family), false at a terminal hand-off or mid-work. Computed by main (where the LoopDef
+   *  resolves); the renderer reads it rather than re-deriving the gate/awaiting logic. Always set on
+   *  a derived loop view — the `?` is for hand-constructed views only. */
+  humanNeeded?: boolean;
 }
 
 /** One typed input the renderer's modal must collect (§18.4 / §24.2.3 T3): the field `name` and its
@@ -485,6 +483,14 @@ export interface FlowStateView {
  *  (a todo mutated, the agent flipped active/quiet); the strip re-pulls `flow:state`. Carries no
  *  payload beyond the session — the strip re-pulls for its own current repoKey (§16.3). */
 export interface FlowStateChangedMsg {
+  sessionId: SessionId;
+}
+
+/** flow:revealLoop push (§24.2.3 T4): main signals that the OS attention notification was activated
+ *  and the loop read-out must be revealed. The renderer responds by exiting viewer-fullscreen if
+ *  active, switching to the Terminal view, and opening the docked loop read-out. Window focus is a
+ *  main-side effect; carries no payload beyond the session. */
+export interface FlowRevealLoopMsg {
   sessionId: SessionId;
 }
 
@@ -628,6 +634,9 @@ export interface FlowApi {
   /** Subscribe to main's flow:onStateChanged push (§24.2.2 S5): `cb` fires when a flow-relevant
    *  input changed (todo/activity), prompting a `state()` re-pull. Returns an unsubscribe. */
   onStateChanged(cb: () => void): () => void;
+  /** Subscribe to main's flow:revealLoop push (§24.2.3 T4): `cb` fires when the OS attention
+   *  notification was activated and the loop read-out must be revealed. Returns an unsubscribe. */
+  onRevealLoop(cb: () => void): () => void;
 }
 
 declare global {
