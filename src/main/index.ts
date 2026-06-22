@@ -1,4 +1,5 @@
-import { app, BrowserWindow, ipcMain, Notification } from 'electron';
+import { app, BrowserWindow, clipboard, ipcMain, Menu, Notification } from 'electron';
+import { buildMenuTemplate } from './appMenu';
 import path from 'node:path';
 import os from 'node:os';
 import {
@@ -29,6 +30,7 @@ import {
   isValidFlowRequest,
   isValidFlowProvideInput,
   isValidInject,
+  isValidClipboardWrite,
   isValidInput,
   isValidLearnChrome,
   isValidResize,
@@ -105,8 +107,17 @@ async function createWindow(): Promise<void> {
     if (!win.isDestroyed()) win.webContents.send(channel, payload);
   };
 
-  // S5 (§24.2.2): main fires flow:onStateChanged on any flow-relevant change and the strip re-pulls
-  // flow:state — `agentActivity` caches the latest §8.3 activity for the derived view to fold in.
+  // macOS Edit menu (§7.7): route ⌘C/⌘V/⌘A to our renderer actions so they don't operate on xterm's
+  // hidden native selection. Off darwin buildMenuTemplate returns null and we leave the default menu.
+  // TODO(keymap): the menu-accelerator→IPC dispatch is macOS-only, so it has no Linux e2e; the pure
+  // template (appMenu.test) and the renderer router (menuActions.test) are unit/DOM covered.
+  const menuTemplate = buildMenuTemplate(process.platform, (action) => send(CH.menuEdit, { action }));
+  if (menuTemplate) Menu.setApplicationMenu(Menu.buildFromTemplate(menuTemplate));
+
+  // S5 (§24.2.2): the flow's derived in-progress status (n/m done + agent activity) is PUSHED to
+  // the strip — main fires flow:onStateChanged on any flow-relevant change (a todo mutated, the
+  // agent flipped active/quiet) and the strip re-pulls flow:state. `agentActivity` holds the latest
+  // §8.3 activity so flow:state can fold it into the derived view without re-deriving it.
   let agentActivity: AgentState = 'quiet';
   const pushFlowChanged = (): void => send(CH.flowOnStateChanged, { sessionId: SESSION_ID });
 
@@ -304,7 +315,11 @@ async function createWindow(): Promise<void> {
       [CH.agentInject]: (_e, m) => {
         if (isValidInject(m)) inject(m.text, { submit: m.submit });
       },
-      // §16.6: app-wide, so no sessionId.
+      // Clipboard is an OS resource owned by main (§7.7); the sandboxed preload can't reach it.
+      [CH.clipboardWrite]: (_e, m) => {
+        if (isValidClipboardWrite(m)) clipboard.writeText(m.text);
+      },
+      // Global UI prefs (§16.6) — no sessionId; persisted to userData.
       [CH.uiSetSettings]: (_e, m) => {
         if (isValidSetSettings(m)) uiSettings.set(m.settings);
       },
@@ -317,6 +332,7 @@ async function createWindow(): Promise<void> {
       [CH.monitorCurrentRepo]: () =>
         currentRepoInfo(cwdTracker.cwd(), cwdTracker.repoKey(), spawnCwd(process.env, os.homedir())),
       [CH.uiGetSettings]: () => uiSettings.get(),
+      [CH.clipboardRead]: (): string => clipboard.readText(), // Paste source (§7.7)
       [CH.monitorCommands]: (_e, m): CommandSummary[] =>
         isValidCommandsRequest(m)
           ? tracker.summaries().map((s) => ({ ...s, sessionId: SESSION_ID }))

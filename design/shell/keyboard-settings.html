@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Keyboard settings (view) · Galley · Lit · Agent Terminal</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;0,9..144,600;1,9..144,400;1,9..144,500&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<script>(function(){var t=new URLSearchParams(location.search).get('theme');if(t)document.documentElement.setAttribute('data-theme',t);else if(matchMedia('(prefers-color-scheme:dark)').matches)document.documentElement.setAttribute('data-theme','dark');})();</script>
+<link rel="stylesheet" href="tokens.css">
+<style>
+  /* Settings is a first-class view in the main column (§24.1C), opened from the rail gear (⌘,). */
+  .app { display:grid; grid-template-columns:200px 1fr; height:100vh; }
+
+  .rail { background:var(--card); border-right:1px solid var(--hair); display:flex; flex-direction:column; padding:16px 14px; overflow:auto; }
+  .rail .mark { font-family:"Fraunces",serif; font-weight:600; font-size:15px; margin-bottom:20px; white-space:nowrap; }
+  .rail .mark .sig { color:var(--signal); }
+  .rail .sect { text-transform:uppercase; letter-spacing:.14em; font-size:9px; color:var(--dim); margin:0 0 9px; }
+  .navlist { display:flex; flex-direction:column; gap:2px; }
+  .nav { display:flex; align-items:center; gap:9px; padding:8px 10px; border-radius:7px; color:var(--text); cursor:pointer; background:none; border:none; font-size:13px; font-weight:500; text-align:left; width:100%; }
+  .nav:hover { background:var(--hair2); }
+  .nav.on { background:var(--signal-wash); color:var(--signal); }
+  .nav .ic { font-family:"IBM Plex Mono",monospace; font-size:12px; width:14px; text-align:center; color:var(--dim); }
+  .nav.on .ic { color:var(--signal); }
+  .nav .k { margin-left:auto; font-family:"IBM Plex Mono",monospace; font-size:9.5px; color:var(--dim); }
+  .nav.on .k { color:var(--signal); }
+  .rail .foot { margin-top:auto; display:flex; flex-direction:column; gap:6px; padding-top:16px; border-top:1px solid var(--hair); }
+
+  .main { min-width:0; overflow:auto; }
+
+  /* ---- the Keyboard settings view ---- */
+  .kview { max-width:700px; margin:0 auto; padding:34px 40px 56px; }
+  .kview-head h1 { font-family:"Fraunces",serif; font-weight:500; font-size:30px; letter-spacing:-.01em; margin:5px 0 0; }
+  .kview-head .sub { font-size:13px; color:var(--dim); margin-top:7px; max-width:54ch; }
+
+  /* layout profile — the global frame; reframes every default below, so it leads */
+  .kprofile { display:flex; align-items:center; justify-content:space-between; gap:24px; margin:26px 0 8px; padding:16px 18px; background:var(--card); border:1px solid var(--hair); border-radius:var(--r); }
+  .kp-label { font-size:13px; font-weight:600; }
+  .kp-help { font-size:12px; color:var(--dim); margin-top:3px; max-width:34ch; }
+  .kp-help b { color:var(--signal); font-weight:600; }
+  .seg { display:inline-flex; background:var(--hair2); border:1px solid var(--hair); border-radius:999px; padding:3px; flex:none; }
+  .seg-opt { border:none; background:none; font-family:inherit; font-size:12.5px; font-weight:600; color:var(--dim); padding:6px 16px; border-radius:999px; cursor:pointer; }
+  .seg-opt.on { background:var(--card); color:var(--signal); box-shadow:0 1px 2px rgba(8,16,28,.13); }
+
+  .kgroup { padding:22px 0 6px; }
+  .kgroup + .kgroup { border-top:1px solid var(--hair); }
+  .kg-head { margin:0 0 6px; }
+
+  .krow { display:grid; grid-template-columns:1fr auto 80px; align-items:center; gap:18px; padding:13px 0; border-bottom:1px solid var(--hair2); }
+  .kgroup .krow:last-child { border-bottom:none; }
+  .kr-name { font-size:14px; font-weight:500; }
+  .kr-desc { font-size:12px; color:var(--dim); margin-top:2px; }
+
+  /* keycaps — the signature: a chord as physical keys (mono glyph, weighted bottom edge) */
+  .kr-chord { display:flex; align-items:center; gap:5px; justify-content:flex-end; }
+  .kc { display:inline-flex; align-items:center; justify-content:center; min-width:27px; height:27px; padding:0 8px;
+    font-family:"IBM Plex Mono",monospace; font-size:12.5px; font-weight:500; color:var(--text);
+    background:var(--card); border:1px solid var(--hair); border-bottom-width:2px; border-radius:6px; }
+  [data-theme="dark"] .kc { background:#1B2530; }
+
+  /* live capture — the lit moment: the slot fills with signal and listens for a chord */
+  .kcapture { display:inline-flex; align-items:center; height:27px; padding:0 13px; border-radius:999px; white-space:nowrap;
+    font-size:12px; font-weight:600; color:var(--signal); background:var(--signal-wash); border:1px solid var(--signal);
+    animation:kpulse 1.3s ease-in-out infinite; }
+  @keyframes kpulse { 0%,100% { box-shadow:0 0 0 3px var(--signal-wash); } 50% { box-shadow:0 0 0 6px transparent; } }
+  /* blocked chord (conflict): the recorded chord already belongs to another action — old binding kept */
+  .kcapture.bad { color:var(--attn); background:color-mix(in srgb,var(--attn) 12%,transparent); border-color:var(--attn); box-shadow:none; animation:none; }
+
+  /* a modified row carries the cyan "this is changed" accent the app uses for provenance */
+  .krow.mod { border-left:2px solid var(--signal); margin-left:-12px; padding-left:10px; }
+
+  .kr-ctl { display:flex; align-items:center; justify-content:flex-end; }
+  .kr-ctl .linkbtn { opacity:0; }
+  .krow:hover .kr-ctl .linkbtn, .krow:focus-within .kr-ctl .linkbtn,
+  .krow.mod .kr-ctl .linkbtn, .krow.live .kr-ctl .linkbtn { opacity:1; }
+
+  .kfoot { display:flex; align-items:center; gap:18px; margin-top:30px; padding-top:18px; border-top:1px solid var(--hair); }
+  .kfoot .hint { font-family:"IBM Plex Mono",monospace; font-size:11px; color:var(--dim); }
+  .kfoot .restore { margin-left:auto; }
+  .kfoot .restore .linkbtn { color:var(--dim); }
+  .kfoot .restore .linkbtn:hover { color:var(--attn); }
+
+  @media (prefers-reduced-motion:reduce) { .kcapture { animation:none; } }
+  @media (max-width:560px) { .kprofile { flex-direction:column; align-items:flex-start; gap:14px; } }
+</style>
+</head>
+<body>
+<div class="app">
+
+  <!-- rail: the gear lives here; Settings is the active destination (⌘,) -->
+  <aside class="rail">
+    <div class="mark">Agent&nbsp;Terminal<span class="sig">.</span></div>
+    <div class="sect">Views</div>
+    <div class="navlist">
+      <button class="nav"><span class="ic">›_</span> Terminal <span class="k">⌘1</span></button>
+      <button class="nav"><span class="ic">▤</span> Artifacts <span class="k">⌘2</span></button>
+      <button class="nav"><span class="ic">☑</span> Todos <span class="k">⌘3</span></button>
+    </div>
+    <div class="foot">
+      <button class="nav on"><span class="ic">⚙</span> Settings <span class="k">⌘,</span></button>
+      <button class="nav"><span class="ic">◐</span> Theme</button>
+    </div>
+  </aside>
+
+  <!-- main: the keyboard settings view -->
+  <main class="main">
+    <div class="kview">
+
+      <header class="kview-head">
+        <div class="eyebrow">Settings</div>
+        <h1 class="serif">Keyboard</h1>
+        <div class="sub">Rebind any shortcut. Changes save as you make them. Recording stops at the first key combination, or press Esc to cancel.</div>
+      </header>
+
+      <div class="kprofile">
+        <div>
+          <div class="kp-label">Layout profile</div>
+          <div class="kp-help"><b>Auto</b> follows your operating system — this machine resolves to macOS.</div>
+        </div>
+        <div class="seg" role="group" aria-label="Layout profile">
+          <button class="seg-opt on" aria-pressed="true">Auto</button>
+          <button class="seg-opt" aria-pressed="false">macOS</button>
+          <button class="seg-opt" aria-pressed="false">PC</button>
+        </div>
+      </div>
+
+      <section class="kgroup">
+        <div class="kg-head"><span class="eyebrow">Clipboard</span></div>
+
+        <div class="krow">
+          <div><div class="kr-name">Copy</div><div class="kr-desc">Copy the selected text to the clipboard.</div></div>
+          <div class="kr-chord"><span class="kc">⌘</span><span class="kc">C</span></div>
+          <div class="kr-ctl"><button class="linkbtn">Set</button></div>
+        </div>
+
+        <!-- signature state: mid-capture, lit cyan -->
+        <div class="krow live">
+          <div><div class="kr-name">Paste</div><div class="kr-desc">Paste clipboard text into the terminal.</div></div>
+          <div class="kr-chord"><span class="kcapture">Press a shortcut…</span></div>
+          <div class="kr-ctl"><button class="linkbtn">Cancel</button></div>
+        </div>
+
+        <!-- blocked state: recorded a chord that's already taken; old binding kept -->
+        <div class="krow live">
+          <div><div class="kr-name">Select all</div><div class="kr-desc">Select everything in the terminal.</div></div>
+          <div class="kr-chord"><span class="kcapture bad">⌘C already maps to Copy</span></div>
+          <div class="kr-ctl"><button class="linkbtn">Cancel</button></div>
+        </div>
+      </section>
+
+      <section class="kgroup">
+        <div class="kg-head"><span class="eyebrow">Editing</span></div>
+
+        <div class="krow">
+          <div><div class="kr-name">Newline, no submit</div><div class="kr-desc">Add a line break without running the command.</div></div>
+          <div class="kr-chord"><span class="kc">⇧</span><span class="kc">⏎</span></div>
+          <div class="kr-ctl"><button class="linkbtn">Set</button></div>
+        </div>
+        <div class="krow">
+          <div><div class="kr-name">Word left</div><div class="kr-desc">Move the cursor back one word.</div></div>
+          <div class="kr-chord"><span class="kc">⌥</span><span class="kc">←</span></div>
+          <div class="kr-ctl"><button class="linkbtn">Set</button></div>
+        </div>
+        <div class="krow">
+          <div><div class="kr-name">Word right</div><div class="kr-desc">Move the cursor forward one word.</div></div>
+          <div class="kr-chord"><span class="kc">⌥</span><span class="kc">→</span></div>
+          <div class="kr-ctl"><button class="linkbtn">Set</button></div>
+        </div>
+        <div class="krow">
+          <div><div class="kr-name">Delete word</div><div class="kr-desc">Delete the word before the cursor.</div></div>
+          <div class="kr-chord"><span class="kc">⌥</span><span class="kc">⌫</span></div>
+          <div class="kr-ctl"><button class="linkbtn">Set</button></div>
+        </div>
+        <div class="krow">
+          <div><div class="kr-name">Delete line</div><div class="kr-desc">Delete to the start of the line.</div></div>
+          <div class="kr-chord"><span class="kc">⌘</span><span class="kc">⌫</span></div>
+          <div class="kr-ctl"><button class="linkbtn">Set</button></div>
+        </div>
+      </section>
+
+      <section class="kgroup">
+        <div class="kg-head"><span class="eyebrow">Navigation</span></div>
+
+        <!-- modified row: cyan provenance accent + always-visible Reset -->
+        <div class="krow mod">
+          <div><div class="kr-name">Toggle quick-send</div><div class="kr-desc">Show or hide the quick-send drawer.</div></div>
+          <div class="kr-chord"><span class="kc">⌥</span><span class="kc">Space</span></div>
+          <div class="kr-ctl"><button class="linkbtn">Reset</button></div>
+        </div>
+        <div class="krow">
+          <div><div class="kr-name">View: Terminal</div><div class="kr-desc">Switch to the terminal.</div></div>
+          <div class="kr-chord"><span class="kc">⌘</span><span class="kc">1</span></div>
+          <div class="kr-ctl"><button class="linkbtn">Set</button></div>
+        </div>
+        <div class="krow">
+          <div><div class="kr-name">View: Artifacts</div><div class="kr-desc">Switch to the artifact viewer.</div></div>
+          <div class="kr-chord"><span class="kc">⌘</span><span class="kc">2</span></div>
+          <div class="kr-ctl"><button class="linkbtn">Set</button></div>
+        </div>
+        <div class="krow">
+          <div><div class="kr-name">View: Todos</div><div class="kr-desc">Switch to the todo list.</div></div>
+          <div class="kr-chord"><span class="kc">⌘</span><span class="kc">3</span></div>
+          <div class="kr-ctl"><button class="linkbtn">Set</button></div>
+        </div>
+      </section>
+
+      <div class="kfoot">
+        <span class="hint">Profile and overrides save to your settings.</span>
+        <span class="restore"><button class="linkbtn">Restore all defaults</button></span>
+      </div>
+
+    </div>
+  </main>
+
+</div>
+</body>
+</html>

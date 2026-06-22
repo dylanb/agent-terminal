@@ -1,10 +1,10 @@
 // Terminal pane setup (§7.1): xterm + FitAddon, PTY wiring, debounced resize.
-// Native selection highlight is transparent — the app draws its own (§7.0).
 
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
 import { FOCUS_VIEW_EVENT } from './paneActions';
+import { SEL_COLOR } from './selection';
 
 export const RESIZE_DEBOUNCE_MS = 80;
 
@@ -52,7 +52,11 @@ export function createTerminalPane(container: HTMLElement): TerminalPane {
     // Expose row content to assistive tech — the terminal is the primary surface (WCAG 4.1.2).
     screenReaderMode: true,
     theme: {
-      selectionBackground: 'rgba(0,0,0,0)',
+      // Focused selection paints live during the drag — xterm's hit-testing gives instant,
+      // per-frame feedback the app-owned decoration can't (it churns faster than it paints, §7.1).
+      selectionBackground: SEL_COLOR,
+      // Blurred selection stays transparent: once focus leaves, the persistent app-owned
+      // decoration (§7.0) is the sole highlight, so the two never double-tint off-focus.
       selectionInactiveBackground: 'rgba(0,0,0,0)',
     },
   });

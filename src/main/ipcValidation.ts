@@ -5,6 +5,7 @@ import path from 'node:path';
 import {
   SESSION_ID,
   type AgentInjectMsg,
+  type ClipboardWriteMsg,
   type CaptureCommandMsg,
   type CaptureLastMsg,
   type ClearCommandsMsg,
@@ -62,6 +63,10 @@ export function isValidResize(m: unknown): m is PtyResizeMsg {
 
 export function isValidInject(m: unknown): m is AgentInjectMsg {
   return isRecord(m) && isLiveSession(m) && typeof m.text === 'string' && typeof m.submit === 'boolean';
+}
+
+export function isValidClipboardWrite(m: unknown): m is ClipboardWriteMsg {
+  return isRecord(m) && typeof m.text === 'string'; // app-global (no sessionId), like UiSettings
 }
 
 export function isValidCapture(m: unknown): m is MonitorCaptureMsg {

@@ -230,20 +230,29 @@ export function createFlowMachine(
   // `done` means the last step's Advance completed the whole flow, not just one step (§24.2.3 T1).
   let index = 0;
   let status: FlowStatus = 'not_started';
+  // The flow's resolved typed inputs (§18.4 / §24.2.3 T3), flow-wide so a value resolved at one step
+  // threads to later steps.
+  let inputs: Record<string, string> = {};
 
-  // §19.1: resume only a persisted step still present in *this* definition; a changed flow.yaml
-  // whose step is gone starts fresh rather than resuming at a stale index.
-  const persisted = store?.read();
-  if (persisted) {
+  // Re-read the persisted progression from the store (§19.1: flow-state.yaml is the source of truth).
+  // Run at construction AND on every state() query, so an external advance — the agent-loop CLI moving
+  // the flow, or a manual edit — is reflected live, not frozen at first read. Resume only a step still
+  // in *this* definition: a changed flow.yaml whose persisted step is gone starts fresh.
+  const hydrate = (): void => {
+    if (!store) return; // no backing store (tests / transient): in-memory state is authoritative
+    index = 0;
+    status = 'not_started';
+    inputs = {};
+    const persisted = store.read();
+    if (!persisted) return;
     const i = names.indexOf(persisted.step);
     if (i >= 0) {
       index = i;
       status = persisted.status;
     }
-  }
-  // Flow-wide (§18.4 / §24.2.3 T3) so a value resolved at one step threads to later steps; hydrated
-  // from persisted state so answers survive a relaunch.
-  let inputs: Record<string, string> = persisted?.inputs ? { ...persisted.inputs } : {};
+    if (persisted.inputs) inputs = { ...persisted.inputs };
+  };
+  hydrate();
 
   const current = (): FlowStepDef => steps[index];
 
@@ -285,7 +294,10 @@ export function createFlowMachine(
   };
 
   return {
-    state: view,
+    state: () => {
+      hydrate(); // §19.1: reflect the on-disk progression, not the construction-time snapshot
+      return view();
+    },
     start: () => {
       requireStatus('not_started', 'start');
       status = 'in_progress';
@@ -356,20 +368,27 @@ export interface FlowManagerDeps {
 export function createFlowManager(deps: FlowManagerDeps): FlowManager {
   const loadDef = deps.loadDefinition ?? loadFlowDefinitionLocalFirst;
   const makeStore = deps.makeStore ?? createFlowStateStore;
-  const cache = new Map<string, FlowMachine>();
+  // Cache the machine AND a signature of the definition it was built from. The DEFINITION (flow.yaml)
+  // is re-read on every access — like the §19.1 state re-read — and the machine is rebuilt only when
+  // that definition changed, so a flow.yaml added/edited/removed while the app runs is picked up on
+  // the next directory entry. A cached "no flow.yaml" error no longer sticks (the reported bug).
+  const cache = new Map<string, { sig: string; machine: FlowMachine }>();
   const machineFor = (repoKey: string): FlowMachine => {
-    let m = cache.get(repoKey);
-    if (!m) {
-      m = createFlowMachine(
-        loadDef(repoKey, deps.globalDir),
-        makeStore(repoKey),
-        deps.onEnterStep,
-        deps.readLoopState ? () => deps.readLoopState!(repoKey) : undefined,
-        deps.readLoopDef ? (name) => deps.readLoopDef!(repoKey, name) : undefined,
-      );
-      cache.set(repoKey, m);
-    }
-    return m;
+    const load = loadDef(repoKey, deps.globalDir);
+    const sig = JSON.stringify(load);
+    const cached = cache.get(repoKey);
+    if (cached && cached.sig === sig) return cached.machine;
+    // Definition changed (or first visit): rebuild. Progression survives in flow-state.yaml, which
+    // the fresh machine re-hydrates at construction — a step no longer in the new definition starts fresh.
+    const machine = createFlowMachine(
+      load,
+      makeStore(repoKey),
+      deps.onEnterStep,
+      deps.readLoopState ? () => deps.readLoopState!(repoKey) : undefined,
+      deps.readLoopDef ? (name) => deps.readLoopDef!(repoKey, name) : undefined,
+    );
+    cache.set(repoKey, { sig, machine });
+    return machine;
   };
   return {
     state: (k) => machineFor(k).state(),

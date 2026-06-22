@@ -74,6 +74,36 @@ describe('flow manager (repo-keyed, follows cwd)', () => {
     expect(mgr.state(a).notice).toBeUndefined();
   });
 
+  // The DEFINITION (flow.yaml) is re-read on every access, not cached at first visit — so a file
+  // added, edited, or removed while the app runs is picked up on the next directory entry (§18.1).
+  // This mirrors the §19.1 state re-read; the cached error from an absent file no longer sticks.
+  it('picks up a flow.yaml added after the first visit (re-reads the definition on re-entry)', () => {
+    const plain = mkdtempSync(join(tmpdir(), 'flow-mgr-added-'));
+    try {
+      const mgr = createFlowManager({ globalDir: home });
+      expect(mgr.state(plain).status).toBe('error'); // no flow.yaml yet
+      seed(plain, 'late'); // the file appears while the app is running
+      expect(mgr.state(plain).status).not.toBe('error');
+      expect(mgr.state(plain).stepName).toBe('late-step');
+    } finally {
+      rmSync(plain, { recursive: true, force: true });
+    }
+  });
+
+  it('reflects an edited flow.yaml, replacing the previously-loaded definition', () => {
+    const mgr = createFlowManager({ globalDir: home });
+    expect(mgr.state(a).stepName).toBe('alpha-step');
+    writeFileSync(join(a, '.agent-terminal', 'flow.yaml'), VALID('revised')); // edited on disk
+    expect(mgr.state(a).stepName).toBe('revised-step');
+  });
+
+  it('reflects a removed flow.yaml, dropping back to the no-definition error state', () => {
+    const mgr = createFlowManager({ globalDir: home });
+    expect(mgr.state(a).status).toBe('not_started');
+    rmSync(join(a, '.agent-terminal', 'flow.yaml'));
+    expect(mgr.state(a).status).toBe('error');
+  });
+
   it('falls back to the global definition for a repo with no local flow.yaml, state still per-key', () => {
     seed(home, 'global');
     const plain = mkdtempSync(join(tmpdir(), 'flow-mgr-plain-'));

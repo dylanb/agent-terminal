@@ -68,6 +68,25 @@ describe('control text contrast (WCAG 1.4.3 AA)', () => {
       const fg = ref ? resolve(map, ref[1]) : color;
       expect(contrast(fg, resolve(map, '--card'))).toBeGreaterThanOrEqual(4.5);
     });
+
+    // §7.7 keyboard settings: the active profile segment label sits on --card; the raw bright --signal
+    // accent fails 4.5:1 in light, so the rule must resolve the accessible --signal-text token.
+    it(`${themeName}: .seg-opt.on text clears 4.5:1 on --card (active profile segment)`, () => {
+      const color = ruleColor('\\.seg \\.seg-opt\\.on');
+      const ref = color.match(/^var\(\s*(--[\w-]+)\s*\)$/);
+      const fg = ref ? resolve(map, ref[1]) : color;
+      expect(contrast(fg, resolve(map, '--card'))).toBeGreaterThanOrEqual(4.5);
+    });
+
+    // §7.7 keyboard settings: the recording pill's text sits on --signal-wash composited over --card;
+    // --signal on its own wash fails 4.5:1, so the rule must resolve --signal-text.
+    it(`${themeName}: .kcapture text clears 4.5:1 on its wash over --card (recording pill)`, () => {
+      const color = ruleColor('\\.kr-chord \\.kcapture');
+      const ref = color.match(/^var\(\s*(--[\w-]+)\s*\)$/);
+      const fg = ref ? resolve(map, ref[1]) : color;
+      const bg = over(resolveBg(map, ruleBackground('\\.kr-chord \\.kcapture')), parseColor(resolve(map, '--card')));
+      expect(contrast(fg, toHex(bg))).toBeGreaterThanOrEqual(4.5);
+    });
   }
 });
 

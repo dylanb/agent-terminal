@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createFlowMachine, type FlowLoad } from '../../src/main/flow';
-import { createFlowStateStore } from '../../src/main/flowState';
+import { createFlowStateStore, type FlowStateStore, type PersistedFlowState } from '../../src/main/flowState';
 
 // §24.2.2 S1 — the walking-skeleton workflow state machine (lifecycle not_started → in_progress → done,
 // done terminal). The observable contract is the state view and thrown errors on illegal transitions.
@@ -467,5 +467,44 @@ describe('flow machine typed-input bootstrap (§24.2.3 T3)', () => {
   it('provideInput is illegal unless a step is being worked (in_progress)', () => {
     const flow = createFlowMachine(LOAD, undefined, bootEnter);
     expect(() => flow.provideInput({ ticket: '176' })).toThrow();
+  });
+});
+
+// The flow-state.yaml on disk is the source of truth (§19.1): another process (the agent-loop CLI
+// advancing the flow, or a manual edit) can move the progression while the app runs. state() must
+// reflect the current disk contents, not a snapshot frozen at construction.
+describe('flow state machine — state() reflects external disk changes (§19.1)', () => {
+  const THREE_STEP: FlowLoad = {
+    ok: true,
+    definition: {
+      name: 'f',
+      steps: [
+        { id: 'groom', kind: 'manual' },
+        { id: 'plan', kind: 'manual' },
+        { id: 'implement', kind: 'manual' },
+      ],
+    },
+    flowDir: '/tmp/f/.agent-terminal',
+  };
+
+  it('re-reads the persisted step/status from the store on every state() query', () => {
+    let stored: PersistedFlowState | null = { step: 'groom', status: 'in_progress' };
+    const store: FlowStateStore = { read: () => stored, write: (s) => void (stored = s) };
+    const flow = createFlowMachine(THREE_STEP, store);
+    expect(flow.state().stepName).toBe('groom');
+    stored = { step: 'implement', status: 'in_progress' }; // external advance on disk
+    expect(flow.state().stepName).toBe('implement');
+    expect(flow.state().status).toBe('in_progress');
+  });
+
+  it('reflects a flow-state.yaml deleted out from under it as not_started', () => {
+    let stored: PersistedFlowState | null = { step: 'implement', status: 'in_progress' };
+    const store: FlowStateStore = { read: () => stored, write: (s) => void (stored = s) };
+    const flow = createFlowMachine(THREE_STEP, store);
+    expect(flow.state().status).toBe('in_progress');
+    stored = null; // file removed/cleared on disk
+    const s = flow.state();
+    expect(s.status).toBe('not_started');
+    expect(s.stepName).toBe('groom'); // back to the first step
   });
 });

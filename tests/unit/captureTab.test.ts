@@ -244,6 +244,54 @@ describe('Capture tab §24.2.1 — bulk triage (checkbox + Add to todo / Dismiss
     expect(monitor.dismiss).not.toHaveBeenCalled();
   });
 
+  // §16.2: the undo window must not lock out further triage. A fresh selection re-enables
+  // "Add to todo" while a prior batch is still undoable; the undo applies only to the latest add.
+  it('Add to todo re-enables for a freshly-checked chunk while a prior batch is still in its undo window', async () => {
+    await withRepo();
+    handlers.event!(makeEvent({ id: 'f1', type: 'finding', parentId: null, text: 'alpha' }));
+    handlers.event!(makeEvent({ id: 'f2', type: 'finding', parentId: null, text: 'beta' }));
+    checkbox(cards().find((c) => c.dataset.eventId === 'f1')!).click();
+    addBtn().click();
+    await tick();
+    expect(document.querySelector('.undo-add-to-todo')).toBeTruthy(); // f1's undo window open
+    checkbox(cards().find((c) => c.dataset.eventId === 'f2')!).click();
+    expect(addBtn().disabled).toBe(false); // not locked out by the pending undo
+  });
+
+  it('a second Add to todo only adds the freshly-checked chunk, ignoring the still-disabled prior one', async () => {
+    await withRepo();
+    handlers.event!(makeEvent({ id: 'f1', type: 'finding', parentId: null, text: 'alpha' }));
+    handlers.event!(makeEvent({ id: 'f2', type: 'finding', parentId: null, text: 'beta' }));
+    checkbox(cards().find((c) => c.dataset.eventId === 'f1')!).click();
+    addBtn().click();
+    await tick();
+    checkbox(cards().find((c) => c.dataset.eventId === 'f2')!).click();
+    addBtn().click();
+    await tick();
+    expect(monitor.todoAdd).toHaveBeenCalledTimes(2);
+    expect(monitor.todoAdd).toHaveBeenLastCalledWith('/repoA', 'beta', { type: 'capture' });
+  });
+
+  it('a second Add to todo finalizes the prior batch (its chunks dismissed) and makes only the latest undoable', async () => {
+    await withRepo();
+    handlers.event!(makeEvent({ id: 'f1', type: 'finding', parentId: null, text: 'alpha' }));
+    handlers.event!(makeEvent({ id: 'f2', type: 'finding', parentId: null, text: 'beta' }));
+    checkbox(cards().find((c) => c.dataset.eventId === 'f1')!).click();
+    addBtn().click();
+    await tick();
+    checkbox(cards().find((c) => c.dataset.eventId === 'f2')!).click();
+    addBtn().click();
+    await tick();
+    // f1's batch is committed: dismissed + removed from the list.
+    expect(monitor.dismiss).toHaveBeenCalledWith('f1');
+    expect(blocks().querySelector('[data-event-id="f1"]')).toBeNull();
+    // Undo now targets only the latest todo and leaves f2 in place.
+    (document.querySelector('.undo-add-to-todo') as HTMLButtonElement).click();
+    await tick();
+    expect(monitor.todoDelete).toHaveBeenCalledTimes(1);
+    expect(blocks().querySelector('[data-event-id="f2"]')).toBeTruthy();
+  });
+
   it('each chunk checkbox is distinguishable — its label carries the capture text', async () => {
     await withRepo();
     handlers.event!(makeEvent({ id: 'f1', type: 'finding', parentId: null, text: 'unbounded scrollback re-scan' }));

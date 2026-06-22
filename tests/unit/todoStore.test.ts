@@ -144,4 +144,33 @@ describe('todoStore (§16.3 / §16.4 — repo-scoped CRUD + persistence)', () =>
     const written = readdirSync(join(repoA, '.agent-terminal'));
     expect(written).toEqual(['todos.json']);
   });
+
+  // ---- contamination resilience (§16.3): the file IS the bucket ----
+  // A todos.json can carry items whose stored repoKey names a *different* repo — e.g. the
+  // .agent-terminal dir was copied from another checkout, or a worktree was seeded from one.
+  // An item belongs to the file it lives in; per-row mutations route by the item's own
+  // repoKey, so a stale stamp sends setStatus/delete to the wrong file (the displayed list
+  // appears to clear / deletions resurrect). list() must report the file's key, not the stamp.
+  function seedRawFile(repo: string, items: unknown[]): void {
+    mkdirSync(join(repo, '.agent-terminal'), { recursive: true });
+    writeFileSync(join(repo, '.agent-terminal', 'todos.json'), JSON.stringify(items));
+  }
+
+  it('normalizes an item carrying a foreign repoKey to the file it was loaded from', () => {
+    seedRawFile(repoA, [
+      { id: 'x1', repoKey: repoB, text: 'carried over', status: 'active', order: 1, createdAt: '2020-01-01T00:00:00.000Z' },
+    ]);
+    const [item] = makeStore().list(repoA);
+    expect(item.repoKey).toBe(repoA);
+  });
+
+  it('self-heals a contaminated file on the next write', () => {
+    seedRawFile(repoA, [
+      { id: 'x1', repoKey: repoB, text: 'carried over', status: 'active', order: 1, createdAt: '2020-01-01T00:00:00.000Z' },
+    ]);
+    const store = makeStore();
+    store.add(repoA, 'fresh'); // any mutation persists the loaded state
+    const onDisk = JSON.parse(readFileSync(join(repoA, '.agent-terminal', 'todos.json'), 'utf8')) as { repoKey: string }[];
+    expect(onDisk.every((t) => t.repoKey === repoA)).toBe(true);
+  });
 });
