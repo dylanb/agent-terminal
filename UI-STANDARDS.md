@@ -132,7 +132,31 @@ same wired contract," the contract has leaked — fix the component, not the tes
 
 ---
 
-## 4. Conventions
+## 4. Transient announcements — the WAI-ARIA Alert pattern
+
+A component that surfaces a transient, attention-demanding message (an alert bar, a toast, a
+status banner that must reach assistive tech the moment it appears) follows the Alert pattern.
+Getting this wrong by reaching for the obvious `[hidden]` toggle silently breaks screen-reader
+announcement and can create a focus trap. The rules:
+
+1. **The live-region host is permanent and never toggled.** Set `role="alert"` +
+   `aria-live="assertive"` (WCAG 4.1.3) on a host that is always in the DOM. **Never** hide it
+   with `[hidden]`/`display:none`/unmount — a region that comes and going does not re-announce
+   reliably.
+2. **Re-announce by emptying and refilling the host**, not by toggling visibility. Clearing its
+   children (`replaceChildren()`) and inserting new content is what fires the next announcement;
+   collapse the empty host visually with `:empty` in CSS, not by hiding the element.
+3. **An empty live region must have no focusable descendants**, so emptying it can never strand
+   focus on a hidden-but-focusable control (spec §22.2). Filling it with a focusable (e.g. a
+   dismiss button) is fine *because* emptying removes that focusable.
+4. **Mount it in an always-visible region.** A live region nested under a frame that can itself be
+   hidden can be suppressed out from under you; put it where no ancestor toggle can mask it.
+5. **Removing the focused control restores focus (WCAG 2.4.3).** If a dismiss/teardown empties the
+   host while focus was inside it, the component signals across its contract (an `onDismiss`-style
+   callback) so the root can place focus somewhere sensible — it does **not** reach across organisms
+   to move focus itself (UI §2.2). The canonical implementation is `attentionCue`.
+
+## 5. Conventions
 
 - **Factory shape.** `createX(host: HTMLElement, deps?): X` returning a typed interface with a
   `dispose()`. No default-exported god objects.
@@ -143,7 +167,7 @@ same wired contract," the contract has leaked — fix the component, not the tes
 - **No new magic numbers.** Timings/dimensions that the spec names stay named and configurable
   (§7.1/§8.2/§9.3).
 
-## 5. Definition of done (per component)
+## 6. Definition of done (per component)
 - [ ] Correct tier, and obeys that tier's dependency limits (UI §1).
 - [ ] Typed interface; all inputs/outputs/services on it (organisms: UI §2.1).
 - [ ] Touches only its host subtree; services injected, not reached for (UI §2.2).
@@ -151,3 +175,4 @@ same wired contract," the contract has leaked — fix the component, not the tes
 - [ ] `dispose()` leaves nothing behind.
 - [ ] RED-first DOM unit tests of observable behavior (UI §3.1).
 - [ ] Organisms: e2e + a passing relocation test in ≥2 placements (UI §3.2–3.3).
+- [ ] If it announces transient messages: follows the Alert pattern — permanent host, empty-to-re-announce, no focusable when empty, focus restored on dismiss (UI §4).

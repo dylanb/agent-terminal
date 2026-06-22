@@ -26,6 +26,7 @@ Use `scripts/await-copilot-review.sh <pr> [--request] [--check]` (portable bash;
 - `src/preload/` — contextBridge exposing the `term` and `monitor` namespaces (§6). No raw `ipcRenderer` in the renderer.
 - `src/renderer/` — terminal pane (xterm + app-owned selection, §7) and monitor pane (§9).
 - `src/shared/ipc.ts` — the typed IPC contract. This file is the single source of truth for channel names and payload shapes; main, preload, and renderer all import from it.
+- **Semantics shared by main and renderer get one definition in `src/shared/`, imported by both — never re-implemented per side.** This generalizes the `ipc.ts` rule from the wire shape to the *meaning* on top of it: any classification or identity that both processes must agree on — what counts as "the same occurrence" for dedup, which statuses mean "blocked on a human", and the like — lives in a shared module so the two sides cannot drift. Two parallel copies that "obviously agree today" are the bug; a behavior-preserving change to one side must be unable to desync them. The current examples are `src/shared/occurrence.ts` (dedup identity) and `src/shared/loopStatus.ts` (human-needed classification).
 
 ## Test-driven development
 
