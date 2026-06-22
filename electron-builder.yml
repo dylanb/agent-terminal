@@ -1,5 +1,5 @@
 appId: dev.agentterminal.app
-productName: Agent Terminal
+productName: agent-terminal
 directories:
   buildResources: build
   output: dist
@@ -20,3 +20,4 @@ linux:
     - AppImage
     - deb
   category: Development
+  syncDesktopName: true

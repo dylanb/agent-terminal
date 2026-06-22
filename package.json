@@ -2,6 +2,12 @@
   "name": "agent-terminal",
   "version": "0.1.0",
   "description": "Foundation for a coding-agent management application: bash in a PTY, xterm.js UI, shadow screen model, monitor pane",
+  "homepage": "https://github.com/dylanb",
+  "author": {
+    "name": "Dylan Barrell",
+    "email": "dylan@barrell.com"
+  },
+  "desktopName": "agent-terminal.desktop",
   "main": "out/main/index.js",
   "private": true,
   "scripts": {
