@@ -55,8 +55,9 @@ export async function captureToTodo(
   }
 }
 
-// >=3:1 against the #1e1e1e background (WCAG 1.4.11); the native highlight is suppressed (§7.0).
-const SEL_COLOR = 'rgba(80, 140, 255, 0.7)';
+// >=3:1 against the #1e1e1e background (WCAG 1.4.11). Shared with the terminal's native selection
+// theme (§7.1) so the live drag highlight and the persistent app-owned decoration read as one.
+export const SEL_COLOR = 'rgba(80, 140, 255, 0.7)';
 // Cross-highlight reveal (§16.8) — amber, distinct from the blue selection so a revealed
 // capture span reads differently from a user selection.
 const REVEAL_COLOR = 'rgba(255, 196, 84, 0.4)';

@@ -170,6 +170,34 @@ test('selection survives focus changes and draws the app-owned highlight', async
   await expect(page.locator('.xterm-decoration')).toHaveCount(0);
 });
 
+test('the native selection highlight is visible live mid-drag, before mouseup (§7.1)', async () => {
+  await typeCommand('echo drag-highlight-marker');
+  await expect(termRows()).toContainText('drag-highlight-marker');
+  await expect.poll(() => findRowIndex('drag-highlight-marker')).toBeGreaterThanOrEqual(0);
+  const row = page.locator('.xterm-rows > div').nth(await findRowIndex('drag-highlight-marker'));
+  const box = (await row.boundingBox())!;
+  const cy = box.y + box.height / 2;
+
+  // The button is still DOWN (no mouse.up): the user must SEE the highlight as they drag,
+  // which the app-owned decoration cannot provide mid-gesture (it churns faster than it paints).
+  await page.mouse.move(box.x + 2, cy);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width - 2, cy, { steps: 10 });
+
+  // xterm's DOM renderer paints the live selection as .xterm-selection rectangles, coloured from
+  // the now non-transparent selectionBackground — a visibly blue fill, not the black it blended
+  // to while transparent (rgba(0,0,0,0) over the black bg → rgb(0,0,0), i.e. invisible).
+  const rect = page.locator('.xterm-selection div').first();
+  await expect(rect).toBeVisible();
+  const [r, , b] = (await rect.evaluate((el) => getComputedStyle(el).backgroundColor))
+    .match(/\d+/g)!
+    .map(Number);
+  expect(b).toBeGreaterThan(120); // visibly blue…
+  expect(b).toBeGreaterThan(r + 60); // …not the black it was when transparent
+
+  await page.mouse.up();
+});
+
 test('manual selection capture routes to the Todo tab; Send drives the shell (§16.2)', async () => {
   await cdToTempDir('inject');
   await typeCommand("echo 'echo injected-ok-123'");
