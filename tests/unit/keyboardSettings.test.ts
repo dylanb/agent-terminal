@@ -205,6 +205,10 @@ describe('keyboard settings view — focus & a11y (§7.7 / WCAG)', () => {
     createKeyboardSettings(host, deps());
     const live = host.querySelector('[aria-live]') as HTMLElement;
     expect(live).toBeTruthy();
+    // A polite status region (role=status's natural politeness): this advisory must not assertively
+    // interrupt the screen reader mid-utterance (WAI-ARIA — avoid the status+assertive contradiction).
+    expect(live.getAttribute('role')).toBe('status');
+    expect(live.getAttribute('aria-live')).toBe('polite');
     expect(live.textContent).toBe('');
     rebindBtn('paste').click();
     expect(live.textContent).toMatch(/record|press a shortcut/i);

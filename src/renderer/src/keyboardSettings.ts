@@ -196,7 +196,7 @@ export function createKeyboardSettings(host: HTMLElement, deps: KeyboardSettings
   // never destroys it, and its text mutation (set in render()) announces recording start / a conflict.
   const liveRegion = el('div', 'kstatus-live');
   liveRegion.setAttribute('role', 'status');
-  liveRegion.setAttribute('aria-live', 'assertive');
+  liveRegion.setAttribute('aria-live', 'polite'); // status is a polite advisory — never interrupt the SR mid-utterance
 
   const groupsHost = el('div', 'kgroups');
   viewRoot.append(head, profile, liveRegion, groupsHost);
@@ -209,7 +209,7 @@ export function createKeyboardSettings(host: HTMLElement, deps: KeyboardSettings
   }
   const win = doc.defaultView;
   const onFocusView = (e: Event): void => {
-    if ((e as CustomEvent<{ view?: string }>).detail?.view === SETTINGS_VIEW) focusPrimary();
+    if ((e as CustomEvent<{ view: string }>).detail?.view === SETTINGS_VIEW) focusPrimary();
   };
   win?.addEventListener(FOCUS_VIEW_EVENT, onFocusView);
 
