@@ -1,10 +1,8 @@
-// The converged three-view shell frame (§22 / §24.1C): view switching, app-global
-// hotkeys (⌘/Ctrl+1/2/3, ⌘/Ctrl+K), the docked non-blurring quick-send drawer, and
-// the light/dark theme. It is the app frame organism (UI-STANDARDS §1.3): it touches
-// only its host subtree and the document element it themes, takes theme persistence
-// as an injected seam, and signals nothing to sibling organisms directly. The drawer
-// docks as a layout column — it never inserts a scrim — so the terminal stays visible
-// beside the capture pane for cross-highlight (§16.8, amends §22.2 per v2.29).
+// The converged three-view shell frame (§22 / §24.1C): the app frame organism (UI-STANDARDS §1.3) —
+// touches only its host subtree plus the document element it themes, takes theme persistence as an
+// injected seam, and signals siblings only through the contract. The drawer docks as a layout column
+// (no scrim) so the terminal stays visible beside the capture pane for cross-highlight (§16.8, amends
+// §22.2 per v2.29).
 
 import type { Theme } from '../../shared/ipc';
 import { setShown } from './visibility';
@@ -16,6 +14,8 @@ export type ViewId = '1' | '2' | '3' | '4'; // 4 = the Settings view (§7.7), re
 export interface Shell {
   setView(v: ViewId): void;
   getView(): ViewId;
+  /** Land focus on a view's nav button, so the root needn't reach into the shell's markup (WCAG 2.4.3). */
+  focusView(v: ViewId): void;
   openDrawer(): void;
   closeDrawer(): void;
   toggleDrawer(): void;
@@ -55,7 +55,7 @@ export function createShell(root: HTMLElement, deps: ShellDeps = {}): Shell {
   let fullscreen = root.classList.contains('viewer-fullscreen');
 
   function setView(v: ViewId): void {
-    if (fullscreen && v !== '2') setViewerFullscreen(false); // chrome is hidden; leaving the viewer restores it
+    if (fullscreen && v !== '2') setViewerFullscreen(false); // leaving the viewer restores hidden chrome (§20.2)
     view = v;
     root.querySelectorAll('[data-viewpane]').forEach((p) => p.classList.toggle('on', p.getAttribute('data-viewpane') === v));
     root.querySelectorAll('[data-viewbtn]').forEach((b) => {
@@ -64,25 +64,21 @@ export function createShell(root: HTMLElement, deps: ShellDeps = {}): Shell {
       if (on) b.setAttribute('aria-current', 'page');
       else b.removeAttribute('aria-current');
     });
-    // The pane is now visible; hand focus to its organism so the keyboard lands in the view the
-    // user just switched to (the terminal, so they can keep typing). The shell never focuses a
-    // sibling's controls itself — it announces, the organism focuses (§22.4).
+    // §22.4: the shell never focuses a sibling's controls — it announces, the organism focuses.
     announceViewFocus(v);
   }
 
-  // Drawer-tab selection is owned by the action-window coordinator (monitor.ts, §16.1),
-  // which keys off the real `role="tab"`/`aria-selected` contract and persists lastTab. The
-  // shell only docks/undocks the drawer column; it never touches the tabs inside it.
+  // Drawer-tab selection is owned by monitor.ts (§16.1); the shell only docks/undocks the column
+  // and never touches the tabs inside it.
 
-  // The dock is a layout column, so opening/closing it changes the main pane's width
-  // without a window resize. Broadcast one so width-sensitive panes (the terminal's
-  // FitAddon, §7.1) refit — the same decoupled signal the old splitter used.
+  // Docking changes the main pane's width without a window resize; broadcast one so width-sensitive
+  // panes (the terminal's FitAddon, §7.1) refit.
   const signalLayoutChange = (): void => {
     doc.defaultView?.dispatchEvent(new Event('resize'));
   };
 
-  // The drawer is display:none when closed (via setShown), not just a 0-width column — otherwise its
-  // tabs/buttons stay in the tab order while invisible (§22.2). The grid class sizes it when open.
+  // Closed drawer is display:none (setShown), not a 0-width column: otherwise its tabs/buttons stay
+  // in the tab order while invisible (§22.2).
   const drawerEl = root.querySelector<HTMLElement>('.drawer');
   const isDrawerOpen = (): boolean => root.classList.contains('drawer-open');
   function openDrawer(): void {
@@ -100,9 +96,8 @@ export function createShell(root: HTMLElement, deps: ShellDeps = {}): Shell {
     else openDrawer();
   }
 
-  // The loop+gate panel docks as another layout column (§24.2.3), between the rail and main.
-  // Like the drawer it is display:none when closed (so its close button leaves the tab order),
-  // and its read-out (.loopstat) carries the aria-expanded state for assistive tech.
+  // Same display:none-when-closed contract as the drawer (§22.2); its .loopstat read-out carries
+  // aria-expanded for assistive tech (§24.2.3).
   const loopPanelEl = root.querySelector<HTMLElement>('.loop-panel');
   const isLoopPanelOpen = (): boolean => root.classList.contains('loop-open');
   const syncLoopReadout = (on: boolean): void =>
@@ -157,9 +152,8 @@ export function createShell(root: HTMLElement, deps: ShellDeps = {}): Shell {
     if (target.closest('#tg')) return setTheme(theme === 'dark' ? 'light' : 'dark');
   };
 
-  // Capture phase + stopPropagation: the terminal (xterm) would otherwise swallow
-  // ⌘/Ctrl+K (a control char) and ⌘/Ctrl+1-3 before they reach us, so the shell's
-  // own chords must be intercepted ahead of any focused descendant (§22.4).
+  // Capture phase + stopPropagation: xterm would otherwise swallow ⌘/Ctrl+K and ⌘/Ctrl+1-3 before
+  // they reach the shell, so these chords must be intercepted ahead of any focused descendant (§22.4).
   const onKeyDown = (e: KeyboardEvent): void => {
     if (e.key === 'Escape' && fullscreen) {
       e.preventDefault();
@@ -206,10 +200,8 @@ export function createShell(root: HTMLElement, deps: ShellDeps = {}): Shell {
     }
   };
 
-  // A Send (todo/capture/artifact) asks for terminal focus on the decoupled bus (§16.2). From
-  // another view that focus would hit a hidden xterm, so the shell reveals the terminal view;
-  // setView then announces it and the terminal organism focuses (§22.4). Owning the reveal here
-  // keeps the focus path single — the terminal no longer listens for this event itself.
+  // A Send asks for terminal focus on the decoupled bus (§16.2); from another view that would hit a
+  // hidden xterm, so the shell reveals the terminal view and setView announces it to focus (§22.4).
   const onFocusTerminal = (): void => setView('1');
   const win = doc.defaultView;
   win?.addEventListener(FOCUS_TERMINAL_EVENT, onFocusTerminal);
@@ -218,20 +210,19 @@ export function createShell(root: HTMLElement, deps: ShellDeps = {}): Shell {
   doc.addEventListener('keydown', onKeyDown, true);
 
   applyTheme(theme);
-  setView(view); // sync the pane/nav classes + aria-current to the markup-inferred view on mount
-  if (drawerEl) setShown(drawerEl, isDrawerOpen()); // match the drawer's inert state to its start class
-  if (loopPanelEl) setShown(loopPanelEl, isLoopPanelOpen()); // same for the loop panel (starts closed)
-  // A failing IPC / main-process restart must not become an unhandled rejection; on failure
-  // keep the default theme.
+  setView(view);
+  if (drawerEl) setShown(drawerEl, isDrawerOpen());
+  if (loopPanelEl) setShown(loopPanelEl, isLoopPanelOpen());
   if (deps.getTheme)
     void deps
       .getTheme()
-      .then((t) => { if (!themeUserSet) applyTheme(t); }) // skip if the user already chose a theme
-      .catch(() => {});
+      .then((t) => { if (!themeUserSet) applyTheme(t); }) // a user toggle that already ran wins (§16.6)
+      .catch(() => {}); // a rejected invoke (main restart) keeps the default theme, never rejects
 
   return {
     setView,
     getView: () => view,
+    focusView: (v) => root.querySelector<HTMLElement>(`[data-viewbtn="${v}"]`)?.focus(),
     openDrawer,
     closeDrawer,
     toggleDrawer,

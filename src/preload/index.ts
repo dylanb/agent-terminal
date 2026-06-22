@@ -82,12 +82,12 @@ const monitorApi: MonitorApi = {
     ipcRenderer.send(CH.monitorLearnChrome, { sessionId: SESSION_ID, eventId, sample }),
   inject: (req) =>
     ipcRenderer.send(CH.agentInject, { sessionId: SESSION_ID, ...req } satisfies AgentInjectMsg),
-  // Global UI prefs (§16.6) — no sessionId; app-wide, not per-session.
+  // §16.6: app-wide, so no sessionId.
   getSettings: () => ipcRenderer.invoke(CH.uiGetSettings) as Promise<UiSettings>,
   setSettings: (settings) => ipcRenderer.send(CH.uiSetSettings, { settings }),
   onCwdChanged: (cb) => ipcRenderer.on(CH.cwdChanged, (_e, m: CwdChangedMsg) => cb(m)),
   clearCommands: () => ipcRenderer.send(CH.monitorClearCommands, { sessionId: SESSION_ID }),
-  // Todo (§16.4) — repoKey threaded so an in-flight edit always targets its own repo.
+  // §16.4: repoKey threaded so an in-flight edit always targets its own repo, not whatever cwd moved to.
   todoList: (repoKey) => ipcRenderer.invoke(CH.todoList, { sessionId: SESSION_ID, repoKey }) as Promise<TodoItem[]>,
   todoAdd: (repoKey, text, source?: TodoSource) =>
     ipcRenderer.invoke(CH.todoAdd, { sessionId: SESSION_ID, repoKey, text, source }) as Promise<TodoItem[]>,
@@ -124,6 +124,11 @@ const flowApi: FlowApi = {
     const handler = (): void => cb();
     ipcRenderer.on(CH.flowOnStateChanged, handler);
     return () => ipcRenderer.removeListener(CH.flowOnStateChanged, handler);
+  },
+  onRevealLoop: (cb) => {
+    const handler = (): void => cb();
+    ipcRenderer.on(CH.flowRevealLoop, handler);
+    return () => ipcRenderer.removeListener(CH.flowRevealLoop, handler);
   },
 };
 

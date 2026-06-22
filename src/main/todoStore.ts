@@ -1,12 +1,5 @@
-// Repo-scoped todo store (§16.3 / §16.4) — the app's first in-repo persistence.
-// Each repo key (a git root or a non-repo dir) owns one file at
-// <repoKey>/.agent-terminal/todos.json. Lists are loaded lazily, cached per key,
-// and rewritten atomically on every mutation. A missing/corrupt file degrades to
-// an empty list (never a throw) so a bad file can't wedge the pane.
-//
-// `order` is a monotonically increasing sort key: new/re-activated items take the
-// next value, so they append to the bottom of the active list. The Done section is
-// capped (APP_MAX_DONE_TODOS) by pruning the smallest-order (oldest) done items.
+// Repo-scoped todo store (§16.3 / §16.4). A missing/corrupt file degrades to an empty list (never
+// a throw) so a bad file can't wedge the pane. Done is capped (APP_MAX_DONE_TODOS).
 
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
@@ -58,7 +51,7 @@ export function createTodoStore(deps: TodoStoreDeps): TodoStore {
       const raw = JSON.parse(readFileSync(fileFor(repoKey), 'utf8'));
       if (Array.isArray(raw)) items = raw as TodoItem[];
     } catch {
-      items = []; // missing/corrupt → empty (§16.3)
+      items = [];
     }
     // The file IS the bucket (§16.3): an item belongs to the repo whose file it lives in. A
     // stale stamp (dir copied between checkouts / worktree seeded from another) would misroute
@@ -113,8 +106,6 @@ export function createTodoStore(deps: TodoStoreDeps): TodoStore {
     },
     reorder(repoKey, orderedIds) {
       const state = load(repoKey);
-      // Reassign a fresh ascending run to the listed active items, preserving the
-      // given sequence; unlisted items keep their order.
       for (const id of orderedIds) {
         const item = state.items.find((t) => t.id === id);
         if (item) item.order = ++state.seq;

@@ -1,10 +1,6 @@
-// Mocked Review-gate widget (§19.3): the view-3 gate panel renders from ONE fixture
-// FlowState; its actions are stubbed — they reflect a verdict locally and notify an
-// optional handler, but inject nothing (no agent-loop bridge yet, §18.3/§19.1). It is a
-// placement-agnostic widget (UI-STANDARDS §1.2) — it takes a host + data.
-//
-// The fixture flow timeline + rail status that lived here were retired by §24.2.2 S1:
-// the rail's flow status strip is now real (`flowStrip.ts`, driven by window.flow).
+// Mocked Review-gate widget (§19.3): a placement-agnostic widget (UI-STANDARDS §1.2) whose actions
+// are stubbed — they reflect a verdict locally but inject nothing (no agent-loop bridge yet,
+// §18.3/§19.1).
 
 export type StepStatus = 'done' | 'active' | 'todo';
 export interface FlowStep {
@@ -19,7 +15,7 @@ export interface FlowState {
   loop: { iteration: number; severity: string; openFindings: number; lastVerdict: string };
 }
 
-/** The Phase-1 sample flow: a review loop paused at the Review gate, iteration 3. */
+/** Fixture: a review loop paused at the Review gate. */
 export const SAMPLE_FLOW: FlowState = {
   steps: [
     { name: 'Plan', status: 'done' },
@@ -33,8 +29,7 @@ export const SAMPLE_FLOW: FlowState = {
 
 const pad2 = (n: number): string => String(n).padStart(2, '0');
 
-// Build elements from the HOST's document, not the global one, so these widgets are correct if
-// ever mounted in another Document/iframe (host-document invariant, UI-STANDARDS).
+// host-document invariant (UI-STANDARDS): build from the host's document, not global.
 type El = (tag: string, className?: string, text?: string) => HTMLElement;
 const makeEl = (doc: Document): El => (tag, className, text) => {
   const node = doc.createElement(tag);
@@ -63,7 +58,6 @@ export function createGatePanel(
   const el = makeEl(host.ownerDocument);
   let status: GateStatus = state.gate.status;
 
-  // Before any action the row shows the loop's prior verdict; acting overwrites it.
   const verdict = el('span', 'lv', state.loop.lastVerdict);
   verdict.classList.toggle('bad', /change/i.test(state.loop.lastVerdict));
   const renderVerdict = (): void => {
@@ -75,7 +69,7 @@ export function createGatePanel(
   const approve = el('button', 'pill app', 'Approve gate') as HTMLButtonElement;
   const request = el('button', 'pill send', 'Request changes') as HTMLButtonElement;
   const open = el('button', 'pill', 'Open report') as HTMLButtonElement;
-  open.disabled = true; // Phase-1 stub: no report wiring yet, so it must not present as actionable (§19.3)
+  open.disabled = true; // stub: no report wiring yet, must not present as actionable (§19.3)
   bar.append(approve, request, open);
 
   const set = (next: GateStatus, action: 'approve' | 'changes'): void => {

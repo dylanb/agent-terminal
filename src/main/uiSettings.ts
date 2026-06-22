@@ -1,21 +1,17 @@
-// Global UI-settings store (§16.6) — the app's first on-disk persistence and the
-// only state that lives outside the repo (app.getPath('userData')/ui-settings.json).
-// Writes are atomic and a missing/corrupt/garbage file degrades to defaults, never
-// a throw, so a bad pref can never wedge startup.
+// Global UI-settings store (§16.6). A missing/corrupt/garbage file MUST degrade to
+// defaults, never throw, so a bad pref can never wedge startup.
 
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { DEFAULT_UI_SETTINGS, type KeymapProfileSetting, type TabId, type Theme, type UiSettings } from '../shared/ipc';
 import { KEY_ACTION_IDS, type Chord, type KeyActionId } from '../shared/keymap';
 
-// Keep the persisted ratio away from the degenerate edges; the renderer applies a
-// px-based clamp on top (§16.6), but the store must never hand back a 0/1 ratio.
+// §16.6: the store must never hand back a 0/1 ratio (the renderer adds a px-based clamp).
 const MIN_RATIO = 0.05;
 const MAX_RATIO = 0.95;
-// Artifact tree-pane width clamp (§20.2) — wide enough to read names, never eats the viewer.
+// Artifact tree-pane width clamp (§20.2).
 const MIN_TREE_W = 140;
 const MAX_TREE_W = 640;
-// The full-screen popout has a wider range (a viewport-relative clamp is applied in the renderer).
 const MIN_FS_TREE_W = 200;
 const MAX_FS_TREE_W = 2000;
 
@@ -35,7 +31,7 @@ function coerceWidth(raw: unknown, fallback: number): number {
   return Math.min(MAX_TREE_W, Math.max(MIN_TREE_W, Math.round(raw)));
 }
 
-// Optional: undefined stays undefined (the renderer then defaults to 30% of the viewport, §20.2).
+// Stays undefined so the renderer can apply its viewport-relative default (§20.2).
 function coerceFsWidth(raw: unknown, fallback: number | undefined): number | undefined {
   if (typeof raw !== 'number' || !Number.isFinite(raw)) return fallback;
   return Math.min(MAX_FS_TREE_W, Math.max(MIN_FS_TREE_W, Math.round(raw)));

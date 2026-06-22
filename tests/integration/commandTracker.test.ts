@@ -175,8 +175,8 @@ describe('command tracker (§15.5 — OSC 133 segmentation, detection only)', ()
 
   it('caps concurrent open spans, evicting oldest-first and disposing its markers', async () => {
     setup({ maxOpenSpans: 2 });
-    // Observe disposal through the injected addMarker seam with a test-owned wrapper
-    // (delegating the members the tracker uses) rather than mutating the real IMarker.
+    // Count live markers through the injected addMarker seam — a test-owned wrapper, not a mutated
+    // real IMarker.
     let live = 0;
     tracker.dispose();
     tracker = createCommandTracker({

@@ -1,6 +1,6 @@
-// Cross-highlight matcher (§16.8), terminal→capture direction. Pure so it is unit-tested
-// without a terminal; selection.ts feeds it the LIVE marker rows (xterm markers track
-// reflow), so the match stays correct after a resize that moved the captured rows.
+// Cross-highlight matcher (§16.8), terminal→capture direction. selection.ts must feed it the LIVE
+// marker rows (xterm markers track reflow), else a resize that moved the captured rows stales the
+// match.
 
 export interface RevealSpan {
   id: string;

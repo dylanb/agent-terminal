@@ -1,10 +1,6 @@
 // The artifact viewer (§20.1/§20.2 / §24.1): view 2's file tree + viewer. A placement-agnostic
-// organism (UI-STANDARDS §1.2/§1.3) — it builds and touches only its host subtree, takes
-// discovery (loadTree), file reading (loadFile), the heavy render stack, and the two §16.2
-// sinks as injected seams, and themes through tokens only. The tree is hierarchical and
-// provenance-tagged; in a repo a "show all repo files" checkbox switches the curated default
-// to the whole repo (§20.1 / D8). Code renders read-only; a selection in either view routes
-// to the same two sinks as the terminal-pane selection (send-to-agent / add-to-todo).
+// organism (UI-STANDARDS §1.2/§1.3). A selection in either view routes to the same two §16.2 sinks
+// as the terminal-pane selection (send-to-agent / add-to-todo).
 
 import type { ArtifactNode, ArtifactScope, ArtifactTree, ViewerFile } from '../../shared/ipc';
 import { setShown, setCollapsed } from './visibility';
@@ -57,7 +53,7 @@ const DEFAULT_TREE_W = 248;
 const MIN_TREE_W = 140;
 const MAX_TREE_W = 640;
 const WIDTH_STEP = 16;
-const FS_MIN_TREE_W = 200; // full-screen popout floor; ceiling is FS_MAX_VIEWPORT_FRAC of the viewport
+const FS_MIN_TREE_W = 200;
 const FS_MAX_VIEWPORT_FRAC = 0.85;
 const clampWidth = (px: number): number => Math.min(MAX_TREE_W, Math.max(MIN_TREE_W, Math.round(px)));
 
@@ -89,8 +85,8 @@ export function selectionWithin(viewer: HTMLElement): string {
   if (!sel || sel.isCollapsed || sel.rangeCount === 0) return '';
   const within = (n: Node | null): boolean => !!n && (n === viewer || viewer.contains(n));
   if (!within(sel.anchorNode) || !within(sel.focusNode)) return '';
-  // Return the RAW selection so code indentation/trailing newlines survive (§16.2); only collapse a
-  // whitespace-only selection to empty (the disabled-until-highlight guard relies on that).
+  // RAW selection so code indentation/trailing newlines survive (§16.2); a whitespace-only
+  // selection collapses to empty so the disabled-until-highlight guard holds.
   const text = sel.toString();
   return text.trim() === '' ? '' : text;
 }
@@ -120,7 +116,6 @@ export function createArtifacts(host: HTMLElement, deps: ArtifactsDeps): Artifac
     return n;
   };
 
-  // --- DOM: tree | viewer (the organism owns this whole subtree) ---
   host.replaceChildren();
   const split = el('div', 'artsplit');
   const tree = el('div', 'tree');
@@ -139,7 +134,6 @@ export function createArtifacts(host: HTMLElement, deps: ArtifactsDeps): Artifac
   list.setAttribute('aria-label', 'Artifacts');
   tree.append(search, scopeLabel, list);
 
-  // Drag/keyboard-resizable edge between the tree and the viewer (§20.2).
   const divider = el('div', 'artsplit-divider');
   divider.setAttribute('role', 'separator');
   divider.setAttribute('aria-orientation', 'vertical');
@@ -153,12 +147,11 @@ export function createArtifacts(host: HTMLElement, deps: ArtifactsDeps): Artifac
   const actions = el('div', 'vactions');
   const sendBtn = el('button', 'art-send pill sm signal', 'Send to agent') as HTMLButtonElement;
   const todoBtn = el('button', 'art-todo pill sm', 'Add to todo') as HTMLButtonElement;
-  sendBtn.disabled = true; // inert until there is a highlight to act on (§20.2)
+  sendBtn.disabled = true;
   todoBtn.disabled = true;
-  // The sinks act on the live selection, which a button mousedown would otherwise collapse;
-  // preventDefault keeps it alive across the click so the handler still sees it (§20.2).
+  // preventDefault keeps the live selection alive across the click — a button mousedown would
+  // otherwise collapse it before the sink handler reads it (§20.2).
   for (const b of [sendBtn, todoBtn]) b.addEventListener('mousedown', (e) => e.preventDefault());
-  // Step through the file's changed sections (§20.2), with a current/total readout.
   const prevBtn = el('button', 'art-prev pill sm', '‹') as HTMLButtonElement;
   const nextBtn = el('button', 'art-next pill sm', '›') as HTMLButtonElement;
   prevBtn.setAttribute('aria-label', 'Previous changed section');
@@ -167,8 +160,7 @@ export function createArtifacts(host: HTMLElement, deps: ArtifactsDeps): Artifac
   const nav = el('div', 'vnav');
   setShown(nav, false);
   nav.append(prevBtn, navCount, nextBtn);
-  // Full-screen toggle (§20.2): the same button enters and exits; in full screen it lives in the
-  // revealed header (the "top bar when visible") and Escape is the other exit.
+  // Full-screen toggle (§20.2).
   const fsBtn = el('button', 'art-fs pill sm', '⛶') as HTMLButtonElement;
   fsBtn.setAttribute('aria-label', 'Full screen');
   fsBtn.setAttribute('aria-pressed', 'false');
@@ -177,18 +169,17 @@ export function createArtifacts(host: HTMLElement, deps: ArtifactsDeps): Artifac
   titleWrap.append(title, meta);
   bar.append(titleWrap, actions);
   const body = el('div', 'vbody');
-  body.setAttribute('role', 'region'); // a labelled, keyboard-focusable scroll region (§20.2 a11y)
+  body.setAttribute('role', 'region'); // §20.2 a11y
   viewer.append(bar, body);
 
-  // Thin edge strips that pop the collapsed header/tree open and closed in full screen (§20.2);
-  // hidden by CSS outside full screen. Real buttons → Tab-reachable, Enter/Space-operable.
+  // Edge strips that reopen the collapsed header/tree in full screen (§20.2); real <button>s so
+  // they are Tab-reachable and Enter/Space-operable, not click-only divs.
   const topStrip = el('button', 'fs-strip fs-strip-top') as HTMLButtonElement;
   topStrip.setAttribute('aria-label', 'Show file header');
   topStrip.setAttribute('aria-expanded', 'false');
   const leftStrip = el('button', 'fs-strip fs-strip-left') as HTMLButtonElement;
   leftStrip.setAttribute('aria-label', 'Show file tree');
   leftStrip.setAttribute('aria-expanded', 'false');
-  // Resize handle on the full-screen tree popout's right edge (§20.2); drag or arrow-key.
   const fsResize = el('div', 'fs-tree-resize');
   fsResize.setAttribute('role', 'separator');
   fsResize.setAttribute('aria-orientation', 'vertical');
@@ -200,24 +191,23 @@ export function createArtifacts(host: HTMLElement, deps: ArtifactsDeps): Artifac
   let scope: ArtifactScope = 'curated';
   let current: string | null = null;
   let treeRoot = '';
-  let treeNodes: ArtifactNode[] = []; // the full discovered tree; the search re-renders a filtered view of it
+  let treeNodes: ArtifactNode[] = [];
   let refreshSeq = 0; // a slow stale refresh must not overwrite a newer one (cwd sync race)
   const fileRows = new Map<string, HTMLElement>();
 
-  // --- Resizable tree pane (§20.2): drag the divider, or arrow-key it; width persists. ---
   let width = clampWidth(deps.initialWidth ?? DEFAULT_TREE_W);
   function applyWidth(px: number, persist: boolean): void {
     width = clampWidth(px);
     split.style.setProperty('--tree-w', `${width}px`);
     divider.setAttribute('aria-valuenow', String(width));
-    divider.setAttribute('aria-valuemin', String(MIN_TREE_W)); // expose the clamp range for AT (§20.2)
+    divider.setAttribute('aria-valuemin', String(MIN_TREE_W)); // §20.2 a11y
     divider.setAttribute('aria-valuemax', String(MAX_TREE_W));
     if (persist) deps.onWidthChange?.(width);
   }
   applyWidth(width, false);
 
-  // A drag attaches document-level mousemove/mouseup; tracked in one outer slot so a mid-gesture
-  // dispose() (relocation/unmount) removes them deterministically and a new drag can't stack (§20.2).
+  // The drag's document-level listeners live in one outer slot so a mid-gesture dispose() removes
+  // them deterministically and a new drag can't stack a second pair (§20.2).
   let endDrag: (() => void) | null = null;
   function beginDrag(startX: number, startW: number, apply: (px: number) => void, persist: () => void): void {
     endDrag?.();
@@ -246,8 +236,8 @@ export function createArtifacts(host: HTMLElement, deps: ArtifactsDeps): Artifac
     e.preventDefault();
   });
 
-  // --- Full-screen tree popout: its own remembered width, defaulting to 30% of the viewport so it
-  // opens usefully wide; resized by dragging its right edge or arrow-keying it (§20.2). ---
+  // The full-screen popout keeps its own width, defaulting to 30% of the viewport so it opens
+  // usefully wide (§20.2).
   const viewportW = (): number => doc.defaultView?.innerWidth ?? 1024;
   const fsMaxWidth = (): number => Math.round(viewportW() * FS_MAX_VIEWPORT_FRAC);
   const clampFsWidth = (px: number): number => Math.min(fsMaxWidth(), Math.max(FS_MIN_TREE_W, Math.round(px)));
@@ -256,20 +246,19 @@ export function createArtifacts(host: HTMLElement, deps: ArtifactsDeps): Artifac
     fsWidth = clampFsWidth(px);
     split.style.setProperty('--tree-w-fs', `${fsWidth}px`);
     fsResize.setAttribute('aria-valuenow', String(fsWidth));
-    fsResize.setAttribute('aria-valuemin', String(FS_MIN_TREE_W)); // clamp range for AT (§20.2)
+    fsResize.setAttribute('aria-valuemin', String(FS_MIN_TREE_W)); // §20.2 a11y
     fsResize.setAttribute('aria-valuemax', String(fsMaxWidth())); // viewport-dependent ceiling
     if (persist) deps.onFullscreenWidthChange?.(fsWidth);
   }
   applyFsWidth(fsWidth, false);
-  // The clamp ceiling (aria-valuemax) is viewport-dependent, so re-apply on window resize to keep
-  // it (and the width) from going stale; cleaned up in dispose().
+  // The clamp ceiling is viewport-dependent, so re-apply on window resize to keep it (and the
+  // width) from going stale.
   const win = doc.defaultView;
   const onWindowResize = (): void => applyFsWidth(fsWidth, false);
   win?.addEventListener('resize', onWindowResize);
 
-  // §22.4 focus rule: when the shell switches to this view it announces it; we move keyboard
-  // focus to the first tree item so arrow-key navigation works without a click (the tree is the
-  // view's primary control). Other views are ignored. The roving tabindex is set by focusItem.
+  // §22.4 focus rule: the shell dispatches FOCUS_VIEW_EVENT when it switches view; on our view we
+  // move focus to the first tree item (the view's primary control) so arrow-nav works without a click.
   const onFocusView = (e: Event): void => {
     if ((e as CustomEvent<{ view: string }>).detail?.view === ARTIFACTS_VIEW) focusItem(visibleItems()[0]);
   };
@@ -285,8 +274,8 @@ export function createArtifacts(host: HTMLElement, deps: ArtifactsDeps): Artifac
     e.preventDefault();
   });
   divider.addEventListener('dblclick', () => applyWidth(DEFAULT_TREE_W, true));
-  // A button click collapses the live DOM selection before its handler runs, so we remember
-  // the last non-empty in-viewer selection and fall back to it at click time.
+  // Fallback for the sinks: a click can collapse the live selection before the handler reads it,
+  // so the last non-empty in-viewer selection is remembered.
   let lastSelection = '';
   function updateActions(): void {
     const text = readSelection(body);
@@ -296,9 +285,8 @@ export function createArtifacts(host: HTMLElement, deps: ArtifactsDeps): Artifac
   }
   doc.addEventListener('selectionchange', updateActions);
 
-  // --- Changed-section navigation (§20.2): viewport-driven. `sections` is the 1-based start
-  // line of each contiguous changed run; the readout and prev/next targets are read off what
-  // the editor currently shows, so scrolling updates them live. ---
+  // Changed-section navigation (§20.2): the readout and prev/next targets are read off the
+  // editor's current viewport, so scrolling updates them live.
   let codeView: CodeView | null = null;
   let sections: number[] = [];
   let unsubViewport: (() => void) | null = null;
@@ -313,8 +301,6 @@ export function createArtifacts(host: HTMLElement, deps: ArtifactsDeps): Artifac
     }
     return starts;
   }
-  // Current = the last section scrolled onto/past the screen (≤ viewport bottom); prev/next
-  // target the nearest section strictly above the top / below the bottom of the viewport.
   function navState(): { display: number; prevTo: number | null; nextTo: number | null } {
     if (!codeView || sections.length === 0) return { display: 0, prevTo: null, nextTo: null };
     const { top, bottom } = codeView.visibleLines();
@@ -346,13 +332,12 @@ export function createArtifacts(host: HTMLElement, deps: ArtifactsDeps): Artifac
     if (nextTo !== null) codeView?.revealLine(nextTo);
   });
 
-  // --- Full-screen viewer (§20.2): the button requests the chrome change through the contract;
-  // the shell calls setFullscreen back. The header/tree slide off and the edge strips pop them
-  // open and closed. State lives on the .artsplit element so the styling is placement-agnostic. ---
+  // Full-screen viewer (§20.2): the button requests the chrome change through the contract and
+  // the shell calls setFullscreen back. State lives on .artsplit so the styling is placement-agnostic.
   let fullscreen = false;
   fsBtn.addEventListener('click', () => deps.onRequestFullscreen?.(!fullscreen));
-  // Each panel's open state lives as .is-collapsed on the panel itself, so a collapsed (slid-off)
-  // header/tree is inert — no tab stops inside hidden content (§22.2).
+  // .is-collapsed on the panel itself keeps a slid-off header/tree inert — no tab stops inside
+  // hidden content (§22.2).
   const setHeaderOpen = (open: boolean): void => {
     setCollapsed(bar, !open);
     topStrip.setAttribute('aria-expanded', String(open));
@@ -367,16 +352,16 @@ export function createArtifacts(host: HTMLElement, deps: ArtifactsDeps): Artifac
     if (on === fullscreen) return;
     fullscreen = on;
     split.classList.toggle('fullscreen', on);
-    setHeaderOpen(!on); // collapsed on enter; expanded on exit so the normal split shows them again
+    setHeaderOpen(!on);
     setTreeOpen(!on);
     fsBtn.setAttribute('aria-pressed', String(on));
     fsBtn.setAttribute('aria-label', on ? 'Exit full screen' : 'Full screen');
-    (on ? topStrip : fsBtn).focus(); // keep keyboard focus on a live control across the transition
+    (on ? topStrip : fsBtn).focus(); // keep focus on a live control across the transition (WCAG 2.4.3)
   }
 
   const PROV_LABEL: Record<string, string> = { changed: 'changed', loop: 'loop', pr: 'PR' };
 
-  // Collapse/expand a directory and keep its treeitem's aria-expanded in sync (§20.2 a11y).
+  // Keep the treeitem's aria-expanded in sync with the collapse state (§20.2 a11y).
   const setDirCollapsed = (dir: HTMLElement, head: HTMLElement, collapsed: boolean): void => {
     dir.classList.toggle('collapsed', collapsed);
     head.setAttribute('aria-expanded', String(!collapsed));
@@ -387,22 +372,22 @@ export function createArtifacts(host: HTMLElement, deps: ArtifactsDeps): Artifac
       if (node.kind === 'dir') {
         const dir = el('div', 'dir');
         const head = el('div', 'dname', node.name);
-        head.title = node.relPath; // full path on hover (§20.2 truncation discoverability)
+        head.title = node.relPath; // truncated name → full path on hover (§20.2)
         head.setAttribute('role', 'treeitem');
-        head.setAttribute('aria-expanded', 'true'); // dirs render expanded; kept in sync on toggle
+        head.setAttribute('aria-expanded', 'true');
         head.tabIndex = -1;
         head.addEventListener('click', () => setDirCollapsed(dir, head, !dir.classList.contains('collapsed')));
         const children = el('div', 'dchildren');
-        children.setAttribute('role', 'group'); // ARIA tree: a dir treeitem owns a group of children
+        children.setAttribute('role', 'group'); // WAI-ARIA tree: dir treeitem owns a group
         renderNodes(node.children ?? [], children);
         dir.append(head, children);
         into.appendChild(dir);
       } else {
         const row = el('div', 'f');
         row.dataset.rel = node.relPath;
-        row.title = node.relPath; // full path on hover, since the name truncates (§20.2)
+        row.title = node.relPath; // truncated name → full path on hover (§20.2)
         row.setAttribute('role', 'treeitem');
-        row.setAttribute('aria-selected', 'false'); // single-select; the open file flips to true
+        row.setAttribute('aria-selected', 'false');
         row.tabIndex = -1;
         row.append(el('span', 'ic', node.relPath.endsWith('.md') ? 'md' : 'ƒ'), el('span', 'fn', node.name));
         for (const p of node.provenance ?? []) row.appendChild(el('span', `tag tag-${p}`, PROV_LABEL[p] ?? p));
@@ -430,14 +415,14 @@ export function createArtifacts(host: HTMLElement, deps: ArtifactsDeps): Artifac
     row.focus();
   }
 
-  // WAI-ARIA tree keyboard nav (§20.2): a single handler on the tree, keyed off the focused row.
+  // WAI-ARIA tree keyboard nav (§20.2).
   list.addEventListener('keydown', (e) => {
     const row = (e.target as HTMLElement).closest('[role="treeitem"]') as HTMLElement | null;
     if (!row) return;
     const items = visibleItems();
     const i = items.indexOf(row);
     const isDir = row.classList.contains('dname');
-    const dir = row.parentElement; // the .dir wrapper, for dir rows
+    const dir = row.parentElement;
     switch (e.key) {
       case 'ArrowDown': focusItem(items[i + 1]); break;
       case 'ArrowUp': focusItem(items[i - 1]); break;
@@ -450,7 +435,7 @@ export function createArtifacts(host: HTMLElement, deps: ArtifactsDeps): Artifac
         break;
       case 'ArrowRight':
         if (isDir && dir?.classList.contains('collapsed')) setDirCollapsed(dir, row, false);
-        else if (isDir) focusItem(visibleItems()[i + 1]); // into first child
+        else if (isDir) focusItem(visibleItems()[i + 1]);
         break;
       case 'ArrowLeft':
         if (isDir && dir && !dir.classList.contains('collapsed')) setDirCollapsed(dir, row, true);
@@ -461,9 +446,8 @@ export function createArtifacts(host: HTMLElement, deps: ArtifactsDeps): Artifac
     e.preventDefault();
   });
 
-  // Keep a file iff its own name matches (not its path — else a directory whose name contains the
-  // query would drag in all its files); keep a directory iff it still has a matching descendant, so
-  // matches show with just their tree hierarchy (§20.2).
+  // Match a file's own name, not its path — else a directory whose name contains the query would
+  // drag in all its files (§20.2).
   function filterNodes(nodes: ArtifactNode[], q: string): ArtifactNode[] {
     const out: ArtifactNode[] = [];
     for (const n of nodes) {
@@ -477,19 +461,18 @@ export function createArtifacts(host: HTMLElement, deps: ArtifactsDeps): Artifac
     return out;
   }
 
-  // Render the tree from the discovered nodes, filtered to the current query — we re-render rather
-  // than toggle visibility so nothing non-matching is ever in the DOM (§20.2).
+  // Re-render rather than toggle visibility so nothing non-matching is ever left in the DOM (§20.2).
   function renderTree(): void {
     const q = search.value.trim().toLowerCase();
     fileRows.clear();
     list.replaceChildren();
     renderNodes(q ? filterNodes(treeNodes, q) : treeNodes, list);
     if (current) setSelectedRow(current);
-    const firstItem = visibleItems()[0]; // one row carries tabindex=0 so the tree is reachable
+    const firstItem = visibleItems()[0]; // one row holds tabindex=0 so the tree is Tab-reachable
     if (firstItem) firstItem.tabIndex = 0;
   }
 
-  // Reflect single-select state both visually (.sel) and to assistive tech (aria-selected, §20.2).
+  // Reflect single-select to assistive tech via aria-selected (§20.2 a11y).
   function setSelectedRow(relPath: string): void {
     for (const [rel, row] of fileRows) {
       const on = rel === relPath;
@@ -502,8 +485,8 @@ export function createArtifacts(host: HTMLElement, deps: ArtifactsDeps): Artifac
     current = relPath;
     lastSelection = '';
     setSelectedRow(relPath);
-    // An IPC failure (e.g. main restart) reads as an unreadable file, not an unhandled
-    // rejection — the `if (!file)` path below renders the "Cannot display" state (§20.2).
+    // An IPC failure (main restart) must render the "Cannot display" state, not escape as an
+    // unhandled rejection (§20.2).
     let file: ViewerFile | null;
     try {
       file = await deps.loadFile(relPath);
@@ -526,14 +509,13 @@ export function createArtifacts(host: HTMLElement, deps: ArtifactsDeps): Artifac
     codeView = null;
     if (file.kind === 'code') {
       codeView = renderCode(file.body, file.lang, body, file.changedLines) ?? null;
-      // A real editor owns its own focusable scroller (cm-scroller), so the body steps out of the
-      // tab order to avoid a dead stop; but the plain-text fallback (no CodeView) makes the body
-      // itself the scroll container, so it must stay keyboard-reachable (§20.2 a11y).
+      // A real editor owns its own focusable scroller, so the body leaves the tab order; the
+      // plain-text fallback makes the body the scroll container, so it stays Tab-reachable (§20.2 a11y).
       body.tabIndex = codeView ? -1 : 0;
       sections = changedSections(file.changedLines);
       if (codeView) unsubViewport = codeView.onViewportChange(updateNav);
     } else {
-      body.tabIndex = 0; // the body itself scrolls markdown → make it the focusable scroll region
+      body.tabIndex = 0; // markdown scrolls in the body itself → keep it a focusable scroll region (§20.2 a11y)
       renderMarkdown(file.body, body);
       sections = [];
     }
@@ -543,8 +525,8 @@ export function createArtifacts(host: HTMLElement, deps: ArtifactsDeps): Artifac
 
   async function refresh(): Promise<void> {
     const token = ++refreshSeq;
-    // Leave the previous tree/content in place on an IPC failure rather than blanking the
-    // viewer or surfacing an unhandled rejection (callers use `void refresh()`, §20.2).
+    // An IPC failure keeps the previous tree/content rather than blanking the viewer or escaping
+    // as an unhandled rejection (callers use `void refresh()`, §20.2).
     let data: ArtifactTree;
     try {
       data = await deps.loadTree(scope);
@@ -572,8 +554,7 @@ export function createArtifacts(host: HTMLElement, deps: ArtifactsDeps): Artifac
   function routeSelection(sink: (text: string) => void | Promise<void>): void {
     const text = readSelection(body) || lastSelection;
     if (!text) return;
-    // The sink may be async (addToTodo crosses IPC); a rejected invoke (main restart) must not
-    // become an unhandled renderer rejection.
+    // addToTodo crosses IPC; a rejected invoke (main restart) must not escape as an unhandled rejection.
     Promise.resolve(sink(text)).catch(() => {});
   }
 

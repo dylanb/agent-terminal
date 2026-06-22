@@ -67,7 +67,6 @@ describe('buildReportRegion (§15.3 / §16.8 — findings carry their own on-scr
   });
 
   it('maps a multi-row paragraph finding to its full row span', () => {
-    // lines 0-1 = first finding, line 2 blank, lines 3-4 = second finding.
     const region = buildReportRegion('alpha one\nalpha two\n\nbeta one\nbeta two', 'heuristic', 20, 24);
     expect(region.children).toEqual([
       { type: 'finding', source: 'heuristic', text: 'alpha one\nalpha two', startRow: 20, endRow: 21 },

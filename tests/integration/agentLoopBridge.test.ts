@@ -4,10 +4,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { parseAgentLoopState, watchAgentLoopState } from '../../src/main/agentLoopBridge';
 
-// §24.2.3 T2 — the read-only agent-loop bridge. It parses the real v4 <repo>/.agent-loop/state.yaml
-// over real temp files (no fs mocks) and NEVER throws: an unknown schema_version, a corrupt file, or
-// a missing file all degrade to null (mirrors the §19.1 flow-state store). A directory watcher fires
-// when the file changes so the existing flow:onStateChanged push can re-pull (§24.2.2 S5).
+// §24.2.3 T2 — the read-only agent-loop bridge parses real v4 <repo>/.agent-loop/state.yaml and
+// NEVER throws: unknown schema_version / corrupt / missing all degrade to null (mirrors the §19.1
+// store). A directory watcher fires on change so flow:onStateChanged can re-pull (§24.2.2 S5).
+// Real temp files, no fs mocks.
 
 const V4 =
   'schema_version: 4\n' +
@@ -52,8 +52,7 @@ describe('agent-loop state.yaml bridge (§24.2.3 T2 / §19.1)', () => {
   });
 
   it('accepts schema_version 4 in either YAML scalar form (bare number or quoted string)', () => {
-    // state.yaml writes a bare number; LoopDefs write a quoted "4". The version check compares the
-    // value, not its YAML scalar type, so the same guard works for both engine files.
+    // state.yaml writes a bare number, LoopDefs a quoted "4"; one value-comparing guard must accept both.
     writeState('schema_version: "4"\nstatus: planning\niteration: 1\n');
     expect(parseAgentLoopState(dir)).toEqual({ status: 'planning', iteration: 1, pr: null, branch: null });
   });

@@ -4,8 +4,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createTodoStore, type TodoStore } from '../../src/main/todoStore';
 
-// The store writes to <repoKey>/.agent-terminal/todos.json (§16.3). Tests use real
-// temp dirs as repo keys — no fs mocks. `now`/`newId` are injected for determinism.
+// §16.3: the store writes to <repoKey>/.agent-terminal/todos.json. Real temp dirs as repo keys, no
+// fs mocks; `now`/`newId` injected for determinism.
 describe('todoStore (§16.3 / §16.4 — repo-scoped CRUD + persistence)', () => {
   let repoA: string;
   let repoB: string;
@@ -106,9 +106,9 @@ describe('todoStore (§16.3 / §16.4 — repo-scoped CRUD + persistence)', () =>
   it('caps the Done section, pruning the oldest done items', () => {
     const store = makeStore({ maxDoneTodos: 2 });
     const items = [store.add(repoA, '1')[0], store.add(repoA, '2')[1], store.add(repoA, '3')[2]];
-    store.setStatus(repoA, items[0].id, 'done'); // oldest done
+    store.setStatus(repoA, items[0].id, 'done');
     store.setStatus(repoA, items[1].id, 'done');
-    const list = store.setStatus(repoA, items[2].id, 'done'); // exceeds cap → prune '1'
+    const list = store.setStatus(repoA, items[2].id, 'done');
     const done = list.filter((t) => t.status === 'done').map((t) => t.text);
     expect(done).not.toContain('1');
     expect(done).toEqual(['2', '3']);

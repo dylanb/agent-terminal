@@ -1,9 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { pickRevealTarget } from '../../src/renderer/src/reveal';
 
-// The cross-highlight terminal→capture matcher (§16.8). It runs over the LIVE marker
-// positions (resolved by selection.ts from xterm markers, which track reflow), so a
-// resize that moved a capture's rows is already reflected in the spans passed here.
+// Cross-highlight terminal→capture matcher (§16.8). Spans are LIVE marker positions (xterm
+// markers track reflow), so a resize that moved a capture's rows is already reflected here.
 describe('pickRevealTarget — most-specific capture covering a terminal row (§16.8)', () => {
   it('returns the id of the span covering the row', () => {
     expect(pickRevealTarget([{ id: 'r', start: 10, end: 14 }], 12)).toBe('r');

@@ -1,12 +1,7 @@
-// Command-output capture (§15.5 / D4). Segments the stream into command spans
-// using OSC 133 marks (A prompt-start, B command-start, C output-start,
-// D;exit finished). Independent of quiescence — it keys off marks, not the §8.3
-// machinery. OSC handlers fire mid-parse, so the cursor at handler time is the
-// mark position; each mark records {marker, col} for durable, trim-aware extraction.
-//
-// Marks are UNTRUSTED (§ threat model): anything in the stream can emit them.
-// The state machine therefore never crashes or wedges on adversarial ordering,
-// and resource use is bounded by named caps (no IMarker leaks on eviction).
+// Command-output capture (§15.5 / D4) via OSC 133 marks (A prompt-start, B command-start,
+// C output-start, D;exit finished). Marks are UNTRUSTED (§ threat model): anything in the
+// stream can emit them in any order, so the state machine MUST never crash, wedge, or leak
+// IMarkers on adversarial input, and resource use stays bounded by the named caps.
 
 import { randomUUID } from 'node:crypto';
 import type { ShadowMarker, ShadowReader } from './shadow';
@@ -84,9 +79,8 @@ export function createCommandTracker(deps: CommandTrackerDeps): CommandTracker {
   }
 
   /**
-   * Extract rows from a start mark up to an end boundary — the next mark's row,
-   * or (for an open span) the live cursor. A boundary at column 0 sits on a fresh
-   * line, so its row is excluded; otherwise the partial row is sliced at its column.
+   * Rows from `start` up to `end` (or the live cursor for an open span). A boundary at column 0
+   * sits on a fresh line, so its row is excluded; otherwise its row is sliced at the column.
    */
   function between(start: Mark, end: Mark | null): CommandCapture {
     let truncated = false;
@@ -110,7 +104,7 @@ export function createCommandTracker(deps: CommandTrackerDeps): CommandTracker {
         endCol = end.col;
       }
     } else {
-      const cur = reader.cursor(); // open span → output so far
+      const cur = reader.cursor();
       endRow = cur.y;
       endCol = cur.x;
     }
@@ -239,8 +233,6 @@ export function createCommandTracker(deps: CommandTrackerDeps): CommandTracker {
       }));
     },
     clear() {
-      // Clear only finished commands; a still-running command (and any in-flight
-      // command-start) survives until it finishes (§16.2).
       for (let i = spans.length - 1; i >= 0; i--) {
         if (spans[i].running) continue;
         disposeSpan(spans[i]);

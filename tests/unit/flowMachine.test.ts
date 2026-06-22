@@ -5,11 +5,8 @@ import { join } from 'node:path';
 import { createFlowMachine, type FlowLoad } from '../../src/main/flow';
 import { createFlowStateStore, type FlowStateStore, type PersistedFlowState } from '../../src/main/flowState';
 
-// §24.2.2 S1 — the walking-skeleton workflow state machine. A single manual step with the
-// lifecycle not_started --start--> in_progress --advance--> done; done is terminal. Tests
-// assert only the observable contract: the state view and thrown errors on illegal
-// transitions (the machine's internals are free to change). S2 made the step's source a
-// loaded definition; these tests feed a valid one and assert the lifecycle is unchanged.
+// §24.2.2 S1 — the walking-skeleton workflow state machine (lifecycle not_started → in_progress → done,
+// done terminal). The observable contract is the state view and thrown errors on illegal transitions.
 
 const LOAD: FlowLoad = { ok: true, definition: { name: 'f', steps: [{ id: 'step-1', kind: 'manual' }] }, flowDir: '/tmp/f/.agent-terminal' };
 
@@ -38,24 +35,21 @@ describe('flow state machine (§24.2.2 S1)', () => {
 
   it('rejects every illegal transition and never mutates state when it does', () => {
     const flow = createFlowMachine(LOAD);
-    expect(() => flow.advance()).toThrow(); // not_started --advance--> illegal
+    expect(() => flow.advance()).toThrow();
     expect(flow.state().status).toBe('not_started');
 
     flow.start();
-    expect(() => flow.start()).toThrow(); // in_progress --start--> illegal
+    expect(() => flow.start()).toThrow();
 
     flow.advance();
-    expect(() => flow.advance()).toThrow(); // done is terminal — a second Advance is impossible
+    expect(() => flow.advance()).toThrow();
     expect(() => flow.start()).toThrow();
     expect(flow.state().status).toBe('done');
   });
 });
 
-// §24.2.3 T1 — the multi-step walking skeleton. The machine tracks a current-step index and
-// advances ACROSS steps: each Advance moves to the next step (staying in_progress) until the last,
-// whose Advance reaches `done`. position/stepName walk the real steps; `done` is reachable only
-// past the last step. Manual-only, no new backing (T1). The observable contract is the state view
-// and thrown errors — never the internal index variable.
+// §24.2.3 T1 — the multi-step walking skeleton: Advance walks across steps (staying in_progress) and
+// reaches `done` only past the last step.
 describe('flow state machine — multi-step (§24.2.3 T1)', () => {
   const THREE: FlowLoad = {
     ok: true,
@@ -83,13 +77,13 @@ describe('flow state machine — multi-step (§24.2.3 T1)', () => {
     flow.start();
     expect([flow.state().position, flow.state().stepName, flow.state().status]).toEqual([1, 'groom', 'in_progress']);
 
-    let v = flow.advance(); // step 1 → step 2 (still in progress)
+    let v = flow.advance();
     expect([v.position, v.stepName, v.status]).toEqual([2, 'plan', 'in_progress']);
 
-    v = flow.advance(); // step 2 → step 3
+    v = flow.advance();
     expect([v.position, v.stepName, v.status]).toEqual([3, 'implement', 'in_progress']);
 
-    v = flow.advance(); // step 3 (last) → done
+    v = flow.advance();
     expect(v.status).toBe('done');
     expect(v.position).toBe(3);
   });
@@ -99,7 +93,7 @@ describe('flow state machine — multi-step (§24.2.3 T1)', () => {
     flow.start();
     flow.advance();
     flow.advance();
-    flow.advance(); // now done
+    flow.advance();
     expect(() => flow.advance()).toThrow();
     expect(flow.state().status).toBe('done');
   });
@@ -119,7 +113,7 @@ describe('flow state machine — multi-step (§24.2.3 T1)', () => {
     try {
       const first = createFlowMachine(THREE, createFlowStateStore(dir));
       first.start();
-      first.advance(); // now on step 2 (plan), in progress
+      first.advance();
       const resumed = createFlowMachine(THREE, createFlowStateStore(dir)).state();
       expect([resumed.position, resumed.stepName, resumed.status]).toEqual([2, 'plan', 'in_progress']);
     } finally {
@@ -128,10 +122,8 @@ describe('flow state machine — multi-step (§24.2.3 T1)', () => {
   });
 });
 
-// §24.2.3 T2 — a loop step mirrors its agent-loop state.yaml. The machine folds the read-only
-// mirror (via an injected readLoop) onto every view of a loop step, as a `loop` field parallel to
-// derived; a manual step never mirrors. readLoop is read on each view so the mirror is live. The
-// observable contract is the view's `loop` field — never how the machine reads the file.
+// §24.2.3 T2 — a loop step folds its agent-loop state.yaml as the view's read-only `loop` field; a
+// manual step never mirrors, and the mirror is re-read on each view so it stays live.
 describe('flow state machine — loop-step state.yaml mirror (§24.2.3 T2)', () => {
   const MIXED: FlowLoad = {
     ok: true,
@@ -148,9 +140,9 @@ describe('flow state machine — loop-step state.yaml mirror (§24.2.3 T2)', () 
 
   it('folds the mirror onto a loop step view but NOT a manual step view', () => {
     const flow = createFlowMachine(MIXED, undefined, undefined, () => mirror);
-    expect(flow.state().loop).toBeUndefined(); // step 1 is manual — no mirror
+    expect(flow.state().loop).toBeUndefined();
     flow.start();
-    const v = flow.advance(); // → step 2 (loop)
+    const v = flow.advance();
     expect(v.loop).toMatchObject({ status: 'awaiting-human-pr-approval', iteration: 9, pr: 179 });
   });
 
@@ -182,21 +174,17 @@ describe('flow state machine — loop-step state.yaml mirror (§24.2.3 T2)', () 
     let live = mirror;
     const flow = createFlowMachine(MIXED, undefined, undefined, () => live, (name) => (name === 'impl-loop' ? def : null));
     flow.start();
-    flow.advance(); // → step 2 (loop, bound to impl-loop)
-    // At the awaiting gate: not ready, gate options surfaced from the gate's human_options.
+    flow.advance();
     expect(flow.state().loop?.ready).toBe(false);
     expect(flow.state().loop?.gateOptions).toEqual(['approve', 'request-changes', 'impasse']);
-    // At the terminal gate: ready, no options.
     live = { status: 'awaiting-team-review', iteration: 10, pr: 179, branch: 'b' };
     expect(flow.state().loop?.ready).toBe(true);
     expect(flow.state().loop?.gateOptions).toBeUndefined();
   });
 });
 
-// §24.2.2 S3 — the machine is backed by a real flow-state store: it restores its status from
-// disk on construction (so a relaunch resumes where it left off) and persists every transition.
-// Tests drive the real store over a temp dir; the observable contract is what a *fresh* machine
-// on the same store reads back — never which write happened internally.
+// §24.2.2 S3 — the machine restores its status from a real flow-state store on construction and
+// persists every transition; the observable contract is what a fresh machine on the same store reads back.
 describe('flow machine persistence (§24.2.2 S3)', () => {
   let dir: string;
   beforeEach(() => {
@@ -217,7 +205,7 @@ describe('flow machine persistence (§24.2.2 S3)', () => {
     first.advance();
     const resumed = createFlowMachine(LOAD, createFlowStateStore(dir));
     expect(resumed.state().status).toBe('done');
-    expect(() => resumed.advance()).toThrow(); // still terminal after reload
+    expect(() => resumed.advance()).toThrow();
   });
 
   it('ignores persisted state whose step id no longer matches the definition', () => {
@@ -240,8 +228,7 @@ describe('flow machine persistence (§24.2.2 S3)', () => {
   });
 });
 
-// Restart from the completed state: reset and advance back to the first step (in_progress),
-// so the workflow can be re-run. Only legal from done; persisted like any other transition.
+// Restart is legal only from done: it re-runs the workflow from the first step (in_progress).
 describe('flow machine restart', () => {
   it('restart() moves done → in_progress (re-running the first step)', () => {
     const flow = createFlowMachine(LOAD);
@@ -253,10 +240,10 @@ describe('flow machine restart', () => {
 
   it('is illegal before the flow is done and does not mutate state', () => {
     const flow = createFlowMachine(LOAD);
-    expect(() => flow.restart()).toThrow(); // not_started
+    expect(() => flow.restart()).toThrow();
     expect(flow.state().status).toBe('not_started');
     flow.start();
-    expect(() => flow.restart()).toThrow(); // in_progress
+    expect(() => flow.restart()).toThrow();
     expect(flow.state().status).toBe('in_progress');
   });
 
@@ -274,9 +261,8 @@ describe('flow machine restart', () => {
   });
 });
 
-// Undo a manual advance: revert done → in_progress so a too-eager Advance can be taken back. It is
-// the inverse of advance(), NOT a restart — it must NOT re-run the step's entry actions. Only legal
-// from done; persisted like any other transition.
+// Undo reverts done → in_progress (legal only from done). It is the inverse of advance(), NOT a restart:
+// it must NOT re-run the step's entry actions.
 describe('flow machine undo (revert an advance)', () => {
   it('undo() moves done → in_progress', () => {
     const flow = createFlowMachine(LOAD);
@@ -288,10 +274,10 @@ describe('flow machine undo (revert an advance)', () => {
 
   it('is illegal anywhere but done and does not mutate state', () => {
     const flow = createFlowMachine(LOAD);
-    expect(() => flow.undo()).toThrow(); // not_started
+    expect(() => flow.undo()).toThrow();
     expect(flow.state().status).toBe('not_started');
     flow.start();
-    expect(() => flow.undo()).toThrow(); // in_progress
+    expect(() => flow.undo()).toThrow();
     expect(flow.state().status).toBe('in_progress');
   });
 
@@ -302,7 +288,7 @@ describe('flow machine undo (revert an advance)', () => {
     flow.advance();
     onEnter.mockClear();
     flow.undo();
-    expect(onEnter).not.toHaveBeenCalled(); // undo reverts the state; it does not enter the step
+    expect(onEnter).not.toHaveBeenCalled();
   });
 
   it('persists the undo so a fresh machine resumes in_progress', () => {
@@ -320,22 +306,20 @@ describe('flow machine undo (revert an advance)', () => {
 
   it('is inert on an error load', () => {
     const flow = createFlowMachine({ ok: false, error: 'no flow.yaml' });
-    expect(flow.undo().status).toBe('error'); // inert, never throws
+    expect(flow.undo().status).toBe('error'); // inert error load: never throws
   });
 });
 
-// §24.2.2 S4 — the machine runs the step's entry actions on ENTRY (start/restart) via an injected
-// `onEnter(step)` callback, and merges any transient notice it returns onto the TRANSITION view
-// only (a one-shot — `state()` never carries it). Entry actions are a property of entering a step,
-// so advancing AWAY from a step does not fire them, and an inert error load never fires them.
+// §24.2.2 S4 — entry actions fire on step ENTRY (start/restart); a returned notice merges onto the
+// TRANSITION view only (one-shot — `state()` never carries it).
 describe('flow machine entry actions (§24.2.2 S4)', () => {
   it('fires onEnter with the step on start and merges its notice onto the returned view', () => {
     const onEnter = vi.fn(() => ({ notice: 'busy' }));
     const flow = createFlowMachine(LOAD, undefined, onEnter);
     const view = flow.start();
-    expect(onEnter).toHaveBeenCalledWith(LOAD.definition.steps[0], {}); // step + resolved inputs (§24.2.3 T3)
+    expect(onEnter).toHaveBeenCalledWith(LOAD.definition.steps[0], {});
     expect(view.notice).toBe('busy');
-    expect(flow.state().notice).toBeUndefined(); // the notice is one-shot, not part of the state
+    expect(flow.state().notice).toBeUndefined();
   });
 
   it('fires onEnter on restart (the first step re-runs)', () => {
@@ -349,8 +333,6 @@ describe('flow machine entry actions (§24.2.2 S4)', () => {
   });
 
   it('does not fire onEnter when advancing completes the flow (done enters no step)', () => {
-    // A single-step flow: Advance goes step-1 → done. No new step is entered, so entry actions
-    // do not fire (T3's entry-on-advance is "entering a step", and `done` is not a step).
     const onEnter = vi.fn(() => ({}));
     const flow = createFlowMachine(LOAD, undefined, onEnter);
     flow.start();
@@ -375,14 +357,12 @@ describe('flow machine entry actions (§24.2.2 S4)', () => {
       flowDir: '/tmp/f/.agent-terminal',
     };
     expect(createFlowMachine(templated).state().templateRef).toBe('ticket-grooming');
-    expect(createFlowMachine(LOAD).state().templateRef).toBeUndefined(); // no binding → no ref
+    expect(createFlowMachine(LOAD).state().templateRef).toBeUndefined();
   });
 });
 
-// §24.2.3 T3 — entry actions fire on EVERY entry into a step, not only start/restart of the first
-// (the deferral T1 left explicit). Advancing from step i INTO step i+1 enters that step, so its
-// `onEnter` runs (a later step's skill / bootstrap injects when you reach it); the notice it returns
-// merges onto the advance view. Advancing past the LAST step reaches `done`, which enters no step.
+// §24.2.3 T3 — entry actions fire on EVERY entry, including advancing from step i INTO step i+1, not
+// only start/restart of the first step. Advancing past the LAST step reaches `done`, which enters no step.
 describe('flow machine entry-on-advance (§24.2.3 T3)', () => {
   const TWO: FlowLoad = {
     ok: true,
@@ -395,28 +375,27 @@ describe('flow machine entry-on-advance (§24.2.3 T3)', () => {
     const flow = createFlowMachine(TWO, undefined, onEnter);
     flow.start();
     onEnter.mockClear();
-    const view = flow.advance(); // groom → plan: entering `plan` runs its entry actions
+    const view = flow.advance();
     expect(onEnter).toHaveBeenCalledWith(TWO.definition.steps[1], {});
     expect(view.notice).toBe('busy');
-    expect(flow.state().notice).toBeUndefined(); // one-shot, never part of state()
+    expect(flow.state().notice).toBeUndefined();
   });
 
   it('does not fire onEnter when the last Advance completes the flow', () => {
     const onEnter = vi.fn(() => ({}));
     const flow = createFlowMachine(TWO, undefined, onEnter);
     flow.start();
-    flow.advance(); // → plan (fires)
+    flow.advance();
     onEnter.mockClear();
-    const view = flow.advance(); // plan (last) → done: no step entered
+    const view = flow.advance();
     expect(view.status).toBe('done');
     expect(onEnter).not.toHaveBeenCalled();
   });
 });
 
-// §24.2.3 T3 — typed-input bootstrap (§18.4). The machine threads the flow's resolved inputs into
-// `onEnter`, merges a returned `prompt` onto the transition view (one-shot, like `notice`), and
-// `provideInput(values)` records the answer, persists it, and RE-ENTERS the step so the now-satisfied
-// bootstrap runs. The machine itself injects nothing — it only routes inputs to the entry action.
+// §24.2.3 T3 — typed-input bootstrap (§18.4). A returned `prompt` merges onto the transition view
+// (one-shot, like `notice`); `provideInput(values)` persists the answer and re-enters the step. The
+// machine routes inputs to the entry action and injects nothing itself.
 describe('flow machine typed-input bootstrap (§24.2.3 T3)', () => {
   let dir: string;
   beforeEach(() => {
@@ -427,7 +406,6 @@ describe('flow machine typed-input bootstrap (§24.2.3 T3)', () => {
   });
 
   const PROMPT = { inputs: [{ name: 'ticket', type: 'github-ticket' }], bootstrap: 'agent-loop pickup' };
-  // A fake entry action: prompts until `ticket` is resolved, then "boots" (records the value).
   const bootEnter = vi.fn((_step, inputs: Record<string, string> = {}) =>
     inputs.ticket ? { notice: `booted:${inputs.ticket}` } : { prompt: PROMPT },
   );
@@ -436,10 +414,10 @@ describe('flow machine typed-input bootstrap (§24.2.3 T3)', () => {
     bootEnter.mockClear();
     const flow = createFlowMachine(LOAD, undefined, bootEnter);
     const view = flow.start();
-    expect(bootEnter).toHaveBeenCalledWith(LOAD.definition.steps[0], {}); // no inputs resolved yet
+    expect(bootEnter).toHaveBeenCalledWith(LOAD.definition.steps[0], {});
     expect(view.prompt).toEqual(PROMPT);
     expect(view.notice).toBeUndefined();
-    expect(flow.state().prompt).toBeUndefined(); // one-shot, never part of state()
+    expect(flow.state().prompt).toBeUndefined();
   });
 
   it('provideInput threads the value into re-entry, persists it, and clears the prompt', () => {
@@ -448,17 +426,16 @@ describe('flow machine typed-input bootstrap (§24.2.3 T3)', () => {
     flow.start();
     bootEnter.mockClear();
     const view = flow.provideInput({ ticket: '176' });
-    expect(bootEnter).toHaveBeenCalledWith(LOAD.definition.steps[0], { ticket: '176' }); // re-entry sees the value
-    expect(view.notice).toBe('booted:176'); // the now-satisfied bootstrap ran
+    expect(bootEnter).toHaveBeenCalledWith(LOAD.definition.steps[0], { ticket: '176' });
+    expect(view.notice).toBe('booted:176');
     expect(view.prompt).toBeUndefined();
-    expect(store.read()?.inputs).toEqual({ ticket: '176' }); // persisted for threading + relaunch
+    expect(store.read()?.inputs).toEqual({ ticket: '176' });
   });
 
   it('hydrates persisted inputs so a re-entered step no longer prompts', () => {
     createFlowStateStore(dir).write({ step: 'step-1', status: 'done', inputs: { ticket: '176' } });
     bootEnter.mockClear();
     const resumed = createFlowMachine(LOAD, createFlowStateStore(dir), bootEnter);
-    // Restart re-enters the first step; the persisted ticket means the bootstrap fires, no prompt.
     const view = resumed.restart();
     expect(bootEnter).toHaveBeenCalledWith(LOAD.definition.steps[0], { ticket: '176' });
     expect(view.prompt).toBeUndefined();
@@ -466,8 +443,6 @@ describe('flow machine typed-input bootstrap (§24.2.3 T3)', () => {
   });
 
   it('threads a value resolved at one step into a LATER step\'s same-named input (§18.1 output→input)', () => {
-    // Two bootstrap steps both needing `ticket`. Resolving it at step 1 means entering step 2 by
-    // Advance no longer prompts — the flow-wide inputs carry the value forward (§24.2.3 T3 threading).
     const TWO_BOOT: FlowLoad = {
       ok: true,
       definition: {
@@ -480,18 +455,18 @@ describe('flow machine typed-input bootstrap (§24.2.3 T3)', () => {
       flowDir: '/tmp/f/.agent-terminal',
     };
     const flow = createFlowMachine(TWO_BOOT, createFlowStateStore(dir), bootEnter);
-    expect(flow.start().prompt).toEqual(PROMPT); // step 1 needs the ticket
-    flow.provideInput({ ticket: '176' }); // resolved at step 1
+    expect(flow.start().prompt).toEqual(PROMPT);
+    flow.provideInput({ ticket: '176' });
     bootEnter.mockClear();
-    const view = flow.advance(); // → step 2 (impl): same-named input already satisfied
+    const view = flow.advance();
     expect(bootEnter).toHaveBeenCalledWith(TWO_BOOT.definition.steps[1], { ticket: '176' });
-    expect(view.prompt).toBeUndefined(); // no re-prompt — the value threaded forward
+    expect(view.prompt).toBeUndefined();
     expect(view.notice).toBe('booted:176');
   });
 
   it('provideInput is illegal unless a step is being worked (in_progress)', () => {
     const flow = createFlowMachine(LOAD, undefined, bootEnter);
-    expect(() => flow.provideInput({ ticket: '176' })).toThrow(); // not_started — nothing to bootstrap
+    expect(() => flow.provideInput({ ticket: '176' })).toThrow();
   });
 });
 

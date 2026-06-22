@@ -1,6 +1,5 @@
-// Trust-boundary validation for renderer→main IPC (§6). The renderer is sandboxed
-// and single today, but unvalidated cols/rows reach native ptyProcess.resize and a
-// non-positive/NaN value throws an uncaught exception in the main process.
+// Trust-boundary validation for renderer→main IPC (§6): unvalidated cols/rows reach native
+// ptyProcess.resize, where a non-positive/NaN value throws an uncaught exception in main.
 
 import path from 'node:path';
 import {
@@ -105,7 +104,7 @@ export function isValidSetSettings(m: unknown): m is UiSetSettingsMsg {
   if ('splitRatio' in s && (typeof s.splitRatio !== 'number' || !Number.isFinite(s.splitRatio))) return false;
   if ('lastTab' in s && s.lastTab !== 'capture' && s.lastTab !== 'todo') return false;
   if ('theme' in s && s.theme !== 'light' && s.theme !== 'dark') return false;
-  // Artifact viewer widths (§20.2) — finite numbers only, no NaN/Infinity/non-number.
+  // Artifact viewer widths (§20.2).
   for (const k of ['artifactTreeWidth', 'artifactFullscreenTreeWidth'] as const) {
     if (k in s && (typeof s[k] !== 'number' || !Number.isFinite(s[k]))) return false;
   }
@@ -116,14 +115,13 @@ export function isValidClearCommands(m: unknown): m is ClearCommandsMsg {
   return isRecord(m) && isLiveSession(m);
 }
 
-/** Flow lifecycle (§24.2.2). `repoKey` scopes the flow to the terminal's current repo and becomes
- *  a filesystem path in flowState, so it gets the same safe-path guard as the todo channels. */
+/** Flow lifecycle (§24.2.2). `repoKey` becomes a filesystem path in flowState, so it gets the
+ *  same safe-path guard as the todo channels. */
 export function isValidFlowRequest(m: unknown): m is FlowRequestMsg {
   return isRecord(m) && isLiveSession(m) && isSafeRepoKey(m.repoKey);
 }
 
-/** flow:provideInput (§18.4 / §24.2.3 T3): a flow request plus a `values` record whose every value
- *  is a string (the typed input answers persisted to flow-state). */
+/** flow:provideInput — the typed input answers persisted to flow-state (§18.4 / §24.2.3 T3). */
 export function isValidFlowProvideInput(m: unknown): m is FlowProvideInputMsg {
   return (
     isRecord(m) &&
@@ -135,7 +133,7 @@ export function isValidFlowProvideInput(m: unknown): m is FlowProvideInputMsg {
   );
 }
 
-/** todoTemplate:list (§6): a live session + a safe repoKey (the flow dir is resolved from it). */
+/** todoTemplate:list (§6). The flow dir is resolved from repoKey, so it needs the safe-path guard. */
 export function isValidTemplateList(m: unknown): m is TodoTemplateListMsg {
   return isRecord(m) && isLiveSession(m) && isSafeRepoKey(m.repoKey);
 }
@@ -153,7 +151,7 @@ export function isValidTemplateInstantiate(m: unknown): m is TodoTemplateInstant
   );
 }
 
-// ---- todo:* validators (§16.3 / §16.4). repoKey is threaded on every mutation. ----
+// ---- todo:* validators (§16.3 / §16.4). ----
 
 /** A repoKey is a main-derived absolute repo/cwd path; it becomes a filesystem write path
  *  in todoStore, so reject non-absolute or traversal-laden keys at the boundary (§6). */

@@ -6,9 +6,7 @@ import { join } from 'node:path';
 import { discover, readArtifact, emptyTree, pathWithin } from '../../src/main/artifactTree';
 import type { ArtifactNode } from '../../src/shared/ipc';
 
-// The path-escape guard (§20.2), as a pure function so the filesystem-root edge case is testable
-// without reading the real root. path.relative-based, so root='/' (where `root + sep` is '//') and
-// Windows cross-drive paths are handled correctly.
+// The path-escape guard (§20.2).
 describe('pathWithin — escape guard', () => {
   it('accepts the root itself and paths under it', () => {
     expect(pathWithin('/repo', '/repo')).toBe(true);
@@ -28,8 +26,7 @@ describe('pathWithin — escape guard', () => {
   });
 });
 
-// Real git, real filesystem — no mocks (CLAUDE.md). Discovery (§20.1) is exercised against a
-// temp repo we build with actual git commands, mirroring how scanner tests drive a real shadow.
+// Real git, real filesystem — no mocks (CLAUDE.md). Discovery: §20.1.
 
 const git = (args: string[], cwd: string): string => execFileSync('git', args, { cwd, encoding: 'utf8' });
 
@@ -71,7 +68,6 @@ describe('artifact discovery (§20.1 / D8 — real git)', () => {
     writeFileSync(join(repo, 'src', 'a.ts'), 'export const x = 1;\n');
     git(['add', '.'], repo);
     git(['commit', '-q', '-m', 'init'], repo);
-    // Now make a working-tree change, add an untracked file, and an agent-loop artifact.
     writeFileSync(join(repo, 'committed.md'), '# Committed\n\nbody changed');
     writeFileSync(join(repo, 'untracked.txt'), 'scratch');
     mkdirSync(join(repo, '.agent-loop'), { recursive: true });
@@ -110,7 +106,6 @@ describe('artifact discovery (§20.1 / D8 — real git)', () => {
     const tree = discover(repo, 'repo');
     const files = fileRelPaths(tree.nodes);
     expect(files).toEqual(expect.arrayContaining(['committed.md', 'src/a.ts', 'untracked.txt']));
-    // src/a.ts lives under a real directory node, not a flat row.
     const srcDir = tree.nodes.find((n) => n.kind === 'dir' && n.name === 'src');
     expect(srcDir?.children?.some((c) => c.name === 'a.ts')).toBe(true);
   });
@@ -129,9 +124,8 @@ describe('artifact discovery (§20.1 / D8 — real git)', () => {
     expect(files).toEqual(expect.arrayContaining(['.gitignore', '.github/ci.yml']));
   });
 
-  // viewer:tree must satisfy its Promise<ArtifactTree> contract even for an untrusted/invalid
-  // request — the handler returns this safe empty tree instead of null (which would crash the
-  // renderer's `data.root` read).
+  // The viewer:tree handler returns this for an invalid request rather than null, which would
+  // crash the renderer's `data.root` read.
   it('emptyTree() is a valid, empty ArtifactTree (the invalid-request fallback)', () => {
     expect(emptyTree('/some/cwd')).toEqual({ root: '/some/cwd', isRepo: false, scope: 'curated', nodes: [] });
     expect(emptyTree('/x', 'repo').scope).toBe('repo');
@@ -150,8 +144,8 @@ describe('artifact discovery (§20.1 / D8 — real git)', () => {
   });
 
   it('refuses to follow an in-root symlink that points outside the discovery root', () => {
-    // A symlink that lives inside the root but targets an outside file passes the lexical
-    // guard; the read must still refuse it (resolve real paths, not just the literal path).
+    // An in-root symlink targeting an outside file passes the lexical guard; the read must still
+    // refuse it (resolve real paths, not the literal path).
     const outside = mkdtempSync(join(tmpdir(), 'art-outside-'));
     writeFileSync(join(outside, 'secret.md'), '# secret');
     try {
@@ -164,8 +158,8 @@ describe('artifact discovery (§20.1 / D8 — real git)', () => {
   });
 
   it('reads an in-root symlink that targets an in-root file (stat/read via the validated real path)', () => {
-    // The TOCTOU fix stats/reads the resolved real path; a legitimate in-root symlink must still
-    // read its target's content (regression pin for the abs→real switch).
+    // A legitimate in-root symlink must still read its target's content — regression pin for the
+    // TOCTOU abs→real-path switch.
     writeFileSync(join(plain, 'target.md'), '# real target body');
     try {
       symlinkSync(join(plain, 'target.md'), join(plain, 'alias.md'));

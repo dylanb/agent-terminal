@@ -1,8 +1,6 @@
-// Typed required-element contract for the renderer's static DOM (§9.1). The pane's
-// element ids are a real interface between index.html, the CSS, and the wiring code;
-// declaring them once — and failing loud, naming the id, when one is absent — beats
-// scattering `getElementById(id)!` non-null assertions that defer the failure to a
-// later null-deref the compiler can't see.
+// Typed required-element contract for the renderer's static DOM (§9.1): the pane's element ids are a
+// real interface between index.html, the CSS, and the wiring code. Failing loud and naming the id
+// beats `getElementById(id)!` assertions that defer the failure to a later null-deref.
 
 /** Look up a required element by id; throw naming the id if it is absent. */
 export function requireElement<T extends HTMLElement = HTMLElement>(id: string, doc: Document = document): T {

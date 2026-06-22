@@ -1,20 +1,14 @@
-// Production render seams for the artifact viewer (§20.2): markdown-it (+ mermaid for
-// fenced ```mermaid blocks) and a read-only CodeMirror 6 editor for code. The heavy libs
-// are loaded lazily (dynamic import → separate Vite chunks) so they cost nothing until an
-// artifact is actually opened. These are the real impls injected into `createArtifacts`;
-// the organism itself is library-agnostic and unit-tested with fakes (artifacts.ts).
-//
-// Selection-to-send works off the live DOM selection (both markdown HTML and CodeMirror's
-// content are real selectable DOM), so neither path needs a bespoke selection reader.
+// Production render seams for the artifact viewer (§20.2): the real impls injected into
+// `createArtifacts`, which is itself library-agnostic and unit-tested with fakes (artifacts.ts).
 
 import type MarkdownItLib from 'markdown-it';
 import type { Extension } from '@codemirror/state';
 import type { Decoration as DecorationT, EditorView as EditorViewT } from '@codemirror/view';
 import type { CodeView } from './artifacts';
 
-// Per-host render token: guards against a stale async render overwriting a newer one INTO THE SAME
-// host. Keyed by host element (not a single global counter) so a render into one placement never
-// invalidates an in-flight render into another (relocation / future side-by-side viewers, §20.2).
+// Per-host render token: guards against a stale async render overwriting a newer one into the same
+// host. Keyed by host (not a single global counter) so a render into one placement never invalidates
+// an in-flight render into another (relocation / future side-by-side viewers, §20.2).
 const renderTokens = new WeakMap<HTMLElement, number>();
 const bumpToken = (into: HTMLElement): number => {
   const next = (renderTokens.get(into) ?? 0) + 1;
@@ -23,9 +17,8 @@ const bumpToken = (into: HTMLElement): number => {
 };
 const tokenOf = (into: HTMLElement): number => renderTokens.get(into) ?? 0;
 
-// Each host holds at most one live CodeMirror view; the render seams reuse the same host across
-// file opens, so a re-render must destroy the prior view first — removing the DOM alone leaks the
-// document/window handlers CM releases only in destroy() (§20.2).
+// A re-render must destroy the prior CodeMirror view before mounting another into the same host:
+// removing the DOM alone leaks the document/window handlers CM releases only in destroy() (§20.2).
 const mountedViews = new WeakMap<HTMLElement, EditorViewT>();
 function teardownView(into: HTMLElement): void {
   const prev = mountedViews.get(into);
@@ -35,7 +28,6 @@ function teardownView(into: HTMLElement): void {
   }
 }
 
-// markdown-it instance is created once, then reused.
 let mdInstance: MarkdownItLib | null = null;
 async function getMarkdownIt(): Promise<MarkdownItLib> {
   if (!mdInstance) {
@@ -50,7 +42,7 @@ let mermaidSeq = 0;
 /** Render markdown into `into`, then turn any ```mermaid fences into rendered SVG. */
 export function renderMarkdownInto(body: string, into: HTMLElement): void {
   const token = bumpToken(into);
-  teardownView(into); // switching to markdown disposes any code view this host held (§20.2)
+  teardownView(into); // disposes any code view this host held (§20.2)
   into.classList.add('md');
   into.textContent = '…';
   // TODO(viewer): the catch degrades a chunk-load/render failure to raw text instead of a stuck
@@ -58,7 +50,7 @@ export function renderMarkdownInto(body: string, into: HTMLElement): void {
   // nor e2e can force the import to reject without a production seam added only for the test.
   void (async () => {
     const md = await getMarkdownIt();
-    if (token !== tokenOf(into)) return; // a newer artifact was opened
+    if (token !== tokenOf(into)) return;
     into.innerHTML = md.render(body);
     const fences = [...into.querySelectorAll('code.language-mermaid')];
     if (fences.length === 0) return;
@@ -86,10 +78,8 @@ export function renderMarkdownInto(body: string, into: HTMLElement): void {
 
 /**
  * Render code read-only and syntax-highlighted in a CodeMirror 6 editor. `changedLines` are
- * 1-based current-file lines that differ from HEAD (§20.2); each is marked with both a gutter
- * stripe and a line-background tint. The doc is read-only, so the decorations are static.
- * Returns a handle for changed-section navigation; a reveal requested before the editor has
- * finished its async build is replayed once it exists.
+ * 1-based current-file lines that differ from HEAD (§20.2). Returns a handle for changed-section
+ * navigation; a reveal requested before the editor's async build finishes is replayed once it exists.
  */
 export function renderCodeInto(
   body: string,
@@ -98,7 +88,7 @@ export function renderCodeInto(
   changedLines?: number[],
 ): CodeView {
   const token = bumpToken(into);
-  teardownView(into); // dispose the prior code view before mounting a new one into this host (§20.2)
+  teardownView(into); // §20.2
   into.classList.remove('md');
   into.textContent = '…';
   // TODO(viewer): see renderMarkdownInto — the trailing catch degrades a CodeMirror chunk-load
@@ -136,7 +126,6 @@ export function renderCodeInto(
       ]);
     if (token !== tokenOf(into)) return;
     into.replaceChildren();
-    // Chrome follows the app theme via tokens; basicSetup's default highlight stays (§24.1C polish).
     const cmTheme = EditorView.theme({
       '&': { backgroundColor: 'transparent', color: 'var(--ink)', fontSize: '13px' },
       '.cm-gutters': { backgroundColor: 'transparent', color: 'var(--muted)', border: 'none' },
@@ -161,22 +150,21 @@ export function renderCodeInto(
           EditorView.editable.of(false),
           EditorState.readOnly.of(true),
           cmTheme,
-          // Resize changes which lines are visible; scroll is caught on scrollDOM below (§20.2).
           EditorView.updateListener.of((u) => { if (u.geometryChanged) notify(); }),
           ...changeExt,
         ],
       }),
     });
     EV = EditorView;
-    mountedViews.set(into, editor); // tracked so the next render into this host disposes it (§20.2)
-    // The read-only editor isn't editable-focusable, so make its scroller a keyboard-reachable,
-    // labelled scroll region — otherwise there's no way to scroll the code by keyboard (§20.2 a11y).
+    mountedViews.set(into, editor);
+    // The read-only editor isn't editable-focusable, so its scroller needs to be a keyboard-reachable
+    // labelled region — otherwise the code can't be scrolled by keyboard (§20.2 a11y).
     editor.scrollDOM.tabIndex = 0;
     editor.scrollDOM.setAttribute('role', 'region');
     editor.scrollDOM.setAttribute('aria-label', 'File contents');
     const sd = editor.scrollDOM;
     sd.addEventListener('scroll', notify);
-    detachScroll = () => sd.removeEventListener('scroll', notify); // removed in destroy() (§20.2)
+    detachScroll = () => sd.removeEventListener('scroll', notify);
     if (pending !== null) {
       reveal(pending);
       pending = null;
@@ -185,8 +173,8 @@ export function renderCodeInto(
   })().catch(() => {
     if (token === tokenOf(into)) {
       into.textContent = body; // degrade to raw text, never an unhandled rejection
-      // The editor never mounted, so the host (not a cm-scroller) is the scroll region — restore
-      // keyboard reachability (the caller set tabIndex=-1 assuming a real editor would own it, §20.2).
+      // The editor never mounted, so the host itself is the scroll region; restore keyboard
+      // reachability the caller surrendered to the (never-built) editor (§20.2).
       into.tabIndex = 0;
     }
   });
@@ -200,7 +188,7 @@ export function renderCodeInto(
     destroy: () => {
       bumpToken(into); // a still-in-flight build bails at its token check before it mounts the editor
       teardownView(into);
-      detachScroll?.(); // drop the scrollDOM listener so no viewport callback fires post-destroy
+      detachScroll?.();
       detachScroll = null;
       listeners.clear();
     },
@@ -210,7 +198,7 @@ export function renderCodeInto(
 type CmState = typeof import('@codemirror/state');
 type CmView = typeof import('@codemirror/view');
 
-/** A gutter stripe + a line-background tint on each changed line. Empty set → no extensions. */
+/** CodeMirror extensions decorating each changed line; empty set → no extensions. */
 function buildChangeExtensions(
   changed: Set<number>,
   s: { EditorView: CmView['EditorView']; StateField: CmState['StateField']; RangeSetBuilder: CmState['RangeSetBuilder'] },
@@ -222,8 +210,8 @@ function buildChangeExtensions(
   const tintField = s.StateField.define({
     create(state) {
       const b = new s.RangeSetBuilder<DecorationT>();
-      // Iterate the changed line numbers (sorted — RangeSetBuilder needs ascending positions),
-      // not 1..doc.lines, so a few changes in a large file stay O(changes), not O(totalLines).
+      // RangeSetBuilder requires ascending positions; iterating changed lines (not 1..doc.lines)
+      // also keeps a few changes in a large file O(changes), not O(totalLines).
       for (const n of [...changed].sort((a, z) => a - z)) {
         if (n >= 1 && n <= state.doc.lines) b.add(state.doc.line(n).from, state.doc.line(n).from, Decoration.line({ class: 'cm-changedLine' }));
       }
@@ -234,8 +222,7 @@ function buildChangeExtensions(
   });
 
   const stripe = new (class extends GutterMarker {
-    // Create in the EditorView's own document, not the global one, so the marker is correct if the
-    // viewer is ever mounted in a different Document/iframe (host-document invariant, UI-STANDARDS).
+    // host-document invariant (UI-STANDARDS): build in the EditorView's own document, not global.
     toDOM(view: EditorViewT): Node {
       const el = view.dom.ownerDocument.createElement('div');
       el.className = 'cm-changedGutter';

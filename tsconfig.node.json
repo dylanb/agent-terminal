@@ -37,6 +37,8 @@
     "src/renderer/src/flowStrip.ts",
     "src/renderer/src/loopStatus.ts",
     "src/renderer/src/loopPanel.ts",
+    "src/renderer/src/attentionCue.ts",
+    "src/renderer/src/loopReveal.ts",
     "src/renderer/src/flowInputModal.ts",
     "src/renderer/src/artifacts.ts",
     "src/renderer/src/viewerRender.ts",

@@ -4,16 +4,14 @@ import { _electron as electron, expect, test, type ElectronApplication, type Pag
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import '../../src/shared/ipc';
+import { CH, SESSION_ID } from '../../src/shared/ipc';
 
 // Full-loop e2e (§12 acceptance): real Electron, real node-pty, real bash.
 
 let app: ElectronApplication;
 let page: Page;
-// Isolate Electron's userData (ui-settings.json) per test so persisted UI state — split ratio,
-// last tab, and the full-screen tree width (§20.2) — never bleeds across runs or scribbles on the
-// developer's real ~/.config/Electron. Tests that relaunch reuse this same dir so within-test
-// persistence still holds; the HOME=temp tests isolate userData under their own temp HOME instead.
+// Per-test userData so persisted UI state (§20.2) never bleeds across runs or touches the dev's real
+// ~/.config/Electron. HOME=temp tests instead get userData under their HOME.
 let userDataDir: string;
 const launchArgs = (): string[] => ['out/main/index.js', `--user-data-dir=${userDataDir}`];
 
@@ -32,16 +30,16 @@ async function findRowIndex(needle: string): Promise<number> {
   return texts.findIndex((t) => t.trim() === needle);
 }
 
-/** First visible row whose text contains `needle` (survives reflow wrapping a logical line). */
+/** First visible row whose text contains `needle`. */
 async function findRowIndexContaining(needle: string): Promise<number> {
   const texts = await page.locator('.xterm-rows > div').allTextContents();
   return texts.findIndex((t) => t.includes(needle));
 }
 
-/** Drag-select the whole visible row whose exact text is `needle`; returns its bounding box. */
+/** Drag-select the visible row whose exact text is `needle`; returns its bounding box. */
 async function selectRowContaining(needle: string): Promise<{ x: number; y: number; width: number; height: number }> {
-  // Wait for the exact output row to render — a preceding toContainText can match the
-  // echoed command line before the command's own output appears (avoids a select race).
+  // A toContainText can match the echoed command line before its output row renders; the exact-row
+  // poll waits for the output row so the drag does not race it.
   await expect.poll(() => findRowIndex(needle)).toBeGreaterThanOrEqual(0);
   const row = page.locator('.xterm-rows > div').nth(await findRowIndex(needle));
   const box = (await row.boundingBox())!;
@@ -53,8 +51,8 @@ async function selectRowContaining(needle: string): Promise<{ x: number; y: numb
   return box;
 }
 
-/** Capture is manual + single-slot (§21.1): run report-detection on demand against the current
- *  buffer. Nothing auto-emits, so every findings assertion is preceded by this click. */
+/** Capture is manual + single-slot (§21.1): nothing auto-emits, so a findings assertion must follow
+ *  an on-demand capture. */
 async function clickCaptureLast(): Promise<void> {
   await page.locator('#capture-last').click();
 }
@@ -75,29 +73,25 @@ function canFocus(sel: string): Promise<boolean> {
   });
 }
 
-/** Open the quick-send drawer (closed on startup, §22.2) on a known tab. Call after a relaunch or
- *  reload, which both reset the drawer to closed. */
+/** Open the quick-send drawer (closed on startup and reset to closed by relaunch/reload, §22.2). */
 async function openQuickSend(tab: 'capture' | 'todo' = 'capture'): Promise<void> {
   await page.locator('#qs').click();
   await page.locator(`#tab-${tab}`).click();
 }
 
 /**
- * cd into a throwaway directory so repo-scoped todos (§16.3) land there, not in the
- * project/HOME tree. Returns once the new prompt's OSC 7 has propagated the repo key
- * to the renderer (the Todo count chip exists). `marker` keys distinct temp dirs.
+ * cd into a throwaway dir so repo-scoped todos (§16.3) land there, not in the project/HOME tree.
+ * Resolves once the new prompt's OSC 7 has propagated the repo key to the renderer. `marker` keys
+ * distinct temp dirs; each dir is wiped at most once per test so a within-test relaunch keeps its
+ * todos.json while a fresh test starts clean from the fixed /tmp path.
  */
-// Markers whose repo dir was already wiped THIS test — so a within-test relaunch (the persistence
-// tests cd back after restarting the app) keeps the repo's todos.json, while each new test starts
-// from a clean repo no matter what a prior run left in the fixed /tmp path. Reset in beforeEach.
 let freshenedDirs: Set<string>;
 async function cdToTempDir(marker: string): Promise<void> {
   const dir = `/tmp/agent-term-e2e-${marker}`;
-  const wipe = freshenedDirs.has(marker) ? '' : `rm -rf "${dir}" && `; // clean once per test, not on re-entry
+  const wipe = freshenedDirs.has(marker) ? '' : `rm -rf "${dir}" && `;
   freshenedDirs.add(marker);
   await typeCommand(`${wipe}mkdir -p "${dir}" && cd "${dir}" && pwd`);
-  // The exact pwd output row confirms the cd ran; waiting for quiescence guarantees
-  // the following OSC 7 (emitted at the next prompt) has been parsed → repo key live.
+  // Quiescence guarantees the next prompt's OSC 7 was parsed → repo key live before return.
   await expect(
     page.locator('.xterm-rows > div').filter({ hasText: new RegExp(`^\\s*${dir}\\s*$`) }),
   ).not.toHaveCount(0);
@@ -112,11 +106,9 @@ test.beforeEach(async () => {
     env: { ...process.env, APP_SUBMIT_DELAY_MS: '100' },
   });
   page = await app.firstWindow();
-  // Bash prompt is ready once the shell has produced any output.
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
-  // The drawer starts closed (§22.2); the drawer-driven tests below assume it open on a known
-  // tab, so dock it and select Capture here. (The closed-on-startup default is asserted by its
-  // own test, which relaunches a fresh app.)
+  // The drawer starts closed (§22.2); drawer-driven tests below assume it open on Capture. The
+  // closed-on-startup default is asserted by its own fresh-relaunch test.
   await openQuickSend('capture');
 });
 
@@ -152,8 +144,7 @@ test('selection survives focus changes and draws the app-owned highlight', async
 
   const rowBox = await selectRowContaining('select-me-marker');
 
-  // The app's own decoration is drawn over the selected row (absolute-coordinate check:
-  // with 100 lines scrolled, viewport-relative math would place it elsewhere).
+  // Absolute-coordinate check: with 100 lines scrolled, viewport-relative math would mis-place this.
   const deco = page.locator('.xterm-decoration').first();
   await expect(deco).toBeVisible();
   const decoBox = (await deco.boundingBox())!;
@@ -214,25 +205,23 @@ test('manual selection capture routes to the Todo tab; Send drives the shell (§
   const outputRow = page.locator('.xterm-rows > div').filter({ hasText: /^\s*injected-ok-123\s*$/ });
   await page.locator('#drawer').click();
   await item.getByRole('button', { name: 'Send' }).click();
-  // The command text is now at the prompt but has not run — no output row yet.
   await expect(page.locator('.xterm-rows')).toContainText('echo injected-ok-123');
   await expect(outputRow).toHaveCount(0);
-  // Submitting it (the user's choice) runs it and yields the echo output on its own row.
   await page.keyboard.press('Enter');
   await expect(outputRow).toHaveCount(1);
 });
 
 test('injection honors bracketed-paste mode read live from the shadow (§9.3)', async () => {
-  // Mode OFF: bash disables ?2004 while a command runs; cat -v makes received bytes visible.
+  // Mode OFF (?2004l): an unfenced paste arrives with no bracket markers (§9.3). cat -v renders bytes.
   await typeCommand('printf "\\x1b[?2004l"; cat -v');
   await expect(page.locator('.status-chip[data-status="paste mode"]')).toContainText('off');
   await inject('plain-text-in', true);
   await expect(termRows()).toContainText('plain-text-in');
   expect(await termRows().innerText()).not.toContain('200~');
 
-  // Mode ON (forced by the foreground "app"): markers must fence the paste.
-  await typeCommand(''); // flush
-  await page.keyboard.press('Control+D'); // leave cat
+  // Mode ON (?2004h): the paste must be fenced by ESC[200~ … ESC[201~.
+  await typeCommand('');
+  await page.keyboard.press('Control+D');
   await typeCommand('printf "\\x1b[?2004h"; cat -v');
   await expect(page.locator('.status-chip[data-status="paste mode"]')).toContainText('on');
   await inject('fenced-in', true);
@@ -243,12 +232,11 @@ test('embedded ESC[201~ in injected content cannot break out of paste mode', asy
   await typeCommand('printf "\\x1b[?2004h"; cat -v');
   await expect(page.locator('.status-chip[data-status="paste mode"]')).toContainText('on');
   await inject('bad\x1b[201~rm', true);
-  // The end marker inside the content is stripped: payload arrives contiguous.
+  // The embedded ESC[201~ is stripped (§7.5/§9.3 breakout guard): payload arrives contiguous.
   await expect(termRows()).toContainText(/\[200~badrm.*\[201~/);
 });
 
 test('the terminal exposes an accessibility tree for screen readers', async () => {
-  // screenReaderMode wires xterm's AccessibilityManager, which mounts this container.
   await expect(page.locator('.xterm-accessibility')).toHaveCount(1);
 });
 
@@ -261,7 +249,7 @@ test('Send selection pastes the selected text as an editable command line', asyn
   // The selection stays highlighted after Send (§7.5).
   await expect(page.locator('.xterm-decoration').first()).toBeVisible();
 
-  // Pasted at the prompt, not executed — running it now yields the echo output on its own row.
+  // Pasted at the prompt, not executed (§9.3): the text only runs on a user Enter.
   await page.locator('.xterm-screen').click();
   await page.keyboard.press('Enter');
   await expect(
@@ -273,14 +261,14 @@ test('Escape clears an active selection but passes through to the agent otherwis
   await typeCommand("echo 'esc-target-row'");
   await expect(termRows()).toContainText('esc-target-row');
 
-  // With a selection active, Escape clears it and is NOT sent to the shell.
+  // Selection active → Escape clears it and is NOT sent to the shell (§7.5.1).
   await selectRowContaining('esc-target-row');
   await expect(page.locator('.xterm-decoration')).not.toHaveCount(0);
   await page.locator('.xterm-screen').click();
   await page.keyboard.press('Escape');
   await expect(page.locator('.xterm-decoration')).toHaveCount(0);
 
-  // With no selection, Escape passes through — cat -v renders the byte as ^[.
+  // No selection → Escape passes through to the shell; cat -v renders the ESC byte as ^[.
   await typeCommand('cat -v');
   await page.keyboard.press('Escape');
   await expect(termRows()).toContainText('^[');
@@ -288,8 +276,7 @@ test('Escape clears an active selection but passes through to the agent otherwis
 });
 
 test('Shift+Enter inserts a newline (ESC+CR) instead of submitting (§7.5.2)', async () => {
-  // cat -v echoes received control bytes visibly: ESC -> ^[. xterm's default for
-  // Shift+Enter is a bare CR (no ^[), so the rendered ^[ proves our handler ran.
+  // xterm's default Shift+Enter is a bare CR (no ESC); the rendered ^[ (cat -v) proves our ESC+CR ran.
   await typeCommand('cat -v');
   await page.locator('.xterm-screen').click();
   await page.keyboard.press('Shift+Enter');
@@ -298,8 +285,8 @@ test('Shift+Enter inserts a newline (ESC+CR) instead of submitting (§7.5.2)', a
 });
 
 test('Option/Alt+Backspace deletes the whole previous word at the prompt (§7.5.2)', async () => {
-  // Functional, end-to-end: word-delete leaves `echo `, so `done` runs as `echo done`.
-  // A char-delete or no-op would instead run `echo foobadone` / `echo foobardone`.
+  // Word-delete leaves `echo `, so `done` runs as `echo done`; a char-delete or no-op would run
+  // `echo foobadone` / `echo foobardone` — distinguishing the discriminating output below.
   await page.locator('.xterm-screen').click();
   await page.keyboard.type('echo foobar');
   await page.keyboard.press('Alt+Backspace');
@@ -443,7 +430,6 @@ test('the Keyboard settings view opens from the gear and Ctrl+,, rebinds live, a
 
 test('a todo persists in-repo across an app restart (§16.3)', async () => {
   await cdToTempDir('persist');
-  // Seed a todo via Capture selection (manual add is deferred to §24.2.1).
   await typeCommand("echo 'persist-this-todo'");
   await expect(termRows()).toContainText('persist-this-todo');
   await selectRowContaining('persist-this-todo');
@@ -451,8 +437,7 @@ test('a todo persists in-repo across an app restart (§16.3)', async () => {
   await page.locator('#tab-todo').click();
   await expect(page.locator('.todo').filter({ hasText: 'persist-this-todo' })).toHaveCount(1);
 
-  // Restart the whole app (fresh main process + PTY): the in-repo todos.json is reread
-  // when the agent cd's back into the repo, and the first OSC 7 re-broadcasts the key.
+  // Across a full restart, the in-repo todos.json is reread when the agent cd's back (§16.3).
   await app.close();
   app = await electron.launch({ args: launchArgs(), env: { ...process.env, APP_SUBMIT_DELAY_MS: '100' } });
   page = await app.firstWindow();
@@ -467,9 +452,8 @@ test('monitor status strip tracks quiescence and alt-screen', async () => {
   const agentChip = page.locator('.status-chip[data-status="agent"]');
   const fsChip = page.locator('.status-chip[data-status="full-screen"]');
 
-  // A single instantaneous echo can flip working→quiet inside one poll cycle (the chip was only ever
-  // sampled as "quiet for Ns"); emit output over ~1s so the "working" state is reliably observable,
-  // then assert it quiesces. QUIET_MS is 1000 ms, so the 0.2s cadence keeps it "working" throughout.
+  // A single echo can flip working→quiet inside one poll cycle. Burst over ~1s at 0.2s cadence (under
+  // QUIET_MS 1000) so "working" is reliably observable before it quiesces.
   await typeCommand('for i in 1 2 3 4 5; do echo burst; sleep 0.2; done');
   await expect(agentChip).toContainText('working');
   await expect(agentChip).toContainText('quiet', { timeout: 5_000 });
@@ -493,8 +477,7 @@ test('a printed Claude-style permission box produces no semantic capture card (v
     "printf '%s\\n' '╭──────────────────────────────╮' '│ Do you want to proceed?      │' '│ ❯ 1. Yes                     │' '│   2. No                      │' '╰──────────────────────────────╯'",
   );
   await expect(termRows()).toContainText('Do you want to proceed?');
-  // Permission/question detection was removed; a box is chrome and (with shell integration
-  // on) its output is a gated command span — capturing on demand surfaces no finding.
+  // Permission/question detection was removed (v2.6): a box is chrome, so capture surfaces no finding.
   await clickCaptureLast();
   await expect(page.locator('#monitor-blocks .finding')).toHaveCount(0);
 });
@@ -508,9 +491,8 @@ test('boring commands produce zero agent-semantic captures (§15.8 budget)', asy
 });
 
 test('a captured report (with findings) survives a monitor reload (capture:last→store→replay)', async () => {
-  // Integration off: no command spans, so the generic heuristic surfaces the printed
-  // report deterministically (no span-gating race) and the capture:last→store→replay path
-  // is exercised end-to-end.
+  // APP_SHELL_INTEGRATION=0: no command spans, so the report surfaces deterministically (no
+  // span-gating race) and the capture:last→store→replay path runs end-to-end.
   await app.close();
   app = await electron.launch({
     args: launchArgs(),
@@ -524,19 +506,19 @@ test('a captured report (with findings) survives a monitor reload (capture:last�
     "printf '%s\\n' 'Here is the summary of findings from this code review:' '- one important finding worth acting on' '- another finding to address before merge'",
   );
   await expect(termRows()).toContainText('another finding to address before merge');
-  await clickCaptureLast(); // capture is manual now (§21.1)
+  await clickCaptureLast();
   const findings = page.locator('#monitor-blocks .finding');
   await expect(findings.first()).toBeVisible({ timeout: 10_000 });
   expect(await findings.count()).toBeGreaterThan(0);
 
-  // The single captured report is stored, so a reloaded pane replays it (no re-click).
+  // The single captured report is stored, so a reloaded pane replays it without a re-click (§21.1).
   await page.reload();
-  await openQuickSend('capture'); // reload resets the drawer to closed
+  await openQuickSend('capture'); // reload resets the drawer to closed (§22.2)
   await expect(page.locator('#monitor-blocks .finding').first()).toBeVisible();
 });
 
 test('capture ↔ terminal cross-highlight: double-click reveals each side (§16.8)', async () => {
-  // Integration off so the printed report surfaces deterministically (as in the replay test).
+  // APP_SHELL_INTEGRATION=0 so the printed report surfaces deterministically (as in the replay test).
   await app.close();
   app = await electron.launch({
     args: launchArgs(),
@@ -546,47 +528,41 @@ test('capture ↔ terminal cross-highlight: double-click reveals each side (§16
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
   await openQuickSend('capture'); // the drawer starts closed after a relaunch (§22.2)
 
-  // Feed the report through base64 so the finding phrases appear ONLY in the command's OUTPUT,
-  // never in its echoed input line. With shell integration off the scanner captures the echo
-  // region too, so a phrase typed literally would match twice (echo + output) and a terminal
-  // double-click could land on the echo. The decoded text is the same three-line report.
+  // Feed the report through base64 so the finding phrases appear ONLY in the command's OUTPUT, not
+  // its echoed input: with integration off the scanner captures the echo region too, so a literal
+  // phrase would match twice (echo + output) and a terminal double-click could land on the echo.
   const reportB64 =
     'SGVyZSBpcyB0aGUgY3Jvc3MtaGlnaGxpZ2h0IHN1bW1hcnkgb2YgZmluZGluZ3MgYmVsb3c6Ci0gY3Jvc3MtaGlnaGxpZ2h0IGZpbmRpbmcgb25lIHdvcnRoIGFjdGluZyBvbiBub3cKLSBjcm9zcy1oaWdobGlnaHQgZmluZGluZyB0d28gdG8gYWRkcmVzcyBiZWZvcmUgbWVyZ2UK';
   await typeCommand(`echo '${reportB64}' | base64 -d`);
   await expect(termRows()).toContainText('finding two to address before merge');
-  await clickCaptureLast(); // capture is manual now (§21.1)
+  await clickCaptureLast();
 
-  // Each list item splits into an individually-actionable finding, rendered as a flat
-  // .finding card (the report blob itself is never a card, §24.1). The phrase is unique to
-  // the output, so each matches exactly one finding.
+  // Each list item splits into an individually-actionable .finding card; the report blob itself is
+  // never a card (§24.1).
   const findingOne = page.locator('#monitor-blocks .finding', { hasText: 'finding one worth acting on now' });
   const findingTwo = page.locator('#monitor-blocks .finding', { hasText: 'finding two to address before merge' });
   await expect(findingOne).toHaveCount(1, { timeout: 10_000 });
   await expect(findingTwo).toHaveCount(1);
 
-  // Capture → terminal: double-clicking a single finding draws the amber reveal decoration
-  // over just that chunk's terminal rows (a class distinct from the blue selection one).
+  // Capture → terminal: revealing a single finding decorates only that chunk's rows — a class
+  // distinct from the selection decoration (§16.8).
   await findingOne.dblclick();
   await expect(page.locator('.xterm-decoration.reveal-highlight').first()).toBeVisible();
 
-  // Terminal → capture: double-clicking a word on that finding's terminal row reveals the
-  // specific chunk, not the whole report — the finding card itself gets the outline.
+  // Terminal → capture: a word on that finding's row reveals the specific chunk, not the whole report.
   const rowIdx = await findRowIndex('- cross-highlight finding one worth acting on now');
   expect(rowIdx).toBeGreaterThanOrEqual(0);
   await page.locator('.xterm-rows > div').nth(rowIdx).dblclick();
   await expect(findingOne).toHaveClass(/revealed/);
 
-  // The regression guard: after a resize REFLOWS the transcript, the link must still resolve to
-  // the SAME content. Each capture's span is anchored to xterm markers (which move with their
-  // lines through reflow), so the scan-time absolute rows can't go stale and mis-target (§16.8).
-  // Narrow the window so the long echoed input line re-wraps and pushes the output findings to
-  // new absolute rows, then re-run terminal → capture against finding TWO: a stale-row mapping
-  // would now point at the wrong chunk or the whole report; the marker mapping still lands true.
+  // Regression guard (§16.8): capture spans are anchored to xterm markers, which move with their
+  // lines through reflow, so scan-time absolute rows can't go stale and mis-target. Narrowing the
+  // window re-wraps the echoed input and pushes output findings to new absolute rows; re-running
+  // terminal → capture against finding TWO would hit the wrong chunk under a stale-row mapping.
   await expect(findingOne).not.toHaveClass(/revealed/, { timeout: 12_000 }); // let the prior reveal self-clear
   await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(480, 600));
-  // Reflow settles over the 80 ms debounce and can keep shifting absolute rows, and one double-click
-  // can land between rows mid-reflow — so retry find→dblclick→reveal as a single unit until finding
-  // TWO's chunk resolves (the marker mapping surviving the reflow is what this guards, §16.8).
+  // Reflow keeps shifting rows over the 80 ms debounce and one dblclick can land between rows
+  // mid-reflow — so retry find→dblclick→reveal as a unit until finding TWO's chunk resolves.
   await expect
     .poll(
       async () => {
@@ -607,7 +583,6 @@ test('only the active tab’s panel is visible (§16.1)', async () => {
   const capture = page.locator('#panel-capture');
   const todo = page.locator('#panel-todo');
 
-  // beforeEach selects the Capture tab.
   await expect(capture).toBeVisible();
   await expect(todo).toBeHidden();
 
@@ -623,7 +598,6 @@ test('only the active tab’s panel is visible (§16.1)', async () => {
 test('cd between directories swaps the repo-scoped todo list (§16.3)', async () => {
   const todo = (text: string) => page.locator('.todo').filter({ hasText: text });
 
-  // Seed A's list via Capture selection (manual add is deferred to §24.2.1).
   await cdToTempDir('repoA');
   await typeCommand("echo 'A-side todo'");
   await expect(termRows()).toContainText('A-side todo');
@@ -632,11 +606,11 @@ test('cd between directories swaps the repo-scoped todo list (§16.3)', async ()
   await page.locator('#tab-todo').click();
   await expect(todo('A-side todo')).toHaveCount(1);
 
-  // cd elsewhere → the list swaps to that dir's (empty) list.
+  // cd elsewhere → the list swaps to that dir's (empty) list (§16.3).
   await cdToTempDir('repoB');
   await expect(todo('A-side todo')).toHaveCount(0);
 
-  // cd back → A's todo returns (persisted in repoA/.agent-terminal/todos.json).
+  // cd back → A's todo returns, reread from its repo-local store (§16.3).
   await typeCommand('cd "/tmp/agent-term-e2e-repoA"');
   await expect(todo('A-side todo')).toHaveCount(1);
 });
@@ -651,8 +625,7 @@ test('a manually-added todo persists across a reload (§24.2.1 manual add)', asy
   const row = page.locator('.todo').filter({ hasText: 'hand-written e2e todo' });
   await expect(row).toHaveCount(1);
 
-  // Full loop: it was written through todoAdd → the repo's todos.json, so a reloaded pane
-  // re-pulls it (currentRepo on mount → todoList).
+  // Persisted to the repo's todos.json, so a reloaded pane re-pulls it (§24.2.1).
   await page.reload();
   await openQuickSend('todo');
   await expect(page.locator('.todo').filter({ hasText: 'hand-written e2e todo' })).toHaveCount(1);
@@ -668,12 +641,11 @@ test('two-step delete: Confirm then Undo keeps the todo, no server delete (§24.
 
   await row.getByRole('button', { name: 'Delete todo' }).click();
   await page.getByRole('button', { name: 'Confirm delete' }).click();
-  // The row collapses to a Deleted/Undo affordance during the window; Undo restores it.
   await expect(page.locator('.todo-undo')).toBeVisible();
   await page.locator('.todo-undo').click();
   await expect(page.locator('.todo').filter({ hasText: 'delete-me-e2e' })).toHaveCount(1);
 
-  // The reverted delete never reached the store, so a reload still shows it.
+  // The reverted delete never reached the store, so a reload still shows it (§24.2.1).
   await page.reload();
   await openQuickSend('todo');
   await expect(page.locator('.todo').filter({ hasText: 'delete-me-e2e' })).toHaveCount(1);
@@ -696,7 +668,7 @@ test('reorder: Move down swaps two todos and the new order persists (§24.2.1)',
   await page.locator('.todo').filter({ hasText: 'reorder-first-e2e' }).getByRole('button', { name: 'Move down' }).click();
   await expect.poll(texts).toEqual(['reorder-second-e2e', 'reorder-first-e2e']);
 
-  // Persisted via todoReorder → todos.json, so the swapped order survives a reload.
+  // Persisted to todos.json, so the swapped order survives a reload (§24.2.1).
   await page.reload();
   await openQuickSend('todo');
   await expect.poll(texts).toEqual(['reorder-second-e2e', 'reorder-first-e2e']);
@@ -709,14 +681,14 @@ test('tri-state: Send marks a todo in-progress (mixed), then the checkbox cycles
   await page.locator('#todo-add-btn').click();
   const row = page.locator('.todo').filter({ hasText: 'tri-state-e2e' });
   const chk = row.locator('.chk');
-  await expect(chk).toHaveAttribute('aria-checked', 'false'); // starts active (not started)
+  await expect(chk).toHaveAttribute('aria-checked', 'false'); // not started
 
-  // Send hands it to the agent AND marks it in_progress → the checkbox renders mixed.
+  // Send marks the todo in_progress → the checkbox renders mixed (§16.3).
   await row.getByRole('button', { name: 'Send todo to agent' }).click();
-  await page.locator('#tab-todo').click(); // Send revealed the terminal (F2); return to the list
+  await page.locator('#tab-todo').click(); // Send revealed the terminal view — return to the list
   await expect(chk).toHaveAttribute('aria-checked', 'mixed');
 
-  // A checkbox click on an in-progress todo completes it; the change persists through todoSetStatus.
+  // A checkbox click on an in-progress todo completes it, persisted (§16.3).
   await chk.click();
   await expect(chk).toHaveAttribute('aria-checked', 'true');
   await page.reload();
@@ -732,25 +704,21 @@ test('switches views via hotkey and nav button, showing one pane at a time (§22
   await expect(v1).toBeVisible();
   await expect(v3).toBeHidden();
 
-  // ⌘/Ctrl+3 → Todos view.
   await page.keyboard.press('Control+3');
   await expect(v3).toBeVisible();
   await expect(v1).toBeHidden();
   await expect(page.locator('[data-viewbtn="3"]')).toHaveClass(/on/);
 
-  // The nav button switches back to the terminal.
   await page.locator('[data-viewbtn="1"]').click();
   await expect(v1).toBeVisible();
   await expect(v3).toBeHidden();
 });
 
 test('switching to the terminal view focuses it, so the keyboard lands there to keep typing (§22.4)', async () => {
-  // Park focus off the terminal: go to the Todos view (its pane, not the terminal, is shown).
   await page.keyboard.press('Control+3');
   await expect(page.locator('[data-viewpane="3"]')).toBeVisible();
   await expect(page.locator('.xterm-helper-textarea')).not.toBeFocused();
 
-  // ⌘/Ctrl+1 returns to the terminal view AND hands it keyboard focus (xterm's input textarea).
   await page.keyboard.press('Control+1');
   await expect(page.locator('[data-viewpane="1"]')).toBeVisible();
   await expect(page.locator('.xterm-helper-textarea')).toBeFocused();
@@ -758,18 +726,18 @@ test('switching to the terminal view focuses it, so the keyboard lands there to 
 
 test('Send from a todo reveals + focuses the terminal so you can finish typing there (§16.2/§22.4)', async () => {
   await cdToTempDir('sendfocus');
-  await page.locator('#tab-todo').click(); // drawer is already docked by beforeEach — just switch tab
+  await page.locator('#tab-todo').click();
   await page.locator('#todo-new').fill('send-focus-e2e');
   await page.locator('#todo-add-btn').click();
   const row = page.locator('.todo').filter({ hasText: 'send-focus-e2e' });
   await expect(row).toHaveCount(1);
 
-  // Park on another view so a naive focus() would land on a hidden terminal.
+  // Park on another view so a naive focus() would land on the hidden terminal (§22.4 guard).
   await page.keyboard.press('Control+2');
   await expect(page.locator('[data-viewpane="2"]')).toBeVisible();
   await expect(page.locator('.xterm-helper-textarea')).not.toBeFocused();
 
-  // Send injects the text WITHOUT submitting, brings the terminal view forward, and focuses it.
+  // Send injects without submitting (§16.2), reveals the terminal view, and focuses it (§22.4).
   await row.getByRole('button', { name: 'Send todo to agent' }).click();
   await expect(page.locator('[data-viewpane="1"]')).toBeVisible();
   await expect(page.locator('.xterm-helper-textarea')).toBeFocused();
@@ -786,11 +754,11 @@ test('switching to the Artifacts view focuses the file tree for immediate keyboa
   await expect(page.locator('.xterm-rows > div').filter({ hasText: new RegExp(`^\\s*${dir}\\s*$`) })).not.toHaveCount(0);
   await expect(page.locator('.status-chip[data-status="agent"]')).toContainText('quiet', { timeout: 6_000 });
 
-  // First visit populates the tree (discovery is async, so focus has nothing to land on yet).
+  // Discovery is async, so the first visit has nothing for focus to land on yet.
   await page.keyboard.press('Control+2');
   await expect(page.locator('#artifacts .tree .f').filter({ hasText: 'a.md' })).toHaveCount(1);
 
-  // Returning to the view (tree already loaded) lands keyboard focus on the tree, not nowhere.
+  // Returning once the tree is loaded must land focus on it, not nowhere (§22.4).
   await page.keyboard.press('Control+1');
   await expect(page.locator('.xterm-helper-textarea')).toBeFocused();
   await page.keyboard.press('Control+2');
@@ -798,8 +766,8 @@ test('switching to the Artifacts view focuses the file tree for immediate keyboa
 });
 
 test('the artifact viewer discovers real repo files and sends a selection to a todo (§20.1/§20.2)', async () => {
-  // Build a real git repo: doc.md is edited after commit (curated/changed); src/app.ts is
-  // committed-unchanged (whole-repo only). The trailing cd makes it the session's live cwd.
+  // doc.md is edited after commit (curated/changed); src/app.ts is committed-unchanged (whole-repo
+  // only) — the two cases the curated-vs-all discovery distinction turns on (§20.1).
   const dir = '/tmp/agent-term-e2e-artrepo';
   await typeCommand(
     `rm -rf "${dir}" && mkdir -p "${dir}/src" && cd "${dir}" && git init -q && ` +
@@ -814,13 +782,13 @@ test('the artifact viewer discovers real repo files and sends a selection to a t
   await page.keyboard.press('Control+2');
   await expect(page.locator('[data-viewpane="2"]')).toBeVisible();
 
-  // Curated discovery: the working-tree change is listed; the committed-unchanged file is not.
+  // Curated discovery (§20.1): the working-tree change is listed; the committed-unchanged file is not.
   const tree = page.locator('#artifacts .tree');
   await expect(tree.locator('.f').filter({ hasText: 'doc.md' })).toHaveCount(1);
   await expect(tree.locator('.f').filter({ hasText: 'app.ts' })).toHaveCount(0);
   await expect(tree.locator('.f').filter({ hasText: 'doc.md' })).toContainText('changed');
 
-  // Open doc.md → rendered markdown; select a passage → Add-to-todo (§16.2 sink).
+  // A passage selected in the rendered markdown routes to the todo list (§16.2 sink).
   const body = page.locator('#artifacts .vbody');
   await tree.locator('.f').filter({ hasText: 'doc.md' }).click();
   await expect(body.locator('h1')).toContainText('Doc');
@@ -829,7 +797,7 @@ test('the artifact viewer discovers real repo files and sends a selection to a t
   await page.locator('#tab-todo').click();
   await expect(page.locator('.todo').filter({ hasText: 'The scanner carves tool calls' })).toHaveCount(1);
 
-  // "Show all repo files" reveals the committed file under its directory; it renders in CodeMirror.
+  // The whole-repo scope reveals the committed file; code renders in CodeMirror (§20.1/§20.2).
   await page.locator('#artifacts .scope-toggle input').check();
   const appRow = tree.locator('.f').filter({ hasText: 'app.ts' });
   await expect(appRow).toHaveCount(1);
@@ -839,9 +807,8 @@ test('the artifact viewer discovers real repo files and sends a selection to a t
 });
 
 test('the viewer starts in sync with the terminal cwd, before any cd (§20.1)', async () => {
-  // bash spawns in $HOME; the viewer must discover there from the first paint — not in the
-  // Electron process dir. Launch with a controlled HOME holding a marker file and assert the
-  // viewer shows it with no cd. (Relaunch our own app; afterEach closes the reassigned one.)
+  // bash spawns in $HOME (§5/§20.1): the viewer must discover there from the first paint, not in the
+  // Electron process dir — so a marker placed in a controlled HOME must show with no cd.
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-home-'));
   writeFileSync(join(home, 'home-marker.md'), '# Home marker\n');
   await app.close();
@@ -880,14 +847,14 @@ test('file names are rendered in full, not truncated with an ellipsis (§20.2)',
   await page.keyboard.press('Control+2');
   const fn = page.locator('#artifacts .treelist .f .fn').first();
   await expect(fn).toHaveText(longName);
-  // The name element is sized to its full content — nothing is clipped behind an ellipsis.
+  // scrollWidth ≈ clientWidth ⇒ nothing clipped behind an ellipsis (§20.2).
   const clipped = await fn.evaluate((el) => el.scrollWidth - el.clientWidth);
   expect(clipped).toBeLessThanOrEqual(1);
 });
 
 test('the code viewer marks changed lines with a gutter stripe and a line tint (§20.2)', async () => {
-  // Commit a 3-line source file, then modify only line 2. The viewer must mark exactly that
-  // line — current-file position, not a diff — with both a gutter stripe and a line tint.
+  // Only line 2 is modified post-commit: the viewer must mark it at its current-file position, not
+  // as a diff (§20.2).
   const dir = '/tmp/agent-term-e2e-changedlines';
   await typeCommand(
     `rm -rf "${dir}" && mkdir -p "${dir}/src" && cd "${dir}" && git init -q && ` +
@@ -906,14 +873,14 @@ test('the code viewer marks changed lines with a gutter stripe and a line tint (
   const body = page.locator('#artifacts .vbody');
   await expect(body.locator('.cm-editor')).toBeVisible();
   await expect(body.locator('.cm-editor')).toContainText('99');
-  // Line 2 is the only changed line → exactly one tinted line and one gutter stripe.
+  // Only line 2 changed → exactly one tinted line and one gutter stripe.
   await expect(body.locator('.cm-changedLine')).toHaveCount(1);
   await expect(body.locator('.cm-changedGutter')).toHaveCount(1);
 });
 
 test('the viewer gates the sinks on a selection and steps through changed sections (§20.2)', async () => {
-  // A 200-line file with two far-apart edits (lines 2 and 180): change 2 is off-screen at open,
-  // so the readout/controls must follow the viewport, not a static index.
+  // Two far-apart edits (lines 2 and 180) in a 200-line file: change 2 is off-screen at open, so the
+  // readout/controls must follow the viewport, not a static index (§20.2).
   const dir = '/tmp/agent-term-e2e-changenav';
   await typeCommand(
     `rm -rf "${dir}" && mkdir -p "${dir}/src" && cd "${dir}" && git init -q && ` +
@@ -932,13 +899,13 @@ test('the viewer gates the sinks on a selection and steps through changed sectio
   const body = page.locator('#artifacts .vbody');
   await expect(body.locator('.cm-editor')).toBeVisible();
 
-  // Tweak 1: the sinks are disabled with nothing highlighted, and enable once a passage is selected.
+  // The sinks gate on a selection: disabled with nothing highlighted, enabled once a passage is selected.
   const send = page.locator('#artifacts .art-send');
   const todo = page.locator('#artifacts .art-todo');
   await expect(send).toBeDisabled();
   await expect(todo).toBeDisabled();
 
-  // Tweak 2: open at the top → only change 1 on screen; change 2 (line 180) is below the fold.
+  // Open at the top → only change 1 on screen; change 2 (line 180) is below the fold.
   const count = page.locator('#artifacts .art-navcount');
   const prev = page.locator('#artifacts .art-prev');
   const next = page.locator('#artifacts .art-next');
@@ -950,7 +917,7 @@ test('the viewer gates the sinks on a selection and steps through changed sectio
   await expect(send).toBeEnabled();
   await expect(todo).toBeEnabled();
 
-  // Next jumps to the off-screen change → readout follows, boundaries flip.
+  // Next jumps to the off-screen change → readout follows the viewport, boundaries flip (§20.2).
   await next.click();
   await expect(count).toHaveText('2 / 2');
   await expect(next).toBeDisabled();
@@ -974,7 +941,7 @@ test('the viewer has a keyboard-accessible full-screen mode (§20.2)', async () 
   const drawer = page.locator('#app #drawer');
   await expect(rail).toBeVisible();
 
-  // Enter full screen via the toolbar button → all app chrome hidden, header + tree collapsed (inert).
+  // Full screen hides all app chrome and collapses (inert) the header + tree (§20.2).
   const vbar = page.locator('#artifacts .vbar');
   const treePanel = page.locator('#artifacts .tree');
   await page.locator('#artifacts .art-fs').click();
@@ -984,19 +951,18 @@ test('the viewer has a keyboard-accessible full-screen mode (§20.2)', async () 
   await expect(vbar).toHaveClass(/is-collapsed/);
   await expect(treePanel).toHaveClass(/is-collapsed/);
 
-  // The edge strips pop the header and tree open and closed.
+  // The edge strips pop the collapsed header and tree open.
   await page.locator('#artifacts .fs-strip-top').click();
   await expect(vbar).not.toHaveClass(/is-collapsed/);
   await page.locator('#artifacts .fs-strip-left').click();
   await expect(treePanel).not.toHaveClass(/is-collapsed/);
 
-  // ESC exits → chrome returns.
   await page.keyboard.press('Escape');
   await expect(appEl).not.toHaveClass(/viewer-fullscreen/);
   await expect(rail).toBeVisible();
 
-  // Keyboard path (§20.2 a11y): Enter on the focused toggle enters; on enter, focus lands on the
-  // top strip — Enter there pops the header open; the revealed exit button leaves full screen.
+  // Keyboard path (§20.2 a11y): on entering, focus lands on the top strip, so Enter there must pop
+  // the header open — the whole flow must be reachable with no pointer.
   await page.locator('#artifacts .art-fs').focus();
   await page.keyboard.press('Enter');
   await expect(appEl).toHaveClass(/viewer-fullscreen/);
@@ -1007,7 +973,7 @@ test('the viewer has a keyboard-accessible full-screen mode (§20.2)', async () 
 });
 
 test('the viewer is keyboard-focusable and scrollable (§20.2 a11y)', async () => {
-  // A tall markdown file and a tall code file so both scroll containers actually overflow.
+  // Tall markdown + tall code files so both scroll containers actually overflow.
   const dir = '/tmp/agent-term-e2e-a11yscroll';
   await typeCommand(
     `rm -rf "${dir}" && mkdir -p "${dir}/src" && cd "${dir}" && git init -q && ` +
@@ -1021,7 +987,7 @@ test('the viewer is keyboard-focusable and scrollable (§20.2 a11y)', async () =
   const tree = page.locator('#artifacts .tree');
   const body = page.locator('#artifacts .vbody');
 
-  // Markdown: the body itself is the focusable scroll region.
+  // Markdown: the body itself is the focusable scroll region (§20.2 a11y).
   await tree.locator('.f').filter({ hasText: 'doc.md' }).click();
   await expect(body.locator('p').first()).toBeVisible();
   expect(await body.evaluate((e) => (e as HTMLElement).tabIndex)).toBe(0);
@@ -1030,7 +996,7 @@ test('the viewer is keyboard-focusable and scrollable (§20.2 a11y)', async () =
   await page.keyboard.press('End');
   await expect.poll(() => body.evaluate((e) => e.scrollTop)).toBeGreaterThan(0);
 
-  // Code: the editor's scroller is the focusable scroll region.
+  // Code: the editor's scroller is the focusable scroll region (§20.2 a11y).
   await page.locator('#artifacts .scope-toggle input').check();
   await tree.locator('.f').filter({ hasText: 'app.ts' }).click();
   const scroller = page.locator('#artifacts .cm-scroller');
@@ -1055,7 +1021,7 @@ test('the full-screen tree popout is resizable and remembers its width (§20.2)'
     await page.keyboard.press('Control+2');
     await page.locator('#artifacts .art-fs').click();
     await expect(page.locator('#app')).toHaveClass(/viewer-fullscreen/);
-    await page.locator('#artifacts .fs-strip-left').click(); // pop the tree open
+    await page.locator('#artifacts .fs-strip-left').click();
     await expect(page.locator('#artifacts .tree')).not.toHaveClass(/is-collapsed/);
   };
 
@@ -1063,7 +1029,7 @@ test('the full-screen tree popout is resizable and remembers its width (§20.2)'
   const before = await fsW();
   expect(before).toBeGreaterThanOrEqual(0.3 * (await page.evaluate(() => window.innerWidth))); // ≥30% default
 
-  // Drag the popout's resize handle by `dx` (re-reading its box each time — it moves with the width).
+  // Re-read the handle box per drag — it moves with the width it sets.
   const handle = page.locator('#artifacts .fs-tree-resize');
   const dragHandleBy = async (dx: number): Promise<void> => {
     const box = (await handle.boundingBox())!;
@@ -1073,10 +1039,9 @@ test('the full-screen tree popout is resizable and remembers its width (§20.2)'
     await page.mouse.up();
   };
 
-  // The start width may sit at the viewport-dependent ceiling (a persisted width clamps to
-  // FS_MAX_VIEWPORT_FRAC × innerWidth), which would leave a rightward drag no room to grow. So
-  // shrink first to a known-narrower baseline (guaranteed room — `before` is ≥30% of the viewport,
-  // well above the floor), then assert the rightward drag widens it from there.
+  // The start width may sit at the viewport-dependent ceiling (clamped to FS_MAX_VIEWPORT_FRAC ×
+  // innerWidth), leaving a rightward drag no room to grow — so shrink to a known-narrower baseline
+  // first, then assert the rightward drag widens it from there.
   await dragHandleBy(-200);
   await expect.poll(fsW).toBeLessThan(before);
   const narrow = await fsW();
@@ -1085,7 +1050,7 @@ test('the full-screen tree popout is resizable and remembers its width (§20.2)'
   await expect.poll(fsW).toBeGreaterThan(narrow + 50);
   const resized = await fsW();
 
-  // The width survives a renderer reload (persisted, like the split tree).
+  // The width survives a renderer reload (persisted, §20.2).
   await page.keyboard.press('Escape');
   await page.reload();
   await enterAndOpenTree();
@@ -1099,8 +1064,8 @@ test('full-screen collapse keeps the header and tree out of the tab order (§22.
   await expect(page.locator('.status-chip[data-status="agent"]')).toContainText('quiet', { timeout: 6_000 });
 
   await page.keyboard.press('Control+2');
-  await page.locator('#artifacts .art-fs').click(); // enter → header + tree collapsed
-  // Collapsed (slid-off) chrome is inert — its controls can't be tab-focused.
+  await page.locator('#artifacts .art-fs').click();
+  // Collapsed (slid-off) chrome is inert — its controls can't be tab-focused (§22.2).
   await expect.poll(() => canFocus('#artifacts .art-fs')).toBe(false);
   await expect.poll(() => canFocus('#artifacts .treesearch')).toBe(false);
   // Popping a panel open makes its controls reachable again.
@@ -1111,17 +1076,17 @@ test('full-screen collapse keeps the header and tree out of the tab order (§22.
 });
 
 test('the quick-send drawer is closed on startup and inert while closed (§22.2)', async () => {
-  // beforeEach opens the drawer; relaunch a fresh app to observe the real startup default.
+  // beforeEach opens the drawer, so relaunch a fresh app to observe the real startup default (§22.2).
   await app.close();
   app = await electron.launch({ args: launchArgs(), env: { ...process.env, APP_SUBMIT_DELAY_MS: '100' } });
   page = await app.firstWindow();
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   const appEl = page.locator('#app');
-  await expect(appEl).not.toHaveClass(/drawer-open/);     // closed on startup
+  await expect(appEl).not.toHaveClass(/drawer-open/);
   await expect(page.locator('#drawer')).toBeHidden();
-  expect(await canFocus('#tab-capture')).toBe(false);     // closed → controls out of the tab order
-  await page.locator('#qs').click();                      // open it
+  expect(await canFocus('#tab-capture')).toBe(false);     // closed → controls out of the tab order (§22.2)
+  await page.locator('#qs').click();
   await expect(appEl).toHaveClass(/drawer-open/);
   expect(await canFocus('#tab-capture')).toBe(true);
 });
@@ -1139,7 +1104,7 @@ test('the changed-section controls leave the tab order when the file has no chan
 
   await page.keyboard.press('Control+2');
   const tree = page.locator('#artifacts .tree');
-  // Markdown has no changed-section nav → controls display:none and out of the tab order.
+  // Markdown has no changed sections → the nav controls hide and leave the tab order (§22.2).
   await tree.locator('.f').filter({ hasText: 'doc.md' }).click();
   await expect(page.locator('#artifacts .vnav')).toBeHidden();
   expect(await canFocus('#artifacts .art-prev')).toBe(false);
@@ -1161,12 +1126,12 @@ test('the artifact tree pane is resizable by dragging its edge, and the width pe
   await page.mouse.up();
   await expect.poll(() => treeW()).toBe('318px'); // 248 default + 70
 
-  // Persisted via UiSettings — survives a renderer reload.
+  // Persisted — survives a renderer reload (§20.2).
   await page.reload();
   await page.keyboard.press('Control+2');
   await expect.poll(() => treeW()).toBe('318px');
 
-  // Reset to the default so the persisted width doesn't leak into later runs.
+  // Reset to default so the persisted width doesn't leak into later runs.
   await page.locator('#artifacts .artsplit-divider').dblclick();
   await expect.poll(() => treeW()).toBe('248px');
 });
@@ -1181,7 +1146,6 @@ test('the quick-send drawer docks and undocks without a scrim, keeping the termi
   await expect(page.locator('.scrim, .backdrop')).toHaveCount(0);
   await expect(page.locator('#terminal')).toBeVisible();
 
-  // The quick-send button re-docks; the close button undocks again.
   await page.locator('#qs').click();
   await expect(appEl).toHaveClass(/drawer-open/);
   await expect(page.locator('#panel-capture')).toBeVisible();
@@ -1191,7 +1155,7 @@ test('the quick-send drawer docks and undocks without a scrim, keeping the termi
 
 test('Ctrl+Shift+K toggles the drawer even while the terminal is focused (§22.4 / §7.7)', async () => {
   const appEl = page.locator('#app');
-  await page.locator('.xterm-screen').click(); // focus the terminal
+  await page.locator('.xterm-screen').click();
   await expect(appEl).toHaveClass(/drawer-open/);
 
   // The shell intercepts the chord (capture phase) ahead of xterm, so the hotkey still reaches it.
@@ -1206,8 +1170,8 @@ test('the terminal refits its PTY when the drawer docks/undocks (§7.1)', async 
   await expect(termRows()).toContainText(/cols-docked=\d+/);
   const docked = Number((await termRows().innerText()).match(/cols-docked=(\d+)/)![1]);
 
-  // Undocking the drawer (close button — the terminal has focus, so ⌘K would be
-  // consumed by xterm) widens the terminal column; the PTY must follow (more cols).
+  // Use the close button, not ⌘K: the terminal has focus, so xterm would consume the chord. Undocking
+  // widens the terminal column and the PTY must follow (§7.1).
   await page.locator('#dclose').click();
   await expect
     .poll(async () => {
@@ -1219,19 +1183,18 @@ test('the terminal refits its PTY when the drawer docks/undocks (§7.1)', async 
 });
 
 test('the mocked Review gate renders from the fixture and its Approve stub reflects a verdict (§19.3)', async () => {
-  await page.keyboard.press('Control+3'); // Todos + gate view
+  await page.keyboard.press('Control+3');
   const gate = page.locator('#gate-panel');
   await expect(gate.locator('button.app')).toHaveText(/Approve/);
-  await expect(gate).toContainText('changes requested'); // fixture's prior verdict
+  await expect(gate).toContainText('changes requested'); // the fixture's prior verdict
 
-  await gate.locator('button.app').click(); // stubbed — no injection, reflects locally
+  await gate.locator('button.app').click(); // stubbed (§19.3): no injection, reflects locally only
   await expect(gate).toContainText('approved');
 });
 
-// Seed a temp git repo with its own flow.yaml naming `stepId`; returns the repo path.
 function seedFlowRepo(prefix: string, stepId: string): string {
   const dir = mkdtempSync(join(tmpdir(), prefix));
-  mkdirSync(join(dir, '.git'), { recursive: true }); // a git root → its own repo key (§16.3)
+  mkdirSync(join(dir, '.git'), { recursive: true }); // a git root ⇒ its own repo key (§16.3)
   mkdirSync(join(dir, '.agent-terminal'), { recursive: true });
   writeFileSync(
     join(dir, '.agent-terminal', 'flow.yaml'),
@@ -1240,8 +1203,8 @@ function seedFlowRepo(prefix: string, stepId: string): string {
   return dir;
 }
 
-// Seed a flow repo with a manual step + MULTIPLE co-located named templates under
-// .agent-terminal/todo-templates/ (each given an H1 title so the picker shows a readable name).
+// Multiple co-located templates under .agent-terminal/todo-templates/ (§18.6); each template's H1
+// supplies the picker's display name.
 function seedFlowRepoMultiTemplate(
   prefix: string,
   stepId: string,
@@ -1265,7 +1228,7 @@ const flowStation = (i: number) => page.locator('#flow-strip .flow.vert .stn').n
 const flowStepName = () => flowStation(1).locator('.nm'); // station 1 = the first real step (Not-started bookend at 0)
 const flowControl = () => page.locator('#flow-strip .flow-control');
 
-// Seed a temp git repo with a MULTI-step flow.yaml (§24.2.3 T1): N manual steps named by `stepIds`.
+// Multi-step manual flow named by `stepIds` (§24.2.3 T1).
 function seedMultiStepFlowRepo(prefix: string, stepIds: string[]): string {
   const dir = mkdtempSync(join(tmpdir(), prefix));
   mkdirSync(join(dir, '.git'), { recursive: true });
@@ -1275,9 +1238,8 @@ function seedMultiStepFlowRepo(prefix: string, stepIds: string[]): string {
   return dir;
 }
 
-// §24.2.3 T3 — seed a 2-step manual flow whose SECOND step declares a `skill`. Entering step 2 by
-// Advance must fire its entry action (the skill injection) — entry-on-advance, the converse of T1's
-// "advance does not fire onEnter". Step 1 has no skill, so Start injects nothing.
+// §24.2.3 T3 — a 2-step manual flow whose SECOND step declares a `skill`, so Advance into it fires
+// entry-on-advance (the converse of T1's "advance does not fire onEnter"). Step 1 has no skill.
 function seedSkillOnSecondStepFlowRepo(prefix: string, skill: string): string {
   const dir = mkdtempSync(join(tmpdir(), prefix));
   mkdirSync(join(dir, '.git'), { recursive: true });
@@ -1289,9 +1251,9 @@ function seedSkillOnSecondStepFlowRepo(prefix: string, skill: string): string {
   return dir;
 }
 
-// §24.2.3 T3 — seed a 2-step flow whose SECOND step is a loop step with a `bootstrap: pickup` and a
-// required typed input (§18.3/§18.4). Entering it prompts for the input via the modal; Confirm then
-// injects `agent-loop pickup <input>` (subject to the §19.3 busy refusal) and persists the value.
+// §24.2.3 T3 — second step is a loop with `bootstrap: pickup` and a required typed input
+// (§18.3/§18.4): entering prompts via the modal, Confirm injects `agent-loop pickup <input>`
+// (subject to the §19.3 busy refusal) and persists the value.
 function seedBootstrapFlowRepo(prefix: string): string {
   const dir = mkdtempSync(join(tmpdir(), prefix));
   mkdirSync(join(dir, '.git'), { recursive: true });
@@ -1308,9 +1270,9 @@ function seedBootstrapFlowRepo(prefix: string): string {
 
 const inputModal = () => page.locator('#flow-modal-host .flow-modal');
 
-// §24.2.3 T2 — seed a repo whose step 2 is a `loop` step bound to a LoopDef, plus a real v4
-// agent-loop state.yaml the app mirrors read-only. Returns the state.yaml path so the test can
-// hand-edit it (the human driving agent-loop) and watch the strip update.
+// §24.2.3 T2 — step 2 is a `loop` bound to a LoopDef, plus a real v4 agent-loop state.yaml the app
+// mirrors read-only. Returns the state.yaml path so the test hand-edits it (standing in for the
+// human driving agent-loop) and watches the strip update.
 function seedLoopFlowRepo(prefix: string): { dir: string; stateFile: string } {
   const dir = mkdtempSync(join(tmpdir(), prefix));
   mkdirSync(join(dir, '.git'), { recursive: true });
@@ -1319,9 +1281,8 @@ function seedLoopFlowRepo(prefix: string): { dir: string; stateFile: string } {
     join(dir, '.agent-terminal', 'flow.yaml'),
     'name: dev-flow\nsteps:\n  - id: groom\n    kind: manual\n  - id: build\n    kind: loop\n    loop: impl-loop\n',
   );
-  // Hermetic LoopDef resolution (§18.1): a repo-local .agent-loop.yaml loops: registry override
-  // points at a working-tree LoopDef copy, so the gate model resolves without depending on the
-  // machine's ~/.claude/loops install. Its gates drive the gate-options row + gate-driven readiness.
+  // Hermetic LoopDef resolution (§18.1): a repo-local .agent-loop.yaml registry override points at a
+  // working-tree LoopDef copy, so the gate model resolves without the machine's ~/.claude/loops install.
   writeFileSync(join(dir, '.agent-loop.yaml'), 'loops:\n  impl-loop: ./impl-loop.yaml\n');
   writeFileSync(
     join(dir, 'impl-loop.yaml'),
@@ -1335,11 +1296,23 @@ function seedLoopFlowRepo(prefix: string): { dir: string; stateFile: string } {
   return { dir, stateFile: join(loopDir, 'state.yaml') };
 }
 
-const loopReadout = () => page.locator('#flow-strip .loopstat'); // compact rail read-out (opens the panel)
-const loopPanel = () => page.locator('#loop-panel'); // the docked expanded state mirror
+const loopReadout = () => page.locator('#flow-strip .loopstat'); // compact rail read-out; click opens the panel
+const loopPanel = () => page.locator('#loop-panel');
+const attnCue = () => page.locator('#attn-cue'); // §24.2.3 T4
 
-// Seed a flow repo whose manual step declares entry actions (§18.6): an optional `skill` and an
-// optional `todo_template` whose markdown-list items are written to a repo-local file.
+// Fire main's flow:revealLoop push directly (§24.2.3 T4) so the real renderer reveal path runs. The
+// OS-notification CLICK that emits this in production is untestable Electron glue (its decision +
+// activation are covered at the main integration layer in loopNotifier); this covers everything
+// downstream of it.
+const fireRevealLoop = (): Promise<void> =>
+  app.evaluate(
+    ({ BrowserWindow }, { ch, sid }) =>
+      BrowserWindow.getAllWindows()[0].webContents.send(ch, { sessionId: sid }),
+    { ch: CH.flowRevealLoop, sid: SESSION_ID },
+  );
+
+// Manual step with entry actions (§18.6): an optional `skill` and an optional `todo_template` whose
+// markdown-list items are written to a repo-local file.
 function seedFlowRepoWithEntry(
   prefix: string,
   stepId: string,
@@ -1351,7 +1324,7 @@ function seedFlowRepoWithEntry(
   let step = `  - id: ${stepId}\n    kind: manual\n`;
   if (opts.skill) step += `    skill: ${opts.skill}\n`;
   if (opts.templateItems) {
-    // Templates live co-located with flow.yaml under todo-templates/ (§18.6); a bare ref gets `.md`.
+    // Templates co-located with flow.yaml under todo-templates/ (§18.6); a bare ref resolves to `.md`.
     mkdirSync(join(dir, '.agent-terminal', 'todo-templates'), { recursive: true });
     writeFileSync(
       join(dir, '.agent-terminal', 'todo-templates', 'tmpl.md'),
@@ -1364,8 +1337,7 @@ function seedFlowRepoWithEntry(
 }
 
 test('the flow strip follows the cwd: cd into a repo shows its flow and drives it (§24.2.2)', async () => {
-  // bash spawns in $HOME (spawnCwd, §5); the flow follows the terminal cwd like todos (§16.3).
-  // cd into a repo whose flow.yaml names the step, then drive Start → Advance → Restart.
+  // bash spawns in $HOME (§5); the flow follows the terminal cwd like todos (§16.3).
   const repo = seedFlowRepo('agent-term-e2e-flow-a-', 'groom-ticket');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-flow-home-'));
   await app.close();
@@ -1374,8 +1346,8 @@ test('the flow strip follows the cwd: cd into a repo shows its flow and drives i
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   await typeCommand(`cd "${repo}"`);
-  await expect(flowStepName()).toHaveText('groom-ticket', { timeout: 10_000 }); // strip swapped to this repo
-  await expect(flowStation(0)).toHaveClass(/\bactive\b/); // synthetic "Not started" active
+  await expect(flowStepName()).toHaveText('groom-ticket', { timeout: 10_000 });
+  await expect(flowStation(0)).toHaveClass(/\bactive\b/); // synthetic "Not started" bookend
   await expect(flowControl()).toHaveText('Start');
 
   await flowControl().click();
@@ -1383,10 +1355,10 @@ test('the flow strip follows the cwd: cd into a repo shows its flow and drives i
   await expect(flowControl()).toHaveText('Advance');
 
   await flowControl().click();
-  await expect(flowStation(2)).toHaveClass(/\bactive\b/); // synthetic "Completed" active
+  await expect(flowStation(2)).toHaveClass(/\bactive\b/); // synthetic "Completed" bookend
   await expect(flowControl()).toHaveText('Restart');
 
-  await flowControl().click(); // Restart re-runs the first step
+  await flowControl().click(); // Restart → back to the first step
   await expect(flowStation(1)).toHaveClass(/\bactive\b/);
   await expect(flowControl()).toHaveText('Advance');
   await app.close(); // HOME=temp ⇒ Electron writes userData under it; stop writes before removing it
@@ -1395,10 +1367,7 @@ test('the flow strip follows the cwd: cd into a repo shows its flow and drives i
 });
 
 test('a multi-step flow walks the bookended rail: Start → Advance ×3 reaches done (§24.2.3 T1)', async () => {
-  // The T1 fire: a 3-manual-step flow.yaml. The rail brackets the three real steps with the
-  // Not-started / Completed bookends, so it has FIVE stations; Start lights step 1, each Advance
-  // lights the next and marks the prior done, and the final Advance lights "Completed" with the
-  // Advance control gone. Real loop: bash + node-pty + the flow manager + the rendered strip.
+  // A 3-step flow's rail brackets the real steps with Not-started / Completed bookends → FIVE stations.
   const repo = seedMultiStepFlowRepo('agent-term-e2e-flow-multi-', ['groom', 'plan', 'implement']);
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-flow-multi-home-'));
   await app.close();
@@ -1407,7 +1376,7 @@ test('a multi-step flow walks the bookended rail: Start → Advance ×3 reaches 
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   await typeCommand(`cd "${repo}"`);
-  // Five stations: [Not started] · groom · plan · implement · [Completed]; before Start, Not-started active.
+  // Rail: [Not started] · groom · plan · implement · [Completed].
   await expect(page.locator('#flow-strip .flow.vert .stn')).toHaveCount(5, { timeout: 10_000 });
   await expect(flowStation(1).locator('.nm')).toHaveText('groom');
   await expect(flowStation(3).locator('.nm')).toHaveText('implement');
@@ -1415,38 +1384,37 @@ test('a multi-step flow walks the bookended rail: Start → Advance ×3 reaches 
   await expect(page.locator('#flow-strip .sect')).toHaveText('Flow — step 1 / 5');
   await expect(flowControl()).toHaveText('Start');
 
-  await flowControl().click(); // Start → step 1 (groom) active
+  await flowControl().click();
   await expect(flowStation(1)).toHaveClass(/\bactive\b/);
   await expect(page.locator('#flow-strip .sect')).toHaveText('Flow — step 2 / 5');
   await expect(flowControl()).toHaveText('Advance');
 
-  await flowControl().click(); // Advance → step 2 (plan) active, groom done
+  await flowControl().click();
   await expect(flowStation(1)).toHaveClass(/\bdone\b/);
   await expect(flowStation(2)).toHaveClass(/\bactive\b/);
   await expect(page.locator('#flow-strip .sect')).toHaveText('Flow — step 3 / 5');
 
-  await flowControl().click(); // Advance → step 3 (implement) active
+  await flowControl().click();
   await expect(flowStation(2)).toHaveClass(/\bdone\b/);
   await expect(flowStation(3)).toHaveClass(/\bactive\b/);
   await expect(page.locator('#flow-strip .sect')).toHaveText('Flow — step 4 / 5');
   await expect(flowControl()).toHaveText('Advance'); // still Advance — not yet past the last step
 
-  await flowControl().click(); // final Advance → done: every real step done, "Completed" active
+  await flowControl().click();
   await expect(flowStation(1)).toHaveClass(/\bdone\b/);
   await expect(flowStation(2)).toHaveClass(/\bdone\b/);
   await expect(flowStation(3)).toHaveClass(/\bdone\b/);
   await expect(flowStation(4)).toHaveClass(/\bactive\b/); // Completed
   await expect(page.locator('#flow-strip .sect')).toHaveText('Flow — step 5 / 5');
-  await expect(flowControl()).toHaveText('Restart'); // the Advance control is gone (now Restart)
+  await expect(flowControl()).toHaveText('Restart');
   await app.close(); // HOME=temp ⇒ Electron writes userData under it; stop writes before removing it
   rmSync(repo, { recursive: true, force: true });
   rmSync(home, { recursive: true, force: true });
 });
 
 test('advancing INTO a later step fires its entry action: the skill injects on Advance (§24.2.3 T3)', async () => {
-  // The T3 entry-on-advance fire (the converse of T1's "advance does not fire onEnter"): a 2-step
-  // flow whose step 2 declares a skill. Start enters step 1 (no skill → nothing typed); Advance
-  // enters step 2, whose skill is injected into the real PTY. Real loop: bash + node-pty + flow mgr.
+  // Entry-on-advance (the converse of T1's "advance does not fire onEnter"): advancing into step 2
+  // injects its skill into the real PTY.
   const repo = seedSkillOnSecondStepFlowRepo('agent-term-e2e-flow-t3adv-', 'buildctl');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-flow-t3adv-home-'));
   await app.close();
@@ -1457,11 +1425,11 @@ test('advancing INTO a later step fires its entry action: the skill injects on A
   await typeCommand(`cd "${repo}"`);
   await expect(flowStepName()).toHaveText('groom', { timeout: 10_000 });
 
-  await flowControl().click(); // Start → step 1 (groom): no skill, nothing injected
+  await flowControl().click(); // Start → groom: no skill, nothing injected
   await expect(flowStation(1)).toHaveClass(/\bactive\b/);
   await expect(termRows()).not.toContainText('/buildctl');
 
-  await flowControl().click(); // Advance → step 2 (build): entry-on-advance injects its skill
+  await flowControl().click(); // Advance → build: entry-on-advance injects its skill
   await expect(flowStation(2)).toHaveClass(/\bactive\b/);
   await expect(termRows()).toContainText('/buildctl', { timeout: 10_000 });
 
@@ -1471,9 +1439,7 @@ test('advancing INTO a later step fires its entry action: the skill injects on A
 });
 
 test('entering a bootstrap loop step prompts for its typed input; Confirm injects agent-loop pickup + persists (§24.2.3 T3)', async () => {
-  // The T3 fire (ready shell): advance into a loop step that needs a typed input → the modal prompts;
-  // typing the ticket + Confirm injects `agent-loop pickup <ticket>` at the ready prompt and persists
-  // the value to flow-state. Real loop: bash + node-pty + flow manager + the modal organism.
+  // Ready-shell case: Confirm over a ready prompt injects and persists (contrast the busy-shell test).
   const repo = seedBootstrapFlowRepo('agent-term-e2e-flow-t3boot-');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-flow-t3boot-home-'));
   await app.close();
@@ -1484,7 +1450,7 @@ test('entering a bootstrap loop step prompts for its typed input; Confirm inject
   await typeCommand(`cd "${repo}"`);
   await expect(flowStepName()).toHaveText('groom', { timeout: 10_000 });
 
-  await flowControl().click(); // Start → groom (manual): no prompt yet
+  await flowControl().click(); // Start → groom (manual): no input prompt
   await expect(flowStation(1)).toHaveClass(/\bactive\b/);
   await expect(inputModal()).toHaveCount(0);
 
@@ -1496,9 +1462,9 @@ test('entering a bootstrap loop step prompts for its typed input; Confirm inject
   await inputModal().locator('.field input').fill('176');
   await inputModal().locator('.confirm').click();
 
-  await expect(termRows()).toContainText('agent-loop pickup 176', { timeout: 10_000 }); // bootstrap typed at the prompt
-  await expect(inputModal()).toHaveCount(0); // modal closes once the input is provided
-  // The value persists to flow-state.yaml so it threads to later steps and survives a relaunch.
+  await expect(termRows()).toContainText('agent-loop pickup 176', { timeout: 10_000 });
+  await expect(inputModal()).toHaveCount(0);
+  // The value persists to flow-state.yaml so it threads to later steps and survives a relaunch (§18.3).
   await expect
     .poll(() => readFileSync(join(repo, '.agent-terminal', 'flow-state.yaml'), 'utf8'), { timeout: 10_000 })
     .toContain('176');
@@ -1509,8 +1475,8 @@ test('entering a bootstrap loop step prompts for its typed input; Confirm inject
 });
 
 test('a busy shell refuses the bootstrap on Confirm: refusal notice, nothing injected (§19.3 / §24.2.3 T3)', async () => {
-  // The T3 fire (busy shell): the input still prompts, but Confirm over a foreground process refuses
-  // to inject the bootstrap — the §19.3 notice shows and nothing is typed into the PTY.
+  // Busy-shell case: the input still prompts, but Confirm over a foreground process refuses to inject
+  // the bootstrap (§19.3 notice, nothing typed into the PTY).
   const repo = seedBootstrapFlowRepo('agent-term-e2e-flow-t3bootbusy-');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-flow-t3bootbusy-home-'));
   await app.close();
@@ -1522,11 +1488,11 @@ test('a busy shell refuses the bootstrap on Confirm: refusal notice, nothing inj
   await expect(flowStepName()).toHaveText('groom', { timeout: 10_000 });
   await flowControl().click(); // Start → groom
 
-  // Hold the shell off its ready prompt before advancing (a live OSC-133 span = busy, §19.3).
+  // A live foreground process holds the shell off its ready prompt → busy (a live OSC-133 span, §19.3).
   await typeCommand('echo BUSY_NOW; cat');
   await expect(termRows()).toContainText('BUSY_NOW');
 
-  await flowControl().click(); // Advance → plan: the modal still prompts (input resolution precedes the busy check)
+  await flowControl().click(); // Advance → plan: the modal still prompts — input resolution precedes the busy check
   await expect(inputModal()).toBeVisible({ timeout: 10_000 });
   await inputModal().locator('.field input').fill('176');
   await inputModal().locator('.confirm').click();
@@ -1540,10 +1506,8 @@ test('a busy shell refuses the bootstrap on Confirm: refusal notice, nothing inj
 });
 
 test('a loop step shows a Loop read-out that expands a docked state-mirror panel, live; advancing early warns (§24.2.3 T2)', async () => {
-  // The T2 fire: a flow whose step 2 is kind:loop, with a real v4 state.yaml. The app DRIVES NOTHING
-  // — it mirrors agent-loop's state. The rail shows a compact Loop read-out; clicking it opens the
-  // docked panel with the full v4 vocabulary, which updates live as the file changes. Real loop:
-  // bash + node-pty + the bridge watcher + the flow manager + the rendered strip + the docked panel.
+  // The app DRIVES NOTHING — it mirrors agent-loop's v4 state.yaml read-only, updating live as the
+  // file changes (§24.2.3 T2).
   const { dir: repo, stateFile } = seedLoopFlowRepo('agent-term-e2e-loop-');
   writeFileSync(
     stateFile,
@@ -1556,44 +1520,136 @@ test('a loop step shows a Loop read-out that expands a docked state-mirror panel
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   await typeCommand(`cd "${repo}"`);
-  // Rail: [Not started] · groom · build · [Completed] — 4 stations; no Loop read-out on the manual step.
+  // Rail: [Not started] · groom · build · [Completed]. A manual step carries no Loop read-out.
   await expect(page.locator('#flow-strip .flow.vert .stn')).toHaveCount(4, { timeout: 10_000 });
   await expect(flowStation(2).locator('.nm')).toHaveText('build');
   await expect(loopReadout()).toHaveCount(0);
 
-  await flowControl().click(); // Start → groom (manual) active
+  await flowControl().click(); // Start → groom (manual)
   await expect(flowStation(1)).toHaveClass(/\bactive\b/);
-  await expect(loopReadout()).toHaveCount(0); // still manual — no read-out
+  await expect(loopReadout()).toHaveCount(0);
 
-  await flowControl().click(); // Advance → build (loop) active: the compact Loop read-out appears
+  await flowControl().click(); // Advance → build (loop): the compact Loop read-out appears
   await expect(flowStation(2)).toHaveClass(/\bactive\b/);
-  await expect(loopReadout().locator('.spill')).toHaveText('awaiting', { timeout: 10_000 }); // compact tone label
+  await expect(loopReadout().locator('.spill')).toHaveText('awaiting', { timeout: 10_000 });
   await expect(loopReadout().locator('.spill')).toHaveClass(/\bawait\b/); // awaiting-human → needs-you tone
   await expect(loopReadout()).toContainText('iter 9');
 
-  // The docked panel starts closed; clicking the read-out opens it and reveals the full v4 vocabulary.
+  // Clicking the read-out opens the docked panel with the full v4 vocabulary (it starts closed).
   await expect(page.locator('#app')).not.toHaveClass(/\bloop-open\b/);
   await loopReadout().click();
   await expect(page.locator('#app')).toHaveClass(/\bloop-open\b/);
   await expect(loopPanel()).toContainText('awaiting-human-pr-approval'); // exact status, not the tone
   await expect(loopPanel()).toContainText('#179');
   await expect(loopPanel()).toContainText('agent-loop/issue-176');
-  // The bound LoopDef (resolved via the repo's .agent-loop.yaml registry) drives the gate-options
-  // row: this gate's human_options [approve, request-changes, impasse], rendered "approve · changes · impasse".
+  // The bound LoopDef (resolved via the repo's .agent-loop.yaml registry) drives the gate-options row
+  // from this gate's human_options [approve, request-changes, impasse].
   const gateRow = loopPanel().locator('.ldl .lrow', { has: page.locator('.lk', { hasText: 'gate options' }) });
   await expect(gateRow.locator('.lv')).toHaveText('approve · changes · impasse');
 
-  // The human edits state.yaml by hand → the open panel re-pulls live over flow:onStateChanged (no
-  // app write, no user action). Still an awaiting-human status, so the step stays not-ready.
+  // A hand-edit of state.yaml (no app write, no user action) must re-pull the open panel live.
   writeFileSync(stateFile, 'schema_version: 4\npr: 179\nbranch: agent-loop/issue-176\niteration: 11\nstatus: awaiting-human-impl-triage\n');
   await expect(loopPanel()).toContainText('awaiting-human-impl-triage', { timeout: 10_000 });
   await expect(loopPanel()).toContainText('11');
 
-  // Advancing the loop step while it still needs a human is a §19.2 override: it warns but proceeds.
+  // Advancing while the loop still needs a human is a §19.2 override: it warns but proceeds.
   await flowControl().click();
   await expect(page.locator('#flow-strip .flow-notice')).toContainText('still needs you', { timeout: 10_000 });
-  await expect(flowStation(3)).toHaveClass(/\bactive\b/); // Completed — the flow advanced anyway
+  await expect(flowStation(3)).toHaveClass(/\bactive\b/); // Completed — advanced anyway
   await expect(flowControl()).toHaveText('Restart');
+
+  await app.close(); // HOME=temp ⇒ Electron writes userData under it; stop writes before removing it
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+});
+
+test('the awaiting-human cue appears, re-fires after dismiss, and clears as the loop state changes (§24.2.3 T4)', async () => {
+  // The cue tracks state.yaml with no manual refresh: a distinct human-needed entry re-fires it even
+  // after a dismiss; a non-human status clears it (§24.2.3 T4).
+  const { dir: repo, stateFile } = seedLoopFlowRepo('agent-term-e2e-cue-');
+  writeFileSync(stateFile, 'schema_version: 4\npr: 179\nbranch: agent-loop/issue-176\niteration: 9\nstatus: awaiting-human-pr-approval\n');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-cue-home-'));
+  await app.close();
+  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
+  page = await app.firstWindow();
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await typeCommand(`cd "${repo}"`);
+  await expect(flowStepName()).toHaveText('groom', { timeout: 10_000 });
+  await expect(attnCue()).toBeHidden(); // a manual step is not human-needed
+
+  await flowControl().click(); // Start → groom (manual): still not human-needed
+  await expect(attnCue()).toBeHidden();
+
+  await flowControl().click(); // Advance → build (loop) at awaiting-human-pr-approval
+  await expect(attnCue()).toBeVisible({ timeout: 10_000 });
+  await expect(attnCue()).toContainText('awaiting-human-pr-approval');
+
+  // Dismiss only hides it — it changes no loop state (the read-out stays) and injects nothing.
+  await attnCue().locator('[data-attn-dismiss]').click();
+  await expect(attnCue()).toBeHidden();
+  await expect(loopReadout()).toHaveCount(1);
+  // Dismiss must not strand focus on <body> (WCAG 2.4.3): it lands on the loop read-out toggle.
+  await expect(loopReadout()).toBeFocused();
+
+  // A distinct human-needed entry (new status, later iteration) re-fires the cue even after a dismiss.
+  writeFileSync(stateFile, 'schema_version: 4\npr: 179\nbranch: agent-loop/issue-176\niteration: 11\nstatus: awaiting-human-impl-triage\n');
+  await expect(attnCue()).toBeVisible({ timeout: 10_000 });
+  await expect(attnCue()).toContainText('awaiting-human-impl-triage');
+
+  // A terminal hand-off (not human-needed) clears the cue.
+  writeFileSync(stateFile, 'schema_version: 4\npr: 179\nbranch: agent-loop/issue-176\niteration: 11\nstatus: awaiting-team-review\n');
+  await expect(attnCue()).toBeHidden({ timeout: 10_000 });
+
+  await app.close(); // HOME=temp ⇒ Electron writes userData under it; stop writes before removing it
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+});
+
+test('the reveal signal lands the user on the loop read-out, from another view and from viewer-fullscreen with the strip hidden (§24.2.3 T4)', async () => {
+  // Needs a real git repo so the artifact viewer's full-screen (which hides the rail/strip) works
+  // (§24.2.3 T4).
+  const { dir: repo, stateFile } = seedLoopFlowRepo('agent-term-e2e-reveal-');
+  writeFileSync(stateFile, 'schema_version: 4\npr: 179\nbranch: agent-loop/issue-176\niteration: 9\nstatus: awaiting-human-pr-approval\n');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-reveal-home-'));
+  await app.close();
+  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
+  page = await app.firstWindow();
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await typeCommand(
+    `cd "${repo}" && rm -rf .git && git init -q && git config user.email t@t && git config user.name T && ` +
+      `git add -A && git commit -qm init && printf '# Doc\\n' > doc.md && pwd`,
+  );
+  await expect(flowStepName()).toHaveText('groom', { timeout: 10_000 });
+  await flowControl().click(); // Start → groom
+  await flowControl().click(); // Advance → build (loop) active, human-needed
+  await expect(loopReadout()).toHaveCount(1, { timeout: 10_000 });
+  await expect(attnCue()).toBeVisible();
+  await expect(page.locator('#app')).not.toHaveClass(/\bloop-open\b/); // the docked panel starts closed
+
+  // Reveal from a non-Terminal view must land on Terminal with the read-out open.
+  await page.keyboard.press('Control+3');
+  await expect(page.locator('[data-viewpane="3"]')).toBeVisible();
+  await fireRevealLoop();
+  await expect(page.locator('[data-viewpane="1"]')).toBeVisible();
+  await expect(page.locator('#app')).toHaveClass(/\bloop-open\b/);
+  await expect(loopPanel()).toContainText('awaiting-human-pr-approval');
+
+  // Reveal from viewer-fullscreen (rail/strip hidden) must exit full-screen and re-open the read-out
+  // on Terminal — and the cue must stay perceivable in the always-visible main region throughout.
+  await loopReadout().click();
+  await expect(page.locator('#app')).not.toHaveClass(/\bloop-open\b/);
+  await page.keyboard.press('Control+2');
+  await page.locator('#artifacts .art-fs').click();
+  await expect(page.locator('#app')).toHaveClass(/\bviewer-fullscreen\b/);
+  await expect(page.locator('#app .rail')).toBeHidden(); // the strip lives in the hidden rail…
+  await expect(attnCue()).toBeVisible(); // …yet the cue is still perceivable in the main region
+
+  await fireRevealLoop();
+  await expect(page.locator('#app')).not.toHaveClass(/\bviewer-fullscreen\b/);
+  await expect(page.locator('[data-viewpane="1"]')).toBeVisible();
+  await expect(page.locator('#app')).toHaveClass(/\bloop-open\b/);
 
   await app.close(); // HOME=temp ⇒ Electron writes userData under it; stop writes before removing it
   rmSync(repo, { recursive: true, force: true });
@@ -1715,9 +1771,8 @@ test('flow progression persists across a relaunch, per repo (§24.2.2 S3 / §19.
 const flowDerived = () => page.locator('#flow-strip .flow-derived');
 
 test("the flow strip's derived n/m done moves as todos are checked, pushed live (§24.2.2 S5)", async () => {
-  // Fire: Start the step, add two todos, check one. Land: the strip's "n / m done" count moves on
-  // its own — no manual refresh — proving the flow:onStateChanged push path. Real loop: bash +
-  // node-pty + the todo store + the flow manager.
+  // The strip's "n / m done" count moves on its own as todos change — no manual refresh — proving
+  // the live push path (§24.2.2 S5).
   const repo = seedFlowRepo('agent-term-e2e-flow-s5-', 'groom-ticket');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-flow-s5-home-'));
   await app.close();
@@ -1748,9 +1803,8 @@ test("the flow strip's derived n/m done moves as todos are checked, pushed live 
 });
 
 test('advancing with todos outstanding warns but still completes, and is undoable (§19.2 / §24.2.2 S5)', async () => {
-  // Fire: Start, add a todo (left unchecked), click Advance, then Undo. Land: a one-shot warning
-  // notice surfaces (with NO spec-section jargon) AND the flow reaches done — the §19.2 human
-  // override — and Undo takes the advance back to in-progress.
+  // Advancing with todos outstanding warns (no spec-section jargon in the UI) yet still reaches done
+  // — the §19.2 human override — and the advance is undoable.
   const repo = seedFlowRepo('agent-term-e2e-flow-s5warn-', 'groom-ticket');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-flow-s5warn-home-'));
   await app.close();
@@ -1786,10 +1840,8 @@ test('advancing with todos outstanding warns but still completes, and is undoabl
 });
 
 test('Start injects the skill on entry; todos come from the template ON DEMAND in the todo overlay (§4.1/§6/§9.1)', async () => {
-  // Fire: Start (skill injects, no todos), then open the todo overlay and use its "From template"
-  // control. Land: the skill is typed into the real PTY on Start; the picker is NOT in the flow
-  // strip (it relocated to the todo overlay, §9.1); the template todos appear only after the
-  // on-demand control is used. Drives the real loop: bash + node-pty.
+  // Start injects the skill into the real PTY; the template picker is NOT in the flow strip (it
+  // relocated to the todo overlay, §9.1); template todos appear only after the on-demand control.
   const repo = seedFlowRepoWithEntry('agent-term-e2e-flow-s4-', 'groom-ticket', {
     skill: 'groomctl',
     templateItems: ['Groom the ticket scope', 'Confirm acceptance criteria'],
@@ -1827,9 +1879,8 @@ test('Start injects the skill on entry; todos come from the template ON DEMAND i
 });
 
 test('the todo overlay offers a picker of named templates; choosing one instantiates its todos (§4.1/§6)', async () => {
-  // Fire: Start, open the todo overlay, disclose the picker, choose a template. Land: the picker
-  // lists every co-located template by its H1 name, defaults to the step's bound template, and
-  // instantiating the CHOSEN one adds only its todos. Real loop: bash + node-pty + todoTemplate:*.
+  // The picker lists every co-located template by its H1 name, defaults to the step's bound template,
+  // and instantiating the CHOSEN one adds only its todos.
   const repo = seedFlowRepoMultiTemplate('agent-term-e2e-flow-pick-', 'groom-ticket', {
     skill: 'groomctl',
     defaultRef: 'ticket-grooming',
@@ -1869,8 +1920,7 @@ test('the todo overlay offers a picker of named templates; choosing one instanti
 });
 
 test('Start refuses to inject the skill over a busy shell, showing the refusal (§19.3)', async () => {
-  // Fire: click Start while a foreground process holds the shell off its ready prompt.
-  // Land: the §19.3 refusal notice shows and nothing is injected.
+  // Start over a busy shell shows the §19.3 refusal notice and injects nothing.
   const repo = seedFlowRepoWithEntry('agent-term-e2e-flow-s4busy-', 'groom-ticket', { skill: 'groomctl' });
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-flow-s4busy-home-'));
   await app.close();

@@ -62,7 +62,7 @@ describe('docked loop panel (§24.2.3 T2)', () => {
   it('flags an awaiting-human status as needs-you (the §22.3 act tone)', () => {
     createLoopPanel(host).render(loop({ status: 'awaiting-human-pr-approval' }), 'build');
     expect(row('status')?.querySelector('.lv')?.classList.contains('bad')).toBe(true);
-    createLoopPanel(host).render(loop({ status: 'awaiting-team-review' }), 'build'); // past the human
+    createLoopPanel(host).render(loop({ status: 'awaiting-team-review' }), 'build');
     expect(row('status')?.querySelector('.lv')?.classList.contains('bad')).toBe(false);
   });
 
@@ -72,7 +72,7 @@ describe('docked loop panel (§24.2.3 T2)', () => {
   });
 
   it('omits the gate options row at a terminal / non-gate status (no options to offer)', () => {
-    createLoopPanel(host).render(loop({ status: 'awaiting-team-review', ready: true }), 'build'); // no gateOptions
+    createLoopPanel(host).render(loop({ status: 'awaiting-team-review', ready: true }), 'build');
     expect(row('gate options')).toBeUndefined();
   });
 

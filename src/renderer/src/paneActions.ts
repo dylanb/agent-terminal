@@ -1,40 +1,32 @@
-// Shared action-window primitives (§16.2) used by both the Capture and Todo tabs.
-// Kept out of monitor.ts so the sub-tabs depend on this leaf module, not on the
-// coordinator that imports them (no import cycle). monitor.ts re-exports the
-// constants for callers that already import them from there (selection.ts, tests).
+// Shared action-window primitives (§16.2) used by both the Capture and Todo tabs. The window-event
+// constants below are the decoupled bus (§9.1) that lets the panes signal each other WITHOUT
+// importing each other's modules — the coupling no type can catch, so each names the breakage it
+// prevents. Kept out of monitor.ts to avoid an import cycle; monitor.ts re-exports them.
 
-// Decoupled focus signal (§16.2): the monitor pane must not import terminal modules,
-// so it asks for terminal focus via a window event the terminal pane subscribes to.
 export const FOCUS_TERMINAL_EVENT = 'app:focus-terminal';
 
-// Decoupled todo-change signal (§16.2): a todo added from the terminal pane (Capture
-// selection) must refresh the action window's repo-scoped count/list. Same window-event
-// bus as FOCUS_TERMINAL_EVENT, so neither pane imports the other's internals (§9.1).
+// Fired when a todo is added from the terminal pane; the action window must re-pull its repo-scoped
+// count/list or it goes stale.
 export const TODOS_CHANGED_EVENT = 'app:todos-changed';
 
-// Decoupled flow-changed signal (§4.1/§9.1): the flow strip fires this after a lifecycle
-// transition so the todo widget re-pulls its on-demand template picker (which main gates to an
-// active step) — without the monitor pane importing the flow subsystem. Same window-event bus.
+// Fired by the flow strip after a lifecycle transition so the todo widget re-pulls its template
+// picker (main gates it to an in_progress step); the monitor pane never imports the flow subsystem
+// (§4.1/§9.1).
 export const FLOW_CHANGED_EVENT = 'app:flow-changed';
 
-// Decoupled view-focus signal (§22.4): the shell announces the now-active view (after it shows
-// the pane) so that view's organism can focus its own primary control — the shell never reaches
-// into a sibling view to focus it. `detail.view` is the ViewId ('1' | '2' | '3'), kept as a
-// string here so this leaf module doesn't depend on the shell. Same window-event bus.
+// The shell announces the now-active view so that view's organism focuses its own primary control;
+// the shell never reaches into a sibling to focus it (§22.4). `detail.view` is the ViewId, kept a
+// string so this leaf doesn't depend on the shell.
 export const FOCUS_VIEW_EVENT = 'app:focus-view';
 
-// Cross-highlight signals (§16.8): the same decoupled window-event bus carries the reveal
-// directions between the panes, so neither imports the other (§9.1). The terminal pane owns
-// the coordinates — it marker-anchors every capture's span (xterm markers track reflow), so
-// a resize never stales the link. Reveals are therefore keyed by capture **id**, not raw rows.
-//   • CAPTURE_RANGE_ADD: capture pane → terminal; detail {id, range} — a ranged block/finding
-//     rendered; the terminal registers start/end markers so the span follows reflow.
-//   • CAPTURE_RANGE_REMOVE: capture pane → terminal; detail {id} — that block was dropped;
-//     the terminal disposes its markers.
-//   • REVEAL_CAPTURE: terminal → capture pane; detail {id} (the capture whose live span the
-//     double-clicked row fell in) → the pane scrolls to and border-highlights that block.
-//   • REVEAL_TERMINAL: capture pane → terminal; detail {id} (the double-clicked block) → the
-//     terminal reads that capture's live marker rows and highlights them.
+// Cross-highlight (§16.8). The terminal pane owns the coordinates — it marker-anchors every
+// capture's span (xterm markers track reflow) so a resize never stales the link, which is why
+// reveals are keyed by capture **id**, not raw rows. Break this and a post-resize reveal lands on
+// the wrong rows.
+//   • CAPTURE_RANGE_ADD: capture → terminal; detail {id, range}.
+//   • CAPTURE_RANGE_REMOVE: capture → terminal; detail {id}.
+//   • REVEAL_CAPTURE: terminal → capture; detail {id}.
+//   • REVEAL_TERMINAL: capture → terminal; detail {id}.
 export const CAPTURE_RANGE_ADD_EVENT = 'app:capture-range-add';
 export const CAPTURE_RANGE_REMOVE_EVENT = 'app:capture-range-remove';
 export const REVEAL_CAPTURE_EVENT = 'app:reveal-capture';

@@ -1,5 +1,4 @@
-// Quiescence detection (§8.3): 'active' while bytes arrive, 'quiet' after quietMs
-// of silence. Transitions, not levels, are the API — consumers subscribe via onTransition.
+// Quiescence detection (§8.3): 'active' while bytes arrive, 'quiet' after quietMs of silence.
 
 import type { AgentState } from '../shared/ipc';
 
