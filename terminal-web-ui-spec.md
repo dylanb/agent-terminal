@@ -1061,7 +1061,7 @@ pnpm run dev       # electron-vite dev (renderer HMR)
 
 The foundation is "done" when all of the following pass on both Linux and macOS:
 
-> **Verification status (2026-06-12):** a checked box means the criterion is proven by the automated suite (38 vitest unit/integration tests + 8 Playwright `_electron` e2e tests, `tests/e2e/app.spec.ts`) — on **Linux only**; the macOS pass is pending across the board. Unchecked boxes note exactly what remains: most are the agent-in-the-loop criteria, which require a manual session with real Claude Code / an alt-screen TUI via `npm run dev`.
+> **Verification status (2026-06-12):** a checked box means the criterion is proven by the automated suite (38 vitest unit/integration tests + 8 Playwright `_electron` e2e tests, `tests/e2e/app.spec.ts`) — on **Linux only**; the macOS pass is pending across the board. Unchecked boxes note exactly what remains: most are the agent-in-the-loop criteria, which require a manual session with real Claude Code / an alt-screen TUI via `pnpm run dev`.
 
 **Terminal hosting (unchanged from v1.x)**
 - [x] Launching the app opens a window with an interactive bash prompt. *(e2e)*
