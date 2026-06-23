@@ -4,14 +4,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { loadTodoTemplateFile } from '../../src/main/todoTemplate';
 
-// §18.6/§21.2 — a step's `todo_template` resolves to a file CO-LOCATED with the flow.yaml that
-// declared it: the ref is read relative to the flow.yaml's own directory (so a global
-// ~/.agent-terminal/flow.yaml's template lives in ~/.agent-terminal/, and a repo-local one lives
-// in <repo>/.agent-terminal/). A bare name resolves with a `.md` extension appended. A missing
-// file and a path escaping that directory both degrade to null (never a throw). No fs mocks.
+// §18.6/§21.2 — a step's `todo_template` resolves relative to its flow.yaml's own directory. A bare
+// name gets `.md` appended. A missing file, or a path escaping that directory, degrades to null
+// (never a throw). No fs mocks.
 
 describe('loadTodoTemplateFile (§18.6 — co-located with flow.yaml)', () => {
-  let flowDir: string; // the directory that holds flow.yaml + its templates
+  let flowDir: string;
   beforeEach(() => {
     const base = mkdtempSync(join(tmpdir(), 'todo-tmpl-'));
     flowDir = join(base, '.agent-terminal');
@@ -40,8 +38,8 @@ describe('loadTodoTemplateFile (§18.6 — co-located with flow.yaml)', () => {
   });
 
   it('refuses an in-root symlink that targets a file outside the flow directory (returns null)', () => {
-    // A symlink that lives inside flowDir but points outside it passes the lexical guard;
-    // the loader must still refuse it (resolve real paths, not just the literal path).
+    // An in-flowDir symlink pointing outside it passes the lexical guard; the loader must still
+    // refuse it (resolve real paths, not the literal path).
     const outside = mkdtempSync(join(tmpdir(), 'todo-tmpl-outside-'));
     writeFileSync(join(outside, 'secret.md'), '- leaked secret\n');
     try {
@@ -54,9 +52,8 @@ describe('loadTodoTemplateFile (§18.6 — co-located with flow.yaml)', () => {
   });
 
   it('reads an in-root symlink that targets an in-root file (read via the validated real path)', () => {
-    // The CWE-367 fix reads the resolved real path, not the literal symlink abs; a legitimate
-    // in-root symlink must still return its target's content (regression pin for the abs→real
-    // switch, mirroring readArtifact/loopDef, §20.2).
+    // A legitimate in-root symlink must still return its target's content — regression pin for the
+    // CWE-367 abs→real-path switch (mirrors readArtifact/loopDef, §20.2).
     writeFileSync(join(flowDir, 'target.md'), '- real target body\n');
     try {
       symlinkSync(join(flowDir, 'target.md'), join(flowDir, 'alias.md'));

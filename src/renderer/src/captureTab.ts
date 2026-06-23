@@ -1,20 +1,14 @@
-// Capture tab (§24.1 mockup-exact / §15 / §16.2 / §24.2.1): captured findings/command
-// output rendered in the converged mockup's language — `.finding` cards with a title (.t),
-// a muted meta line (.m), a per-card selection checkbox (.chunk-check), and subtle linkbtn
-// actions (.a). All user text is set via textContent, never innerHTML, so captured bytes
-// cannot inject markup. Reaches the Todo tab only through the narrow TodoSink (§16.2).
+// Capture tab (§24.1 mockup-exact / §15 / §16.2 / §24.2.1): captured findings/command output.
+// All user text is set via textContent, never innerHTML, so captured bytes cannot inject markup.
+// Reaches the Todo tab only through the narrow TodoSink (§16.2).
 //
-// Bulk triage (§24.2.1): each card carries a checkbox; a toolbar concatenates the checked
-// chunks (appeared order, blank-line separated) into ONE todo with an Undo window + a
-// processed-chunk cue, and offers Dismiss selected / Dismiss all. This supersedes the
-// per-card "Add to todo" the mockup shipped, and subsumes Dismiss + Dismiss all.
+// Bulk triage (§24.2.1): a toolbar concatenates the checked chunks into ONE todo with an Undo
+// window. Report prose (§24.2.1): a report that carves no findings renders behind a <details> so
+// its body has a home without a dominating blob.
 //
-// Report prose (§24.2.1): a report that carves no findings renders as an expandable summary
-// card (`.report-prose` + <details>) so its body has a home without a dominating blob.
-//
-// Cross-highlight (§16.8, resize-safe): this pane deals only in capture **ids** — it
-// publishes each ranged card's span (CAPTURE_RANGE_ADD/REMOVE) so the terminal can
-// marker-anchor it, and reveals by id. The terminal owns the coordinates.
+// Cross-highlight (§16.8, resize-safe): this pane deals only in capture ids — it publishes each
+// ranged card's span (CAPTURE_RANGE_ADD/REMOVE) so the terminal can marker-anchor it, and reveals
+// by id. The terminal owns the coordinates.
 
 import type { MonitorApi, MonitorEvent, MonitorEventType, TodoItem } from '../../shared/ipc';
 import {
@@ -64,21 +58,16 @@ export function createCaptureTab(deps: CaptureTabDeps): CaptureTab {
   // relocatable to a separate-process window (UI-STANDARDS §3.3).
   const doc = blocksEl.ownerDocument;
   const rendered = new Set<string>();
-  // Cross-highlight (§16.8): the live self-clearing reveal-highlight timer per element
-  // (re-reveal resets it). The coordinates live on the terminal side, which marker-anchors
-  // each span (so reflow can't stale it); this pane deals only in ids.
   const revealTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
-  // Bulk triage (§16.2 / §24.2.1): each selectable card is a chunk. `seq` is render order =
-  // appeared order so the bulk Add-to-todo concatenation reads oldest-first.
+  // `seq` is render order = appeared order so the bulk Add-to-todo concatenation reads oldest-first
+  // (§16.2 / §24.2.1).
   let chunkSeq = 0;
   const chunkRegistry = new Map<string, { text: string; seq: number }>();
   let undoPending = false;
-  // Chunks committed to the pending Add-to-todo: shown processed (dimmed + checkbox disabled)
-  // until the undo window commits (then they're dismissed) or Undo reverts them.
   let processedIds: string[] = [];
-  // The in-flight commit timer for the undo window — hoisted so endUndo() can cancel it (e.g. a
-  // Dismiss all during the window must not leave a pending commit that fires against gone chunks).
+  // Hoisted so endUndo() can cancel it: a Dismiss all during the window must not leave a pending
+  // commit that fires against gone chunks.
   let undoTimer: ReturnType<typeof setTimeout> | null = null;
 
   /** Publish a capture's span so the terminal can marker-anchor it for cross-highlight (§16.8). */
@@ -129,8 +118,8 @@ export function createCaptureTab(deps: CaptureTabDeps): CaptureTab {
     });
   }
 
-  /** A report that carves no findings: an expandable summary card, prose tucked behind a
-   *  <details> so it doesn't dominate the pane as a blob (§24.2.1). */
+  /** A report that carves no findings: its prose tucked behind a <details> so it doesn't dominate
+   *  the pane as a blob (§24.2.1). */
   function renderReportProse(event: MonitorEvent): HTMLElement {
     const el = doc.createElement('div');
     el.className = 'finding report-prose';
@@ -158,8 +147,8 @@ export function createCaptureTab(deps: CaptureTabDeps): CaptureTab {
     const el = doc.createElement('div');
     el.className = 'finding';
     el.dataset.eventId = event.id;
-    // Tag the source type so single-slot replace (showReport) clears only report/finding
-    // cards, leaving manual captures and command-output in place (§21.1).
+    // showReport's single-slot replace clears only cards tagged report/finding, leaving manual
+    // captures and command-output in place (§21.1).
     el.dataset.type = event.type;
     if (event.parentId) el.dataset.parentId = event.parentId;
     el.setAttribute('role', 'group');
@@ -195,10 +184,8 @@ export function createCaptureTab(deps: CaptureTabDeps): CaptureTab {
   }
 
   function appendBlock(event: MonitorEvent): void {
-    // The pane shows actionable units only (§24.1 mockup): findings, manual/command
-    // captures, completions. report blobs are carved into findings (so we render those, not
-    // the blob — the prose fallback is reached only via showReport); tool-use / diff are
-    // agent furniture that only carve report rows.
+    // The pane shows actionable units only (§24.1 mockup). report blobs are carved into findings
+    // (the prose fallback is reached only via showReport); tool-use / diff are agent furniture.
     if (event.type === 'report' || event.type === 'tool-use' || event.type === 'diff') return;
     if (rendered.has(event.id)) return;
     rendered.add(event.id);
@@ -275,9 +262,11 @@ export function createCaptureTab(deps: CaptureTabDeps): CaptureTab {
 
   // ---- Bulk triage (§16.2 / §24.2.1) ----
 
+  // Already-processed chunks stay checked-but-disabled during the undo window; they are excluded
+  // so a fresh Add to todo never re-adds a prior batch (§16.2).
   function checkedChunks(): { id: string; text: string; seq: number }[] {
     return Array.from(blocksEl.querySelectorAll<HTMLInputElement>('.chunk-check'))
-      .filter((c) => c.checked)
+      .filter((c) => c.checked && !c.disabled)
       .map((c) => ({ id: c.dataset.chunkId!, ...chunkRegistry.get(c.dataset.chunkId!)! }))
       .sort((a, b) => a.seq - b.seq);
   }
@@ -297,62 +286,74 @@ export function createCaptureTab(deps: CaptureTabDeps): CaptureTab {
   }
 
   function refreshSelectionUI(): void {
-    const any = blocksEl.querySelector('.chunk-check:checked') !== null;
-    addSelectedBtn.disabled = !any || undoPending;
+    const any = blocksEl.querySelector('.chunk-check:checked:not(:disabled)') !== null;
+    addSelectedBtn.disabled = !any;
     dismissSelectedBtn.disabled = !any;
   }
 
-  // One undoable todo from all checked chunks (§16.2). The chunks are dismissed only when the
-  // undo window elapses (commit); Undo deletes the just-added todo and leaves the chunks.
+  // Commit the pending batch: dismiss its source chunks (so replay won't resurrect them) and end
+  // the undo window. Fired by the elapsed timer, or eagerly when a new add supersedes it (§16.2).
+  function commitPending(): void {
+    for (const id of processedIds) {
+      monitor.dismiss(id);
+      removeChunk(id);
+    }
+    endUndo();
+  }
+
+  // One undoable todo from all freshly-checked chunks (§16.2). The chunks are dismissed only when
+  // the undo window elapses (commit); Undo deletes the just-added todo and leaves the chunks. A new
+  // add finalizes any prior still-undoable batch, so the undo applies only to the latest add.
+  let adding = false;
   async function onAddSelected(): Promise<void> {
-    if (undoPending || !todoSink.currentRepoKey()) return;
+    if (adding || !todoSink.currentRepoKey()) return;
     const selected = checkedChunks();
     if (selected.length === 0) return;
-    const ids = selected.map((c) => c.id);
-    undoPending = true;
-    processedIds = ids;
-    setProcessed(ids, true);
-    refreshSelectionUI();
-    // A rejected invoke (main restart) is treated the same as a silent failure below — never an
-    // unhandled rejection, and the processed cue is cleared via endUndo().
-    let added: TodoItem | null = null;
+    adding = true;
     try {
-      added = await todoSink.addFromCapture(selected.map((c) => c.text).join('\n\n'), { type: 'capture' });
-    } catch {
-      added = null;
-    }
-    // The add failed (repo went away mid-flight, or IPC down): don't arm the commit, or the
-    // source chunks would be dismissed with nothing added to the todo list.
-    if (!added) {
-      endUndo();
-      return;
-    }
-
-    undoSlot.replaceChildren();
-    const note = doc.createElement('span');
-    note.className = 'added-note';
-    note.textContent = 'Added to todo';
-    const undo = doc.createElement('button');
-    undo.className = 'undo-add-to-todo linkbtn';
-    undo.textContent = 'Undo';
-    undoTimer = setTimeout(() => {
-      for (const id of ids) {
-        monitor.dismiss(id);
-        removeChunk(id);
-      }
-      endUndo();
-    }, TODO_UNDO_MS);
-    undo.addEventListener('click', async () => {
-      if (undoTimer) { clearTimeout(undoTimer); undoTimer = null; } // stop the commit before awaiting
+      if (undoPending) commitPending();
+      const ids = selected.map((c) => c.id);
+      undoPending = true;
+      processedIds = ids;
+      setProcessed(ids, true);
+      refreshSelectionUI();
+      // A rejected invoke (main restart) is treated the same as a silent failure below — never an
+      // unhandled rejection, and the processed cue is cleared via endUndo().
+      let added: TodoItem | null = null;
       try {
-        if (added) await todoSink.deleteTodo(added.repoKey, added.id); // chunks stay; nothing dismissed
+        added = await todoSink.addFromCapture(selected.map((c) => c.text).join('\n\n'), { type: 'capture' });
       } catch {
-        // IPC failure (main restart): nothing dismissed; still end the window below.
-      } finally {
-        endUndo(); // always end the window, or processed chunks stay disabled forever
+        added = null;
       }
-    });
-    undoSlot.append(note, undo);
+      // The add failed (repo went away mid-flight, or IPC down): don't arm the commit, or the
+      // source chunks would be dismissed with nothing added to the todo list.
+      if (!added) {
+        endUndo();
+        return;
+      }
+
+      undoSlot.replaceChildren();
+      const note = doc.createElement('span');
+      note.className = 'added-note';
+      note.textContent = 'Added to todo';
+      const undo = doc.createElement('button');
+      undo.className = 'undo-add-to-todo linkbtn';
+      undo.textContent = 'Undo';
+      undoTimer = setTimeout(commitPending, TODO_UNDO_MS);
+      undo.addEventListener('click', async () => {
+        if (undoTimer) { clearTimeout(undoTimer); undoTimer = null; } // stop the commit before awaiting
+        try {
+          if (added) await todoSink.deleteTodo(added.repoKey, added.id); // chunks stay; nothing dismissed
+        } catch {
+          // IPC failure (main restart): nothing dismissed; still end the window below.
+        } finally {
+          endUndo(); // always end the window, or processed chunks stay disabled forever
+        }
+      });
+      undoSlot.append(note, undo);
+    } finally {
+      adding = false;
+    }
   }
 
   function endUndo(): void {
@@ -365,7 +366,6 @@ export function createCaptureTab(deps: CaptureTabDeps): CaptureTab {
   }
 
   // Toolbar (§16.2 / §24.2.1): bulk Add-to-todo (+ undo slot), Dismiss selected, Dismiss all.
-  // Add/Dismiss-selected stay disabled until at least one chunk is checked.
   const toolbar = doc.createElement('div');
   toolbar.className = 'cap-toolbar';
 

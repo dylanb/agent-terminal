@@ -1,10 +1,6 @@
-// The typed-input modal (§24.2.3 T3 / §18.4) — a placement-agnostic organism (UI-STANDARDS §1.2)
-// that renders design/shell/loop-flow.html's input modal: the ONE deliberate blocking surface, shown
-// when entering a step whose `bootstrap` needs a required input that isn't resolved yet. For each
-// input it renders a labelled field (name + catalog type) and an entry box; Confirm collects the
-// typed values and calls `submit` (the strip's provideInput); Cancel / Escape / scrim close it
-// without submitting. It touches only its host subtree and renders identically wherever mounted; the
-// strip decides WHEN to open/close it (render(prompt|null)), never reaching across to it.
+// The typed-input modal (§24.2.3 T3 / §18.4) — a placement-agnostic organism (UI-STANDARDS §1.2),
+// the ONE deliberate blocking surface, shown when entering a step whose `bootstrap` needs a required
+// input not yet resolved. The strip decides WHEN to open/close it (render(prompt|null)).
 
 import type { FlowPrompt } from '../../shared/ipc';
 
@@ -37,21 +33,21 @@ function inputField(doc: Document, spec: { name: string; type: string }): { fiel
 let modalSeq = 0; // instance-unique title ids: two modals in one document must not collide (WCAG 4.1.2)
 
 export function createFlowInputModal(host: HTMLElement): FlowInputModal {
-  const doc = host.ownerDocument; // build from the host's document so the modal relocates (UI §2.2.1)
-  const titleId = `flow-modal-title-${modalSeq++}`; // names the dialog (aria-labelledby → the heading)
-  let opener: HTMLElement | null = null; // the element focused when the modal opened (§2.4.3 restore)
+  const doc = host.ownerDocument; // host's document, not global — relocation (UI §2.2.1)
+  const titleId = `flow-modal-title-${modalSeq++}`; // aria-labelledby target
+  let opener: HTMLElement | null = null; // focus to restore on close (WCAG 2.4.3)
   const close = (): void => {
     host.replaceChildren();
-    opener?.focus(); // return focus to whoever opened the dialog
+    opener?.focus();
     opener = null;
   };
   return {
     render(prompt, stepName, submit) {
-      if (!prompt) return close(); // the strip dismissing the modal (incl. the submit path) restores focus
+      if (!prompt) return close();
       const wasOpen = host.firstChild !== null;
       host.replaceChildren();
-      // Capture the opener only on the FIRST open; a re-render over an already-open modal would else
-      // grab the just-detached modal child (activeElement → <body>) and strand focus there at close.
+      // Only on the FIRST open: a re-render over an open modal would capture the just-detached modal
+      // child (activeElement → <body>) and strand focus there at close (WCAG 2.4.3).
       if (!wasOpen) opener = doc.activeElement as HTMLElement | null;
 
       const scrim = doc.createElement('div');
@@ -123,8 +119,7 @@ export function createFlowInputModal(host: HTMLElement): FlowInputModal {
         reads.forEach((r) => {
           values[r.name] = r.read();
         });
-        // Every prompted input is required (the entry action only prompts for unsatisfied required
-        // inputs, §18.4); refuse a submit that would persist an empty value and silently re-prompt.
+        // Every prompted input is required (§18.4); refuse a submit with any empty value, re-prompt.
         if (reads.some((r) => values[r.name].length === 0)) return;
         submit(values);
       });
@@ -135,9 +130,8 @@ export function createFlowInputModal(host: HTMLElement): FlowInputModal {
       host.append(scrim, modal);
       (card.querySelector('input') as HTMLInputElement | null)?.focus();
     },
-    // Every listener sits on a node inside the host subtree (scrim/modal/buttons) and dies with it;
-    // nothing is attached to document/window. So teardown is: drop the host subtree and the only
-    // captured state (opener) — without calling close(), which would restore focus to it (§2.2.1).
+    // Teardown drops the host subtree (all listeners live inside it) and clears opener WITHOUT
+    // close(), which would wrongly restore focus on unmount/relocation (UI §2.2.1).
     dispose() {
       host.replaceChildren();
       opener = null;

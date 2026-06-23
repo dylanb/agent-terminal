@@ -2,10 +2,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { SAMPLE_FLOW, createGatePanel, type FlowState } from '../../src/renderer/src/flow';
 
-// §19.3 mocked widget: the view-3 gate panel renders from ONE fixture flow-state. Gate
-// actions are stubbed (no real loop-command injection yet) but observably reflect a
-// verdict. Tests assert rendered output and the stub's observable effect, never
-// internals. The fixture flow timeline + rail status were retired by §24.2.2 S1.
+// §19.3 mocked widget: the view-3 gate panel renders from ONE fixture flow-state; gate actions are
+// stubbed (no real loop-command injection yet) but observably reflect a verdict. The fixture flow
+// timeline + rail status were retired by §24.2.2 S1.
 
 function fixture(over: Partial<FlowState> = {}): FlowState {
   return {

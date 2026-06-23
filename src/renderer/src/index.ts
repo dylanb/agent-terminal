@@ -4,81 +4,128 @@ import { wireMonitorPane } from './monitor';
 import { createShell } from './shell';
 import { wireCrossHighlight } from './crossHighlight';
 import { SAMPLE_FLOW, createGatePanel } from './flow';
-import { createFlowStrip } from './flowStrip';
+import { createFlowStrip, type FlowStrip } from './flowStrip';
 import { createLoopPanel } from './loopPanel';
 import { createFlowInputModal } from './flowInputModal';
+import { createAttentionCue } from './attentionCue';
+import { revealLoopReadout } from './loopReveal';
 import { createArtifacts, type Artifacts } from './artifacts';
 import { renderMarkdownInto, renderCodeInto } from './viewerRender';
 import { doInject } from './paneActions';
 import { createRepoContext } from './repoContext';
+import { createKeymapController, resolveBase } from './keymapController';
+import { createKeyboardSettings } from './keyboardSettings';
+import { runMenuEditAction } from './menuActions';
 
 const { terminal: term } = createTerminalPane(document.getElementById('terminal')!);
-// One shared OSC-7 repo provider (§16.3): seeds the repo key once and feeds the terminal
-// selection capture, the todo list, and the artifact viewer — so no consumer re-derives it.
+// One shared OSC-7 repo provider (§16.3) so no consumer re-derives the key.
 const repo = createRepoContext(window.monitor);
-wireSelection(term, repo);
+
+// Keyboard layout (§7.7): one controller holds the active keymap; the terminal dispatch reads it live
+// and the settings selector switches it. Starts at the markup default and hydrates from the persisted
+// profile once getSettings resolves (a Mac keyboard on Linux can force 'mac' there).
+let keyboardUi: { refresh(): void } | undefined;
+const keymap = createKeymapController({
+  platform: window.term.platform,
+  initial: 'auto',
+  persist: (p) => window.monitor.setSettings({ keymapProfile: p }),
+  persistOverrides: (o) => window.monitor.setSettings({ keymapOverrides: o }),
+  onChange: () => keyboardUi?.refresh(),
+});
+const terminalClipboard = wireSelection(term, repo, () => keymap.current());
+// macOS Edit-menu actions (§7.7) route to the terminal's clipboard actions, or a focused input's
+// native editing. Off macOS this never fires (no menu is installed).
+window.term.onMenuAction((action) => runMenuEditAction(action, document, terminalClipboard, () => window.term.clipboardRead()));
+keyboardUi = createKeyboardSettings(document.getElementById('kb-settings-view')!, {
+  getProfile: () => keymap.profile(),
+  onProfileChange: (p) => keymap.setProfile(p),
+  getKeymap: () => keymap.current(),
+  getOverrides: () => keymap.overrides(),
+  isMac: () => resolveBase(keymap.profile(), window.term.platform) === 'mac',
+  onRebind: (action, chord) => keymap.setOverride(action, [chord]),
+  onReset: (action) => keymap.clearOverride(action),
+});
+void window.monitor
+  .getSettings()
+  .then((s) => {
+    // Hydrate persisted overrides first, then the profile (which re-resolves and refreshes the UI).
+    for (const [action, chords] of Object.entries(s.keymapOverrides ?? {})) {
+      if (chords) keymap.setOverride(action as never, chords);
+    }
+    keymap.setProfile(s.keymapProfile);
+  })
+  .catch(() => {}); // a rejected invoke (main restart) must not be an unhandled rejection
+
 wireMonitorPane(repo);
 
-// The converged three-view shell (§24.1C): view switching, hotkeys, the docked
-// quick-send drawer, and the theme — with theme persisted through the global
-// UI-settings seam (§16.6). The drawer hosts the reused action window; no scrim,
-// so the terminal stays visible for cross-highlight (§16.8, §22.2 amendment).
-// Forward ref so the shell can drive the viewer's full-screen presentation (§20.2) without
-// reaching across organisms — the composition root wires the contract both ways.
+// Forward ref so the shell drives the viewer's full-screen presentation (§20.2) through the
+// contract, not a reach-across; the composition root wires it both ways.
 let artifacts: Artifacts | undefined;
+// Forward ref: the cue's dismiss handler (built first) lands focus via the strip's typed seam below.
+let flowStrip: FlowStrip | undefined;
 const shell = createShell(document.getElementById('app')!, {
   getTheme: () => window.monitor.getSettings().then((s) => s.theme),
   setTheme: (theme) => window.monitor.setSettings({ theme }),
   onViewerFullscreenChange: (on) => artifacts?.setFullscreen(on),
+  getKeymap: () => keymap.current(), // §7.7: app-nav chords follow the active profile/overrides
 });
 
-// Cross-highlight wiring for any finding/source pairs that carry a data-find id
-// (the mocked artifact/finding markup today; real provenance spans in a later phase).
 wireCrossHighlight(document.getElementById('app')!);
 
-// Flow status strip (§22.3 / §24.2.2): the manual-step lifecycle driven through window.flow,
-// scoped to the terminal's current repo. Like the todo list, it follows the cwd — the shared
-// repo context delivers the seeded key on mount and every subsequent cd, and the strip re-pulls.
+// Awaiting-human attention cue (§24.2.3 T4): the flow strip feeds it the loop mirror (below); the
+// OS notification's activation pushes flow:revealLoop, answered by revealLoopReadout via Shell seams.
+const attnCueHost = document.getElementById('attn-cue');
+const attentionCue = attnCueHost
+  ? createAttentionCue(attnCueHost, {
+      // WCAG 2.4.3: never strand focus on <body>; the composition root owns this cross-organism fallback.
+      onDismiss: () => {
+        if (!flowStrip?.focusLoopReadout()) shell.focusView('1');
+      },
+    })
+  : undefined;
+window.flow.onRevealLoop(() => revealLoopReadout(shell));
+
+// Flow status strip (§22.3 / §24.2.2): the manual-step lifecycle through window.flow, scoped to the
+// terminal's current repo (it follows the cwd via the shared repo context, like the todo list).
 const flowStripHost = document.getElementById('flow-strip');
 if (flowStripHost) {
-  // The docked loop panel (§24.2.3 T2) is a sibling organism in its own grid column. The strip is
-  // the single puller of flow state; it hands the current loop mirror to the panel here (the contract
-  // seam, not a DOM reach-across), and the shell docks/undocks the column. No loop → clear + close.
+  // The strip is the single puller of flow state: it hands the loop mirror to the docked loop panel
+  // (§24.2.3 T2) through the contract, not a DOM reach-across. No loop → clear + close.
   const loopPanelHost = document.getElementById('loop-panel');
   const loopPanel = loopPanelHost ? createLoopPanel(loopPanelHost) : undefined;
-  // The typed-input modal (§24.2.3 T3) is a sibling organism over its own fixed host. The strip is the
-  // single puller of flow state; on a step-entry prompt it hands the prompt + a submit closure here
-  // (the contract seam, not a DOM reach-across); the modal collects values and submit calls provideInput.
+  // Same single-puller contract for the typed-input modal (§24.2.3 T3): on a step-entry prompt the
+  // strip hands it the prompt + a submit closure; the modal collects values and submit calls provideInput.
   const modalHost = document.getElementById('flow-modal-host');
   const inputModal = modalHost ? createFlowInputModal(modalHost) : undefined;
-  const flowStrip = createFlowStrip(flowStripHost, {
+  const strip = createFlowStrip(flowStripHost, {
     ...window.flow,
-    loopPanelId: loopPanelHost?.id, // inject the controlled panel id (instance-scoped aria-controls)
+    loopPanelId: loopPanelHost?.id, // instance-scoped aria-controls target
     onLoopState: (loop, title) => {
       loopPanel?.render(loop, title);
+      attentionCue?.render(loop ?? null, repo.repoKey());
       if (!loop) {
         shell.closeLoopPanel(); // the read-out is gone; never leave an empty panel docked
       } else {
-        // The strip just re-rendered a fresh .loopstat (default aria-expanded=false); if the panel
-        // is open, re-sync the read-out so it doesn't read collapsed while the column is docked.
+        // The strip re-rendered a fresh .loopstat (default aria-expanded=false); re-sync it to the
+        // docked state so an open panel doesn't read collapsed (WAI-ARIA).
         document.querySelector('.loopstat')?.setAttribute('aria-expanded', String(shell.isLoopPanelOpen()));
       }
     },
     onPrompt: (prompt, stepName, submit) => inputModal?.render(prompt, stepName, submit),
   });
-  repo.onChange((info) => flowStrip.onRepoChanged(info.repoKey));
+  flowStrip = strip;
+  repo.onChange((info) => strip.onRepoChanged(info.repoKey));
   const seededKey = repo.repoKey();
-  if (seededKey !== null) flowStrip.onRepoChanged(seededKey);
+  if (seededKey !== null) strip.onRepoChanged(seededKey);
 }
 
 // View-3 Review gate (§19.3) is still a fixture-driven, stubbed mock — out of S1 scope.
 const gatePanel = document.getElementById('gate-panel');
 if (gatePanel) createGatePanel(gatePanel, SAMPLE_FLOW);
 
-// View 2 — the artifact viewer (§20.2 / §24.1): real IPC-backed discovery/read
-// (`viewer:tree` / `viewer:read`, scoped to the session's live cwd) rendered with the
-// real markdown-it+mermaid / CodeMirror stack; a selection routes to the same two sinks as
-// the terminal-pane selection — send-to-agent (inject, no submit, §9.3) and add-to-todo (§16.2).
+// View 2 — the artifact viewer (§20.2 / §24.1): real IPC-backed discovery/read scoped to the live
+// cwd; a selection routes to the same two sinks as the terminal pane — send (inject, no submit,
+// §9.3) and add-to-todo (§16.2).
 const artifactsHost = document.getElementById('artifacts');
 if (artifactsHost) {
   const view = createArtifacts(artifactsHost, {
@@ -93,18 +140,14 @@ if (artifactsHost) {
     onRequestFullscreen: (on) => shell.setViewerFullscreen(on),
   });
   artifacts = view;
-  // Re-discover when the agent cd's into another repo/dir (the shared context already holds
-  // the seeded key for add-to-todo).
   repo.onChange(() => void view.refresh());
-  // Apply the persisted tree width once settings resolve (kept off the sync path above so a
-  // late getSettings can't make the viewer miss the first cwd:changed broadcast, §20.1).
+  // Width restore is kept off the sync repo path so a late getSettings can't make the viewer miss
+  // the first cwd:changed broadcast (§20.1).
   void window.monitor
     .getSettings()
     .then((s) => {
       view.setWidth(s.artifactTreeWidth);
       if (s.artifactFullscreenTreeWidth !== undefined) view.setFullscreenWidth(s.artifactFullscreenTreeWidth);
     })
-    // A rejected invoke (main restart) keeps the default computed widths; never an unhandled
-    // rejection (mirrors the tested monitor.ts getSettings catch).
-    .catch(() => {});
+    .catch(() => {}); // a rejected invoke (main restart) keeps the default widths, never rejects
 }

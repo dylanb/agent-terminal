@@ -1,8 +1,7 @@
-// Read-only bridge to the agent-loop engine state (§24.2.3 T2 / §17.2 / §19.1). The app MIRRORS
-// the real v4 <repo>/.agent-loop/state.yaml — it never writes it; the human drives every agent-loop
-// command by hand. Parsing degrades to null on anything it can't trust (unknown schema_version,
-// corrupt, missing), exactly like the §19.1 flow-state store — a bad/foreign state.yaml can never
-// crash the host or be misread as real progress.
+// Read-only bridge to the agent-loop engine state (§24.2.3 T2 / §17.2 / §19.1). The app MIRRORS the
+// real v4 <repo>/.agent-loop/state.yaml and MUST never write it; the human drives every agent-loop
+// command by hand. Parsing degrades to null on anything it can't trust, so a bad/foreign state.yaml
+// can never crash the host or be misread as real progress.
 
 import { readFileSync, watch, type FSWatcher } from 'node:fs';
 import path from 'node:path';

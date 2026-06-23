@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { buildSpawnConfig, mergePaths, spawnCwd } from '../../src/main/pty';
+import { buildSpawnConfig, mergePaths, probeShellCommand, spawnCwd } from '../../src/main/pty';
 
 const HOME = '/home/u';
 
-describe('spawnCwd (§5 — the dir bash is spawned in, also the viewer cwd fallback §20.1)', () => {
+describe('spawnCwd (§5 — the dir the shell is spawned in, also the viewer cwd fallback §20.1)', () => {
   it('uses $HOME when set', () => {
     expect(spawnCwd({ HOME }, '/fallback')).toBe(HOME);
   });
@@ -37,6 +37,37 @@ describe('mergePaths (§5 — GUI-launch PATH probe must not clobber the inherit
   });
 });
 
+describe('probeShellCommand (§5 — the Linux GUI PATH probe targets the resolved shell)', () => {
+  it('returns nothing off Linux (macOS recovers PATH via the -l login shell instead)', () => {
+    expect(probeShellCommand('darwin', { HOME, SHELL: '/bin/zsh' })).toBeUndefined();
+  });
+
+  it("probes the user's own default shell ($SHELL), not hardcoded bash", () => {
+    expect(probeShellCommand('linux', { HOME, SHELL: '/bin/zsh' })?.file).toBe('/bin/zsh');
+  });
+
+  it('probes APP_SHELL in precedence over $SHELL', () => {
+    const cmd = probeShellCommand('linux', {
+      HOME,
+      APP_SHELL: '/opt/homebrew/bin/bash',
+      SHELL: '/bin/zsh',
+    });
+    expect(cmd?.file).toBe('/opt/homebrew/bin/bash');
+  });
+
+  it('falls back to bash when neither APP_SHELL nor $SHELL is set', () => {
+    expect(probeShellCommand('linux', { HOME })?.file).toBe('bash');
+  });
+
+  it('probes via a login shell running a PATH echo — the full command is pinned', () => {
+    expect(probeShellCommand('linux', { HOME, SHELL: '/bin/zsh' })?.args).toEqual([
+      '-l',
+      '-c',
+      'echo -n "$PATH"',
+    ]);
+  });
+});
+
 describe('buildSpawnConfig (§5)', () => {
   it('Linux: plain interactive bash (sources ~/.bashrc), no -l', () => {
     const cfg = buildSpawnConfig({ platform: 'linux', env: { HOME }, home: HOME });
@@ -57,6 +88,29 @@ describe('buildSpawnConfig (§5)', () => {
       home: HOME,
     });
     expect(cfg.shellPath).toBe('/opt/homebrew/bin/bash');
+  });
+
+  it("uses the user's default shell ($SHELL) when APP_SHELL is unset", () => {
+    const cfg = buildSpawnConfig({
+      platform: 'darwin',
+      env: { HOME, SHELL: '/bin/zsh' },
+      home: HOME,
+    });
+    expect(cfg.shellPath).toBe('/bin/zsh');
+  });
+
+  it('APP_SHELL takes precedence over $SHELL', () => {
+    const cfg = buildSpawnConfig({
+      platform: 'linux',
+      env: { HOME, APP_SHELL: '/opt/homebrew/bin/bash', SHELL: '/bin/zsh' },
+      home: HOME,
+    });
+    expect(cfg.shellPath).toBe('/opt/homebrew/bin/bash');
+  });
+
+  it('falls back to bash when neither APP_SHELL nor $SHELL is set', () => {
+    const cfg = buildSpawnConfig({ platform: 'linux', env: { HOME }, home: HOME });
+    expect(cfg.shellPath).toBe('bash');
   });
 
   it('advertises xterm-256color and truecolor on top of the inherited env', () => {
@@ -122,6 +176,27 @@ describe('shell-integration hook (§15.5 / D3 — PROMPT_COMMAND env seam, opt-o
       integrationScriptPath: SCRIPT,
     });
     expect(cfg.options.env.APP_TERM_INTEGRATION).toBeUndefined();
+  });
+
+  it('omits the hook when the default shell ($SHELL) is non-bash', () => {
+    const cfg = buildSpawnConfig({
+      platform: 'linux',
+      env: { HOME, SHELL: '/bin/zsh' },
+      home: HOME,
+      integrationScriptPath: SCRIPT,
+    });
+    expect(cfg.options.env.APP_TERM_INTEGRATION).toBeUndefined();
+  });
+
+  it('installs the hook when the default shell ($SHELL) resolves to bash', () => {
+    const cfg = buildSpawnConfig({
+      platform: 'linux',
+      env: { HOME, SHELL: '/bin/bash' },
+      home: HOME,
+      integrationScriptPath: SCRIPT,
+    });
+    expect(cfg.shellPath).toBe('/bin/bash');
+    expect(cfg.options.env.APP_TERM_INTEGRATION).toBe(SCRIPT);
   });
 
   it('omits the hook when no script path is provided', () => {

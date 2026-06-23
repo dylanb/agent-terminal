@@ -114,8 +114,7 @@ describe('IPC payload validation (§6 — renderer-supplied input is untrusted)'
     expect(isValidSetSettings({ settings: { theme: 'sepia' } })).toBe(false);
     expect(isValidSetSettings({ settings: { splitRatio: 'wide' } })).toBe(false);
     expect(isValidSetSettings({ settings: { splitRatio: Number.NaN } })).toBe(false);
-    // Artifact viewer widths (§20.2) cross the renderer→main trust boundary too (§6):
-    // accept finite numbers, reject NaN/Infinity/non-numbers.
+    // Artifact viewer widths (§20.2) cross the renderer→main trust boundary too (§6).
     expect(isValidSetSettings({ settings: { artifactTreeWidth: 248 } })).toBe(true);
     expect(isValidSetSettings({ settings: { artifactFullscreenTreeWidth: 600 } })).toBe(true);
     expect(isValidSetSettings({ settings: { artifactTreeWidth: Number.NaN } })).toBe(false);

@@ -17,8 +17,6 @@ function finding(text: string) {
   return { type: 'finding' as const, source: 'heuristic' as const, text, parentId: null, truncated: false, range: RANGE };
 }
 
-// Manual single-slot capture (§21.1): "Capture last report" replaces any prior captured report
-// with the one detected now, returning the stored report + findings for the pane to render.
 describe('captureLastReport (§21.1 — manual single-slot)', () => {
   it('stores the detected report and its findings, linking findings to the report id', () => {
     const store = createMonitorEventStore();
@@ -30,7 +28,6 @@ describe('captureLastReport (§21.1 — manual single-slot)', () => {
     expect(events[0].type).toBe('report');
     expect(events[1].parentId).toBe(events[0].id);
     expect(events[2].parentId).toBe(events[0].id);
-    // Replay sees exactly what was captured.
     expect(store.list().map((e) => e.text)).toEqual(['the report', 'one', 'two']);
   });
 

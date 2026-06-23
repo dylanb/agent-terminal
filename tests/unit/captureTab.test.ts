@@ -38,10 +38,8 @@ function makeEvent(over: Partial<MonitorEvent>): MonitorEvent {
   } as MonitorEvent;
 }
 
-// §24.2.1 bulk triage: each capture card carries a selection checkbox; the toolbar's
-// "Add to todo" concatenates the checked chunks (appeared order, blank-line separated) into
-// ONE todo with an Undo window + processed-chunk cue, and "Dismiss selected" / "Dismiss all"
-// clear cards. This supersedes the per-card "Add to todo" the mockup shipped.
+// §24.2.1 bulk triage: "Add to todo" concatenates the checked chunks into ONE todo behind an Undo
+// window. This supersedes the per-card "Add to todo" the mockup shipped.
 describe('Capture tab §24.2.1 — bulk triage (checkbox + Add to todo / Dismiss)', () => {
   let handlers: {
     event?: (e: MonitorEvent) => void;
@@ -83,8 +81,7 @@ describe('Capture tab §24.2.1 — bulk triage (checkbox + Add to todo / Dismiss
     };
   }
 
-  // Fake timers throughout so the TODO_UNDO_MS window is deterministic; `tick()` flushes
-  // microtasks (the pane's mount-time .then() chains) without a wall-clock wait.
+  // Fake timers throughout so the TODO_UNDO_MS undo window is deterministic.
   const tick = () => vi.advanceTimersByTimeAsync(0);
 
   beforeEach(() => {
@@ -193,7 +190,7 @@ describe('Capture tab §24.2.1 — bulk triage (checkbox + Add to todo / Dismiss
 
   it('if the add silently fails (nothing returned), the source chunks are NOT dismissed', async () => {
     await withRepo();
-    monitor.todoAdd.mockResolvedValue([]); // add yields no new item → addFromCapture returns null
+    monitor.todoAdd.mockResolvedValue([]);
     handlers.event!(makeEvent({ id: 'f1', type: 'finding', parentId: null, text: 'alpha' }));
     checkbox(cards()[0]).click();
     addBtn().click();
@@ -237,14 +234,62 @@ describe('Capture tab §24.2.1 — bulk triage (checkbox + Add to todo / Dismiss
     checkbox(cards()[0]).click();
     addBtn().click();
     await tick();
-    expect(document.querySelector('.undo-add-to-todo')).toBeTruthy(); // undo window open
+    expect(document.querySelector('.undo-add-to-todo')).toBeTruthy();
     dismissAll().click();
-    expect(document.querySelector('.undo-add-to-todo')).toBeNull(); // undo slot cleared
-    expect(addBtn().disabled).toBe(true); // no chunks left, but NOT stuck-disabled by undoPending
+    expect(document.querySelector('.undo-add-to-todo')).toBeNull();
+    expect(addBtn().disabled).toBe(true); // disabled for want of chunks, not stuck by undoPending
     // The pending commit timer must not fire against already-removed chunks.
     monitor.dismiss.mockClear();
     await vi.advanceTimersByTimeAsync(60_000);
     expect(monitor.dismiss).not.toHaveBeenCalled();
+  });
+
+  // §16.2: the undo window must not lock out further triage. A fresh selection re-enables
+  // "Add to todo" while a prior batch is still undoable; the undo applies only to the latest add.
+  it('Add to todo re-enables for a freshly-checked chunk while a prior batch is still in its undo window', async () => {
+    await withRepo();
+    handlers.event!(makeEvent({ id: 'f1', type: 'finding', parentId: null, text: 'alpha' }));
+    handlers.event!(makeEvent({ id: 'f2', type: 'finding', parentId: null, text: 'beta' }));
+    checkbox(cards().find((c) => c.dataset.eventId === 'f1')!).click();
+    addBtn().click();
+    await tick();
+    expect(document.querySelector('.undo-add-to-todo')).toBeTruthy(); // f1's undo window open
+    checkbox(cards().find((c) => c.dataset.eventId === 'f2')!).click();
+    expect(addBtn().disabled).toBe(false); // not locked out by the pending undo
+  });
+
+  it('a second Add to todo only adds the freshly-checked chunk, ignoring the still-disabled prior one', async () => {
+    await withRepo();
+    handlers.event!(makeEvent({ id: 'f1', type: 'finding', parentId: null, text: 'alpha' }));
+    handlers.event!(makeEvent({ id: 'f2', type: 'finding', parentId: null, text: 'beta' }));
+    checkbox(cards().find((c) => c.dataset.eventId === 'f1')!).click();
+    addBtn().click();
+    await tick();
+    checkbox(cards().find((c) => c.dataset.eventId === 'f2')!).click();
+    addBtn().click();
+    await tick();
+    expect(monitor.todoAdd).toHaveBeenCalledTimes(2);
+    expect(monitor.todoAdd).toHaveBeenLastCalledWith('/repoA', 'beta', { type: 'capture' });
+  });
+
+  it('a second Add to todo finalizes the prior batch (its chunks dismissed) and makes only the latest undoable', async () => {
+    await withRepo();
+    handlers.event!(makeEvent({ id: 'f1', type: 'finding', parentId: null, text: 'alpha' }));
+    handlers.event!(makeEvent({ id: 'f2', type: 'finding', parentId: null, text: 'beta' }));
+    checkbox(cards().find((c) => c.dataset.eventId === 'f1')!).click();
+    addBtn().click();
+    await tick();
+    checkbox(cards().find((c) => c.dataset.eventId === 'f2')!).click();
+    addBtn().click();
+    await tick();
+    // f1's batch is committed: dismissed + removed from the list.
+    expect(monitor.dismiss).toHaveBeenCalledWith('f1');
+    expect(blocks().querySelector('[data-event-id="f1"]')).toBeNull();
+    // Undo now targets only the latest todo and leaves f2 in place.
+    (document.querySelector('.undo-add-to-todo') as HTMLButtonElement).click();
+    await tick();
+    expect(monitor.todoDelete).toHaveBeenCalledTimes(1);
+    expect(blocks().querySelector('[data-event-id="f2"]')).toBeTruthy();
   });
 
   it('each chunk checkbox is distinguishable — its label carries the capture text', async () => {
@@ -351,8 +396,8 @@ describe('Capture last report button (§21.1 — manual single-slot)', () => {
   });
 
   it('an empty result (nothing detected) leaves the shown report in place — does not clear it', async () => {
-    // capture:last returns [] when no report is detected AND main keeps the prior capture
-    // (a scrolled-away buffer must not wipe it), so the pane must not clear on [].
+    // [] means "nothing detected"; main keeps the prior capture (a scrolled-away buffer must not wipe
+    // it), so the pane must not clear on [] either.
     monitor.captureLast.mockResolvedValueOnce([report('f1', 'kept finding')]);
     wireMonitorPane();
     await flush();
@@ -363,18 +408,17 @@ describe('Capture last report button (§21.1 — manual single-slot)', () => {
     monitor.captureLast.mockResolvedValueOnce([]);
     button().click();
     await flush();
-    expect(findings().map(text)).toEqual(['kept finding']); // unchanged
+    expect(findings().map(text)).toEqual(['kept finding']);
   });
 
   it('a rejected capture:last is handled, not an unhandled rejection', async () => {
-    // vitest fails the run on an unhandled rejection, so this passes only if the click handler
-    // catches a rejected invoke (e.g. main restart).
+    // vitest fails the run on an unhandled rejection — this passes only if the click handler catches it.
     monitor.captureLast.mockRejectedValueOnce(new Error('main restarted'));
     wireMonitorPane();
     await flush();
     button().click();
     await flush();
-    expect(findings()).toHaveLength(0); // no crash, nothing rendered
+    expect(findings()).toHaveLength(0);
   });
 });
 

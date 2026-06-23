@@ -1,10 +1,6 @@
-// Read-only resolver for the agent-loop LoopDef a flow step binds (§24.2.3 T2 / §18.1). A `loop`
-// step names its loop (`loop: impl-loop`); the engine's real LoopDef yaml declares the gate model —
-// each `gates[]` entry's `id` IS a status string, carrying that gate's `human_options` and `kind`.
-// The app reads this read-only to surface the gate's options + whether the loop has reached a
-// TERMINAL status. Resolution mirrors `agent-loop list`: a repo-local `.agent-loop.yaml` `loops:`
-// registry override wins, else `$CLAUDE_CONFIG_DIR/loops/<name>/<name>.yaml` (default ~/.claude).
-// Like the §19.1 store it NEVER throws — a missing / corrupt / wrong-schema / unknown LoopDef → null.
+// Read-only resolver for the agent-loop LoopDef a flow step binds (§24.2.3 T2 / §18.1). The engine
+// owns the LoopDef yaml schema; this reads only the gate slice. Resolution mirrors `agent-loop list`.
+// Like the §19.1 store it NEVER throws — every failure mode degrades to null.
 
 import { readFileSync, realpathSync } from 'node:fs';
 import os from 'node:os';
@@ -12,9 +8,8 @@ import path from 'node:path';
 import yaml from 'js-yaml';
 import { isRecord } from './yamlRecord';
 
-/** One gate of a LoopDef. `id` doubles as the agent-loop `status` it gates (e.g.
- *  `awaiting-human-pr-approval`); `humanOptions` is that gate's `human_options` (the gate UI's
- *  variable button set, §19.4); `terminal` is the loop's exit — `kind: terminal`. */
+/** One gate of a LoopDef. `id` IS the agent-loop `status` it gates; `humanOptions` mirrors the yaml
+ *  `human_options` (the gate UI's button set, §19.4); `terminal` is `kind: terminal`. */
 export interface LoopGate {
   id: string;
   kind: string;
@@ -22,8 +17,8 @@ export interface LoopGate {
   terminal: boolean;
 }
 
-/** The gate slice of a LoopDef the flow reads (§18.1). The engine's other keys (personas, charters,
- *  labels) are irrelevant to the bridge and intentionally not modelled. */
+/** The gate slice of a LoopDef the flow reads (§18.1); the engine's other keys are intentionally
+ *  not modelled. */
 export interface LoopDef {
   name: string;
   gates: LoopGate[];
@@ -47,25 +42,22 @@ function resolveLoopDefPath(repoDir: string, name: string, configDir?: string): 
     if (isRecord(doc) && isRecord(doc.loops) && typeof doc.loops[name] === 'string') {
       const root = path.resolve(repoDir);
       const target = path.resolve(root, doc.loops[name]);
-      // Refuse an override that escapes the repo (CWE-22), mirroring the todoTemplate loader (§20.2):
-      // fall through to the trusted config-dir copy rather than read an arbitrary path.
+      // An override escaping the repo (CWE-22) falls through to the trusted config copy (§20.2).
       if (target === root || target.startsWith(root + path.sep)) {
         try {
-          // Re-check the realpath so an in-repo symlink can't point OUT of the repo (CWE-59) — the
-          // lexical guard above only sees the symlink's own in-repo path — and RETURN that validated
-          // real path so the later read can't be redirected by a target swap (CWE-367 TOCTOU,
-          // mirroring readArtifact). An escaping symlink falls through to the trusted config copy.
+          // §20.2: re-check the realpath (an in-repo symlink can point out, CWE-59) and RETURN that
+          // validated real path so a later target swap can't redirect the read (CWE-367 TOCTOU).
           const real = realpathSync(target);
           const realRoot = realpathSync(root);
           if (real === realRoot || real.startsWith(realRoot + path.sep)) return real;
           return path.join(configLoopsDir(configDir), name, `${name}.yaml`);
         } catch {
-          return target; // dangling/unreadable in-repo override → let the parser yield null
+          return target; // dangling in-repo override → let the parser yield null
         }
       }
     }
   } catch {
-    // no/unreadable .agent-loop.yaml → fall through to the config-dir copy
+    // no/unreadable .agent-loop.yaml → config-dir copy
   }
   return path.join(configLoopsDir(configDir), name, `${name}.yaml`);
 }

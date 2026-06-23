@@ -80,10 +80,68 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible { outline:2px so
 .rail .foot { margin-top:auto; display:flex; flex-direction:column; gap:8px; padding-top:16px; }
 .rail .foot .row { display:flex; gap:8px; align-items:center; }
 
-.main { min-width:0; position:relative; }
+.main { min-width:0; display:flex; flex-direction:column; }
+/* The viewport holds the absolutely-stacked view panes; the attention cue (§24.2.3 T4) sits above it
+   as a flex sibling so a shown cue "makes room" (pushes the active view down), never overlays it. */
+.viewport { position:relative; flex:1; min-height:0; }
 [data-viewpane] { position:absolute; inset:0; display:none; }
 [data-viewpane].on { display:block; }
+
+/* awaiting-human attention cue (§24.2.3 T4) — design/shell/loop-flow.html .attn-bar: a red alert bar
+   pinned atop the active view. It is a PERSISTENT role=alert live region (never [hidden]); when not
+   human-needed the cue empties its content and the `:empty` rule collapses the bar to zero footprint,
+   so the live region stays in the a11y tree for a reliable next announcement (WCAG 4.1.3) while taking
+   no layout space and exposing no focusable descendant. Small text stays on --text/--attn-text for
+   WCAG 1.4.3 on the wash. */
+.attn-bar { display:flex; align-items:center; gap:12px; padding:9px 16px; flex:none;
+  background:color-mix(in srgb, var(--attn) 10%, var(--card));
+  border-bottom:1px solid color-mix(in srgb, var(--attn) 38%, var(--hair)); }
+.attn-bar:empty { padding:0; border:0; height:0; overflow:hidden; }
+.attn-bar .dot { width:8px; height:8px; border-radius:50%; background:var(--attn); flex:none;
+  box-shadow:0 0 0 4px color-mix(in srgb, var(--attn) 18%, transparent); }
+.attn-bar .msg { font-size:12.5px; color:var(--text); }
+.attn-bar .msg b { font-weight:600; }
+.attn-bar .msg .it { font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:11px; color:var(--attn-text); }
+.attn-bar .x { margin-left:auto; color:var(--dim); width:24px; height:24px; }
+/* The global focus ring (--signal) clears 3:1 only on --card; on the bar's tinted wash it falls below
+   in light theme, so scope the ring to --attn-text, which clears 3:1 on the wash in both themes (WCAG 2.1 SC 1.4.11). */
+.attn-bar button:focus-visible { outline-color:var(--attn-text); }
 #artifacts { height:100%; }
+.nav .navic { display:inline-block; width:14px; text-align:center; font-size:13px; }
+
+/* ---- Keyboard settings view (§7.7) — a centred reading column; chords drawn as keycaps ---- */
+#kb-settings-view { height:100%; overflow:auto; }
+.kview { max-width:700px; margin:0 auto; padding:34px 40px 56px; }
+.kview .eyebrow { text-transform:uppercase; letter-spacing:.15em; font-weight:600; font-size:10px; color:var(--dim); }
+.kview-head h1 { font-family:"Fraunces",Georgia,serif; font-weight:500; font-size:30px; letter-spacing:-.01em; margin:5px 0 0; }
+.kview-head .sub { font-size:13px; color:var(--dim); margin-top:7px; max-width:56ch; }
+.kprofile { display:flex; align-items:center; justify-content:space-between; gap:24px; margin:26px 0 8px; padding:16px 18px; background:var(--card); border:1px solid var(--hair); border-radius:var(--r); }
+.kprofile .kp-label { font-size:13px; font-weight:600; }
+.kprofile .kp-help { font-size:12px; color:var(--dim); margin-top:3px; max-width:34ch; }
+.seg { display:inline-flex; background:var(--hair2); border:1px solid var(--hair); border-radius:999px; padding:3px; flex:none; }
+.seg .seg-opt { border:none; background:none; font-family:inherit; font-size:12.5px; font-weight:600; color:var(--dim); padding:6px 16px; border-radius:999px; cursor:pointer; }
+.seg .seg-opt.on { background:var(--card); color:var(--signal-text); box-shadow:0 1px 2px rgba(8,16,28,.13); }
+.kgroup { padding:22px 0 6px; }
+.kgroup + .kgroup { border-top:1px solid var(--hair); }
+.kgroup > .eyebrow { display:block; margin:0 0 6px; }
+.krow { display:grid; grid-template-columns:1fr auto 80px; align-items:center; gap:18px; padding:13px 0; border-bottom:1px solid var(--hair2); }
+.kgroup .krow:last-child { border-bottom:none; }
+.krow .kr-name { font-size:14px; font-weight:500; }
+.krow .kr-desc { font-size:12px; color:var(--dim); margin-top:2px; }
+.kr-chord { display:flex; align-items:center; gap:5px; justify-content:flex-end; }
+.kr-chord .kc { display:inline-flex; align-items:center; justify-content:center; min-width:27px; height:27px; padding:0 8px; font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:12.5px; font-weight:500; color:var(--text); background:var(--card); border:1px solid var(--hair); border-bottom-width:2px; border-radius:6px; }
+[data-theme="dark"] .kr-chord .kc { background:#1B2530; }
+.kr-chord .kr-unset { font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:11.5px; color:var(--dim); }
+.kr-chord .kcapture { display:inline-flex; align-items:center; height:27px; padding:0 13px; border-radius:999px; white-space:nowrap; font-size:12px; font-weight:600; color:var(--signal-text); background:var(--signal-wash); border:1px solid var(--signal); animation:kpulse 1.3s ease-in-out infinite; }
+@keyframes kpulse { 0%,100% { box-shadow:0 0 0 3px var(--signal-wash); } 50% { box-shadow:0 0 0 6px transparent; } }
+.kr-chord .kcapture.bad { color:var(--attn-text); background:color-mix(in srgb,var(--attn) 12%,transparent); border-color:var(--attn); animation:none; }
+.krow.mod { border-left:2px solid var(--signal); margin-left:-12px; padding-left:10px; }
+.krow .kr-ctl { display:flex; align-items:center; justify-content:flex-end; }
+.krow .kr-ctl .linkbtn { opacity:0; }
+.krow:hover .kr-ctl .linkbtn, .krow:focus-within .kr-ctl .linkbtn, .krow.mod .kr-ctl .linkbtn, .krow.live .kr-ctl .linkbtn { opacity:1; }
+@media (prefers-reduced-motion:reduce) { .kr-chord .kcapture { animation:none; } }
+/* Screen-reader-only live region (WCAG 4.1.3): the visible .kcapture pill carries the same text. */
+.kstatus-live { position:absolute; width:1px; height:1px; margin:-1px; padding:0; overflow:hidden; clip:rect(0 0 0 0); white-space:nowrap; border:0; }
 .artsplit { display:grid; grid-template-columns:var(--tree-w,248px) 7px 1fr; height:100%; }
 .artsplit .tree { padding:20px 16px; overflow:auto; }
 /* Drag/keyboard-resizable edge between the tree and the viewer (§20.2). */

@@ -4,10 +4,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createFlowStateStore } from '../../src/main/flowState';
 
-// §24.2.2 S3 / §19.1 — flow progression persists to <worktree>/.agent-terminal/flow-state.yaml.
-// Tests drive the real store against real temp dirs (no fs mocks): the observable contract is
-// what round-trips through read()/write() and what lands in the worktree's .gitignore. A
-// missing/corrupt file degrades to null (never a throw), mirroring the todoStore (§16.3).
+// §24.2.2 S3 / §19.1 — flow progression persists to <worktree>/.agent-terminal/flow-state.yaml,
+// which is gitignored. A missing/corrupt file degrades to null (never a throw), mirroring the
+// todoStore (§16.3). Real store, real temp dirs (no fs mocks).
 
 const GITIGNORE_ENTRY = '.agent-terminal/flow-state.yaml';
 
@@ -35,9 +34,8 @@ describe('flow-state store (§24.2.2 S3 / §19.1)', () => {
     expect(createFlowStateStore(dir).read()).toBeNull();
   });
 
-  // §24.2.3 T3 — a step's resolved typed inputs (§18.4) persist alongside progression so they
-  // survive a relaunch and can be threaded to later steps (§18.1 output→input). Absent inputs
-  // round-trip as no `inputs` key (the §24.2.2 contract is unchanged when a flow has none).
+  // §24.2.3 T3 — resolved typed inputs (§18.4) persist alongside progression so they survive a
+  // relaunch and thread to later steps (§18.1 output→input). Absent inputs omit the `inputs` key.
   it('round-trips resolved step inputs and survives a fresh store (§24.2.3 T3)', () => {
     createFlowStateStore(dir).write({ step: 'plan', status: 'in_progress', inputs: { ticket: '176' } });
     expect(createFlowStateStore(dir).read()).toEqual({ step: 'plan', status: 'in_progress', inputs: { ticket: '176' } });

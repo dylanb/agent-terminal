@@ -4,9 +4,8 @@ import { createCwdTracker, type CwdInfo } from '../../src/main/cwdTracker';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-// Drive the REAL @xterm/headless shadow with scripted OSC 7 bytes (§test rules:
-// no emulator mocks). The repo-key resolver is injected so the test controls the
-// cwd→key mapping without touching the filesystem.
+// Real @xterm/headless shadow, scripted OSC 7 bytes (§test rules: no emulator mocks). The repo-key
+// resolver is injected so tests control the cwd→key mapping without touching the filesystem.
 function osc7(p: string): string {
   return `\x1b]7;file://localhost${p}\x07`;
 }

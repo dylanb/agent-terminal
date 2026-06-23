@@ -25,14 +25,35 @@ describe('global UI settings store (§16.6 — first on-disk persistence, outsid
 
   it('persists a set and a fresh store reads it back (round-trip across restart)', () => {
     createUiSettingsStore(file).set({ splitRatio: 0.4, lastTab: 'todo' });
-    expect(createUiSettingsStore(file).get()).toEqual({ splitRatio: 0.4, lastTab: 'todo', theme: 'light', artifactTreeWidth: 248 });
+    expect(createUiSettingsStore(file).get()).toEqual({ splitRatio: 0.4, lastTab: 'todo', theme: 'light', artifactTreeWidth: 248, keymapProfile: 'auto' });
   });
 
   it('merges a partial set, leaving untouched fields intact', () => {
     const store = createUiSettingsStore(file);
     store.set({ splitRatio: 0.5 });
     store.set({ lastTab: 'todo' });
-    expect(store.get()).toEqual({ splitRatio: 0.5, lastTab: 'todo', theme: 'light', artifactTreeWidth: 248 });
+    expect(store.get()).toEqual({ splitRatio: 0.5, lastTab: 'todo', theme: 'light', artifactTreeWidth: 248, keymapProfile: 'auto' });
+  });
+
+  it('defaults the keymap profile to auto and round-trips a chosen one (§7.7)', () => {
+    expect(createUiSettingsStore(file).get().keymapProfile).toBe('auto');
+    createUiSettingsStore(file).set({ keymapProfile: 'mac' });
+    expect(createUiSettingsStore(file).get().keymapProfile).toBe('mac');
+  });
+
+  it('coerces an unknown keymap profile back to auto (§7.7)', () => {
+    const store = createUiSettingsStore(file);
+    store.set({ keymapProfile: 'klingon' as unknown as 'auto' });
+    expect(store.get().keymapProfile).toBe('auto');
+  });
+
+  it('round-trips per-action keymap overrides and drops malformed ones (§7.7)', () => {
+    const store = createUiSettingsStore(file);
+    store.set({ keymapOverrides: { copy: [{ key: 'k', ctrl: true }] } });
+    expect(createUiSettingsStore(file).get().keymapOverrides).toEqual({ copy: [{ key: 'k', ctrl: true }] });
+    // Garbage values (non-array, non-chord, unknown action) are dropped, not persisted.
+    store.set({ keymapOverrides: { copy: ['nope'], bogusAction: [{ key: 'x' }] } as never });
+    expect(createUiSettingsStore(file).get().keymapOverrides).toBeUndefined();
   });
 
   it('round-trips the theme and falls back to the default for a bogus value', () => {
@@ -89,6 +110,6 @@ describe('global UI settings store (§16.6 — first on-disk persistence, outsid
     createUiSettingsStore(file).set({ splitRatio: 0.42 });
     const written = readdirSync(join(dir, 'nested'));
     expect(written).toEqual(['ui-settings.json']);
-    expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual({ splitRatio: 0.42, lastTab: 'capture', theme: 'light', artifactTreeWidth: 248 });
+    expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual({ splitRatio: 0.42, lastTab: 'capture', theme: 'light', artifactTreeWidth: 248, keymapProfile: 'auto' });
   });
 });

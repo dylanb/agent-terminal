@@ -2,8 +2,15 @@
   "name": "agent-terminal",
   "version": "0.1.0",
   "description": "Foundation for a coding-agent management application: bash in a PTY, xterm.js UI, shadow screen model, monitor pane",
+  "homepage": "https://github.com/dylanb",
+  "author": {
+    "name": "Dylan Barrell",
+    "email": "dylan@barrell.com"
+  },
+  "desktopName": "agent-terminal.desktop",
   "main": "out/main/index.js",
   "private": true,
+  "packageManager": "pnpm@10.28.2",
   "scripts": {
     "rebuild": "electron-rebuild -f -w node-pty",
     "gen-icon": "node scripts/gen-icon.mjs",
@@ -13,8 +20,8 @@
     "start": "electron-vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:e2e": "npm run build && playwright test",
-    "package": "npm run build && electron-builder"
+    "test:e2e": "pnpm run build && playwright test",
+    "package": "pnpm run build && electron-builder"
   },
   "license": "MIT",
   "dependencies": {
@@ -44,5 +51,12 @@
     "typescript": "^6.0.3",
     "vite": "^7.3.5",
     "vitest": "^4.1.8"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "electron",
+      "esbuild",
+      "node-pty"
+    ]
   }
 }

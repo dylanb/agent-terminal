@@ -27,6 +27,8 @@ import {
   type TodoSource,
   type TodoStatus,
   type UiSettings,
+  type OsPlatform,
+  type MenuEditMsg,
 } from '../shared/ipc';
 
 export const termApi: TermApi = {
@@ -42,6 +44,16 @@ export const termApi: TermApi = {
   },
   input: (data) => ipcRenderer.send(CH.ptyInput, { sessionId: SESSION_ID, data }),
   resize: (size) => ipcRenderer.send(CH.ptyResize, { sessionId: SESSION_ID, ...size }),
+  // Clipboard is owned by main (the sandboxed preload can't import electron's clipboard) — route via
+  // IPC. Keeps the renderer off navigator.clipboard's focus/permission path (§9.1 / §7.7).
+  clipboardWrite: (text) => ipcRenderer.send(CH.clipboardWrite, { text }),
+  clipboardRead: () => ipcRenderer.invoke(CH.clipboardRead) as Promise<string>,
+  platform: process.platform as OsPlatform,
+  onMenuAction: (cb) => {
+    const h = (_e: unknown, m: MenuEditMsg): void => cb(m.action);
+    ipcRenderer.on(CH.menuEdit, h);
+    return () => ipcRenderer.removeListener(CH.menuEdit, h);
+  },
 };
 
 const monitorApi: MonitorApi = {
@@ -70,12 +82,12 @@ const monitorApi: MonitorApi = {
     ipcRenderer.send(CH.monitorLearnChrome, { sessionId: SESSION_ID, eventId, sample }),
   inject: (req) =>
     ipcRenderer.send(CH.agentInject, { sessionId: SESSION_ID, ...req } satisfies AgentInjectMsg),
-  // Global UI prefs (§16.6) — no sessionId; app-wide, not per-session.
+  // §16.6: app-wide, so no sessionId.
   getSettings: () => ipcRenderer.invoke(CH.uiGetSettings) as Promise<UiSettings>,
   setSettings: (settings) => ipcRenderer.send(CH.uiSetSettings, { settings }),
   onCwdChanged: (cb) => ipcRenderer.on(CH.cwdChanged, (_e, m: CwdChangedMsg) => cb(m)),
   clearCommands: () => ipcRenderer.send(CH.monitorClearCommands, { sessionId: SESSION_ID }),
-  // Todo (§16.4) — repoKey threaded so an in-flight edit always targets its own repo.
+  // §16.4: repoKey threaded so an in-flight edit always targets its own repo, not whatever cwd moved to.
   todoList: (repoKey) => ipcRenderer.invoke(CH.todoList, { sessionId: SESSION_ID, repoKey }) as Promise<TodoItem[]>,
   todoAdd: (repoKey, text, source?: TodoSource) =>
     ipcRenderer.invoke(CH.todoAdd, { sessionId: SESSION_ID, repoKey, text, source }) as Promise<TodoItem[]>,
@@ -112,6 +124,11 @@ const flowApi: FlowApi = {
     const handler = (): void => cb();
     ipcRenderer.on(CH.flowOnStateChanged, handler);
     return () => ipcRenderer.removeListener(CH.flowOnStateChanged, handler);
+  },
+  onRevealLoop: (cb) => {
+    const handler = (): void => cb();
+    ipcRenderer.on(CH.flowRevealLoop, handler);
+    return () => ipcRenderer.removeListener(CH.flowRevealLoop, handler);
   },
 };
 

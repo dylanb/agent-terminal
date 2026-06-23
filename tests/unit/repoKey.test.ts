@@ -4,7 +4,7 @@ import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { resolveRepoKey, currentRepoInfo } from '../../src/main/repoKey';
 
-// Real temp dirs — repoKey walks the real filesystem for `.git` (§16.3). No mocks.
+// §16.3: repoKey walks the real filesystem for `.git`. Real temp dirs, no mocks.
 describe('resolveRepoKey (§16.3 — git repo root / non-repo dir key)', () => {
   const made: string[] = [];
   function tmp(): string {
@@ -47,9 +47,8 @@ describe('resolveRepoKey (§16.3 — git repo root / non-repo dir key)', () => {
     expect(path.isAbsolute(resolveRepoKey(rel))).toBe(true);
   });
 
-  // currentRepoInfo backs the monitor:currentRepo handler. The todo path must never be left
-  // without a repo key — before/without an OSC 7 it falls back to the spawn cwd (home), the
-  // same way the artifact viewer does (§16.3/§20.1), so todos work in the spawn directory.
+  // §16.3/§20.1: before any OSC 7 reports a cwd, the repo key falls back to the spawn cwd (home) so
+  // the todo path is never keyless, matching the artifact viewer.
   describe('currentRepoInfo — fallback to the spawn cwd when untracked', () => {
     it('uses the tracked cwd/key when OSC 7 has reported one', () => {
       const root = tmp();

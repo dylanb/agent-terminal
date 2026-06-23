@@ -4,8 +4,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createTodoStore, type TodoStore } from '../../src/main/todoStore';
 
-// The store writes to <repoKey>/.agent-terminal/todos.json (§16.3). Tests use real
-// temp dirs as repo keys — no fs mocks. `now`/`newId` are injected for determinism.
+// §16.3: the store writes to <repoKey>/.agent-terminal/todos.json. Real temp dirs as repo keys, no
+// fs mocks; `now`/`newId` injected for determinism.
 describe('todoStore (§16.3 / §16.4 — repo-scoped CRUD + persistence)', () => {
   let repoA: string;
   let repoB: string;
@@ -106,9 +106,9 @@ describe('todoStore (§16.3 / §16.4 — repo-scoped CRUD + persistence)', () =>
   it('caps the Done section, pruning the oldest done items', () => {
     const store = makeStore({ maxDoneTodos: 2 });
     const items = [store.add(repoA, '1')[0], store.add(repoA, '2')[1], store.add(repoA, '3')[2]];
-    store.setStatus(repoA, items[0].id, 'done'); // oldest done
+    store.setStatus(repoA, items[0].id, 'done');
     store.setStatus(repoA, items[1].id, 'done');
-    const list = store.setStatus(repoA, items[2].id, 'done'); // exceeds cap → prune '1'
+    const list = store.setStatus(repoA, items[2].id, 'done');
     const done = list.filter((t) => t.status === 'done').map((t) => t.text);
     expect(done).not.toContain('1');
     expect(done).toEqual(['2', '3']);
@@ -143,5 +143,34 @@ describe('todoStore (§16.3 / §16.4 — repo-scoped CRUD + persistence)', () =>
     makeStore().add(repoA, 'x');
     const written = readdirSync(join(repoA, '.agent-terminal'));
     expect(written).toEqual(['todos.json']);
+  });
+
+  // ---- contamination resilience (§16.3): the file IS the bucket ----
+  // A todos.json can carry items whose stored repoKey names a *different* repo — e.g. the
+  // .agent-terminal dir was copied from another checkout, or a worktree was seeded from one.
+  // An item belongs to the file it lives in; per-row mutations route by the item's own
+  // repoKey, so a stale stamp sends setStatus/delete to the wrong file (the displayed list
+  // appears to clear / deletions resurrect). list() must report the file's key, not the stamp.
+  function seedRawFile(repo: string, items: unknown[]): void {
+    mkdirSync(join(repo, '.agent-terminal'), { recursive: true });
+    writeFileSync(join(repo, '.agent-terminal', 'todos.json'), JSON.stringify(items));
+  }
+
+  it('normalizes an item carrying a foreign repoKey to the file it was loaded from', () => {
+    seedRawFile(repoA, [
+      { id: 'x1', repoKey: repoB, text: 'carried over', status: 'active', order: 1, createdAt: '2020-01-01T00:00:00.000Z' },
+    ]);
+    const [item] = makeStore().list(repoA);
+    expect(item.repoKey).toBe(repoA);
+  });
+
+  it('self-heals a contaminated file on the next write', () => {
+    seedRawFile(repoA, [
+      { id: 'x1', repoKey: repoB, text: 'carried over', status: 'active', order: 1, createdAt: '2020-01-01T00:00:00.000Z' },
+    ]);
+    const store = makeStore();
+    store.add(repoA, 'fresh'); // any mutation persists the loaded state
+    const onDisk = JSON.parse(readFileSync(join(repoA, '.agent-terminal', 'todos.json'), 'utf8')) as { repoKey: string }[];
+    expect(onDisk.every((t) => t.repoKey === repoA)).toBe(true);
   });
 });

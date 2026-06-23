@@ -1,5 +1,4 @@
-// Bash spawn configuration (§5): platform-correct startup files, xterm-256color
-// terminfo, inherited env, APP_SHELL override, GUI-launch PATH probe fallback.
+// Shell spawn configuration (§5).
 
 import { execFile } from 'node:child_process';
 import os from 'node:os';
@@ -17,14 +16,19 @@ export interface SpawnConfig {
   };
 }
 
+/** The shell the session spawns: an explicit `APP_SHELL` override, else the user's own
+ *  login shell (`$SHELL`), else `bash` as a last resort (§5, v2.79). */
+export function resolveShellPath(env: NodeJS.ProcessEnv): string {
+  return env.APP_SHELL || env.SHELL || 'bash';
+}
+
 /** True when the shell is bash (the only shell whose OSC-133 hooks we install, §15.5). */
 function isBashShell(shellPath: string): boolean {
   return /(^|\/)bash$/.test(shellPath);
 }
 
-/** The directory bash is spawned in (§5): $HOME, else the home arg. Also the artifact
- *  viewer's cwd fallback before the first OSC 7 (§20.1) — so the viewer starts where the
- *  terminal starts, not in the Electron process dir. */
+/** Where the shell is spawned (§5), and the artifact viewer's cwd fallback before the first OSC 7
+ *  (§20.1) — so the viewer starts where the terminal starts, not the Electron process dir. */
 export function spawnCwd(env: NodeJS.ProcessEnv, home: string): string {
   return env.HOME || home;
 }
@@ -41,7 +45,7 @@ export function buildSpawnConfig(input: {
   const cleanEnv = Object.fromEntries(
     Object.entries(env).filter((e): e is [string, string] => e[1] !== undefined),
   );
-  const shellPath = env.APP_SHELL || 'bash';
+  const shellPath = resolveShellPath(env);
 
   // Source the integration script after the user's startup files via the only
   // post-rc env seam bash exposes — PROMPT_COMMAND. Opt-out: APP_SHELL_INTEGRATION=0
@@ -87,15 +91,27 @@ export function mergePaths(currentPath: string, probedPath: string): string {
   return merged.join(':');
 }
 
+/** The Linux GUI-launch PATH probe command (§5, v2.82), or undefined off Linux (macOS recovers
+ *  PATH via the `-l` login shell). Targets the resolved session shell so the probed PATH matches
+ *  the shell the session runs. */
+export function probeShellCommand(
+  platform: NodeJS.Platform,
+  env: NodeJS.ProcessEnv,
+): { file: string; args: string[] } | undefined {
+  if (platform !== 'linux') return undefined;
+  return { file: resolveShellPath(env), args: ['-l', '-c', 'echo -n "$PATH"'] };
+}
+
 /**
- * GUI launches inherit a barren PATH (§5). On Linux, probe a login shell once and
- * merge its PATH with ours when it adds entries — never replacing inherited ones
+ * GUI launches inherit a barren PATH (§5). On Linux, probe the user's login shell once
+ * and merge its PATH with ours when it adds entries — never replacing inherited ones
  * (an active venv/direnv). macOS is covered by the -l shell.
  */
 export function probeLoginPath(): Promise<string | undefined> {
-  if (process.platform !== 'linux') return Promise.resolve(undefined);
+  const cmd = probeShellCommand(process.platform, process.env);
+  if (!cmd) return Promise.resolve(undefined);
   return new Promise((resolve) => {
-    execFile('bash', ['-lc', 'echo -n "$PATH"'], { timeout: 5000 }, (err, stdout) => {
+    execFile(cmd.file, cmd.args, { timeout: 5000 }, (err, stdout) => {
       if (err || !stdout) return resolve(undefined);
       const current = process.env.PATH ?? '';
       const probed = stdout.trim();

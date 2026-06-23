@@ -2,11 +2,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createShell, type Shell } from '../../src/renderer/src/shell';
 import { FOCUS_VIEW_EVENT, FOCUS_TERMINAL_EVENT } from '../../src/renderer/src/paneActions';
+import { resolveKeymap } from '../../src/shared/keymap';
 
-// The converged shell (§22.4 / §24.1C): slim left rail + three view panes + a
-// docked drawer. These tests drive the controller through its public interface and
-// assert only what a user can observe — which pane/nav/tab is active, whether the
-// drawer is docked, the theme attribute — never how it's wired internally.
+// The converged shell (§22.4 / §24.1C): slim left rail + three view panes + a docked drawer.
 
 const SHELL_HTML = `
 <div class="app drawer-open" id="app">
@@ -18,12 +16,14 @@ const SHELL_HTML = `
     <button id="tg">theme</button>
     <span data-theme-label>Light</span>
     <span class="stat loopstat" role="button" tabindex="0" aria-expanded="false" aria-controls="loop-panel">Loop</span>
+    <button class="nav" data-viewbtn="4">Settings</button>
   </aside>
   <aside class="loop-panel" id="loop-panel"><button data-loop-close>x</button></aside>
   <main class="main">
     <div data-viewpane="1" class="on">term</div>
     <div data-viewpane="2">artifacts</div>
     <div data-viewpane="3">todos</div>
+    <div data-viewpane="4">settings</div>
   </main>
   <aside class="drawer">
     <button id="tab-todo" class="dtab" role="tab" aria-selected="false" aria-controls="panel-todo">Todo</button>
@@ -88,7 +88,9 @@ describe('shell controller (§24.1C — views, hotkeys, docked drawer, theme)', 
       expect(shell.getView()).toBe('2');
     });
 
-    it('switches view on Ctrl+1/2/3 (non-mac)', () => {
+    it('switches view on Ctrl+1/2/3 under the PC profile (§7.7)', () => {
+      shell.dispose();
+      shell = createShell(app, { getKeymap: () => resolveKeymap('pc') });
       document.dispatchEvent(new KeyboardEvent('keydown', { key: '3', ctrlKey: true, cancelable: true }));
       expect(shell.getView()).toBe('3');
     });
@@ -97,11 +99,28 @@ describe('shell controller (§24.1C — views, hotkeys, docked drawer, theme)', 
       document.dispatchEvent(new KeyboardEvent('keydown', { key: '2' }));
       expect(shell.getView()).toBe('1');
     });
+
+    it('opens the Settings view (4) from the rail gear and from the openSettings chord (§7.7)', () => {
+      (navBtn('4') as HTMLElement).click();
+      expect(shell.getView()).toBe('4');
+      expect(pane('4').classList.contains('on')).toBe(true);
+      expect(pane('1').classList.contains('on')).toBe(false);
+
+      shell.setView('1');
+      key(','); // ⌘, (mac default) → openSettings → view 4
+      expect(shell.getView()).toBe('4');
+    });
+
+    it('opens Settings on Ctrl+, under the PC profile (§7.7)', () => {
+      shell.dispose();
+      shell = createShell(app, { getKeymap: () => resolveKeymap('pc') });
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: ',', ctrlKey: true, cancelable: true }));
+      expect(shell.getView()).toBe('4');
+    });
   });
 
-  // The shell must not reach into a sibling view's internals to focus it (§22.4); instead it
-  // announces the now-active view on the decoupled bus and each view organism focuses its own
-  // primary control. So the shell's observable focus contract is the FOCUS_VIEW_EVENT it emits.
+  // §22.4: the shell must not reach into a sibling view to focus it — it announces the active view on
+  // the decoupled bus (FOCUS_VIEW_EVENT) and each organism focuses its own control.
   describe('focus routing on view switch (§22.4)', () => {
     let seen: string[];
     let onFocusView: (e: Event) => void;
@@ -128,16 +147,34 @@ describe('shell controller (§24.1C — views, hotkeys, docked drawer, theme)', 
       expect(seen).toEqual(['2']);
     });
 
-    // A Send (todo/capture/artifact) injects without submitting and asks for terminal focus so
-    // the user can finish there (§16.2). From another view that focus would land on a hidden
-    // xterm, so the shell first reveals the terminal view; the terminal then focuses via F1.
+    // A Send asks for terminal focus (§16.2); from another view that focus would land on a hidden
+    // xterm, so the shell must reveal the terminal view first.
     it('reveals and activates the terminal view when a Send requests terminal focus', () => {
       shell.setView('2');
       seen.length = 0;
       window.dispatchEvent(new CustomEvent(FOCUS_TERMINAL_EVENT));
       expect(shell.getView()).toBe('1');
       expect(pane('1').classList.contains('on')).toBe(true);
-      expect(seen).toContain('1'); // and it announces view 1 so the terminal organism focuses
+      expect(seen).toContain('1'); // announces view 1 so the terminal organism focuses itself
+    });
+  });
+
+  // A focus-landing seam for the composition root (WCAG 2.4.3): the root lands focus via this contract
+  // rather than reaching into the shell's private `[data-viewbtn]` markup.
+  describe('focusView (focus-landing seam, §22.4 / WCAG 2.4.3)', () => {
+    beforeEach(() => {
+      shell = createShell(app);
+    });
+
+    it('moves focus to the named view nav button', () => {
+      shell.focusView('1');
+      expect(document.activeElement).toBe(navBtn('1'));
+    });
+
+    it('lands on the requested button even when another view is current', () => {
+      shell.setView('2');
+      shell.focusView('1');
+      expect(document.activeElement).toBe(navBtn('1'));
     });
   });
 
@@ -160,16 +197,25 @@ describe('shell controller (§24.1C — views, hotkeys, docked drawer, theme)', 
       expect(document.querySelector('.scrim, .backdrop')).toBeNull();
     });
 
-    it('toggles on Cmd/Ctrl+K', () => {
+    it('toggles on Cmd+K under the mac profile', () => {
       key('k');
       expect(shell.isDrawerOpen()).toBe(false);
       key('K');
       expect(shell.isDrawerOpen()).toBe(true);
     });
 
+    it('under the PC profile uses Ctrl+Shift+K and leaves bare Ctrl+K for readline kill-line (§7.7)', () => {
+      shell.dispose();
+      shell = createShell(app, { getKeymap: () => resolveKeymap('pc') }); // starts open from markup
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', ctrlKey: true, cancelable: true, bubbles: true }));
+      expect(shell.isDrawerOpen()).toBe(true); // bare Ctrl+K is NOT the drawer — unchanged
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'K', ctrlKey: true, shiftKey: true, cancelable: true, bubbles: true }));
+      expect(shell.isDrawerOpen()).toBe(false); // Ctrl+Shift+K toggled it
+    });
+
     it('marks the drawer hidden when closed so its controls leave the tab order (§22.2)', () => {
       const drawer = document.querySelector('.drawer') as HTMLElement;
-      expect(drawer.hidden).toBe(false); // open from markup
+      expect(drawer.hidden).toBe(false);
       shell.closeDrawer();
       expect(drawer.hidden).toBe(true);
       shell.openDrawer();
@@ -192,9 +238,8 @@ describe('shell controller (§24.1C — views, hotkeys, docked drawer, theme)', 
       expect(shell.isDrawerOpen()).toBe(false);
     });
 
-    // Drawer-tab selection is NOT a shell responsibility — the action-window coordinator
-    // (monitor.ts, §16.1) owns it via the real role="tab"/aria-selected contract and is
-    // covered in monitorPane.test.ts. The shell only docks/undocks the drawer column.
+    // Drawer-tab selection is owned by monitor.ts (§16.1), not the shell; the shell only docks/undocks
+    // the column (covered in monitorPane.test.ts).
 
     it('broadcasts a window resize when the dock width changes, so panes refit (§7.1)', () => {
       const onResize = vi.fn();
@@ -206,9 +251,8 @@ describe('shell controller (§24.1C — views, hotkeys, docked drawer, theme)', 
     });
   });
 
-  // §24.2.3 T2 — the full-height docked loop+gate panel "makes room" via a grid column exactly like
-  // the drawer (no scrim). The rail's Loop read-out (#loopstat) opens it; its close button and Escape
-  // dismiss it. The shell only docks/undocks the column — the panel's content is a sibling organism.
+  // §24.2.3 T2 — the docked loop panel makes room via a grid column like the drawer (no scrim). The
+  // shell only docks/undocks the column; the panel's content is a sibling organism.
   describe('docked loop panel', () => {
     beforeEach(() => {
       shell = createShell(app);
@@ -339,7 +383,7 @@ describe('shell controller (§24.1C — views, hotkeys, docked drawer, theme)', 
     it('Escape exits full screen (and is inert otherwise)', () => {
       const onChange = vi.fn();
       shell = createShell(app, { onViewerFullscreenChange: onChange });
-      key('Escape', false); // not in full screen → nothing to do
+      key('Escape', false); // inert when not in full screen
       expect(onChange).not.toHaveBeenCalled();
       shell.setViewerFullscreen(true);
       key('Escape', false);
@@ -367,12 +411,10 @@ describe('shell controller (§24.1C — views, hotkeys, docked drawer, theme)', 
     });
   });
 
-  // UI-STANDARDS §3.3: the shell must read and write through root.ownerDocument, never the ambient
-  // global `document`. The shell controls pre-existing markup rather than creating much DOM, so the
-  // childElementCount recipe (assertRendersFromHostDocument) does not fit; instead mount it on a root
-  // that lives in a FOREIGN document with the global createElement(NS) starved, drive its public
-  // interface, and assert (a) it does not reach the global document (no throw) and (b) its theme
-  // attribute lands on the FOREIGN documentElement — never the global one.
+  // UI-STANDARDS §3.3: the shell must operate through root.ownerDocument, never the global `document`.
+  // It controls pre-existing markup rather than creating DOM, so the assertRendersFromHostDocument
+  // recipe doesn't fit; instead mount on a FOREIGN document with global createElement(NS) starved and
+  // assert the theme attribute lands on the foreign documentElement, not the global one.
   it('operates through root.ownerDocument, not the global document (UI-STANDARDS §3.3)', () => {
     const foreign = document.implementation.createHTMLDocument();
     foreign.body.innerHTML = SHELL_HTML;
@@ -384,13 +426,10 @@ describe('shell controller (§24.1C — views, hotkeys, docked drawer, theme)', 
     const cens = vi.spyOn(document, 'createElementNS').mockImplementation(reach('createElementNS'));
     try {
       shell = createShell(foreignApp);
-      // Drive the public interface: view switch, drawer + loop toggles, and a theme toggle.
       shell.setView('2');
       shell.toggleDrawer();
       shell.toggleLoopPanel();
       shell.setTheme('dark');
-      // Discriminating: the theme attribute landed on the FOREIGN documentElement, and the global
-      // one was left untouched (a reach to the global `document` would have hit it instead).
       expect(foreign.documentElement.getAttribute('data-theme')).toBe('dark');
       expect(document.documentElement.getAttribute('data-theme')).toBeNull();
       expect(foreignApp.classList.contains('drawer-open')).toBe(false);

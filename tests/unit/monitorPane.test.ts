@@ -79,8 +79,7 @@ describe('action window DOM (§16 / §24.1 — tabs, capture cards, focus)', () 
 
   beforeEach(() => {
     document.body.innerHTML = MONITOR_HTML;
-    // jsdom does not implement scrollIntoView; shim it so the cross-highlight reveal
-    // (§16.8) can call it.
+    // jsdom does not implement scrollIntoView (§16.8 reveal calls it).
     window.HTMLElement.prototype.scrollIntoView = () => {};
     handlers = {};
     settings = { ...DEFAULT_UI_SETTINGS };
@@ -196,7 +195,6 @@ describe('action window DOM (§16 / §24.1 — tabs, capture cards, focus)', () 
     expect(card.querySelector('.chunk-check')).toBeTruthy();
     expect(cardButtons(card).some((t) => t?.includes('Add to todo'))).toBe(false);
     expect(cardButtons(card).some((t) => t?.includes('Insert'))).toBe(false);
-    // The bulk Add-to-todo lives in the pane toolbar.
     expect(byId('add-selected-todo')).toBeTruthy();
   });
 
@@ -211,7 +209,7 @@ describe('action window DOM (§16 / §24.1 — tabs, capture cards, focus)', () 
     (byId('add-selected-todo') as HTMLButtonElement).click();
     await flush();
     expect(monitor.todoAdd).toHaveBeenCalledWith('/repo', 'finding one', { type: 'capture' });
-    // The card stays put during the undo window, dimmed as processed (§24.2.1).
+    // Stays put during the undo window, dimmed as processed (§24.2.1).
     expect(blocks().querySelector('[data-event-id="f1"]')).toBeTruthy();
     expect(card.classList.contains('chunk-processed')).toBe(true);
   });
@@ -290,7 +288,7 @@ describe('action window DOM (§16 / §24.1 — tabs, capture cards, focus)', () 
     await flush();
     handlers.event!(makeEvent({ id: 'r', type: 'report', source: 'shadow-scan', text: 'partial report' }));
     handlers.event!(makeEvent({ id: 'f1', type: 'finding', parentId: 'r', text: 'one' }));
-    expect(blocks().querySelector('[data-event-id="r"]')).toBeNull(); // the report blob is never a card
+    expect(blocks().querySelector('[data-event-id="r"]')).toBeNull();
     expect(blocks().querySelector('[data-event-id="f1"]')).toBeTruthy();
   });
 
@@ -309,7 +307,7 @@ describe('action window DOM (§16 / §24.1 — tabs, capture cards, focus)', () 
     handlers.event!(makeEvent({ id: 'f1', type: 'finding', parentId: 'r', text: 'one' }));
     handlers.event!(makeEvent({ id: 'f2', type: 'finding', parentId: 'r', text: 'two' }));
     expect(blocks().querySelectorAll('.finding').length).toBe(2);
-    handlers.eventRemoved!('r'); // supersede the report → its findings go with it
+    handlers.eventRemoved!('r');
     expect(blocks().querySelectorAll('.finding').length).toBe(0);
   });
 
