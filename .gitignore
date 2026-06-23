@@ -4,6 +4,7 @@ dist/
 build/*
 !build/icon.svg
 !build/icon.png
+!build/icon.svg.sha256
 test-results/
 playwright-report/
 *.log
