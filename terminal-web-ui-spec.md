@@ -314,7 +314,7 @@ Two processes, connected by Electron IPC. `node-pty` and the shadow terminal run
 ```mermaid
 flowchart LR
     subgraph Main["Main process (Node)"]
-        PTY["node-pty<br/>(interactive bash → agent CLI)"]
+        PTY["node-pty<br/>(interactive login shell → agent CLI)"]
         SHADOW["@xterm/headless<br/>shadow screen model<br/>(modes, alt-screen, buffer,<br/>quiescence detector)"]
         SCAN["semantic scanner<br/>(adapters + generic,<br/>active→quiet · §15.2/§15.3)"]
         CMD["command tracker<br/>(OSC 133 spans · §15.5)"]

@@ -21,7 +21,7 @@ function isBashShell(shellPath: string): boolean {
   return /(^|\/)bash$/.test(shellPath);
 }
 
-/** Where bash is spawned (§5), and the artifact viewer's cwd fallback before the first OSC 7
+/** Where the shell is spawned (§5), and the artifact viewer's cwd fallback before the first OSC 7
  *  (§20.1) — so the viewer starts where the terminal starts, not the Electron process dir. */
 export function spawnCwd(env: NodeJS.ProcessEnv, home: string): string {
   return env.HOME || home;

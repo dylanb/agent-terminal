@@ -3,7 +3,7 @@ import { buildSpawnConfig, mergePaths, spawnCwd } from '../../src/main/pty';
 
 const HOME = '/home/u';
 
-describe('spawnCwd (§5 — the dir bash is spawned in, also the viewer cwd fallback §20.1)', () => {
+describe('spawnCwd (§5 — the dir the shell is spawned in, also the viewer cwd fallback §20.1)', () => {
   it('uses $HOME when set', () => {
     expect(spawnCwd({ HOME }, '/fallback')).toBe(HOME);
   });
@@ -141,6 +141,16 @@ describe('shell-integration hook (§15.5 / D3 — PROMPT_COMMAND env seam, opt-o
     const cfg = buildSpawnConfig({
       platform: 'linux',
       env: { HOME, APP_SHELL: '/bin/zsh' },
+      home: HOME,
+      integrationScriptPath: SCRIPT,
+    });
+    expect(cfg.options.env.APP_TERM_INTEGRATION).toBeUndefined();
+  });
+
+  it('omits the hook when the default shell ($SHELL) is non-bash', () => {
+    const cfg = buildSpawnConfig({
+      platform: 'linux',
+      env: { HOME, SHELL: '/bin/zsh' },
       home: HOME,
       integrationScriptPath: SCRIPT,
     });
