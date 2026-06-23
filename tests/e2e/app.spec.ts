@@ -105,7 +105,7 @@ test.beforeEach(async () => {
   userDataDir = mkdtempSync(join(tmpdir(), 'agent-term-e2e-ud-'));
   app = await electron.launch({
     args: launchArgs(),
-    env: { ...process.env, APP_SHELL: 'bash',APP_SUBMIT_DELAY_MS: '100' },
+    env: { ...process.env, APP_SHELL: 'bash', APP_SUBMIT_DELAY_MS: '100' },
   });
   page = await app.firstWindow();
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
@@ -441,7 +441,7 @@ test('a todo persists in-repo across an app restart (§16.3)', async () => {
 
   // Across a full restart, the in-repo todos.json is reread when the agent cd's back (§16.3).
   await app.close();
-  app = await electron.launch({ args: launchArgs(), env: { ...process.env, APP_SHELL: 'bash',APP_SUBMIT_DELAY_MS: '100' } });
+  app = await electron.launch({ args: launchArgs(), env: { ...process.env, APP_SHELL: 'bash', APP_SUBMIT_DELAY_MS: '100' } });
   page = await app.firstWindow();
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
@@ -498,7 +498,7 @@ test('a captured report (with findings) survives a monitor reload (capture:last�
   await app.close();
   app = await electron.launch({
     args: launchArgs(),
-    env: { ...process.env, APP_SHELL: 'bash',APP_SUBMIT_DELAY_MS: '100', APP_SHELL_INTEGRATION: '0' },
+    env: { ...process.env, APP_SHELL: 'bash', APP_SUBMIT_DELAY_MS: '100', APP_SHELL_INTEGRATION: '0' },
   });
   page = await app.firstWindow();
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
@@ -524,7 +524,7 @@ test('capture ↔ terminal cross-highlight: double-click reveals each side (§16
   await app.close();
   app = await electron.launch({
     args: launchArgs(),
-    env: { ...process.env, APP_SHELL: 'bash',APP_SUBMIT_DELAY_MS: '100', APP_SHELL_INTEGRATION: '0' },
+    env: { ...process.env, APP_SHELL: 'bash', APP_SUBMIT_DELAY_MS: '100', APP_SHELL_INTEGRATION: '0' },
   });
   page = await app.firstWindow();
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
@@ -814,7 +814,7 @@ test('the viewer starts in sync with the terminal cwd, before any cd (§20.1)', 
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-home-'));
   writeFileSync(join(home, 'home-marker.md'), '# Home marker\n');
   await app.close();
-  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash',HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
+  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
   page = await app.firstWindow();
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
@@ -1080,7 +1080,7 @@ test('full-screen collapse keeps the header and tree out of the tab order (§22.
 test('the quick-send drawer is closed on startup and inert while closed (§22.2)', async () => {
   // beforeEach opens the drawer, so relaunch a fresh app to observe the real startup default (§22.2).
   await app.close();
-  app = await electron.launch({ args: launchArgs(), env: { ...process.env, APP_SHELL: 'bash',APP_SUBMIT_DELAY_MS: '100' } });
+  app = await electron.launch({ args: launchArgs(), env: { ...process.env, APP_SHELL: 'bash', APP_SUBMIT_DELAY_MS: '100' } });
   page = await app.firstWindow();
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
@@ -1343,7 +1343,7 @@ test('the flow strip follows the cwd: cd into a repo shows its flow and drives i
   const repo = seedFlowRepo('agent-term-e2e-flow-a-', 'groom-ticket');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-flow-home-'));
   await app.close();
-  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash',HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
+  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
   page = await app.firstWindow();
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
@@ -1373,7 +1373,7 @@ test('a multi-step flow walks the bookended rail: Start → Advance ×3 reaches 
   const repo = seedMultiStepFlowRepo('agent-term-e2e-flow-multi-', ['groom', 'plan', 'implement']);
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-flow-multi-home-'));
   await app.close();
-  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash',HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
+  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
   page = await app.firstWindow();
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
@@ -1420,7 +1420,7 @@ test('advancing INTO a later step fires its entry action: the skill injects on A
   const repo = seedSkillOnSecondStepFlowRepo('agent-term-e2e-flow-t3adv-', 'buildctl');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-flow-t3adv-home-'));
   await app.close();
-  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash',HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
+  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
   page = await app.firstWindow();
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
@@ -1445,7 +1445,7 @@ test('entering a bootstrap loop step prompts for its typed input; Confirm inject
   const repo = seedBootstrapFlowRepo('agent-term-e2e-flow-t3boot-');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-flow-t3boot-home-'));
   await app.close();
-  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash',HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
+  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
   page = await app.firstWindow();
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
@@ -1482,7 +1482,7 @@ test('a busy shell refuses the bootstrap on Confirm: refusal notice, nothing inj
   const repo = seedBootstrapFlowRepo('agent-term-e2e-flow-t3bootbusy-');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-flow-t3bootbusy-home-'));
   await app.close();
-  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash',HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
+  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
   page = await app.firstWindow();
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
@@ -1517,7 +1517,7 @@ test('a loop step shows a Loop read-out that expands a docked state-mirror panel
   );
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-loop-home-'));
   await app.close();
-  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash',HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
+  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
   page = await app.firstWindow();
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
@@ -1572,7 +1572,7 @@ test('the awaiting-human cue appears, re-fires after dismiss, and clears as the 
   writeFileSync(stateFile, 'schema_version: 4\npr: 179\nbranch: agent-loop/issue-176\niteration: 9\nstatus: awaiting-human-pr-approval\n');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-cue-home-'));
   await app.close();
-  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash',HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
+  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
   page = await app.firstWindow();
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
@@ -1615,7 +1615,7 @@ test('the reveal signal lands the user on the loop read-out, from another view a
   writeFileSync(stateFile, 'schema_version: 4\npr: 179\nbranch: agent-loop/issue-176\niteration: 9\nstatus: awaiting-human-pr-approval\n');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-reveal-home-'));
   await app.close();
-  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash',HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
+  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
   page = await app.firstWindow();
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
@@ -1664,7 +1664,7 @@ test('changing directories swaps flow state; each repo is independent and visiti
   const repoB = seedFlowRepo('agent-term-e2e-flow-B-', 'beta');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-flow-sw-home-'));
   await app.close();
-  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash',HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
+  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
   page = await app.firstWindow();
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
@@ -1701,7 +1701,7 @@ test('cd into a directory with no flow.yaml shows an error and creates no .agent
   mkdirSync(join(plain, '.git'), { recursive: true });
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-flow-none-home-'));
   await app.close();
-  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash',HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
+  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
   page = await app.firstWindow();
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
@@ -1728,7 +1728,7 @@ test('the definition falls back to the global flow.yaml, but state is still writ
     'name: global-default\nsteps:\n  - id: global-step\n    kind: manual\n',
   );
   await app.close();
-  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash',HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
+  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
   page = await app.firstWindow();
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
@@ -1748,7 +1748,7 @@ test('flow progression persists across a relaunch, per repo (§24.2.2 S3 / §19.
   const repo = seedFlowRepo('agent-term-e2e-flow-persist-', 'groom-ticket');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-flow-persist-home-'));
   const launch = async (): Promise<void> => {
-    app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash',HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
+    app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
     page = await app.firstWindow();
     await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
     await typeCommand(`cd "${repo}"`);
@@ -1778,7 +1778,7 @@ test("the flow strip's derived n/m done moves as todos are checked, pushed live 
   const repo = seedFlowRepo('agent-term-e2e-flow-s5-', 'groom-ticket');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-flow-s5-home-'));
   await app.close();
-  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash',HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
+  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
   page = await app.firstWindow();
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
@@ -1810,7 +1810,7 @@ test('advancing with todos outstanding warns but still completes, and is undoabl
   const repo = seedFlowRepo('agent-term-e2e-flow-s5warn-', 'groom-ticket');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-flow-s5warn-home-'));
   await app.close();
-  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash',HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
+  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
   page = await app.firstWindow();
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
@@ -1850,7 +1850,7 @@ test('Start injects the skill on entry; todos come from the template ON DEMAND i
   });
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-flow-s4-home-'));
   await app.close();
-  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash',HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
+  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
   page = await app.firstWindow();
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
@@ -1893,7 +1893,7 @@ test('the todo overlay offers a picker of named templates; choosing one instanti
   });
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-flow-pick-home-'));
   await app.close();
-  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash',HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
+  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
   page = await app.firstWindow();
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
@@ -1926,7 +1926,7 @@ test('Start refuses to inject the skill over a busy shell, showing the refusal (
   const repo = seedFlowRepoWithEntry('agent-term-e2e-flow-s4busy-', 'groom-ticket', { skill: 'groomctl' });
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-flow-s4busy-home-'));
   await app.close();
-  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash',HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
+  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
   page = await app.firstWindow();
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
