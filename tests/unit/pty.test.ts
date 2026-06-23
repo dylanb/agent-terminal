@@ -59,8 +59,12 @@ describe('probeShellCommand (§5 — the Linux GUI PATH probe targets the resolv
     expect(probeShellCommand('linux', { HOME })?.file).toBe('bash');
   });
 
-  it('probes as a login shell so login-only PATH files are sourced', () => {
-    expect(probeShellCommand('linux', { HOME, SHELL: '/bin/zsh' })?.args).toContain('-l');
+  it('probes via a login shell running a PATH echo — the full command is pinned', () => {
+    expect(probeShellCommand('linux', { HOME, SHELL: '/bin/zsh' })?.args).toEqual([
+      '-l',
+      '-c',
+      'echo -n "$PATH"',
+    ]);
   });
 });
 

@@ -91,14 +91,9 @@ export function mergePaths(currentPath: string, probedPath: string): string {
   return merged.join(':');
 }
 
-/**
- * The Linux GUI-launch PATH probe (§5): which shell to ask and how. Probes the **same**
- * shell the session resolves to (§5, v2.79) so a non-bash `$SHELL` contributes its own
- * login PATH — asking a hardcoded bash would miss a zsh/fish user's shell-specific PATH.
- * Linux-only; macOS recovers PATH via the `-l` login shell. `-l -c` is the portable
- * login+command form (a shell with a list-valued, non-colon `$PATH` like fish only ever
- * appends a harmless extra entry, since mergePaths splits on `:` and the OS ignores it).
- */
+/** The Linux GUI-launch PATH probe command (§5, v2.82), or undefined off Linux (macOS recovers
+ *  PATH via the `-l` login shell). Targets the resolved session shell so the probed PATH matches
+ *  the shell the session runs. */
 export function probeShellCommand(
   platform: NodeJS.Platform,
   env: NodeJS.ProcessEnv,
