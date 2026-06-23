@@ -101,6 +101,10 @@
 
 ---
 
+> **Changelog v2.80:** **§11 — the repo now uses pnpm.** `package.json` pins `packageManager: pnpm@10.x` and declares `pnpm.onlyBuiltDependencies` (node-pty/electron/esbuild — pnpm v10 blocks dependency build scripts by default); a new `.npmrc` sets `node-linker=hoisted` so `@electron/rebuild` and electron-builder operate over a flat `node_modules` instead of pnpm's symlinked store. The `package-lock.json` is replaced by `pnpm-lock.yaml`; the `postinstall` electron-rebuild (§11 native-module gotcha) runs unchanged under pnpm. All §11 commands are now `pnpm …`. No application behavior or contract change — toolchain only; verified by the full vitest suite passing post-migration.
+>
+> **Changelog v2.79:** **§5 — the hosted session now defaults to the user's own login shell (`$SHELL`), not hardcoded bash.** The spawn shell resolves `APP_SHELL || $SHELL || bash`: an explicit `APP_SHELL` still wins, otherwise the session uses whatever the user's default shell is (zsh on modern macOS, etc.), falling back to `bash` only when `$SHELL` is unset. This supersedes §5's "User said bash specifically" note below — bash is now the last-resort fallback, not the default. **Unchanged:** the opt-out OSC 133 shell-integration hook (§15.5) still installs only for bash (the `isBashShell` gate already covered a non-bash `APP_SHELL`, and now equally covers a non-bash `$SHELL`); command-output capture is simply unavailable under a non-bash default shell, as already specified. Login-shell args (`-l` on macOS) are shell-agnostic and unchanged. RED-first: `buildSpawnConfig` unit pins that `$SHELL` is used when `APP_SHELL` is unset, that `APP_SHELL` takes precedence over `$SHELL`, and that bash remains the fallback when neither is set.
+>
 > **Changelog v2.78 (was v2.74; renumbered in the keymap-branch merge to clear the v2.72–v2.74 collision with §7.7's entries below):** **§24.2.3 T4 refined — per-repo dedup is genuinely per-repo, and the cue's `role=alert` region is now persistent (iteration-5 review).** Two correctness refinements over v2.77. **(1) Per-repo identity is a map, not a single slot.** v2.77 keyed the dedup by `(repoKey, status, iteration)` but stored only ONE occurrence (repoKey inside the value); a same-repo return visit (cd A→B→A) overwrote the slot and re-fired the notification / re-showed the cue at the unchanged occurrence. Both surfaces now hold a **per-`repoKey` map** of each repo's last occurrence — the notifier dedups against this repo's last-signalled `(status, iteration)`, and the cue records/checks the dismissed occurrence per repo — so a return visit stays deduped/dismissed while two distinct repos at the same coords remain distinct. **(2) The cue is a persistent live region.** v2.77 revealed the `role=alert` host *before* populating it; the host is now **never `[hidden]`** — the empty state collapses purely via CSS (`.attn-bar:empty`), keeping the region in the a11y tree across hide/show so injected content (not a display flip) is the announcement trigger (WAI-ARIA Alert pattern, WCAG 4.1.3). The empty state exposes **no focusable descendant**, so this does not reintroduce the v2.44 hidden-but-focusable trap (the prior `[hidden]` guard is preserved by the empty ⟺ no-focusables invariant). No contract shape change (the cue/notifier identity stays internal); RED-first (return-visit dedup pins on both surfaces, a persistent-region pin, and a tracked-closer cross-repo close pin).
 >
 > **Changelog v2.77 (was v2.73; renumbered in the keymap-branch merge):** **§24.2.3 T4 hardened — per-repo occurrence identity, dismiss focus restore, and the committed flow diagram (iteration-4 review).** The distinct-entry identity that dedups the OS notification and the cue's dismissed occurrence is now keyed by **`(repoKey, status, iteration)`**, not the global `(status, iteration)` — the loop is repo-scoped (§16.3), so two repos coincidentally at the same status+iteration are **distinct loops**: cd-ing between them re-raises rather than silently deduping, a dismiss in one repo no longer carries over to another, and a glance at a non-loop repo no longer closes a different repo's still-valid notification (the notifier clears only the active repo's notification). Dismissing the cue now **restores focus** through an injected `onDismiss` seam (the composition root lands focus on the loop read-out toggle, else the Terminal nav button) instead of dropping it to `<body>` (WCAG 2.4.3); the `role=alert` region is **revealed before it is populated** so the AT mutation fires on a visible live region (WCAG 4.1.3). The **T4 data-flow Mermaid diagram** is now committed in §24.2.3. No contract shape change (the cue/notifier identity is internal); RED-first throughout (per-repo notifier + cue tests, the dismiss-focus test, and close-on-distinct / `dispose` / already-on-Terminal coverage pins).
@@ -399,8 +403,8 @@ To match what the user already experiences in their native terminal, branch on p
 const os = require('os');
 const isMac = process.platform === 'darwin';
 
-// User said "bash" specifically. Allow override via env for flexibility.
-const shellPath = process.env.APP_SHELL || 'bash';
+// Default to the user's own login shell; APP_SHELL overrides, bash is the last resort (v2.79).
+const shellPath = process.env.APP_SHELL || process.env.SHELL || 'bash';
 const shellArgs = isMac ? ['-l'] : [];   // login on macOS, plain interactive on Linux
 
 const ptyProcess = pty.spawn(shellPath, shellArgs, {
@@ -418,7 +422,7 @@ const ptyProcess = pty.spawn(shellPath, shellArgs, {
 
 **Notes / gotchas**
 - `name: 'xterm-256color'` makes `node-pty` advertise the right terminfo; without it, color and key handling degrade.
-- macOS ships bash 3.2 at `/bin/bash`. If the user installed a modern bash via Homebrew it lives at `/opt/homebrew/bin/bash` (Apple Silicon) or `/usr/local/bin/bash` (Intel). Expose `APP_SHELL` so they can point at it.
+- The session defaults to the user's own login shell via `$SHELL` (v2.79); `APP_SHELL` overrides it and `bash` is the last-resort fallback when `$SHELL` is unset. macOS ships bash 3.2 at `/bin/bash`; if the user wants bash but a modern Homebrew build (`/opt/homebrew/bin/bash` on Apple Silicon, `/usr/local/bin/bash` on Intel), they point `APP_SHELL` at it.
 - Do **not** pass `--rcfile` or `--noprofile`; that would defeat "use the user's default configuration."
 - The locale-dependent vars (`LANG`, `LC_*`) are inherited via `...process.env`, which keeps Unicode/emoji rendering correct.
 - **GUI launches start with a barren environment.** When the app is opened from Launchpad or a Linux `.desktop` file rather than a terminal, Electron's `process.env` lacks the user's interactive `PATH` (nvm/asdf shims, `~/.local/bin`, Homebrew) — and agent CLIs are typically npm-installed onto exactly those paths. macOS is covered: the `-l` login shell re-evaluates the profile inside the PTY. On Linux the non-login shell sources `~/.bashrc`, which rebuilds `PATH` for most nvm/asdf setups — but `PATH` set only in `~/.profile` (login-only) will be missing. **Verify that `claude`/`codex` resolve in a GUI-launched session on Linux**; if not, probe once at startup with `bash -lc 'echo $PATH'` and seed the PTY env with the result. (Launching from a terminal has the inverse issue — a pre-polluted inherited env — which is acceptable: it matches what a nested shell would see.)
@@ -1026,24 +1030,26 @@ CSS: panes side by side via flex; `#terminal` fills its pane's remaining height 
 
 ## 11. Build, run, and packaging
 
+The repo uses **pnpm** (`packageManager` in `package.json`). `.npmrc` pins `node-linker=hoisted` so `@electron/rebuild` and electron-builder see a flat `node_modules`, and `pnpm.onlyBuiltDependencies` allows node-pty/electron/esbuild to run install scripts (pnpm v10 blocks build scripts by default).
+
 ### Dependencies
 ```
-npm i @xterm/xterm @xterm/headless @xterm/addon-fit node-pty
-npm i -D electron electron-builder @electron/rebuild
+pnpm add @xterm/xterm @xterm/headless @xterm/addon-fit node-pty
+pnpm add -D electron electron-builder @electron/rebuild
 ```
 (Pin `@xterm/xterm` and `@xterm/headless` to the same version — §8.2.)
 
 ### The native-module gotcha
 `node-pty` is a native addon and must be compiled against **Electron's** Node ABI, not the system Node. After install (and after any Electron version bump), run:
 ```
-npx electron-rebuild -f -w node-pty
+pnpm exec electron-rebuild -f -w node-pty
 ```
 electron-builder triggers this during packaging; for `electron .` dev runs you must do it manually once.
 
 ### Run (dev)
 ```
-npm run rebuild   # electron-rebuild for node-pty (also runs on postinstall)
-npm run dev       # electron-vite dev (renderer HMR)
+pnpm run rebuild   # electron-rebuild for node-pty (also runs on postinstall)
+pnpm run dev       # electron-vite dev (renderer HMR)
 ```
 
 ### Package

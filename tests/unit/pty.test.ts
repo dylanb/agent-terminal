@@ -59,6 +59,29 @@ describe('buildSpawnConfig (§5)', () => {
     expect(cfg.shellPath).toBe('/opt/homebrew/bin/bash');
   });
 
+  it("uses the user's default shell ($SHELL) when APP_SHELL is unset", () => {
+    const cfg = buildSpawnConfig({
+      platform: 'darwin',
+      env: { HOME, SHELL: '/bin/zsh' },
+      home: HOME,
+    });
+    expect(cfg.shellPath).toBe('/bin/zsh');
+  });
+
+  it('APP_SHELL takes precedence over $SHELL', () => {
+    const cfg = buildSpawnConfig({
+      platform: 'linux',
+      env: { HOME, APP_SHELL: '/opt/homebrew/bin/bash', SHELL: '/bin/zsh' },
+      home: HOME,
+    });
+    expect(cfg.shellPath).toBe('/opt/homebrew/bin/bash');
+  });
+
+  it('falls back to bash when neither APP_SHELL nor $SHELL is set', () => {
+    const cfg = buildSpawnConfig({ platform: 'linux', env: { HOME }, home: HOME });
+    expect(cfg.shellPath).toBe('bash');
+  });
+
   it('advertises xterm-256color and truecolor on top of the inherited env', () => {
     const cfg = buildSpawnConfig({
       platform: 'linux',

@@ -6,8 +6,10 @@ The skeleton proves the full loop: a PTY-attached bash session rendered with xte
 
 ## Setup
 
+This repo uses [pnpm](https://pnpm.io). `.npmrc` pins `node-linker=hoisted` so `@electron/rebuild` and electron-builder see a flat `node_modules`.
+
 ```sh
-npm install        # postinstall runs electron-rebuild for node-pty automatically
+pnpm install        # postinstall runs electron-rebuild for node-pty automatically
 ```
 
 > **The native-module gotcha:** `node-pty` must be compiled against **Electron's** Node ABI.
@@ -15,20 +17,20 @@ npm install        # postinstall runs electron-rebuild for node-pty automaticall
 > install scripts were skipped), run:
 >
 > ```sh
-> npm run rebuild
+> pnpm run rebuild
 > ```
 
 ## Run
 
 ```sh
-npm run dev        # electron-vite dev mode (renderer HMR)
+pnpm run dev        # electron-vite dev mode (renderer HMR)
 ```
 
 ## Test
 
 ```sh
-npm test           # vitest: unit + shadow-model integration tests
-npm run test:e2e   # Playwright _electron: full loop against real bash (needs a display)
+pnpm test           # vitest: unit + shadow-model integration tests
+pnpm run test:e2e   # Playwright _electron: full loop against real bash (needs a display)
 ```
 
 The agent-in-the-loop acceptance criteria (spec §12 — Claude Code paste-mode handling, alt-screen TUIs, quiescence tuning) are verified manually with a real agent CLI.
@@ -36,12 +38,12 @@ The agent-in-the-loop acceptance criteria (spec §12 — Claude Code paste-mode 
 ## Package
 
 ```sh
-npm run package    # electron-builder: dmg/zip (macOS), AppImage/deb (Linux)
+pnpm run package    # electron-builder: dmg/zip (macOS), AppImage/deb (Linux)
 ```
 
 ## Settings (environment variables)
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `APP_SHELL` | `bash` | Shell binary for the hosted session (e.g. Homebrew bash on macOS). |
+| `APP_SHELL` | `$SHELL`, else `bash` | Shell binary for the hosted session. Defaults to the user's login shell; set this to override (e.g. Homebrew bash on macOS). |
 | `APP_SUBMIT_DELAY_MS` | `50` | Settle delay between an injected paste and the submitting `\r` (§9.3). Raise on loaded machines/CI if "Insert & submit" submissions are swallowed. |

@@ -1,4 +1,4 @@
-// Bash spawn configuration (§5).
+// Shell spawn configuration (§5).
 
 import { execFile } from 'node:child_process';
 import os from 'node:os';
@@ -39,7 +39,7 @@ export function buildSpawnConfig(input: {
   const cleanEnv = Object.fromEntries(
     Object.entries(env).filter((e): e is [string, string] => e[1] !== undefined),
   );
-  const shellPath = env.APP_SHELL || 'bash';
+  const shellPath = env.APP_SHELL || env.SHELL || 'bash';
 
   // Source the integration script after the user's startup files via the only
   // post-rc env seam bash exposes — PROMPT_COMMAND. Opt-out: APP_SHELL_INTEGRATION=0
