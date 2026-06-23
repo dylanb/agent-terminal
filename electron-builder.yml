@@ -11,6 +11,11 @@ asarUnpack:
   # Keep the sourced shell-integration script on disk so bash can read it (§15.5 / D3).
   # Scoped to the .bash asset only — the compiled main bundle stays sealed inside the asar.
   - out/main/**/*.bash
+# BrowserWindow.icon loads from disk at runtime; ship the raster beside the asar so the resolved
+# process.resourcesPath/icon.png exists in a packaged app (see resolveWindowIconPath).
+extraResources:
+  - from: build/icon.png
+    to: icon.png
 mac:
   target:
     - dmg

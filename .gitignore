@@ -1,7 +1,9 @@
 node_modules/
 out/
 dist/
-build/
+build/*
+!build/icon.svg
+!build/icon.png
 test-results/
 playwright-report/
 *.log
