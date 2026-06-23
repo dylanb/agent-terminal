@@ -68,17 +68,23 @@ import { createInjectionSuppressor } from './injectionSuppression';
 import { createClaudeCodeAdapter } from './adapters/claudeCode';
 import { createGenericAdapter } from './adapters/generic';
 import { SHELL_INTEGRATION_SCRIPT } from './shellIntegration';
-import { resolveWindowIconPath } from './appIcon';
+import { resolveWindowIconPath, resolveDockIconPath } from './appIcon';
 
 async function createWindow(): Promise<void> {
+  const iconLoc = {
+    packaged: app.isPackaged,
+    resourcesPath: process.resourcesPath,
+    appPath: app.getAppPath(),
+  };
+  // macOS draws the Dock / CMD-TAB icon from app.dock, not BrowserWindow.icon. In a packaged .app the
+  // bundle's .icns also covers this; setting it here additionally fixes the dev Dock icon.
+  // TODO(dylan): app.dock is macOS-only, so this has no Linux e2e — resolveDockIconPath is unit-covered.
+  const dockIcon = resolveDockIconPath(process.platform, iconLoc);
+  if (dockIcon && app.dock) app.dock.setIcon(dockIcon);
   const win = new BrowserWindow({
     width: 1280,
     height: 800,
-    icon: resolveWindowIconPath({
-      packaged: app.isPackaged,
-      resourcesPath: process.resourcesPath,
-      appPath: app.getAppPath(),
-    }),
+    icon: resolveWindowIconPath(iconLoc),
     webPreferences: {
       preload: path.join(__dirname, '../preload/index.js'),
       contextIsolation: true,

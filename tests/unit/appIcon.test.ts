@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import { resolveWindowIconPath } from '../../src/main/appIcon';
+import { resolveWindowIconPath, resolveDockIconPath } from '../../src/main/appIcon';
 
 // The runtime BrowserWindow icon. Packaged builds get the PNG copied beside the asar via
 // electron-builder `extraResources`; in dev it sits at <appPath>/build/icon.png (the same asset
@@ -17,6 +17,29 @@ describe('resolveWindowIconPath', () => {
     expect(
       resolveWindowIconPath({ packaged: false, resourcesPath: '/ignored', appPath: '/project' }),
     ).toBe(path.join('/project', 'build', 'icon.png'));
+  });
+});
+
+// macOS draws the Dock / CMD-TAB icon from the app bundle's .icns (or app.dock.setIcon at runtime),
+// NOT from BrowserWindow.icon — so the dock icon is set only on darwin. Off darwin app.dock does not
+// exist; resolving null keeps index.ts from calling it.
+describe('resolveDockIconPath', () => {
+  it('resolves to the window icon path on darwin (packaged)', () => {
+    expect(
+      resolveDockIconPath('darwin', { packaged: true, resourcesPath: '/app/resources', appPath: '/app/app.asar' }),
+    ).toBe(path.join('/app/resources', 'icon.png'));
+  });
+
+  it('resolves to build/icon.png on darwin in dev', () => {
+    expect(
+      resolveDockIconPath('darwin', { packaged: false, resourcesPath: '/ignored', appPath: '/project' }),
+    ).toBe(path.join('/project', 'build', 'icon.png'));
+  });
+
+  it('resolves to null off darwin', () => {
+    const loc = { packaged: false, resourcesPath: '/r', appPath: '/p' };
+    expect(resolveDockIconPath('linux', loc)).toBeNull();
+    expect(resolveDockIconPath('win32', loc)).toBeNull();
   });
 });
 
