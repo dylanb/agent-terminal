@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildSpawnConfig, mergePaths, spawnCwd } from '../../src/main/pty';
+import { buildSpawnConfig, mergePaths, probeShellCommand, spawnCwd } from '../../src/main/pty';
 
 const HOME = '/home/u';
 
@@ -34,6 +34,33 @@ describe('mergePaths (§5 — GUI-launch PATH probe must not clobber the inherit
 
   it('ignores empty segments', () => {
     expect(mergePaths('/usr/bin:', ':/opt/bin')).toBe('/usr/bin:/opt/bin');
+  });
+});
+
+describe('probeShellCommand (§5 — the Linux GUI PATH probe targets the resolved shell)', () => {
+  it('returns nothing off Linux (macOS recovers PATH via the -l login shell instead)', () => {
+    expect(probeShellCommand('darwin', { HOME, SHELL: '/bin/zsh' })).toBeUndefined();
+  });
+
+  it("probes the user's own default shell ($SHELL), not hardcoded bash", () => {
+    expect(probeShellCommand('linux', { HOME, SHELL: '/bin/zsh' })?.file).toBe('/bin/zsh');
+  });
+
+  it('probes APP_SHELL in precedence over $SHELL', () => {
+    const cmd = probeShellCommand('linux', {
+      HOME,
+      APP_SHELL: '/opt/homebrew/bin/bash',
+      SHELL: '/bin/zsh',
+    });
+    expect(cmd?.file).toBe('/opt/homebrew/bin/bash');
+  });
+
+  it('falls back to bash when neither APP_SHELL nor $SHELL is set', () => {
+    expect(probeShellCommand('linux', { HOME })?.file).toBe('bash');
+  });
+
+  it('probes as a login shell so login-only PATH files are sourced', () => {
+    expect(probeShellCommand('linux', { HOME, SHELL: '/bin/zsh' })?.args).toContain('-l');
   });
 });
 
@@ -155,6 +182,17 @@ describe('shell-integration hook (§15.5 / D3 — PROMPT_COMMAND env seam, opt-o
       integrationScriptPath: SCRIPT,
     });
     expect(cfg.options.env.APP_TERM_INTEGRATION).toBeUndefined();
+  });
+
+  it('installs the hook when the default shell ($SHELL) resolves to bash', () => {
+    const cfg = buildSpawnConfig({
+      platform: 'linux',
+      env: { HOME, SHELL: '/bin/bash' },
+      home: HOME,
+      integrationScriptPath: SCRIPT,
+    });
+    expect(cfg.shellPath).toBe('/bin/bash');
+    expect(cfg.options.env.APP_TERM_INTEGRATION).toBe(SCRIPT);
   });
 
   it('omits the hook when no script path is provided', () => {

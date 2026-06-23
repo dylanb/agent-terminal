@@ -16,6 +16,12 @@ export interface SpawnConfig {
   };
 }
 
+/** The shell the session spawns: an explicit `APP_SHELL` override, else the user's own
+ *  login shell (`$SHELL`), else `bash` as a last resort (§5, v2.79). */
+export function resolveShellPath(env: NodeJS.ProcessEnv): string {
+  return env.APP_SHELL || env.SHELL || 'bash';
+}
+
 /** True when the shell is bash (the only shell whose OSC-133 hooks we install, §15.5). */
 function isBashShell(shellPath: string): boolean {
   return /(^|\/)bash$/.test(shellPath);
@@ -39,7 +45,7 @@ export function buildSpawnConfig(input: {
   const cleanEnv = Object.fromEntries(
     Object.entries(env).filter((e): e is [string, string] => e[1] !== undefined),
   );
-  const shellPath = env.APP_SHELL || env.SHELL || 'bash';
+  const shellPath = resolveShellPath(env);
 
   // Source the integration script after the user's startup files via the only
   // post-rc env seam bash exposes — PROMPT_COMMAND. Opt-out: APP_SHELL_INTEGRATION=0
@@ -86,14 +92,31 @@ export function mergePaths(currentPath: string, probedPath: string): string {
 }
 
 /**
- * GUI launches inherit a barren PATH (§5). On Linux, probe a login shell once and
- * merge its PATH with ours when it adds entries — never replacing inherited ones
+ * The Linux GUI-launch PATH probe (§5): which shell to ask and how. Probes the **same**
+ * shell the session resolves to (§5, v2.79) so a non-bash `$SHELL` contributes its own
+ * login PATH — asking a hardcoded bash would miss a zsh/fish user's shell-specific PATH.
+ * Linux-only; macOS recovers PATH via the `-l` login shell. `-l -c` is the portable
+ * login+command form (a shell with a list-valued, non-colon `$PATH` like fish only ever
+ * appends a harmless extra entry, since mergePaths splits on `:` and the OS ignores it).
+ */
+export function probeShellCommand(
+  platform: NodeJS.Platform,
+  env: NodeJS.ProcessEnv,
+): { file: string; args: string[] } | undefined {
+  if (platform !== 'linux') return undefined;
+  return { file: resolveShellPath(env), args: ['-l', '-c', 'echo -n "$PATH"'] };
+}
+
+/**
+ * GUI launches inherit a barren PATH (§5). On Linux, probe the user's login shell once
+ * and merge its PATH with ours when it adds entries — never replacing inherited ones
  * (an active venv/direnv). macOS is covered by the -l shell.
  */
 export function probeLoginPath(): Promise<string | undefined> {
-  if (process.platform !== 'linux') return Promise.resolve(undefined);
+  const cmd = probeShellCommand(process.platform, process.env);
+  if (!cmd) return Promise.resolve(undefined);
   return new Promise((resolve) => {
-    execFile('bash', ['-lc', 'echo -n "$PATH"'], { timeout: 5000 }, (err, stdout) => {
+    execFile(cmd.file, cmd.args, { timeout: 5000 }, (err, stdout) => {
       if (err || !stdout) return resolve(undefined);
       const current = process.env.PATH ?? '';
       const probed = stdout.trim();
