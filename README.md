@@ -2,7 +2,7 @@
 
 Foundation ("walking skeleton") of an application for running, monitoring, and steering coding agents (Claude Code, Codex, …) that live in a terminal. See `terminal-web-ui-spec.md` (v2.3) for the full design; `CLAUDE.md` for contributor standards (TDD is mandatory).
 
-The skeleton proves the full loop: a PTY-attached bash session rendered with xterm.js, every output byte teed into a main-process `@xterm/headless` shadow screen model (mode tracking, alt-screen detection, quiescence), an app-owned focus-independent selection that can be sent back to the agent or captured into the monitor pane, and monitor-pane actions that inject text into the agent through a renderer-independent, bracketed-paste-aware path.
+The skeleton proves the full loop: a PTY-attached shell session rendered with xterm.js, every output byte teed into a main-process `@xterm/headless` shadow screen model (mode tracking, alt-screen detection, quiescence), an app-owned focus-independent selection that can be sent back to the agent or captured into the monitor pane, and monitor-pane actions that inject text into the agent through a renderer-independent, bracketed-paste-aware path.
 
 ## Setup
 
