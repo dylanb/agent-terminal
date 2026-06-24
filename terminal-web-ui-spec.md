@@ -98,9 +98,12 @@
   - [23.3 Cross-instance guard (D21)](#233-cross-instance-guard-d21)
 - [24. Phased build plan](#24-phased-build-plan)
   - [24.1 First slice (walking skeleton)](#241-first-slice-walking-skeleton)
+- [25. Flow audit record (per-run, append-only)](#25-flow-audit-record-per-run-append-only)
 
 ---
 
+> **Changelog v2.79:** **New §25 — the flow audit record (per-run, append-only).** Adds the audit subsystem as a numbered section: a durable, human-auditable record written per flow run under `~/.agent-terminal/audit/<repo-basename>/<flowName>_<startTimestampZ>.yaml`, as a **YAML multi-document stream** (a header document, then one `---`-delimited document per event, **append-only** — O(1) per event, no rewrite; a tail-tolerant reader discards a trailing partial document from a crash mid-append). Defines the storage layout (§25.2), the format (§25.3), the run lifecycle (§25.4 — start opens, advance/restart/undo append, done keeps the file open for append-on-go-back, a new start closes and opens, the current-run pointer survives restart), the event vocabulary (§25.5 — **Phase 1:** `flow.started`/`flow.status`/`step.entered`/`flow.completed` + `todo.created`/`todo.status`/`todo.text`/`todo.deleted`; **Phase 2:** the loop-sourced events), the shared-semantics + timeline-reconstruction boundary (§25.6, per the `src/shared/` rule), and the constraints (§25.7 — never throws into the flow path, untrusted-string escaping + CWE-22 path-segment sanitization, accepted basename collision, explicit ID sourcing, keep-all retention). Auditing is **observe-only** (injects nothing) and **best-effort** (a failed write is logged and dropped, never surfaced to the flow). No contract shape change to `src/shared/ipc.ts` (audit has no UI this round). The build is sliced (§25.8) as Phase 1 (lifecycle + todo timeline) then Phase 2 (loop integration + replayable-timeline proof), each slice fired by an existing UI control (Start/Advance/Restart/Undo, todo edits) and proven by a Playwright `_electron` e2e asserting the on-disk YAML, RED-first throughout.
+>
 > **Changelog v2.78 (was v2.74; renumbered in the keymap-branch merge to clear the v2.72–v2.74 collision with §7.7's entries below):** **§24.2.3 T4 refined — per-repo dedup is genuinely per-repo, and the cue's `role=alert` region is now persistent (iteration-5 review).** Two correctness refinements over v2.77. **(1) Per-repo identity is a map, not a single slot.** v2.77 keyed the dedup by `(repoKey, status, iteration)` but stored only ONE occurrence (repoKey inside the value); a same-repo return visit (cd A→B→A) overwrote the slot and re-fired the notification / re-showed the cue at the unchanged occurrence. Both surfaces now hold a **per-`repoKey` map** of each repo's last occurrence — the notifier dedups against this repo's last-signalled `(status, iteration)`, and the cue records/checks the dismissed occurrence per repo — so a return visit stays deduped/dismissed while two distinct repos at the same coords remain distinct. **(2) The cue is a persistent live region.** v2.77 revealed the `role=alert` host *before* populating it; the host is now **never `[hidden]`** — the empty state collapses purely via CSS (`.attn-bar:empty`), keeping the region in the a11y tree across hide/show so injected content (not a display flip) is the announcement trigger (WAI-ARIA Alert pattern, WCAG 4.1.3). The empty state exposes **no focusable descendant**, so this does not reintroduce the v2.44 hidden-but-focusable trap (the prior `[hidden]` guard is preserved by the empty ⟺ no-focusables invariant). No contract shape change (the cue/notifier identity stays internal); RED-first (return-visit dedup pins on both surfaces, a persistent-region pin, and a tracked-closer cross-repo close pin).
 >
 > **Changelog v2.77 (was v2.73; renumbered in the keymap-branch merge):** **§24.2.3 T4 hardened — per-repo occurrence identity, dismiss focus restore, and the committed flow diagram (iteration-4 review).** The distinct-entry identity that dedups the OS notification and the cue's dismissed occurrence is now keyed by **`(repoKey, status, iteration)`**, not the global `(status, iteration)` — the loop is repo-scoped (§16.3), so two repos coincidentally at the same status+iteration are **distinct loops**: cd-ing between them re-raises rather than silently deduping, a dismiss in one repo no longer carries over to another, and a glance at a non-loop repo no longer closes a different repo's still-valid notification (the notifier clears only the active repo's notification). Dismissing the cue now **restores focus** through an injected `onDismiss` seam (the composition root lands focus on the loop read-out toggle, else the Terminal nav button) instead of dropping it to `<body>` (WCAG 2.4.3); the `role=alert` region is **revealed before it is populated** so the AT mutation fires on a visible live region (WCAG 4.1.3). The **T4 data-flow Mermaid diagram** is now committed in §24.2.3. No contract shape change (the cue/notifier identity is internal); RED-first throughout (per-repo notifier + cue tests, the dismiss-focus test, and close-on-distinct / `dispose` / already-on-Terminal coverage pins).
@@ -1589,3 +1592,124 @@ flowchart LR
 - [x] **T4 — Detect "awaiting human" and notify. ✅ done (v2.72).** The bridge classifies `status` as human-needed by matching it against the LoopDef's gate ids / the `awaiting-*` family (explicit in v4 — not a heuristic); on entering such a status it fires S5's `flow:onStateChanged` and the UI raises a notification/attention cue. Because the loop re-enters a gate at `iteration+1` after each request-changes, the cue **re-fires per cycle**, not once. *(UI to design: the attention/notification surface.)* **Fire:** let agent-loop reach `awaiting-human-pr-approval`, then iterate it to the next awaiting state. **Land:** the cue appears with no manual refresh and re-appears on the next cycle. **e2e:** write `status: awaiting-*` → cue shows; bump iteration + re-enter awaiting → cue re-fires; under it a classifier unit test (which statuses are human-needed, driven by the LoopDef gates) + a renderer test that `flow:onStateChanged` raises the cue.
 - [ ] **T5 — Approve gate → advance the flow.** At a human-review state, the gate UI renders the options from the current status's gate `human_options` (data-driven, not a hardcoded triplet). **Approve** injects `/agent-loop-approve` (§19.3 refusal), then reconciles from `state.yaml`. The **flow** advances only when the approved gate's `next_status_on_approve` is the loop's terminal/exit status — intermediate approvals keep the flow on the same step (the loop just moves on); that loop-status → "flow step complete" mapping is made explicit. **Fire:** at an `awaiting-*` state, click Approve at a ready shell. **Land:** `/agent-loop-approve` typed; state reconciles; a terminal gate advances the flow station, an intermediate gate keeps the step; busy shell → refusal. **e2e:** terminal-gate approve → flow advances; intermediate approve → same step, loop status moves; busy → refusal; under it a gate-option-derivation unit test (UI options come from the gate), a terminal-vs-intermediate advance-mapping test, a refusal test.
 - [ ] **T6 — Request-changes & impasse, with feedback compose (§19.4).** The other two options, both of which **keep the flow on the step** and let the loop iterate. **Request-changes** curates a subset of review todos (+ optional free text) → **Compose-with-agent** (`flow:composeFeedback` writes the reason) **or** **Submit-as-is** (verbatim) → injects `/agent-loop-request-changes` (§19.3 refusal). **Impasse** injects `/agent-loop-impasse`. Neither advances the flow; the loop re-iterates and T4 re-notifies at the next gate. **Fire:** at a review state, pick two todos + a note → request changes; separately, declare impasse. **Land:** the composed/verbatim reason injected as `/agent-loop-request-changes …`; impasse injects `/agent-loop-impasse`; the flow stays put; busy shell → refusal. **e2e:** select todos → request-changes → reason in the PTY with the flow unchanged; impasse → command in the PTY; under it a composer unit test (selected todos + text → reason), gate-driver tests for both commands, a refusal test.
+
+---
+
+## 25. Flow audit record (per-run, append-only)
+
+### 25.1 Goal & boundary (D-audit-1)
+
+Each flow run writes a durable, human-auditable record from which a **complete timeline** of the run can be reconstructed: every lifecycle state change with its timestamp, the TODOs created and each of their state changes, and — added in Phase 2 (§25.5) — the loop inputs/outputs, the ticket and PR numbers involved, the agent-loop status/iteration, and the commands the flow issued on the user's behalf.
+
+**Boundary:** auditing is **observe-only** and **best-effort**. It injects nothing, blocks nothing, and **never throws into the flow path** — it only records what the flow lifecycle and the TODO store already produce (Phase 1) and what the agent-loop bridge already mirrors (Phase 2). A failed audit write is logged and dropped; the flow proceeds unaffected (mirrors the §19.1 "never throws, degrade to null" discipline). **UI:** none this round — files only.
+
+### 25.2 Storage layout (D-audit-2)
+
+Audit root: `~/.agent-terminal/audit/`. One directory per repo, named by the repo **basename only**. One file per `flow:start`, named `<flowName>_<startTimestampZ>.yaml`, where the timestamp is ISO-8601 UTC to the second with `:` replaced by `-` (`2026-06-23T10-00-01Z`).
+
+The repo basename and the flow name are each reduced to a filesystem-safe segment before they reach the path — characters outside `[A-Za-z0-9._-]` become `-` — so an untrusted `flow.yaml` `name:` (a repo is untrusted input) cannot traverse the audit tree (CWE-22). Basename collision across two same-named repos is an **accepted limitation** (§25.7).
+
+```text
+~/.agent-terminal/
+  audit/
+    agent-terminal/                         # repo basename
+      feature-dev_2026-06-23T10-00-01Z.yaml # one run
+      feature-dev_2026-06-25T14-12-00Z.yaml # a later re-run
+```
+
+### 25.3 File format — YAML multi-document stream (D-audit-3)
+
+A **header document**, then one `---`-delimited document **per event**, appended in order. Appending an event is **O(1)** — one complete `---\n…\n` block written in a single append, never a rewrite of prior content. The "a reader never sees a partial event" guarantee rests on the per-event append being one write **plus the reconstructor discarding a trailing partial document** (possible only on a crash mid-append), *not* on atomic rename. The header is written when the file is opened.
+
+```yaml
+---
+flow: feature-dev
+repo: agent-terminal
+repoPath: /Users/dylanbarrell/Documents/sourcecode/agent-terminal
+started: 2026-06-23T10:00:01Z
+---
+ts: 2026-06-23T10:00:01Z
+type: flow.started
+step: plan
+---
+ts: 2026-06-23T10:02:11Z
+type: todo.created
+id: a1
+text: Wire audit IPC
+---
+ts: 2026-06-23T10:05:00Z
+type: todo.status
+id: a1
+from: active
+to: in_progress
+---
+ts: 2026-06-23T10:30:00Z
+type: step.entered
+step: build
+---
+ts: 2026-06-23T11:00:00Z
+type: flow.status
+from: in_progress
+to: done
+---
+ts: 2026-06-23T11:00:00Z
+type: flow.completed
+step: build
+```
+
+### 25.4 Lifecycle (D-audit-4)
+
+```mermaid
+stateDiagram-v2
+    [*] --> Idle
+    Idle --> Recording : flow start opens new file
+    Recording --> Recording : advance / restart / undo append
+    Recording --> Recording : todo create / status / text / delete append
+    Recording --> Recording : flow done appends completed but stays open
+    Recording --> Recording : go back after done appends to same file
+    Recording --> Recording : new flow start closes current then opens new file
+```
+
+- A fresh `flow:start` **opens a new file** for the run (header document + `flow.started`), **closing** any current run for that repo.
+- `advance` / `restart` / `undo` **append** events to the current run's file — no rewrite of prior content.
+- Reaching `done` records a `flow.completed` event but **keeps the file open**, so completing a flow and then going back (`undo` / `restart`) continues to append to the **same** file.
+- The next `flow:start` **closes** the current run and opens a new file.
+- The current-run pointer **survives an app restart**: after a restart mid-run, append-on-go-back targets the same run file rather than orphaning it and opening a new one. (How the pointer persists is an implementation choice.)
+- TODO events (`todo.*`) are recorded **only while a run is open** for the repo; with no open run, a todo edit records nothing.
+
+### 25.5 Event vocabulary (D-audit-5)
+
+Every event carries an ISO-8601 UTC `ts`.
+
+**Phase 1 — lifecycle + TODO timeline:**
+
+- `flow.started` — entry step of the run (the header carries `flow`, `repo`, `repoPath`, `started`).
+- `flow.status` — `{ from, to }` across `not_started` / `in_progress` / `done`.
+- `step.entered` — a new step became active within a running flow.
+- `flow.completed` — the terminal step was reached (the file stays open for append-on-go-back).
+- `todo.created` — `{ id, text }`.
+- `todo.status` — `{ id, from, to }` across `active` / `in_progress` / `done`.
+- `todo.text` — `{ id, text }` after an edit.
+- `todo.deleted` — `{ id }`.
+
+**Phase 2 — loop integration (later):** `input.resolved` `{ name, value }`, `ticket.assoc` `{ ticket }`, `pr.assoc` `{ pr }`, `loop.status` `{ from, to }`, `loop.iteration` `{ n }`, `command` `{ source, cmd, exit }`, `outputs.snapshot` (`.agent-loop/` files `{ path, bytes }` + `pr`).
+
+### 25.6 Shared semantics & timeline reconstruction (D-audit-6)
+
+Per the `src/shared/` rule (CLAUDE.md), the meanings main, the tests, and a future viewer must all agree on live in **one** shared definition reused by both sides rather than two drifting copies: the **event vocabulary** (types), the audit **file-path derivation**, the **start-opens / advance-appends** event classifier, the **serialize ↔ parse** pair (the on-disk format is the contract the writer and any reader must not drift on), and the **timeline reconstructor**. The reconstructor reads a run's stream — tolerating a trailing partial document — and yields the ordered, replayable timeline (the "a complete timeline can be reconstructed" acceptance criterion; the reconstructor itself lands in Phase 2). Module and function names are the implementor's choice.
+
+### 25.7 Constraints & accepted limitations
+
+- **Never throws into the flow path.** A failed audit write is logged and dropped; the flow is never affected.
+- **Untrusted strings.** TODO text and the repo/flow names are escaped on write (YAML quoting) and path segments are sanitized (§25.2). Phase 2's `.agent-loop/` snapshot performs the §20.2 realpath check so a symlink cannot escape the repo, and sanitizes the untrusted `state.yaml` `status` (CWE-117, per §16.3 / `loopNotifier`).
+- **Basename collision** across same-named repos is **accepted** — the run files co-mingle in one basename directory; the per-repo current-run pointer is keyed by the **full** repo path so each repo still tracks its own open run.
+- **Explicit ID sourcing only** (Phase 2) — ticket/PR numbers come from resolved inputs and `state.yaml`, never from branch-name or PR-body scraping.
+- **Retention:** keep all, no pruning.
+
+### 25.8 Build — tracer-bullet phases
+
+Per the CLAUDE.md tracer-bullet rule, each slice is fired by an **existing UI control** (flow Start/Advance/Restart/Undo, todo edits) and proven by a **Playwright `_electron` e2e asserting the on-disk YAML**, with main-process integration and shared unit tests underneath. RED-first throughout.
+
+- **Phase 0 — Spec (this section).** The contract the code implements.
+- **Phase 1 — Lifecycle + TODO timeline.** The writer core plus every event the flow lifecycle and TODO store already produce (`flow.started` / `flow.status` / `step.entered` / `flow.completed` + `todo.*`). **Fire:** Start, then Advance/Restart/Undo; add/move/edit/delete a TODO while a flow is in progress. **Land:** the per-run file appears with `flow.started`; the lifecycle events accrue with timestamps; a new Start opens a new file; go-back after `done` appends to the same one; `todo.*` events accrue while a flow is active, nothing when none is. **e2e:** drive Start → Advance → done → Undo (same file), then Start again (new file); within an active flow, manipulate a TODO and assert its events.
+- **Phase 2 — Loop integration + timeline reconstruction.** Everything sourced from the agent-loop bridge (tickets, PRs, inputs, loop status/iteration, injected commands, output snapshots) plus the timeline reconstructor that proves the whole record is replayable.

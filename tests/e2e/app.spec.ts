@@ -1,10 +1,11 @@
 /// <reference lib="dom" />
 // page.evaluate callbacks run in the renderer; DOM lib gives them window.monitor's type.
 import { _electron as electron, expect, test, type ElectronApplication, type Page } from '@playwright/test';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, readFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, readFileSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, basename } from 'node:path';
 import { CH, SESSION_ID } from '../../src/shared/ipc';
+import { parseAuditStream, type AuditEvent } from '../../src/shared/audit';
 
 // Full-loop e2e (§12 acceptance): real Electron, real node-pty, real bash.
 
@@ -1362,6 +1363,127 @@ test('the flow strip follows the cwd: cd into a repo shows its flow and drives i
   await expect(flowStation(1)).toHaveClass(/\bactive\b/);
   await expect(flowControl()).toHaveText('Advance');
   await app.close(); // HOME=temp ⇒ Electron writes userData under it; stop writes before removing it
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+});
+
+// Flow audit record (§25): the run's YAML lands under HOME/.agent-terminal/audit/<repo-basename>/.
+const auditDir = (home: string, repo: string): string => join(home, '.agent-terminal', 'audit', basename(repo));
+const auditRunFiles = (home: string, repo: string): string[] => {
+  const dir = auditDir(home, repo);
+  return existsSync(dir) ? readdirSync(dir).filter((f) => f.endsWith('.yaml')) : [];
+};
+const readAuditRun = (home: string, repo: string, file: string): { header: unknown; events: AuditEvent[] } =>
+  parseAuditStream(readFileSync(join(auditDir(home, repo), file), 'utf8'));
+
+test('flow Start opens an audit run file with a flow.started event (§25.4)', async () => {
+  const repo = seedFlowRepo('agent-term-e2e-audit-', 'groom');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-audit-home-'));
+  await app.close();
+  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
+  page = await app.firstWindow();
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await typeCommand(`cd "${repo}"`);
+  await expect(flowControl()).toHaveText('Start', { timeout: 10_000 });
+  await flowControl().click();
+  await expect(flowControl()).toHaveText('Advance');
+
+  await expect.poll(() => auditRunFiles(home, repo).length).toBe(1);
+  const run = readAuditRun(home, repo, auditRunFiles(home, repo)[0]);
+  expect(run.header).toMatchObject({ flow: 'groom-flow', repo: basename(repo) });
+  expect(run.events.map((e) => e.type)).toContain('flow.started');
+
+  await app.close();
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+});
+
+// A run file accrues lifecycle events and go-back-after-done appends to the SAME file. (The
+// new-file-per-flow:start case is integration-covered in auditRecorder.test: the UI never returns to
+// not_started, so a second flow:start is not reachable from the strip.)
+test('the audit run accrues lifecycle events and go-back appends to the same file (§25.4)', async () => {
+  const repo = seedFlowRepo('agent-term-e2e-audit2-', 'groom');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-audit2-home-'));
+  await app.close();
+  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
+  page = await app.firstWindow();
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await typeCommand(`cd "${repo}"`);
+  await expect(flowControl()).toHaveText('Start', { timeout: 10_000 });
+  await flowControl().click(); // Start
+  await expect(flowControl()).toHaveText('Advance');
+  await flowControl().click(); // Advance → done (single step)
+  await expect(flowControl()).toHaveText('Restart');
+
+  await expect.poll(() => auditRunFiles(home, repo).length).toBe(1);
+  await expect
+    .poll(() => readAuditRun(home, repo, auditRunFiles(home, repo)[0]).events.map((e) => e.type))
+    .toEqual(expect.arrayContaining(['flow.started', 'flow.status', 'flow.completed']));
+
+  // Go back after done (Undo) appends to the SAME file — still one file, with the undo's status event.
+  await page.locator('#flow-strip .flow-undo').click();
+  await expect(flowControl()).toHaveText('Advance');
+  expect(auditRunFiles(home, repo)).toHaveLength(1);
+  await expect
+    .poll(() => readAuditRun(home, repo, auditRunFiles(home, repo)[0]).events.filter((e) => e.type === 'flow.status').length)
+    .toBe(2); // in_progress→done, then done→in_progress
+
+  // Restart from done also appends to the same file (records its own done→in_progress).
+  await flowControl().click(); // Advance → done
+  await expect(flowControl()).toHaveText('Restart');
+  await flowControl().click(); // Restart → in_progress
+  await expect(flowControl()).toHaveText('Advance');
+  await expect
+    .poll(() => readAuditRun(home, repo, auditRunFiles(home, repo)[0]).events.filter((e) => e.type === 'flow.status').length)
+    .toBe(4); // + in_progress→done (advance), + done→in_progress (restart)
+  expect(auditRunFiles(home, repo)).toHaveLength(1);
+
+  await app.close();
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+});
+
+test('todo edits during an active flow are recorded; none when no flow is active (§25.5)', async () => {
+  const repo = seedFlowRepo('agent-term-e2e-audit3-', 'groom');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-audit3-home-'));
+  await app.close();
+  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
+  page = await app.firstWindow();
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  // No flow active yet: a todo edit records nothing (no audit dir for the repo).
+  await typeCommand(`cd "${repo}"`);
+  await openQuickSend('todo');
+  await page.locator('#todo-new').fill('before the flow');
+  await page.locator('#todo-add-btn').click();
+  await expect(page.locator('.todo').filter({ hasText: 'before the flow' })).toHaveCount(1);
+  expect(auditRunFiles(home, repo)).toHaveLength(0);
+
+  // Start the flow → a run opens. Now todo edits accrue todo.* events.
+  await expect(flowControl()).toHaveText('Start', { timeout: 10_000 });
+  await flowControl().click();
+  await expect(flowControl()).toHaveText('Advance');
+  await expect.poll(() => auditRunFiles(home, repo).length).toBe(1);
+
+  await page.locator('#todo-new').fill('during the flow');
+  await page.locator('#todo-add-btn').click();
+  const row = page.locator('.todo').filter({ hasText: 'during the flow' });
+  await expect(row).toHaveCount(1);
+  await row.locator('.chk').click(); // mark done → todo.status
+
+  await expect
+    .poll(() => readAuditRun(home, repo, auditRunFiles(home, repo)[0]).events.map((e) => e.type))
+    .toEqual(expect.arrayContaining(['todo.created', 'todo.status']));
+  // The pre-flow todo was NOT recorded (no created event for it).
+  const created = readAuditRun(home, repo, auditRunFiles(home, repo)[0])
+    .events.filter((e): e is Extract<AuditEvent, { type: 'todo.created' }> => e.type === 'todo.created')
+    .map((e) => e.text);
+  expect(created).toContain('during the flow');
+  expect(created).not.toContain('before the flow');
+
+  await app.close();
   rmSync(repo, { recursive: true, force: true });
   rmSync(home, { recursive: true, force: true });
 });

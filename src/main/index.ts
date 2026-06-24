@@ -11,6 +11,7 @@ import {
   type CommandSummary,
   type FlowStateView,
   type SendChannel,
+  type TodoStatus,
 } from '../shared/ipc';
 import { createInjector } from './inject';
 import { createMonitorEventStore } from './eventStore';
@@ -56,6 +57,8 @@ import { currentRepoInfo } from './repoKey';
 import { createScanner } from './scanner';
 import { captureLastReport } from './captureLast';
 import { createFlowManager, deriveFlowView, loadFlowDefinitionLocalFirst } from './flow';
+import { createAuditRecorder } from './auditRecorder';
+import { auditRootDir } from './auditPaths';
 import { createFlowEntryActions } from './flowEntryActions';
 import { parseAgentLoopState, watchAgentLoopState } from './agentLoopBridge';
 import { createLoopNotifier } from './loopNotifier';
@@ -219,6 +222,17 @@ async function createWindow(): Promise<void> {
     readLoopDef: (repoKey, name) => parseLoopDef(repoKey, name),
   });
 
+  // Flow audit record (§25): observe-only, best-effort — records each run's lifecycle to
+  // ~/.agent-terminal/audit/<repo>/<flow>_<ts>.yaml. Never throws into the flow path.
+  const audit = createAuditRecorder({
+    root: auditRootDir(os.homedir()),
+    now: () => new Date(),
+    flowName: (repoKey) => {
+      const load = loadFlowDefinitionLocalFirst(repoKey, flowGlobalDir);
+      return load.ok ? load.definition.name : null;
+    },
+  });
+
   // T2 (§24.2.3): watch a loop repo's state.yaml so a hand-edit re-pushes over the EXISTING
   // flow:onStateChanged seam (§24.2.2 S5) — no new plumbing. One watcher per repo, established
   // lazily; since the strip just re-pulls, duplicate file events are harmless.
@@ -269,6 +283,12 @@ async function createWindow(): Promise<void> {
 
   const withDerived = (repoKey: string, view: FlowStateView): FlowStateView =>
     deriveFlowView(view, todoStore.list(repoKey), agentActivity);
+
+  // The audit before/after diff (§25.5) needs the PRE-mutation values, but todoStore mutates cached
+  // items in place (setStatus/update) and list() hands back those references — a live list would
+  // already read as the post-mutation state. Snapshot the values before mutating.
+  const todoSnapshot = (repoKey: string): { id: string; text: string; status: TodoStatus }[] =>
+    todoStore.list(repoKey).map((t) => ({ id: t.id, text: t.text, status: t.status }));
 
   // Flow A (§4): every output byte goes to the renderer AND the shadow tee.
   ptyProcess.onData((data) => {
@@ -352,21 +372,33 @@ async function createWindow(): Promise<void> {
       [CH.todoList]: (_e, m) => (isValidTodoList(m) ? todoStore.list(m.repoKey) : []),
       [CH.todoAdd]: (_e, m) => {
         if (!isValidTodoAdd(m)) return [];
+        const before = todoSnapshot(m.repoKey);
         const list = todoStore.add(m.repoKey, m.text, m.source);
+        audit.recordTodoChange(m.repoKey, before, list);
         pushFlowChanged();
         return list;
       },
-      [CH.todoUpdate]: (_e, m) => (isValidTodoUpdate(m) ? todoStore.update(m.repoKey, m.id, m.text) : []),
+      [CH.todoUpdate]: (_e, m) => {
+        if (!isValidTodoUpdate(m)) return [];
+        const before = todoSnapshot(m.repoKey);
+        const list = todoStore.update(m.repoKey, m.id, m.text);
+        audit.recordTodoChange(m.repoKey, before, list);
+        return list;
+      },
       [CH.todoReorder]: (_e, m) => (isValidTodoReorder(m) ? todoStore.reorder(m.repoKey, m.orderedIds) : []),
       [CH.todoSetStatus]: (_e, m) => {
         if (!isValidTodoSetStatus(m)) return [];
+        const before = todoSnapshot(m.repoKey);
         const list = todoStore.setStatus(m.repoKey, m.id, m.status);
+        audit.recordTodoChange(m.repoKey, before, list);
         pushFlowChanged();
         return list;
       },
       [CH.todoDelete]: (_e, m) => {
         if (!isValidTodoDelete(m)) return [];
+        const before = todoSnapshot(m.repoKey);
         const list = todoStore.delete(m.repoKey, m.id);
+        audit.recordTodoChange(m.repoKey, before, list);
         pushFlowChanged();
         return list;
       },
@@ -378,8 +410,13 @@ async function createWindow(): Promise<void> {
       // rejects and the strip re-pulls; a malformed payload fails closed to a benign error view.
       [CH.flowState]: (_e, m) =>
         isValidFlowRequest(m) ? trackLoop(m.repoKey, withDerived(m.repoKey, flow.state(m.repoKey))) : flowRequestError(),
-      [CH.flowStart]: (_e, m) =>
-        isValidFlowRequest(m) ? trackLoop(m.repoKey, withDerived(m.repoKey, flow.start(m.repoKey))) : flowRequestError(),
+      [CH.flowStart]: (_e, m) => {
+        if (!isValidFlowRequest(m)) return flowRequestError();
+        const before = flow.state(m.repoKey);
+        const after = flow.start(m.repoKey);
+        audit.recordTransition(m.repoKey, 'start', before, after);
+        return trackLoop(m.repoKey, withDerived(m.repoKey, after));
+      },
       // Advancing while NOT ready is a human override (§19.2): warns via a one-shot notice but still
       // completes. Readiness is read from the PRE-advance state — loop readiness for a loop step, else
       // the todo gate (S5).
@@ -388,16 +425,27 @@ async function createWindow(): Promise<void> {
         const pre = withDerived(m.repoKey, flow.state(m.repoKey));
         const ready = pre.loop ? pre.loop.ready : (pre.derived?.ready ?? true);
         const view = flow.advance(m.repoKey);
+        audit.recordTransition(m.repoKey, 'advance', pre, view);
         if (ready) return trackLoop(m.repoKey, view);
         const notice = pre.loop
           ? 'Advanced while the loop still needs you.'
           : 'Advanced with todos still outstanding.';
         return trackLoop(m.repoKey, { ...view, notice });
       },
-      [CH.flowRestart]: (_e, m) =>
-        isValidFlowRequest(m) ? trackLoop(m.repoKey, withDerived(m.repoKey, flow.restart(m.repoKey))) : flowRequestError(),
-      [CH.flowUndo]: (_e, m) =>
-        isValidFlowRequest(m) ? trackLoop(m.repoKey, withDerived(m.repoKey, flow.undo(m.repoKey))) : flowRequestError(),
+      [CH.flowRestart]: (_e, m) => {
+        if (!isValidFlowRequest(m)) return flowRequestError();
+        const before = flow.state(m.repoKey);
+        const after = flow.restart(m.repoKey);
+        audit.recordTransition(m.repoKey, 'restart', before, after);
+        return trackLoop(m.repoKey, withDerived(m.repoKey, after));
+      },
+      [CH.flowUndo]: (_e, m) => {
+        if (!isValidFlowRequest(m)) return flowRequestError();
+        const before = flow.state(m.repoKey);
+        const after = flow.undo(m.repoKey);
+        audit.recordTransition(m.repoKey, 'undo', before, after);
+        return trackLoop(m.repoKey, withDerived(m.repoKey, after));
+      },
       // Provide a step's typed input (§18.4 / §24.2.3 T3); the returned view's notice carries any §19.3
       // busy-shell refusal.
       [CH.flowProvideInput]: (_e, m) =>
@@ -416,7 +464,9 @@ async function createWindow(): Promise<void> {
       },
       [CH.todoTemplateInstantiate]: (_e, m) => {
         if (!isValidTemplateInstantiate(m)) return [];
+        const before = todoSnapshot(m.repoKey);
         const list = instantiateTemplate(m.repoKey, m.ref);
+        audit.recordTodoChange(m.repoKey, before, list); // each instantiated item → todo.created (§25.5)
         pushFlowChanged(); // instantiation can add todos → the strip's n/m total moves (§24.2.2 S5)
         return list;
       },
