@@ -584,6 +584,25 @@ test('the terminal scrollbar gutter matches the terminal background — no contr
   expect(viewportBg).not.toBe('rgb(0, 0, 0)'); // not xterm's hardcoded-black default
 });
 
+test('the scrollbar gutter re-matches the terminal background after a live theme toggle (§7.1/§7.4)', async () => {
+  // The gutter fill is xterm's inline theme background, seeded once at construction; --term-bg differs
+  // per theme, so without re-seeding on the #tg toggle the strip would reappear one theme behind. Drives
+  // the real renderer theme toggle (no PTY input) and re-asserts the gutter tracks the pane in the new
+  // theme. Keyed off data-theme (the toggle's direct effect), not a pre-click bg snapshot, so the startup
+  // persisted-theme load can't race the assertion.
+  const viewportBg = () =>
+    page.locator('#terminal .xterm-viewport').evaluate((el) => getComputedStyle(el).backgroundColor);
+  const paneBg = () =>
+    page.locator('#terminal-view').evaluate((el) => getComputedStyle(el).backgroundColor);
+  const themeAttr = () => page.evaluate(() => document.documentElement.getAttribute('data-theme'));
+
+  const start = await themeAttr();
+  await page.locator('#tg').click();
+  await expect.poll(themeAttr).not.toBe(start); // the toggle landed (theme genuinely changed)
+  expect(await viewportBg()).toBe(await paneBg()); // gutter re-matched the pane in the new theme
+  await page.locator('#tg').click(); // restore the starting theme for later tests
+});
+
 test('dragging a file over the terminal shows a drop-target affordance (§7.8)', async () => {
   // Slice 3: the drag affordance drives the real renderer wiring with no PTY input. Without the §7.8
   // handler the class never appears.

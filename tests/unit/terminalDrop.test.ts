@@ -25,6 +25,12 @@ describe('formatDroppedPaths (§7.8 single-quoting)', () => {
   it('escapes an embedded single quote POSIX-style so the path survives', () => {
     expect(formatDroppedPaths(["/tmp/it's.png"])).toBe("'/tmp/it'\\''s.png'");
   });
+
+  it('strips embedded control characters so a hostile filename cannot submit a line (§7.8)', () => {
+    // A POSIX filename may legally contain CR/LF; term.paste normalizes \n→\r, which submits the line
+    // when bracketed-paste is off — breaking §7.8's "no submit". No C0 control may reach the paste seam.
+    expect(formatDroppedPaths(['/tmp/a\r\nrm -rf ~/\n'])).toBe("'/tmp/arm -rf ~/'");
+  });
 });
 
 describe('wireTerminalDrop (§7.8 drop → paste path)', () => {
@@ -62,12 +68,16 @@ describe('wireTerminalDrop (§7.8 drop → paste path)', () => {
     expect(paste).not.toHaveBeenCalled();
   });
 
-  it('strips an embedded ESC[201~ paste-breakout from a hostile filename (§9.3)', () => {
+  it('neutralizes an embedded ESC[201~ paste-breakout from a hostile filename (§9.3)', () => {
+    // Stripping C0 controls removes the ESC byte itself, so no bracketed-paste breakout can form; the
+    // residual literal `[201~` is harmless printable text.
     const host = document.createElement('div');
     const { paste, opts } = deps(() => `/drop/evil${PASTE_END}name.png`);
     wireTerminalDrop(host, opts);
     host.dispatchEvent(dropEvent([new File([], 'evil')]));
-    expect(paste).toHaveBeenCalledWith("'/drop/evilname.png'");
+    const pasted = paste.mock.calls[0][0] as string;
+    expect(pasted).not.toContain(PASTE_END);
+    expect(pasted).toBe("'/drop/evil[201~name.png'");
   });
 
   it('preventDefaults the drop so the webview does not navigate to the file', () => {
@@ -93,6 +103,22 @@ describe('wireTerminalDrop (§7.8 drop → paste path)', () => {
     host.dispatchEvent(new Event('dragenter', { bubbles: true, cancelable: true }));
     host.dispatchEvent(dropEvent([new File([], 'a')]));
     expect(host.classList.contains('drag-over')).toBe(false);
+  });
+
+  it('keeps the affordance while the drag crosses nested elements, clearing only when fully left (§7.8)', () => {
+    // The pane wraps nested xterm elements; dragenter/dragleave fire per child boundary, so a depth
+    // counter must keep the outline up until the drag has truly left (depth back to 0), not flicker.
+    const host = document.createElement('div');
+    const { opts } = deps(() => '/drop/a');
+    wireTerminalDrop(host, opts);
+
+    host.dispatchEvent(new Event('dragenter', { bubbles: true, cancelable: true }));
+    host.dispatchEvent(new Event('dragenter', { bubbles: true, cancelable: true }));
+    host.dispatchEvent(new Event('dragleave', { bubbles: true }));
+    expect(host.classList.contains('drag-over')).toBe(true); // depth 2→1: still over
+
+    host.dispatchEvent(new Event('dragleave', { bubbles: true }));
+    expect(host.classList.contains('drag-over')).toBe(false); // depth 1→0: fully left
   });
 
   it('dragover is preventDefaulted so the pane is a valid drop target', () => {

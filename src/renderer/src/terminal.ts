@@ -44,15 +44,15 @@ export function wireTerminalPaneListeners(opts: { focusView: () => void; resize:
 }
 
 /** Single-quote each dropped path (POSIX `'\''` escaping for an embedded quote) and space-join them, so
- *  a path with spaces survives at the prompt (§7.8). */
+ *  a path with spaces survives at the prompt; C0 control chars are stripped first so a CR/LF-bearing
+ *  filename cannot submit a line through the paste seam (§7.8 "no submit"). */
 export function formatDroppedPaths(paths: string[]): string {
-  return paths.map((p) => `'${p.split("'").join("'\\''")}'`).join(' ');
+  return paths.map((p) => `'${p.replace(/[\u0000-\u001f\u007f]/g, '').split("'").join("'\\''")}'`).join(' ');
 }
 
 /** Wire file drag-and-drop on the terminal pane (§7.8): a drop pastes the dropped files' single-quoted
- *  paths at the prompt via the §7.5/§9.3 sanitized paste seam (no submit), and a drag shows a drop-target
- *  affordance. `pathForFile` resolves a `File` to its absolute path (the preload `webUtils` bridge); a drag
- *  item with no path (web text/URL) yields `''` and is skipped. Returns a disposer (clean teardown). */
+ *  paths via the §7.5/§9.3 sanitized paste seam (no submit). `pathForFile` resolves a `File` to its
+ *  absolute path (preload `webUtils` bridge), returning `''` for a drag item with no path. */
 export function wireTerminalDrop(
   container: HTMLElement,
   deps: { pathForFile: (file: File) => string; paste: (text: string) => void },
@@ -89,13 +89,31 @@ export function wireTerminalDrop(
   };
 }
 
-export function createTerminalPane(container: HTMLElement): TerminalPane {
-  // xterm paints the viewport (scrollbar gutter included) with its inline theme background; left at
-  // xterm's #000 default it mismatches the themed --term-bg pane as an ugly strip (§7.1/§7.4).
-  const termBg =
+/** The themed terminal background (`--term-bg`), read from the pane's own cascade and falling back to
+ *  the document root. Seeds xterm's inline theme background so the gutter isn't xterm's `#000` default
+ *  (§7.1/§7.4). */
+export function readTermBg(container: HTMLElement): string | undefined {
+  return (
     getComputedStyle(container).getPropertyValue('--term-bg').trim() ||
     getComputedStyle(document.documentElement).getPropertyValue('--term-bg').trim() ||
-    undefined;
+    undefined
+  );
+}
+
+/** Re-seed xterm's inline theme background on each live `data-theme` toggle (§7.1/§7.4): the gutter fill
+ *  is that background and `--term-bg` differs per theme, so without this the strip reappears one theme
+ *  behind. Observes `data-theme` on the document root (where the shell toggles it). Returns a disposer. */
+export function wireTerminalThemeBackground(deps: {
+  applyBg: (bg: string | undefined) => void;
+  readBg: () => string | undefined;
+}): () => void {
+  const obs = new MutationObserver(() => deps.applyBg(deps.readBg()));
+  obs.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+  return () => obs.disconnect();
+}
+
+export function createTerminalPane(container: HTMLElement): TerminalPane {
+  const termBg = readTermBg(container);
   const term = new Terminal({
     fontFamily: 'monospace',
     fontSize: 14,
@@ -136,6 +154,12 @@ export function createTerminalPane(container: HTMLElement): TerminalPane {
     pathForFile: (file) => window.term.pathForFile(file),
     paste: (text) => term.paste(text),
   });
+  const unwireThemeBg = wireTerminalThemeBackground({
+    readBg: () => readTermBg(container),
+    applyBg: (bg) => {
+      term.options.theme = { ...term.options.theme, background: bg };
+    },
+  });
   sendResize();
 
   return {
@@ -145,6 +169,7 @@ export function createTerminalPane(container: HTMLElement): TerminalPane {
       offExit();
       unwire();
       unwireDrop();
+      unwireThemeBg();
       term.dispose();
     },
   };
