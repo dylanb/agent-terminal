@@ -1490,6 +1490,122 @@ test('todo edits during an active flow are recorded; none when no flow is active
   rmSync(home, { recursive: true, force: true });
 });
 
+// Phase 2 (§25.5): the agent-loop bridge feeds the run. Entering a loop step records the state.yaml
+// mirror; a hand-edit (the human driving agent-loop) appends the change live.
+test('a loop step records the state.yaml mirror and live edits append loop.status (§25.5)', async () => {
+  const { dir: repo, stateFile } = seedLoopFlowRepo('agent-term-e2e-audit-loop-');
+  writeFileSync(stateFile, 'schema_version: 4\npr: 179\nbranch: agent-loop/issue-176\niteration: 9\nstatus: awaiting-human-pr-approval\n');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-audit-loop-home-'));
+  await app.close();
+  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
+  page = await app.firstWindow();
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await typeCommand(`cd "${repo}"`);
+  await expect(flowControl()).toHaveText('Start', { timeout: 10_000 });
+  await flowControl().click(); // Start → groom (manual): run opens
+  await expect.poll(() => auditRunFiles(home, repo).length).toBe(1);
+  await flowControl().click(); // Advance → build (loop): the state.yaml mirror is observed
+
+  const file = (): string => auditRunFiles(home, repo)[0];
+  await expect
+    .poll(() => readAuditRun(home, repo, file()).events.map((e) => e.type))
+    .toEqual(expect.arrayContaining(['loop.status', 'loop.iteration', 'pr.assoc']));
+  const pr = readAuditRun(home, repo, file()).events.find(
+    (e): e is Extract<AuditEvent, { type: 'pr.assoc' }> => e.type === 'pr.assoc',
+  );
+  expect(pr?.pr).toBe(179);
+  // The status change snapshots the .agent-loop/ files (path + bytes) — here state.yaml itself (§25.5).
+  const snap = readAuditRun(home, repo, file()).events.find(
+    (e): e is Extract<AuditEvent, { type: 'outputs.snapshot' }> => e.type === 'outputs.snapshot',
+  );
+  expect(snap?.files.map((f) => f.path)).toContain('.agent-loop/state.yaml');
+
+  // A hand-edit of state.yaml (no app action) re-pulls the mirror and appends the status change.
+  writeFileSync(stateFile, 'schema_version: 4\npr: 179\nbranch: agent-loop/issue-176\niteration: 11\nstatus: awaiting-human-impl-triage\n');
+  await expect
+    .poll(() => readAuditRun(home, repo, file()).events.filter((e) => e.type === 'loop.status').length)
+    .toBeGreaterThanOrEqual(2);
+
+  await app.close();
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+});
+
+test('resolving a github-ticket input records input.resolved and ticket.assoc (§25.5)', async () => {
+  const repo = seedBootstrapFlowRepo('agent-term-e2e-audit-input-');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-audit-input-home-'));
+  await app.close();
+  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
+  page = await app.firstWindow();
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await typeCommand(`cd "${repo}"`);
+  await expect(flowStepName()).toHaveText('groom', { timeout: 10_000 });
+  await flowControl().click(); // Start → groom: run opens
+  await expect.poll(() => auditRunFiles(home, repo).length).toBe(1);
+  await flowControl().click(); // Advance → plan (bootstrap): the typed-input modal opens
+  await expect(inputModal()).toBeVisible({ timeout: 10_000 });
+  await inputModal().locator('.field input').fill('176');
+  await inputModal().locator('.confirm').click();
+
+  const file = (): string => auditRunFiles(home, repo)[0];
+  await expect
+    .poll(() => readAuditRun(home, repo, file()).events.map((e) => e.type))
+    .toEqual(expect.arrayContaining(['input.resolved', 'ticket.assoc']));
+  const resolved = readAuditRun(home, repo, file()).events.find(
+    (e): e is Extract<AuditEvent, { type: 'input.resolved' }> => e.type === 'input.resolved',
+  );
+  expect(resolved).toMatchObject({ name: 'ticket', value: '176' });
+  const ticket = readAuditRun(home, repo, file()).events.find(
+    (e): e is Extract<AuditEvent, { type: 'ticket.assoc' }> => e.type === 'ticket.assoc',
+  );
+  expect(ticket?.ticket).toBe(176);
+
+  await app.close();
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+});
+
+test('a flow-injected bootstrap command is recorded with its exit when the human runs it (§25.5)', async () => {
+  const repo = seedBootstrapFlowRepo('agent-term-e2e-audit-cmd-');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-audit-cmd-home-'));
+  await app.close();
+  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
+  page = await app.firstWindow();
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await typeCommand(`cd "${repo}"`);
+  await expect(flowStepName()).toHaveText('groom', { timeout: 10_000 });
+  await flowControl().click(); // Start → groom: run opens
+  await expect.poll(() => auditRunFiles(home, repo).length).toBe(1);
+  await flowControl().click(); // Advance → plan (bootstrap): the typed-input modal opens
+  await expect(inputModal()).toBeVisible({ timeout: 10_000 });
+  await inputModal().locator('.field input').fill('176');
+  await inputModal().locator('.confirm').click();
+  await expect(termRows()).toContainText('agent-loop pickup 176', { timeout: 10_000 });
+
+  // The human runs the injected command (Enter). agent-loop is not installed → a nonzero exit, whose
+  // OSC-133 span is correlated into a `command` event carrying that exit (§25.5).
+  await page.locator('.xterm-screen').click();
+  await page.keyboard.press('Enter');
+
+  const file = (): string => auditRunFiles(home, repo)[0];
+  await expect
+    .poll(() => readAuditRun(home, repo, file()).events.filter((e) => e.type === 'command').length, { timeout: 15_000 })
+    .toBeGreaterThanOrEqual(1);
+  const cmd = readAuditRun(home, repo, file()).events.find(
+    (e): e is Extract<AuditEvent, { type: 'command' }> => e.type === 'command',
+  );
+  expect(cmd?.source).toBe('bootstrap');
+  expect(cmd?.cmd).toContain('agent-loop pickup 176');
+  expect(typeof cmd?.exit === 'number' || cmd?.exit === null).toBe(true);
+
+  await app.close();
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+});
+
 test('a multi-step flow walks the bookended rail: Start → Advance ×3 reaches done (§24.2.3 T1)', async () => {
   // A 3-step flow's rail brackets the real steps with Not-started / Completed bookends → FIVE stations.
   const repo = seedMultiStepFlowRepo('agent-term-e2e-flow-multi-', ['groom', 'plan', 'implement']);

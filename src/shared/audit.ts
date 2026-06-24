@@ -22,7 +22,21 @@ export type AuditEvent =
   | { ts: string; type: 'todo.created'; id: string; text: string }
   | { ts: string; type: 'todo.status'; id: string; from: TodoStatus; to: TodoStatus }
   | { ts: string; type: 'todo.text'; id: string; text: string }
-  | { ts: string; type: 'todo.deleted'; id: string };
+  | { ts: string; type: 'todo.deleted'; id: string }
+  // Phase 2 — loop integration (§25.5).
+  | { ts: string; type: 'input.resolved'; name: string; value: string }
+  | { ts: string; type: 'ticket.assoc'; ticket: number }
+  | { ts: string; type: 'pr.assoc'; pr: number }
+  | { ts: string; type: 'loop.status'; from: string; to: string }
+  | { ts: string; type: 'loop.iteration'; n: number }
+  | { ts: string; type: 'command'; source: string; cmd: string; exit: number | null }
+  | { ts: string; type: 'outputs.snapshot'; pr: number | null; files: AuditOutputFile[] };
+
+/** One file captured in an `outputs.snapshot` (§25.5): a `.agent-loop/`-relative path and its size. */
+export interface AuditOutputFile {
+  path: string;
+  bytes: number;
+}
 
 /** The minimal flow shape the lifecycle classifier reads (a subset of FlowStateView). */
 export interface FlowLike {
@@ -35,6 +49,13 @@ export interface TodoLike {
   id: string;
   text: string;
   status: TodoStatus;
+}
+
+/** The minimal agent-loop shape the loop classifier diffs (a subset of FlowLoopView, §24.2.3 T2). */
+export interface LoopLike {
+  status: string;
+  iteration: number;
+  pr: number | null;
 }
 
 export type TransitionKind = 'start' | 'advance' | 'restart' | 'undo';
@@ -121,5 +142,129 @@ export function todoEvents(before: TodoLike[], after: TodoLike[], ts: string): A
     if (prev.text !== t.text) events.push({ ts, type: 'todo.text', id: t.id, text: t.text });
   }
   for (const t of before) if (!afterIds.has(t.id)) events.push({ ts, type: 'todo.deleted', id: t.id });
+  return events;
+}
+
+/** The events an agent-loop state.yaml observation produces, from the before/after diff (§25.5).
+ *  First observation (`before` null) records the initial status + iteration (and PR if present); a
+ *  later observation records only what changed. An absent `after` (left the loop step) yields nothing. */
+export function loopEvents(before: LoopLike | null, after: LoopLike | null, ts: string): AuditEvent[] {
+  if (!after) return [];
+  const events: AuditEvent[] = [];
+  if (!before || before.status !== after.status) {
+    events.push({ ts, type: 'loop.status', from: before?.status ?? '', to: after.status });
+  }
+  if (!before || before.iteration !== after.iteration) {
+    events.push({ ts, type: 'loop.iteration', n: after.iteration });
+  }
+  if (after.pr !== null && (!before || before.pr !== after.pr)) {
+    events.push({ ts, type: 'pr.assoc', pr: after.pr });
+  }
+  return events;
+}
+
+/** A run replayed from its append-only stream (§25.6): the ordered events plus the folded final
+ *  state they reconstruct — proof that a complete timeline is recoverable from the record alone. */
+export interface RunTimeline {
+  header: AuditHeader | null;
+  events: AuditEvent[];
+  flow: { status: FlowStatus; step: string };
+  ticket: number | null;
+  pr: number | null;
+  loop: { status: string; iteration: number } | null;
+  inputs: Record<string, string>;
+  todos: TodoLike[];
+  commands: { source: string; cmd: string; exit: number | null }[];
+  snapshots: { pr: number | null; files: AuditOutputFile[] }[];
+}
+
+/** Replay a run's stream into its ordered timeline and folded final state (§25.6), tolerating a
+ *  trailing partial document (parseAuditStream stops at the first unparseable doc). */
+export function reconstructTimeline(text: string): RunTimeline {
+  const { header, events } = parseAuditStream(text);
+  const tl: RunTimeline = {
+    header,
+    events,
+    flow: { status: 'not_started', step: '' },
+    ticket: null,
+    pr: null,
+    loop: null,
+    inputs: {},
+    todos: [],
+    commands: [],
+    snapshots: [],
+  };
+  const todoOf = (id: string): TodoLike | undefined => tl.todos.find((t) => t.id === id);
+  for (const e of events) {
+    switch (e.type) {
+      case 'flow.started':
+        tl.flow = { status: 'in_progress', step: e.step };
+        break;
+      case 'flow.status':
+        tl.flow.status = e.to;
+        break;
+      case 'step.entered':
+      case 'flow.completed':
+        tl.flow.step = e.step;
+        break;
+      case 'todo.created':
+        tl.todos.push({ id: e.id, text: e.text, status: 'active' });
+        break;
+      case 'todo.status': {
+        const t = todoOf(e.id);
+        if (t) t.status = e.to;
+        break;
+      }
+      case 'todo.text': {
+        const t = todoOf(e.id);
+        if (t) t.text = e.text;
+        break;
+      }
+      case 'todo.deleted':
+        tl.todos = tl.todos.filter((t) => t.id !== e.id);
+        break;
+      case 'input.resolved':
+        tl.inputs[e.name] = e.value;
+        break;
+      case 'ticket.assoc':
+        tl.ticket = e.ticket;
+        break;
+      case 'pr.assoc':
+        tl.pr = e.pr;
+        break;
+      case 'loop.status':
+        tl.loop = { status: e.to, iteration: tl.loop?.iteration ?? 0 };
+        break;
+      case 'loop.iteration':
+        tl.loop = { status: tl.loop?.status ?? '', iteration: e.n };
+        break;
+      case 'command':
+        tl.commands.push({ source: e.source, cmd: e.cmd, exit: e.exit });
+        break;
+      case 'outputs.snapshot':
+        tl.snapshots.push({ pr: e.pr, files: e.files });
+        break;
+    }
+  }
+  return tl;
+}
+
+/** The events resolving a step's typed inputs produces (§25.5): an `input.resolved` per value, plus a
+ *  `ticket.assoc` when a `github-ticket` input (per `typeByName`) resolved to a positive integer —
+ *  explicit ID sourcing only, never scraped (§25.7). */
+export function inputEvents(
+  values: Record<string, string>,
+  typeByName: Record<string, string>,
+  ts: string,
+): AuditEvent[] {
+  const events: AuditEvent[] = [];
+  for (const name of Object.keys(values)) {
+    const value = values[name];
+    events.push({ ts, type: 'input.resolved', name, value });
+    if (typeByName[name] === 'github-ticket') {
+      const ticket = Number(value);
+      if (Number.isInteger(ticket) && ticket > 0) events.push({ ts, type: 'ticket.assoc', ticket });
+    }
+  }
   return events;
 }

@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { createAuditRecorder } from '../../src/main/auditRecorder';
-import { parseAuditStream } from '../../src/shared/audit';
+import { parseAuditStream, type AuditEvent } from '../../src/shared/audit';
 import { auditFilePath, auditRepoDir } from '../../src/main/auditPaths';
 
 const D = new Date('2026-06-23T10:00:01.000Z');
@@ -124,5 +124,120 @@ describe('audit recorder — run file lifecycle (§25.4)', () => {
   it('records nothing for a todo change when no run is open (no flow active)', () => {
     recorder().recordTodoChange(repo, [], [{ id: 'a1', text: 'x', status: 'active' }]);
     expect(existsSync(auditRepoDir(root, repo))).toBe(false);
+  });
+
+  it('records loop status/iteration/pr changes from the state.yaml mirror to the open run file', () => {
+    const rec = recorder();
+    rec.recordTransition(repo, 'start', NOT_STARTED, IN_PROGRESS);
+    rec.recordLoop(repo, { status: 'planning', iteration: 1, pr: null });
+    rec.recordLoop(repo, { status: 'planning', iteration: 1, pr: null }); // idempotent re-pull → nothing
+    rec.recordLoop(repo, { status: 'awaiting-human-pr-approval', iteration: 4, pr: 42 });
+
+    expect(eventsIn(runFiles()[0])).toEqual([
+      'flow.started',
+      'loop.status',
+      'loop.iteration',
+      'outputs.snapshot', // a status change snapshots the loop's outputs (§25.5)
+      'loop.status',
+      'loop.iteration',
+      'pr.assoc',
+      'outputs.snapshot',
+    ]);
+  });
+
+  it('records nothing for a loop observation when no run is open', () => {
+    recorder().recordLoop(repo, { status: 'planning', iteration: 1, pr: null });
+    expect(existsSync(auditRepoDir(root, repo))).toBe(false);
+  });
+
+  it('re-records the initial loop status after a fresh start (per-run diff resets)', () => {
+    const rec = recorder();
+    rec.recordTransition(repo, 'start', NOT_STARTED, IN_PROGRESS);
+    rec.recordLoop(repo, { status: 'planning', iteration: 1, pr: null });
+    clock = new Date('2026-06-25T14:12:00Z');
+    rec.recordTransition(repo, 'start', { status: 'done', stepName: 'plan' }, IN_PROGRESS);
+    rec.recordLoop(repo, { status: 'planning', iteration: 1, pr: null });
+
+    const newest = runFiles().sort().at(-1)!;
+    expect(eventsIn(newest)).toEqual(['flow.started', 'loop.status', 'loop.iteration', 'outputs.snapshot']);
+  });
+
+  it('records resolved inputs and a ticket association to the open run file', () => {
+    const rec = recorder();
+    rec.recordTransition(repo, 'start', NOT_STARTED, IN_PROGRESS);
+    rec.recordInputs(repo, { ticket: '176' }, { ticket: 'github-ticket' });
+    expect(eventsIn(runFiles()[0])).toEqual(['flow.started', 'input.resolved', 'ticket.assoc']);
+  });
+
+  it('records nothing for resolved inputs when no run is open', () => {
+    recorder().recordInputs(repo, { ticket: '176' }, { ticket: 'github-ticket' });
+    expect(existsSync(auditRepoDir(root, repo))).toBe(false);
+  });
+
+  const snapshotsIn = (file: string): Extract<AuditEvent, { type: 'outputs.snapshot' }>[] =>
+    parseAuditStream(readFileSync(join(auditRepoDir(root, repo), file), 'utf8')).events.filter(
+      (e): e is Extract<AuditEvent, { type: 'outputs.snapshot' }> => e.type === 'outputs.snapshot',
+    );
+
+  it('snapshots the .agent-loop/ files (path + bytes) and PR on a loop status change', () => {
+    const loopDir = join(repo, '.agent-loop');
+    mkdirSync(loopDir, { recursive: true });
+    writeFileSync(join(loopDir, 'plan.md'), 'a'.repeat(20));
+    writeFileSync(join(loopDir, 'pr-context.md'), 'b'.repeat(5));
+
+    const rec = recorder();
+    rec.recordTransition(repo, 'start', NOT_STARTED, IN_PROGRESS);
+    rec.recordLoop(repo, { status: 'planning', iteration: 1, pr: 42 });
+
+    const snaps = snapshotsIn(runFiles()[0]);
+    expect(snaps).toHaveLength(1);
+    expect(snaps[0].pr).toBe(42);
+    expect(snaps[0].files).toEqual([
+      { path: '.agent-loop/plan.md', bytes: 20 },
+      { path: '.agent-loop/pr-context.md', bytes: 5 },
+    ]);
+  });
+
+  it('takes one snapshot per status change, not per idempotent re-pull', () => {
+    mkdirSync(join(repo, '.agent-loop'), { recursive: true });
+    writeFileSync(join(repo, '.agent-loop', 'plan.md'), 'x');
+    const rec = recorder();
+    rec.recordTransition(repo, 'start', NOT_STARTED, IN_PROGRESS);
+    rec.recordLoop(repo, { status: 'planning', iteration: 1, pr: null });
+    rec.recordLoop(repo, { status: 'planning', iteration: 1, pr: null }); // no change → no snapshot
+    rec.recordLoop(repo, { status: 'building', iteration: 2, pr: null }); // status change → snapshot
+    expect(snapshotsIn(runFiles()[0])).toHaveLength(2);
+  });
+
+  it('records a flow-injected bootstrap command and its exit to the open run file', () => {
+    const rec = recorder();
+    rec.recordTransition(repo, 'start', NOT_STARTED, IN_PROGRESS);
+    rec.recordCommand(repo, 'bootstrap', 'agent-loop pickup 176', 127);
+    const cmd = parseAuditStream(readFileSync(join(auditRepoDir(root, repo), runFiles()[0]), 'utf8')).events.find(
+      (e): e is Extract<AuditEvent, { type: 'command' }> => e.type === 'command',
+    );
+    expect(cmd).toEqual({ ts: '2026-06-23T10:00:01Z', type: 'command', source: 'bootstrap', cmd: 'agent-loop pickup 176', exit: 127 });
+  });
+
+  it('records nothing for a command when no run is open', () => {
+    recorder().recordCommand(repo, 'bootstrap', 'agent-loop pickup 1', 0);
+    expect(existsSync(auditRepoDir(root, repo))).toBe(false);
+  });
+
+  it('excludes a .agent-loop/ symlink that escapes the repo (§20.2)', () => {
+    const loopDir = join(repo, '.agent-loop');
+    mkdirSync(loopDir, { recursive: true });
+    writeFileSync(join(loopDir, 'plan.md'), 'in-repo');
+    const outside = join(tmpdir(), `audit-escape-${basename(repo)}.txt`);
+    writeFileSync(outside, 'secret');
+    symlinkSync(outside, join(loopDir, 'escape.md'));
+
+    const rec = recorder();
+    rec.recordTransition(repo, 'start', NOT_STARTED, IN_PROGRESS);
+    rec.recordLoop(repo, { status: 'planning', iteration: 1, pr: null });
+
+    const files = snapshotsIn(runFiles()[0])[0].files.map((f) => f.path);
+    expect(files).toEqual(['.agent-loop/plan.md']);
+    rmSync(outside, { force: true });
   });
 });

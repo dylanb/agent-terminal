@@ -3,8 +3,11 @@ import path from 'node:path';
 import {
   auditFileStamp,
   auditTimestamp,
+  inputEvents,
   lifecycleEvents,
+  loopEvents,
   parseAuditStream,
+  reconstructTimeline,
   serializeDoc,
   todoEvents,
   type AuditEvent,
@@ -120,6 +123,121 @@ describe('lifecycleEvents — append kinds diff before/after (§25.4/§25.5)', (
     expect(lifecycleEvents('undo', done('build'), inProg('build'), T)).toEqual([
       { ts: T, type: 'flow.status', from: 'done', to: 'in_progress' },
     ]);
+  });
+});
+
+describe('loopEvents — diff the agent-loop state.yaml mirror (§25.5)', () => {
+  const T = '2026-06-23T10:30:00Z';
+  const loop = (status: string, iteration: number, pr: number | null) => ({ status, iteration, pr });
+
+  it('records the initial status, iteration, and PR on first observation (no prior)', () => {
+    expect(loopEvents(null, loop('planning', 1, null), T)).toEqual([
+      { ts: T, type: 'loop.status', from: '', to: 'planning' },
+      { ts: T, type: 'loop.iteration', n: 1 },
+    ]);
+  });
+
+  it('associates the PR the first time state.yaml carries one', () => {
+    expect(loopEvents(loop('building', 3, null), loop('building', 3, 42), T)).toEqual([
+      { ts: T, type: 'pr.assoc', pr: 42 },
+    ]);
+  });
+
+  it('records a status change and an iteration bump together', () => {
+    expect(loopEvents(loop('building', 3, 42), loop('awaiting-human-pr-approval', 4, 42), T)).toEqual([
+      { ts: T, type: 'loop.status', from: 'building', to: 'awaiting-human-pr-approval' },
+      { ts: T, type: 'loop.iteration', n: 4 },
+    ]);
+  });
+
+  it('records nothing when status, iteration, and PR are unchanged', () => {
+    expect(loopEvents(loop('building', 3, 42), loop('building', 3, 42), T)).toEqual([]);
+  });
+
+  it('records nothing when the loop view is absent (left the loop step)', () => {
+    expect(loopEvents(loop('building', 3, 42), null, T)).toEqual([]);
+  });
+});
+
+describe('inputEvents — resolved flow inputs and ticket association (§25.5)', () => {
+  const T = '2026-06-23T10:00:06Z';
+
+  it('records input.resolved for each value', () => {
+    expect(inputEvents({ branch: 'main' }, { branch: 'free-text' }, T)).toEqual([
+      { ts: T, type: 'input.resolved', name: 'branch', value: 'main' },
+    ]);
+  });
+
+  it('also associates the ticket when a github-ticket input resolves to a number', () => {
+    expect(inputEvents({ ticket: '176' }, { ticket: 'github-ticket' }, T)).toEqual([
+      { ts: T, type: 'input.resolved', name: 'ticket', value: '176' },
+      { ts: T, type: 'ticket.assoc', ticket: 176 },
+    ]);
+  });
+
+  it('records the input but no ticket when a github-ticket value is not a positive integer', () => {
+    expect(inputEvents({ ticket: 'oops' }, { ticket: 'github-ticket' }, T)).toEqual([
+      { ts: T, type: 'input.resolved', name: 'ticket', value: 'oops' },
+    ]);
+  });
+});
+
+describe('reconstructTimeline — replay a full run into its ordered timeline + final state (§25.6)', () => {
+  const header: AuditHeader = {
+    flow: 'feature-dev',
+    repo: 'agent-terminal',
+    repoPath: '/a/b/agent-terminal',
+    started: '2026-06-23T10:00:01Z',
+  };
+  const events: AuditEvent[] = [
+    { ts: '2026-06-23T10:00:01Z', type: 'flow.started', step: 'plan' },
+    { ts: '2026-06-23T10:00:06Z', type: 'input.resolved', name: 'ticket', value: '17' },
+    { ts: '2026-06-23T10:00:06Z', type: 'ticket.assoc', ticket: 17 },
+    { ts: '2026-06-23T10:00:07Z', type: 'command', source: 'bootstrap', cmd: 'agent-loop pickup 17', exit: 0 },
+    { ts: '2026-06-23T10:02:11Z', type: 'todo.created', id: 'a1', text: 'Wire audit IPC' },
+    { ts: '2026-06-23T10:02:12Z', type: 'todo.created', id: 'a2', text: 'Add reconstructor' },
+    { ts: '2026-06-23T10:05:00Z', type: 'todo.status', id: 'a1', from: 'active', to: 'done' },
+    { ts: '2026-06-23T10:06:00Z', type: 'todo.deleted', id: 'a2' },
+    { ts: '2026-06-23T10:30:00Z', type: 'loop.status', from: '', to: 'building' },
+    { ts: '2026-06-23T10:30:00Z', type: 'loop.iteration', n: 3 },
+    { ts: '2026-06-23T10:40:00Z', type: 'pr.assoc', pr: 42 },
+    { ts: '2026-06-23T10:40:01Z', type: 'outputs.snapshot', pr: 42, files: [{ path: '.agent-loop/plan.md', bytes: 10 }] },
+    { ts: '2026-06-23T11:00:00Z', type: 'flow.status', from: 'in_progress', to: 'done' },
+    { ts: '2026-06-23T11:00:00Z', type: 'flow.completed', step: 'review' },
+  ];
+  const stream = [serializeDoc(header), ...events.map(serializeDoc)].join('');
+
+  it('preserves the header and the full ordered event sequence', () => {
+    const tl = reconstructTimeline(stream);
+    expect(tl.header).toEqual(header);
+    expect(tl.events).toEqual(events);
+  });
+
+  it('folds the events into the run’s replayable final state', () => {
+    const tl = reconstructTimeline(stream);
+    expect(tl.flow).toEqual({ status: 'done', step: 'review' });
+    expect(tl.ticket).toBe(17);
+    expect(tl.pr).toBe(42);
+    expect(tl.loop).toEqual({ status: 'building', iteration: 3 });
+    expect(tl.inputs).toEqual({ ticket: '17' });
+    expect(tl.commands).toEqual([{ source: 'bootstrap', cmd: 'agent-loop pickup 17', exit: 0 }]);
+    expect(tl.snapshots).toEqual([{ pr: 42, files: [{ path: '.agent-loop/plan.md', bytes: 10 }] }]);
+    // a1 ended done; a2 was deleted → only a1 survives.
+    expect(tl.todos).toEqual([{ id: 'a1', text: 'Wire audit IPC', status: 'done' }]);
+  });
+
+  it('tolerates a trailing partial document (crash mid-append) and replays what survived', () => {
+    const tl = reconstructTimeline(stream + '---\nts: 2026-06-23T11:01:00Z\ntype: "todo.cre');
+    expect(tl.flow).toEqual({ status: 'done', step: 'review' });
+    expect(tl.events).toEqual(events);
+  });
+
+  it('returns an empty, not-started timeline for an empty stream', () => {
+    const tl = reconstructTimeline('');
+    expect(tl.header).toBeNull();
+    expect(tl.events).toEqual([]);
+    expect(tl.flow).toEqual({ status: 'not_started', step: '' });
+    expect(tl.todos).toEqual([]);
   });
 });
 
