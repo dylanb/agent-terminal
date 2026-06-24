@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import { mkdtempSync, readFileSync, writeFileSync, statSync, rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -6,7 +6,15 @@ import path from 'node:path';
 import { generateIcon, fingerprint } from '../../scripts/gen-icon.mjs';
 
 const RASTER = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
-const tmp = (): string => mkdtempSync(path.join(os.tmpdir(), 'genicon-'));
+const tmpDirs: string[] = [];
+const tmp = (): string => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'genicon-'));
+  tmpDirs.push(dir);
+  return dir;
+};
+afterEach(() => {
+  for (const dir of tmpDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+});
 
 describe('generateIcon', () => {
   const paths = (dir: string): { svgPath: string; pngPath: string; hashPath: string } => ({

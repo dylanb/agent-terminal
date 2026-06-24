@@ -12,9 +12,8 @@ export function fingerprint(bytes) {
 }
 
 /**
- * Write the PNG only when the SVG content fingerprint differs from the one recorded at hashPath (or
- * the PNG/record is absent). `render(svgBytes) => Buffer` is injected so the up-to-date decision is
- * independent of the rasterizer. Returns whether it rasterized.
+ * `render(svgBytes) => Buffer` is injected so the up-to-date decision is independent of the
+ * rasterizer. Returns whether it rasterized.
  */
 export function generateIcon({ svgPath, pngPath, hashPath, render }) {
   const svg = readFileSync(svgPath);
