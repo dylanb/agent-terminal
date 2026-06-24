@@ -67,6 +67,20 @@ describe('generateIcon', () => {
     expect(readFileSync(p.pngPath)).toEqual(RASTER);
   });
 
+  it('re-rasterizes when the hash record is missing even though the PNG is present', () => {
+    const dir = tmp();
+    const p = paths(dir);
+    writeFileSync(p.svgPath, '<svg>a</svg>');
+    generateIcon({ ...p, render: () => RASTER });
+    rmSync(p.hashPath);
+    const render = vi.fn(() => RASTER);
+
+    const result = generateIcon({ ...p, render });
+
+    expect(result.regenerated).toBe(true);
+    expect(render).toHaveBeenCalledTimes(1);
+  });
+
   it('re-rasterizes when the SVG content changes', () => {
     const dir = tmp();
     const p = paths(dir);
