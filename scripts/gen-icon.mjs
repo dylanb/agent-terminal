@@ -32,8 +32,6 @@ export function generateIcon({ svgPath, pngPath, hashPath, render }) {
 // `pnpm run package`, so CI never exercises it — recorded gap.
 const invokedDirectly = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 if (invokedDirectly) {
-  // @resvg/resvg-js is an optional native dep; importing it lazily keeps the test/import path free of
-  // the binary.
   const { Resvg } = await import('@resvg/resvg-js');
   const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
   const result = generateIcon({
