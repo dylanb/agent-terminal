@@ -89,9 +89,8 @@ export function wireTerminalDrop(
   };
 }
 
-/** The themed terminal background (`--term-bg`), read from the pane's own cascade and falling back to
- *  the document root. Seeds xterm's inline theme background so the gutter isn't xterm's `#000` default
- *  (§7.1/§7.4). */
+/** The themed `--term-bg` for xterm's inline theme background; `undefined` when unset, leaving xterm's
+ *  `#000` gutter default (§7.1/§7.4). */
 export function readTermBg(container: HTMLElement): string | undefined {
   return (
     getComputedStyle(container).getPropertyValue('--term-bg').trim() ||
@@ -100,9 +99,8 @@ export function readTermBg(container: HTMLElement): string | undefined {
   );
 }
 
-/** Re-seed xterm's inline theme background on each live `data-theme` toggle (§7.1/§7.4): the gutter fill
- *  is that background and `--term-bg` differs per theme, so without this the strip reappears one theme
- *  behind. Observes `data-theme` on the document root (where the shell toggles it). Returns a disposer. */
+/** Re-seed xterm's inline theme background on each live `data-theme` toggle, else the gutter strip
+ *  reappears one theme behind (the fill is that background and `--term-bg` differs per theme; §7.1/§7.4). */
 export function wireTerminalThemeBackground(deps: {
   applyBg: (bg: string | undefined) => void;
   readBg: () => string | undefined;
