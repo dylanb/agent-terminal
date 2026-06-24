@@ -568,6 +568,22 @@ test('native selection + copy work on the alternate screen buffer (§7.4)', asyn
     .toContain('altcopy-98765');
 });
 
+test('the terminal scrollbar gutter matches the terminal background — no contrasting strip (§7.1)', async () => {
+  // xterm paints the viewport (scrollbar gutter included) with its inline theme background; left at
+  // xterm's #000 default it shows as a black strip a full-screen agent (alt buffer, no scrollback) can't
+  // cover, against the themed --term-bg pane. terminal.ts seeds the theme background from --term-bg so
+  // the gutter is the same colour as the terminal. Asserted via computed style (no PTY input needed) so
+  // the fix itself is under test, not the shell.
+  const viewportBg = await page
+    .locator('#terminal .xterm-viewport')
+    .evaluate((el) => getComputedStyle(el).backgroundColor);
+  const paneBg = await page
+    .locator('#terminal-view')
+    .evaluate((el) => getComputedStyle(el).backgroundColor);
+  expect(viewportBg).toBe(paneBg);
+  expect(viewportBg).not.toBe('rgb(0, 0, 0)'); // not xterm's hardcoded-black default
+});
+
 test('capture ↔ terminal cross-highlight: double-click reveals each side (§16.8)', async () => {
   // APP_SHELL_INTEGRATION=0 so the printed report surfaces deterministically (as in the replay test).
   await app.close();

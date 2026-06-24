@@ -267,6 +267,17 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible { outline:2px so
 #terminal-view { display:flex; flex-direction:column; height:100%; background:var(--term-bg); }
 #toolbar { padding:8px 12px; display:flex; gap:8px; background:var(--card); border-bottom:1px solid var(--hair); }
 #terminal { flex:1; min-height:0; padding:6px 8px; }
+/* xterm.css's `.xterm-viewport { overflow-y:scroll }` reserves a permanent scrollbar gutter even with
+ * nothing to scroll (the alt buffer has no scrollback), so a full-screen agent's frame leaves an ugly
+ * strip uncovered (§7.1/§7.4). Overlay instead: gutter only when scrollable, thin and theme-matched.
+ * (The gutter's fill colour is xterm's inline theme background, set to --term-bg in terminal.ts.) */
+#terminal .xterm-viewport {
+  overflow-y:auto;
+  scrollbar-width:thin; scrollbar-color:var(--term-dim) transparent;
+}
+#terminal .xterm-viewport::-webkit-scrollbar { width:8px; }
+#terminal .xterm-viewport::-webkit-scrollbar-track { background:transparent; }
+#terminal .xterm-viewport::-webkit-scrollbar-thumb { background-color:var(--term-dim); border-radius:4px; }
 
 button {
   background:transparent; color:var(--text); border:1px solid var(--hair);

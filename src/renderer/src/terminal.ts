@@ -43,6 +43,12 @@ export function wireTerminalPaneListeners(opts: { focusView: () => void; resize:
 }
 
 export function createTerminalPane(container: HTMLElement): TerminalPane {
+  // xterm paints the viewport (scrollbar gutter included) with its inline theme background; left at
+  // xterm's #000 default it mismatches the themed --term-bg pane as an ugly strip (§7.1/§7.4).
+  const termBg =
+    getComputedStyle(container).getPropertyValue('--term-bg').trim() ||
+    getComputedStyle(document.documentElement).getPropertyValue('--term-bg').trim() ||
+    undefined;
   const term = new Terminal({
     fontFamily: 'monospace',
     fontSize: 14,
@@ -52,6 +58,7 @@ export function createTerminalPane(container: HTMLElement): TerminalPane {
     // Expose row content to assistive tech — the terminal is the primary surface (WCAG 4.1.2).
     screenReaderMode: true,
     theme: {
+      background: termBg,
       // Focused selection paints live during the drag — xterm's hit-testing gives instant,
       // per-frame feedback the app-owned decoration can't (it churns faster than it paints, §7.1).
       selectionBackground: SEL_COLOR,
