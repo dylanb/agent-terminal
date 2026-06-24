@@ -1,7 +1,5 @@
-// Live artifact reload (§20.1): the viewer reads files on demand and otherwise only re-pulls on a
-// cwd change, so an on-disk edit to a displayed artifact goes unseen until the next cd. This watches
-// the viewer's tree root and fires onChange so main can re-broadcast over the viewer:onChanged seam,
-// mirroring the agent-loop state watcher (agentLoopBridge.ts).
+// Live artifact reload (§20.1): watch the viewer's tree root and fire onChange when a file under it
+// changes on disk, so main can re-broadcast over the viewer:onChanged seam and the renderer re-pulls.
 
 import { watch } from 'node:fs';
 import path from 'node:path';
@@ -13,9 +11,8 @@ function isIgnoredEvent(filename: string | Buffer | null, rootName: string): boo
   return rel === rootName || rel.split(path.sep).some((seg) => IGNORED_DIRS.has(seg));
 }
 
-/** The directory the viewer tree is rooted at (§20.1): the git top-level for a repo cwd, else the
- *  cwd itself — so the recursive watch covers exactly the files discovery can surface. Resolves the
- *  root through the same `gitRootOf` discovery uses, so the watch root and the tree root cannot drift. */
+/** The tree root the watch covers (§20.1): the git top-level for a repo cwd, else the cwd itself,
+ *  resolved through the same `gitRootOf` discovery uses so the watch root and the tree root cannot drift. */
 export function viewerRoot(cwd: string): string {
   return gitRootOf(cwd) ?? path.resolve(cwd);
 }
@@ -24,7 +21,8 @@ export function viewerRoot(cwd: string): string {
  *  events; coalescing to one onChange keeps the renderer from re-walking the tree per file. */
 export const VIEWER_WATCH_DEBOUNCE_MS = 100;
 
-/** Starts a recursive watch of `dir`, delivering each event's tree-relative filename to `onEvent`. */
+/** Injection seam for the watch backend. `onEvent` receives each event's tree-relative filename —
+ *  a Buffer on some platforms, and null where the platform omits it. */
 export type ViewerWatchFactory = (
   dir: string,
   onEvent: (filename: string | Buffer | null) => void,
@@ -33,10 +31,9 @@ export type ViewerWatchFactory = (
 const defaultWatchFactory: ViewerWatchFactory = (dir, onEvent) =>
   watch(dir, { recursive: true }, (_event, filename) => onEvent(filename));
 
-/** Watch `dir` recursively, calling `onChange` (coalesced over `opts.debounceMs`) on file events under
- *  it. Returns an unsubscribe that also cancels a pending fire; if the directory can't be watched (it
- *  does not exist yet) it degrades to a no-op, exactly like the agent-loop watcher, so live reload is
- *  simply absent there. `opts.watch` injects the watch factory (defaults to node's recursive fs.watch).*/
+/** Watch `dir` recursively, coalescing events over `opts.debounceMs` into one `onChange` (§20.1).
+ *  `opts.watch` injects the watch backend (defaults to node's recursive fs.watch); the returned
+ *  disposer stops the watch. A directory that cannot be watched yields an inert disposer. */
 export function watchViewerTree(
   dir: string,
   onChange: () => void,

@@ -16,7 +16,11 @@ import {
 const DEBOUNCE = 10;
 const settle = (): Promise<void> => new Promise((r) => setTimeout(r, DEBOUNCE * 4));
 
-function fakeWatch(): { factory: ViewerWatchFactory; emit: (f: string) => void; closed: () => boolean } {
+function fakeWatch(): {
+  factory: ViewerWatchFactory;
+  emit: (f: string | Buffer | null) => void;
+  closed: () => boolean;
+} {
   let onEvent: (f: string | Buffer | null) => void = () => {};
   let open = false;
   return {
@@ -76,6 +80,45 @@ describe('watchViewerTree — artifact tree file watcher', () => {
     w.emit('a.md');
     await settle();
     expect(fired).toBe(1);
+  });
+
+  it('cancels a pending coalesced fire when unsubscribed before the debounce elapses', async () => {
+    const w = fakeWatch();
+    let fired = 0;
+    const stop = watchViewerTree(dir, () => (fired += 1), { debounceMs: DEBOUNCE, watch: w.factory });
+    w.emit('a.md');
+    stop(); // before the debounce window elapses — the armed fire must be cancelled
+    await settle();
+    expect(fired).toBe(0);
+  });
+
+  it('fires a conservative reload for a null filename the platform could not classify', async () => {
+    // node fs.watch may deliver filename === null; isIgnoredEvent cannot classify it, so it must not
+    // be silently dropped — the viewer reloads rather than miss a real change.
+    const w = fakeWatch();
+    let fired = 0;
+    const stop = watchViewerTree(dir, () => (fired += 1), { debounceMs: DEBOUNCE, watch: w.factory });
+    try {
+      w.emit(null);
+      await settle();
+      expect(fired).toBe(1);
+    } finally {
+      stop();
+    }
+  });
+
+  it('classifies a Buffer filename the same as its string form', async () => {
+    const w = fakeWatch();
+    let fired = 0;
+    const stop = watchViewerTree(dir, () => (fired += 1), { debounceMs: DEBOUNCE, watch: w.factory });
+    try {
+      w.emit(Buffer.from(join('.git', 'index'))); // ignored just like the string path
+      w.emit(Buffer.from('a.md')); // a real edit still fires
+      await settle();
+      expect(fired).toBe(1);
+    } finally {
+      stop();
+    }
   });
 
   it('is a no-op (never throws) when the directory cannot be watched', () => {
