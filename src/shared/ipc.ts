@@ -593,6 +593,9 @@ export interface TermApi {
   platform: OsPlatform;
   /** Subscribe to macOS Edit-menu actions (§7.7); the renderer routes them by focus. */
   onMenuAction(cb: (action: EditAction) => void): () => void;
+  /** Absolute filesystem path of a dropped `File` (§7.8) — `File.path` is gone under contextIsolation,
+   *  so the renderer routes through the preload's `webUtils`. Returns `''` for a non-file drag item. */
+  pathForFile(file: File): string;
 }
 
 export interface MonitorApi {

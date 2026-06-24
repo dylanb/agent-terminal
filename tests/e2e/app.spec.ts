@@ -584,6 +584,49 @@ test('the terminal scrollbar gutter matches the terminal background — no contr
   expect(viewportBg).not.toBe('rgb(0, 0, 0)'); // not xterm's hardcoded-black default
 });
 
+test('dragging a file over the terminal shows a drop-target affordance (§7.8)', async () => {
+  // Slice 3: the drag affordance drives the real renderer wiring with no PTY input. Without the §7.8
+  // handler the class never appears.
+  const terminal = page.locator('#terminal');
+  await expect(terminal).not.toHaveClass(/drag-over/);
+  await terminal.dispatchEvent('dragenter');
+  await expect(terminal).toHaveClass(/drag-over/);
+  await terminal.dispatchEvent('dragleave');
+  await expect(terminal).not.toHaveClass(/drag-over/);
+});
+
+test('dropping a file pastes its single-quoted path at the prompt, no submit (§7.8)', async () => {
+  // Slices 1–2: a real File carrying an OS path (so the preload webUtils bridge resolves it) is obtained
+  // via a hidden <input>, then dispatched as a native drop onto #terminal. The §7.8 handler pastes the
+  // single-quoted path through term.paste(), which the shell echoes at the prompt (no Enter → not run).
+  const tmpDir = mkdtempSync(join(tmpdir(), 'agent-term-drop-'));
+  const dropped = join(tmpDir, 'shot.png');
+  writeFileSync(dropped, 'x');
+
+  await page.evaluate(() => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.id = 'e2e-drop-input';
+    input.style.position = 'fixed';
+    input.style.left = '-9999px';
+    document.body.appendChild(input);
+  });
+  await page.locator('#e2e-drop-input').setInputFiles(dropped);
+  await page.locator('#terminal .xterm-screen').click(); // prompt focus, so the pasted path lands there
+
+  await page.evaluate(() => {
+    const input = document.getElementById('e2e-drop-input') as HTMLInputElement;
+    const dt = new DataTransfer();
+    for (const f of Array.from(input.files ?? [])) dt.items.add(f);
+    document
+      .getElementById('terminal')!
+      .dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: dt }));
+  });
+
+  await expect(termRows()).toContainText(`'${dropped}'`);
+  rmSync(tmpDir, { recursive: true, force: true });
+});
+
 test('capture ↔ terminal cross-highlight: double-click reveals each side (§16.8)', async () => {
   // APP_SHELL_INTEGRATION=0 so the printed report surfaces deterministically (as in the replay test).
   await app.close();

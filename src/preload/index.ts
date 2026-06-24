@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from 'electron';
+import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import {
   CH,
   SESSION_ID,
@@ -54,6 +54,7 @@ export const termApi: TermApi = {
     ipcRenderer.on(CH.menuEdit, h);
     return () => ipcRenderer.removeListener(CH.menuEdit, h);
   },
+  pathForFile: (file) => webUtils.getPathForFile(file),
 };
 
 const monitorApi: MonitorApi = {
