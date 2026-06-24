@@ -69,8 +69,8 @@ describe('extraResources packaged-path coupling', () => {
     const basename = path.basename(
       resolveWindowIconPath({ packaged: true, resourcesPath: '/app/resources', appPath: '/app/app.asar' }),
     );
-    // electron-builder copies `from: build/icon.png` to `to: <basename>` beside the asar; the packaged
-    // resolver reads process.resourcesPath/<basename>. A rename of either side breaks the runtime icon.
+    // Coupling: renaming either the electron-builder `to:` target or the packaged resolver basename
+    // breaks the runtime icon, and no type catches it — this test is the guard.
     expect(builderYml).toMatch(new RegExp(`to:\\s*${basename}\\b`));
     expect(builderYml).toMatch(/from:\s*build\/icon\.png\b/);
   });
