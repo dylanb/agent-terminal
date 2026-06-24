@@ -144,7 +144,7 @@ export function createScanner(deps: ScannerDeps): Scanner {
     start: { x: 0, y: startRow },
     end: { x: reader.cols(), y: endRow },
     baseY: reader.baseY(),
-    bufferType: 'normal',
+    bufferType: reader.bufferType(),
   });
 
   // The sole disposer of a Captured's start-marker (an xterm IMarker) — every removal path routes
@@ -424,7 +424,8 @@ export function createScanner(deps: ScannerDeps): Scanner {
    *  Stateless: reads from the top of the buffer (scrollback included), picks the bottom-most
    *  `report` region as "the latest", and stamps each finding's own range (§16.8). */
   function captureLast(): CaptureLastResult | null {
-    if (reader.bufferType() === 'alternate') return null; // alt buffer is out of scope (§15.9)
+    // The on-demand path reads whatever buffer is live, including a full-screen agent's visible
+    // alternate-screen frame (§21.1/§13.4). The auto path stays normal-only via scan()'s guard.
     const endRow = reader.length() - 1;
     if (endRow < 0) return null;
     const { allRegions } = detectRegions(0, endRow);

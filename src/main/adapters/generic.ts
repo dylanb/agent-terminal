@@ -1,7 +1,9 @@
 // Baseline capture (§15.3). Coupling with the scanner (§15.3 / v2.22): this relies on the window
 // already opening at the stability frontier or a provisional run's own start, so it never walks up
 // past startRow; the scanner's positional dedup merges a run re-gathered across a quiet pause.
-// The alternate buffer emits nothing (precise alt is §15.9).
+// Buffer-agnostic: it reads whatever rows the scanner hands it, so on-demand capture (§21.1) drives
+// it over the visible alternate-screen frame too (full-screen agents, §13.4). The auto path stays
+// normal-buffer-only via scan()'s own guard, so the baseline never auto-emits on the alt buffer.
 
 import type { Adapter, AdapterContext, DetectedRegion } from './types';
 import type { CommandSpanRange } from '../spanTypes';
@@ -17,8 +19,7 @@ export function createGenericAdapter(): Adapter {
   return {
     id: 'baseline',
     detect(ctx: AdapterContext): DetectedRegion[] {
-      const { reader, startRow, endRow, altScreen, closedSpans, reportMinChars, isChrome, isClaimed } = ctx;
-      if (altScreen) return [];
+      const { reader, startRow, endRow, closedSpans, reportMinChars, isChrome, isClaimed } = ctx;
 
       // Key on "has a word", not on any box glyph: a frame line must not split the prose drawn
       // inside a box, but its worded text lines must still capture. Glyph-agnostic by design (§15.x).
