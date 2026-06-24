@@ -193,6 +193,8 @@ export function createArtifacts(host: HTMLElement, deps: ArtifactsDeps): Artifac
   let treeRoot = '';
   let treeNodes: ArtifactNode[] = [];
   let refreshSeq = 0; // a slow stale refresh must not overwrite a newer one (cwd sync race)
+  let renderedTreeSig: string | null = null; // last rendered tree structure; a live reload that matches skips the rebuild
+  let shownSig: string | null = null; // last rendered file content; an unchanged reload keeps the view (and its scroll)
   const fileRows = new Map<string, HTMLElement>();
 
   let width = clampWidth(deps.initialWidth ?? DEFAULT_TREE_W);
@@ -461,15 +463,48 @@ export function createArtifacts(host: HTMLElement, deps: ArtifactsDeps): Artifac
     return out;
   }
 
+  function treeItemKey(row: HTMLElement | null): string | null {
+    if (!row) return null;
+    return row.classList.contains('dname') ? `d:${row.title}` : `f:${row.dataset.rel ?? ''}`;
+  }
+
+  // A live reload whose structure matches the rendered one skips the rebuild, so focus, collapse state,
+  // and scroll survive untouched (§20.1). A NUL byte delimits the fields below — it cannot occur in a
+  // path, scope, or provenance, so two different structures can never collide onto the same signature.
+  function treeSignature(): string {
+    const parts: string[] = [search.value.trim().toLowerCase(), scope];
+    const walk = (ns: ArtifactNode[]): void => {
+      for (const n of ns) {
+        parts.push(n.kind, n.relPath, (n.provenance ?? []).join('+'));
+        if (n.children) walk(n.children);
+      }
+    };
+    walk(treeNodes);
+    return parts.join('\u0000');
+  }
+
   // Re-render rather than toggle visibility so nothing non-matching is ever left in the DOM (§20.2).
   function renderTree(): void {
+    const sig = treeSignature();
+    if (sig === renderedTreeSig) return;
+    renderedTreeSig = sig;
+    // Restore keyboard/SR focus across the rebuild, but only when the tree already held focus, so a
+    // background live reload never steals it; if the focused item vanished, fall back to a surviving
+    // item rather than dropping focus to <body> (WCAG 2.4.3, §20.1).
+    const active = doc.activeElement as HTMLElement | null;
+    const hadFocus = !!active && list.contains(active);
+    const focusedKey = hadFocus ? treeItemKey(active!.closest('[role="treeitem"]') as HTMLElement | null) : null;
     const q = search.value.trim().toLowerCase();
     fileRows.clear();
     list.replaceChildren();
     renderNodes(q ? filterNodes(treeNodes, q) : treeNodes, list);
     if (current) setSelectedRow(current);
-    const firstItem = visibleItems()[0]; // one row holds tabindex=0 so the tree is Tab-reachable
-    if (firstItem) firstItem.tabIndex = 0;
+    const items = visibleItems();
+    if (items[0]) items[0].tabIndex = 0; // one row holds tabindex=0 so the tree is Tab-reachable
+    if (hadFocus) {
+      const match = (items.find((r) => treeItemKey(r) === focusedKey) ?? items[0]) as HTMLElement | undefined;
+      if (match) focusItem(match);
+    }
   }
 
   // Reflect single-select to assistive tech via aria-selected (§20.2 a11y).
@@ -482,8 +517,8 @@ export function createArtifacts(host: HTMLElement, deps: ArtifactsDeps): Artifac
   }
 
   async function open(relPath: string): Promise<void> {
+    const wasCurrent = current === relPath;
     current = relPath;
-    lastSelection = '';
     setSelectedRow(relPath);
     // An IPC failure (main restart) must render the "Cannot display" state, not escape as an
     // unhandled rejection (§20.2).
@@ -494,6 +529,14 @@ export function createArtifacts(host: HTMLElement, deps: ArtifactsDeps): Artifac
       file = null;
     }
     if (current !== relPath) return; // a newer open won the race
+    // A live reload re-opens the current file; when its content is unchanged, keep the rendered view
+    // (and its scroll/selection) instead of rebuilding it (§20.1).
+    const sig = file
+      ? `${file.relPath}\u0000${file.kind}\u0000${file.lang ?? ''}\u0000${file.body}\u0000${(file.changedLines ?? []).join(',')}`
+      : `\u0000null\u0000${relPath}`;
+    if (wasCurrent && sig === shownSig) return;
+    shownSig = sig;
+    lastSelection = '';
     body.setAttribute('aria-label', file?.name ?? relPath);
     if (!file) {
       title.textContent = relPath;
