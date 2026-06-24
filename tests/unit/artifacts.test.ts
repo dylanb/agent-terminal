@@ -185,6 +185,30 @@ describe('surgical re-render on live reload (§20.1)', () => {
     await v.api.refresh();
     expect(v.renderCode.mock.calls.length).toBe(before + 1);
   });
+
+  it('re-renders a changed tree even when a naive delimiter-free signature would collide', async () => {
+    // file `a` tagged `changed` and file `achanged` untagged concatenate identically without a field
+    // separator; a colliding signature would skip the rebuild and strand the stale tree.
+    const T1: ArtifactTree = { root: '/repo', isRepo: true, scope: 'curated', nodes: [{ name: 'a', relPath: 'a', kind: 'file', provenance: ['changed'] }] };
+    const T2: ArtifactTree = { root: '/repo', isRepo: true, scope: 'curated', nodes: [{ name: 'achanged', relPath: 'achanged', kind: 'file' }] };
+    let tree = T1;
+    const v = mount(T1, { loadTree: vi.fn(async () => tree) });
+    await v.api.refresh();
+    expect(v.fileRows().some((r) => r.dataset.rel === 'a')).toBe(true);
+    tree = T2;
+    await v.api.refresh();
+    expect(v.fileRows().some((r) => r.dataset.rel === 'achanged')).toBe(true);
+  });
+
+  it('preserves a collapsed directory across an unchanged live reload', async () => {
+    const v = mount();
+    await v.api.refresh();
+    const dirHead = v.dirRows()[0];
+    dirHead.dispatchEvent(new MouseEvent('click', { bubbles: true })); // collapse it
+    expect(dirHead.closest('.dir')!.classList.contains('collapsed')).toBe(true);
+    await v.api.refresh(); // unchanged tree → no rebuild → collapse state survives
+    expect(v.dirRows()[0].closest('.dir')!.classList.contains('collapsed')).toBe(true);
+  });
 });
 
 describe('focus preservation when the tree rebuilds (§20.1 / WCAG 2.4.3)', () => {
@@ -227,6 +251,40 @@ describe('focus preservation when the tree rebuilds (§20.1 / WCAG 2.4.3)', () =
     await v.api.refresh();
 
     expect(document.activeElement).toBe(outside);
+  });
+
+  it('restores focus to a directory header after a structural rebuild', async () => {
+    const t = growingTree();
+    const v = mount(TREE_CURATED, { loadTree: t.load });
+    await v.api.refresh();
+    const dirHead = v.dirRows()[0];
+    dirHead.tabIndex = 0;
+    dirHead.focus();
+    expect(document.activeElement).toBe(dirHead);
+
+    t.addFile();
+    await v.api.refresh();
+
+    const restored = v.dirRows()[0];
+    expect(restored).not.toBe(dirHead);
+    expect(document.activeElement).toBe(restored);
+  });
+
+  it('moves focus to a surviving item when the focused item is deleted on disk', async () => {
+    let nodes: ArtifactTree['nodes'] = [...TREE_CURATED.nodes, { name: 'gone.md', relPath: 'gone.md', kind: 'file' }];
+    const v = mount(TREE_CURATED, { loadTree: vi.fn(async () => ({ ...TREE_CURATED, nodes })) });
+    await v.api.refresh();
+    const row = v.fileRows().find((r) => r.dataset.rel === 'gone.md')!;
+    row.tabIndex = 0;
+    row.focus();
+    expect(document.activeElement).toBe(row);
+
+    nodes = TREE_CURATED.nodes; // the focused file vanished from disk
+    await v.api.refresh();
+
+    // focus must not evaporate to <body>; it lands on a surviving tree item
+    expect(document.activeElement).not.toBe(document.body);
+    expect(v.treeitems()).toContain(document.activeElement);
   });
 });
 

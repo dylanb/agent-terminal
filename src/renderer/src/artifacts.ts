@@ -463,14 +463,14 @@ export function createArtifacts(host: HTMLElement, deps: ArtifactsDeps): Artifac
     return out;
   }
 
-  // Identity of a treeitem that survives a rebuild: file rows by their relPath, dir heads by their path title.
   function treeItemKey(row: HTMLElement | null): string | null {
     if (!row) return null;
     return row.classList.contains('dname') ? `d:${row.title}` : `f:${row.dataset.rel ?? ''}`;
   }
 
-  // Structure the tree renders (filter + scope + each node's path/kind/provenance); a live reload whose
-  // result matches skips the rebuild, so focus, collapse state, and scroll survive untouched (§20.1).
+  // A live reload whose structure matches the rendered one skips the rebuild, so focus, collapse state,
+  // and scroll survive untouched (§20.1). A NUL byte delimits the fields below — it cannot occur in a
+  // path, scope, or provenance, so two different structures can never collide onto the same signature.
   function treeSignature(): string {
     const parts: string[] = [search.value.trim().toLowerCase(), scope];
     const walk = (ns: ArtifactNode[]): void => {
@@ -480,7 +480,7 @@ export function createArtifacts(host: HTMLElement, deps: ArtifactsDeps): Artifac
       }
     };
     walk(treeNodes);
-    return parts.join('');
+    return parts.join('\u0000');
   }
 
   // Re-render rather than toggle visibility so nothing non-matching is ever left in the DOM (§20.2).
@@ -488,22 +488,21 @@ export function createArtifacts(host: HTMLElement, deps: ArtifactsDeps): Artifac
     const sig = treeSignature();
     if (sig === renderedTreeSig) return;
     renderedTreeSig = sig;
-    // Restore keyboard/SR focus to the same item across the rebuild, but only when the tree already
-    // held focus, so a background live reload never steals it (WCAG 2.4.3, §20.1).
-    const active = document.activeElement as HTMLElement | null;
-    const focusedKey =
-      active && list.contains(active) ? treeItemKey(active.closest('[role="treeitem"]') as HTMLElement | null) : null;
+    // Restore keyboard/SR focus across the rebuild, but only when the tree already held focus, so a
+    // background live reload never steals it; if the focused item vanished, fall back to a surviving
+    // item rather than dropping focus to <body> (WCAG 2.4.3, §20.1).
+    const active = doc.activeElement as HTMLElement | null;
+    const hadFocus = !!active && list.contains(active);
+    const focusedKey = hadFocus ? treeItemKey(active!.closest('[role="treeitem"]') as HTMLElement | null) : null;
     const q = search.value.trim().toLowerCase();
     fileRows.clear();
     list.replaceChildren();
     renderNodes(q ? filterNodes(treeNodes, q) : treeNodes, list);
     if (current) setSelectedRow(current);
-    const firstItem = visibleItems()[0]; // one row holds tabindex=0 so the tree is Tab-reachable
-    if (firstItem) firstItem.tabIndex = 0;
-    if (focusedKey) {
-      const match = ([...list.querySelectorAll('[role="treeitem"]')] as HTMLElement[]).find(
-        (r) => treeItemKey(r) === focusedKey,
-      );
+    const items = visibleItems();
+    if (items[0]) items[0].tabIndex = 0; // one row holds tabindex=0 so the tree is Tab-reachable
+    if (hadFocus) {
+      const match = (items.find((r) => treeItemKey(r) === focusedKey) ?? items[0]) as HTMLElement | undefined;
       if (match) focusItem(match);
     }
   }
@@ -533,8 +532,8 @@ export function createArtifacts(host: HTMLElement, deps: ArtifactsDeps): Artifac
     // A live reload re-opens the current file; when its content is unchanged, keep the rendered view
     // (and its scroll/selection) instead of rebuilding it (§20.1).
     const sig = file
-      ? `${file.relPath} ${file.kind} ${file.lang ?? ''} ${file.body} ${(file.changedLines ?? []).join(',')}`
-      : ` null ${relPath}`;
+      ? `${file.relPath}\u0000${file.kind}\u0000${file.lang ?? ''}\u0000${file.body}\u0000${(file.changedLines ?? []).join(',')}`
+      : `\u0000null\u0000${relPath}`;
     if (wasCurrent && sig === shownSig) return;
     shownSig = sig;
     lastSelection = '';
