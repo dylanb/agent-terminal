@@ -141,6 +141,9 @@ if (artifactsHost) {
   });
   artifacts = view;
   repo.onChange(() => void view.refresh());
+  // Live reload (§20.1): main watches the tree root and pushes viewer:onChanged when a displayed
+  // artifact changes on disk; re-pull so an external edit shows without a cd or manual refresh.
+  window.viewer.onChanged(() => void view.refresh());
   // Width restore is kept off the sync repo path so a late getSettings can't make the viewer miss
   // the first cwd:changed broadcast (§20.1).
   void window.monitor

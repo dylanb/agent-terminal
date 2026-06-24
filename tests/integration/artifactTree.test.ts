@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { discover, readArtifact, emptyTree, pathWithin } from '../../src/main/artifactTree';
@@ -59,7 +59,7 @@ describe('artifact discovery (§20.1 / D8 — real git)', () => {
   let plain: string;
 
   beforeEach(() => {
-    repo = mkdtempSync(join(tmpdir(), 'art-repo-'));
+    repo = realpathSync(mkdtempSync(join(tmpdir(), 'art-repo-')));
     git(['init', '-q'], repo);
     git(['config', 'user.email', 't@t'], repo);
     git(['config', 'user.name', 'T'], repo);
@@ -73,7 +73,7 @@ describe('artifact discovery (§20.1 / D8 — real git)', () => {
     mkdirSync(join(repo, '.agent-loop'), { recursive: true });
     writeFileSync(join(repo, '.agent-loop', 'plan.md'), '# Plan\n');
 
-    plain = mkdtempSync(join(tmpdir(), 'art-plain-'));
+    plain = realpathSync(mkdtempSync(join(tmpdir(), 'art-plain-')));
     mkdirSync(join(plain, 'docs'), { recursive: true });
     writeFileSync(join(plain, 'readme.md'), '# Readme');
     writeFileSync(join(plain, 'docs', 'note.txt'), 'note');

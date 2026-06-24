@@ -13,6 +13,7 @@
   "packageManager": "pnpm@10.28.2",
   "scripts": {
     "rebuild": "electron-rebuild -f -w node-pty",
+    "gen-icon": "node scripts/gen-icon.mjs",
     "postinstall": "electron-rebuild -f -w node-pty",
     "dev": "electron-vite dev",
     "build": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json && electron-vite build",
@@ -20,7 +21,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "pnpm run build && playwright test",
-    "package": "pnpm run build && electron-builder"
+    "package": "pnpm run gen-icon && pnpm run build && electron-builder"
   },
   "license": "MIT",
   "dependencies": {
@@ -39,6 +40,7 @@
   "devDependencies": {
     "@electron/rebuild": "^4.0.4",
     "@playwright/test": "^1.60.0",
+    "@resvg/resvg-js": "^2.6.2",
     "@types/js-yaml": "^4.0.9",
     "@types/markdown-it": "^14.1.2",
     "@types/node": "^25.9.3",

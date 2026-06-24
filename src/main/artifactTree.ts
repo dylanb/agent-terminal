@@ -22,7 +22,9 @@ export interface DiscoverDeps {
 
 const MAX_FILE_BYTES = 512 * 1024;
 const MAX_WALK_ENTRIES = 5000;
-const IGNORED_DIRS = new Set(['.git', 'node_modules', '.agent-terminal']);
+// Shared with the live-reload watcher (viewerWatch.ts): discovery skips these dirs, so the watcher
+// MUST ignore events under them too — else `git status`'s own `.git/index` write feeds a reload loop.
+export const IGNORED_DIRS = new Set(['.git', 'node_modules', '.agent-terminal']);
 const NUL = '\u0000';
 
 const LANG_BY_EXT: Record<string, string> = {
@@ -40,7 +42,9 @@ function defaultGit(args: string[], cwd: string): string {
   return execFileSync('git', args, { cwd, encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 });
 }
 
-function gitRootOf(cwd: string, git: (args: string[], cwd: string) => string): string | null {
+/** The git top-level of `cwd` (`path.resolve`d), or null when `cwd` is not in a repo. Shared with the
+ *  live-reload watcher (viewerWatch.ts) so the watch root and the discovery root resolve identically. */
+export function gitRootOf(cwd: string, git: (args: string[], cwd: string) => string = defaultGit): string | null {
   try {
     const out = git(['rev-parse', '--show-toplevel'], cwd).trim();
     return out ? path.resolve(out) : null;
