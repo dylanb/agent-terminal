@@ -22,7 +22,9 @@ export interface DiscoverDeps {
 
 const MAX_FILE_BYTES = 512 * 1024;
 const MAX_WALK_ENTRIES = 5000;
-const IGNORED_DIRS = new Set(['.git', 'node_modules', '.agent-terminal']);
+// Shared with the live-reload watcher (viewerWatch.ts): discovery skips these dirs, so the watcher
+// MUST ignore events under them too — else `git status`'s own `.git/index` write feeds a reload loop.
+export const IGNORED_DIRS = new Set(['.git', 'node_modules', '.agent-terminal']);
 const NUL = '\u0000';
 
 const LANG_BY_EXT: Record<string, string> = {
