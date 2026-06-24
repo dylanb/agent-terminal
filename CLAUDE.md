@@ -1,20 +1,23 @@
 # CLAUDE.md
 
-Agent Terminal — Electron app that hosts coding agents (Claude Code, Codex, …) in a PTY-attached bash session, renders it with xterm.js, tees output into a main-process `@xterm/headless` shadow screen model, and provides a monitor pane that captures output and injects input back into the agent.
+Agent Terminal — Electron app that hosts coding agents (Claude Code, Codex, …) in a PTY-attached shell session, renders it with xterm.js, tees output into a main-process `@xterm/headless` shadow screen model, and provides a monitor pane that captures output and injects input back into the agent.
 
 `terminal-web-ui-spec.md` (v2.55) is the authoritative spec. Every subsystem implements a numbered section of it; when code and spec disagree, the spec wins — or the spec gets a changelog entry. Cite spec sections (e.g. §9.3) in code review discussion rather than re-arguing settled design decisions.
 
 ## Commands
 
+This repo uses **pnpm** (see `packageManager` in `package.json`). `.npmrc` pins `node-linker=hoisted` so `@electron/rebuild` and electron-builder see a flat `node_modules`; `pnpm.onlyBuiltDependencies` allows node-pty/electron/esbuild to run their install scripts (pnpm v10 blocks build scripts by default).
+
 ```
-npm run rebuild     # electron-rebuild -f -w node-pty — REQUIRED after install or Electron bump
-npm run dev         # electron-vite dev (renderer HMR)
-npm run build       # type-check + electron-vite build
-npm test            # vitest: tests/unit + tests/integration
-npm run test:e2e    # playwright _electron e2e (requires a display; real PTY)
+pnpm install        # runs the postinstall electron-rebuild for node-pty automatically
+pnpm run rebuild    # electron-rebuild -f -w node-pty — REQUIRED after install or Electron bump
+pnpm run dev        # electron-vite dev (renderer HMR)
+pnpm run build      # type-check + electron-vite build
+pnpm test           # vitest: tests/unit + tests/integration
+pnpm run test:e2e   # playwright _electron e2e (requires a display; real PTY)
 ```
 
-`node-pty` is a native module compiled against Electron's ABI. If main-process startup fails with a NODE_MODULE_VERSION error, run `npm run rebuild`.
+`node-pty` is a native module compiled against Electron's ABI. If main-process startup fails with a NODE_MODULE_VERSION error, run `pnpm run rebuild`.
 
 ## Requesting / awaiting a Copilot PR review
 
@@ -47,7 +50,7 @@ Use `scripts/await-copilot-review.sh <pr> [--request] [--check]` (portable bash;
 
 **Every implementation plan for §24.2 backlog work MUST be decomposed into tracer-bullet slices before any code is written. This is a planning gate: a plan that is not sliced this way is incomplete and implementation does not start.**
 
-A **tracer bullet** is a thin but *complete* vertical slice that passes through **every layer the feature touches** — main-process logic → the typed IPC contract (`src/shared/ipc.ts`, §6) → preload bridge → renderer widget → visible, interactive UI — and does the **smallest real end-to-end thing** with **real backing, not a fixture**. Like a tracer round, you fire it through the running app and watch where it lands: each slice is hand-testable through the UI (`npm run dev`) and demoable on its own.
+A **tracer bullet** is a thin but *complete* vertical slice that passes through **every layer the feature touches** — main-process logic → the typed IPC contract (`src/shared/ipc.ts`, §6) → preload bridge → renderer widget → visible, interactive UI — and does the **smallest real end-to-end thing** with **real backing, not a fixture**. Like a tracer round, you fire it through the running app and watch where it lands: each slice is hand-testable through the UI (`pnpm run dev`) and demoable on its own.
 
 Each slice MUST satisfy all of:
 

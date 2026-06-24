@@ -15,7 +15,7 @@
 - [3. Technology stack](#3-technology-stack)
 - [4. Architecture](#4-architecture)
   - [Data flows](#data-flows)
-- [5. Spawning bash with the user's configuration](#5-spawning-bash-with-the-users-configuration)
+- [5. Spawning the shell with the user's configuration](#5-spawning-the-shell-with-the-users-configuration)
 - [6. IPC contract](#6-ipc-contract)
 - [7. Renderer behavior and the app-owned selection subsystem](#7-renderer-behavior-and-the-app-owned-selection-subsystem)
   - [7.0 Why a custom selection mechanism](#70-why-a-custom-selection-mechanism)
@@ -102,7 +102,15 @@
 
 ---
 
-> **Changelog v2.79:** **New §25 — the flow audit record (per-run, append-only).** Adds the audit subsystem as a numbered section: a durable, human-auditable record written per flow run under `~/.agent-terminal/audit/<repo-basename>/<flowName>_<startTimestampZ>.yaml`, as a **YAML multi-document stream** (a header document, then one `---`-delimited document per event, **append-only** — O(1) per event, no rewrite; a tail-tolerant reader discards a trailing partial document from a crash mid-append). Defines the storage layout (§25.2), the format (§25.3), the run lifecycle (§25.4 — start opens, advance/restart/undo append, done keeps the file open for append-on-go-back, a new start closes and opens, the current-run pointer survives restart), the event vocabulary (§25.5 — **Phase 1:** `flow.started`/`flow.status`/`step.entered`/`flow.completed` + `todo.created`/`todo.status`/`todo.text`/`todo.deleted`; **Phase 2:** the loop-sourced events), the shared-semantics + timeline-reconstruction boundary (§25.6, per the `src/shared/` rule), and the constraints (§25.7 — never throws into the flow path, untrusted-string escaping + CWE-22 path-segment sanitization, accepted basename collision, explicit ID sourcing, keep-all retention). Auditing is **observe-only** (injects nothing) and **best-effort** (a failed write is logged and dropped, never surfaced to the flow). No contract shape change to `src/shared/ipc.ts` (audit has no UI this round). The build is sliced (§25.8) as Phase 1 (lifecycle + todo timeline) then Phase 2 (loop integration + replayable-timeline proof), each slice fired by an existing UI control (Start/Advance/Restart/Undo, todo edits) and proven by a Playwright `_electron` e2e asserting the on-disk YAML, RED-first throughout.
+> **Changelog v2.83 (was v2.79; renumbered on this merge from origin/main to clear the v2.79–v2.82 collision with the default-shell + pnpm changes below):** **New §25 — the flow audit record (per-run, append-only).** Adds the audit subsystem as a numbered section: a durable, human-auditable record written per flow run under `~/.agent-terminal/audit/<repo-basename>/<flowName>_<startTimestampZ>.yaml`, as a **YAML multi-document stream** (a header document, then one `---`-delimited document per event, **append-only** — O(1) per event, no rewrite; a tail-tolerant reader discards a trailing partial document from a crash mid-append). Defines the storage layout (§25.2), the format (§25.3), the run lifecycle (§25.4 — start opens, advance/restart/undo append, done keeps the file open for append-on-go-back, a new start closes and opens, the current-run pointer survives restart), the event vocabulary (§25.5 — **Phase 1:** `flow.started`/`flow.status`/`step.entered`/`flow.completed` + `todo.created`/`todo.status`/`todo.text`/`todo.deleted`; **Phase 2:** the loop-sourced events), the shared-semantics + timeline-reconstruction boundary (§25.6, per the `src/shared/` rule), and the constraints (§25.7 — never throws into the flow path, untrusted-string escaping + CWE-22 path-segment sanitization, accepted basename collision, explicit ID sourcing, keep-all retention). Auditing is **observe-only** (injects nothing) and **best-effort** (a failed write is logged and dropped, never surfaced to the flow). No contract shape change to `src/shared/ipc.ts` (audit has no UI this round). The build is sliced (§25.8) as Phase 1 (lifecycle + todo timeline) then Phase 2 (loop integration + replayable-timeline proof), each slice fired by an existing UI control (Start/Advance/Restart/Undo, todo edits) and proven by a Playwright `_electron` e2e asserting the on-disk YAML, RED-first throughout.
+>
+> **Changelog v2.82:** **§5 — the Linux GUI-launch PATH probe now targets the resolved shell, not hardcoded bash.** Follow-up to v2.79: `probeLoginPath` asked `bash -lc` regardless of the session shell, so a non-bash `$SHELL` user (zsh/fish) launching from a Linux GUI could miss the shell-specific `PATH` their agent CLIs need — the exact failure the probe exists to prevent. It now probes `APP_SHELL || $SHELL || bash` with the portable `-l -c` login+command form (the resolution is extracted as `resolveShellPath`, shared with `buildSpawnConfig` so the two cannot drift); a shell with a list-valued, non-colon `$PATH` (fish) only ever appends a harmless extra entry, since the merge splits on `:` and the OS ignores a missing dir. Also corrected v2.81's prose overreach: §2/§4 now read "interactive **shell**," not "login shell" — only macOS passes `-l`, while Linux runs a **non-login** interactive shell (§5). RED-first: a `probeShellCommand` unit pins that the probe targets `$SHELL`/`APP_SHELL`/the bash fallback and runs as a login shell, plus a positive `$SHELL=/bin/bash` case pinning that a `$SHELL`-resolved bash both selects bash and installs the OSC 133 hook. No contract change.
+>
+> **Changelog v2.81:** **Prose alignment to v2.79 — "bash" → "shell" where it meant the *default hosted shell*.** Follow-up to v2.79: §1/§2/§5 (and the §4 architecture diagram, fixed alongside) described the hosted session as "bash," which drifted once the default became the user's login shell (`$SHELL`). Renamed §5 to "Spawning the shell with the user's configuration," generalized the Purpose/Scope wording and the §12 hosting/lifecycle acceptance criteria, and corrected the §2 non-goal: a non-bash login shell **is** hosted now — it simply runs without the §15.5 OSC 133 integration (bash-only). Left untouched the genuinely bash-specific facts (the `bash -lc` PATH probe, `PROMPT_COMMAND`/OSC 133 hooks, the macOS bash 3.2 note, readline key forms) and the empirical "e2e-verified against bash" verification records. Prose only — no behavior or contract change.
+>
+> **Changelog v2.80:** **§11 — the repo now uses pnpm.** `package.json` pins `packageManager: pnpm@10.x` and declares `pnpm.onlyBuiltDependencies` (node-pty/electron/esbuild — pnpm v10 blocks dependency build scripts by default); a new `.npmrc` sets `node-linker=hoisted` so `@electron/rebuild` and electron-builder operate over a flat `node_modules` instead of pnpm's symlinked store. The `package-lock.json` is replaced by `pnpm-lock.yaml`; the `postinstall` electron-rebuild (§11 native-module gotcha) runs unchanged under pnpm. All §11 commands are now `pnpm …`. No application behavior or contract change — toolchain only; verified by the full vitest suite passing post-migration.
+>
+> **Changelog v2.79:** **§5 — the hosted session now defaults to the user's own login shell (`$SHELL`), not hardcoded bash.** The spawn shell resolves `APP_SHELL || $SHELL || bash`: an explicit `APP_SHELL` still wins, otherwise the session uses whatever the user's default shell is (zsh on modern macOS, etc.), falling back to `bash` only when `$SHELL` is unset. This supersedes §5's "User said bash specifically" note below — bash is now the last-resort fallback, not the default. **Unchanged:** the opt-out OSC 133 shell-integration hook (§15.5) still installs only for bash (the `isBashShell` gate already covered a non-bash `APP_SHELL`, and now equally covers a non-bash `$SHELL`); command-output capture is simply unavailable under a non-bash default shell, as already specified. Login-shell args (`-l` on macOS) are shell-agnostic and unchanged. RED-first: `buildSpawnConfig` unit pins that `$SHELL` is used when `APP_SHELL` is unset, that `APP_SHELL` takes precedence over `$SHELL`, and that bash remains the fallback when neither is set.
 >
 > **Changelog v2.78 (was v2.74; renumbered in the keymap-branch merge to clear the v2.72–v2.74 collision with §7.7's entries below):** **§24.2.3 T4 refined — per-repo dedup is genuinely per-repo, and the cue's `role=alert` region is now persistent (iteration-5 review).** Two correctness refinements over v2.77. **(1) Per-repo identity is a map, not a single slot.** v2.77 keyed the dedup by `(repoKey, status, iteration)` but stored only ONE occurrence (repoKey inside the value); a same-repo return visit (cd A→B→A) overwrote the slot and re-fired the notification / re-showed the cue at the unchanged occurrence. Both surfaces now hold a **per-`repoKey` map** of each repo's last occurrence — the notifier dedups against this repo's last-signalled `(status, iteration)`, and the cue records/checks the dismissed occurrence per repo — so a return visit stays deduped/dismissed while two distinct repos at the same coords remain distinct. **(2) The cue is a persistent live region.** v2.77 revealed the `role=alert` host *before* populating it; the host is now **never `[hidden]`** — the empty state collapses purely via CSS (`.attn-bar:empty`), keeping the region in the a11y tree across hide/show so injected content (not a display flip) is the announcement trigger (WAI-ARIA Alert pattern, WCAG 4.1.3). The empty state exposes **no focusable descendant**, so this does not reintroduce the v2.44 hidden-but-focusable trap (the prior `[hidden]` guard is preserved by the empty ⟺ no-focusables invariant). No contract shape change (the cue/notifier identity stays internal); RED-first (return-visit dedup pins on both surfaces, a persistent-region pin, and a tracked-closer cross-repo close pin).
 >
@@ -251,11 +259,11 @@
 
 ## 1. Purpose
 
-Build the minimal working foundation of an application for **running, monitoring, and steering coding agents** that live in a terminal. The user runs an agent CLI (Claude Code, Codex, aider, …) inside a hosted bash session; the application watches the agent's output, captures relevant pieces of it into a second UI, and lets the user act on what they see there — with those actions flowing back into the agent as terminal input.
+Build the minimal working foundation of an application for **running, monitoring, and steering coding agents** that live in a terminal. The user runs an agent CLI (Claude Code, Codex, aider, …) inside a hosted shell session; the application watches the agent's output, captures relevant pieces of it into a second UI, and lets the user act on what they see there — with those actions flowing back into the agent as terminal input.
 
 The foundation must prove this **full loop** end-to-end, in its smallest form:
 
-1. Run an interactive **bash** session (the agent's host) using the user's own bash configuration, attached to a real PTY.
+1. Run an interactive **shell** session (the agent's host) using the user's own shell configuration, attached to a real PTY.
 2. Render the live terminal inside a **web UI** (the user can run the agent hands-on, exactly as in a native terminal).
 3. **Tee** all PTY output into a main-process **shadow screen model** that tracks the live screen state, terminal modes, and output activity (quiescence) — the substrate for all monitoring and capture.
 4. Let the user **select any region** of terminal output and either **send it back to the agent** or **capture it into the monitor pane**.
@@ -268,8 +276,8 @@ Automated/semantic capture (recognizing agent questions, tool calls, diffs, etc.
 ## 2. Scope
 
 ### In scope
-- Spawn one interactive bash process attached to a real pseudoterminal (PTY). Agents are launched by the user *inside* this session (e.g. typing `claude`).
-- Honor the user's default bash startup files (`.bashrc` / `.bash_profile` / `.profile`) per platform convention.
+- Spawn one interactive shell process attached to a real pseudoterminal (PTY). Agents are launched by the user *inside* this session (e.g. typing `claude`).
+- Honor the user's shell startup files (for bash: `.bashrc` / `.bash_profile` / `.profile`) per platform convention.
 - Stream PTY output to an `xterm.js` terminal in the UI; stream user keystrokes back to the PTY.
 - **Tee PTY output** into a main-process `@xterm/headless` shadow terminal: live screen model, bracketed-paste-mode tracking, alternate-screen detection.
 - **Quiescence detection** (§8.3): track whether the agent's output stream is **active** or **quiet** and publish transitions to the monitor pane — the "agent is probably waiting for you" signal, and the trigger the future semantic pipeline will scan on.
@@ -285,7 +293,7 @@ Automated/semantic capture (recognizing agent questions, tool calls, diffs, etc.
 - **Semantic/automatic capture** — heuristics that recognize agent prompts, questions, tool-use blocks, diffs, or status regions. (The shadow model is the substrate for this; the heuristics come later.)
 - Running the monitor pane as a separate process/web app (`WebContentsView`); in the skeleton it is a pane in the same renderer, but it is **architecturally constrained** to talk only to main-process APIs so it can be moved out later without change (§9.1).
 - Multiple concurrent agent sessions / tabs / split panes. (IPC payloads carry a `sessionId` from day one so channels don't need redesign — §6.)
-- SSH, remote sessions, or non-bash shells.
+- SSH or remote sessions. (A non-bash login shell is hosted fine — it simply runs without the §15.5 OSC 133 shell-integration hooks, which install only for bash.)
 - Windows support.
 - Persistence of captures, scrollback export, theming UI, settings screens.
 
@@ -313,7 +321,7 @@ Two processes, connected by Electron IPC. `node-pty` and the shadow terminal run
 ```mermaid
 flowchart LR
     subgraph Main["Main process (Node)"]
-        PTY["node-pty<br/>(interactive bash → agent CLI)"]
+        PTY["node-pty<br/>(interactive shell → agent CLI)"]
         SHADOW["@xterm/headless<br/>shadow screen model<br/>(modes, alt-screen, buffer,<br/>quiescence detector)"]
         SCAN["semantic scanner<br/>(adapters + generic,<br/>active→quiet · §15.2/§15.3)"]
         CMD["command tracker<br/>(OSC 133 spans · §15.5)"]
@@ -387,11 +395,11 @@ The **command tracker** segments the stream into command spans from OSC 133 mark
 
 ---
 
-## 5. Spawning bash with the user's configuration
+## 5. Spawning the shell with the user's configuration
 
 This is the requirement most easily gotten subtly wrong.
 
-A PTY-attached bash detects an interactive session automatically (it has a controlling TTY). The remaining question is **which startup files load**, which depends on login vs. non-login — and the convention differs by platform:
+A PTY-attached shell detects an interactive session automatically (it has a controlling TTY). The remaining question is **which startup files load**, which depends on login vs. non-login — and the convention differs by platform:
 
 - **Linux:** native terminals launch a **non-login interactive** shell, which sources `~/.bashrc`.
 - **macOS:** Terminal.app/iTerm launch a **login** shell, which sources `~/.bash_profile` (then `~/.bash_login` / `~/.profile`).
@@ -402,8 +410,8 @@ To match what the user already experiences in their native terminal, branch on p
 const os = require('os');
 const isMac = process.platform === 'darwin';
 
-// User said "bash" specifically. Allow override via env for flexibility.
-const shellPath = process.env.APP_SHELL || 'bash';
+// Default to the user's own login shell; APP_SHELL overrides, bash is the last resort (v2.79).
+const shellPath = process.env.APP_SHELL || process.env.SHELL || 'bash';
 const shellArgs = isMac ? ['-l'] : [];   // login on macOS, plain interactive on Linux
 
 const ptyProcess = pty.spawn(shellPath, shellArgs, {
@@ -421,12 +429,12 @@ const ptyProcess = pty.spawn(shellPath, shellArgs, {
 
 **Notes / gotchas**
 - `name: 'xterm-256color'` makes `node-pty` advertise the right terminfo; without it, color and key handling degrade.
-- macOS ships bash 3.2 at `/bin/bash`. If the user installed a modern bash via Homebrew it lives at `/opt/homebrew/bin/bash` (Apple Silicon) or `/usr/local/bin/bash` (Intel). Expose `APP_SHELL` so they can point at it.
+- The session defaults to the user's own login shell via `$SHELL` (v2.79); `APP_SHELL` overrides it and `bash` is the last-resort fallback when `$SHELL` is unset. macOS ships bash 3.2 at `/bin/bash`; if the user wants bash but a modern Homebrew build (`/opt/homebrew/bin/bash` on Apple Silicon, `/usr/local/bin/bash` on Intel), they point `APP_SHELL` at it.
 - Do **not** pass `--rcfile` or `--noprofile`; that would defeat "use the user's default configuration."
 - The locale-dependent vars (`LANG`, `LC_*`) are inherited via `...process.env`, which keeps Unicode/emoji rendering correct.
-- **GUI launches start with a barren environment.** When the app is opened from Launchpad or a Linux `.desktop` file rather than a terminal, Electron's `process.env` lacks the user's interactive `PATH` (nvm/asdf shims, `~/.local/bin`, Homebrew) — and agent CLIs are typically npm-installed onto exactly those paths. macOS is covered: the `-l` login shell re-evaluates the profile inside the PTY. On Linux the non-login shell sources `~/.bashrc`, which rebuilds `PATH` for most nvm/asdf setups — but `PATH` set only in `~/.profile` (login-only) will be missing. **Verify that `claude`/`codex` resolve in a GUI-launched session on Linux**; if not, probe once at startup with `bash -lc 'echo $PATH'` and seed the PTY env with the result. (Launching from a terminal has the inverse issue — a pre-polluted inherited env — which is acceptable: it matches what a nested shell would see.)
+- **GUI launches start with a barren environment.** When the app is opened from Launchpad or a Linux `.desktop` file rather than a terminal, Electron's `process.env` lacks the user's interactive `PATH` (nvm/asdf shims, `~/.local/bin`, Homebrew) — and agent CLIs are typically npm-installed onto exactly those paths. macOS is covered: the `-l` login shell re-evaluates the profile inside the PTY. On Linux the non-login shell sources `~/.bashrc`, which rebuilds `PATH` for most nvm/asdf setups — but `PATH` set only in `~/.profile` (login-only) will be missing. **Verify that `claude`/`codex` resolve in a GUI-launched session on Linux**; if not, probe once at startup with the user's own resolved shell (`APP_SHELL || $SHELL || bash`, run `-l -c 'echo $PATH'`) and seed the PTY env with the result — asking a hardcoded `bash` would miss a non-bash `$SHELL` user's shell-specific PATH. (Launching from a terminal has the inverse issue — a pre-polluted inherited env — which is acceptable: it matches what a nested shell would see.)
 - **Shell-integration hook (§15.5, added v2.5).** To segment command output, the spawn env gets `APP_TERM_INTEGRATION=<app-owned script path>` and `PROMPT_COMMAND=source "$APP_TERM_INTEGRATION"`. `PROMPT_COMMAND` is bash's only **post-rc** env seam, so the script loads *after* the user's startup files — preserving the "use the user's own configuration" rule above (still no `--rcfile`/`--noprofile`). The script installs OSC 133 marks (`A`/`B` via PS1, `C` via PS0, `D;exit` via a precmd), self-heals each prompt, and degrades silently if a foreign/non-bash shell inherits the env without the file. Opt out with `APP_SHELL_INTEGRATION=0` or a non-bash `APP_SHELL`. Known, accepted limit: an rc that *overwrites* (not appends to) `PROMPT_COMMAND` removes the hook — command capture then becomes unavailable, with no heuristic fallback this phase.
-- **Why bash at all (not the agent directly):** the user's shell config provides their PATH, credentials helpers, and aliases that agent CLIs depend on; and a shell lets the user choose/restart/switch agents within one session. Direct-spawn of an agent binary is a possible later optimization, not the foundation.
+- **Why a shell at all (not the agent directly):** the user's shell config provides their PATH, credentials helpers, and aliases that agent CLIs depend on; and a shell lets the user choose/restart/switch agents within one session. Direct-spawn of an agent binary is a possible later optimization, not the foundation.
 - **Agent CLIs care about the terminal they see.** Claude Code, Codex, etc. read `TERM`, the window size, and color support to choose their rendering. The settings above (xterm-256color, truecolor, live resize) are what they expect. Note: Claude Code renders into the **normal** buffer (scrolling transcript); Codex's TUI uses the **alternate screen**. Both cases are handled by this design — see the alt-screen notes in §7.4 and §8.2.
 
 ---
@@ -1029,24 +1037,26 @@ CSS: panes side by side via flex; `#terminal` fills its pane's remaining height 
 
 ## 11. Build, run, and packaging
 
+The repo uses **pnpm** (`packageManager` in `package.json`). `.npmrc` pins `node-linker=hoisted` so `@electron/rebuild` and electron-builder see a flat `node_modules`, and `pnpm.onlyBuiltDependencies` allows node-pty/electron/esbuild to run install scripts (pnpm v10 blocks build scripts by default).
+
 ### Dependencies
 ```
-npm i @xterm/xterm @xterm/headless @xterm/addon-fit node-pty
-npm i -D electron electron-builder @electron/rebuild
+pnpm add @xterm/xterm @xterm/headless @xterm/addon-fit node-pty
+pnpm add -D electron electron-builder @electron/rebuild
 ```
 (Pin `@xterm/xterm` and `@xterm/headless` to the same version — §8.2.)
 
 ### The native-module gotcha
 `node-pty` is a native addon and must be compiled against **Electron's** Node ABI, not the system Node. After install (and after any Electron version bump), run:
 ```
-npx electron-rebuild -f -w node-pty
+pnpm exec electron-rebuild -f -w node-pty
 ```
 electron-builder triggers this during packaging; for `electron .` dev runs you must do it manually once.
 
 ### Run (dev)
 ```
-npm run rebuild   # electron-rebuild for node-pty (also runs on postinstall)
-npm run dev       # electron-vite dev (renderer HMR)
+pnpm run rebuild   # electron-rebuild for node-pty (also runs on postinstall)
+pnpm run dev       # electron-vite dev (renderer HMR)
 ```
 
 ### Package
@@ -1058,10 +1068,10 @@ npm run dev       # electron-vite dev (renderer HMR)
 
 The foundation is "done" when all of the following pass on both Linux and macOS:
 
-> **Verification status (2026-06-12):** a checked box means the criterion is proven by the automated suite (38 vitest unit/integration tests + 8 Playwright `_electron` e2e tests, `tests/e2e/app.spec.ts`) — on **Linux only**; the macOS pass is pending across the board. Unchecked boxes note exactly what remains: most are the agent-in-the-loop criteria, which require a manual session with real Claude Code / an alt-screen TUI via `npm run dev`.
+> **Verification status (2026-06-12):** a checked box means the criterion is proven by the automated suite (38 vitest unit/integration tests + 8 Playwright `_electron` e2e tests, `tests/e2e/app.spec.ts`) — on **Linux only**; the macOS pass is pending across the board. Unchecked boxes note exactly what remains: most are the agent-in-the-loop criteria, which require a manual session with real Claude Code / an alt-screen TUI via `pnpm run dev`.
 
 **Terminal hosting (unchanged from v1.x)**
-- [x] Launching the app opens a window with an interactive bash prompt. *(e2e)*
+- [x] Launching the app opens a window with an interactive shell prompt. *(e2e)*
 - [ ] The user's **own** prompt, aliases, and functions work (proves their startup files loaded). *(implemented — no `--rcfile`/`--noprofile`, platform login-shell rules per §5 — but only a manual check in a real user environment proves it)*
 - [ ] Typing commands and seeing output works; `vim`/`htop`/`less` render and respond to keys. *(plain commands e2e-verified; full-screen apps manual)*
 - [ ] 256-color and truecolor output display correctly. *(terminal identity — `TERM`/`COLORTERM` — e2e-verified; actual color rendering is a manual visual check)*
@@ -1084,7 +1094,7 @@ The foundation is "done" when all of the following pass on both Linux and macOS:
 - [x] Injected text containing the literal sequence `ESC[201~` does not break out of paste mode (sanitization works on both paths). *(main path e2e-verified end-to-end; the shared `stripPasteBreakout` guard is unit-tested and applied on both the main `wrapForPaste` and renderer `term.paste()` paths; the Send-button path is e2e-verified)*
 
 **Lifecycle**
-- [ ] Exiting the shell (`exit`) shows the exit notice in both panes; closing the window terminates the bash process (no orphaned PTY) and disposes the shadow terminal. *(exit notices in both panes e2e-verified; PTY-kill/shadow-dispose on window close implemented but not asserted by a test)*
+- [ ] Exiting the shell (`exit`) shows the exit notice in both panes; closing the window terminates the shell process (no orphaned PTY) and disposes the shadow terminal. *(exit notices in both panes e2e-verified; PTY-kill/shadow-dispose on window close implemented but not asserted by a test)*
 
 ---
 
@@ -1122,7 +1132,7 @@ These shape choices above (the shadow model, the event schema, the `sessionId` f
 - **Selection of wrapped lines** — verify trimmed multi-row selections inject as the user expects (xterm joins wrapped rows; long pasted commands should remain a single logical line).
 - **`getSelectionPosition()` coordinate base** — confirm absolute-buffer vs. viewport-relative rows in the pinned xterm.js version (§7.3) and convert once if needed; everything downstream assumes absolute rows.
 - **Decorations are normal-buffer only** — the custom highlight will not draw inside full-screen TUIs (Codex) until Option B (§13.4) lands. Capture and injection are unaffected; only the visual highlight is. Separately, text *extraction* on the alt buffer (and across a normal↔alt swap mid-gesture) must be verified against the pinned xterm.js version; the §7.3 `try/catch` keeps any edge case from crashing the renderer.
-- **GUI-launched environment** — apps started from Launchpad / `.desktop` files inherit a minimal `process.env`, so agent CLIs on nvm/asdf-managed paths may not resolve inside the session. macOS is covered by the login shell; on Linux, verify `~/.bashrc` rebuilds `PATH`, with a one-time `bash -lc 'echo $PATH'` probe as the fallback (§5).
+- **GUI-launched environment** — apps started from Launchpad / `.desktop` files inherit a minimal `process.env`, so agent CLIs on nvm/asdf-managed paths may not resolve inside the session. macOS is covered by the login shell; on Linux, verify `~/.bashrc` rebuilds `PATH`, with a one-time probe of the user's resolved shell (`APP_SHELL || $SHELL || bash`, `-l -c 'echo $PATH'`) as the fallback (§5).
 - **Marker lifetime** — markers (and their decorations) are disposed when their line is trimmed from scrollback; a selection scrolled far past `scrollback` will silently lose its highlight. Expected behavior; note it if users report "disappearing" highlights.
 - **Capture provenance on a scrolling buffer** — absolute coordinates shift *live* once scrollback overflows and rows trim, which a noisy agent can cause between the drag and the click (or mid-drag). The model therefore extracts text at gesture time (the durable payload) and stamps `baseY`/`bufferType` as a coordinate-era marker (§7.3); treat `range` as best-effort provenance and never re-extract content from stored coordinates.
 
