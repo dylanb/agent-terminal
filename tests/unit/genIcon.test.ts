@@ -8,9 +8,6 @@ import { generateIcon, fingerprint } from '../../scripts/gen-icon.mjs';
 const RASTER = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
 const tmp = (): string => mkdtempSync(path.join(os.tmpdir(), 'genicon-'));
 
-// The decision under test: rasterize only when the SVG content fingerprint differs from the one
-// recorded beside the PNG. The rasterizer is injected so the skip/regenerate decision is observable
-// without rendering — the expensive step is exactly what must be skipped when the SVG is unchanged.
 describe('generateIcon', () => {
   const paths = (dir: string): { svgPath: string; pngPath: string; hashPath: string } => ({
     svgPath: path.join(dir, 'icon.svg'),
@@ -62,6 +59,20 @@ describe('generateIcon', () => {
     expect(render).toHaveBeenCalledTimes(1);
     expect(readFileSync(p.pngPath)).toEqual(next);
     expect(readFileSync(p.hashPath, 'utf8').trim()).toBe(fingerprint(Buffer.from('<svg>b</svg>')));
+  });
+});
+
+// Drift guard: the committed build/icon.svg.sha256 is what generateIcon compares against to decide
+// whether the committed PNG is up to date. If a hand-edited SVG is committed without re-running the
+// generator, the recorded fingerprint no longer matches the source and the shipped PNG is stale —
+// undetectable in review. Binding the record to the source here fails the suite when they desync.
+describe('committed icon artifacts', () => {
+  const buildDir = path.resolve(__dirname, '..', '..', 'build');
+
+  it('records a sha256 that matches the committed build/icon.svg', () => {
+    const svg = readFileSync(path.join(buildDir, 'icon.svg'));
+    const recorded = readFileSync(path.join(buildDir, 'icon.svg.sha256'), 'utf8').trim();
+    expect(recorded).toBe(fingerprint(svg));
   });
 });
 

@@ -1,11 +1,8 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import { resolveWindowIconPath, resolveDockIconPath } from '../../src/main/appIcon';
+import { resolveWindowIconPath, resolveDockIconPath, applyDockIcon } from '../../src/main/appIcon';
 
-// The runtime BrowserWindow icon. Packaged builds get the PNG copied beside the asar via
-// electron-builder `extraResources`; in dev it sits at <appPath>/build/icon.png (the same asset
-// electron-builder consumes from `buildResources` to mint the installer icons).
 describe('resolveWindowIconPath', () => {
   it('resolves to the extraResources copy in a packaged app', () => {
     expect(
@@ -20,9 +17,6 @@ describe('resolveWindowIconPath', () => {
   });
 });
 
-// macOS draws the Dock / CMD-TAB icon from the app bundle's .icns (or app.dock.setIcon at runtime),
-// NOT from BrowserWindow.icon — so the dock icon is set only on darwin. Off darwin app.dock does not
-// exist; resolving null keeps index.ts from calling it.
 describe('resolveDockIconPath', () => {
   it('resolves to the window icon path on darwin (packaged)', () => {
     expect(
@@ -40,6 +34,41 @@ describe('resolveDockIconPath', () => {
     const loc = { packaged: false, resourcesPath: '/r', appPath: '/p' };
     expect(resolveDockIconPath('linux', loc)).toBeNull();
     expect(resolveDockIconPath('win32', loc)).toBeNull();
+  });
+});
+
+describe('applyDockIcon', () => {
+  const darwin = { packaged: false, resourcesPath: '/ignored', appPath: '/project' };
+
+  it('sets the Dock icon to the resolved path on darwin', () => {
+    const dock = { setIcon: vi.fn() };
+    applyDockIcon(dock, 'darwin', darwin);
+    expect(dock.setIcon).toHaveBeenCalledWith(path.join('/project', 'build', 'icon.png'));
+  });
+
+  it('does not touch the Dock off darwin', () => {
+    const dock = { setIcon: vi.fn() };
+    applyDockIcon(dock, 'linux', darwin);
+    expect(dock.setIcon).not.toHaveBeenCalled();
+  });
+
+  it('is a no-op when app.dock is absent (off darwin, no Dock object)', () => {
+    expect(() => applyDockIcon(undefined, 'win32', darwin)).not.toThrow();
+  });
+});
+
+describe('extraResources packaged-path coupling', () => {
+  const root = path.resolve(__dirname, '..', '..');
+  const builderYml = readFileSync(path.join(root, 'electron-builder.yml'), 'utf8');
+
+  it('ships the PNG under the basename the packaged resolver reads back', () => {
+    const basename = path.basename(
+      resolveWindowIconPath({ packaged: true, resourcesPath: '/app/resources', appPath: '/app/app.asar' }),
+    );
+    // electron-builder copies `from: build/icon.png` to `to: <basename>` beside the asar; the packaged
+    // resolver reads process.resourcesPath/<basename>. A rename of either side breaks the runtime icon.
+    expect(builderYml).toMatch(new RegExp(`to:\\s*${basename}\\b`));
+    expect(builderYml).toMatch(/from:\s*build\/icon\.png\b/);
   });
 });
 

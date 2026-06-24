@@ -17,3 +17,16 @@ export function resolveWindowIconPath(loc: IconLocation): string {
 export function resolveDockIconPath(platform: NodeJS.Platform, loc: IconLocation): string | null {
   return platform === 'darwin' ? resolveWindowIconPath(loc) : null;
 }
+
+export interface DockIconTarget {
+  setIcon(image: string): void;
+}
+
+export function applyDockIcon(
+  dock: DockIconTarget | undefined,
+  platform: NodeJS.Platform,
+  loc: IconLocation,
+): void {
+  const iconPath = resolveDockIconPath(platform, loc);
+  if (iconPath && dock) dock.setIcon(iconPath);
+}
