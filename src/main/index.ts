@@ -69,11 +69,22 @@ import { createInjectionSuppressor } from './injectionSuppression';
 import { createClaudeCodeAdapter } from './adapters/claudeCode';
 import { createGenericAdapter } from './adapters/generic';
 import { SHELL_INTEGRATION_SCRIPT } from './shellIntegration';
+import { resolveWindowIconPath, applyDockIcon } from './appIcon';
 
 async function createWindow(): Promise<void> {
+  const iconLoc = {
+    packaged: app.isPackaged,
+    resourcesPath: process.resourcesPath,
+    appPath: app.getAppPath(),
+  };
+  // TODO(dylan): Electron exposes no getIcon() and app.dock is macOS-only, so neither the
+  // BrowserWindow.icon assignment below nor applyDockIcon has a Linux e2e — resolveWindowIconPath and
+  // applyDockIcon are unit-covered. Recorded gap.
+  applyDockIcon(app.dock, process.platform, iconLoc);
   const win = new BrowserWindow({
     width: 1280,
     height: 800,
+    icon: resolveWindowIconPath(iconLoc),
     webPreferences: {
       preload: path.join(__dirname, '../preload/index.js'),
       contextIsolation: true,
