@@ -55,6 +55,10 @@ describe('applyDockIcon', () => {
   it('is a no-op when app.dock is absent (off darwin, no Dock object)', () => {
     expect(() => applyDockIcon(undefined, 'win32', darwin)).not.toThrow();
   });
+
+  it('is a no-op on darwin when app.dock is unexpectedly absent (does not throw)', () => {
+    expect(() => applyDockIcon(undefined, 'darwin', darwin)).not.toThrow();
+  });
 });
 
 describe('extraResources packaged-path coupling', () => {
@@ -72,8 +76,6 @@ describe('extraResources packaged-path coupling', () => {
   });
 });
 
-// The wired asset must actually exist and be a valid 1024×1024 PNG — otherwise the resolver points at
-// nothing and the window/installer silently fall back to the default Electron icon.
 describe('committed build/icon.png', () => {
   const root = path.resolve(__dirname, '..', '..');
   const png = readFileSync(resolveWindowIconPath({ packaged: false, resourcesPath: '', appPath: root }));
@@ -83,8 +85,9 @@ describe('committed build/icon.png', () => {
   });
 
   it('is 1024×1024 (IHDR width/height)', () => {
-    // PNG IHDR: 8-byte signature, 4-byte length, 4-byte "IHDR", then width(4) + height(4) big-endian.
-    expect(png.readUInt32BE(16)).toBe(1024);
-    expect(png.readUInt32BE(20)).toBe(1024);
+    const IHDR_WIDTH_OFFSET = 16;
+    const IHDR_HEIGHT_OFFSET = 20;
+    expect(png.readUInt32BE(IHDR_WIDTH_OFFSET)).toBe(1024);
+    expect(png.readUInt32BE(IHDR_HEIGHT_OFFSET)).toBe(1024);
   });
 });
