@@ -58,6 +58,7 @@ import { createScanner } from './scanner';
 import { captureLastReport } from './captureLast';
 import { createFlowManager, deriveFlowView, loadFlowDefinitionLocalFirst } from './flow';
 import { createAuditRecorder } from './auditRecorder';
+import type { TransitionKind } from '../shared/audit';
 import { auditRootDir } from './auditPaths';
 import { BOOTSTRAP_PICKUP, createFlowEntryActions } from './flowEntryActions';
 import { createBootstrapCommandTracker, type BootstrapCommandTracker } from './bootstrapCommands';
@@ -317,6 +318,17 @@ async function createWindow(): Promise<void> {
   const withDerived = (repoKey: string, view: FlowStateView): FlowStateView =>
     deriveFlowView(view, todoStore.list(repoKey), agentActivity);
 
+  // A flow transition that records its before/after audit diff (§25.5): capture the pre-state, run the
+  // mutation inside the bootstrap-attribution window (inTransition), record, then re-derive. Shared by
+  // the start/restart/undo handlers, which differ only by kind and mutation; advance/provideInput keep
+  // their own bodies because their readiness/notice handling diverges.
+  const recordedTransition = (repoKey: string, kind: TransitionKind, mutate: () => FlowStateView): FlowStateView => {
+    const before = flow.state(repoKey);
+    const after = inTransition(repoKey, mutate);
+    audit.recordTransition(repoKey, kind, before, after);
+    return trackLoop(repoKey, withDerived(repoKey, after));
+  };
+
   // The audit before/after diff (§25.5) needs the PRE-mutation values, but todoStore mutates cached
   // items in place (setStatus/update) and list() hands back those references — a live list would
   // already read as the post-mutation state. Snapshot the values before mutating.
@@ -455,13 +467,8 @@ async function createWindow(): Promise<void> {
       // rejects and the strip re-pulls; a malformed payload fails closed to a benign error view.
       [CH.flowState]: (_e, m) =>
         isValidFlowRequest(m) ? trackLoop(m.repoKey, withDerived(m.repoKey, flow.state(m.repoKey))) : flowRequestError(),
-      [CH.flowStart]: (_e, m) => {
-        if (!isValidFlowRequest(m)) return flowRequestError();
-        const before = flow.state(m.repoKey);
-        const after = inTransition(m.repoKey, () => flow.start(m.repoKey));
-        audit.recordTransition(m.repoKey, 'start', before, after);
-        return trackLoop(m.repoKey, withDerived(m.repoKey, after));
-      },
+      [CH.flowStart]: (_e, m) =>
+        isValidFlowRequest(m) ? recordedTransition(m.repoKey, 'start', () => flow.start(m.repoKey)) : flowRequestError(),
       // Advancing while NOT ready is a human override (§19.2): warns via a one-shot notice but still
       // completes. Readiness is read from the PRE-advance state — loop readiness for a loop step, else
       // the todo gate (S5).
@@ -477,20 +484,10 @@ async function createWindow(): Promise<void> {
           : 'Advanced with todos still outstanding.';
         return trackLoop(m.repoKey, { ...view, notice });
       },
-      [CH.flowRestart]: (_e, m) => {
-        if (!isValidFlowRequest(m)) return flowRequestError();
-        const before = flow.state(m.repoKey);
-        const after = inTransition(m.repoKey, () => flow.restart(m.repoKey));
-        audit.recordTransition(m.repoKey, 'restart', before, after);
-        return trackLoop(m.repoKey, withDerived(m.repoKey, after));
-      },
-      [CH.flowUndo]: (_e, m) => {
-        if (!isValidFlowRequest(m)) return flowRequestError();
-        const before = flow.state(m.repoKey);
-        const after = inTransition(m.repoKey, () => flow.undo(m.repoKey));
-        audit.recordTransition(m.repoKey, 'undo', before, after);
-        return trackLoop(m.repoKey, withDerived(m.repoKey, after));
-      },
+      [CH.flowRestart]: (_e, m) =>
+        isValidFlowRequest(m) ? recordedTransition(m.repoKey, 'restart', () => flow.restart(m.repoKey)) : flowRequestError(),
+      [CH.flowUndo]: (_e, m) =>
+        isValidFlowRequest(m) ? recordedTransition(m.repoKey, 'undo', () => flow.undo(m.repoKey)) : flowRequestError(),
       // Provide a step's typed input (§18.4 / §24.2.3 T3); the returned view's notice carries any §19.3
       // busy-shell refusal.
       [CH.flowProvideInput]: (_e, m) => {

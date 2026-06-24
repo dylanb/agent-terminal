@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, 
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { createAuditRecorder } from '../../src/main/auditRecorder';
-import { parseAuditStream, type AuditEvent } from '../../src/shared/audit';
+import { parseAuditStream, reconstructTimeline, type AuditEvent } from '../../src/shared/audit';
 import { auditFilePath, auditRepoDir } from '../../src/main/auditPaths';
 
 const D = new Date('2026-06-23T10:00:01.000Z');
@@ -196,6 +196,31 @@ describe('audit recorder — run file lifecycle (§25.4)', () => {
       { path: '.agent-loop/plan.md', bytes: 20 },
       { path: '.agent-loop/pr-context.md', bytes: 5 },
     ]);
+  });
+
+  it('does not snapshot when only iteration or PR changes (status unchanged)', () => {
+    mkdirSync(join(repo, '.agent-loop'), { recursive: true });
+    writeFileSync(join(repo, '.agent-loop', 'plan.md'), 'x');
+    const rec = recorder();
+    rec.recordTransition(repo, 'start', NOT_STARTED, IN_PROGRESS);
+    rec.recordLoop(repo, { status: 'building', iteration: 1, pr: null }); // status change → snapshot
+    rec.recordLoop(repo, { status: 'building', iteration: 2, pr: 42 }); // iteration+pr only → no snapshot
+    expect(snapshotsIn(runFiles()[0])).toHaveLength(1);
+  });
+
+  it('reconstructs the correct final loop state after a restart rehydrates the run pointer', () => {
+    const a = recorder();
+    a.recordTransition(repo, 'start', NOT_STARTED, IN_PROGRESS);
+    a.recordLoop(repo, { status: 'planning', iteration: 1, pr: null });
+    // A fresh recorder models an app restart: it rehydrates the open run from the on-disk pointer with
+    // an empty in-memory loop baseline, so the next observation re-emits the entry status (§25.4).
+    const b = recorder();
+    b.recordLoop(repo, { status: 'planning', iteration: 1, pr: null });
+    b.recordLoop(repo, { status: 'building', iteration: 2, pr: 42 });
+
+    const tl = reconstructTimeline(readFileSync(join(auditRepoDir(root, repo), runFiles()[0]), 'utf8'));
+    expect(tl.loop).toEqual({ status: 'building', iteration: 2 });
+    expect(tl.pr).toBe(42);
   });
 
   it('takes one snapshot per status change, not per idempotent re-pull', () => {
