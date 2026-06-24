@@ -5,3 +5,10 @@
 export function isHumanNeededStatus(status: string): boolean {
   return status.startsWith('awaiting-human') || status === 'impasse';
 }
+
+// CWE-117 (§16.3): the loop `status` comes from an arbitrary repo's untrusted `state.yaml`. Strip
+// control characters before it reaches any human-facing sink — the OS notification (§24.2.3 T4) and
+// the audit record (§25.7) share this one definition so the two sinks cannot sanitize differently.
+export function stripStatusControlChars(status: string): string {
+  return status.replace(/[\x00-\x1f\x7f]/g, ' ');
+}

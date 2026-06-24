@@ -1599,7 +1599,9 @@ test('a flow-injected bootstrap command is recorded with its exit when the human
   );
   expect(cmd?.source).toBe('bootstrap');
   expect(cmd?.cmd).toContain('agent-loop pickup 176');
-  expect(typeof cmd?.exit === 'number' || cmd?.exit === null).toBe(true);
+  // agent-loop is not installed, so the OSC-133 span carries bash's real command-not-found exit —
+  // the correlation must capture that nonzero code, not drop it to null (§25.5).
+  expect(cmd?.exit).toBeGreaterThan(0);
 
   await app.close();
   rmSync(repo, { recursive: true, force: true });

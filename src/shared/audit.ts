@@ -4,6 +4,7 @@
 
 import yaml from 'js-yaml';
 import type { FlowStatus, TodoStatus } from './ipc';
+import { stripStatusControlChars } from './loopStatus';
 
 export interface AuditHeader {
   flow: string;
@@ -152,7 +153,12 @@ export function loopEvents(before: LoopLike | null, after: LoopLike | null, ts: 
   if (!after) return [];
   const events: AuditEvent[] = [];
   if (!before || before.status !== after.status) {
-    events.push({ ts, type: 'loop.status', from: before?.status ?? '', to: after.status });
+    events.push({
+      ts,
+      type: 'loop.status',
+      from: before ? stripStatusControlChars(before.status) : '',
+      to: stripStatusControlChars(after.status),
+    });
   }
   if (!before || before.iteration !== after.iteration) {
     events.push({ ts, type: 'loop.iteration', n: after.iteration });

@@ -28,18 +28,20 @@ import { isRecord } from './yamlRecord';
 const POINTER_REL = path.join('.agent-terminal', 'audit-pointer.yaml');
 const POINTER_GITIGNORE = '.agent-terminal/audit-pointer.yaml';
 
-// Top-level `.agent-loop/` regular files as `{ path, bytes }` (§25.5), realpath-guarded so an in-dir
-// symlink pointing outside the repo is excluded (§20.2). Sorted for a stable snapshot; throws on a
-// missing dir (the caller's try/catch drops the snapshot — best-effort, §25.1).
+// Top-level `.agent-loop/` regular files as `{ path, bytes }` (§25.5), realpath-guarded against the
+// repo root so a symlink — whether a file inside `.agent-loop/` or `.agent-loop/` itself — cannot
+// escape the repo (§20.2/§25.7; anchored on the repo root like `readArtifact`, not on `.agent-loop`).
+// Sorted for a stable snapshot; throws on a missing dir (the caller's try/catch drops the snapshot —
+// best-effort, §25.1).
 function agentLoopFiles(repoKey: string): AuditOutputFile[] {
   const dir = path.join(repoKey, '.agent-loop');
-  const realDir = realpathSync(dir);
+  const realRoot = realpathSync(repoKey);
   const files: AuditOutputFile[] = [];
   for (const name of readdirSync(dir)) {
     const abs = path.join(dir, name);
     try {
       const real = realpathSync(abs);
-      if (!pathWithin(realDir, real)) continue;
+      if (!pathWithin(realRoot, real)) continue;
       const st = statSync(real);
       if (st.isFile()) files.push({ path: `.agent-loop/${name}`, bytes: st.size });
     } catch {

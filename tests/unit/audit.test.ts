@@ -157,6 +157,20 @@ describe('loopEvents — diff the agent-loop state.yaml mirror (§25.5)', () => 
   it('records nothing when the loop view is absent (left the loop step)', () => {
     expect(loopEvents(loop('building', 3, 42), null, T)).toEqual([]);
   });
+
+  it('strips control characters from the untrusted status on first observation (CWE-117, §25.7)', () => {
+    expect(loopEvents(null, loop('building', 1, null), T)).toEqual([
+      { ts: T, type: 'loop.status', from: '', to: 'building  ' },
+      { ts: T, type: 'loop.iteration', n: 1 },
+    ]);
+  });
+
+  it('strips control characters from both sides of a status transition (CWE-117, §25.7)', () => {
+    expect(loopEvents(loop('a', 1, null), loop('b', 2, null), T)).toEqual([
+      { ts: T, type: 'loop.status', from: 'a ', to: 'b ' },
+      { ts: T, type: 'loop.iteration', n: 2 },
+    ]);
+  });
 });
 
 describe('inputEvents — resolved flow inputs and ticket association (§25.5)', () => {

@@ -240,4 +240,17 @@ describe('audit recorder — run file lifecycle (§25.4)', () => {
     expect(files).toEqual(['.agent-loop/plan.md']);
     rmSync(outside, { force: true });
   });
+
+  it('excludes everything when .agent-loop itself is a symlink escaping the repo (§20.2/§25.7)', () => {
+    const outside = mkdtempSync(join(tmpdir(), 'audit-loopdir-escape-'));
+    writeFileSync(join(outside, 'leak.md'), 'secret');
+    symlinkSync(outside, join(repo, '.agent-loop'));
+
+    const rec = recorder();
+    rec.recordTransition(repo, 'start', NOT_STARTED, IN_PROGRESS);
+    rec.recordLoop(repo, { status: 'planning', iteration: 1, pr: null });
+
+    expect(snapshotsIn(runFiles()[0])[0].files).toEqual([]);
+    rmSync(outside, { recursive: true, force: true });
+  });
 });
