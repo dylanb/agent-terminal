@@ -42,7 +42,9 @@ function defaultGit(args: string[], cwd: string): string {
   return execFileSync('git', args, { cwd, encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 });
 }
 
-function gitRootOf(cwd: string, git: (args: string[], cwd: string) => string): string | null {
+/** The git top-level of `cwd` (`path.resolve`d), or null when `cwd` is not in a repo. Shared with the
+ *  live-reload watcher (viewerWatch.ts) so the watch root and the discovery root resolve identically. */
+export function gitRootOf(cwd: string, git: (args: string[], cwd: string) => string = defaultGit): string | null {
   try {
     const out = git(['rev-parse', '--show-toplevel'], cwd).trim();
     return out ? path.resolve(out) : null;
