@@ -105,11 +105,16 @@ const monitorApi: MonitorApi = {
     ipcRenderer.invoke(CH.todoTemplateInstantiate, { sessionId: SESSION_ID, repoKey, ref }) as Promise<TodoItem[]>,
 };
 
-const viewerApi: ViewerApi = {
+export const viewerApi: ViewerApi = {
   tree: (scope: ArtifactScope) =>
     ipcRenderer.invoke(CH.viewerTree, { sessionId: SESSION_ID, scope }) as Promise<ArtifactTree>,
   read: (relPath) =>
     ipcRenderer.invoke(CH.viewerRead, { sessionId: SESSION_ID, relPath }) as Promise<ViewerFile | null>,
+  onChanged: (cb) => {
+    const handler = (): void => cb();
+    ipcRenderer.on(CH.viewerOnChanged, handler);
+    return () => ipcRenderer.removeListener(CH.viewerOnChanged, handler);
+  },
 };
 
 const flowApi: FlowApi = {

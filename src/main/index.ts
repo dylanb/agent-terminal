@@ -62,6 +62,7 @@ import { createLoopNotifier } from './loopNotifier';
 import { parseLoopDef } from './loopDef';
 import { listTodoTemplates, loadTodoTemplateFile, parseTodoTemplate } from './todoTemplate';
 import { discover, readArtifact, emptyTree } from './artifactTree';
+import { watchViewerTree, viewerRoot } from './viewerWatch';
 import { createChromeProfileStore } from './chromeProfile';
 import { learnMarkers } from './chrome';
 import { createInjectionSuppressor } from './injectionSuppression';
@@ -161,9 +162,16 @@ async function createWindow(): Promise<void> {
   // Before the first OSC 7, fall back to bash's spawn dir — never the Electron process dir — so the
   // viewer starts in sync with the shell (§20.1).
   const viewerCwd = (): string => cwdTracker.cwd() ?? spawnCwd(process.env, os.homedir());
-  cwdTracker.onChange(({ cwd, repoKey }) =>
-    send(CH.cwdChanged, { sessionId: SESSION_ID, cwd, repoKey }),
-  );
+  // Live artifact reload (§20.1): watch the viewer's tree root so an on-disk edit re-broadcasts over a
+  // dedicated viewer:onChanged seam (the renderer re-pulls tree/file). One watcher, re-rooted on each
+  // cwd move — the tree root follows the shell like discovery does.
+  const pushViewerChanged = (): void => send(CH.viewerOnChanged, { sessionId: SESSION_ID });
+  let stopViewerWatch = watchViewerTree(viewerRoot(viewerCwd()), pushViewerChanged);
+  cwdTracker.onChange(({ cwd, repoKey }) => {
+    send(CH.cwdChanged, { sessionId: SESSION_ID, cwd, repoKey });
+    stopViewerWatch();
+    stopViewerWatch = watchViewerTree(viewerRoot(cwd), pushViewerChanged);
+  });
   // Drops echoed self-injected input from re-capture (§16.5).
   // TODO(dylan): the watermark→reply row separation and selfInjectWindowMs default
   // are tuned against bash/scripted echo; verify against a real Claude Code
@@ -442,6 +450,7 @@ async function createWindow(): Promise<void> {
     cwdTracker.dispose();
     tracker.dispose();
     shadow.dispose();
+    stopViewerWatch();
     for (const stop of loopWatchers.values()) stop();
     loopWatchers.clear();
   });
