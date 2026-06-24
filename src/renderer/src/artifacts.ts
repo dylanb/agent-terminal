@@ -193,6 +193,8 @@ export function createArtifacts(host: HTMLElement, deps: ArtifactsDeps): Artifac
   let treeRoot = '';
   let treeNodes: ArtifactNode[] = [];
   let refreshSeq = 0; // a slow stale refresh must not overwrite a newer one (cwd sync race)
+  let renderedTreeSig: string | null = null; // last rendered tree structure; a live reload that matches skips the rebuild
+  let shownSig: string | null = null; // last rendered file content; an unchanged reload keeps the view (and its scroll)
   const fileRows = new Map<string, HTMLElement>();
 
   let width = clampWidth(deps.initialWidth ?? DEFAULT_TREE_W);
@@ -461,8 +463,36 @@ export function createArtifacts(host: HTMLElement, deps: ArtifactsDeps): Artifac
     return out;
   }
 
+  // Identity of a treeitem that survives a rebuild: file rows by their relPath, dir heads by their path title.
+  function treeItemKey(row: HTMLElement | null): string | null {
+    if (!row) return null;
+    return row.classList.contains('dname') ? `d:${row.title}` : `f:${row.dataset.rel ?? ''}`;
+  }
+
+  // Structure the tree renders (filter + scope + each node's path/kind/provenance); a live reload whose
+  // result matches skips the rebuild, so focus, collapse state, and scroll survive untouched (§20.1).
+  function treeSignature(): string {
+    const parts: string[] = [search.value.trim().toLowerCase(), scope];
+    const walk = (ns: ArtifactNode[]): void => {
+      for (const n of ns) {
+        parts.push(n.kind, n.relPath, (n.provenance ?? []).join('+'));
+        if (n.children) walk(n.children);
+      }
+    };
+    walk(treeNodes);
+    return parts.join('');
+  }
+
   // Re-render rather than toggle visibility so nothing non-matching is ever left in the DOM (§20.2).
   function renderTree(): void {
+    const sig = treeSignature();
+    if (sig === renderedTreeSig) return;
+    renderedTreeSig = sig;
+    // Restore keyboard/SR focus to the same item across the rebuild, but only when the tree already
+    // held focus, so a background live reload never steals it (WCAG 2.4.3, §20.1).
+    const active = document.activeElement as HTMLElement | null;
+    const focusedKey =
+      active && list.contains(active) ? treeItemKey(active.closest('[role="treeitem"]') as HTMLElement | null) : null;
     const q = search.value.trim().toLowerCase();
     fileRows.clear();
     list.replaceChildren();
@@ -470,6 +500,12 @@ export function createArtifacts(host: HTMLElement, deps: ArtifactsDeps): Artifac
     if (current) setSelectedRow(current);
     const firstItem = visibleItems()[0]; // one row holds tabindex=0 so the tree is Tab-reachable
     if (firstItem) firstItem.tabIndex = 0;
+    if (focusedKey) {
+      const match = ([...list.querySelectorAll('[role="treeitem"]')] as HTMLElement[]).find(
+        (r) => treeItemKey(r) === focusedKey,
+      );
+      if (match) focusItem(match);
+    }
   }
 
   // Reflect single-select to assistive tech via aria-selected (§20.2 a11y).
@@ -482,8 +518,8 @@ export function createArtifacts(host: HTMLElement, deps: ArtifactsDeps): Artifac
   }
 
   async function open(relPath: string): Promise<void> {
+    const wasCurrent = current === relPath;
     current = relPath;
-    lastSelection = '';
     setSelectedRow(relPath);
     // An IPC failure (main restart) must render the "Cannot display" state, not escape as an
     // unhandled rejection (§20.2).
@@ -494,6 +530,14 @@ export function createArtifacts(host: HTMLElement, deps: ArtifactsDeps): Artifac
       file = null;
     }
     if (current !== relPath) return; // a newer open won the race
+    // A live reload re-opens the current file; when its content is unchanged, keep the rendered view
+    // (and its scroll/selection) instead of rebuilding it (§20.1).
+    const sig = file
+      ? `${file.relPath} ${file.kind} ${file.lang ?? ''} ${file.body} ${(file.changedLines ?? []).join(',')}`
+      : ` null ${relPath}`;
+    if (wasCurrent && sig === shownSig) return;
+    shownSig = sig;
+    lastSelection = '';
     body.setAttribute('aria-label', file?.name ?? relPath);
     if (!file) {
       title.textContent = relPath;
