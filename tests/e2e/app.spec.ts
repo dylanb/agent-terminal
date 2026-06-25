@@ -2365,9 +2365,10 @@ test('launching at a target directory roots the shell, viewer, and todo scope th
   // channel — so this drives the real launch input, not a fixture standing in for it.
   const launchDir = realpathSync(mkdtempSync(join(tmpdir(), 'agent-term-e2e-launch-')));
   writeFileSync(join(launchDir, 'launch-marker.md'), '# launched here\n');
+  const ud = mkdtempSync(join(tmpdir(), 'agent-term-e2e-launch-ud-'));
   await app.close();
   app = await electron.launch({
-    args: ['out/main/index.js'],
+    args: ['out/main/index.js', `--user-data-dir=${ud}`],
     env: { ...process.env, APP_SHELL: 'bash', APP_SUBMIT_DELAY_MS: '100', APP_LAUNCH_DIR: launchDir },
   });
   page = await app.firstWindow();
@@ -2389,11 +2390,21 @@ test('launching at a target directory roots the shell, viewer, and todo scope th
 
   await app.close();
   rmSync(launchDir, { recursive: true, force: true });
+  rmSync(ud, { recursive: true, force: true });
 });
 
 test('launching at an unusable target falls back to $HOME across the surfaces (§23.4)', async () => {
   const home = realpathSync(mkdtempSync(join(tmpdir(), 'agent-term-e2e-launch-home-')));
   writeFileSync(join(home, 'home-fallback-marker.md'), '# home fallback\n');
+  // Flow global dir (§18.1) is the fourth surface: a global flow under F (=home) must resolve for a
+  // repo that has no local flow — proving the global anchor fell back to home, not the bogus target.
+  mkdirSync(join(home, '.agent-terminal'), { recursive: true });
+  writeFileSync(
+    join(home, '.agent-terminal', 'flow.yaml'),
+    'name: global-fallback-flow\nsteps:\n  - id: global-step\n    kind: manual\n',
+  );
+  const noFlowRepo = realpathSync(mkdtempSync(join(tmpdir(), 'agent-term-e2e-launch-norepo-')));
+  mkdirSync(join(noFlowRepo, '.git'), { recursive: true });
   const bogus = join(home, 'does-not-exist-launch-target');
   await app.close();
   app = await electron.launch({
@@ -2422,8 +2433,14 @@ test('launching at an unusable target falls back to $HOME across the surfaces (�
     page.locator('.xterm-rows > div').filter({ hasText: new RegExp(`^\\s*${home}\\s*$`) }),
   ).not.toHaveCount(0);
 
+  // Flow global dir (§18.1) = F: cd into a repo with no local flow; the global flow under home
+  // resolves only if the global anchor fell back to home rather than the bogus target.
+  await typeCommand(`cd "${noFlowRepo}"`);
+  await expect(flowStepName()).toHaveText('global-step', { timeout: 10_000 });
+
   await app.close(); // HOME=temp ⇒ Electron writes userData under it; stop writes before removing it
   rmSync(home, { recursive: true, force: true });
+  rmSync(noFlowRepo, { recursive: true, force: true });
 });
 
 test('two concurrent instances each root at their own target directory (§23.4)', async () => {
