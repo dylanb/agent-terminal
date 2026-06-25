@@ -2360,11 +2360,23 @@ test('the theme toggle flips light/dark and persists across a reload (§16.6)', 
 
 // ---- §23.4: launch-root resolution (root a launched instance at a target directory) ----
 
-test('launching at a target directory roots the shell, viewer, and todo scope there (§23.4)', async () => {
+test('launching at a target directory roots the shell, viewer, todo scope, and flow global dir there (§23.4)', async () => {
   // The caller-supplied target arrives over the OS process boundary (APP_LAUNCH_DIR), not an IPC
   // channel — so this drives the real launch input, not a fixture standing in for it.
   const launchDir = realpathSync(mkdtempSync(join(tmpdir(), 'agent-term-e2e-launch-')));
   writeFileSync(join(launchDir, 'launch-marker.md'), '# launched here\n');
+  // Flow global dir (§18.1) is the fourth AC surface. For a *valid* target L = launchDir ≠ $HOME, so a
+  // global flow placed under launchDir resolves for a repo with no local flow only if the global anchor
+  // is launchRoot — pinning index.ts's flowGlobalDir = launchRoot. Test 2 (L == $HOME) cannot tell that
+  // apart from a homeFallback regression; no integration test does either (it feeds the resolved root
+  // straight into loadFlowDefinitionLocalFirst, never the index.ts wiring).
+  mkdirSync(join(launchDir, '.agent-terminal'), { recursive: true });
+  writeFileSync(
+    join(launchDir, '.agent-terminal', 'flow.yaml'),
+    'name: launch-global-flow\nsteps:\n  - id: launch-global-step\n    kind: manual\n',
+  );
+  const noFlowRepo = realpathSync(mkdtempSync(join(tmpdir(), 'agent-term-e2e-launch-noflow-')));
+  mkdirSync(join(noFlowRepo, '.git'), { recursive: true });
   const ud = mkdtempSync(join(tmpdir(), 'agent-term-e2e-launch-ud-'));
   // afterEach owns the beforeEach `app`/userDataDir; this case needs its own launch (APP_LAUNCH_DIR
   // over the OS boundary), so bind it locally and close+clean it in finally — never double-close
@@ -2390,9 +2402,15 @@ test('launching at a target directory roots the shell, viewer, and todo scope th
     await expect(
       page.locator('.xterm-rows > div').filter({ hasText: new RegExp(`^\\s*${launchDir}\\s*$`) }),
     ).not.toHaveCount(0);
+
+    // Flow global dir (§18.1) = L: cd into a repo with no local flow; the global flow resolves only if
+    // the per-process global anchor is launchDir (L), not $HOME.
+    await typeCommand(`cd "${noFlowRepo}"`);
+    await expect(flowStepName()).toHaveText('launch-global-step', { timeout: 10_000 });
   } finally {
     await launched.close();
     rmSync(launchDir, { recursive: true, force: true });
+    rmSync(noFlowRepo, { recursive: true, force: true });
     rmSync(ud, { recursive: true, force: true });
   }
 });
