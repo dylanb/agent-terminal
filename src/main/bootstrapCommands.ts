@@ -24,12 +24,13 @@ export interface BootstrapMatch {
   exit: number | null;
 }
 
-// The shell may add a trailing space or echo artifacts; the extracted command line still begins with
-// the injected text, so a trimmed equality OR prefix is the join (the injected text is a full line).
+// The shell may add a trailing space or echo artifacts after the injected line, so a trimmed equality
+// OR a whole-line prefix (the injected text followed by a token boundary) is the join. The boundary
+// stops a shorter id being a prefix of a longer one (`pickup 17` must not claim `pickup 176`).
 function commandMatches(cmd: string, spanCommand: string): boolean {
   const a = cmd.trim();
   const b = spanCommand.trim();
-  return b === a || b.startsWith(a);
+  return b === a || b.startsWith(`${a} `);
 }
 
 /** Finished, not-yet-recorded spans matched to pending bootstraps — each pending entry and each span

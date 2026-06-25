@@ -124,6 +124,13 @@ describe('lifecycleEvents — append kinds diff before/after (§25.4/§25.5)', (
       { ts: T, type: 'flow.status', from: 'done', to: 'in_progress' },
     ]);
   });
+
+  it('never emits a flow.status carrying error, which is outside the §25.5 vocabulary', () => {
+    const fromError = lifecycleEvents('advance', { status: 'error', stepName: 's' }, inProg('s'), T);
+    const toError = lifecycleEvents('advance', inProg('s'), { status: 'error', stepName: 's' }, T);
+    expect(fromError.some((e) => e.type === 'flow.status')).toBe(false);
+    expect(toError.some((e) => e.type === 'flow.status')).toBe(false);
+  });
 });
 
 describe('loopEvents — diff the agent-loop state.yaml mirror (§25.5)', () => {
@@ -252,6 +259,24 @@ describe('reconstructTimeline — replay a full run into its ordered timeline + 
     expect(tl.events).toEqual([]);
     expect(tl.flow).toEqual({ status: 'not_started', step: '' });
     expect(tl.todos).toEqual([]);
+  });
+
+  it('keeps the loop status when a loop.iteration arrives before any loop.status', () => {
+    const h = serializeDoc(header);
+    const iterFirst =
+      h +
+      serializeDoc({ ts: '2026-06-23T10:30:00Z', type: 'loop.iteration', n: 4 }) +
+      serializeDoc({ ts: '2026-06-23T10:31:00Z', type: 'loop.status', from: '', to: 'building' });
+    expect(reconstructTimeline(iterFirst).loop).toEqual({ status: 'building', iteration: 4 });
+  });
+
+  it('reads events even when the first document is not a valid header', () => {
+    const headerless =
+      serializeDoc({ ts: '2026-06-23T10:00:01Z', type: 'flow.started', step: 'plan' }) +
+      serializeDoc({ ts: '2026-06-23T10:30:00Z', type: 'step.entered', step: 'build' });
+    const parsed = parseAuditStream(headerless);
+    expect(parsed.header).toBeNull();
+    expect(parsed.events).toEqual([{ ts: '2026-06-23T10:30:00Z', type: 'step.entered', step: 'build' }]);
   });
 });
 

@@ -138,8 +138,10 @@ export function createAuditRecorder(deps: AuditRecorderDeps): AuditRecorder {
           const file = auditFilePath(root, repoKey, flow, date);
           const header: AuditHeader = { flow, repo: path.basename(repoKey), repoPath: repoKey, started: ts };
           const events = lifecycleEvents('start', before, after, ts);
-          mkdirSync(path.dirname(file), { recursive: true });
-          writeFileSync(file, serializeDoc(header) + events.map(serializeDoc).join(''));
+          // The record carries the repo path, resolved input values, and injected commands — owner-only
+          // so a shared host cannot read another user's flow (CWE-276).
+          mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+          writeFileSync(file, serializeDoc(header) + events.map(serializeDoc).join(''), { mode: 0o600 });
           open.set(repoKey, file);
           lastLoop.delete(repoKey);
           writePointer(repoKey, file);

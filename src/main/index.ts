@@ -529,7 +529,7 @@ async function createWindow(): Promise<void> {
         if (!isValidTemplateInstantiate(m)) return [];
         const before = todoSnapshot(m.repoKey);
         const list = instantiateTemplate(m.repoKey, m.ref);
-        audit.recordTodoChange(m.repoKey, before, list); // each instantiated item → todo.created (§25.5)
+        audit.recordTodoChange(m.repoKey, before, list); // §25.5
         pushFlowChanged(); // instantiation can add todos → the strip's n/m total moves (§24.2.2 S5)
         return list;
       },

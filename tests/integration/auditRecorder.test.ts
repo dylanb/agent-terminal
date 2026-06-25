@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { createAuditRecorder } from '../../src/main/auditRecorder';
@@ -47,6 +47,26 @@ describe('audit recorder — start opens the run file (§25.3/§25.4)', () => {
   it('gitignores its in-repo current-run pointer (app-owned state, §19.1)', () => {
     recorder().recordTransition(repo, 'start', NOT_STARTED, IN_PROGRESS);
     expect(readFileSync(join(repo, '.gitignore'), 'utf8')).toContain('.agent-terminal/audit-pointer.yaml');
+  });
+
+  it('appends the pointer ignore exactly once across repeated runs (idempotent)', () => {
+    recorder().recordTransition(repo, 'start', NOT_STARTED, IN_PROGRESS);
+    recorder().recordTransition(repo, 'start', NOT_STARTED, IN_PROGRESS);
+    const lines = readFileSync(join(repo, '.gitignore'), 'utf8').split('\n').filter((l) => l.trim() === '.agent-terminal/audit-pointer.yaml');
+    expect(lines).toHaveLength(1);
+  });
+
+  it('separates the pointer ignore from a pre-existing entry that lacks a trailing newline', () => {
+    writeFileSync(join(repo, '.gitignore'), 'node_modules');
+    recorder().recordTransition(repo, 'start', NOT_STARTED, IN_PROGRESS);
+    expect(readFileSync(join(repo, '.gitignore'), 'utf8')).toBe('node_modules\n.agent-terminal/audit-pointer.yaml\n');
+  });
+
+  it('writes the run file and audit dir owner-only (CWE-276 least-privilege)', () => {
+    recorder().recordTransition(repo, 'start', NOT_STARTED, IN_PROGRESS);
+    const file = auditFilePath(root, repo, 'feature-dev', D);
+    expect(statSync(file).mode & 0o077).toBe(0);
+    expect(statSync(auditRepoDir(root, repo)).mode & 0o077).toBe(0);
   });
 
   it('never throws into the flow path when the audit root cannot be created', () => {

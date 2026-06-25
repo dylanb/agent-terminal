@@ -31,6 +31,17 @@ describe('matchBootstrapCommands — correlate an injected bootstrap with its OS
     expect(matches.map((m) => m.spanId)).toEqual(['s1']);
   });
 
+  it('does not mis-match a pending command that is a token-prefix of a longer span command', () => {
+    const pending: PendingBootstrap[] = [{ repoKey: '/r', cmd: 'agent-loop pickup 17' }];
+    expect(matchBootstrapCommands(pending, [span('s1', 'agent-loop pickup 176', 0)], new Set())).toEqual([]);
+  });
+
+  it('matches a span that appends only trailing tokens after the injected line (echo artifacts)', () => {
+    const pending: PendingBootstrap[] = [{ repoKey: '/r', cmd: 'agent-loop pickup 176' }];
+    const matches = matchBootstrapCommands(pending, [span('s1', 'agent-loop pickup 176 # echo', 0)], new Set());
+    expect(matches.map((m) => m.spanId)).toEqual(['s1']);
+  });
+
   it('does not match an unrelated command', () => {
     const pending: PendingBootstrap[] = [{ repoKey: '/r', cmd: 'agent-loop pickup 176' }];
     expect(matchBootstrapCommands(pending, [span('s1', 'ls -la', 0)], new Set())).toEqual([]);

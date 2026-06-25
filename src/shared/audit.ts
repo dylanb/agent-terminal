@@ -15,9 +15,13 @@ export interface AuditHeader {
   started: string;
 }
 
+/** The flow statuses the §25.5 `flow.status` event records — the lifecycle trio, never the `error`
+ *  view (which is a benign malformed-request view, not a recorded run state). */
+export type AuditFlowStatus = Exclude<FlowStatus, 'error'>;
+
 export type AuditEvent =
   | { ts: string; type: 'flow.started'; step: string }
-  | { ts: string; type: 'flow.status'; from: FlowStatus; to: FlowStatus }
+  | { ts: string; type: 'flow.status'; from: AuditFlowStatus; to: AuditFlowStatus }
   | { ts: string; type: 'step.entered'; step: string }
   | { ts: string; type: 'flow.completed'; step: string }
   | { ts: string; type: 'todo.created'; id: string; text: string }
@@ -115,7 +119,7 @@ export function lifecycleEvents(kind: TransitionKind, before: FlowLike, after: F
     return after.status === 'in_progress' ? [{ ts, type: 'flow.started', step: after.stepName }] : [];
   }
   const events: AuditEvent[] = [];
-  if (before.status !== after.status) {
+  if (before.status !== after.status && before.status !== 'error' && after.status !== 'error') {
     events.push({ ts, type: 'flow.status', from: before.status, to: after.status });
   }
   if (after.status === 'in_progress' && before.stepName !== after.stepName) {
