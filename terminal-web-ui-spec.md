@@ -99,13 +99,18 @@
   - [23.3 Cross-instance guard (D21)](#233-cross-instance-guard-d21)
 - [24. Phased build plan](#24-phased-build-plan)
   - [24.1 First slice (walking skeleton)](#241-first-slice-walking-skeleton)
+- [25. Flow audit record (per-run, append-only)](#25-flow-audit-record-per-run-append-only)
 
 ---
 
+> **Changelog v2.87:** **§25 Phase 2 landed — loop integration + timeline reconstruction.** Implements the loop-sourced events the §25.5 vocabulary reserved: `input.resolved` / `ticket.assoc` (on resolving a step's typed inputs; `github-ticket` → ticket), `loop.status` / `loop.iteration` / `pr.assoc` (diffed from the `state.yaml` mirror on each observation, so an external `agent-loop` advance is recorded too), `outputs.snapshot` (the `.agent-loop/` files `{ path, bytes }` + PR, realpath-guarded per §20.2, taken on each loop status change), and `command` (a flow-injected `agent-loop pickup …` correlated with its OSC-133 command span exit, §15.5). Adds the shared **timeline reconstructor** (§25.6) that folds a run's stream into its ordered, replayable timeline + final state — the "a complete timeline can be reconstructed" acceptance criterion. Tightens §25.5/§25.6/§25.8 wording to the as-built behavior. No `src/shared/ipc.ts` contract shape change (audit still has no UI). The bootstrap-`command` correlation is proven through the real shadow with scripted OSC-133 bytes at the integration layer (CLAUDE.md "no mocking the VT parser"), with the full-PTY Playwright e2e covering it where bash shell integration is available.
+>
+> **Changelog v2.86 (was v2.79, then v2.83, then v2.84; renumbered in the origin/main merge to sit above main's v2.84/v2.85 entries):** **New §25 — the flow audit record (per-run, append-only).** Adds the audit subsystem as a numbered section: a durable, human-auditable record written per flow run under `~/.agent-terminal/audit/<repo-basename>/<flowName>_<startTimestampZ>.yaml`, as a **YAML multi-document stream** (a header document, then one `---`-delimited document per event, **append-only** — O(1) per event, no rewrite; a tail-tolerant reader discards a trailing partial document from a crash mid-append). Defines the storage layout (§25.2), the format (§25.3), the run lifecycle (§25.4 — start opens, advance/restart/undo append, done keeps the file open for append-on-go-back, a new start closes and opens, the current-run pointer survives restart), the event vocabulary (§25.5 — **Phase 1:** `flow.started`/`flow.status`/`step.entered`/`flow.completed` + `todo.created`/`todo.status`/`todo.text`/`todo.deleted`; **Phase 2:** the loop-sourced events), the shared-semantics + timeline-reconstruction boundary (§25.6, per the `src/shared/` rule), and the constraints (§25.7 — never throws into the flow path, untrusted-string escaping + CWE-22 path-segment sanitization, accepted basename collision, explicit ID sourcing, keep-all retention). Auditing is **observe-only** (injects nothing) and **best-effort** (a failed write is logged and dropped, never surfaced to the flow). No contract shape change to `src/shared/ipc.ts` (audit has no UI this round). The build is sliced (§25.8) as Phase 1 (lifecycle + todo timeline) then Phase 2 (loop integration + replayable-timeline proof), each slice fired by an existing UI control (Start/Advance/Restart/Undo, todo edits) and proven by a Playwright `_electron` e2e asserting the on-disk YAML, RED-first throughout.
+>
 > **Changelog v2.85 (was v2.84; renumbered in the main merge to clear the v2.83 collision with §20.1's viewer-live-reload entry):** **§7.8 — drop a file onto the terminal to paste its path at the prompt.** Dragging a file from the OS onto the terminal pane did nothing (xterm handles no file drops, and `File.path` is gone under `contextIsolation`), so feeding an agent a file (e.g. dragging an image into Claude Code) had no path. The pane now wires its own drag-and-drop (`wireTerminalDrop`): a **drop pastes every dropped file's path** — **single-quoted** (POSIX `'\''`, spaces survive), space-joined, **any file type**, **no submit** — through the existing **§7.5/§9.3 sanitized paste seam** (`term.paste(stripPasteBreakout(…))`, bracketed-paste-aware, `ESC[201~` stripped so a hostile filename can't break out); **all C0 control chars are stripped from each path** first, so a filename containing `\r`/`\n` cannot submit a line when bracketed-paste is off. Paths resolve via a new preload **`window.term.pathForFile`** bridge over `webUtils.getPathForFile` (a `term`-namespace method, **no new IPC channel**); a drag item with no filesystem path resolves to `''` and is skipped. A **drop-target affordance** (`drag-over` outline, `--signal`) shows while a file drag is over the pane, stable across nested xterm elements via a `dragenter`/`dragleave` depth counter, with `dragover` `preventDefault`ed so the pane is a valid target. Scope: files only (dragged text/URLs/directories out of scope). RED-first: DOM units pin the paste text (single-quoting, multi-file join, empty-path skip, `ESC[201~` strip, affordance toggle, disposer teardown) and a preload unit pins `pathForFile` delegating to `webUtils`; full-loop e2e drive a real native drop (a `File` from a hidden `<input>` so the bridge resolves a real OS path) asserting the single-quoted path lands at the prompt, plus the affordance appears/clears. **Also (§7.1/§7.4): the xterm scrollbar gutter is theme-matched.** xterm.css reserves a permanent scrollbar gutter (`overflow-y:scroll`) painted with xterm's inline theme background — left at xterm's `#000` default it showed as a black strip a full-screen alt-buffer agent (no scrollback) can't cover, against the themed `--term-bg` pane. The gutter is now an overlay (visible only when scrollable, thin, `--term-dim` thumb) and xterm's theme `background` is seeded from `--term-bg`; because the gutter fill is the canvas background and `--term-bg` differs per theme, the pane re-seeds it on each live `data-theme` toggle (a `MutationObserver` on the document root) so the strip never reappears one theme behind. RED-first e2e: the gutter background equals the pane background (not `#000`), and still matches after toggling the theme. No IPC contract change.
 
 > **Changelog v2.84 (was v2.83; renumbered in the main merge to clear the collision with §20.1's viewer-live-reload entry):** **Alt-buffer capture (full-screen agents) + native select/copy on the alternate screen (§21.1 / §13.4 / §7.4).** Claude Code 2.x runs full-screen on the **alternate screen buffer**, where the capture subsystem was inert (§15.9) — "Capture last report" returned nothing, against the app's primary workload. **On-demand capture now reads the visible alt frame:** `scanner.captureLast()` drops its `bufferType === 'alternate'` early-out and runs detection over the active buffer; the baseline detector (`generic.ts`) is buffer-agnostic; and `rangeOf` stamps the real `bufferType`, so a captured alt region is provenance-tagged `alternate`. The **auto** scan path stays normal-buffer-only (its own `!altScreen` guard is unchanged) — still no auto-emit on the alt buffer (§21.1). Inherent constraint: the alt buffer has **no scrollback** (the agent redraws its own frame), so capture sees only what is **currently on screen**. **Select / capture / copy on the alt buffer use xterm's native selection** — in the pinned xterm 5.5.0 `getSelectionPosition()` returns a valid range and `getSelection()` the text on the alt buffer, so the app-owned model populates and Copy / Capture selection work there with **no new code**; the deferred **Option B** pointer-capture overlay (§11 / §13.4) is **explicitly not built**. The app-owned **persistent** highlight and **cross-highlight reveal** stay normal-buffer-only (`registerDecoration` / `registerMarker` return `undefined` on the alt buffer — the documented §7.4 limitation, accepted). **Stale fact corrected:** §5 / §8.2 no longer claim Claude Code uses the normal buffer (2.x is alt-screen); the alt-screen *example* now reads "full-screen TUI agents (Claude Code 2.x, Codex)." RED-first: an integration test captures a multi-line report on the alt buffer (findings split as on the normal buffer); full-loop e2e drive the alt screen via `printf '\x1b[?1049h'` — "Capture last report" surfaces `.finding` cards, and a drag-select + the platform copy chord lands the selection on the OS clipboard. No IPC contract change.
-
+>
 > **Changelog v2.83:** **§20.1 — the viewer live-reloads an open artifact when it changes on disk, with no cd.** The viewer read files on demand and otherwise only re-pulled on a cwd change, so an on-disk edit to a displayed artifact went unseen until the next `cd`. A new `src/main/viewerWatch.ts` recursively watches the viewer's tree root and, on a coalesced burst (`VIEWER_WATCH_DEBOUNCE_MS`), re-broadcasts over a payload-free **`viewer:onChanged`** seam (§6) so the renderer re-pulls `viewer:tree`/`viewer:read` — mirroring the agent-loop `flow:onStateChanged` push. **One watcher, re-rooted on each cwd move.** The watch root is resolved through the **same `gitRootOf`** discovery uses (exported from `artifactTree.ts`), so the watch root and the discovery root cannot drift; events under the shared **`IGNORED_DIRS`** (`.git`/`node_modules`/`.agent-terminal`) are filtered at **any depth** — matching discovery's walk — so a refresh's own `git status` write to `.git/index` can't feed a reload loop. The watch *surface* is intentionally coarser than the curated tree — any non-ignored change under the root fires a (debounced) re-pull, even for a file the curated view won't list. When the directory can't be watched it degrades to a no-op. RED-first: the watcher's coalescing + ignore classification (including nested ignored dirs and the platform root self-event) are pinned via an injected watch seam so event delivery is deterministic, a preload `viewerApi.onChanged` subscription-contract unit, and a full-loop `_electron` e2e that edits a displayed file on disk and asserts it re-renders with no cd. Contract: adds the `viewer:onChanged` broadcast (`ViewerChangedMsg {sessionId}`) to §6.
 >
 > **Changelog v2.82:** **§5 — the Linux GUI-launch PATH probe now targets the resolved shell, not hardcoded bash.** Follow-up to v2.79: `probeLoginPath` asked `bash -lc` regardless of the session shell, so a non-bash `$SHELL` user (zsh/fish) launching from a Linux GUI could miss the shell-specific `PATH` their agent CLIs need — the exact failure the probe exists to prevent. It now probes `APP_SHELL || $SHELL || bash` with the portable `-l -c` login+command form (the resolution is extracted as `resolveShellPath`, shared with `buildSpawnConfig` so the two cannot drift); a shell with a list-valued, non-colon `$PATH` (fish) only ever appends a harmless extra entry, since the merge splits on `:` and the OS ignores a missing dir. Also corrected v2.81's prose overreach: §2/§4 now read "interactive **shell**," not "login shell" — only macOS passes `-l`, while Linux runs a **non-login** interactive shell (§5). RED-first: a `probeShellCommand` unit pins that the probe targets `$SHELL`/`APP_SHELL`/the bash fallback and runs as a login shell, plus a positive `$SHELL=/bin/bash` case pinning that a `$SHELL`-resolved bash both selects bash and installs the OSC 133 hook. No contract change.
@@ -390,6 +395,9 @@ After PTY writes settle (debounced), main reads shadow state — `buffer.active.
 
 **G. Lifecycle**
 On `ptyProcess.onExit` → main sends `pty:exit` → both panes show a notice. On window close → main kills the PTY and disposes the shadow.
+
+**G2. Flow audit record (observe-only)** — *§25*
+A main-process recorder taps the flow lifecycle, the TODO store, the agent-loop `state.yaml` mirror, and OSC-133 command spans, and writes a per-run append-only YAML record under `~/.agent-terminal/audit/`. It is observe-only and best-effort — it injects nothing and never throws into the flow path. This overview omits it from the component diagram above (whose flow/TODO/loop sources are themselves not depicted there); its lifecycle is the §25.4 `stateDiagram-v2` and its event vocabulary is §25.5.
 
 **H. Agent-semantic capture (shadow → event store → monitor)** — *§15.2/§15.3*
 On the active→quiet transition (§8.3), the **semantic scanner** reads the shadow buffer from a marker watermark, dispatches the scan window to the per-agent adapters (or the generic heuristic fallback when none match), dedups regions by content, and emits each new region on `monitor:event` (`source: shadow-scan` / `heuristic`). Detection only — the scanner never acts on what it finds.
@@ -1618,3 +1626,124 @@ flowchart LR
 - [x] **T4 — Detect "awaiting human" and notify. ✅ done (v2.72).** The bridge classifies `status` as human-needed by matching it against the LoopDef's gate ids / the `awaiting-*` family (explicit in v4 — not a heuristic); on entering such a status it fires S5's `flow:onStateChanged` and the UI raises a notification/attention cue. Because the loop re-enters a gate at `iteration+1` after each request-changes, the cue **re-fires per cycle**, not once. *(UI to design: the attention/notification surface.)* **Fire:** let agent-loop reach `awaiting-human-pr-approval`, then iterate it to the next awaiting state. **Land:** the cue appears with no manual refresh and re-appears on the next cycle. **e2e:** write `status: awaiting-*` → cue shows; bump iteration + re-enter awaiting → cue re-fires; under it a classifier unit test (which statuses are human-needed, driven by the LoopDef gates) + a renderer test that `flow:onStateChanged` raises the cue.
 - [ ] **T5 — Approve gate → advance the flow.** At a human-review state, the gate UI renders the options from the current status's gate `human_options` (data-driven, not a hardcoded triplet). **Approve** injects `/agent-loop-approve` (§19.3 refusal), then reconciles from `state.yaml`. The **flow** advances only when the approved gate's `next_status_on_approve` is the loop's terminal/exit status — intermediate approvals keep the flow on the same step (the loop just moves on); that loop-status → "flow step complete" mapping is made explicit. **Fire:** at an `awaiting-*` state, click Approve at a ready shell. **Land:** `/agent-loop-approve` typed; state reconciles; a terminal gate advances the flow station, an intermediate gate keeps the step; busy shell → refusal. **e2e:** terminal-gate approve → flow advances; intermediate approve → same step, loop status moves; busy → refusal; under it a gate-option-derivation unit test (UI options come from the gate), a terminal-vs-intermediate advance-mapping test, a refusal test.
 - [ ] **T6 — Request-changes & impasse, with feedback compose (§19.4).** The other two options, both of which **keep the flow on the step** and let the loop iterate. **Request-changes** curates a subset of review todos (+ optional free text) → **Compose-with-agent** (`flow:composeFeedback` writes the reason) **or** **Submit-as-is** (verbatim) → injects `/agent-loop-request-changes` (§19.3 refusal). **Impasse** injects `/agent-loop-impasse`. Neither advances the flow; the loop re-iterates and T4 re-notifies at the next gate. **Fire:** at a review state, pick two todos + a note → request changes; separately, declare impasse. **Land:** the composed/verbatim reason injected as `/agent-loop-request-changes …`; impasse injects `/agent-loop-impasse`; the flow stays put; busy shell → refusal. **e2e:** select todos → request-changes → reason in the PTY with the flow unchanged; impasse → command in the PTY; under it a composer unit test (selected todos + text → reason), gate-driver tests for both commands, a refusal test.
+
+---
+
+## 25. Flow audit record (per-run, append-only)
+
+### 25.1 Goal & boundary (D-audit-1)
+
+Each flow run writes a durable, human-auditable record from which a **complete timeline** of the run can be reconstructed: every lifecycle state change with its timestamp, the TODOs created and each of their state changes, and — added in Phase 2 (§25.5) — the loop inputs/outputs, the ticket and PR numbers involved, the agent-loop status/iteration, and the commands the flow issued on the user's behalf.
+
+**Boundary:** auditing is **observe-only** and **best-effort**. It injects nothing, blocks nothing, and **never throws into the flow path** — it only records what the flow lifecycle and the TODO store already produce (Phase 1) and what the agent-loop bridge already mirrors (Phase 2). A failed audit write is logged and dropped; the flow proceeds unaffected (mirrors the §19.1 "never throws, degrade to null" discipline). **UI:** none this round — files only.
+
+### 25.2 Storage layout (D-audit-2)
+
+Audit root: `~/.agent-terminal/audit/`. One directory per repo, named by the repo **basename only**. One file per `flow:start`, named `<flowName>_<startTimestampZ>.yaml`, where the timestamp is ISO-8601 UTC to the second with `:` replaced by `-` (`2026-06-23T10-00-01Z`).
+
+The repo basename and the flow name are each reduced to a filesystem-safe segment before they reach the path — characters outside `[A-Za-z0-9._-]` become `-` — so an untrusted `flow.yaml` `name:` (a repo is untrusted input) cannot traverse the audit tree (CWE-22). Basename collision across two same-named repos is an **accepted limitation** (§25.7).
+
+```text
+~/.agent-terminal/
+  audit/
+    agent-terminal/                         # repo basename
+      feature-dev_2026-06-23T10-00-01Z.yaml # one run
+      feature-dev_2026-06-25T14-12-00Z.yaml # a later re-run
+```
+
+### 25.3 File format — YAML multi-document stream (D-audit-3)
+
+A **header document**, then one `---`-delimited document **per event**, appended in order. Appending an event is **O(1)** — one complete `---\n…\n` block written in a single append, never a rewrite of prior content. The "a reader never sees a partial event" guarantee rests on the per-event append being one write **plus the reconstructor discarding a trailing partial document** (possible only on a crash mid-append), *not* on atomic rename. The header is written when the file is opened.
+
+```yaml
+---
+flow: feature-dev
+repo: agent-terminal
+repoPath: /Users/dylanbarrell/Documents/sourcecode/agent-terminal
+started: 2026-06-23T10:00:01Z
+---
+ts: 2026-06-23T10:00:01Z
+type: flow.started
+step: plan
+---
+ts: 2026-06-23T10:02:11Z
+type: todo.created
+id: a1
+text: Wire audit IPC
+---
+ts: 2026-06-23T10:05:00Z
+type: todo.status
+id: a1
+from: active
+to: in_progress
+---
+ts: 2026-06-23T10:30:00Z
+type: step.entered
+step: build
+---
+ts: 2026-06-23T11:00:00Z
+type: flow.status
+from: in_progress
+to: done
+---
+ts: 2026-06-23T11:00:00Z
+type: flow.completed
+step: build
+```
+
+### 25.4 Lifecycle (D-audit-4)
+
+```mermaid
+stateDiagram-v2
+    [*] --> Idle
+    Idle --> Recording : flow start opens new file
+    Recording --> Recording : advance / restart / undo append
+    Recording --> Recording : todo create / status / text / delete append
+    Recording --> Recording : flow done appends completed but stays open
+    Recording --> Recording : go back after done appends to same file
+    Recording --> Recording : new flow start closes current then opens new file
+```
+
+- A fresh `flow:start` **opens a new file** for the run (header document + `flow.started`), **closing** any current run for that repo.
+- `advance` / `restart` / `undo` **append** events to the current run's file — no rewrite of prior content.
+- Reaching `done` records a `flow.completed` event but **keeps the file open**, so completing a flow and then going back (`undo` / `restart`) continues to append to the **same** file.
+- The next `flow:start` **closes** the current run and opens a new file.
+- The current-run pointer **survives an app restart**: after a restart mid-run, append-on-go-back targets the same run file rather than orphaning it and opening a new one. (How the pointer persists is an implementation choice.)
+- TODO events (`todo.*`) are recorded **only while a run is open** for the repo; with no open run, a todo edit records nothing.
+
+### 25.5 Event vocabulary (D-audit-5)
+
+Every event carries an ISO-8601 UTC `ts`.
+
+**Phase 1 — lifecycle + TODO timeline:**
+
+- `flow.started` — entry step of the run (the header carries `flow`, `repo`, `repoPath`, `started`).
+- `flow.status` — `{ from, to }` across `not_started` / `in_progress` / `done`.
+- `step.entered` — a new step became active within a running flow.
+- `flow.completed` — the terminal step was reached (the file stays open for append-on-go-back).
+- `todo.created` — `{ id, text }`.
+- `todo.status` — `{ id, from, to }` across `active` / `in_progress` / `done`.
+- `todo.text` — `{ id, text }` after an edit.
+- `todo.deleted` — `{ id }`.
+
+**Phase 2 — loop integration:** `input.resolved` `{ name, value }` (one per resolved step input), `ticket.assoc` `{ ticket }` (a `github-ticket` input resolving to a positive integer), `pr.assoc` `{ pr }` (from the `state.yaml` mirror), `loop.status` `{ from, to }` and `loop.iteration` `{ n }` (diffed from the mirror on each observation; the first observation records the entry status with `from` empty), `command` `{ source, cmd, exit }` (a flow-injected bootstrap correlated with its OSC-133 command span), `outputs.snapshot` (`.agent-loop/` files `{ path, bytes }` + `pr`, taken on each loop status change).
+
+### 25.6 Shared semantics & timeline reconstruction (D-audit-6)
+
+Per the `src/shared/` rule (CLAUDE.md), the meanings main, the tests, and a future viewer must all agree on live in **one** shared definition reused by both sides rather than two drifting copies: the **event vocabulary** (types), the audit **file-path derivation**, the **start-opens / advance-appends** event classifier, the **serialize ↔ parse** pair (the on-disk format is the contract the writer and any reader must not drift on), and the **timeline reconstructor**. The reconstructor reads a run's stream — tolerating a trailing partial document — and yields the ordered, replayable timeline plus the folded final state (flow status/step, ticket, PR, loop status/iteration, resolved inputs, surviving TODOs, commands, output snapshots) — the "a complete timeline can be reconstructed" acceptance criterion. Module and function names are the implementor's choice.
+
+### 25.7 Constraints & accepted limitations
+
+- **Never throws into the flow path.** A failed audit write is logged and dropped; the flow is never affected.
+- **Untrusted strings.** TODO text and the repo/flow names are escaped on write (YAML quoting) and path segments are sanitized (§25.2). Phase 2's `.agent-loop/` snapshot performs the §20.2 realpath check so a symlink cannot escape the repo, and sanitizes the untrusted `state.yaml` `status` (CWE-117, per §16.3 / `loopNotifier`).
+- **Basename collision** across same-named repos is **accepted** — the run files co-mingle in one basename directory; the per-repo current-run pointer is keyed by the **full** repo path so each repo still tracks its own open run.
+- **Explicit ID sourcing only** (Phase 2) — ticket/PR numbers come from resolved inputs and `state.yaml`, never from branch-name or PR-body scraping.
+- **Retention:** keep all, no pruning.
+
+### 25.8 Build — tracer-bullet phases
+
+Per the CLAUDE.md tracer-bullet rule, each slice is fired by an **existing UI control** (flow Start/Advance/Restart/Undo, todo edits) and proven by a **Playwright `_electron` e2e asserting the on-disk YAML**, with main-process integration and shared unit tests underneath. RED-first throughout.
+
+- **Phase 0 — Spec (this section).** The contract the code implements.
+- **Phase 1 — Lifecycle + TODO timeline.** The writer core plus every event the flow lifecycle and TODO store already produce (`flow.started` / `flow.status` / `step.entered` / `flow.completed` + `todo.*`). **Fire:** Start, then Advance/Restart/Undo; add/move/edit/delete a TODO while a flow is in progress. **Land:** the per-run file appears with `flow.started`; the lifecycle events accrue with timestamps; a new Start opens a new file; go-back after `done` appends to the same one; `todo.*` events accrue while a flow is active, nothing when none is. **e2e:** drive Start → Advance → done → Undo (same file), then Start again (new file); within an active flow, manipulate a TODO and assert its events.
+- **Phase 2 — Loop integration + timeline reconstruction.** Everything sourced from the agent-loop bridge (tickets, PRs, inputs, loop status/iteration, injected commands, output snapshots) plus the timeline reconstructor that proves the whole record is replayable. **Fire:** enter a loop step (the `state.yaml` mirror is observed), resolve a `github-ticket` input (the bootstrap injects `agent-loop pickup <input>`), and let the loop's `state.yaml` change. **Land:** `input.resolved` / `ticket.assoc` on resolution; `loop.status` / `loop.iteration` / `pr.assoc` + an `outputs.snapshot` on each status change; a `command` event once the injected bootstrap runs; the reconstructor folds a full run into its ordered timeline + final state. **e2e:** drive a loop step through `state.yaml` edits and assert the loop/input/ticket/PR/snapshot events on disk; the bootstrap-`command` correlation (OSC-133, §15.5) is proven through the real shadow with scripted bytes at the integration layer, with the full-PTY e2e covering it where shell integration is available.

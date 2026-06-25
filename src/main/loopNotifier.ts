@@ -3,6 +3,7 @@
 
 import type { FlowStateView } from '../shared/ipc';
 import { sameOccurrence, type Occurrence } from '../shared/occurrence';
+import { stripStatusControlChars } from '../shared/loopStatus';
 
 export interface LoopNotifyOpts {
   title: string;
@@ -22,11 +23,10 @@ export interface LoopNotifier {
   observe(repoKey: string, view: FlowStateView): void;
 }
 
-// CWE-117: `status` originates in an arbitrary repo's untrusted `.agent-loop/state.yaml` (§16.3);
-// bound its length and strip control characters before it reaches the OS notification sink.
+// §16.3: bound the untrusted `status` length for the OS notification; the CWE-117 control-character
+// strip is the shared `stripStatusControlChars` so this sink and the audit record cannot drift.
 const STATUS_MAX = 80;
-const sanitizeStatus = (status: string): string =>
-  status.replace(/[\x00-\x1f\x7f]/g, ' ').slice(0, STATUS_MAX);
+const sanitizeStatus = (status: string): string => stripStatusControlChars(status).slice(0, STATUS_MAX);
 
 export function createLoopNotifier(deps: LoopNotifierDeps): LoopNotifier {
   // Per repo (§16.3): a same-repo return visit after a detour to another repo must stay deduped; a

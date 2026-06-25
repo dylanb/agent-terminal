@@ -11,6 +11,7 @@ import {
   type CommandSummary,
   type FlowStateView,
   type SendChannel,
+  type TodoStatus,
 } from '../shared/ipc';
 import { createInjector } from './inject';
 import { createMonitorEventStore } from './eventStore';
@@ -56,7 +57,11 @@ import { currentRepoInfo } from './repoKey';
 import { createScanner } from './scanner';
 import { captureLastReport } from './captureLast';
 import { createFlowManager, deriveFlowView, loadFlowDefinitionLocalFirst } from './flow';
-import { createFlowEntryActions } from './flowEntryActions';
+import { createAuditRecorder } from './auditRecorder';
+import type { TransitionKind } from '../shared/audit';
+import { auditRootDir } from './auditPaths';
+import { BOOTSTRAP_PICKUP, createFlowEntryActions } from './flowEntryActions';
+import { createBootstrapCommandTracker, type BootstrapCommandTracker } from './bootstrapCommands';
 import { parseAgentLoopState, watchAgentLoopState } from './agentLoopBridge';
 import { createLoopNotifier } from './loopNotifier';
 import { parseLoopDef } from './loopDef';
@@ -221,12 +226,32 @@ async function createWindow(): Promise<void> {
     onInject: () => suppressor.noteInjection(),
   });
 
+  // §25.5: a flow-injected bootstrap (`agent-loop pickup …`) is injected during a transition (its
+  // repoKey) and run by the human later; the correlator (built once `audit` exists) holds it pending
+  // and records its OSC-133 span exit. `transitioningRepo` carries the active repoKey into the
+  // synchronous onEnterStep injection below.
+  let bootstrapCommands: BootstrapCommandTracker | null = null;
+  let transitioningRepo: string | null = null;
+  const inTransition = <T>(repoKey: string, fn: () => T): T => {
+    transitioningRepo = repoKey;
+    try {
+      return fn();
+    } finally {
+      transitioningRepo = null;
+    }
+  };
+
   // §18.6/§19.3: a manual step's only automatic entry action is injecting its `skill`, refused over a
   // busy shell — a live OSC-133 command span means not at a ready prompt. Must be built after the
   // injector + tracker exist (it closes over both).
   const flowEntryActions = createFlowEntryActions({
     isShellBusy: () => tracker.summaries().some((s) => s.running),
-    inject: (text) => inject(text, { submit: false }),
+    inject: (text) => {
+      inject(text, { submit: false });
+      if (transitioningRepo && text.startsWith(BOOTSTRAP_PICKUP)) {
+        bootstrapCommands?.notePending(transitioningRepo, text);
+      }
+    },
   });
   // The same global fallback dir the definition uses, so on-demand template instantiation (§18.6)
   // resolves against a global flow's templates too.
@@ -236,6 +261,26 @@ async function createWindow(): Promise<void> {
     onEnterStep: (step, inputs) => flowEntryActions(step, inputs),
     readLoopState: (repoKey) => parseAgentLoopState(repoKey),
     readLoopDef: (repoKey, name) => parseLoopDef(repoKey, name),
+  });
+
+  // Flow audit record (§25): observe-only, best-effort — records each run's lifecycle to
+  // ~/.agent-terminal/audit/<repo>/<flow>_<ts>.yaml. Never throws into the flow path.
+  const audit = createAuditRecorder({
+    root: auditRootDir(os.homedir()),
+    now: () => new Date(),
+    flowName: (repoKey) => {
+      const load = loadFlowDefinitionLocalFirst(repoKey, flowGlobalDir);
+      return load.ok ? load.definition.name : null;
+    },
+  });
+
+  // §25.5: correlate each finished command span with a pending bootstrap and record its exit. Off the
+  // OSC-133 marks the command tracker is built on, so it fires whenever the human runs the injected
+  // `agent-loop pickup …`, not on §8.3 quiescence.
+  bootstrapCommands = createBootstrapCommandTracker({
+    summaries: () => tracker.summaries(),
+    onChange: (cb) => tracker.onChange(cb),
+    recordCommand: (repoKey, cmd, exit) => audit.recordCommand(repoKey, 'bootstrap', cmd, exit),
   });
 
   // T2 (§24.2.3): watch a loop repo's state.yaml so a hand-edit re-pushes over the EXISTING
@@ -265,6 +310,9 @@ async function createWindow(): Promise<void> {
       loopWatchers.set(repoKey, watchAgentLoopState(repoKey, pushFlowChanged));
     }
     loopNotifier.observe(repoKey, view);
+    // §25.5: every view computation (including the state.yaml-watch re-pull) observes the loop mirror,
+    // so an external `agent-loop` advance is recorded as well as one fired from the strip.
+    audit.recordLoop(repoKey, view.loop ?? null);
     return view;
   };
   // todoTemplate:instantiate (§6/§4.1): add a named template's items to the repo's todo list; a
@@ -288,6 +336,35 @@ async function createWindow(): Promise<void> {
 
   const withDerived = (repoKey: string, view: FlowStateView): FlowStateView =>
     deriveFlowView(view, todoStore.list(repoKey), agentActivity);
+
+  // A flow transition that records its before/after audit diff (§25.5): capture the pre-state, run the
+  // mutation inside the bootstrap-attribution window (inTransition), record, then re-derive. Shared by
+  // the start/restart/undo handlers, which differ only by kind and mutation; advance/provideInput keep
+  // their own bodies because their readiness/notice handling diverges.
+  const recordedTransition = (repoKey: string, kind: TransitionKind, mutate: () => FlowStateView): FlowStateView => {
+    const before = flow.state(repoKey);
+    const after = inTransition(repoKey, mutate);
+    audit.recordTransition(repoKey, kind, before, after);
+    return trackLoop(repoKey, withDerived(repoKey, after));
+  };
+
+  // The audit before/after diff (§25.5) needs the PRE-mutation values, but todoStore mutates cached
+  // items in place (setStatus/update) and list() hands back those references — a live list would
+  // already read as the post-mutation state. Snapshot the values before mutating.
+  const todoSnapshot = (repoKey: string): { id: string; text: string; status: TodoStatus }[] =>
+    todoStore.list(repoKey).map((t) => ({ id: t.id, text: t.text, status: t.status }));
+
+  // The current step's declared input types (§18.4), keyed by name — the audit classifier reads this
+  // to tag a `github-ticket` value as a ticket association (§25.5). Empty when the definition or step
+  // can't be resolved, so audit degrades to recording bare `input.resolved` events.
+  const inputTypeMap = (repoKey: string): Record<string, string> => {
+    const load = loadFlowDefinitionLocalFirst(repoKey, flowGlobalDir);
+    if (!load.ok) return {};
+    const step = load.definition.steps[flow.state(repoKey).position - 1];
+    const map: Record<string, string> = {};
+    for (const input of step?.inputs ?? []) map[input.name] = input.type;
+    return map;
+  };
 
   // Flow A (§4): every output byte goes to the renderer AND the shadow tee.
   ptyProcess.onData((data) => {
@@ -371,21 +448,33 @@ async function createWindow(): Promise<void> {
       [CH.todoList]: (_e, m) => (isValidTodoList(m) ? todoStore.list(m.repoKey) : []),
       [CH.todoAdd]: (_e, m) => {
         if (!isValidTodoAdd(m)) return [];
+        const before = todoSnapshot(m.repoKey);
         const list = todoStore.add(m.repoKey, m.text, m.source);
+        audit.recordTodoChange(m.repoKey, before, list);
         pushFlowChanged();
         return list;
       },
-      [CH.todoUpdate]: (_e, m) => (isValidTodoUpdate(m) ? todoStore.update(m.repoKey, m.id, m.text) : []),
+      [CH.todoUpdate]: (_e, m) => {
+        if (!isValidTodoUpdate(m)) return [];
+        const before = todoSnapshot(m.repoKey);
+        const list = todoStore.update(m.repoKey, m.id, m.text);
+        audit.recordTodoChange(m.repoKey, before, list);
+        return list;
+      },
       [CH.todoReorder]: (_e, m) => (isValidTodoReorder(m) ? todoStore.reorder(m.repoKey, m.orderedIds) : []),
       [CH.todoSetStatus]: (_e, m) => {
         if (!isValidTodoSetStatus(m)) return [];
+        const before = todoSnapshot(m.repoKey);
         const list = todoStore.setStatus(m.repoKey, m.id, m.status);
+        audit.recordTodoChange(m.repoKey, before, list);
         pushFlowChanged();
         return list;
       },
       [CH.todoDelete]: (_e, m) => {
         if (!isValidTodoDelete(m)) return [];
+        const before = todoSnapshot(m.repoKey);
         const list = todoStore.delete(m.repoKey, m.id);
+        audit.recordTodoChange(m.repoKey, before, list);
         pushFlowChanged();
         return list;
       },
@@ -398,7 +487,7 @@ async function createWindow(): Promise<void> {
       [CH.flowState]: (_e, m) =>
         isValidFlowRequest(m) ? trackLoop(m.repoKey, withDerived(m.repoKey, flow.state(m.repoKey))) : flowRequestError(),
       [CH.flowStart]: (_e, m) =>
-        isValidFlowRequest(m) ? trackLoop(m.repoKey, withDerived(m.repoKey, flow.start(m.repoKey))) : flowRequestError(),
+        isValidFlowRequest(m) ? recordedTransition(m.repoKey, 'start', () => flow.start(m.repoKey)) : flowRequestError(),
       // Advancing while NOT ready is a human override (§19.2): warns via a one-shot notice but still
       // completes. Readiness is read from the PRE-advance state — loop readiness for a loop step, else
       // the todo gate (S5).
@@ -406,7 +495,8 @@ async function createWindow(): Promise<void> {
         if (!isValidFlowRequest(m)) return flowRequestError();
         const pre = withDerived(m.repoKey, flow.state(m.repoKey));
         const ready = pre.loop ? pre.loop.ready : (pre.derived?.ready ?? true);
-        const view = flow.advance(m.repoKey);
+        const view = inTransition(m.repoKey, () => flow.advance(m.repoKey));
+        audit.recordTransition(m.repoKey, 'advance', pre, view);
         if (ready) return trackLoop(m.repoKey, view);
         const notice = pre.loop
           ? 'Advanced while the loop still needs you.'
@@ -414,15 +504,17 @@ async function createWindow(): Promise<void> {
         return trackLoop(m.repoKey, { ...view, notice });
       },
       [CH.flowRestart]: (_e, m) =>
-        isValidFlowRequest(m) ? trackLoop(m.repoKey, withDerived(m.repoKey, flow.restart(m.repoKey))) : flowRequestError(),
+        isValidFlowRequest(m) ? recordedTransition(m.repoKey, 'restart', () => flow.restart(m.repoKey)) : flowRequestError(),
       [CH.flowUndo]: (_e, m) =>
-        isValidFlowRequest(m) ? trackLoop(m.repoKey, withDerived(m.repoKey, flow.undo(m.repoKey))) : flowRequestError(),
+        isValidFlowRequest(m) ? recordedTransition(m.repoKey, 'undo', () => flow.undo(m.repoKey)) : flowRequestError(),
       // Provide a step's typed input (§18.4 / §24.2.3 T3); the returned view's notice carries any §19.3
       // busy-shell refusal.
-      [CH.flowProvideInput]: (_e, m) =>
-        isValidFlowProvideInput(m)
-          ? trackLoop(m.repoKey, withDerived(m.repoKey, flow.provideInput(m.repoKey, m.values)))
-          : flowRequestError(),
+      [CH.flowProvideInput]: (_e, m) => {
+        if (!isValidFlowProvideInput(m)) return flowRequestError();
+        audit.recordInputs(m.repoKey, m.values, inputTypeMap(m.repoKey));
+        const view = inTransition(m.repoKey, () => flow.provideInput(m.repoKey, m.values));
+        return trackLoop(m.repoKey, withDerived(m.repoKey, view));
+      },
       // Template picker (§6/§4.1): GATED to an in_progress step (operator decision — the picker shows
       // only while a step is active) and carries the step's bound template as the default.
       [CH.todoTemplateList]: (_e, m) => {
@@ -435,7 +527,9 @@ async function createWindow(): Promise<void> {
       },
       [CH.todoTemplateInstantiate]: (_e, m) => {
         if (!isValidTemplateInstantiate(m)) return [];
+        const before = todoSnapshot(m.repoKey);
         const list = instantiateTemplate(m.repoKey, m.ref);
+        audit.recordTodoChange(m.repoKey, before, list); // §25.5
         pushFlowChanged(); // instantiation can add todos → the strip's n/m total moves (§24.2.2 S5)
         return list;
       },

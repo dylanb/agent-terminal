@@ -25,11 +25,11 @@ Use `scripts/await-copilot-review.sh <pr> [--request] [--check]` (portable bash;
 
 ## Architecture (orientation only — details in the spec)
 
-- `src/main/` — PTY lifecycle (§5), shadow terminal + quiescence (§8), injection API (§9.3), IPC handlers. node-pty and the shadow live here, never in the renderer.
+- `src/main/` — PTY lifecycle (§5), shadow terminal + quiescence (§8), injection API (§9.3), IPC handlers. node-pty and the shadow live here, never in the renderer. The flow **audit recorder** (§25) also lives here (`auditRecorder.ts` + `auditPaths.ts`): observe-only, best-effort, it writes each run's append-only YAML under `~/.agent-terminal/audit/` and never throws into the flow path.
 - `src/preload/` — contextBridge exposing the `term` and `monitor` namespaces (§6). No raw `ipcRenderer` in the renderer.
 - `src/renderer/` — terminal pane (xterm + app-owned selection, §7) and monitor pane (§9).
 - `src/shared/ipc.ts` — the typed IPC contract. This file is the single source of truth for channel names and payload shapes; main, preload, and renderer all import from it.
-- **Semantics shared by main and renderer get one definition in `src/shared/`, imported by both — never re-implemented per side.** This generalizes the `ipc.ts` rule from the wire shape to the *meaning* on top of it: any classification or identity that both processes must agree on — what counts as "the same occurrence" for dedup, which statuses mean "blocked on a human", and the like — lives in a shared module so the two sides cannot drift. Two parallel copies that "obviously agree today" are the bug; a behavior-preserving change to one side must be unable to desync them. The current examples are `src/shared/occurrence.ts` (dedup identity) and `src/shared/loopStatus.ts` (human-needed classification).
+- **Semantics shared by main and renderer get one definition in `src/shared/`, imported by both — never re-implemented per side.** This generalizes the `ipc.ts` rule from the wire shape to the *meaning* on top of it: any classification or identity that both processes must agree on — what counts as "the same occurrence" for dedup, which statuses mean "blocked on a human", and the like — lives in a shared module so the two sides cannot drift. Two parallel copies that "obviously agree today" are the bug; a behavior-preserving change to one side must be unable to desync them. The current examples are `src/shared/occurrence.ts` (dedup identity), `src/shared/loopStatus.ts` (human-needed classification), and `src/shared/audit.ts` (the §25 audit vocabulary, event classifiers, serialize↔parse pair, and timeline reconstructor — one definition for the main-process writer, the tests, and a future viewer).
 
 ## Test-driven development
 
