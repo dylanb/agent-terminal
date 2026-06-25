@@ -1,10 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { mkdtempSync, mkdirSync, rmSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, realpathSync, symlinkSync, writeFileSync, chmodSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import { resolveLaunchRoot } from '../../src/main/launchRoot';
 
 const FALLBACK = '/home/fallback-marker';
+
+// accessSync(X_OK) cannot be provoked to throw as root, and Windows lacks the traverse bit.
+const CAN_TEST_UNENTERABLE =
+  process.platform !== 'win32' && typeof process.getuid === 'function' && process.getuid() !== 0;
 
 describe('resolveLaunchRoot (§23.4 — launch root: validated target, else F)', () => {
   let base: string;
@@ -57,6 +61,20 @@ describe('resolveLaunchRoot (§23.4 — launch root: validated target, else F)',
     mkdirSync(dir);
     expect(resolveLaunchRoot(dir, FALLBACK, () => false)).toBe(FALLBACK);
   });
+
+  it.skipIf(!CAN_TEST_UNENTERABLE)(
+    'falls back to F for a real directory with no traverse permission (default canEnter)',
+    () => {
+      const dir = join(base, 'no-x');
+      mkdirSync(dir);
+      chmodSync(dir, 0o000);
+      try {
+        expect(resolveLaunchRoot(dir, FALLBACK)).toBe(FALLBACK);
+      } finally {
+        chmodSync(dir, 0o700);
+      }
+    },
+  );
 
   it('falls back to F when no target is given', () => {
     expect(resolveLaunchRoot(undefined, FALLBACK)).toBe(FALLBACK);
