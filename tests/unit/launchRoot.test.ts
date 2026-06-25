@@ -52,6 +52,17 @@ describe('resolveLaunchRoot (§23.4 — launch root: validated target, else F)',
     expect(resolveLaunchRoot(link, FALLBACK)).toBe(FALLBACK);
   });
 
+  it('falls back to F when an existing directory cannot be entered (no traverse permission)', () => {
+    const probe = {
+      realpathSync: (p: string) => p,
+      statSync: () => ({ isDirectory: () => true }),
+      accessSync: () => {
+        throw new Error('EACCES');
+      },
+    };
+    expect(resolveLaunchRoot('/locked/dir', FALLBACK, probe)).toBe(FALLBACK);
+  });
+
   it('falls back to F when no target is given', () => {
     expect(resolveLaunchRoot(undefined, FALLBACK)).toBe(FALLBACK);
   });
