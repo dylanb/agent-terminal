@@ -13,16 +13,14 @@ describe('example flow plan step binds the plan-loop-review todo template (§18.
       steps: Array<{ id: string; todo_template?: string }>;
     };
     const plan = doc.steps.find((s) => s.id === 'plan');
-    // Fails if the binding is dropped or misspelled in flow.yaml.
     expect(plan?.todo_template).toBe('plan-loop-review');
 
-    // Resolve + parse exactly as index.ts's instantiateTemplate does (loadTodoTemplateFile against the
-    // step's flow dir's todo-templates/, then parseTodoTemplate). Fails if the file is moved/renamed.
+    // Resolve + parse via the same helpers index.ts's instantiateTemplate uses (loadTodoTemplateFile
+    // against the step's flow dir's todo-templates/, then parseTodoTemplate).
     const md = loadTodoTemplateFile(path.join(EXAMPLE_FLOW_DIR, 'todo-templates'), plan!.todo_template!);
     expect(md).not.toBeNull();
 
     const items = parseTodoTemplate(md as string);
-    // Fails if a top-level item is added, removed, or demoted to a sub-bullet.
     expect(items).toHaveLength(7);
     expect(items.every((t) => t.length > 0)).toBe(true);
   });
