@@ -2366,31 +2366,35 @@ test('launching at a target directory roots the shell, viewer, and todo scope th
   const launchDir = realpathSync(mkdtempSync(join(tmpdir(), 'agent-term-e2e-launch-')));
   writeFileSync(join(launchDir, 'launch-marker.md'), '# launched here\n');
   const ud = mkdtempSync(join(tmpdir(), 'agent-term-e2e-launch-ud-'));
-  await app.close();
-  app = await electron.launch({
+  // afterEach owns the beforeEach `app`/userDataDir; this case needs its own launch (APP_LAUNCH_DIR
+  // over the OS boundary), so bind it locally and close+clean it in finally — never double-close
+  // `app`, and never leak the fixtures on an assertion failure.
+  const launched = await electron.launch({
     args: ['out/main/index.js', `--user-data-dir=${ud}`],
     env: { ...process.env, APP_SHELL: 'bash', APP_SUBMIT_DELAY_MS: '100', APP_LAUNCH_DIR: launchDir },
   });
-  page = await app.firstWindow();
-  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+  try {
+    page = await launched.firstWindow();
+    await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
-  // Artifact viewer root (§20.1) and todo/repo scope (§16.3) read the launch root, before any cd.
-  expect(await page.evaluate(() => window.viewer.tree('curated').then((t) => t.root))).toBe(launchDir);
-  expect(await page.evaluate(() => window.monitor.currentRepo())).toMatchObject({ repoKey: launchDir });
-  await page.keyboard.press('Control+2');
-  await expect(page.locator('[data-viewpane="2"]')).toBeVisible();
-  await expect(page.locator('#artifacts .tree .f').filter({ hasText: 'launch-marker.md' })).toHaveCount(1);
+    // Artifact viewer root (§20.1) and todo/repo scope (§16.3) read the launch root, before any cd.
+    expect(await page.evaluate(() => window.viewer.tree('curated').then((t) => t.root))).toBe(launchDir);
+    expect(await page.evaluate(() => window.monitor.currentRepo())).toMatchObject({ repoKey: launchDir });
+    await page.keyboard.press('Control+2');
+    await expect(page.locator('[data-viewpane="2"]')).toBeVisible();
+    await expect(page.locator('#artifacts .tree .f').filter({ hasText: 'launch-marker.md' })).toHaveCount(1);
 
-  // Shell cwd (§5): pwd reports the launch dir before any cd.
-  await page.keyboard.press('Control+1');
-  await typeCommand('pwd');
-  await expect(
-    page.locator('.xterm-rows > div').filter({ hasText: new RegExp(`^\\s*${launchDir}\\s*$`) }),
-  ).not.toHaveCount(0);
-
-  await app.close();
-  rmSync(launchDir, { recursive: true, force: true });
-  rmSync(ud, { recursive: true, force: true });
+    // Shell cwd (§5): pwd reports the launch dir before any cd.
+    await page.keyboard.press('Control+1');
+    await typeCommand('pwd');
+    await expect(
+      page.locator('.xterm-rows > div').filter({ hasText: new RegExp(`^\\s*${launchDir}\\s*$`) }),
+    ).not.toHaveCount(0);
+  } finally {
+    await launched.close();
+    rmSync(launchDir, { recursive: true, force: true });
+    rmSync(ud, { recursive: true, force: true });
+  }
 });
 
 test('launching at an unusable target falls back to $HOME across the surfaces (§23.4)', async () => {
@@ -2406,8 +2410,10 @@ test('launching at an unusable target falls back to $HOME across the surfaces (�
   const noFlowRepo = realpathSync(mkdtempSync(join(tmpdir(), 'agent-term-e2e-launch-norepo-')));
   mkdirSync(join(noFlowRepo, '.git'), { recursive: true });
   const bogus = join(home, 'does-not-exist-launch-target');
-  await app.close();
-  app = await electron.launch({
+  // afterEach owns the beforeEach `app`/userDataDir; bind this case's HOME=temp launch locally and
+  // close+clean it in finally so afterEach never double-closes `app` and the fixtures (incl. the
+  // userData Electron writes under HOME=temp) never leak on an assertion failure.
+  const launched = await electron.launch({
     args: ['out/main/index.js'],
     env: {
       ...process.env,
@@ -2417,30 +2423,32 @@ test('launching at an unusable target falls back to $HOME across the surfaces (�
       APP_LAUNCH_DIR: bogus,
     },
   });
-  page = await app.firstWindow();
-  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+  try {
+    page = await launched.firstWindow();
+    await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
-  // Viewer + repo scope fall back to F (= $HOME), not the bogus target.
-  expect(await page.evaluate(() => window.viewer.tree('curated').then((t) => t.root))).toBe(home);
-  expect(await page.evaluate(() => window.monitor.currentRepo())).toMatchObject({ repoKey: home });
-  await page.keyboard.press('Control+2');
-  await expect(page.locator('#artifacts .tree .f').filter({ hasText: 'home-fallback-marker.md' })).toHaveCount(1);
+    // Viewer + repo scope fall back to F (= $HOME), not the bogus target.
+    expect(await page.evaluate(() => window.viewer.tree('curated').then((t) => t.root))).toBe(home);
+    expect(await page.evaluate(() => window.monitor.currentRepo())).toMatchObject({ repoKey: home });
+    await page.keyboard.press('Control+2');
+    await expect(page.locator('#artifacts .tree .f').filter({ hasText: 'home-fallback-marker.md' })).toHaveCount(1);
 
-  // Shell cwd falls back to F too.
-  await page.keyboard.press('Control+1');
-  await typeCommand('pwd');
-  await expect(
-    page.locator('.xterm-rows > div').filter({ hasText: new RegExp(`^\\s*${home}\\s*$`) }),
-  ).not.toHaveCount(0);
+    // Shell cwd falls back to F too.
+    await page.keyboard.press('Control+1');
+    await typeCommand('pwd');
+    await expect(
+      page.locator('.xterm-rows > div').filter({ hasText: new RegExp(`^\\s*${home}\\s*$`) }),
+    ).not.toHaveCount(0);
 
-  // Flow global dir (§18.1) = F: cd into a repo with no local flow; the global flow under home
-  // resolves only if the global anchor fell back to home rather than the bogus target.
-  await typeCommand(`cd "${noFlowRepo}"`);
-  await expect(flowStepName()).toHaveText('global-step', { timeout: 10_000 });
-
-  await app.close(); // HOME=temp ⇒ Electron writes userData under it; stop writes before removing it
-  rmSync(home, { recursive: true, force: true });
-  rmSync(noFlowRepo, { recursive: true, force: true });
+    // Flow global dir (§18.1) = F: cd into a repo with no local flow; the global flow under home
+    // resolves only if the global anchor fell back to home rather than the bogus target.
+    await typeCommand(`cd "${noFlowRepo}"`);
+    await expect(flowStepName()).toHaveText('global-step', { timeout: 10_000 });
+  } finally {
+    await launched.close(); // HOME=temp ⇒ Electron writes userData under it; stop writes before removing it
+    rmSync(home, { recursive: true, force: true });
+    rmSync(noFlowRepo, { recursive: true, force: true });
+  }
 });
 
 test('two concurrent instances each root at their own target directory (§23.4)', async () => {
@@ -2450,8 +2458,8 @@ test('two concurrent instances each root at their own target directory (§23.4)'
   writeFileSync(join(dirB, 'marker-B.md'), 'B\n');
   const udA = mkdtempSync(join(tmpdir(), 'agent-term-e2e-ud-A-'));
   const udB = mkdtempSync(join(tmpdir(), 'agent-term-e2e-ud-B-'));
-  await app.close();
-
+  // afterEach owns the beforeEach `app`; both instances here are locally owned and closed + cleaned
+  // in finally so afterEach never double-closes `app` and the fixtures never leak on a failure.
   const appA = await electron.launch({
     args: ['out/main/index.js', `--user-data-dir=${udA}`],
     env: { ...process.env, APP_SHELL: 'bash', APP_SUBMIT_DELAY_MS: '100', APP_LAUNCH_DIR: dirA },
@@ -2486,9 +2494,9 @@ test('two concurrent instances each root at their own target directory (§23.4)'
   } finally {
     await appA.close();
     await appB.close();
+    rmSync(dirA, { recursive: true, force: true });
+    rmSync(dirB, { recursive: true, force: true });
+    rmSync(udA, { recursive: true, force: true });
+    rmSync(udB, { recursive: true, force: true });
   }
-  rmSync(dirA, { recursive: true, force: true });
-  rmSync(dirB, { recursive: true, force: true });
-  rmSync(udA, { recursive: true, force: true });
-  rmSync(udB, { recursive: true, force: true });
 });
