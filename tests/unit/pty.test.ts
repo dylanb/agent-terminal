@@ -132,6 +132,16 @@ describe('buildSpawnConfig (§5)', () => {
     expect(cfg.options.cwd).toBe(ROOT);
   });
 
+  it('strips APP_LAUNCH_DIR from the child env so the launch directive does not leak to the shell (§23.4)', () => {
+    const cfg = buildSpawnConfig({
+      platform: 'linux',
+      env: { HOME, APP_LAUNCH_DIR: '/work/repo' },
+      cwd: '/work/repo',
+    });
+    expect(cfg.options.env.APP_LAUNCH_DIR).toBeUndefined();
+    expect(cfg.options.env.HOME).toBe(HOME);
+  });
+
   it('seeds PATH from a login-shell probe when provided (GUI launch, §5)', () => {
     const cfg = buildSpawnConfig({
       platform: 'linux',
