@@ -43,7 +43,9 @@ export function buildSpawnConfig(input: {
 }): SpawnConfig {
   const { platform, env, cwd, probedPath, integrationScriptPath } = input;
   const cleanEnv = Object.fromEntries(
-    Object.entries(env).filter((e): e is [string, string] => e[1] !== undefined),
+    Object.entries(env).filter(
+      (e): e is [string, string] => e[1] !== undefined && e[0] !== 'APP_LAUNCH_DIR',
+    ),
   );
   const shellPath = resolveShellPath(env);
 
