@@ -1,7 +1,7 @@
 /// <reference lib="dom" />
 // page.evaluate callbacks run in the renderer; DOM lib gives them window.monitor's type.
 import { _electron as electron, expect, test, type ElectronApplication, type Page } from '@playwright/test';
-import { mkdtempSync, mkdirSync, writeFileSync, appendFileSync, rmSync, existsSync, readFileSync, readdirSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, appendFileSync, rmSync, existsSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, basename } from 'node:path';
 import { CH, SESSION_ID } from '../../src/shared/ipc';
@@ -2356,4 +2356,122 @@ test('the theme toggle flips light/dark and persists across a reload (§16.6)', 
   // flip back so the persisted pref doesn't leak into later runs
   await page.locator('#tg').click();
   await expect(html).toHaveAttribute('data-theme', 'light');
+});
+
+// ---- §23.4: launch-root resolution (root a launched instance at a target directory) ----
+
+test('launching at a target directory roots the shell, viewer, and todo scope there (§23.4)', async () => {
+  // The caller-supplied target arrives over the OS process boundary (APP_LAUNCH_DIR), not an IPC
+  // channel — so this drives the real launch input, not a fixture standing in for it.
+  const launchDir = realpathSync(mkdtempSync(join(tmpdir(), 'agent-term-e2e-launch-')));
+  writeFileSync(join(launchDir, 'launch-marker.md'), '# launched here\n');
+  await app.close();
+  app = await electron.launch({
+    args: ['out/main/index.js'],
+    env: { ...process.env, APP_SHELL: 'bash', APP_SUBMIT_DELAY_MS: '100', APP_LAUNCH_DIR: launchDir },
+  });
+  page = await app.firstWindow();
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  // Artifact viewer root (§20.1) and todo/repo scope (§16.3) read the launch root, before any cd.
+  expect(await page.evaluate(() => window.viewer.tree('curated').then((t) => t.root))).toBe(launchDir);
+  expect(await page.evaluate(() => window.monitor.currentRepo())).toMatchObject({ repoKey: launchDir });
+  await page.keyboard.press('Control+2');
+  await expect(page.locator('[data-viewpane="2"]')).toBeVisible();
+  await expect(page.locator('#artifacts .tree .f').filter({ hasText: 'launch-marker.md' })).toHaveCount(1);
+
+  // Shell cwd (§5): pwd reports the launch dir before any cd.
+  await page.keyboard.press('Control+1');
+  await typeCommand('pwd');
+  await expect(
+    page.locator('.xterm-rows > div').filter({ hasText: new RegExp(`^\\s*${launchDir}\\s*$`) }),
+  ).not.toHaveCount(0);
+
+  await app.close();
+  rmSync(launchDir, { recursive: true, force: true });
+});
+
+test('launching at an unusable target falls back to $HOME across the surfaces (§23.4)', async () => {
+  const home = realpathSync(mkdtempSync(join(tmpdir(), 'agent-term-e2e-launch-home-')));
+  writeFileSync(join(home, 'home-fallback-marker.md'), '# home fallback\n');
+  const bogus = join(home, 'does-not-exist-launch-target');
+  await app.close();
+  app = await electron.launch({
+    args: ['out/main/index.js'],
+    env: {
+      ...process.env,
+      APP_SHELL: 'bash',
+      APP_SUBMIT_DELAY_MS: '100',
+      HOME: home,
+      APP_LAUNCH_DIR: bogus,
+    },
+  });
+  page = await app.firstWindow();
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  // Viewer + repo scope fall back to F (= $HOME), not the bogus target.
+  expect(await page.evaluate(() => window.viewer.tree('curated').then((t) => t.root))).toBe(home);
+  expect(await page.evaluate(() => window.monitor.currentRepo())).toMatchObject({ repoKey: home });
+  await page.keyboard.press('Control+2');
+  await expect(page.locator('#artifacts .tree .f').filter({ hasText: 'home-fallback-marker.md' })).toHaveCount(1);
+
+  // Shell cwd falls back to F too.
+  await page.keyboard.press('Control+1');
+  await typeCommand('pwd');
+  await expect(
+    page.locator('.xterm-rows > div').filter({ hasText: new RegExp(`^\\s*${home}\\s*$`) }),
+  ).not.toHaveCount(0);
+
+  await app.close(); // HOME=temp ⇒ Electron writes userData under it; stop writes before removing it
+  rmSync(home, { recursive: true, force: true });
+});
+
+test('two concurrent instances each root at their own target directory (§23.4)', async () => {
+  const dirA = realpathSync(mkdtempSync(join(tmpdir(), 'agent-term-e2e-launch-A-')));
+  const dirB = realpathSync(mkdtempSync(join(tmpdir(), 'agent-term-e2e-launch-B-')));
+  writeFileSync(join(dirA, 'marker-A.md'), 'A\n');
+  writeFileSync(join(dirB, 'marker-B.md'), 'B\n');
+  const udA = mkdtempSync(join(tmpdir(), 'agent-term-e2e-ud-A-'));
+  const udB = mkdtempSync(join(tmpdir(), 'agent-term-e2e-ud-B-'));
+  await app.close();
+
+  const appA = await electron.launch({
+    args: ['out/main/index.js', `--user-data-dir=${udA}`],
+    env: { ...process.env, APP_SHELL: 'bash', APP_SUBMIT_DELAY_MS: '100', APP_LAUNCH_DIR: dirA },
+  });
+  const appB = await electron.launch({
+    args: ['out/main/index.js', `--user-data-dir=${udB}`],
+    env: { ...process.env, APP_SHELL: 'bash', APP_SUBMIT_DELAY_MS: '100', APP_LAUNCH_DIR: dirB },
+  });
+  app = appA; // so afterEach has a live handle; appB is closed below
+  try {
+    const pageA = await appA.firstWindow();
+    const pageB = await appB.firstWindow();
+    await expect(pageA.locator('.xterm-rows')).not.toHaveText('', { timeout: 15_000 });
+    await expect(pageB.locator('.xterm-rows')).not.toHaveText('', { timeout: 15_000 });
+
+    // Each viewer roots at its own dir — neither instance's root affected by the other.
+    expect(await pageA.evaluate(() => window.viewer.tree('curated').then((t) => t.root))).toBe(dirA);
+    expect(await pageB.evaluate(() => window.viewer.tree('curated').then((t) => t.root))).toBe(dirB);
+
+    // Each shell sits in its own dir.
+    await pageA.locator('.xterm-screen').click();
+    await pageA.keyboard.type('pwd');
+    await pageA.keyboard.press('Enter');
+    await expect(
+      pageA.locator('.xterm-rows > div').filter({ hasText: new RegExp(`^\\s*${dirA}\\s*$`) }),
+    ).not.toHaveCount(0);
+    await pageB.locator('.xterm-screen').click();
+    await pageB.keyboard.type('pwd');
+    await pageB.keyboard.press('Enter');
+    await expect(
+      pageB.locator('.xterm-rows > div').filter({ hasText: new RegExp(`^\\s*${dirB}\\s*$`) }),
+    ).not.toHaveCount(0);
+  } finally {
+    await appB.close();
+  }
+  rmSync(dirA, { recursive: true, force: true });
+  rmSync(dirB, { recursive: true, force: true });
+  rmSync(udA, { recursive: true, force: true });
+  rmSync(udB, { recursive: true, force: true });
 });

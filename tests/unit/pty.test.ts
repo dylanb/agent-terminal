@@ -70,13 +70,13 @@ describe('probeShellCommand (§5 — the Linux GUI PATH probe targets the resolv
 
 describe('buildSpawnConfig (§5)', () => {
   it('Linux: plain interactive bash (sources ~/.bashrc), no -l', () => {
-    const cfg = buildSpawnConfig({ platform: 'linux', env: { HOME }, home: HOME });
+    const cfg = buildSpawnConfig({ platform: 'linux', env: { HOME }, cwd: HOME });
     expect(cfg.shellPath).toBe('bash');
     expect(cfg.shellArgs).toEqual([]);
   });
 
   it('macOS: login shell (sources ~/.bash_profile), -l', () => {
-    const cfg = buildSpawnConfig({ platform: 'darwin', env: { HOME }, home: HOME });
+    const cfg = buildSpawnConfig({ platform: 'darwin', env: { HOME }, cwd: HOME });
     expect(cfg.shellPath).toBe('bash');
     expect(cfg.shellArgs).toEqual(['-l']);
   });
@@ -85,7 +85,7 @@ describe('buildSpawnConfig (§5)', () => {
     const cfg = buildSpawnConfig({
       platform: 'linux',
       env: { HOME, APP_SHELL: '/opt/homebrew/bin/bash' },
-      home: HOME,
+      cwd: HOME,
     });
     expect(cfg.shellPath).toBe('/opt/homebrew/bin/bash');
   });
@@ -94,7 +94,7 @@ describe('buildSpawnConfig (§5)', () => {
     const cfg = buildSpawnConfig({
       platform: 'darwin',
       env: { HOME, SHELL: '/bin/zsh' },
-      home: HOME,
+      cwd: HOME,
     });
     expect(cfg.shellPath).toBe('/bin/zsh');
   });
@@ -103,13 +103,13 @@ describe('buildSpawnConfig (§5)', () => {
     const cfg = buildSpawnConfig({
       platform: 'linux',
       env: { HOME, APP_SHELL: '/opt/homebrew/bin/bash', SHELL: '/bin/zsh' },
-      home: HOME,
+      cwd: HOME,
     });
     expect(cfg.shellPath).toBe('/opt/homebrew/bin/bash');
   });
 
   it('falls back to bash when neither APP_SHELL nor $SHELL is set', () => {
-    const cfg = buildSpawnConfig({ platform: 'linux', env: { HOME }, home: HOME });
+    const cfg = buildSpawnConfig({ platform: 'linux', env: { HOME }, cwd: HOME });
     expect(cfg.shellPath).toBe('bash');
   });
 
@@ -117,7 +117,7 @@ describe('buildSpawnConfig (§5)', () => {
     const cfg = buildSpawnConfig({
       platform: 'linux',
       env: { HOME, LANG: 'en_US.UTF-8', PATH: '/usr/bin' },
-      home: HOME,
+      cwd: HOME,
     });
     expect(cfg.options.name).toBe('xterm-256color');
     expect(cfg.options.env.TERM).toBe('xterm-256color');
@@ -126,16 +126,17 @@ describe('buildSpawnConfig (§5)', () => {
     expect(cfg.options.env.PATH).toBe('/usr/bin');
   });
 
-  it('starts in the user home directory', () => {
-    const cfg = buildSpawnConfig({ platform: 'linux', env: { HOME }, home: HOME });
-    expect(cfg.options.cwd).toBe(HOME);
+  it('roots the PTY cwd at the resolved launch root passed in (§23.4)', () => {
+    const ROOT = '/work/repo';
+    const cfg = buildSpawnConfig({ platform: 'linux', env: { HOME }, cwd: ROOT });
+    expect(cfg.options.cwd).toBe(ROOT);
   });
 
   it('seeds PATH from a login-shell probe when provided (GUI launch, §5)', () => {
     const cfg = buildSpawnConfig({
       platform: 'linux',
       env: { HOME, PATH: '/usr/bin' },
-      home: HOME,
+      cwd: HOME,
       probedPath: '/home/u/.local/bin:/usr/bin',
     });
     expect(cfg.options.env.PATH).toBe('/home/u/.local/bin:/usr/bin');
@@ -149,7 +150,7 @@ describe('shell-integration hook (§15.5 / D3 — PROMPT_COMMAND env seam, opt-o
     const cfg = buildSpawnConfig({
       platform: 'linux',
       env: { HOME },
-      home: HOME,
+      cwd: HOME,
       integrationScriptPath: SCRIPT,
     });
     expect(cfg.options.env.APP_TERM_INTEGRATION).toBe(SCRIPT);
@@ -161,7 +162,7 @@ describe('shell-integration hook (§15.5 / D3 — PROMPT_COMMAND env seam, opt-o
     const cfg = buildSpawnConfig({
       platform: 'linux',
       env: { HOME, APP_SHELL_INTEGRATION: '0' },
-      home: HOME,
+      cwd: HOME,
       integrationScriptPath: SCRIPT,
     });
     expect(cfg.options.env.APP_TERM_INTEGRATION).toBeUndefined();
@@ -172,7 +173,7 @@ describe('shell-integration hook (§15.5 / D3 — PROMPT_COMMAND env seam, opt-o
     const cfg = buildSpawnConfig({
       platform: 'linux',
       env: { HOME, APP_SHELL: '/bin/zsh' },
-      home: HOME,
+      cwd: HOME,
       integrationScriptPath: SCRIPT,
     });
     expect(cfg.options.env.APP_TERM_INTEGRATION).toBeUndefined();
@@ -182,7 +183,7 @@ describe('shell-integration hook (§15.5 / D3 — PROMPT_COMMAND env seam, opt-o
     const cfg = buildSpawnConfig({
       platform: 'linux',
       env: { HOME, SHELL: '/bin/zsh' },
-      home: HOME,
+      cwd: HOME,
       integrationScriptPath: SCRIPT,
     });
     expect(cfg.options.env.APP_TERM_INTEGRATION).toBeUndefined();
@@ -192,7 +193,7 @@ describe('shell-integration hook (§15.5 / D3 — PROMPT_COMMAND env seam, opt-o
     const cfg = buildSpawnConfig({
       platform: 'linux',
       env: { HOME, SHELL: '/bin/bash' },
-      home: HOME,
+      cwd: HOME,
       integrationScriptPath: SCRIPT,
     });
     expect(cfg.shellPath).toBe('/bin/bash');
@@ -200,7 +201,7 @@ describe('shell-integration hook (§15.5 / D3 — PROMPT_COMMAND env seam, opt-o
   });
 
   it('omits the hook when no script path is provided', () => {
-    const cfg = buildSpawnConfig({ platform: 'linux', env: { HOME }, home: HOME });
+    const cfg = buildSpawnConfig({ platform: 'linux', env: { HOME }, cwd: HOME });
     expect(cfg.options.env.APP_TERM_INTEGRATION).toBeUndefined();
   });
 });
