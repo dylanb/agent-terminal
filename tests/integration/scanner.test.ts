@@ -753,6 +753,26 @@ describe('manual capture on demand (§21.1 — captureLast, dormant auto-scan)',
     expect(result!.report.text).toContain('FINAL CONCLUSION');
   });
 
+  it('captures the visible report on the ALTERNATE buffer (full-screen agent, §21.1/§13.4)', async () => {
+    // Claude Code 2.x runs full-screen on the alt buffer. On-demand capture must read the
+    // visible frame there too — the auto-scan path stays off (it has no onQuiet here).
+    const scanner = dormant([], createGenericAdapter());
+    shadow.write('\x1b[?1049h'); // enter the alternate screen buffer
+    await sleep(10);
+    shadow.write(
+      '- alpha finding worth acting on that is long enough to count\r\n' +
+        '- beta finding to address before merge that is also long enough\r\n',
+    );
+    await sleep(50);
+    const result = scanner.captureLast();
+    expect(result).not.toBeNull();
+    expect(result!.report.range!.bufferType).toBe('alternate');
+    expect(result!.findings.map((f) => f.text)).toEqual([
+      expect.stringContaining('alpha'),
+      expect.stringContaining('beta'),
+    ]);
+  });
+
   it('keeps a prose report that ENDS with a command phrase (not a prompt+command echo, §21.1)', async () => {
     // The echo is "<prompt> <command>" — only a prompt may precede the command. A report whose prose
     // happens to end with the command (no prompt before it) must NOT be dropped.
