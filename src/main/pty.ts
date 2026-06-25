@@ -1,7 +1,6 @@
 // Shell spawn configuration (§5).
 
 import { execFile } from 'node:child_process';
-import os from 'node:os';
 import * as pty from 'node-pty';
 
 export interface SpawnConfig {
@@ -27,8 +26,8 @@ function isBashShell(shellPath: string): boolean {
   return /(^|\/)bash$/.test(shellPath);
 }
 
-/** Where the shell is spawned (§5), and the artifact viewer's cwd fallback before the first OSC 7
- *  (§20.1) — so the viewer starts where the terminal starts, not the Electron process dir. */
+/** F (§23.4): the home value the launch root falls back to — `$HOME`, else the OS home dir. The
+ *  resolved launch root, not this directly, is what the four spawn-cwd surfaces read. */
 export function spawnCwd(env: NodeJS.ProcessEnv, home: string): string {
   return env.HOME || home;
 }
@@ -36,12 +35,13 @@ export function spawnCwd(env: NodeJS.ProcessEnv, home: string): string {
 export function buildSpawnConfig(input: {
   platform: NodeJS.Platform;
   env: NodeJS.ProcessEnv;
-  home: string;
+  /** The resolved launch root (§23.4): where the shell is spawned, one value per process. */
+  cwd: string;
   probedPath?: string;
   /** App-owned, non-user-writable path to the sourced integration script (§15.5 / D3). */
   integrationScriptPath?: string;
 }): SpawnConfig {
-  const { platform, env, home, probedPath, integrationScriptPath } = input;
+  const { platform, env, cwd, probedPath, integrationScriptPath } = input;
   const cleanEnv = Object.fromEntries(
     Object.entries(env).filter((e): e is [string, string] => e[1] !== undefined),
   );
@@ -67,7 +67,7 @@ export function buildSpawnConfig(input: {
       name: 'xterm-256color',
       cols: 80,
       rows: 24,
-      cwd: spawnCwd(env, home),
+      cwd,
       env: {
         ...cleanEnv,
         ...(probedPath ? { PATH: probedPath } : {}),
@@ -122,12 +122,15 @@ export function probeLoginPath(): Promise<string | undefined> {
   });
 }
 
-export async function spawnAgentShell(opts: { integrationScriptPath?: string } = {}): Promise<pty.IPty> {
+export async function spawnAgentShell(opts: {
+  integrationScriptPath?: string;
+  cwd: string;
+}): Promise<pty.IPty> {
   const probedPath = await probeLoginPath();
   const cfg = buildSpawnConfig({
     platform: process.platform,
     env: process.env,
-    home: os.homedir(),
+    cwd: opts.cwd,
     probedPath,
     integrationScriptPath: opts.integrationScriptPath,
   });
