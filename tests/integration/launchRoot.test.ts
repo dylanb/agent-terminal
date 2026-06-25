@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, rmSync, realpathSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { resolveLaunchRoot } from '../../src/main/launchRoot';
+import { resolveLaunchRoot, homeFallback, APP_LAUNCH_DIR_ENV } from '../../src/main/launchRoot';
 import { buildSpawnConfig } from '../../src/main/pty';
 import { currentRepoInfo } from '../../src/main/repoKey';
 import { discover } from '../../src/main/artifactTree';
@@ -85,6 +85,29 @@ describe('launch root → four surfaces consume one resolved value (§23.4)', ()
     const root = resolveLaunchRoot(sub, FALLBACK);
     const info = currentRepoInfo(null, null, root);
     expect(info.repoKey).toBe(realpathSync(repo));
+  });
+
+  it('with no launch target, the env→homeFallback→resolver composition roots all four surfaces at $HOME (§23.4)', () => {
+    // Mirror index.ts's no-target wiring: APP_LAUNCH_DIR absent, so the launch root is F = $HOME, and
+    // every surface must root there — falsifies a break in either the no-target branch or homeFallback.
+    const home = join(base, 'home');
+    mkdirSync(home);
+    writeGlobalFlow(home, 'home-global-flow');
+    const env: NodeJS.ProcessEnv = { HOME: home };
+    const repoNoFlow = join(base, 'home-sibling-no-flow');
+    mkdirSync(repoNoFlow);
+
+    const root = resolveLaunchRoot(env[APP_LAUNCH_DIR_ENV], homeFallback(env, '/os-home-unused'));
+    expect(root).toBe(home);
+
+    const shellCwd = buildSpawnConfig({ platform: 'linux', env, cwd: root }).options.cwd;
+    const viewerRoot = discover(root, 'curated').root;
+    const flowLoad = loadFlowDefinitionLocalFirst(repoNoFlow, root);
+    const repoScope = currentRepoInfo(null, null, root).cwd;
+
+    expect(new Set([shellCwd, viewerRoot, repoScope]).size).toBe(1);
+    expect(shellCwd).toBe(home);
+    expect(flowLoad.ok && flowLoad.definition.name).toBe('home-global-flow');
   });
 
   it('all four surfaces resolve to the same launch root before OSC 7, exercising each real path', () => {

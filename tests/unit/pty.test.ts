@@ -1,18 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { buildSpawnConfig, mergePaths, probeShellCommand, homeFallback } from '../../src/main/pty';
+import { buildSpawnConfig, mergePaths, probeShellCommand } from '../../src/main/pty';
 import { APP_LAUNCH_DIR_ENV } from '../../src/main/launchRoot';
 
 const HOME = '/home/u';
-
-describe('homeFallback (§23.4 — F: the $HOME-else-OS-home value resolveLaunchRoot returns verbatim when the target is absent or unusable)', () => {
-  it('uses $HOME when set', () => {
-    expect(homeFallback({ HOME }, '/fallback')).toBe(HOME);
-  });
-  it('falls back to the home arg when $HOME is unset or empty', () => {
-    expect(homeFallback({}, '/fallback')).toBe('/fallback');
-    expect(homeFallback({ HOME: '' }, '/fallback')).toBe('/fallback');
-  });
-});
 
 describe('mergePaths (§5 — GUI-launch PATH probe must not clobber the inherited env)', () => {
   it('appends probed-only entries after the inherited ones, preserving precedence', () => {

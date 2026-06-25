@@ -11,4 +11,3 @@ playwright-report/
 *.tsbuildinfo
 plan.md
 .agent-terminal/
-.agent-terminal/flow-state.yaml

@@ -27,11 +27,6 @@ function isBashShell(shellPath: string): boolean {
   return /(^|\/)bash$/.test(shellPath);
 }
 
-/** F (§23.4): `$HOME`, else the OS home dir — the value the launch root falls back to. */
-export function homeFallback(env: NodeJS.ProcessEnv, home: string): string {
-  return env.HOME || home;
-}
-
 export function buildSpawnConfig(input: {
   platform: NodeJS.Platform;
   env: NodeJS.ProcessEnv;

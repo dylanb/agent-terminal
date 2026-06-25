@@ -1,6 +1,11 @@
-// Launch-root resolution (§23.4): the single per-process anchor the four spawn-cwd surfaces read.
+// Launch-root resolution (§23.4).
 
 import fs from 'node:fs';
+
+/** F (§23.4): `$HOME`, else the OS home dir — the value the launch root falls back to. */
+export function homeFallback(env: NodeJS.ProcessEnv, home: string): string {
+  return env.HOME || home;
+}
 
 /** Whether a real, existing directory can be entered — the §23.4 "enterable directory" criterion.
  *  Injectable so the not-enterable branch is testable where a real fixture cannot provoke it (CI runs
@@ -21,8 +26,7 @@ export const APP_LAUNCH_DIR_ENV = 'APP_LAUNCH_DIR';
 
 /**
  * The validated launch root (§23.4): the caller-supplied `target` resolved to its real path when it
- * is an enterable directory, else `fallback` (F) returned verbatim. Resolves once per process so the
- * shell cwd (§5), viewer root (§20.1), flow global dir (§18.1), and todo scope (§16.3) cannot drift.
+ * is an enterable directory, else `fallback` (F) returned verbatim.
  */
 export function resolveLaunchRoot(
   target: string | undefined,

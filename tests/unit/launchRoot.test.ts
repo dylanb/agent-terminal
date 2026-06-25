@@ -2,9 +2,19 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdtempSync, mkdirSync, rmSync, realpathSync, symlinkSync, writeFileSync, chmodSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
-import { resolveLaunchRoot } from '../../src/main/launchRoot';
+import { resolveLaunchRoot, homeFallback } from '../../src/main/launchRoot';
 
 const FALLBACK = '/home/fallback-marker';
+
+describe('homeFallback (§23.4 — F: the $HOME-else-OS-home value resolveLaunchRoot returns verbatim when the target is absent or unusable)', () => {
+  it('uses $HOME when set', () => {
+    expect(homeFallback({ HOME: '/home/u' }, '/fallback')).toBe('/home/u');
+  });
+  it('falls back to the home arg when $HOME is unset or empty', () => {
+    expect(homeFallback({}, '/fallback')).toBe('/fallback');
+    expect(homeFallback({ HOME: '' }, '/fallback')).toBe('/fallback');
+  });
+});
 
 // accessSync(X_OK) cannot be provoked to throw as root, and Windows lacks the traverse bit.
 const CAN_TEST_UNENTERABLE =
