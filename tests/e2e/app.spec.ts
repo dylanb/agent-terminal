@@ -2443,7 +2443,6 @@ test('two concurrent instances each root at their own target directory (§23.4)'
     args: ['out/main/index.js', `--user-data-dir=${udB}`],
     env: { ...process.env, APP_SHELL: 'bash', APP_SUBMIT_DELAY_MS: '100', APP_LAUNCH_DIR: dirB },
   });
-  app = appA; // so afterEach has a live handle; appB is closed below
   try {
     const pageA = await appA.firstWindow();
     const pageB = await appB.firstWindow();
@@ -2468,6 +2467,7 @@ test('two concurrent instances each root at their own target directory (§23.4)'
       pageB.locator('.xterm-rows > div').filter({ hasText: new RegExp(`^\\s*${dirB}\\s*$`) }),
     ).not.toHaveCount(0);
   } finally {
+    await appA.close();
     await appB.close();
   }
   rmSync(dirA, { recursive: true, force: true });
