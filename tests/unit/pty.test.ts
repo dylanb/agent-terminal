@@ -1,15 +1,15 @@
 import { describe, expect, it } from 'vitest';
-import { buildSpawnConfig, mergePaths, probeShellCommand, spawnCwd } from '../../src/main/pty';
+import { buildSpawnConfig, mergePaths, probeShellCommand, homeFallback } from '../../src/main/pty';
 
 const HOME = '/home/u';
 
-describe('spawnCwd (§5 — the dir the shell is spawned in, also the viewer cwd fallback §20.1)', () => {
+describe('homeFallback (§23.4 — F: the $HOME-else-OS-home value resolveLaunchRoot returns verbatim when the target is absent or unusable)', () => {
   it('uses $HOME when set', () => {
-    expect(spawnCwd({ HOME }, '/fallback')).toBe(HOME);
+    expect(homeFallback({ HOME }, '/fallback')).toBe(HOME);
   });
   it('falls back to the home arg when $HOME is unset or empty', () => {
-    expect(spawnCwd({}, '/fallback')).toBe('/fallback');
-    expect(spawnCwd({ HOME: '' }, '/fallback')).toBe('/fallback');
+    expect(homeFallback({}, '/fallback')).toBe('/fallback');
+    expect(homeFallback({ HOME: '' }, '/fallback')).toBe('/fallback');
   });
 });
 

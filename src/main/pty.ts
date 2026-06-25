@@ -26,9 +26,8 @@ function isBashShell(shellPath: string): boolean {
   return /(^|\/)bash$/.test(shellPath);
 }
 
-/** F (§23.4): the home value the launch root falls back to — `$HOME`, else the OS home dir. The
- *  resolved launch root, not this directly, is what the four spawn-cwd surfaces read. */
-export function spawnCwd(env: NodeJS.ProcessEnv, home: string): string {
+/** F (§23.4): `$HOME`, else the OS home dir — the value the launch root falls back to. */
+export function homeFallback(env: NodeJS.ProcessEnv, home: string): string {
   return env.HOME || home;
 }
 
