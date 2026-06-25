@@ -1,7 +1,7 @@
 /// <reference lib="dom" />
 // page.evaluate callbacks run in the renderer; DOM lib gives them window.monitor's type.
 import { _electron as electron, expect, test, type ElectronApplication, type Page } from '@playwright/test';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, readFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, appendFileSync, rmSync, existsSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { CH, SESSION_ID } from '../../src/shared/ipc';
@@ -933,6 +933,32 @@ test('the artifact viewer discovers real repo files and sends a selection to a t
   await appRow.click();
   await expect(body.locator('.cm-editor')).toBeVisible();
   await expect(body.locator('.cm-editor')).toContainText('QUIET');
+});
+
+test('the viewer live-reloads an open artifact when it changes on disk, with no cd (§20.1)', async () => {
+  // The bug: the viewer only re-pulls on a cwd change, so an on-disk edit to the open file is unseen.
+  // A file changing under the tree root must reflect in the viewer with no cd and no manual refresh.
+  const dir = '/tmp/agent-term-e2e-artlive';
+  await typeCommand(
+    `rm -rf "${dir}" && mkdir -p "${dir}" && cd "${dir}" && git init -q && ` +
+      `git config user.email t@t && git config user.name T && ` +
+      `printf '# Live\\n\\nfirst paragraph.\\n' > doc.md && ` +
+      `git add -A && git commit -qm init && printf 'edited\\n' >> doc.md && pwd`,
+  );
+  await expect(page.locator('.xterm-rows > div').filter({ hasText: new RegExp(`^\\s*${dir}\\s*$`) })).not.toHaveCount(0);
+  await expect(page.locator('.status-chip[data-status="agent"]')).toContainText('quiet', { timeout: 6_000 });
+
+  await page.locator('[data-viewbtn="2"]').click();
+  await expect(page.locator('[data-viewpane="2"]')).toBeVisible();
+  const tree = page.locator('#artifacts .tree');
+  await expect(tree.locator('.f').filter({ hasText: 'doc.md' })).toHaveCount(1);
+  await tree.locator('.f').filter({ hasText: 'doc.md' }).click();
+  const body = page.locator('#artifacts .vbody');
+  await expect(body).toContainText('first paragraph');
+
+  // Edit the open file on disk — no cd, no manual refresh. The live watcher must re-render it.
+  appendFileSync(join(dir, 'doc.md'), '\nLIVERELOADMARKER\n');
+  await expect(body).toContainText('LIVERELOADMARKER', { timeout: 6_000 });
 });
 
 test('the viewer starts in sync with the terminal cwd, before any cd (§20.1)', async () => {

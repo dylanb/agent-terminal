@@ -42,6 +42,7 @@ export const CH = {
   todoDelete: 'todo:delete',
   viewerTree: 'viewer:tree',
   viewerRead: 'viewer:read',
+  viewerOnChanged: 'viewer:onChanged',
   flowState: 'flow:state',
   flowStart: 'flow:start',
   flowAdvance: 'flow:advance',
@@ -366,6 +367,7 @@ export interface ChannelPayloads {
   'monitor:update': MonitorUpdateMsg;
   'monitor:commandsChanged': CommandsChangedMsg;
   'cwd:changed': CwdChangedMsg;
+  'viewer:onChanged': ViewerChangedMsg;
   'flow:onStateChanged': FlowStateChangedMsg;
   'menu:edit': MenuEditMsg;
   'flow:revealLoop': FlowRevealLoopMsg;
@@ -392,6 +394,13 @@ export interface ArtifactNode {
 
 /** Curated (loop ∪ PR ∪ working-tree changes) vs. the whole repo (D8). */
 export type ArtifactScope = 'curated' | 'repo';
+
+/** viewer:onChanged broadcast (§20.1): main signals that a file under the viewer's tree root changed
+ *  on disk; the viewer re-pulls `viewer:tree`/`viewer:read`. Payload-free beyond the session — the
+ *  viewer re-discovers against its own live cwd, mirroring flow:onStateChanged. */
+export interface ViewerChangedMsg {
+  sessionId: SessionId;
+}
 
 export interface ArtifactTree {
   /** Absolute discovery root: the repo root, or the cwd when outside a repo. */
@@ -660,6 +669,9 @@ export interface ViewerApi {
   tree(scope: ArtifactScope): Promise<ArtifactTree>;
   /** Read one file by its tree-relative path; null when missing, binary, or too large. */
   read(relPath: string): Promise<ViewerFile | null>;
+  /** Subscribe to main's viewer:onChanged push (§20.1): `cb` fires when a file under the viewer's
+   *  tree root changes on disk, prompting a `tree()`/`read()` re-pull. Returns an unsubscribe. */
+  onChanged(cb: () => void): () => void;
 }
 
 /** Flow lifecycle (§24.2.2): drive the manual step's status strip + control. Each call
