@@ -10,6 +10,10 @@ export interface LaunchRootProbe {
 
 const X_OK = fs.constants.X_OK;
 
+/** The OS-boundary env var carrying the caller-supplied launch target (§23.4). The read site and the
+ *  child-env strip site share this one identity so the directive cannot be read yet leak unstripped. */
+export const APP_LAUNCH_DIR_ENV = 'APP_LAUNCH_DIR';
+
 /**
  * The validated launch root (§23.4): the caller-supplied `target` resolved to its real path when it
  * is an enterable directory, else `fallback` (F) returned verbatim. Resolves once per process so the

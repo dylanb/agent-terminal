@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { buildSpawnConfig, mergePaths, probeShellCommand, homeFallback } from '../../src/main/pty';
+import { APP_LAUNCH_DIR_ENV } from '../../src/main/launchRoot';
 
 const HOME = '/home/u';
 
@@ -132,13 +133,13 @@ describe('buildSpawnConfig (§5)', () => {
     expect(cfg.options.cwd).toBe(ROOT);
   });
 
-  it('strips APP_LAUNCH_DIR from the child env so the launch directive does not leak to the shell (§23.4)', () => {
+  it('strips the launch-directive env var the resolver reads so it does not leak to the shell (§23.4)', () => {
     const cfg = buildSpawnConfig({
       platform: 'linux',
-      env: { HOME, APP_LAUNCH_DIR: '/work/repo' },
+      env: { HOME, [APP_LAUNCH_DIR_ENV]: '/work/repo' },
       cwd: '/work/repo',
     });
-    expect(cfg.options.env.APP_LAUNCH_DIR).toBeUndefined();
+    expect(cfg.options.env[APP_LAUNCH_DIR_ENV]).toBeUndefined();
     expect(cfg.options.env.HOME).toBe(HOME);
   });
 

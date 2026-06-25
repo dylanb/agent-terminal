@@ -17,7 +17,7 @@ import { createInjector } from './inject';
 import { createMonitorEventStore } from './eventStore';
 import { createShadowModel } from './shadow';
 import { spawnAgentShell, homeFallback } from './pty';
-import { resolveLaunchRoot } from './launchRoot';
+import { resolveLaunchRoot, APP_LAUNCH_DIR_ENV } from './launchRoot';
 import { createOutputGate } from './outputGate';
 import { resolveRendererTarget } from './rendererTarget';
 import { installNavigationGuards } from './windowGuards';
@@ -105,7 +105,7 @@ async function createWindow(): Promise<void> {
   const config = resolveRuntimeConfig(process.env);
   // §23.4: resolve the launch root ONCE per process — the single source of truth the shell cwd (§5),
   // viewer root (§20.1), flow global dir (§18.1), and todo scope (§16.3) all read, so they cannot drift.
-  const launchRoot = resolveLaunchRoot(process.env.APP_LAUNCH_DIR, homeFallback(process.env, os.homedir()));
+  const launchRoot = resolveLaunchRoot(process.env[APP_LAUNCH_DIR_ENV], homeFallback(process.env, os.homedir()));
   const ptyProcess = await spawnAgentShell({
     integrationScriptPath: config.shellIntegration ? SHELL_INTEGRATION_SCRIPT : undefined,
     cwd: launchRoot,

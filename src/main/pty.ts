@@ -2,6 +2,7 @@
 
 import { execFile } from 'node:child_process';
 import * as pty from 'node-pty';
+import { APP_LAUNCH_DIR_ENV } from './launchRoot';
 
 export interface SpawnConfig {
   shellPath: string;
@@ -43,7 +44,7 @@ export function buildSpawnConfig(input: {
   const { platform, env, cwd, probedPath, integrationScriptPath } = input;
   const cleanEnv = Object.fromEntries(
     Object.entries(env).filter(
-      (e): e is [string, string] => e[1] !== undefined && e[0] !== 'APP_LAUNCH_DIR',
+      (e): e is [string, string] => e[1] !== undefined && e[0] !== APP_LAUNCH_DIR_ENV,
     ),
   );
   const shellPath = resolveShellPath(env);
