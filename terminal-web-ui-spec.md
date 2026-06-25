@@ -1508,6 +1508,17 @@ So one instance can run per worktree/repo (§23.1), a launched instance roots at
 - **Per-surface OSC-7 lifecycle.** The shell starts at L and tracks the shell thereafter (§5). The viewer root (§20.1) and todo/repo scope (§16.3) equal L **before the first OSC 7** and follow the reported cwd after it. The flow global directory (§18.1) equals L for the **life of the process** — a fixed per-process anchor that does not track OSC 7 (pre-existing behavior, preserved).
 - **App-global anchors are untouched.** The audit root (§25, `auditPaths.ts` reads `os.homedir()` directly), user-data, and config-dir lookups stay anchored where they are. Re-rooting them — e.g. by mutating the process-global `HOME` — is **forbidden**: it would also re-root the child shell's env and the audit root.
 
+```mermaid
+flowchart TD
+    target["Caller target (APP_LAUNCH_DIR, OS process boundary)"] --> resolve["resolveLaunchRoot: realpath + enterable-dir check"]
+    F["F = $HOME, else OS home"] -. fallback .-> resolve
+    resolve --> L["Launch root L (resolved once per process)"]
+    L --> shell["PTY shell cwd (§5)"]
+    L --> viewer["Artifact viewer root (§20.1)"]
+    L --> flow["Flow global directory (§18.1)"]
+    L --> todo["Todo / repo scope fallback (§16.3)"]
+```
+
 ---
 
 ## 24. Build plan — UI-inwards
