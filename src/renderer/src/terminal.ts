@@ -5,6 +5,7 @@ import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
 import { FOCUS_VIEW_EVENT } from './paneActions';
 import { SEL_COLOR } from './selection';
+import { stripPasteBreakout } from '../../shared/paste';
 
 export const RESIZE_DEBOUNCE_MS = 80;
 
@@ -42,7 +43,75 @@ export function wireTerminalPaneListeners(opts: { focusView: () => void; resize:
   };
 }
 
+/** Single-quote each dropped path (POSIX `'\''` escaping for an embedded quote) and space-join them, so
+ *  a path with spaces survives at the prompt; C0 control chars are stripped first so a CR/LF-bearing
+ *  filename cannot submit a line through the paste seam (§7.8 "no submit"). */
+export function formatDroppedPaths(paths: string[]): string {
+  return paths.map((p) => `'${p.replace(/[\u0000-\u001f\u007f]/g, '').split("'").join("'\\''")}'`).join(' ');
+}
+
+/** Wire file drag-and-drop on the terminal pane (§7.8): a drop pastes the dropped files' single-quoted
+ *  paths via the §7.5/§9.3 sanitized paste seam (no submit). `pathForFile` resolves a `File` to its
+ *  absolute path (preload `webUtils` bridge), returning `''` for a drag item with no path. */
+export function wireTerminalDrop(
+  container: HTMLElement,
+  deps: { pathForFile: (file: File) => string; paste: (text: string) => void },
+): () => void {
+  let dragDepth = 0;
+  const setOver = (on: boolean): void => void container.classList.toggle('drag-over', on);
+  const onDragEnter = (e: DragEvent): void => {
+    e.preventDefault();
+    dragDepth += 1;
+    setOver(true);
+  };
+  const onDragOver = (e: DragEvent): void => e.preventDefault();
+  const onDragLeave = (): void => {
+    dragDepth = Math.max(0, dragDepth - 1);
+    if (dragDepth === 0) setOver(false);
+  };
+  const onDrop = (e: DragEvent): void => {
+    e.preventDefault();
+    dragDepth = 0;
+    setOver(false);
+    const paths = Array.from(e.dataTransfer?.files ?? [], (f) => deps.pathForFile(f)).filter((p) => p.length > 0);
+    if (paths.length === 0) return;
+    deps.paste(stripPasteBreakout(formatDroppedPaths(paths)));
+  };
+  container.addEventListener('dragenter', onDragEnter);
+  container.addEventListener('dragover', onDragOver);
+  container.addEventListener('dragleave', onDragLeave);
+  container.addEventListener('drop', onDrop);
+  return () => {
+    container.removeEventListener('dragenter', onDragEnter);
+    container.removeEventListener('dragover', onDragOver);
+    container.removeEventListener('dragleave', onDragLeave);
+    container.removeEventListener('drop', onDrop);
+  };
+}
+
+/** The themed `--term-bg` for xterm's inline theme background; `undefined` when unset, leaving xterm's
+ *  `#000` gutter default (§7.1/§7.4). */
+export function readTermBg(container: HTMLElement): string | undefined {
+  return (
+    getComputedStyle(container).getPropertyValue('--term-bg').trim() ||
+    getComputedStyle(document.documentElement).getPropertyValue('--term-bg').trim() ||
+    undefined
+  );
+}
+
+/** Re-seed xterm's inline theme background on each live `data-theme` toggle, else the gutter strip
+ *  reappears one theme behind (the fill is that background and `--term-bg` differs per theme; §7.1/§7.4). */
+export function wireTerminalThemeBackground(deps: {
+  applyBg: (bg: string | undefined) => void;
+  readBg: () => string | undefined;
+}): () => void {
+  const obs = new MutationObserver(() => deps.applyBg(deps.readBg()));
+  obs.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+  return () => obs.disconnect();
+}
+
 export function createTerminalPane(container: HTMLElement): TerminalPane {
+  const termBg = readTermBg(container);
   const term = new Terminal({
     fontFamily: 'monospace',
     fontSize: 14,
@@ -52,6 +121,7 @@ export function createTerminalPane(container: HTMLElement): TerminalPane {
     // Expose row content to assistive tech — the terminal is the primary surface (WCAG 4.1.2).
     screenReaderMode: true,
     theme: {
+      background: termBg,
       // Focused selection paints live during the drag — xterm's hit-testing gives instant,
       // per-frame feedback the app-owned decoration can't (it churns faster than it paints, §7.1).
       selectionBackground: SEL_COLOR,
@@ -78,6 +148,16 @@ export function createTerminalPane(container: HTMLElement): TerminalPane {
     window.term.resize({ cols: term.cols, rows: term.rows });
   };
   const unwire = wireTerminalPaneListeners({ focusView: () => term.focus(), resize: sendResize });
+  const unwireDrop = wireTerminalDrop(container, {
+    pathForFile: (file) => window.term.pathForFile(file),
+    paste: (text) => term.paste(text),
+  });
+  const unwireThemeBg = wireTerminalThemeBackground({
+    readBg: () => readTermBg(container),
+    applyBg: (bg) => {
+      term.options.theme = { ...term.options.theme, background: bg };
+    },
+  });
   sendResize();
 
   return {
@@ -86,6 +166,8 @@ export function createTerminalPane(container: HTMLElement): TerminalPane {
       offData();
       offExit();
       unwire();
+      unwireDrop();
+      unwireThemeBg();
       term.dispose();
     },
   };

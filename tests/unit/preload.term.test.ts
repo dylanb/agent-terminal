@@ -3,9 +3,10 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 vi.mock('electron', () => ({
   contextBridge: { exposeInMainWorld: vi.fn() },
   ipcRenderer: { on: vi.fn(), removeListener: vi.fn(), send: vi.fn(), invoke: vi.fn() },
+  webUtils: { getPathForFile: vi.fn((f: File) => `/abs/${f.name}`) },
 }));
 
-import { ipcRenderer } from 'electron';
+import { ipcRenderer, webUtils } from 'electron';
 import { termApi } from '../../src/preload/index';
 import { CH } from '../../src/shared/ipc';
 
@@ -42,5 +43,14 @@ describe('termApi unsubscribe contract (§6)', () => {
 
     off();
     expect(removeListener).toHaveBeenCalledWith(CH.ptyExit, handler);
+  });
+});
+
+describe('termApi.pathForFile (§7.8 — drop-to-path bridge)', () => {
+  it('resolves a dropped File to its filesystem path via webUtils.getPathForFile', () => {
+    const file = new File([], 'shot.png');
+    const path = termApi.pathForFile(file);
+    expect(webUtils.getPathForFile).toHaveBeenCalledWith(file);
+    expect(path).toBe('/abs/shot.png');
   });
 });

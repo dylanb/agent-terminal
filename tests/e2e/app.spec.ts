@@ -519,6 +519,133 @@ test('a captured report (with findings) survives a monitor reload (capture:last�
   await expect(page.locator('#monitor-blocks .finding').first()).toBeVisible();
 });
 
+test('captures the visible report on the alternate screen buffer (full-screen agent, §13.4)', async () => {
+  // Claude Code 2.x draws full-screen on the alternate screen buffer, where capture was previously
+  // inert (§15.9). On-demand "Capture last report" must read the visible alt frame. INTEGRATION=0 so
+  // the printed report surfaces deterministically (no span-gating race), as in the replay test.
+  await app.close();
+  app = await electron.launch({
+    args: launchArgs(),
+    env: { ...process.env, APP_SHELL: 'bash', APP_SUBMIT_DELAY_MS: '100', APP_SHELL_INTEGRATION: '0' },
+  });
+  page = await app.firstWindow();
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+  await openQuickSend('capture'); // the drawer starts closed after a relaunch (§22.2)
+
+  // Enter the alternate screen, then print the report onto it. The status strip confirms the
+  // full-screen regime — the one where capture used to return nothing.
+  await typeCommand('printf "\\x1b[?1049h"');
+  await expect(page.locator('.status-chip[data-status="full-screen"]')).toContainText('yes');
+  await typeCommand(
+    "printf '%s\\n' 'Here is the summary of findings from this code review:' '- one important finding worth acting on' '- another finding to address before merge'",
+  );
+  await expect(termRows()).toContainText('another finding to address before merge');
+
+  await clickCaptureLast();
+  const findings = page.locator('#monitor-blocks .finding');
+  await expect(findings.first()).toBeVisible({ timeout: 10_000 });
+  expect(await findings.count()).toBeGreaterThan(0);
+});
+
+test('native selection + copy work on the alternate screen buffer (§7.4)', async () => {
+  // On the alt buffer registerMarker/registerDecoration return undefined, so the app-owned
+  // PERSISTENT highlight + cross-highlight reveal are unavailable (§7.4, accepted). But the drag
+  // gesture, text extraction, and copy all ride xterm's native selection, which is buffer-agnostic
+  // — so "select and capture" still works. If getSelection() threw on the alt buffer (the §7.3
+  // risk), onSelectionChange would bail and the app-owned model would stay empty, so copy would
+  // write nothing and this poll would time out.
+  await typeCommand('printf "\\x1b[?1049h"; echo altcopy-98765');
+  await expect(page.locator('.status-chip[data-status="full-screen"]')).toContainText('yes');
+  await expect(termRows()).toContainText('altcopy-98765');
+  await selectRowContaining('altcopy-98765');
+  // Focus the terminal (not a click — that would clear the app-owned selection) so the copy chord
+  // reaches xterm's handler. The auto profile resolves from the running platform: ⌘C on macOS,
+  // Ctrl+Shift+C on the Linux CI (§7.7).
+  await page.locator('.xterm-helper-textarea').focus();
+  await page.keyboard.press(process.platform === 'darwin' ? 'Meta+C' : 'Control+Shift+C');
+  await expect
+    .poll(() => app.evaluate(({ clipboard }) => clipboard.readText()), { timeout: 5_000 })
+    .toContain('altcopy-98765');
+});
+
+test('the terminal scrollbar gutter matches the terminal background — no contrasting strip (§7.1)', async () => {
+  // xterm paints the viewport (scrollbar gutter included) with its inline theme background; left at
+  // xterm's #000 default it shows as a black strip a full-screen agent (alt buffer, no scrollback) can't
+  // cover, against the themed --term-bg pane. terminal.ts seeds the theme background from --term-bg so
+  // the gutter is the same colour as the terminal. Asserted via computed style (no PTY input needed) so
+  // the fix itself is under test, not the shell.
+  const viewportBg = await page
+    .locator('#terminal .xterm-viewport')
+    .evaluate((el) => getComputedStyle(el).backgroundColor);
+  const paneBg = await page
+    .locator('#terminal-view')
+    .evaluate((el) => getComputedStyle(el).backgroundColor);
+  expect(viewportBg).toBe(paneBg);
+  expect(viewportBg).not.toBe('rgb(0, 0, 0)'); // not xterm's hardcoded-black default
+});
+
+test('the scrollbar gutter re-matches the terminal background after a live theme toggle (§7.1/§7.4)', async () => {
+  // The gutter fill is xterm's inline theme background, seeded once at construction; --term-bg differs
+  // per theme, so without re-seeding on the #tg toggle the strip would reappear one theme behind. Drives
+  // the real renderer theme toggle (no PTY input) and re-asserts the gutter tracks the pane in the new
+  // theme. Keyed off data-theme (the toggle's direct effect), not a pre-click bg snapshot, so the startup
+  // persisted-theme load can't race the assertion.
+  const viewportBg = () =>
+    page.locator('#terminal .xterm-viewport').evaluate((el) => getComputedStyle(el).backgroundColor);
+  const paneBg = () =>
+    page.locator('#terminal-view').evaluate((el) => getComputedStyle(el).backgroundColor);
+  const themeAttr = () => page.evaluate(() => document.documentElement.getAttribute('data-theme'));
+
+  const start = await themeAttr();
+  await page.locator('#tg').click();
+  await expect.poll(themeAttr).not.toBe(start); // the toggle landed (theme genuinely changed)
+  expect(await viewportBg()).toBe(await paneBg()); // gutter re-matched the pane in the new theme
+  await page.locator('#tg').click(); // restore the starting theme for later tests
+});
+
+test('dragging a file over the terminal shows a drop-target affordance (§7.8)', async () => {
+  // Slice 3: the drag affordance drives the real renderer wiring with no PTY input. Without the §7.8
+  // handler the class never appears.
+  const terminal = page.locator('#terminal');
+  await expect(terminal).not.toHaveClass(/drag-over/);
+  await terminal.dispatchEvent('dragenter');
+  await expect(terminal).toHaveClass(/drag-over/);
+  await terminal.dispatchEvent('dragleave');
+  await expect(terminal).not.toHaveClass(/drag-over/);
+});
+
+test('dropping a file pastes its single-quoted path at the prompt, no submit (§7.8)', async () => {
+  // Slices 1–2: a real File carrying an OS path (so the preload webUtils bridge resolves it) is obtained
+  // via a hidden <input>, then dispatched as a native drop onto #terminal. The §7.8 handler pastes the
+  // single-quoted path through term.paste(), which the shell echoes at the prompt (no Enter → not run).
+  const tmpDir = mkdtempSync(join(tmpdir(), 'agent-term-drop-'));
+  const dropped = join(tmpDir, 'shot.png');
+  writeFileSync(dropped, 'x');
+
+  await page.evaluate(() => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.id = 'e2e-drop-input';
+    input.style.position = 'fixed';
+    input.style.left = '-9999px';
+    document.body.appendChild(input);
+  });
+  await page.locator('#e2e-drop-input').setInputFiles(dropped);
+  await page.locator('#terminal .xterm-screen').click(); // prompt focus, so the pasted path lands there
+
+  await page.evaluate(() => {
+    const input = document.getElementById('e2e-drop-input') as HTMLInputElement;
+    const dt = new DataTransfer();
+    for (const f of Array.from(input.files ?? [])) dt.items.add(f);
+    document
+      .getElementById('terminal')!
+      .dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: dt }));
+  });
+
+  await expect(termRows()).toContainText(`'${dropped}'`);
+  rmSync(tmpDir, { recursive: true, force: true });
+});
+
 test('capture ↔ terminal cross-highlight: double-click reveals each side (§16.8)', async () => {
   // APP_SHELL_INTEGRATION=0 so the printed report surfaces deterministically (as in the replay test).
   await app.close();
