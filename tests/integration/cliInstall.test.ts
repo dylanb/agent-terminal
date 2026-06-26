@@ -186,16 +186,31 @@ describe('installCliShim reconciles orphan blocks across a default-shell change 
 
   it('strips the launcher block from a profile the active shell no longer sources after a shell change', () => {
     const bashrc = join(root, '.bashrc');
+    const foreign = join(root, '.profile');
     writeFileSync(bashrc, 'export FOO=1\n');
+    writeFileSync(foreign, 'export FOO=1\n');
     expect(installCliShim(buildInstallTarget(runtime('/bin/bash', [bashrc]))).ok).toBe(true);
     expect(readFileSync(bashrc, 'utf8')).toContain('agent-terminal launcher');
 
-    expect(installCliShim(buildInstallTarget(runtime('/bin/zsh', [bashrc]))).ok).toBe(true);
+    expect(installCliShim(buildInstallTarget(runtime('/bin/zsh', [bashrc, foreign]))).ok).toBe(true);
 
     expect(readFileSync(bashrc, 'utf8')).not.toContain('agent-terminal launcher');
+    expect(readFileSync(foreign, 'utf8')).toBe('export FOO=1\n');
     const zshrc = readFileSync(join(root, '.zshrc'), 'utf8');
     expect(zshrc.match(/agent-terminal launcher >>>/g)?.length).toBe(1);
     expect(zshrc.match(/agent-terminal launcher <<</g)?.length).toBe(1);
+  });
+
+  it('leaves exactly one block when reinstalling under the same shell whose profile already exists', () => {
+    const zshrc = join(root, '.zshrc');
+    writeFileSync(zshrc, 'export FOO=1\n');
+    const run = (): CliInstallResult => installCliShim(buildInstallTarget(runtime('/bin/zsh', [zshrc])));
+    expect(run().ok).toBe(true);
+    expect(run().ok).toBe(true);
+
+    const text = readFileSync(zshrc, 'utf8');
+    expect(text.match(/agent-terminal launcher >>>/g)?.length).toBe(1);
+    expect(text.match(/agent-terminal launcher <<</g)?.length).toBe(1);
   });
 });
 

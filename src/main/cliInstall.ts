@@ -105,7 +105,6 @@ function reconcileOrphanBlocks(target: InstallTarget): void {
   for (const profile of target.reconcileProfiles ?? []) {
     if (writeTargets.has(profile)) continue;
     try {
-      if (!fs.existsSync(profile)) continue;
       const existing = fs.readFileSync(profile, 'utf8');
       const next = stripBlock(existing);
       if (next !== existing) fs.writeFileSync(profile, next);
