@@ -12,6 +12,7 @@ import { generateShim, shQuote, CLI_COMMAND_NAME, type LaunchInvocation } from '
 export interface InstallTarget {
   binDir: string;
   profiles: string[];
+  reconcileProfiles?: string[];
   currentPath: string;
   invocation: LaunchInvocation;
 }
@@ -56,7 +57,13 @@ export function buildInstallTarget(info: RuntimeInfo): InstallTarget {
   const binDir = path.join(info.home, '.agent-terminal', 'bin');
   const profiles = resolveProfiles(info.home, info.shell, info.existingProfiles);
   const appArgs = info.defaultApp && info.mainScript ? [path.resolve(info.cwd, info.mainScript)] : [];
-  return { binDir, profiles, currentPath: info.currentPath, invocation: { execPath: info.execPath, appArgs } };
+  return {
+    binDir,
+    profiles,
+    reconcileProfiles: info.existingProfiles,
+    currentPath: info.currentPath,
+    invocation: { execPath: info.execPath, appArgs },
+  };
 }
 
 const PATH_BLOCK_BEGIN = '# >>> agent-terminal launcher >>>';
@@ -93,6 +100,21 @@ function errMsg(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
 
+function reconcileOrphanBlocks(target: InstallTarget): void {
+  const writeTargets = new Set(target.profiles);
+  for (const profile of target.reconcileProfiles ?? []) {
+    if (writeTargets.has(profile)) continue;
+    try {
+      if (!fs.existsSync(profile)) continue;
+      const existing = fs.readFileSync(profile, 'utf8');
+      const next = stripBlock(existing);
+      if (next !== existing) fs.writeFileSync(profile, next);
+    } catch {
+      continue;
+    }
+  }
+}
+
 export function installCliShim(target: InstallTarget): CliInstallResult {
   const cmd = path.join(target.binDir, CLI_COMMAND_NAME);
   try {
@@ -102,6 +124,8 @@ export function installCliShim(target: InstallTarget): CliInstallResult {
   } catch (e) {
     return { ok: false, error: `Could not write the launcher to ${target.binDir}: ${errMsg(e)}` };
   }
+
+  reconcileOrphanBlocks(target);
 
   if (onPath(target.binDir, target.currentPath)) return { ok: true, path: cmd };
 

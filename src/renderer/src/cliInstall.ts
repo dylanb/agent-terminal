@@ -21,7 +21,7 @@ export function createCliInstall(host: HTMLElement, deps: CliInstallDeps): CliIn
     return node;
   };
 
-  const root = el('div', 'kview cliinstall');
+  const root = el('div', 'kview cli-install');
   const head = el('div', 'kview-head');
   head.append(
     el('div', 'eyebrow', 'Settings'),
@@ -44,16 +44,14 @@ export function createCliInstall(host: HTMLElement, deps: CliInstallDeps): CliIn
   status.setAttribute('role', 'status');
   status.setAttribute('aria-live', 'polite');
 
-  const alert = el('div', 'cli-status err cli-alert');
+  const alert = el('div', 'cli-status err');
   alert.setAttribute('role', 'alert');
-  alert.style.display = 'none';
 
   root.append(head, card, status, alert);
   host.appendChild(root);
 
   function showStatus(cls: string, text: string): void {
     alert.textContent = '';
-    alert.style.display = 'none';
     status.className = cls;
     status.textContent = text;
   }
@@ -61,7 +59,6 @@ export function createCliInstall(host: HTMLElement, deps: CliInstallDeps): CliIn
     status.className = 'cli-status';
     status.textContent = '';
     alert.textContent = text;
-    alert.style.display = '';
   }
 
   let busy = false;
