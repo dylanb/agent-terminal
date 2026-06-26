@@ -1,6 +1,6 @@
 // Destructive confirmation dialog (#26) — a placement-agnostic modal-dialog organism (UI-STANDARDS
-// §1.2), NOT the §4 Alert live-region pattern. It composes createModalShell for the role=dialog /
-// focus-trap / focus-restore machinery and supplies only the count message + Cancel/Terminate body.
+// §1.2), NOT the §4 Alert live-region pattern. Composes createModalShell and supplies the todo-count
+// message + Cancel/Terminate actions.
 
 import { createModalShell } from './modalShell';
 

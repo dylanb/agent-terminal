@@ -46,6 +46,9 @@ describe('confirm dialog (#26 AC3/AC4/AC13)', () => {
     const labelledBy = d.getAttribute('aria-labelledby');
     expect(labelledBy).toBeTruthy();
     expect(host.querySelector(`#${labelledBy}`)?.textContent).toContain('Terminate flow');
+    const describedBy = d.getAttribute('aria-describedby');
+    expect(describedBy).toBeTruthy();
+    expect(host.querySelector(`#${describedBy}`)?.textContent).toContain('3 todos');
   });
 
   it('moves focus onto the dialog container with no action pre-focused (AC13b / WCAG 2.4.3)', () => {

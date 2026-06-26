@@ -1,7 +1,6 @@
-// Reusable modal-dialog shell (#26): the WCAG-2.4.3/4.1.2 focus-management shared by every blocking
-// dialog — scrim, role=dialog container, Escape, the Tab focus-trap, and opener focus move-in/restore
-// (UI-STANDARDS §1.2). Callers build only the card body via render(build); both flowInputModal and
-// confirmDialog compose this so the focus-trap logic has one definition, not two that can diverge.
+// Reusable modal-dialog shell (#26): one definition of the WCAG-2.4.3/4.1.2 focus-management for
+// blocking dialogs (UI-STANDARDS §1.2), composed by confirmDialog and flowInputModal so the
+// focus-trap logic cannot diverge between them. Callers supply only the card body via render(build).
 
 export interface ModalCard {
   card: HTMLElement;
