@@ -12,16 +12,16 @@ export interface LaunchInvocation {
 /** The installed command's filename. */
 export const CLI_COMMAND_NAME = 'agent-terminal';
 
-function shQuote(s: string): string {
+/** Wrap a string as one POSIX shell single-quoted literal so embedded metacharacters never evaluate. */
+export function shQuote(s: string): string {
   return `'${s.replace(/'/g, `'\\''`)}'`;
 }
 
 /**
- * The POSIX shell launch shim (§23.4 / #25). The caller-supplied path arrives as `$1` and is forwarded
- * verbatim as a single `APP_LAUNCH_DIR` value — never spliced into a command line — so shell
- * metacharacters, spaces, or a leading `--` reach the resolver as one directory operand (CWE-78). A
- * relative path resolves against the invoking shell's cwd, not the launched process's; the instance
- * starts detached so the shell returns immediately.
+ * The POSIX shell launch shim (§23.4 / #25). An optional caller-supplied path crosses the OS boundary
+ * as one verbatim directory operand, never shell-interpolated (CWE-78). A relative path resolves
+ * against the invoking shell's cwd, not the launched process's; the instance starts detached so the
+ * shell returns immediately.
  */
 export function generateShim(invocation: LaunchInvocation): string {
   const cmd = [invocation.execPath, ...invocation.appArgs].map(shQuote).join(' ');

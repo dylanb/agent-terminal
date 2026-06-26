@@ -541,8 +541,6 @@ async function createWindow(): Promise<void> {
         pushFlowChanged(); // instantiation can add todos → the strip's n/m total moves (§24.2.2 S5)
         return list;
       },
-      // CLI launcher install (§23.4 / #25): the shim is derived from this process's launch facts so it
-      // relaunches THIS build (process.defaultApp tells dev's main-script arg from a packaged binary).
       [CH.cliInstall]: (_e, m): CliInstallResult => {
         if (!isValidCliInstall(m)) return { ok: false, error: 'invalid install request' };
         const home = os.homedir();
@@ -550,6 +548,7 @@ async function createWindow(): Promise<void> {
         return installCliShim(
           buildInstallTarget({
             home,
+            shell: process.env.SHELL ?? '',
             currentPath: process.env.PATH ?? '',
             execPath: process.execPath,
             defaultApp: process.defaultApp === true,

@@ -4,7 +4,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import type { CliInstallResult } from '../shared/ipc';
-import { generateShim, CLI_COMMAND_NAME, type LaunchInvocation } from './cliShim';
+import { generateShim, shQuote, CLI_COMMAND_NAME, type LaunchInvocation } from './cliShim';
 
 /** Where the install lands, injected as a domain seam so tests install into a temp PATH/profile
  *  (CLAUDE.md "narrow domain seam"): the shim's bin directory, the shell-profile files to extend
@@ -16,13 +16,28 @@ export interface InstallTarget {
   invocation: LaunchInvocation;
 }
 
-/** Shell profiles to extend PATH in, most-specific first; the installer writes to the ones that
- *  already exist (never creating e.g. .bash_profile, which would shadow a user's .profile). */
-export const PROFILE_CANDIDATES = ['.zshrc', '.zprofile', '.bashrc', '.bash_profile', '.profile'];
+/** Dotfiles any supported shell might source; the handler filters this to the ones that exist so the
+ *  pure target builder can pick those the active shell actually reads. */
+export const PROFILE_CANDIDATES = ['.zshrc', '.zprofile', '.bashrc', '.bash_profile', '.profile', '.kshrc'];
+
+interface ShellProfileSpec {
+  sources: string[];
+  create: string[];
+}
+
+const SHELL_PROFILES: Record<string, ShellProfileSpec> = {
+  zsh: { sources: ['.zshrc', '.zprofile'], create: ['.zshrc'] },
+  bash: { sources: ['.bashrc', '.bash_profile', '.profile'], create: ['.bashrc', '.profile'] },
+  sh: { sources: ['.profile'], create: ['.profile'] },
+  dash: { sources: ['.profile'], create: ['.profile'] },
+  ash: { sources: ['.profile'], create: ['.profile'] },
+  ksh: { sources: ['.kshrc', '.profile'], create: ['.profile'] },
+};
 
 /** The running build's launch facts, from which the install target is derived. */
 export interface RuntimeInfo {
   home: string;
+  shell: string;
   currentPath: string;
   execPath: string;
   defaultApp: boolean;
@@ -31,9 +46,17 @@ export interface RuntimeInfo {
   existingProfiles: string[];
 }
 
+function resolveProfiles(home: string, shell: string, existing: string[]): string[] {
+  const spec = SHELL_PROFILES[path.basename(shell || '')];
+  if (!spec) return [];
+  const have = new Set(existing);
+  const present = spec.sources.map((n) => path.join(home, n)).filter((p) => have.has(p));
+  return present.length ? present : spec.create.map((n) => path.join(home, n));
+}
+
 export function buildInstallTarget(info: RuntimeInfo): InstallTarget {
   const binDir = path.join(info.home, '.agent-terminal', 'bin');
-  const profiles = info.existingProfiles.length ? info.existingProfiles : [path.join(info.home, '.profile')];
+  const profiles = resolveProfiles(info.home, info.shell, info.existingProfiles);
   const appArgs = info.defaultApp && info.mainScript ? [path.resolve(info.cwd, info.mainScript)] : [];
   return { binDir, profiles, currentPath: info.currentPath, invocation: { execPath: info.execPath, appArgs } };
 }
@@ -42,14 +65,23 @@ const PATH_BLOCK_BEGIN = '# >>> agent-terminal launcher >>>';
 const PATH_BLOCK_END = '# <<< agent-terminal launcher <<<';
 
 function pathBlock(binDir: string): string {
-  return `${PATH_BLOCK_BEGIN}\nexport PATH="${binDir}:$PATH"\n${PATH_BLOCK_END}\n`;
+  const q = shQuote(binDir);
+  return [
+    PATH_BLOCK_BEGIN,
+    `case ":$PATH:" in`,
+    `  *:${q}:*) ;;`,
+    `  *) export PATH=${q}:"$PATH" ;;`,
+    'esac',
+    PATH_BLOCK_END,
+    '',
+  ].join('\n');
 }
 
 function stripBlock(text: string): string {
   const begin = text.indexOf(PATH_BLOCK_BEGIN);
   if (begin === -1) return text;
   const end = text.indexOf(PATH_BLOCK_END, begin);
-  if (end === -1) return text;
+  if (end === -1) return text.slice(0, begin);
   const after = end + PATH_BLOCK_END.length;
   const tail = text[after] === '\n' ? after + 1 : after;
   return text.slice(0, begin) + text.slice(tail);
@@ -74,6 +106,13 @@ export function installCliShim(target: InstallTarget): CliInstallResult {
   }
 
   if (onPath(target.binDir, target.currentPath)) return { ok: true, path: cmd };
+
+  if (target.profiles.length === 0) {
+    return {
+      ok: false,
+      error: `Could not add the launcher to PATH automatically (unsupported shell). Add this directory to your PATH: ${target.binDir}`,
+    };
+  }
 
   const block = pathBlock(target.binDir);
   let extended = false;

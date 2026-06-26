@@ -595,11 +595,9 @@ export interface CliInstallMsg {
 
 /** cli:install result: `ok` with the installed command `path`, or `!ok` with a human-readable `error`.
  *  Never a partial state — `ok` is true only when the command is runnable from a new shell. */
-export interface CliInstallResult {
-  ok: boolean;
-  path?: string;
-  error?: string;
-}
+export type CliInstallResult =
+  | { ok: true; path: string }
+  | { ok: false; error?: string };
 
 // ---- Preload-exposed API surfaces (§6) ----
 

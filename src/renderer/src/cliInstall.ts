@@ -44,28 +44,41 @@ export function createCliInstall(host: HTMLElement, deps: CliInstallDeps): CliIn
   status.setAttribute('role', 'status');
   status.setAttribute('aria-live', 'polite');
 
-  root.append(head, card, status);
+  const alert = el('div', 'cli-status err cli-alert');
+  alert.setAttribute('role', 'alert');
+  alert.style.display = 'none';
+
+  root.append(head, card, status, alert);
   host.appendChild(root);
+
+  function showStatus(cls: string, text: string): void {
+    alert.textContent = '';
+    alert.style.display = 'none';
+    status.className = cls;
+    status.textContent = text;
+  }
+  function showError(text: string): void {
+    status.className = 'cli-status';
+    status.textContent = '';
+    alert.textContent = text;
+    alert.style.display = '';
+  }
 
   let busy = false;
   async function run(): Promise<void> {
     if (busy) return;
     busy = true;
     btn.disabled = true;
-    status.className = 'cli-status';
-    status.textContent = 'Installing…';
+    showStatus('cli-status', 'Installing…');
     try {
       const res = await deps.install();
       if (res.ok) {
-        status.className = 'cli-status ok';
-        status.textContent = `Installed agent-terminal at ${res.path}. Open a new terminal to use it.`;
+        showStatus('cli-status ok', `Installed agent-terminal at ${res.path}. Open a new terminal to use it.`);
       } else {
-        status.className = 'cli-status err';
-        status.textContent = res.error ?? 'Install failed.';
+        showError(res.error ?? 'Install failed.');
       }
     } catch (e) {
-      status.className = 'cli-status err';
-      status.textContent = e instanceof Error ? e.message : 'Install failed.';
+      showError(e instanceof Error ? e.message : 'Install failed.');
     } finally {
       busy = false;
       btn.disabled = false;
