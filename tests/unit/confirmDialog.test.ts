@@ -111,6 +111,26 @@ describe('confirm dialog (#26 AC3/AC4/AC13)', () => {
     expect(document.activeElement).toBe(confirmBtn());
   });
 
+  it('dispose() clears the host subtree and does NOT restore focus to the opener (unmount/relocation)', () => {
+    const d = createConfirmDialog(host);
+    d.render(opts());
+    expect(host.childElementCount).toBeGreaterThan(0);
+    expect(document.activeElement).toBe(dialog());
+
+    d.dispose();
+    expect(host.firstChild).toBeNull();
+    expect(document.activeElement).not.toBe(opener);
+  });
+
+  it('dispose() on an already-closed dialog is idempotent and does not throw', () => {
+    const d = createConfirmDialog(host);
+    expect(() => d.dispose()).not.toThrow();
+    d.render(opts());
+    d.render(null);
+    expect(() => d.dispose()).not.toThrow();
+    expect(host.firstChild).toBeNull();
+  });
+
   it('render(null) closes an open dialog', () => {
     const d = createConfirmDialog(host);
     d.render(opts());

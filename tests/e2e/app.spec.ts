@@ -2424,6 +2424,34 @@ test('Terminate abandons the flow: resets to Not started, clears todos + capture
   rmSync(home, { recursive: true, force: true });
 });
 
+test('Terminate with no todos: the confirmation states zero and still resets to Not started (#26 AC3)', async () => {
+  const repo = seedFlowRepo('agent-term-e2e-term-zero-', 'groom');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-term-zero-home-'));
+  await app.close();
+  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
+  page = await app.firstWindow();
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await typeCommand(`cd "${repo}"`);
+  await expect(flowControl()).toHaveText('Start', { timeout: 10_000 });
+  await flowControl().click();
+  await expect(flowControl()).toHaveText('Advance');
+
+  await page.locator('#tab-todo').click();
+  await expect(page.locator('.todo')).toHaveCount(0);
+
+  await flowTerminate().click();
+  await expect(confirmModal()).toBeVisible();
+  await expect(confirmModal()).toContainText('0 todos');
+  await confirmModal().locator('.confirm').click();
+
+  await expect(flowControl()).toHaveText('Start');
+
+  await app.close();
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+});
+
 test('Terminate is keyboard-operable; focus moves into the dialog and Escape restores it (#26 AC13)', async () => {
   const repo = seedFlowRepo('agent-term-e2e-term-kbd-', 'groom');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-term-kbd-home-'));
