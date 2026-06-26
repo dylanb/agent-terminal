@@ -25,7 +25,7 @@ export function createCliInstall(host: HTMLElement, deps: CliInstallDeps): CliIn
   const head = el('div', 'kview-head');
   head.append(
     el('div', 'eyebrow', 'Settings'),
-    el('h1', 'serif', 'Command line'),
+    el('h2', 'serif', 'Command line'),
     el('div', 'sub', 'Install the agent-terminal command so you can open a new instance rooted at any directory from your shell.'),
   );
 
