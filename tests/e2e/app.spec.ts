@@ -2565,6 +2565,22 @@ test('the in-app install action puts an executable agent-terminal on PATH; the i
   }
 });
 
+test('the in-app install affordance is reachable in the scrolling Settings column, not stranded below the fold (§23.5)', async () => {
+  await page.locator('[data-viewbtn="4"]').click();
+  await expect(page.locator('[data-viewpane="4"]')).toBeVisible();
+
+  const within = await page.evaluate(() => {
+    const pane = document.querySelector('[data-viewpane="4"]') as HTMLElement;
+    const btn = document.querySelector('#cli-install-view button') as HTMLElement;
+    const column = (document.querySelector('#kb-settings-view') as HTMLElement).parentElement as HTMLElement;
+    column.scrollTop = column.scrollHeight;
+    const b = btn.getBoundingClientRect();
+    const p = pane.getBoundingClientRect();
+    return b.width > 0 && b.height > 0 && b.top >= p.top - 1 && b.bottom <= p.bottom + 1;
+  });
+  expect(within).toBe(true);
+});
+
 test('the installed shim launches a genuine second instance rooted at the target (§23.4 / #25)', async () => {
   test.setTimeout(120_000); // launches a second real Electron instance on top of the first
   const home = realpathSync(mkdtempSync(join(tmpdir(), 'agent-term-e2e-shimlaunch-home-')));

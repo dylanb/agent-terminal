@@ -28,6 +28,12 @@ describe('cli install view organism (§23.4)', () => {
     expect(status().getAttribute('aria-live')).toBe('polite');
   });
 
+  it('titles its section with a level-2 heading, not a second page-level h1 (WCAG 1.3.1)', () => {
+    createCliInstall(host, deps());
+    expect(host.querySelector('h1')).toBeNull();
+    expect(host.querySelector('h2')?.textContent).toBe('Command line');
+  });
+
   it('keeps the assertive alert region in the accessibility tree from initial render (WAI-ARIA 6.3.3)', () => {
     createCliInstall(host, deps());
     const a = alert() as HTMLElement;
