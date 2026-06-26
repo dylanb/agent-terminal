@@ -56,9 +56,9 @@ describe('buildInstallTarget (§23.4 / #25)', () => {
     expect(t.profiles).toEqual(['/home/u/.bashrc', '/home/u/.profile']);
   });
 
-  it('targets .profile for a plain POSIX shell', () => {
-    const t = buildInstallTarget({ ...base, shell: '/bin/sh', existingProfiles: [] });
-    expect(t.profiles).toEqual(['/home/u/.profile']);
+  it('targets .profile for a plain POSIX shell (sh and dash)', () => {
+    expect(buildInstallTarget({ ...base, shell: '/bin/sh', existingProfiles: [] }).profiles).toEqual(['/home/u/.profile']);
+    expect(buildInstallTarget({ ...base, shell: '/usr/bin/dash', existingProfiles: [] }).profiles).toEqual(['/home/u/.profile']);
   });
 
   it('yields no profiles for a shell the POSIX export block cannot reach (fish)', () => {

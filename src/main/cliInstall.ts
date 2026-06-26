@@ -16,9 +16,9 @@ export interface InstallTarget {
   invocation: LaunchInvocation;
 }
 
-/** Dotfiles any supported shell might source; the handler filters this to the ones that exist so the
- *  pure target builder can pick those the active shell actually reads. */
-export const PROFILE_CANDIDATES = ['.zshrc', '.zprofile', '.bashrc', '.bash_profile', '.profile', '.kshrc'];
+/** Dotfiles any supported shell might source; the handler passes the existing ones so the pure target
+ *  builder can pick those the active shell actually reads. */
+export const PROFILE_CANDIDATES = ['.zshrc', '.zprofile', '.bashrc', '.bash_profile', '.profile'];
 
 interface ShellProfileSpec {
   sources: string[];
@@ -30,8 +30,6 @@ const SHELL_PROFILES: Record<string, ShellProfileSpec> = {
   bash: { sources: ['.bashrc', '.bash_profile', '.profile'], create: ['.bashrc', '.profile'] },
   sh: { sources: ['.profile'], create: ['.profile'] },
   dash: { sources: ['.profile'], create: ['.profile'] },
-  ash: { sources: ['.profile'], create: ['.profile'] },
-  ksh: { sources: ['.kshrc', '.profile'], create: ['.profile'] },
 };
 
 /** The running build's launch facts, from which the install target is derived. */
