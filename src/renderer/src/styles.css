@@ -10,6 +10,8 @@
   --attn:#E5484D; --pass:#1F9D6B;
   /* destructive-action text: darker than --attn so it clears 4.5:1 on the light panel bg (WCAG 1.4.3). */
   --danger:#B11F26;
+  /* foreground for the filled .pill.danger fill — clears 4.5:1 on --danger per theme (WCAG 1.4.3). */
+  --danger-on:#ffffff;
   /* accessible small-text foregrounds: the bright accents above are kept for borders/dots/washes,
      but status text on --card needs ≥4.5:1, so these darker tones carry it (WCAG 1.4.3). */
   --signal-text:#006699; --pass-text:#157F54; --attn-text:#C02A2F;
@@ -26,6 +28,7 @@
   --text:#E8EEF4; --dim:#8FA0B2; --signal:#22C7FF; --signal-wash:rgba(34,199,255,.14);
   --attn:#FF6168; --pass:#3DDC97;
   --danger:#FF8A8E; /* light red clears 4.5:1 on the dark panel bg */
+  --danger-on:var(--bg); /* dark ink on the light-salmon fill clears 4.5:1 (white would not) */
   /* on the dark panel the bright accents already clear 4.5:1, so the text tokens reuse them. */
   --signal-text:var(--signal); --pass-text:var(--pass); --attn-text:var(--attn);
   --term-bg:#0A0F15; --term-text:#D5DEE8; --term-dim:#65727F;
@@ -458,8 +461,9 @@ button:hover { border-color:var(--dim); }
 /* Terminate (#26): the strip control reads as a destructive action with the design system's reserved
    --danger treatment — outlined (danger text + border) on the panel bg, distinct from the normal
    progression controls (mirrors the two-step todo-delete affordance). The confirmation's primary
-   action is the filled-danger .pill.danger. White on --danger clears 4.5:1 (WCAG 1.4.3). */
+   action is the filled-danger .pill.danger; its --danger-on foreground clears 4.5:1 on the fill in
+   both themes (WCAG 1.4.3) — a fixed white fails on the dark theme's light-salmon --danger. */
 .flowstrip .flow-terminate { color:var(--danger); border-color:var(--danger); background:transparent; }
 .flowstrip .flow-terminate:hover { border-color:var(--danger); }
-.pill.danger { background:var(--danger); color:#fff; border-color:transparent; }
+.pill.danger { background:var(--danger); color:var(--danger-on); border-color:transparent; }
 .pill.danger:hover { border-color:transparent; }
