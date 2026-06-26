@@ -166,10 +166,6 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
     return button;
   }
 
-  /** The destructive Terminate control (#26): visible only in_progress/done and only when the
-   *  composition root injected the confirmation seam. Activation routes to `onTerminate` with the
-   *  current repo; the confirm closure it hands over drives `terminate` and repaints — both guarded
-   *  against a cwd move while the confirmation is open (§16.3), mirroring controlButton. */
   function terminateButton(): HTMLButtonElement {
     const button = doc.createElement('button');
     button.className = 'flow-terminate pill';

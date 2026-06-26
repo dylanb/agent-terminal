@@ -211,12 +211,9 @@ export function createAuditRecorder(deps: AuditRecorderDeps): AuditRecorder {
       try {
         const file = currentFile(repoKey);
         if (file) appendFileSync(file, terminateEvents(auditTimestamp(now())).map(serializeDoc).join(''));
-        // Finalize: drop the in-memory slot + per-run loop baseline and remove the restart-surviving
-        // pointer (§25.4), so neither this recorder nor a relaunched one appends to the abandoned run
-        // and the next start opens a fresh file.
         open.delete(repoKey);
         lastLoop.delete(repoKey);
-        rmSync(pointerPath(repoKey), { force: true });
+        rmSync(pointerPath(repoKey), { force: true }); // §25.4 restart-surviving run pointer
       } catch (e) {
         log('audit recordTerminate failed', e);
       }
