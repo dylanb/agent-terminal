@@ -16,7 +16,8 @@ import {
 import { createInjector } from './inject';
 import { createMonitorEventStore } from './eventStore';
 import { createShadowModel } from './shadow';
-import { spawnAgentShell, spawnCwd } from './pty';
+import { spawnAgentShell } from './pty';
+import { resolveLaunchRoot, homeFallback, APP_LAUNCH_DIR_ENV } from './launchRoot';
 import { createOutputGate } from './outputGate';
 import { resolveRendererTarget } from './rendererTarget';
 import { installNavigationGuards } from './windowGuards';
@@ -102,8 +103,11 @@ async function createWindow(): Promise<void> {
   installNavigationGuards(win.webContents);
 
   const config = resolveRuntimeConfig(process.env);
+  // §23.4
+  const launchRoot = resolveLaunchRoot(process.env[APP_LAUNCH_DIR_ENV], homeFallback(process.env, os.homedir()));
   const ptyProcess = await spawnAgentShell({
     integrationScriptPath: config.shellIntegration ? SHELL_INTEGRATION_SCRIPT : undefined,
+    cwd: launchRoot,
   });
   const store = createMonitorEventStore();
   // §16.6: the only state that lives outside the repo (userData).
@@ -166,7 +170,7 @@ async function createWindow(): Promise<void> {
   const cwdTracker = createCwdTracker({ onOsc: (id, cb) => shadow.onOsc(id, cb) });
   // Before the first OSC 7, fall back to bash's spawn dir — never the Electron process dir — so the
   // viewer starts in sync with the shell (§20.1).
-  const viewerCwd = (): string => cwdTracker.cwd() ?? spawnCwd(process.env, os.homedir());
+  const viewerCwd = (): string => cwdTracker.cwd() ?? launchRoot;
   // Live artifact reload (§20.1): watch the viewer's tree root so an on-disk edit re-broadcasts over a
   // dedicated viewer:onChanged seam (the renderer re-pulls tree/file). One watcher, re-rooted on each
   // cwd move — the tree root follows the shell like discovery does.
@@ -255,7 +259,7 @@ async function createWindow(): Promise<void> {
   });
   // The same global fallback dir the definition uses, so on-demand template instantiation (§18.6)
   // resolves against a global flow's templates too.
-  const flowGlobalDir = spawnCwd(process.env, os.homedir());
+  const flowGlobalDir = launchRoot;
   const flow = createFlowManager({
     globalDir: flowGlobalDir,
     onEnterStep: (step, inputs) => flowEntryActions(step, inputs),
@@ -426,7 +430,7 @@ async function createWindow(): Promise<void> {
       // after the first OSC 7 learns the repo key only by asking. Falls back to the spawn cwd (else
       // todos no-op for lack of a key), mirroring viewerCwd (§20.1).
       [CH.monitorCurrentRepo]: () =>
-        currentRepoInfo(cwdTracker.cwd(), cwdTracker.repoKey(), spawnCwd(process.env, os.homedir())),
+        currentRepoInfo(cwdTracker.cwd(), cwdTracker.repoKey(), launchRoot),
       [CH.uiGetSettings]: () => uiSettings.get(),
       [CH.clipboardRead]: (): string => clipboard.readText(), // Paste source (§7.7)
       [CH.monitorCommands]: (_e, m): CommandSummary[] =>
