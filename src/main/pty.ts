@@ -16,9 +16,8 @@ export interface SpawnConfig {
   };
 }
 
-/** The shell the session spawns or the installer routes its PATH edit to: an explicit `APP_SHELL`
- *  override, else `$SHELL`, else `loginShell` (the password-database shell, for a GUI/launchd launch
- *  whose env carries no `$SHELL`), else `bash` as a last resort (§5, v2.79). */
+/** The shell the session spawns or the installer routes its PATH edit to: `APP_SHELL`, else `$SHELL`,
+ *  else `loginShell` (passwd-db shell, for a GUI launch whose env has no `$SHELL`), else `bash` (§5, v2.79). */
 export function resolveShellPath(env: NodeJS.ProcessEnv, loginShell?: string): string {
   return env.APP_SHELL || env.SHELL || loginShell || 'bash';
 }

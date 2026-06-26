@@ -189,6 +189,7 @@ describe('installCliShim on a GUI/launchd launch with no $SHELL in the env (§23
     const res = installCliShim(buildInstallTarget(guiRuntime('/bin/zsh')));
     expect(asOk(res).path).toBe(join(root, '.agent-terminal', 'bin', CLI_COMMAND_NAME));
     expect(existsSync(join(root, '.zshrc'))).toBe(true);
+    expect(existsSync(join(root, '.profile'))).toBe(false);
 
     const resolved = execFileSync('sh', ['-c', `. "${join(root, '.zshrc')}"; command -v ${CLI_COMMAND_NAME}`], {
       env: { HOME: root, PATH: '/usr/bin:/bin' },
