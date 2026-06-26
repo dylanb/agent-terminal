@@ -2385,7 +2385,7 @@ test('Terminate abandons the flow: resets to Not started, clears todos + capture
   await expect(page.locator('#monitor-blocks [data-event-id]')).toHaveCount(1);
 
   // Todos in active, in-progress, and completed states (AC7): Send marks in_progress; the checkbox done.
-  await page.locator('#tab-todo').click();
+  await openQuickSend('todo'); // the drawer starts closed after a relaunch (§22.2)
   for (const t of ['todo-active', 'todo-progress', 'todo-done']) {
     await page.locator('#todo-new').fill(t);
     await page.locator('#todo-add-btn').click();
@@ -2402,7 +2402,7 @@ test('Terminate abandons the flow: resets to Not started, clears todos + capture
 
   // Flow returns to Not started (AC5), todos gone (AC7), capture cleared (AC6).
   await expect(flowControl()).toHaveText('Start');
-  await expect(page.locator('.todo')).toHaveCount(0);
+  await expect(page.locator('#todo-list .todo')).toHaveCount(0); // the real list, not gate-panel step pills (also .todo)
   await expect(page.locator('#monitor-blocks [data-event-id]')).toHaveCount(0);
 
   // Audit gained a timestamped termination entry (AC8).
@@ -2437,8 +2437,8 @@ test('Terminate with no todos: the confirmation states zero and still resets to 
   await flowControl().click();
   await expect(flowControl()).toHaveText('Advance');
 
-  await page.locator('#tab-todo').click();
-  await expect(page.locator('.todo')).toHaveCount(0);
+  await openQuickSend('todo'); // the drawer starts closed after a relaunch (§22.2)
+  await expect(page.locator('#todo-list .todo')).toHaveCount(0); // the real list, not gate-panel step pills (also .todo)
 
   await flowTerminate().click();
   await expect(confirmModal()).toBeVisible();
@@ -2492,7 +2492,7 @@ test('after Terminate and relaunch the flow stays Not started and the next start
   await expect(flowControl()).toHaveText('Start', { timeout: 10_000 });
   await flowControl().click();
   await expect(flowControl()).toHaveText('Advance');
-  await page.locator('#tab-todo').click();
+  await openQuickSend('todo'); // the drawer starts closed after a relaunch (§22.2)
   await page.locator('#todo-new').fill('persist-term-todo');
   await page.locator('#todo-add-btn').click();
   await expect(page.locator('.todo').filter({ hasText: 'persist-term-todo' })).toHaveCount(1);
