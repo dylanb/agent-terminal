@@ -89,6 +89,28 @@ describe('confirm dialog (#26 AC3/AC4/AC13)', () => {
     expect(document.activeElement).toBe(cancelBtn());
   });
 
+  it('traps Tab within the dialog (AC13a / WCAG 2.4.3): last wraps to first, first wraps to last', () => {
+    createConfirmDialog(host).render(opts());
+    const first = cancelBtn()!;
+    const last = confirmBtn()!;
+    last.focus();
+    last.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true }));
+    expect(document.activeElement).toBe(first);
+    first.focus();
+    first.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Tab', shiftKey: true, bubbles: true, cancelable: true }),
+    );
+    expect(document.activeElement).toBe(last);
+  });
+
+  it('Shift+Tab from the dialog container itself wraps to the last action (AC13b / WCAG 2.4.3)', () => {
+    createConfirmDialog(host).render(opts());
+    const d = dialog()!;
+    expect(document.activeElement).toBe(d); // focus opens on the container, nothing pre-focused
+    d.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', shiftKey: true, bubbles: true, cancelable: true }));
+    expect(document.activeElement).toBe(confirmBtn());
+  });
+
   it('render(null) closes an open dialog', () => {
     const d = createConfirmDialog(host);
     d.render(opts());

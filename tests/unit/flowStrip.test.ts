@@ -822,6 +822,12 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
       expect(terminate()).not.toBeNull();
     });
 
+    it('is absent when the confirmation seam is not wired, even while in_progress (AC2)', async () => {
+      createFlowStrip(host, fakeFlow('in_progress')).onRepoChanged('/repo');
+      await vi.waitFor(() => expect(control()!.textContent).toBe('Advance'));
+      expect(terminate()).toBeNull();
+    });
+
     it('is absent (not in the DOM/accessibility tree) while not_started (AC2)', async () => {
       const deps = { ...fakeFlow('not_started'), onTerminate: vi.fn() };
       createFlowStrip(host, deps).onRepoChanged('/repo');

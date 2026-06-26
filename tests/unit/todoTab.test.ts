@@ -45,7 +45,7 @@ function baseMonitor(handlers: {
   return {
     onEvent: vi.fn(),
     onEventRemoved: vi.fn(),
-      onCleared: vi.fn(),
+    onCleared: vi.fn(),
     onUpdate: vi.fn(),
     onExit: vi.fn(),
     onCommandsChanged: vi.fn(),
