@@ -507,11 +507,10 @@ async function createWindow(): Promise<void> {
         isValidFlowRequest(m) ? recordedTransition(m.repoKey, 'restart', () => flow.restart(m.repoKey)) : flowRequestError(),
       [CH.flowUndo]: (_e, m) =>
         isValidFlowRequest(m) ? recordedTransition(m.repoKey, 'undo', () => flow.undo(m.repoKey)) : flowRequestError(),
-      // Terminate (#26): one user-confirmed action — reset the flow to not_started (discarding carried
-      // inputs), clear the repo's todos + the global capture tab, and write a finalizing termination
-      // entry into the audit run. Inert from not_started / load-error (the control is absent there).
-      // The audit write is best-effort (§25.7) and never blocks the reset, so AC5–AC7 hold uncondition-
-      // ally. No terminal process is signalled and no external agent-loop engine state is touched.
+      // Terminate (#26): inert from not_started / load-error (the control is absent there, AC2) — guard
+      // on the pre-state so a malformed/raced request never clears on an error flow. The audit write is
+      // best-effort (§25.7) and never blocks the reset (AC5–AC7 hold unconditionally). Per AC9/AC10
+      // nothing here signals the terminal process or touches external agent-loop engine state.
       [CH.flowTerminate]: (_e, m) => {
         if (!isValidFlowRequest(m)) return flowRequestError();
         const before = flow.state(m.repoKey);

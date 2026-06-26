@@ -354,6 +354,15 @@ describe('audit recorder — terminate finalization (§25.4 / #26)', () => {
     expect(existsSync(auditRepoDir(root, repo))).toBe(false);
   });
 
+  it('never throws into the flow path when appending the termination event fails (§25.7 / AC8)', () => {
+    const rec = recorder();
+    rec.recordTransition(repo, 'start', NOT_STARTED, IN_PROGRESS);
+    const file = join(auditRepoDir(root, repo), runFiles()[0]);
+    rmSync(file);
+    mkdirSync(file); // a directory at the run-file path makes appendFileSync throw EISDIR
+    expect(() => rec.recordTerminate(repo)).not.toThrow();
+  });
+
   it('finalizes the run pointer so a restart-rehydrated recorder opens a fresh run on the next start (AC12)', () => {
     recorder().recordTransition(repo, 'start', NOT_STARTED, IN_PROGRESS);
     recorder().recordTerminate(repo); // a fresh recorder (app restart) reads the pointer, then clears it

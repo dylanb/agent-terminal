@@ -1704,12 +1704,14 @@ stateDiagram-v2
     Recording --> Recording : flow done appends completed but stays open
     Recording --> Recording : go back after done appends to same file
     Recording --> Recording : new flow start closes current then opens new file
+    Recording --> Idle : terminate appends flow.terminated then finalizes
 ```
 
 - A fresh `flow:start` **opens a new file** for the run (header document + `flow.started`), **closing** any current run for that repo.
 - `advance` / `restart` / `undo` **append** events to the current run's file — no rewrite of prior content.
 - Reaching `done` records a `flow.completed` event but **keeps the file open**, so completing a flow and then going back (`undo` / `restart`) continues to append to the **same** file.
 - The next `flow:start` **closes** the current run and opens a new file.
+- A `flow:terminate` (#26) appends a `flow.terminated` event and **finalizes** the run — closing it and clearing the restart-surviving pointer — so the next `flow:start` opens a new file regardless of whether a run was open at terminate time. Best-effort like every other write (§25.7): it never blocks or rolls back the flow reset.
 - The current-run pointer **survives an app restart**: after a restart mid-run, append-on-go-back targets the same run file rather than orphaning it and opening a new one. (How the pointer persists is an implementation choice.)
 - TODO events (`todo.*`) are recorded **only while a run is open** for the repo; with no open run, a todo edit records nothing.
 
@@ -1723,6 +1725,7 @@ Every event carries an ISO-8601 UTC `ts`.
 - `flow.status` — `{ from, to }` across `not_started` / `in_progress` / `done`.
 - `step.entered` — a new step became active within a running flow.
 - `flow.completed` — the terminal step was reached (the file stays open for append-on-go-back).
+- `flow.terminated` — the run was deliberately abandoned (#26 Terminate); the timeline folds back to `not_started` and the run is finalized so the next start opens a new one.
 - `todo.created` — `{ id, text }`.
 - `todo.status` — `{ id, from, to }` across `active` / `in_progress` / `done`.
 - `todo.text` — `{ id, text }` after an edit.
