@@ -2521,3 +2521,85 @@ test('after Terminate and relaunch the flow stays Not started and the next start
   rmSync(repo, { recursive: true, force: true });
   rmSync(home, { recursive: true, force: true });
 });
+
+test('flow:terminate is inert from Not started: resolves to the benign view and clears nothing (#26 AC2 handler guard)', async () => {
+  const repo = seedFlowRepo('agent-term-e2e-term-inert-', 'groom');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-term-inert-home-'));
+  await app.close();
+  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
+  page = await app.firstWindow();
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  // Capture the app's own resolved repo key (§16.3) so the direct IPC call targets the live repo.
+  const repoKeyPromise = page.evaluate(
+    () => new Promise<string>((resolve) => window.monitor.onCwdChanged((m) => { if (m.repoKey) resolve(m.repoKey); })),
+  );
+  await typeCommand(`cd "${repo}"`);
+  await expect(flowControl()).toHaveText('Start', { timeout: 10_000 }); // not_started: the control is absent (AC2)
+  await expect(flowTerminate()).toHaveCount(0);
+  const repoKey = await repoKeyPromise;
+
+  // Seed state that a destructive terminate would wipe: a repo todo + a captured block.
+  await page.locator('#tab-todo').click();
+  await page.locator('#todo-new').fill('inert-guard-todo');
+  await page.locator('#todo-add-btn').click();
+  await expect(page.locator('.todo').filter({ hasText: 'inert-guard-todo' })).toHaveCount(1);
+  await page.evaluate(() => window.monitor.capture({ text: 'inert-guard captured', range: null, source: 'selection' }));
+  await expect(page.locator('#monitor-blocks [data-event-id]')).toHaveCount(1);
+
+  // Drive flow:terminate directly from not_started. The handler guard resolves to the benign current
+  // view; remove the guard and the machine rejects the transition → the invoke (and this evaluate) reject.
+  const status = await page.evaluate((k) => window.flow.terminate(k).then((v) => v.status), repoKey);
+  expect(status).toBe('not_started');
+
+  // Nothing cleared: flow still not_started, the todo and the capture both intact.
+  await expect(flowControl()).toHaveText('Start');
+  await expect(page.locator('.todo').filter({ hasText: 'inert-guard-todo' })).toHaveCount(1);
+  await expect(page.locator('#monitor-blocks [data-event-id]')).toHaveCount(1);
+
+  await app.close();
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+});
+
+test('flow:terminate is inert in the load-error state: it never wipes todos or capture (#26 AC2 handler guard)', async () => {
+  // A .git repo with NO flow.yaml + empty $HOME ⇒ the flow loads to the error state (§18.1). Unlike
+  // not_started, the machine's terminate does NOT throw here — so without the pre-state guard the
+  // handler would run todoStore.clear + store.clear and wipe an error-flow repo's todos and capture.
+  const repo = mkdtempSync(join(tmpdir(), 'agent-term-e2e-term-err-'));
+  mkdirSync(join(repo, '.git'), { recursive: true });
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-term-err-home-'));
+  await app.close();
+  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
+  page = await app.firstWindow();
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  const repoKeyPromise = page.evaluate(
+    () => new Promise<string>((resolve) => window.monitor.onCwdChanged((m) => { if (m.repoKey) resolve(m.repoKey); })),
+  );
+  await typeCommand(`cd "${repo}"`);
+  await expect(page.locator('#flow-strip .flow-error')).toHaveText(/.+/, { timeout: 10_000 }); // error state
+  await expect(flowTerminate()).toHaveCount(0); // the control is absent in load-error too (AC2)
+  const repoKey = await repoKeyPromise;
+
+  // Seed repo state that a destructive terminate would wipe.
+  await page.locator('#tab-todo').click();
+  await page.locator('#todo-new').fill('err-guard-todo');
+  await page.locator('#todo-add-btn').click();
+  await expect(page.locator('.todo').filter({ hasText: 'err-guard-todo' })).toHaveCount(1);
+  await page.evaluate(() => window.monitor.capture({ text: 'err-guard captured', range: null, source: 'selection' }));
+  await expect(page.locator('#monitor-blocks [data-event-id]')).toHaveCount(1);
+
+  // Drive flow:terminate directly from the error state: the guard returns the benign error view and
+  // clears nothing. Remove the guard and the todo + capture below would be wiped.
+  const status = await page.evaluate((k) => window.flow.terminate(k).then((v) => v.status), repoKey);
+  expect(status).toBe('error');
+
+  await expect(page.locator('#flow-strip .flow-error')).toHaveText(/.+/); // still error
+  await expect(page.locator('.todo').filter({ hasText: 'err-guard-todo' })).toHaveCount(1);
+  await expect(page.locator('#monitor-blocks [data-event-id]')).toHaveCount(1);
+
+  await app.close();
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+});
