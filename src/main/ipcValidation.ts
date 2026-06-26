@@ -86,8 +86,8 @@ export function isValidCaptureLast(m: unknown): m is CaptureLastMsg {
   return isRecord(m) && isLiveSession(m);
 }
 
-export function isValidCliInstall(_m: unknown): _m is CliInstallMsg {
-  return false;
+export function isValidCliInstall(m: unknown): m is CliInstallMsg {
+  return isRecord(m) && isLiveSession(m);
 }
 
 export function isValidDismiss(m: unknown): m is DismissMsg {

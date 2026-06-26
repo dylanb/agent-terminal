@@ -141,7 +141,7 @@ const flowApi: FlowApi = {
 };
 
 export const cliApi: CliApi = {
-  install: () => Promise.resolve({ ok: false } as CliInstallResult),
+  install: () => ipcRenderer.invoke(CH.cliInstall, { sessionId: SESSION_ID }) as Promise<CliInstallResult>,
 };
 
 contextBridge.exposeInMainWorld('term', termApi);

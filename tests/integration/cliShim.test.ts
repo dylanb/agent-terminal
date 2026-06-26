@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, writeFileSync, chmodSync, existsSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, chmodSync, existsSync, readFileSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { generateShim } from '../../src/main/cliShim';
@@ -14,6 +14,7 @@ let work: string;
 let recOut: string;
 let shimPath: string;
 let fixtureCwd: string;
+let realCwd: string;
 
 /** A stand-in "app binary" that records the APP_LAUNCH_DIR it was launched with, then exits. */
 function recorderShim(extra = ''): void {
@@ -44,6 +45,7 @@ beforeEach(() => {
   work = mkdtempSync(join(tmpdir(), 'agent-term-shim-'));
   recOut = join(work, 'launch-target.txt');
   fixtureCwd = mkdtempSync(join(tmpdir(), 'agent-term-shim-cwd-'));
+  realCwd = realpathSync(fixtureCwd);
 });
 
 afterEach(() => {
@@ -54,14 +56,14 @@ afterEach(() => {
 describe('shim forwarding (§23.4)', () => {
   it('forwards the invoking shell cwd as the target when given no argument', async () => {
     recorderShim();
-    expect(resolve(await runShim([]))).toBe(resolve(fixtureCwd));
+    expect(await runShim([])).toBe(realCwd);
   });
 
   it('resolves a relative argument against the invoking shell cwd, not the launched process cwd', async () => {
     mkdirSync(join(fixtureCwd, 'sub'));
     recorderShim();
-    expect(resolve(await runShim(['sub']))).toBe(join(fixtureCwd, 'sub'));
-    expect(resolve(await runShim(['./sub']))).toBe(join(fixtureCwd, 'sub'));
+    expect(await runShim(['sub'])).toBe(join(realCwd, 'sub'));
+    expect(resolve(await runShim(['./sub']))).toBe(join(realCwd, 'sub'));
   });
 
   it('passes an absolute argument through unchanged', async () => {
@@ -83,7 +85,7 @@ describe('shim forwarding (§23.4)', () => {
     execFileSync(shimPath, [], { cwd: fixtureCwd, timeout: 5000 });
     expect(existsSync(recOut)).toBe(false);
     writeFileSync(go, '');
-    expect(resolve(await readWhenReady(recOut))).toBe(resolve(fixtureCwd));
+    expect(await readWhenReady(recOut)).toBe(realCwd);
   });
 });
 
@@ -92,7 +94,7 @@ describe('shim injection safety (§23.4 trust boundary, CWE-78)', () => {
     recorderShim();
     const evil = 'a b; touch evil-marker';
     const got = await runShim([evil]);
-    expect(got).toBe(join(fixtureCwd, evil));
+    expect(got).toBe(join(realCwd, evil));
     expect(existsSync(join(fixtureCwd, 'evil-marker'))).toBe(false);
     expect(existsSync(join(work, 'evil-marker'))).toBe(false);
   });
@@ -101,12 +103,12 @@ describe('shim injection safety (§23.4 trust boundary, CWE-78)', () => {
     recorderShim();
     const evil = '$(touch pwned)';
     const got = await runShim([evil]);
-    expect(got).toBe(join(fixtureCwd, evil));
+    expect(got).toBe(join(realCwd, evil));
     expect(existsSync(join(fixtureCwd, 'pwned'))).toBe(false);
   });
 
   it('treats a leading -- argument as a directory operand, not a launcher flag', async () => {
     recorderShim();
-    expect(await runShim(['--foo'])).toBe(join(fixtureCwd, '--foo'));
+    expect(await runShim(['--foo'])).toBe(join(realCwd, '--foo'));
   });
 });
