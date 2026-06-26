@@ -52,9 +52,9 @@ export function createModalShell(host: HTMLElement, idPrefix: string): ModalShel
       modal.addEventListener('keydown', (e) => {
         if (e.key === 'Escape') return close();
         if (e.key === 'Tab') {
-          const f = [...modal.querySelectorAll<HTMLElement>('input,button')].filter(
-            (el) => !el.hasAttribute('disabled'),
-          );
+          const f = [
+            ...modal.querySelectorAll<HTMLElement>('a[href],button,input,textarea,select,[tabindex]'),
+          ].filter((el) => !el.hasAttribute('disabled') && el.getAttribute('tabindex') !== '-1');
           if (f.length === 0) return;
           const first = f[0];
           const last = f[f.length - 1];
