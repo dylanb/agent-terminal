@@ -2540,7 +2540,7 @@ test('flow:terminate is inert from Not started: resolves to the benign view and 
   const repoKey = await repoKeyPromise;
 
   // Seed state that a destructive terminate would wipe: a repo todo + a captured block.
-  await page.locator('#tab-todo').click();
+  await openQuickSend('todo'); // the drawer starts closed after a relaunch (§22.2)
   await page.locator('#todo-new').fill('inert-guard-todo');
   await page.locator('#todo-add-btn').click();
   await expect(page.locator('.todo').filter({ hasText: 'inert-guard-todo' })).toHaveCount(1);
@@ -2583,7 +2583,7 @@ test('flow:terminate is inert in the load-error state: it never wipes todos or c
   const repoKey = await repoKeyPromise;
 
   // Seed repo state that a destructive terminate would wipe.
-  await page.locator('#tab-todo').click();
+  await openQuickSend('todo'); // the drawer starts closed after a relaunch (§22.2)
   await page.locator('#todo-new').fill('err-guard-todo');
   await page.locator('#todo-add-btn').click();
   await expect(page.locator('.todo').filter({ hasText: 'err-guard-todo' })).toHaveCount(1);
