@@ -6,6 +6,7 @@ import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join, basename } from 'node:path';
 import { CH, SESSION_ID } from '../../src/shared/ipc';
+import { CLI_COMMAND_NAME } from '../../src/main/cliShim';
 import { parseAuditStream, type AuditEvent } from '../../src/shared/audit';
 
 // Full-loop e2e (§12 acceptance): real Electron, real node-pty, real bash.
@@ -2549,7 +2550,7 @@ test('the in-app install action puts an executable agent-terminal on PATH; the i
     await expect(page.locator('[data-viewpane="4"]')).toBeVisible();
     await page.locator('#cli-install-view button').click();
 
-    const cmd = join(home, '.agent-terminal', 'bin', 'agent-terminal');
+    const cmd = join(home, '.agent-terminal', 'bin', CLI_COMMAND_NAME);
     await expect.poll(() => existsSync(cmd)).toBe(true);
     expect(isExecutable(cmd)).toBe(true);
     await expect(page.locator('#cli-install-view [role="status"]')).toContainText('agent-terminal');
@@ -2585,7 +2586,7 @@ test('the installed shim launches a genuine second instance rooted at the target
   try {
     await page.locator('[data-viewbtn="4"]').click();
     await page.locator('#cli-install-view button').click();
-    const shim = join(home, '.agent-terminal', 'bin', 'agent-terminal');
+    const shim = join(home, '.agent-terminal', 'bin', CLI_COMMAND_NAME);
     await expect.poll(() => existsSync(shim)).toBe(true);
 
     before = electronMainPids();

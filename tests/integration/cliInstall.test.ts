@@ -3,8 +3,9 @@ import { execFileSync } from 'node:child_process';
 import { mkdtempSync, writeFileSync, statSync, readFileSync, existsSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { installCliShim, type InstallTarget } from '../../src/main/cliInstall';
+import { buildInstallTarget, installCliShim, type InstallTarget } from '../../src/main/cliInstall';
 import { CLI_COMMAND_NAME, type LaunchInvocation } from '../../src/main/cliShim';
+import type { CliInstallResult } from '../../src/shared/ipc';
 
 // Installer behavior (§23.4 / #25): drive the real installer through its injected location seam with
 // real fs. Assert the OBSERVABLE outcomes the ACs name — runnable from a new shell, idempotent
@@ -13,6 +14,16 @@ import { CLI_COMMAND_NAME, type LaunchInvocation } from '../../src/main/cliShim'
 let root: string;
 const inv = (execPath: string): LaunchInvocation => ({ execPath, appArgs: [] });
 const isExecutable = (p: string): boolean => (statSync(p).mode & 0o111) !== 0;
+const asOk = (res: CliInstallResult): { ok: true; path: string } => {
+  expect(res.ok).toBe(true);
+  if (!res.ok) throw new Error(res.error ?? 'expected ok');
+  return res;
+};
+const asErr = (res: CliInstallResult): { ok: false; error?: string } => {
+  expect(res.ok).toBe(false);
+  if (res.ok) throw new Error('expected error');
+  return res;
+};
 
 beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), 'agent-term-install-'));
@@ -28,9 +39,8 @@ describe('installCliShim happy path', () => {
     writeFileSync(profile, 'export FOO=1\n');
     const res = installCliShim({ binDir, profiles: [profile], currentPath: '/usr/bin', invocation: inv('/app/x') });
 
-    expect(res.ok).toBe(true);
     const cmd = join(binDir, CLI_COMMAND_NAME);
-    expect(res.path).toBe(cmd);
+    expect(asOk(res).path).toBe(cmd);
     expect(isExecutable(cmd)).toBe(true);
 
     const resolved = execFileSync('sh', ['-c', `. "${profile}"; command -v ${CLI_COMMAND_NAME}`], {
@@ -75,7 +85,8 @@ describe('installCliShim idempotency (reconcile to the current build)', () => {
     expect(shim).not.toContain('/builds/one/app');
 
     const profileText = readFileSync(profile, 'utf8');
-    expect(profileText.match(new RegExp(binDir.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'))?.length).toBe(1);
+    expect(profileText.match(/agent-terminal launcher >>>/g)?.length).toBe(1);
+    expect(profileText.match(/agent-terminal launcher <<</g)?.length).toBe(1);
   });
 });
 
@@ -92,7 +103,73 @@ describe('installCliShim resilience to a hand-edited profile', () => {
       encoding: 'utf8',
     }).trim();
     expect(resolved).toBe(join(binDir, CLI_COMMAND_NAME));
-    expect(readFileSync(profile, 'utf8').match(/agent-terminal launcher <<</g)?.length).toBe(1);
+    const text = readFileSync(profile, 'utf8');
+    expect(text.match(/agent-terminal launcher >>>/g)?.length).toBe(1);
+    expect(text.match(/agent-terminal launcher <<</g)?.length).toBe(1);
+  });
+});
+
+describe('installCliShim runtime idempotence (no duplicate PATH entry when a profile is sourced twice)', () => {
+  it('puts the bin directory on PATH only once even if its profile is sourced repeatedly', () => {
+    const binDir = join(root, 'bin');
+    const profile = join(root, '.profile');
+    writeFileSync(profile, '');
+    expect(installCliShim({ binDir, profiles: [profile], currentPath: '/usr/bin', invocation: inv('/app/x') }).ok).toBe(true);
+
+    const out = execFileSync('sh', ['-c', `. "${profile}"; . "${profile}"; printf '%s' "$PATH"`], {
+      env: { HOME: root, PATH: '/usr/bin:/bin' },
+      encoding: 'utf8',
+    });
+    expect(out.split(':').filter((seg) => seg === binDir).length).toBe(1);
+  });
+});
+
+describe('installCliShim quotes the bin directory in the profile (CWE-78)', () => {
+  it('puts a bin directory containing shell metacharacters on PATH literally, with no evaluation', () => {
+    const binDir = join(root, 'we ird$dir', 'bin');
+    const profile = join(root, '.profile');
+    writeFileSync(profile, '');
+    const res = installCliShim({ binDir, profiles: [profile], currentPath: '/usr/bin', invocation: inv('/app/x') });
+    expect(res.ok).toBe(true);
+
+    const resolved = execFileSync('sh', ['-c', `. "${profile}"; command -v ${CLI_COMMAND_NAME}`], {
+      env: { HOME: root, PATH: '/usr/bin:/bin' },
+      encoding: 'utf8',
+    }).trim();
+    expect(resolved).toBe(join(binDir, CLI_COMMAND_NAME));
+  });
+});
+
+describe('installCliShim targets the profile the active shell actually sources (§23.4 / #25)', () => {
+  const runtime = (shell: string): Parameters<typeof buildInstallTarget>[0] => ({
+    home: root,
+    shell,
+    currentPath: '/usr/bin',
+    execPath: '/app/x',
+    defaultApp: false,
+    cwd: root,
+    existingProfiles: [],
+  });
+
+  it('writes the launcher into the rc file a fresh zsh sources, never an unsourced .profile', () => {
+    const res = installCliShim(buildInstallTarget(runtime('/bin/zsh')));
+    expect(res.ok).toBe(true);
+    expect(existsSync(join(root, '.zshrc'))).toBe(true);
+    expect(existsSync(join(root, '.profile'))).toBe(false);
+
+    const resolved = execFileSync('sh', ['-c', `. "${join(root, '.zshrc')}"; command -v ${CLI_COMMAND_NAME}`], {
+      env: { HOME: root, PATH: '/usr/bin:/bin' },
+      encoding: 'utf8',
+    }).trim();
+    expect(resolved).toBe(join(root, '.agent-terminal', 'bin', CLI_COMMAND_NAME));
+  });
+
+  it('reports a visible error for a shell the export block cannot reach (fish), writing no shell profile', () => {
+    const res = installCliShim(buildInstallTarget(runtime('/usr/bin/fish')));
+    expect(asErr(res).error).toBeTruthy();
+    expect(existsSync(join(root, '.zshrc'))).toBe(false);
+    expect(existsSync(join(root, '.profile'))).toBe(false);
+    expect(existsSync(join(root, '.config', 'fish', 'config.fish'))).toBe(false);
   });
 });
 
@@ -102,8 +179,7 @@ describe('installCliShim error path (no partial-success state)', () => {
     writeFileSync(aFile, 'i am a file\n');
     const binDir = join(aFile, 'bin');
     const res = installCliShim({ binDir, profiles: [join(root, '.profile')], currentPath: '/usr/bin', invocation: inv('/app/x') });
-    expect(res.ok).toBe(false);
-    expect(res.error).toBeTruthy();
+    expect(asErr(res).error).toBeTruthy();
     expect(existsSync(binDir)).toBe(false);
   });
 
@@ -118,7 +194,6 @@ describe('installCliShim error path (no partial-success state)', () => {
       currentPath: '/usr/bin',
       invocation: inv('/app/x'),
     });
-    expect(res.ok).toBe(false);
-    expect(res.error).toBeTruthy();
+    expect(asErr(res).error).toBeTruthy();
   });
 });
