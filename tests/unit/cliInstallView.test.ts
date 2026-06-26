@@ -48,4 +48,22 @@ describe('cli install view organism (§23.4)', () => {
     await vi.waitFor(() => expect(status().textContent).toContain('boom'));
     expect(status().className).not.toMatch(/\bok\b/);
   });
+
+  it('announces a visible error when the install action throws', async () => {
+    const install = vi.fn(async (): Promise<CliInstallResult> => { throw new Error('ipc unavailable'); });
+    createCliInstall(host, deps({ install }));
+    button().click();
+    await vi.waitFor(() => expect(status().textContent).toContain('ipc unavailable'));
+    expect(status().className).not.toMatch(/\bok\b/);
+  });
+
+  it('re-enables the button after an install completes so a retry is possible', async () => {
+    let resolveInstall: (r: CliInstallResult) => void = () => {};
+    const install = vi.fn(() => new Promise<CliInstallResult>((r) => { resolveInstall = r; }));
+    createCliInstall(host, deps({ install }));
+    button().click();
+    await vi.waitFor(() => expect(button().disabled).toBe(true));
+    resolveInstall({ ok: true, path: '/p/agent-terminal' });
+    await vi.waitFor(() => expect(button().disabled).toBe(false));
+  });
 });

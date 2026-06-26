@@ -79,6 +79,23 @@ describe('installCliShim idempotency (reconcile to the current build)', () => {
   });
 });
 
+describe('installCliShim resilience to a hand-edited profile', () => {
+  it('still installs and adds exactly one complete block when a prior block lost its end marker', () => {
+    const binDir = join(root, 'bin');
+    const profile = join(root, '.profile');
+    writeFileSync(profile, '# >>> agent-terminal launcher >>>\nexport PATH="/stale/bin:$PATH"\nexport FOO=1\n');
+    const res = installCliShim({ binDir, profiles: [profile], currentPath: '/usr/bin', invocation: inv('/app/x') });
+    expect(res.ok).toBe(true);
+
+    const resolved = execFileSync('sh', ['-c', `. "${profile}"; command -v ${CLI_COMMAND_NAME}`], {
+      env: { HOME: root, PATH: '/usr/bin:/bin' },
+      encoding: 'utf8',
+    }).trim();
+    expect(resolved).toBe(join(binDir, CLI_COMMAND_NAME));
+    expect(readFileSync(profile, 'utf8').match(/agent-terminal launcher <<</g)?.length).toBe(1);
+  });
+});
+
 describe('installCliShim error path (no partial-success state)', () => {
   it('reports a visible error when the shim cannot be written', () => {
     const aFile = join(root, 'afile');
