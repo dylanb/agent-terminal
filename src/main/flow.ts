@@ -331,7 +331,16 @@ export function createFlowMachine(
       persist();
       return view();
     },
-    terminate: () => view(), // STUB (#26): no reset yet
+    terminate: () => {
+      if (status !== 'in_progress' && status !== 'done') {
+        throw new Error(`illegal flow transition: cannot terminate from ${status}`);
+      }
+      index = 0;
+      status = 'not_started';
+      inputs = {};
+      persist();
+      return view(); // not_started enters no step, so no onEnter (mirrors advance → done)
+    },
     provideInput: (values) => {
       requireStatus('in_progress', 'provideInput');
       inputs = { ...inputs, ...values };

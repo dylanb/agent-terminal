@@ -159,6 +159,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
       advance: vi.fn(),
       restart: vi.fn(),
       undo: vi.fn(),
+      terminate: vi.fn(),
       provideInput: vi.fn(),
       onStateChanged: noopSub,
     };
@@ -210,6 +211,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
       advance: vi.fn(),
       restart: vi.fn(),
       undo: vi.fn(),
+      terminate: vi.fn(),
       provideInput: vi.fn(),
       onStateChanged: noopSub,
     };
@@ -238,6 +240,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
       advance: vi.fn(),
       restart: vi.fn(),
       undo: vi.fn(),
+      terminate: vi.fn(),
       provideInput: vi.fn(),
       onStateChanged: vi.fn((cb: () => void) => {
         fire = cb;
@@ -268,6 +271,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
       advance: vi.fn(),
       restart: vi.fn(),
       undo: vi.fn(),
+      terminate: vi.fn(),
       provideInput: vi.fn(),
       onStateChanged: noopSub,
     };
@@ -307,6 +311,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
       advance: vi.fn(),
       restart: vi.fn(),
       undo: vi.fn(),
+      terminate: vi.fn(),
       provideInput: vi.fn(),
       onStateChanged: noopSub,
       loopPanelId: 'loop-panel',
@@ -340,6 +345,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
       advance: vi.fn(),
       restart: vi.fn(),
       undo: vi.fn(),
+      terminate: vi.fn(),
       provideInput: vi.fn(),
       onStateChanged: noopSub,
       // no loopPanelId → the strip must not bake in a document-level id (UI-STANDARDS §2.2 rule 1)
@@ -368,6 +374,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
       advance: vi.fn(),
       restart: vi.fn(),
       undo: vi.fn(),
+      terminate: vi.fn(),
       provideInput: vi.fn(),
       onStateChanged: noopSub,
     });
@@ -406,6 +413,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
       advance: vi.fn(),
       restart: vi.fn(),
       undo: vi.fn(),
+      terminate: vi.fn(),
       provideInput: vi.fn(),
       onStateChanged: noopSub,
     });
@@ -445,6 +453,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
       advance: vi.fn(),
       restart: vi.fn(),
       undo: vi.fn(),
+      terminate: vi.fn(),
       provideInput: vi.fn(),
       onStateChanged: noopSub,
       onLoopState: (loop: FlowStateView['loop'] | null, title: string) => seen.push({ status: loop?.status, title }),
@@ -482,6 +491,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
       advance: vi.fn(),
       restart: vi.fn(),
       undo: vi.fn(),
+      terminate: vi.fn(),
       provideInput,
       onStateChanged: noopSub,
       onPrompt: (prompt: FlowStateView['prompt'] | null, stepName: string, submit: (v: Record<string, string>) => void) => {
@@ -522,6 +532,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
       advance: vi.fn(),
       restart: vi.fn(),
       undo: vi.fn(),
+      terminate: vi.fn(),
       provideInput: vi.fn(),
       onStateChanged: noopSub,
       onPrompt: (prompt: FlowStateView['prompt'] | null) => {
@@ -555,6 +566,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
       advance: vi.fn(),
       restart: vi.fn(),
       undo: vi.fn(),
+      terminate: vi.fn(),
       provideInput,
       onStateChanged: noopSub,
       onPrompt: (prompt: FlowStateView['prompt'] | null, _stepName: string, submit: (v: Record<string, string>) => void) => {
@@ -592,6 +604,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
       advance: vi.fn(),
       restart: vi.fn(),
       undo: vi.fn(),
+      terminate: vi.fn(),
       provideInput: vi.fn(),
       onStateChanged: noopSub,
       onPrompt: (prompt: FlowStateView['prompt'] | null) => seen.push(prompt),
@@ -628,6 +641,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
       advance: vi.fn(),
       restart: vi.fn(),
       undo: vi.fn(),
+      terminate: vi.fn(),
       provideInput: vi.fn((): Promise<FlowStateView> => new Promise((r) => { resolveProvide = r; })),
       onStateChanged: noopSub,
       onPrompt: (prompt: FlowStateView['prompt'] | null, _s: string, submit: (v: Record<string, string>) => void) => {
@@ -669,6 +683,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
       advance: vi.fn(),
       restart: vi.fn(),
       undo: vi.fn(),
+      terminate: vi.fn(),
       provideInput: vi.fn(),
       onStateChanged: vi.fn((cb: () => void) => {
         fire = cb;
@@ -715,6 +730,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
       advance: vi.fn(),
       restart: vi.fn(),
       undo: vi.fn(),
+      terminate: vi.fn(),
       provideInput: vi.fn(),
       onStateChanged: noopSub,
     };

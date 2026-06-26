@@ -7,6 +7,7 @@ import { SAMPLE_FLOW, createGatePanel } from './flow';
 import { createFlowStrip, type FlowStrip } from './flowStrip';
 import { createLoopPanel } from './loopPanel';
 import { createFlowInputModal } from './flowInputModal';
+import { createConfirmDialog } from './confirmDialog';
 import { createAttentionCue } from './attentionCue';
 import { revealLoopReadout } from './loopReveal';
 import { createArtifacts, type Artifacts } from './artifacts';
@@ -97,6 +98,11 @@ if (flowStripHost) {
   // strip hands it the prompt + a submit closure; the modal collects values and submit calls provideInput.
   const modalHost = document.getElementById('flow-modal-host');
   const inputModal = modalHost ? createFlowInputModal(modalHost) : undefined;
+  // Terminate confirmation (#26): a separate destructive modal-dialog organism. The strip hands it the
+  // repo + a confirm closure; the root surfaces the repo's current todo count (window.monitor owns the
+  // count — the strip stays flow-only, §9.1) and gates the IPC call behind the user's confirm.
+  const confirmHost = document.getElementById('flow-confirm-host');
+  const confirmDialog = confirmHost ? createConfirmDialog(confirmHost) : undefined;
   const strip = createFlowStrip(flowStripHost, {
     ...window.flow,
     loopPanelId: loopPanelHost?.id, // instance-scoped aria-controls target
@@ -112,6 +118,22 @@ if (flowStripHost) {
       }
     },
     onPrompt: (prompt, stepName, submit) => inputModal?.render(prompt, stepName, submit),
+    onTerminate: confirmDialog
+      ? (repoKey, confirm) => {
+          void window.monitor
+            .todoList(repoKey)
+            .then((todos) => {
+              const n = todos.length; // deterministic activation-time count (#26 AC3)
+              confirmDialog.render({
+                title: 'Terminate flow',
+                message: `This abandons the flow and deletes ${n} todo${n === 1 ? '' : 's'} for this repository. The flow returns to Not started.`,
+                confirmLabel: 'Terminate',
+                onConfirm: confirm,
+              });
+            })
+            .catch(() => {}); // a rejected count keeps the dialog closed, never an unhandled rejection
+        }
+      : undefined,
   });
   flowStrip = strip;
   repo.onChange((info) => strip.onRepoChanged(info.repoKey));

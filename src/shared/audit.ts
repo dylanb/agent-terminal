@@ -132,10 +132,10 @@ export function lifecycleEvents(kind: TransitionKind, before: FlowLike, after: F
   return events;
 }
 
-/** The single event a flow Terminate produces (#26 / §25): a timestamped `flow.terminated`, from
- *  which the timeline reads not_started again. STUB — returns nothing until implemented. */
-export function terminateEvents(_ts: string): AuditEvent[] {
-  return [];
+/** The single event a flow Terminate produces (#26 / §25): a timestamped `flow.terminated`, distinct
+ *  from the lifecycle transitions, from which the reconstructed timeline reads not_started again. */
+export function terminateEvents(ts: string): AuditEvent[] {
+  return [{ ts, type: 'flow.terminated' }];
 }
 
 /** The events a todo-list mutation produces, from the before/after diff (§25.5). A pure reorder
@@ -223,6 +223,9 @@ export function reconstructTimeline(text: string): RunTimeline {
       case 'step.entered':
       case 'flow.completed':
         tl.flow.step = e.step;
+        break;
+      case 'flow.terminated':
+        tl.flow = { status: 'not_started', step: '' };
         break;
       case 'todo.created':
         tl.todos.push({ id: e.id, text: e.text, status: 'active' });

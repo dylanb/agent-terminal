@@ -454,3 +454,12 @@ button:hover { border-color:var(--dim); }
 .flow-modal .field input:focus-visible { outline:2px solid var(--signal); outline-offset:-1px; }
 .flow-modal .field .help { font-size:11px; color:var(--dim); margin-top:7px; line-height:1.4; }
 .flow-modal .mfoot { display:flex; justify-content:flex-end; gap:9px; margin-top:20px; }
+
+/* Terminate (#26): the strip control reads as a destructive action with the design system's reserved
+   --danger treatment — outlined (danger text + border) on the panel bg, distinct from the normal
+   progression controls (mirrors the two-step todo-delete affordance). The confirmation's primary
+   action is the filled-danger .pill.danger. White on --danger clears 4.5:1 (WCAG 1.4.3). */
+.flowstrip .flow-terminate { color:var(--danger); border-color:var(--danger); background:transparent; }
+.flowstrip .flow-terminate:hover { border-color:var(--danger); }
+.pill.danger { background:var(--danger); color:#fff; border-color:transparent; }
+.pill.danger:hover { border-color:transparent; }

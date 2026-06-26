@@ -40,6 +40,7 @@
     "src/renderer/src/attentionCue.ts",
     "src/renderer/src/loopReveal.ts",
     "src/renderer/src/flowInputModal.ts",
+    "src/renderer/src/confirmDialog.ts",
     "src/renderer/src/artifacts.ts",
     "src/renderer/src/viewerRender.ts",
     "src/renderer/src/terminal.ts",

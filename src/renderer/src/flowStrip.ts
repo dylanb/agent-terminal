@@ -166,6 +166,36 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
     return button;
   }
 
+  /** The destructive Terminate control (#26): visible only in_progress/done and only when the
+   *  composition root injected the confirmation seam. Activation routes to `onTerminate` with the
+   *  current repo; the confirm closure it hands over drives `terminate` and repaints — both guarded
+   *  against a cwd move while the confirmation is open (§16.3), mirroring controlButton. */
+  function terminateButton(): HTMLButtonElement {
+    const button = doc.createElement('button');
+    button.className = 'flow-terminate pill';
+    button.textContent = 'Terminate';
+    button.addEventListener('click', () => {
+      if (repoKey === null) return;
+      const key = repoKey;
+      deps.onTerminate?.(key, () => {
+        if (repoKey !== key) return;
+        button.disabled = true;
+        deps
+          .terminate(key)
+          .then((view) => {
+            if (repoKey !== key) return;
+            applyTransition(view);
+            window.dispatchEvent(new CustomEvent(FLOW_CHANGED_EVENT));
+          })
+          .catch(() => void refresh())
+          .finally(() => {
+            button.disabled = false;
+          });
+      });
+    });
+    return button;
+  }
+
   function render(state: FlowStateView): void {
     // Carry focus across the rebuild if the keyboard user was on the Loop read-out, rather than
     // dropping it to <body> (WCAG 2.4.3).
@@ -234,6 +264,12 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
     // distinct from Restart, which re-runs them.
     if (state.status === 'done') host.append(controlButton('Undo', 'undo'));
     host.append(controlButton(control.label, control.act));
+
+    // Terminate is offered only from in_progress/done (AC1/AC2) and only when the confirmation seam
+    // is wired — absent (not in the accessibility tree) otherwise.
+    if (deps.onTerminate && (state.status === 'in_progress' || state.status === 'done')) {
+      host.append(terminateButton());
+    }
 
     // The §19.3 busy refusal (and any transient notice) rides the transition response only; a later
     // state() re-pull carries none, so the line self-clears.

@@ -2357,3 +2357,139 @@ test('the theme toggle flips light/dark and persists across a reload (§16.6)', 
   await page.locator('#tg').click();
   await expect(html).toHaveAttribute('data-theme', 'light');
 });
+
+// ---- #26: Terminate — abandon a flow, resetting it to Not started ----
+
+const flowTerminate = () => page.locator('#flow-strip .flow-terminate');
+const confirmModal = () => page.locator('#flow-confirm-host .flow-modal');
+
+test('Terminate abandons the flow: resets to Not started, clears todos + capture + audit (#26 tracer)', async () => {
+  const repo = seedFlowRepo('agent-term-e2e-term-', 'groom');
+  // An external agent-loop engine file to prove Terminate never touches it (AC10).
+  mkdirSync(join(repo, '.agent-loop'), { recursive: true });
+  const engineFile = join(repo, '.agent-loop', 'state.yaml');
+  writeFileSync(engineFile, 'phase: impl\niteration: 3\n');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-term-home-'));
+  await app.close();
+  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
+  page = await app.firstWindow();
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await typeCommand(`cd "${repo}"`);
+  await expect(flowControl()).toHaveText('Start', { timeout: 10_000 });
+  await flowControl().click(); // Start → in_progress
+  await expect(flowControl()).toHaveText('Advance');
+
+  // Capture some terminal output into the (global) capture tab (AC6).
+  await page.evaluate(() => window.monitor.capture({ text: 'tracer captured output', range: null, source: 'selection' }));
+  await expect(page.locator('#monitor-blocks [data-event-id]')).toHaveCount(1);
+
+  // Todos in active, in-progress, and completed states (AC7): Send marks in_progress; the checkbox done.
+  await page.locator('#tab-todo').click();
+  for (const t of ['todo-active', 'todo-progress', 'todo-done']) {
+    await page.locator('#todo-new').fill(t);
+    await page.locator('#todo-add-btn').click();
+    await expect(page.locator('.todo').filter({ hasText: t })).toHaveCount(1);
+  }
+  await page.locator('.todo').filter({ hasText: 'todo-progress' }).getByRole('button', { name: 'Send todo to agent' }).click();
+  await page.locator('.todo').filter({ hasText: 'todo-done' }).getByRole('checkbox').click();
+
+  // Activate Terminate and confirm; the confirmation states the deterministic count (AC3).
+  await flowTerminate().click();
+  await expect(confirmModal()).toBeVisible();
+  await expect(confirmModal()).toContainText('3 todos');
+  await confirmModal().locator('.confirm').click();
+
+  // Flow returns to Not started (AC5), todos gone (AC7), capture cleared (AC6).
+  await expect(flowControl()).toHaveText('Start');
+  await expect(page.locator('.todo')).toHaveCount(0);
+  await expect(page.locator('#monitor-blocks [data-event-id]')).toHaveCount(0);
+
+  // Audit gained a timestamped termination entry (AC8).
+  await expect
+    .poll(() => (auditRunFiles(home, repo).length ? readAuditRun(home, repo, auditRunFiles(home, repo)[0]).events.map((e) => e.type) : []))
+    .toContain('flow.terminated');
+  const terminated = readAuditRun(home, repo, auditRunFiles(home, repo)[0]).events.find((e) => e.type === 'flow.terminated')!;
+  expect(terminated.ts).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+
+  // AC10: external agent-loop engine state untouched.
+  expect(readFileSync(engineFile, 'utf8')).toBe('phase: impl\niteration: 3\n');
+
+  // AC9: the shell process was neither interrupted nor killed — it still runs commands.
+  await typeCommand('echo still-alive-after-terminate');
+  await expect(termRows()).toContainText('still-alive-after-terminate');
+
+  await app.close();
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+});
+
+test('Terminate is keyboard-operable; focus moves into the dialog and Escape restores it (#26 AC13)', async () => {
+  const repo = seedFlowRepo('agent-term-e2e-term-kbd-', 'groom');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-term-kbd-home-'));
+  await app.close();
+  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
+  page = await app.firstWindow();
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await typeCommand(`cd "${repo}"`);
+  await expect(flowControl()).toHaveText('Start', { timeout: 10_000 });
+  await flowControl().click();
+  await expect(flowControl()).toHaveText('Advance');
+
+  await flowTerminate().focus();
+  await page.keyboard.press('Enter'); // operate by keyboard alone (WCAG 2.1.1)
+  await expect(confirmModal()).toBeVisible();
+  await expect(confirmModal()).toBeFocused(); // focus moved onto the dialog container (WCAG 2.4.3)
+
+  await page.keyboard.press('Escape'); // dismiss with no change (AC13c / AC4)
+  await expect(confirmModal()).toHaveCount(0);
+  await expect(flowControl()).toHaveText('Advance'); // unchanged
+  await expect(flowTerminate()).toBeFocused(); // focus restored to the Terminate control
+
+  await app.close();
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+});
+
+test('after Terminate and relaunch the flow stays Not started and the next start opens a new audit run (#26 AC12/AC8)', async () => {
+  const repo = seedFlowRepo('agent-term-e2e-term-persist-', 'groom');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-term-persist-home-'));
+  await app.close();
+  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
+  page = await app.firstWindow();
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await typeCommand(`cd "${repo}"`);
+  await expect(flowControl()).toHaveText('Start', { timeout: 10_000 });
+  await flowControl().click();
+  await expect(flowControl()).toHaveText('Advance');
+  await page.locator('#tab-todo').click();
+  await page.locator('#todo-new').fill('persist-term-todo');
+  await page.locator('#todo-add-btn').click();
+  await expect(page.locator('.todo').filter({ hasText: 'persist-term-todo' })).toHaveCount(1);
+
+  await flowTerminate().click();
+  await confirmModal().locator('.confirm').click();
+  await expect(flowControl()).toHaveText('Start');
+  await expect.poll(() => auditRunFiles(home, repo).length).toBe(1);
+
+  // Relaunch: the reset survives (AC12).
+  await app.close();
+  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
+  page = await app.firstWindow();
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+  await typeCommand(`cd "${repo}"`);
+  await expect(flowControl()).toHaveText('Start', { timeout: 10_000 }); // still not_started
+  await openQuickSend('todo');
+  await expect(page.locator('.todo').filter({ hasText: 'persist-term-todo' })).toHaveCount(0); // todos gone
+
+  // The next start opens a NEW audit run: the finalized terminated run + a fresh one (AC8/AC12).
+  await flowControl().click();
+  await expect(flowControl()).toHaveText('Advance');
+  await expect.poll(() => auditRunFiles(home, repo).length).toBe(2);
+
+  await app.close();
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+});

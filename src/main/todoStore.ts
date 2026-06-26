@@ -130,7 +130,9 @@ export function createTodoStore(deps: TodoStoreDeps): TodoStore {
       return persist(repoKey, state);
     },
     clear(repoKey) {
-      return sorted(load(repoKey).items); // STUB (#26): does not clear yet
+      const state = load(repoKey);
+      state.items = [];
+      return persist(repoKey, state);
     },
   };
 }

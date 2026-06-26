@@ -507,6 +507,25 @@ async function createWindow(): Promise<void> {
         isValidFlowRequest(m) ? recordedTransition(m.repoKey, 'restart', () => flow.restart(m.repoKey)) : flowRequestError(),
       [CH.flowUndo]: (_e, m) =>
         isValidFlowRequest(m) ? recordedTransition(m.repoKey, 'undo', () => flow.undo(m.repoKey)) : flowRequestError(),
+      // Terminate (#26): one user-confirmed action — reset the flow to not_started (discarding carried
+      // inputs), clear the repo's todos + the global capture tab, and write a finalizing termination
+      // entry into the audit run. Inert from not_started / load-error (the control is absent there).
+      // The audit write is best-effort (§25.7) and never blocks the reset, so AC5–AC7 hold uncondition-
+      // ally. No terminal process is signalled and no external agent-loop engine state is touched.
+      [CH.flowTerminate]: (_e, m) => {
+        if (!isValidFlowRequest(m)) return flowRequestError();
+        const before = flow.state(m.repoKey);
+        if (before.status !== 'in_progress' && before.status !== 'done') {
+          return trackLoop(m.repoKey, withDerived(m.repoKey, before));
+        }
+        const after = flow.terminate(m.repoKey);
+        audit.recordTerminate(m.repoKey);
+        todoStore.clear(m.repoKey);
+        store.clear();
+        send(CH.monitorCleared, { sessionId: SESSION_ID });
+        pushFlowChanged();
+        return trackLoop(m.repoKey, withDerived(m.repoKey, after));
+      },
       // Provide a step's typed input (§18.4 / §24.2.3 T3); the returned view's notice carries any §19.3
       // busy-shell refusal.
       [CH.flowProvideInput]: (_e, m) => {

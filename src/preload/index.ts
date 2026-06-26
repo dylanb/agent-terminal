@@ -79,6 +79,7 @@ const monitorApi: MonitorApi = {
   captureLast: () => ipcRenderer.invoke(CH.captureLast, { sessionId: SESSION_ID }) as Promise<MonitorEvent[]>,
   dismiss: (eventId) => ipcRenderer.send(CH.monitorDismiss, { sessionId: SESSION_ID, eventId }),
   dismissAll: () => ipcRenderer.send(CH.monitorDismissAll, { sessionId: SESSION_ID }),
+  onCleared: (cb) => ipcRenderer.on(CH.monitorCleared, () => cb()),
   learnChrome: (eventId, sample) =>
     ipcRenderer.send(CH.monitorLearnChrome, { sessionId: SESSION_ID, eventId, sample }),
   inject: (req) =>
@@ -124,6 +125,7 @@ const flowApi: FlowApi = {
   advance: (repoKey) => ipcRenderer.invoke(CH.flowAdvance, { sessionId: SESSION_ID, repoKey }) as Promise<FlowStateView>,
   restart: (repoKey) => ipcRenderer.invoke(CH.flowRestart, { sessionId: SESSION_ID, repoKey }) as Promise<FlowStateView>,
   undo: (repoKey) => ipcRenderer.invoke(CH.flowUndo, { sessionId: SESSION_ID, repoKey }) as Promise<FlowStateView>,
+  terminate: (repoKey) => ipcRenderer.invoke(CH.flowTerminate, { sessionId: SESSION_ID, repoKey }) as Promise<FlowStateView>,
   provideInput: (repoKey, values) =>
     ipcRenderer.invoke(CH.flowProvideInput, { sessionId: SESSION_ID, repoKey, values }) as Promise<FlowStateView>,
   onStateChanged: (cb) => {

@@ -45,6 +45,7 @@ function baseMonitor(handlers: {
   return {
     onEvent: vi.fn(),
     onEventRemoved: vi.fn(),
+      onCleared: vi.fn(),
     onUpdate: vi.fn(),
     onExit: vi.fn(),
     onCommandsChanged: vi.fn(),
@@ -85,6 +86,7 @@ describe('Todo tab (§24.1 mockup-exact — checkbox-done + Send)', () => {
     monitor = {
       onEvent: vi.fn(),
       onEventRemoved: vi.fn(),
+      onCleared: vi.fn(),
       onUpdate: vi.fn(),
       onExit: vi.fn(),
       onCommandsChanged: vi.fn(),

@@ -3,7 +3,7 @@
 // vocabulary, path derivation, serialization, and classifier are shared (src/shared/audit) so the
 // on-disk format cannot drift from any reader.
 
-import { appendFileSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import yaml from 'js-yaml';
 import {
@@ -12,6 +12,7 @@ import {
   lifecycleEvents,
   loopEvents,
   serializeDoc,
+  terminateEvents,
   todoEvents,
   type AuditEvent,
   type AuditHeader,
@@ -206,8 +207,19 @@ export function createAuditRecorder(deps: AuditRecorderDeps): AuditRecorder {
       }
     },
 
-    recordTerminate(_repoKey) {
-      /* STUB (#26): records nothing and does not finalize yet */
+    recordTerminate(repoKey) {
+      try {
+        const file = currentFile(repoKey);
+        if (file) appendFileSync(file, terminateEvents(auditTimestamp(now())).map(serializeDoc).join(''));
+        // Finalize: drop the in-memory slot + per-run loop baseline and remove the restart-surviving
+        // pointer (§25.4), so neither this recorder nor a relaunched one appends to the abandoned run
+        // and the next start opens a fresh file.
+        open.delete(repoKey);
+        lastLoop.delete(repoKey);
+        rmSync(pointerPath(repoKey), { force: true });
+      } catch (e) {
+        log('audit recordTerminate failed', e);
+      }
     },
   };
 }
