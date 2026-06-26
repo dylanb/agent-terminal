@@ -16,7 +16,7 @@ import {
 import { createInjector } from './inject';
 import { createMonitorEventStore } from './eventStore';
 import { createShadowModel } from './shadow';
-import { spawnAgentShell } from './pty';
+import { spawnAgentShell, resolveShellPath } from './pty';
 import { resolveLaunchRoot, homeFallback, APP_LAUNCH_DIR_ENV } from './launchRoot';
 import { createOutputGate } from './outputGate';
 import { resolveRendererTarget } from './rendererTarget';
@@ -548,7 +548,7 @@ async function createWindow(): Promise<void> {
         return installCliShim(
           buildInstallTarget({
             home,
-            shell: process.env.SHELL ?? '',
+            shell: resolveShellPath(process.env, os.userInfo().shell ?? undefined),
             currentPath: process.env.PATH ?? '',
             execPath: process.execPath,
             defaultApp: process.defaultApp === true,

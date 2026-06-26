@@ -16,10 +16,11 @@ export interface SpawnConfig {
   };
 }
 
-/** The shell the session spawns: an explicit `APP_SHELL` override, else the user's own
- *  login shell (`$SHELL`), else `bash` as a last resort (§5, v2.79). */
-export function resolveShellPath(env: NodeJS.ProcessEnv): string {
-  return env.APP_SHELL || env.SHELL || 'bash';
+/** The shell the session spawns or the installer routes its PATH edit to: an explicit `APP_SHELL`
+ *  override, else `$SHELL`, else `loginShell` (the password-database shell, for a GUI/launchd launch
+ *  whose env carries no `$SHELL`), else `bash` as a last resort (§5, v2.79). */
+export function resolveShellPath(env: NodeJS.ProcessEnv, loginShell?: string): string {
+  return env.APP_SHELL || env.SHELL || loginShell || 'bash';
 }
 
 /** True when the shell is bash (the only shell whose OSC-133 hooks we install, §15.5). */
