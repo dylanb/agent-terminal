@@ -16,6 +16,28 @@ export interface InstallTarget {
   invocation: LaunchInvocation;
 }
 
+/** Shell profiles to extend PATH in, most-specific first; the installer writes to the ones that
+ *  already exist (never creating e.g. .bash_profile, which would shadow a user's .profile). */
+export const PROFILE_CANDIDATES = ['.zshrc', '.zprofile', '.bashrc', '.bash_profile', '.profile'];
+
+/** The running build's launch facts, from which the install target is derived. */
+export interface RuntimeInfo {
+  home: string;
+  currentPath: string;
+  execPath: string;
+  defaultApp: boolean;
+  mainScript?: string;
+  cwd: string;
+  existingProfiles: string[];
+}
+
+export function buildInstallTarget(info: RuntimeInfo): InstallTarget {
+  const binDir = path.join(info.home, '.agent-terminal', 'bin');
+  const profiles = info.existingProfiles.length ? info.existingProfiles : [path.join(info.home, '.profile')];
+  const appArgs = info.defaultApp && info.mainScript ? [path.resolve(info.cwd, info.mainScript)] : [];
+  return { binDir, profiles, currentPath: info.currentPath, invocation: { execPath: info.execPath, appArgs } };
+}
+
 const PATH_BLOCK_BEGIN = '# >>> agent-terminal launcher >>>';
 const PATH_BLOCK_END = '# <<< agent-terminal launcher <<<';
 

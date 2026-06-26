@@ -2565,6 +2565,7 @@ test('the in-app install action puts an executable agent-terminal on PATH; the i
 });
 
 test('the installed shim launches a genuine second instance rooted at the target (§23.4 / #25)', async () => {
+  test.setTimeout(120_000); // launches a second real Electron instance on top of the first
   const home = realpathSync(mkdtempSync(join(tmpdir(), 'agent-term-e2e-shimlaunch-home-')));
   const target = realpathSync(mkdtempSync(join(tmpdir(), 'agent-term-e2e-shimlaunch-target-')));
   const invokeFrom = realpathSync(mkdtempSync(join(tmpdir(), 'agent-term-e2e-shimlaunch-from-')));
@@ -2580,14 +2581,14 @@ test('the installed shim launches a genuine second instance rooted at the target
   page = await app.firstWindow();
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
-  const killPids: number[] = [];
+  let before: number[] = [];
   try {
     await page.locator('[data-viewbtn="4"]').click();
     await page.locator('#cli-install-view button').click();
     const shim = join(home, '.agent-terminal', 'bin', 'agent-terminal');
     await expect.poll(() => existsSync(shim)).toBe(true);
 
-    const before = electronMainPids();
+    before = electronMainPids();
     execFileSync(shim, [target], {
       cwd: invokeFrom,
       env: { ...process.env, APP_SHELL: recShell, HOME: home, APP_SUBMIT_DELAY_MS: '100' },
@@ -2596,9 +2597,7 @@ test('the installed shim launches a genuine second instance rooted at the target
 
     // Genuine second process: exactly one more app main process than before, the original among them.
     await expect.poll(() => electronMainPids().length, { timeout: 30_000 }).toBe(before.length + 1);
-    const after = electronMainPids();
-    const added = after.filter((p) => !before.includes(p));
-    killPids.push(...added);
+    const added = electronMainPids().filter((p) => !before.includes(p));
     expect(added).toHaveLength(1);
     expect(() => process.kill(added[0], 0)).not.toThrow(); // the new instance is alive
     expect(electronMainPids()).toEqual(expect.arrayContaining(before)); // the original is still alive
@@ -2614,8 +2613,10 @@ test('the installed shim launches a genuine second instance rooted at the target
     await typeCommand('echo first-alive');
     await expect(termRows()).toContainText('first-alive');
   } finally {
-    for (const pid of killPids) {
-      try { process.kill(pid, 'SIGKILL'); } catch { /* already gone */ }
+    if (before.length) {
+      for (const pid of electronMainPids().filter((p) => !before.includes(p))) {
+        try { process.kill(pid, 'SIGKILL'); } catch { /* already gone */ }
+      }
     }
     await app.close();
     rmSync(home, { recursive: true, force: true });
