@@ -30,6 +30,7 @@ podman run --rm -it \
   --shm-size=1g \
   -v "$PWD":/work \
   -v "$VOLUME":/work/node_modules \
+  -v agent-terminal-e2e-pnpm-store:/pnpm-store \
   -e CI=1 \
   -e E2E_GREP="$FILTER" \
   "$IMAGE"

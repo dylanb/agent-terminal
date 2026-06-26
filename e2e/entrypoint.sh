@@ -3,7 +3,9 @@
 # after the test process exits, masking the result). node_modules is a named volume, so
 # install + rebuild run against the container's Linux/Electron ABI on each run.
 set -e
-pnpm install --frozen-lockfile
+# Keep pnpm's content-addressable store off the bind-mounted repo (a cached volume),
+# else it lands in the host tree as a ~1 GB .pnpm-store.
+pnpm install --frozen-lockfile --store-dir /pnpm-store
 pnpm run rebuild
 pnpm run build
 
