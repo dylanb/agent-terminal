@@ -173,6 +173,32 @@ describe('installCliShim targets the profile the active shell actually sources (
   });
 });
 
+describe('installCliShim reconciles orphan blocks across a default-shell change (§23.4 / #25)', () => {
+  const runtime = (shell: string, existingProfiles: string[]): Parameters<typeof buildInstallTarget>[0] => ({
+    home: root,
+    shell,
+    currentPath: '/usr/bin',
+    execPath: '/app/x',
+    defaultApp: false,
+    cwd: root,
+    existingProfiles,
+  });
+
+  it('strips the launcher block from a profile the active shell no longer sources after a shell change', () => {
+    const bashrc = join(root, '.bashrc');
+    writeFileSync(bashrc, 'export FOO=1\n');
+    expect(installCliShim(buildInstallTarget(runtime('/bin/bash', [bashrc]))).ok).toBe(true);
+    expect(readFileSync(bashrc, 'utf8')).toContain('agent-terminal launcher');
+
+    expect(installCliShim(buildInstallTarget(runtime('/bin/zsh', [bashrc]))).ok).toBe(true);
+
+    expect(readFileSync(bashrc, 'utf8')).not.toContain('agent-terminal launcher');
+    const zshrc = readFileSync(join(root, '.zshrc'), 'utf8');
+    expect(zshrc.match(/agent-terminal launcher >>>/g)?.length).toBe(1);
+    expect(zshrc.match(/agent-terminal launcher <<</g)?.length).toBe(1);
+  });
+});
+
 describe('installCliShim error path (no partial-success state)', () => {
   it('reports a visible error when the shim cannot be written', () => {
     const aFile = join(root, 'afile');

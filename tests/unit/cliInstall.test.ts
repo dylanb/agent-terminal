@@ -28,6 +28,22 @@ describe('cli install view organism (§23.4)', () => {
     expect(status().getAttribute('aria-live')).toBe('polite');
   });
 
+  it('keeps the assertive alert region in the accessibility tree from initial render (WAI-ARIA 6.3.3)', () => {
+    createCliInstall(host, deps());
+    const a = alert() as HTMLElement;
+    expect(a).toBeTruthy();
+    expect(a.style.display).not.toBe('none');
+  });
+
+  it('keeps the alert region present (not display:none) while announcing an install failure', async () => {
+    const install = vi.fn(async (): Promise<CliInstallResult> => ({ ok: false, error: 'no writable PATH directory' }));
+    createCliInstall(host, deps({ install }));
+    const a = alert() as HTMLElement;
+    button().click();
+    await vi.waitFor(() => expect(a.textContent).toContain('no writable PATH directory'));
+    expect(a.style.display).not.toBe('none');
+  });
+
   it('invokes the install action and announces success with the installed path', async () => {
     const install = vi.fn(async (): Promise<CliInstallResult> => ({ ok: true, path: '/p/agent-terminal' }));
     createCliInstall(host, deps({ install }));
