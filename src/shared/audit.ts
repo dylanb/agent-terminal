@@ -24,6 +24,7 @@ export type AuditEvent =
   | { ts: string; type: 'flow.status'; from: AuditFlowStatus; to: AuditFlowStatus }
   | { ts: string; type: 'step.entered'; step: string }
   | { ts: string; type: 'flow.completed'; step: string }
+  | { ts: string; type: 'flow.terminated' }
   | { ts: string; type: 'todo.created'; id: string; text: string }
   | { ts: string; type: 'todo.status'; id: string; from: TodoStatus; to: TodoStatus }
   | { ts: string; type: 'todo.text'; id: string; text: string }
@@ -129,6 +130,12 @@ export function lifecycleEvents(kind: TransitionKind, before: FlowLike, after: F
     events.push({ ts, type: 'flow.completed', step: after.stepName });
   }
   return events;
+}
+
+/** The single event a flow Terminate produces (#26 / §25): a timestamped `flow.terminated`, from
+ *  which the timeline reads not_started again. STUB — returns nothing until implemented. */
+export function terminateEvents(_ts: string): AuditEvent[] {
+  return [];
 }
 
 /** The events a todo-list mutation produces, from the before/after diff (§25.5). A pure reorder

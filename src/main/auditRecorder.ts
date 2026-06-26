@@ -69,6 +69,9 @@ export interface AuditRecorder {
   recordInputs(repoKey: string, values: Record<string, string>, typeByName: Record<string, string>): void;
   /** Record a flow-injected command and its exit (§25.5), only while a run is open. */
   recordCommand(repoKey: string, source: string, cmd: string, exit: number | null): void;
+  /** Record a flow Terminate (#26): append a `flow.terminated` event to the open run, then finalize
+   *  it so the next start opens a new run. Best-effort — never throws into the flow path. */
+  recordTerminate(repoKey: string): void;
 }
 
 export function createAuditRecorder(deps: AuditRecorderDeps): AuditRecorder {
@@ -201,6 +204,10 @@ export function createAuditRecorder(deps: AuditRecorderDeps): AuditRecorder {
       } catch (e) {
         log('audit recordCommand failed', e);
       }
+    },
+
+    recordTerminate(_repoKey) {
+      /* STUB (#26): records nothing and does not finalize yet */
     },
   };
 }

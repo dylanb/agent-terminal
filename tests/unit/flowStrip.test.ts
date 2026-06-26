@@ -32,6 +32,10 @@ function fakeFlow(initial: FlowStatus = 'not_started') {
       byKey.set(repoKey, 'in_progress');
       return view(repoKey);
     }),
+    terminate: vi.fn(async (repoKey: string) => {
+      byKey.set(repoKey, 'not_started');
+      return view(repoKey);
+    }),
     provideInput: vi.fn(async (repoKey: string) => view(repoKey)),
     onStateChanged: vi.fn((_cb: () => void) => () => {}),
   };
@@ -779,6 +783,109 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
       const strip = createFlowStrip(h, fakeFlow('in_progress'));
       strip.onRepoChanged('/repo');
       await strip.refresh();
+    });
+  });
+
+  // Terminate control (#26 AC1/AC2/AC4) — a destructive control wired confirm-then-terminate. It is
+  // rendered only when the composition root supplies the onTerminate confirmation seam.
+  describe('Terminate control (#26 AC1/AC2/AC4)', () => {
+    const terminate = () => host.querySelector<HTMLButtonElement>('.flow-terminate');
+
+    it('is visible while in_progress', async () => {
+      const deps = { ...fakeFlow('in_progress'), onTerminate: vi.fn() };
+      createFlowStrip(host, deps).onRepoChanged('/repo');
+      await vi.waitFor(() => expect(control()!.textContent).toBe('Advance'));
+      expect(terminate()).not.toBeNull();
+      expect(terminate()!.textContent).toBe('Terminate');
+    });
+
+    it('is visible while done', async () => {
+      const deps = { ...fakeFlow('done'), onTerminate: vi.fn() };
+      createFlowStrip(host, deps).onRepoChanged('/repo');
+      await vi.waitFor(() => expect(control()!.textContent).toBe('Restart'));
+      expect(terminate()).not.toBeNull();
+    });
+
+    it('is absent (not in the DOM/accessibility tree) while not_started (AC2)', async () => {
+      const deps = { ...fakeFlow('not_started'), onTerminate: vi.fn() };
+      createFlowStrip(host, deps).onRepoChanged('/repo');
+      await vi.waitFor(() => expect(control()!.textContent).toBe('Start'));
+      expect(terminate()).toBeNull();
+    });
+
+    it('is absent in the load-error state (AC2)', async () => {
+      const deps = {
+        state: vi.fn(
+          async (): Promise<FlowStateView> => ({
+            stepName: '',
+            steps: [],
+            position: 0,
+            total: 0,
+            status: 'error' as FlowStatus,
+            error: 'flow.yaml not found',
+          }),
+        ),
+        start: vi.fn(),
+        advance: vi.fn(),
+        restart: vi.fn(),
+        undo: vi.fn(),
+        terminate: vi.fn(),
+        provideInput: vi.fn(),
+        onStateChanged: noopSub,
+        onTerminate: vi.fn(),
+      };
+      createFlowStrip(host, deps).onRepoChanged('/repo');
+      await vi.waitFor(() => expect(host.querySelector('.flow-error')).not.toBeNull());
+      expect(terminate()).toBeNull();
+    });
+
+    it('routes activation to the confirmation seam with the current repo, before any terminate (AC3 staging)', async () => {
+      const onTerminate = vi.fn();
+      const deps = { ...fakeFlow('in_progress'), onTerminate };
+      createFlowStrip(host, deps).onRepoChanged('/repo');
+      await vi.waitFor(() => expect(terminate()).not.toBeNull());
+      terminate()!.click();
+      expect(onTerminate).toHaveBeenCalledWith('/repo', expect.any(Function));
+      expect(deps.terminate).not.toHaveBeenCalled(); // nothing happens until confirm fires
+    });
+
+    it('cancel (confirmation never fires confirm) makes no terminate call (AC4)', async () => {
+      const onTerminate = vi.fn(); // models a cancelled confirmation: confirm is never invoked
+      const deps = { ...fakeFlow('in_progress'), onTerminate };
+      createFlowStrip(host, deps).onRepoChanged('/repo');
+      await vi.waitFor(() => expect(terminate()).not.toBeNull());
+      terminate()!.click();
+      await new Promise((r) => setTimeout(r, 0));
+      expect(deps.terminate).not.toHaveBeenCalled();
+    });
+
+    it('confirming invokes terminate for the repo and repaints to not_started (AC5)', async () => {
+      const onTerminate = vi.fn((_repoKey: string, confirm: () => void) => confirm());
+      const deps = { ...fakeFlow('in_progress'), onTerminate };
+      createFlowStrip(host, deps).onRepoChanged('/repo');
+      await vi.waitFor(() => expect(terminate()).not.toBeNull());
+      terminate()!.click();
+      await vi.waitFor(() => expect(deps.terminate).toHaveBeenCalledWith('/repo'));
+      await vi.waitFor(() => expect(control()!.textContent).toBe('Start'));
+      expect(terminate()).toBeNull(); // gone in not_started
+    });
+
+    it('drops a stale confirm if the cwd moved to another repo before confirming (AC11)', async () => {
+      let captured: (() => void) | undefined;
+      const onTerminate = vi.fn((_repoKey: string, confirm: () => void) => {
+        captured = confirm;
+      });
+      const deps = { ...fakeFlow('in_progress'), onTerminate };
+      const strip = createFlowStrip(host, deps);
+      strip.onRepoChanged('/repo');
+      await vi.waitFor(() => expect(terminate()).not.toBeNull());
+      terminate()!.click();
+      await vi.waitFor(() => expect(captured).toBeTruthy());
+
+      strip.onRepoChanged('/other');
+      await vi.waitFor(() => expect(deps.state).toHaveBeenCalledWith('/other'));
+      captured!(); // a late confirm after the cwd moved must not terminate the now-current repo
+      expect(deps.terminate).not.toHaveBeenCalled();
     });
   });
 

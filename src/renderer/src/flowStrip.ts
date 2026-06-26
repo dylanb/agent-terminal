@@ -71,6 +71,11 @@ export type FlowStripDeps = Omit<FlowApi, 'onRevealLoop'> & {
    *  organism. `submit` records the typed values (provideInput) and re-renders. `null` closes the
    *  modal (no prompt on this view). The strip never reaches across to the modal directly. */
   onPrompt?: (prompt: FlowPrompt | null, stepName: string, submit: (values: Record<string, string>) => void) => void;
+  /** Open the destructive Terminate confirmation (#26 AC3/AC4). The composition root surfaces the
+   *  repo's current todo count and gates the IPC call; it invokes `confirm` only when the user
+   *  confirms. The strip's `confirm` closure then drives `terminate(repoKey)` and repaints. Omitted →
+   *  no Terminate control is rendered (the strip never reaches across to the dialog directly). */
+  onTerminate?: (repoKey: string, confirm: () => void) => void;
 };
 
 function header(doc: Document, text: string): HTMLElement {

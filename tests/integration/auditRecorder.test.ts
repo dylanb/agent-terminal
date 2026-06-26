@@ -299,3 +299,66 @@ describe('audit recorder — run file lifecycle (§25.4)', () => {
     rmSync(outside, { recursive: true, force: true });
   });
 });
+
+// Terminate finalization (#26 AC8/AC12 / §25.4): appends flow.terminated to the open run, then
+// finalizes it so the NEXT start opens a new run file. Best-effort: never throws into the flow path.
+describe('audit recorder — terminate finalization (§25.4 / #26)', () => {
+  let root: string;
+  let repo: string;
+  let clock: Date;
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), 'audit-root-'));
+    repo = mkdtempSync(join(tmpdir(), 'audit-repo-'));
+    clock = D;
+  });
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+    rmSync(repo, { recursive: true, force: true });
+  });
+
+  const recorder = () => createAuditRecorder({ root, now: () => clock, flowName: () => 'feature-dev' });
+  const runFiles = () => readdirSync(auditRepoDir(root, repo)).filter((f) => f.endsWith('.yaml'));
+  const eventsIn = (file: string) =>
+    parseAuditStream(readFileSync(join(auditRepoDir(root, repo), file), 'utf8')).events.map((e) => e.type);
+
+  it('appends a flow.terminated event to the open run file', () => {
+    const rec = recorder();
+    rec.recordTransition(repo, 'start', NOT_STARTED, IN_PROGRESS);
+    rec.recordTerminate(repo);
+    expect(runFiles()).toHaveLength(1);
+    expect(eventsIn(runFiles()[0])).toEqual(['flow.started', 'flow.terminated']);
+  });
+
+  it('finalizes the run so the next start opens a new run file (§25.4)', () => {
+    const rec = recorder();
+    rec.recordTransition(repo, 'start', NOT_STARTED, IN_PROGRESS);
+    rec.recordTerminate(repo);
+    clock = new Date('2026-06-25T14:12:00Z');
+    rec.recordTransition(repo, 'start', NOT_STARTED, IN_PROGRESS);
+    expect(runFiles()).toHaveLength(2); // the terminated run + a fresh one
+  });
+
+  it('records nothing after terminate finalized the run until the next start (no stale appends)', () => {
+    const rec = recorder();
+    rec.recordTransition(repo, 'start', NOT_STARTED, IN_PROGRESS);
+    rec.recordTerminate(repo);
+    rec.recordTodoChange(repo, [], [{ id: 'a1', text: 'x', status: 'active' }]);
+    rec.recordCommand(repo, 'bootstrap', 'agent-loop pickup 1', 0);
+    expect(eventsIn(runFiles()[0])).toEqual(['flow.started', 'flow.terminated']);
+  });
+
+  it('terminate is a no-op when no run is open (best-effort, never throws)', () => {
+    const rec = recorder();
+    expect(() => rec.recordTerminate(repo)).not.toThrow();
+    expect(existsSync(auditRepoDir(root, repo))).toBe(false);
+  });
+
+  it('finalizes the run pointer so a restart-rehydrated recorder opens a fresh run on the next start (AC12)', () => {
+    recorder().recordTransition(repo, 'start', NOT_STARTED, IN_PROGRESS);
+    recorder().recordTerminate(repo); // a fresh recorder (app restart) reads the pointer, then clears it
+    clock = new Date('2026-06-25T14:12:00Z');
+    recorder().recordTransition(repo, 'start', NOT_STARTED, IN_PROGRESS);
+    expect(runFiles()).toHaveLength(2);
+  });
+});
