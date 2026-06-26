@@ -4,6 +4,7 @@ import { mkdtempSync, writeFileSync, statSync, readFileSync, existsSync, rmSync 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { buildInstallTarget, installCliShim, type InstallTarget } from '../../src/main/cliInstall';
+import { resolveShellPath } from '../../src/main/pty';
 import { CLI_COMMAND_NAME, type LaunchInvocation } from '../../src/main/cliShim';
 import type { CliInstallResult } from '../../src/shared/ipc';
 
@@ -170,6 +171,43 @@ describe('installCliShim targets the profile the active shell actually sources (
     expect(existsSync(join(root, '.zshrc'))).toBe(false);
     expect(existsSync(join(root, '.profile'))).toBe(false);
     expect(existsSync(join(root, '.config', 'fish', 'config.fish'))).toBe(false);
+  });
+});
+
+describe('installCliShim on a GUI/launchd launch with no $SHELL in the env (§23.4 / #25)', () => {
+  const guiRuntime = (loginShell: string | undefined): Parameters<typeof buildInstallTarget>[0] => ({
+    home: root,
+    shell: resolveShellPath({} as NodeJS.ProcessEnv, loginShell),
+    currentPath: '/usr/bin',
+    execPath: '/app/x',
+    defaultApp: false,
+    cwd: root,
+    existingProfiles: [],
+  });
+
+  it("routes the PATH edit to the user's login shell, reachable from a new shell, not the unsupported-shell error", () => {
+    const res = installCliShim(buildInstallTarget(guiRuntime('/bin/zsh')));
+    expect(asOk(res).path).toBe(join(root, '.agent-terminal', 'bin', CLI_COMMAND_NAME));
+    expect(existsSync(join(root, '.zshrc'))).toBe(true);
+
+    const resolved = execFileSync('sh', ['-c', `. "${join(root, '.zshrc')}"; command -v ${CLI_COMMAND_NAME}`], {
+      env: { HOME: root, PATH: '/usr/bin:/bin' },
+      encoding: 'utf8',
+    }).trim();
+    expect(resolved).toBe(join(root, '.agent-terminal', 'bin', CLI_COMMAND_NAME));
+  });
+
+  it('still lands a reachable launcher when even the login shell is unknown (bash last resort)', () => {
+    const res = installCliShim(buildInstallTarget(guiRuntime(undefined)));
+    expect(asOk(res).path).toBe(join(root, '.agent-terminal', 'bin', CLI_COMMAND_NAME));
+    const profile = join(root, '.profile');
+    expect(existsSync(profile)).toBe(true);
+
+    const resolved = execFileSync('sh', ['-c', `. "${profile}"; command -v ${CLI_COMMAND_NAME}`], {
+      env: { HOME: root, PATH: '/usr/bin:/bin' },
+      encoding: 'utf8',
+    }).trim();
+    expect(resolved).toBe(join(root, '.agent-terminal', 'bin', CLI_COMMAND_NAME));
   });
 });
 

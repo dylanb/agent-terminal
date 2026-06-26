@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildSpawnConfig, mergePaths, probeShellCommand } from '../../src/main/pty';
+import { buildSpawnConfig, mergePaths, probeShellCommand, resolveShellPath } from '../../src/main/pty';
 import { APP_LAUNCH_DIR_ENV } from '../../src/main/launchRoot';
 
 const HOME = '/home/u';
@@ -56,6 +56,24 @@ describe('probeShellCommand (§5 — the Linux GUI PATH probe targets the resolv
       '-c',
       'echo -n "$PATH"',
     ]);
+  });
+});
+
+describe('resolveShellPath (§5 — single shell-resolution authority; a GUI/launchd launch carries no $SHELL)', () => {
+  it('prefers APP_SHELL over $SHELL and the login shell', () => {
+    expect(resolveShellPath({ APP_SHELL: '/opt/bash', SHELL: '/bin/zsh' }, '/usr/bin/fish')).toBe('/opt/bash');
+  });
+
+  it('uses $SHELL over the login shell when APP_SHELL is unset', () => {
+    expect(resolveShellPath({ SHELL: '/bin/zsh' }, '/bin/bash')).toBe('/bin/zsh');
+  });
+
+  it("falls back to the password-database login shell when APP_SHELL and $SHELL are both unset", () => {
+    expect(resolveShellPath({}, '/usr/bin/zsh')).toBe('/usr/bin/zsh');
+  });
+
+  it('falls back to bash only when no shell resolves at all', () => {
+    expect(resolveShellPath({}, undefined)).toBe('bash');
   });
 });
 
