@@ -1,0 +1,20 @@
+# Linux + Xvfb runner for the Electron Playwright e2e suite, for use via Podman on macOS.
+# Podman runs a Linux VM; inside it Xvfb is a real (headless) X display, so the Electron
+# window receives keyboard focus and an OS clipboard — capabilities a macOS subprocess
+# launch cannot grant, which is why the focus/clipboard e2e cannot pass outside a GUI
+# session. See docs/e2e-podman.md.
+FROM mcr.microsoft.com/playwright:v1.60.0-noble
+
+# Xvfb provides the virtual display; python3/make/g++ rebuild node-pty (a native module)
+# against this container's Electron ABI — the host's macOS build is not ABI-compatible.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends xvfb python3 make g++ \
+ && rm -rf /var/lib/apt/lists/*
+
+RUN corepack enable
+WORKDIR /work
+ENV CI=1
+
+COPY e2e/entrypoint.sh /usr/local/bin/e2e-entrypoint
+RUN chmod +x /usr/local/bin/e2e-entrypoint
+CMD ["e2e-entrypoint"]
