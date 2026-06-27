@@ -20,9 +20,17 @@ const launchArgs = (): string[] => ['out/main/index.js', `--user-data-dir=${user
 
 const termRows = () => page.locator('.xterm-rows');
 
+// xterm routes keystrokes through a hidden textarea; under parallel-CI load, characters typed before
+// that textarea takes focus are dropped, mistyping the command (e.g. "exit" → "ex"). Click, then wait
+// for focus to land on it before typing — and always type with a per-key delay so each char registers.
+async function focusTerminal(target: Page = page): Promise<void> {
+  await target.locator('.xterm-screen').click();
+  await expect.poll(() => target.evaluate(() => document.activeElement?.tagName)).toBe('TEXTAREA');
+}
+
 async function typeCommand(cmd: string): Promise<void> {
-  await page.locator('.xterm-screen').click();
-  await page.keyboard.type(cmd);
+  await focusTerminal();
+  await page.keyboard.type(cmd, { delay: 20 });
   await page.keyboard.press('Enter');
 }
 
@@ -290,10 +298,10 @@ test('Shift+Enter inserts a newline (ESC+CR) instead of submitting (§7.5.2)', a
 test('Option/Alt+Backspace deletes the whole previous word at the prompt (§7.5.2)', async () => {
   // Word-delete leaves `echo `, so `done` runs as `echo done`; a char-delete or no-op would run
   // `echo foobadone` / `echo foobardone` — distinguishing the discriminating output below.
-  await page.locator('.xterm-screen').click();
-  await page.keyboard.type('echo foobar');
+  await focusTerminal();
+  await page.keyboard.type('echo foobar', { delay: 20 });
   await page.keyboard.press('Alt+Backspace');
-  await page.keyboard.type('done');
+  await page.keyboard.type('done', { delay: 20 });
   await page.keyboard.press('Enter');
   await expect(
     page.locator('.xterm-rows > div').filter({ hasText: /^\s*done\s*$/ }),
@@ -320,8 +328,8 @@ test('the copy chord writes the terminal selection to the OS clipboard (§7.7)',
 test('Ctrl+C still interrupts the foreground process — copy never hijacks it (§7.7)', async () => {
   // If Ctrl+C were intercepted as copy, `sleep 30` would keep running and the echo below could
   // not produce its own output row within the assertion timeout. Real SIGINT, end-to-end.
-  await page.locator('.xterm-screen').click();
-  await page.keyboard.type('sleep 30');
+  await focusTerminal();
+  await page.keyboard.type('sleep 30', { delay: 20 });
   await page.keyboard.press('Enter');
   await page.keyboard.press('Control+C');
   await typeCommand('echo aftersigint');
@@ -469,8 +477,10 @@ test('monitor status strip tracks quiescence and alt-screen', async () => {
 
 test('shell exit notifies both panes', async () => {
   await typeCommand('exit');
-  await expect(termRows()).toContainText('[process exited: 0]');
-  await expect(page.locator('.status-chip[data-status="session"]')).toContainText('exited');
+  // Shell teardown → PTY exit → both-pane notification can take a moment under CI load; wait past the
+  // default expect budget rather than racing it.
+  await expect(termRows()).toContainText('[process exited: 0]', { timeout: 20_000 });
+  await expect(page.locator('.status-chip[data-status="session"]')).toContainText('exited', { timeout: 20_000 });
 });
 
 // ---- §15: semantic capture & detection (rendered as mockup-exact .finding cards) ----
@@ -1330,11 +1340,16 @@ test('the terminal refits its PTY when the drawer docks/undocks (§7.1)', async 
   // widens the terminal column and the PTY must follow (§7.1).
   await page.locator('#dclose').click();
   await expect
-    .poll(async () => {
-      await typeCommand('echo cols-wide=$(tput cols)');
-      const m = (await termRows().innerText()).match(/cols-wide=(\d+)/g)?.at(-1);
-      return m ? Number(m.match(/\d+/)![0]) : docked;
-    })
+    .poll(
+      async () => {
+        await typeCommand('echo cols-wide=$(tput cols)');
+        const m = (await termRows().innerText()).match(/cols-wide=(\d+)/g)?.at(-1);
+        return m ? Number(m.match(/\d+/)![0]) : docked;
+      },
+      // The undock resize is debounced (§7.1) and each poll iteration re-types a command, so give the
+      // PTY resize generous wall-clock room to settle under CI load before it is treated as failed.
+      { timeout: 30_000 },
+    )
     .toBeGreaterThan(docked);
 });
 
@@ -2743,14 +2758,14 @@ test('two concurrent instances each root at their own target directory (§23.4)'
     expect(await pageB.evaluate(() => window.viewer.tree('curated').then((t) => t.root))).toBe(dirB);
 
     // Each shell sits in its own dir.
-    await pageA.locator('.xterm-screen').click();
-    await pageA.keyboard.type('pwd');
+    await focusTerminal(pageA);
+    await pageA.keyboard.type('pwd', { delay: 20 });
     await pageA.keyboard.press('Enter');
     await expect(
       pageA.locator('.xterm-rows > div').filter({ hasText: new RegExp(`^\\s*${dirA}\\s*$`) }),
     ).not.toHaveCount(0);
-    await pageB.locator('.xterm-screen').click();
-    await pageB.keyboard.type('pwd');
+    await focusTerminal(pageB);
+    await pageB.keyboard.type('pwd', { delay: 20 });
     await pageB.keyboard.press('Enter');
     await expect(
       pageB.locator('.xterm-rows > div').filter({ hasText: new RegExp(`^\\s*${dirB}\\s*$`) }),
