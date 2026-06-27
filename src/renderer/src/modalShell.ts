@@ -23,7 +23,7 @@ export interface ModalShell {
 
 let modalSeq = 0;
 
-export function createModalShell(host: HTMLElement, idPrefix: string): ModalShell {
+export function createModalShell(host: HTMLElement, idPrefix: string, role = 'dialog'): ModalShell {
   const doc = host.ownerDocument;
   const titleId = `${idPrefix}-${modalSeq++}`;
   let opener: HTMLElement | null = null;
@@ -45,7 +45,7 @@ export function createModalShell(host: HTMLElement, idPrefix: string): ModalShel
 
       const modal = doc.createElement('div');
       modal.className = 'flow-modal';
-      modal.setAttribute('role', 'dialog');
+      modal.setAttribute('role', role);
       modal.setAttribute('aria-modal', 'true');
       modal.setAttribute('aria-labelledby', titleId);
       modal.tabIndex = -1;

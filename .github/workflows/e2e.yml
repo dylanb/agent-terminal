@@ -1,20 +1,24 @@
 # Runs the Playwright _electron e2e suite on Linux under Xvfb — the environment that gives the
-# Electron window real focus + an OS clipboard (a macOS subprocess launch cannot, so ~30 tests fail
-# there with no product cause). Mirrors the locally-verified Podman setup (see docs/e2e-podman.md).
-# node-pty is rebuilt for the runner's Electron ABI; Xvfb is driven manually (xvfb-run can hang
-# after the test process exits). The authoritative pass tally is this job's live run, not a number
-# pinned here that drifts on the next test added.
+# Electron window real focus + an OS clipboard (a macOS subprocess launch cannot, so the
+# focus/clipboard tests fail there with no product cause). Mirrors the locally-verified Podman setup
+# (see docs/e2e-podman.md). node-pty is rebuilt for the runner's Electron ABI; Xvfb is driven
+# manually (xvfb-run can hang after the test process exits). The authoritative pass tally is this
+# job's live run, not a number pinned here that drifts on the next test added.
 name: e2e
 
+# Run the suite once per commit: PR branches are exercised via pull_request; push covers the default
+# branch (scoping push to main avoids the double-run, since a same-repo push and its pull_request
+# carry different github.ref values and would otherwise land in separate concurrency groups).
 on:
   push:
+    branches: [main]
   pull_request:
 
 # This job only checks out and runs tests; it needs no write scopes.
 permissions:
   contents: read
 
-# Same-repo PR pushes fire both push and pull_request; dedup superseded runs of this costly suite.
+# Cancel an older in-flight run for the same ref when a newer commit supersedes it.
 concurrency:
   group: e2e-${{ github.ref }}
   cancel-in-progress: true

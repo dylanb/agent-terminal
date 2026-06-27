@@ -61,4 +61,12 @@ describe('modal shell focus trap honors all focusable elements', () => {
     );
     expect(document.activeElement).toBe(last());
   });
+
+  it('defaults the dialog role to "dialog" and honors an explicit role (e.g. alertdialog)', () => {
+    createModalShell(host, 'm').render(cardBuild());
+    expect(modal().getAttribute('role')).toBe('dialog');
+    host.replaceChildren();
+    createModalShell(host, 'm', 'alertdialog').render(cardBuild());
+    expect(modal().getAttribute('role')).toBe('alertdialog');
+  });
 });
