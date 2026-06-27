@@ -6,11 +6,11 @@
 # job's live run, not a number pinned here that drifts on the next test added.
 name: e2e
 
-# Trigger on push and pull_request, both unscoped: this workflow is not yet on the default branch,
-# and pull_request does not run a workflow that is absent from the base, so push is the trigger that
-# actually fires for this PR's branch. The concurrency group is keyed on the head commit SHA — which
-# a push and its pull_request share — so the two events for one commit collapse into a single run
-# (github.ref would not, since push and pull_request carry different refs).
+# Trigger on push and pull_request, both unscoped. This workflow is not yet on the default branch,
+# and so far only push has produced runs for it here; scoping push to a branch filter would leave
+# this PR's branch with no e2e run. The concurrency group is keyed on the head commit SHA — which a
+# push and its pull_request share — so if both ever fire for one commit they collapse into a single
+# run (github.ref would not, since push and pull_request carry different refs).
 on:
   push:
   pull_request:
