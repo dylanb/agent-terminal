@@ -4,8 +4,8 @@ import { createFlowInputModal } from '../../src/renderer/src/flowInputModal';
 import { assertRendersFromHostDocument } from './relocatable';
 import type { FlowPrompt } from '../../src/shared/ipc';
 
-// §24.2.3 T3 — the typed-input modal organism (UI-STANDARDS §1.2): the one deliberate blocking
-// surface (§18.4). Placement-agnostic — it touches only its host subtree.
+// §24.2.3 T3 — the typed-input modal, a blocking dialog (UI-STANDARDS §5): the one deliberate
+// blocking surface (§18.4). Placement-agnostic — it touches only its host subtree.
 
 const prompt = (over: Partial<FlowPrompt> = {}): FlowPrompt => ({
   inputs: [{ name: 'ticket', type: 'github-ticket' }],

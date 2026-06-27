@@ -3,8 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createConfirmDialog, type ConfirmDialogOptions } from '../../src/renderer/src/confirmDialog';
 import { assertRendersFromHostDocument } from './relocatable';
 
-// Destructive confirmation dialog (#26 AC3/AC4/AC13) — a placement-agnostic modal-dialog organism
-// (UI-STANDARDS §1.2, NOT the §4 Alert live-region pattern): focus trap, role=dialog, focus
+// Destructive confirmation dialog (#26 AC3/AC4/AC13) — a placement-agnostic blocking dialog
+// (UI-STANDARDS §5, NOT the §4 Alert live-region pattern): focus trap, role=dialog, focus
 // move-in/restore. The opener decides WHEN to open/close it (render(opts|null)).
 
 const opts = (over: Partial<ConfirmDialogOptions> = {}): ConfirmDialogOptions => ({

@@ -1,6 +1,6 @@
-// Reusable modal-dialog shell (#26): one definition of the WCAG-2.4.3/4.1.2 focus-management for
-// blocking dialogs (UI-STANDARDS §1.2), composed by confirmDialog and flowInputModal so the
-// focus-trap logic cannot diverge between them. Callers supply only the card body via render(build).
+// Reusable modal-dialog shell (#26): the one definition of the blocking-dialog focus management
+// (UI-STANDARDS §5), composed by confirmDialog and flowInputModal so the focus-trap logic cannot
+// diverge between them. Callers supply only the card body via render(build).
 
 export interface ModalCard {
   card: HTMLElement;

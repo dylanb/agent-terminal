@@ -1,7 +1,7 @@
-// The typed-input modal (§24.2.3 T3 / §18.4) — a placement-agnostic organism (UI-STANDARDS §1.2),
-// the ONE deliberate blocking surface, shown when entering a step whose `bootstrap` needs a required
-// input not yet resolved. Composes createModalShell and supplies the input-field body; the strip
-// decides WHEN to open/close it.
+// The typed-input modal (§24.2.3 T3 / §18.4) — a placement-agnostic blocking dialog (UI-STANDARDS
+// §5), the ONE deliberate blocking surface, shown when entering a step whose `bootstrap` needs a
+// required input not yet resolved. Composes createModalShell and supplies the input-field body; the
+// strip decides WHEN to open/close it.
 
 import type { FlowPrompt } from '../../shared/ipc';
 import { createModalShell } from './modalShell';
