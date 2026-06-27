@@ -6,21 +6,21 @@
 # job's live run, not a number pinned here that drifts on the next test added.
 name: e2e
 
-# Run the suite once per commit: PR branches are exercised via pull_request; push covers the default
-# branch (scoping push to main avoids the double-run, since a same-repo push and its pull_request
-# carry different github.ref values and would otherwise land in separate concurrency groups).
+# Trigger on push and pull_request, both unscoped: this workflow is not yet on the default branch,
+# and pull_request does not run a workflow that is absent from the base, so push is the trigger that
+# actually fires for this PR's branch. The concurrency group is keyed on the head commit SHA — which
+# a push and its pull_request share — so the two events for one commit collapse into a single run
+# (github.ref would not, since push and pull_request carry different refs).
 on:
   push:
-    branches: [main]
   pull_request:
 
 # This job only checks out and runs tests; it needs no write scopes.
 permissions:
   contents: read
 
-# Cancel an older in-flight run for the same ref when a newer commit supersedes it.
 concurrency:
-  group: e2e-${{ github.ref }}
+  group: e2e-${{ github.event.pull_request.head.sha || github.sha }}
   cancel-in-progress: true
 
 jobs:
