@@ -25,7 +25,7 @@ export function createCliInstall(host: HTMLElement, deps: CliInstallDeps): CliIn
   const head = el('div', 'kview-head');
   head.append(
     el('div', 'eyebrow', 'Settings'),
-    el('h2', 'serif', 'Command line'),
+    el('h1', 'serif', 'Command line'),
     el('div', 'sub', 'Install the agent-terminal command so you can open a new instance rooted at any directory from your shell.'),
   );
 
@@ -65,6 +65,7 @@ export function createCliInstall(host: HTMLElement, deps: CliInstallDeps): CliIn
   async function run(): Promise<void> {
     if (busy) return;
     busy = true;
+    const hadFocus = doc.activeElement === btn;
     btn.disabled = true;
     showStatus('cli-status', 'Installing…');
     try {
@@ -79,6 +80,9 @@ export function createCliInstall(host: HTMLElement, deps: CliInstallDeps): CliIn
     } finally {
       busy = false;
       btn.disabled = false;
+      // Disabling the focused button blurs it to <body> in browsers; restore the focus point so a
+      // keyboard user is not dropped to the top of the page (WCAG 2.4.3).
+      if (hadFocus) btn.focus();
     }
   }
   btn.addEventListener('click', () => void run());

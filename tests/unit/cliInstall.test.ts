@@ -28,10 +28,13 @@ describe('cli install view organism (§23.4)', () => {
     expect(status().getAttribute('aria-live')).toBe('polite');
   });
 
-  it('titles its section with a level-2 heading, not a second page-level h1 (WCAG 1.3.1)', () => {
+  it('titles its section with a top-level heading matching its peer settings panel (WCAG 1.3.1)', () => {
+    // The Keyboard and Command-line panels are stacked and simultaneously visible in #settings-scroll;
+    // the Keyboard panel titles itself <h1>, so this peer must too — an <h2> here would falsely imply
+    // it is a subsection of Keyboard.
     createCliInstall(host, deps());
-    expect(host.querySelector('h1')).toBeNull();
-    expect(host.querySelector('h2')?.textContent).toBe('Command line');
+    expect(host.querySelector('h2')).toBeNull();
+    expect(host.querySelector('h1')?.textContent).toBe('Command line');
   });
 
   it('keeps the assertive alert region in the accessibility tree from initial render (WAI-ARIA 6.3.3)', () => {
@@ -96,6 +99,24 @@ describe('cli install view organism (§23.4)', () => {
     await vi.waitFor(() => expect(button().disabled).toBe(true));
     resolveInstall({ ok: true, path: '/p/agent-terminal' });
     await vi.waitFor(() => expect(button().disabled).toBe(false));
+  });
+
+  it('does not start a second install while one is already in flight', async () => {
+    let resolveInstall: (r: CliInstallResult) => void = () => {};
+    const install = vi.fn(() => new Promise<CliInstallResult>((r) => { resolveInstall = r; }));
+    createCliInstall(host, deps({ install }));
+    button().click();
+    await vi.waitFor(() => expect(button().disabled).toBe(true));
+    button().click(); // second activation while busy
+    expect(install).toHaveBeenCalledTimes(1);
+    resolveInstall({ ok: true, path: '/p/agent-terminal' });
+  });
+
+  it('dispose() clears the view from its host', () => {
+    const view = createCliInstall(host, deps());
+    expect(host.childElementCount).toBeGreaterThan(0);
+    view.dispose();
+    expect(host.childElementCount).toBe(0);
   });
 
   it('builds its DOM from the host document, not the ambient global (relocatable, §3.3)', async () => {

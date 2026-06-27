@@ -2555,6 +2555,11 @@ test('the in-app install action puts an executable agent-terminal on PATH; the i
     expect(isExecutable(cmd)).toBe(true);
     await expect(page.locator('#cli-install-view [role="status"]')).toContainText('agent-terminal');
 
+    // Disabling the focused button during install must not strand keyboard focus on <body> (WCAG 2.4.3).
+    await expect
+      .poll(() => page.evaluate(() => document.activeElement === document.querySelector('#cli-install-view button')))
+      .toBe(true);
+
     // The original instance stays open and responsive after install.
     await page.locator('[data-viewbtn="1"]').click();
     await typeCommand('echo still-here');

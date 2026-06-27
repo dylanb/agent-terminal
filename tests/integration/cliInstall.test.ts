@@ -120,6 +120,13 @@ describe('installCliShim resilience to a hand-edited profile', () => {
     expect(blockCount(readFileSync(profile, 'utf8'))).toBe(1);
     expect(readFileSync(profile, 'utf8')).toContain('agent-terminal launcher <<<');
   });
+
+  it('preserves unrelated user lines that follow a prior block missing its end marker', () => {
+    const profile = join(root, '.profile');
+    writeFileSync(profile, '# >>> agent-terminal launcher >>>\nexport PATH="/stale/bin:$PATH"\nexport FOO=1\n');
+    expect(installCliShim(runtime({ shell: '/bin/sh' })).ok).toBe(true);
+    expect(readFileSync(profile, 'utf8')).toContain('export FOO=1');
+  });
 });
 
 describe('installCliShim runtime idempotence (no duplicate PATH entry when a profile is sourced twice)', () => {

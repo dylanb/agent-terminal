@@ -98,7 +98,7 @@
   - [23.2 Epics = N instances over N worktrees (D18/D22/D23)](#232-epics--n-instances-over-n-worktrees-d18d22d23)
   - [23.3 Cross-instance guard (D21)](#233-cross-instance-guard-d21)
   - [23.4 Launch-root resolution (added v2.88)](#234-launch-root-resolution-added-v288)
-  - [23.5 Launch shim — the agent-terminal CLI launcher (added v2.89)](#235-launch-shim--the-agent-terminal-cli-launcher-added-v289-25)
+  - [23.5 Launch shim — the agent-terminal CLI launcher (added v2.89, #25)](#235-launch-shim--the-agent-terminal-cli-launcher-added-v289-25)
 - [24. Phased build plan](#24-phased-build-plan)
   - [24.1 First slice (walking skeleton)](#241-first-slice-walking-skeleton)
 - [25. Flow audit record (per-run, append-only)](#25-flow-audit-record-per-run-append-only)

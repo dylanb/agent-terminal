@@ -20,10 +20,6 @@ interface InstallTarget {
   invocation: LaunchInvocation;
 }
 
-/** Dotfiles any supported shell might source; the installer keeps the existing ones to pick those the
- *  active shell reads and to reconcile orphan blocks left in profiles a former shell sourced. */
-const PROFILE_CANDIDATES = ['.zshrc', '.zprofile', '.bashrc', '.bash_profile', '.profile'];
-
 interface ShellProfileSpec {
   sources: string[];
   create: string[];
@@ -35,6 +31,13 @@ const SHELL_PROFILES: Record<string, ShellProfileSpec> = {
   sh: { sources: ['.profile'], create: ['.profile'] },
   dash: { sources: ['.profile'], create: ['.profile'] },
 };
+
+/** Dotfiles any supported shell might source — derived from SHELL_PROFILES so the two cannot drift.
+ *  The installer keeps the existing ones to pick those the active shell reads and to reconcile orphan
+ *  blocks left in profiles a former shell sourced. */
+const PROFILE_CANDIDATES = [
+  ...new Set(Object.values(SHELL_PROFILES).flatMap((s) => [...s.sources, ...s.create])),
+];
 
 /** The running build's launch facts the installer needs (§23.4 / #25) — its single public input.
  *  Names domain concepts, not the process/fs shapes that supply them: the user's home, their shell
@@ -84,7 +87,11 @@ function stripBlock(text: string): string {
   const begin = text.indexOf(PATH_BLOCK_BEGIN);
   if (begin === -1) return text;
   const end = text.indexOf(PATH_BLOCK_END, begin);
-  if (end === -1) return text.slice(0, begin);
+  if (end === -1) {
+    const lineEnd = text.indexOf('\n', begin);
+    const tail = lineEnd === -1 ? text.length : lineEnd + 1;
+    return text.slice(0, begin) + text.slice(tail);
+  }
   const after = end + PATH_BLOCK_END.length;
   const tail = text[after] === '\n' ? after + 1 : after;
   return text.slice(0, begin) + text.slice(tail);
