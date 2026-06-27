@@ -1,6 +1,7 @@
 // agent-terminal launch shim generation (§23.4 / #25).
 
 import path from 'node:path';
+import { shellQuote } from '../shared/shellQuote';
 import { APP_LAUNCH_DIR_ENV } from './launchRoot';
 
 /** The launch invocation a generated shim execs to start a fresh, independent instance: the app
@@ -26,11 +27,6 @@ export function resolveLaunchInvocation(
   return { execPath, appArgs };
 }
 
-/** Wrap a string as one POSIX shell single-quoted literal so embedded metacharacters never evaluate. */
-export function shQuote(s: string): string {
-  return `'${s.replace(/'/g, `'\\''`)}'`;
-}
-
 /**
  * The POSIX shell launch shim (§23.4 / #25). An optional caller-supplied path crosses the OS boundary
  * as one verbatim directory operand, never shell-interpolated (CWE-78). A relative path resolves
@@ -38,7 +34,7 @@ export function shQuote(s: string): string {
  * shell returns immediately.
  */
 export function generateShim(invocation: LaunchInvocation): string {
-  const cmd = [invocation.execPath, ...invocation.appArgs].map(shQuote).join(' ');
+  const cmd = [invocation.execPath, ...invocation.appArgs].map(shellQuote).join(' ');
   return [
     '#!/bin/sh',
     '# agent-terminal launcher (generated, §23.4) — reinstalling reconciles it to the current build.',

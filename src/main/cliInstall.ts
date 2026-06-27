@@ -4,8 +4,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import type { CliInstallResult } from '../shared/ipc';
+import { shellQuote } from '../shared/shellQuote';
 import { isValidCliInstall } from './ipcValidation';
-import { generateShim, shQuote, CLI_COMMAND_NAME, type LaunchInvocation } from './cliShim';
+import { generateShim, CLI_COMMAND_NAME, type LaunchInvocation } from './cliShim';
 
 /** The resolved filesystem work of one install: where the shim lands, the shell-profile files to
  *  extend PATH in, the existing profiles to strip orphan blocks from, the current PATH (whether the
@@ -67,7 +68,7 @@ const PATH_BLOCK_BEGIN = '# >>> agent-terminal launcher >>>';
 const PATH_BLOCK_END = '# <<< agent-terminal launcher <<<';
 
 function pathBlock(binDir: string): string {
-  const q = shQuote(binDir);
+  const q = shellQuote(binDir);
   return [
     PATH_BLOCK_BEGIN,
     `case ":$PATH:" in`,

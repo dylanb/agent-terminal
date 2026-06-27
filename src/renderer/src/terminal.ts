@@ -6,6 +6,7 @@ import '@xterm/xterm/css/xterm.css';
 import { FOCUS_VIEW_EVENT } from './paneActions';
 import { SEL_COLOR } from './selection';
 import { stripPasteBreakout } from '../../shared/paste';
+import { shellQuote } from '../../shared/shellQuote';
 
 export const RESIZE_DEBOUNCE_MS = 80;
 
@@ -43,11 +44,12 @@ export function wireTerminalPaneListeners(opts: { focusView: () => void; resize:
   };
 }
 
-/** Single-quote each dropped path (POSIX `'\''` escaping for an embedded quote) and space-join them, so
- *  a path with spaces survives at the prompt; C0 control chars are stripped first so a CR/LF-bearing
- *  filename cannot submit a line through the paste seam (§7.8 "no submit"). */
+/** Single-quote each dropped path through the shared shell primitive and space-join them, so a path
+ *  with spaces survives at the prompt; C0 control chars are stripped first so a CR/LF-bearing filename
+ *  cannot submit a line through the paste seam (§7.8 "no submit") — the lossy sanitization the lossless
+ *  shellQuote deliberately leaves to its callers. */
 export function formatDroppedPaths(paths: string[]): string {
-  return paths.map((p) => `'${p.replace(/[\u0000-\u001f\u007f]/g, '').split("'").join("'\\''")}'`).join(' ');
+  return paths.map((p) => shellQuote(p.replace(/[\u0000-\u001f\u007f]/g, ''))).join(' ');
 }
 
 /** Wire file drag-and-drop on the terminal pane (§7.8): a drop pastes the dropped files' single-quoted
