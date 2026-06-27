@@ -4,12 +4,14 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import type { CliInstallResult } from '../shared/ipc';
+import { isValidCliInstall } from './ipcValidation';
 import { generateShim, shQuote, CLI_COMMAND_NAME, type LaunchInvocation } from './cliShim';
 
-/** Where the install lands, injected as a domain seam so tests install into a temp PATH/profile
- *  (CLAUDE.md "narrow domain seam"): the shim's bin directory, the shell-profile files to extend
- *  PATH in, and the current PATH used to decide whether the bin directory is already reachable. */
-export interface InstallTarget {
+/** The resolved filesystem work of one install: where the shim lands, the shell-profile files to
+ *  extend PATH in, the existing profiles to strip orphan blocks from, the current PATH (whether the
+ *  bin directory is already reachable), and how to launch the build. Internal to this module — the
+ *  public seam is RuntimeInfo. */
+interface InstallTarget {
   binDir: string;
   profiles: string[];
   reconcileProfiles?: string[];
@@ -17,9 +19,9 @@ export interface InstallTarget {
   invocation: LaunchInvocation;
 }
 
-/** Dotfiles any supported shell might source; the handler passes the existing ones so the pure target
- *  builder can pick those the active shell actually reads. */
-export const PROFILE_CANDIDATES = ['.zshrc', '.zprofile', '.bashrc', '.bash_profile', '.profile'];
+/** Dotfiles any supported shell might source; the installer keeps the existing ones to pick those the
+ *  active shell reads and to reconcile orphan blocks left in profiles a former shell sourced. */
+const PROFILE_CANDIDATES = ['.zshrc', '.zprofile', '.bashrc', '.bash_profile', '.profile'];
 
 interface ShellProfileSpec {
   sources: string[];
@@ -33,16 +35,14 @@ const SHELL_PROFILES: Record<string, ShellProfileSpec> = {
   dash: { sources: ['.profile'], create: ['.profile'] },
 };
 
-/** The running build's launch facts, from which the install target is derived. */
+/** The running build's launch facts the installer needs (§23.4 / #25) — its single public input.
+ *  Names domain concepts, not the process/fs shapes that supply them: the user's home, their shell
+ *  (which dotfiles to extend PATH in), the current PATH, and a resolved launch invocation. */
 export interface RuntimeInfo {
   home: string;
   shell: string;
   currentPath: string;
-  execPath: string;
-  defaultApp: boolean;
-  mainScript?: string;
-  cwd: string;
-  existingProfiles: string[];
+  invocation: LaunchInvocation;
 }
 
 function resolveProfiles(home: string, shell: string, existing: string[]): string[] {
@@ -53,16 +53,13 @@ function resolveProfiles(home: string, shell: string, existing: string[]): strin
   return present.length ? present : spec.create.map((n) => path.join(home, n));
 }
 
-export function buildInstallTarget(info: RuntimeInfo): InstallTarget {
-  const binDir = path.join(info.home, '.agent-terminal', 'bin');
-  const profiles = resolveProfiles(info.home, info.shell, info.existingProfiles);
-  const appArgs = info.defaultApp && info.mainScript ? [path.resolve(info.cwd, info.mainScript)] : [];
+function buildInstallTarget(info: RuntimeInfo, existingProfiles: string[]): InstallTarget {
   return {
-    binDir,
-    profiles,
-    reconcileProfiles: info.existingProfiles,
+    binDir: path.join(info.home, '.agent-terminal', 'bin'),
+    profiles: resolveProfiles(info.home, info.shell, existingProfiles),
+    reconcileProfiles: existingProfiles,
     currentPath: info.currentPath,
-    invocation: { execPath: info.execPath, appArgs },
+    invocation: info.invocation,
   };
 }
 
@@ -114,7 +111,24 @@ function reconcileOrphanBlocks(target: InstallTarget): void {
   }
 }
 
-export function installCliShim(target: InstallTarget): CliInstallResult {
+/** The cli:install handler (§6 / §23.4): reject anything that is not a valid live-session request
+ *  before any environment or filesystem work, else install onto PATH. `gatherRuntime` is consulted
+ *  only on the accepted path, so a rejected request produces no install side effects. */
+export function handleCliInstall(m: unknown, gatherRuntime: () => RuntimeInfo): CliInstallResult {
+  if (!isValidCliInstall(m)) return { ok: false, error: 'invalid install request' };
+  return installCliShim(gatherRuntime());
+}
+
+/** Install the launcher for `runtime` onto PATH, idempotently reconciling to the current build, and
+ *  report whether it is now runnable from a new shell (§23.4 / #25). */
+export function installCliShim(runtime: RuntimeInfo): CliInstallResult {
+  const existingProfiles = PROFILE_CANDIDATES.map((n) => path.join(runtime.home, n)).filter((p) =>
+    fs.existsSync(p),
+  );
+  return performInstall(buildInstallTarget(runtime, existingProfiles));
+}
+
+function performInstall(target: InstallTarget): CliInstallResult {
   const cmd = path.join(target.binDir, CLI_COMMAND_NAME);
   try {
     fs.mkdirSync(target.binDir, { recursive: true });

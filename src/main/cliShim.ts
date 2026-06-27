@@ -1,5 +1,6 @@
 // agent-terminal launch shim generation (§23.4 / #25).
 
+import path from 'node:path';
 import { APP_LAUNCH_DIR_ENV } from './launchRoot';
 
 /** The launch invocation a generated shim execs to start a fresh, independent instance: the app
@@ -11,6 +12,19 @@ export interface LaunchInvocation {
 
 /** The installed command's filename. */
 export const CLI_COMMAND_NAME = 'agent-terminal';
+
+/** How to launch a fresh instance of this build: a packaged build execs its app binary with no extra
+ *  args; a dev build (Electron loading a main script) execs Electron with that script, absolutized
+ *  against `cwd` so the generated shim launches the same build from anywhere. */
+export function resolveLaunchInvocation(
+  execPath: string,
+  isDevBuild: boolean,
+  mainScript: string | undefined,
+  cwd: string,
+): LaunchInvocation {
+  const appArgs = isDevBuild && mainScript ? [path.resolve(cwd, mainScript)] : [];
+  return { execPath, appArgs };
+}
 
 /** Wrap a string as one POSIX shell single-quoted literal so embedded metacharacters never evaluate. */
 export function shQuote(s: string): string {
