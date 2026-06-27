@@ -909,6 +909,39 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
       captured!(); // a late confirm after the cwd moved must not terminate the now-current repo
       expect(deps.terminate).not.toHaveBeenCalled();
     });
+
+    it('after confirming, lands focus on a real control instead of dropping it to <body> (WCAG 2.4.3)', async () => {
+      // The repaint to not_started detaches the Terminate button the confirm dialog restored focus to,
+      // and not_started carries no prompt, so without a re-anchor focus falls to <body>.
+      const onTerminate = vi.fn((_repoKey: string, confirm: () => void) => {
+        // Model createModalShell.close() restoring focus to its opener (the Terminate button) before
+        // the strip's confirm closure runs.
+        host.querySelector<HTMLButtonElement>('.flow-terminate')!.focus();
+        confirm();
+      });
+      const deps = { ...fakeFlow('in_progress'), onTerminate };
+      createFlowStrip(host, deps).onRepoChanged('/repo');
+      await vi.waitFor(() => expect(terminate()).not.toBeNull());
+      terminate()!.click();
+      await vi.waitFor(() => expect(control()!.textContent).toBe('Start'));
+      expect(document.activeElement).toBe(control());
+    });
+
+    it('re-enables the Terminate control if both terminate() and the recovery state() reject (failure recovery)', async () => {
+      const onTerminate = vi.fn((_repoKey: string, confirm: () => void) => confirm());
+      const deps = { ...fakeFlow('in_progress'), onTerminate };
+      createFlowStrip(host, deps).onRepoChanged('/repo');
+      await vi.waitFor(() => expect(terminate()).not.toBeNull());
+      const button = terminate()!;
+      // Make both the terminate call and refresh()'s re-pull reject, so no repaint detaches the
+      // button — only the finally re-enable can rescue it from being stranded disabled.
+      deps.terminate.mockRejectedValueOnce(new Error('terminate failed'));
+      deps.state.mockRejectedValueOnce(new Error('state failed'));
+      button.click();
+      await vi.waitFor(() => expect(deps.terminate).toHaveBeenCalledWith('/repo'));
+      await vi.waitFor(() => expect(button.disabled).toBe(false));
+      expect(host.querySelector('.flow-terminate')).toBe(button); // never repainted
+    });
   });
 
   it('builds the loop read-out from host.ownerDocument too (covers the loopReadout branch, §3.3)', async () => {

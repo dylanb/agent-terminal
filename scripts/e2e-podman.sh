@@ -14,7 +14,7 @@ FILTER="${1:-}"
 # Electron + Chromium + Xvfb need more than the 2 GiB default podman machine. Warn loudly
 # rather than fail cryptically mid-run.
 mem_mib="$(podman machine inspect --format '{{.Resources.Memory}}' 2>/dev/null || echo 0)"
-if [ "${mem_mib:-0}" -lt 6000 ]; then
+if [ "${mem_mib:-0}" -lt 8192 ]; then
   echo "WARNING: podman machine has ${mem_mib} MiB RAM; Electron e2e needs >= 8 GiB." >&2
   echo "  Fix once: podman machine stop && podman machine set --memory 8192 --cpus 6 && podman machine start" >&2
 fi

@@ -30,7 +30,9 @@ podman machine start
 - The repo source is bind-mounted; `node_modules` is a **named volume** so the
   macOS-built native modules (node-pty) never shadow the Linux ones. node-pty is rebuilt
   for the container's Electron ABI on each run.
-- The container runs `xvfb-run -a pnpm exec playwright test`.
+- The container drives Xvfb manually (`Xvfb :99 … &`, `export DISPLAY=:99`, then
+  `pnpm exec playwright test`) rather than `xvfb-run`, which can hang after the test process
+  exits and mask the result (see `e2e/entrypoint.sh`).
 - `--shm-size=1g` avoids Chromium's `/dev/shm` crashes; `--cap-add=SYS_ADMIN` lets the
   Chromium sandbox run under rootless Podman.
 

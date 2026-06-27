@@ -38,6 +38,7 @@ export function createFlowInputModal(host: HTMLElement): FlowInputModal {
     render(prompt, stepName, submit) {
       if (!prompt) return shell.render(null);
       shell.render(({ doc, titleId, close }) => {
+        const describedById = `${titleId}-desc`;
         const card = doc.createElement('div');
         card.className = 'card';
         const h3 = doc.createElement('h3');
@@ -46,6 +47,7 @@ export function createFlowInputModal(host: HTMLElement): FlowInputModal {
         h3.textContent = `${stepName} needs an input`;
         const ph = doc.createElement('p');
         ph.className = 'ph';
+        ph.id = describedById;
         ph.textContent = `Entering the ${stepName} step — provide its required input to bootstrap the loop.`;
         card.append(h3, ph);
 
@@ -55,8 +57,11 @@ export function createFlowInputModal(host: HTMLElement): FlowInputModal {
           if (reads.length === 0) {
             const help = doc.createElement('div');
             help.className = 'help';
+            const helpId = `${titleId}-help`;
+            help.id = helpId;
             help.textContent = `Bootstraps \`${prompt.bootstrap} <${spec.name}>\` on entry (§18.3). Threaded to later steps' inputs.`;
             field.append(help);
+            field.querySelector('input')?.setAttribute('aria-describedby', helpId);
           }
           reads.push({ name: spec.name, read });
           card.append(field);
@@ -85,7 +90,7 @@ export function createFlowInputModal(host: HTMLElement): FlowInputModal {
         foot.append(cancel, confirm);
         card.append(foot);
 
-        return { card, initialFocus: card.querySelector('input') };
+        return { card, initialFocus: card.querySelector('input'), describedById };
       });
     },
     dispose() {

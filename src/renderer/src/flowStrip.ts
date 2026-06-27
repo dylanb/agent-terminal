@@ -303,9 +303,11 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
   function applyTransition(view: FlowStateView): void {
     render(view);
     // The repaint detached the just-clicked control, dropping focus to <body>. Re-anchor it on a
-    // real control before the prompt opens so the modal restores focus there on close (WCAG 2.4.3).
-    if (view.prompt && !host.contains(doc.activeElement)) {
-      host.querySelector<HTMLElement>('.flow-control, .flow-undo')?.focus();
+    // real control so the keyboard user keeps their place (WCAG 2.4.3) — including the Terminate →
+    // not_started case, which carries no prompt — and so a following modal restores focus there on
+    // close. render() already re-anchors the loop read-out, which leaves focus inside the host.
+    if (!host.contains(doc.activeElement)) {
+      host.querySelector<HTMLElement>('.flow-control, .flow-undo, .flow-terminate')?.focus();
     }
     emitPrompt(view);
   }

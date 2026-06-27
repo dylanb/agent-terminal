@@ -219,6 +219,22 @@ describe('typed-input modal (§24.2.3 T3 / §18.4)', () => {
     expect(host.childElementCount).toBe(0);
   });
 
+  it('describes the dialog via aria-describedby pointing at its instructional paragraph (WCAG 1.3.1/4.1.2)', () => {
+    createFlowInputModal(host).render(prompt(), 'plan', vi.fn());
+    const dialog = host.querySelector('.flow-modal')!;
+    const describedby = dialog.getAttribute('aria-describedby');
+    expect(describedby).toBeTruthy();
+    expect(host.querySelector(`#${describedby}`)?.classList.contains('ph')).toBe(true);
+  });
+
+  it('associates the first field help text with its input via aria-describedby (WCAG 1.3.1)', () => {
+    createFlowInputModal(host).render(prompt(), 'plan', vi.fn());
+    const input = field('ticket')!.querySelector('input')!;
+    const describedby = input.getAttribute('aria-describedby');
+    expect(describedby).toBeTruthy();
+    expect(host.querySelector(`#${describedby}`)?.classList.contains('help')).toBe(true);
+  });
+
   it('traps Tab focus within the dialog (WCAG 2.4.3): last wraps to first, first wraps to last', () => {
     createFlowInputModal(host).render(prompt(), 'plan', vi.fn());
     const modal = host.querySelector('.flow-modal') as HTMLElement;

@@ -3,7 +3,7 @@
 # window receives keyboard focus and an OS clipboard — capabilities a macOS subprocess
 # launch cannot grant, which is why the focus/clipboard e2e cannot pass outside a GUI
 # session. See docs/e2e-podman.md.
-FROM mcr.microsoft.com/playwright:v1.60.0-noble
+FROM mcr.microsoft.com/playwright:v1.61.0-noble
 
 # Xvfb provides the virtual display; python3/make/g++ rebuild node-pty (a native module)
 # against this container's Electron ABI — the host's macOS build is not ABI-compatible.
