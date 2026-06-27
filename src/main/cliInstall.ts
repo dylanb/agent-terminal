@@ -76,7 +76,7 @@ function pathBlock(binDir: string): string {
     PATH_BLOCK_BEGIN,
     `case ":$PATH:" in`,
     `  *:${q}:*) ;;`,
-    `  *) export PATH=${q}:"$PATH" ;;`,
+    `  *) export PATH="$PATH":${q} ;;`,
     'esac',
     PATH_BLOCK_END,
     '',

@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, writeFileSync, statSync, readFileSync, existsSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, chmodSync, statSync, readFileSync, existsSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { installCliShim, handleCliInstall, type RuntimeInfo } from '../../src/main/cliInstall';
@@ -138,6 +138,21 @@ describe('installCliShim runtime idempotence (no duplicate PATH entry when a pro
       encoding: 'utf8',
     });
     expect(out.split(':').filter((seg) => seg === binOf(root)).length).toBe(1);
+  });
+});
+
+describe('installCliShim does not let its bin directory shadow existing commands (CWE-426)', () => {
+  it('appends the bin directory so a same-named file in it does not override a system command', () => {
+    expect(installCliShim(runtime({ shell: '/bin/sh' })).ok).toBe(true);
+    const bin = binOf(root);
+    const decoy = join(bin, 'ls');
+    writeFileSync(decoy, '#!/bin/sh\necho decoy\n');
+    chmodSync(decoy, 0o755);
+    const resolved = execFileSync('sh', ['-c', '. "$1"; command -v ls', 'sh', join(root, '.profile')], {
+      env: { HOME: root, PATH: '/usr/bin:/bin' },
+      encoding: 'utf8',
+    }).trim();
+    expect(resolved.startsWith(bin)).toBe(false); // system ls wins, not the planted decoy
   });
 });
 

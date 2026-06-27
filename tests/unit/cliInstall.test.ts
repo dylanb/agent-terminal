@@ -101,6 +101,21 @@ describe('cli install view organism (§23.4)', () => {
     await vi.waitFor(() => expect(button().disabled).toBe(false));
   });
 
+  it('does not yank focus back to the button if the user moved focus away during install', async () => {
+    let resolveInstall: (r: CliInstallResult) => void = () => {};
+    const install = vi.fn(() => new Promise<CliInstallResult>((r) => { resolveInstall = r; }));
+    createCliInstall(host, deps({ install }));
+    const other = document.createElement('input');
+    document.body.appendChild(other);
+    button().focus();
+    button().click();
+    await vi.waitFor(() => expect(button().disabled).toBe(true));
+    other.focus(); // user tabs elsewhere while the async install runs
+    resolveInstall({ ok: true, path: '/p/agent-terminal' });
+    await vi.waitFor(() => expect(button().disabled).toBe(false));
+    expect(host.ownerDocument.activeElement).toBe(other);
+  });
+
   it('does not start a second install while one is already in flight', async () => {
     let resolveInstall: (r: CliInstallResult) => void = () => {};
     const install = vi.fn(() => new Promise<CliInstallResult>((r) => { resolveInstall = r; }));
