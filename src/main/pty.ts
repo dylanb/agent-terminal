@@ -16,10 +16,13 @@ export interface SpawnConfig {
   };
 }
 
-/** The shell the session spawns: an explicit `APP_SHELL` override, else the user's own
- *  login shell (`$SHELL`), else `bash` as a last resort (§5, v2.79). */
-export function resolveShellPath(env: NodeJS.ProcessEnv): string {
-  return env.APP_SHELL || env.SHELL || 'bash';
+/** Resolve a shell path: `APP_SHELL`, else `$SHELL`, else `loginShell`, else `bash` (§5, v2.79).
+ *  `loginShell` is an optional caller-supplied fallback, NOT always consulted: the session-spawn
+ *  callers omit it (a no-`$SHELL` GUI session falls through to `bash`), while the installer passes
+ *  the passwd-db login shell so a no-`$SHELL` GUI launch edits the profile that shell actually
+ *  sources. The two callers therefore diverge by design in the no-`$SHELL` case — keep them distinct. */
+export function resolveShellPath(env: NodeJS.ProcessEnv, loginShell?: string): string {
+  return env.APP_SHELL || env.SHELL || loginShell || 'bash';
 }
 
 /** True when the shell is bash (the only shell whose OSC-133 hooks we install, §15.5). */

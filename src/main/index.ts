@@ -16,7 +16,7 @@ import {
 import { createInjector } from './inject';
 import { createMonitorEventStore } from './eventStore';
 import { createShadowModel } from './shadow';
-import { spawnAgentShell } from './pty';
+import { spawnAgentShell, resolveShellPath } from './pty';
 import { resolveLaunchRoot, homeFallback, APP_LAUNCH_DIR_ENV } from './launchRoot';
 import { createOutputGate } from './outputGate';
 import { resolveRendererTarget } from './rendererTarget';
@@ -76,6 +76,9 @@ import { createClaudeCodeAdapter } from './adapters/claudeCode';
 import { createGenericAdapter } from './adapters/generic';
 import { SHELL_INTEGRATION_SCRIPT } from './shellIntegration';
 import { resolveWindowIconPath, applyDockIcon } from './appIcon';
+import { handleCliInstall } from './cliInstall';
+import { resolveLaunchInvocation } from './cliShim';
+import type { CliInstallResult } from '../shared/ipc';
 
 async function createWindow(): Promise<void> {
   const iconLoc = {
@@ -537,6 +540,18 @@ async function createWindow(): Promise<void> {
         pushFlowChanged(); // instantiation can add todos → the strip's n/m total moves (§24.2.2 S5)
         return list;
       },
+      [CH.cliInstall]: (_e, m): CliInstallResult =>
+        handleCliInstall(m, () => ({
+          home: os.homedir(),
+          shell: resolveShellPath(process.env, os.userInfo().shell ?? undefined),
+          currentPath: process.env.PATH ?? '',
+          invocation: resolveLaunchInvocation(
+            process.execPath,
+            process.defaultApp === true,
+            process.argv[1],
+            process.cwd(),
+          ),
+        })),
     },
   );
 

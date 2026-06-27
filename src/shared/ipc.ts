@@ -53,6 +53,7 @@ export const CH = {
   flowRevealLoop: 'flow:revealLoop',
   todoTemplateList: 'todoTemplate:list',
   todoTemplateInstantiate: 'todoTemplate:instantiate',
+  cliInstall: 'cli:install',
 } as const;
 
 /** Action-window tabs (§16.1). */
@@ -584,6 +585,20 @@ export interface TodoTemplateInstantiateMsg {
   ref: string;
 }
 
+// ---- CLI launcher install (§23.4 / #25) ----
+
+/** cli:install request (§6): install the `agent-terminal` launch shim onto the user's PATH. Carries
+ *  sessionId per §6; no other payload — the install target is computed by main from the running build. */
+export interface CliInstallMsg {
+  sessionId: SessionId;
+}
+
+/** cli:install result: `ok` with the installed command `path`, or `!ok` with a human-readable `error`.
+ *  Never a partial state — `ok` is true only when the command is runnable from a new shell. */
+export type CliInstallResult =
+  | { ok: true; path: string }
+  | { ok: false; error: string };
+
 // ---- Preload-exposed API surfaces (§6) ----
 
 /** Host OS, exposed to the renderer so it can resolve the `auto` keymap profile (§7.7). */
@@ -699,11 +714,18 @@ export interface FlowApi {
   onRevealLoop(cb: () => void): () => void;
 }
 
+/** CLI launcher install (§23.4 / #25): the settings affordance's only seam to the install action. */
+export interface CliApi {
+  /** Install the `agent-terminal` launch shim onto PATH, reconciling to the running build. */
+  install(): Promise<CliInstallResult>;
+}
+
 declare global {
   interface Window {
     term: TermApi;
     monitor: MonitorApi;
     viewer: ViewerApi;
     flow: FlowApi;
+    cli: CliApi;
   }
 }

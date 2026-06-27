@@ -15,6 +15,7 @@ import { doInject } from './paneActions';
 import { createRepoContext } from './repoContext';
 import { createKeymapController, resolveBase } from './keymapController';
 import { createKeyboardSettings } from './keyboardSettings';
+import { createCliInstall } from './cliInstall';
 import { runMenuEditAction } from './menuActions';
 
 const { terminal: term } = createTerminalPane(document.getElementById('terminal')!);
@@ -45,6 +46,7 @@ keyboardUi = createKeyboardSettings(document.getElementById('kb-settings-view')!
   onRebind: (action, chord) => keymap.setOverride(action, [chord]),
   onReset: (action) => keymap.clearOverride(action),
 });
+createCliInstall(document.getElementById('cli-install-view')!, { install: () => window.cli.install() });
 void window.monitor
   .getSettings()
   .then((s) => {
