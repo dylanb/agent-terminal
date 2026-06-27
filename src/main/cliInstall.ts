@@ -139,10 +139,11 @@ function performInstall(target: InstallTarget): CliInstallResult {
   const cmd = path.join(target.binDir, CLI_COMMAND_NAME);
   try {
     fs.mkdirSync(target.binDir, { recursive: true });
-    // Owner-only write on the on-PATH executable AND every app-owned ancestor: a world-writable ancestor
-    // (under a permissive umask) lets another user rename bin and substitute a hostile one (CWE-276/426).
-    fs.chmodSync(path.dirname(target.binDir), 0o755);
-    fs.chmodSync(target.binDir, 0o755);
+    // Owner-only on the on-PATH executable dir AND its app-owned parent: a world-traversable/writable
+    // ancestor lets another user rename bin and substitute a hostile launcher (CWE-276/426). 0o700 also
+    // matches auditRecorder's hardening of the shared ~/.agent-terminal root rather than re-widening it.
+    fs.chmodSync(path.dirname(target.binDir), 0o700);
+    fs.chmodSync(target.binDir, 0o700);
     fs.writeFileSync(cmd, generateShim(target.invocation));
     fs.chmodSync(cmd, 0o755);
   } catch (e) {

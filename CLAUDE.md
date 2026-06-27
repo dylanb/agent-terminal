@@ -2,7 +2,7 @@
 
 Agent Terminal — Electron app that hosts coding agents (Claude Code, Codex, …) in a PTY-attached shell session, renders it with xterm.js, tees output into a main-process `@xterm/headless` shadow screen model, and provides a monitor pane that captures output and injects input back into the agent.
 
-`terminal-web-ui-spec.md` (v2.55) is the authoritative spec. Every subsystem implements a numbered section of it; when code and spec disagree, the spec wins — or the spec gets a changelog entry. Cite spec sections (e.g. §9.3) in code review discussion rather than re-arguing settled design decisions.
+`terminal-web-ui-spec.md` (v2.89) is the authoritative spec. Every subsystem implements a numbered section of it; when code and spec disagree, the spec wins — or the spec gets a changelog entry. Cite spec sections (e.g. §9.3) in code review discussion rather than re-arguing settled design decisions.
 
 ## Commands
 

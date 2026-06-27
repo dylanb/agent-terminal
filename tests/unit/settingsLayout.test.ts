@@ -3,15 +3,10 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
+// The scroll-container behavior (the CLI affordance reachable below the fold) is proven by the real-layout
+// e2e in tests/e2e/app.spec.ts (§23.5); jsdom computes no cascade, so this unit layer asserts only the
+// observable DOM structure the two sections share, never the stylesheet's authoring form.
 const html = readFileSync(path.join(__dirname, '../../src/renderer/index.html'), 'utf8');
-const css = readFileSync(path.join(__dirname, '../../src/renderer/src/styles.css'), 'utf8');
-
-function overflowOf(selector: string): string {
-  const m = css.match(new RegExp(`${selector}\\s*\\{([^}]*)\\}`));
-  if (!m) throw new Error(`rule ${selector} not found`);
-  const o = m[1].match(/(?:^|;)\s*overflow(?:-y)?\s*:\s*([^;]+)/);
-  return o ? o[1].trim() : '';
-}
 
 describe('Settings viewpane layout reachability (§23.5)', () => {
   const doc = new DOMParser().parseFromString(html, 'text/html');
@@ -28,10 +23,5 @@ describe('Settings viewpane layout reachability (§23.5)', () => {
     expect(column).not.toBe(pane);
     expect(pane.contains(column)).toBe(true);
     expect(column.id).toBeTruthy();
-  });
-
-  it('makes that shared column the scroll container so the CLI affordance is reachable below the fold', () => {
-    const column = kb.parentElement as HTMLElement;
-    expect(/auto|scroll/.test(overflowOf(`#${column.id}`))).toBe(true);
   });
 });

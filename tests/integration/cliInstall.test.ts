@@ -146,13 +146,14 @@ describe('installCliShim runtime idempotence (no duplicate PATH entry when a pro
 });
 
 describe('installCliShim hardens the on-PATH bin directory permissions (CWE-276/732)', () => {
-  it('does not leave the launcher directory writable by group/other even under a permissive umask', () => {
+  it('creates the launcher directory and its app-owned parent owner-only, even under a permissive umask', () => {
     const prev = process.umask(0o000);
     try {
       expect(installCliShim(runtime({ shell: '/bin/sh' })).ok).toBe(true);
-      expect(statSync(binOf(root)).mode & 0o022).toBe(0); // no group/world write on a dir holding an on-PATH executable
-      // ...nor on any ancestor it created: a world-writable parent allows renaming bin and substituting a hostile one.
-      expect(statSync(join(root, '.agent-terminal')).mode & 0o022).toBe(0);
+      // Owner-only (no group/other bits): closes the rename-and-substitute attack on an on-PATH dir,
+      // and matches auditRecorder's 0o700 hardening of the shared ~/.agent-terminal root rather than re-widening it.
+      expect(statSync(binOf(root)).mode & 0o077).toBe(0);
+      expect(statSync(join(root, '.agent-terminal')).mode & 0o077).toBe(0);
     } finally {
       process.umask(prev);
     }
