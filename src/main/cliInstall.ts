@@ -139,7 +139,10 @@ function performInstall(target: InstallTarget): CliInstallResult {
   const cmd = path.join(target.binDir, CLI_COMMAND_NAME);
   try {
     fs.mkdirSync(target.binDir, { recursive: true });
-    fs.chmodSync(target.binDir, 0o755); // owner-only write: never group/world-writable, even under a permissive umask (CWE-276)
+    // Owner-only write on the on-PATH executable AND every app-owned ancestor: a world-writable ancestor
+    // (under a permissive umask) lets another user rename bin and substitute a hostile one (CWE-276/426).
+    fs.chmodSync(path.dirname(target.binDir), 0o755);
+    fs.chmodSync(target.binDir, 0o755);
     fs.writeFileSync(cmd, generateShim(target.invocation));
     fs.chmodSync(cmd, 0o755);
   } catch (e) {

@@ -151,6 +151,8 @@ describe('installCliShim hardens the on-PATH bin directory permissions (CWE-276/
     try {
       expect(installCliShim(runtime({ shell: '/bin/sh' })).ok).toBe(true);
       expect(statSync(binOf(root)).mode & 0o022).toBe(0); // no group/world write on a dir holding an on-PATH executable
+      // ...nor on any ancestor it created: a world-writable parent allows renaming bin and substituting a hostile one.
+      expect(statSync(join(root, '.agent-terminal')).mode & 0o022).toBe(0);
     } finally {
       process.umask(prev);
     }

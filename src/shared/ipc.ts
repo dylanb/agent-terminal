@@ -597,7 +597,7 @@ export interface CliInstallMsg {
  *  Never a partial state — `ok` is true only when the command is runnable from a new shell. */
 export type CliInstallResult =
   | { ok: true; path: string }
-  | { ok: false; error?: string };
+  | { ok: false; error: string };
 
 // ---- Preload-exposed API surfaces (§6) ----
 
