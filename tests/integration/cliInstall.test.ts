@@ -125,7 +125,11 @@ describe('installCliShim resilience to a hand-edited profile', () => {
     const profile = join(root, '.profile');
     writeFileSync(profile, '# >>> agent-terminal launcher >>>\nexport PATH="/stale/bin:$PATH"\nexport FOO=1\n');
     expect(installCliShim(runtime({ shell: '/bin/sh' })).ok).toBe(true);
-    expect(readFileSync(profile, 'utf8')).toContain('export FOO=1');
+    const after = readFileSync(profile, 'utf8');
+    expect(after).toContain('export FOO=1');
+    // Conservative recovery: with no end marker we cannot know the block's extent, so only the dangling
+    // begin-marker line is removed — every other line (including the orphaned body) is left untouched.
+    expect(after).toContain('export PATH="/stale/bin:$PATH"');
   });
 });
 
@@ -138,6 +142,18 @@ describe('installCliShim runtime idempotence (no duplicate PATH entry when a pro
       encoding: 'utf8',
     });
     expect(out.split(':').filter((seg) => seg === binOf(root)).length).toBe(1);
+  });
+});
+
+describe('installCliShim hardens the on-PATH bin directory permissions (CWE-276/732)', () => {
+  it('does not leave the launcher directory writable by group/other even under a permissive umask', () => {
+    const prev = process.umask(0o000);
+    try {
+      expect(installCliShim(runtime({ shell: '/bin/sh' })).ok).toBe(true);
+      expect(statSync(binOf(root)).mode & 0o022).toBe(0); // no group/world write on a dir holding an on-PATH executable
+    } finally {
+      process.umask(prev);
+    }
   });
 });
 

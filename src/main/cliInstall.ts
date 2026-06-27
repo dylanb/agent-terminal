@@ -8,10 +8,9 @@ import { shellQuote } from '../shared/shellQuote';
 import { isValidCliInstall } from './ipcValidation';
 import { generateShim, CLI_COMMAND_NAME, type LaunchInvocation } from './cliShim';
 
-/** The resolved filesystem work of one install: where the shim lands, the shell-profile files to
- *  extend PATH in, the existing profiles to strip orphan blocks from, the current PATH (whether the
- *  bin directory is already reachable), and how to launch the build. Internal to this module — the
- *  public seam is RuntimeInfo. */
+/** The resolved filesystem work of one install. Internal to this module — the public seam is
+ *  RuntimeInfo. `reconcileProfiles` are profiles to strip orphan launcher blocks from (e.g. left by a
+ *  former shell), distinct from `profiles`, the ones the active shell sources and gets the new block. */
 interface InstallTarget {
   binDir: string;
   profiles: string[];
@@ -140,6 +139,7 @@ function performInstall(target: InstallTarget): CliInstallResult {
   const cmd = path.join(target.binDir, CLI_COMMAND_NAME);
   try {
     fs.mkdirSync(target.binDir, { recursive: true });
+    fs.chmodSync(target.binDir, 0o755); // owner-only write: never group/world-writable, even under a permissive umask (CWE-276)
     fs.writeFileSync(cmd, generateShim(target.invocation));
     fs.chmodSync(cmd, 0o755);
   } catch (e) {

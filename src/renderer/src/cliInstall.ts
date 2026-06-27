@@ -80,9 +80,8 @@ export function createCliInstall(host: HTMLElement, deps: CliInstallDeps): CliIn
     } finally {
       busy = false;
       btn.disabled = false;
-      // Disabling the focused button blurs it to <body> in browsers; restore the focus point so a
-      // keyboard user is not dropped to the top of the page (WCAG 2.4.3) — but not if they moved
-      // focus elsewhere during the async install, which would steal it back (WCAG 2.4.3 Focus Order).
+      // Disabling a focused control blurs it to <body> in browsers; only the unmoved case is restored
+      // so a still-running-elsewhere focus is never stolen back (WCAG 2.4.3).
       if (hadFocus && (doc.activeElement === doc.body || doc.activeElement === btn)) btn.focus();
     }
   }
