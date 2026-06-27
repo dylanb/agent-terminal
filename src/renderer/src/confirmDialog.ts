@@ -1,7 +1,6 @@
 // Destructive confirmation dialog (#26) — a placement-agnostic blocking dialog (UI-STANDARDS §5),
-// NOT the §4 Alert live-region pattern. Uses role="alertdialog" (the WAI-ARIA APG role for a
-// consequential confirmation). Composes createModalShell and supplies the todo-count message +
-// Cancel/Terminate actions.
+// NOT the §4 Alert live-region pattern. Composes createModalShell and supplies the todo-count
+// message + Cancel/Terminate actions.
 
 import { createModalShell } from './modalShell';
 
@@ -20,7 +19,7 @@ export interface ConfirmDialog {
 }
 
 export function createConfirmDialog(host: HTMLElement): ConfirmDialog {
-  const shell = createModalShell(host, 'confirm-dialog-title', 'alertdialog');
+  const shell = createModalShell(host, 'confirm-dialog-title');
   return {
     render(opts) {
       if (!opts) return shell.render(null);

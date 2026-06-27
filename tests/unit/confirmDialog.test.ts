@@ -4,9 +4,8 @@ import { createConfirmDialog, type ConfirmDialogOptions } from '../../src/render
 import { assertRendersFromHostDocument } from './relocatable';
 
 // Destructive confirmation dialog (#26 AC3/AC4/AC13) — a placement-agnostic blocking dialog
-// (UI-STANDARDS §5, NOT the §4 Alert live-region pattern): focus trap, role=alertdialog (the
-// WAI-ARIA APG role for a consequential confirmation), focus move-in/restore. The opener decides
-// WHEN to open/close it (render(opts|null)).
+// (UI-STANDARDS §5, NOT the §4 Alert live-region pattern): focus trap, role=dialog, focus
+// move-in/restore. The opener decides WHEN to open/close it (render(opts|null)).
 
 const opts = (over: Partial<ConfirmDialogOptions> = {}): ConfirmDialogOptions => ({
   title: 'Terminate flow',
@@ -39,10 +38,10 @@ describe('confirm dialog (#26 AC3/AC4/AC13)', () => {
     expect(confirmBtn()!.textContent).toBe('Terminate');
   });
 
-  it('exposes an alertdialog role with an accessible name (AC13d / WCAG 4.1.2; WAI-ARIA APG alertdialog)', () => {
+  it('exposes a dialog role with an accessible name (AC13d / WCAG 4.1.2)', () => {
     createConfirmDialog(host).render(opts());
     const d = dialog()!;
-    expect(d.getAttribute('role')).toBe('alertdialog');
+    expect(d.getAttribute('role')).toBe('dialog');
     expect(d.getAttribute('aria-modal')).toBe('true');
     const labelledBy = d.getAttribute('aria-labelledby');
     expect(labelledBy).toBeTruthy();
