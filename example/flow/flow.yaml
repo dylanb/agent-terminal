@@ -14,6 +14,7 @@ steps:
     kind: loop
     loop: plan-loop
     bootstrap: pickup
+    todo_template: plan-loop-review
     inputs:
       - name: ticket
         type: github-ticket
