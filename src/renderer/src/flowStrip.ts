@@ -85,6 +85,33 @@ function header(doc: Document, text: string): HTMLElement {
   return sect;
 }
 
+/** The live-derived status line text, or null when this view shows no derived line (§24.2.2 S5):
+ *  it appears only on an in_progress step that has derived counts and is not a loop step. */
+function derivedText(state: FlowStateView): string | null {
+  if (state.status === 'in_progress' && state.derived && !state.loop) {
+    const d = state.derived;
+    return `${d.todosDone} / ${d.todosTotal} done · ${d.activity}`;
+  }
+  return null;
+}
+
+/** A signature of everything that fixes the strip's DOM STRUCTURE — deliberately NOT the live values
+ *  a passive push patches in place (loop iteration/tone, derived counts/activity). Two views with an
+ *  equal signature differ only in those live values, so the existing nodes can be updated without a
+ *  teardown — and a teardown is exactly what detaches a focused control, an in-flight click target,
+ *  or a confirm dialog's captured opener (§24.2.2 S5). */
+function structuralSig(state: FlowStateView): string {
+  return JSON.stringify([
+    state.status,
+    state.status === 'error' ? state.error ?? '' : '',
+    state.steps,
+    state.position,
+    !!state.loop,
+    derivedText(state) !== null,
+    state.notice ?? '',
+  ]);
+}
+
 /** The compact read-only loop read-out (§24.2.3 T2) shown in the rail: a 3-tone status pill (the
  *  one-word tone, not the unbounded status) + the iteration, framed as a `role=button` that opens
  *  the docked panel (the shell wires the click). The exact v4 vocabulary lives in that panel. */
@@ -125,6 +152,8 @@ function loopReadout(doc: Document, loop: FlowLoopView, controlsId?: string): HT
 export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStrip {
   const doc = host.ownerDocument; // build from the host's document so the strip relocates (UI §2.2.1)
   let repoKey: string | null = null;
+  // The structure last painted; a passive push whose structure matches patches in place (§24.2.2 S5).
+  let lastSig: string | null = null;
 
   const runAct = (act: Act, key: string): Promise<FlowStateView> =>
     act === 'start'
@@ -193,6 +222,7 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
   }
 
   function render(state: FlowStateView): void {
+    lastSig = structuralSig(state); // this paint defines the structure a later passive push compares to
     // Carry focus across the rebuild if the keyboard user was on the Loop read-out, rather than
     // dropping it to <body> (WCAG 2.4.3).
     const keepLoopFocus = doc.activeElement instanceof HTMLElement && doc.activeElement.classList.contains('loopstat') && host.contains(doc.activeElement);
@@ -312,17 +342,49 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
     emitPrompt(view);
   }
 
+  /** Apply a passive push's live-derived change to the existing DOM, leaving every interactive node
+   *  attached (§24.2.2 S5). The caller guarantees the structural signature is unchanged, so only the
+   *  loop read-out's tone/iteration and the derived n/m line can differ. */
+  function patchInPlace(state: FlowStateView): void {
+    const dText = derivedText(state);
+    if (dText !== null) {
+      const line = host.querySelector('.flow-derived');
+      if (line) line.textContent = dText;
+    }
+    if (state.loop) {
+      const pill = host.querySelector<HTMLElement>('.loopstat .spill');
+      if (pill) {
+        pill.className = `spill ${spillTone(state.loop.status)}`;
+        if (pill.lastElementChild) pill.lastElementChild.textContent = toneLabel(state.loop.status);
+      }
+      const iter = host.querySelector('.loop-iter');
+      if (iter) iter.textContent = `iter ${state.loop.iteration}`;
+    }
+    // Keep the docked loop panel live — the same hand-off render() makes (§24.2.3 T2).
+    deps.onLoopState?.(state.loop ?? null, state.stepName);
+  }
+
   async function refresh(): Promise<void> {
     if (repoKey === null) {
       host.replaceChildren();
+      lastSig = null;
       return;
     }
     // A state() IPC rejection keeps the last rendered rail rather than escaping as an unhandled
     // rejection or clearing to a blank pane (callers fire `void refresh()`, §18.1).
+    let view: FlowStateView;
     try {
-      render(await deps.state(repoKey));
+      view = await deps.state(repoKey);
     } catch {
-      /* keep the last rendered UI */
+      return; // keep the last rendered UI
+    }
+    // A passive push only ever changes live-derived values, so when the structure is unchanged patch
+    // in place — a full teardown would detach a focused control, an in-flight click target, or a
+    // confirm dialog's captured opener (§24.2.2 S5). Any structural change falls back to a render.
+    if (lastSig !== null && host.childElementCount > 0 && structuralSig(view) === lastSig) {
+      patchInPlace(view);
+    } else {
+      render(view);
     }
   }
 
@@ -340,6 +402,7 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
     refresh,
     onRepoChanged(key) {
       repoKey = key;
+      lastSig = null; // force a full structural render for the new repo — never patch across repos
       void refresh();
     },
     focusLoopReadout() {

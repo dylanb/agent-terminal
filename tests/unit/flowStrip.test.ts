@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createFlowStrip } from '../../src/renderer/src/flowStrip';
 import { assertRendersFromHostDocument } from './relocatable';
 import { FLOW_CHANGED_EVENT } from '../../src/renderer/src/paneActions';
-import type { FlowStateView, FlowStatus } from '../../src/shared/ipc';
+import type { AgentState, FlowStateView, FlowStatus } from '../../src/shared/ipc';
 
 // §24.2.2 / §24.2.3 T1 / §22.3 — the flow status strip. It follows the cwd: every window.flow call
 // must carry the current repoKey, so a stale-repo response must never repaint the rail (§16.3).
@@ -696,9 +696,9 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     oldReadout.focus();
     expect(document.activeElement).toBe(oldReadout);
 
-    fire(); // main pushes flow:onStateChanged → the rail repaints, rebuilding the read-out
-    await vi.waitFor(() => expect(host.querySelector('.loopstat')).not.toBe(oldReadout));
-    expect(document.activeElement).toBe(host.querySelector('.loopstat')); // focus rode the repaint (WCAG 2.4.3)
+    fire(); // main pushes flow:onStateChanged → the read-out updates live, with no user action
+    await vi.waitFor(() => expect(deps.state.mock.calls.length).toBeGreaterThanOrEqual(2)); // push handled
+    expect(document.activeElement).toBe(host.querySelector('.loopstat')); // focus stayed on the read-out (WCAG 2.4.3)
   });
 
   it('signals onPrompt(null) on a transition with no input prompt, closing the modal (§24.2.3 T3)', async () => {
@@ -941,6 +941,130 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
       await vi.waitFor(() => expect(deps.terminate).toHaveBeenCalledWith('/repo'));
       await vi.waitFor(() => expect(button.disabled).toBe(false));
       expect(host.querySelector('.flow-terminate')).toBe(button); // never repainted
+    });
+  });
+
+  // A passive flow:onStateChanged push (§24.2.2 S5) carries only LIVE-DERIVED change — todo counts,
+  // agent activity, the loop's state.yaml mirror — never a structural change (status/steps/controls
+  // move only via a user transition). Repainting it by tearing the whole subtree down detaches any
+  // node the user (or an open modal) is mid-interaction with: the focused control loses focus to
+  // <body>, an in-flight click target keeps detaching so the click never lands, and a confirm
+  // dialog's captured opener becomes stale so focus is not restored on close. The push must patch
+  // the derived values in place and leave the interactive nodes attached.
+  describe('passive push patches in place without tearing down interactive nodes (§24.2.2 S5)', () => {
+    const passiveDeps = (read: () => FlowStateView) => {
+      let fire = (): void => {};
+      const deps = {
+        state: vi.fn(async () => read()),
+        start: vi.fn(),
+        advance: vi.fn(),
+        restart: vi.fn(),
+        undo: vi.fn(),
+        terminate: vi.fn(),
+        provideInput: vi.fn(),
+        onStateChanged: vi.fn((cb: () => void) => {
+          fire = cb;
+          return () => {};
+        }),
+      };
+      return { deps, push: () => fire() };
+    };
+
+    it('keeps keyboard focus on the focused control across a derived-only push (1918/WCAG 2.4.3)', async () => {
+      let activity: AgentState = 'active';
+      const { deps, push } = passiveDeps(() => ({
+        stepName: 'build',
+        steps: ['build'],
+        position: 1,
+        total: 1,
+        status: 'in_progress',
+        derived: { activity, todosDone: 1, todosTotal: 3, ready: false },
+      }));
+      createFlowStrip(host, deps).onRepoChanged('/repo');
+      await vi.waitFor(() => expect(control()).not.toBeNull());
+      control()!.focus();
+      expect(document.activeElement).toBe(control());
+
+      activity = 'quiet';
+      push();
+      await vi.waitFor(() =>
+        expect(host.querySelector<HTMLElement>('.flow-derived')!.textContent!.toLowerCase()).toContain('quiet'),
+      );
+      expect(document.activeElement).toBe(control()); // never dropped to <body> by a teardown
+    });
+
+    it('does not tear down the Terminate control on a derived-only push, so a captured opener stays valid (2475 AC13)', async () => {
+      let done = 1;
+      const { deps, push } = passiveDeps(() => ({
+        stepName: 'build',
+        steps: ['build'],
+        position: 1,
+        total: 1,
+        status: 'in_progress',
+        derived: { activity: 'active', todosDone: done, todosTotal: 3, ready: false },
+      }));
+      createFlowStrip(host, { ...deps, onTerminate: vi.fn() }).onRepoChanged('/repo');
+      await vi.waitFor(() => expect(host.querySelector('.flow-terminate')).not.toBeNull());
+      const opener = host.querySelector('.flow-terminate');
+
+      done = 2;
+      push();
+      await vi.waitFor(() => expect(host.querySelector<HTMLElement>('.flow-derived')!.textContent).toContain('2 / 3'));
+      // Same node — a modal that captured this button as its focus-restore opener still resolves it.
+      expect(host.querySelector('.flow-terminate')).toBe(opener);
+    });
+
+    it('updates the loop read-out iteration in place and keeps the same node across a live re-pull (§24.2.3 T2)', async () => {
+      let iteration = 9;
+      const { deps, push } = passiveDeps(() => ({
+        stepName: 'build',
+        steps: ['build'],
+        position: 1,
+        total: 1,
+        status: 'in_progress',
+        loop: { status: 'awaiting-human-pr-approval', iteration, pr: 179, branch: 'b', ready: false },
+      }));
+      createFlowStrip(host, { ...deps, loopPanelId: 'loop-panel' }).onRepoChanged('/repo');
+      await vi.waitFor(() => expect(host.querySelector('.loopstat')).not.toBeNull());
+      const readout = host.querySelector('.loopstat');
+      expect(readout!.textContent).toContain('iter 9');
+
+      iteration = 11;
+      push();
+      await vi.waitFor(() => expect(host.querySelector('.loopstat')!.textContent).toContain('iter 11'));
+      // Same node — the click/focus target survives the live re-pull rather than detaching mid-action.
+      expect(host.querySelector('.loopstat')).toBe(readout);
+    });
+
+    it('still does a full structural render when the push changes structure (loop appears)', async () => {
+      let withLoop = false;
+      const { deps, push } = passiveDeps(() =>
+        withLoop
+          ? {
+              stepName: 'build',
+              steps: ['build'],
+              position: 1,
+              total: 1,
+              status: 'in_progress',
+              loop: { status: 'impl-review', iteration: 1, pr: 1, branch: 'b', ready: false },
+            }
+          : {
+              stepName: 'build',
+              steps: ['build'],
+              position: 1,
+              total: 1,
+              status: 'in_progress',
+              derived: { activity: 'active', todosDone: 1, todosTotal: 3, ready: false },
+            },
+      );
+      createFlowStrip(host, deps).onRepoChanged('/repo');
+      await vi.waitFor(() => expect(host.querySelector('.flow-derived')).not.toBeNull());
+      expect(host.querySelector('.loopstat')).toBeNull();
+
+      withLoop = true;
+      push();
+      await vi.waitFor(() => expect(host.querySelector('.loopstat')).not.toBeNull());
+      expect(host.querySelector('.flow-derived')).toBeNull(); // the derived line gave way to the loop read-out
     });
   });
 
