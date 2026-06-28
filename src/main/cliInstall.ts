@@ -70,29 +70,38 @@ function buildInstallTarget(info: RuntimeInfo, existingProfiles: string[]): Inst
   };
 }
 
-/** User bin directories the installer prefers when one is ALREADY on PATH and writable — landing the
- *  command where the user's shells already look means no profile edit and no new shell (the original
- *  failure: a launcher installed into a dir nobody's PATH includes). XDG user bin first; home-relative. */
+/** User bin directories the installer prefers when one is ALREADY on PATH — landing the command where
+ *  the user's shells already look means no profile edit and no new shell (the original failure: a
+ *  launcher installed into a dir nobody's PATH includes). */
 const PREFERRED_BIN_DIRS = [path.join('.local', 'bin'), 'bin'];
 
-function isWritableDir(dir: string): boolean {
+/** Whether a pre-existing on-PATH user dir is safe to host the launcher: the user can write to it, and
+ *  neither it nor any ancestor below `home` is group/other-writable. Otherwise another local user could
+ *  rename the dir (or an ancestor) and substitute a hostile launcher (CWE-276/426) — the same attack the
+ *  dedicated-dir path blocks by hardening its own parent to 0o700; a reused dir is never re-permissioned,
+ *  so it must instead be vetted and, failing that, declined in favor of the dedicated dir. */
+function isSafeReuseDir(dir: string, home: string): boolean {
   try {
     const st = fs.statSync(dir);
-    if (!st.isDirectory()) return false;
-    // CWE-276/426: a group/other-writable on-PATH dir lets another user substitute the launcher, and a
-    // reused dir is not re-permissioned — so reject it here and fall back to the hardened dedicated dir.
-    if (st.mode & 0o022) return false;
+    if (!st.isDirectory() || st.mode & 0o022) return false;
     fs.accessSync(dir, fs.constants.W_OK);
-    return true;
   } catch {
     return false;
   }
+  for (let cur = path.dirname(dir); cur !== home && cur !== path.dirname(cur); cur = path.dirname(cur)) {
+    try {
+      if (fs.statSync(cur).mode & 0o022) return false;
+    } catch {
+      return false;
+    }
+  }
+  return true;
 }
 
 function preferredOnPathBinDir(home: string, currentPath: string): string | undefined {
   for (const rel of PREFERRED_BIN_DIRS) {
     const dir = path.join(home, rel);
-    if (onPath(dir, currentPath) && isWritableDir(dir)) return dir;
+    if (onPath(dir, currentPath) && isSafeReuseDir(dir, home)) return dir;
   }
   return undefined;
 }

@@ -197,6 +197,25 @@ describe('installCliShim prefers a writable user bin dir already on PATH (§23.4
     expect(asOk(res).path).toBe(cmdOf(root)); // recovered via the always-creatable dedicated dir
     expect(resolvesFrom(join(root, '.zshrc'))).toBe(cmdOf(root));
   });
+
+  it.skipIf(isRoot)('falls back to the hardened dedicated dir when a parent of the preferred dir is group/other-writable (CWE-426)', () => {
+    const lbin = localBin(root);
+    mkdirSync(lbin, { recursive: true }); // ~/.local/bin itself is owner-only
+    chmodSync(join(root, '.local'), 0o777); // but its parent is world-writable → bin can be renamed and substituted
+    const res = installCliShim(runtime({ shell: '/bin/zsh', currentPath: `${lbin}:/usr/bin` }));
+    expect(asOk(res).path).toBe(cmdOf(root)); // not the dir under a tamperable ancestor
+    expect(existsSync(join(lbin, CLI_COMMAND_NAME))).toBe(false);
+    expect(resolvesFrom(join(root, '.zshrc'))).toBe(cmdOf(root));
+  });
+
+  it('installs into ~/bin when ~/.local/bin is absent but ~/bin is writable and on PATH', () => {
+    const hbin = join(root, 'bin');
+    mkdirSync(hbin, { recursive: true }); // ~/.local/bin never created → ~/bin is the preferred dir that qualifies
+    const res = installCliShim(runtime({ shell: '/bin/zsh', currentPath: `${hbin}:/usr/bin` }));
+    expect(asOk(res).path).toBe(join(hbin, CLI_COMMAND_NAME));
+    expect(existsSync(join(root, '.zshrc'))).toBe(false); // already on PATH → no profile edit
+    expect(existsSync(binOf(root))).toBe(false); // and no dedicated dir created
+  });
 });
 
 describe('installCliShim idempotency (reconcile to the current build)', () => {
