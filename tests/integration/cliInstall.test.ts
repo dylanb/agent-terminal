@@ -117,6 +117,7 @@ describe('installCliShim prefers a writable user bin dir already on PATH (§23.4
   it('leaves the reused directory permissions untouched — it is the user dir, not app-owned', () => {
     const lbin = localBin(root);
     mkdirSync(lbin, { recursive: true });
+    chmodSync(join(root, '.local'), 0o755); // pin the walked parent so reuse is selected regardless of umask
     chmodSync(lbin, 0o755);
     expect(installCliShim(runtime({ shell: '/bin/zsh', currentPath: `${lbin}:/usr/bin` })).ok).toBe(true);
     expect(statSync(lbin).mode & 0o777).toBe(0o755); // not tightened to 0o700 like the app-owned dir
@@ -200,6 +201,8 @@ describe('installCliShim prefers a writable user bin dir already on PATH (§23.4
   it('falls back to the dedicated dir when the preferred dir is writable but the shim write fails', () => {
     const lbin = localBin(root);
     mkdirSync(join(lbin, CLI_COMMAND_NAME), { recursive: true }); // shim path occupied by a dir → write throws
+    chmodSync(join(root, '.local'), 0o755); // pin dir + walked parent so reuse is SELECTED (and then the write fails) regardless of umask
+    chmodSync(lbin, 0o755);
     const res = installCliShim(runtime({ shell: '/bin/zsh', currentPath: `${lbin}:/usr/bin` }));
     expect(asOk(res).path).toBe(cmdOf(root)); // recovered via the always-creatable dedicated dir
     expect(resolvesFrom(join(root, '.zshrc'))).toBe(cmdOf(root));
