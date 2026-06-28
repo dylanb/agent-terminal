@@ -159,6 +159,44 @@ describe('installCliShim prefers a writable user bin dir already on PATH (§23.4
     expect(installCliShim(runtime({ shell: '/bin/zsh', currentPath: `${lbin}:/usr/bin` })).ok).toBe(true);
     expect(readFileSync(join(root, '.zshrc'), 'utf8')).not.toContain('agent-terminal launcher');
   });
+
+  it.skipIf(isRoot)('falls back to the hardened dedicated dir when the preferred dir is group/other-writable (CWE-276/426)', () => {
+    const lbin = localBin(root);
+    mkdirSync(lbin, { recursive: true });
+    chmodSync(lbin, 0o777); // world-writable: another local user could substitute the on-PATH launcher
+    try {
+      const res = installCliShim(runtime({ shell: '/bin/zsh', currentPath: `${lbin}:/usr/bin` }));
+      expect(asOk(res).path).toBe(cmdOf(root)); // not the unprotected on-PATH dir
+      expect(existsSync(join(lbin, CLI_COMMAND_NAME))).toBe(false);
+      expect(resolvesFrom(join(root, '.zshrc'))).toBe(cmdOf(root));
+    } finally {
+      chmodSync(lbin, 0o700); // restore so afterEach can remove it
+    }
+  });
+
+  it('falls back to the dedicated dir when a preferred dir is on PATH but does not exist on disk', () => {
+    const lbin = localBin(root); // on PATH (below) but never created
+    const res = installCliShim(runtime({ shell: '/bin/zsh', currentPath: `${lbin}:/usr/bin` }));
+    expect(asOk(res).path).toBe(cmdOf(root));
+    expect(existsSync(join(lbin, CLI_COMMAND_NAME))).toBe(false);
+    expect(resolvesFrom(join(root, '.zshrc'))).toBe(cmdOf(root));
+  });
+
+  it('falls back to the dedicated dir when a preferred path is on PATH but is a regular file', () => {
+    mkdirSync(join(root, '.local'), { recursive: true });
+    const lbin = localBin(root);
+    writeFileSync(lbin, 'i am a file, not a directory\n');
+    const res = installCliShim(runtime({ shell: '/bin/zsh', currentPath: `${lbin}:/usr/bin` }));
+    expect(asOk(res).path).toBe(cmdOf(root));
+  });
+
+  it('falls back to the dedicated dir when the preferred dir is writable but the shim write fails', () => {
+    const lbin = localBin(root);
+    mkdirSync(join(lbin, CLI_COMMAND_NAME), { recursive: true }); // shim path occupied by a dir → write throws
+    const res = installCliShim(runtime({ shell: '/bin/zsh', currentPath: `${lbin}:/usr/bin` }));
+    expect(asOk(res).path).toBe(cmdOf(root)); // recovered via the always-creatable dedicated dir
+    expect(resolvesFrom(join(root, '.zshrc'))).toBe(cmdOf(root));
+  });
 });
 
 describe('installCliShim idempotency (reconcile to the current build)', () => {

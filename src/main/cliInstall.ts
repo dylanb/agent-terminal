@@ -11,9 +11,8 @@ import { generateShim, CLI_COMMAND_NAME, type LaunchInvocation } from './cliShim
 /** The resolved filesystem work of one install. Internal to this module — the public seam is
  *  RuntimeInfo. `reconcileProfiles` are profiles to strip orphan launcher blocks from (e.g. left by a
  *  former shell), distinct from `profiles`, the ones the active shell sources and gets the new block.
- *  `ownsBinDir` is true only for the app-created `~/.agent-terminal/bin` — the dir whose permissions
- *  the installer hardens; false when the shim lands in a pre-existing user dir already on PATH, which
- *  the installer must not create or re-permission. */
+ *  `ownsBinDir` is true only for the app-created `~/.agent-terminal/bin`; false for a reused user dir,
+ *  which the installer must neither create nor re-permission. */
 interface InstallTarget {
   binDir: string;
   ownsBinDir: boolean;
@@ -71,15 +70,18 @@ function buildInstallTarget(info: RuntimeInfo, existingProfiles: string[]): Inst
   };
 }
 
-/** User bin directories the installer prefers when one is ALREADY on PATH and writable — the command
- *  then lands somewhere the user's shells already read, so no profile edit and no new shell are needed
- *  (the original failure this avoids: a launcher installed into a dir nobody's PATH includes). Ordered
- *  by convention, XDG user bin first; relative to home. */
+/** User bin directories the installer prefers when one is ALREADY on PATH and writable — landing the
+ *  command where the user's shells already look means no profile edit and no new shell (the original
+ *  failure: a launcher installed into a dir nobody's PATH includes). XDG user bin first; home-relative. */
 const PREFERRED_BIN_DIRS = [path.join('.local', 'bin'), 'bin'];
 
 function isWritableDir(dir: string): boolean {
   try {
-    if (!fs.statSync(dir).isDirectory()) return false;
+    const st = fs.statSync(dir);
+    if (!st.isDirectory()) return false;
+    // CWE-276/426: a group/other-writable on-PATH dir lets another user substitute the launcher, and a
+    // reused dir is not re-permissioned — so reject it here and fall back to the hardened dedicated dir.
+    if (st.mode & 0o022) return false;
     fs.accessSync(dir, fs.constants.W_OK);
     return true;
   } catch {
@@ -87,14 +89,10 @@ function isWritableDir(dir: string): boolean {
   }
 }
 
-/** The most logical install location for this user on this machine: the first preferred user bin dir
- *  that is both already on PATH and writable, else undefined — then the installer creates and
- *  PATH-wires its own ~/.agent-terminal/bin. */
 function preferredOnPathBinDir(home: string, currentPath: string): string | undefined {
-  const onPathDirs = new Set(currentPath.split(path.delimiter));
   for (const rel of PREFERRED_BIN_DIRS) {
     const dir = path.join(home, rel);
-    if (onPathDirs.has(dir) && isWritableDir(dir)) return dir;
+    if (onPath(dir, currentPath) && isWritableDir(dir)) return dir;
   }
   return undefined;
 }
@@ -167,9 +165,7 @@ export function installCliShim(runtime: RuntimeInfo): CliInstallResult {
   );
   const preferred = preferredOnPathBinDir(runtime.home, runtime.currentPath);
   if (preferred) {
-    // Already on PATH: drop the shim in and skip the profile edit. Reconcile every existing profile so
-    // a stale block from a former dedicated-dir install leaves no orphan PATH/profile entry behind.
-    return performInstall({
+    const result = performInstall({
       binDir: preferred,
       ownsBinDir: false,
       profiles: [],
@@ -177,6 +173,7 @@ export function installCliShim(runtime: RuntimeInfo): CliInstallResult {
       currentPath: runtime.currentPath,
       invocation: runtime.invocation,
     });
+    if (result.ok) return result;
   }
   return performInstall(buildInstallTarget(runtime, existingProfiles));
 }
@@ -189,7 +186,6 @@ function performInstall(target: InstallTarget): CliInstallResult {
       // Owner-only on the on-PATH executable dir AND its app-owned parent: a world-traversable/writable
       // ancestor lets another user rename bin and substitute a hostile launcher (CWE-276/426). 0o700 also
       // matches auditRecorder's hardening of the shared ~/.agent-terminal root rather than re-widening it.
-      // A reused user dir already on PATH is the user's own — never re-created or re-permissioned here.
       fs.chmodSync(path.dirname(target.binDir), 0o700);
       fs.chmodSync(target.binDir, 0o700);
     }
