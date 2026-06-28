@@ -210,7 +210,8 @@ describe('installCliShim prefers a writable user bin dir already on PATH (§23.4
 
   it.skipIf(isRoot)('falls back to the hardened dedicated dir when a parent of the preferred dir is group/other-writable (CWE-426)', () => {
     const lbin = localBin(root);
-    mkdirSync(lbin, { recursive: true }); // ~/.local/bin itself is owner-only
+    mkdirSync(lbin, { recursive: true });
+    chmodSync(lbin, 0o755); // ~/.local/bin itself is owner-only (pinned so the leaf passes the walk under any umask)
     chmodSync(join(root, '.local'), 0o777); // but its parent is world-writable → bin can be renamed and substituted
     const res = installCliShim(runtime({ shell: '/bin/zsh', currentPath: `${lbin}:/usr/bin` }));
     expect(asOk(res).path).toBe(cmdOf(root)); // not the dir under a tamperable ancestor
