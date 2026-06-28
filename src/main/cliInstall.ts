@@ -79,18 +79,24 @@ const PREFERRED_BIN_DIRS = [path.join('.local', 'bin'), 'bin'];
  *  neither it nor any ancestor below `home` is group/other-writable. Otherwise another local user could
  *  rename the dir (or an ancestor) and substitute a hostile launcher (CWE-276/426) — the same attack the
  *  dedicated-dir path blocks by hardening its own parent to 0o700; a reused dir is never re-permissioned,
- *  so it must instead be vetted and, failing that, declined in favor of the dedicated dir. */
+ *  so it must instead be vetted and, failing that, declined in favor of the dedicated dir. The ancestor
+ *  walk runs over the resolved real path (CWE-59): a symlinked dir's real ancestors are what an attacker
+ *  manipulates, not the lexical path. */
 function isSafeReuseDir(dir: string, home: string): boolean {
+  let real: string;
+  let realHome: string;
   try {
     const st = fs.statSync(dir);
-    if (!st.isDirectory() || st.mode & 0o022) return false;
+    if (!st.isDirectory() || (st.mode & 0o022) !== 0) return false;
     fs.accessSync(dir, fs.constants.W_OK);
+    real = fs.realpathSync(dir);
+    realHome = fs.realpathSync(home);
   } catch {
     return false;
   }
-  for (let cur = path.dirname(dir); cur !== home && cur !== path.dirname(cur); cur = path.dirname(cur)) {
+  for (let cur = path.dirname(real); cur !== realHome && cur !== path.dirname(cur); cur = path.dirname(cur)) {
     try {
-      if (fs.statSync(cur).mode & 0o022) return false;
+      if ((fs.statSync(cur).mode & 0o022) !== 0) return false;
     } catch {
       return false;
     }

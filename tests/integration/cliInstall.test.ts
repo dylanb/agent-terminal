@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, writeFileSync, chmodSync, statSync, readFileSync, existsSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, chmodSync, statSync, readFileSync, existsSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { installCliShim, handleCliInstall, type RuntimeInfo } from '../../src/main/cliInstall';
@@ -105,6 +105,7 @@ describe('installCliShim prefers a writable user bin dir already on PATH (§23.4
   it('installs into ~/.local/bin and edits no profile when it is writable and already on PATH', () => {
     const lbin = localBin(root);
     mkdirSync(lbin, { recursive: true });
+    chmodSync(lbin, 0o755); // pin perms so the fixture does not depend on the runner's umask
     const res = installCliShim(runtime({ shell: '/bin/zsh', currentPath: `${lbin}:/usr/bin` }));
     expect(asOk(res).path).toBe(join(lbin, CLI_COMMAND_NAME));
     expect(isExecutable(join(lbin, CLI_COMMAND_NAME))).toBe(true);
@@ -125,6 +126,8 @@ describe('installCliShim prefers a writable user bin dir already on PATH (§23.4
     const hbin = join(root, 'bin');
     mkdirSync(lbin, { recursive: true });
     mkdirSync(hbin, { recursive: true });
+    chmodSync(lbin, 0o755); // pin perms so the fixture does not depend on the runner's umask
+    chmodSync(hbin, 0o755);
     const res = installCliShim(runtime({ shell: '/bin/zsh', currentPath: `${hbin}:${lbin}:/usr/bin` }));
     expect(asOk(res).path).toBe(join(lbin, CLI_COMMAND_NAME));
   });
@@ -156,6 +159,7 @@ describe('installCliShim prefers a writable user bin dir already on PATH (§23.4
     expect(readFileSync(join(root, '.zshrc'), 'utf8')).toContain('agent-terminal launcher');
     const lbin = localBin(root);
     mkdirSync(lbin, { recursive: true });
+    chmodSync(lbin, 0o755); // pin perms so the fixture does not depend on the runner's umask
     expect(installCliShim(runtime({ shell: '/bin/zsh', currentPath: `${lbin}:/usr/bin` })).ok).toBe(true);
     expect(readFileSync(join(root, '.zshrc'), 'utf8')).not.toContain('agent-terminal launcher');
   });
@@ -211,10 +215,43 @@ describe('installCliShim prefers a writable user bin dir already on PATH (§23.4
   it('installs into ~/bin when ~/.local/bin is absent but ~/bin is writable and on PATH', () => {
     const hbin = join(root, 'bin');
     mkdirSync(hbin, { recursive: true }); // ~/.local/bin never created → ~/bin is the preferred dir that qualifies
+    chmodSync(hbin, 0o755); // pin perms so the fixture does not depend on the runner's umask
     const res = installCliShim(runtime({ shell: '/bin/zsh', currentPath: `${hbin}:/usr/bin` }));
     expect(asOk(res).path).toBe(join(hbin, CLI_COMMAND_NAME));
     expect(existsSync(join(root, '.zshrc'))).toBe(false); // already on PATH → no profile edit
     expect(existsSync(binOf(root))).toBe(false); // and no dedicated dir created
+  });
+
+  it.skipIf(isRoot)('falls back to the dedicated dir when the preferred dir is group-only-writable', () => {
+    const lbin = localBin(root);
+    mkdirSync(lbin, { recursive: true });
+    chmodSync(lbin, 0o770); // group-writable but not other-writable: the macOS staff-group exposure
+    try {
+      expect(asOk(installCliShim(runtime({ shell: '/bin/zsh', currentPath: `${lbin}:/usr/bin` }))).path).toBe(cmdOf(root));
+    } finally {
+      chmodSync(lbin, 0o700);
+    }
+  });
+
+  it.skipIf(isRoot)('falls back to the dedicated dir when an ancestor of the preferred dir is group-only-writable', () => {
+    const lbin = localBin(root);
+    mkdirSync(lbin, { recursive: true });
+    chmodSync(lbin, 0o755);
+    chmodSync(join(root, '.local'), 0o770); // group-writable ancestor: bin can be renamed by a group-mate
+    expect(asOk(installCliShim(runtime({ shell: '/bin/zsh', currentPath: `${lbin}:/usr/bin` }))).path).toBe(cmdOf(root));
+  });
+
+  it.skipIf(isRoot)('falls back when the preferred dir is a symlink whose real ancestor is world-writable (CWE-59/426)', () => {
+    const realParent = join(root, 'shared', 'tools');
+    const realBin = join(realParent, 'binreal');
+    mkdirSync(realBin, { recursive: true });
+    chmodSync(realBin, 0o755);
+    chmodSync(realParent, 0o777); // the symlink target's REAL parent is world-writable
+    mkdirSync(join(root, '.local'), { recursive: true });
+    symlinkSync(realBin, localBin(root)); // ~/.local/bin → .../shared/tools/binreal
+    const res = installCliShim(runtime({ shell: '/bin/zsh', currentPath: `${localBin(root)}:/usr/bin` }));
+    expect(asOk(res).path).toBe(cmdOf(root)); // lexical-only ancestor walk would miss the world-writable real parent
+    expect(existsSync(join(realBin, CLI_COMMAND_NAME))).toBe(false);
   });
 });
 
