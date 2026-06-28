@@ -5,6 +5,8 @@ import {
   type AgentInjectMsg,
   type ArtifactScope,
   type ArtifactTree,
+  type CliApi,
+  type CliInstallResult,
   type CommandCaptureResult,
   type CommandSummary,
   type CwdChangedMsg,
@@ -140,7 +142,12 @@ const flowApi: FlowApi = {
   },
 };
 
+export const cliApi: CliApi = {
+  install: () => ipcRenderer.invoke(CH.cliInstall, { sessionId: SESSION_ID }) as Promise<CliInstallResult>,
+};
+
 contextBridge.exposeInMainWorld('term', termApi);
 contextBridge.exposeInMainWorld('monitor', monitorApi);
 contextBridge.exposeInMainWorld('viewer', viewerApi);
 contextBridge.exposeInMainWorld('flow', flowApi);
+contextBridge.exposeInMainWorld('cli', cliApi);

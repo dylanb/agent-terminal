@@ -4,6 +4,7 @@ import {
   isValidCapture,
   isValidCaptureCommand,
   isValidCaptureLast,
+  isValidCliInstall,
   isValidClearCommands,
   isValidCommandsRequest,
   isValidDismiss,
@@ -252,6 +253,12 @@ describe('IPC payload validation (§6 — renderer-supplied input is untrusted)'
     expect(isValidViewerTree({ sessionId: sid })).toBe(false); // scope required
     expect(isValidViewerTree({ sessionId: 'other', scope: 'curated' })).toBe(false);
     expect(isValidViewerTree(null)).toBe(false);
+  });
+
+  it('accepts a cli:install for the live session and rejects a wrong/missing session', () => {
+    expect(isValidCliInstall({ sessionId: sid })).toBe(true);
+    expect(isValidCliInstall({ sessionId: 'other' })).toBe(false);
+    expect(isValidCliInstall(null)).toBe(false);
   });
 
   it('accepts a viewer:read with a string relPath and rejects missing/non-string relPath or wrong session', () => {

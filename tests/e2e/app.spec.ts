@@ -1,10 +1,12 @@
 /// <reference lib="dom" />
 // page.evaluate callbacks run in the renderer; DOM lib gives them window.monitor's type.
 import { _electron as electron, expect, test, type ElectronApplication, type Page } from '@playwright/test';
-import { mkdtempSync, mkdirSync, writeFileSync, appendFileSync, rmSync, existsSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, appendFileSync, chmodSync, rmSync, existsSync, statSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join, basename } from 'node:path';
 import { CH, SESSION_ID } from '../../src/shared/ipc';
+import { CLI_COMMAND_NAME } from '../../src/main/cliShim';
 import { parseAuditStream, type AuditEvent } from '../../src/shared/audit';
 
 // Full-loop e2e (§12 acceptance): real Electron, real node-pty, real bash.
@@ -2777,5 +2779,131 @@ test('two concurrent instances each root at their own target directory (§23.4)'
     rmSync(dirB, { recursive: true, force: true });
     rmSync(udA, { recursive: true, force: true });
     rmSync(udB, { recursive: true, force: true });
+  }
+});
+
+// ---- §23.4 / #25: the agent-terminal CLI launch shim (install in-app, launch a new instance) ----
+
+const MAIN_SCRIPT = 'out/main/index.js';
+
+/** Electron MAIN-process PIDs whose command line loads our app (helper processes carry --type=). */
+function electronMainPids(): number[] {
+  const out = execFileSync('ps', ['-A', '-o', 'pid=,command='], { encoding: 'utf8' });
+  return out
+    .split('\n')
+    .filter((l) => l.includes(MAIN_SCRIPT) && !l.includes('--type='))
+    .map((l) => parseInt(l.trim().split(/\s+/)[0], 10))
+    .filter((n) => Number.isFinite(n));
+}
+
+function isExecutable(p: string): boolean {
+  return (statSync(p).mode & 0o111) !== 0;
+}
+
+test('the in-app install action puts an executable agent-terminal on PATH; the instance stays open (§23.4)', async () => {
+  const home = realpathSync(mkdtempSync(join(tmpdir(), 'agent-term-e2e-cliinstall-home-')));
+  await app.close();
+  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
+  page = await app.firstWindow();
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+  try {
+    await page.locator('[data-viewbtn="4"]').click();
+    await expect(page.locator('[data-viewpane="4"]')).toBeVisible();
+    await page.locator('#cli-install-view button').click();
+
+    const cmd = join(home, '.agent-terminal', 'bin', CLI_COMMAND_NAME);
+    await expect.poll(() => existsSync(cmd)).toBe(true);
+    expect(isExecutable(cmd)).toBe(true);
+    await expect(page.locator('#cli-install-view [role="status"]')).toContainText('agent-terminal');
+
+    // Disabling the focused button during install must not strand keyboard focus on <body> (WCAG 2.4.3).
+    await expect
+      .poll(() => page.evaluate(() => document.activeElement === document.querySelector('#cli-install-view button')))
+      .toBe(true);
+
+    // The original instance stays open and responsive after install.
+    await page.locator('[data-viewbtn="1"]').click();
+    await typeCommand('echo still-here');
+    await expect(termRows()).toContainText('still-here');
+  } finally {
+    await app.close();
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('the in-app install affordance is reachable in the scrolling Settings column, not stranded below the fold (§23.5)', async () => {
+  await page.locator('[data-viewbtn="4"]').click();
+  await expect(page.locator('[data-viewpane="4"]')).toBeVisible();
+
+  const within = await page.evaluate(() => {
+    const pane = document.querySelector('[data-viewpane="4"]') as HTMLElement;
+    const btn = document.querySelector('#cli-install-view button') as HTMLElement;
+    const column = (document.querySelector('#kb-settings-view') as HTMLElement).parentElement as HTMLElement;
+    column.scrollTop = column.scrollHeight;
+    const b = btn.getBoundingClientRect();
+    const p = pane.getBoundingClientRect();
+    return b.width > 0 && b.height > 0 && b.top >= p.top - 1 && b.bottom <= p.bottom + 1;
+  });
+  expect(within).toBe(true);
+});
+
+test('the installed shim launches a genuine second instance rooted at the target (§23.4 / #25)', async () => {
+  test.setTimeout(120_000); // launches a second real Electron instance on top of the first
+  const home = realpathSync(mkdtempSync(join(tmpdir(), 'agent-term-e2e-shimlaunch-home-')));
+  const target = realpathSync(mkdtempSync(join(tmpdir(), 'agent-term-e2e-shimlaunch-target-')));
+  const invokeFrom = realpathSync(mkdtempSync(join(tmpdir(), 'agent-term-e2e-shimlaunch-from-')));
+  const marker = join(home, 'launched-shell.txt');
+  // A stand-in shell so the launched instance's spawn cwd (the §23.4 root) is observable on disk; it
+  // stays alive (sleep) so the second instance is concurrently live with the first.
+  const recShell = join(home, 'rec-shell.sh');
+  writeFileSync(recShell, `#!/bin/sh\nprintf '%s\\n%s\\n' "$$" "$(pwd)" > "${marker}"\nexec sleep 60\n`);
+  chmodSync(recShell, 0o755);
+
+  await app.close();
+  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
+  page = await app.firstWindow();
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  let before: number[] = [];
+  try {
+    await page.locator('[data-viewbtn="4"]').click();
+    await page.locator('#cli-install-view button').click();
+    const shim = join(home, '.agent-terminal', 'bin', CLI_COMMAND_NAME);
+    await expect.poll(() => existsSync(shim)).toBe(true);
+
+    before = electronMainPids();
+    execFileSync(shim, [target], {
+      cwd: invokeFrom,
+      env: { ...process.env, APP_SHELL: recShell, HOME: home, APP_SUBMIT_DELAY_MS: '100' },
+      timeout: 10_000,
+    });
+
+    // Genuine second process: exactly one more app main process than before, the original among them.
+    await expect.poll(() => electronMainPids().length, { timeout: 30_000 }).toBe(before.length + 1);
+    const added = electronMainPids().filter((p) => !before.includes(p));
+    expect(added).toHaveLength(1);
+    expect(() => process.kill(added[0], 0)).not.toThrow(); // the new instance is alive
+    expect(electronMainPids()).toEqual(expect.arrayContaining(before)); // the original is still alive
+
+    // Rooted at the target: the launched instance spawned its shell in the §23.4 root, not the
+    // invoking process's cwd nor $HOME — the discriminator that the shim drove §23.4, not just cwd.
+    await expect.poll(() => existsSync(marker), { timeout: 30_000 }).toBe(true);
+    const launchedShellCwd = readFileSync(marker, 'utf8').trim().split('\n')[1];
+    expect(launchedShellCwd).toBe(target);
+
+    // The first instance is still open and responsive.
+    await page.locator('[data-viewbtn="1"]').click();
+    await typeCommand('echo first-alive');
+    await expect(termRows()).toContainText('first-alive');
+  } finally {
+    if (before.length) {
+      for (const pid of electronMainPids().filter((p) => !before.includes(p))) {
+        try { process.kill(pid, 'SIGKILL'); } catch { /* already gone */ }
+      }
+    }
+    await app.close();
+    rmSync(home, { recursive: true, force: true });
+    rmSync(target, { recursive: true, force: true });
+    rmSync(invokeFrom, { recursive: true, force: true });
   }
 });

@@ -8,6 +8,7 @@ import {
   type ClipboardWriteMsg,
   type CaptureCommandMsg,
   type CaptureLastMsg,
+  type CliInstallMsg,
   type ClearCommandsMsg,
   type CommandsRequestMsg,
   type DismissAllMsg,
@@ -82,6 +83,10 @@ export function isValidCaptureCommand(m: unknown): m is CaptureCommandMsg {
 }
 
 export function isValidCaptureLast(m: unknown): m is CaptureLastMsg {
+  return isRecord(m) && isLiveSession(m);
+}
+
+export function isValidCliInstall(m: unknown): m is CliInstallMsg {
   return isRecord(m) && isLiveSession(m);
 }
 
