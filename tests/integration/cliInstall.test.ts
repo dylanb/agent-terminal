@@ -253,6 +253,23 @@ describe('installCliShim prefers a writable user bin dir already on PATH (§23.4
     expect(asOk(res).path).toBe(cmdOf(root)); // lexical-only ancestor walk would miss the world-writable real parent
     expect(existsSync(join(realBin, CLI_COMMAND_NAME))).toBe(false);
   });
+
+  it('resolves home through symlinks so the walk stops at the real home, not a world-writable grandparent', () => {
+    // home is itself a symlink to a real dir whose REAL parent is world-writable. The ancestor walk must
+    // stop at the resolved real home and not climb into that grandparent, so an owner-safe ~/.local/bin
+    // under it is still accepted. A lexical (unresolved) home sentinel would overrun and wrongly decline.
+    const grandparent = join(root, 'grandparent');
+    const realHome = join(grandparent, 'realhome');
+    mkdirSync(realHome, { recursive: true });
+    chmodSync(grandparent, 0o777); // world-writable, but ABOVE the real home — must not be reached
+    const home = join(root, 'home-link');
+    symlinkSync(realHome, home); // home → .../grandparent/realhome
+    const lbin = join(home, '.local', 'bin');
+    mkdirSync(lbin, { recursive: true });
+    chmodSync(lbin, 0o755);
+    const res = installCliShim(runtime({ home, shell: '/bin/zsh', currentPath: `${lbin}:/usr/bin` }));
+    expect(asOk(res).path).toBe(join(lbin, CLI_COMMAND_NAME)); // accepted: walk terminates at the resolved real home
+  });
 });
 
 describe('installCliShim idempotency (reconcile to the current build)', () => {

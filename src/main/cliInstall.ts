@@ -75,12 +75,11 @@ function buildInstallTarget(info: RuntimeInfo, existingProfiles: string[]): Inst
  *  launcher installed into a dir nobody's PATH includes). */
 const PREFERRED_BIN_DIRS = [path.join('.local', 'bin'), 'bin'];
 
-/** Whether a pre-existing on-PATH user dir is safe to host the launcher: the user can write to it, and
- *  neither it nor any ancestor below `home` is group/other-writable. Otherwise another local user could
- *  rename the dir (or an ancestor) and substitute a hostile launcher (CWE-276/426) — the same attack the
- *  dedicated-dir path blocks by hardening its own parent to 0o700; a reused dir is never re-permissioned,
- *  so it must instead be vetted and, failing that, declined in favor of the dedicated dir. The ancestor
- *  walk runs over the resolved real path (CWE-59): a symlinked dir's real ancestors are what an attacker
+/** Whether a pre-existing on-PATH user dir is safe to host the launcher. A reused dir is never
+ *  re-permissioned, so it must be vetted and, failing that, declined for the dedicated dir — otherwise
+ *  another local user could rename the dir (or an ancestor) and substitute a hostile launcher
+ *  (CWE-276/426), the same attack the dedicated-dir path blocks by hardening its own parent to 0o700.
+ *  Symlinks are resolved first (CWE-59): a symlinked dir's real ancestors are what an attacker
  *  manipulates, not the lexical path. */
 function isSafeReuseDir(dir: string, home: string): boolean {
   let real: string;
