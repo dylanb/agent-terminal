@@ -105,7 +105,8 @@ describe('installCliShim prefers a writable user bin dir already on PATH (§23.4
   it('installs into ~/.local/bin and edits no profile when it is writable and already on PATH', () => {
     const lbin = localBin(root);
     mkdirSync(lbin, { recursive: true });
-    chmodSync(lbin, 0o755); // pin perms so the fixture does not depend on the runner's umask
+    chmodSync(join(root, '.local'), 0o755); // pin the dir AND the walked parent so the fixture does not depend on umask
+    chmodSync(lbin, 0o755);
     const res = installCliShim(runtime({ shell: '/bin/zsh', currentPath: `${lbin}:/usr/bin` }));
     expect(asOk(res).path).toBe(join(lbin, CLI_COMMAND_NAME));
     expect(isExecutable(join(lbin, CLI_COMMAND_NAME))).toBe(true);
@@ -126,7 +127,8 @@ describe('installCliShim prefers a writable user bin dir already on PATH (§23.4
     const hbin = join(root, 'bin');
     mkdirSync(lbin, { recursive: true });
     mkdirSync(hbin, { recursive: true });
-    chmodSync(lbin, 0o755); // pin perms so the fixture does not depend on the runner's umask
+    chmodSync(join(root, '.local'), 0o755); // pin the dirs AND the walked .local parent so the fixture does not depend on umask
+    chmodSync(lbin, 0o755);
     chmodSync(hbin, 0o755);
     const res = installCliShim(runtime({ shell: '/bin/zsh', currentPath: `${hbin}:${lbin}:/usr/bin` }));
     expect(asOk(res).path).toBe(join(lbin, CLI_COMMAND_NAME));
@@ -159,7 +161,8 @@ describe('installCliShim prefers a writable user bin dir already on PATH (§23.4
     expect(readFileSync(join(root, '.zshrc'), 'utf8')).toContain('agent-terminal launcher');
     const lbin = localBin(root);
     mkdirSync(lbin, { recursive: true });
-    chmodSync(lbin, 0o755); // pin perms so the fixture does not depend on the runner's umask
+    chmodSync(join(root, '.local'), 0o755); // pin the dir AND the walked parent so the fixture does not depend on umask
+    chmodSync(lbin, 0o755);
     expect(installCliShim(runtime({ shell: '/bin/zsh', currentPath: `${lbin}:/usr/bin` })).ok).toBe(true);
     expect(readFileSync(join(root, '.zshrc'), 'utf8')).not.toContain('agent-terminal launcher');
   });
@@ -266,6 +269,7 @@ describe('installCliShim prefers a writable user bin dir already on PATH (§23.4
     symlinkSync(realHome, home); // home → .../grandparent/realhome
     const lbin = join(home, '.local', 'bin');
     mkdirSync(lbin, { recursive: true });
+    chmodSync(join(home, '.local'), 0o755); // pin the walked parent too so the fixture does not depend on umask
     chmodSync(lbin, 0o755);
     const res = installCliShim(runtime({ home, shell: '/bin/zsh', currentPath: `${lbin}:/usr/bin` }));
     expect(asOk(res).path).toBe(join(lbin, CLI_COMMAND_NAME)); // accepted: walk terminates at the resolved real home
