@@ -98,6 +98,69 @@ describe('installCliShim happy path', () => {
   });
 });
 
+describe('installCliShim prefers a writable user bin dir already on PATH (§23.4 / #25)', () => {
+  const localBin = (home: string): string => join(home, '.local', 'bin');
+  const isRoot = typeof process.getuid === 'function' && process.getuid() === 0;
+
+  it('installs into ~/.local/bin and edits no profile when it is writable and already on PATH', () => {
+    const lbin = localBin(root);
+    mkdirSync(lbin, { recursive: true });
+    const res = installCliShim(runtime({ shell: '/bin/zsh', currentPath: `${lbin}:/usr/bin` }));
+    expect(asOk(res).path).toBe(join(lbin, CLI_COMMAND_NAME));
+    expect(isExecutable(join(lbin, CLI_COMMAND_NAME))).toBe(true);
+    expect(existsSync(join(root, '.zshrc'))).toBe(false); // already on PATH → no profile edit
+    expect(existsSync(binOf(root))).toBe(false); // and no dedicated dir created
+  });
+
+  it('leaves the reused directory permissions untouched — it is the user dir, not app-owned', () => {
+    const lbin = localBin(root);
+    mkdirSync(lbin, { recursive: true });
+    chmodSync(lbin, 0o755);
+    expect(installCliShim(runtime({ shell: '/bin/zsh', currentPath: `${lbin}:/usr/bin` })).ok).toBe(true);
+    expect(statSync(lbin).mode & 0o777).toBe(0o755); // not tightened to 0o700 like the app-owned dir
+  });
+
+  it('prefers ~/.local/bin over ~/bin when both are writable and on PATH', () => {
+    const lbin = localBin(root);
+    const hbin = join(root, 'bin');
+    mkdirSync(lbin, { recursive: true });
+    mkdirSync(hbin, { recursive: true });
+    const res = installCliShim(runtime({ shell: '/bin/zsh', currentPath: `${hbin}:${lbin}:/usr/bin` }));
+    expect(asOk(res).path).toBe(join(lbin, CLI_COMMAND_NAME));
+  });
+
+  it('falls back to the dedicated dir + profile edit when the preferred dir is writable but not on PATH', () => {
+    const lbin = localBin(root);
+    mkdirSync(lbin, { recursive: true });
+    const res = installCliShim(runtime({ shell: '/bin/zsh', currentPath: '/usr/bin' }));
+    expect(asOk(res).path).toBe(cmdOf(root));
+    expect(existsSync(join(lbin, CLI_COMMAND_NAME))).toBe(false);
+    expect(resolvesFrom(join(root, '.zshrc'))).toBe(cmdOf(root));
+  });
+
+  it.skipIf(isRoot)('falls back to the dedicated dir when the preferred dir is on PATH but not writable', () => {
+    const lbin = localBin(root);
+    mkdirSync(lbin, { recursive: true });
+    chmodSync(lbin, 0o500); // read/execute only — cannot create a file
+    try {
+      const res = installCliShim(runtime({ shell: '/bin/zsh', currentPath: `${lbin}:/usr/bin` }));
+      expect(asOk(res).path).toBe(cmdOf(root));
+      expect(resolvesFrom(join(root, '.zshrc'))).toBe(cmdOf(root));
+    } finally {
+      chmodSync(lbin, 0o700); // restore so afterEach can remove it
+    }
+  });
+
+  it('strips a stale launcher block from profiles when it switches to an on-PATH dir (no orphans)', () => {
+    expect(installCliShim(runtime({ shell: '/bin/zsh' })).ok).toBe(true); // prior dedicated-dir install
+    expect(readFileSync(join(root, '.zshrc'), 'utf8')).toContain('agent-terminal launcher');
+    const lbin = localBin(root);
+    mkdirSync(lbin, { recursive: true });
+    expect(installCliShim(runtime({ shell: '/bin/zsh', currentPath: `${lbin}:/usr/bin` })).ok).toBe(true);
+    expect(readFileSync(join(root, '.zshrc'), 'utf8')).not.toContain('agent-terminal launcher');
+  });
+});
+
 describe('installCliShim idempotency (reconcile to the current build)', () => {
   it('reinstalling a different build reconciles the command and never accumulates duplicate entries', () => {
     expect(installCliShim(runtime({ shell: '/bin/sh', invocation: inv('/builds/one/app') })).ok).toBe(true);
