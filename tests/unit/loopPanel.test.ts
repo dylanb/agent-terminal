@@ -61,6 +61,41 @@ describe('docked loop panel (§24.2.3 T2)', () => {
     expect(b.querySelectorAll('[data-loop-close]').length).toBe(1);
   });
 
+  it('does not rebuild the DOM when re-rendered with unchanged content (no flicker on a no-op push)', () => {
+    const panel = createLoopPanel(host);
+    panel.render(loop(), 'build');
+    const closeBefore = host.querySelector('[data-loop-close]');
+    panel.render(loop(), 'build'); // identical loop/title/refs — nothing the panel shows changed
+    expect(host.querySelector('[data-loop-close]')).toBe(closeBefore); // same node ⇒ no replaceChildren
+  });
+
+  it('keeps keyboard focus in the panel across a no-op repaint', () => {
+    const panel = createLoopPanel(host);
+    panel.render(loop(), 'build');
+    const close = host.querySelector<HTMLElement>('[data-loop-close]')!;
+    close.focus();
+    expect(document.activeElement).toBe(close);
+    panel.render(loop(), 'build'); // unchanged ⇒ no rebuild
+    expect(document.activeElement).toBe(close);
+  });
+
+  it('restores focus into the panel when a content change forces a repaint (WCAG 2.4.3)', () => {
+    const panel = createLoopPanel(host);
+    panel.render(loop({ iteration: 9 }), 'build');
+    host.querySelector<HTMLElement>('[data-loop-close]')!.focus();
+    panel.render(loop({ iteration: 10 }), 'build'); // content changed ⇒ rebuild
+    expect(host.contains(document.activeElement)).toBe(true); // never dropped to <body>
+    expect(document.activeElement).toBe(host.querySelector('[data-loop-close]'));
+  });
+
+  it('still repaints when content changes (iteration updates)', () => {
+    const panel = createLoopPanel(host);
+    panel.render(loop({ iteration: 9 }), 'build');
+    expect(row('iteration')?.querySelector('.lv')?.textContent).toBe('9');
+    panel.render(loop({ iteration: 10 }), 'build');
+    expect(row('iteration')?.querySelector('.lv')?.textContent).toBe('10');
+  });
+
   it('flags an awaiting-human status as needs-you (the §22.3 act tone)', () => {
     createLoopPanel(host).render(loop({ status: 'awaiting-human-pr-approval' }), 'build');
     expect(row('status')?.querySelector('.lv')?.classList.contains('bad')).toBe(true);

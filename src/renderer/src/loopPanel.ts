@@ -57,8 +57,46 @@ function detailRow(doc: Document, key: string, value: string, valueClass = ''): 
   return r;
 }
 
+/** A signature of everything the panel renders, so an identical re-render can be skipped. The async
+ *  title/body/link fill the DOM in place keyed by the same (kind, number), so they need not be in it. */
+function panelSig(loop: FlowLoopView | null, title: string, refs?: FlowRefs): string {
+  return JSON.stringify([
+    title,
+    refs?.ticket ?? null,
+    refs?.pr ?? null,
+    loop ? [loop.status, loop.iteration, loop.pr, loop.branch, loop.gateOptions ?? null] : null,
+  ]);
+}
+
 export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DEPS): LoopPanel {
   const doc = host.ownerDocument; // build from the host's document so the panel relocates (UI §2.2.1)
+  // The structure last painted; an unchanged signature skips the rebuild so a passive push (e.g. an
+  // agent active/quiet flip, which carries no panel change) doesn't flicker or drop focus to <body>.
+  let lastSig: string | null = null;
+
+  /** Where focus sits inside the panel, as a token survivable across a rebuild (the close control or a
+   *  ref row's link), or null when focus is elsewhere. */
+  function captureFocus(): string | null {
+    const active = doc.activeElement;
+    if (!(active instanceof HTMLElement) || !host.contains(active)) return null;
+    const link = active.closest('a.reflink');
+    if (link) return `reflink:${link.closest('.rrow')?.querySelector('.rk')?.textContent ?? ''}`;
+    return 'close'; // the close control or any other in-panel focusable lands back on close
+  }
+
+  /** Restore focus after a rebuild to the matching element, falling back to the close control (always
+   *  present on a populated panel) so a forced repaint never strands focus on <body> (WCAG 2.4.3). */
+  function restoreFocus(token: string | null): void {
+    if (!token) return;
+    if (token.startsWith('reflink:')) {
+      const key = token.slice('reflink:'.length);
+      const link = [...host.querySelectorAll<HTMLElement>('.rrow')]
+        .find((r) => r.querySelector('.rk')?.textContent === key)
+        ?.querySelector<HTMLElement>('a.reflink');
+      if (link) return void link.focus();
+    }
+    host.querySelector<HTMLElement>('[data-loop-close]')?.focus();
+  }
 
   function refRow(label: string, kind: GithubRefKind, number: number): HTMLElement {
     const row = doc.createElement('div');
@@ -100,8 +138,12 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
 
   return {
     render(loop, title, refs) {
-      host.replaceChildren();
       const showRefs = hasFlowRefs(refs);
+      const sig = !loop && !showRefs ? null : panelSig(loop, title, refs);
+      if (sig === lastSig) return; // nothing the panel shows changed — keep the live DOM and its focus
+      const focus = captureFocus();
+      host.replaceChildren();
+      lastSig = sig;
       if (!loop && !showRefs) return;
 
       const head = doc.createElement('div');
@@ -135,7 +177,10 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
         host.append(refsEl);
       }
 
-      if (!loop) return;
+      if (!loop) {
+        restoreFocus(focus);
+        return;
+      }
 
       const body = doc.createElement('div');
       body.className = 'lbody';
@@ -158,9 +203,11 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
 
       body.append(ldl);
       host.append(body);
+      restoreFocus(focus);
     },
     dispose() {
       host.replaceChildren();
+      lastSig = null;
     },
   };
 }
