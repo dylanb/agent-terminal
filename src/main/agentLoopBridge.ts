@@ -11,12 +11,15 @@ import { isRecord } from './yamlRecord';
 const STATE_REL = path.join('.agent-loop', 'state.yaml');
 
 /** The slice of v4 state.yaml the flow surfaces (§24.2.3 T2). `status` carries the state machine;
- *  "needs you" is the explicit `awaiting-*` family. `pr`/`branch` are null before a loop has a PR. */
+ *  "needs you" is the explicit `awaiting-*` family. `pr`/`branch` are null before a loop has a PR.
+ *  `linkedIssues` are the GitHub issue numbers the loop is bound to (the ticket fallback when the
+ *  flow input is unset); `[]` when absent. */
 export interface AgentLoopState {
   status: string;
   iteration: number;
   pr: number | null;
   branch: string | null;
+  linkedIssues: number[];
 }
 
 // Compared by VALUE, not YAML scalar type: state.yaml writes a bare `4`, LoopDefs a quoted `"4"`
@@ -47,6 +50,7 @@ export function parseAgentLoopState(repoDir: string): AgentLoopState | null {
     iteration: doc.iteration,
     pr: typeof doc.pr === 'number' ? doc.pr : null,
     branch: typeof doc.branch === 'string' ? doc.branch : null,
+    linkedIssues: Array.isArray(doc.linked_issues) ? doc.linked_issues.filter((n): n is number => typeof n === 'number') : [],
   };
 }
 

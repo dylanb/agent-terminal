@@ -19,7 +19,7 @@ const base: FlowStateView = {
   total: 2,
   status: 'in_progress',
 };
-const loop = (status: string): AgentLoopState => ({ status, iteration: 9, pr: 179, branch: 'b' });
+const loop = (status: string): AgentLoopState => ({ status, iteration: 9, pr: 179, branch: 'b', linkedIssues: [176] });
 
 const DEF: LoopDef = {
   name: 'impl-loop',

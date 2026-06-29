@@ -1,11 +1,14 @@
-// The docked loop+gate panel (§24.2.3 T2) — a placement-agnostic organism (UI-STANDARDS §1.2)
-// rendering the EXPANDED read-only agent-loop state mirror the rail's compact read-out opens.
+// The docked loop+gate panel (§24.2.3 T2/T7) — a placement-agnostic organism (UI-STANDARDS §1.2).
+// It renders two read-only sections: the ticket/PR the flow is working (T7), shown whenever the flow
+// is active even on a non-loop step; and the EXPANDED agent-loop state mirror (T2) on loop steps. The
+// ticket/PR detail (title, body, link) is fetched best-effort via injected services — the organism
+// reaches for nothing itself.
 //
 // Scope (T2): the state mirror + the read-only "gate options" row. The Review-gate DECISION section
 // (the approve / request-changes / impasse buttons + the §19.4 composer) is the gate slice T5/T6 —
 // not built here.
 
-import type { FlowLoopView } from '../../shared/ipc';
+import type { FlowLoopView, FlowRefs, GithubRef, GithubRefKind } from '../../shared/ipc';
 import { spillTone } from './loopStatus';
 
 /** Display label for a gate `human_option` — matches loop-flow.html's "approve · changes · impasse"
@@ -14,10 +17,27 @@ function gateOptionLabel(option: string): string {
   return option === 'request-changes' ? 'changes' : option;
 }
 
+/** The §24.2.3 T7 services the panel needs: resolve a ref's detail (best-effort; null → bare number)
+ *  and open its url externally. Injected by the composition root; the organism never reaches for them. */
+export interface LoopPanelDeps {
+  githubRef(kind: GithubRefKind, number: number): Promise<GithubRef | null>;
+  openExternal(url: string): void;
+}
+
+const NOOP_DEPS: LoopPanelDeps = { githubRef: () => Promise.resolve(null), openExternal: () => {} };
+
+/** Body text is a teaser in the popout (the user opens the link for the full issue), so a long body is
+ *  truncated with an ellipsis. */
+const BODY_MAX = 200;
+function truncateBody(body: string): string {
+  const t = body.trim();
+  return t.length > BODY_MAX ? `${t.slice(0, BODY_MAX).trimEnd()}…` : t;
+}
+
 export interface LoopPanel {
-  /** Repaint from the current loop mirror; `null` (no loop step / no parseable state.yaml) clears it.
-   *  `title` identifies which loop step the panel mirrors (the rail step name). */
-  render(loop: FlowLoopView | null, title: string): void;
+  /** Repaint from the current flow refs + loop mirror; both `null`/absent clears the host. `title`
+   *  identifies the step the panel mirrors (the rail step name). */
+  render(loop: FlowLoopView | null, title: string, refs?: FlowRefs): void;
   /** Clean teardown (UI-STANDARDS). */
   dispose(): void;
 }
@@ -37,12 +57,48 @@ function detailRow(doc: Document, key: string, value: string, valueClass = ''): 
   return r;
 }
 
-export function createLoopPanel(host: HTMLElement): LoopPanel {
+export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DEPS): LoopPanel {
   const doc = host.ownerDocument; // build from the host's document so the panel relocates (UI §2.2.1)
+
+  /** A ticket/PR ref row: the bare number renders now; the link + title + truncated body fill in once
+   *  `gh` resolves (best-effort — a null result leaves the bare number with no link). */
+  function refRow(label: string, kind: GithubRefKind, number: number): HTMLElement {
+    const row = doc.createElement('div');
+    row.className = 'rrow';
+    const k = doc.createElement('span');
+    k.className = 'rk';
+    k.textContent = label;
+    const num = doc.createElement('span');
+    num.className = 'rnum';
+    num.textContent = `#${number}`;
+    const title = doc.createElement('span');
+    title.className = 'rtitle';
+    const body = doc.createElement('p');
+    body.className = 'rbody';
+    row.append(k, num, title, body);
+
+    void deps.githubRef(kind, number).then((ref) => {
+      if (!ref || !row.isConnected) return;
+      title.textContent = ref.title;
+      body.textContent = truncateBody(ref.body);
+      const link = doc.createElement('a');
+      link.className = 'reflink';
+      link.href = ref.url; // affordance (middle-click); the click handler routes through the validated seam
+      link.textContent = `#${number}`;
+      link.addEventListener('click', (e) => {
+        e.preventDefault();
+        deps.openExternal(ref.url);
+      });
+      num.replaceWith(link);
+    });
+    return row;
+  }
+
   return {
-    render(loop, title) {
+    render(loop, title, refs) {
       host.replaceChildren();
-      if (!loop) return;
+      const hasRefs = refs !== undefined && (refs.ticket !== undefined || refs.pr !== undefined);
+      if (!loop && !hasRefs) return;
 
       const head = doc.createElement('div');
       head.className = 'lhead';
@@ -62,6 +118,20 @@ export function createLoopPanel(host: HTMLElement): LoopPanel {
       close.textContent = '✕';
       head.append(mark, h3, close);
       host.append(head);
+
+      if (hasRefs && refs) {
+        const refsEl = doc.createElement('div');
+        refsEl.className = 'refs';
+        const segH = doc.createElement('div');
+        segH.className = 'seg-h';
+        segH.textContent = 'Working on';
+        refsEl.append(segH);
+        if (refs.ticket !== undefined) refsEl.append(refRow('Ticket', 'issue', refs.ticket));
+        if (refs.pr !== undefined) refsEl.append(refRow('PR', 'pr', refs.pr));
+        host.append(refsEl);
+      }
+
+      if (!loop) return;
 
       const body = doc.createElement('div');
       body.className = 'lbody';

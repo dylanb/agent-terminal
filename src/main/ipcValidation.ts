@@ -15,6 +15,8 @@ import {
   type DismissMsg,
   type FlowRequestMsg,
   type FlowProvideInputMsg,
+  type FlowGithubRefMsg,
+  type AppOpenExternalMsg,
   type TodoTemplateListMsg,
   type TodoTemplateInstantiateMsg,
   type MonitorCaptureMsg,
@@ -136,6 +138,24 @@ export function isValidFlowProvideInput(m: unknown): m is FlowProvideInputMsg {
     !Array.isArray(m.values) &&
     Object.values(m.values).every((v) => typeof v === 'string')
   );
+}
+
+/** flow:githubRef — resolve a ref's detail for the popout (§24.2.3 T7). `kind` is the issue/PR
+ *  selector; `number` must be a positive integer (a GitHub ref number). */
+export function isValidFlowGithubRef(m: unknown): m is FlowGithubRefMsg {
+  return (
+    isRecord(m) &&
+    isLiveSession(m) &&
+    isSafeRepoKey(m.repoKey) &&
+    (m.kind === 'issue' || m.kind === 'pr') &&
+    isPositiveInt(m.number)
+  );
+}
+
+/** app:openExternal — the renderer asks the OS to open a url (§24.2.3 T7). Only the shape is checked
+ *  here; the host/scheme allow-list (isGithubUrl) is enforced in the handler before the OS sees it. */
+export function isValidOpenExternal(m: unknown): m is AppOpenExternalMsg {
+  return isRecord(m) && isLiveSession(m) && typeof m.url === 'string';
 }
 
 /** todoTemplate:list (§6). The flow dir is resolved from repoKey, so it needs the safe-path guard. */

@@ -11,6 +11,8 @@ import {
   isValidDismissAll,
   isValidFlowRequest,
   isValidFlowProvideInput,
+  isValidFlowGithubRef,
+  isValidOpenExternal,
   isValidTemplateList,
   isValidTemplateInstantiate,
   isValidInject,
@@ -164,6 +166,25 @@ describe('IPC payload validation (§6 — renderer-supplied input is untrusted)'
     arr.repoKey = '/repo';
     arr.values = {};
     expect(isValidFlowProvideInput(arr)).toBe(false);
+  });
+
+  it('accepts a flow:githubRef with a valid kind + positive number, rejecting bad shapes (§24.2.3 T7)', () => {
+    expect(isValidFlowGithubRef({ sessionId: sid, repoKey: '/repo', kind: 'issue', number: 25 })).toBe(true);
+    expect(isValidFlowGithubRef({ sessionId: sid, repoKey: '/repo', kind: 'pr', number: 29 })).toBe(true);
+    expect(isValidFlowGithubRef({ sessionId: sid, repoKey: '/repo', kind: 'commit', number: 1 })).toBe(false); // bad kind
+    expect(isValidFlowGithubRef({ sessionId: sid, repoKey: '/repo', kind: 'issue', number: 0 })).toBe(false); // not positive
+    expect(isValidFlowGithubRef({ sessionId: sid, repoKey: '/repo', kind: 'issue', number: 1.5 })).toBe(false); // not integer
+    expect(isValidFlowGithubRef({ sessionId: sid, repoKey: 'relative', kind: 'issue', number: 1 })).toBe(false); // unsafe key
+    expect(isValidFlowGithubRef({ sessionId: 'other', repoKey: '/repo', kind: 'issue', number: 1 })).toBe(false);
+    expect(isValidFlowGithubRef(null)).toBe(false);
+  });
+
+  it('accepts an app:openExternal with a string url, rejecting bad shapes (host check is the handler\'s job)', () => {
+    expect(isValidOpenExternal({ sessionId: sid, url: 'https://github.com/o/r/issues/1' })).toBe(true);
+    expect(isValidOpenExternal({ sessionId: sid, url: 42 })).toBe(false); // non-string
+    expect(isValidOpenExternal({ sessionId: sid })).toBe(false); // url required
+    expect(isValidOpenExternal({ sessionId: 'other', url: 'https://github.com' })).toBe(false);
+    expect(isValidOpenExternal(null)).toBe(false);
   });
 
   it('rejects array-shaped payloads at the trust boundary (arrays are not records)', () => {

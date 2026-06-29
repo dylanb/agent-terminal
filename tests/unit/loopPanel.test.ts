@@ -1,8 +1,10 @@
 // @vitest-environment jsdom
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createLoopPanel } from '../../src/renderer/src/loopPanel';
 import { assertRendersFromHostDocument } from './relocatable';
-import type { FlowLoopView } from '../../src/shared/ipc';
+import type { FlowLoopView, GithubRef, GithubRefKind } from '../../src/shared/ipc';
+
+const flush = (): Promise<void> => new Promise((r) => setTimeout(r, 0));
 
 // §24.2.3 T2 — the docked loop panel organism (UI-STANDARDS §1.2): the EXPANDED read-only state
 // mirror that the rail's compact Loop read-out opens. It renders the real v4 `state.yaml` vocabulary
@@ -114,5 +116,78 @@ describe('docked loop panel (§24.2.3 T2)', () => {
 
   it('builds from host.ownerDocument, not the global document (UI-STANDARDS §3.3)', async () => {
     await assertRendersFromHostDocument((h) => createLoopPanel(h).render(loop(), 'build'));
+  });
+});
+
+// §24.2.3 T7 — the popout also surfaces the ticket + PR the flow is working: the bare number renders
+// immediately and a clickable GitHub link + title + truncated body fill in once `gh` resolves
+// (best-effort). The refs section shows whenever the flow is active, even on a non-loop step.
+describe('docked loop panel — ticket/PR refs (§24.2.3 T7)', () => {
+  const ref = (over: Partial<GithubRef> = {}): GithubRef => ({
+    title: 'Persist flow inputs',
+    body: 'The flow drops the ticket on restart.',
+    url: 'https://github.com/o/r/issues/25',
+    ...over,
+  });
+  const refRow = (key: string): HTMLElement | undefined =>
+    [...host.querySelectorAll<HTMLElement>('.refs .rrow')].find((r) => r.querySelector('.rk')?.textContent === key);
+
+  it('renders the bare ticket + PR numbers immediately (before gh resolves)', () => {
+    const githubRef = vi.fn(async () => null);
+    createLoopPanel(host, { githubRef, openExternal: vi.fn() }).render(loop(), 'plan', { ticket: 25, pr: 29 });
+    expect(refRow('Ticket')?.textContent).toContain('#25');
+    expect(refRow('PR')?.textContent).toContain('#29');
+  });
+
+  it('fills in the title, a truncated body, and a working external link once gh resolves', async () => {
+    const openExternal = vi.fn();
+    const longBody = 'x'.repeat(500);
+    const githubRef = vi.fn(async (kind: GithubRefKind) =>
+      kind === 'issue' ? ref({ body: longBody, url: 'https://github.com/o/r/issues/25' }) : null,
+    );
+    createLoopPanel(host, { githubRef, openExternal }).render(loop({ pr: null, branch: null }), 'plan', { ticket: 25 });
+    await flush();
+    const ticket = refRow('Ticket')!;
+    expect(ticket.querySelector('.rtitle')?.textContent).toBe('Persist flow inputs');
+    const bodyText = ticket.querySelector('.rbody')?.textContent ?? '';
+    expect(bodyText.length).toBeLessThan(longBody.length);
+    expect(bodyText.endsWith('…')).toBe(true);
+    const link = ticket.querySelector<HTMLAnchorElement>('a.reflink')!;
+    expect(link.getAttribute('href')).toBe('https://github.com/o/r/issues/25');
+    link.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+    expect(openExternal).toHaveBeenCalledWith('https://github.com/o/r/issues/25');
+  });
+
+  it('opens the PR link with the PR url', async () => {
+    const openExternal = vi.fn();
+    const githubRef = vi.fn(async (kind: GithubRefKind) =>
+      kind === 'pr' ? ref({ url: 'https://github.com/o/r/pull/29' }) : null,
+    );
+    createLoopPanel(host, { githubRef, openExternal }).render(loop(), 'build', { pr: 29 });
+    await flush();
+    host.querySelector<HTMLAnchorElement>('.refs .rrow a.reflink')!.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+    expect(openExternal).toHaveBeenCalledWith('https://github.com/o/r/pull/29');
+  });
+
+  it('renders refs on a NON-loop step (loop null) — the host is not cleared', () => {
+    const githubRef = vi.fn(async () => null);
+    createLoopPanel(host, { githubRef, openExternal: vi.fn() }).render(null, 'groom', { ticket: 25 });
+    expect(refRow('Ticket')).toBeTruthy();
+    expect(host.querySelector('.ldl')).toBeNull(); // no loop mirror on a non-loop step
+  });
+
+  it('clears the host only when BOTH loop and refs are absent', () => {
+    const panel = createLoopPanel(host, { githubRef: vi.fn(async () => null), openExternal: vi.fn() });
+    panel.render(loop(), 'build', { ticket: 25 });
+    panel.render(null, '', undefined);
+    expect(host.childElementCount).toBe(0);
+  });
+
+  it('degrades to a bare number with no link when gh resolves null', async () => {
+    const githubRef = vi.fn(async () => null);
+    createLoopPanel(host, { githubRef, openExternal: vi.fn() }).render(loop(), 'build', { ticket: 25 });
+    await flush();
+    expect(refRow('Ticket')?.textContent).toContain('#25');
+    expect(refRow('Ticket')?.querySelector('a.reflink')).toBeNull();
   });
 });

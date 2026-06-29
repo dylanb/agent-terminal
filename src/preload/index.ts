@@ -12,6 +12,7 @@ import {
   type CwdChangedMsg,
   type FlowApi,
   type FlowStateView,
+  type GithubRef,
   type MonitorApi,
   type ViewerApi,
   type ViewerFile,
@@ -138,6 +139,9 @@ const flowApi: FlowApi = {
     ipcRenderer.on(CH.flowRevealLoop, handler);
     return () => ipcRenderer.removeListener(CH.flowRevealLoop, handler);
   },
+  githubRef: (repoKey, kind, number) =>
+    ipcRenderer.invoke(CH.flowGithubRef, { sessionId: SESSION_ID, repoKey, kind, number }) as Promise<GithubRef | null>,
+  openExternal: (url) => ipcRenderer.invoke(CH.appOpenExternal, { sessionId: SESSION_ID, url }) as Promise<boolean>,
 };
 
 export const cliApi: CliApi = {

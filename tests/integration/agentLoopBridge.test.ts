@@ -14,7 +14,9 @@ const V4 =
   'pr: 179\n' +
   'branch: agent-loop/issue-176\n' +
   'iteration: 9\n' +
-  'status: awaiting-human-pr-approval\n';
+  'status: awaiting-human-pr-approval\n' +
+  'linked_issues:\n' +
+  '    - 176\n';
 
 describe('agent-loop state.yaml bridge (§24.2.3 T2 / §19.1)', () => {
   let dir: string;
@@ -30,7 +32,7 @@ describe('agent-loop state.yaml bridge (§24.2.3 T2 / §19.1)', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it('parses a real v4 state.yaml into {status, iteration, pr, branch}', () => {
+  it('parses a real v4 state.yaml into {status, iteration, pr, branch, linkedIssues}', () => {
     writeState(V4);
     const s = parseAgentLoopState(dir);
     expect(s).toEqual({
@@ -38,12 +40,18 @@ describe('agent-loop state.yaml bridge (§24.2.3 T2 / §19.1)', () => {
       iteration: 9,
       pr: 179,
       branch: 'agent-loop/issue-176',
+      linkedIssues: [176],
     });
   });
 
-  it('mirrors a plan-phase loop with no PR yet (pr/branch absent → null)', () => {
+  it('mirrors a plan-phase loop with no PR yet (pr/branch absent → null, no linked issues → [])', () => {
     writeState('schema_version: 4\niteration: 1\nstatus: planning\n');
-    expect(parseAgentLoopState(dir)).toEqual({ status: 'planning', iteration: 1, pr: null, branch: null });
+    expect(parseAgentLoopState(dir)).toEqual({ status: 'planning', iteration: 1, pr: null, branch: null, linkedIssues: [] });
+  });
+
+  it('mirrors several linked issues, dropping non-numeric entries (degrading parser)', () => {
+    writeState('schema_version: 4\niteration: 2\nstatus: planning\nlinked_issues:\n    - 25\n    - 26\n    - oops\n');
+    expect(parseAgentLoopState(dir)?.linkedIssues).toEqual([25, 26]);
   });
 
   it('returns null (never throws) for an unknown schema_version', () => {
@@ -54,7 +62,7 @@ describe('agent-loop state.yaml bridge (§24.2.3 T2 / §19.1)', () => {
   it('accepts schema_version 4 in either YAML scalar form (bare number or quoted string)', () => {
     // state.yaml writes a bare number, LoopDefs a quoted "4"; one value-comparing guard must accept both.
     writeState('schema_version: "4"\nstatus: planning\niteration: 1\n');
-    expect(parseAgentLoopState(dir)).toEqual({ status: 'planning', iteration: 1, pr: null, branch: null });
+    expect(parseAgentLoopState(dir)).toEqual({ status: 'planning', iteration: 1, pr: null, branch: null, linkedIssues: [] });
   });
 
   it('returns null (never throws) for corrupt YAML', () => {

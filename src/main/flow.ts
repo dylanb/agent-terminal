@@ -6,7 +6,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import yaml from 'js-yaml';
-import type { AgentState, FlowPrompt, FlowStateView, FlowStatus, TodoItem } from '../shared/ipc';
+import type { AgentState, FlowPrompt, FlowRefs, FlowStateView, FlowStatus, TodoItem } from '../shared/ipc';
 import { createFlowStateStore, type FlowStateStore } from './flowState';
 import type { AgentLoopState } from './agentLoopBridge';
 import { gateForStatus, type LoopDef } from './loopDef';
@@ -176,8 +176,8 @@ export interface FlowMachine {
   start(): FlowStateView;
   /** in_progress → done; throws on any other current status (inert in the error state). */
   advance(): FlowStateView;
-  /** done → in_progress; resets and re-runs the first step. Throws on any other current
-   *  status (inert in the error state). */
+  /** done → in_progress; resets to the first step, clears all resolved inputs (§18.4) so required
+   *  ones are re-requested, and re-runs entry actions. Throws on any other status (inert on error). */
   restart(): FlowStateView;
   /** done → in_progress; reverts a manual advance WITHOUT re-running the step's entry actions
    *  (the inverse of advance, not a restart). Throws on any other status (inert on error). */
@@ -227,6 +227,9 @@ export function createFlowMachine(
   const def = load.definition;
   const steps = def.steps;
   const names = steps.map((s) => s.id);
+  // The flow's ticket is whichever input is typed `github-ticket` (§18.4) — name-agnostic, resolved
+  // from the definition once. Its resolved value feeds refs.ticket on every step (§24.2.3 T7).
+  const ticketInputName = steps.flatMap((s) => s.inputs ?? []).find((i) => i.type === 'github-ticket')?.name;
   // `done` means the last step's Advance completed the whole flow, not just one step (§24.2.3 T1).
   let index = 0;
   let status: FlowStatus = 'not_started';
@@ -256,6 +259,22 @@ export function createFlowMachine(
 
   const current = (): FlowStepDef => steps[index];
 
+  // The ticket + PR the flow works (§24.2.3 T7): the github-ticket input value (own-property only, so
+  // an input named `__proto__` can't resolve off the chain) falling back to the loop's linked_issues,
+  // and the loop's PR. Numbers only; absent when neither resolves.
+  const computeRefs = (loop: AgentLoopState | null): FlowRefs | undefined => {
+    const ticketStr =
+      ticketInputName && Object.prototype.hasOwnProperty.call(inputs, ticketInputName) ? inputs[ticketInputName] : undefined;
+    const ticketFromInput =
+      typeof ticketStr === 'string' && /^\d+$/.test(ticketStr.trim()) ? Number(ticketStr.trim()) : undefined;
+    const ticket = ticketFromInput ?? loop?.linkedIssues[0];
+    const pr = loop?.pr ?? undefined;
+    const refs: FlowRefs = {};
+    if (typeof ticket === 'number') refs.ticket = ticket;
+    if (typeof pr === 'number') refs.pr = pr;
+    return Object.keys(refs).length > 0 ? refs : undefined;
+  };
+
   const view = (): FlowStateView => {
     const step = current();
     const base: FlowStateView = {
@@ -266,10 +285,14 @@ export function createFlowMachine(
       status,
       ...(step.todoTemplate ? { templateRef: step.todoTemplate } : {}),
     };
-    // Only loop steps mirror their state.yaml + LoopDef, read live here on every view (§24.2.3 T2).
-    if (step.kind !== 'loop') return base;
+    // The state.yaml mirror is read once per view: it feeds the cross-step refs (§24.2.3 T7) on every
+    // step, and the read-only `loop` field on loop steps only (§24.2.3 T2).
+    const loop = readLoop?.() ?? null;
+    const refs = computeRefs(loop);
+    const withRefs = refs ? { ...base, refs } : base;
+    if (step.kind !== 'loop') return withRefs;
     const loopDef = step.loop ? (readLoopDef?.(step.loop) ?? null) : null;
-    return deriveLoopView(base, readLoop?.() ?? null, loopDef);
+    return deriveLoopView(withRefs, loop, loopDef);
   };
 
   const persist = (): void =>
@@ -319,6 +342,10 @@ export function createFlowMachine(
       requireStatus('done', 'restart');
       index = 0;
       status = 'in_progress';
+      // Restart re-runs the flow from scratch, so the resolved typed inputs (§18.4) are wiped: a step's
+      // required input is re-requested on re-entry rather than silently reused from the prior run. Undo,
+      // the single-step inverse, leaves them intact.
+      inputs = {};
       persist();
       return enter(view());
     },

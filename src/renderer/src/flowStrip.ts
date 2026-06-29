@@ -4,7 +4,7 @@
 // no control (§18.1). It follows the terminal's cwd, mirroring the repo-scoped todo list (§16.3):
 // before a repo key is known it renders nothing.
 
-import type { FlowApi, FlowStateView, FlowStatus, FlowLoopView, FlowPrompt } from '../../shared/ipc';
+import type { FlowApi, FlowStateView, FlowStatus, FlowLoopView, FlowPrompt, FlowRefs } from '../../shared/ipc';
 import { FLOW_CHANGED_EVENT } from './paneActions';
 import { spillTone, toneLabel } from './loopStatus';
 
@@ -61,12 +61,12 @@ export interface FlowStrip {
  *  reaching across organisms. Fired on every render: `null` when the step has no loop mirror.
  *  `onRevealLoop` is omitted: the OS-notification reveal (§24.2.3 T4) is wired at the composition root
  *  on window.flow, not through the strip (interface segregation — the strip never reveals). */
-export type FlowStripDeps = Omit<FlowApi, 'onRevealLoop'> & {
+export type FlowStripDeps = Omit<FlowApi, 'onRevealLoop' | 'githubRef' | 'openExternal'> & {
   /** The docked loop panel's element id, injected by the composition root so the read-out's
    *  `aria-controls` is instance-scoped — the organism never bakes in a document-level id
    *  (UI-STANDARDS §2.2 rule 1). Omitted → no aria-controls (aria-expanded still conveys state). */
   loopPanelId?: string;
-  onLoopState?: (loop: FlowLoopView | null, title: string) => void;
+  onLoopState?: (loop: FlowLoopView | null, title: string, refs?: FlowRefs) => void;
   /** Hand a step-entry input prompt (§24.2.3 T3) to the composition root, which opens its modal
    *  organism. `submit` records the typed values (provideInput) and re-renders. `null` closes the
    *  modal (no prompt on this view). The strip never reaches across to the modal directly. */
@@ -115,6 +115,44 @@ function loopReadout(doc: Document, loop: FlowLoopView, controlsId?: string): HT
 
   stat.append(k, v);
   return stat;
+}
+
+/** The compact read-out shown on a non-loop step that still has a ticket/PR (§24.2.3 T7): a
+ *  `loopstat`-classed `role=button` (so the shell's existing open wiring + aria apply) summarising the
+ *  numbers. The full ticket/PR detail lives in the docked panel it opens. */
+function refsReadout(doc: Document, refs: FlowRefs, controlsId?: string): HTMLElement {
+  const stat = doc.createElement('span');
+  stat.className = 'stat loopstat';
+  stat.setAttribute('role', 'button');
+  stat.tabIndex = 0;
+  stat.setAttribute('aria-expanded', 'false');
+  if (controlsId) stat.setAttribute('aria-controls', controlsId);
+
+  const k = doc.createElement('span');
+  k.className = 'k';
+  k.textContent = 'Flow';
+
+  const v = doc.createElement('span');
+  v.className = 'v';
+  const parts: string[] = [];
+  if (refs.ticket !== undefined) parts.push(`#${refs.ticket}`);
+  if (refs.pr !== undefined) parts.push(`PR #${refs.pr}`);
+  const summary = doc.createElement('span');
+  summary.className = 'mono';
+  summary.textContent = parts.join(' · ');
+  const car = doc.createElement('span');
+  car.className = 'car';
+  car.setAttribute('aria-hidden', 'true');
+  car.textContent = '▸';
+  v.append(summary, car);
+
+  stat.append(k, v);
+  return stat;
+}
+
+/** Whether a refs payload actually carries a number to show (an empty object never opens a panel). */
+function hasRefs(refs: FlowRefs | undefined): refs is FlowRefs {
+  return refs !== undefined && (refs.ticket !== undefined || refs.pr !== undefined);
 }
 
 export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStrip {
@@ -203,14 +241,16 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
     });
     host.append(rail);
 
-    // A loop step mirrors its agent-loop state.yaml read-only (§24.2.3 T2): the full mirror is handed
-    // to the docked panel via onLoopState (null clears + closes it). The loop's own status supersedes
-    // the todo-derived line below.
+    // The docked panel opens from a compact `loopstat` read-out (§24.2.3 T2/T7): a loop step shows its
+    // agent-loop status pill; a non-loop step that still has a ticket/PR shows a refs summary. Both
+    // hand their data to the panel via onLoopState (a null loop + no refs clears + closes it).
     if (state.loop) {
       host.append(loopReadout(doc, state.loop, deps.loopPanelId));
-      if (keepLoopFocus) host.querySelector<HTMLElement>('.loopstat')?.focus();
+    } else if (hasRefs(state.refs)) {
+      host.append(refsReadout(doc, state.refs, deps.loopPanelId));
     }
-    deps.onLoopState?.(state.loop ?? null, state.stepName);
+    if ((state.loop || hasRefs(state.refs)) && keepLoopFocus) host.querySelector<HTMLElement>('.loopstat')?.focus();
+    deps.onLoopState?.(state.loop ?? null, state.stepName, state.refs);
 
     // Live derived status (§24.2.2 S5): n/m todos done + the §8.3 agent activity, recomputed by main
     // and pushed via flow:onStateChanged.

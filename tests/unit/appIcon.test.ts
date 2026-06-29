@@ -59,6 +59,19 @@ describe('applyDockIcon', () => {
   it('is a no-op on darwin when app.dock is unexpectedly absent (does not throw)', () => {
     expect(() => applyDockIcon(undefined, 'darwin', darwin)).not.toThrow();
   });
+
+  it('swallows a setIcon failure so a missing/bad icon never aborts window creation', () => {
+    // Electron's dock.setIcon throws synchronously on an unreadable image path; since applyDockIcon
+    // runs inside async createWindow BEFORE `new BrowserWindow`, an uncaught throw here would abort the
+    // whole window. A cosmetic Dock icon must never do that.
+    const dock = {
+      setIcon: vi.fn(() => {
+        throw new Error('Failed to load image from path');
+      }),
+    };
+    expect(() => applyDockIcon(dock, 'darwin', darwin)).not.toThrow();
+    expect(dock.setIcon).toHaveBeenCalled();
+  });
 });
 
 describe('extraResources packaged-path coupling', () => {

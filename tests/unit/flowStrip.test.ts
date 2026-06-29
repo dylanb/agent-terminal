@@ -345,6 +345,62 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     expect(host.querySelector<HTMLElement>('.loopstat')!.hasAttribute('aria-controls')).toBe(false);
   });
 
+  it('hands the flow refs to the docked panel via onLoopState, even on a non-loop step (§24.2.3 T7)', async () => {
+    const onLoopState = vi.fn();
+    const deps = {
+      state: vi.fn(
+        async (): Promise<FlowStateView> => ({
+          stepName: 'groom',
+          steps: ['groom', 'plan'],
+          position: 1,
+          total: 2,
+          status: 'in_progress' as FlowStatus,
+          refs: { ticket: 25, pr: 29 },
+        }),
+      ),
+      start: vi.fn(),
+      advance: vi.fn(),
+      restart: vi.fn(),
+      undo: vi.fn(),
+      provideInput: vi.fn(),
+      onStateChanged: noopSub,
+      onLoopState,
+    };
+    createFlowStrip(host, deps).onRepoChanged('/repo');
+    await vi.waitFor(() => expect(onLoopState).toHaveBeenCalled());
+    const last = onLoopState.mock.calls.at(-1)!;
+    expect(last[2]).toEqual({ ticket: 25, pr: 29 }); // (loop, title, refs)
+  });
+
+  it('renders a Loop read-out opener on a NON-loop step that carries refs (§24.2.3 T7)', async () => {
+    const deps = {
+      state: vi.fn(
+        async (): Promise<FlowStateView> => ({
+          stepName: 'groom',
+          steps: ['groom', 'plan'],
+          position: 1,
+          total: 2,
+          status: 'in_progress' as FlowStatus,
+          refs: { ticket: 25, pr: 29 },
+        }),
+      ),
+      start: vi.fn(),
+      advance: vi.fn(),
+      restart: vi.fn(),
+      undo: vi.fn(),
+      provideInput: vi.fn(),
+      onStateChanged: noopSub,
+      loopPanelId: 'loop-panel',
+    };
+    createFlowStrip(host, deps).onRepoChanged('/repo');
+    await vi.waitFor(() => expect(host.querySelector('.loopstat')).not.toBeNull());
+    const readout = host.querySelector<HTMLElement>('.loopstat')!;
+    expect(readout.getAttribute('role')).toBe('button');
+    expect(readout.getAttribute('aria-controls')).toBe('loop-panel');
+    expect(readout.textContent).toContain('#25');
+    expect(readout.textContent).toContain('#29');
+  });
+
   // A focus-landing seam for the composition root (WCAG 2.4.3): the root lands focus via this contract
   // rather than reaching into the strip's private `.loopstat`. The boolean return lets it fall back
   // when no loop is shown.
