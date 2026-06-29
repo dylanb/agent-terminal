@@ -53,6 +53,8 @@ export const CH = {
   flowProvideInput: 'flow:provideInput',
   flowOnStateChanged: 'flow:onStateChanged',
   flowRevealLoop: 'flow:revealLoop',
+  flowGithubRef: 'flow:githubRef',
+  appOpenExternal: 'app:openExternal',
   todoTemplateList: 'todoTemplate:list',
   todoTemplateInstantiate: 'todoTemplate:instantiate',
   cliInstall: 'cli:install',
@@ -484,6 +486,36 @@ export interface FlowLoopView {
   humanNeeded?: boolean;
 }
 
+/** The GitHub issue (ticket) and PR a flow is working (§24.2.3 T7). Numbers only — the title, body,
+ *  and url are fetched lazily via `flow:githubRef` so `flow:state` stays synchronous and best-effort.
+ *  `ticket` is the value of the flow's `github-ticket`-typed input, falling back to the loop's
+ *  `linked_issues`; `pr` is the loop's state.yaml `pr`. Either may be absent; the whole field is
+ *  absent when neither resolves. Present on every active step, not just loop steps. */
+export interface FlowRefs {
+  ticket?: number;
+  pr?: number;
+}
+
+/** Whether a refs payload actually carries a number to show. The one definition both processes share
+ *  (CLAUDE.md shared-semantics): main emits `undefined` for an empty refs object, and every renderer
+ *  consumer (strip read-out, docked panel, composition root) gates on this same predicate, so they
+ *  cannot drift on what counts as renderable refs. */
+export function hasFlowRefs(refs: FlowRefs | undefined): refs is FlowRefs {
+  return refs !== undefined && (refs.ticket !== undefined || refs.pr !== undefined);
+}
+
+/** Which kind of GitHub ref to resolve (§24.2.3 T7): a `ticket` is an issue, `pr` a pull request. */
+export type GithubRefKind = 'issue' | 'pr';
+
+/** The fetched GitHub ref detail (§24.2.3 T7): the title + description body the popout shows and the
+ *  canonical `url` the link opens. Resolved best-effort via `gh`; the whole result is null when it
+ *  can't be resolved (no `gh`, not a GitHub repo, offline), so the popout shows the number alone. */
+export interface GithubRef {
+  title: string;
+  body: string;
+  url: string;
+}
+
 /** One typed input the renderer's modal must collect (§18.4 / §24.2.3 T3): the field `name` and its
  *  catalog `type` (`github-ticket`/`pr`/`files`/`free-text`), which labels and shapes the picker. */
 export interface FlowInputSpec {
@@ -527,6 +559,10 @@ export interface FlowStateView {
    *  parseable v4 state.yaml. Parallel to `derived` (NOT nested) — loop state outlives the manual
    *  in_progress window that gates `derived`. */
   loop?: FlowLoopView;
+  /** The ticket + PR the flow is working (§24.2.3 T7): numbers resolved synchronously from the flow
+   *  input and the loop's state.yaml. Present on every active step when at least one resolves; the
+   *  renderer fetches each one's title/body/url lazily via `flow:githubRef`. */
+  refs?: FlowRefs;
   /** A one-shot step-entry input prompt (§18.4 / §24.2.3 T3): present on a `start`/`restart`/`advance`
    *  response when the entered step's `bootstrap` needs an unsatisfied required input. The renderer
    *  opens its modal and answers via `flow:provideInput`. Like `notice`, never part of `state()`. */
@@ -562,6 +598,23 @@ export interface FlowProvideInputMsg {
   sessionId: SessionId;
   repoKey: string;
   values: Record<string, string>;
+}
+
+/** flow:githubRef request (§24.2.3 T7): resolve a ref's title/body/url for the popout. `repoKey`
+ *  scopes the `gh` lookup to the right repo; `number` is the issue/PR number; `kind` selects which. */
+export interface FlowGithubRefMsg {
+  sessionId: SessionId;
+  repoKey: string;
+  kind: GithubRefKind;
+  number: number;
+}
+
+/** app:openExternal request (§24.2.3 T7): open a ref's GitHub `url` in the OS browser. Main validates
+ *  the url (https + a GitHub host) before handing it to the OS — the renderer cannot open arbitrary
+ *  schemes (CWE-601 open-redirect / local-scheme abuse). */
+export interface AppOpenExternalMsg {
+  sessionId: SessionId;
+  url: string;
 }
 
 /** A discoverable todo template (§4.1/§21.2): `ref` is the instantiate id (filename without
@@ -729,6 +782,12 @@ export interface FlowApi {
   /** Subscribe to main's flow:revealLoop push (§24.2.3 T4): `cb` fires when the OS attention
    *  notification was activated and the loop read-out must be revealed. Returns an unsubscribe. */
   onRevealLoop(cb: () => void): () => void;
+  /** Resolve a GitHub ref's title/body/url for the popout (§24.2.3 T7), best-effort: null when it
+   *  can't be resolved (no `gh`, not a GitHub repo, offline) so the popout shows the number alone. */
+  githubRef(repoKey: string, kind: GithubRefKind, number: number): Promise<GithubRef | null>;
+  /** Open a ref's GitHub `url` in the OS browser (§24.2.3 T7); resolves to whether it was opened
+   *  (false when main rejects the url as non-GitHub/non-https). */
+  openExternal(url: string): Promise<boolean>;
 }
 
 /** CLI launcher install (§23.4 / #25): the settings affordance's only seam to the install action. */

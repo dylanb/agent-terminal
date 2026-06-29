@@ -1,11 +1,16 @@
-// The docked loop+gate panel (§24.2.3 T2) — a placement-agnostic organism (UI-STANDARDS §1.2)
-// rendering the EXPANDED read-only agent-loop state mirror the rail's compact read-out opens.
+// The docked loop+gate panel (§24.2.3 T2/T7) — a placement-agnostic organism (UI-STANDARDS §1.2).
+// It renders two read-only sections: the ticket/PR the flow is working (T7), shown whenever the flow
+// is active even on a non-loop step; and the EXPANDED agent-loop state mirror (T2) on loop steps. The
+// ticket/PR detail (title, body, link) is fetched best-effort via injected services — the organism
+// reaches for nothing itself.
 //
 // Scope (T2): the state mirror + the read-only "gate options" row. The Review-gate DECISION section
 // (the approve / request-changes / impasse buttons + the §19.4 composer) is the gate slice T5/T6 —
 // not built here.
 
-import type { FlowLoopView } from '../../shared/ipc';
+import type { FlowLoopView, FlowRefs, GithubRef, GithubRefKind } from '../../shared/ipc';
+import { hasFlowRefs } from '../../shared/ipc';
+import { githubHttpsHref } from '../../shared/githubUrl';
 import { spillTone } from './loopStatus';
 
 /** Display label for a gate `human_option` — matches loop-flow.html's "approve · changes · impasse"
@@ -14,10 +19,25 @@ function gateOptionLabel(option: string): string {
   return option === 'request-changes' ? 'changes' : option;
 }
 
+/** The §24.2.3 T7 services the panel needs: resolve a ref's detail (best-effort; null → bare number)
+ *  and open its url externally. Injected by the composition root; the organism never reaches for them. */
+export interface LoopPanelDeps {
+  githubRef(kind: GithubRefKind, number: number): Promise<GithubRef | null>;
+  openExternal(url: string): void;
+}
+
+const NOOP_DEPS: LoopPanelDeps = { githubRef: () => Promise.resolve(null), openExternal: () => {} };
+
+const BODY_MAX = 200;
+function truncateBody(body: string): string {
+  const t = body.trim();
+  return t.length > BODY_MAX ? `${t.slice(0, BODY_MAX).trimEnd()}…` : t;
+}
+
 export interface LoopPanel {
-  /** Repaint from the current loop mirror; `null` (no loop step / no parseable state.yaml) clears it.
-   *  `title` identifies which loop step the panel mirrors (the rail step name). */
-  render(loop: FlowLoopView | null, title: string): void;
+  /** Repaint from the current flow refs + loop mirror; both `null`/absent clears the host. `title`
+   *  identifies the step the panel mirrors (the rail step name). */
+  render(loop: FlowLoopView | null, title: string, refs?: FlowRefs): void;
   /** Clean teardown (UI-STANDARDS). */
   dispose(): void;
 }
@@ -37,12 +57,116 @@ function detailRow(doc: Document, key: string, value: string, valueClass = ''): 
   return r;
 }
 
-export function createLoopPanel(host: HTMLElement): LoopPanel {
+/** A signature of what fixes the panel's DOM STRUCTURE — deliberately NOT the live loop values
+ *  (status/iteration) that `patchInPlace` updates without a teardown (mirrors flowStrip's structuralSig,
+ *  §24.2.2 S5). The async ref title/body/link fill the DOM in place keyed by (kind, number), so they
+ *  are excluded too. */
+function structuralSig(loop: FlowLoopView | null, title: string, refs?: FlowRefs): string {
+  return JSON.stringify([
+    title,
+    refs?.ticket ?? null,
+    refs?.pr ?? null,
+    loop ? [loop.pr, loop.branch, loop.gateOptions ?? null] : null,
+  ]);
+}
+
+export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DEPS): LoopPanel {
   const doc = host.ownerDocument; // build from the host's document so the panel relocates (UI §2.2.1)
+  let lastSig: string | null = null;
+  // Live nodes patched without a teardown (mirrors flowStrip), and the ref rows whose detail is still
+  // unresolved so a structurally-unchanged push can re-attempt them (githubRefs never caches a null —
+  // src/main/githubRefs.ts — so a transient failure only self-heals if the caller re-fetches).
+  let liveLoop: { statusVal: HTMLElement; iterVal: HTMLElement } | null = null;
+  let refRows: Array<{ retry: () => void; resolved: () => boolean }> = [];
+
+  /** True when keyboard focus is inside the panel. A forced rebuild captures this, then `restoreFocus`
+   *  lands focus back on the close control so it is never stranded on <body> (WCAG 2.4.3) — and never
+   *  pulled in when it was elsewhere. */
+  const focusInPanel = (): boolean => doc.activeElement instanceof HTMLElement && host.contains(doc.activeElement);
+  const restoreFocus = (had: boolean): void => {
+    if (had) host.querySelector<HTMLElement>('[data-loop-close]')?.focus();
+  };
+
+  /** A ticket/PR ref row. `retry` re-attempts the best-effort `gh` fetch (no-op once resolved); the row
+   *  shows the bare number until the title/body/link fill in. */
+  function refRow(label: string, kind: GithubRefKind, number: number): { el: HTMLElement; retry: () => void; resolved: () => boolean } {
+    const row = doc.createElement('div');
+    row.className = 'rrow';
+    const k = doc.createElement('span');
+    k.className = 'rk';
+    k.textContent = label;
+    const num = doc.createElement('span');
+    num.className = 'rnum';
+    num.textContent = `#${number}`;
+    const title = doc.createElement('span');
+    title.className = 'rtitle';
+    const body = doc.createElement('p');
+    body.className = 'rbody';
+    row.append(k, num, title, body);
+
+    let resolved = false;
+    let pending = false;
+    const attempt = (): void => {
+      if (resolved || pending) return;
+      pending = true;
+      void deps
+        .githubRef(kind, number)
+        .then((ref) => {
+          if (!ref || resolved || !row.isConnected) return;
+          resolved = true;
+          title.textContent = ref.title;
+          body.textContent = truncateBody(ref.body);
+          // Validate the url at the sink against the same allow-list main enforces (CWE-601): a non-GitHub
+          // url keeps the bare number and exposes no href a middle-click could open.
+          const href = githubHttpsHref(ref.url);
+          if (!href) return;
+          const link = doc.createElement('a');
+          link.className = 'reflink';
+          link.href = href;
+          link.textContent = `#${number}`;
+          // The visible text is just the number; name the link's purpose for assistive tech (WCAG 2.4.4).
+          link.setAttribute('aria-label', `${label} #${number}: ${ref.title} (opens in browser)`);
+          link.addEventListener('click', (e) => {
+            e.preventDefault();
+            deps.openExternal(href);
+          });
+          num.replaceWith(link);
+        })
+        .catch(() => {}) // a rejected invoke (main restart) must not be an unhandled rejection
+        .finally(() => {
+          pending = false;
+        });
+    };
+    attempt();
+    return { el: row, retry: attempt, resolved: () => resolved };
+  }
+
+  /** Update the live loop values + re-attempt any unresolved ref, with no teardown so focus and the
+   *  resolved DOM survive a passive push whose structure is unchanged (§24.2.2 S5). */
+  function patchInPlace(loop: FlowLoopView | null): void {
+    if (loop && liveLoop) {
+      liveLoop.statusVal.textContent = loop.status;
+      liveLoop.statusVal.classList.toggle('bad', spillTone(loop.status) === 'await');
+      liveLoop.iterVal.textContent = String(loop.iteration);
+    }
+    for (const r of refRows) if (!r.resolved()) r.retry();
+  }
+
   return {
-    render(loop, title) {
+    render(loop, title, refs) {
+      const showRefs = hasFlowRefs(refs);
+      const sig = !loop && !showRefs ? null : structuralSig(loop, title, refs);
+      if (sig === lastSig && host.childElementCount > 0) {
+        patchInPlace(loop); // §24.2.2 S5
+        return;
+      }
+      if (sig === lastSig) return; // both empty — nothing to do
+      const hadFocus = focusInPanel();
       host.replaceChildren();
-      if (!loop) return;
+      lastSig = sig;
+      liveLoop = null;
+      refRows = [];
+      if (!loop && !showRefs) return;
 
       const head = doc.createElement('div');
       head.className = 'lhead';
@@ -63,6 +187,34 @@ export function createLoopPanel(host: HTMLElement): LoopPanel {
       head.append(mark, h3, close);
       host.append(head);
 
+      if (showRefs && refs) {
+        const refsEl = doc.createElement('div');
+        refsEl.className = 'refs';
+        // The bare number renders now; the title/body/link fill in after the async gh resolve — announce
+        // that late arrival to assistive tech (WCAG 4.1.3 Status Messages).
+        refsEl.setAttribute('aria-live', 'polite');
+        const segH = doc.createElement('div');
+        segH.className = 'seg-h';
+        segH.textContent = 'Working on';
+        refsEl.append(segH);
+        if (refs.ticket !== undefined) {
+          const r = refRow('Ticket', 'issue', refs.ticket);
+          refsEl.append(r.el);
+          refRows.push(r);
+        }
+        if (refs.pr !== undefined) {
+          const r = refRow('PR', 'pr', refs.pr);
+          refsEl.append(r.el);
+          refRows.push(r);
+        }
+        host.append(refsEl);
+      }
+
+      if (!loop) {
+        restoreFocus(hadFocus);
+        return;
+      }
+
       const body = doc.createElement('div');
       body.className = 'lbody';
       const segH = doc.createElement('div');
@@ -73,8 +225,10 @@ export function createLoopPanel(host: HTMLElement): LoopPanel {
       const ldl = doc.createElement('div');
       ldl.className = 'ldl';
       // An awaiting-human status still needs the human — the §22.3 "act" tone (`bad`).
-      ldl.append(detailRow(doc, 'status', loop.status, spillTone(loop.status) === 'await' ? 'bad' : ''));
-      ldl.append(detailRow(doc, 'iteration', String(loop.iteration)));
+      const statusRow = detailRow(doc, 'status', loop.status, spillTone(loop.status) === 'await' ? 'bad' : '');
+      const iterRow = detailRow(doc, 'iteration', String(loop.iteration));
+      ldl.append(statusRow, iterRow);
+      liveLoop = { statusVal: statusRow.querySelector('.lv')!, iterVal: iterRow.querySelector('.lv')! };
       if (loop.pr !== null) ldl.append(detailRow(doc, 'pr', `#${loop.pr}`, 'sig'));
       if (loop.branch !== null) ldl.append(detailRow(doc, 'branch', loop.branch));
       // The current gate's human_options (§18.1/§19.4), present only at an awaiting gate; the decision
@@ -84,9 +238,13 @@ export function createLoopPanel(host: HTMLElement): LoopPanel {
 
       body.append(ldl);
       host.append(body);
+      restoreFocus(hadFocus);
     },
     dispose() {
       host.replaceChildren();
+      lastSig = null;
+      liveLoop = null;
+      refRows = [];
     },
   };
 }

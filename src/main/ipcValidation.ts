@@ -2,6 +2,7 @@
 // ptyProcess.resize, where a non-positive/NaN value throws an uncaught exception in main.
 
 import path from 'node:path';
+import { githubHttpsHref } from '../shared/githubUrl';
 import {
   SESSION_ID,
   type AgentInjectMsg,
@@ -15,6 +16,8 @@ import {
   type DismissMsg,
   type FlowRequestMsg,
   type FlowProvideInputMsg,
+  type FlowGithubRefMsg,
+  type AppOpenExternalMsg,
   type TodoTemplateListMsg,
   type TodoTemplateInstantiateMsg,
   type MonitorCaptureMsg,
@@ -136,6 +139,31 @@ export function isValidFlowProvideInput(m: unknown): m is FlowProvideInputMsg {
     !Array.isArray(m.values) &&
     Object.values(m.values).every((v) => typeof v === 'string')
   );
+}
+
+/** flow:githubRef — resolve a ref's detail for the popout (§24.2.3 T7). `kind` is the issue/PR
+ *  selector; `number` must be a positive integer (a GitHub ref number). */
+export function isValidFlowGithubRef(m: unknown): m is FlowGithubRefMsg {
+  return (
+    isRecord(m) &&
+    isLiveSession(m) &&
+    isSafeRepoKey(m.repoKey) &&
+    (m.kind === 'issue' || m.kind === 'pr') &&
+    isPositiveInt(m.number)
+  );
+}
+
+/** app:openExternal — the renderer asks the OS to open a url (§24.2.3 T7). Only the shape is checked
+ *  here; the host/scheme allow-list + normalization is applied by openExternalTarget (below). */
+export function isValidOpenExternal(m: unknown): m is AppOpenExternalMsg {
+  return isRecord(m) && isLiveSession(m) && typeof m.url === 'string';
+}
+
+/** Resolve an app:openExternal request to the NORMALIZED url the OS should open, or null to refuse
+ *  (bad shape, or a non-https / non-GitHub url). The handler opens exactly this value, so the OS can
+ *  never re-parse a raw payload into a different host than the allow-list approved (CWE-601). */
+export function openExternalTarget(m: unknown): string | null {
+  return isValidOpenExternal(m) ? githubHttpsHref(m.url) : null;
 }
 
 /** todoTemplate:list (§6). The flow dir is resolved from repoKey, so it needs the safe-path guard. */

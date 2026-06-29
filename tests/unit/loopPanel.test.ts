@@ -1,8 +1,10 @@
 // @vitest-environment jsdom
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createLoopPanel } from '../../src/renderer/src/loopPanel';
 import { assertRendersFromHostDocument } from './relocatable';
-import type { FlowLoopView } from '../../src/shared/ipc';
+import type { FlowLoopView, GithubRef, GithubRefKind } from '../../src/shared/ipc';
+
+const flush = (): Promise<void> => new Promise((r) => setTimeout(r, 0));
 
 // §24.2.3 T2 — the docked loop panel organism (UI-STANDARDS §1.2): the EXPANDED read-only state
 // mirror that the rail's compact Loop read-out opens. It renders the real v4 `state.yaml` vocabulary
@@ -57,6 +59,97 @@ describe('docked loop panel (§24.2.3 T2)', () => {
     expect(document.querySelectorAll('[data-loop-close]').length).toBe(2);
     expect(a.querySelectorAll('[data-loop-close]').length).toBe(1);
     expect(b.querySelectorAll('[data-loop-close]').length).toBe(1);
+  });
+
+  it('does not rebuild the DOM when re-rendered with unchanged content (no flicker on a no-op push)', () => {
+    const panel = createLoopPanel(host);
+    panel.render(loop(), 'build');
+    const closeBefore = host.querySelector('[data-loop-close]');
+    panel.render(loop(), 'build'); // identical loop/title/refs — nothing the panel shows changed
+    expect(host.querySelector('[data-loop-close]')).toBe(closeBefore); // same node ⇒ no replaceChildren
+  });
+
+  it('keeps keyboard focus in the panel across a no-op repaint', () => {
+    const panel = createLoopPanel(host);
+    panel.render(loop(), 'build');
+    const close = host.querySelector<HTMLElement>('[data-loop-close]')!;
+    close.focus();
+    expect(document.activeElement).toBe(close);
+    panel.render(loop(), 'build'); // unchanged ⇒ no rebuild
+    expect(document.activeElement).toBe(close);
+  });
+
+  it('patches a status / iteration change in place without a rebuild, preserving focus (WCAG 2.4.3)', () => {
+    // The live loop values tick on every background push during a run; patching them in place (like
+    // the flow strip) keeps the DOM and focus attached instead of yanking focus to the close control.
+    const panel = createLoopPanel(host);
+    panel.render(loop({ status: 'impl-draft', iteration: 9 }), 'build');
+    const close = host.querySelector<HTMLElement>('[data-loop-close]')!;
+    close.focus();
+    panel.render(loop({ status: 'awaiting-human-pr-approval', iteration: 10 }), 'build');
+    expect(host.querySelector('[data-loop-close]')).toBe(close); // same node ⇒ no teardown
+    expect(document.activeElement).toBe(close); // focus undisturbed
+    expect(row('iteration')?.querySelector('.lv')?.textContent).toBe('10'); // value updated in place
+    expect(row('status')?.querySelector('.lv')?.textContent).toBe('awaiting-human-pr-approval');
+    expect(row('status')?.querySelector('.lv')?.classList.contains('bad')).toBe(true); // tone re-derived
+  });
+
+  it('clears the act tone in place when status returns to a working value (negative pair)', () => {
+    const panel = createLoopPanel(host);
+    panel.render(loop({ status: 'awaiting-human-pr-approval' }), 'build');
+    expect(row('status')?.querySelector('.lv')?.classList.contains('bad')).toBe(true);
+    panel.render(loop({ status: 'impl-draft' }), 'build'); // same structure ⇒ patched in place
+    expect(row('status')?.querySelector('.lv')?.classList.contains('bad')).toBe(false); // tone cleared
+  });
+
+  it('does not re-fetch a ref while a fetch is already in flight, then retries once it resolves', async () => {
+    let settle: (r: GithubRef | null) => void = () => {};
+    const githubRef = vi.fn(() => new Promise<GithubRef | null>((res) => (settle = res)));
+    const panel = createLoopPanel(host, { githubRef, openExternal: vi.fn() });
+    panel.render(null, 'plan', { ticket: 25 });
+    expect(githubRef).toHaveBeenCalledTimes(1);
+    panel.render(null, 'plan', { ticket: 25 }); // same signature ⇒ patch path, but the fetch is pending
+    expect(githubRef).toHaveBeenCalledTimes(1); // no overlapping re-fetch
+    settle(null); // the in-flight fetch fails
+    await flush();
+    panel.render(null, 'plan', { ticket: 25 }); // no longer pending ⇒ a fresh retry fires
+    expect(githubRef).toHaveBeenCalledTimes(2);
+  });
+
+  it('restores focus into the panel when a STRUCTURAL change forces a rebuild (WCAG 2.4.3)', () => {
+    const panel = createLoopPanel(host);
+    panel.render(loop({ pr: null, branch: null }), 'build');
+    host.querySelector<HTMLElement>('[data-loop-close]')!.focus();
+    panel.render(loop({ pr: 179, branch: 'b' }), 'build'); // pr/branch rows appear ⇒ rebuild
+    expect(host.contains(document.activeElement)).toBe(true); // never dropped to <body>
+    expect(document.activeElement).toBe(host.querySelector('[data-loop-close]'));
+  });
+
+  it('does not steal focus from outside the panel on a rebuild', () => {
+    const outside = document.createElement('input');
+    document.body.append(outside);
+    const panel = createLoopPanel(host);
+    panel.render(loop({ pr: null, branch: null }), 'build');
+    outside.focus();
+    expect(document.activeElement).toBe(outside);
+    panel.render(loop({ pr: 179, branch: 'b' }), 'build'); // structural rebuild
+    expect(document.activeElement).toBe(outside); // focus NOT pulled into the panel
+    expect(host.contains(document.activeElement)).toBe(false);
+  });
+
+  it('retries an unresolved ref on a later push so a transient gh failure self-heals', async () => {
+    let attempt = 0;
+    const githubRef = vi.fn(async (): Promise<GithubRef | null> => {
+      attempt += 1;
+      return attempt === 1 ? null : { title: 'Persist flow inputs', body: 'b', url: 'https://github.com/o/r/issues/25' };
+    });
+    const panel = createLoopPanel(host, { githubRef, openExternal: vi.fn() });
+    panel.render(null, 'plan', { ticket: 25 }); // manual step — constant structural signature
+    await flush();
+    expect(host.querySelector('a.reflink')).toBeNull(); // first fetch failed → bare number
+    panel.render(null, 'plan', { ticket: 25 }); // same signature ⇒ patch path must re-attempt the fetch
+    await flush();
+    expect(host.querySelector('a.reflink')?.getAttribute('href')).toBe('https://github.com/o/r/issues/25');
   });
 
   it('flags an awaiting-human status as needs-you (the §22.3 act tone)', () => {
@@ -114,5 +207,136 @@ describe('docked loop panel (§24.2.3 T2)', () => {
 
   it('builds from host.ownerDocument, not the global document (UI-STANDARDS §3.3)', async () => {
     await assertRendersFromHostDocument((h) => createLoopPanel(h).render(loop(), 'build'));
+  });
+});
+
+// §24.2.3 T7 — the popout also surfaces the ticket + PR the flow is working: the bare number renders
+// immediately and a clickable GitHub link + title + truncated body fill in once `gh` resolves
+// (best-effort). The refs section shows whenever the flow is active, even on a non-loop step.
+describe('docked loop panel — ticket/PR refs (§24.2.3 T7)', () => {
+  const ref = (over: Partial<GithubRef> = {}): GithubRef => ({
+    title: 'Persist flow inputs',
+    body: 'The flow drops the ticket on restart.',
+    url: 'https://github.com/o/r/issues/25',
+    ...over,
+  });
+  const refRow = (key: string): HTMLElement | undefined =>
+    [...host.querySelectorAll<HTMLElement>('.refs .rrow')].find((r) => r.querySelector('.rk')?.textContent === key);
+
+  it('renders the bare ticket + PR numbers immediately (before gh resolves)', () => {
+    const githubRef = vi.fn(async () => null);
+    createLoopPanel(host, { githubRef, openExternal: vi.fn() }).render(loop(), 'plan', { ticket: 25, pr: 29 });
+    expect(refRow('Ticket')?.textContent).toContain('#25');
+    expect(refRow('PR')?.textContent).toContain('#29');
+  });
+
+  it('fills in the title, a truncated body, and a working external link once gh resolves', async () => {
+    const openExternal = vi.fn();
+    const longBody = 'x'.repeat(500);
+    const githubRef = vi.fn(async (kind: GithubRefKind) =>
+      kind === 'issue' ? ref({ body: longBody, url: 'https://github.com/o/r/issues/25' }) : null,
+    );
+    createLoopPanel(host, { githubRef, openExternal }).render(loop({ pr: null, branch: null }), 'plan', { ticket: 25 });
+    await flush();
+    const ticket = refRow('Ticket')!;
+    expect(ticket.querySelector('.rtitle')?.textContent).toBe('Persist flow inputs');
+    const bodyText = ticket.querySelector('.rbody')?.textContent ?? '';
+    expect(bodyText.length).toBeLessThan(longBody.length);
+    expect(bodyText.endsWith('…')).toBe(true);
+    const link = ticket.querySelector<HTMLAnchorElement>('a.reflink')!;
+    expect(link.getAttribute('href')).toBe('https://github.com/o/r/issues/25');
+    link.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+    expect(openExternal).toHaveBeenCalledWith('https://github.com/o/r/issues/25');
+  });
+
+  it('renders a short body verbatim with no ellipsis (truncateBody pass-through branch)', async () => {
+    const githubRef = vi.fn(async (kind: GithubRefKind) =>
+      kind === 'issue' ? ref({ body: 'short body' }) : null,
+    );
+    createLoopPanel(host, { githubRef, openExternal: vi.fn() }).render(loop({ pr: null, branch: null }), 'plan', { ticket: 25 });
+    await flush();
+    const bodyText = refRow('Ticket')!.querySelector('.rbody')?.textContent ?? '';
+    expect(bodyText).toBe('short body');
+    expect(bodyText.endsWith('…')).toBe(false);
+  });
+
+  it('marks the refs section aria-live=polite so the async detail-fill is announced (WCAG 4.1.3)', () => {
+    createLoopPanel(host, { githubRef: vi.fn(async () => null), openExternal: vi.fn() }).render(null, 'plan', { ticket: 25 });
+    expect(host.querySelector('.refs')?.getAttribute('aria-live')).toBe('polite');
+  });
+
+  it('clears the in-flight guard on a rejected fetch so a later push retries', async () => {
+    let n = 0;
+    const githubRef = vi.fn(() => {
+      n += 1;
+      return n === 1
+        ? Promise.reject(new Error('main gone'))
+        : Promise.resolve<GithubRef>({ title: 't', body: 'b', url: 'https://github.com/o/r/issues/25' });
+    });
+    const panel = createLoopPanel(host, { githubRef, openExternal: vi.fn() });
+    panel.render(null, 'plan', { ticket: 25 });
+    await flush();
+    expect(host.querySelector('a.reflink')).toBeNull(); // first fetch rejected → bare number, guard cleared
+    panel.render(null, 'plan', { ticket: 25 }); // same signature ⇒ retry now that pending is clear
+    await flush();
+    expect(host.querySelector('a.reflink')?.getAttribute('href')).toBe('https://github.com/o/r/issues/25');
+  });
+
+  it('gives the external link a descriptive accessible name (WCAG 2.4.4 — link purpose in context)', async () => {
+    const githubRef = vi.fn(async (kind: GithubRefKind) =>
+      kind === 'issue' ? ref({ title: 'Persist flow inputs' }) : null,
+    );
+    createLoopPanel(host, { githubRef, openExternal: vi.fn() }).render(loop({ pr: null, branch: null }), 'plan', { ticket: 25 });
+    await flush();
+    const link = refRow('Ticket')!.querySelector<HTMLAnchorElement>('a.reflink')!;
+    const name = link.getAttribute('aria-label') ?? '';
+    expect(name).toContain('Ticket');
+    expect(name).toContain('25');
+    expect(name).toContain('Persist flow inputs');
+  });
+
+  it('renders no link for a non-GitHub url, keeping the bare number (sink allow-list, CWE-601)', async () => {
+    const openExternal = vi.fn();
+    const githubRef = vi.fn(async (kind: GithubRefKind) =>
+      kind === 'issue' ? ref({ url: 'https://evil.com/phish' }) : null,
+    );
+    createLoopPanel(host, { githubRef, openExternal }).render(loop({ pr: null, branch: null }), 'plan', { ticket: 25 });
+    await flush();
+    expect(refRow('Ticket')?.querySelector('a.reflink')).toBeNull();
+    expect(refRow('Ticket')?.querySelector('.rtitle')?.textContent).toBe('Persist flow inputs');
+    expect(refRow('Ticket')?.textContent).toContain('#25');
+  });
+
+  it('opens the PR link with the PR url', async () => {
+    const openExternal = vi.fn();
+    const githubRef = vi.fn(async (kind: GithubRefKind) =>
+      kind === 'pr' ? ref({ url: 'https://github.com/o/r/pull/29' }) : null,
+    );
+    createLoopPanel(host, { githubRef, openExternal }).render(loop(), 'build', { pr: 29 });
+    await flush();
+    host.querySelector<HTMLAnchorElement>('.refs .rrow a.reflink')!.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+    expect(openExternal).toHaveBeenCalledWith('https://github.com/o/r/pull/29');
+  });
+
+  it('renders refs on a NON-loop step (loop null) — the host is not cleared', () => {
+    const githubRef = vi.fn(async () => null);
+    createLoopPanel(host, { githubRef, openExternal: vi.fn() }).render(null, 'groom', { ticket: 25 });
+    expect(refRow('Ticket')).toBeTruthy();
+    expect(host.querySelector('.ldl')).toBeNull(); // no loop mirror on a non-loop step
+  });
+
+  it('clears the host only when BOTH loop and refs are absent', () => {
+    const panel = createLoopPanel(host, { githubRef: vi.fn(async () => null), openExternal: vi.fn() });
+    panel.render(loop(), 'build', { ticket: 25 });
+    panel.render(null, '', undefined);
+    expect(host.childElementCount).toBe(0);
+  });
+
+  it('degrades to a bare number with no link when gh resolves null', async () => {
+    const githubRef = vi.fn(async () => null);
+    createLoopPanel(host, { githubRef, openExternal: vi.fn() }).render(loop(), 'build', { ticket: 25 });
+    await flush();
+    expect(refRow('Ticket')?.textContent).toContain('#25');
+    expect(refRow('Ticket')?.querySelector('a.reflink')).toBeNull();
   });
 });

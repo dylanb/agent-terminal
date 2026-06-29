@@ -19,7 +19,7 @@ const base: FlowStateView = {
   total: 2,
   status: 'in_progress',
 };
-const loop = (status: string): AgentLoopState => ({ status, iteration: 9, pr: 179, branch: 'b' });
+const loop = (status: string): AgentLoopState => ({ status, iteration: 9, pr: 179, branch: 'b', linkedIssues: [176] });
 
 const DEF: LoopDef = {
   name: 'impl-loop',
@@ -41,6 +41,12 @@ describe('deriveLoopView (§24.2.3 T2)', () => {
       branch: 'b',
       ready: false,
     });
+  });
+
+  it('does not leak AgentLoopState-only fields (linkedIssues) onto the FlowLoopView wire payload', () => {
+    // linkedIssues feeds FlowRefs, not the loop mirror; the wire shape (FlowLoopView) must not carry it.
+    const v = deriveLoopView(base, loop('awaiting-human-pr-approval'), DEF);
+    expect(v.loop && 'linkedIssues' in v.loop).toBe(false);
   });
 
   it('exposes the current gate\'s human_options as gateOptions (gate-driven)', () => {

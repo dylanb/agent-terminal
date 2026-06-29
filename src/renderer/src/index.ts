@@ -1,3 +1,4 @@
+import { syncDockedPanel } from './dockedPanelSync';
 import { createTerminalPane } from './terminal';
 import { wireSelection, captureToTodo } from './selection';
 import { wireMonitorPane } from './monitor';
@@ -96,7 +97,17 @@ if (flowStripHost) {
   // The strip is the single puller of flow state: it hands the loop mirror to the docked loop panel
   // (§24.2.3 T2) through the contract, not a DOM reach-across. No loop → clear + close.
   const loopPanelHost = document.getElementById('loop-panel');
-  const loopPanel = loopPanelHost ? createLoopPanel(loopPanelHost) : undefined;
+  // The panel resolves ticket/PR detail through window.flow, repo-scoped at call time (the cwd may move
+  // between renders), and opens links via the validated openExternal seam (§24.2.3 T7).
+  const loopPanel = loopPanelHost
+    ? createLoopPanel(loopPanelHost, {
+        githubRef: (kind, number) => {
+          const key = repo.repoKey();
+          return key ? window.flow.githubRef(key, kind, number) : Promise.resolve(null);
+        },
+        openExternal: (url) => void window.flow.openExternal(url),
+      })
+    : undefined;
   // Same single-puller contract for the typed-input modal (§24.2.3 T3): on a step-entry prompt the
   // strip hands it the prompt + a submit closure; the modal collects values and submit calls provideInput.
   const modalHost = document.getElementById('flow-modal-host');
@@ -109,16 +120,13 @@ if (flowStripHost) {
   const strip = createFlowStrip(flowStripHost, {
     ...window.flow,
     loopPanelId: loopPanelHost?.id, // instance-scoped aria-controls target
-    onLoopState: (loop, title) => {
-      loopPanel?.render(loop, title);
+    onPanelState: (loop, title, refs) => {
+      syncDockedPanel(loop, title, refs, {
+        render: (l, t, r) => loopPanel?.render(l, t, r),
+        closePanel: () => shell.closeLoopPanel(),
+        syncExpanded: () => shell.syncLoopReadout(),
+      });
       attentionCue?.render(loop ?? null, repo.repoKey());
-      if (!loop) {
-        shell.closeLoopPanel(); // the read-out is gone; never leave an empty panel docked
-      } else {
-        // The strip re-rendered a fresh .loopstat (default aria-expanded=false); re-sync it to the
-        // docked state so an open panel doesn't read collapsed (WAI-ARIA).
-        document.querySelector('.loopstat')?.setAttribute('aria-expanded', String(shell.isLoopPanelOpen()));
-      }
     },
     onPrompt: (prompt, stepName, submit) => inputModal?.render(prompt, stepName, submit),
     onTerminate: confirmDialog
