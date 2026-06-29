@@ -9,6 +9,8 @@
 // not built here.
 
 import type { FlowLoopView, FlowRefs, GithubRef, GithubRefKind } from '../../shared/ipc';
+import { hasFlowRefs } from '../../shared/ipc';
+import { githubHttpsHref } from '../../shared/githubUrl';
 import { spillTone } from './loopStatus';
 
 /** Display label for a gate `human_option` — matches loop-flow.html's "approve · changes · impasse"
@@ -81,13 +83,19 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
       if (!ref || !row.isConnected) return;
       title.textContent = ref.title;
       body.textContent = truncateBody(ref.body);
+      // Validate the url at the sink against the same allow-list main enforces (CWE-601): a non-GitHub
+      // url keeps the bare number and exposes no href a middle-click could open.
+      const href = githubHttpsHref(ref.url);
+      if (!href) return;
       const link = doc.createElement('a');
       link.className = 'reflink';
-      link.href = ref.url; // affordance (middle-click); the click handler routes through the validated seam
+      link.href = href;
       link.textContent = `#${number}`;
+      // The visible text is just the number; name the link's purpose for assistive tech (WCAG 2.4.4).
+      link.setAttribute('aria-label', `${label} #${number}: ${ref.title} (opens in browser)`);
       link.addEventListener('click', (e) => {
         e.preventDefault();
-        deps.openExternal(ref.url);
+        deps.openExternal(href);
       });
       num.replaceWith(link);
     });
@@ -97,8 +105,8 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
   return {
     render(loop, title, refs) {
       host.replaceChildren();
-      const hasRefs = refs !== undefined && (refs.ticket !== undefined || refs.pr !== undefined);
-      if (!loop && !hasRefs) return;
+      const showRefs = hasFlowRefs(refs);
+      if (!loop && !showRefs) return;
 
       const head = doc.createElement('div');
       head.className = 'lhead';
@@ -119,7 +127,7 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
       head.append(mark, h3, close);
       host.append(head);
 
-      if (hasRefs && refs) {
+      if (showRefs && refs) {
         const refsEl = doc.createElement('div');
         refsEl.className = 'refs';
         const segH = doc.createElement('div');

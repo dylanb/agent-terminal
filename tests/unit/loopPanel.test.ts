@@ -158,6 +158,31 @@ describe('docked loop panel — ticket/PR refs (§24.2.3 T7)', () => {
     expect(openExternal).toHaveBeenCalledWith('https://github.com/o/r/issues/25');
   });
 
+  it('gives the external link a descriptive accessible name (WCAG 2.4.4 — link purpose in context)', async () => {
+    const githubRef = vi.fn(async (kind: GithubRefKind) =>
+      kind === 'issue' ? ref({ title: 'Persist flow inputs' }) : null,
+    );
+    createLoopPanel(host, { githubRef, openExternal: vi.fn() }).render(loop({ pr: null, branch: null }), 'plan', { ticket: 25 });
+    await flush();
+    const link = refRow('Ticket')!.querySelector<HTMLAnchorElement>('a.reflink')!;
+    const name = link.getAttribute('aria-label') ?? '';
+    expect(name).toContain('Ticket');
+    expect(name).toContain('25');
+    expect(name).toContain('Persist flow inputs');
+  });
+
+  it('renders no link for a non-GitHub url, keeping the bare number (sink allow-list, CWE-601)', async () => {
+    const openExternal = vi.fn();
+    const githubRef = vi.fn(async (kind: GithubRefKind) =>
+      kind === 'issue' ? ref({ url: 'https://evil.com/phish' }) : null,
+    );
+    createLoopPanel(host, { githubRef, openExternal }).render(loop({ pr: null, branch: null }), 'plan', { ticket: 25 });
+    await flush();
+    expect(refRow('Ticket')?.querySelector('a.reflink')).toBeNull();
+    expect(refRow('Ticket')?.querySelector('.rtitle')?.textContent).toBe('Persist flow inputs');
+    expect(refRow('Ticket')?.textContent).toContain('#25');
+  });
+
   it('opens the PR link with the PR url', async () => {
     const openExternal = vi.fn();
     const githubRef = vi.fn(async (kind: GithubRefKind) =>

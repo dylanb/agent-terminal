@@ -7,6 +7,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import yaml from 'js-yaml';
 import type { AgentState, FlowPrompt, FlowRefs, FlowStateView, FlowStatus, TodoItem } from '../shared/ipc';
+import { hasFlowRefs } from '../shared/ipc';
 import { createFlowStateStore, type FlowStateStore } from './flowState';
 import type { AgentLoopState } from './agentLoopBridge';
 import { gateForStatus, type LoopDef } from './loopDef';
@@ -275,7 +276,7 @@ export function createFlowMachine(
     const refs: FlowRefs = {};
     if (typeof ticket === 'number') refs.ticket = ticket;
     if (typeof pr === 'number') refs.pr = pr;
-    return Object.keys(refs).length > 0 ? refs : undefined;
+    return hasFlowRefs(refs) ? refs : undefined;
   };
 
   const view = (): FlowStateView => {

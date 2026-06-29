@@ -2,6 +2,7 @@
 // ptyProcess.resize, where a non-positive/NaN value throws an uncaught exception in main.
 
 import path from 'node:path';
+import { githubHttpsHref } from '../shared/githubUrl';
 import {
   SESSION_ID,
   type AgentInjectMsg,
@@ -156,6 +157,13 @@ export function isValidFlowGithubRef(m: unknown): m is FlowGithubRefMsg {
  *  here; the host/scheme allow-list (isGithubUrl) is enforced in the handler before the OS sees it. */
 export function isValidOpenExternal(m: unknown): m is AppOpenExternalMsg {
   return isRecord(m) && isLiveSession(m) && typeof m.url === 'string';
+}
+
+/** Resolve an app:openExternal request to the NORMALIZED url the OS should open, or null to refuse
+ *  (bad shape, or a non-https / non-GitHub url). The handler opens exactly this value, so the OS can
+ *  never re-parse a raw payload into a different host than the allow-list approved (CWE-601). */
+export function openExternalTarget(m: unknown): string | null {
+  return isValidOpenExternal(m) ? githubHttpsHref(m.url) : null;
 }
 
 /** todoTemplate:list (§6). The flow dir is resolved from repoKey, so it needs the safe-path guard. */

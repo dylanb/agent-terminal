@@ -5,6 +5,7 @@
 // before a repo key is known it renders nothing.
 
 import type { FlowApi, FlowStateView, FlowStatus, FlowLoopView, FlowPrompt, FlowRefs } from '../../shared/ipc';
+import { hasFlowRefs } from '../../shared/ipc';
 import { FLOW_CHANGED_EVENT } from './paneActions';
 import { spillTone, toneLabel } from './loopStatus';
 
@@ -182,11 +183,6 @@ function refsReadout(doc: Document, refs: FlowRefs, controlsId?: string): HTMLEl
   return stat;
 }
 
-/** Whether a refs payload actually carries a number to show (an empty object never opens a panel). */
-function hasRefs(refs: FlowRefs | undefined): refs is FlowRefs {
-  return refs !== undefined && (refs.ticket !== undefined || refs.pr !== undefined);
-}
-
 export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStrip {
   const doc = host.ownerDocument; // build from the host's document so the strip relocates (UI §2.2.1)
   let repoKey: string | null = null;
@@ -307,10 +303,10 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
     // hand their data to the panel via onLoopState (a null loop + no refs clears + closes it).
     if (state.loop) {
       host.append(loopReadout(doc, state.loop, deps.loopPanelId));
-    } else if (hasRefs(state.refs)) {
+    } else if (hasFlowRefs(state.refs)) {
       host.append(refsReadout(doc, state.refs, deps.loopPanelId));
     }
-    if ((state.loop || hasRefs(state.refs)) && keepLoopFocus) host.querySelector<HTMLElement>('.loopstat')?.focus();
+    if ((state.loop || hasFlowRefs(state.refs)) && keepLoopFocus) host.querySelector<HTMLElement>('.loopstat')?.focus();
     deps.onLoopState?.(state.loop ?? null, state.stepName, state.refs);
 
     // Live derived status (§24.2.2 S5): n/m todos done + the §8.3 agent activity, recomputed by main

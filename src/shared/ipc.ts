@@ -496,6 +496,14 @@ export interface FlowRefs {
   pr?: number;
 }
 
+/** Whether a refs payload actually carries a number to show. The one definition both processes share
+ *  (CLAUDE.md shared-semantics): main emits `undefined` for an empty refs object, and every renderer
+ *  consumer (strip read-out, docked panel, composition root) gates on this same predicate, so they
+ *  cannot drift on what counts as renderable refs. */
+export function hasFlowRefs(refs: FlowRefs | undefined): refs is FlowRefs {
+  return refs !== undefined && (refs.ticket !== undefined || refs.pr !== undefined);
+}
+
 /** Which kind of GitHub ref to resolve (§24.2.3 T7): a `ticket` is an issue, `pr` a pull request. */
 export type GithubRefKind = 'issue' | 'pr';
 

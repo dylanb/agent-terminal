@@ -1,3 +1,4 @@
+import { hasFlowRefs } from '../../shared/ipc';
 import { createTerminalPane } from './terminal';
 import { wireSelection, captureToTodo } from './selection';
 import { wireMonitorPane } from './monitor';
@@ -122,7 +123,7 @@ if (flowStripHost) {
     onLoopState: (loop, title, refs) => {
       loopPanel?.render(loop, title, refs);
       attentionCue?.render(loop ?? null, repo.repoKey());
-      const hasContent = loop !== null || (refs !== undefined && (refs.ticket !== undefined || refs.pr !== undefined));
+      const hasContent = loop !== null || hasFlowRefs(refs);
       if (!hasContent) {
         shell.closeLoopPanel(); // the read-out is gone; never leave an empty panel docked
       } else {

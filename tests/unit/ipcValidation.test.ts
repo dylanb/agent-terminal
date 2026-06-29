@@ -13,6 +13,7 @@ import {
   isValidFlowProvideInput,
   isValidFlowGithubRef,
   isValidOpenExternal,
+  openExternalTarget,
   isValidTemplateList,
   isValidTemplateInstantiate,
   isValidInject,
@@ -185,6 +186,21 @@ describe('IPC payload validation (§6 — renderer-supplied input is untrusted)'
     expect(isValidOpenExternal({ sessionId: sid })).toBe(false); // url required
     expect(isValidOpenExternal({ sessionId: 'other', url: 'https://github.com' })).toBe(false);
     expect(isValidOpenExternal(null)).toBe(false);
+  });
+
+  // The handler opens exactly openExternalTarget()'s return — the NORMALIZED url, never the raw payload
+  // — so a non-GitHub/non-https url is refused (null) and a host-spoofing control char cannot make the
+  // OS open a different host than the allow-list approved (CWE-601 validator-sink parser differential).
+  it('openExternalTarget resolves a valid GitHub url to its normalized form and refuses everything else', () => {
+    expect(openExternalTarget({ sessionId: sid, url: 'https://github.com/o/r/issues/1' })).toBe(
+      'https://github.com/o/r/issues/1',
+    );
+    expect(openExternalTarget({ sessionId: sid, url: 'https://evil.com/x' })).toBeNull(); // non-GitHub
+    expect(openExternalTarget({ sessionId: sid, url: 'javascript:alert(1)' })).toBeNull(); // non-https
+    expect(openExternalTarget({ sessionId: sid })).toBeNull(); // bad shape
+    expect(openExternalTarget({ sessionId: 'other', url: 'https://github.com' })).toBeNull(); // wrong session
+    const smuggled = openExternalTarget({ sessionId: sid, url: 'https://evil.com\t.github.com/x' });
+    expect(smuggled).toBe('https://evil.com.github.com/x'); // tab stripped: opens the validated host, not the raw string
   });
 
   it('rejects array-shaped payloads at the trust boundary (arrays are not records)', () => {

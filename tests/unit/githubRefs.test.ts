@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { createGithubRefs, ghArgs, isGithubUrl, parseGithubRef } from '../../src/main/githubRefs';
+import { createGithubRefs, ghArgs, parseGithubRef } from '../../src/main/githubRefs';
 
 // §24.2.3 T7 — the best-effort GitHub ref resolver shells out to `gh` and NEVER throws: any failure
 // (no gh, not a repo, offline, malformed) degrades to null so the popout shows the bare number.
@@ -27,22 +27,6 @@ describe('parseGithubRef — degrading parse of gh JSON', () => {
   it('returns null when a required field is missing or mistyped', () => {
     expect(parseGithubRef(JSON.stringify({ title: 'x', url: 'https://github.com/o/r/issues/1' }))).toBeNull();
     expect(parseGithubRef(JSON.stringify({ title: 1, body: 'b', url: 'u' }))).toBeNull();
-  });
-});
-
-describe('isGithubUrl — the open-external allow-list', () => {
-  it('allows an https github.com ref url', () => {
-    expect(isGithubUrl('https://github.com/o/r/pull/29')).toBe(true);
-  });
-  it('allows an https github subdomain', () => {
-    expect(isGithubUrl('https://www.github.com/o/r/issues/1')).toBe(true);
-  });
-  it('rejects http (no TLS), other hosts, and non-web schemes', () => {
-    expect(isGithubUrl('http://github.com/o/r/issues/1')).toBe(false);
-    expect(isGithubUrl('https://evil.com/github.com')).toBe(false);
-    expect(isGithubUrl('javascript:alert(1)')).toBe(false);
-    expect(isGithubUrl('file:///etc/passwd')).toBe(false);
-    expect(isGithubUrl('not a url')).toBe(false);
   });
 });
 
