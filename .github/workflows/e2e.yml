@@ -58,7 +58,10 @@ jobs:
 
       - name: e2e under Xvfb
         run: |
-          Xvfb :99 -screen 0 1280x1024x24 -nolisten tcp &
+          # Xvfb stderr is only the display server's own log (non-fatal xkbcomp "Could not resolve
+          # keysym" noise from an xkb-data older than Chromium's keymap); test reporting comes from
+          # Playwright, so discard it.
+          Xvfb :99 -screen 0 1280x1024x24 -nolisten tcp >/dev/null 2>&1 &
           export DISPLAY=:99
           sleep 2
           pnpm exec playwright test --reporter=list
