@@ -244,7 +244,7 @@ export function createFlowMachine(
   const def = load.definition;
   const steps = def.steps;
   const names = steps.map((s) => s.id);
-  // The ticket input is whichever input is typed `github-ticket` (§18.4 / §24.2.3 T7).
+  // §18.4 / §24.2.3 T7
   const ticketInputName = steps.flatMap((s) => s.inputs ?? []).find((i) => i.type === 'github-ticket')?.name;
   // `done` means the last step's Advance completed the whole flow, not just one step (§24.2.3 T1).
   let index = 0;
@@ -275,9 +275,8 @@ export function createFlowMachine(
 
   const current = (): FlowStepDef => steps[index];
 
-  // The ticket + PR the flow works (§24.2.3 T7): the github-ticket input value (own-property only, so
-  // an input named `__proto__` can't resolve off the chain) falling back to the loop's linked_issues,
-  // and the loop's PR. Numbers only; absent when neither resolves.
+  // §24.2.3 T7 (shape: the FlowRefs JSDoc in src/shared/ipc.ts). Own-property lookup only, so an input
+  // named `__proto__` can't resolve a ticket off the prototype chain.
   const computeRefs = (loop: AgentLoopState | null): FlowRefs | undefined => {
     const ticketStr =
       ticketInputName && Object.prototype.hasOwnProperty.call(inputs, ticketInputName) ? inputs[ticketInputName] : undefined;
@@ -301,7 +300,7 @@ export function createFlowMachine(
       status,
       ...(step.todoTemplate ? { templateRef: step.todoTemplate } : {}),
     };
-    // Read once per view: the cross-step refs (§24.2.3 T7) and, on loop steps, the loop mirror (§24.2.3 T2).
+    // §24.2.3 T7 (refs) / §24.2.3 T2 (loop mirror, loop steps only)
     const loop = readLoop?.() ?? null;
     const refs = computeRefs(loop);
     const withRefs = refs ? { ...base, refs } : base;

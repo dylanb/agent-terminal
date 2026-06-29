@@ -28,8 +28,6 @@ export interface LoopPanelDeps {
 
 const NOOP_DEPS: LoopPanelDeps = { githubRef: () => Promise.resolve(null), openExternal: () => {} };
 
-/** Body text is a teaser in the popout (the user opens the link for the full issue), so a long body is
- *  truncated with an ellipsis. */
 const BODY_MAX = 200;
 function truncateBody(body: string): string {
   const t = body.trim();
@@ -62,8 +60,6 @@ function detailRow(doc: Document, key: string, value: string, valueClass = ''): 
 export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DEPS): LoopPanel {
   const doc = host.ownerDocument; // build from the host's document so the panel relocates (UI §2.2.1)
 
-  /** A ticket/PR ref row: the bare number renders now; the link + title + truncated body fill in once
-   *  `gh` resolves (best-effort — a null result leaves the bare number with no link). */
   function refRow(label: string, kind: GithubRefKind, number: number): HTMLElement {
     const row = doc.createElement('div');
     row.className = 'rrow';

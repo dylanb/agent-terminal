@@ -454,6 +454,41 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     expect(onPanelState.mock.calls.at(-1)![2]).toEqual({ ticket: 25, pr: 29 });
   });
 
+  it('re-renders the rail refs read-out when a background push changes only the refs (§24.2.3 T7)', async () => {
+    // refs are part of structuralSig, so a refs-only change forces a full render — the compact rail
+    // summary (which has no patch handler) must reflect the new number, not stay stale.
+    let fire = (): void => {};
+    let ticket = 25;
+    const deps = {
+      state: vi.fn(
+        async (): Promise<FlowStateView> => ({
+          stepName: 'groom',
+          steps: ['groom', 'plan'],
+          position: 1,
+          total: 2,
+          status: 'in_progress' as FlowStatus,
+          refs: { ticket },
+        }),
+      ),
+      start: vi.fn(),
+      advance: vi.fn(),
+      restart: vi.fn(),
+      undo: vi.fn(),
+      terminate: vi.fn(),
+      provideInput: vi.fn(),
+      onStateChanged: vi.fn((cb: () => void) => {
+        fire = cb;
+        return () => {};
+      }),
+    };
+    createFlowStrip(host, deps).onRepoChanged('/repo');
+    await vi.waitFor(() => expect(host.querySelector('.loopstat')?.textContent).toContain('#25'));
+
+    ticket = 26;
+    fire();
+    await vi.waitFor(() => expect(host.querySelector('.loopstat')?.textContent).toContain('#26'));
+  });
+
   // A focus-landing seam for the composition root (WCAG 2.4.3): the root lands focus via this contract
   // rather than reaching into the strip's private `.loopstat`. The boolean return lets it fall back
   // when no loop is shown.

@@ -301,9 +301,7 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
     });
     host.append(rail);
 
-    // The docked panel opens from a compact `loopstat` read-out (§24.2.3 T2/T7): a loop step shows its
-    // agent-loop status pill; a non-loop step that still has a ticket/PR shows a refs summary. Both
-    // hand their data to the panel via onPanelState (a null loop + no refs clears + closes it).
+    // §24.2.3 T2/T7: the loop read-out (loop steps) else the refs read-out (a ticket/PR on any step).
     if (state.loop) {
       host.append(loopReadout(doc, state.loop, deps.loopPanelId));
     } else if (hasFlowRefs(state.refs)) {

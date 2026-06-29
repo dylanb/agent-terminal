@@ -221,6 +221,13 @@ describe('flow state machine — ticket/PR refs', () => {
     expect(flow.state().refs?.ticket).toBe(176);
   });
 
+  it('falls back to linked_issues when the github-ticket input is present but non-numeric', () => {
+    const store = createFlowStateStore(mkdtempSync(join(tmpdir(), 'flow-refs-')));
+    store.write({ step: 'plan', status: 'in_progress', inputs: { ticket: 'abc' } });
+    const flow = createFlowMachine(TICKET_FLOW, store, undefined, () => mirror({ linkedIssues: [25] }));
+    expect(flow.state().refs?.ticket).toBe(25);
+  });
+
   it('falls back to the loop linked_issues for the ticket when the input is unset', () => {
     const flow = createFlowMachine(TICKET_FLOW, undefined, undefined, () => mirror({ linkedIssues: [25, 26] }));
     flow.start();

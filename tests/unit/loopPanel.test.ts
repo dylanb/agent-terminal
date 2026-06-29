@@ -158,6 +158,17 @@ describe('docked loop panel — ticket/PR refs (§24.2.3 T7)', () => {
     expect(openExternal).toHaveBeenCalledWith('https://github.com/o/r/issues/25');
   });
 
+  it('renders a short body verbatim with no ellipsis (truncateBody pass-through branch)', async () => {
+    const githubRef = vi.fn(async (kind: GithubRefKind) =>
+      kind === 'issue' ? ref({ body: 'short body' }) : null,
+    );
+    createLoopPanel(host, { githubRef, openExternal: vi.fn() }).render(loop({ pr: null, branch: null }), 'plan', { ticket: 25 });
+    await flush();
+    const bodyText = refRow('Ticket')!.querySelector('.rbody')?.textContent ?? '';
+    expect(bodyText).toBe('short body');
+    expect(bodyText.endsWith('…')).toBe(false);
+  });
+
   it('gives the external link a descriptive accessible name (WCAG 2.4.4 — link purpose in context)', async () => {
     const githubRef = vi.fn(async (kind: GithubRefKind) =>
       kind === 'issue' ? ref({ title: 'Persist flow inputs' }) : null,
