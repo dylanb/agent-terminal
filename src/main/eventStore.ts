@@ -40,7 +40,7 @@ export function createMonitorEventStore(
     try {
       persistence?.save(events);
     } catch {
-      /* swallow — the in-memory list and the live pane are unaffected */
+      /* */
     }
   }
 
