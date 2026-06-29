@@ -196,4 +196,23 @@ describe('monitor event persistence — restore after any termination', () => {
     const reborn = createMonitorEventStore({ persistence: backing.persistence });
     expect(reborn.list()).toEqual([]);
   });
+
+  // Persistence is best-effort durability (§8.4): a save() that throws (read-only launch dir,
+  // ENOSPC, a planted directory at the path) must never abort the capture/mutation critical path
+  // it sits on — CLAUDE.md best-effort-side-effect rule, the §25 audit recorder's precedent.
+  const throwingPersistence = { load: () => [], save: () => { throw new Error('EROFS'); } };
+
+  it('a save() failure does not abort addCapture, and the event still lands in memory', () => {
+    const store = createMonitorEventStore({ persistence: throwingPersistence });
+    expect(() => store.addCapture({ ...capture, text: 'a' })).not.toThrow();
+    expect(store.list()).toHaveLength(1);
+  });
+
+  it('a save() failure does not abort remove or clear', () => {
+    const store = createMonitorEventStore({ persistence: throwingPersistence });
+    store.addCapture({ ...capture, text: 'a' });
+    const id = store.list()[0].id;
+    expect(() => store.remove(id)).not.toThrow();
+    expect(() => store.clear()).not.toThrow();
+  });
 });

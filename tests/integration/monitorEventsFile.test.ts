@@ -79,6 +79,22 @@ describe('monitor events file persistence', () => {
     expect(createMonitorEventsFile(dir).load()).toEqual([]);
   });
 
+  it('loads the same-shaped payload when it is under the cap (the cap refuses size, not shape — positive control)', () => {
+    createMonitorEventsFile(dir).save([evt({ id: 'small', text: 'a'.repeat(1024) })]);
+    expect(createMonitorEventsFile(dir).load().map((e) => e.id)).toEqual(['small']);
+  });
+
+  it('refuses a symlinked events file (a planted symlink cannot bypass the size guard or read the target)', () => {
+    // statSync follows symlinks and reports the target's size; a repo could symlink the events file
+    // to a special file (e.g. /dev/zero) to slip past the cap and then hang the synchronous read.
+    // The loader must refuse a non-regular file outright (CWE-59/CWE-400).
+    mkdirSync(join(dir, '.agent-terminal'), { recursive: true });
+    const realTarget = join(dir, 'real-events.json');
+    writeFileSync(realTarget, JSON.stringify([evt({ id: 'x' })]));
+    symlinkSync(realTarget, join(dir, '.agent-terminal', 'monitor-events.json'));
+    expect(createMonitorEventsFile(dir).load()).toEqual([]);
+  });
+
   it('drops inject-able command-output events on load (an untrusted file cannot seed an Insert-at-cursor card)', () => {
     // command-output is the one type whose monitor card injects into the live PTY (§16.2); a
     // repo-shipped file must not be able to restore one (CWE-78 untrusted-data-as-syntax).

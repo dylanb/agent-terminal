@@ -116,7 +116,7 @@ async function createWindow(): Promise<void> {
     cwd: launchRoot,
   });
   const shellSpawnedAt = performance.now(); // monotonic: a wall-clock jump must not flip the grace
-  // §8.4: monitor-event persistence is keyed on the launch directory.
+  // §8.4
   const store = createMonitorEventStore({ persistence: createMonitorEventsFile(launchRoot) });
   // §16.6: the only state that lives outside the repo (userData).
   const uiSettings = createUiSettingsStore(path.join(app.getPath('userData'), 'ui-settings.json'));

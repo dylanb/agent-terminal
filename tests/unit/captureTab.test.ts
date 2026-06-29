@@ -120,6 +120,17 @@ describe('Capture tab §24.2.1 — bulk triage (checkbox + Add to todo / Dismiss
     expect(addBtn().disabled).toBe(true);
   });
 
+  it('renders the Insert-at-cursor affordance only for the inject-able command-output card, not for a finding (§16.2)', async () => {
+    await withRepo();
+    handlers.event!(makeEvent({ id: 'co1', type: 'command-output', parentId: null, text: 'echo hi' }));
+    handlers.event!(makeEvent({ id: 'f1', type: 'finding', parentId: null, text: 'a finding' }));
+    const hasInsert = (id: string) =>
+      Array.from((blocks().querySelector(`[data-event-id="${id}"]`) as HTMLElement).querySelectorAll('button.linkbtn'))
+        .some((b) => b.textContent === 'Insert at cursor');
+    expect(hasInsert('co1')).toBe(true);
+    expect(hasInsert('f1')).toBe(false);
+  });
+
   it('checking findings and clicking Add to todo concatenates them (appeared order, blank-line separated) into one todo', async () => {
     await withRepo();
     handlers.event!(makeEvent({ id: 'f1', type: 'finding', parentId: null, text: 'alpha' }));

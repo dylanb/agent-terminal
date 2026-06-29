@@ -5,7 +5,7 @@
 // validated to the MonitorEvent shape before it can seed the store and replay into the monitor
 // pane; a missing/corrupt/foreign file degrades to an empty list (never a throw).
 
-import { mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
+import { lstatSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import type { BufferType, MonitorEvent, MonitorEventSource, MonitorEventType } from '../shared/ipc';
@@ -37,7 +37,7 @@ const isRange = (v: unknown): boolean =>
   v === null ||
   (isRecord(v) && isCell(v.start) && isCell(v.end) && typeof v.baseY === 'number' && inSet(BUFFER_TYPES)(v.bufferType));
 
-// Per-field validation of the §15.4 `MonitorEvent` shape.
+// §15.4
 const FIELD_CHECKS: Record<keyof MonitorEvent, (v: unknown) => boolean> = {
   id: isString,
   sessionId: isString,
@@ -60,7 +60,11 @@ export function createMonitorEventsFile(launchRoot: string): MonitorEventPersist
   return {
     load() {
       try {
-        if (statSync(file).size > MAX_EVENTS_FILE_BYTES) return [];
+        // lstat (not stat) so a symlink is rejected by isFile() instead of being followed: a symlink
+        // to a special file (/dev/zero, a FIFO) reports size 0, slips a stat-based size cap, then
+        // hangs/OOMs the synchronous read. Only a regular file under the cap is read (CWE-59/CWE-400).
+        const st = lstatSync(file);
+        if (!st.isFile() || st.size > MAX_EVENTS_FILE_BYTES) return [];
         const raw = JSON.parse(readFileSync(file, 'utf8'));
         if (!Array.isArray(raw)) return [];
         return raw.filter(isMonitorEvent).filter((e) => !isInjectableEventType(e.type));

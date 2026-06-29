@@ -6,7 +6,8 @@ import { randomUUID } from 'node:crypto';
 import type { MonitorCaptureMsg, MonitorEvent } from '../shared/ipc';
 
 /** Durable backing for the event list. `load()` returns the persisted events (empty when
- *  absent/corrupt — never throws); `save()` receives the full current list to persist. */
+ *  absent/corrupt — never throws); `save()` receives the full current list to persist and may
+ *  throw on I/O failure — the store treats it as best-effort and never lets that abort a mutation. */
 export interface MonitorEventPersistence {
   load(): MonitorEvent[];
   save(events: readonly MonitorEvent[]): void;
@@ -34,7 +35,13 @@ export function createMonitorEventStore(
   const events: MonitorEvent[] = persistence ? [...persistence.load()] : [];
 
   function save(): void {
-    persistence?.save(events);
+    // Durability is best-effort: a save failure (read-only launch dir, ENOSPC, a planted path)
+    // must never abort the capture/mutation critical path (CLAUDE.md best-effort-side-effect rule).
+    try {
+      persistence?.save(events);
+    } catch {
+      /* swallow — the in-memory list and the live pane are unaffected */
+    }
   }
 
   function append(event: MonitorEvent): MonitorEvent {
