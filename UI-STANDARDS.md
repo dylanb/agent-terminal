@@ -156,7 +156,41 @@ announcement and can create a focus trap. The rules:
    callback) so the root can place focus somewhere sensible — it does **not** reach across organisms
    to move focus itself (UI §2.2). The canonical implementation is `attentionCue`.
 
-## 5. Conventions
+## 5. Blocking dialogs — the modal focus-management pattern
+
+A component that demands a decision before the user can proceed (a destructive confirmation, a
+required typed-input prompt) is a **blocking dialog** — the inverse of the §4 Alert pattern. An
+alert *announces* and must never trap focus; a dialog *traps* focus until dismissed. Confusing the
+two breaks keyboard and screen-reader users in opposite ways, so the boundary is explicit: §4 is
+for transient announcements, §5 is for blocking decisions.
+
+The focus management here (WCAG 2.4.3 focus order, 4.1.2 name/role/value) is subtle and identical
+across every dialog, so it is defined **once** and composed, never re-derived:
+
+1. **Compose the shared modal shell; never hand-roll focus management.** There is exactly one
+   implementation of the scrim + focus-trap + focus-restore (`createModalShell`); a new dialog
+   supplies only its card body and actions. This is the §9.1 / `src/shared` single-definition rule
+   applied to dialog accessibility — two hand-rolled focus traps *will* drift, and the drift is
+   invisible until a keyboard user hits it.
+2. **Identify the dialog to assistive tech.** `role="dialog"` + `aria-modal="true"` +
+   `aria-labelledby` (the title node) and, when there's body copy, `aria-describedby` (the message
+   node). The label/description come from real rendered nodes, not duplicated string attributes.
+3. **Move focus in on open; trap and wrap Tab; Escape closes.** Focus lands on the dialog's
+   declared initial control (or the dialog container when none), Tab/Shift-Tab cycle only the
+   dialog's focusables and wrap at the ends, and the scrim click and Escape both dismiss.
+4. **Restore focus to the opener on close (WCAG 2.4.3).** The shell records whatever was focused
+   when the dialog opened and returns focus there on close — the user is put back where they were.
+5. **`dispose()` tears down WITHOUT restoring focus.** Closing (user dismissal) and disposing
+   (unmount / relocation, UI §2.2.1) are different contracts: `close()` restores focus to the
+   opener; `dispose()` just clears the host subtree, because on relocation there is no opener to
+   return to. An organism that owns a dialog must expose both.
+
+The canonical implementation is `createModalShell`, composed by `confirmDialog` and
+`flowInputModal`. A dialog is tested like any organism (§3.2–3.3) **plus** assertions for items
+2–5 above: the ARIA wiring, Tab wrapping in both directions, Escape/scrim dismissal, and
+focus-restored-to-opener.
+
+## 6. Conventions
 
 - **Factory shape.** `createX(host: HTMLElement, deps?): X` returning a typed interface with a
   `dispose()`. No default-exported god objects.
@@ -167,7 +201,7 @@ announcement and can create a focus trap. The rules:
 - **No new magic numbers.** Timings/dimensions that the spec names stay named and configurable
   (§7.1/§8.2/§9.3).
 
-## 6. Definition of done (per component)
+## 7. Definition of done (per component)
 - [ ] Correct tier, and obeys that tier's dependency limits (UI §1).
 - [ ] Typed interface; all inputs/outputs/services on it (organisms: UI §2.1).
 - [ ] Touches only its host subtree; services injected, not reached for (UI §2.2).
@@ -176,3 +210,4 @@ announcement and can create a focus trap. The rules:
 - [ ] RED-first DOM unit tests of observable behavior (UI §3.1).
 - [ ] Organisms: e2e + a passing relocation test in ≥2 placements (UI §3.2–3.3).
 - [ ] If it announces transient messages: follows the Alert pattern — permanent host, empty-to-re-announce, no focusable when empty, focus restored on dismiss (UI §4).
+- [ ] If it blocks for a decision: composes `createModalShell` — `role="dialog"`/`aria-modal`, labelled + described, Tab trapped and wrapping, Escape/scrim close, focus restored to opener on close, `dispose()` tears down without restoring (UI §5).

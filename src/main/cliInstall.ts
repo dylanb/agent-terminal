@@ -10,9 +10,12 @@ import { generateShim, CLI_COMMAND_NAME, type LaunchInvocation } from './cliShim
 
 /** The resolved filesystem work of one install. Internal to this module — the public seam is
  *  RuntimeInfo. `reconcileProfiles` are profiles to strip orphan launcher blocks from (e.g. left by a
- *  former shell), distinct from `profiles`, the ones the active shell sources and gets the new block. */
+ *  former shell), distinct from `profiles`, the ones the active shell sources and gets the new block.
+ *  `ownsBinDir` is true only for the app-created `~/.agent-terminal/bin`; false for a reused user dir,
+ *  which the installer must neither create nor re-permission. */
 interface InstallTarget {
   binDir: string;
+  ownsBinDir: boolean;
   profiles: string[];
   reconcileProfiles?: string[];
   currentPath: string;
@@ -59,11 +62,53 @@ function resolveProfiles(home: string, shell: string, existing: string[]): strin
 function buildInstallTarget(info: RuntimeInfo, existingProfiles: string[]): InstallTarget {
   return {
     binDir: path.join(info.home, '.agent-terminal', 'bin'),
+    ownsBinDir: true,
     profiles: resolveProfiles(info.home, info.shell, existingProfiles),
     reconcileProfiles: existingProfiles,
     currentPath: info.currentPath,
     invocation: info.invocation,
   };
+}
+
+/** User bin directories the installer prefers when one is ALREADY on PATH — landing the command where
+ *  the user's shells already look means no profile edit and no new shell (the original failure: a
+ *  launcher installed into a dir nobody's PATH includes). */
+const PREFERRED_BIN_DIRS = [path.join('.local', 'bin'), 'bin'];
+
+/** Whether a pre-existing on-PATH user dir is safe to host the launcher. A reused dir is never
+ *  re-permissioned, so it must be vetted and, failing that, declined for the dedicated dir — otherwise
+ *  another local user could rename the dir (or an ancestor) and substitute a hostile launcher
+ *  (CWE-276/426), the same attack the dedicated-dir path blocks by hardening its own parent to 0o700.
+ *  Symlinks are resolved first (CWE-59): a symlinked dir's real ancestors are what an attacker
+ *  manipulates, not the lexical path. */
+function isSafeReuseDir(dir: string, home: string): boolean {
+  let real: string;
+  let realHome: string;
+  try {
+    const st = fs.statSync(dir);
+    if (!st.isDirectory() || (st.mode & 0o022) !== 0) return false;
+    fs.accessSync(dir, fs.constants.W_OK);
+    real = fs.realpathSync(dir);
+    realHome = fs.realpathSync(home);
+  } catch {
+    return false;
+  }
+  for (let cur = path.dirname(real); cur !== realHome && cur !== path.dirname(cur); cur = path.dirname(cur)) {
+    try {
+      if ((fs.statSync(cur).mode & 0o022) !== 0) return false;
+    } catch {
+      return false;
+    }
+  }
+  return true;
+}
+
+function preferredOnPathBinDir(home: string, currentPath: string): string | undefined {
+  for (const rel of PREFERRED_BIN_DIRS) {
+    const dir = path.join(home, rel);
+    if (onPath(dir, currentPath) && isSafeReuseDir(dir, home)) return dir;
+  }
+  return undefined;
 }
 
 const PATH_BLOCK_BEGIN = '# >>> agent-terminal launcher >>>';
@@ -132,18 +177,32 @@ export function installCliShim(runtime: RuntimeInfo): CliInstallResult {
   const existingProfiles = PROFILE_CANDIDATES.map((n) => path.join(runtime.home, n)).filter((p) =>
     fs.existsSync(p),
   );
+  const preferred = preferredOnPathBinDir(runtime.home, runtime.currentPath);
+  if (preferred) {
+    const result = performInstall({
+      binDir: preferred,
+      ownsBinDir: false,
+      profiles: [],
+      reconcileProfiles: existingProfiles,
+      currentPath: runtime.currentPath,
+      invocation: runtime.invocation,
+    });
+    if (result.ok) return result;
+  }
   return performInstall(buildInstallTarget(runtime, existingProfiles));
 }
 
 function performInstall(target: InstallTarget): CliInstallResult {
   const cmd = path.join(target.binDir, CLI_COMMAND_NAME);
   try {
-    fs.mkdirSync(target.binDir, { recursive: true });
-    // Owner-only on the on-PATH executable dir AND its app-owned parent: a world-traversable/writable
-    // ancestor lets another user rename bin and substitute a hostile launcher (CWE-276/426). 0o700 also
-    // matches auditRecorder's hardening of the shared ~/.agent-terminal root rather than re-widening it.
-    fs.chmodSync(path.dirname(target.binDir), 0o700);
-    fs.chmodSync(target.binDir, 0o700);
+    if (target.ownsBinDir) {
+      fs.mkdirSync(target.binDir, { recursive: true });
+      // Owner-only on the on-PATH executable dir AND its app-owned parent: a world-traversable/writable
+      // ancestor lets another user rename bin and substitute a hostile launcher (CWE-276/426). 0o700 also
+      // matches auditRecorder's hardening of the shared ~/.agent-terminal root rather than re-widening it.
+      fs.chmodSync(path.dirname(target.binDir), 0o700);
+      fs.chmodSync(target.binDir, 0o700);
+    }
     fs.writeFileSync(cmd, generateShim(target.invocation));
     fs.chmodSync(cmd, 0o755);
   } catch (e) {

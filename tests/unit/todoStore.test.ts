@@ -173,4 +173,29 @@ describe('todoStore (§16.3 / §16.4 — repo-scoped CRUD + persistence)', () =>
     const onDisk = JSON.parse(readFileSync(join(repoA, '.agent-terminal', 'todos.json'), 'utf8')) as { repoKey: string }[];
     expect(onDisk.every((t) => t.repoKey === repoA)).toBe(true);
   });
+
+  // Terminate (#26 AC7): clears every todo for the repo regardless of state or origin.
+  it('clear removes every todo regardless of status or source, and persists empty', () => {
+    const store = makeStore();
+    store.add(repoA, 'active manual');
+    const flowAdded = store.add(repoA, 'flow added', { type: 'capture' });
+    store.setStatus(repoA, flowAdded[1].id, 'in_progress');
+    const withDone = store.add(repoA, 'completed');
+    store.setStatus(repoA, withDone[2].id, 'done');
+    expect(store.list(repoA).length).toBe(3);
+
+    expect(store.clear(repoA)).toEqual([]);
+    expect(store.list(repoA)).toEqual([]);
+    const onDisk = JSON.parse(readFileSync(join(repoA, '.agent-terminal', 'todos.json'), 'utf8'));
+    expect(onDisk).toEqual([]);
+  });
+
+  it('clear scopes to the repo: another repo keeps its todos (AC11)', () => {
+    const store = makeStore();
+    store.add(repoA, 'a-side');
+    store.add(repoB, 'b-side');
+    store.clear(repoA);
+    expect(store.list(repoA)).toEqual([]);
+    expect(store.list(repoB).map((t) => t.text)).toEqual(['b-side']);
+  });
 });

@@ -1,14 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createFlowStateStore } from '../../src/main/flowState';
 
-// §24.2.2 S3 / §19.1 — flow progression persists to <worktree>/.agent-terminal/flow-state.yaml,
-// which is gitignored. A missing/corrupt file degrades to null (never a throw), mirroring the
-// todoStore (§16.3). Real store, real temp dirs (no fs mocks).
-
-const GITIGNORE_ENTRY = '.agent-terminal/flow-state.yaml';
+// §24.2.2 S3 / §19.1 — flow progression persists to <worktree>/.agent-terminal/flow-state.yaml.
+// A missing/corrupt file degrades to null (never a throw), mirroring the todoStore (§16.3). The
+// store NEVER touches the user's .gitignore (no-gitignore-writes rule). Real store, real temp dirs.
 
 describe('flow-state store (§24.2.2 S3 / §19.1)', () => {
   let dir: string;
@@ -58,33 +56,18 @@ describe('flow-state store (§24.2.2 S3 / §19.1)', () => {
     expect(createFlowStateStore(dir).read()).toBeNull();
   });
 
-  it('gitignores flow-state.yaml on first write (§19.1)', () => {
+  it('never creates a .gitignore on write — the app does not modify the user\'s VCS config', () => {
     createFlowStateStore(dir).write({ step: 'groom-ticket', status: 'in_progress' });
-    const ignore = readFileSync(join(dir, '.gitignore'), 'utf8');
-    expect(ignore.split('\n')).toContain(GITIGNORE_ENTRY);
+    expect(existsSync(join(dir, '.gitignore'))).toBe(false);
   });
 
-  it('does not duplicate the ignore entry across repeated writes', () => {
+  it('leaves a pre-existing .gitignore byte-for-byte unchanged across writes', () => {
+    const before = 'node_modules\n';
+    writeFileSync(join(dir, '.gitignore'), before);
     const store = createFlowStateStore(dir);
     store.write({ step: 'groom-ticket', status: 'in_progress' });
     store.write({ step: 'groom-ticket', status: 'done' });
-    const lines = readFileSync(join(dir, '.gitignore'), 'utf8').split('\n');
-    expect(lines.filter((l) => l === GITIGNORE_ENTRY)).toHaveLength(1);
-  });
-
-  it('preserves an existing .gitignore and only appends the new entry', () => {
-    writeFileSync(join(dir, '.gitignore'), 'node_modules\n');
-    createFlowStateStore(dir).write({ step: 'groom-ticket', status: 'in_progress' });
-    const lines = readFileSync(join(dir, '.gitignore'), 'utf8').split('\n');
-    expect(lines).toContain('node_modules');
-    expect(lines).toContain(GITIGNORE_ENTRY);
-  });
-
-  it('does not re-add the entry when the user already ignores it', () => {
-    writeFileSync(join(dir, '.gitignore'), `${GITIGNORE_ENTRY}\n`);
-    createFlowStateStore(dir).write({ step: 'groom-ticket', status: 'done' });
-    const lines = readFileSync(join(dir, '.gitignore'), 'utf8').split('\n');
-    expect(lines.filter((l) => l === GITIGNORE_ENTRY)).toHaveLength(1);
+    expect(readFileSync(join(dir, '.gitignore'), 'utf8')).toBe(before);
   });
 
   it('reads a __proto__ inputs key as own data without prototype pollution', () => {

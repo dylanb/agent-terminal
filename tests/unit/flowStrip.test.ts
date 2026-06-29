@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createFlowStrip } from '../../src/renderer/src/flowStrip';
 import { assertRendersFromHostDocument } from './relocatable';
 import { FLOW_CHANGED_EVENT } from '../../src/renderer/src/paneActions';
-import type { FlowStateView, FlowStatus } from '../../src/shared/ipc';
+import type { AgentState, FlowStateView, FlowStatus } from '../../src/shared/ipc';
 
 // §24.2.2 / §24.2.3 T1 / §22.3 — the flow status strip. It follows the cwd: every window.flow call
 // must carry the current repoKey, so a stale-repo response must never repaint the rail (§16.3).
@@ -30,6 +30,10 @@ function fakeFlow(initial: FlowStatus = 'not_started') {
     }),
     undo: vi.fn(async (repoKey: string) => {
       byKey.set(repoKey, 'in_progress');
+      return view(repoKey);
+    }),
+    terminate: vi.fn(async (repoKey: string) => {
+      byKey.set(repoKey, 'not_started');
       return view(repoKey);
     }),
     provideInput: vi.fn(async (repoKey: string) => view(repoKey)),
@@ -155,6 +159,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
       advance: vi.fn(),
       restart: vi.fn(),
       undo: vi.fn(),
+      terminate: vi.fn(),
       provideInput: vi.fn(),
       onStateChanged: noopSub,
     };
@@ -206,6 +211,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
       advance: vi.fn(),
       restart: vi.fn(),
       undo: vi.fn(),
+      terminate: vi.fn(),
       provideInput: vi.fn(),
       onStateChanged: noopSub,
     };
@@ -234,6 +240,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
       advance: vi.fn(),
       restart: vi.fn(),
       undo: vi.fn(),
+      terminate: vi.fn(),
       provideInput: vi.fn(),
       onStateChanged: vi.fn((cb: () => void) => {
         fire = cb;
@@ -264,6 +271,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
       advance: vi.fn(),
       restart: vi.fn(),
       undo: vi.fn(),
+      terminate: vi.fn(),
       provideInput: vi.fn(),
       onStateChanged: noopSub,
     };
@@ -303,6 +311,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
       advance: vi.fn(),
       restart: vi.fn(),
       undo: vi.fn(),
+      terminate: vi.fn(),
       provideInput: vi.fn(),
       onStateChanged: noopSub,
       loopPanelId: 'loop-panel',
@@ -336,6 +345,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
       advance: vi.fn(),
       restart: vi.fn(),
       undo: vi.fn(),
+      terminate: vi.fn(),
       provideInput: vi.fn(),
       onStateChanged: noopSub,
       // no loopPanelId → the strip must not bake in a document-level id (UI-STANDARDS §2.2 rule 1)
@@ -363,6 +373,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
       restart: vi.fn(),
       undo: vi.fn(),
       provideInput: vi.fn(),
+      terminate: vi.fn(),
       onStateChanged: noopSub,
       onLoopState,
     };
@@ -389,6 +400,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
       restart: vi.fn(),
       undo: vi.fn(),
       provideInput: vi.fn(),
+      terminate: vi.fn(),
       onStateChanged: noopSub,
       loopPanelId: 'loop-panel',
     };
@@ -420,6 +432,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
       advance: vi.fn(),
       restart: vi.fn(),
       undo: vi.fn(),
+      terminate: vi.fn(),
       provideInput: vi.fn(),
       onStateChanged: noopSub,
     });
@@ -458,6 +471,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
       advance: vi.fn(),
       restart: vi.fn(),
       undo: vi.fn(),
+      terminate: vi.fn(),
       provideInput: vi.fn(),
       onStateChanged: noopSub,
     });
@@ -497,6 +511,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
       advance: vi.fn(),
       restart: vi.fn(),
       undo: vi.fn(),
+      terminate: vi.fn(),
       provideInput: vi.fn(),
       onStateChanged: noopSub,
       onLoopState: (loop: FlowStateView['loop'] | null, title: string) => seen.push({ status: loop?.status, title }),
@@ -534,6 +549,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
       advance: vi.fn(),
       restart: vi.fn(),
       undo: vi.fn(),
+      terminate: vi.fn(),
       provideInput,
       onStateChanged: noopSub,
       onPrompt: (prompt: FlowStateView['prompt'] | null, stepName: string, submit: (v: Record<string, string>) => void) => {
@@ -574,6 +590,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
       advance: vi.fn(),
       restart: vi.fn(),
       undo: vi.fn(),
+      terminate: vi.fn(),
       provideInput: vi.fn(),
       onStateChanged: noopSub,
       onPrompt: (prompt: FlowStateView['prompt'] | null) => {
@@ -607,6 +624,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
       advance: vi.fn(),
       restart: vi.fn(),
       undo: vi.fn(),
+      terminate: vi.fn(),
       provideInput,
       onStateChanged: noopSub,
       onPrompt: (prompt: FlowStateView['prompt'] | null, _stepName: string, submit: (v: Record<string, string>) => void) => {
@@ -644,6 +662,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
       advance: vi.fn(),
       restart: vi.fn(),
       undo: vi.fn(),
+      terminate: vi.fn(),
       provideInput: vi.fn(),
       onStateChanged: noopSub,
       onPrompt: (prompt: FlowStateView['prompt'] | null) => seen.push(prompt),
@@ -680,6 +699,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
       advance: vi.fn(),
       restart: vi.fn(),
       undo: vi.fn(),
+      terminate: vi.fn(),
       provideInput: vi.fn((): Promise<FlowStateView> => new Promise((r) => { resolveProvide = r; })),
       onStateChanged: noopSub,
       onPrompt: (prompt: FlowStateView['prompt'] | null, _s: string, submit: (v: Record<string, string>) => void) => {
@@ -721,6 +741,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
       advance: vi.fn(),
       restart: vi.fn(),
       undo: vi.fn(),
+      terminate: vi.fn(),
       provideInput: vi.fn(),
       onStateChanged: vi.fn((cb: () => void) => {
         fire = cb;
@@ -733,9 +754,9 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     oldReadout.focus();
     expect(document.activeElement).toBe(oldReadout);
 
-    fire(); // main pushes flow:onStateChanged → the rail repaints, rebuilding the read-out
-    await vi.waitFor(() => expect(host.querySelector('.loopstat')).not.toBe(oldReadout));
-    expect(document.activeElement).toBe(host.querySelector('.loopstat')); // focus rode the repaint (WCAG 2.4.3)
+    fire(); // main pushes flow:onStateChanged → the read-out updates live, with no user action
+    await vi.waitFor(() => expect(deps.state.mock.calls.length).toBeGreaterThanOrEqual(2)); // push handled
+    expect(document.activeElement).toBe(host.querySelector('.loopstat')); // focus stayed on the read-out (WCAG 2.4.3)
   });
 
   it('signals onPrompt(null) on a transition with no input prompt, closing the modal (§24.2.3 T3)', async () => {
@@ -767,6 +788,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
       advance: vi.fn(),
       restart: vi.fn(),
       undo: vi.fn(),
+      terminate: vi.fn(),
       provideInput: vi.fn(),
       onStateChanged: noopSub,
     };
@@ -835,6 +857,272 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
       const strip = createFlowStrip(h, fakeFlow('in_progress'));
       strip.onRepoChanged('/repo');
       await strip.refresh();
+    });
+  });
+
+  // Terminate control (#26 AC1/AC2/AC4) — a destructive control wired confirm-then-terminate. It is
+  // rendered only when the composition root supplies the onTerminate confirmation seam.
+  describe('Terminate control (#26 AC1/AC2/AC4)', () => {
+    const terminate = () => host.querySelector<HTMLButtonElement>('.flow-terminate');
+
+    it('is visible while in_progress', async () => {
+      const deps = { ...fakeFlow('in_progress'), onTerminate: vi.fn() };
+      createFlowStrip(host, deps).onRepoChanged('/repo');
+      await vi.waitFor(() => expect(control()!.textContent).toBe('Advance'));
+      expect(terminate()).not.toBeNull();
+      expect(terminate()!.textContent).toBe('Terminate');
+    });
+
+    it('is visible while done', async () => {
+      const deps = { ...fakeFlow('done'), onTerminate: vi.fn() };
+      createFlowStrip(host, deps).onRepoChanged('/repo');
+      await vi.waitFor(() => expect(control()!.textContent).toBe('Restart'));
+      expect(terminate()).not.toBeNull();
+    });
+
+    it('is absent when the confirmation seam is not wired, even while in_progress (AC2)', async () => {
+      createFlowStrip(host, fakeFlow('in_progress')).onRepoChanged('/repo');
+      await vi.waitFor(() => expect(control()!.textContent).toBe('Advance'));
+      expect(terminate()).toBeNull();
+    });
+
+    it('is absent (not in the DOM/accessibility tree) while not_started (AC2)', async () => {
+      const deps = { ...fakeFlow('not_started'), onTerminate: vi.fn() };
+      createFlowStrip(host, deps).onRepoChanged('/repo');
+      await vi.waitFor(() => expect(control()!.textContent).toBe('Start'));
+      expect(terminate()).toBeNull();
+    });
+
+    it('is absent in the load-error state (AC2)', async () => {
+      const deps = {
+        state: vi.fn(
+          async (): Promise<FlowStateView> => ({
+            stepName: '',
+            steps: [],
+            position: 0,
+            total: 0,
+            status: 'error' as FlowStatus,
+            error: 'flow.yaml not found',
+          }),
+        ),
+        start: vi.fn(),
+        advance: vi.fn(),
+        restart: vi.fn(),
+        undo: vi.fn(),
+        terminate: vi.fn(),
+        provideInput: vi.fn(),
+        onStateChanged: noopSub,
+        onTerminate: vi.fn(),
+      };
+      createFlowStrip(host, deps).onRepoChanged('/repo');
+      await vi.waitFor(() => expect(host.querySelector('.flow-error')).not.toBeNull());
+      expect(terminate()).toBeNull();
+    });
+
+    it('routes activation to the confirmation seam with the current repo, before any terminate (AC3 staging)', async () => {
+      const onTerminate = vi.fn();
+      const deps = { ...fakeFlow('in_progress'), onTerminate };
+      createFlowStrip(host, deps).onRepoChanged('/repo');
+      await vi.waitFor(() => expect(terminate()).not.toBeNull());
+      terminate()!.click();
+      expect(onTerminate).toHaveBeenCalledWith('/repo', expect.any(Function));
+      expect(deps.terminate).not.toHaveBeenCalled(); // nothing happens until confirm fires
+    });
+
+    it('cancel (confirmation never fires confirm) makes no terminate call (AC4)', async () => {
+      const onTerminate = vi.fn(); // models a cancelled confirmation: confirm is never invoked
+      const deps = { ...fakeFlow('in_progress'), onTerminate };
+      createFlowStrip(host, deps).onRepoChanged('/repo');
+      await vi.waitFor(() => expect(terminate()).not.toBeNull());
+      terminate()!.click();
+      await new Promise((r) => setTimeout(r, 0));
+      expect(deps.terminate).not.toHaveBeenCalled();
+    });
+
+    it('confirming invokes terminate for the repo and repaints to not_started (AC5)', async () => {
+      const onTerminate = vi.fn((_repoKey: string, confirm: () => void) => confirm());
+      const deps = { ...fakeFlow('in_progress'), onTerminate };
+      createFlowStrip(host, deps).onRepoChanged('/repo');
+      await vi.waitFor(() => expect(terminate()).not.toBeNull());
+      terminate()!.click();
+      await vi.waitFor(() => expect(deps.terminate).toHaveBeenCalledWith('/repo'));
+      await vi.waitFor(() => expect(control()!.textContent).toBe('Start'));
+      expect(terminate()).toBeNull(); // gone in not_started
+    });
+
+    it('drops a stale confirm if the cwd moved to another repo before confirming (AC11)', async () => {
+      let captured: (() => void) | undefined;
+      const onTerminate = vi.fn((_repoKey: string, confirm: () => void) => {
+        captured = confirm;
+      });
+      const deps = { ...fakeFlow('in_progress'), onTerminate };
+      const strip = createFlowStrip(host, deps);
+      strip.onRepoChanged('/repo');
+      await vi.waitFor(() => expect(terminate()).not.toBeNull());
+      terminate()!.click();
+      await vi.waitFor(() => expect(captured).toBeTruthy());
+
+      strip.onRepoChanged('/other');
+      await vi.waitFor(() => expect(deps.state).toHaveBeenCalledWith('/other'));
+      captured!(); // a late confirm after the cwd moved must not terminate the now-current repo
+      expect(deps.terminate).not.toHaveBeenCalled();
+    });
+
+    it('after confirming, lands focus on a real control instead of dropping it to <body> (WCAG 2.4.3)', async () => {
+      // The repaint to not_started detaches the Terminate button the confirm dialog restored focus to,
+      // and not_started carries no prompt, so without a re-anchor focus falls to <body>.
+      const onTerminate = vi.fn((_repoKey: string, confirm: () => void) => {
+        // Model createModalShell.close() restoring focus to its opener (the Terminate button) before
+        // the strip's confirm closure runs.
+        host.querySelector<HTMLButtonElement>('.flow-terminate')!.focus();
+        confirm();
+      });
+      const deps = { ...fakeFlow('in_progress'), onTerminate };
+      createFlowStrip(host, deps).onRepoChanged('/repo');
+      await vi.waitFor(() => expect(terminate()).not.toBeNull());
+      terminate()!.click();
+      await vi.waitFor(() => expect(control()!.textContent).toBe('Start'));
+      expect(document.activeElement).toBe(control());
+    });
+
+    it('re-enables the Terminate control if both terminate() and the recovery state() reject (failure recovery)', async () => {
+      const onTerminate = vi.fn((_repoKey: string, confirm: () => void) => confirm());
+      const deps = { ...fakeFlow('in_progress'), onTerminate };
+      createFlowStrip(host, deps).onRepoChanged('/repo');
+      await vi.waitFor(() => expect(terminate()).not.toBeNull());
+      const button = terminate()!;
+      // Make both the terminate call and refresh()'s re-pull reject, so no repaint detaches the
+      // button — only the finally re-enable can rescue it from being stranded disabled.
+      deps.terminate.mockRejectedValueOnce(new Error('terminate failed'));
+      deps.state.mockRejectedValueOnce(new Error('state failed'));
+      button.click();
+      await vi.waitFor(() => expect(deps.terminate).toHaveBeenCalledWith('/repo'));
+      await vi.waitFor(() => expect(button.disabled).toBe(false));
+      expect(host.querySelector('.flow-terminate')).toBe(button); // never repainted
+    });
+  });
+
+  // A passive flow:onStateChanged push (§24.2.2 S5) carries only LIVE-DERIVED change — todo counts,
+  // agent activity, the loop's state.yaml mirror — never a structural change (status/steps/controls
+  // move only via a user transition). Repainting it by tearing the whole subtree down detaches any
+  // node the user (or an open modal) is mid-interaction with: the focused control loses focus to
+  // <body>, an in-flight click target keeps detaching so the click never lands, and a confirm
+  // dialog's captured opener becomes stale so focus is not restored on close. The push must patch
+  // the derived values in place and leave the interactive nodes attached.
+  describe('passive push patches in place without tearing down interactive nodes (§24.2.2 S5)', () => {
+    const passiveDeps = (read: () => FlowStateView) => {
+      let fire = (): void => {};
+      const deps = {
+        state: vi.fn(async () => read()),
+        start: vi.fn(),
+        advance: vi.fn(),
+        restart: vi.fn(),
+        undo: vi.fn(),
+        terminate: vi.fn(),
+        provideInput: vi.fn(),
+        onStateChanged: vi.fn((cb: () => void) => {
+          fire = cb;
+          return () => {};
+        }),
+      };
+      return { deps, push: () => fire() };
+    };
+
+    it('keeps keyboard focus on the focused control across a derived-only push (1918/WCAG 2.4.3)', async () => {
+      let activity: AgentState = 'active';
+      const { deps, push } = passiveDeps(() => ({
+        stepName: 'build',
+        steps: ['build'],
+        position: 1,
+        total: 1,
+        status: 'in_progress',
+        derived: { activity, todosDone: 1, todosTotal: 3, ready: false },
+      }));
+      createFlowStrip(host, deps).onRepoChanged('/repo');
+      await vi.waitFor(() => expect(control()).not.toBeNull());
+      control()!.focus();
+      expect(document.activeElement).toBe(control());
+
+      activity = 'quiet';
+      push();
+      await vi.waitFor(() =>
+        expect(host.querySelector<HTMLElement>('.flow-derived')!.textContent!.toLowerCase()).toContain('quiet'),
+      );
+      expect(document.activeElement).toBe(control()); // never dropped to <body> by a teardown
+    });
+
+    it('does not tear down the Terminate control on a derived-only push, so a captured opener stays valid (2475 AC13)', async () => {
+      let done = 1;
+      const { deps, push } = passiveDeps(() => ({
+        stepName: 'build',
+        steps: ['build'],
+        position: 1,
+        total: 1,
+        status: 'in_progress',
+        derived: { activity: 'active', todosDone: done, todosTotal: 3, ready: false },
+      }));
+      createFlowStrip(host, { ...deps, onTerminate: vi.fn() }).onRepoChanged('/repo');
+      await vi.waitFor(() => expect(host.querySelector('.flow-terminate')).not.toBeNull());
+      const opener = host.querySelector('.flow-terminate');
+
+      done = 2;
+      push();
+      await vi.waitFor(() => expect(host.querySelector<HTMLElement>('.flow-derived')!.textContent).toContain('2 / 3'));
+      // Same node — a modal that captured this button as its focus-restore opener still resolves it.
+      expect(host.querySelector('.flow-terminate')).toBe(opener);
+    });
+
+    it('updates the loop read-out iteration in place and keeps the same node across a live re-pull (§24.2.3 T2)', async () => {
+      let iteration = 9;
+      const { deps, push } = passiveDeps(() => ({
+        stepName: 'build',
+        steps: ['build'],
+        position: 1,
+        total: 1,
+        status: 'in_progress',
+        loop: { status: 'awaiting-human-pr-approval', iteration, pr: 179, branch: 'b', ready: false },
+      }));
+      createFlowStrip(host, { ...deps, loopPanelId: 'loop-panel' }).onRepoChanged('/repo');
+      await vi.waitFor(() => expect(host.querySelector('.loopstat')).not.toBeNull());
+      const readout = host.querySelector('.loopstat');
+      expect(readout!.textContent).toContain('iter 9');
+
+      iteration = 11;
+      push();
+      await vi.waitFor(() => expect(host.querySelector('.loopstat')!.textContent).toContain('iter 11'));
+      // Same node — the click/focus target survives the live re-pull rather than detaching mid-action.
+      expect(host.querySelector('.loopstat')).toBe(readout);
+    });
+
+    it('still does a full structural render when the push changes structure (loop appears)', async () => {
+      let withLoop = false;
+      const { deps, push } = passiveDeps(() =>
+        withLoop
+          ? {
+              stepName: 'build',
+              steps: ['build'],
+              position: 1,
+              total: 1,
+              status: 'in_progress',
+              loop: { status: 'impl-review', iteration: 1, pr: 1, branch: 'b', ready: false },
+            }
+          : {
+              stepName: 'build',
+              steps: ['build'],
+              position: 1,
+              total: 1,
+              status: 'in_progress',
+              derived: { activity: 'active', todosDone: 1, todosTotal: 3, ready: false },
+            },
+      );
+      createFlowStrip(host, deps).onRepoChanged('/repo');
+      await vi.waitFor(() => expect(host.querySelector('.flow-derived')).not.toBeNull());
+      expect(host.querySelector('.loopstat')).toBeNull();
+
+      withLoop = true;
+      push();
+      await vi.waitFor(() => expect(host.querySelector('.loopstat')).not.toBeNull());
+      expect(host.querySelector('.flow-derived')).toBeNull(); // the derived line gave way to the loop read-out
     });
   });
 

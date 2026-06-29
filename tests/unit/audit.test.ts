@@ -9,6 +9,7 @@ import {
   parseAuditStream,
   reconstructTimeline,
   serializeDoc,
+  terminateEvents,
   todoEvents,
   type AuditEvent,
   type AuditHeader,
@@ -310,5 +311,25 @@ describe('todoEvents — diff before/after the todo list (§25.5)', () => {
     const a = todo('a1', 'x', 'active');
     const b = todo('b1', 'y', 'done');
     expect(todoEvents([a, b], [b, a], T)).toEqual([]);
+  });
+});
+
+// Terminate (#26 / §25): a deliberately-abandoned run gets a timestamped termination event, distinct
+// from the lifecycle transitions, from which the reconstructed timeline reads not_started again.
+describe('terminate classifier + timeline fold (§25 / #26 AC8)', () => {
+  const T = '2026-06-23T10:00:01Z';
+
+  it('emits a single timestamped flow.terminated event', () => {
+    expect(terminateEvents(T)).toEqual([{ ts: T, type: 'flow.terminated' }]);
+  });
+
+  it('reconstructs a terminated run as not_started with no step', () => {
+    const stream =
+      serializeDoc({ flow: 'feature-dev', repo: 'r', repoPath: '/r', started: T }) +
+      serializeDoc({ ts: T, type: 'flow.started', step: 'plan' }) +
+      serializeDoc(terminateEvents(T)[0]);
+    const tl = reconstructTimeline(stream);
+    expect(tl.flow).toEqual({ status: 'not_started', step: '' });
+    expect(tl.events.map((e) => e.type)).toEqual(['flow.started', 'flow.terminated']);
   });
 });

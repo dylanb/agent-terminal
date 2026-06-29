@@ -18,7 +18,7 @@ import { createInjector } from './inject';
 import { createMonitorEventStore } from './eventStore';
 import { createShadowModel } from './shadow';
 import { spawnAgentShell, resolveShellPath } from './pty';
-import { resolveLaunchRoot, homeFallback, APP_LAUNCH_DIR_ENV } from './launchRoot';
+import { resolveLaunchSurfaces } from './launchRoot';
 import { createOutputGate } from './outputGate';
 import { resolveRendererTarget } from './rendererTarget';
 import { installNavigationGuards } from './windowGuards';
@@ -110,8 +110,8 @@ async function createWindow(): Promise<void> {
   installNavigationGuards(win.webContents);
 
   const config = resolveRuntimeConfig(process.env);
-  // §23.4
-  const launchRoot = resolveLaunchRoot(process.env[APP_LAUNCH_DIR_ENV], homeFallback(process.env, os.homedir()));
+  // §23.4: L anchors the cwd surfaces; the flow global dir is the per-user home (§18.1), not L.
+  const { launchRoot, flowGlobalDir } = resolveLaunchSurfaces(process.env, os.homedir());
   const ptyProcess = await spawnAgentShell({
     integrationScriptPath: config.shellIntegration ? SHELL_INTEGRATION_SCRIPT : undefined,
     cwd: launchRoot,
@@ -264,9 +264,6 @@ async function createWindow(): Promise<void> {
       }
     },
   });
-  // The same global fallback dir the definition uses, so on-demand template instantiation (§18.6)
-  // resolves against a global flow's templates too.
-  const flowGlobalDir = launchRoot;
   const flow = createFlowManager({
     globalDir: flowGlobalDir,
     onEnterStep: (step, inputs) => flowEntryActions(step, inputs),
@@ -523,6 +520,24 @@ async function createWindow(): Promise<void> {
         isValidFlowRequest(m) ? recordedTransition(m.repoKey, 'restart', () => flow.restart(m.repoKey)) : flowRequestError(),
       [CH.flowUndo]: (_e, m) =>
         isValidFlowRequest(m) ? recordedTransition(m.repoKey, 'undo', () => flow.undo(m.repoKey)) : flowRequestError(),
+      // Terminate (#26): inert from not_started / load-error (the control is absent there, AC2) — guard
+      // on the pre-state so a malformed/raced request never clears on an error flow. The audit write is
+      // best-effort (§25.7) and never blocks the reset (AC5–AC7 hold unconditionally). Per AC9/AC10
+      // nothing here signals the terminal process or touches external agent-loop engine state.
+      [CH.flowTerminate]: (_e, m) => {
+        if (!isValidFlowRequest(m)) return flowRequestError();
+        const before = flow.state(m.repoKey);
+        if (before.status !== 'in_progress' && before.status !== 'done') {
+          return trackLoop(m.repoKey, withDerived(m.repoKey, before));
+        }
+        const after = flow.terminate(m.repoKey);
+        audit.recordTerminate(m.repoKey);
+        todoStore.clear(m.repoKey);
+        store.clear();
+        send(CH.monitorCleared, { sessionId: SESSION_ID });
+        pushFlowChanged();
+        return trackLoop(m.repoKey, withDerived(m.repoKey, after));
+      },
       // Provide a step's typed input (§18.4 / §24.2.3 T3); the returned view's notice carries any §19.3
       // busy-shell refusal.
       [CH.flowProvideInput]: (_e, m) => {

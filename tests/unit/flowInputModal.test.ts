@@ -4,8 +4,8 @@ import { createFlowInputModal } from '../../src/renderer/src/flowInputModal';
 import { assertRendersFromHostDocument } from './relocatable';
 import type { FlowPrompt } from '../../src/shared/ipc';
 
-// §24.2.3 T3 — the typed-input modal organism (UI-STANDARDS §1.2): the one deliberate blocking
-// surface (§18.4). Placement-agnostic — it touches only its host subtree.
+// §24.2.3 T3 — the typed-input modal, a blocking dialog (UI-STANDARDS §5): the one deliberate
+// blocking surface (§18.4). Placement-agnostic — it touches only its host subtree.
 
 const prompt = (over: Partial<FlowPrompt> = {}): FlowPrompt => ({
   inputs: [{ name: 'ticket', type: 'github-ticket' }],
@@ -217,6 +217,22 @@ describe('typed-input modal (§24.2.3 T3 / §18.4)', () => {
     modal.render(null, '', vi.fn());
     expect(document.activeElement).toBe(other);
     expect(host.childElementCount).toBe(0);
+  });
+
+  it('describes the dialog via aria-describedby pointing at its instructional paragraph (WCAG 1.3.1/4.1.2)', () => {
+    createFlowInputModal(host).render(prompt(), 'plan', vi.fn());
+    const dialog = host.querySelector('.flow-modal')!;
+    const describedby = dialog.getAttribute('aria-describedby');
+    expect(describedby).toBeTruthy();
+    expect(host.querySelector(`#${describedby}`)?.classList.contains('ph')).toBe(true);
+  });
+
+  it('associates the first field help text with its input via aria-describedby (WCAG 1.3.1)', () => {
+    createFlowInputModal(host).render(prompt(), 'plan', vi.fn());
+    const input = field('ticket')!.querySelector('input')!;
+    const describedby = input.getAttribute('aria-describedby');
+    expect(describedby).toBeTruthy();
+    expect(host.querySelector(`#${describedby}`)?.classList.contains('help')).toBe(true);
   });
 
   it('traps Tab focus within the dialog (WCAG 2.4.3): last wraps to first, first wraps to last', () => {

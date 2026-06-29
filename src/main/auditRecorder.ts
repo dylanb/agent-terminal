@@ -3,7 +3,7 @@
 // vocabulary, path derivation, serialization, and classifier are shared (src/shared/audit) so the
 // on-disk format cannot drift from any reader.
 
-import { appendFileSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import yaml from 'js-yaml';
 import {
@@ -12,6 +12,7 @@ import {
   lifecycleEvents,
   loopEvents,
   serializeDoc,
+  terminateEvents,
   todoEvents,
   type AuditEvent,
   type AuditHeader,
@@ -26,7 +27,6 @@ import { pathWithin } from './artifactTree';
 import { isRecord } from './yamlRecord';
 
 const POINTER_REL = path.join('.agent-terminal', 'audit-pointer.yaml');
-const POINTER_GITIGNORE = '.agent-terminal/audit-pointer.yaml';
 
 // Top-level `.agent-loop/` regular files as `{ path, bytes }` (§25.5), realpath-guarded against the
 // repo root so a symlink — whether a file inside `.agent-loop/` or `.agent-loop/` itself — cannot
@@ -69,6 +69,9 @@ export interface AuditRecorder {
   recordInputs(repoKey: string, values: Record<string, string>, typeByName: Record<string, string>): void;
   /** Record a flow-injected command and its exit (§25.5), only while a run is open. */
   recordCommand(repoKey: string, source: string, cmd: string, exit: number | null): void;
+  /** Record a flow Terminate (#26): append a `flow.terminated` event to the open run, then finalize
+   *  it so the next start opens a new run. Best-effort — never throws into the flow path. */
+  recordTerminate(repoKey: string): void;
 }
 
 export function createAuditRecorder(deps: AuditRecorderDeps): AuditRecorder {
@@ -89,24 +92,10 @@ export function createAuditRecorder(deps: AuditRecorderDeps): AuditRecorder {
 
   const pointerPath = (repoKey: string): string => path.join(repoKey, POINTER_REL);
 
-  const ensureGitignored = (repoKey: string): void => {
-    const file = path.join(repoKey, '.gitignore');
-    let existing = '';
-    try {
-      existing = readFileSync(file, 'utf8');
-    } catch {
-      existing = '';
-    }
-    if (existing.split('\n').some((l) => l.trim() === POINTER_GITIGNORE)) return;
-    const prefix = existing.length === 0 || existing.endsWith('\n') ? existing : `${existing}\n`;
-    writeFileSync(file, `${prefix}${POINTER_GITIGNORE}\n`);
-  };
-
   const writePointer = (repoKey: string, file: string): void => {
     const pp = pointerPath(repoKey);
     mkdirSync(path.dirname(pp), { recursive: true });
     writeFileSync(pp, yaml.dump({ file }));
-    ensureGitignored(repoKey);
   };
 
   // The repo's open run file: the in-memory slot, else the persisted pointer (survives an app restart
@@ -200,6 +189,18 @@ export function createAuditRecorder(deps: AuditRecorderDeps): AuditRecorder {
         appendIfOpen(repoKey, [{ ts: auditTimestamp(now()), type: 'command', source, cmd, exit }]);
       } catch (e) {
         log('audit recordCommand failed', e);
+      }
+    },
+
+    recordTerminate(repoKey) {
+      try {
+        const file = currentFile(repoKey);
+        if (file) appendFileSync(file, terminateEvents(auditTimestamp(now())).map(serializeDoc).join(''));
+        open.delete(repoKey);
+        lastLoop.delete(repoKey);
+        rmSync(pointerPath(repoKey), { force: true }); // §25.4 restart-surviving run pointer
+      } catch (e) {
+        log('audit recordTerminate failed', e);
       }
     },
   };

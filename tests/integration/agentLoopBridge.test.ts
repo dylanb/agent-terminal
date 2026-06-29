@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -87,18 +87,12 @@ describe('agent-loop state.yaml bridge (§24.2.3 T2 / §19.1)', () => {
     });
     try {
       writeState('schema_version: 4\niteration: 10\nstatus: awaiting-team-review\n');
-      await new Promise<void>((resolve, reject) => {
-        const t0 = Date.now();
-        const poll = (): void => {
-          if (fired > 0) return resolve();
-          if (Date.now() - t0 > 2000) return reject(new Error('watch did not fire within 2s'));
-          setTimeout(poll, 20);
-        };
-        poll();
-      });
-      expect(fired).toBeGreaterThan(0);
+      // fs.watch delivery is OS-scheduled and unbounded under parallel-suite CPU load, so a tight
+      // wall-clock cap reports false negatives; wait generously — the happy path resolves on the
+      // first event and a genuinely dead watcher still fails at the cap.
+      await vi.waitFor(() => expect(fired).toBeGreaterThan(0), { timeout: 10_000, interval: 20 });
     } finally {
       stop();
     }
-  });
+  }, 15_000);
 });

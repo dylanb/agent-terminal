@@ -1,6 +1,6 @@
-// Flow-progression persistence (§19.1 / §24.2.2 S3). VCS constraint (§19.1): gitignore only
-// flow-state.yaml (app-owned progression), never the committed flow.yaml (§18.1) or the
-// user-owned todos.json (§16.3).
+// Flow-progression persistence (§19.1 / §24.2.2 S3). The app NEVER modifies the user's .gitignore
+// (no-gitignore-writes rule); a user who does not want flow-state.yaml committed ignores
+// .agent-terminal/ themselves.
 
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
@@ -19,12 +19,11 @@ export interface PersistedFlowState {
 export interface FlowStateStore {
   /** The persisted progression, or null when absent/corrupt (never throws). */
   read(): PersistedFlowState | null;
-  /** Persist progression atomically; gitignores flow-state.yaml on first use (§19.1). */
+  /** Persist progression atomically (§19.1). */
   write(state: PersistedFlowState): void;
 }
 
 const STATE_REL = path.join('.agent-terminal', 'flow-state.yaml');
-const GITIGNORE_ENTRY = '.agent-terminal/flow-state.yaml';
 const PERSISTABLE: ReadonlySet<FlowStatus> = new Set(['not_started', 'in_progress', 'done']);
 
 /** Null when absent/empty, so the round-trip omits the key for a flow that resolved none (§24.2.3 T3). */
@@ -35,19 +34,6 @@ function readInputs(raw: unknown): Record<string, string> | null {
   const out: Record<string, string> = Object.create(null);
   for (const [k, v] of Object.entries(raw)) if (typeof v === 'string') out[k] = v;
   return Object.keys(out).length > 0 ? out : null;
-}
-
-function ensureGitignored(worktreeDir: string): void {
-  const file = path.join(worktreeDir, '.gitignore');
-  let existing = '';
-  try {
-    existing = readFileSync(file, 'utf8');
-  } catch {
-    existing = '';
-  }
-  if (existing.split('\n').some((l) => l.trim() === GITIGNORE_ENTRY)) return;
-  const prefix = existing.length === 0 || existing.endsWith('\n') ? existing : `${existing}\n`;
-  writeFileSync(file, `${prefix}${GITIGNORE_ENTRY}\n`);
 }
 
 export function createFlowStateStore(worktreeDir: string): FlowStateStore {
@@ -71,7 +57,6 @@ export function createFlowStateStore(worktreeDir: string): FlowStateStore {
       const hasInputs = state.inputs && Object.keys(state.inputs).length > 0;
       writeFileSync(tmp, yaml.dump({ step: state.step, status: state.status, ...(hasInputs ? { inputs: state.inputs } : {}) }));
       renameSync(tmp, file);
-      ensureGitignored(worktreeDir);
     },
   };
 }
