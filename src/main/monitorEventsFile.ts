@@ -19,6 +19,27 @@ const EVENTS_REL = path.join('.agent-terminal', 'monitor-events.json');
  *  startup, so a cloned repo cannot stall the app with a giant planted file (CWE-400). */
 export const MAX_EVENTS_FILE_BYTES = 16 * 1024 * 1024;
 
+/** Test seam for the otherwise-unpredictable temp path `save()` writes-then-renames through. */
+export interface MonitorEventsFileDeps {
+  /** The temp path `save()` writes-then-renames through; defaults to an unpredictable per-write name
+   *  so a cloned repo cannot pre-plant a symlink at it for the write to follow (CWE-59) — the `wx`
+   *  exclusive create is the backstop. Tests override it to force the exclusive-create refusal path. */
+  tmpPath?: (file: string) => string;
+}
+
+/** True only when `dir` is a real directory or does not exist yet (mkdir will create a real one).
+ *  A symlink — even to a directory — is rejected: the kernel would follow it out of launchRoot,
+ *  redirecting the read or landing the write (captured output that may carry secrets) in an
+ *  attacker-chosen location. lstat does not follow, so a directory symlink fails isDirectory()
+ *  (CWE-59 link following — the guard the final-component lstat and the `wx` temp create cannot give). */
+function containerIsReal(dir: string): boolean {
+  try {
+    return lstatSync(dir).isDirectory();
+  } catch {
+    return true;
+  }
+}
+
 // Runtime membership tests for the §15.4 `MonitorEventType`/`MonitorEventSource`/`BufferType` unions
 // (a type-only union has no runtime form to test against).
 const EVENT_TYPES: Record<MonitorEventType, true> = {
@@ -55,11 +76,17 @@ function isMonitorEvent(v: unknown): v is MonitorEvent {
   return (Object.keys(FIELD_CHECKS) as (keyof MonitorEvent)[]).every((k) => FIELD_CHECKS[k](v[k]));
 }
 
-export function createMonitorEventsFile(launchRoot: string): MonitorEventPersistence {
+export function createMonitorEventsFile(
+  launchRoot: string,
+  deps: MonitorEventsFileDeps = {},
+): MonitorEventPersistence {
   const file = path.join(launchRoot, EVENTS_REL);
+  const dir = path.dirname(file);
+  const tmpPath = deps.tmpPath ?? ((f: string): string => `${f}.${randomUUID()}.tmp`);
   return {
     load() {
       try {
+        if (!containerIsReal(dir)) return [];
         // lstat (not stat) so a symlink is rejected by isFile() instead of being followed: a symlink
         // to a special file (/dev/zero, a FIFO) reports size 0, slips a stat-based size cap, then
         // hangs/OOMs the synchronous read. Only a regular file under the cap is read (CWE-59/CWE-400).
@@ -73,10 +100,11 @@ export function createMonitorEventsFile(launchRoot: string): MonitorEventPersist
       }
     },
     save(events) {
-      mkdirSync(path.dirname(file), { recursive: true });
+      if (!containerIsReal(dir)) return; // refuse a symlinked container rather than write through it
+      mkdirSync(dir, { recursive: true });
       // Unpredictable temp name + exclusive create (wx): an untrusted repo cannot pre-plant a symlink
       // at the temp path for the write to follow (CWE-59). Captured output may carry secrets → 0o600.
-      const tmp = `${file}.${randomUUID()}.tmp`;
+      const tmp = tmpPath(file);
       writeFileSync(tmp, JSON.stringify(events), { mode: 0o600, flag: 'wx' });
       renameSync(tmp, file);
     },

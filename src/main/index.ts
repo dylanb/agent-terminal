@@ -118,8 +118,7 @@ async function createWindow(): Promise<void> {
     cwd: launchRoot,
   });
   const shellSpawnedAt = performance.now(); // monotonic: a wall-clock jump must not flip the grace
-  // Once the shell exits, the kept-open window (§5) still emits resize/input; routing PTY I/O through
-  // this guard makes those a no-op instead of an EBADF that crashes the main process (ptyIo.ts).
+  // PTY I/O after the shell exits is dropped, not driven into a dead master fd (§5; ptyIo.ts).
   const ptyIo = createPtyIo(ptyProcess);
   // §8.4
   const store = createMonitorEventStore({ persistence: createMonitorEventsFile(launchRoot) });

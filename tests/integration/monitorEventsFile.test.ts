@@ -58,17 +58,50 @@ describe('monitor events file persistence', () => {
     expect(readFileSync(join(dir, '.gitignore'), 'utf8')).toBe(before);
   });
 
-  it('does not write through a symlink pre-planted at the temp path (a cloned repo cannot redirect the write)', () => {
-    // A cloned repo ships .agent-terminal/monitor-events.json.tmp as a symlink to one of the user's
-    // own files; save() must not follow it and clobber the target (CWE-59 link following).
+  it('refuses to write through a symlink pre-planted at the exact temp path (exclusive create, not the random name)', () => {
+    // A cloned repo pre-plants a symlink at the precise temp path save() will use, pointing at one of
+    // the user's files; the exclusive-create `wx` flag must refuse to open it so the target is never
+    // clobbered (CWE-59 link following). The tmpPath seam forces the otherwise-unpredictable temp path
+    // onto the planted location, so this exercises the `wx` refusal itself — removing `flag:'wx'` from
+    // save() turns this red (the write would follow the symlink and overwrite the victim).
     const target = join(dir, 'victim.txt');
     const original = 'do-not-overwrite\n';
     writeFileSync(target, original);
     mkdirSync(join(dir, '.agent-terminal'), { recursive: true });
-    symlinkSync(target, join(dir, '.agent-terminal', 'monitor-events.json.tmp'));
-    createMonitorEventsFile(dir).save([evt({ id: 'a', text: 'real' })]);
+    const tmp = join(dir, '.agent-terminal', 'monitor-events.json.planted.tmp');
+    symlinkSync(target, tmp);
+    expect(() => createMonitorEventsFile(dir, { tmpPath: () => tmp }).save([evt({ id: 'a', text: 'real' })])).toThrow();
     expect(readFileSync(target, 'utf8')).toBe(original);
-    expect(createMonitorEventsFile(dir).load().map((e) => e.id)).toEqual(['a']);
+  });
+
+  it('does not read through a symlinked .agent-terminal directory (a cloned repo cannot redirect the read)', () => {
+    // A cloned repo ships `.agent-terminal` itself as a symlink to an attacker-chosen directory; the
+    // loader must not traverse the directory symlink to read <target>/monitor-events.json (CWE-59).
+    const outside = mkdtempSync(join(tmpdir(), 'monitor-events-outside-'));
+    try {
+      writeFileSync(join(outside, 'monitor-events.json'), JSON.stringify([evt({ id: 'leaked' })]));
+      symlinkSync(outside, join(dir, '.agent-terminal'));
+      expect(createMonitorEventsFile(dir).load()).toEqual([]);
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  it('does not write through a symlinked .agent-terminal directory (the write cannot escape the launch dir)', () => {
+    // The save-path twin of the read guard: a `.agent-terminal` directory symlink must not let the
+    // captured output (which may carry secrets) land in the attacker-chosen target directory (CWE-59).
+    const outside = mkdtempSync(join(tmpdir(), 'monitor-events-outside-'));
+    try {
+      symlinkSync(outside, join(dir, '.agent-terminal'));
+      try {
+        createMonitorEventsFile(dir).save([evt({ id: 'a' })]);
+      } catch {
+        /* refusing the symlinked container may throw; the assertion below is the real check */
+      }
+      expect(existsSync(join(outside, 'monitor-events.json'))).toBe(false);
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
   });
 
   it('degrades to an empty list when the file exceeds the size cap (an oversized planted file cannot stall startup)', () => {

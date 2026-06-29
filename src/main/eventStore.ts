@@ -40,7 +40,7 @@ export function createMonitorEventStore(
     try {
       persistence?.save(events);
     } catch {
-      /* */
+      /* swallow: the in-memory mutation stands even when the disk write fails */
     }
   }
 
