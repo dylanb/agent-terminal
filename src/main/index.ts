@@ -15,8 +15,11 @@ import {
 } from '../shared/ipc';
 import { createInjector } from './inject';
 import { createMonitorEventStore } from './eventStore';
+import { createMonitorEventsFile } from './monitorEventsFile';
 import { createShadowModel } from './shadow';
 import { spawnAgentShell, resolveShellPath } from './pty';
+import { shouldTerminateOnShellExit } from './shellExit';
+import { performance } from 'node:perf_hooks';
 import { resolveLaunchRoot, homeFallback, APP_LAUNCH_DIR_ENV } from './launchRoot';
 import { createOutputGate } from './outputGate';
 import { resolveRendererTarget } from './rendererTarget';
@@ -112,7 +115,9 @@ async function createWindow(): Promise<void> {
     integrationScriptPath: config.shellIntegration ? SHELL_INTEGRATION_SCRIPT : undefined,
     cwd: launchRoot,
   });
-  const store = createMonitorEventStore();
+  const shellSpawnedAt = performance.now(); // monotonic: a wall-clock jump must not flip the grace
+  // Monitor events persist per launch-directory (§8.4).
+  const store = createMonitorEventStore({ persistence: createMonitorEventsFile(launchRoot) });
   // §16.6: the only state that lives outside the repo (userData).
   const uiSettings = createUiSettingsStore(path.join(app.getPath('userData'), 'ui-settings.json'));
   const todoStore = createTodoStore({ maxDoneTodos: config.maxDoneTodos });
@@ -378,7 +383,13 @@ async function createWindow(): Promise<void> {
     outputGate.send(data);
     shadow.write(data);
   });
-  ptyProcess.onExit(({ exitCode }) => send(CH.ptyExit, { sessionId: SESSION_ID, code: exitCode }));
+  // The hosted shell IS the session (§5); a sub-grace exit is excepted (shellExit.ts).
+  ptyProcess.onExit(({ exitCode }) => {
+    send(CH.ptyExit, { sessionId: SESSION_ID, code: exitCode });
+    if (shouldTerminateOnShellExit(performance.now() - shellSpawnedAt, config.startupExitGraceMs) && !win.isDestroyed()) {
+      win.close();
+    }
+  });
 
   const disposeIpc = registerIpcListeners(
     ipcMain,

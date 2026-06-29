@@ -7,6 +7,7 @@ import path from 'node:path';
 import yaml from 'js-yaml';
 import type { FlowStatus } from '../shared/ipc';
 import { isRecord } from './yamlRecord';
+import { ensureGitignored } from './gitignore';
 
 /** Persisted progression (§19.1). `inputs` is flow-wide, not per-step, so a value resolved at one
  *  step threads to later steps' inputs (§18.1 output→input; §18.4 / §24.2.3 T3). */
@@ -37,19 +38,6 @@ function readInputs(raw: unknown): Record<string, string> | null {
   return Object.keys(out).length > 0 ? out : null;
 }
 
-function ensureGitignored(worktreeDir: string): void {
-  const file = path.join(worktreeDir, '.gitignore');
-  let existing = '';
-  try {
-    existing = readFileSync(file, 'utf8');
-  } catch {
-    existing = '';
-  }
-  if (existing.split('\n').some((l) => l.trim() === GITIGNORE_ENTRY)) return;
-  const prefix = existing.length === 0 || existing.endsWith('\n') ? existing : `${existing}\n`;
-  writeFileSync(file, `${prefix}${GITIGNORE_ENTRY}\n`);
-}
-
 export function createFlowStateStore(worktreeDir: string): FlowStateStore {
   const file = path.join(worktreeDir, STATE_REL);
   return {
@@ -71,7 +59,7 @@ export function createFlowStateStore(worktreeDir: string): FlowStateStore {
       const hasInputs = state.inputs && Object.keys(state.inputs).length > 0;
       writeFileSync(tmp, yaml.dump({ step: state.step, status: state.status, ...(hasInputs ? { inputs: state.inputs } : {}) }));
       renameSync(tmp, file);
-      ensureGitignored(worktreeDir);
+      ensureGitignored(worktreeDir, GITIGNORE_ENTRY);
     },
   };
 }

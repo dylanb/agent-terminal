@@ -476,12 +476,51 @@ test('monitor status strip tracks quiescence and alt-screen', async () => {
   await expect(fsChip).toContainText('no');
 });
 
-test('shell exit notifies both panes', async () => {
+test('the app terminates when the hosted shell exits', async () => {
+  // When the PTY's shell exits the whole app must terminate — the hosted shell IS the session.
+  // Shell teardown → PTY exit → app quit can take a moment under CI load; wait past the default budget.
   await typeCommand('exit');
-  // Shell teardown → PTY exit → both-pane notification can take a moment under CI load; wait past the
-  // default expect budget rather than racing it.
+  await app.waitForEvent('close', { timeout: 20_000 });
+  expect(app.windows()).toHaveLength(0);
+});
+
+test('an immediate shell startup failure keeps the app open (§5 grace exception)', async () => {
+  // A shell that dies the instant it spawns (broken rc / bad APP_SHELL) is a startup failure: the
+  // app must NOT vanish. `false` exits immediately, well within the startup grace, so the app stays
+  // open rather than quitting. (The exit is too fast to assert the renderer diagnostic here — that
+  // is covered by the within-grace test below, where the exit lands after the renderer has mounted.)
+  await app.close();
+  app = await electron.launch({
+    args: launchArgs(),
+    env: { ...process.env, APP_SHELL: 'false', APP_SUBMIT_DELAY_MS: '100' },
+  });
+  page = await app.firstWindow();
+  // The decision is in main and independent of the renderer: assert the app does NOT close within a
+  // window that comfortably exceeds the 1s grace. A close event here would mean it wrongly terminated.
+  const closed = app
+    .waitForEvent('close', { timeout: 4000 })
+    .then(() => true)
+    .catch(() => false);
+  expect(await closed).toBe(false);
+  expect(app.windows().length).toBeGreaterThan(0);
+});
+
+test('a within-grace shell exit keeps the app open AND shows the exit diagnostic (§5)', async () => {
+  // The point of staying open is that the user can READ the diagnostic. With a large grace, a normal
+  // shell exit (typed after the renderer has mounted) stays open and the `[process exited]` line is
+  // visible — proving the diagnostic the grace exists to preserve actually renders.
+  await app.close();
+  app = await electron.launch({
+    args: launchArgs(),
+    env: { ...process.env, APP_SHELL: 'bash', APP_SUBMIT_DELAY_MS: '100', APP_STARTUP_EXIT_GRACE_MS: '60000' },
+  });
+  page = await app.firstWindow();
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 }); // renderer mounted → pty:exit listener live
+  await typeCommand('exit');
   await expect(termRows()).toContainText('[process exited: 0]', { timeout: 20_000 });
-  await expect(page.locator('.status-chip[data-status="session"]')).toContainText('exited', { timeout: 20_000 });
+  // Uptime at exit (a few seconds) is far under the 60s grace, so the app must NOT close.
+  const closed = app.waitForEvent('close', { timeout: 3000 }).then(() => true).catch(() => false);
+  expect(await closed).toBe(false);
 });
 
 // ---- §15: semantic capture & detection (rendered as mockup-exact .finding cards) ----
@@ -529,6 +568,50 @@ test('a captured report (with findings) survives a monitor reload (capture:last�
   await page.reload();
   await openQuickSend('capture'); // reload resets the drawer to closed (§22.2)
   await expect(page.locator('#monitor-blocks .finding').first()).toBeVisible();
+});
+
+test('captured monitor events restore on relaunch in the same directory (persist→terminate→restore)', async () => {
+  // Unlike the reload test above (same main process, in-memory store survives), this terminates the
+  // whole app — the in-memory store dies with the process — then relaunches in the SAME launch
+  // directory and asserts the persisted events rebuilt the store. APP_LAUNCH_DIR pins the directory
+  // the monitor-events file lives under; APP_SHELL_INTEGRATION=0 surfaces the report deterministically
+  // (no span-gating race), as in the replay test.
+  const launchDir = realpathSync(mkdtempSync(join(tmpdir(), 'agent-term-e2e-launch-')));
+  const dirEnv = {
+    ...process.env,
+    APP_SHELL: 'bash',
+    APP_SUBMIT_DELAY_MS: '100',
+    APP_SHELL_INTEGRATION: '0',
+    APP_LAUNCH_DIR: launchDir,
+  };
+  try {
+    await app.close();
+    app = await electron.launch({ args: launchArgs(), env: dirEnv });
+    page = await app.firstWindow();
+    await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+    await openQuickSend('capture');
+
+    await typeCommand(
+      "printf '%s\\n' 'Here is the summary of findings from this code review:' '- one important finding worth acting on' '- another finding to address before merge'",
+    );
+    await expect(termRows()).toContainText('another finding to address before merge');
+    await clickCaptureLast();
+    await expect(page.locator('#monitor-blocks .finding').first()).toBeVisible({ timeout: 10_000 });
+
+    // Terminate via the real shell-exit path (the app quits when the shell exits), then relaunch in
+    // the same directory — proving restore survives the actual teardown, not just a graceful close.
+    await typeCommand('exit');
+    await app.waitForEvent('close', { timeout: 20_000 });
+    app = await electron.launch({ args: launchArgs(), env: dirEnv });
+    page = await app.firstWindow();
+    await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+    await openQuickSend('capture'); // the drawer starts closed after a relaunch (§22.2)
+
+    // No re-capture: the events were rebuilt from disk and replayed into the fresh pane.
+    await expect(page.locator('#monitor-blocks .finding').first()).toBeVisible({ timeout: 10_000 });
+  } finally {
+    rmSync(launchDir, { recursive: true, force: true });
+  }
 });
 
 test('captures the visible report on the alternate screen buffer (full-screen agent, §13.4)', async () => {

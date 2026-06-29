@@ -25,6 +25,7 @@ import {
 import { auditFilePath } from './auditPaths';
 import { pathWithin } from './artifactTree';
 import { isRecord } from './yamlRecord';
+import { ensureGitignored } from './gitignore';
 
 const POINTER_REL = path.join('.agent-terminal', 'audit-pointer.yaml');
 const POINTER_GITIGNORE = '.agent-terminal/audit-pointer.yaml';
@@ -93,24 +94,11 @@ export function createAuditRecorder(deps: AuditRecorderDeps): AuditRecorder {
 
   const pointerPath = (repoKey: string): string => path.join(repoKey, POINTER_REL);
 
-  const ensureGitignored = (repoKey: string): void => {
-    const file = path.join(repoKey, '.gitignore');
-    let existing = '';
-    try {
-      existing = readFileSync(file, 'utf8');
-    } catch {
-      existing = '';
-    }
-    if (existing.split('\n').some((l) => l.trim() === POINTER_GITIGNORE)) return;
-    const prefix = existing.length === 0 || existing.endsWith('\n') ? existing : `${existing}\n`;
-    writeFileSync(file, `${prefix}${POINTER_GITIGNORE}\n`);
-  };
-
   const writePointer = (repoKey: string, file: string): void => {
     const pp = pointerPath(repoKey);
     mkdirSync(path.dirname(pp), { recursive: true });
     writeFileSync(pp, yaml.dump({ file }));
-    ensureGitignored(repoKey);
+    ensureGitignored(repoKey, POINTER_GITIGNORE);
   };
 
   // The repo's open run file: the in-memory slot, else the persisted pointer (survives an app restart
