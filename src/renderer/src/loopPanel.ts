@@ -105,29 +105,36 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
     row.append(k, num, title, body);
 
     let resolved = false;
+    let pending = false; // collapse overlapping retries to one in-flight fetch
     const attempt = (): void => {
-      if (resolved) return;
-      void deps.githubRef(kind, number).then((ref) => {
-        if (!ref || resolved || !row.isConnected) return;
-        resolved = true;
-        title.textContent = ref.title;
-        body.textContent = truncateBody(ref.body);
-        // Validate the url at the sink against the same allow-list main enforces (CWE-601): a non-GitHub
-        // url keeps the bare number and exposes no href a middle-click could open.
-        const href = githubHttpsHref(ref.url);
-        if (!href) return;
-        const link = doc.createElement('a');
-        link.className = 'reflink';
-        link.href = href;
-        link.textContent = `#${number}`;
-        // The visible text is just the number; name the link's purpose for assistive tech (WCAG 2.4.4).
-        link.setAttribute('aria-label', `${label} #${number}: ${ref.title} (opens in browser)`);
-        link.addEventListener('click', (e) => {
-          e.preventDefault();
-          deps.openExternal(href);
+      if (resolved || pending) return;
+      pending = true;
+      void deps
+        .githubRef(kind, number)
+        .then((ref) => {
+          if (!ref || resolved || !row.isConnected) return;
+          resolved = true;
+          title.textContent = ref.title;
+          body.textContent = truncateBody(ref.body);
+          // Validate the url at the sink against the same allow-list main enforces (CWE-601): a non-GitHub
+          // url keeps the bare number and exposes no href a middle-click could open.
+          const href = githubHttpsHref(ref.url);
+          if (!href) return;
+          const link = doc.createElement('a');
+          link.className = 'reflink';
+          link.href = href;
+          link.textContent = `#${number}`;
+          // The visible text is just the number; name the link's purpose for assistive tech (WCAG 2.4.4).
+          link.setAttribute('aria-label', `${label} #${number}: ${ref.title} (opens in browser)`);
+          link.addEventListener('click', (e) => {
+            e.preventDefault();
+            deps.openExternal(href);
+          });
+          num.replaceWith(link);
+        })
+        .finally(() => {
+          pending = false;
         });
-        num.replaceWith(link);
-      });
     };
     attempt();
     return { el: row, retry: attempt, resolved: () => resolved };
@@ -148,14 +155,12 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
     render(loop, title, refs) {
       const showRefs = hasFlowRefs(refs);
       const sig = !loop && !showRefs ? null : structuralSig(loop, title, refs);
-      // Same structure as the live DOM: patch the live loop values + retry pending refs in place, no
-      // teardown (preserves focus and the resolved detail). Only a structural change rebuilds.
       if (sig === lastSig && host.childElementCount > 0) {
-        patchInPlace(loop);
+        patchInPlace(loop); // §24.2.2 S5
         return;
       }
       if (sig === lastSig) return; // both empty — nothing to do
-      const focus = focusInPanel();
+      const hadFocus = focusInPanel();
       host.replaceChildren();
       lastSig = sig;
       liveLoop = null;
@@ -202,7 +207,7 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
       }
 
       if (!loop) {
-        restoreFocus(focus);
+        restoreFocus(hadFocus);
         return;
       }
 
@@ -229,7 +234,7 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
 
       body.append(ldl);
       host.append(body);
-      restoreFocus(focus);
+      restoreFocus(hadFocus);
     },
     dispose() {
       host.replaceChildren();

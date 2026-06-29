@@ -102,6 +102,7 @@ export function createShell(root: HTMLElement, deps: ShellDeps = {}): Shell {
   const isLoopPanelOpen = (): boolean => root.classList.contains('loop-open');
   const syncLoopReadout = (on: boolean): void =>
     root.querySelector('.loopstat')?.setAttribute('aria-expanded', String(on));
+  const focusView = (v: ViewId): void => void root.querySelector<HTMLElement>(`[data-viewbtn="${v}"]`)?.focus();
   function openLoopPanel(): void {
     root.classList.add('loop-open');
     if (loopPanelEl) setShown(loopPanelEl, true);
@@ -117,8 +118,9 @@ export function createShell(root: HTMLElement, deps: ShellDeps = {}): Shell {
     // is gone too (a state-driven close after the flow ends) fall back to the main view, so focus is
     // never stranded on the now-hidden panel.
     if (hadFocus) {
-      const back = root.querySelector<HTMLElement>('.loopstat') ?? root.querySelector<HTMLElement>('[data-viewbtn="1"]');
-      back?.focus();
+      const readout = root.querySelector<HTMLElement>('.loopstat');
+      if (readout) readout.focus();
+      else focusView('1');
     }
     signalLayoutChange();
   }
@@ -230,7 +232,7 @@ export function createShell(root: HTMLElement, deps: ShellDeps = {}): Shell {
   return {
     setView,
     getView: () => view,
-    focusView: (v) => root.querySelector<HTMLElement>(`[data-viewbtn="${v}"]`)?.focus(),
+    focusView,
     openDrawer,
     closeDrawer,
     toggleDrawer,

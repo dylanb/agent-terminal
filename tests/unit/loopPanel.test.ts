@@ -94,6 +94,28 @@ describe('docked loop panel (§24.2.3 T2)', () => {
     expect(row('status')?.querySelector('.lv')?.classList.contains('bad')).toBe(true); // tone re-derived
   });
 
+  it('clears the act tone in place when status returns to a working value (negative pair)', () => {
+    const panel = createLoopPanel(host);
+    panel.render(loop({ status: 'awaiting-human-pr-approval' }), 'build');
+    expect(row('status')?.querySelector('.lv')?.classList.contains('bad')).toBe(true);
+    panel.render(loop({ status: 'impl-draft' }), 'build'); // same structure ⇒ patched in place
+    expect(row('status')?.querySelector('.lv')?.classList.contains('bad')).toBe(false); // tone cleared
+  });
+
+  it('does not re-fetch a ref while a fetch is already in flight, then retries once it resolves', async () => {
+    let settle: (r: GithubRef | null) => void = () => {};
+    const githubRef = vi.fn(() => new Promise<GithubRef | null>((res) => (settle = res)));
+    const panel = createLoopPanel(host, { githubRef, openExternal: vi.fn() });
+    panel.render(null, 'plan', { ticket: 25 });
+    expect(githubRef).toHaveBeenCalledTimes(1);
+    panel.render(null, 'plan', { ticket: 25 }); // same signature ⇒ patch path, but the fetch is pending
+    expect(githubRef).toHaveBeenCalledTimes(1); // no overlapping re-fetch
+    settle(null); // the in-flight fetch fails
+    await flush();
+    panel.render(null, 'plan', { ticket: 25 }); // no longer pending ⇒ a fresh retry fires
+    expect(githubRef).toHaveBeenCalledTimes(2);
+  });
+
   it('restores focus into the panel when a STRUCTURAL change forces a rebuild (WCAG 2.4.3)', () => {
     const panel = createLoopPanel(host);
     panel.render(loop({ pr: null, branch: null }), 'build');
