@@ -31,7 +31,11 @@ export interface MonitorEventsFileDeps {
  *  A symlink — even to a directory — is rejected: the kernel would follow it out of launchRoot,
  *  redirecting the read or landing the write (captured output that may carry secrets) in an
  *  attacker-chosen location. lstat does not follow, so a directory symlink fails isDirectory()
- *  (CWE-59 link following — the guard the final-component lstat and the `wx` temp create cannot give). */
+ *  (CWE-59 link following — the guard the final-component lstat and the `wx` temp create cannot give).
+ *  This closes the threat model in scope (a statically-planted symlink shipped in a cloned repo). A
+ *  concurrent local process racing the check to swap `.agent-terminal` after it passes is an
+ *  out-of-model TOCTOU residual (CWE-367) that a path-string lstat cannot close without dir-fd
+ *  O_NOFOLLOW APIs Node does not expose; `wx` still blocks clobbering an existing file in that race. */
 function containerIsReal(dir: string): boolean {
   try {
     return lstatSync(dir).isDirectory();
