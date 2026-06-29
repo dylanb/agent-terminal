@@ -310,6 +310,31 @@ describe('shell controller (§24.1C — views, hotkeys, docked drawer, theme)', 
       expect(shell.isLoopPanelOpen()).toBe(true); // the modal owns Escape; the panel stays open
     });
 
+    it('returns focus to the Loop read-out when closed with focus inside the panel (WCAG 2.4.3)', () => {
+      shell.openLoopPanel();
+      const closeBtn = document.querySelector('[data-loop-close]') as HTMLElement;
+      closeBtn.focus();
+      expect(document.activeElement).toBe(closeBtn);
+      shell.closeLoopPanel();
+      expect(document.activeElement).toBe(document.querySelector('.loopstat')); // disclosure trigger
+    });
+
+    it('falls back to the main view on close when the read-out is gone (state-driven close)', () => {
+      shell.openLoopPanel();
+      (document.querySelector('[data-loop-close]') as HTMLElement).focus();
+      document.querySelector('.loopstat')?.remove(); // flow ended → the rail read-out is gone too
+      shell.closeLoopPanel();
+      expect(document.activeElement).toBe(document.querySelector('[data-viewbtn="1"]'));
+    });
+
+    it('does not move focus on close when focus was outside the panel', () => {
+      shell.openLoopPanel();
+      const outside = document.querySelector('[data-viewbtn="2"]') as HTMLElement;
+      outside.focus();
+      shell.closeLoopPanel();
+      expect(document.activeElement).toBe(outside);
+    });
+
     it('broadcasts a window resize when the panel width changes, so panes refit (§7.1)', () => {
       const onResize = vi.fn();
       window.addEventListener('resize', onResize);

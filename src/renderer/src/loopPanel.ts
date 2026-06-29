@@ -57,48 +57,39 @@ function detailRow(doc: Document, key: string, value: string, valueClass = ''): 
   return r;
 }
 
-/** A signature of everything the panel renders, so an identical re-render can be skipped. The async
- *  title/body/link fill the DOM in place keyed by the same (kind, number), so they need not be in it. */
-function panelSig(loop: FlowLoopView | null, title: string, refs?: FlowRefs): string {
+/** A signature of what fixes the panel's DOM STRUCTURE — deliberately NOT the live loop values
+ *  (status/iteration) that `patchInPlace` updates without a teardown (mirrors flowStrip's structuralSig,
+ *  §24.2.2 S5). The async ref title/body/link fill the DOM in place keyed by (kind, number), so they
+ *  are excluded too. */
+function structuralSig(loop: FlowLoopView | null, title: string, refs?: FlowRefs): string {
   return JSON.stringify([
     title,
     refs?.ticket ?? null,
     refs?.pr ?? null,
-    loop ? [loop.status, loop.iteration, loop.pr, loop.branch, loop.gateOptions ?? null] : null,
+    loop ? [loop.pr, loop.branch, loop.gateOptions ?? null] : null,
   ]);
 }
 
 export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DEPS): LoopPanel {
   const doc = host.ownerDocument; // build from the host's document so the panel relocates (UI §2.2.1)
-  // The structure last painted; an unchanged signature skips the rebuild so a passive push (e.g. an
-  // agent active/quiet flip, which carries no panel change) doesn't flicker or drop focus to <body>.
   let lastSig: string | null = null;
+  // Live nodes patched without a teardown (mirrors flowStrip), and the ref rows whose detail is still
+  // unresolved so a structurally-unchanged push can re-attempt them (githubRefs never caches a null —
+  // src/main/githubRefs.ts — so a transient failure only self-heals if the caller re-fetches).
+  let liveLoop: { statusVal: HTMLElement; iterVal: HTMLElement } | null = null;
+  let refRows: Array<{ retry: () => void; resolved: () => boolean }> = [];
 
-  /** Where focus sits inside the panel, as a token survivable across a rebuild (the close control or a
-   *  ref row's link), or null when focus is elsewhere. */
-  function captureFocus(): string | null {
-    const active = doc.activeElement;
-    if (!(active instanceof HTMLElement) || !host.contains(active)) return null;
-    const link = active.closest('a.reflink');
-    if (link) return `reflink:${link.closest('.rrow')?.querySelector('.rk')?.textContent ?? ''}`;
-    return 'close'; // the close control or any other in-panel focusable lands back on close
-  }
+  /** True when keyboard focus is inside the panel. A forced rebuild captures this, then `restoreFocus`
+   *  lands focus back on the close control so it is never stranded on <body> (WCAG 2.4.3) — and never
+   *  pulled in when it was elsewhere. */
+  const focusInPanel = (): boolean => doc.activeElement instanceof HTMLElement && host.contains(doc.activeElement);
+  const restoreFocus = (had: boolean): void => {
+    if (had) host.querySelector<HTMLElement>('[data-loop-close]')?.focus();
+  };
 
-  /** Restore focus after a rebuild to the matching element, falling back to the close control (always
-   *  present on a populated panel) so a forced repaint never strands focus on <body> (WCAG 2.4.3). */
-  function restoreFocus(token: string | null): void {
-    if (!token) return;
-    if (token.startsWith('reflink:')) {
-      const key = token.slice('reflink:'.length);
-      const link = [...host.querySelectorAll<HTMLElement>('.rrow')]
-        .find((r) => r.querySelector('.rk')?.textContent === key)
-        ?.querySelector<HTMLElement>('a.reflink');
-      if (link) return void link.focus();
-    }
-    host.querySelector<HTMLElement>('[data-loop-close]')?.focus();
-  }
-
-  function refRow(label: string, kind: GithubRefKind, number: number): HTMLElement {
+  /** A ticket/PR ref row. `retry` re-attempts the best-effort `gh` fetch (no-op once resolved); the row
+   *  shows the bare number until the title/body/link fill in. */
+  function refRow(label: string, kind: GithubRefKind, number: number): { el: HTMLElement; retry: () => void; resolved: () => boolean } {
     const row = doc.createElement('div');
     row.className = 'rrow';
     const k = doc.createElement('span');
@@ -113,37 +104,62 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
     body.className = 'rbody';
     row.append(k, num, title, body);
 
-    void deps.githubRef(kind, number).then((ref) => {
-      if (!ref || !row.isConnected) return;
-      title.textContent = ref.title;
-      body.textContent = truncateBody(ref.body);
-      // Validate the url at the sink against the same allow-list main enforces (CWE-601): a non-GitHub
-      // url keeps the bare number and exposes no href a middle-click could open.
-      const href = githubHttpsHref(ref.url);
-      if (!href) return;
-      const link = doc.createElement('a');
-      link.className = 'reflink';
-      link.href = href;
-      link.textContent = `#${number}`;
-      // The visible text is just the number; name the link's purpose for assistive tech (WCAG 2.4.4).
-      link.setAttribute('aria-label', `${label} #${number}: ${ref.title} (opens in browser)`);
-      link.addEventListener('click', (e) => {
-        e.preventDefault();
-        deps.openExternal(href);
+    let resolved = false;
+    const attempt = (): void => {
+      if (resolved) return;
+      void deps.githubRef(kind, number).then((ref) => {
+        if (!ref || resolved || !row.isConnected) return;
+        resolved = true;
+        title.textContent = ref.title;
+        body.textContent = truncateBody(ref.body);
+        // Validate the url at the sink against the same allow-list main enforces (CWE-601): a non-GitHub
+        // url keeps the bare number and exposes no href a middle-click could open.
+        const href = githubHttpsHref(ref.url);
+        if (!href) return;
+        const link = doc.createElement('a');
+        link.className = 'reflink';
+        link.href = href;
+        link.textContent = `#${number}`;
+        // The visible text is just the number; name the link's purpose for assistive tech (WCAG 2.4.4).
+        link.setAttribute('aria-label', `${label} #${number}: ${ref.title} (opens in browser)`);
+        link.addEventListener('click', (e) => {
+          e.preventDefault();
+          deps.openExternal(href);
+        });
+        num.replaceWith(link);
       });
-      num.replaceWith(link);
-    });
-    return row;
+    };
+    attempt();
+    return { el: row, retry: attempt, resolved: () => resolved };
+  }
+
+  /** Update the live loop values + re-attempt any unresolved ref, with no teardown so focus and the
+   *  resolved DOM survive a passive push whose structure is unchanged (§24.2.2 S5). */
+  function patchInPlace(loop: FlowLoopView | null): void {
+    if (loop && liveLoop) {
+      liveLoop.statusVal.textContent = loop.status;
+      liveLoop.statusVal.classList.toggle('bad', spillTone(loop.status) === 'await');
+      liveLoop.iterVal.textContent = String(loop.iteration);
+    }
+    for (const r of refRows) if (!r.resolved()) r.retry();
   }
 
   return {
     render(loop, title, refs) {
       const showRefs = hasFlowRefs(refs);
-      const sig = !loop && !showRefs ? null : panelSig(loop, title, refs);
-      if (sig === lastSig) return; // nothing the panel shows changed — keep the live DOM and its focus
-      const focus = captureFocus();
+      const sig = !loop && !showRefs ? null : structuralSig(loop, title, refs);
+      // Same structure as the live DOM: patch the live loop values + retry pending refs in place, no
+      // teardown (preserves focus and the resolved detail). Only a structural change rebuilds.
+      if (sig === lastSig && host.childElementCount > 0) {
+        patchInPlace(loop);
+        return;
+      }
+      if (sig === lastSig) return; // both empty — nothing to do
+      const focus = focusInPanel();
       host.replaceChildren();
       lastSig = sig;
+      liveLoop = null;
+      refRows = [];
       if (!loop && !showRefs) return;
 
       const head = doc.createElement('div');
@@ -172,8 +188,16 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
         segH.className = 'seg-h';
         segH.textContent = 'Working on';
         refsEl.append(segH);
-        if (refs.ticket !== undefined) refsEl.append(refRow('Ticket', 'issue', refs.ticket));
-        if (refs.pr !== undefined) refsEl.append(refRow('PR', 'pr', refs.pr));
+        if (refs.ticket !== undefined) {
+          const r = refRow('Ticket', 'issue', refs.ticket);
+          refsEl.append(r.el);
+          refRows.push(r);
+        }
+        if (refs.pr !== undefined) {
+          const r = refRow('PR', 'pr', refs.pr);
+          refsEl.append(r.el);
+          refRows.push(r);
+        }
         host.append(refsEl);
       }
 
@@ -192,8 +216,10 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
       const ldl = doc.createElement('div');
       ldl.className = 'ldl';
       // An awaiting-human status still needs the human — the §22.3 "act" tone (`bad`).
-      ldl.append(detailRow(doc, 'status', loop.status, spillTone(loop.status) === 'await' ? 'bad' : ''));
-      ldl.append(detailRow(doc, 'iteration', String(loop.iteration)));
+      const statusRow = detailRow(doc, 'status', loop.status, spillTone(loop.status) === 'await' ? 'bad' : '');
+      const iterRow = detailRow(doc, 'iteration', String(loop.iteration));
+      ldl.append(statusRow, iterRow);
+      liveLoop = { statusVal: statusRow.querySelector('.lv')!, iterVal: iterRow.querySelector('.lv')! };
       if (loop.pr !== null) ldl.append(detailRow(doc, 'pr', `#${loop.pr}`, 'sig'));
       if (loop.branch !== null) ldl.append(detailRow(doc, 'branch', loop.branch));
       // The current gate's human_options (§18.1/§19.4), present only at an awaiting gate; the decision
@@ -208,6 +234,8 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
     dispose() {
       host.replaceChildren();
       lastSig = null;
+      liveLoop = null;
+      refRows = [];
     },
   };
 }

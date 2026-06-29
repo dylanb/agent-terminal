@@ -79,21 +79,55 @@ describe('docked loop panel (§24.2.3 T2)', () => {
     expect(document.activeElement).toBe(close);
   });
 
-  it('restores focus into the panel when a content change forces a repaint (WCAG 2.4.3)', () => {
+  it('patches a status / iteration change in place without a rebuild, preserving focus (WCAG 2.4.3)', () => {
+    // The live loop values tick on every background push during a run; patching them in place (like
+    // the flow strip) keeps the DOM and focus attached instead of yanking focus to the close control.
     const panel = createLoopPanel(host);
-    panel.render(loop({ iteration: 9 }), 'build');
+    panel.render(loop({ status: 'impl-draft', iteration: 9 }), 'build');
+    const close = host.querySelector<HTMLElement>('[data-loop-close]')!;
+    close.focus();
+    panel.render(loop({ status: 'awaiting-human-pr-approval', iteration: 10 }), 'build');
+    expect(host.querySelector('[data-loop-close]')).toBe(close); // same node ⇒ no teardown
+    expect(document.activeElement).toBe(close); // focus undisturbed
+    expect(row('iteration')?.querySelector('.lv')?.textContent).toBe('10'); // value updated in place
+    expect(row('status')?.querySelector('.lv')?.textContent).toBe('awaiting-human-pr-approval');
+    expect(row('status')?.querySelector('.lv')?.classList.contains('bad')).toBe(true); // tone re-derived
+  });
+
+  it('restores focus into the panel when a STRUCTURAL change forces a rebuild (WCAG 2.4.3)', () => {
+    const panel = createLoopPanel(host);
+    panel.render(loop({ pr: null, branch: null }), 'build');
     host.querySelector<HTMLElement>('[data-loop-close]')!.focus();
-    panel.render(loop({ iteration: 10 }), 'build'); // content changed ⇒ rebuild
+    panel.render(loop({ pr: 179, branch: 'b' }), 'build'); // pr/branch rows appear ⇒ rebuild
     expect(host.contains(document.activeElement)).toBe(true); // never dropped to <body>
     expect(document.activeElement).toBe(host.querySelector('[data-loop-close]'));
   });
 
-  it('still repaints when content changes (iteration updates)', () => {
+  it('does not steal focus from outside the panel on a rebuild', () => {
+    const outside = document.createElement('input');
+    document.body.append(outside);
     const panel = createLoopPanel(host);
-    panel.render(loop({ iteration: 9 }), 'build');
-    expect(row('iteration')?.querySelector('.lv')?.textContent).toBe('9');
-    panel.render(loop({ iteration: 10 }), 'build');
-    expect(row('iteration')?.querySelector('.lv')?.textContent).toBe('10');
+    panel.render(loop({ pr: null, branch: null }), 'build');
+    outside.focus();
+    expect(document.activeElement).toBe(outside);
+    panel.render(loop({ pr: 179, branch: 'b' }), 'build'); // structural rebuild
+    expect(document.activeElement).toBe(outside); // focus NOT pulled into the panel
+    expect(host.contains(document.activeElement)).toBe(false);
+  });
+
+  it('retries an unresolved ref on a later push so a transient gh failure self-heals', async () => {
+    let attempt = 0;
+    const githubRef = vi.fn(async (): Promise<GithubRef | null> => {
+      attempt += 1;
+      return attempt === 1 ? null : { title: 'Persist flow inputs', body: 'b', url: 'https://github.com/o/r/issues/25' };
+    });
+    const panel = createLoopPanel(host, { githubRef, openExternal: vi.fn() });
+    panel.render(null, 'plan', { ticket: 25 }); // manual step — constant structural signature
+    await flush();
+    expect(host.querySelector('a.reflink')).toBeNull(); // first fetch failed → bare number
+    panel.render(null, 'plan', { ticket: 25 }); // same signature ⇒ patch path must re-attempt the fetch
+    await flush();
+    expect(host.querySelector('a.reflink')?.getAttribute('href')).toBe('https://github.com/o/r/issues/25');
   });
 
   it('flags an awaiting-human status as needs-you (the §22.3 act tone)', () => {

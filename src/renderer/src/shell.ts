@@ -109,9 +109,17 @@ export function createShell(root: HTMLElement, deps: ShellDeps = {}): Shell {
     signalLayoutChange();
   }
   function closeLoopPanel(): void {
+    const hadFocus = loopPanelEl?.contains(root.ownerDocument.activeElement) ?? false;
     root.classList.remove('loop-open');
     if (loopPanelEl) setShown(loopPanelEl, false);
     syncLoopReadout(false);
+    // Disclosure pattern (WCAG 2.4.3): a close returns focus to the read-out that opened it; when that
+    // is gone too (a state-driven close after the flow ends) fall back to the main view, so focus is
+    // never stranded on the now-hidden panel.
+    if (hadFocus) {
+      const back = root.querySelector<HTMLElement>('.loopstat') ?? root.querySelector<HTMLElement>('[data-viewbtn="1"]');
+      back?.focus();
+    }
     signalLayoutChange();
   }
   function toggleLoopPanel(): void {
