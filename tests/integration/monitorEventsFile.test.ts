@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { mkdtempSync, mkdirSync, existsSync, readFileSync, writeFileSync, rmSync, statSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, existsSync, readFileSync, writeFileSync, symlinkSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createMonitorEventsFile } from '../../src/main/monitorEventsFile';
+import { createMonitorEventsFile, MAX_EVENTS_FILE_BYTES } from '../../src/main/monitorEventsFile';
 import type { MonitorEvent } from '../../src/shared/ipc';
 
 // Monitor capture events persist per launch-directory and restore on relaunch regardless of how the
@@ -56,6 +56,47 @@ describe('monitor events file persistence', () => {
     createMonitorEventsFile(dir).save([evt({ id: 'a' })]);
     createMonitorEventsFile(dir).save([evt({ id: 'b' })]);
     expect(readFileSync(join(dir, '.gitignore'), 'utf8')).toBe(before);
+  });
+
+  it('does not write through a symlink pre-planted at the temp path (a cloned repo cannot redirect the write)', () => {
+    // A cloned repo ships .agent-terminal/monitor-events.json.tmp as a symlink to one of the user's
+    // own files; save() must not follow it and clobber the target (CWE-59 link following).
+    const target = join(dir, 'victim.txt');
+    const original = 'do-not-overwrite\n';
+    writeFileSync(target, original);
+    mkdirSync(join(dir, '.agent-terminal'), { recursive: true });
+    symlinkSync(target, join(dir, '.agent-terminal', 'monitor-events.json.tmp'));
+    createMonitorEventsFile(dir).save([evt({ id: 'a', text: 'real' })]);
+    expect(readFileSync(target, 'utf8')).toBe(original);
+    expect(createMonitorEventsFile(dir).load().map((e) => e.id)).toEqual(['a']);
+  });
+
+  it('degrades to an empty list when the file exceeds the size cap (an oversized planted file cannot stall startup)', () => {
+    mkdirSync(join(dir, '.agent-terminal'), { recursive: true });
+    // Valid JSON that would otherwise load one event, but larger than the cap → refused (CWE-400).
+    const huge = JSON.stringify([evt({ id: 'big', text: 'a'.repeat(MAX_EVENTS_FILE_BYTES) })]);
+    writeFileSync(join(dir, '.agent-terminal', 'monitor-events.json'), huge);
+    expect(createMonitorEventsFile(dir).load()).toEqual([]);
+  });
+
+  it('drops inject-able command-output events on load (an untrusted file cannot seed an Insert-at-cursor card)', () => {
+    // command-output is the one type whose monitor card injects into the live PTY (§16.2); a
+    // repo-shipped file must not be able to restore one (CWE-78 untrusted-data-as-syntax).
+    createMonitorEventsFile(dir).save([
+      evt({ id: 'keep', type: 'capture', text: 'safe' }),
+      evt({ id: 'evil', type: 'command-output', text: 'rm -rf ~' }),
+    ]);
+    expect(createMonitorEventsFile(dir).load().map((e) => e.id)).toEqual(['keep']);
+  });
+
+  it('restores only in the same launch directory (events saved under A do not leak into B)', () => {
+    const dirB = mkdtempSync(join(tmpdir(), 'monitor-events-b-'));
+    try {
+      createMonitorEventsFile(dir).save([evt({ id: 'a' })]);
+      expect(createMonitorEventsFile(dirB).load()).toEqual([]);
+    } finally {
+      rmSync(dirB, { recursive: true, force: true });
+    }
   });
 
   it('drops entries that are not well-formed MonitorEvents (a planted/old-shape file degrades, never replays garbage)', () => {

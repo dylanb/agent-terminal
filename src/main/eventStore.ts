@@ -1,12 +1,12 @@
 // Monitor event list (§8.4): stamps captures and replays them to a (re)loaded monitor pane. An
 // optional `persistence` backing makes the list durable across relaunch (§8.4); restore must hold
-// regardless of how the prior instance terminated, so the list is saved after every mutation rather
-// than at exit.
+// regardless of how the prior instance terminated.
 
 import { randomUUID } from 'node:crypto';
 import type { MonitorCaptureMsg, MonitorEvent } from '../shared/ipc';
 
-/** Durable backing for the event list: the store seeds from `load()` and re-`save()`s on each change. */
+/** Durable backing for the event list. `load()` returns the persisted events (empty when
+ *  absent/corrupt — never throws); `save()` receives the full current list to persist. */
 export interface MonitorEventPersistence {
   load(): MonitorEvent[];
   save(events: readonly MonitorEvent[]): void;

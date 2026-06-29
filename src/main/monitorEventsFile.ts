@@ -5,13 +5,19 @@
 // validated to the MonitorEvent shape before it can seed the store and replay into the monitor
 // pane; a missing/corrupt/foreign file degrades to an empty list (never a throw).
 
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import type { BufferType, MonitorEvent, MonitorEventSource, MonitorEventType } from '../shared/ipc';
+import { isInjectableEventType } from '../shared/injectableEvents';
 import type { MonitorEventPersistence } from './eventStore';
 import { isRecord } from './yamlRecord';
 
 const EVENTS_REL = path.join('.agent-terminal', 'monitor-events.json');
+
+/** A file larger than this is refused (load → empty) rather than read into the main process at
+ *  startup, so a cloned repo cannot stall the app with a giant planted file (CWE-400). */
+export const MAX_EVENTS_FILE_BYTES = 16 * 1024 * 1024;
 
 // Runtime membership tests for the §15.4 `MonitorEventType`/`MonitorEventSource`/`BufferType` unions
 // (a type-only union has no runtime form to test against).
@@ -54,17 +60,20 @@ export function createMonitorEventsFile(launchRoot: string): MonitorEventPersist
   return {
     load() {
       try {
+        if (statSync(file).size > MAX_EVENTS_FILE_BYTES) return [];
         const raw = JSON.parse(readFileSync(file, 'utf8'));
-        return Array.isArray(raw) ? raw.filter(isMonitorEvent) : [];
+        if (!Array.isArray(raw)) return [];
+        return raw.filter(isMonitorEvent).filter((e) => !isInjectableEventType(e.type));
       } catch {
         return [];
       }
     },
     save(events) {
       mkdirSync(path.dirname(file), { recursive: true });
-      const tmp = `${file}.tmp`;
-      // Captured terminal output may contain secrets; restrict the file to its owner (§8.4).
-      writeFileSync(tmp, JSON.stringify(events), { mode: 0o600 });
+      // Unpredictable temp name + exclusive create (wx): an untrusted repo cannot pre-plant a symlink
+      // at the temp path for the write to follow (CWE-59). Captured output may carry secrets → 0o600.
+      const tmp = `${file}.${randomUUID()}.tmp`;
+      writeFileSync(tmp, JSON.stringify(events), { mode: 0o600, flag: 'wx' });
       renameSync(tmp, file);
     },
   };
