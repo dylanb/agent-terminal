@@ -1,5 +1,6 @@
 // File-backed persistence for the monitor event store (§8.4): `<launchRoot>/.agent-terminal/
-// monitor-events.json`. Session-local capture state → gitignored like flow-state.yaml (§19.1).
+// monitor-events.json`. The app NEVER modifies the user's .gitignore (no-gitignore-writes rule);
+// whether to ignore or commit `.agent-terminal/` is the user's choice.
 // The file is an UNTRUSTED source — a cloned repo can ship one — so each loaded element is
 // validated to the MonitorEvent shape before it can seed the store and replay into the monitor
 // pane; a missing/corrupt/foreign file degrades to an empty list (never a throw).
@@ -8,11 +9,9 @@ import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { BufferType, MonitorEvent, MonitorEventSource, MonitorEventType } from '../shared/ipc';
 import type { MonitorEventPersistence } from './eventStore';
-import { ensureGitignored } from './gitignore';
 import { isRecord } from './yamlRecord';
 
 const EVENTS_REL = path.join('.agent-terminal', 'monitor-events.json');
-const GITIGNORE_ENTRY = '.agent-terminal/monitor-events.json';
 
 // Runtime membership tests for the §15.4 `MonitorEventType`/`MonitorEventSource`/`BufferType` unions
 // (a type-only union has no runtime form to test against).
@@ -67,7 +66,6 @@ export function createMonitorEventsFile(launchRoot: string): MonitorEventPersist
       // Captured terminal output may contain secrets; restrict the file to its owner (§8.4).
       writeFileSync(tmp, JSON.stringify(events), { mode: 0o600 });
       renameSync(tmp, file);
-      ensureGitignored(launchRoot, GITIGNORE_ENTRY);
     },
   };
 }

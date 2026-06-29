@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync, statSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, existsSync, readFileSync, writeFileSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createMonitorEventsFile } from '../../src/main/monitorEventsFile';
@@ -7,10 +7,8 @@ import type { MonitorEvent } from '../../src/shared/ipc';
 
 // Monitor capture events persist per launch-directory and restore on relaunch regardless of how the
 // prior instance terminated (clean quit, window close, crash). The file IS the bucket: a fresh
-// backing over the same directory models relaunch. Session-local state → gitignored like
-// flow-state.yaml (§19.1). Real fs, real temp dirs (no mocks).
-
-const GITIGNORE_ENTRY = '.agent-terminal/monitor-events.json';
+// backing over the same directory models relaunch. The store NEVER touches the user's .gitignore
+// (no-gitignore-writes rule). Real fs, real temp dirs (no mocks).
 
 function evt(over: Partial<MonitorEvent> = {}): MonitorEvent {
   return {
@@ -47,10 +45,17 @@ describe('monitor events file persistence', () => {
     expect(createMonitorEventsFile(dir).load()).toEqual([]);
   });
 
-  it('gitignores monitor-events.json on first save (session-local, §19.1)', () => {
+  it('never creates a .gitignore on save — the app does not modify the user\'s VCS config', () => {
     createMonitorEventsFile(dir).save([evt()]);
-    const gitignore = readFileSync(join(dir, '.gitignore'), 'utf8');
-    expect(gitignore.split('\n').some((l) => l.trim() === GITIGNORE_ENTRY)).toBe(true);
+    expect(existsSync(join(dir, '.gitignore'))).toBe(false);
+  });
+
+  it('leaves a pre-existing .gitignore byte-for-byte unchanged across saves', () => {
+    const before = 'node_modules\n';
+    writeFileSync(join(dir, '.gitignore'), before);
+    createMonitorEventsFile(dir).save([evt({ id: 'a' })]);
+    createMonitorEventsFile(dir).save([evt({ id: 'b' })]);
+    expect(readFileSync(join(dir, '.gitignore'), 'utf8')).toBe(before);
   });
 
   it('drops entries that are not well-formed MonitorEvents (a planted/old-shape file degrades, never replays garbage)', () => {

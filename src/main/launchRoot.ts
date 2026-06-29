@@ -43,3 +43,25 @@ export function resolveLaunchRoot(
     return fallback;
   }
 }
+
+/** The per-process launch surfaces (§23.4): `launchRoot` (L) anchors the cwd surfaces — PTY shell cwd
+ *  (§5), artifact-viewer fallback root (§20.1), and todo/repo-scope fallback (§16.3). `flowGlobalDir`
+ *  is where the GLOBAL flow definition lives (§18.1): the per-user home (F), NOT L — the local-first
+ *  repo tier already covers a launch-at-a-repo, so a global flow at ~/.agent-terminal/flow.yaml must
+ *  resolve regardless of the launch target rather than be shadowed by it. */
+export interface LaunchSurfaces {
+  launchRoot: string;
+  flowGlobalDir: string;
+}
+
+export function resolveLaunchSurfaces(
+  env: NodeJS.ProcessEnv,
+  osHome: string,
+  canEnter: CanEnter = canEnterDefault,
+): LaunchSurfaces {
+  const home = homeFallback(env, osHome);
+  return {
+    launchRoot: resolveLaunchRoot(env[APP_LAUNCH_DIR_ENV], home, canEnter),
+    flowGlobalDir: home,
+  };
+}

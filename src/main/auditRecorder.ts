@@ -25,10 +25,8 @@ import {
 import { auditFilePath } from './auditPaths';
 import { pathWithin } from './artifactTree';
 import { isRecord } from './yamlRecord';
-import { ensureGitignored } from './gitignore';
 
 const POINTER_REL = path.join('.agent-terminal', 'audit-pointer.yaml');
-const POINTER_GITIGNORE = '.agent-terminal/audit-pointer.yaml';
 
 // Top-level `.agent-loop/` regular files as `{ path, bytes }` (§25.5), realpath-guarded against the
 // repo root so a symlink — whether a file inside `.agent-loop/` or `.agent-loop/` itself — cannot
@@ -98,7 +96,6 @@ export function createAuditRecorder(deps: AuditRecorderDeps): AuditRecorder {
     const pp = pointerPath(repoKey);
     mkdirSync(path.dirname(pp), { recursive: true });
     writeFileSync(pp, yaml.dump({ file }));
-    ensureGitignored(repoKey, POINTER_GITIGNORE);
   };
 
   // The repo's open run file: the in-memory slot, else the persisted pointer (survives an app restart

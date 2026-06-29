@@ -1,13 +1,12 @@
-// Flow-progression persistence (§19.1 / §24.2.2 S3). VCS constraint (§19.1): gitignore only
-// flow-state.yaml (app-owned progression), never the committed flow.yaml (§18.1) or the
-// user-owned todos.json (§16.3).
+// Flow-progression persistence (§19.1 / §24.2.2 S3). The app NEVER modifies the user's .gitignore
+// (no-gitignore-writes rule); a user who does not want flow-state.yaml committed ignores
+// .agent-terminal/ themselves.
 
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import yaml from 'js-yaml';
 import type { FlowStatus } from '../shared/ipc';
 import { isRecord } from './yamlRecord';
-import { ensureGitignored } from './gitignore';
 
 /** Persisted progression (§19.1). `inputs` is flow-wide, not per-step, so a value resolved at one
  *  step threads to later steps' inputs (§18.1 output→input; §18.4 / §24.2.3 T3). */
@@ -20,12 +19,11 @@ export interface PersistedFlowState {
 export interface FlowStateStore {
   /** The persisted progression, or null when absent/corrupt (never throws). */
   read(): PersistedFlowState | null;
-  /** Persist progression atomically; gitignores flow-state.yaml on first use (§19.1). */
+  /** Persist progression atomically (§19.1). */
   write(state: PersistedFlowState): void;
 }
 
 const STATE_REL = path.join('.agent-terminal', 'flow-state.yaml');
-const GITIGNORE_ENTRY = '.agent-terminal/flow-state.yaml';
 const PERSISTABLE: ReadonlySet<FlowStatus> = new Set(['not_started', 'in_progress', 'done']);
 
 /** Null when absent/empty, so the round-trip omits the key for a flow that resolved none (§24.2.3 T3). */
@@ -59,7 +57,6 @@ export function createFlowStateStore(worktreeDir: string): FlowStateStore {
       const hasInputs = state.inputs && Object.keys(state.inputs).length > 0;
       writeFileSync(tmp, yaml.dump({ step: state.step, status: state.status, ...(hasInputs ? { inputs: state.inputs } : {}) }));
       renameSync(tmp, file);
-      ensureGitignored(worktreeDir, GITIGNORE_ENTRY);
     },
   };
 }
