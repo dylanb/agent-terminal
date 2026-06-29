@@ -19,6 +19,7 @@ import { createMonitorEventsFile } from './monitorEventsFile';
 import { createShadowModel } from './shadow';
 import { spawnAgentShell, resolveShellPath } from './pty';
 import { shouldTerminateOnShellExit } from './shellExit';
+import { disposeAll } from './windowTeardown';
 import { performance } from 'node:perf_hooks';
 import { resolveLaunchSurfaces } from './launchRoot';
 import { createOutputGate } from './outputGate';
@@ -582,16 +583,22 @@ async function createWindow(): Promise<void> {
   );
 
   win.on('closed', () => {
-    disposeIpc();
-    ptyProcess.kill();
-    scanner.dispose();
-    suppressor.dispose();
-    cwdTracker.dispose();
-    tracker.dispose();
-    shadow.dispose();
-    stopViewerWatch();
-    for (const stop of loopWatchers.values()) stop();
-    loopWatchers.clear();
+    // §5 grace-kept-open close: the shell may already have exited, so ptyProcess.kill() can throw
+    // ESRCH — each step is isolated so one failure never strands the others (disposeAll).
+    disposeAll([
+      () => disposeIpc(),
+      () => ptyProcess.kill(),
+      () => scanner.dispose(),
+      () => suppressor.dispose(),
+      () => cwdTracker.dispose(),
+      () => tracker.dispose(),
+      () => shadow.dispose(),
+      () => stopViewerWatch(),
+      () => {
+        for (const stop of loopWatchers.values()) stop();
+        loopWatchers.clear();
+      },
+    ]);
   });
 
   const target = resolveRendererTarget({
