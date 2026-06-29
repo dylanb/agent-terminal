@@ -477,7 +477,17 @@ test('monitor status strip tracks quiescence and alt-screen', async () => {
 });
 
 test('the app terminates when the hosted shell exits', async () => {
-  // When the PTY's shell exits the whole app must terminate — the hosted shell IS the session.
+  // When the PTY's shell exits the whole app must terminate — the hosted shell IS the session. Use a
+  // tiny startup-exit grace so the post-grace path is deterministic: in a fast environment the shell
+  // can exit only a few hundred ms after spawn, which under the default 1s grace would be treated as
+  // a startup failure (window kept open) and never terminate. A 1 ms grace exercises a normal exit.
+  await app.close();
+  app = await electron.launch({
+    args: launchArgs(),
+    env: { ...process.env, APP_SHELL: 'bash', APP_SUBMIT_DELAY_MS: '100', APP_STARTUP_EXIT_GRACE_MS: '1' },
+  });
+  page = await app.firstWindow();
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
   // Shell teardown → PTY exit → app quit can take a moment under CI load; wait past the default budget.
   await typeCommand('exit');
   await app.waitForEvent('close', { timeout: 20_000 });
@@ -521,6 +531,16 @@ test('a within-grace shell exit keeps the app open AND shows the exit diagnostic
   // Uptime at exit (a few seconds) is far under the 60s grace, so the app must NOT close.
   const closed = app.waitForEvent('close', { timeout: 3000 }).then(() => true).catch(() => false);
   expect(await closed).toBe(false);
+  // The kept-open window still drives the renderer: a window resize sends a pty:resize to the now-dead
+  // shell. Driving its closed master fd throws ioctl EBADF; uncaught in main that pops Electron's modal
+  // error dialog, blocking the event loop so the app can no longer quit (§5). After the resize the main
+  // process must stay responsive — a wedged app makes this evaluate hang until the test times out.
+  await app.evaluate(({ BrowserWindow }) => {
+    const w = BrowserWindow.getAllWindows()[0];
+    const [width, height] = w.getSize();
+    w.setSize(width + 120, height + 80);
+  });
+  await expect.poll(() => app.evaluate(({ app: a }) => a.isReady()), { timeout: 8000 }).toBe(true);
 });
 
 // ---- §15: semantic capture & detection (rendered as mockup-exact .finding cards) ----

@@ -18,6 +18,7 @@ import { createMonitorEventStore } from './eventStore';
 import { createMonitorEventsFile } from './monitorEventsFile';
 import { createShadowModel } from './shadow';
 import { spawnAgentShell, resolveShellPath } from './pty';
+import { createPtyIo } from './ptyIo';
 import { shouldTerminateOnShellExit } from './shellExit';
 import { disposeAll } from './windowTeardown';
 import { performance } from 'node:perf_hooks';
@@ -117,6 +118,9 @@ async function createWindow(): Promise<void> {
     cwd: launchRoot,
   });
   const shellSpawnedAt = performance.now(); // monotonic: a wall-clock jump must not flip the grace
+  // Once the shell exits, the kept-open window (§5) still emits resize/input; routing PTY I/O through
+  // this guard makes those a no-op instead of an EBADF that crashes the main process (ptyIo.ts).
+  const ptyIo = createPtyIo(ptyProcess);
   // §8.4
   const store = createMonitorEventStore({ persistence: createMonitorEventsFile(launchRoot) });
   // §16.6: the only state that lives outside the repo (userData).
@@ -234,7 +238,7 @@ async function createWindow(): Promise<void> {
   });
 
   const inject = createInjector({
-    write: (data) => ptyProcess.write(data),
+    write: (data) => ptyIo.io.write(data),
     isBracketedPaste: () => shadow.isBracketedPaste(),
     onInject: () => suppressor.noteInjection(),
   });
@@ -383,6 +387,7 @@ async function createWindow(): Promise<void> {
   });
   // The hosted shell IS the session (§5); a sub-grace exit is excepted (shellExit.ts).
   ptyProcess.onExit(({ exitCode }) => {
+    ptyIo.markExited(); // a kept-open window (§5) must not drive the dead shell — see ptyIo.ts
     send(CH.ptyExit, { sessionId: SESSION_ID, code: exitCode });
     if (shouldTerminateOnShellExit(performance.now() - shellSpawnedAt, config.startupExitGraceMs) && !win.isDestroyed()) {
       win.close();
@@ -393,12 +398,12 @@ async function createWindow(): Promise<void> {
     ipcMain,
     {
       [CH.ptyInput]: (_e, m) => {
-        if (isValidInput(m)) ptyProcess.write(m.data);
+        if (isValidInput(m)) ptyIo.io.write(m.data);
       },
       // PTY and shadow must never diverge in size, or captures mis-wrap (§4 flow F).
       [CH.ptyResize]: (_e, m) => {
         if (isValidResize(m)) {
-          ptyProcess.resize(m.cols, m.rows);
+          ptyIo.io.resize(m.cols, m.rows);
           shadow.resize(m.cols, m.rows);
         }
       },
