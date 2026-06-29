@@ -17,7 +17,7 @@ function writeGlobalFlow(dir: string, name: string): void {
   writeFileSync(join(dir, FLOW_REL), `name: ${name}\nsteps:\n  - id: only\n    kind: manual\n`);
 }
 
-describe('launch root → four surfaces consume one resolved value (§23.4)', () => {
+describe('launch root → three cwd surfaces share L; the flow global dir anchors at home (§23.4/§18.1)', () => {
   let base: string;
   beforeEach(() => {
     base = realpathSync(mkdtempSync(join(tmpdir(), 'launch-root-int-')));
