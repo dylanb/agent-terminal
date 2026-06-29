@@ -17,7 +17,7 @@ import { createInjector } from './inject';
 import { createMonitorEventStore } from './eventStore';
 import { createShadowModel } from './shadow';
 import { spawnAgentShell, resolveShellPath } from './pty';
-import { resolveLaunchRoot, homeFallback, APP_LAUNCH_DIR_ENV } from './launchRoot';
+import { resolveLaunchSurfaces } from './launchRoot';
 import { createOutputGate } from './outputGate';
 import { resolveRendererTarget } from './rendererTarget';
 import { installNavigationGuards } from './windowGuards';
@@ -106,8 +106,8 @@ async function createWindow(): Promise<void> {
   installNavigationGuards(win.webContents);
 
   const config = resolveRuntimeConfig(process.env);
-  // §23.4
-  const launchRoot = resolveLaunchRoot(process.env[APP_LAUNCH_DIR_ENV], homeFallback(process.env, os.homedir()));
+  // §23.4: L anchors the cwd surfaces; the flow global dir is the per-user home (§18.1), not L.
+  const { launchRoot, flowGlobalDir } = resolveLaunchSurfaces(process.env, os.homedir());
   const ptyProcess = await spawnAgentShell({
     integrationScriptPath: config.shellIntegration ? SHELL_INTEGRATION_SCRIPT : undefined,
     cwd: launchRoot,
@@ -260,9 +260,6 @@ async function createWindow(): Promise<void> {
       }
     },
   });
-  // The same global fallback dir the definition uses, so on-demand template instantiation (§18.6)
-  // resolves against a global flow's templates too.
-  const flowGlobalDir = launchRoot;
   const flow = createFlowManager({
     globalDir: flowGlobalDir,
     onEnterStep: (step, inputs) => flowEntryActions(step, inputs),

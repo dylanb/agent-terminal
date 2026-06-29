@@ -44,22 +44,17 @@ describe('audit recorder — start opens the run file (§25.3/§25.4)', () => {
     expect(() => readFileSync(auditFilePath(root, repo, 'feature-dev', D), 'utf8')).toThrow();
   });
 
-  it('gitignores its in-repo current-run pointer (app-owned state, §19.1)', () => {
+  it('never creates a .gitignore for its in-repo pointer — the app does not modify the user\'s VCS config', () => {
     recorder().recordTransition(repo, 'start', NOT_STARTED, IN_PROGRESS);
-    expect(readFileSync(join(repo, '.gitignore'), 'utf8')).toContain('.agent-terminal/audit-pointer.yaml');
+    expect(existsSync(join(repo, '.gitignore'))).toBe(false);
   });
 
-  it('appends the pointer ignore exactly once across repeated runs (idempotent)', () => {
+  it('leaves a pre-existing .gitignore byte-for-byte unchanged across repeated runs', () => {
+    const before = 'node_modules';
+    writeFileSync(join(repo, '.gitignore'), before);
     recorder().recordTransition(repo, 'start', NOT_STARTED, IN_PROGRESS);
     recorder().recordTransition(repo, 'start', NOT_STARTED, IN_PROGRESS);
-    const lines = readFileSync(join(repo, '.gitignore'), 'utf8').split('\n').filter((l) => l.trim() === '.agent-terminal/audit-pointer.yaml');
-    expect(lines).toHaveLength(1);
-  });
-
-  it('separates the pointer ignore from a pre-existing entry that lacks a trailing newline', () => {
-    writeFileSync(join(repo, '.gitignore'), 'node_modules');
-    recorder().recordTransition(repo, 'start', NOT_STARTED, IN_PROGRESS);
-    expect(readFileSync(join(repo, '.gitignore'), 'utf8')).toBe('node_modules\n.agent-terminal/audit-pointer.yaml\n');
+    expect(readFileSync(join(repo, '.gitignore'), 'utf8')).toBe(before);
   });
 
   it('writes the run file and audit dir owner-only (CWE-276 least-privilege)', () => {
