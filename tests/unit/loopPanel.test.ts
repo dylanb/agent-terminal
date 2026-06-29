@@ -260,6 +260,28 @@ describe('docked loop panel — ticket/PR refs (§24.2.3 T7)', () => {
     expect(bodyText.endsWith('…')).toBe(false);
   });
 
+  it('marks the refs section aria-live=polite so the async detail-fill is announced (WCAG 4.1.3)', () => {
+    createLoopPanel(host, { githubRef: vi.fn(async () => null), openExternal: vi.fn() }).render(null, 'plan', { ticket: 25 });
+    expect(host.querySelector('.refs')?.getAttribute('aria-live')).toBe('polite');
+  });
+
+  it('clears the in-flight guard on a rejected fetch so a later push retries', async () => {
+    let n = 0;
+    const githubRef = vi.fn(() => {
+      n += 1;
+      return n === 1
+        ? Promise.reject(new Error('main gone'))
+        : Promise.resolve<GithubRef>({ title: 't', body: 'b', url: 'https://github.com/o/r/issues/25' });
+    });
+    const panel = createLoopPanel(host, { githubRef, openExternal: vi.fn() });
+    panel.render(null, 'plan', { ticket: 25 });
+    await flush();
+    expect(host.querySelector('a.reflink')).toBeNull(); // first fetch rejected → bare number, guard cleared
+    panel.render(null, 'plan', { ticket: 25 }); // same signature ⇒ retry now that pending is clear
+    await flush();
+    expect(host.querySelector('a.reflink')?.getAttribute('href')).toBe('https://github.com/o/r/issues/25');
+  });
+
   it('gives the external link a descriptive accessible name (WCAG 2.4.4 — link purpose in context)', async () => {
     const githubRef = vi.fn(async (kind: GithubRefKind) =>
       kind === 'issue' ? ref({ title: 'Persist flow inputs' }) : null,

@@ -310,6 +310,18 @@ describe('shell controller (§24.1C — views, hotkeys, docked drawer, theme)', 
       expect(shell.isLoopPanelOpen()).toBe(true); // the modal owns Escape; the panel stays open
     });
 
+    it('syncLoopReadout re-syncs the rail read-out aria-expanded to the docked state', () => {
+      const loopstat = document.querySelector('.loopstat') as HTMLElement;
+      shell.openLoopPanel();
+      loopstat.setAttribute('aria-expanded', 'false'); // a fresh strip re-render defaults it collapsed
+      shell.syncLoopReadout();
+      expect(loopstat.getAttribute('aria-expanded')).toBe('true');
+      shell.closeLoopPanel();
+      loopstat.setAttribute('aria-expanded', 'true');
+      shell.syncLoopReadout();
+      expect(loopstat.getAttribute('aria-expanded')).toBe('false');
+    });
+
     it('returns focus to the Loop read-out when closed with focus inside the panel (WCAG 2.4.3)', () => {
       shell.openLoopPanel();
       const closeBtn = document.querySelector('[data-loop-close]') as HTMLElement;

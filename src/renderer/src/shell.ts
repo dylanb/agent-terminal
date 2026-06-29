@@ -26,6 +26,9 @@ export interface Shell {
   closeLoopPanel(): void;
   toggleLoopPanel(): void;
   isLoopPanelOpen(): boolean;
+  /** Re-sync the rail read-out's aria-expanded to the docked state, so the root needn't reach into the
+   *  shell's `.loopstat` markup after the strip re-renders a fresh (collapsed-by-default) read-out. */
+  syncLoopReadout(): void;
   setTheme(t: Theme): void;
   getTheme(): Theme;
   /** Full-screen the viewer by hiding all app chrome (§20.2); Escape and a view change exit. */
@@ -241,6 +244,7 @@ export function createShell(root: HTMLElement, deps: ShellDeps = {}): Shell {
     closeLoopPanel,
     toggleLoopPanel,
     isLoopPanelOpen,
+    syncLoopReadout: () => syncLoopReadout(isLoopPanelOpen()),
     setTheme,
     getTheme: () => theme,
     setViewerFullscreen,

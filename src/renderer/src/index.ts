@@ -124,9 +124,7 @@ if (flowStripHost) {
       syncDockedPanel(loop, title, refs, {
         render: (l, t, r) => loopPanel?.render(l, t, r),
         closePanel: () => shell.closeLoopPanel(),
-        // A fresh .loopstat read-out defaults aria-expanded=false; re-sync it to the docked state.
-        syncExpanded: () =>
-          document.querySelector('.loopstat')?.setAttribute('aria-expanded', String(shell.isLoopPanelOpen())),
+        syncExpanded: () => shell.syncLoopReadout(),
       });
       attentionCue?.render(loop ?? null, repo.repoKey());
     },

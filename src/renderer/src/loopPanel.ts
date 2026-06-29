@@ -105,7 +105,7 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
     row.append(k, num, title, body);
 
     let resolved = false;
-    let pending = false; // collapse overlapping retries to one in-flight fetch
+    let pending = false;
     const attempt = (): void => {
       if (resolved || pending) return;
       pending = true;
@@ -132,6 +132,7 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
           });
           num.replaceWith(link);
         })
+        .catch(() => {}) // a rejected invoke (main restart) must not be an unhandled rejection
         .finally(() => {
           pending = false;
         });
@@ -189,6 +190,9 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
       if (showRefs && refs) {
         const refsEl = doc.createElement('div');
         refsEl.className = 'refs';
+        // The bare number renders now; the title/body/link fill in after the async gh resolve — announce
+        // that late arrival to assistive tech (WCAG 4.1.3 Status Messages).
+        refsEl.setAttribute('aria-live', 'polite');
         const segH = doc.createElement('div');
         segH.className = 'seg-h';
         segH.textContent = 'Working on';
