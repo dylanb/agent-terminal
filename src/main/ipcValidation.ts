@@ -154,7 +154,7 @@ export function isValidFlowGithubRef(m: unknown): m is FlowGithubRefMsg {
 }
 
 /** app:openExternal — the renderer asks the OS to open a url (§24.2.3 T7). Only the shape is checked
- *  here; the host/scheme allow-list (isGithubUrl) is enforced in the handler before the OS sees it. */
+ *  here; the host/scheme allow-list + normalization is applied by openExternalTarget (below). */
 export function isValidOpenExternal(m: unknown): m is AppOpenExternalMsg {
   return isRecord(m) && isLiveSession(m) && typeof m.url === 'string';
 }

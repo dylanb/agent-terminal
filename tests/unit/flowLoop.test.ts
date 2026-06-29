@@ -43,6 +43,12 @@ describe('deriveLoopView (§24.2.3 T2)', () => {
     });
   });
 
+  it('does not leak AgentLoopState-only fields (linkedIssues) onto the FlowLoopView wire payload', () => {
+    // linkedIssues feeds FlowRefs, not the loop mirror; the wire shape (FlowLoopView) must not carry it.
+    const v = deriveLoopView(base, loop('awaiting-human-pr-approval'), DEF);
+    expect(v.loop && 'linkedIssues' in v.loop).toBe(false);
+  });
+
   it('exposes the current gate\'s human_options as gateOptions (gate-driven)', () => {
     expect(deriveLoopView(base, loop('awaiting-human-pr-approval'), DEF).loop?.gateOptions).toEqual([
       'approve',

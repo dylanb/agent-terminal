@@ -120,7 +120,7 @@ if (flowStripHost) {
   const strip = createFlowStrip(flowStripHost, {
     ...window.flow,
     loopPanelId: loopPanelHost?.id, // instance-scoped aria-controls target
-    onLoopState: (loop, title, refs) => {
+    onPanelState: (loop, title, refs) => {
       loopPanel?.render(loop, title, refs);
       attentionCue?.render(loop ?? null, repo.repoKey());
       const hasContent = loop !== null || hasFlowRefs(refs);

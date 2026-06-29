@@ -67,7 +67,7 @@ export type FlowStripDeps = Omit<FlowApi, 'onRevealLoop' | 'githubRef' | 'openEx
    *  `aria-controls` is instance-scoped — the organism never bakes in a document-level id
    *  (UI-STANDARDS §2.2 rule 1). Omitted → no aria-controls (aria-expanded still conveys state). */
   loopPanelId?: string;
-  onLoopState?: (loop: FlowLoopView | null, title: string, refs?: FlowRefs) => void;
+  onPanelState?: (loop: FlowLoopView | null, title: string, refs?: FlowRefs) => void;
   /** Hand a step-entry input prompt (§24.2.3 T3) to the composition root, which opens its modal
    *  organism. `submit` records the typed values (provideInput) and re-renders. `null` closes the
    *  modal (no prompt on this view). The strip never reaches across to the modal directly. */
@@ -108,6 +108,9 @@ function structuralSig(state: FlowStateView): string {
     state.steps,
     state.position,
     !!state.loop,
+    // The refs read-out (§24.2.3 T7) renders the actual numbers with no patch handler, so any refs
+    // change must force a full render rather than a value-only patch.
+    state.refs ?? null,
     derivedText(state) !== null,
     state.notice ?? '',
   ]);
@@ -268,7 +271,7 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
       err.className = 'flow-error';
       err.textContent = state.error ?? 'flow failed to load';
       host.append(err);
-      deps.onLoopState?.(null, ''); // no step → the docked panel clears + closes
+      deps.onPanelState?.(null, ''); // no step → the docked panel clears + closes
       return;
     }
 
@@ -300,14 +303,14 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
 
     // The docked panel opens from a compact `loopstat` read-out (§24.2.3 T2/T7): a loop step shows its
     // agent-loop status pill; a non-loop step that still has a ticket/PR shows a refs summary. Both
-    // hand their data to the panel via onLoopState (a null loop + no refs clears + closes it).
+    // hand their data to the panel via onPanelState (a null loop + no refs clears + closes it).
     if (state.loop) {
       host.append(loopReadout(doc, state.loop, deps.loopPanelId));
     } else if (hasFlowRefs(state.refs)) {
       host.append(refsReadout(doc, state.refs, deps.loopPanelId));
     }
     if ((state.loop || hasFlowRefs(state.refs)) && keepLoopFocus) host.querySelector<HTMLElement>('.loopstat')?.focus();
-    deps.onLoopState?.(state.loop ?? null, state.stepName, state.refs);
+    deps.onPanelState?.(state.loop ?? null, state.stepName, state.refs);
 
     // Live derived status (§24.2.2 S5): n/m todos done + the §8.3 agent activity, recomputed by main
     // and pushed via flow:onStateChanged.
@@ -396,8 +399,9 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
       const iter = host.querySelector('.loop-iter');
       if (iter) iter.textContent = `iter ${state.loop.iteration}`;
     }
-    // Keep the docked loop panel live — the same hand-off render() makes (§24.2.3 T2).
-    deps.onLoopState?.(state.loop ?? null, state.stepName);
+    // Keep the docked loop panel live — the same hand-off render() makes (§24.2.3 T2/T7). The refs
+    // ride along so a value-only patch never clears the panel's "Working on" section.
+    deps.onPanelState?.(state.loop ?? null, state.stepName, state.refs);
   }
 
   async function refresh(): Promise<void> {

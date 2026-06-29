@@ -4,8 +4,7 @@ import type { Plugin } from 'vite';
 import { copyDevIcon } from './src/main/appIconBuild';
 
 // After the main bundle is written, copy build/icon.png next to it so the unpackaged runtime resolver
-// (app.getAppPath()/build/icon.png) finds it — without this, dock.setIcon fails on a missing icon. The
-// out dir comes from the resolved config, and the project root is its grandparent (out/main → root).
+// (app.getAppPath()/build/icon.png) finds it — without this, dock.setIcon fails on a missing icon.
 function copyDevIconPlugin(): Plugin {
   let outDir = '';
   return {

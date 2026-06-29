@@ -17,8 +17,3 @@ export function githubHttpsHref(url: string): string | null {
   if (u.hostname !== 'github.com' && !u.hostname.endsWith('.github.com')) return null;
   return u.href;
 }
-
-/** Boolean form of the allow-list — true iff the url resolves to an https GitHub url. */
-export function isGithubUrl(url: string): boolean {
-  return githubHttpsHref(url) !== null;
-}

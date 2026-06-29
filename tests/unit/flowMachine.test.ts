@@ -213,6 +213,14 @@ describe('flow state machine — ticket/PR refs', () => {
     expect(flow.state().refs?.ticket).toBe(176);
   });
 
+  it('prefers the github-ticket input over linked_issues when BOTH are present', () => {
+    // Pins precedence: a mutation swapping the `??` operands would otherwise pass the suite.
+    const store = createFlowStateStore(mkdtempSync(join(tmpdir(), 'flow-refs-')));
+    store.write({ step: 'plan', status: 'in_progress', inputs: { ticket: '176' } });
+    const flow = createFlowMachine(TICKET_FLOW, store, undefined, () => mirror({ linkedIssues: [999] }));
+    expect(flow.state().refs?.ticket).toBe(176);
+  });
+
   it('falls back to the loop linked_issues for the ticket when the input is unset', () => {
     const flow = createFlowMachine(TICKET_FLOW, undefined, undefined, () => mirror({ linkedIssues: [25, 26] }));
     flow.start();

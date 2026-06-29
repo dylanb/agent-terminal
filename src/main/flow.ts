@@ -53,7 +53,20 @@ export function deriveLoopView(
   const ready = loopDef ? gate?.terminal === true : !loop.status.startsWith('awaiting-human');
   const gateOptions = gate && gate.humanOptions.length > 0 ? gate.humanOptions : undefined;
   const humanNeeded = classifyHumanNeeded(loop.status, loopDef);
-  return { ...view, loop: { ...loop, ready, humanNeeded, ...(gateOptions ? { gateOptions } : {}) } };
+  // Project only the FlowLoopView fields — spreading the whole AgentLoopState would leak its
+  // linkedIssues (which feeds FlowRefs, not the mirror) onto the wire (src/shared/ipc.ts contract).
+  return {
+    ...view,
+    loop: {
+      status: loop.status,
+      iteration: loop.iteration,
+      pr: loop.pr,
+      branch: loop.branch,
+      ready,
+      humanNeeded,
+      ...(gateOptions ? { gateOptions } : {}),
+    },
+  };
 }
 
 /** A step's declared typed input (§18.4 / §24.2.3 T3). A `required` input must be resolved on step
@@ -231,8 +244,7 @@ export function createFlowMachine(
   const def = load.definition;
   const steps = def.steps;
   const names = steps.map((s) => s.id);
-  // The flow's ticket is whichever input is typed `github-ticket` (§18.4) — name-agnostic, resolved
-  // from the definition once. Its resolved value feeds refs.ticket on every step (§24.2.3 T7).
+  // The ticket input is whichever input is typed `github-ticket` (§18.4 / §24.2.3 T7).
   const ticketInputName = steps.flatMap((s) => s.inputs ?? []).find((i) => i.type === 'github-ticket')?.name;
   // `done` means the last step's Advance completed the whole flow, not just one step (§24.2.3 T1).
   let index = 0;
@@ -289,8 +301,7 @@ export function createFlowMachine(
       status,
       ...(step.todoTemplate ? { templateRef: step.todoTemplate } : {}),
     };
-    // The state.yaml mirror is read once per view: it feeds the cross-step refs (§24.2.3 T7) on every
-    // step, and the read-only `loop` field on loop steps only (§24.2.3 T2).
+    // Read once per view: the cross-step refs (§24.2.3 T7) and, on loop steps, the loop mirror (§24.2.3 T2).
     const loop = readLoop?.() ?? null;
     const refs = computeRefs(loop);
     const withRefs = refs ? { ...base, refs } : base;
@@ -346,10 +357,7 @@ export function createFlowMachine(
       requireStatus('done', 'restart');
       index = 0;
       status = 'in_progress';
-      // Restart re-runs the flow from scratch, so the resolved typed inputs (§18.4) are wiped: a step's
-      // required input is re-requested on re-entry rather than silently reused from the prior run. Undo,
-      // the single-step inverse, leaves them intact.
-      inputs = {};
+      inputs = {}; // §18.4: a restart re-requests resolved inputs; undo() preserves them
       persist();
       return enter(view());
     },

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { githubHttpsHref, isGithubUrl } from '../../src/shared/githubUrl';
+import { githubHttpsHref } from '../../src/shared/githubUrl';
 
 describe('githubHttpsHref — the open-external allow-list returns the NORMALIZED url to open', () => {
   it('returns the parsed href for an https github.com url', () => {
@@ -24,13 +24,5 @@ describe('githubHttpsHref — the open-external allow-list returns the NORMALIZE
     expect(out).not.toBeNull();
     expect(out).not.toContain('	');
     expect(out).toBe('https://evil.com.github.com/x');
-  });
-});
-
-describe('isGithubUrl — boolean form of the allow-list', () => {
-  it('is true exactly when githubHttpsHref resolves a url', () => {
-    expect(isGithubUrl('https://github.com/o/r/pull/29')).toBe(true);
-    expect(isGithubUrl('https://evil.com/github.com')).toBe(false);
-    expect(isGithubUrl('javascript:alert(1)')).toBe(false);
   });
 });

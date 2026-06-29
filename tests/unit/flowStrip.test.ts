@@ -355,8 +355,8 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     expect(host.querySelector<HTMLElement>('.loopstat')!.hasAttribute('aria-controls')).toBe(false);
   });
 
-  it('hands the flow refs to the docked panel via onLoopState, even on a non-loop step (§24.2.3 T7)', async () => {
-    const onLoopState = vi.fn();
+  it('hands the flow refs to the docked panel via onPanelState, even on a non-loop step (§24.2.3 T7)', async () => {
+    const onPanelState = vi.fn();
     const deps = {
       state: vi.fn(
         async (): Promise<FlowStateView> => ({
@@ -375,11 +375,11 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
       provideInput: vi.fn(),
       terminate: vi.fn(),
       onStateChanged: noopSub,
-      onLoopState,
+      onPanelState,
     };
     createFlowStrip(host, deps).onRepoChanged('/repo');
-    await vi.waitFor(() => expect(onLoopState).toHaveBeenCalled());
-    const last = onLoopState.mock.calls.at(-1)!;
+    await vi.waitFor(() => expect(onPanelState).toHaveBeenCalled());
+    const last = onPanelState.mock.calls.at(-1)!;
     expect(last[2]).toEqual({ ticket: 25, pr: 29 }); // (loop, title, refs)
   });
 
@@ -411,6 +411,47 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     expect(readout.getAttribute('aria-controls')).toBe('loop-panel');
     expect(readout.textContent).toContain('#25');
     expect(readout.textContent).toContain('#29');
+  });
+
+  it('keeps the refs on the docked panel across a same-signature background push (§24.2.3 T7 / S5)', async () => {
+    // A passive flow:onStateChanged push that changes only a live value (loop iteration) keeps the
+    // structural signature equal and takes the patch-in-place path. That path must still hand the refs
+    // to the panel, or a routine background tick wipes the "Working on" ticket/PR section.
+    let fire = (): void => {};
+    let iteration = 1;
+    const onPanelState = vi.fn();
+    const deps = {
+      state: vi.fn(
+        async (): Promise<FlowStateView> => ({
+          stepName: 'build',
+          steps: ['build'],
+          position: 1,
+          total: 1,
+          status: 'in_progress' as FlowStatus,
+          loop: { status: 'impl-draft', iteration, pr: 29, branch: 'b', ready: false },
+          refs: { ticket: 25, pr: 29 },
+        }),
+      ),
+      start: vi.fn(),
+      advance: vi.fn(),
+      restart: vi.fn(),
+      undo: vi.fn(),
+      terminate: vi.fn(),
+      provideInput: vi.fn(),
+      onStateChanged: vi.fn((cb: () => void) => {
+        fire = cb;
+        return () => {};
+      }),
+      onPanelState,
+    };
+    createFlowStrip(host, deps).onRepoChanged('/repo');
+    await vi.waitFor(() => expect(onPanelState).toHaveBeenCalled());
+    expect(onPanelState.mock.calls.at(-1)![2]).toEqual({ ticket: 25, pr: 29 });
+
+    iteration = 2; // only a live value changed → same structural signature → patch-in-place path
+    fire();
+    await vi.waitFor(() => expect(deps.state.mock.calls.length).toBeGreaterThanOrEqual(2));
+    expect(onPanelState.mock.calls.at(-1)![2]).toEqual({ ticket: 25, pr: 29 });
   });
 
   // A focus-landing seam for the composition root (WCAG 2.4.3): the root lands focus via this contract
@@ -495,7 +536,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     expect(host.querySelector('.loopstat')).toBeNull();
   });
 
-  it('hands the loop mirror to the composition root via onLoopState, for the docked panel (§24.2.3 T2)', async () => {
+  it('hands the loop mirror to the composition root via onPanelState, for the docked panel (§24.2.3 T2)', async () => {
     const seen: Array<{ status?: string; title: string }> = [];
     const loopView: FlowStateView = {
       stepName: 'build',
@@ -514,16 +555,16 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
       terminate: vi.fn(),
       provideInput: vi.fn(),
       onStateChanged: noopSub,
-      onLoopState: (loop: FlowStateView['loop'] | null, title: string) => seen.push({ status: loop?.status, title }),
+      onPanelState: (loop: FlowStateView['loop'] | null, title: string) => seen.push({ status: loop?.status, title }),
     };
     createFlowStrip(host, deps).onRepoChanged('/repo');
     await vi.waitFor(() => expect(seen.some((s) => s.status === 'awaiting-human-pr-approval')).toBe(true));
     expect(seen.at(-1)!.title).toBe('build');
   });
 
-  it('signals onLoopState(null) for a non-loop step so the panel clears and closes', async () => {
+  it('signals onPanelState(null) for a non-loop step so the panel clears and closes', async () => {
     const seen: Array<FlowStateView['loop'] | null> = [];
-    const deps = { ...fakeFlow('in_progress'), onLoopState: (loop: FlowStateView['loop'] | null) => seen.push(loop) };
+    const deps = { ...fakeFlow('in_progress'), onPanelState: (loop: FlowStateView['loop'] | null) => seen.push(loop) };
     createFlowStrip(host, deps).onRepoChanged('/repo');
     await vi.waitFor(() => expect(control()!.textContent).toBe('Advance'));
     expect(seen.at(-1)).toBeNull();
