@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, rmSync, realpathSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { resolveLaunchRoot, homeFallback, APP_LAUNCH_DIR_ENV } from '../../src/main/launchRoot';
+import { resolveLaunchRoot, resolveLaunchSurfaces, APP_LAUNCH_DIR_ENV } from '../../src/main/launchRoot';
 import { buildSpawnConfig } from '../../src/main/pty';
 import { currentRepoInfo } from '../../src/main/repoKey';
 import { discover } from '../../src/main/artifactTree';
@@ -55,16 +55,24 @@ describe('launch root → four surfaces consume one resolved value (§23.4)', ()
     expect(discover(root, 'curated').root).toBe(root);
   });
 
-  it('the flow global directory looks the global flow definition up under the launch root (§18.1)', () => {
-    const launch = join(base, 'launch');
-    writeGlobalFlow(launch, 'global-flow');
-    const root = resolveLaunchRoot(launch, FALLBACK);
+  it('looks the global flow definition up under $HOME, not the launch target (§18.1)', () => {
+    // The user's bug: launched at a repo with no flow, a global flow at ~/.agent-terminal/flow.yaml
+    // must still resolve. Binding the flow global dir to L shadowed it; it is now the per-user home.
+    const home = join(base, 'home');
+    writeGlobalFlow(home, 'home-global-flow');
+    const target = join(base, 'launch-elsewhere');
+    mkdirSync(target);
+    writeGlobalFlow(target, 'launch-target-flow'); // present but must NOT win — proves L is not the global anchor
+
+    const env: NodeJS.ProcessEnv = { HOME: home, [APP_LAUNCH_DIR_ENV]: target };
+    const { launchRoot, flowGlobalDir } = resolveLaunchSurfaces(env, '/os-home-unused');
+    expect(launchRoot).toBe(realpathSync(target)); // L is still the target, for the cwd surfaces
 
     const repoNoFlow = join(base, 'repo-without-flow');
     mkdirSync(repoNoFlow);
-    const load = loadFlowDefinitionLocalFirst(repoNoFlow, root);
+    const load = loadFlowDefinitionLocalFirst(repoNoFlow, flowGlobalDir);
     expect(load.ok).toBe(true);
-    expect(load.ok && load.definition.name).toBe('global-flow');
+    expect(load.ok && load.definition.name).toBe('home-global-flow'); // home wins, not the launch target
   });
 
   it('the repo-scope fallback scopes to the launch root itself when it is not a repo (§16.3)', () => {
@@ -87,9 +95,9 @@ describe('launch root → four surfaces consume one resolved value (§23.4)', ()
     expect(info.repoKey).toBe(realpathSync(repo));
   });
 
-  it('with no launch target, the env→homeFallback→resolver composition roots all four surfaces at $HOME (§23.4)', () => {
-    // Mirror index.ts's no-target wiring: APP_LAUNCH_DIR absent, so the launch root is F = $HOME, and
-    // every surface must root there — falsifies a break in either the no-target branch or homeFallback.
+  it('with no launch target, the env→resolver composition roots every surface at $HOME (§23.4)', () => {
+    // Mirror index.ts's no-target wiring: APP_LAUNCH_DIR absent, so L = F = $HOME and the flow global
+    // dir is $HOME too — every surface roots there. Falsifies a break in the no-target branch.
     const home = join(base, 'home');
     mkdirSync(home);
     writeGlobalFlow(home, 'home-global-flow');
@@ -97,35 +105,43 @@ describe('launch root → four surfaces consume one resolved value (§23.4)', ()
     const repoNoFlow = join(base, 'home-sibling-no-flow');
     mkdirSync(repoNoFlow);
 
-    const root = resolveLaunchRoot(env[APP_LAUNCH_DIR_ENV], homeFallback(env, '/os-home-unused'));
-    expect(root).toBe(home);
+    const { launchRoot, flowGlobalDir } = resolveLaunchSurfaces(env, '/os-home-unused');
+    expect(launchRoot).toBe(home);
+    expect(flowGlobalDir).toBe(home);
 
-    const shellCwd = buildSpawnConfig({ platform: 'linux', env, cwd: root }).options.cwd;
-    const viewerRoot = discover(root, 'curated').root;
-    const flowLoad = loadFlowDefinitionLocalFirst(repoNoFlow, root);
-    const repoScope = currentRepoInfo(null, null, root).cwd;
+    const shellCwd = buildSpawnConfig({ platform: 'linux', env, cwd: launchRoot }).options.cwd;
+    const viewerRoot = discover(launchRoot, 'curated').root;
+    const flowLoad = loadFlowDefinitionLocalFirst(repoNoFlow, flowGlobalDir);
+    const repoScope = currentRepoInfo(null, null, launchRoot).cwd;
 
     expect(new Set([shellCwd, viewerRoot, repoScope]).size).toBe(1);
     expect(shellCwd).toBe(home);
     expect(flowLoad.ok && flowLoad.definition.name).toBe('home-global-flow');
   });
 
-  it('all four surfaces resolve to the same launch root before OSC 7, exercising each real path', () => {
-    const dir = join(base, 'work');
-    mkdirSync(dir);
-    writeGlobalFlow(dir, 'one-root-flow');
-    const root = resolveLaunchRoot(dir, FALLBACK);
+  it('the three cwd surfaces root at L while the flow global dir roots at $HOME, before OSC 7', () => {
+    // Launch target ≠ $HOME: the shell cwd, viewer root, and repo scope all root at L; the GLOBAL flow
+    // (§18.1) resolves under $HOME instead — index.ts's split composition (resolveLaunchSurfaces).
+    const home = join(base, 'home');
+    const target = join(base, 'work');
+    mkdirSync(home);
+    mkdirSync(target);
+    writeGlobalFlow(home, 'home-global-flow');
+    const env: NodeJS.ProcessEnv = { HOME: home, [APP_LAUNCH_DIR_ENV]: target };
     const repoNoFlow = join(base, 'sibling-no-flow');
     mkdirSync(repoNoFlow);
 
-    const shellCwd = buildSpawnConfig({ platform: 'linux', env: { HOME: FALLBACK }, cwd: root })
-      .options.cwd;
-    const viewerRoot = discover(root, 'curated').root;
-    const flowLoad = loadFlowDefinitionLocalFirst(repoNoFlow, root);
-    const repoScope = currentRepoInfo(null, null, root).cwd;
+    const { launchRoot, flowGlobalDir } = resolveLaunchSurfaces(env, '/os-home-unused');
+    expect(launchRoot).toBe(realpathSync(target));
+    expect(flowGlobalDir).toBe(home);
+
+    const shellCwd = buildSpawnConfig({ platform: 'linux', env, cwd: launchRoot }).options.cwd;
+    const viewerRoot = discover(launchRoot, 'curated').root;
+    const repoScope = currentRepoInfo(null, null, launchRoot).cwd;
+    const flowLoad = loadFlowDefinitionLocalFirst(repoNoFlow, flowGlobalDir);
 
     expect(new Set([shellCwd, viewerRoot, repoScope]).size).toBe(1);
-    expect(shellCwd).toBe(root);
-    expect(flowLoad.ok && flowLoad.definition.name).toBe('one-root-flow');
+    expect(shellCwd).toBe(realpathSync(target)); // the three cwd surfaces share L
+    expect(flowLoad.ok && flowLoad.definition.name).toBe('home-global-flow'); // flow split off to home
   });
 });

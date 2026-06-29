@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdtempSync, mkdirSync, rmSync, realpathSync, symlinkSync, writeFileSync, chmodSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
-import { resolveLaunchRoot, homeFallback } from '../../src/main/launchRoot';
+import { resolveLaunchRoot, homeFallback, resolveLaunchSurfaces, APP_LAUNCH_DIR_ENV } from '../../src/main/launchRoot';
 
 const FALLBACK = '/home/fallback-marker';
 
@@ -97,5 +97,38 @@ describe('resolveLaunchRoot (§23.4 — launch root: validated target, else F)',
   it('returns F verbatim on fallback — never canonicalized', () => {
     expect(resolveLaunchRoot(undefined, FALLBACK)).toBe(FALLBACK);
     expect(resolveLaunchRoot('/does/not/exist', FALLBACK)).toBe(FALLBACK);
+  });
+});
+
+// The launch surfaces split: the shell cwd / viewer root / todo scope read the launch root L, but the
+// GLOBAL flow definition (§18.1) lives at the per-user home — independent of L, so a global flow at
+// ~/.agent-terminal/flow.yaml resolves regardless of where the instance was launched. (The launch
+// root is the local-first repo anchor's job, never the global one.)
+describe('resolveLaunchSurfaces (§23.4/§18.1 — launch root for the cwd surfaces, home for the flow global dir)', () => {
+  let base: string;
+  beforeEach(() => {
+    base = realpathSync(mkdtempSync(join(tmpdir(), 'launch-surfaces-')));
+  });
+  afterEach(() => {
+    rmSync(base, { recursive: true, force: true });
+  });
+
+  it('roots the flow global dir at $HOME, independent of a usable launch target', () => {
+    const home = join(base, 'home');
+    const target = join(base, 'launch-elsewhere');
+    mkdirSync(home);
+    mkdirSync(target);
+    const env: NodeJS.ProcessEnv = { HOME: home, [APP_LAUNCH_DIR_ENV]: target };
+    const surfaces = resolveLaunchSurfaces(env, '/os-home-unused');
+    expect(surfaces.launchRoot).toBe(realpathSync(target)); // L = the target, for shell/viewer/scope
+    expect(surfaces.flowGlobalDir).toBe(home); // but the flow global dir is HOME, never L
+  });
+
+  it('roots the flow global dir at the OS home when $HOME is unset', () => {
+    const osHome = join(base, 'os-home');
+    mkdirSync(osHome);
+    const surfaces = resolveLaunchSurfaces({}, osHome);
+    expect(surfaces.flowGlobalDir).toBe(osHome);
+    expect(surfaces.launchRoot).toBe(osHome); // no target → L falls back to F = the same home
   });
 });
