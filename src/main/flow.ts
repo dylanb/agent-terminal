@@ -182,6 +182,9 @@ export interface FlowMachine {
   /** done → in_progress; reverts a manual advance WITHOUT re-running the step's entry actions
    *  (the inverse of advance, not a restart). Throws on any other status (inert on error). */
   undo(): FlowStateView;
+  /** in_progress|done → not_started (#26): abandons the flow and discards carried inputs. Throws
+   *  from not_started (inert on error). */
+  terminate(): FlowStateView;
   /** Record the answer to a step-entry input prompt (§18.4 / §24.2.3 T3) and RE-ENTER the current
    *  step so the now-satisfied bootstrap runs. Legal only while a step is in_progress. */
   provideInput(values: Record<string, string>): FlowStateView;
@@ -221,7 +224,7 @@ export function createFlowMachine(
     });
     // Every transition is inert in the error state, and crucially never persists — so a bad flow.yaml
     // can't overwrite a good on-disk progression, and a racing caller can't throw or escape the error.
-    return { state: view, start: view, advance: view, restart: view, undo: view, provideInput: view };
+    return { state: view, start: view, advance: view, restart: view, undo: view, terminate: view, provideInput: view };
   }
 
   const def = load.definition;
@@ -328,6 +331,16 @@ export function createFlowMachine(
       persist();
       return view();
     },
+    terminate: () => {
+      if (status !== 'in_progress' && status !== 'done') {
+        throw new Error(`illegal flow transition: cannot terminate from ${status}`);
+      }
+      index = 0;
+      status = 'not_started';
+      inputs = {};
+      persist();
+      return view(); // not_started enters no step, so no onEnter (mirrors advance → done)
+    },
     provideInput: (values) => {
       requireStatus('in_progress', 'provideInput');
       inputs = { ...inputs, ...values };
@@ -348,6 +361,7 @@ export interface FlowManager {
   advance(repoKey: string): FlowStateView;
   restart(repoKey: string): FlowStateView;
   undo(repoKey: string): FlowStateView;
+  terminate(repoKey: string): FlowStateView;
   provideInput(repoKey: string, values: Record<string, string>): FlowStateView;
 }
 
@@ -396,6 +410,7 @@ export function createFlowManager(deps: FlowManagerDeps): FlowManager {
     advance: (k) => machineFor(k).advance(),
     restart: (k) => machineFor(k).restart(),
     undo: (k) => machineFor(k).undo(),
+    terminate: (k) => machineFor(k).terminate(),
     provideInput: (k, values) => machineFor(k).provideInput(values),
   };
 }

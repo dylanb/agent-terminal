@@ -28,7 +28,8 @@ function resolve(map: Record<string, string>, name: string): string {
 
 const lin = (c: number): number => ((c /= 255), c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4);
 function luminance(hex: string): number {
-  const h = hex.replace('#', '');
+  const raw = hex.replace('#', '');
+  const h = raw.length === 3 ? [...raw].map((c) => c + c).join('') : raw;
   const [r, g, b] = [0, 2, 4].map((i) => parseInt(h.slice(i, i + 2), 16));
   return 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b);
 }
@@ -67,6 +68,17 @@ describe('control text contrast (WCAG 1.4.3 AA)', () => {
       const ref = color.match(/^var\(\s*(--[\w-]+)\s*\)$/);
       const fg = ref ? resolve(map, ref[1]) : color;
       expect(contrast(fg, resolve(map, '--card'))).toBeGreaterThanOrEqual(4.5);
+    });
+
+    // #26 AC13: the Terminate confirm button is the filled `.pill.danger` — its text sits on the
+    // button's OWN --danger fill (not --card). In dark theme --danger is a light salmon, so a fixed
+    // white foreground fails; the rule must resolve a theme-aware foreground that clears 4.5:1.
+    it(`${themeName}: .pill.danger text clears 4.5:1 on its own --danger fill (Terminate confirm button)`, () => {
+      const colorExpr = ruleColor('\\.pill\\.danger');
+      const cRef = colorExpr.match(/^var\(\s*(--[\w-]+)\s*\)$/);
+      const fg = cRef ? resolve(map, cRef[1]) : colorExpr;
+      const bg = toHex(resolveBg(map, ruleBackground('\\.pill\\.danger')));
+      expect(contrast(fg, bg)).toBeGreaterThanOrEqual(4.5);
     });
 
     // §7.7 keyboard settings: the active profile segment label sits on --card; the raw bright --signal

@@ -7,6 +7,8 @@ import { SAMPLE_FLOW, createGatePanel } from './flow';
 import { createFlowStrip, type FlowStrip } from './flowStrip';
 import { createLoopPanel } from './loopPanel';
 import { createFlowInputModal } from './flowInputModal';
+import { createConfirmDialog } from './confirmDialog';
+import { createTerminateConfirm } from './terminateConfirm';
 import { createAttentionCue } from './attentionCue';
 import { revealLoopReadout } from './loopReveal';
 import { createArtifacts, type Artifacts } from './artifacts';
@@ -99,6 +101,11 @@ if (flowStripHost) {
   // strip hands it the prompt + a submit closure; the modal collects values and submit calls provideInput.
   const modalHost = document.getElementById('flow-modal-host');
   const inputModal = modalHost ? createFlowInputModal(modalHost) : undefined;
+  // Terminate confirmation (#26): a separate destructive modal-dialog organism. The strip hands it the
+  // repo + a confirm closure; createTerminateConfirm surfaces the repo's current todo count
+  // (window.monitor owns the count — the strip stays flow-only, §9.1) and gates the IPC call.
+  const confirmHost = document.getElementById('flow-confirm-host');
+  const confirmDialog = confirmHost ? createConfirmDialog(confirmHost) : undefined;
   const strip = createFlowStrip(flowStripHost, {
     ...window.flow,
     loopPanelId: loopPanelHost?.id, // instance-scoped aria-controls target
@@ -114,6 +121,9 @@ if (flowStripHost) {
       }
     },
     onPrompt: (prompt, stepName, submit) => inputModal?.render(prompt, stepName, submit),
+    onTerminate: confirmDialog
+      ? createTerminateConfirm({ todoList: window.monitor.todoList, dialog: confirmDialog })
+      : undefined,
   });
   flowStrip = strip;
   repo.onChange((info) => strip.onRepoChanged(info.repoKey));

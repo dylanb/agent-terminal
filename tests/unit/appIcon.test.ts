@@ -59,6 +59,12 @@ describe('applyDockIcon', () => {
   it('is a no-op on darwin when app.dock is unexpectedly absent (does not throw)', () => {
     expect(() => applyDockIcon(undefined, 'darwin', darwin)).not.toThrow();
   });
+
+  it('swallows a setIcon failure: a cosmetic Dock icon must never abort window creation', () => {
+    const dock = { setIcon: vi.fn(() => { throw new Error('Failed to load image from path'); }) };
+    expect(() => applyDockIcon(dock, 'darwin', darwin)).not.toThrow();
+    expect(dock.setIcon).toHaveBeenCalled();
+  });
 });
 
 describe('extraResources packaged-path coupling', () => {

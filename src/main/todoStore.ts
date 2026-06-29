@@ -21,6 +21,8 @@ export interface TodoStore {
   reorder(repoKey: string, orderedIds: string[]): TodoItem[];
   setStatus(repoKey: string, id: string, status: TodoStatus): TodoItem[];
   delete(repoKey: string, id: string): TodoItem[];
+  /** Remove every todo for the repo regardless of state or origin (#26 AC7); returns the empty list. */
+  clear(repoKey: string): TodoItem[];
 }
 
 interface RepoState {
@@ -125,6 +127,11 @@ export function createTodoStore(deps: TodoStoreDeps): TodoStore {
     delete(repoKey, id) {
       const state = load(repoKey);
       state.items = state.items.filter((t) => t.id !== id);
+      return persist(repoKey, state);
+    },
+    clear(repoKey) {
+      const state = load(repoKey);
+      state.items = [];
       return persist(repoKey, state);
     },
   };

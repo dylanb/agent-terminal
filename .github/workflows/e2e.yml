@@ -1,0 +1,73 @@
+# Runs the Playwright _electron e2e suite on Linux under Xvfb — the environment that gives the
+# Electron window real focus + an OS clipboard (a macOS subprocess launch cannot, so the
+# focus/clipboard tests fail there with no product cause). Mirrors the locally-verified Podman setup
+# (see docs/e2e-podman.md). node-pty is rebuilt for the runner's Electron ABI; Xvfb is driven
+# manually (xvfb-run can hang after the test process exits). The authoritative pass tally is this
+# job's live run, not a number pinned here that drifts on the next test added.
+name: e2e
+
+# Trigger on push and pull_request, both unscoped. This workflow is not yet on the default branch,
+# and so far only push has produced runs for it here; scoping push to a branch filter would leave
+# this PR's branch with no e2e run. The concurrency group is keyed on the head commit SHA — which a
+# push and its pull_request share — so if both ever fire for one commit they collapse into a single
+# run (github.ref would not, since push and pull_request carry different refs).
+on:
+  push:
+  pull_request:
+
+# This job only checks out and runs tests; it needs no write scopes.
+permissions:
+  contents: read
+
+concurrency:
+  group: e2e-${{ github.event.pull_request.head.sha || github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # node-pty is native — rebuild it against the runner's Electron ABI (CLAUDE.md).
+      - run: pnpm run rebuild
+
+      # Electron uses Chromium's shared libraries; install-deps pulls them. Xvfb is the virtual display.
+      - name: System deps (Chromium libs + Xvfb)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb
+          npx playwright install-deps chromium
+
+      # Ubuntu 24.04 restricts unprivileged user namespaces, which Chromium's sandbox needs; re-enable
+      # so Electron launches without --no-sandbox. (The Podman path uses --cap-add=SYS_ADMIN instead.)
+      - name: Allow Chromium sandbox
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+
+      - run: pnpm run build
+
+      - name: e2e under Xvfb
+        run: |
+          Xvfb :99 -screen 0 1280x1024x24 -nolisten tcp &
+          export DISPLAY=:99
+          sleep 2
+          pnpm exec playwright test --reporter=list
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report
+          path: |
+            test-results/
+            playwright-report/
+          retention-days: 7

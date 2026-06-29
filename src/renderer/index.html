@@ -137,6 +137,9 @@
          deliberate blocking surface here, overlaying the app via fixed positioning when a step entry
          needs a required input. Empty until a prompt opens it. -->
     <div id="flow-modal-host"></div>
+    <!-- Destructive confirmation host (#26): createConfirmDialog renders the flow Terminate
+         confirmation here, overlaying the app via fixed positioning. Empty until activated. -->
+    <div id="flow-confirm-host"></div>
     <script type="module" src="./src/index.ts"></script>
   </body>
 </html>

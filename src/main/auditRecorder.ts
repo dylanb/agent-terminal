@@ -3,7 +3,7 @@
 // vocabulary, path derivation, serialization, and classifier are shared (src/shared/audit) so the
 // on-disk format cannot drift from any reader.
 
-import { appendFileSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import yaml from 'js-yaml';
 import {
@@ -12,6 +12,7 @@ import {
   lifecycleEvents,
   loopEvents,
   serializeDoc,
+  terminateEvents,
   todoEvents,
   type AuditEvent,
   type AuditHeader,
@@ -69,6 +70,9 @@ export interface AuditRecorder {
   recordInputs(repoKey: string, values: Record<string, string>, typeByName: Record<string, string>): void;
   /** Record a flow-injected command and its exit (§25.5), only while a run is open. */
   recordCommand(repoKey: string, source: string, cmd: string, exit: number | null): void;
+  /** Record a flow Terminate (#26): append a `flow.terminated` event to the open run, then finalize
+   *  it so the next start opens a new run. Best-effort — never throws into the flow path. */
+  recordTerminate(repoKey: string): void;
 }
 
 export function createAuditRecorder(deps: AuditRecorderDeps): AuditRecorder {
@@ -200,6 +204,18 @@ export function createAuditRecorder(deps: AuditRecorderDeps): AuditRecorder {
         appendIfOpen(repoKey, [{ ts: auditTimestamp(now()), type: 'command', source, cmd, exit }]);
       } catch (e) {
         log('audit recordCommand failed', e);
+      }
+    },
+
+    recordTerminate(repoKey) {
+      try {
+        const file = currentFile(repoKey);
+        if (file) appendFileSync(file, terminateEvents(auditTimestamp(now())).map(serializeDoc).join(''));
+        open.delete(repoKey);
+        lastLoop.delete(repoKey);
+        rmSync(pointerPath(repoKey), { force: true }); // §25.4 restart-surviving run pointer
+      } catch (e) {
+        log('audit recordTerminate failed', e);
       }
     },
   };

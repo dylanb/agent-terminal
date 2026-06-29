@@ -73,6 +73,7 @@ describe('action window DOM (§16 / §24.1 — tabs, capture cards, focus)', () 
     exit?: () => void;
     cwdChanged?: (m: { sessionId: string; cwd: string; repoKey: string }) => void;
     eventRemoved?: (eventId: string) => void;
+    cleared?: () => void;
   };
   let settings: UiSettings;
   let monitor: Record<string, ReturnType<typeof vi.fn>>;
@@ -86,6 +87,7 @@ describe('action window DOM (§16 / §24.1 — tabs, capture cards, focus)', () 
     monitor = {
       onEvent: vi.fn((cb) => (handlers.event = cb)),
       onEventRemoved: vi.fn((cb) => (handlers.eventRemoved = cb)),
+      onCleared: vi.fn((cb) => (handlers.cleared = cb)),
       onUpdate: vi.fn((cb) => (handlers.update = cb)),
       onExit: vi.fn((cb) => (handlers.exit = cb)),
       onCommandsChanged: vi.fn(),
@@ -299,6 +301,17 @@ describe('action window DOM (§16 / §24.1 — tabs, capture cards, focus)', () 
     expect(blocks().querySelector('[data-event-id="f1"]')).toBeTruthy();
     handlers.eventRemoved!('f1');
     expect(blocks().querySelector('[data-event-id="f1"]')).toBeNull();
+  });
+
+  it('drops every capture card when main signals the store was cleared (#26 Terminate)', async () => {
+    wireMonitorPane();
+    await flush();
+    handlers.event!(makeEvent({ id: 'c1', type: 'capture', parentId: null, text: 'one' }));
+    handlers.event!(makeEvent({ id: 'c2', type: 'capture', parentId: null, text: 'two' }));
+    expect(blocks().querySelectorAll('[data-event-id]').length).toBe(2);
+    handlers.cleared!();
+    expect(blocks().querySelectorAll('[data-event-id]').length).toBe(0);
+    expect(monitor.dismissAll).not.toHaveBeenCalled(); // main already cleared the store; no re-clear
   });
 
   it('a retracted report cascades to its finding cards (§15.3 — flat cards tagged by parent)', async () => {

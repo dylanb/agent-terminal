@@ -8,3 +8,4 @@ active todo; this heading and any prose are ignored by the instantiator.
 - Are the modified modules still clean? Has any change been made that now makes a refactor necessary?
 - Does the implementation meet all the repository standards?
 - Has the implementation introduced anything that should become a repository standard?
+- Is the implementation completely tested?

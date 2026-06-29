@@ -52,6 +52,7 @@ describe('Capture tab §24.2.1 — bulk triage (checkbox + Add to todo / Dismiss
     return {
       onEvent: vi.fn((cb) => (handlers.event = cb)),
       onEventRemoved: vi.fn(),
+      onCleared: vi.fn(),
       onUpdate: vi.fn(),
       onExit: vi.fn(),
       onCommandsChanged: vi.fn(),
@@ -313,6 +314,7 @@ describe('Capture last report button (§21.1 — manual single-slot)', () => {
     monitor = {
       onEvent: vi.fn(),
       onEventRemoved: vi.fn(),
+      onCleared: vi.fn(),
       onUpdate: vi.fn(),
       onExit: vi.fn(),
       onCommandsChanged: vi.fn(),
@@ -433,6 +435,7 @@ describe('Capture tab §24.2.1 — report prose fallback (report with no finding
     monitor = {
       onEvent: vi.fn(),
       onEventRemoved: vi.fn(),
+      onCleared: vi.fn(),
       onUpdate: vi.fn(),
       onExit: vi.fn(),
       onCommandsChanged: vi.fn(),

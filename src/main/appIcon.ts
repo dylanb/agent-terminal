@@ -28,5 +28,12 @@ export function applyDockIcon(
   loc: IconLocation,
 ): void {
   const iconPath = resolveDockIconPath(platform, loc);
-  if (iconPath && dock) dock.setIcon(iconPath);
+  if (!iconPath || !dock) return;
+  // A missing/invalid icon makes setIcon throw; the Dock icon is cosmetic and must never abort the
+  // caller (createWindow) before the BrowserWindow is created.
+  try {
+    dock.setIcon(iconPath);
+  } catch {
+    /* leave the default Dock icon in place */
+  }
 }

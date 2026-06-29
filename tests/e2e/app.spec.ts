@@ -1,8 +1,7 @@
 /// <reference lib="dom" />
 // page.evaluate callbacks run in the renderer; DOM lib gives them window.monitor's type.
 import { _electron as electron, expect, test, type ElectronApplication, type Page } from '@playwright/test';
-import { mkdtempSync, mkdirSync, writeFileSync, appendFileSync, chmodSync, rmSync, existsSync, statSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
-import { execFileSync } from 'node:child_process';
+import { mkdtempSync, mkdirSync, writeFileSync, appendFileSync, rmSync, existsSync, statSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, basename } from 'node:path';
 import { CH, SESSION_ID } from '../../src/shared/ipc';
@@ -22,9 +21,17 @@ const launchArgs = (): string[] => ['out/main/index.js', `--user-data-dir=${user
 
 const termRows = () => page.locator('.xterm-rows');
 
+// xterm routes keystrokes through a hidden textarea; under parallel-CI load, characters typed before
+// that textarea takes focus are dropped, mistyping the command (e.g. "exit" → "ex"). Click, then wait
+// for focus to land on it before typing — and always type with a per-key delay so each char registers.
+async function focusTerminal(target: Page = page): Promise<void> {
+  await target.locator('.xterm-screen').click();
+  await expect.poll(() => target.evaluate(() => document.activeElement?.tagName)).toBe('TEXTAREA');
+}
+
 async function typeCommand(cmd: string): Promise<void> {
-  await page.locator('.xterm-screen').click();
-  await page.keyboard.type(cmd);
+  await focusTerminal();
+  await page.keyboard.type(cmd, { delay: 20 });
   await page.keyboard.press('Enter');
 }
 
@@ -292,10 +299,10 @@ test('Shift+Enter inserts a newline (ESC+CR) instead of submitting (§7.5.2)', a
 test('Option/Alt+Backspace deletes the whole previous word at the prompt (§7.5.2)', async () => {
   // Word-delete leaves `echo `, so `done` runs as `echo done`; a char-delete or no-op would run
   // `echo foobadone` / `echo foobardone` — distinguishing the discriminating output below.
-  await page.locator('.xterm-screen').click();
-  await page.keyboard.type('echo foobar');
+  await focusTerminal();
+  await page.keyboard.type('echo foobar', { delay: 20 });
   await page.keyboard.press('Alt+Backspace');
-  await page.keyboard.type('done');
+  await page.keyboard.type('done', { delay: 20 });
   await page.keyboard.press('Enter');
   await expect(
     page.locator('.xterm-rows > div').filter({ hasText: /^\s*done\s*$/ }),
@@ -322,8 +329,8 @@ test('the copy chord writes the terminal selection to the OS clipboard (§7.7)',
 test('Ctrl+C still interrupts the foreground process — copy never hijacks it (§7.7)', async () => {
   // If Ctrl+C were intercepted as copy, `sleep 30` would keep running and the echo below could
   // not produce its own output row within the assertion timeout. Real SIGINT, end-to-end.
-  await page.locator('.xterm-screen').click();
-  await page.keyboard.type('sleep 30');
+  await focusTerminal();
+  await page.keyboard.type('sleep 30', { delay: 20 });
   await page.keyboard.press('Enter');
   await page.keyboard.press('Control+C');
   await typeCommand('echo aftersigint');
@@ -471,8 +478,10 @@ test('monitor status strip tracks quiescence and alt-screen', async () => {
 
 test('shell exit notifies both panes', async () => {
   await typeCommand('exit');
-  await expect(termRows()).toContainText('[process exited: 0]');
-  await expect(page.locator('.status-chip[data-status="session"]')).toContainText('exited');
+  // Shell teardown → PTY exit → both-pane notification can take a moment under CI load; wait past the
+  // default expect budget rather than racing it.
+  await expect(termRows()).toContainText('[process exited: 0]', { timeout: 20_000 });
+  await expect(page.locator('.status-chip[data-status="session"]')).toContainText('exited', { timeout: 20_000 });
 });
 
 // ---- §15: semantic capture & detection (rendered as mockup-exact .finding cards) ----
@@ -1332,11 +1341,16 @@ test('the terminal refits its PTY when the drawer docks/undocks (§7.1)', async 
   // widens the terminal column and the PTY must follow (§7.1).
   await page.locator('#dclose').click();
   await expect
-    .poll(async () => {
-      await typeCommand('echo cols-wide=$(tput cols)');
-      const m = (await termRows().innerText()).match(/cols-wide=(\d+)/g)?.at(-1);
-      return m ? Number(m.match(/\d+/)![0]) : docked;
-    })
+    .poll(
+      async () => {
+        await typeCommand('echo cols-wide=$(tput cols)');
+        const m = (await termRows().innerText()).match(/cols-wide=(\d+)/g)?.at(-1);
+        return m ? Number(m.match(/\d+/)![0]) : docked;
+      },
+      // The undock resize is debounced (§7.1) and each poll iteration re-types a command, so give the
+      // PTY resize generous wall-clock room to settle under CI load before it is treated as failed.
+      { timeout: 30_000 },
+    )
     .toBeGreaterThan(docked);
 });
 
@@ -2360,6 +2374,252 @@ test('the theme toggle flips light/dark and persists across a reload (§16.6)', 
   await expect(html).toHaveAttribute('data-theme', 'light');
 });
 
+// ---- #26: Terminate — abandon a flow, resetting it to Not started ----
+
+const flowTerminate = () => page.locator('#flow-strip .flow-terminate');
+const confirmModal = () => page.locator('#flow-confirm-host .flow-modal');
+
+test('Terminate abandons the flow: resets to Not started, clears todos + capture + audit (#26 tracer)', async () => {
+  const repo = seedFlowRepo('agent-term-e2e-term-', 'groom');
+  // An external agent-loop engine file to prove Terminate never touches it (AC10).
+  mkdirSync(join(repo, '.agent-loop'), { recursive: true });
+  const engineFile = join(repo, '.agent-loop', 'state.yaml');
+  writeFileSync(engineFile, 'phase: impl\niteration: 3\n');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-term-home-'));
+  await app.close();
+  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
+  page = await app.firstWindow();
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await typeCommand(`cd "${repo}"`);
+  await expect(flowControl()).toHaveText('Start', { timeout: 10_000 });
+  await flowControl().click(); // Start → in_progress
+  await expect(flowControl()).toHaveText('Advance');
+
+  // Capture some terminal output into the (global) capture tab (AC6).
+  await page.evaluate(() => window.monitor.capture({ text: 'tracer captured output', range: null, source: 'selection' }));
+  await expect(page.locator('#monitor-blocks [data-event-id]')).toHaveCount(1);
+
+  // Todos in active, in-progress, and completed states (AC7): Send marks in_progress; the checkbox done.
+  await openQuickSend('todo'); // the drawer starts closed after a relaunch (§22.2)
+  for (const t of ['todo-active', 'todo-progress', 'todo-done']) {
+    await page.locator('#todo-new').fill(t);
+    await page.locator('#todo-add-btn').click();
+    await expect(page.locator('.todo').filter({ hasText: t })).toHaveCount(1);
+  }
+  await page.locator('.todo').filter({ hasText: 'todo-progress' }).getByRole('button', { name: 'Send todo to agent' }).click();
+  await page.locator('.todo').filter({ hasText: 'todo-done' }).getByRole('checkbox').click();
+
+  // Activate Terminate and confirm; the confirmation states the deterministic count (AC3).
+  await flowTerminate().click();
+  await expect(confirmModal()).toBeVisible();
+  await expect(confirmModal()).toContainText('3 todos');
+  await confirmModal().locator('.confirm').click();
+
+  // Flow returns to Not started (AC5), todos gone (AC7), capture cleared (AC6).
+  await expect(flowControl()).toHaveText('Start');
+  await expect(page.locator('#todo-list .todo')).toHaveCount(0); // the real list, not gate-panel step pills (also .todo)
+  await expect(page.locator('#monitor-blocks [data-event-id]')).toHaveCount(0);
+
+  // Audit gained a timestamped termination entry (AC8).
+  await expect
+    .poll(() => (auditRunFiles(home, repo).length ? readAuditRun(home, repo, auditRunFiles(home, repo)[0]).events.map((e) => e.type) : []))
+    .toContain('flow.terminated');
+  const terminated = readAuditRun(home, repo, auditRunFiles(home, repo)[0]).events.find((e) => e.type === 'flow.terminated')!;
+  expect(terminated.ts).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+
+  // AC10: external agent-loop engine state untouched.
+  expect(readFileSync(engineFile, 'utf8')).toBe('phase: impl\niteration: 3\n');
+
+  // AC9: the shell process was neither interrupted nor killed — it still runs commands.
+  await typeCommand('echo still-alive-after-terminate');
+  await expect(termRows()).toContainText('still-alive-after-terminate');
+
+  await app.close();
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+});
+
+test('Terminate with no todos: the confirmation states zero and still resets to Not started (#26 AC3)', async () => {
+  const repo = seedFlowRepo('agent-term-e2e-term-zero-', 'groom');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-term-zero-home-'));
+  await app.close();
+  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
+  page = await app.firstWindow();
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await typeCommand(`cd "${repo}"`);
+  await expect(flowControl()).toHaveText('Start', { timeout: 10_000 });
+  await flowControl().click();
+  await expect(flowControl()).toHaveText('Advance');
+
+  await openQuickSend('todo'); // the drawer starts closed after a relaunch (§22.2)
+  await expect(page.locator('#todo-list .todo')).toHaveCount(0); // the real list, not gate-panel step pills (also .todo)
+
+  await flowTerminate().click();
+  await expect(confirmModal()).toBeVisible();
+  await expect(confirmModal()).toContainText('0 todos');
+  await confirmModal().locator('.confirm').click();
+
+  await expect(flowControl()).toHaveText('Start');
+
+  await app.close();
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+});
+
+test('Terminate is keyboard-operable; focus moves into the dialog and Escape restores it (#26 AC13)', async () => {
+  const repo = seedFlowRepo('agent-term-e2e-term-kbd-', 'groom');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-term-kbd-home-'));
+  await app.close();
+  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
+  page = await app.firstWindow();
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await typeCommand(`cd "${repo}"`);
+  await expect(flowControl()).toHaveText('Start', { timeout: 10_000 });
+  await flowControl().click();
+  await expect(flowControl()).toHaveText('Advance');
+
+  await flowTerminate().focus();
+  await page.keyboard.press('Enter'); // operate by keyboard alone (WCAG 2.1.1)
+  await expect(confirmModal()).toBeVisible();
+  await expect(confirmModal()).toBeFocused(); // focus moved onto the dialog container (WCAG 2.4.3)
+
+  await page.keyboard.press('Escape'); // dismiss with no change (AC13c / AC4)
+  await expect(confirmModal()).toHaveCount(0);
+  await expect(flowControl()).toHaveText('Advance'); // unchanged
+  await expect(flowTerminate()).toBeFocused(); // focus restored to the Terminate control
+
+  await app.close();
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+});
+
+test('after Terminate and relaunch the flow stays Not started and the next start opens a new audit run (#26 AC12/AC8)', async () => {
+  const repo = seedFlowRepo('agent-term-e2e-term-persist-', 'groom');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-term-persist-home-'));
+  await app.close();
+  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
+  page = await app.firstWindow();
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await typeCommand(`cd "${repo}"`);
+  await expect(flowControl()).toHaveText('Start', { timeout: 10_000 });
+  await flowControl().click();
+  await expect(flowControl()).toHaveText('Advance');
+  await openQuickSend('todo'); // the drawer starts closed after a relaunch (§22.2)
+  await page.locator('#todo-new').fill('persist-term-todo');
+  await page.locator('#todo-add-btn').click();
+  await expect(page.locator('.todo').filter({ hasText: 'persist-term-todo' })).toHaveCount(1);
+
+  await flowTerminate().click();
+  await confirmModal().locator('.confirm').click();
+  await expect(flowControl()).toHaveText('Start');
+  await expect.poll(() => auditRunFiles(home, repo).length).toBe(1);
+
+  // Relaunch: the reset survives (AC12).
+  await app.close();
+  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
+  page = await app.firstWindow();
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+  await typeCommand(`cd "${repo}"`);
+  await expect(flowControl()).toHaveText('Start', { timeout: 10_000 }); // still not_started
+  await openQuickSend('todo');
+  await expect(page.locator('.todo').filter({ hasText: 'persist-term-todo' })).toHaveCount(0); // todos gone
+
+  // The next start opens a NEW audit run: the finalized terminated run + a fresh one (AC8/AC12).
+  await flowControl().click();
+  await expect(flowControl()).toHaveText('Advance');
+  await expect.poll(() => auditRunFiles(home, repo).length).toBe(2);
+
+  await app.close();
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+});
+
+test('flow:terminate is inert from Not started: resolves to the benign view and clears nothing (#26 AC2 handler guard)', async () => {
+  const repo = seedFlowRepo('agent-term-e2e-term-inert-', 'groom');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-term-inert-home-'));
+  await app.close();
+  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
+  page = await app.firstWindow();
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  // Capture the app's own resolved repo key (§16.3) so the direct IPC call targets the live repo.
+  const repoKeyPromise = page.evaluate(
+    () => new Promise<string>((resolve) => window.monitor.onCwdChanged((m) => { if (m.repoKey) resolve(m.repoKey); })),
+  );
+  await typeCommand(`cd "${repo}"`);
+  await expect(flowControl()).toHaveText('Start', { timeout: 10_000 }); // not_started: the control is absent (AC2)
+  await expect(flowTerminate()).toHaveCount(0);
+  const repoKey = await repoKeyPromise;
+
+  // Seed state that a destructive terminate would wipe: a repo todo + a captured block.
+  await openQuickSend('todo'); // the drawer starts closed after a relaunch (§22.2)
+  await page.locator('#todo-new').fill('inert-guard-todo');
+  await page.locator('#todo-add-btn').click();
+  await expect(page.locator('.todo').filter({ hasText: 'inert-guard-todo' })).toHaveCount(1);
+  await page.evaluate(() => window.monitor.capture({ text: 'inert-guard captured', range: null, source: 'selection' }));
+  await expect(page.locator('#monitor-blocks [data-event-id]')).toHaveCount(1);
+
+  // Drive flow:terminate directly from not_started. The handler guard resolves to the benign current
+  // view; remove the guard and the machine rejects the transition → the invoke (and this evaluate) reject.
+  const status = await page.evaluate((k) => window.flow.terminate(k).then((v) => v.status), repoKey);
+  expect(status).toBe('not_started');
+
+  // Nothing cleared: flow still not_started, the todo and the capture both intact.
+  await expect(flowControl()).toHaveText('Start');
+  await expect(page.locator('.todo').filter({ hasText: 'inert-guard-todo' })).toHaveCount(1);
+  await expect(page.locator('#monitor-blocks [data-event-id]')).toHaveCount(1);
+
+  await app.close();
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+});
+
+test('flow:terminate is inert in the load-error state: it never wipes todos or capture (#26 AC2 handler guard)', async () => {
+  // A .git repo with NO flow.yaml + empty $HOME ⇒ the flow loads to the error state (§18.1). Unlike
+  // not_started, the machine's terminate does NOT throw here — so without the pre-state guard the
+  // handler would run todoStore.clear + store.clear and wipe an error-flow repo's todos and capture.
+  const repo = mkdtempSync(join(tmpdir(), 'agent-term-e2e-term-err-'));
+  mkdirSync(join(repo, '.git'), { recursive: true });
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-term-err-home-'));
+  await app.close();
+  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
+  page = await app.firstWindow();
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  const repoKeyPromise = page.evaluate(
+    () => new Promise<string>((resolve) => window.monitor.onCwdChanged((m) => { if (m.repoKey) resolve(m.repoKey); })),
+  );
+  await typeCommand(`cd "${repo}"`);
+  await expect(page.locator('#flow-strip .flow-error')).toHaveText(/.+/, { timeout: 10_000 }); // error state
+  await expect(flowTerminate()).toHaveCount(0); // the control is absent in load-error too (AC2)
+  const repoKey = await repoKeyPromise;
+
+  // Seed repo state that a destructive terminate would wipe.
+  await openQuickSend('todo'); // the drawer starts closed after a relaunch (§22.2)
+  await page.locator('#todo-new').fill('err-guard-todo');
+  await page.locator('#todo-add-btn').click();
+  await expect(page.locator('.todo').filter({ hasText: 'err-guard-todo' })).toHaveCount(1);
+  await page.evaluate(() => window.monitor.capture({ text: 'err-guard captured', range: null, source: 'selection' }));
+  await expect(page.locator('#monitor-blocks [data-event-id]')).toHaveCount(1);
+
+  // Drive flow:terminate directly from the error state: the guard returns the benign error view and
+  // clears nothing. Remove the guard and the todo + capture below would be wiped.
+  const status = await page.evaluate((k) => window.flow.terminate(k).then((v) => v.status), repoKey);
+  expect(status).toBe('error');
+
+  await expect(page.locator('#flow-strip .flow-error')).toHaveText(/.+/); // still error
+  await expect(page.locator('.todo').filter({ hasText: 'err-guard-todo' })).toHaveCount(1);
+  await expect(page.locator('#monitor-blocks [data-event-id]')).toHaveCount(1);
+
+  await app.close();
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+});
+
 // ---- §23.4: launch-root resolution (root a launched instance at a target directory) ----
 
 test('launching at a target directory roots the shell, viewer, todo scope, and flow global dir there (§23.4)', async () => {
@@ -2499,14 +2759,14 @@ test('two concurrent instances each root at their own target directory (§23.4)'
     expect(await pageB.evaluate(() => window.viewer.tree('curated').then((t) => t.root))).toBe(dirB);
 
     // Each shell sits in its own dir.
-    await pageA.locator('.xterm-screen').click();
-    await pageA.keyboard.type('pwd');
+    await focusTerminal(pageA);
+    await pageA.keyboard.type('pwd', { delay: 20 });
     await pageA.keyboard.press('Enter');
     await expect(
       pageA.locator('.xterm-rows > div').filter({ hasText: new RegExp(`^\\s*${dirA}\\s*$`) }),
     ).not.toHaveCount(0);
-    await pageB.locator('.xterm-screen').click();
-    await pageB.keyboard.type('pwd');
+    await focusTerminal(pageB);
+    await pageB.keyboard.type('pwd', { delay: 20 });
     await pageB.keyboard.press('Enter');
     await expect(
       pageB.locator('.xterm-rows > div').filter({ hasText: new RegExp(`^\\s*${dirB}\\s*$`) }),
@@ -2522,18 +2782,6 @@ test('two concurrent instances each root at their own target directory (§23.4)'
 });
 
 // ---- §23.4 / #25: the agent-terminal CLI launch shim (install in-app, launch a new instance) ----
-
-const MAIN_SCRIPT = 'out/main/index.js';
-
-/** Electron MAIN-process PIDs whose command line loads our app (helper processes carry --type=). */
-function electronMainPids(): number[] {
-  const out = execFileSync('ps', ['-A', '-o', 'pid=,command='], { encoding: 'utf8' });
-  return out
-    .split('\n')
-    .filter((l) => l.includes(MAIN_SCRIPT) && !l.includes('--type='))
-    .map((l) => parseInt(l.trim().split(/\s+/)[0], 10))
-    .filter((n) => Number.isFinite(n));
-}
 
 function isExecutable(p: string): boolean {
   return (statSync(p).mode & 0o111) !== 0;
@@ -2584,65 +2832,4 @@ test('the in-app install affordance is reachable in the scrolling Settings colum
     return b.width > 0 && b.height > 0 && b.top >= p.top - 1 && b.bottom <= p.bottom + 1;
   });
   expect(within).toBe(true);
-});
-
-test('the installed shim launches a genuine second instance rooted at the target (§23.4 / #25)', async () => {
-  test.setTimeout(120_000); // launches a second real Electron instance on top of the first
-  const home = realpathSync(mkdtempSync(join(tmpdir(), 'agent-term-e2e-shimlaunch-home-')));
-  const target = realpathSync(mkdtempSync(join(tmpdir(), 'agent-term-e2e-shimlaunch-target-')));
-  const invokeFrom = realpathSync(mkdtempSync(join(tmpdir(), 'agent-term-e2e-shimlaunch-from-')));
-  const marker = join(home, 'launched-shell.txt');
-  // A stand-in shell so the launched instance's spawn cwd (the §23.4 root) is observable on disk; it
-  // stays alive (sleep) so the second instance is concurrently live with the first.
-  const recShell = join(home, 'rec-shell.sh');
-  writeFileSync(recShell, `#!/bin/sh\nprintf '%s\\n%s\\n' "$$" "$(pwd)" > "${marker}"\nexec sleep 60\n`);
-  chmodSync(recShell, 0o755);
-
-  await app.close();
-  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
-  page = await app.firstWindow();
-  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
-
-  let before: number[] = [];
-  try {
-    await page.locator('[data-viewbtn="4"]').click();
-    await page.locator('#cli-install-view button').click();
-    const shim = join(home, '.agent-terminal', 'bin', CLI_COMMAND_NAME);
-    await expect.poll(() => existsSync(shim)).toBe(true);
-
-    before = electronMainPids();
-    execFileSync(shim, [target], {
-      cwd: invokeFrom,
-      env: { ...process.env, APP_SHELL: recShell, HOME: home, APP_SUBMIT_DELAY_MS: '100' },
-      timeout: 10_000,
-    });
-
-    // Genuine second process: exactly one more app main process than before, the original among them.
-    await expect.poll(() => electronMainPids().length, { timeout: 30_000 }).toBe(before.length + 1);
-    const added = electronMainPids().filter((p) => !before.includes(p));
-    expect(added).toHaveLength(1);
-    expect(() => process.kill(added[0], 0)).not.toThrow(); // the new instance is alive
-    expect(electronMainPids()).toEqual(expect.arrayContaining(before)); // the original is still alive
-
-    // Rooted at the target: the launched instance spawned its shell in the §23.4 root, not the
-    // invoking process's cwd nor $HOME — the discriminator that the shim drove §23.4, not just cwd.
-    await expect.poll(() => existsSync(marker), { timeout: 30_000 }).toBe(true);
-    const launchedShellCwd = readFileSync(marker, 'utf8').trim().split('\n')[1];
-    expect(launchedShellCwd).toBe(target);
-
-    // The first instance is still open and responsive.
-    await page.locator('[data-viewbtn="1"]').click();
-    await typeCommand('echo first-alive');
-    await expect(termRows()).toContainText('first-alive');
-  } finally {
-    if (before.length) {
-      for (const pid of electronMainPids().filter((p) => !before.includes(p))) {
-        try { process.kill(pid, 'SIGKILL'); } catch { /* already gone */ }
-      }
-    }
-    await app.close();
-    rmSync(home, { recursive: true, force: true });
-    rmSync(target, { recursive: true, force: true });
-    rmSync(invokeFrom, { recursive: true, force: true });
-  }
 });

@@ -79,6 +79,8 @@ export function wireMonitorPane(repo: RepoContext = createRepoContext(window.mon
   // §15.3 retraction: a partial capture was superseded by a fuller one; drop the stale block.
   window.monitor.onEventRemoved((eventId) => captureTab.removeBlock(eventId));
 
+  window.monitor.onCleared(() => captureTab.clearAll());
+
   // Repo-scoped todos (§16.3); a repo-key change swaps the displayed list.
   repo.onChange((info) => todoTab.onRepoChanged(info.repoKey));
 

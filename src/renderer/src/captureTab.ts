@@ -42,6 +42,9 @@ export interface CaptureTab {
   /** Cross-highlight (§16.8): scroll to and border-highlight the capture with this id (the
    *  terminal pane resolved the double-clicked row to it); a no-op if it is no longer shown. */
   revealById(id: string): void;
+  /** Drop every rendered capture without re-issuing the store clear — main already cleared the global
+   *  store (e.g. a flow Terminate, #26) and pushed monitor:cleared. */
+  clearAll(): void;
 }
 
 export interface CaptureTabDeps {
@@ -392,22 +395,26 @@ export function createCaptureTab(deps: CaptureTabDeps): CaptureTab {
     refreshSelectionUI();
   });
 
-  const dismissAllBtn = doc.createElement('button');
-  dismissAllBtn.id = 'dismiss-all';
-  dismissAllBtn.className = 'pill sm';
-  dismissAllBtn.textContent = 'Dismiss all';
-  dismissAllBtn.addEventListener('click', () => {
-    endUndo(); // a Dismiss all during the undo window must clear the stuck undo state + pending commit
-    monitor.dismissAll();
+  function clearRendered(): void {
+    endUndo(); // a clear during the undo window must clear the stuck undo state + pending commit
     for (const el of blocksEl.querySelectorAll<HTMLElement>('[data-event-id]')) unpublishRange(el);
     blocksEl.replaceChildren();
     rendered.clear();
     chunkRegistry.clear();
     refreshSelectionUI();
+  }
+
+  const dismissAllBtn = doc.createElement('button');
+  dismissAllBtn.id = 'dismiss-all';
+  dismissAllBtn.className = 'pill sm';
+  dismissAllBtn.textContent = 'Dismiss all';
+  dismissAllBtn.addEventListener('click', () => {
+    monitor.dismissAll();
+    clearRendered();
   });
 
   toolbar.append(addSelectedBtn, undoSlot, dismissSelectedBtn, dismissAllBtn);
   blocksEl.parentNode?.insertBefore(toolbar, blocksEl);
 
-  return { appendBlock, showReport, removeBlock, revealById };
+  return { appendBlock, showReport, removeBlock, revealById, clearAll: clearRendered };
 }

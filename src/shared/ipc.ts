@@ -25,6 +25,7 @@ export const CH = {
   captureLast: 'capture:last',
   monitorDismiss: 'monitor:dismiss',
   monitorDismissAll: 'monitor:dismissAll',
+  monitorCleared: 'monitor:cleared',
   monitorLearnChrome: 'monitor:learnChrome',
   agentInject: 'agent:inject',
   uiGetSettings: 'ui:getSettings',
@@ -48,6 +49,7 @@ export const CH = {
   flowAdvance: 'flow:advance',
   flowRestart: 'flow:restart',
   flowUndo: 'flow:undo',
+  flowTerminate: 'flow:terminate',
   flowProvideInput: 'flow:provideInput',
   flowOnStateChanged: 'flow:onStateChanged',
   flowRevealLoop: 'flow:revealLoop',
@@ -304,6 +306,13 @@ export interface ClearCommandsMsg {
   sessionId: SessionId;
 }
 
+/** monitor:cleared broadcast (#26): main cleared the global capture/event store as part of a flow
+ *  Terminate; the monitor pane drops every rendered capture so the capture tab reflects the empty
+ *  store. Payload-free beyond the session (the store is a single global list, not repo-scoped). */
+export interface MonitorClearedMsg {
+  sessionId: SessionId;
+}
+
 export interface MonitorEventMsg {
   sessionId: SessionId;
   event: MonitorEvent;
@@ -366,6 +375,7 @@ export interface ChannelPayloads {
   'monitor:event': MonitorEventMsg;
   'monitor:eventRemoved': MonitorEventRemovedMsg;
   'monitor:update': MonitorUpdateMsg;
+  'monitor:cleared': MonitorClearedMsg;
   'monitor:commandsChanged': CommandsChangedMsg;
   'cwd:changed': CwdChangedMsg;
   'viewer:onChanged': ViewerChangedMsg;
@@ -649,6 +659,9 @@ export interface MonitorApi {
   dismiss(eventId: string): void;
   /** Dismiss every captured event (§15.6). */
   dismissAll(): void;
+  /** main cleared the global capture/event store (e.g. a flow Terminate, #26); drop every rendered
+   *  capture so the capture tab reflects the empty store. */
+  onCleared(cb: () => void): void;
   /** Mark a captured block as chrome (§15.x): learn its leading glyphs as markers so
    *  future furniture is filtered, and retract this capture. */
   learnChrome(eventId: string, sample: string): void;
@@ -702,6 +715,10 @@ export interface FlowApi {
   /** done → in_progress; reverts a manual advance WITHOUT re-running the step's entry actions
    *  (unlike restart). Rejects if not currently done. */
   undo(repoKey: string): Promise<FlowStateView>;
+  /** in_progress|done → not_started (#26): abandons the flow, discarding carried-over inputs, and
+   *  resolves to the reset (not_started) view. Inert from not_started / load-error. Main also clears
+   *  the repo's todos, the global capture tab, and finalizes the audit run as one user-confirmed action. */
+  terminate(repoKey: string): Promise<FlowStateView>;
   /** Answer a step-entry input `prompt` (§18.4 / §24.2.3 T3): persist the typed `values` to
    *  flow-state and re-run the entry bootstrap (`agent-loop pickup <input>`), returning the new
    *  view (its `notice` carries any §19.3 busy refusal). */
