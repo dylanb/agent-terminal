@@ -307,10 +307,84 @@ describe('flow state machine — ticket/PR refs (progress-gated)', () => {
     expect(v.loop?.pr).toBe(179);
   });
 
+  // The not_started gate (entered=[]) must hold even when the FIRST step is a loop/input step — an index
+  // reset alone would otherwise reopen the gate at step 0. Pins the `status === 'not_started'` branch.
+  const LOOP_FIRST_FLOW: FlowLoad = {
+    ok: true,
+    definition: {
+      name: 'f',
+      steps: [{ id: 'build', kind: 'loop', loop: 'impl-loop', inputs: [{ name: 'ticket', type: 'github-ticket', required: true }] }],
+    },
+    flowDir: '/tmp/f/.agent-terminal',
+  };
+
+  it('keeps the display closed at not_started even when the first step is the loop step', () => {
+    const flow = createFlowMachine(LOOP_FIRST_FLOW, undefined, undefined, () => mirror({ pr: 179, linkedIssues: [25] }));
+    const v = flow.state(); // not_started — nothing entered, so the gate is closed
+    expect(v.refs).toBeUndefined();
+    expect(v.loop).toBeUndefined();
+  });
+
+  it('recloses the display after terminate even when the first step is the loop step', () => {
+    const flow = createFlowMachine(LOOP_FIRST_FLOW, undefined, undefined, () => mirror({ pr: 179, linkedIssues: [25] }));
+    flow.start(); // enter the loop step → visible
+    expect(flow.state().refs).toEqual({ ticket: 25, pr: 179 });
+    flow.terminate(); // → not_started, index 0
+    expect(flow.state().refs).toBeUndefined();
+    expect(flow.state().loop).toBeUndefined();
+  });
+
+  // Two loop steps bound to DISTINCT LoopDefs: the mirror binds to the most-recently-entered loop step's
+  // def, including on a later manual step (a first-wins reduce would surface the wrong gate options).
+  const TWO_LOOP_FLOW: FlowLoad = {
+    ok: true,
+    definition: {
+      name: 'f',
+      steps: [
+        { id: 'first', kind: 'loop', loop: 'loop-a' },
+        { id: 'second', kind: 'loop', loop: 'loop-b' },
+        { id: 'wrap', kind: 'manual' },
+      ],
+    },
+    flowDir: '/tmp/f/.agent-terminal',
+  };
+  const defA = { name: 'loop-a', gates: [{ id: 'planning', kind: 'approve-required', humanOptions: ['approve'], terminal: false }] };
+  const defB = { name: 'loop-b', gates: [{ id: 'planning', kind: 'approve-required', humanOptions: ['approve', 'impasse'], terminal: false }] };
+
+  it('binds the mirror to the most recently entered loop step LoopDef, across two loops and onto a later manual step', () => {
+    const flow = createFlowMachine(TWO_LOOP_FLOW, undefined, undefined, () => mirror(), (name) => (name === 'loop-a' ? defA : name === 'loop-b' ? defB : null));
+    flow.start(); // first (loop-a)
+    expect(flow.state().loop?.gateOptions).toEqual(['approve']);
+    flow.advance(); // second (loop-b)
+    expect(flow.state().loop?.gateOptions).toEqual(['approve', 'impasse']);
+    flow.advance(); // wrap (manual, post-loop) → still loop-b, the most-recently-entered loop
+    expect(flow.state().loop?.gateOptions).toEqual(['approve', 'impasse']);
+  });
+
+  // Two github-ticket inputs in different steps: the ref VALUE comes from the FIRST such input and the
+  // GATE opens once that first step is entered, so value-source and gate stay consistent (the first is
+  // entered no later than any later one).
+  const TWO_TICKET_FLOW: FlowLoad = {
+    ok: true,
+    definition: {
+      name: 'f',
+      steps: [
+        { id: 'a', kind: 'manual', inputs: [{ name: 'ta', type: 'github-ticket', required: true }] },
+        { id: 'b', kind: 'manual', inputs: [{ name: 'tb', type: 'github-ticket', required: true }] },
+      ],
+    },
+    flowDir: '/tmp/f/.agent-terminal',
+  };
+  it('resolves the ticket from the first github-ticket input, gated on entering that first step', () => {
+    const store = createFlowStateStore(mkdtempSync(join(tmpdir(), 'flow-refs-')));
+    store.write({ step: 'a', status: 'in_progress', inputs: { ta: '11', tb: '22' } });
+    const flow = createFlowMachine(TWO_TICKET_FLOW, store, undefined, () => null);
+    expect(flow.state().refs?.ticket).toBe(11);
+  });
+
   // Terminate/Restart reset the flow to its first step, closing every progress gate: the prior run's
   // ticket/PR display clears with NO state.yaml write and stays clear until the flow re-enters a loop
-  // step (refines §24.2.3 T7 — the prior signature-based dismissal re-revealed the same loop on its
-  // next iteration).
+  // step (§24.2.3 T7).
   describe('terminate/restart close the progress gates', () => {
     it('terminate() clears the loop-derived refs and mirror', () => {
       const flow = createFlowMachine(TICKET_FLOW, undefined, undefined, () => mirror({ pr: 179, linkedIssues: [25] }));
@@ -336,7 +410,7 @@ describe('flow state machine — ticket/PR refs (progress-gated)', () => {
       expect(flow.state().refs).toEqual({ ticket: 25, pr: 179 });
     });
 
-    it('does NOT re-reveal the dismissed loop while the same loop merely advances after a terminate', () => {
+    it('does NOT re-reveal the loop while the same loop merely advances after a terminate', () => {
       // The SAME agent loop keeps running and rewrites its state.yaml (iteration/status bump). With the
       // flow at not_started and no loop step entered, the display must stay clear.
       let live = mirror({ pr: 179, linkedIssues: [25] });

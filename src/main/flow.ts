@@ -276,10 +276,8 @@ export function createFlowMachine(
 
   const current = (): FlowStepDef => steps[index];
 
-  // §24.2.3 T7 (shape: the FlowRefs JSDoc in src/shared/ipc.ts). `gates` carry the §24.2.3 T7
-  // progress conditions (computed in view): an input value contributes only once a step requesting it
-  // has been entered; the loop's linked_issues/pr only once a loop step has been entered. Own-property
-  // lookup only, so an input named `__proto__` can't resolve a ref off the prototype chain.
+  // Own-property lookup only (§24.2.3 T7): an input named `__proto__` must not resolve a ref off the
+  // prototype chain.
   const numericInput = (name: string | undefined): number | undefined => {
     if (!name || !Object.prototype.hasOwnProperty.call(inputs, name)) return undefined;
     const raw = inputs[name];
@@ -287,10 +285,10 @@ export function createFlowMachine(
   };
   const computeRefs = (
     loop: AgentLoopState | null,
-    gates: { ticketStep: boolean; prStep: boolean; loopEntered: boolean },
+    gates: { ticketStepEntered: boolean; prStepEntered: boolean; loopEntered: boolean },
   ): FlowRefs | undefined => {
-    const ticket = (gates.ticketStep ? numericInput(ticketInputName) : undefined) ?? (gates.loopEntered ? loop?.linkedIssues[0] : undefined);
-    const pr = (gates.prStep ? numericInput(prInputName) : undefined) ?? (gates.loopEntered ? (loop?.pr ?? undefined) : undefined);
+    const ticket = (gates.ticketStepEntered ? numericInput(ticketInputName) : undefined) ?? (gates.loopEntered ? loop?.linkedIssues[0] : undefined);
+    const pr = (gates.prStepEntered ? numericInput(prInputName) : undefined) ?? (gates.loopEntered ? (loop?.pr ?? undefined) : undefined);
     const refs: FlowRefs = {};
     if (typeof ticket === 'number') refs.ticket = ticket;
     if (typeof pr === 'number') refs.pr = pr;
@@ -307,32 +305,23 @@ export function createFlowMachine(
       status,
       ...(step.todoTemplate ? { templateRef: step.todoTemplate } : {}),
     };
-    // §24.2.3 T7 (refs) / §24.2.3 T2 (loop mirror) — visibility is gated on flow PROGRESS: a
-    // github-ticket/pr input surfaces only once a step requesting it has been entered; the loop's
-    // linked_issues ticket, its state.yaml pr, and the mirror only once a loop step has been entered.
-    // `not_started` has entered nothing, so a terminate/restart (which resets to the first step) clears
-    // the display until it is re-earned by re-entering those steps.
+    // §24.2.3 T7 (refs) / §24.2.3 T2 (loop mirror): gated on the steps entered so far.
     const entered = status === 'not_started' ? [] : steps.slice(0, index + 1);
-    const ticketStep = entered.some((s) => (s.inputs ?? []).some((i) => i.type === 'github-ticket'));
-    const prStep = entered.some((s) => (s.inputs ?? []).some((i) => i.type === 'pr'));
+    const ticketStepEntered = entered.some((s) => (s.inputs ?? []).some((i) => i.type === 'github-ticket'));
+    const prStepEntered = entered.some((s) => (s.inputs ?? []).some((i) => i.type === 'pr'));
     const loopEntered = entered.some((s) => s.kind === 'loop');
     const liveLoop = readLoop?.() ?? null;
-    const refs = computeRefs(liveLoop, { ticketStep, prStep, loopEntered });
+    const refs = computeRefs(liveLoop, { ticketStepEntered, prStepEntered, loopEntered });
     const withRefs = refs ? { ...base, refs } : base;
     if (!loopEntered) return withRefs;
-    // The mirror binds to the most recently entered loop step's LoopDef (§24.2.3 T2); it stays once a
-    // loop step is entered, so a later manual step in the same run still mirrors that loop.
+    // §24.2.3 T2: bind to the most recently entered loop step's LoopDef.
     const loopStep = entered.reduce<FlowStepDef | undefined>((last, s) => (s.kind === 'loop' ? s : last), undefined);
     const loopDef = loopStep?.loop ? (readLoopDef?.(loopStep.loop) ?? null) : null;
     return deriveLoopView(withRefs, liveLoop, loopDef);
   };
 
   const persist = (): void =>
-    store?.write({
-      step: current().id,
-      status,
-      ...(Object.keys(inputs).length > 0 ? { inputs } : {}),
-    });
+    store?.write({ step: current().id, status, ...(Object.keys(inputs).length > 0 ? { inputs } : {}) });
 
   const requireStatus = (expected: FlowStatus, action: string): void => {
     if (status !== expected) {

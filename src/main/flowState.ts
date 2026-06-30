@@ -49,24 +49,13 @@ export function createFlowStateStore(worktreeDir: string): FlowStateStore {
       if (!isRecord(doc) || typeof doc.step !== 'string' || doc.step.length === 0) return null;
       if (typeof doc.status !== 'string' || !PERSISTABLE.has(doc.status as FlowStatus)) return null;
       const inputs = readInputs(doc.inputs);
-      return {
-        step: doc.step,
-        status: doc.status as FlowStatus,
-        ...(inputs ? { inputs } : {}),
-      };
+      return { step: doc.step, status: doc.status as FlowStatus, ...(inputs ? { inputs } : {}) };
     },
     write(state) {
       mkdirSync(path.dirname(file), { recursive: true });
       const tmp = `${file}.tmp`;
       const hasInputs = state.inputs && Object.keys(state.inputs).length > 0;
-      writeFileSync(
-        tmp,
-        yaml.dump({
-          step: state.step,
-          status: state.status,
-          ...(hasInputs ? { inputs: state.inputs } : {}),
-        }),
-      );
+      writeFileSync(tmp, yaml.dump({ step: state.step, status: state.status, ...(hasInputs ? { inputs: state.inputs } : {}) }));
       renameSync(tmp, file);
     },
   };
