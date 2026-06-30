@@ -119,12 +119,15 @@ describe('global UI settings store (§16.6 — first on-disk persistence, outsid
     const outside = mkdtempSync(join(tmpdir(), 'ui-settings-outside-'));
     try {
       symlinkSync(outside, join(dir, 'nested'));
+      const store = createUiSettingsStore(file);
       try {
-        createUiSettingsStore(file).set({ splitRatio: 0.42 });
+        store.set({ splitRatio: 0.42 });
       } catch {
-        /* refusing the symlinked container may throw; the assertion below is the real check */
+        /* refusing the symlinked container may throw; the assertions below are the real checks */
       }
       expect(existsSync(join(outside, 'ui-settings.json'))).toBe(false);
+      // best-effort persistence: the refused write must not drop the in-memory mutation.
+      expect(store.get().splitRatio).toBe(0.42);
     } finally {
       rmSync(outside, { recursive: true, force: true });
     }

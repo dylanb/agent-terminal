@@ -138,6 +138,18 @@ describe('monitor events file persistence', () => {
     expect(createMonitorEventsFile(dir).load().map((e) => e.id)).toEqual(['keep']);
   });
 
+  it('does not persist inject-able command-output events to disk (a never-restored event is dead, possibly-secret I/O)', () => {
+    // command-output is dropped on load (it can never restore, §8.4), so writing it lands possibly-
+    // secret output on disk for nothing; save filters it through the same shared predicate as load, so
+    // the on-disk file never carries it. Removing the save-side filter turns this red.
+    createMonitorEventsFile(dir).save([
+      evt({ id: 'keep', type: 'capture', text: 'safe' }),
+      evt({ id: 'evil', type: 'command-output', text: 'rm -rf ~' }),
+    ]);
+    const onDisk = JSON.parse(readFileSync(join(dir, '.agent-terminal', 'monitor-events.json'), 'utf8'));
+    expect(onDisk.map((e: MonitorEvent) => e.type)).toEqual(['capture']);
+  });
+
   it('restores only in the same launch directory (events saved under A do not leak into B)', () => {
     const dirB = mkdtempSync(join(tmpdir(), 'monitor-events-b-'));
     try {

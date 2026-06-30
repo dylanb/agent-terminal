@@ -4,7 +4,7 @@
 // (CLAUDE.md shared-semantics rule). The app NEVER modifies the user's .gitignore — this writes only
 // the file it is given (no-gitignore-writes rule).
 
-import { lstatSync, mkdirSync, renameSync, writeFileSync } from 'node:fs';
+import { lstatSync, mkdirSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 
@@ -43,7 +43,28 @@ export function atomicWriteFileSync(file: string, data: string, opts: AtomicWrit
   if (!isRealContainer(dir)) return false;
   mkdirSync(dir, { recursive: true });
   const tmp = (opts.tmpPath ?? ((f: string): string => `${f}.${randomUUID()}.tmp`))(file);
-  writeFileSync(tmp, data, { mode: opts.mode ?? 0o600, flag: 'wx' });
-  renameSync(tmp, file);
+  try {
+    writeFileSync(tmp, data, { mode: opts.mode ?? 0o600, flag: 'wx' });
+  } catch (e) {
+    // EEXIST means the temp pre-existed (a planted symlink/file we did not create) — never unlink it.
+    // Otherwise the exclusive create succeeded but the write failed, orphaning our temp; the
+    // unpredictable name would leak one stale file per failed write (CWE-459).
+    if ((e as NodeJS.ErrnoException).code !== 'EEXIST') tryUnlink(tmp);
+    throw e;
+  }
+  try {
+    renameSync(tmp, file);
+  } catch (e) {
+    tryUnlink(tmp);
+    throw e;
+  }
   return true;
+}
+
+function tryUnlink(p: string): void {
+  try {
+    unlinkSync(p);
+  } catch {
+    // already gone or unreadable — nothing to clean up.
+  }
 }

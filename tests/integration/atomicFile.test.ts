@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { mkdtempSync, existsSync, readFileSync, writeFileSync, symlinkSync, rmSync, statSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, existsSync, readFileSync, writeFileSync, symlinkSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { atomicWriteFileSync, isRealContainer } from '../../src/main/atomicFile';
@@ -69,6 +69,17 @@ describe('atomicWriteFileSync', () => {
     symlinkSync(target, tmp);
     expect(() => atomicWriteFileSync(join(dir, 'state.json'), 'real', { tmpPath: () => tmp })).toThrow();
     expect(readFileSync(target, 'utf8')).toBe(original);
+  });
+
+  it('removes its own temp file when the rename fails, so a persistent failure cannot orphan temps (CWE-459)', () => {
+    // The unpredictable per-write temp name means a leak accumulates one stale file per failed write
+    // (unlike the old fixed `.tmp` name). Force renameSync to fail by making the destination a
+    // directory; the exclusive-created temp is ours, so it must be unlinked rather than left behind.
+    const destDir = join(dir, 'state.json');
+    mkdirSync(destDir);
+    const tmp = join(dir, 'state.json.leaky.tmp');
+    expect(() => atomicWriteFileSync(destDir, 'data', { tmpPath: () => tmp })).toThrow();
+    expect(existsSync(tmp)).toBe(false);
   });
 
   it('never creates a .gitignore and leaves a pre-existing one byte-for-byte unchanged', () => {

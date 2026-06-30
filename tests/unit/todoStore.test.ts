@@ -39,12 +39,15 @@ describe('todoStore (§16.3 / §16.4 — repo-scoped CRUD + persistence)', () =>
     const outside = mkdtempSync(join(tmpdir(), 'todo-outside-'));
     try {
       symlinkSync(outside, join(repoA, '.agent-terminal'));
+      const store = makeStore();
       try {
-        makeStore().add(repoA, 'task');
+        store.add(repoA, 'task');
       } catch {
-        /* refusing the symlinked container may throw; the assertion below is the real check */
+        /* refusing the symlinked container may throw; the assertions below are the real checks */
       }
       expect(existsSync(join(outside, 'todos.json'))).toBe(false);
+      // best-effort persistence: the refused write must not drop the in-memory mutation.
+      expect(store.list(repoA).map((t) => t.text)).toContain('task');
     } finally {
       rmSync(outside, { recursive: true, force: true });
     }

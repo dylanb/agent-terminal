@@ -7,7 +7,7 @@
 
 import { lstatSync, readFileSync } from 'node:fs';
 import path from 'node:path';
-import type { BufferType, MonitorEvent, MonitorEventSource, MonitorEventType } from '../shared/ipc';
+import type { BufferType, Cell, MonitorEvent, MonitorEventSource, MonitorEventType, SelectionRange } from '../shared/ipc';
 import { isInjectableEventType } from '../shared/injectableEvents';
 import { atomicWriteFileSync, isRealContainer } from './atomicFile';
 import type { MonitorEventPersistence } from './eventStore';
@@ -38,12 +38,20 @@ const EVENT_SOURCES: Record<MonitorEventSource, true> = {
 const BUFFER_TYPES: Record<BufferType, true> = { normal: true, alternate: true };
 
 const isString = (v: unknown): boolean => typeof v === 'string';
+const isNumber = (v: unknown): boolean => typeof v === 'number';
 const inSet = (set: Record<string, true>) => (v: unknown): boolean =>
   typeof v === 'string' && Object.prototype.hasOwnProperty.call(set, v);
-const isCell = (v: unknown): boolean => isRecord(v) && typeof v.x === 'number' && typeof v.y === 'number';
+// Driven from `keyof` so a new field on Cell/SelectionRange forces a validator entry at compile time,
+// the same exhaustiveness FIELD_CHECKS gives the top-level shape.
+const CELL_CHECKS: Record<keyof Cell, (v: unknown) => boolean> = { x: isNumber, y: isNumber };
+const isCell = (v: unknown): boolean =>
+  isRecord(v) && (Object.keys(CELL_CHECKS) as (keyof Cell)[]).every((k) => CELL_CHECKS[k](v[k]));
+const RANGE_CHECKS: Record<keyof SelectionRange, (v: unknown) => boolean> = {
+  start: isCell, end: isCell, baseY: isNumber, bufferType: inSet(BUFFER_TYPES),
+};
 const isRange = (v: unknown): boolean =>
   v === null ||
-  (isRecord(v) && isCell(v.start) && isCell(v.end) && typeof v.baseY === 'number' && inSet(BUFFER_TYPES)(v.bufferType));
+  (isRecord(v) && (Object.keys(RANGE_CHECKS) as (keyof SelectionRange)[]).every((k) => RANGE_CHECKS[k](v[k])));
 
 // §15.4
 const FIELD_CHECKS: Record<keyof MonitorEvent, (v: unknown) => boolean> = {
@@ -87,8 +95,11 @@ export function createMonitorEventsFile(
     },
     save(events) {
       // Captured output may carry secrets → owner-only; the symlinked-container refusal and the
-      // unpredictable-temp + exclusive-create hardening live in atomicWriteFileSync (CWE-59).
-      atomicWriteFileSync(file, JSON.stringify(events), { mode: 0o600, tmpPath: deps.tmpPath });
+      // unpredictable-temp + exclusive-create hardening live in atomicWriteFileSync (CWE-59). Drop
+      // inject-able types through the same predicate load() applies, so never-restored command-output
+      // is not written to disk at all (§8.4 permanent drop).
+      const persistable = events.filter((e) => !isInjectableEventType(e.type));
+      atomicWriteFileSync(file, JSON.stringify(persistable), { mode: 0o600, tmpPath: deps.tmpPath });
     },
   };
 }
