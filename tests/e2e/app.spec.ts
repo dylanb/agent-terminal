@@ -2004,6 +2004,83 @@ test('the popout surfaces the ticket + PR the flow is working, on a non-loop ste
   rmSync(home, { recursive: true, force: true });
 });
 
+test('Terminate clears the ticket/PR display even though state.yaml still carries the loop (§24.2.3 T7)', async () => {
+  // The prior run's PR/ticket lives on in the read-only state.yaml; Terminate must still empty the
+  // rail read-out and the docked popout — the loop is dismissed, not deleted.
+  const { dir: repo, stateFile } = seedRefsFlowRepo('agent-term-e2e-refs-term-');
+  writeFileSync(
+    stateFile,
+    'schema_version: 4\npr: 179\nbranch: agent-loop/issue-176\niteration: 9\nstatus: planning\nlinked_issues:\n  - 25\n',
+  );
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-refs-term-home-'));
+  await app.close();
+  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
+  page = await app.firstWindow();
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await typeCommand(`cd "${repo}"`);
+  await expect(flowControl()).toHaveText('Start', { timeout: 10_000 });
+  await flowControl().click(); // Start → in_progress (the manual groom step)
+  await expect(flowControl()).toHaveText('Advance');
+  await expect(loopReadout()).toContainText('#25', { timeout: 10_000 });
+  await expect(loopReadout()).toContainText('PR #179');
+  await loopReadout().click(); // open the docked popout
+  await expect(loopPanel()).toContainText('Working on');
+
+  await flowTerminate().click();
+  await expect(confirmModal()).toBeVisible();
+  await confirmModal().locator('.confirm').click();
+
+  // The flow is back at Not started and the ticket/PR display is gone — read-out removed, popout closed
+  // and emptied — despite state.yaml still holding the PR.
+  await expect(flowControl()).toHaveText('Start');
+  await expect(loopReadout()).toHaveCount(0);
+  await expect(page.locator('#app')).not.toHaveClass(/\bloop-open\b/);
+  await expect(loopPanel()).not.toContainText('Working on');
+  expect(readFileSync(stateFile, 'utf8')).toContain('pr: 179'); // the read-only mirror is untouched
+
+  await app.close();
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+});
+
+test('Restart clears the ticket/PR display until a new agent loop attaches (§24.2.3 T7)', async () => {
+  const { dir: repo, stateFile } = seedRefsFlowRepo('agent-term-e2e-refs-restart-');
+  writeFileSync(
+    stateFile,
+    'schema_version: 4\npr: 179\nbranch: agent-loop/issue-176\niteration: 9\nstatus: planning\nlinked_issues:\n  - 25\n',
+  );
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-refs-restart-home-'));
+  await app.close();
+  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
+  page = await app.firstWindow();
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await typeCommand(`cd "${repo}"`);
+  await expect(flowControl()).toHaveText('Start', { timeout: 10_000 });
+  await flowControl().click(); // Start → in_progress
+  await expect(loopReadout()).toContainText('PR #179', { timeout: 10_000 });
+  await flowControl().click(); // Advance → done (single-step flow)
+  await expect(flowControl()).toHaveText('Restart');
+  await expect(loopReadout()).toContainText('PR #179'); // still shown at done
+
+  await flowControl().click(); // Restart → in_progress, dismissing the prior loop
+  await expect(loopReadout()).toHaveCount(0); // display cleared — the dismissed loop is hidden
+
+  // A genuinely new agent loop is attached (the human re-runs pickup → state.yaml changes); the display
+  // returns, now showing the new ticket/PR.
+  writeFileSync(
+    stateFile,
+    'schema_version: 4\npr: 200\nbranch: agent-loop/issue-42\niteration: 1\nstatus: planning\nlinked_issues:\n  - 42\n',
+  );
+  await expect(loopReadout()).toContainText('PR #200', { timeout: 10_000 });
+  await expect(loopReadout()).toContainText('#42');
+
+  await app.close();
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+});
+
 test('a loop step shows a Loop read-out that expands a docked state-mirror panel, live; advancing early warns (§24.2.3 T2)', async () => {
   // The app DRIVES NOTHING — it mirrors agent-loop's v4 state.yaml read-only, updating live as the
   // file changes (§24.2.3 T2).

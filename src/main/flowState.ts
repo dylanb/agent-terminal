@@ -14,6 +14,10 @@ export interface PersistedFlowState {
   step: string;
   status: FlowStatus;
   inputs?: Record<string, string>;
+  /** The agent-loop signature dismissed by the last terminate/restart (§24.2.3 T7); the flow keeps the
+   *  ticket/PR display cleared while the live loop still matches it, so the suppression survives a
+   *  relaunch. Absent when no loop has been dismissed. */
+  dismissedLoop?: string;
 }
 
 export interface FlowStateStore {
@@ -49,13 +53,27 @@ export function createFlowStateStore(worktreeDir: string): FlowStateStore {
       if (!isRecord(doc) || typeof doc.step !== 'string' || doc.step.length === 0) return null;
       if (typeof doc.status !== 'string' || !PERSISTABLE.has(doc.status as FlowStatus)) return null;
       const inputs = readInputs(doc.inputs);
-      return { step: doc.step, status: doc.status as FlowStatus, ...(inputs ? { inputs } : {}) };
+      const dismissedLoop = typeof doc.dismissedLoop === 'string' ? doc.dismissedLoop : null;
+      return {
+        step: doc.step,
+        status: doc.status as FlowStatus,
+        ...(inputs ? { inputs } : {}),
+        ...(dismissedLoop !== null ? { dismissedLoop } : {}),
+      };
     },
     write(state) {
       mkdirSync(path.dirname(file), { recursive: true });
       const tmp = `${file}.tmp`;
       const hasInputs = state.inputs && Object.keys(state.inputs).length > 0;
-      writeFileSync(tmp, yaml.dump({ step: state.step, status: state.status, ...(hasInputs ? { inputs: state.inputs } : {}) }));
+      writeFileSync(
+        tmp,
+        yaml.dump({
+          step: state.step,
+          status: state.status,
+          ...(hasInputs ? { inputs: state.inputs } : {}),
+          ...(state.dismissedLoop !== undefined ? { dismissedLoop: state.dismissedLoop } : {}),
+        }),
+      );
       renameSync(tmp, file);
     },
   };

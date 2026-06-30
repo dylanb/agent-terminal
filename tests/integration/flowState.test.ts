@@ -44,6 +44,19 @@ describe('flow-state store (§24.2.2 S3 / §19.1)', () => {
     expect(createFlowStateStore(dir).read()).toEqual({ step: 'groom', status: 'in_progress' });
   });
 
+  // A terminate/restart records the dismissed agent-loop signature so the ticket/PR display stays
+  // cleared until a NEW loop attaches — and that suppression must survive a relaunch (a relaunch is
+  // not "a new loop attached"). The signature round-trips alongside progression.
+  it('round-trips the dismissed-loop signature and survives a fresh store', () => {
+    createFlowStateStore(dir).write({ step: 'groom', status: 'not_started', dismissedLoop: 'sig-v1' });
+    expect(createFlowStateStore(dir).read()).toEqual({ step: 'groom', status: 'not_started', dismissedLoop: 'sig-v1' });
+  });
+
+  it('omits the dismissedLoop key entirely when no loop has been dismissed', () => {
+    createFlowStateStore(dir).write({ step: 'groom', status: 'in_progress' });
+    expect(createFlowStateStore(dir).read()).toEqual({ step: 'groom', status: 'in_progress' });
+  });
+
   it('reads null on a corrupt/unparseable file rather than throwing', () => {
     mkdirSync(join(dir, '.agent-terminal'), { recursive: true });
     writeFileSync(join(dir, '.agent-terminal', 'flow-state.yaml'), 'status: : : broken\n\t- x');

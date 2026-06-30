@@ -253,6 +253,57 @@ describe('flow state machine — ticket/PR refs', () => {
     flow.start();
     expect(flow.state().refs).toBeUndefined();
   });
+
+  // Terminate/Restart reset the flow to its beginning; the ticket/PR display (refs + loop mirror) must
+  // clear and stay clear until a NEW agent loop is attached — i.e. until the read-only state.yaml the
+  // mirror reads differs from what it was at the moment of the reset (refines §24.2.3 T7).
+  describe('loop refs dismissed on terminate/restart', () => {
+    it('terminate() clears the loop-derived refs and mirror', () => {
+      const flow = createFlowMachine(TICKET_FLOW, undefined, undefined, () => mirror({ pr: 179, linkedIssues: [25] }));
+      flow.start();
+      expect(flow.state().refs).toEqual({ ticket: 25, pr: 179 }); // visible while the flow runs
+      flow.terminate();
+      const after = flow.state();
+      expect(after.refs).toBeUndefined();
+      expect(after.loop).toBeUndefined();
+    });
+
+    it('restart() clears the loop-derived refs and mirror', () => {
+      const flow = createFlowMachine(TICKET_FLOW, undefined, undefined, () => mirror({ pr: 179, linkedIssues: [25] }));
+      flow.start();
+      flow.advance();
+      flow.advance(); // → done (past the last step)
+      expect(flow.state().refs).toEqual({ ticket: 25, pr: 179 });
+      flow.restart();
+      const after = flow.state();
+      expect(after.refs).toBeUndefined();
+      expect(after.loop).toBeUndefined();
+    });
+
+    it('reveals the refs again once the live loop changes after the reset (a new loop attaches)', () => {
+      let live = mirror({ pr: 179, linkedIssues: [25] });
+      const flow = createFlowMachine(TICKET_FLOW, undefined, undefined, () => live);
+      flow.start();
+      flow.terminate();
+      expect(flow.state().refs).toBeUndefined(); // the dismissed loop stays hidden
+      live = mirror({ pr: 200, linkedIssues: [42] }); // the human attaches a new agent loop
+      flow.start();
+      expect(flow.state().refs).toEqual({ ticket: 42, pr: 200 });
+    });
+
+    it('still surfaces a typed-input ticket provided after restart, independent of the dismissed loop', () => {
+      const flow = createFlowMachine(TICKET_FLOW, undefined, undefined, () => mirror({ pr: 179, linkedIssues: [25] }));
+      flow.start();
+      flow.advance();
+      flow.advance(); // → done
+      flow.restart(); // dismisses the loop and clears inputs
+      expect(flow.state().refs).toBeUndefined();
+      flow.provideInput({ ticket: '99' }); // a fresh, flow-owned ticket — not the dismissed loop
+      const v = flow.state();
+      expect(v.refs?.ticket).toBe(99);
+      expect(v.refs?.pr).toBeUndefined(); // the loop's PR stays dismissed (same live state.yaml)
+    });
+  });
 });
 
 // §24.2.2 S3 — the machine restores its status from a real flow-state store on construction and

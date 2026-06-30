@@ -9,7 +9,7 @@ import yaml from 'js-yaml';
 import type { AgentState, FlowPrompt, FlowRefs, FlowStateView, FlowStatus, TodoItem } from '../shared/ipc';
 import { hasFlowRefs } from '../shared/ipc';
 import { createFlowStateStore, type FlowStateStore } from './flowState';
-import type { AgentLoopState } from './agentLoopBridge';
+import { loopSignature, type AgentLoopState } from './agentLoopBridge';
 import { gateForStatus, type LoopDef } from './loopDef';
 import { isHumanNeededStatus } from '../shared/loopStatus';
 import { isRecord } from './yamlRecord';
@@ -252,6 +252,11 @@ export function createFlowMachine(
   // The flow's resolved typed inputs (§18.4 / §24.2.3 T3), flow-wide so a value resolved at one step
   // threads to later steps.
   let inputs: Record<string, string> = {};
+  // §24.2.3 T7 — the agent-loop signature dismissed by the last terminate/restart. While the live
+  // state.yaml still matches it, the loop's refs + mirror are suppressed (the prior run's ticket/PR
+  // must not linger); a different signature means a new loop attached, lifting the suppression. null
+  // when nothing has been dismissed.
+  let dismissedLoop: string | null = null;
 
   // Re-read the persisted progression from the store (§19.1: flow-state.yaml is the source of truth).
   // Run at construction AND on every state() query, so an external advance — the agent-loop CLI moving
@@ -262,6 +267,7 @@ export function createFlowMachine(
     index = 0;
     status = 'not_started';
     inputs = {};
+    dismissedLoop = null;
     const persisted = store.read();
     if (!persisted) return;
     const i = names.indexOf(persisted.step);
@@ -270,6 +276,7 @@ export function createFlowMachine(
       status = persisted.status;
     }
     if (persisted.inputs) inputs = { ...persisted.inputs };
+    if (persisted.dismissedLoop !== undefined) dismissedLoop = persisted.dismissedLoop;
   };
   hydrate();
 
@@ -300,8 +307,11 @@ export function createFlowMachine(
       status,
       ...(step.todoTemplate ? { templateRef: step.todoTemplate } : {}),
     };
-    // §24.2.3 T7 (refs) / §24.2.3 T2 (loop mirror, loop steps only)
-    const loop = readLoop?.() ?? null;
+    // §24.2.3 T7 (refs) / §24.2.3 T2 (loop mirror, loop steps only). A loop dismissed by the last
+    // terminate/restart is treated as absent (no refs fallback, no mirror) until the live state.yaml
+    // differs from the dismissed signature — i.e. until a new loop attaches.
+    const liveLoop = readLoop?.() ?? null;
+    const loop = dismissedLoop !== null && loopSignature(liveLoop) === dismissedLoop ? null : liveLoop;
     const refs = computeRefs(loop);
     const withRefs = refs ? { ...base, refs } : base;
     if (step.kind !== 'loop') return withRefs;
@@ -310,7 +320,12 @@ export function createFlowMachine(
   };
 
   const persist = (): void =>
-    store?.write({ step: current().id, status, ...(Object.keys(inputs).length > 0 ? { inputs } : {}) });
+    store?.write({
+      step: current().id,
+      status,
+      ...(Object.keys(inputs).length > 0 ? { inputs } : {}),
+      ...(dismissedLoop !== null ? { dismissedLoop } : {}),
+    });
 
   const requireStatus = (expected: FlowStatus, action: string): void => {
     if (status !== expected) {
@@ -357,6 +372,7 @@ export function createFlowMachine(
       index = 0;
       status = 'in_progress';
       inputs = {}; // §18.4: a restart re-requests resolved inputs; undo() preserves them
+      dismissedLoop = loopSignature(readLoop?.() ?? null); // §24.2.3 T7: dismiss the prior loop's ticket/PR
       persist();
       return enter(view());
     },
@@ -373,6 +389,7 @@ export function createFlowMachine(
       index = 0;
       status = 'not_started';
       inputs = {};
+      dismissedLoop = loopSignature(readLoop?.() ?? null); // §24.2.3 T7: dismiss the prior loop's ticket/PR
       persist();
       return view(); // not_started enters no step, so no onEnter (mirrors advance → done)
     },

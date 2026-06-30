@@ -26,6 +26,15 @@ export interface AgentLoopState {
 // (loopDef.ts). The same coercing guard works for either engine file.
 const SCHEMA_VERSION = '4';
 
+/** A value-identity of an attached agent-loop, used to tell "the same loop as before" from "a new
+ *  loop attached". The flow snapshots this on terminate/restart and suppresses the loop's refs/mirror
+ *  while the live signature still equals the snapshot (§24.2.3 T7). `''` for no loop, so an empty
+ *  state.yaml is itself an identity that a later real loop differs from. */
+export function loopSignature(state: AgentLoopState | null): string {
+  if (!state) return '';
+  return JSON.stringify([state.status, state.iteration, state.pr, state.branch, state.linkedIssues]);
+}
+
 /** Read & validate <repoDir>/.agent-loop/state.yaml. Returns the mirrored slice, or null for any
  *  missing / unknown-version / corrupt / ill-typed file (never throws). */
 export function parseAgentLoopState(repoDir: string): AgentLoopState | null {
