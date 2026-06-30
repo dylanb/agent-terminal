@@ -499,14 +499,18 @@ test('an immediate shell startup failure keeps the app open (§5 grace exception
   // app must NOT vanish. `false` exits immediately, well within the startup grace, so the app stays
   // open rather than quitting. (The exit is too fast to assert the renderer diagnostic here — that
   // is covered by the within-grace test below, where the exit lands after the renderer has mounted.)
+  // Pin a large grace so the assertion is deterministic: §5 measures uptime when the onExit callback
+  // runs, which on a CPU-starved CI runner can be observed seconds after the spawn; a 60s grace makes
+  // `false`'s instant exit unambiguously sub-grace regardless of that lag (the default 1s grace is
+  // comparable to CI startup jitter, so it would intermittently misclassify the exit as a normal one).
   await app.close();
   app = await electron.launch({
     args: launchArgs(),
-    env: { ...process.env, APP_SHELL: 'false', APP_SUBMIT_DELAY_MS: '100' },
+    env: { ...process.env, APP_SHELL: 'false', APP_SUBMIT_DELAY_MS: '100', APP_STARTUP_EXIT_GRACE_MS: '60000' },
   });
   page = await app.firstWindow();
   // The decision is in main and independent of the renderer: assert the app does NOT close within a
-  // window that comfortably exceeds the 1s grace. A close event here would mean it wrongly terminated.
+  // window comfortably under the grace. A close event here would mean it wrongly terminated.
   const closed = app
     .waitForEvent('close', { timeout: 4000 })
     .then(() => true)
@@ -603,6 +607,10 @@ test('captured monitor events restore on relaunch in the same directory (persist
     APP_SUBMIT_DELAY_MS: '100',
     APP_SHELL_INTEGRATION: '0',
     APP_LAUNCH_DIR: launchDir,
+    // The terminate step below is via the real shell exit; pin a tiny grace so bash's exit (uptime
+    // far above 1ms) deterministically terminates the app, with no default-1s-grace window for a
+    // CPU-starved CI runner to misclassify (§5; cf. the 479 normal-exit test).
+    APP_STARTUP_EXIT_GRACE_MS: '1',
   };
   try {
     await app.close();
@@ -620,8 +628,14 @@ test('captured monitor events restore on relaunch in the same directory (persist
 
     // Terminate via the real shell-exit path (the app quits when the shell exits), then relaunch in
     // the same directory — proving restore survives the actual teardown, not just a graceful close.
-    await typeCommand('exit');
-    await app.waitForEvent('close', { timeout: 20_000 });
+    // Under heavy CI contention the first instance can already be tearing down by now; drive `exit`
+    // only while the page is live (the assertion is restore-after-terminate, not the exact trigger),
+    // and tolerate the close having already happened so a stale `app` never strands the afterEach.
+    if (!page.isClosed()) await typeCommand('exit').catch(() => {});
+    // The app terminates on the shell exit (grace=1ms): poll until it has no windows, resolving as
+    // soon as it is gone and tolerating it having already terminated (a stale waitForEvent('close')
+    // would otherwise hang on an already-emitted event).
+    await expect.poll(() => app.windows().length, { timeout: 20_000 }).toBe(0).catch(() => {});
     app = await electron.launch({ args: launchArgs(), env: dirEnv });
     page = await app.firstWindow();
     await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
