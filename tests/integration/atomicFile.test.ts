@@ -82,6 +82,18 @@ describe('atomicWriteFileSync', () => {
     expect(existsSync(tmp)).toBe(false);
   });
 
+  it('leaves a pre-existing regular file at the temp path untouched (only a temp it created is cleaned up — EEXIST)', () => {
+    // The exclusive create fails EEXIST on any pre-existing temp path; that file is not one this write
+    // created, so the failure cleanup must not unlink it (collapsing the guard to an unconditional
+    // unlink would delete it). A symlink at the temp path cannot prove this — unlinking a symlink
+    // spares its target — so the planted file here is a regular file.
+    const planted = join(dir, 'state.json.preexisting.tmp');
+    const original = 'not-ours\n';
+    writeFileSync(planted, original);
+    expect(() => atomicWriteFileSync(join(dir, 'state.json'), 'real', { tmpPath: () => planted })).toThrow();
+    expect(readFileSync(planted, 'utf8')).toBe(original);
+  });
+
   it('never creates a .gitignore and leaves a pre-existing one byte-for-byte unchanged', () => {
     const before = 'node_modules\n';
     writeFileSync(join(dir, '.gitignore'), before);

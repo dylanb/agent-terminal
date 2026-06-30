@@ -41,8 +41,6 @@ const isString = (v: unknown): boolean => typeof v === 'string';
 const isNumber = (v: unknown): boolean => typeof v === 'number';
 const inSet = (set: Record<string, true>) => (v: unknown): boolean =>
   typeof v === 'string' && Object.prototype.hasOwnProperty.call(set, v);
-// Driven from `keyof` so a new field on Cell/SelectionRange forces a validator entry at compile time,
-// the same exhaustiveness FIELD_CHECKS gives the top-level shape.
 const CELL_CHECKS: Record<keyof Cell, (v: unknown) => boolean> = { x: isNumber, y: isNumber };
 const isCell = (v: unknown): boolean =>
   isRecord(v) && (Object.keys(CELL_CHECKS) as (keyof Cell)[]).every((k) => CELL_CHECKS[k](v[k]));

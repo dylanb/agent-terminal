@@ -64,7 +64,5 @@ export function atomicWriteFileSync(file: string, data: string, opts: AtomicWrit
 function tryUnlink(p: string): void {
   try {
     unlinkSync(p);
-  } catch {
-    // already gone or unreadable — nothing to clean up.
-  }
+  } catch {}
 }
