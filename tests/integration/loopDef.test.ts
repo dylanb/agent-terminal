@@ -82,6 +82,16 @@ describe('LoopDef resolver (§24.2.3 T2 folded / §18.1)', () => {
     expect(parseLoopDef(repo, 'no-such-loop', configDir)).toBeNull();
   });
 
+  it('refuses a loop NAME that is not a single safe path segment, even if it resolves to a real def (CWE-22)', () => {
+    // The loop name (from flow.yaml `loop:`) selects the config-dir directory the def — and its
+    // injected prompts (§26.5) — are read from. A `../`-laden name traverses out of <config>/loops; it
+    // must be refused at the resolution boundary, mirroring the override-path containment check and the
+    // phase/actor SAFE_NAME guard. Plant a valid def at the traversal target and assert it is NOT read.
+    writeFileSync(join(configDir, 'evil-loop.yaml'), IMPL_LOOP.replace('name: impl-loop', 'name: evil-loop'));
+    // path.join(<configDir>/loops, '../evil-loop', '../evil-loop.yaml') === <configDir>/evil-loop.yaml
+    expect(parseLoopDef(repo, '../evil-loop', configDir)).toBeNull();
+  });
+
   it('returns null for a corrupt LoopDef yaml', () => {
     writeConfigLoop('impl-loop', 'name: impl-loop\n  gates: : : broken\n\t- nope');
     expect(parseLoopDef(repo, 'impl-loop', configDir)).toBeNull();

@@ -113,4 +113,36 @@ describe('loop state.yaml writer (§26.6)', () => {
     expect(doc.human_notes).toEqual(['human asked for a smaller plan']);
     expect(doc.completed_loops).toEqual(['some-prior-loop']);
   });
+
+  it('heals a PARTIAL prior doc back to whole-document v4 (back-fills missing LoopExtension fields)', () => {
+    // §26.6's whole-document guarantee must survive a prior doc that is itself partial (a hand-edit, an
+    // older app version, or the re-handoff engine could leave one). Preserve the fields it DOES carry,
+    // but back-fill the ones it is missing with defaults — never propagate the gap.
+    const partial = {
+      schema_version: 4,
+      status: 'plan-draft',
+      iteration: 2,
+      persona_state: { 'review-security': { last_clean_iter: 1 } }, // engine field present — must survive
+      // impasse, sessions, phase2_active, terminated, … all MISSING
+    };
+    mkdirSync(join(repo, '.agent-loop'), { recursive: true });
+    writeFileSync(join(repo, '.agent-loop', 'state.yaml'), yaml.dump(partial));
+
+    writeLoopState(repo, { ...L1_STATE, iteration: 2, status: 'error' }, fixedNow);
+
+    const doc = yaml.load(readFileSync(join(repo, '.agent-loop', 'state.yaml'), 'utf8')) as Record<string, unknown>;
+    expect(doc.persona_state).toEqual({ 'review-security': { last_clean_iter: 1 } }); // present field preserved
+    for (const key of ['sessions', 'impasse', 'phase2_active', 'severity_cycle_iter', 'completed_loops', 'terminated']) {
+      expect(doc, `partial prior doc not healed: missing ${key}`).toHaveProperty(key); // back-filled
+    }
+  });
+
+  it('emits the whole read set present even when branch is null and linkedIssues is empty (§26.6)', () => {
+    // The read set must be uniformly present (defaulted), the way `pr` is — not conditionally omitted.
+    writeLoopState(repo, { ...L1_STATE, branch: null, linkedIssues: [] }, fixedNow);
+    const doc = yaml.load(readFileSync(join(repo, '.agent-loop', 'state.yaml'), 'utf8')) as Record<string, unknown>;
+    expect(doc).toHaveProperty('branch');
+    expect(doc).toHaveProperty('linked_issues');
+    expect(doc.linked_issues).toEqual([]);
+  });
 });

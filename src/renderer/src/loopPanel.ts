@@ -48,6 +48,9 @@ export interface LoopPanel {
 function detailRow(doc: Document, key: string, value: string, valueClass = ''): HTMLElement {
   const r = doc.createElement('div');
   r.className = 'lrow';
+  // WCAG 4.1.3 — patchInPlace mutates only the value span; aria-atomic makes the live region announce the
+  // whole row (label + value, "iteration 3") rather than the bare value node that changed.
+  r.setAttribute('aria-atomic', 'true');
   const k = doc.createElement('span');
   k.className = 'lk';
   k.textContent = key;

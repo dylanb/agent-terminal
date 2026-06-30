@@ -140,6 +140,9 @@ describe('loop turn runner (§26.3/D47a, D48)', () => {
     injectable = false; // the instance goes — and stays — busy
     r.onTimeout(); // attempt 1 times out → wants to retry, but cannot inject → deferred
     expect(inject).toHaveBeenCalledTimes(1); // no second injection
+    // The deferred retry MUST re-arm the deadline (the half of the D48 fix that makes onTimeout fire
+    // again in production); without it the run hangs forever and onTimeout below would never be reached.
+    expect(armTimer).toHaveBeenCalledTimes(2);
     expect(r.state()).toBe('in-flight');
     r.onTimeout(); // the deferred wait-for-injectable deadline elapses, instance still busy
     expect(writeError).toHaveBeenCalledTimes(1);

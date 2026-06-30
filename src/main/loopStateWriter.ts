@@ -25,8 +25,6 @@ export interface LoopStateWrite {
 
 const STATE_REL = path.join('.agent-loop', 'state.yaml');
 
-/** Write <repoDir>/.agent-loop/state.yaml as a whole-document valid v4 doc (§26.6). `now` is injected
- *  for a deterministic `updated_at` (the clock seam). Atomic: a sibling .tmp is renamed into place. */
 /** The LoopExtension defaults for a brand-new doc (§26.6): empty maps/lists, false flags, zero counters.
  *  `auto_chain: true` mirrors the engine's pickup stub (writeBoundLoopStub). Used only when no prior
  *  state.yaml exists — an existing doc's own values are preserved instead (see writeLoopState). */
@@ -56,24 +54,28 @@ function readPriorDoc(file: string): Record<string, unknown> | null {
   }
 }
 
+/** Write <repoDir>/.agent-loop/state.yaml as a whole-document valid v4 doc (§26.6). `now` is injected
+ *  for a deterministic `updated_at` (the clock seam). Atomic: a sibling .tmp is renamed into place. */
 export function writeLoopState(repoDir: string, state: LoopStateWrite, now: () => Date = () => new Date()): void {
   const file = path.join(repoDir, STATE_REL);
   mkdirSync(path.dirname(file), { recursive: true });
 
-  // Preserve any engine-owned LoopExtension fields a prior writer left (§26.6 promises a v4 reader — the
-  // §24.2.3 mirror, the §25 audit, a future Go re-handoff — can read this doc): overlay only the
-  // app-owned read set onto the existing whole document, defaulting the extension surface only when no
-  // prior doc exists. This stops a status-only write from resetting fields the app does not yet model
-  // (persona_state §26.5, impasse §26.8) back to defaults.
+  // §26.6 — a write is whole-document valid v4 AND preserves by merge. Layer, low to high: the
+  // LoopExtension defaults (so a missing field is back-filled even when a partial prior doc exists), then
+  // the prior whole document (so engine-owned fields a prior writer left — persona_state §26.5, impasse
+  // §26.8 — survive a status-only write the app does not yet model), then the app-owned read set, emitted
+  // uniformly present (defaulted, never conditionally omitted — the §26.6 reader must not see a partial
+  // read set; that is why `pr`/`branch`/`linked_issues` all default rather than drop).
   const doc: Record<string, unknown> = {
-    ...(readPriorDoc(file) ?? defaultExtension()),
+    ...defaultExtension(),
+    ...(readPriorDoc(file) ?? {}),
     schema_version: 4,
     pr: state.pr ?? 0,
-    ...(state.branch ? { branch: state.branch } : {}),
+    branch: state.branch ?? null,
     iteration: state.iteration,
     status: state.status,
     ...(state.boundLoop ? { bound_loop: state.boundLoop } : {}),
-    ...(state.linkedIssues.length > 0 ? { linked_issues: state.linkedIssues } : {}),
+    linked_issues: state.linkedIssues,
     updated_at: now().toISOString(),
   };
 

@@ -66,6 +66,13 @@ export interface LoopDef {
 
 const SCHEMA_VERSION = '4';
 
+// Loop names, phase ids, and persona/actor names all become filesystem path components downstream — the
+// loop name selects `<configLoops>/<name>/` (and the dir its injected prompts §26.5 are read from), phase
+// ids form `prompts/work-{id}.md`, actor names form `reviews/{iter}/{actor}.json`. Repo-supplied config
+// (flow.yaml `loop:`, the `.agent-loop.yaml` override, the LoopDef yaml) is untrusted, so every such
+// string is confined to a single safe path-segment — no separators or `..` (CWE-22 defense in depth).
+const SAFE_NAME = /^[a-z0-9][a-z0-9-]*$/;
+
 /** The engine reads `$CLAUDE_CONFIG_DIR/loops/`, defaulting to `~/.claude` (`agent-loop list`). */
 function configLoopsDir(configDir?: string): string {
   const base = configDir ?? process.env.CLAUDE_CONFIG_DIR ?? path.join(os.homedir(), '.claude');
@@ -74,8 +81,10 @@ function configLoopsDir(configDir?: string): string {
 
 /** Resolve a loop NAME to its LoopDef yaml path: a repo-local `.agent-loop.yaml` `loops:` registry
  *  override (resolved relative to the repo) wins; otherwise the bundled/user-authored config copy at
- *  `<configLoops>/<name>/<name>.yaml`. Returns the path to try — existence is the parser's concern. */
-function resolveLoopDefPath(repoDir: string, name: string, configDir?: string): string {
+ *  `<configLoops>/<name>/<name>.yaml`. Returns the path to try (existence is the parser's concern), or
+ *  null when the name is not a single safe path segment — so it can never become a traversal lever. */
+function resolveLoopDefPath(repoDir: string, name: string, configDir?: string): string | null {
+  if (!SAFE_NAME.test(name)) return null;
   try {
     const raw = readFileSync(path.join(repoDir, '.agent-loop.yaml'), 'utf8');
     const doc = yaml.load(raw);
@@ -103,16 +112,12 @@ function resolveLoopDefPath(repoDir: string, name: string, configDir?: string): 
 }
 
 /** The directory that holds a loop's def + its `prompts/`, `charter/`, `skills/` (§26.5) — the parent
- *  of the resolved LoopDef yaml, so prompt/recipe assembly reads from the same source the parser used. */
-export function resolveLoopDir(repoDir: string, name: string, configDir?: string): string {
-  return path.dirname(resolveLoopDefPath(repoDir, name, configDir));
+ *  of the resolved LoopDef yaml, so prompt/recipe assembly reads from the same source the parser used.
+ *  Null when the name does not resolve to a safe path (see resolveLoopDefPath). */
+export function resolveLoopDir(repoDir: string, name: string, configDir?: string): string | null {
+  const defPath = resolveLoopDefPath(repoDir, name, configDir);
+  return defPath === null ? null : path.dirname(defPath);
 }
-
-// Phase ids and persona/actor names become filesystem path components downstream (`prompts/work-{id}.md`,
-// `reviews/{iter}/{actor}.json`). The repo-local `.agent-loop.yaml` override that can redirect resolution
-// is already treated as untrusted (its path is containment-checked, §20.2), so the strings it yields are
-// charset-confined here too: a single safe path-segment, no separators or `..` (CWE-22 defense in depth).
-const SAFE_NAME = /^[a-z0-9][a-z0-9-]*$/;
 
 /** The orchestrator-relevant slice of `phases` (§26.5): id + entry_status + roster binding; malformed or
  *  unsafe-named entries drop. `roster_override_id` is optional (absent → "" = inherit the catalog default). */
@@ -208,9 +213,11 @@ function toPickupContract(doc: Record<string, unknown>): PickupContract | undefi
 /** Resolve + parse the LoopDef bound to `name` for `repoDir`. Returns its gate model + pickup contract,
  *  or null for a missing / corrupt / wrong-`schema_version` / gate-less file (never throws). */
 export function parseLoopDef(repoDir: string, name: string, configDir?: string): LoopDef | null {
+  const defPath = resolveLoopDefPath(repoDir, name, configDir);
+  if (defPath === null) return null;
   let raw: string;
   try {
-    raw = readFileSync(resolveLoopDefPath(repoDir, name, configDir), 'utf8');
+    raw = readFileSync(defPath, 'utf8');
   } catch {
     return null;
   }

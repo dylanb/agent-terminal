@@ -50,6 +50,16 @@ describe('docked loop panel (§24.2.3 T2)', () => {
     expect(host.querySelector('.ldl')?.getAttribute('aria-live')).toBe('polite');
   });
 
+  it('makes each state row atomic so a live update announces label+value together, not a bare value (WCAG 4.1.3)', () => {
+    // patchInPlace mutates only the value node (.lv); without aria-atomic on the row, a screen reader
+    // announces a context-free value ("3") with no field label. aria-atomic on each .lrow makes the
+    // whole row ("iteration 3") announce together.
+    createLoopPanel(host).render(loop(), 'build');
+    const rows = [...host.querySelectorAll<HTMLElement>('.ldl .lrow')];
+    expect(rows.length).toBeGreaterThan(0);
+    for (const r of rows) expect(r.getAttribute('aria-atomic')).toBe('true');
+  });
+
   it('renders the panel header title + a close button the shell can dismiss', () => {
     createLoopPanel(host).render(loop(), 'build');
     expect(host.querySelector('.lhead h3')?.textContent).toBe('build');
