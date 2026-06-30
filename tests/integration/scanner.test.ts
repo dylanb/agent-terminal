@@ -773,6 +773,41 @@ describe('manual capture on demand (§21.1 — captureLast, dormant auto-scan)',
     ]);
   });
 
+  it('skips a Claude Code "※ recap:" line and captures the real report above it (§21.1)', async () => {
+    // Claude Code prints a one-line "※ recap:" turn summary (toggled by /config) below the real
+    // output — it is the agent's meta-recap, not the latest report, so capture must take the
+    // substantive report above it, not the bottom-most recap line.
+    const scanner = dormant([createClaudeCodeAdapter()], createGenericAdapter());
+    shadow.write(
+      'FINAL CONCLUSION: the auth flow is solid and well covered before merge.\r\n' +
+        '⏺ Bash(npm test)\r\n' +
+        '※ recap: tightened the deny list and pinned the branch before merge.\r\n',
+    );
+    await sleep(50);
+    const result = scanner.captureLast();
+    expect(result).not.toBeNull();
+    expect(result!.report.text).toContain('FINAL CONCLUSION');
+    expect(result!.report.text).not.toContain('recap');
+  });
+
+  it('returns null when the only report candidate is a "※ recap:" line (§21.1)', async () => {
+    const scanner = dormant([], createGenericAdapter());
+    shadow.write('※ recap: analyzed the PR and tightened the deny list before merge.\r\n');
+    await sleep(50);
+    expect(scanner.captureLast()).toBeNull();
+  });
+
+  it('keeps a report that merely MENTIONS recap mid-text (not a recap line, §21.1)', async () => {
+    // The recap filter must anchor on the "※ recap:" prefix, not the word anywhere: a real report
+    // that names "recap" inside its prose is not a recap line.
+    const scanner = dormant([], createGenericAdapter());
+    shadow.write('FINAL CONCLUSION: write a recap of the findings before you merge this branch.\r\n');
+    await sleep(50);
+    const result = scanner.captureLast();
+    expect(result).not.toBeNull();
+    expect(result!.report.text).toContain('FINAL CONCLUSION');
+  });
+
   it('keeps a prose report that ENDS with a command phrase (not a prompt+command echo, §21.1)', async () => {
     // The echo is "<prompt> <command>" — only a prompt may precede the command. A report whose prose
     // happens to end with the command (no prompt before it) must NOT be dropped.

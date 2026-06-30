@@ -95,6 +95,12 @@ function normalize(text: string): string {
   return text.trim().replace(/\s+/g, ' ');
 }
 
+/** Claude Code's end-of-turn "※ recap:" line — the agent's one-line turn summary (toggled by its
+ *  own /config), printed below the real output. It is a meta-summary, not the latest report, so
+ *  on-demand capture (§21.1) skips it the way it skips an echoed command line. Anchored at the
+ *  start of the normalized region so a report that merely names "recap" mid-prose is unaffected. */
+const RECAP_LINE = /^※\s*recap:/i;
+
 /** Coordinate-free dedup key so a region survives scrollback trim (§15.3). */
 function dedupKey(type: MonitorEventType, norm: string): string {
   // `::` cannot collide: MonitorEventType is a fixed kebab-case enum with no colons.
@@ -443,7 +449,7 @@ export function createScanner(deps: ScannerDeps): Scanner {
     };
     let region: DetectedRegion | undefined;
     for (const r of allRegions) {
-      if (r.type !== 'report' || isCommandEcho(r.text)) continue;
+      if (r.type !== 'report' || isCommandEcho(r.text) || RECAP_LINE.test(normalize(r.text))) continue;
       if (!region || r.startRow > region.startRow) region = r;
     }
     if (!region) return null;
