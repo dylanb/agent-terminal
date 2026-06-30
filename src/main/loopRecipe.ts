@@ -20,11 +20,12 @@ export interface WorkPromptRequest {
   configDir?: string;
 }
 
-/** Compose the work-turn prompt, or null when the phase template is absent (the recipe's
- *  `on_missing: fail` for the template-file slot — the orchestrator treats null as a config error). */
+/** Compose the work-turn prompt, or null when the loop name is unsafe or the phase template is absent
+ *  (the recipe's `on_missing: fail` for the template-file slot — the orchestrator treats null as a
+ *  config error). */
 export function composeWorkPrompt(req: WorkPromptRequest): string | null {
   const loopDir = resolveLoopDir(req.repoDir, req.loopName, req.configDir);
-  if (loopDir === null) return null; // unsafe loop name → no template (the orchestrator treats null as a config error)
+  if (loopDir === null) return null;
   const templatePath = path.join(loopDir, 'prompts', `work-${req.phase}.md`);
   let body: string;
   try {
