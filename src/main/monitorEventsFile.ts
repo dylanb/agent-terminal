@@ -5,11 +5,11 @@
 // validated to the MonitorEvent shape before it can seed the store and replay into the monitor
 // pane; a missing/corrupt/foreign file degrades to an empty list (never a throw).
 
-import { lstatSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
-import { randomUUID } from 'node:crypto';
+import { lstatSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import type { BufferType, MonitorEvent, MonitorEventSource, MonitorEventType } from '../shared/ipc';
 import { isInjectableEventType } from '../shared/injectableEvents';
+import { atomicWriteFileSync, containerIsReal } from './atomicFile';
 import type { MonitorEventPersistence } from './eventStore';
 import { isRecord } from './yamlRecord';
 
@@ -25,23 +25,6 @@ export interface MonitorEventsFileDeps {
    *  so a cloned repo cannot pre-plant a symlink at it for the write to follow (CWE-59) — the `wx`
    *  exclusive create is the backstop. Tests override it to force the exclusive-create refusal path. */
   tmpPath?: (file: string) => string;
-}
-
-/** True only when `dir` is a real directory or does not exist yet (mkdir will create a real one).
- *  A symlink — even to a directory — is rejected: the kernel would follow it out of launchRoot,
- *  redirecting the read or landing the write (captured output that may carry secrets) in an
- *  attacker-chosen location. lstat does not follow, so a directory symlink fails isDirectory()
- *  (CWE-59 link following — the guard the final-component lstat and the `wx` temp create cannot give).
- *  This closes the threat model in scope (a statically-planted symlink shipped in a cloned repo). A
- *  concurrent local process racing the check to swap `.agent-terminal` after it passes is an
- *  out-of-model TOCTOU residual (CWE-367) that a path-string lstat cannot close without dir-fd
- *  O_NOFOLLOW APIs Node does not expose; `wx` still blocks clobbering an existing file in that race. */
-function containerIsReal(dir: string): boolean {
-  try {
-    return lstatSync(dir).isDirectory();
-  } catch {
-    return true;
-  }
 }
 
 // Runtime membership tests for the §15.4 `MonitorEventType`/`MonitorEventSource`/`BufferType` unions
@@ -86,7 +69,6 @@ export function createMonitorEventsFile(
 ): MonitorEventPersistence {
   const file = path.join(launchRoot, EVENTS_REL);
   const dir = path.dirname(file);
-  const tmpPath = deps.tmpPath ?? ((f: string): string => `${f}.${randomUUID()}.tmp`);
   return {
     load() {
       try {
@@ -104,13 +86,9 @@ export function createMonitorEventsFile(
       }
     },
     save(events) {
-      if (!containerIsReal(dir)) return; // refuse a symlinked container rather than write through it
-      mkdirSync(dir, { recursive: true });
-      // Unpredictable temp name + exclusive create (wx): an untrusted repo cannot pre-plant a symlink
-      // at the temp path for the write to follow (CWE-59). Captured output may carry secrets → 0o600.
-      const tmp = tmpPath(file);
-      writeFileSync(tmp, JSON.stringify(events), { mode: 0o600, flag: 'wx' });
-      renameSync(tmp, file);
+      // Captured output may carry secrets → owner-only; the symlinked-container refusal and the
+      // unpredictable-temp + exclusive-create hardening live in atomicWriteFileSync (CWE-59).
+      atomicWriteFileSync(file, JSON.stringify(events), { mode: 0o600, tmpPath: deps.tmpPath });
     },
   };
 }
