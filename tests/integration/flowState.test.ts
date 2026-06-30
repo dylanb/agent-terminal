@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync, symlinkSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createFlowStateStore } from '../../src/main/flowState';
@@ -30,6 +30,23 @@ describe('flow-state store (§24.2.2 S3 / §19.1)', () => {
 
   it('reads null when no flow-state.yaml exists yet (never throws)', () => {
     expect(createFlowStateStore(dir).read()).toBeNull();
+  });
+
+  it('does not write through a symlinked .agent-terminal directory (the write cannot escape the worktree) — CWE-59', () => {
+    // A cloned repo ships `.agent-terminal` as a symlink to an attacker-chosen directory; the flow
+    // write (which may carry resolved inputs) must not land in <target>/flow-state.yaml.
+    const outside = mkdtempSync(join(tmpdir(), 'flow-state-outside-'));
+    try {
+      symlinkSync(outside, join(dir, '.agent-terminal'));
+      try {
+        createFlowStateStore(dir).write({ step: 'plan', status: 'in_progress' });
+      } catch {
+        /* refusing the symlinked container may throw; the assertion below is the real check */
+      }
+      expect(existsSync(join(outside, 'flow-state.yaml'))).toBe(false);
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
   });
 
   // §24.2.3 T3 — resolved typed inputs (§18.4) persist alongside progression so they survive a

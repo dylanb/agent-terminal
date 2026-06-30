@@ -11,6 +11,7 @@
 // by id. The terminal owns the coordinates.
 
 import type { MonitorApi, MonitorEvent, MonitorEventType, TodoItem } from '../../shared/ipc';
+import { isInjectableEventType } from '../../shared/injectableEvents';
 import {
   CAPTURE_RANGE_ADD_EVENT,
   CAPTURE_RANGE_REMOVE_EVENT,
@@ -168,8 +169,8 @@ export function createCaptureTab(deps: CaptureTabDeps): CaptureTab {
 
     el.append(makeChunkCheckbox(event.id, event.text), t, m);
 
-    // command-output is the one inject-able capture (§16.2): Insert at cursor (no submit).
-    if (event.type === 'command-output') {
+    // The inject-able capture (§16.2): Insert at cursor (no submit).
+    if (isInjectableEventType(event.type)) {
       const a = doc.createElement('div');
       a.className = 'a';
       a.append(linkbtn('Insert at cursor', () => doInject(event.text, false)));

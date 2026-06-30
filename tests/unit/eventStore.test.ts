@@ -1,6 +1,21 @@
 import { describe, expect, it } from 'vitest';
 import { createMonitorEventStore } from '../../src/main/eventStore';
-import type { MonitorCaptureMsg } from '../../src/shared/ipc';
+import type { MonitorCaptureMsg, MonitorEvent } from '../../src/shared/ipc';
+
+/** A fake persistence backing: an in-memory event list standing in for the on-disk file. A "fresh
+ *  store over the same backing" models relaunch — the only observable that matters for restore. */
+function fakeBacking(seed: MonitorEvent[] = []) {
+  let saved: MonitorEvent[] = seed.map((e) => ({ ...e }));
+  return {
+    persistence: {
+      load: () => saved.map((e) => ({ ...e })),
+      save: (events: readonly MonitorEvent[]) => {
+        saved = events.map((e) => ({ ...e }));
+      },
+    },
+    current: () => saved,
+  };
+}
 
 const capture: MonitorCaptureMsg = {
   sessionId: 's1',
@@ -130,5 +145,74 @@ describe('monitor event store (§8.4)', () => {
     store.addCapture({ ...capture, text: 'b' });
     store.clear();
     expect(store.list()).toEqual([]);
+  });
+});
+
+describe('monitor event persistence — restore after any termination', () => {
+  it('replays persisted events on construct', () => {
+    const seed: MonitorEvent[] = [
+      { id: 'e1', sessionId: 's1', type: 'capture', source: 'selection', text: 'prior', range: null, parentId: null, truncated: false, capturedAt: '2026-06-12T10:00:00.000Z' },
+    ];
+    const backing = fakeBacking(seed);
+    const store = createMonitorEventStore({ persistence: backing.persistence });
+    expect(store.list().map((e) => e.text)).toEqual(['prior']);
+  });
+
+  it('a capture survives into a fresh store over the same backing', () => {
+    const backing = fakeBacking();
+    const store = createMonitorEventStore({ now: () => new Date(0), persistence: backing.persistence });
+    const event = store.addCapture({ ...capture, text: 'captured' });
+    const reborn = createMonitorEventStore({ persistence: backing.persistence });
+    expect(reborn.list().map((e) => e.id)).toEqual([event.id]);
+    expect(reborn.list().map((e) => e.text)).toEqual(['captured']);
+  });
+
+  it('addEvent survives into a fresh store over the same backing', () => {
+    const backing = fakeBacking();
+    const store = createMonitorEventStore({ now: () => new Date(0), persistence: backing.persistence });
+    const sem = store.addEvent({
+      sessionId: 's1', type: 'report', source: 'shadow-scan',
+      text: 'report body', range: null, parentId: null, truncated: false,
+    });
+    const reborn = createMonitorEventStore({ persistence: backing.persistence });
+    expect(reborn.list().map((e) => e.id)).toEqual([sem.id]);
+  });
+
+  it('a removal is reflected after relaunch', () => {
+    const backing = fakeBacking();
+    const store = createMonitorEventStore({ now: () => new Date(0), persistence: backing.persistence });
+    const a = store.addCapture({ ...capture, text: 'a' });
+    const b = store.addCapture({ ...capture, text: 'b' });
+    store.remove(a.id);
+    const reborn = createMonitorEventStore({ persistence: backing.persistence });
+    expect(reborn.list().map((e) => e.id)).toEqual([b.id]);
+  });
+
+  it('clear is reflected after relaunch', () => {
+    const backing = fakeBacking();
+    const store = createMonitorEventStore({ now: () => new Date(0), persistence: backing.persistence });
+    store.addCapture({ ...capture, text: 'a' });
+    store.clear();
+    const reborn = createMonitorEventStore({ persistence: backing.persistence });
+    expect(reborn.list()).toEqual([]);
+  });
+
+  // Persistence is best-effort durability (§8.4): a save() that throws (read-only launch dir,
+  // ENOSPC, a planted directory at the path) must never abort the capture/mutation critical path
+  // it sits on — CLAUDE.md best-effort-side-effect rule, the §25 audit recorder's precedent.
+  const throwingPersistence = { load: () => [], save: () => { throw new Error('EROFS'); } };
+
+  it('a save() failure does not abort addCapture, and the event still lands in memory', () => {
+    const store = createMonitorEventStore({ persistence: throwingPersistence });
+    expect(() => store.addCapture({ ...capture, text: 'a' })).not.toThrow();
+    expect(store.list()).toHaveLength(1);
+  });
+
+  it('a save() failure does not abort remove or clear', () => {
+    const store = createMonitorEventStore({ persistence: throwingPersistence });
+    store.addCapture({ ...capture, text: 'a' });
+    const id = store.list()[0].id;
+    expect(() => store.remove(id)).not.toThrow();
+    expect(() => store.clear()).not.toThrow();
   });
 });

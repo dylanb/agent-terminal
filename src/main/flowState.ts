@@ -2,9 +2,10 @@
 // (no-gitignore-writes rule); a user who does not want flow-state.yaml committed ignores
 // .agent-terminal/ themselves.
 
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import yaml from 'js-yaml';
+import { atomicWriteFileSync } from './atomicFile';
 import type { FlowStatus } from '../shared/ipc';
 import { isRecord } from './yamlRecord';
 
@@ -52,11 +53,8 @@ export function createFlowStateStore(worktreeDir: string): FlowStateStore {
       return { step: doc.step, status: doc.status as FlowStatus, ...(inputs ? { inputs } : {}) };
     },
     write(state) {
-      mkdirSync(path.dirname(file), { recursive: true });
-      const tmp = `${file}.tmp`;
       const hasInputs = state.inputs && Object.keys(state.inputs).length > 0;
-      writeFileSync(tmp, yaml.dump({ step: state.step, status: state.status, ...(hasInputs ? { inputs: state.inputs } : {}) }));
-      renameSync(tmp, file);
+      atomicWriteFileSync(file, yaml.dump({ step: state.step, status: state.status, ...(hasInputs ? { inputs: state.inputs } : {}) }));
     },
   };
 }

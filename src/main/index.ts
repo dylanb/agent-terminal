@@ -2,6 +2,7 @@ import { app, BrowserWindow, clipboard, ipcMain, Menu, Notification, shell } fro
 import { buildMenuTemplate } from './appMenu';
 import path from 'node:path';
 import os from 'node:os';
+import { performance } from 'node:perf_hooks';
 import {
   CH,
   SESSION_ID,
@@ -16,8 +17,12 @@ import {
 } from '../shared/ipc';
 import { createInjector } from './inject';
 import { createMonitorEventStore } from './eventStore';
+import { createMonitorEventsFile } from './monitorEventsFile';
 import { createShadowModel } from './shadow';
 import { spawnAgentShell, resolveShellPath } from './pty';
+import { createPtyIo } from './ptyIo';
+import { shouldTerminateOnShellExit } from './shellExit';
+import { disposeAll } from './windowTeardown';
 import { resolveLaunchSurfaces } from './launchRoot';
 import { createOutputGate } from './outputGate';
 import { resolveRendererTarget } from './rendererTarget';
@@ -116,7 +121,11 @@ async function createWindow(): Promise<void> {
     integrationScriptPath: config.shellIntegration ? SHELL_INTEGRATION_SCRIPT : undefined,
     cwd: launchRoot,
   });
-  const store = createMonitorEventStore();
+  const shellSpawnedAt = performance.now(); // monotonic: a wall-clock jump must not flip the grace
+  // PTY I/O after the shell exits is dropped, not driven into a dead master fd (§5; ptyIo.ts).
+  const ptyIo = createPtyIo(ptyProcess);
+  // §8.4
+  const store = createMonitorEventStore({ persistence: createMonitorEventsFile(launchRoot) });
   // §16.6: the only state that lives outside the repo (userData).
   const uiSettings = createUiSettingsStore(path.join(app.getPath('userData'), 'ui-settings.json'));
   const todoStore = createTodoStore({ maxDoneTodos: config.maxDoneTodos });
@@ -232,7 +241,7 @@ async function createWindow(): Promise<void> {
   });
 
   const inject = createInjector({
-    write: (data) => ptyProcess.write(data),
+    write: (data) => ptyIo.io.write(data),
     isBracketedPaste: () => shadow.isBracketedPaste(),
     onInject: () => suppressor.noteInjection(),
   });
@@ -387,18 +396,25 @@ async function createWindow(): Promise<void> {
     outputGate.send(data);
     shadow.write(data);
   });
-  ptyProcess.onExit(({ exitCode }) => send(CH.ptyExit, { sessionId: SESSION_ID, code: exitCode }));
+  // The hosted shell IS the session (§5); a sub-grace exit is excepted (shellExit.ts).
+  ptyProcess.onExit(({ exitCode }) => {
+    ptyIo.markExited(); // a kept-open window (§5) must not drive the dead shell — see ptyIo.ts
+    send(CH.ptyExit, { sessionId: SESSION_ID, code: exitCode });
+    if (shouldTerminateOnShellExit(performance.now() - shellSpawnedAt, config.startupExitGraceMs) && !win.isDestroyed()) {
+      win.close();
+    }
+  });
 
   const disposeIpc = registerIpcListeners(
     ipcMain,
     {
       [CH.ptyInput]: (_e, m) => {
-        if (isValidInput(m)) ptyProcess.write(m.data);
+        if (isValidInput(m)) ptyIo.io.write(m.data);
       },
       // PTY and shadow must never diverge in size, or captures mis-wrap (§4 flow F).
       [CH.ptyResize]: (_e, m) => {
         if (isValidResize(m)) {
-          ptyProcess.resize(m.cols, m.rows);
+          ptyIo.io.resize(m.cols, m.rows);
           shadow.resize(m.cols, m.rows);
         }
       },
@@ -595,16 +611,22 @@ async function createWindow(): Promise<void> {
   );
 
   win.on('closed', () => {
-    disposeIpc();
-    ptyProcess.kill();
-    scanner.dispose();
-    suppressor.dispose();
-    cwdTracker.dispose();
-    tracker.dispose();
-    shadow.dispose();
-    stopViewerWatch();
-    for (const stop of loopWatchers.values()) stop();
-    loopWatchers.clear();
+    // §5 grace-kept-open close: the shell may already have exited, so ptyProcess.kill() can throw
+    // ESRCH — each step is isolated so one failure never strands the others (disposeAll).
+    disposeAll([
+      () => disposeIpc(),
+      () => ptyProcess.kill(),
+      () => scanner.dispose(),
+      () => suppressor.dispose(),
+      () => cwdTracker.dispose(),
+      () => tracker.dispose(),
+      () => shadow.dispose(),
+      () => stopViewerWatch(),
+      () => {
+        for (const stop of loopWatchers.values()) stop();
+        loopWatchers.clear();
+      },
+    ]);
   });
 
   const target = resolveRendererTarget({

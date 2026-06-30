@@ -1,9 +1,10 @@
 // Repo-scoped todo store (§16.3 / §16.4). A missing/corrupt file degrades to an empty list (never
 // a throw) so a bad file can't wedge the pane. Done is capped (APP_MAX_DONE_TODOS).
 
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
+import { atomicWriteFileSync } from './atomicFile';
 import type { TodoItem, TodoSource, TodoStatus } from '../shared/ipc';
 
 export interface TodoStoreDeps {
@@ -67,11 +68,7 @@ export function createTodoStore(deps: TodoStoreDeps): TodoStore {
   }
 
   function persist(repoKey: string, state: RepoState): TodoItem[] {
-    const file = fileFor(repoKey);
-    mkdirSync(path.dirname(file), { recursive: true });
-    const tmp = `${file}.tmp`;
-    writeFileSync(tmp, JSON.stringify(state.items));
-    renameSync(tmp, file);
+    atomicWriteFileSync(fileFor(repoKey), JSON.stringify(state.items));
     return sorted(state.items);
   }
 
