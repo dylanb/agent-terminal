@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { mkdtempSync, writeFileSync, readFileSync, readdirSync, rmSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import yaml from 'js-yaml';
@@ -78,5 +78,39 @@ describe('loop state.yaml writer (§26.6)', () => {
     expect(existsSync(join(repo, '.agent-loop'))).toBe(false);
     writeLoopState(repo, L1_STATE, fixedNow);
     expect(existsSync(join(repo, '.agent-loop', 'state.yaml'))).toBe(true);
+  });
+
+  it('preserves engine-owned fields the app does not model when overwriting an existing doc (§26.6 re-handoff)', () => {
+    // The app writes a whole document but does not yet USE the LoopExtension fields (§26.5/§26.8 read
+    // persona_state / impasse in later slices). A write must therefore preserve any non-default values a
+    // prior writer (the §26.6 "future Go re-handoff", or a later app slice) left, not reset the document
+    // to defaults on every status change. Seed a doc carrying real extension state, then write a status
+    // change through the orchestrator's writer and assert the engine-owned state survives.
+    const seeded = {
+      schema_version: 4,
+      pr: 42,
+      branch: 'plan-loop/issue-176',
+      iteration: 3,
+      status: 'plan-draft',
+      bound_loop: 'plan-loop',
+      linked_issues: [176],
+      persona_state: { 'review-principal': { last_clean_iter: 2 } },
+      impasse: { consecutive_identical: 1, last_findings_sig: 'abc123' },
+      phase2_active: true,
+      human_notes: ['human asked for a smaller plan'],
+      completed_loops: ['some-prior-loop'],
+    };
+    mkdirSync(join(repo, '.agent-loop'), { recursive: true });
+    writeFileSync(join(repo, '.agent-loop', 'state.yaml'), yaml.dump(seeded));
+
+    writeLoopState(repo, { ...L1_STATE, iteration: 3, status: 'error' }, fixedNow);
+
+    const doc = yaml.load(readFileSync(join(repo, '.agent-loop', 'state.yaml'), 'utf8')) as Record<string, unknown>;
+    expect(doc.status).toBe('error'); // the app-owned field is updated
+    expect(doc.persona_state).toEqual({ 'review-principal': { last_clean_iter: 2 } }); // engine state survives
+    expect(doc.impasse).toEqual({ consecutive_identical: 1, last_findings_sig: 'abc123' });
+    expect(doc.phase2_active).toBe(true);
+    expect(doc.human_notes).toEqual(['human asked for a smaller plan']);
+    expect(doc.completed_loops).toEqual(['some-prior-loop']);
   });
 });

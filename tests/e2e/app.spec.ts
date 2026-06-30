@@ -1492,13 +1492,25 @@ function doneSignal(turnKey: string): string {
   return `printf '%s' '${turnKey}' > .agent-loop/${TURN_DONE_FILENAME}; printf '\\n%s\\n' '${turnDoneSentinel(turnKey)}'`;
 }
 
+// Write ONLY the turn-done file — no sentinel line. Exercises the file half of the §26.3/D47a "line OR
+// file" done-signal independently (the line scanner can never match because no sentinel is printed).
+function fileOnlySignal(turnKey: string): string {
+  return `printf '%s' '${turnKey}' > .agent-loop/${TURN_DONE_FILENAME}`;
+}
+
 function seedFakeAgent(
   binDir: string,
-  opts: { work: 'write-plan' | 'plan-only' | 'noop'; reviews?: 'all' | 'missing' },
+  opts: { work: 'write-plan' | 'file-only' | 'plan-only' | 'noop'; reviews?: 'all' | 'missing' },
 ): void {
   const writePlan = "mkdir -p .agent-loop; printf '# Plan\\n\\nfake plan body\\n' > .agent-loop/plan.md";
   const workAct =
-    opts.work === 'noop' ? ':' : opts.work === 'plan-only' ? writePlan : `${writePlan}; ${doneSignal('work-plan')}`;
+    opts.work === 'noop'
+      ? ':'
+      : opts.work === 'plan-only'
+        ? writePlan
+        : opts.work === 'file-only'
+          ? `${writePlan}; ${fileOnlySignal('work-plan')}`
+          : `${writePlan}; ${doneSignal('work-plan')}`;
   // §26.4 — on the reviewers turn, write each roster persona's JSON for iteration 1 then signal done.
   // `missing` writes all but one so the fan-out is incomplete (retry-then-error); undefined = do nothing.
   const personas = opts.reviews === 'missing' ? PLAN_PERSONAS.slice(0, -1) : PLAN_PERSONAS;
@@ -2182,6 +2194,30 @@ test('the loop panel "mark turn complete" control advances a sentinel-less turn 
 
   // Land: the manual override completes the turn (exit 0), and the run never errors.
   await expect.poll(() => turnEvents(home, repo).some((e) => e.cmd.includes('complete') && e.exit === 0), { timeout: 15_000 }).toBe(true);
+  expect(readFileSync(join(repo, '.agent-loop', 'state.yaml'), 'utf8')).not.toContain('status: error');
+
+  await app.close();
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+  rmSync(binDir, { recursive: true, force: true });
+});
+
+test('a work turn completes on the turn-done FILE alone, with no sentinel line (§26.13 / L2 / D47a)', async () => {
+  // §26.3/D47a's done-signal is "the sentinel LINE OR the turn-done FILE". The other L2 happy-path tests
+  // emit both, so the file-watch path is never proven alone. Here the fake-agent writes plan.md and the
+  // turn-done file but prints NO sentinel line, so completion can ONLY come via watchTurnDone.
+  const repo = seedBootstrapFlowRepo('agent-term-e2e-l2-fileonly-');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-l2-fileonly-home-'));
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-l2-fileonly-bin-');
+  seedFakeAgent(binDir, { work: 'file-only', reviews: 'all' });
+  await driveToWorkTurn(repo, home, binDir, logFile, '30000');
+
+  await expect.poll(() => existsSync(join(repo, '.agent-loop', 'plan.md')), { timeout: 20_000 }).toBe(true);
+  await expect
+    .poll(() => turnEvents(home, repo).some((e) => e.cmd.includes('work-plan') && e.cmd.includes('complete') && e.exit === 0), {
+      timeout: 20_000,
+    })
+    .toBe(true);
   expect(readFileSync(join(repo, '.agent-loop', 'state.yaml'), 'utf8')).not.toContain('status: error');
 
   await app.close();

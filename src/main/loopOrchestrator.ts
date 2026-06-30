@@ -1,8 +1,7 @@
-// §26.3/D47a + D48 — the work-agent turn runner: the in-app orchestrator state machine for ONE actor
-// turn. It injects a composed prompt only while the hosted instance is injectable (§26.2), waits for a
-// done-signal (a sentinel line OR file OR the manual override) AND the turn's artifact, retries once on
-// failure, then stops the run in `error`. It owns no I/O — every effect is a domain port the host wires
-// to the injector, the §8.3 quiescence signal, the artifact check, and the state.yaml writer.
+// §26.3/D47a + D48 — the in-app turn-runner state machine for ONE actor turn. It owns no I/O: every
+// effect is a domain port the host wires to the §9.3 injector, the §8.3 quiescence signal, the artifact
+// check, and the state.yaml writer (the CLAUDE.md domain-port seam — the runner names what it needs, not
+// the backing mechanism).
 
 export type TurnState = 'idle' | 'in-flight' | 'complete' | 'error';
 
@@ -11,7 +10,8 @@ export interface TurnRunnerDeps {
   compose(turnKey: string): string | null;
   /** Inject + submit the prompt into the hosted instance (§9.3). */
   inject(prompt: string): void;
-  /** True iff the instance is idle at its input box (§26.2): quiescent and the shell not busy. */
+  /** True iff the hosted instance is idle at its own input box — quiescent (§8.3), per §26.2's redefinition
+   *  of "injectable" for a hosted REPL (NOT a shell-busy check: the agent is itself the foreground process). */
   injectable(): boolean;
   /** True iff the turn's expected artifact exists and parses (§26.3/D47a b); artifact-less turns pass a
    *  turn-appropriate check here. */
@@ -53,6 +53,12 @@ export function createTurnRunner(deps: TurnRunnerDeps): TurnRunner {
     if (state !== 'in-flight' || turnKey === null) return;
     if (!deps.injectable()) {
       awaitingInjectable = true;
+      // Bound only a RETRY that cannot re-inject (a prior attempt was already spent) so an instance that
+      // never returns to injectable after a failed turn resolves to `error` (§26.3/D48) instead of
+      // hanging. A turn's FIRST wait for injectability is the happy path (e.g. the work→reviewers chain
+      // waiting out the instance's post-turn quiescence) and is left unbounded — bounding it would race
+      // quiescence-detection latency under load.
+      if (attempts > 0) deps.armTimer();
       return;
     }
     awaitingInjectable = false;
@@ -107,6 +113,14 @@ export function createTurnRunner(deps: TurnRunnerDeps): TurnRunner {
       resolveCompletion();
     },
     onTimeout() {
+      // A deadline reached while still waiting to inject means the instance never became injectable —
+      // a retry cannot help, so stop in `error` directly rather than looping the defer (§26.3/D48).
+      if (awaitingInjectable) {
+        deps.cancelTimer();
+        state = 'error';
+        deps.writeError('completion timeout: instance never became injectable');
+        return;
+      }
       fail('completion timeout: no done-signal');
     },
     markComplete() {

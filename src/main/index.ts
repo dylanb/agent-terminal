@@ -250,14 +250,10 @@ async function createWindow(): Promise<void> {
     onInject: () => suppressor.noteInjection(),
   });
 
-  // §26.3 / L2 — the in-app work-agent turn runner. After pickup writes plan-draft (§26.9/L1) the
-  // orchestrator injects the bound LoopDef's work-{phase} prompt and advances on a done-signal (a
-  // sentinel line OR the `.agent-loop/turn-done` file) plus the turn artifact, retrying once then
-  // writing the app-only `error` status. `activeTurn` carries the bound-loop context its domain ports
-  // read; the runner injects only while the instance is injectable (§26.2: quiescent at its input box).
-  // A turn is either the `work` actor (produces `plan.md`) or the `reviewers` fan-out (§26.4: produces
-  // every roster persona's `reviews/<iter>/<persona>.json`). The descriptor's `kind` selects the prompt
-  // recipe and the artifact-confirmed check; `reviewers` carries its resolved roster + iteration.
+  // §26.3/§26.4 — the in-app turn descriptor the runner's domain ports read. A turn is either the `work`
+  // actor (produces `plan.md`) or the `reviewers` fan-out (produces every roster persona's
+  // `reviews/<iter>/<persona>.json`); `kind` selects the prompt recipe and the artifact-confirmed check,
+  // and `reviewers` carries its resolved roster + iteration.
   type ActiveTurn =
     | { kind: 'work'; repoDir: string; loopName: string; phase: string; turnKey: string }
     | { kind: 'reviewers'; repoDir: string; loopName: string; phase: string; turnKey: string; personas: string[]; iteration: number };
@@ -308,6 +304,7 @@ async function createWindow(): Promise<void> {
       }
     },
     armTimer: () => {
+      if (turnTimer) clearTimeout(turnTimer); // self-clearing: a re-arm (defer→inject) replaces, never leaks
       turnTimer = setTimeout(() => turnRunner.onTimeout(), config.turnCompletionTimeoutMs);
     },
     cancelTimer: () => {

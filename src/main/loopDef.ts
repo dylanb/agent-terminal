@@ -36,8 +36,6 @@ export interface PickupContract {
   onConflict: string;
 }
 
-/** The gate slice of a LoopDef the flow reads (§18.1) plus the pickup_contract the orchestrator drives
- *  bootstrap from (§26.9); the engine's other keys are intentionally not modelled. */
 /** The orchestrator-relevant slice of a LoopDef phase (§26.5): its `id` and the `entry_status` a run
  *  sits at while that phase's work turn is active — so a status maps back to the phase whose work
  *  prompt (`prompts/work-{id}.md`) and artifacts the orchestrator must drive. */
@@ -54,6 +52,8 @@ export interface LoopRoster {
   actors: string[];
 }
 
+/** The gate slice of a LoopDef the flow reads (§18.1) plus the phase/roster/pickup_contract fields the
+ *  orchestrator drives from (§26.4/§26.5/§26.9); the engine's other keys are intentionally not modelled. */
 export interface LoopDef {
   name: string;
   gates: LoopGate[];
@@ -108,13 +108,19 @@ export function resolveLoopDir(repoDir: string, name: string, configDir?: string
   return path.dirname(resolveLoopDefPath(repoDir, name, configDir));
 }
 
-/** The orchestrator-relevant slice of `phases` (§26.5): id + entry_status + roster binding; malformed
- *  entries drop. `roster_override_id` is optional (absent → "" = inherit the catalog default). */
+// Phase ids and persona/actor names become filesystem path components downstream (`prompts/work-{id}.md`,
+// `reviews/{iter}/{actor}.json`). The repo-local `.agent-loop.yaml` override that can redirect resolution
+// is already treated as untrusted (its path is containment-checked, §20.2), so the strings it yields are
+// charset-confined here too: a single safe path-segment, no separators or `..` (CWE-22 defense in depth).
+const SAFE_NAME = /^[a-z0-9][a-z0-9-]*$/;
+
+/** The orchestrator-relevant slice of `phases` (§26.5): id + entry_status + roster binding; malformed or
+ *  unsafe-named entries drop. `roster_override_id` is optional (absent → "" = inherit the catalog default). */
 function toPhases(doc: Record<string, unknown>): LoopPhase[] {
   if (!Array.isArray(doc.phases)) return [];
   return doc.phases
     .map((p): LoopPhase | null =>
-      isRecord(p) && typeof p.id === 'string' && typeof p.entry_status === 'string'
+      isRecord(p) && typeof p.id === 'string' && SAFE_NAME.test(p.id) && typeof p.entry_status === 'string'
         ? {
             id: p.id,
             entryStatus: p.entry_status,
@@ -135,7 +141,7 @@ function toRosters(doc: Record<string, unknown>): LoopRoster[] {
         ? {
             id: r.id,
             actors: Array.isArray(r.ordered_actors)
-              ? r.ordered_actors.filter((a): a is string => typeof a === 'string')
+              ? r.ordered_actors.filter((a): a is string => typeof a === 'string' && SAFE_NAME.test(a))
               : [],
           }
         : null,

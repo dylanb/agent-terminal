@@ -130,6 +130,34 @@ describe('loop turn runner (§26.3/D47a, D48)', () => {
     expect(r.state()).toBe('idle');
   });
 
+  it('a retry that can never inject (instance never becomes injectable) still stops in error (§26.3/D48)', () => {
+    // The failure-safety gap D48 closes: after a timeout the retry defers when the instance is busy. If
+    // the instance never returns to injectable, the run must still resolve to `error` (human-needed),
+    // not hang forever in-flight with no attention cue.
+    const r = createTurnRunner(deps);
+    r.requestTurn('work-plan'); // attempt 1 injected
+    expect(inject).toHaveBeenCalledTimes(1);
+    injectable = false; // the instance goes — and stays — busy
+    r.onTimeout(); // attempt 1 times out → wants to retry, but cannot inject → deferred
+    expect(inject).toHaveBeenCalledTimes(1); // no second injection
+    expect(r.state()).toBe('in-flight');
+    r.onTimeout(); // the deferred wait-for-injectable deadline elapses, instance still busy
+    expect(writeError).toHaveBeenCalledTimes(1);
+    expect(r.state()).toBe('error');
+  });
+
+  it('ignores a second requestTurn while a turn is in flight (no re-inject, no attempt reset)', () => {
+    const r = createTurnRunner(deps);
+    r.requestTurn('work-plan');
+    expect(inject).toHaveBeenCalledTimes(1);
+    r.requestTurn('work-plan'); // re-entry while in-flight must be a no-op
+    expect(inject).toHaveBeenCalledTimes(1);
+    // the original turn still completes normally (attempts were not reset under it)
+    r.onDoneSignal();
+    expect(onComplete).toHaveBeenCalledWith('work-plan');
+    expect(r.state()).toBe('complete');
+  });
+
   it('accepts a fresh turn after one completes (the §26.4 work→reviewers chain runs sequential turns)', () => {
     // L3 chains the reviewers turn off the work turn's completion: the host calls requestTurn again from
     // the `complete` state. The runner must start the new turn (a different key), not ignore it as re-entry.

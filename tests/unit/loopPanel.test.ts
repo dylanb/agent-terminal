@@ -42,6 +42,14 @@ describe('docked loop panel (§24.2.3 T2)', () => {
     expect(row('branch')?.querySelector('.lv')?.textContent).toBe('agent-loop/issue-176');
   });
 
+  it('marks the live state region polite so a turn advance is announced to assistive tech (WCAG 4.1.3)', () => {
+    // The "mark turn complete" control (and any orchestrator transition) changes the status/iteration
+    // rows in place via patchInPlace without moving focus; without a live region that change is silent
+    // to a screen reader. The region that holds those rows must be aria-live=polite, like .refs.
+    createLoopPanel(host).render(loop(), 'build');
+    expect(host.querySelector('.ldl')?.getAttribute('aria-live')).toBe('polite');
+  });
+
   it('renders the panel header title + a close button the shell can dismiss', () => {
     createLoopPanel(host).render(loop(), 'build');
     expect(host.querySelector('.lhead h3')?.textContent).toBe('build');

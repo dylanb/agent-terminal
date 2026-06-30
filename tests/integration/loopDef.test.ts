@@ -212,6 +212,26 @@ describe('pickup_contract resolution (§26.5 / §26.9)', () => {
     expect(reviewerRosterForPhase(def!, 'no-such-phase')).toEqual([]);
   });
 
+  it('drops phase ids and roster actors that are not safe path components (CWE-22 defense in depth)', () => {
+    // phase id and persona names become filesystem path components downstream (prompts/work-{id}.md,
+    // reviews/{iter}/{actor}.json). A repo-local .agent-loop.yaml override is already treated as
+    // untrusted (its path is containment-checked), so the strings it yields must be charset-validated
+    // too — a `../`-laden id/actor must be dropped at parse time, like any other malformed entry.
+    const evil =
+      'name: evil-loop\nschema_version: "4"\n' +
+      'default_roster_id: r\n' +
+      'rosters:\n  - id: r\n    ordered_actors: [review-principal, "../../../../etc/passwd", review-security]\n' +
+      'phases:\n' +
+      '  - id: plan\n    entry_status: plan-draft\n    roster_override_id: ""\n' +
+      '  - id: "../../escape"\n    entry_status: x\n    roster_override_id: ""\n' +
+      'gates:\n  - id: g\n    kind: terminal\n    human_options: []\n';
+    writeFileSync(join(repo, 'evil.yaml'), evil);
+    writeFileSync(join(repo, '.agent-loop.yaml'), 'loops:\n  evil-loop: ./evil.yaml\n');
+    const def = parseLoopDef(repo, 'evil-loop');
+    expect(def?.phases).toEqual([{ id: 'plan', entryStatus: 'plan-draft', rosterOverrideId: '' }]);
+    expect(reviewerRosterForPhase(def!, 'plan')).toEqual(['review-principal', 'review-security']);
+  });
+
   it('omits pickup when the LoopDef carries no pickup_contract (degrades, never throws)', () => {
     mkdirSync(join(repo, 'loops', 'impl-loop'), { recursive: true });
     writeFileSync(join(repo, 'loops', 'impl-loop', 'impl-loop.yaml'), IMPL_LOOP);

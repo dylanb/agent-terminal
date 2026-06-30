@@ -227,6 +227,9 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
 
       const ldl = doc.createElement('div');
       ldl.className = 'ldl';
+      // WCAG 4.1.3 — `patchInPlace` updates status/iteration here without moving focus (e.g. after the
+      // mark-complete control or an orchestrator transition); a polite live region announces that change.
+      ldl.setAttribute('aria-live', 'polite');
       // An awaiting-human status still needs the human — the §22.3 "act" tone (`bad`).
       const statusRow = detailRow(doc, 'status', loop.status, spillTone(loop.status) === 'await' ? 'bad' : '');
       const iterRow = detailRow(doc, 'iteration', String(loop.iteration));
