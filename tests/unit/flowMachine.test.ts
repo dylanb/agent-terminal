@@ -283,6 +283,28 @@ describe('flow state machine — ticket/PR refs (progress-gated)', () => {
     expect(flow.state().refs).toBeUndefined();
   });
 
+  // The protective direction for the pr gate: a persisted pr-input value stays hidden while the flow is
+  // on an EARLIER step, the symmetric twin of the github-ticket gate. Pins `prStepEntered`.
+  const PR_INPUT_LATER_FLOW: FlowLoad = {
+    ok: true,
+    definition: {
+      name: 'f',
+      steps: [
+        { id: 'a', kind: 'manual' },
+        { id: 'review', kind: 'manual', inputs: [{ name: 'thepr', type: 'pr', required: true }] },
+      ],
+    },
+    flowDir: '/tmp/f/.agent-terminal',
+  };
+  it('does NOT surface a persisted pr-input value until its requesting (later) step is entered', () => {
+    const store = createFlowStateStore(mkdtempSync(join(tmpdir(), 'flow-refs-')));
+    store.write({ step: 'a', status: 'in_progress', inputs: { thepr: '512' } });
+    const flow = createFlowMachine(PR_INPUT_LATER_FLOW, store, undefined, () => null);
+    expect(flow.state().refs).toBeUndefined(); // on step 'a', before the pr step
+    flow.advance(); // enter 'review' (the pr step)
+    expect(flow.state().refs?.pr).toBe(512);
+  });
+
   // --- sticky within a run: once a loop step is entered, its refs + mirror persist onto a later step ---
   const STICKY_FLOW: FlowLoad = {
     ok: true,

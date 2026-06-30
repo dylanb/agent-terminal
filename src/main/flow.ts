@@ -244,9 +244,17 @@ export function createFlowMachine(
   const def = load.definition;
   const steps = def.steps;
   const names = steps.map((s) => s.id);
-  // §18.4 / §24.2.3 T7 — the input names whose values feed the ticket/PR refs (name-agnostic, by type).
-  const ticketInputName = steps.flatMap((s) => s.inputs ?? []).find((i) => i.type === 'github-ticket')?.name;
-  const prInputName = steps.flatMap((s) => s.inputs ?? []).find((i) => i.type === 'pr')?.name;
+  // §18.4 / §24.2.3 T7 — the step that declares each typed ref input, and that input's name. One source
+  // for both the ref value (the input's name) and its visibility gate (the step), so they cannot desync.
+  const typedInput = (type: string): { step: FlowStepDef; name: string } | undefined => {
+    for (const step of steps) {
+      const input = (step.inputs ?? []).find((i) => i.type === type);
+      if (input) return { step, name: input.name };
+    }
+    return undefined;
+  };
+  const ticketInput = typedInput('github-ticket');
+  const prInput = typedInput('pr');
   // `done` means the last step's Advance completed the whole flow, not just one step (§24.2.3 T1).
   let index = 0;
   let status: FlowStatus = 'not_started';
@@ -287,8 +295,8 @@ export function createFlowMachine(
     loop: AgentLoopState | null,
     gates: { ticketStepEntered: boolean; prStepEntered: boolean; loopEntered: boolean },
   ): FlowRefs | undefined => {
-    const ticket = (gates.ticketStepEntered ? numericInput(ticketInputName) : undefined) ?? (gates.loopEntered ? loop?.linkedIssues[0] : undefined);
-    const pr = (gates.prStepEntered ? numericInput(prInputName) : undefined) ?? (gates.loopEntered ? (loop?.pr ?? undefined) : undefined);
+    const ticket = (gates.ticketStepEntered ? numericInput(ticketInput?.name) : undefined) ?? (gates.loopEntered ? loop?.linkedIssues[0] : undefined);
+    const pr = (gates.prStepEntered ? numericInput(prInput?.name) : undefined) ?? (gates.loopEntered ? (loop?.pr ?? undefined) : undefined);
     const refs: FlowRefs = {};
     if (typeof ticket === 'number') refs.ticket = ticket;
     if (typeof pr === 'number') refs.pr = pr;
@@ -305,18 +313,18 @@ export function createFlowMachine(
       status,
       ...(step.todoTemplate ? { templateRef: step.todoTemplate } : {}),
     };
-    // §24.2.3 T7 (refs) / §24.2.3 T2 (loop mirror): gated on the steps entered so far.
+    // §24.2.3 T7 (refs) / §24.2.3 T2 (loop mirror).
     const entered = status === 'not_started' ? [] : steps.slice(0, index + 1);
-    const ticketStepEntered = entered.some((s) => (s.inputs ?? []).some((i) => i.type === 'github-ticket'));
-    const prStepEntered = entered.some((s) => (s.inputs ?? []).some((i) => i.type === 'pr'));
+    const ticketStepEntered = ticketInput !== undefined && entered.includes(ticketInput.step);
+    const prStepEntered = prInput !== undefined && entered.includes(prInput.step);
     const loopEntered = entered.some((s) => s.kind === 'loop');
     const liveLoop = readLoop?.() ?? null;
     const refs = computeRefs(liveLoop, { ticketStepEntered, prStepEntered, loopEntered });
     const withRefs = refs ? { ...base, refs } : base;
     if (!loopEntered) return withRefs;
-    // §24.2.3 T2: bind to the most recently entered loop step's LoopDef.
-    const loopStep = entered.reduce<FlowStepDef | undefined>((last, s) => (s.kind === 'loop' ? s : last), undefined);
-    const loopDef = loopStep?.loop ? (readLoopDef?.(loopStep.loop) ?? null) : null;
+    // §24.2.3 T2
+    const mostRecentLoopStep = entered.reduce<FlowStepDef | undefined>((last, s) => (s.kind === 'loop' ? s : last), undefined);
+    const loopDef = mostRecentLoopStep?.loop ? (readLoopDef?.(mostRecentLoopStep.loop) ?? null) : null;
     return deriveLoopView(withRefs, liveLoop, loopDef);
   };
 

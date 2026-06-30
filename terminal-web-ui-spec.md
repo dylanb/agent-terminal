@@ -1702,7 +1702,7 @@ flowchart LR
   V --> OS["OS browser"]
 ```
 
-  **Fire:** open a flow on a manual step that carries a ticket (typed input) → the read-out opens the popout showing the ticket detail + link; separately, complete a flow then Restart. **Land:** the popout shows the ticket/PR title + truncated body + a working GitHub link on every active step; after Restart the first step re-prompts for its input rather than reusing the prior value. **e2e:** a popout spec (manual step → refs surface) and a restart re-prompt spec; under them machine units (refs from input-first then `linked_issues` fallback, PR, omitted-when-empty, restart-clears-inputs), the `gh` resolver + the shared url allow-list units, the bridge `linked_issues` parse, the `flow:githubRef`/`app:openExternal` validators, and the popout refs-section + non-loop read-out DOM units.
+  **Fire:** open a flow on a manual step that carries a ticket (typed input) → the read-out opens the popout showing the ticket detail + link; separately, complete a flow then Restart. **Land:** the popout shows the ticket/PR title + truncated body + a working GitHub link once the flow has entered the step that surfaces each ref (a typed input on its requesting step; the loop's `linked_issues`/`pr` on a loop step, per (3)); after Restart the first step re-prompts for its input rather than reusing the prior value. **e2e:** a popout spec (manual step → refs surface) and a restart re-prompt spec; under them machine units (refs from input-first then `linked_issues` fallback, PR, omitted-when-empty, restart-clears-inputs), the `gh` resolver + the shared url allow-list units, the bridge `linked_issues` parse, the `flow:githubRef`/`app:openExternal` validators, and the popout refs-section + non-loop read-out DOM units.
 
 ---
 
