@@ -797,6 +797,17 @@ describe('manual capture on demand (§21.1 — captureLast, dormant auto-scan)',
     expect(scanner.captureLast()).toBeNull();
   });
 
+  it('keeps a report whose first line is "recap:" but lacks the ※ mark (§21.1)', async () => {
+    // The skip is for Claude Code's "※ recap:" marker specifically, not any line starting "recap:":
+    // a real report that opens with the word "recap:" is the user's own prose and must be captured.
+    const scanner = dormant([], createGenericAdapter());
+    shadow.write('recap: my own prose summary of the work before you merge this branch to main.\r\n');
+    await sleep(50);
+    const result = scanner.captureLast();
+    expect(result).not.toBeNull();
+    expect(result!.report.text).toContain('my own prose summary');
+  });
+
   it('keeps a report that merely MENTIONS recap mid-text (not a recap line, §21.1)', async () => {
     // The recap filter must anchor on the "※ recap:" prefix, not the word anywhere: a real report
     // that names "recap" inside its prose is not a recap line.
