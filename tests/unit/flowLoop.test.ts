@@ -23,6 +23,7 @@ const loop = (status: string): AgentLoopState => ({ status, iteration: 9, pr: 17
 
 const DEF: LoopDef = {
   name: 'impl-loop',
+  phases: [],
   gates: [
     { id: 'awaiting-human-pr-approval', kind: 'approve-required', humanOptions: ['approve', 'request-changes', 'impasse'], terminal: false },
     { id: 'awaiting-human-impl-triage', kind: 'triage', humanOptions: ['approve', 'request-changes', 'impasse'], terminal: false },
@@ -112,6 +113,7 @@ describe('deriveLoopView (§24.2.3 T2)', () => {
 // gate-field rule misclassifies.
 const IMPL_LOOP: LoopDef = {
   name: 'impl-loop',
+  phases: [],
   gates: [
     { id: 'awaiting-human-pr-approval', kind: 'approve-required', humanOptions: ['approve', 'request-changes', 'impasse'], terminal: false },
     { id: 'awaiting-human-impl-triage', kind: 'triage', humanOptions: ['approve', 'request-changes', 'impasse'], terminal: false },

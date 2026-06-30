@@ -38,9 +38,18 @@ export interface PickupContract {
 
 /** The gate slice of a LoopDef the flow reads (§18.1) plus the pickup_contract the orchestrator drives
  *  bootstrap from (§26.9); the engine's other keys are intentionally not modelled. */
+/** The orchestrator-relevant slice of a LoopDef phase (§26.5): its `id` and the `entry_status` a run
+ *  sits at while that phase's work turn is active — so a status maps back to the phase whose work
+ *  prompt (`prompts/work-{id}.md`) and artifacts the orchestrator must drive. */
+export interface LoopPhase {
+  id: string;
+  entryStatus: string;
+}
+
 export interface LoopDef {
   name: string;
   gates: LoopGate[];
+  phases: LoopPhase[];
   pickup?: PickupContract;
 }
 
@@ -80,6 +89,24 @@ function resolveLoopDefPath(repoDir: string, name: string, configDir?: string): 
     // no/unreadable .agent-loop.yaml → config-dir copy
   }
   return path.join(configLoopsDir(configDir), name, `${name}.yaml`);
+}
+
+/** The directory that holds a loop's def + its `prompts/`, `charter/`, `skills/` (§26.5) — the parent
+ *  of the resolved LoopDef yaml, so prompt/recipe assembly reads from the same source the parser used. */
+export function resolveLoopDir(repoDir: string, name: string, configDir?: string): string {
+  return path.dirname(resolveLoopDefPath(repoDir, name, configDir));
+}
+
+/** The orchestrator-relevant slice of `phases` (§26.5): id + entry_status; malformed entries drop. */
+function toPhases(doc: Record<string, unknown>): LoopPhase[] {
+  if (!Array.isArray(doc.phases)) return [];
+  return doc.phases
+    .map((p): LoopPhase | null =>
+      isRecord(p) && typeof p.id === 'string' && typeof p.entry_status === 'string'
+        ? { id: p.id, entryStatus: p.entry_status }
+        : null,
+    )
+    .filter((p): p is LoopPhase => p !== null);
 }
 
 function toGate(raw: unknown): LoopGate | null {
@@ -160,7 +187,8 @@ export function parseLoopDef(repoDir: string, name: string, configDir?: string):
   if (gates.length === 0) return null;
   const defName = typeof doc.name === 'string' ? doc.name : name;
   const pickup = toPickupContract(doc);
-  return { name: defName, gates, ...(pickup ? { pickup } : {}) };
+  const phases = toPhases(doc);
+  return { name: defName, gates, phases, ...(pickup ? { pickup } : {}) };
 }
 
 /** The gate whose `id` matches `status` (the agent-loop state-machine string), or undefined when the

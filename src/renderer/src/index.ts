@@ -106,6 +106,10 @@ if (flowStripHost) {
           return key ? window.flow.githubRef(key, kind, number) : Promise.resolve(null);
         },
         openExternal: (url) => void window.flow.openExternal(url),
+        markTurnComplete: () => {
+          const key = repo.repoKey();
+          if (key) window.flow.markTurnComplete(key);
+        },
       })
     : undefined;
   // Same single-puller contract for the typed-input modal (§24.2.3 T3): on a step-entry prompt the

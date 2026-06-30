@@ -54,6 +54,7 @@ export const CH = {
   flowOnStateChanged: 'flow:onStateChanged',
   flowRevealLoop: 'flow:revealLoop',
   flowGithubRef: 'flow:githubRef',
+  flowMarkTurnComplete: 'flow:markTurnComplete',
   appOpenExternal: 'app:openExternal',
   todoTemplateList: 'todoTemplate:list',
   todoTemplateInstantiate: 'todoTemplate:instantiate',
@@ -600,6 +601,14 @@ export interface FlowProvideInputMsg {
   values: Record<string, string>;
 }
 
+/** flow:markTurnComplete request (§26.3/D47a c): the operator's manual "this turn is done" override
+ *  for the in-flight loop turn whose automatic done-signal the orchestrator missed. One-way; the
+ *  result surfaces through the existing state.yaml watch → flow:onStateChanged push. */
+export interface FlowMarkTurnCompleteMsg {
+  sessionId: SessionId;
+  repoKey: string;
+}
+
 /** flow:githubRef request (§24.2.3 T7): resolve a ref's title/body/url for the popout. `repoKey`
  *  scopes the `gh` lookup to the right repo; `number` is the issue/PR number; `kind` selects which. */
 export interface FlowGithubRefMsg {
@@ -788,6 +797,9 @@ export interface FlowApi {
   /** Open a ref's GitHub `url` in the OS browser (§24.2.3 T7); resolves to whether it was opened
    *  (false when main rejects the url as non-GitHub/non-https). */
   openExternal(url: string): Promise<boolean>;
+  /** §26.3/D47a(c) — manually mark the in-flight loop turn complete for `repoKey`. One-way: the loop
+   *  panel re-pulls via flow:onStateChanged when the orchestrator's resulting state lands. */
+  markTurnComplete(repoKey: string): void;
 }
 
 /** CLI launcher install (§23.4 / #25): the settings affordance's only seam to the install action. */

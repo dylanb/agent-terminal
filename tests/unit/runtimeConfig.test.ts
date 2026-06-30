@@ -9,6 +9,14 @@ describe('resolveRuntimeConfig (§15.7 — env-overridable per-agent profile sea
     expect(resolveRuntimeConfig({ APP_QUIET_MS: '-5' }).quietMs).toBe(1000);
   });
 
+  it('defaults the loop turn-completion timeout and parses an override (§26.3/D48)', () => {
+    expect(resolveRuntimeConfig({}).turnCompletionTimeoutMs).toBeGreaterThan(0);
+    expect(resolveRuntimeConfig({ APP_TURN_TIMEOUT_MS: '4000' }).turnCompletionTimeoutMs).toBe(4000);
+    expect(resolveRuntimeConfig({ APP_TURN_TIMEOUT_MS: 'nope' }).turnCompletionTimeoutMs).toBe(
+      resolveRuntimeConfig({}).turnCompletionTimeoutMs,
+    );
+  });
+
   it('enables shell integration by default and opts out only on exactly "0"', () => {
     expect(resolveRuntimeConfig({}).shellIntegration).toBe(true);
     expect(resolveRuntimeConfig({ APP_SHELL_INTEGRATION: '0' }).shellIntegration).toBe(false);

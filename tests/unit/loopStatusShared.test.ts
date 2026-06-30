@@ -15,6 +15,10 @@ describe('isHumanNeededStatus (shared family, §24.2.3 T4)', () => {
     expect(isHumanNeededStatus('impasse')).toBe(true);
   });
 
+  it('counts the app-only error status as human-needed (§26.3/D48: a turn failed twice)', () => {
+    expect(isHumanNeededStatus('error')).toBe(true);
+  });
+
   it('does not count the terminal hand-off awaiting-team-review as human-needed', () => {
     expect(isHumanNeededStatus('awaiting-team-review')).toBe(false);
   });

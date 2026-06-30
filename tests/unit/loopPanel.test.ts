@@ -61,6 +61,30 @@ describe('docked loop panel (§24.2.3 T2)', () => {
     expect(b.querySelectorAll('[data-loop-close]').length).toBe(1);
   });
 
+  it('renders a "mark turn complete" control on a loop step that invokes the injected service (§26.3/D47a c)', () => {
+    const markTurnComplete = vi.fn();
+    const panel = createLoopPanel(host, {
+      githubRef: () => Promise.resolve(null),
+      openExternal: () => {},
+      markTurnComplete,
+    });
+    panel.render(loop({ status: 'plan-draft' }), 'plan');
+    const btn = host.querySelector<HTMLButtonElement>('[data-loop-mark-complete]');
+    expect(btn).not.toBeNull();
+    btn!.click();
+    expect(markTurnComplete).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows no "mark turn complete" control when there is no loop step (refs-only panel)', () => {
+    const panel = createLoopPanel(host, {
+      githubRef: () => Promise.resolve(null),
+      openExternal: () => {},
+      markTurnComplete: () => {},
+    });
+    panel.render(null, 'plan', { ticket: 176 }); // ticket/PR popout, no loop mirror
+    expect(host.querySelector('[data-loop-mark-complete]')).toBeNull();
+  });
+
   it('does not rebuild the DOM when re-rendered with unchanged content (no flicker on a no-op push)', () => {
     const panel = createLoopPanel(host);
     panel.render(loop(), 'build');

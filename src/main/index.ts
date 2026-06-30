@@ -70,6 +70,13 @@ import { parseAgentLoopState, watchAgentLoopState } from './agentLoopBridge';
 import { createLoopNotifier } from './loopNotifier';
 import { parseLoopDef } from './loopDef';
 import { runPickup, createRealPickupDeps } from './loopPickup';
+import { createTurnRunner, type TurnRunner } from './loopOrchestrator';
+import { composeWorkPrompt } from './loopRecipe';
+import { createSentinelWatcher } from './turnSentinel';
+import { readAndClearTurnDone, watchTurnDone } from './turnDoneFile';
+import { writeLoopState } from './loopStateWriter';
+import { turnDoneSentinel } from '../shared/loopTurn';
+import { statSync } from 'node:fs';
 import type { FlowStepDef } from './flow';
 import { listTodoTemplates, loadTodoTemplateFile, parseTodoTemplate } from './todoTemplate';
 import { discover, readArtifact, emptyTree } from './artifactTree';
@@ -148,6 +155,9 @@ async function createWindow(): Promise<void> {
   // agent flipped active/quiet) and the strip re-pulls flow:state. `agentActivity` holds the latest
   // §8.3 activity so flow:state can fold it into the derived view without re-deriving it.
   let agentActivity: AgentState = 'quiet';
+  // §26.2/§26.3 — fired on each active→quiet flip so the loop orchestrator can inject a deferred/retry
+  // turn the moment the instance is injectable. Assigned once the runner exists (below); a no-op until.
+  let notifyInjectable: () => void = () => {};
   const pushFlowChanged = (): void => send(CH.flowOnStateChanged, { sessionId: SESSION_ID });
 
   // Hold early PTY output until the renderer registers its pty:data listener (§8.1).
@@ -159,6 +169,7 @@ async function createWindow(): Promise<void> {
       agentActivity = status.agentState;
       send(CH.monitorUpdate, { sessionId: SESSION_ID, ...status });
       pushFlowChanged(); // the active↔quiet flip moves the strip's derived activity (§24.2.2 S5)
+      if (status.agentState === 'quiet') notifyInjectable(); // §26.2: the instance is now injectable
     },
   });
 
@@ -238,6 +249,87 @@ async function createWindow(): Promise<void> {
     onInject: () => suppressor.noteInjection(),
   });
 
+  // §26.3 / L2 — the in-app work-agent turn runner. After pickup writes plan-draft (§26.9/L1) the
+  // orchestrator injects the bound LoopDef's work-{phase} prompt and advances on a done-signal (a
+  // sentinel line OR the `.agent-loop/turn-done` file) plus the turn artifact, retrying once then
+  // writing the app-only `error` status. `activeTurn` carries the bound-loop context its domain ports
+  // read; the runner injects only while the instance is injectable (§26.2: quiescent at its input box).
+  let activeTurn: { repoDir: string; loopName: string; phase: string; turnKey: string } | null = null;
+  let turnTimer: ReturnType<typeof setTimeout> | null = null;
+  let unwatchTurnDone: (() => void) | null = null;
+  let turnRunner: TurnRunner;
+  const turnSentinel = createSentinelWatcher(() => turnRunner.onDoneSignal());
+  turnRunner = createTurnRunner({
+    compose: () => {
+      if (!activeTurn) return null;
+      const s = parseAgentLoopState(activeTurn.repoDir);
+      return composeWorkPrompt({
+        repoDir: activeTurn.repoDir,
+        loopName: activeTurn.loopName,
+        phase: activeTurn.phase,
+        turnKey: activeTurn.turnKey,
+        tokens: {
+          ITERATION: String(s?.iteration ?? 1),
+          PR_NUMBER: s?.pr != null ? String(s.pr) : '',
+          HEAD_REF: s?.branch ?? '',
+          PLAN_LINE_THRESHOLD: '1000',
+        },
+      });
+    },
+    inject: (prompt) => {
+      if (activeTurn) turnSentinel.arm(turnDoneSentinel(activeTurn.turnKey));
+      inject(prompt, { submit: true });
+    },
+    injectable: () => agentActivity === 'quiet',
+    artifactPresent: () => {
+      if (!activeTurn) return false;
+      try {
+        return statSync(path.join(activeTurn.repoDir, '.agent-loop', 'plan.md')).size > 0;
+      } catch {
+        return false;
+      }
+    },
+    armTimer: () => {
+      turnTimer = setTimeout(() => turnRunner.onTimeout(), config.turnCompletionTimeoutMs);
+    },
+    cancelTimer: () => {
+      if (turnTimer) clearTimeout(turnTimer);
+      turnTimer = null;
+      turnSentinel.disarm();
+    },
+    writeError: (reason) => {
+      if (!activeTurn) return;
+      const s = parseAgentLoopState(activeTurn.repoDir);
+      writeLoopState(activeTurn.repoDir, {
+        status: 'error',
+        iteration: s?.iteration ?? 1,
+        pr: s?.pr ?? null,
+        branch: s?.branch ?? null,
+        boundLoop: activeTurn.loopName,
+        linkedIssues: s?.linkedIssues ?? [],
+      });
+      audit.recordCommand(activeTurn.repoDir, 'turn', `turn ${activeTurn.turnKey} failed: ${reason}`, 1);
+      pushFlowChanged();
+    },
+    onComplete: (turnKey) => {
+      if (activeTurn) audit.recordCommand(activeTurn.repoDir, 'turn', `turn ${turnKey} complete`, 0);
+      pushFlowChanged();
+    },
+  });
+  // The §8.3 active→quiet flip is the orchestrator's "instance is now injectable" signal (§26.2) —
+  // assigned once the runner exists so the shadow's onStatus (built earlier) can fire it forward.
+  notifyInjectable = () => turnRunner.onInjectable();
+  // Bind a freshly-bootstrapped loop step's work turn: watch for its done-signal file and request the
+  // turn (injected when the instance next goes injectable).
+  const startWorkTurn = (repoDir: string, loopName: string, phase: string): void => {
+    activeTurn = { repoDir, loopName, phase, turnKey: `work-${phase}` };
+    unwatchTurnDone?.();
+    unwatchTurnDone = watchTurnDone(repoDir, () => {
+      if (readAndClearTurnDone(repoDir) !== null) turnRunner.onDoneSignal();
+    });
+    turnRunner.requestTurn(activeTurn.turnKey);
+  };
+
   // `transitioningRepo` carries the active repoKey into the synchronous onEnterStep below, so a loop
   // step's in-app pickup (§26.9) knows which repo it is bootstrapping.
   let transitioningRepo: string | null = null;
@@ -263,10 +355,17 @@ async function createWindow(): Promise<void> {
     const raw = ticketInput ? inputs[ticketInput.name] : undefined;
     const issue = raw && /^\d+$/.test(raw.trim()) ? Number(raw.trim()) : null;
     if (issue === null) return; // cannot bootstrap without a resolved github-ticket issue number
-    void runPickup(createRealPickupDeps(repoKey), { repoDir: repoKey, issue, loopName: step.loop, pickup: def.pickup })
+    const loopName = step.loop;
+    void runPickup(createRealPickupDeps(repoKey), { repoDir: repoKey, issue, loopName, pickup: def.pickup })
       .then((result) => {
         audit.recordCommand(repoKey, 'pickup', `pickup #${issue}`, result.ok ? 0 : 1);
         pushFlowChanged();
+        // §26.3 / L2 — bootstrap done; drive the work-{phase} turn. The phase is the one whose
+        // entry_status the freshly-written state.yaml now sits at (the bound def's first phase).
+        if (result.ok) {
+          const phase = def.phases.find((p) => p.entryStatus === result.status)?.id ?? def.phases[0]?.id;
+          if (phase) startWorkTurn(repoKey, loopName, phase);
+        }
       });
   };
 
@@ -387,10 +486,12 @@ async function createWindow(): Promise<void> {
     return map;
   };
 
-  // Flow A (§4): every output byte goes to the renderer AND the shadow tee.
+  // Flow A (§4): every output byte goes to the renderer AND the shadow tee — and, while a loop turn is
+  // armed, the done-signal line scanner (§26.3/D47a).
   ptyProcess.onData((data) => {
     outputGate.send(data);
     shadow.write(data);
+    turnSentinel.feed(data);
   });
   ptyProcess.onExit(({ exitCode }) => send(CH.ptyExit, { sessionId: SESSION_ID, code: exitCode }));
 
@@ -431,6 +532,10 @@ async function createWindow(): Promise<void> {
       },
       [CH.agentInject]: (_e, m) => {
         if (isValidInject(m)) inject(m.text, { submit: m.submit });
+      },
+      // §26.3/D47a(c) — the operator's manual "this turn is done" override for the in-flight loop turn.
+      [CH.flowMarkTurnComplete]: (_e, m) => {
+        if (isValidFlowRequest(m)) turnRunner.markComplete();
       },
       // Clipboard is an OS resource owned by main (§7.7); the sandboxed preload can't reach it.
       [CH.clipboardWrite]: (_e, m) => {
@@ -610,6 +715,8 @@ async function createWindow(): Promise<void> {
     stopViewerWatch();
     for (const stop of loopWatchers.values()) stop();
     loopWatchers.clear();
+    if (turnTimer) clearTimeout(turnTimer);
+    unwatchTurnDone?.();
   });
 
   const target = resolveRendererTarget({

@@ -3,7 +3,9 @@
 // drift apart.
 
 export function isHumanNeededStatus(status: string): boolean {
-  return status.startsWith('awaiting-human') || status === 'impasse';
+  // `error` is the app-only step-failed-twice status the in-app orchestrator writes (§26.3/D48); it
+  // blocks on a human exactly like an awaiting-human gate, so it joins this family.
+  return status.startsWith('awaiting-human') || status === 'impasse' || status === 'error';
 }
 
 // CWE-117 (§16.3): the loop `status` comes from an arbitrary repo's untrusted `state.yaml`. Strip

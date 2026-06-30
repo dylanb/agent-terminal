@@ -166,6 +166,7 @@ describe('flow state machine — loop-step state.yaml mirror (§24.2.3 T2)', () 
   it('resolves the step\'s bound LoopDef so readiness + gate options are gate-driven', () => {
     const def = {
       name: 'impl-loop',
+      phases: [],
       gates: [
         { id: 'awaiting-human-pr-approval', kind: 'approve-required', humanOptions: ['approve', 'request-changes', 'impasse'], terminal: false },
         { id: 'awaiting-team-review', kind: 'terminal', humanOptions: [], terminal: true },

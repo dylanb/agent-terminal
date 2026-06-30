@@ -24,6 +24,9 @@ function gateOptionLabel(option: string): string {
 export interface LoopPanelDeps {
   githubRef(kind: GithubRefKind, number: number): Promise<GithubRef | null>;
   openExternal(url: string): void;
+  /** §26.3/D47a(c) — the operator's manual "this turn is done" override for a turn whose automatic
+   *  done-signal was missed. Injected by the composition root; absent → the control is inert. */
+  markTurnComplete?(): void;
 }
 
 const NOOP_DEPS: LoopPanelDeps = { githubRef: () => Promise.resolve(null), openExternal: () => {} };
@@ -237,6 +240,17 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
         ldl.append(detailRow(doc, 'gate options', loop.gateOptions.map(gateOptionLabel).join(' · ')));
 
       body.append(ldl);
+
+      // §26.3/D47a(c) — the human-in-the-loop escape hatch: advance a turn whose automatic done-signal
+      // the orchestrator missed, without editing files. Present on every loop step (the rail's compact
+      // read-out has no room for it); the decision is the orchestrator's, surfaced via state.yaml.
+      const markBtn = doc.createElement('button');
+      markBtn.className = 'pill mark-complete';
+      markBtn.dataset.loopMarkComplete = '';
+      markBtn.textContent = 'Mark turn complete';
+      markBtn.addEventListener('click', () => deps.markTurnComplete?.());
+      body.append(markBtn);
+
       host.append(body);
       restoreFocus(hadFocus);
     },

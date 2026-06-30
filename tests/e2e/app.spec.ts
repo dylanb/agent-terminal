@@ -7,6 +7,7 @@ import { join, basename } from 'node:path';
 import { CH, SESSION_ID } from '../../src/shared/ipc';
 import { CLI_COMMAND_NAME } from '../../src/main/cliShim';
 import { parseAuditStream, type AuditEvent } from '../../src/shared/audit';
+import { turnDoneSentinel, TURN_DONE_FILENAME } from '../../src/shared/loopTurn';
 
 // Full-loop e2e (§12 acceptance): real Electron, real node-pty, real bash.
 // Every launch pins APP_SHELL=bash so the bash-only shell-integration path (OSC 7/133, §15.5)
@@ -1466,6 +1467,29 @@ function seedFakeGhGit(prefix: string): { binDir: string; logFile: string } {
   return { binDir, logFile };
 }
 
+// §26.13 test seam — the deterministic fake hosted agent (the analogue of the engine's `fakeclaude`).
+// Written into the same PATH-prepended bin dir as the fake gh/git; launched as the terminal's
+// foreground REPL so the orchestrator's injected work-{phase} prompt reaches its stdin. Each injected
+// line drives the scripted turn for `mode`: `write-plan` writes the artifact + emits BOTH done-signals
+// (sentinel line + `.agent-loop/turn-done`), `plan-only` writes the artifact but NO signal (drives the
+// manual mark-complete path), `noop` produces nothing (drives retry-then-error). The sentinel + file
+// name are generated from the shared contract so the seam cannot drift from the detectors.
+function seedFakeAgent(binDir: string, mode: 'write-plan' | 'plan-only' | 'noop'): void {
+  const writePlan = "mkdir -p .agent-loop; printf '# Plan\\n\\nfake plan body\\n' > .agent-loop/plan.md";
+  // Leading newline so the sentinel always lands ALONE on a line even if it interleaves with the PTY
+  // echo of the injected prompt — the scanner only matches a full-line sentinel (echo-safety).
+  const signal = `printf '%s' 'work-plan' > .agent-loop/${TURN_DONE_FILENAME}; printf '\\n%s\\n' '${turnDoneSentinel('work-plan')}'`;
+  const act = mode === 'noop' ? ':' : mode === 'plan-only' ? writePlan : `${writePlan}; ${signal}`;
+  const script =
+    '#!/usr/bin/env bash\n' +
+    '# Fake hosted agent REPL; each injected prompt line drives the scripted turn (§26.13).\n' +
+    'while IFS= read -r line; do\n' +
+    '  [ -z "$line" ] && continue\n' +
+    `  ${act}\n` +
+    'done\n';
+  writeFileSync(join(binDir, 'fake-agent'), script, { mode: 0o755 });
+}
+
 // LoopDef resolution for e2e: $CLAUDE_CONFIG_DIR/loops/<name>/<name>.yaml, so the committed example
 // defs (example/loops, real plan-loop/impl-loop) resolve when CLAUDE_CONFIG_DIR points at example/.
 const exampleConfigDir = join(process.cwd(), 'example');
@@ -2010,6 +2034,126 @@ test('a busy shell does NOT block pickup: it runs out-of-band and still writes s
   await expect(termRows()).not.toContainText('agent-loop pickup');
 
   await app.close(); // HOME=temp ⇒ Electron writes userData under it; stop writes before removing it
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+  rmSync(binDir, { recursive: true, force: true });
+});
+
+// §26.13 / L2 — one work-agent turn + completion detection. The shared sequence: cd into the repo,
+// launch the fake-agent REPL as the foreground program, then drive the flow into the bootstrap loop
+// step. After pickup writes plan-draft (§26.9/L1) the orchestrator injects the work-plan prompt into
+// the fake-agent and advances on the done-signal + plan.md (§26.3/D47a), retrying once then `error`.
+async function driveToWorkTurn(
+  repo: string,
+  home: string,
+  binDir: string,
+  logFile: string,
+  turnTimeoutMs: string,
+): Promise<void> {
+  await app.close();
+  app = await electron.launch({
+    args: ['out/main/index.js'],
+    env: {
+      ...process.env,
+      APP_SHELL: 'bash',
+      HOME: home,
+      APP_SUBMIT_DELAY_MS: '100',
+      APP_TURN_TIMEOUT_MS: turnTimeoutMs,
+      CLAUDE_CONFIG_DIR: exampleConfigDir,
+      PATH: `${binDir}:${process.env.PATH}`,
+      FAKE_GHGIT_LOG: logFile,
+    },
+  });
+  page = await app.firstWindow();
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await typeCommand(`cd "${repo}"`);
+  await expect(flowStepName()).toHaveText('groom', { timeout: 10_000 });
+  await typeCommand('fake-agent'); // the hosted agent REPL now owns the prompt; injection reaches it
+
+  await flowControl().click(); // Start → groom: opens the audit run
+  await expect.poll(() => auditRunFiles(home, repo).length).toBe(1);
+  await flowControl().click(); // Advance → plan (loop, bootstrap): the typed-input modal opens
+  await expect(inputModal()).toBeVisible({ timeout: 10_000 });
+  await inputModal().locator('.field input').fill('176');
+  await inputModal().locator('.confirm').click();
+  await expect(inputModal()).toHaveCount(0);
+
+  // Bootstrap landed: pickup wrote plan-draft, so the work turn is now requested + injected.
+  const stateFile = join(repo, '.agent-loop', 'state.yaml');
+  await expect.poll(() => (existsSync(stateFile) ? readFileSync(stateFile, 'utf8') : ''), { timeout: 15_000 }).toContain('status: plan-draft');
+}
+
+const turnEvents = (home: string, repo: string): Array<Extract<AuditEvent, { type: 'command' }>> => {
+  const files = auditRunFiles(home, repo);
+  if (files.length === 0) return [];
+  return readAuditRun(home, repo, files[0]).events.filter(
+    (e): e is Extract<AuditEvent, { type: 'command' }> => e.type === 'command' && e.source === 'turn',
+  );
+};
+
+test('a work-agent turn injected after pickup advances on plan.md + the done-signal (§26.13 / L2)', async () => {
+  const repo = seedBootstrapFlowRepo('agent-term-e2e-l2-ok-');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-l2-ok-home-'));
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-l2-ok-bin-');
+  seedFakeAgent(binDir, 'write-plan');
+  await driveToWorkTurn(repo, home, binDir, logFile, '30000');
+
+  // Land: the fake-agent received the injected work-plan prompt and wrote plan.md, and the orchestrator
+  // detected the done-signal and recorded the turn complete (exit 0) — never auto-erroring.
+  await expect.poll(() => existsSync(join(repo, '.agent-loop', 'plan.md')), { timeout: 20_000 }).toBe(true);
+  await expect.poll(() => turnEvents(home, repo).map((e) => ({ cmd: e.cmd, exit: e.exit })), { timeout: 20_000 }).toEqual(
+    expect.arrayContaining([expect.objectContaining({ exit: 0 })]),
+  );
+  expect(turnEvents(home, repo).some((e) => e.cmd.includes('complete'))).toBe(true);
+  expect(readFileSync(join(repo, '.agent-loop', 'state.yaml'), 'utf8')).not.toContain('status: error');
+
+  await app.close();
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+  rmSync(binDir, { recursive: true, force: true });
+});
+
+test('a work turn that emits no done-signal retries once then stops in error (§26.13 / L2 / D48)', async () => {
+  const repo = seedBootstrapFlowRepo('agent-term-e2e-l2-err-');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-l2-err-home-'));
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-l2-err-bin-');
+  seedFakeAgent(binDir, 'noop'); // produces nothing — no artifact, no done-signal
+  await driveToWorkTurn(repo, home, binDir, logFile, '2500'); // short timeout so two attempts elapse fast
+
+  // Land: after the initial attempt + one retry both time out, the run is written to `error` and the
+  // turn failure is recorded (exit 1). The mirror renders the app-only error status.
+  const stateFile = join(repo, '.agent-loop', 'state.yaml');
+  await expect.poll(() => readFileSync(stateFile, 'utf8'), { timeout: 20_000 }).toContain('status: error');
+  expect(turnEvents(home, repo).some((e) => e.cmd.includes('failed') && e.exit === 1)).toBe(true);
+  await loopReadout().click();
+  await expect(loopPanel()).toContainText('error', { timeout: 10_000 });
+
+  await app.close();
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+  rmSync(binDir, { recursive: true, force: true });
+});
+
+test('the loop panel "mark turn complete" control advances a sentinel-less turn (§26.13 / L2 / D47a c)', async () => {
+  const repo = seedBootstrapFlowRepo('agent-term-e2e-l2-mark-');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-l2-mark-home-'));
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-l2-mark-bin-');
+  seedFakeAgent(binDir, 'plan-only'); // writes plan.md but emits NO done-signal
+  await driveToWorkTurn(repo, home, binDir, logFile, '60000'); // long timeout: no auto-error races the click
+
+  // The artifact is present but no done-signal fired, so the turn sits in flight. The operator's manual
+  // control advances it: open the docked panel and click "mark turn complete".
+  await expect.poll(() => existsSync(join(repo, '.agent-loop', 'plan.md')), { timeout: 20_000 }).toBe(true);
+  expect(turnEvents(home, repo).length).toBe(0); // not yet completed automatically
+  await loopReadout().click();
+  await loopPanel().locator('[data-loop-mark-complete]').click();
+
+  // Land: the manual override completes the turn (exit 0), and the run never errors.
+  await expect.poll(() => turnEvents(home, repo).some((e) => e.cmd.includes('complete') && e.exit === 0), { timeout: 15_000 }).toBe(true);
+  expect(readFileSync(join(repo, '.agent-loop', 'state.yaml'), 'utf8')).not.toContain('status: error');
+
+  await app.close();
   rmSync(repo, { recursive: true, force: true });
   rmSync(home, { recursive: true, force: true });
   rmSync(binDir, { recursive: true, force: true });

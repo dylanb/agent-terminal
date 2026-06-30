@@ -188,6 +188,11 @@ describe('pickup_contract resolution (§26.5 / §26.9)', () => {
     ]);
   });
 
+  it('parses the phase id + entry_status the orchestrator maps a status to (§26.5)', () => {
+    const def = parseLoopDef(repo, 'plan-loop', exampleConfigDir);
+    expect(def?.phases).toEqual([{ id: 'plan', entryStatus: 'plan-draft' }]);
+  });
+
   it('omits pickup when the LoopDef carries no pickup_contract (degrades, never throws)', () => {
     mkdirSync(join(repo, 'loops', 'impl-loop'), { recursive: true });
     writeFileSync(join(repo, 'loops', 'impl-loop', 'impl-loop.yaml'), IMPL_LOOP);

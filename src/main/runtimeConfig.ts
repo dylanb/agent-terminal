@@ -12,6 +12,7 @@ const DEFAULTS = {
   // §16.5: must exceed the active→quiet gap of the agent's reply, or the reply gets suppressed too.
   selfInjectWindowMs: 30_000,
   maxDoneTodos: 50, // §16.4
+  turnCompletionTimeoutMs: 120_000, // §26.3/D48: how long a loop turn may run before a retry
 } as const;
 
 export interface RuntimeConfig {
@@ -25,6 +26,7 @@ export interface RuntimeConfig {
   reportMinChars: number;
   selfInjectWindowMs: number;
   maxDoneTodos: number;
+  turnCompletionTimeoutMs: number;
 }
 
 /** Parse a positive integer env value; fall back on unset/garbage/non-positive (§15.7). */
@@ -46,5 +48,6 @@ export function resolveRuntimeConfig(env: NodeJS.ProcessEnv): RuntimeConfig {
     reportMinChars: posInt(env.APP_REPORT_MIN_CHARS, DEFAULTS.reportMinChars),
     selfInjectWindowMs: posInt(env.APP_SELF_INJECT_WINDOW_MS, DEFAULTS.selfInjectWindowMs),
     maxDoneTodos: posInt(env.APP_MAX_DONE_TODOS, DEFAULTS.maxDoneTodos),
+    turnCompletionTimeoutMs: posInt(env.APP_TURN_TIMEOUT_MS, DEFAULTS.turnCompletionTimeoutMs),
   };
 }
