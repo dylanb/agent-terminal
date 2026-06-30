@@ -12,6 +12,9 @@ const DEFAULTS = {
   // §16.5: must exceed the active→quiet gap of the agent's reply, or the reply gets suppressed too.
   selfInjectWindowMs: 30_000,
   maxDoneTodos: 50, // §16.4
+  // §5: a shell that exits within this window of spawn is a startup failure — keep the window open
+  // for the diagnostic rather than terminating the app.
+  startupExitGraceMs: 1000,
 } as const;
 
 export interface RuntimeConfig {
@@ -25,6 +28,7 @@ export interface RuntimeConfig {
   reportMinChars: number;
   selfInjectWindowMs: number;
   maxDoneTodos: number;
+  startupExitGraceMs: number;
 }
 
 /** Parse a positive integer env value; fall back on unset/garbage/non-positive (§15.7). */
@@ -46,5 +50,6 @@ export function resolveRuntimeConfig(env: NodeJS.ProcessEnv): RuntimeConfig {
     reportMinChars: posInt(env.APP_REPORT_MIN_CHARS, DEFAULTS.reportMinChars),
     selfInjectWindowMs: posInt(env.APP_SELF_INJECT_WINDOW_MS, DEFAULTS.selfInjectWindowMs),
     maxDoneTodos: posInt(env.APP_MAX_DONE_TODOS, DEFAULTS.maxDoneTodos),
+    startupExitGraceMs: posInt(env.APP_STARTUP_EXIT_GRACE_MS, DEFAULTS.startupExitGraceMs),
   };
 }

@@ -1,8 +1,8 @@
 // Global UI-settings store (§16.6). A missing/corrupt/garbage file MUST degrade to
 // defaults, never throw, so a bad pref can never wedge startup.
 
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { readFileSync } from 'node:fs';
+import { atomicWriteFileSync } from './atomicFile';
 import { DEFAULT_UI_SETTINGS, type KeymapProfileSetting, type TabId, type Theme, type UiSettings } from '../shared/ipc';
 import { KEY_ACTION_IDS, type Chord, type KeyActionId } from '../shared/keymap';
 import { isRecord } from './yamlRecord';
@@ -100,10 +100,7 @@ function load(filePath: string): UiSettings {
 }
 
 function persist(filePath: string, settings: UiSettings): void {
-  mkdirSync(dirname(filePath), { recursive: true });
-  const tmp = `${filePath}.tmp`;
-  writeFileSync(tmp, JSON.stringify(settings));
-  renameSync(tmp, filePath);
+  atomicWriteFileSync(filePath, JSON.stringify(settings));
 }
 
 export function createUiSettingsStore(filePath: string): UiSettingsStore {
