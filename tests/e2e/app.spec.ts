@@ -1474,18 +1474,49 @@ function seedFakeGhGit(prefix: string): { binDir: string; logFile: string } {
 // (sentinel line + `.agent-loop/turn-done`), `plan-only` writes the artifact but NO signal (drives the
 // manual mark-complete path), `noop` produces nothing (drives retry-then-error). The sentinel + file
 // name are generated from the shared contract so the seam cannot drift from the detectors.
-function seedFakeAgent(binDir: string, mode: 'write-plan' | 'plan-only' | 'noop'): void {
+// The plan-loop reviewer roster (§26.4) — the real six personas the fan-out turn must satisfy. `missing`
+// mode omits the last one so the orchestrator sees a partial fan-out and drives retry-then-error.
+const PLAN_PERSONAS = [
+  'review-principal',
+  'review-security',
+  'review-architecture',
+  'review-intent',
+  'review-maintainability',
+  'review-contracts',
+];
+
+// Emit BOTH done-signals for `turnKey`: write the turn-done file and print the sentinel ALONE on a line
+// (leading newline so it survives interleaving with the PTY echo of the injected prompt — the scanner
+// only matches a full-line sentinel, echo-safety §26.3/D47a).
+function doneSignal(turnKey: string): string {
+  return `printf '%s' '${turnKey}' > .agent-loop/${TURN_DONE_FILENAME}; printf '\\n%s\\n' '${turnDoneSentinel(turnKey)}'`;
+}
+
+function seedFakeAgent(
+  binDir: string,
+  opts: { work: 'write-plan' | 'plan-only' | 'noop'; reviews?: 'all' | 'missing' },
+): void {
   const writePlan = "mkdir -p .agent-loop; printf '# Plan\\n\\nfake plan body\\n' > .agent-loop/plan.md";
-  // Leading newline so the sentinel always lands ALONE on a line even if it interleaves with the PTY
-  // echo of the injected prompt — the scanner only matches a full-line sentinel (echo-safety).
-  const signal = `printf '%s' 'work-plan' > .agent-loop/${TURN_DONE_FILENAME}; printf '\\n%s\\n' '${turnDoneSentinel('work-plan')}'`;
-  const act = mode === 'noop' ? ':' : mode === 'plan-only' ? writePlan : `${writePlan}; ${signal}`;
+  const workAct =
+    opts.work === 'noop' ? ':' : opts.work === 'plan-only' ? writePlan : `${writePlan}; ${doneSignal('work-plan')}`;
+  // §26.4 — on the reviewers turn, write each roster persona's JSON for iteration 1 then signal done.
+  // `missing` writes all but one so the fan-out is incomplete (retry-then-error); undefined = do nothing.
+  const personas = opts.reviews === 'missing' ? PLAN_PERSONAS.slice(0, -1) : PLAN_PERSONAS;
+  const writeReviews =
+    'mkdir -p .agent-loop/reviews/1; ' +
+    personas.map((p) => `printf '%s' '{\"verdict\":\"clean\"}' > .agent-loop/reviews/1/${p}.json`).join('; ');
+  const reviewAct = opts.reviews === undefined ? ':' : `${writeReviews}; ${doneSignal('review-plan')}`;
+  // The injected prompt's done-signal instruction line carries `turn-done:<turnKey>` (inside the sentinel
+  // it tells the agent to print), so the REPL keys its scripted turn off which sentinel marker it sees.
   const script =
     '#!/usr/bin/env bash\n' +
     '# Fake hosted agent REPL; each injected prompt line drives the scripted turn (§26.13).\n' +
     'while IFS= read -r line; do\n' +
     '  [ -z "$line" ] && continue\n' +
-    `  ${act}\n` +
+    '  case "$line" in\n' +
+    `    *turn-done:work-plan*) ${workAct} ;;\n` +
+    `    *turn-done:review-plan*) ${reviewAct} ;;\n` +
+    '  esac\n' +
     'done\n';
   writeFileSync(join(binDir, 'fake-agent'), script, { mode: 0o755 });
 }
@@ -2096,7 +2127,7 @@ test('a work-agent turn injected after pickup advances on plan.md + the done-sig
   const repo = seedBootstrapFlowRepo('agent-term-e2e-l2-ok-');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-l2-ok-home-'));
   const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-l2-ok-bin-');
-  seedFakeAgent(binDir, 'write-plan');
+  seedFakeAgent(binDir, { work: 'write-plan', reviews: 'all' }); // work turn + the reviewer fan-out it chains into
   await driveToWorkTurn(repo, home, binDir, logFile, '30000');
 
   // Land: the fake-agent received the injected work-plan prompt and wrote plan.md, and the orchestrator
@@ -2118,7 +2149,7 @@ test('a work turn that emits no done-signal retries once then stops in error (§
   const repo = seedBootstrapFlowRepo('agent-term-e2e-l2-err-');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-l2-err-home-'));
   const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-l2-err-bin-');
-  seedFakeAgent(binDir, 'noop'); // produces nothing — no artifact, no done-signal
+  seedFakeAgent(binDir, { work: 'noop' }); // produces nothing — no artifact, no done-signal
   await driveToWorkTurn(repo, home, binDir, logFile, '2500'); // short timeout so two attempts elapse fast
 
   // Land: after the initial attempt + one retry both time out, the run is written to `error` and the
@@ -2139,7 +2170,7 @@ test('the loop panel "mark turn complete" control advances a sentinel-less turn 
   const repo = seedBootstrapFlowRepo('agent-term-e2e-l2-mark-');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-l2-mark-home-'));
   const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-l2-mark-bin-');
-  seedFakeAgent(binDir, 'plan-only'); // writes plan.md but emits NO done-signal
+  seedFakeAgent(binDir, { work: 'plan-only', reviews: 'all' }); // plan.md but NO work signal; reviewers settle after the manual advance
   await driveToWorkTurn(repo, home, binDir, logFile, '60000'); // long timeout: no auto-error races the click
 
   // The artifact is present but no done-signal fired, so the turn sits in flight. The operator's manual
@@ -2152,6 +2183,56 @@ test('the loop panel "mark turn complete" control advances a sentinel-less turn 
   // Land: the manual override completes the turn (exit 0), and the run never errors.
   await expect.poll(() => turnEvents(home, repo).some((e) => e.cmd.includes('complete') && e.exit === 0), { timeout: 15_000 }).toBe(true);
   expect(readFileSync(join(repo, '.agent-loop', 'state.yaml'), 'utf8')).not.toContain('status: error');
+
+  await app.close();
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+  rmSync(binDir, { recursive: true, force: true });
+});
+
+// The reviews/<iter> directory for the plan phase's fan-out (§26.4).
+const reviewsDir = (repo: string): string => join(repo, '.agent-loop', 'reviews', '1');
+
+test('the work turn chains into the reviewer fan-out; all persona JSONs advance it (§26.13 / L3)', async () => {
+  const repo = seedBootstrapFlowRepo('agent-term-e2e-l3-ok-');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-l3-ok-home-'));
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-l3-ok-bin-');
+  seedFakeAgent(binDir, { work: 'write-plan', reviews: 'all' });
+  await driveToWorkTurn(repo, home, binDir, logFile, '30000');
+
+  // Land: the work turn completes on plan.md, then the orchestrator injects the spawn-reviewers prompt;
+  // the fake-agent writes every roster persona's review JSON and the fan-out turn advances (exit 0).
+  await expect.poll(() => existsSync(join(reviewsDir(repo), 'review-contracts.json')), { timeout: 20_000 }).toBe(true);
+  for (const p of PLAN_PERSONAS) expect(existsSync(join(reviewsDir(repo), `${p}.json`))).toBe(true);
+  await expect
+    .poll(() => turnEvents(home, repo).some((e) => e.cmd.includes('review-plan') && e.cmd.includes('complete') && e.exit === 0), {
+      timeout: 20_000,
+    })
+    .toBe(true);
+  expect(readFileSync(join(repo, '.agent-loop', 'state.yaml'), 'utf8')).not.toContain('status: error');
+
+  await app.close();
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+  rmSync(binDir, { recursive: true, force: true });
+});
+
+test('a reviewer fan-out missing one persona JSON retries once then stops in error (§26.13 / L3 / D48)', async () => {
+  const repo = seedBootstrapFlowRepo('agent-term-e2e-l3-err-');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-l3-err-home-'));
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-l3-err-bin-');
+  // The work turn completes cleanly; the reviewers turn writes only five of six persona JSONs.
+  seedFakeAgent(binDir, { work: 'write-plan', reviews: 'missing' });
+  await driveToWorkTurn(repo, home, binDir, logFile, '2500'); // short timeout so the two reviewer attempts elapse fast
+
+  // Land: the fan-out is incomplete every attempt, so after retry the run stops in error and the loop
+  // panel raises it. The missing persona never appears; the failed turn is recorded (exit 1).
+  const stateFile = join(repo, '.agent-loop', 'state.yaml');
+  await expect.poll(() => readFileSync(stateFile, 'utf8'), { timeout: 25_000 }).toContain('status: error');
+  expect(existsSync(join(reviewsDir(repo), 'review-contracts.json'))).toBe(false);
+  expect(turnEvents(home, repo).some((e) => e.cmd.includes('review-plan') && e.cmd.includes('failed') && e.exit === 1)).toBe(true);
+  await loopReadout().click();
+  await expect(loopPanel()).toContainText('error', { timeout: 10_000 });
 
   await app.close();
   rmSync(repo, { recursive: true, force: true });

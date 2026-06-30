@@ -44,12 +44,23 @@ export interface PickupContract {
 export interface LoopPhase {
   id: string;
   entryStatus: string;
+  /** A non-empty `roster_override_id` binds this phase to a named roster; "" inherits the default. */
+  rosterOverrideId: string;
+}
+
+/** One entry of the §26.5 roster catalog: a named ordered list of reviewer persona actors. */
+export interface LoopRoster {
+  id: string;
+  actors: string[];
 }
 
 export interface LoopDef {
   name: string;
   gates: LoopGate[];
   phases: LoopPhase[];
+  /** The §26.5 roster catalog + the catalog's default roster id — the source of the §26.4 fan-out roster. */
+  rosters: LoopRoster[];
+  defaultRosterId: string;
   pickup?: PickupContract;
 }
 
@@ -97,16 +108,39 @@ export function resolveLoopDir(repoDir: string, name: string, configDir?: string
   return path.dirname(resolveLoopDefPath(repoDir, name, configDir));
 }
 
-/** The orchestrator-relevant slice of `phases` (§26.5): id + entry_status; malformed entries drop. */
+/** The orchestrator-relevant slice of `phases` (§26.5): id + entry_status + roster binding; malformed
+ *  entries drop. `roster_override_id` is optional (absent → "" = inherit the catalog default). */
 function toPhases(doc: Record<string, unknown>): LoopPhase[] {
   if (!Array.isArray(doc.phases)) return [];
   return doc.phases
     .map((p): LoopPhase | null =>
       isRecord(p) && typeof p.id === 'string' && typeof p.entry_status === 'string'
-        ? { id: p.id, entryStatus: p.entry_status }
+        ? {
+            id: p.id,
+            entryStatus: p.entry_status,
+            rosterOverrideId: typeof p.roster_override_id === 'string' ? p.roster_override_id : '',
+          }
         : null,
     )
     .filter((p): p is LoopPhase => p !== null);
+}
+
+/** The §26.5 roster catalog: each `rosters[]` entry's id + `ordered_actors` (the fan-out roster, §26.4).
+ *  Malformed entries drop; a non-string actor in an entry is dropped from that entry. */
+function toRosters(doc: Record<string, unknown>): LoopRoster[] {
+  if (!Array.isArray(doc.rosters)) return [];
+  return doc.rosters
+    .map((r): LoopRoster | null =>
+      isRecord(r) && typeof r.id === 'string'
+        ? {
+            id: r.id,
+            actors: Array.isArray(r.ordered_actors)
+              ? r.ordered_actors.filter((a): a is string => typeof a === 'string')
+              : [],
+          }
+        : null,
+    )
+    .filter((r): r is LoopRoster => r !== null);
 }
 
 function toGate(raw: unknown): LoopGate | null {
@@ -188,7 +222,18 @@ export function parseLoopDef(repoDir: string, name: string, configDir?: string):
   const defName = typeof doc.name === 'string' ? doc.name : name;
   const pickup = toPickupContract(doc);
   const phases = toPhases(doc);
-  return { name: defName, gates, phases, ...(pickup ? { pickup } : {}) };
+  const rosters = toRosters(doc);
+  const defaultRosterId = typeof doc.default_roster_id === 'string' ? doc.default_roster_id : '';
+  return { name: defName, gates, phases, rosters, defaultRosterId, ...(pickup ? { pickup } : {}) };
+}
+
+/** The reviewer fan-out roster for `phaseId` (§26.4): the phase's `roster_override_id` if set, else the
+ *  catalog `default_roster_id`, resolved to its ordered actors. Empty when the phase or roster is absent. */
+export function reviewerRosterForPhase(def: LoopDef, phaseId: string): string[] {
+  const phase = def.phases.find((p) => p.id === phaseId);
+  if (!phase) return [];
+  const rosterId = phase.rosterOverrideId !== '' ? phase.rosterOverrideId : def.defaultRosterId;
+  return def.rosters.find((r) => r.id === rosterId)?.actors ?? [];
 }
 
 /** The gate whose `id` matches `status` (the agent-loop state-machine string), or undefined when the

@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { parseLoopDef, gateForStatus } from '../../src/main/loopDef';
+import { parseLoopDef, gateForStatus, reviewerRosterForPhase } from '../../src/main/loopDef';
 
 // §24.2.3 T2 (folded) / §18.1 — the read-only LoopDef resolver. Each gate's `id` IS a status string,
 // carrying `human_options` + `kind`. Resolution mirrors `agent-loop list`: a repo `.agent-loop.yaml`
@@ -190,7 +190,26 @@ describe('pickup_contract resolution (§26.5 / §26.9)', () => {
 
   it('parses the phase id + entry_status the orchestrator maps a status to (§26.5)', () => {
     const def = parseLoopDef(repo, 'plan-loop', exampleConfigDir);
-    expect(def?.phases).toEqual([{ id: 'plan', entryStatus: 'plan-draft' }]);
+    expect(def?.phases).toEqual([{ id: 'plan', entryStatus: 'plan-draft', rosterOverrideId: '' }]);
+  });
+
+  it('resolves the reviewer roster for a phase from the real plan-loop def (§26.4/§26.5)', () => {
+    // The fan-out roster (§26.4) is the phase's resolved roster's ordered actors — read from the
+    // LoopDef, never hardcoded. plan-loop binds its default roster to the six judgment personas.
+    const def = parseLoopDef(repo, 'plan-loop', exampleConfigDir);
+    expect(reviewerRosterForPhase(def!, 'plan')).toEqual([
+      'review-principal',
+      'review-security',
+      'review-architecture',
+      'review-intent',
+      'review-maintainability',
+      'review-contracts',
+    ]);
+  });
+
+  it('returns an empty roster for an unknown phase (degrades, never throws)', () => {
+    const def = parseLoopDef(repo, 'plan-loop', exampleConfigDir);
+    expect(reviewerRosterForPhase(def!, 'no-such-phase')).toEqual([]);
   });
 
   it('omits pickup when the LoopDef carries no pickup_contract (degrades, never throws)', () => {

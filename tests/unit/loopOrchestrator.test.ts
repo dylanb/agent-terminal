@@ -129,4 +129,20 @@ describe('loop turn runner (§26.3/D47a, D48)', () => {
     expect(onComplete).not.toHaveBeenCalled();
     expect(r.state()).toBe('idle');
   });
+
+  it('accepts a fresh turn after one completes (the §26.4 work→reviewers chain runs sequential turns)', () => {
+    // L3 chains the reviewers turn off the work turn's completion: the host calls requestTurn again from
+    // the `complete` state. The runner must start the new turn (a different key), not ignore it as re-entry.
+    const r = createTurnRunner(deps);
+    r.requestTurn('work-plan');
+    r.onDoneSignal();
+    expect(r.state()).toBe('complete');
+
+    r.requestTurn('review-plan');
+    expect(r.state()).toBe('in-flight');
+    expect(inject).toHaveBeenLastCalledWith('PROMPT for review-plan');
+    r.onDoneSignal();
+    expect(onComplete).toHaveBeenLastCalledWith('review-plan');
+    expect(r.state()).toBe('complete');
+  });
 });

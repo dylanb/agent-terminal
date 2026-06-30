@@ -68,10 +68,11 @@ import { auditRootDir } from './auditPaths';
 import { createFlowEntryActions } from './flowEntryActions';
 import { parseAgentLoopState, watchAgentLoopState } from './agentLoopBridge';
 import { createLoopNotifier } from './loopNotifier';
-import { parseLoopDef } from './loopDef';
+import { parseLoopDef, reviewerRosterForPhase } from './loopDef';
 import { runPickup, createRealPickupDeps } from './loopPickup';
 import { createTurnRunner, type TurnRunner } from './loopOrchestrator';
-import { composeWorkPrompt } from './loopRecipe';
+import { composeWorkPrompt, composeSpawnReviewersPrompt } from './loopRecipe';
+import { allReviewsPresent } from './reviewArtifacts';
 import { createSentinelWatcher } from './turnSentinel';
 import { readAndClearTurnDone, watchTurnDone } from './turnDoneFile';
 import { writeLoopState } from './loopStateWriter';
@@ -254,7 +255,13 @@ async function createWindow(): Promise<void> {
   // sentinel line OR the `.agent-loop/turn-done` file) plus the turn artifact, retrying once then
   // writing the app-only `error` status. `activeTurn` carries the bound-loop context its domain ports
   // read; the runner injects only while the instance is injectable (§26.2: quiescent at its input box).
-  let activeTurn: { repoDir: string; loopName: string; phase: string; turnKey: string } | null = null;
+  // A turn is either the `work` actor (produces `plan.md`) or the `reviewers` fan-out (§26.4: produces
+  // every roster persona's `reviews/<iter>/<persona>.json`). The descriptor's `kind` selects the prompt
+  // recipe and the artifact-confirmed check; `reviewers` carries its resolved roster + iteration.
+  type ActiveTurn =
+    | { kind: 'work'; repoDir: string; loopName: string; phase: string; turnKey: string }
+    | { kind: 'reviewers'; repoDir: string; loopName: string; phase: string; turnKey: string; personas: string[]; iteration: number };
+  let activeTurn: ActiveTurn | null = null;
   let turnTimer: ReturnType<typeof setTimeout> | null = null;
   let unwatchTurnDone: (() => void) | null = null;
   let turnRunner: TurnRunner;
@@ -262,6 +269,14 @@ async function createWindow(): Promise<void> {
   turnRunner = createTurnRunner({
     compose: () => {
       if (!activeTurn) return null;
+      if (activeTurn.kind === 'reviewers') {
+        return composeSpawnReviewersPrompt({
+          phase: activeTurn.phase,
+          iteration: activeTurn.iteration,
+          personas: activeTurn.personas,
+          turnKey: activeTurn.turnKey,
+        });
+      }
       const s = parseAgentLoopState(activeTurn.repoDir);
       return composeWorkPrompt({
         repoDir: activeTurn.repoDir,
@@ -283,6 +298,9 @@ async function createWindow(): Promise<void> {
     injectable: () => agentActivity === 'quiet',
     artifactPresent: () => {
       if (!activeTurn) return false;
+      if (activeTurn.kind === 'reviewers') {
+        return allReviewsPresent(activeTurn.repoDir, activeTurn.iteration, activeTurn.personas);
+      }
       try {
         return statSync(path.join(activeTurn.repoDir, '.agent-loop', 'plan.md')).size > 0;
       } catch {
@@ -312,21 +330,36 @@ async function createWindow(): Promise<void> {
       pushFlowChanged();
     },
     onComplete: (turnKey) => {
-      if (activeTurn) audit.recordCommand(activeTurn.repoDir, 'turn', `turn ${turnKey} complete`, 0);
+      const finished = activeTurn;
+      if (finished) audit.recordCommand(finished.repoDir, 'turn', `turn ${turnKey} complete`, 0);
       pushFlowChanged();
+      // §26.4 — the work turn's completion chains into the reviewer fan-out (same loop, same iteration).
+      if (finished?.kind === 'work') startReviewersTurn(finished.repoDir, finished.loopName, finished.phase);
     },
   });
   // The §8.3 active→quiet flip is the orchestrator's "instance is now injectable" signal (§26.2) —
   // assigned once the runner exists so the shadow's onStatus (built earlier) can fire it forward.
   notifyInjectable = () => turnRunner.onInjectable();
   // Bind a freshly-bootstrapped loop step's work turn: watch for its done-signal file and request the
-  // turn (injected when the instance next goes injectable).
+  // turn (injected when the instance next goes injectable). The watcher stays attached across the turns
+  // chained off this one (work → reviewers), so each turn's done-signal file is seen.
   const startWorkTurn = (repoDir: string, loopName: string, phase: string): void => {
-    activeTurn = { repoDir, loopName, phase, turnKey: `work-${phase}` };
+    activeTurn = { kind: 'work', repoDir, loopName, phase, turnKey: `work-${phase}` };
     unwatchTurnDone?.();
     unwatchTurnDone = watchTurnDone(repoDir, () => {
       if (readAndClearTurnDone(repoDir) !== null) turnRunner.onDoneSignal();
     });
+    turnRunner.requestTurn(activeTurn.turnKey);
+  };
+  // §26.4 — fan the phase's reviewer roster out as parallel subagents: resolve the roster from the bound
+  // LoopDef, then run the reviewers turn (one composed prompt; advances when every persona JSON is present
+  // for this iteration). An empty roster means nothing to fan out, so the chain simply stops here.
+  const startReviewersTurn = (repoDir: string, loopName: string, phase: string): void => {
+    const def = parseLoopDef(repoDir, loopName);
+    const personas = def ? reviewerRosterForPhase(def, phase) : [];
+    if (personas.length === 0) return;
+    const s = parseAgentLoopState(repoDir);
+    activeTurn = { kind: 'reviewers', repoDir, loopName, phase, turnKey: `review-${phase}`, personas, iteration: s?.iteration ?? 1 };
     turnRunner.requestTurn(activeTurn.turnKey);
   };
 

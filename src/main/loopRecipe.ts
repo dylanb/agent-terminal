@@ -35,3 +35,31 @@ export function composeWorkPrompt(req: WorkPromptRequest): string | null {
   }
   return `${body}\n${doneSignalInstruction(req.turnKey)}\n`;
 }
+
+export interface SpawnReviewersRequest {
+  /** Phase id whose roster is fanned out (e.g. `plan`). */
+  phase: string;
+  /** Current iteration — scopes each persona's output path `reviews/{iteration}/{persona}.json`. */
+  iteration: number;
+  /** The resolved roster persona actors (§26.4), in order. */
+  personas: string[];
+  /** Turn key the done-signal is scoped to (e.g. `review-plan`). */
+  turnKey: string;
+}
+
+/** §26.4 — compose the single spawn-reviewers prompt (no template file: composed by main). It names each
+ *  roster persona and its iteration-scoped review JSON, instructs the instance to spawn them as parallel
+ *  `Task` subagents, and appends the done-signal instruction that fires once all subagents have returned. */
+export function composeSpawnReviewersPrompt(req: SpawnReviewersRequest): string {
+  const lines = [
+    `Review the current ${req.phase} artifacts by spawning the following reviewer personas as PARALLEL Task`,
+    'subagents — one Task per persona, all launched together, each an independent fresh context. Each',
+    'subagent loads its review skill, reviews the work, and writes its verdict JSON to the path shown:',
+    '',
+    ...req.personas.map((p) => `  - ${p} → .agent-loop/reviews/${req.iteration}/${p}.json`),
+    '',
+    'Wait for every subagent to return before finishing this turn.',
+    doneSignalInstruction(req.turnKey),
+  ];
+  return `${lines.join('\n')}\n`;
+}

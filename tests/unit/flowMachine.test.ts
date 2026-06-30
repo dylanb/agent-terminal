@@ -167,6 +167,8 @@ describe('flow state machine — loop-step state.yaml mirror (§24.2.3 T2)', () 
     const def = {
       name: 'impl-loop',
       phases: [],
+      rosters: [],
+      defaultRosterId: '',
       gates: [
         { id: 'awaiting-human-pr-approval', kind: 'approve-required', humanOptions: ['approve', 'request-changes', 'impasse'], terminal: false },
         { id: 'awaiting-team-review', kind: 'terminal', humanOptions: [], terminal: true },
