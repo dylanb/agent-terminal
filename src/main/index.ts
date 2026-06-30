@@ -65,11 +65,12 @@ import { createGithubRefs } from './githubRefs';
 import { createAuditRecorder } from './auditRecorder';
 import type { TransitionKind } from '../shared/audit';
 import { auditRootDir } from './auditPaths';
-import { BOOTSTRAP_PICKUP, createFlowEntryActions } from './flowEntryActions';
-import { createBootstrapCommandTracker, type BootstrapCommandTracker } from './bootstrapCommands';
+import { createFlowEntryActions } from './flowEntryActions';
 import { parseAgentLoopState, watchAgentLoopState } from './agentLoopBridge';
 import { createLoopNotifier } from './loopNotifier';
 import { parseLoopDef } from './loopDef';
+import { runPickup, createRealPickupDeps } from './loopPickup';
+import type { FlowStepDef } from './flow';
 import { listTodoTemplates, loadTodoTemplateFile, parseTodoTemplate } from './todoTemplate';
 import { discover, readArtifact, emptyTree } from './artifactTree';
 import { watchViewerTree, viewerRoot } from './viewerWatch';
@@ -237,11 +238,8 @@ async function createWindow(): Promise<void> {
     onInject: () => suppressor.noteInjection(),
   });
 
-  // §25.5: a flow-injected bootstrap (`agent-loop pickup …`) is injected during a transition (its
-  // repoKey) and run by the human later; the correlator (built once `audit` exists) holds it pending
-  // and records its OSC-133 span exit. `transitioningRepo` carries the active repoKey into the
-  // synchronous onEnterStep injection below.
-  let bootstrapCommands: BootstrapCommandTracker | null = null;
+  // `transitioningRepo` carries the active repoKey into the synchronous onEnterStep below, so a loop
+  // step's in-app pickup (§26.9) knows which repo it is bootstrapping.
   let transitioningRepo: string | null = null;
   const inTransition = <T>(repoKey: string, fn: () => T): T => {
     transitioningRepo = repoKey;
@@ -252,17 +250,33 @@ async function createWindow(): Promise<void> {
     }
   };
 
+  // §26.9 / L1 — entering a `bootstrap: pickup` loop step runs in-app pickup (gh/git + state.yaml write)
+  // OUT OF BAND, replacing the retired §24.2.3 T3 injected `agent-loop pickup`. Fire-and-forget: on
+  // completion it records an audit command event and pushes flow:onStateChanged so the T2 mirror
+  // re-pulls and renders the freshly-written status. `audit` is built below but referenced lazily here.
+  const runPickupForStep = (step: FlowStepDef, inputs: Record<string, string>): void => {
+    const repoKey = transitioningRepo;
+    if (!repoKey || step.kind !== 'loop' || !step.loop) return;
+    const def = parseLoopDef(repoKey, step.loop);
+    if (!def?.pickup) return; // no pickup_contract → nothing to bootstrap from
+    const ticketInput = (step.inputs ?? []).find((i) => i.type === 'github-ticket');
+    const raw = ticketInput ? inputs[ticketInput.name] : undefined;
+    const issue = raw && /^\d+$/.test(raw.trim()) ? Number(raw.trim()) : null;
+    if (issue === null) return; // cannot bootstrap without a resolved github-ticket issue number
+    void runPickup(createRealPickupDeps(repoKey), { repoDir: repoKey, issue, loopName: step.loop, pickup: def.pickup })
+      .then((result) => {
+        audit.recordCommand(repoKey, 'pickup', `pickup #${issue}`, result.ok ? 0 : 1);
+        pushFlowChanged();
+      });
+  };
+
   // §18.6/§19.3: a manual step's only automatic entry action is injecting its `skill`, refused over a
-  // busy shell — a live OSC-133 command span means not at a ready prompt. Must be built after the
-  // injector + tracker exist (it closes over both).
+  // busy shell — a live OSC-133 command span means not at a ready prompt. A `bootstrap: pickup` loop
+  // step runs in-app pickup instead (§26.9). Must be built after the injector + tracker exist.
   const flowEntryActions = createFlowEntryActions({
     isShellBusy: () => tracker.summaries().some((s) => s.running),
-    inject: (text) => {
-      inject(text, { submit: false });
-      if (transitioningRepo && text.startsWith(BOOTSTRAP_PICKUP)) {
-        bootstrapCommands?.notePending(transitioningRepo, text);
-      }
-    },
+    inject: (text) => inject(text, { submit: false }),
+    runPickup: runPickupForStep,
   });
   const flow = createFlowManager({
     globalDir: flowGlobalDir,
@@ -283,15 +297,6 @@ async function createWindow(): Promise<void> {
       const load = loadFlowDefinitionLocalFirst(repoKey, flowGlobalDir);
       return load.ok ? load.definition.name : null;
     },
-  });
-
-  // §25.5: correlate each finished command span with a pending bootstrap and record its exit. Off the
-  // OSC-133 marks the command tracker is built on, so it fires whenever the human runs the injected
-  // `agent-loop pickup …`, not on §8.3 quiescence.
-  bootstrapCommands = createBootstrapCommandTracker({
-    summaries: () => tracker.summaries(),
-    onChange: (cb) => tracker.onChange(cb),
-    recordCommand: (repoKey, cmd, exit) => audit.recordCommand(repoKey, 'bootstrap', cmd, exit),
   });
 
   // T2 (§24.2.3): watch a loop repo's state.yaml so a hand-edit re-pushes over the EXISTING

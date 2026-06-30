@@ -9,7 +9,7 @@ import type { FlowPrompt } from '../../src/shared/ipc';
 
 const prompt = (over: Partial<FlowPrompt> = {}): FlowPrompt => ({
   inputs: [{ name: 'ticket', type: 'github-ticket' }],
-  bootstrap: 'agent-loop pickup',
+  bootstrap: 'pickup',
   ...over,
 });
 
@@ -32,9 +32,10 @@ describe('typed-input modal (§24.2.3 T3 / §18.4)', () => {
     expect(f).toBeTruthy();
     expect(f!.querySelector('.ty')?.textContent).toBe('github-ticket');
     expect(f!.querySelector('input')).toBeTruthy();
-    // The helper surfaces the bootstrap command to the operator (§18.3).
+    // The helper names the in-app bootstrap action that runs on entry (§26.9).
     expect(host.querySelector('.flow-modal h3')?.textContent).toContain('plan');
-    expect(host.textContent).toContain('agent-loop pickup');
+    expect(host.textContent).toContain('pickup');
+    expect(host.textContent).toContain('§26.9');
   });
 
   it('Confirm collects the typed values and calls submit with the name→value map', () => {

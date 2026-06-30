@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { parseLoopDef, gateForStatus } from '../../src/main/loopDef';
 
 // §24.2.3 T2 (folded) / §18.1 — the read-only LoopDef resolver. Each gate's `id` IS a status string,
@@ -149,5 +149,52 @@ describe('LoopDef resolver (§24.2.3 T2 folded / §18.1)', () => {
     writeFileSync(join(repo, 'loops', 'my-impl-loop.yaml'), IMPL_LOOP);
     writeRegistry('  impl-loop: ./loops/my-impl-loop.yaml\n');
     expect(parseLoopDef(repo, 'impl-loop', configDir)?.name).toBe('impl-loop');
+  });
+});
+
+// §26.5 / §26.9 — the orchestrator drives in-app bootstrap (pickup) from the bound LoopDef's
+// pickup_contract, never hardcoded. parseLoopDef therefore reads the contract's bootstrap-shaping
+// fields and resolves each initial_labels slot to its concrete label string (config_bindings
+// labels.pr / labels.issue maps). Validated against the REAL plan-loop def copied into example/loops.
+describe('pickup_contract resolution (§26.5 / §26.9)', () => {
+  // example/loops/<name>/<name>.yaml mirrors $CLAUDE_CONFIG_DIR/loops layout, so the example dir
+  // serves as the configDir for resolution (configLoopsDir joins `loops`).
+  const exampleConfigDir = resolve(__dirname, '..', '..', 'example');
+  let repo: string;
+  beforeEach(() => {
+    repo = mkdtempSync(join(tmpdir(), 'loopdef-pickup-repo-'));
+  });
+  afterEach(() => {
+    rmSync(repo, { recursive: true, force: true });
+  });
+
+  it('reads the bootstrap-shaping fields from the real plan-loop pickup_contract', () => {
+    const def = parseLoopDef(repo, 'plan-loop', exampleConfigDir);
+    expect(def?.pickup).toMatchObject({
+      initialStatus: 'plan-draft',
+      initialBranchTpl: 'plan-loop/issue-{issue}',
+      initialPrBodyRef: 'stub-pr-body',
+      onConflict: 'wipe-and-retry',
+    });
+  });
+
+  it('resolves each initial_labels slot to its concrete label string (target-scoped)', () => {
+    const def = parseLoopDef(repo, 'plan-loop', exampleConfigDir);
+    // ready/in_progress are issue slots; plan-draft is a pr slot — each resolves against its own map.
+    expect(def?.pickup?.initialLabels).toEqual([
+      { action: 'remove', label: 'plan-loop/ready', target: 'issue' },
+      { action: 'add', label: 'plan-loop/in-progress', target: 'issue' },
+      { action: 'add', label: 'plan-loop/plan-draft', target: 'pr' },
+    ]);
+  });
+
+  it('omits pickup when the LoopDef carries no pickup_contract (degrades, never throws)', () => {
+    mkdirSync(join(repo, 'loops', 'impl-loop'), { recursive: true });
+    writeFileSync(join(repo, 'loops', 'impl-loop', 'impl-loop.yaml'), IMPL_LOOP);
+    // A repo configDir override would need its own .agent-loop.yaml; resolve via the example impl-loop,
+    // which DOES carry a pickup_contract, so instead assert the minimal IMPL_LOOP fixture has none.
+    writeFileSync(join(repo, '.agent-loop.yaml'), 'loops:\n  bare: ./bare.yaml\n');
+    writeFileSync(join(repo, 'bare.yaml'), IMPL_LOOP);
+    expect(parseLoopDef(repo, 'bare')?.pickup).toBeUndefined();
   });
 });

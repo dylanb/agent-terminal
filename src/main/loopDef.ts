@@ -17,11 +17,31 @@ export interface LoopGate {
   terminal: boolean;
 }
 
-/** The gate slice of a LoopDef the flow reads (§18.1); the engine's other keys are intentionally
- *  not modelled. */
+/** One resolved label mutation from a pickup_contract `initial_labels` entry (§26.9): the slot has
+ *  already been resolved to its concrete label string against the target-scoped label map. */
+export interface PickupLabel {
+  action: 'add' | 'remove';
+  label: string;
+  target: 'issue' | 'pr';
+}
+
+/** The bound LoopDef's bootstrap (pickup) contract (§26.5 / §26.9) — drives in-app pickup instead of
+ *  hardcoding it. Slots in `initial_labels` are resolved to concrete strings at parse time; an
+ *  unresolvable slot is dropped (best-effort, never throws). Absent when the def has no contract. */
+export interface PickupContract {
+  initialStatus: string;
+  initialBranchTpl: string;
+  initialPrBodyRef: string;
+  initialLabels: PickupLabel[];
+  onConflict: string;
+}
+
+/** The gate slice of a LoopDef the flow reads (§18.1) plus the pickup_contract the orchestrator drives
+ *  bootstrap from (§26.9); the engine's other keys are intentionally not modelled. */
 export interface LoopDef {
   name: string;
   gates: LoopGate[];
+  pickup?: PickupContract;
 }
 
 const SCHEMA_VERSION = '4';
@@ -71,8 +91,55 @@ function toGate(raw: unknown): LoopGate | null {
   return { id: raw.id, kind, humanOptions, terminal: kind === 'terminal' };
 }
 
-/** Resolve + parse the LoopDef bound to `name` for `repoDir`. Returns its gate model, or null for a
- *  missing / corrupt / wrong-`schema_version` / gate-less file (never throws). */
+/** The engine stores label-slot→string maps under config_bindings entries keyed by `yaml_path`
+ *  (`labels.pr` / `labels.issue`). Pull the `default` string-map for one path; {} when absent. */
+function labelSlotMap(doc: Record<string, unknown>, yamlPath: string): Record<string, string> {
+  const bindings = doc.config_bindings;
+  if (!Array.isArray(bindings)) return {};
+  const entry = bindings.find((b) => isRecord(b) && b.yaml_path === yamlPath);
+  if (!isRecord(entry) || !isRecord(entry.default)) return {};
+  const out: Record<string, string> = {};
+  for (const [slot, label] of Object.entries(entry.default)) if (typeof label === 'string') out[slot] = label;
+  return out;
+}
+
+/** Resolve one `initial_labels` slot entry to a concrete PickupLabel, or null when the entry is
+ *  ill-typed or its slot has no mapping in the target's label map (dropped, best-effort §26.9). */
+function toPickupLabel(
+  raw: unknown,
+  prMap: Record<string, string>,
+  issueMap: Record<string, string>,
+): PickupLabel | null {
+  if (!isRecord(raw)) return null;
+  const action = raw.action;
+  const target = raw.target;
+  if ((action !== 'add' && action !== 'remove') || (target !== 'issue' && target !== 'pr')) return null;
+  if (typeof raw.slot !== 'string') return null;
+  const label = (target === 'pr' ? prMap : issueMap)[raw.slot];
+  return typeof label === 'string' ? { action, label, target } : null;
+}
+
+/** Read the pickup_contract slice (§26.5 / §26.9) with its label slots resolved; undefined when the
+ *  def carries no `pickup_contract` mapping. Never throws — a malformed field degrades to undefined. */
+function toPickupContract(doc: Record<string, unknown>): PickupContract | undefined {
+  const pc = doc.pickup_contract;
+  if (!isRecord(pc)) return undefined;
+  const prMap = labelSlotMap(doc, 'labels.pr');
+  const issueMap = labelSlotMap(doc, 'labels.issue');
+  const initialLabels = Array.isArray(pc.initial_labels)
+    ? pc.initial_labels.map((l) => toPickupLabel(l, prMap, issueMap)).filter((l): l is PickupLabel => l !== null)
+    : [];
+  return {
+    initialStatus: typeof pc.initial_status === 'string' ? pc.initial_status : '',
+    initialBranchTpl: typeof pc.initial_branch_tpl === 'string' ? pc.initial_branch_tpl : '',
+    initialPrBodyRef: typeof pc.initial_pr_body_ref === 'string' ? pc.initial_pr_body_ref : '',
+    initialLabels,
+    onConflict: typeof pc.on_conflict === 'string' ? pc.on_conflict : '',
+  };
+}
+
+/** Resolve + parse the LoopDef bound to `name` for `repoDir`. Returns its gate model + pickup contract,
+ *  or null for a missing / corrupt / wrong-`schema_version` / gate-less file (never throws). */
 export function parseLoopDef(repoDir: string, name: string, configDir?: string): LoopDef | null {
   let raw: string;
   try {
@@ -92,7 +159,8 @@ export function parseLoopDef(repoDir: string, name: string, configDir?: string):
   const gates = doc.gates.map(toGate).filter((g): g is LoopGate => g !== null);
   if (gates.length === 0) return null;
   const defName = typeof doc.name === 'string' ? doc.name : name;
-  return { name: defName, gates };
+  const pickup = toPickupContract(doc);
+  return { name: defName, gates, ...(pickup ? { pickup } : {}) };
 }
 
 /** The gate whose `id` matches `status` (the agent-loop state-machine string), or undefined when the

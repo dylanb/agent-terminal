@@ -1442,6 +1442,34 @@ function seedBootstrapFlowRepo(prefix: string): string {
 
 const inputModal = () => page.locator('#flow-modal-host .flow-modal');
 
+// §26.13 test seam — the orchestrator's in-app pickup (§26.9) shells real git/gh. e2e prepends a fake
+// gh + git on PATH that record their argv and emit canned output (no network/auth/remote), so the run
+// is deterministic on a real PTY: the PTY + shell are real, only the bootstrap helpers are stubbed.
+// Returns the bin dir to prepend to PATH and the log file the fakes append every invocation to.
+function seedFakeGhGit(prefix: string): { binDir: string; logFile: string } {
+  const binDir = mkdtempSync(join(tmpdir(), prefix));
+  const logFile = join(binDir, 'calls.log');
+  const fakeGit =
+    '#!/usr/bin/env bash\n' +
+    'echo "git $*" >> "$FAKE_GHGIT_LOG"\n' +
+    // status --porcelain emits nothing → a clean tree; every other op is a recorded no-op success.
+    'exit 0\n';
+  const fakeGh =
+    '#!/usr/bin/env bash\n' +
+    'echo "gh $*" >> "$FAKE_GHGIT_LOG"\n' +
+    'if [ "$1" = "repo" ] && [ "$2" = "view" ]; then echo "main"; exit 0; fi\n' +
+    'if [ "$1" = "issue" ] && [ "$2" = "view" ]; then echo \'{"title":"Fake ticket","url":"https://example/issues/176"}\'; exit 0; fi\n' +
+    'if [ "$1" = "pr" ] && [ "$2" = "create" ]; then echo "https://github.com/fake/repo/pull/4242"; exit 0; fi\n' +
+    'exit 0\n';
+  writeFileSync(join(binDir, 'git'), fakeGit, { mode: 0o755 });
+  writeFileSync(join(binDir, 'gh'), fakeGh, { mode: 0o755 });
+  return { binDir, logFile };
+}
+
+// LoopDef resolution for e2e: $CLAUDE_CONFIG_DIR/loops/<name>/<name>.yaml, so the committed example
+// defs (example/loops, real plan-loop/impl-loop) resolve when CLAUDE_CONFIG_DIR points at example/.
+const exampleConfigDir = join(process.cwd(), 'example');
+
 // §24.2.3 T2 — step 2 is a `loop` bound to a LoopDef, plus a real v4 agent-loop state.yaml the app
 // mirrors read-only. Returns the state.yaml path so the test hand-edits it (standing in for the
 // human driving agent-loop) and watches the strip update.
@@ -1749,11 +1777,26 @@ test('resolving a github-ticket input records input.resolved and ticket.assoc (�
   rmSync(home, { recursive: true, force: true });
 });
 
-test('a flow-injected bootstrap command is recorded with its exit when the human runs it (§25.5)', async () => {
+test('in-app pickup records a `pickup` command event with its exit (§26.9 / §25.5)', async () => {
+  // The retired §24.2.3 T3 injected `agent-loop pickup` (recorded via an OSC-133 span). §26.9 runs
+  // pickup out-of-band in the app, so the audit `command` event now comes from the runner directly,
+  // with source `pickup` and exit 0 on success (the fake gh/git make it deterministic).
   const repo = seedBootstrapFlowRepo('agent-term-e2e-audit-cmd-');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-audit-cmd-home-'));
+  const { binDir } = seedFakeGhGit('agent-term-e2e-cmd-bin-');
   await app.close();
-  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
+  app = await electron.launch({
+    args: ['out/main/index.js'],
+    env: {
+      ...process.env,
+      APP_SHELL: 'bash',
+      HOME: home,
+      APP_SUBMIT_DELAY_MS: '100',
+      CLAUDE_CONFIG_DIR: exampleConfigDir,
+      PATH: `${binDir}:${process.env.PATH}`,
+      FAKE_GHGIT_LOG: join(binDir, 'calls.log'),
+    },
+  });
   page = await app.firstWindow();
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
@@ -1765,12 +1808,6 @@ test('a flow-injected bootstrap command is recorded with its exit when the human
   await expect(inputModal()).toBeVisible({ timeout: 10_000 });
   await inputModal().locator('.field input').fill('176');
   await inputModal().locator('.confirm').click();
-  await expect(termRows()).toContainText('agent-loop pickup 176', { timeout: 10_000 });
-
-  // The human runs the injected command (Enter). agent-loop is not installed → a nonzero exit, whose
-  // OSC-133 span is correlated into a `command` event carrying that exit (§25.5).
-  await page.locator('.xterm-screen').click();
-  await page.keyboard.press('Enter');
 
   const file = (): string => auditRunFiles(home, repo)[0];
   await expect
@@ -1779,11 +1816,9 @@ test('a flow-injected bootstrap command is recorded with its exit when the human
   const cmd = readAuditRun(home, repo, file()).events.find(
     (e): e is Extract<AuditEvent, { type: 'command' }> => e.type === 'command',
   );
-  expect(cmd?.source).toBe('bootstrap');
-  expect(cmd?.cmd).toContain('agent-loop pickup 176');
-  // agent-loop is not installed, so the OSC-133 span carries bash's real command-not-found exit —
-  // the correlation must capture that nonzero code, not drop it to null (§25.5).
-  expect(cmd?.exit).toBeGreaterThan(0);
+  expect(cmd?.source).toBe('pickup');
+  expect(cmd?.cmd).toContain('176');
+  expect(cmd?.exit).toBe(0); // fake gh/git succeed, so the pickup reports success
 
   await app.close();
   rmSync(repo, { recursive: true, force: true });
@@ -1862,12 +1897,26 @@ test('advancing INTO a later step fires its entry action: the skill injects on A
   rmSync(home, { recursive: true, force: true });
 });
 
-test('entering a bootstrap loop step prompts for its typed input; Confirm injects agent-loop pickup + persists (§24.2.3 T3)', async () => {
-  // Ready-shell case: Confirm over a ready prompt injects and persists (contrast the busy-shell test).
-  const repo = seedBootstrapFlowRepo('agent-term-e2e-flow-t3boot-');
-  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-flow-t3boot-home-'));
+test('entering a bootstrap loop step prompts for its input; Confirm runs in-app pickup: state.yaml + draft PR, mirror plan-draft, nothing injected (§26.9 / L1)', async () => {
+  // L1 — the app OWNS state.yaml and bootstraps in-app. Confirm runs pickup (gh/git, driven by the real
+  // plan-loop pickup_contract), opening a draft PR and WRITING the initial whole-document v4 state.yaml;
+  // the T2 mirror renders plan-draft. The retired §24.2.3 T3 `agent-loop pickup` is NOT injected.
+  const repo = seedBootstrapFlowRepo('agent-term-e2e-flow-l1boot-');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-flow-l1boot-home-'));
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-l1-bin-');
   await app.close();
-  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
+  app = await electron.launch({
+    args: ['out/main/index.js'],
+    env: {
+      ...process.env,
+      APP_SHELL: 'bash',
+      HOME: home,
+      APP_SUBMIT_DELAY_MS: '100',
+      CLAUDE_CONFIG_DIR: exampleConfigDir,
+      PATH: `${binDir}:${process.env.PATH}`,
+      FAKE_GHGIT_LOG: logFile,
+    },
+  });
   page = await app.firstWindow();
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
@@ -1885,26 +1934,57 @@ test('entering a bootstrap loop step prompts for its typed input; Confirm inject
 
   await inputModal().locator('.field input').fill('176');
   await inputModal().locator('.confirm').click();
-
-  await expect(termRows()).toContainText('agent-loop pickup 176', { timeout: 10_000 });
   await expect(inputModal()).toHaveCount(0);
-  // The value persists to flow-state.yaml so it threads to later steps and survives a relaunch (§18.3).
-  await expect
-    .poll(() => readFileSync(join(repo, '.agent-terminal', 'flow-state.yaml'), 'utf8'), { timeout: 10_000 })
-    .toContain('176');
+
+  // Land: a whole-document valid-v4 state.yaml is app-written (status plan-draft, bound_loop plan-loop).
+  const stateFile = join(repo, '.agent-loop', 'state.yaml');
+  await expect.poll(() => (existsSync(stateFile) ? readFileSync(stateFile, 'utf8') : ''), { timeout: 15_000 }).toContain('status: plan-draft');
+  const stateText = readFileSync(stateFile, 'utf8');
+  expect(stateText).toContain('bound_loop: plan-loop');
+  expect(stateText).toContain('schema_version: 4');
+
+  // Land: a draft PR was opened (recorded by the fake gh), and pickup forked the templated branch.
+  const calls = readFileSync(logFile, 'utf8');
+  expect(calls).toContain('gh pr create --draft');
+  expect(calls).toContain('git push -u origin plan-loop/issue-176');
+
+  // Land: the T2 mirror renders the freshly-written state live (the watcher re-pull after the write) —
+  // the rail read-out shows the tone + iteration, and the docked panel the exact v4 status string.
+  await expect(loopReadout()).toContainText('iter 1', { timeout: 10_000 });
+  await loopReadout().click();
+  await expect(loopPanel()).toContainText('plan-draft', { timeout: 10_000 });
+
+  // The retired T3 command is never typed into the PTY.
+  await expect(termRows()).not.toContainText('agent-loop pickup');
+
+  // The resolved input still persists to flow-state.yaml so it threads to later steps (§18.3).
+  await expect.poll(() => readFileSync(join(repo, '.agent-terminal', 'flow-state.yaml'), 'utf8'), { timeout: 10_000 }).toContain('176');
 
   await app.close(); // HOME=temp ⇒ Electron writes userData under it; stop writes before removing it
   rmSync(repo, { recursive: true, force: true });
   rmSync(home, { recursive: true, force: true });
+  rmSync(binDir, { recursive: true, force: true });
 });
 
-test('a busy shell refuses the bootstrap on Confirm: refusal notice, nothing injected (§19.3 / §24.2.3 T3)', async () => {
-  // Busy-shell case: the input still prompts, but Confirm over a foreground process refuses to inject
-  // the bootstrap (§19.3 notice, nothing typed into the PTY).
-  const repo = seedBootstrapFlowRepo('agent-term-e2e-flow-t3bootbusy-');
-  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-flow-t3bootbusy-home-'));
+test('a busy shell does NOT block pickup: it runs out-of-band and still writes state.yaml (§26.2 / §26.6)', async () => {
+  // §26 redefines "injectable" and runs pickup out-of-band (gh/git, not terminal injection), so unlike
+  // the retired T3 injection a busy foreground process must NOT refuse it: state.yaml is still written.
+  const repo = seedBootstrapFlowRepo('agent-term-e2e-flow-bootbusy-');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-flow-bootbusy-home-'));
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-busy-bin-');
   await app.close();
-  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
+  app = await electron.launch({
+    args: ['out/main/index.js'],
+    env: {
+      ...process.env,
+      APP_SHELL: 'bash',
+      HOME: home,
+      APP_SUBMIT_DELAY_MS: '100',
+      CLAUDE_CONFIG_DIR: exampleConfigDir,
+      PATH: `${binDir}:${process.env.PATH}`,
+      FAKE_GHGIT_LOG: logFile,
+    },
+  });
   page = await app.firstWindow();
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
@@ -1912,21 +1992,27 @@ test('a busy shell refuses the bootstrap on Confirm: refusal notice, nothing inj
   await expect(flowStepName()).toHaveText('groom', { timeout: 10_000 });
   await flowControl().click(); // Start → groom
 
-  // A live foreground process holds the shell off its ready prompt → busy (a live OSC-133 span, §19.3).
+  // A live foreground process holds the shell off its ready prompt → busy (a live OSC-133 span).
   await typeCommand('echo BUSY_NOW; cat');
   await expect(termRows()).toContainText('BUSY_NOW');
 
-  await flowControl().click(); // Advance → plan: the modal still prompts — input resolution precedes the busy check
+  await flowControl().click(); // Advance → plan: the modal still prompts
   await expect(inputModal()).toBeVisible({ timeout: 10_000 });
   await inputModal().locator('.field input').fill('176');
   await inputModal().locator('.confirm').click();
 
-  await expect(page.locator('#flow-strip .flow-notice')).toContainText('busy', { timeout: 10_000 });
-  await expect(termRows()).not.toContainText('agent-loop pickup'); // refused — nothing typed into the PTY
+  // Out-of-band: pickup runs despite the busy shell — state.yaml gets written, no busy refusal, and
+  // nothing is typed into the (busy) PTY.
+  const stateFile = join(repo, '.agent-loop', 'state.yaml');
+  await expect.poll(() => (existsSync(stateFile) ? readFileSync(stateFile, 'utf8') : ''), { timeout: 15_000 }).toContain('status: plan-draft');
+  // No §19.3 busy refusal is raised for pickup (it is out-of-band), so the transient notice never shows.
+  await expect(page.locator('#flow-strip .flow-notice')).toHaveCount(0);
+  await expect(termRows()).not.toContainText('agent-loop pickup');
 
   await app.close(); // HOME=temp ⇒ Electron writes userData under it; stop writes before removing it
   rmSync(repo, { recursive: true, force: true });
   rmSync(home, { recursive: true, force: true });
+  rmSync(binDir, { recursive: true, force: true });
 });
 
 test('Restart clears a resolved stage-transition input so the next entry re-prompts (§24.2.3 T3)', async () => {
@@ -1947,8 +2033,12 @@ test('Restart clears a resolved stage-transition input so the next entry re-prom
   await expect(inputModal()).toBeVisible({ timeout: 10_000 });
   await inputModal().locator('.field input').fill('176');
   await inputModal().locator('.confirm').click();
-  await expect(termRows()).toContainText('agent-loop pickup 176', { timeout: 10_000 });
   await expect(inputModal()).toHaveCount(0);
+  // The resolved input persists to flow-state.yaml (no CLAUDE_CONFIG_DIR here, so pickup itself no-ops —
+  // this test isolates the Restart-clears-input behavior, not the pickup side-effects).
+  await expect
+    .poll(() => readFileSync(join(repo, '.agent-terminal', 'flow-state.yaml'), 'utf8'), { timeout: 10_000 })
+    .toContain('176');
 
   await flowControl().click(); // Advance → done (plan is the last step)
   await expect(flowControl()).toHaveText('Restart', { timeout: 10_000 });
