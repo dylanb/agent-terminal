@@ -9,7 +9,7 @@ import yaml from 'js-yaml';
 import type { AgentState, FlowPrompt, FlowRefs, FlowStateView, FlowStatus, TodoItem } from '../shared/ipc';
 import { hasFlowRefs } from '../shared/ipc';
 import { createFlowStateStore, type FlowStateStore } from './flowState';
-import { loopSignature, type AgentLoopState } from './agentLoopBridge';
+import type { AgentLoopState } from './agentLoopBridge';
 import { gateForStatus, type LoopDef } from './loopDef';
 import { isHumanNeededStatus } from '../shared/loopStatus';
 import { isRecord } from './yamlRecord';
@@ -244,19 +244,15 @@ export function createFlowMachine(
   const def = load.definition;
   const steps = def.steps;
   const names = steps.map((s) => s.id);
-  // §18.4 / §24.2.3 T7
+  // §18.4 / §24.2.3 T7 — the input names whose values feed the ticket/PR refs (name-agnostic, by type).
   const ticketInputName = steps.flatMap((s) => s.inputs ?? []).find((i) => i.type === 'github-ticket')?.name;
+  const prInputName = steps.flatMap((s) => s.inputs ?? []).find((i) => i.type === 'pr')?.name;
   // `done` means the last step's Advance completed the whole flow, not just one step (§24.2.3 T1).
   let index = 0;
   let status: FlowStatus = 'not_started';
   // The flow's resolved typed inputs (§18.4 / §24.2.3 T3), flow-wide so a value resolved at one step
   // threads to later steps.
   let inputs: Record<string, string> = {};
-  // §24.2.3 T7 — the agent-loop signature dismissed by the last terminate/restart. While the live
-  // state.yaml still matches it, the loop's refs + mirror are suppressed (the prior run's ticket/PR
-  // must not linger); a different signature means a new loop attached, lifting the suppression. null
-  // when nothing has been dismissed.
-  let dismissedLoop: string | null = null;
 
   // Re-read the persisted progression from the store (§19.1: flow-state.yaml is the source of truth).
   // Run at construction AND on every state() query, so an external advance — the agent-loop CLI moving
@@ -267,7 +263,6 @@ export function createFlowMachine(
     index = 0;
     status = 'not_started';
     inputs = {};
-    dismissedLoop = null;
     const persisted = store.read();
     if (!persisted) return;
     const i = names.indexOf(persisted.step);
@@ -276,21 +271,26 @@ export function createFlowMachine(
       status = persisted.status;
     }
     if (persisted.inputs) inputs = { ...persisted.inputs };
-    if (persisted.dismissedLoop !== undefined) dismissedLoop = persisted.dismissedLoop;
   };
   hydrate();
 
   const current = (): FlowStepDef => steps[index];
 
-  // §24.2.3 T7 (shape: the FlowRefs JSDoc in src/shared/ipc.ts). Own-property lookup only, so an input
-  // named `__proto__` can't resolve a ticket off the prototype chain.
-  const computeRefs = (loop: AgentLoopState | null): FlowRefs | undefined => {
-    const ticketStr =
-      ticketInputName && Object.prototype.hasOwnProperty.call(inputs, ticketInputName) ? inputs[ticketInputName] : undefined;
-    const ticketFromInput =
-      typeof ticketStr === 'string' && /^\d+$/.test(ticketStr.trim()) ? Number(ticketStr.trim()) : undefined;
-    const ticket = ticketFromInput ?? loop?.linkedIssues[0];
-    const pr = loop?.pr ?? undefined;
+  // §24.2.3 T7 (shape: the FlowRefs JSDoc in src/shared/ipc.ts). `gates` carry the §24.2.3 T7
+  // progress conditions (computed in view): an input value contributes only once a step requesting it
+  // has been entered; the loop's linked_issues/pr only once a loop step has been entered. Own-property
+  // lookup only, so an input named `__proto__` can't resolve a ref off the prototype chain.
+  const numericInput = (name: string | undefined): number | undefined => {
+    if (!name || !Object.prototype.hasOwnProperty.call(inputs, name)) return undefined;
+    const raw = inputs[name];
+    return typeof raw === 'string' && /^\d+$/.test(raw.trim()) ? Number(raw.trim()) : undefined;
+  };
+  const computeRefs = (
+    loop: AgentLoopState | null,
+    gates: { ticketStep: boolean; prStep: boolean; loopEntered: boolean },
+  ): FlowRefs | undefined => {
+    const ticket = (gates.ticketStep ? numericInput(ticketInputName) : undefined) ?? (gates.loopEntered ? loop?.linkedIssues[0] : undefined);
+    const pr = (gates.prStep ? numericInput(prInputName) : undefined) ?? (gates.loopEntered ? (loop?.pr ?? undefined) : undefined);
     const refs: FlowRefs = {};
     if (typeof ticket === 'number') refs.ticket = ticket;
     if (typeof pr === 'number') refs.pr = pr;
@@ -307,16 +307,24 @@ export function createFlowMachine(
       status,
       ...(step.todoTemplate ? { templateRef: step.todoTemplate } : {}),
     };
-    // §24.2.3 T7 (refs) / §24.2.3 T2 (loop mirror, loop steps only). A loop dismissed by the last
-    // terminate/restart is treated as absent (no refs fallback, no mirror) until the live state.yaml
-    // differs from the dismissed signature — i.e. until a new loop attaches.
+    // §24.2.3 T7 (refs) / §24.2.3 T2 (loop mirror) — visibility is gated on flow PROGRESS: a
+    // github-ticket/pr input surfaces only once a step requesting it has been entered; the loop's
+    // linked_issues ticket, its state.yaml pr, and the mirror only once a loop step has been entered.
+    // `not_started` has entered nothing, so a terminate/restart (which resets to the first step) clears
+    // the display until it is re-earned by re-entering those steps.
+    const entered = status === 'not_started' ? [] : steps.slice(0, index + 1);
+    const ticketStep = entered.some((s) => (s.inputs ?? []).some((i) => i.type === 'github-ticket'));
+    const prStep = entered.some((s) => (s.inputs ?? []).some((i) => i.type === 'pr'));
+    const loopEntered = entered.some((s) => s.kind === 'loop');
     const liveLoop = readLoop?.() ?? null;
-    const loop = dismissedLoop !== null && loopSignature(liveLoop) === dismissedLoop ? null : liveLoop;
-    const refs = computeRefs(loop);
+    const refs = computeRefs(liveLoop, { ticketStep, prStep, loopEntered });
     const withRefs = refs ? { ...base, refs } : base;
-    if (step.kind !== 'loop') return withRefs;
-    const loopDef = step.loop ? (readLoopDef?.(step.loop) ?? null) : null;
-    return deriveLoopView(withRefs, loop, loopDef);
+    if (!loopEntered) return withRefs;
+    // The mirror binds to the most recently entered loop step's LoopDef (§24.2.3 T2); it stays once a
+    // loop step is entered, so a later manual step in the same run still mirrors that loop.
+    const loopStep = entered.reduce<FlowStepDef | undefined>((last, s) => (s.kind === 'loop' ? s : last), undefined);
+    const loopDef = loopStep?.loop ? (readLoopDef?.(loopStep.loop) ?? null) : null;
+    return deriveLoopView(withRefs, liveLoop, loopDef);
   };
 
   const persist = (): void =>
@@ -324,7 +332,6 @@ export function createFlowMachine(
       step: current().id,
       status,
       ...(Object.keys(inputs).length > 0 ? { inputs } : {}),
-      ...(dismissedLoop !== null ? { dismissedLoop } : {}),
     });
 
   const requireStatus = (expected: FlowStatus, action: string): void => {
@@ -372,7 +379,6 @@ export function createFlowMachine(
       index = 0;
       status = 'in_progress';
       inputs = {}; // §18.4: a restart re-requests resolved inputs; undo() preserves them
-      dismissedLoop = loopSignature(readLoop?.() ?? null); // §24.2.3 T7: dismiss the prior loop's ticket/PR
       persist();
       return enter(view());
     },
@@ -389,7 +395,6 @@ export function createFlowMachine(
       index = 0;
       status = 'not_started';
       inputs = {};
-      dismissedLoop = loopSignature(readLoop?.() ?? null); // §24.2.3 T7: dismiss the prior loop's ticket/PR
       persist();
       return view(); // not_started enters no step, so no onEnter (mirrors advance → done)
     },

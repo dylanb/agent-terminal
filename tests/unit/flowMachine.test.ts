@@ -183,10 +183,12 @@ describe('flow state machine — loop-step state.yaml mirror (§24.2.3 T2)', () 
   });
 });
 
-// The ticket + PR a flow is working surface as a `refs` field on EVERY active step's view (not just
-// loop steps): the ticket from the github-ticket-typed input, falling back to the loop's linked_issues;
-// the PR from the loop's state.yaml pr. Numbers only — descriptions are fetched lazily by the renderer.
-describe('flow state machine — ticket/PR refs', () => {
+// The ticket + PR a flow is working surface as a `refs` field GATED BY FLOW PROGRESS (§24.2.3 T7): the
+// github-ticket / pr inputs surface only once the step that requests them is entered; the loop's
+// linked_issues ticket, its state.yaml pr, and the loop mirror surface only once a loop step is entered,
+// staying until a terminate/restart resets the flow. Numbers only — descriptions are fetched lazily by
+// the renderer.
+describe('flow state machine — ticket/PR refs (progress-gated)', () => {
   const TICKET_FLOW: FlowLoad = {
     ok: true,
     definition: {
@@ -206,7 +208,16 @@ describe('flow state machine — ticket/PR refs', () => {
     linkedIssues: over.linkedIssues ?? [],
   });
 
-  it('surfaces the github-ticket input value as refs.ticket', () => {
+  // --- the github-ticket input is gated on entering the step that requests it ---
+  it('does NOT surface a persisted github-ticket input value until its step is entered', () => {
+    // The value is on disk (inputs are flow-wide), but the flow is still on the pre-input groom step.
+    const store = createFlowStateStore(mkdtempSync(join(tmpdir(), 'flow-refs-')));
+    store.write({ step: 'groom', status: 'in_progress', inputs: { ticket: '176' } });
+    const flow = createFlowMachine(TICKET_FLOW, store, undefined, () => mirror());
+    expect(flow.state().refs).toBeUndefined();
+  });
+
+  it('surfaces the github-ticket input value once its requesting step is entered', () => {
     const store = createFlowStateStore(mkdtempSync(join(tmpdir(), 'flow-refs-')));
     store.write({ step: 'plan', status: 'in_progress', inputs: { ticket: '176' } });
     const flow = createFlowMachine(TICKET_FLOW, store, undefined, () => mirror());
@@ -221,6 +232,24 @@ describe('flow state machine — ticket/PR refs', () => {
     expect(flow.state().refs?.ticket).toBe(176);
   });
 
+  // --- the loop's linked_issues ticket, state.yaml pr, and mirror are gated on entering a loop step ---
+  it('does NOT surface the loop linked_issues, pr, or mirror on a pre-loop manual step', () => {
+    const flow = createFlowMachine(TICKET_FLOW, undefined, undefined, () => mirror({ pr: 179, linkedIssues: [25] }));
+    flow.start(); // step 0 is the manual `groom` step — the loop step has not been entered
+    const v = flow.state();
+    expect(v.refs).toBeUndefined();
+    expect(v.loop).toBeUndefined();
+  });
+
+  it('surfaces the loop linked_issues ticket, pr, and mirror once the loop step is entered', () => {
+    const flow = createFlowMachine(TICKET_FLOW, undefined, undefined, () => mirror({ pr: 179, linkedIssues: [25, 26] }));
+    flow.start();
+    flow.advance(); // enter the plan loop step
+    const v = flow.state();
+    expect(v.refs).toEqual({ ticket: 25, pr: 179 });
+    expect(v.loop?.pr).toBe(179);
+  });
+
   it('falls back to linked_issues when the github-ticket input is present but non-numeric', () => {
     const store = createFlowStateStore(mkdtempSync(join(tmpdir(), 'flow-refs-')));
     store.write({ step: 'plan', status: 'in_progress', inputs: { ticket: 'abc' } });
@@ -228,80 +257,109 @@ describe('flow state machine — ticket/PR refs', () => {
     expect(flow.state().refs?.ticket).toBe(25);
   });
 
-  it('falls back to the loop linked_issues for the ticket when the input is unset', () => {
-    const flow = createFlowMachine(TICKET_FLOW, undefined, undefined, () => mirror({ linkedIssues: [25, 26] }));
-    flow.start();
-    expect(flow.state().refs?.ticket).toBe(25);
-  });
-
-  it('surfaces the loop PR as refs.pr', () => {
-    const flow = createFlowMachine(TICKET_FLOW, undefined, undefined, () => mirror({ pr: 179 }));
-    flow.start();
-    expect(flow.state().refs?.pr).toBe(179);
-  });
-
-  it('surfaces refs on a MANUAL step too (refs follow the flow, not the loop mirror)', () => {
-    const flow = createFlowMachine(TICKET_FLOW, undefined, undefined, () => mirror({ pr: 179, linkedIssues: [25] }));
-    flow.start(); // step 0 is the manual `groom` step — no loop mirror, but refs still resolve
-    const v = flow.state();
-    expect(v.loop).toBeUndefined();
-    expect(v.refs).toEqual({ ticket: 25, pr: 179 });
-  });
-
-  it('omits refs entirely when neither a ticket nor a PR resolves', () => {
+  it('omits refs entirely when neither a ticket nor a PR resolves, even on the loop step', () => {
     const flow = createFlowMachine(TICKET_FLOW, undefined, undefined, () => mirror());
     flow.start();
+    flow.advance();
     expect(flow.state().refs).toBeUndefined();
   });
 
-  // Terminate/Restart reset the flow to its beginning; the ticket/PR display (refs + loop mirror) must
-  // clear and stay clear until a NEW agent loop is attached — i.e. until the read-only state.yaml the
-  // mirror reads differs from what it was at the moment of the reset (refines §24.2.3 T7).
-  describe('loop refs dismissed on terminate/restart', () => {
+  // --- a pr-typed input surfaces refs.pr with no loop at all, once its step is entered ---
+  const PR_INPUT_FLOW: FlowLoad = {
+    ok: true,
+    definition: { name: 'f', steps: [{ id: 'review', kind: 'manual', inputs: [{ name: 'thepr', type: 'pr', required: true }] }] },
+    flowDir: '/tmp/f/.agent-terminal',
+  };
+
+  it('surfaces a pr-typed input value as refs.pr once its step is entered (no loop needed)', () => {
+    const store = createFlowStateStore(mkdtempSync(join(tmpdir(), 'flow-refs-')));
+    store.write({ step: 'review', status: 'in_progress', inputs: { thepr: '512' } });
+    const flow = createFlowMachine(PR_INPUT_FLOW, store, undefined, () => null);
+    expect(flow.state().refs?.pr).toBe(512);
+  });
+
+  it('does NOT surface the pr input before its step is entered (not_started)', () => {
+    const flow = createFlowMachine(PR_INPUT_FLOW, undefined, undefined, () => null);
+    expect(flow.state().refs).toBeUndefined();
+  });
+
+  // --- sticky within a run: once a loop step is entered, its refs + mirror persist onto a later step ---
+  const STICKY_FLOW: FlowLoad = {
+    ok: true,
+    definition: {
+      name: 'f',
+      steps: [
+        { id: 'groom', kind: 'manual' },
+        { id: 'build', kind: 'loop', loop: 'impl-loop' },
+        { id: 'wrap', kind: 'manual' },
+      ],
+    },
+    flowDir: '/tmp/f/.agent-terminal',
+  };
+
+  it('keeps the loop refs and mirror visible on a post-loop manual step (sticky for the run)', () => {
+    const flow = createFlowMachine(STICKY_FLOW, undefined, undefined, () => mirror({ pr: 179, linkedIssues: [25] }));
+    flow.start();
+    flow.advance(); // enter build (the loop step)
+    flow.advance(); // advance to wrap (a manual step AFTER the loop)
+    const v = flow.state();
+    expect(v.refs).toEqual({ ticket: 25, pr: 179 });
+    expect(v.loop?.pr).toBe(179);
+  });
+
+  // Terminate/Restart reset the flow to its first step, closing every progress gate: the prior run's
+  // ticket/PR display clears with NO state.yaml write and stays clear until the flow re-enters a loop
+  // step (refines §24.2.3 T7 — the prior signature-based dismissal re-revealed the same loop on its
+  // next iteration).
+  describe('terminate/restart close the progress gates', () => {
     it('terminate() clears the loop-derived refs and mirror', () => {
       const flow = createFlowMachine(TICKET_FLOW, undefined, undefined, () => mirror({ pr: 179, linkedIssues: [25] }));
       flow.start();
-      expect(flow.state().refs).toEqual({ ticket: 25, pr: 179 }); // visible while the flow runs
+      flow.advance(); // on the loop step → refs visible
+      expect(flow.state().refs).toEqual({ ticket: 25, pr: 179 });
       flow.terminate();
       const after = flow.state();
       expect(after.refs).toBeUndefined();
       expect(after.loop).toBeUndefined();
     });
 
-    it('restart() clears the loop-derived refs and mirror', () => {
+    it('restart() clears the display until the loop step is re-entered — state.yaml unchanged throughout', () => {
       const flow = createFlowMachine(TICKET_FLOW, undefined, undefined, () => mirror({ pr: 179, linkedIssues: [25] }));
       flow.start();
       flow.advance();
       flow.advance(); // → done (past the last step)
       expect(flow.state().refs).toEqual({ ticket: 25, pr: 179 });
-      flow.restart();
-      const after = flow.state();
-      expect(after.refs).toBeUndefined();
-      expect(after.loop).toBeUndefined();
+      flow.restart(); // → in_progress at the groom step; the loop step is no longer entered
+      expect(flow.state().refs).toBeUndefined();
+      expect(flow.state().loop).toBeUndefined();
+      flow.advance(); // re-enter the loop step → the live loop is shown again
+      expect(flow.state().refs).toEqual({ ticket: 25, pr: 179 });
     });
 
-    it('reveals the refs again once the live loop changes after the reset (a new loop attaches)', () => {
+    it('does NOT re-reveal the dismissed loop while the same loop merely advances after a terminate', () => {
+      // The SAME agent loop keeps running and rewrites its state.yaml (iteration/status bump). With the
+      // flow at not_started and no loop step entered, the display must stay clear.
       let live = mirror({ pr: 179, linkedIssues: [25] });
       const flow = createFlowMachine(TICKET_FLOW, undefined, undefined, () => live);
       flow.start();
+      flow.advance();
+      expect(flow.state().refs).toEqual({ ticket: 25, pr: 179 });
       flow.terminate();
-      expect(flow.state().refs).toBeUndefined(); // the dismissed loop stays hidden
-      live = mirror({ pr: 200, linkedIssues: [42] }); // the human attaches a new agent loop
-      flow.start();
-      expect(flow.state().refs).toEqual({ ticket: 42, pr: 200 });
+      expect(flow.state().refs).toBeUndefined();
+      live = { status: 'building', iteration: 10, pr: 179, branch: null, linkedIssues: [25] }; // same loop, advanced
+      expect(flow.state().refs).toBeUndefined();
     });
 
-    it('still surfaces a typed-input ticket provided after restart, independent of the dismissed loop', () => {
+    it('surfaces a typed-input ticket provided after restart once its requesting step is re-entered', () => {
       const flow = createFlowMachine(TICKET_FLOW, undefined, undefined, () => mirror({ pr: 179, linkedIssues: [25] }));
       flow.start();
       flow.advance();
       flow.advance(); // → done
-      flow.restart(); // dismisses the loop and clears inputs
+      flow.restart(); // returns to the groom step and clears inputs
       expect(flow.state().refs).toBeUndefined();
-      flow.provideInput({ ticket: '99' }); // a fresh, flow-owned ticket — not the dismissed loop
-      const v = flow.state();
-      expect(v.refs?.ticket).toBe(99);
-      expect(v.refs?.pr).toBeUndefined(); // the loop's PR stays dismissed (same live state.yaml)
+      flow.advance(); // re-enter the plan step (which requests the ticket)
+      flow.provideInput({ ticket: '99' }); // a fresh, flow-owned ticket
+      expect(flow.state().refs).toEqual({ ticket: 99, pr: 179 });
     });
   });
 });

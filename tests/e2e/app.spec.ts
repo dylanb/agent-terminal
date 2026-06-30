@@ -1475,7 +1475,10 @@ function seedRefsFlowRepo(prefix: string): { dir: string; stateFile: string } {
   const dir = mkdtempSync(join(tmpdir(), prefix));
   mkdirSync(join(dir, '.git'), { recursive: true });
   mkdirSync(join(dir, '.agent-terminal'), { recursive: true });
-  writeFileSync(join(dir, '.agent-terminal', 'flow.yaml'), 'name: refs-flow\nsteps:\n  - id: groom\n    kind: manual\n');
+  writeFileSync(
+    join(dir, '.agent-terminal', 'flow.yaml'),
+    'name: refs-flow\nsteps:\n  - id: groom\n    kind: manual\n  - id: work\n    kind: loop\n    loop: work-loop\n',
+  );
   const loopDir = join(dir, '.agent-loop');
   mkdirSync(loopDir, { recursive: true });
   return { dir, stateFile: join(loopDir, 'state.yaml') };
@@ -1969,9 +1972,9 @@ test('Restart clears a resolved stage-transition input so the next entry re-prom
   rmSync(home, { recursive: true, force: true });
 });
 
-test('the popout surfaces the ticket + PR the flow is working, on a non-loop step (§24.2.3 T7)', async () => {
-  // The ticket falls back to the loop's linked_issues, the PR comes from state.yaml; both surface on a
-  // MANUAL step (no loop mirror) and open in the docked popout's "Working on" section.
+test('loop-derived ticket + PR surface only once the flow enters the loop step (§24.2.3 T7)', async () => {
+  // The loop's linked_issues ticket and state.yaml PR are agent-loop state: progress-gated, they stay
+  // hidden on the pre-loop manual step and appear only once the flow enters a loop step (§24.2.3 T7).
   const { dir: repo, stateFile } = seedRefsFlowRepo('agent-term-e2e-refs-');
   writeFileSync(
     stateFile,
@@ -1984,13 +1987,16 @@ test('the popout surfaces the ticket + PR the flow is working, on a non-loop ste
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   await typeCommand(`cd "${repo}"`);
-  await expect(flowStepName()).toHaveText('groom', { timeout: 10_000 }); // a MANUAL step
-  // The refs read-out appears even on the manual step (no loop mirror), summarising the numbers.
-  await expect(loopReadout()).toContainText('#25', { timeout: 10_000 });
-  await expect(loopReadout()).toContainText('PR #179');
+  await expect(flowControl()).toHaveText('Start', { timeout: 10_000 });
+  await flowControl().click(); // Start → in_progress on the manual `groom` step
+  await expect(flowStepName()).toHaveText('groom');
+  // The loop step has not been entered, so nothing loop-derived shows — even though state.yaml carries it.
+  await expect(loopReadout()).toHaveCount(0);
 
-  // Clicking opens the docked popout with the "Working on" refs section (the link/title fill in via gh
-  // when available; here the temp repo is not on GitHub, so the bare numbers stand).
+  await flowControl().click(); // Advance → enter the `work` loop step
+  await expect(loopReadout()).toBeVisible({ timeout: 10_000 });
+  // The docked popout's "Working on" section now carries the loop's ticket + PR (bare numbers, since the
+  // temp repo is not on GitHub for gh to resolve titles/links).
   await loopReadout().click();
   await expect(page.locator('#app')).toHaveClass(/\bloop-open\b/);
   await expect(loopPanel()).toContainText('Working on');
@@ -2005,8 +2011,9 @@ test('the popout surfaces the ticket + PR the flow is working, on a non-loop ste
 });
 
 test('Terminate clears the ticket/PR display even though state.yaml still carries the loop (§24.2.3 T7)', async () => {
-  // The prior run's PR/ticket lives on in the read-only state.yaml; Terminate must still empty the
-  // rail read-out and the docked popout — the loop is dismissed, not deleted.
+  // The prior run's PR/ticket lives on in the read-only state.yaml; Terminate resets the flow to its
+  // first step, closing the loop-step gate, so the rail read-out and docked popout empty (loop
+  // dismissed, not deleted).
   const { dir: repo, stateFile } = seedRefsFlowRepo('agent-term-e2e-refs-term-');
   writeFileSync(
     stateFile,
@@ -2020,10 +2027,9 @@ test('Terminate clears the ticket/PR display even though state.yaml still carrie
 
   await typeCommand(`cd "${repo}"`);
   await expect(flowControl()).toHaveText('Start', { timeout: 10_000 });
-  await flowControl().click(); // Start → in_progress (the manual groom step)
-  await expect(flowControl()).toHaveText('Advance');
-  await expect(loopReadout()).toContainText('#25', { timeout: 10_000 });
-  await expect(loopReadout()).toContainText('PR #179');
+  await flowControl().click(); // Start → groom (manual)
+  await flowControl().click(); // Advance → work (loop): the display appears
+  await expect(loopReadout()).toBeVisible({ timeout: 10_000 });
   await loopReadout().click(); // open the docked popout
   await expect(loopPanel()).toContainText('Working on');
 
@@ -2031,8 +2037,8 @@ test('Terminate clears the ticket/PR display even though state.yaml still carrie
   await expect(confirmModal()).toBeVisible();
   await confirmModal().locator('.confirm').click();
 
-  // The flow is back at Not started and the ticket/PR display is gone — read-out removed, popout closed
-  // and emptied — despite state.yaml still holding the PR.
+  // Back at Not started: the loop step is no longer entered, so the display is gone — read-out removed,
+  // popout closed and emptied — despite state.yaml still holding the PR.
   await expect(flowControl()).toHaveText('Start');
   await expect(loopReadout()).toHaveCount(0);
   await expect(page.locator('#app')).not.toHaveClass(/\bloop-open\b/);
@@ -2044,7 +2050,10 @@ test('Terminate clears the ticket/PR display even though state.yaml still carrie
   rmSync(home, { recursive: true, force: true });
 });
 
-test('Restart clears the ticket/PR display until a new agent loop attaches (§24.2.3 T7)', async () => {
+test('Restart clears the ticket/PR display until the flow re-enters a loop step (§24.2.3 T7)', async () => {
+  // Restart returns the flow to its first step, closing the loop-step gate; the display clears with no
+  // state.yaml write and returns only once the flow re-enters the loop step — then reflecting whatever
+  // loop state.yaml now holds (a fresh pickup).
   const { dir: repo, stateFile } = seedRefsFlowRepo('agent-term-e2e-refs-restart-');
   writeFileSync(
     stateFile,
@@ -2058,23 +2067,30 @@ test('Restart clears the ticket/PR display until a new agent loop attaches (§24
 
   await typeCommand(`cd "${repo}"`);
   await expect(flowControl()).toHaveText('Start', { timeout: 10_000 });
-  await flowControl().click(); // Start → in_progress
-  await expect(loopReadout()).toContainText('PR #179', { timeout: 10_000 });
-  await flowControl().click(); // Advance → done (single-step flow)
+  await flowControl().click(); // Start → groom (manual)
+  await flowControl().click(); // Advance → work (loop): the display appears
+  await expect(loopReadout()).toBeVisible({ timeout: 10_000 });
+  await flowControl().click(); // Advance → done (past the last step)
   await expect(flowControl()).toHaveText('Restart');
-  await expect(loopReadout()).toContainText('PR #179'); // still shown at done
+  await expect(loopReadout()).toBeVisible(); // still shown at done — the loop step was entered this run
 
-  await flowControl().click(); // Restart → in_progress, dismissing the prior loop
-  await expect(loopReadout()).toHaveCount(0); // display cleared — the dismissed loop is hidden
+  await flowControl().click(); // Restart → in_progress at the groom step
+  await expect(flowStepName()).toHaveText('groom');
+  await expect(loopReadout()).toHaveCount(0); // cleared — the loop step is no longer entered
 
-  // A genuinely new agent loop is attached (the human re-runs pickup → state.yaml changes); the display
-  // returns, now showing the new ticket/PR.
+  // A fresh pickup rewrites state.yaml; re-entering the loop step shows the NEW ticket/PR.
   writeFileSync(
     stateFile,
     'schema_version: 4\npr: 200\nbranch: agent-loop/issue-42\niteration: 1\nstatus: planning\nlinked_issues:\n  - 42\n',
   );
-  await expect(loopReadout()).toContainText('PR #200', { timeout: 10_000 });
-  await expect(loopReadout()).toContainText('#42');
+  await flowControl().click(); // Advance → work (loop): the new loop's display appears
+  await expect(loopReadout()).toBeVisible({ timeout: 10_000 });
+  await loopReadout().click();
+  await expect(loopPanel()).toContainText('Working on');
+  const ticketRow = loopPanel().locator('.refs .rrow', { has: page.locator('.rk', { hasText: 'Ticket' }) });
+  const prRow = loopPanel().locator('.refs .rrow', { has: page.locator('.rk', { hasText: 'PR' }) });
+  await expect(ticketRow).toContainText('#42');
+  await expect(prRow).toContainText('#200');
 
   await app.close();
   rmSync(repo, { recursive: true, force: true });
@@ -2096,14 +2112,14 @@ test('a loop step shows a Loop read-out that expands a docked state-mirror panel
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   await typeCommand(`cd "${repo}"`);
-  // Rail: [Not started] · groom · build · [Completed]. The state.yaml already carries a PR, so even the
-  // manual `groom` step shows a refs read-out (§24.2.3 T7) — but NOT the loop STATUS pill (`.spill`),
-  // which appears only once a loop step is active.
+  // Rail: [Not started] · groom · build · [Completed]. Although state.yaml carries a PR, the
+  // loop-derived display is progress-gated (§24.2.3 T7): the pre-loop manual `groom` step shows no
+  // read-out at all, so there is certainly no loop STATUS pill (`.spill`) yet.
   await expect(page.locator('#flow-strip .flow.vert .stn')).toHaveCount(4, { timeout: 10_000 });
   await expect(flowStation(2).locator('.nm')).toHaveText('build');
   await expect(loopReadout().locator('.spill')).toHaveCount(0);
 
-  await flowControl().click(); // Start → groom (manual): still a refs read-out, no loop status pill
+  await flowControl().click(); // Start → groom (manual): the loop step is not entered, so no read-out
   await expect(flowStation(1)).toHaveClass(/\bactive\b/);
   await expect(loopReadout().locator('.spill')).toHaveCount(0);
 
