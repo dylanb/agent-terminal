@@ -26,6 +26,9 @@ export interface Shell {
   closeLoopPanel(): void;
   toggleLoopPanel(): void;
   isLoopPanelOpen(): boolean;
+  /** Re-sync the rail read-out's aria-expanded to the docked state, so the root needn't reach into the
+   *  shell's `.loopstat` markup after the strip re-renders a fresh (collapsed-by-default) read-out. */
+  syncLoopReadout(): void;
   setTheme(t: Theme): void;
   getTheme(): Theme;
   /** Full-screen the viewer by hiding all app chrome (§20.2); Escape and a view change exit. */
@@ -102,6 +105,7 @@ export function createShell(root: HTMLElement, deps: ShellDeps = {}): Shell {
   const isLoopPanelOpen = (): boolean => root.classList.contains('loop-open');
   const syncLoopReadout = (on: boolean): void =>
     root.querySelector('.loopstat')?.setAttribute('aria-expanded', String(on));
+  const focusView = (v: ViewId): void => void root.querySelector<HTMLElement>(`[data-viewbtn="${v}"]`)?.focus();
   function openLoopPanel(): void {
     root.classList.add('loop-open');
     if (loopPanelEl) setShown(loopPanelEl, true);
@@ -109,9 +113,18 @@ export function createShell(root: HTMLElement, deps: ShellDeps = {}): Shell {
     signalLayoutChange();
   }
   function closeLoopPanel(): void {
+    const hadFocus = loopPanelEl?.contains(root.ownerDocument.activeElement) ?? false;
     root.classList.remove('loop-open');
     if (loopPanelEl) setShown(loopPanelEl, false);
     syncLoopReadout(false);
+    // Disclosure pattern (WCAG 2.4.3): a close returns focus to the read-out that opened it; when that
+    // is gone too (a state-driven close after the flow ends) fall back to the main view, so focus is
+    // never stranded on the now-hidden panel.
+    if (hadFocus) {
+      const readout = root.querySelector<HTMLElement>('.loopstat');
+      if (readout) readout.focus();
+      else focusView('1');
+    }
     signalLayoutChange();
   }
   function toggleLoopPanel(): void {
@@ -222,7 +235,7 @@ export function createShell(root: HTMLElement, deps: ShellDeps = {}): Shell {
   return {
     setView,
     getView: () => view,
-    focusView: (v) => root.querySelector<HTMLElement>(`[data-viewbtn="${v}"]`)?.focus(),
+    focusView,
     openDrawer,
     closeDrawer,
     toggleDrawer,
@@ -231,6 +244,7 @@ export function createShell(root: HTMLElement, deps: ShellDeps = {}): Shell {
     closeLoopPanel,
     toggleLoopPanel,
     isLoopPanelOpen,
+    syncLoopReadout: () => syncLoopReadout(isLoopPanelOpen()),
     setTheme,
     getTheme: () => theme,
     setViewerFullscreen,

@@ -29,11 +29,11 @@ export function applyDockIcon(
 ): void {
   const iconPath = resolveDockIconPath(platform, loc);
   if (!iconPath || !dock) return;
-  // A missing/invalid icon makes setIcon throw; the Dock icon is cosmetic and must never abort the
-  // caller (createWindow) before the BrowserWindow is created.
+  // The Dock icon is cosmetic; setIcon throws synchronously on an unreadable image, and this runs
+  // inside createWindow before the BrowserWindow exists — so a throw here must never abort the window.
   try {
     dock.setIcon(iconPath);
   } catch {
-    /* leave the default Dock icon in place */
+    /* missing/bad icon: skip the Dock icon, never block window creation */
   }
 }

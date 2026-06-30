@@ -1,4 +1,4 @@
-import { app, BrowserWindow, clipboard, ipcMain, Menu, Notification } from 'electron';
+import { app, BrowserWindow, clipboard, ipcMain, Menu, Notification, shell } from 'electron';
 import { buildMenuTemplate } from './appMenu';
 import path from 'node:path';
 import os from 'node:os';
@@ -10,6 +10,7 @@ import {
   type CommandCaptureResult,
   type CommandSummary,
   type FlowStateView,
+  type GithubRef,
   type SendChannel,
   type TodoStatus,
 } from '../shared/ipc';
@@ -36,6 +37,8 @@ import {
   isValidDismissAll,
   isValidFlowRequest,
   isValidFlowProvideInput,
+  isValidFlowGithubRef,
+  openExternalTarget,
   isValidInject,
   isValidClipboardWrite,
   isValidInput,
@@ -63,6 +66,7 @@ import { currentRepoInfo } from './repoKey';
 import { createScanner } from './scanner';
 import { captureLastReport } from './captureLast';
 import { createFlowManager, deriveFlowView, loadFlowDefinitionLocalFirst } from './flow';
+import { createGithubRefs } from './githubRefs';
 import { createAuditRecorder } from './auditRecorder';
 import type { TransitionKind } from '../shared/audit';
 import { auditRootDir } from './auditPaths';
@@ -276,6 +280,9 @@ async function createWindow(): Promise<void> {
     readLoopDef: (repoKey, name) => parseLoopDef(repoKey, name),
   });
 
+  // §24.2.3 T7 — resolve a ticket/PR's title/body/url for the popout, best-effort via `gh`, cached.
+  const githubRefs = createGithubRefs();
+
   // Flow audit record (§25): observe-only, best-effort — records each run's lifecycle to
   // ~/.agent-terminal/audit/<repo>/<flow>_<ts>.yaml. Never throws into the flow path.
   const audit = createAuditRecorder({
@@ -319,8 +326,13 @@ async function createWindow(): Promise<void> {
     },
   });
   const trackLoop = (repoKey: string, view: FlowStateView): FlowStateView => {
-    if (view.loop && !loopWatchers.has(repoKey)) {
-      loopWatchers.set(repoKey, watchAgentLoopState(repoKey, pushFlowChanged));
+    // Watch state.yaml whenever it feeds the view — the loop mirror (loop steps) OR the cross-step
+    // refs (§24.2.3 T7, e.g. a PR appearing on a manual step) — so either updates live (§24.2.2 S5).
+    // Only cache a watcher that actually attached: refs can show a typed-input ticket before the
+    // .agent-loop dir exists, and caching a failed attempt would block re-attaching once it appears.
+    if ((view.loop || view.refs) && !loopWatchers.has(repoKey)) {
+      const unwatch = watchAgentLoopState(repoKey, pushFlowChanged);
+      if (unwatch) loopWatchers.set(repoKey, unwatch);
     }
     loopNotifier.observe(repoKey, view);
     // §25.5: every view computation (including the state.yaml-watch re-pull) observes the loop mirror,
@@ -552,6 +564,18 @@ async function createWindow(): Promise<void> {
         audit.recordInputs(m.repoKey, m.values, inputTypeMap(m.repoKey));
         const view = inTransition(m.repoKey, () => flow.provideInput(m.repoKey, m.values));
         return trackLoop(m.repoKey, withDerived(m.repoKey, view));
+      },
+      // §24.2.3 T7 — resolve a ref's detail for the popout (best-effort; null degrades to bare number).
+      [CH.flowGithubRef]: (_e, m): Promise<GithubRef | null> =>
+        isValidFlowGithubRef(m) ? githubRefs(m.repoKey, m.kind, m.number) : Promise.resolve(null),
+      // §24.2.3 T7 — open a ref's GitHub url externally. The OS receives the NORMALIZED url the
+      // allow-list approved (CWE-601), never the raw payload, so a host-spoofing control char can't
+      // make a permissive OS handler open a different host than was validated.
+      [CH.appOpenExternal]: async (_e, m): Promise<boolean> => {
+        const url = openExternalTarget(m);
+        if (url === null) return false;
+        await shell.openExternal(url);
+        return true;
       },
       // Template picker (§6/§4.1): GATED to an in_progress step (operator decision — the picker shows
       // only while a step is active) and carries the step's bound template as the default.
