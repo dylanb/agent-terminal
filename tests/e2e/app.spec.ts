@@ -532,6 +532,12 @@ test('a within-grace shell exit keeps the app open AND shows the exit diagnostic
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 }); // renderer mounted → pty:exit listener live
   await typeCommand('exit');
   await expect(termRows()).toContainText('[process exited: 0]', { timeout: 20_000 });
+  // The monitor pane's session chip is the other half of the §9.2 exit signal: pty:exit flips it to
+  // "exited". Asserted here (the only test where the window stays open after exit) so the chip's
+  // exit-tracking has live coverage.
+  await expect(page.locator('.status-chip[data-status="session"]')).toContainText('exited', {
+    timeout: 20_000,
+  });
   // Uptime at exit (a few seconds) is far under the 60s grace, so the app must NOT close.
   const closed = app.waitForEvent('close', { timeout: 3000 }).then(() => true).catch(() => false);
   expect(await closed).toBe(false);

@@ -2,6 +2,7 @@ import { app, BrowserWindow, clipboard, ipcMain, Menu, Notification, shell } fro
 import { buildMenuTemplate } from './appMenu';
 import path from 'node:path';
 import os from 'node:os';
+import { performance } from 'node:perf_hooks';
 import {
   CH,
   SESSION_ID,
@@ -22,7 +23,6 @@ import { spawnAgentShell, resolveShellPath } from './pty';
 import { createPtyIo } from './ptyIo';
 import { shouldTerminateOnShellExit } from './shellExit';
 import { disposeAll } from './windowTeardown';
-import { performance } from 'node:perf_hooks';
 import { resolveLaunchSurfaces } from './launchRoot';
 import { createOutputGate } from './outputGate';
 import { resolveRendererTarget } from './rendererTarget';

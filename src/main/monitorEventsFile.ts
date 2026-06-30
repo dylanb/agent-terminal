@@ -9,7 +9,7 @@ import { lstatSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import type { BufferType, MonitorEvent, MonitorEventSource, MonitorEventType } from '../shared/ipc';
 import { isInjectableEventType } from '../shared/injectableEvents';
-import { atomicWriteFileSync, containerIsReal } from './atomicFile';
+import { atomicWriteFileSync, isRealContainer } from './atomicFile';
 import type { MonitorEventPersistence } from './eventStore';
 import { isRecord } from './yamlRecord';
 
@@ -72,7 +72,7 @@ export function createMonitorEventsFile(
   return {
     load() {
       try {
-        if (!containerIsReal(dir)) return [];
+        if (!isRealContainer(dir)) return [];
         // lstat (not stat) so a symlink is rejected by isFile() instead of being followed: a symlink
         // to a special file (/dev/zero, a FIFO) reports size 0, slips a stat-based size cap, then
         // hangs/OOMs the synchronous read. Only a regular file under the cap is read (CWE-59/CWE-400).

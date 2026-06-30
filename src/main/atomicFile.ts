@@ -17,7 +17,7 @@ import path from 'node:path';
  *  racing the check to swap the directory after it passes is an out-of-model TOCTOU residual (CWE-367)
  *  that a path-string lstat cannot close without dir-fd O_NOFOLLOW APIs Node does not expose; `wx`
  *  still blocks clobbering an existing file in that race. */
-export function containerIsReal(dir: string): boolean {
+export function isRealContainer(dir: string): boolean {
   try {
     return lstatSync(dir).isDirectory();
   } catch {
@@ -40,7 +40,7 @@ export interface AtomicWriteOptions {
  *  it is not swallowed here (callers treat persistence as best-effort at their own seam). */
 export function atomicWriteFileSync(file: string, data: string, opts: AtomicWriteOptions = {}): boolean {
   const dir = path.dirname(file);
-  if (!containerIsReal(dir)) return false;
+  if (!isRealContainer(dir)) return false;
   mkdirSync(dir, { recursive: true });
   const tmp = (opts.tmpPath ?? ((f: string): string => `${f}.${randomUUID()}.tmp`))(file);
   writeFileSync(tmp, data, { mode: opts.mode ?? 0o600, flag: 'wx' });

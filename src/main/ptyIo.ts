@@ -20,7 +20,7 @@ export function createPtyIo(pty: PtyIo): { io: PtyIo; markExited(): void } {
     try {
       op();
     } catch {
-      // The fd is already gone (child exited just before onExit fired); dropping it is the §5 behavior.
+      // §5: a post-exit fd throw is expected here, not a fault.
     }
   };
   return {

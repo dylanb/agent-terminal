@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdtempSync, existsSync, readFileSync, writeFileSync, symlinkSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { atomicWriteFileSync, containerIsReal } from '../../src/main/atomicFile';
+import { atomicWriteFileSync, isRealContainer } from '../../src/main/atomicFile';
 
 // The shared hardened atomic-write primitive (§19.1/§25): app-owned state is written through an
 // unpredictable temp + exclusive create + rename, refusing a symlinked container directory so a
@@ -30,12 +30,19 @@ describe('atomicWriteFileSync', () => {
   });
 
   it('writes owner-only (0o600) by default, and honors an explicit mode', () => {
-    const a = join(dir, 'a.json');
-    atomicWriteFileSync(a, '1');
-    expect(statSync(a).mode & 0o777).toBe(0o600);
-    const b = join(dir, 'b.json');
-    atomicWriteFileSync(b, '1', { mode: 0o644 });
-    expect(statSync(b).mode & 0o777).toBe(0o644);
+    // writeFileSync's mode is masked by the process umask; pin it so the explicit-0o644 assertion is
+    // not cleared to 0o600 under a restrictive runner umask (e.g. 0o077).
+    const prevMask = process.umask(0o022);
+    try {
+      const a = join(dir, 'a.json');
+      atomicWriteFileSync(a, '1');
+      expect(statSync(a).mode & 0o777).toBe(0o600);
+      const b = join(dir, 'b.json');
+      atomicWriteFileSync(b, '1', { mode: 0o644 });
+      expect(statSync(b).mode & 0o777).toBe(0o644);
+    } finally {
+      process.umask(prevMask);
+    }
   });
 
   it('refuses to write through a symlinked container directory (returns false, writes nothing) — CWE-59', () => {
@@ -73,7 +80,7 @@ describe('atomicWriteFileSync', () => {
   });
 });
 
-describe('containerIsReal', () => {
+describe('isRealContainer', () => {
   let dir: string;
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), 'atomic-file-'));
@@ -83,15 +90,15 @@ describe('containerIsReal', () => {
   });
 
   it('is true for a real directory and for one that does not exist yet (mkdir will make a real one)', () => {
-    expect(containerIsReal(dir)).toBe(true);
-    expect(containerIsReal(join(dir, 'not-yet'))).toBe(true);
+    expect(isRealContainer(dir)).toBe(true);
+    expect(isRealContainer(join(dir, 'not-yet'))).toBe(true);
   });
 
   it('is false for a directory symlink (lstat does not follow it)', () => {
     const outside = mkdtempSync(join(tmpdir(), 'atomic-file-outside-'));
     try {
       symlinkSync(outside, join(dir, 'link'));
-      expect(containerIsReal(join(dir, 'link'))).toBe(false);
+      expect(isRealContainer(join(dir, 'link'))).toBe(false);
     } finally {
       rmSync(outside, { recursive: true, force: true });
     }
