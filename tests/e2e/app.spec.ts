@@ -1649,8 +1649,13 @@ function seedFakeAgent(
     // §26.9/L8 — when set, the work turn writes a plan.md whose frontmatter classifies it an epic with a
     // three-sub-ticket breakdown, so epic-promote at the plan-approval gate creates the N-1 (=2) sub-issues.
     epicPlan?: boolean;
+    // §26.11/L8 — when set, each turn appends to `.agent-loop/<turn>-ran` when it runs, so a resume e2e can
+    // prove a completed turn was NOT re-executed (the marker for a skipped turn stays absent).
+    turnMarkers?: boolean;
   },
 ): void {
+  // A per-turn execution marker (§26.11 resume): its presence proves that turn actually ran this session.
+  const mark = (turn: string): string => (opts.turnMarkers ? `mkdir -p .agent-loop; printf x >> .agent-loop/${turn}-ran; ` : '');
   const writePlan = opts.epicPlan
     ? "mkdir -p .agent-loop; printf '%s\\n' '---' 'classification: epic' 'sub_tickets:' " +
       "'  - title: Slice one' '  - title: Slice two' '  - title: Slice three' '---' '' '# Plan' > .agent-loop/plan.md"
@@ -1665,10 +1670,10 @@ function seedFakeAgent(
     opts.work === 'noop'
       ? ':'
       : opts.work === 'plan-only'
-        ? `${writePlan}${writeTokens}`
+        ? `${mark('work')}${writePlan}${writeTokens}`
         : opts.work === 'file-only'
-          ? `${writePlan}${writeTokens}; ${fileOnlySignal('work-plan')}`
-          : `${writePlan}${writeTokens}; ${doneSignal('work-plan')}`;
+          ? `${mark('work')}${writePlan}${writeTokens}; ${fileOnlySignal('work-plan')}`
+          : `${mark('work')}${writePlan}${writeTokens}; ${doneSignal('work-plan')}`;
   // §26.4/§26.13 L4 — reviews + consolidated are per-iteration (reviews/<iter>/…). The REPL derives the
   // iteration from the app-written state.yaml so a re-iteration (needs-work) writes reviews/<iter+1>/.
   const getIter = "iter=$(grep -m1 '^iteration:' .agent-loop/state.yaml | tr -dc '0-9')";
@@ -1682,7 +1687,7 @@ function seedFakeAgent(
     personas
       .map((p) => `printf '{\"verdict\":\"clean\",\"seen_iter\":%s}' \"$iter\" > .agent-loop/reviews/$iter/${p}.json`)
       .join('; ');
-  const reviewAct = opts.reviews === undefined ? ':' : `${writeReviews}; ${doneSignal('review-plan')}`;
+  const reviewAct = opts.reviews === undefined ? ':' : `${mark('reviewers')}${writeReviews}; ${doneSignal('review-plan')}`;
   // §26.3/D45 — on the consolidate turn, write reviews/<iter>/consolidated.json with the scripted verdict
   // then signal done. undefined = do nothing (the turn never confirms → retry-then-error).
   // §26.6/L6 — the verdict is resolved at runtime so a phase2-conditional verdict can react to the
@@ -1702,7 +1707,7 @@ function seedFakeAgent(
   const consolidateAct =
     opts.consolidate === undefined
       ? ':'
-      : `${getIter}; ${verdictExpr}; ${findingsSetup}mkdir -p .agent-loop/reviews/$iter; ` +
+      : `${mark('consolidate')}${getIter}; ${verdictExpr}; ${findingsSetup}mkdir -p .agent-loop/reviews/$iter; ` +
         `printf '${printfFmt}' ${printfArgs} > .agent-loop/reviews/$iter/consolidated.json; ` +
         `${doneSignal('consolidate-plan')}`;
   // The injected prompt's done-signal instruction line carries `turn-done:<turnKey>` (inside the sentinel
@@ -2830,6 +2835,90 @@ test('completing an iteration snapshots CI without blocking; records a loop.ci a
   rmSync(binDir, { recursive: true, force: true });
 });
 
+// §26.13 / L8 — auto-resume from state.yaml. A run interrupted mid-iteration (plan.md + all reviews on
+// disk, consolidated absent) is resumed on launch at the consolidate turn — NOT re-running the completed
+// work/reviewers turns. Proven on a real relaunch: the app launches into the repo (APP_LAUNCH_DIR) with the
+// fake-agent AS the shell (APP_SHELL) so the resumed turn injects into the agent, and the run drives forward
+// to its plan-approval gate while the work/reviewers execution markers stay absent (no double-execution).
+function seedResumeRepo(prefix: string): string {
+  const repo = mkdtempSync(join(tmpdir(), prefix));
+  mkdirSync(join(repo, '.agent-loop', 'reviews', '1'), { recursive: true });
+  writeFileSync(
+    join(repo, '.agent-loop', 'state.yaml'),
+    [
+      'schema_version: 4',
+      'status: plan-draft',
+      'iteration: 1',
+      'bound_loop: plan-loop',
+      'pr: 4242',
+      'branch: plan-loop/issue-176',
+      'linked_issues:',
+      '  - 176',
+      'phase2_active: false',
+      'persona_state: {}',
+      'impasse: {}',
+      'sessions: {}',
+      'terminated: false',
+      '',
+    ].join('\n'),
+  );
+  // The work + reviewers turns already completed before the interruption: plan.md + every roster review
+  // exist, but consolidated.json does NOT — so resume must re-enter the consolidate turn.
+  writeFileSync(join(repo, '.agent-loop', 'plan.md'), '# Plan\n\ninterrupted mid-run\n');
+  for (const p of PLAN_PERSONAS) {
+    writeFileSync(join(repo, '.agent-loop', 'reviews', '1', `${p}.json`), '{"verdict":"clean","seen_iter":1}');
+  }
+  return repo;
+}
+
+test('an interrupted run resumes at the consolidate turn on launch without re-running completed turns (§26.13 / L8)', async () => {
+  const repo = seedResumeRepo('agent-term-e2e-l8-resume-');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-l8-resume-home-'));
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-l8-resume-bin-');
+  seedFakeAgent(binDir, { work: 'write-plan', reviews: 'all', consolidate: 'clean', turnMarkers: true });
+
+  await app.close();
+  app = await electron.launch({
+    args: ['out/main/index.js'],
+    env: {
+      ...process.env,
+      // The fake-agent IS the shell, so the resumed turn injects straight into the agent REPL (no bash to
+      // race). The app launches into the repo, so resumeLoop reads its state.yaml on startup.
+      APP_SHELL: join(binDir, 'fake-agent'),
+      APP_LAUNCH_DIR: repo,
+      HOME: home,
+      APP_SUBMIT_DELAY_MS: '100',
+      APP_TURN_TIMEOUT_MS: '30000',
+      CLAUDE_CONFIG_DIR: exampleConfigDir,
+      PATH: `${binDir}:${process.env.PATH}`,
+      FAKE_GHGIT_LOG: logFile,
+    },
+  });
+  page = await app.firstWindow();
+
+  const stateFile = join(repo, '.agent-loop', 'state.yaml');
+  // Land (resumed forward): the consolidate turn ran, wrote consolidated.json, and the clean verdict drove
+  // the run to its plan-approval gate — all from a cold launch, with no human action.
+  await expect
+    .poll(() => existsSync(join(repo, '.agent-loop', 'reviews', '1', 'consolidated.json')), { timeout: 25_000 })
+    .toBe(true);
+  await expect
+    .poll(() => readFileSync(stateFile, 'utf8'), { timeout: 25_000 })
+    .toContain('status: awaiting-human-plan-approval');
+  expect(readFileSync(stateFile, 'utf8')).toContain('iteration: 1');
+
+  // Land (no double-execution): the consolidate turn ran exactly once; the already-complete work and
+  // reviewers turns were NOT re-run (their execution markers never appear).
+  expect(existsSync(join(repo, '.agent-loop', 'consolidate-ran'))).toBe(true);
+  expect(existsSync(join(repo, '.agent-loop', 'work-ran'))).toBe(false);
+  expect(existsSync(join(repo, '.agent-loop', 'reviewers-ran'))).toBe(false);
+
+  await app.close();
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+  rmSync(binDir, { recursive: true, force: true });
+});
+
 test('Restart clears a resolved stage-transition input so the next entry re-prompts (§24.2.3 T3)', async () => {
   // The user supplies the plan step's ticket once; after completing and Restarting the flow, the
   // ticket must be re-requested — Restart wipes resolved inputs (unlike Undo).
@@ -3434,7 +3523,10 @@ test('Start refuses to inject the skill over a busy shell, showing the refusal (
   // notice before we can assert it (the flake). Staying active fires no flip, so the notice persists.
   await typeCommand('while true; do printf "BUSY_NOW "; sleep 0.2; done');
   await expect(termRows()).toContainText('BUSY_NOW');
-  await expect(page.locator('.status-chip[data-status="agent"]')).toContainText('working', { timeout: 6_000 });
+  // Cold-start under full-suite parallel load, the active-detection pipeline (busy loop output → shadow →
+  // agent-active → chip) can take several seconds to flip; use the same tolerance as this test's other
+  // waits so a loaded first run isn't a false red (the assertion still requires 'working' to appear).
+  await expect(page.locator('.status-chip[data-status="agent"]')).toContainText('working', { timeout: 15_000 });
 
   await flowControl().click();
   await expect(page.locator('#flow-strip .flow-notice')).toContainText('busy', { timeout: 10_000 });

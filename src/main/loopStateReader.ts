@@ -24,6 +24,9 @@ export interface LoopExtension {
   /** `cost` (§26.10): the last recorded display-only cost (priced dollars + unpriced ids). Null until an
    *  iteration boundary records one. */
   cost: CostResult | null;
+  /** `bound_loop` (§26.11): which LoopDef governs the run — resume reads it to re-drive the right loop.
+   *  "" when absent. */
+  boundLoop: string;
 }
 
 const DEFAULT_EXTENSION: LoopExtension = {
@@ -31,6 +34,7 @@ const DEFAULT_EXTENSION: LoopExtension = {
   impasse: { consecutiveIdentical: 0, lastFindingsSig: '' },
   personaState: {},
   cost: null,
+  boundLoop: '',
 };
 
 /** Read the §26.6/§26.8 engine-extension slice from <repoDir>/.agent-loop/state.yaml, defaulting every
@@ -70,5 +74,6 @@ export function readLoopExtension(repoDir: string): LoopExtension {
     },
     personaState,
     cost,
+    boundLoop: typeof doc.bound_loop === 'string' ? doc.bound_loop : '',
   };
 }

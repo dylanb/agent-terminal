@@ -52,6 +52,17 @@ export interface PickupContract {
   onConflict: string;
 }
 
+/** The bound LoopDef's resume contract (§26.5 / §26.11) — drives auto-resume of an interrupted run
+ *  instead of blindly re-injecting the current step. `requiredArtifacts` names the per-iteration outputs
+ *  that, if present, need not be re-produced; `midIterSafe` false rewinds to the iteration start.
+ *  Undefined when the def carries no `resume_contract`. */
+export interface ResumeContract {
+  requiredArtifacts: string[];
+  replayActors: string[];
+  skipActors: string[];
+  midIterSafe: boolean;
+}
+
 /** The orchestrator-relevant slice of a LoopDef phase (§26.5): its `id` and the `entry_status` a run
  *  sits at while that phase's work turn is active — so a status maps back to the phase whose work
  *  prompt (`prompts/work-{id}.md`) and artifacts the orchestrator must drive. */
@@ -106,6 +117,8 @@ export interface LoopDef {
   /** The consolidated-verdict taxonomy (§26.5); undefined when the def carries no `verdicts` mapping. */
   verdicts?: LoopVerdicts;
   pickup?: PickupContract;
+  /** The §26.11 resume contract; undefined when the def carries no `resume_contract`. */
+  resume?: ResumeContract;
 }
 
 const SCHEMA_VERSION = '4';
@@ -230,6 +243,21 @@ function toVerdicts(doc: Record<string, unknown>): LoopVerdicts | undefined {
   return { consolidatedCanonical, consolidatedSynonyms, personaSynonyms, severityOrder };
 }
 
+/** Read the resume_contract slice (§26.5 / §26.11); undefined when the def carries no `resume_contract`.
+ *  Never throws — a malformed field degrades to its empty/default. */
+function toResumeContract(doc: Record<string, unknown>): ResumeContract | undefined {
+  const rc = doc.resume_contract;
+  if (!isRecord(rc)) return undefined;
+  const strList = (v: unknown): string[] =>
+    Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [];
+  return {
+    requiredArtifacts: strList(rc.required_artifacts),
+    replayActors: strList(rc.replay_actors),
+    skipActors: strList(rc.skip_actors),
+    midIterSafe: rc.mid_iter_safe === true,
+  };
+}
+
 /** One `on_*` action list entry → GateAction; drops a non-mapping/kind-less entry (best-effort). */
 function toGateAction(raw: unknown): GateAction | null {
   if (!isRecord(raw) || typeof raw.kind !== 'string') return null;
@@ -336,6 +364,7 @@ export function parseLoopDef(repoDir: string, name: string, configDir?: string):
   const rosters = toRosters(doc);
   const defaultRosterId = typeof doc.default_roster_id === 'string' ? doc.default_roster_id : '';
   const verdicts = toVerdicts(doc);
+  const resume = toResumeContract(doc);
   return {
     name: defName,
     gates,
@@ -344,6 +373,7 @@ export function parseLoopDef(repoDir: string, name: string, configDir?: string):
     defaultRosterId,
     ...(verdicts ? { verdicts } : {}),
     ...(pickup ? { pickup } : {}),
+    ...(resume ? { resume } : {}),
   };
 }
 

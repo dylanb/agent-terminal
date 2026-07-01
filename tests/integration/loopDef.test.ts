@@ -206,6 +206,27 @@ describe('pickup_contract resolution (§26.5 / §26.9)', () => {
     });
   });
 
+  it('reads the resume_contract the orchestrator resumes from (§26.5 / §26.11)', () => {
+    const def = parseLoopDef(repo, 'plan-loop', exampleConfigDir);
+    expect(def?.resume).toEqual({
+      requiredArtifacts: ['state', 'plan', 'ticket-body'],
+      replayActors: ['work-agent', 'consolidator'],
+      skipActors: ['plan-self-check', 'handoff'],
+      midIterSafe: true,
+    });
+  });
+
+  it('omits resume when the LoopDef carries no resume_contract (degrades, never throws)', () => {
+    const cfg = mkdtempSync(join(tmpdir(), 'loopdef-noresume-config-'));
+    mkdirSync(join(cfg, 'loops', 'mini-loop'), { recursive: true });
+    writeFileSync(
+      join(cfg, 'loops', 'mini-loop', 'mini-loop.yaml'),
+      'name: mini-loop\nschema_version: "4"\ngates:\n  - id: g\n    kind: terminal\n    human_options: []\n',
+    );
+    expect(parseLoopDef(repo, 'mini-loop', cfg)?.resume).toBeUndefined();
+    rmSync(cfg, { recursive: true, force: true });
+  });
+
   it('resolves each initial_labels slot to its concrete label string (target-scoped)', () => {
     const def = parseLoopDef(repo, 'plan-loop', exampleConfigDir);
     // ready/in_progress are issue slots; plan-draft is a pr slot — each resolves against its own map.

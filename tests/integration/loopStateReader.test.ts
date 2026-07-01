@@ -82,6 +82,17 @@ describe('loop state.yaml extension reader (§26.6)', () => {
     expect(readLoopExtension(repo).cost).toBeNull();
   });
 
+  // §26.11 — resume reads which LoopDef governs the interrupted run from state.yaml's bound_loop.
+  it('reads the bound_loop back as written (§26.11 resume)', () => {
+    write({ status: 'plan-draft', iteration: 1, bound_loop: 'plan-loop' });
+    expect(readLoopExtension(repo).boundLoop).toBe('plan-loop');
+  });
+
+  it('defaults bound_loop to "" when absent or ill-typed', () => {
+    write({ status: 'plan-draft', iteration: 1 });
+    expect(readLoopExtension(repo).boundLoop).toBe('');
+  });
+
   it('defaults to a safe extension for a missing or unreadable state.yaml (never throws)', () => {
     rmSync(join(repo, '.agent-loop'), { recursive: true, force: true });
     expect(readLoopExtension(repo)).toEqual({
@@ -89,6 +100,7 @@ describe('loop state.yaml extension reader (§26.6)', () => {
       impasse: { consecutiveIdentical: 0, lastFindingsSig: '' },
       personaState: {},
       cost: null,
+      boundLoop: '',
     });
   });
 });

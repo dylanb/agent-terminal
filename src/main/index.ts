@@ -93,6 +93,7 @@ import { createSentinelWatcher } from './turnSentinel';
 import { readAndClearTurnDone, watchTurnDone } from './turnDoneFile';
 import { writeLoopState } from './loopStateWriter';
 import { readLoopExtension } from './loopStateReader';
+import { decideResume } from './loopResume';
 import { turnDoneSentinel } from '../shared/loopTurn';
 import { statSync } from 'node:fs';
 import type { FlowStepDef } from './flow';
@@ -536,6 +537,59 @@ async function createWindow(): Promise<void> {
     pushFlowChanged();
     clearContext();
     startWorkTurn(finished.repoDir, finished.loopName, finished.phase);
+  };
+
+  // §26.11 / L8 — auto-resume an interrupted run from <repo>/.agent-loop/state.yaml. Reads the persisted
+  // status/iteration + `bound_loop`, computes which of the iteration's turn artifacts already survived, and
+  // re-enters the EARLIEST incomplete turn (never re-running a completed one — so a crash mid-fan-out does
+  // not re-spawn every reviewer or re-run the work turn), honoring the def's resume_contract `mid_iter_safe`
+  // (false rewinds to the iteration start). A gate/terminal/error status is human-owned and not re-driven
+  // (the §24.2.3 mirror already presents it). Best-effort: any gap — no state, no bound loop, no
+  // resume_contract, or a turn already in flight — is a silent no-op, and it fires at most once per repo.
+  const resumedRepos = new Set<string>();
+  const resumeLoop = (repoDir: string): void => {
+    if (activeTurn !== null || resumedRepos.has(repoDir)) return;
+    const s = parseAgentLoopState(repoDir);
+    if (!s) return;
+    const loopName = readLoopExtension(repoDir).boundLoop;
+    if (!loopName) return;
+    const def = parseLoopDef(repoDir, loopName);
+    if (!def?.resume) return;
+    const phase = def.phases.find((p) => p.entryStatus === s.status);
+    const roster = phase ? reviewerRosterForPhase(def, phase.id) : [];
+    let planPresent = false;
+    try {
+      planPresent = statSync(path.join(repoDir, '.agent-loop', 'plan.md')).size > 0;
+    } catch {
+      planPresent = false;
+    }
+    const decision = decideResume({
+      status: s.status,
+      iteration: s.iteration,
+      phases: def.phases.map((p) => ({ id: p.id, entryStatus: p.entryStatus })),
+      midIterSafe: def.resume.midIterSafe,
+      artifacts: {
+        plan: planPresent,
+        reviewsComplete: roster.length > 0 && allReviewsPresent(repoDir, s.iteration, roster),
+        consolidated: consolidatedVerdict(repoDir, s.iteration) !== null,
+      },
+    });
+    if (decision.kind === 'none') return;
+    resumedRepos.add(repoDir);
+    audit.recordCommand(repoDir, 'resume', `resume ${decision.kind} at ${s.status} iter ${s.iteration}`, 0);
+    if (decision.kind === 'work') startWorkTurn(repoDir, loopName, decision.phaseId);
+    else if (decision.kind === 'reviewers') startReviewersTurn(repoDir, loopName, decision.phaseId);
+    else if (decision.kind === 'consolidate') startConsolidateTurn(repoDir, loopName, decision.phaseId, decision.iteration);
+    // Every turn of the iteration already produced its artifact — only the verdict branch remains.
+    else
+      advanceAfterConsolidate({
+        kind: 'consolidate',
+        repoDir,
+        loopName,
+        phase: decision.phaseId,
+        turnKey: `consolidate-${decision.phaseId}`,
+        iteration: decision.iteration,
+      });
   };
 
   // `transitioningRepo` carries the active repoKey into the synchronous onEnterStep below, so a loop
@@ -1010,6 +1064,13 @@ async function createWindow(): Promise<void> {
   else await win.loadFile(path.join(__dirname, '../renderer/index.html'));
 
   outputGate.open();
+
+  // §26.11 / L8 — on launch, auto-resume an interrupted run in the launch-root repo (the §23.4 spawn cwd).
+  // Absent/complete/human-owned state is a no-op. The deferred turn injects once the hosted instance is
+  // injectable (§26.2). (The best-effort mid-session `cd`-into-repo resume trigger is a recorded v1 gap:
+  // once the hosted instance occupies the shell the cwd rarely changes, and injecting a resumed turn into a
+  // bare bash prompt before an agent is launched is the §26.11/B11 no-interlock risk — deferred.)
+  resumeLoop(launchRoot);
 }
 
 app.whenReady().then(createWindow);
