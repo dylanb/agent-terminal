@@ -27,6 +27,9 @@ export interface LoopPanelDeps {
   /** §26.3/D47a(c) — the operator's manual "this turn is done" override for a turn whose automatic
    *  done-signal was missed. Injected by the composition root; absent → the control is inert. */
   markTurnComplete?(): void;
+  /** §26.6 / L5 — submit the human's gate decision (the option the human picked at an awaiting gate).
+   *  Injected by the composition root; absent → the decision buttons are not rendered. */
+  gateDecision?(option: string): void;
 }
 
 const NOOP_DEPS: LoopPanelDeps = { githubRef: () => Promise.resolve(null), openExternal: () => {} };
@@ -246,6 +249,24 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
         ldl.append(detailRow(doc, 'gate options', loop.gateOptions.map(gateOptionLabel).join(' · ')));
 
       body.append(ldl);
+
+      // §26.6 / L5 — the gate DECISION surface (loop-flow.html's approve · changes · impasse): a button
+      // per gate option the def offers. Choosing one runs the LoopDef `on_*` action list in-app; the
+      // decision is the app's, surfaced via state.yaml → flow:onStateChanged (the panel re-pulls).
+      if (loop.gateOptions && loop.gateOptions.length > 0 && deps.gateDecision) {
+        const gate = doc.createElement('div');
+        gate.className = 'gatebar';
+        for (const option of loop.gateOptions) {
+          const btn = doc.createElement('button');
+          // approve is the primary action (loop-flow.html) — the filled `app` tone; the rest are outline.
+          btn.className = option === 'approve' ? 'pill app gate-approve' : `pill gate-${option}`;
+          btn.dataset.gateOption = option;
+          btn.textContent = gateOptionLabel(option);
+          btn.addEventListener('click', () => deps.gateDecision?.(option));
+          gate.append(btn);
+        }
+        body.append(gate);
+      }
 
       // §26.3/D47a(c) — the human-in-the-loop escape hatch: advance a turn whose automatic done-signal
       // the orchestrator missed, without editing files. Present on every loop step (the rail's compact

@@ -114,6 +114,36 @@ describe('loop state.yaml writer (§26.6)', () => {
     expect(doc.completed_loops).toEqual(['some-prior-loop']);
   });
 
+  it('applies the §26.6 gate write surface OVER the merged prior doc (phase2/persona_state/terminated)', () => {
+    // L5 — a request-changes gate transition sets phase2_active, CLEARS persona_state (every persona
+    // re-reviews next round), and an impasse/approve terminate sets terminated. These app-owned writes
+    // must WIN over the preserved prior values, not be masked by the merge that keeps engine state.
+    const seeded = {
+      schema_version: 4,
+      status: 'awaiting-human-plan-approval',
+      iteration: 2,
+      persona_state: { 'review-principal': { last_clean_iter: 2 } },
+      phase2_active: false,
+      terminated: false,
+    };
+    mkdirSync(join(repo, '.agent-loop'), { recursive: true });
+    writeFileSync(join(repo, '.agent-loop', 'state.yaml'), yaml.dump(seeded));
+
+    writeLoopState(
+      repo,
+      { ...L1_STATE, iteration: 3, status: 'plan-draft', phase2Active: true, clearPersonaState: true },
+      fixedNow,
+    );
+    let doc = yaml.load(readFileSync(join(repo, '.agent-loop', 'state.yaml'), 'utf8')) as Record<string, unknown>;
+    expect(doc.phase2_active).toBe(true);
+    expect(doc.persona_state).toEqual({}); // cleared despite the prior entry
+    expect(doc.terminated).toBe(false); // untouched write leaves the prior value
+
+    writeLoopState(repo, { ...L1_STATE, status: 'impasse', terminated: true }, fixedNow);
+    doc = yaml.load(readFileSync(join(repo, '.agent-loop', 'state.yaml'), 'utf8')) as Record<string, unknown>;
+    expect(doc.terminated).toBe(true);
+  });
+
   it('heals a PARTIAL prior doc back to whole-document v4 (back-fills missing LoopExtension fields)', () => {
     // §26.6's whole-document guarantee must survive a prior doc that is itself partial (a hand-edit, an
     // older app version, or the re-handoff engine could leave one). Preserve the fields it DOES carry,

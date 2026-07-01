@@ -8,13 +8,29 @@ import path from 'node:path';
 import yaml from 'js-yaml';
 import { isRecord } from './yamlRecord';
 
+/** One action of a gate's `on_*` list (§26.6): the engine executes these in order when the human picks
+ *  an option. `kind` selects the effect (`mark-pr-ready`, `set-phase2`, …); `args` carries its params
+ *  verbatim (e.g. `{active: true}`). The orchestrator translates recognized kinds to domain effects
+ *  (`gateActions.ts`) and ignores the rest. */
+export interface GateAction {
+  kind: string;
+  args?: Record<string, unknown>;
+}
+
 /** One gate of a LoopDef. `id` IS the agent-loop `status` it gates; `humanOptions` mirrors the yaml
- *  `human_options` (the gate UI's button set, §19.4); `terminal` is `kind: terminal`. */
+ *  `human_options` (the gate UI's button set, §19.4); `terminal` is `kind: terminal`. The `on*`/`nextStatus*`
+ *  fields (§26.6 / L5) drive the app-internal transition each option performs. */
 export interface LoopGate {
   id: string;
   kind: string;
   humanOptions: string[];
   terminal: boolean;
+  onApprove: GateAction[];
+  onRequestChanges: GateAction[];
+  onImpasse: GateAction[];
+  nextStatusOnApprove: string;
+  nextStatusOnRequestChanges: string;
+  nextStatusOnImpasse: string;
 }
 
 /** One resolved label mutation from a pickup_contract `initial_labels` entry (§26.9): the slot has
@@ -191,13 +207,35 @@ function toVerdicts(doc: Record<string, unknown>): LoopVerdicts | undefined {
   return { consolidatedCanonical, consolidatedSynonyms };
 }
 
+/** One `on_*` action list entry → GateAction; drops a non-mapping/kind-less entry (best-effort). */
+function toGateAction(raw: unknown): GateAction | null {
+  if (!isRecord(raw) || typeof raw.kind !== 'string') return null;
+  return isRecord(raw.args) ? { kind: raw.kind, args: raw.args } : { kind: raw.kind };
+}
+
+function toGateActions(raw: unknown): GateAction[] {
+  return Array.isArray(raw) ? raw.map(toGateAction).filter((a): a is GateAction => a !== null) : [];
+}
+
 function toGate(raw: unknown): LoopGate | null {
   if (!isRecord(raw) || typeof raw.id !== 'string' || raw.id.length === 0) return null;
   const kind = typeof raw.kind === 'string' ? raw.kind : '';
   const humanOptions = Array.isArray(raw.human_options)
     ? raw.human_options.filter((o): o is string => typeof o === 'string')
     : [];
-  return { id: raw.id, kind, humanOptions, terminal: kind === 'terminal' };
+  const str = (v: unknown): string => (typeof v === 'string' ? v : '');
+  return {
+    id: raw.id,
+    kind,
+    humanOptions,
+    terminal: kind === 'terminal',
+    onApprove: toGateActions(raw.on_approve),
+    onRequestChanges: toGateActions(raw.on_request_changes),
+    onImpasse: toGateActions(raw.on_impasse),
+    nextStatusOnApprove: str(raw.next_status_on_approve),
+    nextStatusOnRequestChanges: str(raw.next_status_on_request_changes),
+    nextStatusOnImpasse: str(raw.next_status_on_impasse),
+  };
 }
 
 /** The engine stores label-slot→string maps under config_bindings entries keyed by `yaml_path`

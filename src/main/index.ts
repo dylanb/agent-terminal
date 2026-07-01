@@ -37,6 +37,7 @@ import {
   isValidDismissAll,
   isValidFlowRequest,
   isValidFlowProvideInput,
+  isValidFlowGateDecision,
   isValidFlowGithubRef,
   openExternalTarget,
   isValidInject,
@@ -73,11 +74,15 @@ import { auditRootDir } from './auditPaths';
 import { createFlowEntryActions } from './flowEntryActions';
 import { parseAgentLoopState, watchAgentLoopState } from './agentLoopBridge';
 import { createLoopNotifier } from './loopNotifier';
-import { parseLoopDef, reviewerRosterForPhase, normalizeConsolidatedVerdict } from './loopDef';
+import { parseLoopDef, gateForStatus, reviewerRosterForPhase, normalizeConsolidatedVerdict } from './loopDef';
 import { runPickup, createRealPickupDeps } from './loopPickup';
 import { createTurnRunner, decideConsolidateOutcome, type TurnRunner } from './loopOrchestrator';
 import { composeWorkPrompt, composeSpawnReviewersPrompt, composeConsolidatePrompt } from './loopRecipe';
 import { allReviewsPresent, consolidatedVerdict } from './reviewArtifacts';
+import { decideGateOutcome } from './gateActions';
+import { executeGateOutcome } from './gateExecutor';
+import { createRealGateGitHub } from './gateGithub';
+import { writeHumanNote } from './humanNotes';
 import { createSentinelWatcher } from './turnSentinel';
 import { readAndClearTurnDone, watchTurnDone } from './turnDoneFile';
 import { writeLoopState } from './loopStateWriter';
@@ -596,6 +601,54 @@ async function createWindow(): Promise<void> {
     return map;
   };
 
+  // The bound LoopDef name of the flow's current loop step for `repoKey` (§26.6 gate handler) — null when
+  // the definition/step doesn't resolve or the current step is not a loop step.
+  const boundLoopName = (repoKey: string): string | null => {
+    const load = loadFlowDefinitionLocalFirst(repoKey, flowGlobalDir);
+    if (!load.ok) return null;
+    const step = load.definition.steps[flow.state(repoKey).position - 1];
+    return step?.kind === 'loop' && step.loop ? step.loop : null;
+  };
+
+  // §26.6 / L5 / D52 — execute the human's gate decision in-app (NOT an injected `/agent-loop-*` command,
+  // retired §26.12): resolve the bound LoopDef + the gate at the current status, guard the option against
+  // the gate's human_options, then run that option's action list (state write, gh side-effects out of
+  // band, human note) and advance/re-iterate/stop. Best-effort: an unresolved gate or an unoffered option
+  // is ignored (the loop stays where it is).
+  const runGateDecision = (repoKey: string, option: 'approve' | 'request-changes' | 'impasse', note: string): void => {
+    const loopName = boundLoopName(repoKey);
+    const s = parseAgentLoopState(repoKey);
+    const def = loopName ? parseLoopDef(repoKey, loopName) : null;
+    if (!loopName || !s || !def) return;
+    const gate = gateForStatus(def, s.status);
+    if (!gate || !gate.humanOptions.includes(option)) return; // not at a gate offering this option
+    const outcome = decideGateOutcome(gate, option);
+    const reiterPhase = def.phases.find((p) => p.entryStatus === outcome.nextStatus)?.id ?? def.phases[0]?.id;
+    // Until the §19.4 feedback composer supplies the reason (a later slice), default an empty note to the
+    // decision itself so the gate's `append-human-note` action always leaves an observable artifact.
+    const noteText = note.trim().length > 0 ? note : `human ${option}`;
+    void executeGateOutcome(
+      outcome,
+      { repoDir: repoKey, boundLoop: loopName, iteration: s.iteration, pr: s.pr, branch: s.branch, linkedIssues: s.linkedIssues, note: noteText },
+      {
+        github: createRealGateGitHub(repoKey),
+        writeState: (state) => writeLoopState(repoKey, state),
+        writeHumanNote: (iteration, text) => writeHumanNote(repoKey, iteration, text),
+        // §26.6 — request-changes re-runs the phase's work turn in a fresh context (the next iteration is
+        // already persisted by executeGateOutcome, so the work prompt reads the incremented count).
+        reiterate: () => {
+          if (reiterPhase) {
+            clearContext();
+            startWorkTurn(repoKey, loopName, reiterPhase);
+          }
+        },
+      },
+    ).then(() => {
+      audit.recordCommand(repoKey, 'gate', `gate ${option}`, 0);
+      pushFlowChanged();
+    });
+  };
+
   // Flow A (§4): every output byte goes to the renderer AND the shadow tee — and, while a loop turn is
   // armed, the done-signal line scanner (§26.3/D47a).
   ptyProcess.onData((data) => {
@@ -653,6 +706,10 @@ async function createWindow(): Promise<void> {
       // §26.3/D47a(c) — the operator's manual "this turn is done" override for the in-flight loop turn.
       [CH.flowMarkTurnComplete]: (_e, m) => {
         if (isValidFlowRequest(m)) turnRunner.markComplete();
+      },
+      // §26.6 / L5 — the human's data-driven gate decision, executed app-internally.
+      [CH.flowGateDecision]: (_e, m) => {
+        if (isValidFlowGateDecision(m)) runGateDecision(m.repoKey, m.option, m.note ?? '');
       },
       // Clipboard is an OS resource owned by main (§7.7); the sandboxed preload can't reach it.
       [CH.clipboardWrite]: (_e, m) => {

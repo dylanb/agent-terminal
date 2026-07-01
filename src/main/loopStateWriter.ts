@@ -21,6 +21,12 @@ export interface LoopStateWrite {
   branch: string | null;
   boundLoop: string;
   linkedIssues: number[];
+  /** §26.6 gate write surface (L5) — applied OVER the merged prior doc so a gate transition's own writes
+   *  win. Absent → the field keeps its preserved prior value. `clearPersonaState` resets persona_state to
+   *  `{}` (every persona re-reviews after a request-changes). */
+  phase2Active?: boolean;
+  clearPersonaState?: boolean;
+  terminated?: boolean;
 }
 
 const STATE_REL = path.join('.agent-loop', 'state.yaml');
@@ -78,6 +84,12 @@ export function writeLoopState(repoDir: string, state: LoopStateWrite, now: () =
     linked_issues: state.linkedIssues,
     updated_at: now().toISOString(),
   };
+
+  // §26.6 gate write surface (L5) — layered ABOVE the app read set so a gate transition's own writes win
+  // over the preserved prior values; an absent field keeps its merged prior value.
+  if (state.phase2Active !== undefined) doc.phase2_active = state.phase2Active;
+  if (state.clearPersonaState) doc.persona_state = {};
+  if (state.terminated !== undefined) doc.terminated = state.terminated;
 
   const tmp = `${file}.tmp`;
   writeFileSync(tmp, yaml.dump(doc));

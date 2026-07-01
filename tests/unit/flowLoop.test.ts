@@ -4,6 +4,7 @@ import { isHumanNeededStatus } from '../../src/shared/loopStatus';
 import type { AgentLoopState } from '../../src/main/agentLoopBridge';
 import type { LoopDef } from '../../src/main/loopDef';
 import type { FlowStateView } from '../../src/shared/ipc';
+import { mkGate } from '../helpers/loopGate';
 
 // §24.2.3 T2 — deriveLoopView folds the read-only agent-loop state.yaml mirror onto a flow view as a
 // `loop` field PARALLEL to S5's `derived` (loop state outlives the manual in_progress window, so it
@@ -27,10 +28,10 @@ const DEF: LoopDef = {
   rosters: [],
   defaultRosterId: '',
   gates: [
-    { id: 'awaiting-human-pr-approval', kind: 'approve-required', humanOptions: ['approve', 'request-changes', 'impasse'], terminal: false },
-    { id: 'awaiting-human-impl-triage', kind: 'triage', humanOptions: ['approve', 'request-changes', 'impasse'], terminal: false },
-    { id: 'awaiting-team-review', kind: 'terminal', humanOptions: [], terminal: true },
-    { id: 'impasse', kind: 'terminal', humanOptions: [], terminal: true },
+    mkGate({ id: 'awaiting-human-pr-approval', kind: 'approve-required', humanOptions: ['approve', 'request-changes', 'impasse'], terminal: false }),
+    mkGate({ id: 'awaiting-human-impl-triage', kind: 'triage', humanOptions: ['approve', 'request-changes', 'impasse'], terminal: false }),
+    mkGate({ id: 'awaiting-team-review', kind: 'terminal', humanOptions: [], terminal: true }),
+    mkGate({ id: 'impasse', kind: 'terminal', humanOptions: [], terminal: true }),
   ],
 };
 
@@ -119,11 +120,11 @@ const IMPL_LOOP: LoopDef = {
   rosters: [],
   defaultRosterId: '',
   gates: [
-    { id: 'awaiting-human-pr-approval', kind: 'approve-required', humanOptions: ['approve', 'request-changes', 'impasse'], terminal: false },
-    { id: 'awaiting-human-impl-triage', kind: 'triage', humanOptions: ['approve', 'request-changes', 'impasse'], terminal: false },
-    { id: 'impl-draft', kind: 'in-flight', humanOptions: ['impasse'], terminal: false },
-    { id: 'awaiting-team-review', kind: 'terminal', humanOptions: [], terminal: true },
-    { id: 'impasse', kind: 'terminal', humanOptions: [], terminal: true },
+    mkGate({ id: 'awaiting-human-pr-approval', kind: 'approve-required', humanOptions: ['approve', 'request-changes', 'impasse'], terminal: false }),
+    mkGate({ id: 'awaiting-human-impl-triage', kind: 'triage', humanOptions: ['approve', 'request-changes', 'impasse'], terminal: false }),
+    mkGate({ id: 'impl-draft', kind: 'in-flight', humanOptions: ['impasse'], terminal: false }),
+    mkGate({ id: 'awaiting-team-review', kind: 'terminal', humanOptions: [], terminal: true }),
+    mkGate({ id: 'impasse', kind: 'terminal', humanOptions: [], terminal: true }),
   ],
 };
 

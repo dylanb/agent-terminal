@@ -110,6 +110,10 @@ if (flowStripHost) {
           const key = repo.repoKey();
           if (key) window.flow.markTurnComplete(key);
         },
+        gateDecision: (option) => {
+          const key = repo.repoKey();
+          if (key) window.flow.gateDecision(key, option as 'approve' | 'request-changes' | 'impasse');
+        },
       })
     : undefined;
   // Same single-puller contract for the typed-input modal (§24.2.3 T3): on a step-entry prompt the

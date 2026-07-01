@@ -2477,6 +2477,90 @@ test('a needs-work verdict /clears and re-iterates to the next iteration (§26.1
   rmSync(binDir, { recursive: true, force: true });
 });
 
+// §26.13 / L5 — the human's gate decision, executed app-internally. Drive to the plan-approval gate
+// (clean verdict), open the docked panel, click a gate button, and assert the transition + gh side-effect.
+const gateButton = (option: string) => loopPanel().locator(`[data-gate-option="${option}"]`);
+
+async function driveToPlanGate(repo: string, home: string, binDir: string, logFile: string): Promise<void> {
+  await driveToWorkTurn(repo, home, binDir, logFile, '30000');
+  const stateFile = join(repo, '.agent-loop', 'state.yaml');
+  await expect
+    .poll(() => readFileSync(stateFile, 'utf8'), { timeout: 25_000 })
+    .toContain('status: awaiting-human-plan-approval');
+  await loopReadout().click();
+  await expect(gateButton('approve')).toBeVisible({ timeout: 10_000 });
+}
+
+test('approve at the plan gate marks the PR ready and terminates the loop (§26.13 / L5)', async () => {
+  const repo = seedBootstrapFlowRepo('agent-term-e2e-l5-approve-');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-l5-approve-home-'));
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-l5-approve-bin-');
+  seedFakeAgent(binDir, { work: 'write-plan', reviews: 'all', consolidate: 'clean' });
+  await driveToPlanGate(repo, home, binDir, logFile);
+
+  await gateButton('approve').click();
+
+  const stateFile = join(repo, '.agent-loop', 'state.yaml');
+  await expect.poll(() => readFileSync(stateFile, 'utf8'), { timeout: 15_000 }).toContain('status: plan-human-approved');
+  expect(readFileSync(stateFile, 'utf8')).toContain('terminated: true');
+  // The gate's mark-pr-ready action ran out of band (§26.6/D53): the fake gh recorded `pr ready`.
+  await expect.poll(() => readFileSync(logFile, 'utf8'), { timeout: 10_000 }).toContain('pr ready');
+
+  await app.close();
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+  rmSync(binDir, { recursive: true, force: true });
+});
+
+test('request-changes at the plan gate writes a human note, sets phase2, and re-iterates (§26.13 / L5)', async () => {
+  const repo = seedBootstrapFlowRepo('agent-term-e2e-l5-changes-');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-l5-changes-home-'));
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-l5-changes-bin-');
+  seedFakeAgent(binDir, { work: 'write-plan', reviews: 'all', consolidate: 'clean' });
+  await driveToPlanGate(repo, home, binDir, logFile);
+
+  await gateButton('request-changes').click();
+
+  // Land: the note is written for the critiqued iteration, phase2 is activated, and the loop re-iterates
+  // (a second iteration's consolidated.json appears). No PR is readied (request-changes has no such action).
+  await expect
+    .poll(() => existsSync(join(repo, '.agent-loop', 'human-notes', '1.md')), { timeout: 15_000 })
+    .toBe(true);
+  await expect
+    .poll(() => existsSync(join(repo, '.agent-loop', 'reviews', '2', 'consolidated.json')), { timeout: 30_000 })
+    .toBe(true);
+  const stateText = readFileSync(join(repo, '.agent-loop', 'state.yaml'), 'utf8');
+  expect(stateText).toContain('phase2_active: true');
+  expect(stateText).toContain('iteration: 2');
+  expect(readFileSync(logFile, 'utf8')).not.toContain('pr ready');
+
+  await app.close();
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+  rmSync(binDir, { recursive: true, force: true });
+});
+
+test('impasse at the plan gate terminates the loop at the impasse status (§26.13 / L5)', async () => {
+  const repo = seedBootstrapFlowRepo('agent-term-e2e-l5-impasse-');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-l5-impasse-home-'));
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-l5-impasse-bin-');
+  seedFakeAgent(binDir, { work: 'write-plan', reviews: 'all', consolidate: 'clean' });
+  await driveToPlanGate(repo, home, binDir, logFile);
+
+  await gateButton('impasse').click();
+
+  const stateFile = join(repo, '.agent-loop', 'state.yaml');
+  await expect.poll(() => readFileSync(stateFile, 'utf8'), { timeout: 15_000 }).toContain('status: impasse');
+  expect(readFileSync(stateFile, 'utf8')).toContain('terminated: true');
+  expect(existsSync(join(repo, '.agent-loop', 'human-notes', '1.md'))).toBe(true);
+  expect(readFileSync(logFile, 'utf8')).not.toContain('pr ready');
+
+  await app.close();
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+  rmSync(binDir, { recursive: true, force: true });
+});
+
 test('Restart clears a resolved stage-transition input so the next entry re-prompts (§24.2.3 T3)', async () => {
   // The user supplies the plan step's ticket once; after completing and Restarting the flow, the
   // ticket must be re-requested — Restart wipes resolved inputs (unlike Undo).

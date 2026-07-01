@@ -60,6 +60,12 @@ describe('LoopDef resolver (§24.2.3 T2 folded / §18.1)', () => {
       kind: 'approve-required',
       humanOptions: ['approve', 'request-changes', 'impasse'],
       terminal: false,
+      onApprove: [],
+      onRequestChanges: [],
+      onImpasse: [],
+      nextStatusOnApprove: 'awaiting-team-review',
+      nextStatusOnRequestChanges: '',
+      nextStatusOnImpasse: '',
     });
     const gate = gateForStatus(def!, 'awaiting-human-pr-approval');
     expect(gate?.humanOptions).toEqual(['approve', 'request-changes', 'impasse']);
@@ -73,6 +79,12 @@ describe('LoopDef resolver (§24.2.3 T2 folded / §18.1)', () => {
       kind: 'terminal',
       humanOptions: [],
       terminal: true,
+      onApprove: [],
+      onRequestChanges: [],
+      onImpasse: [],
+      nextStatusOnApprove: '',
+      nextStatusOnRequestChanges: '',
+      nextStatusOnImpasse: '',
     });
   });
 

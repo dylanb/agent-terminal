@@ -93,6 +93,31 @@ describe('docked loop panel (§24.2.3 T2)', () => {
     expect(markTurnComplete).toHaveBeenCalledTimes(1);
   });
 
+  it('renders a gate-decision button per gate option that invokes the injected service (§26.6 / L5)', () => {
+    const gateDecision = vi.fn();
+    const panel = createLoopPanel(host, {
+      githubRef: () => Promise.resolve(null),
+      openExternal: () => {},
+      gateDecision,
+    });
+    panel.render(loop({ status: 'awaiting-human-plan-approval', gateOptions: ['approve', 'request-changes', 'impasse'] }), 'plan');
+    const buttons = [...host.querySelectorAll<HTMLButtonElement>('[data-gate-option]')];
+    expect(buttons.map((b) => b.dataset.gateOption)).toEqual(['approve', 'request-changes', 'impasse']);
+    buttons.find((b) => b.dataset.gateOption === 'request-changes')!.click();
+    expect(gateDecision).toHaveBeenCalledTimes(1);
+    expect(gateDecision).toHaveBeenCalledWith('request-changes');
+  });
+
+  it('renders NO gate-decision buttons when the gate offers no options (mid-work / terminal)', () => {
+    const panel = createLoopPanel(host, {
+      githubRef: () => Promise.resolve(null),
+      openExternal: () => {},
+      gateDecision: () => {},
+    });
+    panel.render(loop({ status: 'plan-draft' }), 'plan'); // no gateOptions
+    expect(host.querySelector('[data-gate-option]')).toBeNull();
+  });
+
   it('shows no "mark turn complete" control when there is no loop step (refs-only panel)', () => {
     const panel = createLoopPanel(host, {
       githubRef: () => Promise.resolve(null),

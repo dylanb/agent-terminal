@@ -55,6 +55,7 @@ export const CH = {
   flowRevealLoop: 'flow:revealLoop',
   flowGithubRef: 'flow:githubRef',
   flowMarkTurnComplete: 'flow:markTurnComplete',
+  flowGateDecision: 'flow:gateDecision',
   appOpenExternal: 'app:openExternal',
   todoTemplateList: 'todoTemplate:list',
   todoTemplateInstantiate: 'todoTemplate:instantiate',
@@ -611,6 +612,21 @@ export interface FlowMarkTurnCompleteMsg {
   repoKey: string;
 }
 
+/** The human's gate decision (§26.6 / L5): the option picked at a data-driven awaiting-human gate. The
+ *  set mirrors the LoopDef `human_options` the gate offers (`approve`/`request-changes`/`impasse`). */
+export type GateDecisionOption = 'approve' | 'request-changes' | 'impasse';
+
+/** flow:gateDecision request (§26.6 / L5): the human picks an option at an awaiting-human gate. The app
+ *  executes that option's LoopDef `on_*` action list in-app (gh side-effects out of band) and advances /
+ *  re-iterates / stops. One-way; the result surfaces through the state.yaml watch → flow:onStateChanged
+ *  push. `note` carries an optional request-changes/impasse reason (written to human-notes/{iter}.md). */
+export interface FlowGateDecisionMsg {
+  sessionId: SessionId;
+  repoKey: string;
+  option: GateDecisionOption;
+  note?: string;
+}
+
 /** flow:githubRef request (§24.2.3 T7): resolve a ref's title/body/url for the popout. `repoKey`
  *  scopes the `gh` lookup to the right repo; `number` is the issue/PR number; `kind` selects which. */
 export interface FlowGithubRefMsg {
@@ -802,6 +818,9 @@ export interface FlowApi {
   /** §26.3/D47a(c) — manually mark the in-flight loop turn complete for `repoKey`. One-way: the loop
    *  panel re-pulls via flow:onStateChanged when the orchestrator's resulting state lands. */
   markTurnComplete(repoKey: string): void;
+  /** §26.6 / L5 — submit the human's gate decision for `repoKey`. One-way: the app executes the option's
+   *  transition and the loop panel re-pulls via flow:onStateChanged when the resulting state lands. */
+  gateDecision(repoKey: string, option: GateDecisionOption, note?: string): void;
 }
 
 /** CLI launcher install (§23.4 / #25): the settings affordance's only seam to the install action. */

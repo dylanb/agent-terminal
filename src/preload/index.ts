@@ -145,6 +145,8 @@ const flowApi: FlowApi = {
     ipcRenderer.invoke(CH.flowGithubRef, { sessionId: SESSION_ID, repoKey, kind, number }) as Promise<GithubRef | null>,
   openExternal: (url) => ipcRenderer.invoke(CH.appOpenExternal, { sessionId: SESSION_ID, url }) as Promise<boolean>,
   markTurnComplete: (repoKey) => ipcRenderer.send(CH.flowMarkTurnComplete, { sessionId: SESSION_ID, repoKey }),
+  gateDecision: (repoKey, option, note) =>
+    ipcRenderer.send(CH.flowGateDecision, { sessionId: SESSION_ID, repoKey, option, ...(note !== undefined ? { note } : {}) }),
 };
 
 export const cliApi: CliApi = {
