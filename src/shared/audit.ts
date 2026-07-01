@@ -36,7 +36,9 @@ export type AuditEvent =
   | { ts: string; type: 'loop.status'; from: string; to: string }
   | { ts: string; type: 'loop.iteration'; n: number }
   | { ts: string; type: 'command'; source: string; cmd: string; exit: number | null }
-  | { ts: string; type: 'outputs.snapshot'; pr: number | null; files: AuditOutputFile[] };
+  | { ts: string; type: 'outputs.snapshot'; pr: number | null; files: AuditOutputFile[] }
+  // §26.10 — the per-iteration cost meter: the priced dollars + any unpriced model ids, tagged by iteration.
+  | { ts: string; type: 'loop.cost'; iteration: number; usd: number; unpriced: string[] };
 
 /** One file captured in an `outputs.snapshot` (§25.5): a `.agent-loop/`-relative path and its size. */
 export interface AuditOutputFile {
@@ -193,6 +195,8 @@ export interface RunTimeline {
   todos: TodoLike[];
   commands: { source: string; cmd: string; exit: number | null }[];
   snapshots: { pr: number | null; files: AuditOutputFile[] }[];
+  /** The §26.10 per-iteration cost events, in order — priced dollars + any unpriced model ids per iteration. */
+  costs: { iteration: number; usd: number; unpriced: string[] }[];
 }
 
 /** Replay a run's stream into its ordered timeline and folded final state (§25.6), tolerating a
@@ -210,6 +214,7 @@ export function reconstructTimeline(text: string): RunTimeline {
     todos: [],
     commands: [],
     snapshots: [],
+    costs: [],
   };
   const todoOf = (id: string): TodoLike | undefined => tl.todos.find((t) => t.id === id);
   for (const e of events) {
@@ -263,6 +268,9 @@ export function reconstructTimeline(text: string): RunTimeline {
         break;
       case 'outputs.snapshot':
         tl.snapshots.push({ pr: e.pr, files: e.files });
+        break;
+      case 'loop.cost':
+        tl.costs.push({ iteration: e.iteration, usd: e.usd, unpriced: e.unpriced });
         break;
     }
   }

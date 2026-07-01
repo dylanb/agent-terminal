@@ -206,6 +206,20 @@ describe('loop state.yaml writer (§26.6)', () => {
     });
   });
 
+  it('writes the §26.10 cost OVER the merged prior doc, and preserves it across a later cost-less write', () => {
+    // The cost meter (§26.10) persists the display-only per-iteration cost at the iteration boundary. Like
+    // the other extension writes it wins over any preserved prior value; a later write that carries no cost
+    // must PRESERVE the last recorded cost (merge from the prior doc), so the strip keeps showing it.
+    writeLoopState(repo, { ...L1_STATE, iteration: 1, cost: { usd: 0.42, unpricedModels: ['x-unknown'] } }, fixedNow);
+    let doc = yaml.load(readFileSync(join(repo, '.agent-loop', 'state.yaml'), 'utf8')) as Record<string, unknown>;
+    expect(doc.cost).toEqual({ usd: 0.42, unpriced: ['x-unknown'] });
+
+    // A subsequent status-only write (no cost field) preserves the prior cost via the merge.
+    writeLoopState(repo, { ...L1_STATE, iteration: 1, status: 'awaiting-human-plan-approval' }, fixedNow);
+    doc = yaml.load(readFileSync(join(repo, '.agent-loop', 'state.yaml'), 'utf8')) as Record<string, unknown>;
+    expect(doc.cost).toEqual({ usd: 0.42, unpriced: ['x-unknown'] });
+  });
+
   it('emits the whole read set present even when branch is null and linkedIssues is empty (§26.6)', () => {
     // The read set must be uniformly present (defaulted), the way `pr` is — not conditionally omitted.
     writeLoopState(repo, { ...L1_STATE, branch: null, linkedIssues: [] }, fixedNow);

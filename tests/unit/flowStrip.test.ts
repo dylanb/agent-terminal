@@ -329,6 +329,67 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     expect(readout.textContent).not.toContain('#179');
   });
 
+  it('renders the §26.10 cost readout on the loop read-out when the view carries one, omits it otherwise', async () => {
+    const withCost: FlowStateView = {
+      stepName: 'build',
+      steps: ['build'],
+      position: 1,
+      total: 1,
+      status: 'in_progress',
+      loop: { status: 'plan-draft', iteration: 2, pr: null, branch: null, ready: false, cost: '$0.42' },
+    };
+    const deps = {
+      state: vi.fn(async (): Promise<FlowStateView> => withCost),
+      start: vi.fn(),
+      advance: vi.fn(),
+      restart: vi.fn(),
+      undo: vi.fn(),
+      terminate: vi.fn(),
+      provideInput: vi.fn(),
+      onStateChanged: noopSub,
+    };
+    createFlowStrip(host, deps).onRepoChanged('/repo');
+    await vi.waitFor(() => expect(host.querySelector('.loop-cost')).not.toBeNull());
+    expect(host.querySelector<HTMLElement>('.loop-cost')!.textContent).toBe('$0.42');
+
+    // A view with no cost renders no cost node (the strip shows nothing before an iteration records one).
+    deps.state.mockResolvedValue({ ...withCost, loop: { ...withCost.loop!, cost: undefined } });
+    createFlowStrip(host, deps).onRepoChanged('/repo2');
+    await vi.waitFor(() => expect(host.querySelector('.loopstat')).not.toBeNull());
+    expect(host.querySelector('.loop-cost')).toBeNull();
+  });
+
+  it('patches the §26.10 cost readout in place on a same-signature background push', async () => {
+    let view: FlowStateView = {
+      stepName: 'build',
+      steps: ['build'],
+      position: 1,
+      total: 1,
+      status: 'in_progress',
+      loop: { status: 'plan-draft', iteration: 1, pr: null, branch: null, ready: false, cost: '$0.10' },
+    };
+    let fire: () => void = () => {};
+    const deps = {
+      state: vi.fn(async (): Promise<FlowStateView> => view),
+      start: vi.fn(),
+      advance: vi.fn(),
+      restart: vi.fn(),
+      undo: vi.fn(),
+      terminate: vi.fn(),
+      provideInput: vi.fn(),
+      onStateChanged: (cb: () => void) => {
+        fire = cb;
+        return () => {};
+      },
+    };
+    createFlowStrip(host, deps).onRepoChanged('/repo');
+    await vi.waitFor(() => expect(host.querySelector('.loop-cost')?.textContent).toBe('$0.10'));
+    // A live value-only push (iteration + cost changed, structure identical) patches the existing node.
+    view = { ...view, loop: { ...view.loop!, iteration: 2, cost: '$0.42' } };
+    fire();
+    await vi.waitFor(() => expect(host.querySelector('.loop-cost')?.textContent).toBe('$0.42'));
+  });
+
   it('omits aria-controls on the loop read-out when no panel id is injected (no hard-coded global id)', async () => {
     const deps = {
       state: vi.fn(

@@ -53,6 +53,12 @@ describe('deriveLoopView (§24.2.3 T2)', () => {
     expect(v.loop && 'linkedIssues' in v.loop).toBe(false);
   });
 
+  // §26.10 — the display-only cost readout is folded onto the loop view when a formatted cost is supplied.
+  it('folds the §26.10 cost readout onto the loop view when supplied, omits it when null', () => {
+    expect(deriveLoopView(base, loop('plan-draft'), DEF, '$0.42').loop?.cost).toBe('$0.42');
+    expect(deriveLoopView(base, loop('plan-draft'), DEF, null).loop && 'cost' in deriveLoopView(base, loop('plan-draft'), DEF, null).loop!).toBe(false);
+  });
+
   it('exposes the current gate\'s human_options as gateOptions (gate-driven)', () => {
     expect(deriveLoopView(base, loop('awaiting-human-pr-approval'), DEF).loop?.gateOptions).toEqual([
       'approve',

@@ -1635,17 +1635,27 @@ function seedFakeAgent(
     // finding every iteration (identical signature → stuck at x2); `changing` stamps the iteration into
     // the finding (a fresh signature each round → never stuck). Absent → no kept findings (empty signature).
     findings?: 'stable' | 'changing';
+    // §26.10/L7 — when set, the work turn writes a deterministic session-JSONL token fixture into the
+    // test-controlled log root ($APP_SESSION_LOG_ROOT) so the cost meter has tokens to price without an
+    // LLM. 1,000,000 claude-sonnet-5 input tokens → exactly $3.00 against the checked-in pricing table.
+    costFixture?: boolean;
   },
 ): void {
   const writePlan = "mkdir -p .agent-loop; printf '# Plan\\n\\nfake plan body\\n' > .agent-loop/plan.md";
+  // The token log the §26.10 meter reads: one assistant event carrying the model + usage (Claude Code's
+  // private JSONL shape). Guarded on the env var so only the L7 test (which sets it) writes a fixture.
+  const writeTokens = opts.costFixture
+    ? `; if [ -n "$APP_SESSION_LOG_ROOT" ]; then mkdir -p "$APP_SESSION_LOG_ROOT"; ` +
+      `printf '%s\\n' '{"type":"assistant","message":{"model":"claude-sonnet-5","usage":{"input_tokens":1000000,"output_tokens":0}}}' > "$APP_SESSION_LOG_ROOT/session.jsonl"; fi`
+    : '';
   const workAct =
     opts.work === 'noop'
       ? ':'
       : opts.work === 'plan-only'
-        ? writePlan
+        ? `${writePlan}${writeTokens}`
         : opts.work === 'file-only'
-          ? `${writePlan}; ${fileOnlySignal('work-plan')}`
-          : `${writePlan}; ${doneSignal('work-plan')}`;
+          ? `${writePlan}${writeTokens}; ${fileOnlySignal('work-plan')}`
+          : `${writePlan}${writeTokens}; ${doneSignal('work-plan')}`;
   // §26.4/§26.13 L4 — reviews + consolidated are per-iteration (reviews/<iter>/…). The REPL derives the
   // iteration from the app-written state.yaml so a re-iteration (needs-work) writes reviews/<iter+1>/.
   const getIter = "iter=$(grep -m1 '^iteration:' .agent-loop/state.yaml | tr -dc '0-9')";
@@ -2263,6 +2273,7 @@ async function driveToWorkTurn(
   binDir: string,
   logFile: string,
   turnTimeoutMs: string,
+  extraEnv: Record<string, string> = {},
 ): Promise<void> {
   await app.close();
   app = await electron.launch({
@@ -2276,6 +2287,7 @@ async function driveToWorkTurn(
       CLAUDE_CONFIG_DIR: exampleConfigDir,
       PATH: `${binDir}:${process.env.PATH}`,
       FAKE_GHGIT_LOG: logFile,
+      ...extraEnv,
     },
   });
   page = await app.firstWindow();
@@ -2688,6 +2700,44 @@ test('impasse at the plan gate terminates the loop at the impasse status (§26.1
   rmSync(repo, { recursive: true, force: true });
   rmSync(home, { recursive: true, force: true });
   rmSync(binDir, { recursive: true, force: true });
+});
+
+// §26.13 / L7 — the cost meter. The fake-agent writes a deterministic session-JSONL token fixture at a
+// test-controlled log root ($APP_SESSION_LOG_ROOT); completing an iteration prices those tokens against the
+// checked-in table, surfaces the dollars on the status-strip loop read-out, and records a §25 cost event.
+test('completing an iteration prices the fixture tokens: strip readout + audit cost event (§26.13 / L7)', async () => {
+  const repo = seedBootstrapFlowRepo('agent-term-e2e-l7-cost-');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-l7-cost-home-'));
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-l7-cost-bin-');
+  const logRoot = mkdtempSync(join(tmpdir(), 'agent-term-e2e-l7-cost-logs-'));
+  // A clean verdict stops at the plan-approval gate on iteration 1 — one completed iteration. The work turn
+  // writes 1,000,000 claude-sonnet-5 input tokens → exactly $3.00 against the pricing table.
+  seedFakeAgent(binDir, { work: 'write-plan', reviews: 'all', consolidate: 'clean', costFixture: true });
+  await driveToWorkTurn(repo, home, binDir, logFile, '30000', { APP_SESSION_LOG_ROOT: logRoot });
+
+  const stateFile = join(repo, '.agent-loop', 'state.yaml');
+  await expect
+    .poll(() => readFileSync(stateFile, 'utf8'), { timeout: 25_000 })
+    .toContain('status: awaiting-human-plan-approval');
+  // Land (state): the iteration boundary persisted the priced cost into the app-owned extension.
+  expect(readFileSync(stateFile, 'utf8')).toContain('usd: 3');
+
+  // Land (strip): the compact loop read-out shows the priced dollars ($3.00), formatted by the meter.
+  await expect(loopReadout().locator('.loop-cost')).toHaveText('$3.00', { timeout: 15_000 });
+
+  // Land (audit): the run's YAML carries the per-iteration cost event with the priced dollars.
+  const costEvents = readAuditRun(home, repo, auditRunFiles(home, repo)[0]).events.filter(
+    (e): e is Extract<AuditEvent, { type: 'loop.cost' }> => e.type === 'loop.cost',
+  );
+  expect(costEvents).toEqual(
+    expect.arrayContaining([expect.objectContaining({ type: 'loop.cost', iteration: 1, usd: 3, unpriced: [] })]),
+  );
+
+  await app.close();
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+  rmSync(binDir, { recursive: true, force: true });
+  rmSync(logRoot, { recursive: true, force: true });
 });
 
 test('Restart clears a resolved stage-transition input so the next entry re-prompts (§24.2.3 T3)', async () => {

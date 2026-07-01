@@ -10,6 +10,7 @@ import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import yaml from 'js-yaml';
 import { isRecord } from './yamlRecord';
+import type { CostResult } from '../shared/pricing';
 
 /** The state the orchestrator persists. The L1 bootstrap supplies the read set (§24.2.3) plus the
  *  bound LoopDef; later slices supply the rest of the §26.6 surface, which defaults here until then. */
@@ -34,6 +35,10 @@ export interface LoopStateWrite {
    *  per persona). Serialized as `persona_state.{persona}.{last_clean_iter,last_seen_plan_digest,
    *  last_seen_files}`. Mutually exclusive with `clearPersonaState` (which resets to `{}`). */
   personaState?: Record<string, { lastCleanIter: number; lastSeenPlanDigest: string; lastSeenFiles: string[] }>;
+  /** §26.10 cost meter — the display-only per-iteration cost persisted at the iteration boundary. Serialized
+   *  as `cost.{usd,unpriced}`. Absent → the prior doc's `cost` is preserved by the merge (the strip keeps
+   *  showing the last recorded cost). */
+  cost?: CostResult;
 }
 
 const STATE_REL = path.join('.agent-loop', 'state.yaml');
@@ -106,6 +111,9 @@ export function writeLoopState(repoDir: string, state: LoopStateWrite, now: () =
       out[persona] = { last_clean_iter: e.lastCleanIter, last_seen_plan_digest: e.lastSeenPlanDigest, last_seen_files: e.lastSeenFiles };
     }
     doc.persona_state = out;
+  }
+  if (state.cost !== undefined) {
+    doc.cost = { usd: state.cost.usd, unpriced: state.cost.unpricedModels };
   }
 
   const tmp = `${file}.tmp`;

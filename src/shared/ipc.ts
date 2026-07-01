@@ -480,6 +480,10 @@ export interface FlowLoopView {
    *  (`approve`/`request-changes`/`impasse`). Present only at an awaiting gate with a resolvable
    *  LoopDef; absent mid-work, at a terminal gate, or when the LoopDef does not resolve. */
   gateOptions?: string[];
+  /** The §26.10 cost-meter readout: the display-only priced dollars for the run (`$X.XX`, `unknown`, or
+   *  `$X.XX +unknown` when some model was unpriced), formatted by the shared `formatCost`. Present once an
+   *  iteration boundary has recorded a cost; absent before then. Display-only — it never gates the loop. */
+  cost?: string;
   /** Observable "the loop is blocked awaiting a human" classification (§24.2.3 T4): true at a
    *  LoopDef human-decision gate (or, with no resolvable LoopDef, the shared awaiting-human/impasse
    *  family), false at a terminal hand-off or mid-work. Computed by main (where the LoopDef

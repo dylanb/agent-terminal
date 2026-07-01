@@ -47,6 +47,7 @@ export function deriveLoopView(
   view: FlowStateView,
   loop: AgentLoopState | null,
   loopDef: LoopDef | null = null,
+  cost: string | null = null,
 ): FlowStateView {
   if (!loop) return view;
   const gate = loopDef ? gateForStatus(loopDef, loop.status) : undefined;
@@ -65,6 +66,7 @@ export function deriveLoopView(
       ready,
       humanNeeded,
       ...(gateOptions ? { gateOptions } : {}),
+      ...(cost !== null ? { cost } : {}),
     },
   };
 }
@@ -218,6 +220,10 @@ export type FlowReadLoop = () => AgentLoopState | null;
  *  options. */
 export type FlowReadLoopDef = (name: string) => LoopDef | null;
 
+/** The formatted §26.10 cost-meter readout for this flow's repo, or null when no cost has been recorded
+ *  yet. Called on every view so the strip shows the live last-recorded cost. */
+export type FlowReadLoopCost = () => string | null;
+
 // Optional `store` (§19.1) persists every transition and restores on construction so a relaunch
 // resumes; without it the machine is in-memory only. Optional `onEnter` (§18.6) runs entry actions.
 export function createFlowMachine(
@@ -226,6 +232,7 @@ export function createFlowMachine(
   onEnter?: FlowEnterStep,
   readLoop?: FlowReadLoop,
   readLoopDef?: FlowReadLoopDef,
+  readLoopCost?: FlowReadLoopCost,
 ): FlowMachine {
   if (!load.ok) {
     const view = (): FlowStateView => ({
@@ -327,7 +334,7 @@ export function createFlowMachine(
     // §24.2.3 T2
     const mostRecentLoopStep = entered.reduce<FlowStepDef | undefined>((last, s) => (s.kind === 'loop' ? s : last), undefined);
     const loopDef = mostRecentLoopStep?.loop ? (readLoopDef?.(mostRecentLoopStep.loop) ?? null) : null;
-    return deriveLoopView(withRefs, liveLoop, loopDef);
+    return deriveLoopView(withRefs, liveLoop, loopDef, readLoopCost?.() ?? null);
   };
 
   const persist = (): void =>
@@ -433,6 +440,8 @@ export interface FlowManagerDeps {
   /** Resolve a repo's loop step's bound LoopDef (§24.2.3 T2 / §18.1); omitted → readiness degrades
    *  to the awaiting-human-* family with no gate options. */
   readLoopDef?: (repoKey: string, name: string) => LoopDef | null;
+  /** The formatted §26.10 cost readout for a repo's loop, or null when none recorded; omitted → no cost. */
+  readLoopCost?: (repoKey: string) => string | null;
 }
 
 export function createFlowManager(deps: FlowManagerDeps): FlowManager {
@@ -456,6 +465,7 @@ export function createFlowManager(deps: FlowManagerDeps): FlowManager {
       deps.onEnterStep,
       deps.readLoopState ? () => deps.readLoopState!(repoKey) : undefined,
       deps.readLoopDef ? (name) => deps.readLoopDef!(repoKey, name) : undefined,
+      deps.readLoopCost ? () => deps.readLoopCost!(repoKey) : undefined,
     );
     cache.set(repoKey, { sig, machine });
     return machine;

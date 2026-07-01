@@ -8,6 +8,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import yaml from 'js-yaml';
 import { isRecord } from './yamlRecord';
+import type { CostResult } from '../shared/pricing';
 
 const STATE_REL = path.join('.agent-loop', 'state.yaml');
 
@@ -20,12 +21,16 @@ export interface LoopExtension {
   impasse: { consecutiveIdentical: number; lastFindingsSig: string };
   /** `persona_state` (§26.5): each persona's last-clean iteration + skip footprint. {} when absent. */
   personaState: Record<string, { lastCleanIter: number; lastSeenPlanDigest: string; lastSeenFiles: string[] }>;
+  /** `cost` (§26.10): the last recorded display-only cost (priced dollars + unpriced ids). Null until an
+   *  iteration boundary records one. */
+  cost: CostResult | null;
 }
 
 const DEFAULT_EXTENSION: LoopExtension = {
   phase2Active: false,
   impasse: { consecutiveIdentical: 0, lastFindingsSig: '' },
   personaState: {},
+  cost: null,
 };
 
 /** Read the §26.6/§26.8 engine-extension slice from <repoDir>/.agent-loop/state.yaml, defaulting every
@@ -50,6 +55,13 @@ export function readLoopExtension(repoDir: string): LoopExtension {
       };
     }
   }
+  let cost: CostResult | null = null;
+  if (isRecord(doc.cost) && typeof doc.cost.usd === 'number') {
+    cost = {
+      usd: doc.cost.usd,
+      unpricedModels: Array.isArray(doc.cost.unpriced) ? doc.cost.unpriced.filter((s): s is string => typeof s === 'string') : [],
+    };
+  }
   return {
     phase2Active: doc.phase2_active === true,
     impasse: {
@@ -57,5 +69,6 @@ export function readLoopExtension(repoDir: string): LoopExtension {
       lastFindingsSig: typeof imp.last_findings_sig === 'string' ? imp.last_findings_sig : '',
     },
     personaState,
+    cost,
   };
 }

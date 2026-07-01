@@ -64,12 +64,31 @@ describe('loop state.yaml extension reader (§26.6)', () => {
     expect(readLoopExtension(repo).personaState).toEqual({});
   });
 
+  // §26.10 — the display-only per-iteration cost persisted at the iteration boundary (usd + unpriced ids).
+  it('reads the §26.10 cost back as written', () => {
+    write({ status: 'plan-draft', iteration: 2, cost: { usd: 0.42, unpriced: ['x-unknown'] } });
+    expect(readLoopExtension(repo).cost).toEqual({ usd: 0.42, unpricedModels: ['x-unknown'] });
+  });
+
+  it('defaults an unpriced list a partial cost omits, and drops non-string entries', () => {
+    write({ status: 'plan-draft', iteration: 2, cost: { usd: 1.5 } });
+    expect(readLoopExtension(repo).cost).toEqual({ usd: 1.5, unpricedModels: [] });
+  });
+
+  it('defaults cost to null when absent or ill-typed (no cost recorded yet)', () => {
+    write({ status: 'plan-draft', iteration: 1 });
+    expect(readLoopExtension(repo).cost).toBeNull();
+    write({ status: 'plan-draft', iteration: 1, cost: { usd: 'nope' } });
+    expect(readLoopExtension(repo).cost).toBeNull();
+  });
+
   it('defaults to a safe extension for a missing or unreadable state.yaml (never throws)', () => {
     rmSync(join(repo, '.agent-loop'), { recursive: true, force: true });
     expect(readLoopExtension(repo)).toEqual({
       phase2Active: false,
       impasse: { consecutiveIdentical: 0, lastFindingsSig: '' },
       personaState: {},
+      cost: null,
     });
   });
 });

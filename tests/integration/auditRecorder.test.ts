@@ -165,6 +165,21 @@ describe('audit recorder — run file lifecycle (§25.4)', () => {
     expect(existsSync(auditRepoDir(root, repo))).toBe(false);
   });
 
+  // §26.10 — the per-iteration cost event: the priced dollars + any unpriced model ids, tagged by iteration.
+  it('records a per-iteration cost event to the open run file', () => {
+    const rec = recorder();
+    rec.recordTransition(repo, 'start', NOT_STARTED, IN_PROGRESS);
+    rec.recordCost(repo, 2, { usd: 0.42, unpricedModels: ['x-unknown'] });
+    const events = parseAuditStream(readFileSync(join(auditRepoDir(root, repo), runFiles()[0]), 'utf8')).events;
+    expect(events.map((e) => e.type)).toEqual(['flow.started', 'loop.cost']);
+    expect(events[1]).toMatchObject({ type: 'loop.cost', iteration: 2, usd: 0.42, unpriced: ['x-unknown'] });
+  });
+
+  it('records nothing for a cost event when no run is open', () => {
+    recorder().recordCost(repo, 1, { usd: 1, unpricedModels: [] });
+    expect(existsSync(auditRepoDir(root, repo))).toBe(false);
+  });
+
   it('re-records the initial loop status after a fresh start (per-run diff resets)', () => {
     const rec = recorder();
     rec.recordTransition(repo, 'start', NOT_STARTED, IN_PROGRESS);

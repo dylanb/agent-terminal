@@ -80,6 +80,8 @@ import { createTurnRunner, decideConsolidateOutcome, type TurnRunner } from './l
 import { composeWorkPrompt, composeSpawnReviewersPrompt, composeConsolidatePrompt } from './loopRecipe';
 import { allReviewsPresent, consolidatedVerdict, consolidatedFindings, personaVerdict, carryForwardReviews, planDigest } from './reviewArtifacts';
 import { findingSignature, nextImpasse } from './findingSignature';
+import { readSessionTokens, sessionLogDir } from './costMeter';
+import { priceTokens, formatCost, type CostResult } from '../shared/pricing';
 import { prunablePersonas, recordCleanPersonas } from './personaSkip';
 import { decideGateOutcome } from './gateActions';
 import { executeGateOutcome } from './gateExecutor';
@@ -398,6 +400,15 @@ async function createWindow(): Promise<void> {
     const digest = planDigest(repoDir);
     return digest === '' ? null : { kind: 'plan', digest };
   };
+  // §26.10 — price the run's accumulated session-log tokens (main session + subagent logs). Best-effort:
+  // any failure degrades to $0 rather than aborting the loop's critical path (CLAUDE.md side-effect rule).
+  const iterationCost = (repoDir: string): CostResult => {
+    try {
+      return priceTokens(readSessionTokens(sessionLogDir(repoDir, process.env, os.homedir())));
+    } catch {
+      return { usd: 0, unpricedModels: [] };
+    }
+  };
   // §26.4/§26.5 — fan the phase's reviewer roster out as parallel subagents, MINUS the personas the skip-opt
   // prunes: a persona clean last iteration with an unchanged plan footprint is dropped and its last-clean
   // review reused (carried forward), so the consolidator still reads a full set. An empty roster means
@@ -476,6 +487,10 @@ async function createWindow(): Promise<void> {
           fp,
         )
       : null;
+    // §26.10 — the display-only cost meter: price the run's accumulated session-log tokens at the iteration
+    // boundary, persist it (strip readout), and record the per-iteration §25 cost event. Best-effort — a
+    // failure here must never abort the loop (CLAUDE.md), so it degrades to $0 and the recorder never throws.
+    const cost = iterationCost(finished.repoDir);
     const s = parseAgentLoopState(finished.repoDir);
     const base = {
       pr: s?.pr ?? null,
@@ -485,9 +500,11 @@ async function createWindow(): Promise<void> {
       // §26.8 — persist the signature run on every consolidate so the next iteration can detect x2.
       impasse: { consecutiveIdentical: impasse.consecutiveIdentical, lastFindingsSig: impasse.lastFindingsSig },
       ...(personaState ? { personaState } : {}),
+      cost,
     };
     if (outcome.kind === 'gate') {
       writeLoopState(finished.repoDir, { ...base, status: outcome.status, iteration: finished.iteration });
+      audit.recordCost(finished.repoDir, finished.iteration, cost);
       pushFlowChanged();
       return;
     }
@@ -496,6 +513,7 @@ async function createWindow(): Promise<void> {
       status: phase?.entryStatus ?? s?.status ?? '',
       iteration: outcome.nextIteration,
     });
+    audit.recordCost(finished.repoDir, finished.iteration, cost);
     pushFlowChanged();
     clearContext();
     startWorkTurn(finished.repoDir, finished.loopName, finished.phase);
@@ -553,6 +571,12 @@ async function createWindow(): Promise<void> {
     onEnterStep: (step, inputs) => flowEntryActions(step, inputs),
     readLoopState: (repoKey) => parseAgentLoopState(repoKey),
     readLoopDef: (repoKey, name) => parseLoopDef(repoKey, name),
+    // §26.10 — the display-only cost readout for the strip: format the last-recorded cost from the
+    // orchestrator-owned extension (loopStateReader), or null before any iteration recorded one.
+    readLoopCost: (repoKey) => {
+      const c = readLoopExtension(repoKey).cost;
+      return c ? formatCost(c) : null;
+    },
   });
 
   // §24.2.3 T7 — resolve a ticket/PR's title/body/url for the popout, best-effort via `gh`, cached.
