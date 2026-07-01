@@ -295,8 +295,10 @@ export function createFlowMachine(
     loop: AgentLoopState | null,
     gates: { ticketStepEntered: boolean; prStepEntered: boolean; loopEntered: boolean },
   ): FlowRefs | undefined => {
-    const ticket = (gates.ticketStepEntered ? numericInput(ticketInput?.name) : undefined) ?? (gates.loopEntered ? loop?.linkedIssues[0] : undefined);
-    const pr = (gates.prStepEntered ? numericInput(prInput?.name) : undefined) ?? (gates.loopEntered ? (loop?.pr ?? undefined) : undefined);
+    const ticketFromInput = gates.ticketStepEntered ? numericInput(ticketInput?.name) : undefined;
+    const prFromInput = gates.prStepEntered ? numericInput(prInput?.name) : undefined;
+    const ticket = ticketFromInput ?? (gates.loopEntered ? loop?.linkedIssues[0] : undefined);
+    const pr = prFromInput ?? (gates.loopEntered ? (loop?.pr ?? undefined) : undefined);
     const refs: FlowRefs = {};
     if (typeof ticket === 'number') refs.ticket = ticket;
     if (typeof pr === 'number') refs.pr = pr;
