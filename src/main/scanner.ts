@@ -95,9 +95,8 @@ function normalize(text: string): string {
   return text.trim().replace(/\s+/g, ' ');
 }
 
-/** Claude Code's end-of-turn "※ recap:" line — the agent's one-line turn summary (toggled by its
- *  own /config), printed below the real output. It is a meta-summary, not the latest report, so
- *  on-demand capture (§21.1) skips it the way it skips an echoed command line. */
+/** Claude Code's end-of-turn "※ recap:" line — its one-line turn summary (toggled by the agent's
+ *  own /config), printed below the real output: a meta-summary, not the latest report (§21.1). */
 const RECAP_LINE = /^※\s*recap:/i;
 
 /** Coordinate-free dedup key so a region survives scrollback trim (§15.3). */

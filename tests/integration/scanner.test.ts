@@ -790,6 +790,22 @@ describe('manual capture on demand (§21.1 — captureLast, dormant auto-scan)',
     expect(result!.report.text).not.toContain('recap');
   });
 
+  it('skips a "※ recap:" line even when the source row is indented (§21.1)', async () => {
+    // Region text is trimmed at build, so the start-anchored /^※/ matches a recap whose source
+    // row carries leading whitespace — the raw-text predicate needs no whitespace normalization.
+    const scanner = dormant([createClaudeCodeAdapter()], createGenericAdapter());
+    shadow.write(
+      'FINAL CONCLUSION: the auth flow is solid and well covered before merge.\r\n' +
+        '⏺ Bash(npm test)\r\n' +
+        '    ※ recap: tightened the deny list and pinned the branch before merge.\r\n',
+    );
+    await sleep(50);
+    const result = scanner.captureLast();
+    expect(result).not.toBeNull();
+    expect(result!.report.text).toContain('FINAL CONCLUSION');
+    expect(result!.report.text).not.toContain('recap');
+  });
+
   it('returns null when the only report candidate is a "※ recap:" line (§21.1)', async () => {
     const scanner = dormant([], createGenericAdapter());
     shadow.write('※ recap: analyzed the PR and tightened the deny list before merge.\r\n');
