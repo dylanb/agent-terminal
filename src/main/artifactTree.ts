@@ -126,7 +126,7 @@ export interface WarmDeps {
 // retried no more often than WARM_RETRY_MS. This bounds the credential-bearing spawn on the per-burst
 // warm path (a git checkout produces no cwd change — §20.1) while still picking up a PR opened, or
 // connectivity restored, mid-session — the guarantee a plain once-per-session guard would drop.
-const WARM_RETRY_MS = 30_000;
+export const WARM_RETRY_MS = 30_000;
 const warmedKeys = new Set<string>();
 const lastWarmAttempt = new Map<string, number>();
 

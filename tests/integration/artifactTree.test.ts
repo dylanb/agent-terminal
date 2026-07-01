@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { discover, readArtifact, emptyTree, pathWithin, warmBaseRef } from '../../src/main/artifactTree';
+import { discover, readArtifact, emptyTree, pathWithin, warmBaseRef, WARM_RETRY_MS } from '../../src/main/artifactTree';
 import type { ArtifactNode } from '../../src/shared/ipc';
 
 // The path-escape guard (§20.2).
@@ -231,8 +231,9 @@ describe('artifact discovery (§20.1 / D8 — real git)', () => {
     expect(findFile(discover(repo, 'curated').nodes, 'src/feature.ts')?.provenance).toContain('pr');
   });
 
-  // The credential-bearing gh lookup fires at most once per (root, branch) — a repeat warm (e.g. from
-  // every watch burst after a checkout) must not re-spawn it.
+  // A RESOLVED gh base is fetched at most once per (root, branch) — a repeat warm (e.g. from every watch
+  // burst after a checkout) must not re-spawn it. (An unresolved attempt is retried under the throttle —
+  // see the retry test below.)
   it('warmBaseRef resolves the gh base at most once per branch (no repeat spawn)', async () => {
     git(['branch', '-M', 'main'], repo);
     git(['checkout', '-q', '-b', 'feature'], repo);
@@ -275,8 +276,9 @@ describe('artifact discovery (§20.1 / D8 — real git)', () => {
   });
 
   // A resolved base is deduped for the session, but an UNRESOLVED attempt (no PR yet / gh offline) must
-  // be retried — throttled — so a PR opened or connectivity restored mid-session is still picked up.
-  it('warmBaseRef retries an unresolved branch after the throttle window, then dedups once resolved', async () => {
+  // be retried — throttled to the WARM_RETRY_MS boundary — so a PR opened or connectivity restored
+  // mid-session is still picked up.
+  it('warmBaseRef retries an unresolved branch at the throttle boundary, then dedups once resolved', async () => {
     git(['branch', '-M', 'main'], repo);
     git(['checkout', '-q', '-b', 'feature'], repo);
     writeFileSync(join(repo, 'src', 'feature.ts'), 'export const f = 1;\n');
@@ -287,13 +289,15 @@ describe('artifact discovery (§20.1 / D8 — real git)', () => {
     // No PR at first (null); once a PR is opened the lookup resolves to 'main'.
     const prBaseName = async (): Promise<string | null> => { calls++; return calls >= 3 ? 'main' : null; };
     const now = (): number => t;
-    await warmBaseRef(repo, { git, prBaseName, now }); // attempt 1: no PR
-    await warmBaseRef(repo, { git, prBaseName, now }); // within throttle → no gh spawn
+    await warmBaseRef(repo, { git, prBaseName, now }); // attempt 1: no PR, records the attempt time
     expect(calls).toBe(1);
-    t += 60_000;
-    await warmBaseRef(repo, { git, prBaseName, now }); // throttle elapsed → attempt 2: still no PR
+    t += WARM_RETRY_MS - 1; // just inside the window
+    await warmBaseRef(repo, { git, prBaseName, now }); // still throttled → no spawn
+    expect(calls).toBe(1);
+    t += 1; // exactly at the window (delta === WARM_RETRY_MS; the `<` boundary lets it through)
+    await warmBaseRef(repo, { git, prBaseName, now }); // attempt 2: retries, still no PR
     expect(calls).toBe(2);
-    t += 60_000;
+    t += WARM_RETRY_MS;
     await warmBaseRef(repo, { git, prBaseName, now }); // attempt 3: PR now resolves
     expect(calls).toBe(3);
     await warmBaseRef(repo, { git, prBaseName, now }); // resolved → deduped, no further spawn
