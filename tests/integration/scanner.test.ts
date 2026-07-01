@@ -792,19 +792,31 @@ describe('manual capture on demand (§21.1 — captureLast, dormant auto-scan)',
 
   it('skips a "※ recap:" region whose first row is indented (§21.1)', async () => {
     // A region's first-line indent is stripped when its text is built, so the start-anchored
-    // /^※/ still matches — the raw-text predicate needs no whitespace normalization. (Skip the
-    // filter and this indented recap wins selection instead of being dropped.)
-    const scanner = dormant([], createGenericAdapter());
+    // /^※/ still matches — the adapter's meta-summary predicate needs no whitespace normalization.
+    // (Skip the filter and this indented recap wins selection instead of being dropped.)
+    const scanner = dormant([createClaudeCodeAdapter()], createGenericAdapter());
     shadow.write('    ※ recap: tightened the deny list and pinned the branch before you merge this.\r\n');
     await sleep(50);
     expect(scanner.captureLast()).toBeNull();
   });
 
   it('returns null when the only report candidate is a "※ recap:" line (§21.1)', async () => {
-    const scanner = dormant([], createGenericAdapter());
+    const scanner = dormant([createClaudeCodeAdapter()], createGenericAdapter());
     shadow.write('※ recap: analyzed the PR and tightened the deny list before merge.\r\n');
     await sleep(50);
     expect(scanner.captureLast()).toBeNull();
+  });
+
+  it('captures a "※ recap:" region as a report when no Claude Code adapter is active (§21.1/§15.3)', async () => {
+    // Per-agent marker knowledge lives in the agent's classifier, not the agnostic scanner core
+    // (§15.3): with no Claude adapter wired, nothing recognizes "※ recap:" as a meta-summary, so
+    // the line is an ordinary report and wins selection.
+    const scanner = dormant([], createGenericAdapter());
+    shadow.write('※ recap: analyzed the PR and tightened the deny list before merge.\r\n');
+    await sleep(50);
+    const result = scanner.captureLast();
+    expect(result).not.toBeNull();
+    expect(result!.report.text).toContain('recap');
   });
 
   it('keeps a report whose first line is "recap:" but lacks the ※ mark (§21.1)', async () => {

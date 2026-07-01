@@ -46,4 +46,8 @@ export interface Adapter {
   id: string;
   /** Every classifier runs, then the baseline runs, every scan — no fingerprint/selection (§15.3). */
   detect(ctx: AdapterContext): DetectedRegion[];
+  /** True when `text` is one of this agent's end-of-turn meta-summaries — a turn recap printed
+   *  below the real output, not the latest report — so on-demand capture skips it as a selection
+   *  candidate (§21.1). Absent ⇒ this agent emits no such lines. */
+  isMetaSummary?(text: string): boolean;
 }

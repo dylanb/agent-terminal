@@ -95,10 +95,6 @@ function normalize(text: string): string {
   return text.trim().replace(/\s+/g, ' ');
 }
 
-/** Claude Code's end-of-turn "※ recap:" line — its one-line turn summary (toggled by the agent's
- *  own /config), printed below the real output: a meta-summary, not the latest report (§21.1). */
-const RECAP_LINE = /^※\s*recap:/i;
-
 /** Coordinate-free dedup key so a region survives scrollback trim (§15.3). */
 function dedupKey(type: MonitorEventType, norm: string): string {
   // `::` cannot collide: MonitorEventType is a fixed kebab-case enum with no colons.
@@ -445,9 +441,13 @@ export function createScanner(deps: ScannerDeps): Scanner {
         return prefix === '' || /[$#%>❯›»]\s*$/.test(prefix);
       });
     };
+    // A classifier recognizes its own agent's end-of-turn meta-summary (e.g. Claude Code's
+    // "※ recap:" line) so it never wins "latest report" selection — the knowledge lives with
+    // the agent's adapter, not this agnostic core (§21.1/§15.3).
+    const isMetaSummary = (text: string): boolean => deps.adapters.some((a) => a.isMetaSummary?.(text) ?? false);
     let region: DetectedRegion | undefined;
     for (const r of allRegions) {
-      if (r.type !== 'report' || isCommandEcho(r.text) || RECAP_LINE.test(r.text)) continue;
+      if (r.type !== 'report' || isCommandEcho(r.text) || isMetaSummary(r.text)) continue;
       if (!region || r.startRow > region.startRow) region = r;
     }
     if (!region) return null;
