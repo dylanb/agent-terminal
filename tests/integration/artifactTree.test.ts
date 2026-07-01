@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { discover, readArtifact, emptyTree, pathWithin } from '../../src/main/artifactTree';
+import { discover, readArtifact, emptyTree, pathWithin, warmBaseRef } from '../../src/main/artifactTree';
 import type { ArtifactNode } from '../../src/shared/ipc';
 
 // The path-escape guard (§20.2).
@@ -173,6 +173,62 @@ describe('artifact discovery (§20.1 / D8 — real git)', () => {
     // a.ts committed as one line; append two → vs HEAD lines 2,3 are new.
     writeFileSync(join(repo, 'src', 'a.ts'), 'export const x = 1;\nexport const y = 2;\nexport const z = 3;\n');
     expect(readArtifact(repo, 'src/a.ts', { baseRef: () => null })?.changedLines).toEqual([2, 3]);
+  });
+
+  // §20.1: the synchronous discovery path resolves the base from LOCAL refs only (never a network
+  // call) — origin/HEAD, else a conventional default — so the main thread never blocks on gh.
+  it('the synchronous base resolves from origin/HEAD without any network call', () => {
+    git(['branch', '-M', 'main'], repo);
+    const head = git(['rev-parse', 'HEAD'], repo).trim();
+    git(['update-ref', 'refs/remotes/origin/main', head], repo);
+    git(['symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/main'], repo);
+    git(['checkout', '-q', '-b', 'feature'], repo);
+    writeFileSync(join(repo, 'src', 'feature.ts'), 'export const f = 1;\n');
+    git(['add', 'src/feature.ts'], repo);
+    git(['commit', '-q', '-m', 'feat'], repo);
+    // No baseRef injected, no gh reachable in a temp repo → base is origin/main via the symbolic-ref.
+    expect(findFile(discover(repo, 'curated').nodes, 'src/feature.ts')?.provenance).toContain('pr');
+  });
+
+  // §20.1: the real PR base (which may target a non-default branch) is refined off the synchronous
+  // path by warmBaseRef; it re-points the memoized base and signals when the tree must re-pull.
+  it('warmBaseRef refines the base to the real gh PR base, dropping default-branch files from the tree', async () => {
+    git(['branch', '-M', 'main'], repo); // default branch = main
+    git(['checkout', '-q', '-b', 'develop'], repo); // develop adds onlydev.ts over main
+    writeFileSync(join(repo, 'src', 'onlydev.ts'), 'export const d = 1;\n');
+    git(['add', 'src/onlydev.ts'], repo);
+    git(['commit', '-q', '-m', 'dev'], repo);
+    git(['checkout', '-q', '-b', 'feature'], repo); // feature branches from develop
+    writeFileSync(join(repo, 'src', 'feature.ts'), 'export const f = 1;\n');
+    git(['add', 'src/feature.ts'], repo);
+    git(['commit', '-q', '-m', 'feat'], repo);
+    // Sync path resolves the local default (main), so onlydev.ts looks like part of the PR (it isn't).
+    expect(findFile(discover(repo, 'curated').nodes, 'src/onlydev.ts')?.provenance).toContain('pr');
+    // The real PR base is develop; warming with it corrects the tree and signals the change.
+    expect(await warmBaseRef(repo, { git, prBaseName: async () => 'develop' })).toBe(true);
+    expect(findFile(discover(repo, 'curated').nodes, 'src/onlydev.ts')?.provenance).toBeUndefined();
+    expect(findFile(discover(repo, 'curated').nodes, 'src/feature.ts')?.provenance).toContain('pr');
+  });
+
+  it('warmBaseRef reports no change when the gh base already matches the local base', async () => {
+    git(['branch', '-M', 'main'], repo);
+    git(['checkout', '-q', '-b', 'feature'], repo);
+    writeFileSync(join(repo, 'src', 'feature.ts'), 'export const f = 1;\n');
+    git(['add', 'src/feature.ts'], repo);
+    git(['commit', '-q', '-m', 'feat'], repo);
+    discover(repo, 'curated'); // resolves + caches the local base 'main'
+    expect(await warmBaseRef(repo, { git, prBaseName: async () => 'main' })).toBe(false);
+  });
+
+  it('warmBaseRef never caches a failed gh lookup — the local base still resolves afterward', async () => {
+    git(['branch', '-M', 'main'], repo);
+    git(['checkout', '-q', '-b', 'feature'], repo);
+    writeFileSync(join(repo, 'src', 'feature.ts'), 'export const f = 1;\n');
+    git(['add', 'src/feature.ts'], repo);
+    git(['commit', '-q', '-m', 'feat'], repo);
+    expect(await warmBaseRef(repo, { git, prBaseName: async () => { throw new Error('offline'); } })).toBe(false);
+    // The transient failure left no cached base → the synchronous path still resolves 'main'.
+    expect(findFile(discover(repo, 'curated').nodes, 'src/feature.ts')?.provenance).toContain('pr');
   });
 
   it('repo scope = every tracked + untracked file, built hierarchically', () => {

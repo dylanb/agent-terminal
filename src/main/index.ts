@@ -76,7 +76,7 @@ import { parseAgentLoopState, watchAgentLoopState } from './agentLoopBridge';
 import { createLoopNotifier } from './loopNotifier';
 import { parseLoopDef } from './loopDef';
 import { listTodoTemplates, loadTodoTemplateFile, parseTodoTemplate } from './todoTemplate';
-import { discover, readArtifact, emptyTree } from './artifactTree';
+import { discover, readArtifact, emptyTree, warmBaseRef, createBaseWarmer, gitRootOf } from './artifactTree';
 import { watchViewerTree, viewerRoot } from './viewerWatch';
 import { createChromeProfileStore } from './chromeProfile';
 import { learnMarkers } from './chrome';
@@ -192,10 +192,20 @@ async function createWindow(): Promise<void> {
   // cwd move — the tree root follows the shell like discovery does.
   const pushViewerChanged = (): void => send(CH.viewerOnChanged, { sessionId: SESSION_ID });
   let stopViewerWatch = watchViewerTree(viewerRoot(viewerCwd()), pushViewerChanged);
+  // §20.1: discovery resolves the base from local refs synchronously; the real gh PR base is refined
+  // off-thread here and re-pulls the viewer when it differs. TODO(dylan): the gh-driven refresh is
+  // unprovokable in e2e (no live PR in CI) — warmBaseRef + createBaseWarmer are unit-covered; recorded gap.
+  const warmBase = createBaseWarmer({
+    root: () => gitRootOf(viewerCwd()),
+    warm: (root) => warmBaseRef(root),
+    onChanged: pushViewerChanged,
+  });
+  void warmBase();
   cwdTracker.onChange(({ cwd, repoKey }) => {
     send(CH.cwdChanged, { sessionId: SESSION_ID, cwd, repoKey });
     stopViewerWatch();
     stopViewerWatch = watchViewerTree(viewerRoot(cwd), pushViewerChanged);
+    void warmBase();
   });
   // Drops echoed self-injected input from re-capture (§16.5).
   // TODO(dylan): the watermark→reply row separation and selfInjectWindowMs default

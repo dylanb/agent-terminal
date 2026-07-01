@@ -1,9 +1,10 @@
 // Artifact discovery (§20.1 / D8): the session's cwd as the viewer's file tree.
-// TODO(agent-loop bridge, §24.2): PR provenance tag + LoopDef `artifacts:` declarations.
+// TODO(agent-loop bridge, §24.2): LoopDef `artifacts:` declarations.
 
-import { execFileSync } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
 import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from 'node:fs';
 import path from 'node:path';
+import { promisify } from 'node:util';
 import type {
   ArtifactNode,
   ArtifactProvenance,
@@ -47,37 +48,54 @@ function defaultGit(args: string[], cwd: string): string {
   return execFileSync('git', args, { cwd, encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 });
 }
 
-function defaultGh(args: string[], cwd: string): string {
-  // Synchronous on the main thread: bound the GitHub round-trip so a slow API can't stall the first
-  // discover per branch (timeout → throw → the caller's default-branch fallback). stderr ignored: a
-  // missing gh / no-PR / offline branch is an expected miss handled by falling back, not a fault.
-  return execFileSync('gh', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 3000, maxBuffer: 4 * 1024 * 1024 });
+const execFileAsync = promisify(execFile);
+
+/** The current branch's PR base branch name from GitHub, or null when there is no PR / gh is
+ *  unavailable. Async so the network round-trip is never on the synchronous discovery path (§20.1). */
+async function defaultPrBaseName(root: string): Promise<string | null> {
+  try {
+    const { stdout } = await execFileAsync('gh', ['pr', 'view', '--json', 'baseRefName', '-q', '.baseRefName'], {
+      cwd: root,
+      encoding: 'utf8',
+      timeout: 5000,
+      maxBuffer: 4 * 1024 * 1024,
+    });
+    return stdout.trim() || null;
+  } catch {
+    return null;
+  }
 }
 
+// --end-of-options: a base ref is repo/remote-controlled data, so it is passed as a ref, never parsed
+// as a git switch even if it begins with `-` (CLAUDE.md: untrusted data crosses a boundary as data,
+// not syntax; CWE-88).
 function refExists(ref: string, root: string, git: (args: string[], cwd: string) => string): boolean {
   try {
-    git(['rev-parse', '--verify', '--quiet', `${ref}^{commit}`], root);
+    git(['rev-parse', '--verify', '--quiet', '--end-of-options', `${ref}^{commit}`], root);
     return true;
   } catch {
     return false;
   }
 }
 
-// gh queries the GitHub API to find the branch's PR — one network round-trip. Memoized per
-// (root, branch) so the viewer's watch-driven re-pulls (§20.1) don't re-query on every burst; a
-// process-lifetime cache is acceptable since a PR's base rarely changes under an open branch.
+// Memoized per (root, branch) so the viewer's watch-driven re-pulls (§20.1) don't re-resolve on every
+// burst. The synchronous path fills it with the LOCAL base (never a network call); warmBaseRef refines
+// it to the real gh PR base off-thread.
 const baseRefMemo = new Map<string, string | null>();
 
-function resolveBaseRef(root: string, git: (args: string[], cwd: string) => string): string | null {
+function branchKey(root: string, git: (args: string[], cwd: string) => string): string {
+  let branch = '';
   try {
-    const base = defaultGh(['pr', 'view', '--json', 'baseRefName', '-q', '.baseRefName'], root).trim();
-    if (base) {
-      if (refExists(`origin/${base}`, root, git)) return `origin/${base}`;
-      if (refExists(base, root, git)) return base;
-    }
+    branch = git(['rev-parse', '--abbrev-ref', 'HEAD'], root).trim();
   } catch {
-    // no gh / no PR for this branch / offline → fall back to the repo default branch.
+    // detached HEAD / no commits — resolve unkeyed by branch.
   }
+  return `${root}${NUL}${branch}`;
+}
+
+/** The base ref inferred from local refs alone — the repo's remote default branch (origin/HEAD), else a
+ *  conventional local default. Never a network call, so it can run on the synchronous discovery path. */
+function localBaseRef(root: string, git: (args: string[], cwd: string) => string): string | null {
   try {
     const head = git(['symbolic-ref', '--quiet', 'refs/remotes/origin/HEAD'], root).trim();
     if (head) return head.replace(/^refs\/remotes\//, ''); // refs/remotes/origin/main → origin/main
@@ -89,24 +107,67 @@ function resolveBaseRef(root: string, git: (args: string[], cwd: string) => stri
 }
 
 function defaultBaseRef(root: string, git: (args: string[], cwd: string) => string): string | null {
-  let branch = '';
-  try {
-    branch = git(['rev-parse', '--abbrev-ref', 'HEAD'], root).trim();
-  } catch {
-    // detached HEAD / no commits — resolve unkeyed by branch.
-  }
-  const key = `${root}${NUL}${branch}`;
+  const key = branchKey(root, git);
   const cached = baseRefMemo.get(key);
   if (cached !== undefined) return cached;
-  const resolved = resolveBaseRef(root, git);
+  const resolved = localBaseRef(root, git);
   baseRefMemo.set(key, resolved);
   return resolved;
+}
+
+export interface WarmDeps {
+  git?: (args: string[], cwd: string) => string;
+  /** The branch's PR base branch name from GitHub (§20.1), or null when there's no PR / it's unavailable. */
+  prBaseName?: (root: string) => Promise<string | null>;
+}
+
+/** Refine the memoized base for `root`'s current branch to the real gh-resolved PR base, off the
+ *  synchronous discovery path (§20.1). Returns true when the base changed from what the sync path
+ *  resolved (the caller re-pulls the viewer). A failed/absent gh lookup leaves the local base intact —
+ *  it never caches a failure, so a later warm can still resolve the real base. */
+export async function warmBaseRef(root: string, deps: WarmDeps = {}): Promise<boolean> {
+  const git = deps.git ?? defaultGit;
+  const fetchBase = deps.prBaseName ?? defaultPrBaseName;
+  let name: string | null = null;
+  try {
+    name = (await fetchBase(root))?.trim() || null;
+  } catch {
+    name = null;
+  }
+  if (!name) return false;
+  let ghBase: string | null = null;
+  if (refExists(`origin/${name}`, root, git)) ghBase = `origin/${name}`;
+  else if (refExists(name, root, git)) ghBase = name;
+  if (!ghBase) return false;
+  const key = branchKey(root, git);
+  const current = baseRefMemo.has(key) ? baseRefMemo.get(key)! : localBaseRef(root, git);
+  baseRefMemo.set(key, ghBase);
+  return ghBase !== current;
+}
+
+/** Wire base-warming to a cwd/branch change (§20.1): resolve the current root, warm its base off the
+ *  synchronous path, and fire `onChanged` only when the real PR base differs from the local one.
+ *  Best-effort — a warm that throws is swallowed so it can never abort the caller. */
+export function createBaseWarmer(deps: {
+  root: () => string | null;
+  warm: (root: string) => Promise<boolean>;
+  onChanged: () => void;
+}): () => Promise<void> {
+  return async () => {
+    const root = deps.root();
+    if (!root) return;
+    try {
+      if (await deps.warm(root)) deps.onChanged();
+    } catch {
+      // best-effort: a failed warm never propagates into the caller.
+    }
+  };
 }
 
 /** The merge-base of `baseRef` and HEAD — the branch point the PR is diffed against — or null. */
 function mergeBaseOf(baseRef: string, root: string, git: (args: string[], cwd: string) => string): string | null {
   try {
-    const mb = git(['merge-base', baseRef, 'HEAD'], root).trim();
+    const mb = git(['merge-base', '--end-of-options', baseRef, 'HEAD'], root).trim();
     return mb || null;
   } catch {
     return null;
