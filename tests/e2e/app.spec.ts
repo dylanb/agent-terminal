@@ -1168,6 +1168,42 @@ test('the code viewer marks changed lines with a gutter stripe and a line tint (
   await expect(body.locator('.cm-changedGutter')).toHaveCount(1);
 });
 
+test('curated tree is the superset: committed-in-PR files show tagged PR with base-relative changed lines (§20.1/§20.2)', async () => {
+  // On a feature branch off main: feature.ts is COMMITTED (nothing uncommitted) yet must appear in the
+  // curated tree tagged PR, and its lines must mark as changed relative to the PR base — not vs HEAD,
+  // where a committed file reads as clean. The base resolves via the local-main fallback (no gh/PR).
+  const dir = '/tmp/agent-term-e2e-prtree';
+  await typeCommand(
+    `rm -rf "${dir}" && mkdir -p "${dir}/src" && cd "${dir}" && git init -q && git branch -M main && ` +
+      `git config user.email t@t && git config user.name T && ` +
+      `printf 'export const BASE = 1;\\n' > src/app.ts && ` +
+      `git add -A && git commit -qm init && ` +
+      `git checkout -q -b feature && ` +
+      `printf 'export const FEATURE = 1;\\nexport const MORE = 2;\\n' > src/feature.ts && ` +
+      `git add src/feature.ts && git commit -qm feat && ` +
+      `printf 'export const WORKING = 9;\\n' >> src/app.ts && pwd`,
+  );
+  await expect(page.locator('.xterm-rows > div').filter({ hasText: new RegExp(`^\\s*${dir}\\s*$`) })).not.toHaveCount(0);
+  await expect(page.locator('.status-chip[data-status="agent"]')).toContainText('quiet', { timeout: 6_000 });
+
+  await page.keyboard.press('Control+2');
+  await expect(page.locator('[data-viewpane="2"]')).toBeVisible();
+  const tree = page.locator('#artifacts .tree');
+
+  // feature.ts is committed on the branch (clean working tree) but present + tagged PR (§20.1).
+  const featureRow = tree.locator('.f').filter({ hasText: 'feature.ts' });
+  await expect(featureRow).toHaveCount(1);
+  await expect(featureRow).toContainText('PR');
+  // app.ts is committed on the base and only edited in the working tree → changed, not PR.
+  await expect(tree.locator('.f').filter({ hasText: 'app.ts' })).toContainText('changed');
+
+  // The committed-in-PR file's lines mark as changed vs the base — both lines of the new file (§20.2).
+  await featureRow.click();
+  const body = page.locator('#artifacts .vbody');
+  await expect(body.locator('.cm-editor')).toContainText('FEATURE');
+  await expect(body.locator('.cm-changedLine')).toHaveCount(2);
+});
+
 test('the viewer gates the sinks on a selection and steps through changed sections (§20.2)', async () => {
   // Two far-apart edits (lines 2 and 180) in a 200-line file: change 2 is off-screen at open, so the
   // readout/controls must follow the viewport, not a static index (§20.2).

@@ -18,6 +18,11 @@ export interface DiscoverDeps {
   git?: (args: string[], cwd: string) => string;
   /** List files (tree-relative) under a non-repo dir; defaults to a bounded recursive walk. */
   listDir?: (dir: string) => string[];
+  /** The PR base branch to diff this branch against (§20.1) — e.g. `origin/main`; null when no base
+   *  resolves. The merge-base of this ref with HEAD is what the branch is diffed against for the `pr`
+   *  provenance and the viewer's changed lines. Defaults to the real PR base via `gh`, falling back to
+   *  the repo's default branch so the superset still works pre-PR / offline. */
+  baseRef?: (root: string, git: (args: string[], cwd: string) => string) => string | null;
 }
 
 const MAX_FILE_BYTES = 512 * 1024;
@@ -40,6 +45,82 @@ const LANG_BY_EXT: Record<string, string> = {
 
 function defaultGit(args: string[], cwd: string): string {
   return execFileSync('git', args, { cwd, encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 });
+}
+
+function defaultGh(args: string[], cwd: string): string {
+  // Synchronous on the main thread: bound the GitHub round-trip so a slow API can't stall the first
+  // discover per branch (timeout → throw → the caller's default-branch fallback). stderr ignored: a
+  // missing gh / no-PR / offline branch is an expected miss handled by falling back, not a fault.
+  return execFileSync('gh', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 3000, maxBuffer: 4 * 1024 * 1024 });
+}
+
+function refExists(ref: string, root: string, git: (args: string[], cwd: string) => string): boolean {
+  try {
+    git(['rev-parse', '--verify', '--quiet', `${ref}^{commit}`], root);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// gh queries the GitHub API to find the branch's PR — one network round-trip. Memoized per
+// (root, branch) so the viewer's watch-driven re-pulls (§20.1) don't re-query on every burst; a
+// process-lifetime cache is acceptable since a PR's base rarely changes under an open branch.
+const baseRefMemo = new Map<string, string | null>();
+
+function resolveBaseRef(root: string, git: (args: string[], cwd: string) => string): string | null {
+  try {
+    const base = defaultGh(['pr', 'view', '--json', 'baseRefName', '-q', '.baseRefName'], root).trim();
+    if (base) {
+      if (refExists(`origin/${base}`, root, git)) return `origin/${base}`;
+      if (refExists(base, root, git)) return base;
+    }
+  } catch {
+    // no gh / no PR for this branch / offline → fall back to the repo default branch.
+  }
+  try {
+    const head = git(['symbolic-ref', '--quiet', 'refs/remotes/origin/HEAD'], root).trim();
+    if (head) return head.replace(/^refs\/remotes\//, ''); // refs/remotes/origin/main → origin/main
+  } catch {
+    // origin/HEAD unset → try a conventional local default.
+  }
+  for (const cand of ['main', 'master']) if (refExists(cand, root, git)) return cand;
+  return null;
+}
+
+function defaultBaseRef(root: string, git: (args: string[], cwd: string) => string): string | null {
+  let branch = '';
+  try {
+    branch = git(['rev-parse', '--abbrev-ref', 'HEAD'], root).trim();
+  } catch {
+    // detached HEAD / no commits — resolve unkeyed by branch.
+  }
+  const key = `${root}${NUL}${branch}`;
+  const cached = baseRefMemo.get(key);
+  if (cached !== undefined) return cached;
+  const resolved = resolveBaseRef(root, git);
+  baseRefMemo.set(key, resolved);
+  return resolved;
+}
+
+/** The merge-base of `baseRef` and HEAD — the branch point the PR is diffed against — or null. */
+function mergeBaseOf(baseRef: string, root: string, git: (args: string[], cwd: string) => string): string | null {
+  try {
+    const mb = git(['merge-base', baseRef, 'HEAD'], root).trim();
+    return mb || null;
+  } catch {
+    return null;
+  }
+}
+
+/** Files committed on this branch since `mergeBase` (existing on HEAD — deletions excluded). */
+function prFiles(root: string, mergeBase: string, git: (args: string[], cwd: string) => string): Set<string> {
+  try {
+    const out = git(['diff', '--name-only', '-z', '--diff-filter=d', mergeBase, 'HEAD'], root);
+    return new Set(out.split(NUL).filter((p) => p.length > 0));
+  } catch {
+    return new Set();
+  }
 }
 
 /** The git top-level of `cwd` (`path.resolve`d), or null when `cwd` is not in a repo. Shared with the
@@ -150,14 +231,18 @@ export function discover(cwd: string, scope: ArtifactScope, deps: DiscoverDeps =
 
   const changed = changedFiles(root, git);
   const loop = loopFiles(root);
+  const base = (deps.baseRef ?? defaultBaseRef)(root, git);
+  const mergeBase = base ? mergeBaseOf(base, root, git) : null;
+  const pr = mergeBase ? prFiles(root, mergeBase, git) : new Set<string>();
   const provenance = (rel: string): ArtifactProvenance[] | undefined => {
     const tags: ArtifactProvenance[] = [];
     if (changed.has(rel)) tags.push('changed');
+    if (pr.has(rel)) tags.push('pr');
     if (loop.has(rel)) tags.push('loop');
     return tags.length ? tags : undefined;
   };
 
-  const rels = scope === 'repo' ? trackedFiles(root, git) : [...new Set([...changed, ...loop])];
+  const rels = scope === 'repo' ? trackedFiles(root, git) : [...new Set([...changed, ...pr, ...loop])];
 
   return { root, isRepo: true, scope, nodes: buildTree(rels, provenance) };
 }
@@ -175,22 +260,23 @@ function addedLinesFromDiff(diff: string): number[] {
   return lines;
 }
 
-/** Lines in `rel`'s working-tree copy that differ from HEAD — added or modified, never deletions (§20.2). */
-function changedLinesOf(root: string, rel: string, body: string, git: (args: string[], cwd: string) => string): number[] {
+/** Lines in `rel`'s working-tree copy that differ from `baseline` (the PR merge-base, else HEAD) —
+ *  added or modified, never deletions (§20.2). Diffing the working tree against the merge-base is the
+ *  superset: it marks both committed-in-PR and uncommitted lines in one pass. */
+function changedLinesOf(root: string, rel: string, body: string, git: (args: string[], cwd: string) => string, baseline: string): number[] {
   let status: string;
   try {
     status = git(['status', '--porcelain', '-z', '--', rel], root);
   } catch {
     return [];
   }
-  if (status.length === 0) return [];
   if (status.startsWith('??')) {
-    // Untracked: `git diff HEAD` skips it, so mark every content line as new.
+    // Untracked: `git diff <baseline>` skips it, so mark every content line as new.
     const content = body.endsWith('\n') ? body.slice(0, -1) : body;
     return content === '' ? [] : content.split('\n').map((_, i) => i + 1);
   }
   try {
-    return addedLinesFromDiff(git(['diff', '--no-color', '-U0', 'HEAD', '--', rel], root));
+    return addedLinesFromDiff(git(['diff', '--no-color', '-U0', baseline, '--', rel], root));
   } catch {
     return [];
   }
@@ -229,7 +315,9 @@ export function readArtifact(cwd: string, relPath: string, deps: DiscoverDeps = 
     const rel = relPath.split(path.sep).join('/');
     const file: ViewerFile = { relPath: rel, name: path.basename(abs), kind, lang: LANG_BY_EXT[ext], body };
     if (gitRoot && kind === 'code') {
-      const changed = changedLinesOf(gitRoot, rel, body, git);
+      const base = (deps.baseRef ?? defaultBaseRef)(gitRoot, git);
+      const mergeBase = base ? mergeBaseOf(base, gitRoot, git) : null;
+      const changed = changedLinesOf(gitRoot, rel, body, git, mergeBase ?? 'HEAD');
       if (changed.length) file.changedLines = changed;
     }
     return file;

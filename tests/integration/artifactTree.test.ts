@@ -102,6 +102,79 @@ describe('artifact discovery (§20.1 / D8 — real git)', () => {
     expect(findFile(tree.nodes, '.agent-loop/plan.md')?.provenance).toContain('loop');
   });
 
+  // §20.1: curated is the SUPERSET — files changed in the working tree (`changed`) ∪ files a branch
+  // commits over its PR base (`pr`) ∪ agent-loop files. `baseRef` names the PR base branch; the merge-
+  // base with HEAD is what the branch is diffed against (injected here so the suite stays offline).
+  it('curated is the superset: committed-but-in-PR files are included and tagged pr', () => {
+    const base = git(['rev-parse', '--abbrev-ref', 'HEAD'], repo).trim();
+    git(['checkout', '-q', '-b', 'feature'], repo);
+    writeFileSync(join(repo, 'src', 'feature.ts'), 'export const f = 1;\n');
+    git(['add', 'src/feature.ts'], repo); // NOT `git add .` — keep committed.md's edit uncommitted
+    git(['commit', '-q', '-m', 'feat: add feature.ts'], repo);
+    // committed.md still carries the uncommitted working-tree edit from beforeEach.
+    const tree = discover(repo, 'curated', { baseRef: () => base });
+    const files = fileRelPaths(tree.nodes);
+    expect(files).toContain('src/feature.ts'); // committed on the branch, absent from the base
+    expect(files).toContain('committed.md'); // uncommitted working-tree edit
+    expect(findFile(tree.nodes, 'src/feature.ts')?.provenance).toContain('pr');
+    expect(findFile(tree.nodes, 'committed.md')?.provenance).toContain('changed');
+  });
+
+  it('a file both committed-in-PR and further edited carries both pr and changed', () => {
+    const base = git(['rev-parse', '--abbrev-ref', 'HEAD'], repo).trim();
+    git(['checkout', '-q', '-b', 'feature'], repo);
+    writeFileSync(join(repo, 'src', 'a.ts'), 'export const x = 1;\nexport const y = 2;\n');
+    git(['add', '.'], repo);
+    git(['commit', '-q', '-m', 'add y'], repo);
+    writeFileSync(join(repo, 'src', 'a.ts'), 'export const x = 1;\nexport const y = 2;\nexport const z = 3;\n');
+    const prov = findFile(discover(repo, 'curated', { baseRef: () => base }).nodes, 'src/a.ts')?.provenance ?? [];
+    expect(prov).toEqual(expect.arrayContaining(['pr', 'changed']));
+  });
+
+  it('does not tag base-branch files as pr (only what the branch adds over the merge-base)', () => {
+    const base = git(['rev-parse', '--abbrev-ref', 'HEAD'], repo).trim();
+    git(['checkout', '-q', '-b', 'feature'], repo);
+    writeFileSync(join(repo, 'src', 'feature.ts'), 'export const f = 1;\n');
+    git(['add', '.'], repo);
+    git(['commit', '-q', '-m', 'feat'], repo);
+    // src/a.ts is on the base branch, unchanged on the branch → neither changed nor pr.
+    expect(fileRelPaths(discover(repo, 'curated', { baseRef: () => base }).nodes)).not.toContain('src/a.ts');
+  });
+
+  it('with no resolvable base, curated stays working-tree ∪ loop (no pr tags)', () => {
+    const tree = discover(repo, 'curated', { baseRef: () => null });
+    expect(fileRelPaths(tree.nodes)).not.toContain('src/a.ts');
+    expect(JSON.stringify(tree.nodes)).not.toContain('"pr"');
+  });
+
+  // §20.2: the code viewer's changed lines are relative to the PR base, so a line committed on the
+  // branch highlights even when the working tree is clean vs HEAD.
+  it('changedLines mark lines a committed-in-PR code file adds over the base (not just vs HEAD)', () => {
+    const base = git(['rev-parse', '--abbrev-ref', 'HEAD'], repo).trim();
+    git(['checkout', '-q', '-b', 'feature'], repo);
+    writeFileSync(join(repo, 'src', 'a.ts'), 'export const x = 1;\nexport const y = 2;\n');
+    git(['add', '.'], repo);
+    git(['commit', '-q', '-m', 'add y'], repo);
+    // Clean vs HEAD, but line 2 is new vs the base.
+    expect(readArtifact(repo, 'src/a.ts', { baseRef: () => base })?.changedLines).toEqual([2]);
+  });
+
+  it('changedLines are the superset of committed-in-PR and uncommitted edits', () => {
+    const base = git(['rev-parse', '--abbrev-ref', 'HEAD'], repo).trim();
+    git(['checkout', '-q', '-b', 'feature'], repo);
+    writeFileSync(join(repo, 'src', 'a.ts'), 'export const x = 1;\nexport const y = 2;\n');
+    git(['add', '.'], repo);
+    git(['commit', '-q', '-m', 'add y'], repo);
+    writeFileSync(join(repo, 'src', 'a.ts'), 'export const x = 1;\nexport const y = 2;\nexport const z = 3;\n');
+    expect(readArtifact(repo, 'src/a.ts', { baseRef: () => base })?.changedLines).toEqual([2, 3]);
+  });
+
+  it('with no resolvable base, changedLines fall back to the vs-HEAD working-tree diff', () => {
+    // a.ts committed as one line; append two → vs HEAD lines 2,3 are new.
+    writeFileSync(join(repo, 'src', 'a.ts'), 'export const x = 1;\nexport const y = 2;\nexport const z = 3;\n');
+    expect(readArtifact(repo, 'src/a.ts', { baseRef: () => null })?.changedLines).toEqual([2, 3]);
+  });
+
   it('repo scope = every tracked + untracked file, built hierarchically', () => {
     const tree = discover(repo, 'repo');
     const files = fileRelPaths(tree.nodes);
