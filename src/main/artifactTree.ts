@@ -24,7 +24,7 @@ export interface DiscoverDeps {
    *  provenance and the viewer's changed lines. Defaults to the repo's local default branch
    *  (`origin/HEAD`, else `main`/`master`) — never a network call; the real gh PR base is refined
    *  off-thread by `warmBaseRef`. */
-  baseRef?: (root: string, git: (args: string[], cwd: string) => string) => string | null;
+  baseRef?: (root: string) => string | null;
 }
 
 const MAX_FILE_BYTES = 512 * 1024;
@@ -110,7 +110,7 @@ function defaultBaseRef(root: string, git: (args: string[], cwd: string) => stri
   const cached = baseRefMemo.get(key);
   if (cached !== undefined) return cached;
   const resolved = localBaseRef(root, git);
-  baseRefMemo.set(key, resolved);
+  if (resolved !== null) baseRefMemo.set(key, resolved); // don't cache a miss — re-resolve if a base later appears
   return resolved;
 }
 
@@ -179,6 +179,24 @@ export function createBaseWarmer(deps: {
       // best-effort: a failed warm never propagates into the caller.
     }
   };
+}
+
+/** The viewer-activity handler (§20.1): a watch burst both re-pulls the viewer and warms the base
+ *  off-thread — a `git checkout` produces no cwd change, so its working-tree writes are the branch-switch
+ *  signal. Extracted so the "burst also warms" wiring is covered without driving the non-hermetic gh path. */
+export function createViewerActivityHandler(deps: { pushChanged: () => void; warm: () => Promise<void> }): () => void {
+  return () => {
+    deps.pushChanged();
+    void deps.warm();
+  };
+}
+
+/** Test-only: clear the process-lifetime base-resolution caches so integration tests are isolated
+ *  explicitly, not by temp-dir uniqueness (§20.1). */
+export function __resetBaseRefState(): void {
+  baseRefMemo.clear();
+  warmedKeys.clear();
+  lastWarmAttempt.clear();
 }
 
 /** The merge-base of `baseRef` and HEAD — the branch point the PR is diffed against — or null. */
@@ -309,7 +327,7 @@ export function discover(cwd: string, scope: ArtifactScope, deps: DiscoverDeps =
 
   const changed = changedFiles(root, git);
   const loop = loopFiles(root);
-  const base = (deps.baseRef ?? defaultBaseRef)(root, git);
+  const base = (deps.baseRef ?? ((r: string) => defaultBaseRef(r, git)))(root);
   const mergeBase = base ? mergeBaseOf(base, root, git) : null;
   const pr = mergeBase ? prFiles(root, mergeBase, git) : new Set<string>();
   const provenance = (rel: string): ArtifactProvenance[] | undefined => {
@@ -393,7 +411,7 @@ export function readArtifact(cwd: string, relPath: string, deps: DiscoverDeps = 
     const rel = relPath.split(path.sep).join('/');
     const file: ViewerFile = { relPath: rel, name: path.basename(abs), kind, lang: LANG_BY_EXT[ext], body };
     if (gitRoot && kind === 'code') {
-      const base = (deps.baseRef ?? defaultBaseRef)(gitRoot, git);
+      const base = (deps.baseRef ?? ((r: string) => defaultBaseRef(r, git)))(gitRoot);
       const mergeBase = base ? mergeBaseOf(base, gitRoot, git) : null;
       const changed = changedLinesOf(gitRoot, rel, body, git, mergeBase ?? 'HEAD');
       if (changed.length) file.changedLines = changed;

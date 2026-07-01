@@ -76,7 +76,7 @@ import { parseAgentLoopState, watchAgentLoopState } from './agentLoopBridge';
 import { createLoopNotifier } from './loopNotifier';
 import { parseLoopDef } from './loopDef';
 import { listTodoTemplates, loadTodoTemplateFile, parseTodoTemplate } from './todoTemplate';
-import { discover, readArtifact, emptyTree, warmBaseRef, createBaseWarmer, gitRootOf } from './artifactTree';
+import { discover, readArtifact, emptyTree, warmBaseRef, createBaseWarmer, createViewerActivityHandler, gitRootOf } from './artifactTree';
 import { watchViewerTree, viewerRoot } from './viewerWatch';
 import { createChromeProfileStore } from './chromeProfile';
 import { learnMarkers } from './chrome';
@@ -202,10 +202,7 @@ async function createWindow(): Promise<void> {
     warm: (root) => warmBaseRef(root),
     onChanged: pushViewerChanged,
   });
-  const onViewerActivity = (): void => {
-    pushViewerChanged();
-    void warmBase();
-  };
+  const onViewerActivity = createViewerActivityHandler({ pushChanged: pushViewerChanged, warm: warmBase });
   let stopViewerWatch = watchViewerTree(viewerRoot(viewerCwd()), onViewerActivity);
   void warmBase();
   cwdTracker.onChange(({ cwd, repoKey }) => {

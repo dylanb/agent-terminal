@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { discover, readArtifact, emptyTree, pathWithin, warmBaseRef, WARM_RETRY_MS } from '../../src/main/artifactTree';
+import { discover, readArtifact, emptyTree, pathWithin, warmBaseRef, WARM_RETRY_MS, __resetBaseRefState } from '../../src/main/artifactTree';
 import type { ArtifactNode } from '../../src/shared/ipc';
 
 // The path-escape guard (§20.2).
@@ -59,6 +59,7 @@ describe('artifact discovery (§20.1 / D8 — real git)', () => {
   let plain: string;
 
   beforeEach(() => {
+    __resetBaseRefState(); // isolate the process-lifetime base caches explicitly, not by temp-dir luck
     repo = realpathSync(mkdtempSync(join(tmpdir(), 'art-repo-')));
     git(['init', '-q'], repo);
     git(['config', 'user.email', 't@t'], repo);
@@ -145,6 +146,28 @@ describe('artifact discovery (§20.1 / D8 — real git)', () => {
     const tree = discover(repo, 'curated', { baseRef: () => null });
     expect(fileRelPaths(tree.nodes)).not.toContain('src/a.ts');
     expect(JSON.stringify(tree.nodes)).not.toContain('"pr"');
+  });
+
+  // The sync base memo must not cache a null (unresolvable) result — else a default branch that appears
+  // mid-session would never be picked up until restart. Only a resolved base is cached.
+  it('re-resolves the base when a default branch appears mid-session (never caches a null base)', () => {
+    git(['branch', '-M', 'topic'], repo); // no origin/HEAD, no main/master → base unresolvable
+    discover(repo, 'curated'); // must NOT cache the null base for (repo, topic)
+    git(['branch', 'main'], repo); // a default branch now exists, at topic's current tip
+    writeFileSync(join(repo, 'src', 'later.ts'), 'export const l = 1;\n');
+    git(['add', 'src/later.ts'], repo);
+    git(['commit', '-q', '-m', 'later'], repo); // committed on topic over main
+    expect(findFile(discover(repo, 'curated').nodes, 'src/later.ts')?.provenance).toContain('pr');
+  });
+
+  it('a file deleted on the branch is not listed or tagged pr (deletions excluded)', () => {
+    const base = git(['rev-parse', '--abbrev-ref', 'HEAD'], repo).trim();
+    git(['checkout', '-q', '-b', 'feature'], repo);
+    git(['rm', '-q', 'src/a.ts'], repo); // a.ts is on the base branch; delete it here
+    git(['commit', '-q', '-m', 'rm a.ts'], repo);
+    const tree = discover(repo, 'curated', { baseRef: () => base });
+    expect(fileRelPaths(tree.nodes)).not.toContain('src/a.ts'); // a deleted file has no current content
+    expect(findFile(tree.nodes, 'src/a.ts')).toBeUndefined();
   });
 
   // §20.2: the code viewer's changed lines are relative to the PR base, so a line committed on the
