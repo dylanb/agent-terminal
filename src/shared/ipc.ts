@@ -489,8 +489,10 @@ export interface FlowLoopView {
 /** The GitHub issue (ticket) and PR a flow is working (§24.2.3 T7). Numbers only — the title, body,
  *  and url are fetched lazily via `flow:githubRef` so `flow:state` stays synchronous and best-effort.
  *  `ticket` is the value of the flow's `github-ticket`-typed input, falling back to the loop's
- *  `linked_issues`; `pr` is the loop's state.yaml `pr`. Either may be absent; the whole field is
- *  absent when neither resolves. Present on every active step, not just loop steps. */
+ *  `linked_issues`; `pr` is the value of the flow's `pr`-typed input, falling back to the loop's
+ *  state.yaml `pr`. Either may be absent; the whole field is absent when neither resolves. Visibility is
+ *  gated on flow progress (§24.2.3 T7): a typed-input ref surfaces only once a step requesting that
+ *  input is entered, and the loop's `linked_issues`/`pr` only once a loop step is entered. */
 export interface FlowRefs {
   ticket?: number;
   pr?: number;
@@ -555,13 +557,13 @@ export interface FlowStateView {
   /** Live derived status (§22.3 / §24.2.2 S5): agent activity + todo completion + gate readiness.
    *  Present only on an `in_progress` view (computed by main from the repo's todos + §8.3 activity). */
   derived?: FlowDerived;
-  /** Read-only agent-loop state.yaml mirror (§24.2.3 T2): present only on a `loop` step with a
-   *  parseable v4 state.yaml. Parallel to `derived` (NOT nested) — loop state outlives the manual
-   *  in_progress window that gates `derived`. */
+  /** Read-only agent-loop state.yaml mirror (§24.2.3 T2): present once a `loop` step has been entered
+   *  (and stays for the run, including any later manual step) with a parseable v4 state.yaml. Parallel
+   *  to `derived` (NOT nested) — loop state outlives the manual in_progress window that gates `derived`. */
   loop?: FlowLoopView;
   /** The ticket + PR the flow is working (§24.2.3 T7): numbers resolved synchronously from the flow
-   *  input and the loop's state.yaml. Present on every active step when at least one resolves; the
-   *  renderer fetches each one's title/body/url lazily via `flow:githubRef`. */
+   *  inputs and the loop's state.yaml, gated on flow progress (see `FlowRefs`). The renderer fetches each
+   *  one's title/body/url lazily via `flow:githubRef`. */
   refs?: FlowRefs;
   /** A one-shot step-entry input prompt (§18.4 / §24.2.3 T3): present on a `start`/`restart`/`advance`
    *  response when the entered step's `bootstrap` needs an unsatisfied required input. The renderer
