@@ -790,20 +790,14 @@ describe('manual capture on demand (§21.1 — captureLast, dormant auto-scan)',
     expect(result!.report.text).not.toContain('recap');
   });
 
-  it('skips a "※ recap:" line even when the source row is indented (§21.1)', async () => {
-    // Region text is trimmed at build, so the start-anchored /^※/ matches a recap whose source
-    // row carries leading whitespace — the raw-text predicate needs no whitespace normalization.
-    const scanner = dormant([createClaudeCodeAdapter()], createGenericAdapter());
-    shadow.write(
-      'FINAL CONCLUSION: the auth flow is solid and well covered before merge.\r\n' +
-        '⏺ Bash(npm test)\r\n' +
-        '    ※ recap: tightened the deny list and pinned the branch before merge.\r\n',
-    );
+  it('skips a "※ recap:" region whose first row is indented (§21.1)', async () => {
+    // A region's first-line indent is stripped when its text is built, so the start-anchored
+    // /^※/ still matches — the raw-text predicate needs no whitespace normalization. (Skip the
+    // filter and this indented recap wins selection instead of being dropped.)
+    const scanner = dormant([], createGenericAdapter());
+    shadow.write('    ※ recap: tightened the deny list and pinned the branch before you merge this.\r\n');
     await sleep(50);
-    const result = scanner.captureLast();
-    expect(result).not.toBeNull();
-    expect(result!.report.text).toContain('FINAL CONCLUSION');
-    expect(result!.report.text).not.toContain('recap');
+    expect(scanner.captureLast()).toBeNull();
   });
 
   it('returns null when the only report candidate is a "※ recap:" line (§21.1)', async () => {
