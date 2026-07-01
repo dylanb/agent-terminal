@@ -118,22 +118,32 @@ export interface WarmDeps {
   git?: (args: string[], cwd: string) => string;
   /** The branch's PR base branch name from GitHub (§20.1), or null when there's no PR / it's unavailable. */
   prBaseName?: (root: string) => Promise<string | null>;
+  /** Current time in ms (§20.1) — injected so the retry throttle is deterministically testable. */
+  now?: () => number;
 }
 
-// The credential-bearing gh lookup runs at most once per (root, branch) per session, so warm can be
-// driven from every watch burst (a git checkout produces no cwd change — §20.1) without re-spawning it.
+// A resolved gh base is deduped for the session; an UNRESOLVED attempt (no PR yet / gh offline) is
+// retried no more often than WARM_RETRY_MS. This bounds the credential-bearing spawn on the per-burst
+// warm path (a git checkout produces no cwd change — §20.1) while still picking up a PR opened, or
+// connectivity restored, mid-session — the guarantee a plain once-per-session guard would drop.
+const WARM_RETRY_MS = 30_000;
 const warmedKeys = new Set<string>();
+const lastWarmAttempt = new Map<string, number>();
 
 /** Refine the memoized base for `root`'s current branch to the real gh-resolved PR base, off the
  *  synchronous discovery path (§20.1). Returns true when the base changed from what the sync path
- *  resolved (the caller re-pulls the viewer). A failed/absent gh lookup leaves the local base intact —
- *  it never overwrites the memo with a failure. */
+ *  resolved (the caller re-pulls the viewer). A resolved base is deduped for the session; an unresolved
+ *  attempt never overwrites the memo and is retried after WARM_RETRY_MS, so a PR opened — or gh
+ *  connectivity restored — mid-session is still picked up. */
 export async function warmBaseRef(root: string, deps: WarmDeps = {}): Promise<boolean> {
   const git = deps.git ?? defaultGit;
   const fetchBase = deps.prBaseName ?? defaultPrBaseName;
+  const now = deps.now ?? Date.now;
   const key = branchKey(root, git);
   if (warmedKeys.has(key)) return false;
-  warmedKeys.add(key);
+  const last = lastWarmAttempt.get(key);
+  if (last !== undefined && now() - last < WARM_RETRY_MS) return false;
+  lastWarmAttempt.set(key, now());
   let name: string | null = null;
   try {
     name = (await fetchBase(root))?.trim() || null;
@@ -145,6 +155,8 @@ export async function warmBaseRef(root: string, deps: WarmDeps = {}): Promise<bo
   if (refExists(`origin/${name}`, root, git)) ghBase = `origin/${name}`;
   else if (refExists(name, root, git)) ghBase = name;
   if (!ghBase) return false;
+  warmedKeys.add(key);
+  lastWarmAttempt.delete(key);
   const current = baseRefMemo.has(key) ? baseRefMemo.get(key)! : localBaseRef(root, git);
   baseRefMemo.set(key, ghBase);
   return ghBase !== current;

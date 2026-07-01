@@ -274,6 +274,49 @@ describe('artifact discovery (§20.1 / D8 — real git)', () => {
     expect(findFile(discover(repo, 'curated').nodes, 'src/onlydev.ts')?.provenance).toContain('pr');
   });
 
+  // A resolved base is deduped for the session, but an UNRESOLVED attempt (no PR yet / gh offline) must
+  // be retried — throttled — so a PR opened or connectivity restored mid-session is still picked up.
+  it('warmBaseRef retries an unresolved branch after the throttle window, then dedups once resolved', async () => {
+    git(['branch', '-M', 'main'], repo);
+    git(['checkout', '-q', '-b', 'feature'], repo);
+    writeFileSync(join(repo, 'src', 'feature.ts'), 'export const f = 1;\n');
+    git(['add', 'src/feature.ts'], repo);
+    git(['commit', '-q', '-m', 'feat'], repo);
+    let t = 1000;
+    let calls = 0;
+    // No PR at first (null); once a PR is opened the lookup resolves to 'main'.
+    const prBaseName = async (): Promise<string | null> => { calls++; return calls >= 3 ? 'main' : null; };
+    const now = (): number => t;
+    await warmBaseRef(repo, { git, prBaseName, now }); // attempt 1: no PR
+    await warmBaseRef(repo, { git, prBaseName, now }); // within throttle → no gh spawn
+    expect(calls).toBe(1);
+    t += 60_000;
+    await warmBaseRef(repo, { git, prBaseName, now }); // throttle elapsed → attempt 2: still no PR
+    expect(calls).toBe(2);
+    t += 60_000;
+    await warmBaseRef(repo, { git, prBaseName, now }); // attempt 3: PR now resolves
+    expect(calls).toBe(3);
+    await warmBaseRef(repo, { git, prBaseName, now }); // resolved → deduped, no further spawn
+    expect(calls).toBe(3);
+  });
+
+  // The dedup key is (root, branch): a checkout to a new branch must re-warm — the branch component is
+  // what makes warm-on-branch-switch work (a root-only key would silently break it).
+  it('warmBaseRef re-warms after a branch switch (dedup is per branch, not per repo)', async () => {
+    git(['branch', '-M', 'main'], repo);
+    git(['checkout', '-q', '-b', 'feature-a'], repo);
+    writeFileSync(join(repo, 'src', 'a-feat.ts'), 'export const a = 1;\n');
+    git(['add', 'src/a-feat.ts'], repo);
+    git(['commit', '-q', '-m', 'a'], repo);
+    let calls = 0;
+    const prBaseName = async (): Promise<string> => { calls++; return 'main'; };
+    await warmBaseRef(repo, { git, prBaseName }); // warms feature-a
+    expect(calls).toBe(1);
+    git(['checkout', '-q', '-b', 'feature-b'], repo);
+    await warmBaseRef(repo, { git, prBaseName }); // new (root, branch) key → re-warms
+    expect(calls).toBe(2);
+  });
+
   it('repo scope = every tracked + untracked file, built hierarchically', () => {
     const tree = discover(repo, 'repo');
     const files = fileRelPaths(tree.nodes);
