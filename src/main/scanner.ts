@@ -441,9 +441,13 @@ export function createScanner(deps: ScannerDeps): Scanner {
         return prefix === '' || /[$#%>❯›»]\s*$/.test(prefix);
       });
     };
+    // A classifier recognizes its own agent's end-of-turn meta-summary (e.g. Claude Code's
+    // "※ recap:" line) so it never wins "latest report" selection — the knowledge lives with
+    // the agent's adapter, not this agnostic core (§21.1/§15.3).
+    const isMetaSummary = (text: string): boolean => deps.adapters.some((a) => a.isMetaSummary?.(text) ?? false);
     let region: DetectedRegion | undefined;
     for (const r of allRegions) {
-      if (r.type !== 'report' || isCommandEcho(r.text)) continue;
+      if (r.type !== 'report' || isCommandEcho(r.text) || isMetaSummary(r.text)) continue;
       if (!region || r.startRow > region.startRow) region = r;
     }
     if (!region) return null;

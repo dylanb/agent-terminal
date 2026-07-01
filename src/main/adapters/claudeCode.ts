@@ -10,6 +10,10 @@ const BULLET = /^[●⏺]/u;
 const DIFF_LINE = /^[+-]\s/;
 const TOOL_CALL = /^[A-Za-z][\w.]*\(/;
 
+// Claude Code's end-of-turn "※ recap:" line — its one-line turn summary (toggled by the agent's
+// own /config), printed below the real output: a meta-summary, not the latest report (§21.1).
+const RECAP_LINE = /^※\s*recap:/i;
+
 function stripBullet(line: string): string {
   return line.replace(/^[●⏺]\s*/u, '').trim();
 }
@@ -17,6 +21,9 @@ function stripBullet(line: string): string {
 export function createClaudeCodeAdapter(): Adapter {
   return {
     id: 'claude-code',
+    isMetaSummary(text: string): boolean {
+      return RECAP_LINE.test(text);
+    },
     detect(ctx: AdapterContext): DetectedRegion[] {
       const { reader, startRow, endRow, isChrome } = ctx;
       const regions: DetectedRegion[] = [];
