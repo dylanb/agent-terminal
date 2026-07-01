@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync, existsSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DEFAULT_UI_SETTINGS } from '../../src/shared/ipc';
@@ -111,5 +111,25 @@ describe('global UI settings store (§16.6 — first on-disk persistence, outsid
     const written = readdirSync(join(dir, 'nested'));
     expect(written).toEqual(['ui-settings.json']);
     expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual({ splitRatio: 0.42, lastTab: 'capture', theme: 'light', artifactTreeWidth: 248, keymapProfile: 'auto' });
+  });
+
+  it('does not write through a symlinked settings directory (the write cannot escape it) — CWE-59', () => {
+    // The settings directory itself is a symlink to an attacker-chosen location; persisting a set
+    // must not land ui-settings.json in <target>/ui-settings.json. The in-memory value still updates.
+    const outside = mkdtempSync(join(tmpdir(), 'ui-settings-outside-'));
+    try {
+      symlinkSync(outside, join(dir, 'nested'));
+      const store = createUiSettingsStore(file);
+      try {
+        store.set({ splitRatio: 0.42 });
+      } catch {
+        /* refusing the symlinked container may throw; the assertions below are the real checks */
+      }
+      expect(existsSync(join(outside, 'ui-settings.json'))).toBe(false);
+      // best-effort persistence: the refused write must not drop the in-memory mutation.
+      expect(store.get().splitRatio).toBe(0.42);
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
   });
 });

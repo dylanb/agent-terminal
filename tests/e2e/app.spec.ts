@@ -477,12 +477,81 @@ test('monitor status strip tracks quiescence and alt-screen', async () => {
   await expect(fsChip).toContainText('no');
 });
 
-test('shell exit notifies both panes', async () => {
+test('the app terminates when the hosted shell exits', async () => {
+  // When the PTY's shell exits the whole app must terminate — the hosted shell IS the session. Use a
+  // tiny startup-exit grace so the post-grace path is deterministic: in a fast environment the shell
+  // can exit only a few hundred ms after spawn, which under the default 1s grace would be treated as
+  // a startup failure (window kept open) and never terminate. A 1 ms grace exercises a normal exit.
+  await app.close();
+  app = await electron.launch({
+    args: launchArgs(),
+    env: { ...process.env, APP_SHELL: 'bash', APP_SUBMIT_DELAY_MS: '100', APP_STARTUP_EXIT_GRACE_MS: '1' },
+  });
+  page = await app.firstWindow();
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+  // Shell teardown → PTY exit → app quit can take a moment under CI load; wait past the default budget.
   await typeCommand('exit');
-  // Shell teardown → PTY exit → both-pane notification can take a moment under CI load; wait past the
-  // default expect budget rather than racing it.
+  await app.waitForEvent('close', { timeout: 20_000 });
+  expect(app.windows()).toHaveLength(0);
+});
+
+test('an immediate shell startup failure keeps the app open (§5 grace exception)', async () => {
+  // A shell that dies the instant it spawns (broken rc / bad APP_SHELL) is a startup failure: the
+  // app must NOT vanish. `false` exits immediately, well within the startup grace, so the app stays
+  // open rather than quitting. (The exit is too fast to assert the renderer diagnostic here — that
+  // is covered by the within-grace test below, where the exit lands after the renderer has mounted.)
+  // Pin a large grace so the assertion is deterministic: §5 measures uptime when the onExit callback
+  // runs, which on a CPU-starved CI runner can be observed seconds after the spawn; a 60s grace makes
+  // `false`'s instant exit unambiguously sub-grace regardless of that lag (the default 1s grace is
+  // comparable to CI startup jitter, so it would intermittently misclassify the exit as a normal one).
+  await app.close();
+  app = await electron.launch({
+    args: launchArgs(),
+    env: { ...process.env, APP_SHELL: 'false', APP_SUBMIT_DELAY_MS: '100', APP_STARTUP_EXIT_GRACE_MS: '60000' },
+  });
+  page = await app.firstWindow();
+  // The decision is in main and independent of the renderer: assert the app does NOT close within a
+  // window comfortably under the grace. A close event here would mean it wrongly terminated.
+  const closed = app
+    .waitForEvent('close', { timeout: 4000 })
+    .then(() => true)
+    .catch(() => false);
+  expect(await closed).toBe(false);
+  expect(app.windows().length).toBeGreaterThan(0);
+});
+
+test('a within-grace shell exit keeps the app open AND shows the exit diagnostic (§5)', async () => {
+  // The point of staying open is that the user can READ the diagnostic. With a large grace, a normal
+  // shell exit (typed after the renderer has mounted) stays open and the `[process exited]` line is
+  // visible — proving the diagnostic the grace exists to preserve actually renders.
+  await app.close();
+  app = await electron.launch({
+    args: launchArgs(),
+    env: { ...process.env, APP_SHELL: 'bash', APP_SUBMIT_DELAY_MS: '100', APP_STARTUP_EXIT_GRACE_MS: '60000' },
+  });
+  page = await app.firstWindow();
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 }); // renderer mounted → pty:exit listener live
+  await typeCommand('exit');
   await expect(termRows()).toContainText('[process exited: 0]', { timeout: 20_000 });
-  await expect(page.locator('.status-chip[data-status="session"]')).toContainText('exited', { timeout: 20_000 });
+  // The monitor pane's session chip is the other half of the §9.2 exit signal: pty:exit flips it to
+  // "exited". Asserted here (the only test where the window stays open after exit) so the chip's
+  // exit-tracking has live coverage.
+  await expect(page.locator('.status-chip[data-status="session"]')).toContainText('exited', {
+    timeout: 20_000,
+  });
+  // Uptime at exit (a few seconds) is far under the 60s grace, so the app must NOT close.
+  const closed = app.waitForEvent('close', { timeout: 3000 }).then(() => true).catch(() => false);
+  expect(await closed).toBe(false);
+  // The kept-open window still drives the renderer: a window resize sends a pty:resize to the now-dead
+  // shell. Driving its closed master fd throws ioctl EBADF; uncaught in main that pops Electron's modal
+  // error dialog, blocking the event loop so the app can no longer quit (§5). After the resize the main
+  // process must stay responsive — a wedged app makes this evaluate hang until the test times out.
+  await app.evaluate(({ BrowserWindow }) => {
+    const w = BrowserWindow.getAllWindows()[0];
+    const [width, height] = w.getSize();
+    w.setSize(width + 120, height + 80);
+  });
+  await expect.poll(() => app.evaluate(({ app: a }) => a.isReady()), { timeout: 8000 }).toBe(true);
 });
 
 // ---- §15: semantic capture & detection (rendered as mockup-exact .finding cards) ----
@@ -530,6 +599,60 @@ test('a captured report (with findings) survives a monitor reload (capture:last�
   await page.reload();
   await openQuickSend('capture'); // reload resets the drawer to closed (§22.2)
   await expect(page.locator('#monitor-blocks .finding').first()).toBeVisible();
+});
+
+test('captured monitor events restore on relaunch in the same directory (persist→terminate→restore)', async () => {
+  // Unlike the reload test above (same main process, in-memory store survives), this terminates the
+  // whole app — the in-memory store dies with the process — then relaunches in the SAME launch
+  // directory and asserts the persisted events rebuilt the store. APP_LAUNCH_DIR pins the directory
+  // the monitor-events file lives under; APP_SHELL_INTEGRATION=0 surfaces the report deterministically
+  // (no span-gating race), as in the replay test.
+  const launchDir = realpathSync(mkdtempSync(join(tmpdir(), 'agent-term-e2e-launch-')));
+  const dirEnv = {
+    ...process.env,
+    APP_SHELL: 'bash',
+    APP_SUBMIT_DELAY_MS: '100',
+    APP_SHELL_INTEGRATION: '0',
+    APP_LAUNCH_DIR: launchDir,
+    // The terminate step below is via the real shell exit; pin a tiny grace so bash's exit (uptime
+    // far above 1ms) deterministically terminates the app, with no default-1s-grace window for a
+    // CPU-starved CI runner to misclassify (§5; cf. the 479 normal-exit test).
+    APP_STARTUP_EXIT_GRACE_MS: '1',
+  };
+  try {
+    await app.close();
+    app = await electron.launch({ args: launchArgs(), env: dirEnv });
+    page = await app.firstWindow();
+    await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+    await openQuickSend('capture');
+
+    await typeCommand(
+      "printf '%s\\n' 'Here is the summary of findings from this code review:' '- one important finding worth acting on' '- another finding to address before merge'",
+    );
+    await expect(termRows()).toContainText('another finding to address before merge');
+    await clickCaptureLast();
+    await expect(page.locator('#monitor-blocks .finding').first()).toBeVisible({ timeout: 10_000 });
+
+    // Terminate via the real shell-exit path (the app quits when the shell exits), then relaunch in
+    // the same directory — proving restore survives the actual teardown, not just a graceful close.
+    // Under heavy CI contention the first instance can already be tearing down by now; drive `exit`
+    // only while the page is live (the assertion is restore-after-terminate, not the exact trigger),
+    // and tolerate the close having already happened so a stale `app` never strands the afterEach.
+    if (!page.isClosed()) await typeCommand('exit').catch(() => {});
+    // The app terminates on the shell exit (grace=1ms): poll until it has no windows, resolving as
+    // soon as it is gone and tolerating it having already terminated (a stale waitForEvent('close')
+    // would otherwise hang on an already-emitted event).
+    await expect.poll(() => app.windows().length, { timeout: 20_000 }).toBe(0).catch(() => {});
+    app = await electron.launch({ args: launchArgs(), env: dirEnv });
+    page = await app.firstWindow();
+    await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+    await openQuickSend('capture'); // the drawer starts closed after a relaunch (§22.2)
+
+    // No re-capture: the events were rebuilt from disk and replayed into the fresh pane.
+    await expect(page.locator('#monitor-blocks .finding').first()).toBeVisible({ timeout: 10_000 });
+  } finally {
+    rmSync(launchDir, { recursive: true, force: true });
+  }
 });
 
 test('captures the visible report on the alternate screen buffer (full-screen agent, §13.4)', async () => {
@@ -1589,7 +1712,10 @@ function seedRefsFlowRepo(prefix: string): { dir: string; stateFile: string } {
   const dir = mkdtempSync(join(tmpdir(), prefix));
   mkdirSync(join(dir, '.git'), { recursive: true });
   mkdirSync(join(dir, '.agent-terminal'), { recursive: true });
-  writeFileSync(join(dir, '.agent-terminal', 'flow.yaml'), 'name: refs-flow\nsteps:\n  - id: groom\n    kind: manual\n');
+  writeFileSync(
+    join(dir, '.agent-terminal', 'flow.yaml'),
+    'name: refs-flow\nsteps:\n  - id: groom\n    kind: manual\n  - id: work\n    kind: loop\n    loop: work-loop\n',
+  );
   const loopDir = join(dir, '.agent-loop');
   mkdirSync(loopDir, { recursive: true });
   return { dir, stateFile: join(loopDir, 'state.yaml') };
@@ -2395,9 +2521,9 @@ test('Restart clears a resolved stage-transition input so the next entry re-prom
   rmSync(home, { recursive: true, force: true });
 });
 
-test('the popout surfaces the ticket + PR the flow is working, on a non-loop step (§24.2.3 T7)', async () => {
-  // The ticket falls back to the loop's linked_issues, the PR comes from state.yaml; both surface on a
-  // MANUAL step (no loop mirror) and open in the docked popout's "Working on" section.
+test('loop-derived ticket + PR surface only once the flow enters the loop step (§24.2.3 T7)', async () => {
+  // The loop's linked_issues ticket and state.yaml PR are agent-loop state: progress-gated, they stay
+  // hidden on the pre-loop manual step and appear only once the flow enters a loop step (§24.2.3 T7).
   const { dir: repo, stateFile } = seedRefsFlowRepo('agent-term-e2e-refs-');
   writeFileSync(
     stateFile,
@@ -2410,13 +2536,16 @@ test('the popout surfaces the ticket + PR the flow is working, on a non-loop ste
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   await typeCommand(`cd "${repo}"`);
-  await expect(flowStepName()).toHaveText('groom', { timeout: 10_000 }); // a MANUAL step
-  // The refs read-out appears even on the manual step (no loop mirror), summarising the numbers.
-  await expect(loopReadout()).toContainText('#25', { timeout: 10_000 });
-  await expect(loopReadout()).toContainText('PR #179');
+  await expect(flowControl()).toHaveText('Start', { timeout: 10_000 });
+  await flowControl().click(); // Start → in_progress on the manual `groom` step
+  await expect(flowStepName()).toHaveText('groom');
+  // The loop step has not been entered, so nothing loop-derived shows — even though state.yaml carries it.
+  await expect(loopReadout()).toHaveCount(0);
 
-  // Clicking opens the docked popout with the "Working on" refs section (the link/title fill in via gh
-  // when available; here the temp repo is not on GitHub, so the bare numbers stand).
+  await flowControl().click(); // Advance → enter the `work` loop step
+  await expect(loopReadout()).toBeVisible({ timeout: 10_000 });
+  // The docked popout's "Working on" section now carries the loop's ticket + PR (bare numbers, since the
+  // temp repo is not on GitHub for gh to resolve titles/links).
   await loopReadout().click();
   await expect(page.locator('#app')).toHaveClass(/\bloop-open\b/);
   await expect(loopPanel()).toContainText('Working on');
@@ -2426,6 +2555,93 @@ test('the popout surfaces the ticket + PR the flow is working, on a non-loop ste
   await expect(prRow).toContainText('#179');
 
   await app.close(); // HOME=temp ⇒ Electron writes userData under it; stop writes before removing it
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+});
+
+test('Terminate clears the ticket/PR display even though state.yaml still carries the loop (§24.2.3 T7)', async () => {
+  // The prior run's PR/ticket lives on in the read-only state.yaml; Terminate resets the flow to its
+  // first step, closing the loop-step gate, so the rail read-out and docked popout empty (loop
+  // dismissed, not deleted).
+  const { dir: repo, stateFile } = seedRefsFlowRepo('agent-term-e2e-refs-term-');
+  writeFileSync(
+    stateFile,
+    'schema_version: 4\npr: 179\nbranch: agent-loop/issue-176\niteration: 9\nstatus: planning\nlinked_issues:\n  - 25\n',
+  );
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-refs-term-home-'));
+  await app.close();
+  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
+  page = await app.firstWindow();
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await typeCommand(`cd "${repo}"`);
+  await expect(flowControl()).toHaveText('Start', { timeout: 10_000 });
+  await flowControl().click(); // Start → groom (manual)
+  await flowControl().click(); // Advance → work (loop): the display appears
+  await expect(loopReadout()).toBeVisible({ timeout: 10_000 });
+  await loopReadout().click(); // open the docked popout
+  await expect(loopPanel()).toContainText('Working on');
+
+  await flowTerminate().click();
+  await expect(confirmModal()).toBeVisible();
+  await confirmModal().locator('.confirm').click();
+
+  // Back at Not started: the loop step is no longer entered, so the display is gone — read-out removed,
+  // popout closed and emptied — despite state.yaml still holding the PR.
+  await expect(flowControl()).toHaveText('Start');
+  await expect(loopReadout()).toHaveCount(0);
+  await expect(page.locator('#app')).not.toHaveClass(/\bloop-open\b/);
+  await expect(loopPanel()).not.toContainText('Working on');
+  expect(readFileSync(stateFile, 'utf8')).toContain('pr: 179'); // the read-only mirror is untouched
+
+  await app.close();
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+});
+
+test('Restart clears the ticket/PR display until the flow re-enters a loop step (§24.2.3 T7)', async () => {
+  // Restart returns the flow to its first step, closing the loop-step gate; the display clears with no
+  // state.yaml write and returns only once the flow re-enters the loop step — then reflecting whatever
+  // loop state.yaml now holds (a fresh pickup).
+  const { dir: repo, stateFile } = seedRefsFlowRepo('agent-term-e2e-refs-restart-');
+  writeFileSync(
+    stateFile,
+    'schema_version: 4\npr: 179\nbranch: agent-loop/issue-176\niteration: 9\nstatus: planning\nlinked_issues:\n  - 25\n',
+  );
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-refs-restart-home-'));
+  await app.close();
+  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
+  page = await app.firstWindow();
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await typeCommand(`cd "${repo}"`);
+  await expect(flowControl()).toHaveText('Start', { timeout: 10_000 });
+  await flowControl().click(); // Start → groom (manual)
+  await flowControl().click(); // Advance → work (loop): the display appears
+  await expect(loopReadout()).toBeVisible({ timeout: 10_000 });
+  await flowControl().click(); // Advance → done (past the last step)
+  await expect(flowControl()).toHaveText('Restart');
+  await expect(loopReadout()).toBeVisible(); // still shown at done — the loop step was entered this run
+
+  await flowControl().click(); // Restart → in_progress at the groom step
+  await expect(flowStepName()).toHaveText('groom');
+  await expect(loopReadout()).toHaveCount(0); // cleared — the loop step is no longer entered
+
+  // A fresh pickup rewrites state.yaml; re-entering the loop step shows the NEW ticket/PR.
+  writeFileSync(
+    stateFile,
+    'schema_version: 4\npr: 200\nbranch: agent-loop/issue-42\niteration: 1\nstatus: planning\nlinked_issues:\n  - 42\n',
+  );
+  await flowControl().click(); // Advance → work (loop): the new loop's display appears
+  await expect(loopReadout()).toBeVisible({ timeout: 10_000 });
+  await loopReadout().click();
+  await expect(loopPanel()).toContainText('Working on');
+  const ticketRow = loopPanel().locator('.refs .rrow', { has: page.locator('.rk', { hasText: 'Ticket' }) });
+  const prRow = loopPanel().locator('.refs .rrow', { has: page.locator('.rk', { hasText: 'PR' }) });
+  await expect(ticketRow).toContainText('#42');
+  await expect(prRow).toContainText('#200');
+
+  await app.close();
   rmSync(repo, { recursive: true, force: true });
   rmSync(home, { recursive: true, force: true });
 });
@@ -2445,14 +2661,14 @@ test('a loop step shows a Loop read-out that expands a docked state-mirror panel
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   await typeCommand(`cd "${repo}"`);
-  // Rail: [Not started] · groom · build · [Completed]. The state.yaml already carries a PR, so even the
-  // manual `groom` step shows a refs read-out (§24.2.3 T7) — but NOT the loop STATUS pill (`.spill`),
-  // which appears only once a loop step is active.
+  // Rail: [Not started] · groom · build · [Completed]. Although state.yaml carries a PR, the
+  // loop-derived display is progress-gated (§24.2.3 T7): the pre-loop manual `groom` step shows no
+  // read-out at all, so there is certainly no loop STATUS pill (`.spill`) yet.
   await expect(page.locator('#flow-strip .flow.vert .stn')).toHaveCount(4, { timeout: 10_000 });
   await expect(flowStation(2).locator('.nm')).toHaveText('build');
   await expect(loopReadout().locator('.spill')).toHaveCount(0);
 
-  await flowControl().click(); // Start → groom (manual): still a refs read-out, no loop status pill
+  await flowControl().click(); // Start → groom (manual): the loop step is not entered, so no read-out
   await expect(flowStation(1)).toHaveClass(/\bactive\b/);
   await expect(loopReadout().locator('.spill')).toHaveCount(0);
 

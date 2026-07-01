@@ -13,6 +13,9 @@ const DEFAULTS = {
   selfInjectWindowMs: 30_000,
   maxDoneTodos: 50, // §16.4
   turnCompletionTimeoutMs: 120_000, // §26.3/D48: how long a loop turn may run before a retry
+  // §5: a shell that exits within this window of spawn is a startup failure — keep the window open
+  // for the diagnostic rather than terminating the app.
+  startupExitGraceMs: 1000,
 } as const;
 
 export interface RuntimeConfig {
@@ -27,6 +30,7 @@ export interface RuntimeConfig {
   selfInjectWindowMs: number;
   maxDoneTodos: number;
   turnCompletionTimeoutMs: number;
+  startupExitGraceMs: number;
 }
 
 /** Parse a positive integer env value; fall back on unset/garbage/non-positive (§15.7). */
@@ -49,5 +53,6 @@ export function resolveRuntimeConfig(env: NodeJS.ProcessEnv): RuntimeConfig {
     selfInjectWindowMs: posInt(env.APP_SELF_INJECT_WINDOW_MS, DEFAULTS.selfInjectWindowMs),
     maxDoneTodos: posInt(env.APP_MAX_DONE_TODOS, DEFAULTS.maxDoneTodos),
     turnCompletionTimeoutMs: posInt(env.APP_TURN_TIMEOUT_MS, DEFAULTS.turnCompletionTimeoutMs),
+    startupExitGraceMs: posInt(env.APP_STARTUP_EXIT_GRACE_MS, DEFAULTS.startupExitGraceMs),
   };
 }

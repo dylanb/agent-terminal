@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
+import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync, mkdirSync, existsSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createTodoStore, type TodoStore } from '../../src/main/todoStore';
@@ -31,6 +31,26 @@ describe('todoStore (§16.3 / §16.4 — repo-scoped CRUD + persistence)', () =>
 
   it('starts empty for a fresh repo', () => {
     expect(makeStore().list(repoA)).toEqual([]);
+  });
+
+  it('does not write through a symlinked .agent-terminal directory (a cloned repo cannot redirect the write) — CWE-59', () => {
+    // A cloned repo ships `<repo>/.agent-terminal` as a symlink to an attacker-chosen directory; the
+    // persist must not land todos.json in <target>/todos.json. The in-memory list still updates.
+    const outside = mkdtempSync(join(tmpdir(), 'todo-outside-'));
+    try {
+      symlinkSync(outside, join(repoA, '.agent-terminal'));
+      const store = makeStore();
+      try {
+        store.add(repoA, 'task');
+      } catch {
+        /* refusing the symlinked container may throw; the assertions below are the real checks */
+      }
+      expect(existsSync(join(outside, 'todos.json'))).toBe(false);
+      // best-effort persistence: the refused write must not drop the in-memory mutation.
+      expect(store.list(repoA).map((t) => t.text)).toContain('task');
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
   });
 
   it('adds todos appended to the bottom of the active list', () => {

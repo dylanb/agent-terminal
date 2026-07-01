@@ -17,6 +17,12 @@ describe('resolveRuntimeConfig (§15.7 — env-overridable per-agent profile sea
     );
   });
 
+  it('defaults the startup-exit grace to 1000ms and parses a valid override, falling back on garbage', () => {
+    expect(resolveRuntimeConfig({}).startupExitGraceMs).toBe(1000);
+    expect(resolveRuntimeConfig({ APP_STARTUP_EXIT_GRACE_MS: '500' }).startupExitGraceMs).toBe(500);
+    expect(resolveRuntimeConfig({ APP_STARTUP_EXIT_GRACE_MS: 'nope' }).startupExitGraceMs).toBe(1000);
+  });
+
   it('enables shell integration by default and opts out only on exactly "0"', () => {
     expect(resolveRuntimeConfig({}).shellIntegration).toBe(true);
     expect(resolveRuntimeConfig({ APP_SHELL_INTEGRATION: '0' }).shellIntegration).toBe(false);
