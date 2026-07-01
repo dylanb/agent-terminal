@@ -39,6 +39,9 @@ export interface LoopStateWrite {
    *  as `cost.{usd,unpriced}`. Absent → the prior doc's `cost` is preserved by the merge (the strip keeps
    *  showing the last recorded cost). */
   cost?: CostResult;
+  /** §26.9 epic-promote — the sub-issues created when a plan classified epic was approved. Serialized as
+   *  `epic.sub_issues`. Absent → the prior doc's `epic` is preserved by the merge. */
+  epic?: { subIssues: number[] };
 }
 
 const STATE_REL = path.join('.agent-loop', 'state.yaml');
@@ -114,6 +117,9 @@ export function writeLoopState(repoDir: string, state: LoopStateWrite, now: () =
   }
   if (state.cost !== undefined) {
     doc.cost = { usd: state.cost.usd, unpriced: state.cost.unpricedModels };
+  }
+  if (state.epic !== undefined) {
+    doc.epic = { sub_issues: state.epic.subIssues };
   }
 
   const tmp = `${file}.tmp`;

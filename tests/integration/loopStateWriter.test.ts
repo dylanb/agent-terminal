@@ -220,6 +220,18 @@ describe('loop state.yaml writer (§26.6)', () => {
     expect(doc.cost).toEqual({ usd: 0.42, unpriced: ['x-unknown'] });
   });
 
+  it('writes the §26.9 epic sub-issue record OVER the merged prior doc, preserved across a later epic-less write', () => {
+    // Epic-promote (§26.9) records the sub-issues it created under `epic`; like the other extension writes
+    // it wins over any preserved prior value, and a later write that carries no epic field preserves it.
+    writeLoopState(repo, { ...L1_STATE, epic: { subIssues: [201, 202] } }, fixedNow);
+    let doc = yaml.load(readFileSync(join(repo, '.agent-loop', 'state.yaml'), 'utf8')) as Record<string, unknown>;
+    expect(doc.epic).toEqual({ sub_issues: [201, 202] });
+
+    writeLoopState(repo, { ...L1_STATE, status: 'plan-human-approved' }, fixedNow);
+    doc = yaml.load(readFileSync(join(repo, '.agent-loop', 'state.yaml'), 'utf8')) as Record<string, unknown>;
+    expect(doc.epic).toEqual({ sub_issues: [201, 202] });
+  });
+
   it('emits the whole read set present even when branch is null and linkedIssues is empty (§26.6)', () => {
     // The read set must be uniformly present (defaulted), the way `pr` is — not conditionally omitted.
     writeLoopState(repo, { ...L1_STATE, branch: null, linkedIssues: [] }, fixedNow);

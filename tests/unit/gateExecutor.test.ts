@@ -13,14 +13,24 @@ function harness(overrides: Partial<GateExecDeps> = {}) {
   const notes: Array<{ iteration: number; text: string }> = [];
   const readyCalls: number[] = [];
   const reiterations: number[] = [];
+  const subIssues: Array<{ title: string; body: string }> = [];
+  let nextIssue = 100;
   const deps: GateExecDeps = {
-    github: { markPrReady: async (pr) => void readyCalls.push(pr) },
+    github: {
+      markPrReady: async (pr) => void readyCalls.push(pr),
+      createSubIssue: async (args) => {
+        subIssues.push(args);
+        return (nextIssue += 1);
+      },
+    },
     writeState: (s) => void writes.push(s),
     writeHumanNote: (iteration, text) => void notes.push({ iteration, text }),
     reiterate: (nextIteration) => void reiterations.push(nextIteration),
+    // §26.9 — not an epic by default, so the L5 tests below observe the pre-L8 behavior unchanged.
+    readEpicPlan: () => ({ isEpic: false, subTickets: [] }),
     ...overrides,
   };
-  return { deps, writes, notes, readyCalls, reiterations };
+  return { deps, writes, notes, readyCalls, reiterations, subIssues };
 }
 
 const CTX = {
@@ -38,6 +48,14 @@ const approveOutcome: GateOutcome = {
   terminate: true,
   reiterate: false,
   effects: [{ kind: 'mark-pr-ready' }, { kind: 'clear-phase2' }, { kind: 'terminate' }],
+};
+// §26.9 / L8 — the real plan-approve action list leads with epic-promote (guarded at exec time on the
+// plan's classification, so the effect is always present; the executor evaluates the epic plan).
+const epicApproveOutcome: GateOutcome = {
+  nextStatus: 'plan-human-approved',
+  terminate: true,
+  reiterate: false,
+  effects: [{ kind: 'epic-promote' }, { kind: 'mark-pr-ready' }, { kind: 'terminate' }],
 };
 const requestChangesOutcome: GateOutcome = {
   nextStatus: 'plan-draft',
@@ -86,7 +104,9 @@ describe('executeGateOutcome (§26.6 / L5)', () => {
   });
 
   it('a gh side-effect failure does not abort the transition (best-effort, §26.11)', async () => {
-    const h = harness({ github: { markPrReady: async () => { throw new Error('gh offline'); } } });
+    const h = harness({
+      github: { markPrReady: async () => { throw new Error('gh offline'); }, createSubIssue: async () => null },
+    });
     await executeGateOutcome(approveOutcome, CTX, h.deps);
     expect(h.writes[0]).toMatchObject({ status: 'plan-human-approved', terminated: true });
   });
@@ -96,5 +116,81 @@ describe('executeGateOutcome (§26.6 / L5)', () => {
     await executeGateOutcome(approveOutcome, { ...CTX, pr: null }, h.deps);
     expect(h.readyCalls).toEqual([]);
     expect(h.writes[0]).toMatchObject({ status: 'plan-human-approved' });
+  });
+
+  // §26.9 / L8 — epic-promote reuses the current PR for sub-ticket-1 and creates the remaining N-1
+  // sub-issues out of band, appending them to linked_issues + recording `epic` in state.yaml.
+  it('epic approve: creates N-1 sub-issues (sub-ticket-1 is the current PR), appends linked_issues + records epic', async () => {
+    const h = harness({
+      readEpicPlan: () => ({
+        isEpic: true,
+        subTickets: [
+          { title: 'Slice 1', body: 'reuses this PR' },
+          { title: 'Slice 2', body: 'second' },
+          { title: 'Slice 3', body: 'third' },
+        ],
+      }),
+    });
+    await executeGateOutcome(epicApproveOutcome, CTX, h.deps);
+    // Only the N-1 remaining sub-tickets are created (the first reuses the current PR).
+    expect(h.subIssues).toEqual([
+      { title: 'Slice 2', body: 'second' },
+      { title: 'Slice 3', body: 'third' },
+    ]);
+    // The created issue numbers are appended to linked_issues and recorded under `epic`.
+    expect(h.writes[0]).toMatchObject({
+      status: 'plan-human-approved',
+      terminated: true,
+      linkedIssues: [1, 101, 102],
+      epic: { subIssues: [101, 102] },
+    });
+    expect(h.readyCalls).toEqual([42]); // still marks the PR ready
+  });
+
+  it('non-epic approve: no sub-issues, no epic field, linked_issues unchanged', async () => {
+    const h = harness(); // readEpicPlan defaults to not-an-epic
+    await executeGateOutcome(epicApproveOutcome, CTX, h.deps);
+    expect(h.subIssues).toEqual([]);
+    expect(h.writes[0].epic).toBeUndefined();
+    expect(h.writes[0].linkedIssues).toEqual([1]);
+  });
+
+  it('a single-sub-ticket epic creates zero sub-issues (the current PR is sub-ticket-1)', async () => {
+    const h = harness({ readEpicPlan: () => ({ isEpic: true, subTickets: [{ title: 'only', body: '' }] }) });
+    await executeGateOutcome(epicApproveOutcome, CTX, h.deps);
+    expect(h.subIssues).toEqual([]);
+    expect(h.writes[0].linkedIssues).toEqual([1]);
+  });
+
+  it('a sub-issue creation failure is best-effort: it is skipped, the transition still writes', async () => {
+    let n = 0;
+    const h = harness({
+      github: {
+        markPrReady: async () => {},
+        // First sub-issue create fails (null), second throws, third succeeds — only the survivor lands.
+        createSubIssue: async () => {
+          n += 1;
+          if (n === 1) return null;
+          if (n === 2) throw new Error('gh offline');
+          return 303;
+        },
+      },
+      readEpicPlan: () => ({
+        isEpic: true,
+        subTickets: [
+          { title: 'reuse', body: '' },
+          { title: 'a', body: '' },
+          { title: 'b', body: '' },
+          { title: 'c', body: '' },
+        ],
+      }),
+    });
+    await executeGateOutcome(epicApproveOutcome, CTX, h.deps);
+    expect(h.writes[0]).toMatchObject({
+      status: 'plan-human-approved',
+      terminated: true,
+      linkedIssues: [1, 303],
+      epic: { subIssues: [303] },
+    });
   });
 });

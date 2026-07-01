@@ -3,7 +3,7 @@
 // bound LoopDef. `decideGateOutcome` is the pure core: it translates the raw GateAction list + the gate's
 // next_status_on_* into the normalized outcome the orchestrator carries out (write status, run the gh
 // side-effects out of band, re-iterate or stop). Unknown action kinds are dropped — the orchestrator only
-// acts on the effects it models in v1 (epic-promote/exec land in later slices, §26.9).
+// acts on the effects it models (epic-promote lands in L8, §26.9; `exec` is still parsed-then-dropped).
 
 import type { GateAction, LoopGate } from './loopDef';
 
@@ -18,6 +18,7 @@ export type GateEffect =
   | { kind: 'append-human-note' }
   | { kind: 'clear-phase2' }
   | { kind: 'reset-severity-cycle' }
+  | { kind: 'epic-promote' }
   | { kind: 'terminate' };
 
 export interface GateOutcome {
@@ -57,6 +58,10 @@ function toEffect(a: GateAction): GateEffect | null {
       return { kind: 'clear-phase2' };
     case 'reset-severity-cycle':
       return { kind: 'reset-severity-cycle' };
+    // §26.9 / L8 — the `when: plan.classification == 'epic'` guard is evaluated at execution time
+    // (gateExecutor reads the epic plan); the effect itself is always recognized in the action list.
+    case 'epic-promote':
+      return { kind: 'epic-promote' };
     case 'terminate':
       return { kind: 'terminate' };
     default:

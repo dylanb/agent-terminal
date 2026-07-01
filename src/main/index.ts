@@ -87,6 +87,7 @@ import { decideGateOutcome } from './gateActions';
 import { executeGateOutcome } from './gateExecutor';
 import { createRealGateGitHub } from './gateGithub';
 import { writeHumanNote } from './humanNotes';
+import { readEpicPlan } from './epicPlan';
 import { createSentinelWatcher } from './turnSentinel';
 import { readAndClearTurnDone, watchTurnDone } from './turnDoneFile';
 import { writeLoopState } from './loopStateWriter';
@@ -714,6 +715,8 @@ async function createWindow(): Promise<void> {
         github: createRealGateGitHub(repoKey),
         writeState: (state) => writeLoopState(repoKey, state),
         writeHumanNote: (iteration, text) => writeHumanNote(repoKey, iteration, text),
+        // §26.9 / L8 — the epic classification the work-agent wrote into plan.md gates epic-promote.
+        readEpicPlan: () => readEpicPlan(repoKey),
         // §26.6 — request-changes re-runs the phase's work turn in a fresh context (the next iteration is
         // already persisted by executeGateOutcome, so the work prompt reads the incremented count).
         reiterate: () => {

@@ -18,6 +18,8 @@ const PLAN_LOOP =
   '    kind: approve-required\n' +
   '    human_options: [approve, request-changes, impasse]\n' +
   '    on_approve:\n' +
+  '      - kind: epic-promote\n' +
+  "        args: {when: \"plan.classification == 'epic'\"}\n" +
   '      - kind: mark-pr-ready\n' +
   '      - kind: clear-phase2\n' +
   '      - kind: reset-severity-cycle\n' +
@@ -66,6 +68,7 @@ describe('decideGateOutcome (§26.6 / L5 — app-internal gate transition)', () 
     expect(g.nextStatusOnRequestChanges).toBe('plan-draft');
     expect(g.nextStatusOnImpasse).toBe('impasse');
     expect(g.onApprove.map((a) => a.kind)).toEqual([
+      'epic-promote',
       'mark-pr-ready',
       'clear-phase2',
       'reset-severity-cycle',
@@ -79,6 +82,11 @@ describe('decideGateOutcome (§26.6 / L5 — app-internal gate transition)', () 
     expect(out.terminate).toBe(true);
     expect(out.reiterate).toBe(false);
     expect(out.effects.map((e) => e.kind)).toContain('mark-pr-ready');
+  });
+
+  it('recognizes the epic-promote effect (§26.9 / L8) — no longer dropped as an unknown kind', () => {
+    const out = decideGateOutcome(gate(), 'approve');
+    expect(out.effects.map((e) => e.kind)).toContain('epic-promote');
   });
 
   it('request-changes → re-iterate at entry status; set-phase2, clear-persona-state, append-human-note', () => {

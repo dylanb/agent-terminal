@@ -1583,6 +1583,9 @@ function seedFakeGhGit(prefix: string): { binDir: string; logFile: string } {
     'echo "gh $*" >> "$FAKE_GHGIT_LOG"\n' +
     'if [ "$1" = "repo" ] && [ "$2" = "view" ]; then echo "main"; exit 0; fi\n' +
     'if [ "$1" = "issue" ] && [ "$2" = "view" ]; then echo \'{"title":"Fake ticket","url":"https://example/issues/176"}\'; exit 0; fi\n' +
+    // §26.9/L8 epic-promote — each `gh issue create` returns a fresh issue URL (a per-binDir counter file
+    // seeded at 500) so the sub-issues carry distinct numbers the executor appends to linked_issues.
+    'if [ "$1" = "issue" ] && [ "$2" = "create" ]; then seq="$FAKE_GHGIT_LOG.issue-seq"; n=$(cat "$seq" 2>/dev/null || echo 500); n=$((n+1)); echo "$n" > "$seq"; echo "https://github.com/fake/repo/issues/$n"; exit 0; fi\n' +
     'if [ "$1" = "pr" ] && [ "$2" = "create" ]; then echo "https://github.com/fake/repo/pull/4242"; exit 0; fi\n' +
     'exit 0\n';
   writeFileSync(join(binDir, 'git'), fakeGit, { mode: 0o755 });
@@ -1639,9 +1642,15 @@ function seedFakeAgent(
     // test-controlled log root ($APP_SESSION_LOG_ROOT) so the cost meter has tokens to price without an
     // LLM. 1,000,000 claude-sonnet-5 input tokens → exactly $3.00 against the checked-in pricing table.
     costFixture?: boolean;
+    // §26.9/L8 — when set, the work turn writes a plan.md whose frontmatter classifies it an epic with a
+    // three-sub-ticket breakdown, so epic-promote at the plan-approval gate creates the N-1 (=2) sub-issues.
+    epicPlan?: boolean;
   },
 ): void {
-  const writePlan = "mkdir -p .agent-loop; printf '# Plan\\n\\nfake plan body\\n' > .agent-loop/plan.md";
+  const writePlan = opts.epicPlan
+    ? "mkdir -p .agent-loop; printf '%s\\n' '---' 'classification: epic' 'sub_tickets:' " +
+      "'  - title: Slice one' '  - title: Slice two' '  - title: Slice three' '---' '' '# Plan' > .agent-loop/plan.md"
+    : "mkdir -p .agent-loop; printf '# Plan\\n\\nfake plan body\\n' > .agent-loop/plan.md";
   // The token log the §26.10 meter reads: one assistant event carrying the model + usage (Claude Code's
   // private JSONL shape). Guarded on the env var so only the L7 test (which sets it) writes a fixture.
   const writeTokens = opts.costFixture
@@ -2695,6 +2704,44 @@ test('impasse at the plan gate terminates the loop at the impasse status (§26.1
   expect(readFileSync(stateFile, 'utf8')).toContain('terminated: true');
   expect(existsSync(join(repo, '.agent-loop', 'human-notes', '1.md'))).toBe(true);
   expect(readFileSync(logFile, 'utf8')).not.toContain('pr ready');
+
+  await app.close();
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+  rmSync(binDir, { recursive: true, force: true });
+});
+
+// §26.13 / L8 — epic-promote. The work-agent classifies the plan an epic (three sub-tickets) in plan.md;
+// approving at the plan gate reuses the current PR for sub-ticket-1 and creates the remaining N-1 (=2)
+// sub-issues out of band, appending them to linked_issues + recording `epic` in state.yaml.
+test('approve on an epic plan creates N-1 sub-issues and records epic in state.yaml (§26.13 / L8)', async () => {
+  const repo = seedBootstrapFlowRepo('agent-term-e2e-l8-epic-');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-l8-epic-home-'));
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-l8-epic-bin-');
+  seedFakeAgent(binDir, { work: 'write-plan', reviews: 'all', consolidate: 'clean', epicPlan: true });
+  await driveToPlanGate(repo, home, binDir, logFile);
+
+  await gateButton('approve').click();
+
+  const stateFile = join(repo, '.agent-loop', 'state.yaml');
+  await expect.poll(() => readFileSync(stateFile, 'utf8'), { timeout: 15_000 }).toContain('status: plan-human-approved');
+  const stateText = readFileSync(stateFile, 'utf8');
+  // Epic-promote created the N-1 sub-issues (Slice one reuses the current PR) and recorded them.
+  expect(stateText).toContain('epic:');
+  expect(stateText).toContain('sub_issues:');
+  expect(stateText).toContain('terminated: true');
+  // The two created issue numbers (501, 502 from the fake-gh counter) are appended to linked_issues.
+  expect(stateText).toContain('- 501');
+  expect(stateText).toContain('- 502');
+  // Exactly the two remaining sub-tickets were created out of band (sub-ticket-1 reused the PR).
+  const calls = readFileSync(logFile, 'utf8');
+  const creates = calls.split('\n').filter((l) => l.startsWith('gh issue create'));
+  expect(creates).toHaveLength(2);
+  expect(calls).toContain('--title Slice two');
+  expect(calls).toContain('--title Slice three');
+  expect(calls).not.toContain('--title Slice one');
+  // The plan-approval mark-pr-ready still ran.
+  expect(calls).toContain('pr ready');
 
   await app.close();
   rmSync(repo, { recursive: true, force: true });
