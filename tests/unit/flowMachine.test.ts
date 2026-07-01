@@ -264,6 +264,36 @@ describe('flow state machine — ticket/PR refs (progress-gated)', () => {
     expect(flow.state().refs).toBeUndefined();
   });
 
+  // --- the pr branch's precedence/fallback twins of the github-ticket tests above ---
+  // A loop step that also declares a pr-typed input, so entering it makes BOTH the pr input and the
+  // loop's state.yaml pr eligible — the only shape that pins which source wins.
+  const PR_LOOP_FLOW: FlowLoad = {
+    ok: true,
+    definition: {
+      name: 'f',
+      steps: [
+        { id: 'groom', kind: 'manual' },
+        { id: 'ship', kind: 'loop', loop: 'ship-loop', bootstrap: 'pickup', inputs: [{ name: 'thepr', type: 'pr', required: true }] },
+      ],
+    },
+    flowDir: '/tmp/f/.agent-terminal',
+  };
+
+  it('prefers the pr-typed input over the loop state.yaml pr when BOTH are present', () => {
+    // Pins precedence: a mutation swapping the `??` operands on the pr branch would otherwise pass.
+    const store = createFlowStateStore(mkdtempSync(join(tmpdir(), 'flow-refs-')));
+    store.write({ step: 'ship', status: 'in_progress', inputs: { thepr: '512' } });
+    const flow = createFlowMachine(PR_LOOP_FLOW, store, undefined, () => mirror({ pr: 179 }));
+    expect(flow.state().refs?.pr).toBe(512);
+  });
+
+  it('falls back to the loop state.yaml pr when the pr-typed input is present but non-numeric', () => {
+    const store = createFlowStateStore(mkdtempSync(join(tmpdir(), 'flow-refs-')));
+    store.write({ step: 'ship', status: 'in_progress', inputs: { thepr: 'abc' } });
+    const flow = createFlowMachine(PR_LOOP_FLOW, store, undefined, () => mirror({ pr: 179 }));
+    expect(flow.state().refs?.pr).toBe(179);
+  });
+
   // --- a pr-typed input surfaces refs.pr with no loop at all, once its step is entered ---
   const PR_INPUT_FLOW: FlowLoad = {
     ok: true,
