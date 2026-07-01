@@ -1,7 +1,8 @@
-// §26.5 / §26.3 — composes a work-{phase} actor-turn prompt from the bound LoopDef recipe. L2 is the
-// minimal-but-real slice: the template body (`prompts/work-{phase}.md`) + token substitution + the
-// appended done-signal instruction (§26.3/D47a). Fuller recipe assembly (charter blocks, skills,
-// artifact slots) belongs to the reviewer/consolidate slices (L3/L4); this is the work turn only.
+// §26.5 / §26.3 — composes the orchestrator's actor-turn prompts from the bound LoopDef recipe: the
+// work turn and the consolidate turn from their template files (`prompts/work-{phase}.md`,
+// `prompts/consolidate.md`) + token substitution, and the spawn-reviewers turn from main (no template,
+// §26.4). Every turn appends the done-signal instruction (§26.3/D47a). Charter blocks, skills, and the
+// full artifact-slot recipe remain unmodeled — the minimal-but-real slice.
 
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -20,23 +21,80 @@ export interface WorkPromptRequest {
   configDir?: string;
 }
 
+/** Assemble one actor-turn prompt from a LoopDef template file (§26.5 recipe: template body + token
+ *  substitution + the appended done-signal instruction). Null when the loop name is unsafe or the
+ *  template is absent — the recipe's `on_missing: fail` for the template-file slot, which the
+ *  orchestrator treats as a config error. */
+function assembleFromTemplate(
+  repoDir: string,
+  loopName: string,
+  templateRel: string,
+  tokens: Record<string, string>,
+  turnKey: string,
+  configDir?: string,
+): string | null {
+  const loopDir = resolveLoopDir(repoDir, loopName, configDir);
+  if (loopDir === null) return null;
+  let body: string;
+  try {
+    body = readFileSync(path.join(loopDir, templateRel), 'utf8');
+  } catch {
+    return null;
+  }
+  for (const [token, value] of Object.entries(tokens)) {
+    body = body.split(`{{${token}}}`).join(value);
+  }
+  return `${body}\n${doneSignalInstruction(turnKey)}\n`;
+}
+
 /** Compose the work-turn prompt, or null when the loop name is unsafe or the phase template is absent
  *  (the recipe's `on_missing: fail` for the template-file slot — the orchestrator treats null as a
  *  config error). */
 export function composeWorkPrompt(req: WorkPromptRequest): string | null {
-  const loopDir = resolveLoopDir(req.repoDir, req.loopName, req.configDir);
-  if (loopDir === null) return null;
-  const templatePath = path.join(loopDir, 'prompts', `work-${req.phase}.md`);
-  let body: string;
-  try {
-    body = readFileSync(templatePath, 'utf8');
-  } catch {
-    return null;
-  }
-  for (const [token, value] of Object.entries(req.tokens)) {
-    body = body.split(`{{${token}}}`).join(value);
-  }
-  return `${body}\n${doneSignalInstruction(req.turnKey)}\n`;
+  return assembleFromTemplate(
+    req.repoDir,
+    req.loopName,
+    path.join('prompts', `work-${req.phase}.md`),
+    req.tokens,
+    req.turnKey,
+    req.configDir,
+  );
+}
+
+export interface ConsolidatePromptRequest {
+  repoDir: string;
+  loopName: string;
+  /** Phase id reviewed (e.g. `plan`) — the `{{PHASE}}` slot. */
+  phase: string;
+  /** Current iteration — the `{{ITERATION}}` slot and the `{{REVIEW_DIR}}` (`reviews/{iter}`) it reads. */
+  iteration: number;
+  /** Turn key the done-signal is scoped to (e.g. `consolidate-plan`). */
+  turnKey: string;
+  /** Caller-resolved slots not derivable here: `{{CLEAN_POLICY}}` (the verdict taxonomy anchor, §26.3
+   *  D45) and `{{SEVERITY_FLOOR}}` (v1 omits the ladder, §26.5, so a static default). */
+  tokens: Record<string, string>;
+  configDir?: string;
+}
+
+/** §26.3/D45 — compose the consolidate-turn prompt from the LoopDef's `prompts/consolidate.md` template.
+ *  The `{{ITERATION}}`/`{{PHASE}}`/`{{REVIEW_DIR}}` slots are filled from the request; the verdict-policy
+ *  slots (`{{CLEAN_POLICY}}`/`{{SEVERITY_FLOOR}}`) come from the caller. Null on an unsafe loop name or a
+ *  missing template, exactly like the work prompt. */
+export function composeConsolidatePrompt(req: ConsolidatePromptRequest): string | null {
+  const tokens: Record<string, string> = {
+    ITERATION: String(req.iteration),
+    PHASE: req.phase,
+    REVIEW_DIR: path.join('.agent-loop', 'reviews', String(req.iteration)),
+    ...req.tokens,
+  };
+  return assembleFromTemplate(
+    req.repoDir,
+    req.loopName,
+    path.join('prompts', 'consolidate.md'),
+    tokens,
+    req.turnKey,
+    req.configDir,
+  );
 }
 
 export interface SpawnReviewersRequest {

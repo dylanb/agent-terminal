@@ -18,3 +18,19 @@ export function allReviewsPresent(repoDir: string, iteration: number, personas: 
     }
   });
 }
+
+/** The consolidate turn's artifact-confirmed check (§26.3/D47a b + §26.13 L4): the raw `verdict` string
+ *  from `reviews/{iteration}/consolidated.json`, or null when the file is absent, does not parse, or
+ *  carries no string verdict. The caller normalizes the raw value against the LoopDef taxonomy (§26.6). */
+export function consolidatedVerdict(repoDir: string, iteration: number): string | null {
+  const file = path.join(repoDir, '.agent-loop', 'reviews', String(iteration), 'consolidated.json');
+  try {
+    const doc: unknown = JSON.parse(readFileSync(file, 'utf8'));
+    if (doc !== null && typeof doc === 'object' && typeof (doc as { verdict?: unknown }).verdict === 'string') {
+      return (doc as { verdict: string }).verdict;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}

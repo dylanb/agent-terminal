@@ -2,7 +2,11 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { composeWorkPrompt, composeSpawnReviewersPrompt } from '../../src/main/loopRecipe';
+import {
+  composeWorkPrompt,
+  composeSpawnReviewersPrompt,
+  composeConsolidatePrompt,
+} from '../../src/main/loopRecipe';
 import { turnDoneSentinel } from '../../src/shared/loopTurn';
 
 // §26.5 / §26.3 — the orchestrator composes the work-{phase} turn prompt from the bound LoopDef recipe.
@@ -76,5 +80,69 @@ describe('spawn-reviewers recipe composition (§26.4)', () => {
   it('instructs parallel subagent fan-out, not a serial walk', () => {
     const out = composeSpawnReviewersPrompt({ phase: 'plan', iteration: 1, personas, turnKey: 'review-plan' });
     expect(out.toLowerCase()).toContain('parallel');
+  });
+});
+
+// §26.3/D45 + §26.13 L4 — the consolidate turn's prompt is assembled from the LoopDef's real
+// prompts/consolidate.md template + token substitution (the §26.5 recipe assembly), given the verdict
+// taxonomy via CLEAN_POLICY, with the done-signal instruction appended like every actor turn.
+describe('consolidate recipe composition (§26.5/§26.3 D45)', () => {
+  const configDir = resolve(__dirname, '..', '..', 'example');
+  let repo: string;
+  beforeEach(() => {
+    repo = mkdtempSync(join(tmpdir(), 'consolidate-recipe-'));
+  });
+  afterEach(() => {
+    rmSync(repo, { recursive: true, force: true });
+  });
+
+  it('reads the real consolidate template body and appends the done-signal instruction', () => {
+    const out = composeConsolidatePrompt({
+      repoDir: repo,
+      loopName: 'plan-loop',
+      phase: 'plan',
+      iteration: 3,
+      turnKey: 'consolidate-plan',
+      tokens: { CLEAN_POLICY: 'clean only when findings_kept is empty', SEVERITY_FLOOR: 'minor' },
+      configDir,
+    });
+    expect(out).not.toBeNull();
+    expect(out).toContain('Consolidator'); // the real template's heading body
+    expect(out).toContain(turnDoneSentinel('consolidate-plan')); // the done-signal instruction is appended
+  });
+
+  it('substitutes the iteration/phase/review-dir/verdict-policy slots, leaving no provided token unresolved', () => {
+    const out = composeConsolidatePrompt({
+      repoDir: repo,
+      loopName: 'plan-loop',
+      phase: 'plan',
+      iteration: 7,
+      turnKey: 'consolidate-plan',
+      tokens: { CLEAN_POLICY: 'CLEAN-POLICY-MARKER', SEVERITY_FLOOR: 'blocker' },
+      configDir,
+    });
+    expect(out).toContain('7'); // {{ITERATION}}
+    expect(out).toContain('reviews/7'); // {{REVIEW_DIR}} → .agent-loop/reviews/{iter}
+    expect(out).toContain('CLEAN-POLICY-MARKER'); // {{CLEAN_POLICY}} carries the verdict taxonomy
+    expect(out).toContain('blocker'); // {{SEVERITY_FLOOR}}
+    expect(out).not.toContain('{{ITERATION}}');
+    expect(out).not.toContain('{{PHASE}}');
+    expect(out).not.toContain('{{REVIEW_DIR}}');
+    expect(out).not.toContain('{{CLEAN_POLICY}}');
+    expect(out).not.toContain('{{SEVERITY_FLOOR}}');
+  });
+
+  it('returns null when the consolidate template does not exist (on_missing: fail)', () => {
+    // A repo-local override pointing at a def dir that has no prompts/consolidate.md → null.
+    const out = composeConsolidatePrompt({
+      repoDir: repo,
+      loopName: 'no-such-loop',
+      phase: 'plan',
+      iteration: 1,
+      turnKey: 'consolidate-plan',
+      tokens: {},
+      configDir,
+    });
+    expect(out).toBeNull();
   });
 });

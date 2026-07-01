@@ -2,7 +2,12 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { parseLoopDef, gateForStatus, reviewerRosterForPhase } from '../../src/main/loopDef';
+import {
+  parseLoopDef,
+  gateForStatus,
+  reviewerRosterForPhase,
+  normalizeConsolidatedVerdict,
+} from '../../src/main/loopDef';
 
 // §24.2.3 T2 (folded) / §18.1 — the read-only LoopDef resolver. Each gate's `id` IS a status string,
 // carrying `human_options` + `kind`. Resolution mirrors `agent-loop list`: a repo `.agent-loop.yaml`
@@ -198,9 +203,29 @@ describe('pickup_contract resolution (§26.5 / §26.9)', () => {
     ]);
   });
 
-  it('parses the phase id + entry_status the orchestrator maps a status to (§26.5)', () => {
+  it('parses the phase id + entry_status + post-verdict gate statuses the orchestrator branches on (§26.5/§26.6)', () => {
     const def = parseLoopDef(repo, 'plan-loop', exampleConfigDir);
-    expect(def?.phases).toEqual([{ id: 'plan', entryStatus: 'plan-draft', rosterOverrideId: '' }]);
+    expect(def?.phases).toEqual([
+      {
+        id: 'plan',
+        entryStatus: 'plan-draft',
+        rosterOverrideId: '',
+        postCleanGate: 'awaiting-human-plan-approval',
+        postNeedsWorkGate: 'awaiting-human-plan-triage',
+      },
+    ]);
+  });
+
+  it('parses the consolidated verdict taxonomy so the orchestrator can normalize a read verdict (§26.5/§26.3 D45)', () => {
+    const def = parseLoopDef(repo, 'plan-loop', exampleConfigDir);
+    // The consolidator writes a canonical clean/needs-work verdict; a synonym or unknown string is
+    // normalized against the LoopDef taxonomy, defaulting to needs-work (the strict-rule fallback, §26.3).
+    expect(normalizeConsolidatedVerdict(def!, 'clean')).toBe('clean');
+    expect(normalizeConsolidatedVerdict(def!, 'needs-work')).toBe('needs-work');
+    expect(normalizeConsolidatedVerdict(def!, 'concerns')).toBe('needs-work'); // a mapped synonym
+    expect(normalizeConsolidatedVerdict(def!, 'approved')).toBe('clean'); // a mapped synonym
+    expect(normalizeConsolidatedVerdict(def!, 'CLEAN')).toBe('clean'); // case/space-insensitive
+    expect(normalizeConsolidatedVerdict(def!, 'gibberish')).toBe('needs-work'); // unknown → strict fallback
   });
 
   it('resolves the reviewer roster for a phase from the real plan-loop def (§26.4/§26.5)', () => {
@@ -238,7 +263,9 @@ describe('pickup_contract resolution (§26.5 / §26.9)', () => {
     writeFileSync(join(repo, 'evil.yaml'), evil);
     writeFileSync(join(repo, '.agent-loop.yaml'), 'loops:\n  evil-loop: ./evil.yaml\n');
     const def = parseLoopDef(repo, 'evil-loop');
-    expect(def?.phases).toEqual([{ id: 'plan', entryStatus: 'plan-draft', rosterOverrideId: '' }]);
+    expect(def?.phases).toEqual([
+      { id: 'plan', entryStatus: 'plan-draft', rosterOverrideId: '', postCleanGate: '', postNeedsWorkGate: '' },
+    ]);
     expect(reviewerRosterForPhase(def!, 'plan')).toEqual(['review-principal', 'review-security']);
   });
 

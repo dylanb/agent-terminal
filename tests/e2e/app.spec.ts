@@ -1500,7 +1500,11 @@ function fileOnlySignal(turnKey: string): string {
 
 function seedFakeAgent(
   binDir: string,
-  opts: { work: 'write-plan' | 'file-only' | 'plan-only' | 'noop'; reviews?: 'all' | 'missing' },
+  opts: {
+    work: 'write-plan' | 'file-only' | 'plan-only' | 'noop';
+    reviews?: 'all' | 'missing';
+    consolidate?: 'clean' | 'needs-work';
+  },
 ): void {
   const writePlan = "mkdir -p .agent-loop; printf '# Plan\\n\\nfake plan body\\n' > .agent-loop/plan.md";
   const workAct =
@@ -1511,13 +1515,24 @@ function seedFakeAgent(
         : opts.work === 'file-only'
           ? `${writePlan}; ${fileOnlySignal('work-plan')}`
           : `${writePlan}; ${doneSignal('work-plan')}`;
-  // §26.4 — on the reviewers turn, write each roster persona's JSON for iteration 1 then signal done.
+  // §26.4/§26.13 L4 — reviews + consolidated are per-iteration (reviews/<iter>/…). The REPL derives the
+  // iteration from the app-written state.yaml so a re-iteration (needs-work) writes reviews/<iter+1>/.
+  const getIter = "iter=$(grep -m1 '^iteration:' .agent-loop/state.yaml | tr -dc '0-9')";
+  // §26.4 — on the reviewers turn, write each roster persona's JSON for the iteration then signal done.
   // `missing` writes all but one so the fan-out is incomplete (retry-then-error); undefined = do nothing.
   const personas = opts.reviews === 'missing' ? PLAN_PERSONAS.slice(0, -1) : PLAN_PERSONAS;
   const writeReviews =
-    'mkdir -p .agent-loop/reviews/1; ' +
-    personas.map((p) => `printf '%s' '{\"verdict\":\"clean\"}' > .agent-loop/reviews/1/${p}.json`).join('; ');
+    `${getIter}; mkdir -p .agent-loop/reviews/$iter; ` +
+    personas.map((p) => `printf '%s' '{\"verdict\":\"clean\"}' > .agent-loop/reviews/$iter/${p}.json`).join('; ');
   const reviewAct = opts.reviews === undefined ? ':' : `${writeReviews}; ${doneSignal('review-plan')}`;
+  // §26.3/D45 — on the consolidate turn, write reviews/<iter>/consolidated.json with the scripted verdict
+  // then signal done. undefined = do nothing (the turn never confirms → retry-then-error).
+  const consolidateAct =
+    opts.consolidate === undefined
+      ? ':'
+      : `${getIter}; mkdir -p .agent-loop/reviews/$iter; ` +
+        `printf '%s' '{\"verdict\":\"${opts.consolidate}\"}' > .agent-loop/reviews/$iter/consolidated.json; ` +
+        `${doneSignal('consolidate-plan')}`;
   // The injected prompt's done-signal instruction line carries `turn-done:<turnKey>` (inside the sentinel
   // it tells the agent to print), so the REPL keys its scripted turn off which sentinel marker it sees.
   const script =
@@ -1526,8 +1541,12 @@ function seedFakeAgent(
     'while IFS= read -r line; do\n' +
     '  [ -z "$line" ] && continue\n' +
     '  case "$line" in\n' +
+    // §26.3/D46 — record each injected `/clear` boundary so the e2e can assert the orchestrator issued it
+    // (the echo scrolls out of the visible xterm-rows behind the next prompt, so a marker file is stable).
+    '    /clear) mkdir -p .agent-loop; printf x >> .agent-loop/clear-seen ;;\n' +
     `    *turn-done:work-plan*) ${workAct} ;;\n` +
     `    *turn-done:review-plan*) ${reviewAct} ;;\n` +
+    `    *turn-done:consolidate-plan*) ${consolidateAct} ;;\n` +
     '  esac\n' +
     'done\n';
   writeFileSync(join(binDir, 'fake-agent'), script, { mode: 0o755 });
@@ -2139,7 +2158,7 @@ test('a work-agent turn injected after pickup advances on plan.md + the done-sig
   const repo = seedBootstrapFlowRepo('agent-term-e2e-l2-ok-');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-l2-ok-home-'));
   const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-l2-ok-bin-');
-  seedFakeAgent(binDir, { work: 'write-plan', reviews: 'all' }); // work turn + the reviewer fan-out it chains into
+  seedFakeAgent(binDir, { work: 'write-plan', reviews: 'all', consolidate: 'clean' }); // full chain: work → reviewers → consolidate
   await driveToWorkTurn(repo, home, binDir, logFile, '30000');
 
   // Land: the fake-agent received the injected work-plan prompt and wrote plan.md, and the orchestrator
@@ -2182,7 +2201,7 @@ test('the loop panel "mark turn complete" control advances a sentinel-less turn 
   const repo = seedBootstrapFlowRepo('agent-term-e2e-l2-mark-');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-l2-mark-home-'));
   const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-l2-mark-bin-');
-  seedFakeAgent(binDir, { work: 'plan-only', reviews: 'all' }); // plan.md but NO work signal; reviewers settle after the manual advance
+  seedFakeAgent(binDir, { work: 'plan-only', reviews: 'all', consolidate: 'clean' }); // plan.md but NO work signal; the chain settles after the manual advance
   await driveToWorkTurn(repo, home, binDir, logFile, '60000'); // long timeout: no auto-error races the click
 
   // The artifact is present but no done-signal fired, so the turn sits in flight. The operator's manual
@@ -2209,7 +2228,7 @@ test('a work turn completes on the turn-done FILE alone, with no sentinel line (
   const repo = seedBootstrapFlowRepo('agent-term-e2e-l2-fileonly-');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-l2-fileonly-home-'));
   const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-l2-fileonly-bin-');
-  seedFakeAgent(binDir, { work: 'file-only', reviews: 'all' });
+  seedFakeAgent(binDir, { work: 'file-only', reviews: 'all', consolidate: 'clean' });
   await driveToWorkTurn(repo, home, binDir, logFile, '30000');
 
   await expect.poll(() => existsSync(join(repo, '.agent-loop', 'plan.md')), { timeout: 20_000 }).toBe(true);
@@ -2233,7 +2252,7 @@ test('the work turn chains into the reviewer fan-out; all persona JSONs advance 
   const repo = seedBootstrapFlowRepo('agent-term-e2e-l3-ok-');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-l3-ok-home-'));
   const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-l3-ok-bin-');
-  seedFakeAgent(binDir, { work: 'write-plan', reviews: 'all' });
+  seedFakeAgent(binDir, { work: 'write-plan', reviews: 'all', consolidate: 'clean' });
   await driveToWorkTurn(repo, home, binDir, logFile, '30000');
 
   // Land: the work turn completes on plan.md, then the orchestrator injects the spawn-reviewers prompt;
@@ -2269,6 +2288,62 @@ test('a reviewer fan-out missing one persona JSON retries once then stops in err
   expect(turnEvents(home, repo).some((e) => e.cmd.includes('review-plan') && e.cmd.includes('failed') && e.exit === 1)).toBe(true);
   await loopReadout().click();
   await expect(loopPanel()).toContainText('error', { timeout: 10_000 });
+
+  await app.close();
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+  rmSync(binDir, { recursive: true, force: true });
+});
+
+test('the fan-out chains into consolidate; a clean verdict stops at the plan-approval gate (§26.13 / L4)', async () => {
+  const repo = seedBootstrapFlowRepo('agent-term-e2e-l4-clean-');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-l4-clean-home-'));
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-l4-clean-bin-');
+  seedFakeAgent(binDir, { work: 'write-plan', reviews: 'all', consolidate: 'clean' });
+  await driveToWorkTurn(repo, home, binDir, logFile, '30000');
+
+  // Land: work → reviewers → /clear → consolidate writes a clean verdict → the orchestrator advances the
+  // run to the phase's post-clean human gate and STOPs (it does not re-iterate to a second iteration).
+  await expect.poll(() => existsSync(join(reviewsDir(repo), 'consolidated.json')), { timeout: 25_000 }).toBe(true);
+  const stateFile = join(repo, '.agent-loop', 'state.yaml');
+  await expect
+    .poll(() => readFileSync(stateFile, 'utf8'), { timeout: 25_000 })
+    .toContain('status: awaiting-human-plan-approval');
+  expect(readFileSync(stateFile, 'utf8')).toContain('iteration: 1'); // stopped, never re-iterated
+  expect(readFileSync(stateFile, 'utf8')).not.toContain('status: error');
+  // The orchestrator injected a /clear at the reviewers→consolidate boundary (D46): the fake instance
+  // received it and recorded the marker (the terminal echo scrolls out of view behind the next prompt).
+  expect(existsSync(join(repo, '.agent-loop', 'clear-seen'))).toBe(true);
+  // The gate status is human-needed, so the docked panel renders the exact awaiting-human status string.
+  await loopReadout().click();
+  await expect(loopPanel()).toContainText('awaiting-human-plan-approval', { timeout: 10_000 });
+
+  await app.close();
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+  rmSync(binDir, { recursive: true, force: true });
+});
+
+test('a needs-work verdict /clears and re-iterates to the next iteration (§26.13 / L4)', async () => {
+  const repo = seedBootstrapFlowRepo('agent-term-e2e-l4-needswork-');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-l4-needswork-home-'));
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-l4-needswork-bin-');
+  // Every consolidate verdict is needs-work, so each iteration re-iterates; the run climbs past iter 1.
+  seedFakeAgent(binDir, { work: 'write-plan', reviews: 'all', consolidate: 'needs-work' });
+  await driveToWorkTurn(repo, home, binDir, logFile, '30000');
+
+  // Land: the first iteration's consolidate returns needs-work → the orchestrator writes the next
+  // iteration and re-runs the work→reviewers→consolidate cycle, so a second iteration's consolidated.json
+  // appears. The run stays at the phase entry status (never a gate) and never errors.
+  await expect
+    .poll(() => existsSync(join(repo, '.agent-loop', 'reviews', '2', 'consolidated.json')), { timeout: 30_000 })
+    .toBe(true);
+  const stateText = readFileSync(join(repo, '.agent-loop', 'state.yaml'), 'utf8');
+  expect(stateText).toContain('status: plan-draft'); // re-iterating, not stopped at a human gate
+  expect(stateText).not.toContain('status: error');
+  expect(stateText).not.toContain('awaiting-human'); // never advanced to a gate
+  // The /clear at the consolidate→re-iterate boundary (D46) reached the instance before the re-run.
+  expect(existsSync(join(repo, '.agent-loop', 'clear-seen'))).toBe(true);
 
   await app.close();
   rmSync(repo, { recursive: true, force: true });

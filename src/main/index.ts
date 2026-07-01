@@ -68,11 +68,11 @@ import { auditRootDir } from './auditPaths';
 import { createFlowEntryActions } from './flowEntryActions';
 import { parseAgentLoopState, watchAgentLoopState } from './agentLoopBridge';
 import { createLoopNotifier } from './loopNotifier';
-import { parseLoopDef, reviewerRosterForPhase } from './loopDef';
+import { parseLoopDef, reviewerRosterForPhase, normalizeConsolidatedVerdict } from './loopDef';
 import { runPickup, createRealPickupDeps } from './loopPickup';
-import { createTurnRunner, type TurnRunner } from './loopOrchestrator';
-import { composeWorkPrompt, composeSpawnReviewersPrompt } from './loopRecipe';
-import { allReviewsPresent } from './reviewArtifacts';
+import { createTurnRunner, decideConsolidateOutcome, type TurnRunner } from './loopOrchestrator';
+import { composeWorkPrompt, composeSpawnReviewersPrompt, composeConsolidatePrompt } from './loopRecipe';
+import { allReviewsPresent, consolidatedVerdict } from './reviewArtifacts';
 import { createSentinelWatcher } from './turnSentinel';
 import { readAndClearTurnDone, watchTurnDone } from './turnDoneFile';
 import { writeLoopState } from './loopStateWriter';
@@ -250,13 +250,14 @@ async function createWindow(): Promise<void> {
     onInject: () => suppressor.noteInjection(),
   });
 
-  // §26.3/§26.4 — the in-app turn descriptor the runner's domain ports read. A turn is either the `work`
-  // actor (produces `plan.md`) or the `reviewers` fan-out (produces every roster persona's
-  // `reviews/<iter>/<persona>.json`); `kind` selects the prompt recipe and the artifact-confirmed check,
-  // and `reviewers` carries its resolved roster + iteration.
+  // §26.3/§26.4 — the in-app turn descriptor the runner's domain ports read. A turn is the `work` actor
+  // (produces `plan.md`), the `reviewers` fan-out (produces every roster persona's
+  // `reviews/<iter>/<persona>.json`), or the `consolidate` actor (produces `reviews/<iter>/consolidated.json`
+  // with a verdict); `kind` selects the prompt recipe and the artifact-confirmed check.
   type ActiveTurn =
     | { kind: 'work'; repoDir: string; loopName: string; phase: string; turnKey: string }
-    | { kind: 'reviewers'; repoDir: string; loopName: string; phase: string; turnKey: string; personas: string[]; iteration: number };
+    | { kind: 'reviewers'; repoDir: string; loopName: string; phase: string; turnKey: string; personas: string[]; iteration: number }
+    | { kind: 'consolidate'; repoDir: string; loopName: string; phase: string; turnKey: string; iteration: number };
   let activeTurn: ActiveTurn | null = null;
   let turnTimer: ReturnType<typeof setTimeout> | null = null;
   let unwatchTurnDone: (() => void) | null = null;
@@ -271,6 +272,21 @@ async function createWindow(): Promise<void> {
           iteration: activeTurn.iteration,
           personas: activeTurn.personas,
           turnKey: activeTurn.turnKey,
+        });
+      }
+      if (activeTurn.kind === 'consolidate') {
+        return composeConsolidatePrompt({
+          repoDir: activeTurn.repoDir,
+          loopName: activeTurn.loopName,
+          phase: activeTurn.phase,
+          iteration: activeTurn.iteration,
+          turnKey: activeTurn.turnKey,
+          // §26.5 — v1 omits the rising severity-floor ladder (severity_floor_track read, not enforced),
+          // so the clean policy is "keep-nothing → clean" and the floor is `minor` (defers nothing).
+          tokens: {
+            CLEAN_POLICY: 'Emit verdict "clean" only when findings_kept is empty after triage; otherwise "needs-work".',
+            SEVERITY_FLOOR: 'minor',
+          },
         });
       }
       const s = parseAgentLoopState(activeTurn.repoDir);
@@ -296,6 +312,9 @@ async function createWindow(): Promise<void> {
       if (!activeTurn) return false;
       if (activeTurn.kind === 'reviewers') {
         return allReviewsPresent(activeTurn.repoDir, activeTurn.iteration, activeTurn.personas);
+      }
+      if (activeTurn.kind === 'consolidate') {
+        return consolidatedVerdict(activeTurn.repoDir, activeTurn.iteration) !== null;
       }
       try {
         return statSync(path.join(activeTurn.repoDir, '.agent-loop', 'plan.md')).size > 0;
@@ -332,6 +351,14 @@ async function createWindow(): Promise<void> {
       pushFlowChanged();
       // §26.4 — the work turn's completion chains into the reviewer fan-out (same loop, same iteration).
       if (finished?.kind === 'work') startReviewersTurn(finished.repoDir, finished.loopName, finished.phase);
+      // §26.3/D46 — the fan-out chains into the consolidate turn, /clear-ing the instance first so the
+      // consolidator merges in a fresh main-instance context (the work-agent's context cannot bias it).
+      else if (finished?.kind === 'reviewers') {
+        clearContext();
+        startConsolidateTurn(finished.repoDir, finished.loopName, finished.phase, finished.iteration);
+      }
+      // §26.6 — the consolidate verdict decides the branch (clean STOPs at the gate, needs-work re-iterates).
+      else if (finished?.kind === 'consolidate') advanceAfterConsolidate(finished);
     },
   });
   // The §8.3 active→quiet flip is the orchestrator's "instance is now injectable" signal (§26.2) —
@@ -358,6 +385,50 @@ async function createWindow(): Promise<void> {
     const s = parseAgentLoopState(repoDir);
     activeTurn = { kind: 'reviewers', repoDir, loopName, phase, turnKey: `review-${phase}`, personas, iteration: s?.iteration ?? 1 };
     turnRunner.requestTurn(activeTurn.turnKey);
+  };
+  // §26.3/D46 — /clear the hosted instance at an actor boundary. Marking it active synchronously closes
+  // the window between this command and the next turn's inject: the turn runner (injectable = quiet)
+  // defers, so the deferred prompt only lands after /clear has drained and the instance re-quiesces.
+  const clearContext = (): void => {
+    inject('/clear', { submit: true });
+    agentActivity = 'active';
+  };
+  // §26.3/D45 — run the consolidate turn: a fresh main-instance turn that reads the fan-out's persona
+  // reviews and writes `reviews/<iter>/consolidated.json` with a verdict (advances when that verdict
+  // parses; retry-then-error on a missing/malformed one, like every turn).
+  const startConsolidateTurn = (repoDir: string, loopName: string, phase: string, iteration: number): void => {
+    activeTurn = { kind: 'consolidate', repoDir, loopName, phase, turnKey: `consolidate-${phase}`, iteration };
+    turnRunner.requestTurn(activeTurn.turnKey);
+  };
+  // §26.6/§26.13 L4 — branch on the consolidate verdict (normalized against the bound LoopDef taxonomy):
+  // `clean` writes the phase's post-clean gate status and STOPs (awaits the human); `needs-work` writes
+  // the next iteration at the phase entry status, /clear-s, and re-runs the work turn.
+  const advanceAfterConsolidate = (finished: Extract<ActiveTurn, { kind: 'consolidate' }>): void => {
+    const def = parseLoopDef(finished.repoDir, finished.loopName);
+    const raw = consolidatedVerdict(finished.repoDir, finished.iteration);
+    const verdict = def && raw !== null ? normalizeConsolidatedVerdict(def, raw) : 'needs-work';
+    const phase = def?.phases.find((p) => p.id === finished.phase);
+    const outcome = decideConsolidateOutcome(verdict, phase?.postCleanGate ?? '', finished.iteration);
+    const s = parseAgentLoopState(finished.repoDir);
+    const base = {
+      pr: s?.pr ?? null,
+      branch: s?.branch ?? null,
+      boundLoop: finished.loopName,
+      linkedIssues: s?.linkedIssues ?? [],
+    };
+    if (outcome.kind === 'gate') {
+      writeLoopState(finished.repoDir, { ...base, status: outcome.status, iteration: finished.iteration });
+      pushFlowChanged();
+      return;
+    }
+    writeLoopState(finished.repoDir, {
+      ...base,
+      status: phase?.entryStatus ?? s?.status ?? '',
+      iteration: outcome.nextIteration,
+    });
+    pushFlowChanged();
+    clearContext();
+    startWorkTurn(finished.repoDir, finished.loopName, finished.phase);
   };
 
   // `transitioningRepo` carries the active repoKey into the synchronous onEnterStep below, so a loop

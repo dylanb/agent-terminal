@@ -44,12 +44,26 @@ export interface LoopPhase {
   entryStatus: string;
   /** A non-empty `roster_override_id` binds this phase to a named roster; "" inherits the default. */
   rosterOverrideId: string;
+  /** The status a `clean` consolidate verdict advances this phase to (§26.6) — a human gate that STOPs
+   *  the loop; "" when the def omits it. */
+  postCleanGate: string;
+  /** The status a `needs-work` verdict routes to when phase-2/at-cap (§26.6/§26.8); "" when omitted. */
+  postNeedsWorkGate: string;
 }
 
 /** One entry of the §26.5 roster catalog: a named ordered list of reviewer persona actors. */
 export interface LoopRoster {
   id: string;
   actors: string[];
+}
+
+/** The §26.5 `verdicts` taxonomy the consolidator applies (§26.3/D45): the consolidated verdict's
+ *  canonical values + the synonym→canonical map. The orchestrator reads it to normalize the verdict
+ *  the consolidator wrote back before branching (§26.6). */
+export interface LoopVerdicts {
+  consolidatedCanonical: string[];
+  /** Lowercased synonym → canonical verdict; canonical values map to themselves in the real defs. */
+  consolidatedSynonyms: Record<string, string>;
 }
 
 /** The gate slice of a LoopDef the flow reads (§18.1) plus the phase/roster/pickup_contract fields the
@@ -61,6 +75,8 @@ export interface LoopDef {
   /** The §26.5 roster catalog + the catalog's default roster id — the source of the §26.4 fan-out roster. */
   rosters: LoopRoster[];
   defaultRosterId: string;
+  /** The consolidated-verdict taxonomy (§26.5); undefined when the def carries no `verdicts` mapping. */
+  verdicts?: LoopVerdicts;
   pickup?: PickupContract;
 }
 
@@ -130,6 +146,8 @@ function toPhases(doc: Record<string, unknown>): LoopPhase[] {
             id: p.id,
             entryStatus: p.entry_status,
             rosterOverrideId: typeof p.roster_override_id === 'string' ? p.roster_override_id : '',
+            postCleanGate: typeof p.post_clean_gate === 'string' ? p.post_clean_gate : '',
+            postNeedsWorkGate: typeof p.post_needs_work_gate === 'string' ? p.post_needs_work_gate : '',
           }
         : null,
     )
@@ -152,6 +170,25 @@ function toRosters(doc: Record<string, unknown>): LoopRoster[] {
         : null,
     )
     .filter((r): r is LoopRoster => r !== null);
+}
+
+/** The §26.5 `verdicts.consolidated` slice (§26.3/D45): its canonical values + synonym map, both
+ *  degrading to empty when absent/ill-typed. Only the consolidated verdict is modelled — the persona
+ *  verdict taxonomy is the reviewers' concern, not the orchestrator's branch. */
+function toVerdicts(doc: Record<string, unknown>): LoopVerdicts | undefined {
+  const v = doc.verdicts;
+  if (!isRecord(v) || !isRecord(v.consolidated)) return undefined;
+  const c = v.consolidated;
+  const consolidatedCanonical = Array.isArray(c.canonical)
+    ? c.canonical.filter((x): x is string => typeof x === 'string')
+    : [];
+  const consolidatedSynonyms: Record<string, string> = {};
+  if (isRecord(c.synonyms)) {
+    for (const [syn, canon] of Object.entries(c.synonyms)) {
+      if (typeof canon === 'string') consolidatedSynonyms[syn.toLowerCase()] = canon;
+    }
+  }
+  return { consolidatedCanonical, consolidatedSynonyms };
 }
 
 function toGate(raw: unknown): LoopGate | null {
@@ -237,7 +274,16 @@ export function parseLoopDef(repoDir: string, name: string, configDir?: string):
   const phases = toPhases(doc);
   const rosters = toRosters(doc);
   const defaultRosterId = typeof doc.default_roster_id === 'string' ? doc.default_roster_id : '';
-  return { name: defName, gates, phases, rosters, defaultRosterId, ...(pickup ? { pickup } : {}) };
+  const verdicts = toVerdicts(doc);
+  return {
+    name: defName,
+    gates,
+    phases,
+    rosters,
+    defaultRosterId,
+    ...(verdicts ? { verdicts } : {}),
+    ...(pickup ? { pickup } : {}),
+  };
 }
 
 /** The reviewer fan-out roster for `phaseId` (§26.4): the phase's `roster_override_id` if set, else the
@@ -253,4 +299,14 @@ export function reviewerRosterForPhase(def: LoopDef, phaseId: string): string[] 
  *  status is mid-work (no gate — the loop is running, not awaiting a human). */
 export function gateForStatus(def: LoopDef, status: string): LoopGate | undefined {
   return def.gates.find((g) => g.id === status);
+}
+
+/** Normalize a consolidator-written verdict to the branch the orchestrator acts on (§26.6): `clean`
+ *  advances to the gate, anything else re-iterates. A synonym maps through the LoopDef taxonomy
+ *  (§26.3/D45); an unknown or absent-taxonomy value defaults to `needs-work` — the §26.3 strict-rule
+ *  fallback (never advance a run to its human gate on an unrecognized verdict). */
+export function normalizeConsolidatedVerdict(def: LoopDef, raw: string): 'clean' | 'needs-work' {
+  const key = raw.trim().toLowerCase();
+  const canon = def.verdicts?.consolidatedSynonyms[key] ?? (key === 'clean' ? 'clean' : '');
+  return canon === 'clean' ? 'clean' : 'needs-work';
 }

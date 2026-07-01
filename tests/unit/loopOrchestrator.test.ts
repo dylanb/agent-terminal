@@ -1,5 +1,9 @@
 import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
-import { createTurnRunner, type TurnRunnerDeps } from '../../src/main/loopOrchestrator';
+import {
+  createTurnRunner,
+  decideConsolidateOutcome,
+  type TurnRunnerDeps,
+} from '../../src/main/loopOrchestrator';
 
 // §26.3/D47a + D48 — the work-agent turn runner. Asserted purely from the outside: which prompts get
 // injected, whether the completion timer is armed/cancelled, when onComplete fires, and when the run is
@@ -175,5 +179,23 @@ describe('loop turn runner (§26.3/D47a, D48)', () => {
     r.onDoneSignal();
     expect(onComplete).toHaveBeenLastCalledWith('review-plan');
     expect(r.state()).toBe('complete');
+  });
+});
+
+// §26.13 L4 / §26.6 — after the consolidate turn completes, the normalized verdict decides the branch:
+// `clean` STOPs the loop at the phase's post-clean human gate; `needs-work` re-iterates at iteration+1.
+describe('consolidate outcome decision (§26.6 / §26.13 L4)', () => {
+  it('routes a clean verdict to the phase post-clean gate (STOP for the human)', () => {
+    expect(decideConsolidateOutcome('clean', 'awaiting-human-plan-approval', 3)).toEqual({
+      kind: 'gate',
+      status: 'awaiting-human-plan-approval',
+    });
+  });
+
+  it('routes a needs-work verdict to a re-iteration at the next iteration', () => {
+    expect(decideConsolidateOutcome('needs-work', 'awaiting-human-plan-approval', 3)).toEqual({
+      kind: 'reiterate',
+      nextIteration: 4,
+    });
   });
 });

@@ -5,6 +5,24 @@
 
 export type TurnState = 'idle' | 'in-flight' | 'complete' | 'error';
 
+/** The branch a completed consolidate turn takes on its normalized verdict (§26.6 / §26.13 L4): a
+ *  `clean` verdict STOPs the loop at the phase's post-clean human gate; `needs-work` re-iterates. */
+export type ConsolidateOutcome =
+  | { kind: 'gate'; status: string }
+  | { kind: 'reiterate'; nextIteration: number };
+
+/** Decide the post-consolidate branch (§26.6): `clean` → the phase's post-clean gate (STOP); anything
+ *  else → the next iteration. Pure so the host's turn-chaining glue is driven by a tested decision. */
+export function decideConsolidateOutcome(
+  verdict: 'clean' | 'needs-work',
+  postCleanGate: string,
+  iteration: number,
+): ConsolidateOutcome {
+  return verdict === 'clean'
+    ? { kind: 'gate', status: postCleanGate }
+    : { kind: 'reiterate', nextIteration: iteration + 1 };
+}
+
 export interface TurnRunnerDeps {
   /** The prompt for `turnKey` (recipe body + done-signal instruction); null = unrecoverable config error. */
   compose(turnKey: string): string | null;
