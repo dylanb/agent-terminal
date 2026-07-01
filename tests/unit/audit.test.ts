@@ -284,6 +284,19 @@ describe('reconstructTimeline — replay a full run into its ordered timeline + 
     ]);
   });
 
+  // §26.7 — a per-iteration CI snapshot event folds into an ordered ci list for the run.
+  it('folds loop.ci events into the run’s ci list (§26.7)', () => {
+    const h = serializeDoc(header);
+    const withCi =
+      h +
+      serializeDoc({ ts: '2026-06-23T10:30:00Z', type: 'loop.ci', iteration: 1, total: 3, passed: 1, failed: 0, pending: 2 }) +
+      serializeDoc({ ts: '2026-06-23T10:40:00Z', type: 'loop.ci', iteration: 2, total: 3, passed: 3, failed: 0, pending: 0 });
+    expect(reconstructTimeline(withCi).ci).toEqual([
+      { iteration: 1, total: 3, passed: 1, failed: 0, pending: 2 },
+      { iteration: 2, total: 3, passed: 3, failed: 0, pending: 0 },
+    ]);
+  });
+
   it('reads events even when the first document is not a valid header', () => {
     const headerless =
       serializeDoc({ ts: '2026-06-23T10:00:01Z', type: 'flow.started', step: 'plan' }) +

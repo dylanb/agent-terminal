@@ -23,6 +23,7 @@ import {
   type TransitionKind,
 } from '../shared/audit';
 import type { CostResult } from '../shared/pricing';
+import type { CiSnapshot } from './ciChecks';
 import { auditFilePath } from './auditPaths';
 import { pathWithin } from './artifactTree';
 import { isRecord } from './yamlRecord';
@@ -72,6 +73,8 @@ export interface AuditRecorder {
   recordCommand(repoKey: string, source: string, cmd: string, exit: number | null): void;
   /** Record the §26.10 per-iteration cost (priced dollars + unpriced model ids), only while a run is open. */
   recordCost(repoKey: string, iteration: number, cost: CostResult): void;
+  /** Record the §26.7 per-iteration CI snapshot (run-don't-block), only while a run is open. Best-effort. */
+  recordCi(repoKey: string, iteration: number, snapshot: CiSnapshot): void;
   /** Record a flow Terminate (#26): append a `flow.terminated` event to the open run, then finalize
    *  it so the next start opens a new run. Best-effort — never throws into the flow path. */
   recordTerminate(repoKey: string): void;
@@ -200,6 +203,16 @@ export function createAuditRecorder(deps: AuditRecorderDeps): AuditRecorder {
         appendIfOpen(repoKey, [{ ts: auditTimestamp(now()), type: 'loop.cost', iteration, usd: cost.usd, unpriced: cost.unpricedModels }]);
       } catch (e) {
         log('audit recordCost failed', e);
+      }
+    },
+
+    recordCi(repoKey, iteration, snapshot) {
+      try {
+        appendIfOpen(repoKey, [
+          { ts: auditTimestamp(now()), type: 'loop.ci', iteration, total: snapshot.total, passed: snapshot.passed, failed: snapshot.failed, pending: snapshot.pending },
+        ]);
+      } catch (e) {
+        log('audit recordCi failed', e);
       }
     },
 

@@ -180,6 +180,21 @@ describe('audit recorder — run file lifecycle (§25.4)', () => {
     expect(existsSync(auditRepoDir(root, repo))).toBe(false);
   });
 
+  // §26.7 — the per-iteration CI snapshot: display-only, recorded best-effort at the iteration boundary.
+  it('records a per-iteration CI snapshot event to the open run file', () => {
+    const rec = recorder();
+    rec.recordTransition(repo, 'start', NOT_STARTED, IN_PROGRESS);
+    rec.recordCi(repo, 2, { total: 4, passed: 2, failed: 1, pending: 1 });
+    const events = parseAuditStream(readFileSync(join(auditRepoDir(root, repo), runFiles()[0]), 'utf8')).events;
+    expect(events.map((e) => e.type)).toEqual(['flow.started', 'loop.ci']);
+    expect(events[1]).toMatchObject({ type: 'loop.ci', iteration: 2, total: 4, passed: 2, failed: 1, pending: 1 });
+  });
+
+  it('records nothing for a CI event when no run is open', () => {
+    recorder().recordCi(repo, 1, { total: 1, passed: 1, failed: 0, pending: 0 });
+    expect(existsSync(auditRepoDir(root, repo))).toBe(false);
+  });
+
   it('re-records the initial loop status after a fresh start (per-run diff resets)', () => {
     const rec = recorder();
     rec.recordTransition(repo, 'start', NOT_STARTED, IN_PROGRESS);

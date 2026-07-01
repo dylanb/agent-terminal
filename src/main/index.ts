@@ -81,6 +81,7 @@ import { composeWorkPrompt, composeSpawnReviewersPrompt, composeConsolidatePromp
 import { allReviewsPresent, consolidatedVerdict, consolidatedFindings, personaVerdict, carryForwardReviews, planDigest } from './reviewArtifacts';
 import { findingSignature, nextImpasse } from './findingSignature';
 import { readSessionTokens, sessionLogDir } from './costMeter';
+import { createRealCiChecks } from './ciChecks';
 import { priceTokens, formatCost, type CostResult } from '../shared/pricing';
 import { prunablePersonas, recordCleanPersonas } from './personaSkip';
 import { decideGateOutcome } from './gateActions';
@@ -410,6 +411,21 @@ async function createWindow(): Promise<void> {
       return { usd: 0, unpricedModels: [] };
     }
   };
+  // §26.7 — CI runs, it does not block. At each iteration boundary take a BEST-EFFORT, NON-BLOCKING
+  // snapshot of whatever CI state already exists on the non-draft PR and record it (display-only). This is
+  // fire-and-forget: the loop has ALREADY advanced (gate STOP or re-iterate) by the time gh returns, so a
+  // slow/pending CI check can never stall the loop (§26.7 removes the engine's polling ci-waiter).
+  const captureCiSnapshot = (repoDir: string, pr: number | null, iteration: number): void => {
+    if (pr === null) return; // no PR yet → no checks to read (§26.7 "omitted if none")
+    void createRealCiChecks(repoDir)
+      .snapshot(pr)
+      .then((snap) => {
+        if (snap) {
+          audit.recordCi(repoDir, iteration, snap);
+          pushFlowChanged();
+        }
+      });
+  };
   // §26.4/§26.5 — fan the phase's reviewer roster out as parallel subagents, MINUS the personas the skip-opt
   // prunes: a persona clean last iteration with an unchanged plan footprint is dropped and its last-clean
   // review reused (carried forward), so the consolidator still reads a full set. An empty roster means
@@ -506,6 +522,7 @@ async function createWindow(): Promise<void> {
     if (outcome.kind === 'gate') {
       writeLoopState(finished.repoDir, { ...base, status: outcome.status, iteration: finished.iteration });
       audit.recordCost(finished.repoDir, finished.iteration, cost);
+      captureCiSnapshot(finished.repoDir, s?.pr ?? null, finished.iteration);
       pushFlowChanged();
       return;
     }
@@ -515,6 +532,7 @@ async function createWindow(): Promise<void> {
       iteration: outcome.nextIteration,
     });
     audit.recordCost(finished.repoDir, finished.iteration, cost);
+    captureCiSnapshot(finished.repoDir, s?.pr ?? null, finished.iteration);
     pushFlowChanged();
     clearContext();
     startWorkTurn(finished.repoDir, finished.loopName, finished.phase);

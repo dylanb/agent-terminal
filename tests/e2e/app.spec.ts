@@ -1587,6 +1587,10 @@ function seedFakeGhGit(prefix: string): { binDir: string; logFile: string } {
     // seeded at 500) so the sub-issues carry distinct numbers the executor appends to linked_issues.
     'if [ "$1" = "issue" ] && [ "$2" = "create" ]; then seq="$FAKE_GHGIT_LOG.issue-seq"; n=$(cat "$seq" 2>/dev/null || echo 500); n=$((n+1)); echo "$n" > "$seq"; echo "https://github.com/fake/repo/issues/$n"; exit 0; fi\n' +
     'if [ "$1" = "pr" ] && [ "$2" = "create" ]; then echo "https://github.com/fake/repo/pull/4242"; exit 0; fi\n' +
+    // §26.7/L8 CI run-don't-block — `gh pr checks` returns the current bucket state (one pending, one pass)
+    // and exits non-zero (8) as real gh does when checks are pending; the app parses stdout regardless and
+    // never waits. The snapshot is fire-and-forget, so it must not stall the loop reaching its gate.
+    'if [ "$1" = "pr" ] && [ "$2" = "checks" ]; then echo \'[{"bucket":"pass"},{"bucket":"pending"}]\'; exit 8; fi\n' +
     'exit 0\n';
   writeFileSync(join(binDir, 'git'), fakeGit, { mode: 0o755 });
   writeFileSync(join(binDir, 'gh'), fakeGh, { mode: 0o755 });
@@ -2785,6 +2789,45 @@ test('completing an iteration prices the fixture tokens: strip readout + audit c
   rmSync(home, { recursive: true, force: true });
   rmSync(binDir, { recursive: true, force: true });
   rmSync(logRoot, { recursive: true, force: true });
+});
+
+// §26.13 / L8 — CI runs, it does not block (§26.7). At the iteration boundary the app takes a best-effort,
+// NON-BLOCKING `gh pr checks` snapshot of the non-draft PR and records it (display-only). A pending check
+// must not stall the loop: it still reaches its gate on the same iteration, and the snapshot is recorded.
+test('completing an iteration snapshots CI without blocking; records a loop.ci audit event (§26.13 / L8)', async () => {
+  const repo = seedBootstrapFlowRepo('agent-term-e2e-l8-ci-');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-l8-ci-home-'));
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-l8-ci-bin-');
+  seedFakeAgent(binDir, { work: 'write-plan', reviews: 'all', consolidate: 'clean' });
+  await driveToWorkTurn(repo, home, binDir, logFile, '30000');
+
+  const stateFile = join(repo, '.agent-loop', 'state.yaml');
+  // Land (no block): despite `gh pr checks` reporting a pending check, the clean iteration still reached
+  // the plan-approval gate on iteration 1 — the loop never waited on CI (§26.7).
+  await expect
+    .poll(() => readFileSync(stateFile, 'utf8'), { timeout: 25_000 })
+    .toContain('status: awaiting-human-plan-approval');
+  expect(readFileSync(stateFile, 'utf8')).toContain('iteration: 1');
+
+  // Land (snapshot): the best-effort `gh pr checks` ran out of band and a loop.ci event was recorded with
+  // the current bucket counts (one pass, one pending).
+  await expect.poll(() => readFileSync(logFile, 'utf8'), { timeout: 10_000 }).toContain('pr checks');
+  await expect
+    .poll(
+      () =>
+        readAuditRun(home, repo, auditRunFiles(home, repo)[0]).events.filter((e) => e.type === 'loop.ci'),
+      { timeout: 15_000 },
+    )
+    .toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: 'loop.ci', iteration: 1, total: 2, passed: 1, failed: 0, pending: 1 }),
+      ]),
+    );
+
+  await app.close();
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+  rmSync(binDir, { recursive: true, force: true });
 });
 
 test('Restart clears a resolved stage-transition input so the next entry re-prompts (§24.2.3 T3)', async () => {
