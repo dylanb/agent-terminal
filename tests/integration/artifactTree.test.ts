@@ -231,6 +231,49 @@ describe('artifact discovery (§20.1 / D8 — real git)', () => {
     expect(findFile(discover(repo, 'curated').nodes, 'src/feature.ts')?.provenance).toContain('pr');
   });
 
+  // The credential-bearing gh lookup fires at most once per (root, branch) — a repeat warm (e.g. from
+  // every watch burst after a checkout) must not re-spawn it.
+  it('warmBaseRef resolves the gh base at most once per branch (no repeat spawn)', async () => {
+    git(['branch', '-M', 'main'], repo);
+    git(['checkout', '-q', '-b', 'feature'], repo);
+    writeFileSync(join(repo, 'src', 'feature.ts'), 'export const f = 1;\n');
+    git(['add', 'src/feature.ts'], repo);
+    git(['commit', '-q', '-m', 'feat'], repo);
+    let calls = 0;
+    const prBaseName = async (): Promise<string> => { calls++; return 'main'; };
+    await warmBaseRef(repo, { git, prBaseName });
+    await warmBaseRef(repo, { git, prBaseName });
+    expect(calls).toBe(1);
+  });
+
+  it('warmBaseRef leaves the local base intact when the gh base name is absent locally', async () => {
+    git(['branch', '-M', 'main'], repo);
+    git(['checkout', '-q', '-b', 'feature'], repo);
+    writeFileSync(join(repo, 'src', 'feature.ts'), 'export const f = 1;\n');
+    git(['add', 'src/feature.ts'], repo);
+    git(['commit', '-q', '-m', 'feat'], repo);
+    // gh names a branch not present in the local clone → no overwrite, no change signalled.
+    expect(await warmBaseRef(repo, { git, prBaseName: async () => 'no-such-ref' })).toBe(false);
+    expect(findFile(discover(repo, 'curated').nodes, 'src/feature.ts')?.provenance).toContain('pr');
+  });
+
+  it('warmBaseRef prefers the remote-tracking origin/<base> over a divergent local branch of the same name', async () => {
+    git(['branch', '-M', 'main'], repo);
+    const initSha = git(['rev-parse', 'HEAD'], repo).trim();
+    git(['checkout', '-q', '-b', 'develop'], repo); // local develop adds onlydev.ts over init
+    writeFileSync(join(repo, 'src', 'onlydev.ts'), 'export const d = 1;\n');
+    git(['add', 'src/onlydev.ts'], repo);
+    git(['commit', '-q', '-m', 'dev'], repo);
+    git(['update-ref', 'refs/remotes/origin/develop', initSha], repo); // origin/develop lags at init
+    git(['checkout', '-q', '-b', 'feature'], repo); // feature branches from local develop
+    writeFileSync(join(repo, 'src', 'feature.ts'), 'export const f = 1;\n');
+    git(['add', 'src/feature.ts'], repo);
+    git(['commit', '-q', '-m', 'feat'], repo);
+    expect(await warmBaseRef(repo, { git, prBaseName: async () => 'develop' })).toBe(true);
+    // Base is origin/develop (= init), not local develop: onlydev.ts (added on local develop) is tagged pr.
+    expect(findFile(discover(repo, 'curated').nodes, 'src/onlydev.ts')?.provenance).toContain('pr');
+  });
+
   it('repo scope = every tracked + untracked file, built hierarchically', () => {
     const tree = discover(repo, 'repo');
     const files = fileRelPaths(tree.nodes);

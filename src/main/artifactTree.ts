@@ -21,8 +21,9 @@ export interface DiscoverDeps {
   listDir?: (dir: string) => string[];
   /** The PR base branch to diff this branch against (§20.1) — e.g. `origin/main`; null when no base
    *  resolves. The merge-base of this ref with HEAD is what the branch is diffed against for the `pr`
-   *  provenance and the viewer's changed lines. Defaults to the real PR base via `gh`, falling back to
-   *  the repo's default branch so the superset still works pre-PR / offline. */
+   *  provenance and the viewer's changed lines. Defaults to the repo's local default branch
+   *  (`origin/HEAD`, else `main`/`master`) — never a network call; the real gh PR base is refined
+   *  off-thread by `warmBaseRef`. */
   baseRef?: (root: string, git: (args: string[], cwd: string) => string) => string | null;
 }
 
@@ -78,9 +79,7 @@ function refExists(ref: string, root: string, git: (args: string[], cwd: string)
   }
 }
 
-// Memoized per (root, branch) so the viewer's watch-driven re-pulls (§20.1) don't re-resolve on every
-// burst. The synchronous path fills it with the LOCAL base (never a network call); warmBaseRef refines
-// it to the real gh PR base off-thread.
+// Memoized per (root, branch) so the viewer's watch-driven re-pulls (§20.1) don't re-resolve on every burst.
 const baseRefMemo = new Map<string, string | null>();
 
 function branchKey(root: string, git: (args: string[], cwd: string) => string): string {
@@ -98,9 +97,9 @@ function branchKey(root: string, git: (args: string[], cwd: string) => string): 
 function localBaseRef(root: string, git: (args: string[], cwd: string) => string): string | null {
   try {
     const head = git(['symbolic-ref', '--quiet', 'refs/remotes/origin/HEAD'], root).trim();
-    if (head) return head.replace(/^refs\/remotes\//, ''); // refs/remotes/origin/main → origin/main
+    if (head) return head.replace(/^refs\/remotes\//, '');
   } catch {
-    // origin/HEAD unset → try a conventional local default.
+    // origin/HEAD unset.
   }
   for (const cand of ['main', 'master']) if (refExists(cand, root, git)) return cand;
   return null;
@@ -121,13 +120,20 @@ export interface WarmDeps {
   prBaseName?: (root: string) => Promise<string | null>;
 }
 
+// The credential-bearing gh lookup runs at most once per (root, branch) per session, so warm can be
+// driven from every watch burst (a git checkout produces no cwd change — §20.1) without re-spawning it.
+const warmedKeys = new Set<string>();
+
 /** Refine the memoized base for `root`'s current branch to the real gh-resolved PR base, off the
  *  synchronous discovery path (§20.1). Returns true when the base changed from what the sync path
  *  resolved (the caller re-pulls the viewer). A failed/absent gh lookup leaves the local base intact —
- *  it never caches a failure, so a later warm can still resolve the real base. */
+ *  it never overwrites the memo with a failure. */
 export async function warmBaseRef(root: string, deps: WarmDeps = {}): Promise<boolean> {
   const git = deps.git ?? defaultGit;
   const fetchBase = deps.prBaseName ?? defaultPrBaseName;
+  const key = branchKey(root, git);
+  if (warmedKeys.has(key)) return false;
+  warmedKeys.add(key);
   let name: string | null = null;
   try {
     name = (await fetchBase(root))?.trim() || null;
@@ -139,7 +145,6 @@ export async function warmBaseRef(root: string, deps: WarmDeps = {}): Promise<bo
   if (refExists(`origin/${name}`, root, git)) ghBase = `origin/${name}`;
   else if (refExists(name, root, git)) ghBase = name;
   if (!ghBase) return false;
-  const key = branchKey(root, git);
   const current = baseRefMemo.has(key) ? baseRefMemo.get(key)! : localBaseRef(root, git);
   baseRefMemo.set(key, ghBase);
   return ghBase !== current;

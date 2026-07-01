@@ -191,20 +191,27 @@ async function createWindow(): Promise<void> {
   // dedicated viewer:onChanged seam (the renderer re-pulls tree/file). One watcher, re-rooted on each
   // cwd move — the tree root follows the shell like discovery does.
   const pushViewerChanged = (): void => send(CH.viewerOnChanged, { sessionId: SESSION_ID });
-  let stopViewerWatch = watchViewerTree(viewerRoot(viewerCwd()), pushViewerChanged);
   // §20.1: discovery resolves the base from local refs synchronously; the real gh PR base is refined
-  // off-thread here and re-pulls the viewer when it differs. TODO(dylan): the gh-driven refresh is
-  // unprovokable in e2e (no live PR in CI) — warmBaseRef + createBaseWarmer are unit-covered; recorded gap.
+  // off-thread here and re-pulls the viewer when it differs. Warm on each watch burst too — a `git
+  // checkout` produces no cwd change, so its working-tree writes are the only signal a branch switched;
+  // warmBaseRef is deduped per (root, branch) so repeat bursts never re-spawn gh. TODO(dylan): the
+  // gh-driven refresh is unprovokable in e2e (no live PR in CI) — warmBaseRef + createBaseWarmer are
+  // unit-covered; recorded gap.
   const warmBase = createBaseWarmer({
     root: () => gitRootOf(viewerCwd()),
     warm: (root) => warmBaseRef(root),
     onChanged: pushViewerChanged,
   });
+  const onViewerActivity = (): void => {
+    pushViewerChanged();
+    void warmBase();
+  };
+  let stopViewerWatch = watchViewerTree(viewerRoot(viewerCwd()), onViewerActivity);
   void warmBase();
   cwdTracker.onChange(({ cwd, repoKey }) => {
     send(CH.cwdChanged, { sessionId: SESSION_ID, cwd, repoKey });
     stopViewerWatch();
-    stopViewerWatch = watchViewerTree(viewerRoot(cwd), pushViewerChanged);
+    stopViewerWatch = watchViewerTree(viewerRoot(cwd), onViewerActivity);
     void warmBase();
   });
   // Drops echoed self-injected input from re-capture (§16.5).
