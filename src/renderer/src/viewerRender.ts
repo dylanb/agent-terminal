@@ -78,7 +78,7 @@ export function renderMarkdownInto(body: string, into: HTMLElement): void {
 
 /**
  * Render code read-only and syntax-highlighted in a CodeMirror 6 editor. `changedLines` are
- * 1-based current-file lines that differ from HEAD (§20.2). Returns a handle for changed-section
+ * 1-based current-file lines that differ from the PR base (else HEAD; §20.2). Returns a handle for changed-section
  * navigation; a reveal requested before the editor's async build finishes is replayed once it exists.
  */
 export function renderCodeInto(

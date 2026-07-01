@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { discover, readArtifact, emptyTree, pathWithin } from '../../src/main/artifactTree';
+import { discover, readArtifact, emptyTree, pathWithin, warmBaseRef, WARM_RETRY_MS, __resetBaseRefState } from '../../src/main/artifactTree';
 import type { ArtifactNode } from '../../src/shared/ipc';
 
 // The path-escape guard (§20.2).
@@ -59,6 +59,7 @@ describe('artifact discovery (§20.1 / D8 — real git)', () => {
   let plain: string;
 
   beforeEach(() => {
+    __resetBaseRefState(); // isolate the process-lifetime base caches explicitly, not by temp-dir luck
     repo = realpathSync(mkdtempSync(join(tmpdir(), 'art-repo-')));
     git(['init', '-q'], repo);
     git(['config', 'user.email', 't@t'], repo);
@@ -100,6 +101,247 @@ describe('artifact discovery (§20.1 / D8 — real git)', () => {
     const tree = discover(repo, 'curated');
     expect(findFile(tree.nodes, 'committed.md')?.provenance).toContain('changed');
     expect(findFile(tree.nodes, '.agent-loop/plan.md')?.provenance).toContain('loop');
+  });
+
+  // §20.1: curated is the SUPERSET — files changed in the working tree (`changed`) ∪ files a branch
+  // commits over its PR base (`pr`) ∪ agent-loop files. `baseRef` names the PR base branch; the merge-
+  // base with HEAD is what the branch is diffed against (injected here so the suite stays offline).
+  it('curated is the superset: committed-but-in-PR files are included and tagged pr', () => {
+    const base = git(['rev-parse', '--abbrev-ref', 'HEAD'], repo).trim();
+    git(['checkout', '-q', '-b', 'feature'], repo);
+    writeFileSync(join(repo, 'src', 'feature.ts'), 'export const f = 1;\n');
+    git(['add', 'src/feature.ts'], repo); // NOT `git add .` — keep committed.md's edit uncommitted
+    git(['commit', '-q', '-m', 'feat: add feature.ts'], repo);
+    // committed.md still carries the uncommitted working-tree edit from beforeEach.
+    const tree = discover(repo, 'curated', { baseRef: () => base });
+    const files = fileRelPaths(tree.nodes);
+    expect(files).toContain('src/feature.ts'); // committed on the branch, absent from the base
+    expect(files).toContain('committed.md'); // uncommitted working-tree edit
+    expect(findFile(tree.nodes, 'src/feature.ts')?.provenance).toContain('pr');
+    expect(findFile(tree.nodes, 'committed.md')?.provenance).toContain('changed');
+  });
+
+  it('a file both committed-in-PR and further edited carries both pr and changed', () => {
+    const base = git(['rev-parse', '--abbrev-ref', 'HEAD'], repo).trim();
+    git(['checkout', '-q', '-b', 'feature'], repo);
+    writeFileSync(join(repo, 'src', 'a.ts'), 'export const x = 1;\nexport const y = 2;\n');
+    git(['add', '.'], repo);
+    git(['commit', '-q', '-m', 'add y'], repo);
+    writeFileSync(join(repo, 'src', 'a.ts'), 'export const x = 1;\nexport const y = 2;\nexport const z = 3;\n');
+    const prov = findFile(discover(repo, 'curated', { baseRef: () => base }).nodes, 'src/a.ts')?.provenance ?? [];
+    expect(prov).toEqual(expect.arrayContaining(['pr', 'changed']));
+  });
+
+  it('does not tag base-branch files as pr (only what the branch adds over the merge-base)', () => {
+    const base = git(['rev-parse', '--abbrev-ref', 'HEAD'], repo).trim();
+    git(['checkout', '-q', '-b', 'feature'], repo);
+    writeFileSync(join(repo, 'src', 'feature.ts'), 'export const f = 1;\n');
+    git(['add', '.'], repo);
+    git(['commit', '-q', '-m', 'feat'], repo);
+    // src/a.ts is on the base branch, unchanged on the branch → neither changed nor pr.
+    expect(fileRelPaths(discover(repo, 'curated', { baseRef: () => base }).nodes)).not.toContain('src/a.ts');
+  });
+
+  it('with no resolvable base, curated stays working-tree ∪ loop (no pr tags)', () => {
+    const tree = discover(repo, 'curated', { baseRef: () => null });
+    expect(fileRelPaths(tree.nodes)).not.toContain('src/a.ts');
+    expect(JSON.stringify(tree.nodes)).not.toContain('"pr"');
+  });
+
+  // The sync base memo must not cache a null (unresolvable) result — else a default branch that appears
+  // mid-session would never be picked up until restart. Only a resolved base is cached.
+  it('re-resolves the base when a default branch appears mid-session (never caches a null base)', () => {
+    git(['branch', '-M', 'topic'], repo); // no origin/HEAD, no main/master → base unresolvable
+    discover(repo, 'curated'); // must NOT cache the null base for (repo, topic)
+    git(['branch', 'main'], repo); // a default branch now exists, at topic's current tip
+    writeFileSync(join(repo, 'src', 'later.ts'), 'export const l = 1;\n');
+    git(['add', 'src/later.ts'], repo);
+    git(['commit', '-q', '-m', 'later'], repo); // committed on topic over main
+    expect(findFile(discover(repo, 'curated').nodes, 'src/later.ts')?.provenance).toContain('pr');
+  });
+
+  it('a file deleted on the branch is not listed or tagged pr (deletions excluded)', () => {
+    const base = git(['rev-parse', '--abbrev-ref', 'HEAD'], repo).trim();
+    git(['checkout', '-q', '-b', 'feature'], repo);
+    git(['rm', '-q', 'src/a.ts'], repo); // a.ts is on the base branch; delete it here
+    git(['commit', '-q', '-m', 'rm a.ts'], repo);
+    const tree = discover(repo, 'curated', { baseRef: () => base });
+    expect(fileRelPaths(tree.nodes)).not.toContain('src/a.ts'); // a deleted file has no current content
+    expect(findFile(tree.nodes, 'src/a.ts')).toBeUndefined();
+  });
+
+  // §20.2: the code viewer's changed lines are relative to the PR base, so a line committed on the
+  // branch highlights even when the working tree is clean vs HEAD.
+  it('changedLines mark lines a committed-in-PR code file adds over the base (not just vs HEAD)', () => {
+    const base = git(['rev-parse', '--abbrev-ref', 'HEAD'], repo).trim();
+    git(['checkout', '-q', '-b', 'feature'], repo);
+    writeFileSync(join(repo, 'src', 'a.ts'), 'export const x = 1;\nexport const y = 2;\n');
+    git(['add', '.'], repo);
+    git(['commit', '-q', '-m', 'add y'], repo);
+    // Clean vs HEAD, but line 2 is new vs the base.
+    expect(readArtifact(repo, 'src/a.ts', { baseRef: () => base })?.changedLines).toEqual([2]);
+  });
+
+  it('changedLines are the superset of committed-in-PR and uncommitted edits', () => {
+    const base = git(['rev-parse', '--abbrev-ref', 'HEAD'], repo).trim();
+    git(['checkout', '-q', '-b', 'feature'], repo);
+    writeFileSync(join(repo, 'src', 'a.ts'), 'export const x = 1;\nexport const y = 2;\n');
+    git(['add', '.'], repo);
+    git(['commit', '-q', '-m', 'add y'], repo);
+    writeFileSync(join(repo, 'src', 'a.ts'), 'export const x = 1;\nexport const y = 2;\nexport const z = 3;\n');
+    expect(readArtifact(repo, 'src/a.ts', { baseRef: () => base })?.changedLines).toEqual([2, 3]);
+  });
+
+  it('with no resolvable base, changedLines fall back to the vs-HEAD working-tree diff', () => {
+    // a.ts committed as one line; append two → vs HEAD lines 2,3 are new.
+    writeFileSync(join(repo, 'src', 'a.ts'), 'export const x = 1;\nexport const y = 2;\nexport const z = 3;\n');
+    expect(readArtifact(repo, 'src/a.ts', { baseRef: () => null })?.changedLines).toEqual([2, 3]);
+  });
+
+  // §20.1: the synchronous discovery path resolves the base from LOCAL refs only (never a network
+  // call) — origin/HEAD, else a conventional default — so the main thread never blocks on gh.
+  it('the synchronous base resolves from origin/HEAD without any network call', () => {
+    git(['branch', '-M', 'main'], repo);
+    const head = git(['rev-parse', 'HEAD'], repo).trim();
+    git(['update-ref', 'refs/remotes/origin/main', head], repo);
+    git(['symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/main'], repo);
+    git(['checkout', '-q', '-b', 'feature'], repo);
+    writeFileSync(join(repo, 'src', 'feature.ts'), 'export const f = 1;\n');
+    git(['add', 'src/feature.ts'], repo);
+    git(['commit', '-q', '-m', 'feat'], repo);
+    // No baseRef injected, no gh reachable in a temp repo → base is origin/main via the symbolic-ref.
+    expect(findFile(discover(repo, 'curated').nodes, 'src/feature.ts')?.provenance).toContain('pr');
+  });
+
+  // §20.1: the real PR base (which may target a non-default branch) is refined off the synchronous
+  // path by warmBaseRef; it re-points the memoized base and signals when the tree must re-pull.
+  it('warmBaseRef refines the base to the real gh PR base, dropping default-branch files from the tree', async () => {
+    git(['branch', '-M', 'main'], repo); // default branch = main
+    git(['checkout', '-q', '-b', 'develop'], repo); // develop adds onlydev.ts over main
+    writeFileSync(join(repo, 'src', 'onlydev.ts'), 'export const d = 1;\n');
+    git(['add', 'src/onlydev.ts'], repo);
+    git(['commit', '-q', '-m', 'dev'], repo);
+    git(['checkout', '-q', '-b', 'feature'], repo); // feature branches from develop
+    writeFileSync(join(repo, 'src', 'feature.ts'), 'export const f = 1;\n');
+    git(['add', 'src/feature.ts'], repo);
+    git(['commit', '-q', '-m', 'feat'], repo);
+    // Sync path resolves the local default (main), so onlydev.ts looks like part of the PR (it isn't).
+    expect(findFile(discover(repo, 'curated').nodes, 'src/onlydev.ts')?.provenance).toContain('pr');
+    // The real PR base is develop; warming with it corrects the tree and signals the change.
+    expect(await warmBaseRef(repo, { git, prBaseName: async () => 'develop' })).toBe(true);
+    expect(findFile(discover(repo, 'curated').nodes, 'src/onlydev.ts')?.provenance).toBeUndefined();
+    expect(findFile(discover(repo, 'curated').nodes, 'src/feature.ts')?.provenance).toContain('pr');
+  });
+
+  it('warmBaseRef reports no change when the gh base already matches the local base', async () => {
+    git(['branch', '-M', 'main'], repo);
+    git(['checkout', '-q', '-b', 'feature'], repo);
+    writeFileSync(join(repo, 'src', 'feature.ts'), 'export const f = 1;\n');
+    git(['add', 'src/feature.ts'], repo);
+    git(['commit', '-q', '-m', 'feat'], repo);
+    discover(repo, 'curated'); // resolves + caches the local base 'main'
+    expect(await warmBaseRef(repo, { git, prBaseName: async () => 'main' })).toBe(false);
+  });
+
+  it('warmBaseRef never caches a failed gh lookup — the local base still resolves afterward', async () => {
+    git(['branch', '-M', 'main'], repo);
+    git(['checkout', '-q', '-b', 'feature'], repo);
+    writeFileSync(join(repo, 'src', 'feature.ts'), 'export const f = 1;\n');
+    git(['add', 'src/feature.ts'], repo);
+    git(['commit', '-q', '-m', 'feat'], repo);
+    expect(await warmBaseRef(repo, { git, prBaseName: async () => { throw new Error('offline'); } })).toBe(false);
+    // The transient failure left no cached base → the synchronous path still resolves 'main'.
+    expect(findFile(discover(repo, 'curated').nodes, 'src/feature.ts')?.provenance).toContain('pr');
+  });
+
+  // A RESOLVED gh base is fetched at most once per (root, branch) — a repeat warm (e.g. from every watch
+  // burst after a checkout) must not re-spawn it. (An unresolved attempt is retried under the throttle —
+  // see the retry test below.)
+  it('warmBaseRef resolves the gh base at most once per branch (no repeat spawn)', async () => {
+    git(['branch', '-M', 'main'], repo);
+    git(['checkout', '-q', '-b', 'feature'], repo);
+    writeFileSync(join(repo, 'src', 'feature.ts'), 'export const f = 1;\n');
+    git(['add', 'src/feature.ts'], repo);
+    git(['commit', '-q', '-m', 'feat'], repo);
+    let calls = 0;
+    const prBaseName = async (): Promise<string> => { calls++; return 'main'; };
+    await warmBaseRef(repo, { git, prBaseName });
+    await warmBaseRef(repo, { git, prBaseName });
+    expect(calls).toBe(1);
+  });
+
+  it('warmBaseRef leaves the local base intact when the gh base name is absent locally', async () => {
+    git(['branch', '-M', 'main'], repo);
+    git(['checkout', '-q', '-b', 'feature'], repo);
+    writeFileSync(join(repo, 'src', 'feature.ts'), 'export const f = 1;\n');
+    git(['add', 'src/feature.ts'], repo);
+    git(['commit', '-q', '-m', 'feat'], repo);
+    // gh names a branch not present in the local clone → no overwrite, no change signalled.
+    expect(await warmBaseRef(repo, { git, prBaseName: async () => 'no-such-ref' })).toBe(false);
+    expect(findFile(discover(repo, 'curated').nodes, 'src/feature.ts')?.provenance).toContain('pr');
+  });
+
+  it('warmBaseRef prefers the remote-tracking origin/<base> over a divergent local branch of the same name', async () => {
+    git(['branch', '-M', 'main'], repo);
+    const initSha = git(['rev-parse', 'HEAD'], repo).trim();
+    git(['checkout', '-q', '-b', 'develop'], repo); // local develop adds onlydev.ts over init
+    writeFileSync(join(repo, 'src', 'onlydev.ts'), 'export const d = 1;\n');
+    git(['add', 'src/onlydev.ts'], repo);
+    git(['commit', '-q', '-m', 'dev'], repo);
+    git(['update-ref', 'refs/remotes/origin/develop', initSha], repo); // origin/develop lags at init
+    git(['checkout', '-q', '-b', 'feature'], repo); // feature branches from local develop
+    writeFileSync(join(repo, 'src', 'feature.ts'), 'export const f = 1;\n');
+    git(['add', 'src/feature.ts'], repo);
+    git(['commit', '-q', '-m', 'feat'], repo);
+    expect(await warmBaseRef(repo, { git, prBaseName: async () => 'develop' })).toBe(true);
+    // Base is origin/develop (= init), not local develop: onlydev.ts (added on local develop) is tagged pr.
+    expect(findFile(discover(repo, 'curated').nodes, 'src/onlydev.ts')?.provenance).toContain('pr');
+  });
+
+  // A resolved base is deduped for the session, but an UNRESOLVED attempt (no PR yet / gh offline) must
+  // be retried — throttled to the WARM_RETRY_MS boundary — so a PR opened or connectivity restored
+  // mid-session is still picked up.
+  it('warmBaseRef retries an unresolved branch at the throttle boundary, then dedups once resolved', async () => {
+    git(['branch', '-M', 'main'], repo);
+    git(['checkout', '-q', '-b', 'feature'], repo);
+    writeFileSync(join(repo, 'src', 'feature.ts'), 'export const f = 1;\n');
+    git(['add', 'src/feature.ts'], repo);
+    git(['commit', '-q', '-m', 'feat'], repo);
+    let t = 1000;
+    let calls = 0;
+    // No PR at first (null); once a PR is opened the lookup resolves to 'main'.
+    const prBaseName = async (): Promise<string | null> => { calls++; return calls >= 3 ? 'main' : null; };
+    const now = (): number => t;
+    await warmBaseRef(repo, { git, prBaseName, now }); // attempt 1: no PR, records the attempt time
+    expect(calls).toBe(1);
+    t += WARM_RETRY_MS - 1; // just inside the window
+    await warmBaseRef(repo, { git, prBaseName, now }); // still throttled → no spawn
+    expect(calls).toBe(1);
+    t += 1; // exactly at the window (delta === WARM_RETRY_MS; the `<` boundary lets it through)
+    await warmBaseRef(repo, { git, prBaseName, now }); // attempt 2: retries, still no PR
+    expect(calls).toBe(2);
+    t += WARM_RETRY_MS;
+    await warmBaseRef(repo, { git, prBaseName, now }); // attempt 3: PR now resolves
+    expect(calls).toBe(3);
+    await warmBaseRef(repo, { git, prBaseName, now }); // resolved → deduped, no further spawn
+    expect(calls).toBe(3);
+  });
+
+  // The dedup key is (root, branch): a checkout to a new branch must re-warm — the branch component is
+  // what makes warm-on-branch-switch work (a root-only key would silently break it).
+  it('warmBaseRef re-warms after a branch switch (dedup is per branch, not per repo)', async () => {
+    git(['branch', '-M', 'main'], repo);
+    git(['checkout', '-q', '-b', 'feature-a'], repo);
+    writeFileSync(join(repo, 'src', 'a-feat.ts'), 'export const a = 1;\n');
+    git(['add', 'src/a-feat.ts'], repo);
+    git(['commit', '-q', '-m', 'a'], repo);
+    let calls = 0;
+    const prBaseName = async (): Promise<string> => { calls++; return 'main'; };
+    await warmBaseRef(repo, { git, prBaseName }); // warms feature-a
+    expect(calls).toBe(1);
+    git(['checkout', '-q', '-b', 'feature-b'], repo);
+    await warmBaseRef(repo, { git, prBaseName }); // new (root, branch) key → re-warms
+    expect(calls).toBe(2);
   });
 
   it('repo scope = every tracked + untracked file, built hierarchically', () => {

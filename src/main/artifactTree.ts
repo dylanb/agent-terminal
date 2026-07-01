@@ -1,9 +1,10 @@
 // Artifact discovery (§20.1 / D8): the session's cwd as the viewer's file tree.
-// TODO(agent-loop bridge, §24.2): PR provenance tag + LoopDef `artifacts:` declarations.
+// TODO(agent-loop bridge, §24.2): LoopDef `artifacts:` declarations.
 
-import { execFileSync } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
 import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from 'node:fs';
 import path from 'node:path';
+import { promisify } from 'node:util';
 import type {
   ArtifactNode,
   ArtifactProvenance,
@@ -18,6 +19,12 @@ export interface DiscoverDeps {
   git?: (args: string[], cwd: string) => string;
   /** List files (tree-relative) under a non-repo dir; defaults to a bounded recursive walk. */
   listDir?: (dir: string) => string[];
+  /** The PR base branch to diff this branch against (§20.1) — e.g. `origin/main`; null when no base
+   *  resolves. The merge-base of this ref with HEAD is what the branch is diffed against for the `pr`
+   *  provenance and the viewer's changed lines. Defaults to the repo's local default branch
+   *  (`origin/HEAD`, else `main`/`master`) — never a network call; the real gh PR base is refined
+   *  off-thread by `warmBaseRef`. */
+  baseRef?: (root: string) => string | null;
 }
 
 const MAX_FILE_BYTES = 512 * 1024;
@@ -40,6 +47,176 @@ const LANG_BY_EXT: Record<string, string> = {
 
 function defaultGit(args: string[], cwd: string): string {
   return execFileSync('git', args, { cwd, encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 });
+}
+
+const execFileAsync = promisify(execFile);
+
+/** The current branch's PR base branch name from GitHub, or null when there is no PR / gh is
+ *  unavailable. Async so the network round-trip is never on the synchronous discovery path (§20.1). */
+async function defaultPrBaseName(root: string): Promise<string | null> {
+  try {
+    const { stdout } = await execFileAsync('gh', ['pr', 'view', '--json', 'baseRefName', '-q', '.baseRefName'], {
+      cwd: root,
+      encoding: 'utf8',
+      timeout: 5000,
+      maxBuffer: 4 * 1024 * 1024,
+    });
+    return stdout.trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+// --end-of-options: a base ref is repo/remote-controlled data, so it is passed as a ref, never parsed
+// as a git switch even if it begins with `-` (CLAUDE.md: untrusted data crosses a boundary as data,
+// not syntax; CWE-88).
+function refExists(ref: string, root: string, git: (args: string[], cwd: string) => string): boolean {
+  try {
+    git(['rev-parse', '--verify', '--quiet', '--end-of-options', `${ref}^{commit}`], root);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// Memoized per (root, branch) so the viewer's watch-driven re-pulls (§20.1) don't re-resolve on every burst.
+const baseRefMemo = new Map<string, string | null>();
+
+function branchKey(root: string, git: (args: string[], cwd: string) => string): string {
+  let branch = '';
+  try {
+    branch = git(['rev-parse', '--abbrev-ref', 'HEAD'], root).trim();
+  } catch {
+    // detached HEAD / no commits — resolve unkeyed by branch.
+  }
+  return `${root}${NUL}${branch}`;
+}
+
+/** The base ref inferred from local refs alone — the repo's remote default branch (origin/HEAD), else a
+ *  conventional local default. Never a network call, so it can run on the synchronous discovery path. */
+function localBaseRef(root: string, git: (args: string[], cwd: string) => string): string | null {
+  try {
+    const head = git(['symbolic-ref', '--quiet', 'refs/remotes/origin/HEAD'], root).trim();
+    if (head) return head.replace(/^refs\/remotes\//, '');
+  } catch {
+    // origin/HEAD unset.
+  }
+  for (const cand of ['main', 'master']) if (refExists(cand, root, git)) return cand;
+  return null;
+}
+
+function defaultBaseRef(root: string, git: (args: string[], cwd: string) => string): string | null {
+  const key = branchKey(root, git);
+  const cached = baseRefMemo.get(key);
+  if (cached !== undefined) return cached;
+  const resolved = localBaseRef(root, git);
+  if (resolved !== null) baseRefMemo.set(key, resolved); // don't cache a miss — re-resolve if a base later appears
+  return resolved;
+}
+
+export interface WarmDeps {
+  git?: (args: string[], cwd: string) => string;
+  /** The branch's PR base branch name from GitHub (§20.1), or null when there's no PR / it's unavailable. */
+  prBaseName?: (root: string) => Promise<string | null>;
+  /** Current time in ms (§20.1) — injected so the retry throttle is deterministically testable. */
+  now?: () => number;
+}
+
+// A resolved gh base is deduped for the session; an UNRESOLVED attempt (no PR yet / gh offline) is
+// retried no more often than WARM_RETRY_MS. This bounds the credential-bearing spawn on the per-burst
+// warm path (a git checkout produces no cwd change — §20.1) while still picking up a PR opened, or
+// connectivity restored, mid-session — the guarantee a plain once-per-session guard would drop.
+export const WARM_RETRY_MS = 30_000;
+const warmedKeys = new Set<string>();
+const lastWarmAttempt = new Map<string, number>();
+
+/** Refine the memoized base for `root`'s current branch to the real gh-resolved PR base, off the
+ *  synchronous discovery path (§20.1). Returns true when the base changed from what the sync path
+ *  resolved (the caller re-pulls the viewer). A resolved base is deduped for the session; an unresolved
+ *  attempt never overwrites the memo and is retried after WARM_RETRY_MS, so a PR opened — or gh
+ *  connectivity restored — mid-session is still picked up. */
+export async function warmBaseRef(root: string, deps: WarmDeps = {}): Promise<boolean> {
+  const git = deps.git ?? defaultGit;
+  const fetchBase = deps.prBaseName ?? defaultPrBaseName;
+  const now = deps.now ?? Date.now;
+  const key = branchKey(root, git);
+  if (warmedKeys.has(key)) return false;
+  const last = lastWarmAttempt.get(key);
+  if (last !== undefined && now() - last < WARM_RETRY_MS) return false;
+  lastWarmAttempt.set(key, now());
+  let name: string | null = null;
+  try {
+    name = (await fetchBase(root))?.trim() || null;
+  } catch {
+    name = null;
+  }
+  if (!name) return false;
+  let ghBase: string | null = null;
+  if (refExists(`origin/${name}`, root, git)) ghBase = `origin/${name}`;
+  else if (refExists(name, root, git)) ghBase = name;
+  if (!ghBase) return false;
+  warmedKeys.add(key);
+  lastWarmAttempt.delete(key);
+  const current = baseRefMemo.has(key) ? baseRefMemo.get(key)! : localBaseRef(root, git);
+  baseRefMemo.set(key, ghBase);
+  return ghBase !== current;
+}
+
+/** Wire base-warming to a cwd/branch change (§20.1): resolve the current root, warm its base off the
+ *  synchronous path, and fire `onChanged` only when the real PR base differs from the local one.
+ *  Best-effort — a warm that throws is swallowed so it can never abort the caller. */
+export function createBaseWarmer(deps: {
+  root: () => string | null;
+  warm: (root: string) => Promise<boolean>;
+  onChanged: () => void;
+}): () => Promise<void> {
+  return async () => {
+    const root = deps.root();
+    if (!root) return;
+    try {
+      if (await deps.warm(root)) deps.onChanged();
+    } catch {
+      // best-effort: a failed warm never propagates into the caller.
+    }
+  };
+}
+
+/** The viewer-activity handler (§20.1): a watch burst both re-pulls the viewer and warms the base
+ *  off-thread — a `git checkout` produces no cwd change, so its working-tree writes are the branch-switch
+ *  signal. Extracted so the "burst also warms" wiring is covered without driving the non-hermetic gh path. */
+export function createViewerActivityHandler(deps: { pushChanged: () => void; warm: () => Promise<void> }): () => void {
+  return () => {
+    deps.pushChanged();
+    void deps.warm();
+  };
+}
+
+/** Test-only: clear the process-lifetime base-resolution caches so integration tests are isolated
+ *  explicitly, not by temp-dir uniqueness (§20.1). */
+export function __resetBaseRefState(): void {
+  baseRefMemo.clear();
+  warmedKeys.clear();
+  lastWarmAttempt.clear();
+}
+
+/** The merge-base of `baseRef` and HEAD — the branch point the PR is diffed against — or null. */
+function mergeBaseOf(baseRef: string, root: string, git: (args: string[], cwd: string) => string): string | null {
+  try {
+    const mb = git(['merge-base', '--end-of-options', baseRef, 'HEAD'], root).trim();
+    return mb || null;
+  } catch {
+    return null;
+  }
+}
+
+/** Files committed on this branch since `mergeBase` (existing on HEAD — deletions excluded). */
+function prFiles(root: string, mergeBase: string, git: (args: string[], cwd: string) => string): Set<string> {
+  try {
+    const out = git(['diff', '--name-only', '-z', '--diff-filter=d', mergeBase, 'HEAD'], root);
+    return new Set(out.split(NUL).filter((p) => p.length > 0));
+  } catch {
+    return new Set();
+  }
 }
 
 /** The git top-level of `cwd` (`path.resolve`d), or null when `cwd` is not in a repo. Shared with the
@@ -150,14 +327,18 @@ export function discover(cwd: string, scope: ArtifactScope, deps: DiscoverDeps =
 
   const changed = changedFiles(root, git);
   const loop = loopFiles(root);
+  const base = (deps.baseRef ?? ((r: string) => defaultBaseRef(r, git)))(root);
+  const mergeBase = base ? mergeBaseOf(base, root, git) : null;
+  const pr = mergeBase ? prFiles(root, mergeBase, git) : new Set<string>();
   const provenance = (rel: string): ArtifactProvenance[] | undefined => {
     const tags: ArtifactProvenance[] = [];
     if (changed.has(rel)) tags.push('changed');
+    if (pr.has(rel)) tags.push('pr');
     if (loop.has(rel)) tags.push('loop');
     return tags.length ? tags : undefined;
   };
 
-  const rels = scope === 'repo' ? trackedFiles(root, git) : [...new Set([...changed, ...loop])];
+  const rels = scope === 'repo' ? trackedFiles(root, git) : [...new Set([...changed, ...pr, ...loop])];
 
   return { root, isRepo: true, scope, nodes: buildTree(rels, provenance) };
 }
@@ -175,22 +356,23 @@ function addedLinesFromDiff(diff: string): number[] {
   return lines;
 }
 
-/** Lines in `rel`'s working-tree copy that differ from HEAD — added or modified, never deletions (§20.2). */
-function changedLinesOf(root: string, rel: string, body: string, git: (args: string[], cwd: string) => string): number[] {
+/** Lines in `rel`'s working-tree copy that differ from `baseline` (the PR merge-base, else HEAD) —
+ *  added or modified, never deletions (§20.2). Diffing the working tree against the merge-base is the
+ *  superset: it marks both committed-in-PR and uncommitted lines in one pass. */
+function changedLinesOf(root: string, rel: string, body: string, git: (args: string[], cwd: string) => string, baseline: string): number[] {
   let status: string;
   try {
     status = git(['status', '--porcelain', '-z', '--', rel], root);
   } catch {
     return [];
   }
-  if (status.length === 0) return [];
   if (status.startsWith('??')) {
-    // Untracked: `git diff HEAD` skips it, so mark every content line as new.
+    // Untracked: `git diff <baseline>` skips it, so mark every content line as new.
     const content = body.endsWith('\n') ? body.slice(0, -1) : body;
     return content === '' ? [] : content.split('\n').map((_, i) => i + 1);
   }
   try {
-    return addedLinesFromDiff(git(['diff', '--no-color', '-U0', 'HEAD', '--', rel], root));
+    return addedLinesFromDiff(git(['diff', '--no-color', '-U0', baseline, '--', rel], root));
   } catch {
     return [];
   }
@@ -229,7 +411,9 @@ export function readArtifact(cwd: string, relPath: string, deps: DiscoverDeps = 
     const rel = relPath.split(path.sep).join('/');
     const file: ViewerFile = { relPath: rel, name: path.basename(abs), kind, lang: LANG_BY_EXT[ext], body };
     if (gitRoot && kind === 'code') {
-      const changed = changedLinesOf(gitRoot, rel, body, git);
+      const base = (deps.baseRef ?? ((r: string) => defaultBaseRef(r, git)))(gitRoot);
+      const mergeBase = base ? mergeBaseOf(base, gitRoot, git) : null;
+      const changed = changedLinesOf(gitRoot, rel, body, git, mergeBase ?? 'HEAD');
       if (changed.length) file.changedLines = changed;
     }
     return file;

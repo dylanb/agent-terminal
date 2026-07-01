@@ -306,6 +306,19 @@ describe('artifact viewer (§20.1/§20.2 — real discovery)', () => {
     expect(aTs.textContent).toContain('changed');
   });
 
+  it('renders the pr provenance tag as "PR" (committed-but-in-PR files, §20.1)', async () => {
+    const tree: ArtifactTree = {
+      root: '/repo',
+      isRepo: true,
+      scope: 'curated',
+      nodes: [{ name: 'feature.ts', relPath: 'feature.ts', kind: 'file', provenance: ['pr'] }],
+    };
+    const v = mount(tree);
+    await v.api.refresh();
+    const row = v.fileRows().find((r) => r.textContent?.includes('feature.ts'))!;
+    expect(row.textContent).toContain('PR');
+  });
+
   it('opens the first file by default, reading it through loadFile and the render seam', async () => {
     const v = mount();
     await v.api.refresh();
