@@ -74,11 +74,13 @@ import { auditRootDir } from './auditPaths';
 import { createFlowEntryActions } from './flowEntryActions';
 import { parseAgentLoopState, watchAgentLoopState } from './agentLoopBridge';
 import { createLoopNotifier } from './loopNotifier';
-import { parseLoopDef, gateForStatus, reviewerRosterForPhase, normalizeConsolidatedVerdict } from './loopDef';
+import { parseLoopDef, gateForStatus, reviewerRosterForPhase, normalizeConsolidatedVerdict, isPersonaClean } from './loopDef';
 import { runPickup, createRealPickupDeps } from './loopPickup';
 import { createTurnRunner, decideConsolidateOutcome, type TurnRunner } from './loopOrchestrator';
 import { composeWorkPrompt, composeSpawnReviewersPrompt, composeConsolidatePrompt } from './loopRecipe';
-import { allReviewsPresent, consolidatedVerdict } from './reviewArtifacts';
+import { allReviewsPresent, consolidatedVerdict, consolidatedFindings, personaVerdict, carryForwardReviews, planDigest } from './reviewArtifacts';
+import { findingSignature, nextImpasse } from './findingSignature';
+import { prunablePersonas, recordCleanPersonas } from './personaSkip';
 import { decideGateOutcome } from './gateActions';
 import { executeGateOutcome } from './gateExecutor';
 import { createRealGateGitHub } from './gateGithub';
@@ -86,6 +88,7 @@ import { writeHumanNote } from './humanNotes';
 import { createSentinelWatcher } from './turnSentinel';
 import { readAndClearTurnDone, watchTurnDone } from './turnDoneFile';
 import { writeLoopState } from './loopStateWriter';
+import { readLoopExtension } from './loopStateReader';
 import { turnDoneSentinel } from '../shared/loopTurn';
 import { statSync } from 'node:fs';
 import type { FlowStepDef } from './flow';
@@ -389,15 +392,34 @@ async function createWindow(): Promise<void> {
     });
     turnRunner.requestTurn(activeTurn.turnKey);
   };
-  // §26.4 — fan the phase's reviewer roster out as parallel subagents: resolve the roster from the bound
-  // LoopDef, then run the reviewers turn (one composed prompt; advances when every persona JSON is present
-  // for this iteration). An empty roster means nothing to fan out, so the chain simply stops here.
+  // §26.5 — the plan-phase skip footprint, or null when there is no plan.md (the impl phase's file-set
+  // footprint is a recorded v1 gap, so the skip-opt is confined to the plan phase where plan.md exists).
+  const planFootprint = (repoDir: string): { kind: 'plan'; digest: string } | null => {
+    const digest = planDigest(repoDir);
+    return digest === '' ? null : { kind: 'plan', digest };
+  };
+  // §26.4/§26.5 — fan the phase's reviewer roster out as parallel subagents, MINUS the personas the skip-opt
+  // prunes: a persona clean last iteration with an unchanged plan footprint is dropped and its last-clean
+  // review reused (carried forward), so the consolidator still reads a full set. An empty roster means
+  // nothing to fan out; a fully-pruned roster carries every review forward and goes straight to consolidate.
   const startReviewersTurn = (repoDir: string, loopName: string, phase: string): void => {
     const def = parseLoopDef(repoDir, loopName);
-    const personas = def ? reviewerRosterForPhase(def, phase) : [];
-    if (personas.length === 0) return;
+    const roster = def ? reviewerRosterForPhase(def, phase) : [];
+    if (roster.length === 0) return;
     const s = parseAgentLoopState(repoDir);
-    activeTurn = { kind: 'reviewers', repoDir, loopName, phase, turnKey: `review-${phase}`, personas, iteration: s?.iteration ?? 1 };
+    const iteration = s?.iteration ?? 1;
+    const fp = planFootprint(repoDir);
+    const { active, pruned } = fp
+      ? prunablePersonas(roster, readLoopExtension(repoDir).personaState, iteration, fp)
+      : { active: roster, pruned: [] as string[] };
+    if (pruned.length > 0) carryForwardReviews(repoDir, pruned, iteration - 1, iteration);
+    if (active.length === 0) {
+      // Every persona reused — no fan-out to run; /clear and consolidate the carried-forward reviews.
+      clearContext();
+      startConsolidateTurn(repoDir, loopName, phase, iteration);
+      return;
+    }
+    activeTurn = { kind: 'reviewers', repoDir, loopName, phase, turnKey: `review-${phase}`, personas: active, iteration };
     turnRunner.requestTurn(activeTurn.turnKey);
   };
   // §26.3/D46 — /clear the hosted instance at an actor boundary. Marking it active synchronously closes
@@ -422,13 +444,47 @@ async function createWindow(): Promise<void> {
     const raw = consolidatedVerdict(finished.repoDir, finished.iteration);
     const verdict = def && raw !== null ? normalizeConsolidatedVerdict(def, raw) : 'needs-work';
     const phase = def?.phases.find((p) => p.id === finished.phase);
-    const outcome = decideConsolidateOutcome(verdict, phase?.postCleanGate ?? '', finished.iteration);
+    const ext = readLoopExtension(finished.repoDir);
+    // §26.8 — advance the stuck detector: the top-3-kept finding signature, compared against the prior
+    // one. Two identical signatures in a row flags the run stuck, which routes the needs-work verdict to
+    // the triage gate for the human to confirm impasse.
+    const sig = findingSignature(consolidatedFindings(finished.repoDir, finished.iteration), def?.verdicts?.severityOrder ?? []);
+    const impasse = nextImpasse(ext.impasse.lastFindingsSig, ext.impasse.consecutiveIdentical, sig);
+    // §26.6/§26.8 — a needs-work verdict routes to the phase's triage gate (STOP) once phase-2 is active
+    // (a prior request-changes), the iteration cap is reached, or the run is flagged stuck.
+    const outcome = decideConsolidateOutcome({
+      verdict,
+      iteration: finished.iteration,
+      postCleanGate: phase?.postCleanGate ?? '',
+      postNeedsWorkGate: phase?.postNeedsWorkGate ?? '',
+      phase2Active: ext.phase2Active,
+      iterationCap: phase?.iterationCap ?? 0,
+      stuck: impasse.stuck,
+    });
+    // §26.5 skip-opt — fold this iteration's clean personas (their own review verdict) into persona_state
+    // with the current plan footprint, so the next fan-out can prune the unchanged-clean ones. Confined to
+    // the plan phase (a plan footprint exists); the impl file-set footprint is a recorded v1 gap.
+    const fp = planFootprint(finished.repoDir);
+    const personaState = fp
+      ? recordCleanPersonas(
+          ext.personaState,
+          (def ? reviewerRosterForPhase(def, finished.phase) : []).filter((p) => {
+            const v = personaVerdict(finished.repoDir, finished.iteration, p);
+            return v !== null && def !== null && isPersonaClean(def, v);
+          }),
+          finished.iteration,
+          fp,
+        )
+      : null;
     const s = parseAgentLoopState(finished.repoDir);
     const base = {
       pr: s?.pr ?? null,
       branch: s?.branch ?? null,
       boundLoop: finished.loopName,
       linkedIssues: s?.linkedIssues ?? [],
+      // §26.8 — persist the signature run on every consolidate so the next iteration can detect x2.
+      impasse: { consecutiveIdentical: impasse.consecutiveIdentical, lastFindingsSig: impasse.lastFindingsSig },
+      ...(personaState ? { personaState } : {}),
     };
     if (outcome.kind === 'gate') {
       writeLoopState(finished.repoDir, { ...base, status: outcome.status, iteration: finished.iteration });

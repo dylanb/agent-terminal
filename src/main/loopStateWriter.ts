@@ -27,6 +27,13 @@ export interface LoopStateWrite {
   phase2Active?: boolean;
   clearPersonaState?: boolean;
   terminated?: boolean;
+  /** §26.8 stuck tracking — the running finding signature + consecutive-identical count, written each
+   *  consolidate. Serialized as the engine's `impasse.{consecutive_identical,last_findings_sig}`. */
+  impasse?: { consecutiveIdentical: number; lastFindingsSig: string };
+  /** §26.5 skip-opt footprints — the fresh full persona_state snapshot (last-clean iteration + footprint
+   *  per persona). Serialized as `persona_state.{persona}.{last_clean_iter,last_seen_plan_digest,
+   *  last_seen_files}`. Mutually exclusive with `clearPersonaState` (which resets to `{}`). */
+  personaState?: Record<string, { lastCleanIter: number; lastSeenPlanDigest: string; lastSeenFiles: string[] }>;
 }
 
 const STATE_REL = path.join('.agent-loop', 'state.yaml');
@@ -90,6 +97,16 @@ export function writeLoopState(repoDir: string, state: LoopStateWrite, now: () =
   if (state.phase2Active !== undefined) doc.phase2_active = state.phase2Active;
   if (state.clearPersonaState) doc.persona_state = {};
   if (state.terminated !== undefined) doc.terminated = state.terminated;
+  if (state.impasse !== undefined) {
+    doc.impasse = { consecutive_identical: state.impasse.consecutiveIdentical, last_findings_sig: state.impasse.lastFindingsSig };
+  }
+  if (state.personaState !== undefined) {
+    const out: Record<string, unknown> = {};
+    for (const [persona, e] of Object.entries(state.personaState)) {
+      out[persona] = { last_clean_iter: e.lastCleanIter, last_seen_plan_digest: e.lastSeenPlanDigest, last_seen_files: e.lastSeenFiles };
+    }
+    doc.persona_state = out;
+  }
 
   const tmp = `${file}.tmp`;
   writeFileSync(tmp, yaml.dump(doc));

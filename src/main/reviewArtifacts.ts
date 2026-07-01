@@ -2,8 +2,10 @@
 // written a parseable review JSON for the current iteration. A missing or malformed one leaves the turn
 // un-confirmed (the orchestrator retries, then errors) rather than advancing on a partial fan-out.
 
-import { readFileSync } from 'node:fs';
+import { copyFileSync, mkdirSync, readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import path from 'node:path';
+import type { Finding } from './findingSignature';
 
 /** True iff every `persona` has a parseable `reviews/{iteration}/{persona}.json` under `<repoDir>/.agent-loop`.
  *  An absent or non-JSON file fails the check; vacuously true for an empty roster (the caller guards that). */
@@ -32,5 +34,68 @@ export function consolidatedVerdict(repoDir: string, iteration: number): string 
     return null;
   } catch {
     return null;
+  }
+}
+
+/** The kept findings from `reviews/{iteration}/consolidated.json` (§26.8 signature input): each entry's
+ *  `severity` + `message`. An absent/malformed file, a missing `findings_kept`, or an entry lacking a
+ *  string severity or message all degrade to (or drop from) an empty set — never throws. */
+export function consolidatedFindings(repoDir: string, iteration: number): Finding[] {
+  const file = path.join(repoDir, '.agent-loop', 'reviews', String(iteration), 'consolidated.json');
+  let doc: unknown;
+  try {
+    doc = JSON.parse(readFileSync(file, 'utf8'));
+  } catch {
+    return [];
+  }
+  const kept = (doc as { findings_kept?: unknown }).findings_kept;
+  if (!Array.isArray(kept)) return [];
+  return kept
+    .map((f): Finding | null =>
+      f !== null && typeof f === 'object' && typeof (f as Finding).severity === 'string' && typeof (f as Finding).message === 'string'
+        ? { severity: (f as Finding).severity, message: (f as Finding).message }
+        : null,
+    )
+    .filter((f): f is Finding => f !== null);
+}
+
+/** The raw `verdict` string from one persona's `reviews/{iteration}/{persona}.json` (§26.5 skip-opt), or
+ *  null when the file is absent, unparseable, or carries no string verdict. */
+export function personaVerdict(repoDir: string, iteration: number, persona: string): string | null {
+  const file = path.join(repoDir, '.agent-loop', 'reviews', String(iteration), `${persona}.json`);
+  try {
+    const doc: unknown = JSON.parse(readFileSync(file, 'utf8'));
+    if (doc !== null && typeof doc === 'object' && typeof (doc as { verdict?: unknown }).verdict === 'string') {
+      return (doc as { verdict: string }).verdict;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/** The SHA256 digest of `.agent-loop/plan.md` — the plan-phase skip footprint (§26.5). "" when plan.md is
+ *  absent/unreadable, so a persona is never pruned against a missing plan (never throws). */
+export function planDigest(repoDir: string): string {
+  try {
+    return createHash('sha256').update(readFileSync(path.join(repoDir, '.agent-loop', 'plan.md'))).digest('hex');
+  } catch {
+    return '';
+  }
+}
+
+/** Reuse each pruned persona's last-clean review (§26.5 skip-opt): copy `reviews/{fromIter}/{persona}.json`
+ *  → `reviews/{toIter}/{persona}.json`, byte-for-byte. Best-effort per persona — a missing source is
+ *  skipped, never thrown, so a partial prior fan-out cannot abort the reuse. */
+export function carryForwardReviews(repoDir: string, personas: string[], fromIter: number, toIter: number): void {
+  const toDir = path.join(repoDir, '.agent-loop', 'reviews', String(toIter));
+  for (const persona of personas) {
+    const from = path.join(repoDir, '.agent-loop', 'reviews', String(fromIter), `${persona}.json`);
+    try {
+      mkdirSync(toDir, { recursive: true });
+      copyFileSync(from, path.join(toDir, `${persona}.json`));
+    } catch {
+      // best-effort: a missing/unreadable source review is skipped
+    }
   }
 }

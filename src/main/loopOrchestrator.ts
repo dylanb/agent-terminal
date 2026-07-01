@@ -5,22 +5,36 @@
 
 export type TurnState = 'idle' | 'in-flight' | 'complete' | 'error';
 
-/** The branch a completed consolidate turn takes on its normalized verdict (§26.6 / §26.13 L4): a
- *  `clean` verdict STOPs the loop at the phase's post-clean human gate; `needs-work` re-iterates. */
+/** The branch a completed consolidate turn takes on its normalized verdict (§26.6 / §26.8 / §26.13 L4/L6):
+ *  a `clean` verdict STOPs the loop at the phase's post-clean human gate; `needs-work` re-iterates unless a
+ *  triage condition holds, which STOPs it at the phase's post-needs-work (triage) gate instead. */
 export type ConsolidateOutcome =
   | { kind: 'gate'; status: string }
   | { kind: 'reiterate'; nextIteration: number };
 
-/** Decide the post-consolidate branch (§26.6): `clean` → the phase's post-clean gate (STOP); anything
- *  else → the next iteration. Pure so the host's turn-chaining glue is driven by a tested decision. */
-export function decideConsolidateOutcome(
-  verdict: 'clean' | 'needs-work',
-  postCleanGate: string,
-  iteration: number,
-): ConsolidateOutcome {
-  return verdict === 'clean'
-    ? { kind: 'gate', status: postCleanGate }
-    : { kind: 'reiterate', nextIteration: iteration + 1 };
+/** The inputs the post-consolidate branch reads (§26.6/§26.8). `stuck` is the signature-x2 flag (§26.8);
+ *  `iterationCap` of 0 means the def names no cap (never at cap). */
+export interface ConsolidateInputs {
+  verdict: 'clean' | 'needs-work';
+  iteration: number;
+  postCleanGate: string;
+  postNeedsWorkGate: string;
+  phase2Active: boolean;
+  iterationCap: number;
+  stuck: boolean;
+}
+
+/** Decide the post-consolidate branch (§26.6/§26.8). `clean` → the phase's post-clean gate (STOP).
+ *  `needs-work` → the phase's post-needs-work TRIAGE gate (STOP) when phase-2 is active, the iteration cap
+ *  is reached, or the run is flagged stuck (signature x2); otherwise the next iteration. A triage
+ *  condition with no named triage gate falls back to re-iteration (never STOP on an empty status). Pure so
+ *  the host's turn-chaining glue is driven by a tested decision. */
+export function decideConsolidateOutcome(inputs: ConsolidateInputs): ConsolidateOutcome {
+  if (inputs.verdict === 'clean') return { kind: 'gate', status: inputs.postCleanGate };
+  const atCap = inputs.iterationCap > 0 && inputs.iteration >= inputs.iterationCap;
+  const triage = inputs.stuck || inputs.phase2Active || atCap;
+  if (triage && inputs.postNeedsWorkGate !== '') return { kind: 'gate', status: inputs.postNeedsWorkGate };
+  return { kind: 'reiterate', nextIteration: inputs.iteration + 1 };
 }
 
 export interface TurnRunnerDeps {

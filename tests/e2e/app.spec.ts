@@ -1627,6 +1627,14 @@ function seedFakeAgent(
     work: 'write-plan' | 'file-only' | 'plan-only' | 'noop';
     reviews?: 'all' | 'missing';
     consolidate?: 'clean' | 'needs-work';
+    // §26.6/L6 — when set, the consolidate turn writes this verdict INSTEAD of `consolidate` on any
+    // iteration where state.yaml already carries `phase2_active: true` (a prior request-changes). Lets an
+    // e2e drive the phase-2 triage branch: clean until phase-2, then needs-work once phase-2 is active.
+    phase2Consolidate?: 'clean' | 'needs-work';
+    // §26.8/L6 — the consolidated `findings_kept` the stuck detector signs. `stable` writes the same
+    // finding every iteration (identical signature → stuck at x2); `changing` stamps the iteration into
+    // the finding (a fresh signature each round → never stuck). Absent → no kept findings (empty signature).
+    findings?: 'stable' | 'changing';
   },
 ): void {
   const writePlan = "mkdir -p .agent-loop; printf '# Plan\\n\\nfake plan body\\n' > .agent-loop/plan.md";
@@ -1644,17 +1652,35 @@ function seedFakeAgent(
   // §26.4 — on the reviewers turn, write each roster persona's JSON for the iteration then signal done.
   // `missing` writes all but one so the fan-out is incomplete (retry-then-error); undefined = do nothing.
   const personas = opts.reviews === 'missing' ? PLAN_PERSONAS.slice(0, -1) : PLAN_PERSONAS;
+  // §26.5/L6 — stamp the iteration into each review so a carried-forward (reused) review is distinguishable
+  // from a freshly-written one: a pruned persona's reviews/<iter>/ file keeps the PRIOR iteration's stamp.
   const writeReviews =
     `${getIter}; mkdir -p .agent-loop/reviews/$iter; ` +
-    personas.map((p) => `printf '%s' '{\"verdict\":\"clean\"}' > .agent-loop/reviews/$iter/${p}.json`).join('; ');
+    personas
+      .map((p) => `printf '{\"verdict\":\"clean\",\"seen_iter\":%s}' \"$iter\" > .agent-loop/reviews/$iter/${p}.json`)
+      .join('; ');
   const reviewAct = opts.reviews === undefined ? ':' : `${writeReviews}; ${doneSignal('review-plan')}`;
   // §26.3/D45 — on the consolidate turn, write reviews/<iter>/consolidated.json with the scripted verdict
   // then signal done. undefined = do nothing (the turn never confirms → retry-then-error).
+  // §26.6/L6 — the verdict is resolved at runtime so a phase2-conditional verdict can react to the
+  // app-written `phase2_active` flag (grep the live state.yaml). Absent phase2Consolidate → static verdict.
+  const verdictExpr = opts.phase2Consolidate
+    ? `verdict='${opts.consolidate}'; if grep -q 'phase2_active: true' .agent-loop/state.yaml 2>/dev/null; then verdict='${opts.phase2Consolidate}'; fi`
+    : `verdict='${opts.consolidate}'`;
+  // §26.8/L6 — the kept findings the signature is computed over. `stable` is identical each iteration
+  // (single-quoted, no expansion); `changing` stamps $iter (double-quoted so bash expands it).
+  const keptAssign =
+    opts.findings === 'stable'
+      ? `kept='[{"severity":"major","message":"stable finding"}]'`
+      : `kept="[{\\"severity\\":\\"major\\",\\"message\\":\\"iter $iter\\"}]"`;
+  const findingsSetup = opts.findings ? `${keptAssign}; ` : '';
+  const printfFmt = opts.findings ? `{\"verdict\":\"%s\",\"findings_kept\":%s}` : `{\"verdict\":\"%s\"}`;
+  const printfArgs = opts.findings ? `\"$verdict\" \"$kept\"` : `\"$verdict\"`;
   const consolidateAct =
     opts.consolidate === undefined
       ? ':'
-      : `${getIter}; mkdir -p .agent-loop/reviews/$iter; ` +
-        `printf '%s' '{\"verdict\":\"${opts.consolidate}\"}' > .agent-loop/reviews/$iter/consolidated.json; ` +
+      : `${getIter}; ${verdictExpr}; ${findingsSetup}mkdir -p .agent-loop/reviews/$iter; ` +
+        `printf '${printfFmt}' ${printfArgs} > .agent-loop/reviews/$iter/consolidated.json; ` +
         `${doneSignal('consolidate-plan')}`;
   // The injected prompt's done-signal instruction line carries `turn-done:<turnKey>` (inside the sentinel
   // it tells the agent to print), so the REPL keys its scripted turn off which sentinel marker it sees.
@@ -2460,16 +2486,119 @@ test('a needs-work verdict /clears and re-iterates to the next iteration (§26.1
 
   // Land: the first iteration's consolidate returns needs-work → the orchestrator writes the next
   // iteration and re-runs the work→reviewers→consolidate cycle, so a second iteration's consolidated.json
-  // appears. The run stays at the phase entry status (never a gate) and never errors.
+  // appears. It re-iterated rather than taking the clean branch (the post-clean approval gate), and never
+  // errored. (At the def's iteration cap the run then routes to the triage gate, §26.8 — asserted by L6.)
   await expect
     .poll(() => existsSync(join(repo, '.agent-loop', 'reviews', '2', 'consolidated.json')), { timeout: 30_000 })
     .toBe(true);
   const stateText = readFileSync(join(repo, '.agent-loop', 'state.yaml'), 'utf8');
-  expect(stateText).toContain('status: plan-draft'); // re-iterating, not stopped at a human gate
   expect(stateText).not.toContain('status: error');
-  expect(stateText).not.toContain('awaiting-human'); // never advanced to a gate
+  expect(stateText).not.toContain('awaiting-human-plan-approval'); // never took the clean branch
   // The /clear at the consolidate→re-iterate boundary (D46) reached the instance before the re-run.
   expect(existsSync(join(repo, '.agent-loop', 'clear-seen'))).toBe(true);
+
+  await app.close();
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+  rmSync(binDir, { recursive: true, force: true });
+});
+
+test('a needs-work verdict at the iteration cap routes to the plan-triage gate (§26.13 / L6)', async () => {
+  const repo = seedBootstrapFlowRepo('agent-term-e2e-l6-cap-');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-l6-cap-home-'));
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-l6-cap-bin-');
+  // Every consolidate is needs-work. plan-loop's exit_predicate.severity_cap is 2: iteration 1 (below the
+  // cap) re-iterates; iteration 2 (at the cap) routes a needs-work verdict to the triage gate (§26.8).
+  seedFakeAgent(binDir, { work: 'write-plan', reviews: 'all', consolidate: 'needs-work' });
+  await driveToWorkTurn(repo, home, binDir, logFile, '30000');
+
+  const stateFile = join(repo, '.agent-loop', 'state.yaml');
+  await expect
+    .poll(() => readFileSync(stateFile, 'utf8'), { timeout: 40_000 })
+    .toContain('status: awaiting-human-plan-triage');
+  const stateText = readFileSync(stateFile, 'utf8');
+  expect(stateText).toContain('iteration: 2'); // reached the cap, then STOPped for the human
+  expect(stateText).not.toContain('status: error');
+  // The triage gate is a human-needed status, so the docked panel raises it with its option buttons.
+  await loopReadout().click();
+  await expect(loopPanel()).toContainText('awaiting-human-plan-triage', { timeout: 10_000 });
+
+  await app.close();
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+  rmSync(binDir, { recursive: true, force: true });
+});
+
+test('a persona clean last iteration with an unchanged plan is pruned; its review is reused (§26.13 / L6 / §26.5)', async () => {
+  const repo = seedBootstrapFlowRepo('agent-term-e2e-l6-skip-');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-l6-skip-home-'));
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-l6-skip-bin-');
+  // Every consolidate is needs-work (drives iteration 1 → 2) with the personas reviewing clean and the
+  // work-agent writing an IDENTICAL plan.md each iteration. So on iteration 2 every persona is clean-at-1
+  // with an unchanged plan digest → all pruned: the fan-out is skipped and iteration 1's reviews are
+  // carried forward. Observable: reviews/2/<persona>.json keeps the iteration-1 stamp (reused, not re-run).
+  seedFakeAgent(binDir, { work: 'write-plan', reviews: 'all', consolidate: 'needs-work' });
+  await driveToWorkTurn(repo, home, binDir, logFile, '30000');
+
+  // Iteration 2 was reached (its consolidated.json exists) and its persona reviews are the reused ones.
+  await expect
+    .poll(() => existsSync(join(repo, '.agent-loop', 'reviews', '2', 'consolidated.json')), { timeout: 40_000 })
+    .toBe(true);
+  const reused = readFileSync(join(repo, '.agent-loop', 'reviews', '2', 'review-principal.json'), 'utf8');
+  expect(reused).toContain('"seen_iter":1'); // carried forward from iteration 1, not freshly reviewed at 2
+  // persona_state recorded the clean personas' skip footprints (§26.5).
+  expect(readFileSync(join(repo, '.agent-loop', 'state.yaml'), 'utf8')).toContain('persona_state');
+
+  await app.close();
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+  rmSync(binDir, { recursive: true, force: true });
+});
+
+test('two consecutive iterations with an identical finding signature flag the run stuck (§26.13 / L6 / §26.8)', async () => {
+  const repo = seedBootstrapFlowRepo('agent-term-e2e-l6-stuck-');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-l6-stuck-home-'));
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-l6-stuck-bin-');
+  // needs-work every iteration with a STABLE finding: iteration 1 signs the finding once; iteration 2
+  // signs the identical finding, so the signature repeats (x2) and the stuck detector flags it (§26.8) —
+  // observable as impasse.consecutive_identical: 2 persisted in state.yaml, and a STOP at the triage gate.
+  seedFakeAgent(binDir, { work: 'write-plan', reviews: 'all', consolidate: 'needs-work', findings: 'stable' });
+  await driveToWorkTurn(repo, home, binDir, logFile, '30000');
+
+  const stateFile = join(repo, '.agent-loop', 'state.yaml');
+  await expect
+    .poll(() => readFileSync(stateFile, 'utf8'), { timeout: 40_000 })
+    .toContain('consecutive_identical: 2');
+  const stateText = readFileSync(stateFile, 'utf8');
+  expect(stateText).toContain('last_findings_sig:'); // the running signature is persisted
+  expect(stateText).toContain('status: awaiting-human-plan-triage'); // stuck STOPs for the human
+  expect(stateText).not.toContain('status: error');
+
+  await app.close();
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+  rmSync(binDir, { recursive: true, force: true });
+});
+
+test('request-changes activates phase-2; the next needs-work verdict routes to the triage gate (§26.13 / L6)', async () => {
+  const repo = seedBootstrapFlowRepo('agent-term-e2e-l6-phase2-');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-l6-phase2-home-'));
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-l6-phase2-bin-');
+  // Iteration 1 consolidates clean → the plan-approval gate. request-changes sets phase2_active and
+  // re-iterates; on iteration 2 the fake now consolidates needs-work (phase-2 is active), so the
+  // orchestrator routes to the triage gate instead of auto-iterating (§26.6).
+  seedFakeAgent(binDir, { work: 'write-plan', reviews: 'all', consolidate: 'clean', phase2Consolidate: 'needs-work' });
+  await driveToPlanGate(repo, home, binDir, logFile);
+
+  await gateButton('request-changes').click();
+
+  const stateFile = join(repo, '.agent-loop', 'state.yaml');
+  await expect
+    .poll(() => readFileSync(stateFile, 'utf8'), { timeout: 40_000 })
+    .toContain('status: awaiting-human-plan-triage');
+  const stateText = readFileSync(stateFile, 'utf8');
+  expect(stateText).toContain('phase2_active: true');
+  expect(stateText).not.toContain('status: error');
 
   await app.close();
   rmSync(repo, { recursive: true, force: true });

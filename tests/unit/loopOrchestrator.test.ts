@@ -182,20 +182,64 @@ describe('loop turn runner (§26.3/D47a, D48)', () => {
   });
 });
 
-// §26.13 L4 / §26.6 — after the consolidate turn completes, the normalized verdict decides the branch:
-// `clean` STOPs the loop at the phase's post-clean human gate; `needs-work` re-iterates at iteration+1.
-describe('consolidate outcome decision (§26.6 / §26.13 L4)', () => {
+// §26.13 L4/L6 / §26.6/§26.8 — after the consolidate turn completes, the normalized verdict decides the
+// branch: `clean` STOPs at the phase post-clean gate; `needs-work` normally re-iterates, but routes to
+// the phase's post-needs-work TRIAGE gate (a STOP for the human) when phase-2 is active, at the iteration
+// cap, or flagged stuck (signature x2, §26.8).
+describe('consolidate outcome decision (§26.6 / §26.8 / §26.13 L4/L6)', () => {
+  const base = {
+    postCleanGate: 'awaiting-human-plan-approval',
+    postNeedsWorkGate: 'awaiting-human-plan-triage',
+    phase2Active: false,
+    iterationCap: 0,
+    stuck: false,
+  };
+
   it('routes a clean verdict to the phase post-clean gate (STOP for the human)', () => {
-    expect(decideConsolidateOutcome('clean', 'awaiting-human-plan-approval', 3)).toEqual({
+    expect(decideConsolidateOutcome({ ...base, verdict: 'clean', iteration: 3 })).toEqual({
       kind: 'gate',
       status: 'awaiting-human-plan-approval',
     });
   });
 
-  it('routes a needs-work verdict to a re-iteration at the next iteration', () => {
-    expect(decideConsolidateOutcome('needs-work', 'awaiting-human-plan-approval', 3)).toEqual({
+  it('re-iterates a needs-work verdict when not phase-2, not at cap, not stuck', () => {
+    expect(decideConsolidateOutcome({ ...base, verdict: 'needs-work', iteration: 3 })).toEqual({
       kind: 'reiterate',
       nextIteration: 4,
     });
+  });
+
+  it('routes a needs-work verdict to the triage gate when phase-2 is active (§26.6)', () => {
+    expect(decideConsolidateOutcome({ ...base, verdict: 'needs-work', iteration: 2, phase2Active: true })).toEqual({
+      kind: 'gate',
+      status: 'awaiting-human-plan-triage',
+    });
+  });
+
+  it('routes a needs-work verdict to the triage gate at the iteration cap (§26.8)', () => {
+    expect(decideConsolidateOutcome({ ...base, verdict: 'needs-work', iteration: 2, iterationCap: 2 })).toEqual({
+      kind: 'gate',
+      status: 'awaiting-human-plan-triage',
+    });
+  });
+
+  it('re-iterates a needs-work verdict below the iteration cap', () => {
+    expect(decideConsolidateOutcome({ ...base, verdict: 'needs-work', iteration: 1, iterationCap: 2 })).toEqual({
+      kind: 'reiterate',
+      nextIteration: 2,
+    });
+  });
+
+  it('routes a needs-work verdict to the triage gate when flagged stuck (signature x2, §26.8)', () => {
+    expect(decideConsolidateOutcome({ ...base, verdict: 'needs-work', iteration: 1, stuck: true })).toEqual({
+      kind: 'gate',
+      status: 'awaiting-human-plan-triage',
+    });
+  });
+
+  it('falls back to re-iteration when a triage condition holds but the def names no triage gate', () => {
+    expect(
+      decideConsolidateOutcome({ ...base, verdict: 'needs-work', iteration: 2, phase2Active: true, postNeedsWorkGate: '' }),
+    ).toEqual({ kind: 'reiterate', nextIteration: 3 });
   });
 });

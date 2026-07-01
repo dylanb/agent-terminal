@@ -65,6 +65,12 @@ export interface LoopPhase {
   postCleanGate: string;
   /** The status a `needs-work` verdict routes to when phase-2/at-cap (§26.6/§26.8); "" when omitted. */
   postNeedsWorkGate: string;
+  /** `exit_predicate.on_phase2_active` (§26.6): once phase-2 is active, a `needs-work` verdict routes to
+   *  the triage gate instead of auto-iterating. False when the def omits the predicate. */
+  onPhase2Active: boolean;
+  /** `exit_predicate.severity_cap` (§26.8): the per-phase iteration cap at which a `needs-work` verdict
+   *  routes to the triage gate. 0 when the def names no cap (never at cap). */
+  iterationCap: number;
 }
 
 /** One entry of the §26.5 roster catalog: a named ordered list of reviewer persona actors. */
@@ -80,6 +86,12 @@ export interface LoopVerdicts {
   consolidatedCanonical: string[];
   /** Lowercased synonym → canonical verdict; canonical values map to themselves in the real defs. */
   consolidatedSynonyms: Record<string, string>;
+  /** Lowercased PERSONA-verdict synonym → canonical (`clean`/`concerns`) — the taxonomy the §26.5 skip-opt
+   *  applies to decide who reviewed clean. {} when the def omits it. */
+  personaSynonyms: Record<string, string>;
+  /** `verdicts.severities.order` (ascending, least-severe first) — the order the §26.8 finding signature
+   *  sorts by; [] when the def omits it. */
+  severityOrder: string[];
 }
 
 /** The gate slice of a LoopDef the flow reads (§18.1) plus the phase/roster/pickup_contract fields the
@@ -156,17 +168,21 @@ export function resolveLoopDir(repoDir: string, name: string, configDir?: string
 function toPhases(doc: Record<string, unknown>): LoopPhase[] {
   if (!Array.isArray(doc.phases)) return [];
   return doc.phases
-    .map((p): LoopPhase | null =>
-      isRecord(p) && typeof p.id === 'string' && SAFE_NAME.test(p.id) && typeof p.entry_status === 'string'
-        ? {
-            id: p.id,
-            entryStatus: p.entry_status,
-            rosterOverrideId: typeof p.roster_override_id === 'string' ? p.roster_override_id : '',
-            postCleanGate: typeof p.post_clean_gate === 'string' ? p.post_clean_gate : '',
-            postNeedsWorkGate: typeof p.post_needs_work_gate === 'string' ? p.post_needs_work_gate : '',
-          }
-        : null,
-    )
+    .map((p): LoopPhase | null => {
+      if (!isRecord(p) || typeof p.id !== 'string' || !SAFE_NAME.test(p.id) || typeof p.entry_status !== 'string') {
+        return null;
+      }
+      const exit = isRecord(p.exit_predicate) ? p.exit_predicate : {};
+      return {
+        id: p.id,
+        entryStatus: p.entry_status,
+        rosterOverrideId: typeof p.roster_override_id === 'string' ? p.roster_override_id : '',
+        postCleanGate: typeof p.post_clean_gate === 'string' ? p.post_clean_gate : '',
+        postNeedsWorkGate: typeof p.post_needs_work_gate === 'string' ? p.post_needs_work_gate : '',
+        onPhase2Active: exit.on_phase2_active === true,
+        iterationCap: typeof exit.severity_cap === 'number' && exit.severity_cap > 0 ? exit.severity_cap : 0,
+      };
+    })
     .filter((p): p is LoopPhase => p !== null);
 }
 
@@ -198,13 +214,20 @@ function toVerdicts(doc: Record<string, unknown>): LoopVerdicts | undefined {
   const consolidatedCanonical = Array.isArray(c.canonical)
     ? c.canonical.filter((x): x is string => typeof x === 'string')
     : [];
-  const consolidatedSynonyms: Record<string, string> = {};
-  if (isRecord(c.synonyms)) {
-    for (const [syn, canon] of Object.entries(c.synonyms)) {
-      if (typeof canon === 'string') consolidatedSynonyms[syn.toLowerCase()] = canon;
+  const toSynonyms = (raw: unknown): Record<string, string> => {
+    const out: Record<string, string> = {};
+    if (isRecord(raw)) {
+      for (const [syn, canon] of Object.entries(raw)) if (typeof canon === 'string') out[syn.toLowerCase()] = canon;
     }
-  }
-  return { consolidatedCanonical, consolidatedSynonyms };
+    return out;
+  };
+  const consolidatedSynonyms = toSynonyms(c.synonyms);
+  const personaSynonyms = isRecord(v.persona) ? toSynonyms(v.persona.synonyms) : {};
+  const severityOrder =
+    isRecord(v.severities) && Array.isArray(v.severities.order)
+      ? v.severities.order.filter((x): x is string => typeof x === 'string')
+      : [];
+  return { consolidatedCanonical, consolidatedSynonyms, personaSynonyms, severityOrder };
 }
 
 /** One `on_*` action list entry → GateAction; drops a non-mapping/kind-less entry (best-effort). */
@@ -347,4 +370,14 @@ export function normalizeConsolidatedVerdict(def: LoopDef, raw: string): 'clean'
   const key = raw.trim().toLowerCase();
   const canon = def.verdicts?.consolidatedSynonyms[key] ?? (key === 'clean' ? 'clean' : '');
   return canon === 'clean' ? 'clean' : 'needs-work';
+}
+
+/** True iff a raw PERSONA-review verdict normalizes to `clean` against the LoopDef persona taxonomy
+ *  (§26.5) — the skip-opt's "who reviewed clean this iteration" test. An unknown/absent-taxonomy value is
+ *  not clean (the same strict fallback as the consolidated normalizer: never treat an unrecognized verdict
+ *  as clean). */
+export function isPersonaClean(def: LoopDef, raw: string): boolean {
+  const key = raw.trim().toLowerCase();
+  const canon = def.verdicts?.personaSynonyms[key] ?? (key === 'clean' ? 'clean' : '');
+  return canon === 'clean';
 }

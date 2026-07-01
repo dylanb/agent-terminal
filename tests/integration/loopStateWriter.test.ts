@@ -167,6 +167,45 @@ describe('loop state.yaml writer (§26.6)', () => {
     }
   });
 
+  it('writes the §26.8 impasse tracking OVER the merged prior doc', () => {
+    // The stuck detector (§26.8) persists the running signature + identical-count each consolidate. Like
+    // the other gate-surface writes it must WIN over any preserved prior impasse value.
+    const seeded = { schema_version: 4, status: 'plan-draft', iteration: 2, impasse: { consecutive_identical: 1, last_findings_sig: 'old' } };
+    mkdirSync(join(repo, '.agent-loop'), { recursive: true });
+    writeFileSync(join(repo, '.agent-loop', 'state.yaml'), yaml.dump(seeded));
+
+    writeLoopState(
+      repo,
+      { ...L1_STATE, iteration: 2, status: 'plan-draft', impasse: { consecutiveIdentical: 2, lastFindingsSig: 'sigA' } },
+      fixedNow,
+    );
+    const doc = yaml.load(readFileSync(join(repo, '.agent-loop', 'state.yaml'), 'utf8')) as Record<string, unknown>;
+    expect(doc.impasse).toEqual({ consecutive_identical: 2, last_findings_sig: 'sigA' });
+  });
+
+  it('writes the §26.5 persona_state skip footprints OVER the merged prior doc', () => {
+    // The skip-opt (§26.5) persists each clean persona's last-clean iteration + footprint. Writing an
+    // explicit persona_state must WIN over the preserved prior map (it is a fresh full snapshot each round).
+    const seeded = { schema_version: 4, status: 'plan-draft', iteration: 2, persona_state: { 'review-security': { last_clean_iter: 1 } } };
+    mkdirSync(join(repo, '.agent-loop'), { recursive: true });
+    writeFileSync(join(repo, '.agent-loop', 'state.yaml'), yaml.dump(seeded));
+
+    writeLoopState(
+      repo,
+      {
+        ...L1_STATE,
+        iteration: 2,
+        status: 'plan-draft',
+        personaState: { 'review-principal': { lastCleanIter: 2, lastSeenPlanDigest: 'D', lastSeenFiles: [] } },
+      },
+      fixedNow,
+    );
+    const doc = yaml.load(readFileSync(join(repo, '.agent-loop', 'state.yaml'), 'utf8')) as Record<string, unknown>;
+    expect(doc.persona_state).toEqual({
+      'review-principal': { last_clean_iter: 2, last_seen_plan_digest: 'D', last_seen_files: [] },
+    });
+  });
+
   it('emits the whole read set present even when branch is null and linkedIssues is empty (§26.6)', () => {
     // The read set must be uniformly present (defaulted), the way `pr` is — not conditionally omitted.
     writeLoopState(repo, { ...L1_STATE, branch: null, linkedIssues: [] }, fixedNow);
