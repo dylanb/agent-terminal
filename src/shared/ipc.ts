@@ -434,7 +434,7 @@ export interface ViewerFile {
   kind: ViewerFileKind;
   lang?: string;
   body: string;
-  /** 1-based current-file lines added/modified vs HEAD (code files in a repo; §20.2). Absent when none. */
+  /** 1-based current-file lines added/modified vs the PR base (else HEAD; code files in a repo; §20.2). Absent when none. */
   changedLines?: number[];
 }
 
