@@ -18,6 +18,9 @@ export interface GateExecContext {
   branch: string | null;
   linkedIssues: number[];
   note: string;
+  /** §26.9 — whether this run's epic was ALREADY promoted (state.yaml `epic.sub_issues` non-empty). Guards
+   *  the irreversible `gh issue create` fan-out so a re-entered gate never creates duplicate sub-issues. */
+  epicAlreadyPromoted: boolean;
 }
 
 export interface GateExecDeps {
@@ -61,8 +64,11 @@ export async function executeGateOutcome(
   const nextIteration = outcome.reiterate ? ctx.iteration + 1 : ctx.iteration;
 
   // §26.9 / L8 — epic-promote runs BEFORE the state write so its new sub-issues land in the same doc
-  // (appended to linked_issues + recorded under `epic`). Best-effort; a non-epic plan yields [].
-  const subIssues = has('epic-promote') ? await promoteEpic(deps.github, deps.readEpicPlan()) : [];
+  // (appended to linked_issues + recorded under `epic`). Best-effort; a non-epic plan yields []. Skipped
+  // when the epic was already promoted (idempotent — `gh issue create` is irreversible, so a re-entered
+  // gate must not duplicate the sub-issues).
+  const subIssues =
+    has('epic-promote') && !ctx.epicAlreadyPromoted ? await promoteEpic(deps.github, deps.readEpicPlan()) : [];
 
   if (has('mark-pr-ready') && ctx.pr !== null) {
     try {

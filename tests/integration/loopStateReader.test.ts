@@ -93,6 +93,20 @@ describe('loop state.yaml extension reader (§26.6)', () => {
     expect(readLoopExtension(repo).boundLoop).toBe('');
   });
 
+  // §26.9 — epic-promote records the created sub-issue numbers; resume/the gate read them back to stay
+  // idempotent (never re-create an already-promoted epic).
+  it('reads epic.sub_issues back as written', () => {
+    write({ status: 'plan-draft', iteration: 1, epic: { sub_issues: [101, 102] } });
+    expect(readLoopExtension(repo).epic).toEqual({ subIssues: [101, 102] });
+  });
+
+  it('defaults epic.subIssues to [] when absent or ill-typed', () => {
+    write({ status: 'plan-draft', iteration: 1 });
+    expect(readLoopExtension(repo).epic).toEqual({ subIssues: [] });
+    write({ status: 'plan-draft', iteration: 1, epic: { sub_issues: 'nope' } });
+    expect(readLoopExtension(repo).epic).toEqual({ subIssues: [] });
+  });
+
   it('defaults to a safe extension for a missing or unreadable state.yaml (never throws)', () => {
     rmSync(join(repo, '.agent-loop'), { recursive: true, force: true });
     expect(readLoopExtension(repo)).toEqual({
@@ -101,6 +115,7 @@ describe('loop state.yaml extension reader (§26.6)', () => {
       personaState: {},
       cost: null,
       boundLoop: '',
+      epic: { subIssues: [] },
     });
   });
 });

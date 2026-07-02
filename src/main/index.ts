@@ -482,7 +482,7 @@ async function createWindow(): Promise<void> {
   // §26.6/§26.13 L4 — branch on the consolidate verdict (normalized against the bound LoopDef taxonomy):
   // `clean` writes the phase's post-clean gate status and STOPs (awaits the human); `needs-work` writes
   // the next iteration at the phase entry status, /clear-s, and re-runs the work turn.
-  const advanceAfterConsolidate = (finished: Extract<ActiveTurn, { kind: 'consolidate' }>): void => {
+  const advanceAfterConsolidate = (finished: { repoDir: string; loopName: string; phase: string; iteration: number }): void => {
     const def = parseLoopDef(finished.repoDir, finished.loopName);
     const raw = consolidatedVerdict(finished.repoDir, finished.iteration);
     const verdict = def && raw !== null ? normalizeConsolidatedVerdict(def, raw) : 'needs-work';
@@ -585,15 +585,7 @@ async function createWindow(): Promise<void> {
     else if (decision.kind === 'reviewers') startReviewersTurn(repoDir, loopName, decision.phaseId);
     else if (decision.kind === 'consolidate') startConsolidateTurn(repoDir, loopName, decision.phaseId, decision.iteration);
     // Every turn of the iteration already produced its artifact — only the verdict branch remains.
-    else
-      advanceAfterConsolidate({
-        kind: 'consolidate',
-        repoDir,
-        loopName,
-        phase: decision.phaseId,
-        turnKey: `consolidate-${decision.phaseId}`,
-        iteration: decision.iteration,
-      });
+    else advanceAfterConsolidate({ repoDir, loopName, phase: decision.phaseId, iteration: decision.iteration });
   };
 
   // `transitioningRepo` carries the active repoKey into the synchronous onEnterStep below, so a loop
@@ -786,7 +778,17 @@ async function createWindow(): Promise<void> {
     const noteText = note.trim().length > 0 ? note : `human ${option}`;
     void executeGateOutcome(
       outcome,
-      { repoDir: repoKey, boundLoop: loopName, iteration: s.iteration, pr: s.pr, branch: s.branch, linkedIssues: s.linkedIssues, note: noteText },
+      {
+        repoDir: repoKey,
+        boundLoop: loopName,
+        iteration: s.iteration,
+        pr: s.pr,
+        branch: s.branch,
+        linkedIssues: s.linkedIssues,
+        note: noteText,
+        // §26.9 — skip epic-promote if this run already created its sub-issues (idempotent re-entry).
+        epicAlreadyPromoted: readLoopExtension(repoKey).epic.subIssues.length > 0,
+      },
       {
         github: createRealGateGitHub(repoKey),
         writeState: (state) => writeLoopState(repoKey, state),

@@ -41,6 +41,7 @@ const CTX = {
   branch: 'plan-loop/issue-1',
   linkedIssues: [1],
   note: 'make it smaller',
+  epicAlreadyPromoted: false,
 };
 
 const approveOutcome: GateOutcome = {
@@ -192,5 +193,25 @@ describe('executeGateOutcome (§26.6 / L5)', () => {
       linkedIssues: [1, 303],
       epic: { subIssues: [303] },
     });
+  });
+
+  // §26.9 — epic-promote is an irreversible external write (gh issue create). A gate re-entered after the
+  // epic was already promoted (operator rewinds + re-approves) must NOT create a duplicate set of issues.
+  it('epic-promote is idempotent: creates no sub-issues when the epic was already promoted', async () => {
+    const h = harness({
+      readEpicPlan: () => ({
+        isEpic: true,
+        subTickets: [
+          { title: 'Slice 1', body: '' },
+          { title: 'Slice 2', body: '' },
+          { title: 'Slice 3', body: '' },
+        ],
+      }),
+    });
+    await executeGateOutcome(epicApproveOutcome, { ...CTX, epicAlreadyPromoted: true }, h.deps);
+    expect(h.subIssues).toEqual([]); // no duplicate gh issue create
+    expect(h.writes[0].epic).toBeUndefined();
+    expect(h.writes[0].linkedIssues).toEqual([1]); // linked_issues not re-appended
+    expect(h.readyCalls).toEqual([42]); // the other effects still run
   });
 });

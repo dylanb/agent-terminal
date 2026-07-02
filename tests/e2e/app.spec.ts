@@ -1625,8 +1625,9 @@ function seedFakeGhGit(prefix: string): { binDir: string; logFile: string } {
     'if [ "$1" = "pr" ] && [ "$2" = "create" ]; then echo "https://github.com/fake/repo/pull/4242"; exit 0; fi\n' +
     // §26.7/L8 CI run-don't-block — `gh pr checks` returns the current bucket state (one pending, one pass)
     // and exits non-zero (8) as real gh does when checks are pending; the app parses stdout regardless and
-    // never waits. The snapshot is fire-and-forget, so it must not stall the loop reaching its gate.
-    'if [ "$1" = "pr" ] && [ "$2" = "checks" ]; then echo \'[{"bucket":"pass"},{"bucket":"pending"}]\'; exit 8; fi\n' +
+    // never waits. The invocation is logged (above) BEFORE the optional FAKE_GH_CHECKS_DELAY sleep, so a
+    // test can hold the snapshot's RESULT back to prove the loop reaches its gate before the snapshot lands.
+    'if [ "$1" = "pr" ] && [ "$2" = "checks" ]; then [ -n "$FAKE_GH_CHECKS_DELAY" ] && sleep "$FAKE_GH_CHECKS_DELAY"; echo \'[{"bucket":"pass"},{"bucket":"pending"}]\'; exit 8; fi\n' +
     'exit 0\n';
   writeFileSync(join(binDir, 'git'), fakeGit, { mode: 0o755 });
   writeFileSync(join(binDir, 'gh'), fakeGh, { mode: 0o755 });
@@ -2840,19 +2841,29 @@ test('completing an iteration snapshots CI without blocking; records a loop.ci a
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-l8-ci-home-'));
   const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-l8-ci-bin-');
   seedFakeAgent(binDir, { work: 'write-plan', reviews: 'all', consolidate: 'clean' });
-  await driveToWorkTurn(repo, home, binDir, logFile, '30000');
+  // Hold the `gh pr checks` RESULT back 5s (the invocation still logs immediately). A blocking snapshot
+  // implementation could not reach the gate until that delay elapsed AND would record loop.ci by then;
+  // the fire-and-forget one reaches the gate at once, with loop.ci landing only after the delay.
+  await driveToWorkTurn(repo, home, binDir, logFile, '30000', { FAKE_GH_CHECKS_DELAY: '5' });
 
   const stateFile = join(repo, '.agent-loop', 'state.yaml');
-  // Land (no block): despite `gh pr checks` reporting a pending check, the clean iteration still reached
-  // the plan-approval gate on iteration 1 — the loop never waited on CI (§26.7).
+  // Land (no block): despite `gh pr checks` reporting a pending check AND being held back 5s, the clean
+  // iteration still reached the plan-approval gate on iteration 1 — the loop never waited on CI (§26.7).
   await expect
     .poll(() => readFileSync(stateFile, 'utf8'), { timeout: 25_000 })
     .toContain('status: awaiting-human-plan-approval');
   expect(readFileSync(stateFile, 'utf8')).toContain('iteration: 1');
 
-  // Land (snapshot): the best-effort `gh pr checks` ran out of band and a loop.ci event was recorded with
-  // the current bucket counts (one pass, one pending).
+  // Teeth for "without blocking": at the moment the gate is reached the snapshot is still in flight, so no
+  // loop.ci event exists yet — a blocking impl would have recorded it before advancing. (`gh pr checks` was
+  // already invoked — it logs before the delay — proving the snapshot fired, just hasn't returned.)
   await expect.poll(() => readFileSync(logFile, 'utf8'), { timeout: 10_000 }).toContain('pr checks');
+  expect(
+    readAuditRun(home, repo, auditRunFiles(home, repo)[0]).events.filter((e) => e.type === 'loop.ci'),
+  ).toEqual([]);
+
+  // Land (snapshot): once the held-back `gh pr checks` returns, the best-effort loop.ci event is recorded
+  // with the current bucket counts (one pass, one pending).
   await expect
     .poll(
       () =>
@@ -3654,9 +3665,9 @@ test('Start refuses to inject the skill over a busy shell, showing the refusal (
   // notice before we can assert it (the flake). Staying active fires no flip, so the notice persists.
   await typeCommand('while true; do printf "BUSY_NOW "; sleep 0.2; done');
   await expect(termRows()).toContainText('BUSY_NOW');
-  // Cold-start under full-suite parallel load, the active-detection pipeline (busy loop output → shadow →
-  // agent-active → chip) can take several seconds to flip; use the same tolerance as this test's other
-  // waits so a loaded first run isn't a false red (the assertion still requires 'working' to appear).
+  // Cold-start, the active-detection pipeline (busy loop output → shadow → agent-active → chip) is
+  // occasionally bimodal — it either flips 'working' within a few seconds or races into a quiet-classified
+  // start that never flips; the latter is a pre-existing flake this assertion retries out of (§8.3).
   await expect(page.locator('.status-chip[data-status="agent"]')).toContainText('working', { timeout: 15_000 });
 
   await flowControl().click();

@@ -27,6 +27,9 @@ export interface LoopExtension {
   /** `bound_loop` (§26.11): which LoopDef governs the run — resume reads it to re-drive the right loop.
    *  "" when absent. */
   boundLoop: string;
+  /** `epic.sub_issues` (§26.9): the sub-issue numbers epic-promote already created — a non-empty list
+   *  means the epic was promoted, so a re-entered gate skips re-creating them (idempotency). [] when absent. */
+  epic: { subIssues: number[] };
 }
 
 const DEFAULT_EXTENSION: LoopExtension = {
@@ -35,6 +38,7 @@ const DEFAULT_EXTENSION: LoopExtension = {
   personaState: {},
   cost: null,
   boundLoop: '',
+  epic: { subIssues: [] },
 };
 
 /** Read the §26.6/§26.8 engine-extension slice from <repoDir>/.agent-loop/state.yaml, defaulting every
@@ -75,5 +79,11 @@ export function readLoopExtension(repoDir: string): LoopExtension {
     personaState,
     cost,
     boundLoop: typeof doc.bound_loop === 'string' ? doc.bound_loop : '',
+    epic: {
+      subIssues:
+        isRecord(doc.epic) && Array.isArray(doc.epic.sub_issues)
+          ? doc.epic.sub_issues.filter((n): n is number => typeof n === 'number')
+          : [],
+    },
   };
 }
