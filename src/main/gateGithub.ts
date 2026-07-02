@@ -22,7 +22,7 @@ function run(file: string, args: string[], cwd: string): Promise<string> {
 }
 
 /** A `gh issue create` URL ends in `/<number>`; pull it, or null when unparseable. */
-function issueNumberFromUrl(url: string): number | null {
+export function issueNumberFromUrl(url: string): number | null {
   const m = url.trim().match(/\/(\d+)\s*$/);
   return m ? Number(m[1]) : null;
 }

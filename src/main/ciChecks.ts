@@ -1,9 +1,6 @@
-// CI — run, don't block (§26.7 / D54 / L8). The impl loop NEVER waits on CI: the PR goes non-draft at
-// plan-approval (the L5 `gh pr ready`) and thereafter impl commits trigger checks asynchronously. At
-// review time the app takes a BEST-EFFORT, NON-BLOCKING snapshot of whatever CI state already exists and
-// records it display-only — the external engine's polling `ci-waiter` actor is removed. `gh pr checks` is
-// Claude Code's own tool surface (its private `bucket` categorization); the parser degrades to null
-// (omit) on any drift, and the port never blocks the loop's advance.
+// CI — run, don't block (§26.7 / D54 / L8): the impl loop never waits on CI. `gh pr checks` is Claude
+// Code's own tool surface (its private `bucket` categorization); the parser degrades to null on any drift
+// and the port never blocks the loop's advance (best-effort, display-only).
 
 import { execFile } from 'node:child_process';
 

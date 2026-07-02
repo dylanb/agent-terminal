@@ -1,15 +1,15 @@
-// Auto-resume decision (§26.11 / L8). On launch (or cd into a managed repo) the orchestrator reads
-// <repo>/.agent-loop/state.yaml and resumes an in-flight run at its recorded status/iteration — but
-// honoring the bound LoopDef's resume_contract rather than blindly re-injecting the current step. This is
-// the pure core: given the persisted status/iteration, the phase map, the `mid_iter_safe` flag, and which
-// of the iteration's turn artifacts already survived on disk, it decides which turn to (re-)enter. A gate/
-// terminal/error status is human-owned and never re-driven (the §24.2.3 mirror already presents it).
+// Auto-resume decision (§26.11 / L8) — the pure core. A gate/terminal/error status is human-owned and
+// never re-driven (the §24.2.3 mirror presents it); a mid-work status re-enters the earliest turn whose
+// iteration-scoped artifact is missing, honoring the resume_contract `mid_iter_safe` flag.
 
-/** The turn-artifact presence for the current iteration — the "which turns already produced output"
- *  signal (§26.11 `required_artifacts`): `plan` = plan.md; `reviewsComplete` = every roster persona's
- *  review is present; `consolidated` = the consolidated verdict is present. */
+/** The iteration-scoped turn-artifact presence for the current iteration (§26.11 `required_artifacts`).
+ *  All three are keyed to the current iteration so a stale prior-iteration file cannot masquerade as this
+ *  iteration's output: `reviewsStarted` = ≥1 roster review for this iteration is present; `reviewsComplete`
+ *  = every roster review is present; `consolidated` = the consolidated verdict is present. plan.md is
+ *  deliberately NOT an input — it is a single file rewritten in place, so its bare presence is not
+ *  iteration-scoped proof that this iteration's work turn ran. */
 export interface ResumeArtifacts {
-  plan: boolean;
+  reviewsStarted: boolean;
   reviewsComplete: boolean;
   consolidated: boolean;
 }
@@ -48,7 +48,10 @@ export function decideResume(inputs: ResumeInputs): ResumeDecision {
   });
   if (!inputs.midIterSafe) return at('work');
   const a = inputs.artifacts;
-  if (!a.plan) return at('work');
+  // Work-completion for THIS iteration is proven only by an iteration-scoped downstream artifact; with
+  // none, re-enter work (regenerating plan.md) rather than grading a possibly-stale prior-iteration plan.
+  const workDone = a.reviewsStarted || a.reviewsComplete || a.consolidated;
+  if (!workDone) return at('work');
   if (!a.reviewsComplete) return at('reviewers');
   if (!a.consolidated) return at('consolidate');
   return at('post-consolidate');

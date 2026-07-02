@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { existsSync, readFileSync } from 'node:fs';
 import {
   allReviewsPresent,
+  anyReviewPresent,
   consolidatedVerdict,
   consolidatedFindings,
   personaVerdict,
@@ -53,6 +54,19 @@ describe('reviewer fan-out artifact detection (§26.4 / §26.3 D47a)', () => {
   it('keys off the iteration directory (a prior iteration’s reviews do not satisfy this one)', () => {
     for (const p of personas) writeReview(1, p, '{"verdict":"clean"}');
     expect(allReviewsPresent(repo, 2, personas)).toBe(false);
+  });
+
+  // §26.11 resume — one present review is iteration-scoped proof the work turn finished for that iteration
+  // (reviewers only run after work), unlike bare plan.md presence which is not iteration-stamped.
+  it('anyReviewPresent is true once a SINGLE roster review for the iteration exists', () => {
+    expect(anyReviewPresent(repo, 2, personas)).toBe(false);
+    writeReview(2, 'review-security', '{"verdict":"clean"}');
+    expect(anyReviewPresent(repo, 2, personas)).toBe(true);
+  });
+
+  it('anyReviewPresent keys off the iteration (a prior iteration’s review does not count for this one)', () => {
+    writeReview(1, 'review-principal', '{"verdict":"clean"}');
+    expect(anyReviewPresent(repo, 2, personas)).toBe(false);
   });
 });
 

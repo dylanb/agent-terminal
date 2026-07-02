@@ -78,7 +78,7 @@ import { parseLoopDef, gateForStatus, reviewerRosterForPhase, normalizeConsolida
 import { runPickup, createRealPickupDeps } from './loopPickup';
 import { createTurnRunner, decideConsolidateOutcome, type TurnRunner } from './loopOrchestrator';
 import { composeWorkPrompt, composeSpawnReviewersPrompt, composeConsolidatePrompt } from './loopRecipe';
-import { allReviewsPresent, consolidatedVerdict, consolidatedFindings, personaVerdict, carryForwardReviews, planDigest } from './reviewArtifacts';
+import { allReviewsPresent, anyReviewPresent, consolidatedVerdict, consolidatedFindings, personaVerdict, carryForwardReviews, planDigest } from './reviewArtifacts';
 import { findingSignature, nextImpasse } from './findingSignature';
 import { readSessionTokens, sessionLogDir } from './costMeter';
 import { createRealCiChecks } from './ciChecks';
@@ -553,13 +553,9 @@ async function createWindow(): Promise<void> {
     startWorkTurn(finished.repoDir, finished.loopName, finished.phase);
   };
 
-  // §26.11 / L8 — auto-resume an interrupted run from <repo>/.agent-loop/state.yaml. Reads the persisted
-  // status/iteration + `bound_loop`, computes which of the iteration's turn artifacts already survived, and
-  // re-enters the EARLIEST incomplete turn (never re-running a completed one — so a crash mid-fan-out does
-  // not re-spawn every reviewer or re-run the work turn), honoring the def's resume_contract `mid_iter_safe`
-  // (false rewinds to the iteration start). A gate/terminal/error status is human-owned and not re-driven
-  // (the §24.2.3 mirror already presents it). Best-effort: any gap — no state, no bound loop, no
-  // resume_contract, or a turn already in flight — is a silent no-op, and it fires at most once per repo.
+  // §26.11 / L8 — auto-resume an interrupted run from <repo>/.agent-loop/state.yaml (decision in
+  // loopResume.ts). Best-effort: any gap — no state, no bound loop, no resume_contract, or a turn already
+  // in flight — is a silent no-op, and it fires at most once per repo.
   const resumedRepos = new Set<string>();
   const resumeLoop = (repoDir: string): void => {
     if (activeTurn !== null || resumedRepos.has(repoDir)) return;
@@ -571,19 +567,13 @@ async function createWindow(): Promise<void> {
     if (!def?.resume) return;
     const phase = def.phases.find((p) => p.entryStatus === s.status);
     const roster = phase ? reviewerRosterForPhase(def, phase.id) : [];
-    let planPresent = false;
-    try {
-      planPresent = statSync(path.join(repoDir, '.agent-loop', 'plan.md')).size > 0;
-    } catch {
-      planPresent = false;
-    }
     const decision = decideResume({
       status: s.status,
       iteration: s.iteration,
       phases: def.phases.map((p) => ({ id: p.id, entryStatus: p.entryStatus })),
       midIterSafe: def.resume.midIterSafe,
       artifacts: {
-        plan: planPresent,
+        reviewsStarted: roster.length > 0 && anyReviewPresent(repoDir, s.iteration, roster),
         reviewsComplete: roster.length > 0 && allReviewsPresent(repoDir, s.iteration, roster),
         consolidated: consolidatedVerdict(repoDir, s.iteration) !== null,
       },

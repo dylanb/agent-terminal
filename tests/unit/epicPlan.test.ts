@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { readEpicPlan } from '../../src/main/epicPlan';
+import { readEpicPlan, MAX_SUB_TICKETS } from '../../src/main/epicPlan';
 
 // §26.9 — the work-agent classifies a plan an epic by writing a `classification: epic` field into
 // `.agent-loop/plan.md` (with the sub-ticket breakdown). The signal is data in plan.md, not a state
@@ -74,5 +74,14 @@ describe('epic plan classification (§26.9)', () => {
   it('unparseable frontmatter degrades to not-an-epic', () => {
     writePlan('---\nclassification: epic\n  : : bad yaml : :\n---\n');
     expect(readEpicPlan(repo)).toEqual({ isEpic: false, subTickets: [] });
+  });
+
+  it('caps an oversized sub_tickets list so a hallucinated plan cannot drive unbounded issue creation (CWE-770)', () => {
+    const entries = Array.from({ length: MAX_SUB_TICKETS + 25 }, (_, i) => `  - title: Slice ${i}`);
+    writePlan(['---', 'classification: epic', 'sub_tickets:', ...entries, '---'].join('\n'));
+    const plan = readEpicPlan(repo);
+    expect(plan.isEpic).toBe(true);
+    expect(plan.subTickets).toHaveLength(MAX_SUB_TICKETS);
+    expect(plan.subTickets[0]).toEqual({ title: 'Slice 0', body: '' });
   });
 });

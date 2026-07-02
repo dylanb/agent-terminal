@@ -2876,15 +2876,20 @@ test('completing an iteration snapshots CI without blocking; records a loop.ci a
 // work/reviewers turns. Proven on a real relaunch: the app launches into the repo (APP_LAUNCH_DIR) with the
 // fake-agent AS the shell (APP_SHELL) so the resumed turn injects into the agent, and the run drives forward
 // to its plan-approval gate while the work/reviewers execution markers stay absent (no double-execution).
-function seedResumeRepo(prefix: string): string {
+function seedResumeRepo(
+  prefix: string,
+  opts: { iteration?: number; reviews?: 'all' | 'none'; consolidated?: boolean } = {},
+): string {
+  const iteration = opts.iteration ?? 1;
+  const reviews = opts.reviews ?? 'all';
   const repo = mkdtempSync(join(tmpdir(), prefix));
-  mkdirSync(join(repo, '.agent-loop', 'reviews', '1'), { recursive: true });
+  mkdirSync(join(repo, '.agent-loop', 'reviews', String(iteration)), { recursive: true });
   writeFileSync(
     join(repo, '.agent-loop', 'state.yaml'),
     [
       'schema_version: 4',
       'status: plan-draft',
-      'iteration: 1',
+      `iteration: ${iteration}`,
       'bound_loop: plan-loop',
       'pr: 4242',
       'branch: plan-loop/issue-176',
@@ -2898,11 +2903,16 @@ function seedResumeRepo(prefix: string): string {
       '',
     ].join('\n'),
   );
-  // The work + reviewers turns already completed before the interruption: plan.md + every roster review
-  // exist, but consolidated.json does NOT — so resume must re-enter the consolidate turn.
+  // plan.md is always on disk (it is rewritten in place, so it can be stale from a prior iteration). What
+  // varies is the iteration-scoped downstream evidence — reviews and the consolidated verdict.
   writeFileSync(join(repo, '.agent-loop', 'plan.md'), '# Plan\n\ninterrupted mid-run\n');
-  for (const p of PLAN_PERSONAS) {
-    writeFileSync(join(repo, '.agent-loop', 'reviews', '1', `${p}.json`), '{"verdict":"clean","seen_iter":1}');
+  if (reviews === 'all') {
+    for (const p of PLAN_PERSONAS) {
+      writeFileSync(join(repo, '.agent-loop', 'reviews', String(iteration), `${p}.json`), `{"verdict":"clean","seen_iter":${iteration}}`);
+    }
+  }
+  if (opts.consolidated) {
+    writeFileSync(join(repo, '.agent-loop', 'reviews', String(iteration), 'consolidated.json'), '{"verdict":"clean","findings_kept":[]}');
   }
   return repo;
 }
@@ -2948,6 +2958,91 @@ test('an interrupted run resumes at the consolidate turn on launch without re-ru
   expect(existsSync(join(repo, '.agent-loop', 'consolidate-ran'))).toBe(true);
   expect(existsSync(join(repo, '.agent-loop', 'work-ran'))).toBe(false);
   expect(existsSync(join(repo, '.agent-loop', 'reviewers-ran'))).toBe(false);
+
+  await app.close();
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+  rmSync(binDir, { recursive: true, force: true });
+});
+
+// §26.13 / L8 — a re-iteration interrupted BEFORE its work turn rewrote plan.md leaves a stale prior-iteration
+// plan.md with no iteration-scoped review for the new iteration. Resume must re-enter WORK (regenerating the
+// plan), never skip to reviewers and grade the stale plan — plan.md is not iteration-stamped, so only a
+// downstream artifact for the current iteration proves the work turn ran.
+test('resume re-enters the work turn when a re-iteration has a stale plan but no review for the new iteration (§26.13 / L8)', async () => {
+  const repo = seedResumeRepo('agent-term-e2e-l8-resume-stale-', { iteration: 2, reviews: 'none' });
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-l8-resume-stale-home-'));
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-l8-resume-stale-bin-');
+  seedFakeAgent(binDir, { work: 'write-plan', reviews: 'all', consolidate: 'clean', turnMarkers: true });
+
+  await app.close();
+  app = await electron.launch({
+    args: ['out/main/index.js'],
+    env: {
+      ...process.env,
+      APP_SHELL: join(binDir, 'fake-agent'),
+      APP_LAUNCH_DIR: repo,
+      HOME: home,
+      APP_SUBMIT_DELAY_MS: '100',
+      APP_TURN_TIMEOUT_MS: '30000',
+      CLAUDE_CONFIG_DIR: exampleConfigDir,
+      PATH: `${binDir}:${process.env.PATH}`,
+      FAKE_GHGIT_LOG: logFile,
+    },
+  });
+  page = await app.firstWindow();
+
+  const stateFile = join(repo, '.agent-loop', 'state.yaml');
+  // Land: the WORK turn ran this session (its marker appears) — resume did NOT skip to reviewers on the
+  // stale plan — and the freshly-produced iteration drove forward to the plan-approval gate.
+  await expect
+    .poll(() => existsSync(join(repo, '.agent-loop', 'work-ran')), { timeout: 25_000 })
+    .toBe(true);
+  await expect
+    .poll(() => readFileSync(stateFile, 'utf8'), { timeout: 25_000 })
+    .toContain('status: awaiting-human-plan-approval');
+
+  await app.close();
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+  rmSync(binDir, { recursive: true, force: true });
+});
+
+// §26.13 / L8 — an interrupted run whose work, reviewers AND consolidate turns all completed (every
+// iteration artifact on disk, including consolidated.json) resumes straight into the post-consolidate
+// verdict branch: it re-injects NO turn, reads the recorded clean verdict, and drives to the gate.
+test('resume runs only the post-consolidate branch when every iteration artifact already exists (§26.13 / L8)', async () => {
+  const repo = seedResumeRepo('agent-term-e2e-l8-resume-post-', { iteration: 1, reviews: 'all', consolidated: true });
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-l8-resume-post-home-'));
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-l8-resume-post-bin-');
+  seedFakeAgent(binDir, { work: 'write-plan', reviews: 'all', consolidate: 'clean', turnMarkers: true });
+
+  await app.close();
+  app = await electron.launch({
+    args: ['out/main/index.js'],
+    env: {
+      ...process.env,
+      APP_SHELL: join(binDir, 'fake-agent'),
+      APP_LAUNCH_DIR: repo,
+      HOME: home,
+      APP_SUBMIT_DELAY_MS: '100',
+      APP_TURN_TIMEOUT_MS: '30000',
+      CLAUDE_CONFIG_DIR: exampleConfigDir,
+      PATH: `${binDir}:${process.env.PATH}`,
+      FAKE_GHGIT_LOG: logFile,
+    },
+  });
+  page = await app.firstWindow();
+
+  const stateFile = join(repo, '.agent-loop', 'state.yaml');
+  // Land: the recorded clean verdict drove the run to its gate with NO turn re-injected — every turn
+  // marker stays absent (work/reviewers/consolidate all already complete on disk).
+  await expect
+    .poll(() => readFileSync(stateFile, 'utf8'), { timeout: 25_000 })
+    .toContain('status: awaiting-human-plan-approval');
+  expect(existsSync(join(repo, '.agent-loop', 'work-ran'))).toBe(false);
+  expect(existsSync(join(repo, '.agent-loop', 'reviewers-ran'))).toBe(false);
+  expect(existsSync(join(repo, '.agent-loop', 'consolidate-ran'))).toBe(false);
 
   await app.close();
   rmSync(repo, { recursive: true, force: true });

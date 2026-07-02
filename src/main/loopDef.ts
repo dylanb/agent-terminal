@@ -52,10 +52,12 @@ export interface PickupContract {
   onConflict: string;
 }
 
-/** The bound LoopDef's resume contract (§26.5 / §26.11) — drives auto-resume of an interrupted run
- *  instead of blindly re-injecting the current step. `requiredArtifacts` names the per-iteration outputs
- *  that, if present, need not be re-produced; `midIterSafe` false rewinds to the iteration start.
- *  Undefined when the def carries no `resume_contract`. */
+/** The bound LoopDef's `resume_contract` (§26.5 / §26.11) — drives auto-resume of an interrupted run.
+ *  Only `midIterSafe` is consumed today (false rewinds to the iteration start; true re-enters the earliest
+ *  turn whose iteration-scoped artifact is missing). `requiredArtifacts`/`replayActors`/`skipActors` are
+ *  parsed for contract fidelity but NOT yet consumed — resume derives its artifact sequence in
+ *  `decideResume` (loopResume.ts), not from these fields. Undefined when the def carries no
+ *  `resume_contract`. TODO(loop-engine): honor replay_actors/skip_actors for per-actor replay (§26.11). */
 export interface ResumeContract {
   requiredArtifacts: string[];
   replayActors: string[];
