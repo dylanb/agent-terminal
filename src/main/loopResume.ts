@@ -48,8 +48,6 @@ export function decideResume(inputs: ResumeInputs): ResumeDecision {
   });
   if (!inputs.midIterSafe) return at('work');
   const a = inputs.artifacts;
-  // Work-completion for THIS iteration is proven only by an iteration-scoped downstream artifact; with
-  // none, re-enter work (regenerating plan.md) rather than grading a possibly-stale prior-iteration plan.
   const workDone = a.reviewsStarted || a.reviewsComplete || a.consolidated;
   if (!workDone) return at('work');
   if (!a.reviewsComplete) return at('reviewers');

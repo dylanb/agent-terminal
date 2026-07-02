@@ -68,6 +68,11 @@ describe('reviewer fan-out artifact detection (§26.4 / §26.3 D47a)', () => {
     writeReview(1, 'review-principal', '{"verdict":"clean"}');
     expect(anyReviewPresent(repo, 2, personas)).toBe(false);
   });
+
+  it('anyReviewPresent rejects a present-but-unparseable review (must not count as work-completion proof)', () => {
+    writeReview(2, 'review-security', 'not json {{{');
+    expect(anyReviewPresent(repo, 2, personas)).toBe(false);
+  });
 });
 
 // §26.3/D45 + §26.13 L4 — the consolidate turn's artifact-confirmed check: the consolidator's
