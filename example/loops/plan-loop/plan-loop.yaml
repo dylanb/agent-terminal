@@ -839,9 +839,6 @@ state_extension:
 # §1.13 ResumeContract
 # ---------------------------------------------------------------------------
 resume_contract:
-  required_artifacts: [state, plan, ticket-body]
-  replay_actors: [work-agent, consolidator]
-  skip_actors: [plan-self-check, handoff]
   mid_iter_safe: true
   on_reset:
     - kind: clear-state-fields

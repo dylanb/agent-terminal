@@ -53,15 +53,11 @@ export interface PickupContract {
 }
 
 /** The bound LoopDef's `resume_contract` (§26.5 / §26.11) — drives auto-resume of an interrupted run.
- *  Only `midIterSafe` is consumed today (false rewinds to the iteration start; true re-enters the earliest
- *  turn whose iteration-scoped artifact is missing). `requiredArtifacts`/`replayActors`/`skipActors` are
- *  parsed for contract fidelity but NOT yet consumed — resume derives its artifact sequence in
- *  `decideResume` (loopResume.ts), not from these fields. Undefined when the def carries no
- *  `resume_contract`. TODO(loop-engine): honor replay_actors/skip_actors for per-actor replay (§26.11). */
+ *  `midIterSafe` false rewinds to the iteration start; true re-enters the earliest turn whose
+ *  iteration-scoped artifact is missing (the sequence is derived in `decideResume`, loopResume.ts).
+ *  Undefined when the def carries no `resume_contract`.
+ *  TODO(loop-engine): per-actor replay (§26.11 `replay_actors`/`skip_actors`) is not yet modeled. */
 export interface ResumeContract {
-  requiredArtifacts: string[];
-  replayActors: string[];
-  skipActors: string[];
   midIterSafe: boolean;
 }
 
@@ -250,14 +246,7 @@ function toVerdicts(doc: Record<string, unknown>): LoopVerdicts | undefined {
 function toResumeContract(doc: Record<string, unknown>): ResumeContract | undefined {
   const rc = doc.resume_contract;
   if (!isRecord(rc)) return undefined;
-  const strList = (v: unknown): string[] =>
-    Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [];
-  return {
-    requiredArtifacts: strList(rc.required_artifacts),
-    replayActors: strList(rc.replay_actors),
-    skipActors: strList(rc.skip_actors),
-    midIterSafe: rc.mid_iter_safe === true,
-  };
+  return { midIterSafe: rc.mid_iter_safe === true };
 }
 
 /** One `on_*` action list entry → GateAction; drops a non-mapping/kind-less entry (best-effort). */

@@ -208,12 +208,7 @@ describe('pickup_contract resolution (§26.5 / §26.9)', () => {
 
   it('reads the resume_contract the orchestrator resumes from (§26.5 / §26.11)', () => {
     const def = parseLoopDef(repo, 'plan-loop', exampleConfigDir);
-    expect(def?.resume).toEqual({
-      requiredArtifacts: ['state', 'plan', 'ticket-body'],
-      replayActors: ['work-agent', 'consolidator'],
-      skipActors: ['plan-self-check', 'handoff'],
-      midIterSafe: true,
-    });
+    expect(def?.resume).toEqual({ midIterSafe: true });
   });
 
   it('omits resume when the LoopDef carries no resume_contract (degrades, never throws)', () => {
