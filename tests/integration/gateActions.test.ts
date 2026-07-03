@@ -89,6 +89,16 @@ describe('decideGateOutcome (§26.6 / L5 — app-internal gate transition)', () 
     expect(out.effects.map((e) => e.kind)).toContain('epic-promote');
   });
 
+  it('drops the action kinds the in-app v1 engine does not model (parsed by loopDef, not carried as effects)', () => {
+    // §26.6 deferred-and-dropped kinds — the LoopDef declares them (real-engine vocabulary) but the app's
+    // v1 gate executor carries out none, so decideGateOutcome must NOT surface them as effects (parity with
+    // `exec`/`publish-body`). In the vendored defs they only ever appear alongside `terminate`, so the run
+    // has already ended when they would apply — dropping them is behavior-identical, and honest.
+    const kinds = decideGateOutcome(gate(), 'approve').effects.map((e) => e.kind);
+    expect(kinds).not.toContain('clear-phase2');
+    expect(kinds).not.toContain('reset-severity-cycle');
+  });
+
   it('request-changes → re-iterate at entry status; set-phase2, clear-persona-state, append-human-note', () => {
     const out = decideGateOutcome(gate(), 'request-changes');
     expect(out.nextStatus).toBe('plan-draft');

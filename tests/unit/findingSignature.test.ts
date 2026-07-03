@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
 import { findingSignature, nextImpasse } from '../../src/main/findingSignature';
 
 // §26.8 — the consolidated finding SIGNATURE is the stuck detector's input: SHA256 of the top-3 kept
@@ -26,6 +27,14 @@ describe('finding signature (§26.8)', () => {
 
   it('is the empty string for an empty kept set (an empty signature never matches, §26.8)', () => {
     expect(findingSignature([], order)).toBe('');
+  });
+
+  it('the source file carries no raw control bytes, so git keeps it text (diffable/reviewable)', () => {
+    // The §26.8 delimiters must be spelled as escapes (\x00/\x01), not embedded as raw NUL/SOH bytes —
+    // a single raw NUL makes git classify the .ts as binary and drop it from every diff.
+    const bytes = readFileSync(new URL('../../src/main/findingSignature.ts', import.meta.url));
+    const control = [...bytes].filter((b) => b < 9 || (b > 13 && b < 32));
+    expect(control).toEqual([]);
   });
 
   it('considers only the top-3 (a change in a 4th-ranked finding does not move it)', () => {

@@ -108,6 +108,43 @@ describe('docked loop panel (§24.2.3 T2)', () => {
     expect(gateDecision).toHaveBeenCalledWith('request-changes');
   });
 
+  it('groups the gate-decision buttons in a labelled group so AT announces their purpose (WCAG 4.1.2)', () => {
+    const panel = createLoopPanel(host, {
+      githubRef: () => Promise.resolve(null),
+      openExternal: () => {},
+      gateDecision: () => {},
+    });
+    panel.render(loop({ status: 'awaiting-human-plan-approval', gateOptions: ['approve', 'request-changes', 'impasse'] }), 'plan');
+    const group = host.querySelector<HTMLElement>('.gatebar');
+    expect(group?.getAttribute('role')).toBe('group');
+    expect((group?.getAttribute('aria-label') ?? '').length).toBeGreaterThan(0);
+  });
+
+  it('gives the abbreviated "changes" button an unabbreviated accessible name (WCAG 2.4.6 / 2.5.3)', () => {
+    const panel = createLoopPanel(host, {
+      githubRef: () => Promise.resolve(null),
+      openExternal: () => {},
+      gateDecision: () => {},
+    });
+    panel.render(loop({ status: 'awaiting-human-plan-approval', gateOptions: ['approve', 'request-changes', 'impasse'] }), 'plan');
+    const btn = host.querySelector<HTMLButtonElement>('[data-gate-option="request-changes"]')!;
+    expect(btn.textContent).toBe('changes'); // visible label stays compact
+    const name = btn.getAttribute('aria-label') ?? '';
+    expect(name).toContain('changes'); // label-in-name (2.5.3): accessible name contains the visible text
+    expect(name).toContain('request'); // …and is not the bare abbreviation
+  });
+
+  it('omits the "mark turn complete" control when no markTurnComplete service is injected (inert-affordance, WCAG 4.1.2)', () => {
+    // The control does nothing without deps.markTurnComplete; rendering an operable-looking button that
+    // is inert on activation misleads every user, AT included. Gate it on the service like the gate bar.
+    const panel = createLoopPanel(host, {
+      githubRef: () => Promise.resolve(null),
+      openExternal: () => {},
+    });
+    panel.render(loop({ status: 'plan-draft' }), 'plan');
+    expect(host.querySelector('[data-loop-mark-complete]')).toBeNull();
+  });
+
   it('renders NO gate-decision buttons when the gate offers no options (mid-work / terminal)', () => {
     const panel = createLoopPanel(host, {
       githubRef: () => Promise.resolve(null),

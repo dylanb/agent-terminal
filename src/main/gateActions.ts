@@ -2,22 +2,22 @@
 // injected `/agent-loop-*` command (retired, §26.12) — executes that option's `on_*` action list from the
 // bound LoopDef. `decideGateOutcome` is the pure core: it translates the raw GateAction list + the gate's
 // next_status_on_* into the normalized outcome the orchestrator carries out (write status, run the gh
-// side-effects out of band, re-iterate or stop). Unknown action kinds are dropped — the orchestrator only
-// acts on the effects it models (epic-promote lands in L8, §26.9; `exec` is still parsed-then-dropped).
+// side-effects out of band, re-iterate or stop). Action kinds the in-app v1 engine does not model are
+// dropped — `exec` (ticket-body publish), `publish-body` (spec §26 out-of-band PR-body publish, deferred),
+// and `clear-phase2`/`reset-severity-cycle` (in the vendored defs they only ever accompany `terminate`,
+// where they are moot). `epic-promote` IS modeled (§26.9 / L8). The full deferred set is recorded in-spec.
 
 import type { GateAction, LoopGate } from './loopDef';
 
 export type GateOption = 'approve' | 'request-changes' | 'impasse';
 
-/** A recognized gate side-effect the orchestrator knows how to perform. Kinds outside this set are
- *  dropped by `decideGateOutcome` (v1 does not model epic-promote/exec — §26.9, later slices). */
+/** A modeled gate side-effect the orchestrator carries out (`gateExecutor.executeGateOutcome`). Every
+ *  member here is consumed there; action kinds outside this set are dropped by `decideGateOutcome`. */
 export type GateEffect =
   | { kind: 'mark-pr-ready' }
   | { kind: 'set-phase2'; active: boolean }
   | { kind: 'clear-persona-state' }
   | { kind: 'append-human-note' }
-  | { kind: 'clear-phase2' }
-  | { kind: 'reset-severity-cycle' }
   | { kind: 'epic-promote' }
   | { kind: 'terminate' };
 
@@ -54,10 +54,6 @@ function toEffect(a: GateAction): GateEffect | null {
       return { kind: 'clear-persona-state' };
     case 'append-human-note':
       return { kind: 'append-human-note' };
-    case 'clear-phase2':
-      return { kind: 'clear-phase2' };
-    case 'reset-severity-cycle':
-      return { kind: 'reset-severity-cycle' };
     // §26.9 / L8 — the `when: plan.classification == 'epic'` guard is evaluated at execution time
     // (gateExecutor reads the epic plan); the effect itself is always recognized in the action list.
     case 'epic-promote':

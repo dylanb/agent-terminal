@@ -48,7 +48,9 @@ export function parseAgentLoopState(repoDir: string): AgentLoopState | null {
   return {
     status: doc.status,
     iteration: doc.iteration,
-    pr: typeof doc.pr === 'number' ? doc.pr : null,
+    // The §26.6 writer serializes a null PR as the whole-document-valid `0`; decode it back (GitHub PR
+    // numbers are >=1, so `0`/non-positive is the "no PR yet" sentinel, never a real ref).
+    pr: typeof doc.pr === 'number' && doc.pr > 0 ? doc.pr : null,
     branch: typeof doc.branch === 'string' ? doc.branch : null,
     linkedIssues: Array.isArray(doc.linked_issues) ? doc.linked_issues.filter((n): n is number => typeof n === 'number') : [],
   };

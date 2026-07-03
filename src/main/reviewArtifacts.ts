@@ -7,41 +7,14 @@ import { createHash } from 'node:crypto';
 import path from 'node:path';
 import type { Finding } from './findingSignature';
 
-/** True iff every `persona` has a parseable `reviews/{iteration}/{persona}.json` under `<repoDir>/.agent-loop`.
- *  An absent or non-JSON file fails the check; vacuously true for an empty roster (the caller guards that). */
-export function allReviewsPresent(repoDir: string, iteration: number, personas: string[]): boolean {
-  return personas.every((persona) => {
-    const file = path.join(repoDir, '.agent-loop', 'reviews', String(iteration), `${persona}.json`);
-    try {
-      JSON.parse(readFileSync(file, 'utf8'));
-      return true;
-    } catch {
-      return false;
-    }
-  });
+/** The path to one review artifact under `<repoDir>/.agent-loop/reviews/{iteration}/` (§26.3). */
+function reviewPath(repoDir: string, iteration: number, name: string): string {
+  return path.join(repoDir, '.agent-loop', 'reviews', String(iteration), name);
 }
 
-/** True iff AT LEAST ONE `persona` has a parseable `reviews/{iteration}/{persona}.json` (§26.11 resume).
- *  Because reviewers only run after the work turn completes for an iteration, one present review is
- *  iteration-scoped proof that iteration's work turn finished — unlike bare `plan.md` presence, which is
- *  not iteration-stamped. Vacuously false for an empty roster. */
-export function anyReviewPresent(repoDir: string, iteration: number, personas: string[]): boolean {
-  return personas.some((persona) => {
-    const file = path.join(repoDir, '.agent-loop', 'reviews', String(iteration), `${persona}.json`);
-    try {
-      JSON.parse(readFileSync(file, 'utf8'));
-      return true;
-    } catch {
-      return false;
-    }
-  });
-}
-
-/** The consolidate turn's artifact-confirmed check (§26.3/D47a b + §26.13 L4): the raw `verdict` string
- *  from `reviews/{iteration}/consolidated.json`, or null when the file is absent, does not parse, or
- *  carries no string verdict. The caller normalizes the raw value against the LoopDef taxonomy (§26.6). */
-export function consolidatedVerdict(repoDir: string, iteration: number): string | null {
-  const file = path.join(repoDir, '.agent-loop', 'reviews', String(iteration), 'consolidated.json');
+/** The raw string `verdict` from a review JSON, or null when absent / unparseable / carrying no string
+ *  verdict. The caller normalizes the raw value against the LoopDef taxonomy (§26.6); never throws. */
+function readVerdict(file: string): string | null {
   try {
     const doc: unknown = JSON.parse(readFileSync(file, 'utf8'));
     if (doc !== null && typeof doc === 'object' && typeof (doc as { verdict?: unknown }).verdict === 'string') {
@@ -53,11 +26,42 @@ export function consolidatedVerdict(repoDir: string, iteration: number): string 
   }
 }
 
+/** True iff every `persona` has a parseable `reviews/{iteration}/{persona}.json` under `<repoDir>/.agent-loop`.
+ *  An absent or non-JSON file fails the check; vacuously true for an empty roster (the caller guards that). */
+export function allReviewsPresent(repoDir: string, iteration: number, personas: string[]): boolean {
+  return personas.every((persona) => isParseableJson(reviewPath(repoDir, iteration, `${persona}.json`)));
+}
+
+/** True iff `file` exists and parses as JSON (§26.4 artifact-confirmed check); false on any error. */
+function isParseableJson(file: string): boolean {
+  try {
+    JSON.parse(readFileSync(file, 'utf8'));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** True iff AT LEAST ONE `persona` has a parseable `reviews/{iteration}/{persona}.json` (§26.11 resume).
+ *  Because reviewers only run after the work turn completes for an iteration, one present review is
+ *  iteration-scoped proof that iteration's work turn finished — unlike bare `plan.md` presence, which is
+ *  not iteration-stamped. Vacuously false for an empty roster. */
+export function anyReviewPresent(repoDir: string, iteration: number, personas: string[]): boolean {
+  return personas.some((persona) => isParseableJson(reviewPath(repoDir, iteration, `${persona}.json`)));
+}
+
+/** The consolidate turn's artifact-confirmed check (§26.3/D47a b + §26.13 L4): the raw `verdict` string
+ *  from `reviews/{iteration}/consolidated.json`, or null when the file is absent, does not parse, or
+ *  carries no string verdict. The caller normalizes the raw value against the LoopDef taxonomy (§26.6). */
+export function consolidatedVerdict(repoDir: string, iteration: number): string | null {
+  return readVerdict(reviewPath(repoDir, iteration, 'consolidated.json'));
+}
+
 /** The kept findings from `reviews/{iteration}/consolidated.json` (§26.8 signature input): each entry's
  *  `severity` + `message`. An absent/malformed file, a missing `findings_kept`, or an entry lacking a
  *  string severity or message all degrade to (or drop from) an empty set — never throws. */
 export function consolidatedFindings(repoDir: string, iteration: number): Finding[] {
-  const file = path.join(repoDir, '.agent-loop', 'reviews', String(iteration), 'consolidated.json');
+  const file = reviewPath(repoDir, iteration, 'consolidated.json');
   let doc: unknown;
   try {
     doc = JSON.parse(readFileSync(file, 'utf8'));
@@ -78,16 +82,7 @@ export function consolidatedFindings(repoDir: string, iteration: number): Findin
 /** The raw `verdict` string from one persona's `reviews/{iteration}/{persona}.json` (§26.5 skip-opt), or
  *  null when the file is absent, unparseable, or carries no string verdict. */
 export function personaVerdict(repoDir: string, iteration: number, persona: string): string | null {
-  const file = path.join(repoDir, '.agent-loop', 'reviews', String(iteration), `${persona}.json`);
-  try {
-    const doc: unknown = JSON.parse(readFileSync(file, 'utf8'));
-    if (doc !== null && typeof doc === 'object' && typeof (doc as { verdict?: unknown }).verdict === 'string') {
-      return (doc as { verdict: string }).verdict;
-    }
-    return null;
-  } catch {
-    return null;
-  }
+  return readVerdict(reviewPath(repoDir, iteration, `${persona}.json`));
 }
 
 /** The SHA256 digest of `.agent-loop/plan.md` — the plan-phase skip footprint (§26.5). "" when plan.md is
@@ -104,12 +99,12 @@ export function planDigest(repoDir: string): string {
  *  → `reviews/{toIter}/{persona}.json`, byte-for-byte. Best-effort per persona — a missing source is
  *  skipped, never thrown, so a partial prior fan-out cannot abort the reuse. */
 export function carryForwardReviews(repoDir: string, personas: string[], fromIter: number, toIter: number): void {
-  const toDir = path.join(repoDir, '.agent-loop', 'reviews', String(toIter));
   for (const persona of personas) {
-    const from = path.join(repoDir, '.agent-loop', 'reviews', String(fromIter), `${persona}.json`);
+    const from = reviewPath(repoDir, fromIter, `${persona}.json`);
+    const to = reviewPath(repoDir, toIter, `${persona}.json`);
     try {
-      mkdirSync(toDir, { recursive: true });
-      copyFileSync(from, path.join(toDir, `${persona}.json`));
+      mkdirSync(path.dirname(to), { recursive: true });
+      copyFileSync(from, to);
     } catch {
       // best-effort: a missing/unreadable source review is skipped
     }

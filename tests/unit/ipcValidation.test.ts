@@ -12,6 +12,7 @@ import {
   isValidFlowRequest,
   isValidFlowProvideInput,
   isValidFlowGithubRef,
+  isValidFlowGateDecision,
   isValidOpenExternal,
   openExternalTarget,
   isValidTemplateList,
@@ -178,6 +179,19 @@ describe('IPC payload validation (§6 — renderer-supplied input is untrusted)'
     expect(isValidFlowGithubRef({ sessionId: sid, repoKey: 'relative', kind: 'issue', number: 1 })).toBe(false); // unsafe key
     expect(isValidFlowGithubRef({ sessionId: 'other', repoKey: '/repo', kind: 'issue', number: 1 })).toBe(false);
     expect(isValidFlowGithubRef(null)).toBe(false);
+  });
+
+  it('confines a flow:gateDecision option to the known set + guards repoKey/session/note (§26.6 / L5)', () => {
+    expect(isValidFlowGateDecision({ sessionId: sid, repoKey: '/repo', option: 'approve' })).toBe(true);
+    expect(isValidFlowGateDecision({ sessionId: sid, repoKey: '/repo', option: 'request-changes' })).toBe(true);
+    expect(isValidFlowGateDecision({ sessionId: sid, repoKey: '/repo', option: 'impasse', note: 'why' })).toBe(true);
+    expect(isValidFlowGateDecision({ sessionId: sid, repoKey: '/repo', option: 'terminate' })).toBe(false); // not an offered option
+    expect(isValidFlowGateDecision({ sessionId: sid, repoKey: '/repo' })).toBe(false); // option required
+    expect(isValidFlowGateDecision({ sessionId: sid, repoKey: '/repo', option: 'approve', note: 42 })).toBe(false); // note must be a string
+    expect(isValidFlowGateDecision({ sessionId: sid, repoKey: 'relative', option: 'approve' })).toBe(false); // unsafe key
+    expect(isValidFlowGateDecision({ sessionId: 'other', repoKey: '/repo', option: 'approve' })).toBe(false); // dead session
+    expect(isValidFlowGateDecision([])).toBe(false); // not a record
+    expect(isValidFlowGateDecision(null)).toBe(false);
   });
 
   it('accepts an app:openExternal with a string url, rejecting bad shapes (host check is the handler\'s job)', () => {

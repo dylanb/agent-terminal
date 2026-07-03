@@ -2,6 +2,7 @@ import { app, BrowserWindow, clipboard, ipcMain, Menu, Notification, shell } fro
 import { buildMenuTemplate } from './appMenu';
 import path from 'node:path';
 import os from 'node:os';
+import { statSync } from 'node:fs';
 import { performance } from 'node:perf_hooks';
 import {
   CH,
@@ -95,7 +96,6 @@ import { writeLoopState } from './loopStateWriter';
 import { readLoopExtension } from './loopStateReader';
 import { decideResume } from './loopResume';
 import { turnDoneSentinel } from '../shared/loopTurn';
-import { statSync } from 'node:fs';
 import type { FlowStepDef } from './flow';
 import { listTodoTemplates, loadTodoTemplateFile, parseTodoTemplate } from './todoTemplate';
 import { discover, readArtifact, emptyTree, warmBaseRef, createBaseWarmer, createViewerActivityHandler, gitRootOf } from './artifactTree';

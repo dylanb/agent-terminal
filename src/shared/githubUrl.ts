@@ -17,3 +17,11 @@ export function githubHttpsHref(url: string): string | null {
   if (u.hostname !== 'github.com' && !u.hostname.endsWith('.github.com')) return null;
   return u.href;
 }
+
+/** The trailing issue/PR number of a `gh` CLI/API url (e.g. `…/issues/25` → 25), or null when the url
+ *  carries no trailing number. One definition for every `gh …` stdout parser (pickup PR create, issue
+ *  create) so the callers cannot drift on what "the number gh printed" means. */
+export function numberFromGithubUrl(url: string): number | null {
+  const m = url.trim().match(/\/(\d+)\s*$/);
+  return m ? Number(m[1]) : null;
+}

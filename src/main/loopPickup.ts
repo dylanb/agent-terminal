@@ -10,6 +10,7 @@ import { rmSync } from 'node:fs';
 import path from 'node:path';
 import type { PickupContract } from './loopDef';
 import { writeLoopState, type LoopStateWrite } from './loopStateWriter';
+import { numberFromGithubUrl } from '../shared/githubUrl';
 
 /** GitHub issue facts the pickup needs for the start commit + PR title. */
 export interface IssueInfo {
@@ -142,12 +143,6 @@ function treeIsClean(porcelain: string): boolean {
     .every((l) => l.replace(/^.. /, '').startsWith('.agent-loop/'));
 }
 
-/** A draft-PR URL ends in `/<number>`; pull it, or null when unparseable. */
-function prNumberFromUrl(url: string): number | null {
-  const m = url.trim().match(/\/(\d+)\s*$/);
-  return m ? Number(m[1]) : null;
-}
-
 export function createRealPickupGit(repoDir: string): PickupGit {
   const git = (args: string[]): Promise<string> => run('git', args, repoDir);
   return {
@@ -189,7 +184,7 @@ export function createRealPickupGitHub(repoDir: string): PickupGitHub {
       void (await gh(['issue', 'edit', String(issue), on ? '--add-label' : '--remove-label', label])),
     createDraftPr: async ({ base, head, title, body }) => {
       const out = await gh(['pr', 'create', '--draft', '--base', base, '--head', head, '--title', title, '--body', body]);
-      return prNumberFromUrl(out);
+      return numberFromGithubUrl(out);
     },
     setPrLabel: async (pr, label, on) =>
       void (await gh(['pr', 'edit', String(pr), on ? '--add-label' : '--remove-label', label])),

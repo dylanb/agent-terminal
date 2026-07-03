@@ -48,7 +48,7 @@ const approveOutcome: GateOutcome = {
   nextStatus: 'plan-human-approved',
   terminate: true,
   reiterate: false,
-  effects: [{ kind: 'mark-pr-ready' }, { kind: 'clear-phase2' }, { kind: 'terminate' }],
+  effects: [{ kind: 'mark-pr-ready' }, { kind: 'terminate' }],
 };
 // §26.9 / L8 — the real plan-approve action list leads with epic-promote (guarded at exec time on the
 // plan's classification, so the effect is always present; the executor evaluates the epic plan).

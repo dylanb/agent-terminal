@@ -4,9 +4,9 @@
 // ticket/PR detail (title, body, link) is fetched best-effort via injected services — the organism
 // reaches for nothing itself.
 //
-// Scope (T2): the state mirror + the read-only "gate options" row. The Review-gate DECISION section
-// (the approve / request-changes / impasse buttons + the §19.4 composer) is the gate slice T5/T6 —
-// not built here.
+// Scope: the state mirror + the read-only "gate options" row, plus the §26.6 / L5 gate DECISION section
+// (a button per gate option, firing the injected gateDecision). The §19.4 feedback composer that supplies
+// the human-note text is a later slice.
 
 import type { FlowLoopView, FlowRefs, GithubRef, GithubRefKind } from '../../shared/ipc';
 import { hasFlowRefs } from '../../shared/ipc';
@@ -243,8 +243,8 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
       liveLoop = { statusVal: statusRow.querySelector('.lv')!, iterVal: iterRow.querySelector('.lv')! };
       if (loop.pr !== null) ldl.append(detailRow(doc, 'pr', `#${loop.pr}`, 'sig'));
       if (loop.branch !== null) ldl.append(detailRow(doc, 'branch', loop.branch));
-      // The current gate's human_options (§18.1/§19.4), present only at an awaiting gate; the decision
-      // buttons are T5/T6 — this row only surfaces what the gate will offer.
+      // The current gate's human_options (§18.1/§19.4), present only at an awaiting gate — the read-only
+      // preview of what the gate offers; the actionable decision buttons render below.
       if (loop.gateOptions && loop.gateOptions.length > 0)
         ldl.append(detailRow(doc, 'gate options', loop.gateOptions.map(gateOptionLabel).join(' · ')));
 
@@ -256,12 +256,19 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
       if (loop.gateOptions && loop.gateOptions.length > 0 && deps.gateDecision) {
         const gate = doc.createElement('div');
         gate.className = 'gatebar';
+        // A labelled group so a screen-reader user hears these controls' shared purpose, not three loose
+        // buttons (WCAG 4.1.2). aria-label carries the group name; the row itself has no visible heading.
+        gate.setAttribute('role', 'group');
+        gate.setAttribute('aria-label', 'gate decision');
         for (const option of loop.gateOptions) {
           const btn = doc.createElement('button');
           // approve is the primary action (loop-flow.html) — the filled `app` tone; the rest are outline.
           btn.className = option === 'approve' ? 'pill app gate-approve' : `pill gate-${option}`;
           btn.dataset.gateOption = option;
           btn.textContent = gateOptionLabel(option);
+          // The visible label stays compact ("changes"); the accessible name is the unabbreviated option
+          // so AT does not announce a bare, ambiguous verb (WCAG 2.4.6; label-in-name 2.5.3).
+          btn.setAttribute('aria-label', option.replace('-', ' '));
           btn.addEventListener('click', () => deps.gateDecision?.(option));
           gate.append(btn);
         }
@@ -269,14 +276,16 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
       }
 
       // §26.3/D47a(c) — the human-in-the-loop escape hatch: advance a turn whose automatic done-signal
-      // the orchestrator missed, without editing files. Present on every loop step (the rail's compact
-      // read-out has no room for it); the decision is the orchestrator's, surfaced via state.yaml.
-      const markBtn = doc.createElement('button');
-      markBtn.className = 'pill mark-complete';
-      markBtn.dataset.loopMarkComplete = '';
-      markBtn.textContent = 'Mark turn complete';
-      markBtn.addEventListener('click', () => deps.markTurnComplete?.());
-      body.append(markBtn);
+      // the orchestrator missed, without editing files. Present on a loop step only when the composition
+      // root injects the service — an un-wired control would be an inert affordance (WCAG 4.1.2).
+      if (deps.markTurnComplete) {
+        const markBtn = doc.createElement('button');
+        markBtn.className = 'pill mark-complete';
+        markBtn.dataset.loopMarkComplete = '';
+        markBtn.textContent = 'Mark turn complete';
+        markBtn.addEventListener('click', () => deps.markTurnComplete?.());
+        body.append(markBtn);
+      }
 
       host.append(body);
       restoreFocus(hadFocus);
