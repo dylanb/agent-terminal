@@ -26,12 +26,6 @@ function readVerdict(file: string): string | null {
   }
 }
 
-/** True iff every `persona` has a parseable `reviews/{iteration}/{persona}.json` under `<repoDir>/.agent-loop`.
- *  An absent or non-JSON file fails the check; vacuously true for an empty roster (the caller guards that). */
-export function allReviewsPresent(repoDir: string, iteration: number, personas: string[]): boolean {
-  return personas.every((persona) => isParseableJson(reviewPath(repoDir, iteration, `${persona}.json`)));
-}
-
 /** True iff `file` exists and parses as JSON (§26.4 artifact-confirmed check); false on any error. */
 function isParseableJson(file: string): boolean {
   try {
@@ -40,6 +34,12 @@ function isParseableJson(file: string): boolean {
   } catch {
     return false;
   }
+}
+
+/** True iff every `persona` has a parseable `reviews/{iteration}/{persona}.json` under `<repoDir>/.agent-loop`.
+ *  An absent or non-JSON file fails the check; vacuously true for an empty roster (the caller guards that). */
+export function allReviewsPresent(repoDir: string, iteration: number, personas: string[]): boolean {
+  return personas.every((persona) => isParseableJson(reviewPath(repoDir, iteration, `${persona}.json`)));
 }
 
 /** True iff AT LEAST ONE `persona` has a parseable `reviews/{iteration}/{persona}.json` (§26.11 resume).

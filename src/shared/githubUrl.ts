@@ -19,8 +19,8 @@ export function githubHttpsHref(url: string): string | null {
 }
 
 /** The trailing issue/PR number of a `gh` CLI/API url (e.g. `…/issues/25` → 25), or null when the url
- *  carries no trailing number. One definition for every `gh …` stdout parser (pickup PR create, issue
- *  create) so the callers cannot drift on what "the number gh printed" means. */
+ *  carries no trailing number. One definition for every `gh …` stdout parser so the callers cannot drift
+ *  on what "the number gh printed" means. */
 export function numberFromGithubUrl(url: string): number | null {
   const m = url.trim().match(/\/(\d+)\s*$/);
   return m ? Number(m[1]) : null;
