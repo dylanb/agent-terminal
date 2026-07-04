@@ -81,18 +81,24 @@ export async function executeGateOutcome(
   // The note keys to the iteration being critiqued (the engine's `{iter}`); the next work turn injects it.
   if (has('append-human-note') && ctx.note.trim().length > 0) deps.writeHumanNote(ctx.iteration, ctx.note);
 
-  deps.writeState({
-    status: outcome.nextStatus,
-    iteration: nextIteration,
-    pr: ctx.pr,
-    branch: ctx.branch,
-    boundLoop: ctx.boundLoop,
-    linkedIssues: [...ctx.linkedIssues, ...subIssues],
-    ...(setPhase2 ? { phase2Active: setPhase2.active } : {}),
-    ...(has('clear-persona-state') ? { clearPersonaState: true } : {}),
-    ...(subIssues.length > 0 ? { epic: { subIssues } } : {}),
-    ...(outcome.terminate ? { terminated: true } : {}),
-  });
+  try {
+    deps.writeState({
+      status: outcome.nextStatus,
+      iteration: nextIteration,
+      pr: ctx.pr,
+      branch: ctx.branch,
+      boundLoop: ctx.boundLoop,
+      linkedIssues: [...ctx.linkedIssues, ...subIssues],
+      ...(setPhase2 ? { phase2Active: setPhase2.active } : {}),
+      ...(has('clear-persona-state') ? { clearPersonaState: true } : {}),
+      ...(subIssues.length > 0 ? { epic: { subIssues } } : {}),
+      ...(outcome.terminate ? { terminated: true } : {}),
+    });
+  } catch {
+    // A failed state write leaves the loop where it is — never re-iterate against unpersisted state, and
+    // never surface as an unhandled rejection in main (the `void` call site cannot catch it, §26.11).
+    return;
+  }
 
   if (outcome.reiterate) deps.reiterate(nextIteration);
 }

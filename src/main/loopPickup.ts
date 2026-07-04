@@ -102,6 +102,9 @@ export async function runPickup(deps: PickupDeps, req: PickupRequest): Promise<P
     }
 
     const title = `${info?.title ?? `issue #${req.issue}`} (closes #${req.issue})`;
+    // TODO(loop-engine): resolve the body from pickup_contract.initial_pr_body_ref (§26.9) instead of this
+    // hardcoded stub. The field is parsed (loopDef.ts) but not yet resolved to a template — like on_conflict,
+    // wiring the resolver is its own slice; the vendored defs name a stub, so the observable body is unchanged.
     const body = `closes #${req.issue}\n\n<!-- agent-loop will fill the real plan + implementation. This body is the initial stub. -->\n`;
     const pr = await github.createDraftPr({ base, head: branch, title, body });
     if (pr === null) return fail('draft PR creation failed');

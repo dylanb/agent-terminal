@@ -234,8 +234,8 @@ describe('pickup_contract resolution (§26.5 / §26.9)', () => {
 
   it('parses the phase id + entry_status + post-verdict gate statuses + exit predicate the orchestrator branches on (§26.5/§26.6/§26.8)', () => {
     const def = parseLoopDef(repo, 'plan-loop', exampleConfigDir);
-    // exit_predicate.on_phase2_active + exit_predicate.severity_cap drive the §26.8 triage routing: a
-    // needs-work verdict routes to the triage gate once phase-2 is active or the iteration cap is reached.
+    // exit_predicate.severity_cap drives the §26.8 cap routing: a needs-work verdict routes to the triage
+    // gate once the iteration cap is reached (phase-2 routing keys off the runtime phase2Active flag).
     expect(def?.phases).toEqual([
       {
         id: 'plan',
@@ -243,7 +243,6 @@ describe('pickup_contract resolution (§26.5 / §26.9)', () => {
         rosterOverrideId: '',
         postCleanGate: 'awaiting-human-plan-approval',
         postNeedsWorkGate: 'awaiting-human-plan-triage',
-        onPhase2Active: true,
         iterationCap: 2,
       },
     ]);
@@ -259,6 +258,9 @@ describe('pickup_contract resolution (§26.5 / §26.9)', () => {
     expect(normalizeConsolidatedVerdict(def!, 'approved')).toBe('clean'); // a mapped synonym
     expect(normalizeConsolidatedVerdict(def!, 'CLEAN')).toBe('clean'); // case/space-insensitive
     expect(normalizeConsolidatedVerdict(def!, 'gibberish')).toBe('needs-work'); // unknown → strict fallback
+    // Normalization runs off the synonym map + hardcoded clean; the raw canonical LIST is not parsed
+    // (§26.11 precedent: no parsed-but-unconsumed surface — the consolidator applies canonical itself).
+    expect(def?.verdicts).not.toHaveProperty('consolidatedCanonical');
   });
 
   it('parses the severity order the §26.8 finding signature sorts by (§26.5)', () => {
@@ -318,7 +320,6 @@ describe('pickup_contract resolution (§26.5 / §26.9)', () => {
         rosterOverrideId: '',
         postCleanGate: '',
         postNeedsWorkGate: '',
-        onPhase2Active: false,
         iterationCap: 0,
       },
     ]);

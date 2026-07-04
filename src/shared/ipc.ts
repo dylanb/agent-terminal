@@ -617,8 +617,10 @@ export interface FlowMarkTurnCompleteMsg {
 }
 
 /** The human's gate decision (§26.6 / L5): the option picked at a data-driven awaiting-human gate. The
- *  set mirrors the LoopDef `human_options` the gate offers (`approve`/`request-changes`/`impasse`). */
-export type GateDecisionOption = 'approve' | 'request-changes' | 'impasse';
+ *  set mirrors the LoopDef `human_options` the gate offers. One runtime source (`GATE_DECISION_OPTIONS`)
+ *  drives both the type and the §6 validator, so main, renderer, and the wire cannot drift on the set. */
+export const GATE_DECISION_OPTIONS = ['approve', 'request-changes', 'impasse'] as const;
+export type GateDecisionOption = (typeof GATE_DECISION_OPTIONS)[number];
 
 /** flow:gateDecision request (§26.6 / L5): the human picks an option at an awaiting-human gate. The app
  *  executes that option's LoopDef `on_*` action list in-app (gh side-effects out of band) and advances /

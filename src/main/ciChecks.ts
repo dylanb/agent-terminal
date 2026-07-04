@@ -1,6 +1,6 @@
 // CI — run, don't block (§26.7 / D54 / L8): the impl loop never waits on CI. `gh pr checks` is Claude
-// Code's own tool surface (its private `bucket` categorization); the parser degrades to null on any drift
-// and the port never blocks the loop's advance (best-effort, display-only).
+// Code's own tool surface (its private `bucket` categorization); the port never blocks the loop's advance
+// (best-effort, display-only).
 
 import { execFile } from 'node:child_process';
 

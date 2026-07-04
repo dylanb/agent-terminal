@@ -85,7 +85,7 @@ import { readSessionTokens, sessionLogDir } from './costMeter';
 import { createRealCiChecks } from './ciChecks';
 import { priceTokens, formatCost, type CostResult } from '../shared/pricing';
 import { prunablePersonas, recordCleanPersonas } from './personaSkip';
-import { decideGateOutcome } from './gateActions';
+import { decideGateOutcome, type GateOption } from './gateActions';
 import { executeGateOutcome } from './gateExecutor';
 import { createRealGateGitHub } from './gateGithub';
 import { writeHumanNote } from './humanNotes';
@@ -764,7 +764,7 @@ async function createWindow(): Promise<void> {
   // the gate's human_options, then run that option's action list (state write, gh side-effects out of
   // band, human note) and advance/re-iterate/stop. Best-effort: an unresolved gate or an unoffered option
   // is ignored (the loop stays where it is).
-  const runGateDecision = (repoKey: string, option: 'approve' | 'request-changes' | 'impasse', note: string): void => {
+  const runGateDecision = (repoKey: string, option: GateOption, note: string): void => {
     const loopName = boundLoopName(repoKey);
     const s = parseAgentLoopState(repoKey);
     const def = loopName ? parseLoopDef(repoKey, loopName) : null;

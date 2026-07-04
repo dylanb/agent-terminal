@@ -8,8 +8,11 @@
 // where they are moot). `epic-promote` IS modeled (§26.9 / L8). The full deferred set is recorded in-spec.
 
 import type { GateAction, LoopGate } from './loopDef';
+import type { GateDecisionOption } from '../shared/ipc';
 
-export type GateOption = 'approve' | 'request-changes' | 'impasse';
+/** The gate option this pure core decides on — the §6 wire type, so the decision core, the validator, and
+ *  the renderer button set share one definition (CLAUDE.md shared-semantics). */
+export type GateOption = GateDecisionOption;
 
 /** A modeled gate side-effect the orchestrator carries out (`gateExecutor.executeGateOutcome`). Every
  *  member here is consumed there; action kinds outside this set are dropped by `decideGateOutcome`. */

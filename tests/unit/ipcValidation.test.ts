@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { SESSION_ID } from '../../src/shared/ipc';
+import { GATE_DECISION_OPTIONS, SESSION_ID } from '../../src/shared/ipc';
 import {
   isValidCapture,
   isValidCaptureCommand,
@@ -192,6 +192,13 @@ describe('IPC payload validation (§6 — renderer-supplied input is untrusted)'
     expect(isValidFlowGateDecision({ sessionId: 'other', repoKey: '/repo', option: 'approve' })).toBe(false); // dead session
     expect(isValidFlowGateDecision([])).toBe(false); // not a record
     expect(isValidFlowGateDecision(null)).toBe(false);
+  });
+
+  it('accepts exactly the shared GATE_DECISION_OPTIONS set — one source for the validator (§26.6)', () => {
+    for (const option of GATE_DECISION_OPTIONS) {
+      expect(isValidFlowGateDecision({ sessionId: sid, repoKey: '/repo', option })).toBe(true);
+    }
+    expect(isValidFlowGateDecision({ sessionId: sid, repoKey: '/repo', option: 'defer' })).toBe(false);
   });
 
   it('accepts an app:openExternal with a string url, rejecting bad shapes (host check is the handler\'s job)', () => {

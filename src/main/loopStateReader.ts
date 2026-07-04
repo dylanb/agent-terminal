@@ -1,6 +1,6 @@
 // Reader for the orchestrator-owned engine-extension fields of .agent-loop/state.yaml (§26.6). The
 // §24.2.3 mirror slice (agentLoopBridge.ts) stays the read-only public contract; this reads back the
-// LARGER surface the orchestrator itself writes (loopStateWriter.ts) — phase2_active (§26.6) — so the
+// LARGER engine-extension surface the orchestrator itself writes (loopStateWriter.ts, §26.6) — so the
 // two live beside their writer's field vocabulary and cannot drift. Like every state reader it degrades
 // each missing/ill-typed field to a safe default and never throws on a foreign or partial doc.
 

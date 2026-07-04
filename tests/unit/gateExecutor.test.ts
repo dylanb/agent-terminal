@@ -112,6 +112,19 @@ describe('executeGateOutcome (§26.6 / L5)', () => {
     expect(h.writes[0]).toMatchObject({ status: 'plan-human-approved', terminated: true });
   });
 
+  it('a state-write failure degrades cleanly: resolves (no unhandled rejection) and does not re-iterate (§26.11)', async () => {
+    const h = harness({
+      writeState: () => {
+        throw new Error('disk full');
+      },
+    });
+    // A rejected promise here surfaces as an unhandled rejection in main (the void call site cannot see it);
+    // the executor must swallow the write failure — leaving the loop where it is, never starting a work turn
+    // against unpersisted state.
+    await expect(executeGateOutcome(requestChangesOutcome, CTX, h.deps)).resolves.toBeUndefined();
+    expect(h.reiterations).toEqual([]);
+  });
+
   it('does not mark a PR ready when there is no PR number', async () => {
     const h = harness();
     await executeGateOutcome(approveOutcome, { ...CTX, pr: null }, h.deps);

@@ -206,6 +206,19 @@ describe('docked loop panel (§24.2.3 T2)', () => {
     expect(row('status')?.querySelector('.lv')?.classList.contains('bad')).toBe(false); // tone cleared
   });
 
+  it('does not rewrite the live status/iteration text nodes on an unchanged patch (no content-free re-announce, WCAG 4.1.3)', () => {
+    // patchInPlace runs on every passive push — a cost-only or refs-only update leaves status/iteration
+    // untouched. Rewriting those text nodes inside the aria-live region with identical strings makes a
+    // screen reader re-announce "status … / iteration …" with nothing changed. Assign only on a real change.
+    const panel = createLoopPanel(host);
+    panel.render(loop({ status: 'impl-draft', iteration: 9 }), 'build');
+    const statusNode = row('status')!.querySelector('.lv')!.firstChild;
+    const iterNode = row('iteration')!.querySelector('.lv')!.firstChild;
+    panel.render(loop({ status: 'impl-draft', iteration: 9 }), 'build'); // identical values ⇒ patch path
+    expect(row('status')!.querySelector('.lv')!.firstChild).toBe(statusNode);
+    expect(row('iteration')!.querySelector('.lv')!.firstChild).toBe(iterNode);
+  });
+
   it('does not re-fetch a ref while a fetch is already in flight, then retries once it resolves', async () => {
     let settle: (r: GithubRef | null) => void = () => {};
     const githubRef = vi.fn(() => new Promise<GithubRef | null>((res) => (settle = res)));

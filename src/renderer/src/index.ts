@@ -16,6 +16,7 @@ import { createArtifacts, type Artifacts } from './artifacts';
 import { renderMarkdownInto, renderCodeInto } from './viewerRender';
 import { doInject } from './paneActions';
 import { createRepoContext } from './repoContext';
+import type { GateDecisionOption } from '../../shared/ipc';
 import { createKeymapController, resolveBase } from './keymapController';
 import { createKeyboardSettings } from './keyboardSettings';
 import { createCliInstall } from './cliInstall';
@@ -112,7 +113,7 @@ if (flowStripHost) {
         },
         gateDecision: (option) => {
           const key = repo.repoKey();
-          if (key) window.flow.gateDecision(key, option as 'approve' | 'request-changes' | 'impasse');
+          if (key) window.flow.gateDecision(key, option as GateDecisionOption);
         },
       })
     : undefined;

@@ -4,6 +4,7 @@
 import path from 'node:path';
 import { githubHttpsHref } from '../shared/githubUrl';
 import {
+  GATE_DECISION_OPTIONS,
   SESSION_ID,
   type AgentInjectMsg,
   type ClipboardWriteMsg,
@@ -149,7 +150,7 @@ export function isValidFlowGateDecision(m: unknown): m is FlowGateDecisionMsg {
     isRecord(m) &&
     isLiveSession(m) &&
     isSafeRepoKey(m.repoKey) &&
-    (m.option === 'approve' || m.option === 'request-changes' || m.option === 'impasse') &&
+    (GATE_DECISION_OPTIONS as readonly unknown[]).includes(m.option) &&
     (m.note === undefined || typeof m.note === 'string')
   );
 }

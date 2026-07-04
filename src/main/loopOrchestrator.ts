@@ -113,7 +113,7 @@ export function createTurnRunner(deps: TurnRunnerDeps): TurnRunner {
       deps.writeError(reason);
       return;
     }
-    tryInject(); // retry — defers itself if the instance is no longer injectable
+    tryInject();
   };
 
   const succeed = (): void => {
@@ -131,7 +131,7 @@ export function createTurnRunner(deps: TurnRunnerDeps): TurnRunner {
 
   return {
     requestTurn(key) {
-      if (state === 'in-flight') return; // a turn is already running; ignore re-entry
+      if (state === 'in-flight') return;
       state = 'in-flight';
       turnKey = key;
       attempts = 0;

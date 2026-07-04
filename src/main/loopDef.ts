@@ -74,12 +74,12 @@ export interface LoopPhase {
   postCleanGate: string;
   /** The status a `needs-work` verdict routes to when phase-2/at-cap (§26.6/§26.8); "" when omitted. */
   postNeedsWorkGate: string;
-  /** `exit_predicate.on_phase2_active` (§26.6): once phase-2 is active, a `needs-work` verdict routes to
-   *  the triage gate instead of auto-iterating. False when the def omits the predicate. */
-  onPhase2Active: boolean;
   /** `exit_predicate.severity_cap` (§26.8): the per-phase iteration cap at which a `needs-work` verdict
    *  routes to the triage gate. 0 when the def names no cap (never at cap). */
   iterationCap: number;
+  // TODO(loop-engine): the per-phase `exit_predicate.on_phase2_active` override (§26.6) is not modeled —
+  // decideConsolidateOutcome routes off the RUNTIME phase2Active flag, so phase-2 always triages. Re-added
+  // to the parsed phase when an asymmetric-per-phase def actually needs it (§26.11 drop-until-built precedent).
 }
 
 /** One entry of the §26.5 roster catalog: a named ordered list of reviewer persona actors. */
@@ -92,7 +92,6 @@ export interface LoopRoster {
  *  canonical values + the synonym→canonical map. The orchestrator reads it to normalize the verdict
  *  the consolidator wrote back before branching (§26.6). */
 export interface LoopVerdicts {
-  consolidatedCanonical: string[];
   /** Lowercased synonym → canonical verdict; canonical values map to themselves in the real defs. */
   consolidatedSynonyms: Record<string, string>;
   /** Lowercased PERSONA-verdict synonym → canonical (`clean`/`concerns`) — the taxonomy the §26.5 skip-opt
@@ -190,7 +189,6 @@ function toPhases(doc: Record<string, unknown>): LoopPhase[] {
         rosterOverrideId: typeof p.roster_override_id === 'string' ? p.roster_override_id : '',
         postCleanGate: typeof p.post_clean_gate === 'string' ? p.post_clean_gate : '',
         postNeedsWorkGate: typeof p.post_needs_work_gate === 'string' ? p.post_needs_work_gate : '',
-        onPhase2Active: exit.on_phase2_active === true,
         iterationCap: typeof exit.severity_cap === 'number' && exit.severity_cap > 0 ? exit.severity_cap : 0,
       };
     })
@@ -215,16 +213,13 @@ function toRosters(doc: Record<string, unknown>): LoopRoster[] {
     .filter((r): r is LoopRoster => r !== null);
 }
 
-/** The §26.5 `verdicts.consolidated` slice (§26.3/D45): its canonical values + synonym map, both
- *  degrading to empty when absent/ill-typed. Only the consolidated verdict is modelled — the persona
- *  verdict taxonomy is the reviewers' concern, not the orchestrator's branch. */
+/** The §26.5 `verdicts.consolidated` slice (§26.3/D45): the synonym map the orchestrator normalizes a read
+ *  verdict against, degrading to empty when absent/ill-typed. Only the consolidated verdict is modelled —
+ *  the persona verdict taxonomy is the reviewers' concern, not the orchestrator's branch. */
 function toVerdicts(doc: Record<string, unknown>): LoopVerdicts | undefined {
   const v = doc.verdicts;
   if (!isRecord(v) || !isRecord(v.consolidated)) return undefined;
   const c = v.consolidated;
-  const consolidatedCanonical = Array.isArray(c.canonical)
-    ? c.canonical.filter((x): x is string => typeof x === 'string')
-    : [];
   const toSynonyms = (raw: unknown): Record<string, string> => {
     const out: Record<string, string> = {};
     if (isRecord(raw)) {
@@ -238,7 +233,7 @@ function toVerdicts(doc: Record<string, unknown>): LoopVerdicts | undefined {
     isRecord(v.severities) && Array.isArray(v.severities.order)
       ? v.severities.order.filter((x): x is string => typeof x === 'string')
       : [];
-  return { consolidatedCanonical, consolidatedSynonyms, personaSynonyms, severityOrder };
+  return { consolidatedSynonyms, personaSynonyms, severityOrder };
 }
 
 /** Read the resume_contract slice (§26.5 / §26.11); undefined when the def carries no `resume_contract`.
