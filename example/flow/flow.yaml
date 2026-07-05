@@ -8,7 +8,6 @@ name: feature-dev
 steps:
   - id: groom-ticket
     kind: manual
-    skill: groom-ticket
     todo_template: ticket-grooming
   - id: plan
     kind: loop
