@@ -4,6 +4,7 @@
 import path from 'node:path';
 import { githubHttpsHref } from '../shared/githubUrl';
 import {
+  GATE_DECISION_OPTIONS,
   SESSION_ID,
   type AgentInjectMsg,
   type ClipboardWriteMsg,
@@ -16,6 +17,7 @@ import {
   type DismissMsg,
   type FlowRequestMsg,
   type FlowProvideInputMsg,
+  type FlowGateDecisionMsg,
   type FlowGithubRefMsg,
   type AppOpenExternalMsg,
   type TodoTemplateListMsg,
@@ -138,6 +140,18 @@ export function isValidFlowProvideInput(m: unknown): m is FlowProvideInputMsg {
     isRecord(m.values) &&
     !Array.isArray(m.values) &&
     Object.values(m.values).every((v) => typeof v === 'string')
+  );
+}
+
+/** flow:gateDecision — the human's gate option (§26.6 / L5). `option` is confined to the known set;
+ *  `note` (optional) is the free-text reason written to human-notes/{iter}.md. */
+export function isValidFlowGateDecision(m: unknown): m is FlowGateDecisionMsg {
+  return (
+    isRecord(m) &&
+    isLiveSession(m) &&
+    isSafeRepoKey(m.repoKey) &&
+    (GATE_DECISION_OPTIONS as readonly unknown[]).includes(m.option) &&
+    (m.note === undefined || typeof m.note === 'string')
   );
 }
 

@@ -246,6 +246,7 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible { outline:2px so
 .flowstrip .loopstat .k { text-transform:uppercase; letter-spacing:.14em; font-size:9px; color:var(--dim); }
 .flowstrip .loopstat .v { display:flex; align-items:center; gap:6px; }
 .flowstrip .loopstat .loop-iter { font-size:11px; color:var(--dim); }
+.flowstrip .loopstat .loop-cost { font-size:11px; color:var(--dim); }
 .flowstrip .loopstat .car { font-size:8px; color:var(--dim); margin-left:auto; }
 
 /* generic status pill — an arbitrary per-LoopDef status maps onto one of three tones, never an

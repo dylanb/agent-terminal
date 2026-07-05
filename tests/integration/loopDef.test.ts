@@ -1,8 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { parseLoopDef, gateForStatus } from '../../src/main/loopDef';
+import { join, resolve } from 'node:path';
+import {
+  parseLoopDef,
+  gateForStatus,
+  reviewerRosterForPhase,
+  normalizeConsolidatedVerdict,
+  isPersonaClean,
+} from '../../src/main/loopDef';
 
 // §24.2.3 T2 (folded) / §18.1 — the read-only LoopDef resolver. Each gate's `id` IS a status string,
 // carrying `human_options` + `kind`. Resolution mirrors `agent-loop list`: a repo `.agent-loop.yaml`
@@ -55,6 +61,12 @@ describe('LoopDef resolver (§24.2.3 T2 folded / §18.1)', () => {
       kind: 'approve-required',
       humanOptions: ['approve', 'request-changes', 'impasse'],
       terminal: false,
+      onApprove: [],
+      onRequestChanges: [],
+      onImpasse: [],
+      nextStatusOnApprove: 'awaiting-team-review',
+      nextStatusOnRequestChanges: '',
+      nextStatusOnImpasse: '',
     });
     const gate = gateForStatus(def!, 'awaiting-human-pr-approval');
     expect(gate?.humanOptions).toEqual(['approve', 'request-changes', 'impasse']);
@@ -68,6 +80,12 @@ describe('LoopDef resolver (§24.2.3 T2 folded / §18.1)', () => {
       kind: 'terminal',
       humanOptions: [],
       terminal: true,
+      onApprove: [],
+      onRequestChanges: [],
+      onImpasse: [],
+      nextStatusOnApprove: '',
+      nextStatusOnRequestChanges: '',
+      nextStatusOnImpasse: '',
     });
   });
 
@@ -80,6 +98,16 @@ describe('LoopDef resolver (§24.2.3 T2 folded / §18.1)', () => {
 
   it('returns null (never throws) for an unknown loop name', () => {
     expect(parseLoopDef(repo, 'no-such-loop', configDir)).toBeNull();
+  });
+
+  it('refuses a loop NAME that is not a single safe path segment, even if it resolves to a real def (CWE-22)', () => {
+    // The loop name (from flow.yaml `loop:`) selects the config-dir directory the def — and its
+    // injected prompts (§26.5) — are read from. A `../`-laden name traverses out of <config>/loops; it
+    // must be refused at the resolution boundary, mirroring the override-path containment check and the
+    // phase/actor SAFE_NAME guard. Plant a valid def at the traversal target and assert it is NOT read.
+    writeFileSync(join(configDir, 'evil-loop.yaml'), IMPL_LOOP.replace('name: impl-loop', 'name: evil-loop'));
+    // path.join(<configDir>/loops, '../evil-loop', '../evil-loop.yaml') === <configDir>/evil-loop.yaml
+    expect(parseLoopDef(repo, '../evil-loop', configDir)).toBeNull();
   });
 
   it('returns null for a corrupt LoopDef yaml', () => {
@@ -149,5 +177,162 @@ describe('LoopDef resolver (§24.2.3 T2 folded / §18.1)', () => {
     writeFileSync(join(repo, 'loops', 'my-impl-loop.yaml'), IMPL_LOOP);
     writeRegistry('  impl-loop: ./loops/my-impl-loop.yaml\n');
     expect(parseLoopDef(repo, 'impl-loop', configDir)?.name).toBe('impl-loop');
+  });
+});
+
+// §26.5 / §26.9 — the orchestrator drives in-app bootstrap (pickup) from the bound LoopDef's
+// pickup_contract, never hardcoded. parseLoopDef therefore reads the contract's bootstrap-shaping
+// fields and resolves each initial_labels slot to its concrete label string (config_bindings
+// labels.pr / labels.issue maps). Validated against the REAL plan-loop def copied into example/loops.
+describe('pickup_contract resolution (§26.5 / §26.9)', () => {
+  // example/loops/<name>/<name>.yaml mirrors $CLAUDE_CONFIG_DIR/loops layout, so the example dir
+  // serves as the configDir for resolution (configLoopsDir joins `loops`).
+  const exampleConfigDir = resolve(__dirname, '..', '..', 'example');
+  let repo: string;
+  beforeEach(() => {
+    repo = mkdtempSync(join(tmpdir(), 'loopdef-pickup-repo-'));
+  });
+  afterEach(() => {
+    rmSync(repo, { recursive: true, force: true });
+  });
+
+  it('reads the bootstrap-shaping fields from the real plan-loop pickup_contract', () => {
+    const def = parseLoopDef(repo, 'plan-loop', exampleConfigDir);
+    expect(def?.pickup).toMatchObject({
+      initialStatus: 'plan-draft',
+      initialBranchTpl: 'plan-loop/issue-{issue}',
+      initialPrBodyRef: 'stub-pr-body',
+      onConflict: 'wipe-and-retry',
+    });
+  });
+
+  it('reads the resume_contract the orchestrator resumes from (§26.5 / §26.11)', () => {
+    const def = parseLoopDef(repo, 'plan-loop', exampleConfigDir);
+    expect(def?.resume).toEqual({ midIterSafe: true });
+  });
+
+  it('omits resume when the LoopDef carries no resume_contract (degrades, never throws)', () => {
+    const cfg = mkdtempSync(join(tmpdir(), 'loopdef-noresume-config-'));
+    mkdirSync(join(cfg, 'loops', 'mini-loop'), { recursive: true });
+    writeFileSync(
+      join(cfg, 'loops', 'mini-loop', 'mini-loop.yaml'),
+      'name: mini-loop\nschema_version: "4"\ngates:\n  - id: g\n    kind: terminal\n    human_options: []\n',
+    );
+    expect(parseLoopDef(repo, 'mini-loop', cfg)?.resume).toBeUndefined();
+    rmSync(cfg, { recursive: true, force: true });
+  });
+
+  it('resolves each initial_labels slot to its concrete label string (target-scoped)', () => {
+    const def = parseLoopDef(repo, 'plan-loop', exampleConfigDir);
+    // ready/in_progress are issue slots; plan-draft is a pr slot — each resolves against its own map.
+    expect(def?.pickup?.initialLabels).toEqual([
+      { action: 'remove', label: 'plan-loop/ready', target: 'issue' },
+      { action: 'add', label: 'plan-loop/in-progress', target: 'issue' },
+      { action: 'add', label: 'plan-loop/plan-draft', target: 'pr' },
+    ]);
+  });
+
+  it('parses the phase id + entry_status + post-verdict gate statuses + exit predicate the orchestrator branches on (§26.5/§26.6/§26.8)', () => {
+    const def = parseLoopDef(repo, 'plan-loop', exampleConfigDir);
+    // exit_predicate.severity_cap drives the §26.8 cap routing: a needs-work verdict routes to the triage
+    // gate once the iteration cap is reached (phase-2 routing keys off the runtime phase2Active flag).
+    expect(def?.phases).toEqual([
+      {
+        id: 'plan',
+        entryStatus: 'plan-draft',
+        rosterOverrideId: '',
+        postCleanGate: 'awaiting-human-plan-approval',
+        postNeedsWorkGate: 'awaiting-human-plan-triage',
+        iterationCap: 2,
+      },
+    ]);
+  });
+
+  it('parses the consolidated verdict taxonomy so the orchestrator can normalize a read verdict (§26.5/§26.3 D45)', () => {
+    const def = parseLoopDef(repo, 'plan-loop', exampleConfigDir);
+    // The consolidator writes a canonical clean/needs-work verdict; a synonym or unknown string is
+    // normalized against the LoopDef taxonomy, defaulting to needs-work (the strict-rule fallback, §26.3).
+    expect(normalizeConsolidatedVerdict(def!, 'clean')).toBe('clean');
+    expect(normalizeConsolidatedVerdict(def!, 'needs-work')).toBe('needs-work');
+    expect(normalizeConsolidatedVerdict(def!, 'concerns')).toBe('needs-work'); // a mapped synonym
+    expect(normalizeConsolidatedVerdict(def!, 'approved')).toBe('clean'); // a mapped synonym
+    expect(normalizeConsolidatedVerdict(def!, 'CLEAN')).toBe('clean'); // case/space-insensitive
+    expect(normalizeConsolidatedVerdict(def!, 'gibberish')).toBe('needs-work'); // unknown → strict fallback
+    // Normalization runs off the synonym map + hardcoded clean; the raw canonical LIST is not parsed
+    // (§26.11 precedent: no parsed-but-unconsumed surface — the consolidator applies canonical itself).
+    expect(def?.verdicts).not.toHaveProperty('consolidatedCanonical');
+  });
+
+  it('parses the severity order the §26.8 finding signature sorts by (§26.5)', () => {
+    const def = parseLoopDef(repo, 'plan-loop', exampleConfigDir);
+    expect(def?.verdicts?.severityOrder).toEqual(['minor', 'major', 'blocker']);
+  });
+
+  it('classifies a persona review verdict as clean via the persona taxonomy (§26.5 / L6 skip-opt)', () => {
+    const def = parseLoopDef(repo, 'plan-loop', exampleConfigDir);
+    expect(isPersonaClean(def!, 'clean')).toBe(true);
+    expect(isPersonaClean(def!, 'approved')).toBe(true); // a mapped synonym → clean
+    expect(isPersonaClean(def!, 'CLEAN')).toBe(true); // case-insensitive
+    expect(isPersonaClean(def!, 'concerns')).toBe(false);
+    expect(isPersonaClean(def!, 'needs-work')).toBe(false); // synonym → concerns
+    expect(isPersonaClean(def!, 'gibberish')).toBe(false); // unknown → not clean (strict)
+  });
+
+  it('resolves the reviewer roster for a phase from the real plan-loop def (§26.4/§26.5)', () => {
+    // The fan-out roster (§26.4) is the phase's resolved roster's ordered actors — read from the
+    // LoopDef, never hardcoded. plan-loop binds its default roster to the six judgment personas.
+    const def = parseLoopDef(repo, 'plan-loop', exampleConfigDir);
+    expect(reviewerRosterForPhase(def!, 'plan')).toEqual([
+      'review-principal',
+      'review-security',
+      'review-architecture',
+      'review-intent',
+      'review-maintainability',
+      'review-contracts',
+    ]);
+  });
+
+  it('returns an empty roster for an unknown phase (degrades, never throws)', () => {
+    const def = parseLoopDef(repo, 'plan-loop', exampleConfigDir);
+    expect(reviewerRosterForPhase(def!, 'no-such-phase')).toEqual([]);
+  });
+
+  it('drops phase ids and roster actors that are not safe path components (CWE-22 defense in depth)', () => {
+    // phase id and persona names become filesystem path components downstream (prompts/work-{id}.md,
+    // reviews/{iter}/{actor}.json). A repo-local .agent-loop.yaml override is already treated as
+    // untrusted (its path is containment-checked), so the strings it yields must be charset-validated
+    // too — a `../`-laden id/actor must be dropped at parse time, like any other malformed entry.
+    const evil =
+      'name: evil-loop\nschema_version: "4"\n' +
+      'default_roster_id: r\n' +
+      'rosters:\n  - id: r\n    ordered_actors: [review-principal, "../../../../etc/passwd", review-security]\n' +
+      'phases:\n' +
+      '  - id: plan\n    entry_status: plan-draft\n    roster_override_id: ""\n' +
+      '  - id: "../../escape"\n    entry_status: x\n    roster_override_id: ""\n' +
+      'gates:\n  - id: g\n    kind: terminal\n    human_options: []\n';
+    writeFileSync(join(repo, 'evil.yaml'), evil);
+    writeFileSync(join(repo, '.agent-loop.yaml'), 'loops:\n  evil-loop: ./evil.yaml\n');
+    const def = parseLoopDef(repo, 'evil-loop');
+    expect(def?.phases).toEqual([
+      {
+        id: 'plan',
+        entryStatus: 'plan-draft',
+        rosterOverrideId: '',
+        postCleanGate: '',
+        postNeedsWorkGate: '',
+        iterationCap: 0,
+      },
+    ]);
+    expect(reviewerRosterForPhase(def!, 'plan')).toEqual(['review-principal', 'review-security']);
+  });
+
+  it('omits pickup when the LoopDef carries no pickup_contract (degrades, never throws)', () => {
+    mkdirSync(join(repo, 'loops', 'impl-loop'), { recursive: true });
+    writeFileSync(join(repo, 'loops', 'impl-loop', 'impl-loop.yaml'), IMPL_LOOP);
+    // A repo configDir override would need its own .agent-loop.yaml; resolve via the example impl-loop,
+    // which DOES carry a pickup_contract, so instead assert the minimal IMPL_LOOP fixture has none.
+    writeFileSync(join(repo, '.agent-loop.yaml'), 'loops:\n  bare: ./bare.yaml\n');
+    writeFileSync(join(repo, 'bare.yaml'), IMPL_LOOP);
+    expect(parseLoopDef(repo, 'bare')?.pickup).toBeUndefined();
   });
 });

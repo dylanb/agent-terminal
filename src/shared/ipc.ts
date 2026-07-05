@@ -54,6 +54,8 @@ export const CH = {
   flowOnStateChanged: 'flow:onStateChanged',
   flowRevealLoop: 'flow:revealLoop',
   flowGithubRef: 'flow:githubRef',
+  flowMarkTurnComplete: 'flow:markTurnComplete',
+  flowGateDecision: 'flow:gateDecision',
   appOpenExternal: 'app:openExternal',
   todoTemplateList: 'todoTemplate:list',
   todoTemplateInstantiate: 'todoTemplate:instantiate',
@@ -478,6 +480,10 @@ export interface FlowLoopView {
    *  (`approve`/`request-changes`/`impasse`). Present only at an awaiting gate with a resolvable
    *  LoopDef; absent mid-work, at a terminal gate, or when the LoopDef does not resolve. */
   gateOptions?: string[];
+  /** The §26.10 cost-meter readout: the display-only priced dollars for the run (`$X.XX`, `unknown`, or
+   *  `$X.XX +unknown` when some model was unpriced), formatted by the shared `formatCost`. Present once an
+   *  iteration boundary has recorded a cost; absent before then. Display-only — it never gates the loop. */
+  cost?: string;
   /** Observable "the loop is blocked awaiting a human" classification (§24.2.3 T4): true at a
    *  LoopDef human-decision gate (or, with no resolvable LoopDef, the shared awaiting-human/impasse
    *  family), false at a terminal hand-off or mid-work. Computed by main (where the LoopDef
@@ -600,6 +606,31 @@ export interface FlowProvideInputMsg {
   sessionId: SessionId;
   repoKey: string;
   values: Record<string, string>;
+}
+
+/** flow:markTurnComplete request (§26.3/D47a c): the operator's manual "this turn is done" override
+ *  for the in-flight loop turn whose automatic done-signal the orchestrator missed. One-way; the
+ *  result surfaces through the existing state.yaml watch → flow:onStateChanged push. */
+export interface FlowMarkTurnCompleteMsg {
+  sessionId: SessionId;
+  repoKey: string;
+}
+
+/** The human's gate decision (§26.6 / L5): the option picked at a data-driven awaiting-human gate. The
+ *  set mirrors the LoopDef `human_options` the gate offers. One runtime source (`GATE_DECISION_OPTIONS`)
+ *  drives both the type and the §6 validator, so main, renderer, and the wire cannot drift on the set. */
+export const GATE_DECISION_OPTIONS = ['approve', 'request-changes', 'impasse'] as const;
+export type GateDecisionOption = (typeof GATE_DECISION_OPTIONS)[number];
+
+/** flow:gateDecision request (§26.6 / L5): the human picks an option at an awaiting-human gate. The app
+ *  executes that option's LoopDef `on_*` action list in-app (gh side-effects out of band) and advances /
+ *  re-iterates / stops. One-way; the result surfaces through the state.yaml watch → flow:onStateChanged
+ *  push. `note` carries an optional request-changes/impasse reason (written to human-notes/{iter}.md). */
+export interface FlowGateDecisionMsg {
+  sessionId: SessionId;
+  repoKey: string;
+  option: GateDecisionOption;
+  note?: string;
 }
 
 /** flow:githubRef request (§24.2.3 T7): resolve a ref's title/body/url for the popout. `repoKey`
@@ -790,6 +821,12 @@ export interface FlowApi {
   /** Open a ref's GitHub `url` in the OS browser (§24.2.3 T7); resolves to whether it was opened
    *  (false when main rejects the url as non-GitHub/non-https). */
   openExternal(url: string): Promise<boolean>;
+  /** §26.3/D47a(c) — manually mark the in-flight loop turn complete for `repoKey`. One-way: the loop
+   *  panel re-pulls via flow:onStateChanged when the orchestrator's resulting state lands. */
+  markTurnComplete(repoKey: string): void;
+  /** §26.6 / L5 — submit the human's gate decision for `repoKey`. One-way: the app executes the option's
+   *  transition and the loop panel re-pulls via flow:onStateChanged when the resulting state lands. */
+  gateDecision(repoKey: string, option: GateDecisionOption, note?: string): void;
 }
 
 /** CLI launcher install (§23.4 / #25): the settings affordance's only seam to the install action. */

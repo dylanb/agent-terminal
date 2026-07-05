@@ -9,6 +9,14 @@ describe('resolveRuntimeConfig (§15.7 — env-overridable per-agent profile sea
     expect(resolveRuntimeConfig({ APP_QUIET_MS: '-5' }).quietMs).toBe(1000);
   });
 
+  it('defaults the loop turn-completion timeout and parses an override (§26.3/D48)', () => {
+    expect(resolveRuntimeConfig({}).turnCompletionTimeoutMs).toBeGreaterThan(0);
+    expect(resolveRuntimeConfig({ APP_TURN_TIMEOUT_MS: '4000' }).turnCompletionTimeoutMs).toBe(4000);
+    expect(resolveRuntimeConfig({ APP_TURN_TIMEOUT_MS: 'nope' }).turnCompletionTimeoutMs).toBe(
+      resolveRuntimeConfig({}).turnCompletionTimeoutMs,
+    );
+  });
+
   it('defaults the startup-exit grace to 1000ms and parses a valid override, falling back on garbage', () => {
     expect(resolveRuntimeConfig({}).startupExitGraceMs).toBe(1000);
     expect(resolveRuntimeConfig({ APP_STARTUP_EXIT_GRACE_MS: '500' }).startupExitGraceMs).toBe(500);

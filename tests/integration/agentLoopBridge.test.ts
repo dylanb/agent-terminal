@@ -49,6 +49,13 @@ describe('agent-loop state.yaml bridge (§24.2.3 T2 / §19.1)', () => {
     expect(parseAgentLoopState(dir)).toEqual({ status: 'planning', iteration: 1, pr: null, branch: null, linkedIssues: [] });
   });
 
+  it('decodes the writer\'s pr:0 sentinel back to null (lossless null round-trip, §26.6)', () => {
+    // loopStateWriter serializes a null PR as the whole-document-valid `0`; the mirror must decode `0`
+    // back to null (GitHub PR numbers are >=1), or a null-PR state surfaces a bogus reference to "PR #0".
+    writeState('schema_version: 4\nstatus: planning\niteration: 1\npr: 0\n');
+    expect(parseAgentLoopState(dir)?.pr).toBeNull();
+  });
+
   it('mirrors several linked issues, dropping non-numeric entries (degrading parser)', () => {
     writeState('schema_version: 4\niteration: 2\nstatus: planning\nlinked_issues:\n    - 25\n    - 26\n    - oops\n');
     expect(parseAgentLoopState(dir)?.linkedIssues).toEqual([25, 26]);

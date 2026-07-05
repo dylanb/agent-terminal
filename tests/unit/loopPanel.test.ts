@@ -42,6 +42,24 @@ describe('docked loop panel (§24.2.3 T2)', () => {
     expect(row('branch')?.querySelector('.lv')?.textContent).toBe('agent-loop/issue-176');
   });
 
+  it('marks the live state region polite so a turn advance is announced to assistive tech (WCAG 4.1.3)', () => {
+    // The "mark turn complete" control (and any orchestrator transition) changes the status/iteration
+    // rows in place via patchInPlace without moving focus; without a live region that change is silent
+    // to a screen reader. The region that holds those rows must be aria-live=polite, like .refs.
+    createLoopPanel(host).render(loop(), 'build');
+    expect(host.querySelector('.ldl')?.getAttribute('aria-live')).toBe('polite');
+  });
+
+  it('makes each state row atomic so a live update announces label+value together, not a bare value (WCAG 4.1.3)', () => {
+    // patchInPlace mutates only the value node (.lv); without aria-atomic on the row, a screen reader
+    // announces a context-free value ("3") with no field label. aria-atomic on each .lrow makes the
+    // whole row ("iteration 3") announce together.
+    createLoopPanel(host).render(loop(), 'build');
+    const rows = [...host.querySelectorAll<HTMLElement>('.ldl .lrow')];
+    expect(rows.length).toBeGreaterThan(0);
+    for (const r of rows) expect(r.getAttribute('aria-atomic')).toBe('true');
+  });
+
   it('renders the panel header title + a close button the shell can dismiss', () => {
     createLoopPanel(host).render(loop(), 'build');
     expect(host.querySelector('.lhead h3')?.textContent).toBe('build');
@@ -59,6 +77,92 @@ describe('docked loop panel (§24.2.3 T2)', () => {
     expect(document.querySelectorAll('[data-loop-close]').length).toBe(2);
     expect(a.querySelectorAll('[data-loop-close]').length).toBe(1);
     expect(b.querySelectorAll('[data-loop-close]').length).toBe(1);
+  });
+
+  it('renders a "mark turn complete" control on a loop step that invokes the injected service (§26.3/D47a c)', () => {
+    const markTurnComplete = vi.fn();
+    const panel = createLoopPanel(host, {
+      githubRef: () => Promise.resolve(null),
+      openExternal: () => {},
+      markTurnComplete,
+    });
+    panel.render(loop({ status: 'plan-draft' }), 'plan');
+    const btn = host.querySelector<HTMLButtonElement>('[data-loop-mark-complete]');
+    expect(btn).not.toBeNull();
+    btn!.click();
+    expect(markTurnComplete).toHaveBeenCalledTimes(1);
+  });
+
+  it('renders a gate-decision button per gate option that invokes the injected service (§26.6 / L5)', () => {
+    const gateDecision = vi.fn();
+    const panel = createLoopPanel(host, {
+      githubRef: () => Promise.resolve(null),
+      openExternal: () => {},
+      gateDecision,
+    });
+    panel.render(loop({ status: 'awaiting-human-plan-approval', gateOptions: ['approve', 'request-changes', 'impasse'] }), 'plan');
+    const buttons = [...host.querySelectorAll<HTMLButtonElement>('[data-gate-option]')];
+    expect(buttons.map((b) => b.dataset.gateOption)).toEqual(['approve', 'request-changes', 'impasse']);
+    buttons.find((b) => b.dataset.gateOption === 'request-changes')!.click();
+    expect(gateDecision).toHaveBeenCalledTimes(1);
+    expect(gateDecision).toHaveBeenCalledWith('request-changes');
+  });
+
+  it('groups the gate-decision buttons in a labelled group so AT announces their purpose (WCAG 4.1.2)', () => {
+    const panel = createLoopPanel(host, {
+      githubRef: () => Promise.resolve(null),
+      openExternal: () => {},
+      gateDecision: () => {},
+    });
+    panel.render(loop({ status: 'awaiting-human-plan-approval', gateOptions: ['approve', 'request-changes', 'impasse'] }), 'plan');
+    const group = host.querySelector<HTMLElement>('.gatebar');
+    expect(group?.getAttribute('role')).toBe('group');
+    expect((group?.getAttribute('aria-label') ?? '').length).toBeGreaterThan(0);
+  });
+
+  it('gives the abbreviated "changes" button an unabbreviated accessible name (WCAG 2.4.6 / 2.5.3)', () => {
+    const panel = createLoopPanel(host, {
+      githubRef: () => Promise.resolve(null),
+      openExternal: () => {},
+      gateDecision: () => {},
+    });
+    panel.render(loop({ status: 'awaiting-human-plan-approval', gateOptions: ['approve', 'request-changes', 'impasse'] }), 'plan');
+    const btn = host.querySelector<HTMLButtonElement>('[data-gate-option="request-changes"]')!;
+    expect(btn.textContent).toBe('changes'); // visible label stays compact
+    const name = btn.getAttribute('aria-label') ?? '';
+    expect(name).toContain('changes'); // label-in-name (2.5.3): accessible name contains the visible text
+    expect(name).toContain('request'); // …and is not the bare abbreviation
+  });
+
+  it('omits the "mark turn complete" control when no markTurnComplete service is injected (inert-affordance, WCAG 4.1.2)', () => {
+    // The control does nothing without deps.markTurnComplete; rendering an operable-looking button that
+    // is inert on activation misleads every user, AT included. Gate it on the service like the gate bar.
+    const panel = createLoopPanel(host, {
+      githubRef: () => Promise.resolve(null),
+      openExternal: () => {},
+    });
+    panel.render(loop({ status: 'plan-draft' }), 'plan');
+    expect(host.querySelector('[data-loop-mark-complete]')).toBeNull();
+  });
+
+  it('renders NO gate-decision buttons when the gate offers no options (mid-work / terminal)', () => {
+    const panel = createLoopPanel(host, {
+      githubRef: () => Promise.resolve(null),
+      openExternal: () => {},
+      gateDecision: () => {},
+    });
+    panel.render(loop({ status: 'plan-draft' }), 'plan'); // no gateOptions
+    expect(host.querySelector('[data-gate-option]')).toBeNull();
+  });
+
+  it('shows no "mark turn complete" control when there is no loop step (refs-only panel)', () => {
+    const panel = createLoopPanel(host, {
+      githubRef: () => Promise.resolve(null),
+      openExternal: () => {},
+      markTurnComplete: () => {},
+    });
+    panel.render(null, 'plan', { ticket: 176 }); // ticket/PR popout, no loop mirror
+    expect(host.querySelector('[data-loop-mark-complete]')).toBeNull();
   });
 
   it('does not rebuild the DOM when re-rendered with unchanged content (no flicker on a no-op push)', () => {
@@ -100,6 +204,19 @@ describe('docked loop panel (§24.2.3 T2)', () => {
     expect(row('status')?.querySelector('.lv')?.classList.contains('bad')).toBe(true);
     panel.render(loop({ status: 'impl-draft' }), 'build'); // same structure ⇒ patched in place
     expect(row('status')?.querySelector('.lv')?.classList.contains('bad')).toBe(false); // tone cleared
+  });
+
+  it('does not rewrite the live status/iteration text nodes on an unchanged patch (no content-free re-announce, WCAG 4.1.3)', () => {
+    // patchInPlace runs on every passive push — a cost-only or refs-only update leaves status/iteration
+    // untouched. Rewriting those text nodes inside the aria-live region with identical strings makes a
+    // screen reader re-announce "status … / iteration …" with nothing changed. Assign only on a real change.
+    const panel = createLoopPanel(host);
+    panel.render(loop({ status: 'impl-draft', iteration: 9 }), 'build');
+    const statusNode = row('status')!.querySelector('.lv')!.firstChild;
+    const iterNode = row('iteration')!.querySelector('.lv')!.firstChild;
+    panel.render(loop({ status: 'impl-draft', iteration: 9 }), 'build'); // identical values ⇒ patch path
+    expect(row('status')!.querySelector('.lv')!.firstChild).toBe(statusNode);
+    expect(row('iteration')!.querySelector('.lv')!.firstChild).toBe(iterNode);
   });
 
   it('does not re-fetch a ref while a fetch is already in flight, then retries once it resolves', async () => {

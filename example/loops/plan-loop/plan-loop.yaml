@@ -1,0 +1,992 @@
+# agent-loop engine config — plan-loop (single-phase planning loop)
+#
+# Authored via /loop-yaml-author. Drives a GitHub issue through a single
+# plan-only loop: work-agent drafts `.agent-loop/plan.md`, six reviewer
+# personas grade the plan on the thinking highway, consolidator merges,
+# and plan-gate approval is terminal — the ticket body is published into
+# the issue (and in epic mode, sub-ticket issues are spawned + this PR
+# is retargeted to sub-ticket 1). The PR remains OPEN so a successor
+# loop (typically impl-loop) can pick up the plan and continue.
+
+name: plan-loop
+version: "0.1"
+schema_version: "4"
+
+# Engine-significant actor role assignments. The engine reads these to find
+# the work-agent + consolidator sessions for bookkeeping, and the reviewer
+# personas that get special routing (principal/security stay full-scope under
+# reduced-scope rerouting). plan-loop ships six judgment reviewers only — the
+# mechanical roles (tests, accessibility, conventions, diagrams) are absent
+# by design and intentionally left unbound.
+actor_roles:
+  work_agent:      work-agent
+  consolidator:    consolidator
+  principal:       review-principal
+  security:        review-security
+  intent:          review-intent
+  architecture:    review-architecture
+  contracts:       review-contracts
+  maintainability: review-maintainability
+
+# Charter block whose body substitutes for {{REVIEW-INSTRUCTIONS}} in reviewer SKILLs.
+review_instructions_block_id: charter.09-review-instructions
+
+# ---------------------------------------------------------------------------
+# §1.16 AdapterBindings — no waiter binding (no CI to wait on)
+# ---------------------------------------------------------------------------
+adapters:
+  persistence: gh-pr
+  waiter: gh-pr-checks                  # bound for schema completeness; never invoked (no ci-waiter actor in this loop)
+  pickup: issue-to-pr
+  prompt_runner: claude-resume
+  session_store: state-yaml-fields
+  livelog: stderr-livelog
+  context_resolver: default-resolver
+
+# ---------------------------------------------------------------------------
+# §1.8 Highways — single `thinking` highway (operator chose to collapse;
+# the loop's six personas are all judgment-heavy, no value in a separate
+# mechanical highway).
+# ---------------------------------------------------------------------------
+highways:
+  - id: thinking
+    model: ""
+    effort: ""
+    warmer:
+      enabled: true
+      prompt_ref: ""
+      skip_under_kb: 20
+      min_chain_size: 2
+      label: thinking
+    ordered_actors:
+      - review-principal
+      - review-security
+      - review-architecture
+      - review-intent
+      - review-maintainability
+      - review-contracts
+
+# ---------------------------------------------------------------------------
+# §1.9 Lanes — six judgment lanes; no mechanical lanes (conventions,
+# tests, accessibility, diagrams dropped — the deliverable is markdown
+# prose, not code).
+# ---------------------------------------------------------------------------
+lanes:
+  - id: review-principal
+    title: "Cross-cutting plan judgment / trajectory"
+    description: >-
+      Whether the plan attacks the right problem at the right scope, and
+      whether the codebase's trajectory improves if it is executed. Final
+      arbiter at the plan stage. Specialist details route to their own
+      lanes.
+    owners: [review-principal]
+    adjacent: [review-architecture, review-intent, review-maintainability]
+
+  - id: review-security
+    title: "OWASP / CWE classes the design opens or closes"
+    description: >-
+      Design-stage threat model — authn/z, data exposure, trust
+      boundaries, dependency surface, secrets handling, and the
+      pre-existing shared layers (HTTP clients, repository wrappers,
+      logging middleware, error responders) the new flow will newly
+      route data through. Catches risk before code is written.
+    owners: [review-security]
+    adjacent: [review-contracts, review-principal]
+
+  - id: review-architecture
+    title: "Module boundaries / layering / one-way doors"
+    description: >-
+      Boundary respect, dependency direction, irreversible decisions
+      flagged as such, seams reused vs. invented. Architectural shape
+      of the proposed change.
+    owners: [review-architecture]
+    adjacent: [review-principal, review-intent, review-contracts]
+
+  - id: review-intent
+    title: "Plan ↔ issue fidelity / three-layer description / scope honored"
+    description: >-
+      Does the plan solve the issue, at the asked-for scope, without
+      unsolicited new public capability? Three-layer description
+      quality. Acceptance-criteria traceability.
+    owners: [review-intent]
+    adjacent: [review-principal, review-architecture]
+
+  - id: review-maintainability
+    title: "Resulting-code readability / locality / navigability / debt"
+    description: >-
+      Long-term DX of the codebase after the plan is executed —
+      readability, locality of concerns, AI/human navigability, debt
+      risk, dev-loop impact.
+    owners: [review-maintainability]
+    adjacent: [review-principal, review-contracts]
+
+  - id: review-contracts
+    title: "API / wire / schema contracts proposed by the plan"
+    description: >-
+      Endpoints, methods, field types, error shapes, literal-value
+      parity across surfaces, versioning discipline, wire-format
+      justification.
+    owners: [review-contracts]
+    adjacent: [review-architecture, review-security]
+
+# ---------------------------------------------------------------------------
+# §1.3 Reviewer roster catalog
+# ---------------------------------------------------------------------------
+default_roster_id: plan-loop-roster
+rosters:
+  - id: plan-loop-roster
+    ordered_actors:
+      - review-principal
+      - review-security
+      - review-architecture
+      - review-intent
+      - review-maintainability
+      - review-contracts
+    default:                              # single-phase loop = no narrowing in practice; schema requires ≥1 entry, so mirror ordered_actors
+      - review-principal
+      - review-security
+      - review-architecture
+      - review-intent
+      - review-maintainability
+      - review-contracts
+    narrowing_phases: []
+
+# ---------------------------------------------------------------------------
+# §1.4 Phases — single plan phase. Plan-gate approval is terminal.
+# ---------------------------------------------------------------------------
+phases:
+  - id: plan
+    entry_status: plan-draft
+    pre_fanout_actors:
+      - work-agent
+      - plan-self-check
+    ordered_fanout: []
+    roster_inherit: true
+    primary_work_actor: work-agent
+    consolidator_actor: consolidator
+    severity_floor_track:
+      per_cycle:
+        1: major
+        2: blocker
+      default: blocker
+    roster_override_id: ""
+    exit_predicate:
+      on_verdict:
+        clean: post-clean
+        needs-work: conditional
+      on_phase2_active: true
+      severity_cap: 2
+    post_clean_gate: awaiting-human-plan-approval
+    post_needs_work_gate: awaiting-human-plan-triage
+
+# ---------------------------------------------------------------------------
+# §1.5 Gates
+# ---------------------------------------------------------------------------
+gates:
+  - id: awaiting-human-plan-approval
+    kind: approve-required
+    human_options: [approve, request-changes, impasse]
+    human_input_artifact: approve-reason
+    prompt_template_ref: prompts/gate-plan-approve.md
+    on_approve:
+      - kind: epic-promote
+        args: {when: "plan.classification == 'epic'"}
+      - kind: mark-pr-ready
+        on_failure: continue
+      # ADR 0015: adapter side effects via `exec`. plan-loop is not bundled,
+      # so it requires `loops_allow_exec: {plan-loop: true}` in .agent-loop.yaml.
+      - kind: exec
+        args:
+          argv: ["gh", "issue", "edit", "{{state.linked_issues[0]}}", "--body-file", "{{artifact.ticket-body}}"]
+        on_failure: continue
+      - kind: clear-phase2
+      - kind: reset-severity-cycle
+      - kind: terminate
+    on_request_changes:
+      - kind: set-phase2
+        args: {active: true}
+      - kind: clear-persona-state
+      - kind: append-human-note
+        args: {title: "human request-changes", artifact: "human-notes/{iter}.md"}
+    on_impasse:
+      - kind: append-human-note
+        args: {prefix: "impasse: "}
+    next_status_on_approve: plan-human-approved
+    next_status_on_request_changes: plan-draft
+    next_status_on_impasse: impasse
+    advance_to_phase: ""
+    terminal_message: "plan approved; loop complete (pass --loop <next> to chain a successor)"
+
+  - id: awaiting-human-plan-triage
+    kind: triage
+    human_options: [approve, request-changes, impasse]
+    human_input_artifact: approve-reason
+    prompt_template_ref: prompts/gate-plan-triage.md
+    on_approve:
+      - kind: append-human-note
+        args: {prefix: "plan-triage approve: "}
+      - kind: epic-promote
+        args: {when: "plan.classification == 'epic'"}
+      - kind: mark-pr-ready
+        on_failure: continue
+      - kind: exec
+        args:
+          argv: ["gh", "issue", "edit", "{{state.linked_issues[0]}}", "--body-file", "{{artifact.ticket-body}}"]
+        on_failure: continue
+      - kind: clear-phase2
+      - kind: reset-severity-cycle
+      - kind: terminate
+    on_request_changes:
+      - kind: set-phase2
+        args: {active: true}
+      - kind: clear-persona-state
+      - kind: append-human-note
+        args: {title: "human request-changes", artifact: "human-notes/{iter}.md"}
+    on_impasse:
+      - kind: append-human-note
+        args: {prefix: "impasse: "}
+    next_status_on_approve: plan-human-approved
+    next_status_on_request_changes: plan-draft
+    next_status_on_impasse: impasse
+    advance_to_phase: ""
+    terminal_message: "plan approved (via triage); loop complete (pass --loop <next> to chain a successor)"
+
+  - id: plan-draft
+    kind: in-flight
+    human_options: [impasse]
+    human_input_artifact: ""
+    prompt_template_ref: ""
+    on_approve: []
+    on_request_changes: []
+    on_impasse:
+      - kind: append-human-note
+        args: {prefix: "impasse: "}
+    next_status_on_approve: ""
+    next_status_on_request_changes: ""
+    next_status_on_impasse: impasse
+    advance_to_phase: ""
+
+  - id: plan-human-approved
+    kind: terminal
+    human_options: []
+    human_input_artifact: ""
+    prompt_template_ref: ""
+    on_approve: []
+    on_request_changes: []
+    on_impasse: []
+    next_status_on_approve: ""
+    next_status_on_request_changes: ""
+    next_status_on_impasse: ""
+    advance_to_phase: ""
+
+  - id: impasse
+    kind: terminal
+    human_options: []
+    human_input_artifact: ""
+    prompt_template_ref: ""
+    on_approve: []
+    on_request_changes: []
+    on_impasse: []
+    next_status_on_approve: ""
+    next_status_on_request_changes: ""
+    next_status_on_impasse: ""
+    advance_to_phase: ""
+
+# ---------------------------------------------------------------------------
+# §1.6 Verdict taxonomy — the synonym set
+# normalizes LLM verdict drift regardless of loop domain.
+# ---------------------------------------------------------------------------
+verdicts:
+  persona:
+    canonical: [clean, concerns]
+    synonyms:
+      clean: clean
+      concerns: concerns
+      approved: clean
+      approve: clean
+      ok: clean
+      pass: clean
+      passed: clean
+      "no issues": clean
+      no-issues: clean
+      needs-work: concerns
+      needs_work: concerns
+      "needs work": concerns
+      changes-requested: concerns
+      changes_requested: concerns
+      "changes requested": concerns
+      blocked: concerns
+      issues: concerns
+      request-changes: concerns
+      request_changes: concerns
+      "request changes": concerns
+      needs-changes: concerns
+  consolidated:
+    canonical: [clean, needs-work]
+    synonyms:
+      clean: clean
+      needs-work: needs-work
+      needs_work: needs-work
+      "needs work": needs-work
+      concerns: needs-work
+      changes-requested: needs-work
+      changes_requested: needs-work
+      "changes requested": needs-work
+      request-changes: needs-work
+      request_changes: needs-work
+      "request changes": needs-work
+      blocked: needs-work
+      issues: needs-work
+      approved: clean
+      approve: clean
+      ok: clean
+      pass: clean
+      passed: clean
+      "no issues": clean
+      no-issues: clean
+  severities:
+    order: [minor, major, blocker]
+  phase2_bounce_rules:
+    on_request_changes_set_active: true
+    reset_cycle_on_approve: true
+    force_triage_on_needs_work: true
+
+# ---------------------------------------------------------------------------
+# §1.10 CharterDef — 9 blocks (dropped: 04-missing-entirely, 05-source-comments)
+# ---------------------------------------------------------------------------
+charter:
+  blocks:
+    - id: charter.00-preamble
+      body_ref: charter/00-preamble.md
+      variables: []
+    - id: charter.01-cite-named-standards
+      body_ref: charter/01-cite-named-standards.md
+      variables: []
+    - id: charter.02-severity-rubric
+      body_ref: charter/02-severity-rubric.md
+      variables: ["PLAN_MODE_DIRECTIVE"]
+    - id: charter.03-severity-floor
+      body_ref: charter/03-severity-floor.md
+      variables: ["SEVERITY_FLOOR"]
+    - id: charter.06-considered-dropped
+      body_ref: charter/06-considered-dropped.md
+      variables: []
+    - id: charter.07-depth-probes
+      body_ref: charter/07-depth-probes.md
+      variables: []
+    - id: charter.08-legal-verdict-strings
+      body_ref: charter/08-legal-verdict-strings.md
+      variables: []
+    - id: charter.09-review-instructions
+      body_ref: charter/09-review-instructions.md
+      variables: []
+    - id: charter.plan-mode-directive
+      body_ref: charter/plan-mode-directive.md
+      variables: ["PLAN_LINE_THRESHOLD", "PLAN_LINE_TAKE_ACTION"]
+
+  compose:
+    - selector: "*"
+      phase: plan
+      ordered_blocks: &all_charter_blocks
+        - charter.00-preamble
+        - charter.01-cite-named-standards
+        - charter.02-severity-rubric
+        - charter.03-severity-floor
+        - charter.06-considered-dropped
+        - charter.07-depth-probes
+        - charter.08-legal-verdict-strings
+      token_substitutions:
+        PLAN_MODE_DIRECTIVE: charter.plan-mode-directive
+    - selector: review-security
+      phase: plan
+      ordered_blocks: *all_charter_blocks
+      token_substitutions:
+        PLAN_MODE_DIRECTIVE: charter.plan-mode-directive
+    - selector: review-architecture
+      phase: plan
+      ordered_blocks: *all_charter_blocks
+      token_substitutions:
+        PLAN_MODE_DIRECTIVE: charter.plan-mode-directive
+
+# ---------------------------------------------------------------------------
+# §1.7 Artifact schemas — 11 artifacts (dropped: pr-description, review-ci,
+# ci-summary; no impl phase = no CI = no PR-body draft).
+# ---------------------------------------------------------------------------
+artifacts:
+  - id: state
+    path_pattern: "state.yaml"
+    producer: ""
+    consumers: ["*"]
+    freshness: {lifecycle: persistent, stale_after: "", on_reset: preserve}
+    access_mode: read-write
+    json_schema_ref: ""
+
+  - id: plan
+    path_pattern: "plan.md"
+    producer: work-agent
+    consumers: ["*"]
+    freshness: {lifecycle: per-phase, stale_after: phase, on_reset: preserve}
+    access_mode: read-write
+    json_schema_ref: ""
+
+  - id: ticket-body
+    path_pattern: "ticket.md"
+    producer: work-agent
+    consumers: ["*"]
+    freshness: {lifecycle: per-phase, stale_after: phase, on_reset: preserve}
+    access_mode: read-write
+    json_schema_ref: ""
+
+  - id: plan-gate-report
+    path_pattern: "plan-gate-report.md"
+    producer: work-agent
+    consumers: [engine]
+    freshness: {lifecycle: per-iter, stale_after: iter, on_reset: remove}
+    access_mode: write-once-per-iter
+    json_schema_ref: ""
+
+  - id: pr-context
+    path_pattern: "pr-context.md"
+    producer: engine
+    consumers: ["*"]
+    freshness: {lifecycle: per-iter, stale_after: "", on_reset: preserve}
+    access_mode: write-once-per-iter
+    json_schema_ref: ""
+
+  - id: pending-feedback
+    path_pattern: "pending-feedback.md"
+    producer: human
+    consumers: [engine]
+    freshness: {lifecycle: per-iter, stale_after: "", on_reset: preserve}
+    access_mode: read-write
+    json_schema_ref: ""
+
+  - id: approve-reason
+    path_pattern: "approve-reason.md"
+    producer: human
+    consumers: [engine]
+    freshness: {lifecycle: per-iter, stale_after: "", on_reset: preserve}
+    access_mode: read-write
+    json_schema_ref: ""
+
+  - id: takeover-signal
+    path_pattern: "takeover-requested.yaml"
+    producer: human
+    consumers: [engine]
+    freshness: {lifecycle: persistent, stale_after: "", on_reset: preserve}
+    access_mode: read-write
+    json_schema_ref: ""
+
+  - id: human-note
+    path_pattern: "human-notes/{iter}.md"
+    producer: human
+    consumers: [work-agent, consolidator]
+    freshness: {lifecycle: per-iter, stale_after: "", on_reset: preserve}
+    access_mode: append-only
+    json_schema_ref: ""
+
+  - id: notes
+    path_pattern: "notes.md"
+    producer: work-agent
+    consumers: [work-agent]
+    freshness: {lifecycle: persistent, stale_after: "", on_reset: preserve}
+    access_mode: read-write
+    json_schema_ref: ""
+
+  - id: persona-output
+    path_pattern: "reviews/{iter}/{actor}.json"
+    producer: ""
+    consumers: [consolidator]
+    freshness: {lifecycle: per-iter, stale_after: "", on_reset: preserve}
+    access_mode: write-once-per-iter
+    json_schema_ref: ""                  # engine work: author schemas/plan-loop/persona-output.json
+
+  - id: consolidated
+    path_pattern: "reviews/{iter}/consolidated.json"
+    producer: consolidator
+    consumers: [engine, work-agent]
+    freshness: {lifecycle: per-iter, stale_after: "", on_reset: preserve}
+    access_mode: write-once-per-iter
+    json_schema_ref: ""                  # engine work: author schemas/plan-loop/consolidated.json
+
+  - id: human-review-transcript
+    path_pattern: "reviews/{iter}/human-review-transcript.md"
+    producer: ups-hook
+    consumers: []
+    freshness: {lifecycle: per-iter, stale_after: "", on_reset: preserve}
+    access_mode: append-only
+    json_schema_ref: ""
+
+  - id: log-actor
+    path_pattern: "logs/{iter}-{actor}.log"
+    producer: engine
+    consumers: []
+    freshness: {lifecycle: per-iter, stale_after: "", on_reset: preserve}
+    access_mode: append-only
+    json_schema_ref: ""
+
+  - id: log-actor-checkpoint
+    path_pattern: "logs/{iter}-{actor}-checkpoint.log"
+    producer: engine
+    consumers: []
+    freshness: {lifecycle: per-iter, stale_after: "", on_reset: preserve}
+    access_mode: append-only
+    json_schema_ref: ""
+
+  - id: log-warmer
+    path_pattern: "logs/{iter}-warmer-{highway}.log"
+    producer: engine
+    consumers: []
+    freshness: {lifecycle: per-iter, stale_after: "", on_reset: preserve}
+    access_mode: append-only
+    json_schema_ref: ""
+
+  - id: log-handoff
+    path_pattern: "logs/{iter}-handoff-{phase}.log"
+    producer: engine
+    consumers: []
+    freshness: {lifecycle: per-iter, stale_after: "", on_reset: preserve}
+    access_mode: append-only
+    json_schema_ref: ""
+
+  - id: prompt-render
+    path_pattern: "prompts/{iter}-{actor}.md"
+    producer: engine
+    consumers: []
+    freshness: {lifecycle: per-iter, stale_after: "", on_reset: preserve}
+    access_mode: write-once-per-iter
+    json_schema_ref: ""
+
+  - id: stub-pr-body
+    path_pattern: ""
+    producer: ""
+    consumers: [engine]
+    freshness: {lifecycle: persistent, stale_after: "", on_reset: preserve}
+    access_mode: read-only
+    json_schema_ref: ""
+
+# ---------------------------------------------------------------------------
+# §1.2 Actors — work-agent, plan-self-check, warmer-thinking, 6 personas,
+# consolidator, handoff. (No warmer-normal, no self-review, no ci-waiter,
+# no pr-description.)
+# ---------------------------------------------------------------------------
+actors:
+  - id: work-agent
+    prompt_template_ref: "prompts/work-{phase}.md"
+    recipe:
+      slots:
+        - {name: "(template body)", source_kind: template-file, source_args: {ref: "prompts/work-{phase}.md"}, on_missing: fail}
+        - {name: "Variables", source_kind: template-token, source_args: {tokens: [ITERATION, PREV_ITER, PR_NUMBER, HEAD_REF, PLAN_LINE_THRESHOLD]}, on_missing: fail}
+        - {name: "Prior session summary", source_kind: loop-extension-data, source_args: {fn: consumeWorkSessionSummary}, on_missing: omit}
+        - {name: "PR context", source_kind: artifact, source_args: {id: pr-context}, on_missing: fail}
+        - {name: "Previous consolidated review", source_kind: peer-output-prior, source_args: {id: consolidated}, on_missing: omit, iteration_filter: "iter>1"}
+        - {name: "Human note", source_kind: human-input, source_args: {ref: "human-notes/{iter-1}.md"}, on_missing: omit, iteration_filter: "iter>1"}
+        - {name: "Notes (post-reset session memory)", source_kind: artifact, source_args: {id: notes}, on_missing: omit}
+    highway: thinking
+    model: ""
+    effort: ""
+    session_policy: {kind: actor-persistent, cross_iter: true, cross_phase: true}
+    checkpoint_policy:
+      enabled: true
+      warn_tokens: 0
+      hard_stop_tokens: 0
+      checkpoint_prompt: workCheckpointPrompt
+    output_artifacts: []
+    livelog: {enabled: true, sink: ""}
+    post_clean_follow_ups: []
+    resume_behavior: {on_resume_replay: true, on_resume_skip: false, step_key: work}
+
+  - id: plan-self-check
+    prompt_template_ref: prompts/work-plan-self-check.md
+    recipe:
+      slots:
+        - {name: "(template body)", source_kind: template-file, source_args: {ref: prompts/work-plan-self-check.md}, on_missing: fail}
+        - {name: "Variables", source_kind: template-token, source_args: {tokens: [ITERATION, PREV_ITER, PR_NUMBER, PLAN_LINE_THRESHOLD]}, on_missing: fail}
+        - {name: "review-intent SKILL", source_kind: skill, source_args: {actor: review-intent}, on_missing: fail}
+        - {name: "review-principal SKILL", source_kind: skill, source_args: {actor: review-principal}, on_missing: fail}
+    highway: thinking
+    model: ""
+    effort: ""
+    session_policy: {kind: shared-with, shared_with_id: work-agent, cross_iter: true, cross_phase: false}
+    checkpoint_policy: {enabled: false}
+    output_artifacts: []
+    livelog: {enabled: true, sink: ""}
+    post_clean_follow_ups: []
+    resume_behavior: {on_resume_replay: false, on_resume_skip: true, step_key: plan-self-check}
+
+  - id: warmer-thinking
+    prompt_template_ref: ""
+    recipe:
+      slots:
+        - {name: "Agent-loop review lane", source_kind: highway-info, source_args: {emit: warmer_label}, on_missing: fail}
+        - {name: "PR context", source_kind: artifact, source_args: {id: pr-context}, on_missing: fail, on_empty: fail}
+        - {name: "Plan", source_kind: artifact, source_args: {id: plan}, on_missing: omit, on_empty: omit}
+        - {name: "Ticket", source_kind: artifact, source_args: {id: ticket-body}, on_missing: omit, on_empty: omit}
+        - {name: "", source_kind: template-token, source_args: {tokens: [WARMER_SUFFIX]}, on_missing: fail}
+    highway: thinking
+    model: ""
+    effort: ""
+    session_policy: {kind: fresh, cross_iter: false, cross_phase: false}
+    checkpoint_policy: {enabled: false}
+    output_artifacts: []
+    livelog: {enabled: true, sink: ""}
+    post_clean_follow_ups: []
+    resume_behavior: {on_resume_replay: false, on_resume_skip: true, step_key: warmer-thinking}
+
+  - id: review-principal
+    lanes: [review-principal]
+    prompt_template_ref: ""
+    recipe:
+      slots:
+        - {name: "Charter + severity floor", source_kind: charter-block, source_args: {compose_for_actor: review-principal}, on_missing: fail}
+        - {name: "SKILL", source_kind: skill, source_args: {actor: review-principal}, on_missing: fail}
+        - {name: "PR context", source_kind: artifact, source_args: {id: pr-context}, on_missing: fail}
+        - {name: "Plan", source_kind: artifact, source_args: {id: plan}, on_missing: fail}
+        - {name: "Ticket", source_kind: artifact, source_args: {id: ticket-body}, on_missing: fail}
+        - {name: "Prior dismissed findings", source_kind: peer-output-prior, source_args: {id: consolidated, json_path: "findings_dismissed[persona=review-principal]"}, on_missing: omit, iteration_filter: "iter>1"}
+        - {name: "LANES_CATALOG_IDS", source_kind: lanes-catalog, source_args: {shape: id-list-with-adjacency}, on_missing: fail}
+        - {name: "Resume independence note", source_kind: template-token, source_args: {tokens: [HIGHWAY_SHARED_DISCLAIMER]}, on_missing: fail}
+    highway: thinking
+    model: ""
+    effort: ""
+    session_policy: {kind: highway-shared, cross_iter: false, cross_phase: false}
+    checkpoint_policy: {enabled: false}
+    output_artifacts: [persona-output]
+    livelog: {enabled: true, sink: ""}
+    post_clean_follow_ups: []
+    resume_behavior: {on_resume_replay: true, on_resume_skip: false, step_key: review-principal}
+    scope_policy: {reduced_scope_exempt: true, test_only_overrides_exemption: true}
+
+  - id: review-security
+    lanes: [review-security]
+    prompt_template_ref: ""
+    recipe:
+      slots:
+        - {name: "Charter + severity floor", source_kind: charter-block, source_args: {compose_for_actor: review-security}, on_missing: fail}
+        - {name: "SKILL", source_kind: skill, source_args: {actor: review-security}, on_missing: fail}
+        - {name: "PR context", source_kind: artifact, source_args: {id: pr-context}, on_missing: fail}
+        - {name: "Plan", source_kind: artifact, source_args: {id: plan}, on_missing: fail}
+        - {name: "Ticket", source_kind: artifact, source_args: {id: ticket-body}, on_missing: fail}
+        - {name: "Prior dismissed findings", source_kind: peer-output-prior, source_args: {id: consolidated, json_path: "findings_dismissed[persona=review-security]"}, on_missing: omit, iteration_filter: "iter>1"}
+        - {name: "LANES_CATALOG_IDS", source_kind: lanes-catalog, source_args: {shape: id-list-with-adjacency}, on_missing: fail}
+        - {name: "Resume independence note", source_kind: template-token, source_args: {tokens: [HIGHWAY_SHARED_DISCLAIMER]}, on_missing: fail}
+    highway: thinking
+    model: ""
+    effort: ""
+    session_policy: {kind: highway-shared, cross_iter: false, cross_phase: false}
+    checkpoint_policy: {enabled: false}
+    output_artifacts: [persona-output]
+    livelog: {enabled: true, sink: ""}
+    post_clean_follow_ups: []
+    resume_behavior: {on_resume_replay: true, on_resume_skip: false, step_key: review-security}
+    scope_policy: {reduced_scope_exempt: true, test_only_overrides_exemption: true}
+
+  - id: review-architecture
+    lanes: [review-architecture]
+    prompt_template_ref: ""
+    recipe:
+      slots:
+        - {name: "Charter + severity floor", source_kind: charter-block, source_args: {compose_for_actor: review-architecture}, on_missing: fail}
+        - {name: "SKILL", source_kind: skill, source_args: {actor: review-architecture}, on_missing: fail}
+        - {name: "PR context", source_kind: artifact, source_args: {id: pr-context}, on_missing: fail}
+        - {name: "Plan", source_kind: artifact, source_args: {id: plan}, on_missing: fail}
+        - {name: "Ticket", source_kind: artifact, source_args: {id: ticket-body}, on_missing: fail}
+        - {name: "Prior dismissed findings", source_kind: peer-output-prior, source_args: {id: consolidated, json_path: "findings_dismissed[persona=review-architecture]"}, on_missing: omit, iteration_filter: "iter>1"}
+        - {name: "LANES_CATALOG_IDS", source_kind: lanes-catalog, source_args: {shape: id-list-with-adjacency}, on_missing: fail}
+        - {name: "Resume independence note", source_kind: template-token, source_args: {tokens: [HIGHWAY_SHARED_DISCLAIMER]}, on_missing: fail}
+    highway: thinking
+    model: ""
+    effort: ""
+    session_policy: {kind: highway-shared, cross_iter: false, cross_phase: false}
+    checkpoint_policy: {enabled: false}
+    output_artifacts: [persona-output]
+    livelog: {enabled: true, sink: ""}
+    post_clean_follow_ups: []
+    resume_behavior: {on_resume_replay: true, on_resume_skip: false, step_key: review-architecture}
+
+  - id: review-intent
+    lanes: [review-intent]
+    prompt_template_ref: ""
+    recipe:
+      slots:
+        - {name: "Charter + severity floor", source_kind: charter-block, source_args: {compose_for_actor: review-intent}, on_missing: fail}
+        - {name: "SKILL", source_kind: skill, source_args: {actor: review-intent}, on_missing: fail}
+        - {name: "PR context", source_kind: artifact, source_args: {id: pr-context}, on_missing: fail}
+        - {name: "Plan", source_kind: artifact, source_args: {id: plan}, on_missing: fail}
+        - {name: "Ticket", source_kind: artifact, source_args: {id: ticket-body}, on_missing: fail}
+        - {name: "Prior dismissed findings", source_kind: peer-output-prior, source_args: {id: consolidated, json_path: "findings_dismissed[persona=review-intent]"}, on_missing: omit, iteration_filter: "iter>1"}
+        - {name: "LANES_CATALOG_IDS", source_kind: lanes-catalog, source_args: {shape: id-list-with-adjacency}, on_missing: fail}
+        - {name: "Resume independence note", source_kind: template-token, source_args: {tokens: [HIGHWAY_SHARED_DISCLAIMER]}, on_missing: fail}
+    highway: thinking
+    model: ""
+    effort: ""
+    session_policy: {kind: highway-shared, cross_iter: false, cross_phase: false}
+    checkpoint_policy: {enabled: false}
+    output_artifacts: [persona-output]
+    livelog: {enabled: true, sink: ""}
+    post_clean_follow_ups: []
+    resume_behavior: {on_resume_replay: true, on_resume_skip: false, step_key: review-intent}
+
+  - id: review-maintainability
+    lanes: [review-maintainability]
+    prompt_template_ref: ""
+    recipe:
+      slots:
+        - {name: "Charter + severity floor", source_kind: charter-block, source_args: {compose_for_actor: review-maintainability}, on_missing: fail}
+        - {name: "SKILL", source_kind: skill, source_args: {actor: review-maintainability}, on_missing: fail}
+        - {name: "PR context", source_kind: artifact, source_args: {id: pr-context}, on_missing: fail}
+        - {name: "Plan", source_kind: artifact, source_args: {id: plan}, on_missing: fail}
+        - {name: "Ticket", source_kind: artifact, source_args: {id: ticket-body}, on_missing: fail}
+        - {name: "Prior dismissed findings", source_kind: peer-output-prior, source_args: {id: consolidated, json_path: "findings_dismissed[persona=review-maintainability]"}, on_missing: omit, iteration_filter: "iter>1"}
+        - {name: "LANES_CATALOG_IDS", source_kind: lanes-catalog, source_args: {shape: id-list-with-adjacency}, on_missing: fail}
+        - {name: "Resume independence note", source_kind: template-token, source_args: {tokens: [HIGHWAY_SHARED_DISCLAIMER]}, on_missing: fail}
+    highway: thinking
+    model: ""
+    effort: ""
+    session_policy: {kind: highway-shared, cross_iter: false, cross_phase: false}
+    checkpoint_policy: {enabled: false}
+    output_artifacts: [persona-output]
+    livelog: {enabled: true, sink: ""}
+    post_clean_follow_ups: []
+    resume_behavior: {on_resume_replay: true, on_resume_skip: false, step_key: review-maintainability}
+
+  - id: review-contracts
+    lanes: [review-contracts]
+    prompt_template_ref: ""
+    recipe:
+      slots:
+        - {name: "Charter + severity floor", source_kind: charter-block, source_args: {compose_for_actor: review-contracts}, on_missing: fail}
+        - {name: "SKILL", source_kind: skill, source_args: {actor: review-contracts}, on_missing: fail}
+        - {name: "PR context", source_kind: artifact, source_args: {id: pr-context}, on_missing: fail}
+        - {name: "Plan", source_kind: artifact, source_args: {id: plan}, on_missing: fail}
+        - {name: "Ticket", source_kind: artifact, source_args: {id: ticket-body}, on_missing: fail}
+        - {name: "Prior dismissed findings", source_kind: peer-output-prior, source_args: {id: consolidated, json_path: "findings_dismissed[persona=review-contracts]"}, on_missing: omit, iteration_filter: "iter>1"}
+        - {name: "LANES_CATALOG_IDS", source_kind: lanes-catalog, source_args: {shape: id-list-with-adjacency}, on_missing: fail}
+        - {name: "Resume independence note", source_kind: template-token, source_args: {tokens: [HIGHWAY_SHARED_DISCLAIMER]}, on_missing: fail}
+    highway: thinking
+    model: ""
+    effort: ""
+    session_policy: {kind: highway-shared, cross_iter: false, cross_phase: false}
+    checkpoint_policy: {enabled: false}
+    output_artifacts: [persona-output]
+    livelog: {enabled: true, sink: ""}
+    post_clean_follow_ups: []
+    resume_behavior: {on_resume_replay: true, on_resume_skip: false, step_key: review-contracts}
+
+  - id: consolidator
+    prompt_template_ref: prompts/consolidate.md
+    recipe:
+      slots:
+        - {name: "(template body)", source_kind: template-file, source_args: {ref: prompts/consolidate.md}, on_missing: fail}
+        - {name: "Variables", source_kind: template-token, source_args: {tokens: [ITERATION, PHASE, PR_NUMBER, CLEAN_POLICY, REVIEW_DIR, SEVERITY_FLOOR]}, on_missing: fail}
+        - {name: "Prior session summary", source_kind: loop-extension-data, source_args: {fn: consumeConsolidatorSessionSummary}, on_missing: omit}
+        - {name: "PR context", source_kind: artifact, source_args: {id: pr-context}, on_missing: fail}
+        - {name: "Plan", source_kind: artifact, source_args: {id: plan}, on_missing: omit}
+        - {name: "Ticket", source_kind: artifact, source_args: {id: ticket-body}, on_missing: omit}
+        - {name: "Persona files directive", source_kind: template-token, source_args: {tokens: [READ_PERSONA_JSONS_DIRECTIVE]}, on_missing: fail}
+    highway: thinking
+    model: ""
+    effort: ""
+    session_policy: {kind: actor-persistent, cross_iter: true, cross_phase: true}
+    checkpoint_policy:
+      enabled: true
+      warn_tokens: 0
+      hard_stop_tokens: 0
+      checkpoint_prompt: consolidatorCheckpointPrompt
+    output_artifacts: [consolidated]
+    livelog: {enabled: true, sink: ""}
+    post_clean_follow_ups:
+      - id: handoff
+    resume_behavior: {on_resume_replay: true, on_resume_skip: false, step_key: consolidator}
+
+  - id: handoff
+    prompt_template_ref: "prompts/handoff-{phase}.md"
+    recipe:
+      slots:
+        - {name: "(template body)", source_kind: template-file, source_args: {ref: "prompts/handoff-{phase}.md"}, on_missing: fail}
+        - {name: "Variables", source_kind: template-token, source_args: {tokens: [ITERATION, PR_NUMBER, PR_TITLE, HEAD_REF]}, on_missing: fail}
+    highway: thinking
+    model: ""
+    effort: ""
+    session_policy: {kind: shared-with, shared_with_id: consolidator, cross_iter: false, cross_phase: false}
+    checkpoint_policy: {enabled: false}
+    output_artifacts: []
+    livelog: {enabled: true, sink: ""}
+    post_clean_follow_ups: []
+    resume_behavior: {on_resume_replay: false, on_resume_skip: true, step_key: handoff}
+
+# ---------------------------------------------------------------------------
+# §1.12 State extension
+# ---------------------------------------------------------------------------
+state_extension:
+  fields:
+    - {name: WorkSessionSummary,                    go_type: string,                                  default: "",    persistence: yaml,      side_file: ""}
+    - {name: WorkSessionSummaryForSID,              go_type: string,                                  default: "",    persistence: yaml,      side_file: ""}
+    - {name: ConsolidatorSessionSummary,            go_type: string,                                  default: "",    persistence: yaml,      side_file: ""}
+    - {name: ConsolidatorSessionSummaryForSID,      go_type: string,                                  default: "",    persistence: yaml,      side_file: ""}
+    - {name: ConsolidatorCheckpointPendingAtSID,    go_type: string,                                  default: "",    persistence: yaml,      side_file: ""}
+    - {name: ActorSessionSummaries,                 go_type: "map[string]ActorSessionSummary",        default: {},    persistence: yaml,      side_file: ""}
+    - {name: LastPlanSelfCheckIter,                 go_type: int,                                     default: 0,     persistence: yaml,      side_file: ""}
+    - {name: PersonaState,                          go_type: "map[string]PersonaRecord",              default: {},    persistence: yaml,      side_file: ""}
+    - {name: Epic,                                  go_type: "*EpicState",                            default: ~,     persistence: yaml,      side_file: ""}
+    - {name: LinkedIssues,                          go_type: "[]int",                                 default: [],    persistence: yaml,      side_file: ""}
+    - {name: SeverityCycleIter,                     go_type: int,                                     default: 0,     persistence: yaml,      side_file: ""}
+    - {name: Phase2Active,                          go_type: bool,                                    default: false, persistence: yaml,      side_file: ""}
+    - {name: ResumeMidIter,                         go_type: int,                                     default: 0,     persistence: yaml,      side_file: ""}
+    - {name: IterInFlight,                          go_type: int,                                     default: 0,     persistence: yaml,      side_file: ""}
+
+# ---------------------------------------------------------------------------
+# §1.13 ResumeContract
+# ---------------------------------------------------------------------------
+resume_contract:
+  mid_iter_safe: true
+  on_reset:
+    - kind: clear-state-fields
+      args:
+        fields:
+          - WorkSessionSummary
+          - WorkSessionSummaryForSID
+          - ConsolidatorSessionSummary
+          - ConsolidatorSessionSummaryForSID
+          - ConsolidatorCheckpointPendingAtSID
+          - PersonaState
+          - LastPlanSelfCheckIter
+          - SeverityCycleIter
+          - Phase2Active
+
+# ---------------------------------------------------------------------------
+# §1.14 PickupContract
+# ---------------------------------------------------------------------------
+pickup_contract:
+  bootstrap_kind: issue-to-pr
+  seed_source: issue-number
+  initial_status: plan-draft
+  initial_branch_tpl: "plan-loop/issue-{issue}"
+  initial_pr_body_ref: stub-pr-body
+  initial_labels:
+    - {action: remove, slot: ready,        target: issue, source: issue}
+    - {action: add,    slot: in_progress,  target: issue, source: issue}
+    - {action: add,    slot: plan-draft,   target: pr,    source: current}
+  on_conflict: wipe-and-retry
+
+# ---------------------------------------------------------------------------
+# §1.15 CLIDef
+# ---------------------------------------------------------------------------
+cli:
+  subcommands:
+    - {name: "<pr>",            action: run-loop,             args: [{name: pr, type: int, required: true}], flags: []}
+    - {name: pickup,            action: pickup-bootstrap,     args: [{name: issue, type: int, required: true}], flags: [{name: base, type: string}]}
+    - {name: available,         action: pickup-list-ready,    args: [],                                       flags: [{name: repo, type: string}]}
+    - {name: resume,            action: run-loop-resume,      args: [],                                       flags: [{name: reset, type: bool}, {name: ask, type: bool}]}
+    - {name: status,            action: print-state,          args: [],                                       flags: [{name: dir, type: string}]}
+    - {name: approve,           action: approve-gate,         args: [],                                       flags: [{name: reason, type: string}, {name: reason-file, type: string}]}
+    - {name: request-changes,   action: request-changes-gate, args: [],                                       flags: [{name: reason, type: string}, {name: reason-file, type: string}]}
+    - {name: impasse,           action: impasse-gate,         args: [],                                       flags: [{name: reason, type: string}]}
+    - {name: takeover,          action: takeover-signal,      args: [],                                       flags: [{name: reason, type: string}]}
+    - {name: "commands install",action: install-commands,     args: [],                                       flags: []}
+    - {name: "commands check",  action: check-commands,       args: [],                                       flags: []}
+    - {name: "commands uninstall", action: uninstall-commands, args: [],                                      flags: []}
+    - {name: "commands remove", action: remove-commands,      args: [],                                       flags: []}
+    - {name: "hook user-prompt",action: hook-handler,         args: [],                                       flags: []}
+    - {name: version,           action: print-version,        args: [],                                       flags: []}
+    - {name: help,              action: print-help,           args: [],                                       flags: []}
+
+  slash_commands:
+    - {filename: agent-loop-approve.md,           body_ref: commands/agent-loop-approve.md}
+    - {filename: agent-loop-request-changes.md,   body_ref: commands/agent-loop-request-changes.md}
+    - {filename: agent-loop-status.md,            body_ref: commands/agent-loop-status.md}
+    - {filename: agent-loop-compose-feedback.md,  body_ref: commands/agent-loop-compose-feedback.md}
+    - {filename: agent-loop-impasse.md,           body_ref: commands/agent-loop-impasse.md}
+    - {filename: agent-loop-resume.md,            body_ref: commands/agent-loop-resume.md}
+    - {filename: review-principal.md,             body_ref: commands/review-principal.md}
+    - {filename: review-security.md,              body_ref: commands/review-security.md}
+    - {filename: review-architecture.md,          body_ref: commands/review-architecture.md}
+    - {filename: review-intent.md,                body_ref: commands/review-intent.md}
+    - {filename: review-maintainability.md,       body_ref: commands/review-maintainability.md}
+    - {filename: review-contracts.md,             body_ref: commands/review-contracts.md}
+
+# ---------------------------------------------------------------------------
+# §1.17 ScopeOverride — empty (no code diff exists at plan-only loop)
+# ---------------------------------------------------------------------------
+scope_override:
+  kind: match-rules
+  rules: []
+
+# ---------------------------------------------------------------------------
+# §1.9 LaneRouting
+# ---------------------------------------------------------------------------
+lane_routing:
+  strict: false
+  fallback_actor: review-principal
+  fallback_audit_tag: unknown-lane
+
+# ---------------------------------------------------------------------------
+# §1.18 ConfigBindings
+# ---------------------------------------------------------------------------
+config_bindings:
+  - token: PLAN_LINE_THRESHOLD
+    type: int
+    default: 1000
+    yaml_path: plan_line_threshold
+    cli_flag: --plan-line-threshold
+    validate: { min: 1, max: 10000 }
+    description: "Production-LOC budget the work agent estimates against. Plans over this threshold must split into sub-tickets via Epic Breakdown."
+
+  - token: PLAN_LINE_TAKE_ACTION
+    type: int
+    default: 2000
+    yaml_path: plan_line_take_action
+    cli_flag: --plan-line-take-action
+    validate: { min: 1, max: 20000 }
+    description: "2x take-action production-LOC value; only review-principal may flag a predicted overrun of this bar, with concrete evidence."
+
+  - token: ""
+    type: string
+    default: ""
+    yaml_path: models.opus
+    cli_flag: --opus-model
+    validate: {}
+    description: "Model id pinned for the thinking lane (all six personas + work agent + consolidator). Empty = inherit the CLI default."
+
+  - token: ""
+    type: string
+    default: ""
+    yaml_path: effort
+    cli_flag: --effort
+    validate: { enum: ["", low, medium, high, xhigh, max] }
+    description: "Reasoning-effort flag passed to every work-agent subprocess. Pinned per-iter when set."
+
+  - token: ""
+    type: string-map
+    default:
+      plan-draft: "plan-loop/plan-draft"
+      awaiting-human-plan-approval: "plan-loop/awaiting-human-plan"
+      plan-human-approved: "plan-loop/plan-approved"
+      awaiting-human-plan-triage: "plan-loop/awaiting-human-triage"
+      impasse: "plan-loop/impasse"
+    merge_strategy: deep-merge-with-empty-disables-slot
+    yaml_path: labels.pr
+    cli_flag: ""
+    validate: { entry_max_len: 50, key_max_len: 64 }
+    description: "PR status-label slot mapping. Empty value disables the slot."
+
+  - token: ""
+    type: string-map
+    default:
+      in_progress: "plan-loop/in-progress"
+      ready: "plan-loop/ready"
+      epic: "plan-loop/epic"
+      sub_ticket: "plan-loop/sub-ticket"
+    merge_strategy: deep-merge-with-empty-disables-slot
+    yaml_path: labels.issue
+    cli_flag: ""
+    validate: { entry_max_len: 50, key_max_len: 64 }
+    description: "Issue-label slot mapping. Same shape and merge semantics as labels.pr."
+
+  - token: ""
+    type: bool
+    default: false
+    yaml_path: adapters.dry_run
+    cli_flag: --dry-run
+    validate: {}
+    description: "Adapter-agnostic dry-run flag; logs renders without executing."

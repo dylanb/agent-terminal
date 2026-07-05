@@ -61,8 +61,12 @@ export interface FlowStrip {
  *  composition root (§24.2.3 T2) — it routes the data to the sibling docked panel without the strip
  *  reaching across organisms. Fired on every render: `null` when the step has no loop mirror.
  *  `onRevealLoop` is omitted: the OS-notification reveal (§24.2.3 T4) is wired at the composition root
- *  on window.flow, not through the strip (interface segregation — the strip never reveals). */
-export type FlowStripDeps = Omit<FlowApi, 'onRevealLoop' | 'githubRef' | 'openExternal'> & {
+ *  on window.flow, not through the strip (interface segregation — the strip never reveals). So is
+ *  `markTurnComplete` (§26.3/D47a c): the loop panel owns that control, not the strip. */
+export type FlowStripDeps = Omit<
+  FlowApi,
+  'onRevealLoop' | 'githubRef' | 'openExternal' | 'markTurnComplete' | 'gateDecision'
+> & {
   /** The docked loop panel's element id, injected by the composition root so the read-out's
    *  `aria-controls` is instance-scoped — the organism never bakes in a document-level id
    *  (UI-STANDARDS §2.2 rule 1). Omitted → no aria-controls (aria-expanded still conveys state). */
@@ -108,6 +112,9 @@ function structuralSig(state: FlowStateView): string {
     state.steps,
     state.position,
     !!state.loop,
+    // The §26.10 cost node's PRESENCE (not its value) is structural: it appears once a cost is recorded,
+    // so a first-cost push forces a full render; thereafter value-only changes patch in place.
+    state.loop ? state.loop.cost !== undefined : false,
     // The refs read-out (§24.2.3 T7) renders the actual numbers with no patch handler, so any refs
     // change must force a full render rather than a value-only patch.
     state.refs ?? null,
@@ -147,7 +154,15 @@ function loopReadout(doc: Document, loop: FlowLoopView, controlsId?: string): HT
   car.className = 'car';
   car.setAttribute('aria-hidden', 'true');
   car.textContent = '▸';
-  v.append(pill, iter, car);
+  v.append(pill, iter);
+  // §26.10 — the display-only cost readout, present once an iteration boundary has recorded a cost.
+  if (loop.cost !== undefined) {
+    const cost = doc.createElement('span');
+    cost.className = 'mono loop-cost';
+    cost.textContent = loop.cost;
+    v.append(cost);
+  }
+  v.append(car);
 
   stat.append(k, v);
   return stat;
@@ -396,6 +411,8 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
       }
       const iter = host.querySelector('.loop-iter');
       if (iter) iter.textContent = `iter ${state.loop.iteration}`;
+      const cost = host.querySelector('.loop-cost');
+      if (cost && state.loop.cost !== undefined) cost.textContent = state.loop.cost;
     }
     // Keep the docked loop panel live — the same hand-off render() makes (§24.2.3 T2/T7). The refs
     // ride along so a value-only patch never clears the panel's "Working on" section.

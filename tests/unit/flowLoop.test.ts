@@ -4,6 +4,7 @@ import { isHumanNeededStatus } from '../../src/shared/loopStatus';
 import type { AgentLoopState } from '../../src/main/agentLoopBridge';
 import type { LoopDef } from '../../src/main/loopDef';
 import type { FlowStateView } from '../../src/shared/ipc';
+import { mkGate } from '../helpers/loopGate';
 
 // §24.2.3 T2 — deriveLoopView folds the read-only agent-loop state.yaml mirror onto a flow view as a
 // `loop` field PARALLEL to S5's `derived` (loop state outlives the manual in_progress window, so it
@@ -23,11 +24,14 @@ const loop = (status: string): AgentLoopState => ({ status, iteration: 9, pr: 17
 
 const DEF: LoopDef = {
   name: 'impl-loop',
+  phases: [],
+  rosters: [],
+  defaultRosterId: '',
   gates: [
-    { id: 'awaiting-human-pr-approval', kind: 'approve-required', humanOptions: ['approve', 'request-changes', 'impasse'], terminal: false },
-    { id: 'awaiting-human-impl-triage', kind: 'triage', humanOptions: ['approve', 'request-changes', 'impasse'], terminal: false },
-    { id: 'awaiting-team-review', kind: 'terminal', humanOptions: [], terminal: true },
-    { id: 'impasse', kind: 'terminal', humanOptions: [], terminal: true },
+    mkGate({ id: 'awaiting-human-pr-approval', kind: 'approve-required', humanOptions: ['approve', 'request-changes', 'impasse'], terminal: false }),
+    mkGate({ id: 'awaiting-human-impl-triage', kind: 'triage', humanOptions: ['approve', 'request-changes', 'impasse'], terminal: false }),
+    mkGate({ id: 'awaiting-team-review', kind: 'terminal', humanOptions: [], terminal: true }),
+    mkGate({ id: 'impasse', kind: 'terminal', humanOptions: [], terminal: true }),
   ],
 };
 
@@ -47,6 +51,12 @@ describe('deriveLoopView (§24.2.3 T2)', () => {
     // linkedIssues feeds FlowRefs, not the loop mirror; the wire shape (FlowLoopView) must not carry it.
     const v = deriveLoopView(base, loop('awaiting-human-pr-approval'), DEF);
     expect(v.loop && 'linkedIssues' in v.loop).toBe(false);
+  });
+
+  // §26.10 — the display-only cost readout is folded onto the loop view when a formatted cost is supplied.
+  it('folds the §26.10 cost readout onto the loop view when supplied, omits it when null', () => {
+    expect(deriveLoopView(base, loop('plan-draft'), DEF, '$0.42').loop?.cost).toBe('$0.42');
+    expect(deriveLoopView(base, loop('plan-draft'), DEF, null).loop && 'cost' in deriveLoopView(base, loop('plan-draft'), DEF, null).loop!).toBe(false);
   });
 
   it('exposes the current gate\'s human_options as gateOptions (gate-driven)', () => {
@@ -112,12 +122,15 @@ describe('deriveLoopView (§24.2.3 T2)', () => {
 // gate-field rule misclassifies.
 const IMPL_LOOP: LoopDef = {
   name: 'impl-loop',
+  phases: [],
+  rosters: [],
+  defaultRosterId: '',
   gates: [
-    { id: 'awaiting-human-pr-approval', kind: 'approve-required', humanOptions: ['approve', 'request-changes', 'impasse'], terminal: false },
-    { id: 'awaiting-human-impl-triage', kind: 'triage', humanOptions: ['approve', 'request-changes', 'impasse'], terminal: false },
-    { id: 'impl-draft', kind: 'in-flight', humanOptions: ['impasse'], terminal: false },
-    { id: 'awaiting-team-review', kind: 'terminal', humanOptions: [], terminal: true },
-    { id: 'impasse', kind: 'terminal', humanOptions: [], terminal: true },
+    mkGate({ id: 'awaiting-human-pr-approval', kind: 'approve-required', humanOptions: ['approve', 'request-changes', 'impasse'], terminal: false }),
+    mkGate({ id: 'awaiting-human-impl-triage', kind: 'triage', humanOptions: ['approve', 'request-changes', 'impasse'], terminal: false }),
+    mkGate({ id: 'impl-draft', kind: 'in-flight', humanOptions: ['impasse'], terminal: false }),
+    mkGate({ id: 'awaiting-team-review', kind: 'terminal', humanOptions: [], terminal: true }),
+    mkGate({ id: 'impasse', kind: 'terminal', humanOptions: [], terminal: true }),
   ],
 };
 

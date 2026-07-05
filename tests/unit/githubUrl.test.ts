@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { githubHttpsHref } from '../../src/shared/githubUrl';
+import { githubHttpsHref, numberFromGithubUrl } from '../../src/shared/githubUrl';
 
 describe('githubHttpsHref — the open-external allow-list returns the NORMALIZED url to open', () => {
   it('returns the parsed href for an https github.com url', () => {
@@ -24,5 +24,21 @@ describe('githubHttpsHref — the open-external allow-list returns the NORMALIZE
     expect(out).not.toBeNull();
     expect(out).not.toContain('	');
     expect(out).toBe('https://evil.com.github.com/x');
+  });
+});
+
+// §26.9 — epic-promote / pickup read the issue/PR number back from `gh …` stdout (a URL ending in
+// `/<number>`). A drifted/failed output must degrade to null so the ref is simply dropped, never
+// crashing the best-effort transition.
+describe('numberFromGithubUrl (§26.9 gh create stdout — one parser for every gh caller)', () => {
+  it('pulls the trailing number from a gh issue/PR URL', () => {
+    expect(numberFromGithubUrl('https://github.com/o/r/issues/502\n')).toBe(502);
+    expect(numberFromGithubUrl('  https://github.com/o/r/pull/17  ')).toBe(17);
+  });
+
+  it('returns null when the output carries no trailing number', () => {
+    expect(numberFromGithubUrl('gh: could not create issue\n')).toBe(null);
+    expect(numberFromGithubUrl('https://github.com/o/r/pull/abc')).toBe(null);
+    expect(numberFromGithubUrl('')).toBe(null);
   });
 });

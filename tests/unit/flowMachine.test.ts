@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createFlowMachine, type FlowLoad } from '../../src/main/flow';
 import { createFlowStateStore, type FlowStateStore, type PersistedFlowState } from '../../src/main/flowState';
+import { mkGate } from '../helpers/loopGate';
 
 // §24.2.2 S1 — the walking-skeleton workflow state machine (lifecycle not_started → in_progress → done,
 // done terminal). The observable contract is the state view and thrown errors on illegal transitions.
@@ -166,9 +167,12 @@ describe('flow state machine — loop-step state.yaml mirror (§24.2.3 T2)', () 
   it('resolves the step\'s bound LoopDef so readiness + gate options are gate-driven', () => {
     const def = {
       name: 'impl-loop',
+      phases: [],
+      rosters: [],
+      defaultRosterId: '',
       gates: [
-        { id: 'awaiting-human-pr-approval', kind: 'approve-required', humanOptions: ['approve', 'request-changes', 'impasse'], terminal: false },
-        { id: 'awaiting-team-review', kind: 'terminal', humanOptions: [], terminal: true },
+        mkGate({ id: 'awaiting-human-pr-approval', kind: 'approve-required', humanOptions: ['approve', 'request-changes', 'impasse'], terminal: false }),
+        mkGate({ id: 'awaiting-team-review', kind: 'terminal', humanOptions: [], terminal: true }),
       ],
     };
     let live = mirror;
@@ -400,8 +404,8 @@ describe('flow state machine — ticket/PR refs (progress-gated)', () => {
     },
     flowDir: '/tmp/f/.agent-terminal',
   };
-  const defA = { name: 'loop-a', gates: [{ id: 'planning', kind: 'approve-required', humanOptions: ['approve'], terminal: false }] };
-  const defB = { name: 'loop-b', gates: [{ id: 'planning', kind: 'approve-required', humanOptions: ['approve', 'impasse'], terminal: false }] };
+  const defA = { name: 'loop-a', phases: [], rosters: [], defaultRosterId: '', gates: [mkGate({ id: 'planning', kind: 'approve-required', humanOptions: ['approve'], terminal: false })] };
+  const defB = { name: 'loop-b', phases: [], rosters: [], defaultRosterId: '', gates: [mkGate({ id: 'planning', kind: 'approve-required', humanOptions: ['approve', 'impasse'], terminal: false })] };
 
   it('binds the mirror to the most recently entered loop step LoopDef, across two loops and onto a later manual step', () => {
     const flow = createFlowMachine(TWO_LOOP_FLOW, undefined, undefined, () => mirror(), (name) => (name === 'loop-a' ? defA : name === 'loop-b' ? defB : null));

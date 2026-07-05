@@ -4,9 +4,9 @@
 // ticket/PR detail (title, body, link) is fetched best-effort via injected services — the organism
 // reaches for nothing itself.
 //
-// Scope (T2): the state mirror + the read-only "gate options" row. The Review-gate DECISION section
-// (the approve / request-changes / impasse buttons + the §19.4 composer) is the gate slice T5/T6 —
-// not built here.
+// Scope: the state mirror + the read-only "gate options" row, plus the §26.6 / L5 gate DECISION section
+// (a button per gate option, firing the injected gateDecision). The §19.4 feedback composer that supplies
+// the human-note text is a later slice.
 
 import type { FlowLoopView, FlowRefs, GithubRef, GithubRefKind } from '../../shared/ipc';
 import { hasFlowRefs } from '../../shared/ipc';
@@ -24,6 +24,12 @@ function gateOptionLabel(option: string): string {
 export interface LoopPanelDeps {
   githubRef(kind: GithubRefKind, number: number): Promise<GithubRef | null>;
   openExternal(url: string): void;
+  /** §26.3/D47a(c) — the operator's manual "this turn is done" override for a turn whose automatic
+   *  done-signal was missed. Injected by the composition root; absent → the control is inert. */
+  markTurnComplete?(): void;
+  /** §26.6 / L5 — submit the human's gate decision (the option the human picked at an awaiting gate).
+   *  Injected by the composition root; absent → the decision buttons are not rendered. */
+  gateDecision?(option: string): void;
 }
 
 const NOOP_DEPS: LoopPanelDeps = { githubRef: () => Promise.resolve(null), openExternal: () => {} };
@@ -45,6 +51,9 @@ export interface LoopPanel {
 function detailRow(doc: Document, key: string, value: string, valueClass = ''): HTMLElement {
   const r = doc.createElement('div');
   r.className = 'lrow';
+  // WCAG 4.1.3 — patchInPlace mutates only the value span; aria-atomic makes the live region announce the
+  // whole row (label + value, "iteration 3") rather than the bare value node that changed.
+  r.setAttribute('aria-atomic', 'true');
   const k = doc.createElement('span');
   k.className = 'lk';
   k.textContent = key;
@@ -145,9 +154,12 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
    *  resolved DOM survive a passive push whose structure is unchanged (§24.2.2 S5). */
   function patchInPlace(loop: FlowLoopView | null): void {
     if (loop && liveLoop) {
-      liveLoop.statusVal.textContent = loop.status;
+      // WCAG 4.1.3 — only touch the live-region text on a real change; an unchanged passive push (cost/refs
+      // only) must not rewrite these nodes, or a screen reader re-announces content that did not change.
+      if (liveLoop.statusVal.textContent !== loop.status) liveLoop.statusVal.textContent = loop.status;
       liveLoop.statusVal.classList.toggle('bad', spillTone(loop.status) === 'await');
-      liveLoop.iterVal.textContent = String(loop.iteration);
+      const iter = String(loop.iteration);
+      if (liveLoop.iterVal.textContent !== iter) liveLoop.iterVal.textContent = iter;
     }
     for (const r of refRows) if (!r.resolved()) r.retry();
   }
@@ -224,6 +236,9 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
 
       const ldl = doc.createElement('div');
       ldl.className = 'ldl';
+      // WCAG 4.1.3 — `patchInPlace` updates status/iteration here without moving focus (e.g. after the
+      // mark-complete control or an orchestrator transition); a polite live region announces that change.
+      ldl.setAttribute('aria-live', 'polite');
       // An awaiting-human status still needs the human — the §22.3 "act" tone (`bad`).
       const statusRow = detailRow(doc, 'status', loop.status, spillTone(loop.status) === 'await' ? 'bad' : '');
       const iterRow = detailRow(doc, 'iteration', String(loop.iteration));
@@ -231,12 +246,50 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
       liveLoop = { statusVal: statusRow.querySelector('.lv')!, iterVal: iterRow.querySelector('.lv')! };
       if (loop.pr !== null) ldl.append(detailRow(doc, 'pr', `#${loop.pr}`, 'sig'));
       if (loop.branch !== null) ldl.append(detailRow(doc, 'branch', loop.branch));
-      // The current gate's human_options (§18.1/§19.4), present only at an awaiting gate; the decision
-      // buttons are T5/T6 — this row only surfaces what the gate will offer.
+      // The current gate's human_options (§18.1/§19.4), present only at an awaiting gate — the read-only
+      // preview of what the gate offers; the actionable decision buttons render below.
       if (loop.gateOptions && loop.gateOptions.length > 0)
         ldl.append(detailRow(doc, 'gate options', loop.gateOptions.map(gateOptionLabel).join(' · ')));
 
       body.append(ldl);
+
+      // §26.6 / L5 — the gate DECISION surface (loop-flow.html's approve · changes · impasse): a button
+      // per gate option the def offers. Choosing one runs the LoopDef `on_*` action list in-app; the
+      // decision is the app's, surfaced via state.yaml → flow:onStateChanged (the panel re-pulls).
+      if (loop.gateOptions && loop.gateOptions.length > 0 && deps.gateDecision) {
+        const gate = doc.createElement('div');
+        gate.className = 'gatebar';
+        // A labelled group so a screen-reader user hears these controls' shared purpose, not three loose
+        // buttons (WCAG 4.1.2). aria-label carries the group name; the row itself has no visible heading.
+        gate.setAttribute('role', 'group');
+        gate.setAttribute('aria-label', 'gate decision');
+        for (const option of loop.gateOptions) {
+          const btn = doc.createElement('button');
+          // approve is the primary action (loop-flow.html) — the filled `app` tone; the rest are outline.
+          btn.className = option === 'approve' ? 'pill app gate-approve' : `pill gate-${option}`;
+          btn.dataset.gateOption = option;
+          btn.textContent = gateOptionLabel(option);
+          // The visible label stays compact ("changes"); the accessible name is the unabbreviated option
+          // so AT does not announce a bare, ambiguous verb (WCAG 2.4.6; label-in-name 2.5.3).
+          btn.setAttribute('aria-label', option.replace('-', ' '));
+          btn.addEventListener('click', () => deps.gateDecision?.(option));
+          gate.append(btn);
+        }
+        body.append(gate);
+      }
+
+      // §26.3/D47a(c) — the human-in-the-loop escape hatch: advance a turn whose automatic done-signal
+      // the orchestrator missed, without editing files. Present on a loop step only when the composition
+      // root injects the service — an un-wired control would be an inert affordance (WCAG 4.1.2).
+      if (deps.markTurnComplete) {
+        const markBtn = doc.createElement('button');
+        markBtn.className = 'pill mark-complete';
+        markBtn.dataset.loopMarkComplete = '';
+        markBtn.textContent = 'Mark turn complete';
+        markBtn.addEventListener('click', () => deps.markTurnComplete?.());
+        body.append(markBtn);
+      }
+
       host.append(body);
       restoreFocus(hadFocus);
     },

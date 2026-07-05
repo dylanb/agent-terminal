@@ -16,6 +16,7 @@ import { createArtifacts, type Artifacts } from './artifacts';
 import { renderMarkdownInto, renderCodeInto } from './viewerRender';
 import { doInject } from './paneActions';
 import { createRepoContext } from './repoContext';
+import type { GateDecisionOption } from '../../shared/ipc';
 import { createKeymapController, resolveBase } from './keymapController';
 import { createKeyboardSettings } from './keyboardSettings';
 import { createCliInstall } from './cliInstall';
@@ -106,6 +107,14 @@ if (flowStripHost) {
           return key ? window.flow.githubRef(key, kind, number) : Promise.resolve(null);
         },
         openExternal: (url) => void window.flow.openExternal(url),
+        markTurnComplete: () => {
+          const key = repo.repoKey();
+          if (key) window.flow.markTurnComplete(key);
+        },
+        gateDecision: (option) => {
+          const key = repo.repoKey();
+          if (key) window.flow.gateDecision(key, option as GateDecisionOption);
+        },
       })
     : undefined;
   // Same single-puller contract for the typed-input modal (§24.2.3 T3): on a step-entry prompt the

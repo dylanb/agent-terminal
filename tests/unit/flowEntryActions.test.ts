@@ -13,6 +13,7 @@ function deps(over: Partial<Parameters<typeof createFlowEntryActions>[0]> = {}) 
   return {
     isShellBusy: vi.fn(() => false),
     inject: vi.fn(),
+    runPickup: vi.fn(),
     ...over,
   };
 }
@@ -48,68 +49,72 @@ describe('flow entry actions (§18.6/§19.3 — skill-only)', () => {
   });
 });
 
-// §24.2.3 T3 — a step with `bootstrap: pickup` resolves its required typed inputs (§18.4) on entry.
-// When a required input is unsatisfied the action returns a `prompt` (the modal collects it) and
-// injects nothing; once every required input is provided it injects `agent-loop pickup <input>`
-// (§18.3), subject to the same §19.3 busy refusal as the skill. The resolved inputs arrive as the
-// second argument (threaded by the machine from flow-state).
-describe('flow entry actions — bootstrap pickup (§24.2.3 T3 / §18.3/§18.4)', () => {
+// §26.9 / L1 — a `bootstrap: pickup` step resolves its required typed inputs (§18.4) on entry. When a
+// required input is unsatisfied the action returns a `prompt` (the modal collects it) and runs nothing;
+// once every required input is provided it runs IN-APP pickup (gh/git, §26.9) — NOT the retired §24.2.3
+// T3 terminal injection of `agent-loop pickup`. Pickup is out-of-band, so unlike the skill it is NOT
+// gated by the §19.3 busy shell. The resolved inputs arrive as the second argument (threaded by the
+// machine from flow-state) and are forwarded to the runner.
+describe('flow entry actions — bootstrap pickup, in-app (§26.9 / L1)', () => {
   const planStep = (over: Partial<FlowStepDef> = {}): FlowStepDef =>
     step({ id: 'plan', kind: 'loop', loop: 'plan-loop', bootstrap: 'pickup', inputs: [{ name: 'ticket', type: 'github-ticket', required: true }], ...over });
 
-  it('prompts for an unsatisfied required input and injects nothing', () => {
+  it('prompts for an unsatisfied required input and runs no pickup, injects nothing', () => {
     const d = deps();
     const result = createFlowEntryActions(d)(planStep(), {});
+    expect(d.runPickup).not.toHaveBeenCalled();
     expect(d.inject).not.toHaveBeenCalled();
     expect(result.prompt).toEqual({ inputs: [{ name: 'ticket', type: 'github-ticket' }], bootstrap: BOOTSTRAP_PICKUP });
     expect(result.notice).toBeUndefined();
   });
 
-  it('injects `agent-loop pickup <input>` once the required input is provided', () => {
+  it('runs in-app pickup with the resolved inputs once the required input is provided (no injection)', () => {
     const d = deps();
-    const result = createFlowEntryActions(d)(planStep(), { ticket: '176' });
-    expect(d.inject).toHaveBeenCalledWith('agent-loop pickup 176');
+    const s = planStep();
+    const result = createFlowEntryActions(d)(s, { ticket: '176' });
+    expect(d.runPickup).toHaveBeenCalledWith(s, { ticket: '176' });
+    expect(d.inject).not.toHaveBeenCalled(); // the retired T3 `agent-loop pickup` is gone
     expect(result.prompt).toBeUndefined();
     expect(result.notice).toBeUndefined();
   });
 
-  it('refuses the bootstrap over a busy shell, injecting nothing (§19.3)', () => {
+  it('runs pickup even over a busy shell — it is out-of-band gh/git, not terminal injection (§26.2/§26.6)', () => {
     const d = deps({ isShellBusy: vi.fn(() => true) });
     const result = createFlowEntryActions(d)(planStep(), { ticket: '176' });
-    expect(d.inject).not.toHaveBeenCalled();
-    expect(result.notice).toBe(BUSY_NOTICE);
+    expect(d.runPickup).toHaveBeenCalledWith(expect.anything(), { ticket: '176' });
+    expect(result.notice).toBeUndefined();
     expect(result.prompt).toBeUndefined();
   });
 
-  it('does not prompt for an optional (non-required) input', () => {
+  it('does not prompt for an optional (non-required) input and still runs pickup', () => {
     const d = deps();
     const result = createFlowEntryActions(d)(planStep({ inputs: [{ name: 'note', type: 'free-text', required: false }] }), {});
     expect(result.prompt).toBeUndefined();
-    expect(d.inject).toHaveBeenCalledWith('agent-loop pickup');
+    expect(d.runPickup).toHaveBeenCalledWith(expect.anything(), {});
   });
 
-  it('treats a reserved prototype-chain input name as unsatisfied (no [object Object] injection)', () => {
+  it('treats a reserved prototype-chain input name as unsatisfied (prompts, no pickup)', () => {
     const d = deps();
     // `inputs['__proto__']` is truthy via the prototype chain even though nothing was resolved; an
-    // own-property check must still see it as missing and prompt, never inject `[object Object]`.
+    // own-property check must still see it as missing and prompt, never run pickup with a junk value.
     const result = createFlowEntryActions(d)(
       planStep({ inputs: [{ name: '__proto__', type: 'free-text', required: true }] }),
       {},
     );
-    expect(d.inject).not.toHaveBeenCalled();
+    expect(d.runPickup).not.toHaveBeenCalled();
     expect(result.prompt).toEqual({ inputs: [{ name: '__proto__', type: 'free-text' }], bootstrap: BOOTSTRAP_PICKUP });
   });
 
-  it('trims a resolved input value before injecting it', () => {
+  it('trims resolved input values before forwarding them to the runner', () => {
     const d = deps();
     createFlowEntryActions(d)(planStep(), { ticket: '  176  ' });
-    expect(d.inject).toHaveBeenCalledWith('agent-loop pickup 176');
+    expect(d.runPickup).toHaveBeenCalledWith(expect.anything(), { ticket: '176' });
   });
 
-  it('prompts when a required input is present but blank/whitespace-only', () => {
+  it('prompts when a required input is present but blank/whitespace-only (no pickup)', () => {
     const d = deps();
     const result = createFlowEntryActions(d)(planStep(), { ticket: '   ' });
-    expect(d.inject).not.toHaveBeenCalled();
+    expect(d.runPickup).not.toHaveBeenCalled();
     expect(result.prompt).toEqual({ inputs: [{ name: 'ticket', type: 'github-ticket' }], bootstrap: BOOTSTRAP_PICKUP });
   });
 });

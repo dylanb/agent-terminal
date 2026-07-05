@@ -53,8 +53,10 @@
     "tests/unit/**/*.ts",
     "tests/integration/**/*.ts",
     "tests/fixtures/**/*.ts",
+    "tests/helpers/**/*.ts",
     "tests/e2e/**/*.ts",
     "playwright.config.ts",
-    "vitest.config.ts"
+    "vitest.config.ts",
+    "vitest.poolSizing.ts"
   ]
 }

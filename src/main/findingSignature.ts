@@ -1,0 +1,48 @@
+// §26.8 — the stuck detector. The consolidated finding SIGNATURE is a SHA256 of the top-3 kept findings
+// sorted by (severity desc, message); two identical signatures on consecutive iterations flag the run as
+// stuck (a best-effort early-out, not a terminal transition — the human confirms impasse at the gate).
+// An empty kept set yields an empty signature, which never matches, so it can never flag stuck.
+
+import { createHash } from 'node:crypto';
+
+/** One kept finding the signature is computed over (§26.3 consolidated schema slice). */
+export interface Finding {
+  severity: string;
+  message: string;
+}
+
+/** The running impasse state (§26.6 `impasse`): the last signature seen and how many consecutive
+ *  iterations have produced it. */
+export interface ImpasseState {
+  lastFindingsSig: string;
+  consecutiveIdentical: number;
+}
+
+/** The signature of the top-3 kept findings, sorted by severity (desc, per `severityOrder`) then message.
+ *  An empty kept set → "" (the §26.8 never-matches sentinel). `severityOrder` is ascending (least-severe
+ *  first); an unrecognized severity ranks below all named ones. */
+export function findingSignature(kept: Finding[], severityOrder: string[]): string {
+  if (kept.length === 0) return '';
+  const rank = (severity: string): number => {
+    const i = severityOrder.indexOf(severity);
+    return i === -1 ? -1 : i;
+  };
+  const top3 = [...kept]
+    .sort((a, b) => rank(b.severity) - rank(a.severity) || (a.message < b.message ? -1 : a.message > b.message ? 1 : 0))
+    .slice(0, 3);
+  const canonical = top3.map((f) => `${f.severity}\x00${f.message}`).join('\x01');
+  return createHash('sha256').update(canonical).digest('hex');
+}
+
+/** Advance the impasse run (§26.8): a new non-empty signature identical to the last increments the run;
+ *  a changed one resets it to a single occurrence; an empty signature resets to zero. `stuck` fires once
+ *  the same signature has appeared on two consecutive iterations. */
+export function nextImpasse(
+  prevSig: string,
+  prevConsecutive: number,
+  newSig: string,
+): ImpasseState & { stuck: boolean } {
+  if (newSig === '') return { lastFindingsSig: '', consecutiveIdentical: 0, stuck: false };
+  const consecutiveIdentical = newSig === prevSig ? prevConsecutive + 1 : 1;
+  return { lastFindingsSig: newSig, consecutiveIdentical, stuck: consecutiveIdentical >= 2 };
+}
