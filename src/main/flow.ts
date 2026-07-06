@@ -67,6 +67,7 @@ export function deriveLoopView(
       humanNeeded,
       ...(gateOptions ? { gateOptions } : {}),
       ...(cost !== null ? { cost } : {}),
+      ...(loop.errorReason ? { errorReason: loop.errorReason } : {}),
     },
   };
 }

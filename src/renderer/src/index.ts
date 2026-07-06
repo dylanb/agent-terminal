@@ -115,6 +115,10 @@ if (flowStripHost) {
           const key = repo.repoKey();
           if (key) window.flow.gateDecision(key, option as GateDecisionOption);
         },
+        retryTurn: () => {
+          const key = repo.repoKey();
+          if (key) window.flow.retryTurn(key);
+        },
       })
     : undefined;
   // Same single-puller contract for the typed-input modal (§24.2.3 T3): on a step-entry prompt the

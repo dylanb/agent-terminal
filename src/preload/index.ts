@@ -147,6 +147,7 @@ const flowApi: FlowApi = {
   markTurnComplete: (repoKey) => ipcRenderer.send(CH.flowMarkTurnComplete, { sessionId: SESSION_ID, repoKey }),
   gateDecision: (repoKey, option, note) =>
     ipcRenderer.send(CH.flowGateDecision, { sessionId: SESSION_ID, repoKey, option, ...(note !== undefined ? { note } : {}) }),
+  retryTurn: (repoKey) => ipcRenderer.send(CH.flowRetryTurn, { sessionId: SESSION_ID, repoKey }),
 };
 
 export const cliApi: CliApi = {

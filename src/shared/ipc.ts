@@ -56,6 +56,7 @@ export const CH = {
   flowGithubRef: 'flow:githubRef',
   flowMarkTurnComplete: 'flow:markTurnComplete',
   flowGateDecision: 'flow:gateDecision',
+  flowRetryTurn: 'flow:retryTurn',
   appOpenExternal: 'app:openExternal',
   todoTemplateList: 'todoTemplate:list',
   todoTemplateInstantiate: 'todoTemplate:instantiate',
@@ -490,6 +491,10 @@ export interface FlowLoopView {
    *  resolves); the renderer reads it rather than re-deriving the gate/awaiting logic. Always set on
    *  a derived loop view — the `?` is for hand-constructed views only. */
   humanNeeded?: boolean;
+  /** §26.3/D48 — the reason the current turn failed, present only at `status: 'error'`. Lets the loop
+   *  panel show WHY the loop stopped (e.g. "no Claude at the prompt") rather than a bare "error", and is
+   *  cleared the moment the status recovers. Absent on every non-error view. */
+  errorReason?: string;
 }
 
 /** The GitHub issue (ticket) and PR a flow is working (§24.2.3 T7). Numbers only — the title, body,
@@ -827,6 +832,10 @@ export interface FlowApi {
   /** §26.6 / L5 — submit the human's gate decision for `repoKey`. One-way: the app executes the option's
    *  transition and the loop panel re-pulls via flow:onStateChanged when the resulting state lands. */
   gateDecision(repoKey: string, option: GateDecisionOption, note?: string): void;
+  /** §26.3/D48 — recover a loop stopped in `error` for `repoKey`: re-drive the failed turn (e.g. after the
+   *  operator starts Claude for a `no hosted agent` stop). One-way: the app clears the error status and
+   *  re-injects; the loop panel re-pulls via flow:onStateChanged when the resulting state lands. */
+  retryTurn(repoKey: string): void;
 }
 
 /** CLI launcher install (§23.4 / #25): the settings affordance's only seam to the install action. */

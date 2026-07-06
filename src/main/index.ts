@@ -77,7 +77,7 @@ import { parseAgentLoopState, watchAgentLoopState } from './agentLoopBridge';
 import { createLoopNotifier } from './loopNotifier';
 import { parseLoopDef, gateForStatus, reviewerRosterForPhase, normalizeConsolidatedVerdict, isPersonaClean } from './loopDef';
 import { runPickup, createRealPickupDeps } from './loopPickup';
-import { createTurnRunner, decideConsolidateOutcome, type TurnRunner } from './loopOrchestrator';
+import { classifyHostedAgent, createTurnRunner, decideConsolidateOutcome, type TurnRunner } from './loopOrchestrator';
 import { composeWorkPrompt, composeSpawnReviewersPrompt, composeConsolidatePrompt } from './loopRecipe';
 import { allReviewsPresent, anyReviewPresent, consolidatedVerdict, consolidatedFindings, personaVerdict, carryForwardReviews, planDigest } from './reviewArtifacts';
 import { findingSignature, nextImpasse } from './findingSignature';
@@ -205,6 +205,16 @@ async function createWindow(): Promise<void> {
   });
   // Command history is live off the OSC-133 marks, not §8.3 quiescence (§15.5).
   tracker.onChange(() => send(CH.monitorCommandsChanged, { sessionId: SESSION_ID }));
+  // §26.2 — a hosted agent occupies the prompt UNLESS the shell is sitting idle at a bare ready prompt:
+  // an OSC-133-instrumented bash that has run commands (spans exist) with NONE currently running. That
+  // idle-prompt case is exactly where an injected turn would leak into the shell (the motivating defect),
+  // so it is `absent`. Both other cases are "present": a running span (the agent — Claude, or the e2e's
+  // typed fake REPL — is the foreground command), OR no span data at all (the agent is itself the PTY
+  // program, so there is no bash prompt to sit idle at — e.g. APP_SHELL=<agent>).
+  const hostedAgentPresent = (): boolean => {
+    const spans = tracker.summaries();
+    return spans.length === 0 || spans.some((s) => s.running);
+  };
   // §16.3: broadcast only on repo-key change, so the pane swaps its todo list once per `cd` across a
   // repo boundary rather than on every cwd move.
   // TODO(dylan): the full OSC-7 → cwd:changed → repo-list-swap loop through real
@@ -343,7 +353,7 @@ async function createWindow(): Promise<void> {
       if (activeTurn) turnSentinel.arm(turnDoneSentinel(activeTurn.turnKey));
       inject(prompt, { submit: true });
     },
-    injectable: () => agentActivity === 'quiet',
+    hostedAgent: () => classifyHostedAgent(hostedAgentPresent(), agentActivity),
     artifactPresent: () => {
       if (!activeTurn) return false;
       if (activeTurn.kind === 'reviewers') {
@@ -377,6 +387,7 @@ async function createWindow(): Promise<void> {
         branch: s?.branch ?? null,
         boundLoop: activeTurn.loopName,
         linkedIssues: s?.linkedIssues ?? [],
+        errorReason: reason,
       });
       audit.recordCommand(activeTurn.repoDir, 'turn', `turn ${activeTurn.turnKey} failed: ${reason}`, 1);
       pushFlowChanged();
@@ -410,6 +421,29 @@ async function createWindow(): Promise<void> {
       if (readAndClearTurnDone(repoDir) !== null) turnRunner.onDoneSignal();
     });
     turnRunner.requestTurn(activeTurn.turnKey);
+  };
+  // §26.3/D48 recovery — re-drive the turn that stopped in `error` (e.g. after the operator starts Claude
+  // for a `no hosted agent` stop). Clear the error status back to the phase's entry status (dropping the
+  // reason) so the mirror leaves the error state, then re-request the SAME turn: it injects if the agent is
+  // now present, or stops in error again if not. No-op when no turn is active for this repo.
+  const retryActiveTurn = (repoKey: string): void => {
+    const turn = activeTurn; // capture: the intervening writes must not lose the null-narrowing
+    if (!turn || turn.repoDir !== repoKey) return;
+    const def = parseLoopDef(repoKey, turn.loopName);
+    const entryStatus = def?.phases.find((p) => p.id === turn.phase)?.entryStatus;
+    if (entryStatus) {
+      const s = parseAgentLoopState(repoKey);
+      writeLoopState(repoKey, {
+        status: entryStatus,
+        iteration: s?.iteration ?? 1,
+        pr: s?.pr ?? null,
+        branch: s?.branch ?? null,
+        boundLoop: turn.loopName,
+        linkedIssues: s?.linkedIssues ?? [],
+      });
+      pushFlowChanged();
+    }
+    turnRunner.requestTurn(turn.turnKey);
   };
   // §26.5 — the plan-phase skip footprint, or null when there is no plan.md (the impl phase's file-set
   // footprint is a recorded v1 gap, so the skip-opt is confined to the plan phase where plan.md exists).
@@ -871,6 +905,11 @@ async function createWindow(): Promise<void> {
       // §26.6 / L5 — the human's data-driven gate decision, executed app-internally.
       [CH.flowGateDecision]: (_e, m) => {
         if (isValidFlowGateDecision(m)) runGateDecision(m.repoKey, m.option, m.note ?? '');
+      },
+      // §26.3/D48 — recover a loop stopped in `error`: re-drive the failed turn (e.g. after the operator
+      // starts Claude for a `no hosted agent` stop).
+      [CH.flowRetryTurn]: (_e, m) => {
+        if (isValidFlowRequest(m)) retryActiveTurn(m.repoKey);
       },
       // Clipboard is an OS resource owned by main (§7.7); the sandboxed preload can't reach it.
       [CH.clipboardWrite]: (_e, m) => {

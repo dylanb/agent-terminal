@@ -40,6 +40,23 @@ describe('loop state.yaml writer (§26.6)', () => {
     });
   });
 
+  it('round-trips the D48 error reason so the panel can show WHY a turn failed, not just "error" (§26.3)', () => {
+    writeLoopState(repo, { ...L1_STATE, status: 'error', errorReason: 'no hosted agent at the prompt' }, fixedNow);
+    const doc = yaml.load(readFileSync(join(repo, '.agent-loop', 'state.yaml'), 'utf8')) as Record<string, unknown>;
+    expect(doc.error_reason).toBe('no hosted agent at the prompt');
+    expect(parseAgentLoopState(repo)?.errorReason).toBe('no hosted agent at the prompt');
+  });
+
+  it('carries no error_reason on a non-error write, and clears a stale one when the status recovers', () => {
+    // Recovery must not leave a stale reason: a write with no errorReason drops any prior error_reason
+    // so a recovered status never shows a message that no longer applies (never-unrecoverable, CLAUDE.md).
+    writeLoopState(repo, { ...L1_STATE, status: 'error', errorReason: 'no hosted agent at the prompt' }, fixedNow);
+    writeLoopState(repo, { ...L1_STATE, status: 'plan-draft' }, fixedNow);
+    const doc = yaml.load(readFileSync(join(repo, '.agent-loop', 'state.yaml'), 'utf8')) as Record<string, unknown>;
+    expect(doc).not.toHaveProperty('error_reason');
+    expect(parseAgentLoopState(repo)).not.toHaveProperty('errorReason');
+  });
+
   it('writes a whole-document valid v4 doc: bare numeric schema_version + the §26.6 write surface', () => {
     writeLoopState(repo, L1_STATE, fixedNow);
     const doc = yaml.load(readFileSync(join(repo, '.agent-loop', 'state.yaml'), 'utf8')) as Record<string, unknown>;

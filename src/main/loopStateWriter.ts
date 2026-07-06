@@ -22,6 +22,10 @@ export interface LoopStateWrite {
   branch: string | null;
   boundLoop: string;
   linkedIssues: number[];
+  /** §26.3/D48 — the human-readable reason a turn failed, persisted with `status: error` so the loop panel
+   *  can show WHY (not a bare "error"). Absent on any non-error write, which also CLEARS a stale prior
+   *  reason so a recovered status never carries a message that no longer applies. */
+  errorReason?: string;
   /** §26.6 gate write surface (L5) — applied OVER the merged prior doc so a gate transition's own writes
    *  win. Absent → the field keeps its preserved prior value. `clearPersonaState` resets persona_state to
    *  `{}` (every persona re-reviews after a request-changes). */
@@ -99,6 +103,11 @@ export function writeLoopState(repoDir: string, state: LoopStateWrite, now: () =
     linked_issues: state.linkedIssues,
     updated_at: now().toISOString(),
   };
+
+  // §26.3/D48 — the error reason travels WITH status: error. Set it on an error write; on any other write
+  // drop it (and any preserved prior reason) so a recovered/advanced status never shows a stale message.
+  if (state.errorReason) doc.error_reason = state.errorReason;
+  else delete doc.error_reason;
 
   // §26.6 gate write surface (L5) — layered ABOVE the app read set so a gate transition's own writes win
   // over the preserved prior values; an absent field keeps its merged prior value.

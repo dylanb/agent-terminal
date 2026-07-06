@@ -2207,6 +2207,7 @@ test('entering a bootstrap loop step prompts for its input; Confirm runs in-app 
   const repo = seedBootstrapFlowRepo('agent-term-e2e-flow-l1boot-');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-flow-l1boot-home-'));
   const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-l1-bin-');
+  seedFakeAgent(binDir, { work: 'noop' }); // present at the prompt so the post-pickup work turn injects (not `absent`) and sits in-flight, keeping plan-draft stable (§26.2)
   await app.close();
   app = await electron.launch({
     args: ['out/main/index.js'],
@@ -2215,6 +2216,7 @@ test('entering a bootstrap loop step prompts for its input; Confirm runs in-app 
       APP_SHELL: 'bash',
       HOME: home,
       APP_SUBMIT_DELAY_MS: '100',
+      APP_TURN_TIMEOUT_MS: '60000', // long: the noop turn stays in-flight (never auto-errors) during the assertions
       CLAUDE_CONFIG_DIR: exampleConfigDir,
       PATH: `${binDir}:${process.env.PATH}`,
       FAKE_GHGIT_LOG: logFile,
@@ -2225,6 +2227,7 @@ test('entering a bootstrap loop step prompts for its input; Confirm runs in-app 
 
   await typeCommand(`cd "${repo}"`);
   await expect(flowStepName()).toHaveText('groom', { timeout: 10_000 });
+  await typeCommand('fake-agent'); // the hosted agent REPL owns the prompt (present), so the work turn injects rather than erroring
 
   await flowControl().click(); // Start → groom (manual): no input prompt
   await expect(flowStation(1)).toHaveClass(/\bactive\b/);
@@ -2329,6 +2332,10 @@ async function driveToWorkTurn(
   logFile: string,
   turnTimeoutMs: string,
   extraEnv: Record<string, string> = {},
+  // §26.2 — when false, no hosted agent is started: the shell stays at a bare ready prompt, so the work
+  // turn injected after pickup finds `no hosted agent` (`absent`) and stops in error instead of leaking
+  // the prompt into the shell. The caller then asserts the error landing rather than plan-draft.
+  startAgent = true,
 ): Promise<void> {
   await app.close();
   app = await electron.launch({
@@ -2350,7 +2357,7 @@ async function driveToWorkTurn(
 
   await typeCommand(`cd "${repo}"`);
   await expect(flowStepName()).toHaveText('groom', { timeout: 10_000 });
-  await typeCommand('fake-agent'); // the hosted agent REPL now owns the prompt; injection reaches it
+  if (startAgent) await typeCommand('fake-agent'); // the hosted agent REPL now owns the prompt; injection reaches it
 
   await flowControl().click(); // Start → groom: opens the audit run
   await expect.poll(() => auditRunFiles(home, repo).length).toBe(1);
@@ -2360,9 +2367,12 @@ async function driveToWorkTurn(
   await inputModal().locator('.confirm').click();
   await expect(inputModal()).toHaveCount(0);
 
-  // Bootstrap landed: pickup wrote plan-draft, so the work turn is now requested + injected.
-  const stateFile = join(repo, '.agent-loop', 'state.yaml');
-  await expect.poll(() => (existsSync(stateFile) ? readFileSync(stateFile, 'utf8') : ''), { timeout: 15_000 }).toContain('status: plan-draft');
+  // With an agent present, bootstrap lands plan-draft and the work turn injects; without one the caller
+  // asserts the `absent` error landing itself (pickup still writes plan-draft first, then the turn errors).
+  if (startAgent) {
+    const stateFile = join(repo, '.agent-loop', 'state.yaml');
+    await expect.poll(() => (existsSync(stateFile) ? readFileSync(stateFile, 'utf8') : ''), { timeout: 15_000 }).toContain('status: plan-draft');
+  }
 }
 
 const turnEvents = (home: string, repo: string): Array<Extract<AuditEvent, { type: 'command' }>> => {
@@ -2409,6 +2419,32 @@ test('a work turn that emits no done-signal retries once then stops in error (§
   expect(turnEvents(home, repo).some((e) => e.cmd.includes('failed') && e.exit === 1)).toBe(true);
   await loopReadout().click();
   await expect(loopPanel()).toContainText('error', { timeout: 10_000 });
+
+  await app.close();
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+  rmSync(binDir, { recursive: true, force: true });
+});
+
+test('a work turn with NO hosted agent at the prompt errors instead of leaking the prompt into the shell; the panel shows the reason + a Retry (§26.2 / D48)', async () => {
+  const repo = seedBootstrapFlowRepo('agent-term-e2e-noagent-');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-noagent-home-'));
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-noagent-bin-');
+  seedFakeAgent(binDir, { work: 'write-plan' }); // on PATH but never launched — the shell stays bare
+  await driveToWorkTurn(repo, home, binDir, logFile, '30000', {}, /* startAgent */ false);
+
+  // Land: no foreground agent occupies the prompt, so the injected work turn is refused — the run stops in
+  // `error` with the reason, and NOTHING is typed into the shell (no plan.md, no leaked prompt echo).
+  const stateFile = join(repo, '.agent-loop', 'state.yaml');
+  await expect.poll(() => (existsSync(stateFile) ? readFileSync(stateFile, 'utf8') : ''), { timeout: 20_000 }).toContain('status: error');
+  expect(readFileSync(stateFile, 'utf8')).toContain('error_reason: no hosted agent at the prompt');
+  expect(existsSync(join(repo, '.agent-loop', 'plan.md'))).toBe(false); // nothing produced the artifact
+  await expect(termRows()).not.toContainText('# Work agent'); // the prompt never reached the shell
+
+  // The panel surfaces WHY + a recovery affordance (never a Terminate-only dead-end).
+  await loopReadout().click();
+  await expect(loopPanel()).toContainText('no hosted agent at the prompt', { timeout: 10_000 });
+  await expect(loopPanel().locator('[data-loop-retry]')).toBeVisible();
 
   await app.close();
   rmSync(repo, { recursive: true, force: true });

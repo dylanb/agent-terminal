@@ -1,15 +1,32 @@
 import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 import {
+  classifyHostedAgent,
   createTurnRunner,
   decideConsolidateOutcome,
   type TurnRunnerDeps,
 } from '../../src/main/loopOrchestrator';
 
+// §26.2 — the mapping from presence + §8.3 activity to injection-readiness. `agentPresent` is the domain
+// fact "a hosted agent occupies the prompt" (how the host derives it from OSC-133 spans is its concern);
+// not present → `absent` (a bare shell, where an injected turn would leak), regardless of quiescence.
+describe('classifyHostedAgent (§26.2 presence + idleness)', () => {
+  it('a bare ready prompt (no foreground command) is absent — no agent to inject into, regardless of quiescence', () => {
+    expect(classifyHostedAgent(false, 'quiet')).toBe('absent');
+    expect(classifyHostedAgent(false, 'active')).toBe('absent');
+  });
+  it('a present agent that is quiescent is idle at its input box', () => {
+    expect(classifyHostedAgent(true, 'quiet')).toBe('idle');
+  });
+  it('a present agent still emitting output is busy (mid-turn) — defer, do not inject', () => {
+    expect(classifyHostedAgent(true, 'active')).toBe('busy');
+  });
+});
+
 // §26.3/D47a + D48 — the work-agent turn runner. Asserted purely from the outside: which prompts get
 // injected, whether the completion timer is armed/cancelled, when onComplete fires, and when the run is
 // written to `error`. No PTY, no real timers — the host drives onDoneSignal/onTimeout/onInjectable.
 describe('loop turn runner (§26.3/D47a, D48)', () => {
-  let injectable: boolean;
+  let hosted: 'idle' | 'busy' | 'absent';
   let artifact: boolean;
   let compose: Mock<(turnKey: string) => string | null>;
   let deps: TurnRunnerDeps;
@@ -20,7 +37,7 @@ describe('loop turn runner (§26.3/D47a, D48)', () => {
   let onComplete: Mock<(turnKey: string) => void>;
 
   beforeEach(() => {
-    injectable = true;
+    hosted = 'idle';
     artifact = true;
     inject = vi.fn();
     armTimer = vi.fn();
@@ -31,7 +48,7 @@ describe('loop turn runner (§26.3/D47a, D48)', () => {
     deps = {
       compose,
       inject,
-      injectable: () => injectable,
+      hostedAgent: () => hosted,
       artifactPresent: () => artifact,
       armTimer,
       cancelTimer,
@@ -87,23 +104,50 @@ describe('loop turn runner (§26.3/D47a, D48)', () => {
   });
 
   it('never injects over a busy instance: defers until injectable (§26.2)', () => {
-    injectable = false;
+    hosted = 'busy';
     const r = createTurnRunner(deps);
     r.requestTurn('work-plan');
     expect(inject).not.toHaveBeenCalled();
     expect(r.state()).toBe('in-flight');
-    injectable = true;
+    hosted = 'idle';
     r.onInjectable();
     expect(inject).toHaveBeenCalledTimes(1);
+  });
+
+  it('no hosted agent at the prompt: errors instead of leaking the prompt into the bare shell (§26.2)', () => {
+    // The motivating defect: injecting on raw quiescence typed a whole work-agent prompt into bash when
+    // no Claude instance was at the prompt. `absent` (normal buffer / no agent) must NEVER inject — it
+    // stops in `error` (D48, human-needed) so the operator is told to start Claude, not left with a
+    // prompt silently pasted into the shell. Distinct from `busy`, which defers and waits.
+    hosted = 'absent';
+    const r = createTurnRunner(deps);
+    r.requestTurn('work-plan');
+    expect(inject).not.toHaveBeenCalled();
+    expect(writeError).toHaveBeenCalledTimes(1);
+    expect(r.state()).toBe('error');
+  });
+
+  it('a deferred turn errors if the agent leaves the prompt while waiting (Claude quit mid-wait, §26.2)', () => {
+    // Busy → deferred (wait it out). If the agent then disappears (operator quits Claude → normal buffer),
+    // the next injectable poke must resolve to `error`, not re-inject into the now-bare shell.
+    hosted = 'busy';
+    const r = createTurnRunner(deps);
+    r.requestTurn('work-plan');
+    expect(inject).not.toHaveBeenCalled();
+    hosted = 'absent';
+    r.onInjectable();
+    expect(inject).not.toHaveBeenCalled();
+    expect(writeError).toHaveBeenCalledTimes(1);
+    expect(r.state()).toBe('error');
   });
 
   it('a retry also waits for the instance to become injectable before re-injecting', () => {
     const r = createTurnRunner(deps);
     r.requestTurn('work-plan'); // injected (attempt 1)
-    injectable = false;
+    hosted = 'busy';
     r.onTimeout(); // wants to retry, but instance is busy
     expect(inject).toHaveBeenCalledTimes(1);
-    injectable = true;
+    hosted = 'idle';
     r.onInjectable();
     expect(inject).toHaveBeenCalledTimes(2);
   });
@@ -141,7 +185,7 @@ describe('loop turn runner (§26.3/D47a, D48)', () => {
     const r = createTurnRunner(deps);
     r.requestTurn('work-plan'); // attempt 1 injected
     expect(inject).toHaveBeenCalledTimes(1);
-    injectable = false; // the instance goes — and stays — busy
+    hosted = 'busy'; // the instance goes — and stays — busy
     r.onTimeout(); // attempt 1 times out → wants to retry, but cannot inject → deferred
     expect(inject).toHaveBeenCalledTimes(1); // no second injection
     // The deferred retry MUST re-arm the deadline (the half of the D48 fix that makes onTimeout fire

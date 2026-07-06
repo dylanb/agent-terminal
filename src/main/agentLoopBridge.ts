@@ -20,6 +20,8 @@ export interface AgentLoopState {
   pr: number | null;
   branch: string | null;
   linkedIssues: number[];
+  /** §26.3/D48 — present only with `status: error`: the reason the turn failed, surfaced by the panel. */
+  errorReason?: string;
 }
 
 // Compared by VALUE, not YAML scalar type: state.yaml writes a bare `4`, LoopDefs a quoted `"4"`
@@ -53,6 +55,7 @@ export function parseAgentLoopState(repoDir: string): AgentLoopState | null {
     pr: typeof doc.pr === 'number' && doc.pr > 0 ? doc.pr : null,
     branch: typeof doc.branch === 'string' ? doc.branch : null,
     linkedIssues: Array.isArray(doc.linked_issues) ? doc.linked_issues.filter((n): n is number => typeof n === 'number') : [],
+    ...(typeof doc.error_reason === 'string' && doc.error_reason.length > 0 ? { errorReason: doc.error_reason } : {}),
   };
 }
 

@@ -30,6 +30,10 @@ export interface LoopPanelDeps {
   /** §26.6 / L5 — submit the human's gate decision (the option the human picked at an awaiting gate).
    *  Injected by the composition root; absent → the decision buttons are not rendered. */
   gateDecision?(option: string): void;
+  /** §26.3/D48 — recover a loop stopped in `error`: re-drive the failed turn (e.g. after starting Claude
+   *  for a `no hosted agent` stop). Injected by the composition root; absent → no Retry control is shown,
+   *  so an errored loop is never a dead-end reachable only by Terminate (never-unrecoverable, CLAUDE.md). */
+  retryTurn?(): void;
 }
 
 const NOOP_DEPS: LoopPanelDeps = { githubRef: () => Promise.resolve(null), openExternal: () => {} };
@@ -75,7 +79,7 @@ function structuralSig(loop: FlowLoopView | null, title: string, refs?: FlowRefs
     title,
     refs?.ticket ?? null,
     refs?.pr ?? null,
-    loop ? [loop.pr, loop.branch, loop.gateOptions ?? null] : null,
+    loop ? [loop.pr, loop.branch, loop.gateOptions ?? null, loop.errorReason ?? null] : null,
   ]);
 }
 
@@ -244,6 +248,10 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
       const iterRow = detailRow(doc, 'iteration', String(loop.iteration));
       ldl.append(statusRow, iterRow);
       liveLoop = { statusVal: statusRow.querySelector('.lv')!, iterVal: iterRow.querySelector('.lv')! };
+      // §26.3/D48 — WHY a turn stopped, adjacent to `status: error`. Present only in error (the mirror
+      // clears it on recovery); the `bad` tone matches the awaiting/error act cue. Structural — in
+      // `structuralSig` above, so entering/leaving error rebuilds the row rather than patching it.
+      if (loop.errorReason) ldl.append(detailRow(doc, 'reason', loop.errorReason, 'bad'));
       if (loop.pr !== null) ldl.append(detailRow(doc, 'pr', `#${loop.pr}`, 'sig'));
       if (loop.branch !== null) ldl.append(detailRow(doc, 'branch', loop.branch));
       // The current gate's human_options (§18.1/§19.4), present only at an awaiting gate — the read-only
@@ -276,6 +284,18 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
           gate.append(btn);
         }
         body.append(gate);
+      }
+
+      // §26.3/D48 — recovery from the error stop: re-drive the failed turn (start Claude, then Retry) so an
+      // errored loop is never a UI dead-end. Error-only + service-gated (an un-wired control would be inert,
+      // WCAG 4.1.2). Structural via `structuralSig` (errorReason gates the rebuild that adds/removes it).
+      if (loop.status === 'error' && deps.retryTurn) {
+        const retryBtn = doc.createElement('button');
+        retryBtn.className = 'pill retry';
+        retryBtn.dataset.loopRetry = '';
+        retryBtn.textContent = 'Retry';
+        retryBtn.addEventListener('click', () => deps.retryTurn?.());
+        body.append(retryBtn);
       }
 
       // §26.3/D47a(c) — the human-in-the-loop escape hatch: advance a turn whose automatic done-signal

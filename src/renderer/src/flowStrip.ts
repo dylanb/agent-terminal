@@ -62,10 +62,11 @@ export interface FlowStrip {
  *  reaching across organisms. Fired on every render: `null` when the step has no loop mirror.
  *  `onRevealLoop` is omitted: the OS-notification reveal (§24.2.3 T4) is wired at the composition root
  *  on window.flow, not through the strip (interface segregation — the strip never reveals). So is
- *  `markTurnComplete` (§26.3/D47a c): the loop panel owns that control, not the strip. */
+ *  `markTurnComplete` (§26.3/D47a c) and `retryTurn` (§26.3/D48): the loop panel owns those controls,
+ *  not the strip. */
 export type FlowStripDeps = Omit<
   FlowApi,
-  'onRevealLoop' | 'githubRef' | 'openExternal' | 'markTurnComplete' | 'gateDecision'
+  'onRevealLoop' | 'githubRef' | 'openExternal' | 'markTurnComplete' | 'gateDecision' | 'retryTurn'
 > & {
   /** The docked loop panel's element id, injected by the composition root so the read-out's
    *  `aria-controls` is instance-scoped — the organism never bakes in a document-level id

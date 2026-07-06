@@ -3,6 +3,8 @@
 // check, and the state.yaml writer (the CLAUDE.md domain-port seam — the runner names what it needs, not
 // the backing mechanism).
 
+import type { AgentState } from '../shared/ipc';
+
 export type TurnState = 'idle' | 'in-flight' | 'complete' | 'error';
 
 /** The branch a completed consolidate turn takes on its normalized verdict (§26.6 / §26.8 / §26.13 L4/L6):
@@ -37,14 +39,31 @@ export function decideConsolidateOutcome(inputs: ConsolidateInputs): Consolidate
   return { kind: 'reiterate', nextIteration: inputs.iteration + 1 };
 }
 
+/** The hosted instance's state relative to injection (§26.2), in the runner's own vocabulary — a domain
+ *  concept, NOT a shell-busy check (the agent is itself the foreground process):
+ *    'idle'   — a hosted agent is at its own input box and quiescent (§8.3): inject now.
+ *    'busy'   — a hosted agent is present but mid-turn: defer until `onInjectable()`.
+ *    'absent' — no hosted agent at the prompt (a bare shell): NEVER inject. Injecting would type the whole
+ *               prompt into the shell (the motivating leak); the run stops in `error` instead (D48). */
+export type HostedAgentState = 'idle' | 'busy' | 'absent';
+
+/** Map presence + activity to injection-readiness (§26.2). `agentPresent` is the host-supplied domain
+ *  fact "a hosted agent occupies the prompt" (vs a bare shell where an injected turn would leak); how the
+ *  host derives it (§26.2 command-span state) is not this function's concern. Absent → `absent` (never
+ *  inject). Present → §8.3 quiescence separates idle-at-input-box from mid-turn. Pure so the gate is tested. */
+export function classifyHostedAgent(agentPresent: boolean, agentState: AgentState): HostedAgentState {
+  if (!agentPresent) return 'absent';
+  return agentState === 'quiet' ? 'idle' : 'busy';
+}
+
 export interface TurnRunnerDeps {
   /** The prompt for `turnKey` (recipe body + done-signal instruction); null = unrecoverable config error. */
   compose(turnKey: string): string | null;
   /** Inject + submit the prompt into the hosted instance (§9.3). */
   inject(prompt: string): void;
-  /** True iff the hosted instance is idle at its own input box — quiescent (§8.3), per §26.2's redefinition
-   *  of "injectable" for a hosted REPL (NOT a shell-busy check: the agent is itself the foreground process). */
-  injectable(): boolean;
+  /** The hosted instance's injection-readiness (§26.2) — see `HostedAgentState`. `absent` is the guard that
+   *  keeps a prompt from ever leaking into a bare shell: it errors rather than injecting or deferring. */
+  hostedAgent(): HostedAgentState;
   /** True iff the turn's expected artifact exists and parses (§26.3/D47a b); artifact-less turns pass a
    *  turn-appropriate check here. */
   artifactPresent(): boolean;
@@ -59,9 +78,10 @@ export interface TurnRunnerDeps {
 }
 
 export interface TurnRunner {
-  /** Begin a turn; injects now if injectable, else defers until `onInjectable()`. */
+  /** Begin a turn; injects now if the hosted agent is idle, defers if busy, errors if absent (§26.2). */
   requestTurn(turnKey: string): void;
-  /** The instance just became injectable (a §8.3 quiet flip) — inject a pending/retry turn. */
+  /** The instance may have become injectable (a §8.3 quiet flip) — re-evaluate a pending/retry turn: inject
+   *  if now idle, keep waiting if still busy, or error if the agent has left the prompt (§26.2). */
   onInjectable(): void;
   /** A done-signal (sentinel line or file) was observed for the in-flight turn. */
   onDoneSignal(): void;
@@ -83,7 +103,18 @@ export function createTurnRunner(deps: TurnRunnerDeps): TurnRunner {
 
   const tryInject = (): void => {
     if (state !== 'in-flight' || turnKey === null) return;
-    if (!deps.injectable()) {
+    const agent = deps.hostedAgent();
+    if (agent === 'absent') {
+      // §26.2 — no hosted agent at the prompt (a bare shell). Injecting now would type the whole prompt
+      // into the shell (the motivating defect). Never inject, never defer waiting for an agent that isn't
+      // there: stop in `error` (human-needed, D48) so the operator is told to start Claude and retry.
+      awaitingInjectable = false;
+      deps.cancelTimer();
+      state = 'error';
+      deps.writeError('no hosted agent at the prompt');
+      return;
+    }
+    if (agent === 'busy') {
       awaitingInjectable = true;
       // Bound only a RETRY that cannot re-inject (a prior attempt was already spent) so an instance that
       // never returns to injectable after a failed turn resolves to `error` (§26.3/D48) instead of

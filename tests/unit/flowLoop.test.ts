@@ -59,6 +59,13 @@ describe('deriveLoopView (§24.2.3 T2)', () => {
     expect(deriveLoopView(base, loop('plan-draft'), DEF, null).loop && 'cost' in deriveLoopView(base, loop('plan-draft'), DEF, null).loop!).toBe(false);
   });
 
+  it('surfaces the D48 error reason on the loop view so the panel shows why, not a bare "error" (§26.3)', () => {
+    const errored: AgentLoopState = { ...loop('error'), errorReason: 'no hosted agent at the prompt' };
+    expect(deriveLoopView(base, errored, DEF).loop?.errorReason).toBe('no hosted agent at the prompt');
+    const clean = deriveLoopView(base, loop('plan-draft'), DEF);
+    expect(clean.loop && 'errorReason' in clean.loop).toBe(false);
+  });
+
   it('exposes the current gate\'s human_options as gateOptions (gate-driven)', () => {
     expect(deriveLoopView(base, loop('awaiting-human-pr-approval'), DEF).loop?.gateOptions).toEqual([
       'approve',
