@@ -1626,7 +1626,10 @@ function seedFakeGhGit(prefix: string): { binDir: string; logFile: string } {
     // §26.9/L8 epic-promote — each `gh issue create` returns a fresh issue URL (a per-binDir counter file
     // seeded at 500) so the sub-issues carry distinct numbers the executor appends to linked_issues.
     'if [ "$1" = "issue" ] && [ "$2" = "create" ]; then seq="$FAKE_GHGIT_LOG.issue-seq"; n=$(cat "$seq" 2>/dev/null || echo 500); n=$((n+1)); echo "$n" > "$seq"; echo "https://github.com/fake/repo/issues/$n"; exit 0; fi\n' +
-    'if [ "$1" = "pr" ] && [ "$2" = "create" ]; then echo "https://github.com/fake/repo/pull/4242"; exit 0; fi\n' +
+    // The `pr create` call is logged BEFORE an optional FAKE_PICKUP_DELAY sleep, so a test can hold the
+    // pickup mid-flight (the branch is created, state.yaml not yet written) long enough to terminate the
+    // flow and prove the async completion drops as stale (§26.9).
+    'if [ "$1" = "pr" ] && [ "$2" = "create" ]; then [ -n "$FAKE_PICKUP_DELAY" ] && sleep "$FAKE_PICKUP_DELAY"; echo "https://github.com/fake/repo/pull/4242"; exit 0; fi\n' +
     // §26.7/L8 CI run-don't-block — `gh pr checks` returns the current bucket state (one pending, one pass)
     // and exits non-zero (8) as real gh does when checks are pending; the app parses stdout regardless and
     // never waits. The invocation is logged (above) BEFORE the optional FAKE_GH_CHECKS_DELAY sleep, so a
@@ -2379,6 +2382,69 @@ test('a bootstrap pickup that cannot run (dirty tree) NEVER fails silently: it s
   await expect(errorDialog).toHaveCount(0);
 
   await app.close(); // HOME=temp ⇒ Electron writes userData under it; stop writes before removing it
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+  rmSync(binDir, { recursive: true, force: true });
+});
+
+test('a pickup that completes AFTER the operator terminates the flow drops as stale: no work turn is injected against the abandoned flow (§26.9)', async () => {
+  // §26.9 — the in-app pickup is fire-and-forget. If the operator TERMINATES the flow while pickup is still
+  // running, its async completion must NOT drive a work turn against the now-abandoned flow (the
+  // decidePickupAction stale-guard drops it). FAKE_PICKUP_DELAY holds `gh pr create` open so the terminate
+  // lands mid-pickup; a hosted agent IS present, so a broken guard WOULD inject the work prompt and the
+  // fake-agent would write plan.md — its absence is the observable proof the stale result was dropped.
+  const repo = seedBootstrapFlowRepo('agent-term-e2e-flow-bootstale-');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-flow-bootstale-home-'));
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-stale-bin-');
+  seedFakeAgent(binDir, { work: 'write-plan' }); // present + would write plan.md if a work turn were injected
+  await app.close();
+  app = await electron.launch({
+    args: ['out/main/index.js'],
+    env: {
+      ...process.env,
+      APP_SHELL: 'bash',
+      HOME: home,
+      APP_SUBMIT_DELAY_MS: '100',
+      APP_TURN_TIMEOUT_MS: '60000',
+      CLAUDE_CONFIG_DIR: exampleConfigDir,
+      PATH: `${binDir}:${process.env.PATH}`,
+      FAKE_GHGIT_LOG: logFile,
+      FAKE_PICKUP_DELAY: '4', // gh pr create sleeps 4s → pickup stays in-flight long enough to terminate
+    },
+  });
+  page = await app.firstWindow();
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await typeCommand(`cd "${repo}"`);
+  await expect(flowStepName()).toHaveText('groom', { timeout: 10_000 });
+  await typeCommand('fake-agent'); // a hosted agent IS at the prompt: a leaked work turn would inject here
+
+  await flowControl().click(); // Start → groom
+  await flowControl().click(); // Advance → plan (loop, bootstrap): typed-input modal
+  await expect(inputModal()).toBeVisible({ timeout: 10_000 });
+  await inputModal().locator('.field input').fill('176');
+  await inputModal().locator('.confirm').click();
+  await expect(inputModal()).toHaveCount(0); // pickup fires and is now sleeping in `gh pr create`
+
+  // Terminate the flow WHILE pickup is still in-flight (state.yaml is written only after the delayed PR create).
+  const stateFile = join(repo, '.agent-loop', 'state.yaml');
+  expect(existsSync(stateFile)).toBe(false); // still mid-pickup
+  await page.locator('#flow-strip .flow-terminate').click();
+  const confirm = page.locator('#flow-confirm-host .flow-modal');
+  await expect(confirm).toBeVisible({ timeout: 10_000 });
+  await confirm.locator('.confirm').click();
+  await expect(confirm).toHaveCount(0);
+  await expect(flowControl()).toHaveText('Start'); // flow terminated → not_started
+
+  // Pickup runs to completion past the sleep and writes state.yaml — the positive signal its async `.then`
+  // has executed. The stale-guard must have dropped the result: NO work turn ran, so no plan.md, no turn
+  // audit event, and nothing leaked into the shell.
+  await expect.poll(() => existsSync(stateFile), { timeout: 20_000 }).toBe(true);
+  expect(existsSync(join(repo, '.agent-loop', 'plan.md'))).toBe(false); // stale → no work turn injected
+  expect(turnEvents(home, repo)).toEqual([]); // no turn was ever requested
+  await expect(termRows()).not.toContainText('# Work agent'); // nothing leaked into the shell
+
+  await app.close();
   rmSync(repo, { recursive: true, force: true });
   rmSync(home, { recursive: true, force: true });
   rmSync(binDir, { recursive: true, force: true });
