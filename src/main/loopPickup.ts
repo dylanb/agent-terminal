@@ -79,6 +79,29 @@ export type PickupResult =
   | { ok: false; conflict: PickupConflict }
   | { ok: false; error: string };
 
+/** The host's completion action once an async pickup resolves (§26.9). `stale` when the flow has left
+ *  the bootstrap step (terminated/navigated while the fire-and-forget pickup ran): the result must not
+ *  drive a turn, prompt a wipe, or roll back a step already left. */
+export type PickupAction =
+  | { kind: 'work'; status: string }
+  | { kind: 'conflict'; branch: string }
+  | { kind: 'revert'; reason: string }
+  | { kind: 'stale' };
+
+/** Decide what the host does with a resolved pickup result, given whether the flow is STILL on the
+ *  bootstrap step. Pure so the fire-and-forget completion glue is driven by a tested decision. */
+export function decidePickupAction(result: PickupResult, stillOnStep: boolean): PickupAction {
+  if (!stillOnStep) return { kind: 'stale' };
+  if (result.ok) return { kind: 'work', status: result.status };
+  if ('conflict' in result) return { kind: 'conflict', branch: result.conflict.branch };
+  return { kind: 'revert', reason: result.error };
+}
+
+// A safe git ref for the pickup branch: no leading `-` (git would parse it as an option — CWE-88), and
+// only characters valid in a branch name. `initial_branch_tpl` is untrusted repo-local config
+// (loopDef.ts), so the resolved branch is validated before it crosses to any git argv (CWE-78).
+const SAFE_BRANCH = /^[A-Za-z0-9._/][A-Za-z0-9._/-]*$/;
+
 /** A best-effort side-effect (assign / label) must not abort the bootstrap if GitHub rejects it —
  *  engine parity (pickup continues past a label failure; the publisher reconciles later). */
 async function bestEffort(op: () => Promise<void>): Promise<void> {
@@ -103,6 +126,9 @@ export async function runPickup(deps: PickupDeps, req: PickupRequest): Promise<P
     if (!base) return fail('could not resolve base branch');
 
     const branch = req.pickup.initialBranchTpl.replace('{issue}', String(req.issue));
+    // Reject a tainted branch before it reaches ANY git sink (CWE-88/78): a leading `-` or a ref
+    // metacharacter would let untrusted `initial_branch_tpl` config inject a git option.
+    if (!SAFE_BRANCH.test(branch)) return fail(`unsafe branch name from initial_branch_tpl: ${branch}`);
     // §26.9 on_conflict — a re-pickup whose branch already exists. `wipe-and-retry` is the vendored
     // policy, but the wipe is destructive + outward-facing (it deletes the remote branch and closes its
     // PR), so on mere detection the runner does NOTHING and returns a `conflict` for the operator to

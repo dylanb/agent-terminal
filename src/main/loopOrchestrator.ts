@@ -47,6 +47,17 @@ export function decideConsolidateOutcome(inputs: ConsolidateInputs): Consolidate
  *               prompt into the shell (the motivating leak); the run stops in `error` instead (D48). */
 export type HostedAgentState = 'idle' | 'busy' | 'absent';
 
+/** Derive the §26.2 presence fact from the OSC-133 command spans: a hosted agent occupies the prompt
+ *  unless the shell is sitting idle at a bare ready prompt. That idle case — instrumented spans exist but
+ *  NONE is running — is exactly where an injected turn would leak into the shell (the motivating defect),
+ *  so it is the only `false`. A running span (the agent is the foreground command) OR zero spans (the
+ *  agent is itself the PTY program, so there is no bash prompt to sit idle at — e.g. APP_SHELL=<agent>)
+ *  are both present. Coupling: this leans on the shim instrumenting every interactive shell (§15.5); a
+ *  future uninstrumented shell would produce zero spans and read as present. Pure so the gate is tested. */
+export function hostedAgentPresent(spans: readonly { running: boolean }[]): boolean {
+  return spans.length === 0 || spans.some((s) => s.running);
+}
+
 /** Map presence + activity to injection-readiness (§26.2). `agentPresent` is the host-supplied domain
  *  fact "a hosted agent occupies the prompt" (vs a bare shell where an injected turn would leak); how the
  *  host derives it (§26.2 command-span state) is not this function's concern. Absent → `absent` (never

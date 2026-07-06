@@ -77,8 +77,8 @@ import { createFlowEntryActions } from './flowEntryActions';
 import { parseAgentLoopState, watchAgentLoopState } from './agentLoopBridge';
 import { createLoopNotifier } from './loopNotifier';
 import { parseLoopDef, gateForStatus, reviewerRosterForPhase, normalizeConsolidatedVerdict, isPersonaClean, type LoopDef, type PickupContract } from './loopDef';
-import { runPickup, createRealPickupDeps } from './loopPickup';
-import { classifyHostedAgent, createTurnRunner, decideConsolidateOutcome, type TurnRunner } from './loopOrchestrator';
+import { runPickup, createRealPickupDeps, decidePickupAction } from './loopPickup';
+import { classifyHostedAgent, createTurnRunner, decideConsolidateOutcome, hostedAgentPresent, type TurnRunner } from './loopOrchestrator';
 import { composeWorkPrompt, composeSpawnReviewersPrompt, composeConsolidatePrompt } from './loopRecipe';
 import { allReviewsPresent, anyReviewPresent, consolidatedVerdict, consolidatedFindings, personaVerdict, carryForwardReviews, planDigest } from './reviewArtifacts';
 import { findingSignature, nextImpasse } from './findingSignature';
@@ -206,16 +206,8 @@ async function createWindow(): Promise<void> {
   });
   // Command history is live off the OSC-133 marks, not §8.3 quiescence (§15.5).
   tracker.onChange(() => send(CH.monitorCommandsChanged, { sessionId: SESSION_ID }));
-  // §26.2 — a hosted agent occupies the prompt UNLESS the shell is sitting idle at a bare ready prompt:
-  // an OSC-133-instrumented bash that has run commands (spans exist) with NONE currently running. That
-  // idle-prompt case is exactly where an injected turn would leak into the shell (the motivating defect),
-  // so it is `absent`. Both other cases are "present": a running span (the agent — Claude, or the e2e's
-  // typed fake REPL — is the foreground command), OR no span data at all (the agent is itself the PTY
-  // program, so there is no bash prompt to sit idle at — e.g. APP_SHELL=<agent>).
-  const hostedAgentPresent = (): boolean => {
-    const spans = tracker.summaries();
-    return spans.length === 0 || spans.some((s) => s.running);
-  };
+  // §26.2 presence (hostedAgentPresent) is derived from the live OSC-133 spans; the classification lives
+  // in loopOrchestrator so the leak-prevention gate is unit-tested away from this composition root.
   // §16.3: broadcast only on repo-key change, so the pane swaps its todo list once per `cd` across a
   // repo boundary rather than on every cwd move.
   // TODO(dylan): the full OSC-7 → cwd:changed → repo-list-swap loop through real
@@ -354,7 +346,7 @@ async function createWindow(): Promise<void> {
       if (activeTurn) turnSentinel.arm(turnDoneSentinel(activeTurn.turnKey));
       inject(prompt, { submit: true });
     },
-    hostedAgent: () => classifyHostedAgent(hostedAgentPresent(), agentActivity),
+    hostedAgent: () => classifyHostedAgent(hostedAgentPresent(tracker.summaries()), agentActivity),
     artifactPresent: () => {
       if (!activeTurn) return false;
       if (activeTurn.kind === 'reviewers') {
@@ -657,29 +649,39 @@ async function createWindow(): Promise<void> {
     void runPickup(createRealPickupDeps(repoKey), { repoDir: repoKey, issue, loopName, pickup, wipeConflict })
       .then((result) => {
         audit.recordCommand(repoKey, 'pickup', `pickup #${issue}`, result.ok ? 0 : 1);
-        if (result.ok) {
-          pushFlowChanged();
-          // §26.3 / L2 — bootstrap done; drive the work-{phase} turn. The phase is the one whose
-          // entry_status the freshly-written state.yaml now sits at (the bound def's first phase).
-          const phase = def.phases.find((p) => p.entryStatus === result.status)?.id ?? def.phases[0]?.id;
-          if (phase) startWorkTurn(repoKey, loopName, phase);
-          return;
+        // The pickup is fire-and-forget: the operator may have terminated or navigated the flow off this
+        // step while it ran. A stale result must not drive a turn, prompt a wipe, or roll back a step the
+        // flow already left (§26.9) — otherwise a terminated flow gets a work prompt injected against it.
+        const live = flow.state(repoKey);
+        const action = decidePickupAction(result, live.status === 'in_progress' && live.stepName === stepId);
+        switch (action.kind) {
+          case 'stale':
+            return;
+          case 'work': {
+            pushFlowChanged();
+            // §26.3 / L2 — bootstrap done; drive the work-{phase} turn. The phase is the one whose
+            // entry_status the freshly-written state.yaml now sits at (the bound def's first phase).
+            const phase = def.phases.find((p) => p.entryStatus === action.status)?.id ?? def.phases[0]?.id;
+            if (phase) startWorkTurn(repoKey, loopName, phase);
+            return;
+          }
+          case 'conflict':
+            // §26.9 wipe-and-retry — the branch already exists and NOTHING destructive was done. Keep the
+            // flow on the loop step and ask the operator to confirm the (destructive, outward-facing) wipe;
+            // the answer returns on flow:resolveBootstrapConflict.
+            pendingConflict.set(repoKey, job);
+            send(CH.flowOnBootstrapConflict, { sessionId: SESSION_ID, branch: action.branch });
+            return;
+          case 'revert':
+            // §26.9 — hard failure (dirty tree / unresolvable base / …). NEVER leave the flow stranded on
+            // the half-entered loop step: roll it back one step (Option C) and surface the reason in a
+            // blocking error dialog (CLAUDE.md — a critical-path failure the operator cannot see or fix by
+            // clicking must never be swallowed).
+            flow.revertStep(repoKey, stepId);
+            pushFlowChanged();
+            send(CH.flowOnBootstrapError, { sessionId: SESSION_ID, reason: action.reason });
+            return;
         }
-        if ('conflict' in result) {
-          // §26.9 wipe-and-retry — the branch already exists and NOTHING destructive was done. Keep the
-          // flow on the loop step and ask the operator to confirm the (destructive, outward-facing) wipe;
-          // the answer returns on flow:resolveBootstrapConflict.
-          pendingConflict.set(repoKey, job);
-          send(CH.flowBootstrapConflict, { sessionId: SESSION_ID, branch: result.conflict.branch });
-          return;
-        }
-        // §26.9 — hard failure (dirty tree / unresolvable base / …). NEVER leave the flow stranded on the
-        // half-entered loop step: roll it back one step (Option C) and surface the reason in a blocking
-        // error dialog (CLAUDE.md — a critical-path failure the operator cannot see or fix by clicking
-        // must never be swallowed). revertStep is a no-op if the flow already moved.
-        flow.revertStep(repoKey, stepId);
-        pushFlowChanged();
-        send(CH.flowBootstrapError, { sessionId: SESSION_ID, reason: result.error });
       });
   };
 

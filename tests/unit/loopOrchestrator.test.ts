@@ -3,6 +3,7 @@ import {
   classifyHostedAgent,
   createTurnRunner,
   decideConsolidateOutcome,
+  hostedAgentPresent,
   type TurnRunnerDeps,
 } from '../../src/main/loopOrchestrator';
 
@@ -19,6 +20,24 @@ describe('classifyHostedAgent (§26.2 presence + idleness)', () => {
   });
   it('a present agent still emitting output is busy (mid-turn) — defer, do not inject', () => {
     expect(classifyHostedAgent(true, 'active')).toBe('busy');
+  });
+});
+
+// §26.2 — deriving "a hosted agent occupies the prompt" from the OSC-133 command spans. A running span
+// is the foreground agent; ZERO spans means the agent is itself the PTY program (no bash prompt to sit
+// idle at — e.g. APP_SHELL=<agent>), also present. The absent case is the leak-prone one: instrumented
+// spans exist but NONE is running — a bare ready prompt where an injected turn would type into the shell.
+describe('hostedAgentPresent (§26.2 — present iff no bare idle prompt)', () => {
+  it('no span data at all is present (the agent is the PTY program, no bash prompt)', () => {
+    expect(hostedAgentPresent([])).toBe(true);
+  });
+  it('a running span is present (the agent is the foreground command)', () => {
+    expect(hostedAgentPresent([{ running: true }])).toBe(true);
+    expect(hostedAgentPresent([{ running: false }, { running: true }])).toBe(true);
+  });
+  it('spans exist but none running is absent (a bare ready prompt — the leak case)', () => {
+    expect(hostedAgentPresent([{ running: false }])).toBe(false);
+    expect(hostedAgentPresent([{ running: false }, { running: false }])).toBe(false);
   });
 });
 

@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { runPickup, type PickupGit, type PickupGitHub } from '../../src/main/loopPickup';
+import { decidePickupAction, runPickup, type PickupGit, type PickupGitHub, type PickupResult } from '../../src/main/loopPickup';
 import type { LoopStateWrite } from '../../src/main/loopStateWriter';
 import { parseLoopDef, type PickupContract } from '../../src/main/loopDef';
 
@@ -191,5 +191,64 @@ describe('in-app pickup runner (§26.9 / L1)', () => {
       expect(g.calls).not.toContain('wipe:plan-loop/issue-176');
       expect(written).toBeNull();
     });
+  });
+
+  // The resolved branch is templated from `initial_branch_tpl`, which the repo-local LoopDef yaml
+  // supplies and the codebase treats as untrusted (loopDef.ts). It reaches git as an argv positional
+  // (`ls-remote`/`branch --list`/`branch -D`/`push --delete`); git permutes options among positionals,
+  // so a value like `--upload-pack=<cmd>` would be parsed as an OPTION, not a ref (CWE-88 → CWE-78).
+  describe('branch-name safety (arg injection, CWE-88)', () => {
+    it('rejects a branch that could be parsed as a git option, reaching NO git/gh sink and writing no state', async () => {
+      const g = makeFakeGit();
+      const h = makeFakeGitHub();
+      const result = await runPickup(deps(g.git, h.github), {
+        ...req(),
+        pickup: { ...planPickup, initialBranchTpl: '--upload-pack=touch{issue}' },
+      });
+      expect(result.ok).toBe(false);
+      expect(g.calls).toEqual([]); // never reached branchExists/create/commit/push/wipe with the tainted value
+      expect(h.calls).toEqual([]); // no issue view/assign/label, no PR create
+      expect(written).toBeNull();
+    });
+
+    it('rejects a branch with a shell/ref metacharacter (space, semicolon) the same way', async () => {
+      const g = makeFakeGit();
+      const h = makeFakeGitHub();
+      const result = await runPickup(deps(g.git, h.github), {
+        ...req(),
+        pickup: { ...planPickup, initialBranchTpl: 'plan; rm -rf {issue}' },
+      });
+      expect(result.ok).toBe(false);
+      expect(g.calls).toEqual([]);
+      expect(written).toBeNull();
+    });
+  });
+});
+
+// §26.9 — the async pickup is fire-and-forget: its `.then()` may resolve AFTER the operator terminated
+// or navigated the flow off the bootstrap step. `decidePickupAction` names the decision the host glue
+// makes on completion, so a stale result drops instead of driving a turn / prompting a wipe / rolling
+// back a step the flow already left (the never-strand rule applied to the completion path).
+describe('decidePickupAction (stale-result guard, §26.9)', () => {
+  const ok: PickupResult = { ok: true, pr: 7, branch: 'b', status: 'plan-draft' };
+  const conflict: PickupResult = { ok: false, conflict: { branch: 'b' } };
+  const hardFail: PickupResult = { ok: false, error: 'working tree is not clean' };
+
+  it('drops ANY result as stale when the flow no longer sits on the bootstrap step', () => {
+    expect(decidePickupAction(ok, false)).toEqual({ kind: 'stale' });
+    expect(decidePickupAction(conflict, false)).toEqual({ kind: 'stale' });
+    expect(decidePickupAction(hardFail, false)).toEqual({ kind: 'stale' });
+  });
+
+  it('drives the work turn on success while still on the step', () => {
+    expect(decidePickupAction(ok, true)).toEqual({ kind: 'work', status: 'plan-draft' });
+  });
+
+  it('prompts the wipe on a conflict while still on the step', () => {
+    expect(decidePickupAction(conflict, true)).toEqual({ kind: 'conflict', branch: 'b' });
+  });
+
+  it('rolls back + surfaces the reason on a hard failure while still on the step', () => {
+    expect(decidePickupAction(hardFail, true)).toEqual({ kind: 'revert', reason: 'working tree is not clean' });
   });
 });

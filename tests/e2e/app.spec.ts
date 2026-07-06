@@ -2620,6 +2620,15 @@ test('a work turn with NO hosted agent at the prompt errors instead of leaking t
   await expect(loopPanel()).toContainText('no hosted agent at the prompt', { timeout: 10_000 });
   await expect(loopPanel().locator('[data-loop-retry]')).toBeVisible();
 
+  // D48 recovery — the whole point of Retry: start the agent so the prompt is now injectable, click Retry,
+  // and observe the run actually RE-DRIVE (leave `error`, inject the work turn into the agent, produce
+  // plan.md — which did not exist while the shell was bare). A regressed retryActiveTurn would leave the
+  // run stuck in `error` with plan.md still absent, so this observes the recovery, not just the button.
+  await typeCommand('fake-agent'); // the hosted agent REPL now owns the prompt
+  await loopPanel().locator('[data-loop-retry]').click();
+  await expect.poll(() => readFileSync(stateFile, 'utf8'), { timeout: 20_000 }).not.toContain('status: error');
+  await expect.poll(() => existsSync(join(repo, '.agent-loop', 'plan.md')), { timeout: 20_000 }).toBe(true);
+
   await app.close();
   rmSync(repo, { recursive: true, force: true });
   rmSync(home, { recursive: true, force: true });

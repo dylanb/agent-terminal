@@ -175,5 +175,41 @@ describe('confirm dialog (#26 AC3/AC4/AC13)', () => {
       expect(onConfirm).toHaveBeenCalledTimes(1);
       expect(onCancel).not.toHaveBeenCalled();
     });
+
+    // The Terminate confirm and the §26.9 bootstrap-conflict confirm share one dialog instance. If a new
+    // dialog is rendered while an unanswered one is open, the displaced dialog's onCancel must still run —
+    // otherwise a conflict confirm silently displaced by another dialog would leave main's pendingConflict
+    // set and the flow un-rolled-back (the never-strand rule).
+    it('fires the displaced dialog\'s onCancel when a new dialog replaces an open, unanswered one', () => {
+      const d = createConfirmDialog(host);
+      const onCancelA = vi.fn();
+      const onCancelB = vi.fn();
+      const onConfirmB = vi.fn();
+      d.render(opts({ title: 'Dialog A', onCancel: onCancelA }));
+      d.render(opts({ title: 'Dialog B', onCancel: onCancelB, onConfirm: onConfirmB }));
+      expect(onCancelA).toHaveBeenCalledTimes(1); // A was declined by being replaced
+      expect(onCancelB).not.toHaveBeenCalled();
+      expect(onConfirmB).not.toHaveBeenCalled();
+      expect(host.querySelector('.flow-modal')?.textContent).toContain('Dialog B'); // B is now shown
+    });
+
+    it('does NOT re-fire onCancel of a dialog already dismissed via Cancel when a new dialog opens', () => {
+      const d = createConfirmDialog(host);
+      const onCancelA = vi.fn();
+      d.render(opts({ title: 'Dialog A', onCancel: onCancelA }));
+      cancelBtn()!.click(); // A dismissed → onCancelA fires once, A closed
+      expect(onCancelA).toHaveBeenCalledTimes(1);
+      d.render(opts({ title: 'Dialog B' }));
+      expect(onCancelA).toHaveBeenCalledTimes(1); // NOT re-fired by the later render
+    });
+
+    it('does NOT fire onCancel of a CONFIRMED dialog when a new dialog replaces it', () => {
+      const d = createConfirmDialog(host);
+      const onCancelA = vi.fn();
+      d.render(opts({ title: 'Dialog A', onCancel: onCancelA, onConfirm: vi.fn() }));
+      confirmBtn()!.click(); // A confirmed + closed
+      d.render(opts({ title: 'Dialog B' }));
+      expect(onCancelA).not.toHaveBeenCalled();
+    });
   });
 });

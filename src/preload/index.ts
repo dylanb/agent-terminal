@@ -145,13 +145,13 @@ const flowApi: FlowApi = {
   },
   onBootstrapError: (cb) => {
     const handler = (_e: unknown, msg: FlowBootstrapErrorMsg): void => cb(msg.reason);
-    ipcRenderer.on(CH.flowBootstrapError, handler);
-    return () => ipcRenderer.removeListener(CH.flowBootstrapError, handler);
+    ipcRenderer.on(CH.flowOnBootstrapError, handler);
+    return () => ipcRenderer.removeListener(CH.flowOnBootstrapError, handler);
   },
   onBootstrapConflict: (cb) => {
     const handler = (_e: unknown, msg: FlowBootstrapConflictMsg): void => cb(msg.branch);
-    ipcRenderer.on(CH.flowBootstrapConflict, handler);
-    return () => ipcRenderer.removeListener(CH.flowBootstrapConflict, handler);
+    ipcRenderer.on(CH.flowOnBootstrapConflict, handler);
+    return () => ipcRenderer.removeListener(CH.flowOnBootstrapConflict, handler);
   },
   resolveBootstrapConflict: (repoKey, wipe) =>
     ipcRenderer.send(CH.flowResolveBootstrapConflict, { sessionId: SESSION_ID, repoKey, wipe }),
