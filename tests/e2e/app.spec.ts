@@ -2437,9 +2437,19 @@ test('a pickup that completes AFTER the operator terminates the flow drops as st
   await expect(flowControl()).toHaveText('Start'); // flow terminated → not_started
 
   // Pickup runs to completion past the sleep and writes state.yaml — the positive signal its async `.then`
-  // has executed. The stale-guard must have dropped the result: NO work turn ran, so no plan.md, no turn
-  // audit event, and nothing leaked into the shell.
+  // has executed.
   await expect.poll(() => existsSync(stateFile), { timeout: 20_000 }).toBe(true);
+
+  // A FIFO happens-after barrier so the negative assertions can't false-pass on the injection round-trip's
+  // latency: the fake-agent REPL reads its stdin in order, and no `/clear` precedes the FIRST work turn
+  // (startWorkTurn does not clear). So a `/clear` typed now is drained AFTER any work prompt a broken guard
+  // leaked — meaning `clear-seen` appears only once plan.md would already have been written. Waiting on it
+  // converts the poll's incidental margin into an engineered one.
+  await typeCommand('/clear');
+  await expect.poll(() => existsSync(join(repo, '.agent-loop', 'clear-seen')), { timeout: 10_000 }).toBe(true);
+
+  // The stale-guard must have dropped the result: NO work turn ran, so no plan.md, no turn audit event,
+  // and nothing leaked into the shell.
   expect(existsSync(join(repo, '.agent-loop', 'plan.md'))).toBe(false); // stale → no work turn injected
   expect(turnEvents(home, repo)).toEqual([]); // no turn was ever requested
   await expect(termRows()).not.toContainText('# Work agent'); // nothing leaked into the shell
