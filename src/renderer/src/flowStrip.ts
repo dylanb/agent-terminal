@@ -66,7 +66,15 @@ export interface FlowStrip {
  *  not the strip. */
 export type FlowStripDeps = Omit<
   FlowApi,
-  'onRevealLoop' | 'githubRef' | 'openExternal' | 'markTurnComplete' | 'gateDecision' | 'retryTurn'
+  | 'onRevealLoop'
+  | 'onBootstrapError'
+  | 'onBootstrapConflict'
+  | 'resolveBootstrapConflict'
+  | 'githubRef'
+  | 'openExternal'
+  | 'markTurnComplete'
+  | 'gateDecision'
+  | 'retryTurn'
 > & {
   /** The docked loop panel's element id, injected by the composition root so the read-out's
    *  `aria-controls` is instance-scoped — the organism never bakes in a document-level id

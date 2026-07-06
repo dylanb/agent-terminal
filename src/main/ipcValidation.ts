@@ -18,6 +18,7 @@ import {
   type FlowRequestMsg,
   type FlowProvideInputMsg,
   type FlowGateDecisionMsg,
+  type FlowResolveBootstrapConflictMsg,
   type FlowGithubRefMsg,
   type AppOpenExternalMsg,
   type TodoTemplateListMsg,
@@ -153,6 +154,13 @@ export function isValidFlowGateDecision(m: unknown): m is FlowGateDecisionMsg {
     (GATE_DECISION_OPTIONS as readonly unknown[]).includes(m.option) &&
     (m.note === undefined || typeof m.note === 'string')
   );
+}
+
+/** flow:resolveBootstrapConflict — the operator's answer to a §26.9 bootstrap conflict. `wipe` selects
+ *  wipe-and-retry (true) vs roll-back (false); `repoKey` becomes a filesystem path, so it gets the same
+ *  safe-path guard as the other flow channels. */
+export function isValidFlowResolveBootstrapConflict(m: unknown): m is FlowResolveBootstrapConflictMsg {
+  return isRecord(m) && isLiveSession(m) && isSafeRepoKey(m.repoKey) && typeof m.wipe === 'boolean';
 }
 
 /** flow:githubRef — resolve a ref's detail for the popout (§24.2.3 T7). `kind` is the issue/PR

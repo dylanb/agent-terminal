@@ -62,3 +62,42 @@ describe('modal shell focus trap honors all focusable elements', () => {
     expect(document.activeElement).toBe(last());
   });
 });
+
+// §26.9 — an optional onClose lets a caller (confirmDialog) distinguish a user DISMISS (Escape / scrim /
+// the build's close) from its own programmatic teardown (render(null) / dispose), so a dialog that must
+// report cancellation to main can. onClose fires exactly on a user-driven close of an open dialog.
+describe('modal shell onClose (user-dismiss signal)', () => {
+  const scrim = () => host.querySelector<HTMLElement>('.flow-scrim')!;
+
+  it('fires onClose when the open dialog is dismissed via Escape', () => {
+    let closes = 0;
+    createModalShell(host, 'm', () => void closes++).render(cardBuild());
+    modal().dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    expect(closes).toBe(1);
+  });
+
+  it('fires onClose when the scrim is clicked', () => {
+    let closes = 0;
+    createModalShell(host, 'm', () => void closes++).render(cardBuild());
+    scrim().click();
+    expect(closes).toBe(1);
+  });
+
+  it('does NOT fire onClose on programmatic render(null) or dispose (caller teardown, not a dismiss)', () => {
+    let closes = 0;
+    const shell = createModalShell(host, 'm', () => void closes++);
+    shell.render(cardBuild());
+    shell.render(null);
+    expect(closes).toBe(0);
+    shell.render(cardBuild());
+    shell.dispose();
+    expect(closes).toBe(0);
+  });
+
+  it('does not fire onClose when nothing is open', () => {
+    let closes = 0;
+    const shell = createModalShell(host, 'm', () => void closes++);
+    shell.render(null); // never opened
+    expect(closes).toBe(0);
+  });
+});

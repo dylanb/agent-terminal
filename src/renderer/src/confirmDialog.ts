@@ -9,6 +9,9 @@ export interface ConfirmDialogOptions {
   message: string;
   confirmLabel: string;
   onConfirm: () => void;
+  /** Fired when the operator DECLINES — Cancel, Escape, or scrim — but never on confirm (§26.9). Lets a
+   *  caller react to a dismissal (e.g. roll the flow back); omit when a dismiss needs no action. */
+  onCancel?: () => void;
 }
 
 export interface ConfirmDialog {
@@ -19,10 +22,18 @@ export interface ConfirmDialog {
 }
 
 export function createConfirmDialog(host: HTMLElement): ConfirmDialog {
-  const shell = createModalShell(host, 'confirm-dialog-title');
+  // Track the open dialog's options + whether it was confirmed, so a user-dismiss (onClose fired by the
+  // shell) runs onCancel while a confirm does not (§26.9).
+  let pending: ConfirmDialogOptions | null = null;
+  let confirmed = false;
+  const shell = createModalShell(host, 'confirm-dialog-title', () => {
+    if (!confirmed) pending?.onCancel?.();
+  });
   return {
     render(opts) {
       if (!opts) return shell.render(null);
+      pending = opts;
+      confirmed = false;
       shell.render(({ doc, titleId, close }) => {
         const describedById = `${titleId}-msg`;
         const card = doc.createElement('div');
@@ -48,6 +59,7 @@ export function createConfirmDialog(host: HTMLElement): ConfirmDialog {
         confirm.textContent = opts.confirmLabel;
         confirm.addEventListener('click', () => {
           const run = opts.onConfirm;
+          confirmed = true; // suppress the shell's onClose → onCancel for this (confirmed) close
           close();
           run();
         });

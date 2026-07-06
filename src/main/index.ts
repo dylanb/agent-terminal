@@ -39,6 +39,7 @@ import {
   isValidFlowRequest,
   isValidFlowProvideInput,
   isValidFlowGateDecision,
+  isValidFlowResolveBootstrapConflict,
   isValidFlowGithubRef,
   openExternalTarget,
   isValidInject,
@@ -75,7 +76,7 @@ import { auditRootDir } from './auditPaths';
 import { createFlowEntryActions } from './flowEntryActions';
 import { parseAgentLoopState, watchAgentLoopState } from './agentLoopBridge';
 import { createLoopNotifier } from './loopNotifier';
-import { parseLoopDef, gateForStatus, reviewerRosterForPhase, normalizeConsolidatedVerdict, isPersonaClean } from './loopDef';
+import { parseLoopDef, gateForStatus, reviewerRosterForPhase, normalizeConsolidatedVerdict, isPersonaClean, type LoopDef, type PickupContract } from './loopDef';
 import { runPickup, createRealPickupDeps } from './loopPickup';
 import { classifyHostedAgent, createTurnRunner, decideConsolidateOutcome, type TurnRunner } from './loopOrchestrator';
 import { composeWorkPrompt, composeSpawnReviewersPrompt, composeConsolidatePrompt } from './loopRecipe';
@@ -638,6 +639,50 @@ async function createWindow(): Promise<void> {
   // OUT OF BAND, replacing the retired §24.2.3 T3 injected `agent-loop pickup`. Fire-and-forget: on
   // completion it records an audit command event and pushes flow:onStateChanged so the T2 mirror
   // re-pulls and renders the freshly-written status. `audit` is built below but referenced lazily here.
+  // The context one pickup run needs, captured so a wipe-and-retry conflict (§26.9) can re-fire the exact
+  // same bootstrap after the operator confirms. `stepId` is the loop step to roll back to on failure/decline.
+  interface PickupJob {
+    repoKey: string;
+    stepId: string;
+    issue: number;
+    loopName: string;
+    def: LoopDef;
+    pickup: PickupContract;
+  }
+  // Conflicts awaiting the operator's wipe/cancel answer, keyed by repo (one active flow per repo).
+  const pendingConflict = new Map<string, PickupJob>();
+
+  const firePickup = (job: PickupJob, wipeConflict: boolean): void => {
+    const { repoKey, stepId, issue, loopName, def, pickup } = job;
+    void runPickup(createRealPickupDeps(repoKey), { repoDir: repoKey, issue, loopName, pickup, wipeConflict })
+      .then((result) => {
+        audit.recordCommand(repoKey, 'pickup', `pickup #${issue}`, result.ok ? 0 : 1);
+        if (result.ok) {
+          pushFlowChanged();
+          // §26.3 / L2 — bootstrap done; drive the work-{phase} turn. The phase is the one whose
+          // entry_status the freshly-written state.yaml now sits at (the bound def's first phase).
+          const phase = def.phases.find((p) => p.entryStatus === result.status)?.id ?? def.phases[0]?.id;
+          if (phase) startWorkTurn(repoKey, loopName, phase);
+          return;
+        }
+        if ('conflict' in result) {
+          // §26.9 wipe-and-retry — the branch already exists and NOTHING destructive was done. Keep the
+          // flow on the loop step and ask the operator to confirm the (destructive, outward-facing) wipe;
+          // the answer returns on flow:resolveBootstrapConflict.
+          pendingConflict.set(repoKey, job);
+          send(CH.flowBootstrapConflict, { sessionId: SESSION_ID, branch: result.conflict.branch });
+          return;
+        }
+        // §26.9 — hard failure (dirty tree / unresolvable base / …). NEVER leave the flow stranded on the
+        // half-entered loop step: roll it back one step (Option C) and surface the reason in a blocking
+        // error dialog (CLAUDE.md — a critical-path failure the operator cannot see or fix by clicking
+        // must never be swallowed). revertStep is a no-op if the flow already moved.
+        flow.revertStep(repoKey, stepId);
+        pushFlowChanged();
+        send(CH.flowBootstrapError, { sessionId: SESSION_ID, reason: result.error });
+      });
+  };
+
   const runPickupForStep = (step: FlowStepDef, inputs: Record<string, string>): void => {
     const repoKey = transitioningRepo;
     if (!repoKey || step.kind !== 'loop' || !step.loop) return;
@@ -647,18 +692,22 @@ async function createWindow(): Promise<void> {
     const raw = ticketInput ? inputs[ticketInput.name] : undefined;
     const issue = raw && /^\d+$/.test(raw.trim()) ? Number(raw.trim()) : null;
     if (issue === null) return; // cannot bootstrap without a resolved github-ticket issue number
-    const loopName = step.loop;
-    void runPickup(createRealPickupDeps(repoKey), { repoDir: repoKey, issue, loopName, pickup: def.pickup })
-      .then((result) => {
-        audit.recordCommand(repoKey, 'pickup', `pickup #${issue}`, result.ok ? 0 : 1);
-        pushFlowChanged();
-        // §26.3 / L2 — bootstrap done; drive the work-{phase} turn. The phase is the one whose
-        // entry_status the freshly-written state.yaml now sits at (the bound def's first phase).
-        if (result.ok) {
-          const phase = def.phases.find((p) => p.entryStatus === result.status)?.id ?? def.phases[0]?.id;
-          if (phase) startWorkTurn(repoKey, loopName, phase);
-        }
-      });
+    firePickup({ repoKey, stepId: step.id, issue, loopName: step.loop, def, pickup: def.pickup }, false);
+  };
+
+  // §26.9 — the operator's answer to a bootstrap conflict. `wipe` re-fires the SAME job with the wipe
+  // enabled; declining rolls the flow back one step (the flow was held on the loop step while the confirm
+  // was up). A stale answer (nothing pending) is inert.
+  const resolveBootstrapConflict = (repoKey: string, wipe: boolean): void => {
+    const job = pendingConflict.get(repoKey);
+    if (!job) return;
+    pendingConflict.delete(repoKey);
+    if (wipe) {
+      firePickup(job, true);
+      return;
+    }
+    flow.revertStep(repoKey, job.stepId);
+    pushFlowChanged();
   };
 
   // §18.6/§19.3: a manual step's only automatic entry action is injecting its `skill`, refused over a
@@ -910,6 +959,10 @@ async function createWindow(): Promise<void> {
       // starts Claude for a `no hosted agent` stop).
       [CH.flowRetryTurn]: (_e, m) => {
         if (isValidFlowRequest(m)) retryActiveTurn(m.repoKey);
+      },
+      // §26.9 — the operator's wipe/cancel answer to a bootstrap conflict.
+      [CH.flowResolveBootstrapConflict]: (_e, m) => {
+        if (isValidFlowResolveBootstrapConflict(m)) resolveBootstrapConflict(m.repoKey, m.wipe);
       },
       // Clipboard is an OS resource owned by main (§7.7); the sandboxed preload can't reach it.
       [CH.clipboardWrite]: (_e, m) => {

@@ -199,6 +199,13 @@ export interface FlowMachine {
   /** done → in_progress; reverts a manual advance WITHOUT re-running the step's entry actions
    *  (the inverse of advance, not a restart). Throws on any other status (inert on error). */
   undo(): FlowStateView;
+  /** Roll a half-entered bootstrap step back one step when its async pickup failed (§26.9): in_progress
+   *  at `fromStepId` → in_progress at the previous step, re-running NO entry actions and PRESERVING
+   *  resolved inputs, so the operator can fix the cause and re-advance. A first-step loop (no previous
+   *  step) reverts to not_started — a recoverable state (Start re-fires pickup). A NO-OP GUARD, never a
+   *  throw: it fires from an async `.then()`, so a stale call (the flow already moved off `fromStepId`,
+   *  or is not in_progress) returns the current view untouched rather than raising. */
+  revertStep(fromStepId: string): FlowStateView;
   /** in_progress|done → not_started (#26): abandons the flow and discards carried inputs. Throws
    *  from not_started (inert on error). */
   terminate(): FlowStateView;
@@ -246,7 +253,7 @@ export function createFlowMachine(
     });
     // Every transition is inert in the error state, and crucially never persists — so a bad flow.yaml
     // can't overwrite a good on-disk progression, and a racing caller can't throw or escape the error.
-    return { state: view, start: view, advance: view, restart: view, undo: view, terminate: view, provideInput: view };
+    return { state: view, start: view, advance: view, restart: view, undo: view, revertStep: view, terminate: view, provideInput: view };
   }
 
   const def = load.definition;
@@ -395,6 +402,15 @@ export function createFlowMachine(
       persist();
       return view();
     },
+    revertStep: (fromStepId) => {
+      // Guard, don't throw: an async bootstrap failure may arrive after the operator terminated or
+      // navigated, so a mismatch is inert rather than an unhandled rejection (§26.9).
+      if (status !== 'in_progress' || current().id !== fromStepId) return view();
+      if (index > 0) index -= 1;
+      else status = 'not_started'; // a first-step loop has no previous step; not_started is recoverable
+      persist();
+      return view(); // no enter(): a rollback restores the prior step, it does not re-run its entry actions
+    },
     terminate: () => {
       if (status !== 'in_progress' && status !== 'done') {
         throw new Error(`illegal flow transition: cannot terminate from ${status}`);
@@ -425,6 +441,8 @@ export interface FlowManager {
   advance(repoKey: string): FlowStateView;
   restart(repoKey: string): FlowStateView;
   undo(repoKey: string): FlowStateView;
+  /** Roll a repo's half-entered bootstrap step back one step after a failed pickup (§26.9). */
+  revertStep(repoKey: string, fromStepId: string): FlowStateView;
   terminate(repoKey: string): FlowStateView;
   provideInput(repoKey: string, values: Record<string, string>): FlowStateView;
 }
@@ -477,6 +495,7 @@ export function createFlowManager(deps: FlowManagerDeps): FlowManager {
     advance: (k) => machineFor(k).advance(),
     restart: (k) => machineFor(k).restart(),
     undo: (k) => machineFor(k).undo(),
+    revertStep: (k, fromStepId) => machineFor(k).revertStep(fromStepId),
     terminate: (k) => machineFor(k).terminate(),
     provideInput: (k, values) => machineFor(k).provideInput(values),
   };

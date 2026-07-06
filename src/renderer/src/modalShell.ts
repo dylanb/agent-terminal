@@ -23,18 +23,26 @@ export interface ModalShell {
 
 let modalSeq = 0;
 
-export function createModalShell(host: HTMLElement, idPrefix: string): ModalShell {
+export function createModalShell(host: HTMLElement, idPrefix: string, onClose?: () => void): ModalShell {
   const doc = host.ownerDocument;
   const titleId = `${idPrefix}-${modalSeq++}`;
   let opener: HTMLElement | null = null;
-  const close = (): void => {
+  const clear = (): void => {
     host.replaceChildren();
     opener?.focus();
     opener = null;
   };
+  // `close` is the USER-dismiss path (Escape / scrim / the build's close): it fires `onClose` so a caller
+  // can distinguish a dismissal from its own programmatic teardown (`render(null)` / `dispose`), which do
+  // not. Guarded on wasOpen so a close of an already-closed dialog is silent.
+  const close = (): void => {
+    const wasOpen = host.firstChild !== null;
+    clear();
+    if (wasOpen) onClose?.();
+  };
   return {
     render(build) {
-      if (!build) return close();
+      if (!build) return clear();
       const wasOpen = host.firstChild !== null;
       host.replaceChildren();
       if (!wasOpen) opener = doc.activeElement as HTMLElement | null;

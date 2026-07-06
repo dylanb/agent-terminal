@@ -53,6 +53,9 @@ export const CH = {
   flowProvideInput: 'flow:provideInput',
   flowOnStateChanged: 'flow:onStateChanged',
   flowRevealLoop: 'flow:revealLoop',
+  flowBootstrapError: 'flow:onBootstrapError',
+  flowBootstrapConflict: 'flow:onBootstrapConflict',
+  flowResolveBootstrapConflict: 'flow:resolveBootstrapConflict',
   flowGithubRef: 'flow:githubRef',
   flowMarkTurnComplete: 'flow:markTurnComplete',
   flowGateDecision: 'flow:gateDecision',
@@ -387,6 +390,8 @@ export interface ChannelPayloads {
   'flow:onStateChanged': FlowStateChangedMsg;
   'menu:edit': MenuEditMsg;
   'flow:revealLoop': FlowRevealLoopMsg;
+  'flow:onBootstrapError': FlowBootstrapErrorMsg;
+  'flow:onBootstrapConflict': FlowBootstrapConflictMsg;
 }
 
 export type SendChannel = keyof ChannelPayloads;
@@ -595,6 +600,35 @@ export interface FlowStateChangedMsg {
  *  main-side effect; carries no payload beyond the session. */
 export interface FlowRevealLoopMsg {
   sessionId: SessionId;
+}
+
+/** flow:onBootstrapError push (§26.9): main signals that a loop step's async in-app pickup FAILED and the
+ *  flow was rolled back to the previous step (revertStep). The failure is never silent — the renderer
+ *  raises a blocking error dialog carrying `reason` (the human-readable cause: dirty tree, unresolvable
+ *  base, conflicting branch). Distinct from the transient strip `notice`: an async failure has no
+ *  transition response to ride, so it needs its own push. */
+export interface FlowBootstrapErrorMsg {
+  sessionId: SessionId;
+  reason: string;
+}
+
+/** flow:onBootstrapConflict push (§26.9): main signals that an in-app pickup hit an EXISTING branch/PR
+ *  under a `wipe-and-retry` policy. Nothing destructive has been done — the flow stays on the loop step
+ *  and the renderer raises a confirm dialog offering to wipe `branch` (which deletes it on origin and
+ *  closes its PR) and retry. The operator's answer returns on `flow:resolveBootstrapConflict`. */
+export interface FlowBootstrapConflictMsg {
+  sessionId: SessionId;
+  branch: string;
+}
+
+/** flow:resolveBootstrapConflict request (§26.9): the operator's answer to a bootstrap conflict. `wipe`
+ *  true → the app wipes the conflicting branch and re-runs pickup; false (Cancel/dismiss) → the app rolls
+ *  the flow back one step (the §26.9 rollback). One-way; the result surfaces through the state.yaml watch
+ *  → flow:onStateChanged (on wipe success) or a rolled-back flow:state re-pull (on cancel). */
+export interface FlowResolveBootstrapConflictMsg {
+  sessionId: SessionId;
+  repoKey: string;
+  wipe: boolean;
 }
 
 /** flow:state/start/advance/restart request. `repoKey` scopes the flow to the terminal's current
@@ -820,6 +854,17 @@ export interface FlowApi {
   /** Subscribe to main's flow:revealLoop push (§24.2.3 T4): `cb` fires when the OS attention
    *  notification was activated and the loop read-out must be revealed. Returns an unsubscribe. */
   onRevealLoop(cb: () => void): () => void;
+  /** Subscribe to main's flow:onBootstrapError push (§26.9): `cb` fires with the human-readable `reason`
+   *  when a loop step's async pickup failed and the flow was rolled back; the renderer raises a blocking
+   *  error dialog. Returns an unsubscribe. */
+  onBootstrapError(cb: (reason: string) => void): () => void;
+  /** Subscribe to main's flow:onBootstrapConflict push (§26.9): `cb` fires with the conflicting `branch`
+   *  when a pickup hit an existing branch under a wipe-and-retry policy; the renderer raises a confirm
+   *  dialog and answers via `resolveBootstrapConflict`. Returns an unsubscribe. */
+  onBootstrapConflict(cb: (branch: string) => void): () => void;
+  /** Answer a bootstrap conflict (§26.9): `wipe` true wipes the branch + retries, false rolls the flow
+   *  back. One-way; the result surfaces through the state.yaml watch / a rolled-back state re-pull. */
+  resolveBootstrapConflict(repoKey: string, wipe: boolean): void;
   /** Resolve a GitHub ref's title/body/url for the popout (§24.2.3 T7), best-effort: null when it
    *  can't be resolved (no `gh`, not a GitHub repo, offline) so the popout shows the number alone. */
   githubRef(repoKey: string, kind: GithubRefKind, number: number): Promise<GithubRef | null>;

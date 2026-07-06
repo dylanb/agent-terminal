@@ -17,6 +17,8 @@ function makeFakeGit(overrides: Partial<Record<string, unknown>> = {}): { git: P
   const git: PickupGit = {
     isCleanTree: async () => ('clean' in overrides ? (overrides.clean as boolean) : true),
     resolveBaseBranch: async () => ('base' in overrides ? (overrides.base as string | null) : 'main'),
+    branchExists: async () => ('branchExists' in overrides ? (overrides.branchExists as boolean) : false),
+    wipeConflictingBranch: async (branch) => void calls.push(`wipe:${branch}`),
     createBranchFromBase: async (branch, base) => void calls.push(`branch:${branch}<-${base}`),
     commitEmptyStart: async (msg) => void calls.push(`commit:${msg.split('\n')[0]}`),
     pushBranchUpstream: async (branch) => void calls.push(`push:${branch}`),
@@ -144,5 +146,50 @@ describe('in-app pickup runner (§26.9 / L1)', () => {
     const h = makeFakeGitHub();
     await runPickup(deps(g.git, h.github), req());
     expect(wiped).toBe(1);
+  });
+
+  // §26.9 on_conflict — a re-pickup whose branch already exists. The vendored plan-loop declares
+  // `on_conflict: wipe-and-retry`; the runner asks first (a `conflict` result) rather than destroying the
+  // branch silently, and wipes only when told to (`wipeConflict`), matching the confirm-first UX.
+  describe('existing-branch conflict (on_conflict: wipe-and-retry)', () => {
+    it('asks first: an existing branch returns a conflict result with NO destructive op and NO state write', async () => {
+      const g = makeFakeGit({ branchExists: true });
+      const h = makeFakeGitHub();
+      const result = await runPickup(deps(g.git, h.github), req());
+      expect(result).toEqual({ ok: false, conflict: { branch: 'plan-loop/issue-176' } });
+      expect(g.calls).not.toContain('wipe:plan-loop/issue-176'); // never wiped without confirmation
+      expect(g.calls).not.toContain('branch:plan-loop/issue-176<-main');
+      expect(h.calls).not.toContain('pr-create:plan-loop/issue-176');
+      expect(written).toBeNull();
+    });
+
+    it('wipes the conflicting branch, then bootstraps cleanly, when told to (wipeConflict)', async () => {
+      const g = makeFakeGit({ branchExists: true });
+      const h = makeFakeGitHub();
+      const result = await runPickup(deps(g.git, h.github), { ...req(), wipeConflict: true });
+      expect(result).toEqual({ ok: true, pr: 42, branch: 'plan-loop/issue-176', status: 'plan-draft' });
+      // the wipe precedes the fresh branch creation
+      expect(g.calls.indexOf('wipe:plan-loop/issue-176')).toBeGreaterThanOrEqual(0);
+      expect(g.calls.indexOf('wipe:plan-loop/issue-176')).toBeLessThan(g.calls.indexOf('branch:plan-loop/issue-176<-main'));
+      expect(written?.status).toBe('plan-draft');
+    });
+
+    it('does NOT ask (and never wipes) when the branch does not exist — the happy path is unchanged', async () => {
+      const g = makeFakeGit({ branchExists: false });
+      const h = makeFakeGitHub();
+      const result = await runPickup(deps(g.git, h.github), req());
+      expect(result.ok).toBe(true);
+      expect(g.calls).not.toContain('wipe:plan-loop/issue-176');
+    });
+
+    it('hard-fails (no conflict prompt, no wipe) on an existing branch when the policy is not wipe-and-retry', async () => {
+      const g = makeFakeGit({ branchExists: true });
+      const h = makeFakeGitHub();
+      const result = await runPickup(deps(g.git, h.github), { ...req(), pickup: { ...planPickup, onConflict: '' } });
+      expect(result.ok).toBe(false);
+      expect(result).not.toHaveProperty('conflict'); // an unknown policy is a hard error, not a wipe prompt
+      expect(g.calls).not.toContain('wipe:plan-loop/issue-176');
+      expect(written).toBeNull();
+    });
   });
 });

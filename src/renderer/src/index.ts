@@ -9,6 +9,7 @@ import { createFlowStrip, type FlowStrip } from './flowStrip';
 import { createLoopPanel } from './loopPanel';
 import { createFlowInputModal } from './flowInputModal';
 import { createConfirmDialog } from './confirmDialog';
+import { createErrorDialog } from './errorDialog';
 import { createTerminateConfirm } from './terminateConfirm';
 import { createAttentionCue } from './attentionCue';
 import { revealLoopReadout } from './loopReveal';
@@ -130,6 +131,34 @@ if (flowStripHost) {
   // (window.monitor owns the count — the strip stays flow-only, §9.1) and gates the IPC call.
   const confirmHost = document.getElementById('flow-confirm-host');
   const confirmDialog = confirmHost ? createConfirmDialog(confirmHost) : undefined;
+  // Bootstrap-failure alert (§26.9): main pushes flow:onBootstrapError when a loop step's async pickup
+  // failed and rolled the flow back. Raise a blocking dialog so the failure is never silent; the strip
+  // re-pulls the rolled-back state via the accompanying flow:onStateChanged push.
+  const errorHost = document.getElementById('flow-error-host');
+  const errorDialog = errorHost ? createErrorDialog(errorHost) : undefined;
+  if (errorDialog) {
+    window.flow.onBootstrapError((reason) => errorDialog.render({ title: 'Bootstrap failed', message: reason }));
+  }
+  // Bootstrap-conflict confirm (§26.9): main pushes flow:onBootstrapConflict when a re-pickup hit an
+  // existing branch under a wipe-and-retry policy. Confirm-first — the wipe is destructive + outward-facing
+  // (deletes the branch on origin, closes its PR), so the operator answers a blocking confirm; the answer
+  // (wipe / cancel-and-roll-back) rides resolveBootstrapConflict, scoped to the repo the conflict is for.
+  if (confirmDialog) {
+    window.flow.onBootstrapConflict((branch) => {
+      const key = repo.repoKey();
+      confirmDialog.render({
+        title: 'Branch already exists',
+        message: `A branch ${branch} already exists. Wiping deletes it on origin and closes its PR. Wipe and retry?`,
+        confirmLabel: 'Wipe and retry',
+        onConfirm: () => {
+          if (key) window.flow.resolveBootstrapConflict(key, true);
+        },
+        onCancel: () => {
+          if (key) window.flow.resolveBootstrapConflict(key, false);
+        },
+      });
+    });
+  }
   const strip = createFlowStrip(flowStripHost, {
     ...window.flow,
     loopPanelId: loopPanelHost?.id, // instance-scoped aria-controls target

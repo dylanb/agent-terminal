@@ -147,4 +147,33 @@ describe('confirm dialog (#26 AC3/AC4/AC13)', () => {
       createConfirmDialog(h).render(opts());
     });
   });
+
+  // §26.9 — the wipe-and-retry confirmation must tell main to roll the flow back when the operator
+  // declines, so an optional onCancel fires on every dismiss path EXCEPT confirm (which runs onConfirm).
+  describe('onCancel (dismiss signal, §26.9)', () => {
+    it('fires onCancel on the Cancel button, and does NOT run onConfirm', () => {
+      const onConfirm = vi.fn();
+      const onCancel = vi.fn();
+      createConfirmDialog(host).render(opts({ onConfirm, onCancel }));
+      cancelBtn()!.click();
+      expect(onCancel).toHaveBeenCalledTimes(1);
+      expect(onConfirm).not.toHaveBeenCalled();
+    });
+
+    it('fires onCancel on Escape dismissal', () => {
+      const onCancel = vi.fn();
+      createConfirmDialog(host).render(opts({ onCancel }));
+      dialog()!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+      expect(onCancel).toHaveBeenCalledTimes(1);
+    });
+
+    it('does NOT fire onCancel when Confirm is clicked (confirm is not a cancel)', () => {
+      const onConfirm = vi.fn();
+      const onCancel = vi.fn();
+      createConfirmDialog(host).render(opts({ onConfirm, onCancel }));
+      confirmBtn()!.click();
+      expect(onConfirm).toHaveBeenCalledTimes(1);
+      expect(onCancel).not.toHaveBeenCalled();
+    });
+  });
 });

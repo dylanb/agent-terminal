@@ -1612,7 +1612,11 @@ function seedFakeGhGit(prefix: string): { binDir: string; logFile: string } {
   const fakeGit =
     '#!/usr/bin/env bash\n' +
     'echo "git $*" >> "$FAKE_GHGIT_LOG"\n' +
-    // status --porcelain emits nothing → a clean tree; every other op is a recorded no-op success.
+    // status --porcelain emits nothing → a clean tree; when FAKE_GIT_DIRTY is set it emits a non-.agent-loop
+    // porcelain line → a dirty tree, so pickup aborts (§26.9). Every other op is a recorded no-op success.
+    'if [ "$1" = "status" ] && [ -n "$FAKE_GIT_DIRTY" ]; then echo " M src/app.ts"; exit 0; fi\n' +
+    // branch --list prints the queried branch when FAKE_GIT_BRANCH_EXISTS is set → a pickup conflict (§26.9).
+    'if [ "$1" = "branch" ] && [ "$2" = "--list" ] && [ -n "$FAKE_GIT_BRANCH_EXISTS" ]; then echo "  $3"; exit 0; fi\n' +
     'exit 0\n';
   const fakeGh =
     '#!/usr/bin/env bash\n' +
@@ -2314,6 +2318,176 @@ test('a busy shell does NOT block pickup: it runs out-of-band and still writes s
   // No §19.3 busy refusal is raised for pickup (it is out-of-band), so the transient notice never shows.
   await expect(page.locator('#flow-strip .flow-notice')).toHaveCount(0);
   await expect(termRows()).not.toContainText('agent-loop pickup');
+
+  await app.close(); // HOME=temp ⇒ Electron writes userData under it; stop writes before removing it
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+  rmSync(binDir, { recursive: true, force: true });
+});
+
+test('a bootstrap pickup that cannot run (dirty tree) NEVER fails silently: it shows an error dialog, rolls the flow back to the previous step, and writes no state.yaml (§26.9)', async () => {
+  // Slice B — the async in-app pickup (§26.9) aborts on a dirty tree. The failure must be surfaced (a
+  // blocking error dialog with the reason) and the half-entered loop step rolled back to the previous
+  // step (Option C), never stranding the flow. No state.yaml is written and no PR is opened.
+  const repo = seedBootstrapFlowRepo('agent-term-e2e-flow-bootdirty-');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-flow-bootdirty-home-'));
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-dirty-bin-');
+  await app.close();
+  app = await electron.launch({
+    args: ['out/main/index.js'],
+    env: {
+      ...process.env,
+      APP_SHELL: 'bash',
+      HOME: home,
+      APP_SUBMIT_DELAY_MS: '100',
+      CLAUDE_CONFIG_DIR: exampleConfigDir,
+      PATH: `${binDir}:${process.env.PATH}`,
+      FAKE_GHGIT_LOG: logFile,
+      FAKE_GIT_DIRTY: '1', // git status --porcelain reports a non-.agent-loop change → pickup aborts
+    },
+  });
+  page = await app.firstWindow();
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await typeCommand(`cd "${repo}"`);
+  await expect(flowStepName()).toHaveText('groom', { timeout: 10_000 });
+
+  await flowControl().click(); // Start → groom
+  await expect(flowStation(1)).toHaveClass(/\bactive\b/);
+
+  await flowControl().click(); // Advance → plan (loop, bootstrap): the typed-input modal opens
+  await expect(inputModal()).toBeVisible({ timeout: 10_000 });
+  await inputModal().locator('.field input').fill('176');
+  await inputModal().locator('.confirm').click();
+  await expect(inputModal()).toHaveCount(0);
+
+  // The failure surfaces: a blocking error dialog carries the reason (never silent).
+  const errorDialog = page.locator('#flow-error-host .flow-modal');
+  await expect(errorDialog).toBeVisible({ timeout: 15_000 });
+  await expect(errorDialog).toContainText('working tree is not clean');
+
+  // The flow is rolled back to the previous step (groom), still in progress — not stranded on plan.
+  await expect(flowStation(1)).toHaveClass(/\bactive\b/, { timeout: 10_000 });
+  await expect(flowStation(2)).not.toHaveClass(/\bactive\b/);
+
+  // No state.yaml was written and no PR was opened — the bootstrap aborted before either.
+  expect(existsSync(join(repo, '.agent-loop', 'state.yaml'))).toBe(false);
+  expect(readFileSync(logFile, 'utf8')).not.toContain('gh pr create');
+
+  // Dismiss restores the app; the operator can fix the tree and re-advance.
+  await errorDialog.locator('.dismiss').click();
+  await expect(errorDialog).toHaveCount(0);
+
+  await app.close(); // HOME=temp ⇒ Electron writes userData under it; stop writes before removing it
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+  rmSync(binDir, { recursive: true, force: true });
+});
+
+test('a re-pickup onto an EXISTING branch (on_conflict: wipe-and-retry) asks first, then wipes + bootstraps on Confirm (§26.9)', async () => {
+  // §26.9 wipe-and-retry — the vendored plan-loop declares it. The wipe is destructive + outward-facing
+  // (deletes the branch on origin, closes its PR), so the app CONFIRMS first: a conflict raises a confirm
+  // dialog; Confirm wipes the branch and bootstraps cleanly (state.yaml plan-draft).
+  const repo = seedBootstrapFlowRepo('agent-term-e2e-flow-bootconf-');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-flow-bootconf-home-'));
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-conf-bin-');
+  seedFakeAgent(binDir, { work: 'noop' }); // present so the post-wipe work turn injects (not `absent`), keeping plan-draft stable
+  await app.close();
+  app = await electron.launch({
+    args: ['out/main/index.js'],
+    env: {
+      ...process.env,
+      APP_SHELL: 'bash',
+      HOME: home,
+      APP_SUBMIT_DELAY_MS: '100',
+      APP_TURN_TIMEOUT_MS: '60000',
+      CLAUDE_CONFIG_DIR: exampleConfigDir,
+      PATH: `${binDir}:${process.env.PATH}`,
+      FAKE_GHGIT_LOG: logFile,
+      FAKE_GIT_BRANCH_EXISTS: '1', // git branch --list reports the target branch → a pickup conflict
+    },
+  });
+  page = await app.firstWindow();
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await typeCommand(`cd "${repo}"`);
+  await expect(flowStepName()).toHaveText('groom', { timeout: 10_000 });
+  await typeCommand('fake-agent');
+
+  await flowControl().click(); // Start → groom
+  await flowControl().click(); // Advance → plan (loop, bootstrap): typed-input modal
+  await expect(inputModal()).toBeVisible({ timeout: 10_000 });
+  await inputModal().locator('.field input').fill('176');
+  await inputModal().locator('.confirm').click();
+  await expect(inputModal()).toHaveCount(0);
+
+  // Ask first: a confirm dialog naming the conflicting branch — nothing wiped yet.
+  const conflict = page.locator('#flow-confirm-host .flow-modal');
+  await expect(conflict).toBeVisible({ timeout: 15_000 });
+  await expect(conflict).toContainText('plan-loop/issue-176');
+  await expect(conflict).toContainText('closes its PR');
+  expect(readFileSync(logFile, 'utf8')).not.toContain('git branch -D plan-loop/issue-176'); // not wiped before confirmation
+
+  // Confirm → the branch is wiped, then a clean bootstrap writes plan-draft.
+  await conflict.locator('.confirm').click();
+  await expect(conflict).toHaveCount(0);
+
+  const stateFile = join(repo, '.agent-loop', 'state.yaml');
+  await expect.poll(() => (existsSync(stateFile) ? readFileSync(stateFile, 'utf8') : ''), { timeout: 15_000 }).toContain('status: plan-draft');
+  const calls = readFileSync(logFile, 'utf8');
+  expect(calls).toContain('git branch -D plan-loop/issue-176'); // the wipe ran
+  expect(calls).toContain('git push origin --delete plan-loop/issue-176');
+  expect(calls).toContain('gh pr create --draft'); // a fresh PR opened after the wipe
+  await expect(flowStation(2)).toHaveClass(/\bactive\b/); // flow stayed on the loop step
+
+  await app.close(); // HOME=temp ⇒ Electron writes userData under it; stop writes before removing it
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+  rmSync(binDir, { recursive: true, force: true });
+});
+
+test('a re-pickup conflict that the operator CANCELS wipes nothing and rolls the flow back (§26.9)', async () => {
+  // The safe half of confirm-first: declining the wipe must destroy nothing and never strand the flow.
+  const repo = seedBootstrapFlowRepo('agent-term-e2e-flow-bootcancel-');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-flow-bootcancel-home-'));
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-cancel-bin-');
+  await app.close();
+  app = await electron.launch({
+    args: ['out/main/index.js'],
+    env: {
+      ...process.env,
+      APP_SHELL: 'bash',
+      HOME: home,
+      APP_SUBMIT_DELAY_MS: '100',
+      CLAUDE_CONFIG_DIR: exampleConfigDir,
+      PATH: `${binDir}:${process.env.PATH}`,
+      FAKE_GHGIT_LOG: logFile,
+      FAKE_GIT_BRANCH_EXISTS: '1',
+    },
+  });
+  page = await app.firstWindow();
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await typeCommand(`cd "${repo}"`);
+  await expect(flowStepName()).toHaveText('groom', { timeout: 10_000 });
+
+  await flowControl().click(); // Start → groom
+  await flowControl().click(); // Advance → plan
+  await expect(inputModal()).toBeVisible({ timeout: 10_000 });
+  await inputModal().locator('.field input').fill('176');
+  await inputModal().locator('.confirm').click();
+
+  const conflict = page.locator('#flow-confirm-host .flow-modal');
+  await expect(conflict).toBeVisible({ timeout: 15_000 });
+
+  // Cancel → nothing wiped, no state.yaml, and the flow rolls back to the previous step.
+  await conflict.locator('.cancel').click();
+  await expect(conflict).toHaveCount(0);
+
+  await expect(flowStation(1)).toHaveClass(/\bactive\b/, { timeout: 10_000 });
+  await expect(flowStation(2)).not.toHaveClass(/\bactive\b/);
+  expect(existsSync(join(repo, '.agent-loop', 'state.yaml'))).toBe(false);
+  expect(readFileSync(logFile, 'utf8')).not.toContain('git branch -D plan-loop/issue-176'); // never wiped
 
   await app.close(); // HOME=temp ⇒ Electron writes userData under it; stop writes before removing it
   rmSync(repo, { recursive: true, force: true });

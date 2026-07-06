@@ -140,6 +140,9 @@
     <!-- Destructive confirmation host (#26): createConfirmDialog renders the flow Terminate
          confirmation here, overlaying the app via fixed positioning. Empty until activated. -->
     <div id="flow-confirm-host"></div>
+    <!-- Bootstrap-failure error-alert host (§26.9): createErrorDialog renders the blocking pickup-failure
+         alert here. Empty until an async bootstrap fails and main pushes flow:onBootstrapError. -->
+    <div id="flow-error-host"></div>
     <script type="module" src="./src/index.ts"></script>
   </body>
 </html>

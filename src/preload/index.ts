@@ -11,6 +11,8 @@ import {
   type CommandSummary,
   type CwdChangedMsg,
   type FlowApi,
+  type FlowBootstrapErrorMsg,
+  type FlowBootstrapConflictMsg,
   type FlowStateView,
   type GithubRef,
   type MonitorApi,
@@ -141,6 +143,18 @@ const flowApi: FlowApi = {
     ipcRenderer.on(CH.flowRevealLoop, handler);
     return () => ipcRenderer.removeListener(CH.flowRevealLoop, handler);
   },
+  onBootstrapError: (cb) => {
+    const handler = (_e: unknown, msg: FlowBootstrapErrorMsg): void => cb(msg.reason);
+    ipcRenderer.on(CH.flowBootstrapError, handler);
+    return () => ipcRenderer.removeListener(CH.flowBootstrapError, handler);
+  },
+  onBootstrapConflict: (cb) => {
+    const handler = (_e: unknown, msg: FlowBootstrapConflictMsg): void => cb(msg.branch);
+    ipcRenderer.on(CH.flowBootstrapConflict, handler);
+    return () => ipcRenderer.removeListener(CH.flowBootstrapConflict, handler);
+  },
+  resolveBootstrapConflict: (repoKey, wipe) =>
+    ipcRenderer.send(CH.flowResolveBootstrapConflict, { sessionId: SESSION_ID, repoKey, wipe }),
   githubRef: (repoKey, kind, number) =>
     ipcRenderer.invoke(CH.flowGithubRef, { sessionId: SESSION_ID, repoKey, kind, number }) as Promise<GithubRef | null>,
   openExternal: (url) => ipcRenderer.invoke(CH.appOpenExternal, { sessionId: SESSION_ID, url }) as Promise<boolean>,

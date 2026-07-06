@@ -24,6 +24,12 @@ export interface PickupGit {
   isCleanTree(): Promise<boolean>;
   /** The branch to fork from + target the PR at; null when undiscoverable (the run then aborts). */
   resolveBaseBranch(): Promise<string | null>;
+  /** True iff `branch` already exists (local or remote) — a re-pickup conflict (§26.9 `on_conflict`). */
+  branchExists(branch: string): Promise<boolean>;
+  /** Remove a conflicting `branch` (local + remote) so a fresh bootstrap can proceed (§26.9
+   *  wipe-and-retry). Deleting the remote head closes its PR. Destructive + outward-facing — the runner
+   *  calls this ONLY after the operator confirmed the wipe (`wipeConflict`), never on mere detection. */
+  wipeConflictingBranch(branch: string): Promise<void>;
   /** Create `branch` off a freshly-fetched `base`, checked out. */
   createBranchFromBase(branch: string, base: string): Promise<void>;
   /** Commit an empty `[skip ci]` start commit so the branch has a tip to open a PR against. */
@@ -57,10 +63,20 @@ export interface PickupRequest {
   pickup: PickupContract;
   /** Explicit base override; when absent the base is discovered via `resolveBaseBranch`. */
   base?: string;
+  /** Resolve a detected branch conflict by wiping it (§26.9 wipe-and-retry), rather than returning a
+   *  `conflict` result for the operator to confirm. Set only after that confirmation. */
+  wipeConflict?: boolean;
+}
+
+/** A re-pickup whose target branch already exists, under a `wipe-and-retry` policy (§26.9): the runner
+ *  did NOTHING destructive and awaits the operator's confirmation before wiping. */
+export interface PickupConflict {
+  branch: string;
 }
 
 export type PickupResult =
   | { ok: true; pr: number; branch: string; status: string }
+  | { ok: false; conflict: PickupConflict }
   | { ok: false; error: string };
 
 /** A best-effort side-effect (assign / label) must not abort the bootstrap if GitHub rejects it —
@@ -74,20 +90,30 @@ async function bestEffort(op: () => Promise<void>): Promise<void> {
 }
 
 /** Run the in-app pickup for one issue. Aborts (no state write) on a dirty tree, an unresolvable base,
- *  or a failed PR create; never throws — a thrown git/gh op resolves to `{ok:false}`. */
+ *  a failed PR create, or (unless `wipeConflict`) an existing-branch conflict; never throws — a thrown
+ *  git/gh op resolves to `{ok:false}`. An existing branch under a `wipe-and-retry` policy returns a
+ *  `conflict` result (nothing destructive done) so the operator confirms before the wipe (§26.9). */
 export async function runPickup(deps: PickupDeps, req: PickupRequest): Promise<PickupResult> {
   const { git, github, writeState, wipeStaleLoopDir } = deps;
   const fail = (error: string): PickupResult => ({ ok: false, error });
   try {
-    // TODO(loop-engine): honor pickup_contract.on_conflict (e.g. wipe-and-retry on an existing
-    // branch/PR). L1 handles the fresh-ticket happy path; an existing branch makes createBranchFromBase
-    // fail → {ok:false}. Re-entry per on_conflict lands with resume (§26.11, L8).
     if (!(await git.isCleanTree())) return fail('working tree is not clean');
 
     const base = req.base ?? (await git.resolveBaseBranch());
     if (!base) return fail('could not resolve base branch');
 
     const branch = req.pickup.initialBranchTpl.replace('{issue}', String(req.issue));
+    // §26.9 on_conflict — a re-pickup whose branch already exists. `wipe-and-retry` is the vendored
+    // policy, but the wipe is destructive + outward-facing (it deletes the remote branch and closes its
+    // PR), so on mere detection the runner does NOTHING and returns a `conflict` for the operator to
+    // confirm; only a confirmed `wipeConflict` performs the wipe. Any other policy is a hard error.
+    if (await git.branchExists(branch)) {
+      if (!req.wipeConflict) {
+        if (req.pickup.onConflict === 'wipe-and-retry') return { ok: false, conflict: { branch } };
+        return fail(`branch ${branch} already exists (on_conflict: ${req.pickup.onConflict || 'none'})`);
+      }
+      await git.wipeConflictingBranch(branch);
+    }
     await git.createBranchFromBase(branch, base);
     wipeStaleLoopDir();
 
@@ -103,8 +129,8 @@ export async function runPickup(deps: PickupDeps, req: PickupRequest): Promise<P
 
     const title = `${info?.title ?? `issue #${req.issue}`} (closes #${req.issue})`;
     // TODO(loop-engine): resolve the body from pickup_contract.initial_pr_body_ref (§26.9) instead of this
-    // hardcoded stub. The field is parsed (loopDef.ts) but not yet resolved to a template — like on_conflict,
-    // wiring the resolver is its own slice; the vendored defs name a stub, so the observable body is unchanged.
+    // hardcoded stub. The field is parsed (loopDef.ts) but not yet resolved to a template; wiring the
+    // resolver is its own slice — the vendored defs name a stub, so the observable body is unchanged.
     const body = `closes #${req.issue}\n\n<!-- agent-loop will fill the real plan + implementation. This body is the initial stub. -->\n`;
     const pr = await github.createDraftPr({ base, head: branch, title, body });
     if (pr === null) return fail('draft PR creation failed');
@@ -148,6 +174,15 @@ function treeIsClean(porcelain: string): boolean {
 
 export function createRealPickupGit(repoDir: string): PickupGit {
   const git = (args: string[]): Promise<string> => run('git', args, repoDir);
+  // A git op whose failure means "the thing is already in the goal state" (a branch already absent on one
+  // side of the wipe): swallow so the wipe is idempotent across local-only / remote-only leftovers.
+  const bestEffortGit = async (args: string[]): Promise<void> => {
+    try {
+      await git(args);
+    } catch {
+      /* the branch was already gone on this side — that IS the goal (§26.9 wipe-and-retry) */
+    }
+  };
   return {
     isCleanTree: async () => treeIsClean(await git(['status', '--porcelain'])),
     resolveBaseBranch: async () => {
@@ -158,6 +193,24 @@ export function createRealPickupGit(repoDir: string): PickupGit {
       } catch {
         return null;
       }
+    },
+    branchExists: async (branch) => {
+      // Local first (`git branch --list` prints the branch when it exists), then the remote head.
+      const local = await git(['branch', '--list', branch]);
+      if (local.trim().length > 0) return true;
+      try {
+        const remote = await run('git', ['ls-remote', '--heads', 'origin', branch], repoDir);
+        return remote.trim().length > 0;
+      } catch {
+        return false; // no remote / offline — treat as no remote conflict
+      }
+    },
+    wipeConflictingBranch: async (branch) => {
+      // Detach HEAD so `branch` isn't the current branch, then force-delete it locally and on origin.
+      // Deleting the remote head closes its PR. Each deletion is best-effort — a side already gone is fine.
+      await bestEffortGit(['checkout', '--detach']);
+      await bestEffortGit(['branch', '-D', branch]);
+      await bestEffortGit(['push', 'origin', '--delete', branch]);
     },
     createBranchFromBase: async (branch, base) => {
       await git(['fetch', 'origin', base]);

@@ -44,6 +44,7 @@
     "src/renderer/src/flowInputModal.ts",
     "src/renderer/src/modalShell.ts",
     "src/renderer/src/confirmDialog.ts",
+    "src/renderer/src/errorDialog.ts",
     "src/renderer/src/terminateConfirm.ts",
     "src/renderer/src/artifacts.ts",
     "src/renderer/src/viewerRender.ts",

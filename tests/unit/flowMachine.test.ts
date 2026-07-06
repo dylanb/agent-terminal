@@ -123,6 +123,95 @@ describe('flow state machine — multi-step (§24.2.3 T1)', () => {
   });
 });
 
+// Slice B (§26.9) — a bootstrap that fails after its step was entered must not strand the flow on a
+// half-entered loop step. revertStep(fromStepId) walks ONE step back, staying in_progress, WITHOUT
+// re-running the previous step's entry actions (the inverse of an advance, like undo but mid-flow) and
+// PRESERVING resolved inputs so the operator can fix the cause and re-advance. It is a no-op guard, not
+// a throwing transition: it fires from an async pickup `.then()`, so a stale call (the flow already
+// moved on) must be inert rather than an unhandled rejection.
+describe('flow state machine — revertStep (§26.9 bootstrap-failure rollback)', () => {
+  const THREE: FlowLoad = {
+    ok: true,
+    definition: {
+      name: 'f',
+      steps: [
+        { id: 'groom', kind: 'manual' },
+        { id: 'plan', kind: 'loop', loop: 'plan-loop', bootstrap: 'pickup' },
+        { id: 'implement', kind: 'manual' },
+      ],
+    },
+    flowDir: '/tmp/f/.agent-terminal',
+  };
+
+  it('walks one step back, staying in_progress, when the current step matches fromStepId', () => {
+    const flow = createFlowMachine(THREE);
+    flow.start();
+    flow.advance(); // → plan (the bootstrap loop step)
+    const v = flow.revertStep('plan');
+    expect([v.position, v.stepName, v.status]).toEqual([1, 'groom', 'in_progress']);
+    expect([flow.state().position, flow.state().stepName]).toEqual([1, 'groom']);
+  });
+
+  it('does NOT re-run the previous step\'s entry actions (unlike restart)', () => {
+    let enters = 0;
+    const flow = createFlowMachine(THREE, undefined, () => void enters++);
+    flow.start(); // enter groom (1)
+    flow.advance(); // enter plan (2)
+    expect(enters).toBe(2);
+    flow.revertStep('plan');
+    expect(enters).toBe(2); // reverting groom is a rollback, not a re-entry — no skill re-injection
+  });
+
+  it('preserves resolved inputs so the operator can re-advance without re-typing them', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'flow-revert-'));
+    try {
+      const store = createFlowStateStore(dir);
+      store.write({ step: 'plan', status: 'in_progress', inputs: { ticket: '176' } });
+      const flow = createFlowMachine(THREE, store);
+      flow.revertStep('plan');
+      const persisted = createFlowStateStore(dir).read();
+      expect(persisted?.step).toBe('groom');
+      expect(persisted?.status).toBe('in_progress');
+      expect(persisted?.inputs).toEqual({ ticket: '176' });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('is a no-op when the current step no longer matches fromStepId (a stale async revert)', () => {
+    const flow = createFlowMachine(THREE);
+    flow.start();
+    flow.advance(); // → plan
+    const v = flow.revertStep('implement'); // stale: we are not on `implement`
+    expect([v.position, v.stepName, v.status]).toEqual([2, 'plan', 'in_progress']);
+  });
+
+  it('is a no-op (never throws) from not_started or done', () => {
+    const flow = createFlowMachine(THREE);
+    expect(flow.revertStep('groom').status).toBe('not_started');
+    flow.start();
+    flow.advance();
+    flow.advance();
+    flow.advance(); // → done
+    expect(flow.revertStep('implement').status).toBe('done');
+  });
+
+  it('reverts a first-step loop to not_started (no previous step), a recoverable state', () => {
+    const FIRST_LOOP: FlowLoad = {
+      ok: true,
+      definition: {
+        name: 'f',
+        steps: [{ id: 'plan', kind: 'loop', loop: 'plan-loop', bootstrap: 'pickup' }],
+      },
+      flowDir: '/tmp/f/.agent-terminal',
+    };
+    const flow = createFlowMachine(FIRST_LOOP);
+    flow.start(); // in_progress on the only (loop) step
+    const v = flow.revertStep('plan');
+    expect(v.status).toBe('not_started'); // Start re-enters the step and re-fires pickup
+  });
+});
+
 // §24.2.3 T2 — a loop step folds its agent-loop state.yaml as the view's read-only `loop` field; a
 // manual step never mirrors, and the mirror is re-read on each view so it stays live.
 describe('flow state machine — loop-step state.yaml mirror (§24.2.3 T2)', () => {
