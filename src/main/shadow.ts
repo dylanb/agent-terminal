@@ -74,6 +74,10 @@ export function createShadowModel(opts: {
   let last: ShadowStatus | null = null;
   let settleTimer: ReturnType<typeof setTimeout> | null = null;
   let disposed = false;
+  // §8.3 quiescence keys off *rendered-screen change*, not raw bytes: a full-screen TUI agent repaints
+  // its frame on a timer even while idle, so byte-presence would never go quiet. `lastSignature` is the
+  // previous visible-screen text; an identical repaint is not activity.
+  let lastSignature: string | null = null;
   const quietCbs = new Set<() => void>();
   const oscDisposables: IDisposable[] = [];
 
@@ -107,6 +111,18 @@ export function createShadowModel(opts: {
     isLineWrapped: (y) => term.buffer.active.getLine(y)?.isWrapped ?? false,
   };
 
+  // The visible viewport's text (absolute rows baseY..baseY+rows), prefixed with the buffer type so a
+  // normal↔alternate switch registers as a change. This is the "did the screen change" signal for §8.3.
+  function visibleSignature(): string {
+    const buf = term.buffer.active;
+    const top = buf.baseY;
+    let sig = buf.type;
+    for (let y = top; y < top + term.rows; y++) {
+      sig += '\n' + (buf.getLine(y)?.translateToString(true) ?? '');
+    }
+    return sig;
+  }
+
   function currentStatus(): ShadowStatus {
     return {
       altScreen: term.buffer.active.type === 'alternate',
@@ -133,8 +149,16 @@ export function createShadowModel(opts: {
   return {
     write(data) {
       if (disposed) return; // onData can race window close (§4G)
-      term.write(data);
-      detector.noteOutputActivity();
+      // Note activity only when the parsed buffer's visible text actually changed (§8.3) — hence inside
+      // term.write's post-parse callback, where the just-written bytes are reflected in the screen.
+      term.write(data, () => {
+        if (disposed) return;
+        const sig = visibleSignature();
+        if (sig !== lastSignature) {
+          lastSignature = sig;
+          detector.noteOutputActivity();
+        }
+      });
       if (settleTimer) clearTimeout(settleTimer);
       // Agents redraw in bursts; read shadow state only after writes settle (§8.2).
       settleTimer = setTimeout(publishStatus, settleMs);

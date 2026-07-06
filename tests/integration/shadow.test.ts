@@ -28,8 +28,9 @@ describe('shadow screen model (§8)', () => {
     shadow.dispose();
   });
 
-  it('output flips agentState to active immediately, then quiet after QUIET_MS', async () => {
+  it('output flips agentState to active, then quiet after QUIET_MS', async () => {
     shadow.write('hello\r\n');
+    await settle();
     expect(statuses.at(0)?.agentState).toBe('active');
     expect(statuses.at(0)?.quietSince).toBeNull();
 
@@ -94,6 +95,52 @@ describe('shadow screen model (§8)', () => {
     shadow.dispose();
     expect(() => shadow.write('late output')).not.toThrow();
     expect(() => shadow.resize(100, 40)).not.toThrow();
+  });
+});
+
+// §8.3 — a full-screen TUI agent (Claude Code, Codex) repaints its frame on a timer even while idle at
+// its prompt, so bytes never stop. Byte-presence would pin agentState 'active' forever (the injection
+// engine then defers every turn, §26.2). Quiescence keys off *rendered-screen change*, not raw bytes:
+// an unchanged repaint is quiet, a changing frame (spinner/stream) is active.
+describe('content-diff quiescence for a repainting TUI (§8.3)', () => {
+  let statuses: ShadowStatus[];
+  let shadow: ReturnType<typeof createShadowModel>;
+  const repaint = (frame: string) => `\x1b[2J\x1b[H${frame}`; // clear + home + redraw, as Ink does
+
+  beforeEach(() => {
+    statuses = [];
+    shadow = createShadowModel({
+      cols: 80,
+      rows: 24,
+      settleMs: SETTLE_MS,
+      quietMs: QUIET_MS,
+      onStatus: (s) => statuses.push(s),
+    });
+  });
+  afterEach(() => shadow.dispose());
+
+  it('reaches quiet while an unchanged frame keeps repainting faster than QUIET_MS', async () => {
+    shadow.write(`\x1b[?1049h${repaint('claude idle ›')}`); // enter alt screen, paint idle frame
+    await settle();
+    // Keep repainting the SAME frame, faster than QUIET_MS, for well over QUIET_MS total.
+    for (let i = 0; i < 8; i++) {
+      shadow.write(repaint('claude idle ›'));
+      await sleep(QUIET_MS / 2); // byte-presence would re-arm the quiet timer here every half-window
+    }
+    // Content never changed after the first frame → quiet must have been reached mid-repaint.
+    expect(statuses.some((s) => s.agentState === 'quiet')).toBe(true);
+    expect(statuses.at(-1)?.agentState).toBe('quiet');
+  });
+
+  it('stays active while the frame keeps changing (spinner / streaming)', async () => {
+    const frames = ['⠋ working', '⠙ working', '⠹ working', '⠸ working'];
+    shadow.write('\x1b[?1049h');
+    await settle();
+    for (let i = 0; i < 8; i++) {
+      shadow.write(repaint(frames[i % frames.length]));
+      await sleep(QUIET_MS / 2);
+    }
+    expect(statuses.at(-1)?.agentState).toBe('active');
   });
 });
 

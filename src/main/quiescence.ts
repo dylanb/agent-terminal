@@ -1,4 +1,6 @@
-// Quiescence detection (§8.3): 'active' while bytes arrive, 'quiet' after quietMs of silence.
+// Quiescence detection (§8.3): 'active' while activity is noted, 'quiet' after quietMs without. The
+// caller decides what counts as activity (the shadow notes a *rendered-screen change*, not raw bytes,
+// so a full-screen TUI agent's idle repaints do not keep it awake).
 
 import type { AgentState } from '../shared/ipc';
 
