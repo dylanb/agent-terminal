@@ -66,6 +66,16 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible { outline:2px so
 .trace i:nth-child(2){animation-delay:.1s}.trace i:nth-child(3){animation-delay:.2s}.trace i:nth-child(4){animation-delay:.3s}.trace i:nth-child(5){animation-delay:.4s}.trace i:nth-child(6){animation-delay:.5s}
 @keyframes tr { 0%,100%{height:3px} 50%{height:13px} }
 
+/* §26 loop-mechanics activity: a phrase + an animated braille spinner (the glyph cycles via `content`). */
+.flow-activity { display:flex; align-items:center; gap:6px; font-size:12px; color:var(--dim); margin-top:6px; }
+.flow-activity .phrase { font-family:"IBM Plex Mono",monospace; }
+.spin { font-family:"IBM Plex Mono",monospace; color:var(--signal); }
+.spin::after { content:'\2809'; animation:braille 0.8s steps(1) infinite; }
+@keyframes braille {
+  0%{content:'\2809'} 12.5%{content:'\2819'} 25%{content:'\2839'} 37.5%{content:'\2838'}
+  50%{content:'\283C'} 62.5%{content:'\2834'} 75%{content:'\2826'} 87.5%{content:'\2827'}
+}
+
 /* ---- gate + loop ---- */
 .gate h3, .loop h3 { font-family:"Fraunces",serif; font-weight:500; font-size:18px; margin:0 0 12px; }
 .gate-note { font-size:13px; color:var(--dim); margin:0 0 16px; line-height:1.5; }
@@ -147,4 +157,4 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible { outline:2px so
 .hair { border:1px solid var(--hair); }
 .cardbox { background:var(--card); border:1px solid var(--hair); border-radius:var(--r); }
 
-@media (prefers-reduced-motion:reduce){ .trace i,.term .cur{animation:none} }
+@media (prefers-reduced-motion:reduce){ .trace i,.term .cur{animation:none} .spin::after{animation:none;content:'\283F'} }

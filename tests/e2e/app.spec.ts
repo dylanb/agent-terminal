@@ -2716,6 +2716,14 @@ test('a work turn that streams past the stall window still advances to the revie
   seedFakeAgent(binDir, { work: 'write-plan', slowWork: true, reviews: 'all', consolidate: 'clean' });
   await driveToWorkTurn(repo, home, binDir, logFile, '3000'); // stall window far shorter than the ~9s stream
 
+  // §26 (v2.120) — while the work turn streams, the strip shows the loop-activity readout (a phrase + the
+  // animated braille spinner) so an in-flight turn is visibly "doing work". The ~9s stream is a comfortable
+  // window to observe it before plan.md lands.
+  const activity = page.locator('#flow-strip .flow-activity');
+  await expect(activity).toBeVisible({ timeout: 20_000 });
+  await expect(activity.locator('.phrase')).not.toBeEmpty();
+  await expect(activity.locator('.spin')).toHaveCount(1);
+
   // Land: plan.md appears only after the long stream, and the reviewers turn then runs (its per-persona
   // JSON is the proof the chain advanced past the work turn). Never auto-errors mid-stream.
   const reviewFile = join(repo, '.agent-loop', 'reviews', '1', 'review-contracts.json');
@@ -2766,6 +2774,15 @@ test('a work turn with NO hosted agent at the prompt errors instead of leaking t
   expect(readFileSync(stateFile, 'utf8')).toContain('error_reason: no hosted agent at the prompt');
   expect(existsSync(join(repo, '.agent-loop', 'plan.md'))).toBe(false); // nothing produced the artifact
   await expect(termRows()).not.toContainText('# Work agent'); // the prompt never reached the shell
+
+  // §26.3/D48 (v2.120) — a run-time turn failure is never silent: it raises the blocking error dialog with
+  // the reason (the same surface bootstrap failures use), in addition to the panel pill. Dismiss it so it
+  // does not trap focus over the panel/Retry exercised below.
+  const errorDialog = page.locator('#flow-error-host .flow-modal');
+  await expect(errorDialog).toBeVisible({ timeout: 15_000 });
+  await expect(errorDialog).toContainText('no hosted agent at the prompt');
+  await errorDialog.locator('.dismiss').click();
+  await expect(errorDialog).toHaveCount(0);
 
   // The panel surfaces WHY + a recovery affordance (never a Terminate-only dead-end).
   await loopReadout().click();

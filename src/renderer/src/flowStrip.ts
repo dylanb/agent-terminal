@@ -8,6 +8,7 @@ import type { FlowApi, FlowStateView, FlowStatus, FlowLoopView, FlowPrompt, Flow
 import { hasFlowRefs } from '../../shared/ipc';
 import { FLOW_CHANGED_EVENT } from './paneActions';
 import { spillTone, toneLabel } from './loopStatus';
+import { createSpinner } from './spinner';
 
 type StationState = 'todo' | 'active' | 'done';
 type Act = 'start' | 'advance' | 'restart' | 'undo';
@@ -68,6 +69,7 @@ export type FlowStripDeps = Omit<
   FlowApi,
   | 'onRevealLoop'
   | 'onBootstrapError'
+  | 'onLoopError'
   | 'onBootstrapConflict'
   | 'resolveBootstrapConflict'
   | 'githubRef'
@@ -109,6 +111,20 @@ function derivedText(state: FlowStateView): string | null {
   return null;
 }
 
+/** The §26 loop-mechanics activity line: the phrase + an animated braille spinner while `busy`. Announced
+ *  via the strip host's own `aria-live=polite` (index.html #flow-strip) — like `.flow-derived`/`.flow-notice`,
+ *  it does NOT nest its own live region. The spinner is decorative (`aria-hidden`); the phrase is the text. */
+function activityLine(doc: Document, activity: NonNullable<FlowStateView['loopActivity']>): HTMLElement {
+  const line = doc.createElement('div');
+  line.className = 'flow-activity';
+  const phrase = doc.createElement('span');
+  phrase.className = 'phrase';
+  phrase.textContent = activity.phrase;
+  line.append(phrase);
+  if (activity.busy) line.append(createSpinner(doc));
+  return line;
+}
+
 /** A signature of everything that fixes the strip's DOM STRUCTURE — deliberately NOT the live values
  *  a passive push patches in place (loop iteration/tone, derived counts/activity). Two views with an
  *  equal signature differ only in those live values, so the existing nodes can be updated without a
@@ -128,6 +144,9 @@ function structuralSig(state: FlowStateView): string {
     // change must force a full render rather than a value-only patch.
     state.refs ?? null,
     derivedText(state) !== null,
+    // §26 activity line PRESENCE + its phrase are structural: the phrase text has no value-patch handler,
+    // so any change (appear / disappear / phrase change) forces a full render rather than a stale patch.
+    state.loopActivity?.phrase ?? '',
     state.notice ?? '',
   ]);
 }
@@ -343,6 +362,11 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
       line.textContent = `${d.todosDone} / ${d.todosTotal} done · ${d.activity}`;
       host.append(line);
     }
+
+    // §26 — what the loop mechanics are doing right now (bootstrapping, waiting, working, reviewing,
+    // consolidating): a phrase + spinner, shown on a loop step during bootstrap (before state.yaml) and
+    // through every turn. Present whenever main reports an activity; absent when the loop is idle/at a gate.
+    if (state.loopActivity) host.append(activityLine(doc, state.loopActivity));
 
     const control = CONTROL[state.status];
     if (!control) return;

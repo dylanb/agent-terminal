@@ -14,6 +14,7 @@ function harness(overrides: Partial<GateExecDeps> = {}) {
   const readyCalls: number[] = [];
   const reiterations: number[] = [];
   const subIssues: Array<{ title: string; body: string }> = [];
+  const writeFailures: string[] = [];
   let nextIssue = 100;
   const deps: GateExecDeps = {
     github: {
@@ -28,9 +29,10 @@ function harness(overrides: Partial<GateExecDeps> = {}) {
     reiterate: (nextIteration) => void reiterations.push(nextIteration),
     // §26.9 — not an epic by default, so the L5 tests below observe the pre-L8 behavior unchanged.
     readEpicPlan: () => ({ isEpic: false, subTickets: [] }),
+    onWriteFailed: (reason) => void writeFailures.push(reason),
     ...overrides,
   };
-  return { deps, writes, notes, readyCalls, reiterations, subIssues };
+  return { deps, writes, notes, readyCalls, reiterations, subIssues, writeFailures };
 }
 
 const CTX = {
@@ -112,17 +114,20 @@ describe('executeGateOutcome (§26.6 / L5)', () => {
     expect(h.writes[0]).toMatchObject({ status: 'plan-human-approved', terminated: true });
   });
 
-  it('a state-write failure degrades cleanly: resolves (no unhandled rejection) and does not re-iterate (§26.11)', async () => {
+  it('a state-write failure surfaces the reason and does not re-iterate (never silently strands the loop, §26.6/D48)', async () => {
     const h = harness({
       writeState: () => {
         throw new Error('disk full');
       },
     });
-    // A rejected promise here surfaces as an unhandled rejection in main (the void call site cannot see it);
-    // the executor must swallow the write failure — leaving the loop where it is, never starting a work turn
-    // against unpersisted state.
+    // A rejected promise here would surface as an unhandled rejection in main (the void call site cannot see
+    // it), so the executor must still resolve and must NOT re-iterate against unpersisted state. But the
+    // failure must no longer be SILENT: the loop would otherwise sit stranded with no error and no trace, so
+    // the executor reports it through onWriteFailed for the host to surface (error dialog + audit).
     await expect(executeGateOutcome(requestChangesOutcome, CTX, h.deps)).resolves.toBeUndefined();
     expect(h.reiterations).toEqual([]);
+    expect(h.writeFailures).toHaveLength(1);
+    expect(h.writeFailures[0]).toContain('disk full');
   });
 
   it('does not mark a PR ready when there is no PR number', async () => {

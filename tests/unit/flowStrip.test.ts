@@ -80,6 +80,33 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     expect(control()!.textContent).toBe('Start');
   });
 
+  it('renders the §26 loop-activity phrase + spinner as a status line', async () => {
+    const deps = {
+      ...fakeFlow('in_progress'),
+      state: vi.fn(async () => ({
+        stepName: 'plan',
+        steps: ['plan'],
+        position: 1,
+        total: 1,
+        status: 'in_progress' as FlowStatus,
+        loopActivity: { phrase: 'Bootstrapping #40', busy: true },
+      })),
+    };
+    createFlowStrip(host, deps).onRepoChanged('/repo');
+    await vi.waitFor(() => expect(host.querySelector('.flow-activity')).not.toBeNull());
+    const line = host.querySelector('.flow-activity')!;
+    expect(line.querySelector('.phrase')?.textContent).toBe('Bootstrapping #40');
+    expect(line.querySelector('.spin')).not.toBeNull(); // busy → the spinner is present
+    expect(line.querySelector('.spin')?.getAttribute('aria-hidden')).toBe('true'); // decorative
+  });
+
+  it('omits the spinner (and the whole activity line) when no activity is reported', async () => {
+    const deps = fakeFlow('in_progress');
+    createFlowStrip(host, deps).onRepoChanged('/repo');
+    await vi.waitFor(() => expect(control()).not.toBeNull());
+    expect(host.querySelector('.flow-activity')).toBeNull();
+  });
+
   it('re-pulls and re-renders for the new repo when the cwd changes', async () => {
     const deps = fakeFlow();
     const strip = createFlowStrip(host, deps);

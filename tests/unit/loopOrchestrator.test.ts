@@ -54,6 +54,7 @@ describe('loop turn runner (§26.3/D47a, D48)', () => {
   let cancelTimer: Mock<() => void>;
   let writeError: Mock<(reason: string) => void>;
   let onComplete: Mock<(turnKey: string) => void>;
+  let noteSettle: Mock<() => void>;
 
   beforeEach(() => {
     hosted = 'idle';
@@ -63,6 +64,7 @@ describe('loop turn runner (§26.3/D47a, D48)', () => {
     cancelTimer = vi.fn();
     writeError = vi.fn();
     onComplete = vi.fn();
+    noteSettle = vi.fn();
     compose = vi.fn((k: string) => `PROMPT for ${k}`);
     deps = {
       compose,
@@ -73,6 +75,7 @@ describe('loop turn runner (§26.3/D47a, D48)', () => {
       cancelTimer,
       writeError,
       onComplete,
+      noteSettle,
     };
   });
 
@@ -253,6 +256,8 @@ describe('loop turn runner (§26.3/D47a, D48)', () => {
   it('accepts a fresh turn after one completes (the §26.4 work→reviewers chain runs sequential turns)', () => {
     // L3 chains the reviewers turn off the work turn's completion: the host calls requestTurn again from
     // the `complete` state. The runner must start the new turn (a different key), not ignore it as re-entry.
+    // §26.3/D46 — a CHAINED turn must not inject on the stale post-done-signal quiet level: it re-arms
+    // quiescence (noteSettle) and injects only once a fresh settle arrives (onInjectable).
     const r = createTurnRunner(deps);
     r.requestTurn('work-plan');
     r.onDoneSignal();
@@ -260,10 +265,71 @@ describe('loop turn runner (§26.3/D47a, D48)', () => {
 
     r.requestTurn('review-plan');
     expect(r.state()).toBe('in-flight');
+    expect(inject).toHaveBeenCalledTimes(1); // NOT injected yet — waiting for the fresh settle
+    r.onInjectable();
     expect(inject).toHaveBeenLastCalledWith('PROMPT for review-plan');
     r.onDoneSignal();
     expect(onComplete).toHaveBeenLastCalledWith('review-plan');
     expect(r.state()).toBe('complete');
+  });
+
+  it('a follow-on turn re-arms quiescence and waits for a fresh settle before injecting (§26.3/D46 race fix)', () => {
+    // The reported data-loss bug: the follow-on prompt was injected the instant the previous turn's
+    // done-signal FILE appeared — a written file is not §8.3 quiescence, so the agent was often still
+    // streaming and the prompt was swallowed. A chained turn must instead re-arm the quiescence window
+    // (noteSettle) and defer until a fresh active→quiet edge (onInjectable), regardless of the stale level.
+    const r = createTurnRunner(deps);
+    r.requestTurn('work-plan'); // initial turn: injects immediately against the idle agent
+    expect(inject).toHaveBeenCalledTimes(1);
+    r.onDoneSignal();
+    expect(r.state()).toBe('complete');
+
+    inject.mockClear();
+    hosted = 'idle'; // the level currently READS quiet — but it is the stale pre-done-signal quiet
+    r.requestTurn('review-plan');
+    expect(noteSettle).toHaveBeenCalledTimes(1); // re-armed the quiescence window
+    expect(inject).not.toHaveBeenCalled(); // did NOT inject on the stale quiet level
+    expect(r.state()).toBe('in-flight');
+
+    r.onInjectable(); // the fresh, post-done-signal settle finally arrives
+    expect(inject).toHaveBeenCalledTimes(1);
+    expect(inject).toHaveBeenCalledWith('PROMPT for review-plan');
+  });
+
+  it('the INITIAL turn injects immediately on the idle agent (no settle wait — the agent was already at rest)', () => {
+    // The re-arm only guards CHAINED turns. The first turn after pickup has no prior turn output to race,
+    // so it must inject on the current idle level without waiting for a (never-coming) fresh edge.
+    const r = createTurnRunner(deps);
+    r.requestTurn('work-plan');
+    expect(noteSettle).not.toHaveBeenCalled();
+    expect(inject).toHaveBeenCalledTimes(1);
+  });
+
+  it('injects a turn preamble (/clear) first — gated — then the prompt only after a further settle (§26.3/D46)', () => {
+    // The actor-boundary /clear must itself be quiescence-gated and ORDERED before the turn prompt: an
+    // un-gated /clear (fired on the done-signal file) races the agent and swallows the follow-on prompt,
+    // losing context. The boundary is a serialized pair of gated injections [/clear, prompt]: /clear on
+    // the first fresh settle, the prompt only after /clear has drained and the agent re-quiesced.
+    const r = createTurnRunner(deps);
+    r.requestTurn('work-plan'); // initial
+    r.onDoneSignal(); // complete
+    inject.mockClear();
+    noteSettle.mockClear();
+
+    r.requestTurn('consolidate-plan', { preamble: '/clear' }); // chained + preamble
+    expect(noteSettle).toHaveBeenCalledTimes(1); // chained: re-arm before /clear
+    expect(inject).not.toHaveBeenCalled(); // waits for the fresh settle
+
+    r.onInjectable(); // first settle arrives
+    expect(inject).toHaveBeenCalledTimes(1);
+    // ONLY /clear — not the prompt yet — and flagged as the preamble so the host keeps the "waiting" readout.
+    expect(inject).toHaveBeenCalledWith('/clear', { preamble: true });
+    expect(noteSettle).toHaveBeenCalledTimes(2); // re-armed again so the prompt waits for /clear to drain
+
+    r.onInjectable(); // second settle, after /clear drained
+    expect(inject).toHaveBeenCalledTimes(2);
+    expect(inject).toHaveBeenLastCalledWith('PROMPT for consolidate-plan'); // the prompt, no preamble flag
+    expect(r.state()).toBe('in-flight');
   });
 });
 

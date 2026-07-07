@@ -32,6 +32,10 @@ export interface GateExecDeps {
   /** §26.9 / L8 — the epic classification of the current plan (from plan.md). Consulted only when the
    *  gate carries an `epic-promote` effect; its `isEpic` is the action's `when` guard. */
   readEpicPlan(): EpicPlan;
+  /** §26.6/D48 — the gate transition could NOT be persisted (the state.yaml write threw). The executor
+   *  leaves the loop where it is and never re-iterates, but the failure must not be silent: the host
+   *  surfaces `reason` (error dialog + audit) so the loop can never sit stranded with no trace. */
+  onWriteFailed(reason: string): void;
 }
 
 /** Run epic-promote (§26.9): the current PR IS sub-ticket-1, so create the REMAINING N-1 sub-issues out
@@ -94,9 +98,12 @@ export async function executeGateOutcome(
       ...(subIssues.length > 0 ? { epic: { subIssues } } : {}),
       ...(outcome.terminate ? { terminated: true } : {}),
     });
-  } catch {
+  } catch (e) {
     // A failed state write leaves the loop where it is — never re-iterate against unpersisted state, and
-    // never surface as an unhandled rejection in main (the `void` call site cannot catch it, §26.11).
+    // never surface as an unhandled rejection in main (the `void` call site cannot catch it, §26.11). But
+    // it must not be SILENT (§26.6/D48): report it so the host raises the error dialog + records the audit,
+    // otherwise the loop sits stranded with no trace.
+    deps.onWriteFailed((e as Error).message);
     return;
   }
 

@@ -70,8 +70,9 @@ export function classifyHostedAgent(agentPresent: boolean, agentState: AgentStat
 export interface TurnRunnerDeps {
   /** The prompt for `turnKey` (recipe body + done-signal instruction); null = unrecoverable config error. */
   compose(turnKey: string): string | null;
-  /** Inject + submit the prompt into the hosted instance (§9.3). */
-  inject(prompt: string): void;
+  /** Inject + submit `prompt` into the hosted instance (§9.3). `opts.preamble` marks the actor-boundary
+   *  /clear drained ahead of the turn, so the host can tell it apart from the turn prompt (§26 activity). */
+  inject(prompt: string, opts?: { preamble?: boolean }): void;
   /** The hosted instance's injection-readiness (§26.2) — see `HostedAgentState`. `absent` is the guard that
    *  keeps a prompt from ever leaking into a bare shell: it errors rather than injecting or deferring. */
   hostedAgent(): HostedAgentState;
@@ -87,11 +88,17 @@ export interface TurnRunnerDeps {
   writeError(reason: string): void;
   /** The turn produced its done-signal and artifact — advance (next slice continues the cycle). */
   onComplete(turnKey: string): void;
+  /** §26.3/D46 — re-arm the §8.3 quiescence window: require a FRESH settle (a new active→quiet edge)
+   *  before the next injection, so a chained turn never injects on the stale quiet the previous turn's
+   *  done-signal FILE left behind. The host satisfies this by re-arming the shadow quiescence detector. */
+  noteSettle(): void;
 }
 
 export interface TurnRunner {
-  /** Begin a turn; injects now if the hosted agent is idle, defers if busy, errors if absent (§26.2). */
-  requestTurn(turnKey: string): void;
+  /** Begin a turn; injects now if the hosted agent is idle, defers if busy, errors if absent (§26.2).
+   *  `opts.preamble` (§26.3/D46) is a command drained BEFORE the turn prompt — the actor-boundary /clear —
+   *  injected gated on its own settle and ordered ahead of the prompt, so neither races the agent. */
+  requestTurn(turnKey: string, opts?: { preamble?: string }): void;
   /** The instance may have become injectable (a §8.3 quiet flip) — re-evaluate a pending/retry turn: inject
    *  if now idle, keep waiting if still busy, or error if the agent has left the prompt (§26.2). */
   onInjectable(): void;
@@ -115,6 +122,9 @@ export function createTurnRunner(deps: TurnRunnerDeps): TurnRunner {
   let turnKey: string | null = null;
   let attempts = 0;
   let awaitingInjectable = false;
+  // §26.3/D46 — a command (the actor-boundary /clear) to drain, gated, BEFORE the turn prompt. Consumed on
+  // its own settle; injecting it re-arms quiescence so the prompt waits for /clear to drain (serialized pair).
+  let preamble: string | null = null;
 
   const tryInject = (): void => {
     if (state !== 'in-flight' || turnKey === null) return;
@@ -139,6 +149,17 @@ export function createTurnRunner(deps: TurnRunnerDeps): TurnRunner {
       return;
     }
     awaitingInjectable = false;
+    // §26.3/D46 — the agent is idle: drain the /clear preamble FIRST, gated. Inject it, re-arm quiescence
+    // (so the prompt waits for /clear to drain and the agent to re-quiesce), and defer until that settle.
+    if (preamble !== null) {
+      const cmd = preamble;
+      preamble = null;
+      deps.inject(cmd, { preamble: true });
+      deps.noteSettle();
+      awaitingInjectable = true;
+      deps.armTimer();
+      return;
+    }
     const prompt = deps.compose(turnKey);
     if (prompt === null) {
       deps.cancelTimer();
@@ -176,12 +197,24 @@ export function createTurnRunner(deps: TurnRunnerDeps): TurnRunner {
   };
 
   return {
-    requestTurn(key) {
+    requestTurn(key, opts) {
       if (state === 'in-flight') return;
+      // §26.3/D46 — a CHAINED turn (requested after a prior turn completed or errored) must not inject on
+      // the stale quiet the previous turn's done-signal left behind: re-arm quiescence and defer until a
+      // FRESH settle (onInjectable). The INITIAL turn (state 'idle') has no prior output to race, so it
+      // injects immediately against the already-at-rest agent.
+      const chained = state === 'complete' || state === 'error';
       state = 'in-flight';
       turnKey = key;
       attempts = 0;
       awaitingInjectable = false;
+      preamble = opts?.preamble ?? null;
+      if (chained) {
+        deps.noteSettle();
+        awaitingInjectable = true;
+        deps.armTimer();
+        return;
+      }
       tryInject();
     },
     onInjectable() {

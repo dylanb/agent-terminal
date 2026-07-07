@@ -2,6 +2,7 @@
 // carries sessionId so multi-session support is additive later.
 
 import type { Chord, KeyActionId } from './keymap';
+import type { LoopActivity } from './loopActivity';
 
 export type SessionId = string;
 
@@ -54,6 +55,7 @@ export const CH = {
   flowOnStateChanged: 'flow:onStateChanged',
   flowRevealLoop: 'flow:revealLoop',
   flowOnBootstrapError: 'flow:onBootstrapError',
+  flowOnLoopError: 'flow:onLoopError',
   flowOnBootstrapConflict: 'flow:onBootstrapConflict',
   flowResolveBootstrapConflict: 'flow:resolveBootstrapConflict',
   flowGithubRef: 'flow:githubRef',
@@ -391,6 +393,7 @@ export interface ChannelPayloads {
   'menu:edit': MenuEditMsg;
   'flow:revealLoop': FlowRevealLoopMsg;
   'flow:onBootstrapError': FlowBootstrapErrorMsg;
+  'flow:onLoopError': FlowLoopErrorMsg;
   'flow:onBootstrapConflict': FlowBootstrapConflictMsg;
 }
 
@@ -573,6 +576,11 @@ export interface FlowStateView {
   /** Live derived status (§22.3 / §24.2.2 S5): agent activity + todo completion + gate readiness.
    *  Present only on an `in_progress` view (computed by main from the repo's todos + §8.3 activity). */
   derived?: FlowDerived;
+  /** What the loop MECHANICS are doing right now (§26): a phrase + a `busy` flag driving the strip's
+   *  spinner — bootstrapping, waiting for the agent, working, running reviewers, consolidating. Top-level
+   *  (NOT under `loop`) because a bootstrap runs before `.agent-loop/state.yaml` exists; absent when the
+   *  loop mechanics are idle (at a gate, done, or between flows). */
+  loopActivity?: LoopActivity;
   /** Read-only agent-loop state.yaml mirror (§24.2.3 T2): present once a `loop` step has been entered
    *  (and stays for the run, including any later manual step) with a parseable v4 state.yaml. Parallel
    *  to `derived` (NOT nested) — loop state outlives the manual in_progress window that gates `derived`. */
@@ -608,6 +616,16 @@ export interface FlowRevealLoopMsg {
  *  base, conflicting branch). Distinct from the transient strip `notice`: an async failure has no
  *  transition response to ride, so it needs its own push. */
 export interface FlowBootstrapErrorMsg {
+  sessionId: SessionId;
+  reason: string;
+}
+
+/** flow:onLoopError push (§26.3/§26.6/D48): main signals that a loop-MECHANICS operation FAILED after the
+ *  loop was bootstrapped — a turn-runner error (no hosted agent, a stall, a missing artifact, a compose
+ *  failure) or a gate transition that could not be persisted. Like the bootstrap-error push, the failure is
+ *  never silent: the renderer raises a blocking error dialog carrying `reason`. Distinct channel from
+ *  `flow:onBootstrapError` so pickup-time and run-time failures keep their own dialog titles. */
+export interface FlowLoopErrorMsg {
   sessionId: SessionId;
   reason: string;
 }
@@ -858,6 +876,10 @@ export interface FlowApi {
    *  when a loop step's async pickup failed and the flow was rolled back; the renderer raises a blocking
    *  error dialog. Returns an unsubscribe. */
   onBootstrapError(cb: (reason: string) => void): () => void;
+  /** Subscribe to main's flow:onLoopError push (§26.3/§26.6/D48): `cb` fires with the human-readable
+   *  `reason` when a loop-mechanics operation failed after bootstrap (a turn-runner error or an
+   *  un-persistable gate transition); the renderer raises a blocking error dialog. Returns an unsubscribe. */
+  onLoopError(cb: (reason: string) => void): () => void;
   /** Subscribe to main's flow:onBootstrapConflict push (§26.9): `cb` fires with the conflicting `branch`
    *  when a pickup hit an existing branch under a wipe-and-retry policy; the renderer raises a confirm
    *  dialog and answers via `resolveBootstrapConflict`. Returns an unsubscribe. */

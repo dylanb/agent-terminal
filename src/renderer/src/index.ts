@@ -138,6 +138,9 @@ if (flowStripHost) {
   const errorDialog = errorHost ? createErrorDialog(errorHost) : undefined;
   if (errorDialog) {
     window.flow.onBootstrapError((reason) => errorDialog.render({ title: 'Bootstrap failed', message: reason }));
+    // §26.3/§26.6/D48 — a loop-mechanics failure AFTER bootstrap (a turn-runner error or an un-persistable
+    // gate transition) is surfaced through the same blocking dialog, so no run-time failure is silent.
+    window.flow.onLoopError((reason) => errorDialog.render({ title: 'Loop error', message: reason }));
   }
   // Bootstrap-conflict confirm (§26.9): main pushes flow:onBootstrapConflict when a re-pickup hit an
   // existing branch under a wipe-and-retry policy. Confirm-first — the wipe is destructive + outward-facing

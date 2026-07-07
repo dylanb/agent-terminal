@@ -12,6 +12,7 @@ import {
   type CwdChangedMsg,
   type FlowApi,
   type FlowBootstrapErrorMsg,
+  type FlowLoopErrorMsg,
   type FlowBootstrapConflictMsg,
   type FlowStateView,
   type GithubRef,
@@ -147,6 +148,11 @@ const flowApi: FlowApi = {
     const handler = (_e: unknown, msg: FlowBootstrapErrorMsg): void => cb(msg.reason);
     ipcRenderer.on(CH.flowOnBootstrapError, handler);
     return () => ipcRenderer.removeListener(CH.flowOnBootstrapError, handler);
+  },
+  onLoopError: (cb) => {
+    const handler = (_e: unknown, msg: FlowLoopErrorMsg): void => cb(msg.reason);
+    ipcRenderer.on(CH.flowOnLoopError, handler);
+    return () => ipcRenderer.removeListener(CH.flowOnLoopError, handler);
   },
   onBootstrapConflict: (cb) => {
     const handler = (_e: unknown, msg: FlowBootstrapConflictMsg): void => cb(msg.branch);

@@ -51,6 +51,11 @@ export interface ShadowModel {
    *  repaint is NOT an edge). The §26.3 stall watchdog resets its deadline on this so a streaming turn
    *  never stalls while a frozen screen counts down. */
   onActivity(cb: () => void): () => void;
+  /** §26.3/D46 — re-arm the §8.3 quiescence window as if output just occurred: flips to `active` now and
+   *  will re-emit `quiet` a full quietMs later. Guarantees a FRESH active→quiet edge for the next
+   *  injection even when the agent already settled (no more real output would otherwise re-arm it),
+   *  without the hang of waiting for an edge that never comes. */
+  noteSettle(): void;
   /** Place a watermark at an absolute buffer row; undefined on the alt buffer (§15.2 / D2). */
   addMarker(absRow: number): ShadowMarker | undefined;
   /** Register an OSC handler (e.g. 133 shell-integration marks, §15.5). */
@@ -192,6 +197,10 @@ export function createShadowModel(opts: {
     onActivity(cb) {
       activityCbs.add(cb);
       return () => activityCbs.delete(cb);
+    },
+    noteSettle() {
+      if (disposed) return;
+      detector.noteOutputActivity();
     },
     addMarker(absRow) {
       if (disposed || reader.bufferType() === 'alternate') return undefined;

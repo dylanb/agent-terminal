@@ -32,6 +32,7 @@ function assembleFromTemplate(
   tokens: Record<string, string>,
   turnKey: string,
   configDir?: string,
+  artifact?: string,
 ): string | null {
   const loopDir = resolveLoopDir(repoDir, loopName, configDir);
   if (loopDir === null) return null;
@@ -44,7 +45,7 @@ function assembleFromTemplate(
   for (const [token, value] of Object.entries(tokens)) {
     body = body.split(`{{${token}}}`).join(value);
   }
-  return `${body}\n${doneSignalInstruction(turnKey)}\n`;
+  return `${body}\n${doneSignalInstruction(turnKey, artifact)}\n`;
 }
 
 /** Compose the work-turn prompt, or null when the loop name is unsafe or the phase template is absent
@@ -58,6 +59,9 @@ export function composeWorkPrompt(req: WorkPromptRequest): string | null {
     req.tokens,
     req.turnKey,
     req.configDir,
+    // The work turn's completion artifact the orchestrator checks (§26.3): the agent verifies it on disk
+    // before signalling done, so a plan that was never written cannot be reported complete.
+    path.join('.agent-loop', 'plan.md'),
   );
 }
 
@@ -94,6 +98,10 @@ export function composeConsolidatePrompt(req: ConsolidatePromptRequest): string 
     tokens,
     req.turnKey,
     req.configDir,
+    // The consolidate turn's completion artifact the orchestrator checks (§26.3/D45): the agent verifies
+    // consolidated.json is actually on disk before signalling done — the motivating "thinks it wrote the
+    // file but did not" case, which otherwise detects done against a missing file → retry → error.
+    path.join(tokens.REVIEW_DIR, 'consolidated.json'),
   );
 }
 
@@ -120,7 +128,10 @@ export function composeSpawnReviewersPrompt(req: SpawnReviewersRequest): string 
     ...req.personas.map((p) => `  - ${p} → .agent-loop/reviews/${req.iteration}/${p}.json`),
     '',
     'Wait for every subagent to return before finishing this turn.',
-    doneSignalInstruction(req.turnKey),
+    // Each persona's review JSON is the completion artifact the orchestrator checks (§26.4): the agent
+    // verifies every one is on disk before signalling done, so a subagent that failed to write its verdict
+    // is caught here rather than reported complete against a missing file.
+    doneSignalInstruction(req.turnKey, `every persona's review JSON listed above under .agent-loop/reviews/${req.iteration}/`),
   ];
   return `${lines.join('\n')}\n`;
 }

@@ -187,6 +187,35 @@ describe('shadow.onActivity — fires per visible-content-change edge (§26.3)',
   });
 });
 
+// §26.3/D46 — the re-arm primitive behind "a chained turn waits for a fresh settle": even when the
+// screen has ALREADY gone quiet (the agent settled and would emit no further output to re-arm it),
+// noteSettle must manufacture a fresh active→quiet edge so the next injection still gets its settle,
+// with no hang waiting for an edge that never comes.
+describe('shadow.noteSettle — re-arms quiescence for a fresh settle (§26.3/D46)', () => {
+  let statuses: ShadowStatus[];
+  let shadow: ReturnType<typeof createShadowModel>;
+  beforeEach(() => {
+    statuses = [];
+    shadow = createShadowModel({ cols: 80, rows: 24, settleMs: SETTLE_MS, quietMs: QUIET_MS, onStatus: (s) => statuses.push(s) });
+  });
+  afterEach(() => shadow.dispose());
+
+  it('produces a fresh active→quiet edge from an already-quiet screen', async () => {
+    shadow.write('done\r\n');
+    await goQuiet();
+    expect(statuses.at(-1)?.agentState).toBe('quiet'); // the agent has settled; no more output is coming
+    const before = statuses.length;
+
+    shadow.noteSettle(); // re-arm as if output just occurred
+    await settle();
+    expect(statuses.at(-1)?.agentState).toBe('active'); // flipped active immediately
+
+    await goQuiet();
+    expect(statuses.at(-1)?.agentState).toBe('quiet'); // and a FRESH quiet edge arrives QUIET_MS later
+    expect(statuses.length).toBeGreaterThan(before); // new transitions were emitted (not a no-op)
+  });
+});
+
 describe('shadow read API for semantic capture (§15.2 / D1)', () => {
   let shadow: ReturnType<typeof createShadowModel>;
 
