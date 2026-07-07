@@ -2811,6 +2811,66 @@ test('the loop panel "mark turn complete" control advances a sentinel-less turn 
   rmSync(binDir, { recursive: true, force: true });
 });
 
+test('a work turn stranded in error with plan.md present is accepted after a relaunch, advancing to the reviewers without re-running the plan (§26.3 / D48)', async () => {
+  // The stranded-plan recovery (the live `.one` shape): a work turn that wrote plan.md but then stopped in
+  // `error` (here: plan.md written, no done-signal, a short stall window). On a RELAUNCH the run is not
+  // auto-driven, but the panel's "mark turn complete" must ACCEPT the present plan and advance to the
+  // reviewers WITHOUT re-running the work turn — the whole point is to not regenerate a finished plan.
+  const repo = seedBootstrapFlowRepo('agent-term-e2e-accept-');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-accept-home-'));
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-accept-bin-');
+  // turnMarkers so we can prove the work turn is NOT re-run on accept (its marker count stays put).
+  seedFakeAgent(binDir, { work: 'plan-only', reviews: 'all', consolidate: 'clean', turnMarkers: true });
+  await driveToWorkTurn(repo, home, binDir, logFile, '2500'); // short stall window: the silent post-plan turn errors
+
+  const stateFile = join(repo, '.agent-loop', 'state.yaml');
+  await expect.poll(() => (existsSync(stateFile) ? readFileSync(stateFile, 'utf8') : ''), { timeout: 20_000 }).toContain('status: error');
+  expect(existsSync(join(repo, '.agent-loop', 'plan.md'))).toBe(true);
+  const workRuns = (): number => {
+    const f = join(repo, '.agent-loop', 'work-ran');
+    return existsSync(f) ? readFileSync(f, 'utf8').length : 0;
+  };
+  const runsBeforeAccept = workRuns();
+  expect(runsBeforeAccept).toBeGreaterThan(0); // the work turn ran once, live
+
+  // Relaunch into the stranded repo with the fake-agent AS the shell so the accepted turn's chained
+  // reviewers fan-out injects straight into the agent (no bootstrap, no live turn — a cold reopen).
+  await app.close();
+  app = await electron.launch({
+    args: ['out/main/index.js'],
+    env: {
+      ...process.env,
+      APP_SHELL: join(binDir, 'fake-agent'),
+      APP_LAUNCH_DIR: repo,
+      HOME: home,
+      APP_SUBMIT_DELAY_MS: '100',
+      APP_TURN_TIMEOUT_MS: '30000',
+      CLAUDE_CONFIG_DIR: exampleConfigDir,
+      PATH: `${binDir}:${process.env.PATH}`,
+      FAKE_GHGIT_LOG: logFile,
+    },
+  });
+  page = await app.firstWindow();
+
+  // The reconstructed error still shows in the panel with its recovery controls; accept it. (The fake-agent
+  // shell prints nothing, so wait on the flow strip's loop read-out, not terminal text.)
+  await expect(loopReadout()).toBeVisible({ timeout: 15_000 });
+  await loopReadout().click();
+  await expect(loopPanel()).toContainText('error', { timeout: 10_000 });
+  await loopPanel().locator('[data-loop-mark-complete]').click();
+
+  // Land: the reviewers fan-out ran (per-persona JSON), the run left error, and the work turn was NOT
+  // re-run (its marker count is unchanged — the plan was accepted, not regenerated).
+  await expect.poll(() => existsSync(join(repo, '.agent-loop', 'reviews', '1', 'review-contracts.json')), { timeout: 25_000 }).toBe(true);
+  await expect.poll(() => readFileSync(stateFile, 'utf8'), { timeout: 20_000 }).not.toContain('status: error');
+  expect(workRuns()).toBe(runsBeforeAccept);
+
+  await app.close();
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+  rmSync(binDir, { recursive: true, force: true });
+});
+
 test('a work turn completes on the turn-done FILE alone, with no sentinel line (§26.13 / L2 / D47a)', async () => {
   // §26.3/D47a's done-signal is "the sentinel LINE OR the turn-done FILE". The other L2 happy-path tests
   // emit both, so the file-watch path is never proven alone. Here the fake-agent writes plan.md and the

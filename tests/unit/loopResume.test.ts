@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { decideResume, type ResumeInputs } from '../../src/main/loopResume';
+import { currentTurnByArtifacts, decideResume, type ResumeInputs } from '../../src/main/loopResume';
 
 // §26.11 — auto-resume from state.yaml. On launch (or cd into a managed repo) the orchestrator resumes an
 // in-flight run at the recorded status/iteration, honoring the bound LoopDef's resume_contract rather than
@@ -70,5 +70,39 @@ describe('decideResume (§26.11)', () => {
         base({ midIterSafe: false, artifacts: { reviewsStarted: true, reviewsComplete: true, consolidated: false } }),
       ),
     ).toEqual({ kind: 'work', phaseId: 'plan', iteration: 2 });
+  });
+});
+
+// §26.3 — the artifact→current-turn mapping decoupled from the entry-status check. `decideResume` uses it
+// after confirming the status IS a phase entry status; the error-recovery reconstruction uses it to name
+// which turn a run stopped at (the earliest turn of the iteration whose artifact is missing), so an errored
+// run can be resumed or accepted without re-running completed work. plan.md is NOT an artifact here (it is
+// not iteration-scoped), so a work turn that wrote plan.md but errored still maps to `work`.
+describe('currentTurnByArtifacts (§26.3 / §26.11)', () => {
+  const arts = (over: Partial<{ reviewsStarted: boolean; reviewsComplete: boolean; consolidated: boolean }> = {}) => ({
+    reviewsStarted: false,
+    reviewsComplete: false,
+    consolidated: false,
+    ...over,
+  });
+
+  it('no downstream artifact → work (an errored work turn, even with plan.md on disk)', () => {
+    expect(currentTurnByArtifacts(true, arts())).toBe('work');
+  });
+  it('a partial fan-out → reviewers', () => {
+    expect(currentTurnByArtifacts(true, arts({ reviewsStarted: true }))).toBe('reviewers');
+  });
+  it('all reviews present, no verdict → consolidate', () => {
+    expect(currentTurnByArtifacts(true, arts({ reviewsStarted: true, reviewsComplete: true }))).toBe('consolidate');
+  });
+  it('every artifact present → post-consolidate', () => {
+    expect(currentTurnByArtifacts(true, arts({ reviewsStarted: true, reviewsComplete: true, consolidated: true }))).toBe(
+      'post-consolidate',
+    );
+  });
+  it('mid_iter_safe false always names work (rewind to the iteration start)', () => {
+    expect(currentTurnByArtifacts(false, arts({ reviewsStarted: true, reviewsComplete: true, consolidated: true }))).toBe(
+      'work',
+    );
   });
 });

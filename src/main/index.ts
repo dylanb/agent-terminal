@@ -95,7 +95,7 @@ import { createSentinelWatcher } from './turnSentinel';
 import { readAndClearTurnDone, watchTurnDone } from './turnDoneFile';
 import { writeLoopState } from './loopStateWriter';
 import { readLoopExtension } from './loopStateReader';
-import { decideResume } from './loopResume';
+import { currentTurnByArtifacts, decideResume } from './loopResume';
 import { turnDoneSentinel } from '../shared/loopTurn';
 import type { FlowStepDef } from './flow';
 import { listTodoTemplates, loadTodoTemplateFile, parseTodoTemplate } from './todoTemplate';
@@ -301,6 +301,17 @@ async function createWindow(): Promise<void> {
   let turnTimer: ReturnType<typeof setTimeout> | null = null;
   let unwatchTurnDone: (() => void) | null = null;
   let turnRunner: TurnRunner;
+  // §26.3/D47a(b) — whether a turn's expected artifact exists and parses. Standalone (not just the runner's
+  // dep) so the §26.3/D48 error-recovery "accept" path can gate on the SAME check the runner uses.
+  const artifactPresentFor = (turn: ActiveTurn): boolean => {
+    if (turn.kind === 'reviewers') return allReviewsPresent(turn.repoDir, turn.iteration, turn.personas);
+    if (turn.kind === 'consolidate') return consolidatedVerdict(turn.repoDir, turn.iteration) !== null;
+    try {
+      return statSync(path.join(turn.repoDir, '.agent-loop', 'plan.md')).size > 0;
+    } catch {
+      return false;
+    }
+  };
   const turnSentinel = createSentinelWatcher(() => turnRunner.onDoneSignal());
   turnRunner = createTurnRunner({
     compose: () => {
@@ -347,20 +358,7 @@ async function createWindow(): Promise<void> {
       inject(prompt, { submit: true });
     },
     hostedAgent: () => classifyHostedAgent(hostedAgentPresent(tracker.summaries()), agentActivity),
-    artifactPresent: () => {
-      if (!activeTurn) return false;
-      if (activeTurn.kind === 'reviewers') {
-        return allReviewsPresent(activeTurn.repoDir, activeTurn.iteration, activeTurn.personas);
-      }
-      if (activeTurn.kind === 'consolidate') {
-        return consolidatedVerdict(activeTurn.repoDir, activeTurn.iteration) !== null;
-      }
-      try {
-        return statSync(path.join(activeTurn.repoDir, '.agent-loop', 'plan.md')).size > 0;
-      } catch {
-        return false;
-      }
-    },
+    artifactPresent: () => (activeTurn ? artifactPresentFor(activeTurn) : false),
     armTimer: () => {
       if (turnTimer) clearTimeout(turnTimer); // self-clearing: a re-arm (each activity edge) replaces, never leaks
       turnTimer = setTimeout(() => turnRunner.onStall(), config.stallTimeoutMs);
@@ -389,18 +387,24 @@ async function createWindow(): Promise<void> {
       const finished = activeTurn;
       if (finished) audit.recordCommand(finished.repoDir, 'turn', `turn ${turnKey} complete`, 0);
       pushFlowChanged();
-      // §26.4 — the work turn's completion chains into the reviewer fan-out (same loop, same iteration).
-      if (finished?.kind === 'work') startReviewersTurn(finished.repoDir, finished.loopName, finished.phase);
-      // §26.3/D46 — the fan-out chains into the consolidate turn, /clear-ing the instance first so the
-      // consolidator merges in a fresh main-instance context (the work-agent's context cannot bias it).
-      else if (finished?.kind === 'reviewers') {
-        clearContext();
-        startConsolidateTurn(finished.repoDir, finished.loopName, finished.phase, finished.iteration);
-      }
-      // §26.6 — the consolidate verdict decides the branch (clean STOPs at the gate, needs-work re-iterates).
-      else if (finished?.kind === 'consolidate') advanceAfterConsolidate(finished);
+      chainAfter(finished);
     },
   });
+  // §26.4/§26.6 — the turn→next-turn chain a completed turn advances into. One definition shared by the
+  // automatic completion path (onComplete) and the §26.3/D48 recovery "accept" path (markTurnComplete),
+  // so a human-accepted turn advances through the exact same steps a signalled one would.
+  const chainAfter = (finished: ActiveTurn | null): void => {
+    // §26.4 — the work turn chains into the reviewer fan-out (same loop, same iteration).
+    if (finished?.kind === 'work') startReviewersTurn(finished.repoDir, finished.loopName, finished.phase);
+    // §26.3/D46 — the fan-out chains into the consolidate turn, /clear-ing the instance first so the
+    // consolidator merges in a fresh main-instance context (the work-agent's context cannot bias it).
+    else if (finished?.kind === 'reviewers') {
+      clearContext();
+      startConsolidateTurn(finished.repoDir, finished.loopName, finished.phase, finished.iteration);
+    }
+    // §26.6 — the consolidate verdict decides the branch (clean STOPs at the gate, needs-work re-iterates).
+    else if (finished?.kind === 'consolidate') advanceAfterConsolidate(finished);
+  };
   // The §8.3 active→quiet flip is the orchestrator's "instance is now injectable" signal (§26.2) —
   // assigned once the runner exists so the shadow's onStatus (built earlier) can fire it forward.
   notifyInjectable = () => turnRunner.onInjectable();
@@ -419,28 +423,48 @@ async function createWindow(): Promise<void> {
     });
     turnRunner.requestTurn(activeTurn.turnKey);
   };
+  // §26.3/D48 — clear an `error` status back to the turn's phase entry status (dropping the stale reason)
+  // so the mirror leaves the error state. Shared by the Retry (re-drive) and the accept (advance) recovery
+  // paths; a no-op when the def/phase can't be resolved (retry still proceeds to re-request the turn).
+  const clearErrorToEntry = (repoKey: string, turn: ActiveTurn): void => {
+    const def = parseLoopDef(repoKey, turn.loopName);
+    const entryStatus = def?.phases.find((p) => p.id === turn.phase)?.entryStatus;
+    if (!entryStatus) return;
+    const s = parseAgentLoopState(repoKey);
+    writeLoopState(repoKey, {
+      status: entryStatus,
+      iteration: s?.iteration ?? 1,
+      pr: s?.pr ?? null,
+      branch: s?.branch ?? null,
+      boundLoop: turn.loopName,
+      linkedIssues: s?.linkedIssues ?? [],
+    });
+    pushFlowChanged();
+  };
   // §26.3/D48 recovery — re-drive the turn that stopped in `error` (e.g. after the operator starts Claude
-  // for a `no hosted agent` stop). Clear the error status back to the phase's entry status (dropping the
-  // reason) so the mirror leaves the error state, then re-request the SAME turn: it injects if the agent is
-  // now present, or stops in error again if not. No-op when no turn is active for this repo.
+  // for a `no hosted agent` stop). Clear the error status, then re-request the SAME turn: it injects if the
+  // agent is now present, or stops in error again if not. No-op when no turn is active for this repo.
   const retryActiveTurn = (repoKey: string): void => {
     const turn = activeTurn; // capture: the intervening writes must not lose the null-narrowing
     if (!turn || turn.repoDir !== repoKey) return;
-    const def = parseLoopDef(repoKey, turn.loopName);
-    const entryStatus = def?.phases.find((p) => p.id === turn.phase)?.entryStatus;
-    if (entryStatus) {
-      const s = parseAgentLoopState(repoKey);
-      writeLoopState(repoKey, {
-        status: entryStatus,
-        iteration: s?.iteration ?? 1,
-        pr: s?.pr ?? null,
-        branch: s?.branch ?? null,
-        boundLoop: turn.loopName,
-        linkedIssues: s?.linkedIssues ?? [],
-      });
-      pushFlowChanged();
-    }
+    clearErrorToEntry(repoKey, turn);
     turnRunner.requestTurn(turn.turnKey);
+  };
+  // §26.3/D47a(c) + D48 — the operator's "this turn is done" control. When the run stopped in `error` and
+  // the errored turn's artifact is actually present (a late done-signal the engine gave up on — e.g. a plan
+  // finished after the run erred), ACCEPT it: clear the error and chain to the next turn via the SAME path a
+  // signalled completion takes (work→reviewers), WITHOUT re-running the turn — so an accepted plan is never
+  // regenerated. Otherwise (a live in-flight turn) it is the D47a(c) manual-advance override, unchanged.
+  const markTurnComplete = (repoKey: string): void => {
+    const turn = activeTurn;
+    if (turn && turn.repoDir === repoKey && parseAgentLoopState(repoKey)?.status === 'error') {
+      if (!artifactPresentFor(turn)) return; // nothing to accept — Retry (re-run) is the path
+      audit.recordCommand(turn.repoDir, 'turn', `turn ${turn.turnKey} accepted (artifact present)`, 0);
+      clearErrorToEntry(repoKey, turn);
+      chainAfter(turn);
+      return;
+    }
+    turnRunner.markComplete();
   };
   // §26.5 — the plan-phase skip footprint, or null when there is no plan.md (the impl phase's file-set
   // footprint is a recorded v1 gap, so the skip-opt is confined to the plan phase where plan.md exists).
@@ -596,6 +620,51 @@ async function createWindow(): Promise<void> {
     if (!loopName) return;
     const def = parseLoopDef(repoDir, loopName);
     if (!def?.resume) return;
+    // §26.3/D48 recovery — a run persisted in `error` is NOT auto-re-driven (human-owned), but it IS
+    // reconstructed (no injection) so the loop panel's Retry (re-run) and "mark turn complete" (accept the
+    // present artifact and advance) act on the right turn after a relaunch. Which turn errored is inferred
+    // from the same artifact evidence resume uses. Single-phase defs only — the vendored plan-loop/impl-loop
+    // are single-phase; a multi-phase error's phase is ambiguous from state.yaml alone (recorded gap).
+    if (s.status === 'error') {
+      if (def.phases.length !== 1) return;
+      const errPhase = def.phases[0];
+      const errRoster = reviewerRosterForPhase(def, errPhase.id);
+      const kind = currentTurnByArtifacts(def.resume.midIterSafe, {
+        reviewsStarted: errRoster.length > 0 && anyReviewPresent(repoDir, s.iteration, errRoster),
+        reviewsComplete: errRoster.length > 0 && allReviewsPresent(repoDir, s.iteration, errRoster),
+        consolidated: consolidatedVerdict(repoDir, s.iteration) !== null,
+      });
+      if (kind === 'post-consolidate') return; // the verdict branch, not a turn to reconstruct (recorded gap)
+      resumedRepos.add(repoDir);
+      audit.recordCommand(repoDir, 'resume', `reconstruct ${kind} error at iter ${s.iteration}`, 0);
+      if (kind === 'work') {
+        activeTurn = { kind: 'work', repoDir, loopName, phase: errPhase.id, turnKey: `work-${errPhase.id}` };
+        unwatchTurnDone?.();
+        unwatchTurnDone = watchTurnDone(repoDir, () => {
+          if (readAndClearTurnDone(repoDir) !== null) turnRunner.onDoneSignal();
+        });
+      } else if (kind === 'reviewers') {
+        activeTurn = {
+          kind: 'reviewers',
+          repoDir,
+          loopName,
+          phase: errPhase.id,
+          turnKey: `review-${errPhase.id}`,
+          personas: errRoster,
+          iteration: s.iteration,
+        };
+      } else {
+        activeTurn = {
+          kind: 'consolidate',
+          repoDir,
+          loopName,
+          phase: errPhase.id,
+          turnKey: `consolidate-${errPhase.id}`,
+          iteration: s.iteration,
+        };
+      }
+      return;
+    }
     const phase = def.phases.find((p) => p.entryStatus === s.status);
     const roster = phase ? reviewerRosterForPhase(def, phase.id) : [];
     const decision = decideResume({
@@ -953,9 +1022,10 @@ async function createWindow(): Promise<void> {
       [CH.agentInject]: (_e, m) => {
         if (isValidInject(m)) inject(m.text, { submit: m.submit });
       },
-      // §26.3/D47a(c) — the operator's manual "this turn is done" override for the in-flight loop turn.
+      // §26.3/D47a(c) + D48 — the operator's "this turn is done" control: a manual advance for a live
+      // in-flight turn, or (on an `error` with the artifact present) accept-and-advance without re-running.
       [CH.flowMarkTurnComplete]: (_e, m) => {
-        if (isValidFlowRequest(m)) turnRunner.markComplete();
+        if (isValidFlowRequest(m)) markTurnComplete(m.repoKey);
       },
       // §26.6 / L5 — the human's data-driven gate decision, executed app-internally.
       [CH.flowGateDecision]: (_e, m) => {

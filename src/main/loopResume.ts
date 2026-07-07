@@ -35,22 +35,28 @@ export type ResumeDecision =
   | { kind: 'consolidate'; phaseId: string; iteration: number }
   | { kind: 'post-consolidate'; phaseId: string; iteration: number };
 
+/** The turn kind a run is currently at, from the iteration-scoped artifacts alone — the EARLIEST turn whose
+ *  artifact is missing (so completed turns are never re-run), or `work` when `mid_iter_safe` is false
+ *  (rewind to the iteration start). plan.md is deliberately NOT an artifact here, so a work turn that wrote
+ *  plan.md but errored still maps to `work`. Shared by `decideResume` (mid-work auto-resume) and the
+ *  §26.3/D48 error-recovery reconstruction (which turn a run stopped at), so the two cannot disagree. */
+export function currentTurnByArtifacts(
+  midIterSafe: boolean,
+  artifacts: ResumeArtifacts,
+): 'work' | 'reviewers' | 'consolidate' | 'post-consolidate' {
+  if (!midIterSafe) return 'work';
+  const workDone = artifacts.reviewsStarted || artifacts.reviewsComplete || artifacts.consolidated;
+  if (!workDone) return 'work';
+  if (!artifacts.reviewsComplete) return 'reviewers';
+  if (!artifacts.consolidated) return 'consolidate';
+  return 'post-consolidate';
+}
+
 /** Decide the resume action (§26.11). Only a status that IS a phase's entry_status is mid-work and
  *  re-driven; otherwise `none`. Mid-work re-enters the earliest turn whose artifact is missing (so
  *  completed turns are never re-run), or rewinds to work when `mid_iter_safe` is false. */
 export function decideResume(inputs: ResumeInputs): ResumeDecision {
   const phase = inputs.phases.find((p) => p.entryStatus === inputs.status);
   if (!phase) return { kind: 'none' };
-  const at = (kind: 'work' | 'reviewers' | 'consolidate' | 'post-consolidate'): ResumeDecision => ({
-    kind,
-    phaseId: phase.id,
-    iteration: inputs.iteration,
-  });
-  if (!inputs.midIterSafe) return at('work');
-  const a = inputs.artifacts;
-  const workDone = a.reviewsStarted || a.reviewsComplete || a.consolidated;
-  if (!workDone) return at('work');
-  if (!a.reviewsComplete) return at('reviewers');
-  if (!a.consolidated) return at('consolidate');
-  return at('post-consolidate');
+  return { kind: currentTurnByArtifacts(inputs.midIterSafe, inputs.artifacts), phaseId: phase.id, iteration: inputs.iteration };
 }
