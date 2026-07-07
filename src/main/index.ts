@@ -362,8 +362,8 @@ async function createWindow(): Promise<void> {
       }
     },
     armTimer: () => {
-      if (turnTimer) clearTimeout(turnTimer); // self-clearing: a re-arm (defer→inject) replaces, never leaks
-      turnTimer = setTimeout(() => turnRunner.onTimeout(), config.turnCompletionTimeoutMs);
+      if (turnTimer) clearTimeout(turnTimer); // self-clearing: a re-arm (each activity edge) replaces, never leaks
+      turnTimer = setTimeout(() => turnRunner.onStall(), config.stallTimeoutMs);
     },
     cancelTimer: () => {
       if (turnTimer) clearTimeout(turnTimer);
@@ -404,6 +404,10 @@ async function createWindow(): Promise<void> {
   // The §8.3 active→quiet flip is the orchestrator's "instance is now injectable" signal (§26.2) —
   // assigned once the runner exists so the shadow's onStatus (built earlier) can fire it forward.
   notifyInjectable = () => turnRunner.onInjectable();
+  // Every §8.3 visible-content edge resets the in-flight turn's stall watchdog (§26.3): a streaming turn
+  // keeps producing edges so it never stalls, while a frozen screen stops producing them and counts down.
+  // Inert unless a turn is in flight (the runner guards it), so this is idle-cheap outside a loop.
+  shadow.onActivity(() => turnRunner.noteActivity());
   // Bind a freshly-bootstrapped loop step's work turn: watch for its done-signal file and request the
   // turn (injected when the instance next goes injectable). The watcher stays attached across the turns
   // chained off this one (work → reviewers), so each turn's done-signal file is seen.

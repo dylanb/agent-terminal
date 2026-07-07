@@ -144,6 +144,49 @@ describe('content-diff quiescence for a repainting TUI (§8.3)', () => {
   });
 });
 
+// §26.3 stall watchdog — the turn runner resets its stall deadline on every *visible-content change*
+// edge (the same §8.3 signal that reaches quiescence), so a streaming turn never stalls but a frozen
+// screen counts down. onActivity exposes that edge; an identical repaint is NOT an edge.
+describe('shadow.onActivity — fires per visible-content-change edge (§26.3)', () => {
+  let shadow: ReturnType<typeof createShadowModel>;
+  const repaint = (frame: string) => `\x1b[2J\x1b[H${frame}`;
+
+  beforeEach(() => {
+    shadow = createShadowModel({ cols: 80, rows: 24, settleMs: SETTLE_MS, quietMs: QUIET_MS, onStatus: () => {} });
+  });
+  afterEach(() => shadow.dispose());
+
+  it('fires on a changed frame but NOT on an identical repaint', async () => {
+    let hits = 0;
+    shadow.onActivity(() => hits++);
+    shadow.write(`\x1b[?1049h${repaint('frame one')}`);
+    await settle();
+    const afterFirst = hits;
+    expect(afterFirst).toBeGreaterThan(0); // the initial paint is an edge
+
+    shadow.write(repaint('frame one')); // identical → no edge
+    await settle();
+    expect(hits).toBe(afterFirst);
+
+    shadow.write(repaint('frame two')); // changed → one edge
+    await settle();
+    expect(hits).toBe(afterFirst + 1);
+  });
+
+  it('stops firing after the returned unsubscribe', async () => {
+    let hits = 0;
+    const off = shadow.onActivity(() => hits++);
+    shadow.write('a');
+    await settle();
+    const n = hits;
+    expect(n).toBeGreaterThan(0);
+    off();
+    shadow.write('bc');
+    await settle();
+    expect(hits).toBe(n);
+  });
+});
+
 describe('shadow read API for semantic capture (§15.2 / D1)', () => {
   let shadow: ReturnType<typeof createShadowModel>;
 

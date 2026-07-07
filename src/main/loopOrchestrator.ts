@@ -78,9 +78,10 @@ export interface TurnRunnerDeps {
   /** True iff the turn's expected artifact exists and parses (§26.3/D47a b); artifact-less turns pass a
    *  turn-appropriate check here. */
   artifactPresent(): boolean;
-  /** Arm the completion timeout; the host calls `onTimeout()` when it elapses. */
+  /** Arm (or re-arm) the stall watchdog; the host calls `onStall()` when it elapses with no intervening
+   *  `noteActivity()`. Not a completion deadline — a working turn keeps it reset via visible activity. */
   armTimer(): void;
-  /** Cancel a previously-armed completion timeout. */
+  /** Cancel a previously-armed stall watchdog. */
   cancelTimer(): void;
   /** Persist `status: error` with the reason (§26.3/D48). */
   writeError(reason: string): void;
@@ -96,14 +97,17 @@ export interface TurnRunner {
   onInjectable(): void;
   /** A done-signal (sentinel line or file) was observed for the in-flight turn. */
   onDoneSignal(): void;
-  /** The completion timer elapsed for the in-flight turn. */
-  onTimeout(): void;
+  /** A visible-content-change edge (§8.3) was observed — reset the in-flight turn's stall watchdog. */
+  noteActivity(): void;
+  /** The stall watchdog elapsed for the in-flight turn (no visible activity for the whole window). */
+  onStall(): void;
   /** Operator override (§26.3/D47a c): assert the in-flight turn is done. */
   markComplete(): void;
   state(): TurnState;
 }
 
-// Total injections per turn before the run errors: the initial attempt plus one retry (§26.3/D48).
+// Total injections per turn before the run errors: the initial attempt plus one retry on a missing
+// artifact (§26.3/D48). A stall never retries — it errors straight to the human.
 const MAX_ATTEMPTS = 2;
 
 export function createTurnRunner(deps: TurnRunnerDeps): TurnRunner {
@@ -127,17 +131,17 @@ export function createTurnRunner(deps: TurnRunnerDeps): TurnRunner {
     }
     if (agent === 'busy') {
       awaitingInjectable = true;
-      // Bound only a RETRY that cannot re-inject (a prior attempt was already spent) so an instance that
-      // never returns to injectable after a failed turn resolves to `error` (§26.3/D48) instead of
-      // hanging. A turn's FIRST wait for injectability is the happy path (e.g. the work→reviewers chain
-      // waiting out the instance's post-turn quiescence) and is left unbounded — bounding it would race
-      // quiescence-detection latency under load.
-      if (attempts > 0) deps.armTimer();
+      // The stall watchdog runs during the wait — visible activity (the busy instance is producing output)
+      // keeps resetting it, so only a genuinely frozen instance that never returns to injectable resolves
+      // to `error` (§26.3/D48) instead of hanging. Safe to arm on the first wait now that it is
+      // activity-gated (a long window reset by any repaint), not a wall-clock deadline racing quiescence.
+      deps.armTimer();
       return;
     }
     awaitingInjectable = false;
     const prompt = deps.compose(turnKey);
     if (prompt === null) {
+      deps.cancelTimer();
       state = 'error';
       deps.writeError(`could not compose prompt for ${turnKey}`);
       return;
@@ -186,16 +190,23 @@ export function createTurnRunner(deps: TurnRunnerDeps): TurnRunner {
     onDoneSignal() {
       resolveCompletion();
     },
-    onTimeout() {
-      // A deadline reached while still waiting to inject means the instance never became injectable —
-      // a retry cannot help, so stop in `error` directly rather than looping the defer (§26.3/D48).
-      if (awaitingInjectable) {
-        deps.cancelTimer();
-        state = 'error';
-        deps.writeError('completion timeout: instance never became injectable');
-        return;
-      }
-      fail('completion timeout: no done-signal');
+    noteActivity() {
+      // Every §8.3 visible-content edge resets the stall watchdog: a streaming turn never stalls, only a
+      // frozen screen counts down. Inert unless a turn is in flight — a late repaint on a finished turn
+      // must not re-arm a dead deadline.
+      if (state === 'in-flight') deps.armTimer();
+    },
+    onStall() {
+      // No visible activity for the whole (long) stall window while in flight — a genuine freeze, not a
+      // slow-but-working turn (which keeps resetting the watchdog via noteActivity). Re-injecting a frozen
+      // instance cannot help, so stop in `error` directly (recoverable Retry), never a wall-clock kill of
+      // a working turn (§26.3/D48).
+      if (state !== 'in-flight') return;
+      deps.cancelTimer();
+      state = 'error';
+      deps.writeError(
+        awaitingInjectable ? 'stalled: the hosted agent never became injectable' : 'stalled: no terminal activity',
+      );
     },
     markComplete() {
       resolveCompletion();

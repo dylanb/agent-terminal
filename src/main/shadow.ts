@@ -47,6 +47,10 @@ export interface ShadowModel {
   reader: ShadowReader;
   /** Fires on each active→quiet transition, after a parse-queue barrier so the buffer reflects all pre-transition bytes (§15.2). */
   onQuiet(cb: () => void): () => void;
+  /** Fires on each visible-content-change edge — the same §8.3 signal quiescence keys off (an identical
+   *  repaint is NOT an edge). The §26.3 stall watchdog resets its deadline on this so a streaming turn
+   *  never stalls while a frozen screen counts down. */
+  onActivity(cb: () => void): () => void;
   /** Place a watermark at an absolute buffer row; undefined on the alt buffer (§15.2 / D2). */
   addMarker(absRow: number): ShadowMarker | undefined;
   /** Register an OSC handler (e.g. 133 shell-integration marks, §15.5). */
@@ -79,6 +83,7 @@ export function createShadowModel(opts: {
   // previous visible-screen text; an identical repaint is not activity.
   let lastSignature: string | null = null;
   const quietCbs = new Set<() => void>();
+  const activityCbs = new Set<() => void>();
   const oscDisposables: IDisposable[] = [];
 
   const detector = createQuiescenceDetector({
@@ -157,6 +162,7 @@ export function createShadowModel(opts: {
         if (sig !== lastSignature) {
           lastSignature = sig;
           detector.noteOutputActivity();
+          for (const cb of activityCbs) cb();
         }
       });
       if (settleTimer) clearTimeout(settleTimer);
@@ -183,6 +189,10 @@ export function createShadowModel(opts: {
       quietCbs.add(cb);
       return () => quietCbs.delete(cb);
     },
+    onActivity(cb) {
+      activityCbs.add(cb);
+      return () => activityCbs.delete(cb);
+    },
     addMarker(absRow) {
       if (disposed || reader.bufferType() === 'alternate') return undefined;
       const buf = term.buffer.active;
@@ -202,6 +212,7 @@ export function createShadowModel(opts: {
       if (settleTimer) clearTimeout(settleTimer);
       for (const d of oscDisposables) d.dispose();
       quietCbs.clear();
+      activityCbs.clear();
       detector.dispose();
       term.dispose();
     },

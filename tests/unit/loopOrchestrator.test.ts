@@ -42,8 +42,8 @@ describe('hostedAgentPresent (§26.2 — present iff no bare idle prompt)', () =
 });
 
 // §26.3/D47a + D48 — the work-agent turn runner. Asserted purely from the outside: which prompts get
-// injected, whether the completion timer is armed/cancelled, when onComplete fires, and when the run is
-// written to `error`. No PTY, no real timers — the host drives onDoneSignal/onTimeout/onInjectable.
+// injected, whether the stall watchdog is armed/reset/cancelled, when onComplete fires, and when the run
+// is written to `error`. No PTY, no real timers — the host drives onDoneSignal/onStall/onInjectable/noteActivity.
 describe('loop turn runner (§26.3/D47a, D48)', () => {
   let hosted: 'idle' | 'busy' | 'absent';
   let artifact: boolean;
@@ -91,26 +91,36 @@ describe('loop turn runner (§26.3/D47a, D48)', () => {
     expect(r.state()).toBe('complete');
   });
 
-  it('a completion timeout retries the turn exactly once, then completes', () => {
+  it('a stall stops the run in error directly, without retrying the injection (§26.3)', () => {
+    // The wall-clock completion deadline is gone: onStall means the screen went silent for the whole
+    // (long) stall window while a turn was in flight — a genuine freeze, not a slow-but-working turn.
+    // Re-injecting a frozen instance cannot help, so it errors straight to the human (recoverable Retry).
     const r = createTurnRunner(deps);
     r.requestTurn('work-plan');
-    r.onTimeout(); // first attempt produced nothing
-    expect(inject).toHaveBeenCalledTimes(2); // re-injected once
-    expect(writeError).not.toHaveBeenCalled();
-    r.onDoneSignal();
-    expect(onComplete).toHaveBeenCalledWith('work-plan');
-    expect(r.state()).toBe('complete');
-  });
-
-  it('a second failure stops the run in error (retry once, then error)', () => {
-    const r = createTurnRunner(deps);
-    r.requestTurn('work-plan');
-    r.onTimeout(); // attempt 1 fails -> retry
-    r.onTimeout(); // attempt 2 fails -> error
-    expect(inject).toHaveBeenCalledTimes(2);
+    expect(inject).toHaveBeenCalledTimes(1);
+    r.onStall();
+    expect(inject).toHaveBeenCalledTimes(1); // NOT re-injected
     expect(writeError).toHaveBeenCalledTimes(1);
+    expect(writeError.mock.calls[0][0]).toContain('stall');
     expect(onComplete).not.toHaveBeenCalled();
     expect(r.state()).toBe('error');
+  });
+
+  it('visible activity re-arms the stall deadline while in flight, but is inert once the turn ends', () => {
+    // noteActivity is fired on every §8.3 content-change edge; while a turn is in flight it resets the
+    // watchdog (a streaming turn never stalls). After the turn completes/errors it must NOT re-arm — a
+    // late repaint on a finished turn cannot resurrect a dead deadline.
+    const r = createTurnRunner(deps);
+    r.requestTurn('work-plan');
+    expect(armTimer).toHaveBeenCalledTimes(1); // armed on inject
+    r.noteActivity();
+    r.noteActivity();
+    expect(armTimer).toHaveBeenCalledTimes(3); // each edge re-arms
+    r.onDoneSignal();
+    expect(r.state()).toBe('complete');
+    armTimer.mockClear();
+    r.noteActivity();
+    expect(armTimer).not.toHaveBeenCalled();
   });
 
   it('treats a done-signal with the artifact missing as a failure (retries)', () => {
@@ -120,6 +130,18 @@ describe('loop turn runner (§26.3/D47a, D48)', () => {
     r.onDoneSignal(); // signalled, but plan.md absent
     expect(onComplete).not.toHaveBeenCalled();
     expect(inject).toHaveBeenCalledTimes(2); // retried
+  });
+
+  it('a second missing-artifact done-signal stops the run in error (retry once, then error)', () => {
+    artifact = false;
+    const r = createTurnRunner(deps);
+    r.requestTurn('work-plan');
+    r.onDoneSignal(); // attempt 1: signalled, artifact absent -> retry
+    r.onDoneSignal(); // attempt 2: still absent -> error
+    expect(inject).toHaveBeenCalledTimes(2);
+    expect(writeError).toHaveBeenCalledTimes(1);
+    expect(onComplete).not.toHaveBeenCalled();
+    expect(r.state()).toBe('error');
   });
 
   it('never injects over a busy instance: defers until injectable (§26.2)', () => {
@@ -160,11 +182,12 @@ describe('loop turn runner (§26.3/D47a, D48)', () => {
     expect(r.state()).toBe('error');
   });
 
-  it('a retry also waits for the instance to become injectable before re-injecting', () => {
+  it('a missing-artifact retry also waits for the instance to become injectable before re-injecting', () => {
+    artifact = false;
     const r = createTurnRunner(deps);
     r.requestTurn('work-plan'); // injected (attempt 1)
     hosted = 'busy';
-    r.onTimeout(); // wants to retry, but instance is busy
+    r.onDoneSignal(); // signalled but artifact absent -> wants to retry, but instance is busy
     expect(inject).toHaveBeenCalledTimes(1);
     hosted = 'idle';
     r.onInjectable();
@@ -197,22 +220,21 @@ describe('loop turn runner (§26.3/D47a, D48)', () => {
     expect(r.state()).toBe('idle');
   });
 
-  it('a retry that can never inject (instance never becomes injectable) still stops in error (§26.3/D48)', () => {
-    // The failure-safety gap D48 closes: after a timeout the retry defers when the instance is busy. If
-    // the instance never returns to injectable, the run must still resolve to `error` (human-needed),
-    // not hang forever in-flight with no attention cue.
+  it('a turn deferred on a busy instance that never becomes injectable stalls into error (§26.3/D48)', () => {
+    // The failure-safety gap D48 closes: a turn requested while the instance is busy defers. The stall
+    // watchdog runs during the wait (armed on defer, reset by any visible activity), so an instance that
+    // stays busy but goes silent — never returning to injectable — still resolves to `error` (human-needed)
+    // rather than hanging forever in-flight with no attention cue.
+    hosted = 'busy'; // the instance is — and stays — busy
     const r = createTurnRunner(deps);
-    r.requestTurn('work-plan'); // attempt 1 injected
-    expect(inject).toHaveBeenCalledTimes(1);
-    hosted = 'busy'; // the instance goes — and stays — busy
-    r.onTimeout(); // attempt 1 times out → wants to retry, but cannot inject → deferred
-    expect(inject).toHaveBeenCalledTimes(1); // no second injection
-    // The deferred retry MUST re-arm the deadline (the half of the D48 fix that makes onTimeout fire
-    // again in production); without it the run hangs forever and onTimeout below would never be reached.
-    expect(armTimer).toHaveBeenCalledTimes(2);
+    r.requestTurn('work-plan');
+    expect(inject).not.toHaveBeenCalled(); // deferred, nothing injected into a busy instance
+    expect(armTimer).toHaveBeenCalledTimes(1); // watchdog armed while we wait
     expect(r.state()).toBe('in-flight');
-    r.onTimeout(); // the deferred wait-for-injectable deadline elapses, instance still busy
+    r.onStall(); // the wait went silent for the whole stall window, instance still busy
+    expect(inject).not.toHaveBeenCalled();
     expect(writeError).toHaveBeenCalledTimes(1);
+    expect(writeError.mock.calls[0][0]).toContain('injectable');
     expect(r.state()).toBe('error');
   });
 

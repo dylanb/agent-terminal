@@ -1696,6 +1696,18 @@ function seedFakeAgent(
     // §26.11/L8 — when set, each turn appends to `.agent-loop/<turn>-ran` when it runs, so a resume e2e can
     // prove a completed turn was NOT re-executed (the marker for a skipped turn stays absent).
     turnMarkers?: boolean;
+    // §8.3/§26.2 — when set, the agent enters the alt screen and repaints an IDENTICAL idle frame on a
+    // ~200ms timer (< QUIET_MS) from a background writer that never reads stdin, modelling a full-screen TUI
+    // agent (Claude Code, Codex) that is never byte-silent even at rest. This is the one agent shape the
+    // line-oriented REPL cannot otherwise produce. Under byte-presence quiescence the repaint pins
+    // agentState 'active' forever, so the §26.2 gate reads `busy` and defers the work turn indefinitely;
+    // content-diff quiescence (§8.3) sees an unchanged frame, reaches quiet, and the turn injects.
+    idleRepaint?: boolean;
+    // §26.3 — when set, the work turn STREAMS changing lines (~9s of new content faster than the stall
+    // window) BEFORE it writes plan.md and signals done. Each changed line is a §8.3 content edge that
+    // resets the stall watchdog, so a turn that runs far past a short APP_TURN_TIMEOUT_MS still advances.
+    // Under a wall-clock deadline (or with the activity reset unwired) the same turn is killed mid-stream.
+    slowWork?: boolean;
   },
 ): void {
   // A per-turn execution marker (§26.11 resume): its presence proves that turn actually ran this session.
@@ -1710,6 +1722,9 @@ function seedFakeAgent(
     ? `; if [ -n "$APP_SESSION_LOG_ROOT" ]; then mkdir -p "$APP_SESSION_LOG_ROOT"; ` +
       `printf '%s\\n' '{"type":"assistant","message":{"model":"claude-sonnet-5","usage":{"input_tokens":1000000,"output_tokens":0}}}' > "$APP_SESSION_LOG_ROOT/session.jsonl"; fi`
     : '';
+  // §26.3 — a stream of changing lines that outlasts a short stall window; each line is a §8.3 edge that
+  // must reset the watchdog. Runs BEFORE plan.md so a killed turn leaves no artifact (a clean RED landing).
+  const workStream = opts.slowWork ? "for i in $(seq 1 30); do printf 'working %s\\n' \"$i\"; sleep 0.3; done; " : '';
   const workAct =
     opts.work === 'noop'
       ? ':'
@@ -1717,7 +1732,7 @@ function seedFakeAgent(
         ? `${mark('work')}${writePlan}${writeTokens}`
         : opts.work === 'file-only'
           ? `${mark('work')}${writePlan}${writeTokens}; ${fileOnlySignal('work-plan')}`
-          : `${mark('work')}${writePlan}${writeTokens}; ${doneSignal('work-plan')}`;
+          : `${mark('work')}${workStream}${writePlan}${writeTokens}; ${doneSignal('work-plan')}`;
   // §26.4/§26.13 L4 — reviews + consolidated are per-iteration (reviews/<iter>/…). The REPL derives the
   // iteration from the app-written state.yaml so a re-iteration (needs-work) writes reviews/<iter+1>/.
   const getIter = "iter=$(grep -m1 '^iteration:' .agent-loop/state.yaml | tr -dc '0-9')";
@@ -1756,9 +1771,19 @@ function seedFakeAgent(
         `${doneSignal('consolidate-plan')}`;
   // The injected prompt's done-signal instruction line carries `turn-done:<turnKey>` (inside the sentinel
   // it tells the agent to print), so the REPL keys its scripted turn off which sentinel marker it sees.
+  // §8.3 — before the read loop, a repainting agent enters the alt screen and repaints an identical idle
+  // frame every 200ms from a background writer redirected off stdin (so the REPL below still owns injected
+  // input). The EXIT trap reaps the writer when the process closes. Bytes never stop; the frame never changes.
+  const repaintPrelude = opts.idleRepaint
+    ? "printf '\\x1b[?1049h'\n" +
+      "( while :; do printf '\\x1b[2J\\x1b[Hclaude idle >'; sleep 0.2; done ) </dev/null &\n" +
+      'RPID=$!\n' +
+      "trap 'kill $RPID 2>/dev/null' EXIT\n"
+    : '';
   const script =
     '#!/usr/bin/env bash\n' +
     '# Fake hosted agent REPL; each injected prompt line drives the scripted turn (§26.13).\n' +
+    repaintPrelude +
     'while IFS= read -r line; do\n' +
     '  [ -z "$line" ] && continue\n' +
     '  case "$line" in\n' +
@@ -2655,17 +2680,68 @@ test('a work-agent turn injected after pickup advances on plan.md + the done-sig
   rmSync(binDir, { recursive: true, force: true });
 });
 
-test('a work turn that emits no done-signal retries once then stops in error (§26.13 / L2 / D48)', async () => {
+test('a repainting (never byte-silent) hosted agent still reaches quiet, so the work turn injects (§8.3 / §26.2)', async () => {
+  const repo = seedBootstrapFlowRepo('agent-term-e2e-repaint-');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-repaint-home-'));
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-repaint-bin-');
+  // A full-screen TUI agent: on the alt screen, repainting an identical idle frame faster than QUIET_MS
+  // forever. Byte-presence quiescence would pin agentState 'active', so the §26.2 gate reads `busy` and
+  // defers the work turn indefinitely — plan.md would never appear. This is the exact production shape
+  // (Claude Code, Codex) the plain line-oriented REPL cannot model and that let the original bug ship.
+  seedFakeAgent(binDir, { work: 'write-plan', idleRepaint: true });
+  await driveToWorkTurn(repo, home, binDir, logFile, '30000');
+
+  // Land: content-diff quiescence (§8.3) reaches quiet on the unchanged frame, the §26.2 gate reads `idle`,
+  // and the injected work-plan prompt reaches the agent — which writes plan.md. plan.md is a file, immune to
+  // the screen-clearing repaint, so its appearance is the stable proof injection happened. Never auto-errors.
+  await expect.poll(() => existsSync(join(repo, '.agent-loop', 'plan.md')), { timeout: 25_000 }).toBe(true);
+  expect(readFileSync(join(repo, '.agent-loop', 'state.yaml'), 'utf8')).not.toContain('status: error');
+
+  await app.close();
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+  rmSync(binDir, { recursive: true, force: true });
+});
+
+test('a work turn that streams past the stall window still advances to the reviewers on its done-signal (§26.3)', async () => {
+  // The regression this guards: a turn that legitimately runs far longer than the (short, here) stall
+  // window must NOT be killed as long as its screen keeps changing. The fake-agent streams changing lines
+  // for ~9s — well past the 3s window — before it writes plan.md and signals. Each line is a §8.3 content
+  // edge that resets the stall watchdog, so the done-signal lands while the turn is still in flight and the
+  // work→reviewers chain runs. Under a wall-clock deadline (or with the §8.3 activity reset unwired) the
+  // same turn stalls at 3s: plan.md never appears and no review is written.
+  const repo = seedBootstrapFlowRepo('agent-term-e2e-slow-');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-slow-home-'));
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-slow-bin-');
+  seedFakeAgent(binDir, { work: 'write-plan', slowWork: true, reviews: 'all', consolidate: 'clean' });
+  await driveToWorkTurn(repo, home, binDir, logFile, '3000'); // stall window far shorter than the ~9s stream
+
+  // Land: plan.md appears only after the long stream, and the reviewers turn then runs (its per-persona
+  // JSON is the proof the chain advanced past the work turn). Never auto-errors mid-stream.
+  const reviewFile = join(repo, '.agent-loop', 'reviews', '1', 'review-contracts.json');
+  await expect.poll(() => existsSync(join(repo, '.agent-loop', 'plan.md')), { timeout: 30_000 }).toBe(true);
+  await expect.poll(() => existsSync(reviewFile), { timeout: 30_000 }).toBe(true);
+  expect(readFileSync(join(repo, '.agent-loop', 'state.yaml'), 'utf8')).not.toContain('status: error');
+
+  await app.close();
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+  rmSync(binDir, { recursive: true, force: true });
+});
+
+test('a work turn whose screen stays frozen for the stall window stops in a recoverable error (§26.3 / D48)', async () => {
   const repo = seedBootstrapFlowRepo('agent-term-e2e-l2-err-');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-l2-err-home-'));
   const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-l2-err-bin-');
-  seedFakeAgent(binDir, { work: 'noop' }); // produces nothing — no artifact, no done-signal
-  await driveToWorkTurn(repo, home, binDir, logFile, '2500'); // short timeout so two attempts elapse fast
+  seedFakeAgent(binDir, { work: 'noop' }); // produces nothing — no artifact, no output: the screen never changes
 
-  // Land: after the initial attempt + one retry both time out, the run is written to `error` and the
-  // turn failure is recorded (exit 1). The mirror renders the app-only error status.
+  await driveToWorkTurn(repo, home, binDir, logFile, '2500'); // short stall window: the silent turn stalls fast
+
+  // Land: with no visible activity for the whole stall window, the run is written to `error` and the turn
+  // failure is recorded (exit 1). The mirror renders the app-only error status with a recovery affordance.
   const stateFile = join(repo, '.agent-loop', 'state.yaml');
   await expect.poll(() => readFileSync(stateFile, 'utf8'), { timeout: 20_000 }).toContain('status: error');
+  expect(readFileSync(stateFile, 'utf8')).toContain('stalled: no terminal activity');
   expect(turnEvents(home, repo).some((e) => e.cmd.includes('failed') && e.exit === 1)).toBe(true);
   await loopReadout().click();
   await expect(loopPanel()).toContainText('error', { timeout: 10_000 });
