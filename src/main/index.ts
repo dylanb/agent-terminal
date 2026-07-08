@@ -76,7 +76,7 @@ import { auditRootDir } from './auditPaths';
 import { createFlowEntryActions } from './flowEntryActions';
 import { parseAgentLoopState, watchAgentLoopState } from './agentLoopBridge';
 import { createLoopNotifier } from './loopNotifier';
-import { parseLoopDef, gateForStatus, reviewerRosterForPhase, normalizeConsolidatedVerdict, isPersonaClean, type LoopDef, type PickupContract } from './loopDef';
+import { parseLoopDef, gateForStatus, reviewerRosterForPhase, normalizeConsolidatedVerdict, isPersonaClean, artifactPath, readLoopExecAllowed, type LoopDef, type PickupContract } from './loopDef';
 import { runPickup, createRealPickupDeps, decidePickupAction } from './loopPickup';
 import { classifyHostedAgent, createTurnRunner, decideConsolidateOutcome, hostedAgentPresent, type TurnRunner } from './loopOrchestrator';
 import { deriveLoopActivity, type LoopActivity } from '../shared/loopActivity';
@@ -90,6 +90,7 @@ import { prunablePersonas, recordCleanPersonas } from './personaSkip';
 import { decideGateOutcome, type GateOption } from './gateActions';
 import { executeGateOutcome } from './gateExecutor';
 import { createRealGateGitHub } from './gateGithub';
+import { createRealGateExec } from './gateExec';
 import { writeHumanNote } from './humanNotes';
 import { readEpicPlan } from './epicPlan';
 import { createSentinelWatcher } from './turnSentinel';
@@ -992,9 +993,14 @@ async function createWindow(): Promise<void> {
         note: noteText,
         // §26.9 — skip epic-promote if this run already created its sub-issues (idempotent re-entry).
         epicAlreadyPromoted: readLoopExtension(repoKey).epic.subIssues.length > 0,
+        // §26.6 — exec runs by default; the repo opts a loop out via `.agent-loop.yaml` loops_deny_exec.
+        execAllowed: readLoopExecAllowed(repoKey, loopName),
       },
       {
         github: createRealGateGitHub(repoKey),
+        // §26.6 — resolve an exec action's `{{artifact.<id>}}` against the bound LoopDef; run it out of band.
+        resolveArtifact: (id) => artifactPath(def, repoKey, id),
+        runExec: createRealGateExec(repoKey),
         writeState: (state) => writeLoopState(repoKey, state),
         writeHumanNote: (iteration, text) => writeHumanNote(repoKey, iteration, text),
         // §26.9 / L8 — the epic classification the work-agent wrote into plan.md gates epic-promote.

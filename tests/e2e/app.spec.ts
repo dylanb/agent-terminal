@@ -2751,6 +2751,12 @@ test('a work turn whose screen stays frozen for the stall window stops in a reco
   await expect.poll(() => readFileSync(stateFile, 'utf8'), { timeout: 20_000 }).toContain('status: error');
   expect(readFileSync(stateFile, 'utf8')).toContain('stalled: no terminal activity');
   expect(turnEvents(home, repo).some((e) => e.cmd.includes('failed') && e.exit === 1)).toBe(true);
+  // §26.3/D48 (Theme B, v2.120) — a run-time turn failure is never silent: it raises the blocking error
+  // dialog. Dismiss it so the modal does not trap focus over the panel exercised below.
+  const errorDialog = page.locator('#flow-error-host .flow-modal');
+  await expect(errorDialog).toBeVisible({ timeout: 15_000 });
+  await errorDialog.locator('.dismiss').click();
+  await expect(errorDialog).toHaveCount(0);
   await loopReadout().click();
   await expect(loopPanel()).toContainText('error', { timeout: 10_000 });
 
@@ -2953,6 +2959,12 @@ test('a reviewer fan-out missing one persona JSON retries once then stops in err
   await expect.poll(() => readFileSync(stateFile, 'utf8'), { timeout: 25_000 }).toContain('status: error');
   expect(existsSync(join(reviewsDir(repo), 'review-contracts.json'))).toBe(false);
   expect(turnEvents(home, repo).some((e) => e.cmd.includes('review-plan') && e.cmd.includes('failed') && e.exit === 1)).toBe(true);
+  // §26.3/D48 (Theme B, v2.120) — the incomplete fan-out error raises the blocking dialog; dismiss it so
+  // the modal does not trap focus over the panel exercised below.
+  const errorDialog = page.locator('#flow-error-host .flow-modal');
+  await expect(errorDialog).toBeVisible({ timeout: 15_000 });
+  await errorDialog.locator('.dismiss').click();
+  await expect(errorDialog).toHaveCount(0);
   await loopReadout().click();
   await expect(loopPanel()).toContainText('error', { timeout: 10_000 });
 
@@ -3149,6 +3161,56 @@ test('approve at the plan gate marks the PR ready and terminates the loop (§26.
   expect(readFileSync(stateFile, 'utf8')).toContain('terminated: true');
   // The gate's mark-pr-ready action ran out of band (§26.6/D53): the fake gh recorded `pr ready`.
   await expect.poll(() => readFileSync(logFile, 'utf8'), { timeout: 10_000 }).toContain('pr ready');
+
+  await app.close();
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+  rmSync(binDir, { recursive: true, force: true });
+});
+
+// §26.6 — the exec gate action (ticket-body publish). The vendored plan-loop's plan-approve gate carries
+// `exec: [gh, issue, edit, {{state.linked_issues[0]}}, --body-file, {{artifact.ticket-body}}]`; approving
+// interpolates it against the run (issue 176, .agent-loop/ticket.md) and runs it out of band. Allowed by
+// default; a repo opts a loop out via `.agent-loop.yaml` loops_deny_exec.
+test('approve at the plan gate runs the exec ticket-body publish out of band (§26.6)', async () => {
+  const repo = seedBootstrapFlowRepo('agent-term-e2e-exec-on-');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-exec-on-home-'));
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-exec-on-bin-');
+  seedFakeAgent(binDir, { work: 'write-plan', reviews: 'all', consolidate: 'clean' });
+  await driveToPlanGate(repo, home, binDir, logFile);
+
+  await gateButton('approve').click();
+
+  const stateFile = join(repo, '.agent-loop', 'state.yaml');
+  await expect.poll(() => readFileSync(stateFile, 'utf8'), { timeout: 15_000 }).toContain('status: plan-human-approved');
+  // The exec ran: fake gh recorded `gh issue edit 176 --body-file <repo>/.agent-loop/ticket.md`, its
+  // placeholders resolved from the run's linked issue + the LoopDef ticket-body artifact path.
+  await expect.poll(() => readFileSync(logFile, 'utf8'), { timeout: 10_000 }).toContain('issue edit 176 --body-file');
+  expect(readFileSync(logFile, 'utf8')).toContain(join('.agent-loop', 'ticket.md'));
+
+  await app.close();
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+  rmSync(binDir, { recursive: true, force: true });
+});
+
+test('a repo that opts the loop out via loops_deny_exec runs no exec at the plan gate (§26.6)', async () => {
+  const repo = seedBootstrapFlowRepo('agent-term-e2e-exec-off-');
+  // Opt plan-loop out of exec; no `loops:` registry, so LoopDef resolution still falls back to config dir.
+  writeFileSync(join(repo, '.agent-loop.yaml'), 'loops_deny_exec:\n  plan-loop: true\n');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-exec-off-home-'));
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-exec-off-bin-');
+  seedFakeAgent(binDir, { work: 'write-plan', reviews: 'all', consolidate: 'clean' });
+  await driveToPlanGate(repo, home, binDir, logFile);
+
+  await gateButton('approve').click();
+
+  const stateFile = join(repo, '.agent-loop', 'state.yaml');
+  await expect.poll(() => readFileSync(stateFile, 'utf8'), { timeout: 15_000 }).toContain('status: plan-human-approved');
+  // The transition + mark-pr-ready still ran, but the opted-out exec did not. Scope to the exec's
+  // `--body-file` ticket-body publish — pickup legitimately runs `gh issue edit` for label/assignee moves.
+  await expect.poll(() => readFileSync(logFile, 'utf8'), { timeout: 10_000 }).toContain('pr ready');
+  expect(readFileSync(logFile, 'utf8')).not.toContain('issue edit 176 --body-file');
 
   await app.close();
   rmSync(repo, { recursive: true, force: true });

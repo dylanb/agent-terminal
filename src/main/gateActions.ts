@@ -2,10 +2,11 @@
 // injected `/agent-loop-*` command (retired, §26.12) — executes that option's `on_*` action list from the
 // bound LoopDef. `decideGateOutcome` is the pure core: it translates the raw GateAction list + the gate's
 // next_status_on_* into the normalized outcome the orchestrator carries out (write status, run the gh
-// side-effects out of band, re-iterate or stop). Action kinds the in-app v1 engine does not model are
-// dropped — `exec` (ticket-body publish), `publish-body` (spec §26 out-of-band PR-body publish, deferred),
-// and `clear-phase2`/`reset-severity-cycle` (in the vendored defs they only ever accompany `terminate`,
-// where they are moot). `epic-promote` IS modeled (§26.9 / L8). The full deferred set is recorded in-spec.
+// side-effects out of band, re-iterate or stop). `epic-promote` (§26.9 / L8) and `exec` (§26.6 — the
+// ADR-0015 ticket-body publish, run best-effort under the loops_deny_exec opt-out) ARE modeled. Action
+// kinds the in-app v1 engine still does not model are dropped — `publish-body` (spec §26 out-of-band
+// PR-body publish, deferred) and `clear-phase2`/`reset-severity-cycle` (in the vendored defs they only
+// ever accompany `terminate`, where they are moot). The full deferred set is recorded in-spec.
 
 import type { GateAction, LoopGate } from './loopDef';
 import type { GateDecisionOption } from '../shared/ipc';
@@ -22,6 +23,10 @@ export type GateEffect =
   | { kind: 'clear-persona-state' }
   | { kind: 'append-human-note' }
   | { kind: 'epic-promote' }
+  // §26.6 — the ADR-0015 adapter side-effect (e.g. plan-approve ticket-body publish). `argv` carries the
+  // def's command with its `{{…}}` placeholders unresolved; the executor interpolates + runs it out of band
+  // (best-effort), gated on the repo's opt-out (loops_deny_exec). A kind-less/argv-less entry is dropped.
+  | { kind: 'exec'; argv: string[] }
   | { kind: 'terminate' };
 
 export interface GateOutcome {
@@ -61,6 +66,14 @@ function toEffect(a: GateAction): GateEffect | null {
     // (gateExecutor reads the epic plan); the effect itself is always recognized in the action list.
     case 'epic-promote':
       return { kind: 'epic-promote' };
+    // §26.6 — carry the exec argv through only when it is a string[]; a malformed/absent argv drops the
+    // action (never surface an exec effect with nothing to run).
+    case 'exec': {
+      const argv = a.args?.argv;
+      return Array.isArray(argv) && argv.every((x): x is string => typeof x === 'string')
+        ? { kind: 'exec', argv }
+        : null;
+    }
     case 'terminate':
       return { kind: 'terminate' };
     default:

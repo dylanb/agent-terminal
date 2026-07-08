@@ -259,6 +259,7 @@ describe('flow state machine — loop-step state.yaml mirror (§24.2.3 T2)', () 
       phases: [],
       rosters: [],
       defaultRosterId: '',
+      artifacts: {},
       gates: [
         mkGate({ id: 'awaiting-human-pr-approval', kind: 'approve-required', humanOptions: ['approve', 'request-changes', 'impasse'], terminal: false }),
         mkGate({ id: 'awaiting-team-review', kind: 'terminal', humanOptions: [], terminal: true }),
@@ -493,8 +494,8 @@ describe('flow state machine — ticket/PR refs (progress-gated)', () => {
     },
     flowDir: '/tmp/f/.agent-terminal',
   };
-  const defA = { name: 'loop-a', phases: [], rosters: [], defaultRosterId: '', gates: [mkGate({ id: 'planning', kind: 'approve-required', humanOptions: ['approve'], terminal: false })] };
-  const defB = { name: 'loop-b', phases: [], rosters: [], defaultRosterId: '', gates: [mkGate({ id: 'planning', kind: 'approve-required', humanOptions: ['approve', 'impasse'], terminal: false })] };
+  const defA = { name: 'loop-a', phases: [], rosters: [], defaultRosterId: '', artifacts: {}, gates: [mkGate({ id: 'planning', kind: 'approve-required', humanOptions: ['approve'], terminal: false })] };
+  const defB = { name: 'loop-b', phases: [], rosters: [], defaultRosterId: '', artifacts: {}, gates: [mkGate({ id: 'planning', kind: 'approve-required', humanOptions: ['approve', 'impasse'], terminal: false })] };
 
   it('binds the mirror to the most recently entered loop step LoopDef, across two loops and onto a later manual step', () => {
     const flow = createFlowMachine(TWO_LOOP_FLOW, undefined, undefined, () => mirror(), (name) => (name === 'loop-a' ? defA : name === 'loop-b' ? defB : null));

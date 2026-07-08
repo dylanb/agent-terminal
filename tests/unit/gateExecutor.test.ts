@@ -15,6 +15,7 @@ function harness(overrides: Partial<GateExecDeps> = {}) {
   const reiterations: number[] = [];
   const subIssues: Array<{ title: string; body: string }> = [];
   const writeFailures: string[] = [];
+  const execArgs: string[][] = [];
   let nextIssue = 100;
   const deps: GateExecDeps = {
     github: {
@@ -30,9 +31,12 @@ function harness(overrides: Partial<GateExecDeps> = {}) {
     // §26.9 — not an epic by default, so the L5 tests below observe the pre-L8 behavior unchanged.
     readEpicPlan: () => ({ isEpic: false, subTickets: [] }),
     onWriteFailed: (reason) => void writeFailures.push(reason),
+    // §26.6 — exec ports: resolveArtifact maps the def's `{{artifact.<id>}}`; runExec records the argv.
+    resolveArtifact: (id) => (id === 'ticket-body' ? '/repo/.agent-loop/ticket.md' : null),
+    runExec: async (argv) => void execArgs.push(argv),
     ...overrides,
   };
-  return { deps, writes, notes, readyCalls, reiterations, subIssues, writeFailures };
+  return { deps, writes, notes, readyCalls, reiterations, subIssues, writeFailures, execArgs };
 }
 
 const CTX = {
@@ -44,6 +48,15 @@ const CTX = {
   linkedIssues: [1],
   note: 'make it smaller',
   epicAlreadyPromoted: false,
+  execAllowed: true,
+};
+
+const EXEC_ARGV = ['gh', 'issue', 'edit', '{{state.linked_issues[0]}}', '--body-file', '{{artifact.ticket-body}}'];
+const execApproveOutcome: GateOutcome = {
+  nextStatus: 'plan-human-approved',
+  terminate: true,
+  reiterate: false,
+  effects: [{ kind: 'mark-pr-ready' }, { kind: 'exec', argv: EXEC_ARGV }, { kind: 'terminate' }],
 };
 
 const approveOutcome: GateOutcome = {
@@ -231,5 +244,39 @@ describe('executeGateOutcome (§26.6 / L5)', () => {
     expect(h.writes[0].epic).toBeUndefined();
     expect(h.writes[0].linkedIssues).toEqual([1]); // linked_issues not re-appended
     expect(h.readyCalls).toEqual([42]); // the other effects still run
+  });
+
+  // §26.6 — the exec gate action (ticket-body publish). Runs out of band, best-effort, only when the repo
+  // has not opted the loop out (execAllowed) and its argv fully resolves.
+  it('exec: interpolates the argv and runs it when execAllowed', async () => {
+    const h = harness();
+    await executeGateOutcome(execApproveOutcome, CTX, h.deps);
+    expect(h.execArgs).toEqual([['gh', 'issue', 'edit', '1', '--body-file', '/repo/.agent-loop/ticket.md']]);
+    expect(h.writes[0].status).toBe('plan-human-approved'); // the transition still lands
+  });
+
+  it('exec: does NOT run when the loop is opted out (execAllowed false)', async () => {
+    const h = harness();
+    await executeGateOutcome(execApproveOutcome, { ...CTX, execAllowed: false }, h.deps);
+    expect(h.execArgs).toEqual([]);
+    expect(h.writes[0].status).toBe('plan-human-approved'); // other effects + transition unaffected
+  });
+
+  it('exec: does NOT run when the argv cannot be fully resolved (no linked issue)', async () => {
+    const h = harness();
+    await executeGateOutcome(execApproveOutcome, { ...CTX, linkedIssues: [] }, h.deps);
+    expect(h.execArgs).toEqual([]); // never a half-filled gh command
+    expect(h.writes[0].status).toBe('plan-human-approved');
+  });
+
+  it('exec: a failing exec is swallowed (best-effort §26.11) — the state write still lands', async () => {
+    const h = harness({
+      runExec: async () => {
+        throw new Error('gh not found');
+      },
+    });
+    await executeGateOutcome(execApproveOutcome, CTX, h.deps);
+    expect(h.writes[0].status).toBe('plan-human-approved');
+    expect(h.writeFailures).toEqual([]); // an exec failure is NOT a gate-write failure
   });
 });

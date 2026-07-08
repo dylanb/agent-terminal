@@ -116,6 +116,9 @@ export interface LoopDef {
   pickup?: PickupContract;
   /** The §26.11 resume contract; undefined when the def carries no `resume_contract`. */
   resume?: ResumeContract;
+  /** §26.6 — the `artifacts` slot map (id → `.agent-loop/`-relative `path_pattern`), the source that
+   *  resolves an `exec` action's `{{artifact.<id>}}` placeholder to a real path. {} when the def omits it. */
+  artifacts: Record<string, string>;
 }
 
 const SCHEMA_VERSION = '4';
@@ -322,6 +325,41 @@ function toPickupContract(doc: Record<string, unknown>): PickupContract | undefi
   };
 }
 
+/** The §26.6 `artifacts` list → id→path_pattern map: the source that resolves an `exec` action's
+ *  `{{artifact.<id>}}` placeholder. Non-mapping / non-string entries drop; {} when the def omits it. */
+function toArtifacts(doc: Record<string, unknown>): Record<string, string> {
+  if (!Array.isArray(doc.artifacts)) return {};
+  const out: Record<string, string> = {};
+  for (const a of doc.artifacts) {
+    if (isRecord(a) && typeof a.id === 'string' && typeof a.path_pattern === 'string') out[a.id] = a.path_pattern;
+  }
+  return out;
+}
+
+/** Resolve an `exec` action's `{{artifact.<id>}}` to an absolute path under `<repoDir>/.agent-loop/`
+ *  (§26.6). Null when the id is unknown or its `path_pattern` (untrusted def config) escapes that dir
+ *  (CWE-22 — same confinement as the `.agent-loop.yaml` loops override). Existence is the caller's concern. */
+export function artifactPath(def: LoopDef, repoDir: string, id: string): string | null {
+  const pattern = def.artifacts[id];
+  if (typeof pattern !== 'string') return null;
+  const base = path.resolve(repoDir, '.agent-loop');
+  const target = path.resolve(base, pattern);
+  return target === base || target.startsWith(base + path.sep) ? target : null;
+}
+
+/** §26.6 — whether the `exec` gate action may run for `loopName`. exec is allowed by DEFAULT for every
+ *  loop; a repo opts a loop OUT via `.agent-loop.yaml` `loops_deny_exec: {<loop>: true}`. Fails OPEN
+ *  (allowed) on any missing / unreadable / unparseable config — never throws. */
+export function readLoopExecAllowed(repoDir: string, loopName: string): boolean {
+  try {
+    const doc = yaml.load(readFileSync(path.join(repoDir, '.agent-loop.yaml'), 'utf8'));
+    if (isRecord(doc) && isRecord(doc.loops_deny_exec) && doc.loops_deny_exec[loopName] === true) return false;
+  } catch {
+    // no/unreadable/unparseable .agent-loop.yaml → allowed (opt-out default)
+  }
+  return true;
+}
+
 /** Resolve + parse the LoopDef bound to `name` for `repoDir`. Returns its gate model + pickup contract,
  *  or null for a missing / corrupt / wrong-`schema_version` / gate-less file (never throws). */
 export function parseLoopDef(repoDir: string, name: string, configDir?: string): LoopDef | null {
@@ -351,12 +389,14 @@ export function parseLoopDef(repoDir: string, name: string, configDir?: string):
   const defaultRosterId = typeof doc.default_roster_id === 'string' ? doc.default_roster_id : '';
   const verdicts = toVerdicts(doc);
   const resume = toResumeContract(doc);
+  const artifacts = toArtifacts(doc);
   return {
     name: defName,
     gates,
     phases,
     rosters,
     defaultRosterId,
+    artifacts,
     ...(verdicts ? { verdicts } : {}),
     ...(pickup ? { pickup } : {}),
     ...(resume ? { resume } : {}),

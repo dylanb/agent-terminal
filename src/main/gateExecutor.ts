@@ -8,6 +8,7 @@ import type { GateOutcome } from './gateActions';
 import type { GateGitHub } from './gateGithub';
 import type { LoopStateWrite } from './loopStateWriter';
 import type { EpicPlan } from './epicPlan';
+import { interpolateExecArgv, type RunGateExec } from './gateExec';
 
 /** The run context a gate transition writes from — the current loop state + the human's note text. */
 export interface GateExecContext {
@@ -21,6 +22,9 @@ export interface GateExecContext {
   /** §26.9 — whether this run's epic was ALREADY promoted (state.yaml `epic.sub_issues` non-empty). Guards
    *  the irreversible `gh issue create` fan-out so a re-entered gate never creates duplicate sub-issues. */
   epicAlreadyPromoted: boolean;
+  /** §26.6 — whether the `exec` gate action may run for this loop (allowed by default; the repo opts a loop
+   *  out via `.agent-loop.yaml` `loops_deny_exec`). False skips every exec effect. */
+  execAllowed: boolean;
 }
 
 export interface GateExecDeps {
@@ -36,6 +40,10 @@ export interface GateExecDeps {
    *  leaves the loop where it is and never re-iterates, but the failure must not be silent: the host
    *  surfaces `reason` (error dialog + audit) so the loop can never sit stranded with no trace. */
   onWriteFailed(reason: string): void;
+  /** §26.6 — resolve an `exec` action's `{{artifact.<id>}}` to a path (from the bound LoopDef), or null. */
+  resolveArtifact(id: string): string | null;
+  /** §26.6 — run a fully-resolved `exec` argv out of band (execFile, best-effort). */
+  runExec: RunGateExec;
 }
 
 /** Run epic-promote (§26.9): the current PR IS sub-ticket-1, so create the REMAINING N-1 sub-issues out
@@ -79,6 +87,22 @@ export async function executeGateOutcome(
       await deps.github.markPrReady(ctx.pr);
     } catch {
       /* best-effort (§26.11): a gh failure is reconciled out of band, never blocks the transition */
+    }
+  }
+
+  // §26.6 — exec adapter side-effects (e.g. ticket-body publish). Skipped entirely when the loop is opted
+  // out (execAllowed). Each argv is interpolated against the run; an argv that does not fully resolve is
+  // skipped (never run a half-filled command). Best-effort — a run failure is reconciled out of band.
+  if (ctx.execAllowed) {
+    for (const e of outcome.effects) {
+      if (e.kind !== 'exec') continue;
+      const argv = interpolateExecArgv(e.argv, { linkedIssues: ctx.linkedIssues, resolveArtifact: deps.resolveArtifact });
+      if (argv === null) continue;
+      try {
+        await deps.runExec(argv);
+      } catch {
+        /* best-effort (§26.11): a failed exec is reconciled out of band, never blocks the transition */
+      }
     }
   }
 
