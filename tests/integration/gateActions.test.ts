@@ -3,7 +3,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { parseLoopDef, gateForStatus } from '../../src/main/loopDef';
-import { decideGateOutcome } from '../../src/main/gateActions';
+import { decideGateOutcome, shouldAdvanceFlowOnGate } from '../../src/main/gateActions';
 
 // §26.6 / L5 — the app-internal gate transition. A gate's on_approve / on_request_changes / on_impasse
 // action list + next_status_on_* are parsed from the LoopDef (§26.5); `decideGateOutcome` translates the
@@ -130,5 +130,26 @@ describe('decideGateOutcome (§26.6 / L5 — app-internal gate transition)', () 
     expect(out.terminate).toBe(true);
     expect(out.reiterate).toBe(false);
     expect(out.effects.map((e) => e.kind)).toContain('append-human-note');
+  });
+
+  // §26 D42a — a SUCCESS terminal (an approve whose action list terminates the loop) is the signal that
+  // the enclosing flow's loop step is complete, so the flow auto-advances to its next step. Impasse also
+  // terminates but is a human-owned FAILURE terminal (no advance); request-changes re-iterates; an approve
+  // at an intermediate gate that advances a phase WITHIN the loop is not terminal (must not advance the flow).
+  describe('shouldAdvanceFlowOnGate (§26 D42a — a success terminal auto-advances the flow)', () => {
+    it('approve at a terminal gate advances the flow', () => {
+      expect(shouldAdvanceFlowOnGate('approve', decideGateOutcome(gate(), 'approve'))).toBe(true);
+    });
+    it('impasse (failure terminal) does NOT advance the flow', () => {
+      expect(shouldAdvanceFlowOnGate('impasse', decideGateOutcome(gate(), 'impasse'))).toBe(false);
+    });
+    it('request-changes (re-iterate) does NOT advance the flow', () => {
+      expect(shouldAdvanceFlowOnGate('request-changes', decideGateOutcome(gate(), 'request-changes'))).toBe(false);
+    });
+    it('approve at an intermediate (non-terminal) gate does NOT advance the flow', () => {
+      expect(
+        shouldAdvanceFlowOnGate('approve', { nextStatus: 'impl-review', terminate: false, reiterate: false, effects: [] }),
+      ).toBe(false);
+    });
   });
 });

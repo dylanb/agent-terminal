@@ -91,3 +91,12 @@ export function decideGateOutcome(gate: LoopGate, option: GateOption): GateOutco
   const reiterate = option === 'request-changes' && !terminate;
   return { nextStatus, terminate, reiterate, effects };
 }
+
+/** §26 D42a — whether this gate decision reaches a SUCCESS terminal, the signal to auto-advance the
+ *  enclosing flow to its next step. A success terminal is an `approve` whose action list terminates the
+ *  loop; impasse also terminates but is a human-owned FAILURE terminal (no advance), request-changes
+ *  re-iterates, and an `approve` at an intermediate gate (advancing a phase WITHIN the loop) is not
+ *  terminal — none of those advance the flow. */
+export function shouldAdvanceFlowOnGate(option: GateOption, outcome: GateOutcome): boolean {
+  return option === 'approve' && outcome.terminate;
+}

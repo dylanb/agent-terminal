@@ -26,6 +26,10 @@ export interface FlowEntryActionDeps {
   /** Run in-app bootstrap (pickup) for a `bootstrap: pickup` step (§26.9), given the resolved required
    *  inputs. Out-of-band gh/git + state.yaml write — never terminal injection, never busy-gated. */
   runPickup(step: FlowStepDef, inputs: Record<string, string>): void;
+  /** §26 D42a (resume --loop) — entering a loop step with NO `bootstrap: pickup` RESUMES the existing run
+   *  under the step's bound loop: rebind state.yaml to the new loop (fresh internal state, carried
+   *  PR/branch/issues) + inject /clear + the first work prompt. Out-of-band like pickup, never busy-gated. */
+  resumeLoop(step: FlowStepDef): void;
 }
 
 /** A transient result surfaced on the transition's returned view: the §19.3 refusal `notice` (skill),
@@ -63,6 +67,12 @@ export function createFlowEntryActions(deps: FlowEntryActionDeps): FlowEntryActi
       const resolvedInputs: Record<string, string> = {};
       for (const i of required) resolvedInputs[i.name] = resolved(i.name);
       deps.runPickup(step, resolvedInputs);
+      return {};
+    }
+    // §26 D42a — a loop step that does NOT bootstrap a fresh run RESUMES the existing one under its bound
+    // loop (rebind + /clear + first work prompt). Out-of-band like pickup, so the busy shell never gates it.
+    if (step.kind === 'loop') {
+      deps.resumeLoop(step);
     }
     return {};
   };

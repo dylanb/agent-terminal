@@ -1600,6 +1600,24 @@ function seedBootstrapFlowRepo(prefix: string): string {
   return dir;
 }
 
+// §26 D42a — a chain flow whose plan loop step is FOLLOWED by an `implement` loop step (no bootstrap):
+// approving the plan gate reaches a success terminal, so the flow auto-advances plan → implement. Same
+// pickup-driven plan step as seedBootstrapFlowRepo, plus the successor the auto-advance lands on.
+function seedChainFlowRepo(prefix: string): string {
+  const dir = mkdtempSync(join(tmpdir(), prefix));
+  mkdirSync(join(dir, '.git'), { recursive: true });
+  mkdirSync(join(dir, '.agent-terminal'), { recursive: true });
+  writeFileSync(
+    join(dir, '.agent-terminal', 'flow.yaml'),
+    'name: dev-flow\nsteps:\n' +
+      '  - id: groom\n    kind: manual\n' +
+      '  - id: plan\n    kind: loop\n    loop: plan-loop\n    bootstrap: pickup\n' +
+      '    inputs:\n      - name: ticket\n        type: github-ticket\n        required: true\n' +
+      '  - id: implement\n    kind: loop\n    loop: impl-loop\n',
+  );
+  return dir;
+}
+
 const inputModal = () => page.locator('#flow-modal-host .flow-modal');
 
 // §26.13 test seam — the orchestrator's in-app pickup (§26.9) shells real git/gh. e2e prepends a fake
@@ -1793,6 +1811,9 @@ function seedFakeAgent(
     `    *turn-done:work-plan*) ${workAct} ;;\n` +
     `    *turn-done:review-plan*) ${reviewAct} ;;\n` +
     `    *turn-done:consolidate-plan*) ${consolidateAct} ;;\n` +
+    // §26 D42a — record that the IMPL loop's first work prompt reached the agent, so a resume --loop e2e can
+    // prove the rebound loop injected its own work turn (turnKey work-impl) after the actor-boundary /clear.
+    '    *turn-done:work-impl*) mkdir -p .agent-loop; printf x >> .agent-loop/impl-work-ran ;;\n' +
     '  esac\n' +
     'done\n';
   writeFileSync(join(binDir, 'fake-agent'), script, { mode: 0o755 });
@@ -3147,6 +3168,29 @@ async function driveToPlanGate(repo: string, home: string, binDir: string, logFi
   await expect(gateButton('approve')).toBeVisible({ timeout: 10_000 });
 }
 
+// §26 D42a (Slice 3 / Q3) — the FIRST work turn of a freshly-bootstrapped loop step is preceded by the same
+// actor-boundary /clear (§26.3/D46) as every other loop-step entry, so the loop starts from a clean agent
+// context (e.g. the human's grooming conversation is cleared before the plan work begins). `plan-only` never
+// signals done, so the loop never advances past this first work turn — clear-seen can ONLY come from the
+// bootstrap /clear, not a later reviewers/consolidate boundary. That isolates this slice's behavior.
+test('the plan bootstrap first work turn is preceded by an actor-boundary /clear (§26 D42a)', async () => {
+  const repo = seedBootstrapFlowRepo('agent-term-e2e-bootstrap-clear-');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-bootstrap-clear-home-'));
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-bootstrap-clear-bin-');
+  seedFakeAgent(binDir, { work: 'plan-only' }); // no reviews/consolidate: the only possible /clear is the bootstrap work turn's
+  await driveToWorkTurn(repo, home, binDir, logFile, '30000');
+
+  // The bootstrapped loop's first work turn injected /clear before its work prompt (clear-seen), and that
+  // /clear preceded a REAL work prompt (plan.md written) — no other turn boundary has occurred.
+  await expect.poll(() => existsSync(join(repo, '.agent-loop', 'clear-seen')), { timeout: 15_000 }).toBe(true);
+  await expect.poll(() => existsSync(join(repo, '.agent-loop', 'plan.md')), { timeout: 15_000 }).toBe(true);
+
+  await app.close();
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+  rmSync(binDir, { recursive: true, force: true });
+});
+
 test('approve at the plan gate marks the PR ready and terminates the loop (§26.13 / L5)', async () => {
   const repo = seedBootstrapFlowRepo('agent-term-e2e-l5-approve-');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-l5-approve-home-'));
@@ -3161,6 +3205,56 @@ test('approve at the plan gate marks the PR ready and terminates the loop (§26.
   expect(readFileSync(stateFile, 'utf8')).toContain('terminated: true');
   // The gate's mark-pr-ready action ran out of band (§26.6/D53): the fake gh recorded `pr ready`.
   await expect.poll(() => readFileSync(logFile, 'utf8'), { timeout: 10_000 }).toContain('pr ready');
+
+  await app.close();
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+  rmSync(binDir, { recursive: true, force: true });
+});
+
+// §26 D42a — reaching a SUCCESS terminal (approve at the plan gate) auto-advances the flow into the next
+// step (Slice 1), and entering that `implement` loop step — which has no `bootstrap: pickup` — RESUMES the
+// existing run under impl-loop (Slice 2, `agent-loop resume --loop`): state.yaml is rebound to impl-loop at
+// its impl-draft entry status with the internal counters reset to a new-run baseline, but the SAME
+// PR/branch/issue carried, and the impl loop's first work turn is driven behind an actor-boundary /clear.
+test('approve at the plan gate auto-advances the flow and resumes into the impl loop (§26 D42a)', async () => {
+  const repo = seedChainFlowRepo('agent-term-e2e-chain-advance-');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-chain-advance-home-'));
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-chain-advance-bin-');
+  seedFakeAgent(binDir, { work: 'write-plan', reviews: 'all', consolidate: 'clean' });
+  await driveToPlanGate(repo, home, binDir, logFile);
+
+  // Pre-approve: the flow is still at the plan step, bound to plan-loop.
+  const flowStateFile = join(repo, '.agent-terminal', 'flow-state.yaml');
+  expect(readFileSync(flowStateFile, 'utf8')).toContain('step: plan');
+
+  await gateButton('approve').click();
+
+  // Slice 1 — the success terminal auto-advanced the flow: the strip's active station moves to the
+  // implement step and the progression persists to flow-state.yaml.
+  await expect.poll(() => readFileSync(flowStateFile, 'utf8'), { timeout: 20_000 }).toContain('step: implement');
+  await expect(page.locator('#flow-strip .stn.active .nm')).toHaveText('implement', { timeout: 10_000 });
+
+  // Slice 2 — entering the non-pickup implement step rebound the run to impl-loop at impl-draft, iteration
+  // reset to 1, carrying the plan run's PR/branch/issue (a resume, never a fresh pickup).
+  const stateFile = join(repo, '.agent-loop', 'state.yaml');
+  await expect.poll(() => readFileSync(stateFile, 'utf8'), { timeout: 15_000 }).toContain('bound_loop: impl-loop');
+  const stateText = readFileSync(stateFile, 'utf8');
+  expect(stateText).toContain('status: impl-draft');
+  expect(stateText).toMatch(/^iteration: 1$/m); // impl's INTERNAL counter reset to 1
+  expect(stateText).toContain('branch: plan-loop/issue-176'); // same branch — resume kept the plan PR
+  expect(stateText).toMatch(/linked_issues:\s*\n\s*- 176/); // the plan run's issue carried, not reset
+
+  // Slice 4 — the DISPLAYED iteration is cumulative: plan finished at iteration 1, so the impl loop's own
+  // internal iteration 1 shows as "iter 2" on the strip (the count climbs, never resets to 1 visibly).
+  await expect(loopReadout()).toContainText('iter 2', { timeout: 10_000 });
+
+  // The actor-boundary /clear fired (§26.3/D46), THEN the impl loop's OWN work prompt reached the agent
+  // (turnKey work-impl) — the resumed loop drove its first work turn.
+  await expect.poll(() => existsSync(join(repo, '.agent-loop', 'clear-seen')), { timeout: 10_000 }).toBe(true);
+  await expect.poll(() => existsSync(join(repo, '.agent-loop', 'impl-work-ran')), { timeout: 15_000 }).toBe(true);
+  // Resume, not pickup: no new impl branch was created (the fake git/gh log carries no impl-loop branch).
+  expect(readFileSync(logFile, 'utf8')).not.toContain('impl-loop/');
 
   await app.close();
   rmSync(repo, { recursive: true, force: true });
@@ -3260,6 +3354,11 @@ test('impasse at the plan gate terminates the loop at the impasse status (§26.1
   expect(readFileSync(stateFile, 'utf8')).toContain('terminated: true');
   expect(existsSync(join(repo, '.agent-loop', 'human-notes', '1.md'))).toBe(true);
   expect(readFileSync(logFile, 'utf8')).not.toContain('pr ready');
+  // §26 D42a — impasse is a human-owned FAILURE terminal: the flow does NOT auto-advance (it stays at the
+  // plan step, never advancing to `done`), so the human resolves the impasse rather than the flow marching on.
+  const flowStateText = readFileSync(join(repo, '.agent-terminal', 'flow-state.yaml'), 'utf8');
+  expect(flowStateText).toContain('step: plan');
+  expect(flowStateText).not.toContain('status: done');
 
   await app.close();
   rmSync(repo, { recursive: true, force: true });

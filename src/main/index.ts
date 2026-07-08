@@ -74,6 +74,7 @@ import { createAuditRecorder } from './auditRecorder';
 import type { TransitionKind } from '../shared/audit';
 import { auditRootDir } from './auditPaths';
 import { createFlowEntryActions } from './flowEntryActions';
+import { resumeRebindWrite } from './loopRebind';
 import { parseAgentLoopState, watchAgentLoopState } from './agentLoopBridge';
 import { createLoopNotifier } from './loopNotifier';
 import { parseLoopDef, gateForStatus, reviewerRosterForPhase, normalizeConsolidatedVerdict, isPersonaClean, artifactPath, readLoopExecAllowed, type LoopDef, type PickupContract } from './loopDef';
@@ -87,7 +88,7 @@ import { readSessionTokens, sessionLogDir } from './costMeter';
 import { createRealCiChecks } from './ciChecks';
 import { priceTokens, formatCost, type CostResult } from '../shared/pricing';
 import { prunablePersonas, recordCleanPersonas } from './personaSkip';
-import { decideGateOutcome, type GateOption } from './gateActions';
+import { decideGateOutcome, shouldAdvanceFlowOnGate, type GateOption } from './gateActions';
 import { executeGateOutcome } from './gateExecutor';
 import { createRealGateGitHub } from './gateGithub';
 import { createRealGateExec } from './gateExec';
@@ -766,9 +767,11 @@ async function createWindow(): Promise<void> {
           case 'work': {
             pushFlowChanged();
             // §26.3 / L2 — bootstrap done; drive the work-{phase} turn. The phase is the one whose
-            // entry_status the freshly-written state.yaml now sits at (the bound def's first phase).
+            // entry_status the freshly-written state.yaml now sits at (the bound def's first phase). §26 D42a
+            // (Q3) — like every other loop-step entry, the first work turn is preceded by an actor-boundary
+            // /clear (§26.3/D46) so the loop starts from a clean agent context.
             const phase = def.phases.find((p) => p.entryStatus === action.status)?.id ?? def.phases[0]?.id;
-            if (phase) startWorkTurn(repoKey, loopName, phase);
+            if (phase) startWorkTurn(repoKey, loopName, phase, CLEAR_PREAMBLE);
             return;
           }
           case 'conflict':
@@ -818,13 +821,38 @@ async function createWindow(): Promise<void> {
     pushFlowChanged();
   };
 
+  // §26 D42a — entering a loop step with NO `bootstrap: pickup` RESUMES the existing run under the step's
+  // loop (`agent-loop resume --loop <new>`): rebind state.yaml to the new loop (fresh internal state, but
+  // the same PR/branch/issues carried), then drive its first work turn behind an actor-boundary /clear
+  // (§26.3/D46). A no-op when there is no run to resume (parseAgentLoopState null) — nothing to rebind onto.
+  const resumeLoopForStep = (step: FlowStepDef): void => {
+    const repoKey = transitioningRepo;
+    if (!repoKey || step.kind !== 'loop' || !step.loop) return;
+    const def = parseLoopDef(repoKey, step.loop);
+    const prior = parseAgentLoopState(repoKey);
+    if (!def || !prior) return;
+    // §26 D42a — the loop being left + the chain so far come from the engine-extension (loopStateReader),
+    // so the rebind records the completing loop and the displayed iteration stays cumulative.
+    const ext = readLoopExtension(repoKey);
+    const rebind = resumeRebindWrite(
+      { pr: prior.pr, branch: prior.branch, linkedIssues: prior.linkedIssues, iteration: prior.iteration, boundLoop: ext.boundLoop, completedLoops: ext.completedLoops },
+      step.loop,
+      def,
+    );
+    if (!rebind) return;
+    writeLoopState(repoKey, rebind.write);
+    startWorkTurn(repoKey, step.loop, rebind.workPhase, CLEAR_PREAMBLE);
+  };
+
   // §18.6/§19.3: a manual step's only automatic entry action is injecting its `skill`, refused over a
   // busy shell — a live OSC-133 command span means not at a ready prompt. A `bootstrap: pickup` loop
-  // step runs in-app pickup instead (§26.9). Must be built after the injector + tracker exist.
+  // step runs in-app pickup instead (§26.9); a non-pickup loop step RESUMES the existing run (§26 D42a).
+  // Must be built after the injector + tracker exist.
   const flowEntryActions = createFlowEntryActions({
     isShellBusy: () => tracker.summaries().some((s) => s.running),
     inject: (text) => inject(text, { submit: false }),
     runPickup: runPickupForStep,
+    resumeLoop: resumeLoopForStep,
   });
   const flow = createFlowManager({
     globalDir: flowGlobalDir,
@@ -837,6 +865,9 @@ async function createWindow(): Promise<void> {
       const c = readLoopExtension(repoKey).cost;
       return c ? formatCost(c) : null;
     },
+    // §26 D42a — the loops this run has completed, so the strip/panel show the CUMULATIVE iteration that
+    // climbs across a chained run rather than resetting to 1 when a successor loop begins.
+    readLoopCompleted: (repoKey) => readLoopExtension(repoKey).completedLoops,
   });
 
   // §24.2.3 T7 — resolve a ticket/PR's title/body/url for the popout, best-effort via `gh`, cached.
@@ -964,6 +995,17 @@ async function createWindow(): Promise<void> {
     return step?.kind === 'loop' && step.loop ? step.loop : null;
   };
 
+  // §26 D42a — advance the flow one step when a loop step's loop reaches a success terminal. Guarded on
+  // in_progress (advance throws otherwise, e.g. a flow the operator terminated while the gate resolved) and
+  // run inside inTransition so the next step's entry actions fire in transition context, matching the manual
+  // advance handler. A no-op guard, never a throw: a raced non-in_progress flow is left untouched.
+  const autoAdvanceFlow = (repoKey: string): void => {
+    const pre = flow.state(repoKey);
+    if (pre.status !== 'in_progress') return;
+    const view = inTransition(repoKey, () => flow.advance(repoKey));
+    audit.recordTransition(repoKey, 'advance', pre, view);
+  };
+
   // §26.6 / L5 / D52 — execute the human's gate decision in-app (NOT an injected `/agent-loop-*` command,
   // retired §26.12): resolve the bound LoopDef + the gate at the current status, guard the option against
   // the gate's human_options, then run that option's action list (state write, gh side-effects out of
@@ -981,6 +1023,9 @@ async function createWindow(): Promise<void> {
     // Until the §19.4 feedback composer supplies the reason (a later slice), default an empty note to the
     // decision itself so the gate's `append-human-note` action always leaves an observable artifact.
     const noteText = note.trim().length > 0 ? note : `human ${option}`;
+    // §26.6/D48 — a failed state write leaves the loop where it is (onWriteFailed); the flow must NOT
+    // auto-advance over an unpersisted transition, so track the failure and gate the advance on it.
+    let gateWriteFailed = false;
     void executeGateOutcome(
       outcome,
       {
@@ -1015,12 +1060,17 @@ async function createWindow(): Promise<void> {
         // §26.6/D48 — a gate transition that could not be persisted is never silent: surface the reason in
         // the blocking error dialog and record it, so the loop can never sit stranded with no trace.
         onWriteFailed: (reason) => {
+          gateWriteFailed = true;
           audit.recordCommand(repoKey, 'gate', `gate ${option} write failed: ${reason}`, 1);
           send(CH.flowOnLoopError, { sessionId: SESSION_ID, reason: `could not persist gate transition: ${reason}` });
         },
       },
     ).then(() => {
       audit.recordCommand(repoKey, 'gate', `gate ${option}`, 0);
+      // §26 D42a — a SUCCESS terminal (approve terminating the loop) means this flow's loop step is done,
+      // so auto-advance the flow to its next step. Impasse/error terminals are human-owned and never
+      // advance; a failed state write leaves the loop unmoved, so never advance over it.
+      if (!gateWriteFailed && shouldAdvanceFlowOnGate(option, outcome)) autoAdvanceFlow(repoKey);
       pushFlowChanged();
     });
   };

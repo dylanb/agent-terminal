@@ -249,6 +249,70 @@ describe('loop state.yaml writer (§26.6)', () => {
     expect(doc.epic).toEqual({ sub_issues: [201, 202] });
   });
 
+  it('freshExtension resets the internal loop state to defaults while carrying the passed read set (§26 D42a resume --loop)', () => {
+    // A resume-into-a-new-loop (§26 D42a) rebinds an existing run to a new loop def that starts FRESH: its
+    // internal counters (iteration, phase2, persona footprints, impasse tracking, severity cycle) reset to
+    // a new-run baseline, but the carried PR/branch/linked-issues (passed in the write) persist so the new
+    // loop keeps working the same PR. The normal merge would inherit the PRIOR loop's internal state, so
+    // freshExtension skips the prior-doc merge and lays the LoopExtension defaults instead.
+    const seeded = {
+      schema_version: 4,
+      pr: 50,
+      branch: 'plan-loop/issue-40',
+      iteration: 3,
+      status: 'plan-human-approved',
+      bound_loop: 'plan-loop',
+      linked_issues: [40],
+      phase2_active: true,
+      persona_state: { 'review-principal': { last_clean_iter: 2 } },
+      impasse: { consecutive_identical: 2, last_findings_sig: 'abc' },
+      severity_cycle_iter: 3,
+      terminated: true,
+    };
+    mkdirSync(join(repo, '.agent-loop'), { recursive: true });
+    writeFileSync(join(repo, '.agent-loop', 'state.yaml'), yaml.dump(seeded));
+
+    writeLoopState(
+      repo,
+      { status: 'impl-draft', iteration: 1, pr: 50, branch: 'plan-loop/issue-40', boundLoop: 'impl-loop', linkedIssues: [40], freshExtension: true },
+      fixedNow,
+    );
+
+    const doc = yaml.load(readFileSync(join(repo, '.agent-loop', 'state.yaml'), 'utf8')) as Record<string, unknown>;
+    // Rebound to the new loop at its entry status, iteration reset to 1.
+    expect(doc.bound_loop).toBe('impl-loop');
+    expect(doc.status).toBe('impl-draft');
+    expect(doc.iteration).toBe(1);
+    // The carried read set persists — the new loop keeps working the same PR/branch/issue.
+    expect(doc.pr).toBe(50);
+    expect(doc.branch).toBe('plan-loop/issue-40');
+    expect(doc.linked_issues).toEqual([40]);
+    // The prior loop's internal state is GONE — the new loop starts fresh (never inherits phase2/persona/
+    // impasse/severity from the loop it succeeded).
+    expect(doc.phase2_active).toBe(false);
+    expect(doc.persona_state).toEqual({});
+    expect(doc.impasse).toEqual({});
+    expect(doc.severity_cycle_iter).toBe(0);
+    expect(doc.terminated).toBe(false);
+    // Still a whole-document valid v4 doc.
+    expect(doc.schema_version).toBe(4);
+    for (const key of ['sessions', 'iter_in_flight', 'resume_mid_iter', 'completed_loops']) {
+      expect(doc, `missing whole-document key ${key}`).toHaveProperty(key);
+    }
+  });
+
+  it('writes completed_loops (§26 D42a) — the recorded chain of finished loops for the cumulative count', () => {
+    // The resume --loop rebind records the loop it succeeded (name + final iteration) so the displayed
+    // iteration can climb cumulatively. Written OVER the freshExtension default [].
+    writeLoopState(
+      repo,
+      { status: 'impl-draft', iteration: 1, pr: 50, branch: 'b', boundLoop: 'impl-loop', linkedIssues: [40], freshExtension: true, completedLoops: [{ loop: 'plan-loop', iterations: 3 }] },
+      fixedNow,
+    );
+    const doc = yaml.load(readFileSync(join(repo, '.agent-loop', 'state.yaml'), 'utf8')) as Record<string, unknown>;
+    expect(doc.completed_loops).toEqual([{ loop: 'plan-loop', iterations: 3 }]);
+  });
+
   it('emits the whole read set present even when branch is null and linkedIssues is empty (§26.6)', () => {
     // The read set must be uniformly present (defaulted), the way `pr` is — not conditionally omitted.
     writeLoopState(repo, { ...L1_STATE, branch: null, linkedIssues: [] }, fixedNow);

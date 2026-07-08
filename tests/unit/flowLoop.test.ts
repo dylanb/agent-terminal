@@ -60,6 +60,18 @@ describe('deriveLoopView (§24.2.3 T2)', () => {
     expect(deriveLoopView(base, loop('plan-draft'), DEF, null).loop && 'cost' in deriveLoopView(base, loop('plan-draft'), DEF, null).loop!).toBe(false);
   });
 
+  // §26 D42a — the displayed iteration is CUMULATIVE across the loops a chained run has been through, so it
+  // climbs and never resets to 1 when a successor loop begins, even though each loop keeps its own internal
+  // counter (reset to 1 on resume --loop).
+  it('folds the CUMULATIVE iteration across completed loops onto the view (§26 D42a)', () => {
+    const v = deriveLoopView(base, { ...loop('impl-draft'), iteration: 1 }, DEF, null, [{ loop: 'plan-loop', iterations: 3 }]);
+    expect(v.loop?.iteration).toBe(4); // plan finished at 3 + impl internal 1 → user sees 4, not 1
+  });
+
+  it('shows the raw iteration when no loop has completed yet (first loop of the run)', () => {
+    expect(deriveLoopView(base, loop('plan-draft'), DEF).loop?.iteration).toBe(9);
+  });
+
   it('surfaces the D48 error reason on the loop view so the panel shows why, not a bare "error" (§26.3)', () => {
     const errored: AgentLoopState = { ...loop('error'), errorReason: 'no hosted agent at the prompt' };
     expect(deriveLoopView(base, errored, DEF).loop?.errorReason).toBe('no hosted agent at the prompt');
