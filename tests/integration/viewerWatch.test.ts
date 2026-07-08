@@ -3,9 +3,13 @@ import { execFileSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, rmSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, sep } from 'node:path';
+import { writeFileSync } from 'node:fs';
+import { relative } from 'node:path';
 import {
   watchViewerTree,
   viewerRoot,
+  watchableDirs,
+  viewerWatchDirs,
   VIEWER_WATCH_DEBOUNCE_MS,
   type ViewerWatchFactory,
 } from '../../src/main/viewerWatch';
@@ -184,6 +188,113 @@ describe('watchViewerTree — artifact tree file watcher', () => {
     } finally {
       stop();
     }
+  });
+});
+
+describe('watchableDirs — the directories the recursive watch actually covers (§20.1)', () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'watchable-'));
+  });
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  // The reported crash: watching the launch root recursively descends into node_modules and exhausts the
+  // inotify limit (ENOSPC). The watch surface must PRUNE IGNORED_DIRS at creation — not just filter their
+  // events — so a repo checkout's node_modules is never watched, matching discovery which skips them.
+  it('covers the root and non-ignored subdirs but never descends into an IGNORED_DIR at any depth', () => {
+    mkdirSync(join(dir, 'src', 'deep'), { recursive: true });
+    mkdirSync(join(dir, '.agent-loop', 'reviews', '1'), { recursive: true });
+    mkdirSync(join(dir, 'node_modules', 'got', 'dist', 'source'), { recursive: true });
+    mkdirSync(join(dir, '.git', 'objects'), { recursive: true });
+    mkdirSync(join(dir, 'pkg', 'node_modules', 'left-pad'), { recursive: true }); // nested ignored
+    writeFileSync(join(dir, 'src', 'a.ts'), '');
+
+    const rels = watchableDirs(dir).map((d) => relative(dir, d) || '.');
+
+    expect(rels).toContain('.');
+    expect(rels).toContain('src');
+    expect(rels).toContain(join('src', 'deep'));
+    expect(rels).toContain('.agent-loop');
+    expect(rels).toContain(join('.agent-loop', 'reviews', '1'));
+    expect(rels).toContain('pkg');
+    // No watched dir lies within an ignored dir at ANY depth — the node_modules descent that caused ENOSPC.
+    expect(rels.some((d) => d.split(sep).includes('node_modules'))).toBe(false);
+    expect(rels.some((d) => d.split(sep).includes('.git'))).toBe(false);
+  });
+
+  it('never throws for a missing root — returns just that root (the caller degrades to inert)', () => {
+    expect(watchableDirs(join(dir, 'nope'))).toEqual([join(dir, 'nope')]);
+  });
+});
+
+describe('viewerWatchDirs — scope the watch by git-ness (§20.1)', () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = realpathSync(mkdtempSync(join(tmpdir(), 'watchscope-')));
+  });
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  const gitInit = (d: string): void => {
+    execFileSync('git', ['init', '-q'], { cwd: d });
+    execFileSync('git', ['config', 'user.email', 't@t'], { cwd: d });
+    execFileSync('git', ['config', 'user.name', 'T'], { cwd: d });
+  };
+
+  it('inside a git repo watches every dir the repo .gitignore does NOT exclude (not a hard-coded list)', () => {
+    gitInit(dir);
+    // Ignore node_modules AND an arbitrary build dir — proving the skip follows THIS repo's .gitignore.
+    writeFileSync(join(dir, '.gitignore'), 'node_modules/\nbuild/\n.agent-loop/\n.agent-terminal/\n');
+    mkdirSync(join(dir, 'src', 'deep'), { recursive: true });
+    writeFileSync(join(dir, 'src', 'deep', 'a.ts'), '');
+    mkdirSync(join(dir, 'node_modules', 'x'), { recursive: true });
+    writeFileSync(join(dir, 'node_modules', 'x', 'i.js'), '');
+    mkdirSync(join(dir, 'build', 'out'), { recursive: true });
+    writeFileSync(join(dir, 'build', 'out', 'bundle.js'), '');
+
+    const rels = viewerWatchDirs(dir).map((d) => relative(dir, d) || '.');
+    expect(rels).toContain('.');
+    expect(rels).toContain('src');
+    expect(rels).toContain(join('src', 'deep'));
+    // BOTH gitignored dirs skipped — node_modules and the arbitrary build/ (the generalization).
+    expect(rels.some((d) => d.split(sep).includes('node_modules'))).toBe(false);
+    expect(rels.some((d) => d.split(sep).includes('build'))).toBe(false);
+  });
+
+  it('watches the app state dirs even when the repo .gitignore excludes them (the allow-list)', () => {
+    gitInit(dir);
+    writeFileSync(join(dir, '.gitignore'), '.agent-loop/\n.agent-terminal/\n');
+    mkdirSync(join(dir, '.agent-loop', 'reviews', '1'), { recursive: true });
+    mkdirSync(join(dir, '.agent-terminal'), { recursive: true });
+    const set = new Set(viewerWatchDirs(dir));
+    expect(set.has(join(dir, '.agent-loop'))).toBe(true);
+    expect(set.has(join(dir, '.agent-loop', 'reviews', '1'))).toBe(true);
+    expect(set.has(join(dir, '.agent-terminal'))).toBe(true);
+  });
+
+  // The reported crash: launching in ~ (not a repo) watched the entire home filesystem → ENOSPC. Outside a
+  // repo the watch must cover ONLY the app-owned state dirs, never the cwd itself nor unrelated siblings.
+  it('outside a git repo watches ONLY the app state dirs (.agent-terminal / .agent-loop), never the cwd', () => {
+    mkdirSync(join(dir, '.agent-terminal'), { recursive: true });
+    mkdirSync(join(dir, '.agent-loop', 'reviews', '1'), { recursive: true });
+    mkdirSync(join(dir, 'Downloads', 'huge'), { recursive: true }); // a normal home-dir sibling
+    const set = new Set(viewerWatchDirs(dir));
+    expect(set.has(join(dir, '.agent-terminal'))).toBe(true);
+    expect(set.has(join(dir, '.agent-loop'))).toBe(true);
+    expect(set.has(join(dir, '.agent-loop', 'reviews', '1'))).toBe(true);
+    expect(set.has(dir)).toBe(false); // NOT the cwd root
+    expect([...set].some((d) => d.split(sep).includes('Downloads'))).toBe(false); // NOT unrelated dirs
+  });
+
+  it('outside a repo with no app dirs present watches nothing that exists (each missing path is inert)', () => {
+    // No .agent-terminal / .agent-loop created — the returned paths simply do not exist, so the factory
+    // skips them; the point is it never falls back to watching the whole cwd.
+    const set = new Set(viewerWatchDirs(dir));
+    expect(set.has(dir)).toBe(false);
+    for (const d of set) expect(d.startsWith(join(dir, '.agent'))).toBe(true);
   });
 });
 
