@@ -159,9 +159,10 @@ announcement and can create a focus trap. The rules:
    Capture focus *before* disabling and return it *after* — but only if focus has not since moved:
    restore iff the control still holds focus or was blurred to `<body>` by the disable, never stealing
    focus the user redirected mid-action. Never hand-roll this guard; the canonical implementation is
-   `captureFocusReturn` (`dom.ts`), composed by every self-disabling async control (`cliInstall`,
-   `installExamples`). Two hand-rolled copies *will* drift — the same reason `createModalShell` and
-   `attentionCue` are single implementations (§5.1).
+   `captureFocusReturn` (`dom.ts`), which `cliInstall` and `installExamples` compose rather than
+   re-deriving it — any self-disabling async control that returns focus composes it too. Two hand-rolled
+   copies *will* drift — the same reason `createModalShell` and `attentionCue` are single
+   implementations (§5.1).
 
 ## 5. Blocking dialogs — the modal focus-management pattern
 
