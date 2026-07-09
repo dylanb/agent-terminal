@@ -2242,6 +2242,30 @@ test('a customized global flow prompts before overwriting; declining leaves it b
   rmSync(home, { recursive: true, force: true });
 });
 
+test('dismissing the overwrite prompt without a choice returns focus to the install button (WCAG 2.4.3 #40)', async () => {
+  // Focus the button, then trigger the preview which disables it (blurring focus to <body>) before the
+  // prompt opens. Dismissing the prompt via Escape must restore focus to the button, not strand it on
+  // <body> — the modal opener has to be the button, not whatever held focus while it was disabled.
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-install-ex-focus-home-'));
+  mkdirSync(join(home, '.agent-terminal'), { recursive: true });
+  writeFileSync(join(home, '.agent-terminal', 'flow.yaml'), 'name: my-custom-flow\nsteps:\n  - id: mine\n    kind: manual\n'); // present + differs
+  await app.close();
+  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
+  page = await app.firstWindow();
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await page.locator('[data-viewbtn="4"]').click();
+  await installExamplesBtn().focus();
+  await installExamplesBtn().click();
+  await expect(installExamplesPrompt()).toBeVisible({ timeout: 10_000 });
+  await page.keyboard.press('Escape');
+  await expect(installExamplesPrompt()).toBeHidden();
+  await expect(installExamplesBtn()).toBeFocused();
+
+  await app.close();
+  rmSync(home, { recursive: true, force: true });
+});
+
 test('after install, the active step offers its bundled todo template as the picker default (§18.6 #40)', async () => {
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-install-ex3-home-'));
   const repo = mkdtempSync(join(tmpdir(), 'agent-term-e2e-install-ex3-repo-'));

@@ -2,7 +2,7 @@
 
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
-import { atomicWriteFileSync } from './atomicFile';
+import { atomicWriteFileSync, isRealContainer } from './atomicFile';
 import type { InstallExamplesPreview, InstallExamplesResult } from '../shared/ipc';
 import { isValidInstallExamplesPreview, isValidInstallExamplesApply } from './ipcValidation';
 
@@ -58,6 +58,9 @@ export function applyInstallExamples(
   targetDir: string,
   overwrite: boolean,
 ): InstallExamplesResult {
+  // Not redundant with atomicWriteFileSync's per-file container guard (CWE-59): that one misses a
+  // symlinked home above a nested write when flow.yaml is skipped and never written directly.
+  if (!isRealContainer(targetDir)) return { ok: false, error: `Could not install: ${targetDir} is not a real directory` };
   const created: string[] = [];
   const overwritten: string[] = [];
   const skipped: string[] = [];
@@ -75,7 +78,7 @@ export function applyInstallExamples(
     } catch (e) {
       return { ok: false, error: `Could not install ${rel}: ${errMsg(e)}` };
     }
-    if (!wrote) return { ok: false, error: `Could not install ${rel}: ${targetDir} is not a real directory` };
+    if (!wrote) return { ok: false, error: `Could not install ${rel}: ${path.dirname(targetFile)} is not a real directory` };
     (cls === 'create' ? created : overwritten).push(rel);
   }
   return { ok: true, created, overwritten, skipped };

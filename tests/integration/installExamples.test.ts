@@ -190,6 +190,22 @@ describe('applyInstallExamples — a refused write is an error, never a silent s
     expect(res.error).toBeTruthy();
     expect(existsSync(path.join(real, flowRel))).toBe(false); // nothing written into the symlink target
   });
+
+  it('refuses when the home is a symlink even if flow.yaml is skipped, so nested templates cannot escape (CWE-59)', () => {
+    // A symlinked flow home whose flow.yaml is already byte-identical: flow.yaml is skipped, so the only
+    // writes are the nested todo-templates. atomicWriteFileSync only guards each file's immediate
+    // container, not a symlinked grandparent — so the install must refuse up front on the home itself.
+    const real = path.join(home, 'real-home');
+    mkdirSync(real, { recursive: true });
+    writeFileSync(path.join(real, flowRel), readFileSync(path.join(BUNDLE, flowRel))); // identical → skipped
+    symlinkSync(real, targetDir);
+
+    const res = applyInstallExamples(BUNDLE, targetDir, false);
+    expect(res.ok).toBe(false);
+    if (res.ok) return;
+    expect(res.error).toBeTruthy();
+    expect(existsSync(path.join(real, 'todo-templates'))).toBe(false); // no nested write escaped into the symlink target
+  });
 });
 
 describe('installed bytes are renderable by the runtime read path (§18.1/§18.6)', () => {

@@ -152,6 +152,10 @@ export function createInstallExamples(host: HTMLElement, deps: InstallExamplesDe
       return;
     }
     setBusy(false);
+    // Re-focus the button before the modal opens so it — not the <body> the disable blurred to — is the
+    // opener createModalShell restores to on a no-choice dismissal (WCAG 2.4.3). The guard keeps focus
+    // where the user moved it if they redirected it during preview.
+    returnFocus();
     promptOverwrite(conflicts.length, returnFocus);
   }
 
