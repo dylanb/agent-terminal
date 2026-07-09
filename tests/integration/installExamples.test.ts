@@ -142,6 +142,25 @@ describe('applyInstallExamples — the overwrite decision governs only exist-and
   });
 });
 
+describe('applyInstallExamples — a bundle without a todo-templates/ subdir installs flow-only', () => {
+  it('installs and reports only the flow definition when the bundle has no todo-templates/', () => {
+    const bundleOnlyFlow = mkdtempSync(path.join(tmpdir(), 'bundle-flow-only-'));
+    try {
+      writeFileSync(path.join(bundleOnlyFlow, flowRel), readFileSync(path.join(BUNDLE, flowRel)));
+      const res = applyInstallExamples(bundleOnlyFlow, targetDir, false);
+      expect(res.ok).toBe(true);
+      if (!res.ok) return;
+      expect(res.created).toEqual([flowRel]);
+      expect(res.overwritten).toEqual([]);
+      expect(res.skipped).toEqual([]);
+      expect(existsSync(targetOf(flowRel))).toBe(true);
+      expect(existsSync(path.join(targetDir, 'todo-templates'))).toBe(false);
+    } finally {
+      rmSync(bundleOnlyFlow, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('applyInstallExamples — never writes a .gitignore', () => {
   it('creates no .gitignore anywhere in the home', () => {
     applyInstallExamples(BUNDLE, targetDir, false);

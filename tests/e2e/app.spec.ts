@@ -2193,8 +2193,11 @@ test('installing the bundled examples seeds the global flow; a fresh repo render
 
   await page.locator('[data-viewbtn="4"]').click(); // open the settings view
   await expect(page.locator('#install-examples-view')).toBeVisible();
+  await installExamplesBtn().focus();
   await installExamplesBtn().click();
   await expect(installExamplesStatus()).toContainText('created', { timeout: 15_000 });
+  // Keyboard focus returns to the control after the install resolves (WCAG 2.4.3) — not stranded on <body>.
+  await expect(installExamplesBtn()).toBeFocused();
 
   // The bundled flow definition + its todo templates now exist in the global flow home.
   expect(existsSync(join(home, '.agent-terminal', 'flow.yaml'))).toBe(true);

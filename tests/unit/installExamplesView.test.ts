@@ -85,6 +85,36 @@ describe('install examples view organism (§18.1/§23.4)', () => {
     await vi.waitFor(() => expect(status().textContent?.toLowerCase()).toContain('skipped'));
   });
 
+  it('reports the names of the files it created, overwrote, and skipped — not just counts (§ AC)', async () => {
+    const apply = vi.fn(async () =>
+      okResult({ created: ['todo-templates/a.md'], overwritten: ['flow.yaml'], skipped: ['todo-templates/b.md'] }),
+    );
+    createInstallExamples(host, deps({ preview: vi.fn(async () => ({ conflicts: ['flow.yaml'] })), apply }));
+    button().click();
+    await vi.waitFor(() => expect(overwriteBtn()).toBeTruthy());
+    overwriteBtn().click();
+    await vi.waitFor(() => expect(status().className).toMatch(/\bok\b/));
+    const text = status().textContent ?? '';
+    expect(text).toContain('flow.yaml');
+    expect(text).toContain('todo-templates/a.md');
+    expect(text).toContain('todo-templates/b.md');
+  });
+
+  it('does not yank focus back to the button if the user moved focus away during install (WCAG 2.4.3)', async () => {
+    let resolveApply: (r: InstallExamplesResult) => void = () => {};
+    const apply = vi.fn(() => new Promise<InstallExamplesResult>((r) => { resolveApply = r; }));
+    createInstallExamples(host, deps({ apply }));
+    const other = document.createElement('input');
+    document.body.appendChild(other);
+    button().focus();
+    button().click();
+    await vi.waitFor(() => expect(apply).toHaveBeenCalledTimes(1));
+    other.focus();
+    resolveApply(okResult());
+    await vi.waitFor(() => expect(status().textContent?.toLowerCase()).toContain('created'));
+    expect(host.ownerDocument.activeElement).toBe(other);
+  });
+
   it('announces an install error through the assertive alert region (WCAG 4.1.3)', async () => {
     const apply = vi.fn(async (): Promise<InstallExamplesResult> => ({ ok: false, error: 'refused: symlinked home' }));
     createInstallExamples(host, deps({ apply }));
