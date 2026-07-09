@@ -208,6 +208,28 @@ describe('applyInstallExamples — a refused write is an error, never a silent s
   });
 });
 
+describe('applyInstallExamples — a missing bundled file is a reported error, not a thrown reject', () => {
+  it('returns { ok:false, error } instead of throwing when a bundled file cannot be read (mispackaged bundle)', () => {
+    // A target flow.yaml exists (so classify reads past the target and reaches the bundle read), but the
+    // bundle is missing flow.yaml. The apply must surface { ok:false, error }, honoring the result
+    // contract, rather than throwing out of the IPC handler.
+    const bundleEmpty = mkdtempSync(path.join(tmpdir(), 'bundle-empty-'));
+    try {
+      mkdirSync(targetDir, { recursive: true });
+      writeFileSync(targetOf(flowRel), 'name: my-custom-flow\nsteps: []\n'); // target present → bundle read is reached
+      let res: ReturnType<typeof applyInstallExamples> | undefined;
+      expect(() => {
+        res = applyInstallExamples(bundleEmpty, targetDir, false);
+      }).not.toThrow();
+      expect(res?.ok).toBe(false);
+      if (!res || res.ok) return;
+      expect(res.error).toBeTruthy();
+    } finally {
+      rmSync(bundleEmpty, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('installed bytes are renderable by the runtime read path (§18.1/§18.6)', () => {
   it('loads through loadFlowDefinitionLocalFirst and yields every bundled step id', () => {
     applyInstallExamples(BUNDLE, targetDir, false);

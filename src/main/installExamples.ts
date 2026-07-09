@@ -67,19 +67,19 @@ export function applyInstallExamples(
   for (const rel of installSet(bundleDir)) {
     const bundleFile = path.join(bundleDir, rel);
     const targetFile = path.join(targetDir, rel);
-    const cls = classify(bundleFile, targetFile);
-    if (cls === 'identical' || (cls === 'differ' && !overwrite)) {
-      skipped.push(rel);
-      continue;
-    }
-    let wrote: boolean;
     try {
-      wrote = atomicWriteFileSync(targetFile, readFileSync(bundleFile, 'utf8'));
+      const cls = classify(bundleFile, targetFile);
+      if (cls === 'identical' || (cls === 'differ' && !overwrite)) {
+        skipped.push(rel);
+        continue;
+      }
+      if (!atomicWriteFileSync(targetFile, readFileSync(bundleFile, 'utf8'))) {
+        return { ok: false, error: `Could not install ${rel}: ${path.dirname(targetFile)} is not a real directory` };
+      }
+      (cls === 'create' ? created : overwritten).push(rel);
     } catch (e) {
       return { ok: false, error: `Could not install ${rel}: ${errMsg(e)}` };
     }
-    if (!wrote) return { ok: false, error: `Could not install ${rel}: ${path.dirname(targetFile)} is not a real directory` };
-    (cls === 'create' ? created : overwritten).push(rel);
   }
   return { ok: true, created, overwritten, skipped };
 }
