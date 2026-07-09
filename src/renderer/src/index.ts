@@ -20,6 +20,7 @@ import type { GateDecisionOption } from '../../shared/ipc';
 import { createKeymapController, resolveBase } from './keymapController';
 import { createKeyboardSettings } from './keyboardSettings';
 import { createCliInstall } from './cliInstall';
+import { createInstallExamples } from './installExamples';
 import { runMenuEditAction } from './menuActions';
 
 const { terminal: term } = createTerminalPane(document.getElementById('terminal')!);
@@ -51,6 +52,10 @@ keyboardUi = createKeyboardSettings(document.getElementById('kb-settings-view')!
   onReset: (action) => keymap.clearOverride(action),
 });
 createCliInstall(document.getElementById('cli-install-view')!, { install: () => window.cli.install() });
+createInstallExamples(document.getElementById('install-examples-view')!, {
+  preview: () => window.examples.preview(),
+  apply: (overwrite) => window.examples.apply(overwrite),
+});
 void window.monitor
   .getSettings()
   .then((s) => {

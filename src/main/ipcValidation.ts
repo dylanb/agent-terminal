@@ -100,12 +100,12 @@ export function isValidCliInstall(m: unknown): m is CliInstallMsg {
 /** examples:preview (§6) — a live-session request; no other payload (the bundle + target are
  *  computed by main from the running build). */
 export function isValidInstallExamplesPreview(m: unknown): m is InstallExamplesPreviewMsg {
-  return false;
+  return isRecord(m) && isLiveSession(m);
 }
 
 /** examples:apply (§6) — a live-session request carrying the boolean overwrite decision. */
 export function isValidInstallExamplesApply(m: unknown): m is InstallExamplesApplyMsg {
-  return false;
+  return isRecord(m) && isLiveSession(m) && typeof m.overwrite === 'boolean';
 }
 
 export function isValidDismiss(m: unknown): m is DismissMsg {

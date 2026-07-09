@@ -109,6 +109,8 @@ import { SHELL_INTEGRATION_SCRIPT } from './shellIntegration';
 import { resolveWindowIconPath, applyDockIcon } from './appIcon';
 import { handleCliInstall } from './cliInstall';
 import { resolveLaunchInvocation } from './cliShim';
+import { resolveExampleFlowDir } from './exampleAssets';
+import { handleInstallExamplesPreview, handleInstallExamplesApply } from './installExamples';
 import type { CliInstallResult } from '../shared/ipc';
 
 async function createWindow(): Promise<void> {
@@ -139,6 +141,12 @@ async function createWindow(): Promise<void> {
   const config = resolveRuntimeConfig(process.env);
   // §23.4: L anchors the cwd surfaces; the flow global dir is the per-user home (§18.1), not L.
   const { launchRoot, flowGlobalDir } = resolveLaunchSurfaces(process.env, os.homedir());
+  // §18.1/§23.4: the install-examples action's fixed bundle source (build-aware) + install target (the
+  // GLOBAL flow home). Resolved once from the running build; the handlers read this seam.
+  const exampleDirs = (): { bundleDir: string; targetDir: string } => ({
+    bundleDir: resolveExampleFlowDir(iconLoc),
+    targetDir: path.join(flowGlobalDir, '.agent-terminal'),
+  });
   const ptyProcess = await spawnAgentShell({
     integrationScriptPath: config.shellIntegration ? SHELL_INTEGRATION_SCRIPT : undefined,
     cwd: launchRoot,
@@ -1036,6 +1044,11 @@ async function createWindow(): Promise<void> {
             process.cwd(),
           ),
         })),
+      // Install bundled examples (§18.1/§23.4): the bundle resolves build-aware (packaged resources vs
+      // the unpackaged app path), and the flow definition + its templates install into the GLOBAL flow
+      // home <flowGlobalDir>/.agent-terminal (§18.1), read back by loadFlowDefinitionLocalFirst.
+      [CH.installExamplesPreview]: (_e, m) => handleInstallExamplesPreview(m, exampleDirs),
+      [CH.installExamplesApply]: (_e, m) => handleInstallExamplesApply(m, exampleDirs),
     },
   );
 

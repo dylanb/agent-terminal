@@ -16,6 +16,10 @@ asarUnpack:
 extraResources:
   - from: build/icon.png
     to: icon.png
+  # The install-examples action (§18.1/§23.4) reads the bundled flow at runtime; ship it under the path
+  # the packaged resolver reads back (process.resourcesPath/example/flow, see resolveExampleFlowDir).
+  - from: example/flow
+    to: example/flow
 mac:
   target:
     - dmg

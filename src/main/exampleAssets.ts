@@ -1,7 +1,6 @@
-// Build-aware resolution of the bundled example-flow assets (§18.1/§23.4). Mirrors the bundled-icon
-// resolver (appIcon.ts resolveWindowIconPath): a packaged build reads from process.resourcesPath, an
-// unpackaged built run (e2e / `pnpm run dev`) from app.getAppPath(). The location is injected as a
-// domain value so the packaged-vs-dev branch is unit-testable without reaching for Electron shapes.
+// Build-aware resolution of the bundled example-flow assets (§18.1/§23.4), modeled on appIcon.ts
+// resolveWindowIconPath. The location is injected as a domain value (not app.isPackaged /
+// process.resourcesPath reached for here) so the packaged-vs-dev branch is unit-testable.
 
 import path from 'node:path';
 
@@ -12,5 +11,7 @@ export interface BundleLocation {
 }
 
 export function resolveExampleFlowDir(loc: BundleLocation): string {
-  throw new Error('not implemented');
+  return loc.packaged
+    ? path.join(loc.resourcesPath, 'example', 'flow')
+    : path.join(loc.appPath, 'example', 'flow');
 }
