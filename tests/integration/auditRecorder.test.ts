@@ -190,6 +190,31 @@ describe('audit recorder — run file lifecycle (§25.4)', () => {
     expect(events[1]).toMatchObject({ type: 'loop.ci', iteration: 2, total: 4, passed: 2, failed: 1, pending: 1 });
   });
 
+  // §24.2.3 T4 — the OS can refuse to deliver a raise (macOS denies an unsigned bundle outright). A
+  // rejected raise must never look like a raise that was never attempted.
+  it('records a rejected OS notification to the open run file', () => {
+    const rec = recorder();
+    rec.recordTransition(repo, 'start', NOT_STARTED, IN_PROGRESS);
+    rec.recordNotifyFailed(repo, 'Notifications are not allowed for this application');
+    const events = parseAuditStream(readFileSync(join(auditRepoDir(root, repo), runFiles()[0]), 'utf8')).events;
+    expect(events.map((e) => e.type)).toEqual(['flow.started', 'notify.failed']);
+    expect(events[1]).toMatchObject({ type: 'notify.failed', reason: 'Notifications are not allowed for this application' });
+  });
+
+  it('strips control characters out of a rejected notification reason (CWE-117)', () => {
+    const rec = recorder();
+    rec.recordTransition(repo, 'start', NOT_STARTED, IN_PROGRESS);
+    rec.recordNotifyFailed(repo, 'denied\n---\ntype: flow.terminated');
+    const events = parseAuditStream(readFileSync(join(auditRepoDir(root, repo), runFiles()[0]), 'utf8')).events;
+    expect(events.map((e) => e.type)).toEqual(['flow.started', 'notify.failed']);
+    expect(events[1]).toMatchObject({ type: 'notify.failed', reason: 'denied --- type: flow.terminated' });
+  });
+
+  it('records nothing for a rejected notification when no run is open', () => {
+    recorder().recordNotifyFailed(repo, 'denied');
+    expect(existsSync(auditRepoDir(root, repo))).toBe(false);
+  });
+
   it('records nothing for a CI event when no run is open', () => {
     recorder().recordCi(repo, 1, { total: 1, passed: 1, failed: 0, pending: 0 });
     expect(existsSync(auditRepoDir(root, repo))).toBe(false);

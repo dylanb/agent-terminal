@@ -914,16 +914,26 @@ async function createWindow(): Promise<void> {
   // Electron Notification surface is created here.
   const loopNotifier = createLoopNotifier({
     isFocused: () => !win.isDestroyed() && win.isFocused(),
+    onFocusChanged: (listener) => {
+      win.on('blur', listener);
+      win.on('focus', listener);
+    },
     focusWindow: () => {
       if (win.isDestroyed()) return;
       if (win.isMinimized()) win.restore();
       win.focus();
     },
     reveal: () => send(CH.flowRevealLoop, { sessionId: SESSION_ID }),
-    notify: ({ title, body, onActivate }) => {
-      if (!Notification.isSupported()) return () => {};
+    // A refused raise is indistinguishable from one never attempted unless it is recorded: macOS denies
+    // an unsigned bundle outright (UNErrorDomain 1), which silently disabled this surface for its whole life.
+    notify: ({ title, body, repoKey, onActivate }) => {
+      if (!Notification.isSupported()) {
+        audit.recordNotifyFailed(repoKey, 'the platform supports no notifications');
+        return () => {};
+      }
       const notification = new Notification({ title, body });
       notification.on('click', onActivate);
+      notification.on('failed', (_event, error) => audit.recordNotifyFailed(repoKey, String(error)));
       notification.show();
       return () => notification.close();
     },

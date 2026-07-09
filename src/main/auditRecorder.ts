@@ -11,6 +11,7 @@ import {
   inputEvents,
   lifecycleEvents,
   loopEvents,
+  notifyFailedEvent,
   serializeDoc,
   terminateEvents,
   todoEvents,
@@ -75,6 +76,9 @@ export interface AuditRecorder {
   recordCost(repoKey: string, iteration: number, cost: CostResult): void;
   /** Record the §26.7 per-iteration CI snapshot (run-don't-block), only while a run is open. Best-effort. */
   recordCi(repoKey: string, iteration: number, snapshot: CiSnapshot): void;
+  /** Record the OS refusing to deliver a §24.2.3 T4 attention notification, only while a run is open.
+   *  `reason` is the OS's untrusted message; the record bounds and strips it. */
+  recordNotifyFailed(repoKey: string, reason: string): void;
   /** Record a flow Terminate (#26): append a `flow.terminated` event to the open run, then finalize
    *  it so the next start opens a new run. Best-effort — never throws into the flow path. */
   recordTerminate(repoKey: string): void;
@@ -213,6 +217,14 @@ export function createAuditRecorder(deps: AuditRecorderDeps): AuditRecorder {
         ]);
       } catch (e) {
         log('audit recordCi failed', e);
+      }
+    },
+
+    recordNotifyFailed(repoKey, reason) {
+      try {
+        appendIfOpen(repoKey, [notifyFailedEvent(reason, auditTimestamp(now()))]);
+      } catch (e) {
+        log('audit recordNotifyFailed failed', e);
       }
     },
 

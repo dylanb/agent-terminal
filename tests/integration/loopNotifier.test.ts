@@ -44,7 +44,20 @@ describe('loop notifier driven from real state.yaml (§24.2.3 T4)', () => {
 
   function spyNotifier(focused = false) {
     const notify = vi.fn<(o: LoopNotifyOpts) => () => void>(() => () => {});
-    return { notify, notifier: createLoopNotifier({ isFocused: () => focused, notify, focusWindow: vi.fn(), reveal: vi.fn() }) };
+    let isFocused = focused;
+    const listeners: (() => void)[] = [];
+    const notifier = createLoopNotifier({
+      isFocused: () => isFocused,
+      onFocusChanged: (listener) => listeners.push(listener),
+      notify,
+      focusWindow: vi.fn(),
+      reveal: vi.fn(),
+    });
+    const setFocused = (next: boolean): void => {
+      isFocused = next;
+      for (const listener of listeners) listener();
+    };
+    return { notify, notifier, setFocused };
   }
 
   it('raises on a real awaiting-human state.yaml when unfocused', () => {
@@ -70,10 +83,52 @@ describe('loop notifier driven from real state.yaml (§24.2.3 T4)', () => {
     expect(notify).toHaveBeenCalledTimes(2);
   });
 
+  // The app hosts the agent, so the window is almost always focused at the instant the loop stops for
+  // the human. A raise skipped for focus must stay PENDING, not count as signalled — otherwise walking
+  // away from the app is exactly the moment the notification is guaranteed never to arrive.
+  it('raises when the user leaves the app, for an entry that arrived while the window was focused', () => {
+    writeState('awaiting-human-pr-approval', 9);
+    const { notifier, notify, setFocused } = spyNotifier(true);
+
+    notifier.observe(repo, viewNow());
+    expect(notify).not.toHaveBeenCalled();
+
+    setFocused(false);
+    expect(notify).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not re-raise an already-raised entry when the window is focused and left again', () => {
+    writeState('awaiting-human-pr-approval', 9);
+    const { notifier, notify, setFocused } = spyNotifier(false);
+
+    notifier.observe(repo, viewNow());
+    setFocused(true);
+    setFocused(false);
+    expect(notify).toHaveBeenCalledTimes(1);
+  });
+
+  it('never raises for an entry the loop resolved while the window was focused', () => {
+    writeState('awaiting-human-pr-approval', 9);
+    const { notifier, notify, setFocused } = spyNotifier(true);
+    notifier.observe(repo, viewNow());
+
+    writeState('impl-draft', 10); // the human answered in-app; the loop moved on
+    notifier.observe(repo, viewNow());
+
+    setFocused(false);
+    expect(notify).not.toHaveBeenCalled();
+  });
+
   it('clears the notification when the mirror becomes a null mirror (corrupt state.yaml)', () => {
     const close = vi.fn();
     const notify = vi.fn<(o: LoopNotifyOpts) => () => void>(() => close);
-    const notifier = createLoopNotifier({ isFocused: () => false, notify, focusWindow: vi.fn(), reveal: vi.fn() });
+    const notifier = createLoopNotifier({
+      isFocused: () => false,
+      onFocusChanged: () => {},
+      notify,
+      focusWindow: vi.fn(),
+      reveal: vi.fn(),
+    });
     writeState('awaiting-human-pr-approval', 9);
     notifier.observe(repo, viewNow());
     writeFileSync(join(repo, '.agent-loop', 'state.yaml'), 'schema_version: 99\n: not: valid');

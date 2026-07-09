@@ -17,6 +17,12 @@ extraResources:
   - from: build/icon.png
     to: icon.png
 mac:
+  # macOS authorizes notifications only for a bundle whose signature binds its Info.plist (§24.2.3 T4).
+  # With no identity electron-builder skips signing and ships the linker's, which does not — so ad-hoc
+  # sign. Hardened runtime is off because under an ad-hoc identity it enforces library validation, which
+  # rejects the pre-signed Electron framework's differing Team ID.
+  identity: "-"
+  hardenedRuntime: false
   target:
     - dmg
     - zip

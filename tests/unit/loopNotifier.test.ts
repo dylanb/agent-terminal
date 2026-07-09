@@ -26,6 +26,7 @@ function harness(over: Partial<LoopNotifierDeps> = {}) {
   const reveal = vi.fn();
   const deps: LoopNotifierDeps = {
     isFocused: () => false,
+    onFocusChanged: () => {},
     notify,
     focusWindow,
     reveal,

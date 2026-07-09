@@ -94,11 +94,13 @@ describe('agent-loop state.yaml bridge (§24.2.3 T2 / §19.1)', () => {
     });
     expect(stop).not.toBeNull();
     try {
-      writeState('schema_version: 4\niteration: 10\nstatus: awaiting-team-review\n');
-      // fs.watch delivery is OS-scheduled and unbounded under parallel-suite CPU load, so a tight
-      // wall-clock cap reports false negatives; wait generously — the happy path resolves on the
-      // first event and a genuinely dead watcher still fails at the cap.
-      await vi.waitFor(() => expect(fired).toBeGreaterThan(0), { timeout: 10_000, interval: 20 });
+      // fs.watch arms asynchronously (FSEvents on darwin), so a change written before it is armed is
+      // dropped and never redelivered — a single write races the watcher and hangs to the cap. Re-write
+      // on every poll: the happy path resolves on the first event, a dead watcher still fails at the cap.
+      await vi.waitFor(() => {
+        writeState('schema_version: 4\niteration: 10\nstatus: awaiting-team-review\n');
+        expect(fired).toBeGreaterThan(0);
+      }, { timeout: 10_000, interval: 50 });
     } finally {
       stop?.();
     }
