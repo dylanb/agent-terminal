@@ -85,6 +85,7 @@ import { composeWorkPrompt, composeSpawnReviewersPrompt, composeConsolidatePromp
 import { allReviewsPresent, anyReviewPresent, consolidatedVerdict, consolidatedFindings, personaVerdict, carryForwardReviews, planDigest } from './reviewArtifacts';
 import { findingSignature, nextImpasse } from './findingSignature';
 import { readSessionTokens, sessionLogDir } from './costMeter';
+import { createFlowStateStore } from './flowState';
 import { createRealCiChecks } from './ciChecks';
 import { priceTokens, formatCost, type CostResult } from '../shared/pricing';
 import { prunablePersonas, recordCleanPersonas } from './personaSkip';
@@ -523,11 +524,16 @@ async function createWindow(): Promise<void> {
     const digest = planDigest(repoDir);
     return digest === '' ? null : { kind: 'plan', digest };
   };
-  // §26.10 — price the run's accumulated session-log tokens (main session + subagent logs). Best-effort:
-  // any failure degrades to $0 rather than aborting the loop's critical path (CLAUDE.md side-effect rule).
+  // §26.10 — price the run's accumulated session-log tokens (main session + subagent logs), swept from the
+  // instant the flow started: the repo's project dir accumulates every session ever logged against it, so an
+  // unbounded sweep reports the repo's lifetime spend rather than this run's. A flow with no recorded start
+  // (one begun before the instant was persisted) sweeps unbounded rather than reporting nothing.
+  // Best-effort: any failure degrades to $0 rather than aborting the loop's critical path (CLAUDE.md
+  // side-effect rule).
   const iterationCost = (repoDir: string): CostResult => {
     try {
-      return priceTokens(readSessionTokens(sessionLogDir(repoDir, process.env, os.homedir())));
+      const since = createFlowStateStore(repoDir).read()?.startedAt;
+      return priceTokens(readSessionTokens(sessionLogDir(repoDir, process.env, os.homedir()), since));
     } catch {
       return { usd: 0, unpricedModels: [] };
     }

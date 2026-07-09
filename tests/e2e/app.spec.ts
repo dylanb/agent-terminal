@@ -1742,11 +1742,30 @@ function seedFakeAgent(
     ? "mkdir -p .agent-loop; printf '%s\\n' '---' 'classification: epic' 'sub_tickets:' " +
       "'  - title: Slice one' '  - title: Slice two' '  - title: Slice three' '---' '' '# Plan' > .agent-loop/plan.md"
     : "mkdir -p .agent-loop; printf '# Plan\\n\\nfake plan body\\n' > .agent-loop/plan.md";
-  // The token log the §26.10 meter reads: one assistant event carrying the model + usage (Claude Code's
-  // private JSONL shape). Guarded on the env var so only the L7 test (which sets it) writes a fixture.
+  // The token log the §26.10 meter reads (Claude Code's private JSONL shape). Guarded on the env var so only
+  // the L7 test (which sets it) writes a fixture. It reproduces the four shapes a real project dir holds:
+  //   stale.jsonl    a session from BEFORE this flow began (opus, 1M input = $15) — outside the run's window
+  //   session.jsonl  this run's work turn (sonnet-5, 1M input = $3.00), written TWICE under one billing
+  //                  identity, as a resumed session replays it — the API billed it once
+  //   subagents/     a reviewer subagent nested under the session dir (sonnet-5, 100k output = $1.50)
+  //   <synthetic>    Claude Code's zero-token API-error turn — bills nothing, so no `+unknown`
+  // A correctly scoped, deduped, recursive, synthetic-skipping meter reads exactly $4.50.
+  const jsonl = (ts: string, id: string, model: string, usage: string): string =>
+    `{"type":"assistant","timestamp":"${ts}","requestId":"req-${id}","message":{"id":"msg-${id}","model":"${model}","usage":{${usage}}}}`;
+  const emit = (obj: string, file: string, redirect = '>'): string =>
+    `printf '%s\\n' '${obj.replace(/NOW/, "'\"$NOW\"'")}' ${redirect} "${file}"; `;
+  const root = '$APP_SESSION_LOG_ROOT';
   const writeTokens = opts.costFixture
-    ? `; if [ -n "$APP_SESSION_LOG_ROOT" ]; then mkdir -p "$APP_SESSION_LOG_ROOT"; ` +
-      `printf '%s\\n' '{"type":"assistant","message":{"model":"claude-sonnet-5","usage":{"input_tokens":1000000,"output_tokens":0}}}' > "$APP_SESSION_LOG_ROOT/session.jsonl"; fi`
+    ? `; if [ -n "$APP_SESSION_LOG_ROOT" ]; then mkdir -p "${root}/session-uuid/subagents"; ` +
+      // The current second at .999 — always at or after the instant the flow started, which lies in this
+      // second or an earlier one, whatever the sub-second offset.
+      `NOW=$(date -u +%Y-%m-%dT%H:%M:%S.999Z); ` +
+      emit(jsonl('2020-01-01T00:00:00.000Z', 'stale', 'claude-opus-4-8', '"input_tokens":1000000'), `${root}/stale.jsonl`) +
+      emit(jsonl('NOW', 'work', 'claude-sonnet-5', '"input_tokens":1000000,"output_tokens":0'), `${root}/session.jsonl`) +
+      emit(jsonl('NOW', 'work', 'claude-sonnet-5', '"input_tokens":1000000,"output_tokens":0'), `${root}/session.jsonl`, '>>') +
+      emit(jsonl('NOW', 'err', '<synthetic>', '"input_tokens":0,"output_tokens":0'), `${root}/session.jsonl`, '>>') +
+      emit(jsonl('NOW', 'rev', 'claude-sonnet-5', '"output_tokens":100000'), `${root}/session-uuid/subagents/agent-x.jsonl`) +
+      `fi`
     : '';
   // §26.3 — a stream of changing lines that outlasts a short stall window; each line is a §8.3 edge that
   // must reset the watchdog. Runs BEFORE plan.md so a killed turn leaves no artifact (a clean RED landing).
@@ -3538,7 +3557,9 @@ test('completing an iteration prices the fixture tokens: strip readout + audit c
   const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-l7-cost-bin-');
   const logRoot = mkdtempSync(join(tmpdir(), 'agent-term-e2e-l7-cost-logs-'));
   // A clean verdict stops at the plan-approval gate on iteration 1 — one completed iteration. The work turn
-  // writes 1,000,000 claude-sonnet-5 input tokens → exactly $3.00 against the pricing table.
+  // writes the §26.10 session-log fixture: $3.00 of work tokens (replayed twice under one billing identity)
+  // + $1.50 of reviewer-subagent tokens, beside $15 of a session that predates this flow and a zero-token
+  // `<synthetic>` turn. Only this run's distinct, priced turns count → exactly $4.50, with no pricing gap.
   seedFakeAgent(binDir, { work: 'write-plan', reviews: 'all', consolidate: 'clean', costFixture: true });
   await driveToWorkTurn(repo, home, binDir, logFile, '30000', { APP_SESSION_LOG_ROOT: logRoot });
 
@@ -3547,17 +3568,35 @@ test('completing an iteration prices the fixture tokens: strip readout + audit c
     .poll(() => readFileSync(stateFile, 'utf8'), { timeout: 25_000 })
     .toContain('status: awaiting-human-plan-approval');
   // Land (state): the iteration boundary persisted the priced cost into the app-owned extension.
-  expect(readFileSync(stateFile, 'utf8')).toContain('usd: 3');
+  expect(readFileSync(stateFile, 'utf8')).toContain('usd: 4.5');
 
-  // Land (strip): the compact loop read-out shows the priced dollars ($3.00), formatted by the meter.
-  await expect(loopReadout().locator('.loop-cost')).toHaveText('$3.00', { timeout: 15_000 });
+  // Land (strip): the read-out shows this run's dollars — the pre-flow session, the replayed turn, and the
+  // zero-token `<synthetic>` model all excluded, the reviewer subagent's tokens included.
+  const cost = loopReadout().locator('.loop-cost');
+  await expect(cost).toHaveText('$4.50', { timeout: 15_000 });
+
+  // Land (strip layout): a value too wide for the 200px rail must stay on ONE line and overflow the row,
+  // never wrap inside itself. A shrinkable flex item breaks mid-value, interleaving `iter N` and the dollars
+  // into unreadable columns (the reported defect: `iter $4104.09` above `1 +unknown`). Drive the widest
+  // readout the meter can produce through the real state.yaml → reader → strip path.
+  const widened = readFileSync(stateFile, 'utf8').replace('usd: 4.5\n  unpriced: []', 'usd: 4104.09\n  unpriced:\n    - claude-made-up-9');
+  expect(widened, 'the cost block moved; re-anchor this rewrite').toContain('usd: 4104.09');
+  writeFileSync(stateFile, widened);
+  await expect(cost).toHaveText('$4104.09 +unknown', { timeout: 15_000 });
+  for (const value of [cost, loopReadout().locator('.loop-iter')]) {
+    const lines = await value.evaluate((el) => {
+      const one = parseFloat(getComputedStyle(el).fontSize) * 2; // a generous single line box
+      return { height: el.getBoundingClientRect().height, oneLine: one };
+    });
+    expect(lines.height, 'loop read-out value wrapped onto a second line').toBeLessThan(lines.oneLine);
+  }
 
   // Land (audit): the run's YAML carries the per-iteration cost event with the priced dollars.
   const costEvents = readAuditRun(home, repo, auditRunFiles(home, repo)[0]).events.filter(
     (e): e is Extract<AuditEvent, { type: 'loop.cost' }> => e.type === 'loop.cost',
   );
   expect(costEvents).toEqual(
-    expect.arrayContaining([expect.objectContaining({ type: 'loop.cost', iteration: 1, usd: 3, unpriced: [] })]),
+    expect.arrayContaining([expect.objectContaining({ type: 'loop.cost', iteration: 1, usd: 4.5, unpriced: [] })]),
   );
 
   await app.close();

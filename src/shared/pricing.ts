@@ -13,8 +13,8 @@ export interface ModelTokens {
 }
 
 /** A priced result (§26.10): `usd` is the summed dollars of every PRICED model; `unpricedModels` names each
- *  model absent from the table (each contributes zero, surfaced as `unknown`). `usd` is always finite —
- *  never NaN — so the readout never renders `$NaN` and never blocks. */
+ *  model absent from the table that actually consumed tokens (each contributes zero, surfaced as `unknown`).
+ *  `usd` is always finite — never NaN — so the readout never renders `$NaN` and never blocks. */
 export interface CostResult {
   usd: number;
   unpricedModels: string[];
@@ -35,16 +35,21 @@ export const PRICING: Record<string, ModelPrice> = {
   'claude-opus-4-8': { input: 15, cacheCreate: 18.75, cacheRead: 1.5, output: 75 },
   'claude-opus-4-7': { input: 15, cacheCreate: 18.75, cacheRead: 1.5, output: 75 },
   'claude-sonnet-5': { input: 3, cacheCreate: 3.75, cacheRead: 0.3, output: 15 },
+  'claude-sonnet-4-6': { input: 3, cacheCreate: 3.75, cacheRead: 0.3, output: 15 },
   'claude-fable-5': { input: 3, cacheCreate: 3.75, cacheRead: 0.3, output: 15 },
   'claude-haiku-4-5-20251001': { input: 1, cacheCreate: 1.25, cacheRead: 0.1, output: 5 },
 };
 
 /** Price per-model token totals against PRICING (§26.10). A model absent from the table contributes zero
- *  dollars and is named once in `unpricedModels`; the returned `usd` is always finite. */
+ *  dollars and is named once in `unpricedModels`; the returned `usd` is always finite. A model that consumed
+ *  no tokens bills nothing, so it is never a pricing gap however unfamiliar its id — Claude Code logs a
+ *  `<synthetic>` model on API-error turns with every token field at zero, and reporting that as unpriced
+ *  would append `+unknown` to a readout that is in fact complete. */
 export function priceTokens(totals: ModelTokens[]): CostResult {
   let usd = 0;
   const unpricedModels: string[] = [];
   for (const t of totals) {
+    if (t.input + t.cacheCreate + t.cacheRead + t.output === 0) continue;
     const price = PRICING[t.model];
     if (!price) {
       if (!unpricedModels.includes(t.model)) unpricedModels.push(t.model);

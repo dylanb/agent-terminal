@@ -244,6 +244,7 @@ export function createFlowMachine(
   readLoop?: FlowReadLoop,
   readLoopDef?: FlowReadLoopDef,
   readLoopCost?: FlowReadLoopCost,
+  now: () => number = Date.now,
 ): FlowMachine {
   if (!load.ok) {
     const view = (): FlowStateView => ({
@@ -279,6 +280,9 @@ export function createFlowMachine(
   // The flow's resolved typed inputs (§18.4 / §24.2.3 T3), flow-wide so a value resolved at one step
   // threads to later steps.
   let inputs: Record<string, string> = {};
+  // §26.10 — when THIS run of the flow began. The cost meter sweeps session logs from here, so it must
+  // survive every transition within a run and never outlive one.
+  let startedAt: number | null = null;
 
   // Re-read the persisted progression from the store (§19.1: flow-state.yaml is the source of truth).
   // Run at construction AND on every state() query, so an external advance — the agent-loop CLI moving
@@ -289,6 +293,7 @@ export function createFlowMachine(
     index = 0;
     status = 'not_started';
     inputs = {};
+    startedAt = null;
     const persisted = store.read();
     if (!persisted) return;
     const i = names.indexOf(persisted.step);
@@ -297,6 +302,7 @@ export function createFlowMachine(
       status = persisted.status;
     }
     if (persisted.inputs) inputs = { ...persisted.inputs };
+    if (persisted.startedAt !== undefined) startedAt = persisted.startedAt;
   };
   hydrate();
 
@@ -349,7 +355,12 @@ export function createFlowMachine(
   };
 
   const persist = (): void =>
-    store?.write({ step: current().id, status, ...(Object.keys(inputs).length > 0 ? { inputs } : {}) });
+    store?.write({
+      step: current().id,
+      status,
+      ...(Object.keys(inputs).length > 0 ? { inputs } : {}),
+      ...(startedAt !== null ? { startedAt } : {}),
+    });
 
   const requireStatus = (expected: FlowStatus, action: string): void => {
     if (status !== expected) {
@@ -377,6 +388,7 @@ export function createFlowMachine(
     start: () => {
       requireStatus('not_started', 'start');
       status = 'in_progress';
+      startedAt = now();
       persist();
       return enter(view());
     },
@@ -396,6 +408,7 @@ export function createFlowMachine(
       index = 0;
       status = 'in_progress';
       inputs = {}; // §18.4: a restart re-requests resolved inputs; undo() preserves them
+      startedAt = now(); // a re-run is a new run: its cost starts from zero (§26.10)
       persist();
       return enter(view());
     },
@@ -421,6 +434,7 @@ export function createFlowMachine(
       index = 0;
       status = 'not_started';
       inputs = {};
+      startedAt = null; // an abandoned run leaves no window for the next run's cost to be measured from
       persist();
       return view(); // not_started enters no step, so no onEnter (mirrors advance → done)
     },
@@ -464,6 +478,8 @@ export interface FlowManagerDeps {
   readLoopDef?: (repoKey: string, name: string) => LoopDef | null;
   /** The formatted §26.10 cost readout for a repo's loop, or null when none recorded; omitted → no cost. */
   readLoopCost?: (repoKey: string) => string | null;
+  /** The current instant, stamped onto a run when it starts (§26.10); omitted → the wall clock. */
+  now?: () => number;
 }
 
 export function createFlowManager(deps: FlowManagerDeps): FlowManager {
@@ -488,6 +504,7 @@ export function createFlowManager(deps: FlowManagerDeps): FlowManager {
       deps.readLoopState ? () => deps.readLoopState!(repoKey) : undefined,
       deps.readLoopDef ? (name) => deps.readLoopDef!(repoKey, name) : undefined,
       deps.readLoopCost ? () => deps.readLoopCost!(repoKey) : undefined,
+      deps.now,
     );
     cache.set(repoKey, { sig, machine });
     return machine;

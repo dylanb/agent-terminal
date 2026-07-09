@@ -123,6 +123,64 @@ describe('flow state machine — multi-step (§24.2.3 T1)', () => {
   });
 });
 
+// §26.10 — starting a flow records WHEN it started, so the cost meter can price only the turns this run
+// produced. The instant survives every transition within the run and is re-stamped by a fresh run.
+describe('flow state machine — the run`s start instant (§26.10)', () => {
+  const THREE: FlowLoad = {
+    ok: true,
+    definition: { name: 'f', steps: [{ id: 'groom', kind: 'manual' }, { id: 'plan', kind: 'manual' }] },
+    flowDir: '/tmp/f/.agent-terminal',
+  };
+  let dir: string;
+  const at = (ms: number) => () => ms;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'flow-started-'));
+  });
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('stamps the start instant when the flow begins', () => {
+    const store = createFlowStateStore(dir);
+    createFlowMachine(THREE, store, undefined, undefined, undefined, undefined, at(1000)).start();
+    expect(store.read()?.startedAt).toBe(1000);
+  });
+
+  it('a not_started flow has no start instant', () => {
+    const store = createFlowStateStore(dir);
+    createFlowMachine(THREE, store, undefined, undefined, undefined, undefined, at(1000)).state();
+    expect(store.read()?.startedAt).toBeUndefined();
+  });
+
+  it('advancing through the flow preserves the original start instant', () => {
+    const store = createFlowStateStore(dir);
+    const flow = createFlowMachine(THREE, store, undefined, undefined, undefined, undefined, at(1000));
+    flow.start();
+    flow.advance();
+    expect(store.read()?.startedAt).toBe(1000);
+  });
+
+  it('terminating clears the start instant, so the next run cannot inherit it', () => {
+    const store = createFlowStateStore(dir);
+    const flow = createFlowMachine(THREE, store, undefined, undefined, undefined, undefined, at(1000));
+    flow.start();
+    flow.terminate();
+    expect(store.read()?.startedAt).toBeUndefined();
+  });
+
+  it('restarting a finished flow re-stamps the instant, so its cost starts from zero', () => {
+    const store = createFlowStateStore(dir);
+    let clock = 1000;
+    const flow = createFlowMachine(THREE, store, undefined, undefined, undefined, undefined, () => clock);
+    flow.start();
+    flow.advance();
+    flow.advance(); // → done
+    clock = 5000;
+    flow.restart();
+    expect(store.read()?.startedAt).toBe(5000);
+  });
+});
+
 // Slice B (§26.9) — a bootstrap that fails after its step was entered must not strand the flow on a
 // half-entered loop step. revertStep(fromStepId) walks ONE step back, staying in_progress, WITHOUT
 // re-running the previous step's entry actions (the inverse of an advance, like undo but mid-flow) and
