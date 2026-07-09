@@ -7,7 +7,7 @@ import {
   composeSpawnReviewersPrompt,
   composeConsolidatePrompt,
 } from '../../src/main/loopRecipe';
-import { turnDoneSentinel } from '../../src/shared/loopTurn';
+
 
 // §26.5 / §26.3 — the orchestrator composes the work-{phase} turn prompt from the bound LoopDef recipe.
 // L2 is minimal-but-real: the template body (prompts/work-{phase}.md) + resolvable token substitution +
@@ -33,7 +33,7 @@ describe('work-{phase} recipe composition (§26.5/§26.3)', () => {
     });
     expect(out).not.toBeNull();
     expect(out).toContain('Work agent'); // the real template's heading body
-    expect(out).toContain(turnDoneSentinel('work-plan')); // the done-signal instruction is appended
+    expect(out).toContain('turn-done:work-plan'); // the done-signal instruction is appended
   });
 
   it('substitutes resolvable tokens, leaving no unresolved copy of a provided token', () => {
@@ -74,7 +74,7 @@ describe('spawn-reviewers recipe composition (§26.4)', () => {
       expect(out).toContain(p);
       expect(out).toContain(`reviews/3/${p}.json`); // the §26.4 per-persona artifact path
     }
-    expect(out).toContain(turnDoneSentinel('review-plan')); // every actor turn carries the done-signal
+    expect(out).toContain('turn-done:review-plan'); // every actor turn carries the done-signal
   });
 
   it('instructs parallel subagent fan-out, not a serial walk', () => {
@@ -108,7 +108,7 @@ describe('consolidate recipe composition (§26.5/§26.3 D45)', () => {
     });
     expect(out).not.toBeNull();
     expect(out).toContain('Consolidator'); // the real template's heading body
-    expect(out).toContain(turnDoneSentinel('consolidate-plan')); // the done-signal instruction is appended
+    expect(out).toContain('turn-done:consolidate-plan'); // the done-signal instruction is appended
   });
 
   it('substitutes the iteration/phase/review-dir/verdict-policy slots, leaving no provided token unresolved', () => {

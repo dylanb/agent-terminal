@@ -94,12 +94,10 @@ import { createRealGateGitHub } from './gateGithub';
 import { createRealGateExec } from './gateExec';
 import { writeHumanNote } from './humanNotes';
 import { readEpicPlan } from './epicPlan';
-import { createSentinelWatcher } from './turnSentinel';
 import { readTurnDone, clearTurnDone, watchTurnDone } from './turnDoneFile';
 import { writeLoopState } from './loopStateWriter';
 import { readLoopExtension } from './loopStateReader';
 import { currentTurnByArtifacts, decideResume } from './loopResume';
-import { turnDoneSentinel } from '../shared/loopTurn';
 import type { FlowStepDef } from './flow';
 import { listTodoTemplates, loadTodoTemplateFile, parseTodoTemplate } from './todoTemplate';
 import { discover, readArtifact, emptyTree, warmBaseRef, createBaseWarmer, createViewerActivityHandler, gitRootOf } from './artifactTree';
@@ -320,7 +318,6 @@ async function createWindow(): Promise<void> {
       return false;
     }
   };
-  const turnSentinel = createSentinelWatcher(() => turnRunner.onDoneSignal());
   turnRunner = createTurnRunner({
     compose: () => {
       if (!activeTurn) return null;
@@ -363,12 +360,11 @@ async function createWindow(): Promise<void> {
     },
     inject: (prompt, opts) => {
       // §26.3/D46 — the turn PROMPT inject (never the /clear preamble) is the SINGLE point at which the
-      // completed turn's done-signal state is reset: arm the sentinel for this turn AND clear any latched
-      // turn-done file. Because the prompt inject is gated to land only after /clear drained + the agent
-      // re-quiesced, this is exactly "reset only when /clear fired AND quiescent" — the prior turn's
-      // detection survives the whole transition. The preamble resets nothing.
+      // completed turn's done-signal state is reset: clear any latched turn-done file. Because the prompt
+      // inject is gated to land only after /clear drained + the agent re-quiesced, this is exactly "reset
+      // only when /clear fired AND quiescent" — the prior turn's detection survives the whole transition.
+      // The preamble resets nothing.
       if (!opts?.preamble && activeTurn) {
-        turnSentinel.arm(turnDoneSentinel(activeTurn.turnKey));
         clearTurnDone(activeTurn.repoDir);
         // §26 activity — the turn prompt landing flips the strip readout from "Waiting for the agent" to
         // the turn phrase (the preamble keeps the wait phrase; it is not the turn working yet).
@@ -442,15 +438,23 @@ async function createWindow(): Promise<void> {
   // Bind a freshly-bootstrapped loop step's work turn: watch for its done-signal file and request the
   // turn (injected when the instance next goes injectable). The watcher stays attached across the turns
   // chained off this one (work → reviewers), so each turn's done-signal file is seen.
-  const startWorkTurn = (repoDir: string, loopName: string, phase: string, preamble?: string): void => {
-    activeTurn = { kind: 'work', repoDir, loopName, phase, turnKey: `work-${phase}` };
+  // §26.3/D47a — arm the turn-done FILE watch for the active turn. Since §26 D42a made the file the SOLE
+  // completion signal, EVERY turn-starter must arm it — not only the work turn: a chain that starts mid-run
+  // (§26.11 resume straight into the reviewers/consolidate turn) never runs startWorkTurn, so without this
+  // the resumed turn would have no completion trigger at all. The watch reads `activeTurn` dynamically and
+  // key-matches (D46), so re-arming per turn is safe and one live watch serves whatever turn is current.
+  const armTurnDoneWatch = (repoDir: string): void => {
     unwatchTurnDone?.();
     unwatchTurnDone = watchTurnDone(repoDir, () => {
-      // §26.3/D46 — read WITHOUT deleting (the file is latched until the next prompt inject clears it) and
-      // fire only when the file's key matches the active turn, so a prior turn's not-yet-cleared file can
-      // never complete a different in-flight turn during the deferred-settle window.
+      // Read WITHOUT deleting (the file is latched until the next prompt inject clears it) and fire only when
+      // the file's key matches the active turn, so a prior turn's not-yet-cleared file can never complete a
+      // different in-flight turn during the deferred-settle window.
       if (readTurnDone(repoDir) === activeTurn?.turnKey) turnRunner.onDoneSignal();
     });
+  };
+  const startWorkTurn = (repoDir: string, loopName: string, phase: string, preamble?: string): void => {
+    activeTurn = { kind: 'work', repoDir, loopName, phase, turnKey: `work-${phase}` };
+    armTurnDoneWatch(repoDir);
     turnPromptInjected = false; // §26 activity — a new turn starts in "waiting" until its prompt injects
     turnRunner.requestTurn(activeTurn.turnKey, { preamble });
   };
@@ -548,6 +552,7 @@ async function createWindow(): Promise<void> {
       return;
     }
     activeTurn = { kind: 'reviewers', repoDir, loopName, phase, turnKey: `review-${phase}`, personas: active, iteration };
+    armTurnDoneWatch(repoDir);
     turnPromptInjected = false;
     turnRunner.requestTurn(activeTurn.turnKey);
   };
@@ -560,6 +565,7 @@ async function createWindow(): Promise<void> {
   // parses; retry-then-error on a missing/malformed one, like every turn).
   const startConsolidateTurn = (repoDir: string, loopName: string, phase: string, iteration: number, preamble?: string): void => {
     activeTurn = { kind: 'consolidate', repoDir, loopName, phase, turnKey: `consolidate-${phase}`, iteration };
+    armTurnDoneWatch(repoDir);
     turnPromptInjected = false;
     turnRunner.requestTurn(activeTurn.turnKey, { preamble });
   };
@@ -667,11 +673,6 @@ async function createWindow(): Promise<void> {
       audit.recordCommand(repoDir, 'resume', `reconstruct ${kind} error at iter ${s.iteration}`, 0);
       if (kind === 'work') {
         activeTurn = { kind: 'work', repoDir, loopName, phase: errPhase.id, turnKey: `work-${errPhase.id}` };
-        unwatchTurnDone?.();
-        unwatchTurnDone = watchTurnDone(repoDir, () => {
-          // §26.3/D46 — read WITHOUT deleting + key-match (see startWorkTurn's watcher).
-          if (readTurnDone(repoDir) === activeTurn?.turnKey) turnRunner.onDoneSignal();
-        });
       } else if (kind === 'reviewers') {
         activeTurn = {
           kind: 'reviewers',
@@ -692,6 +693,9 @@ async function createWindow(): Promise<void> {
           iteration: s.iteration,
         };
       }
+      // Arm the file watch for whichever turn was reconstructed, so the operator's Retry (which re-injects)
+      // can complete via the turn-done file — the sole completion signal since §26 D42a.
+      armTurnDoneWatch(repoDir);
       return;
     }
     const phase = def.phases.find((p) => p.entryStatus === s.status);
@@ -1075,12 +1079,11 @@ async function createWindow(): Promise<void> {
     });
   };
 
-  // Flow A (§4): every output byte goes to the renderer AND the shadow tee — and, while a loop turn is
-  // armed, the done-signal line scanner (§26.3/D47a).
+  // Flow A (§4): every output byte goes to the renderer AND the shadow tee. Turn completion is detected
+  // via the .agent-loop/turn-done FILE only (§26.3/D47a; §26 D42a retired the echo-hazardous line scanner).
   ptyProcess.onData((data) => {
     outputGate.send(data);
     shadow.write(data);
-    turnSentinel.feed(data);
   });
   // The hosted shell IS the session (§5); a sub-grace exit is excepted (shellExit.ts).
   ptyProcess.onExit(({ exitCode }) => {

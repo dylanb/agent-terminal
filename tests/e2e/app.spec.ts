@@ -7,7 +7,11 @@ import { join, basename } from 'node:path';
 import { CH, SESSION_ID } from '../../src/shared/ipc';
 import { CLI_COMMAND_NAME } from '../../src/main/cliShim';
 import { parseAuditStream, type AuditEvent } from '../../src/shared/audit';
-import { turnDoneSentinel, TURN_DONE_FILENAME } from '../../src/shared/loopTurn';
+import { TURN_DONE_FILENAME } from '../../src/shared/loopTurn';
+
+// §26 D42a — the retired printable done-signal sentinel. Kept here ONLY so a regression test can inject it
+// into the PTY output and prove it no longer completes a turn (completion is the turn-done FILE alone).
+const RETIRED_SENTINEL = (turnKey: string): string => `<<<agent-loop:turn-done:${turnKey}>>>`;
 
 // Full-loop e2e (§12 acceptance): real Electron, real node-pty, real bash.
 // Every launch pins APP_SHELL=bash so the bash-only shell-integration path (OSC 7/133, §15.5)
@@ -1677,15 +1681,14 @@ const PLAN_PERSONAS = [
   'review-contracts',
 ];
 
-// Emit BOTH done-signals for `turnKey`: write the turn-done file and print the sentinel ALONE on a line
-// (leading newline so it survives interleaving with the PTY echo of the injected prompt — the scanner
-// only matches a full-line sentinel, echo-safety §26.3/D47a).
+// Signal a turn done by writing the turn-done FILE (§26.3/D47a — the sole completion signal since §26 D42a
+// retired the printable sentinel line). Contents are exactly the turn key, which main key-matches.
 function doneSignal(turnKey: string): string {
-  return `printf '%s' '${turnKey}' > .agent-loop/${TURN_DONE_FILENAME}; printf '\\n%s\\n' '${turnDoneSentinel(turnKey)}'`;
+  return `printf '%s' '${turnKey}' > .agent-loop/${TURN_DONE_FILENAME}`;
 }
 
-// Write ONLY the turn-done file — no sentinel line. Exercises the file half of the §26.3/D47a "line OR
-// file" done-signal independently (the line scanner can never match because no sentinel is printed).
+// Alias kept for the tests that name the file half explicitly — identical to doneSignal now that
+// completion is file-only.
 function fileOnlySignal(turnKey: string): string {
   return `printf '%s' '${turnKey}' > .agent-loop/${TURN_DONE_FILENAME}`;
 }
@@ -1726,6 +1729,11 @@ function seedFakeAgent(
     // resets the stall watchdog, so a turn that runs far past a short APP_TURN_TIMEOUT_MS still advances.
     // Under a wall-clock deadline (or with the activity reset unwired) the same turn is killed mid-stream.
     slowWork?: boolean;
+    // §26 D42a — when set, the work turn PRINTS the retired done-signal sentinel line (alone on a line) but
+    // writes NO turn-done file. Pair with work:'plan-only' to reproduce the false-completion the retired
+    // line-scanner caused (a real TUI reflowed the injected instruction's echo onto its own line): under
+    // the fix, a printed sentinel must NOT complete the turn — only the file does.
+    printBareSentinel?: boolean;
   },
 ): void {
   // A per-turn execution marker (§26.11 resume): its presence proves that turn actually ran this session.
@@ -1743,11 +1751,13 @@ function seedFakeAgent(
   // §26.3 — a stream of changing lines that outlasts a short stall window; each line is a §8.3 edge that
   // must reset the watchdog. Runs BEFORE plan.md so a killed turn leaves no artifact (a clean RED landing).
   const workStream = opts.slowWork ? "for i in $(seq 1 30); do printf 'working %s\\n' \"$i\"; sleep 0.3; done; " : '';
+  // §26 D42a — print the retired sentinel alone on a line (no file). Proves a printed line never completes.
+  const bareSentinel = opts.printBareSentinel ? `; printf '\\n<<<agent-loop:turn-done:work-plan>>>\\n'` : '';
   const workAct =
     opts.work === 'noop'
       ? ':'
       : opts.work === 'plan-only'
-        ? `${mark('work')}${writePlan}${writeTokens}`
+        ? `${mark('work')}${writePlan}${writeTokens}${bareSentinel}`
         : opts.work === 'file-only'
           ? `${mark('work')}${writePlan}${writeTokens}; ${fileOnlySignal('work-plan')}`
           : `${mark('work')}${workStream}${writePlan}${writeTokens}; ${doneSignal('work-plan')}`;
@@ -2670,6 +2680,35 @@ async function driveToWorkTurn(
     await expect.poll(() => (existsSync(stateFile) ? readFileSync(stateFile, 'utf8') : ''), { timeout: 15_000 }).toContain('status: plan-draft');
   }
 }
+
+// §26 D42a — a printed done-signal sentinel line must NOT complete a turn; only the .agent-loop/turn-done
+// FILE does. This regression pins the fix for the premature-completion bug: a real Claude Code TUI reflowed
+// the injected prompt on echo so the retired line-scanner matched the sentinel inside its own "print this
+// line" instruction and fired the NEXT turn while the agent was still working. Here the work turn writes
+// plan.md (so the artifact check would PASS) and prints the sentinel alone on a line, but writes NO
+// turn-done file — under the old line-scanner the reviewers fan-out would start; under the fix it must not.
+test('a printed done-signal sentinel line never completes a turn — only the turn-done file does (§26 D42a)', async () => {
+  const repo = seedBootstrapFlowRepo('agent-term-e2e-sentinel-nofile-');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-sentinel-nofile-home-'));
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-sentinel-nofile-bin-');
+  // Work turn: write plan.md (artifact present) + print the retired sentinel alone on a line, but write NO
+  // turn-done file. reviews would only appear if the printed line falsely completed the work turn.
+  seedFakeAgent(binDir, { work: 'plan-only', printBareSentinel: true, reviews: 'all' });
+  await driveToWorkTurn(repo, home, binDir, logFile, '30000');
+
+  // The work turn produced plan.md and the sentinel was printed to the PTY…
+  await expect.poll(() => existsSync(join(repo, '.agent-loop', 'plan.md')), { timeout: 15_000 }).toBe(true);
+  await expect(termRows()).toContainText(RETIRED_SENTINEL('work-plan'), { timeout: 10_000 });
+  // …but with no turn-done file the work turn never completes, so the reviewers fan-out never starts. Give
+  // it a generous window (well under the stall watchdog) — the reviews dir must stay absent.
+  await new Promise((r) => setTimeout(r, 6000));
+  expect(existsSync(join(repo, '.agent-loop', 'reviews', '1'))).toBe(false);
+
+  await app.close();
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+  rmSync(binDir, { recursive: true, force: true });
+});
 
 const turnEvents = (home: string, repo: string): Array<Extract<AuditEvent, { type: 'command' }>> => {
   const files = auditRunFiles(home, repo);
