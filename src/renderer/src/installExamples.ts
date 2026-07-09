@@ -46,7 +46,7 @@ export function createInstallExamples(host: HTMLElement, deps: InstallExamplesDe
   );
   const btn = el('button', 'pill signal', 'Install examples');
   btn.type = 'button';
-  btn.setAttribute('aria-label', 'Install the bundled example flow');
+  btn.setAttribute('aria-label', 'Install examples — the bundled feature-dev flow');
   card.append(txt, btn);
 
   const status = el('div', 'cli-status');

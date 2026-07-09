@@ -47,6 +47,15 @@ describe('install examples view organism (§18.1/§23.4)', () => {
     expect(host.querySelector('h1')).toBeTruthy();
   });
 
+  it('gives the install button an accessible name that contains its visible label (WCAG 2.5.3)', () => {
+    createInstallExamples(host, deps());
+    const b = button();
+    const visible = b.textContent?.trim() ?? '';
+    expect(visible).toBe('Install examples');
+    const accessibleName = b.getAttribute('aria-label') ?? b.textContent ?? '';
+    expect(accessibleName).toContain(visible);
+  });
+
   it('installs without a prompt when preview reports no conflict, calling apply with no overwrite', async () => {
     const apply = vi.fn(async () => okResult({ created: ['flow.yaml', 'todo-templates/a.md'] }));
     createInstallExamples(host, deps({ preview: vi.fn(async () => ({ conflicts: [] })), apply }));
@@ -203,5 +212,22 @@ describe('install examples view organism (§18.1/§23.4)', () => {
 
   it('builds its DOM from the host document, not the ambient global (relocatable, §3.3)', async () => {
     await assertRendersFromHostDocument((h) => { createInstallExamples(h, deps()); });
+  });
+
+  it('renders identically across two host placements (relocation, §3.3)', () => {
+    const a = document.createElement('section');
+    const b = document.createElement('aside');
+    document.body.append(a, b);
+    createInstallExamples(a, deps());
+    createInstallExamples(b, deps());
+    const shape = (h: HTMLElement) => ({
+      buttons: h.querySelectorAll('button').length,
+      status: h.querySelectorAll('[role="status"]').length,
+      alert: h.querySelectorAll('[role="alert"]').length,
+    });
+    expect(shape(a)).toEqual(shape(b));
+    expect(shape(a).buttons).toBe(1);
+    expect(shape(a).status).toBe(1);
+    expect(shape(a).alert).toBe(1);
   });
 });
