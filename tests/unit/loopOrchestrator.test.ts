@@ -207,6 +207,45 @@ describe('loop turn runner (§26.3/D47a, D48)', () => {
     expect(r.state()).toBe('complete');
   });
 
+  // The operator's override is "this turn is done", never "run it again". Routing it through the
+  // done-signal's missing-artifact retry re-injects the whole prompt into the agent the operator was
+  // trying to move past — and does so silently, leaving no error to see and nothing to retry.
+  it('the manual mark-complete never re-injects the turn when the artifact is absent (§26.3/D47a c)', () => {
+    artifact = false;
+    const r = createTurnRunner(deps);
+    r.requestTurn('work-plan');
+    inject.mockClear();
+
+    r.markComplete();
+
+    expect(inject).not.toHaveBeenCalled();
+    expect(onComplete).not.toHaveBeenCalled();
+  });
+
+  it('the manual mark-complete surfaces a recoverable error when the artifact is absent (§26.3/D48)', () => {
+    artifact = false;
+    const r = createTurnRunner(deps);
+    r.requestTurn('work-plan');
+
+    r.markComplete();
+
+    expect(writeError).toHaveBeenCalledTimes(1);
+    expect(r.state()).toBe('error');
+    expect(cancelTimer).toHaveBeenCalled();
+  });
+
+  // A done-signal is the AGENT's claim; a missing artifact means it lied or crashed, so one retry is right.
+  it('a done-signal with the artifact absent still retries the turn (unchanged, §26.3/D48)', () => {
+    artifact = false;
+    const r = createTurnRunner(deps);
+    r.requestTurn('work-plan');
+    inject.mockClear();
+
+    r.onDoneSignal();
+
+    expect(inject).toHaveBeenCalledTimes(1);
+  });
+
   it('a compose failure stops in error without injecting (config error, no retry)', () => {
     compose.mockReturnValue(null);
     const r = createTurnRunner(deps);

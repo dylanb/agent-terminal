@@ -36,10 +36,10 @@ describe('error dialog (§26.9 bootstrap-failure alert)', () => {
     expect(dismissBtn()!.textContent).toBe('Dismiss');
   });
 
-  it('exposes a dialog role with an accessible name describing the reason (WCAG 4.1.2)', () => {
+  it('exposes an alertdialog role with an accessible name describing the reason (WCAG 4.1.2)', () => {
     createErrorDialog(host).render(opts());
     const d = dialog()!;
-    expect(d.getAttribute('role')).toBe('dialog');
+    expect(d.getAttribute('role')).toBe('alertdialog');
     expect(d.getAttribute('aria-modal')).toBe('true');
     const labelledBy = d.getAttribute('aria-labelledby');
     expect(host.querySelector(`#${labelledBy}`)?.textContent).toContain('Bootstrap failed');
@@ -86,5 +86,42 @@ describe('error dialog (§26.9 bootstrap-failure alert)', () => {
     await assertRendersFromHostDocument((h) => {
       createErrorDialog(h).render(opts());
     });
+  });
+});
+
+// WAI-ARIA APG: this dialog is pushed by main when a bootstrap or a loop turn fails — the user did not
+// ask for it. `alertdialog` is the role for an urgent interrupting message, and it makes the screen
+// reader announce the message along with the dialog rather than just the word "dialog".
+describe('error dialog is an alert dialog (WAI-ARIA APG / SC 4.1.2)', () => {
+  it('carries role=alertdialog with its message referenced as the description', () => {
+    const dlg = createErrorDialog(host);
+    dlg.render({ title: 'Loop error', message: 'the turn stalled' });
+
+    const modal = host.querySelector('.flow-modal')!;
+    expect(modal.getAttribute('role')).toBe('alertdialog');
+    const describedBy = modal.getAttribute('aria-describedby')!;
+    expect(host.querySelector(`#${describedBy}`)!.textContent).toBe('the turn stalled');
+  });
+});
+
+// WCAG 2.1 SC 2.4.3 (Focus Order). The strip behind the dialog re-renders while it is open, so the opener
+// can be detached by the time it closes. The composition root supplies where focus should land instead;
+// without that wiring focus falls to <body>. This pins that the factory forwards the fallback.
+describe('error dialog focus fallback (SC 2.4.3)', () => {
+  it('invokes onFocusLost when the opener was detached while the dialog was open', () => {
+    let landed = 0;
+    const dlg = createErrorDialog(host, { onFocusLost: () => (landed += 1) });
+    dlg.render(opts());
+    opener.remove();
+    dlg.render(null);
+    expect(landed).toBe(1);
+  });
+
+  it('does not invoke onFocusLost when the opener survives', () => {
+    let landed = 0;
+    const dlg = createErrorDialog(host, { onFocusLost: () => (landed += 1) });
+    dlg.render(opts());
+    dlg.render(null);
+    expect(landed).toBe(0);
   });
 });

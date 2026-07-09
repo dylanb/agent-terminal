@@ -21,17 +21,22 @@ export interface ConfirmDialog {
   dispose(): void;
 }
 
-export function createConfirmDialog(host: HTMLElement): ConfirmDialog {
+export function createConfirmDialog(host: HTMLElement, opts?: { onFocusLost?: () => void }): ConfirmDialog {
   // Track the open dialog's options + whether it was confirmed, so a user-dismiss (onClose fired by the
   // shell) runs onCancel while a confirm does not (§26.9). `pending` is non-null ONLY while a dialog is
   // open and unanswered — the shell's onClose nulls it — so a later render can tell an open-and-displaced
   // dialog (still pending) from an already-closed one (nulled), and never double-fires onCancel.
   let pending: ConfirmDialogOptions | null = null;
   let confirmed = false;
-  const shell = createModalShell(host, 'confirm-dialog-title', () => {
-    if (!confirmed) pending?.onCancel?.();
-    pending = null;
-  });
+  const shell = createModalShell(
+    host,
+    'confirm-dialog-title',
+    () => {
+      if (!confirmed) pending?.onCancel?.();
+      pending = null;
+    },
+    { onFocusLost: opts?.onFocusLost },
+  );
   return {
     render(opts) {
       if (!opts) {

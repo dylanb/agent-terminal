@@ -1,7 +1,7 @@
 // The human-readable "what the loop mechanics are doing right now" descriptor (§24.2.2 / §26): a short
-// phrase + a `busy` flag that drives the strip's spinner. One shared definition — the main-process
-// producer and the renderer both key off THIS vocabulary, so they cannot drift (CLAUDE.md shared-
-// semantics rule; the sibling of occurrence.ts / loopStatus.ts).
+// phrase, present exactly while the loop is active (its presence drives the strip's spinner). One shared
+// definition — the main-process producer and the renderer both key off THIS vocabulary, so they cannot
+// drift (CLAUDE.md shared-semantics rule; the sibling of occurrence.ts / loopStatus.ts).
 
 /** The distinct loop-mechanics activities a phrase can describe. */
 export type LoopActivityKind = 'pickup' | 'waiting' | 'work' | 'reviewers' | 'consolidate';
@@ -12,10 +12,10 @@ export interface LoopActivityContext {
   wipe?: boolean;
 }
 
-/** The descriptor surfaced on the wire (src/shared/ipc.ts FlowStateView.loopActivity). */
+/** The descriptor surfaced on the wire (src/shared/ipc.ts FlowStateView.loopActivity). Present only while
+ *  the loop mechanics are active — the descriptor's presence IS "busy"; there is no idle descriptor. */
 export interface LoopActivity {
   phrase: string;
-  busy: boolean;
 }
 
 /** Map an activity kind (+ context) to its display phrase. Total over `LoopActivityKind`. */
@@ -35,9 +35,9 @@ export function loopActivityPhrase(kind: LoopActivityKind, ctx: LoopActivityCont
   }
 }
 
-/** Build the busy descriptor for `kind` — the loop mechanics are actively doing this, so it spins. */
+/** Build the descriptor for `kind` — the loop mechanics are actively doing this (so the strip spins). */
 export function loopActivity(kind: LoopActivityKind, ctx?: LoopActivityContext): LoopActivity {
-  return { phrase: loopActivityPhrase(kind, ctx), busy: true };
+  return { phrase: loopActivityPhrase(kind, ctx) };
 }
 
 /** The live loop state the descriptor is derived from: an in-flight bootstrap, or the current turn plus

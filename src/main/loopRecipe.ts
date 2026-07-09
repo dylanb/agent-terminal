@@ -18,7 +18,7 @@ export interface WorkPromptRequest {
   turnKey: string;
   /** `{{TOKEN}}` → value substitutions resolved by the host from state + LoopDef config bindings. */
   tokens: Record<string, string>;
-  /** §26.3/D47a — the `.agent-loop/`-relative file the work turn must produce (from `def.workArtifact`): the
+  /** §26.3/D47a — the REPO-relative file the work turn must produce (from `def.workArtifact`): the
    *  agent is told to verify it on disk before signalling done. Omitted/empty for a loop whose work turn
    *  produces no file deliverable (impl-loop) — completion is then the turn-done file alone. */
   workArtifact?: string;

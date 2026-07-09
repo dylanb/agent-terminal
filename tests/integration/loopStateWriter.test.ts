@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, rmSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, rmSync, existsSync, lstatSync, statSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import yaml from 'js-yaml';
@@ -308,5 +308,30 @@ describe('loop state.yaml writer (§26.6)', () => {
     expect(doc).toHaveProperty('branch');
     expect(doc).toHaveProperty('linked_issues');
     expect(doc.linked_issues).toEqual([]);
+  });
+  // The write goes through a predictable `<file>.tmp` inside a directory the repo controls. `writeFileSync`
+  // follows an existing symlink at that path, so a repo that commits `state.yaml.tmp` as a link to a file
+  // outside the repo has the app write YAML through it before the rename moves the link aside (CWE-59).
+  it('never writes through a pre-planted state.yaml.tmp symlink (CWE-59)', () => {
+    const outside = join(repo, 'outside.txt');
+    writeFileSync(outside, 'ORIGINAL');
+    mkdirSync(join(repo, '.agent-loop'), { recursive: true });
+    symlinkSync(outside, join(repo, '.agent-loop', 'state.yaml.tmp'));
+
+    writeLoopState(repo, { status: 'planning', iteration: 1, pr: null, branch: null, boundLoop: 'plan-loop', linkedIssues: [] });
+
+    expect(readFileSync(outside, 'utf8')).toBe('ORIGINAL');
+    expect(parseAgentLoopState(repo)?.status).toBe('planning');
+  });
+
+  it('writes state.yaml owner-only (CWE-276)', () => {
+    writeLoopState(repo, { status: 'planning', iteration: 1, pr: null, branch: null, boundLoop: 'plan-loop', linkedIssues: [] });
+    expect(statSync(join(repo, '.agent-loop', 'state.yaml')).mode & 0o077).toBe(0);
+  });
+
+  it('leaves no temp file behind', () => {
+    writeLoopState(repo, { status: 'planning', iteration: 1, pr: null, branch: null, boundLoop: 'plan-loop', linkedIssues: [] });
+    expect(existsSync(join(repo, '.agent-loop', 'state.yaml.tmp'))).toBe(false);
+    expect(lstatSync(join(repo, '.agent-loop', 'state.yaml')).isSymbolicLink()).toBe(false);
   });
 });

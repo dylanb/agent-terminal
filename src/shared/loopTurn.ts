@@ -2,12 +2,8 @@
 // instruction) and the main-process detector (which watches the file) cannot drift — the shared-semantics
 // rule. A turn is "done" when the `.agent-loop/turn-done` FILE is written with the turn key as its content.
 //
-// §26 D42a — the printable sentinel LINE was retired. A full-screen TUI agent (Claude Code) reflows the
-// injected prompt on echo, so a "print this line: <sentinel>" instruction was echoed back with the sentinel
-// wrapped onto its own rendered line — which the line-detector matched, falsely completing the turn seconds
-// after its prompt was injected (the next turn fired while the agent was still working). The file is the
-// only reliable, echo-immune signal, so completion is file-only and the injected prompt names no printable
-// marker at all.
+// §26 D42a — the signal must never be anything the agent can PRINT: a hosted TUI agent reflows the injected
+// prompt on echo, so any printable marker named in the prompt is echoed back and read as a completion.
 
 /** The `.agent-loop/`-relative file a turn writes last as a robust, cross-process done-signal. */
 export const TURN_DONE_FILENAME = 'turn-done';

@@ -111,17 +111,17 @@ function derivedText(state: FlowStateView): string | null {
   return null;
 }
 
-/** The §26 loop-mechanics activity line: the phrase + an animated braille spinner while `busy`. Announced
- *  via the strip host's own `aria-live=polite` (index.html #flow-strip) — like `.flow-derived`/`.flow-notice`,
- *  it does NOT nest its own live region. The spinner is decorative (`aria-hidden`); the phrase is the text. */
+/** The §26 loop-mechanics activity line: the phrase + an animated braille spinner (the descriptor exists
+ *  only while the loop is active). Announced via the strip host's own `aria-live=polite` (index.html
+ *  #flow-strip) — like `.flow-derived`/`.flow-notice`, it does NOT nest its own live region. The spinner is
+ *  decorative (`aria-hidden`); the phrase is the text. */
 function activityLine(doc: Document, activity: NonNullable<FlowStateView['loopActivity']>): HTMLElement {
   const line = doc.createElement('div');
   line.className = 'flow-activity';
   const phrase = doc.createElement('span');
   phrase.className = 'phrase';
   phrase.textContent = activity.phrase;
-  line.append(phrase);
-  if (activity.busy) line.append(createSpinner(doc));
+  line.append(phrase, createSpinner(doc));
   return line;
 }
 
@@ -144,9 +144,10 @@ function structuralSig(state: FlowStateView): string {
     // change must force a full render rather than a value-only patch.
     state.refs ?? null,
     derivedText(state) !== null,
-    // §26 activity line PRESENCE + its phrase are structural: the phrase text has no value-patch handler,
-    // so any change (appear / disappear / phrase change) forces a full render rather than a stale patch.
-    state.loopActivity?.phrase ?? '',
+    // §26 activity line: only its PRESENCE is structural. The phrase itself patches in place — the host is
+    // an aria-live region (WCAG SC 4.1.3), so rebuilding it to change one word would re-announce the whole
+    // strip.
+    !!state.loopActivity,
     state.notice ?? '',
   ]);
 }
@@ -188,6 +189,9 @@ function loopReadout(doc: Document, loop: FlowLoopView, controlsId?: string): HT
     const cost = doc.createElement('span');
     cost.className = 'mono loop-cost';
     cost.textContent = loop.cost;
+    // The visible figure is bare; under aria-atomic=false only this node is announced, so it carries the
+    // "cost" context in its accessible name (WCAG SC 1.3.1) — the label `.loop-iter` keeps in its text.
+    cost.setAttribute('aria-label', `cost ${loop.cost}`);
     v.append(cost);
   }
   v.append(car);
@@ -231,6 +235,9 @@ function refsReadout(doc: Document, refs: FlowRefs, controlsId?: string): HTMLEl
 
 export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStrip {
   const doc = host.ownerDocument; // build from the host's document so the strip relocates (UI §2.2.1)
+  // WCAG SC 4.1.3: `role=status` is an implicitly atomic live region; the strip patches individual nodes
+  // in place, so it must announce only the changed node, not re-read the whole strip on every update.
+  host.setAttribute('aria-atomic', 'false');
   let repoKey: string | null = null;
   // The structure last painted; a passive push whose structure matches patches in place (§24.2.2 S5).
   let lastSig: string | null = null;
@@ -436,6 +443,10 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
       const line = host.querySelector('.flow-derived');
       if (line) line.textContent = dText;
     }
+    if (state.loopActivity) {
+      const phrase = host.querySelector('.flow-activity .phrase');
+      if (phrase) phrase.textContent = state.loopActivity.phrase;
+    }
     if (state.loop) {
       const pill = host.querySelector<HTMLElement>('.loopstat .spill');
       if (pill) {
@@ -445,7 +456,10 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
       const iter = host.querySelector('.loop-iter');
       if (iter) iter.textContent = `iter ${state.loop.iteration}`;
       const cost = host.querySelector('.loop-cost');
-      if (cost && state.loop.cost !== undefined) cost.textContent = state.loop.cost;
+      if (cost && state.loop.cost !== undefined) {
+        cost.textContent = state.loop.cost;
+        cost.setAttribute('aria-label', `cost ${state.loop.cost}`);
+      }
     }
     // Keep the docked loop panel live — the same hand-off render() makes (§24.2.3 T2/T7). The refs
     // ride along so a value-only patch never clears the panel's "Working on" section.

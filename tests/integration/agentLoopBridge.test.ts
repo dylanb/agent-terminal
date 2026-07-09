@@ -61,6 +61,25 @@ describe('agent-loop state.yaml bridge (§24.2.3 T2 / §19.1)', () => {
     expect(parseAgentLoopState(dir)?.linkedIssues).toEqual([25, 26]);
   });
 
+  // A linked issue reaches `gh issue edit <n>` as an argv element (§26.6 exec). A negative or fractional
+  // "number" is still a number, and `-1` arrives where gh expects an operand — it reads as an option
+  // (CWE-88). GitHub issue numbers are positive integers; nothing else is one.
+  it('drops linked_issues entries that are not positive integers (CWE-88 argument injection)', () => {
+    writeState('schema_version: 4\niteration: 2\nstatus: planning\nlinked_issues:\n    - -1\n    - 0\n    - 1.5\n    - 26\n');
+    expect(parseAgentLoopState(dir)?.linkedIssues).toEqual([26]);
+  });
+
+  // Both contract surfaces (AgentLoopState.errorReason, FlowLoopView.errorReason) say "present only at
+  // status: error". Only the app's own writer deletes the key on a non-error write — a hand-edited file, a
+  // rebind doc, or any other writer §26.6 contemplates would leave it, and the panel would render it.
+  it('surfaces error_reason only at status: error (the field is conditional on both contract surfaces)', () => {
+    writeState('schema_version: 4\niteration: 2\nstatus: error\nerror_reason: the turn stalled\n');
+    expect(parseAgentLoopState(dir)?.errorReason).toBe('the turn stalled');
+
+    writeState('schema_version: 4\niteration: 2\nstatus: planning\nerror_reason: stale leftover\n');
+    expect(parseAgentLoopState(dir)?.errorReason).toBeUndefined();
+  });
+
   it('returns null (never throws) for an unknown schema_version', () => {
     writeState('schema_version: 99\nstatus: x\niteration: 1\n');
     expect(parseAgentLoopState(dir)).toBeNull();

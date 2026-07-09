@@ -2,6 +2,27 @@
 // never re-driven (the §24.2.3 mirror presents it); a mid-work status re-enters the earliest turn whose
 // iteration-scoped artifact is missing, honoring the resume_contract `mid_iter_safe` flag.
 
+/** §26.11 / §16.3 — whether `repoDir`'s run may be auto-resumed now. `turnInFlight` must report whether a
+ *  turn is actually being driven, not whether one ever was: a slot that outlives its turn turns this into a
+ *  permanent veto. `resumed` records the repos already resumed this session (at most once each). This gates
+ *  the DRIVING resume (it injects a turn), so it stays one-shot per repo. */
+export function canResumeRepo(repoDir: string, resumed: ReadonlySet<string>, turnInFlight: boolean): boolean {
+  return !resumed.has(repoDir) && !turnInFlight;
+}
+
+/** §26.3/D48 / §16.3 — whether to (re)build the reconstructed `error` turn for `repoDir`. Unlike the
+ *  driving resume this injects NOTHING — it only re-establishes which turn the panel's Retry / mark-complete
+ *  act on — so it is NOT one-shot: whenever the operator returns to an error-stranded repo and no turn is in
+ *  flight, its recovery affordances must point at ITS turn, not one left over from a detour to another repo.
+ *  `activeTurnRepo` is the repo the single turn slot currently describes (null when empty). */
+export function shouldReconstructErrorTurn(
+  repoDir: string,
+  activeTurnRepo: string | null,
+  turnInFlight: boolean,
+): boolean {
+  return !turnInFlight && activeTurnRepo !== repoDir;
+}
+
 /** The iteration-scoped turn-artifact presence for the current iteration (§26.11 `required_artifacts`).
  *  All three are keyed to the current iteration so a stale prior-iteration file cannot masquerade as this
  *  iteration's output: `reviewsStarted` = ≥1 roster review for this iteration is present; `reviewsComplete`

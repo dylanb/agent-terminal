@@ -1,11 +1,5 @@
-// Resume-into-a-new-loop rebind (§26 D42a / L8 — `agent-loop resume --loop <new>`). When a flow advances
-// INTO a loop step that does not bootstrap a fresh run, the existing run is rebound to the step's loop def:
-// it keeps working the same PR (pr/branch/linked_issues carried) but starts the new loop FRESH — at the new
-// loop's first-phase entry status, with the prior loop's internal counters reset (via the freshExtension
-// write). The one thing that does NOT reset is `iteration`: it is a single MONOTONIC counter across every
-// loop the run passes through (ai-deque parity), so it carries forward (+1) — this is what keeps each loop's
-// reviews/<iter>/ from colliding with a predecessor's and makes the displayed count the run's running total.
-// Pure: the imperative read/write/turn wiring lives in the orchestrator (index.ts).
+// Resume-into-a-new-loop rebind (§26 D42a / L8 — `agent-loop resume --loop <new>`). Pure: the imperative
+// read/write/turn wiring lives in the orchestrator (index.ts).
 
 import type { LoopDef } from './loopDef';
 import type { LoopStateWrite } from './loopStateWriter';
@@ -47,4 +41,23 @@ export function resumeRebindWrite(prior: ResumeRebindPrior, loopName: string, ne
     },
     workPhase: phase.id,
   };
+}
+
+/** Either the rebind to drive, or the reason the step cannot be entered — stated so the caller can show it. */
+export type StepResumePlan = (ResumeRebind & { ok: true }) | { ok: false; reason: string };
+
+/** Decide what entering loop step `loopName` should do, given the run on disk (`prior`, null when there is
+ *  none) and the step's parsed def (`newDef`, null when it is missing or unparseable). Entering a loop step
+ *  is automatic (the gate approve advances the flow), so a refusal the human never sees would park the flow
+ *  on a step with no turn to retry: every failure carries a reason instead. */
+export function planStepResume(
+  prior: ResumeRebindPrior | null,
+  loopName: string,
+  newDef: LoopDef | null,
+): StepResumePlan {
+  if (!newDef) return { ok: false, reason: `no loop definition found for "${loopName}"` };
+  if (!prior) return { ok: false, reason: `no agent-loop run to resume under "${loopName}"` };
+  const rebind = resumeRebindWrite(prior, loopName, newDef);
+  if (!rebind) return { ok: false, reason: `loop "${loopName}" declares no phase to run` };
+  return { ok: true, ...rebind };
 }

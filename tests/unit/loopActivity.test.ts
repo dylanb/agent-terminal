@@ -8,7 +8,7 @@ import {
 
 // §24.2.2 / §26 — the human-readable "what the loop mechanics are doing now" phrase. One shared
 // definition so the main-process producer and the renderer/tests never drift on the vocabulary
-// (CLAUDE.md shared-semantics rule). Asserted purely on the produced phrase + busy flag.
+// (CLAUDE.md shared-semantics rule). Asserted purely on the produced phrase.
 describe('loopActivityPhrase (§26 loop-activity vocabulary)', () => {
   it('names the bootstrap phase with the issue number', () => {
     expect(loopActivityPhrase('pickup', { issue: 40 })).toBe('Bootstrapping #40');
@@ -34,12 +34,12 @@ describe('loopActivityPhrase (§26 loop-activity vocabulary)', () => {
 });
 
 describe('loopActivity (§26 descriptor for the strip)', () => {
-  it('wraps the phrase and marks it busy (the spinner spins)', () => {
-    expect(loopActivity('work')).toEqual({ phrase: 'Working', busy: true });
+  it('wraps the phrase (presence alone means the loop is busy — the spinner spins)', () => {
+    expect(loopActivity('work')).toEqual({ phrase: 'Working' });
   });
 
   it('threads the pickup context into the phrase', () => {
-    expect(loopActivity('pickup', { issue: 7 })).toEqual({ phrase: 'Bootstrapping #7', busy: true });
+    expect(loopActivity('pickup', { issue: 7 })).toEqual({ phrase: 'Bootstrapping #7' });
   });
 
   it('covers every kind (no phrase is empty)', () => {
@@ -52,7 +52,6 @@ describe('deriveLoopActivity (§26 — live state → descriptor)', () => {
   it('reports the pickup while a bootstrap is in flight', () => {
     expect(deriveLoopActivity({ pickup: { issue: 40, wipe: false }, turn: null })).toEqual({
       phrase: 'Bootstrapping #40',
-      busy: true,
     });
   });
 
@@ -64,14 +63,12 @@ describe('deriveLoopActivity (§26 — live state → descriptor)', () => {
   it('reports the turn phase once its prompt has been injected', () => {
     expect(deriveLoopActivity({ pickup: null, turn: { kind: 'consolidate', injected: true } })).toEqual({
       phrase: 'Consolidating reviews',
-      busy: true,
     });
   });
 
   it('reports "waiting for the agent" while a turn is deferred (prompt not yet injected)', () => {
     expect(deriveLoopActivity({ pickup: null, turn: { kind: 'reviewers', injected: false } })).toEqual({
       phrase: 'Waiting for the agent',
-      busy: true,
     });
   });
 

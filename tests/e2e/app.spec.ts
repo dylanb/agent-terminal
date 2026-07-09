@@ -13,6 +13,10 @@ import { TURN_DONE_FILENAME } from '../../src/shared/loopTurn';
 // into the PTY output and prove it no longer completes a turn (completion is the turn-done FILE alone).
 const RETIRED_SENTINEL = (turnKey: string): string => `<<<agent-loop:turn-done:${turnKey}>>>`;
 
+/** How long a falsely-completed work turn would need to fan the reviewers out. Comfortably longer than the
+ *  chain's own settle, and well under the stall watchdog, so the absence it proves is a real absence. */
+const FALSE_COMPLETION_GRACE_MS = 6_000;
+
 // Full-loop e2e (§12 acceptance): real Electron, real node-pty, real bash.
 // Every launch pins APP_SHELL=bash so the bash-only shell-integration path (OSC 7/133, §15.5)
 // is exercised regardless of the host's $SHELL — host shell must not change e2e outcomes.
@@ -2724,7 +2728,7 @@ test('a printed done-signal sentinel line never completes a turn — only the tu
   await expect(termRows()).toContainText(RETIRED_SENTINEL('work-plan'), { timeout: 10_000 });
   // …but with no turn-done file the work turn never completes, so the reviewers fan-out never starts. Give
   // it a generous window (well under the stall watchdog) — the reviews dir must stay absent.
-  await new Promise((r) => setTimeout(r, 6000));
+  await new Promise((r) => setTimeout(r, FALSE_COMPLETION_GRACE_MS));
   expect(existsSync(join(repo, '.agent-loop', 'reviews', '1'))).toBe(false);
 
   await app.close();
@@ -3901,6 +3905,9 @@ test('loop-derived ticket + PR surface only once the flow enters the loop step (
 
   await flowControl().click(); // Advance → enter the `work` loop step
   await expect(loopReadout()).toBeVisible({ timeout: 10_000 });
+  // A display-only loop step (no resumable def/run) must NOT pop a blocking error dialog — entering it is a
+  // legitimate no-op, not a failure (§26 D42a; the round-1 raise regressed this by intercepting all clicks).
+  await expect(page.locator('#flow-error-host .flow-modal')).toHaveCount(0);
   // The docked popout's "Working on" section now carries the loop's ticket + PR (bare numbers, since the
   // temp repo is not on GitHub for gh to resolve titles/links).
   await loopReadout().click();

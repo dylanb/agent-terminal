@@ -29,6 +29,7 @@ const DEF: LoopDef = {
   defaultRosterId: '',
   artifacts: {},
   workArtifact: '',
+  origin: 'operator-config',
   gates: [
     mkGate({ id: 'awaiting-human-pr-approval', kind: 'approve-required', humanOptions: ['approve', 'request-changes', 'impasse'], terminal: false }),
     mkGate({ id: 'awaiting-human-impl-triage', kind: 'triage', humanOptions: ['approve', 'request-changes', 'impasse'], terminal: false }),
@@ -146,6 +147,7 @@ const IMPL_LOOP: LoopDef = {
   defaultRosterId: '',
   artifacts: {},
   workArtifact: '',
+  origin: 'operator-config',
   gates: [
     mkGate({ id: 'awaiting-human-pr-approval', kind: 'approve-required', humanOptions: ['approve', 'request-changes', 'impasse'], terminal: false }),
     mkGate({ id: 'awaiting-human-impl-triage', kind: 'triage', humanOptions: ['approve', 'request-changes', 'impasse'], terminal: false }),

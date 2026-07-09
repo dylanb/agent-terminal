@@ -1,9 +1,7 @@
-// §26.6 — the imperative `exec` gate action (ADR 0015 adapter side-effect; e.g. the plan-approve
-// ticket-body publish `gh issue edit … --body-file …`). Two halves: `interpolateExecArgv` fills the def's
-// `{{state.linked_issues[N]}}` / `{{artifact.<id>}}` placeholders against the run (pure), and the real
-// port shells out via execFile so every resolved value crosses as a distinct argv element — never spliced
-// into a shell string (CWE-78). Best-effort (§26.11): a failed exec is reconciled out of band, never
-// aborts the gate transition. Whether it runs at all is the caller's opt-out check (loops_deny_exec).
+// §26.6 — the imperative `exec` gate action (ADR 0015 adapter side-effect). Every resolved value crosses
+// as a distinct argv element, never spliced into a shell string (CWE-78). Best-effort (§26.11): a failed
+// exec is reconciled out of band, never aborts the gate transition. `exec` names the PROGRAM as well as
+// its arguments, so whether it may run at all is `loopDef.loopExecAllowed` — an operator-authored def only.
 
 import { execFile } from 'node:child_process';
 

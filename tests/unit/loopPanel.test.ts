@@ -126,6 +126,51 @@ describe('docked loop panel (§24.2.3 T2)', () => {
     expect(retryTurn).toHaveBeenCalledTimes(1);
   });
 
+  // WCAG 2.1 SC 4.1.3 (Status Messages). Assistive tech does not announce content that already exists when
+  // a live region is registered. Rebuilding `.ldl` to enter `error` therefore produces SILENCE at exactly
+  // the moment the turn failed. The region must survive, so the reason row is announced as an addition.
+  it('keeps the live region alive when the loop enters error, and adds the reason + Retry into it', () => {
+    const retryTurn = vi.fn();
+    const panel = createLoopPanel(host, { githubRef: () => Promise.resolve(null), openExternal: () => {}, retryTurn });
+
+    panel.render(loop({ status: 'impl-draft' }), 'impl');
+    const ldlBefore = host.querySelector('.ldl')!;
+    expect(host.querySelector('[data-loop-retry]')).toBeNull();
+
+    panel.render(loop({ status: 'error', errorReason: 'no Claude at the prompt' }), 'impl');
+
+    expect(host.querySelector('.ldl')).toBe(ldlBefore); // same live region → the addition is announced
+    expect(row('reason')?.querySelector('.lv')?.textContent).toBe('no Claude at the prompt');
+    expect(host.querySelector('[data-loop-retry]')).not.toBeNull();
+  });
+
+  it('removes the reason row and the Retry control when the loop recovers out of error', () => {
+    const retryTurn = vi.fn();
+    const panel = createLoopPanel(host, { githubRef: () => Promise.resolve(null), openExternal: () => {}, retryTurn });
+
+    panel.render(loop({ status: 'error', errorReason: 'no Claude at the prompt' }), 'impl');
+    const ldlBefore = host.querySelector('.ldl')!;
+
+    panel.render(loop({ status: 'impl-draft' }), 'impl');
+
+    expect(host.querySelector('.ldl')).toBe(ldlBefore);
+    expect(row('reason')).toBeUndefined();
+    expect(host.querySelector('[data-loop-retry]')).toBeNull();
+  });
+
+  it('updates a changed reason without replacing the live region', () => {
+    const retryTurn = vi.fn();
+    const panel = createLoopPanel(host, { githubRef: () => Promise.resolve(null), openExternal: () => {}, retryTurn });
+
+    panel.render(loop({ status: 'error', errorReason: 'first reason' }), 'impl');
+    const ldlBefore = host.querySelector('.ldl')!;
+
+    panel.render(loop({ status: 'error', errorReason: 'second reason' }), 'impl');
+
+    expect(host.querySelector('.ldl')).toBe(ldlBefore);
+    expect(row('reason')?.querySelector('.lv')?.textContent).toBe('second reason');
+  });
+
   it('renders NO Retry control when the loop is not in error (recovery is error-only, WCAG 4.1.2)', () => {
     const retryTurn = vi.fn();
     const panel = createLoopPanel(host, {

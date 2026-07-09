@@ -74,10 +74,10 @@ import { createAuditRecorder } from './auditRecorder';
 import type { TransitionKind } from '../shared/audit';
 import { auditRootDir } from './auditPaths';
 import { createFlowEntryActions } from './flowEntryActions';
-import { resumeRebindWrite } from './loopRebind';
+import { planStepResume } from './loopRebind';
 import { parseAgentLoopState, watchAgentLoopState } from './agentLoopBridge';
 import { createLoopNotifier } from './loopNotifier';
-import { parseLoopDef, gateForStatus, reviewerRosterForPhase, normalizeConsolidatedVerdict, isPersonaClean, artifactPath, readLoopExecAllowed, type LoopDef, type PickupContract } from './loopDef';
+import { parseLoopDef, gateForStatus, reviewerRosterForPhase, normalizeConsolidatedVerdict, isPersonaClean, artifactPath, loopExecAllowed, type LoopDef, type PickupContract } from './loopDef';
 import { runPickup, createRealPickupDeps, decidePickupAction } from './loopPickup';
 import { classifyHostedAgent, createTurnRunner, decideConsolidateOutcome, hostedAgentPresent, type TurnRunner } from './loopOrchestrator';
 import { deriveLoopActivity, type LoopActivity } from '../shared/loopActivity';
@@ -98,7 +98,7 @@ import { readEpicPlan } from './epicPlan';
 import { readTurnDone, clearTurnDone, watchTurnDone } from './turnDoneFile';
 import { writeLoopState } from './loopStateWriter';
 import { readLoopExtension } from './loopStateReader';
-import { currentTurnByArtifacts, decideResume } from './loopResume';
+import { canResumeRepo, currentTurnByArtifacts, decideResume, shouldReconstructErrorTurn } from './loopResume';
 import type { FlowStepDef } from './flow';
 import { listTodoTemplates, loadTodoTemplateFile, parseTodoTemplate } from './todoTemplate';
 import { discover, readArtifact, emptyTree, warmBaseRef, createBaseWarmer, createViewerActivityHandler, gitRootOf } from './artifactTree';
@@ -376,11 +376,8 @@ async function createWindow(): Promise<void> {
       });
     },
     inject: (prompt, opts) => {
-      // §26.3/D46 — the turn PROMPT inject (never the /clear preamble) is the SINGLE point at which the
-      // completed turn's done-signal state is reset: clear any latched turn-done file. Because the prompt
-      // inject is gated to land only after /clear drained + the agent re-quiesced, this is exactly "reset
-      // only when /clear fired AND quiescent" — the prior turn's detection survives the whole transition.
-      // The preamble resets nothing.
+      // §26.3/D46 — clearing the prior turn's done-signal any earlier than the next turn's PROMPT inject
+      // would drop a completion that arrived during the transition.
       if (!opts?.preamble && activeTurn) {
         clearTurnDone(activeTurn.repoDir);
         // §26 activity — the turn prompt landing flips the strip readout from "Waiting for the agent" to
@@ -399,8 +396,6 @@ async function createWindow(): Promise<void> {
     cancelTimer: () => {
       if (turnTimer) clearTimeout(turnTimer);
       turnTimer = null;
-      // §26.3/D46 — do NOT disarm the sentinel on completion: the done-signal state is reset only at the
-      // next turn's prompt inject (after /clear fired + quiescent), so it survives this turn's teardown.
     },
     writeError: (reason) => {
       if (!activeTurn) return;
@@ -452,20 +447,13 @@ async function createWindow(): Promise<void> {
   // keeps producing edges so it never stalls, while a frozen screen stops producing them and counts down.
   // Inert unless a turn is in flight (the runner guards it), so this is idle-cheap outside a loop.
   shadow.onActivity(() => turnRunner.noteActivity());
-  // Bind a freshly-bootstrapped loop step's work turn: watch for its done-signal file and request the
-  // turn (injected when the instance next goes injectable). The watcher stays attached across the turns
-  // chained off this one (work → reviewers), so each turn's done-signal file is seen.
-  // §26.3/D47a — arm the turn-done FILE watch for the active turn. Since §26 D42a made the file the SOLE
-  // completion signal, EVERY turn-starter must arm it — not only the work turn: a chain that starts mid-run
-  // (§26.11 resume straight into the reviewers/consolidate turn) never runs startWorkTurn, so without this
-  // the resumed turn would have no completion trigger at all. The watch reads `activeTurn` dynamically and
-  // key-matches (D46), so re-arming per turn is safe and one live watch serves whatever turn is current.
+  // §26.3/D47a — the turn-done file is the sole completion signal, so EVERY turn-starter must call this,
+  // not just the work turn: a chain entered mid-run (§26.11 resume into reviewers/consolidate) would
+  // otherwise have no completion trigger at all.
   const armTurnDoneWatch = (repoDir: string): void => {
     unwatchTurnDone?.();
     unwatchTurnDone = watchTurnDone(repoDir, () => {
-      // Read WITHOUT deleting (the file is latched until the next prompt inject clears it) and fire only when
-      // the file's key matches the active turn, so a prior turn's not-yet-cleared file can never complete a
-      // different in-flight turn during the deferred-settle window.
+      // §26.3/D46 — key-match: a prior turn's latched file must not complete a different in-flight turn.
       if (readTurnDone(repoDir) === activeTurn?.turnKey) turnRunner.onDoneSignal();
     });
   };
@@ -665,11 +653,10 @@ async function createWindow(): Promise<void> {
   };
 
   // §26.11 / L8 — auto-resume an interrupted run from <repo>/.agent-loop/state.yaml (decision in
-  // loopResume.ts). Best-effort: any gap — no state, no bound loop, no resume_contract, or a turn already
-  // in flight — is a silent no-op, and it fires at most once per repo.
+  // loopResume.ts). Best-effort: any gap — no state, no bound loop, no resume_contract — is a silent no-op.
   const resumedRepos = new Set<string>();
   const resumeLoop = (repoDir: string): void => {
-    if (activeTurn !== null || resumedRepos.has(repoDir)) return;
+    const turnInFlight = turnRunner.state() === 'in-flight';
     const s = parseAgentLoopState(repoDir);
     if (!s) return;
     const loopName = readLoopExtension(repoDir).boundLoop;
@@ -678,10 +665,13 @@ async function createWindow(): Promise<void> {
     if (!def?.resume) return;
     // §26.3/D48 recovery — a run persisted in `error` is NOT auto-re-driven (human-owned), but it IS
     // reconstructed (no injection) so the loop panel's Retry (re-run) and "mark turn complete" (accept the
-    // present artifact and advance) act on the right turn after a relaunch. Which turn errored is inferred
-    // from the same artifact evidence resume uses. Single-phase defs only — the vendored plan-loop/impl-loop
-    // are single-phase; a multi-phase error's phase is ambiguous from state.yaml alone (recorded gap).
+    // present artifact and advance) act on the right turn after a relaunch. This is NOT one-shot: returning
+    // to an error repo after a detour to another must re-point the single turn slot at THIS repo, or the
+    // first repo's Retry silently no-ops (§16.3). Which turn errored is inferred from artifact evidence.
+    // Single-phase defs only — the vendored plan-loop/impl-loop are single-phase; a multi-phase error's
+    // phase is ambiguous from state.yaml alone (recorded gap).
     if (s.status === 'error') {
+      if (!shouldReconstructErrorTurn(repoDir, activeTurn?.repoDir ?? null, turnInFlight)) return;
       if (def.phases.length !== 1) return;
       const errPhase = def.phases[0];
       const errRoster = reviewerRosterForPhase(def, errPhase.id);
@@ -691,7 +681,6 @@ async function createWindow(): Promise<void> {
         consolidated: consolidatedVerdict(repoDir, s.iteration) !== null,
       });
       if (kind === 'post-consolidate') return; // the verdict branch, not a turn to reconstruct (recorded gap)
-      resumedRepos.add(repoDir);
       audit.recordCommand(repoDir, 'resume', `reconstruct ${kind} error at iter ${s.iteration}`, 0);
       if (kind === 'work') {
         activeTurn = { kind: 'work', repoDir, loopName, phase: errPhase.id, turnKey: `work-${errPhase.id}` };
@@ -720,6 +709,9 @@ async function createWindow(): Promise<void> {
       armTurnDoneWatch(repoDir);
       return;
     }
+    // The DRIVING resume injects a turn, so it fires at most once per repo and never while a turn is in
+    // flight (the single runner would drop the request) — unlike the reconstruct path above.
+    if (!canResumeRepo(repoDir, resumedRepos, turnInFlight)) return;
     const phase = def.phases.find((p) => p.entryStatus === s.status);
     const roster = phase ? reviewerRosterForPhase(def, phase.id) : [];
     const decision = decideResume({
@@ -850,23 +842,33 @@ async function createWindow(): Promise<void> {
   // §26 D42a — entering a loop step with NO `bootstrap: pickup` RESUMES the existing run under the step's
   // loop (`agent-loop resume --loop <new>`): rebind state.yaml to the new loop (fresh internal state, but
   // the same PR/branch/issues carried), then drive its first work turn behind an actor-boundary /clear
-  // (§26.3/D46). A no-op when there is no run to resume (parseAgentLoopState null) — nothing to rebind onto.
+  // (§26.3/D46). Decision in loopRebind.ts; the "nothing to resume" outcomes are audited no-ops (a loop
+  // step can be display-only), and only a persist failure mid-rebind is surfaced.
   const resumeLoopForStep = (step: FlowStepDef): void => {
     const repoKey = transitioningRepo;
     if (!repoKey || step.kind !== 'loop' || !step.loop) return;
-    const def = parseLoopDef(repoKey, step.loop);
     const prior = parseAgentLoopState(repoKey);
-    if (!def || !prior) return;
-    // §26 D42a — the rebind carries the run identity and advances the MONOTONIC iteration (prior + 1), so the
-    // successor loop's reviews/<iter>/ never collide with the prior loop's and the displayed count climbs.
-    const rebind = resumeRebindWrite(
-      { pr: prior.pr, branch: prior.branch, linkedIssues: prior.linkedIssues, iteration: prior.iteration },
+    const plan = planStepResume(
+      prior && { pr: prior.pr, branch: prior.branch, linkedIssues: prior.linkedIssues, iteration: prior.iteration },
       step.loop,
-      def,
+      parseLoopDef(repoKey, step.loop),
     );
-    if (!rebind) return;
-    writeLoopState(repoKey, rebind.write);
-    startWorkTurn(repoKey, step.loop, rebind.workPhase, CLEAR_PREAMBLE);
+    if (!plan.ok) {
+      // Nothing to resume (no def, no prior run, or a phase-less def). Not a blocking error: a loop step
+      // can legitimately be display-only (its state.yaml mirror still renders), and the flow stays
+      // recoverable via Terminate/Restart. Record why so the no-op leaves a trace (§25), never silent.
+      audit.recordCommand(repoKey, 'resume', `loop step not resumed: ${plan.reason}`, 1);
+      return;
+    }
+    try {
+      writeLoopState(repoKey, plan.write);
+    } catch (e) {
+      // A persist failure DID interrupt a rebind that was going to run — surface it (the state on disk may
+      // be half-written) so the operator can retry rather than sit on a silently-failed transition.
+      send(CH.flowOnLoopError, { sessionId: SESSION_ID, reason: `could not persist the loop rebind: ${String(e)}` });
+      return;
+    }
+    startWorkTurn(repoKey, step.loop, plan.workPhase, CLEAR_PREAMBLE);
   };
 
   // §18.6/§19.3: a manual step's only automatic entry action is injecting its `skill`, refused over a
@@ -1070,8 +1072,8 @@ async function createWindow(): Promise<void> {
         note: noteText,
         // §26.9 — skip epic-promote if this run already created its sub-issues (idempotent re-entry).
         epicAlreadyPromoted: readLoopExtension(repoKey).epic.subIssues.length > 0,
-        // §26.6 — exec runs by default; the repo opts a loop out via `.agent-loop.yaml` loops_deny_exec.
-        execAllowed: readLoopExecAllowed(repoKey, loopName),
+        // §26.6 — exec runs only for an operator-authored def (CWE-829), minus the repo's loops_deny_exec.
+        execAllowed: loopExecAllowed(def, repoKey, loopName),
       },
       {
         github: createRealGateGitHub(repoKey),

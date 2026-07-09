@@ -1,9 +1,6 @@
-// §26.3/D47a — the robust half of the per-turn done-signal: the turn writes `.agent-loop/turn-done`
-// as its last action. Read and clear are SEPARATE (§26.3/D46 latch): the read drives completion, but the
-// file is NOT consumed until the done-signal has been acted on — the host clears it only at the next
-// prompt inject (after /clear fired + the agent re-quiesced), which is also where the sentinel is re-armed.
-// A stale file can't satisfy a different turn because the host fires onDoneSignal only when the read key
-// matches the active turn. The companion line half is `turnSentinel.ts`; both feed the same `onDoneSignal`.
+// §26.3/D47a, §26.3/D46 — the per-turn done-signal: the turn writes `.agent-loop/turn-done` as its last
+// action. Read and clear are separate operations; clearing before the signal has been acted on would lose
+// the completion of the turn that wrote it.
 
 import { readFileSync, rmSync, watch, type FSWatcher } from 'node:fs';
 import path from 'node:path';

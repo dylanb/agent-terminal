@@ -119,13 +119,15 @@ export interface LoopDef {
   /** §26.6 — the `artifacts` slot map (id → `.agent-loop/`-relative `path_pattern`), the source that
    *  resolves an `exec` action's `{{artifact.<id>}}` placeholder to a real path. {} when the def omits it. */
   artifacts: Record<string, string>;
-  /** §26.3/D47a — the `.agent-loop/`-relative file the WORK turn must produce to be "done": the agent
+  /** §26.3/D47a — the REPO-relative file the WORK turn must produce to be "done": the agent
    *  verifies it on disk before signalling done, and the runner gates completion on it. `.agent-loop/plan.md`
    *  for a loop that PRODUCES the plan (its `plan` artifact has a producer); `""` for a loop that CONSUMES
    *  the plan as a pre-authored input (impl-loop) — that loop's work is code/commits, so its work turn
    *  completes on the turn-done file alone. One definition, read by both the prompt recipe and the runner
    *  gate, so the injected instruction and the completion check cannot desync (CLAUDE.md shared-semantics). */
   workArtifact: string;
+  /** Whose authority this def's bytes carry — see `LoopDefOrigin`. Gates the §26.6 `exec` capability. */
+  origin: LoopDefOrigin;
 }
 
 const SCHEMA_VERSION = '4';
@@ -143,12 +145,27 @@ function configLoopsDir(configDir?: string): string {
   return path.join(base, 'loops');
 }
 
+/** Where a LoopDef's bytes came from, and therefore whose authority they carry: `operator-config` is the
+ *  user's own `<configLoops>/` copy; `repo` is a file inside the checked-out repository, i.e. untrusted
+ *  content authored by whoever wrote the repo. Capabilities that let a def act on the machine (§26.6
+ *  `exec`) are granted on this distinction, never on anything the repo itself asserts. */
+export type LoopDefOrigin = 'operator-config' | 'repo';
+
+interface ResolvedLoopDef {
+  path: string;
+  origin: LoopDefOrigin;
+}
+
 /** Resolve a loop NAME to its LoopDef yaml path: a repo-local `.agent-loop.yaml` `loops:` registry
  *  override (resolved relative to the repo) wins; otherwise the bundled/user-authored config copy at
- *  `<configLoops>/<name>/<name>.yaml`. Returns the path to try (existence is the parser's concern), or
- *  null when the name is not a single safe path segment — so it can never become a traversal lever. */
-function resolveLoopDefPath(repoDir: string, name: string, configDir?: string): string | null {
+ *  `<configLoops>/<name>/<name>.yaml`. Returns the path to try (existence is the parser's concern) with
+ *  its origin, or null when the name is not a single safe path segment — never a traversal lever. */
+function resolveLoopDefPath(repoDir: string, name: string, configDir?: string): ResolvedLoopDef | null {
   if (!SAFE_NAME.test(name)) return null;
+  const fromConfig: ResolvedLoopDef = {
+    path: path.join(configLoopsDir(configDir), name, `${name}.yaml`),
+    origin: 'operator-config',
+  };
   try {
     const raw = readFileSync(path.join(repoDir, '.agent-loop.yaml'), 'utf8');
     const doc = yaml.load(raw);
@@ -162,25 +179,25 @@ function resolveLoopDefPath(repoDir: string, name: string, configDir?: string): 
           // validated real path so a later target swap can't redirect the read (CWE-367 TOCTOU).
           const real = realpathSync(target);
           const realRoot = realpathSync(root);
-          if (real === realRoot || real.startsWith(realRoot + path.sep)) return real;
-          return path.join(configLoopsDir(configDir), name, `${name}.yaml`);
+          if (real === realRoot || real.startsWith(realRoot + path.sep)) return { path: real, origin: 'repo' };
+          return fromConfig;
         } catch {
-          return target; // dangling in-repo override → let the parser yield null
+          return { path: target, origin: 'repo' }; // dangling in-repo override → parser yields null
         }
       }
     }
   } catch {
     // no/unreadable .agent-loop.yaml → config-dir copy
   }
-  return path.join(configLoopsDir(configDir), name, `${name}.yaml`);
+  return fromConfig;
 }
 
 /** The directory that holds a loop's def + its `prompts/`, `charter/`, `skills/` (§26.5) — the parent
  *  of the resolved LoopDef yaml, so prompt/recipe assembly reads from the same source the parser used.
  *  Null when the name does not resolve to a safe path (see resolveLoopDefPath). */
 export function resolveLoopDir(repoDir: string, name: string, configDir?: string): string | null {
-  const defPath = resolveLoopDefPath(repoDir, name, configDir);
-  return defPath === null ? null : path.dirname(defPath);
+  const resolved = resolveLoopDefPath(repoDir, name, configDir);
+  return resolved === null ? null : path.dirname(resolved.path);
 }
 
 /** The orchestrator-relevant slice of `phases` (§26.5): id + entry_status + roster binding; malformed or
@@ -356,20 +373,62 @@ function toWorkArtifact(doc: Record<string, unknown>): string {
   return path.join('.agent-loop', plan.path_pattern);
 }
 
-/** Resolve an `exec` action's `{{artifact.<id>}}` to an absolute path under `<repoDir>/.agent-loop/`
- *  (§26.6). Null when the id is unknown or its `path_pattern` (untrusted def config) escapes that dir
- *  (CWE-22 — same confinement as the `.agent-loop.yaml` loops override). Existence is the caller's concern. */
+/** The real path of `p`, resolving symlinks in its longest EXISTING prefix and appending the not-yet-created
+ *  tail — so a path whose final segments do not exist yet still resolves any linked ancestor. */
+function realpathBounded(p: string): string {
+  const tail: string[] = [];
+  let cur = p;
+  for (;;) {
+    try {
+      return path.join(realpathSync(cur), ...tail.reverse());
+    } catch {
+      const parent = path.dirname(cur);
+      if (parent === cur) return p; // reached the root without resolving — nothing to follow
+      tail.push(path.basename(cur));
+      cur = parent;
+    }
+  }
+}
+
+/** `target`'s symlink-resolved path if it stays inside the run's `.agent-loop/` confinement, else null.
+ *  The confinement dir is computed as `<realpath(repoDir)>/.agent-loop` and is NOT itself realpath'd, so a
+ *  repo that makes `.agent-loop` a symlink to some other directory cannot adopt that directory as the jail.
+ *  Returning the RESOLVED path (like `resolveLoopDefPath`) means the caller hands `gh` a symlink-free path,
+ *  so a later `.agent-loop` swap cannot redirect the read (CWE-367). */
+function confinedRealPath(repoDir: string, target: string): string | null {
+  let repoReal: string;
+  try {
+    repoReal = realpathSync(repoDir);
+  } catch {
+    return null;
+  }
+  const dirReal = path.join(repoReal, '.agent-loop');
+  const real = realpathBounded(target);
+  return real === dirReal || real.startsWith(dirReal + path.sep) ? real : null;
+}
+
+/** A `path_pattern` slot the def templates per iteration (`human-notes/{iter}.md`, §26.6). */
+const UNEXPANDED_SLOT = /\{[^}]*\}/;
+
+/** Resolve an `exec` action's `{{artifact.<id>}}` to a symlink-free absolute path under
+ *  `<repoDir>/.agent-loop/` (§26.6). Null when the id is unknown, its `path_pattern` (untrusted def config)
+ *  still carries an unexpanded `{slot}`, or the path escapes that dir either lexically (CWE-22) or through a
+ *  symlink the consuming command would follow (CWE-59). Existence is the caller's concern. */
 export function artifactPath(def: LoopDef, repoDir: string, id: string): string | null {
   const pattern = def.artifacts[id];
   if (typeof pattern !== 'string') return null;
+  if (UNEXPANDED_SLOT.test(pattern)) return null;
   const base = path.resolve(repoDir, '.agent-loop');
   const target = path.resolve(base, pattern);
-  return target === base || target.startsWith(base + path.sep) ? target : null;
+  if (!(target === base || target.startsWith(base + path.sep))) return null;
+  return confinedRealPath(repoDir, target);
 }
 
 /** §26.6 — whether the `exec` gate action may run for `loopName`. exec is allowed by DEFAULT for every
  *  loop; a repo opts a loop OUT via `.agent-loop.yaml` `loops_deny_exec: {<loop>: true}`. Fails OPEN
- *  (allowed) on any missing / unreadable / unparseable config — never throws. */
+ *  (allowed) on any missing / unreadable / unparseable config — never throws. This is the operator's
+ *  convenience switch over their OWN defs, not a security control: it lives in the repo. See
+ *  `loopExecAllowed`, which is the decision every caller must ask. */
 export function readLoopExecAllowed(repoDir: string, loopName: string): boolean {
   try {
     const doc = yaml.load(readFileSync(path.join(repoDir, '.agent-loop.yaml'), 'utf8'));
@@ -380,14 +439,23 @@ export function readLoopExecAllowed(repoDir: string, loopName: string): boolean 
   return true;
 }
 
+/** §26.6 — whether this gate may run `def`'s `exec` argv. `exec` names the PROGRAM, not just its
+ *  arguments, so a def the repo supplied would be arbitrary code execution on Approve (CWE-829): the
+ *  opt-out policy is premised on an operator-authored def, and only `origin` establishes that. The
+ *  repo's own `loops_deny_exec` can then subtract, never add. */
+export function loopExecAllowed(def: LoopDef, repoDir: string, loopName: string): boolean {
+  if (def.origin !== 'operator-config') return false;
+  return readLoopExecAllowed(repoDir, loopName);
+}
+
 /** Resolve + parse the LoopDef bound to `name` for `repoDir`. Returns its gate model + pickup contract,
  *  or null for a missing / corrupt / wrong-`schema_version` / gate-less file (never throws). */
 export function parseLoopDef(repoDir: string, name: string, configDir?: string): LoopDef | null {
-  const defPath = resolveLoopDefPath(repoDir, name, configDir);
-  if (defPath === null) return null;
+  const resolved = resolveLoopDefPath(repoDir, name, configDir);
+  if (resolved === null) return null;
   let raw: string;
   try {
-    raw = readFileSync(defPath, 'utf8');
+    raw = readFileSync(resolved.path, 'utf8');
   } catch {
     return null;
   }
@@ -419,6 +487,7 @@ export function parseLoopDef(repoDir: string, name: string, configDir?: string):
     defaultRosterId,
     artifacts,
     workArtifact,
+    origin: resolved.origin,
     ...(verdicts ? { verdicts } : {}),
     ...(pickup ? { pickup } : {}),
     ...(resume ? { resume } : {}),

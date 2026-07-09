@@ -17,8 +17,12 @@ export interface ErrorDialog {
   dispose(): void;
 }
 
-export function createErrorDialog(host: HTMLElement): ErrorDialog {
-  const shell = createModalShell(host, 'error-dialog-title');
+export function createErrorDialog(host: HTMLElement, opts?: { onFocusLost?: () => void }): ErrorDialog {
+  // WAI-ARIA APG: main pushes this dialog on a failure the user never asked for — an urgent interruption.
+  const shell = createModalShell(host, 'error-dialog-title', undefined, {
+    role: 'alertdialog',
+    onFocusLost: opts?.onFocusLost,
+  });
   return {
     render(opts) {
       if (!opts) return shell.render(null);

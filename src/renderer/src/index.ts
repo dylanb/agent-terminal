@@ -124,18 +124,23 @@ if (flowStripHost) {
     : undefined;
   // Same single-puller contract for the typed-input modal (§24.2.3 T3): on a step-entry prompt the
   // strip hands it the prompt + a submit closure; the modal collects values and submit calls provideInput.
+  // WCAG 2.4.3: a dialog's opener can be detached by a strip re-render while it is open; land focus on a
+  // stable target instead of <body>. The same cross-organism fallback the attention cue uses.
+  const landFocus = (): void => {
+    if (!flowStrip?.focusLoopReadout()) shell.focusView('1');
+  };
   const modalHost = document.getElementById('flow-modal-host');
-  const inputModal = modalHost ? createFlowInputModal(modalHost) : undefined;
+  const inputModal = modalHost ? createFlowInputModal(modalHost, { onFocusLost: landFocus }) : undefined;
   // Terminate confirmation (#26): a separate destructive modal-dialog organism. The strip hands it the
   // repo + a confirm closure; createTerminateConfirm surfaces the repo's current todo count
   // (window.monitor owns the count — the strip stays flow-only, §9.1) and gates the IPC call.
   const confirmHost = document.getElementById('flow-confirm-host');
-  const confirmDialog = confirmHost ? createConfirmDialog(confirmHost) : undefined;
+  const confirmDialog = confirmHost ? createConfirmDialog(confirmHost, { onFocusLost: landFocus }) : undefined;
   // Bootstrap-failure alert (§26.9): main pushes flow:onBootstrapError when a loop step's async pickup
   // failed and rolled the flow back. Raise a blocking dialog so the failure is never silent; the strip
   // re-pulls the rolled-back state via the accompanying flow:onStateChanged push.
   const errorHost = document.getElementById('flow-error-host');
-  const errorDialog = errorHost ? createErrorDialog(errorHost) : undefined;
+  const errorDialog = errorHost ? createErrorDialog(errorHost, { onFocusLost: landFocus }) : undefined;
   if (errorDialog) {
     window.flow.onBootstrapError((reason) => errorDialog.render({ title: 'Bootstrap failed', message: reason }));
     // §26.3/§26.6/D48 — a loop-mechanics failure AFTER bootstrap (a turn-runner error or an un-persistable

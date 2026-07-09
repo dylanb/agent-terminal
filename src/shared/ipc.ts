@@ -576,10 +576,10 @@ export interface FlowStateView {
   /** Live derived status (§22.3 / §24.2.2 S5): agent activity + todo completion + gate readiness.
    *  Present only on an `in_progress` view (computed by main from the repo's todos + §8.3 activity). */
   derived?: FlowDerived;
-  /** What the loop MECHANICS are doing right now (§26): a phrase + a `busy` flag driving the strip's
-   *  spinner — bootstrapping, waiting for the agent, working, running reviewers, consolidating. Top-level
-   *  (NOT under `loop`) because a bootstrap runs before `.agent-loop/state.yaml` exists; absent when the
-   *  loop mechanics are idle (at a gate, done, or between flows). */
+  /** What the loop MECHANICS are doing right now (§26): a phrase — bootstrapping, waiting for the agent,
+   *  working, running reviewers, consolidating. Present exactly while the loop is active (its presence
+   *  drives the strip's spinner). Top-level (NOT under `loop`) because a bootstrap runs before
+   *  `.agent-loop/state.yaml` exists; absent when the loop mechanics are idle. */
   loopActivity?: LoopActivity;
   /** Read-only agent-loop state.yaml mirror (§24.2.3 T2): present once a `loop` step has been entered
    *  (and stays for the run, including any later manual step) with a parseable v4 state.yaml. Parallel

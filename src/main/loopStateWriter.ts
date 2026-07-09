@@ -6,7 +6,7 @@
 //
 // CLAUDE.md (no-gitignore-writes): this writes only state.yaml; it never creates or edits a .gitignore.
 
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { closeSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import yaml from 'js-yaml';
 import { isRecord } from './yamlRecord';
@@ -137,7 +137,16 @@ export function writeLoopState(repoDir: string, state: LoopStateWrite, now: () =
     doc.epic = { sub_issues: state.epic.subIssues };
   }
 
+  // `.agent-loop/` belongs to the repo, so the temp path is attacker-plantable. `wx` refuses to open an
+  // existing entry — a symlink included — instead of writing through it (CWE-59), and 0600 keeps the run's
+  // state owner-only (CWE-276). `rename` replaces the link itself, never its target.
   const tmp = `${file}.tmp`;
-  writeFileSync(tmp, yaml.dump(doc));
+  rmSync(tmp, { force: true });
+  const fd = openSync(tmp, 'wx', 0o600);
+  try {
+    writeFileSync(fd, yaml.dump(doc));
+  } finally {
+    closeSync(fd);
+  }
   renameSync(tmp, file);
 }

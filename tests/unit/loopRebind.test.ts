@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { resumeRebindWrite } from '../../src/main/loopRebind';
+import { planStepResume, resumeRebindWrite } from '../../src/main/loopRebind';
 import type { LoopDef } from '../../src/main/loopDef';
 
 // §26 D42a (resume --loop) — the pure computation that rebinds an existing run to a NEW loop. It reads the
@@ -18,6 +18,7 @@ const def = (over: Partial<LoopDef> = {}): LoopDef => ({
   defaultRosterId: '',
   artifacts: {},
   workArtifact: '',
+  origin: 'operator-config',
   ...over,
 });
 
@@ -51,5 +52,42 @@ describe('resumeRebindWrite (§26 D42a)', () => {
 
   it('returns null when the new loop def has no phase to enter (nothing to drive)', () => {
     expect(resumeRebindWrite(prior, 'impl-loop', def({ phases: [] }))).toBeNull();
+  });
+});
+
+// §26 D42a — entering a loop step is now AUTOMATIC (the gate approve advances the flow), so the human is
+// not watching at the moment it happens. Every way this can fail must therefore name itself: a step that
+// cannot be driven and says nothing leaves the flow parked on it with no turn, no Retry, and no error —
+// the unrecoverable dead end CLAUDE.md forbids.
+describe('planStepResume (§26 D42a — no silent refusal to enter a loop step)', () => {
+  const prior = { pr: 50, branch: 'plan-loop/issue-40', linkedIssues: [40], iteration: 3 };
+
+  it('plans the rebind + work phase when the run and the def are both present', () => {
+    const plan = planStepResume(prior, 'impl-loop', def());
+    expect(plan.ok).toBe(true);
+    if (!plan.ok) return;
+    expect(plan.workPhase).toBe('impl');
+    expect(plan.write.iteration).toBe(4);
+  });
+
+  it('refuses with a reason when the step names a loop whose def is missing or unparseable', () => {
+    const plan = planStepResume(prior, 'impl-loop', null);
+    expect(plan.ok).toBe(false);
+    if (plan.ok) return;
+    expect(plan.reason).toContain('impl-loop');
+  });
+
+  it('refuses with a reason when there is no run on disk to rebind onto', () => {
+    const plan = planStepResume(null, 'impl-loop', def());
+    expect(plan.ok).toBe(false);
+    if (plan.ok) return;
+    expect(plan.reason).not.toBe('');
+  });
+
+  it('refuses with a reason when the def declares no phase to drive', () => {
+    const plan = planStepResume(prior, 'impl-loop', def({ phases: [] }));
+    expect(plan.ok).toBe(false);
+    if (plan.ok) return;
+    expect(plan.reason).not.toBe('');
   });
 });

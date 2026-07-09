@@ -101,3 +101,66 @@ describe('modal shell onClose (user-dismiss signal)', () => {
     expect(closes).toBe(0);
   });
 });
+
+// WCAG 2.1 SC 2.4.3 (Focus Order). The opener is captured at open time, but the surfaces behind a dialog
+// re-render (the flow strip rebuilds on a loop-activity phrase change), so the captured element can be
+// detached by the time the dialog closes. `focus()` on a detached node is a silent no-op that drops focus
+// to <body> — the keyboard user is returned to the top of the document.
+describe('modal shell focus restoration (SC 2.4.3)', () => {
+  it('restores focus to the opener when it is still in the document', () => {
+    const opener = document.createElement('button');
+    document.body.append(opener);
+    opener.focus();
+    const shell = createModalShell(host, 'x');
+
+    shell.render(cardBuild());
+    shell.render(null);
+
+    expect(document.activeElement).toBe(opener);
+  });
+
+  it('reports the focus loss when the opener was detached while the dialog was open', () => {
+    const opener = document.createElement('button');
+    document.body.append(opener);
+    opener.focus();
+    let lost = 0;
+    const shell = createModalShell(host, 'x', undefined, { onFocusLost: () => (lost += 1) });
+
+    shell.render(cardBuild());
+    opener.remove(); // the surface behind the dialog re-rendered
+    shell.render(null);
+
+    expect(lost).toBe(1);
+  });
+
+  it('does not report a focus loss when the opener survives', () => {
+    const opener = document.createElement('button');
+    document.body.append(opener);
+    opener.focus();
+    let lost = 0;
+    const shell = createModalShell(host, 'x', undefined, { onFocusLost: () => (lost += 1) });
+
+    shell.render(cardBuild());
+    shell.render(null);
+
+    expect(lost).toBe(0);
+  });
+});
+
+// WAI-ARIA APG: `alertdialog` is the role for a dialog whose content is an urgent message that interrupts
+// the user — which is exactly a loop/bootstrap failure the user never asked for. `dialog` announces only
+// "dialog"; `alertdialog` announces the message with it.
+describe('modal shell dialog role (WAI-ARIA APG / SC 4.1.2)', () => {
+  it('is role=dialog by default', () => {
+    const shell = createModalShell(host, 'x');
+    shell.render(cardBuild());
+    expect(modal().getAttribute('role')).toBe('dialog');
+  });
+
+  it('carries role=alertdialog when the caller declares the dialog an alert', () => {
+    const shell = createModalShell(host, 'x', undefined, { role: 'alertdialog' });
+    shell.render(cardBuild());
+    expect(modal().getAttribute('role')).toBe('alertdialog');
+    expect(modal().getAttribute('aria-modal')).toBe('true');
+  });
+});

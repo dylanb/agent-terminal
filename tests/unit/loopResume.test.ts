@@ -1,5 +1,59 @@
 import { describe, expect, it } from 'vitest';
-import { currentTurnByArtifacts, decideResume, type ResumeInputs } from '../../src/main/loopResume';
+import {
+  canResumeRepo,
+  currentTurnByArtifacts,
+  decideResume,
+  shouldReconstructErrorTurn,
+  type ResumeInputs,
+} from '../../src/main/loopResume';
+
+// §26.11 / §16.3 — WHICH repo may be auto-resumed. One runner drives one turn, so a turn in flight
+// anywhere defers the resume; a resume fires at most once per repo per session. The admission reads
+// whether a turn is ACTUALLY in flight, never a slot that outlives it.
+describe('canResumeRepo (§26.11 — per-repo resume admission)', () => {
+  const none = new Set<string>();
+
+  it('resumes a repo when no turn is in flight', () => {
+    expect(canResumeRepo('/repoA', none, false)).toBe(true);
+  });
+
+  it('refuses a repo already resumed this session', () => {
+    expect(canResumeRepo('/repoA', new Set(['/repoA']), false)).toBe(false);
+  });
+
+  it('defers while a turn is in flight — the single runner would drop the request', () => {
+    expect(canResumeRepo('/repoA', none, true)).toBe(false);
+  });
+
+  // The defect this pins: the caller vetoed on a turn SLOT that is assigned and never cleared, so once the
+  // session's first turn had run, cd-into-repo recovery was a permanent no-op for every repo. A finished
+  // turn leaves no turn in flight, so a later repo must still resume.
+  it('resumes a repo once the earlier turn has finished, even though a turn ran before', () => {
+    expect(canResumeRepo('/repoB', new Set(['/repoA']), false)).toBe(true);
+  });
+});
+
+// §26.3/D48 — the reconstructed error turn only tells the panel's Retry / mark-complete which turn to act
+// on; it injects nothing. So it must NOT be one-shot: returning to an error repo after a detour to another
+// must re-point the single turn slot at THIS repo, or the first repo's Retry silently no-ops (unrecoverable).
+describe('shouldReconstructErrorTurn (§26.3/D48 — recovery is not one-shot)', () => {
+  it('reconstructs when the slot is empty and no turn is in flight', () => {
+    expect(shouldReconstructErrorTurn('/repoA', null, false)).toBe(true);
+  });
+
+  it('does nothing when the slot already describes this repo', () => {
+    expect(shouldReconstructErrorTurn('/repoA', '/repoA', false)).toBe(false);
+  });
+
+  it('re-points the slot to this repo when a detour to another error repo clobbered it', () => {
+    // cd A (slot=A) -> cd B (slot=B) -> cd back to A: A's Retry must act on A again, not B.
+    expect(shouldReconstructErrorTurn('/repoA', '/repoB', false)).toBe(true);
+  });
+
+  it('never clobbers a turn that is actually being driven', () => {
+    expect(shouldReconstructErrorTurn('/repoA', '/repoB', true)).toBe(false);
+  });
+});
 
 // §26.11 — auto-resume from state.yaml. On launch (or cd into a managed repo) the orchestrator resumes an
 // in-flight run at the recorded status/iteration, honoring the bound LoopDef's resume_contract rather than

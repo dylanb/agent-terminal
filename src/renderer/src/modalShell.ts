@@ -21,20 +21,36 @@ export interface ModalShell {
   dispose(): void;
 }
 
+export interface ModalShellOptions {
+  /** WAI-ARIA APG: `alertdialog` for a dialog raised by the system to interrupt the user with an urgent
+   *  message; `dialog` (the default) when the user asked for it. */
+  role?: 'dialog' | 'alertdialog';
+  /** Called when the element that opened the dialog is gone by the time it closes, so focus has nowhere to
+   *  return (WCAG SC 2.4.3). The caller owns the fallback landing spot; without one focus falls to <body>. */
+  onFocusLost?: () => void;
+}
+
 let modalSeq = 0;
 
-export function createModalShell(host: HTMLElement, idPrefix: string, onClose?: () => void): ModalShell {
+export function createModalShell(
+  host: HTMLElement,
+  idPrefix: string,
+  onClose?: () => void,
+  opts?: ModalShellOptions,
+): ModalShell {
   const doc = host.ownerDocument;
   const titleId = `${idPrefix}-${modalSeq++}`;
   let opener: HTMLElement | null = null;
   const clear = (): void => {
     host.replaceChildren();
-    opener?.focus();
+    // A surface behind the dialog may have re-rendered and detached the opener; focusing a detached node
+    // silently does nothing and strands the keyboard user at the top of the document.
+    if (opener?.isConnected) opener.focus();
+    else if (opener) opts?.onFocusLost?.();
     opener = null;
   };
   // `close` is the USER-dismiss path (Escape / scrim / the build's close): it fires `onClose` so a caller
-  // can distinguish a dismissal from its own programmatic teardown (`render(null)` / `dispose`), which do
-  // not. Guarded on wasOpen so a close of an already-closed dialog is silent.
+  // can distinguish a dismissal from its own programmatic teardown (`render(null)` / `dispose`), which do not.
   const close = (): void => {
     const wasOpen = host.firstChild !== null;
     clear();
@@ -53,7 +69,7 @@ export function createModalShell(host: HTMLElement, idPrefix: string, onClose?: 
 
       const modal = doc.createElement('div');
       modal.className = 'flow-modal';
-      modal.setAttribute('role', 'dialog');
+      modal.setAttribute('role', opts?.role ?? 'dialog');
       modal.setAttribute('aria-modal', 'true');
       modal.setAttribute('aria-labelledby', titleId);
       modal.tabIndex = -1;

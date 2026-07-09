@@ -102,7 +102,7 @@ export interface TurnRunner {
   /** The instance may have become injectable (a §8.3 quiet flip) — re-evaluate a pending/retry turn: inject
    *  if now idle, keep waiting if still busy, or error if the agent has left the prompt (§26.2). */
   onInjectable(): void;
-  /** A done-signal (sentinel line or file) was observed for the in-flight turn. */
+  /** A done-signal was observed for the in-flight turn (§26.3/D47a). */
   onDoneSignal(): void;
   /** A visible-content-change edge (§8.3) was observed — reset the in-flight turn's stall watchdog. */
   noteActivity(): void;
@@ -242,7 +242,17 @@ export function createTurnRunner(deps: TurnRunnerDeps): TurnRunner {
       );
     },
     markComplete() {
-      resolveCompletion();
+      if (state !== 'in-flight') return;
+      // Unlike a done-signal (the agent's claim, worth one retry), this is the operator's. Re-injecting
+      // the prompt would re-run the turn they asked to move past, so a missing artifact stops in `error`
+      // (§26.3/D48) — visible, and recoverable through Retry.
+      if (deps.artifactPresent()) {
+        succeed();
+        return;
+      }
+      deps.cancelTimer();
+      state = 'error';
+      deps.writeError('marked complete but the turn artifact is missing');
     },
     state() {
       return state;

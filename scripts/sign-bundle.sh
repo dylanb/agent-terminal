@@ -10,11 +10,15 @@
 
 set -u
 
-APP="${1:-node_modules/electron/dist/Electron.app}"
-BUNDLE_ID="${2:-dev.agentterminal.app}"
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+
+APP="${1:-$ROOT/node_modules/electron/dist/Electron.app}"
+# The id macOS matches authorization against IS the bundle id, so it has exactly one source: `appId`.
+BUNDLE_ID="${2:-$(sed -n 's/^appId:[[:space:]]*//p' "$ROOT/electron-builder.yml" 2>/dev/null | head -1)}"
 
 [ "$(uname -s)" = "Darwin" ] || exit 0
 [ -d "$APP" ] || exit 0
+[ -n "$BUNDLE_ID" ] || { echo "sign-bundle: no appId in electron-builder.yml; skipping" >&2; exit 0; }
 
 # Already carries a real signature under this id — re-signing would only cost time.
 if codesign -dv "$APP" 2>&1 | grep -qx "Identifier=${BUNDLE_ID}"; then
@@ -26,7 +30,9 @@ if ! /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier ${BUNDLE_ID}" "$APP/Con
   exit 0
 fi
 
-if ! codesign --force --deep --sign - "$APP" >/dev/null 2>&1; then
+# No `--deep`: Apple documents it as unsuitable for signing (TN3161), and only the top-level signature
+# binds the Info.plist. Reaching inside would discard the nested frameworks' real signatures for nothing.
+if ! codesign --force --sign - "$APP" >/dev/null 2>&1; then
   echo "sign-bundle: could not ad-hoc sign $APP; OS notifications will not be delivered" >&2
   exit 0
 fi

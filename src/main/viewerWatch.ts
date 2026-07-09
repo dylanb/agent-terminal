@@ -11,6 +11,10 @@ import { gitRootOf, IGNORED_DIRS } from './artifactTree';
  *  repo's own .gitignore (below) rather than a hard-coded skip list. */
 const ALWAYS_WATCH_DIRS = ['.agent-terminal', '.agent-loop'];
 
+/** Cap on `git ls-files` stdout. A repo whose tracked-file list exceeds this makes execFileSync throw, and
+ *  the caller falls back to walking the tree — degraded, not broken. */
+const GIT_LS_FILES_MAX_BYTES = 64 * 1024 * 1024;
+
 function isIgnoredEvent(filename: string | Buffer | null, rootName: string): boolean {
   if (filename === null) return false;
   const rel = filename.toString();
@@ -68,7 +72,7 @@ function gitNonIgnoredDirs(gitRoot: string): string[] | null {
   try {
     out = execFileSync('git', ['-C', gitRoot, 'ls-files', '--cached', '--others', '--exclude-standard', '-z'], {
       encoding: 'utf8',
-      maxBuffer: 64 * 1024 * 1024,
+      maxBuffer: GIT_LS_FILES_MAX_BYTES,
     });
   } catch {
     return null;

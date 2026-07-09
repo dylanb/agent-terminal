@@ -1,6 +1,6 @@
 import { describe, expect, it, beforeEach, afterEach } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -44,21 +44,47 @@ describe.skipIf(!darwin)('ad-hoc bundle signing so macOS will deliver notificati
   });
   afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
-  it('leaves an unsigned-by-the-linker bundle reporting a foreign identifier and an unbound Info.plist', () => {
-    const app = makeBundle(dir, 'dev.agentterminal.app');
+  it('binds the Info.plist and adopts the bundle id as the code-signing identifier', () => {
+    const app = makeBundle(dir, 'placeholder.id');
     const before = inspect(app);
     expect(before).toContain('Info.plist=not bound');
     expect(before).not.toContain('Identifier=dev.agentterminal.app');
-  });
-
-  it('binds the Info.plist and adopts the bundle id as the code-signing identifier', () => {
-    const app = makeBundle(dir, 'placeholder.id');
 
     run(app, 'dev.agentterminal.app');
 
     const after = inspect(app);
     expect(after).toContain('Identifier=dev.agentterminal.app');
     expect(after).not.toContain('Info.plist=not bound');
+  });
+
+  // The identifier macOS matches the notification authorization against IS the bundle id. Spelling it a
+  // second time in the script lets `appId` be renamed while dev-mode signing keeps using the old one —
+  // silently restoring "the notification was never delivered", whose diagnosis cost a 2x2 isolation.
+  it('defaults the bundle id to electron-builder.yml appId, not a second copy of the literal', () => {
+    const appId = readFileSync(join(__dirname, '../../electron-builder.yml'), 'utf8').match(/^appId:\s*(\S+)/m)![1];
+    const app = makeBundle(dir, 'placeholder.id');
+
+    execFileSync('/bin/bash', [SCRIPT, app], { encoding: 'utf8' });
+
+    expect(inspect(app)).toContain(`Identifier=${appId}`);
+  });
+
+  // Apple documents `--deep` as unsuitable for signing (TN3161): it re-signs every nested framework and
+  // helper with this identity, discarding their real signatures. Only the top-level signature binds the
+  // Info.plist, so nothing is gained by reaching inside.
+  it('leaves a nested framework\'s existing signature untouched', () => {
+    const app = makeBundle(dir, 'placeholder.id');
+    const nested = join(app, 'Contents', 'Frameworks', 'Nested.framework');
+    mkdirSync(nested, { recursive: true });
+    copyFileSync('/bin/echo', join(nested, 'Nested'));
+    chmodSync(join(nested, 'Nested'), 0o755);
+    execFileSync('/usr/bin/codesign', ['--force', '--sign', '-', '--identifier', 'nested.original', nested]);
+    const before = inspect(nested);
+
+    run(app, 'dev.agentterminal.app');
+
+    expect(inspect(nested)).toBe(before);
+    expect(inspect(nested)).toContain('Identifier=nested.original');
   });
 
   it('is idempotent — re-running over an already-signed bundle leaves the identifier intact', () => {
