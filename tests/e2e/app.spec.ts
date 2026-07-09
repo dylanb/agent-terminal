@@ -2954,6 +2954,80 @@ test('a work turn stranded in error with plan.md present is accepted after a rel
   rmSync(binDir, { recursive: true, force: true });
 });
 
+// §26 D42a / §26.11 — resume/error-recovery must be keyed to the repo the operator is IN, not only the
+// launch root. `resumeLoop` ran once at launch against launchRoot; if the operator launched elsewhere and
+// cd'd into a repo whose run is stranded in `error`, the errored turn was never reconstructed, so the loop
+// panel's Retry / mark-turn-complete (which need the reconstructed activeTurn) did nothing. Fix: re-run the
+// resume reconstruction on cd-into-repo. Here the app launches in a NON-repo dir, then cd's into a repo
+// stranded in `error`; Retry must reconstruct the work turn and re-drive it (the run leaves error).
+test('cd into a repo stranded in error reconstructs the turn so Retry re-drives it (§26 D42a / §26.11)', async () => {
+  const repo = mkdtempSync(join(tmpdir(), 'agent-term-e2e-cd-resume-'));
+  mkdirSync(join(repo, '.git'), { recursive: true });
+  mkdirSync(join(repo, '.agent-loop'), { recursive: true });
+  mkdirSync(join(repo, '.agent-terminal'), { recursive: true });
+  // The flow is parked at its plan loop step (so the loop mirror + its recovery controls render); its run
+  // is stranded in `error`.
+  writeFileSync(
+    join(repo, '.agent-terminal', 'flow.yaml'),
+    'name: dev-flow\nsteps:\n  - id: groom\n    kind: manual\n  - id: plan\n    kind: loop\n    loop: plan-loop\n    bootstrap: pickup\n' +
+      '    inputs:\n      - name: ticket\n        type: github-ticket\n        required: true\n',
+  );
+  writeFileSync(join(repo, '.agent-terminal', 'flow-state.yaml'), "step: plan\nstatus: in_progress\ninputs:\n  ticket: '176'\n");
+  // A run stranded in `error` at the work turn: plan.md present (rewritten in place), but NO iteration-scoped
+  // reviews, so the reconstruction infers the WORK turn stopped. bound_loop plan-loop resolves + has a
+  // resume_contract.
+  writeFileSync(
+    join(repo, '.agent-loop', 'state.yaml'),
+    ['schema_version: 4', 'status: error', 'iteration: 1', 'bound_loop: plan-loop', 'pr: 4242', 'branch: plan-loop/issue-176',
+      'linked_issues:', '  - 176', 'phase2_active: false', 'persona_state: {}', 'impasse: {}', 'sessions: {}', 'terminated: false',
+      'error_reason: done-signal received but the turn artifact is missing', ''].join('\n'),
+  );
+  writeFileSync(join(repo, '.agent-loop', 'plan.md'), '# Plan\n\nstranded mid-run\n');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-cd-resume-home-'));
+  const launchDir = mkdtempSync(join(tmpdir(), 'agent-term-e2e-cd-resume-elsewhere-')); // NOT the repo
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-cd-resume-bin-');
+  seedFakeAgent(binDir, { work: 'write-plan', reviews: 'all', consolidate: 'clean', turnMarkers: true });
+
+  await app.close();
+  app = await electron.launch({
+    args: ['out/main/index.js'],
+    env: {
+      ...process.env,
+      APP_SHELL: 'bash',
+      APP_LAUNCH_DIR: launchDir, // launch OUTSIDE the stranded repo
+      HOME: home,
+      APP_SUBMIT_DELAY_MS: '100',
+      APP_TURN_TIMEOUT_MS: '30000',
+      CLAUDE_CONFIG_DIR: exampleConfigDir,
+      PATH: `${binDir}:${process.env.PATH}`,
+      FAKE_GHGIT_LOG: logFile,
+    },
+  });
+  page = await app.firstWindow();
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await typeCommand(`cd "${repo}"`); // OSC-7 cwd change → resume reconstruction runs for THIS repo
+  await typeCommand('fake-agent'); // host the agent so the re-driven turn injects
+
+  // The reconstructed error surfaces its recovery controls; Retry re-drives the work turn.
+  await expect(loopReadout()).toBeVisible({ timeout: 15_000 });
+  await loopReadout().click();
+  await expect(loopPanel()).toContainText('error', { timeout: 10_000 });
+  await loopPanel().locator('[data-loop-retry]').click();
+
+  // Land: the work turn re-ran (its execution marker appears) and the run left error — proving activeTurn
+  // was reconstructed on cd (under the launch-root-only resume it would stay error, Retry a no-op).
+  const stateFile = join(repo, '.agent-loop', 'state.yaml');
+  await expect.poll(() => existsSync(join(repo, '.agent-loop', 'work-ran')), { timeout: 25_000 }).toBe(true);
+  await expect.poll(() => readFileSync(stateFile, 'utf8'), { timeout: 20_000 }).not.toContain('status: error');
+
+  await app.close();
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+  rmSync(launchDir, { recursive: true, force: true });
+  rmSync(binDir, { recursive: true, force: true });
+});
+
 test('a work turn completes on the turn-done FILE alone, with no sentinel line (§26.13 / L2 / D47a)', async () => {
   // §26.3/D47a's done-signal is "the sentinel LINE OR the turn-done FILE". The other L2 happy-path tests
   // emit both, so the file-watch path is never proven alone. Here the fake-agent writes plan.md and the

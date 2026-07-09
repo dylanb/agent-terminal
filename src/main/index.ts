@@ -240,6 +240,13 @@ async function createWindow(): Promise<void> {
     stopViewerWatch();
     stopViewerWatch = watchViewerTree(viewerRoot(cwd), onViewerActivity);
     void warmBase();
+    // §26.11 / §26 D42a — resume/reconstruct the run in the repo the operator just entered, not only the
+    // launch root: cd-ing into a repo whose run is stranded in `error` (or mid-work) must reconstruct its
+    // turn so the loop panel's Retry / mark-turn-complete act on it. Keyed to `repoKey` — the same identity
+    // the flow + the recovery handlers use — so the reconstructed activeTurn.repoDir matches. Idempotent
+    // (guarded on activeTurn/resumedRepos); the error path injects nothing, and a mid-work drive that finds
+    // no hosted agent safe-stops (§26.2) rather than leaking into a bare shell.
+    resumeLoop(repoKey);
   });
   // Drops echoed self-injected input from re-capture (§16.5).
   // TODO(dylan): the watermark→reply row separation and selfInjectWindowMs default
