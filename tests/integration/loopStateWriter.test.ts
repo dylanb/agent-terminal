@@ -66,7 +66,7 @@ describe('loop state.yaml writer (§26.6)', () => {
     expect(doc.linked_issues).toEqual([176]);
     expect(doc.updated_at).toBe('2026-06-30T12:00:00.000Z');
     // Whole-document: the LoopExtension fields the orchestrator owns are present, defaulted.
-    for (const key of ['sessions', 'impasse', 'phase2_active', 'persona_state', 'completed_loops', 'terminated']) {
+    for (const key of ['sessions', 'impasse', 'phase2_active', 'persona_state', 'terminated']) {
       expect(doc, `missing whole-document key ${key}`).toHaveProperty(key);
     }
   });
@@ -179,7 +179,7 @@ describe('loop state.yaml writer (§26.6)', () => {
 
     const doc = yaml.load(readFileSync(join(repo, '.agent-loop', 'state.yaml'), 'utf8')) as Record<string, unknown>;
     expect(doc.persona_state).toEqual({ 'review-security': { last_clean_iter: 1 } }); // present field preserved
-    for (const key of ['sessions', 'impasse', 'phase2_active', 'severity_cycle_iter', 'completed_loops', 'terminated']) {
+    for (const key of ['sessions', 'impasse', 'phase2_active', 'severity_cycle_iter', 'terminated']) {
       expect(doc, `partial prior doc not healed: missing ${key}`).toHaveProperty(key); // back-filled
     }
   });
@@ -296,21 +296,9 @@ describe('loop state.yaml writer (§26.6)', () => {
     expect(doc.terminated).toBe(false);
     // Still a whole-document valid v4 doc.
     expect(doc.schema_version).toBe(4);
-    for (const key of ['sessions', 'iter_in_flight', 'resume_mid_iter', 'completed_loops']) {
+    for (const key of ['sessions', 'iter_in_flight', 'resume_mid_iter']) {
       expect(doc, `missing whole-document key ${key}`).toHaveProperty(key);
     }
-  });
-
-  it('writes completed_loops (§26 D42a) — the recorded chain of finished loops for the cumulative count', () => {
-    // The resume --loop rebind records the loop it succeeded (name + final iteration) so the displayed
-    // iteration can climb cumulatively. Written OVER the freshExtension default [].
-    writeLoopState(
-      repo,
-      { status: 'impl-draft', iteration: 1, pr: 50, branch: 'b', boundLoop: 'impl-loop', linkedIssues: [40], freshExtension: true, completedLoops: [{ loop: 'plan-loop', iterations: 3 }] },
-      fixedNow,
-    );
-    const doc = yaml.load(readFileSync(join(repo, '.agent-loop', 'state.yaml'), 'utf8')) as Record<string, unknown>;
-    expect(doc.completed_loops).toEqual([{ loop: 'plan-loop', iterations: 3 }]);
   });
 
   it('emits the whole read set present even when branch is null and linkedIssues is empty (§26.6)', () => {

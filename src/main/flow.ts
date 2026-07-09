@@ -12,7 +12,6 @@ import { createFlowStateStore, type FlowStateStore } from './flowState';
 import type { AgentLoopState } from './agentLoopBridge';
 import { gateForStatus, type LoopDef } from './loopDef';
 import { isHumanNeededStatus } from '../shared/loopStatus';
-import { cumulativeIteration, type CompletedLoop } from '../shared/loopIteration';
 import { isRecord } from './yamlRecord';
 
 /**
@@ -49,7 +48,6 @@ export function deriveLoopView(
   loop: AgentLoopState | null,
   loopDef: LoopDef | null = null,
   cost: string | null = null,
-  completedLoops: CompletedLoop[] = [],
 ): FlowStateView {
   if (!loop) return view;
   const gate = loopDef ? gateForStatus(loopDef, loop.status) : undefined;
@@ -62,10 +60,10 @@ export function deriveLoopView(
     ...view,
     loop: {
       status: loop.status,
-      // §26 D42a — the DISPLAYED iteration is cumulative across the run's completed loops, so a resume into
-      // a successor loop (whose internal counter reset to 1) never reads as going backwards. The raw
-      // per-loop counter (loop.iteration) stays the orchestrator's; only this wire value is cumulative.
-      iteration: cumulativeIteration(completedLoops, loop.iteration),
+      // §26 D42a — iteration is a single MONOTONIC counter across the whole run (ai-deque parity): it is
+      // already the running total across every loop the run has passed through (a successor loop carries it
+      // forward, never resetting to 1), so the wire value is the raw counter — no cross-loop summation here.
+      iteration: loop.iteration,
       pr: loop.pr,
       branch: loop.branch,
       ready,
@@ -237,10 +235,6 @@ export type FlowReadLoopDef = (name: string) => LoopDef | null;
  *  yet. Called on every view so the strip shows the live last-recorded cost. */
 export type FlowReadLoopCost = () => string | null;
 
-/** §26 D42a — the loops this run has already completed (name + final iteration), the base for the
- *  cumulative displayed iteration. Called on every view so the displayed count reflects the live chain. */
-export type FlowReadLoopCompleted = () => CompletedLoop[];
-
 // Optional `store` (§19.1) persists every transition and restores on construction so a relaunch
 // resumes; without it the machine is in-memory only. Optional `onEnter` (§18.6) runs entry actions.
 export function createFlowMachine(
@@ -250,7 +244,6 @@ export function createFlowMachine(
   readLoop?: FlowReadLoop,
   readLoopDef?: FlowReadLoopDef,
   readLoopCost?: FlowReadLoopCost,
-  readLoopCompleted?: FlowReadLoopCompleted,
 ): FlowMachine {
   if (!load.ok) {
     const view = (): FlowStateView => ({
@@ -352,7 +345,7 @@ export function createFlowMachine(
     // §24.2.3 T2
     const mostRecentLoopStep = entered.reduce<FlowStepDef | undefined>((last, s) => (s.kind === 'loop' ? s : last), undefined);
     const loopDef = mostRecentLoopStep?.loop ? (readLoopDef?.(mostRecentLoopStep.loop) ?? null) : null;
-    return deriveLoopView(withRefs, liveLoop, loopDef, readLoopCost?.() ?? null, readLoopCompleted?.() ?? []);
+    return deriveLoopView(withRefs, liveLoop, loopDef, readLoopCost?.() ?? null);
   };
 
   const persist = (): void =>
@@ -471,9 +464,6 @@ export interface FlowManagerDeps {
   readLoopDef?: (repoKey: string, name: string) => LoopDef | null;
   /** The formatted §26.10 cost readout for a repo's loop, or null when none recorded; omitted → no cost. */
   readLoopCost?: (repoKey: string) => string | null;
-  /** §26 D42a — the loops a repo's chained run has completed, the base for the cumulative displayed
-   *  iteration; omitted → the displayed iteration is the raw per-loop counter (no chaining). */
-  readLoopCompleted?: (repoKey: string) => CompletedLoop[];
 }
 
 export function createFlowManager(deps: FlowManagerDeps): FlowManager {
@@ -498,7 +488,6 @@ export function createFlowManager(deps: FlowManagerDeps): FlowManager {
       deps.readLoopState ? () => deps.readLoopState!(repoKey) : undefined,
       deps.readLoopDef ? (name) => deps.readLoopDef!(repoKey, name) : undefined,
       deps.readLoopCost ? () => deps.readLoopCost!(repoKey) : undefined,
-      deps.readLoopCompleted ? () => deps.readLoopCompleted!(repoKey) : undefined,
     );
     cache.set(repoKey, { sig, machine });
     return machine;

@@ -119,6 +119,13 @@ export interface LoopDef {
   /** §26.6 — the `artifacts` slot map (id → `.agent-loop/`-relative `path_pattern`), the source that
    *  resolves an `exec` action's `{{artifact.<id>}}` placeholder to a real path. {} when the def omits it. */
   artifacts: Record<string, string>;
+  /** §26.3/D47a — the `.agent-loop/`-relative file the WORK turn must produce to be "done": the agent
+   *  verifies it on disk before signalling done, and the runner gates completion on it. `.agent-loop/plan.md`
+   *  for a loop that PRODUCES the plan (its `plan` artifact has a producer); `""` for a loop that CONSUMES
+   *  the plan as a pre-authored input (impl-loop) — that loop's work is code/commits, so its work turn
+   *  completes on the turn-done file alone. One definition, read by both the prompt recipe and the runner
+   *  gate, so the injected instruction and the completion check cannot desync (CLAUDE.md shared-semantics). */
+  workArtifact: string;
 }
 
 const SCHEMA_VERSION = '4';
@@ -336,6 +343,19 @@ function toArtifacts(doc: Record<string, unknown>): Record<string, string> {
   return out;
 }
 
+/** §26.3/D47a — derive the work turn's completion artifact from the `plan` artifact's PRODUCER: a loop that
+ *  produces the plan (`producer` non-empty) gates its work turn on that file; a loop that consumes the plan
+ *  as an external input (`producer: ""`, impl-loop) has no work-turn file deliverable → "". Keyed only off
+ *  the `plan` artifact so a scratch file the work agent also writes (impl-loop `notes.md`) is never mistaken
+ *  for the deliverable. "" on any missing / ill-typed / producer-less plan entry (never throws). */
+function toWorkArtifact(doc: Record<string, unknown>): string {
+  if (!Array.isArray(doc.artifacts)) return '';
+  const plan = doc.artifacts.find((a) => isRecord(a) && a.id === 'plan');
+  if (!isRecord(plan) || typeof plan.path_pattern !== 'string') return '';
+  if (typeof plan.producer !== 'string' || plan.producer.trim() === '') return '';
+  return path.join('.agent-loop', plan.path_pattern);
+}
+
 /** Resolve an `exec` action's `{{artifact.<id>}}` to an absolute path under `<repoDir>/.agent-loop/`
  *  (§26.6). Null when the id is unknown or its `path_pattern` (untrusted def config) escapes that dir
  *  (CWE-22 — same confinement as the `.agent-loop.yaml` loops override). Existence is the caller's concern. */
@@ -390,6 +410,7 @@ export function parseLoopDef(repoDir: string, name: string, configDir?: string):
   const verdicts = toVerdicts(doc);
   const resume = toResumeContract(doc);
   const artifacts = toArtifacts(doc);
+  const workArtifact = toWorkArtifact(doc);
   return {
     name: defName,
     gates,
@@ -397,6 +418,7 @@ export function parseLoopDef(repoDir: string, name: string, configDir?: string):
     rosters,
     defaultRosterId,
     artifacts,
+    workArtifact,
     ...(verdicts ? { verdicts } : {}),
     ...(pickup ? { pickup } : {}),
     ...(resume ? { resume } : {}),

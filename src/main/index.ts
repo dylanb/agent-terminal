@@ -319,8 +319,14 @@ async function createWindow(): Promise<void> {
   const artifactPresentFor = (turn: ActiveTurn): boolean => {
     if (turn.kind === 'reviewers') return allReviewsPresent(turn.repoDir, turn.iteration, turn.personas);
     if (turn.kind === 'consolidate') return consolidatedVerdict(turn.repoDir, turn.iteration) !== null;
+    // §26.3/D47a — the WORK turn's completion artifact comes from the loop (`def.workArtifact`), the SAME
+    // definition the injected instruction names, so the runner's gate and the agent's instruction can't
+    // desync. "" (impl-loop: work produces code, not a file) → no file gate; completion is the turn-done
+    // file alone (the runner still requires onDoneSignal). Non-empty (plan-loop) → the file must be present.
+    const rel = parseLoopDef(turn.repoDir, turn.loopName)?.workArtifact ?? '';
+    if (rel === '') return true;
     try {
-      return statSync(path.join(turn.repoDir, '.agent-loop', 'plan.md')).size > 0;
+      return statSync(path.join(turn.repoDir, rel)).size > 0;
     } catch {
       return false;
     }
@@ -357,6 +363,9 @@ async function createWindow(): Promise<void> {
         loopName: activeTurn.loopName,
         phase: activeTurn.phase,
         turnKey: activeTurn.turnKey,
+        // §26.3/D47a — the same `def.workArtifact` the runner's gate uses (artifactPresentFor), so the
+        // injected "verify before done" instruction and the completion check name the same file (or none).
+        workArtifact: parseLoopDef(activeTurn.repoDir, activeTurn.loopName)?.workArtifact ?? '',
         tokens: {
           ITERATION: String(s?.iteration ?? 1),
           PR_NUMBER: s?.pr != null ? String(s.pr) : '',
@@ -842,11 +851,10 @@ async function createWindow(): Promise<void> {
     const def = parseLoopDef(repoKey, step.loop);
     const prior = parseAgentLoopState(repoKey);
     if (!def || !prior) return;
-    // §26 D42a — the loop being left + the chain so far come from the engine-extension (loopStateReader),
-    // so the rebind records the completing loop and the displayed iteration stays cumulative.
-    const ext = readLoopExtension(repoKey);
+    // §26 D42a — the rebind carries the run identity and advances the MONOTONIC iteration (prior + 1), so the
+    // successor loop's reviews/<iter>/ never collide with the prior loop's and the displayed count climbs.
     const rebind = resumeRebindWrite(
-      { pr: prior.pr, branch: prior.branch, linkedIssues: prior.linkedIssues, iteration: prior.iteration, boundLoop: ext.boundLoop, completedLoops: ext.completedLoops },
+      { pr: prior.pr, branch: prior.branch, linkedIssues: prior.linkedIssues, iteration: prior.iteration },
       step.loop,
       def,
     );
@@ -876,9 +884,6 @@ async function createWindow(): Promise<void> {
       const c = readLoopExtension(repoKey).cost;
       return c ? formatCost(c) : null;
     },
-    // §26 D42a — the loops this run has completed, so the strip/panel show the CUMULATIVE iteration that
-    // climbs across a chained run rather than resetting to 1 when a successor loop begins.
-    readLoopCompleted: (repoKey) => readLoopExtension(repoKey).completedLoops,
   });
 
   // §24.2.3 T7 — resolve a ticket/PR's title/body/url for the popout, best-effort via `gh`, cached.

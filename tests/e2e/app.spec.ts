@@ -1821,9 +1821,13 @@ function seedFakeAgent(
     `    *turn-done:work-plan*) ${workAct} ;;\n` +
     `    *turn-done:review-plan*) ${reviewAct} ;;\n` +
     `    *turn-done:consolidate-plan*) ${consolidateAct} ;;\n` +
-    // §26 D42a — record that the IMPL loop's first work prompt reached the agent, so a resume --loop e2e can
-    // prove the rebound loop injected its own work turn (turnKey work-impl) after the actor-boundary /clear.
-    '    *turn-done:work-impl*) mkdir -p .agent-loop; printf x >> .agent-loop/impl-work-ran ;;\n' +
+    // §26 D42a — record that the IMPL loop's first work prompt reached the agent, then COMPLETE the turn by
+    // writing the turn-done file (the impl work turn produces code, not a plan.md deliverable, so completion
+    // is the turn-done file alone — §26.3/D47a). Completing advances the run to the impl reviewers turn.
+    `    *turn-done:work-impl*) mkdir -p .agent-loop; printf x >> .agent-loop/impl-work-ran; ${fileOnlySignal('work-impl')} ;;\n` +
+    // Record that the impl REVIEWERS prompt reached the agent — proof the impl work turn completed on the
+    // turn-done file and the run advanced into the impl loop's fan-out (turnKey review-impl).
+    '    *turn-done:review-impl*) mkdir -p .agent-loop; printf x >> .agent-loop/impl-review-ran ;;\n' +
     '  esac\n' +
     'done\n';
   writeFileSync(join(binDir, 'fake-agent'), script, { mode: 0o755 });
@@ -3328,8 +3332,9 @@ test('approve at the plan gate marks the PR ready and terminates the loop (§26.
 // §26 D42a — reaching a SUCCESS terminal (approve at the plan gate) auto-advances the flow into the next
 // step (Slice 1), and entering that `implement` loop step — which has no `bootstrap: pickup` — RESUMES the
 // existing run under impl-loop (Slice 2, `agent-loop resume --loop`): state.yaml is rebound to impl-loop at
-// its impl-draft entry status with the internal counters reset to a new-run baseline, but the SAME
-// PR/branch/issue carried, and the impl loop's first work turn is driven behind an actor-boundary /clear.
+// its impl-draft entry status with the per-loop internal counters reset to a new-run baseline — EXCEPT the
+// run's MONOTONIC iteration, which carries forward (plan's 1 → impl's 2) — but the SAME PR/branch/issue
+// carried, and the impl loop's first work turn is driven behind an actor-boundary /clear.
 test('approve at the plan gate auto-advances the flow and resumes into the impl loop (§26 D42a)', async () => {
   const repo = seedChainFlowRepo('agent-term-e2e-chain-advance-');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-chain-advance-home-'));
@@ -3348,24 +3353,31 @@ test('approve at the plan gate auto-advances the flow and resumes into the impl 
   await expect.poll(() => readFileSync(flowStateFile, 'utf8'), { timeout: 20_000 }).toContain('step: implement');
   await expect(page.locator('#flow-strip .stn.active .nm')).toHaveText('implement', { timeout: 10_000 });
 
-  // Slice 2 — entering the non-pickup implement step rebound the run to impl-loop at impl-draft, iteration
-  // reset to 1, carrying the plan run's PR/branch/issue (a resume, never a fresh pickup).
+  // Slice 2 — entering the non-pickup implement step rebound the run to impl-loop at impl-draft, carrying the
+  // plan run's PR/branch/issue (a resume, never a fresh pickup). §26 D42a — iteration is a single MONOTONIC
+  // counter across the whole run (ai-deque parity): the plan loop finished at iteration 1, so the impl loop
+  // continues at iteration 2, NOT reset to 1. That climb is what keeps impl's reviews/<iter>/ from colliding
+  // with the plan loop's (impl writes reviews/2/, not over reviews/1/).
   const stateFile = join(repo, '.agent-loop', 'state.yaml');
   await expect.poll(() => readFileSync(stateFile, 'utf8'), { timeout: 15_000 }).toContain('bound_loop: impl-loop');
   const stateText = readFileSync(stateFile, 'utf8');
   expect(stateText).toContain('status: impl-draft');
-  expect(stateText).toMatch(/^iteration: 1$/m); // impl's INTERNAL counter reset to 1
+  expect(stateText).toMatch(/^iteration: 2$/m); // monotonic: carried forward from the plan loop's 1, never reset
   expect(stateText).toContain('branch: plan-loop/issue-176'); // same branch — resume kept the plan PR
   expect(stateText).toMatch(/linked_issues:\s*\n\s*- 176/); // the plan run's issue carried, not reset
 
-  // Slice 4 — the DISPLAYED iteration is cumulative: plan finished at iteration 1, so the impl loop's own
-  // internal iteration 1 shows as "iter 2" on the strip (the count climbs, never resets to 1 visibly).
+  // The DISPLAYED iteration is the monotonic counter verbatim — the count climbs to "iter 2" and never
+  // resets to 1 when the successor loop begins.
   await expect(loopReadout()).toContainText('iter 2', { timeout: 10_000 });
 
   // The actor-boundary /clear fired (§26.3/D46), THEN the impl loop's OWN work prompt reached the agent
   // (turnKey work-impl) — the resumed loop drove its first work turn.
   await expect.poll(() => existsSync(join(repo, '.agent-loop', 'clear-seen')), { timeout: 10_000 }).toBe(true);
   await expect.poll(() => existsSync(join(repo, '.agent-loop', 'impl-work-ran')), { timeout: 15_000 }).toBe(true);
+  // The impl WORK turn completed on the turn-done file ALONE (§26.3/D47a — impl produces code, not a plan.md
+  // deliverable, so its completion is not gated on any .agent-loop artifact) and the run advanced into the
+  // impl loop's reviewer fan-out: the review-impl prompt reached the agent.
+  await expect.poll(() => existsSync(join(repo, '.agent-loop', 'impl-review-ran')), { timeout: 15_000 }).toBe(true);
   // Resume, not pickup: no new impl branch was created (the fake git/gh log carries no impl-loop branch).
   expect(readFileSync(logFile, 'utf8')).not.toContain('impl-loop/');
 

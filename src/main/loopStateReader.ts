@@ -9,7 +9,6 @@ import path from 'node:path';
 import yaml from 'js-yaml';
 import { isRecord } from './yamlRecord';
 import type { CostResult } from '../shared/pricing';
-import type { CompletedLoop } from '../shared/loopIteration';
 
 const STATE_REL = path.join('.agent-loop', 'state.yaml');
 
@@ -28,9 +27,6 @@ export interface LoopExtension {
   /** `bound_loop` (§26.11): which LoopDef governs the run — resume reads it to re-drive the right loop.
    *  "" when absent. */
   boundLoop: string;
-  /** `completed_loops` (§26 D42a): the loops a chained run has already finished (name + final iteration),
-   *  the base for the cumulative user-visible iteration. [] when absent; legacy/ill-typed entries dropped. */
-  completedLoops: CompletedLoop[];
   /** `epic.sub_issues` (§26.9): the sub-issue numbers epic-promote already created — a non-empty list
    *  means the epic was promoted, so a re-entered gate skips re-creating them (idempotency). [] when absent. */
   epic: { subIssues: number[] };
@@ -42,7 +38,6 @@ const DEFAULT_EXTENSION: LoopExtension = {
   personaState: {},
   cost: null,
   boundLoop: '',
-  completedLoops: [],
   epic: { subIssues: [] },
 };
 
@@ -84,11 +79,6 @@ export function readLoopExtension(repoDir: string): LoopExtension {
     personaState,
     cost,
     boundLoop: typeof doc.bound_loop === 'string' ? doc.bound_loop : '',
-    completedLoops: Array.isArray(doc.completed_loops)
-      ? doc.completed_loops.filter(
-          (c): c is CompletedLoop => isRecord(c) && typeof c.loop === 'string' && typeof c.iterations === 'number',
-        )
-      : [],
     epic: {
       subIssues:
         isRecord(doc.epic) && Array.isArray(doc.epic.sub_issues)

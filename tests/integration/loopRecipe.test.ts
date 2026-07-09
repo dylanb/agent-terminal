@@ -60,6 +60,46 @@ describe('work-{phase} recipe composition (§26.5/§26.3)', () => {
     });
     expect(out).toBeNull();
   });
+
+  // §26.3/D47a — the work turn's completion artifact is supplied by the caller (from `def.workArtifact`),
+  // never hardcoded. A loop that produces the plan passes `.agent-loop/plan.md`, so the appended done-signal
+  // instruction makes the agent re-read it before signalling done; a loop that consumes the plan as an input
+  // (impl-loop) passes no artifact, so the instruction names none — completion is the turn-done file alone.
+  // The unique signature of the APPENDED artifact-verify clause (loopTurn doneSignalInstruction), distinct
+  // from any "re-read"/"plan.md" the template body itself uses (the impl template names plan.md as its input).
+  const VERIFY_CLAUSE = 'confirm your output artifact actually landed on disk';
+
+  it('appends the artifact-verify clause when the caller names a work artifact (plan-producing loop)', () => {
+    const out = composeWorkPrompt({
+      repoDir: repo,
+      loopName: 'plan-loop',
+      phase: 'plan',
+      turnKey: 'work-plan',
+      tokens: { PLAN_LINE_THRESHOLD: '1000' },
+      workArtifact: join('.agent-loop', 'plan.md'),
+      configDir,
+    });
+    expect(out).toContain(VERIFY_CLAUSE); // verify plan.md on disk before the done-signal
+    expect(out).toContain(`re-read ${join('.agent-loop', 'plan.md')}`); // the artifact to re-read is named
+  });
+
+  it('appends NO artifact-verify clause when the caller supplies none (plan-consuming loop)', () => {
+    // impl-loop: the work turn produces code/commits, not an .agent-loop file — its completion is the
+    // turn-done file alone, so the done-signal instruction must not tell the agent to verify a deliverable
+    // (plan.md is a read-only INPUT here, which the template legitimately references — hence keying off the
+    // appended clause's unique phrase, not a bare "plan.md" or "re-read").
+    const out = composeWorkPrompt({
+      repoDir: repo,
+      loopName: 'impl-loop',
+      phase: 'impl',
+      turnKey: 'work-impl',
+      tokens: {},
+      configDir,
+    });
+    expect(out).not.toBeNull();
+    expect(out).toContain('turn-done:work-impl'); // still carries the done-signal instruction
+    expect(out).not.toContain(VERIFY_CLAUSE); // but no artifact-verify clause is appended
+  });
 });
 
 // §26.4 — the reviewer fan-out is ONE prompt composed by main (no template file), naming each persona

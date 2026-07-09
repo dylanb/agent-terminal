@@ -18,6 +18,10 @@ export interface WorkPromptRequest {
   turnKey: string;
   /** `{{TOKEN}}` → value substitutions resolved by the host from state + LoopDef config bindings. */
   tokens: Record<string, string>;
+  /** §26.3/D47a — the `.agent-loop/`-relative file the work turn must produce (from `def.workArtifact`): the
+   *  agent is told to verify it on disk before signalling done. Omitted/empty for a loop whose work turn
+   *  produces no file deliverable (impl-loop) — completion is then the turn-done file alone. */
+  workArtifact?: string;
   configDir?: string;
 }
 
@@ -59,9 +63,10 @@ export function composeWorkPrompt(req: WorkPromptRequest): string | null {
     req.tokens,
     req.turnKey,
     req.configDir,
-    // The work turn's completion artifact the orchestrator checks (§26.3): the agent verifies it on disk
-    // before signalling done, so a plan that was never written cannot be reported complete.
-    path.join('.agent-loop', 'plan.md'),
+    // §26.3/D47a — the work turn's completion artifact (from `def.workArtifact`, resolved by the host): the
+    // agent verifies it on disk before signalling done. Empty for a loop with no work-turn file deliverable
+    // (impl-loop) → the instruction names none and the turn completes on the turn-done file alone.
+    req.workArtifact || undefined,
   );
 }
 

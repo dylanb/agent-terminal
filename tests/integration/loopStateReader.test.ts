@@ -107,21 +107,6 @@ describe('loop state.yaml extension reader (§26.6)', () => {
     expect(readLoopExtension(repo).epic).toEqual({ subIssues: [] });
   });
 
-  // §26 D42a — the loops a chained run has completed (name + final iteration), the base for the cumulative
-  // user-visible iteration; recorded when the run is rebound to a successor loop (resume --loop).
-  it('reads completed_loops back as written (§26 D42a cumulative iteration)', () => {
-    write({ status: 'impl-draft', iteration: 1, completed_loops: [{ loop: 'plan-loop', iterations: 3 }] });
-    expect(readLoopExtension(repo).completedLoops).toEqual([{ loop: 'plan-loop', iterations: 3 }]);
-  });
-
-  it('defaults completed_loops to [] when absent, dropping entries missing a loop name or iteration count', () => {
-    write({ status: 'plan-draft', iteration: 1 });
-    expect(readLoopExtension(repo).completedLoops).toEqual([]);
-    // A legacy/foreign shape (bare strings, half-populated entries) is dropped — only well-formed entries count.
-    write({ status: 'plan-draft', iteration: 1, completed_loops: ['legacy', { loop: 'x' }, { iterations: 2 }, { loop: 'plan-loop', iterations: 3 }] });
-    expect(readLoopExtension(repo).completedLoops).toEqual([{ loop: 'plan-loop', iterations: 3 }]);
-  });
-
   it('defaults to a safe extension for a missing or unreadable state.yaml (never throws)', () => {
     rmSync(join(repo, '.agent-loop'), { recursive: true, force: true });
     expect(readLoopExtension(repo)).toEqual({
@@ -130,7 +115,6 @@ describe('loop state.yaml extension reader (§26.6)', () => {
       personaState: {},
       cost: null,
       boundLoop: '',
-      completedLoops: [],
       epic: { subIssues: [] },
     });
   });

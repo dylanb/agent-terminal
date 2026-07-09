@@ -11,7 +11,6 @@ import path from 'node:path';
 import yaml from 'js-yaml';
 import { isRecord } from './yamlRecord';
 import type { CostResult } from '../shared/pricing';
-import type { CompletedLoop } from '../shared/loopIteration';
 
 /** The state the orchestrator persists. The L1 bootstrap supplies the read set (§24.2.3) plus the
  *  bound LoopDef; later slices supply the rest of the §26.6 surface, which defaults here until then. */
@@ -47,10 +46,6 @@ export interface LoopStateWrite {
   /** §26.9 epic-promote — the sub-issues created when a plan classified epic was approved. Serialized as
    *  `epic.sub_issues`. Absent → the prior doc's `epic` is preserved by the merge. */
   epic?: { subIssues: number[] };
-  /** §26 D42a — the chain of loops this run has completed (name + final iteration), written OVER the
-   *  merged/default `completed_loops` so a resume --loop rebind can record the loop it succeeded. Absent →
-   *  the field keeps its preserved (or default []) value. */
-  completedLoops?: CompletedLoop[];
   /** §26 D42a (resume --loop) — SKIP the prior-doc merge and lay the LoopExtension defaults instead, so a
    *  run rebound to a NEW loop starts fresh (iteration/phase2/persona_state/impasse/severity_cycle reset to
    *  a new-run baseline) rather than inheriting the loop it succeeded. The read set passed in this write
@@ -74,7 +69,6 @@ function defaultExtension(): Record<string, unknown> {
     resume_mid_iter: 0,
     auto_chain: true,
     human_notes: [],
-    completed_loops: [],
     terminated: false,
   };
 }
@@ -141,11 +135,6 @@ export function writeLoopState(repoDir: string, state: LoopStateWrite, now: () =
   }
   if (state.epic !== undefined) {
     doc.epic = { sub_issues: state.epic.subIssues };
-  }
-  // §26 D42a — the CompletedLoop shape ({loop, iterations}) is already the on-disk shape, so it serializes
-  // directly. Layered above the merge/default so a resume --loop rebind's recorded chain wins.
-  if (state.completedLoops !== undefined) {
-    doc.completed_loops = state.completedLoops.map((c) => ({ loop: c.loop, iterations: c.iterations }));
   }
 
   const tmp = `${file}.tmp`;
