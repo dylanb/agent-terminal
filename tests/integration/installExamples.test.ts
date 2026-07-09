@@ -8,6 +8,7 @@ import {
   existsSync,
   rmSync,
   symlinkSync,
+  chmodSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -28,7 +29,9 @@ import { SESSION_ID } from '../../src/shared/ipc';
 // never on how the installer walks the tree.
 
 const BUNDLE = path.resolve('example', 'flow');
-const TEMPLATE_COUNT = readdirSync(path.join(BUNDLE, 'todo-templates')).filter((f) => f.endsWith('.md')).length;
+// Count every file installSet() would copy, not just *.md — otherwise a future non-.md bundle file would
+// fail these counts though the installer is unchanged.
+const TEMPLATE_COUNT = readdirSync(path.join(BUNDLE, 'todo-templates'), { withFileTypes: true }).filter((e) => e.isFile()).length;
 const FILE_COUNT = TEMPLATE_COUNT + 1; // flow.yaml + every template
 
 let home: string;
@@ -206,6 +209,30 @@ describe('applyInstallExamples — a refused write is an error, never a silent s
     expect(res.error).toBeTruthy();
     expect(existsSync(path.join(real, 'todo-templates'))).toBe(false); // no nested write escaped into the symlink target
   });
+});
+
+describe('applyInstallExamples — an existing-but-unreadable target is not mistaken for absent', () => {
+  const asRoot = typeof process.getuid === 'function' && process.getuid() === 0;
+  // A traverse/read-permission failure cannot be provoked as root (it bypasses the mode bits), so gate
+  // rather than widen a seam into classify (CLAUDE.md it.skipIf guidance).
+  it.skipIf(asRoot)(
+    'does not silently overwrite a present target it cannot read (EACCES is not absence — non-destructive contract)',
+    () => {
+      mkdirSync(targetDir, { recursive: true });
+      const tf = targetOf(flowRel);
+      const custom = 'name: my-custom-flow\nsteps: []\n';
+      writeFileSync(tf, custom);
+      chmodSync(tf, 0o000); // present but unreadable → readFileSync throws EACCES, not ENOENT
+      let res: ReturnType<typeof applyInstallExamples> | undefined;
+      try {
+        res = applyInstallExamples(BUNDLE, targetDir, false); // declining overwrite
+      } finally {
+        chmodSync(tf, 0o600); // restore so the assertion + afterEach can read/remove it
+      }
+      expect(res?.ok).toBe(false); // must not classify a present-but-unreadable target as 'create' and overwrite it
+      expect(readFileSync(tf, 'utf8')).toBe(custom); // left byte-for-byte unchanged
+    },
+  );
 });
 
 describe('applyInstallExamples — a missing bundled file is a reported error, not a thrown reject', () => {

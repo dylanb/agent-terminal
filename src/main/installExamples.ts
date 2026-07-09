@@ -35,8 +35,11 @@ function classify(bundleFile: string, targetFile: string): Classification {
   let target: Buffer;
   try {
     target = readFileSync(targetFile);
-  } catch {
-    return 'create';
+  } catch (e) {
+    // Only absence means "create"; an existing-but-unreadable target (EACCES, …) must not be silently
+    // overwritten — let it propagate to a reported error, preserving the non-destructive contract.
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return 'create';
+    throw e;
   }
   return readFileSync(bundleFile).equals(target) ? 'identical' : 'differ';
 }
