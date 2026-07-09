@@ -1,11 +1,8 @@
-// Install-examples VIEW organism (§18.1/§23.4 / UI-STANDARDS): a single Install action that seeds the
-// bundled feature-dev flow into the global flow home. Non-destructive — a read-only preview drives an
-// up-front overwrite prompt (the blocking-dialog pattern via createModalShell, UI §5) only when a target
-// exists and differs; otherwise it installs without prompting. Built from the host document so it stays
-// relocatable; signals out only through the injected contract.
+// Install-examples VIEW organism — §18.1/§23.4; blocking-dialog pattern per UI-STANDARDS §5.
 
 import type { InstallExamplesPreview, InstallExamplesResult } from '../../shared/ipc';
 import { createModalShell } from './modalShell';
+import { captureFocusReturn } from './dom';
 
 export interface InstallExamplesDeps {
   preview(): Promise<InstallExamplesPreview>;
@@ -83,11 +80,7 @@ export function createInstallExamples(host: HTMLElement, deps: InstallExamplesDe
     btn.disabled = v;
   }
 
-  function restoreFocus(hadFocus: boolean): void {
-    if (hadFocus && (doc.activeElement === doc.body || doc.activeElement === btn)) btn.focus();
-  }
-
-  async function install(overwrite: boolean, hadFocus: boolean): Promise<void> {
+  async function install(overwrite: boolean, returnFocus: () => void): Promise<void> {
     setBusy(true);
     showStatus('cli-status', 'Installing…');
     try {
@@ -98,11 +91,11 @@ export function createInstallExamples(host: HTMLElement, deps: InstallExamplesDe
       showError(e instanceof Error ? e.message : 'Install failed.');
     } finally {
       setBusy(false);
-      restoreFocus(hadFocus);
+      returnFocus();
     }
   }
 
-  function promptOverwrite(count: number, hadFocus: boolean): void {
+  function promptOverwrite(count: number, returnFocus: () => void): void {
     modal.render(({ doc: d, titleId, close }) => {
       const describedById = `${titleId}-msg`;
       const cardEl = d.createElement('div');
@@ -124,14 +117,14 @@ export function createInstallExamples(host: HTMLElement, deps: InstallExamplesDe
       keep.textContent = 'Keep mine';
       keep.addEventListener('click', () => {
         close();
-        void install(false, hadFocus);
+        void install(false, returnFocus);
       });
       const overwrite = d.createElement('button');
       overwrite.className = 'pill danger overwrite';
       overwrite.textContent = 'Overwrite';
       overwrite.addEventListener('click', () => {
         close();
-        void install(true, hadFocus);
+        void install(true, returnFocus);
       });
       foot.append(keep, overwrite);
       cardEl.append(foot);
@@ -142,7 +135,7 @@ export function createInstallExamples(host: HTMLElement, deps: InstallExamplesDe
 
   async function run(): Promise<void> {
     if (busy) return;
-    const hadFocus = doc.activeElement === btn;
+    const returnFocus = captureFocusReturn(btn);
     setBusy(true);
     showStatus('cli-status', 'Checking…');
     let conflicts: string[];
@@ -151,15 +144,15 @@ export function createInstallExamples(host: HTMLElement, deps: InstallExamplesDe
     } catch (e) {
       showError(e instanceof Error ? e.message : 'Install failed.');
       setBusy(false);
-      restoreFocus(hadFocus);
+      returnFocus();
       return;
     }
     if (conflicts.length === 0) {
-      await install(false, hadFocus);
+      await install(false, returnFocus);
       return;
     }
     setBusy(false);
-    promptOverwrite(conflicts.length, hadFocus);
+    promptOverwrite(conflicts.length, returnFocus);
   }
 
   btn.addEventListener('click', () => void run());

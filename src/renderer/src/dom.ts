@@ -2,6 +2,18 @@
 // real interface between index.html, the CSS, and the wiring code. Failing loud and naming the id
 // beats `getElementById(id)!` assertions that defer the failure to a later null-deref.
 
+/** Capture whether `el` holds focus now and return a restorer for after an async action that may
+ *  disable `el`. The restorer returns focus to `el` only if `el` had focus at capture AND focus has
+ *  not since moved away — it is still on `el`, or was blurred to `<body>` by the disable — so it never
+ *  steals focus the user redirected mid-action (WCAG 2.4.3). */
+export function captureFocusReturn(el: HTMLElement): () => void {
+  const doc = el.ownerDocument;
+  const hadFocus = doc.activeElement === el;
+  return () => {
+    if (hadFocus && (doc.activeElement === doc.body || doc.activeElement === el)) el.focus();
+  };
+}
+
 /** Look up a required element by id; throw naming the id if it is absent. */
 export function requireElement<T extends HTMLElement = HTMLElement>(id: string, doc: Document = document): T {
   const el = doc.getElementById(id);

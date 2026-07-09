@@ -101,6 +101,28 @@ describe('install examples view organism (§18.1/§23.4)', () => {
     expect(text).toContain('todo-templates/b.md');
   });
 
+  it('returns focus to the install button after opting into the overwrite prompt (WCAG 2.4.3)', async () => {
+    const apply = vi.fn(async () => okResult({ created: [], overwritten: ['flow.yaml'] }));
+    createInstallExamples(host, deps({ preview: vi.fn(async () => ({ conflicts: ['flow.yaml'] })), apply }));
+    button().focus();
+    button().click();
+    await vi.waitFor(() => expect(overwriteBtn()).toBeTruthy());
+    overwriteBtn().click();
+    await vi.waitFor(() => expect(status().className).toMatch(/\bok\b/));
+    expect(host.ownerDocument.activeElement).toBe(button());
+  });
+
+  it('returns focus to the install button after declining the overwrite prompt (WCAG 2.4.3)', async () => {
+    const apply = vi.fn(async () => okResult({ created: ['todo-templates/a.md'], skipped: ['flow.yaml'] }));
+    createInstallExamples(host, deps({ preview: vi.fn(async () => ({ conflicts: ['flow.yaml'] })), apply }));
+    button().focus();
+    button().click();
+    await vi.waitFor(() => expect(keepBtn()).toBeTruthy());
+    keepBtn().click();
+    await vi.waitFor(() => expect(status().className).toMatch(/\bok\b/));
+    expect(host.ownerDocument.activeElement).toBe(button());
+  });
+
   it('does not yank focus back to the button if the user moved focus away during install (WCAG 2.4.3)', async () => {
     let resolveApply: (r: InstallExamplesResult) => void = () => {};
     const apply = vi.fn(() => new Promise<InstallExamplesResult>((r) => { resolveApply = r; }));
