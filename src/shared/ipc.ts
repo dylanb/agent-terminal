@@ -60,6 +60,8 @@ export const CH = {
   todoTemplateList: 'todoTemplate:list',
   todoTemplateInstantiate: 'todoTemplate:instantiate',
   cliInstall: 'cli:install',
+  installExamplesPreview: 'examples:preview',
+  installExamplesApply: 'examples:apply',
 } as const;
 
 /** Action-window tabs (§16.1). */
@@ -695,6 +697,35 @@ export type CliInstallResult =
   | { ok: true; path: string }
   | { ok: false; error: string };
 
+// ---- Install bundled examples (§18.1/§23.4) ----
+
+/** examples:preview request (§6): report which bundled files would conflict (exist and differ from
+ *  the bundled content), driving the up-front overwrite prompt. Carries only sessionId — the bundle
+ *  source and install target are computed by main from the running build. */
+export interface InstallExamplesPreviewMsg {
+  sessionId: SessionId;
+}
+
+/** examples:preview result: the install-set entries that already exist and differ from the bundle.
+ *  Empty when the flow home is clean or every present target is byte-identical (§18.1). */
+export interface InstallExamplesPreview {
+  conflicts: string[];
+}
+
+/** examples:apply request (§6): install the bundled flow into the global flow home. `overwrite`
+ *  governs ONLY targets that exist and differ; absent targets are always created regardless (§18.1). */
+export interface InstallExamplesApplyMsg {
+  sessionId: SessionId;
+  overwrite: boolean;
+}
+
+/** examples:apply result: `ok` with the entries created / overwritten / skipped, or `!ok` with a
+ *  human-readable `error`. A write the safe-path primitive refuses (symlinked container, CWE-59) is an
+ *  `error`, never a silent skip — `skipped` means "left unchanged per the overwrite decision". */
+export type InstallExamplesResult =
+  | { ok: true; created: string[]; overwritten: string[]; skipped: string[] }
+  | { ok: false; error: string };
+
 // ---- Preload-exposed API surfaces (§6) ----
 
 /** Host OS, exposed to the renderer so it can resolve the `auto` keymap profile (§7.7). */
@@ -835,6 +866,14 @@ export interface CliApi {
   install(): Promise<CliInstallResult>;
 }
 
+/** Install bundled examples (§18.1/§23.4): the settings organism's only seam to the install action.
+ *  A non-destructive `preview` (which targets conflict) drives the up-front overwrite prompt; `apply`
+ *  writes per the decision and reports the created/overwritten/skipped sets or a human-readable error. */
+export interface ExamplesApi {
+  preview(): Promise<InstallExamplesPreview>;
+  apply(overwrite: boolean): Promise<InstallExamplesResult>;
+}
+
 declare global {
   interface Window {
     term: TermApi;
@@ -842,5 +881,6 @@ declare global {
     viewer: ViewerApi;
     flow: FlowApi;
     cli: CliApi;
+    examples: ExamplesApi;
   }
 }

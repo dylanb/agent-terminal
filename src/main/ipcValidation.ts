@@ -11,6 +11,8 @@ import {
   type CaptureCommandMsg,
   type CaptureLastMsg,
   type CliInstallMsg,
+  type InstallExamplesPreviewMsg,
+  type InstallExamplesApplyMsg,
   type ClearCommandsMsg,
   type CommandsRequestMsg,
   type DismissAllMsg,
@@ -93,6 +95,17 @@ export function isValidCaptureLast(m: unknown): m is CaptureLastMsg {
 
 export function isValidCliInstall(m: unknown): m is CliInstallMsg {
   return isRecord(m) && isLiveSession(m);
+}
+
+/** examples:preview (§6) — a live-session request; no other payload (the bundle + target are
+ *  computed by main from the running build). */
+export function isValidInstallExamplesPreview(m: unknown): m is InstallExamplesPreviewMsg {
+  return false;
+}
+
+/** examples:apply (§6) — a live-session request carrying the boolean overwrite decision. */
+export function isValidInstallExamplesApply(m: unknown): m is InstallExamplesApplyMsg {
+  return false;
 }
 
 export function isValidDismiss(m: unknown): m is DismissMsg {
