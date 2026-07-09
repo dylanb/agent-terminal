@@ -14,7 +14,7 @@
   "scripts": {
     "rebuild": "electron-rebuild -f -w node-pty",
     "gen-icon": "node scripts/gen-icon.mjs",
-    "postinstall": "electron-rebuild -f -w node-pty && bash scripts/sign-bundle.sh",
+    "postinstall": "electron-rebuild -f -w node-pty && node scripts/postinstall-sign.mjs",
     "dev": "electron-vite dev",
     "build": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json && electron-vite build",
     "start": "electron-vite preview",

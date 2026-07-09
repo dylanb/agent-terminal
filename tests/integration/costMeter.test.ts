@@ -99,6 +99,19 @@ describe('session-log token recovery (§26.10)', () => {
     expect(readSessionTokens(dir)[0].input).toBe(111);
   });
 
+  // The billing identity is message.id AND requestId. A turn missing requestId is only half-identified, so
+  // it must NOT collapse onto another turn that happens to share its message.id — that would hide real spend.
+  it('a turn missing requestId is unidentifiable, not collapsed onto a message.id twin', () => {
+    writeFileSync(
+      join(dir, 'session.jsonl'),
+      [
+        JSON.stringify({ message: { id: 'msg_1', model: 'claude-sonnet-5', usage: { input_tokens: 5 } } }),
+        JSON.stringify({ message: { id: 'msg_1', model: 'claude-sonnet-5', usage: { input_tokens: 50 } } }),
+      ].join('\n'),
+    );
+    expect(readSessionTokens(dir)[0].input).toBe(55);
+  });
+
   it('an unidentifiable turn (no message.id) is still counted', () => {
     writeFileSync(
       join(dir, 'session.jsonl'),

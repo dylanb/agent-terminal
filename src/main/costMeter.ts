@@ -51,7 +51,10 @@ function extractTurn(obj: unknown): SessionTurn | null {
   const m = message as { model?: unknown; usage?: unknown; id?: unknown };
   if (typeof m.model !== 'string' || m.usage === null || typeof m.usage !== 'object') return null;
   const u = m.usage as Record<string, unknown>;
+  // The billing identity is BOTH message.id and requestId; a turn missing either is only half-identified
+  // and stays uncollapsible (null) rather than deduping on the half it has (which would hide real spend).
   const msgId = str(m.id);
+  const reqId = str(line.requestId);
   return {
     model: m.model,
     input: num(u.input_tokens),
@@ -59,7 +62,7 @@ function extractTurn(obj: unknown): SessionTurn | null {
     cacheRead: num(u.cache_read_input_tokens),
     output: num(u.output_tokens),
     at: Date.parse(typeof line.timestamp === 'string' ? line.timestamp : ''),
-    id: msgId === null ? null : `${msgId}\x00${str(line.requestId) ?? ''}`,
+    id: msgId === null || reqId === null ? null : `${msgId}\x00${reqId}`,
   };
 }
 

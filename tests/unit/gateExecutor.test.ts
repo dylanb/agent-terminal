@@ -143,6 +143,18 @@ describe('executeGateOutcome (§26.6 / L5)', () => {
     expect(h.writeFailures[0]).toContain('disk full');
   });
 
+  it('surfaces a non-Error write failure as a non-empty reason (never a bare "undefined", §26.6/D48)', async () => {
+    const h = harness({
+      writeState: () => {
+        // A throw that is not an Error instance — `(e as Error).message` would be undefined.
+        throw 'ENOSPC: no space left on device';
+      },
+    });
+    await expect(executeGateOutcome(requestChangesOutcome, CTX, h.deps)).resolves.toBeUndefined();
+    expect(h.writeFailures).toHaveLength(1);
+    expect(h.writeFailures[0]).toContain('ENOSPC');
+  });
+
   it('does not mark a PR ready when there is no PR number', async () => {
     const h = harness();
     await executeGateOutcome(approveOutcome, { ...CTX, pr: null }, h.deps);

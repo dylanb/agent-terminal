@@ -37,6 +37,21 @@ const run = (app: string, bundleId: string): void => {
   execFileSync('/bin/bash', [SCRIPT, app, bundleId], { encoding: 'utf8' });
 };
 
+// The signing is darwin-only, but `postinstall` runs on EVERY platform's install. Invoking `bash` there
+// unconditionally makes a non-mac `pnpm install` fail before the script's own platform guard can run, on
+// any environment lacking bash. The install step must therefore never invoke bash unconditionally — the
+// darwin gate belongs in node (always present in postinstall), not in the shell script it would launch.
+describe('postinstall never requires bash off darwin (§24.2.3 T4 portability)', () => {
+  it('gates the sign-bundle invocation in node, not behind a bare bash call', () => {
+    const pkg = JSON.parse(readFileSync(join(__dirname, '../../package.json'), 'utf8')) as {
+      scripts: Record<string, string>;
+    };
+    const postinstall = pkg.scripts.postinstall;
+    expect(postinstall).not.toMatch(/(^|&&|;|\|)\s*bash\b/);
+    expect(postinstall).toContain('node scripts/postinstall-sign.mjs');
+  });
+});
+
 describe.skipIf(!darwin)('ad-hoc bundle signing so macOS will deliver notifications (§24.2.3 T4)', () => {
   let dir: string;
   beforeEach(() => {

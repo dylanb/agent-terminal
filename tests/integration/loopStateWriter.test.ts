@@ -251,10 +251,11 @@ describe('loop state.yaml writer (§26.6)', () => {
 
   it('freshExtension resets the internal loop state to defaults while carrying the passed read set (§26 D42a resume --loop)', () => {
     // A resume-into-a-new-loop (§26 D42a) rebinds an existing run to a new loop def that starts FRESH: its
-    // internal counters (iteration, phase2, persona footprints, impasse tracking, severity cycle) reset to
-    // a new-run baseline, but the carried PR/branch/linked-issues (passed in the write) persist so the new
-    // loop keeps working the same PR. The normal merge would inherit the PRIOR loop's internal state, so
-    // freshExtension skips the prior-doc merge and lays the LoopExtension defaults instead.
+    // per-loop extension fields (phase2, persona footprints, impasse tracking, severity cycle) reset to a
+    // new-run baseline. `iteration` is NOT among them — the caller sets it (monotonic across the chain,
+    // prior+1 on resume --loop; this test passes 1). The carried PR/branch/linked-issues (passed in the
+    // write) persist so the new loop keeps working the same PR. The normal merge would inherit the PRIOR
+    // loop's internal state, so freshExtension skips the prior-doc merge and lays the LoopExtension defaults.
     const seeded = {
       schema_version: 4,
       pr: 50,
@@ -279,7 +280,7 @@ describe('loop state.yaml writer (§26.6)', () => {
     );
 
     const doc = yaml.load(readFileSync(join(repo, '.agent-loop', 'state.yaml'), 'utf8')) as Record<string, unknown>;
-    // Rebound to the new loop at its entry status, iteration reset to 1.
+    // Rebound to the new loop at its entry status; iteration is the caller-passed value (1 here).
     expect(doc.bound_loop).toBe('impl-loop');
     expect(doc.status).toBe('impl-draft');
     expect(doc.iteration).toBe(1);

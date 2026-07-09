@@ -127,7 +127,7 @@ export async function executeGateOutcome(
     // never surface as an unhandled rejection in main (the `void` call site cannot catch it, §26.11). But
     // it must not be SILENT (§26.6/D48): report it so the host raises the error dialog + records the audit,
     // otherwise the loop sits stranded with no trace.
-    deps.onWriteFailed((e as Error).message);
+    deps.onWriteFailed(e instanceof Error ? e.message : String(e));
     return;
   }
 
