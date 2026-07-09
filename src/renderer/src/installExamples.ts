@@ -16,8 +16,12 @@ export interface InstallExamples {
   dispose(): void;
 }
 
+function report(label: string, files: string[]): string {
+  return files.length === 0 ? `${label} none` : `${label} ${files.length} (${files.join(', ')})`;
+}
+
 function resultMessage(res: Extract<InstallExamplesResult, { ok: true }>): string {
-  return `Installed examples — created ${res.created.length}, overwrote ${res.overwritten.length}, skipped ${res.skipped.length}.`;
+  return `Installed examples — ${report('created', res.created)}, ${report('overwrote', res.overwritten)}, ${report('skipped', res.skipped)}.`;
 }
 
 export function createInstallExamples(host: HTMLElement, deps: InstallExamplesDeps): InstallExamples {
@@ -79,9 +83,12 @@ export function createInstallExamples(host: HTMLElement, deps: InstallExamplesDe
     btn.disabled = v;
   }
 
-  async function install(overwrite: boolean): Promise<void> {
+  function restoreFocus(hadFocus: boolean): void {
+    if (hadFocus && (doc.activeElement === doc.body || doc.activeElement === btn)) btn.focus();
+  }
+
+  async function install(overwrite: boolean, hadFocus: boolean): Promise<void> {
     setBusy(true);
-    const hadFocus = doc.activeElement === btn;
     showStatus('cli-status', 'Installing…');
     try {
       const res = await deps.apply(overwrite);
@@ -91,11 +98,11 @@ export function createInstallExamples(host: HTMLElement, deps: InstallExamplesDe
       showError(e instanceof Error ? e.message : 'Install failed.');
     } finally {
       setBusy(false);
-      if (hadFocus && (doc.activeElement === doc.body || doc.activeElement === btn)) btn.focus();
+      restoreFocus(hadFocus);
     }
   }
 
-  function promptOverwrite(count: number): void {
+  function promptOverwrite(count: number, hadFocus: boolean): void {
     modal.render(({ doc: d, titleId, close }) => {
       const describedById = `${titleId}-msg`;
       const cardEl = d.createElement('div');
@@ -117,14 +124,14 @@ export function createInstallExamples(host: HTMLElement, deps: InstallExamplesDe
       keep.textContent = 'Keep mine';
       keep.addEventListener('click', () => {
         close();
-        void install(false);
+        void install(false, hadFocus);
       });
       const overwrite = d.createElement('button');
       overwrite.className = 'pill danger overwrite';
       overwrite.textContent = 'Overwrite';
       overwrite.addEventListener('click', () => {
         close();
-        void install(true);
+        void install(true, hadFocus);
       });
       foot.append(keep, overwrite);
       cardEl.append(foot);
@@ -135,6 +142,7 @@ export function createInstallExamples(host: HTMLElement, deps: InstallExamplesDe
 
   async function run(): Promise<void> {
     if (busy) return;
+    const hadFocus = doc.activeElement === btn;
     setBusy(true);
     showStatus('cli-status', 'Checking…');
     let conflicts: string[];
@@ -143,16 +151,15 @@ export function createInstallExamples(host: HTMLElement, deps: InstallExamplesDe
     } catch (e) {
       showError(e instanceof Error ? e.message : 'Install failed.');
       setBusy(false);
+      restoreFocus(hadFocus);
       return;
     }
     if (conflicts.length === 0) {
-      await install(false);
+      await install(false, hadFocus);
       return;
     }
-    // Hand off to the modal; re-enable so dismissing the prompt (Escape/scrim) never strands the
-    // control. The modal's scrim blocks a second click while the prompt is open.
     setBusy(false);
-    promptOverwrite(conflicts.length);
+    promptOverwrite(conflicts.length, hadFocus);
   }
 
   btn.addEventListener('click', () => void run());
