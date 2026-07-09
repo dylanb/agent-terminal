@@ -31,6 +31,7 @@ describe('install examples view organism (§18.1/§23.4)', () => {
   const prompt = (): HTMLElement | null => host.querySelector('.flow-modal');
   const overwriteBtn = (): HTMLButtonElement => host.querySelector('.flow-modal button.overwrite') as HTMLButtonElement;
   const keepBtn = (): HTMLButtonElement => host.querySelector('.flow-modal button.keep') as HTMLButtonElement;
+  const scrim = (): HTMLElement => host.querySelector('.flow-scrim') as HTMLElement;
 
   it('renders an install button, a status live region, and an assertive alert region', () => {
     createInstallExamples(host, deps());
@@ -139,6 +140,29 @@ describe('install examples view organism (§18.1/§23.4)', () => {
     button().click();
     expect(preview).toHaveBeenCalledTimes(1);
     resolvePreview({ conflicts: [] });
+  });
+
+  it('keeps the install button enabled while the overwrite prompt is open so a scrim dismissal cannot strand it disabled', async () => {
+    const apply = vi.fn(async () => okResult());
+    createInstallExamples(host, deps({ preview: vi.fn(async () => ({ conflicts: ['flow.yaml'] })), apply }));
+    button().click();
+    await vi.waitFor(() => expect(prompt()).not.toBeNull());
+    expect(button().disabled).toBe(false);
+    scrim().click();
+    expect(prompt()).toBeNull();
+    expect(button().disabled).toBe(false);
+    expect(apply).not.toHaveBeenCalled();
+  });
+
+  it('keeps the install button enabled when the overwrite prompt is dismissed with Escape without a choice', async () => {
+    const apply = vi.fn(async () => okResult());
+    createInstallExamples(host, deps({ preview: vi.fn(async () => ({ conflicts: ['flow.yaml'] })), apply }));
+    button().click();
+    await vi.waitFor(() => expect(prompt()).not.toBeNull());
+    prompt()!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    expect(prompt()).toBeNull();
+    expect(button().disabled).toBe(false);
+    expect(apply).not.toHaveBeenCalled();
   });
 
   it('re-enables the install button after a run completes so a retry is possible', async () => {
