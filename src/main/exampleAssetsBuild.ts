@@ -6,8 +6,6 @@ import { copyFileSync, mkdirSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { resolveExampleFlowDir } from './exampleAssets';
 
-// copyFileSync overwrites in place; a rerun over the Podman e2e mount cannot re-stat pre-existing
-// dirs, so directories are never recreated.
 function copyTree(src: string, dest: string): void {
   mkdirSync(dest, { recursive: true });
   for (const entry of readdirSync(src, { withFileTypes: true })) {

@@ -29,9 +29,9 @@ import { SESSION_ID } from '../../src/shared/ipc';
 // never on how the installer walks the tree.
 
 const BUNDLE = path.resolve('example', 'flow');
-// Count every file installSet() would copy, not just *.md — otherwise a future non-.md bundle file would
-// fail these counts though the installer is unchanged.
-const TEMPLATE_COUNT = readdirSync(path.join(BUNDLE, 'todo-templates'), { withFileTypes: true }).filter((e) => e.isFile()).length;
+// installSet() copies flow.yaml + the .md todo templates (§18.6); count that same set so a non-.md
+// bundle file changes neither the installer nor this count.
+const TEMPLATE_COUNT = readdirSync(path.join(BUNDLE, 'todo-templates')).filter((f) => f.endsWith('.md')).length;
 const FILE_COUNT = TEMPLATE_COUNT + 1; // flow.yaml + every template
 
 let home: string;
@@ -208,6 +208,28 @@ describe('applyInstallExamples — a refused write is an error, never a silent s
     if (res.ok) return;
     expect(res.error).toBeTruthy();
     expect(existsSync(path.join(real, 'todo-templates'))).toBe(false); // no nested write escaped into the symlink target
+  });
+});
+
+describe('applyInstallExamples — installs only .md todo templates (§18.6)', () => {
+  it('never installs a non-.md bundle asset (so no non-text file is copied through a utf8 read)', () => {
+    const bundleX = mkdtempSync(path.join(tmpdir(), 'bundle-nonmd-'));
+    try {
+      writeFileSync(path.join(bundleX, flowRel), readFileSync(path.join(BUNDLE, flowRel)));
+      mkdirSync(path.join(bundleX, 'todo-templates'), { recursive: true });
+      writeFileSync(path.join(bundleX, 'todo-templates', 'ticket-grooming.md'), '# t\n- [ ] x\n');
+      writeFileSync(path.join(bundleX, 'todo-templates', 'asset.bin'), Buffer.from([0xff, 0xfe, 0x00, 0x80, 0x90]));
+
+      const res = applyInstallExamples(bundleX, targetDir, false);
+      expect(res.ok).toBe(true);
+      if (!res.ok) return;
+      const binRel = path.join('todo-templates', 'asset.bin');
+      expect(res.created).not.toContain(binRel);
+      expect(existsSync(targetOf(binRel))).toBe(false); // non-.md asset never copied
+      expect(existsSync(targetOf(path.join('todo-templates', 'ticket-grooming.md')))).toBe(true); // .md template installed
+    } finally {
+      rmSync(bundleX, { recursive: true, force: true });
+    }
   });
 });
 

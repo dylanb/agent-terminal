@@ -23,6 +23,7 @@ function installSet(bundleDir: string): string[] {
     return set;
   }
   for (const name of entries.sort()) {
+    if (!name.endsWith('.md')) continue; // §18.6: only .md files resolve as todo templates
     const rel = path.join(TEMPLATES_SUBDIR, name);
     if (statSync(path.join(bundleDir, rel)).isFile()) set.push(rel);
   }
