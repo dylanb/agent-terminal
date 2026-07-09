@@ -2174,6 +2174,130 @@ test('a multi-step flow walks the bookended rail: Start → Advance ×3 reaches 
   rmSync(home, { recursive: true, force: true });
 });
 
+// ---- #40: user-invoked install-examples action seeds the bundled feature-dev flow (§18.1/§23.4) ----
+// TODO(dylan): the three original tracer cases below (install/render/template) landed green-first, not
+// RED-first; their RED observation cannot be reconstructed. The WCAG 2.4.3 focus assertion in the first
+// case was added RED-first (observed failing in Podman before its fix). Recorded gap.
+
+const installExamplesBtn = () => page.locator('#install-examples-view button');
+const installExamplesStatus = () => page.locator('#install-examples-view [role="status"]');
+const installExamplesPrompt = () => page.locator('#install-examples-view .flow-modal');
+
+test('installing the bundled examples seeds the global flow; a fresh repo renders its steps (§18.1/§23.4 #40)', async () => {
+  // The tracer bullet: click the settings control against a temp HOME, then prove the global flow file +
+  // its templates exist and are reported created, and a repo with no local flow renders the bundled steps.
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-install-ex-home-'));
+  const repo = mkdtempSync(join(tmpdir(), 'agent-term-e2e-install-ex-repo-'));
+  mkdirSync(join(repo, '.git'), { recursive: true }); // its own repo key; no local flow → global is used
+  await app.close();
+  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
+  page = await app.firstWindow();
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await page.locator('[data-viewbtn="4"]').click(); // open the settings view
+  await expect(page.locator('#install-examples-view')).toBeVisible();
+  await installExamplesBtn().focus();
+  await installExamplesBtn().click();
+  await expect(installExamplesStatus()).toContainText('created', { timeout: 15_000 });
+  // Keyboard focus returns to the control after the install resolves (WCAG 2.4.3) — not stranded on <body>.
+  await expect(installExamplesBtn()).toBeFocused();
+
+  // The bundled flow definition + its todo templates now exist in the global flow home.
+  expect(existsSync(join(home, '.agent-terminal', 'flow.yaml'))).toBe(true);
+  expect(existsSync(join(home, '.agent-terminal', 'todo-templates', 'ticket-grooming.md'))).toBe(true);
+
+  // Back to the terminal; cd into a repo with no local flow → the installed global flow renders its steps.
+  await page.locator('[data-viewbtn="1"]').click();
+  await typeCommand(`cd "${repo}"`);
+  await expect(page.locator('#flow-strip .flow.vert .stn')).toHaveCount(7, { timeout: 10_000 }); // 5 steps + 2 bookends
+  await expect(flowStepName()).toHaveText('groom-ticket');
+
+  await app.close();
+  rmSync(home, { recursive: true, force: true });
+  rmSync(repo, { recursive: true, force: true });
+});
+
+test('a customized global flow prompts before overwriting; declining leaves it byte-for-byte unchanged (§18.1 #40)', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-install-ex2-home-'));
+  const custom = 'name: my-custom-flow\nsteps:\n  - id: mine\n    kind: manual\n';
+  mkdirSync(join(home, '.agent-terminal'), { recursive: true });
+  writeFileSync(join(home, '.agent-terminal', 'flow.yaml'), custom); // present + differs from the bundle
+  await app.close();
+  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
+  page = await app.firstWindow();
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await page.locator('[data-viewbtn="4"]').click();
+  await installExamplesBtn().click();
+  // The up-front overwrite prompt appears because a target exists and differs.
+  await expect(installExamplesPrompt()).toBeVisible({ timeout: 10_000 });
+  await page.locator('#install-examples-view .flow-modal button.keep').click(); // decline overwriting
+  await expect(installExamplesStatus()).toContainText('skipped', { timeout: 10_000 });
+
+  // The customized flow is untouched; the absent templates were still installed (no creation withheld).
+  expect(readFileSync(join(home, '.agent-terminal', 'flow.yaml'), 'utf8')).toBe(custom);
+  expect(existsSync(join(home, '.agent-terminal', 'todo-templates', 'ticket-grooming.md'))).toBe(true);
+
+  await app.close();
+  rmSync(home, { recursive: true, force: true });
+});
+
+test('dismissing the overwrite prompt without a choice returns focus to the install button (WCAG 2.4.3 #40)', async () => {
+  // Focus the button, then trigger the preview which disables it (blurring focus to <body>) before the
+  // prompt opens. Dismissing the prompt via Escape must restore focus to the button, not strand it on
+  // <body> — the modal opener has to be the button, not whatever held focus while it was disabled.
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-install-ex-focus-home-'));
+  mkdirSync(join(home, '.agent-terminal'), { recursive: true });
+  writeFileSync(join(home, '.agent-terminal', 'flow.yaml'), 'name: my-custom-flow\nsteps:\n  - id: mine\n    kind: manual\n'); // present + differs
+  await app.close();
+  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
+  page = await app.firstWindow();
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await page.locator('[data-viewbtn="4"]').click();
+  await installExamplesBtn().focus();
+  await installExamplesBtn().click();
+  await expect(installExamplesPrompt()).toBeVisible({ timeout: 10_000 });
+  await page.keyboard.press('Escape');
+  await expect(installExamplesPrompt()).toBeHidden();
+  await expect(installExamplesBtn()).toBeFocused();
+
+  await app.close();
+  rmSync(home, { recursive: true, force: true });
+});
+
+test('after install, the active step offers its bundled todo template as the picker default (§18.6 #40)', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-install-ex3-home-'));
+  const repo = mkdtempSync(join(tmpdir(), 'agent-term-e2e-install-ex3-repo-'));
+  mkdirSync(join(repo, '.git'), { recursive: true });
+  await app.close();
+  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
+  page = await app.firstWindow();
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await page.locator('[data-viewbtn="4"]').click();
+  await installExamplesBtn().click();
+  await expect(installExamplesStatus()).toContainText('created', { timeout: 15_000 });
+  await page.locator('[data-viewbtn="1"]').click();
+
+  await typeCommand(`cd "${repo}"`);
+  await expect(flowStepName()).toHaveText('groom-ticket', { timeout: 10_000 });
+  await flowControl().click(); // Start → groom-ticket active (todo_template: ticket-grooming)
+
+  await openQuickSend('todo');
+  const toggle = page.locator('#todo-list .tmpl-toggle');
+  await expect(toggle).toBeVisible({ timeout: 10_000 });
+  await toggle.click();
+  await expect(page.locator('#todo-list .tmpl-pick')).toHaveValue('ticket-grooming'); // the step's bundled default
+  await page.locator('#todo-list .tmpl-add').click();
+  // Instantiating the bundled template resolves (§18.6) and yields todos from its content.
+  await expect(page.locator('.todo').filter({ hasText: 'groom the ticket' })).not.toHaveCount(0, { timeout: 10_000 });
+
+  await app.close();
+  rmSync(home, { recursive: true, force: true });
+  rmSync(repo, { recursive: true, force: true });
+});
+
 test('advancing INTO a later step fires its entry action: the skill injects on Advance (§24.2.3 T3)', async () => {
   // Entry-on-advance (the converse of T1's "advance does not fire onEnter"): advancing into step 2
   // injects its skill into the real PTY.

@@ -3,6 +3,7 @@
 // document so it stays relocatable; signals out only through the injected contract.
 
 import type { CliInstallResult } from '../../shared/ipc';
+import { captureFocusReturn } from './dom';
 
 export interface CliInstallDeps {
   install(): Promise<CliInstallResult>;
@@ -65,7 +66,7 @@ export function createCliInstall(host: HTMLElement, deps: CliInstallDeps): CliIn
   async function run(): Promise<void> {
     if (busy) return;
     busy = true;
-    const hadFocus = doc.activeElement === btn;
+    const returnFocus = captureFocusReturn(btn);
     btn.disabled = true;
     showStatus('cli-status', 'Installing…');
     try {
@@ -80,9 +81,7 @@ export function createCliInstall(host: HTMLElement, deps: CliInstallDeps): CliIn
     } finally {
       busy = false;
       btn.disabled = false;
-      // Disabling a focused control blurs it to <body> in browsers; only the unmoved case is restored
-      // so a still-running-elsewhere focus is never stolen back (WCAG 2.4.3).
-      if (hadFocus && (doc.activeElement === doc.body || doc.activeElement === btn)) btn.focus();
+      returnFocus();
     }
   }
   btn.addEventListener('click', () => void run());

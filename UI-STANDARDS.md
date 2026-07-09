@@ -155,6 +155,14 @@ announcement and can create a focus trap. The rules:
    host while focus was inside it, the component signals across its contract (an `onDismiss`-style
    callback) so the root can place focus somewhere sensible — it does **not** reach across organisms
    to move focus itself (UI §2.2). The canonical implementation is `attentionCue`.
+6. **A control that disables itself during an async action restores focus on completion (WCAG 2.4.3).**
+   Capture focus *before* disabling and return it *after* — but only if focus has not since moved:
+   restore iff the control still holds focus or was blurred to `<body>` by the disable, never stealing
+   focus the user redirected mid-action. Never hand-roll this guard; the canonical implementation is
+   `captureFocusReturn` (`dom.ts`), which `cliInstall` and `installExamples` compose rather than
+   re-deriving it — any self-disabling async control that returns focus composes it too. Two hand-rolled
+   copies *will* drift — the same reason `createModalShell` and `attentionCue` are single
+   implementations (§5.1).
 
 ## 5. Blocking dialogs — the modal focus-management pattern
 

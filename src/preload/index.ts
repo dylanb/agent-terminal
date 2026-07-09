@@ -7,6 +7,9 @@ import {
   type ArtifactTree,
   type CliApi,
   type CliInstallResult,
+  type ExamplesApi,
+  type InstallExamplesPreview,
+  type InstallExamplesResult,
   type CommandCaptureResult,
   type CommandSummary,
   type CwdChangedMsg,
@@ -153,8 +156,19 @@ export const cliApi: CliApi = {
   install: () => ipcRenderer.invoke(CH.cliInstall, { sessionId: SESSION_ID }) as Promise<CliInstallResult>,
 };
 
+export const examplesApi: ExamplesApi = {
+  preview: () =>
+    ipcRenderer.invoke(CH.installExamplesPreview, { sessionId: SESSION_ID }) as Promise<InstallExamplesPreview>,
+  apply: (overwrite) =>
+    ipcRenderer.invoke(CH.installExamplesApply, {
+      sessionId: SESSION_ID,
+      overwrite,
+    }) as Promise<InstallExamplesResult>,
+};
+
 contextBridge.exposeInMainWorld('term', termApi);
 contextBridge.exposeInMainWorld('monitor', monitorApi);
 contextBridge.exposeInMainWorld('viewer', viewerApi);
 contextBridge.exposeInMainWorld('flow', flowApi);
 contextBridge.exposeInMainWorld('cli', cliApi);
+contextBridge.exposeInMainWorld('examples', examplesApi);

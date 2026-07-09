@@ -1,10 +1,7 @@
 import path from 'node:path';
+import type { BundleLocation } from './bundleLocation';
 
-export interface IconLocation {
-  packaged: boolean;
-  resourcesPath: string;
-  appPath: string;
-}
+export type IconLocation = BundleLocation;
 
 export function resolveWindowIconPath(loc: IconLocation): string {
   return loc.packaged

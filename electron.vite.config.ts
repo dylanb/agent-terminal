@@ -2,25 +2,30 @@ import path from 'node:path';
 import { defineConfig, externalizeDepsPlugin } from 'electron-vite';
 import type { Plugin } from 'vite';
 import { copyDevIcon } from './src/main/appIconBuild';
+import { copyExampleFlow } from './src/main/exampleAssetsBuild';
 
-// After the main bundle is written, copy build/icon.png next to it so the unpackaged runtime resolver
-// (app.getAppPath()/build/icon.png) finds it — without this, dock.setIcon fails on a missing icon.
-function copyDevIconPlugin(): Plugin {
+// After the main bundle is written, copy build/icon.png and the example flow tree next to it so the
+// unpackaged runtime resolvers (app.getAppPath()/build/icon.png and .../example/flow) find them —
+// without this, dock.setIcon fails on a missing icon and the install-examples action has no bundle.
+function copyDevAssetsPlugin(): Plugin {
   let outDir = '';
   return {
-    name: 'copy-dev-icon',
+    name: 'copy-dev-assets',
     configResolved(config) {
       outDir = config.build.outDir;
     },
     closeBundle() {
-      if (outDir) copyDevIcon(path.resolve(outDir, '..', '..'), outDir);
+      if (!outDir) return;
+      const rootDir = path.resolve(outDir, '..', '..');
+      copyDevIcon(rootDir, outDir);
+      copyExampleFlow(rootDir, outDir);
     },
   };
 }
 
 export default defineConfig({
   main: {
-    plugins: [externalizeDepsPlugin(), copyDevIconPlugin()], // keeps node-pty (native) and @xterm/headless unbundled
+    plugins: [externalizeDepsPlugin(), copyDevAssetsPlugin()], // keeps node-pty (native) and @xterm/headless unbundled
   },
   preload: {
     plugins: [externalizeDepsPlugin()],

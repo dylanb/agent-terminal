@@ -12,7 +12,7 @@ import { resolveWindowIconPath } from './appIcon';
  *  `mainOutDir`. Returns the destination path. */
 export function copyDevIcon(rootDir: string, mainOutDir: string): string {
   const src = path.join(rootDir, 'build', 'icon.png');
-  const dest = resolveWindowIconPath({ packaged: false, resourcesPath: '', appPath: mainOutDir });
+  const dest = resolveWindowIconPath({ packaged: false, appPath: mainOutDir });
   mkdirSync(path.dirname(dest), { recursive: true });
   copyFileSync(src, dest);
   return dest;
