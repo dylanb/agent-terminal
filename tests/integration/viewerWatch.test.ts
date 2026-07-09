@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, rmSync, realpathSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, realpathSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, sep } from 'node:path';
 import { writeFileSync } from 'node:fs';
@@ -226,6 +226,27 @@ describe('watchableDirs — the directories the recursive watch actually covers 
 
   it('never throws for a missing root — returns just that root (the caller degrades to inert)', () => {
     expect(watchableDirs(join(dir, 'nope'))).toEqual([join(dir, 'nope')]);
+  });
+
+  // A repo can plant `.agent-loop`/`.agent-terminal` as a SYMLINK to a huge external tree; viewerWatchDirs
+  // walks those paths as roots. Descending through the symlink would enumerate the target's whole subtree
+  // and re-exhaust inotify (ENOSPC) — the crash this walk exists to prevent. The symlink itself is a bounded
+  // leaf; its subtree must never be enumerated (CWE-59).
+  it('does not descend into a symlinked directory root — treats it as a single leaf', () => {
+    const external = join(dir, 'external');
+    mkdirSync(join(external, 'a', 'b'), { recursive: true });
+    const link = join(dir, 'link');
+    symlinkSync(external, link);
+    expect(watchableDirs(link)).toEqual([link]);
+  });
+
+  it('does not follow a symlinked subdirectory entry', () => {
+    const external = join(dir, 'ext2');
+    mkdirSync(join(external, 'deep'), { recursive: true });
+    const root = join(dir, 'root');
+    mkdirSync(root);
+    symlinkSync(external, join(root, 'link'));
+    expect(watchableDirs(root).map((d) => relative(root, d) || '.')).toEqual(['.']);
   });
 });
 

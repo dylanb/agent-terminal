@@ -1,7 +1,7 @@
 // Live artifact reload (§20.1): watch the viewer's tree root and fire onChange when a file under it
 // changes on disk, so main can re-broadcast over the viewer:onChanged seam and the renderer re-pulls.
 
-import { watch, readdirSync } from 'node:fs';
+import { watch, readdirSync, lstatSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { gitRootOf, IGNORED_DIRS } from './artifactTree';
@@ -43,11 +43,20 @@ export type ViewerWatchFactory = (
  *  inotify watch for every `node_modules` folder and exhaust the system limit (ENOSPC) on a repo checkout;
  *  enumerating the non-ignored dirs here and watching each one keeps the watch surface aligned with
  *  discovery (which also skips IGNORED_DIRS at any depth). Never throws — an unreadable dir is left as a
- *  leaf. Symlinked dirs are not followed (readdir `isDirectory()` is false for them), so no cycle. */
+ *  leaf. A symlinked directory is watched as a single bounded leaf but never descended into: a symlinked
+ *  ENTRY is already excluded (readdir `isDirectory()` is false for it), and a symlinked ROOT — e.g. a repo
+ *  that plants `.agent-loop` as a symlink to a huge tree, which viewerWatchDirs walks as a root — is caught
+ *  by the lstat guard, so following it never enumerates the target's subtree and re-exhausts inotify
+ *  (ENOSPC, the crash this walk prevents; CWE-59). */
 export function watchableDirs(root: string): string[] {
   const out: string[] = [];
   const walk = (d: string): void => {
     out.push(d);
+    try {
+      if (lstatSync(d).isSymbolicLink()) return;
+    } catch {
+      return;
+    }
     let entries;
     try {
       entries = readdirSync(d, { withFileTypes: true });
