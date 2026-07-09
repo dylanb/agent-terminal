@@ -2175,6 +2175,9 @@ test('a multi-step flow walks the bookended rail: Start → Advance ×3 reaches 
 });
 
 // ---- #40: user-invoked install-examples action seeds the bundled feature-dev flow (§18.1/§23.4) ----
+// TODO(dylan): the three original tracer cases below (install/render/template) landed green-first, not
+// RED-first; their RED observation cannot be reconstructed. The WCAG 2.4.3 focus assertion in the first
+// case was added RED-first (observed failing in Podman before its fix). Recorded gap.
 
 const installExamplesBtn = () => page.locator('#install-examples-view button');
 const installExamplesStatus = () => page.locator('#install-examples-view [role="status"]');

@@ -1,16 +1,13 @@
-// Build-time placement of the bundled example flow (not a runtime path). The packaged app gets
-// example/flow via electron-builder extraResources (electron-builder.yml); an UNPACKAGED built run
-// (e2e / `pnpm run dev`) instead reads it from <app.getAppPath()>/example/flow, and app.getAppPath()
-// is the main out dir — so the build must copy the committed tree there. Reusing resolveExampleFlowDir
-// as the destination keeps this copy and the runtime read from ever drifting.
+// Build-time placement of the bundled example flow: the packaged app gets example/flow via
+// electron-builder extraResources (electron-builder.yml); an unpackaged run reads it from
+// <app.getAppPath()>/example/flow, so the build must copy the committed tree there.
 
 import { copyFileSync, mkdirSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { resolveExampleFlowDir } from './exampleAssets';
 
-// Overwrite files in place (copyFileSync), never recreate directories — mirrors copyDevIcon so a rerun
-// over a populated out/ (e.g. the Podman e2e mount, whose dirs the container cannot re-stat) overwrites
-// rather than tripping cp's getStats on a pre-existing subdir.
+// copyFileSync overwrites in place; a rerun over the Podman e2e mount cannot re-stat pre-existing
+// dirs, so directories are never recreated.
 function copyTree(src: string, dest: string): void {
   mkdirSync(dest, { recursive: true });
   for (const entry of readdirSync(src, { withFileTypes: true })) {
