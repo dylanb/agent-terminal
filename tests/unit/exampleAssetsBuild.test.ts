@@ -26,7 +26,7 @@ describe('copyExampleFlow — places the bundle where the unpackaged resolver re
 
   it('copies example/flow to the path resolveExampleFlowDir reads for that out dir', () => {
     const dest = copyExampleFlow(root, out);
-    expect(dest).toBe(resolveExampleFlowDir({ packaged: false, resourcesPath: '', appPath: out }));
+    expect(dest).toBe(resolveExampleFlowDir({ packaged: false, appPath: out }));
     expect(readFileSync(path.join(dest, 'flow.yaml'), 'utf8')).toContain('name: feature-dev');
   });
 

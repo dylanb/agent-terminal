@@ -1,18 +1,18 @@
 import { describe, it, expect, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import { resolveWindowIconPath, resolveDockIconPath, applyDockIcon } from '../../src/main/appIcon';
+import { resolveWindowIconPath, resolveDockIconPath, applyDockIcon, type IconLocation } from '../../src/main/appIcon';
 
 describe('resolveWindowIconPath', () => {
   it('resolves to the extraResources copy in a packaged app', () => {
     expect(
-      resolveWindowIconPath({ packaged: true, resourcesPath: '/app/resources', appPath: '/app/app.asar' }),
+      resolveWindowIconPath({ packaged: true, resourcesPath: '/app/resources' }),
     ).toBe(path.join('/app/resources', 'icon.png'));
   });
 
   it('resolves to build/icon.png under the project root in dev', () => {
     expect(
-      resolveWindowIconPath({ packaged: false, resourcesPath: '/ignored', appPath: '/project' }),
+      resolveWindowIconPath({ packaged: false, appPath: '/project' }),
     ).toBe(path.join('/project', 'build', 'icon.png'));
   });
 });
@@ -20,25 +20,25 @@ describe('resolveWindowIconPath', () => {
 describe('resolveDockIconPath', () => {
   it('resolves to the window icon path on darwin (packaged)', () => {
     expect(
-      resolveDockIconPath('darwin', { packaged: true, resourcesPath: '/app/resources', appPath: '/app/app.asar' }),
+      resolveDockIconPath('darwin', { packaged: true, resourcesPath: '/app/resources' }),
     ).toBe(path.join('/app/resources', 'icon.png'));
   });
 
   it('resolves to build/icon.png on darwin in dev', () => {
     expect(
-      resolveDockIconPath('darwin', { packaged: false, resourcesPath: '/ignored', appPath: '/project' }),
+      resolveDockIconPath('darwin', { packaged: false, appPath: '/project' }),
     ).toBe(path.join('/project', 'build', 'icon.png'));
   });
 
   it('resolves to null off darwin', () => {
-    const loc = { packaged: false, resourcesPath: '/r', appPath: '/p' };
+    const loc: IconLocation = { packaged: false, appPath: '/p' };
     expect(resolveDockIconPath('linux', loc)).toBeNull();
     expect(resolveDockIconPath('win32', loc)).toBeNull();
   });
 });
 
 describe('applyDockIcon', () => {
-  const darwin = { packaged: false, resourcesPath: '/ignored', appPath: '/project' };
+  const darwin: IconLocation = { packaged: false, appPath: '/project' };
 
   it('sets the Dock icon to the resolved path on darwin', () => {
     const dock = { setIcon: vi.fn() };
@@ -80,7 +80,7 @@ describe('extraResources packaged-path coupling', () => {
 
   it('ships the PNG under the basename the packaged resolver reads back', () => {
     const basename = path.basename(
-      resolveWindowIconPath({ packaged: true, resourcesPath: '/app/resources', appPath: '/app/app.asar' }),
+      resolveWindowIconPath({ packaged: true, resourcesPath: '/app/resources' }),
     );
     // Coupling: renaming either the electron-builder `to:` target or the packaged resolver basename
     // breaks the runtime icon, and no type catches it — this test is the guard.
@@ -91,7 +91,7 @@ describe('extraResources packaged-path coupling', () => {
 
 describe('committed build/icon.png', () => {
   const root = path.resolve(__dirname, '..', '..');
-  const png = readFileSync(resolveWindowIconPath({ packaged: false, resourcesPath: '', appPath: root }));
+  const png = readFileSync(resolveWindowIconPath({ packaged: false, appPath: root }));
 
   it('starts with the PNG signature', () => {
     expect(png.subarray(0, 8)).toEqual(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));

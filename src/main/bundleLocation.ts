@@ -1,5 +1,3 @@
-export interface BundleLocation {
-  packaged: boolean;
-  resourcesPath: string;
-  appPath: string;
-}
+export type BundleLocation =
+  | { packaged: true; resourcesPath: string }
+  | { packaged: false; appPath: string };

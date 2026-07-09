@@ -26,7 +26,7 @@ describe('copyDevIcon — places the icon where the unpackaged resolver reads it
   it('copies build/icon.png to the path resolveWindowIconPath reads for that out dir', () => {
     const dest = copyDevIcon(root, out);
     // The destination IS the resolver's unpackaged path for appPath = out — they cannot drift.
-    expect(dest).toBe(resolveWindowIconPath({ packaged: false, resourcesPath: '', appPath: out }));
+    expect(dest).toBe(resolveWindowIconPath({ packaged: false, appPath: out }));
     expect(existsSync(dest)).toBe(true);
     expect(readFileSync(dest)).toEqual(readFileSync(path.join(root, 'build', 'icon.png')));
   });

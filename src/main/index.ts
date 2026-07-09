@@ -110,15 +110,14 @@ import { resolveWindowIconPath, applyDockIcon } from './appIcon';
 import { handleCliInstall } from './cliInstall';
 import { resolveLaunchInvocation } from './cliShim';
 import { resolveExampleFlowDir } from './exampleAssets';
+import type { BundleLocation } from './bundleLocation';
 import { handleInstallExamplesPreview, handleInstallExamplesApply } from './installExamples';
 import type { CliInstallResult } from '../shared/ipc';
 
 async function createWindow(): Promise<void> {
-  const iconLoc = {
-    packaged: app.isPackaged,
-    resourcesPath: process.resourcesPath,
-    appPath: app.getAppPath(),
-  };
+  const iconLoc: BundleLocation = app.isPackaged
+    ? { packaged: true, resourcesPath: process.resourcesPath }
+    : { packaged: false, appPath: app.getAppPath() };
   // TODO(dylan): Electron exposes no getIcon() and app.dock is macOS-only, so neither the
   // BrowserWindow.icon assignment below nor applyDockIcon has a Linux e2e — resolveWindowIconPath and
   // applyDockIcon are unit-covered. Recorded gap.

@@ -21,7 +21,7 @@ function copyTree(src: string, dest: string): void {
 /** Copy <rootDir>/example/flow to where the unpackaged resolver reads it when app.getAppPath() is
  *  `mainOutDir`. Returns the destination path. */
 export function copyExampleFlow(rootDir: string, mainOutDir: string): string {
-  const dest = resolveExampleFlowDir({ packaged: false, resourcesPath: '', appPath: mainOutDir });
+  const dest = resolveExampleFlowDir({ packaged: false, appPath: mainOutDir });
   copyTree(path.join(rootDir, 'example', 'flow'), dest);
   return dest;
 }

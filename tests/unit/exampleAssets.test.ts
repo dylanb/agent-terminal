@@ -9,13 +9,13 @@ import { resolveExampleFlowDir } from '../../src/main/exampleAssets';
 describe('resolveExampleFlowDir', () => {
   it('resolves to the extraResources copy in a packaged app', () => {
     expect(
-      resolveExampleFlowDir({ packaged: true, resourcesPath: '/app/resources', appPath: '/app/app.asar' }),
+      resolveExampleFlowDir({ packaged: true, resourcesPath: '/app/resources' }),
     ).toBe(path.join('/app/resources', 'example', 'flow'));
   });
 
   it('resolves to example/flow under the app path in an unpackaged build', () => {
     expect(
-      resolveExampleFlowDir({ packaged: false, resourcesPath: '/ignored', appPath: '/out/main' }),
+      resolveExampleFlowDir({ packaged: false, appPath: '/out/main' }),
     ).toBe(path.join('/out/main', 'example', 'flow'));
   });
 
@@ -23,7 +23,7 @@ describe('resolveExampleFlowDir', () => {
     // Point the resolver at a fixture root (as app.getAppPath() would) and prove the resolved dir holds
     // a real flow.yaml — the resolution contract, not a hardcoded example/ path.
     const fixtureRoot = path.resolve(__dirname, '..', '..'); // repo root standing in for appPath
-    const dir = resolveExampleFlowDir({ packaged: false, resourcesPath: '', appPath: fixtureRoot });
+    const dir = resolveExampleFlowDir({ packaged: false, appPath: fixtureRoot });
     expect(readFileSync(path.join(dir, 'flow.yaml'), 'utf8')).toContain('name: feature-dev');
   });
 });
