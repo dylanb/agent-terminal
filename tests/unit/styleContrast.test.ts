@@ -190,6 +190,62 @@ describe('attn-bar dismiss focus ring contrast (WCAG 2.1 SC 1.4.11)', () => {
   }
 });
 
+/** The alpha a group `opacity` on rules naming `selector` applies to everything the element paints,
+ *  the browser-drawn focus ring included. */
+function groupOpacity(selector: string): number {
+  const bare = css.replace(/\/\*[\s\S]*?\*\//g, '');
+  let alpha = 1;
+  for (const rule of bare.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+    if (!rule[1].split(',').some((s) => s.trim() === selector)) continue;
+    const o = rule[2].match(/(?:^|;)\s*opacity\s*:\s*([\d.]+)\s*(?:;|$)/);
+    if (o) alpha *= parseFloat(o[1]);
+  }
+  return alpha;
+}
+/** The `color` a `.pill` variant paints, after the later `selector` rule cascades over it. */
+function pillColor(map: Record<string, string>, selector: string, base: string): string {
+  const bare = css.replace(/\/\*[\s\S]*?\*\//g, '');
+  let expr = ruleColor(base);
+  for (const rule of bare.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+    if (!rule[1].split(',').some((s) => s.trim() === selector)) continue;
+    const c = rule[2].match(/(?:^|;)\s*color\s*:\s*([^;]+)(?:;|$)/);
+    if (c) expr = c[1].trim();
+  }
+  const ref = expr.match(/^var\(\s*(--[\w-]+)\s*\)$/);
+  return ref ? resolve(map, ref[1]) : expr;
+}
+
+// The Install button stays focusable while busy (aria-disabled + aria-busy) so the progress
+// announcement reaches a keyboard user still standing on it. A group `opacity` on that element
+// alpha-composites the browser-drawn `button:focus-visible` ring along with the label, so the ring a
+// keyboard user sees during `Checking…`/`Installing…` must be graded at the element's own alpha.
+describe('busy pill focus ring contrast (WCAG 2.1 SC 1.4.11)', () => {
+  const BUSY = '.pill[aria-disabled="true"]';
+  const globalRing = blockBody(/button:focus-visible,\s*a:focus-visible[^{]*\{([^}]*)\}/);
+  if (!globalRing) throw new Error('global focus-visible rule not found');
+  const ringExpr = outlineColor(globalRing);
+  if (!ringExpr) throw new Error('global focus-visible rule has no outline color');
+
+  for (const [themeName, map] of [['light', light], ['dark', dark]] as const) {
+    const ref = ringExpr.match(/^var\(\s*(--[\w-]+)\s*\)$/);
+    const ring = parseColor(ref ? resolve(map, ref[1]) : ringExpr);
+    const card = parseColor(resolve(map, '--card'));
+
+    it(`${themeName}: the busy pill's focus ring clears 3:1 on --card`, () => {
+      const painted = over([ring[0], ring[1], ring[2], groupOpacity(BUSY)], card);
+      expect(contrast(toHex(painted), resolve(map, '--card'))).toBeGreaterThanOrEqual(3);
+    });
+
+    it(`${themeName}: an idle pill's focus ring clears 3:1 on --card`, () => {
+      expect(contrast(toHex(over(ring, card)), resolve(map, '--card'))).toBeGreaterThanOrEqual(3);
+    });
+
+    it(`${themeName}: the busy pill still reads as busy — its label differs from the idle pill's`, () => {
+      expect(pillColor(map, BUSY, '\\.pill\\.signal')).not.toBe(resolve(map, '--signal-text'));
+    });
+  }
+});
+
 describe('expanded loop read-out contrast (WCAG 1.4.3 AA)', () => {
   const readoutBgExpr = ruleBackground('\\.flowstrip \\.loopstat\\[aria-expanded="true"\\]');
   for (const [themeName, map] of [['light', light], ['dark', dark]] as const) {
