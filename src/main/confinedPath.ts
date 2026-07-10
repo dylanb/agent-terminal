@@ -4,18 +4,19 @@
 import { realpathSync, lstatSync } from 'node:fs';
 import path from 'node:path';
 
-function pathExists(p: string): boolean {
+function isAbsent(p: string): boolean {
   try {
     lstatSync(p);
-    return true;
-  } catch {
     return false;
+  } catch (e) {
+    return (e as NodeJS.ErrnoException).code === 'ENOENT';
   }
 }
 
 /** The symlink-free real path of `p`: symlinks in its longest existing prefix are resolved and a tail of
- *  not-yet-created segments is appended. Null when an existing segment is a symlink that does not resolve
- *  (a dangling link), which cannot be reduced to a symlink-free path. Never throws. */
+ *  not-yet-created segments is appended. Only a genuinely absent (ENOENT) segment is appended; a segment
+ *  that exists but does not resolve — a dangling symlink — or one that is inaccessible or traversed as a
+ *  non-directory yields null, since none can be reduced to a symlink-free path. Never throws. */
 export function realpathBounded(p: string): string | null {
   const abs = path.resolve(p);
   const tail: string[] = [];
@@ -26,7 +27,7 @@ export function realpathBounded(p: string): string | null {
     } catch {
       const parent = path.dirname(cur);
       if (parent === cur) return abs;
-      if (pathExists(cur)) return null;
+      if (!isAbsent(cur)) return null;
       tail.push(path.basename(cur));
       cur = parent;
     }

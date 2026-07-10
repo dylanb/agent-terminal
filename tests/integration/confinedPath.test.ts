@@ -61,6 +61,13 @@ describe('realpathBounded', () => {
 
     expect(realpathBounded(join(link, 'child.md'))).toBeNull();
   });
+
+  it('returns null when a segment traverses through a non-directory', () => {
+    const file = join(root, 'afile');
+    writeFileSync(file, 'x');
+
+    expect(realpathBounded(join(file, 'child.md'))).toBeNull();
+  });
 });
 
 describe('confinedRealPath', () => {
