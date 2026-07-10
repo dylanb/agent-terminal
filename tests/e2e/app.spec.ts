@@ -266,6 +266,14 @@ test('the terminal view carries no selection toolbar (Send/Capture/Clear removed
   await expect(page.locator('#clear-selection')).toHaveCount(0);
 });
 
+test('the CMD-3 Todos/Review-gate view is gone (view 3 + gate mock removed)', async () => {
+  // The fixture-mocked view 3 (Todos beside the Review-gate mock) and its ⌘3 nav button were
+  // removed; only views 1/2/4 remain. Todos live in the drawer Todo tab, the gate in the §26 panel.
+  await expect(page.locator('[data-viewpane="3"]')).toHaveCount(0);
+  await expect(page.locator('[data-viewbtn="3"]')).toHaveCount(0);
+  await expect(page.locator('#gate-panel')).toHaveCount(0);
+});
+
 test('Escape clears an active selection but passes through to the agent otherwise (§7.5.1)', async () => {
   await typeCommand("echo 'esc-target-row'");
   await expect(termRows()).toContainText('esc-target-row');

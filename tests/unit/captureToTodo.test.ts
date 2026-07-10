@@ -36,8 +36,9 @@ describe('captureToTodo (§16.2 — text straight to the repo-scoped Todo list, 
   });
 
   it('a rejected IPC invoke is swallowed (no unhandled rejection) and no change is signalled', async () => {
-    // A main-process restart can reject todoAdd; the detached `void captureToTodo(...)` call sites
-    // must not surface an unhandled rejection. vitest fails the run on one, so this pins the catch.
+    // A main-process restart can reject todoAdd; callers invoke this fire-and-forget (the Artifacts
+    // add-to-todo sink) so it must not surface an unhandled rejection. vitest fails the run on one,
+    // so this pins the catch.
     listen();
     const monitor = makeMonitor({ todoAdd: vi.fn(async () => { throw new Error('ipc down'); }) });
     await expect(captureToTodo(monitor as never, '/repo', 'x')).resolves.toBeUndefined();
