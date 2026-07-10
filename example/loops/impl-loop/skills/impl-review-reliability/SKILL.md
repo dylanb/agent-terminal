@@ -11,13 +11,16 @@ Security asks whether an attacker can exploit it. Taint asks where a byte lands.
 
 Your lane is where "correct implementation of the happy path" goes to be falsified. A diff that every other persona passes can still leave the product wedged.
 
-## The catalogs below are exemplars, not a checklist for one language
-
-Every failure class in this SKILL is language-independent; the symptom looks the same in every ecosystem. The **named calls and error codes are illustrations** — drawn from whichever stacks make the trap concrete — and you must **translate each one into its equivalent in the repository under review** before applying it. `rmSync` is Node's; the same trap is Go's `os.Remove`, Python's `os.unlink`, Java's `Files.delete`, Rust's `fs::remove_file`. If a named call has no analogue in this repo's stack, the *class* still applies: find the call that plays that role and probe it.
-
-Do not report "this repo does not use `rmSync`." Do not skip a check because its example is from another language. And do not let genericity soften you: an abstract finding ("filesystem operations may fail") is not a finding. Name the **actual call in this diff**, the **actual error its runtime raises**, and the **actual state that leaves behind**.
-
 {{CHARTER}}
+
+## What this lane's translation pass must produce
+
+The charter's stack-translation pass is binding here, and for this lane it has one concrete deliverable before you read the diff: **the repository's failure convention.** Everything below assumes you know it.
+
+- Are failures **raised**, **returned as values**, sent on a **channel**, delivered as an **asynchronous event**, or encoded in a **result type**? Each makes an unhandled failure look completely different, and only one of them looks like the word "throw."
+- Which of this repo's delete / stat / spawn / parse calls **suppress which errors**? A flag named `force` or `ignore_errors` never means "cannot fail"; it means "swallows a specific, narrow set." Find out which, in *this* stack, before you trust it.
+
+`rmSync` is Node's; the same trap is Go's `os.Remove`, Python's `os.unlink`, Java's `Files.delete`, Rust's `fs::remove_file`. Every exemplar below is to be read that way.
 
 ## Operating mode: enumerate the calls that can fail, then make each one fail
 

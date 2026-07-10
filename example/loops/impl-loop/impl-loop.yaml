@@ -464,6 +464,9 @@ charter:
     - id: charter.01-cite-named-standards
       body_ref: charter/01-cite-named-standards.md
       variables: []
+    - id: charter.01a-stack-translation
+      body_ref: charter/01a-stack-translation.md
+      variables: []
     - id: charter.02-severity-rubric
       body_ref: charter/02-severity-rubric.md
       variables: ["PLAN_MODE_DIRECTIVE"]
@@ -501,6 +504,7 @@ charter:
       ordered_blocks: &all_charter_blocks
         - charter.00-preamble
         - charter.01-cite-named-standards
+        - charter.01a-stack-translation
         - charter.02-severity-rubric
         - charter.03-severity-floor
         - charter.04-missing-entirely
