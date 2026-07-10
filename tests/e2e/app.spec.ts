@@ -1094,27 +1094,40 @@ test('code in the viewer stays readable after the theme is toggled to dark (§20
 
   const worst = await page.evaluate(() => {
     const lin = (c: number): number => ((c /= 255), c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4);
-    const rgb = (v: string): [number, number, number] => {
+    const rgb = (v: string): [number, number, number, number] => {
       const p = v.match(/[\d.]+/g)!.map(Number);
-      return [p[0], p[1], p[2]];
+      return [p[0], p[1], p[2], p[3] ?? 1];
     };
-    const lum = (v: string): number => {
-      const [r, g, b] = rgb(v);
-      return 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b);
-    };
-    const bg = getComputedStyle(document.body).backgroundColor;
-    const ratio = (fg: string): number => {
-      const a = lum(fg) + 0.05;
+    const lum = ([r, g, b]: [number, number, number, number]): number =>
+      0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b);
+    // A source alpha composited over an opaque backdrop (mirrors the unit test's `over`, §20.2).
+    const over = (
+      fg: [number, number, number, number],
+      bg: [number, number, number, number],
+    ): [number, number, number, number] => [
+      fg[0] * fg[3] + bg[0] * (1 - fg[3]),
+      fg[1] * fg[3] + bg[1] * (1 - fg[3]),
+      fg[2] * fg[3] + bg[2] * (1 - fg[3]),
+      1,
+    ];
+    const bodyBg = rgb(getComputedStyle(document.body).backgroundColor);
+    const ratio = (fg: string, bg: [number, number, number, number]): number => {
+      const a = lum(rgb(fg)) + 0.05;
       const b = lum(bg) + 0.05;
       return Math.max(a, b) / Math.min(a, b);
     };
+    // A glyph on a changed line sits on --changed-wash over --bg, not the plain body background.
+    const effectiveBg = (el: Element): [number, number, number, number] => {
+      const changed = el.closest('.cm-changedLine');
+      return changed ? over(rgb(getComputedStyle(changed).backgroundColor), bodyBg) : bodyBg;
+    };
     const glyphs = [
-      ...document.querySelectorAll('#artifacts .vbody .cm-content, #artifacts .vbody .cm-lineNumbers .cm-gutterElement, #artifacts .vbody [class*="cm-syn-"]'),
+      ...document.querySelectorAll('#artifacts .vbody .cm-line, #artifacts .vbody .cm-lineNumbers .cm-gutterElement, #artifacts .vbody [class*="cm-syn-"]'),
     ];
     const rated = glyphs.map((el) => ({
       text: (el.textContent ?? '').slice(0, 20),
       cls: el.className,
-      ratio: ratio(getComputedStyle(el).color),
+      ratio: ratio(getComputedStyle(el).color, effectiveBg(el)),
     }));
     return { count: rated.length, min: rated.reduce((m, r) => (r.ratio < m.ratio ? r : m)) };
   });
