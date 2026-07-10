@@ -190,6 +190,46 @@ describe('attn-bar dismiss focus ring contrast (WCAG 2.1 SC 1.4.11)', () => {
   }
 });
 
+// §20.2 code viewer: the editor paints straight onto the app background, and a changed line adds
+// --changed-wash over it. Every glyph in it — the code text, the gutter's line numbers, and each
+// syntax class — is small text, so all of them clear 4.5:1 on BOTH of those backgrounds. Themed via
+// tokens rather than the library default, which is tuned for a light background only (WCAG 1.4.3).
+const CODE_TEXT_RULES = [
+  '\\.vbody \\.cm-editor',
+  '\\.vbody \\.cm-gutters',
+  '\\.vbody \\.cm-syn-keyword',
+  '\\.vbody \\.cm-syn-string',
+  '\\.vbody \\.cm-syn-comment',
+  '\\.vbody \\.cm-syn-number',
+  '\\.vbody \\.cm-syn-func',
+  '\\.vbody \\.cm-syn-type',
+  '\\.vbody \\.cm-syn-var',
+  '\\.vbody \\.cm-syn-punct',
+];
+
+describe('code viewer text contrast (WCAG 1.4.3 AA)', () => {
+  for (const [themeName, map] of [['light', light], ['dark', dark]] as const) {
+    const plain = resolve(map, '--bg');
+    const onChangedLine = toHex(over(parseColor(resolve(map, '--changed-wash')), parseColor(plain)));
+    for (const rule of CODE_TEXT_RULES) {
+      const readable = rule.replace(/\\/g, '');
+      it(`${themeName}: ${readable} clears 4.5:1 on the viewer background`, () => {
+        const color = ruleColor(rule);
+        const ref = color.match(/^var\(\s*(--[\w-]+)\s*\)$/);
+        const fg = ref ? resolve(map, ref[1]) : color;
+        expect(contrast(fg, plain)).toBeGreaterThanOrEqual(4.5);
+      });
+
+      it(`${themeName}: ${readable} clears 4.5:1 on a changed line's wash`, () => {
+        const color = ruleColor(rule);
+        const ref = color.match(/^var\(\s*(--[\w-]+)\s*\)$/);
+        const fg = ref ? resolve(map, ref[1]) : color;
+        expect(contrast(fg, onChangedLine)).toBeGreaterThanOrEqual(4.5);
+      });
+    }
+  }
+});
+
 describe('expanded loop read-out contrast (WCAG 1.4.3 AA)', () => {
   const readoutBgExpr = ruleBackground('\\.flowstrip \\.loopstat\\[aria-expanded="true"\\]');
   for (const [themeName, map] of [['light', light], ['dark', dark]] as const) {

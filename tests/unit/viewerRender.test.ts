@@ -62,6 +62,21 @@ describe('viewerRender — EditorView lifecycle (no leak on re-render, §20.2)',
     expect(calls).toBe(0);
   });
 
+  // §20.2 a11y: the highlighter must emit the viewer's own themed classes, which `styles.css` colors
+  // from tokens per theme. CodeMirror's built-in fallback style hard-codes light-background colors,
+  // so under `data-theme="dark"` it paints unreadable code (WCAG 1.4.3).
+  it('highlights code with the viewer\'s themed syntax classes, not the library default', async () => {
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    renderCodeInto('const answer = 42; // why\n', 'ts', host);
+    await vi.waitFor(() => expect(host.querySelector('.cm-editor')).toBeTruthy());
+    await vi.waitFor(() => {
+      expect(host.querySelector('.cm-syn-keyword')?.textContent).toBe('const');
+      expect(host.querySelector('.cm-syn-number')?.textContent).toBe('42');
+      expect(host.querySelector('.cm-syn-comment')?.textContent).toBe('// why');
+    });
+  });
+
   it('the returned CodeView.destroy() tears down the editor (for the organism dispose path)', async () => {
     const host = document.createElement('div');
     document.body.appendChild(host);

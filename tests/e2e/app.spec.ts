@@ -1071,6 +1071,58 @@ test('the artifact viewer discovers real repo files and sends a selection to a t
   await expect(body.locator('.cm-editor')).toContainText('QUIET');
 });
 
+test('code in the viewer stays readable after the theme is toggled to dark (§20.2, WCAG 1.4.3)', async () => {
+  // The library's fallback highlight style hard-codes light-background colors and the editor's own
+  // text/gutter colors were pinned to the light tokens, so `data-theme="dark"` painted near-black
+  // code on the near-black app background. Every glyph the user reads must clear 4.5:1 in dark.
+  const dir = '/tmp/agent-term-e2e-artdark';
+  await typeCommand(
+    `rm -rf "${dir}" && mkdir -p "${dir}" && cd "${dir}" && git init -q && ` +
+      `git config user.email t@t && git config user.name T && ` +
+      `printf 'export const QUIET = 1;\\n' > code.ts && ` +
+      `git add -A && git commit -qm init && printf '// trailing note\\n' >> code.ts && pwd`,
+  );
+  await expect(page.locator('.xterm-rows > div').filter({ hasText: new RegExp(`^\\s*${dir}\\s*$`) })).not.toHaveCount(0);
+  await expect(page.locator('.status-chip[data-status="agent"]')).toContainText('quiet', { timeout: 6_000 });
+
+  await page.keyboard.press('Control+2');
+  await page.locator('#artifacts .tree .f').filter({ hasText: 'code.ts' }).click();
+  await expect(page.locator('#artifacts .vbody .cm-editor')).toBeVisible();
+
+  await page.locator('#tg').click(); // toggle theme
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+
+  const worst = await page.evaluate(() => {
+    const lin = (c: number): number => ((c /= 255), c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4);
+    const rgb = (v: string): [number, number, number] => {
+      const p = v.match(/[\d.]+/g)!.map(Number);
+      return [p[0], p[1], p[2]];
+    };
+    const lum = (v: string): number => {
+      const [r, g, b] = rgb(v);
+      return 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b);
+    };
+    const bg = getComputedStyle(document.body).backgroundColor;
+    const ratio = (fg: string): number => {
+      const a = lum(fg) + 0.05;
+      const b = lum(bg) + 0.05;
+      return Math.max(a, b) / Math.min(a, b);
+    };
+    const glyphs = [
+      ...document.querySelectorAll('#artifacts .vbody .cm-content, #artifacts .vbody .cm-lineNumbers .cm-gutterElement, #artifacts .vbody [class*="cm-syn-"]'),
+    ];
+    const rated = glyphs.map((el) => ({
+      text: (el.textContent ?? '').slice(0, 20),
+      cls: el.className,
+      ratio: ratio(getComputedStyle(el).color),
+    }));
+    return { count: rated.length, min: rated.reduce((m, r) => (r.ratio < m.ratio ? r : m)) };
+  });
+
+  expect(worst.count).toBeGreaterThan(3); // the highlighter ran: content, gutter, and syntax spans
+  expect(worst.min.ratio).toBeGreaterThanOrEqual(4.5);
+});
+
 test('the viewer live-reloads an open artifact when it changes on disk, with no cd (§20.1)', async () => {
   // The bug: the viewer only re-pulls on a cwd change, so an on-disk edit to the open file is unseen.
   // A file changing under the tree root must reflect in the viewer with no cd and no manual refresh.

@@ -21,6 +21,10 @@
   --reveal:#F2A53C; --reveal-wash:rgba(242,165,60,.22);
   /* changed-line markers in the code viewer (§20.2); tied to the "changed" provenance hue. */
   --changed:var(--signal); --changed-wash:var(--signal-wash);
+  /* code-viewer syntax palette (§20.2). Every tone clears 4.5:1 on --bg AND on a changed line's
+     --changed-wash over it, in both themes (WCAG 1.4.3) — pinned by tests/unit/styleContrast. */
+  --syn-keyword:#B3202B; --syn-string:#0A3069; --syn-comment:#59636E; --syn-number:#0550AE;
+  --syn-func:#6639BA; --syn-type:#116329; --syn-var:#953800; --syn-punct:#24292F;
   --r:7px;
 }
 [data-theme="dark"] {
@@ -33,6 +37,8 @@
   --signal-text:var(--signal); --pass-text:var(--pass); --attn-text:var(--attn);
   --term-bg:#0A0F15; --term-text:#D5DEE8; --term-dim:#65727F;
   --reveal:#FFB454; --reveal-wash:rgba(255,180,84,.20);
+  --syn-keyword:#FF7B72; --syn-string:#A5D6FF; --syn-comment:#9AA6B2; --syn-number:#79C0FF;
+  --syn-func:#D2A8FF; --syn-type:#7EE787; --syn-var:#FFA657; --syn-punct:#C9D1D9;
 }
 * { box-sizing:border-box; }
 html, body { margin:0; height:100%; }
@@ -356,8 +362,17 @@ button:hover { border-color:var(--dim); }
 .vbody.md pre code { background:none; padding:0; }
 .vbody .mermaid { margin:0 0 18px; text-align:center; }
 .vbody .mermaid svg { max-width:100%; height:auto; }
-.vbody .cm-editor { height:100%; }
+.vbody .cm-editor { height:100%; color:var(--text); }
 .vbody .cm-scroller { font-family:"IBM Plex Mono",ui-monospace,monospace; }
+.vbody .cm-gutters { color:var(--dim); }
+.vbody .cm-syn-keyword { color:var(--syn-keyword); }
+.vbody .cm-syn-string { color:var(--syn-string); }
+.vbody .cm-syn-comment { color:var(--syn-comment); }
+.vbody .cm-syn-number { color:var(--syn-number); }
+.vbody .cm-syn-func { color:var(--syn-func); }
+.vbody .cm-syn-type { color:var(--syn-type); }
+.vbody .cm-syn-var { color:var(--syn-var); }
+.vbody .cm-syn-punct { color:var(--syn-punct); }
 .marked { background:var(--signal-wash); border-bottom:2px solid var(--signal); padding:1px 3px; border-radius:2px; }
 .loop .lrow { display:flex; align-items:baseline; font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:12.5px; padding:1px 0; }
 .loop .lrow .lk { color:var(--dim); } .loop .lrow .ld { flex:1; border-bottom:1px dotted var(--hair); margin:0 8px 4px; }
