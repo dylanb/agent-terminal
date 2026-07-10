@@ -27,15 +27,15 @@ import {
 export async function captureToTodo(
   monitor: MonitorApi,
   repoKey: string | null,
-  selectionText: string,
+  text: string,
 ): Promise<void> {
   if (!repoKey) return;
-  const text = cleanSelectionText(selectionText);
-  if (!text) return; // empty-guard: never persist a blank todo (matches manual add / edit)
-  // The detached `void captureToTodo(...)` call sites must never see a rejection (a main restart
-  // can reject the invoke).
+  const cleaned = cleanSelectionText(text);
+  if (!cleaned) return; // empty-guard: never persist a blank todo (matches manual add / edit)
+  // Callers invoke this fire-and-forget (e.g. the Artifacts add-to-todo sink), so a rejected
+  // todo:add (a main restart can reject the invoke) is swallowed rather than surfaced.
   try {
-    await monitor.todoAdd(repoKey, text, { type: 'selection' });
+    await monitor.todoAdd(repoKey, cleaned, { type: 'selection' });
     window.dispatchEvent(new CustomEvent(TODOS_CHANGED_EVENT));
   } catch {
     // IPC failure: leave the todo list unchanged and signal nothing.

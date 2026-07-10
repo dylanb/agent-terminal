@@ -186,8 +186,7 @@ if (flowStripHost) {
 }
 
 // View 2 — the artifact viewer (§20.2 / §24.1): real IPC-backed discovery/read scoped to the live
-// cwd; a selection routes to the same two sinks as the terminal pane — send (inject, no submit,
-// §9.3) and add-to-todo (§16.2).
+// cwd; a selection routes to two sinks — send (inject, no submit, §9.3) and add-to-todo (§16.2).
 const artifactsHost = document.getElementById('artifacts');
 if (artifactsHost) {
   const view = createArtifacts(artifactsHost, {
