@@ -423,7 +423,10 @@ export function createFlowMachine(
       // navigated, so a mismatch is inert rather than an unhandled rejection (§26.9).
       if (status !== 'in_progress' || current().id !== fromStepId) return view();
       if (index > 0) index -= 1;
-      else status = 'not_started'; // a first-step loop has no previous step; not_started is recoverable
+      else {
+        status = 'not_started'; // a first-step loop has no previous step; not_started is recoverable
+        startedAt = null; // reverted to not_started: no active run window (mirrors terminate, §26.10)
+      }
       persist();
       return view(); // no enter(): a rollback restores the prior step, it does not re-run its entry actions
     },

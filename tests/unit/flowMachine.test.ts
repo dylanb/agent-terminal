@@ -179,6 +179,15 @@ describe('flow state machine — the run`s start instant (§26.10)', () => {
     flow.restart();
     expect(store.read()?.startedAt).toBe(5000);
   });
+
+  it('reverting from the first step to not_started clears the instant, like terminate (no window for a run that did not begin)', () => {
+    const store = createFlowStateStore(dir);
+    const flow = createFlowMachine(THREE, store, undefined, undefined, undefined, undefined, at(1000));
+    flow.start(); // in_progress on the first step, stamps startedAt
+    flow.revertStep('groom'); // first step has no previous → not_started
+    expect(flow.state().status).toBe('not_started');
+    expect(store.read()?.startedAt).toBeUndefined();
+  });
 });
 
 // Slice B (§26.9) — a bootstrap that fails after its step was entered must not strand the flow on a
