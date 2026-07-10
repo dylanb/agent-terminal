@@ -109,6 +109,10 @@ describe('confinedRealPath', () => {
     expect(confinedRealPath(jail(), join(jail(), 'linkdir', 'absent.md'))).toBeNull();
   });
 
+  it('accepts a path inside a jail that is the filesystem root', () => {
+    expect(confinedRealPath(sep, root)).toBe(root);
+  });
+
   it('confines to the jail it is given, not to any hardcoded directory name', () => {
     const other = join(repo, 'other');
     mkdirSync(other);

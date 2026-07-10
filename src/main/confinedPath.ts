@@ -36,5 +36,6 @@ export function resolveJail(anchorDir: string, ...segments: string[]): string | 
  *  `target` is the caller's concern. CWE-22, CWE-59, CWE-367. */
 export function confinedRealPath(jail: string, target: string): string | null {
   const real = realpathBounded(path.resolve(target));
-  return real === jail || real.startsWith(jail + path.sep) ? real : null;
+  const prefix = jail.endsWith(path.sep) ? jail : jail + path.sep;
+  return real === jail || real.startsWith(prefix) ? real : null;
 }
