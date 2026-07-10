@@ -112,9 +112,13 @@ import { SHELL_INTEGRATION_SCRIPT } from './shellIntegration';
 import { resolveWindowIconPath, applyDockIcon } from './appIcon';
 import { handleCliInstall } from './cliInstall';
 import { resolveLaunchInvocation } from './cliShim';
-import { resolveExampleFlowDir } from './exampleAssets';
 import type { BundleLocation } from './bundleLocation';
-import { handleInstallExamplesPreview, handleInstallExamplesApply } from './installExamples';
+import {
+  exampleInstallDirs,
+  handleInstallExamplesPreview,
+  handleInstallExamplesApply,
+  type ExampleDirs,
+} from './installExamples';
 import type { CliInstallResult } from '../shared/ipc';
 
 async function createWindow(): Promise<void> {
@@ -143,12 +147,9 @@ async function createWindow(): Promise<void> {
   const config = resolveRuntimeConfig(process.env);
   // §23.4: L anchors the cwd surfaces; the flow global dir is the per-user home (§18.1), not L.
   const { launchRoot, flowGlobalDir } = resolveLaunchSurfaces(process.env, os.homedir());
-  // §18.1/§23.4: the install-examples action's fixed bundle source (build-aware) + install target (the
-  // GLOBAL flow home). Resolved once from the running build; the handlers read this seam.
-  const exampleDirs = (): { bundleDir: string; targetDir: string } => ({
-    bundleDir: resolveExampleFlowDir(iconLoc),
-    targetDir: path.join(flowGlobalDir, '.agent-terminal'),
-  });
+  // §18.1/§23.4/§26.5: the install-examples action's bundle sources (build-aware) + its install targets
+  // (the GLOBAL flow home and the user-level Claude config directories). The handlers read this seam.
+  const exampleDirs = (): ExampleDirs => exampleInstallDirs(iconLoc, flowGlobalDir);
   const ptyProcess = await spawnAgentShell({
     integrationScriptPath: config.shellIntegration ? SHELL_INTEGRATION_SCRIPT : undefined,
     cwd: launchRoot,
@@ -1351,9 +1352,10 @@ async function createWindow(): Promise<void> {
             process.cwd(),
           ),
         })),
-      // Install bundled examples (§18.1/§23.4): the bundle resolves build-aware (packaged resources vs
-      // the unpackaged app path), and the flow definition + its templates install into the GLOBAL flow
-      // home <flowGlobalDir>/.agent-terminal (§18.1), read back by loadFlowDefinitionLocalFirst.
+      // Install bundled examples (§18.1/§23.4/§26.5): bundles resolve build-aware (packaged resources vs
+      // the unpackaged app path); the flow lands in the GLOBAL flow home read back by
+      // loadFlowDefinitionLocalFirst, and the definitions, persona skills and commands land in the
+      // user-level Claude config directories that the engine and Claude Code discover from.
       [CH.installExamplesPreview]: (_e, m) => handleInstallExamplesPreview(m, exampleDirs),
       [CH.installExamplesApply]: (_e, m) => handleInstallExamplesApply(m, exampleDirs),
     },

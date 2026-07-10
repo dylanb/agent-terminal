@@ -758,34 +758,67 @@ export type CliInstallResult =
   | { ok: true; path: string }
   | { ok: false; error: string };
 
-// ---- Install bundled examples (§18.1/§23.4) ----
+// ---- Install bundled examples (§18.1/§23.4/§26.5) ----
+
+/** The destinations the install action seeds. This is the ONE definition of destination identity: main
+ *  groups its results by these ids, the renderer collects one decision per id, and the request validator
+ *  admits no other. `flow` is the global flow home (§18.1); `loops` the engine's loop-config location
+ *  (§24.2.3); `skills` and `commands` the directories Claude Code — a separate process — discovers a
+ *  skill and a slash command from. */
+export const INSTALL_DESTINATION_IDS = ['flow', 'loops', 'skills', 'commands'] as const;
+
+export type InstallDestinationId = (typeof INSTALL_DESTINATION_IDS)[number];
 
 /** examples:preview request (§6): report which bundled files would conflict (exist and differ from
- *  the bundled content), driving the up-front overwrite prompt. Carries only sessionId — the bundle
- *  source and install target are computed by main from the running build. */
+ *  the bundled content), driving the up-front consent step. Carries only sessionId — the bundle
+ *  sources and install targets are computed by main from the running build. */
 export interface InstallExamplesPreviewMsg {
   sessionId: SessionId;
 }
 
-/** examples:preview result: the install-set entries that already exist and differ from the bundle.
- *  Empty when the flow home is clean or every present target is byte-identical (§18.1). */
+/** One destination's preview. The two modes are mutually exclusive: a destination with no conflict
+ *  carries no files and asks the user for no decision, so `files` exists only in the conflicting mode
+ *  (CLAUDE.md discriminated-union corollary). */
+export type InstallDestinationPreview =
+  | { destination: InstallDestinationId; conflict: false }
+  | { destination: InstallDestinationId; conflict: true; files: string[] };
+
+/** examples:preview result: one entry per destination the action would write. Observing a conflict
+ *  never writes anything (§18.1). */
 export interface InstallExamplesPreview {
-  conflicts: string[];
+  destinations: InstallDestinationPreview[];
 }
 
-/** examples:apply request (§6): install the bundled flow into the global flow home. `overwrite`
- *  governs ONLY targets that exist and differ; absent targets are always created regardless (§18.1). */
+/** examples:apply request (§6): seed every destination. `replace` names the destinations the user
+ *  consented to replace conflicting files in — a destination absent from the list keeps its files. The
+ *  decision is per destination, so consenting in one never replaces files in another. Absent targets
+ *  are always created regardless of the decision (§18.1). */
 export interface InstallExamplesApplyMsg {
   sessionId: SessionId;
-  overwrite: boolean;
+  replace: InstallDestinationId[];
 }
 
-/** examples:apply result: `ok` with the entries created / overwritten / skipped, or `!ok` with a
- *  human-readable `error`. A write the safe-path primitive refuses (symlinked container, CWE-59) is an
- *  `error`, never a silent skip — `skipped` means "left unchanged per the overwrite decision". */
+/** Files reported under the destination they were written to, so two destinations sharing a file name
+ *  yield two distinct, attributable entries. Paths are relative to that destination's root. */
+export interface InstallDestinationFiles {
+  destination: InstallDestinationId;
+  files: string[];
+}
+
+/** examples:apply result: `ok` with the entries created / overwritten / skipped grouped by destination,
+ *  or `!ok` with a human-readable `error`. A write the safe-path primitive refuses (symlinked container,
+ *  CWE-59) is an `error`, never a silent skip — `skipped` means "left unchanged per the replace
+ *  decision". A failure carries `created`/`overwritten` too: the action does not roll back a write that
+ *  already landed, so the result names exactly what it wrote before failing. Both are empty when the
+ *  pre-write container check refused, which is the all-or-nothing case. */
 export type InstallExamplesResult =
-  | { ok: true; created: string[]; overwritten: string[]; skipped: string[] }
-  | { ok: false; error: string };
+  | {
+      ok: true;
+      created: InstallDestinationFiles[];
+      overwritten: InstallDestinationFiles[];
+      skipped: InstallDestinationFiles[];
+    }
+  | { ok: false; error: string; created: InstallDestinationFiles[]; overwritten: InstallDestinationFiles[] };
 
 // ---- Preload-exposed API surfaces (§6) ----
 
@@ -952,7 +985,7 @@ export interface CliApi {
  *  writes per the decision and reports the created/overwritten/skipped sets or a human-readable error. */
 export interface ExamplesApi {
   preview(): Promise<InstallExamplesPreview>;
-  apply(overwrite: boolean): Promise<InstallExamplesResult>;
+  apply(replace: InstallDestinationId[]): Promise<InstallExamplesResult>;
 }
 
 declare global {

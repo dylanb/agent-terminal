@@ -1,33 +1,118 @@
-// §18.1/§23.4; writes route through atomicWriteFileSync (CWE-59).
+// §18.1/§23.4/§26.5; writes route through atomicWriteFileSync (CWE-59).
 
-import { readFileSync, readdirSync, statSync } from 'node:fs';
+import { accessSync, constants, readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { atomicWriteFileSync, isRealContainer } from './atomicFile';
-import type { InstallExamplesPreview, InstallExamplesResult } from '../shared/ipc';
+import type { BundleLocation } from './bundleLocation';
+import { resolveExampleCommandsDir, resolveExampleFlowDir, resolveExampleLoopsDir } from './exampleAssets';
+import { userConfigCommandsDir, userConfigLoopsDir, userConfigSkillsDir } from './userConfig';
+import {
+  INSTALL_DESTINATION_IDS,
+  type InstallDestinationFiles,
+  type InstallDestinationId,
+  type InstallExamplesPreview,
+  type InstallExamplesResult,
+} from '../shared/ipc';
 import { isValidInstallExamplesPreview, isValidInstallExamplesApply } from './ipcValidation';
 
-/** `bundleDir` is the resolved example/flow dir; `targetDir` is the global flow home (§18.1). */
+/** The bundle source and install target of every destination the action seeds. The skills destination
+ *  has no bundle dir of its own: its files fan in from every bundled loop's `skills/` (§26.5). */
 export interface ExampleDirs {
-  bundleDir: string;
-  targetDir: string;
+  flowBundleDir: string;
+  flowTargetDir: string;
+  loopsBundleDir: string;
+  loopsTargetDir: string;
+  skillsTargetDir: string;
+  commandsBundleDir: string;
+  commandsTargetDir: string;
+}
+
+/** Resolve the destination set for the running build. The loops target is the NAMED user-config branch,
+ *  never `resolveLoopDir`'s precedence-aware answer: an install is global, so it must not land inside
+ *  whichever repo the app happens to be pointed at (§24.2.3; CLAUDE.md precedence-aware corollary). */
+export function exampleInstallDirs(loc: BundleLocation, flowGlobalDir: string, configDir?: string): ExampleDirs {
+  return {
+    flowBundleDir: resolveExampleFlowDir(loc),
+    flowTargetDir: path.join(flowGlobalDir, '.agent-terminal'),
+    loopsBundleDir: resolveExampleLoopsDir(loc),
+    loopsTargetDir: userConfigLoopsDir(configDir),
+    skillsTargetDir: userConfigSkillsDir(configDir),
+    commandsBundleDir: resolveExampleCommandsDir(loc),
+    commandsTargetDir: userConfigCommandsDir(configDir),
+  };
 }
 
 const TEMPLATES_SUBDIR = 'todo-templates';
+const SKILLS_SUBDIR = 'skills';
 
-function installSet(bundleDir: string): string[] {
-  const set = ['flow.yaml'];
-  let entries: string[];
+interface PlannedFile {
+  rel: string;
+  src: string;
+}
+
+interface PlannedDestination {
+  id: InstallDestinationId;
+  targetDir: string;
+  files: PlannedFile[];
+}
+
+function entriesOf(dir: string): { name: string; isDirectory: boolean; isFile: boolean }[] {
   try {
-    entries = readdirSync(path.join(bundleDir, TEMPLATES_SUBDIR));
+    return readdirSync(dir, { withFileTypes: true })
+      .sort((a, b) => a.name.localeCompare(b.name))
+      .map((e) => ({ name: e.name, isDirectory: e.isDirectory(), isFile: e.isFile() }));
   } catch {
-    return set;
+    return [];
   }
-  for (const name of entries.sort()) {
-    if (!name.endsWith('.md')) continue; // §18.6: only .md files resolve as todo templates
-    const rel = path.join(TEMPLATES_SUBDIR, name);
-    if (statSync(path.join(bundleDir, rel)).isFile()) set.push(rel);
+}
+
+/** Every regular file under `dir`, relative to `base`. A symlink planted in the bundle is skipped, never
+ *  read through (CWE-59) — the bundle is an installed artifact, not necessarily one this build wrote. */
+function walkFiles(dir: string, base: string = dir): string[] {
+  const out: string[] = [];
+  for (const entry of entriesOf(dir)) {
+    const abs = path.join(dir, entry.name);
+    if (entry.isDirectory) out.push(...walkFiles(abs, base));
+    else if (entry.isFile) out.push(path.relative(base, abs));
   }
-  return set;
+  return out;
+}
+
+function filesUnder(bundleDir: string): PlannedFile[] {
+  return walkFiles(bundleDir).map((rel) => ({ rel, src: path.join(bundleDir, rel) }));
+}
+
+/** flow.yaml + the `.md` todo templates — §18.6: only `.md` files resolve as templates, so the flow's
+ *  install set is narrower than a recursive walk of its bundle dir. */
+function flowFiles(bundleDir: string): PlannedFile[] {
+  const rels = ['flow.yaml'];
+  for (const entry of entriesOf(path.join(bundleDir, TEMPLATES_SUBDIR))) {
+    if (!entry.isFile || !entry.name.endsWith('.md')) continue;
+    rels.push(path.join(TEMPLATES_SUBDIR, entry.name));
+  }
+  return rels.map((rel) => ({ rel, src: path.join(bundleDir, rel) }));
+}
+
+/** Claude Code discovers a skill only as `<skills root>/<skill name>/`, so the skills nested inside each
+ *  bundled loop are COPIED OUT to one shared root — a fan-in, not a move: §26.5 still requires each
+ *  skill under its own loop directory, which the `loops` destination writes. */
+function skillFiles(loopsBundleDir: string): PlannedFile[] {
+  const out: PlannedFile[] = [];
+  for (const loop of entriesOf(loopsBundleDir)) {
+    if (!loop.isDirectory) continue;
+    const skillsRoot = path.join(loopsBundleDir, loop.name, SKILLS_SUBDIR);
+    for (const rel of walkFiles(skillsRoot)) out.push({ rel, src: path.join(skillsRoot, rel) });
+  }
+  return out;
+}
+
+function planDestinations(dirs: ExampleDirs): PlannedDestination[] {
+  return [
+    { id: 'flow', targetDir: dirs.flowTargetDir, files: flowFiles(dirs.flowBundleDir) },
+    { id: 'loops', targetDir: dirs.loopsTargetDir, files: filesUnder(dirs.loopsBundleDir) },
+    { id: 'skills', targetDir: dirs.skillsTargetDir, files: skillFiles(dirs.loopsBundleDir) },
+    { id: 'commands', targetDir: dirs.commandsTargetDir, files: filesUnder(dirs.commandsBundleDir) },
+  ];
 }
 
 type Classification = 'create' | 'identical' | 'differ';
@@ -45,60 +130,106 @@ function classify(bundleFile: string, targetFile: string): Classification {
   return readFileSync(bundleFile).equals(target) ? 'identical' : 'differ';
 }
 
+/** True when a write into `dir` can be prepared: it is not a symlink (CWE-59 — the kernel would follow it
+ *  out of the intended root, and the loops container confers §26.6 `exec` authority on what lands there),
+ *  and the nearest existing ancestor grants write permission so the mkdir + create can succeed. */
+function isWritableContainer(dir: string): boolean {
+  if (!isRealContainer(dir)) return false;
+  let probe = dir;
+  for (;;) {
+    try {
+      accessSync(probe, constants.W_OK);
+      return true;
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== 'ENOENT') return false;
+      const parent = path.dirname(probe);
+      if (parent === probe) return false;
+      probe = parent;
+    }
+  }
+}
+
 function errMsg(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
 
-export function previewInstallExamples(bundleDir: string, targetDir: string): InstallExamplesPreview {
-  const conflicts: string[] = [];
-  for (const rel of installSet(bundleDir)) {
-    if (classify(path.join(bundleDir, rel), path.join(targetDir, rel)) === 'differ') conflicts.push(rel);
-  }
-  return { conflicts };
+type Groups = Map<InstallDestinationId, string[]>;
+
+function record(groups: Groups, id: InstallDestinationId, rel: string): void {
+  const list = groups.get(id);
+  if (list) list.push(rel);
+  else groups.set(id, [rel]);
 }
 
-export function applyInstallExamples(
-  bundleDir: string,
-  targetDir: string,
-  overwrite: boolean,
-): InstallExamplesResult {
-  // Not redundant with atomicWriteFileSync's per-file container guard (CWE-59): that one misses a
-  // symlinked home above a nested write when flow.yaml is skipped and never written directly.
-  if (!isRealContainer(targetDir)) return { ok: false, error: `Could not install: ${targetDir} is not a real directory` };
-  const created: string[] = [];
-  const overwritten: string[] = [];
-  const skipped: string[] = [];
-  for (const rel of installSet(bundleDir)) {
-    const bundleFile = path.join(bundleDir, rel);
-    const targetFile = path.join(targetDir, rel);
-    try {
-      const cls = classify(bundleFile, targetFile);
-      if (cls === 'identical' || (cls === 'differ' && !overwrite)) {
-        skipped.push(rel);
-        continue;
-      }
-      if (!atomicWriteFileSync(targetFile, readFileSync(bundleFile, 'utf8'))) {
-        return { ok: false, error: `Could not install ${rel}: ${path.dirname(targetFile)} is not a real directory` };
-      }
-      (cls === 'create' ? created : overwritten).push(rel);
-    } catch (e) {
-      return { ok: false, error: `Could not install ${rel}: ${errMsg(e)}` };
+function report(groups: Groups): InstallDestinationFiles[] {
+  return INSTALL_DESTINATION_IDS.filter((id) => (groups.get(id)?.length ?? 0) > 0).map((id) => ({
+    destination: id,
+    files: groups.get(id) as string[],
+  }));
+}
+
+export function previewInstallExamples(dirs: ExampleDirs): InstallExamplesPreview {
+  const destinations = planDestinations(dirs).map((dest) => {
+    const files = dest.files
+      .filter((f) => classify(f.src, path.join(dest.targetDir, f.rel)) === 'differ')
+      .map((f) => f.rel);
+    return files.length === 0
+      ? ({ destination: dest.id, conflict: false } as const)
+      : ({ destination: dest.id, conflict: true, files } as const);
+  });
+  return { destinations };
+}
+
+export function applyInstallExamples(dirs: ExampleDirs, replace: InstallDestinationId[]): InstallExamplesResult {
+  const plan = planDestinations(dirs).filter((d) => d.files.length > 0);
+
+  // All-or-nothing: every container the action would write is checked BEFORE the first write, so a
+  // detectable failure leaves no destination modified. A failure appearing only afterwards is reported,
+  // not rolled back — hence the created/overwritten lists on the error result.
+  for (const dest of plan) {
+    if (!isWritableContainer(dest.targetDir)) {
+      return { ok: false, error: `Could not install: ${dest.targetDir} cannot be written`, created: [], overwritten: [] };
     }
   }
-  return { ok: true, created, overwritten, skipped };
+
+  const consented = new Set(replace);
+  const created: Groups = new Map();
+  const overwritten: Groups = new Map();
+  const skipped: Groups = new Map();
+  const fail = (error: string): InstallExamplesResult => ({
+    ok: false,
+    error,
+    created: report(created),
+    overwritten: report(overwritten),
+  });
+
+  for (const dest of plan) {
+    for (const file of dest.files) {
+      const targetFile = path.join(dest.targetDir, file.rel);
+      try {
+        const cls = classify(file.src, targetFile);
+        if (cls === 'identical' || (cls === 'differ' && !consented.has(dest.id))) {
+          record(skipped, dest.id, file.rel);
+          continue;
+        }
+        if (!atomicWriteFileSync(targetFile, readFileSync(file.src, 'utf8'))) {
+          return fail(`Could not install ${file.rel}: ${path.dirname(targetFile)} is not a real directory`);
+        }
+        record(cls === 'create' ? created : overwritten, dest.id, file.rel);
+      } catch (e) {
+        return fail(`Could not install ${file.rel}: ${errMsg(e)}`);
+      }
+    }
+  }
+  return { ok: true, created: report(created), overwritten: report(overwritten), skipped: report(skipped) };
 }
 
-export function handleInstallExamplesPreview(
-  m: unknown,
-  dirs: () => ExampleDirs,
-): InstallExamplesPreview {
-  if (!isValidInstallExamplesPreview(m)) return { conflicts: [] };
-  const { bundleDir, targetDir } = dirs();
-  return previewInstallExamples(bundleDir, targetDir);
+export function handleInstallExamplesPreview(m: unknown, dirs: () => ExampleDirs): InstallExamplesPreview {
+  if (!isValidInstallExamplesPreview(m)) return { destinations: [] };
+  return previewInstallExamples(dirs());
 }
 
 export function handleInstallExamplesApply(m: unknown, dirs: () => ExampleDirs): InstallExamplesResult {
-  if (!isValidInstallExamplesApply(m)) return { ok: false, error: 'invalid install request' };
-  const { bundleDir, targetDir } = dirs();
-  return applyInstallExamples(bundleDir, targetDir, m.overwrite);
+  if (!isValidInstallExamplesApply(m)) return { ok: false, error: 'invalid install request', created: [], overwritten: [] };
+  return applyInstallExamples(dirs(), m.replace);
 }

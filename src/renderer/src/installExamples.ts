@@ -1,24 +1,43 @@
-// Install-examples VIEW organism — §18.1/§23.4; blocking-dialog pattern per UI-STANDARDS §5.
+// Install-examples VIEW organism — §18.1/§23.4/§26.5; blocking-dialog pattern per UI-STANDARDS §5.
 
-import type { InstallExamplesPreview, InstallExamplesResult } from '../../shared/ipc';
+import {
+  INSTALL_DESTINATION_IDS,
+  type InstallDestinationFiles,
+  type InstallDestinationId,
+  type InstallExamplesPreview,
+  type InstallExamplesResult,
+} from '../../shared/ipc';
 import { createModalShell } from './modalShell';
 import { captureFocusReturn } from './dom';
 
 export interface InstallExamplesDeps {
   preview(): Promise<InstallExamplesPreview>;
-  apply(overwrite: boolean): Promise<InstallExamplesResult>;
+  apply(replace: InstallDestinationId[]): Promise<InstallExamplesResult>;
 }
 
 export interface InstallExamples {
   dispose(): void;
 }
 
-function report(label: string, files: string[]): string {
-  return files.length === 0 ? `${label} none` : `${label} ${files.length} (${files.join(', ')})`;
+const DESTINATION_LABEL: Record<InstallDestinationId, string> = {
+  flow: 'Flow home',
+  loops: 'Loop definitions',
+  skills: 'Claude Code skills',
+  commands: 'Claude Code commands',
+};
+
+interface Report {
+  created: InstallDestinationFiles[];
+  overwritten: InstallDestinationFiles[];
+  skipped: InstallDestinationFiles[];
 }
 
-function resultMessage(res: Extract<InstallExamplesResult, { ok: true }>): string {
-  return `Installed examples — ${report('created', res.created)}, ${report('overwrote', res.overwritten)}, ${report('skipped', res.skipped)}.`;
+function total(groups: InstallDestinationFiles[]): number {
+  return groups.reduce((n, g) => n + g.files.length, 0);
+}
+
+function summarize(report: Report): string {
+  return `Installed examples — created ${total(report.created)}, overwrote ${total(report.overwritten)}, skipped ${total(report.skipped)}.`;
 }
 
 export function createInstallExamples(host: HTMLElement, deps: InstallExamplesDeps): InstallExamples {
@@ -35,14 +54,22 @@ export function createInstallExamples(host: HTMLElement, deps: InstallExamplesDe
   head.append(
     el('div', 'eyebrow', 'Settings'),
     el('h1', 'serif', 'Example flow'),
-    el('div', 'sub', 'Install the bundled feature-dev flow into your global flow home so a new instance renders it outside a repo.'),
+    el(
+      'div',
+      'sub',
+      'Install the bundled feature-dev flow, its loop definitions, the reviewer persona skills, and the bundled commands so a new instance can render and run them.',
+    ),
   );
 
   const card = el('div', 'kprofile');
   const txt = el('div');
   txt.append(
     el('div', 'kp-label', 'feature-dev flow'),
-    el('div', 'kp-help', 'Copies the flow definition and its todo templates to ~/.agent-terminal. Already-customized files are left untouched unless you choose to overwrite.'),
+    el(
+      'div',
+      'kp-help',
+      'Copies the flow to ~/.agent-terminal, and the loop definitions, persona skills and commands to your Claude config directory. Files you already have are left untouched unless you choose to replace them.',
+    ),
   );
   const btn = el('button', 'pill signal', 'Install examples');
   btn.type = 'button';
@@ -56,12 +83,16 @@ export function createInstallExamples(host: HTMLElement, deps: InstallExamplesDe
   const alert = el('div', 'cli-status err');
   alert.setAttribute('role', 'alert');
 
+  // The install set runs to ~70 entries. The live region carries the summary only; the per-destination
+  // detail lives outside it so a screen reader is not read every file name (WCAG 4.1.3).
+  const reportList = el('ul', 'install-report');
+
   const modalHost = el('div', 'install-examples-modal-host');
 
-  root.append(head, card, status, alert, modalHost);
+  root.append(head, card, status, alert, reportList, modalHost);
   host.appendChild(root);
 
-  const modal = createModalShell(modalHost, 'install-examples-overwrite');
+  const modal = createModalShell(modalHost, 'install-examples-replace');
 
   function showStatus(cls: string, text: string): void {
     alert.textContent = '';
@@ -74,19 +105,45 @@ export function createInstallExamples(host: HTMLElement, deps: InstallExamplesDe
     alert.textContent = text;
   }
 
+  function renderReport(report: Report): void {
+    reportList.replaceChildren();
+    for (const id of INSTALL_DESTINATION_IDS) {
+      const lines: string[] = [];
+      for (const [label, groups] of [
+        ['created', report.created],
+        ['overwrote', report.overwritten],
+        ['skipped', report.skipped],
+      ] as const) {
+        const files = groups.find((g) => g.destination === id)?.files ?? [];
+        if (files.length > 0) lines.push(`${label} ${files.length}: ${files.join(', ')}`);
+      }
+      if (lines.length === 0) continue;
+      const item = el('li');
+      item.setAttribute('data-destination', id);
+      item.append(el('div', 'ir-dest', DESTINATION_LABEL[id]));
+      for (const line of lines) item.append(el('div', 'ir-line', line));
+      reportList.append(item);
+    }
+  }
+
   let busy = false;
   function setBusy(v: boolean): void {
     busy = v;
     btn.disabled = v;
   }
 
-  async function install(overwrite: boolean, returnFocus: () => void): Promise<void> {
+  async function install(replace: InstallDestinationId[], returnFocus: () => void): Promise<void> {
     setBusy(true);
     showStatus('cli-status', 'Installing…');
     try {
-      const res = await deps.apply(overwrite);
-      if (res.ok) showStatus('cli-status ok', resultMessage(res));
-      else showError(res.error);
+      const res = await deps.apply(replace);
+      if (res.ok) {
+        renderReport(res);
+        showStatus('cli-status ok', summarize(res));
+      } else {
+        renderReport({ created: res.created, overwritten: res.overwritten, skipped: [] });
+        showError(res.error);
+      }
     } catch (e) {
       showError(e instanceof Error ? e.message : 'Install failed.');
     } finally {
@@ -95,7 +152,9 @@ export function createInstallExamples(host: HTMLElement, deps: InstallExamplesDe
     }
   }
 
-  function promptOverwrite(count: number, returnFocus: () => void): void {
+  type Conflict = { destination: InstallDestinationId; files: string[] };
+
+  function promptReplace(conflicts: Conflict[], returnFocus: () => void): void {
     modal.render(({ doc: d, titleId, close }) => {
       const describedById = `${titleId}-msg`;
       const cardEl = d.createElement('div');
@@ -103,33 +162,59 @@ export function createInstallExamples(host: HTMLElement, deps: InstallExamplesDe
       const h3 = d.createElement('h3');
       h3.className = 'serif';
       h3.id = titleId;
-      h3.textContent = 'Overwrite customized files?';
+      h3.textContent = 'Replace existing files?';
       const p = d.createElement('p');
       p.className = 'ph';
       p.id = describedById;
-      p.textContent = `${count} file${count === 1 ? '' : 's'} already exist with different content. Overwrite ${count === 1 ? 'it' : 'them'} with the bundled version, or keep your version? Missing files are installed either way.`;
+      p.textContent =
+        'Some places already hold files that differ from the bundled versions. Choose where to replace them — anything you leave unchecked keeps your files. Missing files are installed either way.';
       cardEl.append(h3, p);
+
+      const fieldset = d.createElement('fieldset');
+      fieldset.className = 'install-consent';
+      const legend = d.createElement('legend');
+      legend.textContent = 'Replace files in';
+      fieldset.append(legend);
+
+      const boxes = new Map<InstallDestinationId, HTMLInputElement>();
+      for (const conflict of conflicts) {
+        const label = d.createElement('label');
+        label.className = 'install-consent-opt';
+        const box = d.createElement('input');
+        box.type = 'checkbox';
+        box.setAttribute('data-destination', conflict.destination);
+        const name = d.createElement('span');
+        name.className = 'ic-name';
+        name.textContent = `${DESTINATION_LABEL[conflict.destination]} — ${conflict.files.length} file${conflict.files.length === 1 ? '' : 's'}`;
+        const files = d.createElement('span');
+        files.className = 'ic-files';
+        files.textContent = conflict.files.join(', ');
+        label.append(box, name, files);
+        fieldset.append(label);
+        boxes.set(conflict.destination, box);
+      }
+      cardEl.append(fieldset);
 
       const foot = d.createElement('div');
       foot.className = 'mfoot';
-      const keep = d.createElement('button');
-      keep.className = 'pill cancel keep';
-      keep.textContent = 'Keep mine';
-      keep.addEventListener('click', () => {
+      const cancel = d.createElement('button');
+      cancel.type = 'button';
+      cancel.className = 'pill cancel';
+      cancel.textContent = 'Cancel';
+      cancel.addEventListener('click', () => close());
+      const confirm = d.createElement('button');
+      confirm.type = 'button';
+      confirm.className = 'pill signal confirm';
+      confirm.textContent = 'Install';
+      confirm.addEventListener('click', () => {
+        const replace = [...boxes].filter(([, box]) => box.checked).map(([id]) => id);
         close();
-        void install(false, returnFocus);
+        void install(replace, returnFocus);
       });
-      const overwrite = d.createElement('button');
-      overwrite.className = 'pill danger overwrite';
-      overwrite.textContent = 'Overwrite';
-      overwrite.addEventListener('click', () => {
-        close();
-        void install(true, returnFocus);
-      });
-      foot.append(keep, overwrite);
+      foot.append(cancel, confirm);
       cardEl.append(foot);
 
-      return { card: cardEl, initialFocus: keep, describedById };
+      return { card: cardEl, initialFocus: boxes.values().next().value ?? confirm, describedById };
     });
   }
 
@@ -137,10 +222,13 @@ export function createInstallExamples(host: HTMLElement, deps: InstallExamplesDe
     if (busy) return;
     const returnFocus = captureFocusReturn(btn);
     setBusy(true);
+    reportList.replaceChildren();
     showStatus('cli-status', 'Checking…');
-    let conflicts: string[];
+    let conflicts: Conflict[];
     try {
-      conflicts = (await deps.preview()).conflicts;
+      conflicts = (await deps.preview()).destinations.flatMap((d) =>
+        d.conflict ? [{ destination: d.destination, files: d.files }] : [],
+      );
     } catch (e) {
       showError(e instanceof Error ? e.message : 'Install failed.');
       setBusy(false);
@@ -148,7 +236,7 @@ export function createInstallExamples(host: HTMLElement, deps: InstallExamplesDe
       return;
     }
     if (conflicts.length === 0) {
-      await install(false, returnFocus);
+      await install([], returnFocus);
       return;
     }
     setBusy(false);
@@ -156,7 +244,7 @@ export function createInstallExamples(host: HTMLElement, deps: InstallExamplesDe
     // opener createModalShell restores to on a no-choice dismissal (WCAG 2.4.3). The guard keeps focus
     // where the user moved it if they redirected it during preview.
     returnFocus();
-    promptOverwrite(conflicts.length, returnFocus);
+    promptReplace(conflicts, returnFocus);
   }
 
   btn.addEventListener('click', () => void run());

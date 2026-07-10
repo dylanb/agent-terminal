@@ -3,10 +3,10 @@
 // Like the §19.1 store it NEVER throws — every failure mode degrades to null.
 
 import { readFileSync, realpathSync } from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import yaml from 'js-yaml';
 import { isRecord } from './yamlRecord';
+import { userConfigLoopsDir } from './userConfig';
 
 /** One action of a gate's `on_*` list (§26.6): the engine executes these in order when the human picks
  *  an option. `kind` selects the effect (`mark-pr-ready`, `set-phase2`, …); `args` carries its params
@@ -139,12 +139,6 @@ const SCHEMA_VERSION = '4';
 // string is confined to a single safe path-segment — no separators or `..` (CWE-22 defense in depth).
 const SAFE_NAME = /^[a-z0-9][a-z0-9-]*$/;
 
-/** The engine reads `$CLAUDE_CONFIG_DIR/loops/`, defaulting to `~/.claude` (`agent-loop list`). */
-function configLoopsDir(configDir?: string): string {
-  const base = configDir ?? process.env.CLAUDE_CONFIG_DIR ?? path.join(os.homedir(), '.claude');
-  return path.join(base, 'loops');
-}
-
 /** Where a LoopDef's bytes came from, and therefore whose authority they carry: `operator-config` is the
  *  user's own `<configLoops>/` copy; `repo` is a file inside the checked-out repository, i.e. untrusted
  *  content authored by whoever wrote the repo. Capabilities that let a def act on the machine (§26.6
@@ -163,7 +157,7 @@ interface ResolvedLoopDef {
 function resolveLoopDefPath(repoDir: string, name: string, configDir?: string): ResolvedLoopDef | null {
   if (!SAFE_NAME.test(name)) return null;
   const fromConfig: ResolvedLoopDef = {
-    path: path.join(configLoopsDir(configDir), name, `${name}.yaml`),
+    path: path.join(userConfigLoopsDir(configDir), name, `${name}.yaml`),
     origin: 'operator-config',
   };
   try {
