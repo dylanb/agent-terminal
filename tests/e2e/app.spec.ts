@@ -4007,6 +4007,13 @@ test('an interrupted run resumes at the consolidate turn on launch without re-ru
 // plan), never skip to reviewers and grade the stale plan — plan.md is not iteration-stamped, so only a
 // downstream artifact for the current iteration proves the work turn ran.
 test('resume re-enters the work turn when a re-iteration has a stale plan but no review for the new iteration (§26.13 / L8)', async () => {
+  // Alone among the resume tests this one re-enters at WORK and drives the FULL chain (work → reviewers →
+  // consolidate → gate) from a cold launch. Its first poll lands on `work-ran`, an EARLY artifact, so the
+  // gate poll below must absorb the entire reviewers→consolidate→gate tail on its own — a 3-turn tail where
+  // the single-turn siblings' gate poll covers one. 25s (the siblings' budget) is too tight for that tail
+  // under Podman/Xvfb load, and widening it collides with the 60s global per-test cap; grant this test the
+  // proportionally larger wall-clock budget the longest chain needs.
+  test.setTimeout(90_000);
   const repo = seedResumeRepo('agent-term-e2e-l8-resume-stale-', { iteration: 2, reviews: 'none' });
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-l8-resume-stale-home-'));
   const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-l8-resume-stale-bin-');
@@ -4035,8 +4042,10 @@ test('resume re-enters the work turn when a re-iteration has a stale plan but no
   await expect
     .poll(() => existsSync(join(repo, '.agent-loop', 'work-ran')), { timeout: 25_000 })
     .toBe(true);
+  // The whole reviewers→consolidate→gate tail runs inside THIS poll (work-ran, above, is an early artifact),
+  // so it gets the full-chain budget, not the single-turn siblings' 25s.
   await expect
-    .poll(() => readFileSync(stateFile, 'utf8'), { timeout: 25_000 })
+    .poll(() => readFileSync(stateFile, 'utf8'), { timeout: 45_000 })
     .toContain('status: awaiting-human-plan-approval');
 
   await app.close();
