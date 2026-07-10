@@ -347,6 +347,7 @@ describe('applyInstallExamples — a symlink nested inside a destination is refu
   it.each([
     ["the file's own container", path.join('plan-loop', 'charter')],
     ['an intermediate ancestor', 'plan-loop'],
+    ['an ancestor two levels below the destination', path.join('plan-loop', 'skills')],
   ])('refuses when %s under the loops destination is a symlink', (_label, rel) => {
     const real = mkdtempSync(path.join(tmpdir(), 'link-target-'));
     try {
@@ -357,6 +358,7 @@ describe('applyInstallExamples — a symlink nested inside a destination is refu
       const res = applyInstallExamples(dirs, ALL);
       expect(res.ok).toBe(false);
       if (res.ok) return;
+      expect(res.error).toContain('a symbolic link stands on the path to it');
       expect(res.error).toContain('plan-loop');
       expect(walk(real)).toEqual([]); // nothing written through the link
 
@@ -364,7 +366,7 @@ describe('applyInstallExamples — a symlink nested inside a destination is refu
       expect(filesFor(res.created, 'flow').sort()).toEqual([...FLOW_SET].sort());
       const namedLoops = [...filesFor(res.created, 'loops'), ...filesFor(res.overwritten, 'loops')];
       expect(namedLoops.length).toBeGreaterThan(0);
-      expect(namedLoops.filter((r) => r.startsWith(`plan-loop${path.sep}`))).toEqual([]);
+      expect(namedLoops.filter((r) => r.startsWith(`${rel}${path.sep}`))).toEqual([]);
       expect(filesFor(res.created, 'skills')).toEqual([]);
       expect(filesFor(res.created, 'commands')).toEqual([]);
       expect(existsSync(targetOf('commands', commandRel))).toBe(false);
@@ -379,6 +381,12 @@ describe('applyInstallExamples — a failure once writing has begun names everyt
     // A directory standing where a command file must be written: the pre-flight (a container check)
     // cannot see it, so the failure lands mid-write, after flow/loops/skills are on disk.
     mkdirSync(path.join(dirs.commandsTargetDir, commandRel), { recursive: true });
+    // A pre-action file the run will skip (declined), so `no file outside that list` has a real member
+    // whose bytes can be compared rather than a vacuously empty set.
+    const preserved = targetOf('skills', skillRel);
+    const preservedBytes = 'my own skill\n';
+    mkdirSync(path.dirname(preserved), { recursive: true });
+    writeFileSync(preserved, preservedBytes);
 
     const res = applyInstallExamples(dirs, []);
     expect(res.ok).toBe(false);
@@ -389,10 +397,19 @@ describe('applyInstallExamples — a failure once writing has begun names everyt
       ALL.flatMap((id) => [...filesFor(res.created, id), ...filesFor(res.overwritten, id)].map((r) => targetOf(id, r))),
     );
     expect(named.size).toBeGreaterThan(0); // writing really had begun
+    expect(named.has(preserved)).toBe(false);
 
+    let unnamed = 0;
     for (const id of ALL) {
-      for (const rel of walk(targetOf(id, '.'))) expect(named.has(targetOf(id, rel))).toBe(true);
+      for (const rel of walk(targetOf(id, '.'))) {
+        const abs = targetOf(id, rel);
+        if (named.has(abs)) continue;
+        unnamed++;
+        expect(abs).toBe(preserved);
+        expect(readFileSync(abs, 'utf8')).toBe(preservedBytes);
+      }
     }
+    expect(unnamed).toBe(1);
   });
 });
 
@@ -448,6 +465,28 @@ describe('applyInstallExamples — a mispackaged bundle is a reported error, not
       expect(res.error).toBeTruthy();
     } finally {
       rmSync(bundleEmpty, { recursive: true, force: true });
+    }
+  });
+
+  it('skips a symlink planted in the bundle rather than reading through it (CWE-59)', () => {
+    const bundleX = mkdtempSync(path.join(tmpdir(), 'bundle-link-'));
+    const outside = mkdtempSync(path.join(tmpdir(), 'outside-bundle-'));
+    try {
+      writeFileSync(path.join(outside, 'secret.md'), 'not part of the bundle\n');
+      mkdirSync(path.join(outside, 'secret-dir'), { recursive: true });
+      writeFileSync(path.join(outside, 'secret-dir', 'nested.md'), 'nor is this\n');
+      writeFileSync(path.join(bundleX, commandRel), 'a real bundled command\n');
+      symlinkSync(path.join(outside, 'secret.md'), path.join(bundleX, 'linked.md'));
+      symlinkSync(path.join(outside, 'secret-dir'), path.join(bundleX, 'linked-dir'));
+
+      const res = okOf(applyInstallExamples({ ...dirs, commandsBundleDir: bundleX }, []));
+      expect(filesFor(res.created, 'commands')).toEqual([commandRel]);
+      expect(walk(dirs.commandsTargetDir)).toEqual([commandRel]);
+      expect(existsSync(path.join(dirs.commandsTargetDir, 'linked.md'))).toBe(false);
+      expect(existsSync(path.join(dirs.commandsTargetDir, 'linked-dir'))).toBe(false);
+    } finally {
+      rmSync(bundleX, { recursive: true, force: true });
+      rmSync(outside, { recursive: true, force: true });
     }
   });
 

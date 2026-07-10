@@ -45,6 +45,14 @@ describe('install examples view organism (§18.1/§23.4)', () => {
     ...over,
   });
 
+  function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
+    let resolve: (value: T) => void = () => {};
+    const promise = new Promise<T>((r) => {
+      resolve = r;
+    });
+    return { promise, resolve };
+  }
+
   const button = (): HTMLButtonElement => host.querySelector('.kprofile button') as HTMLButtonElement;
   const status = (): HTMLElement => host.querySelector('[role="status"]') as HTMLElement;
   const alert = (): HTMLElement | null => host.querySelector('[role="alert"]');
@@ -56,6 +64,18 @@ describe('install examples view organism (§18.1/§23.4)', () => {
   const scrim = (): HTMLElement => host.querySelector('.flow-scrim') as HTMLElement;
   const reportGroup = (id: InstallDestinationId): HTMLElement | null =>
     host.querySelector(`.install-report [data-destination="${id}"]`);
+  const reportList = (): HTMLElement => host.querySelector('.install-report') as HTMLElement;
+  const busy = (): string | null => button().getAttribute('aria-disabled');
+
+  async function openConsent(
+    conflicts: InstallDestinationId[],
+    over: Partial<InstallExamplesDeps> = {},
+  ): Promise<void> {
+    createInstallExamples(host, deps({ preview: vi.fn(async () => conflicting(...conflicts)), ...over }));
+    button().focus();
+    button().click();
+    await vi.waitFor(() => expect(prompt()).not.toBeNull());
+  }
 
   it('renders an install button, a status live region, and an assertive alert region', () => {
     createInstallExamples(host, deps());
@@ -92,16 +112,12 @@ describe('install examples view organism (§18.1/§23.4)', () => {
 
   it('shows the consent step before any apply when a destination conflicts', async () => {
     const apply = vi.fn(async () => okResult());
-    createInstallExamples(host, deps({ preview: vi.fn(async () => conflicting('skills')), apply }));
-    button().click();
-    await vi.waitFor(() => expect(prompt()).not.toBeNull());
+    await openConsent(['skills'], { apply });
     expect(apply).not.toHaveBeenCalled();
   });
 
   it('offers one decision per CONFLICTING destination and none for the clean ones', async () => {
-    createInstallExamples(host, deps({ preview: vi.fn(async () => conflicting('skills', 'commands')) }));
-    button().click();
-    await vi.waitFor(() => expect(prompt()).not.toBeNull());
+    await openConsent(['skills', 'commands']);
     expect(consentBox('skills')).toBeTruthy();
     expect(consentBox('commands')).toBeTruthy();
     expect(consentBox('flow')).toBeNull();
@@ -109,17 +125,13 @@ describe('install examples view organism (§18.1/§23.4)', () => {
   });
 
   it('names the conflicting files under each destination so the user knows what is at stake', async () => {
-    createInstallExamples(host, deps({ preview: vi.fn(async () => conflicting('skills')) }));
-    button().click();
-    await vi.waitFor(() => expect(prompt()).not.toBeNull());
+    await openConsent(['skills']);
     expect(prompt()?.textContent).toContain('skills-file.md');
   });
 
   it('forwards only the consented destinations — one decision never covers two', async () => {
     const apply = vi.fn(async () => okResult());
-    createInstallExamples(host, deps({ preview: vi.fn(async () => conflicting('skills', 'commands')), apply }));
-    button().click();
-    await vi.waitFor(() => expect(consentBox('commands')).toBeTruthy());
+    await openConsent(['skills', 'commands'], { apply });
     consentBox('commands').click();
     confirmBtn().click();
     await vi.waitFor(() => expect(apply).toHaveBeenCalledWith(['commands']));
@@ -127,9 +139,7 @@ describe('install examples view organism (§18.1/§23.4)', () => {
 
   it('forwards an empty list when the user confirms with nothing checked, so absent files still install', async () => {
     const apply = vi.fn(async () => okResult({ created: [{ destination: 'loops', files: ['plan-loop/plan-loop.yaml'] }], skipped: [{ destination: 'skills', files: ['a/SKILL.md'] }] }));
-    createInstallExamples(host, deps({ preview: vi.fn(async () => conflicting('skills')), apply }));
-    button().click();
-    await vi.waitFor(() => expect(confirmBtn()).toBeTruthy());
+    await openConsent(['skills'], { apply });
     confirmBtn().click();
     await vi.waitFor(() => expect(apply).toHaveBeenCalledWith([]));
     await vi.waitFor(() => expect(status().textContent?.toLowerCase()).toContain('skipped'));
@@ -138,44 +148,63 @@ describe('install examples view organism (§18.1/§23.4)', () => {
 
   it('gives the report list an accessible name so its purpose is announced (WCAG 1.3.1)', () => {
     createInstallExamples(host, deps());
-    const list = host.querySelector('.install-report') as HTMLElement;
-    expect(list.getAttribute('aria-label')?.trim()).toBeTruthy();
+    expect(reportList().getAttribute('aria-label')?.trim()).toBeTruthy();
+  });
+
+  it('keeps the empty report list out of the accessibility tree until it has something to report (WCAG 4.1.2)', async () => {
+    createInstallExamples(host, deps());
+    expect(reportList().hidden).toBe(true);
+    button().click();
+    await vi.waitFor(() => expect(reportGroup('flow')).not.toBeNull());
+    expect(reportList().hidden).toBe(false);
+  });
+
+  it('re-hides the report list when a run produces nothing to report', async () => {
+    const apply = vi.fn(async () => okResult({ created: [], overwritten: [], skipped: [] }));
+    createInstallExamples(host, deps({ apply }));
+    button().click();
+    await vi.waitFor(() => expect(status().className).toMatch(/\bok\b/));
+    expect(reportList().hidden).toBe(true);
   });
 
   it.each([
     ['the cancel button', () => cancelBtn().click()],
     ['Escape', () => prompt()!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))],
     ['the scrim', () => scrim().click()],
-  ])('clears the stale progress status when the consent step is dismissed with %s (WCAG 4.1.3)', async (_label, dismiss) => {
-    createInstallExamples(host, deps({ preview: vi.fn(async () => conflicting('flow')) }));
-    button().click();
-    await vi.waitFor(() => expect(prompt()).not.toBeNull());
+  ])('announces the cancellation rather than silently emptying the live region when dismissed with %s (WCAG 4.1.3)', async (_label, dismiss) => {
+    await openConsent(['flow']);
     expect(status().textContent).toBe('Checking…');
     dismiss();
-    expect(status().textContent).toBe('');
+    expect(status().textContent).toBe('Install cancelled.');
+  });
+
+  it.each([
+    ['the cancel button', () => cancelBtn().click()],
+    ['Escape', () => prompt()!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))],
+    ['the scrim', () => scrim().click()],
+  ])('returns focus to the install button when the consent step is dismissed with %s (WCAG 2.4.3)', async (_label, dismiss) => {
+    await openConsent(['flow']);
+    dismiss();
+    expect(host.ownerDocument.activeElement).toBe(button());
   });
 
   it('still announces progress when the consent step is confirmed rather than dismissed', async () => {
-    let resolveApply: (r: InstallExamplesResult) => void = () => {};
-    const apply = vi.fn(() => new Promise<InstallExamplesResult>((r) => { resolveApply = r; }));
-    createInstallExamples(host, deps({ preview: vi.fn(async () => conflicting('flow')), apply }));
-    button().click();
-    await vi.waitFor(() => expect(confirmBtn()).toBeTruthy());
+    const applied = deferred<InstallExamplesResult>();
+    const apply = vi.fn(() => applied.promise);
+    await openConsent(['flow'], { apply });
     confirmBtn().click();
     expect(status().textContent).toBe('Installing…');
-    resolveApply(okResult());
+    applied.resolve(okResult());
     await vi.waitFor(() => expect(status().textContent?.toLowerCase()).toContain('created'));
   });
 
   it('cancelling the consent step writes nothing at all', async () => {
     const apply = vi.fn(async () => okResult());
-    createInstallExamples(host, deps({ preview: vi.fn(async () => conflicting('flow')), apply }));
-    button().click();
-    await vi.waitFor(() => expect(cancelBtn()).toBeTruthy());
+    await openConsent(['flow'], { apply });
     cancelBtn().click();
     expect(prompt()).toBeNull();
     expect(apply).not.toHaveBeenCalled();
-    expect(button().disabled).toBe(false);
+    expect(busy()).toBe('false');
   });
 
   it('groups the reported files under the destination each was written to', async () => {
@@ -186,9 +215,7 @@ describe('install examples view organism (§18.1/§23.4)', () => {
         skipped: [{ destination: 'flow', files: ['flow.yaml'] }],
       }),
     );
-    createInstallExamples(host, deps({ preview: vi.fn(async () => conflicting('skills')), apply }));
-    button().click();
-    await vi.waitFor(() => expect(confirmBtn()).toBeTruthy());
+    await openConsent(['skills'], { apply });
     consentBox('skills').click();
     confirmBtn().click();
     await vi.waitFor(() => expect(reportGroup('commands')).not.toBeNull());
@@ -238,18 +265,30 @@ describe('install examples view organism (§18.1/§23.4)', () => {
 
   it('returns focus to the install button after confirming the consent step (WCAG 2.4.3)', async () => {
     const apply = vi.fn(async () => okResult({ created: [], overwritten: [{ destination: 'flow', files: ['flow.yaml'] }] }));
-    createInstallExamples(host, deps({ preview: vi.fn(async () => conflicting('flow')), apply }));
-    button().focus();
-    button().click();
-    await vi.waitFor(() => expect(confirmBtn()).toBeTruthy());
+    await openConsent(['flow'], { apply });
     confirmBtn().click();
     await vi.waitFor(() => expect(status().className).toMatch(/\bok\b/));
     expect(host.ownerDocument.activeElement).toBe(button());
   });
 
+  it('keeps focus on the install button while the install is in flight (WCAG 2.4.3)', async () => {
+    const applied = deferred<InstallExamplesResult>();
+    const apply = vi.fn(() => applied.promise);
+    createInstallExamples(host, deps({ apply }));
+    button().focus();
+    button().click();
+    await vi.waitFor(() => expect(apply).toHaveBeenCalledTimes(1));
+    expect(status().textContent).toBe('Installing…');
+    expect(host.ownerDocument.activeElement).toBe(button());
+    expect(button().getAttribute('aria-busy')).toBe('true');
+    applied.resolve(okResult());
+    await vi.waitFor(() => expect(status().textContent?.toLowerCase()).toContain('created'));
+    expect(button().getAttribute('aria-busy')).toBe('false');
+  });
+
   it('does not yank focus back to the button if the user moved focus away during install (WCAG 2.4.3)', async () => {
-    let resolveApply: (r: InstallExamplesResult) => void = () => {};
-    const apply = vi.fn(() => new Promise<InstallExamplesResult>((r) => { resolveApply = r; }));
+    const applied = deferred<InstallExamplesResult>();
+    const apply = vi.fn(() => applied.promise);
     createInstallExamples(host, deps({ apply }));
     const other = document.createElement('input');
     document.body.appendChild(other);
@@ -257,7 +296,7 @@ describe('install examples view organism (§18.1/§23.4)', () => {
     button().click();
     await vi.waitFor(() => expect(apply).toHaveBeenCalledTimes(1));
     other.focus();
-    resolveApply(okResult());
+    applied.resolve(okResult());
     await vi.waitFor(() => expect(status().textContent?.toLowerCase()).toContain('created'));
     expect(host.ownerDocument.activeElement).toBe(other);
   });
@@ -280,36 +319,32 @@ describe('install examples view organism (§18.1/§23.4)', () => {
   });
 
   it('does not start a second run while one is already in flight', async () => {
-    let resolvePreview: (p: InstallExamplesPreview) => void = () => {};
-    const preview = vi.fn(() => new Promise<InstallExamplesPreview>((r) => { resolvePreview = r; }));
+    const previewed = deferred<InstallExamplesPreview>();
+    const preview = vi.fn(() => previewed.promise);
     createInstallExamples(host, deps({ preview }));
     button().click();
-    await vi.waitFor(() => expect(button().disabled).toBe(true));
+    await vi.waitFor(() => expect(busy()).toBe('true'));
     button().click();
     expect(preview).toHaveBeenCalledTimes(1);
-    resolvePreview(clean);
+    previewed.resolve(clean);
   });
 
-  it('keeps the install button enabled while the consent step is open so a scrim dismissal cannot strand it disabled', async () => {
+  it('keeps the install button operable while the consent step is open so a scrim dismissal cannot strand it', async () => {
     const apply = vi.fn(async () => okResult());
-    createInstallExamples(host, deps({ preview: vi.fn(async () => conflicting('flow')), apply }));
-    button().click();
-    await vi.waitFor(() => expect(prompt()).not.toBeNull());
-    expect(button().disabled).toBe(false);
+    await openConsent(['flow'], { apply });
+    expect(busy()).toBe('false');
     scrim().click();
     expect(prompt()).toBeNull();
-    expect(button().disabled).toBe(false);
+    expect(busy()).toBe('false');
     expect(apply).not.toHaveBeenCalled();
   });
 
-  it('keeps the install button enabled when the consent step is dismissed with Escape without a choice', async () => {
+  it('keeps the install button operable when the consent step is dismissed with Escape without a choice', async () => {
     const apply = vi.fn(async () => okResult());
-    createInstallExamples(host, deps({ preview: vi.fn(async () => conflicting('flow')), apply }));
-    button().click();
-    await vi.waitFor(() => expect(prompt()).not.toBeNull());
+    await openConsent(['flow'], { apply });
     prompt()!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
     expect(prompt()).toBeNull();
-    expect(button().disabled).toBe(false);
+    expect(busy()).toBe('false');
     expect(apply).not.toHaveBeenCalled();
   });
 
@@ -317,7 +352,18 @@ describe('install examples view organism (§18.1/§23.4)', () => {
     createInstallExamples(host, deps());
     button().click();
     await vi.waitFor(() => expect(status().textContent?.toLowerCase()).toContain('created'));
+    expect(busy()).toBe('false');
+  });
+
+  it('marks the install button aria-disabled while a run is in flight rather than removing it from the tab order (WCAG 2.4.3)', async () => {
+    const previewed = deferred<InstallExamplesPreview>();
+    createInstallExamples(host, deps({ preview: vi.fn(() => previewed.promise) }));
+    button().focus();
+    button().click();
+    await vi.waitFor(() => expect(busy()).toBe('true'));
     expect(button().disabled).toBe(false);
+    expect(host.ownerDocument.activeElement).toBe(button());
+    previewed.resolve(clean);
   });
 
   it('dispose() clears the view from its host', () => {
