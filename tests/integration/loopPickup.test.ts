@@ -191,6 +191,21 @@ describe('in-app pickup runner (§26.9 / L1)', () => {
       expect(g.calls).not.toContain('wipe:plan-loop/issue-176');
       expect(written).toBeNull();
     });
+
+    it('never wipes under a non-wipe-and-retry policy even when wipeConflict is set — the destructive path enforces the policy too', async () => {
+      const g = makeFakeGit({ branchExists: true });
+      const h = makeFakeGitHub();
+      // A confirmed wipe (wipeConflict) only reaches here for a wipe-and-retry job by construction, but the
+      // destructive op must guard the policy invariant directly so no future path can wipe under another one.
+      const result = await runPickup(deps(g.git, h.github), {
+        ...req(),
+        wipeConflict: true,
+        pickup: { ...planPickup, onConflict: '' },
+      });
+      expect(result.ok).toBe(false);
+      expect(g.calls).not.toContain('wipe:plan-loop/issue-176');
+      expect(written).toBeNull();
+    });
   });
 
   // The resolved branch is templated from `initial_branch_tpl`, which the repo-local LoopDef yaml

@@ -131,15 +131,17 @@ export async function runPickup(deps: PickupDeps, req: PickupRequest): Promise<P
     // Reject a tainted branch before it reaches ANY git sink (CWE-88/78): a leading `-` or a ref
     // metacharacter would let untrusted `initial_branch_tpl` config inject a git option.
     if (!SAFE_BRANCH.test(branch)) return fail(`unsafe branch name from initial_branch_tpl: ${branch}`);
-    // §26.9 on_conflict — a re-pickup whose branch already exists. `wipe-and-retry` is the vendored
-    // policy, but the wipe is destructive + outward-facing (it deletes the remote branch and closes its
-    // PR), so on mere detection the runner does NOTHING and returns a `conflict` for the operator to
-    // confirm; only a confirmed `wipeConflict` performs the wipe. Any other policy is a hard error.
+    // §26.9 on_conflict — a re-pickup whose branch already exists. `wipe-and-retry` is the vendored policy;
+    // any other policy is a hard error. The wipe is destructive + outward-facing (it deletes the remote
+    // branch and closes its PR), so the policy invariant gates the destructive op DIRECTLY — not only the
+    // detection path — so no route can wipe under another policy. Under wipe-and-retry the runner still does
+    // NOTHING on mere detection, returning a `conflict` for the operator to confirm; only a confirmed
+    // `wipeConflict` performs the wipe.
     if (await git.branchExists(branch)) {
-      if (!req.wipeConflict) {
-        if (req.pickup.onConflict === 'wipe-and-retry') return { ok: false, conflict: { branch } };
+      if (req.pickup.onConflict !== 'wipe-and-retry') {
         return fail(`branch ${branch} already exists (on_conflict: ${req.pickup.onConflict || 'none'})`);
       }
+      if (!req.wipeConflict) return { ok: false, conflict: { branch } };
       await git.wipeConflictingBranch(branch);
     }
     await git.createBranchFromBase(branch, base);
