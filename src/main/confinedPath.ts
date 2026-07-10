@@ -9,7 +9,7 @@ function isAbsent(p: string): boolean {
     lstatSync(p);
     return false;
   } catch (e) {
-    return (e as NodeJS.ErrnoException).code === 'ENOENT';
+    return e instanceof Error && 'code' in e && e.code === 'ENOENT';
   }
 }
 
