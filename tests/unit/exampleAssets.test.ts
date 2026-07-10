@@ -1,10 +1,14 @@
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { readFileSync, existsSync } from 'node:fs';
 import path from 'node:path';
-import { resolveExampleFlowDir } from '../../src/main/exampleAssets';
+import {
+  resolveExampleFlowDir,
+  resolveExampleLoopsDir,
+  resolveExampleCommandsDir,
+} from '../../src/main/exampleAssets';
 
-// The bundled example flow must resolve in BOTH a dev run and a packaged build (§18.1) via an injected
-// location, never a repo-relative path — the same dev-vs-packaged split appIcon uses.
+// The bundled example assets must resolve in BOTH a dev run and a packaged build (§18.1/§26.5) via an
+// injected location, never a repo-relative path — the same dev-vs-packaged split appIcon uses.
 
 describe('resolveExampleFlowDir', () => {
   it('resolves to the extraResources copy in a packaged app', () => {
@@ -28,14 +32,82 @@ describe('resolveExampleFlowDir', () => {
   });
 });
 
+describe('resolveExampleLoopsDir', () => {
+  it('resolves to the extraResources copy in a packaged app', () => {
+    expect(
+      resolveExampleLoopsDir({ packaged: true, resourcesPath: '/app/resources' }),
+    ).toBe(path.join('/app/resources', 'example', 'loops'));
+  });
+
+  it('resolves to example/loops under the app path in an unpackaged build', () => {
+    expect(
+      resolveExampleLoopsDir({ packaged: false, appPath: '/out/main' }),
+    ).toBe(path.join('/out/main', 'example', 'loops'));
+  });
+
+  it('resolves to the real bundled definitions when the app path is a fixture root (§26.5)', () => {
+    const fixtureRoot = path.resolve(__dirname, '..', '..');
+    const dir = resolveExampleLoopsDir({ packaged: false, appPath: fixtureRoot });
+    expect(readFileSync(path.join(dir, 'plan-loop', 'plan-loop.yaml'), 'utf8')).toContain('name: plan-loop');
+    expect(readFileSync(path.join(dir, 'impl-loop', 'impl-loop.yaml'), 'utf8')).toContain('name: impl-loop');
+  });
+
+  it('carries the persona skills nested inside it, so no separate skills bundle needs resolving (§26.5)', () => {
+    const fixtureRoot = path.resolve(__dirname, '..', '..');
+    const dir = resolveExampleLoopsDir({ packaged: false, appPath: fixtureRoot });
+    expect(existsSync(path.join(dir, 'plan-loop', 'skills', 'review-intent', 'SKILL.md'))).toBe(true);
+    expect(existsSync(path.join(dir, 'impl-loop', 'skills', 'impl-review-tests', 'SKILL.md'))).toBe(true);
+  });
+});
+
+describe('resolveExampleCommandsDir', () => {
+  it('resolves to the extraResources copy in a packaged app', () => {
+    expect(
+      resolveExampleCommandsDir({ packaged: true, resourcesPath: '/app/resources' }),
+    ).toBe(path.join('/app/resources', 'example', 'commands'));
+  });
+
+  it('resolves to example/commands under the app path in an unpackaged build', () => {
+    expect(
+      resolveExampleCommandsDir({ packaged: false, appPath: '/out/main' }),
+    ).toBe(path.join('/out/main', 'example', 'commands'));
+  });
+
+  it('resolves to the real bundled commands when the app path is a fixture root', () => {
+    const fixtureRoot = path.resolve(__dirname, '..', '..');
+    const dir = resolveExampleCommandsDir({ packaged: false, appPath: fixtureRoot });
+    expect(existsSync(path.join(dir, 'groom-ticket.md'))).toBe(true);
+  });
+});
+
+describe('the bundled command tree is a sibling of the flow tree, never nested inside it', () => {
+  // The flow install set is flow.yaml + todo-templates/*.md (§18.6). A command living under the flow
+  // bundle would be silently un-seeded by the flow destination and double-owned by the commands one.
+  it('carries no commands/ subtree inside example/flow', () => {
+    const fixtureRoot = path.resolve(__dirname, '..', '..');
+    const flowDir = resolveExampleFlowDir({ packaged: false, appPath: fixtureRoot });
+    expect(existsSync(path.join(flowDir, 'commands'))).toBe(false);
+  });
+});
+
 describe('extraResources packaged-path coupling', () => {
   const root = path.resolve(__dirname, '..', '..');
   const builderYml = readFileSync(path.join(root, 'electron-builder.yml'), 'utf8');
 
+  // Coupling: renaming either an electron-builder `to:` target or the matching packaged resolver segment
+  // breaks the runtime bundle, and no type catches it — these tests are the guard.
   it('ships example/flow under the path the packaged resolver reads back', () => {
-    // Coupling: renaming either the electron-builder `to:` target or the packaged resolver segment
-    // breaks the runtime bundle, and no type catches it — this test is the guard.
     expect(builderYml).toMatch(/from:\s*example\/flow\b/);
     expect(builderYml).toMatch(/to:\s*example\/flow\b/);
+  });
+
+  it('ships example/loops under the path the packaged resolver reads back', () => {
+    expect(builderYml).toMatch(/from:\s*example\/loops\b/);
+    expect(builderYml).toMatch(/to:\s*example\/loops\b/);
+  });
+
+  it('ships example/commands under the path the packaged resolver reads back', () => {
+    expect(builderYml).toMatch(/from:\s*example\/commands\b/);
+    expect(builderYml).toMatch(/to:\s*example\/commands\b/);
   });
 });

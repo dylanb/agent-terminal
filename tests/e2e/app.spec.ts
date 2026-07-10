@@ -2264,23 +2264,43 @@ test('a multi-step flow walks the bookended rail: Start → Advance ×3 reaches 
   rmSync(home, { recursive: true, force: true });
 });
 
-// ---- #40: user-invoked install-examples action seeds the bundled feature-dev flow (§18.1/§23.4) ----
-// TODO(dylan): the three original tracer cases below (install/render/template) landed green-first, not
-// RED-first; their RED observation cannot be reconstructed. The WCAG 2.4.3 focus assertion in the first
-// case was added RED-first (observed failing in Podman before its fix). Recorded gap.
+// ---- #41: the install action seeds four destinations — flow home, loop-config, skills, commands ----
+// TODO(dylan): the flow-render and todo-template cases below originally landed green-first (#40); their
+// RED observation cannot be reconstructed. Every #41 assertion (the loop/skill/command destinations, the
+// grouped report, the per-destination consent step, the second-run skip) was added RED-first, observed
+// failing in Podman against the single-destination installer. Recorded gap.
 
-const installExamplesBtn = () => page.locator('#install-examples-view button');
+const installExamplesBtn = () => page.locator('#install-examples-view .kprofile button');
 const installExamplesStatus = () => page.locator('#install-examples-view [role="status"]');
 const installExamplesPrompt = () => page.locator('#install-examples-view .flow-modal');
+const installExamplesConfirm = () => page.locator('#install-examples-view .flow-modal button.confirm');
+const installReportGroup = (dest: string) =>
+  page.locator(`#install-examples-view .install-report [data-destination="${dest}"]`);
+const consentBox = (dest: string) =>
+  page.locator(`#install-examples-view .flow-modal input[type="checkbox"][data-destination="${dest}"]`);
 
-test('installing the bundled examples seeds the global flow; a fresh repo renders its steps (§18.1/§23.4 #40)', async () => {
-  // The tracer bullet: click the settings control against a temp HOME, then prove the global flow file +
-  // its templates exist and are reported created, and a repo with no local flow renders the bundled steps.
+/** A temp HOME plus a temp Claude config root, so a green run can never write into the developer's own
+ *  ~/.claude skills or commands directory (§24.2.3; CLAUDE_CONFIG_DIR is the engine's own redirect). */
+function installEnv(home: string, configDir: string): Record<string, string> {
+  return {
+    ...(process.env as Record<string, string>),
+    APP_SHELL: 'bash',
+    HOME: home,
+    CLAUDE_CONFIG_DIR: configDir,
+    APP_SUBMIT_DELAY_MS: '100',
+  };
+}
+
+test('installing the bundled examples seeds the flow, the loop definitions, the skills and the commands (§18.1/§23.4/§26.5 #41)', async () => {
+  // The tracer bullet: click the settings control against a temp HOME + temp config root, then prove
+  // every destination was seeded and reported under its own group — and that a repo with no local flow
+  // renders the bundled steps.
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-install-ex-home-'));
+  const configDir = mkdtempSync(join(tmpdir(), 'agent-term-e2e-install-ex-cfg-'));
   const repo = mkdtempSync(join(tmpdir(), 'agent-term-e2e-install-ex-repo-'));
   mkdirSync(join(repo, '.git'), { recursive: true }); // its own repo key; no local flow → global is used
   await app.close();
-  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
+  app = await electron.launch({ args: ['out/main/index.js'], env: installEnv(home, configDir) });
   page = await app.firstWindow();
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
@@ -2292,9 +2312,31 @@ test('installing the bundled examples seeds the global flow; a fresh repo render
   // Keyboard focus returns to the control after the install resolves (WCAG 2.4.3) — not stranded on <body>.
   await expect(installExamplesBtn()).toBeFocused();
 
+  // Every destination is reported under its own group in the result panel.
+  for (const dest of ['flow', 'loops', 'skills', 'commands']) {
+    await expect(installReportGroup(dest)).toBeVisible();
+  }
+  await expect(installReportGroup('loops')).toContainText('plan-loop.yaml');
+  await expect(installReportGroup('commands')).toContainText('groom-ticket.md');
+
   // The bundled flow definition + its todo templates now exist in the global flow home.
   expect(existsSync(join(home, '.agent-terminal', 'flow.yaml'))).toBe(true);
   expect(existsSync(join(home, '.agent-terminal', 'todo-templates', 'ticket-grooming.md'))).toBe(true);
+  // The loop definitions and everything bundled with them exist at the engine's loop-config location.
+  expect(existsSync(join(configDir, 'loops', 'plan-loop', 'plan-loop.yaml'))).toBe(true);
+  expect(existsSync(join(configDir, 'loops', 'impl-loop', 'impl-loop.yaml'))).toBe(true);
+  expect(existsSync(join(configDir, 'loops', 'plan-loop', 'prompts', 'work-plan.md'))).toBe(true);
+  // The persona skills fanned in to the location Claude Code loads skills from.
+  expect(existsSync(join(configDir, 'skills', 'review-intent', 'SKILL.md'))).toBe(true);
+  expect(existsSync(join(configDir, 'skills', 'impl-review-tests', 'SKILL.md'))).toBe(true);
+  // The bundled commands landed where Claude Code discovers a slash command.
+  expect(existsSync(join(configDir, 'commands', 'groom-ticket.md'))).toBe(true);
+
+  // A second click reports every file skipped, and never asks the user to decide a replacement.
+  await installExamplesBtn().click();
+  await expect(installExamplesStatus()).toContainText('skipped', { timeout: 15_000 });
+  await expect(installExamplesStatus()).toContainText('created 0');
+  await expect(installExamplesPrompt()).toBeHidden();
 
   // Back to the terminal; cd into a repo with no local flow → the installed global flow renders its steps.
   await page.locator('[data-viewbtn="1"]').click();
@@ -2304,43 +2346,58 @@ test('installing the bundled examples seeds the global flow; a fresh repo render
 
   await app.close();
   rmSync(home, { recursive: true, force: true });
+  rmSync(configDir, { recursive: true, force: true });
   rmSync(repo, { recursive: true, force: true });
 });
 
-test('a customized global flow prompts before overwriting; declining leaves it byte-for-byte unchanged (§18.1 #40)', async () => {
+test('the consent step collects one decision per conflicting destination; a decline leaves those files unchanged (§18.1 #41)', async () => {
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-install-ex2-home-'));
-  const custom = 'name: my-custom-flow\nsteps:\n  - id: mine\n    kind: manual\n';
+  const configDir = mkdtempSync(join(tmpdir(), 'agent-term-e2e-install-ex2-cfg-'));
+  const customFlow = 'name: my-custom-flow\nsteps:\n  - id: mine\n    kind: manual\n';
+  const customCommand = '# my own groom-ticket\n';
   mkdirSync(join(home, '.agent-terminal'), { recursive: true });
-  writeFileSync(join(home, '.agent-terminal', 'flow.yaml'), custom); // present + differs from the bundle
+  writeFileSync(join(home, '.agent-terminal', 'flow.yaml'), customFlow); // present + differs from the bundle
+  mkdirSync(join(configDir, 'commands'), { recursive: true });
+  writeFileSync(join(configDir, 'commands', 'groom-ticket.md'), customCommand); // conflicts in a second destination
   await app.close();
-  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
+  app = await electron.launch({ args: ['out/main/index.js'], env: installEnv(home, configDir) });
   page = await app.firstWindow();
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   await page.locator('[data-viewbtn="4"]').click();
   await installExamplesBtn().click();
-  // The up-front overwrite prompt appears because a target exists and differs.
   await expect(installExamplesPrompt()).toBeVisible({ timeout: 10_000 });
-  await page.locator('#install-examples-view .flow-modal button.keep').click(); // decline overwriting
+
+  // One decision per CONFLICTING destination; the clean ones offer none.
+  await expect(consentBox('flow')).toBeVisible();
+  await expect(consentBox('commands')).toBeVisible();
+  await expect(consentBox('loops')).toHaveCount(0);
+
+  await consentBox('flow').check(); // replace the flow; leave the command alone
+  await installExamplesConfirm().click();
   await expect(installExamplesStatus()).toContainText('skipped', { timeout: 10_000 });
 
-  // The customized flow is untouched; the absent templates were still installed (no creation withheld).
-  expect(readFileSync(join(home, '.agent-terminal', 'flow.yaml'), 'utf8')).toBe(custom);
+  // Consenting in one destination never replaced the other: the custom command survives byte-for-byte,
+  // while the customized flow was replaced by the bundled one.
+  expect(readFileSync(join(configDir, 'commands', 'groom-ticket.md'), 'utf8')).toBe(customCommand);
+  expect(readFileSync(join(home, '.agent-terminal', 'flow.yaml'), 'utf8')).not.toBe(customFlow);
   expect(existsSync(join(home, '.agent-terminal', 'todo-templates', 'ticket-grooming.md'))).toBe(true);
 
   await app.close();
   rmSync(home, { recursive: true, force: true });
+  rmSync(configDir, { recursive: true, force: true });
 });
 
-test('dismissing the overwrite prompt without a choice returns focus to the install button (WCAG 2.4.3 #40)', async () => {
+test('dismissing the consent step without a choice returns focus to the install button (WCAG 2.4.3 #40)', async () => {
   // Focus the button, then trigger the preview which disables it (blurring focus to <body>) before the
   // prompt opens. Dismissing the prompt via Escape must restore focus to the button, not strand it on
   // <body> — the modal opener has to be the button, not whatever held focus while it was disabled.
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-install-ex-focus-home-'));
+  const configDir = mkdtempSync(join(tmpdir(), 'agent-term-e2e-install-ex-focus-cfg-'));
   mkdirSync(join(home, '.agent-terminal'), { recursive: true });
   writeFileSync(join(home, '.agent-terminal', 'flow.yaml'), 'name: my-custom-flow\nsteps:\n  - id: mine\n    kind: manual\n'); // present + differs
   await app.close();
-  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
+  app = await electron.launch({ args: ['out/main/index.js'], env: installEnv(home, configDir) });
   page = await app.firstWindow();
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
@@ -2354,14 +2411,16 @@ test('dismissing the overwrite prompt without a choice returns focus to the inst
 
   await app.close();
   rmSync(home, { recursive: true, force: true });
+  rmSync(configDir, { recursive: true, force: true });
 });
 
 test('after install, the active step offers its bundled todo template as the picker default (§18.6 #40)', async () => {
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-install-ex3-home-'));
+  const configDir = mkdtempSync(join(tmpdir(), 'agent-term-e2e-install-ex3-cfg-'));
   const repo = mkdtempSync(join(tmpdir(), 'agent-term-e2e-install-ex3-repo-'));
   mkdirSync(join(repo, '.git'), { recursive: true });
   await app.close();
-  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
+  app = await electron.launch({ args: ['out/main/index.js'], env: installEnv(home, configDir) });
   page = await app.firstWindow();
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
@@ -2385,6 +2444,7 @@ test('after install, the active step offers its bundled todo template as the pic
 
   await app.close();
   rmSync(home, { recursive: true, force: true });
+  rmSync(configDir, { recursive: true, force: true });
   rmSync(repo, { recursive: true, force: true });
 });
 

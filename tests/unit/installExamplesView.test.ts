@@ -2,10 +2,15 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createInstallExamples, type InstallExamplesDeps } from '../../src/renderer/src/installExamples';
 import { assertRendersFromHostDocument } from './relocatable';
-import type { InstallExamplesPreview, InstallExamplesResult } from '../../src/shared/ipc';
+import type {
+  InstallDestinationId,
+  InstallExamplesPreview,
+  InstallExamplesResult,
+} from '../../src/shared/ipc';
 
-// Install-examples VIEW organism (§18.1/§23.4 / UI-STANDARDS): preview → conditional overwrite prompt →
-// apply → result reporting. Tests assert the observable DOM + the injected contract, never internals.
+// Install-examples VIEW organism (§18.1/§23.4 / UI-STANDARDS): preview → conditional per-destination
+// consent step → apply → destination-grouped result reporting. Tests assert the observable DOM + the
+// injected contract, never internals.
 describe('install examples view organism (§18.1/§23.4)', () => {
   let host: HTMLElement;
   beforeEach(() => {
@@ -13,25 +18,44 @@ describe('install examples view organism (§18.1/§23.4)', () => {
     document.body.appendChild(host);
   });
 
+  const clean: InstallExamplesPreview = {
+    destinations: [
+      { destination: 'flow', conflict: false },
+      { destination: 'loops', conflict: false },
+      { destination: 'skills', conflict: false },
+      { destination: 'commands', conflict: false },
+    ],
+  };
+  const conflicting = (...ids: InstallDestinationId[]): InstallExamplesPreview => ({
+    destinations: clean.destinations.map((d) =>
+      ids.includes(d.destination) ? { destination: d.destination, conflict: true, files: [`${d.destination}-file.md`] } : d,
+    ),
+  });
+
   const okResult = (over: Partial<Extract<InstallExamplesResult, { ok: true }>> = {}): InstallExamplesResult => ({
     ok: true,
-    created: ['flow.yaml'],
+    created: [{ destination: 'flow', files: ['flow.yaml'] }],
     overwritten: [],
     skipped: [],
     ...over,
   });
   const deps = (over: Partial<InstallExamplesDeps> = {}): InstallExamplesDeps => ({
-    preview: vi.fn(async (): Promise<InstallExamplesPreview> => ({ conflicts: [] })),
+    preview: vi.fn(async (): Promise<InstallExamplesPreview> => clean),
     apply: vi.fn(async (): Promise<InstallExamplesResult> => okResult()),
     ...over,
   });
-  const button = (): HTMLButtonElement => host.querySelector('button') as HTMLButtonElement;
+
+  const button = (): HTMLButtonElement => host.querySelector('.kprofile button') as HTMLButtonElement;
   const status = (): HTMLElement => host.querySelector('[role="status"]') as HTMLElement;
   const alert = (): HTMLElement | null => host.querySelector('[role="alert"]');
   const prompt = (): HTMLElement | null => host.querySelector('.flow-modal');
-  const overwriteBtn = (): HTMLButtonElement => host.querySelector('.flow-modal button.overwrite') as HTMLButtonElement;
-  const keepBtn = (): HTMLButtonElement => host.querySelector('.flow-modal button.keep') as HTMLButtonElement;
+  const confirmBtn = (): HTMLButtonElement => host.querySelector('.flow-modal button.confirm') as HTMLButtonElement;
+  const cancelBtn = (): HTMLButtonElement => host.querySelector('.flow-modal button.cancel') as HTMLButtonElement;
+  const consentBox = (id: InstallDestinationId): HTMLInputElement =>
+    host.querySelector(`.flow-modal input[type="checkbox"][data-destination="${id}"]`) as HTMLInputElement;
   const scrim = (): HTMLElement => host.querySelector('.flow-scrim') as HTMLElement;
+  const reportGroup = (id: InstallDestinationId): HTMLElement | null =>
+    host.querySelector(`.install-report [data-destination="${id}"]`);
 
   it('renders an install button, a status live region, and an assertive alert region', () => {
     createInstallExamples(host, deps());
@@ -56,78 +80,138 @@ describe('install examples view organism (§18.1/§23.4)', () => {
     expect(accessibleName).toContain(visible);
   });
 
-  it('installs without a prompt when preview reports no conflict, calling apply with no overwrite', async () => {
-    const apply = vi.fn(async () => okResult({ created: ['flow.yaml', 'todo-templates/a.md'] }));
-    createInstallExamples(host, deps({ preview: vi.fn(async () => ({ conflicts: [] })), apply }));
+  it('installs without a consent step when no destination conflicts, replacing nothing', async () => {
+    const apply = vi.fn(async () => okResult());
+    createInstallExamples(host, deps({ apply }));
     button().click();
     await vi.waitFor(() => expect(apply).toHaveBeenCalledTimes(1));
-    expect(apply).toHaveBeenCalledWith(false);
-    expect(prompt()).toBeNull(); // no overwrite prompt when nothing conflicts
+    expect(apply).toHaveBeenCalledWith([]);
+    expect(prompt()).toBeNull();
     await vi.waitFor(() => expect(status().textContent?.toLowerCase()).toContain('created'));
   });
 
-  it('shows the up-front overwrite prompt when preview reports a conflict, before any apply', async () => {
+  it('shows the consent step before any apply when a destination conflicts', async () => {
     const apply = vi.fn(async () => okResult());
-    createInstallExamples(host, deps({ preview: vi.fn(async () => ({ conflicts: ['flow.yaml'] })), apply }));
+    createInstallExamples(host, deps({ preview: vi.fn(async () => conflicting('skills')), apply }));
     button().click();
     await vi.waitFor(() => expect(prompt()).not.toBeNull());
-    expect(apply).not.toHaveBeenCalled(); // the prompt precedes the write
+    expect(apply).not.toHaveBeenCalled();
   });
 
-  it('opting into the prompt applies with overwrite=true and reports the overwritten files', async () => {
-    const apply = vi.fn(async () => okResult({ created: [], overwritten: ['flow.yaml'] }));
-    createInstallExamples(host, deps({ preview: vi.fn(async () => ({ conflicts: ['flow.yaml'] })), apply }));
+  it('offers one decision per CONFLICTING destination and none for the clean ones', async () => {
+    createInstallExamples(host, deps({ preview: vi.fn(async () => conflicting('skills', 'commands')) }));
     button().click();
-    await vi.waitFor(() => expect(overwriteBtn()).toBeTruthy());
-    overwriteBtn().click();
-    await vi.waitFor(() => expect(apply).toHaveBeenCalledWith(true));
-    await vi.waitFor(() => expect(status().textContent?.toLowerCase()).toContain('overwrote'));
-    expect(prompt()).toBeNull(); // prompt closes after the choice
+    await vi.waitFor(() => expect(prompt()).not.toBeNull());
+    expect(consentBox('skills')).toBeTruthy();
+    expect(consentBox('commands')).toBeTruthy();
+    expect(consentBox('flow')).toBeNull();
+    expect(consentBox('loops')).toBeNull();
   });
 
-  it('declining the prompt applies with overwrite=false so absent files still install', async () => {
-    const apply = vi.fn(async () => okResult({ created: ['todo-templates/a.md'], skipped: ['flow.yaml'] }));
-    createInstallExamples(host, deps({ preview: vi.fn(async () => ({ conflicts: ['flow.yaml'] })), apply }));
+  it('names the conflicting files under each destination so the user knows what is at stake', async () => {
+    createInstallExamples(host, deps({ preview: vi.fn(async () => conflicting('skills')) }));
     button().click();
-    await vi.waitFor(() => expect(keepBtn()).toBeTruthy());
-    keepBtn().click();
-    await vi.waitFor(() => expect(apply).toHaveBeenCalledWith(false));
+    await vi.waitFor(() => expect(prompt()).not.toBeNull());
+    expect(prompt()?.textContent).toContain('skills-file.md');
+  });
+
+  it('forwards only the consented destinations — one decision never covers two', async () => {
+    const apply = vi.fn(async () => okResult());
+    createInstallExamples(host, deps({ preview: vi.fn(async () => conflicting('skills', 'commands')), apply }));
+    button().click();
+    await vi.waitFor(() => expect(consentBox('commands')).toBeTruthy());
+    consentBox('commands').click();
+    confirmBtn().click();
+    await vi.waitFor(() => expect(apply).toHaveBeenCalledWith(['commands']));
+  });
+
+  it('forwards an empty list when the user confirms with nothing checked, so absent files still install', async () => {
+    const apply = vi.fn(async () => okResult({ created: [{ destination: 'loops', files: ['plan-loop/plan-loop.yaml'] }], skipped: [{ destination: 'skills', files: ['a/SKILL.md'] }] }));
+    createInstallExamples(host, deps({ preview: vi.fn(async () => conflicting('skills')), apply }));
+    button().click();
+    await vi.waitFor(() => expect(confirmBtn()).toBeTruthy());
+    confirmBtn().click();
+    await vi.waitFor(() => expect(apply).toHaveBeenCalledWith([]));
     await vi.waitFor(() => expect(status().textContent?.toLowerCase()).toContain('skipped'));
+    expect(prompt()).toBeNull();
   });
 
-  it('reports the names of the files it created, overwrote, and skipped — not just counts (§ AC)', async () => {
+  it('cancelling the consent step writes nothing at all', async () => {
+    const apply = vi.fn(async () => okResult());
+    createInstallExamples(host, deps({ preview: vi.fn(async () => conflicting('flow')), apply }));
+    button().click();
+    await vi.waitFor(() => expect(cancelBtn()).toBeTruthy());
+    cancelBtn().click();
+    expect(prompt()).toBeNull();
+    expect(apply).not.toHaveBeenCalled();
+    expect(button().disabled).toBe(false);
+  });
+
+  it('groups the reported files under the destination each was written to', async () => {
     const apply = vi.fn(async () =>
-      okResult({ created: ['todo-templates/a.md'], overwritten: ['flow.yaml'], skipped: ['todo-templates/b.md'] }),
+      okResult({
+        created: [{ destination: 'commands', files: ['groom-ticket.md'] }],
+        overwritten: [{ destination: 'skills', files: ['review-intent/SKILL.md'] }],
+        skipped: [{ destination: 'flow', files: ['flow.yaml'] }],
+      }),
     );
-    createInstallExamples(host, deps({ preview: vi.fn(async () => ({ conflicts: ['flow.yaml'] })), apply }));
+    createInstallExamples(host, deps({ preview: vi.fn(async () => conflicting('skills')), apply }));
     button().click();
-    await vi.waitFor(() => expect(overwriteBtn()).toBeTruthy());
-    overwriteBtn().click();
-    await vi.waitFor(() => expect(status().className).toMatch(/\bok\b/));
-    const text = status().textContent ?? '';
-    expect(text).toContain('flow.yaml');
-    expect(text).toContain('todo-templates/a.md');
-    expect(text).toContain('todo-templates/b.md');
+    await vi.waitFor(() => expect(confirmBtn()).toBeTruthy());
+    consentBox('skills').click();
+    confirmBtn().click();
+    await vi.waitFor(() => expect(reportGroup('commands')).not.toBeNull());
+
+    expect(reportGroup('commands')?.textContent).toContain('groom-ticket.md');
+    expect(reportGroup('skills')?.textContent).toContain('review-intent/SKILL.md');
+    expect(reportGroup('flow')?.textContent).toContain('flow.yaml');
+    expect(reportGroup('loops')).toBeNull(); // a destination with nothing to report gets no group
+    // A file name shared across destinations stays attributable to the group it is listed under.
+    expect(reportGroup('commands')?.textContent).not.toContain('flow.yaml');
   });
 
-  it('returns focus to the install button after opting into the overwrite prompt (WCAG 2.4.3)', async () => {
-    const apply = vi.fn(async () => okResult({ created: [], overwritten: ['flow.yaml'] }));
-    createInstallExamples(host, deps({ preview: vi.fn(async () => ({ conflicts: ['flow.yaml'] })), apply }));
-    button().focus();
+  it('summarizes the outcome in the live region rather than reading out every file name (WCAG 4.1.3)', async () => {
+    const many = Array.from({ length: 20 }, (_, i) => `f${i}.md`);
+    const apply = vi.fn(async () => okResult({ created: [{ destination: 'loops', files: many }] }));
+    createInstallExamples(host, deps({ apply }));
     button().click();
-    await vi.waitFor(() => expect(overwriteBtn()).toBeTruthy());
-    overwriteBtn().click();
     await vi.waitFor(() => expect(status().className).toMatch(/\bok\b/));
-    expect(host.ownerDocument.activeElement).toBe(button());
+    expect(status().textContent).toContain('created 20');
+    expect(status().textContent).not.toContain('f19.md');
+    expect(reportGroup('loops')?.textContent).toContain('f19.md');
   });
 
-  it('returns focus to the install button after declining the overwrite prompt (WCAG 2.4.3)', async () => {
-    const apply = vi.fn(async () => okResult({ created: ['todo-templates/a.md'], skipped: ['flow.yaml'] }));
-    createInstallExamples(host, deps({ preview: vi.fn(async () => ({ conflicts: ['flow.yaml'] })), apply }));
+  it('reports what it wrote before failing, alongside the error (mid-write failure)', async () => {
+    const apply = vi.fn(
+      async (): Promise<InstallExamplesResult> => ({
+        ok: false,
+        error: 'Could not install groom-ticket.md',
+        created: [{ destination: 'loops', files: ['plan-loop/plan-loop.yaml'] }],
+        overwritten: [],
+      }),
+    );
+    createInstallExamples(host, deps({ apply }));
+    button().click();
+    await vi.waitFor(() => expect(alert()?.textContent).toContain('Could not install groom-ticket.md'));
+    expect(reportGroup('loops')?.textContent).toContain('plan-loop/plan-loop.yaml');
+  });
+
+  it('clears a previous report when a new run starts', async () => {
+    const preview = vi.fn(async () => clean);
+    createInstallExamples(host, deps({ preview }));
+    button().click();
+    await vi.waitFor(() => expect(reportGroup('flow')).not.toBeNull());
+    button().click();
+    await vi.waitFor(() => expect(preview).toHaveBeenCalledTimes(2));
+  });
+
+  it('returns focus to the install button after confirming the consent step (WCAG 2.4.3)', async () => {
+    const apply = vi.fn(async () => okResult({ created: [], overwritten: [{ destination: 'flow', files: ['flow.yaml'] }] }));
+    createInstallExamples(host, deps({ preview: vi.fn(async () => conflicting('flow')), apply }));
     button().focus();
     button().click();
-    await vi.waitFor(() => expect(keepBtn()).toBeTruthy());
-    keepBtn().click();
+    await vi.waitFor(() => expect(confirmBtn()).toBeTruthy());
+    confirmBtn().click();
     await vi.waitFor(() => expect(status().className).toMatch(/\bok\b/));
     expect(host.ownerDocument.activeElement).toBe(button());
   });
@@ -148,7 +232,9 @@ describe('install examples view organism (§18.1/§23.4)', () => {
   });
 
   it('announces an install error through the assertive alert region (WCAG 4.1.3)', async () => {
-    const apply = vi.fn(async (): Promise<InstallExamplesResult> => ({ ok: false, error: 'refused: symlinked home' }));
+    const apply = vi.fn(
+      async (): Promise<InstallExamplesResult> => ({ ok: false, error: 'refused: symlinked home', created: [], overwritten: [] }),
+    );
     createInstallExamples(host, deps({ apply }));
     button().click();
     await vi.waitFor(() => expect(alert()?.textContent).toContain('refused: symlinked home'));
@@ -170,12 +256,12 @@ describe('install examples view organism (§18.1/§23.4)', () => {
     await vi.waitFor(() => expect(button().disabled).toBe(true));
     button().click();
     expect(preview).toHaveBeenCalledTimes(1);
-    resolvePreview({ conflicts: [] });
+    resolvePreview(clean);
   });
 
-  it('keeps the install button enabled while the overwrite prompt is open so a scrim dismissal cannot strand it disabled', async () => {
+  it('keeps the install button enabled while the consent step is open so a scrim dismissal cannot strand it disabled', async () => {
     const apply = vi.fn(async () => okResult());
-    createInstallExamples(host, deps({ preview: vi.fn(async () => ({ conflicts: ['flow.yaml'] })), apply }));
+    createInstallExamples(host, deps({ preview: vi.fn(async () => conflicting('flow')), apply }));
     button().click();
     await vi.waitFor(() => expect(prompt()).not.toBeNull());
     expect(button().disabled).toBe(false);
@@ -185,9 +271,9 @@ describe('install examples view organism (§18.1/§23.4)', () => {
     expect(apply).not.toHaveBeenCalled();
   });
 
-  it('keeps the install button enabled when the overwrite prompt is dismissed with Escape without a choice', async () => {
+  it('keeps the install button enabled when the consent step is dismissed with Escape without a choice', async () => {
     const apply = vi.fn(async () => okResult());
-    createInstallExamples(host, deps({ preview: vi.fn(async () => ({ conflicts: ['flow.yaml'] })), apply }));
+    createInstallExamples(host, deps({ preview: vi.fn(async () => conflicting('flow')), apply }));
     button().click();
     await vi.waitFor(() => expect(prompt()).not.toBeNull());
     prompt()!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
@@ -224,10 +310,12 @@ describe('install examples view organism (§18.1/§23.4)', () => {
       buttons: h.querySelectorAll('button').length,
       status: h.querySelectorAll('[role="status"]').length,
       alert: h.querySelectorAll('[role="alert"]').length,
+      report: h.querySelectorAll('.install-report').length,
     });
     expect(shape(a)).toEqual(shape(b));
     expect(shape(a).buttons).toBe(1);
     expect(shape(a).status).toBe(1);
     expect(shape(a).alert).toBe(1);
+    expect(shape(a).report).toBe(1);
   });
 });

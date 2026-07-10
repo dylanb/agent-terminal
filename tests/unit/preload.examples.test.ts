@@ -16,16 +16,35 @@ beforeEach(() => invoke.mockClear());
 
 describe('examplesApi routing (§6 / §18.1)', () => {
   it('preview invokes examples:preview with the session id and resolves the preview', async () => {
-    invoke.mockResolvedValueOnce({ conflicts: ['flow.yaml'] });
+    invoke.mockResolvedValueOnce({ destinations: [{ destination: 'flow', conflict: true, files: ['flow.yaml'] }] });
     const res = await examplesApi.preview();
     expect(invoke).toHaveBeenCalledWith(CH.installExamplesPreview, { sessionId: SESSION_ID });
-    expect(res).toEqual({ conflicts: ['flow.yaml'] });
+    expect(res).toEqual({ destinations: [{ destination: 'flow', conflict: true, files: ['flow.yaml'] }] });
   });
 
-  it('apply invokes examples:apply with the session id and the overwrite decision', async () => {
-    invoke.mockResolvedValueOnce({ ok: true, created: ['flow.yaml'], overwritten: [], skipped: [] });
-    const res = await examplesApi.apply(true);
-    expect(invoke).toHaveBeenCalledWith(CH.installExamplesApply, { sessionId: SESSION_ID, overwrite: true });
-    expect(res).toEqual({ ok: true, created: ['flow.yaml'], overwritten: [], skipped: [] });
+  it('apply forwards the per-destination replace list intact', async () => {
+    invoke.mockResolvedValueOnce({ ok: true, created: [], overwritten: [], skipped: [] });
+    await examplesApi.apply(['skills', 'commands']);
+    expect(invoke).toHaveBeenCalledWith(CH.installExamplesApply, {
+      sessionId: SESSION_ID,
+      replace: ['skills', 'commands'],
+    });
+  });
+
+  it('apply forwards an empty replace list as an empty list, never as a missing field', async () => {
+    invoke.mockResolvedValueOnce({ ok: true, created: [], overwritten: [], skipped: [] });
+    await examplesApi.apply([]);
+    expect(invoke).toHaveBeenCalledWith(CH.installExamplesApply, { sessionId: SESSION_ID, replace: [] });
+  });
+
+  it('apply resolves the destination-grouped result', async () => {
+    const result = {
+      ok: true,
+      created: [{ destination: 'commands', files: ['groom-ticket.md'] }],
+      overwritten: [],
+      skipped: [{ destination: 'flow', files: ['flow.yaml'] }],
+    };
+    invoke.mockResolvedValueOnce(result);
+    expect(await examplesApi.apply(['commands'])).toEqual(result);
   });
 });
