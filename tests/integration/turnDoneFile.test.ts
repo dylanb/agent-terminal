@@ -41,4 +41,12 @@ describe('turn done-signal file (§26.3/D47a)', () => {
   it('clearTurnDone is a no-op when the file is absent (never throws)', () => {
     expect(() => clearTurnDone(repo)).not.toThrow();
   });
+
+  it('clearTurnDone never throws on an rmSync failure — it runs on the injection path (best-effort)', () => {
+    // `{ force: true }` only suppresses ENOENT, not EPERM/EISDIR/transient errors. A directory at the
+    // turn-done path makes rmSync throw EISDIR even with force; the clear must swallow it so a filesystem
+    // error can never abort the prompt injection this runs on (CLAUDE.md best-effort; matches readTurnDone).
+    mkdirSync(doneFile(), { recursive: true });
+    expect(() => clearTurnDone(repo)).not.toThrow();
+  });
 });

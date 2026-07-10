@@ -21,9 +21,16 @@ export function readTurnDone(repoDir: string): string | null {
 }
 
 /** Delete the done-signal file (best-effort; absent is fine). The host calls this at the next prompt
- *  inject — the single point at which the completed turn's done-signal state is reset (§26.3/D46). */
+ *  inject — the single point at which the completed turn's done-signal state is reset (§26.3/D46). Never
+ *  throws: `{ force }` covers ENOENT, but this runs on the injection critical path, so any other rmSync
+ *  failure (EPERM, a directory at the path, a transient FS error) is swallowed rather than aborting the
+ *  inject (CLAUDE.md — a best-effort reset must not fail the path it sits on; matches `readTurnDone`). */
 export function clearTurnDone(repoDir: string): void {
-  rmSync(turnDonePath(repoDir), { force: true });
+  try {
+    rmSync(turnDonePath(repoDir), { force: true });
+  } catch {
+    /* best-effort reset; a stale file at worst re-detects the same completed turn, itself deduped */
+  }
 }
 
 /** Watch `<repoDir>/.agent-loop/` for the done-signal file, calling `onChange` on each event touching
