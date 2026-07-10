@@ -19,7 +19,7 @@ beforeEach(() => {
 afterEach(() => rmSync(root, { recursive: true, force: true }));
 
 describe('resolveJail', () => {
-  it('resolves the anchor through symlinks but joins the named segments literally', () => {
+  it('resolves the anchor through symlinks but appends the named segments without resolving them', () => {
     const linkedRepo = join(root, 'linked-repo');
     symlinkSync(repo, linkedRepo);
 

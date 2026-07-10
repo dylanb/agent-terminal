@@ -21,8 +21,8 @@ export function realpathBounded(p: string): string {
   }
 }
 
-/** A confinement directory: `anchorDir` resolved through symlinks, then `segments` joined literally and
- *  never resolved. Null when `anchorDir` does not resolve. CWE-59. */
+/** A confinement directory: `anchorDir` resolved through symlinks; `segments` are appended without
+ *  symlink resolution. Null when `anchorDir` does not resolve. CWE-59. */
 export function resolveJail(anchorDir: string, ...segments: string[]): string | null {
   try {
     return path.join(realpathSync(anchorDir), ...segments);
