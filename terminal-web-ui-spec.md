@@ -1460,6 +1460,39 @@ The capture pane and the terminal carry the **same content** at different statio
   - **The loops container confers execution authority.** `loopExecAllowed` (§26.6) admits an `exec` action only from an `operator-config`-origin def, which is exactly a def read from the user-level loops directory. Seeding there is what makes the bundled `plan-loop`'s `exec` gate runnable, so the container guard on that destination protects an execution-authority boundary (CWE-829), not merely a config directory.
   - The action **never** deletes, and never edits a `.gitignore` (§19.1). It is the explicit, user-invoked exemption to the no-silent-rewrite rule: it writes only where the user asked, and asks before replacing a file it did not create.
 
+```mermaid
+flowchart TD
+  CLICK["User clicks Install examples"] --> PREVIEW["examples:preview — classify each bundled file per destination"]
+  PREVIEW -->|"no destination differs"| APPLY["examples:apply {replace: []}"]
+  PREVIEW -->|"one or more differ"| CONSENT["Consent step: one checkbox per CONFLICTING destination"]
+  CONSENT -->|"dismissed"| NOOP["Nothing written"]
+  CONSENT -->|"confirmed"| APPLY2["examples:apply {replace: consented ids}"]
+  APPLY --> GATE{"Every destination container writable and not a symlink?"}
+  APPLY2 --> GATE
+  GATE -->|"no"| REFUSE["ok: false — nothing written anywhere"]
+  GATE -->|"yes"| WRITE["Write, destination by destination"]
+  WRITE --> RESULT["Result groups created / overwritten / skipped by destination"]
+
+  subgraph BUNDLE["Bundle (read-only)"]
+    BF["example/flow"]
+    BL["example/loops/&lt;loop&gt;"]
+    BC["example/commands"]
+  end
+
+  subgraph DEST["Destinations (write targets)"]
+    DF["flow — ~/.agent-terminal &#40;§23.4&#41;"]
+    DL["loops — user-config loops dir &#40;§24.2.3, never override-aware&#41;"]
+    DS["skills — user-config skills dir &#40;Claude Code&#41;"]
+    DC["commands — user-config commands dir &#40;Claude Code&#41;"]
+  end
+
+  WRITE --> DEST
+  BF -->|"flow.yaml + .md templates &#40;§18.6&#41;"| DF
+  BL -->|"whole tree"| DL
+  BL -->|"skills/ fan in — written twice"| DS
+  BC -->|"whole tree"| DC
+```
+
 ```yaml
 name: feature-dev
 steps:
