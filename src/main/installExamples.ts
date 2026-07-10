@@ -66,8 +66,8 @@ function entriesOf(dir: string): { name: string; isDirectory: boolean; isFile: b
   }
 }
 
-/** Every regular file under `dir`, relative to `base`. A symlink planted in the bundle is skipped, never
- *  read through (CWE-59) — the bundle is an installed artifact, not necessarily one this build wrote. */
+/** CWE-59: a symlink planted in the bundle is skipped, never read through — the bundle is an installed
+ *  artifact, not necessarily one this build wrote. */
 function walkFiles(dir: string, base: string = dir): string[] {
   const out: string[] = [];
   for (const entry of entriesOf(dir)) {
@@ -82,8 +82,7 @@ function filesUnder(bundleDir: string): PlannedFile[] {
   return walkFiles(bundleDir).map((rel) => ({ rel, src: path.join(bundleDir, rel) }));
 }
 
-/** flow.yaml + the `.md` todo templates — §18.6: only `.md` files resolve as templates, so the flow's
- *  install set is narrower than a recursive walk of its bundle dir. */
+/** §18.6: only `.md` files resolve as todo templates. */
 function flowFiles(bundleDir: string): PlannedFile[] {
   const rels = ['flow.yaml'];
   for (const entry of entriesOf(path.join(bundleDir, TEMPLATES_SUBDIR))) {
@@ -93,9 +92,8 @@ function flowFiles(bundleDir: string): PlannedFile[] {
   return rels.map((rel) => ({ rel, src: path.join(bundleDir, rel) }));
 }
 
-/** Claude Code discovers a skill only as `<skills root>/<skill name>/`, so the skills nested inside each
- *  bundled loop are COPIED OUT to one shared root — a fan-in, not a move: §26.5 still requires each
- *  skill under its own loop directory, which the `loops` destination writes. */
+/** Claude Code discovers a skill only as `<skills root>/<skill name>/`, while §26.5 requires each skill
+ *  under its own loop directory — which the `loops` destination writes. A copy-out, not a move. */
 function skillFiles(loopsBundleDir: string): PlannedFile[] {
   const out: PlannedFile[] = [];
   for (const loop of entriesOf(loopsBundleDir)) {
@@ -130,9 +128,21 @@ function classify(bundleFile: string, targetFile: string): Classification {
   return readFileSync(bundleFile).equals(target) ? 'identical' : 'differ';
 }
 
-/** True when a write into `dir` can be prepared: it is not a symlink (CWE-59 — the kernel would follow it
- *  out of the intended root, and the loops container confers §26.6 `exec` authority on what lands there),
- *  and the nearest existing ancestor grants write permission so the mkdir + create can succeed. */
+/** CWE-59 / §26.6: `atomicWriteFileSync` refuses a symlinked container, but nothing guards the ancestors
+ *  it mkdir's through — a symlink at any segment between `targetDir` and the file's own container would
+ *  land the write outside the destination. */
+function ancestorsAreReal(targetDir: string, rel: string): boolean {
+  const segments = path.dirname(rel).split(path.sep).filter((s) => s !== '' && s !== '.');
+  let dir = targetDir;
+  for (const segment of segments.slice(0, -1)) {
+    dir = path.join(dir, segment);
+    if (!isRealContainer(dir)) return false;
+  }
+  return true;
+}
+
+/** CWE-59: a symlinked container would land the write outside the destination, and the loops container
+ *  confers §26.6 `exec` authority on what lands there (CWE-829). */
 function isWritableContainer(dir: string): boolean {
   if (!isRealContainer(dir)) return false;
   let probe = dir;
@@ -183,9 +193,6 @@ export function previewInstallExamples(dirs: ExampleDirs): InstallExamplesPrevie
 export function applyInstallExamples(dirs: ExampleDirs, replace: InstallDestinationId[]): InstallExamplesResult {
   const plan = planDestinations(dirs).filter((d) => d.files.length > 0);
 
-  // All-or-nothing: every container the action would write is checked BEFORE the first write, so a
-  // detectable failure leaves no destination modified. A failure appearing only afterwards is reported,
-  // not rolled back — hence the created/overwritten lists on the error result.
   for (const dest of plan) {
     if (!isWritableContainer(dest.targetDir)) {
       return { ok: false, error: `Could not install: ${dest.targetDir} cannot be written`, created: [], overwritten: [] };
@@ -211,6 +218,9 @@ export function applyInstallExamples(dirs: ExampleDirs, replace: InstallDestinat
         if (cls === 'identical' || (cls === 'differ' && !consented.has(dest.id))) {
           record(skipped, dest.id, file.rel);
           continue;
+        }
+        if (!ancestorsAreReal(dest.targetDir, file.rel)) {
+          return fail(`Could not install ${file.rel}: a symbolic link stands on the path to it under ${dest.targetDir}`);
         }
         if (!atomicWriteFileSync(targetFile, readFileSync(file.src, 'utf8'))) {
           return fail(`Could not install ${file.rel}: ${path.dirname(targetFile)} is not a real directory`);

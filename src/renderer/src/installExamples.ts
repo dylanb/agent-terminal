@@ -83,16 +83,18 @@ export function createInstallExamples(host: HTMLElement, deps: InstallExamplesDe
   const alert = el('div', 'cli-status err');
   alert.setAttribute('role', 'alert');
 
-  // The install set runs to ~70 entries. The live region carries the summary only; the per-destination
-  // detail lives outside it so a screen reader is not read every file name (WCAG 4.1.3).
+  // Detail lives outside the live region so a screen reader is not read every file name (WCAG 4.1.3).
   const reportList = el('ul', 'install-report');
+  reportList.setAttribute('aria-label', 'Installation report');
 
   const modalHost = el('div', 'install-examples-modal-host');
 
   root.append(head, card, status, alert, reportList, modalHost);
   host.appendChild(root);
 
-  const modal = createModalShell(modalHost, 'install-examples-replace');
+  // A no-choice dismissal stops the operation, so the live region must stop asserting it (WCAG 4.1.3).
+  // `onClose` fires on the user-dismiss path only, and the confirm path re-announces after it.
+  const modal = createModalShell(modalHost, 'install-examples-replace', () => showStatus('cli-status', ''));
 
   function showStatus(cls: string, text: string): void {
     alert.textContent = '';
@@ -240,9 +242,8 @@ export function createInstallExamples(host: HTMLElement, deps: InstallExamplesDe
       return;
     }
     setBusy(false);
-    // Re-focus the button before the modal opens so it — not the <body> the disable blurred to — is the
-    // opener createModalShell restores to on a no-choice dismissal (WCAG 2.4.3). The guard keeps focus
-    // where the user moved it if they redirected it during preview.
+    // Re-focus before the modal captures its opener, or a no-choice dismissal restores focus to <body>
+    // rather than the button (WCAG 2.4.3).
     returnFocus();
     promptReplace(conflicts, returnFocus);
   }

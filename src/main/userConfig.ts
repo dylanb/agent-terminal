@@ -5,7 +5,6 @@
 import os from 'node:os';
 import path from 'node:path';
 
-/** `$CLAUDE_CONFIG_DIR`, else `~/.claude`. `configDir` overrides both (the tests' redirect seam). */
 export function userConfigRoot(configDir?: string): string {
   return configDir ?? process.env.CLAUDE_CONFIG_DIR ?? path.join(os.homedir(), '.claude');
 }

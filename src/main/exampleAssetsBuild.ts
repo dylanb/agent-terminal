@@ -17,22 +17,18 @@ function copyTree(src: string, dest: string): void {
   }
 }
 
-/** Copy <rootDir>/example/flow to where the unpackaged resolver reads it when app.getAppPath() is
- *  `mainOutDir`. Returns the destination path. */
 export function copyExampleFlow(rootDir: string, mainOutDir: string): string {
   const dest = resolveExampleFlowDir({ packaged: false, appPath: mainOutDir });
   copyTree(path.join(rootDir, 'example', 'flow'), dest);
   return dest;
 }
 
-/** Copy <rootDir>/example/loops to where the unpackaged resolver reads it. Returns the destination. */
 export function copyExampleLoops(rootDir: string, mainOutDir: string): string {
   const dest = resolveExampleLoopsDir({ packaged: false, appPath: mainOutDir });
   copyTree(path.join(rootDir, 'example', 'loops'), dest);
   return dest;
 }
 
-/** Copy <rootDir>/example/commands to where the unpackaged resolver reads it. Returns the destination. */
 export function copyExampleCommands(rootDir: string, mainOutDir: string): string {
   const dest = resolveExampleCommandsDir({ packaged: false, appPath: mainOutDir });
   copyTree(path.join(rootDir, 'example', 'commands'), dest);
