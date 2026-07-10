@@ -110,9 +110,11 @@ export function writeLoopState(repoDir: string, state: LoopStateWrite, now: () =
     updated_at: now().toISOString(),
   };
 
-  // §26.3/D48 — the error reason travels WITH status: error. Set it on an error write; on any other write
-  // drop it (and any preserved prior reason) so a recovered/advanced status never shows a stale message.
-  if (state.errorReason) doc.error_reason = state.errorReason;
+  // §26.3/D48 — the error reason travels WITH status: error, so it is persisted ONLY on an error write and
+  // dropped on any other (including a preserved prior reason) — enforced on status, not merely on the field
+  // being present, so a caller that mistakenly passes errorReason on a non-error transition can't write a
+  // state.yaml that violates the contract. The reader decodes error_reason only in the error status too.
+  if (state.status === 'error' && state.errorReason) doc.error_reason = state.errorReason;
   else delete doc.error_reason;
 
   // §26.6 gate write surface (L5) — layered ABOVE the app read set so a gate transition's own writes win

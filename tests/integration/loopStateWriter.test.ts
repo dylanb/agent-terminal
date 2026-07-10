@@ -57,6 +57,16 @@ describe('loop state.yaml writer (§26.6)', () => {
     expect(parseAgentLoopState(repo)).not.toHaveProperty('errorReason');
   });
 
+  it('drops error_reason when it is passed on a NON-error status — the field is bound to status: error', () => {
+    // Defense-in-depth for the D48 contract: even if a caller mistakenly passes errorReason on a non-error
+    // transition, the writer must not persist a state.yaml carrying error_reason without status: error. The
+    // reader only decodes error_reason in the error status, so the writer must gate on it too (they agree).
+    writeLoopState(repo, { ...L1_STATE, status: 'plan-draft', errorReason: 'should not be written' }, fixedNow);
+    const doc = yaml.load(readFileSync(join(repo, '.agent-loop', 'state.yaml'), 'utf8')) as Record<string, unknown>;
+    expect(doc).not.toHaveProperty('error_reason');
+    expect(parseAgentLoopState(repo)).not.toHaveProperty('errorReason');
+  });
+
   it('writes a whole-document valid v4 doc: bare numeric schema_version + the §26.6 write surface', () => {
     writeLoopState(repo, L1_STATE, fixedNow);
     const doc = yaml.load(readFileSync(join(repo, '.agent-loop', 'state.yaml'), 'utf8')) as Record<string, unknown>;
