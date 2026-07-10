@@ -97,9 +97,11 @@ export function decidePickupAction(result: PickupResult, stillOnStep: boolean): 
   return { kind: 'revert', reason: result.error };
 }
 
-// A safe git ref for the pickup branch: no leading `-` (git would parse it as an option — CWE-88), and
-// only characters valid in a branch name. `initial_branch_tpl` is untrusted repo-local config
-// (loopDef.ts), so the resolved branch is validated before it crosses to any git argv (CWE-78).
+// A conservative injection-safety allowlist for the pickup branch — NOT a full git refname validator
+// (git's refname grammar is stricter; this does not model it). It only guarantees the value is safe to
+// cross to a git argv: no leading `-` (git would read it as an option — CWE-88) and only a restricted
+// subset of ref characters. `initial_branch_tpl` is untrusted repo-local config (loopDef.ts), so the
+// resolved branch is validated against this before it reaches any git argv (CWE-78).
 const SAFE_BRANCH = /^[A-Za-z0-9._/][A-Za-z0-9._/-]*$/;
 
 /** A best-effort side-effect (assign / label) must not abort the bootstrap if GitHub rejects it —
