@@ -86,15 +86,18 @@ export function createInstallExamples(host: HTMLElement, deps: InstallExamplesDe
   // Detail lives outside the live region so a screen reader is not read every file name (WCAG 4.1.3).
   const reportList = el('ul', 'install-report');
   reportList.setAttribute('aria-label', 'Installation report');
+  reportList.hidden = true;
 
   const modalHost = el('div', 'install-examples-modal-host');
 
   root.append(head, card, status, alert, reportList, modalHost);
   host.appendChild(root);
 
-  // A no-choice dismissal stops the operation, so the live region must stop asserting it (WCAG 4.1.3).
-  // `onClose` fires on the user-dismiss path only, and the confirm path re-announces after it.
-  const modal = createModalShell(modalHost, 'install-examples-replace', () => showStatus('cli-status', ''));
+  // A no-choice dismissal stops the operation, so the live region must retract it. Emptying a polite
+  // region announces nothing, so the retraction has to be an additive text change (WCAG 4.1.3).
+  const modal = createModalShell(modalHost, 'install-examples-replace', () =>
+    showStatus('cli-status', 'Install cancelled.'),
+  );
 
   function showStatus(cls: string, text: string): void {
     alert.textContent = '';
@@ -126,13 +129,18 @@ export function createInstallExamples(host: HTMLElement, deps: InstallExamplesDe
       for (const line of lines) item.append(el('div', 'ir-line', line));
       reportList.append(item);
     }
+    reportList.hidden = reportList.childElementCount === 0;
   }
 
   let busy = false;
+  // Kept focusable while busy: `disabled` blurs the pressed button to <body> for the whole round-trip,
+  // so the progress announcement would arrive with focus nowhere (WCAG 2.4.3, 4.1.2).
   function setBusy(v: boolean): void {
     busy = v;
-    btn.disabled = v;
+    btn.setAttribute('aria-disabled', String(v));
+    btn.setAttribute('aria-busy', String(v));
   }
+  setBusy(false);
 
   async function install(replace: InstallDestinationId[], returnFocus: () => void): Promise<void> {
     setBusy(true);
@@ -225,6 +233,7 @@ export function createInstallExamples(host: HTMLElement, deps: InstallExamplesDe
     const returnFocus = captureFocusReturn(btn);
     setBusy(true);
     reportList.replaceChildren();
+    reportList.hidden = true;
     showStatus('cli-status', 'Checking…');
     let conflicts: Conflict[];
     try {
@@ -242,9 +251,6 @@ export function createInstallExamples(host: HTMLElement, deps: InstallExamplesDe
       return;
     }
     setBusy(false);
-    // Re-focus before the modal captures its opener, or a no-choice dismissal restores focus to <body>
-    // rather than the button (WCAG 2.4.3).
-    returnFocus();
     promptReplace(conflicts, returnFocus);
   }
 

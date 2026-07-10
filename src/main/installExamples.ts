@@ -93,7 +93,7 @@ function flowFiles(bundleDir: string): PlannedFile[] {
 }
 
 /** Claude Code discovers a skill only as `<skills root>/<skill name>/`, while §26.5 requires each skill
- *  under its own loop directory — which the `loops` destination writes. A copy-out, not a move. */
+ *  under its own loop directory. */
 function skillFiles(loopsBundleDir: string): PlannedFile[] {
   const out: PlannedFile[] = [];
   for (const loop of entriesOf(loopsBundleDir)) {
@@ -128,13 +128,11 @@ function classify(bundleFile: string, targetFile: string): Classification {
   return readFileSync(bundleFile).equals(target) ? 'identical' : 'differ';
 }
 
-/** CWE-59 / §26.6: `atomicWriteFileSync` refuses a symlinked container, but nothing guards the ancestors
- *  it mkdir's through — a symlink at any segment between `targetDir` and the file's own container would
- *  land the write outside the destination. */
-function ancestorsAreReal(targetDir: string, rel: string): boolean {
+/** CWE-59 / §26.6. */
+function pathToFileIsReal(targetDir: string, rel: string): boolean {
   const segments = path.dirname(rel).split(path.sep).filter((s) => s !== '' && s !== '.');
   let dir = targetDir;
-  for (const segment of segments.slice(0, -1)) {
+  for (const segment of segments) {
     dir = path.join(dir, segment);
     if (!isRealContainer(dir)) return false;
   }
@@ -219,11 +217,10 @@ export function applyInstallExamples(dirs: ExampleDirs, replace: InstallDestinat
           record(skipped, dest.id, file.rel);
           continue;
         }
-        if (!ancestorsAreReal(dest.targetDir, file.rel)) {
+        const wrote =
+          pathToFileIsReal(dest.targetDir, file.rel) && atomicWriteFileSync(targetFile, readFileSync(file.src, 'utf8'));
+        if (!wrote) {
           return fail(`Could not install ${file.rel}: a symbolic link stands on the path to it under ${dest.targetDir}`);
-        }
-        if (!atomicWriteFileSync(targetFile, readFileSync(file.src, 'utf8'))) {
-          return fail(`Could not install ${file.rel}: ${path.dirname(targetFile)} is not a real directory`);
         }
         record(cls === 'create' ? created : overwritten, dest.id, file.rel);
       } catch (e) {

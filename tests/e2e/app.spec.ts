@@ -2389,9 +2389,8 @@ test('the consent step collects one decision per conflicting destination; a decl
 });
 
 test('dismissing the consent step without a choice returns focus to the install button (WCAG 2.4.3 #40)', async () => {
-  // Focus the button, then trigger the preview which disables it (blurring focus to <body>) before the
-  // prompt opens. Dismissing the prompt via Escape must restore focus to the button, not strand it on
-  // <body> — the modal opener has to be the button, not whatever held focus while it was disabled.
+  // Focus the button, then trigger the preview before the prompt opens. Dismissing the prompt via
+  // Escape must restore focus to the button, not strand it on <body> (WCAG 2.4.3).
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-install-ex-focus-home-'));
   const configDir = mkdtempSync(join(tmpdir(), 'agent-term-e2e-install-ex-focus-cfg-'));
   mkdirSync(join(home, '.agent-terminal'), { recursive: true });

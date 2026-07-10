@@ -218,8 +218,8 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible { outline:2px so
 .pill.send { background:var(--attn); color:#fff; border-color:transparent; }
 .pill.app { background:var(--pass); color:#fff; border-color:transparent; }
 .pill.sm { height:30px; font-size:11.5px; padding:0 12px; }
-.pill:disabled { opacity:.4; cursor:default; }
-.pill:disabled:hover { border-color:var(--hair); }
+.pill:disabled, .pill[aria-disabled="true"] { opacity:.4; cursor:default; }
+.pill:disabled:hover, .pill[aria-disabled="true"]:hover { border-color:var(--hair); }
 .iconbtn { background:none; border:1px solid var(--hair); border-radius:6px; color:var(--dim); width:30px; height:30px; cursor:pointer; font-size:14px; }
 .iconbtn:hover { color:var(--text); border-color:var(--dim); }
 .linkbtn { font-size:11.5px; font-weight:600; background:none; border:none; color:var(--signal); cursor:pointer; padding:0; }
