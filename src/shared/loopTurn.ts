@@ -10,9 +10,11 @@ export const TURN_DONE_FILENAME = 'turn-done';
 
 /** The text the orchestrator appends to an injected turn prompt, instructing the agent to write the
  *  done-signal FILE as its final action once its own work and any spawned subagents have finished. When
- *  `artifact` names the turn's required output file, the agent MUST re-read it and confirm it is actually
- *  on disk BEFORE writing the done-signal — a done-signal written while the artifact was never produced (a
- *  silently failed / mis-pathed Write) makes the run detect "done" against a missing file → retry → error. */
+ *  `artifact` is given — a reference to the turn's required output(s), either a single path (e.g.
+ *  `.agent-loop/plan.md`) or a descriptive reference to a set (e.g. every persona's review JSON) — the agent
+ *  MUST re-read it and confirm each output is present and non-empty on disk BEFORE writing the done-signal:
+ *  a done-signal written while an output was never produced (a silently failed / mis-pathed Write) makes the
+ *  run detect "done" against a missing file → retry → error. */
 export function doneSignalInstruction(turnKey: string, artifact?: string): string {
   const verify = artifact
     ? [
