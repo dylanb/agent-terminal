@@ -4,5 +4,12 @@
 import { execFileSync } from 'node:child_process';
 
 if (process.platform === 'darwin') {
-  execFileSync('bash', ['scripts/sign-bundle.sh'], { stdio: 'inherit' });
+  try {
+    execFileSync('bash', ['scripts/sign-bundle.sh'], { stdio: 'inherit' });
+  } catch (e) {
+    // Best-effort: ad-hoc signing only affects local macOS notification delivery (§24.2.3 T4). A failure
+    // here (bash missing from PATH, codesign error, …) must never abort `pnpm install` (CLAUDE.md — a
+    // cosmetic side effect must not be able to fail the critical path it sits on).
+    console.warn(`postinstall-sign: skipped ad-hoc signing (${e instanceof Error ? e.message : String(e)})`);
+  }
 }

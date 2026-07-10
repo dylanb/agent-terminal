@@ -112,4 +112,18 @@ describe.skipIf(!darwin)('ad-hoc bundle signing so macOS will deliver notificati
   it('succeeds silently when the bundle is absent, so it can never fail an install', () => {
     expect(() => run(join(dir, 'Missing.app'), 'dev.agentterminal.app')).not.toThrow();
   });
+
+  // The postinstall guard runs `bash scripts/sign-bundle.sh` on darwin. Ad-hoc signing is best-effort
+  // (local notification delivery only, §24.2.3 T4), so a failure in it must NEVER abort `pnpm install`
+  // (CLAUDE.md best-effort rule). Running the guard from a cwd with no scripts/sign-bundle.sh makes the
+  // exec fail; the guard must swallow it and exit 0.
+  it('the postinstall guard never fails the install when signing throws', () => {
+    const guard = join(__dirname, '../../scripts/postinstall-sign.mjs');
+    const emptyCwd = mkdtempSync(join(tmpdir(), 'nosign-'));
+    try {
+      expect(() => execFileSync('node', [guard], { cwd: emptyCwd, stdio: 'pipe' })).not.toThrow();
+    } finally {
+      rmSync(emptyCwd, { recursive: true, force: true });
+    }
+  });
 });
