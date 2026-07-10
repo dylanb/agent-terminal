@@ -637,6 +637,10 @@ export interface FlowLoopErrorMsg {
 export interface FlowBootstrapConflictMsg {
   sessionId: SessionId;
   branch: string;
+  /** The repo the conflict was raised for. The operator's answer on `flow:resolveBootstrapConflict` is
+   *  keyed by this — never the terminal's current cwd — so a conflict for one repo cannot resolve against
+   *  another the user has since cd'd to (§26.9; the wipe is destructive). */
+  repoKey: string;
 }
 
 /** flow:resolveBootstrapConflict request (§26.9): the operator's answer to a bootstrap conflict. `wipe`
@@ -881,9 +885,10 @@ export interface FlowApi {
    *  un-persistable gate transition); the renderer raises a blocking error dialog. Returns an unsubscribe. */
   onLoopError(cb: (reason: string) => void): () => void;
   /** Subscribe to main's flow:onBootstrapConflict push (§26.9): `cb` fires with the conflicting `branch`
-   *  when a pickup hit an existing branch under a wipe-and-retry policy; the renderer raises a confirm
-   *  dialog and answers via `resolveBootstrapConflict`. Returns an unsubscribe. */
-  onBootstrapConflict(cb: (branch: string) => void): () => void;
+   *  and the `repoKey` the conflict is for when a pickup hit an existing branch under a wipe-and-retry
+   *  policy; the renderer raises a confirm dialog and answers via `resolveBootstrapConflict` keyed by that
+   *  same repoKey (not the current cwd). Returns an unsubscribe. */
+  onBootstrapConflict(cb: (branch: string, repoKey: string) => void): () => void;
   /** Answer a bootstrap conflict (§26.9): `wipe` true wipes the branch + retries, false rolls the flow
    *  back. One-way; the result surfaces through the state.yaml watch / a rolled-back state re-pull. */
   resolveBootstrapConflict(repoKey: string, wipe: boolean): void;

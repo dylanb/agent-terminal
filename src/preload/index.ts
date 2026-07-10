@@ -155,7 +155,7 @@ const flowApi: FlowApi = {
     return () => ipcRenderer.removeListener(CH.flowOnLoopError, handler);
   },
   onBootstrapConflict: (cb) => {
-    const handler = (_e: unknown, msg: FlowBootstrapConflictMsg): void => cb(msg.branch);
+    const handler = (_e: unknown, msg: FlowBootstrapConflictMsg): void => cb(msg.branch, msg.repoKey);
     ipcRenderer.on(CH.flowOnBootstrapConflict, handler);
     return () => ipcRenderer.removeListener(CH.flowOnBootstrapConflict, handler);
   },

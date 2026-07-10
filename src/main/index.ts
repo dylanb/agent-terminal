@@ -797,7 +797,7 @@ async function createWindow(): Promise<void> {
             // flow on the loop step and ask the operator to confirm the (destructive, outward-facing) wipe;
             // the answer returns on flow:resolveBootstrapConflict.
             pendingConflict.set(repoKey, job);
-            send(CH.flowOnBootstrapConflict, { sessionId: SESSION_ID, branch: action.branch });
+            send(CH.flowOnBootstrapConflict, { sessionId: SESSION_ID, branch: action.branch, repoKey });
             return;
           case 'revert':
             // §26.9 — hard failure (dirty tree / unresolvable base / …). NEVER leave the flow stranded on

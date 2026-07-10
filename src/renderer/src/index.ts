@@ -8,6 +8,7 @@ import { SAMPLE_FLOW, createGatePanel } from './flow';
 import { createFlowStrip, type FlowStrip } from './flowStrip';
 import { createLoopPanel } from './loopPanel';
 import { createFlowInputModal } from './flowInputModal';
+import { wireBootstrapConflict } from './wireBootstrapConflict';
 import { createConfirmDialog } from './confirmDialog';
 import { createErrorDialog } from './errorDialog';
 import { createTerminateConfirm } from './terminateConfirm';
@@ -150,21 +151,12 @@ if (flowStripHost) {
   // Bootstrap-conflict confirm (§26.9): main pushes flow:onBootstrapConflict when a re-pickup hit an
   // existing branch under a wipe-and-retry policy. Confirm-first — the wipe is destructive + outward-facing
   // (deletes the branch on origin, closes its PR), so the operator answers a blocking confirm; the answer
-  // (wipe / cancel-and-roll-back) rides resolveBootstrapConflict, scoped to the repo the conflict is for.
+  // (wipe / cancel-and-roll-back) rides resolveBootstrapConflict, keyed by the conflict's own repoKey.
   if (confirmDialog) {
-    window.flow.onBootstrapConflict((branch) => {
-      const key = repo.repoKey();
-      confirmDialog.render({
-        title: 'Branch already exists',
-        message: `A branch ${branch} already exists. Wiping deletes it on origin and closes its PR. Wipe and retry?`,
-        confirmLabel: 'Wipe and retry',
-        onConfirm: () => {
-          if (key) window.flow.resolveBootstrapConflict(key, true);
-        },
-        onCancel: () => {
-          if (key) window.flow.resolveBootstrapConflict(key, false);
-        },
-      });
+    wireBootstrapConflict({
+      onBootstrapConflict: (cb) => window.flow.onBootstrapConflict(cb),
+      confirm: (opts) => confirmDialog.render(opts),
+      resolve: (key, wipe) => window.flow.resolveBootstrapConflict(key, wipe),
     });
   }
   const strip = createFlowStrip(flowStripHost, {
