@@ -80,6 +80,75 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     expect(control()!.textContent).toBe('Start');
   });
 
+  it('renders the §26 loop-activity phrase + spinner as a status line', async () => {
+    const deps = {
+      ...fakeFlow('in_progress'),
+      state: vi.fn(async () => ({
+        stepName: 'plan',
+        steps: ['plan'],
+        position: 1,
+        total: 1,
+        status: 'in_progress' as FlowStatus,
+        loopActivity: { phrase: 'Bootstrapping #40' },
+      })),
+    };
+    createFlowStrip(host, deps).onRepoChanged('/repo');
+    await vi.waitFor(() => expect(host.querySelector('.flow-activity')).not.toBeNull());
+    const line = host.querySelector('.flow-activity')!;
+    expect(line.querySelector('.phrase')?.textContent).toBe('Bootstrapping #40');
+    expect(line.querySelector('.spin')).not.toBeNull();
+    expect(line.querySelector('.spin')?.getAttribute('aria-hidden')).toBe('true');
+  });
+
+  // WCAG 2.1 SC 4.1.3. The host is `role=status`, which is an implicitly ATOMIC live region — a partial
+  // text patch would still re-announce the WHOLE strip. The strip patches individual nodes (status,
+  // iteration, cost, phrase), so it must mark its own host non-atomic or the patch buys nothing.
+  it('marks its live-region host non-atomic so partial updates announce only what changed', () => {
+    const strip = createFlowStrip(host, fakeFlow('in_progress'));
+    strip.onRepoChanged('/repo');
+    expect(host.getAttribute('aria-atomic')).toBe('false');
+  });
+
+  // WCAG 2.1 SC 4.1.3 (Status Messages). A phrase moving 'Working' -> 'Running reviewers' must patch the
+  // existing node, not rebuild the strip.
+  it('patches the activity phrase in place, without tearing down the live region', async () => {
+    let phrase = 'Working';
+    let fire = (): void => {};
+    const deps = {
+      ...fakeFlow('in_progress'),
+      state: vi.fn(async () => ({
+        stepName: 'plan',
+        steps: ['plan'],
+        position: 1,
+        total: 1,
+        status: 'in_progress' as FlowStatus,
+        loopActivity: { phrase },
+      })),
+      onStateChanged: vi.fn((cb: () => void) => {
+        fire = cb;
+        return () => {};
+      }),
+    };
+    createFlowStrip(host, deps).onRepoChanged('/repo');
+    await vi.waitFor(() => expect(host.querySelector('.flow-activity')).not.toBeNull());
+    const lineBefore = host.querySelector('.flow-activity')!;
+    const stationBefore = host.querySelector('.stn')!;
+
+    phrase = 'Running reviewers';
+    fire();
+
+    await vi.waitFor(() => expect(host.querySelector('.phrase')?.textContent).toBe('Running reviewers'));
+    expect(host.querySelector('.flow-activity')).toBe(lineBefore); // same node → only the phrase announced
+    expect(host.querySelector('.stn')).toBe(stationBefore); // the rest of the strip was not re-inserted
+  });
+
+  it('omits the spinner (and the whole activity line) when no activity is reported', async () => {
+    const deps = fakeFlow('in_progress');
+    createFlowStrip(host, deps).onRepoChanged('/repo');
+    await vi.waitFor(() => expect(control()).not.toBeNull());
+    expect(host.querySelector('.flow-activity')).toBeNull();
+  });
+
   it('re-pulls and re-renders for the new repo when the cwd changes', async () => {
     const deps = fakeFlow();
     const strip = createFlowStrip(host, deps);
@@ -388,6 +457,9 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     view = { ...view, loop: { ...view.loop!, iteration: 2, cost: '$0.42' } };
     fire();
     await vi.waitFor(() => expect(host.querySelector('.loop-cost')?.textContent).toBe('$0.42'));
+    // WCAG SC 4.1.3 / 1.3.1: with the host aria-atomic=false, only the changed cost node is announced.
+    // Its visible text is a bare figure, so it must carry the "cost" context in its accessible name.
+    expect(host.querySelector('.loop-cost')?.getAttribute('aria-label')).toBe('cost $0.42');
   });
 
   it('omits aria-controls on the loop read-out when no panel id is injected (no hard-coded global id)', async () => {

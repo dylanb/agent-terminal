@@ -33,7 +33,7 @@
         </nav>
         <!-- real flow status strip (§22.3) — the §24.1 station rail + manual-step control.
              The strip owns the whole block (header carries the step position), §24.2.2. -->
-        <div class="blk flowstrip" id="flow-strip" role="status" aria-live="polite"></div>
+        <div class="blk flowstrip" id="flow-strip" role="status" aria-live="polite" aria-atomic="false"></div>
         <div class="blk" style="border-bottom:none">
           <div class="sect">Status</div>
           <!-- real status strip (§22.3) renders its chips here -->
@@ -141,6 +141,9 @@
     <!-- Destructive confirmation host (#26): createConfirmDialog renders the flow Terminate
          confirmation here, overlaying the app via fixed positioning. Empty until activated. -->
     <div id="flow-confirm-host"></div>
+    <!-- Bootstrap-failure error-alert host (§26.9): createErrorDialog renders the blocking pickup-failure
+         alert here. Empty until an async bootstrap fails and main pushes flow:onBootstrapError. -->
+    <div id="flow-error-host"></div>
     <script type="module" src="./src/index.ts"></script>
   </body>
 </html>

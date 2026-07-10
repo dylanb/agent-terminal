@@ -335,4 +335,41 @@ describe('pickup_contract resolution (§26.5 / §26.9)', () => {
     writeFileSync(join(repo, 'bare.yaml'), IMPL_LOOP);
     expect(parseLoopDef(repo, 'bare')?.pickup).toBeUndefined();
   });
+
+  // §26.3/D47a — the work turn's completion artifact (the file the agent verifies on disk before signalling
+  // done, and the runner gates completion on). It is a PROPERTY OF THE LOOP: a loop that PRODUCES the plan
+  // (plan-loop: `plan` artifact `producer: work-agent`) gates its work turn on plan.md; a loop that CONSUMES
+  // the plan as a pre-authored INPUT (impl-loop: `plan` artifact `producer: ""`) has no work-turn file
+  // deliverable — its work is code/commits, so the work turn completes on the turn-done FILE alone. One
+  // shared definition (`def.workArtifact`) drives BOTH the injected instruction and the runner's gate so the
+  // two cannot desync (CLAUDE.md shared-semantics).
+  describe('workArtifact (§26.3/D47a — the work turn completion artifact, per loop)', () => {
+    const withPlanProducer = (producer: string): string =>
+      'name: p\nschema_version: "4"\n' +
+      'gates:\n  - id: g\n    kind: terminal\n    human_options: []\n' +
+      'artifacts:\n' +
+      `  - id: plan\n    path_pattern: "plan.md"\n    producer: "${producer}"\n` +
+      '  - id: notes\n    path_pattern: "notes.md"\n    producer: work-agent\n';
+
+    it('is .agent-loop/plan.md when the loop PRODUCES the plan (plan artifact has a producer)', () => {
+      writeFileSync(join(repo, '.agent-loop.yaml'), 'loops:\n  p: ./p.yaml\n');
+      writeFileSync(join(repo, 'p.yaml'), withPlanProducer('work-agent'));
+      expect(parseLoopDef(repo, 'p')?.workArtifact).toBe(join('.agent-loop', 'plan.md'));
+    });
+
+    it("is '' when the loop CONSUMES the plan as an external input (plan artifact producer empty)", () => {
+      // The impl-loop shape: plan.md is a read-only input, so the work turn produces no file deliverable —
+      // completion is the turn-done file alone. notes.md (also producer work-agent, a scratch file) must NOT
+      // be mistaken for the deliverable, so the derivation keys ONLY off the plan artifact's producer.
+      writeFileSync(join(repo, '.agent-loop.yaml'), 'loops:\n  p: ./p.yaml\n');
+      writeFileSync(join(repo, 'p.yaml'), withPlanProducer(''));
+      expect(parseLoopDef(repo, 'p')?.workArtifact).toBe('');
+    });
+
+    it("is '' when the loop declares no artifacts at all (degrades, never throws)", () => {
+      writeFileSync(join(repo, '.agent-loop.yaml'), 'loops:\n  bare: ./bare.yaml\n');
+      writeFileSync(join(repo, 'bare.yaml'), IMPL_LOOP);
+      expect(parseLoopDef(repo, 'bare')?.workArtifact).toBe('');
+    });
+  });
 });

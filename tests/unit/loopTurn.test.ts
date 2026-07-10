@@ -1,31 +1,73 @@
 import { describe, expect, it } from 'vitest';
-import { TURN_DONE_FILENAME, turnDoneSentinel, doneSignalInstruction } from '../../src/shared/loopTurn';
+import { TURN_DONE_FILENAME, doneSignalInstruction } from '../../src/shared/loopTurn';
 
-// §26.3/D47a — the per-turn done-signal contract. These pins guard the cross-component agreement
-// (orchestrator emits the instruction; the main detectors match the line / the file; the e2e
-// fake-agent reproduces both) so a behavior-preserving edit on one side cannot silently desync.
-describe('loop turn done-signal contract (§26.3/D47a)', () => {
-  it('scopes the sentinel line by turn key and keeps it distinctive', () => {
-    const s = turnDoneSentinel('work-plan');
-    expect(s).toContain('work-plan');
-    expect(s).toContain('turn-done');
-    expect(turnDoneSentinel('work-impl')).not.toBe(s); // per-turn, not a single global marker
-  });
-
-  it('keeps the sentinel ASCII so it survives a PTY round-trip', () => {
-    // A multibyte/non-ASCII marker can be split or re-encoded across PTY chunks (§8.2).
-    expect([...turnDoneSentinel('work-plan')].every((c) => c.charCodeAt(0) <= 0x7e)).toBe(true);
-  });
-
-  it('the instruction references the exact line the detector matches (the agreement)', () => {
-    const k = 'work-plan';
-    const instruction = doneSignalInstruction(k);
-    expect(instruction).toContain(turnDoneSentinel(k));
-    expect(instruction).toContain(TURN_DONE_FILENAME);
-    expect(instruction).toContain(k);
-  });
-
+// §26.3/D47a — the per-turn done-signal contract. Completion is the `.agent-loop/turn-done` FILE ONLY
+// (§26 D42a fix): the printable sentinel LINE was retired because a full-screen TUI agent reflows the
+// injected prompt, so the line-detector matched the ECHO of its own "print this line: <sentinel>"
+// instruction and falsely completed a turn seconds after it started (premature reviewers). These pins
+// guard the cross-component agreement (orchestrator emits the instruction; main watches the FILE; the
+// e2e fake-agent writes the FILE) so an edit on one side cannot silently desync.
+describe('loop turn done-signal contract (§26.3/D47a — file-only)', () => {
   it('names the done-signal file the turn writes under .agent-loop/', () => {
     expect(TURN_DONE_FILENAME).toBe('turn-done');
+  });
+
+  it('instructs writing the turn-done file with the turn key as its contents, and names the turn id', () => {
+    const k = 'work-plan';
+    const instruction = doneSignalInstruction(k);
+    expect(instruction).toContain(`.agent-loop/${TURN_DONE_FILENAME}`); // the file to write
+    expect(instruction).toContain(k); // its contents are the turn key
+    expect(instruction).toContain(`turn-done:${k}`); // the turn id token (both agent + fake-agent read it)
+  });
+
+  it('makes the turn-done FILE the completion signal and tells the agent NOT to rely on printing (§26.3/D46)', () => {
+    // A full-screen TUI agent renders output via cursor-addressing, not clean newline-delimited lines, and
+    // the injected prompt itself is reflowed on echo — so a printed marker is both unreliable to detect AND
+    // a false-completion hazard. The FILE is the sole signal; the instruction must say the file completes
+    // the turn and must NOT instruct printing a completion line.
+    const instruction = doneSignalInstruction('consolidate-plan').toLowerCase();
+    expect(instruction).toContain('completes the turn'); // the file write is what completes it
+    expect(instruction).not.toContain('<<<'); // no printable sentinel is named anywhere
+    expect(instruction).toMatch(/do not print|not.*rely on printing|any printed/); // printing is explicitly not the signal
+  });
+
+  it('when given an output artifact, requires verifying it on disk BEFORE the file write (§26.3 — no false done)', () => {
+    // The failure this guards: a turn writes turn-done believing it produced its artifact when it did not
+    // (a Write that silently failed / went to the wrong path), so the run detects "done" but the artifact
+    // is missing → retry → error. The instruction must make the agent re-read and confirm the artifact on
+    // disk, and only THEN write the done-signal file.
+    const artifact = '.agent-loop/reviews/2/consolidated.json';
+    const instruction = doneSignalInstruction('consolidate-plan', artifact);
+    const verifyIdx = instruction.indexOf(artifact);
+    const fileIdx = instruction.indexOf(`.agent-loop/${TURN_DONE_FILENAME}`);
+    expect(verifyIdx).toBeGreaterThanOrEqual(0); // the artifact path is named
+    expect(instruction.toLowerCase()).toContain('re-read'); // confirm by re-reading, not by belief
+    expect(verifyIdx).toBeLessThan(fileIdx); // verify FIRST, then write the done-signal file
+  });
+
+  it('frames the artifact check format-agnostically — exists + non-empty, parsing only for structured files', () => {
+    // The verify clause fires on both a markdown artifact (plan.md) and a JSON one (consolidated.json).
+    // A blanket "parses / malformed" demand is meaningless for prose and can make the agent overfit an
+    // unnecessary check; the baseline must be exists + non-empty, with parsing conditional on structure.
+    const instruction = doneSignalInstruction('work-impl', '.agent-loop/plan.md').toLowerCase();
+    expect(instruction).toContain('non-empty');
+    expect(instruction).not.toContain('malformed');
+    expect(instruction).toMatch(/structured file|json.*yaml/);
+  });
+
+  it('frames the artifact check count-agnostically — the same clause fits one file or a set (§26.4 reviewers)', () => {
+    // Callers pass a single path (plan.md) or a plural/descriptive reference ("every persona's review
+    // JSON…"), so the clause must not bind a singular pronoun ("verify it exists") that reads wrong for a
+    // set. It uses count-neutral wording (each / any) that is correct for one artifact or many.
+    const plural = doneSignalInstruction('review', "every persona's review JSON under .agent-loop/reviews/2/").toLowerCase();
+    expect(plural).not.toContain('verify it exists');
+    expect(plural).toMatch(/each (is|are)?\s*present|confirm each/);
+    expect(plural).toMatch(/if any (is|are)? missing/);
+  });
+
+  it('omits the verification clause when no artifact is named (backward-compatible)', () => {
+    const instruction = doneSignalInstruction('review-plan');
+    expect(instruction).toContain('turn-done:review-plan');
+    expect(instruction.toLowerCase()).not.toContain('re-read');
   });
 });

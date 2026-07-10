@@ -42,6 +42,25 @@ describe('docked loop panel (§24.2.3 T2)', () => {
     expect(row('branch')?.querySelector('.lv')?.textContent).toBe('agent-loop/issue-176');
   });
 
+  it('shows the D48 error reason so a stopped loop says WHY, not a bare "error" (§26.3)', () => {
+    createLoopPanel(host).render(loop({ status: 'error', errorReason: 'no Claude at the prompt' }), 'build');
+    expect(row('status')?.querySelector('.lv')?.textContent).toBe('error');
+    expect(row('reason')?.querySelector('.lv')?.textContent).toBe('no Claude at the prompt');
+  });
+
+  it('shows no reason row when the loop is not in error (the reason is error-only)', () => {
+    createLoopPanel(host).render(loop({ status: 'plan-draft' }), 'build');
+    expect(row('reason')).toBeUndefined();
+  });
+
+  it('removes the reason row in place when the status recovers from error (structural rebuild)', () => {
+    const panel = createLoopPanel(host);
+    panel.render(loop({ status: 'error', errorReason: 'no Claude at the prompt' }), 'build');
+    expect(row('reason')).toBeDefined();
+    panel.render(loop({ status: 'plan-draft' }), 'push');
+    expect(row('reason')).toBeUndefined();
+  });
+
   it('marks the live state region polite so a turn advance is announced to assistive tech (WCAG 4.1.3)', () => {
     // The "mark turn complete" control (and any orchestrator transition) changes the status/iteration
     // rows in place via patchInPlace without moving focus; without a live region that change is silent
@@ -91,6 +110,76 @@ describe('docked loop panel (§24.2.3 T2)', () => {
     expect(btn).not.toBeNull();
     btn!.click();
     expect(markTurnComplete).toHaveBeenCalledTimes(1);
+  });
+
+  it('renders a "Retry" control on an errored loop that invokes the injected retry service (§26.3/D48)', () => {
+    const retryTurn = vi.fn();
+    const panel = createLoopPanel(host, {
+      githubRef: () => Promise.resolve(null),
+      openExternal: () => {},
+      retryTurn,
+    });
+    panel.render(loop({ status: 'error', errorReason: 'no Claude at the prompt' }), 'plan');
+    const btn = host.querySelector<HTMLButtonElement>('[data-loop-retry]');
+    expect(btn).not.toBeNull();
+    btn!.click();
+    expect(retryTurn).toHaveBeenCalledTimes(1);
+  });
+
+  // WCAG 2.1 SC 4.1.3 (Status Messages). Assistive tech does not announce content that already exists when
+  // a live region is registered. Rebuilding `.ldl` to enter `error` therefore produces SILENCE at exactly
+  // the moment the turn failed. The region must survive, so the reason row is announced as an addition.
+  it('keeps the live region alive when the loop enters error, and adds the reason + Retry into it', () => {
+    const retryTurn = vi.fn();
+    const panel = createLoopPanel(host, { githubRef: () => Promise.resolve(null), openExternal: () => {}, retryTurn });
+
+    panel.render(loop({ status: 'impl-draft' }), 'impl');
+    const ldlBefore = host.querySelector('.ldl')!;
+    expect(host.querySelector('[data-loop-retry]')).toBeNull();
+
+    panel.render(loop({ status: 'error', errorReason: 'no Claude at the prompt' }), 'impl');
+
+    expect(host.querySelector('.ldl')).toBe(ldlBefore); // same live region → the addition is announced
+    expect(row('reason')?.querySelector('.lv')?.textContent).toBe('no Claude at the prompt');
+    expect(host.querySelector('[data-loop-retry]')).not.toBeNull();
+  });
+
+  it('removes the reason row and the Retry control when the loop recovers out of error', () => {
+    const retryTurn = vi.fn();
+    const panel = createLoopPanel(host, { githubRef: () => Promise.resolve(null), openExternal: () => {}, retryTurn });
+
+    panel.render(loop({ status: 'error', errorReason: 'no Claude at the prompt' }), 'impl');
+    const ldlBefore = host.querySelector('.ldl')!;
+
+    panel.render(loop({ status: 'impl-draft' }), 'impl');
+
+    expect(host.querySelector('.ldl')).toBe(ldlBefore);
+    expect(row('reason')).toBeUndefined();
+    expect(host.querySelector('[data-loop-retry]')).toBeNull();
+  });
+
+  it('updates a changed reason without replacing the live region', () => {
+    const retryTurn = vi.fn();
+    const panel = createLoopPanel(host, { githubRef: () => Promise.resolve(null), openExternal: () => {}, retryTurn });
+
+    panel.render(loop({ status: 'error', errorReason: 'first reason' }), 'impl');
+    const ldlBefore = host.querySelector('.ldl')!;
+
+    panel.render(loop({ status: 'error', errorReason: 'second reason' }), 'impl');
+
+    expect(host.querySelector('.ldl')).toBe(ldlBefore);
+    expect(row('reason')?.querySelector('.lv')?.textContent).toBe('second reason');
+  });
+
+  it('renders NO Retry control when the loop is not in error (recovery is error-only, WCAG 4.1.2)', () => {
+    const retryTurn = vi.fn();
+    const panel = createLoopPanel(host, {
+      githubRef: () => Promise.resolve(null),
+      openExternal: () => {},
+      retryTurn,
+    });
+    panel.render(loop({ status: 'plan-draft' }), 'plan');
+    expect(host.querySelector('[data-loop-retry]')).toBeNull();
   });
 
   it('renders a gate-decision button per gate option that invokes the injected service (§26.6 / L5)', () => {

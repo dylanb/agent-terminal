@@ -44,6 +44,37 @@ describe('token pricing (§26.10)', () => {
   it('empty totals price to $0 with no unpriced models', () => {
     expect(priceTokens([])).toEqual({ usd: 0, unpricedModels: [] });
   });
+
+  // Claude Code logs a `<synthetic>` model for API-error turns with every token field at zero. It bills
+  // nothing, so it is not a pricing gap: naming it in unpricedModels would append `+unknown` to a readout
+  // that is in fact complete.
+  it('a zero-token model is not an unpriced gap, whatever its id', () => {
+    const r = priceTokens([{ model: '<synthetic>', input: 0, cacheCreate: 0, cacheRead: 0, output: 0 }]);
+    expect(r).toEqual({ usd: 0, unpricedModels: [] });
+  });
+
+  it('a zero-token unpriced model alongside a priced one leaves the readout complete', () => {
+    const p = PRICING[priced];
+    const r = priceTokens([
+      { model: priced, input: 1_000_000, cacheCreate: 0, cacheRead: 0, output: 0 },
+      { model: '<synthetic>', input: 0, cacheCreate: 0, cacheRead: 0, output: 0 },
+    ]);
+    expect(r.usd).toBeCloseTo(p.input, 6);
+    expect(r.unpricedModels).toEqual([]);
+    expect(formatCost(r)).not.toContain('unknown');
+  });
+
+  it('an unpriced model with real tokens is still a gap', () => {
+    const r = priceTokens([{ model: 'x-unknown', input: 1, cacheCreate: 0, cacheRead: 0, output: 0 }]);
+    expect(r.unpricedModels).toEqual(['x-unknown']);
+  });
+
+  // The models the loop actually runs on must be in the table, or every real readout reads `+unknown`.
+  it('prices the models the hosted agent and its reviewer subagents run on', () => {
+    for (const model of ['claude-opus-4-8', 'claude-sonnet-4-6']) {
+      expect(PRICING[model], `${model} missing from PRICING`).toBeDefined();
+    }
+  });
 });
 
 describe('cost readout formatting (§26.10 — never NaN)', () => {

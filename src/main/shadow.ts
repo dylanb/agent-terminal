@@ -47,6 +47,15 @@ export interface ShadowModel {
   reader: ShadowReader;
   /** Fires on each active→quiet transition, after a parse-queue barrier so the buffer reflects all pre-transition bytes (§15.2). */
   onQuiet(cb: () => void): () => void;
+  /** Fires on each visible-content-change edge — the same §8.3 signal quiescence keys off (an identical
+   *  repaint is NOT an edge). The §26.3 stall watchdog resets its deadline on this so a streaming turn
+   *  never stalls while a frozen screen counts down. */
+  onActivity(cb: () => void): () => void;
+  /** §26.3/D46 — re-arm the §8.3 quiescence window as if output just occurred: flips to `active` now and
+   *  will re-emit `quiet` a full quietMs later. Guarantees a FRESH active→quiet edge for the next
+   *  injection even when the agent already settled (no more real output would otherwise re-arm it),
+   *  without the hang of waiting for an edge that never comes. */
+  noteSettle(): void;
   /** Place a watermark at an absolute buffer row; undefined on the alt buffer (§15.2 / D2). */
   addMarker(absRow: number): ShadowMarker | undefined;
   /** Register an OSC handler (e.g. 133 shell-integration marks, §15.5). */
@@ -74,7 +83,12 @@ export function createShadowModel(opts: {
   let last: ShadowStatus | null = null;
   let settleTimer: ReturnType<typeof setTimeout> | null = null;
   let disposed = false;
+  // §8.3 quiescence keys off *rendered-screen change*, not raw bytes: a full-screen TUI agent repaints
+  // its frame on a timer even while idle, so byte-presence would never go quiet. `lastSignature` is the
+  // previous visible-screen text; an identical repaint is not activity.
+  let lastSignature: string | null = null;
   const quietCbs = new Set<() => void>();
+  const activityCbs = new Set<() => void>();
   const oscDisposables: IDisposable[] = [];
 
   const detector = createQuiescenceDetector({
@@ -107,6 +121,18 @@ export function createShadowModel(opts: {
     isLineWrapped: (y) => term.buffer.active.getLine(y)?.isWrapped ?? false,
   };
 
+  // The visible viewport's text (absolute rows baseY..baseY+rows), prefixed with the buffer type so a
+  // normal↔alternate switch registers as a change. This is the "did the screen change" signal for §8.3.
+  function visibleSignature(): string {
+    const buf = term.buffer.active;
+    const top = buf.baseY;
+    let sig = buf.type;
+    for (let y = top; y < top + term.rows; y++) {
+      sig += '\n' + (buf.getLine(y)?.translateToString(true) ?? '');
+    }
+    return sig;
+  }
+
   function currentStatus(): ShadowStatus {
     return {
       altScreen: term.buffer.active.type === 'alternate',
@@ -133,8 +159,17 @@ export function createShadowModel(opts: {
   return {
     write(data) {
       if (disposed) return; // onData can race window close (§4G)
-      term.write(data);
-      detector.noteOutputActivity();
+      // Note activity only when the parsed buffer's visible text actually changed (§8.3) — hence inside
+      // term.write's post-parse callback, where the just-written bytes are reflected in the screen.
+      term.write(data, () => {
+        if (disposed) return;
+        const sig = visibleSignature();
+        if (sig !== lastSignature) {
+          lastSignature = sig;
+          detector.noteOutputActivity();
+          for (const cb of activityCbs) cb();
+        }
+      });
       if (settleTimer) clearTimeout(settleTimer);
       // Agents redraw in bursts; read shadow state only after writes settle (§8.2).
       settleTimer = setTimeout(publishStatus, settleMs);
@@ -159,6 +194,14 @@ export function createShadowModel(opts: {
       quietCbs.add(cb);
       return () => quietCbs.delete(cb);
     },
+    onActivity(cb) {
+      activityCbs.add(cb);
+      return () => activityCbs.delete(cb);
+    },
+    noteSettle() {
+      if (disposed) return;
+      detector.noteOutputActivity();
+    },
     addMarker(absRow) {
       if (disposed || reader.bufferType() === 'alternate') return undefined;
       const buf = term.buffer.active;
@@ -178,6 +221,7 @@ export function createShadowModel(opts: {
       if (settleTimer) clearTimeout(settleTimer);
       for (const d of oscDisposables) d.dispose();
       quietCbs.clear();
+      activityCbs.clear();
       detector.dispose();
       term.dispose();
     },

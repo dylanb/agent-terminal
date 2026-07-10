@@ -14,6 +14,7 @@ function deps(over: Partial<Parameters<typeof createFlowEntryActions>[0]> = {}) 
     isShellBusy: vi.fn(() => false),
     inject: vi.fn(),
     runPickup: vi.fn(),
+    resumeLoop: vi.fn(),
     ...over,
   };
 }
@@ -116,6 +117,46 @@ describe('flow entry actions — bootstrap pickup, in-app (§26.9 / L1)', () => 
     const result = createFlowEntryActions(d)(planStep(), { ticket: '   ' });
     expect(d.runPickup).not.toHaveBeenCalled();
     expect(result.prompt).toEqual({ inputs: [{ name: 'ticket', type: 'github-ticket' }], bootstrap: BOOTSTRAP_PICKUP });
+  });
+});
+
+// §26 D42a (resume --loop) — a loop step WITHOUT `bootstrap: pickup` does not create a run; it RESUMES the
+// existing run under the step's bound loop def. On entry it calls the out-of-band `resumeLoop` port (which
+// rebinds state.yaml + injects /clear + the first work prompt), and — like pickup — injects nothing itself
+// and is not gated by the busy shell. A pickup loop step and a manual step never resume.
+describe('flow entry actions — resume into a loop step (§26 D42a)', () => {
+  const implStep = (over: Partial<FlowStepDef> = {}): FlowStepDef =>
+    step({ id: 'implement', kind: 'loop', loop: 'impl-loop', ...over });
+
+  it('calls resumeLoop for a loop step with no bootstrap and injects/prompts nothing', () => {
+    const d = deps();
+    const s = implStep();
+    const result = createFlowEntryActions(d)(s, {});
+    expect(d.resumeLoop).toHaveBeenCalledWith(s);
+    expect(d.inject).not.toHaveBeenCalled();
+    expect(d.runPickup).not.toHaveBeenCalled();
+    expect(result.prompt).toBeUndefined();
+    expect(result.notice).toBeUndefined();
+  });
+
+  it('resumes even over a busy shell — it is out-of-band, not terminal injection', () => {
+    const d = deps({ isShellBusy: vi.fn(() => true) });
+    createFlowEntryActions(d)(implStep(), {});
+    expect(d.resumeLoop).toHaveBeenCalled();
+  });
+
+  it('does NOT resume a loop step that bootstraps via pickup (pickup creates the run instead)', () => {
+    const d = deps();
+    const s = step({ id: 'plan', kind: 'loop', loop: 'plan-loop', bootstrap: 'pickup', inputs: [{ name: 'ticket', type: 'github-ticket', required: true }] });
+    createFlowEntryActions(d)(s, { ticket: '176' });
+    expect(d.resumeLoop).not.toHaveBeenCalled();
+    expect(d.runPickup).toHaveBeenCalled();
+  });
+
+  it('does NOT resume a manual step', () => {
+    const d = deps();
+    createFlowEntryActions(d)(step({ id: 'polish', kind: 'manual' }));
+    expect(d.resumeLoop).not.toHaveBeenCalled();
   });
 });
 

@@ -20,6 +20,8 @@ export interface AgentLoopState {
   pr: number | null;
   branch: string | null;
   linkedIssues: number[];
+  /** §26.3/D48 — the reason the turn failed, surfaced by the panel. Present only with `status: error`. */
+  errorReason?: string;
 }
 
 // Compared by VALUE, not YAML scalar type: state.yaml writes a bare `4`, LoopDefs a quoted `"4"`
@@ -52,7 +54,14 @@ export function parseAgentLoopState(repoDir: string): AgentLoopState | null {
     // numbers are >=1, so `0`/non-positive is the "no PR yet" sentinel, never a real ref).
     pr: typeof doc.pr === 'number' && doc.pr > 0 ? doc.pr : null,
     branch: typeof doc.branch === 'string' ? doc.branch : null,
-    linkedIssues: Array.isArray(doc.linked_issues) ? doc.linked_issues.filter((n): n is number => typeof n === 'number') : [],
+    // A GitHub issue number is a positive integer. Anything else reaching `gh issue edit <n>` as an argv
+    // element is read as an option, not an operand (CWE-88).
+    linkedIssues: Array.isArray(doc.linked_issues)
+      ? doc.linked_issues.filter((n): n is number => typeof n === 'number' && Number.isInteger(n) && n > 0)
+      : [],
+    ...(doc.status === 'error' && typeof doc.error_reason === 'string' && doc.error_reason.length > 0
+      ? { errorReason: doc.error_reason }
+      : {}),
   };
 }
 

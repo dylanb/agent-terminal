@@ -27,6 +27,9 @@ const DEF: LoopDef = {
   phases: [],
   rosters: [],
   defaultRosterId: '',
+  artifacts: {},
+  workArtifact: '',
+  origin: 'operator-config',
   gates: [
     mkGate({ id: 'awaiting-human-pr-approval', kind: 'approve-required', humanOptions: ['approve', 'request-changes', 'impasse'], terminal: false }),
     mkGate({ id: 'awaiting-human-impl-triage', kind: 'triage', humanOptions: ['approve', 'request-changes', 'impasse'], terminal: false }),
@@ -57,6 +60,23 @@ describe('deriveLoopView (§24.2.3 T2)', () => {
   it('folds the §26.10 cost readout onto the loop view when supplied, omits it when null', () => {
     expect(deriveLoopView(base, loop('plan-draft'), DEF, '$0.42').loop?.cost).toBe('$0.42');
     expect(deriveLoopView(base, loop('plan-draft'), DEF, null).loop && 'cost' in deriveLoopView(base, loop('plan-draft'), DEF, null).loop!).toBe(false);
+  });
+
+  // §26 D42a — iteration is a single MONOTONIC counter across the whole run (ai-deque parity): it is already
+  // the running total across every loop the run has passed through, so the view shows it verbatim. A
+  // successor loop carries the count forward (never resets to 1), which is what the display surfaces — no
+  // cross-loop summation is done here.
+  it('shows the run iteration verbatim (it is already the cross-loop running total)', () => {
+    expect(deriveLoopView(base, loop('plan-draft'), DEF).loop?.iteration).toBe(9);
+    // A successor loop's carried-forward count (e.g. impl at run-iteration 4) shows as 4, unchanged.
+    expect(deriveLoopView(base, { ...loop('impl-draft'), iteration: 4 }, DEF).loop?.iteration).toBe(4);
+  });
+
+  it('surfaces the D48 error reason on the loop view so the panel shows why, not a bare "error" (§26.3)', () => {
+    const errored: AgentLoopState = { ...loop('error'), errorReason: 'no hosted agent at the prompt' };
+    expect(deriveLoopView(base, errored, DEF).loop?.errorReason).toBe('no hosted agent at the prompt');
+    const clean = deriveLoopView(base, loop('plan-draft'), DEF);
+    expect(clean.loop && 'errorReason' in clean.loop).toBe(false);
   });
 
   it('exposes the current gate\'s human_options as gateOptions (gate-driven)', () => {
@@ -125,6 +145,9 @@ const IMPL_LOOP: LoopDef = {
   phases: [],
   rosters: [],
   defaultRosterId: '',
+  artifacts: {},
+  workArtifact: '',
+  origin: 'operator-config',
   gates: [
     mkGate({ id: 'awaiting-human-pr-approval', kind: 'approve-required', humanOptions: ['approve', 'request-changes', 'impasse'], terminal: false }),
     mkGate({ id: 'awaiting-human-impl-triage', kind: 'triage', humanOptions: ['approve', 'request-changes', 'impasse'], terminal: false }),

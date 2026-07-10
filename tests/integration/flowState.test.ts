@@ -28,6 +28,27 @@ describe('flow-state store (§24.2.2 S3 / §19.1)', () => {
     expect(createFlowStateStore(dir).read()).toEqual({ step: 'groom-ticket', status: 'done' });
   });
 
+  // §26.10 — the instant the flow began, so the cost meter can scope its token sweep to this run rather
+  // than to every session ever logged against the repo.
+  it('round-trips the instant the flow started', () => {
+    const store = createFlowStateStore(dir);
+    store.write({ step: 'plan', status: 'in_progress', startedAt: 1_752_062_400_000 });
+    expect(createFlowStateStore(dir).read()).toEqual({ step: 'plan', status: 'in_progress', startedAt: 1_752_062_400_000 });
+  });
+
+  it('omits the start instant for a flow that never recorded one', () => {
+    createFlowStateStore(dir).write({ step: 'plan', status: 'in_progress' });
+    expect(createFlowStateStore(dir).read()).not.toHaveProperty('startedAt');
+  });
+
+  it('drops an ill-typed or non-positive start instant rather than reporting an impossible run window', () => {
+    mkdirSync(join(dir, '.agent-terminal'), { recursive: true });
+    for (const bad of ['yesterday', 0, -1, Number.NaN]) {
+      writeFileSync(join(dir, '.agent-terminal', 'flow-state.yaml'), `step: plan\nstatus: in_progress\nstarted_at: ${JSON.stringify(bad)}\n`);
+      expect(createFlowStateStore(dir).read()).toEqual({ step: 'plan', status: 'in_progress' });
+    }
+  });
+
   it('reads null when no flow-state.yaml exists yet (never throws)', () => {
     expect(createFlowStateStore(dir).read()).toBeNull();
   });

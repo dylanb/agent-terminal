@@ -123,6 +123,162 @@ describe('flow state machine — multi-step (§24.2.3 T1)', () => {
   });
 });
 
+// §26.10 — starting a flow records WHEN it started, so the cost meter can price only the turns this run
+// produced. The instant survives every transition within the run and is re-stamped by a fresh run.
+describe('flow state machine — the run`s start instant (§26.10)', () => {
+  const THREE: FlowLoad = {
+    ok: true,
+    definition: { name: 'f', steps: [{ id: 'groom', kind: 'manual' }, { id: 'plan', kind: 'manual' }] },
+    flowDir: '/tmp/f/.agent-terminal',
+  };
+  let dir: string;
+  const at = (ms: number) => () => ms;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'flow-started-'));
+  });
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('stamps the start instant when the flow begins', () => {
+    const store = createFlowStateStore(dir);
+    createFlowMachine(THREE, store, undefined, undefined, undefined, undefined, at(1000)).start();
+    expect(store.read()?.startedAt).toBe(1000);
+  });
+
+  it('a not_started flow has no start instant', () => {
+    const store = createFlowStateStore(dir);
+    createFlowMachine(THREE, store, undefined, undefined, undefined, undefined, at(1000)).state();
+    expect(store.read()?.startedAt).toBeUndefined();
+  });
+
+  it('advancing through the flow preserves the original start instant', () => {
+    const store = createFlowStateStore(dir);
+    const flow = createFlowMachine(THREE, store, undefined, undefined, undefined, undefined, at(1000));
+    flow.start();
+    flow.advance();
+    expect(store.read()?.startedAt).toBe(1000);
+  });
+
+  it('terminating clears the start instant, so the next run cannot inherit it', () => {
+    const store = createFlowStateStore(dir);
+    const flow = createFlowMachine(THREE, store, undefined, undefined, undefined, undefined, at(1000));
+    flow.start();
+    flow.terminate();
+    expect(store.read()?.startedAt).toBeUndefined();
+  });
+
+  it('restarting a finished flow re-stamps the instant, so its cost starts from zero', () => {
+    const store = createFlowStateStore(dir);
+    let clock = 1000;
+    const flow = createFlowMachine(THREE, store, undefined, undefined, undefined, undefined, () => clock);
+    flow.start();
+    flow.advance();
+    flow.advance(); // → done
+    clock = 5000;
+    flow.restart();
+    expect(store.read()?.startedAt).toBe(5000);
+  });
+
+  it('reverting from the first step to not_started clears the instant, like terminate (no window for a run that did not begin)', () => {
+    const store = createFlowStateStore(dir);
+    const flow = createFlowMachine(THREE, store, undefined, undefined, undefined, undefined, at(1000));
+    flow.start(); // in_progress on the first step, stamps startedAt
+    flow.revertStep('groom'); // first step has no previous → not_started
+    expect(flow.state().status).toBe('not_started');
+    expect(store.read()?.startedAt).toBeUndefined();
+  });
+});
+
+// Slice B (§26.9) — a bootstrap that fails after its step was entered must not strand the flow on a
+// half-entered loop step. revertStep(fromStepId) walks ONE step back, staying in_progress, WITHOUT
+// re-running the previous step's entry actions (the inverse of an advance, like undo but mid-flow) and
+// PRESERVING resolved inputs so the operator can fix the cause and re-advance. It is a no-op guard, not
+// a throwing transition: it fires from an async pickup `.then()`, so a stale call (the flow already
+// moved on) must be inert rather than an unhandled rejection.
+describe('flow state machine — revertStep (§26.9 bootstrap-failure rollback)', () => {
+  const THREE: FlowLoad = {
+    ok: true,
+    definition: {
+      name: 'f',
+      steps: [
+        { id: 'groom', kind: 'manual' },
+        { id: 'plan', kind: 'loop', loop: 'plan-loop', bootstrap: 'pickup' },
+        { id: 'implement', kind: 'manual' },
+      ],
+    },
+    flowDir: '/tmp/f/.agent-terminal',
+  };
+
+  it('walks one step back, staying in_progress, when the current step matches fromStepId', () => {
+    const flow = createFlowMachine(THREE);
+    flow.start();
+    flow.advance(); // → plan (the bootstrap loop step)
+    const v = flow.revertStep('plan');
+    expect([v.position, v.stepName, v.status]).toEqual([1, 'groom', 'in_progress']);
+    expect([flow.state().position, flow.state().stepName]).toEqual([1, 'groom']);
+  });
+
+  it('does NOT re-run the previous step\'s entry actions (unlike restart)', () => {
+    let enters = 0;
+    const flow = createFlowMachine(THREE, undefined, () => void enters++);
+    flow.start(); // enter groom (1)
+    flow.advance(); // enter plan (2)
+    expect(enters).toBe(2);
+    flow.revertStep('plan');
+    expect(enters).toBe(2); // reverting groom is a rollback, not a re-entry — no skill re-injection
+  });
+
+  it('preserves resolved inputs so the operator can re-advance without re-typing them', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'flow-revert-'));
+    try {
+      const store = createFlowStateStore(dir);
+      store.write({ step: 'plan', status: 'in_progress', inputs: { ticket: '176' } });
+      const flow = createFlowMachine(THREE, store);
+      flow.revertStep('plan');
+      const persisted = createFlowStateStore(dir).read();
+      expect(persisted?.step).toBe('groom');
+      expect(persisted?.status).toBe('in_progress');
+      expect(persisted?.inputs).toEqual({ ticket: '176' });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('is a no-op when the current step no longer matches fromStepId (a stale async revert)', () => {
+    const flow = createFlowMachine(THREE);
+    flow.start();
+    flow.advance(); // → plan
+    const v = flow.revertStep('implement'); // stale: we are not on `implement`
+    expect([v.position, v.stepName, v.status]).toEqual([2, 'plan', 'in_progress']);
+  });
+
+  it('is a no-op (never throws) from not_started or done', () => {
+    const flow = createFlowMachine(THREE);
+    expect(flow.revertStep('groom').status).toBe('not_started');
+    flow.start();
+    flow.advance();
+    flow.advance();
+    flow.advance(); // → done
+    expect(flow.revertStep('implement').status).toBe('done');
+  });
+
+  it('reverts a first-step loop to not_started (no previous step), a recoverable state', () => {
+    const FIRST_LOOP: FlowLoad = {
+      ok: true,
+      definition: {
+        name: 'f',
+        steps: [{ id: 'plan', kind: 'loop', loop: 'plan-loop', bootstrap: 'pickup' }],
+      },
+      flowDir: '/tmp/f/.agent-terminal',
+    };
+    const flow = createFlowMachine(FIRST_LOOP);
+    flow.start(); // in_progress on the only (loop) step
+    const v = flow.revertStep('plan');
+    expect(v.status).toBe('not_started'); // Start re-enters the step and re-fires pickup
+  });
+});
+
 // §24.2.3 T2 — a loop step folds its agent-loop state.yaml as the view's read-only `loop` field; a
 // manual step never mirrors, and the mirror is re-read on each view so it stays live.
 describe('flow state machine — loop-step state.yaml mirror (§24.2.3 T2)', () => {
@@ -170,6 +326,9 @@ describe('flow state machine — loop-step state.yaml mirror (§24.2.3 T2)', () 
       phases: [],
       rosters: [],
       defaultRosterId: '',
+      artifacts: {},
+      workArtifact: '',
+      origin: 'operator-config' as const,
       gates: [
         mkGate({ id: 'awaiting-human-pr-approval', kind: 'approve-required', humanOptions: ['approve', 'request-changes', 'impasse'], terminal: false }),
         mkGate({ id: 'awaiting-team-review', kind: 'terminal', humanOptions: [], terminal: true }),
@@ -404,8 +563,8 @@ describe('flow state machine — ticket/PR refs (progress-gated)', () => {
     },
     flowDir: '/tmp/f/.agent-terminal',
   };
-  const defA = { name: 'loop-a', phases: [], rosters: [], defaultRosterId: '', gates: [mkGate({ id: 'planning', kind: 'approve-required', humanOptions: ['approve'], terminal: false })] };
-  const defB = { name: 'loop-b', phases: [], rosters: [], defaultRosterId: '', gates: [mkGate({ id: 'planning', kind: 'approve-required', humanOptions: ['approve', 'impasse'], terminal: false })] };
+  const defA = { name: 'loop-a', phases: [], rosters: [], defaultRosterId: '', artifacts: {}, workArtifact: '', origin: 'operator-config' as const, gates: [mkGate({ id: 'planning', kind: 'approve-required', humanOptions: ['approve'], terminal: false })] };
+  const defB = { name: 'loop-b', phases: [], rosters: [], defaultRosterId: '', artifacts: {}, workArtifact: '', origin: 'operator-config' as const, gates: [mkGate({ id: 'planning', kind: 'approve-required', humanOptions: ['approve', 'impasse'], terminal: false })] };
 
   it('binds the mirror to the most recently entered loop step LoopDef, across two loops and onto a later manual step', () => {
     const flow = createFlowMachine(TWO_LOOP_FLOW, undefined, undefined, () => mirror(), (name) => (name === 'loop-a' ? defA : name === 'loop-b' ? defB : null));
