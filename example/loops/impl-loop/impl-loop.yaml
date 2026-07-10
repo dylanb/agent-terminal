@@ -80,6 +80,7 @@ highways:
       - impl-review-principal
       - impl-review-security
       - impl-review-taint
+      - impl-review-reliability
       - impl-review-architecture
       - impl-review-intent
       - impl-review-maintainability
@@ -115,7 +116,7 @@ lanes:
       details (security, contracts, tests) — those route to their own
       lanes.
     owners: [impl-review-principal]
-    adjacent: [impl-review-architecture, impl-review-intent, impl-review-maintainability]
+    adjacent: [impl-review-architecture, impl-review-intent, impl-review-maintainability, impl-review-reliability]
 
   - id: impl-review-conventions
     title: "Naming / style / formatting / CI YAML hygiene"
@@ -136,7 +137,7 @@ lanes:
       shell, FS, error responders). Defense-in-depth overlap with
       impl-review-taint, which owns the exhaustive byte-level pass.
     owners: [impl-review-security]
-    adjacent: [impl-review-taint, impl-review-contracts, impl-review-conventions, impl-review-principal]
+    adjacent: [impl-review-taint, impl-review-reliability, impl-review-contracts, impl-review-conventions, impl-review-principal]
 
   - id: impl-review-taint
     title: "Byte-from-boundary-to-sink taint tracer"
@@ -150,7 +151,22 @@ lanes:
       echo, telemetry). Severity is reachability × data class — not
       threat-model judgment, which lives in impl-review-security.
     owners: [impl-review-taint]
-    adjacent: [impl-review-security, impl-review-contracts, impl-review-principal]
+    adjacent: [impl-review-security, impl-review-reliability, impl-review-contracts, impl-review-principal]
+
+  - id: impl-review-reliability
+    title: "Failure modes / unrecoverable states / resource exhaustion"
+    description: >-
+      What the change does when it does NOT get what it expects.
+      Owns unguarded throws on best-effort and critical paths,
+      swallowed or empty error reasons, states the user cannot
+      recover from through the UI, partial-failure ordering between
+      an external side effect and a persisted transition, resource
+      exhaustion (unbounded walks, watches, retries), incomplete
+      cleanup on revert/error paths, and idempotence under retry.
+      Judges RECOVERABILITY, not exploitability (impl-review-security)
+      and not coverage (impl-review-tests).
+    owners: [impl-review-reliability]
+    adjacent: [impl-review-security, impl-review-taint, impl-review-tests, impl-review-principal]
 
   - id: impl-review-architecture
     title: "Module boundaries / coupling / SOLID at module scale"
@@ -175,7 +191,7 @@ lanes:
       Coverage adequacy, behavior-not-implementation assertions, edge
       cases, hermeticity, infra-code smoke tests.
     owners: [impl-review-tests]
-    adjacent: [impl-review-maintainability, impl-review-contracts]
+    adjacent: [impl-review-maintainability, impl-review-contracts, impl-review-reliability]
 
   - id: impl-review-intent
     title: "AC-vs-implementation fidelity / scope-creep / non-goals honored"
@@ -224,6 +240,7 @@ rosters:
       - impl-review-conventions
       - impl-review-security
       - impl-review-taint
+      - impl-review-reliability
       - impl-review-architecture
       - impl-review-contracts
       - impl-review-tests
@@ -236,6 +253,7 @@ rosters:
       - impl-review-conventions
       - impl-review-security
       - impl-review-taint
+      - impl-review-reliability
       - impl-review-architecture
       - impl-review-contracts
       - impl-review-tests
@@ -501,6 +519,10 @@ charter:
       phase: impl
       ordered_blocks: *all_charter_blocks
       token_substitutions: {}
+    - selector: impl-review-reliability
+      phase: impl
+      ordered_blocks: *all_charter_blocks
+      token_substitutions: {}
     - selector: impl-review-architecture
       phase: impl
       ordered_blocks: *all_charter_blocks
@@ -704,7 +726,7 @@ actors:
     resume_behavior: {on_resume_replay: true, on_resume_skip: false, step_key: work}
 
   # -------------------------------------------------------------------------
-  # self-review — all-reviewer inline pass (11 SKILLs); diff slot dropped
+  # self-review — all-reviewer inline pass (12 SKILLs); diff slot dropped
   # -------------------------------------------------------------------------
   - id: self-review
     prompt_template_ref: prompts/work-impl-self-review.md
@@ -716,6 +738,7 @@ actors:
         - {name: "impl-review-conventions SKILL", source_kind: skill, source_args: {actor: impl-review-conventions}, on_missing: fail}
         - {name: "impl-review-security SKILL", source_kind: skill, source_args: {actor: impl-review-security}, on_missing: fail}
         - {name: "impl-review-taint SKILL", source_kind: skill, source_args: {actor: impl-review-taint}, on_missing: fail}
+        - {name: "impl-review-reliability SKILL", source_kind: skill, source_args: {actor: impl-review-reliability}, on_missing: fail}
         - {name: "impl-review-architecture SKILL", source_kind: skill, source_args: {actor: impl-review-architecture}, on_missing: fail}
         - {name: "impl-review-contracts SKILL", source_kind: skill, source_args: {actor: impl-review-contracts}, on_missing: fail}
         - {name: "impl-review-tests SKILL", source_kind: skill, source_args: {actor: impl-review-tests}, on_missing: fail}
@@ -790,7 +813,7 @@ actors:
     resume_behavior: {on_resume_replay: false, on_resume_skip: true, step_key: warmer-normal}
 
   # -------------------------------------------------------------------------
-  # 11 reviewer personas — plan + diff slots dropped from every recipe
+  # 12 reviewer personas — plan + diff slots dropped from every recipe
   # -------------------------------------------------------------------------
   - id: impl-review-principal
     lanes: [impl-review-principal]
@@ -877,6 +900,28 @@ actors:
     livelog: {enabled: true, sink: ""}
     post_clean_follow_ups: []
     resume_behavior: {on_resume_replay: true, on_resume_skip: false, step_key: impl-review-taint}
+    scope_policy: {reduced_scope_exempt: true, test_only_overrides_exemption: true}
+
+  - id: impl-review-reliability
+    lanes: [impl-review-reliability]
+    prompt_template_ref: ""
+    recipe:
+      slots:
+        - {name: "Charter + severity floor", source_kind: charter-block, source_args: {compose_for_actor: impl-review-reliability}, on_missing: fail}
+        - {name: "SKILL", source_kind: skill, source_args: {actor: impl-review-reliability}, on_missing: fail}
+        - {name: "PR context", source_kind: artifact, source_args: {id: pr-context}, on_missing: fail}
+        - {name: "Prior dismissed findings", source_kind: peer-output-prior, source_args: {id: consolidated, json_path: "findings_dismissed[persona=impl-review-reliability]"}, on_missing: omit, iteration_filter: "iter>1"}
+        - {name: "LANES_CATALOG_IDS", source_kind: lanes-catalog, source_args: {shape: id-list-with-adjacency}, on_missing: fail}
+        - {name: "Resume independence note", source_kind: template-token, source_args: {tokens: [HIGHWAY_SHARED_DISCLAIMER]}, on_missing: fail}
+    highway: thinking
+    model: ""
+    effort: ""
+    session_policy: {kind: highway-shared, cross_iter: false, cross_phase: false}
+    checkpoint_policy: {enabled: false}
+    output_artifacts: [persona-output]
+    livelog: {enabled: true, sink: ""}
+    post_clean_follow_ups: []
+    resume_behavior: {on_resume_replay: true, on_resume_skip: false, step_key: impl-review-reliability}
     scope_policy: {reduced_scope_exempt: true, test_only_overrides_exemption: true}
 
   - id: impl-review-architecture
@@ -1182,6 +1227,7 @@ cli:
     - {filename: review-conventions.md,           body_ref: commands/review-conventions.md}
     - {filename: review-security.md,              body_ref: commands/review-security.md}
     - {filename: review-taint.md,                 body_ref: commands/review-taint.md}
+    - {filename: review-reliability.md,           body_ref: commands/review-reliability.md}
     - {filename: review-architecture.md,          body_ref: commands/review-architecture.md}
     - {filename: review-contracts.md,             body_ref: commands/review-contracts.md}
     - {filename: review-tests.md,                 body_ref: commands/review-tests.md}
@@ -1277,10 +1323,11 @@ config_bindings:
     validate:
       enum: [impl-review-intent, impl-review-architecture, impl-review-contracts,
              impl-review-principal, impl-review-conventions, impl-review-security,
-             impl-review-taint, impl-review-tests, impl-review-maintainability,
-             impl-review-accessibility, impl-review-diagrams, all]
+             impl-review-taint, impl-review-reliability, impl-review-tests,
+             impl-review-maintainability, impl-review-accessibility,
+             impl-review-diagrams, all]
     description: >-
-      Impl-phase reviewer roster narrowing. Empty = full 11-persona
+      Impl-phase reviewer roster narrowing. Empty = full 12-persona
       fan-out. Literal ["all"] is a no-op sentinel.
 
   - token: ""
