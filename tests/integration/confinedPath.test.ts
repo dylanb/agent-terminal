@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, sep } from 'node:path';
+import { join, sep, parse } from 'node:path';
 import { resolveJail, confinedRealPath, realpathBounded } from '../../src/main/confinedPath';
 
 let root: string;
@@ -110,7 +110,7 @@ describe('confinedRealPath', () => {
   });
 
   it('accepts a path inside a jail that is the filesystem root', () => {
-    expect(confinedRealPath(sep, root)).toBe(root);
+    expect(confinedRealPath(parse(root).root, root)).toBe(root);
   });
 
   it('confines to the jail it is given, not to any hardcoded directory name', () => {
