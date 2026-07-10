@@ -45,6 +45,16 @@ describe('loop turn done-signal contract (§26.3/D47a — file-only)', () => {
     expect(verifyIdx).toBeLessThan(fileIdx); // verify FIRST, then write the done-signal file
   });
 
+  it('frames the artifact check format-agnostically — exists + non-empty, parsing only for structured files', () => {
+    // The verify clause fires on both a markdown artifact (plan.md) and a JSON one (consolidated.json).
+    // A blanket "parses / malformed" demand is meaningless for prose and can make the agent overfit an
+    // unnecessary check; the baseline must be exists + non-empty, with parsing conditional on structure.
+    const instruction = doneSignalInstruction('work-impl', '.agent-loop/plan.md').toLowerCase();
+    expect(instruction).toContain('non-empty');
+    expect(instruction).not.toContain('malformed');
+    expect(instruction).toMatch(/structured file|json.*yaml/);
+  });
+
   it('omits the verification clause when no artifact is named (backward-compatible)', () => {
     const instruction = doneSignalInstruction('review-plan');
     expect(instruction).toContain('turn-done:review-plan');

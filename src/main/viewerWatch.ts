@@ -31,8 +31,9 @@ export function viewerRoot(cwd: string): string {
  *  events; coalescing to one onChange keeps the renderer from re-walking the tree per file. */
 export const VIEWER_WATCH_DEBOUNCE_MS = 100;
 
-/** Injection seam for the watch backend. `onEvent` receives each event's tree-relative filename —
- *  a Buffer on some platforms, and null where the platform omits it. */
+/** Injection seam for the watch backend. `onEvent` receives each event's filename relative to the specific
+ *  directory that fired it (the default factory watches many dirs individually, non-recursively), NOT the
+ *  viewer root — a Buffer on some platforms, and null where the platform omits it. */
 export type ViewerWatchFactory = (
   dir: string,
   onEvent: (filename: string | Buffer | null) => void,
