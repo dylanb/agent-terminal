@@ -67,7 +67,7 @@ describe('work-{phase} recipe composition (§26.5/§26.3)', () => {
   // (impl-loop) passes no artifact, so the instruction names none — completion is the turn-done file alone.
   // The unique signature of the APPENDED artifact-verify clause (loopTurn doneSignalInstruction), distinct
   // from any "re-read"/"plan.md" the template body itself uses (the impl template names plan.md as its input).
-  const VERIFY_CLAUSE = 'confirm your output artifact actually landed on disk';
+  const VERIFY_CLAUSE = 'confirm your output actually landed on disk';
 
   it('appends the artifact-verify clause when the caller names a work artifact (plan-producing loop)', () => {
     const out = composeWorkPrompt({

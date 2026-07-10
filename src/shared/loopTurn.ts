@@ -17,10 +17,10 @@ export function doneSignalInstruction(turnKey: string, artifact?: string): strin
   const verify = artifact
     ? [
         '',
-        `FIRST confirm your output artifact actually landed on disk: re-read ${artifact} and verify it exists`,
-        'and is non-empty (and, if it is a structured file such as JSON or YAML, that it parses). If it is',
-        'missing or empty, this turn is NOT finished — write it correctly and re-read to confirm. Do NOT write',
-        'the done-signal file below until you have verified the artifact on disk.',
+        `FIRST confirm your output actually landed on disk: re-read ${artifact} and confirm each is present`,
+        'and non-empty (and, if a structured file such as JSON or YAML, that it parses). If any is missing or',
+        'empty, this turn is NOT finished — write it correctly and re-read to confirm. Do NOT write the',
+        'done-signal file below until you have verified your output on disk.',
       ]
     : [];
   return [

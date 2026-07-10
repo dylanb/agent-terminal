@@ -55,6 +55,16 @@ describe('loop turn done-signal contract (§26.3/D47a — file-only)', () => {
     expect(instruction).toMatch(/structured file|json.*yaml/);
   });
 
+  it('frames the artifact check count-agnostically — the same clause fits one file or a set (§26.4 reviewers)', () => {
+    // Callers pass a single path (plan.md) or a plural/descriptive reference ("every persona's review
+    // JSON…"), so the clause must not bind a singular pronoun ("verify it exists") that reads wrong for a
+    // set. It uses count-neutral wording (each / any) that is correct for one artifact or many.
+    const plural = doneSignalInstruction('review', "every persona's review JSON under .agent-loop/reviews/2/").toLowerCase();
+    expect(plural).not.toContain('verify it exists');
+    expect(plural).toMatch(/each (is|are)?\s*present|confirm each/);
+    expect(plural).toMatch(/if any (is|are)? missing/);
+  });
+
   it('omits the verification clause when no artifact is named (backward-compatible)', () => {
     const instruction = doneSignalInstruction('review-plan');
     expect(instruction).toContain('turn-done:review-plan');

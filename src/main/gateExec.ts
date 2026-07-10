@@ -7,7 +7,7 @@ import { execFile } from 'node:child_process';
 
 const PLACEHOLDER = /\{\{\s*([^}]+?)\s*\}\}/g;
 
-/** Resolvers the run supplies for the two placeholder families an `exec` argv may reference. */
+/** The resolver functions the run supplies for the two placeholder families an `exec` argv may reference. */
 export interface ExecInterpolationContext {
   linkedIssues: number[];
   resolveArtifact(id: string): string | null;
