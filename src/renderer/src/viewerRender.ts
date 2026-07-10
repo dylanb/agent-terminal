@@ -117,23 +117,63 @@ export function renderCodeInto(
     return { top, bottom };
   };
   void (async () => {
-    const [{ EditorView, basicSetup }, { EditorState, StateField, RangeSetBuilder }, view, { javascript }] =
-      await Promise.all([
-        import('codemirror'),
-        import('@codemirror/state'),
-        import('@codemirror/view'),
-        import('@codemirror/lang-javascript'),
-      ]);
+    const [
+      { EditorView, basicSetup },
+      { EditorState, StateField, RangeSetBuilder },
+      view,
+      { javascript },
+      { HighlightStyle, syntaxHighlighting },
+      { tags },
+    ] = await Promise.all([
+      import('codemirror'),
+      import('@codemirror/state'),
+      import('@codemirror/view'),
+      import('@codemirror/lang-javascript'),
+      import('@codemirror/language'),
+      import('@lezer/highlight'),
+    ]);
     if (token !== tokenOf(into)) return;
     into.replaceChildren();
     const cmTheme = EditorView.theme({
-      '&': { backgroundColor: 'transparent', color: 'var(--ink)', fontSize: '13px' },
-      '.cm-gutters': { backgroundColor: 'transparent', color: 'var(--muted)', border: 'none' },
+      '&': { backgroundColor: 'transparent', fontSize: '13px' },
+      '.cm-gutters': { backgroundColor: 'transparent', border: 'none' },
       '.cm-activeLine, .cm-activeLineGutter': { backgroundColor: 'transparent' },
       '.cm-changeGutter': { width: '3px', padding: '0' },
       '.cm-changedGutter': { width: '3px', height: '100%', backgroundColor: 'var(--changed)' },
       '.cm-changedLine': { backgroundColor: 'var(--changed-wash)' },
     });
+
+    // basicSetup's own highlighter is registered as a fallback, so naming ours displaces it. It only
+    // assigns classes; `styles.css` gives each one a per-theme token (§20.2 / WCAG 1.4.3).
+    const synHighlight = syntaxHighlighting(
+      HighlightStyle.define([
+        { tag: [tags.comment, tags.lineComment, tags.blockComment, tags.docComment], class: 'cm-syn-comment' },
+        { tag: [tags.string, tags.special(tags.string), tags.regexp, tags.escape], class: 'cm-syn-string' },
+        { tag: [tags.number, tags.bool, tags.null, tags.atom], class: 'cm-syn-number' },
+        {
+          tag: [
+            tags.keyword,
+            tags.controlKeyword,
+            tags.definitionKeyword,
+            tags.moduleKeyword,
+            tags.operatorKeyword,
+            tags.modifier,
+            tags.self,
+          ],
+          class: 'cm-syn-keyword',
+        },
+        {
+          tag: [tags.function(tags.variableName), tags.function(tags.propertyName), tags.labelName],
+          class: 'cm-syn-func',
+        },
+        { tag: [tags.typeName, tags.className, tags.namespace, tags.tagName], class: 'cm-syn-type' },
+        { tag: [tags.variableName, tags.propertyName, tags.attributeName], class: 'cm-syn-var' },
+        {
+          tag: [tags.punctuation, tags.separator, tags.bracket, tags.operator, tags.derefOperator, tags.meta],
+          class: 'cm-syn-punct',
+        },
+      ]),
+    );
 
     const changed = new Set(changedLines ?? []);
     const changeExt = buildChangeExtensions(changed, { EditorView, StateField, RangeSetBuilder }, view);
@@ -147,6 +187,7 @@ export function renderCodeInto(
         extensions: [
           basicSetup,
           ...(isJsLike ? [javascript({ typescript: isTs })] : []),
+          synHighlight,
           EditorView.editable.of(false),
           EditorState.readOnly.of(true),
           cmTheme,
