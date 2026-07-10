@@ -150,9 +150,11 @@ const defaultWatchFactory: ViewerWatchFactory = (dir, onEvent) => {
   };
 };
 
-/** Watch `dir` recursively, coalescing events over `opts.debounceMs` into one `onChange` (§20.1).
- *  `opts.watch` injects the watch backend (defaults to node's recursive fs.watch); the returned
- *  disposer stops the watch. A directory that cannot be watched yields an inert disposer. */
+/** Watch the tree rooted at `dir`, coalescing events over `opts.debounceMs` into one `onChange` (§20.1).
+ *  `opts.watch` injects the watch backend; the default watches the computed set of non-ignored directories
+ *  (`viewerWatchDirs`) INDIVIDUALLY and non-recursively — never one recursive fs.watch on the root, which
+ *  would descend into node_modules and exhaust inotify (ENOSPC). The returned disposer stops the watch; a
+ *  directory that cannot be watched yields an inert disposer. */
 export function watchViewerTree(
   dir: string,
   onChange: () => void,
