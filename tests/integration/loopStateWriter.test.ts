@@ -325,6 +325,16 @@ describe('loop state.yaml writer (§26.6)', () => {
     expect(parseAgentLoopState(repo)?.status).toBe('planning');
   });
 
+  // The temp path is repo-controlled, so it can be left behind (crash) or planted as a DIRECTORY. rmSync
+  // with force-but-not-recursive throws EISDIR on a directory, which would abort the critical state write
+  // and strand the loop; the cleanup must tolerate a directory too so the atomic write still proceeds.
+  it('recovers when a directory sits at state.yaml.tmp (an EISDIR must not strand the write)', () => {
+    mkdirSync(join(repo, '.agent-loop', 'state.yaml.tmp', 'junk'), { recursive: true });
+    writeLoopState(repo, { status: 'planning', iteration: 1, pr: null, branch: null, boundLoop: 'plan-loop', linkedIssues: [] });
+    expect(parseAgentLoopState(repo)?.status).toBe('planning');
+    expect(lstatSync(join(repo, '.agent-loop', 'state.yaml')).isFile()).toBe(true);
+  });
+
   it('writes state.yaml owner-only (CWE-276)', () => {
     writeLoopState(repo, { status: 'planning', iteration: 1, pr: null, branch: null, boundLoop: 'plan-loop', linkedIssues: [] });
     expect(statSync(join(repo, '.agent-loop', 'state.yaml')).mode & 0o077).toBe(0);

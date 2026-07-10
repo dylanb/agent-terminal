@@ -139,9 +139,11 @@ export function writeLoopState(repoDir: string, state: LoopStateWrite, now: () =
 
   // `.agent-loop/` belongs to the repo, so the temp path is attacker-plantable. `wx` refuses to open an
   // existing entry — a symlink included — instead of writing through it (CWE-59), and 0600 keeps the run's
-  // state owner-only (CWE-276). `rename` replaces the link itself, never its target.
+  // state owner-only (CWE-276). `rename` replaces the link itself, never its target. The pre-clean is
+  // `recursive` so a stale/planted DIRECTORY at the temp path is removed too, rather than throwing EISDIR
+  // and stranding the critical state write.
   const tmp = `${file}.tmp`;
-  rmSync(tmp, { force: true });
+  rmSync(tmp, { force: true, recursive: true });
   const fd = openSync(tmp, 'wx', 0o600);
   try {
     writeFileSync(fd, yaml.dump(doc));
