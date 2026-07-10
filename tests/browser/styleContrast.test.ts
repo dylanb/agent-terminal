@@ -189,6 +189,37 @@ for (const theme of ['light', 'dark'] as const) {
       });
     });
 
+    // §20.2 code viewer: the editor paints onto --bg (the board), and a changed line adds --changed-wash
+    // over it. Code text, the gutter's line numbers, and every syntax class are small text, so all clear
+    // 4.5:1 on BOTH surfaces — themed via tokens, since the library default is tuned for light only.
+    describe('code viewer text contrast (WCAG 1.4.3 AA)', () => {
+      const GLYPHS = [
+        ['cm-editor', 'code text'],
+        ['cm-gutters', 'gutter line numbers'],
+        ['cm-syn-keyword', 'keyword'],
+        ['cm-syn-string', 'string'],
+        ['cm-syn-comment', 'comment'],
+        ['cm-syn-number', 'number'],
+        ['cm-syn-func', 'function'],
+        ['cm-syn-type', 'type'],
+        ['cm-syn-var', 'variable'],
+        ['cm-syn-punct', 'punctuation'],
+      ] as const;
+      for (const [cls, name] of GLYPHS) {
+        it(`.${cls} (${name}) clears 4.5:1 on the viewer background`, () => {
+          const el = mount(`<div class="vbody" style="background:var(--bg)"><span class="${cls}">x</span></div>`).querySelector('span')!;
+          expect(contrast(fg(el), paintedBg(el))).toBeGreaterThanOrEqual(4.5);
+        });
+        it(`.${cls} (${name}) clears 4.5:1 on a changed line's wash`, () => {
+          const el = mount(
+            `<div class="vbody" style="background:var(--bg)">` +
+              `<div style="background:var(--changed-wash)"><span class="${cls}">x</span></div></div>`,
+          ).querySelector('span')!;
+          expect(contrast(fg(el), paintedBg(el))).toBeGreaterThanOrEqual(4.5);
+        });
+      }
+    });
+
     // With the loop panel open, each spill tone sits on its own wash over the expanded read-out's
     // background over the card. A read-out that stacks its OWN wash under the spill's would put the
     // text on a failing doubled wash, so the real backgrounds are composited to discriminate that.

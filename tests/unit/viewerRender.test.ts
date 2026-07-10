@@ -62,6 +62,27 @@ describe('viewerRender — EditorView lifecycle (no leak on re-render, §20.2)',
     expect(calls).toBe(0);
   });
 
+  // §20.2 a11y: the highlighter must emit the viewer's own themed classes, which `styles.css` colors
+  // from tokens per theme. CodeMirror's built-in fallback style hard-codes light-background colors,
+  // so under `data-theme="dark"` it paints unreadable code (WCAG 1.4.3).
+  it('highlights code with the viewer\'s themed syntax classes, not the library default', async () => {
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const src = 'type Id = string;\nfunction greet(name: string): Id {\n  const msg = "hi"; // c\n  return msg + 42;\n}\n';
+    renderCodeInto(src, 'ts', host);
+    await vi.waitFor(() => expect(host.querySelector('.cm-editor')).toBeTruthy());
+    await vi.waitFor(() => {
+      expect(host.querySelector('.cm-syn-keyword')?.textContent).toBe('type');
+      expect(host.querySelector('.cm-syn-type')?.textContent).toBe('Id');
+      expect(host.querySelector('.cm-syn-func')?.textContent).toBe('greet');
+      expect(host.querySelector('.cm-syn-var')?.textContent).toBe('name');
+      expect(host.querySelector('.cm-syn-string')?.textContent).toBe('"hi"');
+      expect(host.querySelector('.cm-syn-number')?.textContent).toBe('42');
+      expect(host.querySelector('.cm-syn-comment')?.textContent).toBe('// c');
+      expect(host.querySelector('.cm-syn-punct')?.textContent).toBe('=');
+    });
+  });
+
   it('the returned CodeView.destroy() tears down the editor (for the organism dispose path)', async () => {
     const host = document.createElement('div');
     document.body.appendChild(host);
