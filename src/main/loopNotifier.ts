@@ -70,8 +70,17 @@ export function createLoopNotifier(deps: LoopNotifierDeps): LoopNotifier {
     activeRepoKey = repoKey;
   };
 
-  // A view is only recomputed when the loop moves, so focus alone would never re-run the decision.
+  // A view is only recomputed when the loop moves, so focus alone would never re-run the decision. On BLUR
+  // a pending human-needed stop earns its notification for ANY repo, not only the observed one — `pending`
+  // is per-repo (§16.3), so a stop in a repo the user navigated away from (raised while focused, hence not
+  // yet signalled) would otherwise never surface. The observed repo keeps its original raise and goes LAST,
+  // so it wins the single active slot when it too is due. On focus the observed-only behavior is unchanged.
   deps.onFocusChanged(() => {
+    if (!deps.isFocused()) {
+      for (const repoKey of pending.keys()) {
+        if (repoKey !== observedRepoKey) raiseIfDue(repoKey);
+      }
+    }
     if (observedRepoKey !== null) raiseIfDue(observedRepoKey);
   });
 
