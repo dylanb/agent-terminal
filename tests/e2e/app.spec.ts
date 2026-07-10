@@ -2413,6 +2413,72 @@ test('dismissing the consent step without a choice returns focus to the install 
   rmSync(configDir, { recursive: true, force: true });
 });
 
+test('the busy install button paints a focus ring that clears 3:1 on its own background (WCAG 2.1 SC 1.4.11 #41)', async () => {
+  // Grades the ring Chromium actually paints, not the stylesheet text: the unit contrast pin reads one
+  // rule's declarations, so an `opacity` on a higher-specificity selector or an ancestor — or a later
+  // equal-specificity rule reclaiming `color` — would dim the ring or the busy label with the pin green.
+  await page.locator('[data-viewbtn="4"]').click();
+  await expect(page.locator('#install-examples-view')).toBeVisible();
+
+  // Keyboard focus, so `:focus-visible` genuinely matches; a programmatic focus() need not.
+  const btn = installExamplesBtn();
+  for (let i = 0; i < 40 && !(await btn.evaluate((el) => el === document.activeElement)); i++) {
+    await page.keyboard.press('Tab');
+  }
+  await expect(btn).toBeFocused();
+
+  const painted = await btn.evaluate((el) => {
+    el.setAttribute('aria-disabled', 'true'); // the busy state setBusy() puts the control in
+    el.setAttribute('aria-busy', 'true');
+    const cs = getComputedStyle(el);
+    let alpha = 1; // group opacity composites the ring, so accumulate it up the ancestor chain
+    for (let n: Element | null = el; n; n = n.parentElement) alpha *= parseFloat(getComputedStyle(n).opacity || '1');
+    const probe = document.createElement('span');
+    el.parentElement!.appendChild(probe);
+    const token = (name: string): string => {
+      probe.style.color = `var(${name})`;
+      return getComputedStyle(probe).color;
+    };
+    const out = {
+      focusVisible: el.matches(':focus-visible'),
+      outlineColor: cs.outlineColor,
+      outlineWidth: cs.outlineWidth,
+      labelColor: cs.color,
+      alpha,
+      card: token('--card'),
+      dim: token('--dim'),
+      signalText: token('--signal-text'),
+    };
+    probe.remove();
+    return out;
+  });
+
+  const rgb = (s: string): [number, number, number] => {
+    const m = s.match(/\d+(\.\d+)?/g);
+    if (!m) throw new Error(`unparseable colour: ${s}`);
+    return [Number(m[0]), Number(m[1]), Number(m[2])];
+  };
+  const relLum = (c: [number, number, number]): number => {
+    const [r, g, b] = c.map((v) => (v / 255 <= 0.03928 ? v / 255 / 12.92 : ((v / 255 + 0.055) / 1.055) ** 2.4));
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  };
+  const ratio = (a: [number, number, number], b: [number, number, number]): number => {
+    const [hi, lo] = [relLum(a), relLum(b)].sort((x, y) => y - x);
+    return (hi + 0.05) / (lo + 0.05);
+  };
+  const over = (fg: [number, number, number], bg: [number, number, number], a: number): [number, number, number] =>
+    [0, 1, 2].map((i) => fg[i] * a + bg[i] * (1 - a)) as [number, number, number];
+
+  expect(painted.focusVisible).toBe(true);
+  expect(painted.outlineWidth).toBe('2px');
+  // The ring survives the busy look at full strength, so its painted contrast clears the SC 1.4.11 floor.
+  const ring = over(rgb(painted.outlineColor), rgb(painted.card), painted.alpha);
+  expect(ratio(ring, rgb(painted.card))).toBeGreaterThanOrEqual(3);
+  // And the busy state is still conveyed: the label moves off the idle accent onto --dim.
+  expect(painted.labelColor).toBe(painted.dim);
+  expect(painted.labelColor).not.toBe(painted.signalText);
+});
+
 test('after install, the active step offers its bundled todo template as the picker default (§18.6 #40)', async () => {
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-install-ex3-home-'));
   const configDir = mkdtempSync(join(tmpdir(), 'agent-term-e2e-install-ex3-cfg-'));
