@@ -68,6 +68,18 @@ describe('copyExampleLoops — places the bundled definitions where the unpackag
     expect(readFileSync(path.join(dest, 'plan-loop', 'prompts', 'work-plan.md'), 'utf8')).toContain('# work');
     expect(readFileSync(path.join(dest, 'plan-loop', 'skills', 'review-intent', 'SKILL.md'), 'utf8')).toContain('# intent');
   });
+
+  // Skills fan into one shared root at install time (§26.5); two loops shipping the same skill name would
+  // silently collapse there. The build refuses to ship such a bundle, naming the offenders.
+  it('refuses to copy a loops tree where two definitions ship the same skill name', () => {
+    const other = path.join(root, 'example', 'loops', 'impl-loop', 'skills', 'review-intent');
+    mkdirSync(other, { recursive: true });
+    writeFileSync(path.join(other, 'SKILL.md'), '# duplicate intent\n');
+
+    expect(() => copyExampleLoops(root, out)).toThrow(/review-intent/);
+    expect(() => copyExampleLoops(root, out)).toThrow(/plan-loop/);
+    expect(() => copyExampleLoops(root, out)).toThrow(/impl-loop/);
+  });
 });
 
 describe('copyExampleCommands — places the bundled commands where the unpackaged resolver reads them', () => {

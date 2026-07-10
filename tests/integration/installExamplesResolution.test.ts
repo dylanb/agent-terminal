@@ -3,10 +3,9 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, exist
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import yaml from 'js-yaml';
-import { applyInstallExamples, type ExampleDirs } from '../../src/main/installExamples';
+import { applyInstallExamples, exampleInstallDirs, type InstallDestination } from '../../src/main/installExamples';
 import { parseLoopDef, resolveLoopDir } from '../../src/main/loopDef';
 import { composeWorkPrompt, composeConsolidatePrompt } from '../../src/main/loopRecipe';
-import { userConfigLoopsDir, userConfigSkillsDir, userConfigCommandsDir } from '../../src/main/userConfig';
 
 // After a real install into a temp config root, the flow's bound loop names must resolve to the seeded
 // definitions and their actor turns must compose from the seeded templates (§24.2.3/§26.5). And the
@@ -14,7 +13,6 @@ import { userConfigLoopsDir, userConfigSkillsDir, userConfigCommandsDir } from '
 
 const BUNDLE_FLOW = path.resolve('example', 'flow');
 const BUNDLE_LOOPS = path.resolve('example', 'loops');
-const BUNDLE_COMMANDS = path.resolve('example', 'commands');
 
 function walk(dir: string, base: string = dir): string[] {
   if (!existsSync(dir)) return [];
@@ -34,21 +32,14 @@ function boundLoopNames(): string[] {
 let home: string;
 let configRoot: string;
 let repo: string;
-let dirs: ExampleDirs;
+let dirs: InstallDestination[];
+const loopsTargetDir = (): string => (dirs.find((d) => d.id === 'loops') as InstallDestination).targetDir;
 
 beforeEach(() => {
   home = mkdtempSync(path.join(tmpdir(), 'install-res-home-'));
   configRoot = mkdtempSync(path.join(tmpdir(), 'install-res-cfg-'));
   repo = mkdtempSync(path.join(tmpdir(), 'install-res-repo-'));
-  dirs = {
-    flowBundleDir: BUNDLE_FLOW,
-    flowTargetDir: path.join(home, '.agent-terminal'),
-    loopsBundleDir: BUNDLE_LOOPS,
-    loopsTargetDir: userConfigLoopsDir(configRoot),
-    skillsTargetDir: userConfigSkillsDir(configRoot),
-    commandsBundleDir: BUNDLE_COMMANDS,
-    commandsTargetDir: userConfigCommandsDir(configRoot),
-  };
+  dirs = exampleInstallDirs({ packaged: false, appPath: process.cwd() }, home, configRoot);
 });
 afterEach(() => {
   for (const d of [home, configRoot, repo]) rmSync(d, { recursive: true, force: true });
@@ -62,7 +53,7 @@ describe('after the install, every loop name the flow binds resolves and compose
   it('resolves each bound name to a definition at the engine loop-config location', () => {
     applyInstallExamples(dirs, []);
     for (const name of boundLoopNames()) {
-      expect(resolveLoopDir(repo, name, configRoot)).toBe(path.join(dirs.loopsTargetDir, name));
+      expect(resolveLoopDir(repo, name, configRoot)).toBe(path.join(loopsTargetDir(), name));
       expect(parseLoopDef(repo, name, configRoot)).not.toBeNull();
     }
   });
@@ -136,7 +127,7 @@ describe('the install is global — a repo-local override never redirects where 
     seedOverride();
     applyInstallExamples(dirs, []);
     for (const rel of walk(BUNDLE_LOOPS)) {
-      expect(existsSync(path.join(dirs.loopsTargetDir, rel))).toBe(true);
+      expect(existsSync(path.join(loopsTargetDir(), rel))).toBe(true);
     }
   });
 
@@ -158,7 +149,7 @@ describe('the install is global — a repo-local override never redirects where 
     // plan-loop to the seeded global copy. This is what a global install buys.
     const otherRepo = mkdtempSync(path.join(tmpdir(), 'install-res-other-'));
     try {
-      expect(resolveLoopDir(otherRepo, 'plan-loop', configRoot)).toBe(path.join(dirs.loopsTargetDir, 'plan-loop'));
+      expect(resolveLoopDir(otherRepo, 'plan-loop', configRoot)).toBe(path.join(loopsTargetDir(), 'plan-loop'));
       expect(parseLoopDef(otherRepo, 'plan-loop', configRoot)).not.toBeNull();
     } finally {
       rmSync(otherRepo, { recursive: true, force: true });

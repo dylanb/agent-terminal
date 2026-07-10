@@ -6,6 +6,7 @@
 import { copyFileSync, mkdirSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { resolveExampleCommandsDir, resolveExampleFlowDir, resolveExampleLoopsDir } from './exampleAssets';
+import { skillNameConflicts } from './exampleSkills';
 
 function copyTree(src: string, dest: string): void {
   mkdirSync(dest, { recursive: true });
@@ -24,8 +25,14 @@ export function copyExampleFlow(rootDir: string, mainOutDir: string): string {
 }
 
 export function copyExampleLoops(rootDir: string, mainOutDir: string): string {
+  const src = path.join(rootDir, 'example', 'loops');
+  const conflicts = skillNameConflicts(src);
+  if (conflicts.length > 0) {
+    const detail = conflicts.map((c) => `${c.name} (${c.loops.join(', ')})`).join('; ');
+    throw new Error(`Bundled loops ship colliding skill names that would collapse on install (§26.5): ${detail}`);
+  }
   const dest = resolveExampleLoopsDir({ packaged: false, appPath: mainOutDir });
-  copyTree(path.join(rootDir, 'example', 'loops'), dest);
+  copyTree(src, dest);
   return dest;
 }
 

@@ -4,6 +4,7 @@ import { createInstallExamples, type InstallExamplesDeps } from '../../src/rende
 import { assertRendersFromHostDocument } from './relocatable';
 import type {
   InstallDestinationId,
+  InstallDestinationPreview,
   InstallExamplesPreview,
   InstallExamplesResult,
 } from '../../src/shared/ipc';
@@ -18,16 +19,16 @@ describe('install examples view organism (§18.1/§23.4)', () => {
     document.body.appendChild(host);
   });
 
-  const clean: InstallExamplesPreview = {
-    destinations: [
-      { destination: 'flow', conflict: false },
-      { destination: 'loops', conflict: false },
-      { destination: 'skills', conflict: false },
-      { destination: 'commands', conflict: false },
-    ],
-  };
+  const cleanDestinations: InstallDestinationPreview[] = [
+    { destination: 'flow', conflict: false },
+    { destination: 'loops', conflict: false },
+    { destination: 'skills', conflict: false },
+    { destination: 'commands', conflict: false },
+  ];
+  const clean: InstallExamplesPreview = { ok: true, destinations: cleanDestinations };
   const conflicting = (...ids: InstallDestinationId[]): InstallExamplesPreview => ({
-    destinations: clean.destinations.map((d) =>
+    ok: true,
+    destinations: cleanDestinations.map((d) =>
       ids.includes(d.destination) ? { destination: d.destination, conflict: true, files: [`${d.destination}-file.md`] } : d,
     ),
   });
@@ -239,19 +240,22 @@ describe('install examples view organism (§18.1/§23.4)', () => {
     expect(reportGroup('loops')?.textContent).toContain('f19.md');
   });
 
-  it('reports what it wrote before failing, alongside the error (mid-write failure)', async () => {
+  it('reports what it wrote AND what it left alone before failing, alongside the error (mid-write failure)', async () => {
     const apply = vi.fn(
       async (): Promise<InstallExamplesResult> => ({
         ok: false,
         error: 'Could not install groom-ticket.md',
         created: [{ destination: 'loops', files: ['plan-loop/plan-loop.yaml'] }],
         overwritten: [],
+        skipped: [{ destination: 'skills', files: ['review-intent/SKILL.md'] }],
       }),
     );
     createInstallExamples(host, deps({ apply }));
     button().click();
     await vi.waitFor(() => expect(alert()?.textContent).toContain('Could not install groom-ticket.md'));
     expect(reportGroup('loops')?.textContent).toContain('plan-loop/plan-loop.yaml');
+    // The failure arm carries skipped too, so the report shows what was preserved, not just what landed.
+    expect(reportGroup('skills')?.textContent).toContain('review-intent/SKILL.md');
   });
 
   it('clears a previous report when a new run starts', async () => {
@@ -303,7 +307,7 @@ describe('install examples view organism (§18.1/§23.4)', () => {
 
   it('announces an install error through the assertive alert region (WCAG 4.1.3)', async () => {
     const apply = vi.fn(
-      async (): Promise<InstallExamplesResult> => ({ ok: false, error: 'refused: symlinked home', created: [], overwritten: [] }),
+      async (): Promise<InstallExamplesResult> => ({ ok: false, error: 'refused: symlinked home', created: [], overwritten: [], skipped: [] }),
     );
     createInstallExamples(host, deps({ apply }));
     button().click();
@@ -316,6 +320,16 @@ describe('install examples view organism (§18.1/§23.4)', () => {
     createInstallExamples(host, deps({ preview }));
     button().click();
     await vi.waitFor(() => expect(alert()?.textContent).toContain('ipc down'));
+  });
+
+  it('routes a refused preview (ok:false) to the alert region and applies nothing', async () => {
+    const apply = vi.fn(async () => okResult());
+    const preview = vi.fn(async (): Promise<InstallExamplesPreview> => ({ ok: false, error: 'refused: wrong session' }));
+    createInstallExamples(host, deps({ preview, apply }));
+    button().click();
+    await vi.waitFor(() => expect(alert()?.textContent).toContain('refused: wrong session'));
+    expect(apply).not.toHaveBeenCalled();
+    expect(busy()).toBe('false');
   });
 
   it('does not start a second run while one is already in flight', async () => {

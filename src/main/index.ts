@@ -117,7 +117,7 @@ import {
   exampleInstallDirs,
   handleInstallExamplesPreview,
   handleInstallExamplesApply,
-  type ExampleDirs,
+  type InstallDestination,
 } from './installExamples';
 import type { CliInstallResult } from '../shared/ipc';
 
@@ -149,7 +149,7 @@ async function createWindow(): Promise<void> {
   const { launchRoot, flowGlobalDir } = resolveLaunchSurfaces(process.env, os.homedir());
   // §18.1/§23.4/§26.5: the install-examples action's bundle sources (build-aware) + its install targets
   // (the GLOBAL flow home and the user-level Claude config directories). The handlers read this seam.
-  const exampleDirs = (): ExampleDirs => exampleInstallDirs(iconLoc, flowGlobalDir);
+  const exampleDirs = (): InstallDestination[] => exampleInstallDirs(iconLoc, flowGlobalDir);
   const ptyProcess = await spawnAgentShell({
     integrationScriptPath: config.shellIntegration ? SHELL_INTEGRATION_SCRIPT : undefined,
     cwd: launchRoot,

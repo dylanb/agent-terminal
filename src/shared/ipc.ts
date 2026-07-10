@@ -764,7 +764,8 @@ export type CliInstallResult =
  *  groups its results by these ids, the renderer collects one decision per id, and the request validator
  *  admits no other. `flow` is the global flow home (§18.1); `loops` the engine's loop-config location
  *  (§24.2.3); `skills` and `commands` the directories Claude Code — a separate process — discovers a
- *  skill and a slash command from. */
+ *  skill and a slash command from. Declaration order is also the canonical display order: both main's
+ *  install report and the renderer's report iterate this array, so reordering it reorders the report. */
 export const INSTALL_DESTINATION_IDS = ['flow', 'loops', 'skills', 'commands'] as const;
 
 export type InstallDestinationId = (typeof INSTALL_DESTINATION_IDS)[number];
@@ -783,11 +784,14 @@ export type InstallDestinationPreview =
   | { destination: InstallDestinationId; conflict: false }
   | { destination: InstallDestinationId; conflict: true; files: string[] };
 
-/** examples:preview result: one entry per destination the action would write. Observing a conflict
- *  never writes anything (§18.1). */
-export interface InstallExamplesPreview {
-  destinations: InstallDestinationPreview[];
-}
+/** examples:preview result: `ok` with one entry per destination the action would write, or `!ok` with a
+ *  human-readable `error` when the request itself was refused. The error arm is distinct from a clean
+ *  `ok` with no conflicts: an empty destination list would otherwise read as "nothing conflicts", so a
+ *  refused request could drive an apply the user never consented to. Observing a preview never writes
+ *  anything (§18.1). */
+export type InstallExamplesPreview =
+  | { ok: true; destinations: InstallDestinationPreview[] }
+  | { ok: false; error: string };
 
 /** examples:apply request (§6): seed every destination. `replace` names the destinations the user
  *  consented to replace conflicting files in — a destination absent from the list keeps its files. The
@@ -805,20 +809,22 @@ export interface InstallDestinationFiles {
   files: string[];
 }
 
-/** examples:apply result: `ok` with the entries created / overwritten / skipped grouped by destination,
- *  or `!ok` with a human-readable `error`. A write the safe-path primitive refuses (symlinked container,
- *  CWE-59) is an `error`, never a silent skip — `skipped` means "left unchanged per the replace
- *  decision". A failure carries `created`/`overwritten` too: the action does not roll back a write that
- *  already landed, so the result names exactly what it wrote before failing. Both are empty when the
- *  pre-write container check refused, which is the all-or-nothing case. */
+/** The files an apply touched, grouped by the destination each was written to (§18.1). `skipped` means
+ *  "left unchanged per the replace decision"; a write the safe-path primitive refuses (symlinked
+ *  container, CWE-59) is an `error`, never a silent skip. */
+export interface InstallExamplesWritten {
+  created: InstallDestinationFiles[];
+  overwritten: InstallDestinationFiles[];
+  skipped: InstallDestinationFiles[];
+}
+
+/** examples:apply result: `ok`, or `!ok` with a human-readable `error`. Both arms carry the same
+ *  created / overwritten / skipped sets: the action does not roll back a write that already landed, so a
+ *  failure names exactly what it wrote — and what it left alone — before failing. All three are empty
+ *  when the pre-write container check refused, which is the all-or-nothing case. */
 export type InstallExamplesResult =
-  | {
-      ok: true;
-      created: InstallDestinationFiles[];
-      overwritten: InstallDestinationFiles[];
-      skipped: InstallDestinationFiles[];
-    }
-  | { ok: false; error: string; created: InstallDestinationFiles[]; overwritten: InstallDestinationFiles[] };
+  | ({ ok: true } & InstallExamplesWritten)
+  | ({ ok: false; error: string } & InstallExamplesWritten);
 
 // ---- Preload-exposed API surfaces (§6) ----
 

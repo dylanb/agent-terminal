@@ -16,10 +16,11 @@ beforeEach(() => invoke.mockClear());
 
 describe('examplesApi routing (§6 / §18.1)', () => {
   it('preview invokes examples:preview with the session id and resolves the preview', async () => {
-    invoke.mockResolvedValueOnce({ destinations: [{ destination: 'flow', conflict: true, files: ['flow.yaml'] }] });
+    const preview = { ok: true, destinations: [{ destination: 'flow', conflict: true, files: ['flow.yaml'] }] };
+    invoke.mockResolvedValueOnce(preview);
     const res = await examplesApi.preview();
     expect(invoke).toHaveBeenCalledWith(CH.installExamplesPreview, { sessionId: SESSION_ID });
-    expect(res).toEqual({ destinations: [{ destination: 'flow', conflict: true, files: ['flow.yaml'] }] });
+    expect(res).toEqual(preview);
   });
 
   it('apply forwards the per-destination replace list intact', async () => {

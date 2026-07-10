@@ -47,6 +47,24 @@ function paintedAlpha(el: Element): number {
   return a;
 }
 
+/** The surface a `:focus-visible` ring is painted against. With `outline-offset`, the ring sits OUTSIDE
+ *  the element's border box, so what shows through beneath it is the parent's paint — not the element's
+ *  own background. Grading the ring against the element's own fill is the wrong backdrop for any control
+ *  that has one. */
+function paintedBgBehindRing(el: Element): RGBA {
+  const parent = el.parentElement;
+  if (!parent) throw new Error('probe has no parent to paint its offset focus ring against');
+  return paintedBg(parent);
+}
+/** The painted colour of el's focus ring: its outline colour under the accumulated group alpha,
+ *  composited over the surface behind the offset ring. */
+function focusRing(el: HTMLElement): RGBA {
+  return over(
+    [...parse(getComputedStyle(el).outlineColor).slice(0, 3), paintedAlpha(el)] as RGBA,
+    paintedBgBehindRing(el),
+  );
+}
+
 let card: HTMLElement;
 
 /** A probe subtree on an opaque `--card` backdrop — the surface every control below sits on. */
@@ -54,16 +72,23 @@ function mount(html: string): HTMLElement {
   card.innerHTML = html;
   return card.firstElementChild as HTMLElement;
 }
+/** Read a token's resolved colour without disturbing whatever the test has mounted. */
 function token(name: string): RGBA {
-  const probe = mount(`<span></span>`);
+  const probe = document.createElement('span');
   probe.style.color = `var(${name})`;
-  return parse(getComputedStyle(probe).color);
+  card.appendChild(probe);
+  try {
+    return parse(getComputedStyle(probe).color);
+  } finally {
+    probe.remove();
+  }
 }
 const fg = (el: Element): RGBA => parse(getComputedStyle(el).color);
 
-/** Focus by keyboard, because `:focus-visible` need not match a programmatic `focus()`. */
-async function focusByKeyboard(el: HTMLElement): Promise<void> {
-  await userEvent.tab();
+/** Tab until the probe holds focus, because `:focus-visible` need not match a programmatic `focus()` and
+ *  the probe need not be the first focusable in the subtree. */
+async function tabToProbe(el: HTMLElement): Promise<void> {
+  for (let i = 0; i < 10 && document.activeElement !== el; i++) await userEvent.tab();
   if (document.activeElement !== el) throw new Error('probe did not take keyboard focus');
   if (!el.matches(':focus-visible')) throw new Error('probe focused but :focus-visible did not match');
 }
@@ -122,9 +147,8 @@ for (const theme of ['light', 'dark'] as const) {
       it('the dismiss focus ring clears 3:1 on the attn-bar background', async () => {
         const bar = mount(`<div class="attn-bar"><span class="msg">m</span><button class="x">×</button></div>`);
         const x = bar.querySelector('.x') as HTMLElement;
-        await focusByKeyboard(x);
-        const ring = over([...parse(getComputedStyle(x).outlineColor).slice(0, 3), paintedAlpha(x)] as RGBA, paintedBg(bar));
-        expect(contrast(ring, paintedBg(bar))).toBeGreaterThanOrEqual(3);
+        await tabToProbe(x);
+        expect(contrast(focusRing(x), paintedBgBehindRing(x))).toBeGreaterThanOrEqual(3);
       });
     });
 
@@ -132,21 +156,29 @@ for (const theme of ['light', 'dark'] as const) {
     // announcement reaches a keyboard user still standing on it. A group `opacity` there would
     // alpha-composite the browser-drawn focus ring along with the label.
     describe('busy pill focus ring contrast (WCAG 2.1 SC 1.4.11)', () => {
-      const ringOn = (el: HTMLElement): RGBA => {
-        const bg = paintedBg(el);
-        return over([...parse(getComputedStyle(el).outlineColor).slice(0, 3), paintedAlpha(el)] as RGBA, bg);
-      };
-
       it("the busy pill's focus ring clears 3:1 on --card", async () => {
         const el = mount(`<button class="pill signal" aria-disabled="true" aria-busy="true">Installing…</button>`);
-        await focusByKeyboard(el);
-        expect(contrast(ringOn(el), paintedBg(el))).toBeGreaterThanOrEqual(3);
+        await tabToProbe(el);
+        expect(contrast(focusRing(el), paintedBgBehindRing(el))).toBeGreaterThanOrEqual(3);
       });
 
       it("an idle pill's focus ring clears 3:1 on --card", async () => {
         const el = mount(`<button class="pill signal">Install examples</button>`);
-        await focusByKeyboard(el);
-        expect(contrast(ringOn(el), paintedBg(el))).toBeGreaterThanOrEqual(3);
+        await tabToProbe(el);
+        expect(contrast(focusRing(el), paintedBgBehindRing(el))).toBeGreaterThanOrEqual(3);
+      });
+
+      // The ring sits outside the border box (outline-offset), so it is painted on the surface BEHIND the
+      // control, not the control's own fill. A filled pill makes the two genuinely different colours; a
+      // grader that used the fill would be judging the wrong backdrop. This pins that they differ and the
+      // ring is graded on the one behind.
+      it("a filled pill's ring is graded on the surface behind it, not its own fill", async () => {
+        const el = mount(`<button class="pill app">Install</button>`);
+        await tabToProbe(el);
+        const own = paintedBg(el);
+        expect(own[3]).toBe(1); // .pill.app carries an opaque fill
+        expect(paintedBgBehindRing(el)).not.toEqual(own);
+        expect(contrast(focusRing(el), paintedBgBehindRing(el))).toBeGreaterThanOrEqual(3);
       });
 
       it('the busy pill still reads as busy — its label differs from the idle pill\'s', () => {

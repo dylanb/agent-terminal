@@ -5,55 +5,25 @@ import path from 'node:path';
 import { atomicWriteFileSync, isRealContainer } from './atomicFile';
 import type { BundleLocation } from './bundleLocation';
 import { resolveExampleCommandsDir, resolveExampleFlowDir, resolveExampleLoopsDir } from './exampleAssets';
+import { listBundledSkills } from './exampleSkills';
 import { userConfigCommandsDir, userConfigLoopsDir, userConfigSkillsDir } from './userConfig';
 import {
   INSTALL_DESTINATION_IDS,
   type InstallDestinationFiles,
   type InstallDestinationId,
+  type InstallDestinationPreview,
   type InstallExamplesPreview,
   type InstallExamplesResult,
 } from '../shared/ipc';
 import { isValidInstallExamplesPreview, isValidInstallExamplesApply } from './ipcValidation';
 
-/** The bundle source and install target of every destination the action seeds. The skills destination
- *  has no bundle dir of its own: its files fan in from every bundled loop's `skills/` (§26.5). */
-export interface ExampleDirs {
-  flowBundleDir: string;
-  flowTargetDir: string;
-  loopsBundleDir: string;
-  loopsTargetDir: string;
-  skillsTargetDir: string;
-  commandsBundleDir: string;
-  commandsTargetDir: string;
-}
-
-/** Resolve the destination set for the running build. The loops target is the NAMED user-config branch,
- *  never `resolveLoopDir`'s precedence-aware answer: an install is global, so it must not land inside
- *  whichever repo the app happens to be pointed at (§24.2.3; CLAUDE.md precedence-aware corollary). */
-export function exampleInstallDirs(loc: BundleLocation, flowGlobalDir: string, configDir?: string): ExampleDirs {
-  return {
-    flowBundleDir: resolveExampleFlowDir(loc),
-    flowTargetDir: path.join(flowGlobalDir, '.agent-terminal'),
-    loopsBundleDir: resolveExampleLoopsDir(loc),
-    loopsTargetDir: userConfigLoopsDir(configDir),
-    skillsTargetDir: userConfigSkillsDir(configDir),
-    commandsBundleDir: resolveExampleCommandsDir(loc),
-    commandsTargetDir: userConfigCommandsDir(configDir),
-  };
-}
-
 const TEMPLATES_SUBDIR = 'todo-templates';
-const SKILLS_SUBDIR = 'skills';
 
-interface PlannedFile {
+/** A file the action installs: its path relative to the destination root, and the bundle file it copies
+ *  from. */
+export interface PlannedFile {
   rel: string;
   src: string;
-}
-
-interface PlannedDestination {
-  id: InstallDestinationId;
-  targetDir: string;
-  files: PlannedFile[];
 }
 
 function entriesOf(dir: string): { name: string; isDirectory: boolean; isFile: boolean }[] {
@@ -93,24 +63,54 @@ function flowFiles(bundleDir: string): PlannedFile[] {
 }
 
 /** Claude Code discovers a skill only as `<skills root>/<skill name>/`, while §26.5 requires each skill
- *  under its own loop directory. */
+ *  under its own loop directory. Colliding names across loops are refused at build time (exampleSkills). */
 function skillFiles(loopsBundleDir: string): PlannedFile[] {
   const out: PlannedFile[] = [];
-  for (const loop of entriesOf(loopsBundleDir)) {
-    if (!loop.isDirectory) continue;
-    const skillsRoot = path.join(loopsBundleDir, loop.name, SKILLS_SUBDIR);
-    for (const rel of walkFiles(skillsRoot)) out.push({ rel, src: path.join(skillsRoot, rel) });
+  for (const skill of listBundledSkills(loopsBundleDir)) {
+    const skillsRoot = path.dirname(skill.dir);
+    for (const rel of walkFiles(skill.dir, skillsRoot)) out.push({ rel, src: path.join(skillsRoot, rel) });
   }
   return out;
 }
 
-function planDestinations(dirs: ExampleDirs): PlannedDestination[] {
-  return [
-    { id: 'flow', targetDir: dirs.flowTargetDir, files: flowFiles(dirs.flowBundleDir) },
-    { id: 'loops', targetDir: dirs.loopsTargetDir, files: filesUnder(dirs.loopsBundleDir) },
-    { id: 'skills', targetDir: dirs.skillsTargetDir, files: skillFiles(dirs.loopsBundleDir) },
-    { id: 'commands', targetDir: dirs.commandsTargetDir, files: filesUnder(dirs.commandsBundleDir) },
-  ];
+/** A resolved install destination: where its files come from, where they go, and how to enumerate them.
+ *  `plan` is opaque to callers — only preview/apply invoke it — so a destination's file strategy can
+ *  change without touching the seam. Tests override `bundleDir` to point at a broken or empty bundle. */
+export interface InstallDestination {
+  id: InstallDestinationId;
+  bundleDir: string;
+  targetDir: string;
+  plan: (bundleDir: string) => PlannedFile[];
+}
+
+interface DestinationSpec {
+  bundle: (loc: BundleLocation) => string;
+  target: (flowGlobalDir: string, configDir?: string) => string;
+  plan: (bundleDir: string) => PlannedFile[];
+}
+
+/** The one registry of destination identity: bundle source, install target, and file-planning strategy,
+ *  keyed by the contract's own ids so `Record<InstallDestinationId, …>` fails to compile if an id is
+ *  missing or unknown — the registry and INSTALL_DESTINATION_IDS cannot drift in membership. Order is not
+ *  stored here: `exampleInstallDirs` iterates INSTALL_DESTINATION_IDS, the single source of the display
+ *  order (§18.1). The loops/skills/commands targets are the NAMED user-config branches (§24.2.3; CLAUDE.md
+ *  precedence-aware corollary), never `resolveLoopDir`'s precedence-aware answer: a global install must not
+ *  land inside whichever repo the app happens to be pointed at. The skills source is the loops bundle —
+ *  its files fan in from every loop's `skills/` (§26.5). */
+const DESTINATIONS: Record<InstallDestinationId, DestinationSpec> = {
+  flow: { bundle: resolveExampleFlowDir, target: (flowGlobalDir) => path.join(flowGlobalDir, '.agent-terminal'), plan: flowFiles },
+  loops: { bundle: resolveExampleLoopsDir, target: (_flow, cfg) => userConfigLoopsDir(cfg), plan: filesUnder },
+  skills: { bundle: resolveExampleLoopsDir, target: (_flow, cfg) => userConfigSkillsDir(cfg), plan: skillFiles },
+  commands: { bundle: resolveExampleCommandsDir, target: (_flow, cfg) => userConfigCommandsDir(cfg), plan: filesUnder },
+};
+
+/** Resolve every destination for the running build: its bundle source from `loc`, its install target
+ *  from the user's surfaces. Order is the contract's, so the report cannot be reordered against it. */
+export function exampleInstallDirs(loc: BundleLocation, flowGlobalDir: string, configDir?: string): InstallDestination[] {
+  return INSTALL_DESTINATION_IDS.map((id) => {
+    const d = DESTINATIONS[id];
+    return { id, bundleDir: d.bundle(loc), targetDir: d.target(flowGlobalDir, configDir), plan: d.plan };
+  });
 }
 
 type Classification = 'create' | 'identical' | 'differ';
@@ -176,24 +176,26 @@ function report(groups: Groups): InstallDestinationFiles[] {
   }));
 }
 
-export function previewInstallExamples(dirs: ExampleDirs): InstallExamplesPreview {
-  const destinations = planDestinations(dirs).map((dest) => {
-    const files = dest.files
+export function previewInstallExamples(destinations: InstallDestination[]): InstallDestinationPreview[] {
+  return destinations.map((dest) => {
+    const files = dest
+      .plan(dest.bundleDir)
       .filter((f) => classify(f.src, path.join(dest.targetDir, f.rel)) === 'differ')
       .map((f) => f.rel);
     return files.length === 0
       ? ({ destination: dest.id, conflict: false } as const)
       : ({ destination: dest.id, conflict: true, files } as const);
   });
-  return { destinations };
 }
 
-export function applyInstallExamples(dirs: ExampleDirs, replace: InstallDestinationId[]): InstallExamplesResult {
-  const plan = planDestinations(dirs).filter((d) => d.files.length > 0);
+export function applyInstallExamples(destinations: InstallDestination[], replace: InstallDestinationId[]): InstallExamplesResult {
+  const plan = destinations
+    .map((d) => ({ id: d.id, targetDir: d.targetDir, files: d.plan(d.bundleDir) }))
+    .filter((d) => d.files.length > 0);
 
   for (const dest of plan) {
     if (!isWritableContainer(dest.targetDir)) {
-      return { ok: false, error: `Could not install: ${dest.targetDir} cannot be written`, created: [], overwritten: [] };
+      return { ok: false, error: `Could not install: ${dest.targetDir} cannot be written`, created: [], overwritten: [], skipped: [] };
     }
   }
 
@@ -206,6 +208,7 @@ export function applyInstallExamples(dirs: ExampleDirs, replace: InstallDestinat
     error,
     created: report(created),
     overwritten: report(overwritten),
+    skipped: report(skipped),
   });
 
   for (const dest of plan) {
@@ -231,12 +234,12 @@ export function applyInstallExamples(dirs: ExampleDirs, replace: InstallDestinat
   return { ok: true, created: report(created), overwritten: report(overwritten), skipped: report(skipped) };
 }
 
-export function handleInstallExamplesPreview(m: unknown, dirs: () => ExampleDirs): InstallExamplesPreview {
-  if (!isValidInstallExamplesPreview(m)) return { destinations: [] };
-  return previewInstallExamples(dirs());
+export function handleInstallExamplesPreview(m: unknown, dirs: () => InstallDestination[]): InstallExamplesPreview {
+  if (!isValidInstallExamplesPreview(m)) return { ok: false, error: 'invalid preview request' };
+  return { ok: true, destinations: previewInstallExamples(dirs()) };
 }
 
-export function handleInstallExamplesApply(m: unknown, dirs: () => ExampleDirs): InstallExamplesResult {
-  if (!isValidInstallExamplesApply(m)) return { ok: false, error: 'invalid install request', created: [], overwritten: [] };
+export function handleInstallExamplesApply(m: unknown, dirs: () => InstallDestination[]): InstallExamplesResult {
+  if (!isValidInstallExamplesApply(m)) return { ok: false, error: 'invalid install request', created: [], overwritten: [], skipped: [] };
   return applyInstallExamples(dirs(), m.replace);
 }

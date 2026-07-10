@@ -4,8 +4,10 @@ import {
   INSTALL_DESTINATION_IDS,
   type InstallDestinationFiles,
   type InstallDestinationId,
+  type InstallDestinationPreview,
   type InstallExamplesPreview,
   type InstallExamplesResult,
+  type InstallExamplesWritten,
 } from '../../shared/ipc';
 import { createModalShell } from './modalShell';
 import { captureFocusReturn } from './dom';
@@ -26,11 +28,9 @@ const DESTINATION_LABEL: Record<InstallDestinationId, string> = {
   commands: 'Claude Code commands',
 };
 
-interface Report {
-  created: InstallDestinationFiles[];
-  overwritten: InstallDestinationFiles[];
-  skipped: InstallDestinationFiles[];
-}
+// The created/overwritten/skipped sets are the contract's own vocabulary — derive from it so the two
+// cannot drift (CLAUDE.md shared-semantics rule).
+type Report = InstallExamplesWritten;
 
 function total(groups: InstallDestinationFiles[]): number {
   return groups.reduce((n, g) => n + g.files.length, 0);
@@ -151,7 +151,7 @@ export function createInstallExamples(host: HTMLElement, deps: InstallExamplesDe
         renderReport(res);
         showStatus('cli-status ok', summarize(res));
       } else {
-        renderReport({ created: res.created, overwritten: res.overwritten, skipped: [] });
+        renderReport(res);
         showError(res.error);
       }
     } catch (e) {
@@ -162,7 +162,7 @@ export function createInstallExamples(host: HTMLElement, deps: InstallExamplesDe
     }
   }
 
-  type Conflict = { destination: InstallDestinationId; files: string[] };
+  type Conflict = Extract<InstallDestinationPreview, { conflict: true }>;
 
   function promptReplace(conflicts: Conflict[], returnFocus: () => void): void {
     modal.render(({ doc: d, titleId, close }) => {
@@ -237,9 +237,14 @@ export function createInstallExamples(host: HTMLElement, deps: InstallExamplesDe
     showStatus('cli-status', 'Checking…');
     let conflicts: Conflict[];
     try {
-      conflicts = (await deps.preview()).destinations.flatMap((d) =>
-        d.conflict ? [{ destination: d.destination, files: d.files }] : [],
-      );
+      const preview = await deps.preview();
+      if (!preview.ok) {
+        showError(preview.error);
+        setBusy(false);
+        returnFocus();
+        return;
+      }
+      conflicts = preview.destinations.flatMap((d) => (d.conflict ? [d] : []));
     } catch (e) {
       showError(e instanceof Error ? e.message : 'Install failed.');
       setBusy(false);

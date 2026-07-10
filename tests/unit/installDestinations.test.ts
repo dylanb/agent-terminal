@@ -3,6 +3,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, realpathSync, rmSync } from 'nod
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { exampleInstallDirs } from '../../src/main/installExamples';
+import { INSTALL_DESTINATION_IDS } from '../../src/shared/ipc';
 import { resolveLoopDir } from '../../src/main/loopDef';
 import {
   userConfigLoopsDir,
@@ -22,25 +23,41 @@ import {
 const loc = { packaged: false, appPath: '/out/main' } as const;
 const FLOW_HOME = '/home/u';
 
+const bundleOf = (dirs: ReturnType<typeof exampleInstallDirs>, id: string): string =>
+  dirs.find((d) => d.id === id)!.bundleDir;
+const targetOf = (dirs: ReturnType<typeof exampleInstallDirs>, id: string): string =>
+  dirs.find((d) => d.id === id)!.targetDir;
+
+describe('exampleInstallDirs — the destination set is the contract, in the contract order', () => {
+  it('yields exactly INSTALL_DESTINATION_IDS, in that order (report order is single-sourced)', () => {
+    // The registry and the contract's id list are not two lists that must be kept in sync by hand: the
+    // installer derives its destinations — and their order — from INSTALL_DESTINATION_IDS alone, so the
+    // report order (which also iterates that list) cannot drift from preview/apply order.
+    expect(exampleInstallDirs(loc, FLOW_HOME, '/cfg').map((d) => d.id)).toEqual([...INSTALL_DESTINATION_IDS]);
+  });
+});
+
 describe('exampleInstallDirs — bundle sources come from the runtime resolvers', () => {
   it('sources each destination from the resolver that reads it back', () => {
     const dirs = exampleInstallDirs(loc, FLOW_HOME, '/cfg');
-    expect(dirs.flowBundleDir).toBe(resolveExampleFlowDir(loc));
-    expect(dirs.loopsBundleDir).toBe(resolveExampleLoopsDir(loc));
-    expect(dirs.commandsBundleDir).toBe(resolveExampleCommandsDir(loc));
+    expect(bundleOf(dirs, 'flow')).toBe(resolveExampleFlowDir(loc));
+    expect(bundleOf(dirs, 'loops')).toBe(resolveExampleLoopsDir(loc));
+    expect(bundleOf(dirs, 'commands')).toBe(resolveExampleCommandsDir(loc));
+    // The skills destination has no bundle of its own — its files fan in from the loops bundle (§26.5).
+    expect(bundleOf(dirs, 'skills')).toBe(resolveExampleLoopsDir(loc));
   });
 });
 
 describe('exampleInstallDirs — targets are the destinations their readers discover from', () => {
   it('targets the global flow home for the flow destination (§18.1)', () => {
-    expect(exampleInstallDirs(loc, FLOW_HOME, '/cfg').flowTargetDir).toBe(path.join(FLOW_HOME, '.agent-terminal'));
+    expect(targetOf(exampleInstallDirs(loc, FLOW_HOME, '/cfg'), 'flow')).toBe(path.join(FLOW_HOME, '.agent-terminal'));
   });
 
   it('targets the user-config loops, skills and commands directories (§24.2.3)', () => {
     const dirs = exampleInstallDirs(loc, FLOW_HOME, '/cfg');
-    expect(dirs.loopsTargetDir).toBe(userConfigLoopsDir('/cfg'));
-    expect(dirs.skillsTargetDir).toBe(userConfigSkillsDir('/cfg'));
-    expect(dirs.commandsTargetDir).toBe(userConfigCommandsDir('/cfg'));
+    expect(targetOf(dirs, 'loops')).toBe(userConfigLoopsDir('/cfg'));
+    expect(targetOf(dirs, 'skills')).toBe(userConfigSkillsDir('/cfg'));
+    expect(targetOf(dirs, 'commands')).toBe(userConfigCommandsDir('/cfg'));
   });
 });
 
@@ -68,8 +85,8 @@ describe('exampleInstallDirs — the loops target ignores a repo-local override 
     expect(overrideDir).toBe(realpathSync(path.join(repo, 'my-loops', 'plan-loop')));
 
     const dirs = exampleInstallDirs(loc, FLOW_HOME, configDir);
-    expect(dirs.loopsTargetDir).toBe(userConfigLoopsDir(configDir));
-    expect(dirs.loopsTargetDir).not.toBe(overrideDir);
-    expect(dirs.loopsTargetDir.startsWith(realpathSync(repo))).toBe(false);
+    expect(targetOf(dirs, 'loops')).toBe(userConfigLoopsDir(configDir));
+    expect(targetOf(dirs, 'loops')).not.toBe(overrideDir);
+    expect(targetOf(dirs, 'loops').startsWith(realpathSync(repo))).toBe(false);
   });
 });

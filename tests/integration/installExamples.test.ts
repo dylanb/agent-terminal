@@ -15,14 +15,19 @@ import path from 'node:path';
 import {
   previewInstallExamples,
   applyInstallExamples,
+  exampleInstallDirs,
   handleInstallExamplesPreview,
   handleInstallExamplesApply,
-  type ExampleDirs,
+  type InstallDestination,
 } from '../../src/main/installExamples';
 import { loadFlowDefinitionLocalFirst } from '../../src/main/flow';
 import { listTodoTemplates, loadTodoTemplateFile, parseTodoTemplate } from '../../src/main/todoTemplate';
-import { userConfigLoopsDir, userConfigSkillsDir, userConfigCommandsDir } from '../../src/main/userConfig';
-import { SESSION_ID, type InstallDestinationId, type InstallExamplesResult } from '../../src/shared/ipc';
+import {
+  SESSION_ID,
+  type InstallDestinationId,
+  type InstallDestinationPreview,
+  type InstallExamplesResult,
+} from '../../src/shared/ipc';
 
 // Drive the real installer with real fs against the ACTUAL bundled example trees (§18.1/§26.5).
 // Assertions are on the observable outcomes the ACs name — per-destination created/overwritten/skipped
@@ -58,7 +63,7 @@ const SKILLS_SET = LOOP_NAMES.flatMap((loop) => walk(path.join(BUNDLE_LOOPS, loo
 
 let home: string;
 let configRoot: string;
-let dirs: ExampleDirs;
+let dirs: InstallDestination[];
 
 const flowRel = 'flow.yaml';
 const templateRel = path.join('todo-templates', 'ticket-grooming.md');
@@ -66,18 +71,18 @@ const planDefRel = path.join('plan-loop', 'plan-loop.yaml');
 const skillRel = path.join('review-intent', 'SKILL.md');
 const commandRel = 'groom-ticket.md';
 
+// The real bundle resolves from cwd (path.resolve('example', …)), so appPath: process.cwd() yields the
+// actual bundled trees; home/configRoot give the temp install targets. Tests that need a broken bundle
+// swap one destination's bundleDir with withBundle — the opaque plan strategy travels untouched.
+const seam = (): InstallDestination[] => exampleInstallDirs({ packaged: false, appPath: process.cwd() }, home, configRoot);
+const destOf = (id: InstallDestinationId): InstallDestination => dirs.find((d) => d.id === id) as InstallDestination;
+const withBundle = (id: InstallDestinationId, bundleDir: string): InstallDestination[] =>
+  dirs.map((d) => (d.id === id ? { ...d, bundleDir } : d));
+
 beforeEach(() => {
   home = mkdtempSync(path.join(tmpdir(), 'install-examples-'));
   configRoot = mkdtempSync(path.join(tmpdir(), 'install-examples-cfg-'));
-  dirs = {
-    flowBundleDir: BUNDLE_FLOW,
-    flowTargetDir: path.join(home, '.agent-terminal'),
-    loopsBundleDir: BUNDLE_LOOPS,
-    loopsTargetDir: userConfigLoopsDir(configRoot),
-    skillsTargetDir: userConfigSkillsDir(configRoot),
-    commandsBundleDir: BUNDLE_COMMANDS,
-    commandsTargetDir: userConfigCommandsDir(configRoot),
-  };
+  dirs = seam();
 });
 afterEach(() => {
   rmSync(home, { recursive: true, force: true });
@@ -85,11 +90,7 @@ afterEach(() => {
 });
 
 const ALL: InstallDestinationId[] = ['flow', 'loops', 'skills', 'commands'];
-const targetOf = (id: InstallDestinationId, rel: string): string =>
-  path.join(
-    { flow: dirs.flowTargetDir, loops: dirs.loopsTargetDir, skills: dirs.skillsTargetDir, commands: dirs.commandsTargetDir }[id],
-    rel,
-  );
+const targetOf = (id: InstallDestinationId, rel: string): string => path.join(destOf(id).targetDir, rel);
 const filesFor = (
   groups: { destination: InstallDestinationId; files: string[] }[],
   id: InstallDestinationId,
@@ -98,11 +99,8 @@ const okOf = (res: InstallExamplesResult): Extract<InstallExamplesResult, { ok: 
   if (!res.ok) throw new Error(`expected ok, got error: ${res.error}`);
   return res;
 };
-const conflictsFor = (
-  preview: ReturnType<typeof previewInstallExamples>,
-  id: InstallDestinationId,
-): string[] => {
-  const d = preview.destinations.find((x) => x.destination === id);
+const conflictsFor = (preview: InstallDestinationPreview[], id: InstallDestinationId): string[] => {
+  const d = preview.find((x) => x.destination === id);
   return d && d.conflict ? d.files : [];
 };
 
@@ -131,7 +129,7 @@ describe('applyInstallExamples — a clean run seeds every destination and repor
     applyInstallExamples(dirs, []);
     for (const loop of LOOP_NAMES) {
       for (const rel of walk(path.join(BUNDLE_LOOPS, loop))) {
-        const installed = path.join(dirs.loopsTargetDir, loop, rel);
+        const installed = path.join(destOf('loops').targetDir, loop, rel);
         expect(existsSync(installed)).toBe(true);
         expect(readFileSync(installed)).toEqual(readFileSync(path.join(BUNDLE_LOOPS, loop, rel)));
       }
@@ -142,20 +140,20 @@ describe('applyInstallExamples — a clean run seeds every destination and repor
     applyInstallExamples(dirs, []);
     expect(COMMANDS_SET.length).toBeGreaterThan(0);
     for (const rel of COMMANDS_SET) {
-      expect(readFileSync(path.join(dirs.commandsTargetDir, rel))).toEqual(readFileSync(path.join(BUNDLE_COMMANDS, rel)));
+      expect(readFileSync(path.join(destOf('commands').targetDir, rel))).toEqual(readFileSync(path.join(BUNDLE_COMMANDS, rel)));
     }
-    expect(walk(dirs.commandsTargetDir).sort()).toEqual([...COMMANDS_SET].sort());
+    expect(walk(destOf('commands').targetDir).sort()).toEqual([...COMMANDS_SET].sort());
   });
 
   it('seeds no command into the flow home', () => {
     applyInstallExamples(dirs, []);
-    for (const rel of COMMANDS_SET) expect(existsSync(path.join(dirs.flowTargetDir, rel))).toBe(false);
-    expect(existsSync(path.join(dirs.flowTargetDir, 'commands'))).toBe(false);
+    for (const rel of COMMANDS_SET) expect(existsSync(path.join(destOf('flow').targetDir, rel))).toBe(false);
+    expect(existsSync(path.join(destOf('flow').targetDir, 'commands'))).toBe(false);
   });
 
   it('installs the flow destination as flow.yaml + .md templates only — never a bare recursive walk', () => {
     applyInstallExamples(dirs, []);
-    expect(walk(dirs.flowTargetDir).sort()).toEqual([...FLOW_SET].sort());
+    expect(walk(destOf('flow').targetDir).sort()).toEqual([...FLOW_SET].sort());
   });
 
   it('reports a file name occurring in two loop definitions as two distinct entries', () => {
@@ -187,7 +185,7 @@ describe('applyInstallExamples — a clean run seeds every destination and repor
 describe('previewInstallExamples — per-destination conflicts, and nothing is ever written', () => {
   it('reports no conflict in any destination when everything is clean', () => {
     const preview = previewInstallExamples(dirs);
-    for (const id of ALL) expect(preview.destinations.find((d) => d.destination === id)?.conflict).toBe(false);
+    for (const id of ALL) expect(preview.find((d) => d.destination === id)?.conflict).toBe(false);
   });
 
   it('creates no file and no directory in any destination', () => {
@@ -198,14 +196,14 @@ describe('previewInstallExamples — per-destination conflicts, and nothing is e
   it('reports no conflict when every present target is byte-identical (never prompted twice)', () => {
     applyInstallExamples(dirs, []);
     const preview = previewInstallExamples(dirs);
-    for (const id of ALL) expect(preview.destinations.find((d) => d.destination === id)?.conflict).toBe(false);
+    for (const id of ALL) expect(preview.find((d) => d.destination === id)?.conflict).toBe(false);
   });
 
   it('reports exactly the differing targets, grouped under their own destination', () => {
-    mkdirSync(dirs.skillsTargetDir, { recursive: true });
+    mkdirSync(destOf('skills').targetDir, { recursive: true });
     mkdirSync(path.dirname(targetOf('skills', skillRel)), { recursive: true });
     writeFileSync(targetOf('skills', skillRel), 'my own skill\n');
-    mkdirSync(dirs.commandsTargetDir, { recursive: true });
+    mkdirSync(destOf('commands').targetDir, { recursive: true });
     writeFileSync(targetOf('commands', commandRel), 'my own command\n');
 
     const preview = previewInstallExamples(dirs);
@@ -223,9 +221,9 @@ describe('applyInstallExamples — one replace decision per destination, never o
     const flowBody = 'name: my-custom-flow\nsteps: []\n';
     mkdirSync(path.dirname(targetOf('skills', skillRel)), { recursive: true });
     writeFileSync(targetOf('skills', skillRel), skillBody);
-    mkdirSync(dirs.commandsTargetDir, { recursive: true });
+    mkdirSync(destOf('commands').targetDir, { recursive: true });
     writeFileSync(targetOf('commands', commandRel), commandBody);
-    mkdirSync(dirs.flowTargetDir, { recursive: true });
+    mkdirSync(destOf('flow').targetDir, { recursive: true });
     writeFileSync(targetOf('flow', flowRel), flowBody);
     return { skillBody, commandBody, flowBody };
   }
@@ -280,7 +278,7 @@ describe('applyInstallExamples — one replace decision per destination, never o
   });
 
   it('creates absent files in a declined destination — a decline withholds no creation', () => {
-    mkdirSync(dirs.commandsTargetDir, { recursive: true });
+    mkdirSync(destOf('commands').targetDir, { recursive: true });
     writeFileSync(targetOf('commands', commandRel), 'mine\n');
     const res = okOf(applyInstallExamples(dirs, []));
     expect(filesFor(res.skipped, 'commands')).toEqual([commandRel]);
@@ -296,7 +294,7 @@ describe('applyInstallExamples — one replace decision per destination, never o
     expect(filesFor(res.skipped, 'loops').sort()).toEqual([...LOOPS_SET].sort());
     expect(filesFor(res.skipped, 'skills').sort()).toEqual([...SKILLS_SET].sort());
     expect(filesFor(res.skipped, 'commands').sort()).toEqual([...COMMANDS_SET].sort());
-    for (const d of previewInstallExamples(dirs).destinations) expect(d.conflict).toBe(false);
+    for (const d of previewInstallExamples(dirs)) expect(d.conflict).toBe(false);
   });
 });
 
@@ -326,8 +324,8 @@ describe('applyInstallExamples — all-or-nothing across destinations when unwri
   });
 
   it.skipIf(asRoot)('writes nothing anywhere when a destination container is not writable', () => {
-    mkdirSync(dirs.skillsTargetDir, { recursive: true });
-    chmodSync(dirs.skillsTargetDir, 0o500); // readable + traversable, not writable
+    mkdirSync(destOf('skills').targetDir, { recursive: true });
+    chmodSync(destOf('skills').targetDir, 0o500); // readable + traversable, not writable
     try {
       const res = applyInstallExamples(dirs, []);
       expect(res.ok).toBe(false);
@@ -338,7 +336,7 @@ describe('applyInstallExamples — all-or-nothing across destinations when unwri
       expect(existsSync(targetOf('loops', planDefRel))).toBe(false);
       expect(existsSync(targetOf('commands', commandRel))).toBe(false);
     } finally {
-      chmodSync(dirs.skillsTargetDir, 0o700);
+      chmodSync(destOf('skills').targetDir, 0o700);
     }
   });
 });
@@ -351,7 +349,7 @@ describe('applyInstallExamples — a symlink nested inside a destination is refu
   ])('refuses when %s under the loops destination is a symlink', (_label, rel) => {
     const real = mkdtempSync(path.join(tmpdir(), 'link-target-'));
     try {
-      const link = path.join(dirs.loopsTargetDir, rel);
+      const link = path.join(destOf('loops').targetDir, rel);
       mkdirSync(path.dirname(link), { recursive: true });
       symlinkSync(real, link);
 
@@ -380,7 +378,7 @@ describe('applyInstallExamples — a failure once writing has begun names everyt
   it('reports every created/overwritten file, and no file outside that list differs from its pre-action bytes', () => {
     // A directory standing where a command file must be written: the pre-flight (a container check)
     // cannot see it, so the failure lands mid-write, after flow/loops/skills are on disk.
-    mkdirSync(path.join(dirs.commandsTargetDir, commandRel), { recursive: true });
+    mkdirSync(path.join(destOf('commands').targetDir, commandRel), { recursive: true });
     // A pre-action file the run will skip (declined), so `no file outside that list` has a real member
     // whose bytes can be compared rather than a vacuously empty set.
     const preserved = targetOf('skills', skillRel);
@@ -392,6 +390,9 @@ describe('applyInstallExamples — a failure once writing has begun names everyt
     expect(res.ok).toBe(false);
     if (res.ok) return;
     expect(res.error).toBeTruthy();
+    // The failure arm still names what it left alone: the declined skill was correctly skipped, and a
+    // caller reconciling the outcome must be able to see that, not infer it from silence.
+    expect(filesFor(res.skipped, 'skills')).toContain(skillRel);
 
     const named = new Set(
       ALL.flatMap((id) => [...filesFor(res.created, id), ...filesFor(res.overwritten, id)].map((r) => targetOf(id, r))),
@@ -416,7 +417,7 @@ describe('applyInstallExamples — a failure once writing has begun names everyt
 describe('applyInstallExamples — never writes a .gitignore', () => {
   it('creates none anywhere it wrote', () => {
     applyInstallExamples(dirs, ALL);
-    for (const dir of [home, configRoot, dirs.flowTargetDir, dirs.loopsTargetDir, dirs.skillsTargetDir, dirs.commandsTargetDir]) {
+    for (const dir of [home, configRoot, destOf('flow').targetDir, destOf('loops').targetDir, destOf('skills').targetDir, destOf('commands').targetDir]) {
       expect(existsSync(path.join(dir, '.gitignore'))).toBe(false);
     }
   });
@@ -434,7 +435,7 @@ describe('applyInstallExamples — an existing-but-unreadable target is not mist
   // A traverse/read-permission failure cannot be provoked as root (it bypasses the mode bits), so gate
   // rather than widen a seam into classify (CLAUDE.md it.skipIf guidance).
   it.skipIf(asRoot)('does not silently overwrite a present target it cannot read (EACCES is not absence)', () => {
-    mkdirSync(dirs.flowTargetDir, { recursive: true });
+    mkdirSync(destOf('flow').targetDir, { recursive: true });
     const tf = targetOf('flow', flowRel);
     const custom = 'name: my-custom-flow\nsteps: []\n';
     writeFileSync(tf, custom);
@@ -454,11 +455,11 @@ describe('applyInstallExamples — a mispackaged bundle is a reported error, not
   it('returns { ok:false, error } instead of throwing when a bundled file cannot be read', () => {
     const bundleEmpty = mkdtempSync(path.join(tmpdir(), 'bundle-empty-'));
     try {
-      mkdirSync(dirs.flowTargetDir, { recursive: true });
+      mkdirSync(destOf('flow').targetDir, { recursive: true });
       writeFileSync(targetOf('flow', flowRel), 'name: my-custom-flow\nsteps: []\n'); // present → bundle read reached
       let res: InstallExamplesResult | undefined;
       expect(() => {
-        res = applyInstallExamples({ ...dirs, flowBundleDir: bundleEmpty }, ['flow']);
+        res = applyInstallExamples(withBundle('flow', bundleEmpty), ['flow']);
       }).not.toThrow();
       expect(res?.ok).toBe(false);
       if (!res || res.ok) return;
@@ -479,11 +480,11 @@ describe('applyInstallExamples — a mispackaged bundle is a reported error, not
       symlinkSync(path.join(outside, 'secret.md'), path.join(bundleX, 'linked.md'));
       symlinkSync(path.join(outside, 'secret-dir'), path.join(bundleX, 'linked-dir'));
 
-      const res = okOf(applyInstallExamples({ ...dirs, commandsBundleDir: bundleX }, []));
+      const res = okOf(applyInstallExamples(withBundle('commands', bundleX), []));
       expect(filesFor(res.created, 'commands')).toEqual([commandRel]);
-      expect(walk(dirs.commandsTargetDir)).toEqual([commandRel]);
-      expect(existsSync(path.join(dirs.commandsTargetDir, 'linked.md'))).toBe(false);
-      expect(existsSync(path.join(dirs.commandsTargetDir, 'linked-dir'))).toBe(false);
+      expect(walk(destOf('commands').targetDir)).toEqual([commandRel]);
+      expect(existsSync(path.join(destOf('commands').targetDir, 'linked.md'))).toBe(false);
+      expect(existsSync(path.join(destOf('commands').targetDir, 'linked-dir'))).toBe(false);
     } finally {
       rmSync(bundleX, { recursive: true, force: true });
       rmSync(outside, { recursive: true, force: true });
@@ -498,7 +499,7 @@ describe('applyInstallExamples — a mispackaged bundle is a reported error, not
       writeFileSync(path.join(bundleX, 'todo-templates', 'ticket-grooming.md'), '# t\n- [ ] x\n');
       writeFileSync(path.join(bundleX, 'todo-templates', 'asset.bin'), Buffer.from([0xff, 0xfe, 0x00, 0x80, 0x90]));
 
-      const res = okOf(applyInstallExamples({ ...dirs, flowBundleDir: bundleX }, []));
+      const res = okOf(applyInstallExamples(withBundle('flow', bundleX), []));
       const binRel = path.join('todo-templates', 'asset.bin');
       expect(filesFor(res.created, 'flow')).not.toContain(binRel);
       expect(existsSync(targetOf('flow', binRel))).toBe(false);
@@ -542,10 +543,10 @@ describe('installed bytes are renderable by the runtime read path (§18.1/§18.6
 });
 
 describe('handleInstallExamplesPreview / handleInstallExamplesApply — contract guards (§6)', () => {
-  const seam = (): ExampleDirs => dirs;
+  const thunk = (): InstallDestination[] => dirs;
 
   it('applies for a valid live-session request', () => {
-    const res = handleInstallExamplesApply({ sessionId: SESSION_ID, replace: [] }, seam);
+    const res = handleInstallExamplesApply({ sessionId: SESSION_ID, replace: [] }, thunk);
     expect(res.ok).toBe(true);
     expect(existsSync(targetOf('flow', flowRel))).toBe(true);
     expect(existsSync(targetOf('loops', planDefRel))).toBe(true);
@@ -559,19 +560,22 @@ describe('handleInstallExamplesPreview / handleInstallExamplesApply — contract
     });
     expect(res.ok).toBe(false);
     expect(consulted).toBe(0);
-    expect(existsSync(dirs.flowTargetDir)).toBe(false);
+    expect(existsSync(destOf('flow').targetDir)).toBe(false);
   });
 
   it('rejects an apply whose replace list is missing or holds an unknown destination', () => {
-    expect(handleInstallExamplesApply({ sessionId: SESSION_ID }, seam).ok).toBe(false);
-    expect(handleInstallExamplesApply({ sessionId: SESSION_ID, replace: ['everything'] }, seam).ok).toBe(false);
-    expect(existsSync(dirs.flowTargetDir)).toBe(false);
+    expect(handleInstallExamplesApply({ sessionId: SESSION_ID }, thunk).ok).toBe(false);
+    expect(handleInstallExamplesApply({ sessionId: SESSION_ID, replace: ['everything'] }, thunk).ok).toBe(false);
+    expect(existsSync(destOf('flow').targetDir)).toBe(false);
   });
 
-  it('previews conflicts for a live session and returns nothing for a wrong session', () => {
-    mkdirSync(dirs.commandsTargetDir, { recursive: true });
+  it('previews conflicts for a live session and refuses a wrong session with an error, not an empty list', () => {
+    mkdirSync(destOf('commands').targetDir, { recursive: true });
     writeFileSync(targetOf('commands', commandRel), 'mine\n');
-    expect(conflictsFor(handleInstallExamplesPreview({ sessionId: SESSION_ID }, seam), 'commands')).toEqual([commandRel]);
-    expect(handleInstallExamplesPreview({ sessionId: 'nope' }, seam).destinations).toEqual([]);
+    const live = handleInstallExamplesPreview({ sessionId: SESSION_ID }, thunk);
+    expect(live.ok).toBe(true);
+    if (live.ok) expect(conflictsFor(live.destinations, 'commands')).toEqual([commandRel]);
+    // A refused request is distinguishable from a clean preview: it carries an error, not { destinations: [] }.
+    expect(handleInstallExamplesPreview({ sessionId: 'nope' }, thunk).ok).toBe(false);
   });
 });
