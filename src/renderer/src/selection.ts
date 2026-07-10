@@ -5,7 +5,6 @@ import type { BufferType, SelectionRange } from '../../shared/ipc';
 import { stripPasteBreakout } from '../../shared/paste';
 import type { MonitorApi } from '../../shared/ipc';
 import { cleanSelectionText, createSelectionModel } from './selectionModel';
-import { createRepoContext, type RepoContext } from './repoContext';
 import { handleTerminalKey, type KeyActions } from './keymap';
 import { resolveKeymap, type Keymap } from '../../shared/keymap';
 import type { TerminalClipboard } from './menuActions';
@@ -20,32 +19,23 @@ import {
 } from './monitor';
 
 /**
- * Capture straight to the repo-scoped Todo list (§16.2): the selected text, else the latest
- * command's output. A no-op without a repo key or with nothing to capture. Signals the action
- * window (a separate pane, §9.1) to refresh after `todo:add` resolves — it can't see this add
- * otherwise, and the await ensures its re-pull sees the new item.
+ * Capture `text` straight to the repo-scoped Todo list (§16.2). A no-op without a repo key or when
+ * the text cleans to empty. Signals the action window (a separate pane, §9.1) to refresh after
+ * `todo:add` resolves — it can't see this add otherwise, and the await ensures its re-pull sees the
+ * new item.
  */
 export async function captureToTodo(
   monitor: MonitorApi,
   repoKey: string | null,
-  selectionText: string | null,
+  selectionText: string,
 ): Promise<void> {
   if (!repoKey) return;
+  const text = cleanSelectionText(selectionText);
+  if (!text) return; // empty-guard: never persist a blank todo (matches manual add / edit)
   // The detached `void captureToTodo(...)` call sites must never see a rejection (a main restart
-  // can reject any of these invokes).
+  // can reject the invoke).
   try {
-    if (selectionText !== null) {
-      const text = cleanSelectionText(selectionText);
-      if (!text) return; // empty-guard: never persist a blank todo (matches manual add / edit)
-      await monitor.todoAdd(repoKey, text, { type: 'selection' });
-    } else {
-      const commands = await monitor.commands();
-      const latest = commands[commands.length - 1]; // newest-last (§15.5)
-      if (!latest) return;
-      const cap = await monitor.captureCommandText(latest.id);
-      if (!cap || !cap.text.trim()) return; // unknown/trimmed id, or empty output — nothing to add
-      await monitor.todoAdd(repoKey, cap.text, { type: 'command-output' });
-    }
+    await monitor.todoAdd(repoKey, text, { type: 'selection' });
     window.dispatchEvent(new CustomEvent(TODOS_CHANGED_EVENT));
   } catch {
     // IPC failure: leave the todo list unchanged and signal nothing.
@@ -61,7 +51,6 @@ const REVEAL_COLOR = 'rgba(255, 196, 84, 0.4)';
 
 export function wireSelection(
   term: Terminal,
-  repo: RepoContext = createRepoContext(window.monitor),
   getKeymap: () => Keymap = () => resolveKeymap(window.term.platform === 'darwin' ? 'mac' : 'pc'),
 ): TerminalClipboard {
   let decorations: IDecoration[] = [];
@@ -123,25 +112,6 @@ export function wireSelection(
     model.clear();
     term.clearSelection();
   }
-
-  document.getElementById('send-selection')!.addEventListener('click', () => {
-    const s = model.get();
-    if (!s.active) return;
-    // paste(), not write(): honors the foreground app's bracketed-paste mode (§7.5).
-    // xterm's paste() does NOT strip the end marker, so we guard the breakout here (§7.5/§9.3).
-    term.paste(stripPasteBreakout(cleanSelectionText(s.text)));
-  });
-
-  // TODO(dylan): the real xterm selection → captureToTodo path (and the no-selection
-  // command-capture branch) is verified only in the §F e2e (plan PR5 5c) — jsdom can't
-  // drive an xterm selection and the emulator must not be mocked (CLAUDE.md). Recorded gap.
-  document.getElementById('capture-selection')!.addEventListener('click', () => {
-    const s = model.get();
-    const selectionText = s.active && s.start && s.end ? s.text : null;
-    void captureToTodo(window.monitor, repo.repoKey(), selectionText);
-  });
-
-  document.getElementById('clear-selection')!.addEventListener('click', clearSelection);
 
   // ---- Cross-highlight between the terminal and the capture pane (§16.8) ----
   // Decoupled via the window-event bus (paneActions), so neither pane imports the other.

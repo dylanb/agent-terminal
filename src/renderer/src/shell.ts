@@ -9,7 +9,7 @@ import { setShown } from './visibility';
 import { announceViewFocus, FOCUS_TERMINAL_EVENT } from './paneActions';
 import { matchChord, MAC_DEFAULTS, type Keymap } from '../../shared/keymap';
 
-export type ViewId = '1' | '2' | '3' | '4'; // 4 = the Settings view (§7.7), reached via the gear / ⌘,
+export type ViewId = '1' | '2' | '4'; // 4 = the Settings view (§7.7), reached via the gear / ⌘,
 
 export interface Shell {
   setView(v: ViewId): void;
@@ -199,7 +199,6 @@ export function createShell(root: HTMLElement, deps: ShellDeps = {}): Shell {
     const targetView: ViewId | null =
       action === 'viewTerminal' ? '1'
       : action === 'viewArtifacts' ? '2'
-      : action === 'viewTodos' ? '3'
       : action === 'openSettings' ? '4'
       : null;
     if (action === 'toggleDrawer') {

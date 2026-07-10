@@ -4,7 +4,6 @@ import { wireSelection, captureToTodo } from './selection';
 import { wireMonitorPane } from './monitor';
 import { createShell } from './shell';
 import { wireCrossHighlight } from './crossHighlight';
-import { SAMPLE_FLOW, createGatePanel } from './flow';
 import { createFlowStrip, type FlowStrip } from './flowStrip';
 import { createLoopPanel } from './loopPanel';
 import { createFlowInputModal } from './flowInputModal';
@@ -40,7 +39,7 @@ const keymap = createKeymapController({
   persistOverrides: (o) => window.monitor.setSettings({ keymapOverrides: o }),
   onChange: () => keyboardUi?.refresh(),
 });
-const terminalClipboard = wireSelection(term, repo, () => keymap.current());
+const terminalClipboard = wireSelection(term, () => keymap.current());
 // macOS Edit-menu actions (§7.7) route to the terminal's clipboard actions, or a focused input's
 // native editing. Off macOS this never fires (no menu is installed).
 window.term.onMenuAction((action) => runMenuEditAction(action, document, terminalClipboard, () => window.term.clipboardRead()));
@@ -185,10 +184,6 @@ if (flowStripHost) {
   const seededKey = repo.repoKey();
   if (seededKey !== null) strip.onRepoChanged(seededKey);
 }
-
-// View-3 Review gate (§19.3) is still a fixture-driven, stubbed mock — out of S1 scope.
-const gatePanel = document.getElementById('gate-panel');
-if (gatePanel) createGatePanel(gatePanel, SAMPLE_FLOW);
 
 // View 2 — the artifact viewer (§20.2 / §24.1): real IPC-backed discovery/read scoped to the live
 // cwd; a selection routes to the same two sinks as the terminal pane — send (inject, no submit,

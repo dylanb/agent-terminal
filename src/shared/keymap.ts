@@ -19,7 +19,6 @@ export type KeyActionId =
   | 'toggleDrawer'
   | 'viewTerminal'
   | 'viewArtifacts'
-  | 'viewTodos'
   | 'openSettings';
 
 /** A normalized chord: a `key` (lower-cased letter, or a DOM key name like `Enter`/`ArrowLeft`/
@@ -47,7 +46,6 @@ export const KEY_ACTION_IDS: KeyActionId[] = [
   'toggleDrawer',
   'viewTerminal',
   'viewArtifacts',
-  'viewTodos',
   'openSettings',
 ];
 
@@ -56,7 +54,6 @@ export const APP_ACTION_IDS: readonly KeyActionId[] = [
   'toggleDrawer',
   'viewTerminal',
   'viewArtifacts',
-  'viewTodos',
   'openSettings',
 ];
 
@@ -103,7 +100,6 @@ export const MAC_DEFAULTS: Keymap = {
   toggleDrawer: [{ key: 'k', meta: true }],
   viewTerminal: [{ key: '1', meta: true }],
   viewArtifacts: [{ key: '2', meta: true }],
-  viewTodos: [{ key: '3', meta: true }],
   openSettings: [{ key: ',', meta: true }], // ⌘, — the macOS Preferences convention
   ...MOTIONS,
 };
@@ -117,7 +113,6 @@ export const PC_DEFAULTS: Keymap = {
   toggleDrawer: [{ key: 'k', ctrl: true, shift: true }],
   viewTerminal: [{ key: '1', ctrl: true }],
   viewArtifacts: [{ key: '2', ctrl: true }],
-  viewTodos: [{ key: '3', ctrl: true }],
   openSettings: [{ key: ',', ctrl: true }], // Ctrl+, — the GTK/VS Code Preferences convention
   ...MOTIONS,
 };

@@ -1,6 +1,6 @@
 # Technical Specification — Agent Terminal: Foundation for a Coding-Agent Management Application
 
-**Document status:** Draft v2.131
+**Document status:** Draft v2.132
 **Scope:** Foundation / "walking skeleton" build (shipped) + semantic/command capture (shipped, §15–§16) + the **task-flow management** phase (§17–§24): requirements drafted, and **Phase 1 — the three-view UI shell with real cores and fixture-mocked machinery (§24.1) — shipped** + the **in-terminal loop engine** (§26): requirements drafted, **tracer bullets L1–L8 shipped** (the app owns `state.yaml`; in-app pickup; one work-agent turn with completion detection; the reviewer fan-out as parallel subagents; the consolidate turn + verdict-driven branch; the in-app gate decision + gh side-effects; full multi-iteration — skip-opt persona pruning, phase-2/at-cap triage routing, and signature-×2 stuck detection; the cost meter — session-JSONL token pricing surfaced on the status strip and recorded per-iteration in the audit; **L8 — CI run-don't-block + resume + epic-promote**) — the app becomes the agent-loop engine, driving one hosted instance by injection instead of shelling to the external Go binary
 **Target platforms:** Linux and macOS (Windows out of scope for this version)
 
@@ -105,6 +105,9 @@
 - [26. In-terminal loop engine — replacing the external agent-loop](#26-in-terminal-loop-engine--replacing-the-external-agent-loop)
 
 ---
+
+> **Changelog v2.132:** **Removed the in-terminal selection toolbar and the CMD-3 Todos/Review-gate mock view, plus the renderer command-history IPC they were the last consumer of.** Two vestigial UI surfaces are deleted. **(1) The selection toolbar (§7).** The `#toolbar` with **Send selection**, **Capture selection**, and **Clear selection** buttons is removed from the terminal view. The app-owned selection subsystem (§7) is unchanged — selection is now driven entirely by the keyboard: **Copy** via the keymap (§7.7), **Clear** via **Escape while a selection is active** (§7.5.1, already the primary path), and paste/select-all via their chords. Capture-to-todo from a selection is retired as a terminal-pane affordance; todos are curated in the drawer's Todo tab (§16, manual add / template) and the Artifacts view's add-to-todo (§20.2). `captureToTodo` (§16.2) narrows to a **text-only** helper — its no-selection "latest command output" branch is removed with the button that was its only caller. **(2) The CMD-3 view (§24.1 / §19.3).** The `data-viewpane="3"` pane — a **fixture-mocked** Todos list beside the **mocked Review-gate** widget (§19.3, `createGatePanel`/`SAMPLE_FLOW`) — is removed entirely, along with its `⌘3`/Ctrl+3 nav chord (`viewTodos` leaves the keymap, §7.7). It was never the real todo surface (that is the drawer Todo tab, §16.3, unchanged) and the gate mock was superseded by the real §26 loop/gate panel. `⌘1`/`⌘2` (Terminal/Artifacts) and the gear/`⌘,` Settings view are untouched; there is no `⌘3` gap to renumber. **(3) Orphaned command-history IPC (§15.4/§15.5).** With the Capture-selection button gone, the renderer command-history/command-capture channels have no consumer, so **`monitor:commands`**, **`monitor:commandsChanged`**, **`monitor:captureCommandText`**, and **`monitor:clearCommands`** (§6) are removed together with their preload bridges, main handlers, validators, and `MonitorApi` methods. The **main-process `commandTracker` (§15.5) is unchanged** — it still segments OSC-133 spans and feeds hosted-agent presence (§26.2), shell-busy, and the §15.6 scanner heuristic; only its renderer-facing exposure is dropped. `command-output` remains a live monitor event type (the Insert-at-cursor capture card, §16.2). No change to the surviving `src/shared/ipc.ts` contract beyond these removals. RED-first: unit updates (`captureToTodo` text-only; `ipcValidation` drops the three request validators; `keymap`/`shell`/`keyboardSettings`/`loopReveal` drop `viewTodos`/view-3), and e2e updates (a regression test asserts the selection toolbar is absent; the todo persistence/repo-scope and Send-from-todo tests re-sourced through the drawer's manual add; the view-switch and reveal tests re-pointed at view 2; the gate-panel e2e removed).
+>
 
 > **Changelog v2.131:** **Third review round — convergence: only MINOR residue, no correctness or security defect survived.** The eleven personas re-ran against the v2.130 tree targeting the round-2 fixes; everything they surfaced was a doc/a11y polish item, and the fixes hold. **(1) A stale wire doc-comment (caught by five lanes).** v2.130 narrowed `LoopActivity` to `{phrase}` in the TYPE, but `FlowStateView.loopActivity`'s doc-comment in `src/shared/ipc.ts` still described "a phrase + a `busy` flag" — the IPC contract's own documentation named a field that no longer exists. Corrected. **(2) A defense-in-depth TOCTOU on the exec artifact path.** `artifactPath` validated the resolved path but returned the LEXICAL `<repo>/.agent-loop/<pattern>`, so a repo swapping `.agent-loop` for a symlink between the check and `gh` opening the `--body-file` could redirect the read (CWE-367). It now returns the symlink-resolved path (via `confinedRealPath`, replacing `escapesConfinement`), symmetric with `resolveLoopDefPath` — `gh` receives a symlink-free path a later swap cannot redirect. **(3) A bare currency announcement the atomic-live-region fix exposed.** With the strip host now `aria-atomic="false"` (v2.130), a cost-boundary push announces only the changed `.loop-cost` node, whose visible text is a bare figure (`$1.23`) — a screen reader read "one dollar twenty-three" with no context (WCAG SC 1.3.1). The cost node now carries an `aria-label` (`cost $1.23`, kept in sync on patch), the label its sibling `.loop-iter` keeps in its own text. **(4) Spec prose drift on the headline feature.** §26.3(b) still said the impl work turn confirms "on its SENTINEL plus a new commit on HEAD" and self-review "on its sentinel" — but the printable sentinel line was retired in v2.124 and completion is the `.agent-loop/turn-done` file; the prose now matches (and notes the impl work turn's `workArtifact` is `""`, v2.126, so there is no additional file gate). **Test:** the §24.2.3 T7 e2e gains an explicit assertion that entering a display-only loop step raises no error dialog — pinning the v2.130 regression fix at its observable boundary. **Dismissed after probing:** none — the three test-lane items were coverage observations, two now addressed and one recorded below. **Recorded gaps:** (a) the two-repo error-reconstruction clobber remains covered only at the `shouldReconstructErrorTurn` decision seam, not a dedicated e2e (v2.130); (b) the composition-root `landFocus` wiring into the three dialogs (`src/renderer/src/index.ts`) is covered at the factory-forwarding and `modalShell` mechanism layers but has no e2e driving a real detached-opener focus landing — an e2e that detaches a live dialog's opener mid-open is disproportionate to the SC 2.4.3 residue it would guard.
 >
@@ -384,9 +387,7 @@ Automated/semantic capture (recognizing agent questions, tool calls, diffs, etc.
 - **Tee PTY output** into a main-process `@xterm/headless` shadow terminal: live screen model, bracketed-paste-mode tracking, alternate-screen detection.
 - **Quiescence detection** (§8.3): track whether the agent's output stream is **active** or **quiet** and publish transitions to the monitor pane — the "agent is probably waiting for you" signal, and the trigger the future semantic pipeline will scan on.
 - Full color (256-color / truecolor) and correct resize/reflow behavior (renderer and shadow stay in lockstep).
-- Mouse text selection in the terminal (app-owned, focus-independent model).
-- A "Send selection to terminal" button (paste-injects the selection back into the foreground app).
-- A "Capture selection" button that snapshots the selection into the **monitor pane**.
+- Mouse text selection in the terminal (app-owned, focus-independent model); driven entirely by the keyboard — Copy via the keymap (§7.7), Clear via Escape while a selection is active (§7.5.1).
 - A minimal **monitor pane**: lists captured blocks and live session status (working/quiet activity, alt-screen and bracketed-paste indicators); each block offers **Insert into agent** and **Insert & submit** actions.
 - A main-process **injection API** (`agent:inject`) used by the monitor pane: wraps text per the *live* bracketed-paste mode read from the shadow model, optionally appends a submit (`\r`).
 - Graceful handling of shell exit and window close.
@@ -435,11 +436,9 @@ flowchart LR
             XT["xterm.js terminal"]
             SELMODEL["selection model<br/>(app-owned, focus-independent)"]
             DECO["decoration layer<br/>(custom highlight)"]
-            BTN["Send / Capture / Clear buttons"]
         end
         subgraph MonPane["Monitor pane (second UI)"]
             LIST["captured + semantic blocks + status"]
-            HIST["command history"]
             ACT["Insert / Insert & submit"]
         end
     end
@@ -450,17 +449,13 @@ flowchart LR
     XT -- "keystrokes / paste data" --> Preload --> PTY
     XT -- "pointer gesture" --> SELMODEL
     SELMODEL -- "render ranges" --> DECO --> XT
-    BTN -- "send: term.paste(model.text)" --> XT
-    BTN -- "monitor:capture {text, range}" --> Preload --> STORE
     STORE -- "monitor:event (stamped)" --> Preload --> LIST
     LIST -- "monitor:replay" --> Preload --> STORE
     SHADOW -- "monitor:update (status)" --> Preload --> LIST
     SHADOW -- "active→quiet scan" --> SCAN
     SCAN -- "monitor:event (semantic)" --> STORE
     SHADOW -- "OSC 133 marks" --> CMD
-    CMD -- "monitor:commandsChanged" --> Preload --> HIST
-    HIST -- "monitor:commands" --> Preload --> CMD
-    CMD -- "captureCommandText {id} → output text" --> Preload
+    CMD -- "closed-span ranges + hosted-agent presence (§15.6/§26.2)" --> SCAN
     ACT -- "agent:inject {text, submit}" --> Preload --> INJ --> PTY
 ```
 
@@ -472,10 +467,10 @@ flowchart LR
 **B. Keystrokes (UI → PTY)**
 User types in `xterm.js` → `term.onData(cb)` fires → renderer calls `api.input(data)` → IPC `pty:input` → main calls `ptyProcess.write(data)`.
 
-**C. Selection (capture and re-injection)**
+**C. Selection (app-owned, keyboard-driven)**
 1. User drags over output. The app writes the range into an **application-owned selection model** (absolute buffer coordinates + extracted text), not the browser's native selection.
 2. The app renders the persistent highlight itself via xterm.js **decorations**; xterm's native selection paints the *live drag* and is suppressed only once focus leaves (§7.1). The decoration persists regardless of where focus goes.
-3. **Send selection** injects `model.text` via `term.paste()` (bracketed-paste aware) back into the foreground app. **Capture selection** sends the text + range over `monitor:capture`; main stamps it and broadcasts it to the monitor pane as a captured block. The selection survives both actions; only an explicit clear removes it.
+3. The selection is acted on by the keyboard alone (§7.7): **Copy** writes `model.text` to the clipboard; **Escape** while a selection is active clears it (§7.5.1); paste/select-all run their chords. The selection survives focus changes; only an explicit clear (Escape) removes it. (The former in-terminal Send/Capture/Clear toolbar was removed in v2.132; capture-to-todo now lives in the drawer Todo tab and the Artifacts view, §16/§20.2.)
 
 **D. Monitor-pane actions (second UI → agent)** — *the new headline flow*
 User clicks **Insert into agent** (or **Insert & submit**) on a captured block → monitor pane calls `api.inject({text, submit})` → IPC `agent:inject` → main reads the **live** bracketed-paste mode from the shadow (`shadow.modes.bracketedPasteMode`), wraps via `wrapForPaste`, writes to the PTY, and if `submit` is set follows with `\r` after a short settle delay (§9.3). This path never touches the renderer's xterm — it works even if the terminal pane is unfocused, scrolled away, or (later) in a different process.
@@ -496,7 +491,7 @@ A main-process recorder taps the flow lifecycle, the TODO store, the agent-loop 
 On the active→quiet transition (§8.3), the **semantic scanner** reads the shadow buffer from a marker watermark, dispatches the scan window to the per-agent adapters (or the generic heuristic fallback when none match), dedups regions by content, and emits each new region on `monitor:event` (`source: shadow-scan` / `heuristic`). Detection only — the scanner never acts on what it finds.
 
 **I. Command-output capture (OSC 133 → command tracker → monitor)** — *§15.5*
-The **command tracker** segments the stream into command spans from OSC 133 marks (`A` prompt-start, `B` command-start, `C` output-start, `D;exit` finished), keyed off the marks and independent of the §8.3 quiescence machinery. When a span opens or closes it fires `monitor:commandsChanged`; the monitor pane re-pulls the compact, read-only history via `monitor:commands`. **Capturing** a command's output is done from the terminal pane's Capture-selection button when nothing is selected: it invokes `monitor:captureCommandText {id}`, which returns that span's output **text** (fail-closed `null` on an unknown/trimmed id), and the renderer adds it straight to the Todo list (§16.2) — there is no per-row Capture button and no `command-output` Capture-tab block. Closed-span output ranges also gate the generic heuristic so command output is not mistaken for an agent prompt (§15.6).
+The **command tracker** segments the stream into command spans from OSC 133 marks (`A` prompt-start, `B` command-start, `C` output-start, `D;exit` finished), keyed off the marks and independent of the §8.3 quiescence machinery. The spans are consumed **entirely in the main process**: closed-span output ranges gate the generic heuristic so command output is not mistaken for an agent prompt (§15.6), and the live spans drive hosted-agent presence (§26.2) and the shell-busy signal. (The former renderer-facing command-history channels — `monitor:commands` / `monitor:commandsChanged` / `monitor:captureCommandText` / `monitor:clearCommands` — were removed in v2.132 along with the Capture-selection button that was their only consumer; the tracker's own capture capability is retained and unit-tested.)
 
 ---
 
@@ -570,17 +565,13 @@ All payloads carry a `sessionId` (a single fixed id in this version). This costs
 | `monitor:capture` | renderer → main | `{sessionId, text, range, source: 'selection'}` | User captured a region; main stamps `{id, capturedAt}` and broadcasts it back on `monitor:event`. |
 | `monitor:event` | main → renderer | `{sessionId, event}` | Manual captures, semantic events, and command-output blocks. `event = {id, type, source, text, range, parentId, truncated, capturedAt}`; `type`/`source` are the §15.4 unions, `parentId` links a finding to its report (§15.4 / v2.6). **Amended v2.27 (§21/D39):** reports/findings no longer arrive on this push channel — they are pulled on demand via `capture:last`. The channel remains for any non-report event use. |
 | `monitor:eventRemoved` | main → renderer | `{sessionId, eventId}` | The scanner retracted a prior semantic event because a later capture supersedes it (its text is an exact prefix of the newer one — §15.3 / v2.13); the pane drops the block, cascading to a report's findings. **Retired v2.27 (§21/D39):** single-slot capture replaces in place, so cross-transition retraction is no longer used. |
-| `monitor:update` | main → renderer | `{sessionId, altScreen: boolean, bracketedPaste: boolean, agentState: 'active'\|'quiet', quietSince: number\|null}` | Debounced shadow-state and activity changes (live status indicators). **Status-only** — it carries no command data; the pane re-pulls `monitor:commands` on each tick for liveness (§15.4). |
+| `monitor:update` | main → renderer | `{sessionId, altScreen: boolean, bracketedPaste: boolean, agentState: 'active'\|'quiet', quietSince: number\|null}` | Debounced shadow-state and activity changes (live status indicators). **Status-only** — it carries no command data. |
 | `monitor:replay` | renderer → main (invoke) | `() → MonitorEvent[]` | A (re)loaded monitor pane requests the captures stamped so far (§8.4). |
 | `monitor:currentRepo` | renderer → main (invoke) | `{sessionId} → {cwd, repoKey} \| null` | The agent's current repo, queried on mount so the pane learns the key even when it missed the live `cwd:changed` broadcast (§16.3, v2.19). |
-| `monitor:commands` | renderer → main (invoke) | `{sessionId} → CommandSummary[]` | The sole command-history data path (§15.4 / §15.5); re-invoked on each `monitor:update` tick and `monitor:commandsChanged` signal. |
-| `monitor:commandsChanged` | main → renderer | `{sessionId}` | A command span opened or closed (OSC 133). Signal-only — the pane re-pulls `monitor:commands`. Keeps history live off the marks, independent of §8.3 quiescence (§15.5, added v2.5). |
-| `monitor:captureCommandText` | renderer → main | invoke `{sessionId, commandId} → {text, truncated} \| null` | A command's output **text**, for adding straight to a todo (§16.2). **Fail-closed**: an unknown/stale/trimmed id returns `null`. (Replaced `monitor:captureCommand`, which materialized a Capture-tab block, when the per-entry Capture button was removed — v2.11.) |
 | `monitor:dismiss` | renderer → main | `{sessionId, eventId}` | Remove a captured event from the store; dismissing a report cascades to its findings, so a reloaded pane's replay won't resurrect it (§15.6 / v2.6). |
 | `monitor:dismissAll` | renderer → main | `{sessionId}` | Clear every captured event from the store (Dismiss-all; §15.6 / v2.6). **Retired v2.27 (§21/D39):** no capture list to clear under single-slot capture. |
 | `monitor:learnChrome` | renderer → main | `{sessionId, eventId, sample}` | **Mark as chrome** (§15.x / v2.14): learn the block's leading glyphs as chrome markers (persisted), then retract the capture via `monitor:eventRemoved` (cascading to findings). |
 | `agent:inject` | renderer → main | `{sessionId, text, submit: boolean}` | Action-window action: paste-wrap per live mode, write to PTY, optionally submit. Focus follows the §16.2 rule (renderer-side): Insert → terminal, Insert & submit → stays. |
-| `monitor:clearCommands` | renderer → main | `{sessionId}` | Clear **finished** commands from the history, keeping any still-running one (§16.2); fires `monitor:commandsChanged` so the pane re-renders. |
 | `todo:list` | renderer → main (invoke) | `{sessionId, repoKey} → TodoItem[]` | Current repo's todos (active + done), order-sorted (§16.3). |
 | `todo:add` | renderer → main (invoke) | `{sessionId, repoKey, text, source?} → TodoItem[]` | Append a todo (manual or Add-to-todo); returns the fresh list (§16.4). |
 | `todo:update` | renderer → main (invoke) | `{sessionId, repoKey, id, text} → TodoItem[]` | Save an in-place edit (§16.4). |
@@ -593,7 +584,7 @@ All payloads carry a `sessionId` (a single fixed id in this version). This costs
 | `term:clipboardWrite` | renderer → main | `{text}` | Write to the OS clipboard (§7.7) — owned by main since the sandboxed preload cannot import electron's `clipboard`. App-global, **no `sessionId`** (the §16.6 `UiSettings` exception). |
 | `term:clipboardRead` | renderer → main (invoke) | `() → string` | Read the OS clipboard for the sanitized paste path (§7.7/§9.3). App-global, no `sessionId`. |
 | `menu:edit` | main → renderer | `{action}` (`action ∈ copy \| paste \| selectAll`) | macOS Edit-menu accelerators route here (§7.7); the renderer dispatches to the terminal clipboard action or the focused input's native editing. App-global, no `sessionId`. |
-| `capture:last` | renderer → main (invoke) | `{sessionId} → MonitorEvent[]` | **(v2.27, §21/D39; shape v2.34)** Run report-detection (§15.3) **on demand** against the current shadow buffer and return the single latest report **followed by its findings** as stored `MonitorEvent`s — `[]` when none. Mirrors `monitor:replay`'s shape so the pane renders a button-capture and a replay identically; the handler replaces any prior `report` in the store first (single-slot). Skips a candidate that is just the echoed command line, or one an active classifier flags as its agent's end-of-turn meta-summary (Claude Code's `※ recap:` line — a meta-summary, not a report; v2.96, §15.3). Command-output capture stays on `monitor:captureCommandText`. |
+| `capture:last` | renderer → main (invoke) | `{sessionId} → MonitorEvent[]` | **(v2.27, §21/D39; shape v2.34)** Run report-detection (§15.3) **on demand** against the current shadow buffer and return the single latest report **followed by its findings** as stored `MonitorEvent`s — `[]` when none. Mirrors `monitor:replay`'s shape so the pane renders a button-capture and a replay identically; the handler replaces any prior `report` in the store first (single-slot). Skips a candidate that is just the echoed command line, or one an active classifier flags as its agent's end-of-turn meta-summary (Claude Code's `※ recap:` line — a meta-summary, not a report; v2.96, §15.3). |
 | `flow:list` | renderer → main (invoke) | `{sessionId} → FlowDef[]` | **(v2.27, §18)** The merged flow-definition library (global ∪ per-repo, repo wins on name clash — §18.4). |
 | `flow:start` | renderer → main (invoke) | `{sessionId, flowName, inputs} → FlowState` | **(v2.27, §19)** Instantiate the chosen definition, begin step 1, run its entry actions (incl. `bootstrap: pickup` if declared — §18.3). |
 | `flow:state` | renderer → main (invoke) | `{sessionId} → FlowState \| null` | **(v2.27, §19)** Current step, per-step status, gate state, derived loop progress (§19.1). |
@@ -630,9 +621,6 @@ contextBridge.exposeInMainWorld('monitor', {
   onUpdate: (cb) => ipcRenderer.on('monitor:update', (_e, m) => cb(m)),
   onExit:   (cb) => ipcRenderer.on('pty:exit',       (_e, m) => cb(m)), // session alive/exited (§9.2)
   replay:   () => ipcRenderer.invoke('monitor:replay'),
-  commands: () => ipcRenderer.invoke('monitor:commands', { sessionId: SID }),
-  captureCommandText: (commandId) => ipcRenderer.invoke('monitor:captureCommandText', { sessionId: SID, commandId }),
-  clearCommands: () => ipcRenderer.send('monitor:clearCommands', { sessionId: SID }),
   inject:   (req) => ipcRenderer.send('agent:inject', { sessionId: SID, ...req }),
   // Todo (§16) — repoKey threaded so an in-flight edit always targets its own repo
   todoList:   (repoKey) => ipcRenderer.invoke('todo:list',   { sessionId: SID, repoKey }),
@@ -845,23 +833,10 @@ function cleanSelectionText() {
   return text.replace(/\r?\n$/, '');                     // drop one trailing newline (don't auto-submit)
 }
 
-// Send selection back into the foreground app.
-document.getElementById('send-selection').addEventListener('click', () => {
-  injectText(cleanSelectionText());
-  // selection intentionally NOT cleared, focus NOT forced back.
-});
-
-// Capture selection into the monitor pane (flows through main — §6).
-document.getElementById('capture-selection').addEventListener('click', () => {
-  if (!selection.active) return;
-  window.monitor.capture({
-    text: cleanSelectionText(),
-    range: { start: selection.start, end: selection.end,
-             baseY: selection.baseY, bufferType: selection.bufferType },
-    source: 'selection',
-  });
-  // selection intentionally NOT cleared — the user may capture AND send.
-});
+// The selection has no in-terminal toolbar (removed in v2.132). It is acted on by the keyboard
+// alone (§7.7): Copy writes cleanSelectionText() to the clipboard; Escape (while active) clears it
+// (§7.5.1). injectText() above is the shared paste path the Paste chord and the §9.3 injection API
+// both route through — it is not tied to any button.
 ```
 
 > **Why two injection paths exist:** the renderer path uses `term.paste()`, which reads the live mode and sanitizes for free. The **monitor pane** (and any future programmatic actor) must not depend on the renderer's xterm instance, so it uses the main-process injection API (§9.3), which reads the same mode from the **shadow** terminal and applies the equivalent `wrapForPaste` sanitization. Both paths are mode-honoring; neither caches the mode.
@@ -879,7 +854,7 @@ function clearSelection() {
   clearDecorations();
   term.clearSelection();          // also drop xterm's native selection (visible while focused, §7.1)
 }
-document.getElementById('clear-selection').addEventListener('click', clearSelection);
+// Escape (while a selection is active) is the only clear affordance — there is no toolbar button (§7.5.1, v2.132).
 term.attachCustomKeyEventHandler((e) => {
   if (e.type === 'keydown' && e.key === 'Escape') { clearSelection(); return false; }
   return true;
@@ -888,7 +863,7 @@ term.attachCustomKeyEventHandler((e) => {
 
 > **Escape-key caveat for agents:** Claude Code and other TUIs bind Escape themselves (interrupt/back). Swallowing it globally for "clear selection" conflicts with driving the agent. Rule: Escape clears the selection **only when a selection is active**; otherwise it passes through to the PTY (`return true`). Revisit the binding once agents are the daily workload.
 
-`index.html` (§10) therefore has **Send selection**, **Capture selection**, and **Clear selection** buttons.
+The terminal view carries **no selection toolbar** (the former **Send selection** / **Capture selection** / **Clear selection** buttons were removed in v2.132); the selection is driven by the keyboard alone (Copy via the keymap, Clear via Escape — §7.7).
 
 ### 7.5.2 Agent key bindings (added v2.8)
 
@@ -922,14 +897,14 @@ Design constraints:
 
 ### 7.7 Cross-platform keymap (clipboard + editing, profile-driven & rebindable) (added v2.72)
 
-The §7.5.2 chords generalize into a **data-driven keymap**: a profile maps each logical **action** to one or more **chords**, the renderer resolves a key event to an action and runs it. The model is pure and OS-agnostic (`src/shared/keymap.ts`): `KeyActionId` (the terminal actions `copy`, `paste`, `selectAll`, `newlineNoSubmit`, `wordBack`, `wordForward`, `deleteWordBack`, `deleteLine`, plus the §24.1C app-navigation actions `toggleDrawer`, `viewTerminal`, `viewArtifacts`, `viewTodos`, `openSettings` — see the App-navigation note below), `Chord {key, ctrl?, alt?, shift?, meta?}`, `Keymap = Record<KeyActionId, Chord[]>`; `matchChord(event, keymap)` → action id or `null`, `resolveKeymap(base, overrides)`, `eventToChord(event)` (rebinding capture), and `BYTES_FOR` (the §7.5.2 motion bytes — the bytes are still the contract). Clipboard actions are **side effects**, not bytes.
+The §7.5.2 chords generalize into a **data-driven keymap**: a profile maps each logical **action** to one or more **chords**, the renderer resolves a key event to an action and runs it. The model is pure and OS-agnostic (`src/shared/keymap.ts`): `KeyActionId` (the terminal actions `copy`, `paste`, `selectAll`, `newlineNoSubmit`, `wordBack`, `wordForward`, `deleteWordBack`, `deleteLine`, plus the §24.1C app-navigation actions `toggleDrawer`, `viewTerminal`, `viewArtifacts`, `openSettings` — see the App-navigation note below), `Chord {key, ctrl?, alt?, shift?, meta?}`, `Keymap = Record<KeyActionId, Chord[]>`; `matchChord(event, keymap)` → action id or `null`, `resolveKeymap(base, overrides)`, `eventToChord(event)` (rebinding capture), and `BYTES_FOR` (the §7.5.2 motion bytes — the bytes are still the contract). Clipboard actions are **side effects**, not bytes.
 
 - **Interrupt is intentionally unbound.** `Ctrl+C` matches no action, so it passes straight through to the PTY as SIGINT; plain `Enter` likewise submits. Copy is *only ever* the profile/override chord — never a "smart Ctrl+C."
 - **Two built-in profiles.** `MAC_DEFAULTS` (Cmd-based: `⌘C`/`⌘V`/`⌘A`) and `PC_DEFAULTS` (`Ctrl+Shift+C`/`V`/`A`, the ~20-year Linux/GNOME convention). The editing motions are identical in both (they key off Option/Alt, which the DOM reports the same on every OS).
 - **Profile resolution + override.** `UiSettings.keymapProfile` (`auto`|`mac`|`pc`; `auto` → `mac` on `darwin` else `pc`) — a user override is mandatory because the OS and the desired layout can disagree (a Mac keyboard on Linux). The renderer resolves via `window.term.platform`; `keymapController` (`src/renderer/src/keymapController.ts`) holds the active keymap and is read **live per keydown** by the §7.5 dispatch, so a switch needs no rewire. `UiSettings.keymapOverrides` (per-action chords, omitted when none) merge over the profile.
 - **Copy / paste / select-all wiring.** Copy writes the **app-owned selection** (§7), not xterm's hidden native one, to the OS clipboard. Paste reads the OS clipboard and goes through `term.paste(stripPasteBreakout(…))` so the **§9.3 breakout sanitization always runs** — the browser/xterm *native* paste bypasses it, so our handler `preventDefault`s and owns the path. Select-all calls `term.selectAll()`, which feeds the model via the existing `onSelectionChange` listener (so the highlight and Copy reflect it). The clipboard is an OS resource owned by **main** (the sandboxed preload cannot import electron's `clipboard`), routed via `term:clipboardWrite` / `term:clipboardRead`; `window.term.platform` exposes the OS for `auto` resolution.
 - **Keyboard settings UI.** `src/renderer/src/keyboardSettings.ts` (a relocatable organism) is a dedicated **Settings view** (shell view 4), reached from the rail gear and the `openSettings` chord (**⌘,** / **Ctrl+,**) — not the rail foot. It renders the **Auto/macOS/PC** profile control plus per-action rows grouped by category (Clipboard / Editing / Navigation), each chord drawn as **keycaps** (`chordToCaps`). **Set** captures the next keypress (`eventToChord`, ignoring modifier-only presses); a combination already bound elsewhere is **blocked and named** (`findChordOwner`), keeping the old binding; an overridden row offers **Reset** (`keymapController.clearOverride`, restoring the profile default).
-- **App-navigation actions (§24.1C).** The shell shortcuts are part of the same keymap (so they are profile-aware and rebindable): `toggleDrawer`, `viewTerminal`, `viewArtifacts`, `viewTodos`, `openSettings`. On **PC** the drawer is **Ctrl+Shift+K** (not bare Ctrl+K, which is left to readline kill-line); views are Ctrl+1/2/3. On **mac** they are ⌘K and ⌘1/2/3. `shell.ts` matches these via the shared keymap; the terminal dispatch ignores them (no `BYTES_FOR`, so they pass through), and the shell's capture-phase handler claims them first.
+- **App-navigation actions (§24.1C).** The shell shortcuts are part of the same keymap (so they are profile-aware and rebindable): `toggleDrawer`, `viewTerminal`, `viewArtifacts`, `openSettings`. On **PC** the drawer is **Ctrl+Shift+K** (not bare Ctrl+K, which is left to readline kill-line); views are Ctrl+1/2 (the `viewTodos`/⌘3 chord was removed with the Todos view, v2.132). On **mac** they are ⌘K and ⌘1/2. `shell.ts` matches these via the shared keymap; the terminal dispatch ignores them (no `BYTES_FOR`, so they pass through), and the shell's capture-phase handler claims them first.
 - **macOS Edit menu.** Because macOS routes ⌘C/⌘V/⌘A through the application menu (and the default Edit roles act on xterm's *hidden native* selection), on darwin `src/main/appMenu.ts` installs a menu whose Copy/Paste/Select All `click` to the renderer (`menu:edit`); `src/renderer/src/menuActions.ts` routes each to the **terminal** clipboard action when the terminal is focused, else the focused input's native editing (so text fields keep ⌘C/⌘V/⌘A). Off darwin no menu is installed and the renderer keymap owns the chords.
 
 ### 7.6.1 (note) §7.5.2 is the motion subset
@@ -1134,7 +1109,7 @@ agent-terminal/
 │   │   └── assets/      # shell-integration.bash — sourced PROMPT_COMMAND OSC-133 marks (§15.5)
 │   ├── preload/index.ts # contextBridge: term + monitor namespaces (§6)
 │   ├── renderer/
-│   │   ├── index.html   # two-pane layout: <main> #terminal + toolbar | <aside> #monitor (status, command-history, blocks)
+│   │   ├── index.html   # two-pane layout: <main> #terminal | <aside> #monitor (status, blocks)
 │   │   └── src/         # terminal.ts, selection.ts, selectionModel.ts, monitor.ts, styles.css (§7, §9)
 │   └── shared/ipc.ts    # the typed IPC contract — single source of truth (§6)
 ├── tests/               # unit + integration (vitest) + e2e (playwright _electron)
@@ -1145,16 +1120,10 @@ agent-terminal/
 ```html
 <div id="app">
   <div id="terminal-pane">
-    <div id="toolbar">
-      <button id="send-selection">Send selection</button>
-      <button id="capture-selection">Capture selection</button>
-      <button id="clear-selection">Clear selection</button>
-    </div>
     <div id="terminal"></div>
   </div>
   <div id="monitor">
     <div id="monitor-status"></div>
-    <div id="command-history"></div>
     <div id="monitor-blocks"></div>
   </div>
 </div>
@@ -1208,14 +1177,14 @@ The foundation is "done" when all of the following pass on both Linux and macOS:
 **Selection (unchanged behavior + capture)**
 - [x] Dragging to select output shows the app's own highlight (custom translucent decoration, not native xterm highlight). *(e2e, including absolute-coordinate placement after 100 lines of scrollback)*
 - [x] **Focus independence:** the highlight remains after clicking any button, typing in the terminal, or focusing the monitor pane. It disappears **only** on Clear / Escape-with-active-selection / starting a new selection. *(e2e: monitor-click persistence + Clear; Escape-clears and Escape-passthrough now e2e too)*
-- [x] Clicking **Send selection** inserts exactly the selected text (whitespace-trimmed, no trailing newline) at the prompt; the selection stays highlighted. *(e2e: Send pastes an editable command line and the highlight persists; trim/newline logic unit-tested via `cleanSelectionText`)*
+- [x] The app-owned selection stays highlighted through focus changes and clears only on **Escape** while active (§7.5.1); trim/newline handling is unit-tested via `cleanSelectionText`. *(The former **Send selection** button was removed in v2.132; a selection is copied via the keymap and re-used through the drawer Todo tab / Artifacts add-to-todo.)*
 - [ ] The highlight stays glued to its text when the buffer scrolls. *(implemented — marker-anchored decorations + `onScroll` re-render; no automated assertion yet)*
 
 **Agent hosting + monitor loop (new — the product-defining criteria)**
 - [ ] Running **Claude Code** (`claude`) inside the session works: it renders correctly, accepts input, and the monitor status strip shows `bracketedPaste: on` while it runs. *(manual — real agent required)*
 - [x] Running an **alt-screen TUI** (Codex TUI, or `htop` as a stand-in) flips the monitor's `altScreen` indicator on, and back off on exit. *(e2e via `ESC[?1049h/l`; spot-check with a real TUI manually)*
 - [ ] **Quiescence:** while Claude Code is generating output the monitor shows **working**; within ~1 s of it finishing and idling at its input box the indicator flips to **quiet** (and the quiet-for counter starts); submitting a new message flips it back to **working**. *(mechanism e2e-verified with bash output bursts; the Claude Code-specific behavior and `QUIET_MS` tuning (§14) are manual)*
-- [ ] **Capture:** selecting a region of agent output and clicking **Capture selection** makes the block appear in the monitor pane with its text and timestamp. Capture works on the alt buffer too (even though the in-terminal highlight may not draw there — known §7.4 limitation). *(normal-buffer capture e2e-verified; alt-buffer capture untested)*
+- [x] **Capture:** the monitor pane's **"Capture last report"** action (§21.1) snapshots the current report + findings; each finding is **Add-to-todo**-able. Works on the alt buffer too (even though the in-terminal highlight may not draw there — known §7.4 limitation). *(The per-selection **Capture selection** button was removed in v2.132; capture-to-todo now lives in the drawer Todo tab and the Artifacts view.)*
 - [ ] **Insert into agent:** with Claude Code running, clicking **Insert into agent** on a captured multi-line block places the whole block in Claude Code's input box as one editable unit, **without running anything** — including when the terminal pane is not focused. *(mechanics e2e-verified against bash, including injection with the terminal pane unfocused; the Claude Code input box is manual)*
 - [ ] **Insert & submit:** the same block lands and is submitted; Claude Code receives it as a single message. *(same: bash path e2e-verified; Claude Code manual)*
 - [x] **Mode honoring:** the same insert against a session with bracketed paste off (plain bash prompt with the mode disabled) arrives as raw input — no stray `ESC[200~` markers visible. *(e2e, both directions: `?2004l` → no markers, `?2004h` → fenced)*
@@ -1308,15 +1277,15 @@ These shape choices above (the shadow model, the event schema, the `sessionId` f
   - A `truncated: boolean` field marks trim-loss (§15.2); a `parentId: string | null` field links a `finding` to its `report` (**v2.6**).
   - `text` is the durable payload, extracted at scan time; `range` remains best-effort provenance, never re-extracted from (§7.3 rule applies unchanged). `id`/`capturedAt` stamped by main; every payload carries `sessionId`.
 - Events append to the existing in-memory event store and are included in replay, so a reloaded monitor pane sees semantic, command, and manual captures in one ordered history.
-- ~~No new renderer-direction IPC channels; the §6 contract gains only the widened unions and fields.~~ **Amended v2.5:** building command-output capture required two renderer→main channels, `monitor:commands` and `monitor:captureCommand` (§6), in the same class as the already-shipped `monitor:replay`, plus one main→renderer signal channel, `monitor:commandsChanged` (a command span opened/closed; the pane re-pulls `monitor:commands`), so history stays live off the OSC-133 marks rather than the §8.3 quiescence tick. Everything else holds: the widened `type`/`source` unions and `truncated` field live in `src/shared/ipc.ts` (strict-typed, no `any`), and `monitor:update` stays status-only (it does **not** carry commands).
+- ~~No new renderer-direction IPC channels; the §6 contract gains only the widened unions and fields.~~ **Amended v2.5:** building command-output capture required two renderer→main channels, `monitor:commands` and `monitor:captureCommand` (§6), in the same class as the already-shipped `monitor:replay`, plus one main→renderer signal channel, `monitor:commandsChanged` (a command span opened/closed; the pane re-pulls `monitor:commands`), so history stays live off the OSC-133 marks rather than the §8.3 quiescence tick. Everything else holds: the widened `type`/`source` unions and `truncated` field live in `src/shared/ipc.ts` (strict-typed, no `any`), and `monitor:update` stays status-only (it does **not** carry commands). **Superseded v2.132:** all four command-history channels (`monitor:commands`, `monitor:commandsChanged`, `monitor:captureCommandText`, `monitor:clearCommands`) were removed when their only renderer consumer — the Capture-selection button — was deleted; the command tracker is now main-process-only (§15.5), and the §6 contract no longer carries any renderer-direction command channel.
 
 ### 15.5 Command-output capture (shell integration)
 
 - **Segmentation via OSC 133 shell-integration marks** (FinalTerm/iTerm2/VS Code convention): `OSC 133;A` prompt start, `B` command start, `C` output start, `D;exitcode` finished. The shadow parses these with a registered OSC handler (`parser.registerOscHandler(133, …)` — public xterm API, available in `@xterm/headless`), yielding deterministic boundaries: command text, full output span, exit code. **Never prompt-regex heuristics** — user prompts are too variable, and agents print prompt-looking text constantly.
 - Output rows between `C` and `D` are extracted from scrollback under the same watermark / truncation / wrapped-line rules as §15.2.
 - **Opt-out shell-integration injection (amends §5 when built):** bash does not emit OSC 133 on its own; the hosted session sources a small integration script (`PROMPT_COMMAND`/`PS0` hooks) *after* the user's own startup files — env-var hook, **not** `--rcfile`/`--noprofile`, preserving §5's "user's own configuration" rule. Documented and disableable (e.g. `APP_SHELL_INTEGRATION=0`). Marks are invisible in the renderer (xterm ignores unhandled OSC). When marks are absent (user execs another shell, SSHes away, opt-out), command-output capture is simply unavailable — no heuristic fallback this phase; agent-semantic capture is unaffected.
-- **Capture-on-demand, not block-per-command:** every completed command is *capturable*, but plain commands must not each spam a monitor block (`ls; cd; git status` would bury real agent events). The monitor pane shows a compact, read-only command history (command + exit chip). **Amended v2.11:** capturing a command's output sends it **straight to the Todo list** (the latest command's output, via the terminal pane's Capture-selection button when nothing is selected — §16.2), not a Capture-tab block; the per-row Capture button and the `command-output` block materialization were removed.
-- **Boundary cases:** a command still running at scan time (no `D` yet) is an open span, capturable as "output so far." Command capture keys off marks, not quiet transitions — it is independent of the §8.3 quiescence machinery, and the tracker fires `monitor:commandsChanged` (§6) on each span open/close so the pane's history refreshes without waiting for an `active→quiet` flip.
+- **Capture-on-demand, not block-per-command:** every completed command is *capturable*, but plain commands must not each spam a monitor block (`ls; cd; git status` would bury real agent events). **Amended v2.132:** the renderer command-history list and its Capture-selection → Todo route were removed; the OSC-133 command tracker is now main-process-only, feeding the §15.6 scanner heuristic and §26.2 hosted-agent presence rather than any renderer surface.
+- **Boundary cases:** a command still running at scan time (no `D` yet) is an open span, capturable as "output so far." Command tracking keys off marks, not quiet transitions — it is independent of the §8.3 quiescence machinery, so the tracker's spans update on each mark rather than on an `active→quiet` flip.
 - **Composition with agent capture:** an agent CLI launched as a command is itself one OSC-delimited span, telling the scanner exactly which scrollback region belongs to the agent session. The two capture families compose.
 
 ### 15.6 Monitor pane
@@ -1366,11 +1335,9 @@ These shape choices above (the shadow model, the event schema, the `sessionId` f
 ### 16.2 Injection model (supersedes the §9.2 / §15.6 "every block injects" posture)
 
 - **Semantic captures** (`report`, `finding`): **no inject**. Each offers **Add to todo** (item-level — a finding adds that finding; a report group adds the whole report) and **Dismiss**. Add-to-todo appends a todo and then shows an **in-place Undo** on the block for `TODO_UNDO_MS` (60 000 ms). The block is **dismissed and removed only when that window elapses** (committing the add); clicking **Undo** within the window **deletes the just-added todo** (`todo:delete`, by the new item's own `repoKey`) and restores the block's **Add to todo** action — the source is **never dismissed on undo**. **Amended v2.27 (§21/D39):** the captured report comes from the manual **"Capture last report"** action (`capture:last`, §6), is **single-slot** (a new capture replaces it), and **Dismiss** is dropped (replace, don't dismiss). **Add to todo + Undo** are unchanged; the Add-to-todo path is what feeds curated **review todos** into the request-changes feedback composer (§19.4).
-- **Manual selection capture** (§7.5): routes **straight to the Todo list** — it does not appear in the Capture tab. Because this add happens in the terminal pane (which owns the selection; §9.1), it signals the action window via a decoupled `app:todos-changed` window event (same bus as `app:focus-terminal`) so the repo-scoped **todo count/list refreshes immediately**; without it the count would lag until the next re-pull.
-- **Command history**: a compact, read-only list (command + exit chip), newest-first, plus a **Clear commands** action (`monitor:clearCommands`, §6). There is **no per-entry button** — command capture moved to the terminal pane's **Capture selection** button (below). Clear commands drops only **finished** commands; a **still-running** command (and any in-flight command-start) survives until it finishes. The renderer does not optimistically wipe — main drops the finished spans and the pane re-renders via `monitor:commandsChanged`, so a running command is never momentarily hidden.
-- **Capture (terminal pane, §7.5)** is the single capture surface → **straight to the Todo list**, never a Capture-tab block: with an active selection it adds the **selected text**; with **no selection** it captures the **latest command's output** (via `monitor:captureCommandText`, §6) and adds that. Either way it refreshes the action window via the `app:todos-changed` signal (above).
+- **Add-to-todo** (from the **Artifacts** view, §20.2, and item-level from a semantic capture above): appends the todo through the shared `captureToTodo` helper (text-only since v2.132) and signals the action window via a decoupled `app:todos-changed` window event (same bus as `app:focus-terminal`) so the repo-scoped **todo count/list refreshes immediately**; without it the count would lag until the next re-pull. (The terminal-pane **Capture selection** route — selected text, else the latest command's output — that also used this signal was **removed in v2.132**, along with the renderer command-history list and its **Clear commands** action; the OSC-133 command tracker itself is unchanged and now main-process-only, §15.5.)
 - **Todo items**: **Insert / Insert & submit** (§16.4).
-- **Focus rule:** **Insert** moves focus to the terminal pane (the user finishes/submits in the agent); **Insert & submit** leaves focus in the action window (fire-and-forget — keep curating). Applies to command-history and todo inject alike. Renderer-side focus only — the §9.3 injection path and contract are unchanged.
+- **Focus rule:** **Insert** moves focus to the terminal pane (the user finishes/submits in the agent); **Insert & submit** leaves focus in the action window (fire-and-forget — keep curating). Renderer-side focus only — the §9.3 injection path and contract are unchanged.
 
 ### 16.3 Todo data model, scope, and persistence
 
@@ -1568,11 +1535,11 @@ steps:
 
 ### 22.1 Three full-screen views (D26)
 
-- **1 Terminal** (work with the agent), **2 Artifacts** (file tree + viewer, §20), **3 Todos + Status** (§21 + §22.3). Hotkey switching; each view's state is preserved across switches.
+- **1 Terminal** (work with the agent), **2 Artifacts** (file tree + viewer, §20), and the **Settings** view (§7.7, reached via the gear / ⌘,). Hotkey switching; each view's state is preserved across switches. **Amended v2.132:** the originally-planned **view 3 Todos + Status** was removed — todos and captures live in the **drawer overlay** (§22.2) and status on the **rail status strip** (§22.3), so there is no standalone Todos view and no ⌘3 chord.
 
 ### 22.2 Tabbed quick-send overlay (D26/D40)
 
-- A hotkey **overlay** pops over any view with two tabs — **`Todo | Capture`**: the Todo tab → pick a todo → send to the terminal; the Capture tab → "Capture last report" (§21.1) → Add-to-todo / Insert. The same two widgets are the body of view 3. This is the headline efficiency feature — curate-and-send without leaving the current view.
+- A hotkey **overlay** pops over any view with two tabs — **`Todo | Capture`**: the Todo tab → pick a todo → send to the terminal; the Capture tab → "Capture last report" (§21.1) → Add-to-todo / Insert. This is the headline efficiency feature — curate-and-send without leaving the current view — and, since v2.132, the **only** home of the Todo/Capture widgets (the former view 3 that also hosted them was removed).
 
 ### 22.3 Status strip (D6/D27)
 
@@ -1582,7 +1549,7 @@ steps:
 ### 22.4 Layout is data, not code (D17/D28/D36)
 
 - The UI is built from **placement-agnostic widgets** (terminal, viewer, file tree, todos, capture, gate panel, status strip, overlay) positioned by a **layout config** at `~/.config/agent-terminal/layout.json`: which view holds which widgets, what the overlay shows, the hotkeys. **No runtime drag-dock** in v1 — changing layout = editing config, not rewriting widgets. This is a **first-class architectural constraint** (clean widget boundaries), not a nice-to-have.
-- Hotkey defaults: **Ctrl/Cmd+1/2/3** (views) + **Ctrl/Cmd+K** (overlay), remappable via the config.
+- Hotkey defaults: **Ctrl/Cmd+1/2** (views) + **Ctrl/Cmd+K** (overlay), remappable via the config (⌘3 was retired with view 3, v2.132).
 
 ---
 
@@ -1653,6 +1620,8 @@ flowchart TD
 ### 24.1 Phase 1 — the three-view UI, mocked
 
 > **Progress:** 24.1A Mood ✅ · 24.1B Options ✅ · 24.1C Implement ✅ — **Phase 1 is complete** (v2.36): the full three-view shell is the live UI with every widget present and interactive in both themes, the shipped cores (terminal, capture, todos) reused behind the skin, and the **artifact viewer** now real (markdown-it+mermaid / CodeMirror, §20.2). The §24.2.1 drawer-panel restorations are now **complete** (v2.45). What remains is **not Phase 1**: the §24.2 backlog of real flow machinery (status strip / gate / flow runner are intentionally still fixture-driven mocks). Design artifacts live in `design/` (`design/README.md` is the running log); mood studies in `design/mood/`, shell mockups in `design/shell/`.
+>
+> **Amended v2.132 — view 3 removed.** The Phase-1 build below describes a **three-view** shell whose **view 3** held the fixture-mocked **Todos + Review-gate** widgets. That view was later removed: the real Todo/Capture widgets live only in the drawer overlay (§22.2), and the fixture gate panel (`createGatePanel`/`SAMPLE_FLOW` in the former `src/renderer/src/flow.ts`) was superseded by the real §26 loop/gate panel and deleted. Read the "view 3 / gate panel" items in this section as **historical build record**; the live shell is view 1 Terminal, view 2 Artifacts, and the Settings view (⌘1/⌘2 + gear/⌘,).
 
 Deliver the full §22 shell: **view 1 Terminal**, **view 2 Artifacts** (file tree + viewer), **view 3 Todos + Status**, the **`Todo | Capture` quick-send overlay** (§22.2), the **status strip** (§22.3), and **Ctrl/Cmd+1/2/3 + Ctrl/Cmd+K** hotkeys (§22.4) — in **both light and dark themes** with a toggle. State is preserved across view switches.
 
