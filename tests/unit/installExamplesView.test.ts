@@ -136,6 +136,37 @@ describe('install examples view organism (§18.1/§23.4)', () => {
     expect(prompt()).toBeNull();
   });
 
+  it('gives the report list an accessible name so its purpose is announced (WCAG 1.3.1)', () => {
+    createInstallExamples(host, deps());
+    const list = host.querySelector('.install-report') as HTMLElement;
+    expect(list.getAttribute('aria-label')?.trim()).toBeTruthy();
+  });
+
+  it.each([
+    ['the cancel button', () => cancelBtn().click()],
+    ['Escape', () => prompt()!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))],
+    ['the scrim', () => scrim().click()],
+  ])('clears the stale progress status when the consent step is dismissed with %s (WCAG 4.1.3)', async (_label, dismiss) => {
+    createInstallExamples(host, deps({ preview: vi.fn(async () => conflicting('flow')) }));
+    button().click();
+    await vi.waitFor(() => expect(prompt()).not.toBeNull());
+    expect(status().textContent).toBe('Checking…');
+    dismiss();
+    expect(status().textContent).toBe('');
+  });
+
+  it('still announces progress when the consent step is confirmed rather than dismissed', async () => {
+    let resolveApply: (r: InstallExamplesResult) => void = () => {};
+    const apply = vi.fn(() => new Promise<InstallExamplesResult>((r) => { resolveApply = r; }));
+    createInstallExamples(host, deps({ preview: vi.fn(async () => conflicting('flow')), apply }));
+    button().click();
+    await vi.waitFor(() => expect(confirmBtn()).toBeTruthy());
+    confirmBtn().click();
+    expect(status().textContent).toBe('Installing…');
+    resolveApply(okResult());
+    await vi.waitFor(() => expect(status().textContent?.toLowerCase()).toContain('created'));
+  });
+
   it('cancelling the consent step writes nothing at all', async () => {
     const apply = vi.fn(async () => okResult());
     createInstallExamples(host, deps({ preview: vi.fn(async () => conflicting('flow')), apply }));

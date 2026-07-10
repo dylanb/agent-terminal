@@ -343,6 +343,37 @@ describe('applyInstallExamples — all-or-nothing across destinations when unwri
   });
 });
 
+describe('applyInstallExamples — a symlink nested inside a destination is refused mid-write (CWE-59)', () => {
+  it.each([
+    ["the file's own container", path.join('plan-loop', 'charter')],
+    ['an intermediate ancestor', 'plan-loop'],
+  ])('refuses when %s under the loops destination is a symlink', (_label, rel) => {
+    const real = mkdtempSync(path.join(tmpdir(), 'link-target-'));
+    try {
+      const link = path.join(dirs.loopsTargetDir, rel);
+      mkdirSync(path.dirname(link), { recursive: true });
+      symlinkSync(real, link);
+
+      const res = applyInstallExamples(dirs, ALL);
+      expect(res.ok).toBe(false);
+      if (res.ok) return;
+      expect(res.error).toContain('plan-loop');
+      expect(walk(real)).toEqual([]); // nothing written through the link
+
+      // Writing had already begun, and the result names exactly what landed before the refusal.
+      expect(filesFor(res.created, 'flow').sort()).toEqual([...FLOW_SET].sort());
+      const namedLoops = [...filesFor(res.created, 'loops'), ...filesFor(res.overwritten, 'loops')];
+      expect(namedLoops.length).toBeGreaterThan(0);
+      expect(namedLoops.filter((r) => r.startsWith(`plan-loop${path.sep}`))).toEqual([]);
+      expect(filesFor(res.created, 'skills')).toEqual([]);
+      expect(filesFor(res.created, 'commands')).toEqual([]);
+      expect(existsSync(targetOf('commands', commandRel))).toBe(false);
+    } finally {
+      rmSync(real, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('applyInstallExamples — a failure once writing has begun names everything already written', () => {
   it('reports every created/overwritten file, and no file outside that list differs from its pre-action bytes', () => {
     // A directory standing where a command file must be written: the pre-flight (a container check)
@@ -354,22 +385,13 @@ describe('applyInstallExamples — a failure once writing has begun names everyt
     if (res.ok) return;
     expect(res.error).toBeTruthy();
 
-    const named = new Set([
-      ...filesFor(res.created, 'flow').map((r) => targetOf('flow', r)),
-      ...filesFor(res.created, 'loops').map((r) => targetOf('loops', r)),
-      ...filesFor(res.created, 'skills').map((r) => targetOf('skills', r)),
-      ...filesFor(res.overwritten, 'flow').map((r) => targetOf('flow', r)),
-      ...filesFor(res.overwritten, 'loops').map((r) => targetOf('loops', r)),
-      ...filesFor(res.overwritten, 'skills').map((r) => targetOf('skills', r)),
-    ]);
+    const named = new Set(
+      ALL.flatMap((id) => [...filesFor(res.created, id), ...filesFor(res.overwritten, id)].map((r) => targetOf(id, r))),
+    );
     expect(named.size).toBeGreaterThan(0); // writing really had begun
 
     for (const id of ALL) {
-      for (const rel of walk(targetOf(id, '.'))) {
-        const abs = targetOf(id, rel);
-        // Every file now on disk was either named by the result, or is a pre-action file left unchanged.
-        expect(named.has(abs)).toBe(true);
-      }
+      for (const rel of walk(targetOf(id, '.'))) expect(named.has(targetOf(id, rel))).toBe(true);
     }
   });
 });
