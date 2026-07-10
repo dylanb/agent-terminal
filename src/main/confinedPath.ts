@@ -21,9 +21,8 @@ export function realpathBounded(p: string): string {
   }
 }
 
-/** A confinement directory: `anchorDir` resolved through symlinks, then `segments` joined literally.
- *  The segments are deliberately NOT resolved, so a repo that plants a symlink at `<repo>/.agent-loop`
- *  cannot make the link's target adopt the jail (CWE-59). Null when `anchorDir` does not resolve. */
+/** A confinement directory: `anchorDir` resolved through symlinks, then `segments` joined literally and
+ *  never resolved. Null when `anchorDir` does not resolve. CWE-59. */
 export function resolveJail(anchorDir: string, ...segments: string[]): string | null {
   try {
     return path.join(realpathSync(anchorDir), ...segments);
@@ -32,10 +31,9 @@ export function resolveJail(anchorDir: string, ...segments: string[]): string | 
   }
 }
 
-/** `target`'s symlink-free real path when it stays inside `jail`, else null — rejecting both a lexical
- *  escape (CWE-22) and a symlink the consuming caller would follow out (CWE-59). Callers hand the returned
- *  path on, so a later swap of the original cannot redirect the read (CWE-367). `jail` must already be
- *  resolved (see `resolveJail`). Existence of `target` is the caller's concern. */
+/** `target`'s symlink-free real path when it stays inside `jail`, else null. `jail` must already be
+ *  resolved (see `resolveJail`); callers use the returned path directly, not the original. Existence of
+ *  `target` is the caller's concern. CWE-22, CWE-59, CWE-367. */
 export function confinedRealPath(jail: string, target: string): string | null {
   const real = realpathBounded(path.resolve(target));
   return real === jail || real.startsWith(jail + path.sep) ? real : null;

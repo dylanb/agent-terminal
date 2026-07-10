@@ -174,8 +174,7 @@ function resolveLoopDefPath(repoDir: string, name: string, configDir?: string): 
       const root = path.resolve(repoDir);
       const target = path.resolve(root, doc.loops[name]);
       const jail = resolveJail(root);
-      // §20.2 — an override escaping the repo, lexically or through an in-repo symlink, falls through
-      // to the trusted config copy rather than being read.
+      // §20.2
       if (jail !== null && (target === root || target.startsWith(root + path.sep))) {
         const real = confinedRealPath(jail, target);
         if (real !== null) return { path: real, origin: 'repo' };
