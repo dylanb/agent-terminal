@@ -15,10 +15,15 @@ const ALWAYS_WATCH_DIRS = ['.agent-terminal', '.agent-loop'];
  *  the caller falls back to walking the tree — degraded, not broken. */
 const GIT_LS_FILES_MAX_BYTES = 64 * 1024 * 1024;
 
-function isIgnoredEvent(filename: string | Buffer | null, rootName: string): boolean {
+// Per-dir non-recursive watchers report `filename` relative to the firing directory, so an event is
+// ignored purely by whether its path runs through an IGNORED_DIR — never by matching the repo-root
+// basename, which would drop a legitimate edit to a file coincidentally named like the repo (§20.1).
+function isIgnoredEvent(filename: string | Buffer | null): boolean {
   if (filename === null) return false;
-  const rel = filename.toString();
-  return rel === rootName || rel.split(path.sep).some((seg) => IGNORED_DIRS.has(seg));
+  return filename
+    .toString()
+    .split(path.sep)
+    .some((seg) => IGNORED_DIRS.has(seg));
 }
 
 /** The tree root the watch covers (§20.1): the git top-level for a repo cwd, else the cwd itself,
@@ -155,7 +160,6 @@ export function watchViewerTree(
 ): () => void {
   const debounceMs = opts.debounceMs ?? VIEWER_WATCH_DEBOUNCE_MS;
   const makeWatcher = opts.watch ?? defaultWatchFactory;
-  const rootName = path.basename(path.resolve(dir));
   let timer: ReturnType<typeof setTimeout> | undefined;
   const schedule = (): void => {
     if (timer) clearTimeout(timer);
@@ -164,7 +168,7 @@ export function watchViewerTree(
   let watcher: { close(): void } | undefined;
   try {
     watcher = makeWatcher(dir, (filename) => {
-      if (!isIgnoredEvent(filename, rootName)) schedule();
+      if (!isIgnoredEvent(filename)) schedule();
     });
   } catch {
     return () => {};

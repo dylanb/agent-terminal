@@ -176,7 +176,12 @@ describe('watchViewerTree — artifact tree file watcher', () => {
     }
   });
 
-  it('ignores the spurious self-event some platforms emit for the watched root itself', async () => {
+  it('reloads on a file named like the repo root — per-dir watchers report dir-relative names, so this is a real edit', async () => {
+    // The watch now covers many dirs individually (non-recursive), so `filename` is relative to the firing
+    // dir, not the tree root. A dir-relative name equal to the repo-root basename is therefore a legitimate
+    // file edit and MUST reload; suppressing it (the old `rel === rootName` guard) dropped real reloads. A
+    // spurious platform self-event named the same is at worst one harmless debounced re-pull; IGNORED_DIRS
+    // still covers the real skip set.
     const w = fakeWatch();
     let fired = 0;
     const rootName = dir.split(sep).pop()!;
@@ -184,7 +189,7 @@ describe('watchViewerTree — artifact tree file watcher', () => {
     try {
       w.emit(rootName);
       await settle();
-      expect(fired).toBe(0);
+      expect(fired).toBe(1);
     } finally {
       stop();
     }
