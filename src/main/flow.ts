@@ -60,6 +60,9 @@ export function deriveLoopView(
     ...view,
     loop: {
       status: loop.status,
+      // §26 D42a — iteration is a single MONOTONIC counter across the whole run (ai-deque parity): it is
+      // already the running total across every loop the run has passed through (a successor loop carries it
+      // forward, never resetting to 1), so the wire value is the raw counter — no cross-loop summation here.
       iteration: loop.iteration,
       pr: loop.pr,
       branch: loop.branch,
@@ -67,6 +70,7 @@ export function deriveLoopView(
       humanNeeded,
       ...(gateOptions ? { gateOptions } : {}),
       ...(cost !== null ? { cost } : {}),
+      ...(loop.errorReason ? { errorReason: loop.errorReason } : {}),
     },
   };
 }
@@ -198,6 +202,13 @@ export interface FlowMachine {
   /** done → in_progress; reverts a manual advance WITHOUT re-running the step's entry actions
    *  (the inverse of advance, not a restart). Throws on any other status (inert on error). */
   undo(): FlowStateView;
+  /** Roll a half-entered bootstrap step back one step when its async pickup failed (§26.9): in_progress
+   *  at `fromStepId` → in_progress at the previous step, re-running NO entry actions and PRESERVING
+   *  resolved inputs, so the operator can fix the cause and re-advance. A first-step loop (no previous
+   *  step) reverts to not_started — a recoverable state (Start re-fires pickup). A NO-OP GUARD, never a
+   *  throw: it fires from an async `.then()`, so a stale call (the flow already moved off `fromStepId`,
+   *  or is not in_progress) returns the current view untouched rather than raising. */
+  revertStep(fromStepId: string): FlowStateView;
   /** in_progress|done → not_started (#26): abandons the flow and discards carried inputs. Throws
    *  from not_started (inert on error). */
   terminate(): FlowStateView;
@@ -233,6 +244,7 @@ export function createFlowMachine(
   readLoop?: FlowReadLoop,
   readLoopDef?: FlowReadLoopDef,
   readLoopCost?: FlowReadLoopCost,
+  now: () => number = Date.now,
 ): FlowMachine {
   if (!load.ok) {
     const view = (): FlowStateView => ({
@@ -245,7 +257,7 @@ export function createFlowMachine(
     });
     // Every transition is inert in the error state, and crucially never persists — so a bad flow.yaml
     // can't overwrite a good on-disk progression, and a racing caller can't throw or escape the error.
-    return { state: view, start: view, advance: view, restart: view, undo: view, terminate: view, provideInput: view };
+    return { state: view, start: view, advance: view, restart: view, undo: view, revertStep: view, terminate: view, provideInput: view };
   }
 
   const def = load.definition;
@@ -268,6 +280,9 @@ export function createFlowMachine(
   // The flow's resolved typed inputs (§18.4 / §24.2.3 T3), flow-wide so a value resolved at one step
   // threads to later steps.
   let inputs: Record<string, string> = {};
+  // §26.10 — when THIS run of the flow began. The cost meter sweeps session logs from here, so it must
+  // survive every transition within a run and never outlive one.
+  let startedAt: number | null = null;
 
   // Re-read the persisted progression from the store (§19.1: flow-state.yaml is the source of truth).
   // Run at construction AND on every state() query, so an external advance — the agent-loop CLI moving
@@ -278,6 +293,7 @@ export function createFlowMachine(
     index = 0;
     status = 'not_started';
     inputs = {};
+    startedAt = null;
     const persisted = store.read();
     if (!persisted) return;
     const i = names.indexOf(persisted.step);
@@ -286,6 +302,7 @@ export function createFlowMachine(
       status = persisted.status;
     }
     if (persisted.inputs) inputs = { ...persisted.inputs };
+    if (persisted.startedAt !== undefined) startedAt = persisted.startedAt;
   };
   hydrate();
 
@@ -338,7 +355,12 @@ export function createFlowMachine(
   };
 
   const persist = (): void =>
-    store?.write({ step: current().id, status, ...(Object.keys(inputs).length > 0 ? { inputs } : {}) });
+    store?.write({
+      step: current().id,
+      status,
+      ...(Object.keys(inputs).length > 0 ? { inputs } : {}),
+      ...(startedAt !== null ? { startedAt } : {}),
+    });
 
   const requireStatus = (expected: FlowStatus, action: string): void => {
     if (status !== expected) {
@@ -366,6 +388,7 @@ export function createFlowMachine(
     start: () => {
       requireStatus('not_started', 'start');
       status = 'in_progress';
+      startedAt = now();
       persist();
       return enter(view());
     },
@@ -385,6 +408,7 @@ export function createFlowMachine(
       index = 0;
       status = 'in_progress';
       inputs = {}; // §18.4: a restart re-requests resolved inputs; undo() preserves them
+      startedAt = now(); // a re-run is a new run: its cost starts from zero (§26.10)
       persist();
       return enter(view());
     },
@@ -394,6 +418,18 @@ export function createFlowMachine(
       persist();
       return view();
     },
+    revertStep: (fromStepId) => {
+      // Guard, don't throw: an async bootstrap failure may arrive after the operator terminated or
+      // navigated, so a mismatch is inert rather than an unhandled rejection (§26.9).
+      if (status !== 'in_progress' || current().id !== fromStepId) return view();
+      if (index > 0) index -= 1;
+      else {
+        status = 'not_started'; // a first-step loop has no previous step; not_started is recoverable
+        startedAt = null; // reverted to not_started: no active run window (mirrors terminate, §26.10)
+      }
+      persist();
+      return view(); // no enter(): a rollback restores the prior step, it does not re-run its entry actions
+    },
     terminate: () => {
       if (status !== 'in_progress' && status !== 'done') {
         throw new Error(`illegal flow transition: cannot terminate from ${status}`);
@@ -401,6 +437,7 @@ export function createFlowMachine(
       index = 0;
       status = 'not_started';
       inputs = {};
+      startedAt = null; // an abandoned run leaves no window for the next run's cost to be measured from
       persist();
       return view(); // not_started enters no step, so no onEnter (mirrors advance → done)
     },
@@ -424,6 +461,8 @@ export interface FlowManager {
   advance(repoKey: string): FlowStateView;
   restart(repoKey: string): FlowStateView;
   undo(repoKey: string): FlowStateView;
+  /** Roll a repo's half-entered bootstrap step back one step after a failed pickup (§26.9). */
+  revertStep(repoKey: string, fromStepId: string): FlowStateView;
   terminate(repoKey: string): FlowStateView;
   provideInput(repoKey: string, values: Record<string, string>): FlowStateView;
 }
@@ -442,6 +481,8 @@ export interface FlowManagerDeps {
   readLoopDef?: (repoKey: string, name: string) => LoopDef | null;
   /** The formatted §26.10 cost readout for a repo's loop, or null when none recorded; omitted → no cost. */
   readLoopCost?: (repoKey: string) => string | null;
+  /** The current instant, stamped onto a run when it starts (§26.10); omitted → the wall clock. */
+  now?: () => number;
 }
 
 export function createFlowManager(deps: FlowManagerDeps): FlowManager {
@@ -466,6 +507,7 @@ export function createFlowManager(deps: FlowManagerDeps): FlowManager {
       deps.readLoopState ? () => deps.readLoopState!(repoKey) : undefined,
       deps.readLoopDef ? (name) => deps.readLoopDef!(repoKey, name) : undefined,
       deps.readLoopCost ? () => deps.readLoopCost!(repoKey) : undefined,
+      deps.now,
     );
     cache.set(repoKey, { sig, machine });
     return machine;
@@ -476,6 +518,7 @@ export function createFlowManager(deps: FlowManagerDeps): FlowManager {
     advance: (k) => machineFor(k).advance(),
     restart: (k) => machineFor(k).restart(),
     undo: (k) => machineFor(k).undo(),
+    revertStep: (k, fromStepId) => machineFor(k).revertStep(fromStepId),
     terminate: (k) => machineFor(k).terminate(),
     provideInput: (k, values) => machineFor(k).provideInput(values),
   };

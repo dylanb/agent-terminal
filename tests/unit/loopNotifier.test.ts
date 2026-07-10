@@ -26,6 +26,7 @@ function harness(over: Partial<LoopNotifierDeps> = {}) {
   const reveal = vi.fn();
   const deps: LoopNotifierDeps = {
     isFocused: () => false,
+    onFocusChanged: () => {},
     notify,
     focusWindow,
     reveal,
@@ -100,6 +101,25 @@ describe('createLoopNotifier (§24.2.3 T4)', () => {
     notifier.observe('/repoA', loopView({ status: 'awaiting-human-pr-approval', iteration: 9 }));
     notifier.observe('/repoB', loopView({ status: 'awaiting-human-pr-approval', iteration: 9 }));
     expect(notify).toHaveBeenCalledTimes(2);
+  });
+
+  it('on blur, raises a pending human-needed stop for a repo other than the one now observed (§16.3 per-repo)', () => {
+    // A stops for the human while the app is focused (so it is pending but not yet raised); the user then
+    // cd's to B (no stop), making B the observed repo. Leaving the app must still raise A's pending stop —
+    // the single-repo focus check missed a stop in a repo the user had navigated away from.
+    let focused = true;
+    const listeners: (() => void)[] = [];
+    const { notifier, notify } = harness({
+      isFocused: () => focused,
+      onFocusChanged: (l) => listeners.push(l),
+    });
+    notifier.observe('/repoA', loopView({ status: 'awaiting-human-pr-approval', iteration: 9 }));
+    expect(notify).not.toHaveBeenCalled(); // focused → pending, not raised
+    notifier.observe('/repoB', NON_LOOP); // B is now the observed repo; A's stop stays pending
+    focused = false;
+    for (const l of listeners) l(); // blur
+    expect(notify).toHaveBeenCalledTimes(1);
+    expect(notify.mock.calls[0][0].repoKey).toBe('/repoA');
   });
 
   it('does not re-fire on a same-repo return visit after a detour to another repo (per-repo dedup)', () => {

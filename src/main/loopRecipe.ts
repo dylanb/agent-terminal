@@ -18,6 +18,10 @@ export interface WorkPromptRequest {
   turnKey: string;
   /** `{{TOKEN}}` → value substitutions resolved by the host from state + LoopDef config bindings. */
   tokens: Record<string, string>;
+  /** §26.3/D47a — the REPO-relative file the work turn must produce (from `def.workArtifact`): the
+   *  agent is told to verify it on disk before signalling done. Omitted/empty for a loop whose work turn
+   *  produces no file deliverable (impl-loop) — completion is then the turn-done file alone. */
+  workArtifact?: string;
   configDir?: string;
 }
 
@@ -32,6 +36,7 @@ function assembleFromTemplate(
   tokens: Record<string, string>,
   turnKey: string,
   configDir?: string,
+  artifact?: string,
 ): string | null {
   const loopDir = resolveLoopDir(repoDir, loopName, configDir);
   if (loopDir === null) return null;
@@ -44,7 +49,7 @@ function assembleFromTemplate(
   for (const [token, value] of Object.entries(tokens)) {
     body = body.split(`{{${token}}}`).join(value);
   }
-  return `${body}\n${doneSignalInstruction(turnKey)}\n`;
+  return `${body}\n${doneSignalInstruction(turnKey, artifact)}\n`;
 }
 
 /** Compose the work-turn prompt, or null when the loop name is unsafe or the phase template is absent
@@ -58,6 +63,10 @@ export function composeWorkPrompt(req: WorkPromptRequest): string | null {
     req.tokens,
     req.turnKey,
     req.configDir,
+    // §26.3/D47a — the work turn's completion artifact (from `def.workArtifact`, resolved by the host): the
+    // agent verifies it on disk before signalling done. Empty for a loop with no work-turn file deliverable
+    // (impl-loop) → the instruction names none and the turn completes on the turn-done file alone.
+    req.workArtifact || undefined,
   );
 }
 
@@ -94,6 +103,10 @@ export function composeConsolidatePrompt(req: ConsolidatePromptRequest): string 
     tokens,
     req.turnKey,
     req.configDir,
+    // The consolidate turn's completion artifact the orchestrator checks (§26.3/D45): the agent verifies
+    // consolidated.json is actually on disk before signalling done — the motivating "thinks it wrote the
+    // file but did not" case, which otherwise detects done against a missing file → retry → error.
+    path.join(tokens.REVIEW_DIR, 'consolidated.json'),
   );
 }
 
@@ -120,7 +133,10 @@ export function composeSpawnReviewersPrompt(req: SpawnReviewersRequest): string 
     ...req.personas.map((p) => `  - ${p} → .agent-loop/reviews/${req.iteration}/${p}.json`),
     '',
     'Wait for every subagent to return before finishing this turn.',
-    doneSignalInstruction(req.turnKey),
+    // Each persona's review JSON is the completion artifact the orchestrator checks (§26.4): the agent
+    // verifies every one is on disk before signalling done, so a subagent that failed to write its verdict
+    // is caught here rather than reported complete against a missing file.
+    doneSignalInstruction(req.turnKey, `every persona's review JSON listed above under .agent-loop/reviews/${req.iteration}/`),
   ];
   return `${lines.join('\n')}\n`;
 }

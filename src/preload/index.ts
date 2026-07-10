@@ -14,6 +14,9 @@ import {
   type CommandSummary,
   type CwdChangedMsg,
   type FlowApi,
+  type FlowBootstrapErrorMsg,
+  type FlowLoopErrorMsg,
+  type FlowBootstrapConflictMsg,
   type FlowStateView,
   type GithubRef,
   type MonitorApi,
@@ -144,12 +147,30 @@ const flowApi: FlowApi = {
     ipcRenderer.on(CH.flowRevealLoop, handler);
     return () => ipcRenderer.removeListener(CH.flowRevealLoop, handler);
   },
+  onBootstrapError: (cb) => {
+    const handler = (_e: unknown, msg: FlowBootstrapErrorMsg): void => cb(msg.reason);
+    ipcRenderer.on(CH.flowOnBootstrapError, handler);
+    return () => ipcRenderer.removeListener(CH.flowOnBootstrapError, handler);
+  },
+  onLoopError: (cb) => {
+    const handler = (_e: unknown, msg: FlowLoopErrorMsg): void => cb(msg.reason);
+    ipcRenderer.on(CH.flowOnLoopError, handler);
+    return () => ipcRenderer.removeListener(CH.flowOnLoopError, handler);
+  },
+  onBootstrapConflict: (cb) => {
+    const handler = (_e: unknown, msg: FlowBootstrapConflictMsg): void => cb(msg.branch, msg.repoKey);
+    ipcRenderer.on(CH.flowOnBootstrapConflict, handler);
+    return () => ipcRenderer.removeListener(CH.flowOnBootstrapConflict, handler);
+  },
+  resolveBootstrapConflict: (repoKey, wipe) =>
+    ipcRenderer.send(CH.flowResolveBootstrapConflict, { sessionId: SESSION_ID, repoKey, wipe }),
   githubRef: (repoKey, kind, number) =>
     ipcRenderer.invoke(CH.flowGithubRef, { sessionId: SESSION_ID, repoKey, kind, number }) as Promise<GithubRef | null>,
   openExternal: (url) => ipcRenderer.invoke(CH.appOpenExternal, { sessionId: SESSION_ID, url }) as Promise<boolean>,
   markTurnComplete: (repoKey) => ipcRenderer.send(CH.flowMarkTurnComplete, { sessionId: SESSION_ID, repoKey }),
   gateDecision: (repoKey, option, note) =>
     ipcRenderer.send(CH.flowGateDecision, { sessionId: SESSION_ID, repoKey, option, ...(note !== undefined ? { note } : {}) }),
+  retryTurn: (repoKey) => ipcRenderer.send(CH.flowRetryTurn, { sessionId: SESSION_ID, repoKey }),
 };
 
 export const cliApi: CliApi = {

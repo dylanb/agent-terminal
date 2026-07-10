@@ -30,6 +30,10 @@ export interface LoopPanelDeps {
   /** §26.6 / L5 — submit the human's gate decision (the option the human picked at an awaiting gate).
    *  Injected by the composition root; absent → the decision buttons are not rendered. */
   gateDecision?(option: string): void;
+  /** §26.3/D48 — recover a loop stopped in `error`: re-drive the failed turn (e.g. after starting Claude
+   *  for a `no hosted agent` stop). Injected by the composition root; absent → no Retry control is shown,
+   *  so an errored loop is never a dead-end reachable only by Terminate (never-unrecoverable, CLAUDE.md). */
+  retryTurn?(): void;
 }
 
 const NOOP_DEPS: LoopPanelDeps = { githubRef: () => Promise.resolve(null), openExternal: () => {} };
@@ -67,9 +71,10 @@ function detailRow(doc: Document, key: string, value: string, valueClass = ''): 
 }
 
 /** A signature of what fixes the panel's DOM STRUCTURE — deliberately NOT the live loop values
- *  (status/iteration) that `patchInPlace` updates without a teardown (mirrors flowStrip's structuralSig,
- *  §24.2.2 S5). The async ref title/body/link fill the DOM in place keyed by (kind, number), so they
- *  are excluded too. */
+ *  (status/iteration/error reason) that `patchInPlace` updates without a teardown (mirrors flowStrip's
+ *  structuralSig, §24.2.2 S5). The async ref title/body/link fill the DOM in place keyed by (kind,
+ *  number), so they are excluded too. The error reason and its Retry control are excluded because
+ *  rebuilding the live region to show them would announce nothing at all (WCAG SC 4.1.3). */
 function structuralSig(loop: FlowLoopView | null, title: string, refs?: FlowRefs): string {
   return JSON.stringify([
     title,
@@ -85,8 +90,44 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
   // Live nodes patched without a teardown (mirrors flowStrip), and the ref rows whose detail is still
   // unresolved so a structurally-unchanged push can re-attempt them (githubRefs never caches a null —
   // src/main/githubRefs.ts — so a transient failure only self-heals if the caller re-fetches).
-  let liveLoop: { statusVal: HTMLElement; iterVal: HTMLElement } | null = null;
+  let liveLoop: { statusVal: HTMLElement; iterVal: HTMLElement; ldl: HTMLElement; iterRow: HTMLElement; body: HTMLElement } | null = null;
   let refRows: Array<{ retry: () => void; resolved: () => boolean }> = [];
+
+  /** §26.3/D48 — the `reason` row, kept INSIDE the surviving live region so entering error announces it as
+   *  an addition (WCAG SC 4.1.3) instead of silently recreating the region around it. */
+  const syncReasonRow = (ldl: HTMLElement, iterRow: HTMLElement, reason: string | undefined): void => {
+    const existing = ldl.querySelector<HTMLElement>('[data-loop-reason]');
+    if (!reason) {
+      existing?.remove();
+      return;
+    }
+    if (existing) {
+      const v = existing.querySelector('.lv')!;
+      if (v.textContent !== reason) v.textContent = reason;
+      return;
+    }
+    const row = detailRow(doc, 'reason', reason, 'bad');
+    row.dataset.loopReason = '';
+    iterRow.after(row);
+  };
+
+  /** §26.3/D48 — recovery from the error stop: re-drive the failed turn (start Claude, then Retry) so an
+   *  errored loop is never a UI dead-end. Error-only + service-gated (an un-wired control would be inert,
+   *  WCAG 4.1.2). */
+  const syncRetry = (body: HTMLElement, status: string): void => {
+    const existing = body.querySelector<HTMLElement>('[data-loop-retry]');
+    if (status !== 'error' || !deps.retryTurn) {
+      existing?.remove();
+      return;
+    }
+    if (existing) return;
+    const retryBtn = doc.createElement('button');
+    retryBtn.className = 'pill retry';
+    retryBtn.dataset.loopRetry = '';
+    retryBtn.textContent = 'Retry';
+    retryBtn.addEventListener('click', () => deps.retryTurn?.());
+    body.append(retryBtn);
+  };
 
   /** True when keyboard focus is inside the panel. A forced rebuild captures this, then `restoreFocus`
    *  lands focus back on the close control so it is never stranded on <body> (WCAG 2.4.3) — and never
@@ -160,6 +201,8 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
       liveLoop.statusVal.classList.toggle('bad', spillTone(loop.status) === 'await');
       const iter = String(loop.iteration);
       if (liveLoop.iterVal.textContent !== iter) liveLoop.iterVal.textContent = iter;
+      syncReasonRow(liveLoop.ldl, liveLoop.iterRow, loop.errorReason);
+      syncRetry(liveLoop.body, loop.status);
     }
     for (const r of refRows) if (!r.resolved()) r.retry();
   }
@@ -243,7 +286,10 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
       const statusRow = detailRow(doc, 'status', loop.status, spillTone(loop.status) === 'await' ? 'bad' : '');
       const iterRow = detailRow(doc, 'iteration', String(loop.iteration));
       ldl.append(statusRow, iterRow);
-      liveLoop = { statusVal: statusRow.querySelector('.lv')!, iterVal: iterRow.querySelector('.lv')! };
+      liveLoop = { statusVal: statusRow.querySelector('.lv')!, iterVal: iterRow.querySelector('.lv')!, ldl, iterRow, body };
+      // §26.3/D48 — WHY a turn stopped, adjacent to `status: error`. Present only in error (the mirror
+      // clears it on recovery).
+      syncReasonRow(ldl, iterRow, loop.errorReason);
       if (loop.pr !== null) ldl.append(detailRow(doc, 'pr', `#${loop.pr}`, 'sig'));
       if (loop.branch !== null) ldl.append(detailRow(doc, 'branch', loop.branch));
       // The current gate's human_options (§18.1/§19.4), present only at an awaiting gate — the read-only
@@ -277,6 +323,8 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
         }
         body.append(gate);
       }
+
+      syncRetry(body, loop.status);
 
       // §26.3/D47a(c) — the human-in-the-loop escape hatch: advance a turn whose automatic done-signal
       // the orchestrator missed, without editing files. Present on a loop step only when the composition

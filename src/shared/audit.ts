@@ -41,7 +41,10 @@ export type AuditEvent =
   | { ts: string; type: 'loop.cost'; iteration: number; usd: number; unpriced: string[] }
   // §26.7 — the per-iteration CI snapshot (run-don't-block): the check counts read at review time, tagged
   // by iteration. Display-only — recorded best-effort, never gates the loop.
-  | { ts: string; type: 'loop.ci'; iteration: number; total: number; passed: number; failed: number; pending: number };
+  | { ts: string; type: 'loop.ci'; iteration: number; total: number; passed: number; failed: number; pending: number }
+  // §24.2.3 T4 — the OS refused to deliver a raised attention notification. Not folded into the
+  // RunTimeline's state: a rejected raise is an event about the delivery surface, not about the run.
+  | { ts: string; type: 'notify.failed'; reason: string };
 
 /** One file captured in an `outputs.snapshot` (§25.5): a `.agent-loop/`-relative path and its size. */
 export interface AuditOutputFile {
@@ -183,6 +186,13 @@ export function loopEvents(before: LoopLike | null, after: LoopLike | null, ts: 
     events.push({ ts, type: 'pr.assoc', pr: after.pr });
   }
   return events;
+}
+
+/** The OS's rejection reason is an untrusted string from outside the process (§24.2.3 T4); bound and
+ *  strip it exactly as `loopEvents` does the status, so the record cannot be forged (CWE-117). */
+const NOTIFY_REASON_MAX = 200;
+export function notifyFailedEvent(reason: string, ts: string): AuditEvent {
+  return { ts, type: 'notify.failed', reason: stripStatusControlChars(reason).slice(0, NOTIFY_REASON_MAX) };
 }
 
 /** A run replayed from its append-only stream (§25.6): the ordered events plus the folded final

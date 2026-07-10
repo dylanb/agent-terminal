@@ -3,6 +3,8 @@
 // check, and the state.yaml writer (the CLAUDE.md domain-port seam — the runner names what it needs, not
 // the backing mechanism).
 
+import type { AgentState } from '../shared/ipc';
+
 export type TurnState = 'idle' | 'in-flight' | 'complete' | 'error';
 
 /** The branch a completed consolidate turn takes on its normalized verdict (§26.6 / §26.8 / §26.13 L4/L6):
@@ -37,42 +39,82 @@ export function decideConsolidateOutcome(inputs: ConsolidateInputs): Consolidate
   return { kind: 'reiterate', nextIteration: inputs.iteration + 1 };
 }
 
+/** The hosted instance's state relative to injection (§26.2), in the runner's own vocabulary — a domain
+ *  concept, NOT a shell-busy check (the agent is itself the foreground process):
+ *    'idle'   — a hosted agent is at its own input box and quiescent (§8.3): inject now.
+ *    'busy'   — a hosted agent is present but mid-turn: defer until `onInjectable()`.
+ *    'absent' — no hosted agent at the prompt (a bare shell): NEVER inject. Injecting would type the whole
+ *               prompt into the shell (the motivating leak); the run stops in `error` instead (D48). */
+export type HostedAgentState = 'idle' | 'busy' | 'absent';
+
+/** Derive the §26.2 presence fact from the OSC-133 command spans: a hosted agent occupies the prompt
+ *  unless the shell is sitting idle at a bare ready prompt. That idle case — instrumented spans exist but
+ *  NONE is running — is exactly where an injected turn would leak into the shell (the motivating defect),
+ *  so it is the only `false`. A running span (the agent is the foreground command) OR zero spans (the
+ *  agent is itself the PTY program, so there is no bash prompt to sit idle at — e.g. APP_SHELL=<agent>)
+ *  are both present. Coupling: this leans on the shim instrumenting every interactive shell (§15.5); a
+ *  future uninstrumented shell would produce zero spans and read as present. Pure so the gate is tested. */
+export function hostedAgentPresent(spans: readonly { running: boolean }[]): boolean {
+  return spans.length === 0 || spans.some((s) => s.running);
+}
+
+/** Map presence + activity to injection-readiness (§26.2). `agentPresent` is the host-supplied domain
+ *  fact "a hosted agent occupies the prompt" (vs a bare shell where an injected turn would leak); how the
+ *  host derives it (§26.2 command-span state) is not this function's concern. Absent → `absent` (never
+ *  inject). Present → §8.3 quiescence separates idle-at-input-box from mid-turn. Pure so the gate is tested. */
+export function classifyHostedAgent(agentPresent: boolean, agentState: AgentState): HostedAgentState {
+  if (!agentPresent) return 'absent';
+  return agentState === 'quiet' ? 'idle' : 'busy';
+}
+
 export interface TurnRunnerDeps {
   /** The prompt for `turnKey` (recipe body + done-signal instruction); null = unrecoverable config error. */
   compose(turnKey: string): string | null;
-  /** Inject + submit the prompt into the hosted instance (§9.3). */
-  inject(prompt: string): void;
-  /** True iff the hosted instance is idle at its own input box — quiescent (§8.3), per §26.2's redefinition
-   *  of "injectable" for a hosted REPL (NOT a shell-busy check: the agent is itself the foreground process). */
-  injectable(): boolean;
+  /** Inject + submit `prompt` into the hosted instance (§9.3). `opts.preamble` marks the actor-boundary
+   *  /clear drained ahead of the turn, so the host can tell it apart from the turn prompt (§26 activity). */
+  inject(prompt: string, opts?: { preamble?: boolean }): void;
+  /** The hosted instance's injection-readiness (§26.2) — see `HostedAgentState`. `absent` is the guard that
+   *  keeps a prompt from ever leaking into a bare shell: it errors rather than injecting or deferring. */
+  hostedAgent(): HostedAgentState;
   /** True iff the turn's expected artifact exists and parses (§26.3/D47a b); artifact-less turns pass a
    *  turn-appropriate check here. */
   artifactPresent(): boolean;
-  /** Arm the completion timeout; the host calls `onTimeout()` when it elapses. */
+  /** Arm (or re-arm) the stall watchdog; the host calls `onStall()` when it elapses with no intervening
+   *  `noteActivity()`. Not a completion deadline — a working turn keeps it reset via visible activity. */
   armTimer(): void;
-  /** Cancel a previously-armed completion timeout. */
+  /** Cancel a previously-armed stall watchdog. */
   cancelTimer(): void;
   /** Persist `status: error` with the reason (§26.3/D48). */
   writeError(reason: string): void;
   /** The turn produced its done-signal and artifact — advance (next slice continues the cycle). */
   onComplete(turnKey: string): void;
+  /** §26.3/D46 — re-arm the §8.3 quiescence window: require a FRESH settle (a new active→quiet edge)
+   *  before the next injection, so a chained turn never injects on the stale quiet the previous turn's
+   *  done-signal FILE left behind. The host satisfies this by re-arming the shadow quiescence detector. */
+  noteSettle(): void;
 }
 
 export interface TurnRunner {
-  /** Begin a turn; injects now if injectable, else defers until `onInjectable()`. */
-  requestTurn(turnKey: string): void;
-  /** The instance just became injectable (a §8.3 quiet flip) — inject a pending/retry turn. */
+  /** Begin a turn; injects now if the hosted agent is idle, defers if busy, errors if absent (§26.2).
+   *  `opts.preamble` (§26.3/D46) is a command drained BEFORE the turn prompt — the actor-boundary /clear —
+   *  injected gated on its own settle and ordered ahead of the prompt, so neither races the agent. */
+  requestTurn(turnKey: string, opts?: { preamble?: string }): void;
+  /** The instance may have become injectable (a §8.3 quiet flip) — re-evaluate a pending/retry turn: inject
+   *  if now idle, keep waiting if still busy, or error if the agent has left the prompt (§26.2). */
   onInjectable(): void;
-  /** A done-signal (sentinel line or file) was observed for the in-flight turn. */
+  /** A done-signal was observed for the in-flight turn (§26.3/D47a). */
   onDoneSignal(): void;
-  /** The completion timer elapsed for the in-flight turn. */
-  onTimeout(): void;
+  /** A visible-content-change edge (§8.3) was observed — reset the in-flight turn's stall watchdog. */
+  noteActivity(): void;
+  /** The stall watchdog elapsed for the in-flight turn (no visible activity for the whole window). */
+  onStall(): void;
   /** Operator override (§26.3/D47a c): assert the in-flight turn is done. */
   markComplete(): void;
   state(): TurnState;
 }
 
-// Total injections per turn before the run errors: the initial attempt plus one retry (§26.3/D48).
+// Total injections per turn before the run errors: the initial attempt plus one retry on a missing
+// artifact (§26.3/D48). A stall never retries — it errors straight to the human.
 const MAX_ATTEMPTS = 2;
 
 export function createTurnRunner(deps: TurnRunnerDeps): TurnRunner {
@@ -80,22 +122,47 @@ export function createTurnRunner(deps: TurnRunnerDeps): TurnRunner {
   let turnKey: string | null = null;
   let attempts = 0;
   let awaitingInjectable = false;
+  // §26.3/D46 — a command (the actor-boundary /clear) to drain, gated, BEFORE the turn prompt. Consumed on
+  // its own settle; injecting it re-arms quiescence so the prompt waits for /clear to drain (serialized pair).
+  let preamble: string | null = null;
 
   const tryInject = (): void => {
     if (state !== 'in-flight' || turnKey === null) return;
-    if (!deps.injectable()) {
+    const agent = deps.hostedAgent();
+    if (agent === 'absent') {
+      // §26.2 — no hosted agent at the prompt (a bare shell). Injecting now would type the whole prompt
+      // into the shell (the motivating defect). Never inject, never defer waiting for an agent that isn't
+      // there: stop in `error` (human-needed, D48) so the operator is told to start Claude and retry.
+      awaitingInjectable = false;
+      deps.cancelTimer();
+      state = 'error';
+      deps.writeError('no hosted agent at the prompt');
+      return;
+    }
+    if (agent === 'busy') {
       awaitingInjectable = true;
-      // Bound only a RETRY that cannot re-inject (a prior attempt was already spent) so an instance that
-      // never returns to injectable after a failed turn resolves to `error` (§26.3/D48) instead of
-      // hanging. A turn's FIRST wait for injectability is the happy path (e.g. the work→reviewers chain
-      // waiting out the instance's post-turn quiescence) and is left unbounded — bounding it would race
-      // quiescence-detection latency under load.
-      if (attempts > 0) deps.armTimer();
+      // The stall watchdog runs during the wait — visible activity (the busy instance is producing output)
+      // keeps resetting it, so only a genuinely frozen instance that never returns to injectable resolves
+      // to `error` (§26.3/D48) instead of hanging. Safe to arm on the first wait now that it is
+      // activity-gated (a long window reset by any repaint), not a wall-clock deadline racing quiescence.
+      deps.armTimer();
       return;
     }
     awaitingInjectable = false;
+    // §26.3/D46 — the agent is idle: drain the /clear preamble FIRST, gated. Inject it, re-arm quiescence
+    // (so the prompt waits for /clear to drain and the agent to re-quiesce), and defer until that settle.
+    if (preamble !== null) {
+      const cmd = preamble;
+      preamble = null;
+      deps.inject(cmd, { preamble: true });
+      deps.noteSettle();
+      awaitingInjectable = true;
+      deps.armTimer();
+      return;
+    }
     const prompt = deps.compose(turnKey);
     if (prompt === null) {
+      deps.cancelTimer();
       state = 'error';
       deps.writeError(`could not compose prompt for ${turnKey}`);
       return;
@@ -130,12 +197,24 @@ export function createTurnRunner(deps: TurnRunnerDeps): TurnRunner {
   };
 
   return {
-    requestTurn(key) {
+    requestTurn(key, opts) {
       if (state === 'in-flight') return;
+      // §26.3/D46 — a CHAINED turn (requested after a prior turn completed or errored) must not inject on
+      // the stale quiet the previous turn's done-signal left behind: re-arm quiescence and defer until a
+      // FRESH settle (onInjectable). The INITIAL turn (state 'idle') has no prior output to race, so it
+      // injects immediately against the already-at-rest agent.
+      const chained = state === 'complete' || state === 'error';
       state = 'in-flight';
       turnKey = key;
       attempts = 0;
       awaitingInjectable = false;
+      preamble = opts?.preamble ?? null;
+      if (chained) {
+        deps.noteSettle();
+        awaitingInjectable = true;
+        deps.armTimer();
+        return;
+      }
       tryInject();
     },
     onInjectable() {
@@ -144,19 +223,36 @@ export function createTurnRunner(deps: TurnRunnerDeps): TurnRunner {
     onDoneSignal() {
       resolveCompletion();
     },
-    onTimeout() {
-      // A deadline reached while still waiting to inject means the instance never became injectable —
-      // a retry cannot help, so stop in `error` directly rather than looping the defer (§26.3/D48).
-      if (awaitingInjectable) {
-        deps.cancelTimer();
-        state = 'error';
-        deps.writeError('completion timeout: instance never became injectable');
-        return;
-      }
-      fail('completion timeout: no done-signal');
+    noteActivity() {
+      // Every §8.3 visible-content edge resets the stall watchdog: a streaming turn never stalls, only a
+      // frozen screen counts down. Inert unless a turn is in flight — a late repaint on a finished turn
+      // must not re-arm a dead deadline.
+      if (state === 'in-flight') deps.armTimer();
+    },
+    onStall() {
+      // No visible activity for the whole (long) stall window while in flight — a genuine freeze, not a
+      // slow-but-working turn (which keeps resetting the watchdog via noteActivity). Re-injecting a frozen
+      // instance cannot help, so stop in `error` directly (recoverable Retry), never a wall-clock kill of
+      // a working turn (§26.3/D48).
+      if (state !== 'in-flight') return;
+      deps.cancelTimer();
+      state = 'error';
+      deps.writeError(
+        awaitingInjectable ? 'stalled: the hosted agent never became injectable' : 'stalled: no terminal activity',
+      );
     },
     markComplete() {
-      resolveCompletion();
+      if (state !== 'in-flight') return;
+      // Unlike a done-signal (the agent's claim, worth one retry), this is the operator's. Re-injecting
+      // the prompt would re-run the turn they asked to move past, so a missing artifact stops in `error`
+      // (§26.3/D48) — visible, and recoverable through Retry.
+      if (deps.artifactPresent()) {
+        succeed();
+        return;
+      }
+      deps.cancelTimer();
+      state = 'error';
+      deps.writeError('marked complete but the turn artifact is missing');
     },
     state() {
       return state;

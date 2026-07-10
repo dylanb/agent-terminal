@@ -8,6 +8,7 @@ import type { FlowApi, FlowStateView, FlowStatus, FlowLoopView, FlowPrompt, Flow
 import { hasFlowRefs } from '../../shared/ipc';
 import { FLOW_CHANGED_EVENT } from './paneActions';
 import { spillTone, toneLabel } from './loopStatus';
+import { createSpinner } from './spinner';
 
 type StationState = 'todo' | 'active' | 'done';
 type Act = 'start' | 'advance' | 'restart' | 'undo';
@@ -62,10 +63,20 @@ export interface FlowStrip {
  *  reaching across organisms. Fired on every render: `null` when the step has no loop mirror.
  *  `onRevealLoop` is omitted: the OS-notification reveal (§24.2.3 T4) is wired at the composition root
  *  on window.flow, not through the strip (interface segregation — the strip never reveals). So is
- *  `markTurnComplete` (§26.3/D47a c): the loop panel owns that control, not the strip. */
+ *  `markTurnComplete` (§26.3/D47a c) and `retryTurn` (§26.3/D48): the loop panel owns those controls,
+ *  not the strip. */
 export type FlowStripDeps = Omit<
   FlowApi,
-  'onRevealLoop' | 'githubRef' | 'openExternal' | 'markTurnComplete' | 'gateDecision'
+  | 'onRevealLoop'
+  | 'onBootstrapError'
+  | 'onLoopError'
+  | 'onBootstrapConflict'
+  | 'resolveBootstrapConflict'
+  | 'githubRef'
+  | 'openExternal'
+  | 'markTurnComplete'
+  | 'gateDecision'
+  | 'retryTurn'
 > & {
   /** The docked loop panel's element id, injected by the composition root so the read-out's
    *  `aria-controls` is instance-scoped — the organism never bakes in a document-level id
@@ -100,6 +111,20 @@ function derivedText(state: FlowStateView): string | null {
   return null;
 }
 
+/** The §26 loop-mechanics activity line: the phrase + an animated braille spinner (the descriptor exists
+ *  only while the loop is active). Announced via the strip host's own `aria-live=polite` (index.html
+ *  #flow-strip) — like `.flow-derived`/`.flow-notice`, it does NOT nest its own live region. The spinner is
+ *  decorative (`aria-hidden`); the phrase is the text. */
+function activityLine(doc: Document, activity: NonNullable<FlowStateView['loopActivity']>): HTMLElement {
+  const line = doc.createElement('div');
+  line.className = 'flow-activity';
+  const phrase = doc.createElement('span');
+  phrase.className = 'phrase';
+  phrase.textContent = activity.phrase;
+  line.append(phrase, createSpinner(doc));
+  return line;
+}
+
 /** A signature of everything that fixes the strip's DOM STRUCTURE — deliberately NOT the live values
  *  a passive push patches in place (loop iteration/tone, derived counts/activity). Two views with an
  *  equal signature differ only in those live values, so the existing nodes can be updated without a
@@ -119,6 +144,10 @@ function structuralSig(state: FlowStateView): string {
     // change must force a full render rather than a value-only patch.
     state.refs ?? null,
     derivedText(state) !== null,
+    // §26 activity line: only its PRESENCE is structural. The phrase itself patches in place — the host is
+    // an aria-live region (WCAG SC 4.1.3), so rebuilding it to change one word would re-announce the whole
+    // strip.
+    !!state.loopActivity,
     state.notice ?? '',
   ]);
 }
@@ -160,6 +189,9 @@ function loopReadout(doc: Document, loop: FlowLoopView, controlsId?: string): HT
     const cost = doc.createElement('span');
     cost.className = 'mono loop-cost';
     cost.textContent = loop.cost;
+    // The visible figure is bare; under aria-atomic=false only this node is announced, so it carries the
+    // "cost" context in its accessible name (WCAG SC 1.3.1) — the label `.loop-iter` keeps in its text.
+    cost.setAttribute('aria-label', `cost ${loop.cost}`);
     v.append(cost);
   }
   v.append(car);
@@ -203,6 +235,9 @@ function refsReadout(doc: Document, refs: FlowRefs, controlsId?: string): HTMLEl
 
 export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStrip {
   const doc = host.ownerDocument; // build from the host's document so the strip relocates (UI §2.2.1)
+  // WCAG SC 4.1.3: `role=status` is an implicitly atomic live region; the strip patches individual nodes
+  // in place, so it must announce only the changed node, not re-read the whole strip on every update.
+  host.setAttribute('aria-atomic', 'false');
   let repoKey: string | null = null;
   // The structure last painted; a passive push whose structure matches patches in place (§24.2.2 S5).
   let lastSig: string | null = null;
@@ -335,6 +370,11 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
       host.append(line);
     }
 
+    // §26 — what the loop mechanics are doing right now (bootstrapping, waiting, working, reviewing,
+    // consolidating): a phrase + spinner, shown on a loop step during bootstrap (before state.yaml) and
+    // through every turn. Present whenever main reports an activity; absent when the loop is idle/at a gate.
+    if (state.loopActivity) host.append(activityLine(doc, state.loopActivity));
+
     const control = CONTROL[state.status];
     if (!control) return;
 
@@ -403,6 +443,10 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
       const line = host.querySelector('.flow-derived');
       if (line) line.textContent = dText;
     }
+    if (state.loopActivity) {
+      const phrase = host.querySelector('.flow-activity .phrase');
+      if (phrase) phrase.textContent = state.loopActivity.phrase;
+    }
     if (state.loop) {
       const pill = host.querySelector<HTMLElement>('.loopstat .spill');
       if (pill) {
@@ -412,7 +456,10 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
       const iter = host.querySelector('.loop-iter');
       if (iter) iter.textContent = `iter ${state.loop.iteration}`;
       const cost = host.querySelector('.loop-cost');
-      if (cost && state.loop.cost !== undefined) cost.textContent = state.loop.cost;
+      if (cost && state.loop.cost !== undefined) {
+        cost.textContent = state.loop.cost;
+        cost.setAttribute('aria-label', `cost ${state.loop.cost}`);
+      }
     }
     // Keep the docked loop panel live — the same hand-off render() makes (§24.2.3 T2/T7). The refs
     // ride along so a value-only patch never clears the panel's "Working on" section.

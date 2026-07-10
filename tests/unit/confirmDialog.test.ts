@@ -147,4 +147,69 @@ describe('confirm dialog (#26 AC3/AC4/AC13)', () => {
       createConfirmDialog(h).render(opts());
     });
   });
+
+  // §26.9 — the wipe-and-retry confirmation must tell main to roll the flow back when the operator
+  // declines, so an optional onCancel fires on every dismiss path EXCEPT confirm (which runs onConfirm).
+  describe('onCancel (dismiss signal, §26.9)', () => {
+    it('fires onCancel on the Cancel button, and does NOT run onConfirm', () => {
+      const onConfirm = vi.fn();
+      const onCancel = vi.fn();
+      createConfirmDialog(host).render(opts({ onConfirm, onCancel }));
+      cancelBtn()!.click();
+      expect(onCancel).toHaveBeenCalledTimes(1);
+      expect(onConfirm).not.toHaveBeenCalled();
+    });
+
+    it('fires onCancel on Escape dismissal', () => {
+      const onCancel = vi.fn();
+      createConfirmDialog(host).render(opts({ onCancel }));
+      dialog()!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+      expect(onCancel).toHaveBeenCalledTimes(1);
+    });
+
+    it('does NOT fire onCancel when Confirm is clicked (confirm is not a cancel)', () => {
+      const onConfirm = vi.fn();
+      const onCancel = vi.fn();
+      createConfirmDialog(host).render(opts({ onConfirm, onCancel }));
+      confirmBtn()!.click();
+      expect(onConfirm).toHaveBeenCalledTimes(1);
+      expect(onCancel).not.toHaveBeenCalled();
+    });
+
+    // The Terminate confirm and the §26.9 bootstrap-conflict confirm share one dialog instance. If a new
+    // dialog is rendered while an unanswered one is open, the displaced dialog's onCancel must still run —
+    // otherwise a conflict confirm silently displaced by another dialog would leave main's pendingConflict
+    // set and the flow un-rolled-back (the never-strand rule).
+    it('fires the displaced dialog\'s onCancel when a new dialog replaces an open, unanswered one', () => {
+      const d = createConfirmDialog(host);
+      const onCancelA = vi.fn();
+      const onCancelB = vi.fn();
+      const onConfirmB = vi.fn();
+      d.render(opts({ title: 'Dialog A', onCancel: onCancelA }));
+      d.render(opts({ title: 'Dialog B', onCancel: onCancelB, onConfirm: onConfirmB }));
+      expect(onCancelA).toHaveBeenCalledTimes(1); // A was declined by being replaced
+      expect(onCancelB).not.toHaveBeenCalled();
+      expect(onConfirmB).not.toHaveBeenCalled();
+      expect(host.querySelector('.flow-modal')?.textContent).toContain('Dialog B'); // B is now shown
+    });
+
+    it('does NOT re-fire onCancel of a dialog already dismissed via Cancel when a new dialog opens', () => {
+      const d = createConfirmDialog(host);
+      const onCancelA = vi.fn();
+      d.render(opts({ title: 'Dialog A', onCancel: onCancelA }));
+      cancelBtn()!.click(); // A dismissed → onCancelA fires once, A closed
+      expect(onCancelA).toHaveBeenCalledTimes(1);
+      d.render(opts({ title: 'Dialog B' }));
+      expect(onCancelA).toHaveBeenCalledTimes(1); // NOT re-fired by the later render
+    });
+
+    it('does NOT fire onCancel of a CONFIRMED dialog when a new dialog replaces it', () => {
+      const d = createConfirmDialog(host);
+      const onCancelA = vi.fn();
+      d.render(opts({ title: 'Dialog A', onCancel: onCancelA, onConfirm: vi.fn() }));
+      confirmBtn()!.click(); // A confirmed + closed
+      d.render(opts({ title: 'Dialog B' }));
+      expect(onCancelA).not.toHaveBeenCalled();
+    });
+  });
 });

@@ -2,6 +2,7 @@
 // carries sessionId so multi-session support is additive later.
 
 import type { Chord, KeyActionId } from './keymap';
+import type { LoopActivity } from './loopActivity';
 
 export type SessionId = string;
 
@@ -53,9 +54,14 @@ export const CH = {
   flowProvideInput: 'flow:provideInput',
   flowOnStateChanged: 'flow:onStateChanged',
   flowRevealLoop: 'flow:revealLoop',
+  flowOnBootstrapError: 'flow:onBootstrapError',
+  flowOnLoopError: 'flow:onLoopError',
+  flowOnBootstrapConflict: 'flow:onBootstrapConflict',
+  flowResolveBootstrapConflict: 'flow:resolveBootstrapConflict',
   flowGithubRef: 'flow:githubRef',
   flowMarkTurnComplete: 'flow:markTurnComplete',
   flowGateDecision: 'flow:gateDecision',
+  flowRetryTurn: 'flow:retryTurn',
   appOpenExternal: 'app:openExternal',
   todoTemplateList: 'todoTemplate:list',
   todoTemplateInstantiate: 'todoTemplate:instantiate',
@@ -388,6 +394,9 @@ export interface ChannelPayloads {
   'flow:onStateChanged': FlowStateChangedMsg;
   'menu:edit': MenuEditMsg;
   'flow:revealLoop': FlowRevealLoopMsg;
+  'flow:onBootstrapError': FlowBootstrapErrorMsg;
+  'flow:onLoopError': FlowLoopErrorMsg;
+  'flow:onBootstrapConflict': FlowBootstrapConflictMsg;
 }
 
 export type SendChannel = keyof ChannelPayloads;
@@ -492,6 +501,10 @@ export interface FlowLoopView {
    *  resolves); the renderer reads it rather than re-deriving the gate/awaiting logic. Always set on
    *  a derived loop view — the `?` is for hand-constructed views only. */
   humanNeeded?: boolean;
+  /** §26.3/D48 — the reason the current turn failed, present only at `status: 'error'`. Lets the loop
+   *  panel show WHY the loop stopped (e.g. "no Claude at the prompt") rather than a bare "error", and is
+   *  cleared the moment the status recovers. Absent on every non-error view. */
+  errorReason?: string;
 }
 
 /** The GitHub issue (ticket) and PR a flow is working (§24.2.3 T7). Numbers only — the title, body,
@@ -565,6 +578,11 @@ export interface FlowStateView {
   /** Live derived status (§22.3 / §24.2.2 S5): agent activity + todo completion + gate readiness.
    *  Present only on an `in_progress` view (computed by main from the repo's todos + §8.3 activity). */
   derived?: FlowDerived;
+  /** What the loop MECHANICS are doing right now (§26): a phrase — bootstrapping, waiting for the agent,
+   *  working, running reviewers, consolidating. Present exactly while the loop is active (its presence
+   *  drives the strip's spinner). Top-level (NOT under `loop`) because a bootstrap runs before
+   *  `.agent-loop/state.yaml` exists; absent when the loop mechanics are idle. */
+  loopActivity?: LoopActivity;
   /** Read-only agent-loop state.yaml mirror (§24.2.3 T2): present once a `loop` step has been entered
    *  (and stays for the run, including any later manual step) with a parseable v4 state.yaml. Parallel
    *  to `derived` (NOT nested) — loop state outlives the manual in_progress window that gates `derived`. */
@@ -592,6 +610,49 @@ export interface FlowStateChangedMsg {
  *  main-side effect; carries no payload beyond the session. */
 export interface FlowRevealLoopMsg {
   sessionId: SessionId;
+}
+
+/** flow:onBootstrapError push (§26.9): main signals that a loop step's async in-app pickup FAILED and the
+ *  flow was rolled back to the previous step (revertStep). The failure is never silent — the renderer
+ *  raises a blocking error dialog carrying `reason` (the human-readable cause: dirty tree, unresolvable
+ *  base, conflicting branch). Distinct from the transient strip `notice`: an async failure has no
+ *  transition response to ride, so it needs its own push. */
+export interface FlowBootstrapErrorMsg {
+  sessionId: SessionId;
+  reason: string;
+}
+
+/** flow:onLoopError push (§26.3/§26.6/D48): main signals that a loop-MECHANICS operation FAILED after the
+ *  loop was bootstrapped — a turn-runner error (no hosted agent, a stall, a missing artifact, a compose
+ *  failure) or a gate transition that could not be persisted. Like the bootstrap-error push, the failure is
+ *  never silent: the renderer raises a blocking error dialog carrying `reason`. Distinct channel from
+ *  `flow:onBootstrapError` so pickup-time and run-time failures keep their own dialog titles. */
+export interface FlowLoopErrorMsg {
+  sessionId: SessionId;
+  reason: string;
+}
+
+/** flow:onBootstrapConflict push (§26.9): main signals that an in-app pickup hit an EXISTING branch/PR
+ *  under a `wipe-and-retry` policy. Nothing destructive has been done — the flow stays on the loop step
+ *  and the renderer raises a confirm dialog offering to wipe `branch` (which deletes it on origin and
+ *  closes its PR) and retry. The operator's answer returns on `flow:resolveBootstrapConflict`. */
+export interface FlowBootstrapConflictMsg {
+  sessionId: SessionId;
+  branch: string;
+  /** The repo the conflict was raised for. The operator's answer on `flow:resolveBootstrapConflict` is
+   *  keyed by this — never the terminal's current cwd — so a conflict for one repo cannot resolve against
+   *  another the user has since cd'd to (§26.9; the wipe is destructive). */
+  repoKey: string;
+}
+
+/** flow:resolveBootstrapConflict request (§26.9): the operator's answer to a bootstrap conflict. `wipe`
+ *  true → the app wipes the conflicting branch and re-runs pickup; false (Cancel/dismiss) → the app rolls
+ *  the flow back one step (the §26.9 rollback). One-way; the result surfaces through the state.yaml watch
+ *  → flow:onStateChanged (on wipe success) or a rolled-back flow:state re-pull (on cancel). */
+export interface FlowResolveBootstrapConflictMsg {
+  sessionId: SessionId;
+  repoKey: string;
+  wipe: boolean;
 }
 
 /** flow:state/start/advance/restart request. `repoKey` scopes the flow to the terminal's current
@@ -846,6 +907,22 @@ export interface FlowApi {
   /** Subscribe to main's flow:revealLoop push (§24.2.3 T4): `cb` fires when the OS attention
    *  notification was activated and the loop read-out must be revealed. Returns an unsubscribe. */
   onRevealLoop(cb: () => void): () => void;
+  /** Subscribe to main's flow:onBootstrapError push (§26.9): `cb` fires with the human-readable `reason`
+   *  when a loop step's async pickup failed and the flow was rolled back; the renderer raises a blocking
+   *  error dialog. Returns an unsubscribe. */
+  onBootstrapError(cb: (reason: string) => void): () => void;
+  /** Subscribe to main's flow:onLoopError push (§26.3/§26.6/D48): `cb` fires with the human-readable
+   *  `reason` when a loop-mechanics operation failed after bootstrap (a turn-runner error or an
+   *  un-persistable gate transition); the renderer raises a blocking error dialog. Returns an unsubscribe. */
+  onLoopError(cb: (reason: string) => void): () => void;
+  /** Subscribe to main's flow:onBootstrapConflict push (§26.9): `cb` fires with the conflicting `branch`
+   *  and the `repoKey` the conflict is for when a pickup hit an existing branch under a wipe-and-retry
+   *  policy; the renderer raises a confirm dialog and answers via `resolveBootstrapConflict` keyed by that
+   *  same repoKey (not the current cwd). Returns an unsubscribe. */
+  onBootstrapConflict(cb: (branch: string, repoKey: string) => void): () => void;
+  /** Answer a bootstrap conflict (§26.9): `wipe` true wipes the branch + retries, false rolls the flow
+   *  back. One-way; the result surfaces through the state.yaml watch / a rolled-back state re-pull. */
+  resolveBootstrapConflict(repoKey: string, wipe: boolean): void;
   /** Resolve a GitHub ref's title/body/url for the popout (§24.2.3 T7), best-effort: null when it
    *  can't be resolved (no `gh`, not a GitHub repo, offline) so the popout shows the number alone. */
   githubRef(repoKey: string, kind: GithubRefKind, number: number): Promise<GithubRef | null>;
@@ -858,6 +935,10 @@ export interface FlowApi {
   /** §26.6 / L5 — submit the human's gate decision for `repoKey`. One-way: the app executes the option's
    *  transition and the loop panel re-pulls via flow:onStateChanged when the resulting state lands. */
   gateDecision(repoKey: string, option: GateDecisionOption, note?: string): void;
+  /** §26.3/D48 — recover a loop stopped in `error` for `repoKey`: re-drive the failed turn (e.g. after the
+   *  operator starts Claude for a `no hosted agent` stop). One-way: the app clears the error status and
+   *  re-injects; the loop panel re-pulls via flow:onStateChanged when the resulting state lands. */
+  retryTurn(repoKey: string): void;
 }
 
 /** CLI launcher install (§23.4 / #25): the settings affordance's only seam to the install action. */

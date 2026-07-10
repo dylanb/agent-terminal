@@ -12,7 +12,10 @@ const DEFAULTS = {
   // §16.5: must exceed the active→quiet gap of the agent's reply, or the reply gets suppressed too.
   selfInjectWindowMs: 30_000,
   maxDoneTodos: 50, // §16.4
-  turnCompletionTimeoutMs: 120_000, // §26.3/D48: how long a loop turn may run before a retry
+  // §26.3/D48: how long a turn's screen may stay frozen (no visible-content change) before the run stalls
+  // into a recoverable error. Deliberately long (~20 min) and activity-gated — NOT a wall-clock deadline
+  // on a working turn, which resets it via §8.3 activity. Env keeps the historical APP_TURN_TIMEOUT_MS name.
+  stallTimeoutMs: 1_200_000,
   // §5: a shell that exits within this window of spawn is a startup failure — keep the window open
   // for the diagnostic rather than terminating the app.
   startupExitGraceMs: 1000,
@@ -29,7 +32,7 @@ export interface RuntimeConfig {
   reportMinChars: number;
   selfInjectWindowMs: number;
   maxDoneTodos: number;
-  turnCompletionTimeoutMs: number;
+  stallTimeoutMs: number;
   startupExitGraceMs: number;
 }
 
@@ -52,7 +55,7 @@ export function resolveRuntimeConfig(env: NodeJS.ProcessEnv): RuntimeConfig {
     reportMinChars: posInt(env.APP_REPORT_MIN_CHARS, DEFAULTS.reportMinChars),
     selfInjectWindowMs: posInt(env.APP_SELF_INJECT_WINDOW_MS, DEFAULTS.selfInjectWindowMs),
     maxDoneTodos: posInt(env.APP_MAX_DONE_TODOS, DEFAULTS.maxDoneTodos),
-    turnCompletionTimeoutMs: posInt(env.APP_TURN_TIMEOUT_MS, DEFAULTS.turnCompletionTimeoutMs),
+    stallTimeoutMs: posInt(env.APP_TURN_TIMEOUT_MS, DEFAULTS.stallTimeoutMs),
     startupExitGraceMs: posInt(env.APP_STARTUP_EXIT_GRACE_MS, DEFAULTS.startupExitGraceMs),
   };
 }

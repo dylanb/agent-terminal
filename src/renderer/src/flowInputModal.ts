@@ -32,8 +32,8 @@ function inputField(doc: Document, spec: { name: string; type: string }): { fiel
   return { field, read: () => input.value.trim() };
 }
 
-export function createFlowInputModal(host: HTMLElement): FlowInputModal {
-  const shell = createModalShell(host, 'flow-modal-title');
+export function createFlowInputModal(host: HTMLElement, opts?: { onFocusLost?: () => void }): FlowInputModal {
+  const shell = createModalShell(host, 'flow-modal-title', undefined, { onFocusLost: opts?.onFocusLost });
   return {
     render(prompt, stepName, submit) {
       if (!prompt) return shell.render(null);

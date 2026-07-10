@@ -28,8 +28,9 @@ describe('shadow screen model (§8)', () => {
     shadow.dispose();
   });
 
-  it('output flips agentState to active immediately, then quiet after QUIET_MS', async () => {
+  it('output flips agentState to active, then quiet after QUIET_MS', async () => {
     shadow.write('hello\r\n');
+    await settle();
     expect(statuses.at(0)?.agentState).toBe('active');
     expect(statuses.at(0)?.quietSince).toBeNull();
 
@@ -94,6 +95,124 @@ describe('shadow screen model (§8)', () => {
     shadow.dispose();
     expect(() => shadow.write('late output')).not.toThrow();
     expect(() => shadow.resize(100, 40)).not.toThrow();
+  });
+});
+
+// §8.3 — a full-screen TUI agent (Claude Code, Codex) repaints its frame on a timer even while idle at
+// its prompt, so bytes never stop. Byte-presence would pin agentState 'active' forever (the injection
+// engine then defers every turn, §26.2). Quiescence keys off *rendered-screen change*, not raw bytes:
+// an unchanged repaint is quiet, a changing frame (spinner/stream) is active.
+describe('content-diff quiescence for a repainting TUI (§8.3)', () => {
+  let statuses: ShadowStatus[];
+  let shadow: ReturnType<typeof createShadowModel>;
+  const repaint = (frame: string) => `\x1b[2J\x1b[H${frame}`; // clear + home + redraw, as Ink does
+
+  beforeEach(() => {
+    statuses = [];
+    shadow = createShadowModel({
+      cols: 80,
+      rows: 24,
+      settleMs: SETTLE_MS,
+      quietMs: QUIET_MS,
+      onStatus: (s) => statuses.push(s),
+    });
+  });
+  afterEach(() => shadow.dispose());
+
+  it('reaches quiet while an unchanged frame keeps repainting faster than QUIET_MS', async () => {
+    shadow.write(`\x1b[?1049h${repaint('claude idle ›')}`); // enter alt screen, paint idle frame
+    await settle();
+    // Keep repainting the SAME frame, faster than QUIET_MS, for well over QUIET_MS total.
+    for (let i = 0; i < 8; i++) {
+      shadow.write(repaint('claude idle ›'));
+      await sleep(QUIET_MS / 2); // byte-presence would re-arm the quiet timer here every half-window
+    }
+    // Content never changed after the first frame → quiet must have been reached mid-repaint.
+    expect(statuses.some((s) => s.agentState === 'quiet')).toBe(true);
+    expect(statuses.at(-1)?.agentState).toBe('quiet');
+  });
+
+  it('stays active while the frame keeps changing (spinner / streaming)', async () => {
+    const frames = ['⠋ working', '⠙ working', '⠹ working', '⠸ working'];
+    shadow.write('\x1b[?1049h');
+    await settle();
+    for (let i = 0; i < 8; i++) {
+      shadow.write(repaint(frames[i % frames.length]));
+      await sleep(QUIET_MS / 2);
+    }
+    expect(statuses.at(-1)?.agentState).toBe('active');
+  });
+});
+
+// §26.3 stall watchdog — the turn runner resets its stall deadline on every *visible-content change*
+// edge (the same §8.3 signal that reaches quiescence), so a streaming turn never stalls but a frozen
+// screen counts down. onActivity exposes that edge; an identical repaint is NOT an edge.
+describe('shadow.onActivity — fires per visible-content-change edge (§26.3)', () => {
+  let shadow: ReturnType<typeof createShadowModel>;
+  const repaint = (frame: string) => `\x1b[2J\x1b[H${frame}`;
+
+  beforeEach(() => {
+    shadow = createShadowModel({ cols: 80, rows: 24, settleMs: SETTLE_MS, quietMs: QUIET_MS, onStatus: () => {} });
+  });
+  afterEach(() => shadow.dispose());
+
+  it('fires on a changed frame but NOT on an identical repaint', async () => {
+    let hits = 0;
+    shadow.onActivity(() => hits++);
+    shadow.write(`\x1b[?1049h${repaint('frame one')}`);
+    await settle();
+    const afterFirst = hits;
+    expect(afterFirst).toBeGreaterThan(0); // the initial paint is an edge
+
+    shadow.write(repaint('frame one')); // identical → no edge
+    await settle();
+    expect(hits).toBe(afterFirst);
+
+    shadow.write(repaint('frame two')); // changed → one edge
+    await settle();
+    expect(hits).toBe(afterFirst + 1);
+  });
+
+  it('stops firing after the returned unsubscribe', async () => {
+    let hits = 0;
+    const off = shadow.onActivity(() => hits++);
+    shadow.write('a');
+    await settle();
+    const n = hits;
+    expect(n).toBeGreaterThan(0);
+    off();
+    shadow.write('bc');
+    await settle();
+    expect(hits).toBe(n);
+  });
+});
+
+// §26.3/D46 — the re-arm primitive behind "a chained turn waits for a fresh settle": even when the
+// screen has ALREADY gone quiet (the agent settled and would emit no further output to re-arm it),
+// noteSettle must manufacture a fresh active→quiet edge so the next injection still gets its settle,
+// with no hang waiting for an edge that never comes.
+describe('shadow.noteSettle — re-arms quiescence for a fresh settle (§26.3/D46)', () => {
+  let statuses: ShadowStatus[];
+  let shadow: ReturnType<typeof createShadowModel>;
+  beforeEach(() => {
+    statuses = [];
+    shadow = createShadowModel({ cols: 80, rows: 24, settleMs: SETTLE_MS, quietMs: QUIET_MS, onStatus: (s) => statuses.push(s) });
+  });
+  afterEach(() => shadow.dispose());
+
+  it('produces a fresh active→quiet edge from an already-quiet screen', async () => {
+    shadow.write('done\r\n');
+    await goQuiet();
+    expect(statuses.at(-1)?.agentState).toBe('quiet'); // the agent has settled; no more output is coming
+    const before = statuses.length;
+
+    shadow.noteSettle(); // re-arm as if output just occurred
+    await settle();
+    expect(statuses.at(-1)?.agentState).toBe('active'); // flipped active immediately
+
+    await goQuiet();
+    expect(statuses.at(-1)?.agentState).toBe('quiet'); // and a FRESH quiet edge arrives QUIET_MS later
+    expect(statuses.length).toBeGreaterThan(before); // new transitions were emitted (not a no-op)
   });
 });
 

@@ -193,8 +193,8 @@ gates:
         args: {when: "plan.classification == 'epic'"}
       - kind: mark-pr-ready
         on_failure: continue
-      # ADR 0015: adapter side effects via `exec`. plan-loop is not bundled,
-      # so it requires `loops_allow_exec: {plan-loop: true}` in .agent-loop.yaml.
+      # ADR 0015: adapter side effects via `exec`. Allowed by default; a repo opts a loop OUT via
+      # `.agent-loop.yaml` `loops_deny_exec: {plan-loop: true}` (terminal-web-ui-spec.md §26.6/v2.122).
       - kind: exec
         args:
           argv: ["gh", "issue", "edit", "{{state.linked_issues[0]}}", "--body-file", "{{artifact.ticket-body}}"]

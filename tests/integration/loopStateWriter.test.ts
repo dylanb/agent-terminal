@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, rmSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, rmSync, existsSync, lstatSync, statSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import yaml from 'js-yaml';
@@ -40,6 +40,33 @@ describe('loop state.yaml writer (§26.6)', () => {
     });
   });
 
+  it('round-trips the D48 error reason so the panel can show WHY a turn failed, not just "error" (§26.3)', () => {
+    writeLoopState(repo, { ...L1_STATE, status: 'error', errorReason: 'no hosted agent at the prompt' }, fixedNow);
+    const doc = yaml.load(readFileSync(join(repo, '.agent-loop', 'state.yaml'), 'utf8')) as Record<string, unknown>;
+    expect(doc.error_reason).toBe('no hosted agent at the prompt');
+    expect(parseAgentLoopState(repo)?.errorReason).toBe('no hosted agent at the prompt');
+  });
+
+  it('carries no error_reason on a non-error write, and clears a stale one when the status recovers', () => {
+    // Recovery must not leave a stale reason: a write with no errorReason drops any prior error_reason
+    // so a recovered status never shows a message that no longer applies (never-unrecoverable, CLAUDE.md).
+    writeLoopState(repo, { ...L1_STATE, status: 'error', errorReason: 'no hosted agent at the prompt' }, fixedNow);
+    writeLoopState(repo, { ...L1_STATE, status: 'plan-draft' }, fixedNow);
+    const doc = yaml.load(readFileSync(join(repo, '.agent-loop', 'state.yaml'), 'utf8')) as Record<string, unknown>;
+    expect(doc).not.toHaveProperty('error_reason');
+    expect(parseAgentLoopState(repo)).not.toHaveProperty('errorReason');
+  });
+
+  it('drops error_reason when it is passed on a NON-error status — the field is bound to status: error', () => {
+    // Defense-in-depth for the D48 contract: even if a caller mistakenly passes errorReason on a non-error
+    // transition, the writer must not persist a state.yaml carrying error_reason without status: error. The
+    // reader only decodes error_reason in the error status, so the writer must gate on it too (they agree).
+    writeLoopState(repo, { ...L1_STATE, status: 'plan-draft', errorReason: 'should not be written' }, fixedNow);
+    const doc = yaml.load(readFileSync(join(repo, '.agent-loop', 'state.yaml'), 'utf8')) as Record<string, unknown>;
+    expect(doc).not.toHaveProperty('error_reason');
+    expect(parseAgentLoopState(repo)).not.toHaveProperty('errorReason');
+  });
+
   it('writes a whole-document valid v4 doc: bare numeric schema_version + the §26.6 write surface', () => {
     writeLoopState(repo, L1_STATE, fixedNow);
     const doc = yaml.load(readFileSync(join(repo, '.agent-loop', 'state.yaml'), 'utf8')) as Record<string, unknown>;
@@ -49,7 +76,7 @@ describe('loop state.yaml writer (§26.6)', () => {
     expect(doc.linked_issues).toEqual([176]);
     expect(doc.updated_at).toBe('2026-06-30T12:00:00.000Z');
     // Whole-document: the LoopExtension fields the orchestrator owns are present, defaulted.
-    for (const key of ['sessions', 'impasse', 'phase2_active', 'persona_state', 'completed_loops', 'terminated']) {
+    for (const key of ['sessions', 'impasse', 'phase2_active', 'persona_state', 'terminated']) {
       expect(doc, `missing whole-document key ${key}`).toHaveProperty(key);
     }
   });
@@ -162,7 +189,7 @@ describe('loop state.yaml writer (§26.6)', () => {
 
     const doc = yaml.load(readFileSync(join(repo, '.agent-loop', 'state.yaml'), 'utf8')) as Record<string, unknown>;
     expect(doc.persona_state).toEqual({ 'review-security': { last_clean_iter: 1 } }); // present field preserved
-    for (const key of ['sessions', 'impasse', 'phase2_active', 'severity_cycle_iter', 'completed_loops', 'terminated']) {
+    for (const key of ['sessions', 'impasse', 'phase2_active', 'severity_cycle_iter', 'terminated']) {
       expect(doc, `partial prior doc not healed: missing ${key}`).toHaveProperty(key); // back-filled
     }
   });
@@ -232,6 +259,59 @@ describe('loop state.yaml writer (§26.6)', () => {
     expect(doc.epic).toEqual({ sub_issues: [201, 202] });
   });
 
+  it('freshExtension resets the internal loop state to defaults while carrying the passed read set (§26 D42a resume --loop)', () => {
+    // A resume-into-a-new-loop (§26 D42a) rebinds an existing run to a new loop def that starts FRESH: its
+    // per-loop extension fields (phase2, persona footprints, impasse tracking, severity cycle) reset to a
+    // new-run baseline. `iteration` is NOT among them — the caller sets it (monotonic across the chain,
+    // prior+1 on resume --loop; this test passes 1). The carried PR/branch/linked-issues (passed in the
+    // write) persist so the new loop keeps working the same PR. The normal merge would inherit the PRIOR
+    // loop's internal state, so freshExtension skips the prior-doc merge and lays the LoopExtension defaults.
+    const seeded = {
+      schema_version: 4,
+      pr: 50,
+      branch: 'plan-loop/issue-40',
+      iteration: 3,
+      status: 'plan-human-approved',
+      bound_loop: 'plan-loop',
+      linked_issues: [40],
+      phase2_active: true,
+      persona_state: { 'review-principal': { last_clean_iter: 2 } },
+      impasse: { consecutive_identical: 2, last_findings_sig: 'abc' },
+      severity_cycle_iter: 3,
+      terminated: true,
+    };
+    mkdirSync(join(repo, '.agent-loop'), { recursive: true });
+    writeFileSync(join(repo, '.agent-loop', 'state.yaml'), yaml.dump(seeded));
+
+    writeLoopState(
+      repo,
+      { status: 'impl-draft', iteration: 1, pr: 50, branch: 'plan-loop/issue-40', boundLoop: 'impl-loop', linkedIssues: [40], freshExtension: true },
+      fixedNow,
+    );
+
+    const doc = yaml.load(readFileSync(join(repo, '.agent-loop', 'state.yaml'), 'utf8')) as Record<string, unknown>;
+    // Rebound to the new loop at its entry status; iteration is the caller-passed value (1 here).
+    expect(doc.bound_loop).toBe('impl-loop');
+    expect(doc.status).toBe('impl-draft');
+    expect(doc.iteration).toBe(1);
+    // The carried read set persists — the new loop keeps working the same PR/branch/issue.
+    expect(doc.pr).toBe(50);
+    expect(doc.branch).toBe('plan-loop/issue-40');
+    expect(doc.linked_issues).toEqual([40]);
+    // The prior loop's internal state is GONE — the new loop starts fresh (never inherits phase2/persona/
+    // impasse/severity from the loop it succeeded).
+    expect(doc.phase2_active).toBe(false);
+    expect(doc.persona_state).toEqual({});
+    expect(doc.impasse).toEqual({});
+    expect(doc.severity_cycle_iter).toBe(0);
+    expect(doc.terminated).toBe(false);
+    // Still a whole-document valid v4 doc.
+    expect(doc.schema_version).toBe(4);
+    for (const key of ['sessions', 'iter_in_flight', 'resume_mid_iter']) {
+      expect(doc, `missing whole-document key ${key}`).toHaveProperty(key);
+    }
+  });
+
   it('emits the whole read set present even when branch is null and linkedIssues is empty (§26.6)', () => {
     // The read set must be uniformly present (defaulted), the way `pr` is — not conditionally omitted.
     writeLoopState(repo, { ...L1_STATE, branch: null, linkedIssues: [] }, fixedNow);
@@ -239,5 +319,40 @@ describe('loop state.yaml writer (§26.6)', () => {
     expect(doc).toHaveProperty('branch');
     expect(doc).toHaveProperty('linked_issues');
     expect(doc.linked_issues).toEqual([]);
+  });
+  // The write goes through a predictable `<file>.tmp` inside a directory the repo controls. `writeFileSync`
+  // follows an existing symlink at that path, so a repo that commits `state.yaml.tmp` as a link to a file
+  // outside the repo has the app write YAML through it before the rename moves the link aside (CWE-59).
+  it('never writes through a pre-planted state.yaml.tmp symlink (CWE-59)', () => {
+    const outside = join(repo, 'outside.txt');
+    writeFileSync(outside, 'ORIGINAL');
+    mkdirSync(join(repo, '.agent-loop'), { recursive: true });
+    symlinkSync(outside, join(repo, '.agent-loop', 'state.yaml.tmp'));
+
+    writeLoopState(repo, { status: 'planning', iteration: 1, pr: null, branch: null, boundLoop: 'plan-loop', linkedIssues: [] });
+
+    expect(readFileSync(outside, 'utf8')).toBe('ORIGINAL');
+    expect(parseAgentLoopState(repo)?.status).toBe('planning');
+  });
+
+  // The temp path is repo-controlled, so it can be left behind (crash) or planted as a DIRECTORY. rmSync
+  // with force-but-not-recursive throws EISDIR on a directory, which would abort the critical state write
+  // and strand the loop; the cleanup must tolerate a directory too so the atomic write still proceeds.
+  it('recovers when a directory sits at state.yaml.tmp (an EISDIR must not strand the write)', () => {
+    mkdirSync(join(repo, '.agent-loop', 'state.yaml.tmp', 'junk'), { recursive: true });
+    writeLoopState(repo, { status: 'planning', iteration: 1, pr: null, branch: null, boundLoop: 'plan-loop', linkedIssues: [] });
+    expect(parseAgentLoopState(repo)?.status).toBe('planning');
+    expect(lstatSync(join(repo, '.agent-loop', 'state.yaml')).isFile()).toBe(true);
+  });
+
+  it('writes state.yaml owner-only (CWE-276)', () => {
+    writeLoopState(repo, { status: 'planning', iteration: 1, pr: null, branch: null, boundLoop: 'plan-loop', linkedIssues: [] });
+    expect(statSync(join(repo, '.agent-loop', 'state.yaml')).mode & 0o077).toBe(0);
+  });
+
+  it('leaves no temp file behind', () => {
+    writeLoopState(repo, { status: 'planning', iteration: 1, pr: null, branch: null, boundLoop: 'plan-loop', linkedIssues: [] });
+    expect(existsSync(join(repo, '.agent-loop', 'state.yaml.tmp'))).toBe(false);
+    expect(lstatSync(join(repo, '.agent-loop', 'state.yaml')).isSymbolicLink()).toBe(false);
   });
 });

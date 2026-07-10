@@ -1,7 +1,6 @@
-// §26.3/D47a — the robust half of the per-turn done-signal: the turn writes `.agent-loop/turn-done`
-// as its last action and the orchestrator reads-and-clears it. Consuming the file (not just reading it)
-// guarantees a stale signal from a prior turn cannot satisfy the next turn's wait. The companion line
-// half is `turnSentinel.ts`; both feed the same `onDoneSignal`.
+// §26.3/D47a, §26.3/D46 — the per-turn done-signal: the turn writes `.agent-loop/turn-done` as its last
+// action. Read and clear are separate operations; clearing before the signal has been acted on would lose
+// the completion of the turn that wrote it.
 
 import { readFileSync, rmSync, watch, type FSWatcher } from 'node:fs';
 import path from 'node:path';
@@ -11,17 +10,27 @@ function turnDonePath(repoDir: string): string {
   return path.join(repoDir, '.agent-loop', TURN_DONE_FILENAME);
 }
 
-/** Read the done-signal file's turn key and delete it; null when absent (never throws). */
-export function readAndClearTurnDone(repoDir: string): string | null {
-  const file = turnDonePath(repoDir);
-  let body: string;
+/** Read the done-signal file's turn key WITHOUT deleting it; null when absent (never throws). The signal
+ *  stays latched until `clearTurnDone` (§26.3/D46), so a re-read returns the same key. */
+export function readTurnDone(repoDir: string): string | null {
   try {
-    body = readFileSync(file, 'utf8');
+    return readFileSync(turnDonePath(repoDir), 'utf8').trim();
   } catch {
     return null;
   }
-  rmSync(file, { force: true });
-  return body.trim();
+}
+
+/** Delete the done-signal file (best-effort; absent is fine). The host calls this at the next prompt
+ *  inject — the single point at which the completed turn's done-signal state is reset (§26.3/D46). Never
+ *  throws: `{ force }` covers ENOENT, but this runs on the injection critical path, so any other rmSync
+ *  failure (EPERM, a directory at the path, a transient FS error) is swallowed rather than aborting the
+ *  inject (CLAUDE.md — a best-effort reset must not fail the path it sits on; matches `readTurnDone`). */
+export function clearTurnDone(repoDir: string): void {
+  try {
+    rmSync(turnDonePath(repoDir), { force: true });
+  } catch {
+    /* best-effort reset; a stale file at worst re-detects the same completed turn, itself deduped */
+  }
 }
 
 /** Watch `<repoDir>/.agent-loop/` for the done-signal file, calling `onChange` on each event touching
