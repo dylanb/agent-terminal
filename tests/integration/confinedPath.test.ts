@@ -54,6 +54,13 @@ describe('realpathBounded', () => {
     const absent = join(root, 'a', 'b', 'c');
     expect(realpathBounded(absent)).toBe(join(root, 'a', 'b', 'c'));
   });
+
+  it('returns null when an existing segment is a dangling symlink', () => {
+    const link = join(root, 'dangling');
+    symlinkSync(join(root, 'no-such-target'), link);
+
+    expect(realpathBounded(join(link, 'child.md'))).toBeNull();
+  });
 });
 
 describe('confinedRealPath', () => {
@@ -105,6 +112,12 @@ describe('confinedRealPath', () => {
 
   it('rejects when a not-yet-created tail hangs off a symlinked ancestor pointing out of the jail', () => {
     symlinkSync(outside, join(jail(), 'linkdir'));
+
+    expect(confinedRealPath(jail(), join(jail(), 'linkdir', 'absent.md'))).toBeNull();
+  });
+
+  it('rejects a dangling symlink ancestor inside the jail', () => {
+    symlinkSync(join(outside, 'absent-target'), join(jail(), 'linkdir'));
 
     expect(confinedRealPath(jail(), join(jail(), 'linkdir', 'absent.md'))).toBeNull();
   });
