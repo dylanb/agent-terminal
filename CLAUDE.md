@@ -13,7 +13,8 @@ pnpm install        # runs the postinstall electron-rebuild for node-pty automat
 pnpm run rebuild    # electron-rebuild -f -w node-pty — REQUIRED after install or Electron bump
 pnpm run dev        # electron-vite dev (renderer HMR)
 pnpm run build      # type-check + electron-vite build
-pnpm test           # vitest: tests/unit + tests/integration
+pnpm test           # vitest, both projects: `node` (tests/unit + tests/integration) and `browser` (tests/browser)
+pnpm exec playwright install chromium   # one-time: the `browser` project needs the binary; `pnpm test` fails without it
 ./scripts/e2e-podman.sh        # playwright _electron e2e in Podman/Xvfb — the canonical local e2e run (real PTY/display)
 ./scripts/e2e-podman.sh "<-g>" # filter to matching tests
 pnpm run test:e2e   # raw playwright e2e — needs a focusable display; on macOS a bare subprocess launch can't focus, so prefer the Podman harness above
@@ -53,6 +54,7 @@ Use `scripts/await-copilot-review.sh <pr> [--request] [--check]` (portable bash;
 
   Everything else goes. Prefer a precise name, a named test, or a `§n` citation over any sentence. Doc-comments on exported identifiers are allowed but must add the caller-facing contract (obligations, external invariants) — not echo the signature or types. `// TODO(owner): …` tags and recorded §12-style gaps are always allowed. When in doubt, delete: a missing comment costs a code read; a wrong one costs a misled change.
 - **No mocks for the terminal emulator or the PTY.** Integration tests drive the real `@xterm/headless` shadow module with scripted byte streams (it is pure JS and runs under vitest/node). Full-loop behavior (real node-pty, real bash, real renderer) is covered by Playwright `_electron` e2e — never by mocking node-pty. Fake timers/clocks are fine (the quiescence detector takes injectable timers for exactly this); mocking the VT parser is not.
+- **No mock CSS engine either — a test that grades a painted pixel asks a browser what it painted.** Assertions about colour, contrast, or the focus ring go in the `browser` vitest project (`tests/browser/`, real Chromium) or the Playwright e2e, and read `getComputedStyle`; the test does the WCAG arithmetic and nothing else. Never re-derive a painted value by parsing `styles.css` — resolving `var()`, `color-mix()`, specificity and document order is the engine's job, and a regex that approximates it is the same class of error as mocking the VT parser. The rule is not stylistic: the parser this replaced modelled the cascade as "the later-named rule always wins" and matched one exact selector string, so a group `opacity` on a higher-specificity selector, an `opacity` on an ancestor, and an equal-specificity rule reclaiming `color` all left the suite green over a control that had lost its focus ring (WCAG SC 1.4.11). A pin that cannot fail when the pixel is wrong is worse than none.
 
 ## Tracer-bullet development (mandatory planning requirement)
 
