@@ -2,10 +2,11 @@
 // owns the LoopDef yaml schema; this reads only the gate slice. Resolution mirrors `agent-loop list`.
 // Like the §19.1 store it NEVER throws — every failure mode degrades to null.
 
-import { readFileSync, realpathSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import yaml from 'js-yaml';
+import { confinedRealPath, resolveJail } from './confinedPath';
 import { isRecord } from './yamlRecord';
 
 /** One action of a gate's `on_*` list (§26.6): the engine executes these in order when the human picks
@@ -172,18 +173,11 @@ function resolveLoopDefPath(repoDir: string, name: string, configDir?: string): 
     if (isRecord(doc) && isRecord(doc.loops) && typeof doc.loops[name] === 'string') {
       const root = path.resolve(repoDir);
       const target = path.resolve(root, doc.loops[name]);
-      // An override escaping the repo (CWE-22) falls through to the trusted config copy (§20.2).
-      if (target === root || target.startsWith(root + path.sep)) {
-        try {
-          // §20.2: re-check the realpath (an in-repo symlink can point out, CWE-59) and RETURN that
-          // validated real path so a later target swap can't redirect the read (CWE-367 TOCTOU).
-          const real = realpathSync(target);
-          const realRoot = realpathSync(root);
-          if (real === realRoot || real.startsWith(realRoot + path.sep)) return { path: real, origin: 'repo' };
-          return fromConfig;
-        } catch {
-          return { path: target, origin: 'repo' }; // dangling in-repo override → parser yields null
-        }
+      const jail = resolveJail(root);
+      // §20.2
+      if (jail !== null && (target === root || target.startsWith(root + path.sep))) {
+        const real = confinedRealPath(jail, target);
+        if (real !== null) return { path: real, origin: 'repo' };
       }
     }
   } catch {
@@ -373,40 +367,6 @@ function toWorkArtifact(doc: Record<string, unknown>): string {
   return path.join('.agent-loop', plan.path_pattern);
 }
 
-/** The real path of `p`, resolving symlinks in its longest EXISTING prefix and appending the not-yet-created
- *  tail — so a path whose final segments do not exist yet still resolves any linked ancestor. */
-function realpathBounded(p: string): string {
-  const tail: string[] = [];
-  let cur = p;
-  for (;;) {
-    try {
-      return path.join(realpathSync(cur), ...tail.reverse());
-    } catch {
-      const parent = path.dirname(cur);
-      if (parent === cur) return p; // reached the root without resolving — nothing to follow
-      tail.push(path.basename(cur));
-      cur = parent;
-    }
-  }
-}
-
-/** `target`'s symlink-resolved path if it stays inside the run's `.agent-loop/` confinement, else null.
- *  The confinement dir is computed as `<realpath(repoDir)>/.agent-loop` and is NOT itself realpath'd, so a
- *  repo that makes `.agent-loop` a symlink to some other directory cannot adopt that directory as the jail.
- *  Returning the RESOLVED path (like `resolveLoopDefPath`) means the caller hands `gh` a symlink-free path,
- *  so a later `.agent-loop` swap cannot redirect the read (CWE-367). */
-function confinedRealPath(repoDir: string, target: string): string | null {
-  let repoReal: string;
-  try {
-    repoReal = realpathSync(repoDir);
-  } catch {
-    return null;
-  }
-  const dirReal = path.join(repoReal, '.agent-loop');
-  const real = realpathBounded(target);
-  return real === dirReal || real.startsWith(dirReal + path.sep) ? real : null;
-}
-
 /** A `path_pattern` slot the def templates per iteration (`human-notes/{iter}.md`, §26.6). */
 const UNEXPANDED_SLOT = /\{[^}]*\}/;
 
@@ -418,10 +378,9 @@ export function artifactPath(def: LoopDef, repoDir: string, id: string): string 
   const pattern = def.artifacts[id];
   if (typeof pattern !== 'string') return null;
   if (UNEXPANDED_SLOT.test(pattern)) return null;
-  const base = path.resolve(repoDir, '.agent-loop');
-  const target = path.resolve(base, pattern);
-  if (!(target === base || target.startsWith(base + path.sep))) return null;
-  return confinedRealPath(repoDir, target);
+  const jail = resolveJail(repoDir, '.agent-loop');
+  if (jail === null) return null;
+  return confinedRealPath(jail, path.resolve(repoDir, '.agent-loop', pattern));
 }
 
 /** §26.6 — whether the `exec` gate action may run for `loopName`. exec is allowed by DEFAULT for every
