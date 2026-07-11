@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { decidePickupAction, runPickup, type PickupGit, type PickupGitHub, type PickupResult } from '../../src/main/loopPickup';
+import { createRealPickupGit, decidePickupAction, runPickup, type PickupGit, type PickupGitHub, type PickupResult } from '../../src/main/loopPickup';
 import type { LoopStateWrite } from '../../src/main/loopStateWriter';
 import { parseLoopDef, type PickupContract } from '../../src/main/loopDef';
 
@@ -238,21 +239,39 @@ describe('in-app pickup runner (§26.9 / L1)', () => {
       expect(written).toBeNull();
     });
   });
+
+  // The hard-failure path now ALWAYS reaches the operator's blocking dialog (decidePickupAction revert), so
+  // the reason it carries must never be blank. A git/gh port that rejects with a non-Error value (a bare
+  // string, a plain object) must still surface a meaningful reason (CLAUDE.md — a caught value is `unknown`,
+  // never an `Error`; an error surfaced with an empty reason is swallowed just as thoroughly as one dropped).
+  it('surfaces a non-Error throw as its stringified reason (never a blank dialog)', async () => {
+    const g = makeFakeGit();
+    g.git.isCleanTree = () => Promise.reject('boom'); // a thrown string, not an Error
+    const h = makeFakeGitHub();
+    const result = await runPickup(deps(g.git, h.github), req());
+    expect(result).toEqual({ ok: false, error: 'boom' });
+  });
 });
 
 // §26.9 — the async pickup is fire-and-forget: its `.then()` may resolve AFTER the operator terminated
 // or navigated the flow off the bootstrap step. `decidePickupAction` names the decision the host glue
-// makes on completion, so a stale result drops instead of driving a turn / prompting a wipe / rolling
-// back a step the flow already left (the never-strand rule applied to the completion path).
-describe('decidePickupAction (stale-result guard, §26.9)', () => {
+// makes on completion. A hard FAILURE always surfaces (revert to the initiating step + blocking dialog) so
+// a failed bootstrap is never swallowed (CLAUDE.md — a critical-path failure the operator cannot see must
+// never be silent). Only a SUCCESS or CONFLICT that lands after the flow left the step is dropped as
+// `stale`: driving a work turn or prompting a wipe against a moved/terminated flow would act on the wrong
+// context.
+describe('decidePickupAction (§26.9)', () => {
   const ok: PickupResult = { ok: true, pr: 7, branch: 'b', status: 'plan-draft' };
   const conflict: PickupResult = { ok: false, conflict: { branch: 'b' } };
   const hardFail: PickupResult = { ok: false, error: 'working tree is not clean' };
 
-  it('drops ANY result as stale when the flow no longer sits on the bootstrap step', () => {
+  it('drops a success or conflict result as stale when the flow no longer sits on the bootstrap step', () => {
     expect(decidePickupAction(ok, false)).toEqual({ kind: 'stale' });
     expect(decidePickupAction(conflict, false)).toEqual({ kind: 'stale' });
-    expect(decidePickupAction(hardFail, false)).toEqual({ kind: 'stale' });
+  });
+
+  it('ALWAYS surfaces a hard failure (revert + dialog) even when the flow left the bootstrap step', () => {
+    expect(decidePickupAction(hardFail, false)).toEqual({ kind: 'revert', reason: 'working tree is not clean' });
   });
 
   it('drives the work turn on success while still on the step', () => {
@@ -263,7 +282,89 @@ describe('decidePickupAction (stale-result guard, §26.9)', () => {
     expect(decidePickupAction(conflict, true)).toEqual({ kind: 'conflict', branch: 'b' });
   });
 
-  it('rolls back + surfaces the reason on a hard failure while still on the step', () => {
+  it('rolls back to the initiating step + surfaces the reason on a hard failure while still on the step', () => {
     expect(decidePickupAction(hardFail, true)).toEqual({ kind: 'revert', reason: 'working tree is not clean' });
+  });
+});
+
+// §26.9 — pickup's clean-tree gate runs against the REAL git porcelain (createRealPickupGit). It must
+// ignore churn under the app's OWN state directories, or agent-terminal's own writes would permanently
+// block pickup in any repo it has ever run a flow in: `.agent-loop/` is engine parity, and `.agent-terminal/`
+// (flow-state, todos, monitor-events, audit-pointer) is agent-terminal state the external engine never
+// writes. A genuine source change — or a `.gitignore` edit, which the app never makes — stays dirty.
+describe('createRealPickupGit.isCleanTree — app-owned state is not "dirty" (§26.9)', () => {
+  let repo: string;
+  const git = (args: string[]): void => void execFileSync('git', args, { cwd: repo });
+  beforeEach(() => {
+    repo = mkdtempSync(join(tmpdir(), 'pickup-clean-'));
+    git(['init', '-q']);
+    git(['config', 'user.email', 'test@example.com']);
+    git(['config', 'user.name', 'Test']);
+    writeFileSync(join(repo, 'README.md'), 'x\n');
+    git(['add', 'README.md']);
+    git(['commit', '-q', '-m', 'init']);
+  });
+  afterEach(() => rmSync(repo, { recursive: true, force: true }));
+
+  it('treats untracked churn under .agent-terminal/ (flow-state, todos, monitor-events, audit-pointer) as clean', async () => {
+    mkdirSync(join(repo, '.agent-terminal'));
+    for (const f of ['flow-state.yaml', 'todos.json', 'monitor-events.json', 'audit-pointer.yaml']) {
+      writeFileSync(join(repo, '.agent-terminal', f), 'x\n');
+    }
+    expect(await createRealPickupGit(repo).isCleanTree()).toBe(true);
+  });
+
+  it('treats churn under .agent-loop/ as clean (engine parity)', async () => {
+    mkdirSync(join(repo, '.agent-loop'));
+    writeFileSync(join(repo, '.agent-loop', 'state.yaml'), 'x\n');
+    expect(await createRealPickupGit(repo).isCleanTree()).toBe(true);
+  });
+
+  it('treats a real source change as dirty', async () => {
+    writeFileSync(join(repo, 'README.md'), 'changed\n');
+    expect(await createRealPickupGit(repo).isCleanTree()).toBe(false);
+  });
+
+  it("treats a modified .gitignore as dirty (the app never edits it, so a change is the user's)", async () => {
+    writeFileSync(join(repo, '.gitignore'), 'foo\n');
+    git(['add', '.gitignore']);
+    git(['commit', '-q', '-m', 'add ignore']);
+    writeFileSync(join(repo, '.gitignore'), 'foo\nbar\n');
+    expect(await createRealPickupGit(repo).isCleanTree()).toBe(false);
+  });
+
+  // A repo that does NOT gitignore .agent-terminal/ (the never-touch-.gitignore rule leaves that to the
+  // user) tracks the app's state files, so re-writing one shows as a worktree-modified " M " porcelain line
+  // — whose leading status space must not defeat the app-state match, or pickup stays permanently blocked
+  // in exactly the repos the .agent-terminal/ allowance exists to unblock.
+  it('treats a worktree-modified tracked .agent-terminal/ file as clean (" M " status)', async () => {
+    mkdirSync(join(repo, '.agent-terminal'));
+    writeFileSync(join(repo, '.agent-terminal', 'flow-state.yaml'), 'x\n');
+    git(['add', '.agent-terminal/flow-state.yaml']);
+    git(['commit', '-q', '-m', 'track flow state']);
+    writeFileSync(join(repo, '.agent-terminal', 'flow-state.yaml'), 'changed\n');
+    expect(await createRealPickupGit(repo).isCleanTree()).toBe(true);
+  });
+
+  // A staged rename OUT of an app-state dir INTO a real source path mutates the source tree, so it must read
+  // dirty even though its origin is app-owned — the gate checks BOTH sides of a `R  <orig> -> <new>` line,
+  // not just the origin, or a genuinely-dirty tree slips through the clean gate.
+  it('treats a staged rename from an app-state dir to a source file as dirty', async () => {
+    mkdirSync(join(repo, '.agent-loop'));
+    writeFileSync(join(repo, '.agent-loop', 'x'), 'x\n');
+    git(['add', '.agent-loop/x']);
+    git(['commit', '-q', '-m', 'track loop file']);
+    git(['mv', '.agent-loop/x', 'moved-source.ts']);
+    expect(await createRealPickupGit(repo).isCleanTree()).toBe(false);
+  });
+
+  // Pins the outer `.every` over lines: app-state churn present alongside a genuine source change is dirty.
+  // A regression that short-circuited to clean once one app-state line matched would pass every other case
+  // here but let pickup run over uncommitted work (CLAUDE.md — never allow an unrecoverable state).
+  it('treats app-state churn alongside a real source change as dirty', async () => {
+    mkdirSync(join(repo, '.agent-terminal'));
+    writeFileSync(join(repo, '.agent-terminal', 'todos.json'), 'x\n');
+    writeFileSync(join(repo, 'README.md'), 'changed\n');
+    expect(await createRealPickupGit(repo).isCleanTree()).toBe(false);
   });
 });

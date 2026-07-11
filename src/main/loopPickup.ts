@@ -11,6 +11,7 @@ import path from 'node:path';
 import type { PickupContract } from './loopDef';
 import { writeLoopState, type LoopStateWrite } from './loopStateWriter';
 import { numberFromGithubUrl } from '../shared/githubUrl';
+import { APP_STATE_DIRS } from './appStateDirs';
 
 /** GitHub issue facts the pickup needs for the start commit + PR title. */
 export interface IssueInfo {
@@ -20,7 +21,8 @@ export interface IssueInfo {
 
 /** Git operations pickup needs, in the runner's own vocabulary (not the git CLI's). */
 export interface PickupGit {
-  /** True iff the tree is clean enough to bootstrap — `.agent-loop/` churn is ignored (engine parity). */
+  /** True iff the tree is clean enough to bootstrap — churn under app-owned state dirs (`.agent-loop/`
+   *  engine parity, `.agent-terminal/` app state) is ignored (§26.9). */
   isCleanTree(): Promise<boolean>;
   /** The branch to fork from + target the PR at; null when undiscoverable (the run then aborts). */
   resolveBaseBranch(): Promise<string | null>;
@@ -79,9 +81,9 @@ export type PickupResult =
   | { ok: false; conflict: PickupConflict }
   | { ok: false; error: string };
 
-/** The host's completion action once an async pickup resolves (§26.9). `stale` when the flow has left
- *  the bootstrap step (terminated/navigated while the fire-and-forget pickup ran): the result must not
- *  drive a turn, prompt a wipe, or roll back a step already left. */
+/** What the host does with a resolved async pickup (§26.9), consumed by the completion switch in index.ts:
+ *  `work` drives the turn, `conflict` prompts the wipe confirm, `revert` rolls back to the initiating step
+ *  and raises the blocking error dialog, `stale` is inert (the flow already left the step). */
 export type PickupAction =
   | { kind: 'work'; status: string }
   | { kind: 'conflict'; branch: string }
@@ -91,10 +93,13 @@ export type PickupAction =
 /** Decide what the host does with a resolved pickup result, given whether the flow is STILL on the
  *  bootstrap step. Pure so the fire-and-forget completion glue is driven by a tested decision. */
 export function decidePickupAction(result: PickupResult, stillOnStep: boolean): PickupAction {
+  // Checked BEFORE the stale gate so an off-step hard failure still surfaces (CLAUDE.md: a critical-path
+  // failure the operator cannot see or fix by clicking must not be swallowed). Safe because the caller's
+  // revertStep self-guards to a no-op once the flow has left the step, so only the blocking dialog fires.
+  if (!result.ok && 'error' in result) return { kind: 'revert', reason: result.error };
   if (!stillOnStep) return { kind: 'stale' };
   if (result.ok) return { kind: 'work', status: result.status };
-  if ('conflict' in result) return { kind: 'conflict', branch: result.conflict.branch };
-  return { kind: 'revert', reason: result.error };
+  return { kind: 'conflict', branch: result.conflict.branch };
 }
 
 // A conservative injection-safety allowlist for the pickup branch — NOT a full git refname validator
@@ -173,7 +178,7 @@ export async function runPickup(deps: PickupDeps, req: PickupRequest): Promise<P
     writeState({ status, iteration: 1, pr, branch, boundLoop: req.loopName, linkedIssues: [req.issue] });
     return { ok: true, pr, branch, status };
   } catch (e) {
-    return fail((e as Error).message);
+    return fail(e instanceof Error ? e.message : String(e));
   }
 }
 
@@ -193,13 +198,18 @@ function run(file: string, args: string[], cwd: string): Promise<string> {
   });
 }
 
-/** Drop `git status --porcelain` lines that touch only `.agent-loop/` (engine's filterAgentLoopStatus). */
+const APP_STATE_PREFIXES = APP_STATE_DIRS.map((d) => `${d}/`);
+
+// `git status --porcelain` v1: each line is `XY <path>` (two status columns + a space), and a rename/copy
+// carries `<orig> -> <new>`. Clean iff every changed path — BOTH sides of a rename — is app-owned, so a
+// rename OUT of an app dir to a real file still reads dirty. Slicing the fixed status columns (not trimming)
+// keeps a worktree-modified " M " line's leading space from defeating the prefix match.
 function treeIsClean(porcelain: string): boolean {
+  const isAppState = (p: string): boolean => APP_STATE_PREFIXES.some((prefix) => p.startsWith(prefix));
   return porcelain
     .split('\n')
-    .map((l) => l.trim())
     .filter((l) => l.length > 0)
-    .every((l) => l.replace(/^.. /, '').startsWith('.agent-loop/'));
+    .every((line) => line.slice(3).split(' -> ').every(isAppState));
 }
 
 export function createRealPickupGit(repoDir: string): PickupGit {
