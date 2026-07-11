@@ -374,6 +374,39 @@ describe('applyInstallExamples — a symlink nested inside a destination is refu
   });
 });
 
+describe('applyInstallExamples — a container symlink that stays inside the destination is followed, not refused (CWE-59 confinement)', () => {
+  // The write path routes through the shared confinement primitive (confinedPath.ts): a container
+  // symlink is refused ONLY when it escapes the destination (the tests above), and one that resolves to
+  // a real location INSIDE the destination is followed to that symlink-free location (CWE-367) — the same
+  // policy every other confined path in the app applies, rather than a blanket refusal of any symlink.
+  it('writes a loop whose directory links to a real sibling inside the destination, at the resolved location', () => {
+    const loopsTarget = destOf('loops').targetDir;
+    mkdirSync(loopsTarget, { recursive: true });
+    const realDir = path.join(loopsTarget, 'real-plan');
+    mkdirSync(realDir);
+    symlinkSync(realDir, path.join(loopsTarget, 'plan-loop'));
+
+    const res = applyInstallExamples(dirs, []);
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    // plan-loop/plan-loop.yaml resolves through the in-jail link to real-plan/plan-loop.yaml.
+    expect(existsSync(path.join(realDir, 'plan-loop.yaml'))).toBe(true);
+    expect(readFileSync(path.join(realDir, 'plan-loop.yaml'))).toEqual(readFileSync(path.join(BUNDLE_LOOPS, planDefRel)));
+  });
+});
+
+describe('applyInstallExamples — first run seeds a config root that does not exist yet', () => {
+  it('creates the whole tree when the user-config root is absent (a fresh machine)', () => {
+    rmSync(configRoot, { recursive: true, force: true }); // ~/.claude has never been created
+    const res = applyInstallExamples(dirs, []);
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(existsSync(targetOf('loops', planDefRel))).toBe(true);
+    expect(existsSync(targetOf('skills', skillRel))).toBe(true);
+    expect(existsSync(targetOf('commands', commandRel))).toBe(true);
+  });
+});
+
 describe('applyInstallExamples — a failure once writing has begun names everything already written', () => {
   it('reports every created/overwritten file, and no file outside that list differs from its pre-action bytes', () => {
     // A directory standing where a command file must be written: the pre-flight (a container check)

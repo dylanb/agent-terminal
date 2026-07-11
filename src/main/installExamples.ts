@@ -3,6 +3,7 @@
 import { accessSync, constants, readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { atomicWriteFileSync, isRealContainer } from './atomicFile';
+import { confinedRealPath, resolveNewDirJail } from './confinedPath';
 import type { BundleLocation } from './bundleLocation';
 import { resolveExampleCommandsDir, resolveExampleFlowDir, resolveExampleLoopsDir } from './exampleAssets';
 import { listBundledSkills } from './exampleSkills';
@@ -128,17 +129,6 @@ function classify(bundleFile: string, targetFile: string): Classification {
   return readFileSync(bundleFile).equals(target) ? 'identical' : 'differ';
 }
 
-/** CWE-59 / §26.6. */
-function pathToFileIsReal(targetDir: string, rel: string): boolean {
-  const segments = path.dirname(rel).split(path.sep).filter((s) => s !== '' && s !== '.');
-  let dir = targetDir;
-  for (const segment of segments) {
-    dir = path.join(dir, segment);
-    if (!isRealContainer(dir)) return false;
-  }
-  return true;
-}
-
 /** CWE-59: a symlinked container would land the write outside the destination, and the loops container
  *  confers §26.6 `exec` authority on what lands there (CWE-829). */
 function isWritableContainer(dir: string): boolean {
@@ -212,17 +202,21 @@ export function applyInstallExamples(destinations: InstallDestination[], replace
   });
 
   for (const dest of plan) {
+    // One jail per destination; confinedRealPath refuses a file whose path escapes it and returns the
+    // symlink-free real path for the rest, so classify reads and the write lands on that path (CWE-367).
+    const jail = resolveNewDirJail(dest.targetDir);
     for (const file of dest.files) {
-      const targetFile = path.join(dest.targetDir, file.rel);
       try {
-        const cls = classify(file.src, targetFile);
+        const real = jail === null ? null : confinedRealPath(jail, path.join(dest.targetDir, file.rel));
+        if (real === null) {
+          return fail(`Could not install ${file.rel}: a symbolic link stands on the path to it under ${dest.targetDir}`);
+        }
+        const cls = classify(file.src, real);
         if (cls === 'identical' || (cls === 'differ' && !consented.has(dest.id))) {
           record(skipped, dest.id, file.rel);
           continue;
         }
-        const wrote =
-          pathToFileIsReal(dest.targetDir, file.rel) && atomicWriteFileSync(targetFile, readFileSync(file.src, 'utf8'));
-        if (!wrote) {
+        if (!atomicWriteFileSync(real, readFileSync(file.src, 'utf8'))) {
           return fail(`Could not install ${file.rel}: a symbolic link stands on the path to it under ${dest.targetDir}`);
         }
         record(cls === 'create' ? created : overwritten, dest.id, file.rel);

@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, sep, parse } from 'node:path';
-import { resolveJail, confinedRealPath, realpathBounded } from '../../src/main/confinedPath';
+import { resolveJail, resolveNewDirJail, confinedRealPath, realpathBounded } from '../../src/main/confinedPath';
 
 let root: string;
 let repo: string;
@@ -39,6 +39,28 @@ describe('resolveJail', () => {
 
   it('resolves the anchor itself when no segments are named', () => {
     expect(resolveJail(repo)).toBe(repo);
+  });
+});
+
+describe('resolveNewDirJail', () => {
+  it('anchors a not-yet-created directory under its nearest existing ancestor, final segment unresolved', () => {
+    const dir = join(repo, 'absent-parent', 'loops');
+
+    expect(resolveNewDirJail(dir)).toBe(join(repo, 'absent-parent', 'loops'));
+  });
+
+  it('resolves a symlinked parent chain but does NOT resolve a symlink standing AT the directory itself', () => {
+    const linkedRepo = join(root, 'linked-repo');
+    symlinkSync(repo, linkedRepo);
+    symlinkSync(outside, join(repo, 'loops')); // a planted link at the destination must not widen the jail
+
+    expect(resolveNewDirJail(join(linkedRepo, 'loops'))).toBe(join(repo, 'loops'));
+  });
+
+  it('is null when the parent chain cannot be reduced to a symlink-free path (dangling ancestor)', () => {
+    symlinkSync(join(root, 'no-such-target'), join(root, 'dangling'));
+
+    expect(resolveNewDirJail(join(root, 'dangling', 'loops'))).toBeNull();
   });
 });
 

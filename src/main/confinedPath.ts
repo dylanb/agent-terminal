@@ -44,6 +44,17 @@ export function resolveJail(anchorDir: string, ...segments: string[]): string | 
   }
 }
 
+/** A confinement jail for a destination directory that may not exist yet: its parent chain resolved
+ *  through symlinks in the longest existing prefix (realpathBounded), with the directory's own final
+ *  segment appended UNRESOLVED — so a symlink planted AT the destination cannot adopt its target as the
+ *  jail (resolveJail's guarantee, extended to a not-yet-created anchor). Null when the parent chain
+ *  cannot be reduced to a symlink-free path. CWE-59. */
+export function resolveNewDirJail(dir: string): string | null {
+  const abs = path.resolve(dir);
+  const parent = realpathBounded(path.dirname(abs));
+  return parent === null ? null : path.join(parent, path.basename(abs));
+}
+
 /** `target`'s symlink-free real path when it stays inside `jail`, else null. `jail` must already be
  *  resolved (see `resolveJail`); callers use the returned path directly, not the original. Existence of
  *  `target` is the caller's concern. CWE-22, CWE-59, CWE-367. */
