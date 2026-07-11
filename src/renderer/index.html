@@ -28,7 +28,6 @@
           <div class="navlist">
             <button class="nav on" data-viewbtn="1">Terminal <span class="k">⌘1</span></button>
             <button class="nav" data-viewbtn="2">Artifacts <span class="k">⌘2</span></button>
-            <button class="nav" data-viewbtn="3">Todos <span class="k">⌘3</span></button>
           </div>
         </nav>
         <!-- real flow status strip (§22.3) — the §24.1 station rail + manual-step control.
@@ -65,11 +64,6 @@
           <!-- VIEW 1 — Terminal (real xterm + selection, §7) -->
           <div data-viewpane="1" class="on">
             <div id="terminal-view">
-              <div id="toolbar" role="toolbar" aria-label="Selection actions">
-                <button id="send-selection">Send selection</button>
-                <button id="capture-selection">Capture selection</button>
-                <button id="clear-selection">Clear selection</button>
-              </div>
               <div id="terminal"></div>
             </div>
           </div>
@@ -90,24 +84,6 @@
             </div>
           </div>
 
-          <!-- VIEW 3 — Todos + Review gate (mocked fixture, §19.3) -->
-          <div data-viewpane="3">
-            <div class="twocol">
-              <div class="pane">
-                <h2 class="serif">Todos</h2><div class="sub">Curate, then send to the agent</div>
-                <div class="mock-todos">
-                  <div class="todo"><span class="chk"></span><div class="body"><div class="tx">Bound the scrollback re-scan — don't re-read on every quiet pause</div><div class="meta"><span class="from">from review.md</span> · L42 · high</div></div></div>
-                  <div class="todo"><span class="chk"></span><div class="body"><div class="tx">Flag sub-floor findings instead of dropping them silently</div><div class="meta"><span class="from">from review.md</span> · L44</div></div></div>
-                  <div class="todo done"><span class="chk"></span><div class="body"><div class="tx">Carve tool calls out of the report body</div><div class="meta">done · §15.x</div></div></div>
-                </div>
-              </div>
-              <div class="pane">
-                <h2 class="serif">Review gate</h2>
-                <!-- mocked gate panel (§19.3) — rendered from the fixture; actions stubbed -->
-                <div id="gate-panel"></div>
-              </div>
-            </div>
-          </div>
         </div>
       </main>
 

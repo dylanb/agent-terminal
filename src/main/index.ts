@@ -9,8 +9,6 @@ import {
   SESSION_ID,
   type AgentState,
   type ChannelPayloads,
-  type CommandCaptureResult,
-  type CommandSummary,
   type FlowStateView,
   type GithubRef,
   type SendChannel,
@@ -30,10 +28,7 @@ import { resolveRendererTarget } from './rendererTarget';
 import { installNavigationGuards } from './windowGuards';
 import {
   isValidCapture,
-  isValidCaptureCommand,
   isValidCaptureLast,
-  isValidClearCommands,
-  isValidCommandsRequest,
   isValidDismiss,
   isValidDismissAll,
   isValidFlowRequest,
@@ -213,8 +208,6 @@ async function createWindow(): Promise<void> {
     onOsc: (id, cb) => shadow.onOsc(id, cb),
     config,
   });
-  // Command history is live off the OSC-133 marks, not §8.3 quiescence (§15.5).
-  tracker.onChange(() => send(CH.monitorCommandsChanged, { sessionId: SESSION_ID }));
   // §26.2 presence (hostedAgentPresent) is derived from the live OSC-133 spans; the classification lives
   // in loopOrchestrator so the leak-prevention gate is unit-tested away from this composition root.
   // §16.3: broadcast only on repo-key change, so the pane swaps its todo list once per `cd` across a
@@ -1163,9 +1156,6 @@ async function createWindow(): Promise<void> {
         store.remove(m.eventId);
         send(CH.monitorEventRemoved, { sessionId: SESSION_ID, eventId: m.eventId });
       },
-      [CH.monitorClearCommands]: (_e, m) => {
-        if (isValidClearCommands(m)) tracker.clear();
-      },
       [CH.agentInject]: (_e, m) => {
         if (isValidInject(m)) inject(m.text, { submit: m.submit });
       },
@@ -1205,14 +1195,6 @@ async function createWindow(): Promise<void> {
         currentRepoInfo(cwdTracker.cwd(), cwdTracker.repoKey(), launchRoot),
       [CH.uiGetSettings]: () => uiSettings.get(),
       [CH.clipboardRead]: (): string => clipboard.readText(), // Paste source (§7.7)
-      [CH.monitorCommands]: (_e, m): CommandSummary[] =>
-        isValidCommandsRequest(m)
-          ? tracker.summaries().map((s) => ({ ...s, sessionId: SESSION_ID }))
-          : [],
-      // A command's output text for adding straight to a todo (§16.2); fail-closed to
-      // null on a malformed payload or an unknown/trimmed id.
-      [CH.monitorCaptureCommandText]: (_e, m): CommandCaptureResult | null =>
-        isValidCaptureCommand(m) ? (tracker.capture(m.commandId) ?? null) : null,
       // "Capture last report" (§21.1): returned to the caller, never broadcast — onEvent would prepend
       // a duplicate rather than replace the single slot. Fail-closed to [], which the renderer reads as
       // "nothing captured, keep the prior report" (§6 live-session check).

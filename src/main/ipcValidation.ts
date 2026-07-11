@@ -8,13 +8,10 @@ import {
   SESSION_ID,
   type AgentInjectMsg,
   type ClipboardWriteMsg,
-  type CaptureCommandMsg,
   type CaptureLastMsg,
   type CliInstallMsg,
   type InstallExamplesPreviewMsg,
   type InstallExamplesApplyMsg,
-  type ClearCommandsMsg,
-  type CommandsRequestMsg,
   type DismissAllMsg,
   type DismissMsg,
   type FlowRequestMsg,
@@ -82,14 +79,6 @@ export function isValidCapture(m: unknown): m is MonitorCaptureMsg {
   return isRecord(m) && isLiveSession(m) && typeof m.text === 'string' && m.source === 'selection';
 }
 
-export function isValidCommandsRequest(m: unknown): m is CommandsRequestMsg {
-  return isRecord(m) && isLiveSession(m);
-}
-
-export function isValidCaptureCommand(m: unknown): m is CaptureCommandMsg {
-  return isRecord(m) && isLiveSession(m) && typeof m.commandId === 'string';
-}
-
 export function isValidCaptureLast(m: unknown): m is CaptureLastMsg {
   return isRecord(m) && isLiveSession(m);
 }
@@ -133,10 +122,6 @@ export function isValidSetSettings(m: unknown): m is UiSetSettingsMsg {
     if (k in s && (typeof s[k] !== 'number' || !Number.isFinite(s[k]))) return false;
   }
   return true;
-}
-
-export function isValidClearCommands(m: unknown): m is ClearCommandsMsg {
-  return isRecord(m) && isLiveSession(m);
 }
 
 /** Flow lifecycle (§24.2.2). `repoKey` becomes a filesystem path in flowState, so it gets the

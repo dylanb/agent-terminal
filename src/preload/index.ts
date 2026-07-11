@@ -10,8 +10,6 @@ import {
   type ExamplesApi,
   type InstallExamplesPreview,
   type InstallExamplesResult,
-  type CommandCaptureResult,
-  type CommandSummary,
   type CwdChangedMsg,
   type FlowApi,
   type FlowBootstrapErrorMsg,
@@ -77,14 +75,6 @@ const monitorApi: MonitorApi = {
   replay: () => ipcRenderer.invoke(CH.monitorReplay) as Promise<MonitorEvent[]>,
   currentRepo: () =>
     ipcRenderer.invoke(CH.monitorCurrentRepo, { sessionId: SESSION_ID }) as Promise<RepoInfo | null>,
-  commands: () =>
-    ipcRenderer.invoke(CH.monitorCommands, { sessionId: SESSION_ID }) as Promise<CommandSummary[]>,
-  onCommandsChanged: (cb) => ipcRenderer.on(CH.monitorCommandsChanged, () => cb()),
-  captureCommandText: (commandId) =>
-    ipcRenderer.invoke(CH.monitorCaptureCommandText, {
-      sessionId: SESSION_ID,
-      commandId,
-    }) as Promise<CommandCaptureResult | null>,
   captureLast: () => ipcRenderer.invoke(CH.captureLast, { sessionId: SESSION_ID }) as Promise<MonitorEvent[]>,
   dismiss: (eventId) => ipcRenderer.send(CH.monitorDismiss, { sessionId: SESSION_ID, eventId }),
   dismissAll: () => ipcRenderer.send(CH.monitorDismissAll, { sessionId: SESSION_ID }),
@@ -97,7 +87,6 @@ const monitorApi: MonitorApi = {
   getSettings: () => ipcRenderer.invoke(CH.uiGetSettings) as Promise<UiSettings>,
   setSettings: (settings) => ipcRenderer.send(CH.uiSetSettings, { settings }),
   onCwdChanged: (cb) => ipcRenderer.on(CH.cwdChanged, (_e, m: CwdChangedMsg) => cb(m)),
-  clearCommands: () => ipcRenderer.send(CH.monitorClearCommands, { sessionId: SESSION_ID }),
   // §16.4: repoKey threaded so an in-flight edit always targets its own repo, not whatever cwd moved to.
   todoList: (repoKey) => ipcRenderer.invoke(CH.todoList, { sessionId: SESSION_ID, repoKey }) as Promise<TodoItem[]>,
   todoAdd: (repoKey, text, source?: TodoSource) =>

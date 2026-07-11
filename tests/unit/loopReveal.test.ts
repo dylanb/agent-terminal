@@ -12,14 +12,12 @@ const APP_HTML = `
   <aside class="rail">
     <button class="nav on" data-viewbtn="1">Terminal</button>
     <button class="nav" data-viewbtn="2">Artifacts</button>
-    <button class="nav" data-viewbtn="3">Todos</button>
     <span class="stat loopstat" role="button" tabindex="0" aria-expanded="false">Loop</span>
   </aside>
   <aside class="loop-panel" id="loop-panel"><button data-loop-close>x</button></aside>
   <main class="main">
     <div data-viewpane="1" class="on">term</div>
     <div data-viewpane="2">artifacts</div>
-    <div data-viewpane="3">todos</div>
   </main>
 </div>`;
 
@@ -33,8 +31,8 @@ describe('revealLoopReadout (§24.2.3 T4)', () => {
   afterEach(() => shell?.dispose());
 
   it('lands on the Terminal view with the loop read-out open, from another view', () => {
-    shell.setView('3');
-    expect(shell.getView()).toBe('3');
+    shell.setView('2');
+    expect(shell.getView()).toBe('2');
     revealLoopReadout(shell);
     expect(shell.getView()).toBe('1');
     expect(shell.isLoopPanelOpen()).toBe(true);
