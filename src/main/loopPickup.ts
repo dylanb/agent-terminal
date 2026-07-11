@@ -11,7 +11,7 @@ import path from 'node:path';
 import type { PickupContract } from './loopDef';
 import { writeLoopState, type LoopStateWrite } from './loopStateWriter';
 import { numberFromGithubUrl } from '../shared/githubUrl';
-import { AGENT_STATE_DIRS } from './appStateDirs';
+import { APP_STATE_DIRS } from './appStateDirs';
 
 /** GitHub issue facts the pickup needs for the start commit + PR title. */
 export interface IssueInfo {
@@ -198,7 +198,7 @@ function run(file: string, args: string[], cwd: string): Promise<string> {
   });
 }
 
-const APP_STATE_PREFIXES = AGENT_STATE_DIRS.map((d) => `${d}/`);
+const APP_STATE_PREFIXES = APP_STATE_DIRS.map((d) => `${d}/`);
 
 // `git status --porcelain` v1: each line is `XY <path>` (two status columns + a space), and a rename/copy
 // carries `<orig> -> <new>`. Clean iff every changed path — BOTH sides of a rename — is app-owned, so a

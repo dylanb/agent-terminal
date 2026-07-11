@@ -5,7 +5,7 @@ import { watch, readdirSync, lstatSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { gitRootOf, IGNORED_DIRS } from './artifactTree';
-import { AGENT_STATE_DIRS } from './appStateDirs';
+import { APP_STATE_DIRS } from './appStateDirs';
 
 /** Cap on `git ls-files` stdout. A repo whose tracked-file list exceeds this makes execFileSync throw, and
  *  the caller falls back to walking the tree — degraded, not broken. */
@@ -108,7 +108,7 @@ function gitNonIgnoredDirs(gitRoot: string): string[] | null {
  *  filesystem and exhaust the inotify limit (ENOSPC, the reported crash). A missing dir is a path the watch
  *  factory simply skips. */
 export function viewerWatchDirs(root: string): string[] {
-  const appDirs = AGENT_STATE_DIRS.flatMap((d) => watchableDirs(path.join(root, d)));
+  const appDirs = APP_STATE_DIRS.flatMap((d) => watchableDirs(path.join(root, d)));
   const gitRoot = gitRootOf(root);
   if (gitRoot === null) return appDirs;
   // git-failure fallback: the hard-coded IGNORED_DIRS walk still excludes node_modules/.git.

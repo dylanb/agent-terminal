@@ -3,4 +3,4 @@
 // watched even when the repo's .gitignore excludes them). One definition both import — CLAUDE.md
 // shared-vocabulary rule. `.agent-loop/` is external-engine parity (filterAgentLoopStatus); `.agent-terminal/`
 // is agent-terminal's own state (flow-state, todos, monitor-events, audit-pointer) the engine never writes.
-export const AGENT_STATE_DIRS = ['.agent-loop', '.agent-terminal'] as const;
+export const APP_STATE_DIRS = ['.agent-loop', '.agent-terminal'] as const;
