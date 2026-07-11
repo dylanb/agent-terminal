@@ -239,6 +239,18 @@ describe('in-app pickup runner (§26.9 / L1)', () => {
       expect(written).toBeNull();
     });
   });
+
+  // The hard-failure path now ALWAYS reaches the operator's blocking dialog (decidePickupAction revert), so
+  // the reason it carries must never be blank. A git/gh port that rejects with a non-Error value (a bare
+  // string, a plain object) must still surface a meaningful reason (CLAUDE.md — a caught value is `unknown`,
+  // never an `Error`; an error surfaced with an empty reason is swallowed just as thoroughly as one dropped).
+  it('surfaces a non-Error throw as its stringified reason (never a blank dialog)', async () => {
+    const g = makeFakeGit();
+    g.git.isCleanTree = () => Promise.reject('boom'); // a thrown string, not an Error
+    const h = makeFakeGitHub();
+    const result = await runPickup(deps(g.git, h.github), req());
+    expect(result).toEqual({ ok: false, error: 'boom' });
+  });
 });
 
 // §26.9 — the async pickup is fire-and-forget: its `.then()` may resolve AFTER the operator terminated
@@ -318,6 +330,41 @@ describe('createRealPickupGit.isCleanTree — app-owned state is not "dirty" (§
     git(['add', '.gitignore']);
     git(['commit', '-q', '-m', 'add ignore']);
     writeFileSync(join(repo, '.gitignore'), 'foo\nbar\n');
+    expect(await createRealPickupGit(repo).isCleanTree()).toBe(false);
+  });
+
+  // A repo that does NOT gitignore .agent-terminal/ (the never-touch-.gitignore rule leaves that to the
+  // user) tracks the app's state files, so re-writing one shows as a worktree-modified " M " porcelain line
+  // — whose leading status space must not defeat the app-state match, or pickup stays permanently blocked
+  // in exactly the repos the .agent-terminal/ allowance exists to unblock.
+  it('treats a worktree-modified tracked .agent-terminal/ file as clean (" M " status)', async () => {
+    mkdirSync(join(repo, '.agent-terminal'));
+    writeFileSync(join(repo, '.agent-terminal', 'flow-state.yaml'), 'x\n');
+    git(['add', '.agent-terminal/flow-state.yaml']);
+    git(['commit', '-q', '-m', 'track flow state']);
+    writeFileSync(join(repo, '.agent-terminal', 'flow-state.yaml'), 'changed\n');
+    expect(await createRealPickupGit(repo).isCleanTree()).toBe(true);
+  });
+
+  // A staged rename OUT of an app-state dir INTO a real source path mutates the source tree, so it must read
+  // dirty even though its origin is app-owned — the gate checks BOTH sides of a `R  <orig> -> <new>` line,
+  // not just the origin, or a genuinely-dirty tree slips through the clean gate.
+  it('treats a staged rename from an app-state dir to a source file as dirty', async () => {
+    mkdirSync(join(repo, '.agent-loop'));
+    writeFileSync(join(repo, '.agent-loop', 'x'), 'x\n');
+    git(['add', '.agent-loop/x']);
+    git(['commit', '-q', '-m', 'track loop file']);
+    git(['mv', '.agent-loop/x', 'moved-source.ts']);
+    expect(await createRealPickupGit(repo).isCleanTree()).toBe(false);
+  });
+
+  // Pins the outer `.every` over lines: app-state churn present alongside a genuine source change is dirty.
+  // A regression that short-circuited to clean once one app-state line matched would pass every other case
+  // here but let pickup run over uncommitted work (CLAUDE.md — never allow an unrecoverable state).
+  it('treats app-state churn alongside a real source change as dirty', async () => {
+    mkdirSync(join(repo, '.agent-terminal'));
+    writeFileSync(join(repo, '.agent-terminal', 'todos.json'), 'x\n');
+    writeFileSync(join(repo, 'README.md'), 'changed\n');
     expect(await createRealPickupGit(repo).isCleanTree()).toBe(false);
   });
 });

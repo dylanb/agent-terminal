@@ -11,6 +11,7 @@ import path from 'node:path';
 import type { PickupContract } from './loopDef';
 import { writeLoopState, type LoopStateWrite } from './loopStateWriter';
 import { numberFromGithubUrl } from '../shared/githubUrl';
+import { AGENT_STATE_DIRS } from './appStateDirs';
 
 /** GitHub issue facts the pickup needs for the start commit + PR title. */
 export interface IssueInfo {
@@ -20,7 +21,8 @@ export interface IssueInfo {
 
 /** Git operations pickup needs, in the runner's own vocabulary (not the git CLI's). */
 export interface PickupGit {
-  /** True iff the tree is clean enough to bootstrap — `.agent-loop/` churn is ignored (engine parity). */
+  /** True iff the tree is clean enough to bootstrap — churn under app-owned state dirs (`.agent-loop/`
+   *  engine parity, `.agent-terminal/` app state) is ignored (§26.9). */
   isCleanTree(): Promise<boolean>;
   /** The branch to fork from + target the PR at; null when undiscoverable (the run then aborts). */
   resolveBaseBranch(): Promise<string | null>;
@@ -79,11 +81,9 @@ export type PickupResult =
   | { ok: false; conflict: PickupConflict }
   | { ok: false; error: string };
 
-/** The host's completion action once an async pickup resolves (§26.9). A hard failure always yields
- *  `revert` (the caller rolls the flow back to the initiating step and raises the blocking error dialog),
- *  so a failed bootstrap is never silent. `stale` applies ONLY to a success/conflict result that lands
- *  after the flow LEFT the bootstrap step (terminated/navigated): driving a turn or prompting a wipe then
- *  would act on the wrong context. */
+/** What the host does with a resolved async pickup (§26.9), consumed by the completion switch in index.ts:
+ *  `work` drives the turn, `conflict` prompts the wipe confirm, `revert` rolls back to the initiating step
+ *  and raises the blocking error dialog, `stale` is inert (the flow already left the step). */
 export type PickupAction =
   | { kind: 'work'; status: string }
   | { kind: 'conflict'; branch: string }
@@ -93,10 +93,9 @@ export type PickupAction =
 /** Decide what the host does with a resolved pickup result, given whether the flow is STILL on the
  *  bootstrap step. Pure so the fire-and-forget completion glue is driven by a tested decision. */
 export function decidePickupAction(result: PickupResult, stillOnStep: boolean): PickupAction {
-  // A hard failure ALWAYS surfaces — the operator's pickup did not happen, so it is never dropped even if
-  // the flow has since navigated/terminated (CLAUDE.md: a critical-path failure the operator cannot see or
-  // fix by clicking must not be swallowed). The caller's revertStep self-guards to a no-op once the flow
-  // has left, so the blocking dialog still fires without yanking an unrelated step.
+  // Checked BEFORE the stale gate so an off-step hard failure still surfaces (CLAUDE.md: a critical-path
+  // failure the operator cannot see or fix by clicking must not be swallowed). Safe because the caller's
+  // revertStep self-guards to a no-op once the flow has left the step, so only the blocking dialog fires.
   if (!result.ok && 'error' in result) return { kind: 'revert', reason: result.error };
   if (!stillOnStep) return { kind: 'stale' };
   if (result.ok) return { kind: 'work', status: result.status };
@@ -179,7 +178,7 @@ export async function runPickup(deps: PickupDeps, req: PickupRequest): Promise<P
     writeState({ status, iteration: 1, pr, branch, boundLoop: req.loopName, linkedIssues: [req.issue] });
     return { ok: true, pr, branch, status };
   } catch (e) {
-    return fail((e as Error).message);
+    return fail(e instanceof Error ? e.message : String(e));
   }
 }
 
@@ -199,22 +198,18 @@ function run(file: string, args: string[], cwd: string): Promise<string> {
   });
 }
 
-// The app's OWN per-repo state directories, whose churn is not "dirty" for the clean-tree gate: `.agent-loop/`
-// is engine parity (filterAgentLoopStatus); `.agent-terminal/` is agent-terminal's own state (flow-state,
-// todos, monitor-events, audit-pointer) that the external engine never writes, so without it here the app's
-// own files would permanently block pickup in any repo it has run a flow in.
-const APP_STATE_PREFIXES = ['.agent-loop/', '.agent-terminal/'];
+const APP_STATE_PREFIXES = AGENT_STATE_DIRS.map((d) => `${d}/`);
 
-/** True iff every `git status --porcelain` line touches only an app-owned state dir (APP_STATE_PREFIXES). */
+// `git status --porcelain` v1: each line is `XY <path>` (two status columns + a space), and a rename/copy
+// carries `<orig> -> <new>`. Clean iff every changed path — BOTH sides of a rename — is app-owned, so a
+// rename OUT of an app dir to a real file still reads dirty. Slicing the fixed status columns (not trimming)
+// keeps a worktree-modified " M " line's leading space from defeating the prefix match.
 function treeIsClean(porcelain: string): boolean {
+  const isAppState = (p: string): boolean => APP_STATE_PREFIXES.some((prefix) => p.startsWith(prefix));
   return porcelain
     .split('\n')
-    .map((l) => l.trim())
     .filter((l) => l.length > 0)
-    .every((l) => {
-      const p = l.replace(/^.. /, '');
-      return APP_STATE_PREFIXES.some((prefix) => p.startsWith(prefix));
-    });
+    .every((line) => line.slice(3).split(' -> ').every(isAppState));
 }
 
 export function createRealPickupGit(repoDir: string): PickupGit {

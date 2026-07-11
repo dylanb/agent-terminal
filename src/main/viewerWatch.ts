@@ -5,11 +5,7 @@ import { watch, readdirSync, lstatSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { gitRootOf, IGNORED_DIRS } from './artifactTree';
-
-/** App-owned state dirs the viewer watch ALWAYS covers, even though a repo's .gitignore excludes them:
- *  the flow/loop state the app writes lives here and must live-reload. Everything else is governed by the
- *  repo's own .gitignore (below) rather than a hard-coded skip list. */
-const ALWAYS_WATCH_DIRS = ['.agent-terminal', '.agent-loop'];
+import { AGENT_STATE_DIRS } from './appStateDirs';
 
 /** Cap on `git ls-files` stdout. A repo whose tracked-file list exceeds this makes execFileSync throw, and
  *  the caller falls back to walking the tree — degraded, not broken. */
@@ -112,7 +108,7 @@ function gitNonIgnoredDirs(gitRoot: string): string[] | null {
  *  filesystem and exhaust the inotify limit (ENOSPC, the reported crash). A missing dir is a path the watch
  *  factory simply skips. */
 export function viewerWatchDirs(root: string): string[] {
-  const appDirs = ALWAYS_WATCH_DIRS.flatMap((d) => watchableDirs(path.join(root, d)));
+  const appDirs = AGENT_STATE_DIRS.flatMap((d) => watchableDirs(path.join(root, d)));
   const gitRoot = gitRootOf(root);
   if (gitRoot === null) return appDirs;
   // git-failure fallback: the hard-coded IGNORED_DIRS walk still excludes node_modules/.git.
