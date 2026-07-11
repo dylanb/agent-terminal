@@ -79,9 +79,11 @@ export type PickupResult =
   | { ok: false; conflict: PickupConflict }
   | { ok: false; error: string };
 
-/** The host's completion action once an async pickup resolves (§26.9). `stale` when the flow has left
- *  the bootstrap step (terminated/navigated while the fire-and-forget pickup ran): the result must not
- *  drive a turn, prompt a wipe, or roll back a step already left. */
+/** The host's completion action once an async pickup resolves (§26.9). A hard failure always yields
+ *  `revert` (the caller rolls the flow back to the initiating step and raises the blocking error dialog),
+ *  so a failed bootstrap is never silent. `stale` applies ONLY to a success/conflict result that lands
+ *  after the flow LEFT the bootstrap step (terminated/navigated): driving a turn or prompting a wipe then
+ *  would act on the wrong context. */
 export type PickupAction =
   | { kind: 'work'; status: string }
   | { kind: 'conflict'; branch: string }
@@ -91,10 +93,14 @@ export type PickupAction =
 /** Decide what the host does with a resolved pickup result, given whether the flow is STILL on the
  *  bootstrap step. Pure so the fire-and-forget completion glue is driven by a tested decision. */
 export function decidePickupAction(result: PickupResult, stillOnStep: boolean): PickupAction {
+  // A hard failure ALWAYS surfaces — the operator's pickup did not happen, so it is never dropped even if
+  // the flow has since navigated/terminated (CLAUDE.md: a critical-path failure the operator cannot see or
+  // fix by clicking must not be swallowed). The caller's revertStep self-guards to a no-op once the flow
+  // has left, so the blocking dialog still fires without yanking an unrelated step.
+  if (!result.ok && 'error' in result) return { kind: 'revert', reason: result.error };
   if (!stillOnStep) return { kind: 'stale' };
   if (result.ok) return { kind: 'work', status: result.status };
-  if ('conflict' in result) return { kind: 'conflict', branch: result.conflict.branch };
-  return { kind: 'revert', reason: result.error };
+  return { kind: 'conflict', branch: result.conflict.branch };
 }
 
 // A conservative injection-safety allowlist for the pickup branch — NOT a full git refname validator
@@ -193,13 +199,22 @@ function run(file: string, args: string[], cwd: string): Promise<string> {
   });
 }
 
-/** Drop `git status --porcelain` lines that touch only `.agent-loop/` (engine's filterAgentLoopStatus). */
+// The app's OWN per-repo state directories, whose churn is not "dirty" for the clean-tree gate: `.agent-loop/`
+// is engine parity (filterAgentLoopStatus); `.agent-terminal/` is agent-terminal's own state (flow-state,
+// todos, monitor-events, audit-pointer) that the external engine never writes, so without it here the app's
+// own files would permanently block pickup in any repo it has run a flow in.
+const APP_STATE_PREFIXES = ['.agent-loop/', '.agent-terminal/'];
+
+/** True iff every `git status --porcelain` line touches only an app-owned state dir (APP_STATE_PREFIXES). */
 function treeIsClean(porcelain: string): boolean {
   return porcelain
     .split('\n')
     .map((l) => l.trim())
     .filter((l) => l.length > 0)
-    .every((l) => l.replace(/^.. /, '').startsWith('.agent-loop/'));
+    .every((l) => {
+      const p = l.replace(/^.. /, '');
+      return APP_STATE_PREFIXES.some((prefix) => p.startsWith(prefix));
+    });
 }
 
 export function createRealPickupGit(repoDir: string): PickupGit {
