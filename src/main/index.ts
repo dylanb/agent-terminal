@@ -100,7 +100,7 @@ import { writeLoopState } from './loopStateWriter';
 import { readLoopExtension } from './loopStateReader';
 import { canResumeRepo, currentTurnByArtifacts, decideResume, shouldReconstructErrorTurn } from './loopResume';
 import type { FlowStepDef } from './flow';
-import { listTodoTemplates, loadTodoTemplateFile, parseTodoTemplate } from './todoTemplate';
+import { listTodoTemplates, loadTodoTemplateFile, parseTodoTemplate, todoTemplatesDir } from './todoTemplate';
 import { discover, readArtifact, emptyTree, warmBaseRef, createBaseWarmer, createViewerActivityHandler, gitRootOf } from './artifactTree';
 import { watchViewerTree, viewerRoot } from './viewerWatch';
 import { createChromeProfileStore } from './chromeProfile';
@@ -968,7 +968,7 @@ async function createWindow(): Promise<void> {
   const instantiateTemplate = (repoKey: string, ref: string): ReturnType<typeof todoStore.list> => {
     const load = loadFlowDefinitionLocalFirst(repoKey, flowGlobalDir);
     if (!load.ok) return todoStore.list(repoKey);
-    const md = loadTodoTemplateFile(path.join(load.flowDir, 'todo-templates'), ref);
+    const md = loadTodoTemplateFile(todoTemplatesDir(load.flowDir), ref);
     if (md === null) return todoStore.list(repoKey);
     // Silent dedup (operator decision): re-firing a template skips items already outstanding, so a
     // repeat click never piles up duplicates.
@@ -1328,7 +1328,7 @@ async function createWindow(): Promise<void> {
         if (!isValidTemplateList(m)) return { templates: [] };
         if (flow.state(m.repoKey).status !== 'in_progress') return { templates: [] };
         const load = loadFlowDefinitionLocalFirst(m.repoKey, flowGlobalDir);
-        const templates = load.ok ? listTodoTemplates(path.join(load.flowDir, 'todo-templates')) : [];
+        const templates = load.ok ? listTodoTemplates(todoTemplatesDir(load.flowDir)) : [];
         const defaultRef = flow.state(m.repoKey).templateRef;
         return defaultRef ? { templates, defaultRef } : { templates };
       },

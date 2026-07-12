@@ -11,7 +11,11 @@ export interface ModalCard {
 export type ModalShellBuild = (ctx: {
   doc: Document;
   titleId: string;
+  /** Dismiss: the user declined (Escape / scrim / a Cancel button). Fires `onClose`. */
   close: () => void;
+  /** Accept: the user's own affirmative action (Confirm / Install). Closes WITHOUT firing `onClose`, so a
+   *  caller that retracts the operation on dismissal does not also retract the one it is about to run. */
+  confirm: () => void;
 }) => ModalCard;
 
 export interface ModalShell {
@@ -49,8 +53,9 @@ export function createModalShell(
     else if (opener) opts?.onFocusLost?.();
     opener = null;
   };
-  // `close` is the USER-dismiss path (Escape / scrim / the build's close): it fires `onClose` so a caller
-  // can distinguish a dismissal from its own programmatic teardown (`render(null)` / `dispose`), which do not.
+  // `close` is the USER-dismiss path (Escape / scrim / the build's Cancel): it fires `onClose` so a caller
+  // can distinguish a dismissal from its own programmatic teardown (`render(null)` / `dispose`), which do
+  // not — and from the build's `confirm`, the user's affirmative action, which is not a dismissal either.
   const close = (): void => {
     const wasOpen = host.firstChild !== null;
     clear();
@@ -93,7 +98,7 @@ export function createModalShell(
         }
       });
 
-      const { card, initialFocus, describedById } = build({ doc, titleId, close });
+      const { card, initialFocus, describedById } = build({ doc, titleId, close, confirm: clear });
       if (describedById) modal.setAttribute('aria-describedby', describedById);
       modal.append(card);
       host.append(scrim, modal);

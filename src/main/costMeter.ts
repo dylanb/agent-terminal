@@ -7,6 +7,7 @@
 import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import type { ModelTokens } from '../shared/pricing';
+import { userConfigRootFrom } from './userConfig';
 
 /** One assistant turn recovered from a session log: its billed tokens, the instant it happened, and the
  *  identity Claude Code bills it under. `at` is NaN and `id` is null when the line carries neither. */
@@ -15,19 +16,18 @@ interface SessionTurn extends ModelTokens {
   id: string | null;
 }
 
-/** Encode a repo path into Claude Code's project-dir name (§26.10): every non-alphanumeric → `-`, matching
- *  the `~/.claude/projects/<encoded>/` layout the session logs live under. */
+/** Encode a repo path into Claude Code's project-dir name (§26.10): every non-alphanumeric → `-`. */
 export function encodeProjectDir(repoPath: string): string {
   return repoPath.replace(/[^A-Za-z0-9]/g, '-');
 }
 
 /** The directory the repo's session JSONL logs live in (§26.10). `APP_SESSION_LOG_ROOT` overrides it with an
- *  EXACT directory (the L7 §26.13 test seam, where the fake-agent writes its fixtures); otherwise the
- *  production `~/.claude/projects/<encoded-repo>/`. */
+ *  EXACT directory (the L7 §26.13 test seam, where the fake-agent writes its fixtures); otherwise it hangs off
+ *  the same user-config root the installer seeds, so a CLAUDE_CONFIG_DIR redirect moves both together. */
 export function sessionLogDir(repoPath: string, env: NodeJS.ProcessEnv, home: string): string {
   const override = env.APP_SESSION_LOG_ROOT;
   if (override && override.length > 0) return override;
-  return path.join(home, '.claude', 'projects', encodeProjectDir(repoPath));
+  return path.join(userConfigRootFrom(env, home), 'projects', encodeProjectDir(repoPath));
 }
 
 function num(v: unknown): number {

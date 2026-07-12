@@ -502,4 +502,40 @@ describe('install examples view organism (§18.1/§23.4)', () => {
     expect(shape(a).alert).toBe(1);
     expect(shape(a).report).toBe(1);
   });
+
+  // The live region's SEQUENCE of values is what an AT reads out — not just its final text. Confirming the
+  // consent step is the user's affirmative answer, so it must not travel the shell's user-dismiss path: that
+  // fires the organism's retraction and announces "Install cancelled." over an install that is in fact
+  // running (WCAG 4.1.3). Reading only the settled DOM cannot see it; a MutationObserver sees what the AT does.
+  describe('the consent step announces an accept as an accept, never as a cancellation', () => {
+    const announced = (obs: MutationObserver): string[] =>
+      obs.takeRecords().flatMap((r) => [...r.addedNodes]).map((n) => n.textContent ?? '');
+
+    it('never announces "Install cancelled." on the Install path', async () => {
+      await openConsent(['loops']);
+      const region = status();
+      const obs = new MutationObserver(() => {});
+      obs.observe(region, { childList: true, characterData: true, subtree: true });
+
+      confirmBtn().click();
+      const said = announced(obs);
+      obs.disconnect();
+
+      expect(said).not.toContain('Install cancelled.');
+      expect(said).toContain('Installing…');
+    });
+
+    it('still announces the retraction when the user DOES dismiss', async () => {
+      await openConsent(['loops']);
+      const region = status();
+      const obs = new MutationObserver(() => {});
+      obs.observe(region, { childList: true, characterData: true, subtree: true });
+
+      cancelBtn().click();
+      const said = announced(obs);
+      obs.disconnect();
+
+      expect(said).toContain('Install cancelled.');
+    });
+  });
 });

@@ -168,7 +168,7 @@ export function createInstallExamples(host: HTMLElement, deps: InstallExamplesDe
   type Conflict = Extract<InstallDestinationPreview, { conflict: true }>;
 
   function promptReplace(conflicts: Conflict[], returnFocus: () => void): void {
-    modal.render(({ doc: d, titleId, close }) => {
+    modal.render(({ doc: d, titleId, close, confirm: accept }) => {
       const describedById = `${titleId}-msg`;
       const cardEl = d.createElement('div');
       cardEl.className = 'card';
@@ -188,6 +188,7 @@ export function createInstallExamples(host: HTMLElement, deps: InstallExamplesDe
       const group = d.createElement('div');
       group.className = 'install-consent';
       group.setAttribute('role', 'group');
+      group.setAttribute('data-modal-grow', ''); // the shell's body slot (UI §5)
       const groupLabelId = `${titleId}-consent-group-label`;
       group.setAttribute('aria-labelledby', groupLabelId);
       const groupLabel = d.createElement('span');
@@ -196,6 +197,7 @@ export function createInstallExamples(host: HTMLElement, deps: InstallExamplesDe
       groupLabel.textContent = 'Replace files in';
       const rows = d.createElement('div');
       rows.className = 'install-consent-rows';
+      rows.setAttribute('data-modal-scroll', '');
       group.append(groupLabel, rows);
 
       const boxes = new Map<InstallDestinationId, HTMLInputElement>();
@@ -239,7 +241,7 @@ export function createInstallExamples(host: HTMLElement, deps: InstallExamplesDe
       confirm.textContent = 'Install';
       confirm.addEventListener('click', () => {
         const replace = [...boxes].filter(([, box]) => box.checked).map(([id]) => id);
-        close();
+        accept(); // NOT close(): installing is the affirmative answer, so nothing is retracted
         void install(replace, returnFocus);
       });
       foot.append(cancel, confirm);

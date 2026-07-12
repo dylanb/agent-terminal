@@ -63,9 +63,10 @@ export function resolveOwnedDirJail(dir: string): string | null {
 export type PathRefusal = 'escapes' | 'unresolvable';
 export type ConfinedPath = { ok: true; path: string } | { ok: false; cause: PathRefusal };
 
-/** `target`'s symlink-free real path when it stays inside `jail`, else the reason it was refused. `jail`
- *  must already be resolved (see `resolveJail`); callers use the returned path directly, not the original.
- *  Existence of `target` is the caller's concern. CWE-22, CWE-59, CWE-367. */
+/** `target`'s symlink-free real path when it stays inside `jail`, else the reason it was refused. `jail` must
+ *  already be resolved — by `resolveJail` or `resolveOwnedDirJail`, whichever matches whose ground it sits on;
+ *  callers use the returned path directly, not the original. Existence of `target` is the caller's concern.
+ *  CWE-22, CWE-59, CWE-367. */
 export function confinedRealPathResult(jail: string, target: string): ConfinedPath {
   const real = realpathBounded(path.resolve(target));
   if (real === null) return { ok: false, cause: 'unresolvable' };

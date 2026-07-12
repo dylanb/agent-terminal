@@ -22,17 +22,16 @@ export interface ConfirmDialog {
 }
 
 export function createConfirmDialog(host: HTMLElement, opts?: { onFocusLost?: () => void }): ConfirmDialog {
-  // Track the open dialog's options + whether it was confirmed, so a user-dismiss (onClose fired by the
-  // shell) runs onCancel while a confirm does not (§26.9). `pending` is non-null ONLY while a dialog is
-  // open and unanswered — the shell's onClose nulls it — so a later render can tell an open-and-displaced
-  // dialog (still pending) from an already-closed one (nulled), and never double-fires onCancel.
+  // `pending` is non-null ONLY while a dialog is open and UNANSWERED, so a later render can tell an
+  // open-and-displaced dialog (still pending) from an already-answered one (nulled), and never
+  // double-fires onCancel (§26.9). The shell's `confirm` path does not fire onClose, so an accept is not
+  // mistaken for a dismissal.
   let pending: ConfirmDialogOptions | null = null;
-  let confirmed = false;
   const shell = createModalShell(
     host,
     'confirm-dialog-title',
     () => {
-      if (!confirmed) pending?.onCancel?.();
+      pending?.onCancel?.();
       pending = null;
     },
     { onFocusLost: opts?.onFocusLost },
@@ -46,10 +45,9 @@ export function createConfirmDialog(host: HTMLElement, opts?: { onFocusLost?: ()
       // Replacing a still-open, unanswered dialog counts as declining it (§26.9): run its onCancel so a
       // rollback isn't dropped. shell.render(build) tears the old card down WITHOUT firing onClose, so this
       // is the only place the displaced dialog's cancellation is signalled.
-      if (pending && !confirmed) pending.onCancel?.();
+      if (pending) pending.onCancel?.();
       pending = opts;
-      confirmed = false;
-      shell.render(({ doc, titleId, close }) => {
+      shell.render(({ doc, titleId, close, confirm: accept }) => {
         const describedById = `${titleId}-msg`;
         const card = doc.createElement('div');
         card.className = 'card';
@@ -74,8 +72,8 @@ export function createConfirmDialog(host: HTMLElement, opts?: { onFocusLost?: ()
         confirm.textContent = opts.confirmLabel;
         confirm.addEventListener('click', () => {
           const run = opts.onConfirm;
-          confirmed = true; // suppress the shell's onClose → onCancel for this (confirmed) close
-          close();
+          pending = null; // answered, so neither this close nor a later render may fire onCancel
+          accept();
           run();
         });
         foot.append(cancel, confirm);

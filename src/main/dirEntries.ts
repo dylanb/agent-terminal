@@ -11,8 +11,8 @@ export interface DirEntry {
   isFile: boolean;
 }
 
-/** Entries of `dir`, name-sorted. An absent directory yields `[]`; every other failure throws — §18.1
- *  refuses a mispackaged bundle, and an unreadable tree enumerates to nothing exactly as an empty one does. */
+/** Entries of `dir`, name-sorted. An absent directory yields `[]`; every other failure — an unreadable tree
+ *  above all — THROWS, so it can never be mistaken for an empty one and silently install nothing (§18.1). */
 export function readDirEntries(dir: string): DirEntry[] {
   try {
     return readdirSync(dir, { withFileTypes: true })

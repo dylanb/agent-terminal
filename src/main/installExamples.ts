@@ -9,7 +9,8 @@ import { isErrno } from './errno';
 import type { BundleLocation } from './bundleLocation';
 import { resolveExampleCommandsDir, resolveExampleFlowDir, resolveExampleLoopsDir } from './exampleAssets';
 import { listBundledSkills } from './exampleSkills';
-import { flowHomeDir } from './flow';
+import { FLOW_DEF_FILE, flowHomeDir } from './flow';
+import { isTodoTemplateFile, todoTemplatesDir } from './todoTemplate';
 import { userConfigCommandsDir, userConfigLoopsDir, userConfigSkillsDir } from './userConfig';
 import {
   INSTALL_DESTINATION_IDS,
@@ -21,8 +22,6 @@ import {
   type InstallExamplesResult,
 } from '../shared/ipc';
 import { isValidInstallExamplesPreview, isValidInstallExamplesApply } from './ipcValidation';
-
-const TEMPLATES_SUBDIR = 'todo-templates';
 
 /** The one place a DestRelativePath is minted. The brand blocks an implicit `string`, but only a check
  *  blocks a wrong one — an absolute path, or one climbing out of its destination, would otherwise travel
@@ -70,13 +69,16 @@ function filesUnder(bundleDir: string): Plan {
   return walkFiles(bundleDir).map((rel) => ({ rel, src: path.join(bundleDir, rel) }));
 }
 
-/** §18.6: only `.md` files resolve as todo templates. */
+/** §18.6. The subdir and the extension come from `todoTemplate`'s own resolver — the reader's — so the
+ *  installer cannot seed a location or a file type the picker does not read (CLAUDE.md writer↔reader). */
 function flowFiles(bundleDir: string): Plan {
   if (absent(bundleDir)) return null;
-  const rels: DestRelativePath[] = [destRelative('flow.yaml')];
-  for (const entry of readDirEntries(path.join(bundleDir, TEMPLATES_SUBDIR))) {
-    if (!entry.isFile || !entry.name.endsWith('.md')) continue;
-    rels.push(destRelative(path.join(TEMPLATES_SUBDIR, entry.name)));
+  const templates = todoTemplatesDir(bundleDir);
+  const subdir = path.relative(bundleDir, templates);
+  const rels: DestRelativePath[] = [destRelative(FLOW_DEF_FILE)];
+  for (const entry of readDirEntries(templates)) {
+    if (!entry.isFile || !isTodoTemplateFile(entry.name)) continue;
+    rels.push(destRelative(path.join(subdir, entry.name)));
   }
   return rels.map((rel) => ({ rel, src: path.join(bundleDir, rel) }));
 }

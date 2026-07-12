@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import '../../src/renderer/src/styles.css';
 import { createInstallExamples } from '../../src/renderer/src/installExamples';
 import type { DestRelativePath, InstallExamplesPreview, InstallExamplesResult } from '../../src/shared/ipc';
-import { parseColor as parse, compositeOver as over, contrastRatio as contrast, type RGBA } from '../helpers/wcag';
+import { parseColor as parse, compositeOver as over, contrastRatio as contrast, ringOver, type RGBA } from '../helpers/wcag';
 
 // WCAG contrast pins for the renderer's tokens and controls. The locked "Galley · Lit" mood keeps
 // bright accent hues, so dedicated `--*-text` tokens carry the accessible foreground (memory
@@ -39,13 +39,12 @@ function paintedBgBehindRing(el: Element): RGBA {
   if (!parent) throw new Error('probe has no parent to paint its offset focus ring against');
   return paintedBg(parent);
 }
-/** The painted colour of el's focus ring: its outline colour under the accumulated group alpha,
- *  composited over the surface behind the offset ring. */
+/** The painted colour of el's focus ring: its outline colour at ITS OWN alpha, further scaled by every
+ *  group opacity above it, composited over the surface behind the offset ring. A ring made translucent by
+ *  `outline-color` alone (the `color-mix(…, transparent)` idiom this stylesheet uses) is washed out on the
+ *  screen exactly as one under a group `opacity` is; grading only the group alpha reads it as opaque. */
 function focusRing(el: HTMLElement): RGBA {
-  return over(
-    [...parse(getComputedStyle(el).outlineColor).slice(0, 3), paintedAlpha(el)] as RGBA,
-    paintedBgBehindRing(el),
-  );
+  return ringOver(getComputedStyle(el).outlineColor, paintedAlpha(el), paintedBgBehindRing(el));
 }
 
 let card: HTMLElement;
@@ -456,5 +455,33 @@ describe('capping the card does not clip the OTHER dialogs built on the same she
     const r = confirm.getBoundingClientRect();
     expect(r.bottom).toBeLessThanOrEqual(window.innerHeight + 1);
     expect(r.top).toBeGreaterThanOrEqual(-1);
+  });
+});
+
+// The ring's alpha has TWO independent sources — the outline colour's own alpha and any group opacity
+// above it — and dropping either one grades a washed-out ring as a solid one, which is how a control can
+// lose its visible focus indicator (WCAG 2.1 SC 1.4.11) with every ring pin still green.
+describe('focusRing (the helper the ring pins are graded through)', () => {
+  beforeEach(() => {
+    card = document.createElement('div');
+    card.style.background = 'var(--card)';
+    document.body.replaceChildren(card);
+  });
+
+  it('honours the outline colour\'s OWN alpha, not just the group opacity', () => {
+    const el = mount('<button style="outline-style:solid;outline-width:2px;outline-color:rgba(0,0,0,0.02)">x</button>');
+    // 2% black on the card is, on screen, the card: a ring that invisible must grade as invisible.
+    expect(contrast(focusRing(el), paintedBgBehindRing(el))).toBeLessThan(1.2);
+  });
+
+  it('still folds in a group opacity above the element', () => {
+    const el = mount('<div style="opacity:0.02"><button style="outline-style:solid;outline-width:2px;outline-color:rgb(0,0,0)">x</button></div>')
+      .querySelector('button') as HTMLElement;
+    expect(contrast(focusRing(el), paintedBgBehindRing(el))).toBeLessThan(1.2);
+  });
+
+  it('grades an opaque ring on the card at its full contrast', () => {
+    const el = mount('<button style="outline-style:solid;outline-width:2px;outline-color:rgb(0,0,0)">x</button>');
+    expect(contrast(focusRing(el), paintedBgBehindRing(el))).toBeGreaterThan(3);
   });
 });

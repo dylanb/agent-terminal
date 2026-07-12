@@ -117,6 +117,41 @@ describe('shell controller (§24.1C — views, hotkeys, docked drawer, theme)', 
       document.dispatchEvent(new KeyboardEvent('keydown', { key: ',', ctrlKey: true, cancelable: true }));
       expect(shell.getView()).toBe('4');
     });
+
+    // A modal blocks the app beneath it (`aria-modal`), and a view switch `display:none`s a whole viewpane
+    // — including one a dialog is hosted in. Acting on a chord would tear focus out of the open dialog and
+    // strand the keyboard user behind the scrim, with no route back (WCAG 2.4.3, 2.1.1).
+    describe('with a modal dialog open', () => {
+      let modal: HTMLElement;
+      beforeEach(() => {
+        shell.setView('4');
+        modal = document.createElement('div');
+        modal.setAttribute('role', 'dialog');
+        modal.setAttribute('aria-modal', 'true');
+        document.body.append(modal);
+      });
+      afterEach(() => modal.remove());
+
+      it('does not switch view on a view chord', () => {
+        key('2');
+        expect(shell.getView()).toBe('4');
+      });
+
+      it('does not open Settings, and does not toggle the drawer', () => {
+        shell.setView('1');
+        key(',');
+        expect(shell.getView()).toBe('1');
+        const before = app.classList.contains('drawer-open');
+        key('k');
+        expect(app.classList.contains('drawer-open')).toBe(before);
+      });
+
+      it('resumes switching once the dialog closes', () => {
+        modal.remove();
+        key('2');
+        expect(shell.getView()).toBe('2');
+      });
+    });
   });
 
   // §22.4: the shell must not reach into a sibling view to focus it — it announces the active view on

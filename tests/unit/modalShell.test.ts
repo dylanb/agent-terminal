@@ -164,3 +164,41 @@ describe('modal shell dialog role (WAI-ARIA APG / SC 4.1.2)', () => {
     expect(modal().getAttribute('aria-modal')).toBe('true');
   });
 });
+
+// `close` is the USER-dismiss path; a caller's own affirmative action (Confirm / Install) is NOT a dismissal
+// and must not fire `onClose`, or the organism retracts an operation it is actually about to run — the
+// success path then announces "cancelled" into its own live region (WCAG 4.1.3). Every consumer needs this,
+// so the shell owns it: two hand-rolled `confirmed` flags are two chances to get it wrong.
+describe('accept vs dismiss (the onClose contract)', () => {
+  it('fires onClose when the build dismisses via close()', () => {
+    let closed = 0;
+    const shell = createModalShell(host, 'x', () => closed++);
+    shell.render(({ doc, close }) => {
+      const card = doc.createElement('div');
+      const b = doc.createElement('button');
+      b.id = 'dismiss';
+      b.addEventListener('click', close);
+      card.append(b);
+      return { card, initialFocus: null };
+    });
+    host.querySelector<HTMLButtonElement>('#dismiss')!.click();
+    expect(closed).toBe(1);
+    expect(host.firstChild).toBeNull();
+  });
+
+  it('closes WITHOUT firing onClose when the build accepts via confirm()', () => {
+    let closed = 0;
+    const shell = createModalShell(host, 'x', () => closed++);
+    shell.render(({ doc, confirm }) => {
+      const card = doc.createElement('div');
+      const b = doc.createElement('button');
+      b.id = 'accept';
+      b.addEventListener('click', confirm);
+      card.append(b);
+      return { card, initialFocus: null };
+    });
+    host.querySelector<HTMLButtonElement>('#accept')!.click();
+    expect(closed).toBe(0);
+    expect(host.firstChild).toBeNull();
+  });
+});

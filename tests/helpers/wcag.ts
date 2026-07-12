@@ -6,11 +6,30 @@
 
 export type RGBA = [number, number, number, number];
 
-/** A computed colour string (`rgb(…)` / `rgba(…)`) as channels; a missing alpha reads as opaque. */
+const RGB = /^rgba?\(([^)]+)\)$/;
+const SRGB = /^color\(srgb ([^)]+)\)$/;
+const nums = (s: string): number[] => s.split(/[\s,/]+/).filter(Boolean).map(Number);
+
+/** A computed colour string as 0–255 channels with a 0–1 alpha; a missing alpha reads as opaque. Chromium
+ *  emits `rgb()`/`rgba()` (channels 0–255) for plain colours and `color(srgb r g b[ / a])` (channels 0–1)
+ *  for a resolved `color-mix(in srgb, …)`. Any OTHER serialization throws: this arithmetic is defined on
+ *  sRGB, and a parser that guesses channels off an unrecognized string returns a number that still passes.
+ *  https://www.w3.org/TR/css-color-4/#serializing-color-values */
 export function parseColor(computed: string): RGBA {
-  const n = computed.match(/[\d.]+/g);
-  if (!n) throw new Error(`unparseable computed colour: ${computed}`);
-  return [Number(n[0]), Number(n[1]), Number(n[2]), n[3] === undefined ? 1 : Number(n[3])];
+  const s = computed.trim();
+  const legacy = RGB.exec(s);
+  if (legacy) {
+    const n = nums(legacy[1]);
+    if (n.length < 3 || n.some(Number.isNaN)) throw new Error(`unparseable computed colour: ${computed}`);
+    return [n[0], n[1], n[2], n[3] ?? 1];
+  }
+  const srgb = SRGB.exec(s);
+  if (srgb) {
+    const n = nums(srgb[1]);
+    if (n.length < 3 || n.some(Number.isNaN)) throw new Error(`unparseable computed colour: ${computed}`);
+    return [n[0] * 255, n[1] * 255, n[2] * 255, n[3] ?? 1];
+  }
+  throw new Error(`computed colour is not an sRGB serialization this WCAG arithmetic is valid for: ${computed}`);
 }
 
 /** `fg` composited over `bg` at fg's alpha — what the compositor actually shows. */
@@ -35,4 +54,13 @@ export function relativeLuminance(c: RGBA): number {
 export function contrastRatio(a: RGBA, b: RGBA): number {
   const [hi, lo] = [relativeLuminance(a) + 0.05, relativeLuminance(b) + 0.05].sort((x, y) => y - x);
   return hi / lo;
+}
+
+/** A focus ring's painted colour: its outline colour at ITS OWN alpha, scaled by any group `opacity` above
+ *  it, composited over the surface behind the ring. The ring has TWO independent alpha sources and dropping
+ *  either grades a washed-out ring as a solid one — which is how a control loses its visible focus indicator
+ *  with every ring pin still green (WCAG 2.1 SC 1.4.11). */
+export function ringOver(outlineColor: string, groupAlpha: number, behind: RGBA): RGBA {
+  const [r, g, b, a] = parseColor(outlineColor);
+  return compositeOver([r, g, b, a * groupAlpha], behind);
 }

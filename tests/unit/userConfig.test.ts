@@ -33,6 +33,28 @@ describe('userConfigRoot', () => {
     delete process.env.CLAUDE_CONFIG_DIR;
     expect(userConfigRoot()).toBe(path.join(os.homedir(), '.claude'));
   });
+
+  // An exported-but-empty CLAUDE_CONFIG_DIR means UNSET, not "the empty path". A root of '' makes every
+  // destination a bare relative name, which the install then anchors at process.cwd() — seeding the user's
+  // checked-out repo instead of their config (CLAUDE.md: never allow an unrecoverable state).
+  it.each([
+    ['an empty environment variable', () => (process.env.CLAUDE_CONFIG_DIR = '')],
+    ['a whitespace-only environment variable', () => (process.env.CLAUDE_CONFIG_DIR = '   ')],
+  ])('treats %s as unset', (_label, set) => {
+    set();
+    expect(userConfigRoot()).toBe(path.join(os.homedir(), '.claude'));
+  });
+
+  it.each([undefined, '', '   '])('never yields a relative destination for a root of %o', (configDir) => {
+    delete process.env.CLAUDE_CONFIG_DIR;
+    for (const dir of [
+      userConfigLoopsDir(configDir),
+      userConfigSkillsDir(configDir),
+      userConfigCommandsDir(configDir),
+    ]) {
+      expect(path.isAbsolute(dir)).toBe(true);
+    }
+  });
 });
 
 describe('the three destination branches all derive from the one root', () => {

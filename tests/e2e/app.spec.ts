@@ -4,7 +4,7 @@ import { _electron as electron, expect, test, type ElectronApplication, type Pag
 import { mkdtempSync, mkdirSync, writeFileSync, appendFileSync, rmSync, existsSync, statSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, basename } from 'node:path';
-import { parseColor, compositeOver, contrastRatio, type RGBA } from '../helpers/wcag';
+import { parseColor, contrastRatio, ringOver } from '../helpers/wcag';
 import { WINDOW_TIMEOUT_MS } from '../helpers/e2eBudget';
 import { CH, SESSION_ID } from '../../src/shared/ipc';
 import { CLI_COMMAND_NAME } from '../../src/main/cliShim';
@@ -2400,10 +2400,13 @@ test('installing the bundled examples seeds the flow, the loop definitions, the 
   // The bundled commands landed where Claude Code discovers a slash command.
   expect(existsSync(join(configDir, 'commands', 'groom-ticket.md'))).toBe(true);
 
-  // A second click reports every file skipped, and never asks the user to decide a replacement.
+  // A second click reports every file SKIPPED — not silently re-written — and never asks the user to decide
+  // a replacement. The counts are what distinguish the two: a regression that overwrites byte-identical
+  // files still says "created 0" and still contains the word "skipped".
   await installExamplesBtn().click();
-  await expect(installExamplesStatus()).toContainText('skipped', { timeout: 15_000 });
-  await expect(installExamplesStatus()).toContainText('created 0');
+  await expect(installExamplesStatus()).toContainText(/created 0, overwrote 0, skipped [1-9]\d*\./, {
+    timeout: 15_000,
+  });
   await expect(installExamplesPrompt()).toBeHidden();
 
   // Back to the terminal; cd into a repo with no local flow → the installed global flow renders its steps.
@@ -2529,7 +2532,7 @@ test('the REAL consent checkbox paints a focus ring, and the dialog footer stays
 
   expect(painted.focusVisible).toBe(true);
   expect(painted.outlineWidth).toBe('2px');
-  const ring = compositeOver([...parseColor(painted.outlineColor).slice(0, 3), painted.alpha] as RGBA, parseColor(painted.behind));
+  const ring = ringOver(painted.outlineColor, painted.alpha, parseColor(painted.behind));
   expect(contrastRatio(ring, parseColor(painted.behind))).toBeGreaterThanOrEqual(3);
 
   // The footer actions must remain on screen with the manifest rendered — a card that outgrows a centred
@@ -2639,7 +2642,7 @@ test('the busy install button paints a focus ring that clears 3:1 on its own bac
   expect(painted.focusVisible).toBe(true);
   expect(painted.outlineWidth).toBe('2px');
   // The ring survives the busy look at full strength, so its painted contrast clears the SC 1.4.11 floor.
-  const ring = compositeOver([...parseColor(painted.outlineColor).slice(0, 3), painted.alpha] as RGBA, parseColor(painted.card));
+  const ring = ringOver(painted.outlineColor, painted.alpha, parseColor(painted.card));
   expect(contrastRatio(ring, parseColor(painted.card))).toBeGreaterThanOrEqual(3);
   // And the busy state is still conveyed: the label moves off the idle accent onto --dim.
   expect(painted.labelColor).toBe(painted.dim);

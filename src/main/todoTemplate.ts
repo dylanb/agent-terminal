@@ -4,6 +4,16 @@ import { readFileSync, readdirSync, realpathSync } from 'node:fs';
 import path from 'node:path';
 import type { TodoTemplateRef } from '../shared/ipc';
 
+/** §18.6: the templates subdir of a flow dir, and which of its files are templates. ONE definition, shared
+ *  by the reader that lists them and the installer that seeds them — two copies would let the installer
+ *  seed a directory, or a file extension, the reader does not look for (CLAUDE.md writer↔reader rule). */
+export function todoTemplatesDir(flowDir: string): string {
+  return path.join(flowDir, 'todo-templates');
+}
+export function isTodoTemplateFile(name: string): boolean {
+  return name.endsWith('.md');
+}
+
 const TOP_LEVEL_BULLET = /^([-*+]|\d+[.)])\s+/;
 const INDENTED = /^\s+\S/;
 const ANY_BULLET = /^[-*+]\s+|^\d+[.)]\s+/;
@@ -65,7 +75,7 @@ export function listTodoTemplates(templatesDir: string): TodoTemplateRef[] {
   const root = path.resolve(templatesDir);
   const refs: TodoTemplateRef[] = [];
   for (const file of files.sort()) {
-    if (!file.endsWith('.md')) continue;
+    if (!isTodoTemplateFile(file)) continue;
     // Skip an in-dir symlink whose real target escapes the root (§20.2).
     const real = resolveContained(root, file);
     if (real === null) continue;

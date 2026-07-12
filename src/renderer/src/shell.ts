@@ -196,6 +196,15 @@ export function createShell(root: HTMLElement, deps: ShellDeps = {}): Shell {
     // the drawer to Ctrl+Shift+K instead. Only the four app actions are claimed here; everything else
     // (terminal chords, plain keys) propagates to the focused descendant.
     const action = matchChord(e, getKeymap());
+    if (!action) return;
+
+    // An `aria-modal` dialog blocks the app beneath it, so no app-nav chord may run while one is open: a
+    // view switch display:none's a whole viewpane — including one a dialog is hosted in — tearing focus out
+    // of it and leaving the keyboard user behind the scrim with no route back (WCAG 2.4.3, 2.1.1). Same
+    // deference the Escape branch above gives an open dialog. Gated behind the chord match, so a terminal
+    // keystroke never pays for a document query.
+    if (doc.querySelector('[aria-modal="true"]')) return;
+
     const targetView: ViewId | null =
       action === 'viewTerminal' ? '1'
       : action === 'viewArtifacts' ? '2'

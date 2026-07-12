@@ -111,7 +111,11 @@ export type FlowLoad =
   | { ok: false; error: string };
 
 const FLOW_HOME_SUBDIR = '.agent-terminal';
-const FLOW_REL = path.join(FLOW_HOME_SUBDIR, 'flow.yaml');
+
+/** The definition's file name within a flow home — the reader's own, so the installer seeds the name that
+ *  is read back (CLAUDE.md writer↔reader rule; the `flowHomeDir` half of the same pair is below). */
+export const FLOW_DEF_FILE = 'flow.yaml';
+const FLOW_REL = path.join(FLOW_HOME_SUBDIR, FLOW_DEF_FILE);
 
 /** Where a root keeps its flow definition (§18.1/§23.4) — the resolver the install action writes through,
  *  so the seeded location and the location read back here cannot drift (CLAUDE.md writer↔reader rule). */

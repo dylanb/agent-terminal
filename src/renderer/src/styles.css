@@ -140,6 +140,10 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible { outline:2px so
 .install-report .ir-line { font-size:12px; color:var(--dim); margin-top:3px; overflow-wrap:anywhere; }
 .install-consent { border:1px solid var(--hair); border-radius:var(--r); margin:12px 0 0; padding:8px 0 12px; }
 .install-consent .ic-group-label { display:block; font-size:12px; font-weight:600; color:var(--dim); padding:0 12px 4px; }
+/* The scroll box clips ink on BOTH axes — `overflow-y:auto` computes `overflow-x` to `auto` (CSS Overflow
+   L3 §3) — and a focus ring is ink outside the control's border box, so the rows carry the side padding the
+   ring paints into rather than leaving a checkbox flush against the clip edge (WCAG 1.4.11). */
+.install-consent-rows { padding:0 12px; }
 .install-consent-opt { display:grid; grid-template-columns:24px 1fr; align-items:center; gap:4px 8px; padding:6px 0; }
 .install-consent-opt .ic-label { display:contents; cursor:pointer; }
 .install-consent-opt input[type="checkbox"] { width:24px; height:24px; margin:0; accent-color:var(--signal); }
@@ -503,13 +507,13 @@ button:hover { border-color:var(--dim); }
    any viewport (WCAG 2.1.1, 2.4.3, 1.4.10). `safe`: CSS Box Alignment L3 §4.4. */
 .flow-modal { overflow-y:auto; align-items:safe center; }
 .flow-modal .card { width:440px; max-width:92vw; max-height:calc(100vh - 48px); display:flex; flex-direction:column; background:var(--card); border:1px solid var(--hair); border-radius:10px; box-shadow:0 30px 80px rgba(8,16,28,.34); padding:22px; }
-/* The bound is the card's remaining column height, never a `vh` cap: a viewport-relative bound cannot know
-   what the column has left, and overprints the footer at zoom (WCAG 1.4.4, 1.4.10). */
-.flow-modal .card > .install-consent { display:flex; flex-direction:column; flex:1 1 auto; min-height:0; }
-/* The scroll box clips ink on BOTH axes — `overflow-y:auto` computes `overflow-x` to `auto` (CSS Overflow
-   L3 §3) — and a focus ring is ink outside the control's border box, so the rows carry the side padding the
-   ring paints into rather than leaving a checkbox flush against the clip edge (WCAG 1.4.11). */
-.flow-modal .card > .install-consent > .install-consent-rows { flex:1 1 auto; min-height:0; overflow-y:auto; padding:0 12px; }
+/* The shell's body slot (UI §5): a card marks the chain that should absorb the card's leftover column height
+   `data-modal-grow`, and the one box within it that should scroll `data-modal-scroll`. The bound is the
+   card's remaining column height, never a `vh` cap — a viewport-relative bound cannot know what the column
+   has left, and overprints the footer at zoom (WCAG 1.4.4, 1.4.10). The shell names a slot, never an
+   organism's classes (UI §2.3). */
+.flow-modal .card [data-modal-grow] { display:flex; flex-direction:column; flex:1 1 auto; min-height:0; }
+.flow-modal .card [data-modal-scroll] { flex:1 1 auto; min-height:0; overflow-y:auto; }
 .flow-modal .mfoot { flex:none; }
 .flow-modal h3 { font-family:"Fraunces",serif; font-weight:500; font-size:19px; margin:0 0 4px; }
 .flow-modal .ph { font-size:12.5px; color:var(--dim); margin:0 0 16px; }

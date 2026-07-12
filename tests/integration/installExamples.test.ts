@@ -21,7 +21,13 @@ import {
   type InstallDestination,
 } from '../../src/main/installExamples';
 import { loadFlowDefinitionLocalFirst } from '../../src/main/flow';
-import { listTodoTemplates, loadTodoTemplateFile, parseTodoTemplate } from '../../src/main/todoTemplate';
+import {
+  isTodoTemplateFile,
+  listTodoTemplates,
+  loadTodoTemplateFile,
+  parseTodoTemplate,
+  todoTemplatesDir,
+} from '../../src/main/todoTemplate';
 import {
   SESSION_ID,
   type InstallDestinationId,
@@ -159,6 +165,24 @@ describe('applyInstallExamples — a clean run seeds every destination and repor
   it('installs the flow destination as flow.yaml + .md templates only — never a bare recursive walk', () => {
     applyInstallExamples(dirs, []);
     expect(walk(destOf('flow').targetDir).sort()).toEqual([...FLOW_SET].sort());
+  });
+
+  // The writer↔reader pin: the installer must seed the templates where the READER looks for them, so both
+  // sides derive the location and the extension from `todoTemplate`'s own resolver. Asserting through
+  // `listTodoTemplates` is what makes it able to fail — a literal that drifts on either side lands the
+  // files somewhere the picker does not read, and the picker then comes back empty.
+  it('seeds the templates where the todo-template reader looks for them', () => {
+    applyInstallExamples(dirs, []);
+    const flowDir = destOf('flow').targetDir;
+
+    const seeded = listTodoTemplates(todoTemplatesDir(flowDir)).map((t) => t.ref).sort();
+    const bundled = readdirSync(todoTemplatesDir(BUNDLE_FLOW))
+      .filter(isTodoTemplateFile)
+      .map((f) => f.replace(/\.md$/, ''))
+      .sort();
+
+    expect(bundled.length).toBeGreaterThan(0);
+    expect(seeded).toEqual(bundled);
   });
 
   it('reports a file name occurring in two loop definitions as two distinct entries', () => {
