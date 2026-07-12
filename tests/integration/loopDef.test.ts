@@ -186,7 +186,7 @@ describe('LoopDef resolver (§24.2.3 T2 folded / §18.1)', () => {
 // labels.pr / labels.issue maps). Validated against the REAL plan-loop def copied into example/loops.
 describe('pickup_contract resolution (§26.5 / §26.9)', () => {
   // example/loops/<name>/<name>.yaml mirrors $CLAUDE_CONFIG_DIR/loops layout, so the example dir
-  // serves as the configDir for resolution (configLoopsDir joins `loops`).
+  // serves as the configDir for resolution (userConfigLoopsDir joins `loops`).
   const exampleConfigDir = resolve(__dirname, '..', '..', 'example');
   let repo: string;
   beforeEach(() => {

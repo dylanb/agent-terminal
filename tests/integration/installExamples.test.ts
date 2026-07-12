@@ -26,6 +26,7 @@ import {
   SESSION_ID,
   type InstallDestinationId,
   type InstallDestinationPreview,
+  type InstallExamplesPreview,
   type InstallExamplesResult,
 } from '../../src/shared/ipc';
 
@@ -99,9 +100,13 @@ const okOf = (res: InstallExamplesResult): Extract<InstallExamplesResult, { ok: 
   if (!res.ok) throw new Error(`expected ok, got error: ${res.error}`);
   return res;
 };
-const conflictsFor = (preview: InstallDestinationPreview[], id: InstallDestinationId): string[] => {
-  const d = preview.find((x) => x.destination === id);
-  return d && d.conflict ? d.files : [];
+const previewOk = (res: InstallExamplesPreview): InstallDestinationPreview[] => {
+  if (!res.ok) throw new Error(`expected a preview, got error: ${res.error}`);
+  return res.destinations;
+};
+const conflictsFor = (res: InstallExamplesPreview, id: InstallDestinationId): string[] => {
+  const d = previewOk(res).find((x) => x.destination === id);
+  return d && d.conflict ? [...d.files] : [];
 };
 
 describe('applyInstallExamples — a clean run seeds every destination and reports each file under it', () => {
@@ -184,7 +189,7 @@ describe('applyInstallExamples — a clean run seeds every destination and repor
 
 describe('previewInstallExamples — per-destination conflicts, and nothing is ever written', () => {
   it('reports no conflict in any destination when everything is clean', () => {
-    const preview = previewInstallExamples(dirs);
+    const preview = previewOk(previewInstallExamples(dirs));
     for (const id of ALL) expect(preview.find((d) => d.destination === id)?.conflict).toBe(false);
   });
 
@@ -195,7 +200,7 @@ describe('previewInstallExamples — per-destination conflicts, and nothing is e
 
   it('reports no conflict when every present target is byte-identical (never prompted twice)', () => {
     applyInstallExamples(dirs, []);
-    const preview = previewInstallExamples(dirs);
+    const preview = previewOk(previewInstallExamples(dirs));
     for (const id of ALL) expect(preview.find((d) => d.destination === id)?.conflict).toBe(false);
   });
 
@@ -294,7 +299,7 @@ describe('applyInstallExamples — one replace decision per destination, never o
     expect(filesFor(res.skipped, 'loops').sort()).toEqual([...LOOPS_SET].sort());
     expect(filesFor(res.skipped, 'skills').sort()).toEqual([...SKILLS_SET].sort());
     expect(filesFor(res.skipped, 'commands').sort()).toEqual([...COMMANDS_SET].sort());
-    for (const d of previewInstallExamples(dirs)) expect(d.conflict).toBe(false);
+    for (const d of previewOk(previewInstallExamples(dirs))) expect(d.conflict).toBe(false);
   });
 });
 
@@ -341,12 +346,15 @@ describe('applyInstallExamples — all-or-nothing across destinations when unwri
   });
 });
 
-describe('applyInstallExamples — a symlink nested inside a destination is refused mid-write (CWE-59)', () => {
+describe('applyInstallExamples — a symlink nested inside a destination is refused BEFORE the first write (CWE-59)', () => {
+  // §18.1 puts the link-following refusal in the pre-write check: "if any check fails, nothing is written
+  // anywhere". Confining only as each file is reached would satisfy the refusal but not the guarantee —
+  // the destinations planned ahead of the offending one would already be on disk.
   it.each([
     ["the file's own container", path.join('plan-loop', 'charter')],
     ['an intermediate ancestor', 'plan-loop'],
     ['an ancestor two levels below the destination', path.join('plan-loop', 'skills')],
-  ])('refuses when %s under the loops destination is a symlink', (_label, rel) => {
+  ])('refuses when %s under the loops destination is a symlink, and writes nothing anywhere', (_label, rel) => {
     const real = mkdtempSync(path.join(tmpdir(), 'link-target-'));
     try {
       const link = path.join(destOf('loops').targetDir, rel);
@@ -360,13 +368,11 @@ describe('applyInstallExamples — a symlink nested inside a destination is refu
       expect(res.error).toContain('plan-loop');
       expect(walk(real)).toEqual([]); // nothing written through the link
 
-      // Writing had already begun, and the result names exactly what landed before the refusal.
-      expect(filesFor(res.created, 'flow').sort()).toEqual([...FLOW_SET].sort());
-      const namedLoops = [...filesFor(res.created, 'loops'), ...filesFor(res.overwritten, 'loops')];
-      expect(namedLoops.length).toBeGreaterThan(0);
-      expect(namedLoops.filter((r) => r.startsWith(`${rel}${path.sep}`))).toEqual([]);
-      expect(filesFor(res.created, 'skills')).toEqual([]);
-      expect(filesFor(res.created, 'commands')).toEqual([]);
+      // Nothing landed anywhere: the refusal precedes the first write, so no destination is half-seeded.
+      expect(res.created).toEqual([]);
+      expect(res.overwritten).toEqual([]);
+      expect(existsSync(destOf('flow').targetDir)).toBe(false);
+      expect(existsSync(destOf('skills').targetDir)).toBe(false);
       expect(existsSync(targetOf('commands', commandRel))).toBe(false);
     } finally {
       rmSync(real, { recursive: true, force: true });
@@ -575,6 +581,159 @@ describe('installed bytes are renderable by the runtime read path (§18.1/§18.6
   });
 });
 
+describe('an absent bundle source is a refusal, never a silent success (§18.1)', () => {
+  // Enumeration is tree-driven, so a mispackaged build (a tree missing from extraResources) yields an
+  // EMPTY plan — indistinguishable, to a planner that swallows ENOENT, from a bundle that legitimately
+  // carries no files. Reported as ok, the user is told the examples were installed and nothing was.
+  const absent = path.join(tmpdir(), 'install-examples-no-such-bundle');
+
+  it.each(['loops', 'skills', 'commands', 'flow'] as const)(
+    'reports a failure when the %s bundle tree is missing from the build',
+    (id) => {
+      const res = applyInstallExamples(withBundle(id, absent), []);
+      expect(res.ok).toBe(false);
+      if (res.ok) return;
+      expect(res.error).toContain('bundle');
+    },
+  );
+
+  it('refuses before writing anything, so a mispackaged build seeds no destination at all', () => {
+    expect(applyInstallExamples(withBundle('loops', absent), []).ok).toBe(false);
+    for (const id of ALL) expect(existsSync(destOf(id).targetDir)).toBe(false);
+  });
+
+  it('distinguishes an absent tree from an empty one: an empty bundle installs nothing and says so', () => {
+    const empty = mkdtempSync(path.join(tmpdir(), 'bundle-empty-tree-'));
+    try {
+      const res = applyInstallExamples(withBundle('commands', empty), []);
+      expect(res.ok).toBe(true);
+      expect(filesFor(okOf(res).created, 'commands')).toEqual([]);
+    } finally {
+      rmSync(empty, { recursive: true, force: true });
+    }
+  });
+
+  it.skipIf(asRoot)('reports a failure when a bundle tree exists but cannot be read (EACCES is not empty)', () => {
+    // An unreadable bundle enumerates to nothing exactly as an absent one does. Swallowed, it installs
+    // no files and tells the user it succeeded.
+    const locked = mkdtempSync(path.join(tmpdir(), 'bundle-locked-'));
+    try {
+      writeFileSync(path.join(locked, commandRel), 'a real bundled command\n');
+      chmodSync(locked, 0o000);
+      const res = applyInstallExamples(withBundle('commands', locked), []);
+      expect(res.ok).toBe(false);
+    } finally {
+      chmodSync(locked, 0o700);
+      rmSync(locked, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('a refusal names the cause the user has to act on', () => {
+  it('says a symlinked destination container is a symlink, not that it "cannot be written"', () => {
+    // The two conditions call for opposite fixes — replace the link vs. fix the permissions — so one
+    // message for both leaves the user guessing (CLAUDE.md: never strand the user in a state they cannot
+    // resolve through the UI).
+    const outside = mkdtempSync(path.join(tmpdir(), 'outside-container-'));
+    try {
+      mkdirSync(path.dirname(destOf('skills').targetDir), { recursive: true });
+      symlinkSync(outside, destOf('skills').targetDir);
+      const res = applyInstallExamples(dirs, []);
+      expect(res.ok).toBe(false);
+      if (res.ok) return;
+      expect(res.error).toMatch(/symbolic link/);
+      expect(walk(outside)).toEqual([]);
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('installed bytes are the bundle bytes — a non-UTF-8 asset survives the copy', () => {
+  // The bundle is a tree the build ships, not a text corpus: a skill or command may legitimately carry a
+  // binary asset. Decoding it as UTF-8 on the way out replaces every invalid byte with U+FFFD, so the
+  // install corrupts the file AND never converges — the byte-compare that classifies it sees a permanent
+  // `differ` and re-writes the same corruption on every run.
+  const bytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0xff, 0xfe, 0x80, 0x90]);
+
+  it('writes a bundled binary asset byte-for-byte', () => {
+    const bundleX = mkdtempSync(path.join(tmpdir(), 'bundle-bin-'));
+    try {
+      writeFileSync(path.join(bundleX, 'logo.png'), bytes);
+      const res = okOf(applyInstallExamples(withBundle('commands', bundleX), []));
+      expect(filesFor(res.created, 'commands')).toEqual(['logo.png']);
+      expect(readFileSync(targetOf('commands', 'logo.png')).equals(bytes)).toBe(true);
+    } finally {
+      rmSync(bundleX, { recursive: true, force: true });
+    }
+  });
+
+  it('converges: once installed, the binary asset no longer reads as a conflict', () => {
+    // The convergence claim, not the reporting one: a corrupted write classifies as `differ` forever, so
+    // the user is asked to consent to replacing a file they never changed on every subsequent run.
+    const bundleX = mkdtempSync(path.join(tmpdir(), 'bundle-bin2-'));
+    try {
+      writeFileSync(path.join(bundleX, 'logo.png'), bytes);
+      const seamX = withBundle('commands', bundleX);
+      applyInstallExamples(seamX, []);
+      expect(conflictsFor(previewInstallExamples(seamX), 'commands')).toEqual([]);
+    } finally {
+      rmSync(bundleX, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('previewInstallExamples — the read path is confined exactly as the write path is (CWE-22/59)', () => {
+  // Preview opens every target file to classify it. Unconfined, a symlink standing inside a destination
+  // is READ THROUGH: the classification reports on a file outside the destination, so the consent step
+  // the user is shown is computed from bytes the installer would never have written.
+  it('refuses a destination whose target file is a symlink escaping it, rather than classifying through it', () => {
+    const outside = mkdtempSync(path.join(tmpdir(), 'outside-preview-'));
+    try {
+      const secret = path.join(outside, 'secret.md');
+      writeFileSync(secret, 'a file outside every destination\n');
+      mkdirSync(destOf('commands').targetDir, { recursive: true });
+      symlinkSync(secret, targetOf('commands', commandRel));
+
+      const res = handleInstallExamplesPreview({ sessionId: SESSION_ID }, () => dirs);
+      expect(res.ok).toBe(false);
+      expect(readFileSync(secret, 'utf8')).toBe('a file outside every destination\n');
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  it.skipIf(asRoot)('reports an unreadable target as a refusal instead of throwing out of the handler', () => {
+    mkdirSync(destOf('flow').targetDir, { recursive: true });
+    const tf = targetOf('flow', flowRel);
+    writeFileSync(tf, 'name: my-custom-flow\nsteps: []\n');
+    chmodSync(tf, 0o000); // present but unreadable → classify's read throws EACCES, not ENOENT
+    let res: ReturnType<typeof handleInstallExamplesPreview> | undefined;
+    try {
+      expect(() => {
+        res = handleInstallExamplesPreview({ sessionId: SESSION_ID }, () => dirs);
+      }).not.toThrow();
+    } finally {
+      chmodSync(tf, 0o600);
+    }
+    expect(res?.ok).toBe(false);
+  });
+});
+
+describe('applyInstallExamples — an unresolvable destination jail is a refusal, not a mid-write throw', () => {
+  it('refuses when the config root itself is a dangling symlink', () => {
+    // isRealContainer passes (lstat of a dangling link is not a directory... but ENOENT-on-stat reads as
+    // "absent, mkdir will create it"), and the writability walk-up climbs past it to a real ancestor — so
+    // this reaches resolveNewDirJail, which cannot reduce the parent chain and returns null.
+    const cfgLink = path.join(configRoot, 'dangling');
+    symlinkSync(path.join(configRoot, 'no-such-target'), cfgLink);
+    const linked = exampleInstallDirs({ packaged: false, appPath: process.cwd() }, home, cfgLink);
+    const res = applyInstallExamples(linked, []);
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error).toMatch(/symbolic link/);
+  });
+});
+
 describe('handleInstallExamplesPreview / handleInstallExamplesApply — contract guards (§6)', () => {
   const thunk = (): InstallDestination[] => dirs;
 
@@ -607,7 +766,7 @@ describe('handleInstallExamplesPreview / handleInstallExamplesApply — contract
     writeFileSync(targetOf('commands', commandRel), 'mine\n');
     const live = handleInstallExamplesPreview({ sessionId: SESSION_ID }, thunk);
     expect(live.ok).toBe(true);
-    if (live.ok) expect(conflictsFor(live.destinations, 'commands')).toEqual([commandRel]);
+    expect(conflictsFor(live, 'commands')).toEqual([commandRel]);
     // A refused request is distinguishable from a clean preview: it carries an error, not { destinations: [] }.
     expect(handleInstallExamplesPreview({ sessionId: 'nope' }, thunk).ok).toBe(false);
   });

@@ -13,8 +13,8 @@ pnpm install        # runs the postinstall electron-rebuild for node-pty automat
 pnpm run rebuild    # electron-rebuild -f -w node-pty — REQUIRED after install or Electron bump
 pnpm run dev        # electron-vite dev (renderer HMR)
 pnpm run build      # type-check + electron-vite build
-pnpm test           # vitest, both projects: `node` (tests/unit + tests/integration) and `browser` (tests/browser)
-pnpm exec playwright install chromium   # one-time: the `browser` project needs the binary; `pnpm test` fails without it
+pnpm test           # vitest, both projects: `node` (tests/unit + tests/integration) and `browser` (tests/browser).
+                    # The `pretest` hook provisions the Chromium the `browser` project needs (a cached no-op after the first run).
 ./scripts/e2e-podman.sh        # playwright _electron e2e in Podman/Xvfb — the canonical local e2e run (real PTY/display)
 ./scripts/e2e-podman.sh "<-g>" # filter to matching tests
 pnpm run test:e2e   # raw playwright e2e — needs a focusable display; on macOS a bare subprocess launch can't focus, so prefer the Podman harness above

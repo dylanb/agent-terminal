@@ -189,6 +189,20 @@ for (const theme of ['light', 'dark'] as const) {
       });
     });
 
+    // The consent checkboxes are the only decision controls in the install dialog, and one of them takes
+    // initial focus. The global ring rule matches `button`/`a`/`[tabindex]` — an `input` matches none of
+    // them, so without a rule of its own the control falls back to the UA ring.
+    describe('install consent checkbox focus ring contrast (WCAG 2.1 SC 1.4.11)', () => {
+      it("a consent checkbox's focus ring clears 3:1 on the surface behind it", async () => {
+        const row = mount(
+          `<div class="install-consent-opt"><label class="ic-label"><input type="checkbox"><span class="ic-name">Loop definitions — 2 files</span></label><span class="ic-files">a.yaml, b.yaml</span></div>`,
+        );
+        const box = row.querySelector('input') as HTMLElement;
+        await tabToProbe(box);
+        expect(contrast(focusRing(box), paintedBgBehindRing(box))).toBeGreaterThanOrEqual(3);
+      });
+    });
+
     // §20.2 code viewer: the editor paints onto --bg (the board), and a changed line adds --changed-wash
     // over it. Code text, the gutter's line numbers, and every syntax class are small text, so all clear
     // 4.5:1 on BOTH surfaces — themed via tokens, since the library default is tuned for light only.

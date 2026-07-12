@@ -782,7 +782,7 @@ export interface InstallExamplesPreviewMsg {
  *  (CLAUDE.md discriminated-union corollary). */
 export type InstallDestinationPreview =
   | { destination: InstallDestinationId; conflict: false }
-  | { destination: InstallDestinationId; conflict: true; files: string[] };
+  | { destination: InstallDestinationId; conflict: true; files: DestRelativePath[] };
 
 /** examples:preview result: `ok` with one entry per destination the action would write, or `!ok` with a
  *  human-readable `error` when the request itself was refused. The error arm is distinct from a clean
@@ -802,16 +802,22 @@ export interface InstallExamplesApplyMsg {
   replace: InstallDestinationId[];
 }
 
+/** A file's path relative to the root of the destination it installs under. The brand is the point: it
+ *  cannot be satisfied by an arbitrary `string`, so widening one of these to an absolute or
+ *  bundle-relative path fails to compile rather than quietly falsifying a sentence of prose. */
+export type DestRelativePath = string & { readonly __destRelative: unique symbol };
+
 /** Files reported under the destination they were written to, so two destinations sharing a file name
- *  yield two distinct, attributable entries. Paths are relative to that destination's root. */
+ *  yield two distinct, attributable entries. */
 export interface InstallDestinationFiles {
   destination: InstallDestinationId;
-  files: string[];
+  files: DestRelativePath[];
 }
 
-/** The files an apply touched, grouped by the destination each was written to (§18.1). `skipped` means
- *  "left unchanged per the replace decision"; a write the safe-path primitive refuses (symlinked
- *  container, CWE-59) is an `error`, never a silent skip. */
+/** The files an apply touched, grouped by the destination each was written to (§18.1). `skipped` is
+ *  "left byte-for-byte unchanged" — either the target already matched the bundle, or it differed and the
+ *  user did not consent to replace in that destination. A write the safe-path primitive refuses
+ *  (symlinked container, CWE-59) is an `error`, never a silent skip. */
 export interface InstallExamplesWritten {
   created: InstallDestinationFiles[];
   overwritten: InstallDestinationFiles[];

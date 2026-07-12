@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createInstallExamples, type InstallExamplesDeps } from '../../src/renderer/src/installExamples';
 import { assertRendersFromHostDocument } from './relocatable';
 import type {
+  DestRelativePath,
   InstallDestinationId,
   InstallDestinationPreview,
   InstallExamplesPreview,
@@ -19,6 +20,10 @@ describe('install examples view organism (§18.1/§23.4)', () => {
     document.body.appendChild(host);
   });
 
+  // The contract types a destination-relative path (DestRelativePath), so a fixture says so once here
+  // rather than casting at every literal.
+  const rels = (...p: string[]): DestRelativePath[] => p as DestRelativePath[];
+
   const cleanDestinations: InstallDestinationPreview[] = [
     { destination: 'flow', conflict: false },
     { destination: 'loops', conflict: false },
@@ -29,13 +34,13 @@ describe('install examples view organism (§18.1/§23.4)', () => {
   const conflicting = (...ids: InstallDestinationId[]): InstallExamplesPreview => ({
     ok: true,
     destinations: cleanDestinations.map((d) =>
-      ids.includes(d.destination) ? { destination: d.destination, conflict: true, files: [`${d.destination}-file.md`] } : d,
+      ids.includes(d.destination) ? { destination: d.destination, conflict: true, files: rels(`${d.destination}-file.md`) } : d,
     ),
   });
 
   const okResult = (over: Partial<Extract<InstallExamplesResult, { ok: true }>> = {}): InstallExamplesResult => ({
     ok: true,
-    created: [{ destination: 'flow', files: ['flow.yaml'] }],
+    created: [{ destination: 'flow', files: rels('flow.yaml') }],
     overwritten: [],
     skipped: [],
     ...over,
@@ -139,7 +144,7 @@ describe('install examples view organism (§18.1/§23.4)', () => {
   });
 
   it('forwards an empty list when the user confirms with nothing checked, so absent files still install', async () => {
-    const apply = vi.fn(async () => okResult({ created: [{ destination: 'loops', files: ['plan-loop/plan-loop.yaml'] }], skipped: [{ destination: 'skills', files: ['a/SKILL.md'] }] }));
+    const apply = vi.fn(async () => okResult({ created: [{ destination: 'loops', files: rels('plan-loop/plan-loop.yaml') }], skipped: [{ destination: 'skills', files: rels('a/SKILL.md') }] }));
     await openConsent(['skills'], { apply });
     confirmBtn().click();
     await vi.waitFor(() => expect(apply).toHaveBeenCalledWith([]));
@@ -211,9 +216,9 @@ describe('install examples view organism (§18.1/§23.4)', () => {
   it('groups the reported files under the destination each was written to', async () => {
     const apply = vi.fn(async () =>
       okResult({
-        created: [{ destination: 'commands', files: ['groom-ticket.md'] }],
-        overwritten: [{ destination: 'skills', files: ['review-intent/SKILL.md'] }],
-        skipped: [{ destination: 'flow', files: ['flow.yaml'] }],
+        created: [{ destination: 'commands', files: rels('groom-ticket.md') }],
+        overwritten: [{ destination: 'skills', files: rels('review-intent/SKILL.md') }],
+        skipped: [{ destination: 'flow', files: rels('flow.yaml') }],
       }),
     );
     await openConsent(['skills'], { apply });
@@ -230,7 +235,7 @@ describe('install examples view organism (§18.1/§23.4)', () => {
   });
 
   it('summarizes the outcome in the live region rather than reading out every file name (WCAG 4.1.3)', async () => {
-    const many = Array.from({ length: 20 }, (_, i) => `f${i}.md`);
+    const many = rels(...Array.from({ length: 20 }, (_, i) => `f${i}.md`));
     const apply = vi.fn(async () => okResult({ created: [{ destination: 'loops', files: many }] }));
     createInstallExamples(host, deps({ apply }));
     button().click();
@@ -245,9 +250,9 @@ describe('install examples view organism (§18.1/§23.4)', () => {
       async (): Promise<InstallExamplesResult> => ({
         ok: false,
         error: 'Could not install groom-ticket.md',
-        created: [{ destination: 'loops', files: ['plan-loop/plan-loop.yaml'] }],
+        created: [{ destination: 'loops', files: rels('plan-loop/plan-loop.yaml') }],
         overwritten: [],
-        skipped: [{ destination: 'skills', files: ['review-intent/SKILL.md'] }],
+        skipped: [{ destination: 'skills', files: rels('review-intent/SKILL.md') }],
       }),
     );
     createInstallExamples(host, deps({ apply }));
@@ -259,16 +264,86 @@ describe('install examples view organism (§18.1/§23.4)', () => {
   });
 
   it('clears a previous report when a new run starts', async () => {
-    const preview = vi.fn(async () => clean);
+    // Hold the second preview pending and assert the report is GONE while it runs — the previous
+    // assertion (preview called twice) passed with the clearing deleted, because renderReport replaces
+    // the list's children on the way back in either way.
+    const gate = deferred<InstallExamplesPreview>();
+    let call = 0;
+    const preview = vi.fn(async (): Promise<InstallExamplesPreview> => {
+      call += 1;
+      return call === 1 ? clean : gate.promise;
+    });
     createInstallExamples(host, deps({ preview }));
     button().click();
     await vi.waitFor(() => expect(reportGroup('flow')).not.toBeNull());
+    expect(reportList().hidden).toBe(false);
+
     button().click();
     await vi.waitFor(() => expect(preview).toHaveBeenCalledTimes(2));
+    expect(reportGroup('flow')).toBeNull();
+    expect(reportList().hidden).toBe(true);
+    gate.resolve(clean);
+  });
+
+  it('renders the report groups in the contract order, whatever order the result arrives in', async () => {
+    // renderReport iterates INSTALL_DESTINATION_IDS so the display order is single-sourced from the
+    // contract. Hand it the groups reversed; the DOM must still come back in contract order.
+    const apply = vi.fn(
+      async (): Promise<InstallExamplesResult> => ({
+        ok: true,
+        created: [
+          { destination: 'commands', files: rels('groom-ticket.md') },
+          { destination: 'flow', files: rels('flow.yaml') },
+        ],
+        overwritten: [{ destination: 'skills', files: rels('review-intent/SKILL.md') }],
+        skipped: [{ destination: 'loops', files: rels('plan-loop/plan-loop.yaml') }],
+      }),
+    );
+    createInstallExamples(host, deps({ apply }));
+    button().click();
+    await vi.waitFor(() => expect(reportGroup('flow')).not.toBeNull());
+    const order = [...reportList().children].map((li) => li.getAttribute('data-destination'));
+    expect(order).toEqual(['flow', 'loops', 'skills', 'commands']);
+  });
+
+  it('keeps the conflicting file list out of a consent checkbox’s accessible name (accname 1.2, WCAG 4.1.2)', async () => {
+    // The files sit inside the implicit <label>, so accname folds every path into the control's NAME:
+    // a screen reader announces dozens of paths before the user learns which destination this is. The
+    // manifest is a DESCRIPTION, not a name.
+    await openConsent(['loops']);
+    const box = consentBox('loops');
+    const label = box.closest('label') as HTMLElement;
+    expect(label.textContent).toContain('Loop definitions');
+    expect(label.textContent).not.toContain('loops-file.md');
+
+    const describedBy = box.getAttribute('aria-describedby');
+    expect(describedBy).toBeTruthy();
+    const desc = host.ownerDocument.getElementById(describedBy as string);
+    expect(desc?.textContent).toContain('loops-file.md');
+  });
+
+  it('announces what was written even when the install fails partway (WCAG 4.1.3)', async () => {
+    // The failure arm carries created/overwritten/skipped exactly as the success arm does, and this is
+    // the branch where the user most needs them: the alert region must not drop to the bare error.
+    const apply = vi.fn(
+      async (): Promise<InstallExamplesResult> => ({
+        ok: false,
+        error: 'Could not install groom-ticket.md',
+        created: [{ destination: 'loops', files: rels('plan-loop/plan-loop.yaml') }],
+        overwritten: [],
+        skipped: [{ destination: 'skills', files: rels('review-intent/SKILL.md') }],
+      }),
+    );
+    createInstallExamples(host, deps({ apply }));
+    button().click();
+    await vi.waitFor(() => expect(alert()?.textContent).toContain('Could not install groom-ticket.md'));
+    const announced = alert()?.textContent ?? '';
+    expect(announced).toMatch(/created 1/i);
+    expect(announced).toMatch(/skipped 1/i);
   });
 
   it('returns focus to the install button after confirming the consent step (WCAG 2.4.3)', async () => {
-    const apply = vi.fn(async () => okResult({ created: [], overwritten: [{ destination: 'flow', files: ['flow.yaml'] }] }));
+    const apply = vi.fn(async () => okResult({ created: [], overwritten: [{ destination: 'flow', files: rels('flow.yaml') }] }));
     await openConsent(['flow'], { apply });
     confirmBtn().click();
     await vi.waitFor(() => expect(status().className).toMatch(/\bok\b/));

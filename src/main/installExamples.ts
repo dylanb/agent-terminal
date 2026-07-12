@@ -1,15 +1,17 @@
 // §18.1/§23.4/§26.5; writes route through atomicWriteFileSync (CWE-59).
 
-import { accessSync, constants, readFileSync, readdirSync } from 'node:fs';
+import { accessSync, constants, readFileSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { atomicWriteFileSync, isRealContainer } from './atomicFile';
 import { confinedRealPath, resolveNewDirJail } from './confinedPath';
 import type { BundleLocation } from './bundleLocation';
 import { resolveExampleCommandsDir, resolveExampleFlowDir, resolveExampleLoopsDir } from './exampleAssets';
 import { listBundledSkills } from './exampleSkills';
+import { flowHomeDir } from './flow';
 import { userConfigCommandsDir, userConfigLoopsDir, userConfigSkillsDir } from './userConfig';
 import {
   INSTALL_DESTINATION_IDS,
+  type DestRelativePath,
   type InstallDestinationFiles,
   type InstallDestinationId,
   type InstallDestinationPreview,
@@ -20,56 +22,76 @@ import { isValidInstallExamplesPreview, isValidInstallExamplesApply } from './ip
 
 const TEMPLATES_SUBDIR = 'todo-templates';
 
-/** A file the action installs: its path relative to the destination root, and the bundle file it copies
- *  from. */
+/** A file the action installs: where it lands under its destination, and the bundle file it copies from. */
 export interface PlannedFile {
-  rel: string;
+  rel: DestRelativePath;
   src: string;
 }
 
+/** A destination's plan, or `null` when its bundle source is ABSENT — a tree missing from the running
+ *  build. Enumeration is tree-driven (§18.1), so an absent tree would otherwise plan zero files and
+ *  install nothing while reporting success. An absent tree is not an empty one. */
+type Plan = PlannedFile[] | null;
+
+function absent(dir: string): boolean {
+  try {
+    statSync(dir);
+    return false;
+  } catch (e) {
+    return (e as NodeJS.ErrnoException).code === 'ENOENT';
+  }
+}
+
+/** Absence is the ONLY enumeration failure that reads as "no files here" (an optional subtree, e.g. a loop
+ *  with no `skills/`). Anything else — EACCES on an unreadable install, ENOTDIR on a corrupt one — throws,
+ *  because a swallowed failure here is indistinguishable from an empty tree and installs nothing while
+ *  reporting success. */
 function entriesOf(dir: string): { name: string; isDirectory: boolean; isFile: boolean }[] {
   try {
     return readdirSync(dir, { withFileTypes: true })
       .sort((a, b) => a.name.localeCompare(b.name))
       .map((e) => ({ name: e.name, isDirectory: e.isDirectory(), isFile: e.isFile() }));
-  } catch {
-    return [];
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return [];
+    throw e;
   }
 }
 
 /** CWE-59: a symlink planted in the bundle is skipped, never read through — the bundle is an installed
  *  artifact, not necessarily one this build wrote. */
-function walkFiles(dir: string, base: string = dir): string[] {
-  const out: string[] = [];
+function walkFiles(dir: string, base: string = dir): DestRelativePath[] {
+  const out: DestRelativePath[] = [];
   for (const entry of entriesOf(dir)) {
     const abs = path.join(dir, entry.name);
     if (entry.isDirectory) out.push(...walkFiles(abs, base));
-    else if (entry.isFile) out.push(path.relative(base, abs));
+    else if (entry.isFile) out.push(path.relative(base, abs) as DestRelativePath);
   }
   return out;
 }
 
-function filesUnder(bundleDir: string): PlannedFile[] {
+function filesUnder(bundleDir: string): Plan {
+  if (absent(bundleDir)) return null;
   return walkFiles(bundleDir).map((rel) => ({ rel, src: path.join(bundleDir, rel) }));
 }
 
 /** §18.6: only `.md` files resolve as todo templates. */
-function flowFiles(bundleDir: string): PlannedFile[] {
-  const rels = ['flow.yaml'];
+function flowFiles(bundleDir: string): Plan {
+  if (absent(bundleDir)) return null;
+  const rels: DestRelativePath[] = ['flow.yaml' as DestRelativePath];
   for (const entry of entriesOf(path.join(bundleDir, TEMPLATES_SUBDIR))) {
     if (!entry.isFile || !entry.name.endsWith('.md')) continue;
-    rels.push(path.join(TEMPLATES_SUBDIR, entry.name));
+    rels.push(path.join(TEMPLATES_SUBDIR, entry.name) as DestRelativePath);
   }
   return rels.map((rel) => ({ rel, src: path.join(bundleDir, rel) }));
 }
 
 /** Claude Code discovers a skill only as `<skills root>/<skill name>/`, while §26.5 requires each skill
  *  under its own loop directory. Colliding names across loops are refused at build time (exampleSkills). */
-function skillFiles(loopsBundleDir: string): PlannedFile[] {
+function skillFiles(loopsBundleDir: string): Plan {
+  if (absent(loopsBundleDir)) return null;
   const out: PlannedFile[] = [];
   for (const skill of listBundledSkills(loopsBundleDir)) {
-    const skillsRoot = path.dirname(skill.dir);
-    for (const rel of walkFiles(skill.dir, skillsRoot)) out.push({ rel, src: path.join(skillsRoot, rel) });
+    for (const rel of walkFiles(skill.dir, skill.root)) out.push({ rel, src: path.join(skill.root, rel) });
   }
   return out;
 }
@@ -81,25 +103,21 @@ export interface InstallDestination {
   id: InstallDestinationId;
   bundleDir: string;
   targetDir: string;
-  plan: (bundleDir: string) => PlannedFile[];
+  plan: (bundleDir: string) => Plan;
 }
 
 interface DestinationSpec {
   bundle: (loc: BundleLocation) => string;
   target: (flowGlobalDir: string, configDir?: string) => string;
-  plan: (bundleDir: string) => PlannedFile[];
+  plan: (bundleDir: string) => Plan;
 }
 
-/** The one registry of destination identity: bundle source, install target, and file-planning strategy,
- *  keyed by the contract's own ids so `Record<InstallDestinationId, …>` fails to compile if an id is
- *  missing or unknown — the registry and INSTALL_DESTINATION_IDS cannot drift in membership. Order is not
- *  stored here: `exampleInstallDirs` iterates INSTALL_DESTINATION_IDS, the single source of the display
- *  order (§18.1). The loops/skills/commands targets are the NAMED user-config branches (§24.2.3; CLAUDE.md
- *  precedence-aware corollary), never `resolveLoopDir`'s precedence-aware answer: a global install must not
- *  land inside whichever repo the app happens to be pointed at. The skills source is the loops bundle —
- *  its files fan in from every loop's `skills/` (§26.5). */
+/** The loops/skills/commands targets are the NAMED user-config branches (§24.2.3), never `resolveLoopDir`'s
+ *  precedence-aware answer: an install wired to that would seed whichever repo the app is pointed at and
+ *  leave every other one unseeded. The skills source is the loops bundle — its files fan in from every
+ *  loop's `skills/` (§26.5). */
 const DESTINATIONS: Record<InstallDestinationId, DestinationSpec> = {
-  flow: { bundle: resolveExampleFlowDir, target: (flowGlobalDir) => path.join(flowGlobalDir, '.agent-terminal'), plan: flowFiles },
+  flow: { bundle: resolveExampleFlowDir, target: (flowGlobalDir) => flowHomeDir(flowGlobalDir), plan: flowFiles },
   loops: { bundle: resolveExampleLoopsDir, target: (_flow, cfg) => userConfigLoopsDir(cfg), plan: filesUnder },
   skills: { bundle: resolveExampleLoopsDir, target: (_flow, cfg) => userConfigSkillsDir(cfg), plan: skillFiles },
   commands: { bundle: resolveExampleCommandsDir, target: (_flow, cfg) => userConfigCommandsDir(cfg), plan: filesUnder },
@@ -129,6 +147,44 @@ function classify(bundleFile: string, targetFile: string): Classification {
   return readFileSync(bundleFile).equals(target) ? 'identical' : 'differ';
 }
 
+/** A destination resolved for work: its plan, and the symlink-free real path each file resolves to inside
+ *  the destination's jail. Preview and apply both read targets, so BOTH route through this — a read that
+ *  followed a symlink out would classify (and show the user a consent step computed from) bytes outside
+ *  the destination the installer would never have written (CWE-22/59/367). */
+interface ResolvedFile {
+  rel: DestRelativePath;
+  src: string;
+  real: string;
+}
+interface ResolvedDestination {
+  id: InstallDestinationId;
+  targetDir: string;
+  files: ResolvedFile[];
+}
+type Resolution = { ok: true; destinations: ResolvedDestination[] } | { ok: false; error: string };
+
+const linkRefusal = (rel: string, dir: string): string =>
+  `Could not install ${rel}: a symbolic link stands on the path to it under ${dir}`;
+
+function resolveAll(destinations: InstallDestination[]): Resolution {
+  const out: ResolvedDestination[] = [];
+  for (const dest of destinations) {
+    const files = dest.plan(dest.bundleDir);
+    if (files === null) {
+      return { ok: false, error: `Could not install: the ${dest.id} examples are missing from this build's bundle` };
+    }
+    const jail = resolveNewDirJail(dest.targetDir);
+    const resolved: ResolvedFile[] = [];
+    for (const file of files) {
+      const real = jail === null ? null : confinedRealPath(jail, path.join(dest.targetDir, file.rel));
+      if (real === null) return { ok: false, error: linkRefusal(file.rel, dest.targetDir) };
+      resolved.push({ rel: file.rel, src: file.src, real });
+    }
+    out.push({ id: dest.id, targetDir: dest.targetDir, files: resolved });
+  }
+  return { ok: true, destinations: out };
+}
+
 /** CWE-59: a symlinked container would land the write outside the destination, and the loops container
  *  confers §26.6 `exec` authority on what lands there (CWE-829). */
 function isWritableContainer(dir: string): boolean {
@@ -151,9 +207,9 @@ function errMsg(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
 
-type Groups = Map<InstallDestinationId, string[]>;
+type Groups = Map<InstallDestinationId, DestRelativePath[]>;
 
-function record(groups: Groups, id: InstallDestinationId, rel: string): void {
+function record(groups: Groups, id: InstallDestinationId, rel: DestRelativePath): void {
   const list = groups.get(id);
   if (list) list.push(rel);
   else groups.set(id, [rel]);
@@ -162,30 +218,49 @@ function record(groups: Groups, id: InstallDestinationId, rel: string): void {
 function report(groups: Groups): InstallDestinationFiles[] {
   return INSTALL_DESTINATION_IDS.filter((id) => (groups.get(id)?.length ?? 0) > 0).map((id) => ({
     destination: id,
-    files: groups.get(id) as string[],
+    files: groups.get(id) as DestRelativePath[],
   }));
 }
 
-export function previewInstallExamples(destinations: InstallDestination[]): InstallDestinationPreview[] {
-  return destinations.map((dest) => {
-    const files = dest
-      .plan(dest.bundleDir)
-      .filter((f) => classify(f.src, path.join(dest.targetDir, f.rel)) === 'differ')
-      .map((f) => f.rel);
-    return files.length === 0
-      ? ({ destination: dest.id, conflict: false } as const)
-      : ({ destination: dest.id, conflict: true, files } as const);
-  });
+export function previewInstallExamples(destinations: InstallDestination[]): InstallExamplesPreview {
+  let resolution: Resolution;
+  try {
+    resolution = resolveAll(destinations);
+  } catch (e) {
+    return { ok: false, error: `Could not check the install targets: ${errMsg(e)}` };
+  }
+  if (!resolution.ok) return resolution;
+
+  const out: InstallDestinationPreview[] = [];
+  for (const dest of resolution.destinations) {
+    let files: DestRelativePath[];
+    try {
+      files = dest.files.filter((f) => classify(f.src, f.real) === 'differ').map((f) => f.rel);
+    } catch (e) {
+      // classify rethrows a non-ENOENT read (an unreadable target). The contract carries a refusal arm for
+      // exactly this: an empty destination list would otherwise read as "nothing conflicts" and drive an
+      // apply the user never consented to.
+      return { ok: false, error: `Could not check the install targets: ${errMsg(e)}` };
+    }
+    out.push(files.length === 0 ? { destination: dest.id, conflict: false } : { destination: dest.id, conflict: true, files });
+  }
+  return { ok: true, destinations: out };
 }
 
 export function applyInstallExamples(destinations: InstallDestination[], replace: InstallDestinationId[]): InstallExamplesResult {
-  const plan = destinations
-    .map((d) => ({ id: d.id, targetDir: d.targetDir, files: d.plan(d.bundleDir) }))
-    .filter((d) => d.files.length > 0);
+  const empty = { created: [], overwritten: [], skipped: [] };
+  let resolution: Resolution;
+  try {
+    resolution = resolveAll(destinations);
+  } catch (e) {
+    return { ok: false, error: `Could not install: ${errMsg(e)}`, ...empty };
+  }
+  if (!resolution.ok) return { ok: false, error: resolution.error, ...empty };
 
+  const plan = resolution.destinations.filter((d) => d.files.length > 0);
   for (const dest of plan) {
     if (!isWritableContainer(dest.targetDir)) {
-      return { ok: false, error: `Could not install: ${dest.targetDir} cannot be written`, created: [], overwritten: [], skipped: [] };
+      return { ok: false, error: `Could not install: ${dest.targetDir} cannot be written`, ...empty };
     }
   }
 
@@ -202,23 +277,16 @@ export function applyInstallExamples(destinations: InstallDestination[], replace
   });
 
   for (const dest of plan) {
-    // One jail per destination; confinedRealPath refuses a file whose path escapes it and returns the
-    // symlink-free real path for the rest, so classify reads and the write lands on that path (CWE-367).
-    const jail = resolveNewDirJail(dest.targetDir);
     for (const file of dest.files) {
       try {
-        const real = jail === null ? null : confinedRealPath(jail, path.join(dest.targetDir, file.rel));
-        if (real === null) {
-          return fail(`Could not install ${file.rel}: a symbolic link stands on the path to it under ${dest.targetDir}`);
-        }
-        const cls = classify(file.src, real);
+        const cls = classify(file.src, file.real);
         if (cls === 'identical' || (cls === 'differ' && !consented.has(dest.id))) {
           record(skipped, dest.id, file.rel);
           continue;
         }
-        if (!atomicWriteFileSync(real, readFileSync(file.src, 'utf8'))) {
-          return fail(`Could not install ${file.rel}: a symbolic link stands on the path to it under ${dest.targetDir}`);
-        }
+        // Bytes, not text: the bundle is a tree the build ships, and decoding a non-UTF-8 asset would both
+        // corrupt it and leave it permanently `differ` against the byte-compare that classifies it.
+        if (!atomicWriteFileSync(file.real, readFileSync(file.src))) return fail(linkRefusal(file.rel, dest.targetDir));
         record(cls === 'create' ? created : overwritten, dest.id, file.rel);
       } catch (e) {
         return fail(`Could not install ${file.rel}: ${errMsg(e)}`);
@@ -230,7 +298,7 @@ export function applyInstallExamples(destinations: InstallDestination[], replace
 
 export function handleInstallExamplesPreview(m: unknown, dirs: () => InstallDestination[]): InstallExamplesPreview {
   if (!isValidInstallExamplesPreview(m)) return { ok: false, error: 'invalid preview request' };
-  return { ok: true, destinations: previewInstallExamples(dirs()) };
+  return previewInstallExamples(dirs());
 }
 
 export function handleInstallExamplesApply(m: unknown, dirs: () => InstallDestination[]): InstallExamplesResult {

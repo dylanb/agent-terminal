@@ -6,6 +6,7 @@ import {
   resolveExampleLoopsDir,
   resolveExampleCommandsDir,
 } from '../../src/main/exampleAssets';
+import type { BundleLocation } from '../../src/main/bundleLocation';
 
 // The bundled example assets must resolve in BOTH a dev run and a packaged build (§18.1/§26.5) via an
 // injected location, never a repo-relative path — the same dev-vs-packaged split appIcon uses.
@@ -93,21 +94,22 @@ describe('the bundled command tree is a sibling of the flow tree, never nested i
 describe('extraResources packaged-path coupling', () => {
   const root = path.resolve(__dirname, '..', '..');
   const builderYml = readFileSync(path.join(root, 'electron-builder.yml'), 'utf8');
+  const RESOURCES = '/app/resources';
+  const packaged: BundleLocation = { packaged: true, resourcesPath: RESOURCES };
 
-  // Coupling: renaming either an electron-builder `to:` target or the matching packaged resolver segment
-  // breaks the runtime bundle, and no type catches it — these tests are the guard.
-  it('ships example/flow under the path the packaged resolver reads back', () => {
-    expect(builderYml).toMatch(/from:\s*example\/flow\b/);
-    expect(builderYml).toMatch(/to:\s*example\/flow\b/);
-  });
-
-  it('ships example/loops under the path the packaged resolver reads back', () => {
-    expect(builderYml).toMatch(/from:\s*example\/loops\b/);
-    expect(builderYml).toMatch(/to:\s*example\/loops\b/);
-  });
-
-  it('ships example/commands under the path the packaged resolver reads back', () => {
-    expect(builderYml).toMatch(/from:\s*example\/commands\b/);
-    expect(builderYml).toMatch(/to:\s*example\/commands\b/);
-  });
+  // Coupling: the build writes each tree to a `to:` literal and the runtime reads it back through a
+  // resolver, and no type binds the two (CLAUDE.md writer↔reader rule — pin it with a test). The
+  // expected `to:` is DERIVED from the resolver, never re-spelled: an assertion that hard-codes
+  // `to: example/flow` stays green when the resolver is renamed and the packaged app breaks.
+  for (const [tree, resolve] of [
+    ['flow', resolveExampleFlowDir],
+    ['loops', resolveExampleLoopsDir],
+    ['commands', resolveExampleCommandsDir],
+  ] as const) {
+    it(`ships example/${tree} under the exact path its packaged resolver reads back`, () => {
+      const to = path.relative(RESOURCES, resolve(packaged));
+      expect(builderYml).toMatch(new RegExp(`from:\\s*example/${tree}\\b`));
+      expect(builderYml).toMatch(new RegExp(`to:\\s*${to.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*$`, 'm'));
+    });
+  }
 });

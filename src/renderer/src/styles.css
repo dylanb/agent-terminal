@@ -140,8 +140,12 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible { outline:2px so
 .install-report .ir-line { font-size:12px; color:var(--dim); margin-top:3px; overflow-wrap:anywhere; }
 .install-consent { border:1px solid var(--hair); border-radius:var(--r); margin:12px 0 0; padding:8px 12px 12px; }
 .install-consent legend { font-size:12px; font-weight:600; color:var(--dim); padding:0 4px; }
-.install-consent-opt { display:grid; grid-template-columns:24px 1fr; align-items:center; gap:4px 8px; padding:6px 0; cursor:pointer; }
+.install-consent-opt { display:grid; grid-template-columns:24px 1fr; align-items:center; gap:4px 8px; padding:6px 0; }
+.install-consent-opt .ic-label { display:contents; cursor:pointer; }
 .install-consent-opt input[type="checkbox"] { width:24px; height:24px; margin:0; accent-color:var(--signal); }
+/* The global focus rule matches button/a/[tabindex] only, so a checkbox would fall back to the UA ring
+   (WCAG 2.4.7, 1.4.11). */
+.install-consent-opt input[type="checkbox"]:focus-visible { outline:2px solid var(--signal); outline-offset:2px; }
 .install-consent-opt .ic-name { font-size:12.5px; font-weight:600; }
 .install-consent-opt .ic-files { grid-column:2; font-size:12px; color:var(--dim); overflow-wrap:anywhere; }
 .seg { display:inline-flex; background:var(--hair2); border:1px solid var(--hair); border-radius:999px; padding:3px; flex:none; }

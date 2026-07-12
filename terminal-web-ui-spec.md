@@ -1456,22 +1456,25 @@ The capture pane and the terminal carry the **same content** at different statio
   - **Global, never override-aware.** The loops destination is the **user-level** loops directory, not whatever `resolveLoopDir` would answer for the repo the app is pointed at. A repo carrying an override has deliberately taken ownership of what that override contains; reconciling it against a newly-seeded global definition is the user's business (§24.2.3 resolution order, unchanged). An install that landed inside one repo would leave every other repo — and the packaged app opened against none — unseeded.
   - **Skills fan in.** A LoopDef names its personas by bare skill name and Claude Code discovers a skill only as `<skills root>/<skill name>/`, so each bundled skill is written **twice**: once under its own loop's directory at the loop-config destination (the §26.5 layout the engine reads), and once under the shared skills root. It is a copy-out, not a move.
   - **Non-destructive, per destination.** A file that is absent is created; a file present and byte-identical is skipped; a file present and differing is replaced **only** in a destination the user consented to. Consent in one destination never replaces files in another. Enumeration is tree-driven over the bundle, so a file added to the bundle later is seeded with no code change.
-  - **All-or-nothing is bounded to a pre-write check.** Every destination's container is checked for writability — including the link-following refusal (CWE-59) that guards a symlinked container — **before the first write**; if any check fails, nothing is written anywhere. A failure appearing only *after* writing has begun is **not** rolled back: the result then names every file the action created or overwrote before failing, and nothing outside that list differs from its pre-action bytes. That is a reporting guarantee, not a transactional one.
+  - **All-or-nothing is bounded to a pre-write check.** **Before the first write**, every destination is checked: its bundle tree is present (an absent tree is a mispackaged build, and is refused — never enumerated as "no files" and reported as a successful install of nothing), every planned file resolves inside its destination (the link-following refusal, CWE-59), and its container is writable. If any check fails, nothing is written anywhere. A failure appearing only *after* writing has begun is **not** rolled back: the result then names every file the action created or overwrote before failing, and nothing outside that list differs from its pre-action bytes. That is a reporting guarantee, not a transactional one.
+  - **The bundle is copied as bytes.** A bundled asset need not be UTF-8 text; it is written byte-for-byte, so a binary asset is neither corrupted on the way out nor left permanently mismatched against the byte-compare that classifies it.
   - **The loops container confers execution authority.** `loopExecAllowed` (§26.6) admits an `exec` action only from an `operator-config`-origin def, which is exactly a def read from the user-level loops directory. Seeding there is what makes the bundled `plan-loop`'s `exec` gate runnable, so the container guard on that destination protects an execution-authority boundary (CWE-829), not merely a config directory.
   - The action **never** deletes, and never edits a `.gitignore` (§19.1). It is the explicit, user-invoked exemption to the no-silent-rewrite rule: it writes only where the user asked, and asks before replacing a file it did not create.
 
 ```mermaid
 flowchart TD
-  CLICK["User clicks Install examples"] --> PREVIEW["examples:preview — classify each bundled file per destination"]
+  CLICK["User clicks Install examples"] --> PREVIEW["examples:preview — confine, then classify each bundled file per destination"]
+  PREVIEW -->|"refused — ok: false"| PERR["Error surfaced, nothing written"]
   PREVIEW -->|"no destination differs"| APPLY["examples:apply {replace: []}"]
   PREVIEW -->|"one or more differ"| CONSENT["Consent step: one checkbox per CONFLICTING destination"]
   CONSENT -->|"dismissed"| NOOP["Nothing written"]
   CONSENT -->|"confirmed"| APPLY2["examples:apply {replace: consented ids}"]
-  APPLY --> GATE{"Every destination container writable and not a symlink?"}
+  APPLY --> GATE{"Bundle trees present, every file confined to its destination, every container writable?"}
   APPLY2 --> GATE
   GATE -->|"no"| REFUSE["ok: false — nothing written anywhere"]
   GATE -->|"yes"| WRITE["Write, destination by destination"]
-  WRITE --> RESULT["Result groups created / overwritten / skipped by destination"]
+  WRITE -->|"a write fails partway"| PARTIAL["ok: false — NOT rolled back; names what already landed"]
+  WRITE -->|"all writes land"| RESULT["Result groups created / overwritten / skipped by destination"]
 
   subgraph BUNDLE["Bundle (read-only)"]
     BF["example/flow"]

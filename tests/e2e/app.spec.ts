@@ -2492,29 +2492,52 @@ test('the busy install button paints a focus ring that clears 3:1 on its own bac
   }
   await expect(btn).toBeFocused();
 
-  const painted = await btn.evaluate((el) => {
-    el.setAttribute('aria-disabled', 'true'); // the busy state setBusy() puts the control in
-    el.setAttribute('aria-busy', 'true');
-    const cs = getComputedStyle(el);
-    let alpha = 1; // group opacity composites the ring, so accumulate it up the ancestor chain
-    for (let n: Element | null = el; n; n = n.parentElement) alpha *= parseFloat(getComputedStyle(n).opacity || '1');
-    const probe = document.createElement('span');
-    el.parentElement!.appendChild(probe);
-    const token = (name: string): string => {
-      probe.style.color = `var(${name})`;
-      return getComputedStyle(probe).color;
+  // Arm a MutationObserver that snapshots the paint the INSTANT the app itself sets aria-busy, then fire
+  // the real install with the keyboard (so :focus-visible survives — a mouse click would drop it). Setting
+  // the attributes here instead would grade a state the test invented, and would stay green even if
+  // setBusy() never applied it.
+  await btn.evaluate((el) => {
+    const w = window as unknown as { __busyPaint?: unknown };
+    const snap = (): void => {
+      const cs = getComputedStyle(el);
+      let alpha = 1;
+      for (let n: Element | null = el; n; n = n.parentElement) alpha *= parseFloat(getComputedStyle(n).opacity || '1');
+      const probe = document.createElement('span');
+      el.parentElement!.appendChild(probe);
+      const token = (name: string): string => {
+        probe.style.color = `var(${name})`;
+        return getComputedStyle(probe).color;
+      };
+      w.__busyPaint = {
+        focusVisible: el.matches(':focus-visible'),
+        ariaBusy: el.getAttribute('aria-busy'),
+        ariaDisabled: el.getAttribute('aria-disabled'),
+        outlineColor: cs.outlineColor,
+        outlineWidth: cs.outlineWidth,
+        labelColor: cs.color,
+        alpha,
+        card: token('--card'),
+        dim: token('--dim'),
+        signalText: token('--signal-text'),
+      };
+      probe.remove();
     };
-    const out = {
-      focusVisible: el.matches(':focus-visible'),
-      outlineColor: cs.outlineColor,
-      outlineWidth: cs.outlineWidth,
-      labelColor: cs.color,
-      alpha,
-      card: token('--card'),
-      dim: token('--dim'),
-      signalText: token('--signal-text'),
-    };
-    probe.remove();
+    new MutationObserver(() => {
+      if (el.getAttribute('aria-busy') === 'true' && !w.__busyPaint) snap();
+    }).observe(el, { attributes: true, attributeFilter: ['aria-busy'] });
+  });
+
+  await page.keyboard.press('Enter');
+  await expect
+    .poll(() => btn.evaluate(() => (window as unknown as { __busyPaint?: unknown }).__busyPaint !== undefined))
+    .toBe(true);
+
+  const painted = await btn.evaluate(() => {
+    const out = (window as unknown as { __busyPaint: {
+      focusVisible: boolean; ariaBusy: string | null; ariaDisabled: string | null;
+      outlineColor: string; outlineWidth: string; labelColor: string; alpha: number;
+      card: string; dim: string; signalText: string;
+    } }).__busyPaint;
     return out;
   });
 
@@ -2534,6 +2557,9 @@ test('the busy install button paints a focus ring that clears 3:1 on its own bac
   const over = (fg: [number, number, number], bg: [number, number, number], a: number): [number, number, number] =>
     [0, 1, 2].map((i) => fg[i] * a + bg[i] * (1 - a)) as [number, number, number];
 
+  // The state was the APP's, not the test's: setBusy() put both attributes on the control.
+  expect(painted.ariaBusy).toBe('true');
+  expect(painted.ariaDisabled).toBe('true');
   expect(painted.focusVisible).toBe(true);
   expect(painted.outlineWidth).toBe('2px');
   // The ring survives the busy look at full strength, so its painted contrast clears the SC 1.4.11 floor.

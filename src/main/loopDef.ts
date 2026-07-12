@@ -134,14 +134,14 @@ export interface LoopDef {
 const SCHEMA_VERSION = '4';
 
 // Loop names, phase ids, and persona/actor names all become filesystem path components downstream — the
-// loop name selects `<configLoops>/<name>/` (and the dir its injected prompts §26.5 are read from), phase
+// loop name selects `userConfigLoopsDir()/<name>/` (and the dir its injected prompts §26.5 are read from), phase
 // ids form `prompts/work-{id}.md`, actor names form `reviews/{iter}/{actor}.json`. Repo-supplied config
 // (flow.yaml `loop:`, the `.agent-loop.yaml` override, the LoopDef yaml) is untrusted, so every such
 // string is confined to a single safe path-segment — no separators or `..` (CWE-22 defense in depth).
 const SAFE_NAME = /^[a-z0-9][a-z0-9-]*$/;
 
 /** Where a LoopDef's bytes came from, and therefore whose authority they carry: `operator-config` is the
- *  user's own `<configLoops>/` copy; `repo` is a file inside the checked-out repository, i.e. untrusted
+ *  user's own userConfigLoopsDir() copy; `repo` is a file inside the checked-out repository, i.e. untrusted
  *  content authored by whoever wrote the repo. Capabilities that let a def act on the machine (§26.6
  *  `exec`) are granted on this distinction, never on anything the repo itself asserts. */
 export type LoopDefOrigin = 'operator-config' | 'repo';
@@ -153,7 +153,7 @@ interface ResolvedLoopDef {
 
 /** Resolve a loop NAME to its LoopDef yaml path: a repo-local `.agent-loop.yaml` `loops:` registry
  *  override (resolved relative to the repo) wins; otherwise the bundled/user-authored config copy at
- *  `<configLoops>/<name>/<name>.yaml`. Returns the path to try (existence is the parser's concern) with
+ *  `userConfigLoopsDir()/<name>/<name>.yaml`. Returns the path to try (existence is the parser's concern) with
  *  its origin, or null when the name is not a single safe path segment — never a traversal lever. */
 function resolveLoopDefPath(repoDir: string, name: string, configDir?: string): ResolvedLoopDef | null {
   if (!SAFE_NAME.test(name)) return null;

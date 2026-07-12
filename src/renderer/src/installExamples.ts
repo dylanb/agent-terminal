@@ -36,8 +36,12 @@ function total(groups: InstallDestinationFiles[]): number {
   return groups.reduce((n, g) => n + g.files.length, 0);
 }
 
+function counts(report: Report): string {
+  return `created ${total(report.created)}, overwrote ${total(report.overwritten)}, skipped ${total(report.skipped)}.`;
+}
+
 function summarize(report: Report): string {
-  return `Installed examples — created ${total(report.created)}, overwrote ${total(report.overwritten)}, skipped ${total(report.skipped)}.`;
+  return `Installed examples — ${counts(report)}`;
 }
 
 export function createInstallExamples(host: HTMLElement, deps: InstallExamplesDeps): InstallExamples {
@@ -147,13 +151,12 @@ export function createInstallExamples(host: HTMLElement, deps: InstallExamplesDe
     showStatus('cli-status', 'Installing…');
     try {
       const res = await deps.apply(replace);
-      if (res.ok) {
-        renderReport(res);
-        showStatus('cli-status ok', summarize(res));
-      } else {
-        renderReport(res);
-        showError(res.error);
-      }
+      renderReport(res);
+      // The failure arm carries the same created/overwritten/skipped sets, and this is the branch where
+      // the user most needs them: a partial install is not rolled back (§18.1), so the alert has to say
+      // what landed, not just what broke (WCAG 4.1.3).
+      if (res.ok) showStatus('cli-status ok', summarize(res));
+      else showError(`${res.error} — ${counts(res)}`);
     } catch (e) {
       showError(e instanceof Error ? e.message : 'Install failed.');
     } finally {
@@ -188,19 +191,28 @@ export function createInstallExamples(host: HTMLElement, deps: InstallExamplesDe
 
       const boxes = new Map<InstallDestinationId, HTMLInputElement>();
       for (const conflict of conflicts) {
+        // accname 1.2 step 2D folds the WHOLE label subtree into the control's name, so the file manifest
+        // has to sit OUTSIDE the label and attach as a description — otherwise the checkbox announces
+        // dozens of paths before the user hears which destination it is (WCAG 4.1.2).
+        const row = d.createElement('div');
+        row.className = 'install-consent-opt';
         const label = d.createElement('label');
-        label.className = 'install-consent-opt';
+        label.className = 'ic-label';
         const box = d.createElement('input');
         box.type = 'checkbox';
         box.setAttribute('data-destination', conflict.destination);
+        const filesId = `${titleId}-${conflict.destination}-files`;
+        box.setAttribute('aria-describedby', filesId);
         const name = d.createElement('span');
         name.className = 'ic-name';
         name.textContent = `${DESTINATION_LABEL[conflict.destination]} — ${conflict.files.length} file${conflict.files.length === 1 ? '' : 's'}`;
+        label.append(box, name);
         const files = d.createElement('span');
         files.className = 'ic-files';
+        files.id = filesId;
         files.textContent = conflict.files.join(', ');
-        label.append(box, name, files);
-        fieldset.append(label);
+        row.append(label, files);
+        fieldset.append(row);
         boxes.set(conflict.destination, box);
       }
       cardEl.append(fieldset);

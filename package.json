@@ -18,6 +18,7 @@
     "dev": "electron-vite dev",
     "build": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json && electron-vite build",
     "start": "electron-vite preview",
+    "pretest": "playwright install chromium",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "pnpm run build && playwright test",

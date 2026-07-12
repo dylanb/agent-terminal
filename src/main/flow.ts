@@ -110,7 +110,14 @@ export type FlowLoad =
   | { ok: true; definition: FlowDefinition; flowDir: string }
   | { ok: false; error: string };
 
-const FLOW_REL = path.join('.agent-terminal', 'flow.yaml');
+const FLOW_HOME_SUBDIR = '.agent-terminal';
+const FLOW_REL = path.join(FLOW_HOME_SUBDIR, 'flow.yaml');
+
+/** Where a root keeps its flow definition (§18.1/§23.4) — the resolver the install action writes through,
+ *  so the seeded location and the location read back here cannot drift (CLAUDE.md writer↔reader rule). */
+export function flowHomeDir(root: string): string {
+  return path.join(root, FLOW_HOME_SUBDIR);
+}
 
 /** Validate a step's `inputs:` (§18.4); `required` defaults to false. Absent → []; a malformed entry
  *  → the sentinel 'invalid' so the loader can error rather than silently drop it. */

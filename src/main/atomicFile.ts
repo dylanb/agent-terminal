@@ -38,7 +38,7 @@ export interface AtomicWriteOptions {
  *  the launch dir (CWE-59); returns true on success. mkdir's the container. The exclusive-create `wx`
  *  throws if the temp path is a pre-planted symlink rather than following it — that throw propagates,
  *  it is not swallowed here (callers treat persistence as best-effort at their own seam). */
-export function atomicWriteFileSync(file: string, data: string, opts: AtomicWriteOptions = {}): boolean {
+export function atomicWriteFileSync(file: string, data: string | Uint8Array, opts: AtomicWriteOptions = {}): boolean {
   const dir = path.dirname(file);
   if (!isRealContainer(dir)) return false;
   mkdirSync(dir, { recursive: true });
