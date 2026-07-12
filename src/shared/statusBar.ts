@@ -27,7 +27,7 @@ export function normalizeTitle(raw: unknown): string | null {
   return text.length > 0 ? text : null;
 }
 
-export function titleKey(t: StatusBarTitle): string {
+function titleKey(t: StatusBarTitle): string {
   switch (t.kind) {
     case 'pr':
       return `pr:${t.number}`;

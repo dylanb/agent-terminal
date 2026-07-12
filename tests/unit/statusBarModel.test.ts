@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { deriveStatusBar, normalizeTitle, sameTitle, TITLE_MAX, titleKey } from '../../src/shared/statusBar';
+import { deriveStatusBar, normalizeTitle, sameTitle, TITLE_MAX } from '../../src/shared/statusBar';
 import { loopActivity } from '../../src/shared/loopActivity';
 import type { FlowLoopView, FlowStateView } from '../../src/shared/ipc';
 
@@ -104,9 +104,10 @@ describe('status bar model (§22.3.1)', () => {
     });
   });
 
-  describe('titleKey — identity over the union, so a new kind cannot silently dedup away', () => {
-    it('separates the kinds that share a number', () => {
-      expect(titleKey({ kind: 'pr', number: 7 })).not.toBe(titleKey({ kind: 'ticket', number: 7 }));
+  describe('sameTitle — identity over the union, so a new kind cannot silently dedup away', () => {
+    it('separates the kinds that share a number, and matches a kind against itself', () => {
+      expect(sameTitle({ kind: 'pr', number: 7 }, { kind: 'ticket', number: 7 })).toBe(false);
+      expect(sameTitle({ kind: 'pr', number: 7 }, { kind: 'pr', number: 7 })).toBe(true);
     });
 
     it('separates two names, and matches one against itself', () => {
