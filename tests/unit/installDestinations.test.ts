@@ -5,6 +5,7 @@ import path from 'node:path';
 import { exampleInstallDirs } from '../../src/main/installExamples';
 import { INSTALL_DESTINATION_IDS } from '../../src/shared/ipc';
 import { resolveLoopDir } from '../../src/main/loopDef';
+import { flowHomeDir } from '../../src/main/flow';
 import {
   userConfigLoopsDir,
   userConfigSkillsDir,
@@ -50,7 +51,10 @@ describe('exampleInstallDirs — bundle sources come from the runtime resolvers'
 
 describe('exampleInstallDirs — targets are the destinations their readers discover from', () => {
   it('targets the global flow home for the flow destination (§18.1)', () => {
-    expect(targetOf(exampleInstallDirs(loc, FLOW_HOME, '/cfg'), 'flow')).toBe(path.join(FLOW_HOME, '.agent-terminal'));
+    // Derived from the READER's own resolver, never re-spelled: an assertion that hard-codes
+    // '.agent-terminal' stays green when the installer reintroduces the parallel literal flowHomeDir()
+    // exists to remove, and the seeded flow silently stops being the flow the app reads back.
+    expect(targetOf(exampleInstallDirs(loc, FLOW_HOME, '/cfg'), 'flow')).toBe(flowHomeDir(FLOW_HOME));
   });
 
   it('targets the user-config loops, skills and commands directories (§24.2.3)', () => {

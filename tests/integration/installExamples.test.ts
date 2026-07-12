@@ -629,7 +629,51 @@ describe('an absent bundle source is a refusal, never a silent success (§18.1)'
   });
 });
 
+describe('the pre-write writability gate covers the containers the write actually touches', () => {
+  it.skipIf(asRoot)('refuses before writing anything when a NESTED container is unwritable', () => {
+    // Ticket #41's safety AC is all-or-nothing whenever unwritability is detectable before the first
+    // write. Probing only each destination's ROOT detects it only for the root: an unwritable
+    // subdirectory the write must enter is found mid-write, after other destinations have landed.
+    const loops = destOf('loops').targetDir;
+    const nested = path.join(loops, 'plan-loop');
+    mkdirSync(nested, { recursive: true });
+    chmodSync(nested, 0o555); // traversable, not writable
+    let res: InstallExamplesResult | undefined;
+    try {
+      res = applyInstallExamples(dirs, []);
+    } finally {
+      chmodSync(nested, 0o700);
+    }
+    expect(res?.ok).toBe(false);
+    if (!res || res.ok) return;
+    expect(res.error).toMatch(/cannot be written/);
+    expect(res.created).toEqual([]);
+    expect(res.overwritten).toEqual([]);
+    expect(existsSync(destOf('flow').targetDir)).toBe(false);
+    expect(existsSync(destOf('commands').targetDir)).toBe(false);
+  });
+});
+
 describe('a refusal names the cause the user has to act on', () => {
+  it.skipIf(asRoot)('does not blame a symlink for an unreadable directory on the path', () => {
+    // confinedRealPath returns null for MORE than an escaping symlink: an unreadable (EACCES) or
+    // non-directory segment cannot be reduced to a real path either. Reporting all of them as "a symbolic
+    // link stands on the path" sends the user hunting for a link that does not exist.
+    const locked = path.join(destOf('skills').targetDir, path.dirname(skillRel));
+    mkdirSync(locked, { recursive: true });
+    chmodSync(locked, 0o000);
+    let res: InstallExamplesResult | undefined;
+    try {
+      res = applyInstallExamples(dirs, []);
+    } finally {
+      chmodSync(locked, 0o700);
+    }
+    expect(res?.ok).toBe(false);
+    if (!res || res.ok) return;
+    expect(res.error).not.toMatch(/symbolic link/);
+    expect(res.error).toMatch(/could not be resolved|cannot be read|unreadable/i);
+  });
+
   it('says a symlinked destination container is a symlink, not that it "cannot be written"', () => {
     // The two conditions call for opposite fixes — replace the link vs. fix the permissions — so one
     // message for both leaves the user guessing (CLAUDE.md: never strand the user in a state they cannot
@@ -730,7 +774,9 @@ describe('applyInstallExamples — an unresolvable destination jail is a refusal
     const linked = exampleInstallDirs({ packaged: false, appPath: process.cwd() }, home, cfgLink);
     const res = applyInstallExamples(linked, []);
     expect(res.ok).toBe(false);
-    if (!res.ok) expect(res.error).toMatch(/symbolic link/);
+    // A DANGLING link is unresolvable, not an escape: nothing is being redirected out of the jail, the
+    // path simply has no real location. The message says what to check rather than naming a culprit.
+    if (!res.ok) expect(res.error).toMatch(/could not be resolved/);
   });
 });
 

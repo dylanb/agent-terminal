@@ -802,9 +802,9 @@ export interface InstallExamplesApplyMsg {
   replace: InstallDestinationId[];
 }
 
-/** A file's path relative to the root of the destination it installs under. The brand is the point: it
- *  cannot be satisfied by an arbitrary `string`, so widening one of these to an absolute or
- *  bundle-relative path fails to compile rather than quietly falsifying a sentence of prose. */
+/** A file's path relative to the root of the destination it installs under. A plain `string` is not
+ *  assignable to it, so every value is minted at one checked place (`destRelative`) — an absolute path or
+ *  one escaping its destination is refused there rather than travelling as a legal-looking value. */
 export type DestRelativePath = string & { readonly __destRelative: unique symbol };
 
 /** Files reported under the destination they were written to, so two destinations sharing a file name
@@ -992,9 +992,8 @@ export interface CliApi {
   install(): Promise<CliInstallResult>;
 }
 
-/** Install bundled examples (§18.1/§23.4): the settings organism's only seam to the install action.
- *  A non-destructive `preview` (which targets conflict) drives the up-front overwrite prompt; `apply`
- *  writes per the decision and reports the created/overwritten/skipped sets or a human-readable error. */
+/** Install bundled examples (§18.1/§23.4/§26.5): the settings organism's only seam to the install action.
+ *  Observing a preview never writes anything. */
 export interface ExamplesApi {
   preview(): Promise<InstallExamplesPreview>;
   apply(replace: InstallDestinationId[]): Promise<InstallExamplesResult>;

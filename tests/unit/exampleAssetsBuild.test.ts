@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { copyExampleFlow, copyExampleLoops, copyExampleCommands } from '../../src/main/exampleAssetsBuild';
@@ -93,5 +93,42 @@ describe('copyExampleCommands — places the bundled commands where the unpackag
     expect(existsSync(path.join(out, 'example', 'commands'))).toBe(false);
     copyExampleCommands(root, out);
     expect(existsSync(path.join(out, 'example', 'commands'))).toBe(true);
+  });
+});
+
+describe('a symlink in a committed bundle tree fails the build — it is never followed into the bundle (CWE-59)', () => {
+  // The install-time walker deliberately SKIPS a symlink rather than reading through it. But the
+  // build-time copier runs FIRST: `copyFileSync` follows a link and materializes the target's bytes as a
+  // regular file, so by the time the installer walks the bundle there is no symlink left to skip — the
+  // outside content has already been laundered into it, and lands in the user's ~/.claude on install.
+  // A link in a committed tree is a repo defect, so it fails the build loudly, exactly as a colliding
+  // skill name does.
+  let outside: string;
+  beforeEach(() => {
+    outside = mkdtempSync(path.join(tmpdir(), 'ex-outside-'));
+    writeFileSync(path.join(outside, 'secret.md'), 'not part of the bundle\n');
+  });
+  afterEach(() => {
+    rmSync(outside, { recursive: true, force: true });
+  });
+
+  it('refuses a symlinked FILE planted in example/commands', () => {
+    symlinkSync(path.join(outside, 'secret.md'), path.join(root, 'example', 'commands', 'linked.md'));
+    expect(() => copyExampleCommands(root, out)).toThrow(/symbolic link|symlink/i);
+    expect(existsSync(path.join(out, 'example', 'commands', 'linked.md'))).toBe(false);
+  });
+
+  it('refuses a symlinked DIRECTORY planted in example/loops', () => {
+    mkdirSync(path.join(outside, 'secret-dir'), { recursive: true });
+    writeFileSync(path.join(outside, 'secret-dir', 'nested.md'), 'nor is this\n');
+    symlinkSync(path.join(outside, 'secret-dir'), path.join(root, 'example', 'loops', 'linked-dir'));
+    expect(() => copyExampleLoops(root, out)).toThrow(/symbolic link|symlink/i);
+    expect(existsSync(path.join(out, 'example', 'loops', 'linked-dir'))).toBe(false);
+  });
+
+  it('does not launder the link target into the bundle as a regular file', () => {
+    symlinkSync(path.join(outside, 'secret.md'), path.join(root, 'example', 'flow', 'linked.md'));
+    expect(() => copyExampleFlow(root, out)).toThrow();
+    expect(existsSync(path.join(out, 'example', 'flow', 'linked.md'))).toBe(false);
   });
 });

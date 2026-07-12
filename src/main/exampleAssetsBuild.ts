@@ -8,13 +8,18 @@ import path from 'node:path';
 import { resolveExampleCommandsDir, resolveExampleFlowDir, resolveExampleLoopsDir } from './exampleAssets';
 import { skillNameConflicts } from './exampleSkills';
 
+/** CWE-59: `copyFileSync` FOLLOWS a symlink and materializes the target's bytes as a regular file, so a
+ *  link committed under `example/` would be laundered into the bundle — and the install-time walker, which
+ *  skips links, would find nothing left to skip and seed the outside content into the user's config. Only
+ *  directories and regular files are copied; anything else fails the build, as a colliding skill name does. */
 function copyTree(src: string, dest: string): void {
   mkdirSync(dest, { recursive: true });
   for (const entry of readdirSync(src, { withFileTypes: true })) {
     const from = path.join(src, entry.name);
     const to = path.join(dest, entry.name);
     if (entry.isDirectory()) copyTree(from, to);
-    else copyFileSync(from, to);
+    else if (entry.isFile()) copyFileSync(from, to);
+    else throw new Error(`Bundled example trees must hold only directories and regular files: ${from} is a symbolic link or other special file (CWE-59)`);
   }
 }
 

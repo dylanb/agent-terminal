@@ -55,12 +55,25 @@ export function resolveNewDirJail(dir: string): string | null {
   return parent === null ? null : path.join(parent, path.basename(abs));
 }
 
-/** `target`'s symlink-free real path when it stays inside `jail`, else null. `jail` must already be
- *  resolved (see `resolveJail`); callers use the returned path directly, not the original. Existence of
- *  `target` is the caller's concern. CWE-22, CWE-59, CWE-367. */
-export function confinedRealPath(jail: string, target: string): string | null {
+/** Why a path was refused. `escapes` is a link or `..` that leaves the jail (CWE-22/59); `unresolvable` is
+ *  a path that cannot be reduced to a symlink-free real path at all — a dangling link, or a segment that is
+ *  unreadable or is not a directory. The two call for opposite fixes, so a caller that reports a refusal to
+ *  a human MUST distinguish them rather than blaming a link for a permission problem. */
+export type PathRefusal = 'escapes' | 'unresolvable';
+export type ConfinedPath = { ok: true; path: string } | { ok: false; cause: PathRefusal };
+
+/** `target`'s symlink-free real path when it stays inside `jail`, else the reason it was refused. `jail`
+ *  must already be resolved (see `resolveJail`); callers use the returned path directly, not the original.
+ *  Existence of `target` is the caller's concern. CWE-22, CWE-59, CWE-367. */
+export function confinedRealPathResult(jail: string, target: string): ConfinedPath {
   const real = realpathBounded(path.resolve(target));
-  if (real === null) return null;
+  if (real === null) return { ok: false, cause: 'unresolvable' };
   const prefix = jail.endsWith(path.sep) ? jail : jail + path.sep;
-  return real === jail || real.startsWith(prefix) ? real : null;
+  return real === jail || real.startsWith(prefix) ? { ok: true, path: real } : { ok: false, cause: 'escapes' };
+}
+
+/** The same confinement for callers that only gate on it and never report the cause to a human. */
+export function confinedRealPath(jail: string, target: string): string | null {
+  const r = confinedRealPathResult(jail, target);
+  return r.ok ? r.path : null;
 }

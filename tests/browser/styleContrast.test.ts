@@ -251,3 +251,50 @@ for (const theme of ['light', 'dark'] as const) {
     });
   });
 }
+
+// The consent step lists every conflicting file inline, and the loops destination enumerates the whole
+// bundle — dozens of paths. A card that grows past the viewport in a centred, position:fixed modal is
+// CLIPPED, not scrolled: the footer holding Cancel and Install goes off-screen with no way to reach it,
+// so the dialog becomes unoperable by any input method (WCAG 2.1.1 / 2.4.3).
+describe('install consent dialog stays operable with a long file manifest', () => {
+  let modal: HTMLElement;
+  beforeEach(() => {
+    const files = Array.from({ length: 60 }, (_, i) => `some-loop/nested/dir/file-${i}.yaml`).join(', ');
+    modal = document.createElement('div');
+    modal.className = 'flow-modal';
+    modal.innerHTML = `
+      <div class="card">
+        <h3 class="serif">Replace existing files?</h3>
+        <p class="ph">Some places already hold files that differ from the bundled versions.</p>
+        <fieldset class="install-consent">
+          <legend>Replace files in</legend>
+          <div class="install-consent-opt">
+            <label class="ic-label"><input type="checkbox"><span class="ic-name">Loop definitions — 60 files</span></label>
+            <span class="ic-files">${files}</span>
+          </div>
+        </fieldset>
+        <div class="mfoot">
+          <button type="button" class="pill cancel">Cancel</button>
+          <button type="button" class="pill signal confirm">Install</button>
+        </div>
+      </div>`;
+    document.body.replaceChildren(modal);
+  });
+
+  it('keeps the footer actions inside the viewport', () => {
+    const confirm = modal.querySelector('button.confirm') as HTMLElement;
+    const r = confirm.getBoundingClientRect();
+    expect(r.bottom).toBeLessThanOrEqual(window.innerHeight);
+    expect(r.top).toBeGreaterThanOrEqual(0);
+  });
+
+  it('scrolls the overflowing manifest inside the card rather than clipping the card', () => {
+    const cardEl = modal.querySelector('.card') as HTMLElement;
+    expect(cardEl.getBoundingClientRect().height).toBeLessThanOrEqual(window.innerHeight);
+    // Something inside the card must actually take the overflow, or the content is simply unreachable.
+    const scrollable = [...cardEl.querySelectorAll('*')].some(
+      (n) => n.scrollHeight > n.clientHeight + 1 && /auto|scroll/.test(getComputedStyle(n).overflowY),
+    );
+    expect(scrollable).toBe(true);
+  });
+});

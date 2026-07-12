@@ -1,9 +1,10 @@
 // §18.1/§23.4/§26.5; writes route through atomicWriteFileSync (CWE-59).
 
-import { accessSync, constants, readFileSync, readdirSync, statSync } from 'node:fs';
+import { accessSync, constants, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { atomicWriteFileSync, isRealContainer } from './atomicFile';
-import { confinedRealPath, resolveNewDirJail } from './confinedPath';
+import { confinedRealPathResult, resolveNewDirJail, type PathRefusal } from './confinedPath';
+import { readDirEntries } from './dirEntries';
 import type { BundleLocation } from './bundleLocation';
 import { resolveExampleCommandsDir, resolveExampleFlowDir, resolveExampleLoopsDir } from './exampleAssets';
 import { listBundledSkills } from './exampleSkills';
@@ -22,15 +23,24 @@ import { isValidInstallExamplesPreview, isValidInstallExamplesApply } from './ip
 
 const TEMPLATES_SUBDIR = 'todo-templates';
 
+/** The one place a DestRelativePath is minted. The brand blocks an implicit `string`, but only a check
+ *  blocks a wrong one — an absolute path, or one climbing out of its destination, would otherwise travel
+ *  as a legal-looking value straight to a write (CWE-22). */
+function destRelative(rel: string): DestRelativePath {
+  const norm = path.normalize(rel);
+  if (path.isAbsolute(norm) || norm === '..' || norm.startsWith(`..${path.sep}`)) {
+    throw new Error(`Not a destination-relative path: ${rel}`);
+  }
+  return norm as DestRelativePath;
+}
+
 /** A file the action installs: where it lands under its destination, and the bundle file it copies from. */
 export interface PlannedFile {
   rel: DestRelativePath;
   src: string;
 }
 
-/** A destination's plan, or `null` when its bundle source is ABSENT — a tree missing from the running
- *  build. Enumeration is tree-driven (§18.1), so an absent tree would otherwise plan zero files and
- *  install nothing while reporting success. An absent tree is not an empty one. */
+/** `null` when the bundle source is absent — a mispackaged build, not an empty tree (§18.1). */
 type Plan = PlannedFile[] | null;
 
 function absent(dir: string): boolean {
@@ -42,29 +52,14 @@ function absent(dir: string): boolean {
   }
 }
 
-/** Absence is the ONLY enumeration failure that reads as "no files here" (an optional subtree, e.g. a loop
- *  with no `skills/`). Anything else — EACCES on an unreadable install, ENOTDIR on a corrupt one — throws,
- *  because a swallowed failure here is indistinguishable from an empty tree and installs nothing while
- *  reporting success. */
-function entriesOf(dir: string): { name: string; isDirectory: boolean; isFile: boolean }[] {
-  try {
-    return readdirSync(dir, { withFileTypes: true })
-      .sort((a, b) => a.name.localeCompare(b.name))
-      .map((e) => ({ name: e.name, isDirectory: e.isDirectory(), isFile: e.isFile() }));
-  } catch (e) {
-    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return [];
-    throw e;
-  }
-}
-
 /** CWE-59: a symlink planted in the bundle is skipped, never read through — the bundle is an installed
  *  artifact, not necessarily one this build wrote. */
 function walkFiles(dir: string, base: string = dir): DestRelativePath[] {
   const out: DestRelativePath[] = [];
-  for (const entry of entriesOf(dir)) {
+  for (const entry of readDirEntries(dir)) {
     const abs = path.join(dir, entry.name);
     if (entry.isDirectory) out.push(...walkFiles(abs, base));
-    else if (entry.isFile) out.push(path.relative(base, abs) as DestRelativePath);
+    else if (entry.isFile) out.push(destRelative(path.relative(base, abs)));
   }
   return out;
 }
@@ -77,10 +72,10 @@ function filesUnder(bundleDir: string): Plan {
 /** §18.6: only `.md` files resolve as todo templates. */
 function flowFiles(bundleDir: string): Plan {
   if (absent(bundleDir)) return null;
-  const rels: DestRelativePath[] = ['flow.yaml' as DestRelativePath];
-  for (const entry of entriesOf(path.join(bundleDir, TEMPLATES_SUBDIR))) {
+  const rels: DestRelativePath[] = [destRelative('flow.yaml')];
+  for (const entry of readDirEntries(path.join(bundleDir, TEMPLATES_SUBDIR))) {
     if (!entry.isFile || !entry.name.endsWith('.md')) continue;
-    rels.push(path.join(TEMPLATES_SUBDIR, entry.name) as DestRelativePath);
+    rels.push(destRelative(path.join(TEMPLATES_SUBDIR, entry.name)));
   }
   return rels.map((rel) => ({ rel, src: path.join(bundleDir, rel) }));
 }
@@ -91,14 +86,13 @@ function skillFiles(loopsBundleDir: string): Plan {
   if (absent(loopsBundleDir)) return null;
   const out: PlannedFile[] = [];
   for (const skill of listBundledSkills(loopsBundleDir)) {
-    for (const rel of walkFiles(skill.dir, skill.root)) out.push({ rel, src: path.join(skill.root, rel) });
+    for (const rel of walkFiles(skill.dir)) {
+      out.push({ rel: destRelative(path.join(skill.name, rel)), src: path.join(skill.dir, rel) });
+    }
   }
   return out;
 }
 
-/** A resolved install destination: where its files come from, where they go, and how to enumerate them.
- *  `plan` is opaque to callers — only preview/apply invoke it — so a destination's file strategy can
- *  change without touching the seam. Tests override `bundleDir` to point at a broken or empty bundle. */
 export interface InstallDestination {
   id: InstallDestinationId;
   bundleDir: string;
@@ -163,8 +157,12 @@ interface ResolvedDestination {
 }
 type Resolution = { ok: true; destinations: ResolvedDestination[] } | { ok: false; error: string };
 
-const linkRefusal = (rel: string, dir: string): string =>
-  `Could not install ${rel}: a symbolic link stands on the path to it under ${dir}`;
+/** The two refusals call for opposite fixes — replace the link vs. fix the permissions — so the message
+ *  names the one that actually happened. */
+const refusal = (what: string, dir: string, cause: PathRefusal): string =>
+  cause === 'escapes'
+    ? `Could not install ${what}: a symbolic link stands on the path to it under ${dir}`
+    : `Could not install ${what}: its path under ${dir} could not be resolved — check that every directory on the way to it exists, is readable, and is a directory`;
 
 function resolveAll(destinations: InstallDestination[]): Resolution {
   const out: ResolvedDestination[] = [];
@@ -174,11 +172,12 @@ function resolveAll(destinations: InstallDestination[]): Resolution {
       return { ok: false, error: `Could not install: the ${dest.id} examples are missing from this build's bundle` };
     }
     const jail = resolveNewDirJail(dest.targetDir);
+    if (jail === null) return { ok: false, error: refusal(dest.id, dest.targetDir, 'unresolvable') };
     const resolved: ResolvedFile[] = [];
     for (const file of files) {
-      const real = jail === null ? null : confinedRealPath(jail, path.join(dest.targetDir, file.rel));
-      if (real === null) return { ok: false, error: linkRefusal(file.rel, dest.targetDir) };
-      resolved.push({ rel: file.rel, src: file.src, real });
+      const real = confinedRealPathResult(jail, path.join(dest.targetDir, file.rel));
+      if (!real.ok) return { ok: false, error: refusal(file.rel, dest.targetDir, real.cause) };
+      resolved.push({ rel: file.rel, src: file.src, real: real.path });
     }
     out.push({ id: dest.id, targetDir: dest.targetDir, files: resolved });
   }
@@ -258,9 +257,13 @@ export function applyInstallExamples(destinations: InstallDestination[], replace
   if (!resolution.ok) return { ok: false, error: resolution.error, ...empty };
 
   const plan = resolution.destinations.filter((d) => d.files.length > 0);
+  // Every container the write will actually enter, not just each destination's root: an unwritable nested
+  // directory is detectable before the first write, and §18.1's all-or-nothing covers everything that is.
   for (const dest of plan) {
-    if (!isWritableContainer(dest.targetDir)) {
-      return { ok: false, error: `Could not install: ${dest.targetDir} cannot be written`, ...empty };
+    for (const dir of new Set([dest.targetDir, ...dest.files.map((f) => path.dirname(f.real))])) {
+      if (!isWritableContainer(dir)) {
+        return { ok: false, error: `Could not install: ${dir} cannot be written`, ...empty };
+      }
     }
   }
 
@@ -286,7 +289,7 @@ export function applyInstallExamples(destinations: InstallDestination[], replace
         }
         // Bytes, not text: the bundle is a tree the build ships, and decoding a non-UTF-8 asset would both
         // corrupt it and leave it permanently `differ` against the byte-compare that classifies it.
-        if (!atomicWriteFileSync(file.real, readFileSync(file.src))) return fail(linkRefusal(file.rel, dest.targetDir));
+        if (!atomicWriteFileSync(file.real, readFileSync(file.src))) return fail(refusal(file.rel, dest.targetDir, 'escapes'));
         record(cls === 'create' ? created : overwritten, dest.id, file.rel);
       } catch (e) {
         return fail(`Could not install ${file.rel}: ${errMsg(e)}`);

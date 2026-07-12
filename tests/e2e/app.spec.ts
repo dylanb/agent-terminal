@@ -2453,6 +2453,90 @@ test('the consent step collects one decision per conflicting destination; a decl
   rmSync(configDir, { recursive: true, force: true });
 });
 
+test('the REAL consent checkbox paints a focus ring, and the dialog footer stays reachable (WCAG 1.4.11, 2.1.1 #41)', async () => {
+  // The browser-project pin grades a probe whose classes are hand-written in the test, so a class rename
+  // in the renderer would leave it green while the real control lost its ring. This drives the actual
+  // dialog the app builds — and with the loops destination conflicting, its file manifest is the whole
+  // bundle, which is exactly the content that pushed the footer off-screen.
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-install-ring-home-'));
+  const configDir = mkdtempSync(join(tmpdir(), 'agent-term-e2e-install-ring-cfg-'));
+  mkdirSync(join(configDir, 'loops', 'plan-loop'), { recursive: true });
+  writeFileSync(join(configDir, 'loops', 'plan-loop', 'plan-loop.yaml'), 'name: mine\n'); // conflicts in loops
+  await app.close();
+  app = await electron.launch({ args: ['out/main/index.js'], env: installEnv(home, configDir) });
+  page = await app.firstWindow();
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await page.locator('[data-viewbtn="4"]').click();
+  await installExamplesBtn().click();
+  await expect(installExamplesPrompt()).toBeVisible({ timeout: 10_000 });
+
+  const box = consentBox('loops');
+  await expect(box).toBeVisible();
+
+  // The dialog gives the first checkbox its INITIAL focus programmatically, and a programmatic focus need
+  // not match :focus-visible. Focus has to ARRIVE by keyboard, so step off the control and come back.
+  const el = box.first();
+  await expect(el).toBeFocused();
+  await page.keyboard.press('Tab');
+  await expect(el).not.toBeFocused();
+  await page.keyboard.press('Shift+Tab');
+  await expect(el).toBeFocused();
+
+  const painted = await el.evaluate((n) => {
+    const cs = getComputedStyle(n);
+    let alpha = 1;
+    for (let a: Element | null = n; a; a = a.parentElement) alpha *= parseFloat(getComputedStyle(a).opacity || '1');
+    const bgOf = (start: Element | null): string => {
+      for (let a = start; a; a = a.parentElement) {
+        const c = getComputedStyle(a).backgroundColor;
+        const m = c.match(/[\d.]+/g);
+        if (m && (m[3] === undefined || Number(m[3]) === 1)) return c;
+      }
+      return 'rgb(255,255,255)';
+    };
+    return {
+      focusVisible: n.matches(':focus-visible'),
+      outlineWidth: cs.outlineWidth,
+      outlineColor: cs.outlineColor,
+      behind: bgOf(n.parentElement),
+      alpha,
+    };
+  });
+
+  const rgb = (s: string): [number, number, number] => {
+    const m = s.match(/\d+(\.\d+)?/g);
+    if (!m) throw new Error(`unparseable colour: ${s}`);
+    return [Number(m[0]), Number(m[1]), Number(m[2])];
+  };
+  const relLum = (c: [number, number, number]): number => {
+    const [r, g, b] = c.map((v) => (v / 255 <= 0.03928 ? v / 255 / 12.92 : ((v / 255 + 0.055) / 1.055) ** 2.4));
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  };
+  const ratio = (a: [number, number, number], b: [number, number, number]): number => {
+    const [hi, lo] = [relLum(a), relLum(b)].sort((x, y) => y - x);
+    return (hi + 0.05) / (lo + 0.05);
+  };
+  const over = (f: [number, number, number], b: [number, number, number], a: number): [number, number, number] =>
+    [0, 1, 2].map((i) => f[i] * a + b[i] * (1 - a)) as [number, number, number];
+
+  expect(painted.focusVisible).toBe(true);
+  expect(painted.outlineWidth).toBe('2px');
+  const behind = rgb(painted.behind);
+  expect(ratio(over(rgb(painted.outlineColor), behind, painted.alpha), behind)).toBeGreaterThanOrEqual(3);
+
+  // The footer actions must remain on screen with the manifest rendered — a card that outgrows a centred
+  // fixed modal is clipped, not scrolled, and Cancel/Install go where no input method can reach them.
+  const confirmBox = await installExamplesConfirm().boundingBox();
+  const viewport = page.viewportSize() ?? (await page.evaluate(() => ({ width: innerWidth, height: innerHeight })));
+  expect(confirmBox).not.toBeNull();
+  expect((confirmBox as { y: number; height: number }).y + (confirmBox as { height: number }).height).toBeLessThanOrEqual(viewport.height);
+
+  await app.close();
+  rmSync(home, { recursive: true, force: true });
+  rmSync(configDir, { recursive: true, force: true });
+});
+
 test('dismissing the consent step without a choice returns focus to the install button (WCAG 2.4.3 #40)', async () => {
   // Focus the button, then trigger the preview before the prompt opens. Dismissing the prompt via
   // Escape must restore focus to the button, not strand it on <body> (WCAG 2.4.3).
