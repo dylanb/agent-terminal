@@ -532,9 +532,11 @@ describe('shell controller (§24.1C — views, hotkeys, docked drawer, theme)', 
     });
 
     // A global modal (errorDialog / flowInputModal) can open OVER the fullscreen viewer. Escape then belongs
-    // to the dialog, not to fullscreen — otherwise the shell's capture-phase stopPropagation() exits
-    // fullscreen and swallows the dialog's own Escape (WCAG 2.4.3). The third Escape branch, same predicate.
-    it('does not exit full screen on Escape while a modal is open', () => {
+    // to the dialog, not to fullscreen. The shell must LET the event through — asserting the fullscreen class
+    // is unchanged is not enough, because setViewerFullscreen self-guards while a modal is open, so the class
+    // stays put even if the shell wrongly swallows the event. The real harm is the capture-phase
+    // stopPropagation()/preventDefault() eating the dialog's own Escape (WCAG 2.4.3), so assert THAT is absent.
+    it('lets Escape reach a dialog open over the viewer, rather than consuming it for fullscreen', () => {
       shell = createShell(app);
       shell.setViewerFullscreen(true);
       const modal = document.createElement('div');
@@ -543,7 +545,16 @@ describe('shell controller (§24.1C — views, hotkeys, docked drawer, theme)', 
       const btn = document.createElement('button');
       modal.append(btn);
       document.body.append(modal);
-      btn.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+
+      const esc = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true });
+      let reachedDialog = false;
+      btn.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') reachedDialog = true; // the dialog's own handler would run here
+      });
+      btn.dispatchEvent(esc);
+
+      expect(reachedDialog).toBe(true); // the shell did not stopPropagation it away
+      expect(esc.defaultPrevented).toBe(false); // nor preventDefault it
       expect(app.classList.contains('viewer-fullscreen')).toBe(true);
       modal.remove();
     });

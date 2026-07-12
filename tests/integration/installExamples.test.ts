@@ -145,6 +145,21 @@ describe('a relative user-config root is refused, not anchored at the process cw
     const res = previewInstallExamples(relativeDirs());
     expect(res.ok).toBe(false);
   });
+
+  // The FLOW destination's root is the launch home (§23.4), NOT the config dir — so an absolute
+  // CLAUDE_CONFIG_DIR does not save it. A defined-but-empty $HOME makes that root relative
+  // (`.agent-terminal`), which would seed flow.yaml + templates into the launch cwd (the repo under dev).
+  // The gate is at the RESOLVER: a relative flow home yields a null targetDir. Asserting that FIRST means a
+  // regression fails here — before any write — so the probe can never pollute the repo the bug targets.
+  it('refuses the flow destination when its home root is relative (empty $HOME)', () => {
+    const relFlowDirs = exampleInstallDirs({ packaged: false, appPath: process.cwd() }, '', configRoot);
+    const flow = relFlowDirs.find((d) => d.id === 'flow');
+    expect(flow?.targetDir).toBeNull(); // the gate — a removed gate fails here, no filesystem touched
+
+    const res = applyInstallExamples(relFlowDirs, []); // null target → refuse, nothing written
+    expect(res.ok).toBe(false);
+    expect(existsSync(path.join(process.cwd(), '.agent-terminal', 'flow.yaml'))).toBe(false);
+  });
 });
 
 describe('applyInstallExamples — a clean run seeds every destination and reports each file under it', () => {

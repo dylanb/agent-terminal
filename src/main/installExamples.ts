@@ -80,7 +80,6 @@ function planUnlessLinked(p: string): boolean {
     return true;
   }
 }
-/** True when `p` is a real directory — false for a symlink, even one pointing at a directory. */
 function isRealDir(p: string): boolean {
   try {
     return lstatSync(p).isDirectory();
@@ -140,7 +139,7 @@ interface DestinationSpec {
  *  leave every other one unseeded. The skills source is the loops bundle — its files fan in from every
  *  loop's `skills/` (§26.5). */
 const DESTINATIONS: Record<InstallDestinationId, DestinationSpec> = {
-  flow: { bundle: resolveExampleFlowDir, target: (flowGlobalDir) => flowHomeDir(flowGlobalDir), plan: flowFiles },
+  flow: { bundle: resolveExampleFlowDir, target: (flowGlobalDir) => (path.isAbsolute(flowGlobalDir) ? flowHomeDir(flowGlobalDir) : null), plan: flowFiles },
   loops: { bundle: resolveExampleLoopsDir, target: (_flow, cfg) => userConfigLoopsDir(cfg), plan: filesUnder },
   skills: { bundle: resolveExampleLoopsDir, target: (_flow, cfg) => userConfigSkillsDir(cfg), plan: skillFiles },
   commands: { bundle: resolveExampleCommandsDir, target: (_flow, cfg) => userConfigCommandsDir(cfg), plan: filesUnder },
@@ -200,12 +199,14 @@ function resolveAll(destinations: InstallDestination[]): Resolution {
   const out: ResolvedDestination[] = [];
   for (const dest of destinations) {
     if (dest.targetDir === null) {
+      // Every install target must be an absolute directory. A relative one — a relative CLAUDE_CONFIG_DIR
+      // (loops/skills/commands) or a relative launch home from an empty $HOME (flow) — has no single meaning
+      // and would seed into the process cwd, so the whole install refuses rather than guessing (CWE-829).
       return {
         ok: false,
         error:
-          `Could not install the ${dest.id} examples: CLAUDE_CONFIG_DIR is set to a relative path, so there is no ` +
-          `single directory it names — Claude Code resolves it against its own working directory, not this app's. ` +
-          `Set it to an absolute path, or unset it to use ~/.claude.`,
+          `Could not install the ${dest.id} examples: its install location is not an absolute path. ` +
+          `Set CLAUDE_CONFIG_DIR (and $HOME) to absolute paths, or unset CLAUDE_CONFIG_DIR to use ~/.claude.`,
       };
     }
     const files = dest.plan(dest.bundleDir);
