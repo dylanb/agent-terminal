@@ -122,8 +122,9 @@ function skillFiles(loopsBundleDir: string): Plan {
 export interface InstallDestination {
   id: InstallDestinationId;
   bundleDir: string;
-  /** `null` when the user-config root is refused (a relative CLAUDE_CONFIG_DIR): there is no target to
-   *  install to, and `resolveAll` turns that into a refusal the user sees rather than a guessed path. */
+  /** `null` when this destination has no absolute install location — a relative CLAUDE_CONFIG_DIR (config
+   *  destinations) or a relative launch home from an empty $HOME (flow). `resolveAll` turns it into a
+   *  refusal the user sees rather than a guessed path. */
   targetDir: string | null;
   plan: (bundleDir: string) => Plan;
 }
