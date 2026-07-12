@@ -3,11 +3,8 @@ import { GATE_DECISION_OPTIONS, SESSION_ID } from '../../src/shared/ipc';
 import { TITLE_MAX } from '../../src/shared/statusBar';
 import {
   isValidCapture,
-  isValidCaptureCommand,
   isValidCaptureLast,
   isValidCliInstall,
-  isValidClearCommands,
-  isValidCommandsRequest,
   isValidDismiss,
   isValidDismissAll,
   isValidFlowRequest,
@@ -77,23 +74,10 @@ describe('IPC payload validation (§6 — renderer-supplied input is untrusted)'
     expect(isValidCapture({ sessionId: sid, text: 7, range: null, source: 'selection' })).toBe(false);
   });
 
-  it('accepts a well-formed commands request and rejects a wrong sessionId (§15.4)', () => {
-    expect(isValidCommandsRequest({ sessionId: sid })).toBe(true);
-    expect(isValidCommandsRequest({ sessionId: 'other' })).toBe(false);
-    expect(isValidCommandsRequest(null)).toBe(false);
-  });
-
   it('accepts a well-formed capture:last request and rejects a wrong/missing sessionId (§21.1)', () => {
     expect(isValidCaptureLast({ sessionId: sid })).toBe(true);
     expect(isValidCaptureLast({ sessionId: 'other' })).toBe(false);
     expect(isValidCaptureLast(null)).toBe(false);
-  });
-
-  it('accepts a capture-command request and rejects missing/non-string commandId (§15.4)', () => {
-    expect(isValidCaptureCommand({ sessionId: sid, commandId: 'abc' })).toBe(true);
-    expect(isValidCaptureCommand({ sessionId: sid, commandId: 7 })).toBe(false);
-    expect(isValidCaptureCommand({ sessionId: sid })).toBe(false);
-    expect(isValidCaptureCommand({ sessionId: 'other', commandId: 'abc' })).toBe(false);
   });
 
   it('accepts a dismiss request and rejects missing/non-string eventId or wrong session (§15.6)', () => {
@@ -131,12 +115,6 @@ describe('IPC payload validation (§6 — renderer-supplied input is untrusted)'
     expect(isValidSetSettings({ settings: null })).toBe(false);
     expect(isValidSetSettings({})).toBe(false);
     expect(isValidSetSettings(null)).toBe(false);
-  });
-
-  it('accepts a clear-commands request and rejects a wrong sessionId (§16.2)', () => {
-    expect(isValidClearCommands({ sessionId: sid })).toBe(true);
-    expect(isValidClearCommands({ sessionId: 'other' })).toBe(false);
-    expect(isValidClearCommands(null)).toBe(false);
   });
 
   it('accepts a flow request with a safe repoKey and rejects a wrong session / unsafe key (§24.2.2)', () => {
@@ -248,7 +226,7 @@ describe('IPC payload validation (§6 — renderer-supplied input is untrusted)'
   it('rejects array-shaped payloads at the trust boundary (arrays are not records)', () => {
     const a: any = [];
     a.sessionId = sid;
-    expect(isValidCommandsRequest(a)).toBe(false);
+    expect(isValidCaptureLast(a)).toBe(false);
   });
 
   it('accepts a todoTemplate:list with a safe repoKey and rejects an unsafe key / wrong session', () => {

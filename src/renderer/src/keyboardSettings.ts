@@ -64,7 +64,6 @@ const ACTION_LABELS: Record<KeyActionId, string> = {
   toggleDrawer: 'Toggle quick-send',
   viewTerminal: 'View: Terminal',
   viewArtifacts: 'View: Artifacts',
-  viewTodos: 'View: Todos',
   openSettings: 'Open settings',
 };
 
@@ -80,14 +79,13 @@ const ACTION_DESCS: Record<KeyActionId, string> = {
   toggleDrawer: 'Show or hide the quick-send drawer.',
   viewTerminal: 'Switch to the terminal.',
   viewArtifacts: 'Switch to the artifact viewer.',
-  viewTodos: 'Switch to the todo list.',
   openSettings: 'Open this settings view.',
 };
 
 const GROUPS: { label: string; actions: KeyActionId[] }[] = [
   { label: 'Clipboard', actions: ['copy', 'paste', 'selectAll'] },
   { label: 'Editing', actions: ['newlineNoSubmit', 'wordBack', 'wordForward', 'deleteWordBack', 'deleteLine'] },
-  { label: 'Navigation', actions: ['toggleDrawer', 'viewTerminal', 'viewArtifacts', 'viewTodos', 'openSettings'] },
+  { label: 'Navigation', actions: ['toggleDrawer', 'viewTerminal', 'viewArtifacts', 'openSettings'] },
 ];
 
 const MODIFIER_KEYS = new Set(['Control', 'Shift', 'Alt', 'Meta']);

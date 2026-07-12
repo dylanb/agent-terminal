@@ -239,11 +239,6 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible { outline:2px so
 .artsplit.fullscreen .fs-strip-top { top:0; left:0; right:0; height:6px; }
 .artsplit.fullscreen .fs-strip-left { top:0; bottom:0; left:0; width:6px; }
 
-.twocol { display:grid; grid-template-columns:1fr 1fr; height:100%; }
-.pane { overflow:auto; padding:24px 26px; }
-.pane + .pane { border-left:1px solid var(--hair); background:var(--card); }
-.pane h2 { font-family:"Fraunces",Georgia,serif; font-weight:500; font-size:21px; margin:0 0 3px; }
-.pane .sub { font-size:12px; color:var(--dim); margin-bottom:18px; }
 .gatebar { display:flex; gap:9px; align-items:center; flex-wrap:wrap; margin:10px 0 18px; }
 
 /* ---- buttons (tokens) ---- */
@@ -334,7 +329,6 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible { outline:2px so
 
 /* ---- view 1: terminal ---- */
 #terminal-view { display:flex; flex-direction:column; height:100%; background:var(--term-bg); }
-#toolbar { padding:8px 12px; display:flex; gap:8px; background:var(--card); border-bottom:1px solid var(--hair); }
 #terminal { flex:1; min-height:0; padding:6px 8px; }
 /* xterm.css's `.xterm-viewport { overflow-y:scroll }` reserves a permanent scrollbar gutter even with
  * nothing to scroll (the alt buffer has no scrollback), so a full-screen agent's frame leaves an ugly
@@ -355,7 +349,7 @@ button {
 }
 button:hover { border-color:var(--dim); }
 
-/* ---- view 2/3: mocked artifacts + todos + gate ---- */
+/* ---- view 2: artifacts ---- */
 .tree { font-size:13px; display:flex; flex-direction:column; gap:12px; }
 .treesearch { font:inherit; font-size:12px; color:var(--text); background:var(--hair2); border:1px solid var(--hair); border-radius:6px; padding:6px 9px; outline:none; }
 .treesearch:focus { border-color:var(--signal); }
@@ -417,16 +411,6 @@ button:hover { border-color:var(--dim); }
 .vbody .cm-syn-var { color:var(--syn-var); }
 .vbody .cm-syn-punct { color:var(--syn-punct); }
 .marked { background:var(--signal-wash); border-bottom:2px solid var(--signal); padding:1px 3px; border-radius:2px; }
-.loop .lrow { display:flex; align-items:baseline; font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:12.5px; padding:1px 0; }
-.loop .lrow .lk { color:var(--dim); } .loop .lrow .ld { flex:1; border-bottom:1px dotted var(--hair); margin:0 8px 4px; }
-.loop .lrow .lv.bad { color:var(--attn-text); }
-.mock-todos .todo { display:flex; gap:11px; align-items:flex-start; padding:12px 4px; border-bottom:1px solid var(--hair2); }
-.mock-todos .todo .chk { width:15px; height:15px; border:1.5px solid var(--dim); border-radius:4px; margin-top:2px; flex:none; }
-.mock-todos .todo.done .chk { background:var(--pass); border-color:var(--pass); }
-.mock-todos .todo.done .tx { text-decoration:line-through; color:var(--dim); }
-.mock-todos .todo .tx { font-size:13.5px; }
-.mock-todos .todo .meta { font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:10.5px; color:var(--dim); margin-top:4px; }
-.mock-todos .todo .meta .from { color:var(--signal); }
 
 /* ---- docked drawer = the reused monitor (capture/todo) ---- */
 .drawer { background:var(--card); border-left:1px solid var(--hair); overflow:hidden; display:flex; flex-direction:column; min-width:0; }

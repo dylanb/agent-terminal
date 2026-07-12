@@ -87,7 +87,8 @@ describe('keymap model — app navigation actions (§7.7 / §24.1C)', () => {
     expect(matchChord(keydown({ key: 'k', ctrlKey: true }), PC_DEFAULTS)).toBeNull();
     expect(matchChord(keydown({ key: '1', ctrlKey: true }), PC_DEFAULTS)).toBe('viewTerminal');
     expect(matchChord(keydown({ key: '2', metaKey: true }), MAC_DEFAULTS)).toBe('viewArtifacts');
-    expect(matchChord(keydown({ key: '3', ctrlKey: true }), PC_DEFAULTS)).toBe('viewTodos');
+    // ⌘3/Ctrl+3 is no longer bound — the Todos view was removed, so the chord passes through.
+    expect(matchChord(keydown({ key: '3', ctrlKey: true }), PC_DEFAULTS)).toBeNull();
   });
 });
 

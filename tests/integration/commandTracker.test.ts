@@ -51,7 +51,7 @@ describe('command tracker (§15.5 — OSC 133 segmentation, detection only)', ()
     expect(s[0].truncated).toBe(false);
   });
 
-  it('clear() drops finished commands and fires a change (Clear commands, §16.2)', async () => {
+  it('clear() drops finished commands and fires a change (§15.5, tracker-internal)', async () => {
     setup();
     shadow.write(runCmd('echo hi', 'hi\r\n', 0));
     await sleep(60);

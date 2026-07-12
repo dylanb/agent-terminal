@@ -20,9 +20,6 @@ export const CH = {
   monitorUpdate: 'monitor:update',
   monitorReplay: 'monitor:replay',
   monitorCurrentRepo: 'monitor:currentRepo',
-  monitorCommands: 'monitor:commands',
-  monitorCommandsChanged: 'monitor:commandsChanged',
-  monitorCaptureCommandText: 'monitor:captureCommandText',
   captureLast: 'capture:last',
   monitorDismiss: 'monitor:dismiss',
   monitorDismissAll: 'monitor:dismissAll',
@@ -35,7 +32,6 @@ export const CH = {
   clipboardRead: 'term:clipboardRead',
   menuEdit: 'menu:edit',
   cwdChanged: 'cwd:changed',
-  monitorClearCommands: 'monitor:clearCommands',
   todoList: 'todo:list',
   todoAdd: 'todo:add',
   todoUpdate: 'todo:update',
@@ -266,37 +262,6 @@ export interface MonitorEvent {
   capturedAt: string;
 }
 
-/** A completed or running command segmented by OSC 133 marks (§15.5). Newest-last. */
-export interface CommandSummary {
-  id: string;
-  sessionId: SessionId;
-  command: string;
-  exitCode: number | null;
-  running: boolean;
-  startedAt: number;
-  truncated: boolean;
-}
-
-export interface CommandsRequestMsg {
-  sessionId: SessionId;
-}
-
-/** Fired when a command span opens/closes so the pane re-pulls history (§15.5). */
-export interface CommandsChangedMsg {
-  sessionId: SessionId;
-}
-
-export interface CaptureCommandMsg {
-  sessionId: SessionId;
-  commandId: string;
-}
-
-/** Output text of a captured command (§16.2); returned null when the id is unknown/trimmed. */
-export interface CommandCaptureResult {
-  text: string;
-  truncated: boolean;
-}
-
 /** "Capture last report" (§21.1): run report-detection on demand; resolves to the single
  *  latest report + findings (replacing the prior capture), or [] when none is detected. */
 export interface CaptureLastMsg {
@@ -311,11 +276,6 @@ export interface DismissMsg {
 
 /** Dismiss every captured event in the pane (§15.6 / v2.6). */
 export interface DismissAllMsg {
-  sessionId: SessionId;
-}
-
-/** Clear the command-history list — Dismiss-all for commands (§16.2). */
-export interface ClearCommandsMsg {
   sessionId: SessionId;
 }
 
@@ -389,7 +349,6 @@ export interface ChannelPayloads {
   'monitor:eventRemoved': MonitorEventRemovedMsg;
   'monitor:update': MonitorUpdateMsg;
   'monitor:cleared': MonitorClearedMsg;
-  'monitor:commandsChanged': CommandsChangedMsg;
   'cwd:changed': CwdChangedMsg;
   'viewer:onChanged': ViewerChangedMsg;
   'flow:onStateChanged': FlowStateChangedMsg;
@@ -837,13 +796,6 @@ export interface MonitorApi {
    *  resolves to a RepoInfo even before the first OSC 7; the `| null` is reserved for an
    *  unresolvable session (no live PTY) and is not the normal pre-OSC-7 case. */
   currentRepo(): Promise<RepoInfo | null>;
-  /** Compact command history (§15.5), pulled on demand — Capture selection resolves the latest
-   *  command's output to a todo (§16.2). Callers decide when to pull; no polling is implied. */
-  commands(): Promise<CommandSummary[]>;
-  /** Mark-driven signal that a command span opened/closed (§15.5). */
-  onCommandsChanged(cb: () => void): void;
-  /** A command's output text, for adding straight to a todo (§16.2); null on unknown/trimmed id. */
-  captureCommandText(commandId: string): Promise<CommandCaptureResult | null>;
   /** Run report-detection on demand and return the single latest report + findings (§21.1);
    *  [] when none. The captured report replaces any prior — the pane holds one (§21.1). */
   captureLast(): Promise<MonitorEvent[]>;
@@ -863,8 +815,6 @@ export interface MonitorApi {
   setSettings(settings: Partial<UiSettings>): void;
   /** The agent's repo key changed (OSC 7 → §16.3); pane re-pulls its todo list. */
   onCwdChanged(cb: (msg: CwdChangedMsg) => void): void;
-  /** Clear the command-history list — Dismiss-all for commands (§16.2). */
-  clearCommands(): void;
   // Todo (§16.4) — repoKey threaded so an in-flight edit always targets its own repo.
   todoList(repoKey: string): Promise<TodoItem[]>;
   todoAdd(repoKey: string, text: string, source?: TodoSource): Promise<TodoItem[]>;
