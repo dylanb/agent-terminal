@@ -492,8 +492,15 @@ test('the app terminates when the hosted shell exits', async () => {
   page = await app.firstWindow();
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
   // Shell teardown → PTY exit → app quit can take a moment under CI load; wait past the default budget.
-  await typeCommand('exit');
-  await app.waitForEvent('close', { timeout: 20_000 });
+  const closed = app.waitForEvent('close', { timeout: 20_000 });
+  await focusTerminal();
+  await page.keyboard.type('exit', { delay: 20 });
+  try {
+    await page.keyboard.press('Enter');
+  } catch (error) {
+    if (!page.isClosed()) throw error;
+  }
+  await closed;
   expect(app.windows()).toHaveLength(0);
 });
 
