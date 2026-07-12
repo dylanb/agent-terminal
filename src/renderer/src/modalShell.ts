@@ -1,19 +1,25 @@
 // Reusable modal-dialog shell (#26): the one definition of the blocking-dialog focus management
-// (UI-STANDARDS §5), composed by confirmDialog and flowInputModal so the focus-trap logic cannot
-// diverge between them. Callers supply only the card body via render(build).
+// (UI-STANDARDS §5). EVERY blocking dialog composes it — an enumeration here would rot, and the composer it
+// omitted is precisely the one that would drift. Callers supply only the card body via render(build).
 
 export interface ModalCard {
   card: HTMLElement;
   initialFocus: HTMLElement | null;
   describedById?: string;
+  /** The card's body slots (UI §5.7), when its content can outgrow the card's max-height. `grow` is the
+   *  chain that absorbs the card's leftover column height; `scroll` is the one box within it that scrolls.
+   *  Naming them on the contract — rather than leaving the shell's stylesheet to reach for an organism's
+   *  own class names — is what keeps the shell from knowing anything about its callers. */
+  grow?: HTMLElement;
+  scroll?: HTMLElement;
 }
 
 export type ModalShellBuild = (ctx: {
   doc: Document;
   titleId: string;
-  /** Dismiss: the user declined (Escape / scrim / a Cancel button). Fires `onClose`. */
+  /** Dismiss: the user declined (Escape / scrim / a Cancel button). Fires `onDismiss`. */
   close: () => void;
-  /** Accept: the user's own affirmative action (Confirm / Install). Closes WITHOUT firing `onClose`, so a
+  /** Accept: the user's own affirmative action (Confirm / Install). Closes WITHOUT firing `onDismiss`, so a
    *  caller that retracts the operation on dismissal does not also retract the one it is about to run. */
   confirm: () => void;
 }) => ModalCard;
@@ -39,7 +45,10 @@ let modalSeq = 0;
 export function createModalShell(
   host: HTMLElement,
   idPrefix: string,
-  onClose?: () => void,
+  /** The user DISMISSED the dialog (Escape / scrim / Cancel). NOT fired for the build's `confirm`, nor for
+   *  `render(null)` / `dispose`. Named for the event, not the mechanism: calling it "onClose" is what led a
+   *  consumer to accept through the dismiss door and announce a cancellation over a running operation. */
+  onDismiss?: () => void,
   opts?: ModalShellOptions,
 ): ModalShell {
   const doc = host.ownerDocument;
@@ -53,13 +62,10 @@ export function createModalShell(
     else if (opener) opts?.onFocusLost?.();
     opener = null;
   };
-  // `close` is the USER-dismiss path (Escape / scrim / the build's Cancel): it fires `onClose` so a caller
-  // can distinguish a dismissal from its own programmatic teardown (`render(null)` / `dispose`), which do
-  // not — and from the build's `confirm`, the user's affirmative action, which is not a dismissal either.
   const close = (): void => {
     const wasOpen = host.firstChild !== null;
     clear();
-    if (wasOpen) onClose?.();
+    if (wasOpen) onDismiss?.();
   };
   return {
     render(build) {
@@ -98,8 +104,10 @@ export function createModalShell(
         }
       });
 
-      const { card, initialFocus, describedById } = build({ doc, titleId, close, confirm: clear });
+      const { card, initialFocus, describedById, grow, scroll } = build({ doc, titleId, close, confirm: clear });
       if (describedById) modal.setAttribute('aria-describedby', describedById);
+      grow?.setAttribute('data-modal-grow', '');
+      scroll?.setAttribute('data-modal-scroll', '');
       modal.append(card);
       host.append(scrim, modal);
       (initialFocus ?? modal).focus();

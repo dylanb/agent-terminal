@@ -83,6 +83,13 @@ const commandRel = 'groom-ticket.md';
 // swap one destination's bundleDir with withBundle — the opaque plan strategy travels untouched.
 const seam = (): InstallDestination[] => exampleInstallDirs({ packaged: false, appPath: process.cwd() }, home, configRoot);
 const destOf = (id: InstallDestinationId): InstallDestination => dirs.find((d) => d.id === id) as InstallDestination;
+/** The destination's target. `targetDir` is nullable because a relative CLAUDE_CONFIG_DIR is refused; these
+ *  fixtures always supply an absolute one, so a null here is a broken fixture, not a case under test. */
+const targetDirOf = (id: InstallDestinationId): string => {
+  const t = destOf(id).targetDir;
+  if (t === null) throw new Error(`fixture supplied no target for ${id}`);
+  return t;
+};
 const withBundle = (id: InstallDestinationId, bundleDir: string): InstallDestination[] =>
   dirs.map((d) => (d.id === id ? { ...d, bundleDir } : d));
 
@@ -97,7 +104,7 @@ afterEach(() => {
 });
 
 const ALL: InstallDestinationId[] = ['flow', 'loops', 'skills', 'commands'];
-const targetOf = (id: InstallDestinationId, rel: string): string => path.join(destOf(id).targetDir, rel);
+const targetOf = (id: InstallDestinationId, rel: string): string => path.join(targetDirOf(id), rel);
 const filesFor = (
   groups: { destination: InstallDestinationId; files: string[] }[],
   id: InstallDestinationId,
@@ -114,6 +121,31 @@ const conflictsFor = (res: InstallExamplesPreview, id: InstallDestinationId): st
   const d = previewOk(res).find((x) => x.destination === id);
   return d && d.conflict ? [...d.files] : [];
 };
+
+// A relative CLAUDE_CONFIG_DIR names no single directory — Claude Code resolves it against ITS cwd, not
+// ours — so the install refuses rather than anchoring it at this process's cwd, which under `electron-vite
+// dev` is the repo root: the loops tree, every persona skill and the commands would land in the user's
+// working tree, reporting success, and `loopDef` would then stamp that repo path `operator-config`, the
+// origin §26.6 grants `exec` authority on (CWE-829).
+describe('a relative user-config root is refused, not anchored at the process cwd', () => {
+  const relativeDirs = (): InstallDestination[] =>
+    exampleInstallDirs({ packaged: false, appPath: process.cwd() }, home, '~/.claude');
+
+  it('refuses the apply, names CLAUDE_CONFIG_DIR, and writes nothing anywhere', () => {
+    const before = walk(home);
+    const res = applyInstallExamples(relativeDirs(), []);
+
+    expect(res.ok).toBe(false);
+    expect(res.ok ? '' : res.error).toContain('CLAUDE_CONFIG_DIR');
+    expect(walk(home)).toEqual(before);
+    expect(existsSync(path.join(process.cwd(), '~'))).toBe(false);
+  });
+
+  it('refuses the preview too, so no consent step is ever computed from a guessed path', () => {
+    const res = previewInstallExamples(relativeDirs());
+    expect(res.ok).toBe(false);
+  });
+});
 
 describe('applyInstallExamples — a clean run seeds every destination and reports each file under it', () => {
   it('reports every bundled file created under the destination it was written to', () => {
@@ -140,7 +172,7 @@ describe('applyInstallExamples — a clean run seeds every destination and repor
     applyInstallExamples(dirs, []);
     for (const loop of LOOP_NAMES) {
       for (const rel of walk(path.join(BUNDLE_LOOPS, loop))) {
-        const installed = path.join(destOf('loops').targetDir, loop, rel);
+        const installed = path.join(targetDirOf('loops'), loop, rel);
         expect(existsSync(installed)).toBe(true);
         expect(readFileSync(installed)).toEqual(readFileSync(path.join(BUNDLE_LOOPS, loop, rel)));
       }
@@ -151,20 +183,20 @@ describe('applyInstallExamples — a clean run seeds every destination and repor
     applyInstallExamples(dirs, []);
     expect(COMMANDS_SET.length).toBeGreaterThan(0);
     for (const rel of COMMANDS_SET) {
-      expect(readFileSync(path.join(destOf('commands').targetDir, rel))).toEqual(readFileSync(path.join(BUNDLE_COMMANDS, rel)));
+      expect(readFileSync(path.join(targetDirOf('commands'), rel))).toEqual(readFileSync(path.join(BUNDLE_COMMANDS, rel)));
     }
-    expect(walk(destOf('commands').targetDir).sort()).toEqual([...COMMANDS_SET].sort());
+    expect(walk(targetDirOf('commands')).sort()).toEqual([...COMMANDS_SET].sort());
   });
 
   it('seeds no command into the flow home', () => {
     applyInstallExamples(dirs, []);
-    for (const rel of COMMANDS_SET) expect(existsSync(path.join(destOf('flow').targetDir, rel))).toBe(false);
-    expect(existsSync(path.join(destOf('flow').targetDir, 'commands'))).toBe(false);
+    for (const rel of COMMANDS_SET) expect(existsSync(path.join(targetDirOf('flow'), rel))).toBe(false);
+    expect(existsSync(path.join(targetDirOf('flow'), 'commands'))).toBe(false);
   });
 
   it('installs the flow destination as flow.yaml + .md templates only — never a bare recursive walk', () => {
     applyInstallExamples(dirs, []);
-    expect(walk(destOf('flow').targetDir).sort()).toEqual([...FLOW_SET].sort());
+    expect(walk(targetDirOf('flow')).sort()).toEqual([...FLOW_SET].sort());
   });
 
   // The writer↔reader pin: the installer must seed the templates where the READER looks for them, so both
@@ -173,7 +205,7 @@ describe('applyInstallExamples — a clean run seeds every destination and repor
   // files somewhere the picker does not read, and the picker then comes back empty.
   it('seeds the templates where the todo-template reader looks for them', () => {
     applyInstallExamples(dirs, []);
-    const flowDir = destOf('flow').targetDir;
+    const flowDir = targetDirOf('flow');
 
     const seeded = listTodoTemplates(todoTemplatesDir(flowDir)).map((t) => t.ref).sort();
     const bundled = readdirSync(todoTemplatesDir(BUNDLE_FLOW))
@@ -229,10 +261,10 @@ describe('previewInstallExamples — per-destination conflicts, and nothing is e
   });
 
   it('reports exactly the differing targets, grouped under their own destination', () => {
-    mkdirSync(destOf('skills').targetDir, { recursive: true });
+    mkdirSync(targetDirOf('skills'), { recursive: true });
     mkdirSync(path.dirname(targetOf('skills', skillRel)), { recursive: true });
     writeFileSync(targetOf('skills', skillRel), 'my own skill\n');
-    mkdirSync(destOf('commands').targetDir, { recursive: true });
+    mkdirSync(targetDirOf('commands'), { recursive: true });
     writeFileSync(targetOf('commands', commandRel), 'my own command\n');
 
     const preview = previewInstallExamples(dirs);
@@ -250,9 +282,9 @@ describe('applyInstallExamples — one replace decision per destination, never o
     const flowBody = 'name: my-custom-flow\nsteps: []\n';
     mkdirSync(path.dirname(targetOf('skills', skillRel)), { recursive: true });
     writeFileSync(targetOf('skills', skillRel), skillBody);
-    mkdirSync(destOf('commands').targetDir, { recursive: true });
+    mkdirSync(targetDirOf('commands'), { recursive: true });
     writeFileSync(targetOf('commands', commandRel), commandBody);
-    mkdirSync(destOf('flow').targetDir, { recursive: true });
+    mkdirSync(targetDirOf('flow'), { recursive: true });
     writeFileSync(targetOf('flow', flowRel), flowBody);
     return { skillBody, commandBody, flowBody };
   }
@@ -307,7 +339,7 @@ describe('applyInstallExamples — one replace decision per destination, never o
   });
 
   it('creates absent files in a declined destination — a decline withholds no creation', () => {
-    mkdirSync(destOf('commands').targetDir, { recursive: true });
+    mkdirSync(targetDirOf('commands'), { recursive: true });
     writeFileSync(targetOf('commands', commandRel), 'mine\n');
     const res = okOf(applyInstallExamples(dirs, []));
     expect(filesFor(res.skipped, 'commands')).toEqual([commandRel]);
@@ -358,8 +390,8 @@ describe('applyInstallExamples — all-or-nothing across destinations when unwri
   );
 
   it.skipIf(asRoot)('writes nothing anywhere when a destination container is not writable', () => {
-    mkdirSync(destOf('skills').targetDir, { recursive: true });
-    chmodSync(destOf('skills').targetDir, 0o500); // readable + traversable, not writable
+    mkdirSync(targetDirOf('skills'), { recursive: true });
+    chmodSync(targetDirOf('skills'), 0o500); // readable + traversable, not writable
     try {
       const res = applyInstallExamples(dirs, []);
       expect(res.ok).toBe(false);
@@ -370,7 +402,7 @@ describe('applyInstallExamples — all-or-nothing across destinations when unwri
       expect(existsSync(targetOf('loops', planDefRel))).toBe(false);
       expect(existsSync(targetOf('commands', commandRel))).toBe(false);
     } finally {
-      chmodSync(destOf('skills').targetDir, 0o700);
+      chmodSync(targetDirOf('skills'), 0o700);
     }
   });
 });
@@ -386,7 +418,7 @@ describe('applyInstallExamples — a symlink nested inside a destination is refu
   ])('refuses when %s under the loops destination is a symlink, and writes nothing anywhere', (_label, rel) => {
     const real = mkdtempSync(path.join(tmpdir(), 'link-target-'));
     try {
-      const link = path.join(destOf('loops').targetDir, rel);
+      const link = path.join(targetDirOf('loops'), rel);
       mkdirSync(path.dirname(link), { recursive: true });
       symlinkSync(real, link);
 
@@ -400,8 +432,8 @@ describe('applyInstallExamples — a symlink nested inside a destination is refu
       // Nothing landed anywhere: the refusal precedes the first write, so no destination is half-seeded.
       expect(res.created).toEqual([]);
       expect(res.overwritten).toEqual([]);
-      expect(existsSync(destOf('flow').targetDir)).toBe(false);
-      expect(existsSync(destOf('skills').targetDir)).toBe(false);
+      expect(existsSync(targetDirOf('flow'))).toBe(false);
+      expect(existsSync(targetDirOf('skills'))).toBe(false);
       expect(existsSync(targetOf('commands', commandRel))).toBe(false);
     } finally {
       rmSync(real, { recursive: true, force: true });
@@ -415,7 +447,7 @@ describe('applyInstallExamples — a container symlink that stays inside the des
   // a real location INSIDE the destination is followed to that symlink-free location (CWE-367) — the same
   // policy every other confined path in the app applies, rather than a blanket refusal of any symlink.
   it('writes a loop whose directory links to a real sibling inside the destination, at the resolved location', () => {
-    const loopsTarget = destOf('loops').targetDir;
+    const loopsTarget = targetDirOf('loops');
     mkdirSync(loopsTarget, { recursive: true });
     const realDir = path.join(loopsTarget, 'real-plan');
     mkdirSync(realDir);
@@ -446,7 +478,7 @@ describe('applyInstallExamples — a failure once writing has begun names everyt
   it('reports every created/overwritten file, and no file outside that list differs from its pre-action bytes', () => {
     // A directory standing where a command file must be written: the pre-flight (a container check)
     // cannot see it, so the failure lands mid-write, after flow/loops/skills are on disk.
-    mkdirSync(path.join(destOf('commands').targetDir, commandRel), { recursive: true });
+    mkdirSync(path.join(targetDirOf('commands'), commandRel), { recursive: true });
     // A pre-action file the run will skip (declined), so `no file outside that list` has a real member
     // whose bytes can be compared rather than a vacuously empty set.
     const preserved = targetOf('skills', skillRel);
@@ -485,7 +517,7 @@ describe('applyInstallExamples — a failure once writing has begun names everyt
 describe('applyInstallExamples — never writes a .gitignore', () => {
   it('creates none anywhere it wrote', () => {
     applyInstallExamples(dirs, ALL);
-    for (const dir of [home, configRoot, destOf('flow').targetDir, destOf('loops').targetDir, destOf('skills').targetDir, destOf('commands').targetDir]) {
+    for (const dir of [home, configRoot, targetDirOf('flow'), targetDirOf('loops'), targetDirOf('skills'), targetDirOf('commands')]) {
       expect(existsSync(path.join(dir, '.gitignore'))).toBe(false);
     }
   });
@@ -503,7 +535,7 @@ describe('applyInstallExamples — an existing-but-unreadable target is not mist
   // A traverse/read-permission failure cannot be provoked as root (it bypasses the mode bits), so gate
   // rather than widen a seam into classify (CLAUDE.md it.skipIf guidance).
   it.skipIf(asRoot)('does not silently overwrite a present target it cannot read (EACCES is not absence)', () => {
-    mkdirSync(destOf('flow').targetDir, { recursive: true });
+    mkdirSync(targetDirOf('flow'), { recursive: true });
     const tf = targetOf('flow', flowRel);
     const custom = 'name: my-custom-flow\nsteps: []\n';
     writeFileSync(tf, custom);
@@ -523,7 +555,7 @@ describe('applyInstallExamples — a mispackaged bundle is a reported error, not
   it('returns { ok:false, error } instead of throwing when a bundled file cannot be read', () => {
     const bundleEmpty = mkdtempSync(path.join(tmpdir(), 'bundle-empty-'));
     try {
-      mkdirSync(destOf('flow').targetDir, { recursive: true });
+      mkdirSync(targetDirOf('flow'), { recursive: true });
       writeFileSync(targetOf('flow', flowRel), 'name: my-custom-flow\nsteps: []\n'); // present → bundle read reached
       let res: InstallExamplesResult | undefined;
       expect(() => {
@@ -550,9 +582,9 @@ describe('applyInstallExamples — a mispackaged bundle is a reported error, not
 
       const res = okOf(applyInstallExamples(withBundle('commands', bundleX), []));
       expect(filesFor(res.created, 'commands')).toEqual([commandRel]);
-      expect(walk(destOf('commands').targetDir)).toEqual([commandRel]);
-      expect(existsSync(path.join(destOf('commands').targetDir, 'linked.md'))).toBe(false);
-      expect(existsSync(path.join(destOf('commands').targetDir, 'linked-dir'))).toBe(false);
+      expect(walk(targetDirOf('commands'))).toEqual([commandRel]);
+      expect(existsSync(path.join(targetDirOf('commands'), 'linked.md'))).toBe(false);
+      expect(existsSync(path.join(targetDirOf('commands'), 'linked-dir'))).toBe(false);
     } finally {
       rmSync(bundleX, { recursive: true, force: true });
       rmSync(outside, { recursive: true, force: true });
@@ -628,7 +660,7 @@ describe('an absent bundle source is a refusal, never a silent success (§18.1)'
 
   it('refuses before writing anything, so a mispackaged build seeds no destination at all', () => {
     expect(applyInstallExamples(withBundle('loops', absent), []).ok).toBe(false);
-    for (const id of ALL) expect(existsSync(destOf(id).targetDir)).toBe(false);
+    for (const id of ALL) expect(existsSync(targetDirOf(id))).toBe(false);
   });
 
   it('distinguishes an absent tree from an empty one: an empty bundle installs nothing and says so', () => {
@@ -663,7 +695,7 @@ describe('the pre-write writability gate covers the containers the write actuall
     // Ticket #41's safety AC is all-or-nothing whenever unwritability is detectable before the first
     // write. Probing only each destination's ROOT detects it only for the root: an unwritable
     // subdirectory the write must enter is found mid-write, after other destinations have landed.
-    const loops = destOf('loops').targetDir;
+    const loops = targetDirOf('loops');
     const nested = path.join(loops, 'plan-loop');
     mkdirSync(nested, { recursive: true });
     chmodSync(nested, 0o555); // traversable, not writable
@@ -678,8 +710,8 @@ describe('the pre-write writability gate covers the containers the write actuall
     expect(res.error).toMatch(/cannot be written/);
     expect(res.created).toEqual([]);
     expect(res.overwritten).toEqual([]);
-    expect(existsSync(destOf('flow').targetDir)).toBe(false);
-    expect(existsSync(destOf('commands').targetDir)).toBe(false);
+    expect(existsSync(targetDirOf('flow'))).toBe(false);
+    expect(existsSync(targetDirOf('commands'))).toBe(false);
   });
 });
 
@@ -699,8 +731,8 @@ describe('a destination root the USER symlinked is followed, not refused — it 
 
   const linkDest = (id: InstallDestinationId, real: string): void => {
     mkdirSync(real, { recursive: true });
-    mkdirSync(path.dirname(destOf(id).targetDir), { recursive: true });
-    symlinkSync(real, destOf(id).targetDir);
+    mkdirSync(path.dirname(targetDirOf(id)), { recursive: true });
+    symlinkSync(real, targetDirOf(id));
   };
 
   it('installs through the symlink, landing the files at the resolved location', () => {
@@ -732,7 +764,7 @@ describe('a refusal names the cause the user has to act on', () => {
     // confinedRealPath returns null for MORE than an escaping symlink: an unreadable (EACCES) or
     // non-directory segment cannot be reduced to a real path either. Reporting all of them as "a symbolic
     // link stands on the path" sends the user hunting for a link that does not exist.
-    const locked = path.join(destOf('skills').targetDir, path.dirname(skillRel));
+    const locked = path.join(targetDirOf('skills'), path.dirname(skillRel));
     mkdirSync(locked, { recursive: true });
     chmodSync(locked, 0o000);
     let res: InstallExamplesResult | undefined;
@@ -792,7 +824,7 @@ describe('previewInstallExamples — the read path is confined exactly as the wr
     try {
       const secret = path.join(outside, 'secret.md');
       writeFileSync(secret, 'a file outside every destination\n');
-      mkdirSync(destOf('commands').targetDir, { recursive: true });
+      mkdirSync(targetDirOf('commands'), { recursive: true });
       symlinkSync(secret, targetOf('commands', commandRel));
 
       const res = handleInstallExamplesPreview({ sessionId: SESSION_ID }, () => dirs);
@@ -804,7 +836,7 @@ describe('previewInstallExamples — the read path is confined exactly as the wr
   });
 
   it.skipIf(asRoot)('reports an unreadable target as a refusal instead of throwing out of the handler', () => {
-    mkdirSync(destOf('flow').targetDir, { recursive: true });
+    mkdirSync(targetDirOf('flow'), { recursive: true });
     const tf = targetOf('flow', flowRel);
     writeFileSync(tf, 'name: my-custom-flow\nsteps: []\n');
     chmodSync(tf, 0o000); // present but unreadable → classify's read throws EACCES, not ENOENT
@@ -853,17 +885,17 @@ describe('handleInstallExamplesPreview / handleInstallExamplesApply — contract
     });
     expect(res.ok).toBe(false);
     expect(consulted).toBe(0);
-    expect(existsSync(destOf('flow').targetDir)).toBe(false);
+    expect(existsSync(targetDirOf('flow'))).toBe(false);
   });
 
   it('rejects an apply whose replace list is missing or holds an unknown destination', () => {
     expect(handleInstallExamplesApply({ sessionId: SESSION_ID }, thunk).ok).toBe(false);
     expect(handleInstallExamplesApply({ sessionId: SESSION_ID, replace: ['everything'] }, thunk).ok).toBe(false);
-    expect(existsSync(destOf('flow').targetDir)).toBe(false);
+    expect(existsSync(targetDirOf('flow'))).toBe(false);
   });
 
   it('previews conflicts for a live session and refuses a wrong session with an error, not an empty list', () => {
-    mkdirSync(destOf('commands').targetDir, { recursive: true });
+    mkdirSync(targetDirOf('commands'), { recursive: true });
     writeFileSync(targetOf('commands', commandRel), 'mine\n');
     const live = handleInstallExamplesPreview({ sessionId: SESSION_ID }, thunk);
     expect(live.ok).toBe(true);

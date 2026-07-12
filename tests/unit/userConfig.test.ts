@@ -45,6 +45,34 @@ describe('userConfigRoot', () => {
     expect(userConfigRoot()).toBe(path.join(os.homedir(), '.claude'));
   });
 
+  // A RELATIVE override is the same defect wearing a different costume, and it is REACHABLE:
+  // `export CLAUDE_CONFIG_DIR="~/.claude"` does not expand the tilde inside double quotes, so the value is
+  // literally relative. `path.resolve()` would anchor it at THIS process's cwd — which is not even the cwd
+  // Claude Code (a separate process) resolves the same variable against, so no cwd we could pick is right.
+  // Anchoring at ours seeds a directory nobody reads, and when the app was launched from a repo it lands in
+  // the user's working tree — where `loopDef` would then stamp it `operator-config`, the origin §26.6 hangs
+  // `exec` authority on (CWE-829). It is refused, not guessed at.
+  it.each(['~/.claude', '.claude', 'relative/dir', './cfg', '  spaced/rel  '])(
+    'refuses a relative CLAUDE_CONFIG_DIR (%o) rather than anchoring it at process.cwd()',
+    (v) => {
+      process.env.CLAUDE_CONFIG_DIR = v;
+      expect(userConfigRoot()).toBeNull();
+      expect(userConfigLoopsDir()).toBeNull();
+      expect(userConfigSkillsDir()).toBeNull();
+      expect(userConfigCommandsDir()).toBeNull();
+    },
+  );
+
+  it('refuses a relative explicit argument too — the same domain, whichever door it arrives through', () => {
+    delete process.env.CLAUDE_CONFIG_DIR;
+    expect(userConfigRoot('relative/dir')).toBeNull();
+  });
+
+  it('trims a padded ABSOLUTE value rather than leaving it relative', () => {
+    process.env.CLAUDE_CONFIG_DIR = '  /Users/x/.claude  ';
+    expect(userConfigRoot()).toBe(path.join('/Users/x/.claude'));
+  });
+
   it.each([undefined, '', '   '])('never yields a relative destination for a root of %o', (configDir) => {
     delete process.env.CLAUDE_CONFIG_DIR;
     for (const dir of [
@@ -52,7 +80,8 @@ describe('userConfigRoot', () => {
       userConfigSkillsDir(configDir),
       userConfigCommandsDir(configDir),
     ]) {
-      expect(path.isAbsolute(dir)).toBe(true);
+      expect(dir).not.toBeNull();
+      expect(path.isAbsolute(dir as string)).toBe(true);
     }
   });
 });
@@ -68,7 +97,8 @@ describe('the three destination branches all derive from the one root', () => {
   it('redirects all three together when CLAUDE_CONFIG_DIR moves', () => {
     process.env.CLAUDE_CONFIG_DIR = '/redirected';
     for (const dir of [userConfigLoopsDir(), userConfigSkillsDir(), userConfigCommandsDir()]) {
-      expect(dir.startsWith('/redirected' + path.sep)).toBe(true);
+      expect(dir).not.toBeNull();
+      expect((dir as string).startsWith('/redirected' + path.sep)).toBe(true);
     }
   });
 });

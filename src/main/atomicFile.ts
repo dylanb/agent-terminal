@@ -19,8 +19,10 @@ import path from 'node:path';
 export function isRealContainer(dir: string): boolean {
   try {
     return lstatSync(dir).isDirectory();
-  } catch {
-    return true;
+  } catch (e) {
+    // ONLY absence is "mkdir will make a real one". Any other failure (EACCES on a parent, ENOTDIR) leaves
+    // us unable to say the container is real, and a write must not proceed on a container we could not see.
+    return isErrno(e, 'ENOENT');
   }
 }
 

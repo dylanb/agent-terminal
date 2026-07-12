@@ -513,7 +513,16 @@ button:hover { border-color:var(--dim); }
    has left, and overprints the footer at zoom (WCAG 1.4.4, 1.4.10). The shell names a slot, never an
    organism's classes (UI §2.3). */
 .flow-modal .card [data-modal-grow] { display:flex; flex-direction:column; flex:1 1 auto; min-height:0; }
-.flow-modal .card [data-modal-scroll] { flex:1 1 auto; min-height:0; overflow-y:auto; }
+/* Two things this box must never do, both invisible to a pin that only checks the footer:
+   `min-height` — a `flex:1 1 auto; min-height:0` body is free to shrink to ZERO when the card's other rows
+   fill its max-height, leaving the controls focusable but entirely unpaintable: keyboard focus then lands on
+   a control the user cannot see (WCAG 2.2 SC 2.4.11 Focus Not Obscured). The floor keeps at least one option
+   on screen and lets `.flow-modal`'s own scroll carry whatever the card then cannot fit.
+   `scroll-padding` — insets the scrollport that sequential-focus scroll-into-view aligns against; without it
+   the browser lands a focused control's BORDER BOX flush with the clip edge, and a focus ring paints OUTSIDE
+   the border box, so the indicator is cut off on the very axis this box scrolls (SC 2.4.11, SC 1.4.11). The
+   inset is the app's ring extent: 2px outline + 2px offset. */
+.flow-modal .card [data-modal-scroll] { flex:1 1 auto; min-height:5rem; overflow-y:auto; scroll-padding:4px; }
 .flow-modal .mfoot { flex:none; }
 .flow-modal h3 { font-family:"Fraunces",serif; font-weight:500; font-size:19px; margin:0 0 4px; }
 .flow-modal .ph { font-size:12.5px; color:var(--dim); margin:0 0 16px; }

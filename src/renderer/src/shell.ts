@@ -57,7 +57,15 @@ export function createShell(root: HTMLElement, deps: ShellDeps = {}): Shell {
   let theme: Theme = themeTarget.getAttribute('data-theme') === 'dark' ? 'dark' : 'light';
   let fullscreen = root.classList.contains('viewer-fullscreen');
 
+  /** A dialog opened with `aria-modal` blocks the app beneath it, so nothing may switch the view out from
+   *  under it — not a chord, not the rail, not another surface calling `setView` (loopReveal does, on an OS
+   *  notification). A switch `display:none`s a whole viewpane, and a hidden dialog is still IN the document:
+   *  focus is torn out of it, and it can never be reached to close, so the app would be wedged behind the
+   *  scrim (WCAG 2.4.3, 2.1.1). Guarding the switch, not its callers, is what makes that unreachable. */
+  const modalIsOpen = (): boolean => doc.querySelector('[aria-modal="true"]') !== null;
+
   function setView(v: ViewId): void {
+    if (modalIsOpen()) return;
     if (fullscreen && v !== '2') setViewerFullscreen(false); // leaving the viewer restores hidden chrome (§20.2)
     view = v;
     root.querySelectorAll('[data-viewpane]').forEach((p) => p.classList.toggle('on', p.getAttribute('data-viewpane') === v));
@@ -175,9 +183,10 @@ export function createShell(root: HTMLElement, deps: ShellDeps = {}): Shell {
       return;
     }
     if (e.key === 'Escape' && isLoopPanelOpen()) {
-      // Defer to an open dialog (e.g. the typed-input modal): Escape should dismiss the topmost
-      // surface, not the panel behind it (WCAG 2.4.3). The modal's own handler closes it.
-      if ((e.target as Element | null)?.closest?.('[role="dialog"]')) return;
+      // Defer to an open dialog: Escape dismisses the topmost surface, not the panel behind it (WCAG 2.4.3).
+      // The SAME predicate the view guard uses — `[role="dialog"]` alone misses errorDialog's `alertdialog`,
+      // and two hand-maintained copies of "a blocking dialog is open" are what let them disagree.
+      if (modalIsOpen()) return;
       e.preventDefault();
       e.stopPropagation();
       closeLoopPanel();
@@ -197,13 +206,9 @@ export function createShell(root: HTMLElement, deps: ShellDeps = {}): Shell {
     // (terminal chords, plain keys) propagates to the focused descendant.
     const action = matchChord(e, getKeymap());
     if (!action) return;
-
-    // An `aria-modal` dialog blocks the app beneath it, so no app-nav chord may run while one is open: a
-    // view switch display:none's a whole viewpane — including one a dialog is hosted in — tearing focus out
-    // of it and leaving the keyboard user behind the scrim with no route back (WCAG 2.4.3, 2.1.1). Same
-    // deference the Escape branch above gives an open dialog. Gated behind the chord match, so a terminal
-    // keystroke never pays for a document query.
-    if (doc.querySelector('[aria-modal="true"]')) return;
+    // The drawer is chrome behind the scrim too; `setView` guards itself. Gated behind the chord match, so
+    // a terminal keystroke never pays for a document query.
+    if (modalIsOpen()) return;
 
     const targetView: ViewId | null =
       action === 'viewTerminal' ? '1'

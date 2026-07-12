@@ -188,7 +188,6 @@ export function createInstallExamples(host: HTMLElement, deps: InstallExamplesDe
       const group = d.createElement('div');
       group.className = 'install-consent';
       group.setAttribute('role', 'group');
-      group.setAttribute('data-modal-grow', ''); // the shell's body slot (UI §5)
       const groupLabelId = `${titleId}-consent-group-label`;
       group.setAttribute('aria-labelledby', groupLabelId);
       const groupLabel = d.createElement('span');
@@ -197,7 +196,6 @@ export function createInstallExamples(host: HTMLElement, deps: InstallExamplesDe
       groupLabel.textContent = 'Replace files in';
       const rows = d.createElement('div');
       rows.className = 'install-consent-rows';
-      rows.setAttribute('data-modal-scroll', '');
       group.append(groupLabel, rows);
 
       const boxes = new Map<InstallDestinationId, HTMLInputElement>();
@@ -247,7 +245,8 @@ export function createInstallExamples(host: HTMLElement, deps: InstallExamplesDe
       foot.append(cancel, confirm);
       cardEl.append(foot);
 
-      return { card: cardEl, initialFocus: boxes.values().next().value ?? confirm, describedById };
+      // The body slots are declared on the contract (UI §5.7); the shell applies them.
+      return { card: cardEl, initialFocus: boxes.values().next().value ?? confirm, describedById, grow: group, scroll: rows };
     });
   }
 

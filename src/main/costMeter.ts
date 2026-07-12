@@ -24,10 +24,11 @@ export function encodeProjectDir(repoPath: string): string {
 /** The directory the repo's session JSONL logs live in (§26.10). `APP_SESSION_LOG_ROOT` overrides it with an
  *  EXACT directory (the L7 §26.13 test seam, where the fake-agent writes its fixtures); otherwise it hangs off
  *  the same user-config root the installer seeds, so a CLAUDE_CONFIG_DIR redirect moves both together. */
-export function sessionLogDir(repoPath: string, env: NodeJS.ProcessEnv, home: string): string {
+export function sessionLogDir(repoPath: string, env: NodeJS.ProcessEnv, home: string): string | null {
   const override = env.APP_SESSION_LOG_ROOT;
   if (override && override.length > 0) return override;
-  return path.join(userConfigRootFrom(env, home), 'projects', encodeProjectDir(repoPath));
+  const root = userConfigRootFrom(env, home);
+  return root === null ? null : path.join(root, 'projects', encodeProjectDir(repoPath));
 }
 
 function num(v: unknown): number {
@@ -94,8 +95,10 @@ function jsonlFiles(dir: string): string[] {
  *  A turn is counted ONCE per `message.id`+`requestId`: resuming or forking a session replays the prior turns
  *  verbatim into the new session file, and the API bills them once.
  *
- *  Never throws: an absent dir, unreadable file, or unparseable line is skipped. */
-export function readSessionTokens(logDir: string, since?: number): ModelTokens[] {
+ *  Never throws: a refused root (`null`), an absent dir, an unreadable file, or an unparseable line is
+ *  skipped — cost is display-only and must never abort the loop. */
+export function readSessionTokens(logDir: string | null, since?: number): ModelTokens[] {
+  if (logDir === null) return [];
   const byModel = new Map<string, ModelTokens>();
   const counted = new Set<string>();
   for (const file of jsonlFiles(logDir)) {

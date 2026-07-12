@@ -5,7 +5,7 @@ import path from 'node:path';
 import { atomicWriteFileSync, isRealContainer } from './atomicFile';
 import { confinedRealPathResult, resolveOwnedDirJail, type PathRefusal } from './confinedPath';
 import { readDirEntries } from './dirEntries';
-import { isErrno } from './errno';
+import { errMsg, isErrno } from './errno';
 import type { BundleLocation } from './bundleLocation';
 import { resolveExampleCommandsDir, resolveExampleFlowDir, resolveExampleLoopsDir } from './exampleAssets';
 import { listBundledSkills } from './exampleSkills';
@@ -99,13 +99,15 @@ function skillFiles(loopsBundleDir: string): Plan {
 export interface InstallDestination {
   id: InstallDestinationId;
   bundleDir: string;
-  targetDir: string;
+  /** `null` when the user-config root is refused (a relative CLAUDE_CONFIG_DIR): there is no target to
+   *  install to, and `resolveAll` turns that into a refusal the user sees rather than a guessed path. */
+  targetDir: string | null;
   plan: (bundleDir: string) => Plan;
 }
 
 interface DestinationSpec {
   bundle: (loc: BundleLocation) => string;
-  target: (flowGlobalDir: string, configDir?: string) => string;
+  target: (flowGlobalDir: string, configDir?: string) => string | null;
   plan: (bundleDir: string) => Plan;
 }
 
@@ -173,6 +175,15 @@ const refusal = (what: string, dir: string, cause: PathRefusal): string =>
 function resolveAll(destinations: InstallDestination[]): Resolution {
   const out: ResolvedDestination[] = [];
   for (const dest of destinations) {
+    if (dest.targetDir === null) {
+      return {
+        ok: false,
+        error:
+          `Could not install the ${dest.id} examples: CLAUDE_CONFIG_DIR is set to a relative path, so there is no ` +
+          `single directory it names — Claude Code resolves it against its own working directory, not this app's. ` +
+          `Set it to an absolute path, or unset it to use ~/.claude.`,
+      };
+    }
     const files = dest.plan(dest.bundleDir);
     if (files === null) {
       return { ok: false, error: `Could not install: the ${dest.id} examples are missing from this build's bundle` };
@@ -206,10 +217,6 @@ function isWritableContainer(dir: string): boolean {
       probe = parent;
     }
   }
-}
-
-function errMsg(e: unknown): string {
-  return e instanceof Error ? e.message : String(e);
 }
 
 type Groups = Map<InstallDestinationId, DestRelativePath[]>;

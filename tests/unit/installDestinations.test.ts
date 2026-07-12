@@ -27,7 +27,7 @@ const FLOW_HOME = '/home/u';
 const bundleOf = (dirs: ReturnType<typeof exampleInstallDirs>, id: string): string =>
   dirs.find((d) => d.id === id)!.bundleDir;
 const targetOf = (dirs: ReturnType<typeof exampleInstallDirs>, id: string): string =>
-  dirs.find((d) => d.id === id)!.targetDir;
+  dirs.find((d) => d.id === id)!.targetDir as string;
 
 describe('exampleInstallDirs — the destination set is the contract, in the contract order', () => {
   it('yields exactly INSTALL_DESTINATION_IDS, in that order (report order is single-sourced)', () => {

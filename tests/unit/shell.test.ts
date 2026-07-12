@@ -137,16 +137,60 @@ describe('shell controller (§24.1C — views, hotkeys, docked drawer, theme)', 
         expect(shell.getView()).toBe('4');
       });
 
-      it('does not open Settings, and does not toggle the drawer', () => {
-        shell.setView('1');
-        key(',');
-        expect(shell.getView()).toBe('1');
+      it('does not toggle the drawer — it is chrome behind the scrim too', () => {
         const before = app.classList.contains('drawer-open');
         key('k');
         expect(app.classList.contains('drawer-open')).toBe(before);
       });
 
+      it('does not act on the openSettings chord', () => {
+        modal.remove();
+        shell.setView('1');
+        document.body.append(modal);
+        key(',');
+        expect(shell.getView()).toBe('1');
+      });
+
       it('resumes switching once the dialog closes', () => {
+        modal.remove();
+        key('2');
+        expect(shell.getView()).toBe('2');
+      });
+
+      // Guarding the CHORD is not enough: setView() is public and other surfaces call it (loopReveal fires
+      // it when an OS notification is activated). If a view switch could still land, it would display:none
+      // the pane the dialog is hosted in — and a display:none'd dialog is still IN the document, so the
+      // guard would then match it forever and deaden every chord with no way to reach the dialog and close
+      // it. The guard belongs on the switch itself (WCAG 2.4.3, 2.1.1).
+      it('does not switch view when setView is called directly by another surface', () => {
+        shell.setView('1');
+        expect(shell.getView()).toBe('4');
+      });
+
+      // errorDialog composes the shell with role="alertdialog" (WAI-ARIA APG: a dialog the SYSTEM raises).
+      // A predicate that matches only [role="dialog"] misses it — so with the loop panel open, exactly when
+      // a bootstrap/loop error fires, the shell's capture-phase stopPropagation() would eat Escape, destroy
+      // the panel behind the scrim, and never let the alert's own handler close it (WCAG 2.1.1, 2.4.3).
+      it('defers Escape to an alertdialog, not just a dialog, when the loop panel is open', () => {
+        modal.remove();
+        shell.openLoopPanel();
+        const alert = document.createElement('div');
+        alert.setAttribute('role', 'alertdialog');
+        alert.setAttribute('aria-modal', 'true');
+        const inside = document.createElement('button');
+        alert.append(inside);
+        document.body.append(alert);
+
+        inside.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+
+        expect(shell.isLoopPanelOpen()).toBe(true); // the panel behind the alert survives
+        alert.remove();
+      });
+
+      it('never leaves the app wedged: the dialog is never hidden, so chords resume when it closes', () => {
+        shell.setView('1'); // refused
+        key('2'); // refused
+        expect(pane('4').classList.contains('on')).toBe(true); // the dialog's pane is still shown
         modal.remove();
         key('2');
         expect(shell.getView()).toBe('2');
@@ -338,6 +382,9 @@ describe('shell controller (§24.1C — views, hotkeys, docked drawer, theme)', 
       shell.openLoopPanel();
       const dialog = document.createElement('div');
       dialog.setAttribute('role', 'dialog');
+      // What BLOCKS the app beneath is `aria-modal`, not the role — and createModalShell always sets both.
+      // A role="dialog" without it is a non-modal dialog, which must NOT capture the panel's Escape.
+      dialog.setAttribute('aria-modal', 'true');
       const inp = document.createElement('input');
       dialog.appendChild(inp);
       document.body.appendChild(dialog);

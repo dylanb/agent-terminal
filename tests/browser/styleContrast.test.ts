@@ -414,14 +414,83 @@ describe('the consent scroll box does not clip the checkbox focus ring', () => {
     await vi.waitFor(() => expect(host.querySelector('.flow-modal .card')).not.toBeNull());
   });
 
-  it('leaves room for the ring to paint inside the clip', async () => {
+  const ringOf = (el: HTMLElement): number => {
+    const cs = getComputedStyle(el);
+    return parseFloat(cs.outlineWidth) + parseFloat(cs.outlineOffset);
+  };
+
+  it('leaves room for the ring to paint inside the clip, on the INLINE axis', async () => {
     const rows = host.querySelector('.install-consent-rows') as HTMLElement;
     const box = host.querySelector('.install-consent-opt input[type="checkbox"]') as HTMLElement;
     await tabToProbe(box); // `outline-width` computes to 0 unless :focus-visible actually matches
-    const cs = getComputedStyle(box);
-    const ring = parseFloat(cs.outlineWidth) + parseFloat(cs.outlineOffset);
+    const ring = ringOf(box);
     expect(ring).toBeGreaterThan(0);
     expect(box.getBoundingClientRect().left - rows.getBoundingClientRect().left).toBeGreaterThanOrEqual(ring);
+  });
+});
+
+// The BLOCK axis is the one the box actually scrolls, and it is the axis the inline pin above cannot see.
+// Sequential focus navigation scrolls the newly-focused control into view by aligning its BORDER BOX with the
+// scrollport edge — so without `scroll-padding`, the ring (which paints OUTSIDE the border box) lands beyond
+// the clip and the focus indicator is cut off (WCAG 2.2 SC 2.4.11 Focus Not Obscured; SC 1.4.11). Provoking it
+// needs SEVERAL checkboxes and a manifest long enough that reaching a later one must scroll.
+describe('the consent scroll box does not clip the focus ring of a control it scrolled into view', () => {
+  let host: HTMLElement;
+
+  beforeEach(async () => {
+    await page.viewport(900, 300);
+    host = document.createElement('div');
+    document.body.replaceChildren(host);
+    // SHORT manifests: nothing below a checkbox to keep it away from the clip edge, so scroll-into-view
+    // really can land its border box flush against the scrollport.
+    const files = (n: string): DestRelativePath[] => [`${n}/a.yaml`] as DestRelativePath[];
+    createInstallExamples(host, {
+      preview: async (): Promise<InstallExamplesPreview> => ({
+        ok: true,
+        destinations: [
+          { destination: 'flow', conflict: true, files: files('flow') },
+          { destination: 'loops', conflict: true, files: files('loops') },
+          { destination: 'skills', conflict: true, files: files('skills') },
+          { destination: 'commands', conflict: true, files: files('commands') },
+        ],
+      }),
+      apply: async (): Promise<InstallExamplesResult> => ({ ok: true, created: [], overwritten: [], skipped: [] }),
+    });
+    (host.querySelector('.kprofile button') as HTMLElement).click();
+    await vi.waitUntil(() => host.querySelector('.flow-modal') !== null);
+  });
+
+  afterEach(async () => {
+    await page.viewport(1280, 896);
+  });
+
+  // A `flex:1 1 auto; min-height:0` body is free to shrink to ZERO when the card's other rows fill its
+  // max-height. The controls stay focusable and the box still "scrolls" — it just paints nothing, so a
+  // keyboard user is standing on a control that does not exist on screen. The footer-reachability pins
+  // cannot see this; only asking whether the box has any height can.
+  it('never collapses the options to zero height, however short the viewport', () => {
+    const rows = host.querySelector('[data-modal-scroll]') as HTMLElement;
+    const box = host.querySelector('.install-consent-opt input[type="checkbox"]') as HTMLElement;
+    expect(rows.clientHeight).toBeGreaterThan(0);
+    expect(rows.getBoundingClientRect().height).toBeGreaterThanOrEqual(box.getBoundingClientRect().height);
+  });
+
+  it('leaves room for the ring on the BLOCK axis for every checkbox, including ones below the fold', async () => {
+    const rows = host.querySelector('[data-modal-scroll]') as HTMLElement;
+    const boxes = [...host.querySelectorAll<HTMLElement>('.install-consent-opt input[type="checkbox"]')];
+    expect(boxes.length).toBe(4);
+    expect(rows.scrollHeight).toBeGreaterThan(rows.clientHeight); // it really does have to scroll
+
+    for (const box of boxes) {
+      await tabToProbe(box);
+      const cs = getComputedStyle(box);
+      const ring = parseFloat(cs.outlineWidth) + parseFloat(cs.outlineOffset);
+      expect(ring).toBeGreaterThan(0);
+      const r = box.getBoundingClientRect();
+      const clip = rows.getBoundingClientRect();
+      expect(r.top - clip.top).toBeGreaterThanOrEqual(ring);
+      expect(clip.bottom - r.bottom).toBeGreaterThanOrEqual(ring);
+    }
   });
 });
 

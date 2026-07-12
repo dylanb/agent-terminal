@@ -157,10 +157,12 @@ interface ResolvedLoopDef {
  *  its origin, or null when the name is not a single safe path segment — never a traversal lever. */
 function resolveLoopDefPath(repoDir: string, name: string, configDir?: string): ResolvedLoopDef | null {
   if (!SAFE_NAME.test(name)) return null;
-  const fromConfig: ResolvedLoopDef = {
-    path: path.join(userConfigLoopsDir(configDir), name, `${name}.yaml`),
-    origin: 'operator-config',
-  };
+  // A refused user-config root (a relative CLAUDE_CONFIG_DIR) yields NO operator-config candidate: resolving
+  // it against this process's cwd could place `operator-config` authority on a path inside the repo, and that
+  // origin is what §26.6 grants `exec` on (CWE-829). The repo-override branch below still stands on its own.
+  const loopsDir = userConfigLoopsDir(configDir);
+  const fromConfig: ResolvedLoopDef | null =
+    loopsDir === null ? null : { path: path.join(loopsDir, name, `${name}.yaml`), origin: 'operator-config' };
   try {
     const raw = readFileSync(path.join(repoDir, '.agent-loop.yaml'), 'utf8');
     const doc = yaml.load(raw);

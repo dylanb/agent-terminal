@@ -202,26 +202,33 @@ across every dialog, so it is defined **once** and composed, never re-derived:
    (unmount / relocation, UI §2.2.1) are different contracts: `close()` restores focus to the
    opener; `dispose()` just clears the host subtree, because on relocation there is no opener to
    return to. An organism that owns a dialog must expose both.
-6. **Accept and dismiss are different doors.** `close` is the *dismiss* path and fires `onClose`;
+6. **Accept and dismiss are different doors.** `close` is the *dismiss* path and fires `onDismiss`;
    the build's `confirm` is the user's *affirmative* action and does not. Accepting through `close`
    fires the caller's retraction against the very operation it is starting — the success path then
    announces the cancellation into its own live region (WCAG 4.1.3). The shell owns this: never
-   re-hand-roll a `confirmed` flag to work around it.
+   re-hand-roll a `confirmed` flag to work around it. The callback is named for the *event*, not the
+   mechanism — calling it "onClose" is what invited a consumer through the wrong door.
 7. **A long body scrolls in the card, and never pushes the footer off-screen.** The card is a flex
-   column with a `max-height`; a card whose body can outgrow it marks the chain that should absorb
-   the leftover height `data-modal-grow` and the one box that should scroll `data-modal-scroll`.
-   The bound is the card's remaining column height, never a `vh` cap — a viewport-relative bound
-   cannot know what the column has left, and overprints the footer at 200% zoom (WCAG 1.4.4,
-   1.4.10). These are slots the shell names; the shell's stylesheet must never reach for an
-   organism's own class names (UI §2.3).
-8. **No app-nav chord runs while a dialog is open.** A view switch `display:none`s a whole viewpane
-   — including one a dialog may be hosted in — tearing focus out of the open dialog and stranding
-   the keyboard user behind the scrim (WCAG 2.4.3, 2.1.1). The shell defers to any open
-   `[aria-modal="true"]`, exactly as it already defers Escape.
+   column with a `max-height`. A card whose body can outgrow it returns `grow` (the chain that
+   absorbs the leftover column height) and `scroll` (the one box that scrolls) **on its `ModalCard`**;
+   the shell applies them. Two things that box must never do, and neither is visible to a pin that
+   only checks the footer: **collapse to zero height** (a `flex:1 1 auto; min-height:0` body will,
+   leaving controls focusable but unpainted — focus lands where nothing is drawn, WCAG 2.2 SC 2.4.11),
+   and **clip the focus ring of a control it scrolled into view** (scroll-into-view aligns the border
+   box with the clip edge, and the ring paints outside it — `scroll-padding`). The shell's stylesheet
+   styles those slots and must never reach for an organism's own class names (UI §2.3).
+8. **Nothing switches the view while a dialog is open.** A view switch `display:none`s a whole
+   viewpane — including one a dialog may be hosted in — tearing focus out of the open dialog; and a
+   hidden dialog is still IN the document, so it can never be reached to close, wedging the app
+   behind the scrim (WCAG 2.4.3, 2.1.1). The guard lives on the app shell's `setView` itself, not on
+   its callers, so a chord, the rail, and another organism calling `setView` are all covered. It and
+   the loop-panel's Escape deference share ONE predicate — an open `[aria-modal="true"]`. Two
+   hand-maintained copies is exactly how they came to disagree about `role="alertdialog"`.
 
-The canonical implementation is `createModalShell`, composed by `confirmDialog`, `flowInputModal`
-and `installExamples`. A dialog is tested like any organism (§3.2–3.3) **plus** assertions for items
-2–8 above: the ARIA wiring, Tab wrapping in both directions, Escape/scrim dismissal,
+The canonical implementation is `createModalShell`. **Every** blocking dialog composes it — do not
+maintain a list here; the composer a list omits is the one that drifts (that is how `errorDialog`'s
+`role="alertdialog"` fell out of the shell's Escape predicate). A dialog is tested like any organism
+(§3.2–3.3) **plus** assertions for items 2–8 above: the ARIA wiring, Tab wrapping in both directions, Escape/scrim dismissal,
 focus-restored-to-opener, accept-is-not-dismiss, and (if its body can overflow) the §3.2b painted
 pins for scroll and footer reachability.
 

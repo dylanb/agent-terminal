@@ -5,32 +5,48 @@
 import os from 'node:os';
 import path from 'node:path';
 
-/** A blank override is UNSET, not the empty path: `??` would let an exported-but-empty CLAUDE_CONFIG_DIR
- *  through, and every destination below it would then be a bare relative name that a writer anchors at the
- *  process cwd — seeding the user's checked-out repo. `launchRoot.homeFallback` reads `$HOME` the same way. */
-const set = (v: string | undefined): string | undefined => (v?.trim() ? v : undefined);
+const trimmed = (v: string | undefined): string | undefined => {
+  const t = v?.trim();
+  return t ? t : undefined;
+};
 
-/** The root, resolved against a supplied environment and home dir — for callers that take both injected. */
-export function userConfigRootFrom(env: NodeJS.ProcessEnv, home: string, configDir?: string): string {
-  return set(configDir) ?? set(env.CLAUDE_CONFIG_DIR) ?? path.join(home, '.claude');
+/** The root, resolved against a supplied environment and home dir — for callers that take both injected.
+ *  `null` when an override is set to something no cwd could make right: a RELATIVE path. Claude Code is a
+ *  separate process with its own cwd and resolves the same variable against that, so a relative value has no
+ *  single meaning; anchoring it at ours seeds a directory Claude Code never reads, and — when the app was
+ *  launched from a repo — lands it in the working tree, where `loopDef` would stamp it `operator-config`,
+ *  the origin §26.6 grants `exec` authority on (CWE-829). Callers surface the refusal; none guess. */
+export function userConfigRootFrom(
+  env: NodeJS.ProcessEnv,
+  home: string,
+  configDir?: string,
+): string | null {
+  const override = trimmed(configDir) ?? trimmed(env.CLAUDE_CONFIG_DIR);
+  if (override === undefined) return path.join(home, '.claude');
+  return path.isAbsolute(override) ? override : null;
 }
 
-export function userConfigRoot(configDir?: string): string {
+export function userConfigRoot(configDir?: string): string | null {
   return userConfigRootFrom(process.env, os.homedir(), configDir);
 }
 
+const branch = (sub: string, configDir?: string): string | null => {
+  const root = userConfigRoot(configDir);
+  return root === null ? null : path.join(root, sub);
+};
+
 /** The engine's loop-config location (`agent-loop list`). NOT precedence-aware: this is the named
  *  user-config branch a writer targets, never the repo-local override a reader may prefer (§24.2.3). */
-export function userConfigLoopsDir(configDir?: string): string {
-  return path.join(userConfigRoot(configDir), 'loops');
+export function userConfigLoopsDir(configDir?: string): string | null {
+  return branch('loops', configDir);
 }
 
 /** Where Claude Code — a separate process — discovers a skill, as `<root>/skills/<skill name>/`. */
-export function userConfigSkillsDir(configDir?: string): string {
-  return path.join(userConfigRoot(configDir), 'skills');
+export function userConfigSkillsDir(configDir?: string): string | null {
+  return branch('skills', configDir);
 }
 
 /** Where Claude Code — a separate process — discovers a slash command, as `<root>/commands/<name>.md`. */
-export function userConfigCommandsDir(configDir?: string): string {
-  return path.join(userConfigRoot(configDir), 'commands');
+export function userConfigCommandsDir(configDir?: string): string | null {
+  return branch('commands', configDir);
 }

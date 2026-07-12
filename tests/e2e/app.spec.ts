@@ -2576,6 +2576,16 @@ test('the busy install button paints a focus ring that clears 3:1 on its own bac
   // Grades the ring Chromium actually paints, not the stylesheet text: the unit contrast pin reads one
   // rule's declarations, so an `opacity` on a higher-specificity selector or an ancestor — or a later
   // equal-specificity rule reclaiming `color` — would dim the ring or the busy label with the pin green.
+  //
+  // It fires the REAL install to reach the busy state, so it relaunches into a temp HOME + config root like
+  // every other install test: on the shared app it would seed the developer's own ~/.claude (installEnv).
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-install-busy-home-'));
+  const configDir = mkdtempSync(join(tmpdir(), 'agent-term-e2e-install-busy-cfg-'));
+  await app.close();
+  app = await electron.launch({ args: ['out/main/index.js'], env: installEnv(home, configDir) });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
   await page.locator('[data-viewbtn="4"]').click();
   await expect(page.locator('#install-examples-view')).toBeVisible();
 
@@ -2647,6 +2657,10 @@ test('the busy install button paints a focus ring that clears 3:1 on its own bac
   // And the busy state is still conveyed: the label moves off the idle accent onto --dim.
   expect(painted.labelColor).toBe(painted.dim);
   expect(painted.labelColor).not.toBe(painted.signalText);
+
+  await app.close();
+  rmSync(home, { recursive: true, force: true });
+  rmSync(configDir, { recursive: true, force: true });
 });
 
 test('after install, the active step offers its bundled todo template as the picker default (§18.6 #40)', async () => {

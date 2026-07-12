@@ -3,6 +3,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { errMsg } from './errno';
 import type { CliInstallResult } from '../shared/ipc';
 import { shellQuote } from '../shared/shellQuote';
 import { isValidCliInstall } from './ipcValidation';
@@ -145,9 +146,6 @@ function onPath(binDir: string, currentPath: string): boolean {
   return currentPath.split(path.delimiter).includes(binDir);
 }
 
-function errMsg(e: unknown): string {
-  return e instanceof Error ? e.message : String(e);
-}
 
 function reconcileOrphanBlocks(target: InstallTarget): void {
   const writeTargets = new Set(target.profiles);

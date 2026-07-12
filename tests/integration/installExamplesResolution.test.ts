@@ -33,7 +33,7 @@ let home: string;
 let configRoot: string;
 let repo: string;
 let dirs: InstallDestination[];
-const loopsTargetDir = (): string => (dirs.find((d) => d.id === 'loops') as InstallDestination).targetDir;
+const loopsTargetDir = (): string => (dirs.find((d) => d.id === 'loops') as InstallDestination).targetDir as string;
 
 beforeEach(() => {
   home = mkdtempSync(path.join(tmpdir(), 'install-res-home-'));

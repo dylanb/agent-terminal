@@ -197,7 +197,7 @@ describe('session-log dir resolution (§26.10)', () => {
     const env = { CLAUDE_CONFIG_DIR: '/cfg' } as NodeJS.ProcessEnv;
     expect(sessionLogDir('/repo/foo', env, '/home/me')).toBe(join('/cfg', 'projects', '-repo-foo'));
     expect(sessionLogDir('/repo/foo', env, '/home/me')).toBe(
-      join(userConfigRoot('/cfg'), 'projects', '-repo-foo'),
+      join(userConfigRoot('/cfg') as string, 'projects', '-repo-foo'),
     );
   });
 
