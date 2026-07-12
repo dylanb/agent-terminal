@@ -215,6 +215,9 @@ export interface FlowMachine {
   /** Record the answer to a step-entry input prompt (§18.4 / §24.2.3 T3) and RE-ENTER the current
    *  step so the now-satisfied bootstrap runs. Legal only while a step is in_progress. */
   provideInput(values: Record<string, string>): FlowStateView;
+  /** Name this worktree's work (§22.3), or clear the name with a blank. Legal from EVERY status — the
+   *  name describes the worktree, not the run — but inert in the error state, where nothing may persist. */
+  setTitle(text: string): FlowStateView;
 }
 
 /** Run a step's entry actions, given the flow's resolved typed inputs (§18.4). Returns a one-shot
@@ -257,7 +260,7 @@ export function createFlowMachine(
     });
     // Every transition is inert in the error state, and crucially never persists — so a bad flow.yaml
     // can't overwrite a good on-disk progression, and a racing caller can't throw or escape the error.
-    return { state: view, start: view, advance: view, restart: view, undo: view, revertStep: view, terminate: view, provideInput: view };
+    return { state: view, start: view, advance: view, restart: view, undo: view, revertStep: view, terminate: view, provideInput: view, setTitle: view };
   }
 
   const def = load.definition;
@@ -454,6 +457,12 @@ export function createFlowMachine(
       persist();
       return enter(view());
     },
+    setTitle: (text) => {
+      const named = text.trim();
+      userTitle = named.length > 0 ? named : null; // a blank clears the name; it never persists as ""
+      persist();
+      return view();
+    },
   };
 }
 
@@ -472,6 +481,8 @@ export interface FlowManager {
   revertStep(repoKey: string, fromStepId: string): FlowStateView;
   terminate(repoKey: string): FlowStateView;
   provideInput(repoKey: string, values: Record<string, string>): FlowStateView;
+  /** Name a repo's work, or clear the name with a blank (§22.3). */
+  setTitle(repoKey: string, text: string): FlowStateView;
 }
 
 export interface FlowManagerDeps {
@@ -528,5 +539,6 @@ export function createFlowManager(deps: FlowManagerDeps): FlowManager {
     revertStep: (k, fromStepId) => machineFor(k).revertStep(fromStepId),
     terminate: (k) => machineFor(k).terminate(),
     provideInput: (k, values) => machineFor(k).provideInput(values),
+    setTitle: (k, text) => machineFor(k).setTitle(text),
   };
 }

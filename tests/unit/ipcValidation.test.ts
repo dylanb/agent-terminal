@@ -11,6 +11,7 @@ import {
   isValidDismissAll,
   isValidFlowRequest,
   isValidFlowProvideInput,
+  isValidFlowSetTitle,
   isValidFlowGithubRef,
   isValidFlowGateDecision,
   isValidOpenExternal,
@@ -151,6 +152,21 @@ describe('IPC payload validation (§6 — renderer-supplied input is untrusted)'
     arr.sessionId = sid;
     arr.repoKey = '/repo';
     expect(isValidFlowRequest(arr)).toBe(false);
+  });
+
+  it('accepts a flow:setTitle carrying a string title, rejecting bad shapes (§22.3)', () => {
+    expect(isValidFlowSetTitle({ sessionId: sid, repoKey: '/repo', title: 'Refactor the shadow parser' })).toBe(true);
+    expect(isValidFlowSetTitle({ sessionId: sid, repoKey: '/repo', title: '' })).toBe(true); // a blank CLEARS the name
+    expect(isValidFlowSetTitle({ sessionId: sid, repoKey: '/repo', title: 176 })).toBe(false); // not a string
+    expect(isValidFlowSetTitle({ sessionId: sid, repoKey: '/repo' })).toBe(false); // title required
+    expect(isValidFlowSetTitle({ sessionId: sid, repoKey: 'relative', title: 'x' })).toBe(false); // unsafe key
+    expect(isValidFlowSetTitle({ sessionId: 'other', repoKey: '/repo', title: 'x' })).toBe(false);
+    expect(isValidFlowSetTitle(null)).toBe(false);
+    const arr: any = [];
+    arr.sessionId = sid;
+    arr.repoKey = '/repo';
+    arr.title = 'x';
+    expect(isValidFlowSetTitle(arr)).toBe(false); // arrays are not records
   });
 
   it('accepts a flow:provideInput with a string→string values map, rejecting bad shapes (§24.2.3 T3)', () => {

@@ -35,6 +35,7 @@ function mount(deps: Partial<StatusBarDeps> = {}): {
   const bar = createStatusBar(host, {
     githubRef: deps.githubRef ?? (() => Promise.resolve(null)),
     openExternal: deps.openExternal ?? (() => {}),
+    setTitle: deps.setTitle ?? (() => Promise.resolve()),
   });
   return { host, bar, render: (m, repoKey = REPO) => bar.render(m, repoKey) };
 }
@@ -56,10 +57,13 @@ describe('status bar (§22.3)', () => {
       expect(host.querySelector('.sb-activity')).not.toBeNull();
     });
 
-    it('exposes no focusable control while it has nothing to act on', () => {
+    it('exposes no focusable control inside a live region it has nothing to say in', () => {
+      // empty region ⟺ no focusable descendant: the permanent bar must not re-introduce a
+      // hidden-but-focusable trap (§22.2). The title slot is not a live region and is exempt.
       const { host, render } = mount();
       render(model());
-      expect(host.querySelector('button, [tabindex]')).toBeNull();
+      expect(alertEl(host).querySelector('button, [tabindex]')).toBeNull();
+      expect(host.querySelector('.sb-activity')!.querySelector('button, [tabindex]')).toBeNull();
     });
 
     it('invites a name before it is handed anything at all', () => {
@@ -163,6 +167,127 @@ describe('status bar (§22.3)', () => {
     });
   });
 
+  describe('naming the work yourself', () => {
+    const editor = (host: HTMLElement): HTMLInputElement | null => host.querySelector('input[data-sb-title-edit]');
+    const startEditing = (host: HTMLElement): HTMLInputElement => {
+      titleEl(host)!.click();
+      return editor(host)!;
+    };
+    const type = (input: HTMLInputElement, text: string): void => {
+      input.value = text;
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    };
+    const press = (input: HTMLInputElement, key: string): void => {
+      input.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true }));
+    };
+
+    it('opens an editor in place when the unnamed title is clicked', () => {
+      const { host, render } = mount();
+      render(model({ title: { kind: 'user', text: '' } }));
+      expect(editor(host)).toBeNull();
+      expect(startEditing(host)).not.toBeNull();
+    });
+
+    it('commits the typed name on Enter', () => {
+      const setTitle = vi.fn(() => Promise.resolve());
+      const { host, render } = mount({ setTitle });
+      render(model({ title: { kind: 'user', text: '' } }));
+      const input = startEditing(host);
+      type(input, 'Refactor the shadow parser');
+      press(input, 'Enter');
+      expect(setTitle).toHaveBeenCalledWith('Refactor the shadow parser');
+    });
+
+    it('abandons the edit on Escape, keeping the name that was there', () => {
+      const setTitle = vi.fn(() => Promise.resolve());
+      const { host, render } = mount({ setTitle });
+      render(model({ title: { kind: 'user', text: 'Refactor the shadow parser' } }));
+      const input = startEditing(host);
+      type(input, 'something else entirely');
+      press(input, 'Escape');
+      expect(setTitle).not.toHaveBeenCalled();
+      expect(editor(host)).toBeNull();
+      expect(titleEl(host)!.textContent).toContain('Refactor the shadow parser');
+    });
+
+    it('commits on blur, so clicking away does not silently discard what was typed', () => {
+      const setTitle = vi.fn(() => Promise.resolve());
+      const { host, render } = mount({ setTitle });
+      render(model({ title: { kind: 'user', text: '' } }));
+      const input = startEditing(host);
+      type(input, 'Named by blur');
+      input.dispatchEvent(new Event('blur'));
+      expect(setTitle).toHaveBeenCalledWith('Named by blur');
+    });
+
+    it('does not write when the name was not actually changed', () => {
+      const setTitle = vi.fn(() => Promise.resolve());
+      const { host, render } = mount({ setTitle });
+      render(model({ title: { kind: 'user', text: 'Refactor the shadow parser' } }));
+      const input = startEditing(host);
+      press(input, 'Enter'); // committed unchanged
+      expect(setTitle).not.toHaveBeenCalled();
+    });
+
+    it('lets the user clear the name by emptying it', () => {
+      const setTitle = vi.fn(() => Promise.resolve());
+      const { host, render } = mount({ setTitle });
+      render(model({ title: { kind: 'user', text: 'Refactor the shadow parser' } }));
+      const input = startEditing(host);
+      type(input, '');
+      press(input, 'Enter');
+      expect(setTitle).toHaveBeenCalledWith('');
+    });
+
+    it('keeps the editor open while a push arrives, so a live re-pull cannot eat what is being typed', () => {
+      // The bar is repainted by every flow:onStateChanged push (a todo mutated, the agent went quiet).
+      // A repaint that replaced the input mid-word would make the field impossible to type in.
+      const { host, render } = mount({ setTitle: () => Promise.resolve() });
+      render(model({ title: { kind: 'user', text: '' } }));
+      const input = startEditing(host);
+      type(input, 'half a nam');
+      render(model({ title: { kind: 'user', text: '' }, activity: { phrase: 'Working' } }));
+      expect(editor(host)).toBe(input);
+      expect(editor(host)!.value).toBe('half a nam');
+    });
+
+    it('takes the name back when the write fails, rather than showing one that was never saved', async () => {
+      // The commit paints the new name at once and lets main confirm it. If the write is rejected (main
+      // restarted, a read-only tree), the bar must not go on displaying a name that does not exist — the
+      // user would believe their work was named and it would be gone at the next relaunch.
+      const setTitle = vi.fn(() => Promise.reject(new Error('EROFS')));
+      const { host, render } = mount({ setTitle });
+      render(model({ title: { kind: 'user', text: 'Refactor the shadow parser' } }));
+      const input = startEditing(host);
+      type(input, 'A name that will not save');
+      press(input, 'Enter');
+      expect(titleEl(host)!.textContent).toContain('A name that will not save'); // shown optimistically…
+      await flush();
+      expect(titleEl(host)!.textContent).toContain('Refactor the shadow parser'); // …then taken back
+    });
+
+    it('offers no editor for a PR or ticket title — that name is GitHub\'s, not the user\'s', () => {
+      const { host, render } = mount({ setTitle: () => Promise.resolve() });
+      render(model({ title: { kind: 'pr', number: 57 } }));
+      titleEl(host)!.click();
+      expect(editor(host)).toBeNull();
+    });
+
+    it('offers no editor for a flow that failed to load — there is nowhere to persist a name', () => {
+      const { host, render } = mount({ setTitle: () => Promise.resolve() });
+      render(model({ title: { kind: 'unavailable' } }));
+      titleEl(host)!.click();
+      expect(editor(host)).toBeNull();
+    });
+
+    it('offers no editor before a repo is known — there is no worktree to name', () => {
+      const { host, render } = mount({ setTitle: () => Promise.resolve() });
+      render(model({ title: { kind: 'user', text: '' } }), null);
+      titleEl(host)!.click();
+      expect(editor(host)).toBeNull();
+    });
+  });
+
   describe('the engine activity', () => {
     it('names what the engine is doing', () => {
       const { host, render } = mount();
@@ -181,6 +306,27 @@ describe('status bar (§22.3)', () => {
       const { host } = mount();
       const region = host.querySelector('.sb-activity')!;
       expect(region.getAttribute('aria-live')).toBe('polite');
+    });
+
+    it('does not re-announce an unchanged phrase on every push', () => {
+      // The bar is repainted by every flow:onStateChanged push — a todo mutating, the agent flipping
+      // active/quiet. Rebuilding the live region each time would re-announce "Working" over and over
+      // while nothing about the engine actually changed (WCAG 4.1.3).
+      const { host, render } = mount();
+      render(model({ activity: { phrase: 'Working' } }));
+      const phrase = host.querySelector('.sb-activity .phrase');
+      render(model({ activity: { phrase: 'Working' }, alert: blocked }));
+      expect(host.querySelector('.sb-activity .phrase')).toBe(phrase); // same node → nothing re-announced
+    });
+
+    it('announces a phrase that really changed, without tearing down the region', () => {
+      const { host, render } = mount();
+      render(model({ activity: { phrase: 'Working' } }));
+      const region = host.querySelector('.sb-activity')!;
+      render(model({ activity: { phrase: 'Running reviewers' } }));
+      expect(host.querySelector('.sb-activity')).toBe(region); // the live region itself persists…
+      expect(region.textContent).toContain('Running reviewers'); // …and the new phrase is what announces
+      expect(region.querySelectorAll('.spin')).toHaveLength(1); // exactly one spinner, never a stacked pair
     });
   });
 
@@ -256,7 +402,7 @@ describe('status bar (§22.3)', () => {
 
   it('renders from the host document (relocatable, UI-STANDARDS §2.2)', async () => {
     await assertRendersFromHostDocument((host) =>
-      createStatusBar(host, { githubRef: () => Promise.resolve(null), openExternal: () => {} }).render(
+      createStatusBar(host, { githubRef: () => Promise.resolve(null), openExternal: () => {}, setTitle: () => Promise.resolve() }).render(
         model({ alert: blocked }),
         REPO,
       ),

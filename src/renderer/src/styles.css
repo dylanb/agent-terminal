@@ -120,6 +120,10 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible { outline:2px so
 .status-bar button.sb-name { background:none; border:0; padding:0; font:inherit; cursor:pointer;
   max-width:100%; text-align:left; }
 .status-bar .sb-link:hover { text-decoration:underline; }
+.status-bar button.sb-name:hover { text-decoration:underline; }
+/* The in-place name editor: sized to the slot it replaced, so committing a name does not jump the layout. */
+.status-bar input.sb-edit { width:min(38ch, 100%); background:var(--card); color:var(--text);
+  border:1px solid var(--hair); border-radius:5px; padding:2px 6px; font:inherit; font-size:12.5px; }
 
 .status-bar .sb-activity { flex:0 1 auto; min-width:0; margin-left:auto; display:flex; align-items:center;
   gap:6px; color:var(--dim); }

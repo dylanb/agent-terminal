@@ -39,6 +39,32 @@ describe('the user title the status bar shows (§22.3)', () => {
     expect(store.read()?.title).toBe('Refactor the shadow parser');
   });
 
+  it('persists a name the user typed', () => {
+    const store = createFlowStateStore(dir);
+    const flow = createFlowMachine(LOAD, store);
+    expect(flow.setTitle('Refactor the shadow parser').userTitle).toBe('Refactor the shadow parser');
+    expect(store.read()?.title).toBe('Refactor the shadow parser');
+    expect(createFlowMachine(LOAD, store).state().userTitle).toBe('Refactor the shadow parser'); // survives relaunch
+  });
+
+  it('never persists a name for a flow that failed to load — a bad flow.yaml must not clobber a good progression', () => {
+    // The inert error machine is why the status bar renders that state's name slot as un-editable: a
+    // setTitle it accepted here would have nowhere safe to go.
+    const store = createFlowStateStore(dir);
+    store.write({ step: 'step-1', status: 'in_progress' });
+    createFlowMachine({ ok: false, error: 'bad yaml' }, store).setTitle('Refactor the shadow parser');
+    expect(store.read()?.title).toBeUndefined();
+    expect(store.read()?.status).toBe('in_progress'); // and the good progression is untouched
+  });
+
+  it('clears the name when the user empties it, rather than persisting a blank', () => {
+    const store = createFlowStateStore(dir);
+    const flow = createFlowMachine(LOAD, store);
+    flow.setTitle('Refactor the shadow parser');
+    expect(flow.setTitle('   ').userTitle).toBeUndefined();
+    expect(store.read()?.title).toBeUndefined();
+  });
+
   it('keeps the title when the flow is terminated — the name outlives the run it named', () => {
     const store = createFlowStateStore(dir);
     store.write({ step: 'step-1', status: 'in_progress', title: 'Refactor the shadow parser' });

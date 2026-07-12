@@ -97,6 +97,11 @@ const statusBar = statusBarHost
         return key ? window.flow.githubRef(key, kind, number) : Promise.resolve(null);
       },
       openExternal: (url) => void window.flow.openExternal(url),
+      setTitle: async (text) => {
+        const key = repo.repoKey();
+        if (key === null) return; // the bar offers no editor without a repo, so this cannot strand a name
+        await window.flow.setTitle(key, text);
+      },
     })
   : undefined;
 window.flow.onRevealLoop(() => revealLoopReadout(shell));

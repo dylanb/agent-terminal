@@ -38,6 +38,7 @@ import {
   isValidDismissAll,
   isValidFlowRequest,
   isValidFlowProvideInput,
+  isValidFlowSetTitle,
   isValidFlowGateDecision,
   isValidFlowResolveBootstrapConflict,
   isValidFlowGithubRef,
@@ -1307,6 +1308,15 @@ async function createWindow(): Promise<void> {
         if (!isValidFlowProvideInput(m)) return flowRequestError();
         audit.recordInputs(m.repoKey, m.values, inputTypeMap(m.repoKey));
         const view = inTransition(m.repoKey, () => flow.provideInput(m.repoKey, m.values));
+        return trackLoop(m.repoKey, withDerived(m.repoKey, view));
+      },
+      // §22.3 — name the repo's work (a blank clears it). Not a lifecycle transition: it neither enters a
+      // step nor runs an entry action, so it takes no inTransition guard; it simply persists the name and
+      // answers with the view the status bar repaints from.
+      [CH.flowSetTitle]: (_e, m) => {
+        if (!isValidFlowSetTitle(m)) return flowRequestError();
+        const view = flow.setTitle(m.repoKey, m.title);
+        pushFlowChanged(); // every surface re-pulls: the name is repo state, not this window's local UI
         return trackLoop(m.repoKey, withDerived(m.repoKey, view));
       },
       // §24.2.3 T7 — resolve a ref's detail for the popout (best-effort; null degrades to bare number).

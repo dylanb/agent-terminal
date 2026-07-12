@@ -19,6 +19,7 @@ import {
   type DismissMsg,
   type FlowRequestMsg,
   type FlowProvideInputMsg,
+  type FlowSetTitleMsg,
   type FlowGateDecisionMsg,
   type FlowResolveBootstrapConflictMsg,
   type FlowGithubRefMsg,
@@ -155,6 +156,11 @@ export function isValidFlowProvideInput(m: unknown): m is FlowProvideInputMsg {
     !Array.isArray(m.values) &&
     Object.values(m.values).every((v) => typeof v === 'string')
   );
+}
+
+/** flow:setTitle — the name typed into the status bar (§22.3). A blank title is LEGAL: it clears the name. */
+export function isValidFlowSetTitle(m: unknown): m is FlowSetTitleMsg {
+  return isRecord(m) && isLiveSession(m) && isSafeRepoKey(m.repoKey) && typeof m.title === 'string';
 }
 
 /** flow:gateDecision — the human's gate option (§26.6 / L5). `option` is confined to the known set;

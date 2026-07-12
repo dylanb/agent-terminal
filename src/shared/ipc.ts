@@ -52,6 +52,7 @@ export const CH = {
   flowUndo: 'flow:undo',
   flowTerminate: 'flow:terminate',
   flowProvideInput: 'flow:provideInput',
+  flowSetTitle: 'flow:setTitle',
   flowOnStateChanged: 'flow:onStateChanged',
   flowRevealLoop: 'flow:revealLoop',
   flowOnBootstrapError: 'flow:onBootstrapError',
@@ -675,6 +676,15 @@ export interface FlowProvideInputMsg {
   values: Record<string, string>;
 }
 
+/** flow:setTitle request (§22.3): the name the user typed into the status bar for the repo's work. A blank
+ *  `title` CLEARS the name (it never persists as an empty string). Answered with the new view, so the bar
+ *  repaints from the same state everything else reads. */
+export interface FlowSetTitleMsg {
+  sessionId: SessionId;
+  repoKey: string;
+  title: string;
+}
+
 /** flow:markTurnComplete request (§26.3/D47a c): the operator's manual "this turn is done" override
  *  for the in-flight loop turn whose automatic done-signal the orchestrator missed. One-way; the
  *  result surfaces through the existing state.yaml watch → flow:onStateChanged push. */
@@ -905,6 +915,8 @@ export interface FlowApi {
    *  flow-state and re-run the entry bootstrap (`agent-loop pickup <input>`), returning the new
    *  view (its `notice` carries any §19.3 busy refusal). */
   provideInput(repoKey: string, values: Record<string, string>): Promise<FlowStateView>;
+  /** Name the repo's work, or clear the name with a blank (§22.3). Resolves to the new view. */
+  setTitle(repoKey: string, title: string): Promise<FlowStateView>;
   /** Subscribe to main's flow:onStateChanged push (§24.2.2 S5): `cb` fires when a flow-relevant
    *  input changed (todo/activity), prompting a `state()` re-pull. Returns an unsubscribe. */
   onStateChanged(cb: () => void): () => void;

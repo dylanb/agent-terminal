@@ -4321,6 +4321,56 @@ test('the status bar is always there, names the work, and turns to the attention
   rmSync(home, { recursive: true, force: true });
 });
 
+test('the user names the work in the status bar; the name persists, is outranked by a PR, and comes back (§22.3)', async () => {
+  // The fallback title: what the bar shows when neither a PR nor a ticket supplies one. It is typed in
+  // place, persists per worktree in .agent-terminal/flow-state.yaml, and — crucially — is OUTRANKED rather
+  // than destroyed when a ref appears, so it returns if the refs go away.
+  const { dir: repo, stateFile } = seedLoopFlowRepo('agent-term-e2e-sbname-');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-sbname-home-'));
+  await app.close();
+  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
+  page = await app.firstWindow();
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await typeCommand(`cd "${repo}"`);
+  await expect(flowStepName()).toHaveText('groom', { timeout: 10_000 });
+
+  // No PR, no ticket: the bar invites a name, and clicking it opens an editor in place.
+  await expect(statusTitle()).toContainText('Untitled');
+  await statusTitle().click();
+  const editor = page.locator('#status-bar input[data-sb-title-edit]');
+  await expect(editor).toBeFocused();
+  await editor.fill('Refactor the shadow parser');
+  await editor.press('Enter');
+  await expect(statusTitle()).toHaveText('Refactor the shadow parser');
+  await expect(editor).toHaveCount(0);
+
+  // It is real state, not this window's local UI: it lands in flow-state.yaml…
+  await expect
+    .poll(() => readFileSync(join(repo, '.agent-terminal', 'flow-state.yaml'), 'utf8'), { timeout: 10_000 })
+    .toContain('Refactor the shadow parser');
+
+  // …and survives a relaunch.
+  await app.close();
+  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
+  page = await app.firstWindow();
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+  await typeCommand(`cd "${repo}"`);
+  await expect(statusTitle()).toHaveText('Refactor the shadow parser', { timeout: 10_000 });
+
+  // A PR appears: it outranks the user's name, which is hidden — NOT discarded.
+  writeFileSync(stateFile, 'schema_version: 4\npr: 179\nbranch: agent-loop/issue-176\niteration: 1\nstatus: impl-draft\n');
+  await flowControl().click(); // Start → groom
+  await flowControl().click(); // Advance → build (the loop step, where the PR ref surfaces)
+  await expect(statusTitle()).toContainText('PR #179', { timeout: 10_000 });
+  // The name is still on disk, merely outranked.
+  expect(readFileSync(join(repo, '.agent-terminal', 'flow-state.yaml'), 'utf8')).toContain('Refactor the shadow parser');
+
+  await app.close();
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+});
+
 test('under space pressure the status bar sheds the title first and keeps the alert to the last (§22.3)', async () => {
   // Everything coexists; the bar drops an element only when there is no room for a character of it, and the
   // thing the human must act on is the last one standing.
