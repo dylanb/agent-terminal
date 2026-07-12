@@ -415,10 +415,13 @@ describe('the consent scroll box does not clip the checkbox focus ring', () => {
     await vi.waitFor(() => expect(host.querySelector('.flow-modal .card')).not.toBeNull());
   });
 
-  it('leaves room for the ring to paint inside the clip', () => {
+  it('leaves room for the ring to paint inside the clip', async () => {
     const rows = host.querySelector('.install-consent-rows') as HTMLElement;
     const box = host.querySelector('.install-consent-opt input[type="checkbox"]') as HTMLElement;
-    const ring = 2 + 2; // outline-width + outline-offset
+    await tabToProbe(box); // `outline-width` computes to 0 unless :focus-visible actually matches
+    const cs = getComputedStyle(box);
+    const ring = parseFloat(cs.outlineWidth) + parseFloat(cs.outlineOffset);
+    expect(ring).toBeGreaterThan(0);
     expect(box.getBoundingClientRect().left - rows.getBoundingClientRect().left).toBeGreaterThanOrEqual(ring);
   });
 });
@@ -444,12 +447,14 @@ describe('capping the card does not clip the OTHER dialogs built on the same she
     await page.viewport(1280, 896);
   });
 
-  it('does not let a tall dialog’s body overprint its own footer', () => {
-    // The card has no `overflow`, so capping its height does not CLIP the body — it lets it paint straight
-    // over the footer, which is `flex:none` and cannot move. Same defect as the consent manifest, on every
-    // other dialog that composes this shell.
-    const foot = modal.querySelector('.mfoot') as HTMLElement;
-    const lastLine = [...modal.querySelectorAll('.ph')].pop() as HTMLElement;
-    expect(lastLine.getBoundingClientRect().bottom).toBeLessThanOrEqual(foot.getBoundingClientRect().top + 1);
+  it('keeps a tall dialog’s actions reachable by scrolling', () => {
+    // Capping `.card` without a scroll box would put the footer where no input method can reach it. Assert
+    // the OUTCOME — scroll the modal to its end and look for the button — not a property pair, and not that
+    // two flex siblings fail to overlap (normal flow guarantees that, so it could never fail).
+    const confirm = modal.querySelector('button.confirm') as HTMLElement;
+    modal.scrollTop = modal.scrollHeight;
+    const r = confirm.getBoundingClientRect();
+    expect(r.bottom).toBeLessThanOrEqual(window.innerHeight + 1);
+    expect(r.top).toBeGreaterThanOrEqual(-1);
   });
 });

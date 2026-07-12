@@ -188,10 +188,10 @@ export function createInstallExamples(host: HTMLElement, deps: InstallExamplesDe
       const group = d.createElement('div');
       group.className = 'install-consent';
       group.setAttribute('role', 'group');
-      const groupLabelId = `${titleId}-consent-legend`;
+      const groupLabelId = `${titleId}-consent-group-label`;
       group.setAttribute('aria-labelledby', groupLabelId);
       const groupLabel = d.createElement('span');
-      groupLabel.className = 'ic-legend';
+      groupLabel.className = 'ic-group-label';
       groupLabel.id = groupLabelId;
       groupLabel.textContent = 'Replace files in';
       const rows = d.createElement('div');

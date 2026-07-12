@@ -3,13 +3,14 @@
 
 import { realpathSync, lstatSync } from 'node:fs';
 import path from 'node:path';
+import { isErrno } from './errno';
 
 function isAbsent(p: string): boolean {
   try {
     lstatSync(p);
     return false;
   } catch (e) {
-    return e instanceof Error && 'code' in e && e.code === 'ENOENT';
+    return isErrno(e, 'ENOENT');
   }
 }
 

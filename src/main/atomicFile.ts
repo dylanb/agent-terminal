@@ -5,6 +5,7 @@
 // the file it is given (no-gitignore-writes rule).
 
 import { lstatSync, mkdirSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
+import { isErrno } from './errno';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 
@@ -49,7 +50,7 @@ export function atomicWriteFileSync(file: string, data: string | Uint8Array, opt
     // EEXIST means the temp pre-existed (a planted symlink/file we did not create) — never unlink it.
     // Otherwise the exclusive create succeeded but the write failed, orphaning our temp; the
     // unpredictable name would leak one stale file per failed write (CWE-459).
-    if ((e as NodeJS.ErrnoException).code !== 'EEXIST') tryUnlink(tmp);
+    if (!isErrno(e, 'EEXIST')) tryUnlink(tmp);
     throw e;
   }
   try {

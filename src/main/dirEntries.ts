@@ -3,6 +3,7 @@
 // policy that "obviously agree today" are the bug the rule exists to prevent.
 
 import { readdirSync } from 'node:fs';
+import { isErrno } from './errno';
 
 export interface DirEntry {
   name: string;
@@ -18,7 +19,7 @@ export function readDirEntries(dir: string): DirEntry[] {
       .sort((a, b) => a.name.localeCompare(b.name))
       .map((e) => ({ name: e.name, isDirectory: e.isDirectory(), isFile: e.isFile() }));
   } catch (e) {
-    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return [];
+    if (isErrno(e, 'ENOENT')) return [];
     throw e;
   }
 }

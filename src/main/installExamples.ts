@@ -5,6 +5,7 @@ import path from 'node:path';
 import { atomicWriteFileSync, isRealContainer } from './atomicFile';
 import { confinedRealPathResult, resolveOwnedDirJail, type PathRefusal } from './confinedPath';
 import { readDirEntries } from './dirEntries';
+import { isErrno } from './errno';
 import type { BundleLocation } from './bundleLocation';
 import { resolveExampleCommandsDir, resolveExampleFlowDir, resolveExampleLoopsDir } from './exampleAssets';
 import { listBundledSkills } from './exampleSkills';
@@ -48,7 +49,7 @@ function absent(dir: string): boolean {
     statSync(dir);
     return false;
   } catch (e) {
-    return (e as NodeJS.ErrnoException).code === 'ENOENT';
+    return isErrno(e, 'ENOENT');
   }
 }
 
@@ -135,7 +136,7 @@ function classify(bundleFile: string, targetFile: string): Classification {
   } catch (e) {
     // Only absence means "create"; an existing-but-unreadable target (EACCES, …) must not be silently
     // overwritten — let it propagate to a reported error, preserving the non-destructive contract.
-    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return 'create';
+    if (isErrno(e, 'ENOENT')) return 'create';
     throw e;
   }
   return readFileSync(bundleFile).equals(target) ? 'identical' : 'differ';
@@ -197,7 +198,7 @@ function isWritableContainer(dir: string): boolean {
       accessSync(probe, constants.W_OK);
       return true;
     } catch (e) {
-      if ((e as NodeJS.ErrnoException).code !== 'ENOENT') return false;
+      if (!isErrno(e, 'ENOENT')) return false;
       const parent = path.dirname(probe);
       if (parent === probe) return false;
       probe = parent;

@@ -2,11 +2,6 @@ import { describe, expect, it } from 'vitest';
 import { WINDOW_TIMEOUT_MS } from '../helpers/e2eBudget';
 import config from '../../playwright.config';
 
-// Two hand-maintained numbers in two files, and one is meaningless without the other: Playwright counts
-// beforeEach against the per-test `timeout`, so a window budget at or above the cap is a budget the harness
-// can never grant. It shipped that way once (90s against a 60s cap), which is why this is a test and not a
-// sentence in a comment.
-
 describe('the e2e launch budget fits inside the harness that must grant it', () => {
   const cap = config.timeout;
 
