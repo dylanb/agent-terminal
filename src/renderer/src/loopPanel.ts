@@ -346,9 +346,6 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
       restoreFocus(hadFocus);
     },
     focusDecision() {
-      // The gate decision when the loop is at a gate; the recovery action (Retry) when it errored — both
-      // are human-needed, and the blocked human lands on whichever the panel is asking for, never on the
-      // Close button (§26.6 / §26.3 D48).
       const action = host.querySelector<HTMLElement>('[data-gate-option], [data-loop-retry]');
       action?.focus();
       return action !== null;
