@@ -6,9 +6,9 @@
 
 import type { FlowApi, FlowStateView, FlowStatus, FlowLoopView, FlowPrompt, FlowRefs } from '../../shared/ipc';
 import { hasFlowRefs } from '../../shared/ipc';
+import { deriveStatusBar, IDLE_STATUS_BAR, type StatusBarModel } from '../../shared/statusBar';
 import { FLOW_CHANGED_EVENT } from './paneActions';
 import { spillTone, toneLabel } from './loopStatus';
-import { createSpinner } from './spinner';
 
 type StationState = 'todo' | 'active' | 'done';
 type Act = 'start' | 'advance' | 'restart' | 'undo';
@@ -83,6 +83,11 @@ export type FlowStripDeps = Omit<
    *  (UI-STANDARDS §2.2 rule 1). Omitted → no aria-controls (aria-expanded still conveys state). */
   loopPanelId?: string;
   onPanelState?: (loop: FlowLoopView | null, title: string, refs?: FlowRefs) => void;
+  /** Hand the always-visible status bar (§22.3) its model on every render AND every passive push — the
+   *  bar is the only surface showing what the engine is doing, so a patch that skipped it would freeze it
+   *  on the run's first phrase. The strip stays the single puller of flow state (§24.2.2 S5); it derives
+   *  through the shared rule and never reaches across to the bar. */
+  onStatusBar?: (model: StatusBarModel) => void;
   /** Hand a step-entry input prompt (§24.2.3 T3) to the composition root, which opens its modal
    *  organism. `submit` records the typed values (provideInput) and re-renders. `null` closes the
    *  modal (no prompt on this view). The strip never reaches across to the modal directly. */
@@ -111,20 +116,6 @@ function derivedText(state: FlowStateView): string | null {
   return null;
 }
 
-/** The §26 loop-mechanics activity line: the phrase + an animated braille spinner (the descriptor exists
- *  only while the loop is active). Announced via the strip host's own `aria-live=polite` (index.html
- *  #flow-strip) — like `.flow-derived`/`.flow-notice`, it does NOT nest its own live region. The spinner is
- *  decorative (`aria-hidden`); the phrase is the text. */
-function activityLine(doc: Document, activity: NonNullable<FlowStateView['loopActivity']>): HTMLElement {
-  const line = doc.createElement('div');
-  line.className = 'flow-activity';
-  const phrase = doc.createElement('span');
-  phrase.className = 'phrase';
-  phrase.textContent = activity.phrase;
-  line.append(phrase, createSpinner(doc));
-  return line;
-}
-
 /** A signature of everything that fixes the strip's DOM STRUCTURE — deliberately NOT the live values
  *  a passive push patches in place (loop iteration/tone, derived counts/activity). Two views with an
  *  equal signature differ only in those live values, so the existing nodes can be updated without a
@@ -144,10 +135,6 @@ function structuralSig(state: FlowStateView): string {
     // change must force a full render rather than a value-only patch.
     state.refs ?? null,
     derivedText(state) !== null,
-    // §26 activity line: only its PRESENCE is structural. The phrase itself patches in place — the host is
-    // an aria-live region (WCAG SC 4.1.3), so rebuilding it to change one word would re-announce the whole
-    // strip.
-    !!state.loopActivity,
     state.notice ?? '',
   ]);
 }
@@ -310,6 +297,7 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
 
   function render(state: FlowStateView): void {
     lastSig = structuralSig(state); // this paint defines the structure a later passive push compares to
+    deps.onStatusBar?.(deriveStatusBar(state)); // §22.3 — also on the error view, whose title is unavailable
     // Carry focus across the rebuild if the keyboard user was on the Loop read-out, rather than
     // dropping it to <body> (WCAG 2.4.3).
     const keepLoopFocus = doc.activeElement instanceof HTMLElement && doc.activeElement.classList.contains('loopstat') && host.contains(doc.activeElement);
@@ -369,11 +357,6 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
       line.textContent = `${d.todosDone} / ${d.todosTotal} done · ${d.activity}`;
       host.append(line);
     }
-
-    // §26 — what the loop mechanics are doing right now (bootstrapping, waiting, working, reviewing,
-    // consolidating): a phrase + spinner, shown on a loop step during bootstrap (before state.yaml) and
-    // through every turn. Present whenever main reports an activity; absent when the loop is idle/at a gate.
-    if (state.loopActivity) host.append(activityLine(doc, state.loopActivity));
 
     const control = CONTROL[state.status];
     if (!control) return;
@@ -438,14 +421,11 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
    *  attached (§24.2.2 S5). The caller guarantees the structural signature is unchanged, so only the
    *  loop read-out's tone/iteration and the derived n/m line can differ. */
   function patchInPlace(state: FlowStateView): void {
+    deps.onStatusBar?.(deriveStatusBar(state));
     const dText = derivedText(state);
     if (dText !== null) {
       const line = host.querySelector('.flow-derived');
       if (line) line.textContent = dText;
-    }
-    if (state.loopActivity) {
-      const phrase = host.querySelector('.flow-activity .phrase');
-      if (phrase) phrase.textContent = state.loopActivity.phrase;
     }
     if (state.loop) {
       const pill = host.querySelector<HTMLElement>('.loopstat .spill');
@@ -470,6 +450,9 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
     if (repoKey === null) {
       host.replaceChildren();
       lastSig = null;
+      // The bar outlives the strip's content: with no repo it still shows, still inviting a name (§22.3).
+      // Without this a cd out of a repo would strand the previous repo's title on it.
+      deps.onStatusBar?.(IDLE_STATUS_BAR);
       return;
     }
     // A state() IPC rejection keeps the last rendered rail rather than escaping as an unhandled

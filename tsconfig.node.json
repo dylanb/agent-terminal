@@ -41,7 +41,7 @@
     "src/renderer/src/spinner.ts",
     "src/renderer/src/loopPanel.ts",
     "src/renderer/src/dockedPanelSync.ts",
-    "src/renderer/src/attentionCue.ts",
+    "src/renderer/src/statusBar.ts",
     "src/renderer/src/loopReveal.ts",
     "src/renderer/src/flowInputModal.ts",
     "src/renderer/src/wireBootstrapConflict.ts",

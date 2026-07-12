@@ -1969,7 +1969,12 @@ function seedRefsFlowRepo(prefix: string): { dir: string; stateFile: string } {
 
 const loopReadout = () => page.locator('#flow-strip .loopstat'); // compact rail read-out; click opens the panel
 const loopPanel = () => page.locator('#loop-panel');
-const attnCue = () => page.locator('#attn-cue'); // §24.2.3 T4
+// §22.3 — the always-visible status bar and its three parts: the work's title, what the engine is doing,
+// and the attention state (§24.2.3 T4) when the loop is blocked on a human.
+const statusBar = () => page.locator('#status-bar');
+const statusTitle = () => page.locator('#status-bar [data-sb-title]');
+const statusActivity = () => page.locator('#status-bar .sb-activity');
+const statusAlert = () => page.locator('#status-bar [data-status-alert]');
 
 // Fire main's flow:revealLoop push directly (§24.2.3 T4) so the real renderer reveal path runs. The
 // OS-notification CLICK that emits this in production is untestable Electron glue (its decision +
@@ -2992,13 +2997,13 @@ test('a work turn that streams past the stall window still advances to the revie
   seedFakeAgent(binDir, { work: 'write-plan', slowWork: true, reviews: 'all', consolidate: 'clean' });
   await driveToWorkTurn(repo, home, binDir, logFile, '3000'); // stall window far shorter than the ~9s stream
 
-  // §26 (v2.120) — while the work turn streams, the strip shows the loop-activity readout (a phrase + the
+  // §22.3 — while the work turn streams, the STATUS BAR shows what the engine is doing (a phrase + the
   // animated braille spinner) so an in-flight turn is visibly "doing work". The ~9s stream is a comfortable
-  // window to observe it before plan.md lands.
-  const activity = page.locator('#flow-strip .flow-activity');
-  await expect(activity).toBeVisible({ timeout: 20_000 });
-  await expect(activity.locator('.phrase')).not.toBeEmpty();
-  await expect(activity.locator('.spin')).toHaveCount(1);
+  // window to observe it before plan.md lands. The rail shows no busy signal: one busy surface, one place.
+  await expect(statusActivity()).toBeVisible({ timeout: 20_000 });
+  await expect(statusActivity().locator('.phrase')).not.toBeEmpty();
+  await expect(statusActivity().locator('.spin')).toHaveCount(1);
+  await expect(page.locator('#flow-strip .flow-activity')).toHaveCount(0);
 
   // Land: plan.md appears only after the long stream, and the reviewers turn then runs (its per-persona
   // JSON is the proof the chain advanced past the work turn). Never auto-errors mid-stream.
@@ -4259,12 +4264,69 @@ test('a loop step shows a Loop read-out that expands a docked state-mirror panel
   rmSync(home, { recursive: true, force: true });
 });
 
-test('the awaiting-human cue appears, re-fires after dismiss, and clears as the loop state changes (§24.2.3 T4)', async () => {
-  // The cue tracks state.yaml with no manual refresh: a distinct human-needed entry re-fires it even
-  // after a dismiss; a non-human status clears it (§24.2.3 T4).
-  const { dir: repo, stateFile } = seedLoopFlowRepo('agent-term-e2e-cue-');
+test('the status bar is always there, names the work, and turns to the attention state only while the loop is blocked on a human (§22.3 / §24.2.3 T4)', async () => {
+  // The bar is a permanent status surface, not a cue that comes and goes: it is visible with no flow at
+  // all, it names the work the flow is on, and it enters (and leaves) its red attention state purely from
+  // state.yaml, with no manual refresh and nothing to dismiss.
+  const { dir: repo, stateFile } = seedLoopFlowRepo('agent-term-e2e-statusbar-');
   writeFileSync(stateFile, 'schema_version: 4\npr: 179\nbranch: agent-loop/issue-176\niteration: 9\nstatus: awaiting-human-pr-approval\n');
-  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-cue-home-'));
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-statusbar-home-'));
+  await app.close();
+  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
+  page = await app.firstWindow();
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  // Before any repo, any flow, any loop: the bar is there, inviting a name.
+  await expect(statusBar()).toBeVisible();
+  await expect(statusTitle()).toBeVisible();
+  await expect(statusAlert()).toHaveCount(0);
+
+  await typeCommand(`cd "${repo}"`);
+  await expect(flowStepName()).toHaveText('groom', { timeout: 10_000 });
+  await expect(statusBar()).toBeVisible();
+  await expect(statusAlert()).toHaveCount(0); // a manual step is not human-needed
+
+  await flowControl().click(); // Start → groom (manual): still not human-needed
+  await expect(statusAlert()).toHaveCount(0);
+
+  await flowControl().click(); // Advance → build (loop) at awaiting-human-pr-approval
+  await expect(statusAlert()).toBeVisible({ timeout: 10_000 });
+  await expect(statusAlert()).toContainText('awaiting-human-pr-approval');
+  // The bar now names the work by its PR. `gh` cannot resolve a title here (no network, no remote), so it
+  // keeps showing the number rather than blanking — the number rides flow:state, the title is best-effort.
+  await expect(statusTitle()).toContainText('PR #179');
+
+  // Nothing to dismiss: the ✕ is gone, and the alert persists across a re-render.
+  await expect(page.locator('#status-bar [data-attn-dismiss]')).toHaveCount(0);
+
+  // The alert IS the route to the gate controls: clicking it opens the docked loop panel.
+  await expect(page.locator('#app')).not.toHaveClass(/\bloop-open\b/);
+  await statusAlert().click();
+  await expect(page.locator('#app')).toHaveClass(/\bloop-open\b/);
+  await expect(loopPanel()).toContainText('awaiting-human-pr-approval');
+
+  // A distinct human-needed entry (new status, later iteration) re-announces in place.
+  writeFileSync(stateFile, 'schema_version: 4\npr: 179\nbranch: agent-loop/issue-176\niteration: 11\nstatus: awaiting-human-impl-triage\n');
+  await expect(statusAlert()).toContainText('awaiting-human-impl-triage', { timeout: 10_000 });
+
+  // A terminal hand-off (not human-needed) leaves the attention state — but NOT the bar, which stays
+  // visible and keeps naming the work.
+  writeFileSync(stateFile, 'schema_version: 4\npr: 179\nbranch: agent-loop/issue-176\niteration: 11\nstatus: awaiting-team-review\n');
+  await expect(statusAlert()).toHaveCount(0, { timeout: 10_000 });
+  await expect(statusBar()).toBeVisible();
+  await expect(statusTitle()).toContainText('PR #179');
+
+  await app.close(); // HOME=temp ⇒ Electron writes userData under it; stop writes before removing it
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+});
+
+test('under space pressure the status bar sheds the title first and keeps the alert to the last (§22.3)', async () => {
+  // Everything coexists; the bar drops an element only when there is no room for a character of it, and the
+  // thing the human must act on is the last one standing.
+  const { dir: repo, stateFile } = seedLoopFlowRepo('agent-term-e2e-sbtrunc-');
+  writeFileSync(stateFile, 'schema_version: 4\npr: 179\nbranch: agent-loop/issue-176\niteration: 9\nstatus: awaiting-human-pr-approval\n');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-sbtrunc-home-'));
   await app.close();
   app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
   page = await app.firstWindow();
@@ -4272,32 +4334,25 @@ test('the awaiting-human cue appears, re-fires after dismiss, and clears as the 
 
   await typeCommand(`cd "${repo}"`);
   await expect(flowStepName()).toHaveText('groom', { timeout: 10_000 });
-  await expect(attnCue()).toBeHidden(); // a manual step is not human-needed
+  await flowControl().click();
+  await flowControl().click(); // → the loop step, human-needed
+  await expect(statusAlert()).toBeVisible({ timeout: 10_000 });
+  await expect(statusTitle()).toBeVisible(); // wide: both are shown
 
-  await flowControl().click(); // Start → groom (manual): still not human-needed
-  await expect(attnCue()).toBeHidden();
+  // Squeeze the bar. The title is the flexible element: it ellipsizes, then gives up its width entirely.
+  // The alert does not shrink, so it survives — a zero-width element has no bounding box, which is exactly
+  // "not visible" to the user and to Playwright.
+  await page.setViewportSize({ width: 420, height: 700 });
+  await expect(statusAlert()).toBeVisible();
+  await expect(statusTitle()).toBeHidden();
+  await expect(statusBar()).toBeVisible();
 
-  await flowControl().click(); // Advance → build (loop) at awaiting-human-pr-approval
-  await expect(attnCue()).toBeVisible({ timeout: 10_000 });
-  await expect(attnCue()).toContainText('awaiting-human-pr-approval');
+  // Restore the width and the title comes back — nothing was destroyed, only unshown.
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await expect(statusTitle()).toBeVisible();
+  await expect(statusAlert()).toBeVisible();
 
-  // Dismiss only hides it — it changes no loop state (the read-out stays) and injects nothing.
-  await attnCue().locator('[data-attn-dismiss]').click();
-  await expect(attnCue()).toBeHidden();
-  await expect(loopReadout()).toHaveCount(1);
-  // Dismiss must not strand focus on <body> (WCAG 2.4.3): it lands on the loop read-out toggle.
-  await expect(loopReadout()).toBeFocused();
-
-  // A distinct human-needed entry (new status, later iteration) re-fires the cue even after a dismiss.
-  writeFileSync(stateFile, 'schema_version: 4\npr: 179\nbranch: agent-loop/issue-176\niteration: 11\nstatus: awaiting-human-impl-triage\n');
-  await expect(attnCue()).toBeVisible({ timeout: 10_000 });
-  await expect(attnCue()).toContainText('awaiting-human-impl-triage');
-
-  // A terminal hand-off (not human-needed) clears the cue.
-  writeFileSync(stateFile, 'schema_version: 4\npr: 179\nbranch: agent-loop/issue-176\niteration: 11\nstatus: awaiting-team-review\n');
-  await expect(attnCue()).toBeHidden({ timeout: 10_000 });
-
-  await app.close(); // HOME=temp ⇒ Electron writes userData under it; stop writes before removing it
+  await app.close();
   rmSync(repo, { recursive: true, force: true });
   rmSync(home, { recursive: true, force: true });
 });
@@ -4321,7 +4376,7 @@ test('the reveal signal lands the user on the loop read-out, from another view a
   await flowControl().click(); // Start → groom
   await flowControl().click(); // Advance → build (loop) active, human-needed
   await expect(loopReadout()).toHaveCount(1, { timeout: 10_000 });
-  await expect(attnCue()).toBeVisible();
+  await expect(statusAlert()).toBeVisible();
   await expect(page.locator('#app')).not.toHaveClass(/\bloop-open\b/); // the docked panel starts closed
 
   // Reveal from a non-Terminal view must land on Terminal with the read-out open.
@@ -4333,14 +4388,14 @@ test('the reveal signal lands the user on the loop read-out, from another view a
   await expect(loopPanel()).toContainText('awaiting-human-pr-approval');
 
   // Reveal from viewer-fullscreen (rail/strip hidden) must exit full-screen and re-open the read-out
-  // on Terminal — and the cue must stay perceivable in the always-visible main region throughout.
+  // on Terminal — and the alert must stay perceivable in the always-visible main region throughout.
   await loopReadout().click();
   await expect(page.locator('#app')).not.toHaveClass(/\bloop-open\b/);
   await page.keyboard.press('Control+2');
   await page.locator('#artifacts .art-fs').click();
   await expect(page.locator('#app')).toHaveClass(/\bviewer-fullscreen\b/);
   await expect(page.locator('#app .rail')).toBeHidden(); // the strip lives in the hidden rail…
-  await expect(attnCue()).toBeVisible(); // …yet the cue is still perceivable in the main region
+  await expect(statusAlert()).toBeVisible(); // …yet the alert is still perceivable in the main region
 
   await fireRevealLoop();
   await expect(page.locator('#app')).not.toHaveClass(/\bviewer-fullscreen\b/);

@@ -82,6 +82,31 @@ describe('flow-state store (§24.2.2 S3 / §19.1)', () => {
     expect(createFlowStateStore(dir).read()).toEqual({ step: 'groom', status: 'in_progress' });
   });
 
+  // §22.3 — the name the user gave this worktree's work, shown by the status bar when no PR/ticket
+  // supplies a title. write() rewrites the whole file on every transition, so a title it failed to
+  // round-trip would be destroyed by the next Start/Advance the user clicked.
+  it('round-trips the user title and survives a fresh store', () => {
+    createFlowStateStore(dir).write({ step: 'plan', status: 'in_progress', title: 'Refactor the shadow parser' });
+    expect(createFlowStateStore(dir).read()).toEqual({
+      step: 'plan',
+      status: 'in_progress',
+      title: 'Refactor the shadow parser',
+    });
+  });
+
+  it('omits the title key entirely for a flow the user never named', () => {
+    createFlowStateStore(dir).write({ step: 'plan', status: 'in_progress' });
+    expect(createFlowStateStore(dir).read()).not.toHaveProperty('title');
+  });
+
+  it('drops an ill-typed or blank title rather than showing an empty name', () => {
+    mkdirSync(join(dir, '.agent-terminal'), { recursive: true });
+    for (const bad of ['""', '"   "', '42', '[a, b]']) {
+      writeFileSync(join(dir, '.agent-terminal', 'flow-state.yaml'), `step: plan\nstatus: in_progress\ntitle: ${bad}\n`);
+      expect(createFlowStateStore(dir).read()).toEqual({ step: 'plan', status: 'in_progress' });
+    }
+  });
+
   it('reads null on a corrupt/unparseable file rather than throwing', () => {
     mkdirSync(join(dir, '.agent-terminal'), { recursive: true });
     writeFileSync(join(dir, '.agent-terminal', 'flow-state.yaml'), 'status: : : broken\n\t- x');

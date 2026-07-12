@@ -80,7 +80,9 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     expect(control()!.textContent).toBe('Start');
   });
 
-  it('renders the §26 loop-activity phrase + spinner as a status line', async () => {
+  // §22.3 — what the engine is doing shows in the status bar, and ONLY there. The rail keeps the loop
+  // read-out (tone pill, iteration, cost) and no busy signal of its own: one busy surface, one place.
+  it('renders no activity line — the status bar is the only busy surface', async () => {
     const deps = {
       ...fakeFlow('in_progress'),
       state: vi.fn(async () => ({
@@ -93,11 +95,34 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
       })),
     };
     createFlowStrip(host, deps).onRepoChanged('/repo');
-    await vi.waitFor(() => expect(host.querySelector('.flow-activity')).not.toBeNull());
-    const line = host.querySelector('.flow-activity')!;
-    expect(line.querySelector('.phrase')?.textContent).toBe('Bootstrapping #40');
-    expect(line.querySelector('.spin')).not.toBeNull();
-    expect(line.querySelector('.spin')?.getAttribute('aria-hidden')).toBe('true');
+    await vi.waitFor(() => expect(control()).not.toBeNull());
+    expect(host.querySelector('.flow-activity')).toBeNull();
+    expect(host.querySelector('.spin')).toBeNull();
+    expect(host.textContent).not.toContain('Bootstrapping #40');
+  });
+
+  it('hands the status-bar model to the composition root, so the bar can show the engine activity', async () => {
+    const onStatusBar = vi.fn();
+    const deps = {
+      ...fakeFlow('in_progress'),
+      state: vi.fn(async () => ({
+        stepName: 'plan',
+        steps: ['plan'],
+        position: 1,
+        total: 1,
+        status: 'in_progress' as FlowStatus,
+        refs: { pr: 57 },
+        loopActivity: { phrase: 'Bootstrapping #40' },
+      })),
+      onStatusBar,
+    };
+    createFlowStrip(host, deps).onRepoChanged('/repo');
+    await vi.waitFor(() => expect(onStatusBar).toHaveBeenCalled());
+    expect(onStatusBar.mock.calls.at(-1)![0]).toEqual({
+      title: { kind: 'pr', number: 57 },
+      activity: { phrase: 'Bootstrapping #40' },
+      alert: null,
+    });
   });
 
   // WCAG 2.1 SC 4.1.3. The host is `role=status`, which is an implicitly ATOMIC live region — a partial
@@ -109,11 +134,13 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     expect(host.getAttribute('aria-atomic')).toBe('false');
   });
 
-  // WCAG 2.1 SC 4.1.3 (Status Messages). A phrase moving 'Working' -> 'Running reviewers' must patch the
-  // existing node, not rebuild the strip.
-  it('patches the activity phrase in place, without tearing down the live region', async () => {
+  // A phrase moving 'Working' -> 'Running reviewers' arrives on a PASSIVE push, which the strip answers by
+  // patching in place. The status bar must still be handed the new phrase — otherwise the one surface that
+  // shows what the engine is doing freezes on the first phrase of the run.
+  it('keeps the status bar live across a passive push that patches the strip in place', async () => {
     let phrase = 'Working';
     let fire = (): void => {};
+    const onStatusBar = vi.fn();
     const deps = {
       ...fakeFlow('in_progress'),
       state: vi.fn(async () => ({
@@ -128,25 +155,26 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
         fire = cb;
         return () => {};
       }),
+      onStatusBar,
     };
     createFlowStrip(host, deps).onRepoChanged('/repo');
-    await vi.waitFor(() => expect(host.querySelector('.flow-activity')).not.toBeNull());
-    const lineBefore = host.querySelector('.flow-activity')!;
+    await vi.waitFor(() => expect(onStatusBar).toHaveBeenCalled());
     const stationBefore = host.querySelector('.stn')!;
 
     phrase = 'Running reviewers';
     fire();
 
-    await vi.waitFor(() => expect(host.querySelector('.phrase')?.textContent).toBe('Running reviewers'));
-    expect(host.querySelector('.flow-activity')).toBe(lineBefore); // same node → only the phrase announced
-    expect(host.querySelector('.stn')).toBe(stationBefore); // the rest of the strip was not re-inserted
+    await vi.waitFor(() =>
+      expect(onStatusBar.mock.calls.at(-1)![0].activity).toEqual({ phrase: 'Running reviewers' }),
+    );
+    expect(host.querySelector('.stn')).toBe(stationBefore); // the strip itself was patched, not rebuilt
   });
 
-  it('omits the spinner (and the whole activity line) when no activity is reported', async () => {
-    const deps = fakeFlow('in_progress');
-    createFlowStrip(host, deps).onRepoChanged('/repo');
-    await vi.waitFor(() => expect(control()).not.toBeNull());
-    expect(host.querySelector('.flow-activity')).toBeNull();
+  it('reports no activity to the status bar when the engine is idle', async () => {
+    const onStatusBar = vi.fn();
+    createFlowStrip(host, { ...fakeFlow('in_progress'), onStatusBar }).onRepoChanged('/repo');
+    await vi.waitFor(() => expect(onStatusBar).toHaveBeenCalled());
+    expect(onStatusBar.mock.calls.at(-1)![0].activity).toBeNull();
   });
 
   it('re-pulls and re-renders for the new repo when the cwd changes', async () => {

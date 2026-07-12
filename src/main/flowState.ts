@@ -18,6 +18,8 @@ export interface PersistedFlowState {
   /** Epoch ms at which this run of the flow began (§26.10) — the lower bound the cost meter sweeps
    *  session logs from. Absent for a flow that never started, and for one persisted before this field. */
   startedAt?: number;
+  /** The name the user gave this worktree's work (§22.3). Absent until they name one. */
+  title?: string;
 }
 
 export interface FlowStateStore {
@@ -46,6 +48,14 @@ function readStartedAt(raw: unknown): number | null {
   return typeof raw === 'number' && Number.isFinite(raw) && raw > 0 ? raw : null;
 }
 
+/** Null unless the value names something: a blank or ill-typed `title` would render the status bar's
+ *  name slot as an empty, un-nameable gap rather than its click-to-name placeholder (§22.3). */
+function readTitle(raw: unknown): string | null {
+  if (typeof raw !== 'string') return null;
+  const text = raw.trim();
+  return text.length > 0 ? text : null;
+}
+
 export function createFlowStateStore(worktreeDir: string): FlowStateStore {
   const file = path.join(worktreeDir, STATE_REL);
   return {
@@ -60,15 +70,18 @@ export function createFlowStateStore(worktreeDir: string): FlowStateStore {
       if (typeof doc.status !== 'string' || !PERSISTABLE.has(doc.status as FlowStatus)) return null;
       const inputs = readInputs(doc.inputs);
       const startedAt = readStartedAt(doc.started_at);
+      const title = readTitle(doc.title);
       return {
         step: doc.step,
         status: doc.status as FlowStatus,
         ...(inputs ? { inputs } : {}),
         ...(startedAt !== null ? { startedAt } : {}),
+        ...(title !== null ? { title } : {}),
       };
     },
     write(state) {
       const hasInputs = state.inputs && Object.keys(state.inputs).length > 0;
+      const title = readTitle(state.title);
       atomicWriteFileSync(
         file,
         yaml.dump({
@@ -76,6 +89,7 @@ export function createFlowStateStore(worktreeDir: string): FlowStateStore {
           status: state.status,
           ...(hasInputs ? { inputs: state.inputs } : {}),
           ...(state.startedAt !== undefined ? { started_at: state.startedAt } : {}),
+          ...(title !== null ? { title } : {}),
         }),
       );
     },

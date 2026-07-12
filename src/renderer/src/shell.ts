@@ -161,6 +161,9 @@ export function createShell(root: HTMLElement, deps: ShellDeps = {}): Shell {
     if (target.closest('#qs')) return toggleDrawer();
     if (target.closest('#dclose')) return closeDrawer();
     if (target.closest('.loopstat')) return toggleLoopPanel();
+    // §22.3 — the status bar's attention state routes to the gate controls. It OPENS rather than toggles:
+    // the alert says the loop is blocked on a human, so the click must always land on the decision.
+    if (target.closest('[data-status-alert]')) return openLoopPanel();
     if (target.closest('[data-loop-close]')) return closeLoopPanel();
     if (target.closest('#tg')) return setTheme(theme === 'dark' ? 'light' : 'dark');
   };

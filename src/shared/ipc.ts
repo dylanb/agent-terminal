@@ -591,6 +591,10 @@ export interface FlowStateView {
    *  inputs and the loop's state.yaml, gated on flow progress (see `FlowRefs`). The renderer fetches each
    *  one's title/body/url lazily via `flow:githubRef`. */
   refs?: FlowRefs;
+  /** The name the user gave this worktree's work (§22.3), persisted in flow-state.yaml. The status bar
+   *  shows it only when neither a PR nor a ticket supplies a title (`deriveStatusBar`) — it is outranked,
+   *  never discarded, so it returns if the refs go away. Absent when the user has named nothing. */
+  userTitle?: string;
   /** A one-shot step-entry input prompt (§18.4 / §24.2.3 T3): present on a `start`/`restart`/`advance`
    *  response when the entered step's `bootstrap` needs an unsatisfied required input. The renderer
    *  opens its modal and answers via `flow:provideInput`. Like `notice`, never part of `state()`. */

@@ -283,6 +283,9 @@ export function createFlowMachine(
   // §26.10 — when THIS run of the flow began. The cost meter sweeps session logs from here, so it must
   // survive every transition within a run and never outlive one.
   let startedAt: number | null = null;
+  // §22.3 — the name the user gave this worktree's work. Unlike `inputs`/`startedAt` it names the
+  // worktree, not the run, so no transition clears it — a terminate/restart must give the name back.
+  let userTitle: string | null = null;
 
   // Re-read the persisted progression from the store (§19.1: flow-state.yaml is the source of truth).
   // Run at construction AND on every state() query, so an external advance — the agent-loop CLI moving
@@ -294,6 +297,7 @@ export function createFlowMachine(
     status = 'not_started';
     inputs = {};
     startedAt = null;
+    userTitle = null;
     const persisted = store.read();
     if (!persisted) return;
     const i = names.indexOf(persisted.step);
@@ -303,6 +307,7 @@ export function createFlowMachine(
     }
     if (persisted.inputs) inputs = { ...persisted.inputs };
     if (persisted.startedAt !== undefined) startedAt = persisted.startedAt;
+    if (persisted.title !== undefined) userTitle = persisted.title;
   };
   hydrate();
 
@@ -338,6 +343,7 @@ export function createFlowMachine(
       total: steps.length,
       status,
       ...(step.todoTemplate ? { templateRef: step.todoTemplate } : {}),
+      ...(userTitle !== null ? { userTitle } : {}),
     };
     // §24.2.3 T7 (refs) / §24.2.3 T2 (loop mirror).
     const entered = status === 'not_started' ? [] : steps.slice(0, index + 1);
@@ -360,6 +366,7 @@ export function createFlowMachine(
       status,
       ...(Object.keys(inputs).length > 0 ? { inputs } : {}),
       ...(startedAt !== null ? { startedAt } : {}),
+      ...(userTitle !== null ? { title: userTitle } : {}),
     });
 
   const requireStatus = (expected: FlowStatus, action: string): void => {

@@ -137,9 +137,10 @@ function ruleBackground(escapedSelector: string): string | null {
   return b ? b[1].trim() : null;
 }
 
-// The attn-bar dismiss focus ring is a non-text indicator that must clear 3:1 on the bar's tinted wash,
-// not the plain card (WCAG 2.1 SC 1.4.11). The global `button:focus-visible` `--signal` outline clears
-// 3:1 only on `--card` and falls short on the tinted bar in light theme, so the bar scopes its own ring.
+// The status bar's focus ring, in the bar's attention state, is a non-text indicator that must clear 3:1
+// on the bar's tinted wash, not the plain card (WCAG 2.1 SC 1.4.11). The global `button:focus-visible`
+// `--signal` outline clears 3:1 only on `--card` and falls short on the tinted bar in light theme, so the
+// bar scopes its own ring.
 function blockBody(re: RegExp): string | null {
   const m = css.match(re);
   return m ? m[1] : null;
@@ -151,10 +152,10 @@ function outlineColor(body: string): string | null {
   const c = sh ? sh[1].match(/var\(\s*--[\w-]+\s*\)|#[0-9a-fA-F]{3,8}|rgba?\([^)]+\)/) : null;
   return c ? c[0] : null;
 }
-/** The outline color that actually paints on the attn-bar dismiss button: a scoped
- *  `.attn-bar …:focus-visible` rule wins over the global `button:focus-visible` outline. */
+/** The outline color that actually paints on a control in the status bar's attention state: a scoped
+ *  `.status-bar…:focus-visible` rule wins over the global `button:focus-visible` outline. */
 function attnFocusOutline(): string {
-  const scoped = blockBody(/\.attn-bar (?:button|\.x):focus-visible\s*\{([^}]*)\}/);
+  const scoped = blockBody(/\.status-bar:has\(\.sb-alert-btn\) button:focus-visible\s*\{([^}]*)\}/);
   if (scoped) {
     const c = outlineColor(scoped);
     if (c) return c;
@@ -177,12 +178,12 @@ function resolveOpaqueMix(map: Record<string, string>, expr: string): string {
   return toHex([a[0] * p + b[0] * (1 - p), a[1] * p + b[1] * (1 - p), a[2] * p + b[2] * (1 - p), 1]);
 }
 
-describe('attn-bar dismiss focus ring contrast (WCAG 2.1 SC 1.4.11)', () => {
-  const barBgExpr = ruleBackground('\\.attn-bar');
-  if (!barBgExpr) throw new Error('.attn-bar background not found');
+describe('status-bar attention-state focus ring contrast (WCAG 2.1 SC 1.4.11)', () => {
+  const barBgExpr = ruleBackground('\\.status-bar:has\\(\\.sb-alert-btn\\)');
+  if (!barBgExpr) throw new Error('.status-bar attention-state background not found');
   const outline = attnFocusOutline();
   for (const [themeName, map] of [['light', light], ['dark', dark]] as const) {
-    it(`${themeName}: dismiss focus ring clears 3:1 on the attn-bar background`, () => {
+    it(`${themeName}: focus ring clears 3:1 on the status bar's attention wash`, () => {
       const ref = outline.match(/^var\(\s*(--[\w-]+)\s*\)$/);
       const ringHex = ref ? resolve(map, ref[1]) : outline;
       expect(contrast(ringHex, resolveOpaqueMix(map, barBgExpr))).toBeGreaterThanOrEqual(3);

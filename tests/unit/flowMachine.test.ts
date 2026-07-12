@@ -11,6 +11,44 @@ import { mkGate } from '../helpers/loopGate';
 
 const LOAD: FlowLoad = { ok: true, definition: { name: 'f', steps: [{ id: 'step-1', kind: 'manual' }] }, flowDir: '/tmp/f/.agent-terminal' };
 
+describe('the user title the status bar shows (§22.3)', () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'flow-title-'));
+  });
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('surfaces the persisted title on the view', () => {
+    const store = createFlowStateStore(dir);
+    store.write({ step: 'step-1', status: 'in_progress', title: 'Refactor the shadow parser' });
+    expect(createFlowMachine(LOAD, store).state().userTitle).toBe('Refactor the shadow parser');
+  });
+
+  it('reports no title for a flow the user never named', () => {
+    expect(createFlowMachine(LOAD, createFlowStateStore(dir)).state().userTitle).toBeUndefined();
+  });
+
+  it('keeps the title across every transition, so clicking Start never destroys the name', () => {
+    const store = createFlowStateStore(dir);
+    store.write({ step: 'step-1', status: 'not_started', title: 'Refactor the shadow parser' });
+    const flow = createFlowMachine(LOAD, store);
+    expect(flow.start().userTitle).toBe('Refactor the shadow parser');
+    expect(flow.advance().userTitle).toBe('Refactor the shadow parser');
+    expect(store.read()?.title).toBe('Refactor the shadow parser');
+  });
+
+  it('keeps the title when the flow is terminated — the name outlives the run it named', () => {
+    const store = createFlowStateStore(dir);
+    store.write({ step: 'step-1', status: 'in_progress', title: 'Refactor the shadow parser' });
+    const flow = createFlowMachine(LOAD, store);
+    const after = flow.terminate();
+    expect(after.status).toBe('not_started');
+    expect(after.userTitle).toBe('Refactor the shadow parser');
+  });
+});
+
 describe('flow state machine (§24.2.2 S1)', () => {
   it('begins not_started at position 1/1 with a named step', () => {
     const flow = createFlowMachine(LOAD);

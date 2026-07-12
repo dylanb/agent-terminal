@@ -12,7 +12,7 @@ import { wireBootstrapConflict } from './wireBootstrapConflict';
 import { createConfirmDialog } from './confirmDialog';
 import { createErrorDialog } from './errorDialog';
 import { createTerminateConfirm } from './terminateConfirm';
-import { createAttentionCue } from './attentionCue';
+import { createStatusBar } from './statusBar';
 import { revealLoopReadout } from './loopReveal';
 import { createArtifacts, type Artifacts } from './artifacts';
 import { renderMarkdownInto, renderCodeInto } from './viewerRender';
@@ -74,7 +74,7 @@ wireMonitorPane(repo);
 // Forward ref so the shell drives the viewer's full-screen presentation (§20.2) through the
 // contract, not a reach-across; the composition root wires it both ways.
 let artifacts: Artifacts | undefined;
-// Forward ref: the cue's dismiss handler (built first) lands focus via the strip's typed seam below.
+// Forward ref: a dialog's focus fallback (wired below) lands focus via the strip's typed seam.
 let flowStrip: FlowStrip | undefined;
 const shell = createShell(document.getElementById('app')!, {
   getTheme: () => window.monitor.getSettings().then((s) => s.theme),
@@ -85,15 +85,18 @@ const shell = createShell(document.getElementById('app')!, {
 
 wireCrossHighlight(document.getElementById('app')!);
 
-// Awaiting-human attention cue (§24.2.3 T4): the flow strip feeds it the loop mirror (below); the
-// OS notification's activation pushes flow:revealLoop, answered by revealLoopReadout via Shell seams.
-const attnCueHost = document.getElementById('attn-cue');
-const attentionCue = attnCueHost
-  ? createAttentionCue(attnCueHost, {
-      // WCAG 2.4.3: never strand focus on <body>; the composition root owns this cross-organism fallback.
-      onDismiss: () => {
-        if (!flowStrip?.focusLoopReadout()) shell.focusView('1');
+// The always-visible status bar (§22.3): the flow strip feeds it its model (below). It resolves ref
+// titles through window.flow, repo-scoped at call time (the cwd may move between renders), and opens
+// links via the validated openExternal seam — the same contract the docked loop panel uses.
+// The OS notification's activation pushes flow:revealLoop, answered by revealLoopReadout via Shell seams.
+const statusBarHost = document.getElementById('status-bar');
+const statusBar = statusBarHost
+  ? createStatusBar(statusBarHost, {
+      githubRef: (kind, number) => {
+        const key = repo.repoKey();
+        return key ? window.flow.githubRef(key, kind, number) : Promise.resolve(null);
       },
+      openExternal: (url) => void window.flow.openExternal(url),
     })
   : undefined;
 window.flow.onRevealLoop(() => revealLoopReadout(shell));
@@ -173,8 +176,8 @@ if (flowStripHost) {
         closePanel: () => shell.closeLoopPanel(),
         syncExpanded: () => shell.syncLoopReadout(),
       });
-      attentionCue?.render(loop ?? null, repo.repoKey());
     },
+    onStatusBar: (model) => statusBar?.render(model, repo.repoKey()),
     onPrompt: (prompt, stepName, submit) => inputModal?.render(prompt, stepName, submit),
     onTerminate: confirmDialog
       ? createTerminateConfirm({ todoList: window.monitor.todoList, dialog: confirmDialog })
