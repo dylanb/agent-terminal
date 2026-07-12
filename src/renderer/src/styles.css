@@ -502,9 +502,15 @@ button:hover { border-color:var(--dim); }
 /* Bounded and column-laid so an overflowing body scrolls INSIDE the card: a centred position:fixed modal
    clips a taller-than-viewport card at both ends, taking the footer actions off-screen with no way to
    reach them (WCAG 2.1.1, 2.4.3). The consent step's file manifest is unbounded — it enumerates the
-   bundle — so the body, not the card, takes the overflow and the footer stays put. */
+   bundle. `safe center` is required over plain `center`: an over-constrained centred flex item overflows
+   the TOP edge, which no scroll can reach (WCAG 1.4.4, 1.4.10). */
+.flow-modal { overflow-y:auto; align-items:safe center; }
 .flow-modal .card { width:440px; max-width:92vw; max-height:calc(100vh - 48px); display:flex; flex-direction:column; background:var(--card); border:1px solid var(--hair); border-radius:10px; box-shadow:0 30px 80px rgba(8,16,28,.34); padding:22px; }
-.flow-modal .card > .install-consent { overflow-y:auto; min-height:0; }
+/* The scroll box is the rows container, never the <fieldset>: Chromium renders a fieldset's children in an
+   anonymous content box, so it honours neither `overflow` nor a flex min-height chain on the element
+   itself. The rows carry their own bound, which does not depend on the fieldset's layout at all. */
+.flow-modal .card > .install-consent { min-height:0; }
+.install-consent .install-consent-rows { overflow-y:auto; max-height:40vh; }
 .flow-modal .mfoot { flex:none; }
 .flow-modal h3 { font-family:"Fraunces",serif; font-weight:500; font-size:19px; margin:0 0 4px; }
 .flow-modal .ph { font-size:12.5px; color:var(--dim); margin:0 0 16px; }

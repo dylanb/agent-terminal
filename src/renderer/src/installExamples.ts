@@ -187,7 +187,12 @@ export function createInstallExamples(host: HTMLElement, deps: InstallExamplesDe
       fieldset.className = 'install-consent';
       const legend = d.createElement('legend');
       legend.textContent = 'Replace files in';
-      fieldset.append(legend);
+      // Chromium ignores `overflow` on a <fieldset> — its children render in an anonymous content box, so
+      // the element never becomes a scroll box however it is styled. The rows need a container of their
+      // own to take the overflow, or a long manifest pushes the footer actions off-screen unreachably.
+      const rows = d.createElement('div');
+      rows.className = 'install-consent-rows';
+      fieldset.append(legend, rows);
 
       const boxes = new Map<InstallDestinationId, HTMLInputElement>();
       for (const conflict of conflicts) {
@@ -212,7 +217,7 @@ export function createInstallExamples(host: HTMLElement, deps: InstallExamplesDe
         files.id = filesId;
         files.textContent = conflict.files.join(', ');
         row.append(label, files);
-        fieldset.append(row);
+        rows.append(row);
         boxes.set(conflict.destination, box);
       }
       cardEl.append(fieldset);

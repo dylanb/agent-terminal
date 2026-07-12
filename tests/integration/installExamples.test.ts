@@ -304,29 +304,34 @@ describe('applyInstallExamples — one replace decision per destination, never o
 });
 
 describe('applyInstallExamples — all-or-nothing across destinations when unwritability is detectable', () => {
-  it.each(ALL)('writes nothing anywhere when the %s container is a symlink (CWE-59)', (id) => {
-    // Plant the destination's container as a symlink to a real directory elsewhere. The write must be
-    // refused up front — nothing through the link, nothing in the link target, nothing in any sibling
-    // destination. Seeding the loops directory grants `exec` authority (§26.6/CWE-829), so this guard
-    // protects an execution-authority boundary, not merely a config directory.
-    const target = targetOf(id, '.');
-    const real = mkdtempSync(path.join(tmpdir(), 'link-target-'));
-    try {
-      mkdirSync(path.dirname(target), { recursive: true });
-      symlinkSync(real, target);
+  it.skipIf(asRoot).each(ALL)(
+    'writes nothing anywhere when the %s container resolves somewhere unwritable',
+    (id) => {
+      // The destination roots are app-derived, so a link the user placed at one is followed to its real
+      // location (see the dotfiles describe below). What must still refuse UP FRONT is a root that cannot
+      // be written — including one reached through the user's own link. Seeding the loops directory grants
+      // `exec` authority (§26.6/CWE-829), so this gate protects an execution-authority boundary.
+      const target = targetOf(id, '.');
+      const real = mkdtempSync(path.join(tmpdir(), 'link-target-'));
+      try {
+        mkdirSync(path.dirname(target), { recursive: true });
+        symlinkSync(real, target);
+        chmodSync(real, 0o500); // traversable, not writable
 
-      const res = applyInstallExamples(dirs, ALL);
-      expect(res.ok).toBe(false);
-      if (res.ok) return;
-      expect(res.error).toBeTruthy();
-      expect(res.created).toEqual([]);
-      expect(res.overwritten).toEqual([]);
-      expect(walk(real)).toEqual([]); // nothing written through the link
-      for (const other of ALL.filter((o) => o !== id)) expect(walk(targetOf(other, '.'))).toEqual([]);
-    } finally {
-      rmSync(real, { recursive: true, force: true });
-    }
-  });
+        const res = applyInstallExamples(dirs, ALL);
+        expect(res.ok).toBe(false);
+        if (res.ok) return;
+        expect(res.error).toMatch(/cannot be written/);
+        expect(res.created).toEqual([]);
+        expect(res.overwritten).toEqual([]);
+        expect(walk(real)).toEqual([]);
+        for (const other of ALL.filter((o) => o !== id)) expect(walk(targetOf(other, '.'))).toEqual([]);
+      } finally {
+        chmodSync(real, 0o700);
+        rmSync(real, { recursive: true, force: true });
+      }
+    },
+  );
 
   it.skipIf(asRoot)('writes nothing anywhere when a destination container is not writable', () => {
     mkdirSync(destOf('skills').targetDir, { recursive: true });
@@ -654,6 +659,50 @@ describe('the pre-write writability gate covers the containers the write actuall
   });
 });
 
+describe('a destination root the USER symlinked is followed, not refused — it is their config, not a planted link', () => {
+  // The four destination roots are derived by the APP (home / CLAUDE_CONFIG_DIR); they are never read out
+  // of untrusted content. Symlinking ~/.claude/skills into a dotfiles repo is a standard stow-style setup,
+  // and Claude Code READS through it — so refusing to WRITE through it seeds nothing the reader will load,
+  // strands the user with no route out, and blames them for an attack. Confinement still holds INSIDE the
+  // resolved root.
+  let dotfiles: string;
+  beforeEach(() => {
+    dotfiles = mkdtempSync(path.join(tmpdir(), 'install-dotfiles-'));
+  });
+  afterEach(() => {
+    rmSync(dotfiles, { recursive: true, force: true });
+  });
+
+  const linkDest = (id: InstallDestinationId, real: string): void => {
+    mkdirSync(real, { recursive: true });
+    mkdirSync(path.dirname(destOf(id).targetDir), { recursive: true });
+    symlinkSync(real, destOf(id).targetDir);
+  };
+
+  it('installs through the symlink, landing the files at the resolved location', () => {
+    const real = path.join(dotfiles, 'skills');
+    linkDest('skills', real);
+    const res = okOf(applyInstallExamples(dirs, []));
+    expect(filesFor(res.created, 'skills').sort()).toEqual([...SKILLS_SET].sort());
+    expect(readFileSync(path.join(real, skillRel))).toEqual(
+      readFileSync(path.join(BUNDLE_LOOPS, 'plan-loop', 'skills', skillRel)),
+    );
+  });
+
+  it('still refuses a symlink INSIDE the resolved root that escapes it (CWE-59)', () => {
+    const real = path.join(dotfiles, 'loops');
+    const outside = path.join(dotfiles, 'outside');
+    linkDest('loops', real);
+    mkdirSync(outside, { recursive: true });
+    symlinkSync(outside, path.join(real, 'plan-loop')); // escapes the RESOLVED root
+
+    const res = applyInstallExamples(dirs, []);
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error).toMatch(/symbolic link/);
+    expect(walk(outside)).toEqual([]);
+  });
+});
+
 describe('a refusal names the cause the user has to act on', () => {
   it.skipIf(asRoot)('does not blame a symlink for an unreadable directory on the path', () => {
     // confinedRealPath returns null for MORE than an escaping symlink: an unreadable (EACCES) or
@@ -674,23 +723,6 @@ describe('a refusal names the cause the user has to act on', () => {
     expect(res.error).toMatch(/could not be resolved|cannot be read|unreadable/i);
   });
 
-  it('says a symlinked destination container is a symlink, not that it "cannot be written"', () => {
-    // The two conditions call for opposite fixes — replace the link vs. fix the permissions — so one
-    // message for both leaves the user guessing (CLAUDE.md: never strand the user in a state they cannot
-    // resolve through the UI).
-    const outside = mkdtempSync(path.join(tmpdir(), 'outside-container-'));
-    try {
-      mkdirSync(path.dirname(destOf('skills').targetDir), { recursive: true });
-      symlinkSync(outside, destOf('skills').targetDir);
-      const res = applyInstallExamples(dirs, []);
-      expect(res.ok).toBe(false);
-      if (res.ok) return;
-      expect(res.error).toMatch(/symbolic link/);
-      expect(walk(outside)).toEqual([]);
-    } finally {
-      rmSync(outside, { recursive: true, force: true });
-    }
-  });
 });
 
 describe('installed bytes are the bundle bytes — a non-UTF-8 asset survives the copy', () => {

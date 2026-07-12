@@ -10,8 +10,7 @@ import { skillNameConflicts } from './exampleSkills';
 
 /** CWE-59: `copyFileSync` FOLLOWS a symlink and materializes the target's bytes as a regular file, so a
  *  link committed under `example/` would be laundered into the bundle — and the install-time walker, which
- *  skips links, would find nothing left to skip and seed the outside content into the user's config. Only
- *  directories and regular files are copied; anything else fails the build, as a colliding skill name does. */
+ *  skips links, would find nothing left to skip and seed the outside content into the user's config. */
 function copyTree(src: string, dest: string): void {
   mkdirSync(dest, { recursive: true });
   for (const entry of readdirSync(src, { withFileTypes: true })) {

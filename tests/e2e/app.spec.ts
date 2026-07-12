@@ -4,6 +4,7 @@ import { _electron as electron, expect, test, type ElectronApplication, type Pag
 import { mkdtempSync, mkdirSync, writeFileSync, appendFileSync, rmSync, existsSync, statSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, basename } from 'node:path';
+import { parseColor, compositeOver, contrastRatio, type RGBA } from '../helpers/wcag';
 import { CH, SESSION_ID } from '../../src/shared/ipc';
 import { CLI_COMMAND_NAME } from '../../src/main/cliShim';
 import { parseAuditStream, type AuditEvent } from '../../src/shared/audit';
@@ -119,6 +120,12 @@ async function cdToTempDir(marker: string): Promise<void> {
   await expect(page.locator('.status-chip[data-status="agent"]')).toContainText('quiet', { timeout: 6_000 });
 }
 
+// Electron's window event under full-suite load: the process is real and the window does arrive, but a
+// cold launch competing with 145 siblings can exceed Playwright's 30s default and fail at firstWindow()
+// before any assertion runs. That is a launch-tail budget, not a product race — the same test passes in
+// 2.9s alone. Budget it once, here, rather than leaving each of the ~62 launch sites to lose the race.
+const WINDOW_TIMEOUT_MS = 90_000;
+
 test.beforeEach(async () => {
   freshenedDirs = new Set();
   userDataDir = mkdtempSync(join(tmpdir(), 'agent-term-e2e-ud-'));
@@ -126,7 +133,7 @@ test.beforeEach(async () => {
     args: launchArgs(),
     env: { ...process.env, APP_SHELL: 'bash', APP_SUBMIT_DELAY_MS: '100' },
   });
-  page = await app.firstWindow();
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
   // The drawer starts closed (§22.2); drawer-driven tests below assume it open on Capture. The
   // closed-on-startup default is asserted by its own fresh-relaunch test.
@@ -461,7 +468,7 @@ test('a todo persists in-repo across an app restart (§16.3)', async () => {
   // Across a full restart, the in-repo todos.json is reread when the agent cd's back (§16.3).
   await app.close();
   app = await electron.launch({ args: launchArgs(), env: { ...process.env, APP_SHELL: 'bash', APP_SUBMIT_DELAY_MS: '100' } });
-  page = await app.firstWindow();
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   await cdToTempDir('persist');
@@ -495,7 +502,7 @@ test('the app terminates when the hosted shell exits', async () => {
     args: launchArgs(),
     env: { ...process.env, APP_SHELL: 'bash', APP_SUBMIT_DELAY_MS: '100', APP_STARTUP_EXIT_GRACE_MS: '1' },
   });
-  page = await app.firstWindow();
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
   // Shell teardown → PTY exit → app quit can take a moment under CI load; wait past the default budget.
   await typeCommand('exit');
@@ -517,7 +524,7 @@ test('an immediate shell startup failure keeps the app open (§5 grace exception
     args: launchArgs(),
     env: { ...process.env, APP_SHELL: 'false', APP_SUBMIT_DELAY_MS: '100', APP_STARTUP_EXIT_GRACE_MS: '60000' },
   });
-  page = await app.firstWindow();
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   // The decision is in main and independent of the renderer: assert the app does NOT close within a
   // window comfortably under the grace. A close event here would mean it wrongly terminated.
   const closed = app
@@ -537,7 +544,7 @@ test('a within-grace shell exit keeps the app open AND shows the exit diagnostic
     args: launchArgs(),
     env: { ...process.env, APP_SHELL: 'bash', APP_SUBMIT_DELAY_MS: '100', APP_STARTUP_EXIT_GRACE_MS: '60000' },
   });
-  page = await app.firstWindow();
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 }); // renderer mounted → pty:exit listener live
   await typeCommand('exit');
   await expect(termRows()).toContainText('[process exited: 0]', { timeout: 20_000 });
@@ -590,7 +597,7 @@ test('a captured report (with findings) survives a monitor reload (capture:last�
     args: launchArgs(),
     env: { ...process.env, APP_SHELL: 'bash', APP_SUBMIT_DELAY_MS: '100', APP_SHELL_INTEGRATION: '0' },
   });
-  page = await app.firstWindow();
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
   await openQuickSend('capture'); // the drawer starts closed after a relaunch (§22.2)
 
@@ -630,7 +637,7 @@ test('captured monitor events restore on relaunch in the same directory (persist
   try {
     await app.close();
     app = await electron.launch({ args: launchArgs(), env: dirEnv });
-    page = await app.firstWindow();
+    page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
     await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
     await openQuickSend('capture');
 
@@ -652,7 +659,7 @@ test('captured monitor events restore on relaunch in the same directory (persist
     // would otherwise hang on an already-emitted event).
     await expect.poll(() => app.windows().length, { timeout: 20_000 }).toBe(0).catch(() => {});
     app = await electron.launch({ args: launchArgs(), env: dirEnv });
-    page = await app.firstWindow();
+    page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
     await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
     await openQuickSend('capture'); // the drawer starts closed after a relaunch (§22.2)
 
@@ -672,7 +679,7 @@ test('captures the visible report on the alternate screen buffer (full-screen ag
     args: launchArgs(),
     env: { ...process.env, APP_SHELL: 'bash', APP_SUBMIT_DELAY_MS: '100', APP_SHELL_INTEGRATION: '0' },
   });
-  page = await app.firstWindow();
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
   await openQuickSend('capture'); // the drawer starts closed after a relaunch (§22.2)
 
@@ -797,7 +804,7 @@ test('capture ↔ terminal cross-highlight: double-click reveals each side (§16
     args: launchArgs(),
     env: { ...process.env, APP_SHELL: 'bash', APP_SUBMIT_DELAY_MS: '100', APP_SHELL_INTEGRATION: '0' },
   });
-  page = await app.firstWindow();
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
   await openQuickSend('capture'); // the drawer starts closed after a relaunch (§22.2)
 
@@ -1177,7 +1184,7 @@ test('the viewer starts in sync with the terminal cwd, before any cd (§20.1)', 
   writeFileSync(join(home, 'home-marker.md'), '# Home marker\n');
   await app.close();
   app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
-  page = await app.firstWindow();
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   await page.keyboard.press('Control+2');
@@ -1479,7 +1486,7 @@ test('the quick-send drawer is closed on startup and inert while closed (§22.2)
   // beforeEach opens the drawer, so relaunch a fresh app to observe the real startup default (§22.2).
   await app.close();
   app = await electron.launch({ args: launchArgs(), env: { ...process.env, APP_SHELL: 'bash', APP_SUBMIT_DELAY_MS: '100' } });
-  page = await app.firstWindow();
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   const appEl = page.locator('#app');
@@ -2013,7 +2020,7 @@ test('the flow strip follows the cwd: cd into a repo shows its flow and drives i
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-flow-home-'));
   await app.close();
   app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
-  page = await app.firstWindow();
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   await typeCommand(`cd "${repo}"`);
@@ -2051,7 +2058,7 @@ test('flow Start opens an audit run file with a flow.started event (§25.4)', as
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-audit-home-'));
   await app.close();
   app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
-  page = await app.firstWindow();
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   await typeCommand(`cd "${repo}"`);
@@ -2077,7 +2084,7 @@ test('the audit run accrues lifecycle events and go-back appends to the same fil
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-audit2-home-'));
   await app.close();
   app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
-  page = await app.firstWindow();
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   await typeCommand(`cd "${repo}"`);
@@ -2120,7 +2127,7 @@ test('todo edits during an active flow are recorded; none when no flow is active
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-audit3-home-'));
   await app.close();
   app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
-  page = await app.firstWindow();
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   // No flow active yet: a todo edit records nothing (no audit dir for the repo).
@@ -2166,7 +2173,7 @@ test('a loop step records the state.yaml mirror and live edits append loop.statu
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-audit-loop-home-'));
   await app.close();
   app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
-  page = await app.firstWindow();
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   await typeCommand(`cd "${repo}"`);
@@ -2205,7 +2212,7 @@ test('resolving a github-ticket input records input.resolved and ticket.assoc (�
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-audit-input-home-'));
   await app.close();
   app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
-  page = await app.firstWindow();
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   await typeCommand(`cd "${repo}"`);
@@ -2255,7 +2262,7 @@ test('in-app pickup records a `pickup` command event with its exit (§26.9 / §2
       FAKE_GHGIT_LOG: join(binDir, 'calls.log'),
     },
   });
-  page = await app.firstWindow();
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   await typeCommand(`cd "${repo}"`);
@@ -2289,7 +2296,7 @@ test('a multi-step flow walks the bookended rail: Start → Advance ×3 reaches 
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-flow-multi-home-'));
   await app.close();
   app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
-  page = await app.firstWindow();
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   await typeCommand(`cd "${repo}"`);
@@ -2366,7 +2373,7 @@ test('installing the bundled examples seeds the flow, the loop definitions, the 
   mkdirSync(join(repo, '.git'), { recursive: true }); // its own repo key; no local flow → global is used
   await app.close();
   app = await electron.launch({ args: ['out/main/index.js'], env: installEnv(home, configDir) });
-  page = await app.firstWindow();
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   await page.locator('[data-viewbtn="4"]').click(); // open the settings view
@@ -2426,7 +2433,7 @@ test('the consent step collects one decision per conflicting destination; a decl
   writeFileSync(join(configDir, 'commands', 'groom-ticket.md'), customCommand); // conflicts in a second destination
   await app.close();
   app = await electron.launch({ args: ['out/main/index.js'], env: installEnv(home, configDir) });
-  page = await app.firstWindow();
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   await page.locator('[data-viewbtn="4"]').click();
@@ -2460,11 +2467,26 @@ test('the REAL consent checkbox paints a focus ring, and the dialog footer stays
   // bundle, which is exactly the content that pushed the footer off-screen.
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-install-ring-home-'));
   const configDir = mkdtempSync(join(tmpdir(), 'agent-term-e2e-install-ring-cfg-'));
-  mkdirSync(join(configDir, 'loops', 'plan-loop'), { recursive: true });
-  writeFileSync(join(configDir, 'loops', 'plan-loop', 'plan-loop.yaml'), 'name: mine\n'); // conflicts in loops
+  // The manifest lists only files that are present AND differ, so seeding ONE conflicting file would
+  // render a ONE-path manifest — and the footer assertion below would pass against content that never
+  // overflowed anything. Conflict the WHOLE loops bundle, which is the content that clipped the footer.
+  const seedConflicts = (src: string, dest: string): number => {
+    let n = 0;
+    mkdirSync(dest, { recursive: true });
+    for (const e of readdirSync(src, { withFileTypes: true })) {
+      if (e.isDirectory()) n += seedConflicts(join(src, e.name), join(dest, e.name));
+      else if (e.isFile()) {
+        writeFileSync(join(dest, e.name), `# mine — differs from the bundle\n${readFileSync(join(src, e.name), 'utf8')}`);
+        n += 1;
+      }
+    }
+    return n;
+  };
+  const conflicting = seedConflicts(join(process.cwd(), 'example', 'loops'), join(configDir, 'loops'));
+  expect(conflicting).toBeGreaterThan(20); // the fixture must actually be the overflowing case
   await app.close();
   app = await electron.launch({ args: ['out/main/index.js'], env: installEnv(home, configDir) });
-  page = await app.firstWindow();
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   await page.locator('[data-viewbtn="4"]').click();
@@ -2473,6 +2495,10 @@ test('the REAL consent checkbox paints a focus ring, and the dialog footer stays
 
   const box = consentBox('loops');
   await expect(box).toBeVisible();
+  // The dialog is genuinely rendering the long manifest — otherwise the footer check below grades a
+  // dialog that never overflowed and cannot fail.
+  const manifest = page.locator('#install-examples-view .flow-modal .ic-files').first();
+  expect((await manifest.innerText()).length).toBeGreaterThan(500);
 
   // The dialog gives the first checkbox its INITIAL focus programmatically, and a programmatic focus need
   // not match :focus-visible. Focus has to ARRIVE by keyboard, so step off the control and come back.
@@ -2504,26 +2530,11 @@ test('the REAL consent checkbox paints a focus ring, and the dialog footer stays
     };
   });
 
-  const rgb = (s: string): [number, number, number] => {
-    const m = s.match(/\d+(\.\d+)?/g);
-    if (!m) throw new Error(`unparseable colour: ${s}`);
-    return [Number(m[0]), Number(m[1]), Number(m[2])];
-  };
-  const relLum = (c: [number, number, number]): number => {
-    const [r, g, b] = c.map((v) => (v / 255 <= 0.03928 ? v / 255 / 12.92 : ((v / 255 + 0.055) / 1.055) ** 2.4));
-    return 0.2126 * r + 0.7152 * g + 0.0722 * b;
-  };
-  const ratio = (a: [number, number, number], b: [number, number, number]): number => {
-    const [hi, lo] = [relLum(a), relLum(b)].sort((x, y) => y - x);
-    return (hi + 0.05) / (lo + 0.05);
-  };
-  const over = (f: [number, number, number], b: [number, number, number], a: number): [number, number, number] =>
-    [0, 1, 2].map((i) => f[i] * a + b[i] * (1 - a)) as [number, number, number];
 
   expect(painted.focusVisible).toBe(true);
   expect(painted.outlineWidth).toBe('2px');
-  const behind = rgb(painted.behind);
-  expect(ratio(over(rgb(painted.outlineColor), behind, painted.alpha), behind)).toBeGreaterThanOrEqual(3);
+  const ring = compositeOver([...parseColor(painted.outlineColor).slice(0, 3), painted.alpha] as RGBA, parseColor(painted.behind));
+  expect(contrastRatio(ring, parseColor(painted.behind))).toBeGreaterThanOrEqual(3);
 
   // The footer actions must remain on screen with the manifest rendered — a card that outgrows a centred
   // fixed modal is clipped, not scrolled, and Cancel/Install go where no input method can reach them.
@@ -2546,7 +2557,7 @@ test('dismissing the consent step without a choice returns focus to the install 
   writeFileSync(join(home, '.agent-terminal', 'flow.yaml'), 'name: my-custom-flow\nsteps:\n  - id: mine\n    kind: manual\n'); // present + differs
   await app.close();
   app = await electron.launch({ args: ['out/main/index.js'], env: installEnv(home, configDir) });
-  page = await app.firstWindow();
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   await page.locator('[data-viewbtn="4"]').click();
@@ -2625,21 +2636,6 @@ test('the busy install button paints a focus ring that clears 3:1 on its own bac
     return out;
   });
 
-  const rgb = (s: string): [number, number, number] => {
-    const m = s.match(/\d+(\.\d+)?/g);
-    if (!m) throw new Error(`unparseable colour: ${s}`);
-    return [Number(m[0]), Number(m[1]), Number(m[2])];
-  };
-  const relLum = (c: [number, number, number]): number => {
-    const [r, g, b] = c.map((v) => (v / 255 <= 0.03928 ? v / 255 / 12.92 : ((v / 255 + 0.055) / 1.055) ** 2.4));
-    return 0.2126 * r + 0.7152 * g + 0.0722 * b;
-  };
-  const ratio = (a: [number, number, number], b: [number, number, number]): number => {
-    const [hi, lo] = [relLum(a), relLum(b)].sort((x, y) => y - x);
-    return (hi + 0.05) / (lo + 0.05);
-  };
-  const over = (fg: [number, number, number], bg: [number, number, number], a: number): [number, number, number] =>
-    [0, 1, 2].map((i) => fg[i] * a + bg[i] * (1 - a)) as [number, number, number];
 
   // The state was the APP's, not the test's: setBusy() put both attributes on the control.
   expect(painted.ariaBusy).toBe('true');
@@ -2647,8 +2643,8 @@ test('the busy install button paints a focus ring that clears 3:1 on its own bac
   expect(painted.focusVisible).toBe(true);
   expect(painted.outlineWidth).toBe('2px');
   // The ring survives the busy look at full strength, so its painted contrast clears the SC 1.4.11 floor.
-  const ring = over(rgb(painted.outlineColor), rgb(painted.card), painted.alpha);
-  expect(ratio(ring, rgb(painted.card))).toBeGreaterThanOrEqual(3);
+  const ring = compositeOver([...parseColor(painted.outlineColor).slice(0, 3), painted.alpha] as RGBA, parseColor(painted.card));
+  expect(contrastRatio(ring, parseColor(painted.card))).toBeGreaterThanOrEqual(3);
   // And the busy state is still conveyed: the label moves off the idle accent onto --dim.
   expect(painted.labelColor).toBe(painted.dim);
   expect(painted.labelColor).not.toBe(painted.signalText);
@@ -2661,7 +2657,7 @@ test('after install, the active step offers its bundled todo template as the pic
   mkdirSync(join(repo, '.git'), { recursive: true });
   await app.close();
   app = await electron.launch({ args: ['out/main/index.js'], env: installEnv(home, configDir) });
-  page = await app.firstWindow();
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   await page.locator('[data-viewbtn="4"]').click();
@@ -2695,7 +2691,7 @@ test('advancing INTO a later step fires its entry action: the skill injects on A
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-flow-t3adv-home-'));
   await app.close();
   app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
-  page = await app.firstWindow();
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   await typeCommand(`cd "${repo}"`);
@@ -2736,7 +2732,7 @@ test('entering a bootstrap loop step prompts for its input; Confirm runs in-app 
       FAKE_GHGIT_LOG: logFile,
     },
   });
-  page = await app.firstWindow();
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   await typeCommand(`cd "${repo}"`);
@@ -2805,7 +2801,7 @@ test('a busy shell does NOT block pickup: it runs out-of-band and still writes s
       FAKE_GHGIT_LOG: logFile,
     },
   });
-  page = await app.firstWindow();
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   await typeCommand(`cd "${repo}"`);
@@ -2856,7 +2852,7 @@ test('a bootstrap pickup that cannot run (dirty tree) NEVER fails silently: it s
       FAKE_GIT_DIRTY: '1', // git status --porcelain reports a non-.agent-loop change → pickup aborts
     },
   });
-  page = await app.firstWindow();
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   await typeCommand(`cd "${repo}"`);
@@ -2919,7 +2915,7 @@ test('a pickup that completes AFTER the operator terminates the flow drops as st
       FAKE_PICKUP_DELAY: '4', // gh pr create sleeps 4s → pickup stays in-flight long enough to terminate
     },
   });
-  page = await app.firstWindow();
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   await typeCommand(`cd "${repo}"`);
@@ -2990,7 +2986,7 @@ test('a re-pickup onto an EXISTING branch (on_conflict: wipe-and-retry) asks fir
       FAKE_GIT_BRANCH_EXISTS: '1', // git branch --list reports the target branch → a pickup conflict
     },
   });
-  page = await app.firstWindow();
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   await typeCommand(`cd "${repo}"`);
@@ -3048,7 +3044,7 @@ test('a re-pickup conflict that the operator CANCELS wipes nothing and rolls the
       FAKE_GIT_BRANCH_EXISTS: '1',
     },
   });
-  page = await app.firstWindow();
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   await typeCommand(`cd "${repo}"`);
@@ -3109,7 +3105,7 @@ async function driveToWorkTurn(
       ...extraEnv,
     },
   });
-  page = await app.firstWindow();
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   await typeCommand(`cd "${repo}"`);
@@ -3384,7 +3380,7 @@ test('a work turn stranded in error with plan.md present is accepted after a rel
       FAKE_GHGIT_LOG: logFile,
     },
   });
-  page = await app.firstWindow();
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
 
   // The reconstructed error still shows in the panel with its recovery controls; accept it. (The fake-agent
   // shell prints nothing, so wait on the flow strip's loop read-out, not terminal text.)
@@ -3454,7 +3450,7 @@ test('cd into a repo stranded in error reconstructs the turn so Retry re-drives 
       FAKE_GHGIT_LOG: logFile,
     },
   });
-  page = await app.firstWindow();
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   await typeCommand(`cd "${repo}"`); // OSC-7 cwd change → resume reconstruction runs for THIS repo
@@ -4152,7 +4148,7 @@ test('an interrupted run resumes at the consolidate turn on launch without re-ru
       FAKE_GHGIT_LOG: logFile,
     },
   });
-  page = await app.firstWindow();
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
 
   const stateFile = join(repo, '.agent-loop', 'state.yaml');
   // Land (resumed forward): the consolidate turn ran, wrote consolidated.json, and the clean verdict drove
@@ -4209,7 +4205,7 @@ test('resume re-enters the work turn when a re-iteration has a stale plan but no
       FAKE_GHGIT_LOG: logFile,
     },
   });
-  page = await app.firstWindow();
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
 
   const stateFile = join(repo, '.agent-loop', 'state.yaml');
   // Land: the WORK turn ran this session (its marker appears) — resume did NOT skip to reviewers on the
@@ -4253,7 +4249,7 @@ test('resume runs only the post-consolidate branch when every iteration artifact
       FAKE_GHGIT_LOG: logFile,
     },
   });
-  page = await app.firstWindow();
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
 
   const stateFile = join(repo, '.agent-loop', 'state.yaml');
   // Land: the recorded clean verdict drove the run to its gate with NO turn re-injected — every turn
@@ -4278,7 +4274,7 @@ test('Restart clears a resolved stage-transition input so the next entry re-prom
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-restart-reprompt-home-'));
   await app.close();
   app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
-  page = await app.firstWindow();
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   await typeCommand(`cd "${repo}"`);
@@ -4326,7 +4322,7 @@ test('loop-derived ticket + PR surface only once the flow enters the loop step (
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-refs-home-'));
   await app.close();
   app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
-  page = await app.firstWindow();
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   await typeCommand(`cd "${repo}"`);
@@ -4368,7 +4364,7 @@ test('Terminate clears the ticket/PR display even though state.yaml still carrie
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-refs-term-home-'));
   await app.close();
   app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
-  page = await app.firstWindow();
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   await typeCommand(`cd "${repo}"`);
@@ -4408,7 +4404,7 @@ test('Restart clears the ticket/PR display until the flow re-enters a loop step 
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-refs-restart-home-'));
   await app.close();
   app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
-  page = await app.firstWindow();
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   await typeCommand(`cd "${repo}"`);
@@ -4454,7 +4450,7 @@ test('a loop step shows a Loop read-out that expands a docked state-mirror panel
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-loop-home-'));
   await app.close();
   app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
-  page = await app.firstWindow();
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   await typeCommand(`cd "${repo}"`);
@@ -4511,7 +4507,7 @@ test('the awaiting-human cue appears, re-fires after dismiss, and clears as the 
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-cue-home-'));
   await app.close();
   app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
-  page = await app.firstWindow();
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   await typeCommand(`cd "${repo}"`);
@@ -4554,7 +4550,7 @@ test('the reveal signal lands the user on the loop read-out, from another view a
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-reveal-home-'));
   await app.close();
   app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
-  page = await app.firstWindow();
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   await typeCommand(
@@ -4603,7 +4599,7 @@ test('changing directories swaps flow state; each repo is independent and visiti
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-flow-sw-home-'));
   await app.close();
   app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
-  page = await app.firstWindow();
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   // In repo A: start the flow (→ in progress).
@@ -4640,7 +4636,7 @@ test('cd into a directory with no flow.yaml shows an error and creates no .agent
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-flow-none-home-'));
   await app.close();
   app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
-  page = await app.firstWindow();
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   await typeCommand(`cd "${plain}"`);
@@ -4667,7 +4663,7 @@ test('the definition falls back to the global flow.yaml, but state is still writ
   );
   await app.close();
   app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
-  page = await app.firstWindow();
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   await typeCommand(`cd "${repo}"`);
@@ -4687,7 +4683,7 @@ test('flow progression persists across a relaunch, per repo (§24.2.2 S3 / §19.
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-flow-persist-home-'));
   const launch = async (): Promise<void> => {
     app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
-    page = await app.firstWindow();
+    page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
     await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
     await typeCommand(`cd "${repo}"`);
     await expect(flowStepName()).toHaveText('groom-ticket', { timeout: 10_000 });
@@ -4717,7 +4713,7 @@ test("the flow strip's derived n/m done moves as todos are checked, pushed live 
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-flow-s5-home-'));
   await app.close();
   app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
-  page = await app.firstWindow();
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   await typeCommand(`cd "${repo}"`);
@@ -4749,7 +4745,7 @@ test('advancing with todos outstanding warns but still completes, and is undoabl
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-flow-s5warn-home-'));
   await app.close();
   app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
-  page = await app.firstWindow();
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   await typeCommand(`cd "${repo}"`);
@@ -4789,7 +4785,7 @@ test('Start injects the skill on entry; todos come from the template ON DEMAND i
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-flow-s4-home-'));
   await app.close();
   app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
-  page = await app.firstWindow();
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   await typeCommand(`cd "${repo}"`);
@@ -4832,7 +4828,7 @@ test('the todo overlay offers a picker of named templates; choosing one instanti
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-flow-pick-home-'));
   await app.close();
   app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
-  page = await app.firstWindow();
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   await typeCommand(`cd "${repo}"`);
@@ -4865,7 +4861,7 @@ test('Start refuses to inject the skill over a busy shell, showing the refusal (
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-flow-s4busy-home-'));
   await app.close();
   app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
-  page = await app.firstWindow();
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   await typeCommand(`cd "${repo}"`);
@@ -4920,7 +4916,7 @@ test('Terminate abandons the flow: resets to Not started, clears todos + capture
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-term-home-'));
   await app.close();
   app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
-  page = await app.firstWindow();
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   await typeCommand(`cd "${repo}"`);
@@ -4977,7 +4973,7 @@ test('Terminate with no todos: the confirmation states zero and still resets to 
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-term-zero-home-'));
   await app.close();
   app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
-  page = await app.firstWindow();
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   await typeCommand(`cd "${repo}"`);
@@ -5005,7 +5001,7 @@ test('Terminate is keyboard-operable; focus moves into the dialog and Escape res
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-term-kbd-home-'));
   await app.close();
   app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
-  page = await app.firstWindow();
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   await typeCommand(`cd "${repo}"`);
@@ -5033,7 +5029,7 @@ test('after Terminate and relaunch the flow stays Not started and the next start
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-term-persist-home-'));
   await app.close();
   app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
-  page = await app.firstWindow();
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   await typeCommand(`cd "${repo}"`);
@@ -5053,7 +5049,7 @@ test('after Terminate and relaunch the flow stays Not started and the next start
   // Relaunch: the reset survives (AC12).
   await app.close();
   app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
-  page = await app.firstWindow();
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
   await typeCommand(`cd "${repo}"`);
   await expect(flowControl()).toHaveText('Start', { timeout: 10_000 }); // still not_started
@@ -5075,7 +5071,7 @@ test('flow:terminate is inert from Not started: resolves to the benign view and 
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-term-inert-home-'));
   await app.close();
   app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
-  page = await app.firstWindow();
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   // Capture the app's own resolved repo key (§16.3) so the direct IPC call targets the live repo.
@@ -5119,7 +5115,7 @@ test('flow:terminate is inert in the load-error state: it never wipes todos or c
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-term-err-home-'));
   await app.close();
   app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
-  page = await app.firstWindow();
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   const repoKeyPromise = page.evaluate(
@@ -5330,7 +5326,7 @@ test('the in-app install action puts an executable agent-terminal on PATH; the i
   const home = realpathSync(mkdtempSync(join(tmpdir(), 'agent-term-e2e-cliinstall-home-')));
   await app.close();
   app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
-  page = await app.firstWindow();
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
   try {
     await page.locator('[data-viewbtn="4"]').click();

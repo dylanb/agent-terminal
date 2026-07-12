@@ -3,7 +3,7 @@
 import { accessSync, constants, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { atomicWriteFileSync, isRealContainer } from './atomicFile';
-import { confinedRealPathResult, resolveNewDirJail, type PathRefusal } from './confinedPath';
+import { confinedRealPathResult, resolveOwnedDirJail, type PathRefusal } from './confinedPath';
 import { readDirEntries } from './dirEntries';
 import type { BundleLocation } from './bundleLocation';
 import { resolveExampleCommandsDir, resolveExampleFlowDir, resolveExampleLoopsDir } from './exampleAssets';
@@ -26,7 +26,7 @@ const TEMPLATES_SUBDIR = 'todo-templates';
 /** The one place a DestRelativePath is minted. The brand blocks an implicit `string`, but only a check
  *  blocks a wrong one — an absolute path, or one climbing out of its destination, would otherwise travel
  *  as a legal-looking value straight to a write (CWE-22). */
-function destRelative(rel: string): DestRelativePath {
+export function destRelative(rel: string): DestRelativePath {
   const norm = path.normalize(rel);
   if (path.isAbsolute(norm) || norm === '..' || norm.startsWith(`..${path.sep}`)) {
     throw new Error(`Not a destination-relative path: ${rel}`);
@@ -152,7 +152,10 @@ interface ResolvedFile {
 }
 interface ResolvedDestination {
   id: InstallDestinationId;
+  /** As the user knows it — what a message names. May be a symlink they placed themselves. */
   targetDir: string;
+  /** Its symlink-free real location — what the write is confined to and gated on. */
+  jail: string;
   files: ResolvedFile[];
 }
 type Resolution = { ok: true; destinations: ResolvedDestination[] } | { ok: false; error: string };
@@ -171,15 +174,17 @@ function resolveAll(destinations: InstallDestination[]): Resolution {
     if (files === null) {
       return { ok: false, error: `Could not install: the ${dest.id} examples are missing from this build's bundle` };
     }
-    const jail = resolveNewDirJail(dest.targetDir);
+    // The roots are app-derived, so a link the USER put at one is their own config and is followed;
+    // confinement then holds inside the RESOLVED root (confinedPath.ts — resolveOwnedDirJail).
+    const jail = resolveOwnedDirJail(dest.targetDir);
     if (jail === null) return { ok: false, error: refusal(dest.id, dest.targetDir, 'unresolvable') };
     const resolved: ResolvedFile[] = [];
     for (const file of files) {
-      const real = confinedRealPathResult(jail, path.join(dest.targetDir, file.rel));
+      const real = confinedRealPathResult(jail, path.join(jail, file.rel));
       if (!real.ok) return { ok: false, error: refusal(file.rel, dest.targetDir, real.cause) };
       resolved.push({ rel: file.rel, src: file.src, real: real.path });
     }
-    out.push({ id: dest.id, targetDir: dest.targetDir, files: resolved });
+    out.push({ id: dest.id, targetDir: dest.targetDir, jail, files: resolved });
   }
   return { ok: true, destinations: out };
 }
@@ -260,7 +265,7 @@ export function applyInstallExamples(destinations: InstallDestination[], replace
   // Every container the write will actually enter, not just each destination's root: an unwritable nested
   // directory is detectable before the first write, and §18.1's all-or-nothing covers everything that is.
   for (const dest of plan) {
-    for (const dir of new Set([dest.targetDir, ...dest.files.map((f) => path.dirname(f.real))])) {
+    for (const dir of new Set([dest.jail, ...dest.files.map((f) => path.dirname(f.real))])) {
       if (!isWritableContainer(dir)) {
         return { ok: false, error: `Could not install: ${dir} cannot be written`, ...empty };
       }

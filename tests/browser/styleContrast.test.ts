@@ -1,31 +1,14 @@
 import { userEvent } from 'vitest/browser';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import '../../src/renderer/src/styles.css';
+import { createInstallExamples } from '../../src/renderer/src/installExamples';
+import type { DestRelativePath, InstallExamplesPreview, InstallExamplesResult } from '../../src/shared/ipc';
+import { parseColor as parse, compositeOver as over, contrastRatio as contrast, type RGBA } from '../helpers/wcag';
 
 // WCAG contrast pins for the renderer's tokens and controls. The locked "Galley · Lit" mood keeps
 // bright accent hues, so dedicated `--*-text` tokens carry the accessible foreground (memory
 // wcag-overrides-locked-mood). Chromium resolves the cascade, `var()` and `color-mix()`; the
 // assertions below do only the WCAG 2.1 arithmetic on the values it paints.
-
-type RGBA = [number, number, number, number];
-
-function parse(computed: string): RGBA {
-  const n = computed.match(/[\d.]+/g);
-  if (!n) throw new Error(`unparseable computed colour: ${computed}`);
-  return [Number(n[0]), Number(n[1]), Number(n[2]), n[3] === undefined ? 1 : Number(n[3])];
-}
-const lin = (c: number): number => ((c /= 255), c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4);
-const luminance = (c: RGBA): number => 0.2126 * lin(c[0]) + 0.7152 * lin(c[1]) + 0.0722 * lin(c[2]);
-function contrast(fg: RGBA, bg: RGBA): number {
-  const [hi, lo] = [luminance(fg) + 0.05, luminance(bg) + 0.05].sort((a, b) => b - a);
-  return hi / lo;
-}
-const over = (fg: RGBA, bg: RGBA): RGBA => [
-  fg[0] * fg[3] + bg[0] * (1 - fg[3]),
-  fg[1] * fg[3] + bg[1] * (1 - fg[3]),
-  fg[2] * fg[3] + bg[2] * (1 - fg[3]),
-  1,
-];
 
 /** The colour actually behind `el`: its own background composited down the ancestor chain to the
  *  first opaque layer, exactly as the compositor stacks them. */
@@ -256,45 +239,55 @@ for (const theme of ['light', 'dark'] as const) {
 // bundle — dozens of paths. A card that grows past the viewport in a centred, position:fixed modal is
 // CLIPPED, not scrolled: the footer holding Cancel and Install goes off-screen with no way to reach it,
 // so the dialog becomes unoperable by any input method (WCAG 2.1.1 / 2.4.3).
+//
+// This drives the REAL organism rather than hand-written probe markup. A probe that re-types the DOM is a
+// pin that cannot fail: it kept passing while the app's own fieldset silently refused to scroll, and it
+// would keep passing through any class rename in the renderer.
 describe('install consent dialog stays operable with a long file manifest', () => {
-  let modal: HTMLElement;
-  beforeEach(() => {
-    const files = Array.from({ length: 60 }, (_, i) => `some-loop/nested/dir/file-${i}.yaml`).join(', ');
-    modal = document.createElement('div');
-    modal.className = 'flow-modal';
-    modal.innerHTML = `
-      <div class="card">
-        <h3 class="serif">Replace existing files?</h3>
-        <p class="ph">Some places already hold files that differ from the bundled versions.</p>
-        <fieldset class="install-consent">
-          <legend>Replace files in</legend>
-          <div class="install-consent-opt">
-            <label class="ic-label"><input type="checkbox"><span class="ic-name">Loop definitions — 60 files</span></label>
-            <span class="ic-files">${files}</span>
-          </div>
-        </fieldset>
-        <div class="mfoot">
-          <button type="button" class="pill cancel">Cancel</button>
-          <button type="button" class="pill signal confirm">Install</button>
-        </div>
-      </div>`;
-    document.body.replaceChildren(modal);
+  let host: HTMLElement;
+
+  beforeEach(async () => {
+    host = document.createElement('div');
+    document.body.replaceChildren(host);
+    const files = Array.from({ length: 60 }, (_, i) => `some-loop/nested/dir/file-${i}.yaml`) as DestRelativePath[];
+    createInstallExamples(host, {
+      preview: async (): Promise<InstallExamplesPreview> => ({
+        ok: true,
+        destinations: [
+          { destination: 'flow', conflict: false },
+          { destination: 'loops', conflict: true, files },
+          { destination: 'skills', conflict: false },
+          { destination: 'commands', conflict: false },
+        ],
+      }),
+      apply: async (): Promise<InstallExamplesResult> => ({ ok: true, created: [], overwritten: [], skipped: [] }),
+    });
+    (host.querySelector('.kprofile button') as HTMLButtonElement).click();
+    await vi.waitFor(() => expect(host.querySelector('.flow-modal .card')).not.toBeNull());
   });
 
+  const cardEl = (): HTMLElement => host.querySelector('.flow-modal .card') as HTMLElement;
+
   it('keeps the footer actions inside the viewport', () => {
-    const confirm = modal.querySelector('button.confirm') as HTMLElement;
+    const confirm = host.querySelector('.flow-modal button.confirm') as HTMLElement;
     const r = confirm.getBoundingClientRect();
     expect(r.bottom).toBeLessThanOrEqual(window.innerHeight);
     expect(r.top).toBeGreaterThanOrEqual(0);
   });
 
   it('scrolls the overflowing manifest inside the card rather than clipping the card', () => {
-    const cardEl = modal.querySelector('.card') as HTMLElement;
-    expect(cardEl.getBoundingClientRect().height).toBeLessThanOrEqual(window.innerHeight);
-    // Something inside the card must actually take the overflow, or the content is simply unreachable.
-    const scrollable = [...cardEl.querySelectorAll('*')].some(
-      (n) => n.scrollHeight > n.clientHeight + 1 && /auto|scroll/.test(getComputedStyle(n).overflowY),
-    );
-    expect(scrollable).toBe(true);
+    expect(cardEl().getBoundingClientRect().height).toBeLessThanOrEqual(window.innerHeight);
+    // Ask each candidate to SCROLL and see whether it moves. `overflow-y:auto` plus a taller scrollHeight
+    // is NOT enough: on a <fieldset> Chromium renders the rows in an anonymous content box and the element
+    // never becomes a scroll box, so a check on those two properties alone passes while the content stays
+    // unreachable — which is exactly what shipped.
+    const scrolls = [...cardEl().querySelectorAll<HTMLElement>('*')].some((n) => {
+      if (n.scrollHeight <= n.clientHeight + 1) return false;
+      n.scrollTop = 50;
+      const moved = n.scrollTop > 0;
+      n.scrollTop = 0;
+      return moved;
+    });
+    expect(scrolls).toBe(true);
   });
 });
