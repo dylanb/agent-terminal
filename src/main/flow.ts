@@ -216,8 +216,9 @@ export interface FlowMachine {
   /** Record the answer to a step-entry input prompt (§18.4 / §24.2.3 T3) and RE-ENTER the current
    *  step so the now-satisfied bootstrap runs. Legal only while a step is in_progress. */
   provideInput(values: Record<string, string>): FlowStateView;
-  /** Name this worktree's work (§22.3.1), or clear the name with a blank. Legal from EVERY status — the
-   *  name describes the worktree, not the run — but inert in the error state, where nothing may persist. */
+  /** Name this worktree's work (§22.3.1), or clear the name with a blank. Legal from EVERY status,
+   *  including the load-error state — the name describes the worktree, not the run, so a directory whose
+   *  flow.yaml never loaded is nameable like any other (only the name is written; no progression). */
   setTitle(text: string): FlowStateView;
 }
 

@@ -293,25 +293,21 @@ describe('shell controller (§24.1C — views, hotkeys, docked drawer, theme)', 
       expect(shell.isLoopPanelOpen()).toBe(false);
     });
 
-    it('opened WITH an opener lands focus on the gate decision, not the panel close button (WCAG 2.4.3)', () => {
-      // An alert says the human is blocked; routing them to the Close button — the first focusable —
-      // would land them one Enter away from re-dismissing. Focus must reach the decision.
+    it('records the opener as the focus-return target without yanking focus into the panel', () => {
+      // The shell opens the column and remembers who to return focus to; moving focus ONTO the gate
+      // decision is the panel's own job (it owns that markup), so the shell never reaches across for it.
+      (document.querySelector('[data-viewbtn="1"]') as HTMLElement).focus();
       const opener = document.querySelector('.loopstat') as HTMLElement;
       shell.openLoopPanel(opener);
-      expect(document.activeElement).toBe(document.querySelector('[data-gate-option="approve"]'));
+      expect(document.activeElement).toBe(document.querySelector('[data-viewbtn="1"]')); // focus not moved
     });
 
-    it('returns focus to the opener when the panel is closed', () => {
+    it('returns focus to the opener when the panel — having taken focus — is closed', () => {
       const opener = document.querySelector('.loopstat') as HTMLElement;
       shell.openLoopPanel(opener);
+      (document.querySelector('[data-gate-option="approve"]') as HTMLElement).focus(); // the panel took focus
       shell.closeLoopPanel();
       expect(document.activeElement).toBe(opener);
-    });
-
-    it('does not move focus when opened without an opener (the rail read-out toggle)', () => {
-      (document.querySelector('[data-viewbtn="1"]') as HTMLElement).focus();
-      shell.openLoopPanel();
-      expect(document.activeElement).toBe(document.querySelector('[data-viewbtn="1"]'));
     });
 
     it('closes on Escape when open', () => {

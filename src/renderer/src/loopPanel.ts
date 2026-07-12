@@ -48,6 +48,9 @@ export interface LoopPanel {
   /** Repaint from the current flow refs + loop mirror; both `null`/absent clears the host. `title`
    *  identifies the step the panel mirrors (the rail step name). */
   render(loop: FlowLoopView | null, title: string, refs?: FlowRefs): void;
+  /** Move focus onto the gate decision, returning whether a decision was there to focus. The panel owns
+   *  this so a sibling never reaches into its markup for the control (§26.6; WCAG 2.4.3). */
+  focusDecision(): boolean;
   /** Clean teardown (UI-STANDARDS). */
   dispose(): void;
 }
@@ -340,6 +343,11 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
 
       host.append(body);
       restoreFocus(hadFocus);
+    },
+    focusDecision() {
+      const decision = host.querySelector<HTMLElement>('[data-gate-option]');
+      decision?.focus();
+      return decision !== null;
     },
     dispose() {
       host.replaceChildren();

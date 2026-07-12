@@ -73,48 +73,47 @@ export function createFlowStateStore(worktreeDir: string): FlowStateStore {
     }
   };
 
-  return {
-    read() {
-      const doc = loadDoc();
-      if (!doc || typeof doc.step !== 'string' || doc.step.length === 0) return null;
-      if (typeof doc.status !== 'string' || !PERSISTABLE.has(doc.status as FlowStatus)) return null;
-      const inputs = readInputs(doc.inputs);
-      const startedAt = readStartedAt(doc.started_at);
-      const title = normalizeTitle(doc.title);
-      return {
-        step: doc.step,
-        status: doc.status as FlowStatus,
-        ...(inputs ? { inputs } : {}),
-        ...(startedAt !== null ? { startedAt } : {}),
-        ...(title !== null ? { title } : {}),
-      };
-    },
-    write(state) {
-      const hasInputs = state.inputs && Object.keys(state.inputs).length > 0;
-      const title = normalizeTitle(state.title);
-      persist({
-        step: state.step,
-        status: state.status,
-        ...(hasInputs ? { inputs: state.inputs } : {}),
-        ...(state.startedAt !== undefined ? { started_at: state.startedAt } : {}),
-        ...(title !== null ? { title } : {}),
-      });
-    },
-    readTitle() {
-      return normalizeTitle(loadDoc()?.title);
-    },
-    writeTitle(title) {
-      // Carry the name onto the KNOWN progression only, never a raw spread of what was read back: a
-      // repo-supplied flow-state.yaml (or a symlink to a secret it can be swapped for) must not have its
-      // foreign keys re-serialized into a tracked file (CWE-59 / CWE-200). When no progression is
-      // readable, the name stands alone.
-      const progression = this.read();
-      if (progression) {
-        this.write({ ...progression, title: title ?? undefined });
-      } else {
-        const named = normalizeTitle(title);
-        persist(named !== null ? { title: named } : {});
-      }
-    },
+  const read = (): PersistedFlowState | null => {
+    const doc = loadDoc();
+    if (!doc || typeof doc.step !== 'string' || doc.step.length === 0) return null;
+    if (typeof doc.status !== 'string' || !PERSISTABLE.has(doc.status as FlowStatus)) return null;
+    const inputs = readInputs(doc.inputs);
+    const startedAt = readStartedAt(doc.started_at);
+    const title = normalizeTitle(doc.title);
+    return {
+      step: doc.step,
+      status: doc.status as FlowStatus,
+      ...(inputs ? { inputs } : {}),
+      ...(startedAt !== null ? { startedAt } : {}),
+      ...(title !== null ? { title } : {}),
+    };
   };
+
+  const write = (state: PersistedFlowState): void => {
+    const hasInputs = state.inputs && Object.keys(state.inputs).length > 0;
+    const title = normalizeTitle(state.title);
+    persist({
+      step: state.step,
+      status: state.status,
+      ...(hasInputs ? { inputs: state.inputs } : {}),
+      ...(state.startedAt !== undefined ? { started_at: state.startedAt } : {}),
+      ...(title !== null ? { title } : {}),
+    });
+  };
+
+  const writeTitle = (title: string | null): void => {
+    // Carry the name onto the KNOWN progression only, never a raw spread of what was read back: a
+    // repo-supplied flow-state.yaml (or a symlink to a secret it can be swapped for) must not have its
+    // foreign keys re-serialized into a tracked file (CWE-59 / CWE-200). When no progression is
+    // readable, the name stands alone.
+    const progression = read();
+    if (progression) {
+      write({ ...progression, title: title ?? undefined });
+    } else {
+      const named = normalizeTitle(title);
+      persist(named !== null ? { title: named } : {});
+    }
+  };
+
+  return { read, write, readTitle: () => normalizeTitle(loadDoc()?.title), writeTitle };
 }

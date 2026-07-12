@@ -197,6 +197,21 @@ describe('docked loop panel (§24.2.3 T2)', () => {
     expect(gateDecision).toHaveBeenCalledWith('request-changes');
   });
 
+  it('focuses its own gate decision on request, so the shell need not know the gate markup (WCAG 2.4.3)', () => {
+    // The alert routes the human ONTO the decision; the panel owns which control that is, rather than a
+    // sibling reaching into its DOM for [data-gate-option] (UI-STANDARDS §2.2 rule 4).
+    const panel = createLoopPanel(host, { githubRef: () => Promise.resolve(null), openExternal: () => {}, gateDecision: () => {} });
+    panel.render(loop({ status: 'awaiting-human-plan-approval', gateOptions: ['approve', 'request-changes', 'impasse'] }), 'plan');
+    expect(panel.focusDecision()).toBe(true);
+    expect(document.activeElement).toBe(host.querySelector('[data-gate-option="approve"]'));
+  });
+
+  it('reports it could not focus a decision when there is no gate showing', () => {
+    const panel = createLoopPanel(host, { githubRef: () => Promise.resolve(null), openExternal: () => {} });
+    panel.render(loop({ status: 'impl-draft' }), 'plan'); // a working (non-gate) state
+    expect(panel.focusDecision()).toBe(false);
+  });
+
   it('groups the gate-decision buttons in a labelled group so AT announces their purpose (WCAG 4.1.2)', () => {
     const panel = createLoopPanel(host, {
       githubRef: () => Promise.resolve(null),

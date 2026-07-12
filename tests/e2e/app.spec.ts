@@ -4550,6 +4550,38 @@ test('a name that cannot be saved surfaces a blocking error and takes the name b
   rmSync(home, { recursive: true, force: true });
 });
 
+test('a flow transition whose write cannot land surfaces a blocking error and stays retryable (§19.1)', async () => {
+  // persist() throws when the write cannot land; the name-save path surfaces that, and so must a
+  // Start/Advance — a transition that silently no-ops leaves the user clicking into the void.
+  // `.agent-terminal` is a symlink: the flow.yaml behind it LOADS (readFileSync follows the link), but
+  // atomicWriteFileSync REFUSES a symlinked container, so Start's persist() throws.
+  const repo = mkdtempSync(join(tmpdir(), 'agent-term-e2e-txerr-'));
+  mkdirSync(join(repo, '.git'), { recursive: true });
+  const real = mkdtempSync(join(tmpdir(), 'agent-term-e2e-txerr-real-'));
+  writeFileSync(join(real, 'flow.yaml'), 'name: manual\nsteps:\n  - id: groom\n    kind: manual\n');
+  symlinkSync(real, join(repo, '.agent-terminal'));
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-txerr-home-'));
+  await app.close();
+  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
+  page = await app.firstWindow();
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await typeCommand(`cd "${repo}"`);
+  await expect(flowStepName()).toHaveText('groom', { timeout: 10_000 });
+  await flowControl().click(); // Start → persist() throws (symlinked container)
+
+  const errorDialog = page.locator('#flow-error-host .flow-modal');
+  await expect(errorDialog).toBeVisible({ timeout: 10_000 });
+  await expect(errorDialog).toContainText('Flow action failed');
+  await errorDialog.locator('.dismiss').click();
+  await expect(flowControl()).toBeEnabled(); // retryable, not stuck
+
+  await app.close();
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(real, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+});
+
 test('the reveal signal lands the user on the loop read-out, from another view and from viewer-fullscreen with the strip hidden (§24.2.3 T4)', async () => {
   // Needs a real git repo so the artifact viewer's full-screen (which hides the rail/strip) works
   // (§24.2.3 T4).

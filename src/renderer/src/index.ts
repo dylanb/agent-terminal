@@ -6,7 +6,7 @@ import { createShell } from './shell';
 import { wireCrossHighlight } from './crossHighlight';
 import { SAMPLE_FLOW, createGatePanel } from './flow';
 import { createFlowStrip, type FlowStrip } from './flowStrip';
-import { createLoopPanel } from './loopPanel';
+import { createLoopPanel, type LoopPanel } from './loopPanel';
 import { createFlowInputModal } from './flowInputModal';
 import { wireBootstrapConflict } from './wireBootstrapConflict';
 import { createConfirmDialog } from './confirmDialog';
@@ -104,13 +104,21 @@ if (errorDialog) {
 // would answer with wherever the terminal has since cd-ed to (CLAUDE.md).
 // The OS notification's activation pushes flow:revealLoop, answered by revealLoopReadout via Shell seams.
 const loopPanelHost = document.getElementById('loop-panel');
+// Assigned in the flow-strip block below; the alert's click handler (a runtime event) closes over it, so
+// the later assignment is in place by the time it fires.
+let loopPanel: LoopPanel | undefined;
 const statusBarHost = document.getElementById('status-bar');
 const statusBar = statusBarHost
   ? createStatusBar(statusBarHost, {
       githubRef: (key, kind, number) => window.flow.githubRef(key, kind, number),
       openExternal: (url) => void window.flow.openExternal(url),
       setTitle: async (key, text) => void (await window.flow.setTitle(key, text)),
-      onAlertActivate: (opener) => shell.openLoopPanel(opener),
+      // Open the docked panel, then let the panel move focus onto its own gate decision (§26.6): the
+      // human is blocked, so land them ON the decision — the shell never names the panel's markup.
+      onAlertActivate: (opener) => {
+        shell.openLoopPanel(opener);
+        loopPanel?.focusDecision();
+      },
       onError: (reason) => errorDialog?.render({ title: 'Could not save the name', message: reason }),
       loopPanelId: loopPanelHost?.id ?? '',
     })
@@ -125,7 +133,7 @@ if (flowStripHost) {
   // (§24.2.3 T2) through the contract, not a DOM reach-across. No loop → clear + close.
   // The panel resolves ticket/PR detail through window.flow, repo-scoped at call time (the cwd may move
   // between renders), and opens links via the validated openExternal seam (§24.2.3 T7).
-  const loopPanel = loopPanelHost
+  loopPanel = loopPanelHost
     ? createLoopPanel(loopPanelHost, {
         githubRef: (kind, number) => {
           const key = repo.repoKey();

@@ -22,8 +22,8 @@ export interface Shell {
   isDrawerOpen(): boolean;
   /** The full-height docked loop+gate panel (§24.2.3): a grid column that "makes room" like the
    *  drawer, opened from the rail Loop read-out and dismissed by its close button or Escape. */
-  /** `opener` is the control focus returns to on close, and its presence means the caller wants focus
-   *  moved into the panel (an alert routes the human ONTO the decision, not merely to its reveal). */
+  /** `opener` is the control focus returns to when the panel closes, or omitted to leave focus where it
+   *  is (the rail toggle). Moving focus into the panel is the panel's own `focusDecision`, not the shell's. */
   openLoopPanel(opener?: HTMLElement): void;
   closeLoopPanel(): void;
   toggleLoopPanel(): void;
@@ -109,21 +109,14 @@ export function createShell(root: HTMLElement, deps: ShellDeps = {}): Shell {
     root.querySelector('.loopstat')?.setAttribute('aria-expanded', String(on));
   const focusView = (v: ViewId): void => void root.querySelector<HTMLElement>(`[data-viewbtn="${v}"]`)?.focus();
   // The control that opened the panel, so a close returns focus to it rather than to whichever control
-  // the shell assumes opened it — the status bar's alert opens it too (WCAG 2.4.3).
+  // the shell assumes opened it — the status bar's alert opens it too (WCAG 2.4.3). Moving focus INTO the
+  // panel is the panel's own job (it owns the gate markup); the shell only docks the column.
   let panelOpener: HTMLElement | null = null;
   function openLoopPanel(opener?: HTMLElement): void {
     panelOpener = opener ?? null;
     root.classList.add('loop-open');
     if (loopPanelEl) setShown(loopPanelEl, true);
     syncLoopReadout(true);
-    // An alert says the human is blocked; the click must land them ON the decision (§26.6 gatebar), not
-    // on the panel's Close button, which is the first focusable (WCAG 2.4.3).
-    if (opener) {
-      const target =
-        loopPanelEl?.querySelector<HTMLElement>('[data-gate-option]') ??
-        loopPanelEl?.querySelector<HTMLElement>('button, [href], [tabindex]:not([tabindex="-1"])');
-      target?.focus();
-    }
     signalLayoutChange();
   }
   function closeLoopPanel(): void {

@@ -130,6 +130,7 @@ export function createStatusBar(host: HTMLElement, deps: StatusBarDeps): StatusB
     const name = doc.createElement(editable ? 'button' : 'span');
     name.className = named ? 'sb-name' : 'sb-name empty';
     name.dataset.sbTitle = '';
+    if (!editable) name.tabIndex = -1; // else a repaint that removes a focused editable name strands focus (WCAG 2.4.3)
     name.textContent = named ? title.text : 'Untitled — name this work';
     if (name instanceof HTMLButtonElement) {
       const forRepo = repoKey!; // canEdit
@@ -144,7 +145,7 @@ export function createStatusBar(host: HTMLElement, deps: StatusBarDeps): StatusB
     const label = doc.createElement('span');
     label.className = 'sb-name';
     label.dataset.sbTitle = '';
-    label.tabIndex = -1; // not a tab stop, but can receive focus a repaint would otherwise drop (WCAG 2.4.3)
+    label.tabIndex = -1; // so a repaint that removes the focused title does not strand focus (WCAG 2.4.3)
     label.textContent = title.kind === 'pr' ? `PR #${title.number}` : `#${title.number}`;
     titleSlot.replaceChildren(label);
     if (forRepo === null) return;
@@ -232,8 +233,6 @@ export function createStatusBar(host: HTMLElement, deps: StatusBarDeps): StatusB
     open.className = 'sb-alert-btn';
     open.dataset.statusAlert = '';
     open.setAttribute('aria-controls', deps.loopPanelId);
-    // No aria-label: the button's own text is its accessible name, so the name cannot diverge from the
-    // visible tokens a speech-input user says (WCAG 2.5.3 label-in-name).
     open.addEventListener('click', () => deps.onAlertActivate(open));
 
     const dot = doc.createElement('span');
