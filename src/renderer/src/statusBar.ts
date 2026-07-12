@@ -1,7 +1,5 @@
 // The always-visible status bar (§22.3.1) — a relocatable organism (UI-STANDARDS §1.3).
-//
-// WCAG 4.1.3 / WAI-ARIA Alert: both live regions are mounted for the bar's whole life. §22.2: an empty
-// region exposes no focusable descendant.
+// Split live regions per WCAG 4.1.3 / WAI-ARIA Alert; §22.2.
 
 import type { GithubRef, GithubRefKind } from '../../shared/ipc';
 import { IDLE_STATUS_BAR, normalizeTitle, sameTitle, TITLE_MAX, type StatusBarModel, type StatusBarTitle } from '../../shared/statusBar';
@@ -16,8 +14,9 @@ export interface StatusBarDeps {
   openExternal(url: string): void;
   /** Name `repoKey`'s work, or clear the name with a blank (§22.3.1). */
   setTitle(repoKey: string, text: string): Promise<void>;
-  /** The human is blocked and asked for the gate controls (§24.2.3 T4). */
-  onAlertActivate(): void;
+  /** The human is blocked and asked for the gate controls (§24.2.3 T4). `opener` is the alert button
+   *  itself, handed over so the panel can return focus here on close without reaching into this DOM. */
+  onAlertActivate(opener: HTMLElement): void;
   /** A name the user typed could not be saved. */
   onError(reason: string): void;
   /** The region the alert routes to, for `aria-controls` (WCAG 4.1.2). */
@@ -145,6 +144,7 @@ export function createStatusBar(host: HTMLElement, deps: StatusBarDeps): StatusB
     const label = doc.createElement('span');
     label.className = 'sb-name';
     label.dataset.sbTitle = '';
+    label.tabIndex = -1; // not a tab stop, but can receive focus a repaint would otherwise drop (WCAG 2.4.3)
     label.textContent = title.kind === 'pr' ? `PR #${title.number}` : `#${title.number}`;
     titleSlot.replaceChildren(label);
     if (forRepo === null) return;
@@ -156,6 +156,7 @@ export function createStatusBar(host: HTMLElement, deps: StatusBarDeps): StatusB
       // same number in another repo is another ref, and answering for it would paint one repo's title
       // into another's bar and arm the click with its url.
       if (disposed || got === null || !sameShownRef(asked)) return;
+      const hadFocus = titleSlot.contains(doc.activeElement);
       refUrl = got.url;
       const link = doc.createElement('button');
       link.className = 'sb-name sb-link';
@@ -166,6 +167,7 @@ export function createStatusBar(host: HTMLElement, deps: StatusBarDeps): StatusB
         if (refUrl !== null) deps.openExternal(refUrl);
       });
       titleSlot.replaceChildren(link);
+      if (hadFocus) link.focus();
     });
   }
 
@@ -177,6 +179,9 @@ export function createStatusBar(host: HTMLElement, deps: StatusBarDeps): StatusB
     // same unnamed title is inert before a repo is known and editable after. A dedup on the text alone
     // would keep showing A's fetched title (and open A's url) after a cd to B.
     if (sameTitle(title, shownTitle) && repoKey === shownRepo && editable === shownEditable) return;
+    // A model-driven repaint removes the current title node; if the keyboard user was on it, land focus
+    // on its replacement rather than let it fall to <body> (WCAG 2.4.3).
+    const hadFocus = titleSlot.contains(doc.activeElement);
     shownTitle = title;
     shownRepo = repoKey;
     shownEditable = editable;
@@ -184,6 +189,7 @@ export function createStatusBar(host: HTMLElement, deps: StatusBarDeps): StatusB
 
     if (title.kind === 'user') renderName(title, editable);
     else renderRef(title, repoKey);
+    if (hadFocus) titleSlot.querySelector<HTMLElement>('[data-sb-title]')?.focus();
   }
 
   function renderActivity(phrase: string | null): void {
@@ -206,8 +212,12 @@ export function createStatusBar(host: HTMLElement, deps: StatusBarDeps): StatusB
 
   function renderAlert(model: StatusBarModel, key: string | null): void {
     if (model.alert === null) {
+      // The alert cleared (the loop left the human-needed family). If the keyboard user was on it, its
+      // removal would strand focus on <body>; land it on the title instead (WCAG 2.4.3).
+      const hadFocus = alert.contains(doc.activeElement);
       shownAlert = null;
       alert.replaceChildren();
+      if (hadFocus) titleSlot.querySelector<HTMLElement>('[data-sb-title]')?.focus();
       return;
     }
     const occ: Occurrence = { repoKey: key, status: model.alert.status, iteration: model.alert.iteration };
@@ -222,13 +232,9 @@ export function createStatusBar(host: HTMLElement, deps: StatusBarDeps): StatusB
     open.className = 'sb-alert-btn';
     open.dataset.statusAlert = '';
     open.setAttribute('aria-controls', deps.loopPanelId);
-    // The visible string is terse; the accessible name says what is being asked, in words assistive tech
-    // can read out (WCAG 2.4.6 — `iter` expands to nothing).
-    open.setAttribute(
-      'aria-label',
-      `Loop needs you: ${status}, iteration ${iteration}${pr !== null ? `, pull request ${pr}` : ''}`,
-    );
-    open.addEventListener('click', () => deps.onAlertActivate());
+    // No aria-label: the button's own text is its accessible name, so the name cannot diverge from the
+    // visible tokens a speech-input user says (WCAG 2.5.3 label-in-name).
+    open.addEventListener('click', () => deps.onAlertActivate(open));
 
     const dot = doc.createElement('span');
     dot.className = 'dot';

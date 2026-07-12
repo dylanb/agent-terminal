@@ -104,9 +104,17 @@ export function createFlowStateStore(worktreeDir: string): FlowStateStore {
       return normalizeTitle(loadDoc()?.title);
     },
     writeTitle(title) {
-      const named = normalizeTitle(title);
-      const { title: _prev, ...rest } = loadDoc() ?? {};
-      persist(named !== null ? { ...rest, title: named } : rest);
+      // Carry the name onto the KNOWN progression only, never a raw spread of what was read back: a
+      // repo-supplied flow-state.yaml (or a symlink to a secret it can be swapped for) must not have its
+      // foreign keys re-serialized into a tracked file (CWE-59 / CWE-200). When no progression is
+      // readable, the name stands alone.
+      const progression = this.read();
+      if (progression) {
+        this.write({ ...progression, title: title ?? undefined });
+      } else {
+        const named = normalizeTitle(title);
+        persist(named !== null ? { title: named } : {});
+      }
     },
   };
 }

@@ -84,7 +84,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     expect(control()!.textContent).toBe('Start');
   });
 
-  // §22.3 — what the engine is doing shows in the status bar, and ONLY there. The rail keeps the loop
+  // §22.3.1 — what the engine is doing shows in the status bar, and ONLY there. The rail keeps the loop
   // read-out (tone pill, iteration, cost) and no busy signal of its own: one busy surface, one place.
   it('renders no activity line — the status bar is the only busy surface', async () => {
     const deps = {
@@ -211,6 +211,19 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     await vi.waitFor(() => expect(stateOf(1)).toBe('active'));
     expect(deps.start).toHaveBeenCalledWith('/repo');
     expect(control()!.textContent).toBe('Advance');
+  });
+
+  it('surfaces a transition write-failure instead of silently swallowing it', async () => {
+    // persist() now THROWS when the write cannot land (a symlinked .agent-terminal), so a transition
+    // that used to silently no-op now rejects. The user must be told, not left clicking Start into the
+    // void with no recovery (CLAUDE.md — never silently swallow an unrecoverable error).
+    const onError = vi.fn();
+    const deps = { ...fakeFlow(), start: vi.fn(async () => { throw new Error('cannot write .agent-terminal/flow-state.yaml'); }), onError };
+    createFlowStrip(host, deps).onRepoChanged('/repo');
+    await vi.waitFor(() => expect(control()!.textContent).toBe('Start'));
+    control()!.click();
+    await vi.waitFor(() => expect(onError).toHaveBeenCalledTimes(1));
+    expect(String(onError.mock.calls[0][0])).toContain('cannot write');
   });
 
   it('Advance completes the flow (Completed active) and shows Restart, scoped to the repo', async () => {

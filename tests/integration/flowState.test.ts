@@ -82,7 +82,7 @@ describe('flow-state store (§24.2.2 S3 / §19.1)', () => {
     expect(createFlowStateStore(dir).read()).toEqual({ step: 'groom', status: 'in_progress' });
   });
 
-  // §22.3 — the name the user gave this worktree's work, shown by the status bar when no PR/ticket
+  // §22.3.1 — the name the user gave this worktree's work, shown by the status bar when no PR/ticket
   // supplies a title. write() rewrites the whole file on every transition, so a title it failed to
   // round-trip would be destroyed by the next Start/Advance the user clicked.
   it('round-trips the user title and survives a fresh store', () => {
@@ -126,6 +126,25 @@ describe('flow-state store (§24.2.2 S3 / §19.1)', () => {
         startedAt: 1234,
         title: 'Refactor the shadow parser',
       });
+    });
+
+    it('re-dumps only the fields it knows — never a foreign key it read back from disk', () => {
+      // A hostile clone can ship flow-state.yaml as a symlink to a secret the user can read
+      // (~/.config/gh/hosts.yml, a kube config). Re-serializing whatever `loadDoc()` returned would
+      // slurp that secret into a repo-tracked file (CWE-59 / CWE-200). writeTitle carries forward only
+      // the progression it models, so an unknown key never survives the round-trip.
+      mkdirSync(join(dir, '.agent-terminal'), { recursive: true });
+      writeFileSync(
+        join(dir, '.agent-terminal', 'flow-state.yaml'),
+        'step: plan\nstatus: in_progress\ngithub_token: ghp_secret_value\noauth_token: xoxb-leak\n',
+      );
+      createFlowStateStore(dir).writeTitle('Named');
+      const onDisk = readFileSync(join(dir, '.agent-terminal', 'flow-state.yaml'), 'utf8');
+      expect(onDisk).toContain('Named');
+      expect(onDisk).not.toContain('ghp_secret_value');
+      expect(onDisk).not.toContain('oauth_token');
+      // The known progression it DID model still round-trips.
+      expect(createFlowStateStore(dir).read()).toEqual({ step: 'plan', status: 'in_progress', title: 'Named' });
     });
 
     it('clears the name without disturbing the progression', () => {

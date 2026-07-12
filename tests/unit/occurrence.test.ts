@@ -35,7 +35,7 @@ describe('sameOccurrence (shared identity, §24.2.3 T4)', () => {
     expect(sameOccurrence(null, null)).toBe(false);
   });
 
-  it('matches a null repoKey to a null repoKey (the cue keys by a possibly-null repo)', () => {
+  it('matches a null repoKey to a null repoKey (the alert keys by a possibly-null repo)', () => {
     expect(sameOccurrence(occ({ repoKey: null }), occ({ repoKey: null }))).toBe(true);
     expect(sameOccurrence(occ({ repoKey: null }), occ({ repoKey: '/repo' }))).toBe(false);
   });

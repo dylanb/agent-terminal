@@ -26,7 +26,7 @@ const memStore = (read: () => PersistedFlowState | null, set: (s: PersistedFlowS
   };
 };
 
-describe('the user title the status bar shows (§22.3)', () => {
+describe('the user title the status bar shows (§22.3.1)', () => {
   let dir: string;
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), 'flow-title-'));

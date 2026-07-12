@@ -2,12 +2,11 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
-// §22.3.1 — the status bar's truncation ladder is declared entirely in CSS, so its contract lives in the
-// stylesheet and is pinned here. jsdom has no layout engine, so the *rendered* consequences (the floor
-// holds, the alert stays inside the bar, the bar's height never changes) are pinned by e2e instead; what
-// is checkable here is the declaration the browser then acts on — and the defect this file exists to
-// catch was exactly a declaration one: title and activity shipped with the SAME shrink factor, which
-// makes them shed together, in proportion to their widths, rather than in the stated order.
+// §22.3.1 — a few status-bar guarantees that are declared in CSS and are awkward-to-impossible to
+// observe in the layout tier: a live region that must never be pruned from the a11y tree, and a spinner
+// whose animation (and its reduced-motion freeze) is motion, not layout. The truncation LADDER's rendered
+// behaviour — shed order, the floor, the alert staying inside the bar, the constant height — is pinned
+// behaviourally by the e2e instead, so this file no longer asserts the flex-shrink spelling.
 
 const css = readFileSync(path.join(__dirname, '../../src/renderer/src/styles.css'), 'utf8');
 
@@ -17,38 +16,15 @@ function body(selector: string): string {
   return m[1];
 }
 
-/** The `flex-shrink` a rule declares, read out of its `flex` shorthand (`flex: grow shrink basis`). */
-function shrink(selector: string): number {
-  const m = body(selector).match(/(?:^|;)\s*flex\s*:\s*(\d+)\s+(\d+)\s/);
-  if (!m) throw new Error(`rule ${selector} declares no flex shorthand with a shrink factor`);
-  return Number(m[2]);
-}
-
-const TITLE = '\\.status-bar \\.sb-title';
-const ACTIVITY = '\\.status-bar \\.sb-activity';
-const ALERT = '\\.status-bar \\.sb-alert';
-
-describe('the status bar sheds in a stated ORDER, not proportionally (§22.3.1)', () => {
-  it('gives the title a dominant shrink factor, so it yields its width before the phrase yields any', () => {
-    // Equal factors distribute the overflow proportionally to content width (CSS Flexbox §9.7): a long
-    // title and a live phrase would ellipsize TOGETHER, which is not a ladder.
-    expect(shrink(TITLE)).toBeGreaterThan(shrink(ACTIVITY));
+describe('nothing sheds to zero — the title and the phrase floor (§22.3.1 / decision 16)', () => {
+  // The rendered floor is proven behaviourally by the e2e; here we pin only that the required min-width
+  // DECLARATION exists, the one guard jsdom cannot layout and the defect (a phrase with no floor) was.
+  it('floors the title so a focusable control is never clipped to zero width (WCAG 2.4.11)', () => {
+    expect(body('\\.status-bar \\.sb-title')).toMatch(/min-width\s*:\s*[1-9]/);
   });
 
-  it('sheds the activity before the alert — the thing the human must act on goes last', () => {
-    expect(shrink(ACTIVITY)).toBeGreaterThan(shrink(ALERT));
-  });
-
-  it('lets the alert shrink only as the last resort, so it can never be pushed off the bar (WCAG 1.4.10)', () => {
-    // A non-shrinking alert in a nowrap bar does not survive a squeeze — it OVERFLOWS the edge, which is
-    // worse than truncating: the text the human must read leaves the window entirely.
-    expect(shrink(ALERT)).toBeGreaterThan(0);
-  });
-
-  it('floors the title rather than letting it vanish, so a focusable control is never zero-width', () => {
-    // WCAG 2.4.11 / 1.4.4: content shrunk to nothing is removed from perception, and a clipped button
-    // stays in the tab order.
-    expect(body(TITLE)).toMatch(/min-width\s*:\s*[1-9]/);
+  it('floors the activity phrase so an active engine never collapses to a bare spinner', () => {
+    expect(body('\\.status-bar \\.sb-activity \\.phrase')).toMatch(/min-width\s*:\s*[1-9]/);
   });
 });
 

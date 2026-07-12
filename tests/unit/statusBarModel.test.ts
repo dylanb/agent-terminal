@@ -3,7 +3,7 @@ import { deriveStatusBar, normalizeTitle, sameTitle, TITLE_MAX, titleKey } from 
 import { loopActivity } from '../../src/shared/loopActivity';
 import type { FlowLoopView, FlowStateView } from '../../src/shared/ipc';
 
-// The one definition of what the always-visible status bar shows (§22.3): the title-precedence rule
+// The one definition of what the always-visible status bar shows (§22.3.1): the title-precedence rule
 // (PR → ticket → user), the alert condition, and the activity pass-through. Shared so the renderer and
 // any future producer cannot drift on it (CLAUDE.md shared-semantics; sibling of loopStatus/occurrence).
 
@@ -26,7 +26,7 @@ const loop = (over: Partial<FlowLoopView> = {}): FlowLoopView => ({
   ...over,
 });
 
-describe('status bar model (§22.3)', () => {
+describe('status bar model (§22.3.1)', () => {
   describe('title precedence — PR, then ticket, then the user title', () => {
     it('prefers the PR when the flow is working both a ticket and a PR', () => {
       expect(deriveStatusBar(view({ refs: { ticket: 42, pr: 57 } })).title).toEqual({ kind: 'pr', number: 57 });

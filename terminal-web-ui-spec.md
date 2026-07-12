@@ -1796,7 +1796,7 @@ flowchart LR
   SY["state.yaml watch"] --> M["main flow derivation<br/>+ human-needed classify"]
   M -->|"loop view incl. classification"| R["renderer flow composition root"]
   R --> CUE["status-bar organism (§22.3.1)<br/>always-visible; not dismissable"]
-  CUE -->|"activate alert: open the gate controls"| OPEN
+  CUE -->|"activate alert"| OPENGATE["Shell: open loop panel + focus gate controls"]
   M -->|"distinct (repo,status,iter) entry"| P["pending for this repo"]
   BLUR["window blur/focus"] --> P
   P -->|"unfocused and not yet raised"| OSN["OS notification"]

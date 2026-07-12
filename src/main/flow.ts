@@ -320,18 +320,21 @@ export function createFlowMachine(
     status = 'not_started';
     inputs = {};
     startedAt = null;
-    userTitle = null;
-    // The name outlives any progression this definition can resume, so it is read on its own.
-    userTitle = store.readTitle();
     const persisted = store.read();
-    if (!persisted) return;
-    const i = names.indexOf(persisted.step);
-    if (i >= 0) {
-      index = i;
-      status = persisted.status;
+    if (persisted) {
+      const i = names.indexOf(persisted.step);
+      if (i >= 0) {
+        index = i;
+        status = persisted.status;
+      }
+      if (persisted.inputs) inputs = { ...persisted.inputs };
+      if (persisted.startedAt !== undefined) startedAt = persisted.startedAt;
+      userTitle = persisted.title ?? null;
+    } else {
+      // No resumable progression, but the worktree name outlives any progression (§22.3.1), so it is
+      // still read — from its own path, since read() rejected the doc.
+      userTitle = store.readTitle();
     }
-    if (persisted.inputs) inputs = { ...persisted.inputs };
-    if (persisted.startedAt !== undefined) startedAt = persisted.startedAt;
   };
   hydrate();
 

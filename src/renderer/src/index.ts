@@ -110,7 +110,7 @@ const statusBar = statusBarHost
       githubRef: (key, kind, number) => window.flow.githubRef(key, kind, number),
       openExternal: (url) => void window.flow.openExternal(url),
       setTitle: async (key, text) => void (await window.flow.setTitle(key, text)),
-      onAlertActivate: () => shell.openLoopPanel(statusBarHost.querySelector<HTMLElement>('[data-status-alert]') ?? undefined),
+      onAlertActivate: (opener) => shell.openLoopPanel(opener),
       onError: (reason) => errorDialog?.render({ title: 'Could not save the name', message: reason }),
       loopPanelId: loopPanelHost?.id ?? '',
     })
@@ -177,6 +177,7 @@ if (flowStripHost) {
       });
     },
     onStatusBar: (model, key) => statusBar?.render(model, key),
+    onError: (reason) => errorDialog?.render({ title: 'Flow action failed', message: reason }),
     onPrompt: (prompt, stepName, submit) => inputModal?.render(prompt, stepName, submit),
     onTerminate: confirmDialog
       ? createTerminateConfirm({ todoList: window.monitor.todoList, dialog: confirmDialog })

@@ -1,7 +1,7 @@
 /// <reference lib="dom" />
 // page.evaluate callbacks run in the renderer; DOM lib gives them window.monitor's type.
 import { _electron as electron, expect, test, type ElectronApplication, type Page } from '@playwright/test';
-import { mkdtempSync, mkdirSync, writeFileSync, appendFileSync, rmSync, existsSync, statSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, appendFileSync, rmSync, existsSync, statSync, readFileSync, readdirSync, realpathSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, basename } from 'node:path';
 import { CH, SESSION_ID } from '../../src/shared/ipc';
@@ -1969,7 +1969,7 @@ function seedRefsFlowRepo(prefix: string): { dir: string; stateFile: string } {
 
 const loopReadout = () => page.locator('#flow-strip .loopstat'); // compact rail read-out; click opens the panel
 const loopPanel = () => page.locator('#loop-panel');
-// §22.3 — the always-visible status bar and its three parts: the work's title, what the engine is doing,
+// §22.3.1 — the always-visible status bar and its three parts: the work's title, what the engine is doing,
 // and the attention state (§24.2.3 T4) when the loop is blocked on a human.
 const statusBar = () => page.locator('#status-bar');
 const statusTitle = () => page.locator('#status-bar [data-sb-title]');
@@ -2997,13 +2997,22 @@ test('a work turn that streams past the stall window still advances to the revie
   seedFakeAgent(binDir, { work: 'write-plan', slowWork: true, reviews: 'all', consolidate: 'clean' });
   await driveToWorkTurn(repo, home, binDir, logFile, '3000'); // stall window far shorter than the ~9s stream
 
-  // §22.3 — while the work turn streams, the STATUS BAR shows what the engine is doing (a phrase + the
+  // §22.3.1 — while the work turn streams, the STATUS BAR shows what the engine is doing (a phrase + the
   // animated braille spinner) so an in-flight turn is visibly "doing work". The ~9s stream is a comfortable
   // window to observe it before plan.md lands. The rail shows no busy signal: one busy surface, one place.
   await expect(statusActivity()).toBeVisible({ timeout: 20_000 });
   await expect(statusActivity().locator('.phrase')).not.toBeEmpty();
   await expect(statusActivity().locator('.spin')).toHaveCount(1);
   await expect(page.locator('#flow-strip .flow-activity')).toHaveCount(0);
+
+  // Decision 16 / §22.3.1: under space pressure the phrase FLOORS and ellipsizes — it never sheds to a
+  // bare spinner. Squeeze hard and assert a legible phrase and its spinner both survive with real width.
+  await page.setViewportSize({ width: 360, height: 700 });
+  const phrase = statusActivity().locator('.phrase');
+  await expect(phrase).toBeVisible();
+  expect((await phrase.boundingBox())!.width).toBeGreaterThan(0);
+  await expect(statusActivity().locator('.spin')).toBeVisible();
+  await page.setViewportSize({ width: 1280, height: 800 });
 
   // Land: plan.md appears only after the long stream, and the reviewers turn then runs (its per-persona
   // JSON is the proof the chain advanced past the work turn). Never auto-errors mid-stream.
@@ -4264,7 +4273,7 @@ test('a loop step shows a Loop read-out that expands a docked state-mirror panel
   rmSync(home, { recursive: true, force: true });
 });
 
-test('the status bar is always there, names the work, and turns to the attention state only while the loop is blocked on a human (§22.3 / §24.2.3 T4)', async () => {
+test('the status bar is always there, names the work, and turns to the attention state only while the loop is blocked on a human (§22.3.1 / §24.2.3 T4)', async () => {
   // The bar is a permanent status surface, not a cue that comes and goes: it is visible with no flow at
   // all, it names the work the flow is on, and it enters (and leaves) its red attention state purely from
   // state.yaml, with no manual refresh and nothing to dismiss.
@@ -4321,7 +4330,7 @@ test('the status bar is always there, names the work, and turns to the attention
   rmSync(home, { recursive: true, force: true });
 });
 
-test('the user names the work in the status bar; the name persists, is outranked by a PR, and comes back (§22.3)', async () => {
+test('the user names the work in the status bar; the name persists, is outranked by a PR, and comes back (§22.3.1)', async () => {
   // The fallback title: what the bar shows when neither a PR nor a ticket supplies one. It is typed in
   // place, persists per worktree in .agent-terminal/flow-state.yaml, and — crucially — is OUTRANKED rather
   // than destroyed when a ref appears, so it returns if the refs go away.
@@ -4506,6 +4515,38 @@ test('a directory with no flow at all can still be named, and the name survives 
 
   await app.close();
   rmSync(plain, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+});
+
+test('a name that cannot be saved surfaces a blocking error and takes the name back (§22.3.1)', async () => {
+  // A symlinked .agent-terminal makes atomicWriteFileSync refuse; the store throws rather than silently
+  // dropping the write. The user must be told, not left believing the work was named.
+  const plain = mkdtempSync(join(tmpdir(), 'agent-term-e2e-nameerr-'));
+  const elsewhere = mkdtempSync(join(tmpdir(), 'agent-term-e2e-nameerr-else-'));
+  symlinkSync(elsewhere, join(plain, '.agent-terminal')); // the write cannot land here
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-nameerr-home-'));
+  await app.close();
+  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
+  page = await app.firstWindow();
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await typeCommand(`cd "${plain}"`);
+  await expect(statusTitle()).toBeVisible({ timeout: 10_000 });
+  await statusTitle().click();
+  const editor = page.locator('#status-bar input[data-sb-title-edit]');
+  await expect(editor).toBeVisible({ timeout: 10_000 });
+  await editor.fill('Never lands');
+  await editor.press('Enter');
+
+  const errorDialog = page.locator('#flow-error-host .flow-modal');
+  await expect(errorDialog).toBeVisible({ timeout: 10_000 });
+  await expect(errorDialog).toContainText('Could not save the name');
+  // The optimistic name is taken back rather than left showing a name that was never saved.
+  await expect(statusTitle()).not.toHaveText('Never lands');
+
+  await app.close();
+  rmSync(plain, { recursive: true, force: true });
+  rmSync(elsewhere, { recursive: true, force: true });
   rmSync(home, { recursive: true, force: true });
 });
 

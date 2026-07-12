@@ -116,8 +116,14 @@ export function createShell(root: HTMLElement, deps: ShellDeps = {}): Shell {
     root.classList.add('loop-open');
     if (loopPanelEl) setShown(loopPanelEl, true);
     syncLoopReadout(true);
-    // An alert says the human is blocked; the click must land them ON the decision, not merely reveal it.
-    if (opener) loopPanelEl?.querySelector<HTMLElement>('button, [href], [tabindex]:not([tabindex="-1"])')?.focus();
+    // An alert says the human is blocked; the click must land them ON the decision (§26.6 gatebar), not
+    // on the panel's Close button, which is the first focusable (WCAG 2.4.3).
+    if (opener) {
+      const target =
+        loopPanelEl?.querySelector<HTMLElement>('[data-gate-option]') ??
+        loopPanelEl?.querySelector<HTMLElement>('button, [href], [tabindex]:not([tabindex="-1"])');
+      target?.focus();
+    }
     signalLayoutChange();
   }
   function closeLoopPanel(): void {

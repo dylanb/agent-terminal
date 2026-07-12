@@ -127,7 +127,9 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible { outline:2px so
 
 .status-bar .sb-activity { flex:0 100 auto; min-width:0; display:flex; align-items:center;
   min-height:var(--sb-line); gap:6px; color:var(--dim); }
-.status-bar .sb-activity .phrase { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+/* The phrase floors like the title (decision 16 / §22.3.1): it ellipsizes rather than shedding to zero,
+   so an active engine never collapses to a bare spinner with no legible word beside it. */
+.status-bar .sb-activity .phrase { min-width:5ch; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 
 /* The activity spinner (§26). It ships HERE, not in design/shell/tokens.css, which the app does not
    load: the bar is the only surface carrying "the engine is working", and the ladder above leaves the

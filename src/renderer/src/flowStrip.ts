@@ -89,6 +89,10 @@ export type FlowStripDeps = Omit<
    *  on the run's first phrase. The strip stays the single puller of flow state (§24.2.2 S5); it derives
    *  through the shared rule and never reaches across to the bar. */
   onStatusBar(model: StatusBarModel, repoKey: string | null): void;
+  /** A transition's write could not land (§19.1 — persist() throws when the target is unwritable). The
+   *  composition root surfaces it in the blocking error dialog; a silent catch would leave the user
+   *  clicking Start into the void with no recovery. Omitted → the failure only re-pulls state. */
+  onError?(reason: string): void;
   /** Hand a step-entry input prompt (§24.2.3 T3) to the composition root, which opens its modal
    *  organism. `submit` records the typed values (provideInput) and re-renders. `null` closes the
    *  modal (no prompt on this view). The strip never reaches across to the modal directly. */
@@ -230,6 +234,13 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
   // The structure last painted; a passive push whose structure matches patches in place (§24.2.2 S5).
   let lastSig: string | null = null;
 
+  // A transition rejected (its write could not land, or the machine refused): surface the reason and
+  // re-pull, rather than swallow it. `unknown`, never `Error` — a rejected IPC invoke can carry anything.
+  const onActFailed = (e: unknown): void => {
+    deps.onError?.(e instanceof Error ? e.message : String(e));
+    void refresh();
+  };
+
   const runAct = (act: Act, key: string): Promise<FlowStateView> =>
     act === 'start'
       ? deps.start(key)
@@ -260,7 +271,7 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
           // which this transition may have changed (decoupled contract, §4.1/§9.1).
           window.dispatchEvent(new CustomEvent(FLOW_CHANGED_EVENT));
         })
-        .catch(() => void refresh())
+        .catch(onActFailed)
         // Re-enable so retry is possible if both the action and refresh()'s state() reject (no
         // repaint detached this button). Harmless on success: the repaint already replaced it.
         .finally(() => {
@@ -287,7 +298,7 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
             applyTransition(view);
             window.dispatchEvent(new CustomEvent(FLOW_CHANGED_EVENT));
           })
-          .catch(() => void refresh())
+          .catch(onActFailed)
           .finally(() => {
             button.disabled = false;
           });
@@ -399,7 +410,7 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
           if (repoKey !== boundRepo) return;
           applyTransition(view);
         })
-        .catch(() => void refresh());
+        .catch(onActFailed);
     });
   }
 

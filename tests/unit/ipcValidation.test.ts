@@ -155,7 +155,7 @@ describe('IPC payload validation (§6 — renderer-supplied input is untrusted)'
     expect(isValidFlowRequest(arr)).toBe(false);
   });
 
-  it('accepts a flow:setTitle carrying a string title, rejecting bad shapes (§22.3)', () => {
+  it('accepts a flow:setTitle carrying a string title, rejecting bad shapes (§22.3.1)', () => {
     expect(isValidFlowSetTitle({ sessionId: sid, repoKey: '/repo', title: 'Refactor the shadow parser' })).toBe(true);
     expect(isValidFlowSetTitle({ sessionId: sid, repoKey: '/repo', title: '' })).toBe(true); // a blank CLEARS the name
     expect(isValidFlowSetTitle({ sessionId: sid, repoKey: '/repo', title: 176 })).toBe(false); // not a string

@@ -5,7 +5,7 @@ import { assertRendersFromHostDocument } from './relocatable';
 import type { StatusBarModel } from '../../src/shared/statusBar';
 import type { GithubRef } from '../../src/shared/ipc';
 
-// §22.3 — the always-visible status bar. It shows the work's title, what the engine is doing, and (in
+// §22.3.1 — the always-visible status bar. It shows the work's title, what the engine is doing, and (in
 // its attention state) that the loop is blocked on a human. All three coexist; the bar never collapses.
 
 const REPO = '/repo';
@@ -55,7 +55,7 @@ const alertEl = (host: HTMLElement): HTMLElement => host.querySelector('.sb-aler
 const alertBtn = (host: HTMLElement): HTMLElement | null => host.querySelector('[data-status-alert]');
 const flush = (): Promise<void> => new Promise((r) => setTimeout(r, 0));
 
-describe('status bar (§22.3)', () => {
+describe('status bar (§22.3.1)', () => {
   describe('it is always there', () => {
     it('keeps its live regions mounted even with nothing to say, so the next alert announces', () => {
       // WAI-ARIA Alert pattern (WCAG 4.1.3): the region must already be in the a11y tree when content is
@@ -393,7 +393,9 @@ describe('status bar (§22.3)', () => {
       expect(alertBtn(host)).not.toBe(first);
     });
 
-    it('routes to the gate controls through its own contract, not a sibling reaching into its DOM', () => {
+    it('routes to the gate controls through its own contract, handing over its own button as the opener', () => {
+      // The opener travels on the contract, not by a sibling sniffing [data-status-alert] out of this
+      // organism's DOM — so focus-return still works when the bar is relocated (UI-STANDARDS §2.2 rule 4).
       const onAlertActivate = vi.fn();
       const { host, render } = mount({ onAlertActivate });
       render(model({ alert: blocked }));
@@ -401,6 +403,7 @@ describe('status bar (§22.3)', () => {
       expect(btn.tagName).toBe('BUTTON'); // operable by keyboard natively (WCAG 2.1.1)
       btn.click();
       expect(onAlertActivate).toHaveBeenCalledTimes(1);
+      expect(onAlertActivate).toHaveBeenCalledWith(btn);
     });
 
     it('names the panel it controls, so the relationship is programmatic (WCAG 4.1.2)', () => {
@@ -409,12 +412,16 @@ describe('status bar (§22.3)', () => {
       expect(alertBtn(host)!.getAttribute('aria-controls')).toBe('loop-panel');
     });
 
-    it('spells the alert out for assistive tech rather than reading an internal token (WCAG 2.4.6)', () => {
+    it('gives the alert an accessible name that CONTAINS its visible text (WCAG 2.5.3 label-in-name)', () => {
+      // A speech-input user says what they see. The visible detail reads `... · iter 9 · PR #179`, so the
+      // accessible name must contain those exact tokens — `pull request 179` is not `PR #179`.
       const { host, render } = mount();
       render(model({ alert: blocked }));
-      const name = alertBtn(host)!.getAttribute('aria-label')!;
-      expect(name).toContain('iteration 9'); // not the abbreviation `iter`
-      expect(name).toContain('pull request 179');
+      const btn = alertBtn(host)!;
+      const name = btn.getAttribute('aria-label') ?? btn.textContent ?? '';
+      expect(name).toContain('iter 9');
+      expect(name).toContain('PR #179');
+      expect(name).toContain('Loop needs you');
     });
 
     it('strips control characters out of a repo-supplied status before it reaches the human (CWE-117)', () => {
@@ -492,6 +499,25 @@ describe('status bar (§22.3)', () => {
       input.focus();
       press(input, 'Escape');
       expect(document.activeElement).toBe(titleEl(host));
+    });
+
+    it('does not strand focus on the body when a push replaces the focused title (WCAG 2.4.3)', () => {
+      // A PR opens for the named work while the user has TAB-focused (not clicked) the name button; the
+      // model-driven repaint removes that button. Focus must land on the control that replaced it, not <body>.
+      const { host, render } = mount({ githubRef: () => Promise.resolve(null) });
+      render(model({ title: { kind: 'user', text: 'Named' } }));
+      titleEl(host)!.focus();
+      render(model({ title: { kind: 'pr', number: 57 } }));
+      expect(document.activeElement).toBe(titleEl(host));
+      expect(document.activeElement).not.toBe(document.body);
+    });
+
+    it('does not strand focus when the alert clears while it is focused (WCAG 2.4.3)', () => {
+      const { host, render } = mount();
+      render(model({ title: { kind: 'user', text: 'Named' }, alert: blocked }));
+      alertBtn(host)!.focus();
+      render(model({ title: { kind: 'user', text: 'Named' } })); // loop left the human-needed family
+      expect(document.activeElement).not.toBe(document.body);
     });
 
     it('surfaces why a name could not be saved, rather than reverting with no reason given', async () => {
