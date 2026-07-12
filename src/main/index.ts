@@ -1310,7 +1310,7 @@ async function createWindow(): Promise<void> {
         const view = inTransition(m.repoKey, () => flow.provideInput(m.repoKey, m.values));
         return trackLoop(m.repoKey, withDerived(m.repoKey, view));
       },
-      // §22.3 — name the repo's work (a blank clears it). Not a lifecycle transition: it neither enters a
+      // §22.3.1 — name the repo's work (a blank clears it). Not a lifecycle transition: it neither enters a
       // step nor runs an entry action, so it takes no inTransition guard; it simply persists the name and
       // answers with the view the status bar repaints from.
       [CH.flowSetTitle]: (_e, m) => {

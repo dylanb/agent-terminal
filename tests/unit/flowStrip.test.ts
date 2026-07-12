@@ -4,6 +4,7 @@ import { createFlowStrip } from '../../src/renderer/src/flowStrip';
 import { assertRendersFromHostDocument } from './relocatable';
 import { FLOW_CHANGED_EVENT } from '../../src/renderer/src/paneActions';
 import type { AgentState, FlowStateView, FlowStatus } from '../../src/shared/ipc';
+import { IDLE_STATUS_BAR, type StatusBarModel } from '../../src/shared/statusBar';
 
 // §24.2.2 / §24.2.3 T1 / §22.3 — the flow status strip. It follows the cwd: every window.flow call
 // must carry the current repoKey, so a stale-repo response must never repaint the rail (§16.3).
@@ -38,6 +39,9 @@ function fakeFlow(initial: FlowStatus = 'not_started') {
     }),
     provideInput: vi.fn(async (repoKey: string) => view(repoKey)),
     onStateChanged: vi.fn((_cb: () => void) => () => {}),
+    // Required, not optional: the bar is the only surface carrying the engine's activity and the loop's
+    // human-blocked alert, so a layout that wires the strip without feeding the bar must not compile.
+    onStatusBar: vi.fn((_m: StatusBarModel, _k: string | null) => {}),
   };
 }
 
@@ -123,6 +127,18 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
       activity: { phrase: 'Bootstrapping #40' },
       alert: null,
     });
+    expect(onStatusBar.mock.calls.at(-1)![1]).toBe('/repo'); // the bar acts on the repo the model came from
+  });
+
+  it('gives the bar back its empty state when the terminal leaves every repo', async () => {
+    // Without this the bar would go on showing the title, activity and alert of a repo the user has left.
+    const onStatusBar = vi.fn();
+    const strip = createFlowStrip(host, { ...fakeFlow('in_progress'), onStatusBar });
+    strip.onRepoChanged('/repo');
+    await vi.waitFor(() => expect(onStatusBar).toHaveBeenCalled());
+    onStatusBar.mockClear();
+    strip.onRepoChanged(null);
+    expect(onStatusBar).toHaveBeenCalledWith(IDLE_STATUS_BAR, null);
   });
 
   // WCAG 2.1 SC 4.1.3. The host is `role=status`, which is an implicitly ATOMIC live region — a partial
@@ -258,6 +274,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
       undo: vi.fn(),
       terminate: vi.fn(),
       provideInput: vi.fn(),
+      onStatusBar: vi.fn(),
       onStateChanged: noopSub,
     };
     const strip = createFlowStrip(host, deps);
@@ -310,6 +327,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
       undo: vi.fn(),
       terminate: vi.fn(),
       provideInput: vi.fn(),
+      onStatusBar: vi.fn(),
       onStateChanged: noopSub,
     };
     createFlowStrip(host, deps).onRepoChanged('/repo');
@@ -339,6 +357,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
       undo: vi.fn(),
       terminate: vi.fn(),
       provideInput: vi.fn(),
+      onStatusBar: vi.fn(),
       onStateChanged: vi.fn((cb: () => void) => {
         fire = cb;
         return () => {};
@@ -370,6 +389,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
       undo: vi.fn(),
       terminate: vi.fn(),
       provideInput: vi.fn(),
+      onStatusBar: vi.fn(),
       onStateChanged: noopSub,
     };
     createFlowStrip(host, deps).onRepoChanged('/repo');
@@ -410,6 +430,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
       undo: vi.fn(),
       terminate: vi.fn(),
       provideInput: vi.fn(),
+      onStatusBar: vi.fn(),
       onStateChanged: noopSub,
       loopPanelId: 'loop-panel',
     };
@@ -443,6 +464,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
       undo: vi.fn(),
       terminate: vi.fn(),
       provideInput: vi.fn(),
+      onStatusBar: vi.fn(),
       onStateChanged: noopSub,
     };
     createFlowStrip(host, deps).onRepoChanged('/repo');
@@ -474,6 +496,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
       undo: vi.fn(),
       terminate: vi.fn(),
       provideInput: vi.fn(),
+      onStatusBar: vi.fn(),
       onStateChanged: (cb: () => void) => {
         fire = cb;
         return () => {};
@@ -508,6 +531,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
       undo: vi.fn(),
       terminate: vi.fn(),
       provideInput: vi.fn(),
+      onStatusBar: vi.fn(),
       onStateChanged: noopSub,
       // no loopPanelId → the strip must not bake in a document-level id (UI-STANDARDS §2.2 rule 1)
     };
@@ -534,6 +558,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
       restart: vi.fn(),
       undo: vi.fn(),
       provideInput: vi.fn(),
+      onStatusBar: vi.fn(),
       terminate: vi.fn(),
       onStateChanged: noopSub,
       onPanelState,
@@ -561,6 +586,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
       restart: vi.fn(),
       undo: vi.fn(),
       provideInput: vi.fn(),
+      onStatusBar: vi.fn(),
       terminate: vi.fn(),
       onStateChanged: noopSub,
       loopPanelId: 'loop-panel',
@@ -599,6 +625,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
       undo: vi.fn(),
       terminate: vi.fn(),
       provideInput: vi.fn(),
+      onStatusBar: vi.fn(),
       onStateChanged: vi.fn((cb: () => void) => {
         fire = cb;
         return () => {};
@@ -637,6 +664,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
       undo: vi.fn(),
       terminate: vi.fn(),
       provideInput: vi.fn(),
+      onStatusBar: vi.fn(),
       onStateChanged: vi.fn((cb: () => void) => {
         fire = cb;
         return () => {};
@@ -671,6 +699,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
       undo: vi.fn(),
       terminate: vi.fn(),
       provideInput: vi.fn(),
+      onStatusBar: vi.fn(),
       onStateChanged: noopSub,
     });
 
@@ -710,6 +739,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
       undo: vi.fn(),
       terminate: vi.fn(),
       provideInput: vi.fn(),
+      onStatusBar: vi.fn(),
       onStateChanged: noopSub,
     });
     const toneFor = async (status: string): Promise<string> => {
@@ -750,6 +780,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
       undo: vi.fn(),
       terminate: vi.fn(),
       provideInput: vi.fn(),
+      onStatusBar: vi.fn(),
       onStateChanged: noopSub,
       onPanelState: (loop: FlowStateView['loop'] | null, title: string) => seen.push({ status: loop?.status, title }),
     };
@@ -789,6 +820,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
       terminate: vi.fn(),
       provideInput,
       onStateChanged: noopSub,
+      onStatusBar: vi.fn(),
       onPrompt: (prompt: FlowStateView['prompt'] | null, stepName: string, submit: (v: Record<string, string>) => void) => {
         if (prompt) {
           seen.push({ names: prompt.inputs.map((i) => i.name), stepName });
@@ -829,6 +861,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
       undo: vi.fn(),
       terminate: vi.fn(),
       provideInput: vi.fn(),
+      onStatusBar: vi.fn(),
       onStateChanged: noopSub,
       onPrompt: (prompt: FlowStateView['prompt'] | null) => {
         if (prompt) openerAtPrompt = host.ownerDocument.activeElement;
@@ -864,6 +897,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
       terminate: vi.fn(),
       provideInput,
       onStateChanged: noopSub,
+      onStatusBar: vi.fn(),
       onPrompt: (prompt: FlowStateView['prompt'] | null, _stepName: string, submit: (v: Record<string, string>) => void) => {
         if (prompt) lastSubmit = submit;
       },
@@ -901,6 +935,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
       undo: vi.fn(),
       terminate: vi.fn(),
       provideInput: vi.fn(),
+      onStatusBar: vi.fn(),
       onStateChanged: noopSub,
       onPrompt: (prompt: FlowStateView['prompt'] | null) => seen.push(prompt),
     };
@@ -939,6 +974,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
       terminate: vi.fn(),
       provideInput: vi.fn((): Promise<FlowStateView> => new Promise((r) => { resolveProvide = r; })),
       onStateChanged: noopSub,
+      onStatusBar: vi.fn(),
       onPrompt: (prompt: FlowStateView['prompt'] | null, _s: string, submit: (v: Record<string, string>) => void) => {
         seen.push(prompt);
         if (prompt) lastSubmit = submit;
@@ -980,6 +1016,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
       undo: vi.fn(),
       terminate: vi.fn(),
       provideInput: vi.fn(),
+      onStatusBar: vi.fn(),
       onStateChanged: vi.fn((cb: () => void) => {
         fire = cb;
         return () => {};
@@ -1027,6 +1064,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
       undo: vi.fn(),
       terminate: vi.fn(),
       provideInput: vi.fn(),
+      onStatusBar: vi.fn(),
       onStateChanged: noopSub,
     };
     createFlowStrip(host, deps).onRepoChanged('/repo');
@@ -1148,6 +1186,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
         undo: vi.fn(),
         terminate: vi.fn(),
         provideInput: vi.fn(),
+        onStatusBar: vi.fn(),
         onStateChanged: noopSub,
         onTerminate: vi.fn(),
       };
@@ -1257,6 +1296,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
         undo: vi.fn(),
         terminate: vi.fn(),
         provideInput: vi.fn(),
+        onStatusBar: vi.fn(),
         onStateChanged: vi.fn((cb: () => void) => {
           fire = cb;
           return () => {};

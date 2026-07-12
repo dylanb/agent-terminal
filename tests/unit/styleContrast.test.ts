@@ -189,6 +189,22 @@ describe('status-bar attention-state focus ring contrast (WCAG 2.1 SC 1.4.11)', 
       expect(contrast(ringHex, resolveOpaqueMix(map, barBgExpr))).toBeGreaterThanOrEqual(3);
     });
   }
+
+  // The bar shows the title and the activity ALONGSIDE the alert — the cue it replaced only ever carried
+  // alert text — so every one of those tokens now renders on the attention wash too, and none of them
+  // was pinned against it (WCAG 2.1 SC 1.4.3).
+  const ON_WASH: ReadonlyArray<readonly [string, string]> = [
+    ['--dim', 'the unnamed-title placeholder and the activity phrase'],
+    ['--text', "the alert's lead and a named title"],
+    ['--attn-text', "the alert's status detail"],
+  ];
+  for (const [themeName, map] of [['light', light], ['dark', dark]] as const) {
+    for (const [token, what] of ON_WASH) {
+      it(`${themeName}: ${what} (${token}) clears 4.5:1 on the status bar's attention wash`, () => {
+        expect(contrast(resolve(map, token), resolveOpaqueMix(map, barBgExpr))).toBeGreaterThanOrEqual(4.5);
+      });
+    }
+  }
 });
 
 // §20.2 code viewer: the editor paints straight onto the app background, and a changed line adds

@@ -84,11 +84,11 @@ export type FlowStripDeps = Omit<
    *  (UI-STANDARDS §2.2 rule 1). Omitted → no aria-controls (aria-expanded still conveys state). */
   loopPanelId?: string;
   onPanelState?: (loop: FlowLoopView | null, title: string, refs?: FlowRefs) => void;
-  /** Hand the always-visible status bar (§22.3) its model on every render AND every passive push — the
+  /** Hand the always-visible status bar (§22.3.1) its model on every render AND every passive push — the
    *  bar is the only surface showing what the engine is doing, so a patch that skipped it would freeze it
    *  on the run's first phrase. The strip stays the single puller of flow state (§24.2.2 S5); it derives
    *  through the shared rule and never reaches across to the bar. */
-  onStatusBar?: (model: StatusBarModel) => void;
+  onStatusBar(model: StatusBarModel, repoKey: string | null): void;
   /** Hand a step-entry input prompt (§24.2.3 T3) to the composition root, which opens its modal
    *  organism. `submit` records the typed values (provideInput) and re-renders. `null` closes the
    *  modal (no prompt on this view). The strip never reaches across to the modal directly. */
@@ -298,7 +298,7 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
 
   function render(state: FlowStateView): void {
     lastSig = structuralSig(state); // this paint defines the structure a later passive push compares to
-    deps.onStatusBar?.(deriveStatusBar(state)); // §22.3 — also on the error view, whose title is unavailable
+    deps.onStatusBar(deriveStatusBar(state), repoKey);
     // Carry focus across the rebuild if the keyboard user was on the Loop read-out, rather than
     // dropping it to <body> (WCAG 2.4.3).
     const keepLoopFocus = doc.activeElement instanceof HTMLElement && doc.activeElement.classList.contains('loopstat') && host.contains(doc.activeElement);
@@ -422,7 +422,7 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
    *  attached (§24.2.2 S5). The caller guarantees the structural signature is unchanged, so only the
    *  loop read-out's tone/iteration and the derived n/m line can differ. */
   function patchInPlace(state: FlowStateView): void {
-    deps.onStatusBar?.(deriveStatusBar(state));
+    deps.onStatusBar(deriveStatusBar(state), repoKey);
     const dText = derivedText(state);
     if (dText !== null) {
       const line = host.querySelector('.flow-derived');
@@ -451,9 +451,9 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
     if (repoKey === null) {
       host.replaceChildren();
       lastSig = null;
-      // The bar outlives the strip's content: with no repo it still shows, still inviting a name (§22.3).
+      // The bar outlives the strip's content: with no repo it still shows, still inviting a name (§22.3.1).
       // Without this a cd out of a repo would strand the previous repo's title on it.
-      deps.onStatusBar?.(IDLE_STATUS_BAR);
+      deps.onStatusBar(IDLE_STATUS_BAR, null);
       return;
     }
     // A state() IPC rejection keeps the last rendered rail rather than escaping as an unhandled

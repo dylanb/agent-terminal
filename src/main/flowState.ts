@@ -7,6 +7,7 @@ import path from 'node:path';
 import yaml from 'js-yaml';
 import { atomicWriteFileSync } from './atomicFile';
 import type { FlowStatus } from '../shared/ipc';
+import { normalizeTitle } from '../shared/statusBar';
 import { isRecord } from './yamlRecord';
 
 /** Persisted progression (§19.1). `inputs` is flow-wide, not per-step, so a value resolved at one
@@ -18,15 +19,19 @@ export interface PersistedFlowState {
   /** Epoch ms at which this run of the flow began (§26.10) — the lower bound the cost meter sweeps
    *  session logs from. Absent for a flow that never started, and for one persisted before this field. */
   startedAt?: number;
-  /** The name the user gave this worktree's work (§22.3). Absent until they name one. */
+  /** The name the user gave this worktree's work (§22.3.1). Absent until they name one. */
   title?: string;
 }
 
 export interface FlowStateStore {
   /** The persisted progression, or null when absent/corrupt (never throws). */
   read(): PersistedFlowState | null;
-  /** Persist progression atomically (§19.1). */
+  /** Persist progression atomically (§19.1). Throws if the write cannot land. */
   write(state: PersistedFlowState): void;
+  /** The worktree's name (§22.3.1), readable even where the progression is absent or corrupt. */
+  readTitle(): string | null;
+  /** Name the worktree, leaving any progression on disk untouched. Throws if the write cannot land. */
+  writeTitle(title: string | null): void;
 }
 
 const STATE_REL = path.join('.agent-terminal', 'flow-state.yaml');
@@ -48,29 +53,34 @@ function readStartedAt(raw: unknown): number | null {
   return typeof raw === 'number' && Number.isFinite(raw) && raw > 0 ? raw : null;
 }
 
-/** Null unless the value names something: a blank or ill-typed `title` would render the status bar's
- *  name slot as an empty, un-nameable gap rather than its click-to-name placeholder (§22.3). */
-function readTitle(raw: unknown): string | null {
-  if (typeof raw !== 'string') return null;
-  const text = raw.trim();
-  return text.length > 0 ? text : null;
-}
-
 export function createFlowStateStore(worktreeDir: string): FlowStateStore {
   const file = path.join(worktreeDir, STATE_REL);
+
+  const loadDoc = (): Record<string, unknown> | null => {
+    try {
+      const doc: unknown = yaml.load(readFileSync(file, 'utf8'));
+      return isRecord(doc) ? doc : null;
+    } catch {
+      return null;
+    }
+  };
+
+  // atomicWriteFileSync REFUSES (writes nothing, returns false) when the container is a symlink. A
+  // refusal the caller cannot see is a name the user believes was saved and finds gone at relaunch.
+  const persist = (doc: Record<string, unknown>): void => {
+    if (!atomicWriteFileSync(file, yaml.dump(doc))) {
+      throw new Error(`cannot write ${STATE_REL}: ${path.dirname(STATE_REL)} is not a real directory`);
+    }
+  };
+
   return {
     read() {
-      let doc: unknown;
-      try {
-        doc = yaml.load(readFileSync(file, 'utf8'));
-      } catch {
-        return null;
-      }
-      if (!isRecord(doc) || typeof doc.step !== 'string' || doc.step.length === 0) return null;
+      const doc = loadDoc();
+      if (!doc || typeof doc.step !== 'string' || doc.step.length === 0) return null;
       if (typeof doc.status !== 'string' || !PERSISTABLE.has(doc.status as FlowStatus)) return null;
       const inputs = readInputs(doc.inputs);
       const startedAt = readStartedAt(doc.started_at);
-      const title = readTitle(doc.title);
+      const title = normalizeTitle(doc.title);
       return {
         step: doc.step,
         status: doc.status as FlowStatus,
@@ -81,17 +91,22 @@ export function createFlowStateStore(worktreeDir: string): FlowStateStore {
     },
     write(state) {
       const hasInputs = state.inputs && Object.keys(state.inputs).length > 0;
-      const title = readTitle(state.title);
-      atomicWriteFileSync(
-        file,
-        yaml.dump({
-          step: state.step,
-          status: state.status,
-          ...(hasInputs ? { inputs: state.inputs } : {}),
-          ...(state.startedAt !== undefined ? { started_at: state.startedAt } : {}),
-          ...(title !== null ? { title } : {}),
-        }),
-      );
+      const title = normalizeTitle(state.title);
+      persist({
+        step: state.step,
+        status: state.status,
+        ...(hasInputs ? { inputs: state.inputs } : {}),
+        ...(state.startedAt !== undefined ? { started_at: state.startedAt } : {}),
+        ...(title !== null ? { title } : {}),
+      });
+    },
+    readTitle() {
+      return normalizeTitle(loadDoc()?.title);
+    },
+    writeTitle(title) {
+      const named = normalizeTitle(title);
+      const { title: _prev, ...rest } = loadDoc() ?? {};
+      persist(named !== null ? { ...rest, title: named } : rest);
     },
   };
 }

@@ -22,7 +22,9 @@ export interface Shell {
   isDrawerOpen(): boolean;
   /** The full-height docked loop+gate panel (§24.2.3): a grid column that "makes room" like the
    *  drawer, opened from the rail Loop read-out and dismissed by its close button or Escape. */
-  openLoopPanel(): void;
+  /** `opener` is the control focus returns to on close, and its presence means the caller wants focus
+   *  moved into the panel (an alert routes the human ONTO the decision, not merely to its reveal). */
+  openLoopPanel(opener?: HTMLElement): void;
   closeLoopPanel(): void;
   toggleLoopPanel(): void;
   isLoopPanelOpen(): boolean;
@@ -106,10 +108,16 @@ export function createShell(root: HTMLElement, deps: ShellDeps = {}): Shell {
   const syncLoopReadout = (on: boolean): void =>
     root.querySelector('.loopstat')?.setAttribute('aria-expanded', String(on));
   const focusView = (v: ViewId): void => void root.querySelector<HTMLElement>(`[data-viewbtn="${v}"]`)?.focus();
-  function openLoopPanel(): void {
+  // The control that opened the panel, so a close returns focus to it rather than to whichever control
+  // the shell assumes opened it — the status bar's alert opens it too (WCAG 2.4.3).
+  let panelOpener: HTMLElement | null = null;
+  function openLoopPanel(opener?: HTMLElement): void {
+    panelOpener = opener ?? null;
     root.classList.add('loop-open');
     if (loopPanelEl) setShown(loopPanelEl, true);
     syncLoopReadout(true);
+    // An alert says the human is blocked; the click must land them ON the decision, not merely reveal it.
+    if (opener) loopPanelEl?.querySelector<HTMLElement>('button, [href], [tabindex]:not([tabindex="-1"])')?.focus();
     signalLayoutChange();
   }
   function closeLoopPanel(): void {
@@ -117,14 +125,15 @@ export function createShell(root: HTMLElement, deps: ShellDeps = {}): Shell {
     root.classList.remove('loop-open');
     if (loopPanelEl) setShown(loopPanelEl, false);
     syncLoopReadout(false);
-    // Disclosure pattern (WCAG 2.4.3): a close returns focus to the read-out that opened it; when that
-    // is gone too (a state-driven close after the flow ends) fall back to the main view, so focus is
-    // never stranded on the now-hidden panel.
+    // Disclosure pattern (WCAG 2.4.3): a close returns focus to whatever opened it; when that is gone
+    // too (a state-driven close after the flow ends) fall back to the read-out, then the main view, so
+    // focus is never stranded on the now-hidden panel.
     if (hadFocus) {
-      const readout = root.querySelector<HTMLElement>('.loopstat');
-      if (readout) readout.focus();
+      const back = panelOpener?.isConnected ? panelOpener : root.querySelector<HTMLElement>('.loopstat');
+      if (back) back.focus();
       else focusView('1');
     }
+    panelOpener = null;
     signalLayoutChange();
   }
   function toggleLoopPanel(): void {
@@ -161,9 +170,6 @@ export function createShell(root: HTMLElement, deps: ShellDeps = {}): Shell {
     if (target.closest('#qs')) return toggleDrawer();
     if (target.closest('#dclose')) return closeDrawer();
     if (target.closest('.loopstat')) return toggleLoopPanel();
-    // §22.3 — the status bar's attention state routes to the gate controls. It OPENS rather than toggles:
-    // the alert says the loop is blocked on a human, so the click must always land on the decision.
-    if (target.closest('[data-status-alert]')) return openLoopPanel();
     if (target.closest('[data-loop-close]')) return closeLoopPanel();
     if (target.closest('#tg')) return setTheme(theme === 'dark' ? 'light' : 'dark');
   };

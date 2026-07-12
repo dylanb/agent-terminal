@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { deriveStatusBar } from '../../src/shared/statusBar';
+import { deriveStatusBar, normalizeTitle, sameTitle, TITLE_MAX, titleKey } from '../../src/shared/statusBar';
 import { loopActivity } from '../../src/shared/loopActivity';
 import type { FlowLoopView, FlowStateView } from '../../src/shared/ipc';
 
@@ -59,12 +59,64 @@ describe('status bar model (§22.3)', () => {
       });
     });
 
-    it('is unavailable — never editable — on a flow that failed to load', () => {
-      // The machine is inert in the error state and must not persist (a bad flow.yaml cannot clobber a
-      // good on-disk progression), so offering an edit here would silently no-op.
-      expect(deriveStatusBar(view({ status: 'error', error: 'bad yaml', userTitle: 'x' })).title).toEqual({
-        kind: 'unavailable',
+    it('names the work of a directory whose flow never loaded — the case where nothing else can', () => {
+      // A directory with no flow.yaml has no PR and no ticket either, so the user title is the ONLY thing
+      // that can ever name it. The name belongs to the worktree, not to a flow that happened to load.
+      expect(deriveStatusBar(view({ status: 'error', error: 'no flow.yaml', userTitle: 'Spike the parser' })).title).toEqual({
+        kind: 'user',
+        text: 'Spike the parser',
       });
+    });
+
+    it('invites a name on a directory whose flow never loaded and has never been named', () => {
+      expect(deriveStatusBar(view({ status: 'error', error: 'no flow.yaml' })).title).toEqual({ kind: 'user', text: '' });
+    });
+  });
+
+  // One predicate for what a persisted name IS, imported by the machine, the on-disk store and the
+  // renderer's optimistic paint alike — a writer and a reader of one file are two sides of one contract
+  // exactly as two processes are (CLAUDE.md shared-semantics).
+  describe('normalizeTitle — the one rule for what counts as a name', () => {
+    it('takes the name the user typed', () => {
+      expect(normalizeTitle('Refactor the shadow parser')).toBe('Refactor the shadow parser');
+    });
+
+    it('trims, so the optimistic paint cannot disagree with what lands on disk', () => {
+      expect(normalizeTitle('  Refactor  ')).toBe('Refactor');
+    });
+
+    it('treats a blank as no name at all, so it never persists as an empty string', () => {
+      expect(normalizeTitle('')).toBeNull();
+      expect(normalizeTitle('   ')).toBeNull();
+    });
+
+    it('rejects anything that is not a string — a hand-edited or repo-supplied YAML value', () => {
+      expect(normalizeTitle(undefined)).toBeNull();
+      expect(normalizeTitle(null)).toBeNull();
+      expect(normalizeTitle(42)).toBeNull();
+      expect(normalizeTitle({ toString: () => 'evil' })).toBeNull();
+    });
+
+    it('bounds the name, so a pasted megabyte cannot land in a file re-parsed on every state query', () => {
+      const long = normalizeTitle('x'.repeat(10_000));
+      expect(long).not.toBeNull();
+      expect(long!.length).toBe(TITLE_MAX);
+    });
+  });
+
+  describe('titleKey — identity over the union, so a new kind cannot silently dedup away', () => {
+    it('separates the kinds that share a number', () => {
+      expect(titleKey({ kind: 'pr', number: 7 })).not.toBe(titleKey({ kind: 'ticket', number: 7 }));
+    });
+
+    it('separates two names, and matches one against itself', () => {
+      expect(sameTitle({ kind: 'user', text: 'a' }, { kind: 'user', text: 'b' })).toBe(false);
+      expect(sameTitle({ kind: 'user', text: 'a' }, { kind: 'user', text: 'a' })).toBe(true);
+    });
+
+    it('never matches against nothing', () => {
+      expect(sameTitle(null, { kind: 'user', text: 'a' })).toBe(false);
+      expect(sameTitle({ kind: 'user', text: 'a' }, null)).toBe(false);
     });
   });
 

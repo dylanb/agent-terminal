@@ -3,6 +3,7 @@
 
 import path from 'node:path';
 import { githubHttpsHref } from '../shared/githubUrl';
+import { TITLE_MAX } from '../shared/statusBar';
 import {
   GATE_DECISION_OPTIONS,
   SESSION_ID,
@@ -158,9 +159,16 @@ export function isValidFlowProvideInput(m: unknown): m is FlowProvideInputMsg {
   );
 }
 
-/** flow:setTitle — the name typed into the status bar (§22.3). A blank title is LEGAL: it clears the name. */
+/** flow:setTitle — the name typed into the status bar (§22.3.1). A blank title is LEGAL: it clears the
+ *  name. Bounded at TITLE_MAX (CWE-1284). */
 export function isValidFlowSetTitle(m: unknown): m is FlowSetTitleMsg {
-  return isRecord(m) && isLiveSession(m) && isSafeRepoKey(m.repoKey) && typeof m.title === 'string';
+  return (
+    isRecord(m) &&
+    isLiveSession(m) &&
+    isSafeRepoKey(m.repoKey) &&
+    typeof m.title === 'string' &&
+    m.title.length <= TITLE_MAX
+  );
 }
 
 /** flow:gateDecision — the human's gate option (§26.6 / L5). `option` is confined to the known set;

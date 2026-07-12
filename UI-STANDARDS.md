@@ -151,18 +151,19 @@ announcement and can create a focus trap. The rules:
    dismiss button) is fine *because* emptying removes that focusable.
 4. **Mount it in an always-visible region.** A live region nested under a frame that can itself be
    hidden can be suppressed out from under you; put it where no ancestor toggle can mask it.
-5. **Removing the focused control restores focus (WCAG 2.4.3).** If a dismiss/teardown empties the
-   host while focus was inside it, the component signals across its contract (an `onDismiss`-style
-   callback) so the root can place focus somewhere sensible — it does **not** reach across organisms
-   to move focus itself (UI §2.2). The canonical implementation is `attentionCue`.
+5. **Removing the focused control restores focus (WCAG 2.4.3).** If a teardown or an in-place swap
+   removes the node that held focus, the component puts focus back on the control that replaced it —
+   or, when the host is emptied entirely, signals across its contract (an `onFocusLost`-style callback)
+   so the root can place focus somewhere sensible. It does **not** reach across organisms to move focus
+   itself (UI §2.2). The canonical implementation is `statusBar`, whose in-place name editor returns
+   focus to the name it replaced on both commit and cancel.
 6. **A control that disables itself during an async action restores focus on completion (WCAG 2.4.3).**
    Capture focus *before* disabling and return it *after* — but only if focus has not since moved:
    restore iff the control still holds focus or was blurred to `<body>` by the disable, never stealing
    focus the user redirected mid-action. Never hand-roll this guard; the canonical implementation is
    `captureFocusReturn` (`dom.ts`), which `cliInstall` and `installExamples` compose rather than
    re-deriving it — any self-disabling async control that returns focus composes it too. Two hand-rolled
-   copies *will* drift — the same reason `createModalShell` and `attentionCue` are single
-   implementations (§5.1).
+   copies *will* drift — the same reason `createModalShell` is a single implementation (§5.1).
 
 ## 5. Blocking dialogs — the modal focus-management pattern
 

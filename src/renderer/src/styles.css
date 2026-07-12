@@ -90,60 +90,69 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible { outline:2px so
 .rail .foot .row { display:flex; gap:8px; align-items:center; }
 
 .main { min-width:0; display:flex; flex-direction:column; }
-/* The viewport holds the absolutely-stacked view panes; the attention cue (§24.2.3 T4) sits above it
-   as a flex sibling so a shown cue "makes room" (pushes the active view down), never overlays it. */
+/* The status bar (§22.3.1) is a flex sibling of the viewport, never an overlay: it makes room rather
+   than covering the active view. */
 .viewport { position:relative; flex:1; min-height:0; }
 [data-viewpane] { position:absolute; inset:0; display:none; }
 [data-viewpane].on { display:block; }
 
-/* Always-visible status bar (§22.3) — design/shell/loop-flow.html .attn-bar in its attention state. The
-   bar never collapses: it is a status surface, and its two live regions (.sb-alert assertive, .sb-activity
-   polite) must already be in the a11y tree when content is injected, or the announcement is dropped
-   (WCAG 4.1.3 / WAI-ARIA Alert). An empty region has no focusable descendant, so the persistent bar
-   exposes no hidden-but-focusable trap (§22.2). Nothing wraps, so its height is constant and the
-   terminal below it never needs a refit. */
-.status-bar { display:flex; align-items:center; gap:12px; padding:9px 16px; flex:none; min-height:36px;
+/* Always-visible status bar (§22.3.1) — design/shell/loop-flow.html .attn-bar in its attention state.
+   The bar's height is constant (nothing wraps, and every control is bounded by --sb-line), so the
+   terminal below it never needs a refit — pinned by an e2e that measures it idle, alerted, and while the
+   name editor is open. */
+.status-bar { --sb-line:24px;
+  display:flex; align-items:center; gap:12px; padding:6px 16px; flex:none; min-height:36px;
   background:var(--card); border-bottom:1px solid var(--hair); font-size:12.5px; white-space:nowrap; }
-/* The attention state: the same red wash the cue used, applied to the whole bar (§24.2.3 T4). */
+/* §24.2.3 T4 */
 .status-bar:has(.sb-alert-btn) { background:color-mix(in srgb, var(--attn) 10%, var(--card));
   border-bottom-color:color-mix(in srgb, var(--attn) 38%, var(--hair)); }
 
-/* The truncation ladder. Everything coexists; the bar sheds an element only under space pressure, and only
-   once truncating it would leave nothing legible. `flex-shrink` IS the priority order: the title gives up
-   its width first (down to zero — it vanishes exactly when no character fits), the activity phrase next,
-   and the alert never — it is the last thing standing. min-width:0 is what lets a flex item shrink below
-   its content width at all. */
-.status-bar .sb-title { flex:0 1 auto; min-width:0; overflow:hidden; }
+/* The truncation ladder, as shrink factors: the title yields ~all overflow before the activity yields
+   any, and the activity before the alert. Each floors rather than vanishing — content shrunk to zero
+   would be removed from perception, not merely truncated, and would leave a zero-width control still in
+   the tab order (WCAG 1.4.4 Resize Text, 1.4.10 Reflow, 2.4.11 Focus Not Obscured). */
+.status-bar .sb-title { flex:0 10000 auto; min-width:7ch; overflow:hidden; margin-right:auto; }
 .status-bar .sb-name { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
-  font-size:12.5px; color:var(--text); }
+  min-height:var(--sb-line); line-height:var(--sb-line); font-size:12.5px; color:var(--text); }
 .status-bar .sb-name.empty { color:var(--dim); font-style:italic; }
+/* WCAG 2.5.8: the target is 24x24 on its own, not by grace of the spacing exception. */
 .status-bar button.sb-name { background:none; border:0; padding:0; font:inherit; cursor:pointer;
-  max-width:100%; text-align:left; }
-.status-bar .sb-link:hover { text-decoration:underline; }
-.status-bar button.sb-name:hover { text-decoration:underline; }
-/* The in-place name editor: sized to the slot it replaced, so committing a name does not jump the layout. */
-.status-bar input.sb-edit { width:min(38ch, 100%); background:var(--card); color:var(--text);
-  border:1px solid var(--hair); border-radius:5px; padding:2px 6px; font:inherit; font-size:12.5px; }
+  max-width:100%; text-align:left; text-decoration:underline; text-decoration-style:dotted;
+  text-underline-offset:3px; }
+.status-bar button.sb-name:hover, .status-bar button.sb-name:focus-visible { text-decoration-style:solid; }
+.status-bar button.sb-link { text-decoration-style:solid; } /* it navigates: it reads as a link */
+.status-bar input.sb-edit { width:min(38ch, 100%); height:var(--sb-line); background:var(--card);
+  color:var(--text); border:1px solid var(--hair); border-radius:5px; padding:0 6px; font:inherit;
+  font-size:12.5px; box-sizing:border-box; }
 
-.status-bar .sb-activity { flex:0 1 auto; min-width:0; margin-left:auto; display:flex; align-items:center;
-  gap:6px; color:var(--dim); }
-.status-bar .sb-activity:empty { display:none; } /* an empty region must not eat the auto margin */
+.status-bar .sb-activity { flex:0 100 auto; min-width:0; display:flex; align-items:center;
+  min-height:var(--sb-line); gap:6px; color:var(--dim); }
 .status-bar .sb-activity .phrase { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.status-bar .sb-activity .spin { flex:none; } /* the spinner outlives its phrase: motion survives to zero width */
 
-.status-bar .sb-alert { flex:0 0 auto; }
-.status-bar .sb-alert:not(:empty) { margin-left:auto; }
-/* The alert IS the control (its text is the button's accessible name), so the assertive announcement and
-   the route to the gate controls are one node, not two competing ones. */
+/* The activity spinner (§26). It ships HERE, not in design/shell/tokens.css, which the app does not
+   load: the bar is the only surface carrying "the engine is working", and the ladder above leaves the
+   spinner standing after the phrase has gone. */
+.spin { font-family:"IBM Plex Mono",ui-monospace,monospace; color:var(--signal); flex:none; }
+.spin::after { content:'\2809'; animation:braille 0.8s steps(1) infinite; }
+@keyframes braille {
+  0%{content:'\2809'} 12.5%{content:'\2819'} 25%{content:'\2839'} 37.5%{content:'\2838'}
+  50%{content:'\283C'} 62.5%{content:'\2834'} 75%{content:'\2826'} 87.5%{content:'\2827'}
+}
+/* WCAG 2.2.2 */
+@media (prefers-reduced-motion:reduce) { .spin::after { animation:none; content:'\283F'; } }
+
+/* The alert sheds last, and only its detail: "Loop needs you" and the dot never yield, so the alert can
+   never be pushed off the bar's edge (WCAG 1.4.10). */
+.status-bar .sb-alert { flex:0 1 auto; min-width:0; }
 .status-bar .sb-alert-btn { display:flex; align-items:center; gap:8px; background:none; border:0; padding:0;
-  font:inherit; color:var(--text); cursor:pointer; }
+  min-height:var(--sb-line); font:inherit; color:var(--text); cursor:pointer; max-width:100%; }
 .status-bar .sb-alert-btn .dot { width:8px; height:8px; border-radius:50%; background:var(--attn); flex:none;
   box-shadow:0 0 0 4px color-mix(in srgb, var(--attn) 18%, transparent); }
-.status-bar .sb-alert-btn b { font-weight:600; }
-.status-bar .sb-alert-btn .it { font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:11px; color:var(--attn-text); }
+.status-bar .sb-alert-btn b { font-weight:600; flex:none; }
+.status-bar .sb-alert-btn .it { font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:11px;
+  color:var(--attn-text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; }
 /* The global focus ring (--signal) clears 3:1 only on --card; on the bar's tinted attention wash it falls
-   below in light theme, so scope the ring to --attn-text, which clears 3:1 on the wash in both themes
-   (WCAG 2.1 SC 1.4.11). */
+   below in light theme (WCAG 2.1 SC 1.4.11). */
 .status-bar:has(.sb-alert-btn) button:focus-visible { outline-color:var(--attn-text); }
 #artifacts { height:100%; }
 .nav .navic { display:inline-block; width:14px; text-align:center; font-size:13px; }

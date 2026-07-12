@@ -4371,11 +4371,13 @@ test('the user names the work in the status bar; the name persists, is outranked
   rmSync(home, { recursive: true, force: true });
 });
 
-test('under space pressure the status bar sheds the title first and keeps the alert to the last (§22.3)', async () => {
-  // Everything coexists; the bar drops an element only when there is no room for a character of it, and the
-  // thing the human must act on is the last one standing.
+test('under space pressure the status bar sheds the title first and keeps the alert to the last (§22.3.1)', async () => {
+  // Everything coexists; the bar sheds in a stated ORDER, and the thing the human must act on is the last
+  // one standing — and stays inside the bar rather than being pushed off its edge.
+  // The state.yaml carries no `pr`, so no ref outranks the user title: a long typed name is what makes the
+  // squeeze observable at all (a bare `PR #179` is too short to truncate).
   const { dir: repo, stateFile } = seedLoopFlowRepo('agent-term-e2e-sbtrunc-');
-  writeFileSync(stateFile, 'schema_version: 4\npr: 179\nbranch: agent-loop/issue-176\niteration: 9\nstatus: awaiting-human-pr-approval\n');
+  writeFileSync(stateFile, 'schema_version: 4\nbranch: agent-loop/issue-176\niteration: 9\nstatus: awaiting-human-pr-approval\n');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-sbtrunc-home-'));
   await app.close();
   app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
@@ -4384,26 +4386,126 @@ test('under space pressure the status bar sheds the title first and keeps the al
 
   await typeCommand(`cd "${repo}"`);
   await expect(flowStepName()).toHaveText('groom', { timeout: 10_000 });
+  await statusTitle().click();
+  const nameEditor = page.locator('#status-bar input[data-sb-title-edit]');
+  await expect(nameEditor).toBeVisible();
+  await nameEditor.fill('Refactor the shadow parser and its quiescence detector');
+  await nameEditor.press('Enter');
+  await expect(statusTitle()).toHaveText('Refactor the shadow parser and its quiescence detector');
+
   await flowControl().click();
   await flowControl().click(); // → the loop step, human-needed
   await expect(statusAlert()).toBeVisible({ timeout: 10_000 });
   await expect(statusTitle()).toBeVisible(); // wide: both are shown
 
-  // Squeeze the bar. The title is the flexible element: it ellipsizes, then gives up its width entirely.
-  // The alert does not shrink, so it survives — a zero-width element has no bounding box, which is exactly
-  // "not visible" to the user and to Playwright.
-  await page.setViewportSize({ width: 420, height: 700 });
-  await expect(statusAlert()).toBeVisible();
-  await expect(statusTitle()).toBeHidden();
-  await expect(statusBar()).toBeVisible();
+  const heightOf = async () => (await statusBar().boundingBox())!.height;
+  const wideHeight = await heightOf();
 
-  // Restore the width and the title comes back — nothing was destroyed, only unshown.
+  // Squeeze the bar. The title sheds first — it ellipsizes — but it FLOORS rather than vanishing: content
+  // shrunk to zero is removed from perception, not truncated, and a zero-width button stays in the tab
+  // order (WCAG 1.4.4 / 1.4.10 / 2.4.11).
+  await page.setViewportSize({ width: 420, height: 700 });
+  await expect(statusTitle()).toBeVisible();
+  const squeezed = await statusTitle().boundingBox();
+  expect(squeezed!.width).toBeGreaterThan(0);
+  // It really is truncated, not merely narrow: the text overflows the box it is clipped to.
+  expect(await statusTitle().evaluate((el) => el.scrollWidth > el.clientWidth)).toBe(true);
+
+  // The alert is the last thing standing AND stays inside the bar. `toBeVisible` alone cannot see this:
+  // a nowrap alert pushed past the window edge still has a bounding box.
+  await expect(statusAlert()).toBeVisible();
+  const bar = (await statusBar().boundingBox())!;
+  const alertBox = (await statusAlert().boundingBox())!;
+  expect(alertBox.x).toBeGreaterThanOrEqual(bar.x - 1);
+  expect(alertBox.x + alertBox.width).toBeLessThanOrEqual(bar.x + bar.width + 1);
+
+  // Nothing wraps, so the bar's height never changes and the terminal below it never needs a refit.
+  expect(await heightOf()).toBe(wideHeight);
+
+  // Restore the width and the title is whole again — it was clipped, never destroyed.
   await page.setViewportSize({ width: 1280, height: 800 });
   await expect(statusTitle()).toBeVisible();
   await expect(statusAlert()).toBeVisible();
+  expect(await statusTitle().evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
+  expect(await heightOf()).toBe(wideHeight);
 
   await app.close();
   rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+});
+
+test('the status bar keeps a constant height — idle, alerted, and while the name is being typed (§22.3.1)', async () => {
+  // The bar broadcasts no resize, so the terminal below it never refits. That is only safe if its height
+  // is genuinely invariant: the in-place name editor is the control most likely to grow it.
+  const { dir: repo, stateFile } = seedLoopFlowRepo('agent-term-e2e-sbheight-');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-sbheight-home-'));
+  await app.close();
+  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
+  page = await app.firstWindow();
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  const heightOf = async () => (await statusBar().boundingBox())!.height;
+  await typeCommand(`cd "${repo}"`);
+  await expect(flowStepName()).toHaveText('groom', { timeout: 10_000 });
+  const idle = await heightOf();
+
+  // While the name editor is open.
+  await statusTitle().click();
+  const editor = page.locator('#status-bar input[data-sb-title-edit]');
+  await expect(editor).toBeVisible();
+  expect(await heightOf()).toBe(idle);
+  await editor.fill('A rather long name for this piece of work');
+  await editor.press('Enter');
+  await expect(statusTitle()).toHaveText('A rather long name for this piece of work');
+  expect(await heightOf()).toBe(idle);
+
+  // And in the attention state.
+  writeFileSync(stateFile, 'schema_version: 4\npr: 179\nbranch: agent-loop/issue-176\niteration: 9\nstatus: awaiting-human-pr-approval\n');
+  await flowControl().click();
+  await flowControl().click();
+  await expect(statusAlert()).toBeVisible({ timeout: 10_000 });
+  expect(await heightOf()).toBe(idle);
+
+  await app.close();
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+});
+
+test('a directory with no flow at all can still be named, and the name survives a relaunch (§22.3.1)', async () => {
+  // The commonest directory there is: no flow.yaml, so no PR and no ticket either. The user title is the
+  // only thing that can ever name it — if the bar were inert here the feature would be unusable in most
+  // of the places it is meant for.
+  const plain = mkdtempSync(join(tmpdir(), 'agent-term-e2e-noflow-'));
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-noflow-home-'));
+  await app.close();
+  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
+  page = await app.firstWindow();
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await typeCommand(`cd "${plain}"`);
+  await expect(statusTitle()).toBeVisible({ timeout: 10_000 });
+  await statusTitle().click();
+  const editor = page.locator('#status-bar input[data-sb-title-edit]');
+  await expect(editor).toBeVisible({ timeout: 10_000 });
+  await editor.fill('Spike the shadow parser');
+  await editor.press('Enter');
+  await expect(statusTitle()).toHaveText('Spike the shadow parser');
+
+  // It is on disk, in the worktree it names.
+  await expect
+    .poll(() => readFileSync(join(plain, '.agent-terminal', 'flow-state.yaml'), 'utf8'), { timeout: 10_000 })
+    .toContain('Spike the shadow parser');
+
+  // And it comes back on relaunch.
+  await app.close();
+  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
+  page = await app.firstWindow();
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+  await typeCommand(`cd "${plain}"`);
+  await expect(statusTitle()).toHaveText('Spike the shadow parser', { timeout: 10_000 });
+
+  await app.close();
+  rmSync(plain, { recursive: true, force: true });
   rmSync(home, { recursive: true, force: true });
 });
 

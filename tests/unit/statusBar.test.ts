@@ -36,9 +36,19 @@ function mount(deps: Partial<StatusBarDeps> = {}): {
     githubRef: deps.githubRef ?? (() => Promise.resolve(null)),
     openExternal: deps.openExternal ?? (() => {}),
     setTitle: deps.setTitle ?? (() => Promise.resolve()),
+    onAlertActivate: deps.onAlertActivate ?? (() => {}),
+    onError: deps.onError ?? (() => {}),
+    loopPanelId: deps.loopPanelId ?? 'loop-panel',
   });
   return { host, bar, render: (m, repoKey = REPO) => bar.render(m, repoKey) };
 }
+
+/** Open the in-place name editor and return it. */
+function edit(host: HTMLElement): HTMLInputElement {
+  (titleEl(host) as HTMLButtonElement).click();
+  return host.querySelector<HTMLInputElement>('[data-sb-title-edit]')!;
+}
+const press = (el: HTMLElement, key: string): void => void el.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true }));
 
 const titleEl = (host: HTMLElement): HTMLElement | null => host.querySelector('[data-sb-title]');
 const alertEl = (host: HTMLElement): HTMLElement => host.querySelector('.sb-alert')!;
@@ -85,7 +95,7 @@ describe('status bar (§22.3)', () => {
       expect(titleEl(host)!.textContent).toContain('PR #57');
       await flush();
       expect(titleEl(host)!.textContent).toContain('Persist flow inputs across steps');
-      expect(githubRef).toHaveBeenCalledWith('pr', 57);
+      expect(githubRef).toHaveBeenCalledWith(REPO, 'pr', 57);
     });
 
     it('keeps showing the number when the fetch fails, rather than blanking the title', async () => {
@@ -125,15 +135,12 @@ describe('status bar (§22.3)', () => {
       expect(titleEl(host)!.textContent!.length).toBeGreaterThan(0);
     });
 
-    it('still shows a name slot — inert — for a flow that failed to load', () => {
-      // Every directory without a flow.yaml IS a load-error view, so blanking the title here would blank
-      // the bar in the commonest case of all. The machine is inert and must not persist in that state, so
-      // the slot is shown but never offered as something to edit or open.
+    it('invites a name in a directory whose flow never loaded — the case where nothing else can name it', () => {
+      // Every directory without a flow.yaml IS a load-error view, and has no PR or ticket either. The
+      // name belongs to the worktree, not to a flow that happened to load (§22.3.1).
       const { host, render } = mount();
-      render(model({ title: { kind: 'unavailable' } }));
-      expect(titleEl(host)).not.toBeNull();
-      expect(titleEl(host)!.tagName).not.toBe('BUTTON');
-      expect(host.querySelector('button')).toBeNull();
+      render(model({ title: { kind: 'user', text: '' } }));
+      expect(titleEl(host)!.tagName).toBe('BUTTON');
     });
 
     it('does not re-fetch an unchanged ref on every push', async () => {
@@ -195,7 +202,7 @@ describe('status bar (§22.3)', () => {
       const input = startEditing(host);
       type(input, 'Refactor the shadow parser');
       press(input, 'Enter');
-      expect(setTitle).toHaveBeenCalledWith('Refactor the shadow parser');
+      expect(setTitle).toHaveBeenCalledWith(REPO, 'Refactor the shadow parser');
     });
 
     it('abandons the edit on Escape, keeping the name that was there', () => {
@@ -217,7 +224,7 @@ describe('status bar (§22.3)', () => {
       const input = startEditing(host);
       type(input, 'Named by blur');
       input.dispatchEvent(new Event('blur'));
-      expect(setTitle).toHaveBeenCalledWith('Named by blur');
+      expect(setTitle).toHaveBeenCalledWith(REPO, 'Named by blur');
     });
 
     it('does not write when the name was not actually changed', () => {
@@ -236,7 +243,7 @@ describe('status bar (§22.3)', () => {
       const input = startEditing(host);
       type(input, '');
       press(input, 'Enter');
-      expect(setTitle).toHaveBeenCalledWith('');
+      expect(setTitle).toHaveBeenCalledWith(REPO, '');
     });
 
     it('keeps the editor open while a push arrives, so a live re-pull cannot eat what is being typed', () => {
@@ -273,9 +280,9 @@ describe('status bar (§22.3)', () => {
       expect(editor(host)).toBeNull();
     });
 
-    it('offers no editor for a flow that failed to load — there is nowhere to persist a name', () => {
+    it('offers no editor on a ref title — a PR name is GitHub\'s, not the user\'s to type', () => {
       const { host, render } = mount({ setTitle: () => Promise.resolve() });
-      render(model({ title: { kind: 'unavailable' } }));
+      render(model({ title: { kind: 'ticket', number: 42 } }));
       titleEl(host)!.click();
       expect(editor(host)).toBeNull();
     });
@@ -386,10 +393,172 @@ describe('status bar (§22.3)', () => {
       expect(alertBtn(host)).not.toBe(first);
     });
 
-    it('offers the gate controls: the alert is a button the shell opens the loop panel from', () => {
+    it('routes to the gate controls through its own contract, not a sibling reaching into its DOM', () => {
+      const onAlertActivate = vi.fn();
+      const { host, render } = mount({ onAlertActivate });
+      render(model({ alert: blocked }));
+      const btn = alertBtn(host)!;
+      expect(btn.tagName).toBe('BUTTON'); // operable by keyboard natively (WCAG 2.1.1)
+      btn.click();
+      expect(onAlertActivate).toHaveBeenCalledTimes(1);
+    });
+
+    it('names the panel it controls, so the relationship is programmatic (WCAG 4.1.2)', () => {
+      const { host, render } = mount({ loopPanelId: 'loop-panel' });
+      render(model({ alert: blocked }));
+      expect(alertBtn(host)!.getAttribute('aria-controls')).toBe('loop-panel');
+    });
+
+    it('spells the alert out for assistive tech rather than reading an internal token (WCAG 2.4.6)', () => {
       const { host, render } = mount();
       render(model({ alert: blocked }));
-      expect(alertBtn(host)!.tagName).toBe('BUTTON'); // operable by keyboard natively (WCAG 2.1.1)
+      const name = alertBtn(host)!.getAttribute('aria-label')!;
+      expect(name).toContain('iteration 9'); // not the abbreviation `iter`
+      expect(name).toContain('pull request 179');
+    });
+
+    it('strips control characters out of a repo-supplied status before it reaches the human (CWE-117)', () => {
+      const { host, render } = mount();
+      render(model({ alert: { ...blocked, status: 'awaiting\x00\x1bhuman' } }));
+      expect(alertBtn(host)!.textContent).not.toMatch(/[\x00-\x1f]/);
+    });
+  });
+
+  // CLAUDE.md: every payload carries the identity of the resource it acts on, and the receiver never
+  // re-derives that target from ambient state. The editor commits on blur, and the cwd moves under it.
+  describe('a name commits against the repo it was typed for', () => {
+    it('commits to the repo the editor was opened in, even after the terminal has cd-ed elsewhere', () => {
+      const setTitle = vi.fn(() => Promise.resolve());
+      const { host, render } = mount({ setTitle });
+      render(model({ title: { kind: 'user', text: '' } }), '/repoA');
+      const input = edit(host);
+      input.value = 'Refactor the shadow parser';
+      render(model({ title: { kind: 'user', text: '' } }), '/repoB'); // a cd lands while the editor is open
+      input.dispatchEvent(new FocusEvent('blur'));
+      expect(setTitle).toHaveBeenCalledWith('/repoA', 'Refactor the shadow parser');
+    });
+
+    it('resolves a ref against the repo that asked for it, so another repo cannot answer for it', async () => {
+      const githubRef = vi.fn(() => Promise.resolve(ref()));
+      const { render } = mount({ githubRef });
+      render(model({ title: { kind: 'pr', number: 7 } }), '/repoA');
+      expect(githubRef).toHaveBeenCalledWith('/repoA', 'pr', 7);
+      await flush();
+      // The same ref NUMBER in a different repo is a different ref: a fetch issued for A must not land
+      // on B's identically-numbered PR, painting one repo's private title into another's bar.
+      githubRef.mockReturnValue(Promise.resolve(ref({ title: 'B secret', url: 'https://github.com/o/b/pull/7' })));
+      render(model({ title: { kind: 'pr', number: 7 } }), '/repoB');
+      expect(githubRef).toHaveBeenLastCalledWith('/repoB', 'pr', 7);
+    });
+  });
+
+  describe('the editor never lies about what was saved, and never strands the keyboard', () => {
+    it('commits once on Enter — the blur that follows the input being removed must not write again', () => {
+      const setTitle = vi.fn(() => Promise.resolve());
+      const { host, render } = mount({ setTitle });
+      render(model({ title: { kind: 'user', text: '' } }));
+      const input = edit(host);
+      input.value = 'Named';
+      press(input, 'Enter');
+      input.dispatchEvent(new FocusEvent('blur')); // removing a focused element fires blur
+      expect(setTitle).toHaveBeenCalledTimes(1);
+    });
+
+    it('abandons on Escape — and the blur that follows must not commit the name the user just discarded', () => {
+      const setTitle = vi.fn(() => Promise.resolve());
+      const { host, render } = mount({ setTitle });
+      render(model({ title: { kind: 'user', text: '' } }));
+      const input = edit(host);
+      input.value = 'Discarded';
+      press(input, 'Escape');
+      input.dispatchEvent(new FocusEvent('blur'));
+      expect(setTitle).not.toHaveBeenCalled();
+    });
+
+    it('returns focus to the name it replaced, rather than dropping it on the body (WCAG 2.4.3)', () => {
+      const { host, render } = mount();
+      render(model({ title: { kind: 'user', text: 'Named' } }));
+      const input = edit(host);
+      input.focus();
+      press(input, 'Enter');
+      expect(document.activeElement).toBe(titleEl(host));
+      expect(document.activeElement).not.toBe(document.body);
+    });
+
+    it('returns focus after an abandoned edit too', () => {
+      const { host, render } = mount();
+      render(model({ title: { kind: 'user', text: 'Named' } }));
+      const input = edit(host);
+      input.focus();
+      press(input, 'Escape');
+      expect(document.activeElement).toBe(titleEl(host));
+    });
+
+    it('surfaces why a name could not be saved, rather than reverting with no reason given', async () => {
+      const onError = vi.fn();
+      const { host, render } = mount({ setTitle: () => Promise.reject('EROFS'), onError }); // a bare string, not an Error
+      render(model({ title: { kind: 'user', text: '' } }));
+      const input = edit(host);
+      input.value = 'never lands';
+      press(input, 'Enter');
+      await flush();
+      expect(onError).toHaveBeenCalledTimes(1);
+      expect(String(onError.mock.calls[0][0])).toContain('EROFS');
+    });
+
+    it('does not claw back a name the user has since replaced when a slow rejection finally lands', async () => {
+      let reject: (e: unknown) => void = () => {};
+      const setTitle = vi
+        .fn()
+        .mockImplementationOnce(() => new Promise((_, r) => (reject = r)))
+        .mockImplementation(() => Promise.resolve());
+      const { host, render } = mount({ setTitle });
+      render(model({ title: { kind: 'user', text: '' } }));
+      const first = edit(host);
+      first.value = 'First';
+      press(first, 'Enter');
+      const second = edit(host);
+      second.value = 'Second';
+      press(second, 'Enter');
+      reject(new Error('EROFS')); // the FIRST write's rejection, arriving after the second name was typed
+      await flush();
+      expect(titleEl(host)!.textContent).toBe('Second');
+    });
+  });
+
+  describe('a control is offered only where it can act', () => {
+    it('does not present an unresolvable ref as an operable control (WCAG 4.1.2)', async () => {
+      // `gh` absent, offline, or the repo private: the number stays, but a button that swallows every
+      // click advertises an action it can never perform.
+      const { host, render } = mount({ githubRef: () => Promise.resolve(null) });
+      render(model({ title: { kind: 'pr', number: 179 } }));
+      await flush();
+      expect(titleEl(host)!.textContent).toBe('PR #179');
+      expect(titleEl(host)!.tagName).not.toBe('BUTTON');
+    });
+
+    it('upgrades the ref to an operable link once a url is actually in hand', async () => {
+      const openExternal = vi.fn();
+      const { host, render } = mount({ githubRef: () => Promise.resolve(ref()), openExternal });
+      render(model({ title: { kind: 'pr', number: 57 } }));
+      await flush();
+      const link = titleEl(host)!;
+      expect(link.textContent).toBe('Persist flow inputs across steps');
+      expect(link.getAttribute('role')).toBe('link'); // it navigates; it does not act (WAI-ARIA APG)
+      link.click();
+      expect(openExternal).toHaveBeenCalledWith('https://github.com/o/r/pull/57');
+    });
+
+    it('never opens the ref the bar has moved off, once it moves to one that never resolves', async () => {
+      const openExternal = vi.fn();
+      const githubRef = vi.fn().mockResolvedValueOnce(ref()).mockResolvedValue(null);
+      const { host, render } = mount({ githubRef, openExternal });
+      render(model({ title: { kind: 'pr', number: 57 } }));
+      await flush();
+      render(model({ title: { kind: 'ticket', number: 42 } }));
+      await flush();
+      titleEl(host)!.click();
+      expect(openExternal).not.toHaveBeenCalled();
     });
   });
 
@@ -400,12 +569,60 @@ describe('status bar (§22.3)', () => {
     expect(host.childElementCount).toBe(0);
   });
 
+  it('does not commit a half-typed name as a side effect of being torn down', () => {
+    // dispose() detaches the focused input, which fires blur — and blur commits. A teardown must not
+    // write what the user never finished typing.
+    const setTitle = vi.fn(() => Promise.resolve());
+    const { host, bar, render } = mount({ setTitle });
+    render(model({ title: { kind: 'user', text: '' } }));
+    const input = edit(host);
+    input.value = 'half-typ';
+    bar.dispose();
+    input.dispatchEvent(new FocusEvent('blur'));
+    expect(setTitle).not.toHaveBeenCalled();
+  });
+
   it('renders from the host document (relocatable, UI-STANDARDS §2.2)', async () => {
     await assertRendersFromHostDocument((host) =>
-      createStatusBar(host, { githubRef: () => Promise.resolve(null), openExternal: () => {}, setTitle: () => Promise.resolve() }).render(
-        model({ alert: blocked }),
-        REPO,
-      ),
+      createStatusBar(host, {
+        githubRef: () => Promise.resolve(null),
+        openExternal: () => {},
+        setTitle: () => Promise.resolve(),
+        onAlertActivate: () => {},
+        onError: () => {},
+        loopPanelId: 'loop-panel',
+      }).render(model({ alert: blocked }), REPO),
     );
+  });
+
+  // UI-STANDARDS §3.3: relocatability is only true when a test proves it — the SAME organism, unchanged,
+  // in TWO placements, with the SAME behavioral assertions run against both.
+  it('behaves identically in two different placements (UI-STANDARDS §3.3 relocation)', () => {
+    const place = (): { host: HTMLElement; onAlertActivate: ReturnType<typeof vi.fn>; setTitle: ReturnType<typeof vi.fn> } => {
+      const onAlertActivate = vi.fn();
+      const setTitle = vi.fn(() => Promise.resolve());
+      const { host, render } = mount({ onAlertActivate, setTitle });
+      render(model({ title: { kind: 'user', text: 'Named' }, activity: { phrase: 'Working' }, alert: blocked }));
+      return { host, onAlertActivate, setTitle };
+    };
+    const railFrame = document.createElement('section'); // two genuinely different placements
+    const mainFrame = document.createElement('main');
+    document.body.append(railFrame, mainFrame);
+
+    const a = place();
+    const b = place();
+    railFrame.appendChild(a.host);
+    mainFrame.appendChild(b.host);
+
+    for (const p of [a, b]) {
+      expect(p.host.querySelector('.sb-activity')!.textContent).toContain('Working');
+      alertBtn(p.host)!.click();
+      expect(p.onAlertActivate).toHaveBeenCalledTimes(1); // the alert routes from either frame
+      const input = edit(p.host);
+      input.value = 'Renamed';
+      press(input, 'Enter');
+      expect(p.setTitle).toHaveBeenCalledWith(REPO, 'Renamed'); // and the name commits from either frame
+    }
+    expect(a.host.innerHTML).toBe(b.host.innerHTML);
   });
 });

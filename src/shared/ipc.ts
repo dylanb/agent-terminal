@@ -580,8 +580,8 @@ export interface FlowStateView {
    *  Present only on an `in_progress` view (computed by main from the repo's todos + §8.3 activity). */
   derived?: FlowDerived;
   /** What the loop MECHANICS are doing right now (§26): a phrase — bootstrapping, waiting for the agent,
-   *  working, running reviewers, consolidating. Present exactly while the loop is active (its presence
-   *  drives the strip's spinner). Top-level (NOT under `loop`) because a bootstrap runs before
+   *  working, running reviewers, consolidating. The descriptor's PRESENCE is "the loop is busy"; there is
+   *  no idle descriptor. Top-level (NOT under `loop`) because a bootstrap runs before
    *  `.agent-loop/state.yaml` exists; absent when the loop mechanics are idle. */
   loopActivity?: LoopActivity;
   /** Read-only agent-loop state.yaml mirror (§24.2.3 T2): present once a `loop` step has been entered
@@ -592,7 +592,7 @@ export interface FlowStateView {
    *  inputs and the loop's state.yaml, gated on flow progress (see `FlowRefs`). The renderer fetches each
    *  one's title/body/url lazily via `flow:githubRef`. */
   refs?: FlowRefs;
-  /** The name the user gave this worktree's work (§22.3), persisted in flow-state.yaml. The status bar
+  /** The name the user gave this worktree's work (§22.3.1), persisted in flow-state.yaml. The status bar
    *  shows it only when neither a PR nor a ticket supplies a title (`deriveStatusBar`) — it is outranked,
    *  never discarded, so it returns if the refs go away. Absent when the user has named nothing. */
   userTitle?: string;
@@ -676,9 +676,9 @@ export interface FlowProvideInputMsg {
   values: Record<string, string>;
 }
 
-/** flow:setTitle request (§22.3): the name the user typed into the status bar for the repo's work. A blank
- *  `title` CLEARS the name (it never persists as an empty string). Answered with the new view, so the bar
- *  repaints from the same state everything else reads. */
+/** flow:setTitle request (§22.3.1): the name the user typed into the status bar for `repoKey`'s work. A
+ *  blank `title` CLEARS the name. The name is bounded by TITLE_MAX and normalized by `normalizeTitle` —
+ *  one predicate, shared with the on-disk store, so what the bar paints and what lands cannot disagree. */
 export interface FlowSetTitleMsg {
   sessionId: SessionId;
   repoKey: string;
@@ -915,7 +915,7 @@ export interface FlowApi {
    *  flow-state and re-run the entry bootstrap (`agent-loop pickup <input>`), returning the new
    *  view (its `notice` carries any §19.3 busy refusal). */
   provideInput(repoKey: string, values: Record<string, string>): Promise<FlowStateView>;
-  /** Name the repo's work, or clear the name with a blank (§22.3). Resolves to the new view. */
+  /** Name the repo's work, or clear the name with a blank (§22.3.1). Resolves to the new view. */
   setTitle(repoKey: string, title: string): Promise<FlowStateView>;
   /** Subscribe to main's flow:onStateChanged push (§24.2.2 S5): `cb` fires when a flow-relevant
    *  input changed (todo/activity), prompting a `state()` re-pull. Returns an unsubscribe. */

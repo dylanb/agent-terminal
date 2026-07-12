@@ -85,23 +85,34 @@ const shell = createShell(document.getElementById('app')!, {
 
 wireCrossHighlight(document.getElementById('app')!);
 
-// The always-visible status bar (§22.3): the flow strip feeds it its model (below). It resolves ref
-// titles through window.flow, repo-scoped at call time (the cwd may move between renders), and opens
-// links via the validated openExternal seam — the same contract the docked loop panel uses.
+// WCAG 2.4.3: a dialog's opener can be detached by a strip re-render while it is open; land focus on a
+// stable target instead of <body>.
+const landFocus = (): void => {
+  if (!flowStrip?.focusLoopReadout()) shell.focusView('1');
+};
+// §26.9 — a bootstrap failure, a §26.3/D48 loop-mechanics failure, and a name that could not be saved
+// all surface through this one blocking dialog: no failure on a path the user asked for is silent.
+const errorHost = document.getElementById('flow-error-host');
+const errorDialog = errorHost ? createErrorDialog(errorHost, { onFocusLost: landFocus }) : undefined;
+if (errorDialog) {
+  window.flow.onBootstrapError((reason) => errorDialog.render({ title: 'Bootstrap failed', message: reason }));
+  window.flow.onLoopError((reason) => errorDialog.render({ title: 'Loop error', message: reason }));
+}
+
+// The always-visible status bar (§22.3.1). Every seam takes the repo it acts on from the bar, which
+// captured it when the work was named or the ref painted — never from repo.repoKey() at call time, which
+// would answer with wherever the terminal has since cd-ed to (CLAUDE.md).
 // The OS notification's activation pushes flow:revealLoop, answered by revealLoopReadout via Shell seams.
+const loopPanelHost = document.getElementById('loop-panel');
 const statusBarHost = document.getElementById('status-bar');
 const statusBar = statusBarHost
   ? createStatusBar(statusBarHost, {
-      githubRef: (kind, number) => {
-        const key = repo.repoKey();
-        return key ? window.flow.githubRef(key, kind, number) : Promise.resolve(null);
-      },
+      githubRef: (key, kind, number) => window.flow.githubRef(key, kind, number),
       openExternal: (url) => void window.flow.openExternal(url),
-      setTitle: async (text) => {
-        const key = repo.repoKey();
-        if (key === null) return; // the bar offers no editor without a repo, so this cannot strand a name
-        await window.flow.setTitle(key, text);
-      },
+      setTitle: async (key, text) => void (await window.flow.setTitle(key, text)),
+      onAlertActivate: () => shell.openLoopPanel(statusBarHost.querySelector<HTMLElement>('[data-status-alert]') ?? undefined),
+      onError: (reason) => errorDialog?.render({ title: 'Could not save the name', message: reason }),
+      loopPanelId: loopPanelHost?.id ?? '',
     })
   : undefined;
 window.flow.onRevealLoop(() => revealLoopReadout(shell));
@@ -112,7 +123,6 @@ const flowStripHost = document.getElementById('flow-strip');
 if (flowStripHost) {
   // The strip is the single puller of flow state: it hands the loop mirror to the docked loop panel
   // (§24.2.3 T2) through the contract, not a DOM reach-across. No loop → clear + close.
-  const loopPanelHost = document.getElementById('loop-panel');
   // The panel resolves ticket/PR detail through window.flow, repo-scoped at call time (the cwd may move
   // between renders), and opens links via the validated openExternal seam (§24.2.3 T7).
   const loopPanel = loopPanelHost
@@ -138,11 +148,6 @@ if (flowStripHost) {
     : undefined;
   // Same single-puller contract for the typed-input modal (§24.2.3 T3): on a step-entry prompt the
   // strip hands it the prompt + a submit closure; the modal collects values and submit calls provideInput.
-  // WCAG 2.4.3: a dialog's opener can be detached by a strip re-render while it is open; land focus on a
-  // stable target instead of <body>. The same cross-organism fallback the attention cue uses.
-  const landFocus = (): void => {
-    if (!flowStrip?.focusLoopReadout()) shell.focusView('1');
-  };
   const modalHost = document.getElementById('flow-modal-host');
   const inputModal = modalHost ? createFlowInputModal(modalHost, { onFocusLost: landFocus }) : undefined;
   // Terminate confirmation (#26): a separate destructive modal-dialog organism. The strip hands it the
@@ -150,17 +155,6 @@ if (flowStripHost) {
   // (window.monitor owns the count — the strip stays flow-only, §9.1) and gates the IPC call.
   const confirmHost = document.getElementById('flow-confirm-host');
   const confirmDialog = confirmHost ? createConfirmDialog(confirmHost, { onFocusLost: landFocus }) : undefined;
-  // Bootstrap-failure alert (§26.9): main pushes flow:onBootstrapError when a loop step's async pickup
-  // failed and rolled the flow back. Raise a blocking dialog so the failure is never silent; the strip
-  // re-pulls the rolled-back state via the accompanying flow:onStateChanged push.
-  const errorHost = document.getElementById('flow-error-host');
-  const errorDialog = errorHost ? createErrorDialog(errorHost, { onFocusLost: landFocus }) : undefined;
-  if (errorDialog) {
-    window.flow.onBootstrapError((reason) => errorDialog.render({ title: 'Bootstrap failed', message: reason }));
-    // §26.3/§26.6/D48 — a loop-mechanics failure AFTER bootstrap (a turn-runner error or an un-persistable
-    // gate transition) is surfaced through the same blocking dialog, so no run-time failure is silent.
-    window.flow.onLoopError((reason) => errorDialog.render({ title: 'Loop error', message: reason }));
-  }
   // Bootstrap-conflict confirm (§26.9): main pushes flow:onBootstrapConflict when a re-pickup hit an
   // existing branch under a wipe-and-retry policy. Confirm-first — the wipe is destructive + outward-facing
   // (deletes the branch on origin, closes its PR), so the operator answers a blocking confirm; the answer
@@ -182,7 +176,7 @@ if (flowStripHost) {
         syncExpanded: () => shell.syncLoopReadout(),
       });
     },
-    onStatusBar: (model) => statusBar?.render(model, repo.repoKey()),
+    onStatusBar: (model, key) => statusBar?.render(model, key),
     onPrompt: (prompt, stepName, submit) => inputModal?.render(prompt, stepName, submit),
     onTerminate: confirmDialog
       ? createTerminateConfirm({ todoList: window.monitor.todoList, dialog: confirmDialog })

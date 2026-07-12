@@ -107,6 +107,61 @@ describe('flow-state store (§24.2.2 S3 / §19.1)', () => {
     }
   });
 
+  // §22.3.1 — the name belongs to the WORKTREE, not to a flow that happened to load. A directory with no
+  // flow.yaml has no PR and no ticket either, so the user title is the only thing that can ever name it.
+  describe('the worktree name, independent of the flow progression', () => {
+    it('names a directory that has no progression at all', () => {
+      createFlowStateStore(dir).writeTitle('Spike the parser');
+      expect(createFlowStateStore(dir).readTitle()).toBe('Spike the parser');
+    });
+
+    it('leaves an existing progression untouched when only the name changes', () => {
+      const store = createFlowStateStore(dir);
+      store.write({ step: 'plan', status: 'in_progress', inputs: { ticket: '42' }, startedAt: 1234 });
+      store.writeTitle('Refactor the shadow parser');
+      expect(createFlowStateStore(dir).read()).toEqual({
+        step: 'plan',
+        status: 'in_progress',
+        inputs: { ticket: '42' },
+        startedAt: 1234,
+        title: 'Refactor the shadow parser',
+      });
+    });
+
+    it('clears the name without disturbing the progression', () => {
+      const store = createFlowStateStore(dir);
+      store.write({ step: 'plan', status: 'in_progress', title: 'gone' });
+      store.writeTitle(null);
+      expect(createFlowStateStore(dir).readTitle()).toBeNull();
+      expect(createFlowStateStore(dir).read()).toEqual({ step: 'plan', status: 'in_progress' });
+    });
+
+    it('reads a name off a file whose progression is corrupt, rather than losing it with the rest', () => {
+      mkdirSync(join(dir, '.agent-terminal'), { recursive: true });
+      writeFileSync(join(dir, '.agent-terminal', 'flow-state.yaml'), 'step: x\ntitle: Still named\n'); // no status
+      expect(createFlowStateStore(dir).read()).toBeNull();
+      expect(createFlowStateStore(dir).readTitle()).toBe('Still named');
+    });
+
+    it('bounds a repo-supplied name, which is re-parsed on every state query (CWE-400)', () => {
+      mkdirSync(join(dir, '.agent-terminal'), { recursive: true });
+      writeFileSync(join(dir, '.agent-terminal', 'flow-state.yaml'), `step: plan\nstatus: in_progress\ntitle: ${'x'.repeat(10_000)}\n`);
+      expect(createFlowStateStore(dir).readTitle()!.length).toBe(200);
+    });
+  });
+
+  // A write that REFUSES silently is worse than one that throws: the caller reports success, the bar
+  // paints the name, and the next state pull makes it vanish with no error and no way back.
+  describe('a write that cannot land must not report success', () => {
+    it('throws rather than silently writing nothing when .agent-terminal is a symlink', () => {
+      const elsewhere = mkdtempSync(join(tmpdir(), 'flow-elsewhere-'));
+      symlinkSync(elsewhere, join(dir, '.agent-terminal'));
+      expect(() => createFlowStateStore(dir).write({ step: 'plan', status: 'in_progress' })).toThrow();
+      expect(() => createFlowStateStore(dir).writeTitle('never lands')).toThrow();
+      rmSync(elsewhere, { recursive: true, force: true });
+    });
+  });
+
   it('reads null on a corrupt/unparseable file rather than throwing', () => {
     mkdirSync(join(dir, '.agent-terminal'), { recursive: true });
     writeFileSync(join(dir, '.agent-terminal', 'flow-state.yaml'), 'status: : : broken\n\t- x');

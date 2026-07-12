@@ -8,6 +8,7 @@ import path from 'node:path';
 import yaml from 'js-yaml';
 import type { AgentState, FlowPrompt, FlowRefs, FlowStateView, FlowStatus, TodoItem } from '../shared/ipc';
 import { hasFlowRefs } from '../shared/ipc';
+import { normalizeTitle } from '../shared/statusBar';
 import { createFlowStateStore, type FlowStateStore } from './flowState';
 import type { AgentLoopState } from './agentLoopBridge';
 import { gateForStatus, type LoopDef } from './loopDef';
@@ -15,7 +16,7 @@ import { isHumanNeededStatus } from '../shared/loopStatus';
 import { isRecord } from './yamlRecord';
 
 /**
- * Single source of truth for "the loop needs you" (§24.2.3 T4), consumed by both the in-app cue and
+ * Single source of truth for "the loop needs you" (§24.2.3 T4), consumed by both the status bar's alert and
  * the OS notification. With a LoopDef this is gate-driven; without one it degrades to the shared
  * awaiting-human/impasse family. Both paths classify the shipped vocabulary identically.
  */
@@ -215,7 +216,7 @@ export interface FlowMachine {
   /** Record the answer to a step-entry input prompt (§18.4 / §24.2.3 T3) and RE-ENTER the current
    *  step so the now-satisfied bootstrap runs. Legal only while a step is in_progress. */
   provideInput(values: Record<string, string>): FlowStateView;
-  /** Name this worktree's work (§22.3), or clear the name with a blank. Legal from EVERY status — the
+  /** Name this worktree's work (§22.3.1), or clear the name with a blank. Legal from EVERY status — the
    *  name describes the worktree, not the run — but inert in the error state, where nothing may persist. */
   setTitle(text: string): FlowStateView;
 }
@@ -250,17 +251,36 @@ export function createFlowMachine(
   now: () => number = Date.now,
 ): FlowMachine {
   if (!load.ok) {
-    const view = (): FlowStateView => ({
-      stepName: '',
-      steps: [],
-      position: 0,
-      total: 0,
-      status: 'error',
-      error: load.error,
-    });
-    // Every transition is inert in the error state, and crucially never persists — so a bad flow.yaml
-    // can't overwrite a good on-disk progression, and a racing caller can't throw or escape the error.
-    return { state: view, start: view, advance: view, restart: view, undo: view, revertStep: view, terminate: view, provideInput: view, setTitle: view };
+    const view = (): FlowStateView => {
+      const named = store?.readTitle() ?? null;
+      return {
+        stepName: '',
+        steps: [],
+        position: 0,
+        total: 0,
+        status: 'error',
+        error: load.error,
+        ...(named !== null ? { userTitle: named } : {}),
+      };
+    };
+    // Every PROGRESSION transition is inert here, so a bad flow.yaml cannot overwrite a good on-disk
+    // progression. The name is not a progression: it names the worktree (§22.3.1), and a directory with
+    // no flow.yaml has no PR or ticket either, so it is the only name such a directory can ever have —
+    // writeTitle leaves every other key on disk untouched.
+    return {
+      state: view,
+      start: view,
+      advance: view,
+      restart: view,
+      undo: view,
+      revertStep: view,
+      terminate: view,
+      provideInput: view,
+      setTitle: (text) => {
+        store?.writeTitle(normalizeTitle(text));
+        return view();
+      },
+    };
   }
 
   const def = load.definition;
@@ -286,7 +306,7 @@ export function createFlowMachine(
   // §26.10 — when THIS run of the flow began. The cost meter sweeps session logs from here, so it must
   // survive every transition within a run and never outlive one.
   let startedAt: number | null = null;
-  // §22.3 — the name the user gave this worktree's work. Unlike `inputs`/`startedAt` it names the
+  // §22.3.1 — the name the user gave this worktree's work. Unlike `inputs`/`startedAt` it names the
   // worktree, not the run, so no transition clears it — a terminate/restart must give the name back.
   let userTitle: string | null = null;
 
@@ -301,6 +321,8 @@ export function createFlowMachine(
     inputs = {};
     startedAt = null;
     userTitle = null;
+    // The name outlives any progression this definition can resume, so it is read on its own.
+    userTitle = store.readTitle();
     const persisted = store.read();
     if (!persisted) return;
     const i = names.indexOf(persisted.step);
@@ -310,7 +332,6 @@ export function createFlowMachine(
     }
     if (persisted.inputs) inputs = { ...persisted.inputs };
     if (persisted.startedAt !== undefined) startedAt = persisted.startedAt;
-    if (persisted.title !== undefined) userTitle = persisted.title;
   };
   hydrate();
 
@@ -458,9 +479,15 @@ export function createFlowMachine(
       return enter(view());
     },
     setTitle: (text) => {
-      const named = text.trim();
-      userTitle = named.length > 0 ? named : null; // a blank clears the name; it never persists as ""
-      persist();
+      hydrate(); // §19.1 — merge the name onto the progression on disk, never onto a stale snapshot
+      const prev = userTitle;
+      userTitle = normalizeTitle(text);
+      try {
+        persist();
+      } catch (e) {
+        userTitle = prev; // else the next transition commits a name the UI already reported as failed
+        throw e;
+      }
       return view();
     },
   };
@@ -481,7 +508,7 @@ export interface FlowManager {
   revertStep(repoKey: string, fromStepId: string): FlowStateView;
   terminate(repoKey: string): FlowStateView;
   provideInput(repoKey: string, values: Record<string, string>): FlowStateView;
-  /** Name a repo's work, or clear the name with a blank (§22.3). */
+  /** Name a repo's work, or clear the name with a blank (§22.3.1). */
   setTitle(repoKey: string, text: string): FlowStateView;
 }
 
