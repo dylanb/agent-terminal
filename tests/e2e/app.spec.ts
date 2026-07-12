@@ -120,11 +120,12 @@ async function cdToTempDir(marker: string): Promise<void> {
   await expect(page.locator('.status-chip[data-status="agent"]')).toContainText('quiet', { timeout: 6_000 });
 }
 
-// Electron's window event under full-suite load: the process is real and the window does arrive, but a
-// cold launch competing with 145 siblings can exceed Playwright's 30s default and fail at firstWindow()
-// before any assertion runs. That is a launch-tail budget, not a product race — the same test passes in
-// 2.9s alone. Budget it once, here, rather than leaving each of the ~62 launch sites to lose the race.
-const WINDOW_TIMEOUT_MS = 90_000;
+// Electron's window event under full-suite load: the window does arrive, but a cold launch competing with
+// its siblings can exceed Playwright's 30s default and fail at firstWindow() before any assertion runs —
+// a launch-tail budget, not a product race (the same test passes in 2.9s alone). The ceiling is the
+// per-test `timeout` in playwright.config.ts, which counts beforeEach against it, so this must fit under
+// it with room for the test itself.
+const WINDOW_TIMEOUT_MS = 45_000;
 
 test.beforeEach(async () => {
   freshenedDirs = new Set();
@@ -5180,7 +5181,7 @@ test('launching at a target directory roots the shell, viewer, and todo scope th
     env: { ...process.env, APP_SHELL: 'bash', APP_SUBMIT_DELAY_MS: '100', HOME: home, APP_LAUNCH_DIR: launchDir },
   });
   try {
-    page = await launched.firstWindow();
+    page = await launched.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
     await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
     // Artifact viewer root (§20.1) and todo/repo scope (§16.3) read the launch root, before any cd.
@@ -5239,7 +5240,7 @@ test('launching at an unusable target falls back to $HOME across the surfaces (�
     },
   });
   try {
-    page = await launched.firstWindow();
+    page = await launched.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
     await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
     // Viewer + repo scope fall back to F (= $HOME), not the bogus target.
@@ -5284,8 +5285,8 @@ test('two concurrent instances each root at their own target directory (§23.4)'
     env: { ...process.env, APP_SHELL: 'bash', APP_SUBMIT_DELAY_MS: '100', APP_LAUNCH_DIR: dirB },
   });
   try {
-    const pageA = await appA.firstWindow();
-    const pageB = await appB.firstWindow();
+    const pageA = await appA.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+    const pageB = await appB.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
     await expect(pageA.locator('.xterm-rows')).not.toHaveText('', { timeout: 15_000 });
     await expect(pageB.locator('.xterm-rows')).not.toHaveText('', { timeout: 15_000 });
 

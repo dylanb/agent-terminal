@@ -1,4 +1,4 @@
-import { userEvent } from 'vitest/browser';
+import { userEvent, page } from 'vitest/browser';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import '../../src/renderer/src/styles.css';
 import { createInstallExamples } from '../../src/renderer/src/installExamples';
@@ -289,5 +289,101 @@ describe('install consent dialog stays operable with a long file manifest', () =
       return moved;
     });
     expect(scrolls).toBe(true);
+  });
+});
+
+// The card's bound (`max-height:calc(100vh - 48px)`) cannot absorb every viewport: at 200% zoom, or in a
+// short window, the unshrinkable header and footer alone can exceed it. Nothing on this branch tested that
+// case — every other test runs at full size, where the card fits and the manifest bound is never reached —
+// so the whole short-viewport path shipped on an assertion that could not fail.
+describe('the consent dialog survives a short viewport (200% zoom / reflow — WCAG 1.4.4, 1.4.10)', () => {
+  let host: HTMLElement;
+
+  beforeEach(async () => {
+    await page.viewport(512, 384); // 1024x768 at 200% zoom
+    host = document.createElement('div');
+    document.body.replaceChildren(host);
+    const files = Array.from({ length: 60 }, (_, i) => `some-loop/nested/dir/file-${i}.yaml`) as DestRelativePath[];
+    createInstallExamples(host, {
+      preview: async (): Promise<InstallExamplesPreview> => ({
+        ok: true,
+        destinations: [
+          { destination: 'flow', conflict: false },
+          { destination: 'loops', conflict: true, files },
+          { destination: 'skills', conflict: false },
+          { destination: 'commands', conflict: false },
+        ],
+      }),
+      apply: async (): Promise<InstallExamplesResult> => ({ ok: true, created: [], overwritten: [], skipped: [] }),
+    });
+    (host.querySelector('.kprofile button') as HTMLButtonElement).click();
+    await vi.waitFor(() => expect(host.querySelector('.flow-modal .card')).not.toBeNull());
+  });
+
+  afterEach(async () => {
+    await page.viewport(1280, 896);
+  });
+
+  it('does not let the manifest overprint the footer actions', () => {
+    const rows = host.querySelector('.install-consent-rows') as HTMLElement;
+    const confirm = host.querySelector('.flow-modal button.confirm') as HTMLElement;
+    // The rows must stop where the footer begins — a viewport-relative cap cannot know that, so an
+    // over-tall manifest escapes the column and paints straight over the buttons.
+    expect(rows.getBoundingClientRect().bottom).toBeLessThanOrEqual(confirm.getBoundingClientRect().top + 1);
+  });
+
+  it('keeps the footer actions reachable', () => {
+    const confirm = host.querySelector('.flow-modal button.confirm') as HTMLElement;
+    const r = confirm.getBoundingClientRect();
+    expect(r.bottom).toBeLessThanOrEqual(window.innerHeight);
+    expect(r.top).toBeGreaterThanOrEqual(0);
+  });
+});
+
+// SC 1.4.10 names 320x256 as the reflow target. There the card's own bound cannot save it: the header and
+// the footer are unshrinkable, and together they already exceed the viewport — so the card must be allowed
+// to overflow a SCROLLABLE modal, and it must overflow DOWNWARD. `align-items:center` would push the top
+// edge above the viewport, and no scroll can reach content above the origin.
+describe('the consent dialog reflows at 320x256 (WCAG 1.4.10)', () => {
+  let host: HTMLElement;
+
+  beforeEach(async () => {
+    await page.viewport(320, 256);
+    host = document.createElement('div');
+    document.body.replaceChildren(host);
+    const files = Array.from({ length: 60 }, (_, i) => `some-loop/nested/dir/file-${i}.yaml`) as DestRelativePath[];
+    createInstallExamples(host, {
+      preview: async (): Promise<InstallExamplesPreview> => ({
+        ok: true,
+        destinations: [
+          { destination: 'flow', conflict: false },
+          { destination: 'loops', conflict: true, files },
+          { destination: 'skills', conflict: false },
+          { destination: 'commands', conflict: false },
+        ],
+      }),
+      apply: async (): Promise<InstallExamplesResult> => ({ ok: true, created: [], overwritten: [], skipped: [] }),
+    });
+    (host.querySelector('.kprofile button') as HTMLButtonElement).click();
+    await vi.waitFor(() => expect(host.querySelector('.flow-modal .card')).not.toBeNull());
+  });
+
+  afterEach(async () => {
+    await page.viewport(1280, 896);
+  });
+
+  it('never pushes the card above the top of the viewport, where no scroll can reach it', () => {
+    const cardEl = host.querySelector('.flow-modal .card') as HTMLElement;
+    expect(cardEl.getBoundingClientRect().top).toBeGreaterThanOrEqual(-1);
+  });
+
+  it('lets the modal scroll to whatever the card cannot fit', () => {
+    const modalEl = host.querySelector('.flow-modal') as HTMLElement;
+    const confirm = host.querySelector('.flow-modal button.confirm') as HTMLElement;
+    const reachable =
+      confirm.getBoundingClientRect().bottom <= window.innerHeight ||
+      (modalEl.scrollHeight > modalEl.clientHeight + 1 &&
+        /auto|scroll/.test(getComputedStyle(modalEl).overflowY));
+    expect(reachable).toBe(true);
   });
 });

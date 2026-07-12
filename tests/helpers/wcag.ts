@@ -1,9 +1,8 @@
-// The WCAG 2.1 colour arithmetic, once. The tests do this maths themselves — a browser tells us what it
-// PAINTED (CLAUDE.md: never re-derive a painted value by parsing CSS), and this converts those painted
-// values into the ratios the success criteria are stated in. Three copies of it had accumulated across the
-// browser project and the e2e; three copies of one formula is one bug waiting for the copy nobody updates.
+// The WCAG 2.1 colour arithmetic, once. A browser tells the tests what it PAINTED (CLAUDE.md: never
+// re-derive a painted value by parsing CSS); this turns those painted values into the ratios the success
+// criteria are stated in.
 //
-// WCAG 2.1 relative luminance and contrast ratio: https://www.w3.org/TR/WCAG21/#dfn-relative-luminance
+// https://www.w3.org/TR/WCAG21/#dfn-relative-luminance
 
 export type RGBA = [number, number, number, number];
 

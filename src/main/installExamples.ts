@@ -174,9 +174,7 @@ function resolveAll(destinations: InstallDestination[]): Resolution {
     if (files === null) {
       return { ok: false, error: `Could not install: the ${dest.id} examples are missing from this build's bundle` };
     }
-    // The roots are app-derived, so a link the USER put at one is their own config and is followed;
-    // confinement then holds inside the RESOLVED root (confinedPath.ts — resolveOwnedDirJail).
-    const jail = resolveOwnedDirJail(dest.targetDir);
+    const jail = resolveOwnedDirJail(dest.targetDir); // §18.1
     if (jail === null) return { ok: false, error: refusal(dest.id, dest.targetDir, 'unresolvable') };
     const resolved: ResolvedFile[] = [];
     for (const file of files) {

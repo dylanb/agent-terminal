@@ -798,9 +798,8 @@ describe('previewInstallExamples — the read path is confined exactly as the wr
 
 describe('applyInstallExamples — an unresolvable destination jail is a refusal, not a mid-write throw', () => {
   it('refuses when the config root itself is a dangling symlink', () => {
-    // isRealContainer passes (lstat of a dangling link is not a directory... but ENOENT-on-stat reads as
-    // "absent, mkdir will create it"), and the writability walk-up climbs past it to a real ancestor — so
-    // this reaches resolveNewDirJail, which cannot reduce the parent chain and returns null.
+    // A dangling link cannot be reduced to a real location at all, so the jail is unresolvable — which is
+    // NOT the same refusal as a link that escapes, and must not be reported as one.
     const cfgLink = path.join(configRoot, 'dangling');
     symlinkSync(path.join(configRoot, 'no-such-target'), cfgLink);
     const linked = exampleInstallDirs({ packaged: false, appPath: process.cwd() }, home, cfgLink);

@@ -183,13 +183,18 @@ export function createInstallExamples(host: HTMLElement, deps: InstallExamplesDe
         'Some places already hold files that differ from the bundled versions. Choose where to replace them — anything you leave unchecked keeps your files. Missing files are installed either way.';
       cardEl.append(h3, p);
 
-      const fieldset = d.createElement('fieldset');
+      // A <fieldset> cannot carry the flex/overflow chain this needs — Chromium renders its children in an
+      // anonymous content box, so it is neither a scroll box nor a shrinkable flex column. role="group" +
+      // aria-labelledby gives the identical grouping semantics on a box that can (WAI-ARIA `group`).
+      const fieldset = d.createElement('div');
       fieldset.className = 'install-consent';
-      const legend = d.createElement('legend');
+      fieldset.setAttribute('role', 'group');
+      const legendId = `${titleId}-consent-legend`;
+      fieldset.setAttribute('aria-labelledby', legendId);
+      const legend = d.createElement('span');
+      legend.className = 'ic-legend';
+      legend.id = legendId;
       legend.textContent = 'Replace files in';
-      // Chromium ignores `overflow` on a <fieldset> — its children render in an anonymous content box, so
-      // the element never becomes a scroll box however it is styled. The rows need a container of their
-      // own to take the overflow, or a long manifest pushes the footer actions off-screen unreachably.
       const rows = d.createElement('div');
       rows.className = 'install-consent-rows';
       fieldset.append(legend, rows);

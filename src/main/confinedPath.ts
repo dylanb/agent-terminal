@@ -44,27 +44,11 @@ export function resolveJail(anchorDir: string, ...segments: string[]): string | 
   }
 }
 
-/** A confinement jail for a not-yet-existing directory WHOSE PATH IS NAMED BY UNTRUSTED CONTENT: its parent
- *  chain resolved through symlinks in the longest existing prefix (realpathBounded), with the directory's
- *  own final segment appended UNRESOLVED — so a symlink planted AT the destination cannot adopt its target
- *  as the jail (resolveJail's guarantee, extended to a not-yet-created anchor). Null when the parent chain
- *  cannot be reduced to a symlink-free path. CWE-59.
- *
- *  When the app DERIVES the root itself rather than reading it out of content, use `resolveOwnedDirJail`:
- *  refusing a link the user put at their own config dir protects nothing and strands them. */
-export function resolveNewDirJail(dir: string): string | null {
-  const abs = path.resolve(dir);
-  const parent = realpathBounded(path.dirname(abs));
-  return parent === null ? null : path.join(parent, path.basename(abs));
-}
-
-/** A confinement jail for a directory THE APP ITSELF DERIVES (from the home dir, `CLAUDE_CONFIG_DIR`, …)
- *  rather than reads out of untrusted content — resolved through symlinks INCLUDING its own final segment,
- *  with any not-yet-created tail appended. A link the user put at their own config dir is their setup (a
- *  dotfiles repo), and the tools that READ that directory follow it, so refusing to write through it seeds
- *  nothing the reader will load while granting no protection: whatever could plant the link can already
- *  write the directory. Confinement still holds INSIDE the resolved root — a link under it that escapes is
- *  still refused (CWE-22/59). Null when the path cannot be reduced to a symlink-free real path. */
+/** A confinement jail for a directory the app itself DERIVES (`$HOME`, `CLAUDE_CONFIG_DIR`, …) rather than
+ *  reads out of untrusted content: resolved through symlinks INCLUDING its own final segment, with any
+ *  not-yet-created tail appended. Null when the path cannot be reduced to a symlink-free real path.
+ *  Confinement still holds inside the returned root — see `confinedRealPathResult` (CWE-22/59).
+ *  Following a link the user placed at their own config dir is the policy of §18.1, not of this function. */
 export function resolveOwnedDirJail(dir: string): string | null {
   return realpathBounded(path.resolve(dir));
 }
