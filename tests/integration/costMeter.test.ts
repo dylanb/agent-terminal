@@ -201,6 +201,11 @@ describe('session-log dir resolution (§26.10)', () => {
     );
   });
 
+  it('refuses a relative CLAUDE_CONFIG_DIR (null dir) so pricing degrades to zero, never anchors at cwd', () => {
+    expect(sessionLogDir('/repo/foo', { CLAUDE_CONFIG_DIR: 'relative/cfg' } as NodeJS.ProcessEnv, '/home/me')).toBeNull();
+    expect(readSessionTokens(sessionLogDir('/repo/foo', { CLAUDE_CONFIG_DIR: 'rel' } as NodeJS.ProcessEnv, '/home/me'))).toEqual([]);
+  });
+
   it('ignores a blank CLAUDE_CONFIG_DIR rather than pricing from a relative path', () => {
     expect(sessionLogDir('/repo/foo', { CLAUDE_CONFIG_DIR: '' } as NodeJS.ProcessEnv, '/home/me')).toBe(
       join('/home/me', '.claude', 'projects', '-repo-foo'),

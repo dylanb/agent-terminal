@@ -187,6 +187,17 @@ describe('shell controller (§24.1C — views, hotkeys, docked drawer, theme)', 
         alert.remove();
       });
 
+      // The guard is on the chrome-mutating METHODS, not just the chord: revealLoopReadout (an OS-notification
+      // handler) calls setViewerFullscreen + setView + openLoopPanel, and while a modal blocks the app none
+      // of them may change the chrome beneath it (WCAG 2.4.3, 2.1.1). One gate, every mutator consults it.
+      it('does not enter fullscreen or open the loop panel while a modal is open', () => {
+        expect(shell.isViewerFullscreen()).toBe(false);
+        shell.setViewerFullscreen(true);
+        expect(shell.isViewerFullscreen()).toBe(false); // refused
+        shell.openLoopPanel();
+        expect(shell.isLoopPanelOpen()).toBe(false); // refused
+      });
+
       it('never leaves the app wedged: the dialog is never hidden, so chords resume when it closes', () => {
         shell.setView('1'); // refused
         key('2'); // refused
@@ -518,6 +529,23 @@ describe('shell controller (§24.1C — views, hotkeys, docked drawer, theme)', 
       shell.setView('1');
       expect(app.classList.contains('viewer-fullscreen')).toBe(false);
       expect(onChange).toHaveBeenLastCalledWith(false);
+    });
+
+    // A global modal (errorDialog / flowInputModal) can open OVER the fullscreen viewer. Escape then belongs
+    // to the dialog, not to fullscreen — otherwise the shell's capture-phase stopPropagation() exits
+    // fullscreen and swallows the dialog's own Escape (WCAG 2.4.3). The third Escape branch, same predicate.
+    it('does not exit full screen on Escape while a modal is open', () => {
+      shell = createShell(app);
+      shell.setViewerFullscreen(true);
+      const modal = document.createElement('div');
+      modal.setAttribute('role', 'alertdialog');
+      modal.setAttribute('aria-modal', 'true');
+      const btn = document.createElement('button');
+      modal.append(btn);
+      document.body.append(modal);
+      btn.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+      expect(app.classList.contains('viewer-fullscreen')).toBe(true);
+      modal.remove();
     });
   });
 

@@ -1,28 +1,27 @@
-// Shared hardened atomic write for app-owned state (§19.1/§25): the one primitive the monitor-event
-// store, the todo store, the UI-settings store, and the flow-state store all persist through, so the
-// symlink/exclusive-create hardening lives in one place instead of being re-derived per store
-// (CLAUDE.md shared-semantics rule). The app NEVER modifies the user's .gitignore — this writes only
-// the file it is given (no-gitignore-writes rule).
+// Shared hardened atomic write for app-owned state (§19.1/§25): every app-owned persistence routes through
+// this one primitive, so the symlink/exclusive-create hardening lives in one place instead of being
+// re-derived per store (CLAUDE.md shared-semantics rule). The app NEVER modifies the user's .gitignore —
+// this writes only the file it is given (no-gitignore-writes rule).
 
 import { lstatSync, mkdirSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { isErrno } from './errno';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 
-/** True only when `dir` is a real directory or does not exist yet (mkdir will create a real one). A symlink
- *  — even to a directory — is rejected: the kernel would follow it, landing the write (state that may carry
- *  secrets) wherever the link points (CWE-59). Callers that MEAN to follow a link the user placed themselves
- *  resolve the destination first and pass the real path — see `resolveOwnedDirJail` and §18.1; what this
- *  refuses is a link the caller did not intend to traverse. A concurrent process racing the check to swap
- *  the directory after it passes is a TOCTOU residual (CWE-367) that a path-string lstat cannot close
- *  without dir-fd O_NOFOLLOW APIs Node does not expose; `wx` still blocks clobbering an existing file. */
+/** False ONLY for a non-directory confirmed in place — a symlink (even to a directory) or a plain file —
+ *  which the kernel would follow, landing the write (state that may carry secrets) wherever it points
+ *  (CWE-59). A symlink always lstats successfully, so a lstat that THROWS is never one: the write is let
+ *  through and its own error (EACCES, ENOTDIR) surfaces downstream, rather than being reported here as a
+ *  symlink that isn't there and silently dropped. Callers that MEAN to follow a link the user placed
+ *  themselves resolve the destination first and pass the real path — see `resolveOwnedDirJail` and §18.1.
+ *  A concurrent process racing the check to swap the directory after it passes is a TOCTOU residual
+ *  (CWE-367) a path-string lstat cannot close without dir-fd O_NOFOLLOW APIs Node does not expose; `wx`
+ *  still blocks clobbering an existing file. */
 export function isRealContainer(dir: string): boolean {
   try {
     return lstatSync(dir).isDirectory();
-  } catch (e) {
-    // ONLY absence is "mkdir will make a real one". Any other failure (EACCES on a parent, ENOTDIR) leaves
-    // us unable to say the container is real, and a write must not proceed on a container we could not see.
-    return isErrno(e, 'ENOENT');
+  } catch {
+    return true;
   }
 }
 

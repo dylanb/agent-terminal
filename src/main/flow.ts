@@ -13,6 +13,7 @@ import type { AgentLoopState } from './agentLoopBridge';
 import { gateForStatus, type LoopDef } from './loopDef';
 import { isHumanNeededStatus } from '../shared/loopStatus';
 import { isRecord } from './yamlRecord';
+import { errMsg } from './errno';
 
 /**
  * Single source of truth for "the loop needs you" (§24.2.3 T4), consumed by both the in-app cue and
@@ -150,7 +151,7 @@ export function loadFlowDefinition(worktreeDir: string): FlowLoad {
   try {
     doc = yaml.load(raw);
   } catch (e) {
-    return { ok: false, error: `flow.yaml is not valid YAML: ${(e as Error).message}` };
+    return { ok: false, error: `flow.yaml is not valid YAML: ${errMsg(e)}` };
   }
 
   if (!isRecord(doc)) return { ok: false, error: 'flow.yaml must be a mapping with name + steps' };

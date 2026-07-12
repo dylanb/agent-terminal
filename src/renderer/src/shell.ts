@@ -57,11 +57,10 @@ export function createShell(root: HTMLElement, deps: ShellDeps = {}): Shell {
   let theme: Theme = themeTarget.getAttribute('data-theme') === 'dark' ? 'dark' : 'light';
   let fullscreen = root.classList.contains('viewer-fullscreen');
 
-  /** A dialog opened with `aria-modal` blocks the app beneath it, so nothing may switch the view out from
-   *  under it — not a chord, not the rail, not another surface calling `setView` (loopReveal does, on an OS
-   *  notification). A switch `display:none`s a whole viewpane, and a hidden dialog is still IN the document:
-   *  focus is torn out of it, and it can never be reached to close, so the app would be wedged behind the
-   *  scrim (WCAG 2.4.3, 2.1.1). Guarding the switch, not its callers, is what makes that unreachable. */
+  /** True while an `aria-modal` dialog blocks the app beneath it. Every chrome mutation — the view switch,
+   *  fullscreen, the loop panel, the drawer chord — and the Escape branches consult this ONE gate, so a
+   *  chord, the rail, or another surface calling in (loopReveal, on an OS notification) cannot change or
+   *  hide chrome out from under an open dialog and wedge focus behind the scrim (WCAG 2.4.3, 2.1.1). */
   const modalIsOpen = (): boolean => doc.querySelector('[aria-modal="true"]') !== null;
 
   function setView(v: ViewId): void {
@@ -115,6 +114,7 @@ export function createShell(root: HTMLElement, deps: ShellDeps = {}): Shell {
     root.querySelector('.loopstat')?.setAttribute('aria-expanded', String(on));
   const focusView = (v: ViewId): void => void root.querySelector<HTMLElement>(`[data-viewbtn="${v}"]`)?.focus();
   function openLoopPanel(): void {
+    if (modalIsOpen()) return; // chrome is frozen while a modal blocks the app beneath it
     root.classList.add('loop-open');
     if (loopPanelEl) setShown(loopPanelEl, true);
     syncLoopReadout(true);
@@ -155,6 +155,7 @@ export function createShell(root: HTMLElement, deps: ShellDeps = {}): Shell {
   }
 
   function setViewerFullscreen(on: boolean): void {
+    if (modalIsOpen()) return; // chrome is frozen while a modal blocks the app beneath it
     if (on === fullscreen) return;
     fullscreen = on;
     root.classList.toggle('viewer-fullscreen', on);
@@ -177,6 +178,7 @@ export function createShell(root: HTMLElement, deps: ShellDeps = {}): Shell {
   // they reach the shell, so these chords must be intercepted ahead of any focused descendant (§22.4).
   const onKeyDown = (e: KeyboardEvent): void => {
     if (e.key === 'Escape' && fullscreen) {
+      if (modalIsOpen()) return; // a dialog over the viewer owns Escape (WCAG 2.4.3)
       e.preventDefault();
       e.stopPropagation();
       setViewerFullscreen(false);

@@ -11,6 +11,7 @@ import path from 'node:path';
 import type { PickupContract } from './loopDef';
 import { writeLoopState, type LoopStateWrite } from './loopStateWriter';
 import { numberFromGithubUrl } from '../shared/githubUrl';
+import { errMsg } from './errno';
 
 /** GitHub issue facts the pickup needs for the start commit + PR title. */
 export interface IssueInfo {
@@ -173,7 +174,7 @@ export async function runPickup(deps: PickupDeps, req: PickupRequest): Promise<P
     writeState({ status, iteration: 1, pr, branch, boundLoop: req.loopName, linkedIssues: [req.issue] });
     return { ok: true, pr, branch, status };
   } catch (e) {
-    return fail((e as Error).message);
+    return fail(errMsg(e));
   }
 }
 

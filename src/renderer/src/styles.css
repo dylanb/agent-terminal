@@ -5,6 +5,7 @@
 
 /* ---- tokens (design/shell/tokens.css) ---- */
 :root {
+  --focus-ring-w:2px; --focus-ring-offset:2px; --focus-ring-extent:calc(var(--focus-ring-w) + var(--focus-ring-offset));
   --board:#FBFCFE; --leaf:#FFFFFF; --rule:#E3E9F0; --rule-soft:#EEF2F7;
   --ink:#11161D; --muted:#5E6B7A; --signal:#0098DB; --signal-wash:rgba(0,152,219,.12);
   --attn:#E5484D; --pass:#1F9D6B;
@@ -149,7 +150,7 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible { outline:2px so
 .install-consent-opt input[type="checkbox"] { width:24px; height:24px; margin:0; accent-color:var(--signal); }
 /* The global focus rule matches button/a/[tabindex] only, so a checkbox would fall back to the UA ring
    (WCAG 2.4.7, 1.4.11). */
-.install-consent-opt input[type="checkbox"]:focus-visible { outline:2px solid var(--signal); outline-offset:2px; }
+.install-consent-opt input[type="checkbox"]:focus-visible { outline:var(--focus-ring-w) solid var(--signal); outline-offset:var(--focus-ring-offset); }
 .install-consent-opt .ic-name { font-size:12.5px; font-weight:600; }
 .install-consent-opt .ic-files { grid-column:2; font-size:12px; color:var(--dim); overflow-wrap:anywhere; }
 .seg { display:inline-flex; background:var(--hair2); border:1px solid var(--hair); border-radius:999px; padding:3px; flex:none; }
@@ -521,8 +522,8 @@ button:hover { border-color:var(--dim); }
    `scroll-padding` — insets the scrollport that sequential-focus scroll-into-view aligns against; without it
    the browser lands a focused control's BORDER BOX flush with the clip edge, and a focus ring paints OUTSIDE
    the border box, so the indicator is cut off on the very axis this box scrolls (SC 2.4.11, SC 1.4.11). The
-   inset is the app's ring extent: 2px outline + 2px offset. */
-.flow-modal .card [data-modal-scroll] { flex:1 1 auto; min-height:5rem; overflow-y:auto; scroll-padding:4px; }
+   inset is `--focus-ring-extent`, the same token the ring is drawn from, so widening the ring widens both. */
+.flow-modal .card [data-modal-scroll] { flex:1 1 auto; min-height:5rem; overflow-y:auto; scroll-padding:var(--focus-ring-extent); }
 .flow-modal .mfoot { flex:none; }
 .flow-modal h3 { font-family:"Fraunces",serif; font-weight:500; font-size:19px; margin:0 0 4px; }
 .flow-modal .ph { font-size:12.5px; color:var(--dim); margin:0 0 16px; }

@@ -7,8 +7,9 @@ import type { TodoTemplateRef } from '../shared/ipc';
 /** §18.6: the templates subdir of a flow dir, and which of its files are templates. ONE definition, shared
  *  by the reader that lists them and the installer that seeds them — two copies would let the installer
  *  seed a directory, or a file extension, the reader does not look for (CLAUDE.md writer↔reader rule). */
+export const TODO_TEMPLATES_SUBDIR = 'todo-templates';
 export function todoTemplatesDir(flowDir: string): string {
-  return path.join(flowDir, 'todo-templates');
+  return path.join(flowDir, TODO_TEMPLATES_SUBDIR);
 }
 /** The extension is spelled ONCE. Every use below derives from it — the predicate, the ref↔filename mapping
  *  in both directions — so widening it cannot leave the installer seeding files the picker lists under a

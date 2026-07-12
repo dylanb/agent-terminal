@@ -1,6 +1,6 @@
 // §18.1/§23.4/§26.5; writes route through atomicWriteFileSync (CWE-59).
 
-import { accessSync, constants, readFileSync, statSync } from 'node:fs';
+import { accessSync, constants, lstatSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { atomicWriteFileSync, isRealContainer } from './atomicFile';
 import { confinedRealPathResult, resolveOwnedDirJail, type PathRefusal } from './confinedPath';
@@ -10,7 +10,7 @@ import type { BundleLocation } from './bundleLocation';
 import { resolveExampleCommandsDir, resolveExampleFlowDir, resolveExampleLoopsDir } from './exampleAssets';
 import { listBundledSkills } from './exampleSkills';
 import { FLOW_DEF_FILE, flowHomeDir } from './flow';
-import { isTodoTemplateFile, todoTemplatesDir } from './todoTemplate';
+import { TODO_TEMPLATES_SUBDIR, isTodoTemplateFile, todoTemplatesDir } from './todoTemplate';
 import { userConfigCommandsDir, userConfigLoopsDir, userConfigSkillsDir } from './userConfig';
 import {
   INSTALL_DESTINATION_IDS,
@@ -69,16 +69,40 @@ function filesUnder(bundleDir: string): Plan {
   return walkFiles(bundleDir).map((rel) => ({ rel, src: path.join(bundleDir, rel) }));
 }
 
-/** §18.6. The subdir and the extension come from `todoTemplate`'s own resolver — the reader's — so the
- *  installer cannot seed a location or a file type the picker does not read (CLAUDE.md writer↔reader). */
+/** Plan `p` unless it is a CONFIRMED non-regular file — a symlink (even to a file) or a special file — which
+ *  the kernel would read through (CWE-59). An ABSENT file is still planned, so a mispackaged bundle missing a
+ *  required member reports a read error rather than silently installing nothing (§18.1); the same absent-vs-
+ *  present-wrong-type split `isRealContainer` makes for a write container. */
+function planUnlessLinked(p: string): boolean {
+  try {
+    return lstatSync(p).isFile();
+  } catch {
+    return true;
+  }
+}
+/** True when `p` is a real directory — false for a symlink, even one pointing at a directory. */
+function isRealDir(p: string): boolean {
+  try {
+    return lstatSync(p).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+/** §18.6. The subdir and the extension come from `todoTemplate`'s own definitions — the reader's — so the
+ *  installer cannot seed a location or a file type the picker does not read (CLAUDE.md writer↔reader). Each
+ *  planned source is a REGULAR file inside a REAL directory: a symlinked flow.yaml, or a symlinked
+ *  todo-templates dir, is skipped rather than read through (CWE-59). */
 function flowFiles(bundleDir: string): Plan {
   if (absent(bundleDir)) return null;
+  const rels: DestRelativePath[] = [];
+  if (planUnlessLinked(path.join(bundleDir, FLOW_DEF_FILE))) rels.push(destRelative(FLOW_DEF_FILE));
   const templates = todoTemplatesDir(bundleDir);
-  const subdir = path.relative(bundleDir, templates);
-  const rels: DestRelativePath[] = [destRelative(FLOW_DEF_FILE)];
-  for (const entry of readDirEntries(templates)) {
-    if (!entry.isFile || !isTodoTemplateFile(entry.name)) continue;
-    rels.push(destRelative(path.join(subdir, entry.name)));
+  if (isRealDir(templates)) {
+    for (const entry of readDirEntries(templates)) {
+      if (!entry.isFile || !isTodoTemplateFile(entry.name)) continue;
+      rels.push(destRelative(path.join(TODO_TEMPLATES_SUBDIR, entry.name)));
+    }
   }
   return rels.map((rel) => ({ rel, src: path.join(bundleDir, rel) }));
 }

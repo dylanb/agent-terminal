@@ -591,6 +591,28 @@ describe('applyInstallExamples — a mispackaged bundle is a reported error, not
     }
   });
 
+  it('does not read through a symlink in the FLOW bundle — flow.yaml or a linked todo-templates dir (CWE-59)', () => {
+    const bundleX = mkdtempSync(path.join(tmpdir(), 'bundle-flow-link-'));
+    const outside = mkdtempSync(path.join(tmpdir(), 'outside-flow-'));
+    try {
+      // flow.yaml is a symlink to outside content; and todo-templates is a symlink to an outside dir of .md
+      writeFileSync(path.join(outside, 'evil.yaml'), 'name: evil\nsteps: []\n');
+      symlinkSync(path.join(outside, 'evil.yaml'), path.join(bundleX, 'flow.yaml'));
+      mkdirSync(path.join(outside, 'evil-templates'), { recursive: true });
+      writeFileSync(path.join(outside, 'evil-templates', 'leak.md'), '# leak\n- [ ] x\n');
+      symlinkSync(path.join(outside, 'evil-templates'), path.join(bundleX, 'todo-templates'));
+
+      const res = okOf(applyInstallExamples(withBundle('flow', bundleX), []));
+      // Nothing from behind either link is installed.
+      expect(filesFor(res.created, 'flow')).toEqual([]);
+      expect(existsSync(path.join(targetDirOf('flow'), 'flow.yaml'))).toBe(false);
+      expect(existsSync(path.join(targetDirOf('flow'), 'todo-templates', 'leak.md'))).toBe(false);
+    } finally {
+      rmSync(bundleX, { recursive: true, force: true });
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
   it('installs only .md todo templates, never a non-.md flow bundle asset (§18.6)', () => {
     const bundleX = mkdtempSync(path.join(tmpdir(), 'bundle-nonmd-'));
     try {

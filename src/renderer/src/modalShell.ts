@@ -45,9 +45,10 @@ let modalSeq = 0;
 export function createModalShell(
   host: HTMLElement,
   idPrefix: string,
-  /** The user DISMISSED the dialog (Escape / scrim / Cancel). NOT fired for the build's `confirm`, nor for
-   *  `render(null)` / `dispose`. Named for the event, not the mechanism: calling it "onClose" is what led a
-   *  consumer to accept through the dismiss door and announce a cancellation over a running operation. */
+  /** The user DISMISSED the dialog — Escape, the scrim, or the build's Cancel. NOT fired for the build's
+   *  `confirm` (an accept is not a dismissal), nor for any caller-driven teardown that replaces or clears the
+   *  card — `render(build)` over an open one, `render(null)`, `dispose`. A displaced dialog's own
+   *  cancellation is the displacing caller's concern (confirmDialog's `pending`), not this signal's. */
   onDismiss?: () => void,
   opts?: ModalShellOptions,
 ): ModalShell {

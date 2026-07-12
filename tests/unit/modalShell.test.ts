@@ -63,27 +63,27 @@ describe('modal shell focus trap honors all focusable elements', () => {
   });
 });
 
-// §26.9 — an optional onClose lets a caller (confirmDialog) distinguish a user DISMISS (Escape / scrim /
+// §26.9 — an optional onDismiss lets a caller (confirmDialog) distinguish a user DISMISS (Escape / scrim /
 // the build's close) from its own programmatic teardown (render(null) / dispose), so a dialog that must
-// report cancellation to main can. onClose fires exactly on a user-driven close of an open dialog.
-describe('modal shell onClose (user-dismiss signal)', () => {
+// report cancellation to main can. onDismiss fires exactly on a user-driven close of an open dialog.
+describe('modal shell onDismiss (user-dismiss signal)', () => {
   const scrim = () => host.querySelector<HTMLElement>('.flow-scrim')!;
 
-  it('fires onClose when the open dialog is dismissed via Escape', () => {
+  it('fires onDismiss when the open dialog is dismissed via Escape', () => {
     let closes = 0;
     createModalShell(host, 'm', () => void closes++).render(cardBuild());
     modal().dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
     expect(closes).toBe(1);
   });
 
-  it('fires onClose when the scrim is clicked', () => {
+  it('fires onDismiss when the scrim is clicked', () => {
     let closes = 0;
     createModalShell(host, 'm', () => void closes++).render(cardBuild());
     scrim().click();
     expect(closes).toBe(1);
   });
 
-  it('does NOT fire onClose on programmatic render(null) or dispose (caller teardown, not a dismiss)', () => {
+  it('does NOT fire onDismiss on programmatic render(null) or dispose (caller teardown, not a dismiss)', () => {
     let closes = 0;
     const shell = createModalShell(host, 'm', () => void closes++);
     shell.render(cardBuild());
@@ -94,7 +94,7 @@ describe('modal shell onClose (user-dismiss signal)', () => {
     expect(closes).toBe(0);
   });
 
-  it('does not fire onClose when nothing is open', () => {
+  it('does not fire onDismiss when nothing is open', () => {
     let closes = 0;
     const shell = createModalShell(host, 'm', () => void closes++);
     shell.render(null); // never opened
@@ -166,11 +166,11 @@ describe('modal shell dialog role (WAI-ARIA APG / SC 4.1.2)', () => {
 });
 
 // `close` is the USER-dismiss path; a caller's own affirmative action (Confirm / Install) is NOT a dismissal
-// and must not fire `onClose`, or the organism retracts an operation it is actually about to run — the
+// and must not fire `onDismiss`, or the organism retracts an operation it is actually about to run — the
 // success path then announces "cancelled" into its own live region (WCAG 4.1.3). Every consumer needs this,
 // so the shell owns it: two hand-rolled `confirmed` flags are two chances to get it wrong.
-describe('accept vs dismiss (the onClose contract)', () => {
-  it('fires onClose when the build dismisses via close()', () => {
+describe('accept vs dismiss (the onDismiss contract)', () => {
+  it('fires onDismiss when the build dismisses via close()', () => {
     let closed = 0;
     const shell = createModalShell(host, 'x', () => closed++);
     shell.render(({ doc, close }) => {
@@ -186,7 +186,7 @@ describe('accept vs dismiss (the onClose contract)', () => {
     expect(host.firstChild).toBeNull();
   });
 
-  it('closes WITHOUT firing onClose when the build accepts via confirm()', () => {
+  it('closes WITHOUT firing onDismiss when the build accepts via confirm()', () => {
     let closed = 0;
     const shell = createModalShell(host, 'x', () => closed++);
     shell.render(({ doc, confirm }) => {

@@ -22,8 +22,11 @@ export function userConfigRootFrom(
   configDir?: string,
 ): string | null {
   const override = trimmed(configDir) ?? trimmed(env.CLAUDE_CONFIG_DIR);
-  if (override === undefined) return path.join(home, '.claude');
-  return path.isAbsolute(override) ? override : null;
+  const root = override ?? path.join(home, '.claude');
+  // The absoluteness gate is on the RESULT, not just the override branch: a defined-but-empty `$HOME` makes
+  // `os.homedir()` return '', so the unset branch is `.claude` — relative, and the same CWE-829 sink. Only an
+  // absolute root can be right; anything else is refused whichever branch produced it.
+  return path.isAbsolute(root) ? root : null;
 }
 
 export function userConfigRoot(configDir?: string): string | null {

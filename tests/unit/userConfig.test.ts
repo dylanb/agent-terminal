@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {
   userConfigRoot,
+  userConfigRootFrom,
   userConfigLoopsDir,
   userConfigSkillsDir,
   userConfigCommandsDir,
@@ -45,13 +46,8 @@ describe('userConfigRoot', () => {
     expect(userConfigRoot()).toBe(path.join(os.homedir(), '.claude'));
   });
 
-  // A RELATIVE override is the same defect wearing a different costume, and it is REACHABLE:
-  // `export CLAUDE_CONFIG_DIR="~/.claude"` does not expand the tilde inside double quotes, so the value is
-  // literally relative. `path.resolve()` would anchor it at THIS process's cwd — which is not even the cwd
-  // Claude Code (a separate process) resolves the same variable against, so no cwd we could pick is right.
-  // Anchoring at ours seeds a directory nobody reads, and when the app was launched from a repo it lands in
-  // the user's working tree — where `loopDef` would then stamp it `operator-config`, the origin §26.6 hangs
-  // `exec` authority on (CWE-829). It is refused, not guessed at.
+  // Why a relative root is refused rather than anchored at cwd (CWE-829) is on `userConfigRootFrom`; the
+  // `~/.claude` case is reachable because double quotes do not expand the tilde.
   it.each(['~/.claude', '.claude', 'relative/dir', './cfg', '  spaced/rel  '])(
     'refuses a relative CLAUDE_CONFIG_DIR (%o) rather than anchoring it at process.cwd()',
     (v) => {
@@ -62,6 +58,16 @@ describe('userConfigRoot', () => {
       expect(userConfigCommandsDir()).toBeNull();
     },
   );
+
+  // The empty-$HOME source of the same sink: os.homedir() returning '' makes the unset branch relative too.
+  // Exercised through the injected-home seam (the export's os.homedir() cannot be '' in this process).
+  it.each(['', '   ', 'relative/home'])('refuses when the home dir is not absolute (%o) and no override is set', (home) => {
+    expect(userConfigRootFrom({}, home)).toBeNull();
+  });
+
+  it('resolves against an absolute home when no override is set', () => {
+    expect(userConfigRootFrom({}, '/home/me')).toBe(path.join('/home/me', '.claude'));
+  });
 
   it('refuses a relative explicit argument too — the same domain, whichever door it arrives through', () => {
     delete process.env.CLAUDE_CONFIG_DIR;

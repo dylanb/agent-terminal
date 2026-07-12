@@ -24,7 +24,7 @@ export interface ConfirmDialog {
 export function createConfirmDialog(host: HTMLElement, opts?: { onFocusLost?: () => void }): ConfirmDialog {
   // `pending` is non-null ONLY while a dialog is open and UNANSWERED, so a later render can tell an
   // open-and-displaced dialog (still pending) from an already-answered one (nulled), and never
-  // double-fires onCancel (§26.9). The shell's `confirm` path does not fire onClose, so an accept is not
+  // double-fires onCancel (§26.9). The shell's `confirm` path does not fire onDismiss, so an accept is not
   // mistaken for a dismissal.
   let pending: ConfirmDialogOptions | null = null;
   const shell = createModalShell(
@@ -43,7 +43,7 @@ export function createConfirmDialog(host: HTMLElement, opts?: { onFocusLost?: ()
         return shell.render(null);
       }
       // Replacing a still-open, unanswered dialog counts as declining it (§26.9): run its onCancel so a
-      // rollback isn't dropped. shell.render(build) tears the old card down WITHOUT firing onClose, so this
+      // rollback isn't dropped. shell.render(build) tears the old card down WITHOUT firing onDismiss, so this
       // is the only place the displaced dialog's cancellation is signalled.
       if (pending) pending.onCancel?.();
       pending = opts;

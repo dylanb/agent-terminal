@@ -190,7 +190,7 @@ across every dialog, so it is defined **once** and composed, never re-derived:
    supplies only its card body and actions. This is the §9.1 / `src/shared` single-definition rule
    applied to dialog accessibility — two hand-rolled focus traps *will* drift, and the drift is
    invisible until a keyboard user hits it.
-2. **Identify the dialog to assistive tech.** `role="dialog"` + `aria-modal="true"` +
+2. **Identify the dialog to assistive tech.** `role="dialog"` (or `alertdialog` for a system-raised alert — errorDialog) + `aria-modal="true"` +
    `aria-labelledby` (the title node) and, when there's body copy, `aria-describedby` (the message
    node). The label/description come from real rendered nodes, not duplicated string attributes.
 3. **Move focus in on open; trap and wrap Tab; Escape closes.** Focus lands on the dialog's
@@ -215,8 +215,9 @@ across every dialog, so it is defined **once** and composed, never re-derived:
    only checks the footer: **collapse to zero height** (a `flex:1 1 auto; min-height:0` body will,
    leaving controls focusable but unpainted — focus lands where nothing is drawn, WCAG 2.2 SC 2.4.11),
    and **clip the focus ring of a control it scrolled into view** (scroll-into-view aligns the border
-   box with the clip edge, and the ring paints outside it — `scroll-padding`). The shell's stylesheet
-   styles those slots and must never reach for an organism's own class names (UI §2.3).
+   box with the clip edge, and the ring paints outside it — `scroll-padding`). The shell's stylesheet styles its OWN structural classes (`.card`, `.mfoot`, the slot attributes)
+   but must never reach for an ORGANISM's class names — that reach-across is what the slot attributes exist
+   to replace (UI §2.3).
 8. **Nothing switches the view while a dialog is open.** A view switch `display:none`s a whole
    viewpane — including one a dialog may be hosted in — tearing focus out of the open dialog; and a
    hidden dialog is still IN the document, so it can never be reached to close, wedging the app
@@ -253,5 +254,5 @@ pins for scroll and footer reachability.
 - [ ] Organisms: e2e + a passing relocation test in ≥2 placements (UI §3.2–3.3).
 - [ ] Any claim about a painted pixel (colour, contrast, focus ring, scroll, clip, reflow) pinned in the `browser` project or the e2e — never by parsing CSS (UI §3.2b).
 - [ ] If it announces transient messages: follows the Alert pattern — permanent host, empty-to-re-announce, no focusable when empty, focus restored on dismiss (UI §4).
-- [ ] If it blocks for a decision: composes `createModalShell` — `role="dialog"`/`aria-modal`, labelled + described, Tab trapped and wrapping, Escape/scrim close, focus restored to opener on close, `dispose()` tears down without restoring (UI §5).
-- [ ] …and answers it through the right door: the build's `confirm` for the user's affirmative action, `close` **only** for a dismissal. `close` fires `onClose`, so accepting through it retracts the very operation being started — the success path then announces the cancellation (WCAG 4.1.3). Never re-hand-roll a `confirmed` flag; the shell owns this.
+- [ ] If it blocks for a decision: composes `createModalShell` — `role="dialog"` (or `alertdialog`)/`aria-modal`, labelled + described, Tab trapped and wrapping, Escape/scrim close, focus restored to opener on close, `dispose()` tears down without restoring (UI §5).
+- [ ] …and answers it through the right door: the build's `confirm` for the user's affirmative action, `close` **only** for a dismissal. `close` fires `onDismiss`, so accepting through it retracts the very operation being started — the success path then announces the cancellation (WCAG 4.1.3). Never re-hand-roll a `confirmed` flag; the shell owns this.
