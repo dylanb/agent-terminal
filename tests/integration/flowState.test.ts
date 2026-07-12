@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync, symlinkSync, rmSync } from 'node:fs';
+import { chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync, symlinkSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createFlowStateStore } from '../../src/main/flowState';
@@ -82,9 +82,6 @@ describe('flow-state store (§24.2.2 S3 / §19.1)', () => {
     expect(createFlowStateStore(dir).read()).toEqual({ step: 'groom', status: 'in_progress' });
   });
 
-  // §22.3.1 — the name the user gave this worktree's work, shown by the status bar when no PR/ticket
-  // supplies a title. write() rewrites the whole file on every transition, so a title it failed to
-  // round-trip would be destroyed by the next Start/Advance the user clicked.
   it('round-trips the user title and survives a fresh store', () => {
     createFlowStateStore(dir).write({ step: 'plan', status: 'in_progress', title: 'Refactor the shadow parser' });
     expect(createFlowStateStore(dir).read()).toEqual({
@@ -107,8 +104,6 @@ describe('flow-state store (§24.2.2 S3 / §19.1)', () => {
     }
   });
 
-  // §22.3.1 — the name belongs to the WORKTREE, not to a flow that happened to load. A directory with no
-  // flow.yaml has no PR and no ticket either, so the user title is the only thing that can ever name it.
   describe('the worktree name, independent of the flow progression', () => {
     it('names a directory that has no progression at all', () => {
       createFlowStateStore(dir).writeTitle('Spike the parser');
@@ -128,23 +123,25 @@ describe('flow-state store (§24.2.2 S3 / §19.1)', () => {
       });
     });
 
-    it('re-dumps only the fields it knows — never a foreign key it read back from disk', () => {
-      // A hostile clone can ship flow-state.yaml as a symlink to a secret the user can read
-      // (~/.config/gh/hosts.yml, a kube config). Re-serializing whatever `loadDoc()` returned would
-      // slurp that secret into a repo-tracked file (CWE-59 / CWE-200). writeTitle carries forward only
-      // the progression it models, so an unknown key never survives the round-trip.
+    it('refuses to rewrite a progression with unknown fields and leaves it byte-for-byte intact', () => {
       mkdirSync(join(dir, '.agent-terminal'), { recursive: true });
+      const file = join(dir, '.agent-terminal', 'flow-state.yaml');
+      const before = 'step: plan\nstatus: in_progress\nfuture_extension: keep-me\n';
+      writeFileSync(file, before);
+      expect(() => createFlowStateStore(dir).writeTitle('Named')).toThrow(/unrecognized/i);
+      expect(readFileSync(file, 'utf8')).toBe(before);
+    });
+
+    it('does not re-serialize foreign keys from a readable file', () => {
+      mkdirSync(join(dir, '.agent-terminal'), { recursive: true });
+      const file = join(dir, '.agent-terminal', 'flow-state.yaml');
+      const before = 'step: plan\nstatus: in_progress\ngithub_token: ghp_secret_value\noauth_token: xoxb-leak\n';
       writeFileSync(
-        join(dir, '.agent-terminal', 'flow-state.yaml'),
-        'step: plan\nstatus: in_progress\ngithub_token: ghp_secret_value\noauth_token: xoxb-leak\n',
+        file,
+        before,
       );
-      createFlowStateStore(dir).writeTitle('Named');
-      const onDisk = readFileSync(join(dir, '.agent-terminal', 'flow-state.yaml'), 'utf8');
-      expect(onDisk).toContain('Named');
-      expect(onDisk).not.toContain('ghp_secret_value');
-      expect(onDisk).not.toContain('oauth_token');
-      // The known progression it DID model still round-trips.
-      expect(createFlowStateStore(dir).read()).toEqual({ step: 'plan', status: 'in_progress', title: 'Named' });
+      expect(() => createFlowStateStore(dir).writeTitle('Named')).toThrow(/unrecognized/i);
+      expect(readFileSync(file, 'utf8')).toBe(before);
     });
 
     it('clears the name without disturbing the progression', () => {
@@ -167,10 +164,31 @@ describe('flow-state store (§24.2.2 S3 / §19.1)', () => {
       writeFileSync(join(dir, '.agent-terminal', 'flow-state.yaml'), `step: plan\nstatus: in_progress\ntitle: ${'x'.repeat(10_000)}\n`);
       expect(createFlowStateStore(dir).readTitle()!.length).toBe(200);
     });
+
+    it('refuses to replace malformed YAML when naming the worktree', () => {
+      mkdirSync(join(dir, '.agent-terminal'), { recursive: true });
+      const file = join(dir, '.agent-terminal', 'flow-state.yaml');
+      const before = 'status: : : broken\n\t- x';
+      writeFileSync(file, before);
+      expect(() => createFlowStateStore(dir).writeTitle('Named')).toThrow(/read|parse|unrecognized/i);
+      expect(readFileSync(file, 'utf8')).toBe(before);
+    });
+
+    it('propagates a non-absence read failure and preserves the existing state', () => {
+      mkdirSync(join(dir, '.agent-terminal'), { recursive: true });
+      const file = join(dir, '.agent-terminal', 'flow-state.yaml');
+      const before = 'step: plan\nstatus: in_progress\ninputs:\n  ticket: "42"\n';
+      writeFileSync(file, before);
+      chmodSync(file, 0o000);
+      try {
+        expect(() => createFlowStateStore(dir).writeTitle('Named')).toThrow();
+      } finally {
+        chmodSync(file, 0o600);
+      }
+      expect(readFileSync(file, 'utf8')).toBe(before);
+    });
   });
 
-  // A write that REFUSES silently is worse than one that throws: the caller reports success, the bar
-  // paints the name, and the next state pull makes it vanish with no error and no way back.
   describe('a write that cannot land must not report success', () => {
     it('throws rather than silently writing nothing when .agent-terminal is a symlink', () => {
       const elsewhere = mkdtempSync(join(tmpdir(), 'flow-elsewhere-'));

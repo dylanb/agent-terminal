@@ -90,16 +90,11 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible { outline:2px so
 .rail .foot .row { display:flex; gap:8px; align-items:center; }
 
 .main { min-width:0; display:flex; flex-direction:column; }
-/* The status bar (§22.3.1) is a flex sibling of the viewport, never an overlay: it makes room rather
-   than covering the active view. */
 .viewport { position:relative; flex:1; min-height:0; }
 [data-viewpane] { position:absolute; inset:0; display:none; }
 [data-viewpane].on { display:block; }
 
-/* Always-visible status bar (§22.3.1) — design/shell/loop-flow.html .attn-bar in its attention state.
-   The bar's height is constant (nothing wraps, and every control is bounded by --sb-line), so the
-   terminal below it never needs a refit — pinned by an e2e that measures it idle, alerted, and while the
-   name editor is open. */
+/* §22.3.1 */
 .status-bar { --sb-line:24px;
   display:flex; align-items:center; gap:12px; padding:6px 16px; flex:none; min-height:36px;
   background:var(--card); border-bottom:1px solid var(--hair); font-size:12.5px; white-space:nowrap; }
@@ -107,33 +102,27 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible { outline:2px so
 .status-bar:has(.sb-alert-btn) { background:color-mix(in srgb, var(--attn) 10%, var(--card));
   border-bottom-color:color-mix(in srgb, var(--attn) 38%, var(--hair)); }
 
-/* The truncation ladder, as shrink factors: the title yields ~all overflow before the activity yields
-   any, and the activity before the alert. Each floors rather than vanishing — content shrunk to zero
-   would be removed from perception, not merely truncated, and would leave a zero-width control still in
-   the tab order (WCAG 1.4.4 Resize Text, 1.4.10 Reflow, 2.4.11 Focus Not Obscured). */
+/* WCAG 1.4.4 / 1.4.10 / 2.4.11 */
 .status-bar .sb-title { flex:0 10000 auto; min-width:7ch; overflow:hidden; margin-right:auto; }
 .status-bar .sb-name { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
   min-height:var(--sb-line); line-height:var(--sb-line); font-size:12.5px; color:var(--text); }
 .status-bar .sb-name.empty { color:var(--dim); font-style:italic; }
-/* WCAG 2.5.8: the target is 24x24 on its own, not by grace of the spacing exception. */
+/* WCAG 2.5.8 */
 .status-bar button.sb-name { background:none; border:0; padding:0; font:inherit; cursor:pointer;
   max-width:100%; text-align:left; text-decoration:underline; text-decoration-style:dotted;
   text-underline-offset:3px; }
 .status-bar button.sb-name:hover, .status-bar button.sb-name:focus-visible { text-decoration-style:solid; }
-.status-bar button.sb-link { text-decoration-style:solid; } /* it navigates: it reads as a link */
+.status-bar button.sb-link { text-decoration-style:solid; }
 .status-bar input.sb-edit { width:min(38ch, 100%); height:var(--sb-line); background:var(--card);
   color:var(--text); border:1px solid var(--hair); border-radius:5px; padding:0 6px; font:inherit;
   font-size:12.5px; box-sizing:border-box; }
 
 .status-bar .sb-activity { flex:0 100 auto; min-width:0; display:flex; align-items:center;
   min-height:var(--sb-line); gap:6px; color:var(--dim); }
-/* The phrase floors like the title (decision 16 / §22.3.1): it ellipsizes rather than shedding to zero,
-   so an active engine never collapses to a bare spinner with no legible word beside it. */
+/* §22.3.1 */
 .status-bar .sb-activity .phrase { min-width:5ch; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 
-/* The activity spinner (§26). It ships HERE, not in design/shell/tokens.css, which the app does not
-   load: the bar is the only surface carrying "the engine is working", and the ladder above leaves the
-   spinner standing after the phrase has gone. */
+/* §26 */
 .spin { font-family:"IBM Plex Mono",ui-monospace,monospace; color:var(--signal); flex:none; }
 .spin::after { content:'\2809'; animation:braille 0.8s steps(1) infinite; }
 @keyframes braille {
@@ -143,8 +132,7 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible { outline:2px so
 /* WCAG 2.2.2 */
 @media (prefers-reduced-motion:reduce) { .spin::after { animation:none; content:'\283F'; } }
 
-/* The alert sheds last, and only its detail: "Loop needs you" and the dot never yield, so the alert can
-   never be pushed off the bar's edge (WCAG 1.4.10). */
+/* WCAG 1.4.10 */
 .status-bar .sb-alert { flex:0 1 auto; min-width:0; }
 .status-bar .sb-alert-btn { display:flex; align-items:center; gap:8px; background:none; border:0; padding:0;
   min-height:var(--sb-line); font:inherit; color:var(--text); cursor:pointer; max-width:100%; }
@@ -153,8 +141,7 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible { outline:2px so
 .status-bar .sb-alert-btn b { font-weight:600; flex:none; }
 .status-bar .sb-alert-btn .it { font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:11px;
   color:var(--attn-text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; }
-/* The global focus ring (--signal) clears 3:1 only on --card; on the bar's tinted attention wash it falls
-   below in light theme (WCAG 2.1 SC 1.4.11). */
+/* WCAG 1.4.11 */
 .status-bar:has(.sb-alert-btn) button:focus-visible { outline-color:var(--attn-text); }
 #artifacts { height:100%; }
 .nav .navic { display:inline-block; width:14px; text-align:center; font-size:13px; }

@@ -215,10 +215,11 @@ describe('docked loop panel (§24.2.3 T2)', () => {
     expect(document.activeElement).toBe(host.querySelector('[data-loop-retry]'));
   });
 
-  it('reports it could not focus a decision when there is no gate or recovery control showing', () => {
+  it('falls back to the panel close control when a human-needed state has no decision metadata', () => {
     const panel = createLoopPanel(host, { githubRef: () => Promise.resolve(null), openExternal: () => {} });
-    panel.render(loop({ status: 'impl-draft' }), 'plan'); // a working (non-gate) state
-    expect(panel.focusDecision()).toBe(false);
+    panel.render(loop({ status: 'awaiting-human-plan-approval', gateOptions: [] }), 'plan');
+    expect(panel.focusDecision()).toBe(true);
+    expect(document.activeElement).toBe(host.querySelector('[data-loop-close]'));
   });
 
   it('groups the gate-decision buttons in a labelled group so AT announces their purpose (WCAG 4.1.2)', () => {

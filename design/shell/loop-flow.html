@@ -96,14 +96,12 @@
   .viewport { position:relative; flex:1; min-height:0; }
   [data-viewpane] { position:absolute; inset:0; }
 
-  /* (4) awaiting-human attention banner — red, pinned atop the active view; OS-notifies when unfocused */
-  .attn-bar { display:none; align-items:center; gap:12px; padding:9px 16px; background:color-mix(in srgb,var(--attn) 10%,var(--card)); border-bottom:1px solid color-mix(in srgb,var(--attn) 38%,var(--hair)); flex:none; }
-  .attn-bar.on { display:flex; }
-  .attn-bar .dot { width:8px; height:8px; border-radius:50%; background:var(--attn); flex:none; box-shadow:0 0 0 4px color-mix(in srgb,var(--attn) 18%,transparent); }
-  .attn-bar .msg { font-size:12.5px; } .attn-bar .msg b { font-weight:600; } .attn-bar .msg .it { font-family:"IBM Plex Mono",monospace; font-size:11px; color:var(--dim); }
-  .attn-bar .os { font-family:"IBM Plex Mono",monospace; font-size:10px; color:var(--dim); border:1px solid var(--hair); border-radius:999px; padding:2px 8px; }
-  .attn-bar .open-gate { color:var(--signal); font-weight:600; font-size:12px; background:none; border:none; cursor:pointer; margin-left:auto; }
-  .attn-bar .x { color:var(--dim); width:24px; height:24px; }
+  .status-bar { display:flex; align-items:center; gap:12px; min-height:36px; padding:6px 16px; background:color-mix(in srgb,var(--attn) 10%,var(--card)); border-bottom:1px solid color-mix(in srgb,var(--attn) 38%,var(--hair)); flex:none; font-size:12.5px; white-space:nowrap; }
+  .status-bar .title { min-width:7ch; overflow:hidden; text-overflow:ellipsis; margin-right:auto; }
+  .status-bar .activity { min-width:5ch; overflow:hidden; text-overflow:ellipsis; color:var(--dim); }
+  .status-bar .alert { display:flex; align-items:center; gap:8px; min-height:24px; padding:0; border:0; background:none; color:var(--text); cursor:pointer; }
+  .status-bar .dot { width:8px; height:8px; border-radius:50%; background:var(--attn); flex:none; box-shadow:0 0 0 4px color-mix(in srgb,var(--attn) 18%,transparent); }
+  .status-bar .it { font-family:"IBM Plex Mono",monospace; font-size:11px; color:var(--dim); }
 
   .pane { overflow:auto; padding:24px 26px; height:100%; }
   .pane h2 { font-family:"Fraunces",serif; font-weight:500; font-size:21px; margin:0 0 3px; }
@@ -227,13 +225,10 @@
 
   <!-- FULL-BLEED MAIN -->
   <main class="main">
-    <!-- (4) awaiting-human banner (re-fires each iteration; OS-notifies when unfocused) -->
-    <div class="attn-bar on" id="attn">
-      <span class="dot"></span>
-      <span class="msg"><b>Implement loop needs you</b> — <span class="it">awaiting-human-pr-approval · PR #179 · iter 9</span></span>
-      <span class="os">🔔 OS-notified</span>
-      <button class="open-gate" id="opengate">Open gate →</button>
-      <button class="iconbtn x" id="attnx" title="Dismiss">✕</button>
+    <div class="status-bar" id="statusbar">
+      <span class="title">PR #179 — Replace loop sentinel with completion file</span>
+      <span class="activity">Running reviewers · ⠋</span>
+      <button class="alert" id="status-alert"><span class="dot"></span><b>Loop needs you</b> — <span class="it">awaiting-human-pr-approval · iter 9 · PR #179</span></button>
     </div>
     <div class="viewport">
       <div data-viewpane="1" class="on">
@@ -244,7 +239,7 @@
           <div>⏺ Review complete — status <span class="u">awaiting-human-pr-approval</span>. Approve, request changes, or impasse.</div>
           <div class="dim">  ● 0 blocking findings · 2 nits deferred</div>
           <div style="margin-top:8px"><span class="u">$</span> <span class="cur">&nbsp;</span></div>
-          <div class="esc">esc to interrupt · open the loop panel from the rail (or “Open gate →”) to decide the gate</div>
+          <div class="esc">esc to interrupt · open the loop panel from the rail or the status-bar alert to decide the gate</div>
         </div>
       </div>
       <div data-viewpane="2">
@@ -254,7 +249,7 @@
       <div data-viewpane="3">
         <div class="pane">
           <h2>Todos</h2><div class="sub">Curate review notes, then send to the agent</div>
-          <div class="pointer">The loop’s <b>review gate</b> lives in the <b>loop panel</b> — open it from the rail <b>Loop</b> row or the “Open gate →” banner.</div>
+          <div class="pointer">The loop’s <b>review gate</b> lives in the <b>loop panel</b> — open it from the rail <b>Loop</b> row or the status-bar alert.</div>
           <div class="todos">
             <div class="todo"><span class="chk"></span><div class="body"><div class="tx">Tighten the consolidator dedup across reviewers</div><div class="src"><span class="from">from review</span> · iter 8</div></div></div>
             <div class="todo"><span class="chk"></span><div class="body"><div class="tx">Add a regression test for the sub-floor finding case</div><div class="src">manual</div></div></div>
@@ -284,7 +279,7 @@
 </div>
 
 <div class="demohint">
-  <b>T0 demo</b> · loop-step surfaces. Click the rail <b>Loop</b> row (or “Open gate →”) for the full-height loop+gate panel ·
+  <b>T0 demo</b> · loop-step surfaces. Click the rail <b>Loop</b> row or the status-bar alert for the full-height loop+gate panel ·
   <b>Request changes</b> reveals the composer · <span class="mono">?prompt=1</span> input modal · <span class="mono">?gate=intermediate</span> · <span class="mono">?theme=dark</span>
 </div>
 
@@ -310,8 +305,7 @@
     if(e.target.closest('#tg')) setTheme(root.getAttribute('data-theme')==='dark'?'light':'dark');
     if(e.target.closest('#loopstat')) openPanel();
     if(e.target.closest('#lclose')) openPanel(false);
-    if(e.target.closest('#opengate')) openPanel(true);
-    if(e.target.closest('#attnx')) document.getElementById('attn').classList.remove('on');
+    if(e.target.closest('#status-alert')) openPanel(true);
     if(e.target.closest('#reqchanges')) document.getElementById('rc').classList.toggle('open');
     if(e.target.closest('#impasse')) document.getElementById('gatenote').textContent='Impasse injects /agent-loop-impasse — records the loop as stuck for human triage. The flow stays on this step.';
     const sb=e.target.closest('.seg button'); if(sb){ sb.parentElement.querySelectorAll('button').forEach(b=>b.classList.toggle('on',b===sb)); }
@@ -330,7 +324,6 @@
   if(q.get('view')) setView(q.get('view'));
   if(q.get('panel')==='1'||q.get('loop')==='1') openPanel(true);
   if(q.get('prompt')==='1') openModal();
-  if(q.get('attn')==='0') document.getElementById('attn').classList.remove('on');
 </script>
 </body>
 </html>

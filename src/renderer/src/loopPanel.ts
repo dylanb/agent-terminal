@@ -48,9 +48,9 @@ export interface LoopPanel {
   /** Repaint from the current flow refs + loop mirror; both `null`/absent clears the host. `title`
    *  identifies the step the panel mirrors (the rail step name). */
   render(loop: FlowLoopView | null, title: string, refs?: FlowRefs): void;
-  /** Move focus onto the human-needed action — the gate decision, or the recovery Retry in the error
-   *  state — returning whether one was there to focus. The panel owns this so a sibling never reaches into
-   *  its markup for the control (§26.6 / §26.3 D48; WCAG 2.4.3). */
+  /** Move focus onto the gate decision, recovery Retry, or stable Close entry, returning whether one was
+   *  there to focus. The panel owns this so a sibling never reaches into its markup for the control
+   *  (§26.6 / §26.3 D48; WCAG 2.4.3). */
   focusDecision(): boolean;
   /** Clean teardown (UI-STANDARDS). */
   dispose(): void;
@@ -346,7 +346,9 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
       restoreFocus(hadFocus);
     },
     focusDecision() {
-      const action = host.querySelector<HTMLElement>('[data-gate-option], [data-loop-retry]');
+      const action =
+        host.querySelector<HTMLElement>('[data-gate-option], [data-loop-retry]') ??
+        host.querySelector<HTMLElement>('[data-loop-close]');
       action?.focus();
       return action !== null;
     },

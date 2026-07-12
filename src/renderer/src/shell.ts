@@ -108,8 +108,7 @@ export function createShell(root: HTMLElement, deps: ShellDeps = {}): Shell {
   const syncLoopReadout = (on: boolean): void =>
     root.querySelector('.loopstat')?.setAttribute('aria-expanded', String(on));
   const focusView = (v: ViewId): void => void root.querySelector<HTMLElement>(`[data-viewbtn="${v}"]`)?.focus();
-  // The status bar's alert opens the panel too, so a close returns focus to whatever opened it, not an
-  // assumed rail toggle (WCAG 2.4.3).
+  // WCAG 2.4.3.
   let panelOpener: HTMLElement | null = null;
   function openLoopPanel(opener?: HTMLElement): void {
     panelOpener = opener ?? null;

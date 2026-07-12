@@ -264,10 +264,6 @@ export function createFlowMachine(
         ...(named !== null ? { userTitle: named } : {}),
       };
     };
-    // Every PROGRESSION transition is inert here, so a bad flow.yaml cannot overwrite a good on-disk
-    // progression. The name is not a progression: it names the worktree (§22.3.1), and a directory with
-    // no flow.yaml has no PR or ticket either, so it is the only name such a directory can ever have —
-    // writeTitle leaves every other key on disk untouched.
     return {
       state: view,
       start: view,
@@ -307,8 +303,7 @@ export function createFlowMachine(
   // §26.10 — when THIS run of the flow began. The cost meter sweeps session logs from here, so it must
   // survive every transition within a run and never outlive one.
   let startedAt: number | null = null;
-  // §22.3.1 — the name the user gave this worktree's work. Unlike `inputs`/`startedAt` it names the
-  // worktree, not the run, so no transition clears it — a terminate/restart must give the name back.
+  // §22.3.1.
   let userTitle: string | null = null;
 
   // Re-read the persisted progression from the store (§19.1: flow-state.yaml is the source of truth).
@@ -331,11 +326,7 @@ export function createFlowMachine(
       if (persisted.inputs) inputs = { ...persisted.inputs };
       if (persisted.startedAt !== undefined) startedAt = persisted.startedAt;
       userTitle = persisted.title ?? null;
-    } else {
-      // No resumable progression, but the worktree name outlives any progression (§22.3.1), so it is
-      // still read — from its own path, since read() rejected the doc.
-      userTitle = store.readTitle();
-    }
+    } else userTitle = store.readTitle();
   };
   hydrate();
 
@@ -483,13 +474,13 @@ export function createFlowMachine(
       return enter(view());
     },
     setTitle: (text) => {
-      hydrate(); // §19.1 — merge the name onto the progression on disk, never onto a stale snapshot
+      hydrate(); // §19.1
       const prev = userTitle;
       userTitle = normalizeTitle(text);
       try {
-        persist();
+        store?.writeTitle(userTitle);
       } catch (e) {
-        userTitle = prev; // else the next transition commits a name the UI already reported as failed
+        userTitle = prev;
         throw e;
       }
       return view();

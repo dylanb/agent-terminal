@@ -61,7 +61,7 @@ import { registerIpcListeners } from './sessionIpc';
 import { resolveRuntimeConfig } from './runtimeConfig';
 import { createCommandTracker } from './commandTracker';
 import { createCwdTracker } from './cwdTracker';
-import { currentRepoInfo } from './repoKey';
+import { currentRepoInfo, resolveRepoKey } from './repoKey';
 import { createScanner } from './scanner';
 import { captureLastReport } from './captureLast';
 import { createFlowManager, deriveFlowView, loadFlowDefinitionLocalFirst } from './flow';
@@ -216,6 +216,7 @@ async function createWindow(): Promise<void> {
   // TODO(dylan): the full OSC-7 → cwd:changed → repo-list-swap loop through real
   // node-pty + bash is verified in the §F e2e (plan PR5 5c) — recorded gap.
   const cwdTracker = createCwdTracker({ onOsc: (id, cb) => shadow.onOsc(id, cb) });
+  const knownRepoKeys = new Set([resolveRepoKey(launchRoot)]);
   // Before the first OSC 7, fall back to bash's spawn dir — never the Electron process dir — so the
   // viewer starts in sync with the shell (§20.1).
   const viewerCwd = (): string => cwdTracker.cwd() ?? launchRoot;
@@ -238,6 +239,7 @@ async function createWindow(): Promise<void> {
   let stopViewerWatch = watchViewerTree(viewerRoot(viewerCwd()), onViewerActivity);
   void warmBase();
   cwdTracker.onChange(({ cwd, repoKey }) => {
+    knownRepoKeys.add(repoKey);
     send(CH.cwdChanged, { sessionId: SESSION_ID, cwd, repoKey });
     stopViewerWatch();
     stopViewerWatch = watchViewerTree(viewerRoot(cwd), onViewerActivity);
@@ -1292,13 +1294,11 @@ async function createWindow(): Promise<void> {
         const view = inTransition(m.repoKey, () => flow.provideInput(m.repoKey, m.values));
         return trackLoop(m.repoKey, withDerived(m.repoKey, view));
       },
-      // §22.3.1 — name the repo's work (a blank clears it). Not a lifecycle transition: it neither enters a
-      // step nor runs an entry action, so it takes no inTransition guard; it simply persists the name and
-      // answers with the view the status bar repaints from.
       [CH.flowSetTitle]: (_e, m) => {
-        if (!isValidFlowSetTitle(m)) return flowRequestError();
+        if (!isValidFlowSetTitle(m)) throw new Error('invalid flow:setTitle request');
+        if (!knownRepoKeys.has(m.repoKey)) throw new Error('cannot name an unregistered repo');
         const view = flow.setTitle(m.repoKey, m.title);
-        pushFlowChanged(); // every surface re-pulls: the name is repo state, not this window's local UI
+        pushFlowChanged();
         return trackLoop(m.repoKey, withDerived(m.repoKey, view));
       },
       // §24.2.3 T7 — resolve a ref's detail for the popout (best-effort; null degrades to bare number).

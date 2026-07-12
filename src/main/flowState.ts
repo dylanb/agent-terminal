@@ -56,26 +56,40 @@ function readStartedAt(raw: unknown): number | null {
 export function createFlowStateStore(worktreeDir: string): FlowStateStore {
   const file = path.join(worktreeDir, STATE_REL);
 
-  const loadDoc = (): Record<string, unknown> | null => {
+  type LoadResult =
+    | { kind: 'missing' }
+    | { kind: 'invalid'; reason: string }
+    | { kind: 'record'; doc: Record<string, unknown> };
+
+  const loadDoc = (): LoadResult => {
+    let raw: string;
     try {
-      const doc: unknown = yaml.load(readFileSync(file, 'utf8'));
-      return isRecord(doc) ? doc : null;
-    } catch {
-      return null;
+      raw = readFileSync(file, 'utf8');
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code === 'ENOENT') return { kind: 'missing' };
+      const reason = e instanceof Error ? e.message : String(e);
+      return { kind: 'invalid', reason: `cannot read ${STATE_REL}: ${reason}` };
+    }
+    try {
+      const doc: unknown = yaml.load(raw);
+      return isRecord(doc)
+        ? { kind: 'record', doc }
+        : { kind: 'invalid', reason: `${STATE_REL} is not a mapping` };
+    } catch (e) {
+      const reason = e instanceof Error ? e.message : String(e);
+      return { kind: 'invalid', reason: `cannot parse ${STATE_REL}: ${reason}` };
     }
   };
 
-  // atomicWriteFileSync REFUSES (writes nothing, returns false) when the container is a symlink. A
-  // refusal the caller cannot see is a name the user believes was saved and finds gone at relaunch.
+  // CWE-59: a symlinked container must be a visible write failure.
   const persist = (doc: Record<string, unknown>): void => {
     if (!atomicWriteFileSync(file, yaml.dump(doc))) {
       throw new Error(`cannot write ${STATE_REL}: ${path.dirname(STATE_REL)} is not a real directory`);
     }
   };
 
-  const read = (): PersistedFlowState | null => {
-    const doc = loadDoc();
-    if (!doc || typeof doc.step !== 'string' || doc.step.length === 0) return null;
+  const decode = (doc: Record<string, unknown>): PersistedFlowState | null => {
+    if (typeof doc.step !== 'string' || doc.step.length === 0) return null;
     if (typeof doc.status !== 'string' || !PERSISTABLE.has(doc.status as FlowStatus)) return null;
     const inputs = readInputs(doc.inputs);
     const startedAt = readStartedAt(doc.started_at);
@@ -87,6 +101,11 @@ export function createFlowStateStore(worktreeDir: string): FlowStateStore {
       ...(startedAt !== null ? { startedAt } : {}),
       ...(title !== null ? { title } : {}),
     };
+  };
+
+  const read = (): PersistedFlowState | null => {
+    const loaded = loadDoc();
+    return loaded.kind === 'record' ? decode(loaded.doc) : null;
   };
 
   const write = (state: PersistedFlowState): void => {
@@ -102,18 +121,46 @@ export function createFlowStateStore(worktreeDir: string): FlowStateStore {
   };
 
   const writeTitle = (title: string | null): void => {
-    // Carry the name onto the KNOWN progression only, never a raw spread of what was read back: a
-    // repo-supplied flow-state.yaml (or a symlink to a secret it can be swapped for) must not have its
-    // foreign keys re-serialized into a tracked file (CWE-59 / CWE-200). When no progression is
-    // readable, the name stands alone.
-    const progression = read();
-    if (progression) {
-      write({ ...progression, title: title ?? undefined });
-    } else {
-      const named = normalizeTitle(title);
+    const loaded = loadDoc();
+    const named = normalizeTitle(title);
+    if (loaded.kind === 'missing') {
       persist(named !== null ? { title: named } : {});
+      return;
     }
+    if (loaded.kind === 'invalid') throw new Error(loaded.reason);
+
+    const keys = Object.keys(loaded.doc);
+    if (keys.every((key) => key === 'title')) {
+      persist(named !== null ? { title: named } : {});
+      return;
+    }
+
+    const allowed = new Set(['step', 'status', 'inputs', 'started_at', 'title']);
+    const progression = decode(loaded.doc);
+    const inputsValid =
+      loaded.doc.inputs === undefined ||
+      (isRecord(loaded.doc.inputs) && Object.values(loaded.doc.inputs).every((value) => typeof value === 'string'));
+    const startedAtValid = loaded.doc.started_at === undefined || readStartedAt(loaded.doc.started_at) !== null;
+    const priorTitleValid = loaded.doc.title === undefined || normalizeTitle(loaded.doc.title) !== null;
+    if (
+      progression === null ||
+      keys.some((key) => !allowed.has(key)) ||
+      !inputsValid ||
+      !startedAtValid ||
+      !priorTitleValid
+    ) {
+      throw new Error(`cannot update ${STATE_REL}: unrecognized progression`);
+    }
+    write({ ...progression, title: named ?? undefined });
   };
 
-  return { read, write, readTitle: () => normalizeTitle(loadDoc()?.title), writeTitle };
+  return {
+    read,
+    write,
+    readTitle: () => {
+      const loaded = loadDoc();
+      return loaded.kind === 'record' ? normalizeTitle(loaded.doc.title) : null;
+    },
+    writeTitle,
+  };
 }

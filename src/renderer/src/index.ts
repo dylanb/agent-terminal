@@ -73,7 +73,6 @@ wireMonitorPane(repo);
 // Forward ref so the shell drives the viewer's full-screen presentation (§20.2) through the
 // contract, not a reach-across; the composition root wires it both ways.
 let artifacts: Artifacts | undefined;
-// Forward ref: a dialog's focus fallback (wired below) lands focus via the strip's typed seam.
 let flowStrip: FlowStrip | undefined;
 const shell = createShell(document.getElementById('app')!, {
   getTheme: () => window.monitor.getSettings().then((s) => s.theme),
@@ -84,13 +83,10 @@ const shell = createShell(document.getElementById('app')!, {
 
 wireCrossHighlight(document.getElementById('app')!);
 
-// WCAG 2.4.3: a dialog's opener can be detached by a strip re-render while it is open; land focus on a
-// stable target instead of <body>.
+// WCAG 2.4.3.
 const landFocus = (): void => {
   if (!flowStrip?.focusLoopReadout()) shell.focusView('1');
 };
-// §26.9 — a bootstrap failure, a §26.3/D48 loop-mechanics failure, and a name that could not be saved
-// all surface through this one blocking dialog: no failure on a path the user asked for is silent.
 const errorHost = document.getElementById('flow-error-host');
 const errorDialog = errorHost ? createErrorDialog(errorHost, { onFocusLost: landFocus }) : undefined;
 if (errorDialog) {
@@ -98,27 +94,21 @@ if (errorDialog) {
   window.flow.onLoopError((reason) => errorDialog.render({ title: 'Loop error', message: reason }));
 }
 
-// The always-visible status bar (§22.3.1). Every seam takes the repo it acts on from the bar, which
-// captured it when the work was named or the ref painted — never from repo.repoKey() at call time, which
-// would answer with wherever the terminal has since cd-ed to (CLAUDE.md).
-// The OS notification's activation pushes flow:revealLoop, answered by revealLoopReadout via Shell seams.
+// §22.3.1.
 const loopPanelHost = document.getElementById('loop-panel');
-// Assigned in the flow-strip block below; the alert's click handler (a runtime event) closes over it, so
-// the later assignment is in place by the time it fires.
 let loopPanel: LoopPanel | undefined;
 const statusBarHost = document.getElementById('status-bar');
 const statusBar = statusBarHost
   ? createStatusBar(statusBarHost, {
       githubRef: (key, kind, number) => window.flow.githubRef(key, kind, number),
-      openExternal: (url) => void window.flow.openExternal(url),
+      openExternal: (url) => window.flow.openExternal(url),
       setTitle: async (key, text) => void (await window.flow.setTitle(key, text)),
-      // The human is blocked: land focus ON the panel's action (§26.6). The shell docks; the panel owns
-      // its own markup, so it — not the shell — moves focus.
       onAlertActivate: (opener) => {
         shell.openLoopPanel(opener);
         loopPanel?.focusDecision();
       },
       onError: (reason) => errorDialog?.render({ title: 'Could not save the name', message: reason }),
+      onOpenError: (reason) => errorDialog?.render({ title: 'Could not open link', message: reason }),
       loopPanelId: loopPanelHost?.id ?? '',
     })
   : undefined;

@@ -84,14 +84,9 @@ export type FlowStripDeps = Omit<
    *  (UI-STANDARDS §2.2 rule 1). Omitted → no aria-controls (aria-expanded still conveys state). */
   loopPanelId?: string;
   onPanelState?: (loop: FlowLoopView | null, title: string, refs?: FlowRefs) => void;
-  /** Hand the always-visible status bar (§22.3.1) its model on every render AND every passive push — the
-   *  bar is the only surface showing what the engine is doing, so a patch that skipped it would freeze it
-   *  on the run's first phrase. The strip stays the single puller of flow state (§24.2.2 S5); it derives
-   *  through the shared rule and never reaches across to the bar. */
+  /** Required status-bar handoff on structural and passive state updates (§22.3.1 / §24.2.2 S5). */
   onStatusBar(model: StatusBarModel, repoKey: string | null): void;
-  /** A transition's write could not land (§19.1 — persist() throws when the target is unwritable). The
-   *  composition root surfaces it in the blocking error dialog; a silent catch would leave the user
-   *  clicking Start into the void with no recovery. Omitted → the failure only re-pulls state. */
+  /** Visible transition failure seam (§19.1). */
   onError?(reason: string): void;
   /** Hand a step-entry input prompt (§24.2.3 T3) to the composition root, which opens its modal
    *  organism. `submit` records the typed values (provideInput) and re-renders. `null` closes the
@@ -233,9 +228,8 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
   let repoKey: string | null = null;
   // The structure last painted; a passive push whose structure matches patches in place (§24.2.2 S5).
   let lastSig: string | null = null;
+  let refreshGeneration = 0;
 
-  // A transition rejected (its write could not land, or the machine refused): surface the reason and
-  // re-pull, rather than swallow it. `unknown`, never `Error` — a rejected IPC invoke can carry anything.
   const onActFailed = (e: unknown): void => {
     deps.onError?.(e instanceof Error ? e.message : String(e));
     void refresh();
@@ -459,22 +453,22 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
   }
 
   async function refresh(): Promise<void> {
-    if (repoKey === null) {
+    const key = repoKey;
+    const generation = ++refreshGeneration;
+    if (key === null) {
       host.replaceChildren();
       lastSig = null;
-      // The bar outlives the strip's content: with no repo it still shows, still inviting a name (§22.3.1).
-      // Without this a cd out of a repo would strand the previous repo's title on it.
       deps.onStatusBar(IDLE_STATUS_BAR, null);
       return;
     }
-    // A state() IPC rejection keeps the last rendered rail rather than escaping as an unhandled
-    // rejection or clearing to a blank pane (callers fire `void refresh()`, §18.1).
+    // §18.1: keep the last rendered state on a failed pull.
     let view: FlowStateView;
     try {
-      view = await deps.state(repoKey);
+      view = await deps.state(key);
     } catch {
       return; // keep the last rendered UI
     }
+    if (disposed || repoKey !== key || generation !== refreshGeneration) return;
     // A passive push only ever changes live-derived values, so when the structure is unchanged patch
     // in place — a full teardown would detach a focused control, an in-flight click target, or a
     // confirm dialog's captured opener (§24.2.2 S5). Any structural change falls back to a render.
@@ -498,8 +492,14 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
   return {
     refresh,
     onRepoChanged(key) {
+      const changed = repoKey !== key;
       repoKey = key;
       lastSig = null; // force a full structural render for the new repo — never patch across repos
+      if (changed) {
+        host.replaceChildren();
+        deps.onStatusBar(IDLE_STATUS_BAR, null);
+        deps.onPanelState?.(null, '');
+      }
       void refresh();
     },
     focusLoopReadout() {

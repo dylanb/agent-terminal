@@ -1,5 +1,4 @@
-// The always-visible status bar (§22.3.1) — a relocatable organism (UI-STANDARDS §1.3).
-// Split live regions per WCAG 4.1.3 / WAI-ARIA Alert; §22.2.
+// §22.3.1; UI-STANDARDS §1.3; WCAG 4.1.3.
 
 import type { GithubRef, GithubRefKind } from '../../shared/ipc';
 import { IDLE_STATUS_BAR, normalizeTitle, sameTitle, TITLE_MAX, type StatusBarModel, type StatusBarTitle } from '../../shared/statusBar';
@@ -11,14 +10,16 @@ export interface StatusBarDeps {
   /** Resolve a ref's title/url within `repoKey`. Null when it cannot be resolved (no `gh`, offline,
    *  private) — the bar then keeps showing the number. */
   githubRef(repoKey: string, kind: GithubRefKind, number: number): Promise<GithubRef | null>;
-  openExternal(url: string): void;
+  openExternal(url: string): Promise<boolean> | void;
   /** Name `repoKey`'s work, or clear the name with a blank (§22.3.1). */
   setTitle(repoKey: string, text: string): Promise<void>;
-  /** The human is blocked and asked for the gate controls (§24.2.3 T4). `opener` is the alert button
-   *  itself, handed over so the panel can return focus here on close without reaching into this DOM. */
+  /** The human is blocked and sent to the panel's gate decision, recovery Retry, or stable Close entry
+   *  (§24.2.3 T4). `opener` lets the panel return focus without reaching into this DOM. */
   onAlertActivate(opener: HTMLElement): void;
   /** A name the user typed could not be saved. */
   onError(reason: string): void;
+  /** A resolved ref could not be opened by the OS. */
+  onOpenError(reason: string): void;
   /** The region the alert routes to, for `aria-controls` (WCAG 4.1.2). */
   loopPanelId: string;
 }
@@ -28,7 +29,6 @@ export interface StatusBar {
   dispose(): void;
 }
 
-/** A ref resolved for one repo must never land on another repo's identically-numbered ref. */
 interface ShownRef {
   repoKey: string;
   title: StatusBarTitle;
@@ -58,16 +58,17 @@ export function createStatusBar(host: HTMLElement, deps: StatusBarDeps): StatusB
   let refUrl: string | null = null;
   let shownPhrase: string | null = null;
   let shownAlert: Occurrence | null = null;
+  let shownAlertPr: number | null = null;
   let disposed = false;
   let repoKey: string | null = null;
   let latestTitle: StatusBarTitle = IDLE_STATUS_BAR.title;
   let editing = false;
+  let renderRevision = 0;
+  let titleMutation = 0;
 
   const canEdit = (title: StatusBarTitle): boolean => title.kind === 'user' && repoKey !== null;
 
-  /** Swap the name for an input, in place. Enter commits, Escape abandons, blur commits. `forRepo` is
-   *  captured here, not read at commit: the cwd moves while the editor is open, and the name belongs to
-   *  the repo it was typed for (CLAUDE.md — a receiver never re-derives its target from ambient state). */
+  // CLAUDE.md resource-identity rule.
   function beginEdit(from: string, forRepo: string): void {
     if (editing) return;
     editing = true;
@@ -80,32 +81,36 @@ export function createStatusBar(host: HTMLElement, deps: StatusBarDeps): StatusB
     input.maxLength = TITLE_MAX;
     input.setAttribute('aria-label', 'Name this work');
 
-    let closed = false; // Enter removes the input, which fires blur — the second close must be inert
+    let closed = false;
     const close = (commit: boolean): void => {
       if (closed) return;
       closed = true;
       editing = false;
-      // dispose() detaches the focused input, which fires blur — and blur commits. A teardown must not
-      // write a name the user never finished typing.
       if (disposed) return;
       const typed = input.value;
       const hadFocus = doc.activeElement === input;
       if (commit && typed !== from) {
         const optimistic: StatusBarTitle = { kind: 'user', text: normalizeTitle(typed) ?? '' };
-        latestTitle = optimistic;
+        const mutation = ++titleMutation;
+        const revision = renderRevision;
+        if (repoKey === forRepo) latestTitle = optimistic;
         void deps.setTitle(forRepo, typed).catch((e: unknown) => {
           deps.onError(e instanceof Error ? e.message : String(e));
-          // Take the name back: the user would otherwise believe the work was named and find it gone at
-          // the next relaunch. Only if the bar is still showing OUR name — a later edit or push wins.
-          if (disposed || !sameTitle(latestTitle, optimistic)) return;
+          if (
+            disposed ||
+            repoKey !== forRepo ||
+            renderRevision !== revision ||
+            titleMutation !== mutation ||
+            !sameTitle(latestTitle, optimistic)
+          ) return;
           latestTitle = { kind: 'user', text: from };
           shownTitle = null;
           if (!editing) renderTitle(latestTitle);
         });
       }
-      shownTitle = null; // the editor replaced the name node: repaint rather than dedup against it
+      shownTitle = null;
       renderTitle(latestTitle);
-      // WCAG 2.4.3: removing the focused input would otherwise drop focus onto <body>.
+      // WCAG 2.4.3.
       if (hadFocus) titleSlot.querySelector<HTMLElement>('[data-sb-title]')?.focus();
     };
 
@@ -130,22 +135,22 @@ export function createStatusBar(host: HTMLElement, deps: StatusBarDeps): StatusB
     const name = doc.createElement(editable ? 'button' : 'span');
     name.className = named ? 'sb-name' : 'sb-name empty';
     name.dataset.sbTitle = '';
-    if (!editable) name.tabIndex = -1; // else a repaint that removes a focused editable name strands focus (WCAG 2.4.3)
+    if (!editable) name.tabIndex = -1; // WCAG 2.4.3
     name.textContent = named ? title.text : 'Untitled — name this work';
     if (name instanceof HTMLButtonElement) {
       const forRepo = repoKey!; // canEdit
+      if (named) name.setAttribute('aria-label', `Rename work: ${title.text}`);
       name.addEventListener('click', () => beginEdit(title.text, forRepo));
     }
     titleSlot.replaceChildren(name);
   }
 
   function renderRef(title: StatusBarTitle & { kind: 'pr' | 'ticket' }, forRepo: string | null): void {
-    // A ref whose url never resolves stays a span: a control that swallows every click advertises an
-    // action it can never perform (WCAG 4.1.2).
+    // WCAG 4.1.2.
     const label = doc.createElement('span');
     label.className = 'sb-name';
     label.dataset.sbTitle = '';
-    label.tabIndex = -1; // so a repaint that removes the focused title does not strand focus (WCAG 2.4.3)
+    label.tabIndex = -1; // WCAG 2.4.3
     label.textContent = title.kind === 'pr' ? `PR #${title.number}` : `#${title.number}`;
     titleSlot.replaceChildren(label);
     if (forRepo === null) return;
@@ -153,19 +158,22 @@ export function createStatusBar(host: HTMLElement, deps: StatusBarDeps): StatusB
     const kind: GithubRefKind = title.kind === 'pr' ? 'pr' : 'issue';
     const asked: ShownRef = { repoKey: forRepo, title };
     void deps.githubRef(forRepo, kind, title.number).then((got) => {
-      // The cwd/flow may have moved while `gh` ran. The guard carries the REPO as well as the ref: the
-      // same number in another repo is another ref, and answering for it would paint one repo's title
-      // into another's bar and arm the click with its url.
+      // CLAUDE.md resource-identity rule.
       if (disposed || got === null || !sameShownRef(asked)) return;
       const hadFocus = titleSlot.contains(doc.activeElement);
       refUrl = got.url;
       const link = doc.createElement('button');
       link.className = 'sb-name sb-link';
       link.dataset.sbTitle = '';
-      link.setAttribute('role', 'link'); // it navigates; it does not act (WAI-ARIA APG)
+      link.setAttribute('role', 'link'); // WAI-ARIA APG
       link.textContent = got.title;
       link.addEventListener('click', () => {
-        if (refUrl !== null) deps.openExternal(refUrl);
+        if (refUrl === null) return;
+        void Promise.resolve(deps.openExternal(refUrl))
+          .then((opened) => {
+            if (opened === false) throw new Error('the operating system refused the link');
+          })
+          .catch((e: unknown) => deps.onOpenError(e instanceof Error ? e.message : String(e)));
       });
       titleSlot.replaceChildren(link);
       if (hadFocus) link.focus();
@@ -176,12 +184,8 @@ export function createStatusBar(host: HTMLElement, deps: StatusBarDeps): StatusB
 
   function renderTitle(title: StatusBarTitle): void {
     const editable = canEdit(title);
-    // The repo is part of what is painted, not just the text: repo B's `PR #7` is not repo A's, and the
-    // same unnamed title is inert before a repo is known and editable after. A dedup on the text alone
-    // would keep showing A's fetched title (and open A's url) after a cd to B.
     if (sameTitle(title, shownTitle) && repoKey === shownRepo && editable === shownEditable) return;
-    // A model-driven repaint removes the current title node; if the keyboard user was on it, land focus
-    // on its replacement rather than let it fall to <body> (WCAG 2.4.3).
+    // WCAG 2.4.3.
     const hadFocus = titleSlot.contains(doc.activeElement);
     shownTitle = title;
     shownRepo = repoKey;
@@ -213,17 +217,18 @@ export function createStatusBar(host: HTMLElement, deps: StatusBarDeps): StatusB
 
   function renderAlert(model: StatusBarModel, key: string | null): void {
     if (model.alert === null) {
-      // The alert cleared (the loop left the human-needed family). If the keyboard user was on it, its
-      // removal would strand focus on <body>; land it on the title instead (WCAG 2.4.3).
+      // WCAG 2.4.3.
       const hadFocus = alert.contains(doc.activeElement);
       shownAlert = null;
+      shownAlertPr = null;
       alert.replaceChildren();
       if (hadFocus) titleSlot.querySelector<HTMLElement>('[data-sb-title]')?.focus();
       return;
     }
     const occ: Occurrence = { repoKey: key, status: model.alert.status, iteration: model.alert.iteration };
-    if (sameOccurrence(shownAlert, occ)) return; // rebuilding would re-announce identical text
+    if (sameOccurrence(shownAlert, occ) && shownAlertPr === model.alert.pr) return;
     shownAlert = occ;
+    shownAlertPr = model.alert.pr;
 
     // CWE-117 — `status` comes from an arbitrary repo's state.yaml (§16.3).
     const status = stripStatusControlChars(model.alert.status);
@@ -248,15 +253,13 @@ export function createStatusBar(host: HTMLElement, deps: StatusBarDeps): StatusB
     alert.replaceChildren(open);
   }
 
-  // The bar stands up in its idle state rather than blank: it exists before any repo is known, and until
-  // one is, no flow pull will ever hand it a model.
   renderTitle(IDLE_STATUS_BAR.title);
 
   return {
     render(model, key) {
+      renderRevision += 1;
       repoKey = key;
       latestTitle = model.title;
-      // A push (a todo mutated, the agent went quiet) must not replace the field mid-word.
       if (!editing) renderTitle(model.title);
       renderActivity(model.activity?.phrase ?? null);
       renderAlert(model, key);

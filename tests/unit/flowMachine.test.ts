@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createFlowMachine, type FlowLoad } from '../../src/main/flow';
@@ -58,7 +58,7 @@ describe('the user title the status bar shows (§22.3.1)', () => {
     const store = createFlowStateStore(dir);
     const flow = createFlowMachine(LOAD, store);
     expect(flow.setTitle('Refactor the shadow parser').userTitle).toBe('Refactor the shadow parser');
-    expect(store.read()?.title).toBe('Refactor the shadow parser');
+    expect(store.readTitle()).toBe('Refactor the shadow parser');
     expect(createFlowMachine(LOAD, store).state().userTitle).toBe('Refactor the shadow parser'); // survives relaunch
   });
 
@@ -103,6 +103,17 @@ describe('the user title the status bar shows (§22.3.1)', () => {
     createFlowStateStore(dir).write({ step: 'step-3', status: 'in_progress' }); // an external advance
     flow.setTitle('Refactor the shadow parser');
     expect(store.read()).toEqual({ step: 'step-3', status: 'in_progress', title: 'Refactor the shadow parser' });
+  });
+
+  it('refuses a title update when the progression has unknown fields and preserves its bytes', () => {
+    const file = join(dir, '.agent-terminal', 'flow-state.yaml');
+    const store = createFlowStateStore(dir);
+    store.write({ step: 'step-1', status: 'in_progress' });
+    const before = 'step: step-1\nstatus: in_progress\nfuture_extension: keep-me\n';
+    writeFileSync(file, before);
+
+    expect(() => createFlowMachine(LOAD, store).setTitle('Named')).toThrow(/unrecognized/i);
+    expect(readFileSync(file, 'utf8')).toBe(before);
   });
 
   it('does not go on holding a name whose write was refused', () => {

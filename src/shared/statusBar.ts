@@ -1,5 +1,3 @@
-// What the always-visible status bar shows (§22.3.1).
-
 import type { FlowStateView } from './ipc';
 import type { LoopActivity } from './loopActivity';
 
@@ -23,17 +21,12 @@ export const IDLE_STATUS_BAR: StatusBarModel = { title: { kind: 'user', text: ''
  *  flow-state.yaml as easily as from the editor (CWE-400 / CWE-1284). */
 export const TITLE_MAX = 200;
 
-/** The one predicate for what a persisted name IS — imported by the machine, the on-disk store and the
- *  renderer's optimistic paint, so a writer and a reader of one file cannot drift (CLAUDE.md
- *  shared-semantics). */
 export function normalizeTitle(raw: unknown): string | null {
   if (typeof raw !== 'string') return null;
   const text = raw.trim().slice(0, TITLE_MAX);
   return text.length > 0 ? text : null;
 }
 
-/** Identity over the union: a kind added later fails to compile here rather than comparing equal to a
- *  sibling and deduping itself off the bar. */
 export function titleKey(t: StatusBarTitle): string {
   switch (t.kind) {
     case 'pr':

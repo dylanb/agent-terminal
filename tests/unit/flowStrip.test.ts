@@ -39,8 +39,6 @@ function fakeFlow(initial: FlowStatus = 'not_started') {
     }),
     provideInput: vi.fn(async (repoKey: string) => view(repoKey)),
     onStateChanged: vi.fn((_cb: () => void) => () => {}),
-    // Required, not optional: the bar is the only surface carrying the engine's activity and the loop's
-    // human-blocked alert, so a layout that wires the strip without feeding the bar must not compile.
     onStatusBar: vi.fn((_m: StatusBarModel, _k: string | null) => {}),
   };
 }
@@ -82,6 +80,59 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     expect([stateOf(0), stateOf(1), stateOf(2)]).toEqual(['active', 'todo', 'todo']);
     expect(sect()).toBe('Flow — step 1 / 3'); // synthetic-inclusive: the bookends count toward the total
     expect(control()!.textContent).toBe('Start');
+  });
+
+  it('discards a late refresh from the prior repo after the new repo has rendered', async () => {
+    let resolveA: (view: FlowStateView) => void = () => {};
+    let resolveB: (view: FlowStateView) => void = () => {};
+    const onStatusBar = vi.fn();
+    const deps = {
+      ...fakeFlow(),
+      state: vi.fn((repoKey: string) => new Promise<FlowStateView>((resolve) => {
+        if (repoKey === '/repoA') resolveA = resolve;
+        else resolveB = resolve;
+      })),
+      onStatusBar,
+    };
+    const strip = createFlowStrip(host, deps);
+    strip.onRepoChanged('/repoA');
+    await vi.waitFor(() => expect(deps.state).toHaveBeenCalledWith('/repoA'));
+    strip.onRepoChanged('/repoB');
+    await vi.waitFor(() => expect(deps.state).toHaveBeenCalledWith('/repoB'));
+
+    resolveB({ stepName: 'Repo B', steps: ['Repo B'], position: 1, total: 1, status: 'not_started', userTitle: 'B' });
+    await vi.waitFor(() => expect(stepName()).toBe('Repo B'));
+    resolveA({ stepName: 'Repo A', steps: ['Repo A'], position: 1, total: 1, status: 'not_started', userTitle: 'A' });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(stepName()).toBe('Repo B');
+    expect(onStatusBar.mock.calls.at(-1)?.[1]).toBe('/repoB');
+    expect(onStatusBar.mock.calls.at(-1)?.[0].title).toEqual({ kind: 'user', text: 'B' });
+  });
+
+  it('removes repo A controls while a repo B pull is pending and leaves them removed if it rejects', async () => {
+    const onStatusBar = vi.fn();
+    const onPanelState = vi.fn();
+    const deps = {
+      ...fakeFlow(),
+      state: vi.fn((repoKey: string) =>
+        repoKey === '/repoA'
+          ? Promise.resolve({ stepName: 'Repo A', steps: ['Repo A'], position: 1, total: 1, status: 'not_started' as FlowStatus })
+          : Promise.reject(new Error('repo B unavailable')),
+      ),
+      onStatusBar,
+      onPanelState,
+    };
+    const strip = createFlowStrip(host, deps);
+    strip.onRepoChanged('/repoA');
+    await vi.waitFor(() => expect(stepName()).toBe('Repo A'));
+
+    strip.onRepoChanged('/repoB');
+    expect(host.childElementCount).toBe(0);
+    expect(onStatusBar).toHaveBeenLastCalledWith(IDLE_STATUS_BAR, null);
+    expect(onPanelState).toHaveBeenLastCalledWith(null, '');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(host.childElementCount).toBe(0);
   });
 
   // §22.3.1 — what the engine is doing shows in the status bar, and ONLY there. The rail keeps the loop
