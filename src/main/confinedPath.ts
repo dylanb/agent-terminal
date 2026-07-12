@@ -34,8 +34,10 @@ export function realpathBounded(p: string): string | null {
   }
 }
 
-/** A confinement directory: `anchorDir` resolved through symlinks; `segments` are appended without
- *  symlink resolution. Null when `anchorDir` does not resolve. CWE-59. */
+/** A jail that lives INSIDE UNTRUSTED CONTENT (a checked-out repo working tree), where a link can be planted
+ *  at the jail's own final segment: `anchorDir` is resolved through symlinks, `segments` are appended
+ *  WITHOUT resolution, so a planted link cannot adopt its target as the jail. Null when `anchorDir` does not
+ *  resolve. CWE-59. For a root in the user's own space that the app derives, use `resolveOwnedDirJail`. */
 export function resolveJail(anchorDir: string, ...segments: string[]): string | null {
   try {
     return path.join(realpathSync(anchorDir), ...segments);
@@ -44,11 +46,11 @@ export function resolveJail(anchorDir: string, ...segments: string[]): string | 
   }
 }
 
-/** A confinement jail for a directory the app itself DERIVES (`$HOME`, `CLAUDE_CONFIG_DIR`, …) rather than
- *  reads out of untrusted content: resolved through symlinks INCLUDING its own final segment, with any
- *  not-yet-created tail appended. Null when the path cannot be reduced to a symlink-free real path.
- *  Confinement still holds inside the returned root — see `confinedRealPathResult` (CWE-22/59).
- *  Following a link the user placed at their own config dir is the policy of §18.1, not of this function. */
+/** A jail in the USER'S OWN SPACE that the app derives itself (`$HOME`, `CLAUDE_CONFIG_DIR`, …) and which
+ *  may not exist yet: resolved through symlinks INCLUDING its own final segment, with any not-yet-created
+ *  tail appended. Null when the path cannot be reduced to a symlink-free real path. Confinement still holds
+ *  inside the returned jail — see `confinedRealPathResult` (CWE-22/59). Following a link the user placed at
+ *  their own config dir is the policy of §18.1, not of this function. */
 export function resolveOwnedDirJail(dir: string): string | null {
   return realpathBounded(path.resolve(dir));
 }

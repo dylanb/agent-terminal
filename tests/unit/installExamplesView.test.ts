@@ -306,6 +306,24 @@ describe('install examples view organism (§18.1/§23.4)', () => {
     expect(order).toEqual(['flow', 'loops', 'skills', 'commands']);
   });
 
+  it('exposes the consent options as a NAMED group (WAI-ARIA group; WCAG 1.3.1)', async () => {
+    // A <fieldset>/<legend> gave this by construction. A div carrying role="group" + aria-labelledby buys
+    // the layout the dialog needs, but pays for it with three strings that must agree — so they are pinned.
+    await openConsent(['loops', 'skills']);
+    const group = host.querySelector('.flow-modal .install-consent') as HTMLElement;
+    expect(group.getAttribute('role')).toBe('group');
+
+    const labelledBy = group.getAttribute('aria-labelledby');
+    expect(labelledBy).toBeTruthy();
+    const label = host.ownerDocument.getElementById(labelledBy as string);
+    expect(label?.textContent?.trim()).toBe('Replace files in');
+
+    // Every decision control lives inside the group it names.
+    for (const id of ['loops', 'skills'] as InstallDestinationId[]) {
+      expect(group.contains(consentBox(id))).toBe(true);
+    }
+  });
+
   it('keeps the conflicting file list out of a consent checkbox’s accessible name (accname 1.2, WCAG 4.1.2)', async () => {
     // The files sit inside the implicit <label>, so accname folds every path into the control's NAME:
     // a screen reader announces dozens of paths before the user learns which destination this is. The

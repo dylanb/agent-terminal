@@ -183,21 +183,20 @@ export function createInstallExamples(host: HTMLElement, deps: InstallExamplesDe
         'Some places already hold files that differ from the bundled versions. Choose where to replace them — anything you leave unchecked keeps your files. Missing files are installed either way.';
       cardEl.append(h3, p);
 
-      // A <fieldset> cannot carry the flex/overflow chain this needs — Chromium renders its children in an
-      // anonymous content box, so it is neither a scroll box nor a shrinkable flex column. role="group" +
-      // aria-labelledby gives the identical grouping semantics on a box that can (WAI-ARIA `group`).
-      const fieldset = d.createElement('div');
-      fieldset.className = 'install-consent';
-      fieldset.setAttribute('role', 'group');
-      const legendId = `${titleId}-consent-legend`;
-      fieldset.setAttribute('aria-labelledby', legendId);
-      const legend = d.createElement('span');
-      legend.className = 'ic-legend';
-      legend.id = legendId;
-      legend.textContent = 'Replace files in';
+      // Not a <fieldset>: Chromium renders its children in an anonymous content box, so it can be neither a
+      // scroll box nor a shrinkable flex column. WAI-ARIA `group` + aria-labelledby, on a box that can be.
+      const group = d.createElement('div');
+      group.className = 'install-consent';
+      group.setAttribute('role', 'group');
+      const groupLabelId = `${titleId}-consent-legend`;
+      group.setAttribute('aria-labelledby', groupLabelId);
+      const groupLabel = d.createElement('span');
+      groupLabel.className = 'ic-legend';
+      groupLabel.id = groupLabelId;
+      groupLabel.textContent = 'Replace files in';
       const rows = d.createElement('div');
       rows.className = 'install-consent-rows';
-      fieldset.append(legend, rows);
+      group.append(groupLabel, rows);
 
       const boxes = new Map<InstallDestinationId, HTMLInputElement>();
       for (const conflict of conflicts) {
@@ -225,7 +224,7 @@ export function createInstallExamples(host: HTMLElement, deps: InstallExamplesDe
         rows.append(row);
         boxes.set(conflict.destination, box);
       }
-      cardEl.append(fieldset);
+      cardEl.append(group);
 
       const foot = d.createElement('div');
       foot.className = 'mfoot';

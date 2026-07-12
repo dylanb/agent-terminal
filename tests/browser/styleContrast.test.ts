@@ -378,12 +378,78 @@ describe('the consent dialog reflows at 320x256 (WCAG 1.4.10)', () => {
   });
 
   it('lets the modal scroll to whatever the card cannot fit', () => {
+    // Assert the OUTCOME, not the two properties: `overflow-y:auto` plus a taller scrollHeight is exactly
+    // the pair this file already documents as insufficient (a <fieldset> satisfies both and never scrolls).
+    // Scroll the modal to its end and see whether the button is actually there.
     const modalEl = host.querySelector('.flow-modal') as HTMLElement;
     const confirm = host.querySelector('.flow-modal button.confirm') as HTMLElement;
-    const reachable =
-      confirm.getBoundingClientRect().bottom <= window.innerHeight ||
-      (modalEl.scrollHeight > modalEl.clientHeight + 1 &&
-        /auto|scroll/.test(getComputedStyle(modalEl).overflowY));
-    expect(reachable).toBe(true);
+    modalEl.scrollTop = modalEl.scrollHeight;
+    expect(confirm.getBoundingClientRect().bottom).toBeLessThanOrEqual(window.innerHeight + 1);
+    expect(confirm.getBoundingClientRect().top).toBeGreaterThanOrEqual(-1);
+  });
+});
+
+// `overflow-y:auto` computes `overflow-x` to `auto` too (CSS Overflow L3 §3), so the scroll box clips ink
+// on BOTH axes at its padding box. A focus ring is ink OUTSIDE the control's border box, so a checkbox
+// flush against the clip edge loses the inline-start stroke of its ring (WCAG 1.4.11).
+describe('the consent scroll box does not clip the checkbox focus ring', () => {
+  let host: HTMLElement;
+
+  beforeEach(async () => {
+    host = document.createElement('div');
+    document.body.replaceChildren(host);
+    const files = Array.from({ length: 60 }, (_, i) => `some-loop/nested/dir/file-${i}.yaml`) as DestRelativePath[];
+    createInstallExamples(host, {
+      preview: async (): Promise<InstallExamplesPreview> => ({
+        ok: true,
+        destinations: [
+          { destination: 'flow', conflict: false },
+          { destination: 'loops', conflict: true, files },
+          { destination: 'skills', conflict: false },
+          { destination: 'commands', conflict: false },
+        ],
+      }),
+      apply: async (): Promise<InstallExamplesResult> => ({ ok: true, created: [], overwritten: [], skipped: [] }),
+    });
+    (host.querySelector('.kprofile button') as HTMLButtonElement).click();
+    await vi.waitFor(() => expect(host.querySelector('.flow-modal .card')).not.toBeNull());
+  });
+
+  it('leaves room for the ring to paint inside the clip', () => {
+    const rows = host.querySelector('.install-consent-rows') as HTMLElement;
+    const box = host.querySelector('.install-consent-opt input[type="checkbox"]') as HTMLElement;
+    const ring = 2 + 2; // outline-width + outline-offset
+    expect(box.getBoundingClientRect().left - rows.getBoundingClientRect().left).toBeGreaterThanOrEqual(ring);
+  });
+});
+
+// `.flow-modal .card` is shared by every dialog built on createModalShell (confirm, error, flow-input).
+// Capping its height without giving it a scroll box would clip THEIR content instead of scrolling it — the
+// footer is `flex:none`, so it is what gets pushed out (WCAG 2.1.1, 2.4.3).
+describe('capping the card does not clip the OTHER dialogs built on the same shell', () => {
+  let modal: HTMLElement;
+
+  beforeEach(async () => {
+    await page.viewport(600, 300);
+    modal = document.createElement('div');
+    modal.className = 'flow-modal';
+    const body = Array.from({ length: 40 }, (_, i) => `<p class="ph">Line ${i} of a dialog with a lot to say.</p>`).join('');
+    modal.innerHTML = `<div class="card"><h3 class="serif">Terminate the flow?</h3>${body}
+      <div class="mfoot"><button type="button" class="pill cancel">Cancel</button><button type="button" class="pill danger confirm">Terminate</button></div>
+    </div>`;
+    document.body.replaceChildren(modal);
+  });
+
+  afterEach(async () => {
+    await page.viewport(1280, 896);
+  });
+
+  it('does not let a tall dialog’s body overprint its own footer', () => {
+    // The card has no `overflow`, so capping its height does not CLIP the body — it lets it paint straight
+    // over the footer, which is `flex:none` and cannot move. Same defect as the consent manifest, on every
+    // other dialog that composes this shell.
+    const foot = modal.querySelector('.mfoot') as HTMLElement;
+    const lastLine = [...modal.querySelectorAll('.ph')].pop() as HTMLElement;
+    expect(lastLine.getBoundingClientRect().bottom).toBeLessThanOrEqual(foot.getBoundingClientRect().top + 1);
   });
 });

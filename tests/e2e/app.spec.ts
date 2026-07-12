@@ -5,6 +5,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, appendFileSync, rmSync, existsSy
 import { tmpdir } from 'node:os';
 import { join, basename } from 'node:path';
 import { parseColor, compositeOver, contrastRatio, type RGBA } from '../helpers/wcag';
+import { WINDOW_TIMEOUT_MS } from '../helpers/e2eBudget';
 import { CH, SESSION_ID } from '../../src/shared/ipc';
 import { CLI_COMMAND_NAME } from '../../src/main/cliShim';
 import { parseAuditStream, type AuditEvent } from '../../src/shared/audit';
@@ -120,12 +121,6 @@ async function cdToTempDir(marker: string): Promise<void> {
   await expect(page.locator('.status-chip[data-status="agent"]')).toContainText('quiet', { timeout: 6_000 });
 }
 
-// Electron's window event under full-suite load: the window does arrive, but a cold launch competing with
-// its siblings can exceed Playwright's 30s default and fail at firstWindow() before any assertion runs —
-// a launch-tail budget, not a product race (the same test passes in 2.9s alone). The ceiling is the
-// per-test `timeout` in playwright.config.ts, which counts beforeEach against it, so this must fit under
-// it with room for the test itself.
-const WINDOW_TIMEOUT_MS = 45_000;
 
 test.beforeEach(async () => {
   freshenedDirs = new Set();
