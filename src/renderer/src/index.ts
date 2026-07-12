@@ -113,8 +113,8 @@ const statusBar = statusBarHost
       githubRef: (key, kind, number) => window.flow.githubRef(key, kind, number),
       openExternal: (url) => void window.flow.openExternal(url),
       setTitle: async (key, text) => void (await window.flow.setTitle(key, text)),
-      // Open the docked panel, then let the panel move focus onto its own gate decision (§26.6): the
-      // human is blocked, so land them ON the decision — the shell never names the panel's markup.
+      // The human is blocked: land focus ON the panel's action (§26.6). The shell docks; the panel owns
+      // its own markup, so it — not the shell — moves focus.
       onAlertActivate: (opener) => {
         shell.openLoopPanel(opener);
         loopPanel?.focusDecision();

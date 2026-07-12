@@ -206,7 +206,16 @@ describe('docked loop panel (§24.2.3 T2)', () => {
     expect(document.activeElement).toBe(host.querySelector('[data-gate-option="approve"]'));
   });
 
-  it('reports it could not focus a decision when there is no gate showing', () => {
+  it('falls back to the recovery action when the human-needed state is an error, not a gate (WCAG 2.4.3)', () => {
+    // `error` is human-needed but shows a Retry control, not gate options. The blocked human must still
+    // land on the panel's actionable control, not be left on the alert button.
+    const panel = createLoopPanel(host, { githubRef: () => Promise.resolve(null), openExternal: () => {}, retryTurn: () => {} });
+    panel.render(loop({ status: 'error' }), 'plan');
+    expect(panel.focusDecision()).toBe(true);
+    expect(document.activeElement).toBe(host.querySelector('[data-loop-retry]'));
+  });
+
+  it('reports it could not focus a decision when there is no gate or recovery control showing', () => {
     const panel = createLoopPanel(host, { githubRef: () => Promise.resolve(null), openExternal: () => {} });
     panel.render(loop({ status: 'impl-draft' }), 'plan'); // a working (non-gate) state
     expect(panel.focusDecision()).toBe(false);

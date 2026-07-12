@@ -108,9 +108,8 @@ export function createShell(root: HTMLElement, deps: ShellDeps = {}): Shell {
   const syncLoopReadout = (on: boolean): void =>
     root.querySelector('.loopstat')?.setAttribute('aria-expanded', String(on));
   const focusView = (v: ViewId): void => void root.querySelector<HTMLElement>(`[data-viewbtn="${v}"]`)?.focus();
-  // The control that opened the panel, so a close returns focus to it rather than to whichever control
-  // the shell assumes opened it — the status bar's alert opens it too (WCAG 2.4.3). Moving focus INTO the
-  // panel is the panel's own job (it owns the gate markup); the shell only docks the column.
+  // The status bar's alert opens the panel too, so a close returns focus to whatever opened it, not an
+  // assumed rail toggle (WCAG 2.4.3).
   let panelOpener: HTMLElement | null = null;
   function openLoopPanel(opener?: HTMLElement): void {
     panelOpener = opener ?? null;

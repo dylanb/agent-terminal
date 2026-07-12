@@ -3555,6 +3555,32 @@ test('approve at the plan gate marks the PR ready and terminates the loop (§26.
   rmSync(binDir, { recursive: true, force: true });
 });
 
+test('activating the status-bar alert opens the docked panel and lands focus on the gate decision (§22.3.1 / WCAG 2.4.3)', async () => {
+  // The whole point of the alert→panel seam: a keyboard user who activates the red alert is routed ONTO
+  // the decision, not merely shown the panel. This drives the REAL alert through the composition root
+  // (openLoopPanel + the panel's own focusDecision) and observes focus land — the un-hide-then-focus
+  // ordering jsdom cannot exercise.
+  const repo = seedBootstrapFlowRepo('agent-term-e2e-alertfocus-');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-alertfocus-home-'));
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-alertfocus-bin-');
+  seedFakeAgent(binDir, { work: 'write-plan', reviews: 'all', consolidate: 'clean' });
+  await driveToWorkTurn(repo, home, binDir, logFile, '30000');
+  await expect
+    .poll(() => readFileSync(join(repo, '.agent-loop', 'state.yaml'), 'utf8'), { timeout: 25_000 })
+    .toContain('status: awaiting-human-plan-approval');
+
+  // The panel is still closed; the alert is the status bar's attention state.
+  await expect(statusAlert()).toBeVisible({ timeout: 10_000 });
+  await statusAlert().click();
+  await expect(gateButton('approve')).toBeVisible({ timeout: 10_000 });
+  await expect(gateButton('approve')).toBeFocused(); // routed onto the decision, not left on the alert
+
+  await app.close();
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+  rmSync(binDir, { recursive: true, force: true });
+});
+
 // §26 D42a — reaching a SUCCESS terminal (approve at the plan gate) auto-advances the flow into the next
 // step (Slice 1), and entering that `implement` loop step — which has no `bootstrap: pickup` — RESUMES the
 // existing run under impl-loop (Slice 2, `agent-loop resume --loop`): state.yaml is rebound to impl-loop at

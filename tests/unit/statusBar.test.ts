@@ -512,6 +512,18 @@ describe('status bar (§22.3.1)', () => {
       expect(document.activeElement).not.toBe(document.body);
     });
 
+    it('does not strand focus when a focused editable name becomes non-editable (WCAG 2.4.3)', () => {
+      // Name the work in a repo (an editable button), tab-focus it, then leave the repo (repoKey null):
+      // the title stays a `user` kind but is no longer editable, so it repaints as a span. Without a
+      // tabindex the focus-restore would no-op and strand focus on <body>.
+      const { host, render } = mount();
+      render(model({ title: { kind: 'user', text: 'Named' } }), REPO);
+      titleEl(host)!.focus();
+      render(model({ title: { kind: 'user', text: 'Named' } }), null); // cwd left the repo
+      expect(document.activeElement).toBe(titleEl(host));
+      expect(document.activeElement).not.toBe(document.body);
+    });
+
     it('does not strand focus when the alert clears while it is focused (WCAG 2.4.3)', () => {
       const { host, render } = mount();
       render(model({ title: { kind: 'user', text: 'Named' }, alert: blocked }));
