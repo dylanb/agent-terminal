@@ -226,6 +226,34 @@ rule has actually leaked through:
   its survival past the mechanism is a violation that was merely latent before. Grep the comment for the
   identifier you just removed.
 
+## An e2e test never boots a process it will not use — the `@ownapp` contract
+
+**A test fixture provisions what the test uses, and nothing it discards.** The e2e's `beforeEach` boots a
+real Electron (real PTY, real bash, real renderer) and waits for its first paint. A test that needs a
+bespoke environment — a temp `HOME`, a stubbed `PATH`, `CLAUDE_CONFIG_DIR` — cannot use that instance and
+launches its own, so booting one for it buys a full startup, and the wait on it, purely to throw away. Tag
+such a test **`@ownapp`**: the harness boots nothing and the test boots once. The canary at the top of
+`app.spec.ts` pins the contract (`expect(harnessBooted).toBe(false)`), so a `beforeEach` that regresses to
+booting unconditionally fails a test rather than quietly costing every run.
+
+This is a correctness rule, not a speed one. The waste is not distributed evenly — it lands entirely on
+process startup, the most contended thing the suite does — and a saturated runner does not fail *loudly*.
+It fails as a startup that misses its budget, a whole test that misses the 60 s ceiling, and a worker that
+cannot tear down. **A worker-teardown timeout is not attributed to any test**, so `retries` cannot absorb
+it: Playwright reports `1 error was not a part of any test` and exits non-zero with every test green. That
+is the failure this rule exists to prevent — a red bar that no test failure explains, on a suite whose
+tests all pass.
+
+The motivating defect: 147 tests each got a `beforeEach` boot, and 63 of them immediately closed it and
+launched their own — **214 Electron boots where 153 would do**, ~40% of them pure discard. Four tests were
+worse, leaving the unused instance *running* while they launched one or two more, so a 2-core CI runner
+hosted up to three concurrent Electrons for a test that used one. The suite went red with 149 passed, 4
+flaky, and 0 failed. The green bar had been true and useless for as long as it took the load to tip.
+
+The general form, and the reason it earns a standard rather than a code comment: **when a shared fixture is
+expensive and only *some* tests can use it, "provision it for everyone" is not the safe default — it is a
+load-bearing cost paid by the tests that cannot use it.** Make the fixture opt-out, and pin the opt-out.
+
 ## One theme per PR
 
 A branch that accumulates unrelated themes is not reviewable, by a human or by the §26 persona fan-out:
