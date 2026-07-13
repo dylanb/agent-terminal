@@ -1,7 +1,7 @@
 /// <reference lib="dom" />
 // page.evaluate callbacks run in the renderer; DOM lib gives them window.monitor's type.
 import { _electron as electron, expect, test, type ElectronApplication, type Page } from '@playwright/test';
-import { mkdtempSync, mkdirSync, writeFileSync, appendFileSync, rmSync, existsSync, statSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, appendFileSync, rmSync, existsSync, statSync, readFileSync, readdirSync, realpathSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, basename } from 'node:path';
 import { parseColor, contrastRatio, ringOver } from '../helpers/wcag';
@@ -495,8 +495,15 @@ test('the app terminates when the hosted shell exits', async () => {
   page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
   // Shell teardown → PTY exit → app quit can take a moment under CI load; wait past the default budget.
-  await typeCommand('exit');
-  await app.waitForEvent('close', { timeout: 20_000 });
+  const closed = app.waitForEvent('close', { timeout: 20_000 });
+  await focusTerminal();
+  await page.keyboard.type('exit', { delay: 20 });
+  try {
+    await page.keyboard.press('Enter');
+  } catch (error) {
+    if (!page.isClosed()) throw error;
+  }
+  await closed;
   expect(app.windows()).toHaveLength(0);
 });
 
@@ -1954,7 +1961,8 @@ function seedRefsFlowRepo(prefix: string): { dir: string; stateFile: string } {
 
 const loopReadout = () => page.locator('#flow-strip .loopstat'); // compact rail read-out; click opens the panel
 const loopPanel = () => page.locator('#loop-panel');
-const attnCue = () => page.locator('#attn-cue'); // §24.2.3 T4
+const statusActivity = () => page.locator('#status-bar .sb-activity');
+const statusAlert = () => page.locator('#status-bar [data-status-alert]');
 
 // Fire main's flow:revealLoop push directly (§24.2.3 T4) so the real renderer reveal path runs. The
 // OS-notification CLICK that emits this in production is untestable Electron glue (its decision +
@@ -3218,13 +3226,22 @@ test('a work turn that streams past the stall window still advances to the revie
   seedFakeAgent(binDir, { work: 'write-plan', slowWork: true, reviews: 'all', consolidate: 'clean' });
   await driveToWorkTurn(repo, home, binDir, logFile, '3000'); // stall window far shorter than the ~9s stream
 
-  // §26 (v2.120) — while the work turn streams, the strip shows the loop-activity readout (a phrase + the
+  // §22.3.1 — while the work turn streams, the STATUS BAR shows what the engine is doing (a phrase + the
   // animated braille spinner) so an in-flight turn is visibly "doing work". The ~9s stream is a comfortable
-  // window to observe it before plan.md lands.
-  const activity = page.locator('#flow-strip .flow-activity');
-  await expect(activity).toBeVisible({ timeout: 20_000 });
-  await expect(activity.locator('.phrase')).not.toBeEmpty();
-  await expect(activity.locator('.spin')).toHaveCount(1);
+  // window to observe it before plan.md lands. The rail shows no busy signal: one busy surface, one place.
+  await expect(statusActivity()).toBeVisible({ timeout: 20_000 });
+  await expect(statusActivity().locator('.phrase')).not.toBeEmpty();
+  await expect(statusActivity().locator('.spin')).toHaveCount(1);
+  await expect(page.locator('#flow-strip .flow-activity')).toHaveCount(0);
+
+  // Decision 16 / §22.3.1: under space pressure the phrase FLOORS and ellipsizes — it never sheds to a
+  // bare spinner. Squeeze hard and assert a legible phrase and its spinner both survive with real width.
+  await page.setViewportSize({ width: 360, height: 700 });
+  const phrase = statusActivity().locator('.phrase');
+  await expect(phrase).toBeVisible();
+  expect((await phrase.boundingBox())!.width).toBeGreaterThan(0);
+  await expect(statusActivity().locator('.spin')).toBeVisible();
+  await page.setViewportSize({ width: 1280, height: 800 });
 
   // Land: plan.md appears only after the long stream, and the reviewers turn then runs (its per-persona
   // JSON is the proof the chain advanced past the work turn). Never auto-errors mid-stream.
@@ -3760,6 +3777,32 @@ test('approve at the plan gate marks the PR ready and terminates the loop (§26.
   expect(readFileSync(stateFile, 'utf8')).toContain('terminated: true');
   // The gate's mark-pr-ready action ran out of band (§26.6/D53): the fake gh recorded `pr ready`.
   await expect.poll(() => readFileSync(logFile, 'utf8'), { timeout: 10_000 }).toContain('pr ready');
+
+  await app.close();
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+  rmSync(binDir, { recursive: true, force: true });
+});
+
+test('activating the status-bar alert opens the docked panel and lands focus on the gate decision (§22.3.1 / WCAG 2.4.3)', async () => {
+  // The whole point of the alert→panel seam: a keyboard user who activates the red alert is routed ONTO
+  // the decision, not merely shown the panel. This drives the REAL alert through the composition root
+  // (openLoopPanel + the panel's own focusDecision) and observes focus land — the un-hide-then-focus
+  // ordering jsdom cannot exercise.
+  const repo = seedBootstrapFlowRepo('agent-term-e2e-alertfocus-');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-alertfocus-home-'));
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-alertfocus-bin-');
+  seedFakeAgent(binDir, { work: 'write-plan', reviews: 'all', consolidate: 'clean' });
+  await driveToWorkTurn(repo, home, binDir, logFile, '30000');
+  await expect
+    .poll(() => readFileSync(join(repo, '.agent-loop', 'state.yaml'), 'utf8'), { timeout: 25_000 })
+    .toContain('status: awaiting-human-plan-approval');
+
+  // The panel is still closed; the alert is the status bar's attention state.
+  await expect(statusAlert()).toBeVisible({ timeout: 10_000 });
+  await statusAlert().click();
+  await expect(gateButton('approve')).toBeVisible({ timeout: 10_000 });
+  await expect(gateButton('approve')).toBeFocused(); // routed onto the decision, not left on the alert
 
   await app.close();
   rmSync(repo, { recursive: true, force: true });
@@ -4494,12 +4537,17 @@ test('a loop step shows a Loop read-out that expands a docked state-mirror panel
   rmSync(home, { recursive: true, force: true });
 });
 
-test('the awaiting-human cue appears, re-fires after dismiss, and clears as the loop state changes (§24.2.3 T4)', async () => {
-  // The cue tracks state.yaml with no manual refresh: a distinct human-needed entry re-fires it even
-  // after a dismiss; a non-human status clears it (§24.2.3 T4).
-  const { dir: repo, stateFile } = seedLoopFlowRepo('agent-term-e2e-cue-');
-  writeFileSync(stateFile, 'schema_version: 4\npr: 179\nbranch: agent-loop/issue-176\niteration: 9\nstatus: awaiting-human-pr-approval\n');
-  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-cue-home-'));
+test('a flow transition whose write cannot land surfaces a blocking error and stays retryable (§19.1)', async () => {
+  // persist() throws when the write cannot land; the name-save path surfaces that, and so must a
+  // Start/Advance — a transition that silently no-ops leaves the user clicking into the void.
+  // `.agent-terminal` is a symlink: the flow.yaml behind it LOADS (readFileSync follows the link), but
+  // atomicWriteFileSync REFUSES a symlinked container, so Start's persist() throws.
+  const repo = mkdtempSync(join(tmpdir(), 'agent-term-e2e-txerr-'));
+  mkdirSync(join(repo, '.git'), { recursive: true });
+  const real = mkdtempSync(join(tmpdir(), 'agent-term-e2e-txerr-real-'));
+  writeFileSync(join(real, 'flow.yaml'), 'name: manual\nsteps:\n  - id: groom\n    kind: manual\n');
+  symlinkSync(real, join(repo, '.agent-terminal'));
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-txerr-home-'));
   await app.close();
   app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
   page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
@@ -4507,33 +4555,17 @@ test('the awaiting-human cue appears, re-fires after dismiss, and clears as the 
 
   await typeCommand(`cd "${repo}"`);
   await expect(flowStepName()).toHaveText('groom', { timeout: 10_000 });
-  await expect(attnCue()).toBeHidden(); // a manual step is not human-needed
+  await flowControl().click(); // Start → persist() throws (symlinked container)
 
-  await flowControl().click(); // Start → groom (manual): still not human-needed
-  await expect(attnCue()).toBeHidden();
+  const errorDialog = page.locator('#flow-error-host .flow-modal');
+  await expect(errorDialog).toBeVisible({ timeout: 10_000 });
+  await expect(errorDialog).toContainText('Flow action failed');
+  await errorDialog.locator('.dismiss').click();
+  await expect(flowControl()).toBeEnabled(); // retryable, not stuck
 
-  await flowControl().click(); // Advance → build (loop) at awaiting-human-pr-approval
-  await expect(attnCue()).toBeVisible({ timeout: 10_000 });
-  await expect(attnCue()).toContainText('awaiting-human-pr-approval');
-
-  // Dismiss only hides it — it changes no loop state (the read-out stays) and injects nothing.
-  await attnCue().locator('[data-attn-dismiss]').click();
-  await expect(attnCue()).toBeHidden();
-  await expect(loopReadout()).toHaveCount(1);
-  // Dismiss must not strand focus on <body> (WCAG 2.4.3): it lands on the loop read-out toggle.
-  await expect(loopReadout()).toBeFocused();
-
-  // A distinct human-needed entry (new status, later iteration) re-fires the cue even after a dismiss.
-  writeFileSync(stateFile, 'schema_version: 4\npr: 179\nbranch: agent-loop/issue-176\niteration: 11\nstatus: awaiting-human-impl-triage\n');
-  await expect(attnCue()).toBeVisible({ timeout: 10_000 });
-  await expect(attnCue()).toContainText('awaiting-human-impl-triage');
-
-  // A terminal hand-off (not human-needed) clears the cue.
-  writeFileSync(stateFile, 'schema_version: 4\npr: 179\nbranch: agent-loop/issue-176\niteration: 11\nstatus: awaiting-team-review\n');
-  await expect(attnCue()).toBeHidden({ timeout: 10_000 });
-
-  await app.close(); // HOME=temp ⇒ Electron writes userData under it; stop writes before removing it
+  await app.close();
   rmSync(repo, { recursive: true, force: true });
+  rmSync(real, { recursive: true, force: true });
   rmSync(home, { recursive: true, force: true });
 });
 
@@ -4556,7 +4588,7 @@ test('the reveal signal lands the user on the loop read-out, from another view a
   await flowControl().click(); // Start → groom
   await flowControl().click(); // Advance → build (loop) active, human-needed
   await expect(loopReadout()).toHaveCount(1, { timeout: 10_000 });
-  await expect(attnCue()).toBeVisible();
+  await expect(statusAlert()).toBeVisible();
   await expect(page.locator('#app')).not.toHaveClass(/\bloop-open\b/); // the docked panel starts closed
 
   // Reveal from a non-Terminal view must land on Terminal with the read-out open.
@@ -4568,14 +4600,14 @@ test('the reveal signal lands the user on the loop read-out, from another view a
   await expect(loopPanel()).toContainText('awaiting-human-pr-approval');
 
   // Reveal from viewer-fullscreen (rail/strip hidden) must exit full-screen and re-open the read-out
-  // on Terminal — and the cue must stay perceivable in the always-visible main region throughout.
+  // on Terminal — and the alert must stay perceivable in the always-visible main region throughout.
   await loopReadout().click();
   await expect(page.locator('#app')).not.toHaveClass(/\bloop-open\b/);
   await page.keyboard.press('Control+2');
   await page.locator('#artifacts .art-fs').click();
   await expect(page.locator('#app')).toHaveClass(/\bviewer-fullscreen\b/);
   await expect(page.locator('#app .rail')).toBeHidden(); // the strip lives in the hidden rail…
-  await expect(attnCue()).toBeVisible(); // …yet the cue is still perceivable in the main region
+  await expect(statusAlert()).toBeVisible(); // …yet the alert is still perceivable in the main region
 
   await fireRevealLoop();
   await expect(page.locator('#app')).not.toHaveClass(/\bviewer-fullscreen\b/);

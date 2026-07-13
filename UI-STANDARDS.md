@@ -161,18 +161,28 @@ announcement and can create a focus trap. The rules:
    dismiss button) is fine *because* emptying removes that focusable.
 4. **Mount it in an always-visible region.** A live region nested under a frame that can itself be
    hidden can be suppressed out from under you; put it where no ancestor toggle can mask it.
-5. **Removing the focused control restores focus (WCAG 2.4.3).** If a dismiss/teardown empties the
-   host while focus was inside it, the component signals across its contract (an `onDismiss`-style
-   callback) so the root can place focus somewhere sensible — it does **not** reach across organisms
-   to move focus itself (UI §2.2). The canonical implementation is `attentionCue`.
+5. **Preserving focus across a subtree rebuild restores it through the shared primitive (WCAG 2.4.3).**
+   When a teardown or an in-place rebuild removes the node that held focus, the component captures
+   whether focus was inside the rebuilt container *before* the rebuild and lands it on the freshly-built
+   replacement *after* — but only if focus has not since moved away (it is on `<body>`, blurred there by
+   the rebuild, or still inside the container), never pulling focus in when it was elsewhere and never
+   stealing focus the user redirected. Never hand-roll this capture/guard; the canonical implementation
+   is `captureSubtreeFocus` (`dom.ts`) — the subtree sibling of `captureFocusReturn` (§4.6) — which
+   `statusBar` (its in-place name editor and ref/alert swaps), `loopPanel`, and the shell's loop-panel
+   close compose rather than re-deriving. When a component empties its host with no replacement to land
+   on, focus must not strand on `<body>`: either it signals across its contract (an `onFocusLost`-style
+   callback) so the root re-places focus, or a caller contract guarantees focus is moved out *before* the
+   emptying call (the docked panel's close-before-clear order, `dockedPanelSync`) — whichever it is, the
+   emptying entry point states which in its own doc-comment. A component never reaches across organisms
+   to move focus itself (UI §2.2). Two hand-rolled copies *will* drift — the reason `createModalShell` is
+   a single implementation (§5.1).
 6. **A control that disables itself during an async action restores focus on completion (WCAG 2.4.3).**
    Capture focus *before* disabling and return it *after* — but only if focus has not since moved:
    restore iff the control still holds focus or was blurred to `<body>` by the disable, never stealing
    focus the user redirected mid-action. Never hand-roll this guard; the canonical implementation is
    `captureFocusReturn` (`dom.ts`), which `cliInstall` and `installExamples` compose rather than
    re-deriving it — any self-disabling async control that returns focus composes it too. Two hand-rolled
-   copies *will* drift — the same reason `createModalShell` and `attentionCue` are single
-   implementations (§5.1).
+   copies *will* drift — the same reason `createModalShell` is a single implementation (§5.1).
 
 ## 5. Blocking dialogs — the modal focus-management pattern
 
@@ -253,6 +263,7 @@ pins for scroll and footer reachability.
 - [ ] RED-first DOM unit tests of observable behavior (UI §3.1).
 - [ ] Organisms: e2e + a passing relocation test in ≥2 placements (UI §3.2–3.3).
 - [ ] Any claim about a painted pixel (colour, contrast, focus ring, scroll, clip, reflow) pinned in the `browser` project or the e2e — never by parsing CSS (UI §3.2b).
+- [ ] If it rebuilds a subtree that can hold focus: composes `captureSubtreeFocus`/`captureFocusReturn` (`dom.ts`), never a hand-rolled capture/guard (UI §4.5–4.6).
 - [ ] If it announces transient messages: follows the Alert pattern — permanent host, empty-to-re-announce, no focusable when empty, focus restored on dismiss (UI §4).
 - [ ] If it blocks for a decision: composes `createModalShell` — `role="dialog"` (or `alertdialog`)/`aria-modal`, labelled + described, Tab trapped and wrapping, Escape/scrim close, focus restored to opener on close, `dispose()` tears down without restoring (UI §5).
 - [ ] …and answers it through the right door: the build's `confirm` for the user's affirmative action, `close` **only** for a dismissal. `close` fires `onDismiss`, so accepting through it retracts the very operation being started — the success path then announces the cancellation (WCAG 4.1.3). Never re-hand-roll a `confirmed` flag; the shell owns this.

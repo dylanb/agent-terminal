@@ -17,7 +17,7 @@ const SHELL_HTML = `
     <span class="stat loopstat" role="button" tabindex="0" aria-expanded="false" aria-controls="loop-panel">Loop</span>
     <button class="nav" data-viewbtn="4">Settings</button>
   </aside>
-  <aside class="loop-panel" id="loop-panel"><button data-loop-close>x</button></aside>
+  <aside class="loop-panel" id="loop-panel"><button data-loop-close>x</button><div class="gatebar"><button data-gate-option="approve">approve</button></div></aside>
   <main class="main">
     <div data-viewpane="1" class="on">term</div>
     <div data-viewpane="2">artifacts</div>
@@ -398,6 +398,23 @@ describe('shell controller (§24.1C — views, hotkeys, docked drawer, theme)', 
       expect(shell.isLoopPanelOpen()).toBe(true);
       press(' ');
       expect(shell.isLoopPanelOpen()).toBe(false);
+    });
+
+    it('records the opener as the focus-return target without yanking focus into the panel', () => {
+      // The shell opens the column and remembers who to return focus to; moving focus ONTO the gate
+      // decision is the panel's own job (it owns that markup), so the shell never reaches across for it.
+      (document.querySelector('[data-viewbtn="1"]') as HTMLElement).focus();
+      const opener = document.querySelector('.loopstat') as HTMLElement;
+      shell.openLoopPanel(opener);
+      expect(document.activeElement).toBe(document.querySelector('[data-viewbtn="1"]')); // focus not moved
+    });
+
+    it('returns focus to the opener when the panel — having taken focus — is closed', () => {
+      const opener = document.querySelector('.loopstat') as HTMLElement;
+      shell.openLoopPanel(opener);
+      (document.querySelector('[data-gate-option="approve"]') as HTMLElement).focus(); // the panel took focus
+      shell.closeLoopPanel();
+      expect(document.activeElement).toBe(opener);
     });
 
     it('closes on Escape when open', () => {

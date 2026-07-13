@@ -2,6 +2,8 @@ import { userEvent, page } from 'vitest/browser';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import '../../src/renderer/src/styles.css';
 import { createInstallExamples } from '../../src/renderer/src/installExamples';
+import { createStatusBar, type StatusBar } from '../../src/renderer/src/statusBar';
+import type { StatusBarModel, StatusBarTitle } from '../../src/shared/statusBar';
 import type { DestRelativePath, InstallExamplesPreview, InstallExamplesResult } from '../../src/shared/ipc';
 import { parseColor as parse, compositeOver as over, contrastRatio as contrast, ringOver, type RGBA } from '../helpers/wcag';
 
@@ -123,15 +125,56 @@ for (const theme of ['light', 'dark'] as const) {
       });
     });
 
-    // The attn-bar dismiss ring is a non-text indicator on the bar's tinted wash, not the plain card;
-    // the global --signal outline falls short there in light theme, so the bar scopes its own ring.
-    describe('attn-bar dismiss focus ring contrast (WCAG 2.1 SC 1.4.11)', () => {
-      it('the dismiss focus ring clears 3:1 on the attn-bar background', async () => {
-        const bar = mount(`<div class="attn-bar"><span class="msg">m</span><button class="x">×</button></div>`);
-        const x = bar.querySelector('.x') as HTMLElement;
-        await tabToProbe(x);
-        expect(contrast(focusRing(x), paintedBgBehindRing(x))).toBeGreaterThanOrEqual(3);
+    // §22.3.1. In its attention state the bar paints on a tinted wash, not the plain card — and it shows
+    // the title and the activity ALONGSIDE the alert, so every glyph on it is graded against that wash.
+    // Driving the real organism: probe markup re-typed here would keep passing through any rename in the
+    // renderer, and the wash only exists under `:has(.sb-alert-btn)`, which only the real alert emits.
+    describe('status-bar attention state (WCAG 2.1 SC 1.4.3 / 1.4.11)', () => {
+      let bar: StatusBar;
+
+      const mountBar = (model: StatusBarModel): HTMLElement => {
+        const host = mount(`<div class="status-bar"></div>`);
+        bar = createStatusBar(host, {
+          githubRef: async () => null,
+          openExternal: () => true,
+          setTitle: async () => {},
+          onAlertActivate: () => {},
+          onError: () => {},
+          onOpenError: () => {},
+          loopPanelId: 'loop-panel',
+        });
+        bar.render(model, 'repo');
+        return host;
+      };
+      const withAlert = (title: StatusBarTitle): StatusBarModel => ({
+        title,
+        activity: { phrase: 'Waiting for the agent' },
+        alert: { status: 'awaiting-plan-review', iteration: 3, pr: 58 },
       });
+
+      afterEach(() => bar?.dispose());
+
+      it("the alert's focus ring clears 3:1 on the attention wash", async () => {
+        const host = mountBar(withAlert({ kind: 'user', text: 'Some work' }));
+        const btn = host.querySelector('[data-status-alert]') as HTMLElement;
+        await tabToProbe(btn);
+        expect(contrast(focusRing(btn), paintedBgBehindRing(btn))).toBeGreaterThanOrEqual(3);
+      });
+
+      // Each glyph the bar can paint in this state, graded on the wash it actually sits on.
+      const ON_WASH: ReadonlyArray<readonly [StatusBarTitle, string, string]> = [
+        [{ kind: 'user', text: 'Some work' }, '.sb-name', 'a named title'],
+        [{ kind: 'user', text: '' }, '.sb-name.empty', 'the unnamed-title placeholder'],
+        [{ kind: 'user', text: 'Some work' }, '.sb-activity .phrase', 'the activity phrase'],
+        [{ kind: 'user', text: 'Some work' }, '.sb-alert-btn b', "the alert's lead"],
+        [{ kind: 'user', text: 'Some work' }, '.sb-alert-btn .it', "the alert's status detail"],
+      ];
+      for (const [title, sel, what] of ON_WASH) {
+        it(`${what} (${sel}) clears 4.5:1 on the attention wash`, () => {
+          const el = mountBar(withAlert(title)).querySelector(sel) as HTMLElement;
+          expect(contrast(fg(el), paintedBg(el))).toBeGreaterThanOrEqual(4.5);
+        });
+      }
     });
 
     // The Install button stays focusable while busy (aria-disabled + aria-busy) so the progress

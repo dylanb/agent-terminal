@@ -8,6 +8,7 @@ import path from 'node:path';
 import yaml from 'js-yaml';
 import type { AgentState, FlowPrompt, FlowRefs, FlowStateView, FlowStatus, TodoItem } from '../shared/ipc';
 import { hasFlowRefs } from '../shared/ipc';
+import { normalizeTitle } from '../shared/statusBar';
 import { createFlowStateStore, type FlowStateStore } from './flowState';
 import type { AgentLoopState } from './agentLoopBridge';
 import { gateForStatus, type LoopDef } from './loopDef';
@@ -16,7 +17,7 @@ import { isRecord } from './yamlRecord';
 import { errMsg } from './errno';
 
 /**
- * Single source of truth for "the loop needs you" (§24.2.3 T4), consumed by both the in-app cue and
+ * Single source of truth for "the loop needs you" (§24.2.3 T4), consumed by both the status bar's alert and
  * the OS notification. With a LoopDef this is gate-driven; without one it degrades to the shared
  * awaiting-human/impasse family. Both paths classify the shipped vocabulary identically.
  */
@@ -227,6 +228,10 @@ export interface FlowMachine {
   /** Record the answer to a step-entry input prompt (§18.4 / §24.2.3 T3) and RE-ENTER the current
    *  step so the now-satisfied bootstrap runs. Legal only while a step is in_progress. */
   provideInput(values: Record<string, string>): FlowStateView;
+  /** Name this worktree's work (§22.3.1), or clear the name with a blank. Legal from EVERY status,
+   *  including the load-error state — the name describes the worktree, not the run, so a directory whose
+   *  flow.yaml never loaded is nameable like any other (only the name is written; no progression). */
+  setTitle(text: string): FlowStateView;
 }
 
 /** Run a step's entry actions, given the flow's resolved typed inputs (§18.4). Returns a one-shot
@@ -259,17 +264,32 @@ export function createFlowMachine(
   now: () => number = Date.now,
 ): FlowMachine {
   if (!load.ok) {
-    const view = (): FlowStateView => ({
-      stepName: '',
-      steps: [],
-      position: 0,
-      total: 0,
-      status: 'error',
-      error: load.error,
-    });
-    // Every transition is inert in the error state, and crucially never persists — so a bad flow.yaml
-    // can't overwrite a good on-disk progression, and a racing caller can't throw or escape the error.
-    return { state: view, start: view, advance: view, restart: view, undo: view, revertStep: view, terminate: view, provideInput: view };
+    const view = (): FlowStateView => {
+      const named = store?.readTitle() ?? null;
+      return {
+        stepName: '',
+        steps: [],
+        position: 0,
+        total: 0,
+        status: 'error',
+        error: load.error,
+        ...(named !== null ? { userTitle: named } : {}),
+      };
+    };
+    return {
+      state: view,
+      start: view,
+      advance: view,
+      restart: view,
+      undo: view,
+      revertStep: view,
+      terminate: view,
+      provideInput: view,
+      setTitle: (text) => {
+        store?.writeTitle(normalizeTitle(text));
+        return view();
+      },
+    };
   }
 
   const def = load.definition;
@@ -295,6 +315,8 @@ export function createFlowMachine(
   // §26.10 — when THIS run of the flow began. The cost meter sweeps session logs from here, so it must
   // survive every transition within a run and never outlive one.
   let startedAt: number | null = null;
+  // §22.3.1.
+  let userTitle: string | null = null;
 
   // Re-read the persisted progression from the store (§19.1: flow-state.yaml is the source of truth).
   // Run at construction AND on every state() query, so an external advance — the agent-loop CLI moving
@@ -307,14 +329,16 @@ export function createFlowMachine(
     inputs = {};
     startedAt = null;
     const persisted = store.read();
-    if (!persisted) return;
-    const i = names.indexOf(persisted.step);
-    if (i >= 0) {
-      index = i;
-      status = persisted.status;
-    }
-    if (persisted.inputs) inputs = { ...persisted.inputs };
-    if (persisted.startedAt !== undefined) startedAt = persisted.startedAt;
+    if (persisted) {
+      const i = names.indexOf(persisted.step);
+      if (i >= 0) {
+        index = i;
+        status = persisted.status;
+      }
+      if (persisted.inputs) inputs = { ...persisted.inputs };
+      if (persisted.startedAt !== undefined) startedAt = persisted.startedAt;
+      userTitle = persisted.title ?? null;
+    } else userTitle = store.readTitle();
   };
   hydrate();
 
@@ -350,6 +374,7 @@ export function createFlowMachine(
       total: steps.length,
       status,
       ...(step.todoTemplate ? { templateRef: step.todoTemplate } : {}),
+      ...(userTitle !== null ? { userTitle } : {}),
     };
     // §24.2.3 T7 (refs) / §24.2.3 T2 (loop mirror).
     const entered = status === 'not_started' ? [] : steps.slice(0, index + 1);
@@ -372,6 +397,7 @@ export function createFlowMachine(
       status,
       ...(Object.keys(inputs).length > 0 ? { inputs } : {}),
       ...(startedAt !== null ? { startedAt } : {}),
+      ...(userTitle !== null ? { title: userTitle } : {}),
     });
 
   const requireStatus = (expected: FlowStatus, action: string): void => {
@@ -459,6 +485,18 @@ export function createFlowMachine(
       persist();
       return enter(view());
     },
+    setTitle: (text) => {
+      hydrate(); // §19.1
+      const prev = userTitle;
+      userTitle = normalizeTitle(text);
+      try {
+        store?.writeTitle(userTitle);
+      } catch (e) {
+        userTitle = prev;
+        throw e;
+      }
+      return view();
+    },
   };
 }
 
@@ -477,6 +515,8 @@ export interface FlowManager {
   revertStep(repoKey: string, fromStepId: string): FlowStateView;
   terminate(repoKey: string): FlowStateView;
   provideInput(repoKey: string, values: Record<string, string>): FlowStateView;
+  /** Name a repo's work, or clear the name with a blank (§22.3.1). */
+  setTitle(repoKey: string, text: string): FlowStateView;
 }
 
 export interface FlowManagerDeps {
@@ -533,5 +573,6 @@ export function createFlowManager(deps: FlowManagerDeps): FlowManager {
     revertStep: (k, fromStepId) => machineFor(k).revertStep(fromStepId),
     terminate: (k) => machineFor(k).terminate(),
     provideInput: (k, values) => machineFor(k).provideInput(values),
+    setTitle: (k, text) => machineFor(k).setTitle(text),
   };
 }

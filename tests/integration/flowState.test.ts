@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync, symlinkSync, rmSync } from 'node:fs';
+import { chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync, symlinkSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createFlowStateStore } from '../../src/main/flowState';
@@ -80,6 +80,133 @@ describe('flow-state store (§24.2.2 S3 / §19.1)', () => {
   it('omits the inputs key entirely when a flow resolved none', () => {
     createFlowStateStore(dir).write({ step: 'groom', status: 'in_progress' });
     expect(createFlowStateStore(dir).read()).toEqual({ step: 'groom', status: 'in_progress' });
+  });
+
+  it('round-trips the user title and survives a fresh store', () => {
+    createFlowStateStore(dir).write({ step: 'plan', status: 'in_progress', title: 'Refactor the shadow parser' });
+    expect(createFlowStateStore(dir).read()).toEqual({
+      step: 'plan',
+      status: 'in_progress',
+      title: 'Refactor the shadow parser',
+    });
+  });
+
+  it('omits the title key entirely for a flow the user never named', () => {
+    createFlowStateStore(dir).write({ step: 'plan', status: 'in_progress' });
+    expect(createFlowStateStore(dir).read()).not.toHaveProperty('title');
+  });
+
+  it('drops an ill-typed or blank title rather than showing an empty name', () => {
+    mkdirSync(join(dir, '.agent-terminal'), { recursive: true });
+    for (const bad of ['""', '"   "', '42', '[a, b]']) {
+      writeFileSync(join(dir, '.agent-terminal', 'flow-state.yaml'), `step: plan\nstatus: in_progress\ntitle: ${bad}\n`);
+      expect(createFlowStateStore(dir).read()).toEqual({ step: 'plan', status: 'in_progress' });
+    }
+  });
+
+  describe('the worktree name, independent of the flow progression', () => {
+    it('names a directory that has no progression at all', () => {
+      createFlowStateStore(dir).writeTitle('Spike the parser');
+      expect(createFlowStateStore(dir).readTitle()).toBe('Spike the parser');
+    });
+
+    it('leaves an existing progression untouched when only the name changes', () => {
+      const store = createFlowStateStore(dir);
+      store.write({ step: 'plan', status: 'in_progress', inputs: { ticket: '42' }, startedAt: 1234 });
+      store.writeTitle('Refactor the shadow parser');
+      expect(createFlowStateStore(dir).read()).toEqual({
+        step: 'plan',
+        status: 'in_progress',
+        inputs: { ticket: '42' },
+        startedAt: 1234,
+        title: 'Refactor the shadow parser',
+      });
+    });
+
+    it('refuses to rewrite a progression with unknown fields and leaves it byte-for-byte intact', () => {
+      mkdirSync(join(dir, '.agent-terminal'), { recursive: true });
+      const file = join(dir, '.agent-terminal', 'flow-state.yaml');
+      const before = 'step: plan\nstatus: in_progress\nfuture_extension: keep-me\n';
+      writeFileSync(file, before);
+      expect(() => createFlowStateStore(dir).writeTitle('Named')).toThrow(/unrecognized/i);
+      expect(readFileSync(file, 'utf8')).toBe(before);
+    });
+
+    it('does not re-serialize foreign keys from a readable file', () => {
+      mkdirSync(join(dir, '.agent-terminal'), { recursive: true });
+      const file = join(dir, '.agent-terminal', 'flow-state.yaml');
+      const before = 'step: plan\nstatus: in_progress\ngithub_token: ghp_secret_value\noauth_token: xoxb-leak\n';
+      writeFileSync(
+        file,
+        before,
+      );
+      expect(() => createFlowStateStore(dir).writeTitle('Named')).toThrow(/unrecognized/i);
+      expect(readFileSync(file, 'utf8')).toBe(before);
+    });
+
+    it('write-side strict validation rejects an ill-typed inputs value that the lenient read tolerates', () => {
+      mkdirSync(join(dir, '.agent-terminal'), { recursive: true });
+      const file = join(dir, '.agent-terminal', 'flow-state.yaml');
+      writeFileSync(file, 'step: plan\nstatus: in_progress\ninputs:\n  a: ok\n  b: 5\n');
+      const store = createFlowStateStore(dir);
+      expect(store.read()).toMatchObject({ step: 'plan', status: 'in_progress', inputs: { a: 'ok' } });
+      expect(() => store.writeTitle('Named')).toThrow(/unrecognized/i);
+      expect(readFileSync(file, 'utf8')).toContain('b: 5'); // strict write left the un-round-trippable doc intact
+    });
+
+    it('clears the name without disturbing the progression', () => {
+      const store = createFlowStateStore(dir);
+      store.write({ step: 'plan', status: 'in_progress', title: 'gone' });
+      store.writeTitle(null);
+      expect(createFlowStateStore(dir).readTitle()).toBeNull();
+      expect(createFlowStateStore(dir).read()).toEqual({ step: 'plan', status: 'in_progress' });
+    });
+
+    it('reads a name off a file whose progression is corrupt, rather than losing it with the rest', () => {
+      mkdirSync(join(dir, '.agent-terminal'), { recursive: true });
+      writeFileSync(join(dir, '.agent-terminal', 'flow-state.yaml'), 'step: x\ntitle: Still named\n'); // no status
+      expect(createFlowStateStore(dir).read()).toBeNull();
+      expect(createFlowStateStore(dir).readTitle()).toBe('Still named');
+    });
+
+    it('bounds a repo-supplied name, which is re-parsed on every state query (CWE-400)', () => {
+      mkdirSync(join(dir, '.agent-terminal'), { recursive: true });
+      writeFileSync(join(dir, '.agent-terminal', 'flow-state.yaml'), `step: plan\nstatus: in_progress\ntitle: ${'x'.repeat(10_000)}\n`);
+      expect(createFlowStateStore(dir).readTitle()!.length).toBe(200);
+    });
+
+    it('refuses to replace malformed YAML when naming the worktree', () => {
+      mkdirSync(join(dir, '.agent-terminal'), { recursive: true });
+      const file = join(dir, '.agent-terminal', 'flow-state.yaml');
+      const before = 'status: : : broken\n\t- x';
+      writeFileSync(file, before);
+      expect(() => createFlowStateStore(dir).writeTitle('Named')).toThrow(/read|parse|unrecognized/i);
+      expect(readFileSync(file, 'utf8')).toBe(before);
+    });
+
+    it('propagates a non-absence read failure and preserves the existing state', () => {
+      mkdirSync(join(dir, '.agent-terminal'), { recursive: true });
+      const file = join(dir, '.agent-terminal', 'flow-state.yaml');
+      const before = 'step: plan\nstatus: in_progress\ninputs:\n  ticket: "42"\n';
+      writeFileSync(file, before);
+      chmodSync(file, 0o000);
+      try {
+        expect(() => createFlowStateStore(dir).writeTitle('Named')).toThrow();
+      } finally {
+        chmodSync(file, 0o600);
+      }
+      expect(readFileSync(file, 'utf8')).toBe(before);
+    });
+  });
+
+  describe('a write that cannot land must not report success', () => {
+    it('throws rather than silently writing nothing when .agent-terminal is a symlink', () => {
+      const elsewhere = mkdtempSync(join(tmpdir(), 'flow-elsewhere-'));
+      symlinkSync(elsewhere, join(dir, '.agent-terminal'));
+      expect(() => createFlowStateStore(dir).write({ step: 'plan', status: 'in_progress' })).toThrow();
+      expect(() => createFlowStateStore(dir).writeTitle('never lands')).toThrow();
+      rmSync(elsewhere, { recursive: true, force: true });
+    });
   });
 
   it('reads null on a corrupt/unparseable file rather than throwing', () => {
