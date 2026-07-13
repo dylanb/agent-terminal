@@ -182,6 +182,8 @@ export function createStatusBar(host: HTMLElement, deps: StatusBarDeps): StatusB
       });
       titleSlot.replaceChildren(link);
       restore(() => link);
+    }).catch(() => {
+      // Deliberate: a resolution failure is non-fatal — the bar keeps the number (see githubRef).
     });
   }
 

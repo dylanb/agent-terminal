@@ -95,6 +95,22 @@ describe('status bar (§22.3.1)', () => {
       expect(titleEl(host)!.textContent).toContain('#42');
     });
 
+    it('keeps the number and leaks no unhandled rejection when ref resolution rejects', async () => {
+      const rejections: unknown[] = [];
+      const onUnhandled = (reason: unknown): void => void rejections.push(reason);
+      process.on('unhandledRejection', onUnhandled);
+      try {
+        const { host, render } = mount({ githubRef: () => Promise.reject(new Error('channel torn down')) });
+        render(model({ title: { kind: 'pr', number: 57 } }));
+        await flush();
+        await flush(); // let a would-be unhandled rejection be reported before asserting
+        expect(titleEl(host)!.textContent).toContain('#57');
+        expect(rejections).toEqual([]);
+      } finally {
+        process.off('unhandledRejection', onUnhandled);
+      }
+    });
+
     it('opens the ref on GitHub when the title is clicked', async () => {
       const openExternal = vi.fn();
       const { host, render } = mount({ githubRef: () => Promise.resolve(ref()), openExternal });
