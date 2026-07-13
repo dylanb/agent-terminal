@@ -259,6 +259,67 @@ describe('applyInstallExamples — a clean run seeds every destination and repor
   });
 });
 
+describe('a bundle member that cannot be READ is a refusal, never an install of less (absent ≠ unreadable)', () => {
+  // CLAUDE.md's enumeration rule: absent yields nothing, unreadable THROWS — conflating them "reports a
+  // successful install of nothing". The flow plan asks whether the bundle's todo-templates/ is a real
+  // directory, and a lstat that fails for ANY reason other than absence is not an answer to that question:
+  // an optional subtree that is not there is a legitimate empty, an unreadable one is a broken build.
+  // The refusal must land while PLANNING — preview included, since a preview that cannot read the bundle
+  // and reports "nothing conflicts" drives an apply the user never consented to (§18.1).
+  it.skipIf(asRoot)('refuses the preview rather than reporting a clean, conflict-free bundle it cannot read', () => {
+    const bundle = mkdtempSync(path.join(tmpdir(), 'flow-bundle-'));
+    try {
+      writeFileSync(path.join(bundle, 'flow.yaml'), 'steps: []\n');
+      mkdirSync(path.join(bundle, 'todo-templates'));
+      chmodSync(bundle, 0o600); // readable, NOT traversable — its members cannot be lstat'd
+
+      const pre = previewInstallExamples(withBundle('flow', bundle));
+
+      expect(pre.ok).toBe(false);
+      if (pre.ok) return;
+      expect(pre.error).toContain('todo-templates'); // names the member it could not read
+    } finally {
+      chmodSync(bundle, 0o700);
+      rmSync(bundle, { recursive: true, force: true });
+    }
+  });
+
+  it.skipIf(asRoot)('refuses the apply before the first write, seeding no destination', () => {
+    const bundle = mkdtempSync(path.join(tmpdir(), 'flow-bundle-'));
+    try {
+      writeFileSync(path.join(bundle, 'flow.yaml'), 'steps: []\n');
+      mkdirSync(path.join(bundle, 'todo-templates'));
+      chmodSync(bundle, 0o600);
+
+      const res = applyInstallExamples(withBundle('flow', bundle), ALL);
+
+      expect(res.ok).toBe(false);
+      if (res.ok) return;
+      expect(res.created).toEqual([]);
+      expect(res.overwritten).toEqual([]);
+      for (const id of ALL) expect(walk(targetOf(id, '.'))).toEqual([]);
+    } finally {
+      chmodSync(bundle, 0o700);
+      rmSync(bundle, { recursive: true, force: true });
+    }
+  });
+
+  // The absent case must stay a legitimate empty: a loop that ships no todo-templates/ is not a broken build.
+  it('still installs a flow bundle that simply has no todo-templates directory', () => {
+    const bundle = mkdtempSync(path.join(tmpdir(), 'flow-bundle-'));
+    try {
+      writeFileSync(path.join(bundle, 'flow.yaml'), 'steps: []\n');
+
+      const res = applyInstallExamples(withBundle('flow', bundle), ALL);
+
+      expect(res.ok).toBe(true);
+      expect(filesFor(res.created, 'flow')).toEqual(['flow.yaml']);
+    } finally {
+      rmSync(bundle, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('previewInstallExamples — per-destination conflicts, and nothing is ever written', () => {
   it('reports no conflict in any destination when everything is clean', () => {
     const preview = previewOk(previewInstallExamples(dirs));

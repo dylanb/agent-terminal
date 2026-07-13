@@ -80,11 +80,16 @@ function planUnlessLinked(p: string): boolean {
     return true;
   }
 }
+/** A REAL directory — a symlinked one is NOT (CWE-59, as above). Absent is a legitimate "no templates
+ *  here"; every other failure THROWS rather than reading as absent, so a bundle member this build cannot
+ *  read refuses the install instead of quietly seeding less than it shipped — the absent-vs-unreadable
+ *  split `readDirEntries` makes for the enumeration itself (CLAUDE.md; §18.1). */
 function isRealDir(p: string): boolean {
   try {
     return lstatSync(p).isDirectory();
-  } catch {
-    return false;
+  } catch (e) {
+    if (isErrno(e, 'ENOENT')) return false;
+    throw e;
   }
 }
 
