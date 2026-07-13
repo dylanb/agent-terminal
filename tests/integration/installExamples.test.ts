@@ -286,7 +286,9 @@ describe('a bundle member that cannot be READ is a refusal, never an install of 
 
       expect(pre.ok).toBe(false);
       if (pre.ok) return;
-      expect(pre.error).toContain('todo-templates'); // names the member it could not read
+      // Names a bundle member it could not read. WHICH one is walk order, not contract — every member of an
+      // untraversable bundle is unreadable, so the refusal names the first one reached.
+      expect(pre.error).toMatch(/flow\.yaml|todo-templates/);
     } finally {
       chmodSync(bundle, 0o700);
       rmSync(bundle, { recursive: true, force: true });
@@ -733,7 +735,13 @@ describe('applyInstallExamples — a mispackaged bundle is a reported error, not
     }
   });
 
-  it('skips a symlink planted in the bundle rather than reading through it (CWE-59)', () => {
+  // A symlink in the bundle is never read through (CWE-59) — but it is REFUSED, not skipped. Skipping it
+  // seeds a destination with less than the bundle shipped and reports SUCCESS, which is the "successful
+  // install of nothing" §18.1 exists to forbid; for a required member (flow.yaml) it means the destination
+  // plans zero files, is dropped from the apply entirely, and the user is told the install worked. The
+  // build-time guard (exampleAssetsBuild) keeps a link out of the tree in the first place; this is the
+  // second line, for a bundle that is an installed artifact this build did not necessarily write.
+  it('refuses a symlink planted in the bundle rather than reading through it OR quietly installing less (CWE-59)', () => {
     const bundleX = mkdtempSync(path.join(tmpdir(), 'bundle-link-'));
     const outside = mkdtempSync(path.join(tmpdir(), 'outside-bundle-'));
     try {
@@ -744,9 +752,14 @@ describe('applyInstallExamples — a mispackaged bundle is a reported error, not
       symlinkSync(path.join(outside, 'secret.md'), path.join(bundleX, 'linked.md'));
       symlinkSync(path.join(outside, 'secret-dir'), path.join(bundleX, 'linked-dir'));
 
-      const res = okOf(applyInstallExamples(withBundle('commands', bundleX), []));
-      expect(filesFor(res.created, 'commands')).toEqual([commandRel]);
-      expect(walk(targetDirOf('commands'))).toEqual([commandRel]);
+      const res = applyInstallExamples(withBundle('commands', bundleX), []);
+
+      expect(res.ok).toBe(false);
+      if (res.ok) return;
+      expect(res.error).toContain('linked'); // names the member it will not read
+      expect(res.created).toEqual([]);
+      // Not read through, and not partially installed either — not even the one legitimate command.
+      expect(walk(targetDirOf('commands'))).toEqual([]);
       expect(existsSync(path.join(targetDirOf('commands'), 'linked.md'))).toBe(false);
       expect(existsSync(path.join(targetDirOf('commands'), 'linked-dir'))).toBe(false);
     } finally {
@@ -755,7 +768,7 @@ describe('applyInstallExamples — a mispackaged bundle is a reported error, not
     }
   });
 
-  it('does not read through a symlink in the FLOW bundle — flow.yaml or a linked todo-templates dir (CWE-59)', () => {
+  it('refuses a symlink in the FLOW bundle — flow.yaml or a linked todo-templates dir (CWE-59)', () => {
     const bundleX = mkdtempSync(path.join(tmpdir(), 'bundle-flow-link-'));
     const outside = mkdtempSync(path.join(tmpdir(), 'outside-flow-'));
     try {
@@ -766,11 +779,34 @@ describe('applyInstallExamples — a mispackaged bundle is a reported error, not
       writeFileSync(path.join(outside, 'evil-templates', 'leak.md'), '# leak\n- [ ] x\n');
       symlinkSync(path.join(outside, 'evil-templates'), path.join(bundleX, 'todo-templates'));
 
-      const res = okOf(applyInstallExamples(withBundle('flow', bundleX), []));
+      const res = applyInstallExamples(withBundle('flow', bundleX), []);
+
+      // A skip here would drop the whole flow destination (zero planned files) and report ok — an install
+      // the user is told succeeded, that never seeded the flow home at all.
+      expect(res.ok).toBe(false);
+      if (res.ok) return;
+      expect(res.error).toMatch(/flow\.yaml|todo-templates/);
+      expect(res.created).toEqual([]);
       // Nothing from behind either link is installed.
-      expect(filesFor(res.created, 'flow')).toEqual([]);
       expect(existsSync(path.join(targetDirOf('flow'), 'flow.yaml'))).toBe(false);
       expect(existsSync(path.join(targetDirOf('flow'), 'todo-templates', 'leak.md'))).toBe(false);
+    } finally {
+      rmSync(bundleX, { recursive: true, force: true });
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses the PREVIEW too, so no consent step is computed from a bundle it will not read', () => {
+    const bundleX = mkdtempSync(path.join(tmpdir(), 'bundle-preview-link-'));
+    const outside = mkdtempSync(path.join(tmpdir(), 'outside-preview-'));
+    try {
+      writeFileSync(path.join(outside, 'secret.md'), 'not part of the bundle\n');
+      writeFileSync(path.join(bundleX, commandRel), 'a real bundled command\n');
+      symlinkSync(path.join(outside, 'secret.md'), path.join(bundleX, 'linked.md'));
+
+      const res = previewInstallExamples(withBundle('commands', bundleX));
+
+      expect(res.ok).toBe(false);
     } finally {
       rmSync(bundleX, { recursive: true, force: true });
       rmSync(outside, { recursive: true, force: true });

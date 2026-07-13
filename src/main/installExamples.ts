@@ -52,14 +52,23 @@ function absent(dir: string): boolean {
   }
 }
 
-/** CWE-59: a symlink planted in the bundle is skipped, never read through — the bundle is an installed
- *  artifact, not necessarily one this build wrote. */
+/** A bundle member that is neither a regular file nor a directory — a symlink above all. The bundle is an
+ *  installed artifact, not necessarily one this build wrote, so it is never read through (CWE-59). It is
+ *  REFUSED rather than skipped: skipping seeds a destination with less than the bundle shipped and reports
+ *  success, and where the member is required (`flow.yaml`) the destination plans zero files, is dropped from
+ *  the apply, and the user is told an install worked that never happened (§18.1 — a detectable bundle
+ *  problem is a named refusal, never a successful install of nothing). The build-time guard
+ *  (`exampleAssetsBuild`) keeps one out of the tree; this is the second line, for a bundle on disk. */
+const bundleAnomaly = (p: string): Error =>
+  new Error(`the bundled examples are damaged: a symbolic link or special file stands at ${p}, which this build will not read through`);
+
 function walkFiles(dir: string, base: string = dir): DestRelativePath[] {
   const out: DestRelativePath[] = [];
   for (const entry of readDirEntries(dir)) {
     const abs = path.join(dir, entry.name);
     if (entry.isDirectory) out.push(...walkFiles(abs, base));
     else if (entry.isFile) out.push(destRelative(path.relative(base, abs)));
+    else throw bundleAnomaly(abs);
   }
   return out;
 }
@@ -69,28 +78,33 @@ function filesUnder(bundleDir: string): Plan {
   return walkFiles(bundleDir).map((rel) => ({ rel, src: path.join(bundleDir, rel) }));
 }
 
-/** Plan `p` unless it is a CONFIRMED non-regular file — a symlink (even to a file) or a special file — which
- *  the kernel would read through (CWE-59). An ABSENT file is still planned, so a mispackaged bundle missing a
- *  required member reports a read error rather than silently installing nothing (§18.1); the same absent-vs-
- *  present-wrong-type split `isRealContainer` makes for a write container. */
-function planUnlessLinked(p: string): boolean {
+/** A required bundle member must be a REGULAR file, or absent. Absent is still planned, so a mispackaged
+ *  bundle missing it reports a read error rather than silently installing nothing (§18.1). PRESENT but not
+ *  regular — a symlink (even to a file), a special file — is refused (`bundleAnomaly`). */
+function requireRegularIfPresent(p: string): void {
+  let st;
   try {
-    return lstatSync(p).isFile();
-  } catch {
-    return true;
+    st = lstatSync(p);
+  } catch (e) {
+    if (isErrno(e, 'ENOENT')) return;
+    throw e;
   }
+  if (!st.isFile()) throw bundleAnomaly(p);
 }
-/** A REAL directory — a symlinked one is NOT (CWE-59, as above). Absent is a legitimate "no templates
- *  here"; every other failure THROWS rather than reading as absent, so a bundle member this build cannot
- *  read refuses the install instead of quietly seeding less than it shipped — the absent-vs-unreadable
- *  split `readDirEntries` makes for the enumeration itself (CLAUDE.md; §18.1). */
+/** True for a REAL directory, false when ABSENT — a bundle shipping no `todo-templates/` is a legitimate
+ *  empty, not a broken build. Present but not a real directory (a symlinked one above all) is refused, as is
+ *  a member this build cannot read at all: the absent-vs-unreadable split `readDirEntries` makes for the
+ *  enumeration itself (CLAUDE.md; §18.1). */
 function isRealDir(p: string): boolean {
+  let st;
   try {
-    return lstatSync(p).isDirectory();
+    st = lstatSync(p);
   } catch (e) {
     if (isErrno(e, 'ENOENT')) return false;
     throw e;
   }
+  if (!st.isDirectory()) throw bundleAnomaly(p);
+  return true;
 }
 
 /** §18.6. The subdir and the extension come from `todoTemplate`'s own definitions — the reader's — so the
@@ -100,7 +114,8 @@ function isRealDir(p: string): boolean {
 function flowFiles(bundleDir: string): Plan {
   if (absent(bundleDir)) return null;
   const rels: DestRelativePath[] = [];
-  if (planUnlessLinked(path.join(bundleDir, FLOW_DEF_FILE))) rels.push(destRelative(FLOW_DEF_FILE));
+  requireRegularIfPresent(path.join(bundleDir, FLOW_DEF_FILE));
+  rels.push(destRelative(FLOW_DEF_FILE));
   const templates = todoTemplatesDir(bundleDir);
   if (isRealDir(templates)) {
     for (const entry of readDirEntries(templates)) {
