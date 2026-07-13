@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it } from 'vitest';
-import { MONITOR_ELEMENT_IDS, captureFocusReturn, requireElement, resolveElements, resolveMonitorElements } from '../../src/renderer/src/dom';
+import { MONITOR_ELEMENT_IDS, captureFocusReturn, captureSubtreeFocus, requireElement, resolveElements, resolveMonitorElements } from '../../src/renderer/src/dom';
 
 afterEach(() => {
   document.body.innerHTML = '';
@@ -34,6 +34,52 @@ describe('captureFocusReturn — return focus after an async action that may dis
     const returnFocus = captureFocusReturn(btn());
     returnFocus();
     expect(document.activeElement).toBe(document.getElementById('other'));
+  });
+});
+
+describe('captureSubtreeFocus — preserve focus across a subtree rebuild (WCAG 2.4.3)', () => {
+  it('lands focus on the freshly-built target when focus was inside the container', () => {
+    document.body.innerHTML = `<div id="box"><button id="old">old</button></div>`;
+    const box = document.getElementById('box') as HTMLElement;
+    (document.getElementById('old') as HTMLElement).focus();
+    const restore = captureSubtreeFocus(box);
+    box.replaceChildren(); // rebuild removes the focused child → focus falls to <body>
+    const fresh = document.createElement('button');
+    fresh.id = 'new';
+    box.append(fresh);
+    expect(document.activeElement).toBe(document.body);
+    restore(() => document.getElementById('new')); // resolver runs at restore time, over the new node
+    expect(document.activeElement).toBe(fresh);
+  });
+
+  it('is a no-op when focus was not inside the container at capture', () => {
+    document.body.innerHTML = `<div id="box"><button id="old"></button></div><input id="other" />`;
+    (document.getElementById('other') as HTMLElement).focus();
+    const box = document.getElementById('box') as HTMLElement;
+    const restore = captureSubtreeFocus(box);
+    box.replaceChildren(document.createElement('button'));
+    restore(() => box.querySelector('button'));
+    expect(document.activeElement).toBe(document.getElementById('other'));
+  });
+
+  it('does not steal focus the user moved elsewhere before the restore fires', () => {
+    document.body.innerHTML = `<div id="box"><button id="old"></button></div><input id="other" />`;
+    const box = document.getElementById('box') as HTMLElement;
+    (document.getElementById('old') as HTMLElement).focus();
+    const restore = captureSubtreeFocus(box);
+    (document.getElementById('other') as HTMLElement).focus(); // user redirected during the async gap
+    restore(() => box.querySelector('button'));
+    expect(document.activeElement).toBe(document.getElementById('other'));
+  });
+
+  it('does nothing when the resolver yields no element', () => {
+    document.body.innerHTML = `<div id="box"><button id="old"></button></div>`;
+    const box = document.getElementById('box') as HTMLElement;
+    (document.getElementById('old') as HTMLElement).focus();
+    const restore = captureSubtreeFocus(box);
+    box.replaceChildren();
+    expect(() => restore(() => null)).not.toThrow();
+    expect(document.activeElement).toBe(document.body);
   });
 });
 

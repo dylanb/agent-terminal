@@ -6,6 +6,7 @@
 
 import type { Theme } from '../../shared/ipc';
 import { setShown } from './visibility';
+import { captureSubtreeFocus } from './dom';
 import { announceViewFocus, FOCUS_TERMINAL_EVENT } from './paneActions';
 import { matchChord, MAC_DEFAULTS, type Keymap } from '../../shared/keymap';
 
@@ -118,18 +119,16 @@ export function createShell(root: HTMLElement, deps: ShellDeps = {}): Shell {
     signalLayoutChange();
   }
   function closeLoopPanel(): void {
-    const hadFocus = loopPanelEl?.contains(root.ownerDocument.activeElement) ?? false;
+    const restore = loopPanelEl ? captureSubtreeFocus(loopPanelEl) : null;
     root.classList.remove('loop-open');
     if (loopPanelEl) setShown(loopPanelEl, false);
     syncLoopReadout(false);
-    // Disclosure pattern (WCAG 2.4.3): a close returns focus to whatever opened it; when that is gone
-    // too (a state-driven close after the flow ends) fall back to the read-out, then the main view, so
-    // focus is never stranded on the now-hidden panel.
-    if (hadFocus) {
-      const back = panelOpener?.isConnected ? panelOpener : root.querySelector<HTMLElement>('.loopstat');
-      if (back) back.focus();
-      else focusView('1');
-    }
+    // Disclosure pattern (WAI-ARIA APG): focus returns to the opener, else the read-out, else the view.
+    restore?.(
+      () =>
+        (panelOpener?.isConnected ? panelOpener : root.querySelector<HTMLElement>('.loopstat')) ??
+        root.querySelector<HTMLElement>('[data-viewbtn="1"]'),
+    );
     panelOpener = null;
     signalLayoutChange();
   }

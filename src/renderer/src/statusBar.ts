@@ -5,6 +5,7 @@ import { IDLE_STATUS_BAR, normalizeTitle, sameTitle, TITLE_MAX, type StatusBarMo
 import { stripStatusControlChars } from '../../shared/loopStatus';
 import { sameOccurrence, type Occurrence } from '../../shared/occurrence';
 import { createSpinner } from './spinner';
+import { captureSubtreeFocus } from './dom';
 
 export interface StatusBarDeps {
   /** Resolve a ref's title/url within `repoKey`. Null when it cannot be resolved (no `gh`, offline,
@@ -88,7 +89,7 @@ export function createStatusBar(host: HTMLElement, deps: StatusBarDeps): StatusB
       editing = false;
       if (disposed) return;
       const typed = input.value;
-      const hadFocus = doc.activeElement === input;
+      const restore = captureSubtreeFocus(titleSlot);
       if (commit && typed !== from) {
         const optimistic: StatusBarTitle = { kind: 'user', text: normalizeTitle(typed) ?? '' };
         const mutation = ++titleMutation;
@@ -110,8 +111,7 @@ export function createStatusBar(host: HTMLElement, deps: StatusBarDeps): StatusB
       }
       shownTitle = null;
       renderTitle(latestTitle);
-      // WCAG 2.4.3.
-      if (hadFocus) titleSlot.querySelector<HTMLElement>('[data-sb-title]')?.focus();
+      restore(() => titleSlot.querySelector<HTMLElement>('[data-sb-title]'));
     };
 
     input.addEventListener('keydown', (e) => {
@@ -160,7 +160,7 @@ export function createStatusBar(host: HTMLElement, deps: StatusBarDeps): StatusB
     void deps.githubRef(forRepo, kind, title.number).then((got) => {
       // CLAUDE.md resource-identity rule.
       if (disposed || got === null || !sameShownRef(asked)) return;
-      const hadFocus = titleSlot.contains(doc.activeElement);
+      const restore = captureSubtreeFocus(titleSlot);
       refUrl = got.url;
       const link = doc.createElement('button');
       link.className = 'sb-name sb-link';
@@ -176,7 +176,7 @@ export function createStatusBar(host: HTMLElement, deps: StatusBarDeps): StatusB
           .catch((e: unknown) => deps.onOpenError(e instanceof Error ? e.message : String(e)));
       });
       titleSlot.replaceChildren(link);
-      if (hadFocus) link.focus();
+      restore(() => link);
     });
   }
 
@@ -185,8 +185,7 @@ export function createStatusBar(host: HTMLElement, deps: StatusBarDeps): StatusB
   function renderTitle(title: StatusBarTitle): void {
     const editable = canEdit(title);
     if (sameTitle(title, shownTitle) && repoKey === shownRepo && editable === shownEditable) return;
-    // WCAG 2.4.3.
-    const hadFocus = titleSlot.contains(doc.activeElement);
+    const restore = captureSubtreeFocus(titleSlot);
     shownTitle = title;
     shownRepo = repoKey;
     shownEditable = editable;
@@ -194,7 +193,7 @@ export function createStatusBar(host: HTMLElement, deps: StatusBarDeps): StatusB
 
     if (title.kind === 'user') renderName(title, editable);
     else renderRef(title, repoKey);
-    if (hadFocus) titleSlot.querySelector<HTMLElement>('[data-sb-title]')?.focus();
+    restore(() => titleSlot.querySelector<HTMLElement>('[data-sb-title]'));
   }
 
   function renderActivity(phrase: string | null): void {
@@ -217,12 +216,11 @@ export function createStatusBar(host: HTMLElement, deps: StatusBarDeps): StatusB
 
   function renderAlert(model: StatusBarModel, key: string | null): void {
     if (model.alert === null) {
-      // WCAG 2.4.3.
-      const hadFocus = alert.contains(doc.activeElement);
+      const restore = captureSubtreeFocus(alert);
       shownAlert = null;
       shownAlertPr = null;
       alert.replaceChildren();
-      if (hadFocus) titleSlot.querySelector<HTMLElement>('[data-sb-title]')?.focus();
+      restore(() => titleSlot.querySelector<HTMLElement>('[data-sb-title]'));
       return;
     }
     const occ: Occurrence = { repoKey: key, status: model.alert.status, iteration: model.alert.iteration };

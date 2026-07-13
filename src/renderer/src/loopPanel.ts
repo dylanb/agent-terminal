@@ -12,6 +12,7 @@ import type { FlowLoopView, FlowRefs, GithubRef, GithubRefKind } from '../../sha
 import { hasFlowRefs } from '../../shared/ipc';
 import { githubHttpsHref } from '../../shared/githubUrl';
 import { spillTone } from './loopStatus';
+import { captureSubtreeFocus } from './dom';
 
 /** Display label for a gate `human_option` — matches loop-flow.html's "approve · changes · impasse"
  *  (the verbose `request-changes` reads as `changes` in the compact options row). */
@@ -133,14 +134,6 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
     body.append(retryBtn);
   };
 
-  /** True when keyboard focus is inside the panel. A forced rebuild captures this, then `restoreFocus`
-   *  lands focus back on the close control so it is never stranded on <body> (WCAG 2.4.3) — and never
-   *  pulled in when it was elsewhere. */
-  const focusInPanel = (): boolean => doc.activeElement instanceof HTMLElement && host.contains(doc.activeElement);
-  const restoreFocus = (had: boolean): void => {
-    if (had) host.querySelector<HTMLElement>('[data-loop-close]')?.focus();
-  };
-
   /** A ticket/PR ref row. `retry` re-attempts the best-effort `gh` fetch (no-op once resolved); the row
    *  shows the bare number until the title/body/link fill in. */
   function refRow(label: string, kind: GithubRefKind, number: number): { el: HTMLElement; retry: () => void; resolved: () => boolean } {
@@ -220,7 +213,7 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
         return;
       }
       if (sig === lastSig) return; // both empty — nothing to do
-      const hadFocus = focusInPanel();
+      const restoreFocus = captureSubtreeFocus(host);
       host.replaceChildren();
       lastSig = sig;
       liveLoop = null;
@@ -270,7 +263,7 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
       }
 
       if (!loop) {
-        restoreFocus(hadFocus);
+        restoreFocus(() => host.querySelector<HTMLElement>('[data-loop-close]'));
         return;
       }
 
@@ -343,7 +336,7 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
       }
 
       host.append(body);
-      restoreFocus(hadFocus);
+      restoreFocus(() => host.querySelector<HTMLElement>('[data-loop-close]'));
     },
     focusDecision() {
       const action =
