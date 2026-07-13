@@ -15,6 +15,7 @@ import path from 'node:path';
 import {
   previewInstallExamples,
   applyInstallExamples,
+  destRelative,
   exampleInstallDirs,
   handleInstallExamplesPreview,
   handleInstallExamplesApply,
@@ -452,6 +453,59 @@ describe('applyInstallExamples — a symlink nested inside a destination is refu
       expect(existsSync(targetOf('commands', commandRel))).toBe(false);
     } finally {
       rmSync(real, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('applyInstallExamples — a container that is not a directory is never reported as a symbolic link', () => {
+  // The write's own container guard refuses ANY non-directory (atomicFile.isRealContainer), but the message
+  // it is reported under names a symbolic link. That message is only honest because every OTHER kind of
+  // non-directory container is intercepted before the write, by a path that names its own cause. That
+  // interception is an ordering invariant of applyInstallExamples, not a property of the guard — so it is
+  // pinned here rather than asserted in a comment: a reorder that let a plain file reach the write guard
+  // would send the user to replace a symbolic link that is not there.
+  it('names the unresolvable path, not a link, when a plain file already occupies a container', () => {
+    const loopsTarget = targetDirOf('loops');
+    mkdirSync(loopsTarget, { recursive: true });
+    writeFileSync(path.join(loopsTarget, 'plan-loop'), 'not a directory');
+
+    const res = applyInstallExamples(dirs, ALL);
+
+    expect(res.ok).toBe(false);
+    if (res.ok) return;
+    expect(res.error).not.toMatch(/symbolic link/i);
+    expect(res.error).toMatch(/could not be resolved/);
+    expect(res.created).toEqual([]); // refused in the pre-write pass — nothing landed anywhere
+  });
+
+  it('names the failed write, not a link, when a container becomes a plain file after the pre-write pass', () => {
+    // The pre-write pass gates every container, so the only way one is a non-directory AT THE WRITE is that
+    // the tree changed underneath the check (CWE-367). Reproduced deterministically by a plan whose own
+    // earlier file lands on the container of a later one — no race, real fs.
+    const bundle = mkdtempSync(path.join(tmpdir(), 'install-bundle-'));
+    try {
+      writeFileSync(path.join(bundle, 'one'), 'first');
+      writeFileSync(path.join(bundle, 'two'), 'second');
+      const dest: InstallDestination = {
+        ...destOf('loops'),
+        bundleDir: bundle,
+        plan: (b) => [
+          { rel: destRelative('occupier'), src: path.join(b, 'one') },
+          { rel: destRelative(path.join('occupier', 'blocked')), src: path.join(b, 'two') },
+        ],
+      };
+
+      const res = applyInstallExamples([dest], ALL);
+
+      expect(res.ok).toBe(false);
+      if (res.ok) return;
+      expect(res.error).not.toMatch(/symbolic link/i);
+      expect(res.error).toMatch(/not a directory/i);
+      expect(res.error).toContain('occupier');
+      // The write that DID land is still reported: the action does not roll back (§18.1).
+      expect(filesFor(res.created, 'loops')).toEqual(['occupier']);
+    } finally {
+      rmSync(bundle, { recursive: true, force: true });
     }
   });
 });
