@@ -194,7 +194,7 @@ type Resolution = { ok: true; destinations: ResolvedDestination[] } | { ok: fals
 const refusal = (what: string, dir: string, cause: PathRefusal): string =>
   cause === 'escapes'
     ? `Could not install ${what}: a symbolic link stands on the path to it under ${dir}`
-    : `Could not install ${what}: its path under ${dir} could not be resolved — check that every directory on the way to it exists, is readable, and is a directory`;
+    : `Could not install ${what}: its path under ${dir} could not be resolved — check that every directory on the way to it exists, is a directory, and is readable and traversable`;
 
 function resolveAll(destinations: InstallDestination[]): Resolution {
   const out: ResolvedDestination[] = [];

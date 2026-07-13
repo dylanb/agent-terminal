@@ -421,6 +421,31 @@ describe('applyInstallExamples — all-or-nothing across destinations when unwri
       chmodSync(targetDirOf('skills'), 0o700);
     }
   });
+
+  // POSIX needs SEARCH (`x`), not just `w`, to create a file in a directory — so `w`-without-`x` is the
+  // case where a writability probe that asks only for W_OK would pass a container the write then fails on,
+  // mid-install, after earlier destinations had already landed. §18.1's all-or-nothing is what forbids that,
+  // and it is the OUTCOME pinned here, not the probe: no destination may be seeded when any container is
+  // unusable, however the refusal is arrived at.
+  it.skipIf(asRoot)('writes nothing anywhere when a destination container is writable but not traversable', () => {
+    mkdirSync(targetDirOf('skills'), { recursive: true });
+    chmodSync(targetDirOf('skills'), 0o600); // readable + writable, NOT traversable
+    try {
+      const res = applyInstallExamples(dirs, []);
+      expect(res.ok).toBe(false);
+      if (res.ok) return;
+      expect(res.created).toEqual([]);
+      expect(res.overwritten).toEqual([]);
+      expect(existsSync(targetOf('flow', flowRel))).toBe(false);
+      expect(existsSync(targetOf('loops', planDefRel))).toBe(false);
+      expect(existsSync(targetOf('commands', commandRel))).toBe(false);
+      // The container IS readable here — only search permission is missing — so a refusal that told the
+      // user to check readability would send them to inspect a bit that is already set.
+      expect(res.error).toMatch(/traversable/);
+    } finally {
+      chmodSync(targetDirOf('skills'), 0o700);
+    }
+  });
 });
 
 describe('applyInstallExamples — a symlink nested inside a destination is refused BEFORE the first write (CWE-59)', () => {
