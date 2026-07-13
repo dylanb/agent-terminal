@@ -11,7 +11,6 @@ const SHELL_HTML = `
   <aside class="rail">
     <button class="nav on" data-viewbtn="1">Terminal</button>
     <button class="nav" data-viewbtn="2">Artifacts</button>
-    <button class="nav" data-viewbtn="3">Todos</button>
     <button id="qs">Quick-send</button>
     <button id="tg">theme</button>
     <span data-theme-label>Light</span>
@@ -22,7 +21,6 @@ const SHELL_HTML = `
   <main class="main">
     <div data-viewpane="1" class="on">term</div>
     <div data-viewpane="2">artifacts</div>
-    <div data-viewpane="3">todos</div>
     <div data-viewpane="4">settings</div>
   </main>
   <aside class="drawer">
@@ -64,7 +62,7 @@ describe('shell controller (§24.1C — views, hotkeys, docked drawer, theme)', 
       shell.setView('2');
       expect(pane('2').classList.contains('on')).toBe(true);
       expect(pane('1').classList.contains('on')).toBe(false);
-      expect(pane('3').classList.contains('on')).toBe(false);
+      expect(pane('4').classList.contains('on')).toBe(false);
       expect(navBtn('2').classList.contains('on')).toBe(true);
       expect(navBtn('1').classList.contains('on')).toBe(false);
       expect(shell.getView()).toBe('2');
@@ -78,21 +76,21 @@ describe('shell controller (§24.1C — views, hotkeys, docked drawer, theme)', 
     });
 
     it('switches view on a nav-button click', () => {
-      (navBtn('3') as HTMLElement).click();
-      expect(pane('3').classList.contains('on')).toBe(true);
-      expect(shell.getView()).toBe('3');
+      (navBtn('2') as HTMLElement).click();
+      expect(pane('2').classList.contains('on')).toBe(true);
+      expect(shell.getView()).toBe('2');
     });
 
-    it('switches view on Cmd+1/2/3', () => {
+    it('switches view on Cmd+1/2', () => {
       key('2');
       expect(shell.getView()).toBe('2');
     });
 
-    it('switches view on Ctrl+1/2/3 under the PC profile (§7.7)', () => {
+    it('switches view on Ctrl+1/2 under the PC profile (§7.7)', () => {
       shell.dispose();
       shell = createShell(app, { getKeymap: () => resolveKeymap('pc') });
-      document.dispatchEvent(new KeyboardEvent('keydown', { key: '3', ctrlKey: true, cancelable: true }));
-      expect(shell.getView()).toBe('3');
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: '2', ctrlKey: true, cancelable: true }));
+      expect(shell.getView()).toBe('2');
     });
 
     it('ignores a bare number key with no modifier', () => {
@@ -228,8 +226,8 @@ describe('shell controller (§24.1C — views, hotkeys, docked drawer, theme)', 
     });
 
     it('announces the destination on Cmd/Ctrl+number (keyboard switch)', () => {
-      key('3');
-      expect(seen).toEqual(['3']);
+      key('2');
+      expect(seen).toEqual(['2']);
     });
 
     it('announces the destination on a nav-button click', () => {

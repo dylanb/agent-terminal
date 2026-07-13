@@ -180,8 +180,9 @@ test('selection survives focus changes and draws the app-owned highlight', async
   await page.locator('#drawer').click();
   await expect(deco).toBeVisible();
 
-  // Explicit clear is the only way it goes away (§7.5.1).
-  await page.locator('#clear-selection').click();
+  // Explicit clear (Escape while a selection is active) is the only way it goes away (§7.5.1).
+  await page.locator('.xterm-screen').click();
+  await page.keyboard.press('Escape');
   await expect(page.locator('.xterm-decoration')).toHaveCount(0);
 });
 
@@ -213,22 +214,17 @@ test('the native selection highlight is visible live mid-drag, before mouseup (�
   await page.mouse.up();
 });
 
-test('manual selection capture routes to the Todo tab; Send drives the shell (§16.2)', async () => {
+test('Send from a todo pastes an editable command line at the prompt without submitting (§24.2.1)', async () => {
   await cdToTempDir('inject');
-  await typeCommand("echo 'echo injected-ok-123'");
-  await expect(termRows()).toContainText('echo injected-ok-123');
-
-  // Capture selection → straight to the Todo list, NOT a Capture card (§16.2).
-  await selectRowContaining('echo injected-ok-123');
-  await page.locator('#capture-selection').click();
   await page.locator('#tab-todo').click();
+  await page.locator('#todo-new').fill('echo injected-ok-123');
+  await page.locator('#todo-add-btn').click();
   const item = page.locator('.todo').filter({ hasText: 'echo injected-ok-123' });
   await expect(item).toHaveCount(1);
 
   // Send pastes the todo at the prompt WITHOUT submitting, so the user can edit it (§24.2.1).
   const outputRow = page.locator('.xterm-rows > div').filter({ hasText: /^\s*injected-ok-123\s*$/ });
-  await page.locator('#drawer').click();
-  await item.getByRole('button', { name: 'Send' }).click();
+  await item.getByRole('button', { name: 'Send todo to agent' }).click();
   await expect(page.locator('.xterm-rows')).toContainText('echo injected-ok-123');
   await expect(outputRow).toHaveCount(0);
   await page.keyboard.press('Enter');
@@ -264,21 +260,21 @@ test('the terminal exposes an accessibility tree for screen readers', async () =
   await expect(page.locator('.xterm-accessibility')).toHaveCount(1);
 });
 
-test('Send selection pastes the selected text as an editable command line', async () => {
-  await typeCommand("echo 'echo send-payload-xyz'");
-  await expect(termRows()).toContainText('echo send-payload-xyz');
+test('the terminal view carries no selection toolbar (Send/Capture/Clear removed)', async () => {
+  // The in-terminal selection toolbar was removed; selection is driven by the keyboard alone now
+  // (Copy via the keymap, Clear via Escape) and capture-to-todo lives in the drawer / artifacts.
+  await expect(page.locator('#toolbar')).toHaveCount(0);
+  await expect(page.locator('#send-selection')).toHaveCount(0);
+  await expect(page.locator('#capture-selection')).toHaveCount(0);
+  await expect(page.locator('#clear-selection')).toHaveCount(0);
+});
 
-  await selectRowContaining('echo send-payload-xyz');
-  await page.locator('#send-selection').click();
-  // The selection stays highlighted after Send (§7.5).
-  await expect(page.locator('.xterm-decoration').first()).toBeVisible();
-
-  // Pasted at the prompt, not executed (§9.3): the text only runs on a user Enter.
-  await page.locator('.xterm-screen').click();
-  await page.keyboard.press('Enter');
-  await expect(
-    page.locator('.xterm-rows > div').filter({ hasText: /^\s*send-payload-xyz\s*$/ }),
-  ).toHaveCount(1);
+test('the CMD-3 Todos/Review-gate view is gone (view 3 + gate mock removed)', async () => {
+  // The fixture-mocked view 3 (Todos beside the Review-gate mock) and its ⌘3 nav button were
+  // removed; only views 1/2/4 remain. Todos live in the drawer Todo tab, the gate in the §26 panel.
+  await expect(page.locator('[data-viewpane="3"]')).toHaveCount(0);
+  await expect(page.locator('[data-viewbtn="3"]')).toHaveCount(0);
+  await expect(page.locator('#gate-panel')).toHaveCount(0);
 });
 
 test('Escape clears an active selection but passes through to the agent otherwise (§7.5.1)', async () => {
@@ -454,11 +450,9 @@ test('the Keyboard settings view opens from the gear and Ctrl+,, rebinds live, a
 
 test('a todo persists in-repo across an app restart (§16.3)', async () => {
   await cdToTempDir('persist');
-  await typeCommand("echo 'persist-this-todo'");
-  await expect(termRows()).toContainText('persist-this-todo');
-  await selectRowContaining('persist-this-todo');
-  await page.locator('#capture-selection').click();
   await page.locator('#tab-todo').click();
+  await page.locator('#todo-new').fill('persist-this-todo');
+  await page.locator('#todo-add-btn').click();
   await expect(page.locator('.todo').filter({ hasText: 'persist-this-todo' })).toHaveCount(1);
 
   // Across a full restart, the in-repo todos.json is reread when the agent cd's back (§16.3).
@@ -875,11 +869,9 @@ test('cd between directories swaps the repo-scoped todo list (§16.3)', async ()
   const todo = (text: string) => page.locator('.todo').filter({ hasText: text });
 
   await cdToTempDir('repoA');
-  await typeCommand("echo 'A-side todo'");
-  await expect(termRows()).toContainText('A-side todo');
-  await selectRowContaining('A-side todo');
-  await page.locator('#capture-selection').click();
   await page.locator('#tab-todo').click();
+  await page.locator('#todo-new').fill('A-side todo');
+  await page.locator('#todo-add-btn').click();
   await expect(todo('A-side todo')).toHaveCount(1);
 
   // cd elsewhere → the list swaps to that dir's (empty) list (§16.3).
@@ -976,23 +968,23 @@ test('tri-state: Send marks a todo in-progress (mixed), then the checkbox cycles
 
 test('switches views via hotkey and nav button, showing one pane at a time (§22.4)', async () => {
   const v1 = page.locator('[data-viewpane="1"]');
-  const v3 = page.locator('[data-viewpane="3"]');
+  const v2 = page.locator('[data-viewpane="2"]');
   await expect(v1).toBeVisible();
-  await expect(v3).toBeHidden();
+  await expect(v2).toBeHidden();
 
-  await page.keyboard.press('Control+3');
-  await expect(v3).toBeVisible();
+  await page.keyboard.press('Control+2');
+  await expect(v2).toBeVisible();
   await expect(v1).toBeHidden();
-  await expect(page.locator('[data-viewbtn="3"]')).toHaveClass(/on/);
+  await expect(page.locator('[data-viewbtn="2"]')).toHaveClass(/on/);
 
   await page.locator('[data-viewbtn="1"]').click();
   await expect(v1).toBeVisible();
-  await expect(v3).toBeHidden();
+  await expect(v2).toBeHidden();
 });
 
 test('switching to the terminal view focuses it, so the keyboard lands there to keep typing (§22.4)', async () => {
-  await page.keyboard.press('Control+3');
-  await expect(page.locator('[data-viewpane="3"]')).toBeVisible();
+  await page.keyboard.press('Control+2');
+  await expect(page.locator('[data-viewpane="2"]')).toBeVisible();
   await expect(page.locator('.xterm-helper-textarea')).not.toBeFocused();
 
   await page.keyboard.press('Control+1');
@@ -1588,16 +1580,6 @@ test('the terminal refits its PTY when the drawer docks/undocks (§7.1)', async 
       { timeout: 30_000 },
     )
     .toBeGreaterThan(docked);
-});
-
-test('the mocked Review gate renders from the fixture and its Approve stub reflects a verdict (§19.3)', async () => {
-  await page.keyboard.press('Control+3');
-  const gate = page.locator('#gate-panel');
-  await expect(gate.locator('button.app')).toHaveText(/Approve/);
-  await expect(gate).toContainText('changes requested'); // the fixture's prior verdict
-
-  await gate.locator('button.app').click(); // stubbed (§19.3): no injection, reflects locally only
-  await expect(gate).toContainText('approved');
 });
 
 function seedFlowRepo(prefix: string, stepId: string): string {
@@ -4578,8 +4560,8 @@ test('the reveal signal lands the user on the loop read-out, from another view a
   await expect(page.locator('#app')).not.toHaveClass(/\bloop-open\b/); // the docked panel starts closed
 
   // Reveal from a non-Terminal view must land on Terminal with the read-out open.
-  await page.keyboard.press('Control+3');
-  await expect(page.locator('[data-viewpane="3"]')).toBeVisible();
+  await page.keyboard.press('Control+2');
+  await expect(page.locator('[data-viewpane="2"]')).toBeVisible();
   await fireRevealLoop();
   await expect(page.locator('[data-viewpane="1"]')).toBeVisible();
   await expect(page.locator('#app')).toHaveClass(/\bloop-open\b/);
@@ -4959,7 +4941,7 @@ test('Terminate abandons the flow: resets to Not started, clears todos + capture
 
   // Flow returns to Not started (AC5), todos gone (AC7), capture cleared (AC6).
   await expect(flowControl()).toHaveText('Start');
-  await expect(page.locator('#todo-list .todo')).toHaveCount(0); // the real list, not gate-panel step pills (also .todo)
+  await expect(page.locator('#todo-list .todo')).toHaveCount(0); // scope to the drawer's real todo list
   await expect(page.locator('#monitor-blocks [data-event-id]')).toHaveCount(0);
 
   // Audit gained a timestamped termination entry (AC8).
@@ -4995,7 +4977,7 @@ test('Terminate with no todos: the confirmation states zero and still resets to 
   await expect(flowControl()).toHaveText('Advance');
 
   await openQuickSend('todo'); // the drawer starts closed after a relaunch (§22.2)
-  await expect(page.locator('#todo-list .todo')).toHaveCount(0); // the real list, not gate-panel step pills (also .todo)
+  await expect(page.locator('#todo-list .todo')).toHaveCount(0); // scope to the drawer's real todo list
 
   await flowTerminate().click();
   await expect(confirmModal()).toBeVisible();
