@@ -155,6 +155,25 @@ describe('shell controller (§24.1C — views, hotkeys, docked drawer, theme)', 
         expect(shell.getView()).toBe('2');
       });
 
+      // Declining to ACT on a chord and CONSUMING it are different decisions, and the gate makes only the
+      // first. The modal owns the keyboard while it is open, and the keymap is rebindable (§7.7): a user who
+      // binds an app action onto a readline/text-edit key would find that key dead inside every dialog text
+      // field if a blocked chord were swallowed here. A handler that does not act must not eat the event.
+      it('does not consume a blocked chord — the focused dialog control still receives the key', () => {
+        const e = new KeyboardEvent('keydown', { key: '2', metaKey: true, bubbles: true, cancelable: true });
+        document.dispatchEvent(e);
+        expect(shell.getView()).toBe('4'); // no chrome mutation …
+        expect(e.defaultPrevented).toBe(false); // … and the key is left to the dialog
+      });
+
+      it('consumes the same chord once the dialog closes, when it does act on it', () => {
+        modal.remove();
+        const e = new KeyboardEvent('keydown', { key: '2', metaKey: true, bubbles: true, cancelable: true });
+        document.dispatchEvent(e);
+        expect(shell.getView()).toBe('2');
+        expect(e.defaultPrevented).toBe(true);
+      });
+
       // Guarding the CHORD is not enough: setView() is public and other surfaces call it (loopReveal fires
       // it when an OS notification is activated). If a view switch could still land, it would display:none
       // the pane the dialog is hosted in — and a display:none'd dialog is still IN the document, so the
