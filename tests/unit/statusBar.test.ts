@@ -580,6 +580,15 @@ describe('status bar (§22.3.1)', () => {
       expect(document.activeElement).not.toBe(document.body);
     });
 
+    it('keeps focus on the alert when it is rebuilt for a new occurrence while focused (WCAG 2.4.3)', () => {
+      const { host, render } = mount();
+      render(model({ title: { kind: 'user', text: 'Named' }, alert: blocked }));
+      alertBtn(host)!.focus();
+      render(model({ title: { kind: 'user', text: 'Named' }, alert: { ...blocked, iteration: 10 } }));
+      expect(document.activeElement).toBe(alertBtn(host));
+      expect(document.activeElement).not.toBe(document.body);
+    });
+
     it('surfaces why a name could not be saved, rather than reverting with no reason given', async () => {
       const onError = vi.fn();
       const { host, render } = mount({ setTitle: () => Promise.reject('EROFS'), onError });

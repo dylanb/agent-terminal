@@ -255,7 +255,9 @@ export function createStatusBar(host: HTMLElement, deps: StatusBarDeps): StatusB
     detail.textContent = `${status} · iter ${iteration}${pr !== null ? ` · PR #${pr}` : ''}`;
 
     open.append(dot, lead, doc.createTextNode(' — '), detail);
+    const restore = captureSubtreeFocus(alert);
     alert.replaceChildren(open);
+    restore(() => open);
   }
 
   renderTitle(IDLE_STATUS_BAR.title);
