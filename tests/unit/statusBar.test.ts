@@ -524,6 +524,16 @@ describe('status bar (§22.3.1)', () => {
       expect(setTitle).toHaveBeenCalledTimes(1);
     });
 
+    it('does not write when a committed edit changes only normalization-insignificant whitespace', () => {
+      const setTitle = vi.fn(() => Promise.resolve());
+      const { host, render } = mount({ setTitle });
+      render(model({ title: { kind: 'user', text: 'My work' } }), REPO);
+      const input = edit(host);
+      input.value = '  My work   '; // trims to the same title — no semantic change
+      press(input, 'Enter');
+      expect(setTitle).not.toHaveBeenCalled();
+    });
+
     it('abandons on Escape — and the blur that follows must not commit the name the user just discarded', () => {
       const setTitle = vi.fn(() => Promise.resolve());
       const { host, render } = mount({ setTitle });

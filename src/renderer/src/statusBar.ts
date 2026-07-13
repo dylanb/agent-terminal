@@ -91,8 +91,9 @@ export function createStatusBar(host: HTMLElement, deps: StatusBarDeps): StatusB
       if (disposed) return;
       const typed = input.value;
       const restore = captureSubtreeFocus(titleSlot);
-      if (commit && typed !== from) {
-        const optimistic: StatusBarTitle = { kind: 'user', text: normalizeTitle(typed) ?? '' };
+      const normalized = normalizeTitle(typed) ?? '';
+      if (commit && normalized !== from) {
+        const optimistic: StatusBarTitle = { kind: 'user', text: normalized };
         const mutation = ++titleMutation;
         const revision = renderRevision;
         if (repoKey === forRepo) latestTitle = optimistic;
