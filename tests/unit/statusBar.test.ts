@@ -107,6 +107,7 @@ describe('status bar (§22.3.1)', () => {
     it.each([
       ['rejected promise', () => Promise.reject('no browser'), 'no browser'],
       ['explicit refusal', () => Promise.resolve(false), 'the operating system refused the link'],
+      ['synchronous throw', () => { throw new Error('sync boom'); }, 'sync boom'],
     ])('surfaces a failed external open (%s)', async (_case, outcome, expected) => {
       const onOpenError = vi.fn();
       const openExternal = vi.fn(outcome);

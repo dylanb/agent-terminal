@@ -174,11 +174,11 @@ export function createStatusBar(host: HTMLElement, deps: StatusBarDeps): StatusB
       );
       link.addEventListener('click', () => {
         if (refUrl === null) return;
-        void Promise.resolve(deps.openExternal(refUrl))
-          .then((opened) => {
-            if (opened === false) throw new Error('the operating system refused the link');
-          })
-          .catch((e: unknown) => deps.onOpenError(e instanceof Error ? e.message : String(e)));
+        const url = refUrl;
+        void (async () => {
+          const opened = await deps.openExternal(url);
+          if (opened === false) throw new Error('the operating system refused the link');
+        })().catch((e: unknown) => deps.onOpenError(e instanceof Error ? e.message : String(e)));
       });
       titleSlot.replaceChildren(link);
       restore(() => link);
