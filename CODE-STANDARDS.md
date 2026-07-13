@@ -195,3 +195,10 @@ a 5,782-line, 8-theme branch passed an 11-persona round and then collected 21 va
 automated reviewer. If a branch grows a second theme, it wants a second PR — or, when the themes
 genuinely must land together, a review checkpoint per theme rather than one pass over the accumulated
 whole.
+
+### Exception
+
+It is actively encouraged to eliminate the cause of churn and to improve the context of the repository to
+make future work bore efficient and higher quality: therefore, changes in the PR that achieve this goal, for
+example, new standards or tweaks to existin standards or agent context files are absolutely allowed and
+encouraged as long as the content and the changess can be justified and are high quality.
