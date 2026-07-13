@@ -339,10 +339,12 @@ describe('the consent dialog survives a short viewport (200% zoom / reflow — W
   });
 });
 
-// SC 1.4.10 names 320x256 as the reflow target. There the card's own bound cannot save it: the header and
-// the footer are unshrinkable, and together they already exceed the viewport — so the card must be allowed
-// to overflow a SCROLLABLE modal, and it must overflow DOWNWARD. `align-items:center` would push the top
-// edge above the viewport, and no scroll can reach content above the origin.
+// SC 1.4.10 names 320x256 as the reflow target: a card that outgrows the viewport must reflow into a
+// SCROLLABLE modal with every edge reachable by single-axis scroll. `align-items:center` on a scroll
+// container positions an overflowing card so its top sits ABOVE the scroll origin, which scroll cannot
+// reach; `safe center` pins it to the start instead. The reachability of the top edge — not the modal's
+// initial scroll offset, which the browser sets by scrolling the autofocused control into view and so
+// varies with font metrics — is the property. Reachable means: at scrollTop 0 the top edge is on-screen.
 describe('the consent dialog reflows at 320x256 (WCAG 1.4.10)', () => {
   let host: HTMLElement;
 
@@ -371,8 +373,10 @@ describe('the consent dialog reflows at 320x256 (WCAG 1.4.10)', () => {
     await page.viewport(1280, 896);
   });
 
-  it('never pushes the card above the top of the viewport, where no scroll can reach it', () => {
+  it('keeps the card top edge reachable — scrolling to the origin brings it on-screen', () => {
+    const modalEl = host.querySelector('.flow-modal') as HTMLElement;
     const cardEl = host.querySelector('.flow-modal .card') as HTMLElement;
+    modalEl.scrollTop = 0;
     expect(cardEl.getBoundingClientRect().top).toBeGreaterThanOrEqual(-1);
   });
 
