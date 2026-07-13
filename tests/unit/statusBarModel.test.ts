@@ -102,6 +102,14 @@ describe('status bar model (§22.3.1)', () => {
       expect(long).not.toBeNull();
       expect(long!.length).toBe(TITLE_MAX);
     });
+
+    it('strips C0/C1 control characters and bidi-override code points from a repo-supplied name (CWE-117, CWE-1007)', () => {
+      const cleaned = normalizeTitle('safe\x00\x1b\x7f\x9ftext‮reversed⁦');
+      expect(cleaned).not.toBeNull();
+      expect(cleaned!).not.toMatch(/[\x00-\x1f\x7f-\x9f‪-‮⁦-⁩]/);
+      expect(cleaned!).toContain('safe');
+      expect(cleaned!).toContain('text');
+    });
   });
 
   describe('sameTitle — identity over the union, so a new kind cannot silently dedup away', () => {

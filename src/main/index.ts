@@ -312,7 +312,7 @@ async function createWindow(): Promise<void> {
   let activeTurn: ActiveTurn | null = null;
   // §26 activity readout — an in-flight bootstrap (before state.yaml exists), and whether the current
   // turn's PROMPT has been injected yet (deferred → "waiting", injected → the turn phrase). Both feed the
-  // strip's spinner via deriveLoopActivity; neither is authority, only display.
+  // status bar's activity via deriveLoopActivity; neither is authority, only display.
   let pickupInFlight: { repoKey: string; issue: number; wipe: boolean } | null = null;
   let turnPromptInjected = false;
   let turnTimer: ReturnType<typeof setTimeout> | null = null;
@@ -769,8 +769,8 @@ async function createWindow(): Promise<void> {
 
   const firePickup = (job: PickupJob, wipeConflict: boolean): void => {
     const { repoKey, stepId, issue, loopName, def, pickup } = job;
-    // §26 activity — the async bootstrap is now visibly in flight (the strip shows "Bootstrapping #n" +
-    // spinner). Cleared when the pickup resolves, whatever the outcome.
+    // §26 activity — the async bootstrap is now visibly in flight (the status bar shows "Bootstrapping #n"
+    // + spinner). Cleared when the pickup resolves, whatever the outcome.
     pickupInFlight = { repoKey, issue, wipe: wipeConflict };
     pushFlowChanged();
     void runPickup(createRealPickupDeps(repoKey), { repoDir: repoKey, issue, loopName, pickup, wipeConflict })

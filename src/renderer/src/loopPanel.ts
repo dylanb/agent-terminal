@@ -47,7 +47,9 @@ function truncateBody(body: string): string {
 
 export interface LoopPanel {
   /** Repaint from the current flow refs + loop mirror; both `null`/absent clears the host. `title`
-   *  identifies the step the panel mirrors (the rail step name). */
+   *  identifies the step the panel mirrors (the rail step name). A clearing call (both absent) must be
+   *  preceded by moving focus out of the host — the close-before-clear contract `syncDockedPanel` holds
+   *  (UI §4.5) — so emptying never strands focus on `<body>`. */
   render(loop: FlowLoopView | null, title: string, refs?: FlowRefs): void;
   /** Move focus onto the gate decision, recovery Retry, or stable Close entry, returning whether one was
    *  there to focus. The panel owns this so a sibling never reaches into its markup for the control

@@ -110,6 +110,18 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     expect(onStatusBar.mock.calls.at(-1)?.[0].title).toEqual({ kind: 'user', text: 'B' });
   });
 
+  it('does not repaint a disposed strip when an in-flight refresh resolves after teardown', async () => {
+    let resolve: (view: FlowStateView) => void = () => {};
+    const deps = { ...fakeFlow(), state: vi.fn(() => new Promise<FlowStateView>((r) => (resolve = r))) };
+    const strip = createFlowStrip(host, deps);
+    strip.onRepoChanged('/repo');
+    await vi.waitFor(() => expect(deps.state).toHaveBeenCalledWith('/repo'));
+    strip.dispose();
+    resolve({ stepName: 'Late', steps: ['Late'], position: 1, total: 1, status: 'not_started' });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(host.childElementCount).toBe(0);
+  });
+
   it('removes repo A controls while a repo B pull is pending and leaves them removed if it rejects', async () => {
     const onStatusBar = vi.fn();
     const onPanelState = vi.fn();
@@ -904,6 +916,36 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     expect(provideInput).toHaveBeenCalledWith('/repo', { ticket: '176' });
   });
 
+  it('surfaces a provideInput write-failure from a prompt submit instead of swallowing it', async () => {
+    const onError = vi.fn();
+    let submit: ((v: Record<string, string>) => void) | undefined;
+    const promptView: FlowStateView = {
+      stepName: 'plan',
+      steps: ['plan'],
+      position: 1,
+      total: 1,
+      status: 'in_progress',
+      prompt: { inputs: [{ name: 'ticket', type: 'github-ticket' }], bootstrap: 'agent-loop pickup' },
+    };
+    const deps = {
+      ...fakeFlow(),
+      state: vi.fn(async (): Promise<FlowStateView> => ({ ...promptView, status: 'not_started', prompt: undefined })),
+      start: vi.fn(async (): Promise<FlowStateView> => promptView),
+      provideInput: vi.fn(async () => { throw new Error('cannot write .agent-terminal/flow-state.yaml'); }),
+      onError,
+      onPrompt: (prompt: FlowStateView['prompt'] | null, _stepName: string, s: (v: Record<string, string>) => void) => {
+        if (prompt) submit = s;
+      },
+    };
+    createFlowStrip(host, deps).onRepoChanged('/repo');
+    await vi.waitFor(() => expect(control()!.textContent).toBe('Start'));
+    control()!.click();
+    await vi.waitFor(() => expect(submit).toBeDefined());
+    submit!({ ticket: '176' });
+    await vi.waitFor(() => expect(onError).toHaveBeenCalledTimes(1));
+    expect(String(onError.mock.calls[0][0])).toContain('cannot write');
+  });
+
   it('focuses a real flow control before opening the prompt, so the modal does not capture <body> as opener (WCAG 2.4.3)', async () => {
     // Coupling with flowInputModal: it captures its opener from activeElement on open. The rail rebuild
     // detaches the clicked control (focus → <body>), so the strip must re-anchor focus on a real control
@@ -1288,6 +1330,22 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
       await vi.waitFor(() => expect(deps.terminate).toHaveBeenCalledWith('/repo'));
       await vi.waitFor(() => expect(control()!.textContent).toBe('Start'));
       expect(terminate()).toBeNull(); // gone in not_started
+    });
+
+    it('surfaces a terminate write-failure instead of swallowing it', async () => {
+      const onError = vi.fn();
+      const onTerminate = vi.fn((_repoKey: string, confirm: () => void) => confirm());
+      const deps = {
+        ...fakeFlow('in_progress'),
+        terminate: vi.fn(async () => { throw new Error('cannot write .agent-terminal/flow-state.yaml'); }),
+        onTerminate,
+        onError,
+      };
+      createFlowStrip(host, deps).onRepoChanged('/repo');
+      await vi.waitFor(() => expect(terminate()).not.toBeNull());
+      terminate()!.click();
+      await vi.waitFor(() => expect(onError).toHaveBeenCalledTimes(1));
+      expect(String(onError.mock.calls[0][0])).toContain('cannot write');
     });
 
     it('drops a stale confirm if the cwd moved to another repo before confirming (AC11)', async () => {

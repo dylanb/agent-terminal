@@ -107,7 +107,7 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible { outline:2px so
 .status-bar .sb-name { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
   min-height:var(--sb-line); line-height:var(--sb-line); font-size:12.5px; color:var(--text); }
 .status-bar .sb-name.empty { color:var(--dim); font-style:italic; }
-/* WCAG 2.5.8 */
+/* WCAG 2.2 SC 2.5.8 */
 .status-bar button.sb-name { background:none; border:0; padding:0; font:inherit; cursor:pointer;
   max-width:100%; text-align:left; text-decoration:underline; text-decoration-style:dotted;
   text-underline-offset:3px; }

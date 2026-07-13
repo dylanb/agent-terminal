@@ -865,7 +865,9 @@ export interface FlowApi {
    *  flow-state and re-run the entry bootstrap (`agent-loop pickup <input>`), returning the new
    *  view (its `notice` carries any §19.3 busy refusal). */
   provideInput(repoKey: string, values: Record<string, string>): Promise<FlowStateView>;
-  /** Name the repo's work, or clear the name with a blank (§22.3.1). Resolves to the new view. */
+  /** Name the repo's work, or clear the name with a blank (§22.3.1). Resolves to the new view; unlike the
+   *  other flow:* calls, an unsafe or unregistered-repo target REJECTS rather than resolving to a benign
+   *  error view (§22.3.1). */
   setTitle(repoKey: string, title: string): Promise<FlowStateView>;
   /** Subscribe to main's flow:onStateChanged push (§24.2.2 S5): `cb` fires when a flow-relevant
    *  input changed (todo/activity), prompting a `state()` re-pull. Returns an unsubscribe. */

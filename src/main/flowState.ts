@@ -81,7 +81,7 @@ export function createFlowStateStore(worktreeDir: string): FlowStateStore {
     }
   };
 
-  // CWE-59: a symlinked container must be a visible write failure.
+  // CWE-59.
   const persist = (doc: Record<string, unknown>): void => {
     if (!atomicWriteFileSync(file, yaml.dump(doc))) {
       throw new Error(`cannot write ${STATE_REL}: ${path.dirname(STATE_REL)} is not a real directory`);

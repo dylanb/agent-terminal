@@ -96,7 +96,6 @@ export function createStatusBar(host: HTMLElement, deps: StatusBarDeps): StatusB
         const revision = renderRevision;
         if (repoKey === forRepo) latestTitle = optimistic;
         void deps.setTitle(forRepo, typed).catch((e: unknown) => {
-          deps.onError(e instanceof Error ? e.message : String(e));
           if (
             disposed ||
             repoKey !== forRepo ||
@@ -104,6 +103,7 @@ export function createStatusBar(host: HTMLElement, deps: StatusBarDeps): StatusB
             titleMutation !== mutation ||
             !sameTitle(latestTitle, optimistic)
           ) return;
+          deps.onError(e instanceof Error ? e.message : String(e));
           latestTitle = { kind: 'user', text: from };
           shownTitle = null;
           if (!editing) renderTitle(latestTitle);

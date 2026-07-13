@@ -159,10 +159,13 @@ announcement and can create a focus trap. The rules:
    stealing focus the user redirected. Never hand-roll this capture/guard; the canonical implementation
    is `captureSubtreeFocus` (`dom.ts`) — the subtree sibling of `captureFocusReturn` (§4.6) — which
    `statusBar` (its in-place name editor and ref/alert swaps), `loopPanel`, and the shell's loop-panel
-   close compose rather than re-deriving. When the host is emptied with no replacement to land on, the
-   component signals across its contract (an `onFocusLost`-style callback) so the root places focus; it
-   does **not** reach across organisms to move focus itself (UI §2.2). Two hand-rolled copies *will*
-   drift — the reason `createModalShell` is a single implementation (§5.1).
+   close compose rather than re-deriving. When a component empties its host with no replacement to land
+   on, focus must not strand on `<body>`: either it signals across its contract (an `onFocusLost`-style
+   callback) so the root re-places focus, or a caller contract guarantees focus is moved out *before* the
+   emptying call (the docked panel's close-before-clear order, `dockedPanelSync`) — whichever it is, the
+   emptying entry point states which in its own doc-comment. A component never reaches across organisms
+   to move focus itself (UI §2.2). Two hand-rolled copies *will* drift — the reason `createModalShell` is
+   a single implementation (§5.1).
 6. **A control that disables itself during an async action restores focus on completion (WCAG 2.4.3).**
    Capture focus *before* disabling and return it *after* — but only if focus has not since moved:
    restore iff the control still holds focus or was blurred to `<body>` by the disable, never stealing

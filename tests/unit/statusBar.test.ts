@@ -334,6 +334,15 @@ describe('status bar (§22.3.1)', () => {
       expect(region.textContent).toContain('Running reviewers');
       expect(region.querySelectorAll('.spin')).toHaveLength(1);
     });
+
+    it('reuses the phrase node across a changed phrase, updating only its text', () => {
+      const { host, render } = mount();
+      render(model({ activity: { phrase: 'Working' } }));
+      const phraseNode = host.querySelector('.sb-activity .phrase');
+      render(model({ activity: { phrase: 'Running reviewers' } }));
+      expect(host.querySelector('.sb-activity .phrase')).toBe(phraseNode);
+      expect(phraseNode!.textContent).toBe('Running reviewers');
+    });
   });
 
   describe('the attention state — the loop is blocked on a human', () => {
@@ -579,6 +588,26 @@ describe('status bar (§22.3.1)', () => {
       reject(new Error('EROFS'));
       await flush();
       expect(titleEl(host)!.textContent).toBe('Second');
+    });
+
+    it('does not surface an error for a superseded save whose slow rejection lands after a newer one', async () => {
+      let reject: (e: unknown) => void = () => {};
+      const setTitle = vi
+        .fn()
+        .mockImplementationOnce(() => new Promise((_, r) => (reject = r)))
+        .mockImplementation(() => Promise.resolve());
+      const onError = vi.fn();
+      const { host, render } = mount({ setTitle, onError });
+      render(model({ title: { kind: 'user', text: '' } }));
+      const first = edit(host);
+      first.value = 'First';
+      press(first, 'Enter');
+      const second = edit(host);
+      second.value = 'Second';
+      press(second, 'Enter');
+      reject(new Error('EROFS'));
+      await flush();
+      expect(onError).not.toHaveBeenCalled();
     });
   });
 

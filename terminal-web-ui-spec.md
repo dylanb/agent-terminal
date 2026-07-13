@@ -1566,7 +1566,7 @@ flowchart TD
   V["flow:state view"] --> PR{"refs.pr?"}
   PR -->|yes| P["PR #n — upgrades in place to the GitHub title"]
   PR -->|no| TK{"refs.ticket?"}
-  TK -->|yes| T["#n — upgrades in place to the GitHub title"]
+  TK -->|yes| T["Ticket #n — upgrades in place to the GitHub title"]
   TK -->|no| U{"user title?"}
   U -->|yes| N["the name the user typed"]
   U -->|no| E["placeholder: invites a name"]
@@ -1787,7 +1787,7 @@ A distinct human-needed entry becomes **pending** for its repo. Pending is not s
 flowchart LR
   SY["state.yaml watch"] --> M["main flow derivation<br/>+ human-needed classify"]
   M -->|"loop view incl. classification"| R["renderer flow composition root"]
-  R --> CUE["status-bar organism (§22.3.1)<br/>always-visible; not dismissable"]
+  R --> CUE["status-bar organism (§22.3.1)<br/>always-visible — not dismissable"]
   CUE -->|"activate alert"| OPENPANEL["Shell: open loop panel"]
   OPENPANEL --> FOCUSGATE["LoopPanel.focusDecision: focus gate decision / Retry / Close entry"]
   M -->|"distinct (repo,status,iter) entry"| P["pending for this repo"]
@@ -1814,7 +1814,7 @@ flowchart LR
 flowchart LR
   IN["github-ticket / pr typed inputs OR state.yaml linked_issues + pr &#40;visibility gated on flow progress&#41;"] --> M["main computeRefs &#40;§24.2.3 T7&#41;"]
   M -->|"flow:state refs"| RO["renderer read-out + docked popout"]
-  M -->|"flow:state refs"| SB["status bar title (§22.3.1)"]
+  M -->|"flow:state refs"| SB["status bar title &#40;§22.3.1&#41;"]
   RO -->|"flow:githubRef &#40;repoKey, kind, number&#41;"| GH["main githubRefs &#40;gh, cached, never throws&#41;"]
   SB -->|"flow:githubRef &#40;repoKey, kind, number&#41;"| GH
   GH -->|"title / body / url"| RO
