@@ -3,6 +3,7 @@
 
 import path from 'node:path';
 import { githubHttpsHref } from '../shared/githubUrl';
+import { TITLE_MAX } from '../shared/statusBar';
 import {
   GATE_DECISION_OPTIONS,
   SESSION_ID,
@@ -16,6 +17,7 @@ import {
   type DismissMsg,
   type FlowRequestMsg,
   type FlowProvideInputMsg,
+  type FlowSetTitleMsg,
   type FlowGateDecisionMsg,
   type FlowResolveBootstrapConflictMsg,
   type FlowGithubRefMsg,
@@ -139,6 +141,18 @@ export function isValidFlowProvideInput(m: unknown): m is FlowProvideInputMsg {
     isRecord(m.values) &&
     !Array.isArray(m.values) &&
     Object.values(m.values).every((v) => typeof v === 'string')
+  );
+}
+
+/** flow:setTitle — the name typed into the status bar (§22.3.1). A blank title is LEGAL: it clears the
+ *  name. Bounded at TITLE_MAX (CWE-1284). */
+export function isValidFlowSetTitle(m: unknown): m is FlowSetTitleMsg {
+  return (
+    isRecord(m) &&
+    isLiveSession(m) &&
+    isSafeRepoKey(m.repoKey) &&
+    typeof m.title === 'string' &&
+    m.title.length <= TITLE_MAX
   );
 }
 

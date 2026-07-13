@@ -1,6 +1,6 @@
 // One definition of "the same human-needed loop entry" (§24.2.3 T4), imported by both the
-// OS-notification dedup (main) and the in-app cue (renderer) so the two cannot drift. `repoKey` is
-// nullable: the cue keys by the renderer's possibly-unseeded repo (§16.3).
+// OS-notification dedup (main) and the status bar's alert (renderer) so the two cannot drift. `repoKey`
+// is nullable: the renderer's repo may not be seeded yet (§16.3).
 
 export interface Occurrence {
   repoKey: string | null;

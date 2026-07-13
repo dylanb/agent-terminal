@@ -33,6 +33,7 @@ import {
   isValidDismissAll,
   isValidFlowRequest,
   isValidFlowProvideInput,
+  isValidFlowSetTitle,
   isValidFlowGateDecision,
   isValidFlowResolveBootstrapConflict,
   isValidFlowGithubRef,
@@ -60,7 +61,7 @@ import { registerIpcListeners } from './sessionIpc';
 import { resolveRuntimeConfig } from './runtimeConfig';
 import { createCommandTracker } from './commandTracker';
 import { createCwdTracker } from './cwdTracker';
-import { currentRepoInfo } from './repoKey';
+import { currentRepoInfo, resolveRepoKey } from './repoKey';
 import { createScanner } from './scanner';
 import { captureLastReport } from './captureLast';
 import { createFlowManager, deriveFlowView, loadFlowDefinitionLocalFirst } from './flow';
@@ -215,6 +216,7 @@ async function createWindow(): Promise<void> {
   // TODO(dylan): the full OSC-7 → cwd:changed → repo-list-swap loop through real
   // node-pty + bash is verified in the §F e2e (plan PR5 5c) — recorded gap.
   const cwdTracker = createCwdTracker({ onOsc: (id, cb) => shadow.onOsc(id, cb) });
+  const knownRepoKeys = new Set([resolveRepoKey(launchRoot)]);
   // Before the first OSC 7, fall back to bash's spawn dir — never the Electron process dir — so the
   // viewer starts in sync with the shell (§20.1).
   const viewerCwd = (): string => cwdTracker.cwd() ?? launchRoot;
@@ -237,6 +239,7 @@ async function createWindow(): Promise<void> {
   let stopViewerWatch = watchViewerTree(viewerRoot(viewerCwd()), onViewerActivity);
   void warmBase();
   cwdTracker.onChange(({ cwd, repoKey }) => {
+    knownRepoKeys.add(repoKey);
     send(CH.cwdChanged, { sessionId: SESSION_ID, cwd, repoKey });
     stopViewerWatch();
     stopViewerWatch = watchViewerTree(viewerRoot(cwd), onViewerActivity);
@@ -309,7 +312,7 @@ async function createWindow(): Promise<void> {
   let activeTurn: ActiveTurn | null = null;
   // §26 activity readout — an in-flight bootstrap (before state.yaml exists), and whether the current
   // turn's PROMPT has been injected yet (deferred → "waiting", injected → the turn phrase). Both feed the
-  // strip's spinner via deriveLoopActivity; neither is authority, only display.
+  // status bar's activity via deriveLoopActivity; neither is authority, only display.
   let pickupInFlight: { repoKey: string; issue: number; wipe: boolean } | null = null;
   let turnPromptInjected = false;
   let turnTimer: ReturnType<typeof setTimeout> | null = null;
@@ -766,8 +769,8 @@ async function createWindow(): Promise<void> {
 
   const firePickup = (job: PickupJob, wipeConflict: boolean): void => {
     const { repoKey, stepId, issue, loopName, def, pickup } = job;
-    // §26 activity — the async bootstrap is now visibly in flight (the strip shows "Bootstrapping #n" +
-    // spinner). Cleared when the pickup resolves, whatever the outcome.
+    // §26 activity — the async bootstrap is now visibly in flight (the status bar shows "Bootstrapping #n"
+    // + spinner). Cleared when the pickup resolves, whatever the outcome.
     pickupInFlight = { repoKey, issue, wipe: wipeConflict };
     pushFlowChanged();
     void runPickup(createRealPickupDeps(repoKey), { repoDir: repoKey, issue, loopName, pickup, wipeConflict })
@@ -1289,6 +1292,13 @@ async function createWindow(): Promise<void> {
         if (!isValidFlowProvideInput(m)) return flowRequestError();
         audit.recordInputs(m.repoKey, m.values, inputTypeMap(m.repoKey));
         const view = inTransition(m.repoKey, () => flow.provideInput(m.repoKey, m.values));
+        return trackLoop(m.repoKey, withDerived(m.repoKey, view));
+      },
+      [CH.flowSetTitle]: (_e, m) => {
+        if (!isValidFlowSetTitle(m)) throw new Error('invalid flow:setTitle request');
+        if (!knownRepoKeys.has(m.repoKey)) throw new Error('cannot name an unregistered repo');
+        const view = flow.setTitle(m.repoKey, m.title);
+        pushFlowChanged();
         return trackLoop(m.repoKey, withDerived(m.repoKey, view));
       },
       // §24.2.3 T7 — resolve a ref's detail for the popout (best-effort; null degrades to bare number).

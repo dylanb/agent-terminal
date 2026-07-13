@@ -6,6 +6,7 @@
 
 import type { Theme } from '../../shared/ipc';
 import { setShown } from './visibility';
+import { captureSubtreeFocus } from './dom';
 import { announceViewFocus, FOCUS_TERMINAL_EVENT } from './paneActions';
 import { matchChord, MAC_DEFAULTS, type Keymap } from '../../shared/keymap';
 
@@ -22,7 +23,9 @@ export interface Shell {
   isDrawerOpen(): boolean;
   /** The full-height docked loop+gate panel (§24.2.3): a grid column that "makes room" like the
    *  drawer, opened from the rail Loop read-out and dismissed by its close button or Escape. */
-  openLoopPanel(): void;
+  /** `opener` is the control focus returns to when the panel closes, or omitted to leave focus where it
+   *  is (the rail toggle). Moving focus into the panel is the panel's own `focusDecision`, not the shell's. */
+  openLoopPanel(opener?: HTMLElement): void;
   closeLoopPanel(): void;
   toggleLoopPanel(): void;
   isLoopPanelOpen(): boolean;
@@ -106,25 +109,27 @@ export function createShell(root: HTMLElement, deps: ShellDeps = {}): Shell {
   const syncLoopReadout = (on: boolean): void =>
     root.querySelector('.loopstat')?.setAttribute('aria-expanded', String(on));
   const focusView = (v: ViewId): void => void root.querySelector<HTMLElement>(`[data-viewbtn="${v}"]`)?.focus();
-  function openLoopPanel(): void {
+  // WCAG 2.4.3.
+  let panelOpener: HTMLElement | null = null;
+  function openLoopPanel(opener?: HTMLElement): void {
+    panelOpener = opener ?? null;
     root.classList.add('loop-open');
     if (loopPanelEl) setShown(loopPanelEl, true);
     syncLoopReadout(true);
     signalLayoutChange();
   }
   function closeLoopPanel(): void {
-    const hadFocus = loopPanelEl?.contains(root.ownerDocument.activeElement) ?? false;
+    const restore = loopPanelEl ? captureSubtreeFocus(loopPanelEl) : null;
     root.classList.remove('loop-open');
     if (loopPanelEl) setShown(loopPanelEl, false);
     syncLoopReadout(false);
-    // Disclosure pattern (WCAG 2.4.3): a close returns focus to the read-out that opened it; when that
-    // is gone too (a state-driven close after the flow ends) fall back to the main view, so focus is
-    // never stranded on the now-hidden panel.
-    if (hadFocus) {
-      const readout = root.querySelector<HTMLElement>('.loopstat');
-      if (readout) readout.focus();
-      else focusView('1');
-    }
+    // Disclosure pattern (WAI-ARIA APG): focus returns to the opener, else the read-out, else the view.
+    restore?.(
+      () =>
+        (panelOpener?.isConnected ? panelOpener : root.querySelector<HTMLElement>('.loopstat')) ??
+        root.querySelector<HTMLElement>('[data-viewbtn="1"]'),
+    );
+    panelOpener = null;
     signalLayoutChange();
   }
   function toggleLoopPanel(): void {
