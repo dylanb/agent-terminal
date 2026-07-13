@@ -131,24 +131,37 @@ export interface InstallDestination {
    *  destinations) or a relative launch home from an empty $HOME (flow). `resolveAll` turns it into a
    *  refusal the user sees rather than a guessed path. */
   targetDir: string | null;
+  /** What the user must fix when `targetDir` is null: the root THIS destination derives from, and no other.
+   *  The flow home comes from $HOME, the config branches from CLAUDE_CONFIG_DIR — so one refusal text for
+   *  both names a variable that is blameless for whichever destination actually failed. */
+  rootFix: string;
   plan: (bundleDir: string) => Plan;
 }
 
 interface DestinationSpec {
   bundle: (loc: BundleLocation) => string;
   target: (flowGlobalDir: string, configDir?: string) => string | null;
+  rootFix: string;
   plan: (bundleDir: string) => Plan;
 }
+
+const CONFIG_ROOT_FIX = 'Set CLAUDE_CONFIG_DIR to an absolute path, or unset it to use ~/.claude.';
+const HOME_ROOT_FIX = 'Set $HOME to an absolute path.';
 
 /** The loops/skills/commands targets are the NAMED user-config branches (§24.2.3), never `resolveLoopDir`'s
  *  precedence-aware answer: an install wired to that would seed whichever repo the app is pointed at and
  *  leave every other one unseeded. The skills source is the loops bundle — its files fan in from every
  *  loop's `skills/` (§26.5). */
 const DESTINATIONS: Record<InstallDestinationId, DestinationSpec> = {
-  flow: { bundle: resolveExampleFlowDir, target: (flowGlobalDir) => (path.isAbsolute(flowGlobalDir) ? flowHomeDir(flowGlobalDir) : null), plan: flowFiles },
-  loops: { bundle: resolveExampleLoopsDir, target: (_flow, cfg) => userConfigLoopsDir(cfg), plan: filesUnder },
-  skills: { bundle: resolveExampleLoopsDir, target: (_flow, cfg) => userConfigSkillsDir(cfg), plan: skillFiles },
-  commands: { bundle: resolveExampleCommandsDir, target: (_flow, cfg) => userConfigCommandsDir(cfg), plan: filesUnder },
+  flow: {
+    bundle: resolveExampleFlowDir,
+    target: (flowGlobalDir) => (path.isAbsolute(flowGlobalDir) ? flowHomeDir(flowGlobalDir) : null),
+    rootFix: HOME_ROOT_FIX,
+    plan: flowFiles,
+  },
+  loops: { bundle: resolveExampleLoopsDir, target: (_flow, cfg) => userConfigLoopsDir(cfg), rootFix: CONFIG_ROOT_FIX, plan: filesUnder },
+  skills: { bundle: resolveExampleLoopsDir, target: (_flow, cfg) => userConfigSkillsDir(cfg), rootFix: CONFIG_ROOT_FIX, plan: skillFiles },
+  commands: { bundle: resolveExampleCommandsDir, target: (_flow, cfg) => userConfigCommandsDir(cfg), rootFix: CONFIG_ROOT_FIX, plan: filesUnder },
 };
 
 /** Resolve every destination for the running build: its bundle source from `loc`, its install target
@@ -156,7 +169,7 @@ const DESTINATIONS: Record<InstallDestinationId, DestinationSpec> = {
 export function exampleInstallDirs(loc: BundleLocation, flowGlobalDir: string, configDir?: string): InstallDestination[] {
   return INSTALL_DESTINATION_IDS.map((id) => {
     const d = DESTINATIONS[id];
-    return { id, bundleDir: d.bundle(loc), targetDir: d.target(flowGlobalDir, configDir), plan: d.plan };
+    return { id, bundleDir: d.bundle(loc), targetDir: d.target(flowGlobalDir, configDir), rootFix: d.rootFix, plan: d.plan };
   });
 }
 
@@ -208,11 +221,11 @@ function resolveAll(destinations: InstallDestination[]): Resolution {
       // Every install target must be an absolute directory. A relative one — a relative CLAUDE_CONFIG_DIR
       // (loops/skills/commands) or a relative launch home from an empty $HOME (flow) — has no single meaning
       // and would seed into the process cwd, so the whole install refuses rather than guessing (CWE-829).
+      // The remediation is the destination's own: the two roots are independent, and either can be the
+      // sole cause while the other is absolute and blameless.
       return {
         ok: false,
-        error:
-          `Could not install the ${dest.id} examples: its install location is not an absolute path. ` +
-          `Set CLAUDE_CONFIG_DIR (and $HOME) to absolute paths, or unset CLAUDE_CONFIG_DIR to use ~/.claude.`,
+        error: `Could not install the ${dest.id} examples: its install location is not an absolute path. ${dest.rootFix}`,
       };
     }
     const files = dest.plan(dest.bundleDir);

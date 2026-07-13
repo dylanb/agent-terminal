@@ -138,6 +138,9 @@ describe('a relative user-config root is refused, not anchored at the process cw
 
     expect(res.ok).toBe(false);
     expect(res.ok ? '' : res.error).toContain('CLAUDE_CONFIG_DIR');
+    // A config destination's root comes from CLAUDE_CONFIG_DIR alone; $HOME has no bearing on it, and a
+    // refusal that names it sends the user to change a variable that is not the cause.
+    expect(res.ok ? '' : res.error).not.toContain('$HOME');
     expect(walk(home)).toEqual(before);
     expect(existsSync(path.join(process.cwd(), '~'))).toBe(false);
   });
@@ -160,6 +163,12 @@ describe('a relative user-config root is refused, not anchored at the process cw
     const res = applyInstallExamples(relFlowDirs, []); // null target → refuse, nothing written
     expect(res.ok).toBe(false);
     expect(existsSync(path.join(process.cwd(), '.agent-terminal', 'flow.yaml'))).toBe(false);
+
+    // The refusal must name the variable that ACTUALLY governs this destination. CLAUDE_CONFIG_DIR is
+    // absolute and blameless here — telling the user to set or unset it sends them to change a variable
+    // with no bearing on the flow home, while the empty $HOME that caused it goes unmentioned.
+    expect(res.ok ? '' : res.error).toContain('$HOME');
+    expect(res.ok ? '' : res.error).not.toContain('CLAUDE_CONFIG_DIR');
   });
 });
 
