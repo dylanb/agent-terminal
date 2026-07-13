@@ -28,16 +28,49 @@ into the primitive.
 
 Any path derived from repo content is confined before it is walked, opened, or written. This is the
 filesystem twin of the `shellQuote` rule, and it exists for the same reason: a confinement check written
-inline is a check that the *next* filesystem callsite will not have. `resolveJail` names the jail
-(resolving the anchor but never the jail's own final segment, so a planted `.agent-loop` symlink cannot
-adopt its target as the jail); `confinedRealPath` returns the symlink-free real path or `null`, rejecting
-a lexical escape (CWE-22) and a symlink the caller would follow out (CWE-59), and returning the resolved
+inline is a check that the *next* filesystem callsite will not have.
+
+**Which jail you name depends on WHOSE GROUND IT SITS ON, and getting that backwards is the bug.**
+`resolveJail` is for a jail that lives *inside untrusted content* — a checked-out repo working tree —
+where an attacker can plant a symlink at the jail's own final segment: it resolves the anchor but never
+that segment, so a planted `.agent-loop` link cannot adopt its target as the jail. (The segment is named
+by *our* literal; what is untrusted is the ground it stands on, not the name.) `resolveOwnedDirJail` is
+for a root in the **user's own space** that the app derives itself (`$HOME`, `CLAUDE_CONFIG_DIR`, …) and
+which may not exist yet: it resolves the path *including* its final segment. A link the user placed at
+their own config dir is their setup — a dotfiles repo — and the tools that *read* that directory follow
+it, so refusing to write through it seeds nothing the reader loads and strands the user, while granting
+no protection: whatever could plant the link can already write the directory.
+
+Confinement then holds **inside** the resolved jail either way: `confinedRealPath` /
+`confinedRealPathResult` returns the symlink-free real path (or the reason it refused — `escapes` vs
+`unresolvable`, which call for opposite fixes and must never be reported as each other), rejecting a
+lexical escape (CWE-22) and a symlink the caller would follow out (CWE-59), and returning the resolved
 path so a later swap cannot redirect the read (CWE-367). It is in `src/main/`, not `src/shared/`, because
 it needs `node:fs` and `src/shared/` must stay renderer-importable. The motivating defect: `loopDef.ts`
 grew a correct confinement for the `exec` gate's artifact paths, kept it private, and `viewerWatch.ts`'s
 new directory walker then followed a symlinked root straight back into the inotify exhaustion the walker
 existed to fix. A primitive nobody can see is a primitive nobody reuses; absence of a call to a shared
 one is visible in review.
+
+## Errno narrowing and error messages — `src/main/errno.ts`, never inline
+
+A caught value raises two questions — "which errno is it?" and "what do I tell the user?" — and both are
+answered by one module. `isErrno(e, code)` narrows `unknown` (so a thrown non-`Error` fails closed)
+against a **closed `ErrnoCode` union** — not a `string`, because every caller selects swallow-vs-rethrow
+off that value and a merely *misspelled* code compiles, never matches, and silently turns a handled
+failure into an escaping one. `errMsg(e)` is the same rule for the message. Both are one definition
+because the casts they replace had already been removed once and grew back at the next filesystem
+callsite. An unused member of `ErrnoCode` is a claim about the code that is not true — widen it only when
+a caller needs it.
+
+## Tree-walks that must distinguish absent from unreadable — `src/main/dirEntries.ts`
+
+A tree-walk whose emptiness would be a silent DATA problem uses this module. An **absent** directory
+yields `[]` (an optional subtree legitimately has no files); an **unreadable** one **throws**. Conflating
+them is how a mispackaged bundle plans zero files and reports a *successful install of nothing* — so the
+install walk uses it. A best-effort *reader* that treats any failure as "nothing to show" — the cost
+meter's logs, the todo-template picker — is a different, correct policy and stays as it is; the rule is
+not "every readdir routes here."
 
 ## The app never modifies the user's `.gitignore`
 
@@ -47,9 +80,15 @@ wherever the spec puts them, but the code that writes them **never** creates, ap
 edits `.gitignore` to "protect" them — a per-file ignore entry is redundant in a repo that already
 ignores the directory and is unwanted churn besides (§19.1/§25; the todoStore §16.3 is the reference — it
 never touched `.gitignore`). RED-first tests for any app-owned persistence MUST assert the write
-**creates no `.gitignore`** and leaves a pre-existing one **byte-for-byte unchanged**. This generalizes:
-the production system does not silently rewrite a user's tooling config — `.git/`, editor configs, shell
-rc files outside the explicit, user-invoked §23.5 install action — to make its own state tidy.
+**creates no `.gitignore`** and leaves a pre-existing one **byte-for-byte unchanged**.
+
+This generalizes: the production system does not **silently** rewrite a user's tooling config — `.git/`,
+editor configs, shell rc files — to make its own state tidy. The exemption is an **explicit, user-invoked
+install action** (§23.5; the §18.1 install-examples action and its destinations), and it is an exemption
+from *silence*, not from care: such an action writes only where the user asked, asks before replacing a
+file it did not create, leaves a declined file byte-for-byte unchanged, and never deletes. Writing into a
+directory another tool owns — `~/.claude/skills`, `~/.claude/commands` — is permitted on exactly those
+terms and on no others.
 
 ## IPC payloads carry resource identity; the receiver never re-derives it from ambient state
 
@@ -187,6 +226,34 @@ rule has actually leaked through:
   its survival past the mechanism is a violation that was merely latent before. Grep the comment for the
   identifier you just removed.
 
+## An e2e test never boots a process it will not use — the `@ownapp` contract
+
+**A test fixture provisions what the test uses, and nothing it discards.** The e2e's `beforeEach` boots a
+real Electron (real PTY, real bash, real renderer) and waits for its first paint. A test that needs a
+bespoke environment — a temp `HOME`, a stubbed `PATH`, `CLAUDE_CONFIG_DIR` — cannot use that instance and
+launches its own, so booting one for it buys a full startup, and the wait on it, purely to throw away. Tag
+such a test **`@ownapp`**: the harness boots nothing and the test boots once. The canary at the top of
+`app.spec.ts` pins the contract (`expect(harnessBooted).toBe(false)`), so a `beforeEach` that regresses to
+booting unconditionally fails a test rather than quietly costing every run.
+
+This is a correctness rule, not a speed one. The waste is not distributed evenly — it lands entirely on
+process startup, the most contended thing the suite does — and a saturated runner does not fail *loudly*.
+It fails as a startup that misses its budget, a whole test that misses the 60 s ceiling, and a worker that
+cannot tear down. **A worker-teardown timeout is not attributed to any test**, so `retries` cannot absorb
+it: Playwright reports `1 error was not a part of any test` and exits non-zero with every test green. That
+is the failure this rule exists to prevent — a red bar that no test failure explains, on a suite whose
+tests all pass.
+
+The motivating defect: 147 tests each got a `beforeEach` boot, and 63 of them immediately closed it and
+launched their own — **214 Electron boots where 153 would do**, ~40% of them pure discard. Four tests were
+worse, leaving the unused instance *running* while they launched one or two more, so a 2-core CI runner
+hosted up to three concurrent Electrons for a test that used one. The suite went red with 149 passed, 4
+flaky, and 0 failed. The green bar had been true and useless for as long as it took the load to tip.
+
+The general form, and the reason it earns a standard rather than a code comment: **when a shared fixture is
+expensive and only *some* tests can use it, "provision it for everyone" is not the safe default — it is a
+load-bearing cost paid by the tests that cannot use it.** Make the fixture opt-out, and pin the opt-out.
+
 ## One theme per PR
 
 A branch that accumulates unrelated themes is not reviewable, by a human or by the §26 persona fan-out:
@@ -194,11 +261,20 @@ reviewer recall falls with surface area while a mechanical per-hunk pass's does 
 a 5,782-line, 8-theme branch passed an 11-persona round and then collected 21 valid findings from an
 automated reviewer. If a branch grows a second theme, it wants a second PR — or, when the themes
 genuinely must land together, a review checkpoint per theme rather than one pass over the accumulated
-whole.
+whole. A friction/churn fix encountered *while doing the theme's work* (below) is **not** a second theme —
+it is part of delivering this one cleanly.
 
-### Exception
+## Fixing churn or dev friction you hit while doing a PR's work is REQUIRED in that same PR
 
-It is actively encouraged to eliminate the cause of churn and to improve the context of the repository to
-make future work bore efficient and higher quality: therefore, changes in the PR that achieve this goal, for
-example, new standards or tweaks to existin standards or agent context files are absolutely allowed and
-encouraged as long as the content and the changess can be justified and are high quality.
+Not deferred, not optional. When the work of a PR surfaces friction — a stale standard the change just
+falsified, a missing catalog entry for a primitive it introduced, a test harness that fought you, a
+hand-rolled thing the change reveals should be shared, a doc that now misleads — resolving it *in this
+PR* is mandatory, and actively encouraged beyond the strict minimum.
+
+The rule is not in tension with **One theme per PR** above: that rule bars *unrelated* themes
+accumulating; a friction fix is in-theme precisely because the theme's own work exposed it, and leaving it
+for "later" is how the next person re-pays the same cost you just diagnosed. The boundary is the source of
+the discovery, not the file it touches: friction the *work encountered* is in scope even when the fix
+lands in `CLAUDE.md`, a test util, or a neighbouring module; an unrelated improvement you merely *noticed
+in passing* is a separate PR. When unsure which side a change is on, fold it in and say so in the PR body
+rather than dropping it.

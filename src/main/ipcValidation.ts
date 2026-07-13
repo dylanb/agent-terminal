@@ -6,6 +6,7 @@ import { githubHttpsHref } from '../shared/githubUrl';
 import { TITLE_MAX } from '../shared/statusBar';
 import {
   GATE_DECISION_OPTIONS,
+  INSTALL_DESTINATION_IDS,
   SESSION_ID,
   type AgentInjectMsg,
   type ClipboardWriteMsg,
@@ -95,9 +96,13 @@ export function isValidInstallExamplesPreview(m: unknown): m is InstallExamplesP
   return isRecord(m) && isLiveSession(m);
 }
 
-/** examples:apply (§6) — a live-session request carrying the boolean overwrite decision. */
+/** examples:apply (§6) — a live-session request carrying one replace decision per destination. An id
+ *  outside the known set is REJECTED rather than ignored: the list drives filesystem writes, so an
+ *  unrecognized value is a malformed request, not a no-op (CWE-20). */
 export function isValidInstallExamplesApply(m: unknown): m is InstallExamplesApplyMsg {
-  return isRecord(m) && isLiveSession(m) && typeof m.overwrite === 'boolean';
+  if (!isRecord(m) || !isLiveSession(m) || !Array.isArray(m.replace)) return false;
+  const known: readonly string[] = INSTALL_DESTINATION_IDS;
+  return m.replace.every((d) => typeof d === 'string' && known.includes(d));
 }
 
 export function isValidDismiss(m: unknown): m is DismissMsg {

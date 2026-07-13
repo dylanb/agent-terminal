@@ -5,6 +5,7 @@
 
 /* ---- tokens (design/shell/tokens.css) ---- */
 :root {
+  --focus-ring-w:2px; --focus-ring-offset:2px; --focus-ring-extent:calc(var(--focus-ring-w) + var(--focus-ring-offset));
   --board:#FBFCFE; --leaf:#FFFFFF; --rule:#E3E9F0; --rule-soft:#EEF2F7;
   --ink:#11161D; --muted:#5E6B7A; --signal:#0098DB; --signal-wash:rgba(0,152,219,.12);
   --attn:#E5484D; --pass:#1F9D6B;
@@ -22,7 +23,7 @@
   /* changed-line markers in the code viewer (§20.2); tied to the "changed" provenance hue. */
   --changed:var(--signal); --changed-wash:var(--signal-wash);
   /* code-viewer syntax palette (§20.2). Every tone clears 4.5:1 on --bg AND on a changed line's
-     --changed-wash over it, in both themes (WCAG 1.4.3) — pinned by tests/unit/styleContrast. */
+     --changed-wash over it, in both themes (WCAG 1.4.3) — pinned by tests/browser/styleContrast. */
   --syn-keyword:#B3202B; --syn-string:#0A3069; --syn-comment:#59636E; --syn-number:#0550AE;
   --syn-func:#6639BA; --syn-type:#116329; --syn-var:#953800; --syn-punct:#24292F;
   --r:7px;
@@ -160,6 +161,26 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible { outline:2px so
 .cli-status.ok { color:var(--pass-text); }
 .cli-status.err { color:var(--danger); }
 .cli-status:empty { min-height:0; margin:0; color:transparent; }
+
+/* Install-examples per-destination consent + grouped result panel (§18.1/§26.5 / #41). */
+.install-report { list-style:none; margin:12px 0 0; padding:0; display:flex; flex-direction:column; gap:10px; }
+.install-report > li { padding:10px 12px; background:var(--card); border:1px solid var(--hair); border-radius:var(--r); }
+.install-report .ir-dest { font-size:12.5px; font-weight:600; }
+.install-report .ir-line { font-size:12px; color:var(--dim); margin-top:3px; overflow-wrap:anywhere; }
+.install-consent { border:1px solid var(--hair); border-radius:var(--r); margin:12px 0 0; padding:8px 0 12px; }
+.install-consent .ic-group-label { display:block; font-size:12px; font-weight:600; color:var(--dim); padding:0 12px 4px; }
+/* The scroll box clips ink on BOTH axes — `overflow-y:auto` computes `overflow-x` to `auto` (CSS Overflow
+   L3 §3) — and a focus ring is ink outside the control's border box, so the rows carry the side padding the
+   ring paints into rather than leaving a checkbox flush against the clip edge (WCAG 1.4.11). */
+.install-consent-rows { padding:0 12px; }
+.install-consent-opt { display:grid; grid-template-columns:24px 1fr; align-items:center; gap:4px 8px; padding:6px 0; }
+.install-consent-opt .ic-label { display:contents; cursor:pointer; }
+.install-consent-opt input[type="checkbox"] { width:24px; height:24px; margin:0; accent-color:var(--signal); }
+/* The global focus rule matches button/a/[tabindex] only, so a checkbox would fall back to the UA ring
+   (WCAG 2.4.7, 1.4.11). */
+.install-consent-opt input[type="checkbox"]:focus-visible { outline:var(--focus-ring-w) solid var(--signal); outline-offset:var(--focus-ring-offset); }
+.install-consent-opt .ic-name { font-size:12.5px; font-weight:600; }
+.install-consent-opt .ic-files { grid-column:2; font-size:12px; color:var(--dim); overflow-wrap:anywhere; }
 .seg { display:inline-flex; background:var(--hair2); border:1px solid var(--hair); border-radius:999px; padding:3px; flex:none; }
 .seg .seg-opt { border:none; background:none; font-family:inherit; font-size:12.5px; font-weight:600; color:var(--dim); padding:6px 16px; border-radius:999px; cursor:pointer; }
 .seg .seg-opt.on { background:var(--card); color:var(--signal-text); box-shadow:0 1px 2px rgba(8,16,28,.13); }
@@ -236,7 +257,10 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible { outline:2px so
 .pill.app { background:var(--pass); color:#fff; border-color:transparent; }
 .pill.sm { height:30px; font-size:11.5px; padding:0 12px; }
 .pill:disabled { opacity:.4; cursor:default; }
-.pill:disabled:hover { border-color:var(--hair); }
+/* Never a group opacity: an aria-disabled pill keeps focus, and opacity would composite its
+   focus ring below the 3:1 of WCAG SC 1.4.11. */
+.pill[aria-disabled="true"] { color:var(--dim); border-color:var(--hair); cursor:default; }
+.pill:disabled:hover, .pill[aria-disabled="true"]:hover { border-color:var(--hair); }
 .iconbtn { background:none; border:1px solid var(--hair); border-radius:6px; color:var(--dim); width:30px; height:30px; cursor:pointer; font-size:14px; }
 .iconbtn:hover { color:var(--text); border-color:var(--dim); }
 .linkbtn { font-size:11.5px; font-weight:600; background:none; border:none; color:var(--signal); cursor:pointer; padding:0; }
@@ -492,7 +516,27 @@ button:hover { border-color:var(--dim); }
    blocking surface. createFlowInputModal renders .flow-scrim + .flow-modal into #flow-modal-host. */
 .flow-scrim { position:fixed; inset:0; background:rgba(8,12,18,.42); backdrop-filter:blur(2px); z-index:40; }
 .flow-modal { position:fixed; inset:0; display:flex; align-items:center; justify-content:center; z-index:60; }
-.flow-modal .card { width:440px; max-width:92vw; background:var(--card); border:1px solid var(--hair); border-radius:10px; box-shadow:0 30px 80px rgba(8,16,28,.34); padding:22px; }
+/* The consent step's manifest is unbounded — it enumerates the whole bundle — so this dialog can outgrow
+   any viewport (WCAG 2.1.1, 2.4.3, 1.4.10). `safe`: CSS Box Alignment L3 §4.4. */
+.flow-modal { overflow-y:auto; align-items:safe center; }
+.flow-modal .card { width:440px; max-width:92vw; max-height:calc(100vh - 48px); display:flex; flex-direction:column; background:var(--card); border:1px solid var(--hair); border-radius:10px; box-shadow:0 30px 80px rgba(8,16,28,.34); padding:22px; }
+/* The shell's body slot (UI §5): a card marks the chain that should absorb the card's leftover column height
+   `data-modal-grow`, and the one box within it that should scroll `data-modal-scroll`. The bound is the
+   card's remaining column height, never a `vh` cap — a viewport-relative bound cannot know what the column
+   has left, and overprints the footer at zoom (WCAG 1.4.4, 1.4.10). The shell names a slot, never an
+   organism's classes (UI §2.3). */
+.flow-modal .card [data-modal-grow] { display:flex; flex-direction:column; flex:1 1 auto; min-height:0; }
+/* Two things this box must never do, both invisible to a pin that only checks the footer:
+   `min-height` — a `flex:1 1 auto; min-height:0` body is free to shrink to ZERO when the card's other rows
+   fill its max-height, leaving the controls focusable but entirely unpaintable: keyboard focus then lands on
+   a control the user cannot see (WCAG 2.2 SC 2.4.11 Focus Not Obscured). The floor keeps at least one option
+   on screen and lets `.flow-modal`'s own scroll carry whatever the card then cannot fit.
+   `scroll-padding` — insets the scrollport that sequential-focus scroll-into-view aligns against; without it
+   the browser lands a focused control's BORDER BOX flush with the clip edge, and a focus ring paints OUTSIDE
+   the border box, so the indicator is cut off on the very axis this box scrolls (SC 2.4.11, SC 1.4.11). The
+   inset is `--focus-ring-extent`, the same token the ring is drawn from, so widening the ring widens both. */
+.flow-modal .card [data-modal-scroll] { flex:1 1 auto; min-height:5rem; overflow-y:auto; scroll-padding:var(--focus-ring-extent); }
+.flow-modal .mfoot { flex:none; }
 .flow-modal h3 { font-family:"Fraunces",serif; font-weight:500; font-size:19px; margin:0 0 4px; }
 .flow-modal .ph { font-size:12.5px; color:var(--dim); margin:0 0 16px; }
 .flow-modal .field { margin-bottom:14px; }

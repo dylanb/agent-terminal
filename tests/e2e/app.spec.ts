@@ -4,6 +4,8 @@ import { _electron as electron, expect, test, type ElectronApplication, type Pag
 import { mkdtempSync, mkdirSync, writeFileSync, appendFileSync, rmSync, existsSync, statSync, readFileSync, readdirSync, realpathSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, basename } from 'node:path';
+import { parseColor, contrastRatio, ringOver } from '../helpers/wcag';
+import { WINDOW_TIMEOUT_MS } from '../helpers/e2eBudget';
 import { CH, SESSION_ID } from '../../src/shared/ipc';
 import { CLI_COMMAND_NAME } from '../../src/main/cliShim';
 import { parseAuditStream, type AuditEvent } from '../../src/shared/audit';
@@ -26,6 +28,8 @@ let page: Page;
 // Per-test userData so persisted UI state (§20.2) never bleeds across runs or touches the dev's real
 // ~/.config/Electron. HOME=temp tests instead get userData under their HOME.
 let userDataDir: string;
+/** Did the harness boot the default Electron for the test now running? The `@ownapp` contract below. */
+let harnessBooted: boolean;
 const launchArgs = (): string[] => ['out/main/index.js', `--user-data-dir=${userDataDir}`];
 
 const termRows = () => page.locator('.xterm-rows');
@@ -119,14 +123,20 @@ async function cdToTempDir(marker: string): Promise<void> {
   await expect(page.locator('.status-chip[data-status="agent"]')).toContainText('quiet', { timeout: 6_000 });
 }
 
-test.beforeEach(async () => {
+
+test.beforeEach(async ({}, testInfo) => {
   freshenedDirs = new Set();
+  harnessBooted = false;
   userDataDir = mkdtempSync(join(tmpdir(), 'agent-term-e2e-ud-'));
+  // An @ownapp test launches its own Electron with a bespoke env and never touches this one, so booting
+  // it would spend a full startup — and the wait on its first paint — to be discarded (CODE-STANDARDS).
+  if (testInfo.tags.includes('@ownapp')) return;
+  harnessBooted = true;
   app = await electron.launch({
     args: launchArgs(),
     env: { ...process.env, APP_SHELL: 'bash', APP_SUBMIT_DELAY_MS: '100' },
   });
-  page = await app.firstWindow();
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
   // The drawer starts closed (§22.2); drawer-driven tests below assume it open on Capture. The
   // closed-on-startup default is asserted by its own fresh-relaunch test.
@@ -134,8 +144,25 @@ test.beforeEach(async () => {
 });
 
 test.afterEach(async () => {
-  await app.close(); // stop writes before removing the userData dir
+  // An @ownapp test that threw before launching leaves `app` as the previous test's, already closed —
+  // close() is then a no-op. Never leave an instance running: a stranded one is what kills a worker.
+  await app?.close(); // stop writes before removing the userData dir
   rmSync(userDataDir, { recursive: true, force: true });
+});
+
+// An Electron boot — real PTY, real bash, real renderer — is the most contended thing this suite does, and
+// a test that launches its own with a bespoke env discards whatever was booted for it. `@ownapp` is that
+// contract: the harness boots nothing, the test boots once. Pinned here so a beforeEach that regresses to
+// booting unconditionally fails a test rather than quietly taxing every run (CODE-STANDARDS).
+test('the harness boots no Electron for a test that launches its own (@ownapp)', { tag: '@ownapp' }, async () => {
+  expect(harnessBooted).toBe(false);
+
+  app = await electron.launch({
+    args: launchArgs(),
+    env: { ...process.env, APP_SHELL: 'bash', APP_SUBMIT_DELAY_MS: '100' },
+  });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 });
 
 test('runs commands in an interactive bash with the right terminal identity', async () => {
@@ -455,7 +482,7 @@ test('a todo persists in-repo across an app restart (§16.3)', async () => {
   // Across a full restart, the in-repo todos.json is reread when the agent cd's back (§16.3).
   await app.close();
   app = await electron.launch({ args: launchArgs(), env: { ...process.env, APP_SHELL: 'bash', APP_SUBMIT_DELAY_MS: '100' } });
-  page = await app.firstWindow();
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   await cdToTempDir('persist');
@@ -479,17 +506,16 @@ test('monitor status strip tracks quiescence and alt-screen', async () => {
   await expect(fsChip).toContainText('no');
 });
 
-test('the app terminates when the hosted shell exits', async () => {
+test('the app terminates when the hosted shell exits', { tag: '@ownapp' }, async () => {
   // When the PTY's shell exits the whole app must terminate — the hosted shell IS the session. Use a
   // tiny startup-exit grace so the post-grace path is deterministic: in a fast environment the shell
   // can exit only a few hundred ms after spawn, which under the default 1s grace would be treated as
   // a startup failure (window kept open) and never terminate. A 1 ms grace exercises a normal exit.
-  await app.close();
   app = await electron.launch({
     args: launchArgs(),
     env: { ...process.env, APP_SHELL: 'bash', APP_SUBMIT_DELAY_MS: '100', APP_STARTUP_EXIT_GRACE_MS: '1' },
   });
-  page = await app.firstWindow();
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
   // Shell teardown → PTY exit → app quit can take a moment under CI load; wait past the default budget.
   const closed = app.waitForEvent('close', { timeout: 20_000 });
@@ -504,7 +530,7 @@ test('the app terminates when the hosted shell exits', async () => {
   expect(app.windows()).toHaveLength(0);
 });
 
-test('an immediate shell startup failure keeps the app open (§5 grace exception)', async () => {
+test('an immediate shell startup failure keeps the app open (§5 grace exception)', { tag: '@ownapp' }, async () => {
   // A shell that dies the instant it spawns (broken rc / bad APP_SHELL) is a startup failure: the
   // app must NOT vanish. `false` exits immediately, well within the startup grace, so the app stays
   // open rather than quitting. (The exit is too fast to assert the renderer diagnostic here — that
@@ -513,12 +539,11 @@ test('an immediate shell startup failure keeps the app open (§5 grace exception
   // runs, which on a CPU-starved CI runner can be observed seconds after the spawn; a 60s grace makes
   // `false`'s instant exit unambiguously sub-grace regardless of that lag (the default 1s grace is
   // comparable to CI startup jitter, so it would intermittently misclassify the exit as a normal one).
-  await app.close();
   app = await electron.launch({
     args: launchArgs(),
     env: { ...process.env, APP_SHELL: 'false', APP_SUBMIT_DELAY_MS: '100', APP_STARTUP_EXIT_GRACE_MS: '60000' },
   });
-  page = await app.firstWindow();
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   // The decision is in main and independent of the renderer: assert the app does NOT close within a
   // window comfortably under the grace. A close event here would mean it wrongly terminated.
   const closed = app
@@ -529,16 +554,15 @@ test('an immediate shell startup failure keeps the app open (§5 grace exception
   expect(app.windows().length).toBeGreaterThan(0);
 });
 
-test('a within-grace shell exit keeps the app open AND shows the exit diagnostic (§5)', async () => {
+test('a within-grace shell exit keeps the app open AND shows the exit diagnostic (§5)', { tag: '@ownapp' }, async () => {
   // The point of staying open is that the user can READ the diagnostic. With a large grace, a normal
   // shell exit (typed after the renderer has mounted) stays open and the `[process exited]` line is
   // visible — proving the diagnostic the grace exists to preserve actually renders.
-  await app.close();
   app = await electron.launch({
     args: launchArgs(),
     env: { ...process.env, APP_SHELL: 'bash', APP_SUBMIT_DELAY_MS: '100', APP_STARTUP_EXIT_GRACE_MS: '60000' },
   });
-  page = await app.firstWindow();
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 }); // renderer mounted → pty:exit listener live
   await typeCommand('exit');
   await expect(termRows()).toContainText('[process exited: 0]', { timeout: 20_000 });
@@ -583,15 +607,14 @@ test('boring commands produce zero agent-semantic captures (§15.8 budget)', asy
   await expect(page.locator('#monitor-blocks .finding')).toHaveCount(0);
 });
 
-test('a captured report (with findings) survives a monitor reload (capture:last→store→replay)', async () => {
+test('a captured report (with findings) survives a monitor reload (capture:last→store→replay)', { tag: '@ownapp' }, async () => {
   // APP_SHELL_INTEGRATION=0: no command spans, so the report surfaces deterministically (no
   // span-gating race) and the capture:last→store→replay path runs end-to-end.
-  await app.close();
   app = await electron.launch({
     args: launchArgs(),
     env: { ...process.env, APP_SHELL: 'bash', APP_SUBMIT_DELAY_MS: '100', APP_SHELL_INTEGRATION: '0' },
   });
-  page = await app.firstWindow();
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
   await openQuickSend('capture'); // the drawer starts closed after a relaunch (§22.2)
 
@@ -610,7 +633,7 @@ test('a captured report (with findings) survives a monitor reload (capture:last�
   await expect(page.locator('#monitor-blocks .finding').first()).toBeVisible();
 });
 
-test('captured monitor events restore on relaunch in the same directory (persist→terminate→restore)', async () => {
+test('captured monitor events restore on relaunch in the same directory (persist→terminate→restore)', { tag: '@ownapp' }, async () => {
   // Unlike the reload test above (same main process, in-memory store survives), this terminates the
   // whole app — the in-memory store dies with the process — then relaunches in the SAME launch
   // directory and asserts the persisted events rebuilt the store. APP_LAUNCH_DIR pins the directory
@@ -629,9 +652,8 @@ test('captured monitor events restore on relaunch in the same directory (persist
     APP_STARTUP_EXIT_GRACE_MS: '1',
   };
   try {
-    await app.close();
     app = await electron.launch({ args: launchArgs(), env: dirEnv });
-    page = await app.firstWindow();
+    page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
     await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
     await openQuickSend('capture');
 
@@ -653,7 +675,7 @@ test('captured monitor events restore on relaunch in the same directory (persist
     // would otherwise hang on an already-emitted event).
     await expect.poll(() => app.windows().length, { timeout: 20_000 }).toBe(0).catch(() => {});
     app = await electron.launch({ args: launchArgs(), env: dirEnv });
-    page = await app.firstWindow();
+    page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
     await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
     await openQuickSend('capture'); // the drawer starts closed after a relaunch (§22.2)
 
@@ -664,16 +686,15 @@ test('captured monitor events restore on relaunch in the same directory (persist
   }
 });
 
-test('captures the visible report on the alternate screen buffer (full-screen agent, §13.4)', async () => {
+test('captures the visible report on the alternate screen buffer (full-screen agent, §13.4)', { tag: '@ownapp' }, async () => {
   // Claude Code 2.x draws full-screen on the alternate screen buffer, where capture was previously
   // inert (§15.9). On-demand "Capture last report" must read the visible alt frame. INTEGRATION=0 so
   // the printed report surfaces deterministically (no span-gating race), as in the replay test.
-  await app.close();
   app = await electron.launch({
     args: launchArgs(),
     env: { ...process.env, APP_SHELL: 'bash', APP_SUBMIT_DELAY_MS: '100', APP_SHELL_INTEGRATION: '0' },
   });
-  page = await app.firstWindow();
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
   await openQuickSend('capture'); // the drawer starts closed after a relaunch (§22.2)
 
@@ -791,14 +812,13 @@ test('dropping a file pastes its single-quoted path at the prompt, no submit (§
   rmSync(tmpDir, { recursive: true, force: true });
 });
 
-test('capture ↔ terminal cross-highlight: double-click reveals each side (§16.8)', async () => {
+test('capture ↔ terminal cross-highlight: double-click reveals each side (§16.8)', { tag: '@ownapp' }, async () => {
   // APP_SHELL_INTEGRATION=0 so the printed report surfaces deterministically (as in the replay test).
-  await app.close();
   app = await electron.launch({
     args: launchArgs(),
     env: { ...process.env, APP_SHELL: 'bash', APP_SUBMIT_DELAY_MS: '100', APP_SHELL_INTEGRATION: '0' },
   });
-  page = await app.firstWindow();
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
   await openQuickSend('capture'); // the drawer starts closed after a relaunch (§22.2)
 
@@ -1169,14 +1189,13 @@ test('the viewer live-reloads an open artifact when it changes on disk, with no 
   await expect(body).toContainText('LIVERELOADMARKER', { timeout: 6_000 });
 });
 
-test('the viewer starts in sync with the terminal cwd, before any cd (§20.1)', async () => {
+test('the viewer starts in sync with the terminal cwd, before any cd (§20.1)', { tag: '@ownapp' }, async () => {
   // bash spawns in $HOME (§5/§20.1): the viewer must discover there from the first paint, not in the
   // Electron process dir — so a marker placed in a controlled HOME must show with no cd.
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-home-'));
   writeFileSync(join(home, 'home-marker.md'), '# Home marker\n');
-  await app.close();
   app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
-  page = await app.firstWindow();
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   await page.keyboard.press('Control+2');
@@ -1474,11 +1493,10 @@ test('full-screen collapse keeps the header and tree out of the tab order (§22.
   expect(await canFocus('#artifacts .treesearch')).toBe(true);
 });
 
-test('the quick-send drawer is closed on startup and inert while closed (§22.2)', async () => {
+test('the quick-send drawer is closed on startup and inert while closed (§22.2)', { tag: '@ownapp' }, async () => {
   // beforeEach opens the drawer, so relaunch a fresh app to observe the real startup default (§22.2).
-  await app.close();
   app = await electron.launch({ args: launchArgs(), env: { ...process.env, APP_SHELL: 'bash', APP_SUBMIT_DELAY_MS: '100' } });
-  page = await app.firstWindow();
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   const appEl = page.locator('#app');
@@ -1997,13 +2015,12 @@ function seedFlowRepoWithEntry(
   return dir;
 }
 
-test('the flow strip follows the cwd: cd into a repo shows its flow and drives it (§24.2.2)', async () => {
+test('the flow strip follows the cwd: cd into a repo shows its flow and drives it (§24.2.2)', { tag: '@ownapp' }, async () => {
   // bash spawns in $HOME (§5); the flow follows the terminal cwd like todos (§16.3).
   const repo = seedFlowRepo('agent-term-e2e-flow-a-', 'groom-ticket');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-flow-home-'));
-  await app.close();
   app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
-  page = await app.firstWindow();
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   await typeCommand(`cd "${repo}"`);
@@ -2036,12 +2053,11 @@ const auditRunFiles = (home: string, repo: string): string[] => {
 const readAuditRun = (home: string, repo: string, file: string): { header: unknown; events: AuditEvent[] } =>
   parseAuditStream(readFileSync(join(auditDir(home, repo), file), 'utf8'));
 
-test('flow Start opens an audit run file with a flow.started event (§25.4)', async () => {
+test('flow Start opens an audit run file with a flow.started event (§25.4)', { tag: '@ownapp' }, async () => {
   const repo = seedFlowRepo('agent-term-e2e-audit-', 'groom');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-audit-home-'));
-  await app.close();
   app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
-  page = await app.firstWindow();
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   await typeCommand(`cd "${repo}"`);
@@ -2062,12 +2078,11 @@ test('flow Start opens an audit run file with a flow.started event (§25.4)', as
 // A run file accrues lifecycle events and go-back-after-done appends to the SAME file. (The
 // new-file-per-flow:start case is integration-covered in auditRecorder.test: the UI never returns to
 // not_started, so a second flow:start is not reachable from the strip.)
-test('the audit run accrues lifecycle events and go-back appends to the same file (§25.4)', async () => {
+test('the audit run accrues lifecycle events and go-back appends to the same file (§25.4)', { tag: '@ownapp' }, async () => {
   const repo = seedFlowRepo('agent-term-e2e-audit2-', 'groom');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-audit2-home-'));
-  await app.close();
   app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
-  page = await app.firstWindow();
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   await typeCommand(`cd "${repo}"`);
@@ -2105,12 +2120,11 @@ test('the audit run accrues lifecycle events and go-back appends to the same fil
   rmSync(home, { recursive: true, force: true });
 });
 
-test('todo edits during an active flow are recorded; none when no flow is active (§25.5)', async () => {
+test('todo edits during an active flow are recorded; none when no flow is active (§25.5)', { tag: '@ownapp' }, async () => {
   const repo = seedFlowRepo('agent-term-e2e-audit3-', 'groom');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-audit3-home-'));
-  await app.close();
   app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
-  page = await app.firstWindow();
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   // No flow active yet: a todo edit records nothing (no audit dir for the repo).
@@ -2150,13 +2164,12 @@ test('todo edits during an active flow are recorded; none when no flow is active
 
 // Phase 2 (§25.5): the agent-loop bridge feeds the run. Entering a loop step records the state.yaml
 // mirror; a hand-edit (the human driving agent-loop) appends the change live.
-test('a loop step records the state.yaml mirror and live edits append loop.status (§25.5)', async () => {
+test('a loop step records the state.yaml mirror and live edits append loop.status (§25.5)', { tag: '@ownapp' }, async () => {
   const { dir: repo, stateFile } = seedLoopFlowRepo('agent-term-e2e-audit-loop-');
   writeFileSync(stateFile, 'schema_version: 4\npr: 179\nbranch: agent-loop/issue-176\niteration: 9\nstatus: awaiting-human-pr-approval\n');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-audit-loop-home-'));
-  await app.close();
   app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
-  page = await app.firstWindow();
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   await typeCommand(`cd "${repo}"`);
@@ -2190,12 +2203,11 @@ test('a loop step records the state.yaml mirror and live edits append loop.statu
   rmSync(home, { recursive: true, force: true });
 });
 
-test('resolving a github-ticket input records input.resolved and ticket.assoc (§25.5)', async () => {
+test('resolving a github-ticket input records input.resolved and ticket.assoc (§25.5)', { tag: '@ownapp' }, async () => {
   const repo = seedBootstrapFlowRepo('agent-term-e2e-audit-input-');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-audit-input-home-'));
-  await app.close();
   app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
-  page = await app.firstWindow();
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   await typeCommand(`cd "${repo}"`);
@@ -2225,14 +2237,13 @@ test('resolving a github-ticket input records input.resolved and ticket.assoc (�
   rmSync(home, { recursive: true, force: true });
 });
 
-test('in-app pickup records a `pickup` command event with its exit (§26.9 / §25.5)', async () => {
+test('in-app pickup records a `pickup` command event with its exit (§26.9 / §25.5)', { tag: '@ownapp' }, async () => {
   // The retired §24.2.3 T3 injected `agent-loop pickup` (recorded via an OSC-133 span). §26.9 runs
   // pickup out-of-band in the app, so the audit `command` event now comes from the runner directly,
   // with source `pickup` and exit 0 on success (the fake gh/git make it deterministic).
   const repo = seedBootstrapFlowRepo('agent-term-e2e-audit-cmd-');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-audit-cmd-home-'));
   const { binDir } = seedFakeGhGit('agent-term-e2e-cmd-bin-');
-  await app.close();
   app = await electron.launch({
     args: ['out/main/index.js'],
     env: {
@@ -2245,7 +2256,7 @@ test('in-app pickup records a `pickup` command event with its exit (§26.9 / §2
       FAKE_GHGIT_LOG: join(binDir, 'calls.log'),
     },
   });
-  page = await app.firstWindow();
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   await typeCommand(`cd "${repo}"`);
@@ -2273,13 +2284,12 @@ test('in-app pickup records a `pickup` command event with its exit (§26.9 / §2
   rmSync(home, { recursive: true, force: true });
 });
 
-test('a multi-step flow walks the bookended rail: Start → Advance ×3 reaches done (§24.2.3 T1)', async () => {
+test('a multi-step flow walks the bookended rail: Start → Advance ×3 reaches done (§24.2.3 T1)', { tag: '@ownapp' }, async () => {
   // A 3-step flow's rail brackets the real steps with Not-started / Completed bookends → FIVE stations.
   const repo = seedMultiStepFlowRepo('agent-term-e2e-flow-multi-', ['groom', 'plan', 'implement']);
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-flow-multi-home-'));
-  await app.close();
   app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
-  page = await app.firstWindow();
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   await typeCommand(`cd "${repo}"`);
@@ -2319,24 +2329,43 @@ test('a multi-step flow walks the bookended rail: Start → Advance ×3 reaches 
   rmSync(home, { recursive: true, force: true });
 });
 
-// ---- #40: user-invoked install-examples action seeds the bundled feature-dev flow (§18.1/§23.4) ----
-// TODO(dylan): the three original tracer cases below (install/render/template) landed green-first, not
-// RED-first; their RED observation cannot be reconstructed. The WCAG 2.4.3 focus assertion in the first
-// case was added RED-first (observed failing in Podman before its fix). Recorded gap.
+// ---- #41: the install action seeds four destinations — flow home, loop-config, skills, commands ----
+// TODO(dylan): the flow-render and todo-template cases below originally landed green-first (#40); their
+// RED observation cannot be reconstructed. Every #41 assertion (the loop/skill/command destinations, the
+// grouped report, the per-destination consent step, the second-run skip) was added RED-first, observed
+// failing in Podman against the single-destination installer. Recorded gap.
 
-const installExamplesBtn = () => page.locator('#install-examples-view button');
+const installExamplesBtn = () => page.locator('#install-examples-view .kprofile button');
 const installExamplesStatus = () => page.locator('#install-examples-view [role="status"]');
 const installExamplesPrompt = () => page.locator('#install-examples-view .flow-modal');
+const installExamplesConfirm = () => page.locator('#install-examples-view .flow-modal button.confirm');
+const installReportGroup = (dest: string) =>
+  page.locator(`#install-examples-view .install-report [data-destination="${dest}"]`);
+const consentBox = (dest: string) =>
+  page.locator(`#install-examples-view .flow-modal input[type="checkbox"][data-destination="${dest}"]`);
 
-test('installing the bundled examples seeds the global flow; a fresh repo renders its steps (§18.1/§23.4 #40)', async () => {
-  // The tracer bullet: click the settings control against a temp HOME, then prove the global flow file +
-  // its templates exist and are reported created, and a repo with no local flow renders the bundled steps.
+/** A temp HOME plus a temp Claude config root, so a green run can never write into the developer's own
+ *  ~/.claude skills or commands directory (§24.2.3; CLAUDE_CONFIG_DIR is the engine's own redirect). */
+function installEnv(home: string, configDir: string): Record<string, string> {
+  return {
+    ...(process.env as Record<string, string>),
+    APP_SHELL: 'bash',
+    HOME: home,
+    CLAUDE_CONFIG_DIR: configDir,
+    APP_SUBMIT_DELAY_MS: '100',
+  };
+}
+
+test('installing the bundled examples seeds the flow, the loop definitions, the skills and the commands (§18.1/§23.4/§26.5 #41)', { tag: '@ownapp' }, async () => {
+  // The tracer bullet: click the settings control against a temp HOME + temp config root, then prove
+  // every destination was seeded and reported under its own group — and that a repo with no local flow
+  // renders the bundled steps.
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-install-ex-home-'));
+  const configDir = mkdtempSync(join(tmpdir(), 'agent-term-e2e-install-ex-cfg-'));
   const repo = mkdtempSync(join(tmpdir(), 'agent-term-e2e-install-ex-repo-'));
   mkdirSync(join(repo, '.git'), { recursive: true }); // its own repo key; no local flow → global is used
-  await app.close();
-  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
-  page = await app.firstWindow();
+  app = await electron.launch({ args: ['out/main/index.js'], env: installEnv(home, configDir) });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   await page.locator('[data-viewbtn="4"]').click(); // open the settings view
@@ -2347,9 +2376,34 @@ test('installing the bundled examples seeds the global flow; a fresh repo render
   // Keyboard focus returns to the control after the install resolves (WCAG 2.4.3) — not stranded on <body>.
   await expect(installExamplesBtn()).toBeFocused();
 
+  // Every destination is reported under its own group in the result panel.
+  for (const dest of ['flow', 'loops', 'skills', 'commands']) {
+    await expect(installReportGroup(dest)).toBeVisible();
+  }
+  await expect(installReportGroup('loops')).toContainText('plan-loop.yaml');
+  await expect(installReportGroup('commands')).toContainText('groom-ticket.md');
+
   // The bundled flow definition + its todo templates now exist in the global flow home.
   expect(existsSync(join(home, '.agent-terminal', 'flow.yaml'))).toBe(true);
   expect(existsSync(join(home, '.agent-terminal', 'todo-templates', 'ticket-grooming.md'))).toBe(true);
+  // The loop definitions and everything bundled with them exist at the engine's loop-config location.
+  expect(existsSync(join(configDir, 'loops', 'plan-loop', 'plan-loop.yaml'))).toBe(true);
+  expect(existsSync(join(configDir, 'loops', 'impl-loop', 'impl-loop.yaml'))).toBe(true);
+  expect(existsSync(join(configDir, 'loops', 'plan-loop', 'prompts', 'work-plan.md'))).toBe(true);
+  // The persona skills fanned in to the location Claude Code loads skills from.
+  expect(existsSync(join(configDir, 'skills', 'review-intent', 'SKILL.md'))).toBe(true);
+  expect(existsSync(join(configDir, 'skills', 'impl-review-tests', 'SKILL.md'))).toBe(true);
+  // The bundled commands landed where Claude Code discovers a slash command.
+  expect(existsSync(join(configDir, 'commands', 'groom-ticket.md'))).toBe(true);
+
+  // A second click reports every file SKIPPED — not silently re-written — and never asks the user to decide
+  // a replacement. The counts are what distinguish the two: a regression that overwrites byte-identical
+  // files still says "created 0" and still contains the word "skipped".
+  await installExamplesBtn().click();
+  await expect(installExamplesStatus()).toContainText(/created 0, overwrote 0, skipped [1-9]\d*\./, {
+    timeout: 15_000,
+  });
+  await expect(installExamplesPrompt()).toBeHidden();
 
   // Back to the terminal; cd into a repo with no local flow → the installed global flow renders its steps.
   await page.locator('[data-viewbtn="1"]').click();
@@ -2359,44 +2413,143 @@ test('installing the bundled examples seeds the global flow; a fresh repo render
 
   await app.close();
   rmSync(home, { recursive: true, force: true });
+  rmSync(configDir, { recursive: true, force: true });
   rmSync(repo, { recursive: true, force: true });
 });
 
-test('a customized global flow prompts before overwriting; declining leaves it byte-for-byte unchanged (§18.1 #40)', async () => {
+test('the consent step collects one decision per conflicting destination; a decline leaves those files unchanged (§18.1 #41)', { tag: '@ownapp' }, async () => {
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-install-ex2-home-'));
-  const custom = 'name: my-custom-flow\nsteps:\n  - id: mine\n    kind: manual\n';
+  const configDir = mkdtempSync(join(tmpdir(), 'agent-term-e2e-install-ex2-cfg-'));
+  const customFlow = 'name: my-custom-flow\nsteps:\n  - id: mine\n    kind: manual\n';
+  const customCommand = '# my own groom-ticket\n';
   mkdirSync(join(home, '.agent-terminal'), { recursive: true });
-  writeFileSync(join(home, '.agent-terminal', 'flow.yaml'), custom); // present + differs from the bundle
-  await app.close();
-  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
-  page = await app.firstWindow();
+  writeFileSync(join(home, '.agent-terminal', 'flow.yaml'), customFlow); // present + differs from the bundle
+  mkdirSync(join(configDir, 'commands'), { recursive: true });
+  writeFileSync(join(configDir, 'commands', 'groom-ticket.md'), customCommand); // conflicts in a second destination
+  app = await electron.launch({ args: ['out/main/index.js'], env: installEnv(home, configDir) });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   await page.locator('[data-viewbtn="4"]').click();
   await installExamplesBtn().click();
-  // The up-front overwrite prompt appears because a target exists and differs.
   await expect(installExamplesPrompt()).toBeVisible({ timeout: 10_000 });
-  await page.locator('#install-examples-view .flow-modal button.keep').click(); // decline overwriting
+
+  // One decision per CONFLICTING destination; the clean ones offer none.
+  await expect(consentBox('flow')).toBeVisible();
+  await expect(consentBox('commands')).toBeVisible();
+  await expect(consentBox('loops')).toHaveCount(0);
+
+  await consentBox('flow').check(); // replace the flow; leave the command alone
+  await installExamplesConfirm().click();
   await expect(installExamplesStatus()).toContainText('skipped', { timeout: 10_000 });
 
-  // The customized flow is untouched; the absent templates were still installed (no creation withheld).
-  expect(readFileSync(join(home, '.agent-terminal', 'flow.yaml'), 'utf8')).toBe(custom);
+  // Consenting in one destination never replaced the other: the custom command survives byte-for-byte,
+  // while the customized flow was replaced by the bundled one.
+  expect(readFileSync(join(configDir, 'commands', 'groom-ticket.md'), 'utf8')).toBe(customCommand);
+  expect(readFileSync(join(home, '.agent-terminal', 'flow.yaml'), 'utf8')).not.toBe(customFlow);
   expect(existsSync(join(home, '.agent-terminal', 'todo-templates', 'ticket-grooming.md'))).toBe(true);
 
   await app.close();
   rmSync(home, { recursive: true, force: true });
+  rmSync(configDir, { recursive: true, force: true });
 });
 
-test('dismissing the overwrite prompt without a choice returns focus to the install button (WCAG 2.4.3 #40)', async () => {
-  // Focus the button, then trigger the preview which disables it (blurring focus to <body>) before the
-  // prompt opens. Dismissing the prompt via Escape must restore focus to the button, not strand it on
-  // <body> — the modal opener has to be the button, not whatever held focus while it was disabled.
+test('the REAL consent checkbox paints a focus ring, and the dialog footer stays reachable (WCAG 1.4.11, 2.1.1 #41)', { tag: '@ownapp' }, async () => {
+  // The browser-project pin grades a probe whose classes are hand-written in the test, so a class rename
+  // in the renderer would leave it green while the real control lost its ring. This drives the actual
+  // dialog the app builds — and with the loops destination conflicting, its file manifest is the whole
+  // bundle, which is exactly the content that pushed the footer off-screen.
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-install-ring-home-'));
+  const configDir = mkdtempSync(join(tmpdir(), 'agent-term-e2e-install-ring-cfg-'));
+  // The manifest lists only files that are present AND differ, so seeding ONE conflicting file would
+  // render a ONE-path manifest — and the footer assertion below would pass against content that never
+  // overflowed anything. Conflict the WHOLE loops bundle, which is the content that clipped the footer.
+  const seedConflicts = (src: string, dest: string): number => {
+    let n = 0;
+    mkdirSync(dest, { recursive: true });
+    for (const e of readdirSync(src, { withFileTypes: true })) {
+      if (e.isDirectory()) n += seedConflicts(join(src, e.name), join(dest, e.name));
+      else if (e.isFile()) {
+        writeFileSync(join(dest, e.name), `# mine — differs from the bundle\n${readFileSync(join(src, e.name), 'utf8')}`);
+        n += 1;
+      }
+    }
+    return n;
+  };
+  const conflicting = seedConflicts(join(process.cwd(), 'example', 'loops'), join(configDir, 'loops'));
+  expect(conflicting).toBeGreaterThan(20); // the fixture must actually be the overflowing case
+  app = await electron.launch({ args: ['out/main/index.js'], env: installEnv(home, configDir) });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await page.locator('[data-viewbtn="4"]').click();
+  await installExamplesBtn().click();
+  await expect(installExamplesPrompt()).toBeVisible({ timeout: 10_000 });
+
+  const box = consentBox('loops');
+  await expect(box).toBeVisible();
+  // The dialog is genuinely rendering the long manifest — otherwise the footer check below grades a
+  // dialog that never overflowed and cannot fail.
+  const manifest = page.locator('#install-examples-view .flow-modal .ic-files').first();
+  expect((await manifest.innerText()).length).toBeGreaterThan(500);
+
+  // The dialog gives the first checkbox its INITIAL focus programmatically, and a programmatic focus need
+  // not match :focus-visible. Focus has to ARRIVE by keyboard, so step off the control and come back.
+  const el = box.first();
+  await expect(el).toBeFocused();
+  await page.keyboard.press('Tab');
+  await expect(el).not.toBeFocused();
+  await page.keyboard.press('Shift+Tab');
+  await expect(el).toBeFocused();
+
+  const painted = await el.evaluate((n) => {
+    const cs = getComputedStyle(n);
+    let alpha = 1;
+    for (let a: Element | null = n; a; a = a.parentElement) alpha *= parseFloat(getComputedStyle(a).opacity || '1');
+    const bgOf = (start: Element | null): string => {
+      for (let a = start; a; a = a.parentElement) {
+        const c = getComputedStyle(a).backgroundColor;
+        const m = c.match(/[\d.]+/g);
+        if (m && (m[3] === undefined || Number(m[3]) === 1)) return c;
+      }
+      return 'rgb(255,255,255)';
+    };
+    return {
+      focusVisible: n.matches(':focus-visible'),
+      outlineWidth: cs.outlineWidth,
+      outlineColor: cs.outlineColor,
+      behind: bgOf(n.parentElement),
+      alpha,
+    };
+  });
+
+
+  expect(painted.focusVisible).toBe(true);
+  expect(painted.outlineWidth).toBe('2px');
+  const ring = ringOver(painted.outlineColor, painted.alpha, parseColor(painted.behind));
+  expect(contrastRatio(ring, parseColor(painted.behind))).toBeGreaterThanOrEqual(3);
+
+  // The footer actions must remain on screen with the manifest rendered — a card that outgrows a centred
+  // fixed modal is clipped, not scrolled, and Cancel/Install go where no input method can reach them.
+  const confirmBox = await installExamplesConfirm().boundingBox();
+  const viewport = page.viewportSize() ?? (await page.evaluate(() => ({ width: innerWidth, height: innerHeight })));
+  expect(confirmBox).not.toBeNull();
+  expect((confirmBox as { y: number; height: number }).y + (confirmBox as { height: number }).height).toBeLessThanOrEqual(viewport.height);
+
+  await app.close();
+  rmSync(home, { recursive: true, force: true });
+  rmSync(configDir, { recursive: true, force: true });
+});
+
+test('dismissing the consent step without a choice returns focus to the install button (WCAG 2.4.3 #40)', { tag: '@ownapp' }, async () => {
+  // Focus the button, then trigger the preview before the prompt opens. Dismissing the prompt via
+  // Escape must restore focus to the button, not strand it on <body> (WCAG 2.4.3).
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-install-ex-focus-home-'));
+  const configDir = mkdtempSync(join(tmpdir(), 'agent-term-e2e-install-ex-focus-cfg-'));
   mkdirSync(join(home, '.agent-terminal'), { recursive: true });
   writeFileSync(join(home, '.agent-terminal', 'flow.yaml'), 'name: my-custom-flow\nsteps:\n  - id: mine\n    kind: manual\n'); // present + differs
-  await app.close();
-  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
-  page = await app.firstWindow();
+  app = await electron.launch({ args: ['out/main/index.js'], env: installEnv(home, configDir) });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   await page.locator('[data-viewbtn="4"]').click();
@@ -2409,15 +2562,106 @@ test('dismissing the overwrite prompt without a choice returns focus to the inst
 
   await app.close();
   rmSync(home, { recursive: true, force: true });
+  rmSync(configDir, { recursive: true, force: true });
 });
 
-test('after install, the active step offers its bundled todo template as the picker default (§18.6 #40)', async () => {
+test('the busy install button paints a focus ring that clears 3:1 on its own background (WCAG 2.1 SC 1.4.11 #41)', { tag: '@ownapp' }, async () => {
+  // Grades the ring Chromium actually paints, not the stylesheet text: the unit contrast pin reads one
+  // rule's declarations, so an `opacity` on a higher-specificity selector or an ancestor — or a later
+  // equal-specificity rule reclaiming `color` — would dim the ring or the busy label with the pin green.
+  //
+  // It fires the REAL install to reach the busy state, so it relaunches into a temp HOME + config root like
+  // every other install test: on the shared app it would seed the developer's own ~/.claude (installEnv).
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-install-busy-home-'));
+  const configDir = mkdtempSync(join(tmpdir(), 'agent-term-e2e-install-busy-cfg-'));
+  app = await electron.launch({ args: ['out/main/index.js'], env: installEnv(home, configDir) });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await page.locator('[data-viewbtn="4"]').click();
+  await expect(page.locator('#install-examples-view')).toBeVisible();
+
+  // Keyboard focus, so `:focus-visible` genuinely matches; a programmatic focus() need not.
+  const btn = installExamplesBtn();
+  for (let i = 0; i < 40 && !(await btn.evaluate((el) => el === document.activeElement)); i++) {
+    await page.keyboard.press('Tab');
+  }
+  await expect(btn).toBeFocused();
+
+  // Arm a MutationObserver that snapshots the paint the INSTANT the app itself sets aria-busy, then fire
+  // the real install with the keyboard (so :focus-visible survives — a mouse click would drop it). Setting
+  // the attributes here instead would grade a state the test invented, and would stay green even if
+  // setBusy() never applied it.
+  await btn.evaluate((el) => {
+    const w = window as unknown as { __busyPaint?: unknown };
+    const snap = (): void => {
+      const cs = getComputedStyle(el);
+      let alpha = 1;
+      for (let n: Element | null = el; n; n = n.parentElement) alpha *= parseFloat(getComputedStyle(n).opacity || '1');
+      const probe = document.createElement('span');
+      el.parentElement!.appendChild(probe);
+      const token = (name: string): string => {
+        probe.style.color = `var(${name})`;
+        return getComputedStyle(probe).color;
+      };
+      w.__busyPaint = {
+        focusVisible: el.matches(':focus-visible'),
+        ariaBusy: el.getAttribute('aria-busy'),
+        ariaDisabled: el.getAttribute('aria-disabled'),
+        outlineColor: cs.outlineColor,
+        outlineWidth: cs.outlineWidth,
+        labelColor: cs.color,
+        alpha,
+        card: token('--card'),
+        dim: token('--dim'),
+        signalText: token('--signal-text'),
+      };
+      probe.remove();
+    };
+    new MutationObserver(() => {
+      if (el.getAttribute('aria-busy') === 'true' && !w.__busyPaint) snap();
+    }).observe(el, { attributes: true, attributeFilter: ['aria-busy'] });
+  });
+
+  await page.keyboard.press('Enter');
+  await expect
+    .poll(() => btn.evaluate(() => (window as unknown as { __busyPaint?: unknown }).__busyPaint !== undefined))
+    .toBe(true);
+
+  const painted = await btn.evaluate(() => {
+    const out = (window as unknown as { __busyPaint: {
+      focusVisible: boolean; ariaBusy: string | null; ariaDisabled: string | null;
+      outlineColor: string; outlineWidth: string; labelColor: string; alpha: number;
+      card: string; dim: string; signalText: string;
+    } }).__busyPaint;
+    return out;
+  });
+
+
+  // The state was the APP's, not the test's: setBusy() put both attributes on the control.
+  expect(painted.ariaBusy).toBe('true');
+  expect(painted.ariaDisabled).toBe('true');
+  expect(painted.focusVisible).toBe(true);
+  expect(painted.outlineWidth).toBe('2px');
+  // The ring survives the busy look at full strength, so its painted contrast clears the SC 1.4.11 floor.
+  const ring = ringOver(painted.outlineColor, painted.alpha, parseColor(painted.card));
+  expect(contrastRatio(ring, parseColor(painted.card))).toBeGreaterThanOrEqual(3);
+  // And the busy state is still conveyed: the label moves off the idle accent onto --dim.
+  expect(painted.labelColor).toBe(painted.dim);
+  expect(painted.labelColor).not.toBe(painted.signalText);
+
+  await app.close();
+  rmSync(home, { recursive: true, force: true });
+  rmSync(configDir, { recursive: true, force: true });
+});
+
+test('after install, the active step offers its bundled todo template as the picker default (§18.6 #40)', { tag: '@ownapp' }, async () => {
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-install-ex3-home-'));
+  const configDir = mkdtempSync(join(tmpdir(), 'agent-term-e2e-install-ex3-cfg-'));
   const repo = mkdtempSync(join(tmpdir(), 'agent-term-e2e-install-ex3-repo-'));
   mkdirSync(join(repo, '.git'), { recursive: true });
-  await app.close();
-  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
-  page = await app.firstWindow();
+  app = await electron.launch({ args: ['out/main/index.js'], env: installEnv(home, configDir) });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   await page.locator('[data-viewbtn="4"]').click();
@@ -2440,17 +2684,17 @@ test('after install, the active step offers its bundled todo template as the pic
 
   await app.close();
   rmSync(home, { recursive: true, force: true });
+  rmSync(configDir, { recursive: true, force: true });
   rmSync(repo, { recursive: true, force: true });
 });
 
-test('advancing INTO a later step fires its entry action: the skill injects on Advance (§24.2.3 T3)', async () => {
+test('advancing INTO a later step fires its entry action: the skill injects on Advance (§24.2.3 T3)', { tag: '@ownapp' }, async () => {
   // Entry-on-advance (the converse of T1's "advance does not fire onEnter"): advancing into step 2
   // injects its skill into the real PTY.
   const repo = seedSkillOnSecondStepFlowRepo('agent-term-e2e-flow-t3adv-', 'buildctl');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-flow-t3adv-home-'));
-  await app.close();
   app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
-  page = await app.firstWindow();
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   await typeCommand(`cd "${repo}"`);
@@ -2469,7 +2713,7 @@ test('advancing INTO a later step fires its entry action: the skill injects on A
   rmSync(home, { recursive: true, force: true });
 });
 
-test('entering a bootstrap loop step prompts for its input; Confirm runs in-app pickup: state.yaml + draft PR, mirror plan-draft, nothing injected (§26.9 / L1)', async () => {
+test('entering a bootstrap loop step prompts for its input; Confirm runs in-app pickup: state.yaml + draft PR, mirror plan-draft, nothing injected (§26.9 / L1)', { tag: '@ownapp' }, async () => {
   // L1 — the app OWNS state.yaml and bootstraps in-app. Confirm runs pickup (gh/git, driven by the real
   // plan-loop pickup_contract), opening a draft PR and WRITING the initial whole-document v4 state.yaml;
   // the T2 mirror renders plan-draft. The retired §24.2.3 T3 `agent-loop pickup` is NOT injected.
@@ -2477,7 +2721,6 @@ test('entering a bootstrap loop step prompts for its input; Confirm runs in-app 
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-flow-l1boot-home-'));
   const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-l1-bin-');
   seedFakeAgent(binDir, { work: 'noop' }); // present at the prompt so the post-pickup work turn injects (not `absent`) and sits in-flight, keeping plan-draft stable (§26.2)
-  await app.close();
   app = await electron.launch({
     args: ['out/main/index.js'],
     env: {
@@ -2491,7 +2734,7 @@ test('entering a bootstrap loop step prompts for its input; Confirm runs in-app 
       FAKE_GHGIT_LOG: logFile,
     },
   });
-  page = await app.firstWindow();
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   await typeCommand(`cd "${repo}"`);
@@ -2541,13 +2784,12 @@ test('entering a bootstrap loop step prompts for its input; Confirm runs in-app 
   rmSync(binDir, { recursive: true, force: true });
 });
 
-test('a busy shell does NOT block pickup: it runs out-of-band and still writes state.yaml (§26.2 / §26.6)', async () => {
+test('a busy shell does NOT block pickup: it runs out-of-band and still writes state.yaml (§26.2 / §26.6)', { tag: '@ownapp' }, async () => {
   // §26 redefines "injectable" and runs pickup out-of-band (gh/git, not terminal injection), so unlike
   // the retired T3 injection a busy foreground process must NOT refuse it: state.yaml is still written.
   const repo = seedBootstrapFlowRepo('agent-term-e2e-flow-bootbusy-');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-flow-bootbusy-home-'));
   const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-busy-bin-');
-  await app.close();
   app = await electron.launch({
     args: ['out/main/index.js'],
     env: {
@@ -2560,7 +2802,7 @@ test('a busy shell does NOT block pickup: it runs out-of-band and still writes s
       FAKE_GHGIT_LOG: logFile,
     },
   });
-  page = await app.firstWindow();
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   await typeCommand(`cd "${repo}"`);
@@ -2590,14 +2832,13 @@ test('a busy shell does NOT block pickup: it runs out-of-band and still writes s
   rmSync(binDir, { recursive: true, force: true });
 });
 
-test('a bootstrap pickup that cannot run (dirty tree) NEVER fails silently: it shows an error dialog, rolls the flow back to the previous step, and writes no state.yaml (§26.9)', async () => {
+test('a bootstrap pickup that cannot run (dirty tree) NEVER fails silently: it shows an error dialog, rolls the flow back to the previous step, and writes no state.yaml (§26.9)', { tag: '@ownapp' }, async () => {
   // Slice B — the async in-app pickup (§26.9) aborts on a dirty tree. The failure must be surfaced (a
   // blocking error dialog with the reason) and the half-entered loop step rolled back to the previous
   // step (Option C), never stranding the flow. No state.yaml is written and no PR is opened.
   const repo = seedBootstrapFlowRepo('agent-term-e2e-flow-bootdirty-');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-flow-bootdirty-home-'));
   const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-dirty-bin-');
-  await app.close();
   app = await electron.launch({
     args: ['out/main/index.js'],
     env: {
@@ -2611,7 +2852,7 @@ test('a bootstrap pickup that cannot run (dirty tree) NEVER fails silently: it s
       FAKE_GIT_DIRTY: '1', // git status --porcelain reports a non-.agent-loop change → pickup aborts
     },
   });
-  page = await app.firstWindow();
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   await typeCommand(`cd "${repo}"`);
@@ -2649,7 +2890,7 @@ test('a bootstrap pickup that cannot run (dirty tree) NEVER fails silently: it s
   rmSync(binDir, { recursive: true, force: true });
 });
 
-test('a pickup that completes AFTER the operator terminates the flow drops as stale: no work turn is injected against the abandoned flow (§26.9)', async () => {
+test('a pickup that completes AFTER the operator terminates the flow drops as stale: no work turn is injected against the abandoned flow (§26.9)', { tag: '@ownapp' }, async () => {
   // §26.9 — the in-app pickup is fire-and-forget. If the operator TERMINATES the flow while pickup is still
   // running, its async completion must NOT drive a work turn against the now-abandoned flow (the
   // decidePickupAction stale-guard drops it). FAKE_PICKUP_DELAY holds `gh pr create` open so the terminate
@@ -2659,7 +2900,6 @@ test('a pickup that completes AFTER the operator terminates the flow drops as st
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-flow-bootstale-home-'));
   const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-stale-bin-');
   seedFakeAgent(binDir, { work: 'write-plan' }); // present + would write plan.md if a work turn were injected
-  await app.close();
   app = await electron.launch({
     args: ['out/main/index.js'],
     env: {
@@ -2674,7 +2914,7 @@ test('a pickup that completes AFTER the operator terminates the flow drops as st
       FAKE_PICKUP_DELAY: '4', // gh pr create sleeps 4s → pickup stays in-flight long enough to terminate
     },
   });
-  page = await app.firstWindow();
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   await typeCommand(`cd "${repo}"`);
@@ -2722,7 +2962,7 @@ test('a pickup that completes AFTER the operator terminates the flow drops as st
   rmSync(binDir, { recursive: true, force: true });
 });
 
-test('a re-pickup onto an EXISTING branch (on_conflict: wipe-and-retry) asks first, then wipes + bootstraps on Confirm (§26.9)', async () => {
+test('a re-pickup onto an EXISTING branch (on_conflict: wipe-and-retry) asks first, then wipes + bootstraps on Confirm (§26.9)', { tag: '@ownapp' }, async () => {
   // §26.9 wipe-and-retry — the vendored plan-loop declares it. The wipe is destructive + outward-facing
   // (deletes the branch on origin, closes its PR), so the app CONFIRMS first: a conflict raises a confirm
   // dialog; Confirm wipes the branch and bootstraps cleanly (state.yaml plan-draft).
@@ -2730,7 +2970,6 @@ test('a re-pickup onto an EXISTING branch (on_conflict: wipe-and-retry) asks fir
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-flow-bootconf-home-'));
   const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-conf-bin-');
   seedFakeAgent(binDir, { work: 'noop' }); // present so the post-wipe work turn injects (not `absent`), keeping plan-draft stable
-  await app.close();
   app = await electron.launch({
     args: ['out/main/index.js'],
     env: {
@@ -2745,7 +2984,7 @@ test('a re-pickup onto an EXISTING branch (on_conflict: wipe-and-retry) asks fir
       FAKE_GIT_BRANCH_EXISTS: '1', // git branch --list reports the target branch → a pickup conflict
     },
   });
-  page = await app.firstWindow();
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   await typeCommand(`cd "${repo}"`);
@@ -2784,12 +3023,11 @@ test('a re-pickup onto an EXISTING branch (on_conflict: wipe-and-retry) asks fir
   rmSync(binDir, { recursive: true, force: true });
 });
 
-test('a re-pickup conflict that the operator CANCELS wipes nothing and rolls the flow back (§26.9)', async () => {
+test('a re-pickup conflict that the operator CANCELS wipes nothing and rolls the flow back (§26.9)', { tag: '@ownapp' }, async () => {
   // The safe half of confirm-first: declining the wipe must destroy nothing and never strand the flow.
   const repo = seedBootstrapFlowRepo('agent-term-e2e-flow-bootcancel-');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-flow-bootcancel-home-'));
   const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-cancel-bin-');
-  await app.close();
   app = await electron.launch({
     args: ['out/main/index.js'],
     env: {
@@ -2803,7 +3041,7 @@ test('a re-pickup conflict that the operator CANCELS wipes nothing and rolls the
       FAKE_GIT_BRANCH_EXISTS: '1',
     },
   });
-  page = await app.firstWindow();
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   await typeCommand(`cd "${repo}"`);
@@ -2864,7 +3102,7 @@ async function driveToWorkTurn(
       ...extraEnv,
     },
   });
-  page = await app.firstWindow();
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   await typeCommand(`cd "${repo}"`);
@@ -3109,7 +3347,7 @@ test('the loop panel "mark turn complete" control advances a sentinel-less turn 
   rmSync(binDir, { recursive: true, force: true });
 });
 
-test('a work turn stranded in error with plan.md present is accepted after a relaunch, advancing to the reviewers without re-running the plan (§26.3 / D48)', async () => {
+test('a work turn stranded in error with plan.md present is accepted after a relaunch, advancing to the reviewers without re-running the plan (§26.3 / D48)', { tag: '@ownapp' }, async () => {
   // The stranded-plan recovery (the live `.one` shape): a work turn that wrote plan.md but then stopped in
   // `error` (here: plan.md written, no done-signal, a short stall window). On a RELAUNCH the run is not
   // auto-driven, but the panel's "mark turn complete" must ACCEPT the present plan and advance to the
@@ -3133,7 +3371,6 @@ test('a work turn stranded in error with plan.md present is accepted after a rel
 
   // Relaunch into the stranded repo with the fake-agent AS the shell so the accepted turn's chained
   // reviewers fan-out injects straight into the agent (no bootstrap, no live turn — a cold reopen).
-  await app.close();
   app = await electron.launch({
     args: ['out/main/index.js'],
     env: {
@@ -3148,7 +3385,7 @@ test('a work turn stranded in error with plan.md present is accepted after a rel
       FAKE_GHGIT_LOG: logFile,
     },
   });
-  page = await app.firstWindow();
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
 
   // The reconstructed error still shows in the panel with its recovery controls; accept it. (The fake-agent
   // shell prints nothing, so wait on the flow strip's loop read-out, not terminal text.)
@@ -3175,7 +3412,7 @@ test('a work turn stranded in error with plan.md present is accepted after a rel
 // panel's Retry / mark-turn-complete (which need the reconstructed activeTurn) did nothing. Fix: re-run the
 // resume reconstruction on cd-into-repo. Here the app launches in a NON-repo dir, then cd's into a repo
 // stranded in `error`; Retry must reconstruct the work turn and re-drive it (the run leaves error).
-test('cd into a repo stranded in error reconstructs the turn so Retry re-drives it (§26 D42a / §26.11)', async () => {
+test('cd into a repo stranded in error reconstructs the turn so Retry re-drives it (§26 D42a / §26.11)', { tag: '@ownapp' }, async () => {
   const repo = mkdtempSync(join(tmpdir(), 'agent-term-e2e-cd-resume-'));
   mkdirSync(join(repo, '.git'), { recursive: true });
   mkdirSync(join(repo, '.agent-loop'), { recursive: true });
@@ -3203,7 +3440,6 @@ test('cd into a repo stranded in error reconstructs the turn so Retry re-drives 
   const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-cd-resume-bin-');
   seedFakeAgent(binDir, { work: 'write-plan', reviews: 'all', consolidate: 'clean', turnMarkers: true });
 
-  await app.close();
   app = await electron.launch({
     args: ['out/main/index.js'],
     env: {
@@ -3218,7 +3454,7 @@ test('cd into a repo stranded in error reconstructs the turn so Retry re-drives 
       FAKE_GHGIT_LOG: logFile,
     },
   });
-  page = await app.firstWindow();
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   await typeCommand(`cd "${repo}"`); // OSC-7 cwd change → resume reconstruction runs for THIS repo
@@ -3919,13 +4155,12 @@ function seedResumeRepo(
   return repo;
 }
 
-test('an interrupted run resumes at the consolidate turn on launch without re-running completed turns (§26.13 / L8)', async () => {
+test('an interrupted run resumes at the consolidate turn on launch without re-running completed turns (§26.13 / L8)', { tag: '@ownapp' }, async () => {
   const repo = seedResumeRepo('agent-term-e2e-l8-resume-');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-l8-resume-home-'));
   const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-l8-resume-bin-');
   seedFakeAgent(binDir, { work: 'write-plan', reviews: 'all', consolidate: 'clean', turnMarkers: true });
 
-  await app.close();
   app = await electron.launch({
     args: ['out/main/index.js'],
     env: {
@@ -3942,7 +4177,7 @@ test('an interrupted run resumes at the consolidate turn on launch without re-ru
       FAKE_GHGIT_LOG: logFile,
     },
   });
-  page = await app.firstWindow();
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
 
   const stateFile = join(repo, '.agent-loop', 'state.yaml');
   // Land (resumed forward): the consolidate turn ran, wrote consolidated.json, and the clean verdict drove
@@ -3971,13 +4206,19 @@ test('an interrupted run resumes at the consolidate turn on launch without re-ru
 // plan.md with no iteration-scoped review for the new iteration. Resume must re-enter WORK (regenerating the
 // plan), never skip to reviewers and grade the stale plan — plan.md is not iteration-stamped, so only a
 // downstream artifact for the current iteration proves the work turn ran.
-test('resume re-enters the work turn when a re-iteration has a stale plan but no review for the new iteration (§26.13 / L8)', async () => {
+test('resume re-enters the work turn when a re-iteration has a stale plan but no review for the new iteration (§26.13 / L8)', { tag: '@ownapp' }, async () => {
+  // Alone among the resume tests this one re-enters at WORK and drives the FULL chain (work → reviewers →
+  // consolidate → gate) from a cold launch. Its first poll lands on `work-ran`, an EARLY artifact, so the
+  // gate poll below must absorb the entire reviewers→consolidate→gate tail on its own — a 3-turn tail where
+  // the single-turn siblings' gate poll covers one. 25s (the siblings' budget) is too tight for that tail
+  // under Podman/Xvfb load, and widening it collides with the 60s global per-test cap; grant this test the
+  // proportionally larger wall-clock budget the longest chain needs.
+  test.setTimeout(90_000);
   const repo = seedResumeRepo('agent-term-e2e-l8-resume-stale-', { iteration: 2, reviews: 'none' });
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-l8-resume-stale-home-'));
   const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-l8-resume-stale-bin-');
   seedFakeAgent(binDir, { work: 'write-plan', reviews: 'all', consolidate: 'clean', turnMarkers: true });
 
-  await app.close();
   app = await electron.launch({
     args: ['out/main/index.js'],
     env: {
@@ -3992,7 +4233,7 @@ test('resume re-enters the work turn when a re-iteration has a stale plan but no
       FAKE_GHGIT_LOG: logFile,
     },
   });
-  page = await app.firstWindow();
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
 
   const stateFile = join(repo, '.agent-loop', 'state.yaml');
   // Land: the WORK turn ran this session (its marker appears) — resume did NOT skip to reviewers on the
@@ -4000,8 +4241,10 @@ test('resume re-enters the work turn when a re-iteration has a stale plan but no
   await expect
     .poll(() => existsSync(join(repo, '.agent-loop', 'work-ran')), { timeout: 25_000 })
     .toBe(true);
+  // The whole reviewers→consolidate→gate tail runs inside THIS poll (work-ran, above, is an early artifact),
+  // so it gets the full-chain budget, not the single-turn siblings' 25s.
   await expect
-    .poll(() => readFileSync(stateFile, 'utf8'), { timeout: 25_000 })
+    .poll(() => readFileSync(stateFile, 'utf8'), { timeout: 45_000 })
     .toContain('status: awaiting-human-plan-approval');
 
   await app.close();
@@ -4013,13 +4256,12 @@ test('resume re-enters the work turn when a re-iteration has a stale plan but no
 // §26.13 / L8 — an interrupted run whose work, reviewers AND consolidate turns all completed (every
 // iteration artifact on disk, including consolidated.json) resumes straight into the post-consolidate
 // verdict branch: it re-injects NO turn, reads the recorded clean verdict, and drives to the gate.
-test('resume runs only the post-consolidate branch when every iteration artifact already exists (§26.13 / L8)', async () => {
+test('resume runs only the post-consolidate branch when every iteration artifact already exists (§26.13 / L8)', { tag: '@ownapp' }, async () => {
   const repo = seedResumeRepo('agent-term-e2e-l8-resume-post-', { iteration: 1, reviews: 'all', consolidated: true });
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-l8-resume-post-home-'));
   const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-l8-resume-post-bin-');
   seedFakeAgent(binDir, { work: 'write-plan', reviews: 'all', consolidate: 'clean', turnMarkers: true });
 
-  await app.close();
   app = await electron.launch({
     args: ['out/main/index.js'],
     env: {
@@ -4034,7 +4276,7 @@ test('resume runs only the post-consolidate branch when every iteration artifact
       FAKE_GHGIT_LOG: logFile,
     },
   });
-  page = await app.firstWindow();
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
 
   const stateFile = join(repo, '.agent-loop', 'state.yaml');
   // Land: the recorded clean verdict drove the run to its gate with NO turn re-injected — every turn
@@ -4052,14 +4294,13 @@ test('resume runs only the post-consolidate branch when every iteration artifact
   rmSync(binDir, { recursive: true, force: true });
 });
 
-test('Restart clears a resolved stage-transition input so the next entry re-prompts (§24.2.3 T3)', async () => {
+test('Restart clears a resolved stage-transition input so the next entry re-prompts (§24.2.3 T3)', { tag: '@ownapp' }, async () => {
   // The user supplies the plan step's ticket once; after completing and Restarting the flow, the
   // ticket must be re-requested — Restart wipes resolved inputs (unlike Undo).
   const repo = seedBootstrapFlowRepo('agent-term-e2e-restart-reprompt-');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-restart-reprompt-home-'));
-  await app.close();
   app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
-  page = await app.firstWindow();
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   await typeCommand(`cd "${repo}"`);
@@ -4096,7 +4337,7 @@ test('Restart clears a resolved stage-transition input so the next entry re-prom
   rmSync(home, { recursive: true, force: true });
 });
 
-test('loop-derived ticket + PR surface only once the flow enters the loop step (§24.2.3 T7)', async () => {
+test('loop-derived ticket + PR surface only once the flow enters the loop step (§24.2.3 T7)', { tag: '@ownapp' }, async () => {
   // The loop's linked_issues ticket and state.yaml PR are agent-loop state: progress-gated, they stay
   // hidden on the pre-loop manual step and appear only once the flow enters a loop step (§24.2.3 T7).
   const { dir: repo, stateFile } = seedRefsFlowRepo('agent-term-e2e-refs-');
@@ -4105,9 +4346,8 @@ test('loop-derived ticket + PR surface only once the flow enters the loop step (
     'schema_version: 4\npr: 179\nbranch: agent-loop/issue-176\niteration: 9\nstatus: planning\nlinked_issues:\n  - 25\n',
   );
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-refs-home-'));
-  await app.close();
   app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
-  page = await app.firstWindow();
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   await typeCommand(`cd "${repo}"`);
@@ -4137,7 +4377,7 @@ test('loop-derived ticket + PR surface only once the flow enters the loop step (
   rmSync(home, { recursive: true, force: true });
 });
 
-test('Terminate clears the ticket/PR display even though state.yaml still carries the loop (§24.2.3 T7)', async () => {
+test('Terminate clears the ticket/PR display even though state.yaml still carries the loop (§24.2.3 T7)', { tag: '@ownapp' }, async () => {
   // The prior run's PR/ticket lives on in the read-only state.yaml; Terminate resets the flow to its
   // first step, closing the loop-step gate, so the rail read-out and docked popout empty (loop
   // dismissed, not deleted).
@@ -4147,9 +4387,8 @@ test('Terminate clears the ticket/PR display even though state.yaml still carrie
     'schema_version: 4\npr: 179\nbranch: agent-loop/issue-176\niteration: 9\nstatus: planning\nlinked_issues:\n  - 25\n',
   );
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-refs-term-home-'));
-  await app.close();
   app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
-  page = await app.firstWindow();
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   await typeCommand(`cd "${repo}"`);
@@ -4177,7 +4416,7 @@ test('Terminate clears the ticket/PR display even though state.yaml still carrie
   rmSync(home, { recursive: true, force: true });
 });
 
-test('Restart clears the ticket/PR display until the flow re-enters a loop step (§24.2.3 T7)', async () => {
+test('Restart clears the ticket/PR display until the flow re-enters a loop step (§24.2.3 T7)', { tag: '@ownapp' }, async () => {
   // Restart returns the flow to its first step, closing the loop-step gate; the display clears with no
   // state.yaml write and returns only once the flow re-enters the loop step — then reflecting whatever
   // loop state.yaml now holds (a fresh pickup).
@@ -4187,9 +4426,8 @@ test('Restart clears the ticket/PR display until the flow re-enters a loop step 
     'schema_version: 4\npr: 179\nbranch: agent-loop/issue-176\niteration: 9\nstatus: planning\nlinked_issues:\n  - 25\n',
   );
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-refs-restart-home-'));
-  await app.close();
   app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
-  page = await app.firstWindow();
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   await typeCommand(`cd "${repo}"`);
@@ -4224,7 +4462,7 @@ test('Restart clears the ticket/PR display until the flow re-enters a loop step 
   rmSync(home, { recursive: true, force: true });
 });
 
-test('a loop step shows a Loop read-out that expands a docked state-mirror panel, live; advancing early warns (§24.2.3 T2)', async () => {
+test('a loop step shows a Loop read-out that expands a docked state-mirror panel, live; advancing early warns (§24.2.3 T2)', { tag: '@ownapp' }, async () => {
   // The app DRIVES NOTHING — it mirrors agent-loop's v4 state.yaml read-only, updating live as the
   // file changes (§24.2.3 T2).
   const { dir: repo, stateFile } = seedLoopFlowRepo('agent-term-e2e-loop-');
@@ -4233,9 +4471,8 @@ test('a loop step shows a Loop read-out that expands a docked state-mirror panel
     'schema_version: 4\npr: 179\nbranch: agent-loop/issue-176\niteration: 9\nstatus: awaiting-human-pr-approval\n',
   );
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-loop-home-'));
-  await app.close();
   app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
-  page = await app.firstWindow();
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   await typeCommand(`cd "${repo}"`);
@@ -4284,7 +4521,7 @@ test('a loop step shows a Loop read-out that expands a docked state-mirror panel
   rmSync(home, { recursive: true, force: true });
 });
 
-test('a flow transition whose write cannot land surfaces a blocking error and stays retryable (§19.1)', async () => {
+test('a flow transition whose write cannot land surfaces a blocking error and stays retryable (§19.1)', { tag: '@ownapp' }, async () => {
   // persist() throws when the write cannot land; the name-save path surfaces that, and so must a
   // Start/Advance — a transition that silently no-ops leaves the user clicking into the void.
   // `.agent-terminal` is a symlink: the flow.yaml behind it LOADS (readFileSync follows the link), but
@@ -4295,9 +4532,8 @@ test('a flow transition whose write cannot land surfaces a blocking error and st
   writeFileSync(join(real, 'flow.yaml'), 'name: manual\nsteps:\n  - id: groom\n    kind: manual\n');
   symlinkSync(real, join(repo, '.agent-terminal'));
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-txerr-home-'));
-  await app.close();
   app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
-  page = await app.firstWindow();
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   await typeCommand(`cd "${repo}"`);
@@ -4316,15 +4552,14 @@ test('a flow transition whose write cannot land surfaces a blocking error and st
   rmSync(home, { recursive: true, force: true });
 });
 
-test('the reveal signal lands the user on the loop read-out, from another view and from viewer-fullscreen with the strip hidden (§24.2.3 T4)', async () => {
+test('the reveal signal lands the user on the loop read-out, from another view and from viewer-fullscreen with the strip hidden (§24.2.3 T4)', { tag: '@ownapp' }, async () => {
   // Needs a real git repo so the artifact viewer's full-screen (which hides the rail/strip) works
   // (§24.2.3 T4).
   const { dir: repo, stateFile } = seedLoopFlowRepo('agent-term-e2e-reveal-');
   writeFileSync(stateFile, 'schema_version: 4\npr: 179\nbranch: agent-loop/issue-176\niteration: 9\nstatus: awaiting-human-pr-approval\n');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-reveal-home-'));
-  await app.close();
   app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
-  page = await app.firstWindow();
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   await typeCommand(
@@ -4366,14 +4601,13 @@ test('the reveal signal lands the user on the loop read-out, from another view a
   rmSync(home, { recursive: true, force: true });
 });
 
-test('changing directories swaps flow state; each repo is independent and visiting writes nothing (§24.2.2 / §19.1)', async () => {
+test('changing directories swaps flow state; each repo is independent and visiting writes nothing (§24.2.2 / §19.1)', { tag: '@ownapp' }, async () => {
   // The reported bug: after cd-ing away, the flow must reflect the NEW repo, not the old one.
   const repoA = seedFlowRepo('agent-term-e2e-flow-A-', 'alpha');
   const repoB = seedFlowRepo('agent-term-e2e-flow-B-', 'beta');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-flow-sw-home-'));
-  await app.close();
   app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
-  page = await app.firstWindow();
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   // In repo A: start the flow (→ in progress).
@@ -4402,15 +4636,14 @@ test('changing directories swaps flow state; each repo is independent and visiti
   rmSync(home, { recursive: true, force: true });
 });
 
-test('cd into a directory with no flow.yaml shows an error and creates no .agent-terminal dir (§18.1)', async () => {
+test('cd into a directory with no flow.yaml shows an error and creates no .agent-terminal dir (§18.1)', { tag: '@ownapp' }, async () => {
   // No local flow.yaml and an empty $HOME (no global): the strip errors with no control, the rest
   // of the app still runs, and just cd-ing there must NOT litter the dir with an empty .agent-terminal.
   const plain = mkdtempSync(join(tmpdir(), 'agent-term-e2e-flow-none-'));
   mkdirSync(join(plain, '.git'), { recursive: true });
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-flow-none-home-'));
-  await app.close();
   app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
-  page = await app.firstWindow();
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   await typeCommand(`cd "${plain}"`);
@@ -4424,7 +4657,7 @@ test('cd into a directory with no flow.yaml shows an error and creates no .agent
   rmSync(home, { recursive: true, force: true });
 });
 
-test('the definition falls back to the global flow.yaml, but state is still written local (§18.1/§19.1)', async () => {
+test('the definition falls back to the global flow.yaml, but state is still written local (§18.1/§19.1)', { tag: '@ownapp' }, async () => {
   // A repo with no flow.yaml falls back to the $HOME default DEFINITION; the STATE is still
   // repo-local — Starting writes flow-state.yaml into the repo, never into HOME.
   const repo = mkdtempSync(join(tmpdir(), 'agent-term-e2e-flow-global-repo-'));
@@ -4435,9 +4668,8 @@ test('the definition falls back to the global flow.yaml, but state is still writ
     join(home, '.agent-terminal', 'flow.yaml'),
     'name: global-default\nsteps:\n  - id: global-step\n    kind: manual\n',
   );
-  await app.close();
   app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
-  page = await app.firstWindow();
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   await typeCommand(`cd "${repo}"`);
@@ -4452,18 +4684,17 @@ test('the definition falls back to the global flow.yaml, but state is still writ
   rmSync(home, { recursive: true, force: true });
 });
 
-test('flow progression persists across a relaunch, per repo (§24.2.2 S3 / §19.1)', async () => {
+test('flow progression persists across a relaunch, per repo (§24.2.2 S3 / §19.1)', { tag: '@ownapp' }, async () => {
   const repo = seedFlowRepo('agent-term-e2e-flow-persist-', 'groom-ticket');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-flow-persist-home-'));
   const launch = async (): Promise<void> => {
     app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
-    page = await app.firstWindow();
+    page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
     await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
     await typeCommand(`cd "${repo}"`);
     await expect(flowStepName()).toHaveText('groom-ticket', { timeout: 10_000 });
   };
 
-  await app.close();
   await launch();
   await flowControl().click(); // Start
   await expect(flowStation(1)).toHaveClass(/\bactive\b/);
@@ -4480,14 +4711,13 @@ test('flow progression persists across a relaunch, per repo (§24.2.2 S3 / §19.
 
 const flowDerived = () => page.locator('#flow-strip .flow-derived');
 
-test("the flow strip's derived n/m done moves as todos are checked, pushed live (§24.2.2 S5)", async () => {
+test("the flow strip's derived n/m done moves as todos are checked, pushed live (§24.2.2 S5)", { tag: '@ownapp' }, async () => {
   // The strip's "n / m done" count moves on its own as todos change — no manual refresh — proving
   // the live push path (§24.2.2 S5).
   const repo = seedFlowRepo('agent-term-e2e-flow-s5-', 'groom-ticket');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-flow-s5-home-'));
-  await app.close();
   app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
-  page = await app.firstWindow();
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   await typeCommand(`cd "${repo}"`);
@@ -4512,14 +4742,13 @@ test("the flow strip's derived n/m done moves as todos are checked, pushed live 
   rmSync(home, { recursive: true, force: true });
 });
 
-test('advancing with todos outstanding warns but still completes, and is undoable (§19.2 / §24.2.2 S5)', async () => {
+test('advancing with todos outstanding warns but still completes, and is undoable (§19.2 / §24.2.2 S5)', { tag: '@ownapp' }, async () => {
   // Advancing with todos outstanding warns (no spec-section jargon in the UI) yet still reaches done
   // — the §19.2 human override — and the advance is undoable.
   const repo = seedFlowRepo('agent-term-e2e-flow-s5warn-', 'groom-ticket');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-flow-s5warn-home-'));
-  await app.close();
   app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
-  page = await app.firstWindow();
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   await typeCommand(`cd "${repo}"`);
@@ -4549,7 +4778,7 @@ test('advancing with todos outstanding warns but still completes, and is undoabl
   rmSync(home, { recursive: true, force: true });
 });
 
-test('Start injects the skill on entry; todos come from the template ON DEMAND in the todo overlay (§4.1/§6/§9.1)', async () => {
+test('Start injects the skill on entry; todos come from the template ON DEMAND in the todo overlay (§4.1/§6/§9.1)', { tag: '@ownapp' }, async () => {
   // Start injects the skill into the real PTY; the template picker is NOT in the flow strip (it
   // relocated to the todo overlay, §9.1); template todos appear only after the on-demand control.
   const repo = seedFlowRepoWithEntry('agent-term-e2e-flow-s4-', 'groom-ticket', {
@@ -4557,9 +4786,8 @@ test('Start injects the skill on entry; todos come from the template ON DEMAND i
     templateItems: ['Groom the ticket scope', 'Confirm acceptance criteria'],
   });
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-flow-s4-home-'));
-  await app.close();
   app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
-  page = await app.firstWindow();
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   await typeCommand(`cd "${repo}"`);
@@ -4588,7 +4816,7 @@ test('Start injects the skill on entry; todos come from the template ON DEMAND i
   rmSync(home, { recursive: true, force: true });
 });
 
-test('the todo overlay offers a picker of named templates; choosing one instantiates its todos (§4.1/§6)', async () => {
+test('the todo overlay offers a picker of named templates; choosing one instantiates its todos (§4.1/§6)', { tag: '@ownapp' }, async () => {
   // The picker lists every co-located template by its H1 name, defaults to the step's bound template,
   // and instantiating the CHOSEN one adds only its todos.
   const repo = seedFlowRepoMultiTemplate('agent-term-e2e-flow-pick-', 'groom-ticket', {
@@ -4600,9 +4828,8 @@ test('the todo overlay offers a picker of named templates; choosing one instanti
     ],
   });
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-flow-pick-home-'));
-  await app.close();
   app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
-  page = await app.firstWindow();
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   await typeCommand(`cd "${repo}"`);
@@ -4629,13 +4856,12 @@ test('the todo overlay offers a picker of named templates; choosing one instanti
   rmSync(home, { recursive: true, force: true });
 });
 
-test('Start refuses to inject the skill over a busy shell, showing the refusal (§19.3)', async () => {
+test('Start refuses to inject the skill over a busy shell, showing the refusal (§19.3)', { tag: '@ownapp' }, async () => {
   // Start over a busy shell shows the §19.3 refusal notice and injects nothing.
   const repo = seedFlowRepoWithEntry('agent-term-e2e-flow-s4busy-', 'groom-ticket', { skill: 'groomctl' });
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-flow-s4busy-home-'));
-  await app.close();
   app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
-  page = await app.firstWindow();
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   await typeCommand(`cd "${repo}"`);
@@ -4681,16 +4907,15 @@ test('the theme toggle flips light/dark and persists across a reload (§16.6)', 
 const flowTerminate = () => page.locator('#flow-strip .flow-terminate');
 const confirmModal = () => page.locator('#flow-confirm-host .flow-modal');
 
-test('Terminate abandons the flow: resets to Not started, clears todos + capture + audit (#26 tracer)', async () => {
+test('Terminate abandons the flow: resets to Not started, clears todos + capture + audit (#26 tracer)', { tag: '@ownapp' }, async () => {
   const repo = seedFlowRepo('agent-term-e2e-term-', 'groom');
   // An external agent-loop engine file to prove Terminate never touches it (AC10).
   mkdirSync(join(repo, '.agent-loop'), { recursive: true });
   const engineFile = join(repo, '.agent-loop', 'state.yaml');
   writeFileSync(engineFile, 'phase: impl\niteration: 3\n');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-term-home-'));
-  await app.close();
   app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
-  page = await app.firstWindow();
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   await typeCommand(`cd "${repo}"`);
@@ -4742,12 +4967,11 @@ test('Terminate abandons the flow: resets to Not started, clears todos + capture
   rmSync(home, { recursive: true, force: true });
 });
 
-test('Terminate with no todos: the confirmation states zero and still resets to Not started (#26 AC3)', async () => {
+test('Terminate with no todos: the confirmation states zero and still resets to Not started (#26 AC3)', { tag: '@ownapp' }, async () => {
   const repo = seedFlowRepo('agent-term-e2e-term-zero-', 'groom');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-term-zero-home-'));
-  await app.close();
   app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
-  page = await app.firstWindow();
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   await typeCommand(`cd "${repo}"`);
@@ -4770,12 +4994,11 @@ test('Terminate with no todos: the confirmation states zero and still resets to 
   rmSync(home, { recursive: true, force: true });
 });
 
-test('Terminate is keyboard-operable; focus moves into the dialog and Escape restores it (#26 AC13)', async () => {
+test('Terminate is keyboard-operable; focus moves into the dialog and Escape restores it (#26 AC13)', { tag: '@ownapp' }, async () => {
   const repo = seedFlowRepo('agent-term-e2e-term-kbd-', 'groom');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-term-kbd-home-'));
-  await app.close();
   app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
-  page = await app.firstWindow();
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   await typeCommand(`cd "${repo}"`);
@@ -4798,12 +5021,11 @@ test('Terminate is keyboard-operable; focus moves into the dialog and Escape res
   rmSync(home, { recursive: true, force: true });
 });
 
-test('after Terminate and relaunch the flow stays Not started and the next start opens a new audit run (#26 AC12/AC8)', async () => {
+test('after Terminate and relaunch the flow stays Not started and the next start opens a new audit run (#26 AC12/AC8)', { tag: '@ownapp' }, async () => {
   const repo = seedFlowRepo('agent-term-e2e-term-persist-', 'groom');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-term-persist-home-'));
-  await app.close();
   app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
-  page = await app.firstWindow();
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   await typeCommand(`cd "${repo}"`);
@@ -4823,7 +5045,7 @@ test('after Terminate and relaunch the flow stays Not started and the next start
   // Relaunch: the reset survives (AC12).
   await app.close();
   app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
-  page = await app.firstWindow();
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
   await typeCommand(`cd "${repo}"`);
   await expect(flowControl()).toHaveText('Start', { timeout: 10_000 }); // still not_started
@@ -4840,12 +5062,11 @@ test('after Terminate and relaunch the flow stays Not started and the next start
   rmSync(home, { recursive: true, force: true });
 });
 
-test('flow:terminate is inert from Not started: resolves to the benign view and clears nothing (#26 AC2 handler guard)', async () => {
+test('flow:terminate is inert from Not started: resolves to the benign view and clears nothing (#26 AC2 handler guard)', { tag: '@ownapp' }, async () => {
   const repo = seedFlowRepo('agent-term-e2e-term-inert-', 'groom');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-term-inert-home-'));
-  await app.close();
   app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
-  page = await app.firstWindow();
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   // Capture the app's own resolved repo key (§16.3) so the direct IPC call targets the live repo.
@@ -4880,16 +5101,15 @@ test('flow:terminate is inert from Not started: resolves to the benign view and 
   rmSync(home, { recursive: true, force: true });
 });
 
-test('flow:terminate is inert in the load-error state: it never wipes todos or capture (#26 AC2 handler guard)', async () => {
+test('flow:terminate is inert in the load-error state: it never wipes todos or capture (#26 AC2 handler guard)', { tag: '@ownapp' }, async () => {
   // A .git repo with NO flow.yaml + empty $HOME ⇒ the flow loads to the error state (§18.1). Unlike
   // not_started, the machine's terminate does NOT throw here — so without the pre-state guard the
   // handler would run todoStore.clear + store.clear and wipe an error-flow repo's todos and capture.
   const repo = mkdtempSync(join(tmpdir(), 'agent-term-e2e-term-err-'));
   mkdirSync(join(repo, '.git'), { recursive: true });
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-term-err-home-'));
-  await app.close();
   app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
-  page = await app.firstWindow();
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   const repoKeyPromise = page.evaluate(
@@ -4924,7 +5144,7 @@ test('flow:terminate is inert in the load-error state: it never wipes todos or c
 
 // ---- §23.4: launch-root resolution (root a launched instance at a target directory) ----
 
-test('launching at a target directory roots the shell, viewer, and todo scope there — but the flow global dir stays at $HOME (§23.4/§18.1)', async () => {
+test('launching at a target directory roots the shell, viewer, and todo scope there — but the flow global dir stays at $HOME (§23.4/§18.1)', { tag: '@ownapp' }, async () => {
   // The caller-supplied target arrives over the OS process boundary (APP_LAUNCH_DIR), not an IPC
   // channel — so this drives the real launch input, not a fixture standing in for it.
   const launchDir = realpathSync(mkdtempSync(join(tmpdir(), 'agent-term-e2e-launch-')));
@@ -4954,7 +5174,7 @@ test('launching at a target directory roots the shell, viewer, and todo scope th
     env: { ...process.env, APP_SHELL: 'bash', APP_SUBMIT_DELAY_MS: '100', HOME: home, APP_LAUNCH_DIR: launchDir },
   });
   try {
-    page = await launched.firstWindow();
+    page = await launched.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
     await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
     // Artifact viewer root (§20.1) and todo/repo scope (§16.3) read the launch root, before any cd.
@@ -4986,7 +5206,7 @@ test('launching at a target directory roots the shell, viewer, and todo scope th
   }
 });
 
-test('launching at an unusable target falls back to $HOME across the surfaces (§23.4)', async () => {
+test('launching at an unusable target falls back to $HOME across the surfaces (§23.4)', { tag: '@ownapp' }, async () => {
   const home = realpathSync(mkdtempSync(join(tmpdir(), 'agent-term-e2e-launch-home-')));
   writeFileSync(join(home, 'home-fallback-marker.md'), '# home fallback\n');
   // Flow global dir (§18.1) = $HOME unconditionally: a global flow under home must resolve for a repo
@@ -5013,7 +5233,7 @@ test('launching at an unusable target falls back to $HOME across the surfaces (�
     },
   });
   try {
-    page = await launched.firstWindow();
+    page = await launched.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
     await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
     // Viewer + repo scope fall back to F (= $HOME), not the bogus target.
@@ -5040,15 +5260,15 @@ test('launching at an unusable target falls back to $HOME across the surfaces (�
   }
 });
 
-test('two concurrent instances each root at their own target directory (§23.4)', async () => {
+test('two concurrent instances each root at their own target directory (§23.4)', { tag: '@ownapp' }, async () => {
   const dirA = realpathSync(mkdtempSync(join(tmpdir(), 'agent-term-e2e-launch-A-')));
   const dirB = realpathSync(mkdtempSync(join(tmpdir(), 'agent-term-e2e-launch-B-')));
   writeFileSync(join(dirA, 'marker-A.md'), 'A\n');
   writeFileSync(join(dirB, 'marker-B.md'), 'B\n');
   const udA = mkdtempSync(join(tmpdir(), 'agent-term-e2e-ud-A-'));
   const udB = mkdtempSync(join(tmpdir(), 'agent-term-e2e-ud-B-'));
-  // afterEach owns the beforeEach `app`; both instances here are locally owned and closed + cleaned
-  // in finally so afterEach never double-closes `app` and the fixtures never leak on a failure.
+  // @ownapp: no harness instance exists. Both are locally owned and closed + cleaned in finally, so the
+  // fixtures never leak on a failure — and this test hosts two Electrons, never a third it does not use.
   const appA = await electron.launch({
     args: ['out/main/index.js', `--user-data-dir=${udA}`],
     env: { ...process.env, APP_SHELL: 'bash', APP_SUBMIT_DELAY_MS: '100', APP_LAUNCH_DIR: dirA },
@@ -5058,8 +5278,8 @@ test('two concurrent instances each root at their own target directory (§23.4)'
     env: { ...process.env, APP_SHELL: 'bash', APP_SUBMIT_DELAY_MS: '100', APP_LAUNCH_DIR: dirB },
   });
   try {
-    const pageA = await appA.firstWindow();
-    const pageB = await appB.firstWindow();
+    const pageA = await appA.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+    const pageB = await appB.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
     await expect(pageA.locator('.xterm-rows')).not.toHaveText('', { timeout: 15_000 });
     await expect(pageB.locator('.xterm-rows')).not.toHaveText('', { timeout: 15_000 });
 
@@ -5096,11 +5316,10 @@ function isExecutable(p: string): boolean {
   return (statSync(p).mode & 0o111) !== 0;
 }
 
-test('the in-app install action puts an executable agent-terminal on PATH; the instance stays open (§23.4)', async () => {
+test('the in-app install action puts an executable agent-terminal on PATH; the instance stays open (§23.4)', { tag: '@ownapp' }, async () => {
   const home = realpathSync(mkdtempSync(join(tmpdir(), 'agent-term-e2e-cliinstall-home-')));
-  await app.close();
   app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
-  page = await app.firstWindow();
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
   try {
     await page.locator('[data-viewbtn="4"]').click();

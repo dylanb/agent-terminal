@@ -60,7 +60,14 @@ export function createShell(root: HTMLElement, deps: ShellDeps = {}): Shell {
   let theme: Theme = themeTarget.getAttribute('data-theme') === 'dark' ? 'dark' : 'light';
   let fullscreen = root.classList.contains('viewer-fullscreen');
 
+  /** True while an `aria-modal` dialog blocks the app beneath it. Every chrome mutation — the view switch,
+   *  fullscreen, the loop panel, the drawer chord — and the Escape branches consult this ONE gate, so a
+   *  chord, the rail, or another surface calling in (loopReveal, on an OS notification) cannot change or
+   *  hide chrome out from under an open dialog and wedge focus behind the scrim (WCAG 2.4.3, 2.1.1). */
+  const modalIsOpen = (): boolean => doc.querySelector('[aria-modal="true"]') !== null;
+
   function setView(v: ViewId): void {
+    if (modalIsOpen()) return;
     if (fullscreen && v !== '2') setViewerFullscreen(false); // leaving the viewer restores hidden chrome (§20.2)
     view = v;
     root.querySelectorAll('[data-viewpane]').forEach((p) => p.classList.toggle('on', p.getAttribute('data-viewpane') === v));
@@ -112,6 +119,7 @@ export function createShell(root: HTMLElement, deps: ShellDeps = {}): Shell {
   // WCAG 2.4.3.
   let panelOpener: HTMLElement | null = null;
   function openLoopPanel(opener?: HTMLElement): void {
+    if (modalIsOpen()) return; // chrome is frozen while a modal blocks the app beneath it
     panelOpener = opener ?? null;
     root.classList.add('loop-open');
     if (loopPanelEl) setShown(loopPanelEl, true);
@@ -152,6 +160,7 @@ export function createShell(root: HTMLElement, deps: ShellDeps = {}): Shell {
   }
 
   function setViewerFullscreen(on: boolean): void {
+    if (modalIsOpen()) return; // chrome is frozen while a modal blocks the app beneath it
     if (on === fullscreen) return;
     fullscreen = on;
     root.classList.toggle('viewer-fullscreen', on);
@@ -174,15 +183,17 @@ export function createShell(root: HTMLElement, deps: ShellDeps = {}): Shell {
   // they reach the shell, so these chords must be intercepted ahead of any focused descendant (§22.4).
   const onKeyDown = (e: KeyboardEvent): void => {
     if (e.key === 'Escape' && fullscreen) {
+      if (modalIsOpen()) return; // a dialog over the viewer owns Escape (WCAG 2.4.3)
       e.preventDefault();
       e.stopPropagation();
       setViewerFullscreen(false);
       return;
     }
     if (e.key === 'Escape' && isLoopPanelOpen()) {
-      // Defer to an open dialog (e.g. the typed-input modal): Escape should dismiss the topmost
-      // surface, not the panel behind it (WCAG 2.4.3). The modal's own handler closes it.
-      if ((e.target as Element | null)?.closest?.('[role="dialog"]')) return;
+      // Defer to an open dialog: Escape dismisses the topmost surface, not the panel behind it (WCAG 2.4.3).
+      // The SAME predicate the view guard uses — `[role="dialog"]` alone misses errorDialog's `alertdialog`,
+      // and two hand-maintained copies of "a blocking dialog is open" are what let them disagree.
+      if (modalIsOpen()) return;
       e.preventDefault();
       e.stopPropagation();
       closeLoopPanel();
@@ -201,6 +212,11 @@ export function createShell(root: HTMLElement, deps: ShellDeps = {}): Shell {
     // the drawer to Ctrl+Shift+K instead. Only the four app actions are claimed here; everything else
     // (terminal chords, plain keys) propagates to the focused descendant.
     const action = matchChord(e, getKeymap());
+    if (!action) return;
+    // The drawer is chrome behind the scrim too; `setView` guards itself. Gated behind the chord match, so
+    // a terminal keystroke never pays for a document query.
+    if (modalIsOpen()) return;
+
     const targetView: ViewId | null =
       action === 'viewTerminal' ? '1'
       : action === 'viewArtifacts' ? '2'

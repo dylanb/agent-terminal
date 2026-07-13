@@ -731,34 +731,79 @@ export type CliInstallResult =
   | { ok: true; path: string }
   | { ok: false; error: string };
 
-// ---- Install bundled examples (§18.1/§23.4) ----
+// ---- Install bundled examples (§18.1/§23.4/§26.5) ----
+
+/** The destinations the install action seeds. This is the ONE definition of destination identity: main
+ *  groups its results by these ids, the renderer collects one decision per id, and the request validator
+ *  admits no other. `flow` is the global flow home (§18.1); `loops` the engine's loop-config location
+ *  (§24.2.3); `skills` and `commands` the directories Claude Code — a separate process — discovers a
+ *  skill and a slash command from. Declaration order is also the canonical display order: both main's
+ *  install report and the renderer's report iterate this array, so reordering it reorders the report. */
+export const INSTALL_DESTINATION_IDS = ['flow', 'loops', 'skills', 'commands'] as const;
+
+export type InstallDestinationId = (typeof INSTALL_DESTINATION_IDS)[number];
 
 /** examples:preview request (§6): report which bundled files would conflict (exist and differ from
- *  the bundled content), driving the up-front overwrite prompt. Carries only sessionId — the bundle
- *  source and install target are computed by main from the running build. */
+ *  the bundled content), driving the up-front consent step. Carries only sessionId — the bundle
+ *  sources and install targets are computed by main from the running build. */
 export interface InstallExamplesPreviewMsg {
   sessionId: SessionId;
 }
 
-/** examples:preview result: the install-set entries that already exist and differ from the bundle.
- *  Empty when the flow home is clean or every present target is byte-identical (§18.1). */
-export interface InstallExamplesPreview {
-  conflicts: string[];
-}
+/** One destination's preview. The two modes are mutually exclusive: a destination with no conflict
+ *  carries no files and asks the user for no decision, so `files` exists only in the conflicting mode
+ *  (CLAUDE.md discriminated-union corollary). */
+export type InstallDestinationPreview =
+  | { destination: InstallDestinationId; conflict: false }
+  | { destination: InstallDestinationId; conflict: true; files: DestRelativePath[] };
 
-/** examples:apply request (§6): install the bundled flow into the global flow home. `overwrite`
- *  governs ONLY targets that exist and differ; absent targets are always created regardless (§18.1). */
+/** examples:preview result: `ok` with one entry per destination the action would write, or `!ok` with a
+ *  human-readable `error` when the request itself was refused. The error arm is distinct from a clean
+ *  `ok` with no conflicts: an empty destination list would otherwise read as "nothing conflicts", so a
+ *  refused request could drive an apply the user never consented to. Observing a preview never writes
+ *  anything (§18.1). */
+export type InstallExamplesPreview =
+  | { ok: true; destinations: InstallDestinationPreview[] }
+  | { ok: false; error: string };
+
+/** examples:apply request (§6): seed every destination. `replace` names the destinations the user
+ *  consented to replace conflicting files in — a destination absent from the list keeps its files. The
+ *  decision is per destination, so consenting in one never replaces files in another. Absent targets
+ *  are always created regardless of the decision (§18.1). */
 export interface InstallExamplesApplyMsg {
   sessionId: SessionId;
-  overwrite: boolean;
+  replace: InstallDestinationId[];
 }
 
-/** examples:apply result: `ok` with the entries created / overwritten / skipped, or `!ok` with a
- *  human-readable `error`. A write the safe-path primitive refuses (symlinked container, CWE-59) is an
- *  `error`, never a silent skip — `skipped` means "left unchanged per the overwrite decision". */
+/** A file's path relative to the root of the destination it installs under. A plain `string` is not
+ *  assignable to it, so every value is minted at one checked place (`destRelative`) — an absolute path or
+ *  one escaping its destination is refused there rather than travelling as a legal-looking value. */
+export type DestRelativePath = string & { readonly __destRelative: unique symbol };
+
+/** Files reported under the destination they were written to, so two destinations sharing a file name
+ *  yield two distinct, attributable entries. */
+export interface InstallDestinationFiles {
+  destination: InstallDestinationId;
+  files: DestRelativePath[];
+}
+
+/** The files an apply touched, grouped by the destination each was written to (§18.1). `skipped` is
+ *  "left byte-for-byte unchanged" — either the target already matched the bundle, or it differed and the
+ *  user did not consent to replace in that destination. A write the safe-path primitive refuses
+ *  (symlinked container, CWE-59) is an `error`, never a silent skip. */
+export interface InstallExamplesWritten {
+  created: InstallDestinationFiles[];
+  overwritten: InstallDestinationFiles[];
+  skipped: InstallDestinationFiles[];
+}
+
+/** examples:apply result: `ok`, or `!ok` with a human-readable `error`. Both arms carry the same
+ *  created / overwritten / skipped sets: the action does not roll back a write that already landed, so a
+ *  failure names exactly what it wrote — and what it left alone — before failing. All three are empty
+ *  when the pre-write container check refused, which is the all-or-nothing case. */
 export type InstallExamplesResult =
-  | { ok: true; created: string[]; overwritten: string[]; skipped: string[] }
-  | { ok: false; error: string };
+  | ({ ok: true } & InstallExamplesWritten)
+  | ({ ok: false; error: string } & InstallExamplesWritten);
 
 // ---- Preload-exposed API surfaces (§6) ----
 
@@ -915,12 +960,11 @@ export interface CliApi {
   install(): Promise<CliInstallResult>;
 }
 
-/** Install bundled examples (§18.1/§23.4): the settings organism's only seam to the install action.
- *  A non-destructive `preview` (which targets conflict) drives the up-front overwrite prompt; `apply`
- *  writes per the decision and reports the created/overwritten/skipped sets or a human-readable error. */
+/** Install bundled examples (§18.1/§23.4/§26.5): the settings organism's only seam to the install action.
+ *  Observing a preview never writes anything. */
 export interface ExamplesApi {
   preview(): Promise<InstallExamplesPreview>;
-  apply(overwrite: boolean): Promise<InstallExamplesResult>;
+  apply(replace: InstallDestinationId[]): Promise<InstallExamplesResult>;
 }
 
 declare global {

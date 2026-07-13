@@ -115,6 +115,115 @@ describe('shell controller (§24.1C — views, hotkeys, docked drawer, theme)', 
       document.dispatchEvent(new KeyboardEvent('keydown', { key: ',', ctrlKey: true, cancelable: true }));
       expect(shell.getView()).toBe('4');
     });
+
+    // A modal blocks the app beneath it (`aria-modal`), and a view switch `display:none`s a whole viewpane
+    // — including one a dialog is hosted in. Acting on a chord would tear focus out of the open dialog and
+    // strand the keyboard user behind the scrim, with no route back (WCAG 2.4.3, 2.1.1).
+    describe('with a modal dialog open', () => {
+      let modal: HTMLElement;
+      beforeEach(() => {
+        shell.setView('4');
+        modal = document.createElement('div');
+        modal.setAttribute('role', 'dialog');
+        modal.setAttribute('aria-modal', 'true');
+        document.body.append(modal);
+      });
+      afterEach(() => modal.remove());
+
+      it('does not switch view on a view chord', () => {
+        key('2');
+        expect(shell.getView()).toBe('4');
+      });
+
+      it('does not toggle the drawer — it is chrome behind the scrim too', () => {
+        const before = app.classList.contains('drawer-open');
+        key('k');
+        expect(app.classList.contains('drawer-open')).toBe(before);
+      });
+
+      it('does not act on the openSettings chord', () => {
+        modal.remove();
+        shell.setView('1');
+        document.body.append(modal);
+        key(',');
+        expect(shell.getView()).toBe('1');
+      });
+
+      it('resumes switching once the dialog closes', () => {
+        modal.remove();
+        key('2');
+        expect(shell.getView()).toBe('2');
+      });
+
+      // Declining to ACT on a chord and CONSUMING it are different decisions, and the gate makes only the
+      // first. The modal owns the keyboard while it is open, and the keymap is rebindable (§7.7): a user who
+      // binds an app action onto a readline/text-edit key would find that key dead inside every dialog text
+      // field if a blocked chord were swallowed here. A handler that does not act must not eat the event.
+      it('does not consume a blocked chord — the focused dialog control still receives the key', () => {
+        const e = new KeyboardEvent('keydown', { key: '2', metaKey: true, bubbles: true, cancelable: true });
+        document.dispatchEvent(e);
+        expect(shell.getView()).toBe('4'); // no chrome mutation …
+        expect(e.defaultPrevented).toBe(false); // … and the key is left to the dialog
+      });
+
+      it('consumes the same chord once the dialog closes, when it does act on it', () => {
+        modal.remove();
+        const e = new KeyboardEvent('keydown', { key: '2', metaKey: true, bubbles: true, cancelable: true });
+        document.dispatchEvent(e);
+        expect(shell.getView()).toBe('2');
+        expect(e.defaultPrevented).toBe(true);
+      });
+
+      // Guarding the CHORD is not enough: setView() is public and other surfaces call it (loopReveal fires
+      // it when an OS notification is activated). If a view switch could still land, it would display:none
+      // the pane the dialog is hosted in — and a display:none'd dialog is still IN the document, so the
+      // guard would then match it forever and deaden every chord with no way to reach the dialog and close
+      // it. The guard belongs on the switch itself (WCAG 2.4.3, 2.1.1).
+      it('does not switch view when setView is called directly by another surface', () => {
+        shell.setView('1');
+        expect(shell.getView()).toBe('4');
+      });
+
+      // errorDialog composes the shell with role="alertdialog" (WAI-ARIA APG: a dialog the SYSTEM raises).
+      // A predicate that matches only [role="dialog"] misses it — so with the loop panel open, exactly when
+      // a bootstrap/loop error fires, the shell's capture-phase stopPropagation() would eat Escape, destroy
+      // the panel behind the scrim, and never let the alert's own handler close it (WCAG 2.1.1, 2.4.3).
+      it('defers Escape to an alertdialog, not just a dialog, when the loop panel is open', () => {
+        modal.remove();
+        shell.openLoopPanel();
+        const alert = document.createElement('div');
+        alert.setAttribute('role', 'alertdialog');
+        alert.setAttribute('aria-modal', 'true');
+        const inside = document.createElement('button');
+        alert.append(inside);
+        document.body.append(alert);
+
+        inside.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+
+        expect(shell.isLoopPanelOpen()).toBe(true); // the panel behind the alert survives
+        alert.remove();
+      });
+
+      // The guard is on the chrome-mutating METHODS, not just the chord: revealLoopReadout (an OS-notification
+      // handler) calls setViewerFullscreen + setView + openLoopPanel, and while a modal blocks the app none
+      // of them may change the chrome beneath it (WCAG 2.4.3, 2.1.1). One gate, every mutator consults it.
+      it('does not enter fullscreen or open the loop panel while a modal is open', () => {
+        expect(shell.isViewerFullscreen()).toBe(false);
+        shell.setViewerFullscreen(true);
+        expect(shell.isViewerFullscreen()).toBe(false); // refused
+        shell.openLoopPanel();
+        expect(shell.isLoopPanelOpen()).toBe(false); // refused
+      });
+
+      it('never leaves the app wedged: the dialog is never hidden, so chords resume when it closes', () => {
+        shell.setView('1'); // refused
+        key('2'); // refused
+        expect(pane('4').classList.contains('on')).toBe(true); // the dialog's pane is still shown
+        modal.remove();
+        key('2');
+        expect(shell.getView()).toBe('2');
+      });
+    });
   });
 
   // §22.4: the shell must not reach into a sibling view to focus it — it announces the active view on
@@ -318,6 +427,9 @@ describe('shell controller (§24.1C — views, hotkeys, docked drawer, theme)', 
       shell.openLoopPanel();
       const dialog = document.createElement('div');
       dialog.setAttribute('role', 'dialog');
+      // What BLOCKS the app beneath is `aria-modal`, not the role — and createModalShell always sets both.
+      // A role="dialog" without it is a non-modal dialog, which must NOT capture the panel's Escape.
+      dialog.setAttribute('aria-modal', 'true');
       const inp = document.createElement('input');
       dialog.appendChild(inp);
       document.body.appendChild(dialog);
@@ -451,6 +563,34 @@ describe('shell controller (§24.1C — views, hotkeys, docked drawer, theme)', 
       shell.setView('1');
       expect(app.classList.contains('viewer-fullscreen')).toBe(false);
       expect(onChange).toHaveBeenLastCalledWith(false);
+    });
+
+    // A global modal (errorDialog / flowInputModal) can open OVER the fullscreen viewer. Escape then belongs
+    // to the dialog, not to fullscreen. The shell must LET the event through — asserting the fullscreen class
+    // is unchanged is not enough, because setViewerFullscreen self-guards while a modal is open, so the class
+    // stays put even if the shell wrongly swallows the event. The real harm is the capture-phase
+    // stopPropagation()/preventDefault() eating the dialog's own Escape (WCAG 2.4.3), so assert THAT is absent.
+    it('lets Escape reach a dialog open over the viewer, rather than consuming it for fullscreen', () => {
+      shell = createShell(app);
+      shell.setViewerFullscreen(true);
+      const modal = document.createElement('div');
+      modal.setAttribute('role', 'alertdialog');
+      modal.setAttribute('aria-modal', 'true');
+      const btn = document.createElement('button');
+      modal.append(btn);
+      document.body.append(modal);
+
+      const esc = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true });
+      let reachedDialog = false;
+      btn.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') reachedDialog = true; // the dialog's own handler would run here
+      });
+      btn.dispatchEvent(esc);
+
+      expect(reachedDialog).toBe(true); // the shell did not stopPropagation it away
+      expect(esc.defaultPrevented).toBe(false); // nor preventDefault it
+      expect(app.classList.contains('viewer-fullscreen')).toBe(true);
+      modal.remove();
     });
   });
 

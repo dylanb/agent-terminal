@@ -126,4 +126,15 @@ describe('isRealContainer', () => {
       rmSync(outside, { recursive: true, force: true });
     }
   });
+
+  // A lstat that THROWS is never a symlink — a symlink always lstats successfully. So a throw must NOT be
+  // reported as "reject: symlink"; the only job here is symlink rejection, and returning false on a throw
+  // masks a real error (EACCES/ENOTDIR) as a link that isn't there and silently drops the write. `false`
+  // means exactly one thing: a confirmed non-directory in place. Everything else proceeds so the write's own
+  // error surfaces (regression: round 8 narrowed this to ENOENT-only and turned EACCES into a silent skip).
+  it('is true when lstat throws for a reason that is not a symlink (a non-directory on the path)', () => {
+    const file = join(dir, 'afile');
+    writeFileSync(file, 'x');
+    expect(isRealContainer(join(file, 'child'))).toBe(true); // ENOTDIR — not a symlink, so not refused
+  });
 });
