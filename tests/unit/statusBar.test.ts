@@ -335,12 +335,14 @@ describe('status bar (§22.3.1)', () => {
       expect(region.querySelectorAll('.spin')).toHaveLength(1);
     });
 
-    it('reuses the phrase node across a changed phrase, updating only its text', () => {
+    it('updates a changed phrase in place without recreating the phrase or spinner nodes, so the spinner animation never restarts', () => {
       const { host, render } = mount();
       render(model({ activity: { phrase: 'Working' } }));
       const phraseNode = host.querySelector('.sb-activity .phrase');
+      const spinner = host.querySelector('.sb-activity .spin');
       render(model({ activity: { phrase: 'Running reviewers' } }));
       expect(host.querySelector('.sb-activity .phrase')).toBe(phraseNode);
+      expect(host.querySelector('.sb-activity .spin')).toBe(spinner); // not recreated → CSS animation stays continuous
       expect(phraseNode!.textContent).toBe('Running reviewers');
     });
   });
@@ -435,10 +437,12 @@ describe('status bar (§22.3.1)', () => {
       expect(name).toContain('Loop needs you');
     });
 
-    it('strips control characters out of a repo-supplied status before it reaches the human (CWE-117)', () => {
+    it('strips control and bidi characters out of a repo-supplied status before it reaches the human (CWE-117 / CWE-1007)', () => {
+      const cp = (...codes: number[]): string => String.fromCharCode(...codes);
       const { host, render } = mount();
-      render(model({ alert: { ...blocked, status: 'awaiting\x00\x1bhuman' } }));
-      expect(alertBtn(host)!.textContent).not.toMatch(/[\x00-\x1f]/);
+      const unsafe = [0x00, 0x1b, 0x9f, 0x202e];
+      render(model({ alert: { ...blocked, status: `awaiting${cp(...unsafe)}human` } }));
+      for (const c of unsafe) expect(alertBtn(host)!.textContent!.includes(cp(c))).toBe(false);
     });
   });
 
@@ -609,6 +613,23 @@ describe('status bar (§22.3.1)', () => {
       await flush();
       expect(onError).not.toHaveBeenCalled();
     });
+
+    it('surfaces a current save failure even when an unrelated background push landed while it was in flight', async () => {
+      let reject: (e: unknown) => void = () => {};
+      const setTitle = vi.fn().mockImplementationOnce(() => new Promise((_, r) => (reject = r)));
+      const onError = vi.fn();
+      const { host, render } = mount({ setTitle, onError });
+      render(model({ title: { kind: 'user', text: 'Old' } }));
+      const input = edit(host);
+      input.value = 'New name';
+      press(input, 'Enter');
+      // an ordinary background push (same repo, no new edit) lands while the save is still pending
+      render(model({ title: { kind: 'user', text: 'Old' }, activity: { phrase: 'Working' } }));
+      reject(new Error('EROFS'));
+      await flush();
+      expect(onError).toHaveBeenCalledTimes(1);
+      expect(String(onError.mock.calls[0][0])).toContain('EROFS');
+    });
   });
 
   describe('a control is offered only where it can act', () => {
@@ -628,6 +649,7 @@ describe('status bar (§22.3.1)', () => {
       const link = titleEl(host)!;
       expect(link.textContent).toBe('Persist flow inputs across steps');
       expect(link.getAttribute('role')).toBe('link');
+      expect(link.getAttribute('aria-label')).toBe('PR #57: Persist flow inputs across steps (opens in browser)');
       link.click();
       expect(openExternal).toHaveBeenCalledWith('https://github.com/o/r/pull/57');
     });

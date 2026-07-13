@@ -1,5 +1,6 @@
 import type { FlowStateView } from './ipc';
 import type { LoopActivity } from './loopActivity';
+import { stripDisplayControlChars } from './controlChars';
 
 /** The name the bar shows, and therefore what may be done with it: a `pr`/`ticket` opens GitHub; a
  *  `user` name is typed in place. */
@@ -23,12 +24,7 @@ export const TITLE_MAX = 200;
 
 export function normalizeTitle(raw: unknown): string | null {
   if (typeof raw !== 'string') return null;
-  // CWE-117 / CWE-1007: this is the one boundary every read (decode) and write (IPC validate) crosses,
-  // so a repo-supplied name is neutralized here rather than at each human-facing sink.
-  const text = raw
-    .replace(/[\x00-\x1f\x7f-\x9f‪-‮⁦-⁩]/g, ' ')
-    .trim()
-    .slice(0, TITLE_MAX);
+  const text = stripDisplayControlChars(raw).trim().slice(0, TITLE_MAX);
   return text.length > 0 ? text : null;
 }
 

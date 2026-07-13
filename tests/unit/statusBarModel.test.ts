@@ -103,12 +103,16 @@ describe('status bar model (§22.3.1)', () => {
       expect(long!.length).toBe(TITLE_MAX);
     });
 
-    it('strips C0/C1 control characters and bidi-override code points from a repo-supplied name (CWE-117, CWE-1007)', () => {
-      const cleaned = normalizeTitle('safe\x00\x1b\x7f\x9ftext‮reversed⁦');
+    it('strips control, bidi, and line-separator characters from a repo-supplied name but keeps ZWJ/ZWNJ (CWE-117, CWE-1007, CWE-116)', () => {
+      const cp = (...codes: number[]): string => String.fromCharCode(...codes);
+      const dangerous = [0x00, 0x1f, 0x7f, 0x9f, 0x061c, 0x200b, 0x200e, 0x200f, 0x2028, 0x2029, 0x202e, 0x2066, 0xfeff];
+      const cleaned = normalizeTitle(`safe${cp(...dangerous)}text` + cp(0x200d, 0x200c));
       expect(cleaned).not.toBeNull();
-      expect(cleaned!).not.toMatch(/[\x00-\x1f\x7f-\x9f‪-‮⁦-⁩]/);
+      for (const c of dangerous) expect(cleaned!.includes(cp(c))).toBe(false);
       expect(cleaned!).toContain('safe');
       expect(cleaned!).toContain('text');
+      expect(cleaned!.includes(cp(0x200d))).toBe(true); // ZWJ preserved
+      expect(cleaned!.includes(cp(0x200c))).toBe(true); // ZWNJ preserved
     });
   });
 

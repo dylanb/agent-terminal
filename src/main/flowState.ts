@@ -36,6 +36,7 @@ export interface FlowStateStore {
 
 const STATE_REL = path.join('.agent-terminal', 'flow-state.yaml');
 const PERSISTABLE: ReadonlySet<FlowStatus> = new Set(['not_started', 'in_progress', 'done']);
+const PERSISTED_KEYS: ReadonlySet<string> = new Set(['step', 'status', 'inputs', 'started_at', 'title']);
 
 /** Null when absent/empty, so the round-trip omits the key for a flow that resolved none (§24.2.3 T3). */
 function readInputs(raw: unknown): Record<string, string> | null {
@@ -103,6 +104,16 @@ export function createFlowStateStore(worktreeDir: string): FlowStateStore {
     };
   };
 
+  const decodeStrict = (doc: Record<string, unknown>): PersistedFlowState | null => {
+    const progression = decode(doc);
+    if (progression === null) return null;
+    if (Object.keys(doc).some((key) => !PERSISTED_KEYS.has(key))) return null;
+    if (doc.inputs !== undefined && !(isRecord(doc.inputs) && Object.values(doc.inputs).every((v) => typeof v === 'string'))) return null;
+    if (doc.started_at !== undefined && readStartedAt(doc.started_at) === null) return null;
+    if (doc.title !== undefined && normalizeTitle(doc.title) === null) return null;
+    return progression;
+  };
+
   const read = (): PersistedFlowState | null => {
     const loaded = loadDoc();
     return loaded.kind === 'record' ? decode(loaded.doc) : null;
@@ -135,22 +146,8 @@ export function createFlowStateStore(worktreeDir: string): FlowStateStore {
       return;
     }
 
-    const allowed = new Set(['step', 'status', 'inputs', 'started_at', 'title']);
-    const progression = decode(loaded.doc);
-    const inputsValid =
-      loaded.doc.inputs === undefined ||
-      (isRecord(loaded.doc.inputs) && Object.values(loaded.doc.inputs).every((value) => typeof value === 'string'));
-    const startedAtValid = loaded.doc.started_at === undefined || readStartedAt(loaded.doc.started_at) !== null;
-    const priorTitleValid = loaded.doc.title === undefined || normalizeTitle(loaded.doc.title) !== null;
-    if (
-      progression === null ||
-      keys.some((key) => !allowed.has(key)) ||
-      !inputsValid ||
-      !startedAtValid ||
-      !priorTitleValid
-    ) {
-      throw new Error(`cannot update ${STATE_REL}: unrecognized progression`);
-    }
+    const progression = decodeStrict(loaded.doc);
+    if (progression === null) throw new Error(`cannot update ${STATE_REL}: unrecognized progression`);
     write({ ...progression, title: named ?? undefined });
   };
 

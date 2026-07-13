@@ -96,17 +96,15 @@ export function createStatusBar(host: HTMLElement, deps: StatusBarDeps): StatusB
         const revision = renderRevision;
         if (repoKey === forRepo) latestTitle = optimistic;
         void deps.setTitle(forRepo, typed).catch((e: unknown) => {
-          if (
-            disposed ||
-            repoKey !== forRepo ||
-            renderRevision !== revision ||
-            titleMutation !== mutation ||
-            !sameTitle(latestTitle, optimistic)
-          ) return;
+          const stale = disposed || repoKey !== forRepo || titleMutation !== mutation;
+          if (stale) return;
           deps.onError(e instanceof Error ? e.message : String(e));
-          latestTitle = { kind: 'user', text: from };
-          shownTitle = null;
-          if (!editing) renderTitle(latestTitle);
+          const optimisticStillShown = renderRevision === revision && sameTitle(latestTitle, optimistic);
+          if (optimisticStillShown) {
+            latestTitle = { kind: 'user', text: from };
+            shownTitle = null;
+            if (!editing) renderTitle(latestTitle);
+          }
         });
       }
       shownTitle = null;
@@ -167,6 +165,11 @@ export function createStatusBar(host: HTMLElement, deps: StatusBarDeps): StatusB
       link.dataset.sbTitle = '';
       link.setAttribute('role', 'link'); // WAI-ARIA APG
       link.textContent = got.title;
+      // WCAG 2.4.4.
+      link.setAttribute(
+        'aria-label',
+        `${title.kind === 'pr' ? 'PR' : 'Ticket'} #${title.number}: ${got.title} (opens in browser)`,
+      );
       link.addEventListener('click', () => {
         if (refUrl === null) return;
         void Promise.resolve(deps.openExternal(refUrl))

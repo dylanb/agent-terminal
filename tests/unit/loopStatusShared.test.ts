@@ -41,4 +41,9 @@ describe('stripStatusControlChars (shared CWE-117 strip, §16.3/§25.7)', () => 
   it('leaves a normal printable status untouched', () => {
     expect(stripStatusControlChars('awaiting-human-pr-approval')).toBe('awaiting-human-pr-approval');
   });
+
+  it('strips bidi-override characters so a repo status cannot spoof the notification or audit (CWE-1007)', () => {
+    const rlo = String.fromCharCode(0x202e);
+    expect(stripStatusControlChars(`await${rlo}ing`).includes(rlo)).toBe(false);
+  });
 });
