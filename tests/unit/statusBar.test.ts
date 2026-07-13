@@ -654,6 +654,16 @@ describe('status bar (§22.3.1)', () => {
       expect(openExternal).toHaveBeenCalledWith('https://github.com/o/r/pull/57');
     });
 
+    it('strips control and bidi characters from a fetched ref title before the link text and aria-label (CWE-1007)', async () => {
+      const rlo = String.fromCharCode(0x202e);
+      const { host, render } = mount({ githubRef: () => Promise.resolve(ref({ title: `Fix${rlo}bug` })) });
+      render(model({ title: { kind: 'pr', number: 57 } }));
+      await flush();
+      const link = titleEl(host)!;
+      expect(link.textContent!.includes(rlo)).toBe(false);
+      expect(link.getAttribute('aria-label')!.includes(rlo)).toBe(false);
+    });
+
     it('never opens the ref the bar has moved off, once it moves to one that never resolves', async () => {
       const openExternal = vi.fn();
       const githubRef = vi.fn().mockResolvedValueOnce(ref()).mockResolvedValue(null);

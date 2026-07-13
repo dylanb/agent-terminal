@@ -38,13 +38,15 @@ const STATE_REL = path.join('.agent-terminal', 'flow-state.yaml');
 const PERSISTABLE: ReadonlySet<FlowStatus> = new Set(['not_started', 'in_progress', 'done']);
 const PERSISTED_KEYS: ReadonlySet<string> = new Set(['step', 'status', 'inputs', 'started_at', 'title']);
 
+const isStringValue = (v: unknown): v is string => typeof v === 'string';
+
 /** Null when absent/empty, so the round-trip omits the key for a flow that resolved none (§24.2.3 T3). */
 function readInputs(raw: unknown): Record<string, string> | null {
   if (!isRecord(raw)) return null;
   // Null-prototype map: a YAML-supplied key like `__proto__` must store as own data, not hit the
   // prototype setter (prototype-pollution / data-loss vector).
   const out: Record<string, string> = Object.create(null);
-  for (const [k, v] of Object.entries(raw)) if (typeof v === 'string') out[k] = v;
+  for (const [k, v] of Object.entries(raw)) if (isStringValue(v)) out[k] = v;
   return Object.keys(out).length > 0 ? out : null;
 }
 
@@ -108,7 +110,7 @@ export function createFlowStateStore(worktreeDir: string): FlowStateStore {
     const progression = decode(doc);
     if (progression === null) return null;
     if (Object.keys(doc).some((key) => !PERSISTED_KEYS.has(key))) return null;
-    if (doc.inputs !== undefined && !(isRecord(doc.inputs) && Object.values(doc.inputs).every((v) => typeof v === 'string'))) return null;
+    if (doc.inputs !== undefined && !(isRecord(doc.inputs) && Object.values(doc.inputs).every(isStringValue))) return null;
     if (doc.started_at !== undefined && readStartedAt(doc.started_at) === null) return null;
     if (doc.title !== undefined && normalizeTitle(doc.title) === null) return null;
     return progression;

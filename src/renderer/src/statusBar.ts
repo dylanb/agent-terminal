@@ -3,6 +3,7 @@
 import type { GithubRef, GithubRefKind } from '../../shared/ipc';
 import { IDLE_STATUS_BAR, normalizeTitle, sameTitle, TITLE_MAX, type StatusBarModel, type StatusBarTitle } from '../../shared/statusBar';
 import { stripStatusControlChars } from '../../shared/loopStatus';
+import { stripDisplayControlChars } from '../../shared/controlChars';
 import { sameOccurrence, type Occurrence } from '../../shared/occurrence';
 import { createSpinner } from './spinner';
 import { captureSubtreeFocus } from './dom';
@@ -164,11 +165,12 @@ export function createStatusBar(host: HTMLElement, deps: StatusBarDeps): StatusB
       link.className = 'sb-name sb-link';
       link.dataset.sbTitle = '';
       link.setAttribute('role', 'link'); // WAI-ARIA APG
-      link.textContent = got.title;
+      const refTitle = stripDisplayControlChars(got.title);
+      link.textContent = refTitle;
       // WCAG 2.4.4.
       link.setAttribute(
         'aria-label',
-        `${title.kind === 'pr' ? 'PR' : 'Ticket'} #${title.number}: ${got.title} (opens in browser)`,
+        `${title.kind === 'pr' ? 'PR' : 'Ticket'} #${title.number}: ${refTitle} (opens in browser)`,
       );
       link.addEventListener('click', () => {
         if (refUrl === null) return;
