@@ -1,0 +1,255 @@
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, sep } from 'node:path';
+import { resolveLoopDefV2, type LoopDefV2Tiers } from '../../src/main/loopDefV2';
+
+// A minimal, valid §27 (v2) def as YAML. Helpers below mutate one line at a time so each escape /
+// malformed case is exactly one departure from a def that is otherwise known-good.
+const VALID_DEF = `version: v2
+name: plan-loop
+work:
+  recipe: prompts/work.md
+  artifact: plan
+reviewers:
+  - persona: review-plan-principal
+    charter: charter/principal.md
+    tools: [Read, Grep, Glob]
+  - persona: review-plan-security
+    charter: charter/security.md
+    tools: [Read, Grep, Glob, Bash]
+consolidator:
+  recipe: prompts/consolidate.md
+boundaries:
+  - boundary: pre-work
+    mode: clear
+  - boundary: pre-review
+    mode: compact
+    message: Keep the plan and the ticket.
+report:
+  sections: [summary, findings, disposition]
+gate:
+  - option: approve
+    side_effects:
+      - kind: gh
+        action: publish-pr-body
+  - option: request-changes
+    side_effects: []
+pickup:
+  initial_status: planning
+  branch_template: plan-loop/issue-{issue}
+inputs:
+  - id: ticket
+    path: artifacts/groomed-ticket.md
+outputs:
+  - id: plan
+    path: artifacts/plan.md
+`;
+
+let opDir: string;
+let appDir: string;
+let repoDir: string;
+
+function tiers(): LoopDefV2Tiers {
+  return { operator: join(opDir, 'loops-v2'), appBundled: join(appDir, 'loops-v2') };
+}
+
+// Plant a def named `name` in a tier root, with real charter + prompt files so confinement resolves.
+function plantDef(tierRoot: string, name: string, body: string): void {
+  const defDir = join(tierRoot, name);
+  mkdirSync(join(defDir, 'charter'), { recursive: true });
+  mkdirSync(join(defDir, 'prompts'), { recursive: true });
+  writeFileSync(join(defDir, 'charter', 'principal.md'), '# principal\n');
+  writeFileSync(join(defDir, 'charter', 'security.md'), '# security\n');
+  writeFileSync(join(defDir, 'prompts', 'work.md'), 'do work\n');
+  writeFileSync(join(defDir, 'prompts', 'consolidate.md'), 'judge\n');
+  writeFileSync(join(defDir, `${name}.yaml`), body);
+}
+
+beforeEach(() => {
+  opDir = mkdtempSync(join(tmpdir(), 'v2-op-'));
+  appDir = mkdtempSync(join(tmpdir(), 'v2-app-'));
+  repoDir = mkdtempSync(join(tmpdir(), 'v2-repo-'));
+});
+afterEach(() => {
+  for (const d of [opDir, appDir, repoDir]) rmSync(d, { recursive: true, force: true });
+});
+
+describe('resolveLoopDefV2 — parse round-trip (§27.8, AC 3)', () => {
+  it('reads every §27.8 element without loss from a valid def', () => {
+    plantDef(join(appDir, 'loops-v2'), 'plan-loop', VALID_DEF);
+    const r = resolveLoopDefV2('plan-loop', { tiers: tiers(), repoDir });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const d = r.def;
+    expect(d.version).toBe('v2');
+    expect(d.name).toBe('plan-loop');
+    expect(d.work.artifact).toBe('plan');
+    // reviewer catalog with per-persona charter reference AND permitted tools (readable even though nothing consumes it)
+    expect(d.reviewers.map((p) => p.persona)).toEqual(['review-plan-principal', 'review-plan-security']);
+    expect(d.reviewers[1].tools).toEqual(['Read', 'Grep', 'Glob', 'Bash']);
+    expect(d.reviewers[0].charter).toContain(['charter', 'principal.md'].join(sep));
+    // per-boundary clear or compact-with-message
+    expect(d.boundaries[0]).toMatchObject({ boundary: 'pre-work', mode: 'clear' });
+    expect(d.boundaries[1]).toMatchObject({ boundary: 'pre-review', mode: 'compact', message: 'Keep the plan and the ticket.' });
+    // report structure
+    expect(d.report.sections).toEqual(['summary', 'findings', 'disposition']);
+    // gate options and side-effects
+    expect(d.gate.map((g) => g.option)).toEqual(['approve', 'request-changes']);
+    expect(d.gate[0].sideEffects[0]).toMatchObject({ kind: 'gh' });
+    // pickup contract; inputs and outputs
+    expect(d.pickup.initialStatus).toBe('planning');
+    expect(d.inputs[0].id).toBe('ticket');
+    expect(d.outputs[0].id).toBe('plan');
+  });
+
+  it('assigns origin from the tier it resolved from — never from def content (AC 5)', () => {
+    plantDef(join(appDir, 'loops-v2'), 'plan-loop', VALID_DEF);
+    const app = resolveLoopDefV2('plan-loop', { tiers: tiers(), repoDir });
+    expect(app.ok && app.def.origin).toBe('app-bundled');
+
+    plantDef(join(opDir, 'loops-v2'), 'plan-loop', VALID_DEF);
+    const op = resolveLoopDefV2('plan-loop', { tiers: tiers(), repoDir });
+    expect(op.ok && op.def.origin).toBe('operator'); // operator tier wins (first-hit)
+  });
+
+  it('rejects a def that declares origin in its own content as an unknown key (AC 5)', () => {
+    plantDef(join(appDir, 'loops-v2'), 'plan-loop', VALID_DEF + 'origin: operator\n');
+    const r = resolveLoopDefV2('plan-loop', { tiers: tiers(), repoDir });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason.toLowerCase()).toContain('origin');
+  });
+});
+
+describe('resolveLoopDefV2 — charter by reference (AC 4)', () => {
+  it('accepts a charter carried as a path reference', () => {
+    plantDef(join(appDir, 'loops-v2'), 'plan-loop', VALID_DEF);
+    const r = resolveLoopDefV2('plan-loop', { tiers: tiers(), repoDir });
+    expect(r.ok).toBe(true);
+  });
+
+  it('rejects an inlined charter body', () => {
+    const inlined = VALID_DEF.replace('charter: charter/principal.md', 'charter: |\n      # principal\n      Long inline body\n      across lines');
+    plantDef(join(appDir, 'loops-v2'), 'plan-loop', inlined);
+    const r = resolveLoopDefV2('plan-loop', { tiers: tiers(), repoDir });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason.toLowerCase()).toContain('charter');
+  });
+});
+
+describe('resolveLoopDefV2 — malformed / version / evolution (AC 6, version story)', () => {
+  it('surfaces a reason for malformed yaml rather than throwing', () => {
+    plantDef(join(appDir, 'loops-v2'), 'plan-loop', 'version: v2\nname: [unterminated');
+    const r = resolveLoopDefV2('plan-loop', { tiers: tiers(), repoDir });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toBeTruthy();
+  });
+
+  it('rejects an unknown declared version with the reason surfaced, never partially parsed', () => {
+    plantDef(join(appDir, 'loops-v2'), 'plan-loop', VALID_DEF.replace('version: v2', 'version: v3'));
+    const r = resolveLoopDefV2('plan-loop', { tiers: tiers(), repoDir });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason.toLowerCase()).toContain('version');
+  });
+
+  it('rejects an unknown top-level key rather than partially parsing', () => {
+    plantDef(join(appDir, 'loops-v2'), 'plan-loop', VALID_DEF + 'mystery: 1\n');
+    const r = resolveLoopDefV2('plan-loop', { tiers: tiers(), repoDir });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason.toLowerCase()).toContain('mystery');
+  });
+
+  it('resolves a def carrying only this slice-s elements even with an optional element absent', () => {
+    // exec is an optional, later-slice element; a def that omits it still resolves (evolution: N2-N7 add only optional keys)
+    plantDef(join(appDir, 'loops-v2'), 'plan-loop', VALID_DEF);
+    const r = resolveLoopDefV2('plan-loop', { tiers: tiers(), repoDir });
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.def.exec).toBeNull();
+  });
+
+  it('a def declaring an executable side-effect parses, reads back, and executes nothing (inertness)', () => {
+    const withExec = VALID_DEF + 'exec:\n  program: format-plan\n';
+    plantDef(join(appDir, 'loops-v2'), 'plan-loop', withExec);
+    const r = resolveLoopDefV2('plan-loop', { tiers: tiers(), repoDir });
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.def.exec).toMatchObject({ program: 'format-plan' });
+  });
+});
+
+describe('resolveLoopDefV2 — identifier safe-segment confinement (AC 9)', () => {
+  it('rejects the bound loop name when it is not a single safe segment, before joining any tier root', () => {
+    for (const bad of ['../evil', 'a/b', 'A', 'plan_loop']) {
+      const r = resolveLoopDefV2(bad, { tiers: tiers(), repoDir });
+      expect(r.ok, `name ${bad}`).toBe(false);
+    }
+  });
+
+  it('rejects a persona name that carries a separator or parent segment', () => {
+    plantDef(join(appDir, 'loops-v2'), 'plan-loop', VALID_DEF.replace('persona: review-plan-principal', 'persona: ../escape'));
+    const r = resolveLoopDefV2('plan-loop', { tiers: tiers(), repoDir });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason.toLowerCase()).toContain('persona');
+  });
+
+  it('rejects an artifact id that is not a single safe segment', () => {
+    plantDef(join(appDir, 'loops-v2'), 'plan-loop', VALID_DEF.replace('id: plan', 'id: ../plan'));
+    const r = resolveLoopDefV2('plan-loop', { tiers: tiers(), repoDir });
+    expect(r.ok).toBe(false);
+  });
+});
+
+describe('resolveLoopDefV2 — def-relative path confinement to the tier root (AC 9)', () => {
+  it('rejects a charter reference that escapes the tier root lexically', () => {
+    plantDef(join(appDir, 'loops-v2'), 'plan-loop', VALID_DEF.replace('charter: charter/principal.md', 'charter: ../../../../etc/passwd'));
+    const r = resolveLoopDefV2('plan-loop', { tiers: tiers(), repoDir });
+    expect(r.ok).toBe(false);
+  });
+
+  it('rejects a charter reference that escapes the tier root through a planted symlink', () => {
+    const tierRoot = join(appDir, 'loops-v2');
+    plantDef(tierRoot, 'plan-loop', VALID_DEF.replace('charter: charter/principal.md', 'charter: charter/link.md'));
+    const secret = join(appDir, 'outside-secret.md');
+    writeFileSync(secret, 'secret\n');
+    symlinkSync(secret, join(tierRoot, 'plan-loop', 'charter', 'link.md'));
+    const r = resolveLoopDefV2('plan-loop', { tiers: tiers(), repoDir });
+    expect(r.ok).toBe(false);
+  });
+});
+
+describe('resolveLoopDefV2 — artifact/input/output confinement to the artifacts subtree (AC 9)', () => {
+  it('rejects an output path that escapes the artifacts subtree lexically', () => {
+    plantDef(join(appDir, 'loops-v2'), 'plan-loop', VALID_DEF.replace('path: artifacts/plan.md', 'path: ../../../etc/passwd'));
+    const r = resolveLoopDefV2('plan-loop', { tiers: tiers(), repoDir });
+    expect(r.ok).toBe(false);
+  });
+
+  it('rejects an output path that resolves onto the engine own loop state or a round report', () => {
+    // ../state.yaml and ../reports/1.md both leave the dedicated artifacts subtree onto engine-owned files
+    for (const onto of ['../state.yaml', '../reports/1.md']) {
+      plantDef(join(appDir, 'loops-v2'), 'plan-loop', VALID_DEF.replace('path: artifacts/plan.md', `path: ${onto}`));
+      const r = resolveLoopDefV2('plan-loop', { tiers: tiers(), repoDir });
+      expect(r.ok, onto).toBe(false);
+      rmSync(join(appDir, 'loops-v2'), { recursive: true, force: true });
+    }
+  });
+
+  it('rejects an output path that still carries an unexpanded template slot', () => {
+    plantDef(join(appDir, 'loops-v2'), 'plan-loop', VALID_DEF.replace('path: artifacts/plan.md', 'path: artifacts/{iter}.md'));
+    const r = resolveLoopDefV2('plan-loop', { tiers: tiers(), repoDir });
+    expect(r.ok).toBe(false);
+  });
+});
+
+describe('resolveLoopDefV2 — tier precedence + schema independence (AC 7)', () => {
+  it('resolves no def and surfaces a reason when the name is nowhere in either tier', () => {
+    const r = resolveLoopDefV2('nowhere-loop', { tiers: tiers(), repoDir });
+    expect(r.ok).toBe(false);
+  });
+
+  it('parses content that would be invalid under the §26 schema (independent schemas)', () => {
+    // VALID_DEF has no §26 gates:/schema_version:4 — it is invalid §26 content, yet resolves here
+    plantDef(join(appDir, 'loops-v2'), 'plan-loop', VALID_DEF);
+    const r = resolveLoopDefV2('plan-loop', { tiers: tiers(), repoDir });
+    expect(r.ok).toBe(true);
+  });
+});
