@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import {
   parseLoopDef,
+  resolveLoopDir,
   gateForStatus,
   reviewerRosterForPhase,
   normalizeConsolidatedVerdict,
@@ -96,6 +97,15 @@ describe('LoopDef resolver (§24.2.3 T2 folded / §18.1)', () => {
     expect(def?.gates.length).toBe(3);
   });
 
+  it('yields no operator-config candidate when CLAUDE_CONFIG_DIR is relative (CWE-829)', () => {
+    // A relative config dir resolves to null (userConfig), so there is NO operator-config path — resolving
+    // it against process.cwd() could stamp `operator-config` authority on a def sitting inside the repo.
+    // With no registry override and a relative config dir, resolution must be null, not a cwd-anchored path.
+    writeConfigLoop('plan-loop', IMPL_LOOP.replace('name: impl-loop', 'name: plan-loop'));
+    expect(resolveLoopDir(repo, 'plan-loop', 'relative/cfg')).toBeNull();
+    expect(parseLoopDef(repo, 'plan-loop', 'relative/cfg')).toBeNull();
+  });
+
   it('returns null (never throws) for an unknown loop name', () => {
     expect(parseLoopDef(repo, 'no-such-loop', configDir)).toBeNull();
   });
@@ -186,7 +196,7 @@ describe('LoopDef resolver (§24.2.3 T2 folded / §18.1)', () => {
 // labels.pr / labels.issue maps). Validated against the REAL plan-loop def copied into example/loops.
 describe('pickup_contract resolution (§26.5 / §26.9)', () => {
   // example/loops/<name>/<name>.yaml mirrors $CLAUDE_CONFIG_DIR/loops layout, so the example dir
-  // serves as the configDir for resolution (configLoopsDir joins `loops`).
+  // serves as the configDir for resolution (userConfigLoopsDir joins `loops`).
   const exampleConfigDir = resolve(__dirname, '..', '..', 'example');
   let repo: string;
   beforeEach(() => {

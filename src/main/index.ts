@@ -33,6 +33,7 @@ import {
   isValidDismissAll,
   isValidFlowRequest,
   isValidFlowProvideInput,
+  isValidFlowSetTitle,
   isValidFlowGateDecision,
   isValidFlowResolveBootstrapConflict,
   isValidFlowGithubRef,
@@ -60,7 +61,7 @@ import { registerIpcListeners } from './sessionIpc';
 import { resolveRuntimeConfig } from './runtimeConfig';
 import { createCommandTracker } from './commandTracker';
 import { createCwdTracker } from './cwdTracker';
-import { currentRepoInfo } from './repoKey';
+import { currentRepoInfo, resolveRepoKey } from './repoKey';
 import { createScanner } from './scanner';
 import { captureLastReport } from './captureLast';
 import { createFlowManager, deriveFlowView, loadFlowDefinitionLocalFirst } from './flow';
@@ -95,7 +96,7 @@ import { writeLoopState } from './loopStateWriter';
 import { readLoopExtension } from './loopStateReader';
 import { canResumeRepo, currentTurnByArtifacts, decideResume, shouldReconstructErrorTurn } from './loopResume';
 import type { FlowStepDef } from './flow';
-import { listTodoTemplates, loadTodoTemplateFile, parseTodoTemplate } from './todoTemplate';
+import { listTodoTemplates, loadTodoTemplateFile, parseTodoTemplate, todoTemplatesDir } from './todoTemplate';
 import { discover, readArtifact, emptyTree, warmBaseRef, createBaseWarmer, createViewerActivityHandler, gitRootOf } from './artifactTree';
 import { watchViewerTree, viewerRoot } from './viewerWatch';
 import { createChromeProfileStore } from './chromeProfile';
@@ -107,9 +108,13 @@ import { SHELL_INTEGRATION_SCRIPT } from './shellIntegration';
 import { resolveWindowIconPath, applyDockIcon } from './appIcon';
 import { handleCliInstall } from './cliInstall';
 import { resolveLaunchInvocation } from './cliShim';
-import { resolveExampleFlowDir } from './exampleAssets';
 import type { BundleLocation } from './bundleLocation';
-import { handleInstallExamplesPreview, handleInstallExamplesApply } from './installExamples';
+import {
+  exampleInstallDirs,
+  handleInstallExamplesPreview,
+  handleInstallExamplesApply,
+  type InstallDestination,
+} from './installExamples';
 import type { CliInstallResult } from '../shared/ipc';
 
 async function createWindow(): Promise<void> {
@@ -138,12 +143,9 @@ async function createWindow(): Promise<void> {
   const config = resolveRuntimeConfig(process.env);
   // §23.4: L anchors the cwd surfaces; the flow global dir is the per-user home (§18.1), not L.
   const { launchRoot, flowGlobalDir } = resolveLaunchSurfaces(process.env, os.homedir());
-  // §18.1/§23.4: the install-examples action's fixed bundle source (build-aware) + install target (the
-  // GLOBAL flow home). Resolved once from the running build; the handlers read this seam.
-  const exampleDirs = (): { bundleDir: string; targetDir: string } => ({
-    bundleDir: resolveExampleFlowDir(iconLoc),
-    targetDir: path.join(flowGlobalDir, '.agent-terminal'),
-  });
+  // §18.1/§23.4/§26.5: the install-examples action's bundle sources (build-aware) + its install targets
+  // (the GLOBAL flow home and the user-level Claude config directories). The handlers read this seam.
+  const exampleDirs = (): InstallDestination[] => exampleInstallDirs(iconLoc, flowGlobalDir);
   const ptyProcess = await spawnAgentShell({
     integrationScriptPath: config.shellIntegration ? SHELL_INTEGRATION_SCRIPT : undefined,
     cwd: launchRoot,
@@ -215,6 +217,7 @@ async function createWindow(): Promise<void> {
   // TODO(dylan): the full OSC-7 → cwd:changed → repo-list-swap loop through real
   // node-pty + bash is verified in the §F e2e (plan PR5 5c) — recorded gap.
   const cwdTracker = createCwdTracker({ onOsc: (id, cb) => shadow.onOsc(id, cb) });
+  const knownRepoKeys = new Set([resolveRepoKey(launchRoot)]);
   // Before the first OSC 7, fall back to bash's spawn dir — never the Electron process dir — so the
   // viewer starts in sync with the shell (§20.1).
   const viewerCwd = (): string => cwdTracker.cwd() ?? launchRoot;
@@ -237,6 +240,7 @@ async function createWindow(): Promise<void> {
   let stopViewerWatch = watchViewerTree(viewerRoot(viewerCwd()), onViewerActivity);
   void warmBase();
   cwdTracker.onChange(({ cwd, repoKey }) => {
+    knownRepoKeys.add(repoKey);
     send(CH.cwdChanged, { sessionId: SESSION_ID, cwd, repoKey });
     stopViewerWatch();
     stopViewerWatch = watchViewerTree(viewerRoot(cwd), onViewerActivity);
@@ -309,7 +313,7 @@ async function createWindow(): Promise<void> {
   let activeTurn: ActiveTurn | null = null;
   // §26 activity readout — an in-flight bootstrap (before state.yaml exists), and whether the current
   // turn's PROMPT has been injected yet (deferred → "waiting", injected → the turn phrase). Both feed the
-  // strip's spinner via deriveLoopActivity; neither is authority, only display.
+  // status bar's activity via deriveLoopActivity; neither is authority, only display.
   let pickupInFlight: { repoKey: string; issue: number; wipe: boolean } | null = null;
   let turnPromptInjected = false;
   let turnTimer: ReturnType<typeof setTimeout> | null = null;
@@ -766,8 +770,8 @@ async function createWindow(): Promise<void> {
 
   const firePickup = (job: PickupJob, wipeConflict: boolean): void => {
     const { repoKey, stepId, issue, loopName, def, pickup } = job;
-    // §26 activity — the async bootstrap is now visibly in flight (the strip shows "Bootstrapping #n" +
-    // spinner). Cleared when the pickup resolves, whatever the outcome.
+    // §26 activity — the async bootstrap is now visibly in flight (the status bar shows "Bootstrapping #n"
+    // + spinner). Cleared when the pickup resolves, whatever the outcome.
     pickupInFlight = { repoKey, issue, wipe: wipeConflict };
     pushFlowChanged();
     void runPickup(createRealPickupDeps(repoKey), { repoDir: repoKey, issue, loopName, pickup, wipeConflict })
@@ -960,7 +964,7 @@ async function createWindow(): Promise<void> {
   const instantiateTemplate = (repoKey: string, ref: string): ReturnType<typeof todoStore.list> => {
     const load = loadFlowDefinitionLocalFirst(repoKey, flowGlobalDir);
     if (!load.ok) return todoStore.list(repoKey);
-    const md = loadTodoTemplateFile(path.join(load.flowDir, 'todo-templates'), ref);
+    const md = loadTodoTemplateFile(todoTemplatesDir(load.flowDir), ref);
     if (md === null) return todoStore.list(repoKey);
     // Silent dedup (operator decision): re-firing a template skips items already outstanding, so a
     // repeat click never piles up duplicates.
@@ -1291,6 +1295,13 @@ async function createWindow(): Promise<void> {
         const view = inTransition(m.repoKey, () => flow.provideInput(m.repoKey, m.values));
         return trackLoop(m.repoKey, withDerived(m.repoKey, view));
       },
+      [CH.flowSetTitle]: (_e, m) => {
+        if (!isValidFlowSetTitle(m)) throw new Error('invalid flow:setTitle request');
+        if (!knownRepoKeys.has(m.repoKey)) throw new Error('cannot name an unregistered repo');
+        const view = flow.setTitle(m.repoKey, m.title);
+        pushFlowChanged();
+        return trackLoop(m.repoKey, withDerived(m.repoKey, view));
+      },
       // §24.2.3 T7 — resolve a ref's detail for the popout (best-effort; null degrades to bare number).
       [CH.flowGithubRef]: (_e, m): Promise<GithubRef | null> =>
         isValidFlowGithubRef(m) ? githubRefs(m.repoKey, m.kind, m.number) : Promise.resolve(null),
@@ -1309,7 +1320,7 @@ async function createWindow(): Promise<void> {
         if (!isValidTemplateList(m)) return { templates: [] };
         if (flow.state(m.repoKey).status !== 'in_progress') return { templates: [] };
         const load = loadFlowDefinitionLocalFirst(m.repoKey, flowGlobalDir);
-        const templates = load.ok ? listTodoTemplates(path.join(load.flowDir, 'todo-templates')) : [];
+        const templates = load.ok ? listTodoTemplates(todoTemplatesDir(load.flowDir)) : [];
         const defaultRef = flow.state(m.repoKey).templateRef;
         return defaultRef ? { templates, defaultRef } : { templates };
       },
@@ -1333,9 +1344,10 @@ async function createWindow(): Promise<void> {
             process.cwd(),
           ),
         })),
-      // Install bundled examples (§18.1/§23.4): the bundle resolves build-aware (packaged resources vs
-      // the unpackaged app path), and the flow definition + its templates install into the GLOBAL flow
-      // home <flowGlobalDir>/.agent-terminal (§18.1), read back by loadFlowDefinitionLocalFirst.
+      // Install bundled examples (§18.1/§23.4/§26.5): bundles resolve build-aware (packaged resources vs
+      // the unpackaged app path); the flow lands in the GLOBAL flow home read back by
+      // loadFlowDefinitionLocalFirst, and the definitions, persona skills and commands land in the
+      // user-level Claude config directories that the engine and Claude Code discover from.
       [CH.installExamplesPreview]: (_e, m) => handleInstallExamplesPreview(m, exampleDirs),
       [CH.installExamplesApply]: (_e, m) => handleInstallExamplesApply(m, exampleDirs),
     },

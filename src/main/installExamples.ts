@@ -1,33 +1,191 @@
-// §18.1/§23.4; writes route through atomicWriteFileSync (CWE-59).
+// §18.1/§23.4/§26.5; writes route through atomicWriteFileSync (CWE-59).
 
-import { readFileSync, readdirSync, statSync } from 'node:fs';
+import { accessSync, constants, lstatSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { atomicWriteFileSync, isRealContainer } from './atomicFile';
-import type { InstallExamplesPreview, InstallExamplesResult } from '../shared/ipc';
+import { confinedRealPathResult, resolveOwnedDirJail, type PathRefusal } from './confinedPath';
+import { readDirEntries } from './dirEntries';
+import { errMsg, isErrno } from './errno';
+import type { BundleLocation } from './bundleLocation';
+import { resolveExampleCommandsDir, resolveExampleFlowDir, resolveExampleLoopsDir } from './exampleAssets';
+import { listBundledSkills } from './exampleSkills';
+import { FLOW_DEF_FILE, flowHomeDir } from './flow';
+import { TODO_TEMPLATES_SUBDIR, isTodoTemplateFile, todoTemplatesDir } from './todoTemplate';
+import { userConfigCommandsDir, userConfigLoopsDir, userConfigSkillsDir } from './userConfig';
+import {
+  INSTALL_DESTINATION_IDS,
+  type DestRelativePath,
+  type InstallDestinationFiles,
+  type InstallDestinationId,
+  type InstallDestinationPreview,
+  type InstallExamplesPreview,
+  type InstallExamplesResult,
+} from '../shared/ipc';
 import { isValidInstallExamplesPreview, isValidInstallExamplesApply } from './ipcValidation';
 
-/** `bundleDir` is the resolved example/flow dir; `targetDir` is the global flow home (§18.1). */
-export interface ExampleDirs {
-  bundleDir: string;
-  targetDir: string;
+/** The one place a DestRelativePath is minted. The brand blocks an implicit `string`, but only a check
+ *  blocks a wrong one — an absolute path, or one climbing out of its destination, would otherwise travel
+ *  as a legal-looking value straight to a write (CWE-22). */
+export function destRelative(rel: string): DestRelativePath {
+  const norm = path.normalize(rel);
+  if (path.isAbsolute(norm) || norm === '..' || norm.startsWith(`..${path.sep}`)) {
+    throw new Error(`Not a destination-relative path: ${rel}`);
+  }
+  return norm as DestRelativePath;
 }
 
-const TEMPLATES_SUBDIR = 'todo-templates';
+/** A file the action installs: where it lands under its destination, and the bundle file it copies from. */
+export interface PlannedFile {
+  rel: DestRelativePath;
+  src: string;
+}
 
-function installSet(bundleDir: string): string[] {
-  const set = ['flow.yaml'];
-  let entries: string[];
+/** `null` when the bundle source is absent — a mispackaged build, not an empty tree (§18.1). */
+type Plan = PlannedFile[] | null;
+
+function absent(dir: string): boolean {
   try {
-    entries = readdirSync(path.join(bundleDir, TEMPLATES_SUBDIR));
-  } catch {
-    return set;
+    statSync(dir);
+    return false;
+  } catch (e) {
+    return isErrno(e, 'ENOENT');
   }
-  for (const name of entries.sort()) {
-    if (!name.endsWith('.md')) continue; // §18.6: only .md files resolve as todo templates
-    const rel = path.join(TEMPLATES_SUBDIR, name);
-    if (statSync(path.join(bundleDir, rel)).isFile()) set.push(rel);
+}
+
+/** A bundle member that is neither a regular file nor a directory — a symlink above all. The bundle is an
+ *  installed artifact, not necessarily one this build wrote, so it is never read through (CWE-59). It is
+ *  REFUSED rather than skipped: skipping seeds a destination with less than the bundle shipped and reports
+ *  success, and where the member is required (`flow.yaml`) the destination plans zero files, is dropped from
+ *  the apply, and the user is told an install worked that never happened (§18.1 — a detectable bundle
+ *  problem is a named refusal, never a successful install of nothing). The build-time guard
+ *  (`exampleAssetsBuild`) keeps one out of the tree; this is the second line, for a bundle on disk. */
+const bundleAnomaly = (p: string): Error =>
+  new Error(`the bundled examples are damaged: a symbolic link or special file stands at ${p}, which this build will not read through`);
+
+function walkFiles(dir: string, base: string = dir): DestRelativePath[] {
+  const out: DestRelativePath[] = [];
+  for (const entry of readDirEntries(dir)) {
+    const abs = path.join(dir, entry.name);
+    if (entry.isDirectory) out.push(...walkFiles(abs, base));
+    else if (entry.isFile) out.push(destRelative(path.relative(base, abs)));
+    else throw bundleAnomaly(abs);
   }
-  return set;
+  return out;
+}
+
+function filesUnder(bundleDir: string): Plan {
+  if (absent(bundleDir)) return null;
+  return walkFiles(bundleDir).map((rel) => ({ rel, src: path.join(bundleDir, rel) }));
+}
+
+/** A required bundle member must be a REGULAR file, or absent. Absent is still planned, so a mispackaged
+ *  bundle missing it reports a read error rather than silently installing nothing (§18.1). PRESENT but not
+ *  regular — a symlink (even to a file), a special file — is refused (`bundleAnomaly`). */
+function requireRegularIfPresent(p: string): void {
+  let st;
+  try {
+    st = lstatSync(p);
+  } catch (e) {
+    if (isErrno(e, 'ENOENT')) return;
+    throw e;
+  }
+  if (!st.isFile()) throw bundleAnomaly(p);
+}
+/** True for a REAL directory, false when ABSENT — a bundle shipping no `todo-templates/` is a legitimate
+ *  empty, not a broken build. Present but not a real directory (a symlinked one above all) is refused, as is
+ *  a member this build cannot read at all: the absent-vs-unreadable split `readDirEntries` makes for the
+ *  enumeration itself (CLAUDE.md; §18.1). */
+function isRealDir(p: string): boolean {
+  let st;
+  try {
+    st = lstatSync(p);
+  } catch (e) {
+    if (isErrno(e, 'ENOENT')) return false;
+    throw e;
+  }
+  if (!st.isDirectory()) throw bundleAnomaly(p);
+  return true;
+}
+
+/** §18.6. The subdir and the extension come from `todoTemplate`'s own definitions — the reader's — so the
+ *  installer cannot seed a location or a file type the picker does not read (CLAUDE.md writer↔reader). Each
+ *  planned source is a REGULAR file inside a REAL directory: a symlinked flow.yaml, or a symlinked
+ *  todo-templates dir, is skipped rather than read through (CWE-59). */
+function flowFiles(bundleDir: string): Plan {
+  if (absent(bundleDir)) return null;
+  const rels: DestRelativePath[] = [];
+  requireRegularIfPresent(path.join(bundleDir, FLOW_DEF_FILE));
+  rels.push(destRelative(FLOW_DEF_FILE));
+  const templates = todoTemplatesDir(bundleDir);
+  if (isRealDir(templates)) {
+    for (const entry of readDirEntries(templates)) {
+      if (!entry.isFile || !isTodoTemplateFile(entry.name)) continue;
+      rels.push(destRelative(path.join(TODO_TEMPLATES_SUBDIR, entry.name)));
+    }
+  }
+  return rels.map((rel) => ({ rel, src: path.join(bundleDir, rel) }));
+}
+
+/** Claude Code discovers a skill only as `<skills root>/<skill name>/`, while §26.5 requires each skill
+ *  under its own loop directory. Colliding names across loops are refused at build time (exampleSkills). */
+function skillFiles(loopsBundleDir: string): Plan {
+  if (absent(loopsBundleDir)) return null;
+  const out: PlannedFile[] = [];
+  for (const skill of listBundledSkills(loopsBundleDir)) {
+    for (const rel of walkFiles(skill.dir)) {
+      out.push({ rel: destRelative(path.join(skill.name, rel)), src: path.join(skill.dir, rel) });
+    }
+  }
+  return out;
+}
+
+export interface InstallDestination {
+  id: InstallDestinationId;
+  bundleDir: string;
+  /** `null` when this destination has no absolute install location — a relative CLAUDE_CONFIG_DIR (config
+   *  destinations) or a relative launch home from an empty $HOME (flow). `resolveAll` turns it into a
+   *  refusal the user sees rather than a guessed path. */
+  targetDir: string | null;
+  /** What the user must fix when `targetDir` is null: the root THIS destination derives from, and no other.
+   *  The flow home comes from $HOME, the config branches from CLAUDE_CONFIG_DIR — so one refusal text for
+   *  both names a variable that is blameless for whichever destination actually failed. */
+  rootFix: string;
+  plan: (bundleDir: string) => Plan;
+}
+
+interface DestinationSpec {
+  bundle: (loc: BundleLocation) => string;
+  target: (flowGlobalDir: string, configDir?: string) => string | null;
+  rootFix: string;
+  plan: (bundleDir: string) => Plan;
+}
+
+const CONFIG_ROOT_FIX = 'Set CLAUDE_CONFIG_DIR to an absolute path, or unset it to use ~/.claude.';
+const HOME_ROOT_FIX = 'Set $HOME to an absolute path.';
+
+/** The loops/skills/commands targets are the NAMED user-config branches (§24.2.3), never `resolveLoopDir`'s
+ *  precedence-aware answer: an install wired to that would seed whichever repo the app is pointed at and
+ *  leave every other one unseeded. The skills source is the loops bundle — its files fan in from every
+ *  loop's `skills/` (§26.5). */
+const DESTINATIONS: Record<InstallDestinationId, DestinationSpec> = {
+  flow: {
+    bundle: resolveExampleFlowDir,
+    target: (flowGlobalDir) => (path.isAbsolute(flowGlobalDir) ? flowHomeDir(flowGlobalDir) : null),
+    rootFix: HOME_ROOT_FIX,
+    plan: flowFiles,
+  },
+  loops: { bundle: resolveExampleLoopsDir, target: (_flow, cfg) => userConfigLoopsDir(cfg), rootFix: CONFIG_ROOT_FIX, plan: filesUnder },
+  skills: { bundle: resolveExampleLoopsDir, target: (_flow, cfg) => userConfigSkillsDir(cfg), rootFix: CONFIG_ROOT_FIX, plan: skillFiles },
+  commands: { bundle: resolveExampleCommandsDir, target: (_flow, cfg) => userConfigCommandsDir(cfg), rootFix: CONFIG_ROOT_FIX, plan: filesUnder },
+};
+
+/** Resolve every destination for the running build: its bundle source from `loc`, its install target
+ *  from the user's surfaces. Order is the contract's, so the report cannot be reordered against it. */
+export function exampleInstallDirs(loc: BundleLocation, flowGlobalDir: string, configDir?: string): InstallDestination[] {
+  return INSTALL_DESTINATION_IDS.map((id) => {
+    const d = DESTINATIONS[id];
+    return { id, bundleDir: d.bundle(loc), targetDir: d.target(flowGlobalDir, configDir), rootFix: d.rootFix, plan: d.plan };
+  });
 }
 
 type Classification = 'create' | 'identical' | 'differ';
@@ -39,66 +197,186 @@ function classify(bundleFile: string, targetFile: string): Classification {
   } catch (e) {
     // Only absence means "create"; an existing-but-unreadable target (EACCES, …) must not be silently
     // overwritten — let it propagate to a reported error, preserving the non-destructive contract.
-    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return 'create';
+    if (isErrno(e, 'ENOENT')) return 'create';
     throw e;
   }
   return readFileSync(bundleFile).equals(target) ? 'identical' : 'differ';
 }
 
-function errMsg(e: unknown): string {
-  return e instanceof Error ? e.message : String(e);
+/** A destination resolved for work: its plan, and the symlink-free real path each file resolves to inside
+ *  the destination's jail. Preview and apply both read targets, so BOTH route through this — a read that
+ *  followed a symlink out would classify (and show the user a consent step computed from) bytes outside
+ *  the destination the installer would never have written (CWE-22/59/367). */
+interface ResolvedFile {
+  rel: DestRelativePath;
+  src: string;
+  real: string;
 }
+interface ResolvedDestination {
+  id: InstallDestinationId;
+  /** As the user knows it — what a message names. May be a symlink they placed themselves. */
+  targetDir: string;
+  /** Its symlink-free real location — what the write is confined to and gated on. */
+  jail: string;
+  files: ResolvedFile[];
+}
+type Resolution = { ok: true; destinations: ResolvedDestination[] } | { ok: false; error: string };
 
-export function previewInstallExamples(bundleDir: string, targetDir: string): InstallExamplesPreview {
-  const conflicts: string[] = [];
-  for (const rel of installSet(bundleDir)) {
-    if (classify(path.join(bundleDir, rel), path.join(targetDir, rel)) === 'differ') conflicts.push(rel);
+/** The two refusals call for opposite fixes — replace the link vs. fix the permissions — so the message
+ *  names the one that actually happened. */
+const refusal = (what: string, dir: string, cause: PathRefusal): string =>
+  cause === 'escapes'
+    ? `Could not install ${what}: a symbolic link stands on the path to it under ${dir}`
+    : `Could not install ${what}: its path under ${dir} could not be resolved — check that every directory on the way to it exists, is a directory, and is readable and traversable`;
+
+function resolveAll(destinations: InstallDestination[]): Resolution {
+  const out: ResolvedDestination[] = [];
+  for (const dest of destinations) {
+    if (dest.targetDir === null) {
+      // Every install target must be an absolute directory. A relative one — a relative CLAUDE_CONFIG_DIR
+      // (loops/skills/commands) or a relative launch home from an empty $HOME (flow) — has no single meaning
+      // and would seed into the process cwd, so the whole install refuses rather than guessing (CWE-829).
+      // The remediation is the destination's own: the two roots are independent, and either can be the
+      // sole cause while the other is absolute and blameless.
+      return {
+        ok: false,
+        error: `Could not install the ${dest.id} examples: its install location is not an absolute path. ${dest.rootFix}`,
+      };
+    }
+    const files = dest.plan(dest.bundleDir);
+    if (files === null) {
+      return { ok: false, error: `Could not install: the ${dest.id} examples are missing from this build's bundle` };
+    }
+    const jail = resolveOwnedDirJail(dest.targetDir); // §18.1
+    if (jail === null) return { ok: false, error: refusal(dest.id, dest.targetDir, 'unresolvable') };
+    const resolved: ResolvedFile[] = [];
+    for (const file of files) {
+      const real = confinedRealPathResult(jail, path.join(jail, file.rel));
+      if (!real.ok) return { ok: false, error: refusal(file.rel, dest.targetDir, real.cause) };
+      resolved.push({ rel: file.rel, src: file.src, real: real.path });
+    }
+    out.push({ id: dest.id, targetDir: dest.targetDir, jail, files: resolved });
   }
-  return { conflicts };
+  return { ok: true, destinations: out };
 }
 
-export function applyInstallExamples(
-  bundleDir: string,
-  targetDir: string,
-  overwrite: boolean,
-): InstallExamplesResult {
-  // Not redundant with atomicWriteFileSync's per-file container guard (CWE-59): that one misses a
-  // symlinked home above a nested write when flow.yaml is skipped and never written directly.
-  if (!isRealContainer(targetDir)) return { ok: false, error: `Could not install: ${targetDir} is not a real directory` };
-  const created: string[] = [];
-  const overwritten: string[] = [];
-  const skipped: string[] = [];
-  for (const rel of installSet(bundleDir)) {
-    const bundleFile = path.join(bundleDir, rel);
-    const targetFile = path.join(targetDir, rel);
+/** CWE-59: a symlinked container would land the write outside the destination, and the loops container
+ *  confers §26.6 `exec` authority on what lands there (CWE-829). */
+function isWritableContainer(dir: string): boolean {
+  if (!isRealContainer(dir)) return false;
+  let probe = dir;
+  for (;;) {
     try {
-      const cls = classify(bundleFile, targetFile);
-      if (cls === 'identical' || (cls === 'differ' && !overwrite)) {
-        skipped.push(rel);
-        continue;
-      }
-      if (!atomicWriteFileSync(targetFile, readFileSync(bundleFile, 'utf8'))) {
-        return { ok: false, error: `Could not install ${rel}: ${path.dirname(targetFile)} is not a real directory` };
-      }
-      (cls === 'create' ? created : overwritten).push(rel);
+      accessSync(probe, constants.W_OK);
+      return true;
     } catch (e) {
-      return { ok: false, error: `Could not install ${rel}: ${errMsg(e)}` };
+      if (!isErrno(e, 'ENOENT')) return false;
+      const parent = path.dirname(probe);
+      if (parent === probe) return false;
+      probe = parent;
     }
   }
-  return { ok: true, created, overwritten, skipped };
 }
 
-export function handleInstallExamplesPreview(
-  m: unknown,
-  dirs: () => ExampleDirs,
-): InstallExamplesPreview {
-  if (!isValidInstallExamplesPreview(m)) return { conflicts: [] };
-  const { bundleDir, targetDir } = dirs();
-  return previewInstallExamples(bundleDir, targetDir);
+type Groups = Map<InstallDestinationId, DestRelativePath[]>;
+
+function record(groups: Groups, id: InstallDestinationId, rel: DestRelativePath): void {
+  const list = groups.get(id);
+  if (list) list.push(rel);
+  else groups.set(id, [rel]);
 }
 
-export function handleInstallExamplesApply(m: unknown, dirs: () => ExampleDirs): InstallExamplesResult {
-  if (!isValidInstallExamplesApply(m)) return { ok: false, error: 'invalid install request' };
-  const { bundleDir, targetDir } = dirs();
-  return applyInstallExamples(bundleDir, targetDir, m.overwrite);
+function report(groups: Groups): InstallDestinationFiles[] {
+  return INSTALL_DESTINATION_IDS.filter((id) => (groups.get(id)?.length ?? 0) > 0).map((id) => ({
+    destination: id,
+    files: groups.get(id) as DestRelativePath[],
+  }));
+}
+
+export function previewInstallExamples(destinations: InstallDestination[]): InstallExamplesPreview {
+  let resolution: Resolution;
+  try {
+    resolution = resolveAll(destinations);
+  } catch (e) {
+    return { ok: false, error: `Could not check the install targets: ${errMsg(e)}` };
+  }
+  if (!resolution.ok) return resolution;
+
+  const out: InstallDestinationPreview[] = [];
+  for (const dest of resolution.destinations) {
+    let files: DestRelativePath[];
+    try {
+      files = dest.files.filter((f) => classify(f.src, f.real) === 'differ').map((f) => f.rel);
+    } catch (e) {
+      // classify rethrows a non-ENOENT read (an unreadable target). The contract carries a refusal arm for
+      // exactly this: an empty destination list would otherwise read as "nothing conflicts" and drive an
+      // apply the user never consented to.
+      return { ok: false, error: `Could not check the install targets: ${errMsg(e)}` };
+    }
+    out.push(files.length === 0 ? { destination: dest.id, conflict: false } : { destination: dest.id, conflict: true, files });
+  }
+  return { ok: true, destinations: out };
+}
+
+export function applyInstallExamples(destinations: InstallDestination[], replace: InstallDestinationId[]): InstallExamplesResult {
+  const empty = { created: [], overwritten: [], skipped: [] };
+  let resolution: Resolution;
+  try {
+    resolution = resolveAll(destinations);
+  } catch (e) {
+    return { ok: false, error: `Could not install: ${errMsg(e)}`, ...empty };
+  }
+  if (!resolution.ok) return { ok: false, error: resolution.error, ...empty };
+
+  const plan = resolution.destinations.filter((d) => d.files.length > 0);
+  // Every container the write will actually enter, not just each destination's root: an unwritable nested
+  // directory is detectable before the first write, and §18.1's all-or-nothing covers everything that is.
+  for (const dest of plan) {
+    for (const dir of new Set([dest.jail, ...dest.files.map((f) => path.dirname(f.real))])) {
+      if (!isWritableContainer(dir)) {
+        return { ok: false, error: `Could not install: ${dir} cannot be written`, ...empty };
+      }
+    }
+  }
+
+  const consented = new Set(replace);
+  const created: Groups = new Map();
+  const overwritten: Groups = new Map();
+  const skipped: Groups = new Map();
+  const fail = (error: string): InstallExamplesResult => ({
+    ok: false,
+    error,
+    created: report(created),
+    overwritten: report(overwritten),
+    skipped: report(skipped),
+  });
+
+  for (const dest of plan) {
+    for (const file of dest.files) {
+      try {
+        const cls = classify(file.src, file.real);
+        if (cls === 'identical' || (cls === 'differ' && !consented.has(dest.id))) {
+          record(skipped, dest.id, file.rel);
+          continue;
+        }
+        // Bytes, not text: the bundle is a tree the build ships, and decoding a non-UTF-8 asset would both
+        // corrupt it and leave it permanently `differ` against the byte-compare that classifies it.
+        if (!atomicWriteFileSync(file.real, readFileSync(file.src))) return fail(refusal(file.rel, dest.targetDir, 'escapes'));
+        record(cls === 'create' ? created : overwritten, dest.id, file.rel);
+      } catch (e) {
+        return fail(`Could not install ${file.rel}: ${errMsg(e)}`);
+      }
+    }
+  }
+  return { ok: true, created: report(created), overwritten: report(overwritten), skipped: report(skipped) };
+}
+
+export function handleInstallExamplesPreview(m: unknown, dirs: () => InstallDestination[]): InstallExamplesPreview {
+  if (!isValidInstallExamplesPreview(m)) return { ok: false, error: 'invalid preview request' };
+  return previewInstallExamples(dirs());
+}
+
+export function handleInstallExamplesApply(m: unknown, dirs: () => InstallDestination[]): InstallExamplesResult {
+  if (!isValidInstallExamplesApply(m)) return { ok: false, error: 'invalid install request', created: [], overwritten: [], skipped: [] };
+  return applyInstallExamples(dirs(), m.replace);
 }

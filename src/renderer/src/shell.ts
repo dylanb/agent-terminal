@@ -6,6 +6,7 @@
 
 import type { Theme } from '../../shared/ipc';
 import { setShown } from './visibility';
+import { captureSubtreeFocus } from './dom';
 import { announceViewFocus, FOCUS_TERMINAL_EVENT } from './paneActions';
 import { matchChord, MAC_DEFAULTS, type Keymap } from '../../shared/keymap';
 
@@ -22,7 +23,9 @@ export interface Shell {
   isDrawerOpen(): boolean;
   /** The full-height docked loop+gate panel (§24.2.3): a grid column that "makes room" like the
    *  drawer, opened from the rail Loop read-out and dismissed by its close button or Escape. */
-  openLoopPanel(): void;
+  /** `opener` is the control focus returns to when the panel closes, or omitted to leave focus where it
+   *  is (the rail toggle). Moving focus into the panel is the panel's own `focusDecision`, not the shell's. */
+  openLoopPanel(opener?: HTMLElement): void;
   closeLoopPanel(): void;
   toggleLoopPanel(): void;
   isLoopPanelOpen(): boolean;
@@ -57,7 +60,14 @@ export function createShell(root: HTMLElement, deps: ShellDeps = {}): Shell {
   let theme: Theme = themeTarget.getAttribute('data-theme') === 'dark' ? 'dark' : 'light';
   let fullscreen = root.classList.contains('viewer-fullscreen');
 
+  /** True while an `aria-modal` dialog blocks the app beneath it. Every chrome mutation — the view switch,
+   *  fullscreen, the loop panel, the drawer chord — and the Escape branches consult this ONE gate, so a
+   *  chord, the rail, or another surface calling in (loopReveal, on an OS notification) cannot change or
+   *  hide chrome out from under an open dialog and wedge focus behind the scrim (WCAG 2.4.3, 2.1.1). */
+  const modalIsOpen = (): boolean => doc.querySelector('[aria-modal="true"]') !== null;
+
   function setView(v: ViewId): void {
+    if (modalIsOpen()) return;
     if (fullscreen && v !== '2') setViewerFullscreen(false); // leaving the viewer restores hidden chrome (§20.2)
     view = v;
     root.querySelectorAll('[data-viewpane]').forEach((p) => p.classList.toggle('on', p.getAttribute('data-viewpane') === v));
@@ -106,25 +116,28 @@ export function createShell(root: HTMLElement, deps: ShellDeps = {}): Shell {
   const syncLoopReadout = (on: boolean): void =>
     root.querySelector('.loopstat')?.setAttribute('aria-expanded', String(on));
   const focusView = (v: ViewId): void => void root.querySelector<HTMLElement>(`[data-viewbtn="${v}"]`)?.focus();
-  function openLoopPanel(): void {
+  // WCAG 2.4.3.
+  let panelOpener: HTMLElement | null = null;
+  function openLoopPanel(opener?: HTMLElement): void {
+    if (modalIsOpen()) return; // chrome is frozen while a modal blocks the app beneath it
+    panelOpener = opener ?? null;
     root.classList.add('loop-open');
     if (loopPanelEl) setShown(loopPanelEl, true);
     syncLoopReadout(true);
     signalLayoutChange();
   }
   function closeLoopPanel(): void {
-    const hadFocus = loopPanelEl?.contains(root.ownerDocument.activeElement) ?? false;
+    const restore = loopPanelEl ? captureSubtreeFocus(loopPanelEl) : null;
     root.classList.remove('loop-open');
     if (loopPanelEl) setShown(loopPanelEl, false);
     syncLoopReadout(false);
-    // Disclosure pattern (WCAG 2.4.3): a close returns focus to the read-out that opened it; when that
-    // is gone too (a state-driven close after the flow ends) fall back to the main view, so focus is
-    // never stranded on the now-hidden panel.
-    if (hadFocus) {
-      const readout = root.querySelector<HTMLElement>('.loopstat');
-      if (readout) readout.focus();
-      else focusView('1');
-    }
+    // Disclosure pattern (WAI-ARIA APG): focus returns to the opener, else the read-out, else the view.
+    restore?.(
+      () =>
+        (panelOpener?.isConnected ? panelOpener : root.querySelector<HTMLElement>('.loopstat')) ??
+        root.querySelector<HTMLElement>('[data-viewbtn="1"]'),
+    );
+    panelOpener = null;
     signalLayoutChange();
   }
   function toggleLoopPanel(): void {
@@ -147,6 +160,7 @@ export function createShell(root: HTMLElement, deps: ShellDeps = {}): Shell {
   }
 
   function setViewerFullscreen(on: boolean): void {
+    if (modalIsOpen()) return; // chrome is frozen while a modal blocks the app beneath it
     if (on === fullscreen) return;
     fullscreen = on;
     root.classList.toggle('viewer-fullscreen', on);
@@ -169,15 +183,17 @@ export function createShell(root: HTMLElement, deps: ShellDeps = {}): Shell {
   // they reach the shell, so these chords must be intercepted ahead of any focused descendant (§22.4).
   const onKeyDown = (e: KeyboardEvent): void => {
     if (e.key === 'Escape' && fullscreen) {
+      if (modalIsOpen()) return; // a dialog over the viewer owns Escape (WCAG 2.4.3)
       e.preventDefault();
       e.stopPropagation();
       setViewerFullscreen(false);
       return;
     }
     if (e.key === 'Escape' && isLoopPanelOpen()) {
-      // Defer to an open dialog (e.g. the typed-input modal): Escape should dismiss the topmost
-      // surface, not the panel behind it (WCAG 2.4.3). The modal's own handler closes it.
-      if ((e.target as Element | null)?.closest?.('[role="dialog"]')) return;
+      // Defer to an open dialog: Escape dismisses the topmost surface, not the panel behind it (WCAG 2.4.3).
+      // The SAME predicate the view guard uses — `[role="dialog"]` alone misses errorDialog's `alertdialog`,
+      // and two hand-maintained copies of "a blocking dialog is open" are what let them disagree.
+      if (modalIsOpen()) return;
       e.preventDefault();
       e.stopPropagation();
       closeLoopPanel();
@@ -196,6 +212,11 @@ export function createShell(root: HTMLElement, deps: ShellDeps = {}): Shell {
     // the drawer to Ctrl+Shift+K instead. Only the four app actions are claimed here; everything else
     // (terminal chords, plain keys) propagates to the focused descendant.
     const action = matchChord(e, getKeymap());
+    if (!action) return;
+    // The drawer is chrome behind the scrim too; `setView` guards itself. Gated behind the chord match, so
+    // a terminal keystroke never pays for a document query.
+    if (modalIsOpen()) return;
+
     const targetView: ViewId | null =
       action === 'viewTerminal' ? '1'
       : action === 'viewArtifacts' ? '2'

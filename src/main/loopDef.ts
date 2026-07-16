@@ -3,11 +3,11 @@
 // Like the §19.1 store it NEVER throws — every failure mode degrades to null.
 
 import { readFileSync } from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import yaml from 'js-yaml';
 import { confinedRealPath, resolveJail } from './confinedPath';
 import { isRecord } from './yamlRecord';
+import { userConfigLoopsDir } from './userConfig';
 
 /** One action of a gate's `on_*` list (§26.6): the engine executes these in order when the human picks
  *  an option. `kind` selects the effect (`mark-pr-ready`, `set-phase2`, …); `args` carries its params
@@ -134,20 +134,14 @@ export interface LoopDef {
 const SCHEMA_VERSION = '4';
 
 // Loop names, phase ids, and persona/actor names all become filesystem path components downstream — the
-// loop name selects `<configLoops>/<name>/` (and the dir its injected prompts §26.5 are read from), phase
+// loop name selects `userConfigLoopsDir()/<name>/` (and the dir its injected prompts §26.5 are read from), phase
 // ids form `prompts/work-{id}.md`, actor names form `reviews/{iter}/{actor}.json`. Repo-supplied config
 // (flow.yaml `loop:`, the `.agent-loop.yaml` override, the LoopDef yaml) is untrusted, so every such
 // string is confined to a single safe path-segment — no separators or `..` (CWE-22 defense in depth).
 const SAFE_NAME = /^[a-z0-9][a-z0-9-]*$/;
 
-/** The engine reads `$CLAUDE_CONFIG_DIR/loops/`, defaulting to `~/.claude` (`agent-loop list`). */
-function configLoopsDir(configDir?: string): string {
-  const base = configDir ?? process.env.CLAUDE_CONFIG_DIR ?? path.join(os.homedir(), '.claude');
-  return path.join(base, 'loops');
-}
-
 /** Where a LoopDef's bytes came from, and therefore whose authority they carry: `operator-config` is the
- *  user's own `<configLoops>/` copy; `repo` is a file inside the checked-out repository, i.e. untrusted
+ *  user's own userConfigLoopsDir() copy; `repo` is a file inside the checked-out repository, i.e. untrusted
  *  content authored by whoever wrote the repo. Capabilities that let a def act on the machine (§26.6
  *  `exec`) are granted on this distinction, never on anything the repo itself asserts. */
 export type LoopDefOrigin = 'operator-config' | 'repo';
@@ -159,14 +153,16 @@ interface ResolvedLoopDef {
 
 /** Resolve a loop NAME to its LoopDef yaml path: a repo-local `.agent-loop.yaml` `loops:` registry
  *  override (resolved relative to the repo) wins; otherwise the bundled/user-authored config copy at
- *  `<configLoops>/<name>/<name>.yaml`. Returns the path to try (existence is the parser's concern) with
+ *  `userConfigLoopsDir()/<name>/<name>.yaml`. Returns the path to try (existence is the parser's concern) with
  *  its origin, or null when the name is not a single safe path segment — never a traversal lever. */
 function resolveLoopDefPath(repoDir: string, name: string, configDir?: string): ResolvedLoopDef | null {
   if (!SAFE_NAME.test(name)) return null;
-  const fromConfig: ResolvedLoopDef = {
-    path: path.join(configLoopsDir(configDir), name, `${name}.yaml`),
-    origin: 'operator-config',
-  };
+  // A refused user-config root (a relative CLAUDE_CONFIG_DIR) yields NO operator-config candidate: resolving
+  // it against this process's cwd could place `operator-config` authority on a path inside the repo, and that
+  // origin is what §26.6 grants `exec` on (CWE-829). The repo-override branch below still stands on its own.
+  const loopsDir = userConfigLoopsDir(configDir);
+  const fromConfig: ResolvedLoopDef | null =
+    loopsDir === null ? null : { path: path.join(loopsDir, name, `${name}.yaml`), origin: 'operator-config' };
   try {
     const raw = readFileSync(path.join(repoDir, '.agent-loop.yaml'), 'utf8');
     const doc = yaml.load(raw);

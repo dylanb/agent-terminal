@@ -2,11 +2,12 @@ import path from 'node:path';
 import { defineConfig, externalizeDepsPlugin } from 'electron-vite';
 import type { Plugin } from 'vite';
 import { copyDevIcon } from './src/main/appIconBuild';
-import { copyExampleFlow } from './src/main/exampleAssetsBuild';
+import { copyExampleCommands, copyExampleFlow, copyExampleLoops } from './src/main/exampleAssetsBuild';
 
-// After the main bundle is written, copy build/icon.png and the example flow tree next to it so the
-// unpackaged runtime resolvers (app.getAppPath()/build/icon.png and .../example/flow) find them —
-// without this, dock.setIcon fails on a missing icon and the install-examples action has no bundle.
+// After the main bundle is written, copy build/icon.png and the example trees next to it so the
+// unpackaged runtime resolvers (app.getAppPath()/build/icon.png and .../example/{flow,loops,commands})
+// find them — without this, dock.setIcon fails on a missing icon and the install-examples action has no
+// bundle to seed from.
 function copyDevAssetsPlugin(): Plugin {
   let outDir = '';
   return {
@@ -19,6 +20,8 @@ function copyDevAssetsPlugin(): Plugin {
       const rootDir = path.resolve(outDir, '..', '..');
       copyDevIcon(rootDir, outDir);
       copyExampleFlow(rootDir, outDir);
+      copyExampleLoops(rootDir, outDir);
+      copyExampleCommands(rootDir, outDir);
     },
   };
 }

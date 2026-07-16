@@ -3,6 +3,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { encodeProjectDir, sessionLogDir, readSessionTokens } from '../../src/main/costMeter';
+import { userConfigRoot } from '../../src/main/userConfig';
 
 it('the source file carries no raw control bytes, so git keeps it text (diffable/reviewable)', () => {
   // The per-message dedup key's separator must be spelled as an escape (\x00), not embedded as a raw NUL —
@@ -186,6 +187,27 @@ describe('session-log dir resolution (§26.10)', () => {
 
   it('with no override, resolves ~/.claude/projects/<encoded-repo>', () => {
     expect(sessionLogDir('/repo/foo', {} as NodeJS.ProcessEnv, '/home/me')).toBe(
+      join('/home/me', '.claude', 'projects', '-repo-foo'),
+    );
+  });
+
+  // The session logs live under the SAME user-config root the installer seeds, so a CLAUDE_CONFIG_DIR
+  // redirect has to move both together — one definition, no parallel copy of the `.claude` literal.
+  it('follows CLAUDE_CONFIG_DIR, so the meter reads the logs where Claude Code writes them', () => {
+    const env = { CLAUDE_CONFIG_DIR: '/cfg' } as NodeJS.ProcessEnv;
+    expect(sessionLogDir('/repo/foo', env, '/home/me')).toBe(join('/cfg', 'projects', '-repo-foo'));
+    expect(sessionLogDir('/repo/foo', env, '/home/me')).toBe(
+      join(userConfigRoot('/cfg') as string, 'projects', '-repo-foo'),
+    );
+  });
+
+  it('refuses a relative CLAUDE_CONFIG_DIR (null dir) so pricing degrades to zero, never anchors at cwd', () => {
+    expect(sessionLogDir('/repo/foo', { CLAUDE_CONFIG_DIR: 'relative/cfg' } as NodeJS.ProcessEnv, '/home/me')).toBeNull();
+    expect(readSessionTokens(sessionLogDir('/repo/foo', { CLAUDE_CONFIG_DIR: 'rel' } as NodeJS.ProcessEnv, '/home/me'))).toEqual([]);
+  });
+
+  it('ignores a blank CLAUDE_CONFIG_DIR rather than pricing from a relative path', () => {
+    expect(sessionLogDir('/repo/foo', { CLAUDE_CONFIG_DIR: '' } as NodeJS.ProcessEnv, '/home/me')).toBe(
       join('/home/me', '.claude', 'projects', '-repo-foo'),
     );
   });

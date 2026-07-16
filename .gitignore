@@ -7,9 +7,11 @@ build/*
 !build/icon.svg.sha256
 test-results/
 playwright-report/
+.vitest-attachments/
 *.log
 *.tsbuildinfo
 plan.md
 .agent-terminal/
 .agent-terminal/flow-state.yaml
 .pnpm-store/
+__screenshots__/

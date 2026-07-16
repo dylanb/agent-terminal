@@ -4,6 +4,24 @@ import { readFileSync, readdirSync, realpathSync } from 'node:fs';
 import path from 'node:path';
 import type { TodoTemplateRef } from '../shared/ipc';
 
+/** §18.6: the templates subdir of a flow dir, and which of its files are templates. ONE definition, shared
+ *  by the reader that lists them and the installer that seeds them — two copies would let the installer
+ *  seed a directory, or a file extension, the reader does not look for (CLAUDE.md writer↔reader rule). */
+export const TODO_TEMPLATES_SUBDIR = 'todo-templates';
+export function todoTemplatesDir(flowDir: string): string {
+  return path.join(flowDir, TODO_TEMPLATES_SUBDIR);
+}
+/** The extension is spelled ONCE. Every use below derives from it — the predicate, the ref↔filename mapping
+ *  in both directions — so widening it cannot leave the installer seeding files the picker lists under a
+ *  truncated ref and then fails to load. */
+const TODO_TEMPLATE_EXT = '.md';
+export function isTodoTemplateFile(name: string): boolean {
+  return name.endsWith(TODO_TEMPLATE_EXT);
+}
+/** The `todo_template` ref a filename resolves under, and the filename a ref names — one inverse pair. */
+export const todoTemplateRef = (file: string): string => file.slice(0, -TODO_TEMPLATE_EXT.length);
+export const todoTemplateFile = (ref: string): string => `${ref}${TODO_TEMPLATE_EXT}`;
+
 const TOP_LEVEL_BULLET = /^([-*+]|\d+[.)])\s+/;
 const INDENTED = /^\s+\S/;
 const ANY_BULLET = /^[-*+]\s+|^\d+[.)]\s+/;
@@ -28,9 +46,9 @@ function resolveContained(root: string, candidate: string): string | null {
 }
 
 /**
- * Resolve a step's `todo_template` ref to a file inside `baseDir` (§18.6/§21.2). Callers MUST pass
- * the `todo-templates/` subdir, NOT the flow dir itself. Returns the markdown, or null for a missing
- * or `baseDir`-escaping path (never throws).
+ * Resolve a step's `todo_template` ref to a file inside the templates dir (§18.6/§21.2) — the one
+ * `todoTemplatesDir` returns, which is how callers name it. Returns the markdown, or null for a missing or
+ * escaping path (never throws).
  */
 export function loadTodoTemplateFile(baseDir: string, ref: string): string | null {
   const root = path.resolve(baseDir);
@@ -43,7 +61,7 @@ export function loadTodoTemplateFile(baseDir: string, ref: string): string | nul
       return null;
     }
   };
-  return read(ref) ?? (ref.endsWith('.md') ? null : read(`${ref}.md`));
+  return read(ref) ?? (isTodoTemplateFile(ref) ? null : read(todoTemplateFile(ref)));
 }
 
 function humanize(ref: string): string {
@@ -65,11 +83,11 @@ export function listTodoTemplates(templatesDir: string): TodoTemplateRef[] {
   const root = path.resolve(templatesDir);
   const refs: TodoTemplateRef[] = [];
   for (const file of files.sort()) {
-    if (!file.endsWith('.md')) continue;
+    if (!isTodoTemplateFile(file)) continue;
     // Skip an in-dir symlink whose real target escapes the root (§20.2).
     const real = resolveContained(root, file);
     if (real === null) continue;
-    const ref = file.slice(0, -'.md'.length);
+    const ref = todoTemplateRef(file);
     let name = humanize(ref);
     try {
       const h1 = readFileSync(real, 'utf8').match(/^#\s+(.+?)\s*$/m);
