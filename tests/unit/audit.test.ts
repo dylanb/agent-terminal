@@ -162,6 +162,12 @@ describe('loopEvents — diff the agent-loop state.yaml mirror (§25.5)', () => 
     expect(loopEvents(loop('building', 3, 42), loop('building', 3, 42), T)).toEqual([]);
   });
 
+  it('records the status but NO iteration event when no round has run (a §27 run-less view)', () => {
+    expect(loopEvents(null, { status: 'not-started', iteration: undefined, pr: null }, T)).toEqual([
+      { ts: T, type: 'loop.status', from: '', to: 'not-started' },
+    ]);
+  });
+
   it('records nothing when the loop view is absent (left the loop step)', () => {
     expect(loopEvents(loop('building', 3, 42), null, T)).toEqual([]);
   });

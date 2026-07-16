@@ -10,6 +10,7 @@
 
 import type { FlowLoopView, FlowRefs, GithubRef, GithubRefKind } from '../../shared/ipc';
 import { hasFlowRefs } from '../../shared/ipc';
+import { loopGateActionable } from '../../shared/loopGate';
 import { githubHttpsHref } from '../../shared/githubUrl';
 import { spillTone } from './loopStatus';
 import { captureSubtreeFocus } from './dom';
@@ -87,7 +88,9 @@ function structuralSig(loop: FlowLoopView | null, title: string, refs?: FlowRefs
     title,
     refs?.ticket ?? null,
     refs?.pr ?? null,
-    loop ? [loop.pr, loop.branch, loop.gateOptions ?? null] : null,
+    // iteration PRESENCE and actionability are structural: the iteration row and the gate-decision
+    // buttons appear/disappear with them, so a run-less↔run transition forces a full render.
+    loop ? [loop.pr, loop.branch, loop.gateOptions ?? null, loop.iteration !== undefined, loop.actionable ?? null] : null,
   ]);
 }
 
@@ -97,12 +100,13 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
   // Live nodes patched without a teardown (mirrors flowStrip), and the ref rows whose detail is still
   // unresolved so a structurally-unchanged push can re-attempt them (githubRefs never caches a null —
   // src/main/githubRefs.ts — so a transient failure only self-heals if the caller re-fetches).
-  let liveLoop: { statusVal: HTMLElement; iterVal: HTMLElement; ldl: HTMLElement; iterRow: HTMLElement; body: HTMLElement } | null = null;
+  let liveLoop: { statusVal: HTMLElement; iterVal: HTMLElement | null; ldl: HTMLElement; reasonAnchor: HTMLElement; body: HTMLElement } | null = null;
   let refRows: Array<{ retry: () => void; resolved: () => boolean }> = [];
 
   /** §26.3/D48 — the `reason` row, kept INSIDE the surviving live region so entering error announces it as
-   *  an addition (WCAG SC 4.1.3) instead of silently recreating the region around it. */
-  const syncReasonRow = (ldl: HTMLElement, iterRow: HTMLElement, reason: string | undefined): void => {
+   *  an addition (WCAG SC 4.1.3) instead of silently recreating the region around it. `anchor` is the
+   *  iteration row when a round has run, else the status row (a run-less §27 failure carries no iteration). */
+  const syncReasonRow = (ldl: HTMLElement, anchor: HTMLElement, reason: string | undefined): void => {
     const existing = ldl.querySelector<HTMLElement>('[data-loop-reason]');
     if (!reason) {
       existing?.remove();
@@ -115,7 +119,7 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
     }
     const row = detailRow(doc, 'reason', reason, 'bad');
     row.dataset.loopReason = '';
-    iterRow.after(row);
+    anchor.after(row);
   };
 
   /** §26.3/D48 — recovery from the error stop: re-drive the failed turn (start Claude, then Retry) so an
@@ -198,9 +202,11 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
       // only) must not rewrite these nodes, or a screen reader re-announces content that did not change.
       if (liveLoop.statusVal.textContent !== loop.status) liveLoop.statusVal.textContent = loop.status;
       liveLoop.statusVal.classList.toggle('bad', spillTone(loop.status) === 'await');
-      const iter = String(loop.iteration);
-      if (liveLoop.iterVal.textContent !== iter) liveLoop.iterVal.textContent = iter;
-      syncReasonRow(liveLoop.ldl, liveLoop.iterRow, loop.errorReason);
+      if (liveLoop.iterVal && loop.iteration !== undefined) {
+        const iter = String(loop.iteration);
+        if (liveLoop.iterVal.textContent !== iter) liveLoop.iterVal.textContent = iter;
+      }
+      syncReasonRow(liveLoop.ldl, liveLoop.reasonAnchor, loop.errorReason);
       syncRetry(liveLoop.body, loop.status);
     }
     for (const r of refRows) if (!r.resolved()) r.retry();
@@ -283,12 +289,19 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
       ldl.setAttribute('aria-live', 'polite');
       // An awaiting-human status still needs the human — the §22.3 "act" tone (`bad`).
       const statusRow = detailRow(doc, 'status', loop.status, spillTone(loop.status) === 'await' ? 'bad' : '');
-      const iterRow = detailRow(doc, 'iteration', String(loop.iteration));
-      ldl.append(statusRow, iterRow);
-      liveLoop = { statusVal: statusRow.querySelector('.lv')!, iterVal: iterRow.querySelector('.lv')!, ldl, iterRow, body };
+      ldl.append(statusRow);
+      // No iteration row when no round has run (a §27 run-less view); the reason row then anchors on the
+      // status row instead. An absent iteration is not rendered as 0 (§27 IPC item 3).
+      let iterRow: HTMLElement | null = null;
+      if (loop.iteration !== undefined) {
+        iterRow = detailRow(doc, 'iteration', String(loop.iteration));
+        ldl.append(iterRow);
+      }
+      const reasonAnchor = iterRow ?? statusRow;
+      liveLoop = { statusVal: statusRow.querySelector('.lv')!, iterVal: iterRow?.querySelector('.lv') ?? null, ldl, reasonAnchor, body };
       // §26.3/D48 — WHY a turn stopped, adjacent to `status: error`. Present only in error (the mirror
       // clears it on recovery).
-      syncReasonRow(ldl, iterRow, loop.errorReason);
+      syncReasonRow(ldl, reasonAnchor, loop.errorReason);
       if (loop.pr !== null) ldl.append(detailRow(doc, 'pr', `#${loop.pr}`, 'sig'));
       if (loop.branch !== null) ldl.append(detailRow(doc, 'branch', loop.branch));
       // The current gate's human_options (§18.1/§19.4), present only at an awaiting gate — the read-only
@@ -300,8 +313,10 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
 
       // §26.6 / L5 — the gate DECISION surface (loop-flow.html's approve · changes · impasse): a button
       // per gate option the def offers. Choosing one runs the LoopDef `on_*` action list in-app; the
-      // decision is the app's, surfaced via state.yaml → flow:onStateChanged (the panel re-pulls).
-      if (loop.gateOptions && loop.gateOptions.length > 0 && deps.gateDecision) {
+      // decision is the app's, surfaced via state.yaml → flow:onStateChanged (the panel re-pulls). A §27
+      // run-less view carries the same gateOptions display-only (loopGateActionable false) — the read-only
+      // row above shows them, but no clickable control renders; the refusal guard is at the operation.
+      if (loop.gateOptions && loop.gateOptions.length > 0 && loopGateActionable(loop) && deps.gateDecision) {
         const gate = doc.createElement('div');
         gate.className = 'gatebar';
         // A labelled group so a screen-reader user hears these controls' shared purpose, not three loose

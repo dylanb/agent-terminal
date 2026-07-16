@@ -131,6 +131,9 @@ function structuralSig(state: FlowStateView): string {
     // The §26.10 cost node's PRESENCE (not its value) is structural: it appears once a cost is recorded,
     // so a first-cost push forces a full render; thereafter value-only changes patch in place.
     state.loop ? state.loop.cost !== undefined : false,
+    // The iteration read-out's PRESENCE is likewise structural — absent for a §27 run-less view — so a
+    // run-less↔run transition forces a full render rather than a value-only patch of a missing node.
+    state.loop ? state.loop.iteration !== undefined : false,
     // The refs read-out (§24.2.3 T7) renders the actual numbers with no patch handler, so any refs
     // change must force a full render rather than a value-only patch.
     state.refs ?? null,
@@ -163,14 +166,18 @@ function loopReadout(doc: Document, loop: FlowLoopView, controlsId?: string): HT
   const label = doc.createElement('span');
   label.textContent = toneLabel(loop.status);
   pill.append(dot, label);
-  const iter = doc.createElement('span');
-  iter.className = 'mono loop-iter';
-  iter.textContent = `iter ${loop.iteration}`;
   const car = doc.createElement('span');
   car.className = 'car';
   car.setAttribute('aria-hidden', 'true');
   car.textContent = '▸';
-  v.append(pill, iter);
+  v.append(pill);
+  // No iteration read-out when no round has run (a §27 run-less view); absent is not rendered as 0.
+  if (loop.iteration !== undefined) {
+    const iter = doc.createElement('span');
+    iter.className = 'mono loop-iter';
+    iter.textContent = `iter ${loop.iteration}`;
+    v.append(iter);
+  }
   // §26.10 — the display-only cost readout, present once an iteration boundary has recorded a cost.
   if (loop.cost !== undefined) {
     const cost = doc.createElement('span');
@@ -440,7 +447,7 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
         if (pill.lastElementChild) pill.lastElementChild.textContent = toneLabel(state.loop.status);
       }
       const iter = host.querySelector('.loop-iter');
-      if (iter) iter.textContent = `iter ${state.loop.iteration}`;
+      if (iter && state.loop.iteration !== undefined) iter.textContent = `iter ${state.loop.iteration}`;
       const cost = host.querySelector('.loop-cost');
       if (cost && state.loop.cost !== undefined) {
         cost.textContent = state.loop.cost;

@@ -72,7 +72,7 @@ export function deriveLoopView(
       branch: loop.branch,
       ready,
       humanNeeded,
-      ...(gateOptions ? { gateOptions } : {}),
+      ...(gateOptions ? { gateOptions, actionable: true } : {}),
       ...(cost !== null ? { cost } : {}),
       ...(loop.errorReason ? { errorReason: loop.errorReason } : {}),
     },
