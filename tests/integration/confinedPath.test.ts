@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, sep, parse } from 'node:path';
-import { resolveJail, confinedRealPath, realpathBounded } from '../../src/main/confinedPath';
+import { resolveJail, resolveOwnedDirJail, confinedRealPath, realpathBounded } from '../../src/main/confinedPath';
 
 let root: string;
 let repo: string;
@@ -39,6 +39,27 @@ describe('resolveJail', () => {
 
   it('resolves the anchor itself when no segments are named', () => {
     expect(resolveJail(repo)).toBe(repo);
+  });
+});
+
+describe('resolveOwnedDirJail — a root the APP derives, so a link the user put at it is followed', () => {
+  it('resolves a not-yet-created directory through its parent chain', () => {
+    const dir = join(repo, 'absent-parent', 'loops');
+    expect(resolveOwnedDirJail(dir)).toBe(join(repo, 'absent-parent', 'loops'));
+  });
+
+  it('follows a symlink standing AT the directory itself, to its real location', () => {
+    // The distinction from a content-named anchor: the app derives this path, so a link here is the
+    // user's own config (a dotfiles repo) and the tools that read the directory follow it too.
+    const real = join(root, 'real-loops');
+    mkdirSync(real, { recursive: true });
+    symlinkSync(real, join(repo, 'linked-loops'));
+    expect(resolveOwnedDirJail(join(repo, 'linked-loops'))).toBe(realpathSync(real));
+  });
+
+  it('is null when the path cannot be reduced to a real location (a dangling link on the way)', () => {
+    symlinkSync(join(root, 'no-such-target'), join(root, 'dangling'));
+    expect(resolveOwnedDirJail(join(root, 'dangling', 'loops'))).toBeNull();
   });
 });
 

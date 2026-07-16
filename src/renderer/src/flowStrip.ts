@@ -6,9 +6,9 @@
 
 import type { FlowApi, FlowStateView, FlowStatus, FlowLoopView, FlowPrompt, FlowRefs } from '../../shared/ipc';
 import { hasFlowRefs } from '../../shared/ipc';
+import { deriveStatusBar, IDLE_STATUS_BAR, type StatusBarModel } from '../../shared/statusBar';
 import { FLOW_CHANGED_EVENT } from './paneActions';
 import { spillTone, toneLabel } from './loopStatus';
-import { createSpinner } from './spinner';
 
 type StationState = 'todo' | 'active' | 'done';
 type Act = 'start' | 'advance' | 'restart' | 'undo';
@@ -77,12 +77,17 @@ export type FlowStripDeps = Omit<
   | 'markTurnComplete'
   | 'gateDecision'
   | 'retryTurn'
+  | 'setTitle'
 > & {
   /** The docked loop panel's element id, injected by the composition root so the read-out's
    *  `aria-controls` is instance-scoped — the organism never bakes in a document-level id
    *  (UI-STANDARDS §2.2 rule 1). Omitted → no aria-controls (aria-expanded still conveys state). */
   loopPanelId?: string;
   onPanelState?: (loop: FlowLoopView | null, title: string, refs?: FlowRefs) => void;
+  /** Required status-bar handoff on structural and passive state updates (§22.3.1 / §24.2.2 S5). */
+  onStatusBar(model: StatusBarModel, repoKey: string | null): void;
+  /** Visible transition failure seam (§19.1). */
+  onError?(reason: string): void;
   /** Hand a step-entry input prompt (§24.2.3 T3) to the composition root, which opens its modal
    *  organism. `submit` records the typed values (provideInput) and re-renders. `null` closes the
    *  modal (no prompt on this view). The strip never reaches across to the modal directly. */
@@ -111,20 +116,6 @@ function derivedText(state: FlowStateView): string | null {
   return null;
 }
 
-/** The §26 loop-mechanics activity line: the phrase + an animated braille spinner (the descriptor exists
- *  only while the loop is active). Announced via the strip host's own `aria-live=polite` (index.html
- *  #flow-strip) — like `.flow-derived`/`.flow-notice`, it does NOT nest its own live region. The spinner is
- *  decorative (`aria-hidden`); the phrase is the text. */
-function activityLine(doc: Document, activity: NonNullable<FlowStateView['loopActivity']>): HTMLElement {
-  const line = doc.createElement('div');
-  line.className = 'flow-activity';
-  const phrase = doc.createElement('span');
-  phrase.className = 'phrase';
-  phrase.textContent = activity.phrase;
-  line.append(phrase, createSpinner(doc));
-  return line;
-}
-
 /** A signature of everything that fixes the strip's DOM STRUCTURE — deliberately NOT the live values
  *  a passive push patches in place (loop iteration/tone, derived counts/activity). Two views with an
  *  equal signature differ only in those live values, so the existing nodes can be updated without a
@@ -144,10 +135,6 @@ function structuralSig(state: FlowStateView): string {
     // change must force a full render rather than a value-only patch.
     state.refs ?? null,
     derivedText(state) !== null,
-    // §26 activity line: only its PRESENCE is structural. The phrase itself patches in place — the host is
-    // an aria-live region (WCAG SC 4.1.3), so rebuilding it to change one word would re-announce the whole
-    // strip.
-    !!state.loopActivity,
     state.notice ?? '',
   ]);
 }
@@ -241,6 +228,12 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
   let repoKey: string | null = null;
   // The structure last painted; a passive push whose structure matches patches in place (§24.2.2 S5).
   let lastSig: string | null = null;
+  let refreshGeneration = 0;
+
+  const onActFailed = (e: unknown): void => {
+    deps.onError?.(e instanceof Error ? e.message : String(e));
+    void refresh();
+  };
 
   const runAct = (act: Act, key: string): Promise<FlowStateView> =>
     act === 'start'
@@ -272,7 +265,7 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
           // which this transition may have changed (decoupled contract, §4.1/§9.1).
           window.dispatchEvent(new CustomEvent(FLOW_CHANGED_EVENT));
         })
-        .catch(() => void refresh())
+        .catch(onActFailed)
         // Re-enable so retry is possible if both the action and refresh()'s state() reject (no
         // repaint detached this button). Harmless on success: the repaint already replaced it.
         .finally(() => {
@@ -299,7 +292,7 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
             applyTransition(view);
             window.dispatchEvent(new CustomEvent(FLOW_CHANGED_EVENT));
           })
-          .catch(() => void refresh())
+          .catch(onActFailed)
           .finally(() => {
             button.disabled = false;
           });
@@ -310,6 +303,7 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
 
   function render(state: FlowStateView): void {
     lastSig = structuralSig(state); // this paint defines the structure a later passive push compares to
+    deps.onStatusBar(deriveStatusBar(state), repoKey);
     // Carry focus across the rebuild if the keyboard user was on the Loop read-out, rather than
     // dropping it to <body> (WCAG 2.4.3).
     const keepLoopFocus = doc.activeElement instanceof HTMLElement && doc.activeElement.classList.contains('loopstat') && host.contains(doc.activeElement);
@@ -370,11 +364,6 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
       host.append(line);
     }
 
-    // §26 — what the loop mechanics are doing right now (bootstrapping, waiting, working, reviewing,
-    // consolidating): a phrase + spinner, shown on a loop step during bootstrap (before state.yaml) and
-    // through every turn. Present whenever main reports an activity; absent when the loop is idle/at a gate.
-    if (state.loopActivity) host.append(activityLine(doc, state.loopActivity));
-
     const control = CONTROL[state.status];
     if (!control) return;
 
@@ -415,7 +404,7 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
           if (repoKey !== boundRepo) return;
           applyTransition(view);
         })
-        .catch(() => void refresh());
+        .catch(onActFailed);
     });
   }
 
@@ -438,14 +427,11 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
    *  attached (§24.2.2 S5). The caller guarantees the structural signature is unchanged, so only the
    *  loop read-out's tone/iteration and the derived n/m line can differ. */
   function patchInPlace(state: FlowStateView): void {
+    deps.onStatusBar(deriveStatusBar(state), repoKey);
     const dText = derivedText(state);
     if (dText !== null) {
       const line = host.querySelector('.flow-derived');
       if (line) line.textContent = dText;
-    }
-    if (state.loopActivity) {
-      const phrase = host.querySelector('.flow-activity .phrase');
-      if (phrase) phrase.textContent = state.loopActivity.phrase;
     }
     if (state.loop) {
       const pill = host.querySelector<HTMLElement>('.loopstat .spill');
@@ -467,19 +453,22 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
   }
 
   async function refresh(): Promise<void> {
-    if (repoKey === null) {
+    const key = repoKey;
+    const generation = ++refreshGeneration;
+    if (key === null) {
       host.replaceChildren();
       lastSig = null;
+      deps.onStatusBar(IDLE_STATUS_BAR, null);
       return;
     }
-    // A state() IPC rejection keeps the last rendered rail rather than escaping as an unhandled
-    // rejection or clearing to a blank pane (callers fire `void refresh()`, §18.1).
+    // §18.1: keep the last rendered state on a failed pull.
     let view: FlowStateView;
     try {
-      view = await deps.state(repoKey);
+      view = await deps.state(key);
     } catch {
       return; // keep the last rendered UI
     }
+    if (disposed || repoKey !== key || generation !== refreshGeneration) return;
     // A passive push only ever changes live-derived values, so when the structure is unchanged patch
     // in place — a full teardown would detach a focused control, an in-flight click target, or a
     // confirm dialog's captured opener (§24.2.2 S5). Any structural change falls back to a render.
@@ -503,8 +492,14 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
   return {
     refresh,
     onRepoChanged(key) {
+      const changed = repoKey !== key;
       repoKey = key;
       lastSig = null; // force a full structural render for the new repo — never patch across repos
+      if (changed) {
+        host.replaceChildren();
+        deps.onStatusBar(IDLE_STATUS_BAR, null);
+        deps.onPanelState?.(null, '');
+      }
       void refresh();
     },
     focusLoopReadout() {

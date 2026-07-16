@@ -1,5 +1,4 @@
-// The human-readable "what the loop mechanics are doing right now" descriptor (§24.2.2 / §26): a short
-// phrase, present exactly while the loop is active (its presence drives the strip's spinner). One shared
+// The human-readable "what the loop mechanics are doing right now" descriptor (§24.2.2 / §26). One shared
 // definition — the main-process producer and the renderer both key off THIS vocabulary, so they cannot
 // drift (CLAUDE.md shared-semantics rule; the sibling of occurrence.ts / loopStatus.ts).
 
@@ -35,7 +34,7 @@ export function loopActivityPhrase(kind: LoopActivityKind, ctx: LoopActivityCont
   }
 }
 
-/** Build the descriptor for `kind` — the loop mechanics are actively doing this (so the strip spins). */
+/** Build the descriptor for `kind` — the loop mechanics are actively doing this. */
 export function loopActivity(kind: LoopActivityKind, ctx?: LoopActivityContext): LoopActivity {
   return { phrase: loopActivityPhrase(kind, ctx) };
 }
@@ -49,7 +48,7 @@ export interface LoopActivityInputs {
 
 /** Derive the current activity descriptor, or null when the loop mechanics are idle (at a gate, done, or
  *  between flows). A bootstrap outranks a turn (it precedes any turn); an un-injected turn is still
- *  "waiting for the agent". Pure so the strip's spinner is driven by a tested decision. */
+ *  "waiting for the agent". Pure: the decision is tested, not the rendering of it. */
 export function deriveLoopActivity(inputs: LoopActivityInputs): LoopActivity | null {
   if (inputs.pickup) return loopActivity('pickup', { issue: inputs.pickup.issue, wipe: inputs.pickup.wipe });
   if (inputs.turn) return loopActivity(inputs.turn.injected ? inputs.turn.kind : 'waiting');

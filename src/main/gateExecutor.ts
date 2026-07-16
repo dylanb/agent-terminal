@@ -9,6 +9,7 @@ import type { GateGitHub } from './gateGithub';
 import type { LoopStateWrite } from './loopStateWriter';
 import type { EpicPlan } from './epicPlan';
 import { interpolateExecArgv, type RunGateExec } from './gateExec';
+import { errMsg } from './errno';
 
 /** The run context a gate transition writes from — the current loop state + the human's note text. */
 export interface GateExecContext {
@@ -127,7 +128,7 @@ export async function executeGateOutcome(
     // never surface as an unhandled rejection in main (the `void` call site cannot catch it, §26.11). But
     // it must not be SILENT (§26.6/D48): report it so the host raises the error dialog + records the audit,
     // otherwise the loop sits stranded with no trace.
-    deps.onWriteFailed(e instanceof Error ? e.message : String(e));
+    deps.onWriteFailed(errMsg(e));
     return;
   }
 

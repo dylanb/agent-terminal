@@ -126,6 +126,8 @@ const flowApi: FlowApi = {
   terminate: (repoKey) => ipcRenderer.invoke(CH.flowTerminate, { sessionId: SESSION_ID, repoKey }) as Promise<FlowStateView>,
   provideInput: (repoKey, values) =>
     ipcRenderer.invoke(CH.flowProvideInput, { sessionId: SESSION_ID, repoKey, values }) as Promise<FlowStateView>,
+  setTitle: (repoKey, title) =>
+    ipcRenderer.invoke(CH.flowSetTitle, { sessionId: SESSION_ID, repoKey, title }) as Promise<FlowStateView>,
   onStateChanged: (cb) => {
     const handler = (): void => cb();
     ipcRenderer.on(CH.flowOnStateChanged, handler);
@@ -169,10 +171,10 @@ export const cliApi: CliApi = {
 export const examplesApi: ExamplesApi = {
   preview: () =>
     ipcRenderer.invoke(CH.installExamplesPreview, { sessionId: SESSION_ID }) as Promise<InstallExamplesPreview>,
-  apply: (overwrite) =>
+  apply: (replace) =>
     ipcRenderer.invoke(CH.installExamplesApply, {
       sessionId: SESSION_ID,
-      overwrite,
+      replace,
     }) as Promise<InstallExamplesResult>,
 };
 

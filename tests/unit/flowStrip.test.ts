@@ -4,6 +4,7 @@ import { createFlowStrip } from '../../src/renderer/src/flowStrip';
 import { assertRendersFromHostDocument } from './relocatable';
 import { FLOW_CHANGED_EVENT } from '../../src/renderer/src/paneActions';
 import type { AgentState, FlowStateView, FlowStatus } from '../../src/shared/ipc';
+import { IDLE_STATUS_BAR, type StatusBarModel } from '../../src/shared/statusBar';
 
 // §24.2.2 / §24.2.3 T1 / §22.3 — the flow status strip. It follows the cwd: every window.flow call
 // must carry the current repoKey, so a stale-repo response must never repaint the rail (§16.3).
@@ -38,6 +39,7 @@ function fakeFlow(initial: FlowStatus = 'not_started') {
     }),
     provideInput: vi.fn(async (repoKey: string) => view(repoKey)),
     onStateChanged: vi.fn((_cb: () => void) => () => {}),
+    onStatusBar: vi.fn((_m: StatusBarModel, _k: string | null) => {}),
   };
 }
 
@@ -80,7 +82,74 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     expect(control()!.textContent).toBe('Start');
   });
 
-  it('renders the §26 loop-activity phrase + spinner as a status line', async () => {
+  it('discards a late refresh from the prior repo after the new repo has rendered', async () => {
+    let resolveA: (view: FlowStateView) => void = () => {};
+    let resolveB: (view: FlowStateView) => void = () => {};
+    const onStatusBar = vi.fn();
+    const deps = {
+      ...fakeFlow(),
+      state: vi.fn((repoKey: string) => new Promise<FlowStateView>((resolve) => {
+        if (repoKey === '/repoA') resolveA = resolve;
+        else resolveB = resolve;
+      })),
+      onStatusBar,
+    };
+    const strip = createFlowStrip(host, deps);
+    strip.onRepoChanged('/repoA');
+    await vi.waitFor(() => expect(deps.state).toHaveBeenCalledWith('/repoA'));
+    strip.onRepoChanged('/repoB');
+    await vi.waitFor(() => expect(deps.state).toHaveBeenCalledWith('/repoB'));
+
+    resolveB({ stepName: 'Repo B', steps: ['Repo B'], position: 1, total: 1, status: 'not_started', userTitle: 'B' });
+    await vi.waitFor(() => expect(stepName()).toBe('Repo B'));
+    resolveA({ stepName: 'Repo A', steps: ['Repo A'], position: 1, total: 1, status: 'not_started', userTitle: 'A' });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(stepName()).toBe('Repo B');
+    expect(onStatusBar.mock.calls.at(-1)?.[1]).toBe('/repoB');
+    expect(onStatusBar.mock.calls.at(-1)?.[0].title).toEqual({ kind: 'user', text: 'B' });
+  });
+
+  it('does not repaint a disposed strip when an in-flight refresh resolves after teardown', async () => {
+    let resolve: (view: FlowStateView) => void = () => {};
+    const deps = { ...fakeFlow(), state: vi.fn(() => new Promise<FlowStateView>((r) => (resolve = r))) };
+    const strip = createFlowStrip(host, deps);
+    strip.onRepoChanged('/repo');
+    await vi.waitFor(() => expect(deps.state).toHaveBeenCalledWith('/repo'));
+    strip.dispose();
+    resolve({ stepName: 'Late', steps: ['Late'], position: 1, total: 1, status: 'not_started' });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(host.childElementCount).toBe(0);
+  });
+
+  it('removes repo A controls while a repo B pull is pending and leaves them removed if it rejects', async () => {
+    const onStatusBar = vi.fn();
+    const onPanelState = vi.fn();
+    const deps = {
+      ...fakeFlow(),
+      state: vi.fn((repoKey: string) =>
+        repoKey === '/repoA'
+          ? Promise.resolve({ stepName: 'Repo A', steps: ['Repo A'], position: 1, total: 1, status: 'not_started' as FlowStatus })
+          : Promise.reject(new Error('repo B unavailable')),
+      ),
+      onStatusBar,
+      onPanelState,
+    };
+    const strip = createFlowStrip(host, deps);
+    strip.onRepoChanged('/repoA');
+    await vi.waitFor(() => expect(stepName()).toBe('Repo A'));
+
+    strip.onRepoChanged('/repoB');
+    expect(host.childElementCount).toBe(0);
+    expect(onStatusBar).toHaveBeenLastCalledWith(IDLE_STATUS_BAR, null);
+    expect(onPanelState).toHaveBeenLastCalledWith(null, '');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(host.childElementCount).toBe(0);
+  });
+
+  // §22.3.1 — what the engine is doing shows in the status bar, and ONLY there. The rail keeps the loop
+  // read-out (tone pill, iteration, cost) and no busy signal of its own: one busy surface, one place.
+  it('renders no activity line — the status bar is the only busy surface', async () => {
     const deps = {
       ...fakeFlow('in_progress'),
       state: vi.fn(async () => ({
@@ -93,11 +162,46 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
       })),
     };
     createFlowStrip(host, deps).onRepoChanged('/repo');
-    await vi.waitFor(() => expect(host.querySelector('.flow-activity')).not.toBeNull());
-    const line = host.querySelector('.flow-activity')!;
-    expect(line.querySelector('.phrase')?.textContent).toBe('Bootstrapping #40');
-    expect(line.querySelector('.spin')).not.toBeNull();
-    expect(line.querySelector('.spin')?.getAttribute('aria-hidden')).toBe('true');
+    await vi.waitFor(() => expect(control()).not.toBeNull());
+    expect(host.querySelector('.flow-activity')).toBeNull();
+    expect(host.querySelector('.spin')).toBeNull();
+    expect(host.textContent).not.toContain('Bootstrapping #40');
+  });
+
+  it('hands the status-bar model to the composition root, so the bar can show the engine activity', async () => {
+    const onStatusBar = vi.fn();
+    const deps = {
+      ...fakeFlow('in_progress'),
+      state: vi.fn(async () => ({
+        stepName: 'plan',
+        steps: ['plan'],
+        position: 1,
+        total: 1,
+        status: 'in_progress' as FlowStatus,
+        refs: { pr: 57 },
+        loopActivity: { phrase: 'Bootstrapping #40' },
+      })),
+      onStatusBar,
+    };
+    createFlowStrip(host, deps).onRepoChanged('/repo');
+    await vi.waitFor(() => expect(onStatusBar).toHaveBeenCalled());
+    expect(onStatusBar.mock.calls.at(-1)![0]).toEqual({
+      title: { kind: 'pr', number: 57 },
+      activity: { phrase: 'Bootstrapping #40' },
+      alert: null,
+    });
+    expect(onStatusBar.mock.calls.at(-1)![1]).toBe('/repo'); // the bar acts on the repo the model came from
+  });
+
+  it('gives the bar back its empty state when the terminal leaves every repo', async () => {
+    // Without this the bar would go on showing the title, activity and alert of a repo the user has left.
+    const onStatusBar = vi.fn();
+    const strip = createFlowStrip(host, { ...fakeFlow('in_progress'), onStatusBar });
+    strip.onRepoChanged('/repo');
+    await vi.waitFor(() => expect(onStatusBar).toHaveBeenCalled());
+    onStatusBar.mockClear();
+    strip.onRepoChanged(null);
+    expect(onStatusBar).toHaveBeenCalledWith(IDLE_STATUS_BAR, null);
   });
 
   // WCAG 2.1 SC 4.1.3. The host is `role=status`, which is an implicitly ATOMIC live region — a partial
@@ -109,11 +213,13 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     expect(host.getAttribute('aria-atomic')).toBe('false');
   });
 
-  // WCAG 2.1 SC 4.1.3 (Status Messages). A phrase moving 'Working' -> 'Running reviewers' must patch the
-  // existing node, not rebuild the strip.
-  it('patches the activity phrase in place, without tearing down the live region', async () => {
+  // A phrase moving 'Working' -> 'Running reviewers' arrives on a PASSIVE push, which the strip answers by
+  // patching in place. The status bar must still be handed the new phrase — otherwise the one surface that
+  // shows what the engine is doing freezes on the first phrase of the run.
+  it('keeps the status bar live across a passive push that patches the strip in place', async () => {
     let phrase = 'Working';
     let fire = (): void => {};
+    const onStatusBar = vi.fn();
     const deps = {
       ...fakeFlow('in_progress'),
       state: vi.fn(async () => ({
@@ -128,25 +234,26 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
         fire = cb;
         return () => {};
       }),
+      onStatusBar,
     };
     createFlowStrip(host, deps).onRepoChanged('/repo');
-    await vi.waitFor(() => expect(host.querySelector('.flow-activity')).not.toBeNull());
-    const lineBefore = host.querySelector('.flow-activity')!;
+    await vi.waitFor(() => expect(onStatusBar).toHaveBeenCalled());
     const stationBefore = host.querySelector('.stn')!;
 
     phrase = 'Running reviewers';
     fire();
 
-    await vi.waitFor(() => expect(host.querySelector('.phrase')?.textContent).toBe('Running reviewers'));
-    expect(host.querySelector('.flow-activity')).toBe(lineBefore); // same node → only the phrase announced
-    expect(host.querySelector('.stn')).toBe(stationBefore); // the rest of the strip was not re-inserted
+    await vi.waitFor(() =>
+      expect(onStatusBar.mock.calls.at(-1)![0].activity).toEqual({ phrase: 'Running reviewers' }),
+    );
+    expect(host.querySelector('.stn')).toBe(stationBefore); // the strip itself was patched, not rebuilt
   });
 
-  it('omits the spinner (and the whole activity line) when no activity is reported', async () => {
-    const deps = fakeFlow('in_progress');
-    createFlowStrip(host, deps).onRepoChanged('/repo');
-    await vi.waitFor(() => expect(control()).not.toBeNull());
-    expect(host.querySelector('.flow-activity')).toBeNull();
+  it('reports no activity to the status bar when the engine is idle', async () => {
+    const onStatusBar = vi.fn();
+    createFlowStrip(host, { ...fakeFlow('in_progress'), onStatusBar }).onRepoChanged('/repo');
+    await vi.waitFor(() => expect(onStatusBar).toHaveBeenCalled());
+    expect(onStatusBar.mock.calls.at(-1)![0].activity).toBeNull();
   });
 
   it('re-pulls and re-renders for the new repo when the cwd changes', async () => {
@@ -167,6 +274,19 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     await vi.waitFor(() => expect(stateOf(1)).toBe('active'));
     expect(deps.start).toHaveBeenCalledWith('/repo');
     expect(control()!.textContent).toBe('Advance');
+  });
+
+  it('surfaces a transition write-failure instead of silently swallowing it', async () => {
+    // persist() now THROWS when the write cannot land (a symlinked .agent-terminal), so a transition
+    // that used to silently no-op now rejects. The user must be told, not left clicking Start into the
+    // void with no recovery (CLAUDE.md — never silently swallow an unrecoverable error).
+    const onError = vi.fn();
+    const deps = { ...fakeFlow(), start: vi.fn(async () => { throw new Error('cannot write .agent-terminal/flow-state.yaml'); }), onError };
+    createFlowStrip(host, deps).onRepoChanged('/repo');
+    await vi.waitFor(() => expect(control()!.textContent).toBe('Start'));
+    control()!.click();
+    await vi.waitFor(() => expect(onError).toHaveBeenCalledTimes(1));
+    expect(String(onError.mock.calls[0][0])).toContain('cannot write');
   });
 
   it('Advance completes the flow (Completed active) and shows Restart, scoped to the repo', async () => {
@@ -230,6 +350,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
       undo: vi.fn(),
       terminate: vi.fn(),
       provideInput: vi.fn(),
+      onStatusBar: vi.fn(),
       onStateChanged: noopSub,
     };
     const strip = createFlowStrip(host, deps);
@@ -282,6 +403,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
       undo: vi.fn(),
       terminate: vi.fn(),
       provideInput: vi.fn(),
+      onStatusBar: vi.fn(),
       onStateChanged: noopSub,
     };
     createFlowStrip(host, deps).onRepoChanged('/repo');
@@ -311,6 +433,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
       undo: vi.fn(),
       terminate: vi.fn(),
       provideInput: vi.fn(),
+      onStatusBar: vi.fn(),
       onStateChanged: vi.fn((cb: () => void) => {
         fire = cb;
         return () => {};
@@ -342,6 +465,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
       undo: vi.fn(),
       terminate: vi.fn(),
       provideInput: vi.fn(),
+      onStatusBar: vi.fn(),
       onStateChanged: noopSub,
     };
     createFlowStrip(host, deps).onRepoChanged('/repo');
@@ -382,6 +506,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
       undo: vi.fn(),
       terminate: vi.fn(),
       provideInput: vi.fn(),
+      onStatusBar: vi.fn(),
       onStateChanged: noopSub,
       loopPanelId: 'loop-panel',
     };
@@ -415,6 +540,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
       undo: vi.fn(),
       terminate: vi.fn(),
       provideInput: vi.fn(),
+      onStatusBar: vi.fn(),
       onStateChanged: noopSub,
     };
     createFlowStrip(host, deps).onRepoChanged('/repo');
@@ -446,6 +572,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
       undo: vi.fn(),
       terminate: vi.fn(),
       provideInput: vi.fn(),
+      onStatusBar: vi.fn(),
       onStateChanged: (cb: () => void) => {
         fire = cb;
         return () => {};
@@ -480,6 +607,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
       undo: vi.fn(),
       terminate: vi.fn(),
       provideInput: vi.fn(),
+      onStatusBar: vi.fn(),
       onStateChanged: noopSub,
       // no loopPanelId → the strip must not bake in a document-level id (UI-STANDARDS §2.2 rule 1)
     };
@@ -506,6 +634,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
       restart: vi.fn(),
       undo: vi.fn(),
       provideInput: vi.fn(),
+      onStatusBar: vi.fn(),
       terminate: vi.fn(),
       onStateChanged: noopSub,
       onPanelState,
@@ -533,6 +662,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
       restart: vi.fn(),
       undo: vi.fn(),
       provideInput: vi.fn(),
+      onStatusBar: vi.fn(),
       terminate: vi.fn(),
       onStateChanged: noopSub,
       loopPanelId: 'loop-panel',
@@ -571,6 +701,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
       undo: vi.fn(),
       terminate: vi.fn(),
       provideInput: vi.fn(),
+      onStatusBar: vi.fn(),
       onStateChanged: vi.fn((cb: () => void) => {
         fire = cb;
         return () => {};
@@ -609,6 +740,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
       undo: vi.fn(),
       terminate: vi.fn(),
       provideInput: vi.fn(),
+      onStatusBar: vi.fn(),
       onStateChanged: vi.fn((cb: () => void) => {
         fire = cb;
         return () => {};
@@ -643,6 +775,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
       undo: vi.fn(),
       terminate: vi.fn(),
       provideInput: vi.fn(),
+      onStatusBar: vi.fn(),
       onStateChanged: noopSub,
     });
 
@@ -682,6 +815,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
       undo: vi.fn(),
       terminate: vi.fn(),
       provideInput: vi.fn(),
+      onStatusBar: vi.fn(),
       onStateChanged: noopSub,
     });
     const toneFor = async (status: string): Promise<string> => {
@@ -722,6 +856,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
       undo: vi.fn(),
       terminate: vi.fn(),
       provideInput: vi.fn(),
+      onStatusBar: vi.fn(),
       onStateChanged: noopSub,
       onPanelState: (loop: FlowStateView['loop'] | null, title: string) => seen.push({ status: loop?.status, title }),
     };
@@ -761,6 +896,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
       terminate: vi.fn(),
       provideInput,
       onStateChanged: noopSub,
+      onStatusBar: vi.fn(),
       onPrompt: (prompt: FlowStateView['prompt'] | null, stepName: string, submit: (v: Record<string, string>) => void) => {
         if (prompt) {
           seen.push({ names: prompt.inputs.map((i) => i.name), stepName });
@@ -778,6 +914,36 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
 
     lastSubmit!({ ticket: '176' });
     expect(provideInput).toHaveBeenCalledWith('/repo', { ticket: '176' });
+  });
+
+  it('surfaces a provideInput write-failure from a prompt submit instead of swallowing it', async () => {
+    const onError = vi.fn();
+    let submit: ((v: Record<string, string>) => void) | undefined;
+    const promptView: FlowStateView = {
+      stepName: 'plan',
+      steps: ['plan'],
+      position: 1,
+      total: 1,
+      status: 'in_progress',
+      prompt: { inputs: [{ name: 'ticket', type: 'github-ticket' }], bootstrap: 'agent-loop pickup' },
+    };
+    const deps = {
+      ...fakeFlow(),
+      state: vi.fn(async (): Promise<FlowStateView> => ({ ...promptView, status: 'not_started', prompt: undefined })),
+      start: vi.fn(async (): Promise<FlowStateView> => promptView),
+      provideInput: vi.fn(async () => { throw new Error('cannot write .agent-terminal/flow-state.yaml'); }),
+      onError,
+      onPrompt: (prompt: FlowStateView['prompt'] | null, _stepName: string, s: (v: Record<string, string>) => void) => {
+        if (prompt) submit = s;
+      },
+    };
+    createFlowStrip(host, deps).onRepoChanged('/repo');
+    await vi.waitFor(() => expect(control()!.textContent).toBe('Start'));
+    control()!.click();
+    await vi.waitFor(() => expect(submit).toBeDefined());
+    submit!({ ticket: '176' });
+    await vi.waitFor(() => expect(onError).toHaveBeenCalledTimes(1));
+    expect(String(onError.mock.calls[0][0])).toContain('cannot write');
   });
 
   it('focuses a real flow control before opening the prompt, so the modal does not capture <body> as opener (WCAG 2.4.3)', async () => {
@@ -801,6 +967,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
       undo: vi.fn(),
       terminate: vi.fn(),
       provideInput: vi.fn(),
+      onStatusBar: vi.fn(),
       onStateChanged: noopSub,
       onPrompt: (prompt: FlowStateView['prompt'] | null) => {
         if (prompt) openerAtPrompt = host.ownerDocument.activeElement;
@@ -836,6 +1003,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
       terminate: vi.fn(),
       provideInput,
       onStateChanged: noopSub,
+      onStatusBar: vi.fn(),
       onPrompt: (prompt: FlowStateView['prompt'] | null, _stepName: string, submit: (v: Record<string, string>) => void) => {
         if (prompt) lastSubmit = submit;
       },
@@ -873,6 +1041,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
       undo: vi.fn(),
       terminate: vi.fn(),
       provideInput: vi.fn(),
+      onStatusBar: vi.fn(),
       onStateChanged: noopSub,
       onPrompt: (prompt: FlowStateView['prompt'] | null) => seen.push(prompt),
     };
@@ -911,6 +1080,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
       terminate: vi.fn(),
       provideInput: vi.fn((): Promise<FlowStateView> => new Promise((r) => { resolveProvide = r; })),
       onStateChanged: noopSub,
+      onStatusBar: vi.fn(),
       onPrompt: (prompt: FlowStateView['prompt'] | null, _s: string, submit: (v: Record<string, string>) => void) => {
         seen.push(prompt);
         if (prompt) lastSubmit = submit;
@@ -952,6 +1122,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
       undo: vi.fn(),
       terminate: vi.fn(),
       provideInput: vi.fn(),
+      onStatusBar: vi.fn(),
       onStateChanged: vi.fn((cb: () => void) => {
         fire = cb;
         return () => {};
@@ -999,6 +1170,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
       undo: vi.fn(),
       terminate: vi.fn(),
       provideInput: vi.fn(),
+      onStatusBar: vi.fn(),
       onStateChanged: noopSub,
     };
     createFlowStrip(host, deps).onRepoChanged('/repo');
@@ -1120,6 +1292,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
         undo: vi.fn(),
         terminate: vi.fn(),
         provideInput: vi.fn(),
+        onStatusBar: vi.fn(),
         onStateChanged: noopSub,
         onTerminate: vi.fn(),
       };
@@ -1157,6 +1330,22 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
       await vi.waitFor(() => expect(deps.terminate).toHaveBeenCalledWith('/repo'));
       await vi.waitFor(() => expect(control()!.textContent).toBe('Start'));
       expect(terminate()).toBeNull(); // gone in not_started
+    });
+
+    it('surfaces a terminate write-failure instead of swallowing it', async () => {
+      const onError = vi.fn();
+      const onTerminate = vi.fn((_repoKey: string, confirm: () => void) => confirm());
+      const deps = {
+        ...fakeFlow('in_progress'),
+        terminate: vi.fn(async () => { throw new Error('cannot write .agent-terminal/flow-state.yaml'); }),
+        onTerminate,
+        onError,
+      };
+      createFlowStrip(host, deps).onRepoChanged('/repo');
+      await vi.waitFor(() => expect(terminate()).not.toBeNull());
+      terminate()!.click();
+      await vi.waitFor(() => expect(onError).toHaveBeenCalledTimes(1));
+      expect(String(onError.mock.calls[0][0])).toContain('cannot write');
     });
 
     it('drops a stale confirm if the cwd moved to another repo before confirming (AC11)', async () => {
@@ -1229,6 +1418,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
         undo: vi.fn(),
         terminate: vi.fn(),
         provideInput: vi.fn(),
+        onStatusBar: vi.fn(),
         onStateChanged: vi.fn((cb: () => void) => {
           fire = cb;
           return () => {};

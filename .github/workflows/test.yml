@@ -1,0 +1,39 @@
+# Runs the vitest suites — the `node` project (tests/unit + tests/integration) and the `browser`
+# project (tests/browser), which grades painted colour and focus rings in real Chromium. Both are
+# fast; neither needs a display server, so this job stays separate from the Electron e2e workflow.
+# The authoritative pass tally is this job's live run, not a number pinned here that drifts on the
+# next test added.
+name: test
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: test-${{ github.event.pull_request.head.sha || github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # The `browser` project launches Chromium through the playwright provider; without the binary
+      # and its shared libraries the whole `pnpm test` run aborts before the node project reports.
+      - run: pnpm exec playwright install --with-deps chromium
+
+      - run: pnpm test

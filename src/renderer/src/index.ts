@@ -5,13 +5,13 @@ import { wireMonitorPane } from './monitor';
 import { createShell } from './shell';
 import { wireCrossHighlight } from './crossHighlight';
 import { createFlowStrip, type FlowStrip } from './flowStrip';
-import { createLoopPanel } from './loopPanel';
+import { createLoopPanel, type LoopPanel } from './loopPanel';
 import { createFlowInputModal } from './flowInputModal';
 import { wireBootstrapConflict } from './wireBootstrapConflict';
 import { createConfirmDialog } from './confirmDialog';
 import { createErrorDialog } from './errorDialog';
 import { createTerminateConfirm } from './terminateConfirm';
-import { createAttentionCue } from './attentionCue';
+import { createStatusBar } from './statusBar';
 import { revealLoopReadout } from './loopReveal';
 import { createArtifacts, type Artifacts } from './artifacts';
 import { renderMarkdownInto, renderCodeInto } from './viewerRender';
@@ -55,7 +55,7 @@ keyboardUi = createKeyboardSettings(document.getElementById('kb-settings-view')!
 createCliInstall(document.getElementById('cli-install-view')!, { install: () => window.cli.install() });
 createInstallExamples(document.getElementById('install-examples-view')!, {
   preview: () => window.examples.preview(),
-  apply: (overwrite) => window.examples.apply(overwrite),
+  apply: (replace) => window.examples.apply(replace),
 });
 void window.monitor
   .getSettings()
@@ -73,7 +73,6 @@ wireMonitorPane(repo);
 // Forward ref so the shell drives the viewer's full-screen presentation (§20.2) through the
 // contract, not a reach-across; the composition root wires it both ways.
 let artifacts: Artifacts | undefined;
-// Forward ref: the cue's dismiss handler (built first) lands focus via the strip's typed seam below.
 let flowStrip: FlowStrip | undefined;
 const shell = createShell(document.getElementById('app')!, {
   getTheme: () => window.monitor.getSettings().then((s) => s.theme),
@@ -84,15 +83,33 @@ const shell = createShell(document.getElementById('app')!, {
 
 wireCrossHighlight(document.getElementById('app')!);
 
-// Awaiting-human attention cue (§24.2.3 T4): the flow strip feeds it the loop mirror (below); the
-// OS notification's activation pushes flow:revealLoop, answered by revealLoopReadout via Shell seams.
-const attnCueHost = document.getElementById('attn-cue');
-const attentionCue = attnCueHost
-  ? createAttentionCue(attnCueHost, {
-      // WCAG 2.4.3: never strand focus on <body>; the composition root owns this cross-organism fallback.
-      onDismiss: () => {
-        if (!flowStrip?.focusLoopReadout()) shell.focusView('1');
+// WCAG 2.4.3.
+const landFocus = (): void => {
+  if (!flowStrip?.focusLoopReadout()) shell.focusView('1');
+};
+const errorHost = document.getElementById('flow-error-host');
+const errorDialog = errorHost ? createErrorDialog(errorHost, { onFocusLost: landFocus }) : undefined;
+if (errorDialog) {
+  window.flow.onBootstrapError((reason) => errorDialog.render({ title: 'Bootstrap failed', message: reason }));
+  window.flow.onLoopError((reason) => errorDialog.render({ title: 'Loop error', message: reason }));
+}
+
+// §22.3.1.
+const loopPanelHost = document.getElementById('loop-panel');
+let loopPanel: LoopPanel | undefined;
+const statusBarHost = document.getElementById('status-bar');
+const statusBar = statusBarHost
+  ? createStatusBar(statusBarHost, {
+      githubRef: (key, kind, number) => window.flow.githubRef(key, kind, number),
+      openExternal: (url) => window.flow.openExternal(url),
+      setTitle: async (key, text) => void (await window.flow.setTitle(key, text)),
+      onAlertActivate: (opener) => {
+        shell.openLoopPanel(opener);
+        loopPanel?.focusDecision();
       },
+      onError: (reason) => errorDialog?.render({ title: 'Could not save the name', message: reason }),
+      onOpenError: (reason) => errorDialog?.render({ title: 'Could not open link', message: reason }),
+      loopPanelId: loopPanelHost?.id ?? '',
     })
   : undefined;
 window.flow.onRevealLoop(() => revealLoopReadout(shell));
@@ -103,10 +120,9 @@ const flowStripHost = document.getElementById('flow-strip');
 if (flowStripHost) {
   // The strip is the single puller of flow state: it hands the loop mirror to the docked loop panel
   // (§24.2.3 T2) through the contract, not a DOM reach-across. No loop → clear + close.
-  const loopPanelHost = document.getElementById('loop-panel');
   // The panel resolves ticket/PR detail through window.flow, repo-scoped at call time (the cwd may move
   // between renders), and opens links via the validated openExternal seam (§24.2.3 T7).
-  const loopPanel = loopPanelHost
+  loopPanel = loopPanelHost
     ? createLoopPanel(loopPanelHost, {
         githubRef: (kind, number) => {
           const key = repo.repoKey();
@@ -129,11 +145,6 @@ if (flowStripHost) {
     : undefined;
   // Same single-puller contract for the typed-input modal (§24.2.3 T3): on a step-entry prompt the
   // strip hands it the prompt + a submit closure; the modal collects values and submit calls provideInput.
-  // WCAG 2.4.3: a dialog's opener can be detached by a strip re-render while it is open; land focus on a
-  // stable target instead of <body>. The same cross-organism fallback the attention cue uses.
-  const landFocus = (): void => {
-    if (!flowStrip?.focusLoopReadout()) shell.focusView('1');
-  };
   const modalHost = document.getElementById('flow-modal-host');
   const inputModal = modalHost ? createFlowInputModal(modalHost, { onFocusLost: landFocus }) : undefined;
   // Terminate confirmation (#26): a separate destructive modal-dialog organism. The strip hands it the
@@ -141,17 +152,6 @@ if (flowStripHost) {
   // (window.monitor owns the count — the strip stays flow-only, §9.1) and gates the IPC call.
   const confirmHost = document.getElementById('flow-confirm-host');
   const confirmDialog = confirmHost ? createConfirmDialog(confirmHost, { onFocusLost: landFocus }) : undefined;
-  // Bootstrap-failure alert (§26.9): main pushes flow:onBootstrapError when a loop step's async pickup
-  // failed and rolled the flow back. Raise a blocking dialog so the failure is never silent; the strip
-  // re-pulls the rolled-back state via the accompanying flow:onStateChanged push.
-  const errorHost = document.getElementById('flow-error-host');
-  const errorDialog = errorHost ? createErrorDialog(errorHost, { onFocusLost: landFocus }) : undefined;
-  if (errorDialog) {
-    window.flow.onBootstrapError((reason) => errorDialog.render({ title: 'Bootstrap failed', message: reason }));
-    // §26.3/§26.6/D48 — a loop-mechanics failure AFTER bootstrap (a turn-runner error or an un-persistable
-    // gate transition) is surfaced through the same blocking dialog, so no run-time failure is silent.
-    window.flow.onLoopError((reason) => errorDialog.render({ title: 'Loop error', message: reason }));
-  }
   // Bootstrap-conflict confirm (§26.9): main pushes flow:onBootstrapConflict when a re-pickup hit an
   // existing branch under a wipe-and-retry policy. Confirm-first — the wipe is destructive + outward-facing
   // (deletes the branch on origin, closes its PR), so the operator answers a blocking confirm; the answer
@@ -172,8 +172,9 @@ if (flowStripHost) {
         closePanel: () => shell.closeLoopPanel(),
         syncExpanded: () => shell.syncLoopReadout(),
       });
-      attentionCue?.render(loop ?? null, repo.repoKey());
     },
+    onStatusBar: (model, key) => statusBar?.render(model, key),
+    onError: (reason) => errorDialog?.render({ title: 'Flow action failed', message: reason }),
     onPrompt: (prompt, stepName, submit) => inputModal?.render(prompt, stepName, submit),
     onTerminate: confirmDialog
       ? createTerminateConfirm({ todoList: window.monitor.todoList, dialog: confirmDialog })

@@ -14,6 +14,17 @@ export function captureFocusReturn(el: HTMLElement): () => void {
   };
 }
 
+/** Capture whether focus is inside `container`, and return a restorer to run after its subtree is
+ *  rebuilt: it focuses the element `resolve()` yields (resolved at restore time, so it may be freshly
+ *  built) only if focus was inside at capture and has not since moved away (WCAG 2.4.3). */
+export function captureSubtreeFocus(container: HTMLElement): (resolve: () => HTMLElement | null | undefined) => void {
+  const doc = container.ownerDocument;
+  const had = container.contains(doc.activeElement);
+  return (resolve) => {
+    if (had && (doc.activeElement === doc.body || container.contains(doc.activeElement))) resolve()?.focus();
+  };
+}
+
 /** Look up a required element by id; throw naming the id if it is absent. */
 export function requireElement<T extends HTMLElement = HTMLElement>(id: string, doc: Document = document): T {
   const el = doc.getElementById(id);

@@ -12,6 +12,7 @@ import type { FlowLoopView, FlowRefs, GithubRef, GithubRefKind } from '../../sha
 import { hasFlowRefs } from '../../shared/ipc';
 import { githubHttpsHref } from '../../shared/githubUrl';
 import { spillTone } from './loopStatus';
+import { captureSubtreeFocus } from './dom';
 
 /** Display label for a gate `human_option` — matches loop-flow.html's "approve · changes · impasse"
  *  (the verbose `request-changes` reads as `changes` in the compact options row). */
@@ -46,8 +47,14 @@ function truncateBody(body: string): string {
 
 export interface LoopPanel {
   /** Repaint from the current flow refs + loop mirror; both `null`/absent clears the host. `title`
-   *  identifies the step the panel mirrors (the rail step name). */
+   *  identifies the step the panel mirrors (the rail step name). A clearing call (both absent) must be
+   *  preceded by moving focus out of the host — the close-before-clear contract `syncDockedPanel` holds
+   *  (UI §4.5) — so emptying never strands focus on `<body>`. */
   render(loop: FlowLoopView | null, title: string, refs?: FlowRefs): void;
+  /** Move focus onto the gate decision, recovery Retry, or stable Close entry, returning whether one was
+   *  there to focus. The panel owns this so a sibling never reaches into its markup for the control
+   *  (§26.6 / §26.3 D48; WCAG 2.4.3). */
+  focusDecision(): boolean;
   /** Clean teardown (UI-STANDARDS). */
   dispose(): void;
 }
@@ -129,14 +136,6 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
     body.append(retryBtn);
   };
 
-  /** True when keyboard focus is inside the panel. A forced rebuild captures this, then `restoreFocus`
-   *  lands focus back on the close control so it is never stranded on <body> (WCAG 2.4.3) — and never
-   *  pulled in when it was elsewhere. */
-  const focusInPanel = (): boolean => doc.activeElement instanceof HTMLElement && host.contains(doc.activeElement);
-  const restoreFocus = (had: boolean): void => {
-    if (had) host.querySelector<HTMLElement>('[data-loop-close]')?.focus();
-  };
-
   /** A ticket/PR ref row. `retry` re-attempts the best-effort `gh` fetch (no-op once resolved); the row
    *  shows the bare number until the title/body/link fill in. */
   function refRow(label: string, kind: GithubRefKind, number: number): { el: HTMLElement; retry: () => void; resolved: () => boolean } {
@@ -216,7 +215,7 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
         return;
       }
       if (sig === lastSig) return; // both empty — nothing to do
-      const hadFocus = focusInPanel();
+      const restoreFocus = captureSubtreeFocus(host);
       host.replaceChildren();
       lastSig = sig;
       liveLoop = null;
@@ -266,7 +265,7 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
       }
 
       if (!loop) {
-        restoreFocus(hadFocus);
+        restoreFocus(() => host.querySelector<HTMLElement>('[data-loop-close]'));
         return;
       }
 
@@ -339,7 +338,14 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
       }
 
       host.append(body);
-      restoreFocus(hadFocus);
+      restoreFocus(() => host.querySelector<HTMLElement>('[data-loop-close]'));
+    },
+    focusDecision() {
+      const action =
+        host.querySelector<HTMLElement>('[data-gate-option], [data-loop-retry]') ??
+        host.querySelector<HTMLElement>('[data-loop-close]');
+      action?.focus();
+      return action !== null;
     },
     dispose() {
       host.replaceChildren();

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { GATE_DECISION_OPTIONS, SESSION_ID } from '../../src/shared/ipc';
+import { TITLE_MAX } from '../../src/shared/statusBar';
 import {
   isValidCapture,
   isValidCaptureLast,
@@ -8,6 +9,7 @@ import {
   isValidDismissAll,
   isValidFlowRequest,
   isValidFlowProvideInput,
+  isValidFlowSetTitle,
   isValidFlowGithubRef,
   isValidFlowGateDecision,
   isValidOpenExternal,
@@ -129,6 +131,25 @@ describe('IPC payload validation (§6 — renderer-supplied input is untrusted)'
     arr.sessionId = sid;
     arr.repoKey = '/repo';
     expect(isValidFlowRequest(arr)).toBe(false);
+  });
+
+  it('accepts a flow:setTitle carrying a string title, rejecting bad shapes (§22.3.1)', () => {
+    expect(isValidFlowSetTitle({ sessionId: sid, repoKey: '/repo', title: 'Refactor the shadow parser' })).toBe(true);
+    expect(isValidFlowSetTitle({ sessionId: sid, repoKey: '/repo', title: '' })).toBe(true); // a blank CLEARS the name
+    expect(isValidFlowSetTitle({ sessionId: sid, repoKey: '/repo', title: 176 })).toBe(false); // not a string
+    // The name lands in a YAML file re-read and re-parsed on every state query, so an unbounded paste
+    // would make every later repaint parse it again (CWE-400).
+    expect(isValidFlowSetTitle({ sessionId: sid, repoKey: '/repo', title: 'x'.repeat(TITLE_MAX) })).toBe(true);
+    expect(isValidFlowSetTitle({ sessionId: sid, repoKey: '/repo', title: 'x'.repeat(TITLE_MAX + 1) })).toBe(false);
+    expect(isValidFlowSetTitle({ sessionId: sid, repoKey: '/repo' })).toBe(false); // title required
+    expect(isValidFlowSetTitle({ sessionId: sid, repoKey: 'relative', title: 'x' })).toBe(false); // unsafe key
+    expect(isValidFlowSetTitle({ sessionId: 'other', repoKey: '/repo', title: 'x' })).toBe(false);
+    expect(isValidFlowSetTitle(null)).toBe(false);
+    const arr: any = [];
+    arr.sessionId = sid;
+    arr.repoKey = '/repo';
+    arr.title = 'x';
+    expect(isValidFlowSetTitle(arr)).toBe(false); // arrays are not records
   });
 
   it('accepts a flow:provideInput with a string→string values map, rejecting bad shapes (§24.2.3 T3)', () => {

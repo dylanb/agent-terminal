@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createFlowMachine, type FlowLoad } from '../../src/main/flow';
@@ -10,6 +10,154 @@ import { mkGate } from '../helpers/loopGate';
 // done terminal). The observable contract is the state view and thrown errors on illegal transitions.
 
 const LOAD: FlowLoad = { ok: true, definition: { name: 'f', steps: [{ id: 'step-1', kind: 'manual' }] }, flowDir: '/tmp/f/.agent-terminal' };
+
+/** An in-memory store over a caller-owned progression slot. `write` replaces the whole document, as the
+ *  real store's does, so a name absent from the written state is a name cleared — not one retained. */
+const memStore = (read: () => PersistedFlowState | null, set: (s: PersistedFlowState) => void): FlowStateStore => {
+  let named: string | null = null;
+  return {
+    read,
+    write: (s) => {
+      named = s.title ?? null;
+      set(s);
+    },
+    readTitle: () => named,
+    writeTitle: (t) => void (named = t),
+  };
+};
+
+describe('the user title the status bar shows (§22.3.1)', () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'flow-title-'));
+  });
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('surfaces the persisted title on the view', () => {
+    const store = createFlowStateStore(dir);
+    store.write({ step: 'step-1', status: 'in_progress', title: 'Refactor the shadow parser' });
+    expect(createFlowMachine(LOAD, store).state().userTitle).toBe('Refactor the shadow parser');
+  });
+
+  it('reports no title for a flow the user never named', () => {
+    expect(createFlowMachine(LOAD, createFlowStateStore(dir)).state().userTitle).toBeUndefined();
+  });
+
+  it('keeps the title across every transition, so clicking Start never destroys the name', () => {
+    const store = createFlowStateStore(dir);
+    store.write({ step: 'step-1', status: 'not_started', title: 'Refactor the shadow parser' });
+    const flow = createFlowMachine(LOAD, store);
+    expect(flow.start().userTitle).toBe('Refactor the shadow parser');
+    expect(flow.advance().userTitle).toBe('Refactor the shadow parser');
+    expect(store.read()?.title).toBe('Refactor the shadow parser');
+  });
+
+  it('persists a name the user typed', () => {
+    const store = createFlowStateStore(dir);
+    const flow = createFlowMachine(LOAD, store);
+    expect(flow.setTitle('Refactor the shadow parser').userTitle).toBe('Refactor the shadow parser');
+    expect(store.readTitle()).toBe('Refactor the shadow parser');
+    expect(createFlowMachine(LOAD, store).state().userTitle).toBe('Refactor the shadow parser'); // survives relaunch
+  });
+
+  it('names a directory whose flow never loaded — the case where nothing else can name it', () => {
+    // Every directory without a flow.yaml is a load-error view, and it has no PR and no ticket either,
+    // so the user title is the only name it can ever have (§22.3.1).
+    const store = createFlowStateStore(dir);
+    const flow = createFlowMachine({ ok: false, error: 'no flow.yaml' }, store);
+    expect(flow.setTitle('Spike the parser').userTitle).toBe('Spike the parser');
+    expect(store.readTitle()).toBe('Spike the parser');
+    expect(createFlowMachine({ ok: false, error: 'no flow.yaml' }, store).state().userTitle).toBe('Spike the parser');
+  });
+
+  it('names a broken flow without clobbering the progression a good flow.yaml left behind', () => {
+    const store = createFlowStateStore(dir);
+    store.write({ step: 'step-1', status: 'in_progress' });
+    createFlowMachine({ ok: false, error: 'bad yaml' }, store).setTitle('Spike the parser');
+    expect(store.read()).toEqual({ step: 'step-1', status: 'in_progress', title: 'Spike the parser' });
+  });
+
+  it('keeps every other transition inert on a flow that failed to load', () => {
+    const store = createFlowStateStore(dir);
+    store.write({ step: 'step-1', status: 'in_progress' });
+    const flow = createFlowMachine({ ok: false, error: 'bad yaml' }, store);
+    flow.start();
+    flow.advance();
+    flow.terminate();
+    expect(store.read()).toEqual({ step: 'step-1', status: 'in_progress' });
+  });
+
+  it('merges the name onto the progression on disk, not onto a stale snapshot of it', () => {
+    // The machine is long-lived and the editor can sit open indefinitely; an advance that landed
+    // out-of-band must not be rewound by the act of naming the work.
+    const steps: FlowLoad = {
+      ok: true,
+      definition: { name: 'f', steps: [{ id: 'step-1', kind: 'manual' }, { id: 'step-3', kind: 'manual' }] },
+      flowDir: '/tmp/f/.agent-terminal',
+    };
+    const store = createFlowStateStore(dir);
+    const flow = createFlowMachine(steps, store);
+    flow.start();
+    createFlowStateStore(dir).write({ step: 'step-3', status: 'in_progress' }); // an external advance
+    flow.setTitle('Refactor the shadow parser');
+    expect(store.read()).toEqual({ step: 'step-3', status: 'in_progress', title: 'Refactor the shadow parser' });
+  });
+
+  it('refuses a title update when the progression has unknown fields and preserves its bytes', () => {
+    const file = join(dir, '.agent-terminal', 'flow-state.yaml');
+    const store = createFlowStateStore(dir);
+    store.write({ step: 'step-1', status: 'in_progress' });
+    const before = 'step: step-1\nstatus: in_progress\nfuture_extension: keep-me\n';
+    writeFileSync(file, before);
+
+    expect(() => createFlowMachine(LOAD, store).setTitle('Named')).toThrow(/unrecognized/i);
+    expect(readFileSync(file, 'utf8')).toBe(before);
+  });
+
+  it('does not go on holding a name whose write was refused', () => {
+    // A machine that keeps a name it failed to persist commits it silently on the next transition, long
+    // after the UI told the user the write failed.
+    const store = createFlowStateStore(dir);
+    let fail = true;
+    const flaky: FlowStateStore = {
+      ...store,
+      write: (s: PersistedFlowState) => {
+        if (fail) throw new Error('EROFS');
+        store.write(s);
+      },
+      writeTitle: (t: string | null) => {
+        if (fail) throw new Error('EROFS');
+        store.writeTitle(t);
+      },
+    };
+    const flow = createFlowMachine(LOAD, flaky);
+    expect(() => flow.setTitle('never lands')).toThrow('EROFS');
+    fail = false;
+    // No state() in between: a hydrate would mask the stale name. The very next transition is what
+    // would smuggle it onto disk, long after the UI told the user the write failed.
+    flow.start();
+    expect(store.read()?.title).toBeUndefined();
+  });
+
+  it('clears the name when the user empties it, rather than persisting a blank', () => {
+    const store = createFlowStateStore(dir);
+    const flow = createFlowMachine(LOAD, store);
+    flow.setTitle('Refactor the shadow parser');
+    expect(flow.setTitle('   ').userTitle).toBeUndefined();
+    expect(store.read()?.title).toBeUndefined();
+  });
+
+  it('keeps the title when the flow is terminated — the name outlives the run it named', () => {
+    const store = createFlowStateStore(dir);
+    store.write({ step: 'step-1', status: 'in_progress', title: 'Refactor the shadow parser' });
+    const flow = createFlowMachine(LOAD, store);
+    const after = flow.terminate();
+    expect(after.status).toBe('not_started');
+    expect(after.userTitle).toBe('Refactor the shadow parser');
+  });
+});
 
 describe('flow state machine (§24.2.2 S1)', () => {
   it('begins not_started at position 1/1 with a named step', () => {
@@ -962,7 +1110,10 @@ describe('flow state machine — state() reflects external disk changes (§19.1)
 
   it('re-reads the persisted step/status from the store on every state() query', () => {
     let stored: PersistedFlowState | null = { step: 'groom', status: 'in_progress' };
-    const store: FlowStateStore = { read: () => stored, write: (s) => void (stored = s) };
+    const store = memStore(
+      () => stored,
+      (s) => (stored = s),
+    );
     const flow = createFlowMachine(THREE_STEP, store);
     expect(flow.state().stepName).toBe('groom');
     stored = { step: 'implement', status: 'in_progress' }; // external advance on disk
@@ -972,7 +1123,10 @@ describe('flow state machine — state() reflects external disk changes (§19.1)
 
   it('reflects a flow-state.yaml deleted out from under it as not_started', () => {
     let stored: PersistedFlowState | null = { step: 'implement', status: 'in_progress' };
-    const store: FlowStateStore = { read: () => stored, write: (s) => void (stored = s) };
+    const store = memStore(
+      () => stored,
+      (s) => (stored = s),
+    );
     const flow = createFlowMachine(THREE_STEP, store);
     expect(flow.state().status).toBe('in_progress');
     stored = null; // file removed/cleared on disk
