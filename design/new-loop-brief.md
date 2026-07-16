@@ -118,8 +118,8 @@ Compatibility with the old Go `agent-loop` is **not** a constraint. Divergence i
 4. **Cost meter → refactor, not reuse.** It must price the **entire run from flow start to terminate** — work turn, every reviewer subagent, the consolidator, the human's polish conversation, retries — not per-iteration segments rolled up. It remains the evidence for the #59 claim.
 5. **#59 → close it; open an epic.** Its non-goals forbid most of what this design does, so it is the wrong ticket to carry the work. It closes citing the rebuild, and its cost criterion becomes an acceptance criterion of the epic's cost-meter slice.
 
-## 9. New decisions taken while drafting §26
+## 9. New decisions taken while drafting §27
 
 - **The consolidator chooses the next round's roster** (from the LoopDef's catalog; round 1 runs all of it). This **replaces the footprint skip-optimization outright** — instead of hashing `plan.md` and diffing `last_seen_files` to guess who can be pruned, the actor that just read the round's report decides who needs to look next.
-- **The fixer marks its own homework** — recorded as the design's load-bearing accepted risk (§26.5/N5a). The consolidator sees only the report, so nothing in the loop can catch an issue the fixer declined to write down. It is bounded by the full-roster accounting rule, the versioned report series, and the human gate.
+- **The fixer marks its own homework** — recorded as the design's load-bearing accepted risk (§27.5/N5a). The consolidator sees only the report, so nothing in the loop can catch an issue the fixer declined to write down. It is bounded by the full-roster accounting rule, the versioned report series, and the human gate.
 - **CI has no waiter.** A reviewer that cares about check state **pulls it with a tool**, like it pulls everything else.
