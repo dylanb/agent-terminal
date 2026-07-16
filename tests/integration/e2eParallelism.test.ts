@@ -3,12 +3,10 @@ import { describe, expect, it } from 'vitest';
 import { resolveE2eWorkers } from '../../playwright.workers';
 import config from '../../playwright.config';
 
-// The e2e suite runs serially in GitHub CI (full-Electron tests flake under concurrency on a shared
-// runner) but parallel on a dev machine. The gate is GITHUB_ACTIONS, not CI, because the Podman
-// harness (docs/e2e-podman.md) — the canonical local e2e — also sets CI; gating on CI would drag it
-// back to serial. resolveE2eWorkers is the pure decision behind config.workers; pinning it with
-// concrete (env, cores) pairs exercises the cap/floor branches and the CI-vs-GITHUB_ACTIONS split
-// deterministically, regardless of the machine the suite happens to run on.
+// resolveE2eWorkers (playwright.workers.ts) is the pure decision behind config.workers, and that
+// module documents why the gate is GITHUB_ACTIONS rather than CI. Pinning it with concrete
+// (env, cores) pairs exercises the cap/floor branches and the CI-vs-GITHUB_ACTIONS split
+// deterministically, whatever machine the suite happens to run on.
 describe('resolveE2eWorkers', () => {
   it('is serial under GitHub Actions regardless of core count', () => {
     expect(resolveE2eWorkers({ GITHUB_ACTIONS: 'true' }, 32)).toBe(1);
@@ -16,8 +14,6 @@ describe('resolveE2eWorkers', () => {
   });
 
   it('stays parallel when only CI is set (the Podman harness case)', () => {
-    // The whole point of the change: CI alone must NOT force serial, or the canonical local run
-    // (which sets CI, not GITHUB_ACTIONS) would lose its parallelism.
     expect(resolveE2eWorkers({ CI: 'true' }, 8)).toBe(4);
   });
 
