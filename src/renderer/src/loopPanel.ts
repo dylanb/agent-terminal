@@ -125,9 +125,11 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
   /** §26.3/D48 — recovery from the error stop: re-drive the failed turn (start Claude, then Retry) so an
    *  errored loop is never a UI dead-end. Error-only + service-gated (an un-wired control would be inert,
    *  WCAG 4.1.2). */
-  const syncRetry = (body: HTMLElement, status: string): void => {
+  const syncRetry = (body: HTMLElement, loop: FlowLoopView): void => {
     const existing = body.querySelector<HTMLElement>('[data-loop-retry]');
-    if (status !== 'error' || !deps.retryTurn) {
+    // Retry re-drives the errored TURN (§26.3/D48); a run-less failure (no iteration — a §27 def that
+    // never resolved) has no turn to re-drive, so rendering Retry would be an inert affordance (WCAG 4.1.2).
+    if (loop.status !== 'error' || loop.iteration === undefined || !deps.retryTurn) {
       existing?.remove();
       return;
     }
@@ -207,7 +209,7 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
         if (liveLoop.iterVal.textContent !== iter) liveLoop.iterVal.textContent = iter;
       }
       syncReasonRow(liveLoop.ldl, liveLoop.reasonAnchor, loop.errorReason);
-      syncRetry(liveLoop.body, loop.status);
+      syncRetry(liveLoop.body, loop);
     }
     for (const r of refRows) if (!r.resolved()) r.retry();
   }
@@ -338,7 +340,7 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
         body.append(gate);
       }
 
-      syncRetry(body, loop.status);
+      syncRetry(body, loop);
 
       // §26.3/D47a(c) — the human-in-the-loop escape hatch: advance a turn whose automatic done-signal
       // the orchestrator missed, without editing files. Present on a loop step only when the composition
