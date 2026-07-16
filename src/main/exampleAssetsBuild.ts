@@ -5,7 +5,7 @@
 
 import { copyFileSync, mkdirSync, readdirSync } from 'node:fs';
 import path from 'node:path';
-import { resolveExampleCommandsDir, resolveExampleFlowDir, resolveExampleLoopsDir } from './exampleAssets';
+import { resolveExampleCommandsDir, resolveExampleFlowDir, resolveExampleLoopsDir, resolveExampleLoopsV2Dir } from './exampleAssets';
 import { skillNameConflicts } from './exampleSkills';
 
 /** CWE-59: `copyFileSync` FOLLOWS a symlink and materializes the target's bytes as a regular file, so a
@@ -37,6 +37,12 @@ export function copyExampleLoops(rootDir: string, mainOutDir: string): string {
   }
   const dest = resolveExampleLoopsDir({ packaged: false, appPath: mainOutDir });
   copyTree(src, dest);
+  return dest;
+}
+
+export function copyExampleLoopsV2(rootDir: string, mainOutDir: string): string {
+  const dest = resolveExampleLoopsV2Dir({ packaged: false, appPath: mainOutDir });
+  copyTree(path.join(rootDir, 'example', 'loops-v2'), dest);
   return dest;
 }
 

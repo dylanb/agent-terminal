@@ -22,6 +22,9 @@ extraResources:
     to: example/flow
   - from: example/loops
     to: example/loops
+  # The §27 (v2) def tree — the app-bundled resolution tier read by resolveExampleLoopsV2Dir.
+  - from: example/loops-v2
+    to: example/loops-v2
   - from: example/commands
     to: example/commands
 mac:

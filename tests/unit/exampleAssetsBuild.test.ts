@@ -2,10 +2,11 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { copyExampleFlow, copyExampleLoops, copyExampleCommands } from '../../src/main/exampleAssetsBuild';
+import { copyExampleFlow, copyExampleLoops, copyExampleLoopsV2, copyExampleCommands } from '../../src/main/exampleAssetsBuild';
 import {
   resolveExampleFlowDir,
   resolveExampleLoopsDir,
+  resolveExampleLoopsV2Dir,
   resolveExampleCommandsDir,
 } from '../../src/main/exampleAssets';
 
@@ -35,6 +36,11 @@ beforeEach(() => {
   const cmdDir = path.join(root, 'example', 'commands');
   mkdirSync(cmdDir, { recursive: true });
   writeFileSync(path.join(cmdDir, 'groom-ticket.md'), '# groom\n');
+
+  const v2Dir = path.join(root, 'example', 'loops-v2', 'plan-loop');
+  mkdirSync(path.join(v2Dir, 'charter'), { recursive: true });
+  writeFileSync(path.join(v2Dir, 'plan-loop.yaml'), 'version: v2\nname: plan-loop\n');
+  writeFileSync(path.join(v2Dir, 'charter', 'principal.md'), '# principal\n');
 });
 
 afterEach(() => {
@@ -79,6 +85,15 @@ describe('copyExampleLoops — places the bundled definitions where the unpackag
     expect(() => copyExampleLoops(root, out)).toThrow(/review-intent/);
     expect(() => copyExampleLoops(root, out)).toThrow(/plan-loop/);
     expect(() => copyExampleLoops(root, out)).toThrow(/impl-loop/);
+  });
+});
+
+describe('copyExampleLoopsV2 — places the bundled §27 tree where the unpackaged resolver reads it', () => {
+  it('copies example/loops-v2 to the path resolveExampleLoopsV2Dir reads for that out dir', () => {
+    const dest = copyExampleLoopsV2(root, out);
+    expect(dest).toBe(resolveExampleLoopsV2Dir({ packaged: false, appPath: out }));
+    expect(readFileSync(path.join(dest, 'plan-loop', 'plan-loop.yaml'), 'utf8')).toContain('version: v2');
+    expect(readFileSync(path.join(dest, 'plan-loop', 'charter', 'principal.md'), 'utf8')).toContain('# principal');
   });
 });
 
