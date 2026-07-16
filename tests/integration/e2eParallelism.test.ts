@@ -1,36 +1,49 @@
 import { availableParallelism } from 'node:os';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
+import { resolveE2eWorkers } from '../../playwright.workers';
+import config from '../../playwright.config';
 
 // The e2e suite runs serially in GitHub CI (full-Electron tests flake under concurrency on a shared
-// runner) but parallel on a dev machine, where there is headroom. The gate is GITHUB_ACTIONS, not CI,
-// because the Podman harness (docs/e2e-podman.md) also sets CI — gating on CI would drag local Podman
-// runs back to serial. These pins hold that split: swap the gate to CI, drop the cap, or forget
-// fullyParallel and one of them fails.
-async function loadPlaywrightConfig() {
-  vi.resetModules();
-  return (await import('../../playwright.config')).default;
-}
-
-describe('e2e Playwright parallelism', () => {
-  const original = process.env.GITHUB_ACTIONS;
-  afterEach(() => {
-    if (original === undefined) delete process.env.GITHUB_ACTIONS;
-    else process.env.GITHUB_ACTIONS = original;
+// runner) but parallel on a dev machine. The gate is GITHUB_ACTIONS, not CI, because the Podman
+// harness (docs/e2e-podman.md) — the canonical local e2e — also sets CI; gating on CI would drag it
+// back to serial. resolveE2eWorkers is the pure decision behind config.workers; pinning it with
+// concrete (env, cores) pairs exercises the cap/floor branches and the CI-vs-GITHUB_ACTIONS split
+// deterministically, regardless of the machine the suite happens to run on.
+describe('resolveE2eWorkers', () => {
+  it('is serial under GitHub Actions regardless of core count', () => {
+    expect(resolveE2eWorkers({ GITHUB_ACTIONS: 'true' }, 32)).toBe(1);
+    expect(resolveE2eWorkers({ GITHUB_ACTIONS: 'true', CI: 'true' }, 8)).toBe(1);
   });
 
-  it('runs serially under GitHub Actions, whatever the runner core count', async () => {
-    process.env.GITHUB_ACTIONS = 'true';
-    const config = await loadPlaywrightConfig();
-    expect(config.workers).toBe(1);
+  it('stays parallel when only CI is set (the Podman harness case)', () => {
+    // The whole point of the change: CI alone must NOT force serial, or the canonical local run
+    // (which sets CI, not GITHUB_ACTIONS) would lose its parallelism.
+    expect(resolveE2eWorkers({ CI: 'true' }, 8)).toBe(4);
   });
 
-  it('parallelizes on a dev machine at half the cores, capped at 6', async () => {
-    delete process.env.GITHUB_ACTIONS;
-    const config = await loadPlaywrightConfig();
-    // fullyParallel is what lets those workers split a single spec — required for the speedup.
+  it('parallelizes at half the cores off a dev machine', () => {
+    expect(resolveE2eWorkers({}, 8)).toBe(4);
+    expect(resolveE2eWorkers({}, 7)).toBe(4);
+  });
+
+  it('caps at 6 workers however many cores there are', () => {
+    expect(resolveE2eWorkers({}, 12)).toBe(6);
+    expect(resolveE2eWorkers({}, 16)).toBe(6);
+    expect(resolveE2eWorkers({}, 64)).toBe(6);
+  });
+
+  it('never drops below 1 worker on a low-core machine', () => {
+    expect(resolveE2eWorkers({}, 2)).toBe(1);
+    expect(resolveE2eWorkers({}, 1)).toBe(1);
+  });
+});
+
+describe('playwright.config wiring', () => {
+  it('delegates workers to resolveE2eWorkers', () => {
+    expect(config.workers).toBe(resolveE2eWorkers(process.env, availableParallelism()));
+  });
+
+  it('enables fullyParallel so workers split a single spec', () => {
     expect(config.fullyParallel).toBe(true);
-    const expected = Math.min(6, Math.max(1, Math.ceil(availableParallelism() / 2)));
-    expect(config.workers).toBe(expected);
-    expect(config.workers).toBeLessThanOrEqual(6);
   });
 });
