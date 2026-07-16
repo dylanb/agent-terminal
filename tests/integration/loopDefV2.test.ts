@@ -240,6 +240,77 @@ describe('resolveLoopDefV2 — artifact/input/output confinement to the artifact
   });
 });
 
+describe('resolveLoopDefV2 — structural field rejections surface the offending field (AC 6)', () => {
+  const cases: Array<{ what: string; mutate: (d: string) => string; field: string }> = [
+    { what: 'boundary mode neither clear nor compact', mutate: (d) => d.replace('mode: clear', 'mode: shrink'), field: 'mode' },
+    { what: 'compact boundary missing its message', mutate: (d) => d.replace('    message: Keep the plan and the ticket.\n', ''), field: 'message' },
+    { what: 'reviewer tools not a list of strings', mutate: (d) => d.replace('tools: [Read, Grep, Glob]', 'tools: not-a-list'), field: 'tools' },
+    { what: 'reviewers not a list', mutate: (d) => d.replace(/reviewers:\n(?:.*\n)*?consolidator:/, 'reviewers: nope\nconsolidator:'), field: 'reviewers' },
+    { what: 'boundaries not a list', mutate: (d) => d.replace(/boundaries:\n(?:.*\n)*?report:/, 'boundaries: nope\nreport:'), field: 'boundaries' },
+    { what: 'gate not a list', mutate: (d) => d.replace(/gate:\n(?:.*\n)*?pickup:/, 'gate: nope\npickup:'), field: 'gate' },
+    { what: 'gate side_effects not a list', mutate: (d) => d.replace('    side_effects:\n      - kind: gh\n        action: publish-pr-body', '    side_effects: nope'), field: 'side_effects' },
+    { what: 'inputs not a list', mutate: (d) => d.replace(/inputs:\n(?:.*\n)*?outputs:/, 'inputs: nope\noutputs:'), field: 'input' },
+    { what: 'outputs not a list', mutate: (d) => d.replace(/outputs:\n(?:.*\n)*$/, 'outputs: nope\n'), field: 'output' },
+    { what: 'work not a mapping', mutate: (d) => d.replace(/work:\n  recipe: prompts\/work.md\n  artifact: plan/, 'work: scalar'), field: 'work' },
+    { what: 'consolidator not a mapping', mutate: (d) => d.replace('consolidator:\n  recipe: prompts/consolidate.md', 'consolidator: scalar'), field: 'consolidator' },
+    { what: 'report not a mapping', mutate: (d) => d.replace('report:\n  sections: [summary, findings, disposition]', 'report: scalar'), field: 'report' },
+    { what: 'report sections non-list', mutate: (d) => d.replace('sections: [summary, findings, disposition]', 'sections: scalar'), field: 'sections' },
+    { what: 'pickup not a mapping', mutate: (d) => d.replace('pickup:\n  initial_status: planning\n  branch_template: plan-loop/issue-{issue}', 'pickup: scalar'), field: 'pickup' },
+    { what: 'pickup missing initial_status', mutate: (d) => d.replace('  initial_status: planning\n', ''), field: 'initial_status' },
+    { what: 'pickup missing branch_template', mutate: (d) => d.replace('  branch_template: plan-loop/issue-{issue}\n', ''), field: 'branch_template' },
+    { what: 'exec not a mapping', mutate: (d) => d + 'exec: scalar\n', field: 'exec' },
+  ];
+  for (const { what, mutate, field } of cases) {
+    it(`rejects when ${what}, naming the field`, () => {
+      plantDef(join(appDir, 'loops-v2'), 'plan-loop', mutate(VALID_DEF));
+      const r = resolveLoopDefV2('plan-loop', { tiers: tiers(), repoDir });
+      expect(r.ok, what).toBe(false);
+      if (!r.ok) expect(r.reason.toLowerCase(), what).toContain(field);
+    });
+  }
+});
+
+describe('resolveLoopDefV2 — one executable surface (§27.8, Parnas / CWE-829)', () => {
+  it('rejects a gate side-effect of kind exec so the top-level exec field is the sole executable surface', () => {
+    const smuggled = VALID_DEF.replace('      - kind: gh\n        action: publish-pr-body', '      - kind: exec\n        program: rm-rf');
+    plantDef(join(appDir, 'loops-v2'), 'plan-loop', smuggled);
+    const r = resolveLoopDefV2('plan-loop', { tiers: tiers(), repoDir });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason.toLowerCase()).toContain('exec');
+  });
+
+  it('accepts non-exec gate side-effect kinds (the open gh vocabulary)', () => {
+    plantDef(join(appDir, 'loops-v2'), 'plan-loop', VALID_DEF);
+    const r = resolveLoopDefV2('plan-loop', { tiers: tiers(), repoDir });
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.def.gate[0].sideEffects[0].kind).toBe('gh');
+  });
+});
+
+describe('resolveLoopDefV2 — name is resolver-assigned, not forgeable (contract symmetry with origin)', () => {
+  it('rejects a def whose declared name disagrees with its filename-derived name', () => {
+    plantDef(join(appDir, 'loops-v2'), 'plan-loop', VALID_DEF.replace('name: plan-loop', 'name: impl-loop'));
+    const r = resolveLoopDefV2('plan-loop', { tiers: tiers(), repoDir });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason.toLowerCase()).toContain('name');
+  });
+
+  it('accepts a def whose declared name matches its filename-derived name', () => {
+    plantDef(join(appDir, 'loops-v2'), 'plan-loop', VALID_DEF);
+    const r = resolveLoopDefV2('plan-loop', { tiers: tiers(), repoDir });
+    expect(r.ok && r.def.name).toBe('plan-loop');
+  });
+});
+
+describe('resolveLoopDefV2 — artifact paths resolve inside the artifacts subtree (natural relative paths)', () => {
+  it('accepts a bare relative output path with no artifacts/ prefix', () => {
+    plantDef(join(appDir, 'loops-v2'), 'plan-loop', VALID_DEF.replace('path: artifacts/plan.md', 'path: plan.md'));
+    const r = resolveLoopDefV2('plan-loop', { tiers: tiers(), repoDir });
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.def.outputs[0].path).toContain(['loop', 'artifacts', 'plan.md'].join(sep));
+  });
+});
+
 describe('resolveLoopDefV2 — tier precedence + schema independence (AC 7)', () => {
   it('resolves no def and surfaces a reason when the name is nowhere in either tier', () => {
     const r = resolveLoopDefV2('nowhere-loop', { tiers: tiers(), repoDir });
