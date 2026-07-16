@@ -44,6 +44,22 @@ describe('createLoopNotifier (§24.2.3 T4)', () => {
     expect(notify.mock.calls[0][0].body).toContain('9');
   });
 
+  it('omits the iteration segment from the body when no round has run (a §27 run-less failure)', () => {
+    const { notifier, notify } = harness();
+    const runLessFailure: FlowStateView = {
+      stepName: 'plan',
+      steps: ['plan'],
+      position: 1,
+      total: 1,
+      status: 'in_progress',
+      loop: { status: 'error', pr: null, branch: null, ready: false, humanNeeded: true },
+    };
+    notifier.observe(REPO, runLessFailure);
+    expect(notify).toHaveBeenCalledTimes(1);
+    expect(notify.mock.calls[0][0].body).toContain('error');
+    expect(notify.mock.calls[0][0].body).not.toContain('iter');
+  });
+
   it('bounds length and strips control characters from a foreign status before the OS notification body', () => {
     // CWE-117: `status` is read from an arbitrary repo's untrusted `.agent-loop/state.yaml` (§16.3),
     // so it must reach the OS notification sink length-bounded and free of control characters.

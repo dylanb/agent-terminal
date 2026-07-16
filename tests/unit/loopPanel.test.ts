@@ -269,6 +269,29 @@ describe('docked loop panel (§24.2.3 T2)', () => {
     expect(host.querySelector('[data-gate-option]')).toBeNull();
   });
 
+  it('renders a §27 run-less def\'s gate options display-only: the read-only row, but NO decision buttons (AC 1)', () => {
+    const panel = createLoopPanel(host, {
+      githubRef: () => Promise.resolve(null),
+      openExternal: () => {},
+      gateDecision: () => {},
+    });
+    // A §27 run-less view: gate options present but not actionable, no round has run.
+    panel.render(loop({ status: 'not-started', actionable: false, gateOptions: ['approve', 'request-changes'], iteration: undefined }), 'plan');
+    expect(row('gate options')?.querySelector('.lv')?.textContent).toBe('approve · changes');
+    expect(host.querySelector('[data-gate-option]')).toBeNull();
+  });
+
+  it('omits the iteration row when no round has run (absent iteration is not "0", AC 1)', () => {
+    createLoopPanel(host).render(loop({ status: 'not-started', actionable: false, gateOptions: ['approve'], iteration: undefined }), 'plan');
+    expect(row('iteration')).toBeUndefined();
+  });
+
+  it('surfaces a def-failure reason with no iteration row and a route off the step (AC 6)', () => {
+    createLoopPanel(host).render(loop({ status: 'error', errorReason: 'no §27 def named plan-loop in any tier', iteration: undefined }), 'plan');
+    expect(row('reason')?.querySelector('.lv')?.textContent).toBe('no §27 def named plan-loop in any tier');
+    expect(row('iteration')).toBeUndefined();
+  });
+
   it('shows no "mark turn complete" control when there is no loop step (refs-only panel)', () => {
     const panel = createLoopPanel(host, {
       githubRef: () => Promise.resolve(null),
