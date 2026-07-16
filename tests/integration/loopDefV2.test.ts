@@ -94,9 +94,10 @@ describe('resolveLoopDefV2 — parse round-trip (§27.8, AC 3)', () => {
     expect(d.boundaries[1]).toMatchObject({ boundary: 'pre-review', mode: 'compact', message: 'Keep the plan and the ticket.' });
     // report structure
     expect(d.report.sections).toEqual(['summary', 'findings', 'disposition']);
-    // gate options and side-effects
+    // gate options and side-effects — the side-effect payload round-trips without loss, not just its kind
     expect(d.gate.map((g) => g.option)).toEqual(['approve', 'request-changes']);
     expect(d.gate[0].sideEffects[0]).toMatchObject({ kind: 'gh' });
+    expect(d.gate[0].sideEffects[0].args).toMatchObject({ action: 'publish-pr-body' });
     // pickup contract; inputs and outputs
     expect(d.pickup.initialStatus).toBe('planning');
     expect(d.inputs[0].id).toBe('ticket');
