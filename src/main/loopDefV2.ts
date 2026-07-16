@@ -47,8 +47,10 @@ export interface BoundaryPolicy {
   message?: string;
 }
 
-/** One human-gate option's declared side-effects (§27.9/§27.13). The side-effect vocabulary is open and
- *  def-declared; a side-effect of `kind: exec` is the origin-gated executable one (inert in this slice). */
+/** One human-gate option's declared side-effects (§27.9/§27.13) — the app-implemented `gh` vocabulary,
+ *  an open def-declared set. NOT the §27.8 executable capability: a program a def names is declared once,
+ *  on the top-level `exec` field (`ExecSideEffect`), which `toGate` refuses to let a gate side-effect name
+ *  so there is a single origin-gated executable surface for sub-ticket 2 to guard (CWE-829). */
 export interface GateSideEffect {
   kind: string;
   args: Record<string, unknown>;
@@ -152,13 +154,14 @@ function confineDefRelative(tierRoot: string, defDir: string, ref: string, what:
 }
 
 /** Confine an artifact/input/output path to the dedicated artifacts subtree of the per-repo loop area
- *  (§27.10), disjoint from the engine's own loop state and round reports. Same three checks. Throws DefError. */
+ *  (§27.10), disjoint from the engine's own loop state and round reports. The def path resolves against the
+ *  artifacts subtree itself, so a natural relative path (`plan.md`) lands inside it and `../state.yaml`
+ *  escapes onto the engine's own state. Same three checks. Throws DefError. */
 function confineArtifact(repoDir: string, pattern: string, what: string): string {
   if (UNEXPANDED_SLOT.test(pattern)) fail(`${what} path carries an unexpanded slot: ${pattern}`);
-  const loopAreaRoot = resolveJail(repoDir, '.agent-terminal', 'loop');
   const jail = resolveJail(repoDir, '.agent-terminal', 'loop', 'artifacts');
-  if (loopAreaRoot === null || jail === null) fail(`${what} loop area is unresolvable`);
-  const confined = confinedRealPath(jail as string, path.resolve(loopAreaRoot as string, pattern));
+  if (jail === null) fail(`${what} loop area is unresolvable`);
+  const confined = confinedRealPath(jail as string, path.resolve(jail as string, pattern));
   if (confined === null) fail(`${what} path escapes the artifacts subtree: ${pattern}`);
   return confined as string;
 }
@@ -171,6 +174,11 @@ function requireSegment(value: unknown, what: string): string {
 function requireString(value: unknown, what: string): string {
   if (typeof value !== 'string') fail(`${what} must be a string`);
   return value as string;
+}
+
+function requireRecord(value: unknown, what: string): Record<string, unknown> {
+  if (!isRecord(value)) fail(`${what} must be a mapping`);
+  return value as Record<string, unknown>;
 }
 
 function toReviewers(raw: unknown, tierRoot: string, defDir: string): ReviewerCatalogEntry[] {
@@ -209,9 +217,11 @@ function toGate(raw: unknown): GateOptionDef[] {
     const rawSe = rec.side_effects ?? [];
     if (!Array.isArray(rawSe)) fail(`gate option ${option} side_effects must be a list`);
     const sideEffects = (rawSe as unknown[]).map((se) => {
-      if (!isRecord(se)) fail(`gate option ${option} side-effect must be a mapping`);
-      const seRec = se as Record<string, unknown>;
+      const seRec = requireRecord(se, `gate option ${option} side-effect`);
       const kind = requireString(seRec.kind, `gate option ${option} side-effect kind`);
+      // The §27.8 executable capability is declared once, on the top-level `exec` field — never smuggled
+      // through a gate side-effect, so origin-gating (sub-ticket 2) has a single surface (CWE-829).
+      if (kind === 'exec') fail(`gate option ${option} side-effect must not name kind: exec (declare a program on the top-level exec field)`);
       const { kind: _k, ...args } = seRec;
       return { kind, args };
     });
@@ -245,24 +255,26 @@ function parse(body: string, tierRoot: string, defDir: string, name: string, ori
     if (!ALLOWED_TOP_KEYS.has(key)) fail(`unknown key: ${key}`);
   }
   if (rec.version !== LOOP_DEF_V2_VERSION) fail(`unknown schema version: ${String(rec.version)} (expected ${LOOP_DEF_V2_VERSION})`);
+  // `name` is resolver-assigned from the resolving path — like `origin`, def content cannot forge it. A
+  // declared `name` is accepted only when it agrees, so the parsed def has one source of truth for its id.
+  if (rec.name !== undefined && rec.name !== name) fail(`declared name ${String(rec.name)} disagrees with the resolved name ${name}`);
 
-  const work = isRecord(rec.work) ? (rec.work as Record<string, unknown>) : fail('work must be a mapping');
-  const workRecipe = confineDefRelative(tierRoot, defDir, requireString((work as Record<string, unknown>).recipe, 'work recipe'), 'work recipe');
-  const workArtifact = requireString((work as Record<string, unknown>).artifact, 'work artifact');
+  const work = requireRecord(rec.work, 'work');
+  const workRecipe = confineDefRelative(tierRoot, defDir, requireString(work.recipe, 'work recipe'), 'work recipe');
+  const workArtifact = requireString(work.artifact, 'work artifact');
 
-  const cons = isRecord(rec.consolidator) ? (rec.consolidator as Record<string, unknown>) : fail('consolidator must be a mapping');
-  const consolidator = confineDefRelative(tierRoot, defDir, requireString((cons as Record<string, unknown>).recipe, 'consolidator recipe'), 'consolidator recipe');
+  const cons = requireRecord(rec.consolidator, 'consolidator');
+  const consolidator = confineDefRelative(tierRoot, defDir, requireString(cons.recipe, 'consolidator recipe'), 'consolidator recipe');
 
-  const report = isRecord(rec.report) ? (rec.report as Record<string, unknown>) : fail('report must be a mapping');
-  const sections = (report as Record<string, unknown>).sections;
+  const report = requireRecord(rec.report, 'report');
+  const sections = report.sections;
   if (!Array.isArray(sections) || !(sections as unknown[]).every((s) => typeof s === 'string')) fail('report sections must be a list of strings');
 
-  const pickup = isRecord(rec.pickup) ? (rec.pickup as Record<string, unknown>) : fail('pickup must be a mapping');
+  const pickup = requireRecord(rec.pickup, 'pickup');
 
   let exec: ExecSideEffect | null = null;
   if (rec.exec !== undefined && rec.exec !== null) {
-    if (!isRecord(rec.exec)) fail('exec must be a mapping');
-    exec = { program: requireString((rec.exec as Record<string, unknown>).program, 'exec program') };
+    exec = { program: requireString(requireRecord(rec.exec, 'exec').program, 'exec program') };
   }
 
   return {
@@ -276,8 +288,8 @@ function parse(body: string, tierRoot: string, defDir: string, name: string, ori
     report: { sections: sections as string[] },
     gate: toGate(rec.gate),
     pickup: {
-      initialStatus: requireString((pickup as Record<string, unknown>).initial_status, 'pickup initial_status'),
-      branchTemplate: requireString((pickup as Record<string, unknown>).branch_template, 'pickup branch_template'),
+      initialStatus: requireString(pickup.initial_status, 'pickup initial_status'),
+      branchTemplate: requireString(pickup.branch_template, 'pickup branch_template'),
     },
     inputs: toArtifactBindings(rec.inputs, repoDir, 'input'),
     outputs: toArtifactBindings(rec.outputs, repoDir, 'output'),
