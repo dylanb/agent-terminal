@@ -112,6 +112,15 @@ export interface FlowDefinition {
   steps: FlowStepDef[];
 }
 
+/** The §26 (legacy) LoopDef name a step binds, or null when none applies — the gate-decision write half's
+ *  engine selector (§27.15), symmetric with the read/entry halves. An `app`-namespace step resolves NO §26
+ *  name, so a decision arriving for a §27-bound step is refused before it can dispatch into the §26 write
+ *  path; a manual or missing step resolves none either. */
+export function legacyLoopNameForStep(step: FlowStepDef | undefined): string | null {
+  if (step?.kind !== 'loop' || step.loopNamespace === 'app') return null;
+  return step.loop ?? null;
+}
+
 /** Result of reading <worktree>/.agent-terminal/flow.yaml. On success `flowDir` is the directory the
  *  flow.yaml came from — the anchor for resolving co-located templates (§18.6). */
 export type FlowLoad =
@@ -406,16 +415,19 @@ export function createFlowMachine(
     const ticketStepEntered = ticketInput !== undefined && entered.includes(ticketInput.step);
     const prStepEntered = prInput !== undefined && entered.includes(prInput.step);
     const loopEntered = entered.some((s) => s.kind === 'loop');
-    const liveLoop = readLoop?.() ?? null;
-    const refs = computeRefs(liveLoop, { ticketStepEntered, prStepEntered, loopEntered });
-    const withRefs = refs ? { ...base, refs } : base;
-    if (!loopEntered) return withRefs;
     // §24.2.3 T2 / §27.15 — the loop-view provider is engine-selected on the most-recent loop step's
     // namespace binding. An `app` step feeds the §27 provider, which owns the whole view and reads no
     // §26 loop state; a `legacy` (or namespace-absent) step feeds the §26 provider unchanged.
     const mostRecentLoopStep = entered.reduce<FlowStepDef | undefined>((last, s) => (s.kind === 'loop' ? s : last), undefined);
-    if (mostRecentLoopStep?.loopNamespace === 'app' && mostRecentLoopStep.loop) {
-      const appLoop = readAppLoopView?.(mostRecentLoopStep.loop);
+    const appLoopName = mostRecentLoopStep?.loopNamespace === 'app' ? mostRecentLoopStep.loop : undefined;
+    // §27.15 — the flow module holds no independent reader of §26 loop state on the app path: an app step's
+    // refs never source from a stray §26 state.yaml, so a §27 step surfaces none of that engine's ticket/PR.
+    const liveLoop = appLoopName !== undefined ? null : (readLoop?.() ?? null);
+    const refs = computeRefs(liveLoop, { ticketStepEntered, prStepEntered, loopEntered });
+    const withRefs = refs ? { ...base, refs } : base;
+    if (!loopEntered) return withRefs;
+    if (appLoopName !== undefined) {
+      const appLoop = readAppLoopView?.(appLoopName);
       return appLoop ? { ...withRefs, loop: appLoop } : withRefs;
     }
     const loopDef = mostRecentLoopStep?.loop ? (readLoopDef?.(mostRecentLoopStep.loop) ?? null) : null;

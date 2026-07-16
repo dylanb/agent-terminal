@@ -64,7 +64,7 @@ import { createCwdTracker } from './cwdTracker';
 import { currentRepoInfo, resolveRepoKey } from './repoKey';
 import { createScanner } from './scanner';
 import { captureLastReport } from './captureLast';
-import { createFlowManager, deriveFlowView, loadFlowDefinitionLocalFirst } from './flow';
+import { createFlowManager, deriveFlowView, legacyLoopNameForStep, loadFlowDefinitionLocalFirst } from './flow';
 import { createGithubRefs } from './githubRefs';
 import { createAuditRecorder } from './auditRecorder';
 import type { TransitionKind } from '../shared/audit';
@@ -887,6 +887,13 @@ async function createWindow(): Promise<void> {
     inject: (text) => inject(text, { submit: false }),
     runPickup: runPickupForStep,
     resumeLoop: resumeLoopForStep,
+    // §27.15 / N1 — an app-namespace step's entry is a no-op-with-reason: no §26 resume/pickup/work-turn is
+    // dispatched and nothing is injected. Trace the refusal (§25) — the run-less view is the operator's
+    // surface, so this is not the blocking loop-error path.
+    refuseAppEntry: (step) => {
+      const repoKey = transitioningRepo;
+      if (repoKey) audit.recordCommand(repoKey, 'resume', `app-namespace step entry: no §26 run started (${step.loop})`, 1);
+    },
   });
   const flow = createFlowManager({
     globalDir: flowGlobalDir,
@@ -1041,12 +1048,10 @@ async function createWindow(): Promise<void> {
   const boundLoopName = (repoKey: string): string | null => {
     const load = loadFlowDefinitionLocalFirst(repoKey, flowGlobalDir);
     if (!load.ok) return null;
-    const step = load.definition.steps[flow.state(repoKey).position - 1];
-    // §27.15 — the §26 gate-decision executor is a §26-only write surface. A step bound to the `app`
-    // namespace resolves no §26 def: refuse the decision here (the guard is at the operation, not merely
-    // the display-only rendering), so a same-named operator §26 def can never be fired for a §27 step.
-    if (step?.kind === 'loop' && step.loopNamespace === 'app') return null;
-    return step?.kind === 'loop' && step.loop ? step.loop : null;
+    // §27.15 — the §26 gate-decision executor is a §26-only write surface; the selector refuses an
+    // app-namespace step (the guard is at the operation), so a same-named operator §26 def is never fired
+    // for a §27 step.
+    return legacyLoopNameForStep(load.definition.steps[flow.state(repoKey).position - 1]);
   };
 
   // §26 D42a — advance the flow one step when a loop step's loop reaches a success terminal. Guarded on

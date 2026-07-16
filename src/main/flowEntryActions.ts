@@ -30,6 +30,11 @@ export interface FlowEntryActionDeps {
    *  under the step's bound loop: rebind state.yaml to the new loop (fresh internal state, carried
    *  PR/branch/issues) + inject /clear + the first work prompt. Out-of-band like pickup, never busy-gated. */
   resumeLoop(step: FlowStepDef): void;
+  /** §27.15 / N1 — an `app`-namespace loop step binds the §27 engine, which runs no actor in this slice.
+   *  Called INSTEAD of resume/pickup/inject so entering it starts no §26 run and injects nothing (ticket
+   *  non-goal), even on a machine holding a same-named §26 def; the composition root records the §25 no-op
+   *  rather than raising the blocking loop-error the run-less view is not. */
+  refuseAppEntry(step: FlowStepDef): void;
 }
 
 /** A transient result surfaced on the transition's returned view: the §19.3 refusal `notice` (skill),
@@ -45,6 +50,12 @@ export type FlowEntryActions = (step: FlowStepDef, inputs?: Record<string, strin
 
 export function createFlowEntryActions(deps: FlowEntryActionDeps): FlowEntryActions {
   return (step, inputs = {}) => {
+    // §27.15 / N1 — an `app`-namespace loop step is the §27 engine's; entering it starts no §26 run and
+    // injects nothing (ticket non-goal). Refuse at the dispatcher, before skill/pickup/resume can fire.
+    if (step.kind === 'loop' && step.loopNamespace === 'app') {
+      deps.refuseAppEntry(step);
+      return {};
+    }
     // OWN property only: a prototype-chain key (e.g. an input named `__proto__`) must not resolve to a
     // truthy object. A blank/whitespace value counts as unsatisfied (§18.4).
     const resolved = (name: string): string => {
