@@ -371,6 +371,14 @@ describe('status bar (§22.3.1)', () => {
       expect(alertEl(host).textContent).toContain('awaiting-human-pr-approval');
     });
 
+    it('omits the iteration segment when no round has run (a §27 def-failure alert)', () => {
+      const { host, render } = mount();
+      render(model({ alert: { status: 'error', pr: null } }));
+      expect(alertEl(host).textContent).toContain('error');
+      expect(alertEl(host).textContent).not.toContain('iter');
+      expect(alertEl(host).textContent).not.toContain('undefined');
+    });
+
     it('announces assertively, interrupting — the human is the blocker (WCAG 4.1.3)', () => {
       const { host } = mount();
       const region = alertEl(host);
