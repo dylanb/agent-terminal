@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { createFlowMachine, type FlowLoad } from '../../src/main/flow';
+import { createFlowMachine, legacyLoopNameForStep, type FlowLoad } from '../../src/main/flow';
 import type { AgentLoopState } from '../../src/main/agentLoopBridge';
 import type { FlowLoopView } from '../../src/shared/ipc';
 
@@ -45,5 +45,40 @@ describe('createFlowMachine — engine-selected loop view (§27.15)', () => {
     const machine = createFlowMachine(appLoad, undefined, undefined, () => null);
     machine.start();
     expect(machine.state().loop).toBeUndefined();
+  });
+
+  // The §27 provider owns the WHOLE app view and reads no §26 state; the flow module must not source refs
+  // from a stray §26 state.yaml either (a Parnas information-hiding leak). A pure-app flow in a repo that
+  // happens to carry a §26 state.yaml surfaces none of that engine's ticket/PR on its §27 step.
+  it('sources no ticket/PR refs from §26 loop state on an app-namespace step', () => {
+    const readAppLoopView = vi.fn((): FlowLoopView => APP_VIEW);
+    const stray26: AgentLoopState = { status: 'planning', iteration: 3, pr: 42, branch: 'feat/x', linkedIssues: [7] };
+    const readLoop = vi.fn((): AgentLoopState | null => stray26);
+    const machine = createFlowMachine(appLoad, undefined, undefined, readLoop, undefined, undefined, Date.now, readAppLoopView);
+    machine.start();
+    expect(machine.state().refs).toBeUndefined();
+  });
+});
+
+// §27.15 — the gate-decision WRITE half is engine-selected on the same binding as the read/entry halves.
+// The §26 gate executor resolves its target through this selector: an app-namespace step resolves NO §26
+// loop name, so a decision arriving for a §27-bound step is refused before it dispatches into the §26 write
+// path — even on a machine holding a same-named §26 def.
+describe('legacyLoopNameForStep — gate-decision write-half guard (§27.15)', () => {
+  it('resolves no §26 loop name for an app-namespace loop step', () => {
+    expect(legacyLoopNameForStep({ id: 'plan', kind: 'loop', loop: 'plan-loop', loopNamespace: 'app' })).toBeNull();
+  });
+
+  it('resolves the bound §26 name for a legacy-namespace loop step', () => {
+    expect(legacyLoopNameForStep({ id: 'plan', kind: 'loop', loop: 'plan-loop', loopNamespace: 'legacy' })).toBe('plan-loop');
+  });
+
+  it('resolves the bound §26 name when the namespace is absent (defaults to §26)', () => {
+    expect(legacyLoopNameForStep({ id: 'plan', kind: 'loop', loop: 'plan-loop' })).toBe('plan-loop');
+  });
+
+  it('resolves no name for a manual step or a missing step', () => {
+    expect(legacyLoopNameForStep({ id: 'polish', kind: 'manual' })).toBeNull();
+    expect(legacyLoopNameForStep(undefined)).toBeNull();
   });
 });

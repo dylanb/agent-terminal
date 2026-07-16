@@ -3710,6 +3710,47 @@ test('a malformed/unresolvable §27 def surfaces its reason and the flow keeps a
   rmSync(home, { recursive: true, force: true });
 });
 
+test('a §27 app step starts no §26 run and injects nothing, even with a same-named §26 def + a prior run on disk (§27.15 / N1 non-goal)', { tag: '@ownapp' }, async () => {
+  const repo = seedLoopV2FlowRepo('agent-term-e2e-v2-noentry-');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-v2-noentry-home-'));
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-v2-noentry-bin-');
+  seedFakeAgent(binDir, { work: 'write-plan' }); // a hosted agent that WOULD write plan.md if a work turn injected
+  // The exact machine state the namespace binding defends against: example/loops carries a §26 `plan-loop`
+  // def, and a prior §26 run sits on disk. A §26 resume would rebind state.yaml + inject /clear + a work turn.
+  const stateFile = join(repo, '.agent-loop', 'state.yaml');
+  const priorState = 'schema_version: 4\nstatus: planning\niteration: 3\npr: 42\nbranch: feat/prior\nbound_loop: plan-loop\nlinked_issues:\n  - 7\n';
+  mkdirSync(join(repo, '.agent-loop'), { recursive: true });
+  writeFileSync(stateFile, priorState);
+  app = await electron.launch({
+    args: ['out/main/index.js'],
+    env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100', CLAUDE_CONFIG_DIR: exampleConfigDir, PATH: `${binDir}:${process.env.PATH}`, FAKE_GHGIT_LOG: logFile },
+  });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await typeCommand(`cd "${repo}"`);
+  await expect(flowControl()).toHaveText('Start', { timeout: 10_000 });
+  await typeCommand('fake-agent'); // a hosted agent IS at the prompt; a leaked work turn would inject here
+
+  await flowControl().click(); // Start → enter groom (app; no §26 def — a no-op)
+  await flowControl().click(); // Advance → enter plan (app; §26 plan-loop def + prior state present)
+  await loopReadout().click();
+  await expect(loopPanel()).toContainText('approve · changes · impasse', { timeout: 10_000 }); // run-less §27 view rendered
+
+  // The app-namespace entry started no §26 run and injected nothing: the prior state.yaml is byte-for-byte
+  // unchanged (no rebind write), no work prompt reached the shell (no plan.md, no `# Work agent`), and the
+  // audit records no turn.
+  expect(readFileSync(stateFile, 'utf8')).toBe(priorState);
+  expect(existsSync(join(repo, '.agent-loop', 'plan.md'))).toBe(false);
+  await expect(termRows()).not.toContainText('# Work agent');
+  expect(turnEvents(home, repo)).toEqual([]);
+
+  await app.close();
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+  rmSync(binDir, { recursive: true, force: true });
+});
+
 test('a persona clean last iteration with an unchanged plan is pruned; its review is reused (§26.13 / L6 / §26.5)', async () => {
   const repo = seedBootstrapFlowRepo('agent-term-e2e-l6-skip-');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-l6-skip-home-'));
