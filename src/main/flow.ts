@@ -6,7 +6,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import yaml from 'js-yaml';
-import type { AgentState, FlowPrompt, FlowRefs, FlowStateView, FlowStatus, TodoItem } from '../shared/ipc';
+import type { AgentState, FlowLoopView, FlowPrompt, FlowRefs, FlowStateView, FlowStatus, TodoItem } from '../shared/ipc';
 import { hasFlowRefs } from '../shared/ipc';
 import { normalizeTitle } from '../shared/statusBar';
 import { createFlowStateStore, type FlowStateStore } from './flowState';
@@ -270,6 +270,12 @@ export type FlowReadLoopDef = (name: string) => LoopDef | null;
  *  yet. Called on every view so the strip shows the live last-recorded cost. */
 export type FlowReadLoopCost = () => string | null;
 
+/** The §27 (app-namespace) loop-view provider: resolve the bound app-def by name and produce its whole
+ *  loop view — a run-less view or a def-failure view (see loopViewV2). Selected when a loop step's
+ *  `loopNamespace` is `app` (§27.15); absent for a §26-only wiring (tests), where an app step renders no
+ *  loop view rather than falling back to the §26 engine. It reads no §26 loop state. */
+export type FlowReadAppLoopView = (name: string) => FlowLoopView;
+
 // Optional `store` (§19.1) persists every transition and restores on construction so a relaunch
 // resumes; without it the machine is in-memory only. Optional `onEnter` (§18.6) runs entry actions.
 export function createFlowMachine(
@@ -280,6 +286,7 @@ export function createFlowMachine(
   readLoopDef?: FlowReadLoopDef,
   readLoopCost?: FlowReadLoopCost,
   now: () => number = Date.now,
+  readAppLoopView?: FlowReadAppLoopView,
 ): FlowMachine {
   if (!load.ok) {
     const view = (): FlowStateView => {
@@ -403,8 +410,14 @@ export function createFlowMachine(
     const refs = computeRefs(liveLoop, { ticketStepEntered, prStepEntered, loopEntered });
     const withRefs = refs ? { ...base, refs } : base;
     if (!loopEntered) return withRefs;
-    // §24.2.3 T2
+    // §24.2.3 T2 / §27.15 — the loop-view provider is engine-selected on the most-recent loop step's
+    // namespace binding. An `app` step feeds the §27 provider, which owns the whole view and reads no
+    // §26 loop state; a `legacy` (or namespace-absent) step feeds the §26 provider unchanged.
     const mostRecentLoopStep = entered.reduce<FlowStepDef | undefined>((last, s) => (s.kind === 'loop' ? s : last), undefined);
+    if (mostRecentLoopStep?.loopNamespace === 'app' && mostRecentLoopStep.loop) {
+      const appLoop = readAppLoopView?.(mostRecentLoopStep.loop);
+      return appLoop ? { ...withRefs, loop: appLoop } : withRefs;
+    }
     const loopDef = mostRecentLoopStep?.loop ? (readLoopDef?.(mostRecentLoopStep.loop) ?? null) : null;
     return deriveLoopView(withRefs, liveLoop, loopDef, readLoopCost?.() ?? null);
   };
@@ -551,6 +564,9 @@ export interface FlowManagerDeps {
   readLoopDef?: (repoKey: string, name: string) => LoopDef | null;
   /** The formatted §26.10 cost readout for a repo's loop, or null when none recorded; omitted → no cost. */
   readLoopCost?: (repoKey: string) => string | null;
+  /** Resolve a repo's `app`-namespace loop step's §27 def and produce its whole loop view (§27.15);
+   *  omitted → an app step renders no loop view rather than falling back to §26. Reads no §26 state. */
+  readAppLoopView?: (repoKey: string, name: string) => FlowLoopView;
   /** The current instant, stamped onto a run when it starts (§26.10); omitted → the wall clock. */
   now?: () => number;
 }
@@ -578,6 +594,7 @@ export function createFlowManager(deps: FlowManagerDeps): FlowManager {
       deps.readLoopDef ? (name) => deps.readLoopDef!(repoKey, name) : undefined,
       deps.readLoopCost ? () => deps.readLoopCost!(repoKey) : undefined,
       deps.now,
+      deps.readAppLoopView ? (name) => deps.readAppLoopView!(repoKey, name) : undefined,
     );
     cache.set(repoKey, { sig, machine });
     return machine;

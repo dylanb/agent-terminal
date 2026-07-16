@@ -115,6 +115,9 @@ import {
   handleInstallExamplesApply,
   type InstallDestination,
 } from './installExamples';
+import { deriveAppLoopView } from './loopViewV2';
+import { resolveExampleLoopsV2Dir } from './exampleAssets';
+import { userConfigLoopsV2Dir } from './userConfig';
 import type { CliInstallResult } from '../shared/ipc';
 
 async function createWindow(): Promise<void> {
@@ -896,6 +899,15 @@ async function createWindow(): Promise<void> {
       const c = readLoopExtension(repoKey).cost;
       return c ? formatCost(c) : null;
     },
+    // §27.15 — the §27 (app-namespace) loop-view provider: resolve the bound app-def across the operator
+    // and app-bundled tiers and produce its whole run-less/failure view. Tier roots are chosen by the
+    // parsed namespace, never derived from repo content; the loop name is held to a safe segment inside
+    // the resolver before any tier root is joined.
+    readAppLoopView: (repoKey, name) =>
+      deriveAppLoopView(name, {
+        tiers: { operator: userConfigLoopsV2Dir(), appBundled: resolveExampleLoopsV2Dir(iconLoc) },
+        repoDir: repoKey,
+      }),
   });
 
   // §24.2.3 T7 — resolve a ticket/PR's title/body/url for the popout, best-effort via `gh`, cached.
@@ -1030,6 +1042,10 @@ async function createWindow(): Promise<void> {
     const load = loadFlowDefinitionLocalFirst(repoKey, flowGlobalDir);
     if (!load.ok) return null;
     const step = load.definition.steps[flow.state(repoKey).position - 1];
+    // §27.15 — the §26 gate-decision executor is a §26-only write surface. A step bound to the `app`
+    // namespace resolves no §26 def: refuse the decision here (the guard is at the operation, not merely
+    // the display-only rendering), so a same-named operator §26 def can never be fired for a §27 step.
+    if (step?.kind === 'loop' && step.loopNamespace === 'app') return null;
     return step?.kind === 'loop' && step.loop ? step.loop : null;
   };
 

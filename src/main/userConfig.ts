@@ -44,6 +44,13 @@ export function userConfigLoopsDir(configDir?: string): string | null {
   return branch('loops', configDir);
 }
 
+/** The operator tier for §27 (v2) loop defs, `<root>/loops-v2/<name>/<name>.yaml` — a sibling of the §26
+ *  `loops` dir, never nested in it, so the two schemas' operator trees stay disjoint (§27.15). `null` when
+ *  the root is refused (the same relative-override / CWE-829 gate as every other branch). */
+export function userConfigLoopsV2Dir(configDir?: string): string | null {
+  return branch('loops-v2', configDir);
+}
+
 /** Where Claude Code — a separate process — discovers a skill, as `<root>/skills/<skill name>/`. */
 export function userConfigSkillsDir(configDir?: string): string | null {
   return branch('skills', configDir);
