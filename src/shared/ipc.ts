@@ -452,9 +452,10 @@ export interface FlowLoopView {
   branch: string | null;
   ready: boolean;
   /** Whether this view's `gateOptions` are ACTIONABLE — the human can click them to decide the gate.
-   *  Set by the producing engine (via the shared `loopGateActionable` reader): the §26 provider marks an
-   *  awaiting-gate view actionable; the §27 provider marks its run-less view display-only, so the same
-   *  `gateOptions` field never means two things. Absent is display-only (hand-constructed views). */
+   *  Read through the shared `loopGateActionable`, whose default governs: absent means actionable, so the
+   *  §26 provider and every hand-constructed awaiting-gate view keep their controls; the §27 provider sets
+   *  `actionable: false` to mark its run-less view display-only, so the same `gateOptions` field never means
+   *  two things. The default lives once, in `loopGateActionable`. */
   actionable?: boolean;
   /** The current status's gate `human_options` (§18.1/§19.4) — the gate UI's variable option set
    *  (`approve`/`request-changes`/`impasse`), OR the options a §27 def declares for a run-less view.

@@ -306,8 +306,9 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
       syncReasonRow(ldl, reasonAnchor, loop.errorReason);
       if (loop.pr !== null) ldl.append(detailRow(doc, 'pr', `#${loop.pr}`, 'sig'));
       if (loop.branch !== null) ldl.append(detailRow(doc, 'branch', loop.branch));
-      // The current gate's human_options (§18.1/§19.4), present only at an awaiting gate — the read-only
-      // preview of what the gate offers; the actionable decision buttons render below.
+      // The gate's human_options (§18.1/§19.4) — a read-only preview of what the gate offers, rendered
+      // whenever the view carries gateOptions (a §26 awaiting gate OR a §27 run-less def); the actionable
+      // decision buttons render below (loopGateActionable).
       if (loop.gateOptions && loop.gateOptions.length > 0)
         ldl.append(detailRow(doc, 'gate options', loop.gateOptions.map(gateOptionLabel).join(' · ')));
 

@@ -136,44 +136,42 @@ const ALLOWED_TOP_KEYS = new Set([
 const UNEXPANDED_SLOT = /\{[^}]*\}/;
 
 class DefError extends Error {}
-const fail = (reason: string): never => {
+function fail(reason: string): never {
   throw new DefError(reason);
-};
+}
 
-/** Confine a def-relative resource reference (a charter, a recipe) to the tier root it was read beside.
- *  Three checks: reject an unexpanded template slot before any join; confine the joined path lexically and
- *  again after symlinks resolve (reuses the §26 artifact resolver's own primitives). Throws DefError. */
+/** Confine a def-relative resource reference (a charter, a recipe) to the tier root it was read beside
+ *  (§27.8/§18.6). Throws DefError on escape. */
 function confineDefRelative(tierRoot: string, defDir: string, ref: string, what: string): string {
   if (ref.includes('\n')) fail(`${what} must be a path reference, not an inline body`);
   if (UNEXPANDED_SLOT.test(ref)) fail(`${what} reference carries an unexpanded slot: ${ref}`);
   const jail = resolveJail(tierRoot);
   if (jail === null) fail(`${what} tier root is unresolvable`);
-  const confined = confinedRealPath(jail as string, path.resolve(defDir, ref));
+  const confined = confinedRealPath(jail, path.resolve(defDir, ref));
   if (confined === null) fail(`${what} reference escapes the tier root: ${ref}`);
-  return confined as string;
+  return confined;
 }
 
-/** Confine an artifact/input/output path to the dedicated artifacts subtree of the per-repo loop area
- *  (§27.10), disjoint from the engine's own loop state and round reports. The def path resolves against the
- *  artifacts subtree itself, so a natural relative path (`plan.md`) lands inside it and `../state.yaml`
- *  escapes onto the engine's own state. Same three checks. Throws DefError. */
+/** Confine an artifact/input/output path (§27.10) to the dedicated artifacts subtree of the per-repo loop
+ *  area — disjoint from the engine's own loop state and round reports, so `../state.yaml` escapes onto the
+ *  engine's own state and is rejected. Throws DefError. */
 function confineArtifact(repoDir: string, pattern: string, what: string): string {
   if (UNEXPANDED_SLOT.test(pattern)) fail(`${what} path carries an unexpanded slot: ${pattern}`);
   const jail = resolveJail(repoDir, '.agent-terminal', 'loop', 'artifacts');
   if (jail === null) fail(`${what} loop area is unresolvable`);
-  const confined = confinedRealPath(jail as string, path.resolve(jail as string, pattern));
+  const confined = confinedRealPath(jail, path.resolve(jail, pattern));
   if (confined === null) fail(`${what} path escapes the artifacts subtree: ${pattern}`);
-  return confined as string;
+  return confined;
 }
 
 function requireSegment(value: unknown, what: string): string {
   if (typeof value !== 'string' || !isSafePathSegment(value)) fail(`${what} is not a single safe path segment: ${String(value)}`);
-  return value as string;
+  return value;
 }
 
 function requireString(value: unknown, what: string): string {
   if (typeof value !== 'string') fail(`${what} must be a string`);
-  return value as string;
+  return value;
 }
 
 function requireRecord(value: unknown, what: string): Record<string, unknown> {
