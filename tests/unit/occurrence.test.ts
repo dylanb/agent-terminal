@@ -39,4 +39,13 @@ describe('sameOccurrence (shared identity, §24.2.3 T4)', () => {
     expect(sameOccurrence(occ({ repoKey: null }), occ({ repoKey: null }))).toBe(true);
     expect(sameOccurrence(occ({ repoKey: null }), occ({ repoKey: '/repo' }))).toBe(false);
   });
+
+  it('dedups two run-less failures of the same def (absent iteration is part of the identity)', () => {
+    expect(sameOccurrence(occ({ iteration: undefined }), occ({ iteration: undefined }))).toBe(true);
+  });
+
+  it('distinguishes a run-less view from a round-1 view of the same status (absent is not zero)', () => {
+    expect(sameOccurrence(occ({ iteration: undefined }), occ({ iteration: 1 }))).toBe(false);
+    expect(sameOccurrence(occ({ iteration: undefined }), occ({ iteration: 0 }))).toBe(false);
+  });
 });

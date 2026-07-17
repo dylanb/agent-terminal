@@ -1,0 +1,35 @@
+version: v2
+name: impl-loop
+work:
+  recipe: prompts/work.md
+  artifact: diff
+reviewers:
+  - persona: impl-review-principal
+    charter: charter/principal.md
+    tools: [Read, Grep, Glob]
+  - persona: impl-review-tests
+    charter: charter/tests.md
+    tools: [Read, Grep, Glob, Bash]
+consolidator:
+  recipe: prompts/consolidate.md
+boundaries:
+  - boundary: pre-work
+    mode: clear
+report:
+  sections: [summary, findings, disposition]
+gate:
+  - option: approve
+    side_effects:
+      - kind: gh
+        action: mark-ready
+  - option: request-changes
+    side_effects: []
+pickup:
+  initial_status: implementing
+  branch_template: impl-loop/issue-{issue}
+inputs:
+  - id: plan
+    path: plan.md
+outputs:
+  - id: diff
+    path: diff.md

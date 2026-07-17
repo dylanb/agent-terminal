@@ -15,6 +15,7 @@ function deps(over: Partial<Parameters<typeof createFlowEntryActions>[0]> = {}) 
     inject: vi.fn(),
     runPickup: vi.fn(),
     resumeLoop: vi.fn(),
+    refuseAppEntry: vi.fn(),
     ...over,
   };
 }
@@ -157,6 +158,52 @@ describe('flow entry actions — resume into a loop step (§26 D42a)', () => {
     const d = deps();
     createFlowEntryActions(d)(step({ id: 'polish', kind: 'manual' }));
     expect(d.resumeLoop).not.toHaveBeenCalled();
+  });
+});
+
+// §27.15 / N1 — a loop step bound to the `app` def namespace is the §27 engine's. Entering it starts NO
+// §26 run and injects nothing (ticket non-goal), even on a machine holding a same-named §26 def. The entry
+// selector refuses at the dispatcher: neither the skill inject, the pickup runner, nor the §26 resume port
+// fires. The refusal is surfaced through refuseAppEntry (the composition root records the §25 no-op).
+describe('flow entry actions — app-namespace step is refused (§27.15 / N1)', () => {
+  const appStep = (over: Partial<FlowStepDef> = {}): FlowStepDef =>
+    step({ id: 'plan', kind: 'loop', loop: 'plan-loop', loopNamespace: 'app', ...over });
+
+  it('refuses an app-namespace loop step: no resume, no pickup, no injection', () => {
+    const d = deps();
+    const s = appStep();
+    const result = createFlowEntryActions(d)(s, {});
+    expect(d.refuseAppEntry).toHaveBeenCalledWith(s);
+    expect(d.resumeLoop).not.toHaveBeenCalled();
+    expect(d.runPickup).not.toHaveBeenCalled();
+    expect(d.inject).not.toHaveBeenCalled();
+    expect(result.notice).toBeUndefined();
+    expect(result.prompt).toBeUndefined();
+  });
+
+  it('refuses an app-namespace pickup step without running pickup, even with its required input resolved', () => {
+    const d = deps();
+    createFlowEntryActions(d)(
+      appStep({ bootstrap: 'pickup', inputs: [{ name: 'ticket', type: 'github-ticket', required: true }] }),
+      { ticket: '176' },
+    );
+    expect(d.refuseAppEntry).toHaveBeenCalled();
+    expect(d.runPickup).not.toHaveBeenCalled();
+  });
+
+  it('refuses an app-namespace step carrying a skill without injecting it', () => {
+    const d = deps();
+    createFlowEntryActions(d)(appStep({ skill: 'groom' }), {});
+    expect(d.refuseAppEntry).toHaveBeenCalled();
+    expect(d.inject).not.toHaveBeenCalled();
+  });
+
+  it('a legacy-namespace loop step still resumes (the guard is app-only)', () => {
+    const d = deps();
+    const s = step({ id: 'plan', kind: 'loop', loop: 'plan-loop', loopNamespace: 'legacy' });
+    createFlowEntryActions(d)(s, {});
+    expect(d.refuseAppEntry).not.toHaveBeenCalled();
+    expect(d.resumeLoop).toHaveBeenCalledWith(s);
   });
 });
 

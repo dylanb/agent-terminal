@@ -3641,6 +3641,116 @@ test('a needs-work verdict at the iteration cap routes to the plan-triage gate (
   rmSync(binDir, { recursive: true, force: true });
 });
 
+// §27.15 / N1 — a flow whose loop steps bind the app namespace (§27 engine). The three §27 defs resolve
+// from the operator tier (CLAUDE_CONFIG_DIR/loops-v2 → example/loops-v2). The third step binds an
+// unresolvable §27 def, so its panel surfaces the failure reason and the flow keeps its Advance route out.
+function seedLoopV2FlowRepo(prefix: string): string {
+  const dir = mkdtempSync(join(tmpdir(), prefix));
+  mkdirSync(join(dir, '.git'), { recursive: true });
+  mkdirSync(join(dir, '.agent-terminal'), { recursive: true });
+  writeFileSync(
+    join(dir, '.agent-terminal', 'flow.yaml'),
+    'name: v2-demo\nsteps:\n' +
+      '  - id: groom\n    kind: loop\n    loop: groom-loop\n    loop_namespace: app\n' +
+      '  - id: plan\n    kind: loop\n    loop: plan-loop\n    loop_namespace: app\n' +
+      '  - id: missing\n    kind: loop\n    loop: no-such-v2-loop\n    loop_namespace: app\n',
+  );
+  return dir;
+}
+
+test('a §27 (app-namespace) flow step renders the bound def\'s gate options, differing between defs (§27.15 / N1)', { tag: '@ownapp' }, async () => {
+  const repo = seedLoopV2FlowRepo('agent-term-e2e-v2-options-');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-v2-options-home-'));
+  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, CLAUDE_CONFIG_DIR: exampleConfigDir, APP_SUBMIT_DELAY_MS: '100' } });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await typeCommand(`cd "${repo}"`);
+  await expect(flowControl()).toHaveText('Start', { timeout: 10_000 });
+
+  // Enter the first loop step (groom-loop): its declared gate options render in the panel, display-only.
+  await flowControl().click();
+  await expect(loopReadout()).toBeVisible({ timeout: 10_000 });
+  await loopReadout().click();
+  await expect(loopPanel()).toContainText('approve · changes', { timeout: 10_000 });
+  expect(await loopPanel().locator('[data-gate-option]').count()).toBe(0); // run-less view is display-only
+
+  // Advance into the second loop step (plan-loop): a DIFFERENT option set (it declares impasse too).
+  await flowControl().click();
+  await expect(loopPanel()).toContainText('approve · changes · impasse', { timeout: 10_000 });
+
+  await app.close();
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+});
+
+test('a malformed/unresolvable §27 def surfaces its reason and the flow keeps a route off the step (§27.15 / AC 6)', { tag: '@ownapp' }, async () => {
+  const repo = seedLoopV2FlowRepo('agent-term-e2e-v2-fail-');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-v2-fail-home-'));
+  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, CLAUDE_CONFIG_DIR: exampleConfigDir, APP_SUBMIT_DELAY_MS: '100' } });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await typeCommand(`cd "${repo}"`);
+  await expect(flowControl()).toHaveText('Start', { timeout: 10_000 });
+  await flowControl().click(); // enter groom
+  await flowControl().click(); // advance into plan
+  await flowControl().click(); // advance into the step bound to an unresolvable §27 def
+
+  // The reason is readable in the panel, and the Advance control is still present — the route off the
+  // failed step that needs no hand-editing of files on disk (AC 6).
+  await loopReadout().click();
+  await expect(loopPanel()).toContainText('no-such-v2-loop', { timeout: 10_000 });
+  await expect(flowControl()).toHaveText('Advance');
+  await flowControl().click(); // the route out completes the flow
+  await expect(flowControl()).toHaveText('Restart', { timeout: 10_000 });
+
+  await app.close();
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+});
+
+test('a §27 app step starts no §26 run and injects nothing, even with a same-named §26 def + a prior run on disk (§27.15 / N1 non-goal)', { tag: '@ownapp' }, async () => {
+  const repo = seedLoopV2FlowRepo('agent-term-e2e-v2-noentry-');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-v2-noentry-home-'));
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-v2-noentry-bin-');
+  seedFakeAgent(binDir, { work: 'write-plan' }); // a hosted agent that WOULD write plan.md if a work turn injected
+  // The exact machine state the namespace binding defends against: example/loops carries a §26 `plan-loop`
+  // def, and a prior §26 run sits on disk. A §26 resume would rebind state.yaml + inject /clear + a work turn.
+  const stateFile = join(repo, '.agent-loop', 'state.yaml');
+  const priorState = 'schema_version: 4\nstatus: planning\niteration: 3\npr: 42\nbranch: feat/prior\nbound_loop: plan-loop\nlinked_issues:\n  - 7\n';
+  mkdirSync(join(repo, '.agent-loop'), { recursive: true });
+  writeFileSync(stateFile, priorState);
+  app = await electron.launch({
+    args: ['out/main/index.js'],
+    env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100', CLAUDE_CONFIG_DIR: exampleConfigDir, PATH: `${binDir}:${process.env.PATH}`, FAKE_GHGIT_LOG: logFile },
+  });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await typeCommand(`cd "${repo}"`);
+  await expect(flowControl()).toHaveText('Start', { timeout: 10_000 });
+  await typeCommand('fake-agent'); // a hosted agent IS at the prompt; a leaked work turn would inject here
+
+  await flowControl().click(); // Start → enter groom (app; no §26 def — a no-op)
+  await flowControl().click(); // Advance → enter plan (app; §26 plan-loop def + prior state present)
+  await loopReadout().click();
+  await expect(loopPanel()).toContainText('approve · changes · impasse', { timeout: 10_000 }); // run-less §27 view rendered
+
+  // The app-namespace entry started no §26 run and injected nothing: the prior state.yaml is byte-for-byte
+  // unchanged (no rebind write), no work prompt reached the shell (no plan.md, no `# Work agent`), and the
+  // audit records no turn.
+  expect(readFileSync(stateFile, 'utf8')).toBe(priorState);
+  expect(existsSync(join(repo, '.agent-loop', 'plan.md'))).toBe(false);
+  await expect(termRows()).not.toContainText('# Work agent');
+  expect(turnEvents(home, repo)).toEqual([]);
+
+  await app.close();
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+  rmSync(binDir, { recursive: true, force: true });
+});
+
 test('a persona clean last iteration with an unchanged plan is pruned; its review is reused (§26.13 / L6 / §26.5)', async () => {
   const repo = seedBootstrapFlowRepo('agent-term-e2e-l6-skip-');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-l6-skip-home-'));

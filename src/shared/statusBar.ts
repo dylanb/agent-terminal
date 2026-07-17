@@ -12,8 +12,9 @@ export type StatusBarTitle =
 export interface StatusBarModel {
   title: StatusBarTitle;
   activity: LoopActivity | null;
-  /** The loop is blocked on a human (§24.2.3 T4). */
-  alert: { status: string; iteration: number; pr: number | null } | null;
+  /** The loop is blocked on a human (§24.2.3 T4). `iteration` absent means no round has run (a §27
+   *  run-less failure); it flows into the dedup identity as part of it, never coalesced to zero. */
+  alert: { status: string; iteration?: number; pr: number | null } | null;
 }
 
 export const IDLE_STATUS_BAR: StatusBarModel = { title: { kind: 'user', text: '' }, activity: null, alert: null };

@@ -523,6 +523,33 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     expect(readout.textContent).not.toContain('#179');
   });
 
+  it('omits the iteration read-out when no round has run (a §27 run-less view, absent iteration)', async () => {
+    const runLess: FlowStateView = {
+      stepName: 'plan',
+      steps: ['plan'],
+      position: 1,
+      total: 1,
+      status: 'in_progress',
+      loop: { status: 'not-started', pr: null, branch: null, ready: false, actionable: false, gateOptions: ['approve'] },
+    };
+    const deps = {
+      state: vi.fn(async (): Promise<FlowStateView> => runLess),
+      start: vi.fn(),
+      advance: vi.fn(),
+      restart: vi.fn(),
+      undo: vi.fn(),
+      terminate: vi.fn(),
+      provideInput: vi.fn(),
+      onStatusBar: vi.fn(),
+      onStateChanged: noopSub,
+    };
+    createFlowStrip(host, deps).onRepoChanged('/repo');
+    await vi.waitFor(() => expect(host.querySelector('.loopstat')).not.toBeNull());
+    const readout = host.querySelector<HTMLElement>('.loopstat')!;
+    expect(readout.textContent).not.toContain('iter');
+    expect(host.querySelector('.loop-iter')).toBeNull();
+  });
+
   it('renders the §26.10 cost readout on the loop read-out when the view carries one, omits it otherwise', async () => {
     const withCost: FlowStateView = {
       stepName: 'build',

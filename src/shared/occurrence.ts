@@ -5,7 +5,10 @@
 export interface Occurrence {
   repoKey: string | null;
   status: string;
-  iteration: number;
+  /** Absent means NO ROUND HAS RUN (a run-less §27 view or a def that failed to resolve). It is part of
+   *  the identity, not a zero standing in: two run-less failures of the same def (both absent) dedup to
+   *  one notification; a run-less and a round-1 view of the same status do NOT. */
+  iteration?: number;
 }
 
 /** A null on either side never matches. */

@@ -1,0 +1,40 @@
+version: v2
+name: plan-loop
+work:
+  recipe: prompts/work.md
+  artifact: plan
+reviewers:
+  - persona: review-plan-principal
+    charter: charter/principal.md
+    tools: [Read, Grep, Glob]
+  - persona: review-plan-security
+    charter: charter/security.md
+    tools: [Read, Grep, Glob, Bash]
+consolidator:
+  recipe: prompts/consolidate.md
+boundaries:
+  - boundary: pre-work
+    mode: clear
+  - boundary: pre-review
+    mode: compact
+    message: Keep the plan and the ticket.
+report:
+  sections: [summary, findings, disposition]
+gate:
+  - option: approve
+    side_effects:
+      - kind: gh
+        action: publish-pr-body
+  - option: request-changes
+    side_effects: []
+  - option: impasse
+    side_effects: []
+pickup:
+  initial_status: planning
+  branch_template: plan-loop/issue-{issue}
+inputs:
+  - id: groomed-ticket
+    path: groomed-ticket.md
+outputs:
+  - id: plan
+    path: plan.md

@@ -60,7 +60,7 @@ export function createLoopNotifier(deps: LoopNotifierDeps): LoopNotifier {
     lastRaised.set(repoKey, occ);
     closeActive = deps.notify({
       title: 'Agent loop needs you',
-      body: `${sanitizeStatus(occ.status)} · iter ${occ.iteration}`,
+      body: occ.iteration === undefined ? sanitizeStatus(occ.status) : `${sanitizeStatus(occ.status)} · iter ${occ.iteration}`,
       repoKey,
       onActivate: () => {
         deps.focusWindow();
