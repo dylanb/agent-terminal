@@ -250,7 +250,17 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
         // §27.12c — accept a present artifact: advance through the same completion chain a signalled turn
         // takes, WITHOUT re-running and WITHOUT injecting. A missing artifact is not acceptable — Retry
         // (re-run) is that path.
-        if (!artifactPresent()) return;
+        if (!artifactPresent()) {
+          // §27.12c/CWE-755 — an `unresolved` resumed turn (its def no longer resolves) can NEVER be
+          // accepted; surface that instead of returning over the stale original reason with a dead affordance.
+          if (active.completion.kind === 'unresolved') {
+            const reason = 'the bound def no longer resolves — retry or terminate';
+            liveError = { repoDir, loop: active.loopName, step: active.stepId, turnKey: active.turnKey, reason };
+            deps.emitError(reason);
+            deps.onViewChanged();
+          }
+          return;
+        }
         persist('complete');
         deps.audit(repoDir, `§27 work turn ${turnKey} accepted (artifact present)`, 0);
         return;
