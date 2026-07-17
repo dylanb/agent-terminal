@@ -290,8 +290,11 @@ describe('§27 engine — the identity-carrying route-out (AC7)', () => {
   it('accept with no present artifact does not advance (retry is the path)', () => {
     const engine = makeEngine();
     toError(engine);
-    engine.routeOut(repo, STEP, TURN_KEY, 'accept'); // artifact absent
+    emitError.mockClear(); // isolate the refused-Accept call from the stall→error emit
+    engine.routeOut(repo, STEP, TURN_KEY, 'accept'); // artifact absent, but the def RESOLVED
     expect(readAppLoopState(repo)?.status).toBe('error');
+    expect(emitError).not.toHaveBeenCalled(); // a resolved-absent refusal is SILENT — Retry is the affordance
+    expect(engine.liveErrorFor(repo)?.reason).not.toMatch(/resolve/i); // never misdirect with a def-unresolvable reason
   });
 
   it('terminate moves the flow off the step', () => {
