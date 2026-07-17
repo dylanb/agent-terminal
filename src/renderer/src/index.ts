@@ -141,6 +141,10 @@ if (flowStripHost) {
           const key = repo.repoKey();
           if (key) window.flow.retryTurn(key);
         },
+        appRouteOut: (step, turnKey, action) => {
+          const key = repo.repoKey();
+          if (key) window.flow.appRouteOut(key, step, turnKey, action);
+        },
       })
     : undefined;
   // Same single-puller contract for the typed-input modal (§24.2.3 T3): on a step-entry prompt the
