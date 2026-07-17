@@ -162,6 +162,8 @@ const flowApi: FlowApi = {
   gateDecision: (repoKey, option, note) =>
     ipcRenderer.send(CH.flowGateDecision, { sessionId: SESSION_ID, repoKey, option, ...(note !== undefined ? { note } : {}) }),
   retryTurn: (repoKey) => ipcRenderer.send(CH.flowRetryTurn, { sessionId: SESSION_ID, repoKey }),
+  appRouteOut: (repoKey, step, turnKey, action) =>
+    ipcRenderer.send(CH.flowAppRouteOut, { sessionId: SESSION_ID, repoKey, step, turnKey, action }),
 };
 
 export const cliApi: CliApi = {

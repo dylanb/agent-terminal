@@ -5,6 +5,7 @@ import path from 'node:path';
 import { githubHttpsHref } from '../shared/githubUrl';
 import { TITLE_MAX } from '../shared/statusBar';
 import {
+  APP_ROUTE_OUT_ACTIONS,
   GATE_DECISION_OPTIONS,
   INSTALL_DESTINATION_IDS,
   SESSION_ID,
@@ -174,9 +175,20 @@ export function isValidFlowGateDecision(m: unknown): m is FlowGateDecisionMsg {
   );
 }
 
-/** flow:appRouteOut — STUB (RED): implemented in the GREEN commit. */
-export function isValidFlowAppRouteOut(_m: unknown): _m is FlowAppRouteOutMsg {
-  return false;
+/** flow:appRouteOut — the §27-only work-turn route-out (§27.12c). The `action` is confined to the §27 set
+ *  (never a §26 gate option); `repoKey` becomes a filesystem path so it gets the safe-path guard; `step`
+ *  and `turnKey` are the non-empty identity the receiver acts on (§6). */
+export function isValidFlowAppRouteOut(m: unknown): m is FlowAppRouteOutMsg {
+  return (
+    isRecord(m) &&
+    isLiveSession(m) &&
+    isSafeRepoKey(m.repoKey) &&
+    typeof m.step === 'string' &&
+    m.step.length > 0 &&
+    typeof m.turnKey === 'string' &&
+    m.turnKey.length > 0 &&
+    (APP_ROUTE_OUT_ACTIONS as readonly unknown[]).includes(m.action)
+  );
 }
 
 /** flow:resolveBootstrapConflict — the operator's answer to a §26.9 bootstrap conflict. `wipe` selects
