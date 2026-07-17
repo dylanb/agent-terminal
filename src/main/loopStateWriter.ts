@@ -50,9 +50,11 @@ export interface LoopStateWrite {
    *  `epic.sub_issues`. Absent → the prior doc's `epic` is preserved by the merge. */
   epic?: { subIssues: number[] };
   /** §26 D42a (resume --loop) — SKIP the prior-doc merge and lay the LoopExtension defaults instead, so a
-   *  run rebound to a NEW loop starts fresh (cap_baseline/persona_state/impasse/severity_cycle reset to
-   *  a new-run baseline) rather than inheriting the loop it succeeded. The read set passed in this write
-   *  (pr/branch/linked_issues) still persists — that is how the new loop keeps working the same PR. */
+   *  run rebound to a NEW loop starts fresh (persona_state/impasse/severity_cycle reset to a new-run
+   *  baseline) rather than inheriting the loop it succeeded. `cap_baseline` is NOT among the reset defaults:
+   *  the rebind write sets it explicitly (`capBaseline: prior.iteration`, §26.8) to open the successor's own
+   *  cap window at the prior loop's final iteration. The read set passed in this write (pr/branch/
+   *  linked_issues) still persists — that is how the new loop keeps working the same PR. */
   freshExtension?: boolean;
 }
 

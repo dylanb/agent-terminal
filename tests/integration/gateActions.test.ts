@@ -24,7 +24,7 @@ const PLAN_LOOP =
   '      - kind: exec\n' +
   '        args:\n' +
   '          argv: ["gh", "issue", "edit", "{{state.linked_issues[0]}}", "--body-file", "{{artifact.ticket-body}}"]\n' +
-  '      - kind: clear-phase2\n' +
+  '      - kind: publish-body\n' +
   '      - kind: reset-severity-cycle\n' +
   '      - kind: terminate\n' +
   '    on_request_changes:\n' +
@@ -73,7 +73,7 @@ describe('decideGateOutcome (§26.6 / L5 — app-internal gate transition)', () 
       'epic-promote',
       'mark-pr-ready',
       'exec',
-      'clear-phase2',
+      'publish-body',
       'reset-severity-cycle',
       'terminate',
     ]);
@@ -102,11 +102,11 @@ describe('decideGateOutcome (§26.6 / L5 — app-internal gate transition)', () 
 
   it('drops the action kinds the in-app v1 engine does not model (parsed by loopDef, not carried as effects)', () => {
     // §26.6 deferred-and-dropped kinds — the LoopDef declares them (real-engine vocabulary) but the app's
-    // v1 gate executor carries out none, so decideGateOutcome must NOT surface them as effects (parity with
-    // `publish-body`). In the vendored defs they only ever appear alongside `terminate`, so the run has
-    // already ended when they would apply — dropping them is behavior-identical, and honest.
+    // v1 gate executor carries out none, so decideGateOutcome must NOT surface them as effects. In the
+    // vendored defs they only ever appear alongside `terminate`, so the run has already ended when they
+    // would apply — dropping them is behavior-identical, and honest.
     const kinds = decideGateOutcome(gate(), 'approve').effects.map((e) => e.kind);
-    expect(kinds).not.toContain('clear-phase2');
+    expect(kinds).not.toContain('publish-body');
     expect(kinds).not.toContain('reset-severity-cycle');
   });
 
