@@ -123,6 +123,8 @@ describe('§27 engine — entry, boundary, and the work injection (AC1, AC9)', (
     expect(injected[1]).toContain(completionMarker(STEP)); // the marker instruction
     expect(injected[1]).toContain('turn-done:work-plan'); // the §27 done-signal
     expect(engine.activeTurnKey()).toBe(TURN_KEY);
+    // AC9 — the boundary is recorded in the §25 audit (no round/iteration event, exit null).
+    expect(audit).toHaveBeenCalledWith(repo, expect.stringContaining('/clear'), null);
   });
 
   it('a compact boundary issues /compact carrying the def message (§27.9)', () => {
@@ -185,6 +187,8 @@ describe('§27 engine — completion gate (AC2, AC3)', () => {
     expect(state?.status).toBe('error');
     expect(state?.errorReason).toBeTruthy();
     expect(emitError).toHaveBeenCalledTimes(1);
+    // AC7 — the failure is recorded in the §25 audit with its reason (exit 1).
+    expect(audit).toHaveBeenCalledWith(repo, expect.stringContaining(state!.errorReason!), 1);
   });
 });
 
