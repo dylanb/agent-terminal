@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { deriveAppLoopView } from '../../src/main/loopViewV2';
 import type { LoopDefV2Tiers } from '../../src/main/loopDefV2';
+import { writeAppLoopState } from '../../src/main/appLoopState';
 
 // The §27 loop-view provider (the READ meeting point, engine-selected on the flow step's `app` namespace):
 // it resolves the bound app-def and produces the whole loop view the strip/panel render — a run-less view
@@ -87,5 +88,56 @@ describe('deriveAppLoopView — def-failure view (AC 6)', () => {
     const view = deriveAppLoopView('plan-loop', { tiers: tiers(), repoDir });
     expect(view.status).toBe('error');
     expect(view.errorReason).toBeTruthy();
+  });
+});
+
+// §27.12 — once a work turn has run, the provider mirrors the live §27 run-state (working/error/complete)
+// carrying the turn identity the route-out acts on, instead of the run-less view. The error status is
+// classified human-needed by the SHARED predicate (loopStatus), so both engines agree.
+describe('deriveAppLoopView — live run-state (AC1, AC7)', () => {
+  const FIXED = (): Date => new Date('2026-07-17T12:00:00.000Z');
+
+  it('mirrors a running work turn: status working, human not needed, the turn identity, no gate', () => {
+    plant('plan-loop', ['approve']);
+    writeAppLoopState(repoDir, { loop: 'plan-loop', step: 'plan', turnKey: 'work-plan', status: 'working' }, FIXED);
+    const view = deriveAppLoopView('plan-loop', { tiers: tiers(), repoDir });
+    expect(view.status).toBe('working');
+    expect(view.humanNeeded).toBe(false);
+    expect(view.actionable).toBe(false);
+    expect(view.appTurn).toEqual({ step: 'plan', turnKey: 'work-plan' });
+    expect(view.iteration).toBeUndefined(); // no round has run
+    expect(view.errorReason).toBeUndefined();
+  });
+
+  it('mirrors an errored work turn: status error, human-needed by the shared predicate, its reason + identity', () => {
+    plant('plan-loop', ['approve']);
+    writeAppLoopState(
+      repoDir,
+      { loop: 'plan-loop', step: 'plan', turnKey: 'work-plan', status: 'error', errorReason: 'stalled: no terminal activity' },
+      FIXED,
+    );
+    const view = deriveAppLoopView('plan-loop', { tiers: tiers(), repoDir });
+    expect(view.status).toBe('error');
+    expect(view.humanNeeded).toBe(true);
+    expect(view.errorReason).toBe('stalled: no terminal activity');
+    expect(view.appTurn).toEqual({ step: 'plan', turnKey: 'work-plan' });
+  });
+
+  it('mirrors a completed work turn: status complete, human not needed', () => {
+    plant('plan-loop', ['approve']);
+    writeAppLoopState(repoDir, { loop: 'plan-loop', step: 'plan', turnKey: 'work-plan', status: 'complete' }, FIXED);
+    const view = deriveAppLoopView('plan-loop', { tiers: tiers(), repoDir });
+    expect(view.status).toBe('complete');
+    expect(view.humanNeeded).toBe(false);
+    expect(view.appTurn).toEqual({ step: 'plan', turnKey: 'work-plan' });
+  });
+
+  it('ignores a run-state belonging to a DIFFERENT loop (falls back to the run-less view)', () => {
+    plant('plan-loop', ['approve', 'request-changes']);
+    writeAppLoopState(repoDir, { loop: 'groom-loop', step: 'groom', turnKey: 'work-groom', status: 'working' }, FIXED);
+    const view = deriveAppLoopView('plan-loop', { tiers: tiers(), repoDir });
+    expect(view.status).toBe('not-started'); // the stale run-state is not this loop's
+    expect(view.gateOptions).toEqual(['approve', 'request-changes']);
+    expect(view.appTurn).toBeUndefined();
   });
 });

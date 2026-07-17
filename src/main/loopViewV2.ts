@@ -16,6 +16,10 @@ import { resolveLoopDefV2, type LoopDefV2Context } from './loopDefV2';
  *  never a §26 vocabulary term). `error` reuses the existing loop-error surface so the reason row renders. */
 export const APP_LOOP_STATUS_RUN_LESS = 'not-started';
 export const APP_LOOP_STATUS_ERROR = 'error';
+/** The live §27 work-turn statuses the provider mirrors from the persisted run state (§27.12). Equal to the
+ *  `AppLoopRunState` status values (appLoopState.ts) — one vocabulary the writer and this reader share. */
+export const APP_LOOP_STATUS_WORKING = 'working';
+export const APP_LOOP_STATUS_COMPLETE = 'complete';
 
 export function deriveAppLoopView(name: string, ctx: LoopDefV2Context): FlowLoopView {
   const r = resolveLoopDefV2(name, ctx);

@@ -475,6 +475,12 @@ export interface FlowLoopView {
    *  panel show WHY the loop stopped (e.g. "no Claude at the prompt") rather than a bare "error", and is
    *  cleared the moment the status recovers. Absent on every non-error view. */
   errorReason?: string;
+  /** §27.12/§27.15 — the identity of the §27 (app-namespace) work turn this view reflects: the flow step it
+   *  runs against and its turn key. Present ONLY on a live §27 run view (working/error/complete); absent on
+   *  every §26 view and on the §27 run-less/def-failure view (no turn has started). The panel carries this
+   *  onto the §27-only error route-out (retry / accept / terminate) so the receiver acts on the identity it
+   *  names, never ambient state (§6). Additive and §27-only — no §26 concept crosses the seam (§27.15). */
+  appTurn?: { step: string; turnKey: string };
 }
 
 /** The GitHub issue (ticket) and PR a flow is working (§24.2.3 T7). Numbers only — the title, body,
