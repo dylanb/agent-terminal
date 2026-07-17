@@ -242,6 +242,22 @@ describe('§27 engine — a persist failure never aborts the error path (CWE-703
     expect(live?.reason).toBeTruthy();
     expect(engine.liveErrorFor(join(tmpdir(), 'some-other-repo'))).toBeNull();
   });
+
+  it('clears the held live error when the turn transitions back out of error (retry → working)', () => {
+    // The live error is held only while the turn is in `error`; a transition to any non-error status must
+    // clear it, or the view would keep rendering stale retry/accept/terminate controls over a now-working
+    // turn and let the operator route-out against a live turn. Set up a failed error-persist so the live
+    // error is populated, then drive a retry back to `working` and assert the hold is released.
+    const engine = makeEngine((repoDir, state) => {
+      if (state.status === 'error') throw new Error('EROFS: read-only file system');
+      writeAppLoopState(repoDir, state, FIXED);
+    });
+    enterAndInjectWork(engine);
+    engine.onStall();
+    expect(engine.liveErrorFor(repo)).not.toBeNull(); // held after the failed error-persist
+    engine.routeOut(repo, STEP, TURN_KEY, 'retry'); // transitions to `working`
+    expect(engine.liveErrorFor(repo)).toBeNull(); // the non-error persist released the hold
+  });
 });
 
 describe('§27 engine — the identity-carrying route-out (AC7)', () => {
@@ -317,6 +333,21 @@ describe('§27 engine — resume (AC8)', () => {
     engine.routeOut(repo, STEP, TURN_KEY, 'accept');
     expect(readAppLoopState(repo)?.status).toBe('error'); // Accept refused: not fabricated complete
     expect(injected).toEqual([]); // and never injected
+  });
+
+  it('surfaces a def-unresolvable error when Accept is refused on an unresolved resumed turn (CWE-755)', () => {
+    // Refusing Accept silently leaves the operator staring at the stale ORIGINAL error reason (e.g. `stall`)
+    // with an Accept affordance that can never succeed and no feedback saying so. The refusal must surface a
+    // def-unresolvable reason via emitError (and update the live error) so the view tells the operator to
+    // retry or terminate — the exceptional condition is detected AND reported, not just detected.
+    writeAppLoopState(repo, { loop: 'plan-loop', step: STEP, turnKey: TURN_KEY, status: 'error', errorReason: 'stalled' }, FIXED);
+    defResult = { ok: false, reason: 'no §27 def named plan-loop in any tier' };
+    const engine = makeEngine();
+    engine.resume(repo);
+    engine.routeOut(repo, STEP, TURN_KEY, 'accept');
+    expect(readAppLoopState(repo)?.status).toBe('error'); // still not fabricated complete
+    expect(emitError).toHaveBeenCalledWith(expect.stringMatching(/resolve/i));
+    expect(engine.liveErrorFor(repo)?.reason).toMatch(/resolve/i); // the view no longer shows the stale reason
   });
 
   it('never re-runs a completed turn on resume', () => {
