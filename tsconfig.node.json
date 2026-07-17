@@ -60,6 +60,7 @@
     "tests/helpers/**/*.ts",
     "tests/e2e/**/*.ts",
     "playwright.config.ts",
+    "playwright.workers.ts",
     "vitest.config.ts",
     "vitest.poolSizing.ts"
   ]
