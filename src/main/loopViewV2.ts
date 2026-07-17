@@ -10,7 +10,9 @@
 //     human-needed so the cue and OS notifier surface it, with no round.
 
 import type { FlowLoopView } from '../shared/ipc';
+import { isHumanNeededStatus } from '../shared/loopStatus';
 import { resolveLoopDefV2, type LoopDefV2Context } from './loopDefV2';
+import { readAppLoopState } from './appLoopState';
 
 /** The run-less/failure status strings the §27 provider emits (§27-owned, mapped to a tone by the strip;
  *  never a §26 vocabulary term). `error` reuses the existing loop-error surface so the reason row renders. */
@@ -22,6 +24,23 @@ export const APP_LOOP_STATUS_WORKING = 'working';
 export const APP_LOOP_STATUS_COMPLETE = 'complete';
 
 export function deriveAppLoopView(name: string, ctx: LoopDefV2Context): FlowLoopView {
+  // §27.12 — once a work turn has run, the persisted §27 run-state is the live view: mirror its status
+  // (working/error/complete) and carry the turn identity the route-out acts on. `error` is classified
+  // human-needed by the shared predicate so both engines agree. A run-state for a DIFFERENT loop (a stale
+  // prior binding) is not this step's, so it falls through to the resolve-time run-less/failure view.
+  const run = readAppLoopState(ctx.repoDir);
+  if (run && run.loop === name) {
+    return {
+      status: run.status,
+      pr: null,
+      branch: null,
+      ready: false,
+      actionable: false,
+      humanNeeded: isHumanNeededStatus(run.status),
+      appTurn: { step: run.step, turnKey: run.turnKey },
+      ...(run.errorReason ? { errorReason: run.errorReason } : {}),
+    };
+  }
   const r = resolveLoopDefV2(name, ctx);
   if (!r.ok) {
     return {
