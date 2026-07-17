@@ -2,7 +2,7 @@ import { app, BrowserWindow, clipboard, ipcMain, Menu, Notification, shell } fro
 import { buildMenuTemplate } from './appMenu';
 import path from 'node:path';
 import os from 'node:os';
-import { statSync } from 'node:fs';
+import { readFileSync, statSync } from 'node:fs';
 import { performance } from 'node:perf_hooks';
 import {
   CH,
@@ -36,6 +36,7 @@ import {
   isValidFlowSetTitle,
   isValidFlowGateDecision,
   isValidFlowResolveBootstrapConflict,
+  isValidFlowAppRouteOut,
   isValidFlowGithubRef,
   openExternalTarget,
   isValidInject,
@@ -116,6 +117,9 @@ import {
   type InstallDestination,
 } from './installExamples';
 import { deriveAppLoopView } from './loopViewV2';
+import { createAppLoopEngine } from './appLoopEngine';
+import { APP_LOOP_DIR_SEGMENTS, writeAppLoopState } from './appLoopState';
+import { resolveLoopDefV2 } from './loopDefV2';
 import { resolveExampleLoopsV2Dir } from './exampleAssets';
 import { userConfigLoopsV2Dir } from './userConfig';
 import type { CliInstallResult } from '../shared/ipc';
@@ -447,13 +451,77 @@ async function createWindow(): Promise<void> {
     // §26.6 — the consolidate verdict decides the branch (clean STOPs at the gate, needs-work re-iterates).
     else if (finished?.kind === 'consolidate') advanceAfterConsolidate(finished);
   };
+  // §27.15 — the §27 (app-namespace) work-turn engine, driving the SAME hosted instance as the §26 runner
+  // through its own domain ports. Only one turn is ever in flight (one instance), so the shadow signals fan
+  // out to BOTH runners below; the idle one no-ops (each guards on its own in-flight state). The §27 engine
+  // keeps its run state and done-file in the §27 loop area, disjoint from §26's `.agent-loop/` (AC10).
+  const appTurnDoneSubdir = path.join(...APP_LOOP_DIR_SEGMENTS);
+  let appTurnTimer: ReturnType<typeof setTimeout> | null = null;
+  let unwatchAppTurnDone: (() => void) | null = null;
+  const appEngine = createAppLoopEngine({
+    inject: (text) => inject(text, { submit: true }),
+    hostedAgent: () => classifyHostedAgent(hostedAgentPresent(tracker.summaries()), agentActivity),
+    armTimer: () => {
+      if (appTurnTimer) clearTimeout(appTurnTimer); // self-clearing: each activity edge replaces, never leaks
+      appTurnTimer = setTimeout(() => appEngine.onStall(), config.stallTimeoutMs);
+    },
+    cancelTimer: () => {
+      if (appTurnTimer) clearTimeout(appTurnTimer);
+      appTurnTimer = null;
+    },
+    noteSettle: () => shadow.noteSettle(),
+    now: () => new Date(),
+    resolveDef: (repoDir, name) =>
+      resolveLoopDefV2(name, { tiers: { operator: userConfigLoopsV2Dir(), appBundled: resolveExampleLoopsV2Dir(iconLoc) }, repoDir }),
+    readRecipe: (absPath) => {
+      try {
+        return readFileSync(absPath, 'utf8');
+      } catch {
+        return null;
+      }
+    },
+    readArtifact: (absPath) => {
+      try {
+        return readFileSync(absPath, 'utf8');
+      } catch {
+        return null;
+      }
+    },
+    persist: (repoDir, state) => writeAppLoopState(repoDir, state),
+    audit: (repoDir, cmd, exit) => audit.recordCommand(repoDir, 'turn', cmd, exit),
+    emitError: (reason) => send(CH.flowOnLoopError, { sessionId: SESSION_ID, reason }),
+    onViewChanged: () => pushFlowChanged(),
+    terminateFlow: (repoDir) => {
+      flow.terminate(repoDir);
+      pushFlowChanged();
+    },
+  });
+  // Watch the §27 done-file (in the §27 loop area) for the active §27 turn, key-matched so a prior turn's
+  // latched file cannot complete a different one — the §27 analogue of armTurnDoneWatch (§27.12).
+  const armAppTurnDoneWatch = (repoDir: string): void => {
+    unwatchAppTurnDone?.();
+    unwatchAppTurnDone = watchTurnDone(
+      repoDir,
+      () => {
+        if (readTurnDone(repoDir, appTurnDoneSubdir) === appEngine.activeTurnKey()) appEngine.onDoneSignal();
+      },
+      appTurnDoneSubdir,
+    );
+  };
   // The §8.3 active→quiet flip is the orchestrator's "instance is now injectable" signal (§26.2) —
-  // assigned once the runner exists so the shadow's onStatus (built earlier) can fire it forward.
-  notifyInjectable = () => turnRunner.onInjectable();
+  // assigned once the runners exist so the shadow's onStatus (built earlier) can fire it forward. Fans out
+  // to both engines; the idle one no-ops (§27.15 — one instance, one turn in flight).
+  notifyInjectable = () => {
+    turnRunner.onInjectable();
+    appEngine.onInjectable();
+  };
   // Every §8.3 visible-content edge resets the in-flight turn's stall watchdog (§26.3): a streaming turn
   // keeps producing edges so it never stalls, while a frozen screen stops producing them and counts down.
-  // Inert unless a turn is in flight (the runner guards it), so this is idle-cheap outside a loop.
-  shadow.onActivity(() => turnRunner.noteActivity());
+  // Inert unless a turn is in flight (each runner guards it), so this is idle-cheap outside a loop.
+  shadow.onActivity(() => {
+    turnRunner.noteActivity();
+    appEngine.noteActivity();
+  });
   // §26.3/D47a — the turn-done file is the sole completion signal, so EVERY turn-starter must call this,
   // not just the work turn: a chain entered mid-run (§26.11 resume into reviewers/consolidate) would
   // otherwise have no completion trigger at all.
@@ -887,12 +955,14 @@ async function createWindow(): Promise<void> {
     inject: (text) => inject(text, { submit: false }),
     runPickup: runPickupForStep,
     resumeLoop: resumeLoopForStep,
-    // §27.15 / N1 — an app-namespace step's entry is a no-op-with-reason: no §26 resume/pickup/work-turn is
-    // dispatched and nothing is injected. Trace the refusal (§25) — the run-less view is the operator's
-    // surface, so this is not the blocking loop-error path.
-    refuseAppEntry: (step) => {
+    // §27.15/§27.3 — an app-namespace step binds the §27 engine: start its work turn (run the declared
+    // boundary, inject the work prompt once when injectable), NEVER a §26 run. The engine no-ops when the
+    // def fails to resolve — the run-less/failure view (deriveAppLoopView) is the operator's surface then.
+    enterAppLoop: (step) => {
       const repoKey = transitioningRepo;
-      if (repoKey) audit.recordCommand(repoKey, 'resume', `app-namespace step entry: no §26 run started (${step.loop})`, 1);
+      if (!repoKey || !step.loop) return;
+      appEngine.enter(repoKey, step.loop, step.id);
+      armAppTurnDoneWatch(repoKey);
     },
   });
   const flow = createFlowManager({
@@ -1198,6 +1268,15 @@ async function createWindow(): Promise<void> {
       [CH.flowRetryTurn]: (_e, m) => {
         if (isValidFlowRequest(m)) retryActiveTurn(m.repoKey);
       },
+      // §27.12c — the §27-only work-turn route-out (retry / accept-present-artifact / terminate), acting on
+      // the step+turn identity the payload names (§6), never ambient state. After a relaunch the engine has
+      // no live turn, so reconstruct the stopped turn from the persisted §27 run state first (never re-driven
+      // — only made routable); a live turn for this repo already matches, so the resume is skipped.
+      [CH.flowAppRouteOut]: (_e, m) => {
+        if (!isValidFlowAppRouteOut(m)) return;
+        if (appEngine.activeRepoDir() !== m.repoKey) appEngine.resume(m.repoKey);
+        appEngine.routeOut(m.repoKey, m.step, m.turnKey, m.action);
+      },
       // §26.9 — the operator's wipe/cancel answer to a bootstrap conflict.
       [CH.flowResolveBootstrapConflict]: (_e, m) => {
         if (isValidFlowResolveBootstrapConflict(m)) resolveBootstrapConflict(m.repoKey, m.wipe);
@@ -1393,7 +1472,11 @@ async function createWindow(): Promise<void> {
       () => {
         if (turnTimer) clearTimeout(turnTimer);
       },
+      () => {
+        if (appTurnTimer) clearTimeout(appTurnTimer);
+      },
       () => unwatchTurnDone?.(),
+      () => unwatchAppTurnDone?.(),
     ]);
   });
 

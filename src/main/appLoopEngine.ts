@@ -39,8 +39,10 @@ export interface AppLoopEngineDeps {
   noteSettle(): void;
   /** The current instant, stamped onto the persisted run state (§27.10). */
   now(): Date;
-  /** Resolve the bound §27 def (§27.8); its reason surfaces at the view on failure (AC6). */
-  resolveDef(loopName: string): LoopDefV2Result;
+  /** Resolve the bound §27 def for a repo (§27.8); its reason surfaces at the view on failure (AC6). The
+   *  repoDir is the tier context's repo root — the tier roots themselves are chosen by the parsed namespace,
+   *  never derived from repo content. */
+  resolveDef(repoDir: string, loopName: string): LoopDefV2Result;
   /** Read the def's confined work-recipe body; null on read failure (an unrecoverable config error). */
   readRecipe(absPath: string): string | null;
   /** Read the confined completion-artifact content; null when absent/unreadable (the domain concept, not
@@ -183,7 +185,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
   return {
     enter(repoDir, loopName, stepId) {
       if (runner.state() === 'in-flight') return; // §27.2 — never interleave a second turn
-      const r = deps.resolveDef(loopName);
+      const r = deps.resolveDef(repoDir, loopName);
       if (!r.ok) return; // AC6 — the def-failure view is produced at resolve time (loopViewV2)
       start(activeTurnFor(repoDir, loopName, stepId, r.def));
     },
@@ -227,7 +229,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       // reconstructed turn carries its real completion contract (accept must read the true artifact). NEVER
       // re-drive it: an `error`/`complete` turn is human-owned; the runner stays idle until an explicit
       // route-out (§27.12).
-      const r = deps.resolveDef(state.loop);
+      const r = deps.resolveDef(repoDir, state.loop);
       active = r.ok
         ? activeTurnFor(repoDir, state.loop, state.step, r.def)
         : { repoDir, loopName: state.loop, stepId: state.step, turnKey: state.turnKey, recipePath: '', boundaryCmd: '/clear', completion: null };

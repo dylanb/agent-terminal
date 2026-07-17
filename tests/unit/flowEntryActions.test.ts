@@ -15,7 +15,7 @@ function deps(over: Partial<Parameters<typeof createFlowEntryActions>[0]> = {}) 
     inject: vi.fn(),
     runPickup: vi.fn(),
     resumeLoop: vi.fn(),
-    refuseAppEntry: vi.fn(),
+    enterAppLoop: vi.fn(),
     ...over,
   };
 }
@@ -161,19 +161,19 @@ describe('flow entry actions — resume into a loop step (§26 D42a)', () => {
   });
 });
 
-// §27.15 / N1 — a loop step bound to the `app` def namespace is the §27 engine's. Entering it starts NO
-// §26 run and injects nothing (ticket non-goal), even on a machine holding a same-named §26 def. The entry
-// selector refuses at the dispatcher: neither the skill inject, the pickup runner, nor the §26 resume port
-// fires. The refusal is surfaced through refuseAppEntry (the composition root records the §25 no-op).
-describe('flow entry actions — app-namespace step is refused (§27.15 / N1)', () => {
+// §27.15 — a loop step bound to the `app` def namespace is the §27 engine's. The dispatcher routes it to
+// the §27 entry (enterAppLoop) BEFORE any §26 skill inject, pickup runner, or resume port can fire, so the
+// two engines never both run for one step (AC10). What the §27 entry does (start the work turn) is the
+// engine's concern; the dispatcher only guarantees the §26 paths do not fire.
+describe('flow entry actions — app-namespace step routes to the §27 engine (§27.15 / AC10)', () => {
   const appStep = (over: Partial<FlowStepDef> = {}): FlowStepDef =>
     step({ id: 'plan', kind: 'loop', loop: 'plan-loop', loopNamespace: 'app', ...over });
 
-  it('refuses an app-namespace loop step: no resume, no pickup, no injection', () => {
+  it('routes an app-namespace loop step to §27: no §26 resume, no pickup, no injection', () => {
     const d = deps();
     const s = appStep();
     const result = createFlowEntryActions(d)(s, {});
-    expect(d.refuseAppEntry).toHaveBeenCalledWith(s);
+    expect(d.enterAppLoop).toHaveBeenCalledWith(s);
     expect(d.resumeLoop).not.toHaveBeenCalled();
     expect(d.runPickup).not.toHaveBeenCalled();
     expect(d.inject).not.toHaveBeenCalled();
@@ -181,20 +181,20 @@ describe('flow entry actions — app-namespace step is refused (§27.15 / N1)', 
     expect(result.prompt).toBeUndefined();
   });
 
-  it('refuses an app-namespace pickup step without running pickup, even with its required input resolved', () => {
+  it('routes an app-namespace pickup step to §27 without running §26 pickup, even with its required input resolved', () => {
     const d = deps();
     createFlowEntryActions(d)(
       appStep({ bootstrap: 'pickup', inputs: [{ name: 'ticket', type: 'github-ticket', required: true }] }),
       { ticket: '176' },
     );
-    expect(d.refuseAppEntry).toHaveBeenCalled();
+    expect(d.enterAppLoop).toHaveBeenCalled();
     expect(d.runPickup).not.toHaveBeenCalled();
   });
 
-  it('refuses an app-namespace step carrying a skill without injecting it', () => {
+  it('routes an app-namespace step carrying a skill to §27 without injecting it', () => {
     const d = deps();
     createFlowEntryActions(d)(appStep({ skill: 'groom' }), {});
-    expect(d.refuseAppEntry).toHaveBeenCalled();
+    expect(d.enterAppLoop).toHaveBeenCalled();
     expect(d.inject).not.toHaveBeenCalled();
   });
 
@@ -202,7 +202,7 @@ describe('flow entry actions — app-namespace step is refused (§27.15 / N1)', 
     const d = deps();
     const s = step({ id: 'plan', kind: 'loop', loop: 'plan-loop', loopNamespace: 'legacy' });
     createFlowEntryActions(d)(s, {});
-    expect(d.refuseAppEntry).not.toHaveBeenCalled();
+    expect(d.enterAppLoop).not.toHaveBeenCalled();
     expect(d.resumeLoop).toHaveBeenCalledWith(s);
   });
 });
