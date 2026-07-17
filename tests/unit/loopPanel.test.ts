@@ -305,6 +305,57 @@ describe('docked loop panel (§24.2.3 T2)', () => {
     expect(host2.querySelector('[data-loop-retry]')).not.toBeNull();
   });
 
+  // §27.12c — a §27 work turn that stopped in `error` (no round has run, so `appTurn` carries the identity
+  // and iteration is absent) offers all three route-out affordances: retry / accept-present-artifact /
+  // terminate. Each carries the step+turn identity so the route-out acts on it, never ambient state (§6).
+  const appRouteOutDeps = () => {
+    const appRouteOut = vi.fn();
+    return { deps: { githubRef: () => Promise.resolve(null), openExternal: () => {}, appRouteOut }, appRouteOut };
+  };
+
+  it('renders the three §27 route-out affordances on a §27 work-turn error (AC7)', () => {
+    const { deps } = appRouteOutDeps();
+    createLoopPanel(host, deps).render(
+      loop({ status: 'error', errorReason: 'stalled: no terminal activity', iteration: undefined, appTurn: { step: 'plan', turnKey: 'work-plan' } }),
+      'plan',
+    );
+    expect(host.querySelector('[data-app-route-out="retry"]')).not.toBeNull();
+    expect(host.querySelector('[data-app-route-out="accept"]')).not.toBeNull();
+    expect(host.querySelector('[data-app-route-out="terminate"]')).not.toBeNull();
+    // The §26 turn-error Retry is NOT rendered for a §27 error (no iteration): the §27 route-out replaces it.
+    expect(host.querySelector('[data-loop-retry]')).toBeNull();
+  });
+
+  it('each §27 route-out button fires the injected service with its step+turn identity (§6)', () => {
+    const { deps, appRouteOut } = appRouteOutDeps();
+    createLoopPanel(host, deps).render(
+      loop({ status: 'error', errorReason: 'x', iteration: undefined, appTurn: { step: 'plan', turnKey: 'work-plan' } }),
+      'plan',
+    );
+    host.querySelector<HTMLElement>('[data-app-route-out="accept"]')!.click();
+    expect(appRouteOut).toHaveBeenCalledWith('plan', 'work-plan', 'accept');
+    host.querySelector<HTMLElement>('[data-app-route-out="terminate"]')!.click();
+    expect(appRouteOut).toHaveBeenCalledWith('plan', 'work-plan', 'terminate');
+  });
+
+  it('shows NO route-out affordances while the §27 work turn is running (working)', () => {
+    const { deps } = appRouteOutDeps();
+    createLoopPanel(host, deps).render(
+      loop({ status: 'working', iteration: undefined, appTurn: { step: 'plan', turnKey: 'work-plan' } }),
+      'plan',
+    );
+    expect(row('status')?.querySelector('.lv')?.textContent).toBe('working');
+    expect(host.querySelector('[data-app-route-out="retry"]')).toBeNull();
+  });
+
+  it('renders no route-out affordances when the service is not wired (inert-affordance guard, WCAG 4.1.2)', () => {
+    createLoopPanel(host).render(
+      loop({ status: 'error', errorReason: 'x', iteration: undefined, appTurn: { step: 'plan', turnKey: 'work-plan' } }),
+      'plan',
+    );
+    expect(host.querySelector('[data-app-route-out="retry"]')).toBeNull();
+  });
+
   it('shows no "mark turn complete" control when there is no loop step (refs-only panel)', () => {
     const panel = createLoopPanel(host, {
       githubRef: () => Promise.resolve(null),

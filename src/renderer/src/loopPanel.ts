@@ -36,6 +36,10 @@ export interface LoopPanelDeps {
    *  for a `no hosted agent` stop). Injected by the composition root; absent → no Retry control is shown,
    *  so an errored loop is never a dead-end reachable only by Terminate (never-unrecoverable, CLAUDE.md). */
   retryTurn?(): void;
+  /** §27.12c — the §27-only work-turn route-out (retry / accept-present-artifact / terminate), carrying the
+   *  step+turn identity the receiver acts on (§6). Injected by the composition root; absent → the §27 error
+   *  view shows no route-out (an un-wired control would be inert, WCAG 4.1.2). */
+  appRouteOut?(step: string, turnKey: string, action: 'retry' | 'accept' | 'terminate'): void;
 }
 
 const NOOP_DEPS: LoopPanelDeps = { githubRef: () => Promise.resolve(null), openExternal: () => {} };

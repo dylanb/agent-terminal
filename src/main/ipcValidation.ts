@@ -8,6 +8,7 @@ import {
   GATE_DECISION_OPTIONS,
   INSTALL_DESTINATION_IDS,
   SESSION_ID,
+  type FlowAppRouteOutMsg,
   type AgentInjectMsg,
   type ClipboardWriteMsg,
   type CaptureLastMsg,
@@ -171,6 +172,11 @@ export function isValidFlowGateDecision(m: unknown): m is FlowGateDecisionMsg {
     (GATE_DECISION_OPTIONS as readonly unknown[]).includes(m.option) &&
     (m.note === undefined || typeof m.note === 'string')
   );
+}
+
+/** flow:appRouteOut — STUB (RED): implemented in the GREEN commit. */
+export function isValidFlowAppRouteOut(_m: unknown): _m is FlowAppRouteOutMsg {
+  return false;
 }
 
 /** flow:resolveBootstrapConflict — the operator's answer to a §26.9 bootstrap conflict. `wipe` selects
