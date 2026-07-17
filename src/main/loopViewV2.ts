@@ -13,6 +13,7 @@ import type { FlowLoopView } from '../shared/ipc';
 import { isHumanNeededStatus } from '../shared/loopStatus';
 import { resolveLoopDefV2, type LoopDefV2Context } from './loopDefV2';
 import { readAppLoopState } from './appLoopState';
+import type { AppLoopLiveError } from './appLoopEngine';
 
 /** The run-less/failure status strings the §27 provider emits (§27-owned, mapped to a tone by the strip;
  *  never a §26 vocabulary term). `error` reuses the existing loop-error surface so the reason row renders. */
@@ -23,7 +24,23 @@ export const APP_LOOP_STATUS_ERROR = 'error';
 export const APP_LOOP_STATUS_WORKING = 'working';
 export const APP_LOOP_STATUS_COMPLETE = 'complete';
 
-export function deriveAppLoopView(name: string, ctx: LoopDefV2Context): FlowLoopView {
+export function deriveAppLoopView(name: string, ctx: LoopDefV2Context, liveError?: AppLoopLiveError | null): FlowLoopView {
+  // §27.12c — when the status:error write could not land (ENOSPC/EPERM/a planted symlink), the persisted
+  // state cannot reflect the error, so the engine's LIVE error is the truth: surface it (and its route-out
+  // identity) so the §27 route-out is never a dead-end. It is the freshest signal, so it wins over a stale
+  // persisted status; a live error for a DIFFERENT loop is not this step's.
+  if (liveError && liveError.loop === name) {
+    return {
+      status: APP_LOOP_STATUS_ERROR,
+      pr: null,
+      branch: null,
+      ready: false,
+      actionable: false,
+      humanNeeded: isHumanNeededStatus(APP_LOOP_STATUS_ERROR),
+      appTurn: { step: liveError.step, turnKey: liveError.turnKey },
+      errorReason: liveError.reason,
+    };
+  }
   // §27.12 — once a work turn has run, the persisted §27 run-state is the live view: mirror its status
   // (working/error/complete) and carry the turn identity the route-out acts on. `error` is classified
   // human-needed by the shared predicate so both engines agree. A run-state for a DIFFERENT loop (a stale

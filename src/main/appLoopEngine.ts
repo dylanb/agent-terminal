@@ -27,6 +27,24 @@ const APP_DONE_REL_PATH = APP_LOOP_DIR_SEGMENTS.join('/') + '/' + TURN_DONE_FILE
 
 export type AppRouteOut = 'retry' | 'accept' | 'terminate';
 
+/** The live in-memory error of the §27 work turn, surfaced to the view when the persisted error write
+ *  failed (ENOSPC/EPERM/a planted symlink) so the route-out is never a dead-end (§27.12c). */
+export interface AppLoopLiveError {
+  loop: string;
+  step: string;
+  turnKey: string;
+  reason: string;
+}
+
+/** The completion contract of the work turn, as a discriminated union so no mode carries a field another
+ *  ignores: a file-producing turn gates on its artifact, a commit-producing turn on the done-signal alone,
+ *  and an `unresolved` turn (resume could not re-resolve the def) can never be accepted — Accept must read a
+ *  true artifact, never fabricate a pass (CWE-754). */
+type AppCompletion =
+  | { kind: 'file'; path: string; marker: string; artifactRel: string }
+  | { kind: 'commits' }
+  | { kind: 'unresolved' };
+
 export interface AppLoopEngineDeps {
   /** Inject + submit `text` into the hosted instance (§9.3). */
   inject(text: string): void;
@@ -37,8 +55,6 @@ export interface AppLoopEngineDeps {
   cancelTimer(): void;
   /** §27.2 — re-arm the quiescence window so a chained turn waits for a fresh settle before injecting. */
   noteSettle(): void;
-  /** The current instant, stamped onto the persisted run state (§27.10). */
-  now(): Date;
   /** Resolve the bound §27 def for a repo (§27.8); its reason surfaces at the view on failure (AC6). The
    *  repoDir is the tier context's repo root — the tier roots themselves are chosen by the parsed namespace,
    *  never derived from repo content. */
@@ -81,6 +97,9 @@ export interface AppLoopEngine {
   activeTurnKey(): string | null;
   /** The active turn's repo dir, for the host's signal routing; null when idle. */
   activeRepoDir(): string | null;
+  /** The live in-memory error for `repoDir`, or null — the view surfaces it when the persisted error write
+   *  failed, so the route-out stays reachable (§27.12c). */
+  liveErrorFor(repoDir: string): AppLoopLiveError | null;
 }
 
 interface ActiveAppTurn {
@@ -90,9 +109,7 @@ interface ActiveAppTurn {
   turnKey: string;
   recipePath: string;
   boundaryCmd: string;
-  /** The file-producing completion contract (confined artifact path + marker + repo-relative hint), or
-   *  null for a commit-producing turn (done-signal alone). */
-  completion: { path: string; marker: string; artifactRel: string } | null;
+  completion: AppCompletion;
 }
 
 /** The entry context boundary before WORK (§27.3): the def's first declared boundary, defaulting to
@@ -112,31 +129,49 @@ function activeTurnFor(repoDir: string, loopName: string, stepId: string, def: L
     recipePath: def.work.recipe,
     boundaryCmd: entryBoundaryCommand(def),
     completion: artifact
-      ? { path: artifact.path, marker: completionMarker(stepId), artifactRel: path.relative(repoDir, artifact.path) }
-      : null,
+      ? { kind: 'file', path: artifact.path, marker: completionMarker(stepId), artifactRel: path.relative(repoDir, artifact.path) }
+      : { kind: 'commits' },
   };
 }
 
 export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
   let active: ActiveAppTurn | null = null;
   let runner: TurnRunner;
+  // The last errored turn, kept until it transitions out of error, so the view can surface the route-out
+  // even when the persisted error write failed (§27.12c). Cleared on every non-error persist.
+  let liveError: (AppLoopLiveError & { repoDir: string }) | null = null;
 
   const persist = (status: AppLoopRunState['status'], errorReason?: string): void => {
     if (!active) return;
-    deps.persist(active.repoDir, {
-      loop: active.loopName,
-      step: active.stepId,
-      turnKey: active.turnKey,
-      status,
-      ...(errorReason ? { errorReason } : {}),
-    });
+    if (status !== 'error') liveError = null;
+    try {
+      deps.persist(active.repoDir, {
+        loop: active.loopName,
+        step: active.stepId,
+        turnKey: active.turnKey,
+        status,
+        ...(errorReason ? { errorReason } : {}),
+      });
+    } catch (e) {
+      // §27.10 resume state is best-effort: a write failure must never abort the turn's live path or crash
+      // main from a timer/watcher callback (CLAUDE.md — a best-effort side effect never aborts its path;
+      // CWE-703/755). The live error above keeps the route-out reachable this session even when the file
+      // did not land.
+      void (e instanceof Error ? e.message : String(e));
+    }
     deps.onViewChanged();
   };
 
   const artifactPresent = (): boolean => {
     if (!active) return false;
-    if (active.completion === null) return true; // commit-producing: the done-signal alone completes it
-    return artifactWellFormed(deps.readArtifact(active.completion.path), active.completion.marker);
+    switch (active.completion.kind) {
+      case 'commits':
+        return true; // the done-signal alone completes it
+      case 'unresolved':
+        return false; // resume could not re-resolve the def — Accept must not fabricate a pass (CWE-754)
+      case 'file':
+        return artifactWellFormed(deps.readArtifact(active.completion.path), active.completion.marker);
+    }
   };
 
   runner = createTurnRunner({
@@ -148,7 +183,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
         recipeBody: body,
         turnKey,
         doneRelPath: APP_DONE_REL_PATH,
-        completion: active.completion ? { artifactRel: active.completion.artifactRel, marker: active.completion.marker } : null,
+        completion: active.completion.kind === 'file' ? { artifactRel: active.completion.artifactRel, marker: active.completion.marker } : null,
       });
     },
     inject: (prompt, opts) => {
@@ -163,6 +198,9 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
     cancelTimer: () => deps.cancelTimer(),
     writeError: (reason) => {
       if (!active) return;
+      // Record the live error BEFORE persisting: emitError and the view fallback must surface the route-out
+      // even when the persisted error write fails (§27.12c — never an unrecoverable dead-end).
+      liveError = { repoDir: active.repoDir, loop: active.loopName, step: active.stepId, turnKey: active.turnKey, reason };
       persist('error', reason);
       deps.audit(active.repoDir, `§27 work turn ${active.turnKey} failed: ${reason}`, 1);
       deps.emitError(reason);
@@ -232,9 +270,17 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       const r = deps.resolveDef(repoDir, state.loop);
       active = r.ok
         ? activeTurnFor(repoDir, state.loop, state.step, r.def)
-        : { repoDir, loopName: state.loop, stepId: state.step, turnKey: state.turnKey, recipePath: '', boundaryCmd: '/clear', completion: null };
+        : { repoDir, loopName: state.loop, stepId: state.step, turnKey: state.turnKey, recipePath: '', boundaryCmd: '/clear', completion: { kind: 'unresolved' } };
+      if (state.status === 'error') {
+        liveError = { repoDir, loop: state.loop, step: state.step, turnKey: state.turnKey, reason: state.errorReason ?? 'error' };
+      }
     },
     activeTurnKey: () => active?.turnKey ?? null,
     activeRepoDir: () => active?.repoDir ?? null,
+    liveErrorFor: (repoDir) => {
+      if (!liveError || liveError.repoDir !== repoDir) return null;
+      const { loop, step, turnKey, reason } = liveError;
+      return { loop, step, turnKey, reason };
+    },
   };
 }

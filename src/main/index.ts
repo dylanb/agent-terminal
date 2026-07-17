@@ -470,7 +470,6 @@ async function createWindow(): Promise<void> {
       appTurnTimer = null;
     },
     noteSettle: () => shadow.noteSettle(),
-    now: () => new Date(),
     resolveDef: (repoDir, name) =>
       resolveLoopDefV2(name, { tiers: { operator: userConfigLoopsV2Dir(), appBundled: resolveExampleLoopsV2Dir(iconLoc) }, repoDir }),
     readRecipe: (absPath) => {
@@ -981,10 +980,14 @@ async function createWindow(): Promise<void> {
     // parsed namespace, never derived from repo content; the loop name is held to a safe segment inside
     // the resolver before any tier root is joined.
     readAppLoopView: (repoKey, name) =>
-      deriveAppLoopView(name, {
-        tiers: { operator: userConfigLoopsV2Dir(), appBundled: resolveExampleLoopsV2Dir(iconLoc) },
-        repoDir: repoKey,
-      }),
+      deriveAppLoopView(
+        name,
+        {
+          tiers: { operator: userConfigLoopsV2Dir(), appBundled: resolveExampleLoopsV2Dir(iconLoc) },
+          repoDir: repoKey,
+        },
+        appEngine.liveErrorFor(repoKey),
+      ),
   });
 
   // §24.2.3 T7 — resolve a ticket/PR's title/body/url for the popout, best-effort via `gh`, cached.
@@ -1274,7 +1277,13 @@ async function createWindow(): Promise<void> {
       // — only made routable); a live turn for this repo already matches, so the resume is skipped.
       [CH.flowAppRouteOut]: (_e, m) => {
         if (!isValidFlowAppRouteOut(m)) return;
-        if (appEngine.activeRepoDir() !== m.repoKey) appEngine.resume(m.repoKey);
+        if (appEngine.activeRepoDir() !== m.repoKey) {
+          appEngine.resume(m.repoKey);
+          // Re-arm the §27 done-file watch for the reconstructed turn: after a relaunch the fresh process
+          // has no live watcher, so a Retry re-injection would otherwise never see the turn-done file and
+          // could only stall to a second error (injector and completion signal must be armed together).
+          armAppTurnDoneWatch(m.repoKey);
+        }
         appEngine.routeOut(m.repoKey, m.step, m.turnKey, m.action);
       },
       // §26.9 — the operator's wipe/cancel answer to a bootstrap conflict.

@@ -76,7 +76,6 @@ function makeEngine(persistOverride?: (repoDir: string, state: AppLoopRunState) 
     armTimer,
     cancelTimer,
     noteSettle: () => {},
-    now: FIXED,
     resolveDef: () => defResult,
     readRecipe: () => '# work turn\nProduce the plan.',
     readArtifact: (p) => readArtifact(p),
