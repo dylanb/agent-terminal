@@ -34,10 +34,11 @@ describe('loop state.yaml extension reader (§26.6)', () => {
   });
 
   // CWE-20/770 — .agent-loop/state.yaml is attacker-plantable repo content, and cap_baseline feeds the
-  // §26.8 runaway backstop (`iteration - cap_baseline >= cap`). A hostile numeric — negative, NaN, ±Inf, or
-  // a non-integer — must degrade to 0 (the safe "window == monotonic iteration" default), never reach the
-  // subtraction: a large or NaN value would push the comparison to never-fire, defeating the cap.
-  it('rejects a hostile numeric cap_baseline (negative, NaN, Infinity, or non-integer) down to 0', () => {
+  // §26.8 runaway backstop (`iteration - cap_baseline >= cap`). A malformed numeric — negative, NaN, ±Inf,
+  // or a non-integer — must degrade to 0 (the safe "window == monotonic iteration" default) rather than
+  // reach the subtraction. (An in-range-typed but out-of-range value — cap_baseline > iteration — is
+  // clamped at the decision, where `iteration` is known: see decideConsolidateOutcome's own test.)
+  it('rejects a malformed numeric cap_baseline (negative, NaN, Infinity, or non-integer) down to 0', () => {
     for (const hostile of [-1, -1e9, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, 2.5]) {
       write({ status: 'plan-draft', iteration: 1, cap_baseline: hostile });
       expect(readLoopExtension(repo).capBaseline).toBe(0);

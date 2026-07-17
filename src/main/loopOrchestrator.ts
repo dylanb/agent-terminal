@@ -36,7 +36,11 @@ export interface ConsolidateInputs {
  *  re-iteration (never STOP on an empty status). Pure so the host's turn-chaining glue is tested. */
 export function decideConsolidateOutcome(inputs: ConsolidateInputs): ConsolidateOutcome {
   if (inputs.verdict === 'clean') return { kind: 'gate', status: inputs.postCleanGate };
-  const atCap = inputs.iterationCap > 0 && inputs.iteration - inputs.capBaseline >= inputs.iterationCap;
+  // CWE-20/770 — capBaseline is read from attacker-plantable .agent-loop/state.yaml and is always a PRIOR
+  // iteration (<= this one); a value above `iteration` would drive the window negative so the cap never
+  // fires, defeating the §26.8 runaway backstop. Clamp an out-of-range baseline to the monotonic window.
+  const effectiveBaseline = inputs.capBaseline > inputs.iteration ? 0 : inputs.capBaseline;
+  const atCap = inputs.iterationCap > 0 && inputs.iteration - effectiveBaseline >= inputs.iterationCap;
   const triage = inputs.stuck || atCap;
   if (triage && inputs.postNeedsWorkGate !== '') return { kind: 'gate', status: inputs.postNeedsWorkGate };
   return { kind: 'reiterate', nextIteration: inputs.iteration + 1 };

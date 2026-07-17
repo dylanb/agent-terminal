@@ -430,6 +430,23 @@ describe('consolidate outcome decision (§26.6 / §26.8 / §26.13 L4/L6)', () =>
     ).toEqual({ kind: 'reiterate', nextIteration: 6 });
   });
 
+  it('clamps a hostile out-of-range capBaseline (> iteration) so the cap still fires (CWE-20/770)', () => {
+    // cap_baseline is read from attacker-plantable .agent-loop/state.yaml and is always a PRIOR iteration
+    // (<= the current one). A planted value larger than `iteration` would drive `iteration - capBaseline`
+    // negative — the cap never reaches `>= iterationCap`, defeating the §26.8 runaway backstop. An
+    // out-of-range baseline degrades to the monotonic window (`iteration - 0`), so the cap fires as it
+    // would with no reset. Passing the reader's non-negative-integer gate is not enough on its own.
+    expect(
+      decideConsolidateOutcome({
+        ...base,
+        verdict: 'needs-work',
+        iteration: 6,
+        capBaseline: Number.MAX_SAFE_INTEGER,
+        iterationCap: 5,
+      }),
+    ).toEqual({ kind: 'gate', status: 'awaiting-human-plan-triage' });
+  });
+
   it('routes a needs-work verdict to the triage gate when flagged stuck (signature x2, §26.8)', () => {
     expect(decideConsolidateOutcome({ ...base, verdict: 'needs-work', iteration: 1, stuck: true })).toEqual({
       kind: 'gate',
