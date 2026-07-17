@@ -6,6 +6,7 @@
 
 import type { FlowStepDef } from './flow';
 import type { FlowPrompt } from '../shared/ipc';
+import { APP_LOOP_NAMESPACE } from '../shared/loopNamespace';
 
 /** §19.3 running-process refusal message — surfaced as the returned transient notice (skill only). */
 export const BUSY_NOTICE = 'agent is busy — wait or interrupt, then retry';
@@ -52,7 +53,7 @@ export function createFlowEntryActions(deps: FlowEntryActionDeps): FlowEntryActi
   return (step, inputs = {}) => {
     // §27.15 / N1 — an `app`-namespace loop step is the §27 engine's; entering it starts no §26 run and
     // injects nothing (ticket non-goal). Refuse at the dispatcher, before skill/pickup/resume can fire.
-    if (step.kind === 'loop' && step.loopNamespace === 'app') {
+    if (step.kind === 'loop' && step.loopNamespace === APP_LOOP_NAMESPACE) {
       deps.refuseAppEntry(step);
       return {};
     }

@@ -14,6 +14,11 @@ export type LoopNamespace = (typeof LOOP_NAMESPACES)[number];
  *  today, so a namespace-unaware flow file is unchanged in meaning. */
 export const DEFAULT_LOOP_NAMESPACE: LoopNamespace = 'legacy';
 
+/** The namespace that selects the §27 (agent-terminal-owned) engine. The write/read/entry seams all
+ *  classify a step by comparing against this one constant, so the classification lives once (per the
+ *  header's "one definition, shared") and a third namespace changes one edit, not several un-linked ones. */
+export const APP_LOOP_NAMESPACE: LoopNamespace = 'app';
+
 export function isLoopNamespace(v: unknown): v is LoopNamespace {
   return typeof v === 'string' && (LOOP_NAMESPACES as readonly string[]).includes(v);
 }

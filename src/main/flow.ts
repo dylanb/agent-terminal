@@ -15,7 +15,7 @@ import { gateForStatus, type LoopDef } from './loopDef';
 import { isHumanNeededStatus } from '../shared/loopStatus';
 import { isRecord } from './yamlRecord';
 import { errMsg } from './errno';
-import { DEFAULT_LOOP_NAMESPACE, isLoopNamespace, type LoopNamespace } from '../shared/loopNamespace';
+import { APP_LOOP_NAMESPACE, DEFAULT_LOOP_NAMESPACE, isLoopNamespace, type LoopNamespace } from '../shared/loopNamespace';
 import { isSafePathSegment } from '../shared/pathSegment';
 
 /**
@@ -117,7 +117,7 @@ export interface FlowDefinition {
  *  name, so a decision arriving for a §27-bound step is refused before it can dispatch into the §26 write
  *  path; a manual or missing step resolves none either. */
 export function legacyLoopNameForStep(step: FlowStepDef | undefined): string | null {
-  if (step?.kind !== 'loop' || step.loopNamespace === 'app') return null;
+  if (step?.kind !== 'loop' || step.loopNamespace === APP_LOOP_NAMESPACE) return null;
   return step.loop ?? null;
 }
 
@@ -194,7 +194,7 @@ export function loadFlowDefinition(worktreeDir: string): FlowLoad {
       }
       // The §27 engine holds the flow-supplied loop name to one safe segment BEFORE it is joined to any
       // tier root (§27.9); a §26 (legacy) name still validates at resolution, unchanged.
-      if (loopNamespace === 'app' && !isSafePathSegment(raw.loop as string))
+      if (loopNamespace === APP_LOOP_NAMESPACE && !isSafePathSegment(raw.loop as string))
         return { ok: false, error: `flow.yaml loop step "${raw.id}" binds an app def name that is not a single safe path segment: ${String(raw.loop)}` };
     }
     if (raw.skill !== undefined && typeof raw.skill !== 'string')
@@ -419,7 +419,7 @@ export function createFlowMachine(
     // namespace binding. An `app` step feeds the §27 provider, which owns the whole view and reads no
     // §26 loop state; a `legacy` (or namespace-absent) step feeds the §26 provider unchanged.
     const mostRecentLoopStep = entered.reduce<FlowStepDef | undefined>((last, s) => (s.kind === 'loop' ? s : last), undefined);
-    const appLoopName = mostRecentLoopStep?.loopNamespace === 'app' ? mostRecentLoopStep.loop : undefined;
+    const appLoopName = mostRecentLoopStep?.loopNamespace === APP_LOOP_NAMESPACE ? mostRecentLoopStep.loop : undefined;
     // §27.15 — the flow module holds no independent reader of §26 loop state on the app path: an app step's
     // refs never source from a stray §26 state.yaml, so a §27 step surfaces none of that engine's ticket/PR.
     const liveLoop = appLoopName !== undefined ? null : (readLoop?.() ?? null);

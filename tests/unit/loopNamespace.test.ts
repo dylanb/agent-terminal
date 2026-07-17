@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { isLoopNamespace, DEFAULT_LOOP_NAMESPACE } from '../../src/shared/loopNamespace';
+import { isLoopNamespace, DEFAULT_LOOP_NAMESPACE, APP_LOOP_NAMESPACE } from '../../src/shared/loopNamespace';
 import { loadFlowDefinition } from '../../src/main/flow';
 
 describe('loop namespace closed set (§27 engine selection)', () => {
@@ -15,6 +15,9 @@ describe('loop namespace closed set (§27 engine selection)', () => {
       expect(isLoopNamespace(bad as unknown)).toBe(false);
     }
     expect(DEFAULT_LOOP_NAMESPACE).toBe('legacy');
+  });
+  it('names the §27 engine namespace once, for the write/read/entry seams to share', () => {
+    expect(APP_LOOP_NAMESPACE).toBe('app');
   });
 });
 
