@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -24,12 +24,12 @@ let artifactPath: string;
 let hosted: HostedAgentState;
 let injected: string[];
 let deps: AppLoopEngineDeps;
-let audit: ReturnType<typeof vi.fn>;
-let emitError: ReturnType<typeof vi.fn>;
-let terminateFlow: ReturnType<typeof vi.fn>;
-let armTimer: ReturnType<typeof vi.fn>;
-let cancelTimer: ReturnType<typeof vi.fn>;
-let readArtifact: ReturnType<typeof vi.fn>;
+let audit: Mock<(repoDir: string, cmd: string, exit: number | null) => void>;
+let emitError: Mock<(reason: string) => void>;
+let terminateFlow: Mock<(repoDir: string) => void>;
+let armTimer: Mock<() => void>;
+let cancelTimer: Mock<() => void>;
+let readArtifact: Mock<(p: string) => string | null>;
 
 /** A file-producing plan-loop def whose completion artifact resolves under the repo's §27 area. */
 function fileDef(): LoopDefV2 {
