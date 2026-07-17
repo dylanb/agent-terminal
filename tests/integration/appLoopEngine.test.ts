@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createAppLoopEngine, type AppLoopEngineDeps } from '../../src/main/appLoopEngine';
-import { readAppLoopState, writeAppLoopState } from '../../src/main/appLoopState';
+import { readAppLoopState, writeAppLoopState, type AppLoopRunState } from '../../src/main/appLoopState';
 import { completionMarker } from '../../src/main/appWorkTurn';
 import type { HostedAgentState } from '../../src/main/loopOrchestrator';
 import type { LoopDefV2, LoopDefV2Result } from '../../src/main/loopDefV2';
@@ -56,7 +56,7 @@ function commitDef(): LoopDefV2 {
 }
 
 let defResult: LoopDefV2Result;
-function makeEngine(): ReturnType<typeof createAppLoopEngine> {
+function makeEngine(persistOverride?: (repoDir: string, state: AppLoopRunState) => void): ReturnType<typeof createAppLoopEngine> {
   audit = vi.fn();
   emitError = vi.fn();
   terminateFlow = vi.fn();
@@ -80,7 +80,7 @@ function makeEngine(): ReturnType<typeof createAppLoopEngine> {
     resolveDef: () => defResult,
     readRecipe: () => '# work turn\nProduce the plan.',
     readArtifact: (p) => readArtifact(p),
-    persist: (repoDir, state) => writeAppLoopState(repoDir, state, FIXED),
+    persist: persistOverride ?? ((repoDir, state) => writeAppLoopState(repoDir, state, FIXED)),
     audit,
     emitError,
     onViewChanged: () => {},
@@ -215,6 +215,36 @@ describe('§27 engine — stall (AC6)', () => {
   });
 });
 
+describe('§27 engine — a persist failure never aborts the error path (CWE-703/755, AC7)', () => {
+  it('does not let a status:error write throw escape the stall callback, and still surfaces the error', () => {
+    // The §27 loop-state write can fail (ENOSPC/EPERM/EROFS/a planted symlink). That best-effort resume
+    // write must never throw into the stall/done-file callbacks (it would crash main — there is no
+    // uncaughtException handler), and the error must still be surfaced so the route-out stays reachable.
+    const engine = makeEngine((repoDir, state) => {
+      if (state.status === 'error') throw new Error('ENOSPC: no space left on device');
+      writeAppLoopState(repoDir, state, FIXED);
+    });
+    enterAndInjectWork(engine);
+    expect(() => engine.onStall()).not.toThrow();
+    expect(emitError).toHaveBeenCalledTimes(1);
+  });
+
+  it('surfaces the live error to the view even when the status:error write failed (route-out not a dead-end)', () => {
+    const engine = makeEngine((repoDir, state) => {
+      if (state.status === 'error') throw new Error('EROFS: read-only file system');
+      writeAppLoopState(repoDir, state, FIXED);
+    });
+    enterAndInjectWork(engine);
+    engine.onStall();
+    // The persisted file could not record the error, but the engine holds the live error so the view can
+    // still render the §27 route-out (retry / accept / terminate) for THIS repo.
+    const live = engine.liveErrorFor(repo);
+    expect(live).toMatchObject({ loop: 'plan-loop', step: STEP, turnKey: TURN_KEY });
+    expect(live?.reason).toBeTruthy();
+    expect(engine.liveErrorFor(join(tmpdir(), 'some-other-repo'))).toBeNull();
+  });
+});
+
 describe('§27 engine — the identity-carrying route-out (AC7)', () => {
   function toError(engine: ReturnType<typeof createAppLoopEngine>): void {
     enterAndInjectWork(engine);
@@ -275,6 +305,19 @@ describe('§27 engine — resume (AC8)', () => {
     expect(readAppLoopState(repo)?.status).toBe('error');
     engine.routeOut(repo, STEP, TURN_KEY, 'retry'); // acts on the reconstructed turn
     expect(readAppLoopState(repo)?.status).toBe('working');
+  });
+
+  it('refuses Accept after resume when the def no longer resolves — no unverified complete (CWE-754)', () => {
+    // The bound def was deleted/edited between runs, so resume cannot reconstruct the real completion
+    // contract. Accept must NOT mark the file-producing turn complete without validating an artifact — it
+    // reconstructs an UNRESOLVED turn, and Accept refuses (Retry/Terminate remain the route out).
+    writeAppLoopState(repo, { loop: 'plan-loop', step: STEP, turnKey: TURN_KEY, status: 'error', errorReason: 'stalled' }, FIXED);
+    defResult = { ok: false, reason: 'no §27 def named plan-loop in any tier' };
+    const engine = makeEngine();
+    engine.resume(repo);
+    engine.routeOut(repo, STEP, TURN_KEY, 'accept');
+    expect(readAppLoopState(repo)?.status).toBe('error'); // Accept refused: not fabricated complete
+    expect(injected).toEqual([]); // and never injected
   });
 
   it('never re-runs a completed turn on resume', () => {

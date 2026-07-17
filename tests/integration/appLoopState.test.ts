@@ -64,6 +64,13 @@ describe('§27 loop-state serialize/parse round-trip', () => {
     expect(parseAppLoopState('name: [unterminated')).toBeNull();
     expect(parseAppLoopState('42')).toBeNull();
   });
+
+  it('rejects an out-of-vocabulary status rather than surfacing a value the view/route-out cannot handle', () => {
+    // A plausible-but-illegal status (e.g. 'running', 'stopped') must parse to null, not leak past the
+    // STATUSES gate — the view and route-out only understand working/error/complete.
+    const text = serializeAppLoopState(RUN, FIXED).replace('status: working', 'status: running');
+    expect(parseAppLoopState(text)).toBeNull();
+  });
 });
 
 describe('§27 loop-state writer — confined, first-run, atomic, no .gitignore', () => {

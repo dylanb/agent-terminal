@@ -3817,6 +3817,57 @@ test('a §27 work turn with no valid artifact retries then errors, offering all 
   rmSync(binDir, { recursive: true, force: true });
 });
 
+// §27.12 / AC8 — a §27 work turn stranded in `error`, resumed after a RELAUNCH, must complete on its
+// done-signal when Retry re-drives it: the resume/route-out path re-arms the §27 done-file watch, so the
+// re-injected turn's turn-done file is observed. Without the re-arm the fresh process has no live watcher,
+// so a perfect marker-bearing artifact + done-file is unseen and the turn can only stall to a second error.
+test('a §27 error resumed after relaunch completes on its done-signal when Retry re-drives it (§27.12 / AC8)', { tag: '@ownapp' }, async () => {
+  const repo = seedAppLoopFlowRepo('agent-term-e2e-v2-rearm-');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-v2-rearm-home-'));
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-v2-rearm-bin-');
+  // Process 1: the fake agent fires the done-file but writes a marker-less artifact → one retry → error.
+  seedFakeAgentV2(binDir, { stepId: 'plan', artifactRel: APP_ARTIFACT_REL, work: 'no-marker' });
+  const launch = () =>
+    electron.launch({
+      args: ['out/main/index.js'],
+      env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100', APP_TURN_TIMEOUT_MS: '4000', CLAUDE_CONFIG_DIR: exampleConfigDir, PATH: `${binDir}:${process.env.PATH}`, FAKE_GHGIT_LOG: logFile },
+    });
+
+  app = await launch();
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+  await typeCommand(`cd "${repo}"`);
+  await expect(flowControl()).toHaveText('Start', { timeout: 10_000 });
+  await typeCommand('fake-agent');
+  await flowControl().click(); // enter the app step → §27 work turn → error (no valid artifact)
+  await expect.poll(() => readIf(appRunState(repo)), { timeout: 30_000 }).toContain('status: error');
+  await app.close();
+
+  // The operator fixes the agent; the retry after relaunch will now produce a marker-bearing artifact.
+  seedFakeAgentV2(binDir, { stepId: 'plan', artifactRel: APP_ARTIFACT_REL, work: 'complete' });
+
+  // Relaunch = a fresh process with NO live §27 watcher. The persisted error reconstructs on the route-out.
+  app = await launch();
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+  await typeCommand(`cd "${repo}"`);
+  await typeCommand('fake-agent'); // host the agent so the re-driven turn injects
+
+  await loopReadout().click();
+  await expect(loopPanel().locator('[data-app-route-out="retry"]')).toBeVisible({ timeout: 15_000 });
+  await loopPanel().locator('[data-app-route-out="retry"]').click();
+
+  // Land: the re-armed watcher observes the retried turn's done-file, so it advances to complete (not a
+  // second stall→error). Under the pre-fix wiring the done-signal is unseen and this never reaches complete.
+  await expect.poll(() => readIf(appRunState(repo)), { timeout: 25_000 }).toContain('status: complete');
+  expect(readFileSync(join(repo, APP_ARTIFACT_REL), 'utf8')).toContain(completionMarker('plan'));
+
+  await app.close();
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+  rmSync(binDir, { recursive: true, force: true });
+});
+
 test('a legacy (§26) loop step still runs the §26 work path unchanged, writing no §27 loop state (§27.15 / AC10)', async () => {
   const repo = seedBootstrapFlowRepo('agent-term-e2e-v2-legacy-');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-v2-legacy-home-'));

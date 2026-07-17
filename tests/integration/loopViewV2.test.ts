@@ -141,3 +141,32 @@ describe('deriveAppLoopView — live run-state (AC1, AC7)', () => {
     expect(view.appTurn).toBeUndefined();
   });
 });
+
+// CWE-703 recovery — when the status:error write fails (ENOSPC/EPERM/a planted symlink) the persisted state
+// cannot record the error, so the engine hands the provider its LIVE in-memory error. The provider surfaces
+// it (status error + the route-out identity + human-needed) so the §27 route-out is never a dead-end.
+describe('deriveAppLoopView — live-error fallback when the persisted state cannot reflect it', () => {
+  it('surfaces the engine live error + route-out identity when no error is persisted', () => {
+    plant('plan-loop', ['approve']);
+    const view = deriveAppLoopView(
+      'plan-loop',
+      { tiers: tiers(), repoDir },
+      { loop: 'plan-loop', step: 'plan', turnKey: 'work-plan', reason: 'stalled: no terminal activity' },
+    );
+    expect(view.status).toBe('error');
+    expect(view.humanNeeded).toBe(true);
+    expect(view.errorReason).toBe('stalled: no terminal activity');
+    expect(view.appTurn).toEqual({ step: 'plan', turnKey: 'work-plan' });
+  });
+
+  it('ignores a live error belonging to a different loop (falls back to the run-less view)', () => {
+    plant('plan-loop', ['approve']);
+    const view = deriveAppLoopView(
+      'plan-loop',
+      { tiers: tiers(), repoDir },
+      { loop: 'groom-loop', step: 'groom', turnKey: 'work-groom', reason: 'x' },
+    );
+    expect(view.status).toBe('not-started');
+    expect(view.appTurn).toBeUndefined();
+  });
+});

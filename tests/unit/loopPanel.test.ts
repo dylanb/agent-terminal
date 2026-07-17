@@ -348,6 +348,30 @@ describe('docked loop panel (§24.2.3 T2)', () => {
     expect(host.querySelector('[data-app-route-out="retry"]')).toBeNull();
   });
 
+  it('removes the §27 route-out group IN PLACE when a live turn recovers error → working (structuralSig omits status)', () => {
+    // A §27 error and working view share one structural signature (structuralSig excludes loop.status and
+    // keys only on iteration PRESENCE, absent for both), so a Retry re-pull goes through patchInPlace →
+    // syncAppRouteOut, exercising the in-place removal. If that regressed, stale retry/accept/terminate
+    // controls would sit over a now-running turn and route-out against a live turn. Mirrors §26's
+    // "removes the reason row in place when the status recovers from error".
+    const { deps } = appRouteOutDeps();
+    const panel = createLoopPanel(host, deps);
+    panel.render(loop({ status: 'error', errorReason: 'stalled: no terminal activity', iteration: undefined, appTurn: { step: 'plan', turnKey: 'work-plan' } }), 'plan');
+    expect(host.querySelector('[data-app-route-out]')).not.toBeNull();
+    panel.render(loop({ status: 'working', iteration: undefined, appTurn: { step: 'plan', turnKey: 'work-plan' } }), 'plan');
+    expect(host.querySelector('[data-app-route-out]')).toBeNull();
+    expect(host.querySelector('[data-app-route-out-group]')).toBeNull();
+  });
+
+  it('removes the §27 route-out group IN PLACE when a live turn advances error → complete', () => {
+    const { deps } = appRouteOutDeps();
+    const panel = createLoopPanel(host, deps);
+    panel.render(loop({ status: 'error', errorReason: 'x', iteration: undefined, appTurn: { step: 'plan', turnKey: 'work-plan' } }), 'plan');
+    expect(host.querySelector('[data-app-route-out]')).not.toBeNull();
+    panel.render(loop({ status: 'complete', iteration: undefined, appTurn: { step: 'plan', turnKey: 'work-plan' } }), 'plan');
+    expect(host.querySelector('[data-app-route-out]')).toBeNull();
+  });
+
   it('renders no route-out affordances when the service is not wired (inert-affordance guard, WCAG 4.1.2)', () => {
     createLoopPanel(host).render(
       loop({ status: 'error', errorReason: 'x', iteration: undefined, appTurn: { step: 'plan', turnKey: 'work-plan' } }),
