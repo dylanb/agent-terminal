@@ -245,7 +245,7 @@ describe('pickup_contract resolution (§26.5 / §26.9)', () => {
   it('parses the phase id + entry_status + post-verdict gate statuses + exit predicate the orchestrator branches on (§26.5/§26.6/§26.8)', () => {
     const def = parseLoopDef(repo, 'plan-loop', exampleConfigDir);
     // exit_predicate.severity_cap drives the §26.8 cap routing: a needs-work verdict routes to the triage
-    // gate once the iteration cap is reached (phase-2 routing keys off the runtime phase2Active flag).
+    // gate once the per-loop cap window (iteration - cap_baseline) reaches the iteration cap.
     expect(def?.phases).toEqual([
       {
         id: 'plan',

@@ -19,7 +19,9 @@ export type GateOption = GateDecisionOption;
  *  member here is consumed there; action kinds outside this set are dropped by `decideGateOutcome`. */
 export type GateEffect =
   | { kind: 'mark-pr-ready' }
-  | { kind: 'set-phase2'; active: boolean }
+  // §26.6/§26.8 — request-changes resets the per-loop iteration-cap window (the executor writes
+  // cap_baseline = the critiqued iteration), replacing the retired set-phase2 gate-every-round routing.
+  | { kind: 'reset-cap' }
   | { kind: 'clear-persona-state' }
   | { kind: 'append-human-note' }
   | { kind: 'epic-promote' }
@@ -56,8 +58,8 @@ function toEffect(a: GateAction): GateEffect | null {
   switch (a.kind) {
     case 'mark-pr-ready':
       return { kind: 'mark-pr-ready' };
-    case 'set-phase2':
-      return { kind: 'set-phase2', active: a.args?.active === true };
+    case 'reset-cap':
+      return { kind: 'reset-cap' };
     case 'clear-persona-state':
       return { kind: 'clear-persona-state' };
     case 'append-human-note':

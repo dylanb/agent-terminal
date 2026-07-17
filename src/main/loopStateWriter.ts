@@ -29,7 +29,10 @@ export interface LoopStateWrite {
   /** §26.6 gate write surface (L5) — applied OVER the merged prior doc so a gate transition's own writes
    *  win. Absent → the field keeps its preserved prior value. `clearPersonaState` resets persona_state to
    *  `{}` (every persona re-reviews after a request-changes). */
-  phase2Active?: boolean;
+  /** §26.6/§26.8 — the run-wide iteration the current per-loop cap window opens at. Set by a chained-loop
+   *  rebind and by request-changes (`reset-cap`) to reset the internal `iteration - cap_baseline` window;
+   *  absent on every other write, which keeps the merged prior value. Serialized as `cap_baseline`. */
+  capBaseline?: number;
   clearPersonaState?: boolean;
   terminated?: boolean;
   /** §26.8 stuck tracking — the running finding signature + consecutive-identical count, written each
@@ -47,7 +50,7 @@ export interface LoopStateWrite {
    *  `epic.sub_issues`. Absent → the prior doc's `epic` is preserved by the merge. */
   epic?: { subIssues: number[] };
   /** §26 D42a (resume --loop) — SKIP the prior-doc merge and lay the LoopExtension defaults instead, so a
-   *  run rebound to a NEW loop starts fresh (iteration/phase2/persona_state/impasse/severity_cycle reset to
+   *  run rebound to a NEW loop starts fresh (cap_baseline/persona_state/impasse/severity_cycle reset to
    *  a new-run baseline) rather than inheriting the loop it succeeded. The read set passed in this write
    *  (pr/branch/linked_issues) still persists — that is how the new loop keeps working the same PR. */
   freshExtension?: boolean;
@@ -62,7 +65,10 @@ function defaultExtension(): Record<string, unknown> {
   return {
     sessions: {},
     impasse: {},
+    // §26.6 — retired: request-changes no longer activates a permanent triage-routing mode. Still emitted
+    // (defaulted false) for whole-document v4 parity with the external EngineState re-handoff.
     phase2_active: false,
+    cap_baseline: 0,
     persona_state: {},
     severity_cycle_iter: 0,
     iter_in_flight: 0,
@@ -119,7 +125,7 @@ export function writeLoopState(repoDir: string, state: LoopStateWrite, now: () =
 
   // §26.6 gate write surface (L5) — layered ABOVE the app read set so a gate transition's own writes win
   // over the preserved prior values; an absent field keeps its merged prior value.
-  if (state.phase2Active !== undefined) doc.phase2_active = state.phase2Active;
+  if (state.capBaseline !== undefined) doc.cap_baseline = state.capBaseline;
   if (state.clearPersonaState) doc.persona_state = {};
   if (state.terminated !== undefined) doc.terminated = state.terminated;
   if (state.impasse !== undefined) {

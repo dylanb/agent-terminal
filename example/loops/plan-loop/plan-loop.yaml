@@ -174,7 +174,6 @@ phases:
       on_verdict:
         clean: post-clean
         needs-work: conditional
-      on_phase2_active: true
       severity_cap: 2
     post_clean_gate: awaiting-human-plan-approval
     post_needs_work_gate: awaiting-human-plan-triage
@@ -199,12 +198,10 @@ gates:
         args:
           argv: ["gh", "issue", "edit", "{{state.linked_issues[0]}}", "--body-file", "{{artifact.ticket-body}}"]
         on_failure: continue
-      - kind: clear-phase2
       - kind: reset-severity-cycle
       - kind: terminate
     on_request_changes:
-      - kind: set-phase2
-        args: {active: true}
+      - kind: reset-cap
       - kind: clear-persona-state
       - kind: append-human-note
         args: {title: "human request-changes", artifact: "human-notes/{iter}.md"}
@@ -233,12 +230,10 @@ gates:
         args:
           argv: ["gh", "issue", "edit", "{{state.linked_issues[0]}}", "--body-file", "{{artifact.ticket-body}}"]
         on_failure: continue
-      - kind: clear-phase2
       - kind: reset-severity-cycle
       - kind: terminate
     on_request_changes:
-      - kind: set-phase2
-        args: {active: true}
+      - kind: reset-cap
       - kind: clear-persona-state
       - kind: append-human-note
         args: {title: "human request-changes", artifact: "human-notes/{iter}.md"}
@@ -346,10 +341,6 @@ verdicts:
       no-issues: clean
   severities:
     order: [minor, major, blocker]
-  phase2_bounce_rules:
-    on_request_changes_set_active: true
-    reset_cycle_on_approve: true
-    force_triage_on_needs_work: true
 
 # ---------------------------------------------------------------------------
 # §1.10 CharterDef — 9 blocks (dropped: 04-missing-entirely, 05-source-comments)

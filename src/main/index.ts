@@ -597,14 +597,15 @@ async function createWindow(): Promise<void> {
     // the triage gate for the human to confirm impasse.
     const sig = findingSignature(consolidatedFindings(finished.repoDir, finished.iteration), def?.verdicts?.severityOrder ?? []);
     const impasse = nextImpasse(ext.impasse.lastFindingsSig, ext.impasse.consecutiveIdentical, sig);
-    // §26.6/§26.8 — a needs-work verdict routes to the phase's triage gate (STOP) once phase-2 is active
-    // (a prior request-changes), the iteration cap is reached, or the run is flagged stuck.
+    // §26.6/§26.8 — a needs-work verdict routes to the phase's triage gate (STOP) when the per-loop cap
+    // window (`iteration - cap_baseline`) reaches the cap or the run is flagged stuck; otherwise it
+    // auto-iterates. A rebind and a request-changes advance cap_baseline, resetting the window.
     const outcome = decideConsolidateOutcome({
       verdict,
       iteration: finished.iteration,
       postCleanGate: phase?.postCleanGate ?? '',
       postNeedsWorkGate: phase?.postNeedsWorkGate ?? '',
-      phase2Active: ext.phase2Active,
+      capBaseline: ext.capBaseline,
       iterationCap: phase?.iterationCap ?? 0,
       stuck: impasse.stuck,
     });

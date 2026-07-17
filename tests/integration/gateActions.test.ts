@@ -28,8 +28,7 @@ const PLAN_LOOP =
   '      - kind: reset-severity-cycle\n' +
   '      - kind: terminate\n' +
   '    on_request_changes:\n' +
-  '      - kind: set-phase2\n' +
-  '        args: {active: true}\n' +
+  '      - kind: reset-cap\n' +
   '      - kind: clear-persona-state\n' +
   '      - kind: append-human-note\n' +
   '        args: {title: "human request-changes"}\n' +
@@ -111,17 +110,16 @@ describe('decideGateOutcome (§26.6 / L5 — app-internal gate transition)', () 
     expect(kinds).not.toContain('reset-severity-cycle');
   });
 
-  it('request-changes → re-iterate at entry status; set-phase2, clear-persona-state, append-human-note', () => {
+  it('request-changes → re-iterate at entry status; reset-cap, clear-persona-state, append-human-note', () => {
     const out = decideGateOutcome(gate(), 'request-changes');
     expect(out.nextStatus).toBe('plan-draft');
     expect(out.terminate).toBe(false);
     expect(out.reiterate).toBe(true);
     const kinds = out.effects.map((e) => e.kind);
-    expect(kinds).toContain('set-phase2');
+    expect(kinds).toContain('reset-cap');
     expect(kinds).toContain('clear-persona-state');
     expect(kinds).toContain('append-human-note');
-    const setPhase2 = out.effects.find((e) => e.kind === 'set-phase2');
-    expect(setPhase2).toEqual({ kind: 'set-phase2', active: true });
+    expect(out.effects.find((e) => e.kind === 'reset-cap')).toEqual({ kind: 'reset-cap' });
   });
 
   it('impasse → terminal impasse status, append-human-note, no re-iterate', () => {

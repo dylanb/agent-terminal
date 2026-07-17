@@ -77,7 +77,7 @@ const requestChangesOutcome: GateOutcome = {
   nextStatus: 'plan-draft',
   terminate: false,
   reiterate: true,
-  effects: [{ kind: 'set-phase2', active: true }, { kind: 'clear-persona-state' }, { kind: 'append-human-note' }],
+  effects: [{ kind: 'reset-cap' }, { kind: 'clear-persona-state' }, { kind: 'append-human-note' }],
 };
 const impasseOutcome: GateOutcome = {
   nextStatus: 'impasse',
@@ -96,13 +96,13 @@ describe('executeGateOutcome (§26.6 / L5)', () => {
     expect(h.reiterations).toEqual([]);
   });
 
-  it('request-changes: sets phase2, clears persona_state, writes the human note, re-iterates at +1', async () => {
+  it('request-changes: resets the cap window at the critiqued iteration, clears persona_state, writes the human note, re-iterates at +1', async () => {
     const h = harness();
     await executeGateOutcome(requestChangesOutcome, CTX, h.deps);
     expect(h.writes[0]).toMatchObject({
       status: 'plan-draft',
       iteration: 3,
-      phase2Active: true,
+      capBaseline: 2,
       clearPersonaState: true,
     });
     expect(h.notes).toEqual([{ iteration: 2, text: 'make it smaller' }]);
