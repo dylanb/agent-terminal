@@ -73,7 +73,7 @@ export function readLoopExtension(repoDir: string): LoopExtension {
     };
   }
   return {
-    capBaseline: typeof doc.cap_baseline === 'number' ? doc.cap_baseline : 0,
+    capBaseline: typeof doc.cap_baseline === 'number' && Number.isInteger(doc.cap_baseline) && doc.cap_baseline >= 0 ? doc.cap_baseline : 0,
     impasse: {
       consecutiveIdentical: typeof imp.consecutive_identical === 'number' ? imp.consecutive_identical : 0,
       lastFindingsSig: typeof imp.last_findings_sig === 'string' ? imp.last_findings_sig : '',

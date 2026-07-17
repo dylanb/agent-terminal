@@ -26,13 +26,13 @@ export interface LoopStateWrite {
    *  can show WHY (not a bare "error"). Absent on any non-error write, which also CLEARS a stale prior
    *  reason so a recovered status never carries a message that no longer applies. */
   errorReason?: string;
-  /** §26.6 gate write surface (L5) — applied OVER the merged prior doc so a gate transition's own writes
-   *  win. Absent → the field keeps its preserved prior value. `clearPersonaState` resets persona_state to
-   *  `{}` (every persona re-reviews after a request-changes). */
-  /** §26.6/§26.8 — the run-wide iteration the current per-loop cap window opens at. Set by a chained-loop
-   *  rebind and by request-changes (`reset-cap`) to reset the internal `iteration - cap_baseline` window;
-   *  absent on every other write, which keeps the merged prior value. Serialized as `cap_baseline`. */
+  /** §26.6/§26.8 gate write surface (L5) — the run-wide iteration the current per-loop cap window opens at.
+   *  Set by a chained-loop rebind and by request-changes (`reset-cap`) to reset the internal
+   *  `iteration - cap_baseline` window; applied OVER the merged prior doc so a gate transition's own write
+   *  wins, and absent on every other write, which keeps the merged prior value. Serialized as `cap_baseline`. */
   capBaseline?: number;
+  /** §26.6 — resets persona_state to `{}` so every persona re-reviews after a request-changes. Same gate
+   *  write surface as `capBaseline`: applied over the merged prior doc; absent keeps the prior value. */
   clearPersonaState?: boolean;
   terminated?: boolean;
   /** §26.8 stuck tracking — the running finding signature + consecutive-identical count, written each

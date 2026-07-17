@@ -3815,12 +3815,15 @@ test('request-changes resets the per-loop cap window; a following needs-work ver
   await gateButton('request-changes').click();
 
   const stateFile = join(repo, '.agent-loop', 'state.yaml');
-  // The window reset let iteration 2's needs-work AUTO-ITERATE, so the run advances to iteration 3 rather
-  // than STOPping at the triage gate on iteration 2 (which is what the retired phase-2 routing would do).
+  // The window reset let iteration 2's needs-work AUTO-ITERATE past the triage gate the retired phase-2
+  // routing would have STOPped at; at iteration 3 the window (3 - 1 = 2) reaches the cap, so the run STOPs
+  // at the triage gate rather than iterating unbounded — pinning BOTH that phase-2 is gone AND the reset
+  // window still bounds the loop.
   await expect
     .poll(() => readFileSync(stateFile, 'utf8'), { timeout: 45_000 })
-    .toContain('iteration: 3');
+    .toContain('status: awaiting-human-plan-triage');
   const stateText = readFileSync(stateFile, 'utf8');
+  expect(stateText).toContain('iteration: 3'); // auto-iterated past the iteration-2 phase-2 STOP
   expect(stateText).toContain('cap_baseline: 1'); // the window origin request-changes set at iteration 1
   expect(stateText).not.toContain('phase2_active: true'); // phase-2 routing is retired
   expect(stateText).not.toContain('status: error');
@@ -3949,6 +3952,7 @@ test('approve at the plan gate auto-advances the flow and resumes into the impl 
   const stateText = readFileSync(stateFile, 'utf8');
   expect(stateText).toContain('status: impl-draft');
   expect(stateText).toMatch(/^iteration: 2$/m); // monotonic: carried forward from the plan loop's 1, never reset
+  expect(stateText).toContain('cap_baseline: 1'); // the impl loop opens its OWN cap window at the plan loop's final iteration
   expect(stateText).toContain('branch: plan-loop/issue-176'); // same branch — resume kept the plan PR
   expect(stateText).toMatch(/linked_issues:\s*\n\s*- 176/); // the plan run's issue carried, not reset
 

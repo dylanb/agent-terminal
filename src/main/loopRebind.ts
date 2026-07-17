@@ -34,8 +34,8 @@ export function resumeRebindWrite(prior: ResumeRebindPrior, loopName: string, ne
       // §26 D42a — monotonic across the whole run: the successor loop's first turn is the next iteration, so
       // its reviews/<iter>/ never overwrite the prior loop's and the user-visible count keeps climbing.
       iteration: prior.iteration + 1,
-      // §26.6/§26.8 — the successor loop opens its OWN per-loop cap window: cap_baseline = the prior loop's
-      // final iteration, so the first turn is internal-count 1 ((prior.iteration+1) - prior.iteration).
+      // §26.6/§26.8 — the successor loop opens its OWN cap window (cap_baseline = the prior loop's final
+      // iteration) so its cap budget is not inherited from the prior loop; its first turn is internal-count 1.
       capBaseline: prior.iteration,
       pr: prior.pr,
       branch: prior.branch,

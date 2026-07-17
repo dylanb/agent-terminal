@@ -5,8 +5,8 @@
 // side-effects out of band, re-iterate or stop). `epic-promote` (§26.9 / L8) and `exec` (§26.6 — the
 // ADR-0015 ticket-body publish, run best-effort under the loops_deny_exec opt-out) ARE modeled. Action
 // kinds the in-app v1 engine still does not model are dropped — `publish-body` (spec §26 out-of-band
-// PR-body publish, deferred) and `clear-phase2`/`reset-severity-cycle` (in the vendored defs they only
-// ever accompany `terminate`, where they are moot). The full deferred set is recorded in-spec.
+// PR-body publish, deferred) and `reset-severity-cycle` (in the vendored defs it only ever accompanies
+// `terminate`, where it is moot). The full deferred set is recorded in-spec.
 
 import type { GateAction, LoopGate } from './loopDef';
 import type { GateDecisionOption } from '../shared/ipc';
@@ -19,8 +19,8 @@ export type GateOption = GateDecisionOption;
  *  member here is consumed there; action kinds outside this set are dropped by `decideGateOutcome`. */
 export type GateEffect =
   | { kind: 'mark-pr-ready' }
-  // §26.6/§26.8 — request-changes resets the per-loop iteration-cap window (the executor writes
-  // cap_baseline = the critiqued iteration), replacing the retired set-phase2 gate-every-round routing.
+  // §26.6/§26.8 — request-changes resets the per-loop iteration-cap window; the executor writes
+  // cap_baseline = the critiqued iteration.
   | { kind: 'reset-cap' }
   | { kind: 'clear-persona-state' }
   | { kind: 'append-human-note' }

@@ -118,8 +118,8 @@ export async function executeGateOutcome(
       branch: ctx.branch,
       boundLoop: ctx.boundLoop,
       linkedIssues: [...ctx.linkedIssues, ...subIssues],
-      // §26.6/§26.8 — request-changes opens a fresh per-loop cap window at the critiqued iteration, so the
-      // next round is internal-count 1 (retires phase-2's permanent triage routing).
+      // §26.6/§26.8 — cap_baseline = the critiqued iteration makes the next round internal-count 1
+      // (`iteration - cap_baseline`), reopening the autonomous window that request-changes just reset.
       ...(resetCap ? { capBaseline: ctx.iteration } : {}),
       ...(has('clear-persona-state') ? { clearPersonaState: true } : {}),
       ...(subIssues.length > 0 ? { epic: { subIssues } } : {}),
