@@ -123,6 +123,7 @@ describe('loop state.yaml writer (§26.6)', () => {
       linked_issues: [176],
       persona_state: { 'review-principal': { last_clean_iter: 2 } },
       impasse: { consecutive_identical: 1, last_findings_sig: 'abc123' },
+      cap_baseline: 5,
       phase2_active: true,
       human_notes: ['human asked for a smaller plan'],
       completed_loops: ['some-prior-loop'],
@@ -136,6 +137,9 @@ describe('loop state.yaml writer (§26.6)', () => {
     expect(doc.status).toBe('error'); // the app-owned field is updated
     expect(doc.persona_state).toEqual({ 'review-principal': { last_clean_iter: 2 } }); // engine state survives
     expect(doc.impasse).toEqual({ consecutive_identical: 1, last_findings_sig: 'abc123' });
+    // §26.8 — a write that omits capBaseline preserves the safety-relevant cap window by merge (writer L128
+    // is skipped when capBaseline is undefined); a regression that reset it to default 0 shifts the cap.
+    expect(doc.cap_baseline).toBe(5);
     expect(doc.phase2_active).toBe(true);
     expect(doc.human_notes).toEqual(['human asked for a smaller plan']);
     expect(doc.completed_loops).toEqual(['some-prior-loop']);

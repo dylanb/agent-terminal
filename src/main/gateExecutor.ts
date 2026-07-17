@@ -73,7 +73,7 @@ export async function executeGateOutcome(
 ): Promise<void> {
   const has = (kind: GateOutcome['effects'][number]['kind']): boolean =>
     outcome.effects.some((e) => e.kind === kind);
-  const resetCap = outcome.effects.some((e) => e.kind === 'reset-cap');
+  const resetCap = has('reset-cap');
   const nextIteration = outcome.reiterate ? ctx.iteration + 1 : ctx.iteration;
 
   // §26.9 / L8 — epic-promote runs BEFORE the state write so its new sub-issues land in the same doc
