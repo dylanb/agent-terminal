@@ -26,7 +26,7 @@ pnpm run test:e2e   # raw playwright e2e — needs a focusable display; on macOS
 
 ## Requesting / awaiting a Copilot PR review
 
-Use `scripts/await-copilot-review.sh <pr> [--request] [--check]` (portable bash; macOS + Linux, no `jq`) — never hand-roll a poll. Two non-obvious traps it removes: the Copilot reviewer's login is `copilot-pull-request-reviewer[bot]` on `/pulls/{n}/reviews` but `Copilot` on `/pulls/{n}/comments`, so a single exact-login filter silently matches zero; and a wrong poll predicate is indistinguishable from "review not posted yet", so the script baselines the matched count and (`--check`) validates the predicate against the reviews already on the PR before waiting. If you must filter reviews yourself, match `user.type=="Bot"` + a case-insensitive `copilot`, not an exact login.
+Use `scripts/await-copilot-review.sh <pr> [--request] [--check]` (portable bash; macOS + Linux, no `jq`) — **never hand-roll a poll.** The script's header documents the two non-obvious traps it removes (the Copilot login differs by API surface; a wrong poll predicate is indistinguishable from "not posted yet"). If you must filter reviews yourself, match `user.type=="Bot"` + a case-insensitive `copilot`, not an exact login.
 
 ## Architecture (orientation only — details in the spec)
 
@@ -57,18 +57,7 @@ Use `scripts/await-copilot-review.sh <pr> [--request] [--check]` (portable bash;
 
 ## Tracer-bullet development (mandatory planning requirement)
 
-**Every implementation plan for §24.2 backlog work MUST be decomposed into tracer-bullet slices before any code is written. This is a planning gate: a plan that is not sliced this way is incomplete and implementation does not start.**
-
-A **tracer bullet** is a thin but *complete* vertical slice that passes through **every layer the feature touches** — main-process logic → the typed IPC contract (`src/shared/ipc.ts`, §6) → preload bridge → renderer widget → visible, interactive UI — and does the **smallest real end-to-end thing** with **real backing, not a fixture**. Like a tracer round, you fire it through the running app and watch where it lands: each slice is hand-testable through the UI (`pnpm run dev`) and demoable on its own.
-
-Each slice MUST satisfy all of:
-
-1. **Back-to-front, never layer-by-layer.** A slice spans main, `ipc.ts`, preload, and renderer as far as that increment needs, so it is exercisable from the UI. Building a whole horizontal layer — the complete main-process subsystem, the entire IPC surface, or a data store — as its own phase with nothing in the UI to fire it is **forbidden**. If a slice cannot be fired from the UI, it is cut too wide or wrong; narrow it until it can.
-2. **Replaces one mock with real backing, incrementally.** §24.1 stands the widgets up fixture-driven (§24); a slice swaps **one** fixture path for its real subsystem and leaves the app still running and the visible product never regressed.
-3. **Ends testable through the UI, RED-first.** Each slice carries the full **Test-driven development** ladder above (failing test first, observed), and that ladder MUST include a **Playwright `_electron` e2e that drives the real loop** (real PTY, main, renderer) — because the slice's contract *is* "a user does X in the app and sees Y." Main-process integration tests and renderer DOM unit tests sit underneath it.
-4. **Named in the plan.** For every slice the plan states three things: the **user-visible action** that fires the bullet, the **observable result in the UI**, and the **e2e that proves it**. A slice missing any of the three is not yet planned.
-
-This is the §24 "UI-inwards" build direction applied feature by feature: stand the skin up, then drive real subsystems through it one fireable slice at a time. Horizontal "finish the backend, then wire the UI later" plans are a planning-level defect — reject and re-slice.
+**Every implementation plan for §24.2 backlog work MUST be decomposed into tracer-bullet slices before any code is written. This is a planning gate: a plan that is not sliced this way is incomplete and implementation does not start.** A tracer-bullet slice is a thin but *complete* vertical slice — main → `ipc.ts` → preload → renderer → visible UI — that does the smallest real end-to-end thing with real backing, fireable from the UI and RED-first with an `_electron` e2e. The definition and the four criteria each slice must satisfy live in **[TRACER-BULLET.md](TRACER-BULLET.md)** — a plan is graded against that file.
 
 ## Code standards
 
@@ -100,42 +89,6 @@ rather than re-arguing a settled decision.
 
 ## Ticket standards (agent-loop ready)
 
-Tickets are GitHub issues. A ticket is **agent-loop-ready** only when a human applies the **`agent-loop/ready`** label — the single "pickable now" signal (`agent-loop available` lists them; `agent-loop pickup <n>` assigns it, strips the label, and opens a draft PR that `closes #<n>`). Do not add `agent-loop/ready` yourself; it means *a human has vetted the ticket against everything below*.
+Tickets are GitHub issues. A ticket is **agent-loop-ready** only when a human applies the **`agent-loop/ready`** label — the single "pickable now" signal (`agent-loop available` lists them; `agent-loop pickup <n>` assigns it, strips the label, and opens a draft PR that `closes #<n>`). **Do not add `agent-loop/ready` yourself** — it means *a human has vetted the ticket against the full authoring contract*. The issue **body is the intent contract**: agent-loop bundles the title, body, and comments verbatim into `.agent-loop/pr-context.md`, which the work agent and all nine persona reviewers read, so a vague body yields a vague plan and reviews.
 
-The issue **body is the intent contract** — agent-loop bundles the title, body, and comments verbatim into `.agent-loop/pr-context.md`, which the work agent and all nine persona reviewers read. Vague body → vague plan and reviews.
-
-### Required content
-
-Every ready ticket MUST contain:
-
-1. **Title** — a crisp imperative (`Persist flow inputs across steps`), not a topic.
-2. **Problem / context** — what's wrong or missing and why it matters. Cite the spec: `terminal-web-ui-spec.md §n` (the spec wins; if the ticket diverges, say so and add a changelog entry).
-3. **Scope** — the concrete change to make, described as outcomes.
-4. **Non-goals** — what this ticket explicitly does *not* do, so reviewers don't grade against absent work.
-5. **Acceptance criteria** — see the AC rule below. This is what `review-intent` grades "done" against; without it the loop cannot catch an incomplete feature.
-6. **Affected contracts** — if the change alters an external contract, say so and describe the observable contract *behavior*, pointing to `src/shared/ipc.ts` as where the typed contract lives. State "no contract change" when none. (Do not prescribe channel/payload names — that's an implementation decision.)
-7. **Standards that apply** — by reference only: link the governing docs (TDD/RED-first, `UI-STANDARDS.md`, the tracer-bullet rule, relevant `§n`) so reviewers can cite them.
-
-### Writing rules
-
-These are non-negotiable for every ticket:
-
-- **Acceptance criteria are measurable outcomes ONLY** — observable behaviors phrased so each becomes a test (user does X → observes Y). The sole exception is a ticket **inherently technical in nature** (support for a technical standard, an API implementation, a specific algorithm, and the like), which may state technical criteria directly.
-- **Nothing that can drift.** A ticket MUST NOT contain anything that could change under normal activity — merging another branch, implementing the ticket itself, or making a reasonable implementation decision. No line numbers, current counts, "the function below," or any other detail that goes stale the moment work begins.
-- **No implementation.** A ticket MUST NOT contain statements in the realm of *how* to build it. Point to the relevant repository standards **by reference only**; never inline the approach.
-- **Unambiguous.** Avoid statements open to more than one reading. Write one clear meaning per statement; add clarifying language only where genuinely necessary.
-- **No internal conflict.** A ticket MUST NOT contradict itself or any existing standard — **unless** the conflict is an explicit user instruction, in which case the ticket MUST state clearly that it is an explicit user instruction (and why it overrides the standard).
-
-### Tracer-bullet tickets (§24.2 backlog)
-
-A §24.2 ticket MUST name the three things the tracer-bullet rule requires: the **user-visible action** that fires the slice, the **observable result in the UI**, and the **e2e that proves it**. A ticket missing any of the three is not ready.
-
-### Ready checklist
-
-All must hold before the `agent-loop/ready` label goes on:
-
-- [ ] Title is an imperative; body states problem, scope, **non-goals**.
-- [ ] Acceptance criteria are measurable outcomes (or justified technical criteria).
-- [ ] No drift-prone detail; no implementation (standards by reference only).
-- [ ] Every statement is unambiguous; no internal or standards conflict (explicit user overrides labeled as such).
-- [ ] Affected contracts described by behavior (or "none"); §24.2 work names action + result + e2e.
+The full authoring contract a ticket must satisfy before that label goes on — required content, writing rules, tracer-bullet-ticket requirements, and the ready checklist — lives in **[TICKET-STANDARDS.md](TICKET-STANDARDS.md)**. Author and groom tickets against that file.

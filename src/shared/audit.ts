@@ -65,10 +65,12 @@ export interface TodoLike {
   status: TodoStatus;
 }
 
-/** The minimal agent-loop shape the loop classifier diffs (a subset of FlowLoopView, §24.2.3 T2). */
+/** The minimal agent-loop shape the loop classifier diffs (a subset of FlowLoopView, §24.2.3 T2).
+ *  `iteration` is absent for a run-less §27 view (no round has run); no `loop.iteration` event is
+ *  recorded for it, rather than a fabricated zero. */
 export interface LoopLike {
   status: string;
-  iteration: number;
+  iteration?: number;
   pr: number | null;
 }
 
@@ -179,7 +181,7 @@ export function loopEvents(before: LoopLike | null, after: LoopLike | null, ts: 
       to: stripStatusControlChars(after.status),
     });
   }
-  if (!before || before.iteration !== after.iteration) {
+  if (after.iteration !== undefined && (!before || before.iteration !== after.iteration)) {
     events.push({ ts, type: 'loop.iteration', n: after.iteration });
   }
   if (after.pr !== null && (!before || before.pr !== after.pr)) {

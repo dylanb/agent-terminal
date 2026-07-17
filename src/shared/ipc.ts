@@ -443,13 +443,23 @@ export interface FlowDerived {
  *  only at a TERMINAL gate, the loop's exit), else the documented awaiting-human-* family. */
 export interface FlowLoopView {
   status: string;
-  iteration: number;
+  /** The run's iteration counter (§26 D42a). Absent means NO ROUND HAS RUN — the honest value for a
+   *  §27 def that resolved before any round (a run-less view) and for a def that failed to resolve;
+   *  a coalesce-to-zero would fabricate a round identity the dedup key and the audit both key on. Every
+   *  consumer (panel, strip, cost/dedup) omits its iteration read-out when absent rather than showing 0. */
+  iteration?: number;
   pr: number | null;
   branch: string | null;
   ready: boolean;
+  /** Whether this view's `gateOptions` are ACTIONABLE — the human can click them to decide the gate.
+   *  Read through the shared `loopGateActionable`, whose default governs: absent means actionable, so the
+   *  §26 provider and every hand-constructed awaiting-gate view keep their controls; the §27 provider sets
+   *  `actionable: false` to mark its run-less view display-only, so the same `gateOptions` field never means
+   *  two things. The default lives once, in `loopGateActionable`. */
+  actionable?: boolean;
   /** The current status's gate `human_options` (§18.1/§19.4) — the gate UI's variable option set
-   *  (`approve`/`request-changes`/`impasse`). Present only at an awaiting gate with a resolvable
-   *  LoopDef; absent mid-work, at a terminal gate, or when the LoopDef does not resolve. */
+   *  (`approve`/`request-changes`/`impasse`), OR the options a §27 def declares for a run-less view.
+   *  The producing engine owns when to fill it; `actionable` carries whether they are clickable. */
   gateOptions?: string[];
   /** The §26.10 cost-meter readout: the display-only priced dollars for the run (`$X.XX`, `unknown`, or
    *  `$X.XX +unknown` when some model was unpriced), formatted by the shared `formatCost`. Present once an

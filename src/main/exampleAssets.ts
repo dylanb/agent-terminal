@@ -18,3 +18,10 @@ export function resolveExampleLoopsDir(loc: BundleLocation): string {
 export function resolveExampleCommandsDir(loc: BundleLocation): string {
   return path.join(bundleRoot(loc), 'example', 'commands');
 }
+
+/** The bundled §27 (v2) loop-def tree — the app-bundled resolution tier for `app`-namespace flow steps
+ *  (§27.15). A sibling of the §26 `example/loops` tree, never nested in it, so the two schemas' trees stay
+ *  disjoint. This is the destination the build step's placement computes through, and the runtime reads. */
+export function resolveExampleLoopsV2Dir(loc: BundleLocation): string {
+  return path.join(bundleRoot(loc), 'example', 'loops-v2');
+}

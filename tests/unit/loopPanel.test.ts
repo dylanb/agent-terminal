@@ -269,6 +269,42 @@ describe('docked loop panel (§24.2.3 T2)', () => {
     expect(host.querySelector('[data-gate-option]')).toBeNull();
   });
 
+  it('renders a §27 run-less def\'s gate options display-only: the read-only row, but NO decision buttons (AC 1)', () => {
+    const panel = createLoopPanel(host, {
+      githubRef: () => Promise.resolve(null),
+      openExternal: () => {},
+      gateDecision: () => {},
+    });
+    // A §27 run-less view: gate options present but not actionable, no round has run.
+    panel.render(loop({ status: 'not-started', actionable: false, gateOptions: ['approve', 'request-changes'], iteration: undefined }), 'plan');
+    expect(row('gate options')?.querySelector('.lv')?.textContent).toBe('approve · changes');
+    expect(host.querySelector('[data-gate-option]')).toBeNull();
+  });
+
+  it('omits the iteration row when no round has run (absent iteration is not "0", AC 1)', () => {
+    createLoopPanel(host).render(loop({ status: 'not-started', actionable: false, gateOptions: ['approve'], iteration: undefined }), 'plan');
+    expect(row('iteration')).toBeUndefined();
+  });
+
+  it('surfaces a def-failure reason with no iteration row and a route off the step (AC 6)', () => {
+    createLoopPanel(host).render(loop({ status: 'error', errorReason: 'no §27 def named plan-loop in any tier', iteration: undefined }), 'plan');
+    expect(row('reason')?.querySelector('.lv')?.textContent).toBe('no §27 def named plan-loop in any tier');
+    expect(row('iteration')).toBeUndefined();
+  });
+
+  it('renders NO Retry on a run-less §27 failure (no turn to re-drive), but does on a §26 turn error (WCAG 4.1.2)', () => {
+    const deps = { githubRef: () => Promise.resolve(null), openExternal: () => {}, retryTurn: () => {} };
+    // §27 resolution failure: error and retryTurn wired, but no round has run — Retry (re-drive the
+    // turn) is inert here, so only the iteration guard keeps it from rendering an inert affordance.
+    createLoopPanel(host, deps).render(loop({ status: 'error', errorReason: 'no §27 def named plan-loop', iteration: undefined }), 'plan');
+    expect(host.querySelector('[data-loop-retry]')).toBeNull();
+    // §26 turn error: a round ran, so re-driving it is meaningful — Retry renders.
+    document.body.innerHTML = '<aside id="loop-panel"></aside>';
+    const host2 = document.getElementById('loop-panel')!;
+    createLoopPanel(host2, deps).render(loop({ status: 'error', errorReason: 'no Claude at the prompt', iteration: 3 }), 'plan');
+    expect(host2.querySelector('[data-loop-retry]')).not.toBeNull();
+  });
+
   it('shows no "mark turn complete" control when there is no loop step (refs-only panel)', () => {
     const panel = createLoopPanel(host, {
       githubRef: () => Promise.resolve(null),

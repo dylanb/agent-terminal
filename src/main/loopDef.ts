@@ -8,6 +8,7 @@ import yaml from 'js-yaml';
 import { confinedRealPath, resolveJail } from './confinedPath';
 import { isRecord } from './yamlRecord';
 import { userConfigLoopsDir } from './userConfig';
+import { isSafePathSegment } from '../shared/pathSegment';
 
 /** One action of a gate's `on_*` list (§26.6): the engine executes these in order when the human picks
  *  an option. `kind` selects the effect (`mark-pr-ready`, `reset-cap`, …); `args` carries its params
@@ -131,13 +132,6 @@ export interface LoopDef {
 
 const SCHEMA_VERSION = '4';
 
-// Loop names, phase ids, and persona/actor names all become filesystem path components downstream — the
-// loop name selects `userConfigLoopsDir()/<name>/` (and the dir its injected prompts §26.5 are read from), phase
-// ids form `prompts/work-{id}.md`, actor names form `reviews/{iter}/{actor}.json`. Repo-supplied config
-// (flow.yaml `loop:`, the `.agent-loop.yaml` override, the LoopDef yaml) is untrusted, so every such
-// string is confined to a single safe path-segment — no separators or `..` (CWE-22 defense in depth).
-const SAFE_NAME = /^[a-z0-9][a-z0-9-]*$/;
-
 /** Where a LoopDef's bytes came from, and therefore whose authority they carry: `operator-config` is the
  *  user's own userConfigLoopsDir() copy; `repo` is a file inside the checked-out repository, i.e. untrusted
  *  content authored by whoever wrote the repo. Capabilities that let a def act on the machine (§26.6
@@ -154,7 +148,7 @@ interface ResolvedLoopDef {
  *  `userConfigLoopsDir()/<name>/<name>.yaml`. Returns the path to try (existence is the parser's concern) with
  *  its origin, or null when the name is not a single safe path segment — never a traversal lever. */
 function resolveLoopDefPath(repoDir: string, name: string, configDir?: string): ResolvedLoopDef | null {
-  if (!SAFE_NAME.test(name)) return null;
+  if (!isSafePathSegment(name)) return null;
   // A refused user-config root (a relative CLAUDE_CONFIG_DIR) yields NO operator-config candidate: resolving
   // it against this process's cwd could place `operator-config` authority on a path inside the repo, and that
   // origin is what §26.6 grants `exec` on (CWE-829). The repo-override branch below still stands on its own.
@@ -194,7 +188,7 @@ function toPhases(doc: Record<string, unknown>): LoopPhase[] {
   if (!Array.isArray(doc.phases)) return [];
   return doc.phases
     .map((p): LoopPhase | null => {
-      if (!isRecord(p) || typeof p.id !== 'string' || !SAFE_NAME.test(p.id) || typeof p.entry_status !== 'string') {
+      if (!isRecord(p) || typeof p.id !== 'string' || !isSafePathSegment(p.id) || typeof p.entry_status !== 'string') {
         return null;
       }
       const exit = isRecord(p.exit_predicate) ? p.exit_predicate : {};
@@ -220,7 +214,7 @@ function toRosters(doc: Record<string, unknown>): LoopRoster[] {
         ? {
             id: r.id,
             actors: Array.isArray(r.ordered_actors)
-              ? r.ordered_actors.filter((a): a is string => typeof a === 'string' && SAFE_NAME.test(a))
+              ? r.ordered_actors.filter((a): a is string => typeof a === 'string' && isSafePathSegment(a))
               : [],
           }
         : null,

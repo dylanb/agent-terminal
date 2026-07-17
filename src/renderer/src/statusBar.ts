@@ -253,7 +253,8 @@ export function createStatusBar(host: HTMLElement, deps: StatusBarDeps): StatusB
     lead.textContent = 'Loop needs you';
     const detail = doc.createElement('span');
     detail.className = 'it';
-    detail.textContent = `${status} · iter ${iteration}${pr !== null ? ` · PR #${pr}` : ''}`;
+    const iterSeg = iteration !== undefined ? ` · iter ${iteration}` : '';
+    detail.textContent = `${status}${iterSeg}${pr !== null ? ` · PR #${pr}` : ''}`;
 
     open.append(dot, lead, doc.createTextNode(' — '), detail);
     const restore = captureSubtreeFocus(alert);
