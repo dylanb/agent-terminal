@@ -8,10 +8,11 @@
 /** The file a turn writes last as a robust, cross-process done-signal. */
 export const TURN_DONE_FILENAME = 'turn-done';
 
-/** The §26 engine's repo-relative done-file path — the default the instruction names, so §26 is
- *  byte-for-byte unchanged. The §27 engine (§27.15) passes its own area (.agent-terminal/loop/turn-done):
- *  one vocabulary, directory-parameterized (the ticket's authorized leaf-primitive lift), never a copy. */
-export const LEGACY_DONE_REL_PATH = `.agent-loop/${TURN_DONE_FILENAME}`;
+/** The §26 engine's repo-relative done-file path (its `.agent-loop/` area) — the default the instruction
+ *  names, so §26 is byte-for-byte unchanged. §26 is an active, coexisting engine (§27.15), not deprecated.
+ *  The §27 engine passes its own area (.agent-terminal/loop/turn-done): one vocabulary,
+ *  directory-parameterized (the ticket's authorized leaf-primitive lift), never a copy. */
+export const AGENT_LOOP_DONE_REL_PATH = `.agent-loop/${TURN_DONE_FILENAME}`;
 
 /** The text the orchestrator appends to an injected turn prompt, instructing the agent to write the
  *  done-signal FILE as its final action once its own work and any spawned subagents have finished. When
@@ -20,7 +21,7 @@ export const LEGACY_DONE_REL_PATH = `.agent-loop/${TURN_DONE_FILENAME}`;
  *  MUST re-read it and confirm each output is present and non-empty on disk BEFORE writing the done-signal:
  *  a done-signal written while an output was never produced (a silently failed / mis-pathed Write) makes the
  *  run detect "done" against a missing file → retry → error. */
-export function doneSignalInstruction(turnKey: string, artifact?: string, doneRelPath: string = LEGACY_DONE_REL_PATH): string {
+export function doneSignalInstruction(turnKey: string, artifact?: string, doneRelPath: string = AGENT_LOOP_DONE_REL_PATH): string {
   const verify = artifact
     ? [
         '',

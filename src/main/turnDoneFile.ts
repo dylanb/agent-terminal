@@ -9,7 +9,7 @@ import { TURN_DONE_FILENAME } from '../shared/loopTurn';
 /** The §26 engine's done-file subdir. The §27 engine (§27.15) passes its own area
  *  (`.agent-terminal/loop`) so both engines share one watcher/reader, directory-parameterized (the
  *  ticket's authorized leaf-primitive lift) rather than a second copy. Default keeps §26 unchanged. */
-export const LEGACY_TURN_DONE_SUBDIR = '.agent-loop';
+export const AGENT_LOOP_TURN_DONE_SUBDIR = '.agent-loop';
 
 function turnDonePath(repoDir: string, subDir: string): string {
   return path.join(repoDir, subDir, TURN_DONE_FILENAME);
@@ -17,7 +17,7 @@ function turnDonePath(repoDir: string, subDir: string): string {
 
 /** Read the done-signal file's turn key WITHOUT deleting it; null when absent (never throws). The signal
  *  stays latched until `clearTurnDone` (§26.3/D46), so a re-read returns the same key. */
-export function readTurnDone(repoDir: string, subDir: string = LEGACY_TURN_DONE_SUBDIR): string | null {
+export function readTurnDone(repoDir: string, subDir: string = AGENT_LOOP_TURN_DONE_SUBDIR): string | null {
   try {
     return readFileSync(turnDonePath(repoDir, subDir), 'utf8').trim();
   } catch {
@@ -30,7 +30,7 @@ export function readTurnDone(repoDir: string, subDir: string = LEGACY_TURN_DONE_
  *  throws: `{ force }` covers ENOENT, but this runs on the injection critical path, so any other rmSync
  *  failure (EPERM, a directory at the path, a transient FS error) is swallowed rather than aborting the
  *  inject (CLAUDE.md — a best-effort reset must not fail the path it sits on; matches `readTurnDone`). */
-export function clearTurnDone(repoDir: string, subDir: string = LEGACY_TURN_DONE_SUBDIR): void {
+export function clearTurnDone(repoDir: string, subDir: string = AGENT_LOOP_TURN_DONE_SUBDIR): void {
   try {
     rmSync(turnDonePath(repoDir, subDir), { force: true });
   } catch {
@@ -41,7 +41,7 @@ export function clearTurnDone(repoDir: string, subDir: string = LEGACY_TURN_DONE
 /** Watch `<repoDir>/<subDir>/` for the done-signal file, calling `onChange` on each event touching
  *  it. Returns an unsubscribe, or null when the directory can't be watched yet (mirrors
  *  `watchAgentLoopState`: the caller must not cache a null so a later directory appearance re-attaches). */
-export function watchTurnDone(repoDir: string, onChange: () => void, subDir: string = LEGACY_TURN_DONE_SUBDIR): (() => void) | null {
+export function watchTurnDone(repoDir: string, onChange: () => void, subDir: string = AGENT_LOOP_TURN_DONE_SUBDIR): (() => void) | null {
   let watcher: FSWatcher;
   try {
     watcher = watch(path.join(repoDir, subDir), (_event, filename) => {
