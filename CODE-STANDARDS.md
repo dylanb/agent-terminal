@@ -101,6 +101,41 @@ taint persona caught it in round-1 review; the fix is the two layers above, each
 reader over the hostile numeric family (`-1`, `NaN`, `±Inf`, non-integer), the decision over
 `cap_baseline > iteration`.
 
+## An agent-produced artifact contract — one vocabulary, a self-validating example, a minimal predicate
+
+§27's review-and-fix turn is the first place a **composed prompt instructs an LLM subagent to produce a
+serialized artifact that a predicate then gates completion on** (`composeReviewAndFixPrompt` writes the
+instruction; `roundReportWellFormed` validates the fixer's output). This is the shared-semantics rule with
+a new kind of writer — a natural-language instruction to a model, not a second process — and it desyncs
+the same way two hand-maintained copies of a wire format do. Three parts hold it together, and the last
+two are not obvious enough to survive a second author who reads only the first.
+
+1. **The prompt's vocabulary and the validating predicate derive from one descriptor.** The disposition
+   set, the per-issue labels, and the section/persona heading tokens live once in
+   `src/shared/roundReport.ts` and are read by both the composer (what the fixer is told to write) and the
+   predicate (what the engine accepts). A prompt is a *writer* subject to the single-definition rule
+   exactly as a file writer is; the trap is not recognizing "a prompt" as a side of the contract.
+
+2. **The prompt embeds a canonical example that is itself asserted well-formed against the very predicate
+   that gates the turn.** The few-shot the fixer is shown is `exampleRoundReport(...)`, and a test runs
+   that example through `roundReportWellFormed` and requires `true` (`reviewTurn.test.ts` — "no
+   prompt↔predicate drift"). Without this pin the prompt can drift into instructing the fixer to write
+   something the engine will reject, and no code-level test catches it: the example and the predicate
+   become two hand-maintained copies of the shape. This is the enforcement most likely to be dropped,
+   because the example "obviously matches" the grammar it was written beside — until it doesn't.
+
+3. **The predicate validates the minimal contract — required tokens and structure — not a rigid layout.**
+   `roundReportWellFormed` checks that the declared sections are present, every roster persona is accounted
+   for, and each recorded issue carries its labelled elements with a disposition from the closed set; it
+   does not pin exact spacing, ordering, or surrounding prose. An over-constrained validator passes the
+   test's fake agent (which emits the canonical example verbatim) while rejecting a real model's legitimate
+   formatting variation — the same failure mode as mocking the VT parser, one layer out. Validate what the
+   downstream reader needs, and nothing the model may vary.
+
+The foundation is the shared-semantics rule in `CLAUDE.md`; this section names the two disciplines that
+rule does not carry on its own — the self-validating example and the deliberately-lenient predicate —
+because the next turn type that composes a prompt whose output a predicate gates will need both.
+
 ## The app never modifies the user's `.gitignore`
 
 Whether to ignore or commit a path is the user's VCS decision, not the app's. App-owned files
