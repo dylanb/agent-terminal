@@ -130,6 +130,22 @@ describe('roundReportWellFormed — disposition CORRECTNESS is out of scope (Non
   });
 });
 
+describe('roundReportWellFormed — linear-time parse on untrusted content (CWE-1333/CWE-400)', () => {
+  it('returns within a small time bound on a report carrying a multi-thousand-character colon-less line', () => {
+    // The hosted agent writes the report; the engine runs this predicate synchronously on the Electron main
+    // thread on every done-signal poll. A single long colon-less line (a stack trace, an indented code block,
+    // wrapped prose) must NOT drive super-linear backtracking that wedges node-pty/IPC for seconds-to-minutes.
+    const colonlessLine = `x${' '.repeat(50000)}x`;
+    const report =
+      `## summary\n\n${colonlessLine}\n\n### review-principal\n\n${REPORT_GRAMMAR.emptyMarker}\n\n` +
+      `### review-security\n\n${REPORT_GRAMMAR.emptyMarker}\n`;
+    const spec: RoundReportSpec = { sections: ['summary'], roster: ['review-principal', 'review-security'] };
+    const start = performance.now();
+    roundReportWellFormed(report, spec);
+    expect(performance.now() - start).toBeLessThan(300);
+  }, 30000);
+});
+
 describe('the closed disposition set is spec-fixed', () => {
   it('is exactly the §27.5 four-value set', () => {
     expect(DISPOSITIONS).toEqual(['fixed', 'dismissed — out of scope', 'dismissed — invalid', 'needs a human']);

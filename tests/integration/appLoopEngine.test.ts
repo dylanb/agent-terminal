@@ -486,6 +486,38 @@ describe('§27 engine — the review-and-fix route-out diverges from the work ac
     expect(readAppLoopState(repo)?.status).toBe('complete');
   });
 
+  it('accept REFUSES an UNRESOLVED review round reached via a report-location failure — never fabricates a finalized round (CWE-754/755)', () => {
+    // An `unresolved` review turn (the loop area/def no longer resolves) has NO report to keep, so the AC8
+    // override has nothing to finalize; accept must refuse it exactly as the work-turn def-unresolvable guard
+    // does, not persist `complete` over an empty round. Reached here by chaining review when the report
+    // location is unresolvable (startReview's unresolved fallback).
+    const engine = makeEngine();
+    deps.resolveReportLocation = () => null;
+    enterAndInjectWork(engine);
+    writeArtifact(true);
+    engine.onDoneSignal(); // work completes → chain review, but the location is unresolvable → unresolved review error
+    expect(readAppLoopState(repo)).toMatchObject({ turnKey: REVIEW_KEY, status: 'error' });
+    const afterError = injected.length;
+    engine.routeOut(repo, STEP, REVIEW_KEY, 'accept');
+    expect(readAppLoopState(repo)?.status).toBe('error'); // refused — NOT fabricated complete
+    expect(injected.length).toBe(afterError); // and never re-injected
+  });
+
+  it('accept REFUSES an UNRESOLVED review round reconstructed on resume (def deleted) and surfaces def-unresolvable (CWE-755)', () => {
+    // The def was deleted/edited between runs; resume reconstructs an `unresolved` review turn. Accepting it
+    // would finalize the round `complete` with reportPath === '' and no report — violating AC7 (one immutable
+    // report per finalized round) and AC8 (accept keeps THE malformed report; here there is none). The guard
+    // must refuse and surface a def-unresolvable reason so Retry/Terminate are the route out.
+    writeAppLoopState(repo, { loop: 'plan-loop', step: STEP, turnKey: REVIEW_KEY, status: 'error', errorReason: 'report omits a roster persona', round: 1 }, FIXED);
+    defResult = { ok: false, reason: 'no §27 def named plan-loop in any tier' };
+    const engine = makeEngine();
+    engine.resume(repo);
+    engine.routeOut(repo, STEP, REVIEW_KEY, 'accept');
+    expect(readAppLoopState(repo)?.status).toBe('error'); // still not fabricated complete
+    expect(engine.liveErrorFor(repo)?.kind).toBe('def-unresolvable'); // structured kind — wording free to change
+    expect(emitError).toHaveBeenCalledWith(engine.liveErrorFor(repo)?.reason);
+  });
+
   it('retry re-enters the same review-and-fix turn of the correct round (boundary + review prompt)', () => {
     const engine = makeEngine();
     toReviewError(engine);
