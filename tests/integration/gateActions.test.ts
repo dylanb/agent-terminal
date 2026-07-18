@@ -24,12 +24,11 @@ const PLAN_LOOP =
   '      - kind: exec\n' +
   '        args:\n' +
   '          argv: ["gh", "issue", "edit", "{{state.linked_issues[0]}}", "--body-file", "{{artifact.ticket-body}}"]\n' +
-  '      - kind: clear-phase2\n' +
+  '      - kind: publish-body\n' +
   '      - kind: reset-severity-cycle\n' +
   '      - kind: terminate\n' +
   '    on_request_changes:\n' +
-  '      - kind: set-phase2\n' +
-  '        args: {active: true}\n' +
+  '      - kind: reset-cap\n' +
   '      - kind: clear-persona-state\n' +
   '      - kind: append-human-note\n' +
   '        args: {title: "human request-changes"}\n' +
@@ -74,7 +73,7 @@ describe('decideGateOutcome (§26.6 / L5 — app-internal gate transition)', () 
       'epic-promote',
       'mark-pr-ready',
       'exec',
-      'clear-phase2',
+      'publish-body',
       'reset-severity-cycle',
       'terminate',
     ]);
@@ -103,25 +102,24 @@ describe('decideGateOutcome (§26.6 / L5 — app-internal gate transition)', () 
 
   it('drops the action kinds the in-app v1 engine does not model (parsed by loopDef, not carried as effects)', () => {
     // §26.6 deferred-and-dropped kinds — the LoopDef declares them (real-engine vocabulary) but the app's
-    // v1 gate executor carries out none, so decideGateOutcome must NOT surface them as effects (parity with
-    // `publish-body`). In the vendored defs they only ever appear alongside `terminate`, so the run has
-    // already ended when they would apply — dropping them is behavior-identical, and honest.
+    // v1 gate executor carries out none, so decideGateOutcome must NOT surface them as effects. In the
+    // vendored defs they only ever appear alongside `terminate`, so the run has already ended when they
+    // would apply — dropping them is behavior-identical, and honest.
     const kinds = decideGateOutcome(gate(), 'approve').effects.map((e) => e.kind);
-    expect(kinds).not.toContain('clear-phase2');
+    expect(kinds).not.toContain('publish-body');
     expect(kinds).not.toContain('reset-severity-cycle');
   });
 
-  it('request-changes → re-iterate at entry status; set-phase2, clear-persona-state, append-human-note', () => {
+  it('request-changes → re-iterate at entry status; reset-cap, clear-persona-state, append-human-note', () => {
     const out = decideGateOutcome(gate(), 'request-changes');
     expect(out.nextStatus).toBe('plan-draft');
     expect(out.terminate).toBe(false);
     expect(out.reiterate).toBe(true);
     const kinds = out.effects.map((e) => e.kind);
-    expect(kinds).toContain('set-phase2');
+    expect(kinds).toContain('reset-cap');
     expect(kinds).toContain('clear-persona-state');
     expect(kinds).toContain('append-human-note');
-    const setPhase2 = out.effects.find((e) => e.kind === 'set-phase2');
-    expect(setPhase2).toEqual({ kind: 'set-phase2', active: true });
+    expect(out.effects.find((e) => e.kind === 'reset-cap')).toEqual({ kind: 'reset-cap' });
   });
 
   it('impasse → terminal impasse status, append-human-note, no re-iterate', () => {

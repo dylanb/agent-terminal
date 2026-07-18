@@ -294,7 +294,6 @@ phases:
       on_verdict:
         clean: post-clean
         needs-work: conditional
-      on_phase2_active: true
       severity_cap: 5
     post_clean_gate: awaiting-human-pr-approval
     post_needs_work_gate: awaiting-human-impl-triage
@@ -311,11 +310,9 @@ gates:
     on_approve:
       - kind: publish-body
         on_failure: continue
-      - kind: clear-phase2
       - kind: terminate
     on_request_changes:
-      - kind: set-phase2
-        args: {active: true}
+      - kind: reset-cap
       - kind: clear-persona-state
       - kind: append-human-note
         args: {title: "human request-changes", artifact: "human-notes/{iter}.md"}
@@ -336,12 +333,10 @@ gates:
     on_approve:
       - kind: append-human-note
         args: {prefix: "impl-triage approve: "}
-      - kind: clear-phase2
       - kind: reset-severity-cycle
       - kind: terminate
     on_request_changes:
-      - kind: set-phase2
-        args: {active: true}
+      - kind: reset-cap
       - kind: clear-persona-state
       - kind: append-human-note
         args: {title: "human request-changes", artifact: "human-notes/{iter}.md"}
@@ -448,10 +443,6 @@ verdicts:
       no-issues: clean
   severities:
     order: [minor, major, blocker]
-  phase2_bounce_rules:
-    on_request_changes_set_active: true
-    reset_cycle_on_approve: true
-    force_triage_on_needs_work: true
 
 # ---------------------------------------------------------------------------
 # §1.10 CharterDef — drops plan-mode-directive; adds 99-pr-context

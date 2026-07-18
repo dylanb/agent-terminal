@@ -72,6 +72,35 @@ install walk uses it. A best-effort *reader* that treats any failure as "nothing
 meter's logs, the todo-template picker — is a different, correct policy and stays as it is; the rule is
 not "every readdir routes here."
 
+## Validating an untrusted value that feeds a safety limit — where, and which way it fails
+
+A value read from attacker-plantable persisted state (`.agent-loop/state.yaml`, and any on-disk doc a
+repo can carry) that feeds a **runaway backstop** — an iteration cap, a budget, a quota, a rate limit —
+is validated in two places, and the two are **not redundant**.
+
+**Field-local constraints go at the untrusted read boundary; a relational constraint goes at the use
+site.** The reader that decodes the value enforces everything judgeable about the value *alone* — finite,
+non-negative, integer — degrading anything else to the safe default. But a constraint that relates the
+value to *another* value the reader does not have in scope cannot be enforced there; it belongs where
+both operands are live. `cap_baseline` (§26.6/§26.8) is decoded by `loopStateReader` as a finite
+non-negative integer or `0`, but its real invariant — `cap_baseline <= iteration` — is checked in
+`decideConsolidateOutcome`, where `iteration` exists. **Passing the read-boundary gate is not proof the
+relational invariant holds**; a caller or reviewer who treats "the reader already validated it" as
+sufficient is the bug.
+
+**A normalization that feeds a safety limit fails TOWARD the limit still firing, never away from it.**
+When the value is out of range the fallback is the one that *preserves* the backstop — `cap_baseline`
+degrades to `0`, i.e. the monotonic window `iteration - 0`, so the cap fires exactly as it would with no
+reset — never a fallback that silently disables the limit. Corollary, and the sharpest part: **when you
+change how a limit is computed, re-derive whether out-of-range inputs still fail safe.** That is where
+the motivating defect lived. Moving the cap test from `iteration >= cap` to `iteration - cap_baseline >=
+cap` *flipped the safe direction*: a planted `cap_baseline` larger than `iteration` (or `NaN` / `±Inf`)
+drove the subtraction negative or incomparable, so the §26.8 runaway backstop went from "fires early" to
+**never fires** — unbounded autonomous iteration out of one line of untrusted YAML (CWE-20/770). The
+taint persona caught it in round-1 review; the fix is the two layers above, each with a RED test — the
+reader over the hostile numeric family (`-1`, `NaN`, `±Inf`, non-integer), the decision over
+`cap_baseline > iteration`.
+
 ## The app never modifies the user's `.gitignore`
 
 Whether to ignore or commit a path is the user's VCS decision, not the app's. App-owned files

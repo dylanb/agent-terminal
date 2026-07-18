@@ -73,7 +73,6 @@ export async function executeGateOutcome(
 ): Promise<void> {
   const has = (kind: GateOutcome['effects'][number]['kind']): boolean =>
     outcome.effects.some((e) => e.kind === kind);
-  const setPhase2 = outcome.effects.find((e) => e.kind === 'set-phase2');
   const nextIteration = outcome.reiterate ? ctx.iteration + 1 : ctx.iteration;
 
   // §26.9 / L8 — epic-promote runs BEFORE the state write so its new sub-issues land in the same doc
@@ -118,7 +117,9 @@ export async function executeGateOutcome(
       branch: ctx.branch,
       boundLoop: ctx.boundLoop,
       linkedIssues: [...ctx.linkedIssues, ...subIssues],
-      ...(setPhase2 ? { phase2Active: setPhase2.active } : {}),
+      // §26.6/§26.8 — cap_baseline = the critiqued iteration makes the next round internal-count 1
+      // (`iteration - cap_baseline`), reopening the autonomous window that request-changes just reset.
+      ...(has('reset-cap') ? { capBaseline: ctx.iteration } : {}),
       ...(has('clear-persona-state') ? { clearPersonaState: true } : {}),
       ...(subIssues.length > 0 ? { epic: { subIssues } } : {}),
       ...(outcome.terminate ? { terminated: true } : {}),

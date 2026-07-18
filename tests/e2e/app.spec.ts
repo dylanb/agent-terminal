@@ -1776,10 +1776,10 @@ function seedFakeAgent(
     work: 'write-plan' | 'file-only' | 'plan-only' | 'noop';
     reviews?: 'all' | 'missing';
     consolidate?: 'clean' | 'needs-work';
-    // §26.6/L6 — when set, the consolidate turn writes this verdict INSTEAD of `consolidate` on any
-    // iteration where state.yaml already carries `phase2_active: true` (a prior request-changes). Lets an
-    // e2e drive the phase-2 triage branch: clean until phase-2, then needs-work once phase-2 is active.
-    phase2Consolidate?: 'clean' | 'needs-work';
+    // §26.6/L6 — when set, iteration 1's consolidate verdict is this INSTEAD of `consolidate` (later
+    // iterations use `consolidate`). Lets an e2e reach a gate at iteration 1 (e.g. clean → approval) and
+    // then exercise needs-work cap routing on the following iterations without extra rounds.
+    consolidateIter1?: 'clean' | 'needs-work';
     // §26.8/L6 — the consolidated `findings_kept` the stuck detector signs. `stable` writes the same
     // finding every iteration (identical signature → stuck at x2); `changing` stamps the iteration into
     // the finding (a fresh signature each round → never stuck). Absent → no kept findings (empty signature).
@@ -1873,10 +1873,8 @@ function seedFakeAgent(
   const reviewAct = opts.reviews === undefined ? ':' : `${mark('reviewers')}${writeReviews}; ${doneSignal('review-plan')}`;
   // §26.3/D45 — on the consolidate turn, write reviews/<iter>/consolidated.json with the scripted verdict
   // then signal done. undefined = do nothing (the turn never confirms → retry-then-error).
-  // §26.6/L6 — the verdict is resolved at runtime so a phase2-conditional verdict can react to the
-  // app-written `phase2_active` flag (grep the live state.yaml). Absent phase2Consolidate → static verdict.
-  const verdictExpr = opts.phase2Consolidate
-    ? `verdict='${opts.consolidate}'; if grep -q 'phase2_active: true' .agent-loop/state.yaml 2>/dev/null; then verdict='${opts.phase2Consolidate}'; fi`
+  const verdictExpr = opts.consolidateIter1
+    ? `if [ "$iter" = "1" ]; then verdict='${opts.consolidateIter1}'; else verdict='${opts.consolidate}'; fi`
     : `verdict='${opts.consolidate}'`;
   // §26.8/L6 — the kept findings the signature is computed over. `stable` is identical each iteration
   // (single-quoted, no expansion); `changing` stamps $iter (double-quoted so bash expands it).
@@ -3937,24 +3935,32 @@ test('two consecutive iterations with an identical finding signature flag the ru
   rmSync(binDir, { recursive: true, force: true });
 });
 
-test('request-changes activates phase-2; the next needs-work verdict routes to the triage gate (§26.13 / L6)', async () => {
-  const repo = seedBootstrapFlowRepo('agent-term-e2e-l6-phase2-');
-  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-l6-phase2-home-'));
-  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-l6-phase2-bin-');
-  // Iteration 1 consolidates clean → the plan-approval gate. request-changes sets phase2_active and
-  // re-iterates; on iteration 2 the fake now consolidates needs-work (phase-2 is active), so the
-  // orchestrator routes to the triage gate instead of auto-iterating (§26.6).
-  seedFakeAgent(binDir, { work: 'write-plan', reviews: 'all', consolidate: 'clean', phase2Consolidate: 'needs-work' });
+test('request-changes resets the per-loop cap window; a following needs-work verdict re-iterates instead of routing to triage (§26.13 / L6)', async () => {
+  const repo = seedBootstrapFlowRepo('agent-term-e2e-l6-capreset-');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-l6-capreset-home-'));
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-l6-capreset-bin-');
+  // plan-loop's severity_cap is 2, counted over the per-loop window `iteration - cap_baseline`. Iteration 1
+  // consolidates clean → the approval gate; request-changes there RESETS the window (cap_baseline := 1) and
+  // re-iterates. Iterations 2+ consolidate needs-work: under the RETIRED phase-2 routing the first would have
+  // re-gated at iteration 2 at once; with the window reset, iteration 2 (window count 1) auto-iterates and the
+  // run reaches iteration 3 — the observable that phase-2 is gone. Empty findings keep the stuck detector quiet.
+  seedFakeAgent(binDir, { work: 'write-plan', reviews: 'all', consolidate: 'needs-work', consolidateIter1: 'clean' });
   await driveToPlanGate(repo, home, binDir, logFile);
 
   await gateButton('request-changes').click();
 
   const stateFile = join(repo, '.agent-loop', 'state.yaml');
+  // The window reset let iteration 2's needs-work AUTO-ITERATE past the triage gate the retired phase-2
+  // routing would have STOPped at; at iteration 3 the window (3 - 1 = 2) reaches the cap, so the run STOPs
+  // at the triage gate rather than iterating unbounded — pinning BOTH that phase-2 is gone AND the reset
+  // window still bounds the loop.
   await expect
-    .poll(() => readFileSync(stateFile, 'utf8'), { timeout: 40_000 })
+    .poll(() => readFileSync(stateFile, 'utf8'), { timeout: 45_000 })
     .toContain('status: awaiting-human-plan-triage');
   const stateText = readFileSync(stateFile, 'utf8');
-  expect(stateText).toContain('phase2_active: true');
+  expect(stateText).toContain('iteration: 3'); // auto-iterated past the iteration-2 phase-2 STOP
+  expect(stateText).toContain('cap_baseline: 1'); // the window origin request-changes set at iteration 1
+  expect(stateText).not.toContain('phase2_active: true'); // phase-2 routing is retired
   expect(stateText).not.toContain('status: error');
 
   await app.close();
@@ -4081,6 +4087,7 @@ test('approve at the plan gate auto-advances the flow and resumes into the impl 
   const stateText = readFileSync(stateFile, 'utf8');
   expect(stateText).toContain('status: impl-draft');
   expect(stateText).toMatch(/^iteration: 2$/m); // monotonic: carried forward from the plan loop's 1, never reset
+  expect(stateText).toContain('cap_baseline: 1'); // the impl loop opens its OWN cap window at the plan loop's final iteration
   expect(stateText).toContain('branch: plan-loop/issue-176'); // same branch — resume kept the plan PR
   expect(stateText).toMatch(/linked_issues:\s*\n\s*- 176/); // the plan run's issue carried, not reset
 
@@ -4155,7 +4162,7 @@ test('a repo that opts the loop out via loops_deny_exec runs no exec at the plan
   rmSync(binDir, { recursive: true, force: true });
 });
 
-test('request-changes at the plan gate writes a human note, sets phase2, and re-iterates (§26.13 / L5)', async () => {
+test('request-changes at the plan gate writes a human note, resets the cap window, and re-iterates (§26.13 / L5)', async () => {
   const repo = seedBootstrapFlowRepo('agent-term-e2e-l5-changes-');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-l5-changes-home-'));
   const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-l5-changes-bin-');
@@ -4164,8 +4171,9 @@ test('request-changes at the plan gate writes a human note, sets phase2, and re-
 
   await gateButton('request-changes').click();
 
-  // Land: the note is written for the critiqued iteration, phase2 is activated, and the loop re-iterates
-  // (a second iteration's consolidated.json appears). No PR is readied (request-changes has no such action).
+  // Land: the note is written for the critiqued iteration (1), the per-loop cap window resets to that
+  // iteration (cap_baseline: 1), and the loop re-iterates (a second iteration's consolidated.json appears).
+  // No PR is readied (request-changes has no such action).
   await expect
     .poll(() => existsSync(join(repo, '.agent-loop', 'human-notes', '1.md')), { timeout: 15_000 })
     .toBe(true);
@@ -4173,7 +4181,8 @@ test('request-changes at the plan gate writes a human note, sets phase2, and re-
     .poll(() => existsSync(join(repo, '.agent-loop', 'reviews', '2', 'consolidated.json')), { timeout: 30_000 })
     .toBe(true);
   const stateText = readFileSync(join(repo, '.agent-loop', 'state.yaml'), 'utf8');
-  expect(stateText).toContain('phase2_active: true');
+  expect(stateText).toContain('cap_baseline: 1');
+  expect(stateText).not.toContain('phase2_active: true');
   expect(stateText).toContain('iteration: 2');
   expect(readFileSync(logFile, 'utf8')).not.toContain('pr ready');
 

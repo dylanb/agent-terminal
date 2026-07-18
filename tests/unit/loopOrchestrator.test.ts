@@ -374,13 +374,15 @@ describe('loop turn runner (§26.3/D47a, D48)', () => {
 
 // §26.13 L4/L6 / §26.6/§26.8 — after the consolidate turn completes, the normalized verdict decides the
 // branch: `clean` STOPs at the phase post-clean gate; `needs-work` normally re-iterates, but routes to
-// the phase's post-needs-work TRIAGE gate (a STOP for the human) when phase-2 is active, at the iteration
-// cap, or flagged stuck (signature x2, §26.8).
+// the phase's post-needs-work TRIAGE gate (a STOP for the human) at the iteration cap or flagged stuck
+// (signature x2, §26.8). The cap counts the PER-LOOP internal window `iteration - capBaseline`, not the
+// monotonic run-wide iteration: a chained-loop rebind and a request-changes both advance `capBaseline`,
+// which resets the window (retiring phase-2's permanent gate-every-round routing).
 describe('consolidate outcome decision (§26.6 / §26.8 / §26.13 L4/L6)', () => {
   const base = {
     postCleanGate: 'awaiting-human-plan-approval',
     postNeedsWorkGate: 'awaiting-human-plan-triage',
-    phase2Active: false,
+    capBaseline: 0,
     iterationCap: 0,
     stuck: false,
   };
@@ -392,17 +394,10 @@ describe('consolidate outcome decision (§26.6 / §26.8 / §26.13 L4/L6)', () =>
     });
   });
 
-  it('re-iterates a needs-work verdict when not phase-2, not at cap, not stuck', () => {
+  it('re-iterates a needs-work verdict when not at cap, not stuck', () => {
     expect(decideConsolidateOutcome({ ...base, verdict: 'needs-work', iteration: 3 })).toEqual({
       kind: 'reiterate',
       nextIteration: 4,
-    });
-  });
-
-  it('routes a needs-work verdict to the triage gate when phase-2 is active (§26.6)', () => {
-    expect(decideConsolidateOutcome({ ...base, verdict: 'needs-work', iteration: 2, phase2Active: true })).toEqual({
-      kind: 'gate',
-      status: 'awaiting-human-plan-triage',
     });
   });
 
@@ -420,6 +415,38 @@ describe('consolidate outcome decision (§26.6 / §26.8 / §26.13 L4/L6)', () =>
     });
   });
 
+  it('measures the cap from capBaseline, not the monotonic iteration (§26.6/§26.8)', () => {
+    // internal = iteration - capBaseline = 7 - 2 = 5, which reaches the cap of 5.
+    expect(
+      decideConsolidateOutcome({ ...base, verdict: 'needs-work', iteration: 7, capBaseline: 2, iterationCap: 5 }),
+    ).toEqual({ kind: 'gate', status: 'awaiting-human-plan-triage' });
+  });
+
+  it('re-iterates at the monotonic cap when the window was just reset (request-changes / rebind)', () => {
+    // internal = iteration - capBaseline = 5 - 5 = 0: the reset gave a fresh window, so a verdict that
+    // WOULD be at the monotonic cap (iteration >= cap) still auto-iterates (retires phase-2 routing).
+    expect(
+      decideConsolidateOutcome({ ...base, verdict: 'needs-work', iteration: 5, capBaseline: 5, iterationCap: 5 }),
+    ).toEqual({ kind: 'reiterate', nextIteration: 6 });
+  });
+
+  it('clamps a hostile out-of-range capBaseline (> iteration) so the cap still fires (CWE-20/770)', () => {
+    // cap_baseline is read from attacker-plantable .agent-loop/state.yaml and is always a PRIOR iteration
+    // (<= the current one). A planted value larger than `iteration` would drive `iteration - capBaseline`
+    // negative — the cap never reaches `>= iterationCap`, defeating the §26.8 runaway backstop. An
+    // out-of-range baseline degrades to the monotonic window (`iteration - 0`), so the cap fires as it
+    // would with no reset. Passing the reader's non-negative-integer gate is not enough on its own.
+    expect(
+      decideConsolidateOutcome({
+        ...base,
+        verdict: 'needs-work',
+        iteration: 6,
+        capBaseline: Number.MAX_SAFE_INTEGER,
+        iterationCap: 5,
+      }),
+    ).toEqual({ kind: 'gate', status: 'awaiting-human-plan-triage' });
+  });
+
   it('routes a needs-work verdict to the triage gate when flagged stuck (signature x2, §26.8)', () => {
     expect(decideConsolidateOutcome({ ...base, verdict: 'needs-work', iteration: 1, stuck: true })).toEqual({
       kind: 'gate',
@@ -429,7 +456,7 @@ describe('consolidate outcome decision (§26.6 / §26.8 / §26.13 L4/L6)', () =>
 
   it('falls back to re-iteration when a triage condition holds but the def names no triage gate', () => {
     expect(
-      decideConsolidateOutcome({ ...base, verdict: 'needs-work', iteration: 2, phase2Active: true, postNeedsWorkGate: '' }),
+      decideConsolidateOutcome({ ...base, verdict: 'needs-work', iteration: 2, iterationCap: 2, postNeedsWorkGate: '' }),
     ).toEqual({ kind: 'reiterate', nextIteration: 3 });
   });
 });

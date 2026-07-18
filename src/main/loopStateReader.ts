@@ -14,8 +14,10 @@ const STATE_REL = path.join('.agent-loop', 'state.yaml');
 
 /** The orchestrator-owned extension the §26.6/§26.8 branch logic reads back from state.yaml. */
 export interface LoopExtension {
-  /** `phase2_active` (§26.6): request-changes activated the triage-routing mode. */
-  phase2Active: boolean;
+  /** `cap_baseline` (§26.6/§26.8): the run-wide iteration at which the current per-loop cap window opened
+   *  (advanced by a chained-loop rebind and by request-changes). The cap counts `iteration - cap_baseline`.
+   *  0 when absent — a brand-new run's first loop, where the internal window equals the monotonic count. */
+  capBaseline: number;
   /** `impasse` (§26.8): the running finding signature + consecutive-identical count the stuck detector
    *  advances each consolidate. */
   impasse: { consecutiveIdentical: number; lastFindingsSig: string };
@@ -33,7 +35,7 @@ export interface LoopExtension {
 }
 
 const DEFAULT_EXTENSION: LoopExtension = {
-  phase2Active: false,
+  capBaseline: 0,
   impasse: { consecutiveIdentical: 0, lastFindingsSig: '' },
   personaState: {},
   cost: null,
@@ -71,7 +73,7 @@ export function readLoopExtension(repoDir: string): LoopExtension {
     };
   }
   return {
-    phase2Active: doc.phase2_active === true,
+    capBaseline: typeof doc.cap_baseline === 'number' && Number.isInteger(doc.cap_baseline) && doc.cap_baseline >= 0 ? doc.cap_baseline : 0,
     impasse: {
       consecutiveIdentical: typeof imp.consecutive_identical === 'number' ? imp.consecutive_identical : 0,
       lastFindingsSig: typeof imp.last_findings_sig === 'string' ? imp.last_findings_sig : '',
