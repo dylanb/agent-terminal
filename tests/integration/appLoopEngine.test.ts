@@ -508,6 +508,24 @@ describe('§27 engine — the review-and-fix route-out diverges from the work ac
     expect(readAppLoopState(repo)?.status).toBe('complete');
   });
 
+  it('accept REFUSES a review round whose report was NEVER written — present is the one precondition the override keeps (§27.12c/CWE-754)', () => {
+    // The fixer wrote its done-file but no report (a real §27.15 "writes nothing" state): retry-then-error with
+    // NOTHING on disk. The AC8 override keeps a present-but-MALFORMED report; there is none here, so accept must
+    // refuse — finalizing `complete` would record a round with no auditable report at all (§27.5), the exact
+    // fabricated-completion the §27.12c "artifact actually present" precondition forbids.
+    const engine = makeEngine();
+    driveToReviewInjected(engine);
+    engine.onDoneSignal(); // no report → one retry
+    engine.onDoneSignal(); // still no report → review error, report absent
+    expect(readAppLoopState(repo)).toMatchObject({ turnKey: REVIEW_KEY, status: 'error', round: 1 });
+    expect(existsSync(roundReportFile(repo, 1)!)).toBe(false);
+    const afterError = injected.length;
+    engine.routeOut(repo, STEP, REVIEW_KEY, 'accept');
+    expect(readAppLoopState(repo)?.status).toBe('error'); // refused — NOT fabricated complete
+    expect(injected.length).toBe(afterError); // and never re-injected
+    expect(emitError).toHaveBeenCalled(); // the route-out stays surfaced (Retry/Terminate)
+  });
+
   it('accept REFUSES an UNRESOLVED review round reached via a report-location failure — never fabricates a finalized round (CWE-754/755)', () => {
     // An `unresolved` review turn (the loop area/def no longer resolves) has NO report to keep, so the AC8
     // override has nothing to finalize; accept must refuse it exactly as the work-turn def-unresolvable guard

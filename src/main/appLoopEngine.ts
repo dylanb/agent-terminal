@@ -400,6 +400,17 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
             deps.onViewChanged();
             return;
           }
+          // §27.12c/CWE-754 — the override relaxes WELL-FORMEDNESS, not PRESENCE: it keeps a present-but-
+          // malformed report, but a report that was never written has nothing to keep. Refuse it (present is
+          // the one precondition §27.12c always requires) so finalizing `complete` can never record a round
+          // with no auditable report (§27.5), keeping Retry/Terminate the route out.
+          if (deps.readArtifact(active.reportPath) === null) {
+            const reason = 'the review round has no report to accept — retry or terminate';
+            liveError = { kind: 'turn-error', repoDir, loop: active.loopName, step: active.stepId, turnKey: active.turnKey, reason, round: active.round };
+            deps.emitError(reason);
+            deps.onViewChanged();
+            return;
+          }
           // §27.12c/AC8 — the review-turn accept is an OVERRIDE of the well-formedness gate, deliberately
           // divergent from the work turn's artifact-present accept: advance keeping the malformed report as
           // the round's record, WITHOUT re-running and WITHOUT re-injecting. Only a human can take it.
