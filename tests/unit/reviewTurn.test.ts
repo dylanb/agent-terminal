@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { composeReviewAndFixPrompt, preReviewBoundaryCommand, reviewRosterWithCharters } from '../../src/main/reviewTurn';
+import { composeReviewAndFixPrompt, preReviewBoundaryCommand, reviewRoster } from '../../src/main/reviewTurn';
 import { DISPOSITIONS, REPORT_GRAMMAR, roundReportWellFormed } from '../../src/shared/roundReport';
 import type { LoopDefV2 } from '../../src/main/loopDefV2';
 
@@ -43,18 +43,18 @@ describe('preReviewBoundaryCommand — data-driven from the def (§27.7)', () =>
   });
 });
 
-describe('reviewRosterWithCharters — the def\'s full reviewer catalog (§27.4, AC2)', () => {
+describe('reviewRoster — the def\'s full reviewer catalog (§27.4, AC2)', () => {
   it('is every persona the def declares, in order, and never one it does not', () => {
-    expect(reviewRosterWithCharters(def()).map((r) => r.persona)).toEqual(['review-plan-principal', 'review-plan-security']);
+    expect(reviewRoster(def()).map((r) => r.persona)).toEqual(['review-plan-principal', 'review-plan-security']);
   });
 
   it('follows the def: a different catalog is a different roster', () => {
     const other = def({ reviewers: [{ persona: 'impl-review-tests', charter: '/c/t.md', tools: [] }] });
-    expect(reviewRosterWithCharters(other).map((r) => r.persona)).toEqual(['impl-review-tests']);
+    expect(reviewRoster(other).map((r) => r.persona)).toEqual(['impl-review-tests']);
   });
 
   it('the ONE production source carries each persona and its charter, in order', () => {
-    expect(reviewRosterWithCharters(def())).toEqual([
+    expect(reviewRoster(def())).toEqual([
       { persona: 'review-plan-principal', charter: '/tiers/plan-loop/charter/principal.md' },
       { persona: 'review-plan-security', charter: '/tiers/plan-loop/charter/security.md' },
     ]);
@@ -102,7 +102,7 @@ describe('composeReviewAndFixPrompt — single-sourced from the shared report vo
     const p = composeReviewAndFixPrompt(req());
     // The few-shot the prompt shows the fixer must validate against the same predicate that gates the turn,
     // or the fixer is instructed to write something the engine will reject.
-    const spec = { sections: def().report.sections, roster: reviewRosterWithCharters(def()).map((r) => r.persona) };
+    const spec = { sections: def().report.sections, roster: reviewRoster(def()).map((r) => r.persona) };
     // The example is the whole trailing block after the marker line the composer emits before it.
     const example = p.slice(p.indexOf('# Round report'));
     expect(example).toContain('# Round report');

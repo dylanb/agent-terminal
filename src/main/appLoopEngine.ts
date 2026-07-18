@@ -20,7 +20,7 @@ import path from 'node:path';
 import { createTurnRunner, type HostedAgentState, type TurnRunner } from './loopOrchestrator';
 import type { LoopDefV2, LoopDefV2Result } from './loopDefV2';
 import { artifactWellFormed, boundaryCommand, completionArtifact, completionMarker, composeAppWorkPrompt } from './appWorkTurn';
-import { composeReviewAndFixPrompt, preReviewBoundaryCommand, reviewRosterWithCharters, type RosterEntry } from './reviewTurn';
+import { composeReviewAndFixPrompt, preReviewBoundaryCommand, reviewRoster, type RosterEntry } from './reviewTurn';
 import { clearTurnDone } from './turnDoneFile';
 import { TURN_DONE_FILENAME } from '../shared/loopTurn';
 import { roundReportWellFormed } from '../shared/roundReport';
@@ -329,7 +329,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       turnKey: `${REVIEW_TURN_PREFIX}${stepId}`,
       boundaryCmd: preReviewBoundaryCommand(r.def),
       round,
-      reviewers: reviewRosterWithCharters(r.def),
+      reviewers: reviewRoster(r.def),
       sections: r.def.report.sections,
       reportPath: loc.abs,
       reportRel: loc.rel,

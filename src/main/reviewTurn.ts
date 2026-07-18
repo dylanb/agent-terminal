@@ -27,15 +27,15 @@ export interface RosterEntry {
   charter: string;
 }
 
-/** Round 1's roster with each persona's charter reference (§27.4/AC2): every reviewer the def's catalog
- *  declares, in order — and never one it does not. The ONE production derivation of the round roster from the
- *  def; the engine builds its review turn from this. The consolidator selecting a subset for later rounds is N4. */
-export function reviewRosterWithCharters(def: LoopDefV2): RosterEntry[] {
+/** Round 1's roster (§27.4/AC2): every reviewer the def's catalog declares, in order — and never one it does
+ *  not. The ONE production derivation of the round roster from the def; the engine builds its review turn from
+ *  this. The consolidator selecting a subset for later rounds is N4. */
+export function reviewRoster(def: LoopDefV2): RosterEntry[] {
   return def.reviewers.map((r) => ({ persona: r.persona, charter: r.charter }));
 }
 
 export interface ReviewAndFixPromptReq {
-  /** The round's roster: each persona and the confined path of its charter (§27.4 — handed by reference). */
+  /** The round's roster — charters handed by reference, not inlined content (§27.4). */
   roster: RosterEntry[];
   /** The def's prescribed report structure (§27.5). */
   sections: string[];
