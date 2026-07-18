@@ -20,22 +20,23 @@ export function preReviewBoundaryCommand(def: LoopDefV2): string {
   return b ? boundaryCommand(b) : '/clear';
 }
 
+/** A reviewer persona and the confined path of its charter (§27.4). The one shape the roster source, the
+ *  prompt request, and the engine's in-flight review turn all share, so the three cannot drift. */
+export interface RosterEntry {
+  persona: string;
+  charter: string;
+}
+
 /** Round 1's roster with each persona's charter reference (§27.4/AC2): every reviewer the def's catalog
  *  declares, in order — and never one it does not. The ONE production derivation of the round roster from the
  *  def; the engine builds its review turn from this. The consolidator selecting a subset for later rounds is N4. */
-export function reviewRosterWithCharters(def: LoopDefV2): { persona: string; charter: string }[] {
+export function reviewRosterWithCharters(def: LoopDefV2): RosterEntry[] {
   return def.reviewers.map((r) => ({ persona: r.persona, charter: r.charter }));
-}
-
-/** The round roster as bare personas (§27.4/AC2), derived from the same single source as the charter-bearing
- *  roster so the two cannot drift. */
-export function reviewRoster(def: LoopDefV2): string[] {
-  return reviewRosterWithCharters(def).map((r) => r.persona);
 }
 
 export interface ReviewAndFixPromptReq {
   /** The round's roster: each persona and the confined path of its charter (§27.4 — handed by reference). */
-  roster: { persona: string; charter: string }[];
+  roster: RosterEntry[];
   /** The def's prescribed report structure (§27.5). */
   sections: string[];
   /** The repo-relative round-keyed report path the fixer writes (§27.5). */

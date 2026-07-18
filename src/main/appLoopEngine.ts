@@ -20,7 +20,7 @@ import path from 'node:path';
 import { createTurnRunner, type HostedAgentState, type TurnRunner } from './loopOrchestrator';
 import type { LoopDefV2, LoopDefV2Result } from './loopDefV2';
 import { artifactWellFormed, boundaryCommand, completionArtifact, completionMarker, composeAppWorkPrompt } from './appWorkTurn';
-import { composeReviewAndFixPrompt, preReviewBoundaryCommand, reviewRosterWithCharters } from './reviewTurn';
+import { composeReviewAndFixPrompt, preReviewBoundaryCommand, reviewRosterWithCharters, type RosterEntry } from './reviewTurn';
 import { clearTurnDone } from './turnDoneFile';
 import { TURN_DONE_FILENAME } from '../shared/loopTurn';
 import { roundReportWellFormed } from '../shared/roundReport';
@@ -147,7 +147,7 @@ type ActiveAppTurn =
       turnKey: string;
       boundaryCmd: string;
       round: number;
-      reviewers: { persona: string; charter: string }[];
+      reviewers: RosterEntry[];
       sections: string[];
       reportPath: string;
       reportRel: string;
