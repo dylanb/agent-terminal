@@ -523,7 +523,10 @@ describe('§27 engine — the review-and-fix route-out diverges from the work ac
     engine.routeOut(repo, STEP, REVIEW_KEY, 'accept');
     expect(readAppLoopState(repo)?.status).toBe('error'); // refused — NOT fabricated complete
     expect(injected.length).toBe(afterError); // and never re-injected
-    expect(emitError).toHaveBeenCalled(); // the route-out stays surfaced (Retry/Terminate)
+    // the REFUSAL reason is surfaced (not merely the earlier drive-to-error reason), so Retry/Terminate stay
+    // the route out — pinned wording-free via the live error the guard set (kind stable, prose free to change).
+    expect(engine.liveErrorFor(repo)?.kind).toBe('turn-error');
+    expect(emitError).toHaveBeenCalledWith(engine.liveErrorFor(repo)?.reason);
   });
 
   it('accept REFUSES an UNRESOLVED review round reached via a report-location failure — never fabricates a finalized round (CWE-754/755)', () => {
