@@ -30,6 +30,13 @@ const REPORTS_SUBDIR = 'reports';
  *  (`roundReportFile`) cannot diverge on the naming scheme (CLAUDE.md writer↔reader-location). */
 const roundReportLeaf = (round: number): string => `${round}.md`;
 
+/** A round is a positive integer or it is no round at all. The ONE gate both the writer and the reader of the
+ *  persisted `round` field consult, so a value the writer drops can never be one the reader keeps (CLAUDE.md
+ *  writer↔reader shared-semantics; §27.5 IPC item 3, CWE-20). */
+function isValidRound(round: unknown): round is number {
+  return typeof round === 'number' && Number.isInteger(round) && round > 0;
+}
+
 const STATUSES: readonly AppLoopStatus[] = ['working', 'error', 'complete'];
 
 export type AppLoopStatus = 'working' | 'error' | 'complete';
@@ -66,8 +73,8 @@ export function serializeAppLoopState(state: AppLoopRunState, now: () => Date): 
   // stale reason (CLAUDE.md writer↔reader).
   if (state.status === 'error' && state.errorReason) doc.error_reason = state.errorReason;
   // The round belongs to a review-and-fix turn; a work run carries none (absent = no round has run). Written
-  // only for a valid positive integer, so a recovered round is never a fabricated identity (§27.5 IPC item 3).
-  if (Number.isInteger(state.round) && (state.round as number) > 0) doc.round = state.round;
+  // only for a valid round, so a recovered round is never a fabricated identity.
+  if (isValidRound(state.round)) doc.round = state.round;
   return yaml.dump(doc);
 }
 
@@ -86,9 +93,9 @@ export function parseAppLoopState(text: string): AppLoopRunState | null {
   if (typeof loop !== 'string' || typeof step !== 'string' || typeof turnKey !== 'string') return null;
   if (typeof status !== 'string' || !STATUSES.includes(status as AppLoopStatus)) return null;
   const errorReason = status === 'error' && typeof doc.error_reason === 'string' ? doc.error_reason : undefined;
-  // Field-local validation (CWE-20): a round is a positive integer or it is dropped, so a mis-typed or
-  // negative value never surfaces as a fabricated round identity to the view/dedup/resume.
-  const round = typeof doc.round === 'number' && Number.isInteger(doc.round) && doc.round > 0 ? doc.round : undefined;
+  // Field-local validation (CWE-20): a mis-typed or negative value is dropped, so it never surfaces as a
+  // fabricated round identity to the view/dedup/resume.
+  const round = isValidRound(doc.round) ? doc.round : undefined;
   return {
     loop,
     step,

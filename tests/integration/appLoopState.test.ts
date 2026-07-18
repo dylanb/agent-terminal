@@ -152,6 +152,12 @@ describe('§27 loop-state — the review turn round number', () => {
       expect(parseAppLoopState(text)?.round).toBeUndefined();
     }
   });
+
+  it('drops a non-positive or non-integer round on the WRITE side too (one gate governs serialize and parse)', () => {
+    for (const bad of [0, -1, 1.5]) {
+      expect(serializeAppLoopState({ ...REVIEW, round: bad }, FIXED)).not.toContain('round:');
+    }
+  });
 });
 
 // §27.5/AC7 — the round report's write-target (the fixer, via roundReportRel) and read-source (the engine,
