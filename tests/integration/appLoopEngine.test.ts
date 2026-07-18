@@ -294,7 +294,7 @@ describe('§27 engine — the identity-carrying route-out (AC7)', () => {
     engine.routeOut(repo, STEP, TURN_KEY, 'accept'); // artifact absent, but the def RESOLVED
     expect(readAppLoopState(repo)?.status).toBe('error');
     expect(emitError).not.toHaveBeenCalled(); // a resolved-absent refusal is SILENT — Retry is the affordance
-    expect(engine.liveErrorFor(repo)?.reason).not.toMatch(/resolve/i); // never misdirect with a def-unresolvable reason
+    expect(engine.liveErrorFor(repo)?.kind).toBe('turn-error'); // the retained stall error keeps its kind — the refusal never flips it to def-unresolvable
   });
 
   it('terminate moves the flow off the step', () => {
@@ -349,8 +349,8 @@ describe('§27 engine — resume (AC8)', () => {
     engine.resume(repo);
     engine.routeOut(repo, STEP, TURN_KEY, 'accept');
     expect(readAppLoopState(repo)?.status).toBe('error'); // still not fabricated complete
-    expect(emitError).toHaveBeenCalledWith(expect.stringMatching(/resolve/i));
-    expect(engine.liveErrorFor(repo)?.reason).toMatch(/resolve/i); // the view no longer shows the stale reason
+    expect(engine.liveErrorFor(repo)?.kind).toBe('def-unresolvable'); // structured kind, not a message-token match — wording is free to change
+    expect(emitError).toHaveBeenCalledWith(engine.liveErrorFor(repo)?.reason); // the surfaced push equals the live reason, whatever its wording
   });
 
   it('never re-runs a completed turn on resume', () => {

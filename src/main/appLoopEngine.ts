@@ -27,9 +27,16 @@ const APP_DONE_REL_PATH = APP_LOOP_DIR_SEGMENTS.join('/') + '/' + TURN_DONE_FILE
 
 export type AppRouteOut = 'retry' | 'accept' | 'terminate';
 
+/** Why the §27 work turn holds a live error, as a structured discriminator so a consumer branches on the
+ *  kind rather than the human-facing `reason` prose: `turn-error` is a stall/completion-gate failure of the
+ *  turn itself; `def-unresolvable` is an Accept refused because the resumed turn's def no longer resolves
+ *  (§27.12c/CWE-755). The `reason` wording is free to change without moving any consumer. */
+export type AppLoopErrorKind = 'turn-error' | 'def-unresolvable';
+
 /** The live in-memory error of the §27 work turn, surfaced to the view when the persisted error write
  *  failed (ENOSPC/EPERM/a planted symlink) so the route-out is never a dead-end (§27.12c). */
 export interface AppLoopLiveError {
+  kind: AppLoopErrorKind;
   loop: string;
   step: string;
   turnKey: string;
@@ -200,7 +207,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       if (!active) return;
       // Record the live error BEFORE persisting: emitError and the view fallback must surface the route-out
       // even when the persisted error write fails (§27.12c — never an unrecoverable dead-end).
-      liveError = { repoDir: active.repoDir, loop: active.loopName, step: active.stepId, turnKey: active.turnKey, reason };
+      liveError = { kind: 'turn-error', repoDir: active.repoDir, loop: active.loopName, step: active.stepId, turnKey: active.turnKey, reason };
       persist('error', reason);
       deps.audit(active.repoDir, `§27 work turn ${active.turnKey} failed: ${reason}`, 1);
       deps.emitError(reason);
@@ -255,7 +262,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
           // accepted; surface that instead of returning over the stale original reason with a dead affordance.
           if (active.completion.kind === 'unresolved') {
             const reason = 'the bound def no longer resolves — retry or terminate';
-            liveError = { repoDir, loop: active.loopName, step: active.stepId, turnKey: active.turnKey, reason };
+            liveError = { kind: 'def-unresolvable', repoDir, loop: active.loopName, step: active.stepId, turnKey: active.turnKey, reason };
             deps.emitError(reason);
             deps.onViewChanged();
           }
@@ -282,15 +289,15 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
         ? activeTurnFor(repoDir, state.loop, state.step, r.def)
         : { repoDir, loopName: state.loop, stepId: state.step, turnKey: state.turnKey, recipePath: '', boundaryCmd: '/clear', completion: { kind: 'unresolved' } };
       if (state.status === 'error') {
-        liveError = { repoDir, loop: state.loop, step: state.step, turnKey: state.turnKey, reason: state.errorReason ?? 'error' };
+        liveError = { kind: 'turn-error', repoDir, loop: state.loop, step: state.step, turnKey: state.turnKey, reason: state.errorReason ?? 'error' };
       }
     },
     activeTurnKey: () => active?.turnKey ?? null,
     activeRepoDir: () => active?.repoDir ?? null,
     liveErrorFor: (repoDir) => {
       if (!liveError || liveError.repoDir !== repoDir) return null;
-      const { loop, step, turnKey, reason } = liveError;
-      return { loop, step, turnKey, reason };
+      const { kind, loop, step, turnKey, reason } = liveError;
+      return { kind, loop, step, turnKey, reason };
     },
   };
 }

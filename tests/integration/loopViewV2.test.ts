@@ -151,7 +151,7 @@ describe('deriveAppLoopView — live-error fallback when the persisted state can
     const view = deriveAppLoopView(
       'plan-loop',
       { tiers: tiers(), repoDir },
-      { loop: 'plan-loop', step: 'plan', turnKey: 'work-plan', reason: 'stalled: no terminal activity' },
+      { kind: 'turn-error', loop: 'plan-loop', step: 'plan', turnKey: 'work-plan', reason: 'stalled: no terminal activity' },
     );
     expect(view.status).toBe('error');
     expect(view.humanNeeded).toBe(true);
@@ -164,7 +164,7 @@ describe('deriveAppLoopView — live-error fallback when the persisted state can
     const view = deriveAppLoopView(
       'plan-loop',
       { tiers: tiers(), repoDir },
-      { loop: 'groom-loop', step: 'groom', turnKey: 'work-groom', reason: 'x' },
+      { kind: 'turn-error', loop: 'groom-loop', step: 'groom', turnKey: 'work-groom', reason: 'x' },
     );
     expect(view.status).toBe('not-started');
     expect(view.appTurn).toBeUndefined();
