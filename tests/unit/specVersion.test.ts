@@ -7,14 +7,18 @@ import { describe, expect, it } from 'vitest';
 // change is described. A header, a changelog entry, and a row tag that disagree leave the reader unable to
 // say when the contract moved — so the two version facts the document states about ITSELF are pinned here.
 
+// The spec was split into per-section files under docs/spec/ (v2.136): the front-matter `Document status`
+// stays on the top-level index, and the changelog moved to docs/spec/changelog.md. Both facts are still the
+// document's statement ABOUT ITSELF, so each is read from wherever the split now keeps it.
 const spec = readFileSync(path.join(__dirname, '../../terminal-web-ui-spec.md'), 'utf8');
+const changelog = readFileSync(path.join(__dirname, '../../docs/spec/changelog.md'), 'utf8');
 
 type Version = readonly [major: number, minor: number];
 const fmt = (v: Version): string => `v${v[0]}.${v[1]}`;
 const newer = (a: Version, b: Version): boolean => b[0] > a[0] || (b[0] === a[0] && b[1] > a[1]);
 
 const changelogVersions = (): Version[] =>
-  [...spec.matchAll(/\*\*Changelog v(\d+)\.(\d+):\*\*/g)].map((m) => [Number(m[1]), Number(m[2])] as const);
+  [...changelog.matchAll(/\*\*Changelog v(\d+)\.(\d+):\*\*/g)].map((m) => [Number(m[1]), Number(m[2])] as const);
 
 const documentStatus = (): Version | null => {
   const m = spec.match(/\*\*Document status:\*\*\s+Draft v(\d+)\.(\d+)/);
