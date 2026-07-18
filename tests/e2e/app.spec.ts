@@ -11,6 +11,7 @@ import { CLI_COMMAND_NAME } from '../../src/main/cliShim';
 import { parseAuditStream, type AuditEvent } from '../../src/shared/audit';
 import { TURN_DONE_FILENAME } from '../../src/shared/loopTurn';
 import { completionMarker } from '../../src/main/appWorkTurn';
+import { exampleRoundReport } from '../../src/shared/roundReport';
 
 // §26 D42a — the retired printable done-signal sentinel. Kept here ONLY so a regression test can inject it
 // into the PTY output and prove it no longer completes a turn (completion is the turn-done FILE alone).
@@ -3653,16 +3654,32 @@ function seedAppLoopFlowRepo(prefix: string, loopName = 'plan-loop'): string {
   return dir;
 }
 
-// A scriptable §27 fake-agent (§27.15 test seam): on the app work prompt it produces the §27 completion
-// artifact and/or the §27 done-file IN THE §27 LOOP AREA (.agent-terminal/loop/), records the boundary
-// commands, and bumps a per-run counter so an e2e can prove a turn was (or was NOT) re-run.
-//   complete  — write the marker-bearing artifact + the done-file → the turn completes.
-//   no-marker — write an artifact WITHOUT the marker + the done-file → one retry then error.
-//   file-only — write the marker-bearing artifact but NO done-file → stall→error with the artifact present
-//               (so the operator's Accept can advance it).
-//   noop      — produce nothing → stall→error.
-function seedFakeAgentV2(binDir: string, opts: { stepId: string; artifactRel: string; work: 'complete' | 'no-marker' | 'file-only' | 'noop' }): void {
+// The plan-loop (§27) reviewer catalog + report structure the committed example def declares — the roster
+// the round report must account for and the sections it must carry (example/loops-v2/plan-loop/plan-loop.yaml).
+const PLAN_V2_ROSTER = ['review-plan-principal', 'review-plan-security'];
+const PLAN_V2_SECTIONS = ['summary', 'findings', 'disposition'];
+// The canonical report generator is the ONE anchor: the fake-agent emits exactly what the shared predicate
+// (which gates the review turn's completion) accepts, so the e2e fixture cannot drift from the engine.
+// `full` accounts for the whole roster (the first persona carries an issue, the second the empty marker —
+// covering AC5's present-empty-still-completes); `omit-persona` drops a persona so the round is malformed.
+const b64 = (s: string): string => Buffer.from(s, 'utf8').toString('base64');
+const FULL_REPORT_B64 = b64(exampleRoundReport({ sections: PLAN_V2_SECTIONS, roster: PLAN_V2_ROSTER }));
+const OMIT_REPORT_B64 = b64(exampleRoundReport({ sections: PLAN_V2_SECTIONS, roster: [PLAN_V2_ROSTER[0]] }));
+
+// A scriptable §27 fake-agent (§27.15 test seam): on the app WORK prompt it produces the §27 completion
+// artifact and/or the §27 done-file IN THE §27 LOOP AREA (.agent-terminal/loop/); on the chained REVIEW-AND-FIX
+// prompt it writes the round-1 report + the review done-file. It records the boundary commands and bumps
+// per-turn counters so an e2e can prove a turn was (or was NOT) re-run.
+//   work:  complete — marker-bearing artifact + done-file → the work turn completes and chains review.
+//          no-marker — artifact WITHOUT the marker + done-file → one work retry then error (no chain).
+//          file-only — marker-bearing artifact but NO done-file → work stall→error with the artifact present.
+//          noop — produce nothing → work stall→error.
+//   review: full — a report accounting for the whole roster → the review turn completes (default).
+//           omit-persona — a report dropping a roster persona → one review retry then error.
+//           none — write nothing on the review turn → review stall/retry→error.
+function seedFakeAgentV2(binDir: string, opts: { stepId: string; artifactRel: string; work: 'complete' | 'no-marker' | 'file-only' | 'noop'; review?: 'full' | 'omit-persona' | 'none' }): void {
   const turnKey = `work-${opts.stepId}`;
+  const reviewKey = `review-${opts.stepId}`;
   const marker = completionMarker(opts.stepId);
   const doneRel = `.agent-terminal/loop/${TURN_DONE_FILENAME}`;
   const writeArtifact = (withMarker: boolean): string =>
@@ -3670,7 +3687,7 @@ function seedFakeAgentV2(binDir: string, opts: { stepId: string; artifactRel: st
     (withMarker
       ? `printf '%s\\n' '# plan' '${marker}' > ${opts.artifactRel}`
       : `printf '%s\\n' '# plan' 'no marker here' > ${opts.artifactRel}`);
-  const done = `mkdir -p .agent-terminal/loop; printf '%s' '${turnKey}' > ${doneRel}`;
+  const done = (key: string): string => `mkdir -p .agent-terminal/loop; printf '%s' '${key}' > ${doneRel}`;
   const bump = 'mkdir -p .agent-terminal; printf x >> .agent-terminal/work-runs';
   const workAct =
     opts.work === 'noop'
@@ -3678,8 +3695,18 @@ function seedFakeAgentV2(binDir: string, opts: { stepId: string; artifactRel: st
       : opts.work === 'file-only'
         ? `${bump}; ${writeArtifact(true)}`
         : opts.work === 'no-marker'
-          ? `${bump}; ${writeArtifact(false)}; ${done}`
-          : `${bump}; ${writeArtifact(true)}; ${done}`;
+          ? `${bump}; ${writeArtifact(false)}; ${done(turnKey)}`
+          : `${bump}; ${writeArtifact(true)}; ${done(turnKey)}`;
+  const reviewBump = 'mkdir -p .agent-terminal; printf x >> .agent-terminal/review-runs';
+  const writeReport = (reportB64: string): string =>
+    `mkdir -p .agent-terminal/loop/reports; printf '%s' '${reportB64}' | base64 -d > .agent-terminal/loop/reports/1.md`;
+  const reviewKind = opts.review ?? 'full';
+  const reviewAct =
+    reviewKind === 'none'
+      ? `${reviewBump}`
+      : reviewKind === 'omit-persona'
+        ? `${reviewBump}; ${writeReport(OMIT_REPORT_B64)}; ${done(reviewKey)}`
+        : `${reviewBump}; ${writeReport(FULL_REPORT_B64)}; ${done(reviewKey)}`;
   const script =
     '#!/usr/bin/env bash\n' +
     'while IFS= read -r line; do\n' +
@@ -3687,6 +3714,7 @@ function seedFakeAgentV2(binDir: string, opts: { stepId: string; artifactRel: st
     '  case "$line" in\n' +
     '    /clear) mkdir -p .agent-terminal; printf x >> .agent-terminal/clear-seen ;;\n' +
     '    /compact*) mkdir -p .agent-terminal; printf x >> .agent-terminal/compact-seen ;;\n' +
+    `    *turn-done:${reviewKey}*) ${reviewAct} ;;\n` +
     `    *turn-done:${turnKey}*) ${workAct} ;;\n` +
     '  esac\n' +
     'done\n';
@@ -3694,14 +3722,15 @@ function seedFakeAgentV2(binDir: string, opts: { stepId: string; artifactRel: st
 }
 
 const APP_ARTIFACT_REL = '.agent-terminal/loop/artifacts/plan.md';
+const appReport1 = (repo: string): string => join(repo, '.agent-terminal', 'loop', 'reports', '1.md');
 const appRunState = (repo: string): string => join(repo, '.agent-terminal', 'loop', 'run-state.yaml');
 const readIf = (p: string): string => (existsSync(p) ? readFileSync(p, 'utf8') : '');
 
-test('a §27 app step runs the work turn to completion, and leaves §26 untouched (§27.3 / AC1,2,3,9,10)', { tag: '@ownapp' }, async () => {
+test('a §27 app step runs work → review-and-fix to completion, writing the round report, leaving §26 untouched (§27.3 / AC1,2,3,5,7,9,10)', { tag: '@ownapp' }, async () => {
   const repo = seedAppLoopFlowRepo('agent-term-e2e-v2-work-');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-v2-work-home-'));
   const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-v2-work-bin-');
-  seedFakeAgentV2(binDir, { stepId: 'plan', artifactRel: APP_ARTIFACT_REL, work: 'complete' });
+  seedFakeAgentV2(binDir, { stepId: 'plan', artifactRel: APP_ARTIFACT_REL, work: 'complete', review: 'full' });
   // A prior §26 run sits on disk: the §27 engine must never touch it (AC10 — neither engine perturbs the other).
   const stateFile = join(repo, '.agent-loop', 'state.yaml');
   const priorState = 'schema_version: 4\nstatus: planning\niteration: 3\npr: 42\nbranch: feat/prior\nbound_loop: plan-loop\nlinked_issues:\n  - 7\n';
@@ -3720,19 +3749,78 @@ test('a §27 app step runs the work turn to completion, and leaves §26 untouche
 
   await flowControl().click(); // Start → enter the app plan-loop step → the §27 work turn starts
 
-  // The declared entry boundary (/clear) is issued and confirmed, then the work prompt injects; the fake
-  // agent produces the marker-bearing artifact + the §27 done-file, and the run advances to complete.
-  await expect.poll(() => readIf(appRunState(repo)), { timeout: 30_000 }).toContain('status: complete');
-  expect(existsSync(join(repo, '.agent-terminal', 'clear-seen'))).toBe(true); // §27.9 — the boundary was issued
+  // The pre-work boundary (/clear) is issued, the work turn completes on its artifact, the engine crosses the
+  // def-declared pre-review boundary (/compact) on its own, the review-and-fix turn writes the round report
+  // accounting for the whole roster, and the run advances to complete (AC1, AC3).
+  await expect.poll(() => readIf(appRunState(repo)), { timeout: 40_000 }).toContain('status: complete');
+  expect(existsSync(join(repo, '.agent-terminal', 'clear-seen'))).toBe(true); // pre-work boundary issued
+  expect(existsSync(join(repo, '.agent-terminal', 'compact-seen'))).toBe(true); // pre-review boundary issued (AC1)
   expect(readFileSync(join(repo, APP_ARTIFACT_REL), 'utf8')).toContain(completionMarker('plan'));
+  // AC7 — the round report is written to the round-keyed, app-owned location, accounting for the full roster.
+  expect(existsSync(appReport1(repo))).toBe(true);
+  const report = readFileSync(appReport1(repo), 'utf8');
+  for (const persona of PLAN_V2_ROSTER) expect(report).toContain(persona); // AC5 — every roster persona accounted for
+  // AC9 — the persisted run-state records the review turn and its round number.
+  expect(readIf(appRunState(repo))).toContain('round: 1');
 
   // AC10 — the §26 state.yaml is byte-for-byte unchanged, and no §26 artifact was written.
   expect(readFileSync(stateFile, 'utf8')).toBe(priorState);
   expect(existsSync(join(repo, '.agent-loop', 'plan.md'))).toBe(false);
 
-  // The loop panel reflects the completed work turn.
+  // The loop panel reflects the completed review-and-fix round.
   await loopReadout().click();
   await expect(loopPanel()).toContainText('complete', { timeout: 10_000 });
+
+  await app.close();
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+  rmSync(binDir, { recursive: true, force: true });
+});
+
+test('a §27 review-and-fix report omitting a roster persona drives one retry then error; Accept keeps the malformed report without re-running (§27.5/§27.12 / AC4,8)', { tag: '@ownapp' }, async () => {
+  const repo = seedAppLoopFlowRepo('agent-term-e2e-v2-review-');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-v2-review-home-'));
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-v2-review-bin-');
+  // Work completes, but the review turn writes a report that DROPS a roster persona → malformed.
+  seedFakeAgentV2(binDir, { stepId: 'plan', artifactRel: APP_ARTIFACT_REL, work: 'complete', review: 'omit-persona' });
+  app = await electron.launch({
+    args: ['out/main/index.js'],
+    env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100', CLAUDE_CONFIG_DIR: exampleConfigDir, PATH: `${binDir}:${process.env.PATH}`, FAKE_GHGIT_LOG: logFile },
+  });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await typeCommand(`cd "${repo}"`);
+  await expect(flowControl()).toHaveText('Start', { timeout: 10_000 });
+  await typeCommand('fake-agent');
+
+  await flowControl().click(); // enter the app step → work turn → chains review-and-fix
+
+  // The review report omits a persona → malformed → one re-injection → a SECOND malformed report → error.
+  await expect.poll(() => readIf(appRunState(repo)), { timeout: 40_000 }).toContain('status: error');
+  expect(readIf(appRunState(repo))).toContain('turn_key: review-plan'); // the ERRORED turn is the review turn
+  expect(readIf(appRunState(repo))).toContain('round: 1');
+  expect(readIf(join(repo, '.agent-terminal', 'review-runs')).length).toBe(2); // initial + one retry, then stop (AC4)
+
+  // The turn failure is never silent: dismiss the blocking error dialog so it does not intercept the panel.
+  const errorDialog = page.locator('#flow-error-host .flow-modal');
+  await expect(errorDialog).toBeVisible({ timeout: 15_000 });
+  await errorDialog.locator('.dismiss').click();
+  await expect(errorDialog).toHaveCount(0);
+
+  // The panel offers all three route-out affordances on the review error (§27.12c) — the same surface N2 built.
+  await loopReadout().click();
+  await expect(loopPanel().locator('[data-app-route-out="accept"]')).toBeVisible({ timeout: 10_000 });
+  await expect(loopPanel().locator('[data-app-route-out="retry"]')).toBeVisible();
+  await expect(loopPanel().locator('[data-app-route-out="terminate"]')).toBeVisible();
+
+  const malformed = readFileSync(appReport1(repo), 'utf8'); // the malformed report on disk
+  await loopPanel().locator('[data-app-route-out="accept"]').click();
+
+  // AC8 — accept is the OVERRIDE: it advances the review turn keeping the malformed report, without re-running.
+  await expect.poll(() => readIf(appRunState(repo)), { timeout: 15_000 }).toContain('status: complete');
+  expect(readIf(join(repo, '.agent-terminal', 'review-runs')).length).toBe(2); // Accept never re-injected the review turn
+  expect(readFileSync(appReport1(repo), 'utf8')).toBe(malformed); // the malformed report is kept, malformation included
 
   await app.close();
   rmSync(repo, { recursive: true, force: true });
@@ -3855,9 +3943,10 @@ test('a §27 error resumed after relaunch completes on its done-signal when Retr
   await expect(loopPanel().locator('[data-app-route-out="retry"]')).toBeVisible({ timeout: 15_000 });
   await loopPanel().locator('[data-app-route-out="retry"]').click();
 
-  // Land: the re-armed watcher observes the retried turn's done-file, so it advances to complete (not a
-  // second stall→error). Under the pre-fix wiring the done-signal is unseen and this never reaches complete.
-  await expect.poll(() => readIf(appRunState(repo)), { timeout: 25_000 }).toContain('status: complete');
+  // Land: the re-armed watcher observes the retried WORK turn's done-file; the work turn completes, chains
+  // the review-and-fix turn (which writes a full report), and the run advances to complete (not a second
+  // stall→error). Under the pre-fix wiring the done-signal is unseen and this never reaches complete.
+  await expect.poll(() => readIf(appRunState(repo)), { timeout: 40_000 }).toContain('status: complete');
   expect(readFileSync(join(repo, APP_ARTIFACT_REL), 'utf8')).toContain(completionMarker('plan'));
 
   await app.close();
