@@ -293,9 +293,8 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
     onComplete: (turnKey) => {
       if (!active) return;
       if (active.phase === 'work') {
-        // §27.3 — the work turn completing does not stop the loop: chain the review-and-fix turn after the
-        // def-declared pre-review boundary. The run-state advances straight to the review turn (no transient
-        // work-complete state), so a relaunch never mistakes a mid-chain crash for a finished loop.
+        // §27.3 — advance straight into the review turn with no transient work-complete state, so a relaunch
+        // never mistakes a mid-chain crash for a finished loop.
         deps.audit(active.repoDir, `§27 work turn ${turnKey} complete`, 0);
         startReview(active);
         return;

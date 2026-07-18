@@ -27,9 +27,8 @@ export interface RosterEntry {
   charter: string;
 }
 
-/** Round 1's roster (§27.4/AC2): every reviewer the def's catalog declares, in order — and never one it does
- *  not. The ONE production derivation of the round roster from the def; the engine builds its review turn from
- *  this. The consolidator selecting a subset for later rounds is N4. */
+/** Round 1's roster (§27.4/AC2): the ONE production derivation of the round roster from the def. Later rounds'
+ *  subset selection is the consolidator's job (N4). */
 export function reviewRoster(def: LoopDefV2): RosterEntry[] {
   return def.reviewers.map((r) => ({ persona: r.persona, charter: r.charter }));
 }
