@@ -8,6 +8,7 @@ import {
   loopEvents,
   parseAuditStream,
   reconstructTimeline,
+  reviewRoundAuditCmd,
   serializeDoc,
   terminateEvents,
   todoEvents,
@@ -363,5 +364,40 @@ describe('terminate classifier + timeline fold (§25 / #26 AC8)', () => {
     const tl = reconstructTimeline(stream);
     expect(tl.flow).toEqual({ status: 'not_started', step: '' });
     expect(tl.events.map((e) => e.type)).toEqual(['flow.started', 'flow.terminated']);
+  });
+});
+
+// §27.5/§27.12 — the review-and-fix round's boundary/complete/error/accept/retry commands get ONE
+// definition here (the shared audit vocabulary), never ad-hoc main-process strings, so the writer and any
+// future reader/viewer cannot re-spell them.
+describe('§27 review-round audit vocabulary', () => {
+  it('builds round-keyed command text carrying the round and any detail', () => {
+    expect(reviewRoundAuditCmd('boundary', 1, '/compact keep')).toContain('round 1');
+    expect(reviewRoundAuditCmd('boundary', 1, '/compact keep')).toContain('/compact keep');
+    expect(reviewRoundAuditCmd('complete', 2)).toContain('round 2');
+    expect(reviewRoundAuditCmd('error', 1, 'report omits a roster persona')).toContain('report omits a roster persona');
+    expect(reviewRoundAuditCmd('accept', 1)).toContain('accept');
+    expect(reviewRoundAuditCmd('retry', 3)).toContain('round 3');
+  });
+});
+
+// §27 IPC item 3 / AC8 — the round number flows through the SHARED audit vocabulary the loop-view diff
+// already emits: a first-present round (iteration absent → 1) records loop.iteration n:1, never a fabricated
+// 0, and the reconstructed timeline carries the round across a completed-then-errored review round.
+describe('§27 round number flows through loopEvents without coalescing to zero (AC8)', () => {
+  const T = '2026-07-18T00:00:00Z';
+
+  it('emits loop.iteration n:1 for the first present round (absent → 1)', () => {
+    const events = loopEvents({ status: 'working', pr: null }, { status: 'working', iteration: 1, pr: null }, T);
+    expect(events).toContainEqual({ ts: T, type: 'loop.iteration', n: 1 });
+  });
+
+  it('carries the round through a completed-then-errored review round in the reconstructed timeline', () => {
+    const stream =
+      serializeDoc({ flow: 'plan-loop', repo: 'r', repoPath: '/r', started: T }) +
+      serializeDoc({ ts: T, type: 'loop.status', from: '', to: 'working' }) +
+      serializeDoc({ ts: T, type: 'loop.iteration', n: 1 }) +
+      serializeDoc({ ts: T, type: 'loop.status', from: 'working', to: 'error' });
+    expect(reconstructTimeline(stream).loop).toEqual({ status: 'error', iteration: 1 });
   });
 });
