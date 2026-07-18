@@ -12,6 +12,7 @@ import {
   isValidFlowSetTitle,
   isValidFlowGithubRef,
   isValidFlowGateDecision,
+  isValidFlowAppRouteOut,
   isValidOpenExternal,
   openExternalTarget,
   isValidTemplateList,
@@ -191,6 +192,20 @@ describe('IPC payload validation (§6 — renderer-supplied input is untrusted)'
     expect(isValidFlowGateDecision({ sessionId: 'other', repoKey: '/repo', option: 'approve' })).toBe(false); // dead session
     expect(isValidFlowGateDecision([])).toBe(false); // not a record
     expect(isValidFlowGateDecision(null)).toBe(false);
+  });
+
+  it('confines a flow:appRouteOut action to the §27 set + guards repoKey/session/identity (§27.12/§6)', () => {
+    const base = { sessionId: sid, repoKey: '/repo', step: 'plan', turnKey: 'work-plan' };
+    expect(isValidFlowAppRouteOut({ ...base, action: 'retry' })).toBe(true);
+    expect(isValidFlowAppRouteOut({ ...base, action: 'accept' })).toBe(true);
+    expect(isValidFlowAppRouteOut({ ...base, action: 'terminate' })).toBe(true);
+    expect(isValidFlowAppRouteOut({ ...base, action: 'approve' })).toBe(false); // not a §27 route-out
+    expect(isValidFlowAppRouteOut({ ...base })).toBe(false); // action required
+    expect(isValidFlowAppRouteOut({ sessionId: sid, repoKey: '/repo', turnKey: 'work-plan', action: 'retry' })).toBe(false); // step required
+    expect(isValidFlowAppRouteOut({ sessionId: sid, repoKey: '/repo', step: 'plan', action: 'retry' })).toBe(false); // turnKey required
+    expect(isValidFlowAppRouteOut({ ...base, repoKey: 'relative', action: 'retry' })).toBe(false); // unsafe key
+    expect(isValidFlowAppRouteOut({ ...base, sessionId: 'other', action: 'retry' })).toBe(false); // dead session
+    expect(isValidFlowAppRouteOut(null)).toBe(false);
   });
 
   it('accepts exactly the shared GATE_DECISION_OPTIONS set — one source for the validator (§26.6)', () => {

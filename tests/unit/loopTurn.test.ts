@@ -70,4 +70,19 @@ describe('loop turn done-signal contract (§26.3/D47a — file-only)', () => {
     expect(instruction).toContain('turn-done:review-plan');
     expect(instruction.toLowerCase()).not.toContain('re-read');
   });
+
+  // §27 carve-out — the done-file vocabulary is LIFTED (not copied) to a directory-parameterized form so the
+  // §27 engine can keep its done-file in its own area (.agent-terminal/loop/) while §26 is byte-for-byte
+  // unchanged: the default rel path stays .agent-loop/turn-done.
+  it('defaults the done-file to .agent-loop/turn-done (§26 behavior-preserving)', () => {
+    expect(doneSignalInstruction('work-plan')).toContain(`.agent-loop/${TURN_DONE_FILENAME}`);
+  });
+
+  it('names a caller-supplied done-file path so §27 writes under .agent-terminal/loop/', () => {
+    const rel = `.agent-terminal/loop/${TURN_DONE_FILENAME}`;
+    const instruction = doneSignalInstruction('work-plan', undefined, rel);
+    expect(instruction).toContain(rel);
+    expect(instruction).not.toContain(`.agent-loop/${TURN_DONE_FILENAME}`); // the §27 path replaces §26's
+    expect(instruction).toContain('turn-done:work-plan');
+  });
 });

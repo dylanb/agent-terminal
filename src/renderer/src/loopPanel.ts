@@ -36,6 +36,10 @@ export interface LoopPanelDeps {
    *  for a `no hosted agent` stop). Injected by the composition root; absent → no Retry control is shown,
    *  so an errored loop is never a dead-end reachable only by Terminate (never-unrecoverable, CLAUDE.md). */
   retryTurn?(): void;
+  /** §27.12c — the §27-only work-turn route-out (retry / accept-present-artifact / terminate), carrying the
+   *  step+turn identity the receiver acts on (§6). Injected by the composition root; absent → the §27 error
+   *  view shows no route-out (an un-wired control would be inert, WCAG 4.1.2). */
+  appRouteOut?(step: string, turnKey: string, action: 'retry' | 'accept' | 'terminate'): void;
 }
 
 const NOOP_DEPS: LoopPanelDeps = { githubRef: () => Promise.resolve(null), openExternal: () => {} };
@@ -142,6 +146,41 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
     body.append(retryBtn);
   };
 
+  /** §27.12c — the §27 work-turn route-out: retry / accept-present-artifact / terminate. Present ONLY on a
+   *  §27 error view (the view carries `appTurn` — the step+turn identity — and status `error`) so an errored
+   *  §27 turn is never a UI dead-end. Each control carries the identity onto the service, so the route-out
+   *  acts on the turn it names, never ambient state (§6). Service-gated: an un-wired control would be inert
+   *  (WCAG 4.1.2). */
+  const syncAppRouteOut = (body: HTMLElement, loop: FlowLoopView): void => {
+    const existing = body.querySelector<HTMLElement>('[data-app-route-out-group]');
+    if (loop.status !== 'error' || !loop.appTurn || !deps.appRouteOut) {
+      existing?.remove();
+      return;
+    }
+    if (existing) return;
+    const { step, turnKey } = loop.appTurn;
+    const group = doc.createElement('div');
+    group.className = 'gatebar';
+    group.dataset.appRouteOutGroup = '';
+    group.setAttribute('role', 'group');
+    group.setAttribute('aria-label', 'work turn recovery');
+    const actions: Array<{ action: 'retry' | 'accept' | 'terminate'; label: string; cls: string }> = [
+      { action: 'retry', label: 'Retry', cls: 'pill app' },
+      { action: 'accept', label: 'Accept artifact', cls: 'pill' },
+      { action: 'terminate', label: 'Terminate', cls: 'pill' },
+    ];
+    for (const { action, label, cls } of actions) {
+      const btn = doc.createElement('button');
+      btn.className = cls;
+      btn.dataset.appRouteOut = action;
+      btn.textContent = label;
+      btn.setAttribute('aria-label', `${label} the ${step} work turn`);
+      btn.addEventListener('click', () => deps.appRouteOut?.(step, turnKey, action));
+      group.append(btn);
+    }
+    body.append(group);
+  };
+
   /** A ticket/PR ref row. `retry` re-attempts the best-effort `gh` fetch (no-op once resolved); the row
    *  shows the bare number until the title/body/link fill in. */
   function refRow(label: string, kind: GithubRefKind, number: number): { el: HTMLElement; retry: () => void; resolved: () => boolean } {
@@ -210,6 +249,7 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
       }
       syncReasonRow(liveLoop.ldl, liveLoop.reasonAnchor, loop.errorReason);
       syncRetry(liveLoop.body, loop);
+      syncAppRouteOut(liveLoop.body, loop);
     }
     for (const r of refRows) if (!r.resolved()) r.retry();
   }
@@ -342,6 +382,7 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
       }
 
       syncRetry(body, loop);
+      syncAppRouteOut(body, loop);
 
       // §26.3/D47a(c) — the human-in-the-loop escape hatch: advance a turn whose automatic done-signal
       // the orchestrator missed, without editing files. Present on a loop step only when the composition
@@ -360,7 +401,7 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
     },
     focusDecision() {
       const action =
-        host.querySelector<HTMLElement>('[data-gate-option], [data-loop-retry]') ??
+        host.querySelector<HTMLElement>('[data-gate-option], [data-loop-retry], [data-app-route-out]') ??
         host.querySelector<HTMLElement>('[data-loop-close]');
       action?.focus();
       return action !== null;

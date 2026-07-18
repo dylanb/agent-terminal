@@ -49,4 +49,22 @@ describe('turn done-signal file (§26.3/D47a)', () => {
     mkdirSync(doneFile(), { recursive: true });
     expect(() => clearTurnDone(repo)).not.toThrow();
   });
+
+  // §27 carve-out — the done-file watcher/reader is LIFTED to a directory-parameterized form so the §27
+  // engine keeps its done-file in its own area (.agent-terminal/loop/) while §26 (the default subdir,
+  // .agent-loop) is byte-for-byte unchanged.
+  describe('directory-parameterized for the §27 engine (§27.12)', () => {
+    const appSub = join('.agent-terminal', 'loop');
+    const appDoneFile = (): string => join(repo, appSub, TURN_DONE_FILENAME);
+    beforeEach(() => {
+      mkdirSync(join(repo, appSub), { recursive: true });
+    });
+    it('reads and clears a done-file under the supplied §27 subdir, not .agent-loop', () => {
+      writeFileSync(appDoneFile(), 'work-plan\n');
+      expect(readTurnDone(repo, appSub)).toBe('work-plan');
+      expect(readTurnDone(repo)).toBeNull(); // the default §26 dir is untouched
+      clearTurnDone(repo, appSub);
+      expect(existsSync(appDoneFile())).toBe(false);
+    });
+  });
 });

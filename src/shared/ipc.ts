@@ -59,6 +59,7 @@ export const CH = {
   flowMarkTurnComplete: 'flow:markTurnComplete',
   flowGateDecision: 'flow:gateDecision',
   flowRetryTurn: 'flow:retryTurn',
+  flowAppRouteOut: 'flow:appRouteOut',
   appOpenExternal: 'app:openExternal',
   todoTemplateList: 'todoTemplate:list',
   todoTemplateInstantiate: 'todoTemplate:instantiate',
@@ -475,6 +476,12 @@ export interface FlowLoopView {
    *  panel show WHY the loop stopped (e.g. "no Claude at the prompt") rather than a bare "error", and is
    *  cleared the moment the status recovers. Absent on every non-error view. */
   errorReason?: string;
+  /** §27.12/§27.15 — the identity of the §27 (app-namespace) work turn this view reflects: the flow step it
+   *  runs against and its turn key. Present ONLY on a live §27 run view (working/error/complete); absent on
+   *  every §26 view and on the §27 run-less/def-failure view (no turn has started). The panel carries this
+   *  onto the §27-only error route-out (retry / accept / terminate) so the receiver acts on the identity it
+   *  names, never ambient state (§6). Additive and §27-only — no §26 concept crosses the seam (§27.15). */
+  appTurn?: { step: string; turnKey: string };
 }
 
 /** The GitHub issue (ticket) and PR a flow is working (§24.2.3 T7). Numbers only — the title, body,
@@ -677,6 +684,26 @@ export interface FlowGateDecisionMsg {
   repoKey: string;
   option: GateDecisionOption;
   note?: string;
+}
+
+/** The §27-only work-turn error route-out (§27.12c): the human recovers a stopped §27 work turn by
+ *  re-running it (`retry`), accepting a present artifact without re-running (`accept`), or moving the flow
+ *  off the step (`terminate`). ONE runtime source drives both the type and the §6 validator, so main,
+ *  renderer, and the wire cannot drift on the set. Disjoint from `GATE_DECISION_OPTIONS` — a §27 concept,
+ *  never a §26 one (§27.15). */
+export const APP_ROUTE_OUT_ACTIONS = ['retry', 'accept', 'terminate'] as const;
+export type AppRouteOutAction = (typeof APP_ROUTE_OUT_ACTIONS)[number];
+
+/** flow:appRouteOut request (§27.12c): the §27-only work-turn route-out. It carries the identity of the
+ *  step and turn it acts on (§6) — the receiver acts on that identity, never ambient loop state — so a
+ *  decision for one turn can never fire against another. One-way; the result surfaces through the §27 run
+ *  state → flow:onStateChanged re-pull. */
+export interface FlowAppRouteOutMsg {
+  sessionId: SessionId;
+  repoKey: string;
+  step: string;
+  turnKey: string;
+  action: AppRouteOutAction;
 }
 
 /** flow:githubRef request (§24.2.3 T7): resolve a ref's title/body/url for the popout. `repoKey`
@@ -962,6 +989,10 @@ export interface FlowApi {
    *  operator starts Claude for a `no hosted agent` stop). One-way: the app clears the error status and
    *  re-injects; the loop panel re-pulls via flow:onStateChanged when the resulting state lands. */
   retryTurn(repoKey: string): void;
+  /** §27.12c — the §27-only work-turn route-out for `repoKey`, carrying the `step`+`turnKey` identity it
+   *  acts on (§6). `retry` re-runs the turn, `accept` advances a present artifact without re-running,
+   *  `terminate` moves the flow off the step. One-way: the loop panel re-pulls via flow:onStateChanged. */
+  appRouteOut(repoKey: string, step: string, turnKey: string, action: AppRouteOutAction): void;
 }
 
 /** CLI launcher install (§23.4 / #25): the settings affordance's only seam to the install action. */
