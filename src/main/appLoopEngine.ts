@@ -375,6 +375,16 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       }
       if (action === 'accept') {
         if (active.phase === 'review') {
+          // §27.12c/CWE-755 — an `unresolved` review turn (its def/report-location no longer resolves) has NO
+          // report to keep, so the override has nothing to finalize; refuse it exactly as the work-turn guard
+          // below does, surfacing def-unresolvable so Retry/Terminate stay the route out.
+          if (active.completion.kind === 'unresolved') {
+            const reason = 'the review round no longer resolves — retry or terminate';
+            liveError = { kind: 'def-unresolvable', repoDir, loop: active.loopName, step: active.stepId, turnKey: active.turnKey, reason, round: active.round };
+            deps.emitError(reason);
+            deps.onViewChanged();
+            return;
+          }
           // §27.12c/AC8 — the review-turn accept is an OVERRIDE of the well-formedness gate, deliberately
           // divergent from the work turn's artifact-present accept: advance keeping the malformed report as
           // the round's record, WITHOUT re-running and WITHOUT re-injecting. Only a human can take it.

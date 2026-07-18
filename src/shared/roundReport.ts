@@ -43,8 +43,11 @@ function isHeading(line: string, prefix: string): string | null {
 }
 
 function fieldValue(line: string, label: string): string | null {
-  const m = line.trim().match(/^-?\s*([^:]+?)\s*:\s*(.*)$/);
-  return m && m[1] === label ? m[2].trim() : null;
+  let t = line.trim();
+  if (t.startsWith('-')) t = t.slice(1).trimStart();
+  const idx = t.indexOf(':');
+  if (idx < 0) return null;
+  return t.slice(0, idx).trim() === label ? t.slice(idx + 1).trim() : null;
 }
 
 interface IssueBlock {
