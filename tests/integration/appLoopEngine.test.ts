@@ -520,13 +520,15 @@ describe('§27 engine — the review-and-fix route-out diverges from the work ac
     expect(readAppLoopState(repo)).toMatchObject({ turnKey: REVIEW_KEY, status: 'error', round: 1 });
     expect(existsSync(roundReportFile(repo, 1)!)).toBe(false);
     const afterError = injected.length;
+    const emitsBeforeAccept = emitError.mock.calls.length;
     engine.routeOut(repo, STEP, REVIEW_KEY, 'accept');
     expect(readAppLoopState(repo)?.status).toBe('error'); // refused — NOT fabricated complete
     expect(injected.length).toBe(afterError); // and never re-injected
-    // the REFUSAL reason is surfaced (not merely the earlier drive-to-error reason), so Retry/Terminate stay
-    // the route out — pinned wording-free via the live error the guard set (kind stable, prose free to change).
+    // the accept click itself surfaces a FRESH error emission (not merely the earlier drive-to-error one), so
+    // Retry/Terminate stay the route out — a count increment, since the reason prose is free to change and the
+    // drive already left a same-kind live error standing (asserting kind/reason alone would be vacuous).
+    expect(emitError.mock.calls.length).toBeGreaterThan(emitsBeforeAccept);
     expect(engine.liveErrorFor(repo)?.kind).toBe('turn-error');
-    expect(emitError).toHaveBeenCalledWith(engine.liveErrorFor(repo)?.reason);
   });
 
   it('accept REFUSES an UNRESOLVED review round reached via a report-location failure — never fabricates a finalized round (CWE-754/755)', () => {
