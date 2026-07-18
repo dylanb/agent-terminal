@@ -495,8 +495,9 @@ describe('§27 engine — the review-and-fix route-out diverges from the work ac
     expect(readAppLoopState(repo)).toMatchObject({ turnKey: REVIEW_KEY, status: 'complete', round: 1 });
     expect(injected.length).toBe(afterError); // never re-injected — the malformed report was NOT re-generated
     expect(readFileSync(roundReportFile(repo, 1)!, 'utf8')).toBe(malformed); // the report is kept, malformation included
-    // AC8 — the override is itself recorded in the §25 audit.
-    expect(audit).toHaveBeenCalledWith(repo, expect.stringContaining('accept'), 0);
+    // AC8 — the override is recorded in the §25 audit with the review-round vocabulary (§25 wiring): a bare
+    // `accept` substring is vacuous here (the work-turn accept literal also carries it), so pin `review round N`.
+    expect(audit).toHaveBeenCalledWith(repo, expect.stringContaining('review round 1 accepted'), 0);
   });
 
   it('accept does NOT require a well-formed report (the override diverges from the work turn\'s artifact-gated accept)', () => {
