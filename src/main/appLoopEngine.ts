@@ -1,11 +1,14 @@
-// The §27 (app-namespace) work-turn engine — the WRITE half of the coexistence seam (§27.15). On entry to
-// an `app` flow step it runs the def's declared context boundary, injects the composed work prompt once
-// through the §9.3 injector when injectable (§27.2), gates completion on the turn-keyed done-file plus (for
-// a def that declares one) a well-formed completion artifact — present and carrying the marker the prompt
-// instructed, never a quality judgment (§27.12) — retries once then stops in `error`, and persists run
-// state to the app-owned §27 loop-state file so a relaunch reconstructs the stopped turn and never re-drives
-// a completed one (§27.10/§27.12). The `error` route-out (retry / accept / terminate) acts on the step+turn
-// identity it is handed, never ambient state (§6).
+// The §27 (app-namespace) loop engine — the WRITE half of the coexistence seam (§27.15). On entry to an
+// `app` flow step it runs the def's declared context boundary, injects the composed work prompt once through
+// the §9.3 injector when injectable (§27.2), and gates the work turn's completion on the turn-keyed done-file
+// plus (for a def that declares one) a well-formed completion artifact. On work completion it chains the
+// REVIEW-AND-FIX turn (§27.3): cross the def-declared pre-review boundary, inject the review prompt, and gate
+// that turn on the done-file plus a well-formed round report (full-roster accounting, §27.5/§27.12) — never a
+// quality judgment. Either turn retries once then stops in `error`, and run state persists to the app-owned
+// §27 loop-state file so a relaunch reconstructs the stopped turn and never re-drives a completed one
+// (§27.10/§27.12). The `error` route-out (retry / accept / terminate) acts on the step+turn identity it is
+// handed, never ambient state (§6); the review-turn accept diverges from the work-turn accept as an override
+// of the well-formedness gate (§27.12c/AC8).
 //
 // The in-flight turn STATE MACHINE — inject-when-injectable, the boundary preamble drain, retry-once, the
 // stall watchdog — is reused read-only from the §26 turn runner (loopOrchestrator.ts, the plan's authorized
@@ -17,7 +20,7 @@ import path from 'node:path';
 import { createTurnRunner, type HostedAgentState, type TurnRunner } from './loopOrchestrator';
 import type { LoopDefV2, LoopDefV2Result } from './loopDefV2';
 import { artifactWellFormed, boundaryCommand, completionArtifact, completionMarker, composeAppWorkPrompt } from './appWorkTurn';
-import { composeReviewAndFixPrompt, preReviewBoundaryCommand } from './reviewTurn';
+import { composeReviewAndFixPrompt, preReviewBoundaryCommand, reviewRosterWithCharters } from './reviewTurn';
 import { clearTurnDone } from './turnDoneFile';
 import { TURN_DONE_FILENAME } from '../shared/loopTurn';
 import { roundReportWellFormed } from '../shared/roundReport';
@@ -158,6 +161,26 @@ function entryBoundaryCommand(def: LoopDefV2): string {
   return first ? boundaryCommand(first) : '/clear';
 }
 
+/** The review arm of an in-flight turn whose def/report-location no longer resolves (§27.12c): no roster, no
+ *  report, `completion.kind === 'unresolved'` so Accept refuses it. Seeded identically by `startReview`'s
+ *  fallback and `resume`'s fallback so the shape lives in one place. */
+function unresolvedReviewTurn(args: { repoDir: string; loopName: string; stepId: string; turnKey: string; round: number }): Extract<ActiveAppTurn, { phase: 'review' }> {
+  return {
+    phase: 'review',
+    repoDir: args.repoDir,
+    loopName: args.loopName,
+    stepId: args.stepId,
+    turnKey: args.turnKey,
+    boundaryCmd: '/clear',
+    round: args.round,
+    reviewers: [],
+    sections: [],
+    reportPath: '',
+    reportRel: '',
+    completion: { kind: 'unresolved' },
+  };
+}
+
 function activeTurnFor(repoDir: string, loopName: string, stepId: string, def: LoopDefV2): ActiveAppTurn {
   const artifact = completionArtifact(def);
   return {
@@ -204,7 +227,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
     deps.onViewChanged();
   };
 
-  const artifactPresent = (): boolean => {
+  const completionSatisfied = (): boolean => {
     if (!active) return false;
     if (active.phase === 'review') {
       // §27.12b — the review turn completes only on a well-formed round report: def-declared sections, full
@@ -254,7 +277,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       deps.inject(prompt);
     },
     hostedAgent: () => deps.hostedAgent(),
-    artifactPresent,
+    artifactPresent: completionSatisfied,
     armTimer: () => deps.armTimer(),
     cancelTimer: () => deps.cancelTimer(),
     writeError: (reason) => {
@@ -306,7 +329,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       turnKey: `${REVIEW_TURN_PREFIX}${stepId}`,
       boundaryCmd: preReviewBoundaryCommand(r.def),
       round,
-      reviewers: r.def.reviewers.map((rv) => ({ persona: rv.persona, charter: rv.charter })),
+      reviewers: reviewRosterWithCharters(r.def),
       sections: r.def.report.sections,
       reportPath: loc.abs,
       reportRel: loc.rel,
@@ -327,20 +350,13 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       return;
     }
     const reason = 'cannot resolve the review round (def or report location unresolvable)';
-    active = {
-      phase: 'review',
+    active = unresolvedReviewTurn({
       repoDir: work.repoDir,
       loopName: work.loopName,
       stepId: work.stepId,
       turnKey: `${REVIEW_TURN_PREFIX}${work.stepId}`,
-      boundaryCmd: '/clear',
       round: FIRST_ROUND,
-      reviewers: [],
-      sections: [],
-      reportPath: '',
-      reportRel: '',
-      completion: { kind: 'unresolved' },
-    };
+    });
     liveError = { kind: 'turn-error', repoDir: work.repoDir, loop: work.loopName, step: work.stepId, turnKey: active.turnKey, reason, round: FIRST_ROUND };
     persist('error', reason);
     deps.audit(work.repoDir, reviewRoundAuditCmd('error', FIRST_ROUND, reason), 1);
@@ -392,10 +408,9 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
           deps.audit(repoDir, reviewRoundAuditCmd('accept', active.round), 0);
           return;
         }
-        // §27.12c — accept a present artifact: advance through the same completion chain a signalled turn
-        // takes, WITHOUT re-running and WITHOUT injecting. A missing artifact is not acceptable — Retry
-        // (re-run) is that path.
-        if (!artifactPresent()) {
+        // §27.12c — accept a present work artifact: persist `complete` and stop, WITHOUT re-running and
+        // WITHOUT injecting. A missing artifact is not acceptable — Retry (re-run) is that path.
+        if (!completionSatisfied()) {
           // §27.12c/CWE-755 — an `unresolved` resumed turn (its def no longer resolves) can NEVER be
           // accepted; surface that instead of returning over the stale original reason with a dead affordance.
           if (active.completion.kind === 'unresolved') {
@@ -425,20 +440,8 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       if (state.turnKey.startsWith(REVIEW_TURN_PREFIX)) {
         const round = state.round ?? FIRST_ROUND;
         active =
-          reviewTurnFor(repoDir, state.loop, state.step, round) ?? {
-            phase: 'review',
-            repoDir,
-            loopName: state.loop,
-            stepId: state.step,
-            turnKey: state.turnKey,
-            boundaryCmd: '/clear',
-            round,
-            reviewers: [],
-            sections: [],
-            reportPath: '',
-            reportRel: '',
-            completion: { kind: 'unresolved' },
-          };
+          reviewTurnFor(repoDir, state.loop, state.step, round) ??
+          unresolvedReviewTurn({ repoDir, loopName: state.loop, stepId: state.step, turnKey: state.turnKey, round });
         if (state.status === 'error') {
           liveError = { kind: 'turn-error', repoDir, loop: state.loop, step: state.step, turnKey: state.turnKey, reason: state.errorReason ?? 'error', round };
         }

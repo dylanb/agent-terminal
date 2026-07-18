@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { composeReviewAndFixPrompt, preReviewBoundaryCommand, reviewRoster } from '../../src/main/reviewTurn';
+import { composeReviewAndFixPrompt, preReviewBoundaryCommand, reviewRoster, reviewRosterWithCharters } from '../../src/main/reviewTurn';
 import { DISPOSITIONS, REPORT_GRAMMAR, roundReportWellFormed } from '../../src/shared/roundReport';
 import type { LoopDefV2 } from '../../src/main/loopDefV2';
 
@@ -51,6 +51,14 @@ describe('reviewRoster — the def\'s full reviewer catalog (§27.4, AC2)', () =
   it('follows the def: a different catalog is a different roster', () => {
     const other = def({ reviewers: [{ persona: 'impl-review-tests', charter: '/c/t.md', tools: [] }] });
     expect(reviewRoster(other)).toEqual(['impl-review-tests']);
+  });
+
+  it('reviewRosterWithCharters — the ONE production source — carries each persona and its charter, in order', () => {
+    expect(reviewRosterWithCharters(def())).toEqual([
+      { persona: 'review-plan-principal', charter: '/tiers/plan-loop/charter/principal.md' },
+      { persona: 'review-plan-security', charter: '/tiers/plan-loop/charter/security.md' },
+    ]);
+    expect(reviewRoster(def())).toEqual(reviewRosterWithCharters(def()).map((r) => r.persona)); // same source, cannot drift
   });
 });
 

@@ -20,10 +20,17 @@ export function preReviewBoundaryCommand(def: LoopDefV2): string {
   return b ? boundaryCommand(b) : '/clear';
 }
 
-/** Round 1's roster (§27.4/AC2): every persona the def's reviewer catalog declares, in order — and never
- *  one it does not. The consolidator selecting a subset for later rounds is N4. */
+/** Round 1's roster with each persona's charter reference (§27.4/AC2): every reviewer the def's catalog
+ *  declares, in order — and never one it does not. The ONE production derivation of the round roster from the
+ *  def; the engine builds its review turn from this. The consolidator selecting a subset for later rounds is N4. */
+export function reviewRosterWithCharters(def: LoopDefV2): { persona: string; charter: string }[] {
+  return def.reviewers.map((r) => ({ persona: r.persona, charter: r.charter }));
+}
+
+/** The round roster as bare personas (§27.4/AC2), derived from the same single source as the charter-bearing
+ *  roster so the two cannot drift. */
 export function reviewRoster(def: LoopDefV2): string[] {
-  return def.reviewers.map((r) => r.persona);
+  return reviewRosterWithCharters(def).map((r) => r.persona);
 }
 
 export interface ReviewAndFixPromptReq {

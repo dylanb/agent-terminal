@@ -26,6 +26,9 @@ const RUN_STATE_FILE = 'run-state.yaml';
 /** The round reports live under a dedicated subtree of the loop area, keyed by round number (§27.5/§27.10),
  *  disjoint from the run-state file and from every other round's report. */
 const REPORTS_SUBDIR = 'reports';
+/** The round-report leaf filename — spelled once so the write-target (`roundReportRel`) and the read-source
+ *  (`roundReportFile`) cannot diverge on the naming scheme (CLAUDE.md writer↔reader-location). */
+const roundReportLeaf = (round: number): string => `${round}.md`;
 
 const STATUSES: readonly AppLoopStatus[] = ['working', 'error', 'complete'];
 
@@ -120,7 +123,7 @@ export function readAppLoopState(repoDir: string): AppLoopRunState | null {
  *  the one resolver whose READ-source half is `roundReportFile`, so the two cannot drift (CLAUDE.md
  *  writer↔reader-location). */
 export function roundReportRel(round: number): string {
-  return [...APP_LOOP_DIR_SEGMENTS, REPORTS_SUBDIR, `${round}.md`].join('/');
+  return [...APP_LOOP_DIR_SEGMENTS, REPORTS_SUBDIR, roundReportLeaf(round)].join('/');
 }
 
 /** The confined absolute round-report path the engine READS back to gate completion (§27.5), or null when
@@ -129,5 +132,5 @@ export function roundReportRel(round: number): string {
 export function roundReportFile(repoDir: string, round: number): string | null {
   const jail = resolveJail(repoDir, ...APP_LOOP_DIR_SEGMENTS, REPORTS_SUBDIR);
   if (jail === null) return null;
-  return confinedRealPath(jail, path.join(jail, `${round}.md`));
+  return confinedRealPath(jail, path.join(jail, roundReportLeaf(round)));
 }

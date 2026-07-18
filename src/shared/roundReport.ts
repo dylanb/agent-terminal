@@ -5,6 +5,10 @@
 export const DISPOSITIONS = ['fixed', 'dismissed — out of scope', 'dismissed — invalid', 'needs a human'] as const;
 export type Disposition = (typeof DISPOSITIONS)[number];
 
+/** The one disposition that carries extra validation semantics (a `fixed` issue must record what changed) and
+ *  anchors the canonical example — spelled once so it cannot desync from DISPOSITIONS. */
+export const FIXED_DISPOSITION: Disposition = 'fixed';
+
 /** The report grammar both sides agree on: heading prefixes, per-issue element labels, and the empty/failed
  *  persona marker. It pins the names/tokens, not a rigid layout — an over-constrained template would diverge
  *  the fake-agent from the real fixer (§27.5 Risks). */
@@ -63,7 +67,7 @@ function issueWellFormed(block: IssueBlock): boolean {
   if (block.issue === '') return false;
   if (block.disposition === null || !DISPOSITION_SET.has(block.disposition)) return false; // exact, trimmed, never normalized
   if (block.reason === null || block.reason === '') return false;
-  if (block.disposition === 'fixed' && (block.whatChanged === null || block.whatChanged === '')) return false;
+  if (block.disposition === FIXED_DISPOSITION && (block.whatChanged === null || block.whatChanged === '')) return false;
   return true;
 }
 
@@ -128,7 +132,7 @@ export function exampleRoundReport(spec: RoundReportSpec): string {
     if (idx === 0) {
       parts.push(
         `- ${g.issueLabel}: a sample issue raised by ${persona}`,
-        `  ${g.dispositionLabel}: ${DISPOSITIONS[0]}`,
+        `  ${g.dispositionLabel}: ${FIXED_DISPOSITION}`,
         `  ${g.reasonLabel}: it was a real in-scope defect`,
         `  ${g.whatChangedLabel}: corrected the defect`,
         '',
