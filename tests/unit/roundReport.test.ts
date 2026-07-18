@@ -93,6 +93,24 @@ describe('roundReportWellFormed — per-issue elements (AC6)', () => {
       '### review-principal\n\n_none_\n### review-security\n\n_none_\n\n## disposition\n\ndone\n';
     expect(roundReportWellFormed(orphan, SPEC)).toBe(false);
   });
+
+  // The bullet glyph is NOT part of the contract (§27.5 minimal-not-rigid): an issue is an issue whether the
+  // fixer wrote `-`, `*`, `+`, or `1.`. Recognizing only `-` would let a report that records an issue under any
+  // other (valid, common) Markdown bullet hide that issue's missing disposition from the §27.12b backstop.
+  it('detects an issue under a `*` bullet so its omitted disposition is still caught (backstop robust to glyph)', () => {
+    const block = '* issue: a real defect\n  reason: it was in scope\n  what-changed: fixed it\n'; // no disposition
+    expect(roundReportWellFormed(withIssue(block), SPEC)).toBe(false);
+  });
+
+  it('detects an issue under a numbered `1.` bullet so its omitted disposition is still caught', () => {
+    const block = '1. issue: a real defect\n   reason: it was in scope\n   what-changed: fixed it\n'; // no disposition
+    expect(roundReportWellFormed(withIssue(block), SPEC)).toBe(false);
+  });
+
+  it('accepts a well-formed issue under a `*` bullet (glyph variation is not malformation)', () => {
+    const block = '* issue: a real defect\n  disposition: fixed\n  reason: it was in scope\n  what-changed: fixed it\n';
+    expect(roundReportWellFormed(withIssue(block), SPEC)).toBe(true);
+  });
 });
 
 describe('roundReportWellFormed — disposition membership is exact, never normalized (AC6)', () => {
