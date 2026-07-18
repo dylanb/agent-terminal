@@ -444,6 +444,27 @@ describe('§27 engine — the review-and-fix turn (AC3, AC4, AC5, AC7)', () => {
     expect(readAppLoopState(repo)?.status).toBe('complete');
   });
 
+  it('audits the review-round boundary and completion with the review-round vocabulary (§25 wiring, AC3)', () => {
+    const engine = makeEngine();
+    driveToReviewInjected(engine); // work complete → cross the pre-review boundary → inject the review prompt
+    expect(audit).toHaveBeenCalledWith(repo, expect.stringContaining('review round 1 boundary'), null);
+    writeReport();
+    engine.onDoneSignal();
+    expect(readAppLoopState(repo)?.status).toBe('complete');
+    expect(audit).toHaveBeenCalledWith(repo, expect.stringContaining('review round 1 complete'), 0);
+  });
+
+  it('audits a review-round error and retry with the review-round vocabulary, never the work-turn string (§25 wiring, AC4/AC8)', () => {
+    const engine = makeEngine();
+    driveToReviewInjected(engine);
+    writeReport(exampleRoundReport({ sections: ['summary'], roster: [ROSTER[0]] })); // omits ROSTER[1] → malformed
+    engine.onDoneSignal();
+    engine.onDoneSignal(); // → review error
+    expect(audit).toHaveBeenCalledWith(repo, expect.stringContaining('review round 1 failed'), 1);
+    engine.routeOut(repo, STEP, REVIEW_KEY, 'retry');
+    expect(audit).toHaveBeenCalledWith(repo, expect.stringContaining('review round 1 retry'), null);
+  });
+
   it('the report is never read for a review turn whose report location cannot be resolved → cannot complete', () => {
     const engine = makeEngine();
     // resolveReportLocation returns null (e.g. a planted symlink at the loop area): the review turn errors
