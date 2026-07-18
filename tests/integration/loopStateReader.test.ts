@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import yaml from 'js-yaml';
 import { readLoopExtension } from '../../src/main/loopStateReader';
 
-// §26.6 — the orchestrator reads back the engine-extension fields it writes (phase2_active, the §26.8
+// §26.6 — the orchestrator reads back the engine-extension fields it writes (cap_baseline, the §26.8
 // impasse tracking, the §26.5 persona_state), which are NOT part of the §24.2.3 mirror slice. This reader
 // degrades every missing/ill-typed field to its default so a foreign or partial state.yaml is safe.
 describe('loop state.yaml extension reader (§26.6)', () => {
@@ -21,14 +21,28 @@ describe('loop state.yaml extension reader (§26.6)', () => {
   const write = (doc: Record<string, unknown>): void =>
     writeFileSync(join(repo, '.agent-loop', 'state.yaml'), yaml.dump({ schema_version: 4, ...doc }));
 
-  it('reads phase2_active back as written', () => {
-    write({ status: 'plan-draft', iteration: 2, phase2_active: true });
-    expect(readLoopExtension(repo).phase2Active).toBe(true);
+  it('reads cap_baseline back as written', () => {
+    write({ status: 'plan-draft', iteration: 5, cap_baseline: 3 });
+    expect(readLoopExtension(repo).capBaseline).toBe(3);
   });
 
-  it('defaults phase2_active to false when the field is absent', () => {
+  it('defaults cap_baseline to 0 when the field is absent or ill-typed', () => {
     write({ status: 'plan-draft', iteration: 1 });
-    expect(readLoopExtension(repo).phase2Active).toBe(false);
+    expect(readLoopExtension(repo).capBaseline).toBe(0);
+    write({ status: 'plan-draft', iteration: 1, cap_baseline: 'nope' });
+    expect(readLoopExtension(repo).capBaseline).toBe(0);
+  });
+
+  // CWE-20/770 — .agent-loop/state.yaml is attacker-plantable repo content, and cap_baseline feeds the
+  // §26.8 runaway backstop (`iteration - cap_baseline >= cap`). A malformed numeric — negative, NaN, ±Inf,
+  // or a non-integer — must degrade to 0 (the safe "window == monotonic iteration" default) rather than
+  // reach the subtraction. (An in-range-typed but out-of-range value — cap_baseline > iteration — is
+  // clamped at the decision, where `iteration` is known: see decideConsolidateOutcome's own test.)
+  it('rejects a malformed numeric cap_baseline (negative, NaN, Infinity, or non-integer) down to 0', () => {
+    for (const hostile of [-1, -1e9, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, 2.5]) {
+      write({ status: 'plan-draft', iteration: 1, cap_baseline: hostile });
+      expect(readLoopExtension(repo).capBaseline).toBe(0);
+    }
   });
 
   it('reads the §26.8 impasse tracking back as written', () => {
@@ -110,7 +124,7 @@ describe('loop state.yaml extension reader (§26.6)', () => {
   it('defaults to a safe extension for a missing or unreadable state.yaml (never throws)', () => {
     rmSync(join(repo, '.agent-loop'), { recursive: true, force: true });
     expect(readLoopExtension(repo)).toEqual({
-      phase2Active: false,
+      capBaseline: 0,
       impasse: { consecutiveIdentical: 0, lastFindingsSig: '' },
       personaState: {},
       cost: null,

@@ -76,7 +76,7 @@ describe('loop state.yaml writer (§26.6)', () => {
     expect(doc.linked_issues).toEqual([176]);
     expect(doc.updated_at).toBe('2026-06-30T12:00:00.000Z');
     // Whole-document: the LoopExtension fields the orchestrator owns are present, defaulted.
-    for (const key of ['sessions', 'impasse', 'phase2_active', 'persona_state', 'terminated']) {
+    for (const key of ['sessions', 'impasse', 'phase2_active', 'cap_baseline', 'persona_state', 'terminated']) {
       expect(doc, `missing whole-document key ${key}`).toHaveProperty(key);
     }
   });
@@ -123,6 +123,7 @@ describe('loop state.yaml writer (§26.6)', () => {
       linked_issues: [176],
       persona_state: { 'review-principal': { last_clean_iter: 2 } },
       impasse: { consecutive_identical: 1, last_findings_sig: 'abc123' },
+      cap_baseline: 5,
       phase2_active: true,
       human_notes: ['human asked for a smaller plan'],
       completed_loops: ['some-prior-loop'],
@@ -136,21 +137,25 @@ describe('loop state.yaml writer (§26.6)', () => {
     expect(doc.status).toBe('error'); // the app-owned field is updated
     expect(doc.persona_state).toEqual({ 'review-principal': { last_clean_iter: 2 } }); // engine state survives
     expect(doc.impasse).toEqual({ consecutive_identical: 1, last_findings_sig: 'abc123' });
+    // §26.8 — a write that omits capBaseline preserves the safety-relevant cap window by merge (writer L128
+    // is skipped when capBaseline is undefined); a regression that reset it to default 0 shifts the cap.
+    expect(doc.cap_baseline).toBe(5);
     expect(doc.phase2_active).toBe(true);
     expect(doc.human_notes).toEqual(['human asked for a smaller plan']);
     expect(doc.completed_loops).toEqual(['some-prior-loop']);
   });
 
-  it('applies the §26.6 gate write surface OVER the merged prior doc (phase2/persona_state/terminated)', () => {
-    // L5 — a request-changes gate transition sets phase2_active, CLEARS persona_state (every persona
-    // re-reviews next round), and an impasse/approve terminate sets terminated. These app-owned writes
-    // must WIN over the preserved prior values, not be masked by the merge that keeps engine state.
+  it('applies the §26.6 gate write surface OVER the merged prior doc (cap_baseline/persona_state/terminated)', () => {
+    // L5 — a request-changes gate transition RESETS the per-loop cap window (cap_baseline), CLEARS
+    // persona_state (every persona re-reviews next round), and an impasse/approve terminate sets
+    // terminated. These app-owned writes must WIN over the preserved prior values, not be masked by the
+    // merge that keeps engine state. phase2_active is retired but still emitted false for v4 parity.
     const seeded = {
       schema_version: 4,
       status: 'awaiting-human-plan-approval',
       iteration: 2,
       persona_state: { 'review-principal': { last_clean_iter: 2 } },
-      phase2_active: false,
+      cap_baseline: 0,
       terminated: false,
     };
     mkdirSync(join(repo, '.agent-loop'), { recursive: true });
@@ -158,11 +163,12 @@ describe('loop state.yaml writer (§26.6)', () => {
 
     writeLoopState(
       repo,
-      { ...L1_STATE, iteration: 3, status: 'plan-draft', phase2Active: true, clearPersonaState: true },
+      { ...L1_STATE, iteration: 3, status: 'plan-draft', capBaseline: 2, clearPersonaState: true },
       fixedNow,
     );
     let doc = yaml.load(readFileSync(join(repo, '.agent-loop', 'state.yaml'), 'utf8')) as Record<string, unknown>;
-    expect(doc.phase2_active).toBe(true);
+    expect(doc.cap_baseline).toBe(2);
+    expect(doc.phase2_active).toBe(false); // retired, still emitted false (v4 parity)
     expect(doc.persona_state).toEqual({}); // cleared despite the prior entry
     expect(doc.terminated).toBe(false); // untouched write leaves the prior value
 
@@ -189,7 +195,7 @@ describe('loop state.yaml writer (§26.6)', () => {
 
     const doc = yaml.load(readFileSync(join(repo, '.agent-loop', 'state.yaml'), 'utf8')) as Record<string, unknown>;
     expect(doc.persona_state).toEqual({ 'review-security': { last_clean_iter: 1 } }); // present field preserved
-    for (const key of ['sessions', 'impasse', 'phase2_active', 'severity_cycle_iter', 'terminated']) {
+    for (const key of ['sessions', 'impasse', 'phase2_active', 'cap_baseline', 'severity_cycle_iter', 'terminated']) {
       expect(doc, `partial prior doc not healed: missing ${key}`).toHaveProperty(key); // back-filled
     }
   });
@@ -299,8 +305,10 @@ describe('loop state.yaml writer (§26.6)', () => {
     expect(doc.branch).toBe('plan-loop/issue-40');
     expect(doc.linked_issues).toEqual([40]);
     // The prior loop's internal state is GONE — the new loop starts fresh (never inherits phase2/persona/
-    // impasse/severity from the loop it succeeded).
+    // impasse/severity from the loop it succeeded). cap_baseline resets to the default 0 here; the rebind
+    // caller (resumeRebindWrite) sets it to the prior loop's final iteration on the real handoff.
     expect(doc.phase2_active).toBe(false);
+    expect(doc.cap_baseline).toBe(0);
     expect(doc.persona_state).toEqual({});
     expect(doc.impasse).toEqual({});
     expect(doc.severity_cycle_iter).toBe(0);

@@ -15,26 +15,33 @@ export type ConsolidateOutcome =
   | { kind: 'reiterate'; nextIteration: number };
 
 /** The inputs the post-consolidate branch reads (§26.6/§26.8). `stuck` is the signature-x2 flag (§26.8);
- *  `iterationCap` of 0 means the def names no cap (never at cap). */
+ *  `iterationCap` of 0 means the def names no cap (never at cap). `capBaseline` is the run-wide iteration
+ *  at which the current per-loop cap window opened — advanced by a chained-loop rebind and by
+ *  request-changes — so the cap counts the internal `iteration - capBaseline`, not the monotonic total. */
 export interface ConsolidateInputs {
   verdict: 'clean' | 'needs-work';
   iteration: number;
   postCleanGate: string;
   postNeedsWorkGate: string;
-  phase2Active: boolean;
+  capBaseline: number;
   iterationCap: number;
   stuck: boolean;
 }
 
 /** Decide the post-consolidate branch (§26.6/§26.8). `clean` → the phase's post-clean gate (STOP).
- *  `needs-work` → the phase's post-needs-work TRIAGE gate (STOP) when phase-2 is active, the iteration cap
- *  is reached, or the run is flagged stuck (signature x2); otherwise the next iteration. A triage
- *  condition with no named triage gate falls back to re-iteration (never STOP on an empty status). Pure so
- *  the host's turn-chaining glue is driven by a tested decision. */
+ *  `needs-work` → the phase's post-needs-work TRIAGE gate (STOP) when the iteration cap is reached or the
+ *  run is flagged stuck (signature x2); otherwise the next iteration. The cap is measured off the per-loop
+ *  window (`iteration - capBaseline`), so a rebind or request-changes resets it — replacing phase-2's
+ *  retired gate-every-round routing. A triage condition with no named triage gate falls back to
+ *  re-iteration (never STOP on an empty status). Pure so the host's turn-chaining glue is tested. */
 export function decideConsolidateOutcome(inputs: ConsolidateInputs): ConsolidateOutcome {
   if (inputs.verdict === 'clean') return { kind: 'gate', status: inputs.postCleanGate };
-  const atCap = inputs.iterationCap > 0 && inputs.iteration >= inputs.iterationCap;
-  const triage = inputs.stuck || inputs.phase2Active || atCap;
+  // CWE-20/770 — capBaseline is read from attacker-plantable .agent-loop/state.yaml and is always a PRIOR
+  // iteration (<= this one); a value above `iteration` would drive the window negative so the cap never
+  // fires, defeating the §26.8 runaway backstop. Clamp an out-of-range baseline to the monotonic window.
+  const effectiveBaseline = inputs.capBaseline > inputs.iteration ? 0 : inputs.capBaseline;
+  const atCap = inputs.iterationCap > 0 && inputs.iteration - effectiveBaseline >= inputs.iterationCap;
+  const triage = inputs.stuck || atCap;
   if (triage && inputs.postNeedsWorkGate !== '') return { kind: 'gate', status: inputs.postNeedsWorkGate };
   return { kind: 'reiterate', nextIteration: inputs.iteration + 1 };
 }

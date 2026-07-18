@@ -11,9 +11,9 @@ import { userConfigLoopsDir } from './userConfig';
 import { isSafePathSegment } from '../shared/pathSegment';
 
 /** One action of a gate's `on_*` list (§26.6): the engine executes these in order when the human picks
- *  an option. `kind` selects the effect (`mark-pr-ready`, `set-phase2`, …); `args` carries its params
- *  verbatim (e.g. `{active: true}`). The orchestrator translates recognized kinds to domain effects
- *  (`gateActions.ts`) and ignores the rest. */
+ *  an option. `kind` selects the effect (`mark-pr-ready`, `reset-cap`, …); `args` carries its params
+ *  verbatim. The orchestrator translates recognized kinds to domain effects (`gateActions.ts`) and ignores
+ *  the rest. */
 export interface GateAction {
   kind: string;
   args?: Record<string, unknown>;
@@ -74,14 +74,12 @@ export interface LoopPhase {
   /** The status a `clean` consolidate verdict advances this phase to (§26.6) — a human gate that STOPs
    *  the loop; "" when the def omits it. */
   postCleanGate: string;
-  /** The status a `needs-work` verdict routes to when phase-2/at-cap (§26.6/§26.8); "" when omitted. */
+  /** The status a `needs-work` verdict routes to at the iteration cap (§26.6/§26.8); "" when omitted. */
   postNeedsWorkGate: string;
-  /** `exit_predicate.severity_cap` (§26.8): the per-phase iteration cap at which a `needs-work` verdict
-   *  routes to the triage gate. 0 when the def names no cap (never at cap). */
+  /** `exit_predicate.severity_cap` (§26.8): the per-loop iteration cap at which a `needs-work` verdict
+   *  routes to the triage gate, counted over the internal `iteration - cap_baseline` window. 0 when the
+   *  def names no cap (never at cap). */
   iterationCap: number;
-  // TODO(loop-engine): the per-phase `exit_predicate.on_phase2_active` override (§26.6) is not modeled —
-  // decideConsolidateOutcome routes off the RUNTIME phase2Active flag, so phase-2 always triages. Re-added
-  // to the parsed phase when an asymmetric-per-phase def actually needs it (§26.11 drop-until-built precedent).
 }
 
 /** One entry of the §26.5 roster catalog: a named ordered list of reviewer persona actors. */

@@ -34,6 +34,14 @@ describe('resumeRebindWrite (§26 D42a)', () => {
     expect(w.iteration).toBe(4);
   });
 
+  it('opens a fresh per-loop cap window: cap_baseline = the prior loop final iteration (§26.6/§26.8)', () => {
+    // The successor loop's first turn is iteration 4, and cap_baseline = prior.iteration = 3, so its
+    // internal cap count is (4 - 3) = 1 — a full per-loop cap budget regardless of how many iterations the
+    // prior loop consumed.
+    const w = resumeRebindWrite(prior, 'impl-loop', def())!.write;
+    expect(w.capBaseline).toBe(3);
+  });
+
   it('rebinds to the new loop at its first phase entry status with a fresh extension', () => {
     const r = resumeRebindWrite(prior, 'impl-loop', def());
     expect(r).not.toBeNull();
