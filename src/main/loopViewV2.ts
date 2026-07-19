@@ -100,13 +100,16 @@ export function deriveAppLoopView(name: string, ctx: LoopDefV2Context, liveError
   };
 }
 
-/** The flow manager's §27 loop-view provider: derive the view from the engine's live error for `ctx.repoDir`
- *  and the resolved def (§27.15). The single place index.ts composes the engine with `deriveAppLoopView`, so
- *  the relaunch-reconstruction gate lives in one testable place rather than an untestable index.ts closure. */
+/** The flow manager's §27 loop-view provider: reconstruct a relaunch-stranded turn to routable BEFORE the
+ *  live error is read, then derive the view from it + the resolved def (§27.12/§27.15). Without this a
+ *  persisted `working` turn — definitionally stopped by the relaunch — mirrors to a not-human-needed view
+ *  with no route-out (CWE-703/755). resume() no-ops without a §27 run-state and is skipped once a live turn
+ *  for this repo is already active, so a genuinely in-flight turn is never disturbed. */
 export function provideAppLoopView(
-  engine: Pick<AppLoopEngine, 'liveErrorFor'>,
+  engine: Pick<AppLoopEngine, 'activeRepoDir' | 'resume' | 'liveErrorFor'>,
   name: string,
   ctx: LoopDefV2Context,
 ): FlowLoopView {
+  if (engine.activeRepoDir() !== ctx.repoDir) engine.resume(ctx.repoDir);
   return deriveAppLoopView(name, ctx, engine.liveErrorFor(ctx.repoDir));
 }

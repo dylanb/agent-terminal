@@ -1282,16 +1282,14 @@ async function createWindow(): Promise<void> {
       // §27.12c — the §27-only work-turn route-out (retry / accept-present-artifact / terminate), acting on
       // the step+turn identity the payload names (§6), never ambient state. After a relaunch the engine has
       // no live turn, so reconstruct the stopped turn from the persisted §27 run state first (never re-driven
-      // — only made routable); a live turn for this repo already matches, so the resume is skipped.
+      // — only made routable); a live turn for this repo already matches, so the resume is skipped. The
+      // done-file watch is armed unconditionally: the derived view (provideAppLoopView) may have already
+      // reconstructed the stranded turn, so gating the arm on the resume would leave a Retry re-injection
+      // without a completion signal — injector and completion signal must be armed together (§27.12).
       [CH.flowAppRouteOut]: (_e, m) => {
         if (!isValidFlowAppRouteOut(m)) return;
-        if (appEngine.activeRepoDir() !== m.repoKey) {
-          appEngine.resume(m.repoKey);
-          // Re-arm the §27 done-file watch for the reconstructed turn: after a relaunch the fresh process
-          // has no live watcher, so a Retry re-injection would otherwise never see the turn-done file and
-          // could only stall to a second error (injector and completion signal must be armed together).
-          armAppTurnDoneWatch(m.repoKey);
-        }
+        if (appEngine.activeRepoDir() !== m.repoKey) appEngine.resume(m.repoKey);
+        armAppTurnDoneWatch(m.repoKey);
         appEngine.routeOut(m.repoKey, m.step, m.turnKey, m.action);
       },
       // §27.9/AC9 — arm the §27 queued interrupt for the step the payload names (§6). Persisted independently
