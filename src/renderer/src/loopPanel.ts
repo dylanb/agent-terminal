@@ -445,8 +445,9 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
       if (loop.pr !== null) ldl.append(detailRow(doc, 'pr', `#${loop.pr}`, 'sig'));
       if (loop.branch !== null) ldl.append(detailRow(doc, 'branch', loop.branch));
       // The gate's human_options (§18.1/§19.4) — a read-only preview of what the gate offers, rendered
-      // whenever the view carries gateOptions (a §26 awaiting gate OR a §27 run-less def); the actionable
-      // decision buttons render below (loopGateActionable).
+      // whenever the view carries gateOptions (a §26 awaiting gate, a §27 run-less def, OR the §27 terminal
+      // consolidator gate once a verdict is reached); the actionable decision buttons render below
+      // (loopGateActionable).
       if (loop.gateOptions && loop.gateOptions.length > 0)
         ldl.append(detailRow(doc, 'gate options', loop.gateOptions.map(gateOptionLabel).join(' · ')));
 
@@ -455,8 +456,9 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
       // §26.6 / L5 — the gate DECISION surface (loop-flow.html's approve · changes · impasse): a button
       // per gate option the def offers. Choosing one runs the LoopDef `on_*` action list in-app; the
       // decision is the app's, surfaced via state.yaml → flow:onStateChanged (the panel re-pulls). A §27
-      // run-less view carries the same gateOptions display-only (loopGateActionable false) — the read-only
-      // row above shows them, but no clickable control renders; the refusal guard is at the operation.
+      // run-less view AND the §27 terminal consolidator gate carry the same gateOptions display-only
+      // (loopGateActionable false) — the read-only row above shows them, but no clickable control renders;
+      // the refusal guard is at the operation.
       if (loop.gateOptions && loop.gateOptions.length > 0 && loopGateActionable(loop) && deps.gateDecision) {
         const gate = doc.createElement('div');
         gate.className = 'gatebar';

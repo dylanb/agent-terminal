@@ -68,10 +68,11 @@ export function deriveAppLoopView(name: string, ctx: LoopDefV2Context, liveError
       // §27.5 IPC item 3 — carry the round number once a review-and-fix round has run (absent through the
       // work turn, so a coalesce-to-zero never fabricates a round identity the dedup/audit key on).
       ...(run.round !== undefined ? { iteration: run.round } : {}),
-      // §27.6/AC5/AC8 — the catalog, the def's gate options (display-only at the terminal gate), the
-      // consolidator's chosen roster, and the round's verdict + reason.
+      // §27.6/AC5/AC8 — the catalog, the def's gate options, the consolidator's chosen roster, and the round's
+      // verdict + reason. The gate-options preview belongs at the TERMINAL consolidator gate, not during an
+      // active mid-loop turn (AC5 Non-goals), so it rides only once a verdict has been reached.
       ...(catalog ? { catalog } : {}),
-      ...(gateOptions.length > 0 ? { gateOptions } : {}),
+      ...(run.verdict && gateOptions.length > 0 ? { gateOptions } : {}),
       ...(run.chosenRoster ? { chosenRoster: run.chosenRoster } : {}),
       ...(run.verdict ? { verdict: run.verdict } : {}),
       ...(run.verdictReason ? { verdictReason: run.verdictReason } : {}),

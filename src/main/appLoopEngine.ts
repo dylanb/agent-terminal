@@ -38,6 +38,9 @@ const REVIEW_TURN_PREFIX = 'review-';
 const CONSOLIDATE_TURN_PREFIX = 'consolidate-';
 /** The first review-and-fix round; the consolidator's `another round` verdict advances it (§27.6). */
 const FIRST_ROUND = 1;
+/** The route-out reason a relaunch gives a turn the persisted state left mid-flight (`working`): its PTY is
+ *  gone and resume never re-drives it, so it is stopped and the human must retry/terminate it (§27.12/CWE-703). */
+const RELAUNCH_INTERRUPTED_REASON = 'the turn was interrupted before it could finish — retry or terminate';
 
 export type AppRouteOut = 'retry' | 'accept' | 'terminate';
 
@@ -303,13 +306,20 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
     return landed;
   };
 
-  /** Refuse an Accept that has nothing to finalize (§27.12c): hold a live error for the active turn's identity
-   *  and surface it, leaving Retry/Terminate the route out, without persisting a fabricated `complete`. One
-   *  shape for the review-unresolved / review-no-report / consolidate-unresolved / work-unresolved branches so
-   *  a new AppLoopLiveError field cannot be threaded through one and dropped from another. */
-  const refuseRouteOut = (kind: AppLoopErrorKind, reason: string, round?: number): void => {
+  /** Build and hold the live error for the ACTIVE turn's identity — the one place the `AppLoopLiveError`
+   *  literal is spelled, so a new field cannot be threaded through one construction site and dropped from
+   *  another (§27.12c). Every route-out/persist-failure/resume site that summons the human goes through here. */
+  const setLiveError = (kind: AppLoopErrorKind, reason: string, round?: number): void => {
     if (!active) return;
     liveError = { kind, repoDir: active.repoDir, loop: active.loopName, step: active.stepId, turnKey: active.turnKey, reason, ...(round !== undefined ? { round } : {}) };
+  };
+
+  /** Refuse an Accept that has nothing to finalize, or whose finalize write failed (§27.12c): hold a live
+   *  error for the active turn's identity and surface it, leaving Retry/Terminate the route out, without
+   *  persisting a fabricated `complete`. Used by the unresolved-accept guards and the failed-write guards. */
+  const refuseRouteOut = (kind: AppLoopErrorKind, reason: string, round?: number): void => {
+    if (!active) return;
+    setLiveError(kind, reason, round);
     deps.emitError(reason);
     deps.onViewChanged();
   };
@@ -393,7 +403,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       const round = active.phase === 'review' || active.phase === 'consolidate' ? active.round : undefined;
       // Record the live error BEFORE persisting: emitError and the view fallback must surface the route-out
       // even when the persisted error write fails (§27.12c — never an unrecoverable dead-end).
-      liveError = { kind: 'turn-error', repoDir: active.repoDir, loop: active.loopName, step: active.stepId, turnKey: active.turnKey, reason, ...(round !== undefined ? { round } : {}) };
+      setLiveError('turn-error', reason, round);
       persist('error', reason);
       deps.audit(active.repoDir, turnErrorAuditCmd(active, reason), 1);
       deps.emitError(reason);
@@ -537,10 +547,8 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       // holds the pre-terminal `working`. This is the ONE transition whose purpose is to summon the human (a
       // `stop for a human`/`clean` gate); nulling liveError and leaving `working` would silently strand them.
       // Hold a live turn-error so the view keeps the retry/terminate route-out reachable, mirroring writeError.
-      const reason2 = 'the consolidator finished but its verdict could not be saved — retry';
-      liveError = { kind: 'turn-error', repoDir: turn.repoDir, loop: turn.loopName, step: turn.stepId, turnKey: turn.turnKey, reason: reason2, round: turn.round };
-      deps.emitError(reason2);
-      deps.onViewChanged();
+      const saveFailReason = 'the consolidator finished but its verdict could not be saved — retry';
+      refuseRouteOut('turn-error', saveFailReason, turn.round);
       return;
     }
     deps.audit(turn.repoDir, consolidateAuditCmd('complete', turn.round, verdict), 0);
@@ -644,7 +652,12 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
           // §27.12c/AC8 — the review-turn accept is an OVERRIDE of the well-formedness gate, deliberately
           // divergent from the work turn's artifact-present accept: advance keeping the malformed report as
           // the round's record, WITHOUT re-running and WITHOUT re-injecting. Only a human can take it.
-          persist('complete');
+          if (!persist('complete')) {
+            // §27.12c/CWE-703 — the finalize write failed (ENOSPC/EPERM/a planted symlink); the disk still
+            // holds `error`, so re-surface the live error and record no `accept` the disk never saved.
+            refuseRouteOut('turn-error', 'the review round was accepted but could not be saved — retry or terminate', active.round);
+            return;
+          }
           deps.audit(repoDir, reviewRoundAuditCmd('accept', active.round), 0);
           return;
         }
@@ -657,7 +670,10 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
             refuseRouteOut('def-unresolvable', 'the consolidator turn no longer resolves — retry or terminate', active.round);
             return;
           }
-          persist('complete');
+          if (!persist('complete')) {
+            refuseRouteOut('turn-error', 'the consolidator turn was accepted but could not be saved — retry or terminate', active.round);
+            return;
+          }
           deps.audit(repoDir, consolidateAuditCmd('accept', active.round), 0);
           return;
         }
@@ -671,7 +687,10 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
           }
           return;
         }
-        persist('complete');
+        if (!persist('complete')) {
+          refuseRouteOut('turn-error', 'the work turn was accepted but could not be saved — retry or terminate');
+          return;
+        }
         deps.audit(repoDir, `§27 work turn ${turnKey} accepted (artifact present)`, 0);
         return;
       }
@@ -694,12 +713,18 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       // re-drive it: an `error`/`complete` turn is human-owned; the runner stays idle until an explicit
       // route-out (§27.12).
       const ctx: TurnCtx = { repoDir, loopName: state.loop, stepId: state.step };
+      // Make the reconstructed turn routable without re-driving it. An `error` turn carries its persisted
+      // reason; a `working` turn is DEFINITIONALLY stopped by the relaunch — its PTY is gone and resume never
+      // re-drives it — so it too gets a turn-error route-out, or the human is never summoned and the runner
+      // sits idle (§27.12/CWE-703/755). A `complete` gate is human-owned and needs no live error.
+      const makeRoutable = (round?: number): void => {
+        if (state.status === 'error') setLiveError('turn-error', state.errorReason ?? 'error', round);
+        else if (state.status === 'working') setLiveError('turn-error', RELAUNCH_INTERRUPTED_REASON, round);
+      };
       if (state.turnKey.startsWith(CONSOLIDATE_TURN_PREFIX)) {
         const round = state.round ?? FIRST_ROUND;
         active = consolidateTurnFor(ctx, round) ?? unresolvedConsolidateTurn({ ...ctx, turnKey: state.turnKey, round });
-        if (state.status === 'error') {
-          liveError = { kind: 'turn-error', repoDir, loop: state.loop, step: state.step, turnKey: state.turnKey, reason: state.errorReason ?? 'error', round };
-        }
+        makeRoutable(round);
         return;
       }
       if (state.turnKey.startsWith(REVIEW_TURN_PREFIX)) {
@@ -707,18 +732,14 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
         active =
           reviewTurnFor(ctx, round, state.chosenRoster) ??
           { ...unresolvedReviewTurn({ ...ctx, turnKey: state.turnKey, round }), ...(state.chosenRoster ? { chosenRoster: state.chosenRoster } : {}) };
-        if (state.status === 'error') {
-          liveError = { kind: 'turn-error', repoDir, loop: state.loop, step: state.step, turnKey: state.turnKey, reason: state.errorReason ?? 'error', round };
-        }
+        makeRoutable(round);
         return;
       }
       const r = deps.resolveDef(repoDir, state.loop);
       active = r.ok
         ? activeTurnFor(repoDir, state.loop, state.step, r.def)
         : { phase: 'work', repoDir, loopName: state.loop, stepId: state.step, turnKey: state.turnKey, recipePath: '', boundaryCmd: '/clear', completion: { kind: 'unresolved' } };
-      if (state.status === 'error') {
-        liveError = { kind: 'turn-error', repoDir, loop: state.loop, step: state.step, turnKey: state.turnKey, reason: state.errorReason ?? 'error' };
-      }
+      makeRoutable();
     },
     activeTurnKey: () => active?.turnKey ?? null,
     activeRepoDir: () => active?.repoDir ?? null,
