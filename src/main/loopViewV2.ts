@@ -14,7 +14,7 @@ import { isHumanNeededStatus } from '../shared/loopStatus';
 import { resolveLoopDefV2, type LoopDefV2Context } from './loopDefV2';
 import { catalogPersonas } from './reviewTurn';
 import { readAppLoopState } from './appLoopState';
-import type { AppLoopLiveError } from './appLoopEngine';
+import type { AppLoopEngine, AppLoopLiveError } from './appLoopEngine';
 
 /** The run-less/failure status strings the §27 provider emits (§27-owned, mapped to a tone by the strip;
  *  never a §26 vocabulary term). `error` reuses the existing loop-error surface so the reason row renders. */
@@ -98,4 +98,15 @@ export function deriveAppLoopView(name: string, ctx: LoopDefV2Context, liveError
     humanNeeded: false,
     ...(gateOptions.length > 0 ? { gateOptions } : {}),
   };
+}
+
+/** The flow manager's §27 loop-view provider: derive the view from the engine's live error for `ctx.repoDir`
+ *  and the resolved def (§27.15). The single place index.ts composes the engine with `deriveAppLoopView`, so
+ *  the relaunch-reconstruction gate lives in one testable place rather than an untestable index.ts closure. */
+export function provideAppLoopView(
+  engine: Pick<AppLoopEngine, 'liveErrorFor'>,
+  name: string,
+  ctx: LoopDefV2Context,
+): FlowLoopView {
+  return deriveAppLoopView(name, ctx, engine.liveErrorFor(ctx.repoDir));
 }

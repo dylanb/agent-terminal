@@ -117,7 +117,7 @@ import {
   handleInstallExamplesApply,
   type InstallDestination,
 } from './installExamples';
-import { deriveAppLoopView } from './loopViewV2';
+import { provideAppLoopView } from './loopViewV2';
 import { createAppLoopEngine } from './appLoopEngine';
 import { APP_LOOP_DIR_SEGMENTS, armInterrupt, consolidatorOutputFile, consolidatorOutputRel, roundReportFile, roundReportRel, writeAppLoopState } from './appLoopState';
 import { resolveLoopDefV2 } from './loopDefV2';
@@ -992,14 +992,10 @@ async function createWindow(): Promise<void> {
     // parsed namespace, never derived from repo content; the loop name is held to a safe segment inside
     // the resolver before any tier root is joined.
     readAppLoopView: (repoKey, name) =>
-      deriveAppLoopView(
-        name,
-        {
-          tiers: { operator: userConfigLoopsV2Dir(), appBundled: resolveExampleLoopsV2Dir(iconLoc) },
-          repoDir: repoKey,
-        },
-        appEngine.liveErrorFor(repoKey),
-      ),
+      provideAppLoopView(appEngine, name, {
+        tiers: { operator: userConfigLoopsV2Dir(), appBundled: resolveExampleLoopsV2Dir(iconLoc) },
+        repoDir: repoKey,
+      }),
   });
 
   // §24.2.3 T7 — resolve a ticket/PR's title/body/url for the popout, best-effort via `gh`, cached.
