@@ -37,6 +37,7 @@ import {
   isValidFlowGateDecision,
   isValidFlowResolveBootstrapConflict,
   isValidFlowAppRouteOut,
+  isValidFlowArmInterrupt,
   isValidFlowGithubRef,
   openExternalTarget,
   isValidInject,
@@ -118,7 +119,7 @@ import {
 } from './installExamples';
 import { deriveAppLoopView } from './loopViewV2';
 import { createAppLoopEngine } from './appLoopEngine';
-import { APP_LOOP_DIR_SEGMENTS, consolidatorOutputFile, consolidatorOutputRel, roundReportFile, roundReportRel, writeAppLoopState } from './appLoopState';
+import { APP_LOOP_DIR_SEGMENTS, armInterrupt, consolidatorOutputFile, consolidatorOutputRel, roundReportFile, roundReportRel, writeAppLoopState } from './appLoopState';
 import { resolveLoopDefV2 } from './loopDefV2';
 import { resolveExampleLoopsV2Dir } from './exampleAssets';
 import { userConfigLoopsV2Dir } from './userConfig';
@@ -1296,6 +1297,20 @@ async function createWindow(): Promise<void> {
           armAppTurnDoneWatch(m.repoKey);
         }
         appEngine.routeOut(m.repoKey, m.step, m.turnKey, m.action);
+      },
+      // §27.9/AC9 — arm the §27 queued interrupt for the step the payload names (§6). Persisted independently
+      // of the run-state document (armInterrupt), so it survives a relaunch and no turn-status write clobbers
+      // it; the consolidator honors it at its next invocation. Best-effort: a write failure (planted symlink,
+      // ENOSPC) must never crash the IPC handler — the arm simply does not land, and the operator can retry.
+      [CH.flowArmInterrupt]: (_e, m) => {
+        if (!isValidFlowArmInterrupt(m)) return;
+        try {
+          armInterrupt(m.repoKey, m.step);
+        } catch (e) {
+          send(CH.flowOnLoopError, { sessionId: SESSION_ID, reason: `could not arm the interrupt: ${e instanceof Error ? e.message : String(e)}` });
+          return;
+        }
+        pushFlowChanged();
       },
       // §26.9 — the operator's wipe/cancel answer to a bootstrap conflict.
       [CH.flowResolveBootstrapConflict]: (_e, m) => {

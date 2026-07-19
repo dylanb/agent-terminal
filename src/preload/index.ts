@@ -164,6 +164,7 @@ const flowApi: FlowApi = {
   retryTurn: (repoKey) => ipcRenderer.send(CH.flowRetryTurn, { sessionId: SESSION_ID, repoKey }),
   appRouteOut: (repoKey, step, turnKey, action) =>
     ipcRenderer.send(CH.flowAppRouteOut, { sessionId: SESSION_ID, repoKey, step, turnKey, action }),
+  armInterrupt: (repoKey, step) => ipcRenderer.send(CH.flowArmInterrupt, { sessionId: SESSION_ID, repoKey, step }),
 };
 
 export const cliApi: CliApi = {

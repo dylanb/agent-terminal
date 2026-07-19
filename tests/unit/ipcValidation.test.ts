@@ -13,6 +13,7 @@ import {
   isValidFlowGithubRef,
   isValidFlowGateDecision,
   isValidFlowAppRouteOut,
+  isValidFlowArmInterrupt,
   isValidOpenExternal,
   openExternalTarget,
   isValidTemplateList,
@@ -206,6 +207,16 @@ describe('IPC payload validation (§6 — renderer-supplied input is untrusted)'
     expect(isValidFlowAppRouteOut({ ...base, repoKey: 'relative', action: 'retry' })).toBe(false); // unsafe key
     expect(isValidFlowAppRouteOut({ ...base, sessionId: 'other', action: 'retry' })).toBe(false); // dead session
     expect(isValidFlowAppRouteOut(null)).toBe(false);
+  });
+
+  it('guards a flow:armInterrupt on the step identity + repoKey/session (§27.9/§6)', () => {
+    const base = { sessionId: sid, repoKey: '/repo', step: 'plan' };
+    expect(isValidFlowArmInterrupt(base)).toBe(true);
+    expect(isValidFlowArmInterrupt({ ...base, step: '' })).toBe(false); // step must be non-empty (the identity it acts on)
+    expect(isValidFlowArmInterrupt({ sessionId: sid, repoKey: '/repo' })).toBe(false); // step required
+    expect(isValidFlowArmInterrupt({ ...base, repoKey: 'relative' })).toBe(false); // unsafe key
+    expect(isValidFlowArmInterrupt({ ...base, sessionId: 'other' })).toBe(false); // dead session
+    expect(isValidFlowArmInterrupt(null)).toBe(false);
   });
 
   it('accepts exactly the shared GATE_DECISION_OPTIONS set — one source for the validator (§26.6)', () => {
