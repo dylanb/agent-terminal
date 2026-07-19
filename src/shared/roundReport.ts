@@ -20,6 +20,7 @@ export interface ReportGrammar {
   reasonLabel: string;
   whatChangedLabel: string;
   emptyMarker: string;
+  failedMarker: string;
 }
 
 export const REPORT_GRAMMAR: ReportGrammar = {
@@ -30,6 +31,7 @@ export const REPORT_GRAMMAR: ReportGrammar = {
   reasonLabel: 'reason',
   whatChangedLabel: 'what-changed',
   emptyMarker: '_no findings_',
+  failedMarker: '_failed to run_',
 };
 
 /** The def-declared sections and the round's roster, as primitive string vocabulary — never the parsed-def
@@ -130,6 +132,39 @@ export function roundReportWellFormed(report: string, spec: RoundReportSpec): bo
   for (const s of spec.sections) if (!sectionsPresent.has(s)) return false;
   for (const p of spec.roster) if (!personasPresent.has(p)) return false;
   return true;
+}
+
+/** The personas a round report records as having FAILED TO RUN (§27.5/AC7): each persona whose record
+ *  carries the single-sourced failed marker as a line of its own. Distinct from a persona that RAN and found
+ *  nothing (the empty marker) or one that RAN and raised issues (a `needs a human` disposition is a raised
+ *  issue, never a failed lens). The marker is only recognized inside a persona record — prose outside one is
+ *  never mistaken for it — so the engine's clean-guard reads the same grammar the validator single-sources. */
+export function failedReviewers(report: string): string[] {
+  const g = REPORT_GRAMMAR;
+  const failed: string[] = [];
+  let currentPersona: string | null = null;
+  for (const line of report.split('\n')) {
+    const persona = isHeading(line, g.personaPrefix);
+    if (persona !== null) {
+      currentPersona = persona;
+      continue;
+    }
+    if (isHeading(line, g.sectionPrefix) !== null) {
+      currentPersona = null;
+      continue;
+    }
+    if (currentPersona !== null && line.trim() === g.failedMarker && !failed.includes(currentPersona)) {
+      failed.push(currentPersona);
+    }
+  }
+  return failed;
+}
+
+/** Whether the round report records ANY reviewer as failed to run (§27.5/AC7) — the boolean the engine's
+ *  clean-guard keys on. A round with a failed lens is never presented clean, even if the consolidator emits
+ *  `clean`; a raised `needs a human` issue is the consolidator's territory, not a failed lens. */
+export function reportHasFailedReviewer(report: string): boolean {
+  return failedReviewers(report).length > 0;
 }
 
 /** The single canonical example the predicate happy-path test, the fake-agent e2e output, and the prompt
