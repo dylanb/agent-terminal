@@ -92,6 +92,15 @@ describe('composeReviewAndFixPrompt — single-sourced from the shared report vo
     expect(p).toContain(REPORT_GRAMMAR.emptyMarker);
   });
 
+  it('instructs the failed marker for a reviewer that FAILED TO RUN, distinct from the empty marker (§27.5/AC7)', () => {
+    // §27.5/v2.137 — a lens that failed to run must be recorded DISTINCTLY from one that ran and found
+    // nothing; the failed marker is the signal the consolidator's clean-guard keys on, so the prompt must
+    // name it (single-sourced from the grammar) rather than telling the fixer both carry the empty marker.
+    const p = composeReviewAndFixPrompt(req());
+    expect(p).toContain(REPORT_GRAMMAR.failedMarker);
+    expect(REPORT_GRAMMAR.failedMarker).not.toBe(REPORT_GRAMMAR.emptyMarker);
+  });
+
   it('names the prescribed report sections and the round-keyed report location', () => {
     const p = composeReviewAndFixPrompt(req());
     for (const s of def().report.sections) expect(p).toContain(s);
