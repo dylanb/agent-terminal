@@ -3998,6 +3998,60 @@ test('a §27 error resumed after relaunch completes on its done-signal when Retr
   rmSync(binDir, { recursive: true, force: true });
 });
 
+// §27.12 / §27.15 / CWE-703/755 — a §27 turn left `working` when the app was killed mid-turn is
+// DEFINITIONALLY stopped after a relaunch (its PTY is gone). Unlike an `error` turn, `working` is not
+// human-needed, so pre-fix the panel showed no route-out at all: the run was recoverable only by hand-editing
+// run-state.yaml. The derived view must reconstruct the stranded turn so the retry/terminate route-out
+// renders, and Retry must re-arm the §27 done-watch so the re-driven turn completes on its done-signal.
+test('a §27 turn stranded `working` by a relaunch surfaces a route-out and Retry drives it to completion (§27.12 / CWE-703/755)', { tag: '@ownapp' }, async () => {
+  const repo = seedAppLoopFlowRepo('agent-term-e2e-v2-working-');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-v2-working-home-'));
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-v2-working-bin-');
+  // Process 1: a noop agent produces nothing, so the work turn stays `working` (a long stall timeout keeps it
+  // from erroring); the app is closed while it is still `working`, persisting the strand.
+  seedFakeAgentV2(binDir, { stepId: 'plan', artifactRel: APP_ARTIFACT_REL, work: 'noop' });
+  const launch = (turnTimeoutMs: string) =>
+    electron.launch({
+      args: ['out/main/index.js'],
+      env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100', APP_TURN_TIMEOUT_MS: turnTimeoutMs, CLAUDE_CONFIG_DIR: exampleConfigDir, PATH: `${binDir}:${process.env.PATH}`, FAKE_GHGIT_LOG: logFile },
+    });
+
+  app = await launch('60000'); // long: the noop turn stays `working`, never stalls to error
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+  await typeCommand(`cd "${repo}"`);
+  await expect(flowControl()).toHaveText('Start', { timeout: 10_000 });
+  await typeCommand('fake-agent');
+  await flowControl().click(); // enter the app step → §27 work turn → stays `working`
+  await expect.poll(() => readIf(appRunState(repo)), { timeout: 30_000 }).toContain('status: working');
+  await app.close(); // killed mid-turn: the disk holds `working`
+
+  // The operator fixes the agent; the retry after relaunch will now produce a marker-bearing artifact.
+  seedFakeAgentV2(binDir, { stepId: 'plan', artifactRel: APP_ARTIFACT_REL, work: 'complete' });
+
+  app = await launch('4000');
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+  await typeCommand(`cd "${repo}"`);
+  await typeCommand('fake-agent'); // host the agent so the re-driven turn injects
+
+  // Pre-fix the persisted `working` mirrored to a not-human-needed view with NO route-out — this never
+  // appeared. Post-fix the derived view reconstructs the stranded turn and the retry affordance renders.
+  await loopReadout().click();
+  await expect(loopPanel().locator('[data-app-route-out="retry"]')).toBeVisible({ timeout: 15_000 });
+  await loopPanel().locator('[data-app-route-out="retry"]').click();
+
+  // Land: the re-armed §27 done-watch observes the retried work turn's done-file; the turn completes, chains
+  // the review-and-fix + consolidate turns, and the run reaches the clean gate — never a silent idle.
+  await expect.poll(() => readIf(appRunState(repo)), { timeout: 40_000 }).toContain('status: complete');
+  expect(readFileSync(join(repo, APP_ARTIFACT_REL), 'utf8')).toContain(completionMarker('plan'));
+
+  await app.close();
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+  rmSync(binDir, { recursive: true, force: true });
+});
+
 // §27.6 tracer bullet (b) — a round that fixed something → `another round` over the consolidator's chosen
 // roster, and a SECOND review-and-fix round runs (its report is written to reports/2.md).
 test('a §27 `another round` verdict crosses the boundary back into a second review-and-fix round (§27.6 / AC4)', { tag: '@ownapp' }, async () => {

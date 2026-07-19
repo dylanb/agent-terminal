@@ -3,7 +3,9 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { createAppLoopEngine, type AppLoopEngineDeps } from '../../src/main/appLoopEngine';
+import { provideAppLoopView } from '../../src/main/loopViewV2';
 import {
   armInterrupt,
   consolidatorOutputFile,
@@ -978,6 +980,53 @@ describe('§27 engine — resume routes a stopped (working) turn to the human (C
     const engine = makeEngine();
     engine.resume(repo);
     expect(engine.liveErrorFor(repo)).toBeNull();
+  });
+});
+
+// §27.12/§27.15/CWE-703/755 — the STRAND the iter-5 blocker named: after a relaunch nothing has called
+// resume(), so the derived view (what the panel/strip actually render) must itself reconstruct a stopped
+// turn before reading the live error. Graded at the DERIVED-VIEW boundary (provideAppLoopView over a REAL
+// engine + persisted state), NOT by calling resume()/routeOut() directly — a `working` turn that stayed
+// `working` in the view carries no route-out and is human-recoverable only by hand-editing run-state.yaml.
+describe('§27 derived view — a relaunch-stranded turn surfaces a route-out (CWE-703/755)', () => {
+  const appBundled = fileURLToPath(new URL('../../example/loops-v2', import.meta.url));
+  const viewCtx = () => ({ tiers: { operator: null, appBundled }, repoDir: repo });
+
+  it('derives a persisted `working` consolidator turn to a routable error over a fresh engine', () => {
+    writeAppLoopState(repo, { loop: 'plan-loop', step: STEP, turnKey: CONSOLIDATE_KEY, status: 'working', round: 2 }, FIXED);
+    const engine = makeEngine(); // fresh — no live turn, nothing has called resume()
+    const view = provideAppLoopView(engine, 'plan-loop', viewCtx());
+    expect(view.status).toBe('error'); // NOT the stranded `working`
+    expect(view.humanNeeded).toBe(true); // the cue + OS notifier fire; the route-out renders
+    expect(view.appTurn).toEqual({ step: STEP, turnKey: CONSOLIDATE_KEY });
+    expect(view.iteration).toBe(2); // the round rides onto the route-out surface
+  });
+
+  it('derives a persisted `working` work turn to a routable error with no round', () => {
+    writeAppLoopState(repo, { loop: 'plan-loop', step: STEP, turnKey: TURN_KEY, status: 'working' }, FIXED);
+    const engine = makeEngine();
+    const view = provideAppLoopView(engine, 'plan-loop', viewCtx());
+    expect(view.status).toBe('error');
+    expect(view.humanNeeded).toBe(true);
+    expect(view.appTurn).toEqual({ step: STEP, turnKey: TURN_KEY });
+    expect(view.iteration).toBeUndefined();
+  });
+
+  it('does NOT flip a genuinely LIVE `working` turn to error (resume is skipped when a turn is active)', () => {
+    const engine = makeEngine();
+    enterAndInjectWork(engine); // a real in-flight turn for this repo — its PTY is alive, not relaunch-stranded
+    const view = provideAppLoopView(engine, 'plan-loop', viewCtx());
+    expect(view.status).toBe('working'); // the live turn is mirrored as-is, never spuriously errored
+    expect(view.humanNeeded).toBe(false);
+    expect(view.appTurn).toEqual({ step: STEP, turnKey: TURN_KEY });
+  });
+
+  it('does NOT fabricate an error when no §27 run has ever started (run-less view)', () => {
+    const engine = makeEngine(); // fresh engine, no persisted run-state on disk
+    const view = provideAppLoopView(engine, 'plan-loop', viewCtx());
+    expect(view.status).toBe('not-started');
+    expect(view.appTurn).toBeUndefined();
+    expect(view.humanNeeded).toBe(false);
   });
 });
 
