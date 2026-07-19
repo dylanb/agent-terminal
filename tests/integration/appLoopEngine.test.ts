@@ -766,6 +766,22 @@ describe('§27 engine — the verdict drives the branch (AC4, AC5, AC6)', () => 
     expect(readAppLoopState(repo)?.turnKey).toBe(REVIEW_KEY); // looped back, not gated
   });
 
+  it('a terminal `complete` write that FAILS still summons the human via a live error — never a stale `working` dead-end (CWE-703/755)', () => {
+    // The consolidator reaches a terminal verdict, but the `complete` persist throws (ENOSPC/EPERM/a planted
+    // symlink at the run-state file). Without the guard the disk holds the pre-terminal `working` and the human
+    // is never told to decide (isHumanNeededStatus('working') is false, and no verdict row renders). The engine
+    // must hold a LIVE error so deriveAppLoopView surfaces the route-out.
+    const engine = makeEngine((repoDir, state) => {
+      if (state.status === 'complete') throw new Error('ENOSPC: no space left on device');
+      writeAppLoopState(repoDir, state, FIXED);
+    });
+    driveToConsolidateInjected(engine);
+    completeConsolidate(engine, 1, 'verdict: stop for a human\nreason: the reviewers disagree on the API\n');
+    expect(engine.liveErrorFor(repo)).not.toBeNull(); // the human is summoned even though the write failed
+    expect(engine.liveErrorFor(repo)).toMatchObject({ kind: 'turn-error', step: STEP, turnKey: CONSOLIDATE_KEY });
+    expect(emitError).toHaveBeenCalled(); // pushed so the panel renders the retry/terminate route-out
+  });
+
   it('there is no iteration cap — a run that keeps emitting `another round` keeps iterating (AC10)', () => {
     const engine = makeEngine();
     driveToConsolidateInjected(engine);
@@ -796,6 +812,17 @@ describe('§27 engine — a failed reviewer is never read as clean (AC7)', () =>
     advanceReviewToConsolidateInjected(engine, 2, [ROSTER[0]]); // round 2: principal failed AGAIN
     completeConsolidate(engine, 2, 'verdict: clean\n');
     expect(readAppLoopState(repo)).toMatchObject({ status: 'complete', verdict: 'stop for a human' });
+  });
+
+  it('a FRESH failed lens does NOT override an emitted `stop for a human` — the human-owned stop routes to the gate now (§27.6)', () => {
+    // When the consolidator itself emits `stop for a human` (the loop is spinning, or a reviewer raised a
+    // needs-a-human issue) AND a different lens freshly fails, the fresh-failure re-review must NOT divert the
+    // human-owned stop into another autonomous round — the stop routes to the gate now, and the human decides.
+    const engine = makeEngine();
+    driveToConsolidateInjected(engine, [ROSTER[0]]); // round-1 report records principal failed-to-run (a fresh failure)
+    completeConsolidate(engine, 1, 'verdict: stop for a human\nreason: the reviewers disagree on the API\n');
+    expect(readAppLoopState(repo)).toMatchObject({ status: 'complete', verdict: 'stop for a human' });
+    expect(readAppLoopState(repo)?.turnKey).toBe(CONSOLIDATE_KEY); // gated, not looped into a round-2 review
   });
 
   it('a reviewer that RAN and raised a `needs a human` issue is NOT a failed lens — it routes via the verdict, not the guard (AC7)', () => {
@@ -832,6 +859,17 @@ describe('§27 engine — the armed interrupt routes to the gate at the next con
     driveToConsolidateInjected(engine);
     completeConsolidate(engine, 1, `verdict: another round\nroster: ${ROSTER.join(', ')}\n`);
     expect(readAppLoopState(repo)?.turnKey).toBe(REVIEW_KEY); // looped back — no diversion
+  });
+
+  it('records a DISTINCT §25 interrupt-honored audit event, not the generic terminal `complete` (§25/AC9)', () => {
+    // An honored armed interrupt reaches the gate by honoring a queued interrupt, not by the emitted verdict; the
+    // §25 timeline must be able to tell the two apart. A run that reached the gate on its own would-be
+    // `another round` would leave only a `complete` — so a distinct interrupt event must be recorded.
+    const engine = makeEngine();
+    driveToConsolidateInjected(engine);
+    armInterrupt(repo, STEP);
+    completeConsolidate(engine, 1, `verdict: another round\nroster: ${ROSTER.join(', ')}\n`);
+    expect(audit).toHaveBeenCalledWith(repo, expect.stringContaining('interrupt'), expect.anything());
   });
 });
 

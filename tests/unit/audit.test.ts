@@ -5,6 +5,7 @@ import {
   auditTimestamp,
   inputEvents,
   lifecycleEvents,
+  consolidateAuditCmd,
   loopEvents,
   parseAuditStream,
   reconstructTimeline,
@@ -378,6 +379,25 @@ describe('§27 review-round audit vocabulary', () => {
     expect(reviewRoundAuditCmd('error', 1, 'report omits a roster persona')).toContain('report omits a roster persona');
     expect(reviewRoundAuditCmd('accept', 1)).toContain('accept');
     expect(reviewRoundAuditCmd('retry', 3)).toContain('round 3');
+  });
+});
+
+// §27.6/§25 — the consolidator-turn audit vocabulary lives in this ONE shared module beside the review-round
+// one (CLAUDE.md single-home rule), so the main-process writer and a future viewer read the same phrases.
+describe('§27 consolidate-turn audit vocabulary', () => {
+  it('builds round-keyed command text carrying the round, the verdict/detail, and a DISTINCT interrupt event', () => {
+    expect(consolidateAuditCmd('boundary', 1, '/compact keep')).toContain('round 1');
+    expect(consolidateAuditCmd('boundary', 1, '/compact keep')).toContain('/compact keep');
+    expect(consolidateAuditCmd('complete', 2, 'clean')).toContain('round 2');
+    expect(consolidateAuditCmd('complete', 2, 'clean')).toContain('clean');
+    expect(consolidateAuditCmd('error', 1, 'malformed verdict')).toContain('malformed verdict');
+    expect(consolidateAuditCmd('accept', 1)).toContain('accept');
+    expect(consolidateAuditCmd('retry', 3)).toContain('round 3');
+    // AC9 — an honored armed interrupt records its own event, distinguishable from a terminal `complete`.
+    const interrupt = consolidateAuditCmd('interrupt', 2, 'another round');
+    expect(interrupt).toContain('interrupt');
+    expect(interrupt).toContain('another round');
+    expect(interrupt).not.toBe(consolidateAuditCmd('complete', 2, 'another round'));
   });
 });
 

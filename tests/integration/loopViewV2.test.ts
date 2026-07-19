@@ -216,6 +216,21 @@ describe('deriveAppLoopView — the catalog, chosen roster, and verdict (AC5, AC
     expect(view.chosenRoster).toBeUndefined();
     expect(view.catalog).toEqual(CATALOG); // the catalog still shows (AC8)
   });
+
+  // §27.6/AC5 Non-goals — the slice "routes to the gate and displays the verdict and the def's gate options".
+  // The def's gate options must display at the terminal consolidator gate (a run-state view), not only on the
+  // pre-run run-less view, or the operator sits at the gate with the verdict but no options shown.
+  it('carries the def gate options on the terminal consolidator gate (run-state branch), display-only (AC5)', () => {
+    plant('plan-loop', ['approve', 'request-changes'], CATALOG);
+    writeAppLoopState(
+      repoDir,
+      { loop: 'plan-loop', step: 'plan', turnKey: 'consolidate-plan', status: 'complete', round: 2, verdict: 'clean' },
+      FIXED,
+    );
+    const view = deriveAppLoopView('plan-loop', { tiers: tiers(), repoDir });
+    expect(view.gateOptions).toEqual(['approve', 'request-changes']);
+    expect(view.actionable).toBe(false); // display-only — the option guard is at the operation (N5), not the render
+  });
 });
 
 // CWE-703 recovery — when the status:error write fails (ENOSPC/EPERM/a planted symlink) the persisted state

@@ -609,6 +609,18 @@ describe('docked loop panel — the §27 consolidator surface (AC5, AC8, AC9)', 
     expect(armInterrupt).toHaveBeenCalledWith('plan'); // the step identity it acts on, not ambient state
   });
 
+  it('the arm-interrupt accessible name contains its visible label (WCAG 2.5.3 Label in Name)', () => {
+    const { deps } = armDeps();
+    createLoopPanel(host, deps).render(
+      loop({ status: 'working', iteration: 2, appTurn: { step: 'plan', turnKey: 'review-plan' } }),
+      'plan',
+    );
+    const btn = host.querySelector<HTMLElement>('[data-arm-interrupt]');
+    expect(btn).not.toBeNull();
+    const name = (btn!.getAttribute('aria-label') ?? '').toLowerCase();
+    expect(name).toContain((btn!.textContent ?? '').toLowerCase()); // 2.5.3: accessible name contains the visible text
+  });
+
   it('offers NO arm-interrupt control when not iterating — at the gate (complete) or in error (AC9)', () => {
     const { deps } = armDeps();
     const panel = createLoopPanel(host, deps);

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { composeReviewAndFixPrompt, preReviewBoundaryCommand, reviewRoster } from '../../src/main/reviewTurn';
+import { catalogPersonas, composeReviewAndFixPrompt, preReviewBoundaryCommand, reviewRoster } from '../../src/main/reviewTurn';
 import { DISPOSITIONS, REPORT_GRAMMAR, roundReportWellFormed } from '../../src/shared/roundReport';
 import type { LoopDefV2 } from '../../src/main/loopDefV2';
 
@@ -58,6 +58,21 @@ describe('reviewRoster — the def\'s full reviewer catalog (§27.4, AC2)', () =
       { persona: 'review-plan-principal', charter: '/tiers/plan-loop/charter/principal.md' },
       { persona: 'review-plan-security', charter: '/tiers/plan-loop/charter/security.md' },
     ]);
+  });
+});
+
+// §27.4 / CLAUDE.md shared-semantics — the def's catalog-persona projection lives in ONE place, so the panel
+// display, the consolidator's validation catalog, and the round roster cannot drift on which personas the def
+// declares.
+describe('catalogPersonas — the ONE catalog-persona projection (§27.4)', () => {
+  it('is every persona the def declares, in order, and matches reviewRoster\'s persona projection', () => {
+    expect(catalogPersonas(def())).toEqual(['review-plan-principal', 'review-plan-security']);
+    expect(catalogPersonas(def())).toEqual(reviewRoster(def()).map((r) => r.persona));
+  });
+
+  it('follows the def: a different catalog is a different projection', () => {
+    const other = def({ reviewers: [{ persona: 'impl-review-tests', charter: '/c/t.md', tools: [] }] });
+    expect(catalogPersonas(other)).toEqual(['impl-review-tests']);
   });
 });
 

@@ -89,9 +89,11 @@ describe('composeConsolidatePrompt — single-sourced from the shared verdict vo
 
   it('embeds a canonical example that is itself well-formed against the shared predicate (no prompt↔predicate drift)', () => {
     const prompt = composeConsolidatePrompt(req);
-    // The `another round` example the prompt anchors on must satisfy the very predicate the engine gates on.
-    expect(consolidatorOutputWellFormed(`verdict: another round\nroster: ${catalog.join(', ')}\n`, catalog)).toBe(true);
-    expect(prompt).toContain('verdict: another round');
+    // Slice the ACTUAL example the composer embedded and validate THAT — a drift in exampleConsolidatorOutput as
+    // embedded (wrong label, a roster persona outside the catalog) must fail here, mirroring reviewTurn's pattern.
+    const example = prompt.slice(prompt.indexOf('# Consolidator verdict'));
+    expect(example).toContain('# Consolidator verdict');
+    expect(consolidatorOutputWellFormed(example, catalog)).toBe(true);
   });
 
   it('ends with the shared done-signal instruction keyed to the consolidate turn, verifying the output first', () => {
