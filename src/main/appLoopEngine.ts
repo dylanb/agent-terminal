@@ -21,11 +21,13 @@ import { createTurnRunner, type HostedAgentState, type TurnRunner } from './loop
 import type { LoopDefV2, LoopDefV2Result } from './loopDefV2';
 import { artifactWellFormed, boundaryCommand, completionArtifact, completionMarker, composeAppWorkPrompt } from './appWorkTurn';
 import { composeReviewAndFixPrompt, preReviewBoundaryCommand, reviewRoster, type RosterEntry } from './reviewTurn';
+import { composeConsolidatePrompt, lastTwoReportRounds, preConsolidateBoundaryCommand } from './consolidateTurn';
 import { clearTurnDone } from './turnDoneFile';
 import { TURN_DONE_FILENAME } from '../shared/loopTurn';
-import { roundReportWellFormed } from '../shared/roundReport';
+import { failedReviewers, roundReportWellFormed } from '../shared/roundReport';
+import { consolidatorOutputWellFormed, parseConsolidatorOutput, verdictCarriesReason, type ConsolidatorVerdict } from '../shared/consolidatorOutput';
 import { reviewRoundAuditCmd } from '../shared/audit';
-import { APP_LOOP_DIR_SEGMENTS, readAppLoopState, type AppLoopRunState } from './appLoopState';
+import { APP_LOOP_DIR_SEGMENTS, clearInterrupt, readAppLoopState, readArmedInterrupt, type AppLoopRunState } from './appLoopState';
 
 /** The §27 done-file lives in the §27 loop area, disjoint from §26's `.agent-loop/` (AC10 separation). */
 const APP_TURN_DONE_SUBDIR = path.join(...APP_LOOP_DIR_SEGMENTS);
@@ -33,7 +35,8 @@ const APP_DONE_REL_PATH = APP_LOOP_DIR_SEGMENTS.join('/') + '/' + TURN_DONE_FILE
 
 const WORK_TURN_PREFIX = 'work-';
 const REVIEW_TURN_PREFIX = 'review-';
-/** This slice runs round 1 only and stops with the report written; N4 adds the consolidator and later rounds. */
+const CONSOLIDATE_TURN_PREFIX = 'consolidate-';
+/** The first review-and-fix round; the consolidator's `another round` verdict advances it (§27.6). */
 const FIRST_ROUND = 1;
 
 export type AppRouteOut = 'retry' | 'accept' | 'terminate';
@@ -98,6 +101,10 @@ export interface AppLoopEngineDeps {
   /** Resolve round N's report location (§27.5) — the confined absolute path the engine reads and the
    *  repo-relative path the fixer writes, from ONE resolver; null when the loop area is unresolvable. */
   resolveReportLocation(repoDir: string, round: number): { abs: string; rel: string } | null;
+  /** Resolve round N's consolidator-output location (§27.6) — the confined absolute path the engine reads
+   *  back to gate the turn and the repo-relative path the consolidator writes, from ONE resolver; null when
+   *  the loop area is unresolvable. */
+  resolveConsolidatorLocation(repoDir: string, round: number): { abs: string; rel: string } | null;
 }
 
 export interface AppLoopEngine {
@@ -152,6 +159,30 @@ type ActiveAppTurn =
       reportPath: string;
       reportRel: string;
       completion: { kind: 'report' } | { kind: 'unresolved' };
+      /** The roster the consolidator chose for this round (§27.6/AC8); absent on round 1 (the full catalog). */
+      chosenRoster?: string[];
+    }
+  | {
+      phase: 'consolidate';
+      repoDir: string;
+      loopName: string;
+      stepId: string;
+      turnKey: string;
+      boundaryCmd: string;
+      round: number;
+      /** The def's reviewer catalog personas — the set the chosen roster is validated against (§27.4). */
+      catalog: string[];
+      recipePath: string;
+      outputPath: string;
+      outputRel: string;
+      /** The last-two round reports (this round + the previous, §27.6/AC2), by repo-relative and absolute path. */
+      reportRels: string[];
+      reportPaths: string[];
+      completion: { kind: 'output' } | { kind: 'unresolved' };
+      /** The verdict / reason / roster the consolidator reached, set when it routes to the gate (§27.6). */
+      verdict?: ConsolidatorVerdict;
+      verdictReason?: string;
+      chosenRoster?: string[];
     };
 
 /** The entry context boundary before WORK (§27.3): the def's first declared boundary, defaulting to
@@ -181,6 +212,59 @@ function unresolvedReviewTurn(args: { repoDir: string; loopName: string; stepId:
   };
 }
 
+/** The reconstructable identity a chained turn is built for — the bound loop, its flow step, and the repo. */
+interface TurnCtx {
+  repoDir: string;
+  loopName: string;
+  stepId: string;
+}
+
+/** The consolidator arm of an in-flight turn whose def/report/output location no longer resolves (§27.12c):
+ *  no catalog, no reports, `completion.kind === 'unresolved'` so Accept has nothing to finalize. Seeded
+ *  identically by `startConsolidate`'s fallback and `resume`'s fallback so the shape lives in one place. */
+function unresolvedConsolidateTurn(args: TurnCtx & { turnKey: string; round: number }): Extract<ActiveAppTurn, { phase: 'consolidate' }> {
+  return {
+    phase: 'consolidate',
+    repoDir: args.repoDir,
+    loopName: args.loopName,
+    stepId: args.stepId,
+    turnKey: args.turnKey,
+    boundaryCmd: '/clear',
+    round: args.round,
+    catalog: [],
+    recipePath: '',
+    outputPath: '',
+    outputRel: '',
+    reportRels: [],
+    reportPaths: [],
+    completion: { kind: 'unresolved' },
+  };
+}
+
+/** The §25 audit vocabulary for the consolidator turn (§27.6) — mirrors `reviewRoundAuditCmd`; one spelling
+ *  the writer uses so a future viewer reads the same phrases. */
+function consolidateAuditCmd(kind: 'boundary' | 'complete' | 'error' | 'retry' | 'accept', round: number, detail?: string): string {
+  switch (kind) {
+    case 'boundary':
+      return `§27 consolidate round ${round} boundary: ${detail ?? ''}`;
+    case 'complete':
+      return `§27 consolidate round ${round} complete: ${detail ?? ''}`;
+    case 'error':
+      return `§27 consolidate round ${round} failed: ${detail ?? ''}`;
+    case 'retry':
+      return `§27 consolidate round ${round} retry`;
+    case 'accept':
+      return `§27 consolidate round ${round} accepted`;
+  }
+}
+
+/** The §25 audit command for a turn that stopped in `error`, keyed to the phase's vocabulary (§27.12). */
+function turnErrorAuditCmd(turn: ActiveAppTurn, reason: string): string {
+  if (turn.phase === 'review') return reviewRoundAuditCmd('error', turn.round, reason);
+  if (turn.phase === 'consolidate') return consolidateAuditCmd('error', turn.round, reason);
+  return `§27 work turn ${turn.turnKey} failed: ${reason}`;
+}
+
 function activeTurnFor(repoDir: string, loopName: string, stepId: string, def: LoopDefV2): ActiveAppTurn {
   const artifact = completionArtifact(def);
   return {
@@ -207,7 +291,10 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
   const persist = (status: AppLoopRunState['status'], errorReason?: string): void => {
     if (!active) return;
     if (status !== 'error') liveError = null;
-    const round = active.phase === 'review' ? active.round : undefined;
+    const round = active.phase === 'review' || active.phase === 'consolidate' ? active.round : undefined;
+    const verdict = active.phase === 'consolidate' ? active.verdict : undefined;
+    const verdictReason = active.phase === 'consolidate' ? active.verdictReason : undefined;
+    const chosenRoster = active.phase === 'consolidate' || active.phase === 'review' ? active.chosenRoster : undefined;
     try {
       deps.persist(active.repoDir, {
         loop: active.loopName,
@@ -216,6 +303,9 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
         status,
         ...(errorReason ? { errorReason } : {}),
         ...(round !== undefined ? { round } : {}),
+        ...(verdict !== undefined ? { verdict } : {}),
+        ...(verdictReason !== undefined ? { verdictReason } : {}),
+        ...(chosenRoster !== undefined ? { chosenRoster } : {}),
       });
     } catch (e) {
       // §27.10 resume state is best-effort: a write failure must never abort the turn's live path or crash
@@ -229,6 +319,13 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
 
   const completionSatisfied = (): boolean => {
     if (!active) return false;
+    if (active.phase === 'consolidate') {
+      // §27.6/AC3 — the consolidator advances only on a well-formed verdict (a value from the closed set and,
+      // for `another round`, a non-empty roster ⊆ catalog). An `unresolved` consolidate turn reads nothing.
+      if (active.completion.kind === 'unresolved') return false;
+      const content = deps.readArtifact(active.outputPath);
+      return content !== null && consolidatorOutputWellFormed(content, active.catalog);
+    }
     if (active.phase === 'review') {
       // §27.12b — the review turn completes only on a well-formed round report: def-declared sections, full
       // roster accounting, per-issue elements. An `unresolved` review turn (resume lost the def) reads no
@@ -250,6 +347,20 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
   runner = createTurnRunner({
     compose: (turnKey) => {
       if (!active) return null;
+      if (active.phase === 'consolidate') {
+        if (active.completion.kind === 'unresolved') return null; // no def → cannot re-compose
+        const body = deps.readRecipe(active.recipePath);
+        if (body === null) return null;
+        return composeConsolidatePrompt({
+          recipeBody: body,
+          catalog: active.catalog,
+          reportRels: active.reportRels,
+          outputRel: active.outputRel,
+          round: active.round,
+          turnKey,
+          doneRelPath: APP_DONE_REL_PATH,
+        });
+      }
       if (active.phase === 'review') {
         if (active.completion.kind === 'unresolved') return null; // no def → cannot re-compose the roster
         return composeReviewAndFixPrompt({
@@ -282,12 +393,12 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
     cancelTimer: () => deps.cancelTimer(),
     writeError: (reason) => {
       if (!active) return;
-      const round = active.phase === 'review' ? active.round : undefined;
+      const round = active.phase === 'review' || active.phase === 'consolidate' ? active.round : undefined;
       // Record the live error BEFORE persisting: emitError and the view fallback must surface the route-out
       // even when the persisted error write fails (§27.12c — never an unrecoverable dead-end).
       liveError = { kind: 'turn-error', repoDir: active.repoDir, loop: active.loopName, step: active.stepId, turnKey: active.turnKey, reason, ...(round !== undefined ? { round } : {}) };
       persist('error', reason);
-      deps.audit(active.repoDir, round !== undefined ? reviewRoundAuditCmd('error', round, reason) : `§27 work turn ${active.turnKey} failed: ${reason}`, 1);
+      deps.audit(active.repoDir, turnErrorAuditCmd(active, reason), 1);
       deps.emitError(reason);
     },
     onComplete: (turnKey) => {
@@ -296,12 +407,19 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
         // §27.3 — advance straight into the review turn with no transient work-complete state, so a relaunch
         // never mistakes a mid-chain crash for a finished loop.
         deps.audit(active.repoDir, `§27 work turn ${turnKey} complete`, 0);
-        startReview(active);
+        enterReview(active, FIRST_ROUND);
         return;
       }
-      // §27.3/AC3 — the review-and-fix round completed on a well-formed report; stop here (N4 consolidates).
-      persist('complete');
-      deps.audit(active.repoDir, reviewRoundAuditCmd('complete', active.round), 0);
+      if (active.phase === 'review') {
+        // §27.6/AC1 — the review-and-fix round completed on a well-formed report; chain the consolidator with
+        // no transient complete state (so a relaunch never mistakes a mid-chain crash for a finished loop).
+        deps.audit(active.repoDir, reviewRoundAuditCmd('complete', active.round), 0);
+        startConsolidate(active);
+        return;
+      }
+      // §27.6 — the consolidator produced a well-formed verdict; branch on it (with the failed-lens guard and
+      // the armed-interrupt override).
+      finishConsolidate(active);
     },
     noteSettle: () => deps.noteSettle(),
   });
@@ -314,52 +432,158 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
   };
 
   /** Build the review-and-fix turn for a round from the resolved def and the round-keyed report location.
-   *  Returns null when the def no longer resolves or the report location is unresolvable (a routable error). */
-  const reviewTurnFor = (repoDir: string, loopName: string, stepId: string, round: number): ActiveAppTurn | null => {
-    const r = deps.resolveDef(repoDir, loopName);
+   *  `chosenRoster` (round ≥ 2, from the consolidator) narrows the def's catalog to the personas that round
+   *  runs — a persona the catalog does not declare can never be invoked (§27.4), so an unknown one is simply
+   *  filtered out. Round 1 (no `chosenRoster`) runs the full catalog. Returns null when the def no longer
+   *  resolves or the report location is unresolvable (a routable error). */
+  const reviewTurnFor = (ctx: TurnCtx, round: number, chosenRoster?: string[]): Extract<ActiveAppTurn, { phase: 'review' }> | null => {
+    const r = deps.resolveDef(ctx.repoDir, ctx.loopName);
     if (!r.ok) return null;
-    const loc = deps.resolveReportLocation(repoDir, round);
+    const loc = deps.resolveReportLocation(ctx.repoDir, round);
     if (!loc) return null;
+    const full = reviewRoster(r.def);
+    const reviewers = chosenRoster ? full.filter((e) => chosenRoster.includes(e.persona)) : full;
     return {
       phase: 'review',
-      repoDir,
-      loopName,
-      stepId,
-      turnKey: `${REVIEW_TURN_PREFIX}${stepId}`,
+      repoDir: ctx.repoDir,
+      loopName: ctx.loopName,
+      stepId: ctx.stepId,
+      turnKey: `${REVIEW_TURN_PREFIX}${ctx.stepId}`,
       boundaryCmd: preReviewBoundaryCommand(r.def),
       round,
-      reviewers: reviewRoster(r.def),
+      reviewers,
       sections: r.def.report.sections,
       reportPath: loc.abs,
       reportRel: loc.rel,
       completion: { kind: 'report' },
+      ...(chosenRoster ? { chosenRoster } : {}),
     };
   };
 
-  /** Chain the review-and-fix turn after a completed work turn (§27.3): cross the pre-review boundary, then
-   *  inject the review-and-fix prompt when injectable. A def or report-location that no longer resolves stops
-   *  in a routable review `error` rather than silently dropping the round. */
-  const startReview = (work: Extract<ActiveAppTurn, { phase: 'work' }>): void => {
-    const turn = reviewTurnFor(work.repoDir, work.loopName, work.stepId, FIRST_ROUND);
+  /** Enter a review-and-fix round (§27.3/§27.6): cross the pre-review boundary, then inject the review prompt
+   *  when injectable. Chained after a completed work turn (round 1) or after the consolidator's `another
+   *  round` (round ≥ 2, over the chosen roster). A def or report-location that no longer resolves stops in a
+   *  routable review `error` rather than silently dropping the round. */
+  const enterReview = (ctx: TurnCtx, round: number, chosenRoster?: string[]): void => {
+    const turn = reviewTurnFor(ctx, round, chosenRoster);
     if (turn) {
       active = turn;
       persist('working');
-      deps.audit(work.repoDir, reviewRoundAuditCmd('boundary', FIRST_ROUND, turn.boundaryCmd), null);
+      deps.audit(ctx.repoDir, reviewRoundAuditCmd('boundary', round, turn.boundaryCmd), null);
       runner.requestTurn(turn.turnKey, { preamble: turn.boundaryCmd });
       return;
     }
     const reason = 'cannot resolve the review round (def or report location unresolvable)';
-    active = unresolvedReviewTurn({
-      repoDir: work.repoDir,
-      loopName: work.loopName,
-      stepId: work.stepId,
-      turnKey: `${REVIEW_TURN_PREFIX}${work.stepId}`,
-      round: FIRST_ROUND,
-    });
-    liveError = { kind: 'turn-error', repoDir: work.repoDir, loop: work.loopName, step: work.stepId, turnKey: active.turnKey, reason, round: FIRST_ROUND };
+    active = { ...unresolvedReviewTurn({ ...ctx, turnKey: `${REVIEW_TURN_PREFIX}${ctx.stepId}`, round }), ...(chosenRoster ? { chosenRoster } : {}) };
+    liveError = { kind: 'turn-error', repoDir: ctx.repoDir, loop: ctx.loopName, step: ctx.stepId, turnKey: active.turnKey, reason, round };
     persist('error', reason);
-    deps.audit(work.repoDir, reviewRoundAuditCmd('error', FIRST_ROUND, reason), 1);
+    deps.audit(ctx.repoDir, reviewRoundAuditCmd('error', round, reason), 1);
     deps.emitError(reason);
+  };
+
+  /** Build the consolidator turn for a round from the resolved def, its output location, and the last-two
+   *  report locations (§27.6/AC2). Returns null when any of those no longer resolve (a routable error). */
+  const consolidateTurnFor = (ctx: TurnCtx, round: number): Extract<ActiveAppTurn, { phase: 'consolidate' }> | null => {
+    const r = deps.resolveDef(ctx.repoDir, ctx.loopName);
+    if (!r.ok) return null;
+    const out = deps.resolveConsolidatorLocation(ctx.repoDir, round);
+    if (!out) return null;
+    const reportLocs = lastTwoReportRounds(round).map((rd) => deps.resolveReportLocation(ctx.repoDir, rd));
+    if (reportLocs.some((l) => l === null)) return null;
+    return {
+      phase: 'consolidate',
+      repoDir: ctx.repoDir,
+      loopName: ctx.loopName,
+      stepId: ctx.stepId,
+      turnKey: `${CONSOLIDATE_TURN_PREFIX}${ctx.stepId}`,
+      boundaryCmd: preConsolidateBoundaryCommand(r.def),
+      round,
+      catalog: r.def.reviewers.map((rev) => rev.persona),
+      recipePath: r.def.consolidator,
+      outputPath: out.abs,
+      outputRel: out.rel,
+      reportRels: reportLocs.map((l) => l!.rel),
+      reportPaths: reportLocs.map((l) => l!.abs),
+      completion: { kind: 'output' },
+    };
+  };
+
+  /** Chain the consolidator after a completed review round (§27.6/AC1): cross the pre-consolidate boundary,
+   *  then inject the consolidator prompt when injectable. A def/location that no longer resolves stops in a
+   *  routable consolidator `error` rather than silently dropping the turn. */
+  const startConsolidate = (review: Extract<ActiveAppTurn, { phase: 'review' }>): void => {
+    const ctx: TurnCtx = { repoDir: review.repoDir, loopName: review.loopName, stepId: review.stepId };
+    const turn = consolidateTurnFor(ctx, review.round);
+    if (turn) {
+      active = turn;
+      persist('working');
+      deps.audit(ctx.repoDir, consolidateAuditCmd('boundary', review.round, turn.boundaryCmd), null);
+      runner.requestTurn(turn.turnKey, { preamble: turn.boundaryCmd });
+      return;
+    }
+    const reason = 'cannot resolve the consolidator turn (def, report, or output location unresolvable)';
+    active = unresolvedConsolidateTurn({ ...ctx, turnKey: `${CONSOLIDATE_TURN_PREFIX}${ctx.stepId}`, round: review.round });
+    liveError = { kind: 'turn-error', repoDir: ctx.repoDir, loop: ctx.loopName, step: ctx.stepId, turnKey: active.turnKey, reason, round: review.round };
+    persist('error', reason);
+    deps.audit(ctx.repoDir, consolidateAuditCmd('error', review.round, reason), 1);
+    deps.emitError(reason);
+  };
+
+  /** Persist a routed-to-gate consolidator turn (§27.6): record the verdict, its reason (gated), and the
+   *  roster it chose, then stop at the gate (`complete`, N4 gate is display-only). */
+  const routeConsolidateToGate = (turn: Extract<ActiveAppTurn, { phase: 'consolidate' }>, verdict: ConsolidatorVerdict, reason: string | undefined, roster: string[]): void => {
+    turn.verdict = verdict;
+    turn.verdictReason = verdictCarriesReason(verdict) ? reason : undefined;
+    turn.chosenRoster = roster.length > 0 ? roster : undefined;
+    persist('complete');
+    deps.audit(turn.repoDir, consolidateAuditCmd('complete', turn.round, verdict), 0);
+  };
+
+  /** Branch on a completed consolidator turn (§27.6): apply the failed-lens guard (AC7), honor a queued
+   *  interrupt (AC9), then route on the effective verdict — `another round` re-enters review over the chosen
+   *  roster, `clean`/`stop for a human` route to the gate. */
+  const finishConsolidate = (turn: Extract<ActiveAppTurn, { phase: 'consolidate' }>): void => {
+    const output = turn.completion.kind === 'output' ? deps.readArtifact(turn.outputPath) : null;
+    const parsed = output !== null ? parseConsolidatorOutput(output) : null;
+    // The completion gate already accepted a well-formed output; fall back to a human stop if a race leaves it
+    // unreadable, never a silent clean.
+    let verdict: ConsolidatorVerdict = parsed?.verdict ?? 'stop for a human';
+    let roster = parsed?.roster ?? [];
+    let reason = parsed?.reason ?? undefined;
+
+    // §27.6/AC7 — the one engine-side override: a reviewer that FAILED TO RUN is never read as settled. Read
+    // the last-two reports (AC2) and compare their failed lenses. A FRESH failure re-reviews with that lens;
+    // a REPEAT failure (failed in the previous report too) stops for a human — bounding auto re-reviews to one
+    // per lens-failure episode with no counter.
+    const curPath = turn.reportPaths[turn.reportPaths.length - 1];
+    const prevPath = turn.reportPaths.length === 2 ? turn.reportPaths[0] : null;
+    const failedNow = new Set(curPath ? failedReviewers(deps.readArtifact(curPath) ?? '') : []);
+    const failedPrev = new Set(prevPath ? failedReviewers(deps.readArtifact(prevPath) ?? '') : []);
+    const repeat = [...failedNow].filter((p) => failedPrev.has(p));
+    const fresh = [...failedNow].filter((p) => !failedPrev.has(p));
+    if (repeat.length > 0) {
+      verdict = 'stop for a human';
+      reason = `a reviewer failed to run again and needs a human: ${repeat.join(', ')}`;
+    } else if (fresh.length > 0) {
+      verdict = 'another round';
+      roster = Array.from(new Set([...roster, ...fresh]));
+    }
+
+    // §27.9/AC9 — a queued interrupt for this step routes to the gate regardless of the verdict, still stating
+    // the verdict it would otherwise have reached. One-shot: cleared when honored.
+    const armed = readArmedInterrupt(turn.repoDir);
+    if (armed && armed.step === turn.stepId) {
+      clearInterrupt(turn.repoDir);
+      routeConsolidateToGate(turn, verdict, reason, roster);
+      return;
+    }
+
+    if (verdict === 'another round') {
+      deps.audit(turn.repoDir, consolidateAuditCmd('complete', turn.round, verdict), 0);
+      enterReview({ repoDir: turn.repoDir, loopName: turn.loopName, stepId: turn.stepId }, turn.round + 1, roster);
+      return;
+    }
+    routeConsolidateToGate(turn, verdict, reason, roster);
   };
 
   return {
@@ -418,6 +642,22 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
           deps.audit(repoDir, reviewRoundAuditCmd('accept', active.round), 0);
           return;
         }
+        if (active.phase === 'consolidate') {
+          // §27.12c/AC12 — accept moves the consolidator turn off the error to its next state (the gate),
+          // WITHOUT re-running or re-injecting. An `unresolved` turn (def/location gone) has nothing to keep,
+          // so refuse it (def-unresolvable) exactly as the work/review guards do; a present-but-malformed
+          // output is kept as the round's record and the loop stops at the gate for the human.
+          if (active.completion.kind === 'unresolved') {
+            const reason = 'the consolidator turn no longer resolves — retry or terminate';
+            liveError = { kind: 'def-unresolvable', repoDir, loop: active.loopName, step: active.stepId, turnKey: active.turnKey, reason, round: active.round };
+            deps.emitError(reason);
+            deps.onViewChanged();
+            return;
+          }
+          persist('complete');
+          deps.audit(repoDir, consolidateAuditCmd('accept', active.round), 0);
+          return;
+        }
         // §27.12c — accept a present work artifact: persist `complete` and stop, WITHOUT re-running and
         // WITHOUT injecting. A missing artifact is not acceptable — Retry (re-run) is that path.
         if (!completionSatisfied()) {
@@ -437,7 +677,13 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       }
       // retry — re-enter the same turn (boundary + prompt), gated on injectability (§27.12).
       persist('working');
-      deps.audit(repoDir, active.phase === 'review' ? reviewRoundAuditCmd('retry', active.round) : `§27 work turn ${turnKey} retry`, null);
+      const retryAudit =
+        active.phase === 'review'
+          ? reviewRoundAuditCmd('retry', active.round)
+          : active.phase === 'consolidate'
+            ? consolidateAuditCmd('retry', active.round)
+            : `§27 work turn ${turnKey} retry`;
+      deps.audit(repoDir, retryAudit, null);
       runner.requestTurn(turnKey, { preamble: active.boundaryCmd });
     },
     resume(repoDir) {
@@ -447,11 +693,20 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       // reconstructed turn carries its real completion contract (accept must read the true artifact). NEVER
       // re-drive it: an `error`/`complete` turn is human-owned; the runner stays idle until an explicit
       // route-out (§27.12).
+      const ctx: TurnCtx = { repoDir, loopName: state.loop, stepId: state.step };
+      if (state.turnKey.startsWith(CONSOLIDATE_TURN_PREFIX)) {
+        const round = state.round ?? FIRST_ROUND;
+        active = consolidateTurnFor(ctx, round) ?? unresolvedConsolidateTurn({ ...ctx, turnKey: state.turnKey, round });
+        if (state.status === 'error') {
+          liveError = { kind: 'turn-error', repoDir, loop: state.loop, step: state.step, turnKey: state.turnKey, reason: state.errorReason ?? 'error', round };
+        }
+        return;
+      }
       if (state.turnKey.startsWith(REVIEW_TURN_PREFIX)) {
         const round = state.round ?? FIRST_ROUND;
         active =
-          reviewTurnFor(repoDir, state.loop, state.step, round) ??
-          unresolvedReviewTurn({ repoDir, loopName: state.loop, stepId: state.step, turnKey: state.turnKey, round });
+          reviewTurnFor(ctx, round, state.chosenRoster) ??
+          { ...unresolvedReviewTurn({ ...ctx, turnKey: state.turnKey, round }), ...(state.chosenRoster ? { chosenRoster: state.chosenRoster } : {}) };
         if (state.status === 'error') {
           liveError = { kind: 'turn-error', repoDir, loop: state.loop, step: state.step, turnKey: state.turnKey, reason: state.errorReason ?? 'error', round };
         }

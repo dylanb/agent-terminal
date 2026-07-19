@@ -861,6 +861,15 @@ describe('§27 engine — consolidator error route-out + resume (AC11, AC12)', (
     expect(terminateFlow).toHaveBeenCalledWith(repo);
   });
 
+  it('accept on a consolidator error moves off the error to the gate WITHOUT re-running (AC12)', () => {
+    const engine = makeEngine();
+    toConsolidateError(engine);
+    const afterError = injected.length;
+    engine.routeOut(repo, STEP, CONSOLIDATE_KEY, 'accept');
+    expect(readAppLoopState(repo)?.status).toBe('complete');
+    expect(injected.length).toBe(afterError); // never re-injected
+  });
+
   it('resume reconstructs a stopped consolidator turn (round + turnKey), never re-drives it, and retry acts on it (AC11)', () => {
     writeAppLoopState(repo, { loop: 'plan-loop', step: STEP, turnKey: CONSOLIDATE_KEY, status: 'error', errorReason: 'malformed verdict', round: 2 }, FIXED);
     const engine = makeEngine();

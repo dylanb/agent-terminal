@@ -88,13 +88,14 @@ export function serializeAppLoopState(state: AppLoopRunState, now: () => Date): 
   // run). Written only for a valid round, so a recovered round is never a fabricated identity.
   if (isValidRound(state.round)) doc.round = state.round;
   // §27.6 — the consolidator's verdict, and (through the single-sourced gate, mirroring error_reason) its
-  // reason ONLY under `stop for a human`, plus the roster it chose (AC8). A verdict outside the closed set is
-  // never serialized.
+  // reason ONLY under `stop for a human`. A verdict outside the closed set is never serialized.
   if (state.verdict !== undefined && (CONSOLIDATOR_VERDICTS as readonly string[]).includes(state.verdict)) {
     doc.verdict = state.verdict;
     if (verdictCarriesReason(state.verdict) && state.verdictReason) doc.verdict_reason = state.verdictReason;
-    if (state.chosenRoster && state.chosenRoster.length > 0) doc.chosen_roster = state.chosenRoster;
   }
+  // §27.6/AC8 — the chosen roster is carried by BOTH the consolidator turn (the roster it selected) and the
+  // subsequent review round (the roster it runs), so it is persisted independently of the verdict.
+  if (state.chosenRoster && state.chosenRoster.length > 0) doc.chosen_roster = state.chosenRoster;
   return yaml.dump(doc);
 }
 
@@ -123,7 +124,7 @@ export function parseAppLoopState(text: string): AppLoopRunState | null {
   const verdictReason =
     verdict !== undefined && verdictCarriesReason(verdict) && typeof doc.verdict_reason === 'string' ? doc.verdict_reason : undefined;
   const chosenRoster =
-    verdict !== undefined && Array.isArray(doc.chosen_roster) && doc.chosen_roster.every((p) => typeof p === 'string') && doc.chosen_roster.length > 0
+    Array.isArray(doc.chosen_roster) && doc.chosen_roster.every((p) => typeof p === 'string') && doc.chosen_roster.length > 0
       ? (doc.chosen_roster as string[])
       : undefined;
   return {
