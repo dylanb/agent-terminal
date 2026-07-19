@@ -3,6 +3,8 @@ import {
   DISPOSITIONS,
   REPORT_GRAMMAR,
   exampleRoundReport,
+  failedReviewers,
+  reportHasFailedReviewer,
   roundReportWellFormed,
   type RoundReportSpec,
 } from '../../src/shared/roundReport';
@@ -162,6 +164,59 @@ describe('roundReportWellFormed — linear-time parse on untrusted content (CWE-
     roundReportWellFormed(report, spec);
     expect(performance.now() - start).toBeLessThan(300);
   }, 30000);
+});
+
+describe('failed-reviewer marker + classifier (§27.5/AC7 — the signal the clean-guard keys on)', () => {
+  const SPEC2: RoundReportSpec = { sections: ['summary'], roster: ['review-principal', 'review-security'] };
+  const g = REPORT_GRAMMAR;
+
+  // The marker is a single token, single-sourced in the grammar (parallel to emptyMarker/DISPOSITIONS) so
+  // the fixer prompt, the fake-agent, this classifier, and the well-formedness predicate cannot drift.
+  it('the grammar carries a failed marker distinct from the empty marker', () => {
+    expect(typeof g.failedMarker).toBe('string');
+    expect(g.failedMarker.length).toBeGreaterThan(0);
+    expect(g.failedMarker).not.toBe(g.emptyMarker);
+  });
+
+  const withMarkers = (principal: string, security: string): string =>
+    `## summary\n\n### review-principal\n\n${principal}\n\n### review-security\n\n${security}\n`;
+
+  it('classifies a report recording a reviewer as failed-to-run via the marker', () => {
+    const report = withMarkers(g.failedMarker, g.emptyMarker);
+    expect(reportHasFailedReviewer(report)).toBe(true);
+    expect(failedReviewers(report)).toEqual(['review-principal']);
+  });
+
+  it('a reviewer that RAN and found nothing (empty marker) is NOT a failed reviewer (AC7)', () => {
+    const report = withMarkers(g.emptyMarker, g.emptyMarker);
+    expect(reportHasFailedReviewer(report)).toBe(false);
+    expect(failedReviewers(report)).toEqual([]);
+  });
+
+  it('a reviewer that RAN and raised a `needs a human` issue is NOT a failed reviewer (AC7)', () => {
+    const raised =
+      '- issue: something a human must judge\n  disposition: needs a human\n  reason: escalated to the human';
+    const report = withMarkers(raised, g.emptyMarker);
+    expect(reportHasFailedReviewer(report)).toBe(false);
+    expect(failedReviewers(report)).toEqual([]);
+  });
+
+  it('returns every failed persona so the engine can compare a two-report window (AC7)', () => {
+    const report = withMarkers(g.failedMarker, g.failedMarker);
+    expect(new Set(failedReviewers(report))).toEqual(new Set(['review-principal', 'review-security']));
+  });
+
+  it('only counts the marker inside a persona record, never in prose outside one', () => {
+    const prose = `## summary\n\n${g.failedMarker}\n\n### review-principal\n\n${g.emptyMarker}\n\n### review-security\n\n${g.emptyMarker}\n`;
+    expect(reportHasFailedReviewer(prose)).toBe(false);
+  });
+
+  // The addition is behavior-preserving for the existing well-formedness reader (§27.5): a report where a
+  // roster persona carries ONLY the failed marker is still well-formed — the persona is accounted for.
+  it('roundReportWellFormed still accepts a report whose persona carries only the failed marker (additive)', () => {
+    const report = withMarkers(g.failedMarker, g.emptyMarker);
+    expect(roundReportWellFormed(report, SPEC2)).toBe(true);
+  });
 });
 
 describe('the closed disposition set is spec-fixed', () => {
