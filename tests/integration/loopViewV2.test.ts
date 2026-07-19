@@ -110,6 +110,9 @@ describe('deriveAppLoopView — live run-state (AC1, AC7)', () => {
     expect(view.appTurn).toEqual({ step: 'plan', turnKey: 'work-plan' });
     expect(view.iteration).toBeUndefined(); // no round has run
     expect(view.errorReason).toBeUndefined();
+    // §27.6/AC5 Non-goals — the gate's options preview belongs at the TERMINAL consolidator gate, not during
+    // an active mid-loop turn; a `working` run-state has reached no verdict, so it carries no gate options.
+    expect(view.gateOptions).toBeUndefined();
   });
 
   it('mirrors an errored work turn: status error, human-needed by the shared predicate, its reason + identity', () => {
@@ -144,6 +147,7 @@ describe('deriveAppLoopView — live run-state (AC1, AC7)', () => {
     expect(view.status).toBe('working');
     expect(view.iteration).toBe(1);
     expect(view.appTurn).toEqual({ step: 'plan', turnKey: 'review-plan' });
+    expect(view.gateOptions).toBeUndefined(); // a mid-loop review round is not at the gate (§27.6/AC5)
   });
 
   it('carries the round number on an errored review turn (route-out surfaces it)', () => {

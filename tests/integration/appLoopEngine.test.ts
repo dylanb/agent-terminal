@@ -859,6 +859,10 @@ describe('§27 engine — the armed interrupt routes to the gate at the next con
     driveToConsolidateInjected(engine);
     completeConsolidate(engine, 1, `verdict: another round\nroster: ${ROSTER.join(', ')}\n`);
     expect(readAppLoopState(repo)?.turnKey).toBe(REVIEW_KEY); // looped back — no diversion
+    // §25/AC9 — a round that reaches the gate on its OWN verdict records NO interrupt-honored event, so a
+    // regression emitting the interrupt event unconditionally would be caught here (the emission GATE is
+    // pinned, not just the vocabulary distinctness in audit.test.ts).
+    expect(audit).not.toHaveBeenCalledWith(repo, expect.stringContaining('interrupt'), expect.anything());
   });
 
   it('records a DISTINCT §25 interrupt-honored audit event, not the generic terminal `complete` (§25/AC9)', () => {
@@ -933,5 +937,88 @@ describe('§27 engine — consolidator error route-out + resume (AC11, AC12)', (
     completeConsolidate(engine, 1, `verdict: another round\nroster: ${ROSTER.join(', ')}\n`);
     expect(readAppLoopState(repo)).toMatchObject({ status: 'complete', verdict: 'another round' }); // honored post-relaunch
     expect(readArmedInterrupt(repo)).toBeNull();
+  });
+});
+
+// §27.10/§27.12/CWE-703/755 — a persisted `working` turn is DEFINITIONALLY stopped after a relaunch: its PTY
+// is gone and resume never re-drives it. resume must make it routable (a live turn-error → route-out), or the
+// human is never summoned and the runner sits idle forever — the exact hand-edit-to-recover strand.
+describe('§27 engine — resume routes a stopped (working) turn to the human (CWE-703/755)', () => {
+  it('a relaunched WORKING consolidator turn is routable — summons the human, never a silent idle', () => {
+    writeAppLoopState(repo, { loop: 'plan-loop', step: STEP, turnKey: CONSOLIDATE_KEY, status: 'working', round: 2 }, FIXED);
+    const engine = makeEngine();
+    engine.resume(repo);
+    expect(injected).toEqual([]); // definitionally stopped — never re-driven
+    const live = engine.liveErrorFor(repo);
+    expect(live).toMatchObject({ kind: 'turn-error', step: STEP, turnKey: CONSOLIDATE_KEY, round: 2 });
+    engine.routeOut(repo, STEP, CONSOLIDATE_KEY, 'retry'); // the route-out is reachable
+    engine.onInjectable();
+    engine.onInjectable();
+    expect(injected.length).toBeGreaterThan(0);
+  });
+
+  it('a relaunched WORKING review turn is routable and carries its round', () => {
+    writeAppLoopState(repo, { loop: 'plan-loop', step: STEP, turnKey: REVIEW_KEY, status: 'working', round: 1 }, FIXED);
+    const engine = makeEngine();
+    engine.resume(repo);
+    expect(injected).toEqual([]);
+    expect(engine.liveErrorFor(repo)).toMatchObject({ kind: 'turn-error', step: STEP, turnKey: REVIEW_KEY, round: 1 });
+  });
+
+  it('a relaunched WORKING work turn is routable', () => {
+    writeAppLoopState(repo, { loop: 'plan-loop', step: STEP, turnKey: TURN_KEY, status: 'working' }, FIXED);
+    const engine = makeEngine();
+    engine.resume(repo);
+    expect(injected).toEqual([]);
+    expect(engine.liveErrorFor(repo)).toMatchObject({ kind: 'turn-error', step: STEP, turnKey: TURN_KEY });
+  });
+
+  it('a relaunched COMPLETE turn is NOT re-surfaced as an error (human-owned gate, no route-out needed)', () => {
+    writeAppLoopState(repo, { loop: 'plan-loop', step: STEP, turnKey: CONSOLIDATE_KEY, status: 'complete', round: 1, verdict: 'clean' }, FIXED);
+    const engine = makeEngine();
+    engine.resume(repo);
+    expect(engine.liveErrorFor(repo)).toBeNull();
+  });
+});
+
+// §27.12c/CWE-703 — the three Accept branches finalize with persist('complete'); a failed finalize write
+// (ENOSPC/EPERM/a planted symlink) must re-surface the live error and NOT record an `accept` the disk never
+// saved, mirroring the finishConsolidate write-failure guard.
+describe('§27 engine — an accept whose `complete` write fails re-surfaces the error and skips the accept audit', () => {
+  const failComplete = (repoDir: string, state: AppLoopRunState): void => {
+    if (state.status === 'complete') throw new Error('ENOSPC: no space left on device');
+    writeAppLoopState(repoDir, state, FIXED);
+  };
+
+  it('a WORK-turn accept whose write fails holds the live error and records no accept', () => {
+    const engine = makeEngine(failComplete);
+    enterAndInjectWork(engine);
+    writeArtifact(true); // a present, marker-bearing artifact — accept-able
+    engine.onStall(); // → error
+    audit.mockClear();
+    engine.routeOut(repo, STEP, TURN_KEY, 'accept');
+    expect(engine.liveErrorFor(repo)).not.toBeNull(); // route-out still reachable
+    expect(audit).not.toHaveBeenCalledWith(repo, expect.stringContaining('accepted'), expect.anything());
+  });
+
+  it('a REVIEW-turn accept whose write fails holds the live error and records no accept', () => {
+    writeReport(exampleRoundReport({ sections: ['summary'], roster: [ROSTER[0]] })); // present-but-malformed report
+    writeAppLoopState(repo, { loop: 'plan-loop', step: STEP, turnKey: REVIEW_KEY, status: 'error', errorReason: 'malformed', round: 1 }, FIXED);
+    const engine = makeEngine(failComplete);
+    engine.resume(repo);
+    audit.mockClear();
+    engine.routeOut(repo, STEP, REVIEW_KEY, 'accept');
+    expect(engine.liveErrorFor(repo)).not.toBeNull();
+    expect(audit).not.toHaveBeenCalledWith(repo, expect.stringContaining('accept'), expect.anything());
+  });
+
+  it('a CONSOLIDATOR accept whose write fails holds the live error and records no accept (AC12)', () => {
+    writeAppLoopState(repo, { loop: 'plan-loop', step: STEP, turnKey: CONSOLIDATE_KEY, status: 'error', errorReason: 'malformed verdict', round: 1 }, FIXED);
+    const engine = makeEngine(failComplete);
+    engine.resume(repo);
+    audit.mockClear();
+    engine.routeOut(repo, STEP, CONSOLIDATE_KEY, 'accept');
+    expect(engine.liveErrorFor(repo)).not.toBeNull();
+    expect(audit).not.toHaveBeenCalledWith(repo, expect.stringContaining('accept'), expect.anything());
   });
 });
