@@ -33,6 +33,13 @@ export function reviewRoster(def: LoopDefV2): RosterEntry[] {
   return def.reviewers.map((r) => ({ persona: r.persona, charter: r.charter }));
 }
 
+/** The def's reviewer catalog as persona names (§27.4): the ONE projection the panel display, the
+ *  consolidator's roster-validation catalog, and the round roster derive from, so they cannot drift on which
+ *  personas the def declares (CLAUDE.md shared-semantics). */
+export function catalogPersonas(def: LoopDefV2): string[] {
+  return def.reviewers.map((r) => r.persona);
+}
+
 export interface ReviewAndFixPromptReq {
   /** The round's roster — charters handed by reference, not inlined content (§27.4). */
   roster: RosterEntry[];

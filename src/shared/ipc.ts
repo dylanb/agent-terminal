@@ -3,6 +3,7 @@
 
 import type { Chord, KeyActionId } from './keymap';
 import type { LoopActivity } from './loopActivity';
+import type { ConsolidatorVerdict } from './consolidatorOutput';
 
 export type SessionId = string;
 
@@ -489,10 +490,11 @@ export interface FlowLoopView {
    *  drift. Additive and §27-only — the §26 provider populates neither. */
   catalog?: string[];
   chosenRoster?: string[];
-  /** §27.6/AC5/AC9 — the round's consolidator verdict (`clean` / `another round` / `stop for a human`) and,
-   *  only under `stop for a human`, its reason. The panel surfaces the verdict at the gate, and the would-be
-   *  verdict on an armed interrupt. Additive and §27-only; the §26 provider populates neither. */
-  verdict?: string;
+  /** §27.6/AC5/AC9 — the round's consolidator verdict, the closed `ConsolidatorVerdict` set the engine and
+   *  loop-state already carry, so a fourth value cannot cross the wire. Only under `stop for a human` does
+   *  `verdictReason` accompany it. The panel surfaces the verdict at the gate, and the would-be verdict on an
+   *  armed interrupt. Additive and §27-only; the §26 provider populates neither. */
+  verdict?: ConsolidatorVerdict;
   verdictReason?: string;
 }
 

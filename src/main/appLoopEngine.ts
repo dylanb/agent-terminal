@@ -20,13 +20,13 @@ import path from 'node:path';
 import { createTurnRunner, type HostedAgentState, type TurnRunner } from './loopOrchestrator';
 import type { LoopDefV2, LoopDefV2Result } from './loopDefV2';
 import { artifactWellFormed, boundaryCommand, completionArtifact, completionMarker, composeAppWorkPrompt } from './appWorkTurn';
-import { composeReviewAndFixPrompt, preReviewBoundaryCommand, reviewRoster, type RosterEntry } from './reviewTurn';
+import { catalogPersonas, composeReviewAndFixPrompt, preReviewBoundaryCommand, reviewRoster, type RosterEntry } from './reviewTurn';
 import { composeConsolidatePrompt, lastTwoReportRounds, preConsolidateBoundaryCommand } from './consolidateTurn';
 import { clearTurnDone } from './turnDoneFile';
 import { TURN_DONE_FILENAME } from '../shared/loopTurn';
 import { failedReviewers, roundReportWellFormed } from '../shared/roundReport';
 import { consolidatorOutputWellFormed, parseConsolidatorOutput, verdictCarriesReason, type ConsolidatorVerdict } from '../shared/consolidatorOutput';
-import { reviewRoundAuditCmd } from '../shared/audit';
+import { consolidateAuditCmd, reviewRoundAuditCmd } from '../shared/audit';
 import { APP_LOOP_DIR_SEGMENTS, clearInterrupt, readAppLoopState, readArmedInterrupt, type AppLoopRunState } from './appLoopState';
 
 /** The §27 done-file lives in the §27 loop area, disjoint from §26's `.agent-loop/` (AC10 separation). */
@@ -241,23 +241,6 @@ function unresolvedConsolidateTurn(args: TurnCtx & { turnKey: string; round: num
   };
 }
 
-/** The §25 audit vocabulary for the consolidator turn (§27.6) — mirrors `reviewRoundAuditCmd`; one spelling
- *  the writer uses so a future viewer reads the same phrases. */
-function consolidateAuditCmd(kind: 'boundary' | 'complete' | 'error' | 'retry' | 'accept', round: number, detail?: string): string {
-  switch (kind) {
-    case 'boundary':
-      return `§27 consolidate round ${round} boundary: ${detail ?? ''}`;
-    case 'complete':
-      return `§27 consolidate round ${round} complete: ${detail ?? ''}`;
-    case 'error':
-      return `§27 consolidate round ${round} failed: ${detail ?? ''}`;
-    case 'retry':
-      return `§27 consolidate round ${round} retry`;
-    case 'accept':
-      return `§27 consolidate round ${round} accepted`;
-  }
-}
-
 /** The §25 audit command for a turn that stopped in `error`, keyed to the phase's vocabulary (§27.12). */
 function turnErrorAuditCmd(turn: ActiveAppTurn, reason: string): string {
   if (turn.phase === 'review') return reviewRoundAuditCmd('error', turn.round, reason);
@@ -288,13 +271,14 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
   // even when the persisted error write failed (§27.12c). Cleared on every non-error persist.
   let liveError: (AppLoopLiveError & { repoDir: string }) | null = null;
 
-  const persist = (status: AppLoopRunState['status'], errorReason?: string): void => {
-    if (!active) return;
+  const persist = (status: AppLoopRunState['status'], errorReason?: string): boolean => {
+    if (!active) return false;
     if (status !== 'error') liveError = null;
     const round = active.phase === 'review' || active.phase === 'consolidate' ? active.round : undefined;
     const verdict = active.phase === 'consolidate' ? active.verdict : undefined;
     const verdictReason = active.phase === 'consolidate' ? active.verdictReason : undefined;
     const chosenRoster = active.phase === 'consolidate' || active.phase === 'review' ? active.chosenRoster : undefined;
+    let landed = true;
     try {
       deps.persist(active.repoDir, {
         loop: active.loopName,
@@ -310,10 +294,23 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
     } catch (e) {
       // §27.10 resume state is best-effort: a write failure must never abort the turn's live path or crash
       // main from a timer/watcher callback (CLAUDE.md — a best-effort side effect never aborts its path;
-      // CWE-703/755). The live error above keeps the route-out reachable this session even when the file
-      // did not land.
+      // CWE-703/755). The caller learns the write did not land so a terminal completion can still hold a live
+      // error and summon the human, instead of stranding the disk at a stale `working`.
       void (e instanceof Error ? e.message : String(e));
+      landed = false;
     }
+    deps.onViewChanged();
+    return landed;
+  };
+
+  /** Refuse an Accept that has nothing to finalize (§27.12c): hold a live error for the active turn's identity
+   *  and surface it, leaving Retry/Terminate the route out, without persisting a fabricated `complete`. One
+   *  shape for the review-unresolved / review-no-report / consolidate-unresolved / work-unresolved branches so
+   *  a new AppLoopLiveError field cannot be threaded through one and dropped from another. */
+  const refuseRouteOut = (kind: AppLoopErrorKind, reason: string, round?: number): void => {
+    if (!active) return;
+    liveError = { kind, repoDir: active.repoDir, loop: active.loopName, step: active.stepId, turnKey: active.turnKey, reason, ...(round !== undefined ? { round } : {}) };
+    deps.emitError(reason);
     deps.onViewChanged();
   };
 
@@ -498,7 +495,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       turnKey: `${CONSOLIDATE_TURN_PREFIX}${ctx.stepId}`,
       boundaryCmd: preConsolidateBoundaryCommand(r.def),
       round,
-      catalog: r.def.reviewers.map((rev) => rev.persona),
+      catalog: catalogPersonas(r.def),
       recipePath: r.def.consolidator,
       outputPath: out.abs,
       outputRel: out.rel,
@@ -535,7 +532,17 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
     turn.verdict = verdict;
     turn.verdictReason = verdictCarriesReason(verdict) ? reason : undefined;
     turn.chosenRoster = roster.length > 0 ? roster : undefined;
-    persist('complete');
+    if (!persist('complete')) {
+      // §27.12c/CWE-703/755 — the `complete` write failed (ENOSPC/EPERM/a planted symlink), so the disk still
+      // holds the pre-terminal `working`. This is the ONE transition whose purpose is to summon the human (a
+      // `stop for a human`/`clean` gate); nulling liveError and leaving `working` would silently strand them.
+      // Hold a live turn-error so the view keeps the retry/terminate route-out reachable, mirroring writeError.
+      const reason2 = 'the consolidator finished but its verdict could not be saved — retry';
+      liveError = { kind: 'turn-error', repoDir: turn.repoDir, loop: turn.loopName, step: turn.stepId, turnKey: turn.turnKey, reason: reason2, round: turn.round };
+      deps.emitError(reason2);
+      deps.onViewChanged();
+      return;
+    }
     deps.audit(turn.repoDir, consolidateAuditCmd('complete', turn.round, verdict), 0);
   };
 
@@ -564,16 +571,21 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
     if (repeat.length > 0) {
       verdict = 'stop for a human';
       reason = `a reviewer failed to run again and needs a human: ${repeat.join(', ')}`;
-    } else if (fresh.length > 0) {
+    } else if (fresh.length > 0 && verdict !== 'stop for a human') {
+      // A fresh failure supersedes only clean / another-round — never an emitted `stop for a human`, which is a
+      // human-owned decision (loop spinning, or a reviewer raised a needs-a-human issue) that §27.6 routes to
+      // the gate now; the fresh lens is the human's to weigh there, not a reason to run another autonomous round.
       verdict = 'another round';
       roster = Array.from(new Set([...roster, ...fresh]));
     }
 
     // §27.9/AC9 — a queued interrupt for this step routes to the gate regardless of the verdict, still stating
-    // the verdict it would otherwise have reached. One-shot: cleared when honored.
+    // the verdict it would otherwise have reached. One-shot: cleared when honored, and recorded as its own §25
+    // event so the timeline distinguishes an interrupt-honored gate from a verdict-reached one.
     const armed = readArmedInterrupt(turn.repoDir);
     if (armed && armed.step === turn.stepId) {
       clearInterrupt(turn.repoDir);
+      deps.audit(turn.repoDir, consolidateAuditCmd('interrupt', turn.round, verdict), 0);
       routeConsolidateToGate(turn, verdict, reason, roster);
       return;
     }
@@ -618,10 +630,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
           // report to keep, so the override has nothing to finalize; refuse it exactly as the work-turn guard
           // below does, surfacing def-unresolvable so Retry/Terminate stay the route out.
           if (active.completion.kind === 'unresolved') {
-            const reason = 'the review round no longer resolves — retry or terminate';
-            liveError = { kind: 'def-unresolvable', repoDir, loop: active.loopName, step: active.stepId, turnKey: active.turnKey, reason, round: active.round };
-            deps.emitError(reason);
-            deps.onViewChanged();
+            refuseRouteOut('def-unresolvable', 'the review round no longer resolves — retry or terminate', active.round);
             return;
           }
           // §27.12c/CWE-754 — the override relaxes WELL-FORMEDNESS, not PRESENCE: it keeps a present-but-
@@ -629,10 +638,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
           // the one precondition §27.12c always requires) so finalizing `complete` can never record a round
           // with no auditable report (§27.5), keeping Retry/Terminate the route out.
           if (deps.readArtifact(active.reportPath) === null) {
-            const reason = 'the review round has no report to accept — retry or terminate';
-            liveError = { kind: 'turn-error', repoDir, loop: active.loopName, step: active.stepId, turnKey: active.turnKey, reason, round: active.round };
-            deps.emitError(reason);
-            deps.onViewChanged();
+            refuseRouteOut('turn-error', 'the review round has no report to accept — retry or terminate', active.round);
             return;
           }
           // §27.12c/AC8 — the review-turn accept is an OVERRIDE of the well-formedness gate, deliberately
@@ -648,10 +654,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
           // so refuse it (def-unresolvable) exactly as the work/review guards do; a present-but-malformed
           // output is kept as the round's record and the loop stops at the gate for the human.
           if (active.completion.kind === 'unresolved') {
-            const reason = 'the consolidator turn no longer resolves — retry or terminate';
-            liveError = { kind: 'def-unresolvable', repoDir, loop: active.loopName, step: active.stepId, turnKey: active.turnKey, reason, round: active.round };
-            deps.emitError(reason);
-            deps.onViewChanged();
+            refuseRouteOut('def-unresolvable', 'the consolidator turn no longer resolves — retry or terminate', active.round);
             return;
           }
           persist('complete');
@@ -664,10 +667,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
           // §27.12c/CWE-755 — an `unresolved` resumed turn (its def no longer resolves) can NEVER be
           // accepted; surface that instead of returning over the stale original reason with a dead affordance.
           if (active.completion.kind === 'unresolved') {
-            const reason = 'the bound def no longer resolves — retry or terminate';
-            liveError = { kind: 'def-unresolvable', repoDir, loop: active.loopName, step: active.stepId, turnKey: active.turnKey, reason };
-            deps.emitError(reason);
-            deps.onViewChanged();
+            refuseRouteOut('def-unresolvable', 'the bound def no longer resolves — retry or terminate');
           }
           return;
         }

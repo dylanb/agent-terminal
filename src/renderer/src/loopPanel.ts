@@ -267,7 +267,9 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
     btn.className = 'pill arm-interrupt';
     btn.dataset.armInterrupt = '';
     btn.textContent = 'Hand back to me';
-    btn.setAttribute('aria-label', `hand the ${step} loop back to me at the next consolidation`);
+    // WCAG 2.5.3 Label in Name: the accessible name must contain the visible label contiguously, so a
+    // speech-input user saying "click Hand back to me" can activate it.
+    btn.setAttribute('aria-label', `Hand back to me — return the ${step} loop at the next consolidation`);
     btn.addEventListener('click', () => deps.armInterrupt?.(step));
     body.append(btn);
   };
