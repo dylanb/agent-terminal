@@ -1,10 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createAppLoopEngine, type AppLoopEngineDeps } from '../../src/main/appLoopEngine';
-import { readAppLoopState, writeAppLoopState, type AppLoopRunState } from '../../src/main/appLoopState';
+import { readAppLoopState, roundReportFile, roundReportRel, writeAppLoopState, type AppLoopRunState } from '../../src/main/appLoopState';
 import { completionMarker } from '../../src/main/appWorkTurn';
+import { exampleRoundReport } from '../../src/shared/roundReport';
 import type { HostedAgentState } from '../../src/main/loopOrchestrator';
 import type { LoopDefV2, LoopDefV2Result } from '../../src/main/loopDefV2';
 
@@ -17,6 +19,8 @@ import type { LoopDefV2, LoopDefV2Result } from '../../src/main/loopDefV2';
 
 const STEP = 'plan';
 const TURN_KEY = 'work-plan';
+const REVIEW_KEY = 'review-plan';
+const ROSTER = ['review-plan-principal', 'review-plan-security'];
 const FIXED = (): Date => new Date('2026-07-17T12:00:00.000Z');
 
 let repo: string;
@@ -31,16 +35,23 @@ let armTimer: Mock<() => void>;
 let cancelTimer: Mock<() => void>;
 let readArtifact: Mock<(p: string) => string | null>;
 
-/** A file-producing plan-loop def whose completion artifact resolves under the repo's §27 area. */
+/** A file-producing plan-loop def whose completion artifact resolves under the repo's §27 area, declaring a
+ *  two-persona reviewer catalog and a compact pre-review boundary so the review-and-fix chain (N3) is real. */
 function fileDef(): LoopDefV2 {
   return {
     version: 'v2',
     name: 'plan-loop',
     origin: 'app-bundled',
     work: { recipe: join(repo, 'recipe', 'work.md'), artifact: 'plan' },
-    reviewers: [],
+    reviewers: [
+      { persona: ROSTER[0], charter: join(repo, 'charter', 'principal.md'), tools: ['Read'] },
+      { persona: ROSTER[1], charter: join(repo, 'charter', 'security.md'), tools: ['Read', 'Bash'] },
+    ],
     consolidator: join(repo, 'recipe', 'consolidate.md'),
-    boundaries: [{ boundary: 'pre-work', mode: 'clear' }],
+    boundaries: [
+      { boundary: 'pre-work', mode: 'clear' },
+      { boundary: 'pre-review', mode: 'compact', message: 'Keep the plan and the ticket.' },
+    ],
     report: { sections: ['summary'] },
     gate: [{ option: 'approve', sideEffects: [] }],
     pickup: { initialStatus: 'planning', branchTemplate: 'plan-loop/issue-{issue}' },
@@ -84,8 +95,28 @@ function makeEngine(persistOverride?: (repoDir: string, state: AppLoopRunState) 
     emitError,
     onViewChanged: () => {},
     terminateFlow,
+    resolveReportLocation: (repoDir, round) => {
+      const abs = roundReportFile(repoDir, round);
+      return abs ? { abs, rel: roundReportRel(round) } : null;
+    },
   };
   return createAppLoopEngine(deps);
+}
+
+/** A well-formed round-1 report accounting for the def's roster and its single section. */
+function writeReport(content = exampleRoundReport({ sections: ['summary'], roster: ROSTER })): void {
+  const p = roundReportFile(repo, 1)!;
+  mkdirSync(dirname(p), { recursive: true });
+  writeFileSync(p, content);
+}
+
+/** Enter → complete the WORK turn → drain the pre-review boundary → the review-and-fix prompt injects. */
+function driveToReviewInjected(engine: ReturnType<typeof createAppLoopEngine>): void {
+  enterAndInjectWork(engine);
+  writeArtifact(true);
+  engine.onDoneSignal(); // work completes → chains the review-and-fix turn (§27.3)
+  engine.onInjectable(); // the pre-review boundary drains + the instance re-quiesces
+  engine.onInjectable(); // the review-and-fix prompt injects
 }
 
 /** Drive enter → boundary drains → work prompt injects (hosted idle throughout). */
@@ -150,27 +181,29 @@ describe('§27 engine — entry, boundary, and the work injection (AC1, AC9)', (
   });
 });
 
-describe('§27 engine — completion gate (AC2, AC3)', () => {
-  it('completes on the done-signal + a marker-bearing artifact, and never re-injects (runs once)', () => {
+describe('§27 engine — work completion gate + review chain (AC2, AC3)', () => {
+  it('a marker-bearing artifact completes the WORK turn and chains the pre-review boundary + review prompt (AC1)', () => {
     const engine = makeEngine();
     enterAndInjectWork(engine);
+    const afterWork = injected.length;
     writeArtifact(true);
-    engine.onDoneSignal();
-    expect(readAppLoopState(repo)?.status).toBe('complete');
-    const after = injected.length;
-    engine.onInjectable(); // nothing pending — must not re-inject a completed turn
-    engine.onDoneSignal();
-    expect(injected.length).toBe(after);
+    engine.onDoneSignal(); // work done-signal → work complete, chain the review-and-fix turn (§27.3)
+    engine.onInjectable(); // the pre-review boundary drains
+    expect(injected[afterWork]).toBe('/compact Keep the plan and the ticket.'); // the def's pre-review boundary
+    engine.onInjectable(); // the review-and-fix prompt injects
+    expect(injected[afterWork + 1]).toContain(ROSTER[0]); // the roster is conveyed (AC2)
+    expect(injected[afterWork + 1]).toContain(ROSTER[1]);
+    expect(readAppLoopState(repo)).toMatchObject({ turnKey: REVIEW_KEY, status: 'working', round: 1 });
+    expect(engine.activeTurnKey()).toBe(REVIEW_KEY);
   });
 
-  it('a def declaring no artifact completes on the done-signal alone, reading no artifact (AC3)', () => {
+  it('a def declaring no work artifact completes the work turn on the done-signal alone, then chains review (AC3)', () => {
     defResult = { ok: true, def: commitDef() };
     const engine = makeEngine();
     enterAndInjectWork(engine);
-    engine.onDoneSignal();
-    expect(readAppLoopState(repo)?.status).toBe('complete');
-    expect(readArtifact).not.toHaveBeenCalled(); // commit-producing: no artifact read
-
+    engine.onDoneSignal(); // work completes on the done-signal → chains review
+    expect(readArtifact).not.toHaveBeenCalled(); // commit-producing work turn: no artifact read
+    expect(readAppLoopState(repo)?.turnKey).toBe(REVIEW_KEY); // advanced into the review turn
   });
 
   it('an artifact present but missing the marker triggers one retry, then error (AC3, AC5)', () => {
@@ -355,6 +388,223 @@ describe('§27 engine — resume (AC8)', () => {
 
   it('never re-runs a completed turn on resume', () => {
     writeAppLoopState(repo, { loop: 'plan-loop', step: STEP, turnKey: TURN_KEY, status: 'complete' }, FIXED);
+    const engine = makeEngine();
+    engine.resume(repo);
+    expect(injected).toEqual([]);
+    expect(readAppLoopState(repo)?.status).toBe('complete');
+  });
+});
+
+describe('§27 engine — the review-and-fix turn (AC3, AC4, AC5, AC7)', () => {
+  it('completes only on the done-file + a well-formed report at the round-keyed location (AC3, AC7)', () => {
+    const engine = makeEngine();
+    driveToReviewInjected(engine);
+    const afterReviewPrompt = injected.length;
+    engine.onDoneSignal(); // done-signal but NO report yet → not well-formed → one retry
+    expect(readAppLoopState(repo)?.status).not.toBe('complete');
+    expect(injected.length).toBe(afterReviewPrompt + 1); // re-injected once
+    writeReport(); // a well-formed report accounting for the full roster, at reports/1.md
+    expect(existsSync(roundReportFile(repo, 1)!)).toBe(true);
+    engine.onDoneSignal(); // done-signal + well-formed report → complete
+    expect(readAppLoopState(repo)).toMatchObject({ turnKey: REVIEW_KEY, status: 'complete', round: 1 });
+  });
+
+  it('a report OMITTING a roster persona is malformed → one re-injection then error (AC4)', () => {
+    const engine = makeEngine();
+    driveToReviewInjected(engine);
+    const afterReviewPrompt = injected.length;
+    writeReport(exampleRoundReport({ sections: ['summary'], roster: [ROSTER[0]] })); // omits ROSTER[1]
+    engine.onDoneSignal(); // first malformed → re-inject
+    expect(injected.length).toBe(afterReviewPrompt + 1);
+    expect(readAppLoopState(repo)?.status).not.toBe('error');
+    engine.onDoneSignal(); // second malformed → error
+    const state = readAppLoopState(repo);
+    expect(state).toMatchObject({ turnKey: REVIEW_KEY, status: 'error', round: 1 });
+    expect(state?.errorReason).toBeTruthy();
+    expect(emitError).toHaveBeenCalled();
+    // AC8 — the review-round error is recorded in the §25 audit with its reason (exit 1).
+    expect(audit).toHaveBeenCalledWith(repo, expect.stringContaining(state!.errorReason!), 1);
+  });
+
+  it('a report that does not parse against the declared structure is malformed → error (AC4)', () => {
+    const engine = makeEngine();
+    driveToReviewInjected(engine);
+    writeReport('nonsense with no sections and no persona records\n'); // missing the `summary` section
+    engine.onDoneSignal();
+    engine.onDoneSignal();
+    expect(readAppLoopState(repo)?.status).toBe('error');
+  });
+
+  it('a report accounting for a persona that recorded nothing (empty marker) still completes (AC5)', () => {
+    const engine = makeEngine();
+    driveToReviewInjected(engine);
+    // exampleRoundReport gives ROSTER[1] only the empty marker — a present-empty persona. It completes.
+    writeReport();
+    engine.onDoneSignal();
+    expect(readAppLoopState(repo)?.status).toBe('complete');
+  });
+
+  it('audits the review-round boundary and completion with the review-round vocabulary (§25 wiring, AC3)', () => {
+    const engine = makeEngine();
+    driveToReviewInjected(engine); // work complete → cross the pre-review boundary → inject the review prompt
+    expect(audit).toHaveBeenCalledWith(repo, expect.stringContaining('review round 1 boundary'), null);
+    writeReport();
+    engine.onDoneSignal();
+    expect(readAppLoopState(repo)?.status).toBe('complete');
+    expect(audit).toHaveBeenCalledWith(repo, expect.stringContaining('review round 1 complete'), 0);
+  });
+
+  it('audits a review-round error and retry with the review-round vocabulary, never the work-turn string (§25 wiring, AC4/AC8)', () => {
+    const engine = makeEngine();
+    driveToReviewInjected(engine);
+    writeReport(exampleRoundReport({ sections: ['summary'], roster: [ROSTER[0]] })); // omits ROSTER[1] → malformed
+    engine.onDoneSignal();
+    engine.onDoneSignal(); // → review error
+    expect(audit).toHaveBeenCalledWith(repo, expect.stringContaining('review round 1 failed'), 1);
+    engine.routeOut(repo, STEP, REVIEW_KEY, 'retry');
+    expect(audit).toHaveBeenCalledWith(repo, expect.stringContaining('review round 1 retry'), null);
+  });
+
+  it('the report is never read for a review turn whose report location cannot be resolved → cannot complete', () => {
+    const engine = makeEngine();
+    // resolveReportLocation returns null (e.g. a planted symlink at the loop area): the review turn errors
+    // rather than fabricating a pass on an unreadable report.
+    deps.resolveReportLocation = () => null;
+    enterAndInjectWork(engine);
+    writeArtifact(true);
+    engine.onDoneSignal(); // work completes → chain review, but the location is unresolvable
+    expect(readAppLoopState(repo)?.status).toBe('error');
+    expect(readAppLoopState(repo)?.turnKey).toBe(REVIEW_KEY);
+  });
+});
+
+describe('§27 engine — the review-and-fix route-out diverges from the work accept (AC8)', () => {
+  function toReviewError(engine: ReturnType<typeof createAppLoopEngine>): void {
+    driveToReviewInjected(engine);
+    writeReport(exampleRoundReport({ sections: ['summary'], roster: [ROSTER[0]] })); // omits ROSTER[1]
+    engine.onDoneSignal();
+    engine.onDoneSignal(); // → review error
+  }
+
+  it('accept OVERRIDES the gate: advances with the malformed report kept, WITHOUT re-running or injecting (AC8)', () => {
+    const engine = makeEngine();
+    toReviewError(engine);
+    const malformed = readFileSync(roundReportFile(repo, 1)!, 'utf8');
+    const afterError = injected.length;
+    engine.routeOut(repo, STEP, REVIEW_KEY, 'accept');
+    expect(readAppLoopState(repo)).toMatchObject({ turnKey: REVIEW_KEY, status: 'complete', round: 1 });
+    expect(injected.length).toBe(afterError); // never re-injected — the malformed report was NOT re-generated
+    expect(readFileSync(roundReportFile(repo, 1)!, 'utf8')).toBe(malformed); // the report is kept, malformation included
+    // AC8 — the override is recorded in the §25 audit with the review-round vocabulary (§25 wiring): a bare
+    // `accept` substring is vacuous here (the work-turn accept literal also carries it), so pin `review round N`.
+    expect(audit).toHaveBeenCalledWith(repo, expect.stringContaining('review round 1 accepted'), 0);
+  });
+
+  it('accept does NOT require a well-formed report (the override diverges from the work turn\'s artifact-gated accept)', () => {
+    const engine = makeEngine();
+    toReviewError(engine);
+    // The report on disk is malformed and stays malformed; accept still advances (the human backstop).
+    engine.routeOut(repo, STEP, REVIEW_KEY, 'accept');
+    expect(readAppLoopState(repo)?.status).toBe('complete');
+  });
+
+  it('accept REFUSES a review round whose report was NEVER written — present is the one precondition the override keeps (§27.12c/CWE-754)', () => {
+    // The fixer wrote its done-file but no report (a real §27.15 "writes nothing" state): retry-then-error with
+    // NOTHING on disk. The AC8 override keeps a present-but-MALFORMED report; there is none here, so accept must
+    // refuse — finalizing `complete` would record a round with no auditable report at all (§27.5), the exact
+    // fabricated-completion the §27.12c "artifact actually present" precondition forbids.
+    const engine = makeEngine();
+    driveToReviewInjected(engine);
+    engine.onDoneSignal(); // no report → one retry
+    engine.onDoneSignal(); // still no report → review error, report absent
+    expect(readAppLoopState(repo)).toMatchObject({ turnKey: REVIEW_KEY, status: 'error', round: 1 });
+    expect(existsSync(roundReportFile(repo, 1)!)).toBe(false);
+    const afterError = injected.length;
+    const emitsBeforeAccept = emitError.mock.calls.length;
+    engine.routeOut(repo, STEP, REVIEW_KEY, 'accept');
+    expect(readAppLoopState(repo)?.status).toBe('error'); // refused — NOT fabricated complete
+    expect(injected.length).toBe(afterError); // and never re-injected
+    // the accept click itself surfaces a FRESH error emission (not merely the earlier drive-to-error one), so
+    // Retry/Terminate stay the route out — a count increment, since the reason prose is free to change and the
+    // drive already left a same-kind live error standing (asserting kind/reason alone would be vacuous).
+    expect(emitError.mock.calls.length).toBeGreaterThan(emitsBeforeAccept);
+    expect(engine.liveErrorFor(repo)?.kind).toBe('turn-error');
+  });
+
+  it('accept REFUSES an UNRESOLVED review round reached via a report-location failure — never fabricates a finalized round (CWE-754/755)', () => {
+    // An `unresolved` review turn (the loop area/def no longer resolves) has NO report to keep, so the AC8
+    // override has nothing to finalize; accept must refuse it exactly as the work-turn def-unresolvable guard
+    // does, not persist `complete` over an empty round. Reached here by chaining review when the report
+    // location is unresolvable (startReview's unresolved fallback).
+    const engine = makeEngine();
+    deps.resolveReportLocation = () => null;
+    enterAndInjectWork(engine);
+    writeArtifact(true);
+    engine.onDoneSignal(); // work completes → chain review, but the location is unresolvable → unresolved review error
+    expect(readAppLoopState(repo)).toMatchObject({ turnKey: REVIEW_KEY, status: 'error' });
+    const afterError = injected.length;
+    engine.routeOut(repo, STEP, REVIEW_KEY, 'accept');
+    expect(readAppLoopState(repo)?.status).toBe('error'); // refused — NOT fabricated complete
+    expect(injected.length).toBe(afterError); // and never re-injected
+  });
+
+  it('accept REFUSES an UNRESOLVED review round reconstructed on resume (def deleted) and surfaces def-unresolvable (CWE-755)', () => {
+    // The def was deleted/edited between runs; resume reconstructs an `unresolved` review turn. Accepting it
+    // would finalize the round `complete` with reportPath === '' and no report — violating AC7 (one immutable
+    // report per finalized round) and AC8 (accept keeps THE malformed report; here there is none). The guard
+    // must refuse and surface a def-unresolvable reason so Retry/Terminate are the route out.
+    writeAppLoopState(repo, { loop: 'plan-loop', step: STEP, turnKey: REVIEW_KEY, status: 'error', errorReason: 'report omits a roster persona', round: 1 }, FIXED);
+    defResult = { ok: false, reason: 'no §27 def named plan-loop in any tier' };
+    const engine = makeEngine();
+    engine.resume(repo);
+    engine.routeOut(repo, STEP, REVIEW_KEY, 'accept');
+    expect(readAppLoopState(repo)?.status).toBe('error'); // still not fabricated complete
+    expect(engine.liveErrorFor(repo)?.kind).toBe('def-unresolvable'); // structured kind — wording free to change
+    expect(emitError).toHaveBeenCalledWith(engine.liveErrorFor(repo)?.reason);
+  });
+
+  it('retry re-enters the same review-and-fix turn of the correct round (boundary + review prompt)', () => {
+    const engine = makeEngine();
+    toReviewError(engine);
+    const afterError = injected.length;
+    engine.routeOut(repo, STEP, REVIEW_KEY, 'retry');
+    engine.onInjectable(); // pre-review boundary drains
+    engine.onInjectable(); // review prompt re-injects
+    expect(injected.length).toBeGreaterThan(afterError);
+    expect(readAppLoopState(repo)).toMatchObject({ turnKey: REVIEW_KEY, status: 'working', round: 1 });
+  });
+
+  it('terminate moves the flow off the step', () => {
+    const engine = makeEngine();
+    toReviewError(engine);
+    engine.routeOut(repo, STEP, REVIEW_KEY, 'terminate');
+    expect(terminateFlow).toHaveBeenCalledWith(repo);
+  });
+});
+
+describe('§27 engine — review-turn resume (AC9)', () => {
+  it('reconstructs a stopped review turn (round + turnKey), never re-drives it, and retry acts on it', () => {
+    writeAppLoopState(repo, { loop: 'plan-loop', step: STEP, turnKey: REVIEW_KEY, status: 'error', errorReason: 'report omits a roster persona', round: 1 }, FIXED);
+    const engine = makeEngine();
+    engine.resume(repo);
+    expect(injected).toEqual([]); // human-owned — never re-driven on resume
+    expect(engine.liveErrorFor(repo)).toMatchObject({ step: STEP, turnKey: REVIEW_KEY });
+    engine.routeOut(repo, STEP, REVIEW_KEY, 'retry'); // acts on the reconstructed review turn of round 1
+    expect(readAppLoopState(repo)).toMatchObject({ turnKey: REVIEW_KEY, status: 'working', round: 1 });
+  });
+
+  it('accept on a resumed review error keeps the malformed report and completes without re-running (AC8, AC9)', () => {
+    writeReport(exampleRoundReport({ sections: ['summary'], roster: [ROSTER[0]] })); // a malformed report is on disk
+    writeAppLoopState(repo, { loop: 'plan-loop', step: STEP, turnKey: REVIEW_KEY, status: 'error', errorReason: 'malformed', round: 1 }, FIXED);
+    const engine = makeEngine();
+    engine.resume(repo);
+    engine.routeOut(repo, STEP, REVIEW_KEY, 'accept');
+    expect(readAppLoopState(repo)?.status).toBe('complete');
+    expect(injected).toEqual([]); // never injected on the accept override
+  });
+
+  it('never re-runs a completed review turn on resume', () => {
+    writeAppLoopState(repo, { loop: 'plan-loop', step: STEP, turnKey: REVIEW_KEY, status: 'complete', round: 1 }, FIXED);
     const engine = makeEngine();
     engine.resume(repo);
     expect(injected).toEqual([]);

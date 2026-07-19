@@ -298,6 +298,25 @@ export function reconstructTimeline(text: string): RunTimeline {
   return tl;
 }
 
+/** The lifecycle points of a §27 review-and-fix round the §25 audit records (§27.5/§27.12) — one definition
+ *  so the main-process writer and any future viewer share the vocabulary, never re-spelled as ad-hoc strings. */
+export type ReviewRoundAuditKind = 'boundary' | 'complete' | 'error' | 'accept' | 'retry';
+
+export function reviewRoundAuditCmd(kind: ReviewRoundAuditKind, round: number, detail?: string): string {
+  switch (kind) {
+    case 'boundary':
+      return `§27 review round ${round} boundary: ${detail ?? ''}`;
+    case 'complete':
+      return `§27 review round ${round} complete`;
+    case 'error':
+      return `§27 review round ${round} failed: ${detail ?? ''}`;
+    case 'accept':
+      return `§27 review round ${round} accepted (override — malformed report kept)`;
+    case 'retry':
+      return `§27 review round ${round} retry`;
+  }
+}
+
 /** The events resolving a step's typed inputs produces (§25.5): an `input.resolved` per value, plus a
  *  `ticket.assoc` when a `github-ticket` input (per `typeByName`) resolved to a positive integer —
  *  explicit ID sourcing only, never scraped (§25.7). */

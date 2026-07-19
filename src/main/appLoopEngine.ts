@@ -1,11 +1,14 @@
-// The §27 (app-namespace) work-turn engine — the WRITE half of the coexistence seam (§27.15). On entry to
-// an `app` flow step it runs the def's declared context boundary, injects the composed work prompt once
-// through the §9.3 injector when injectable (§27.2), gates completion on the turn-keyed done-file plus (for
-// a def that declares one) a well-formed completion artifact — present and carrying the marker the prompt
-// instructed, never a quality judgment (§27.12) — retries once then stops in `error`, and persists run
-// state to the app-owned §27 loop-state file so a relaunch reconstructs the stopped turn and never re-drives
-// a completed one (§27.10/§27.12). The `error` route-out (retry / accept / terminate) acts on the step+turn
-// identity it is handed, never ambient state (§6).
+// The §27 (app-namespace) loop engine — the WRITE half of the coexistence seam (§27.15). On entry to an
+// `app` flow step it runs the def's declared context boundary, injects the composed work prompt once through
+// the §9.3 injector when injectable (§27.2), and gates the work turn's completion on the turn-keyed done-file
+// plus (for a def that declares one) a well-formed completion artifact. On work completion it chains the
+// REVIEW-AND-FIX turn (§27.3): cross the def-declared pre-review boundary, inject the review prompt, and gate
+// that turn on the done-file plus a well-formed round report (full-roster accounting, §27.5/§27.12) — never a
+// quality judgment. Either turn retries once then stops in `error`, and run state persists to the app-owned
+// §27 loop-state file so a relaunch reconstructs the stopped turn and never re-drives a completed one
+// (§27.10/§27.12). The `error` route-out (retry / accept / terminate) acts on the step+turn identity it is
+// handed, never ambient state (§6); the review-turn accept diverges from the work-turn accept as an override
+// of the well-formedness gate (§27.12c/AC8).
 //
 // The in-flight turn STATE MACHINE — inject-when-injectable, the boundary preamble drain, retry-once, the
 // stall watchdog — is reused read-only from the §26 turn runner (loopOrchestrator.ts, the plan's authorized
@@ -17,13 +20,21 @@ import path from 'node:path';
 import { createTurnRunner, type HostedAgentState, type TurnRunner } from './loopOrchestrator';
 import type { LoopDefV2, LoopDefV2Result } from './loopDefV2';
 import { artifactWellFormed, boundaryCommand, completionArtifact, completionMarker, composeAppWorkPrompt } from './appWorkTurn';
+import { composeReviewAndFixPrompt, preReviewBoundaryCommand, reviewRoster, type RosterEntry } from './reviewTurn';
 import { clearTurnDone } from './turnDoneFile';
 import { TURN_DONE_FILENAME } from '../shared/loopTurn';
+import { roundReportWellFormed } from '../shared/roundReport';
+import { reviewRoundAuditCmd } from '../shared/audit';
 import { APP_LOOP_DIR_SEGMENTS, readAppLoopState, type AppLoopRunState } from './appLoopState';
 
 /** The §27 done-file lives in the §27 loop area, disjoint from §26's `.agent-loop/` (AC10 separation). */
 const APP_TURN_DONE_SUBDIR = path.join(...APP_LOOP_DIR_SEGMENTS);
 const APP_DONE_REL_PATH = APP_LOOP_DIR_SEGMENTS.join('/') + '/' + TURN_DONE_FILENAME;
+
+const WORK_TURN_PREFIX = 'work-';
+const REVIEW_TURN_PREFIX = 'review-';
+/** This slice runs round 1 only and stops with the report written; N4 adds the consolidator and later rounds. */
+const FIRST_ROUND = 1;
 
 export type AppRouteOut = 'retry' | 'accept' | 'terminate';
 
@@ -41,6 +52,9 @@ export interface AppLoopLiveError {
   step: string;
   turnKey: string;
   reason: string;
+  /** The review-and-fix round this error belongs to, so the view carries the round number onto the
+   *  route-out surface; absent for a work-turn error (no round has run). */
+  round?: number;
 }
 
 /** The completion contract of the work turn, as a discriminated union so no mode carries a field another
@@ -81,6 +95,9 @@ export interface AppLoopEngineDeps {
   onViewChanged(): void;
   /** Move the flow off the step (§27.9 abandon = flow Terminate) for the terminate route-out. */
   terminateFlow(repoDir: string): void;
+  /** Resolve round N's report location (§27.5) — the confined absolute path the engine reads and the
+   *  repo-relative path the fixer writes, from ONE resolver; null when the loop area is unresolvable. */
+  resolveReportLocation(repoDir: string, round: number): { abs: string; rel: string } | null;
 }
 
 export interface AppLoopEngine {
@@ -109,15 +126,33 @@ export interface AppLoopEngine {
   liveErrorFor(repoDir: string): AppLoopLiveError | null;
 }
 
-interface ActiveAppTurn {
-  repoDir: string;
-  loopName: string;
-  stepId: string;
-  turnKey: string;
-  recipePath: string;
-  boundaryCmd: string;
-  completion: AppCompletion;
-}
+/** The in-flight §27 turn, a discriminated union on `phase` so the work turn and the chained review-and-fix
+ *  turn each carry only what they need (§27.3). Both share the ids the route-out and persistence key on. */
+type ActiveAppTurn =
+  | {
+      phase: 'work';
+      repoDir: string;
+      loopName: string;
+      stepId: string;
+      turnKey: string;
+      boundaryCmd: string;
+      recipePath: string;
+      completion: AppCompletion;
+    }
+  | {
+      phase: 'review';
+      repoDir: string;
+      loopName: string;
+      stepId: string;
+      turnKey: string;
+      boundaryCmd: string;
+      round: number;
+      reviewers: RosterEntry[];
+      sections: string[];
+      reportPath: string;
+      reportRel: string;
+      completion: { kind: 'report' } | { kind: 'unresolved' };
+    };
 
 /** The entry context boundary before WORK (§27.3): the def's first declared boundary, defaulting to
  *  `clear` when the def names none (every turn boundary is clear-or-compact, §27.7). */
@@ -126,13 +161,34 @@ function entryBoundaryCommand(def: LoopDefV2): string {
   return first ? boundaryCommand(first) : '/clear';
 }
 
+/** The review arm of an in-flight turn whose def/report-location no longer resolves (§27.12c): no roster, no
+ *  report, `completion.kind === 'unresolved'` so Accept refuses it. Seeded identically by `startReview`'s
+ *  fallback and `resume`'s fallback so the shape lives in one place. */
+function unresolvedReviewTurn(args: { repoDir: string; loopName: string; stepId: string; turnKey: string; round: number }): Extract<ActiveAppTurn, { phase: 'review' }> {
+  return {
+    phase: 'review',
+    repoDir: args.repoDir,
+    loopName: args.loopName,
+    stepId: args.stepId,
+    turnKey: args.turnKey,
+    boundaryCmd: '/clear',
+    round: args.round,
+    reviewers: [],
+    sections: [],
+    reportPath: '',
+    reportRel: '',
+    completion: { kind: 'unresolved' },
+  };
+}
+
 function activeTurnFor(repoDir: string, loopName: string, stepId: string, def: LoopDefV2): ActiveAppTurn {
   const artifact = completionArtifact(def);
   return {
+    phase: 'work',
     repoDir,
     loopName,
     stepId,
-    turnKey: `work-${stepId}`,
+    turnKey: `${WORK_TURN_PREFIX}${stepId}`,
     recipePath: def.work.recipe,
     boundaryCmd: entryBoundaryCommand(def),
     completion: artifact
@@ -151,6 +207,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
   const persist = (status: AppLoopRunState['status'], errorReason?: string): void => {
     if (!active) return;
     if (status !== 'error') liveError = null;
+    const round = active.phase === 'review' ? active.round : undefined;
     try {
       deps.persist(active.repoDir, {
         loop: active.loopName,
@@ -158,6 +215,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
         turnKey: active.turnKey,
         status,
         ...(errorReason ? { errorReason } : {}),
+        ...(round !== undefined ? { round } : {}),
       });
     } catch (e) {
       // §27.10 resume state is best-effort: a write failure must never abort the turn's live path or crash
@@ -169,8 +227,16 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
     deps.onViewChanged();
   };
 
-  const artifactPresent = (): boolean => {
+  const completionSatisfied = (): boolean => {
     if (!active) return false;
+    if (active.phase === 'review') {
+      // §27.12b — the review turn completes only on a well-formed round report: def-declared sections, full
+      // roster accounting, per-issue elements. An `unresolved` review turn (resume lost the def) reads no
+      // report — Accept cannot fabricate a pass, and the OVERRIDE path in routeOut is the human backstop.
+      if (active.completion.kind === 'unresolved') return false;
+      const content = deps.readArtifact(active.reportPath);
+      return content !== null && roundReportWellFormed(content, { sections: active.sections, roster: active.reviewers.map((r) => r.persona) });
+    }
     switch (active.completion.kind) {
       case 'commits':
         return true; // the done-signal alone completes it
@@ -184,6 +250,17 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
   runner = createTurnRunner({
     compose: (turnKey) => {
       if (!active) return null;
+      if (active.phase === 'review') {
+        if (active.completion.kind === 'unresolved') return null; // no def → cannot re-compose the roster
+        return composeReviewAndFixPrompt({
+          roster: active.reviewers,
+          sections: active.sections,
+          reportRel: active.reportRel,
+          round: active.round,
+          turnKey,
+          doneRelPath: APP_DONE_REL_PATH,
+        });
+      }
       const body = deps.readRecipe(active.recipePath);
       if (body === null) return null;
       return composeAppWorkPrompt({
@@ -200,22 +277,31 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       deps.inject(prompt);
     },
     hostedAgent: () => deps.hostedAgent(),
-    artifactPresent,
+    artifactPresent: completionSatisfied,
     armTimer: () => deps.armTimer(),
     cancelTimer: () => deps.cancelTimer(),
     writeError: (reason) => {
       if (!active) return;
+      const round = active.phase === 'review' ? active.round : undefined;
       // Record the live error BEFORE persisting: emitError and the view fallback must surface the route-out
       // even when the persisted error write fails (§27.12c — never an unrecoverable dead-end).
-      liveError = { kind: 'turn-error', repoDir: active.repoDir, loop: active.loopName, step: active.stepId, turnKey: active.turnKey, reason };
+      liveError = { kind: 'turn-error', repoDir: active.repoDir, loop: active.loopName, step: active.stepId, turnKey: active.turnKey, reason, ...(round !== undefined ? { round } : {}) };
       persist('error', reason);
-      deps.audit(active.repoDir, `§27 work turn ${active.turnKey} failed: ${reason}`, 1);
+      deps.audit(active.repoDir, round !== undefined ? reviewRoundAuditCmd('error', round, reason) : `§27 work turn ${active.turnKey} failed: ${reason}`, 1);
       deps.emitError(reason);
     },
     onComplete: (turnKey) => {
       if (!active) return;
+      if (active.phase === 'work') {
+        // §27.3 — advance straight into the review turn with no transient work-complete state, so a relaunch
+        // never mistakes a mid-chain crash for a finished loop.
+        deps.audit(active.repoDir, `§27 work turn ${turnKey} complete`, 0);
+        startReview(active);
+        return;
+      }
+      // §27.3/AC3 — the review-and-fix round completed on a well-formed report; stop here (N4 consolidates).
       persist('complete');
-      deps.audit(active.repoDir, `§27 work turn ${turnKey} complete`, 0);
+      deps.audit(active.repoDir, reviewRoundAuditCmd('complete', active.round), 0);
     },
     noteSettle: () => deps.noteSettle(),
   });
@@ -225,6 +311,55 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
     persist('working');
     deps.audit(turn.repoDir, `§27 work turn ${turn.turnKey} boundary: ${turn.boundaryCmd}`, null);
     runner.requestTurn(turn.turnKey, { preamble: turn.boundaryCmd });
+  };
+
+  /** Build the review-and-fix turn for a round from the resolved def and the round-keyed report location.
+   *  Returns null when the def no longer resolves or the report location is unresolvable (a routable error). */
+  const reviewTurnFor = (repoDir: string, loopName: string, stepId: string, round: number): ActiveAppTurn | null => {
+    const r = deps.resolveDef(repoDir, loopName);
+    if (!r.ok) return null;
+    const loc = deps.resolveReportLocation(repoDir, round);
+    if (!loc) return null;
+    return {
+      phase: 'review',
+      repoDir,
+      loopName,
+      stepId,
+      turnKey: `${REVIEW_TURN_PREFIX}${stepId}`,
+      boundaryCmd: preReviewBoundaryCommand(r.def),
+      round,
+      reviewers: reviewRoster(r.def),
+      sections: r.def.report.sections,
+      reportPath: loc.abs,
+      reportRel: loc.rel,
+      completion: { kind: 'report' },
+    };
+  };
+
+  /** Chain the review-and-fix turn after a completed work turn (§27.3): cross the pre-review boundary, then
+   *  inject the review-and-fix prompt when injectable. A def or report-location that no longer resolves stops
+   *  in a routable review `error` rather than silently dropping the round. */
+  const startReview = (work: Extract<ActiveAppTurn, { phase: 'work' }>): void => {
+    const turn = reviewTurnFor(work.repoDir, work.loopName, work.stepId, FIRST_ROUND);
+    if (turn) {
+      active = turn;
+      persist('working');
+      deps.audit(work.repoDir, reviewRoundAuditCmd('boundary', FIRST_ROUND, turn.boundaryCmd), null);
+      runner.requestTurn(turn.turnKey, { preamble: turn.boundaryCmd });
+      return;
+    }
+    const reason = 'cannot resolve the review round (def or report location unresolvable)';
+    active = unresolvedReviewTurn({
+      repoDir: work.repoDir,
+      loopName: work.loopName,
+      stepId: work.stepId,
+      turnKey: `${REVIEW_TURN_PREFIX}${work.stepId}`,
+      round: FIRST_ROUND,
+    });
+    liveError = { kind: 'turn-error', repoDir: work.repoDir, loop: work.loopName, step: work.stepId, turnKey: active.turnKey, reason, round: FIRST_ROUND };
+    persist('error', reason);
+    deps.audit(work.repoDir, reviewRoundAuditCmd('error', FIRST_ROUND, reason), 1);
+    deps.emitError(reason);
   };
 
   return {
@@ -254,10 +389,38 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
         return;
       }
       if (action === 'accept') {
-        // §27.12c — accept a present artifact: advance through the same completion chain a signalled turn
-        // takes, WITHOUT re-running and WITHOUT injecting. A missing artifact is not acceptable — Retry
-        // (re-run) is that path.
-        if (!artifactPresent()) {
+        if (active.phase === 'review') {
+          // §27.12c/CWE-755 — an `unresolved` review turn (its def/report-location no longer resolves) has NO
+          // report to keep, so the override has nothing to finalize; refuse it exactly as the work-turn guard
+          // below does, surfacing def-unresolvable so Retry/Terminate stay the route out.
+          if (active.completion.kind === 'unresolved') {
+            const reason = 'the review round no longer resolves — retry or terminate';
+            liveError = { kind: 'def-unresolvable', repoDir, loop: active.loopName, step: active.stepId, turnKey: active.turnKey, reason, round: active.round };
+            deps.emitError(reason);
+            deps.onViewChanged();
+            return;
+          }
+          // §27.12c/CWE-754 — the override relaxes WELL-FORMEDNESS, not PRESENCE: it keeps a present-but-
+          // malformed report, but a report that was never written has nothing to keep. Refuse it (present is
+          // the one precondition §27.12c always requires) so finalizing `complete` can never record a round
+          // with no auditable report (§27.5), keeping Retry/Terminate the route out.
+          if (deps.readArtifact(active.reportPath) === null) {
+            const reason = 'the review round has no report to accept — retry or terminate';
+            liveError = { kind: 'turn-error', repoDir, loop: active.loopName, step: active.stepId, turnKey: active.turnKey, reason, round: active.round };
+            deps.emitError(reason);
+            deps.onViewChanged();
+            return;
+          }
+          // §27.12c/AC8 — the review-turn accept is an OVERRIDE of the well-formedness gate, deliberately
+          // divergent from the work turn's artifact-present accept: advance keeping the malformed report as
+          // the round's record, WITHOUT re-running and WITHOUT re-injecting. Only a human can take it.
+          persist('complete');
+          deps.audit(repoDir, reviewRoundAuditCmd('accept', active.round), 0);
+          return;
+        }
+        // §27.12c — accept a present work artifact: persist `complete` and stop, WITHOUT re-running and
+        // WITHOUT injecting. A missing artifact is not acceptable — Retry (re-run) is that path.
+        if (!completionSatisfied()) {
           // §27.12c/CWE-755 — an `unresolved` resumed turn (its def no longer resolves) can NEVER be
           // accepted; surface that instead of returning over the stale original reason with a dead affordance.
           if (active.completion.kind === 'unresolved') {
@@ -272,9 +435,9 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
         deps.audit(repoDir, `§27 work turn ${turnKey} accepted (artifact present)`, 0);
         return;
       }
-      // retry — re-enter the same work turn (boundary + work), gated on injectability (§27.12).
+      // retry — re-enter the same turn (boundary + prompt), gated on injectability (§27.12).
       persist('working');
-      deps.audit(repoDir, `§27 work turn ${turnKey} retry`, null);
+      deps.audit(repoDir, active.phase === 'review' ? reviewRoundAuditCmd('retry', active.round) : `§27 work turn ${turnKey} retry`, null);
       runner.requestTurn(turnKey, { preamble: active.boundaryCmd });
     },
     resume(repoDir) {
@@ -284,10 +447,20 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       // reconstructed turn carries its real completion contract (accept must read the true artifact). NEVER
       // re-drive it: an `error`/`complete` turn is human-owned; the runner stays idle until an explicit
       // route-out (§27.12).
+      if (state.turnKey.startsWith(REVIEW_TURN_PREFIX)) {
+        const round = state.round ?? FIRST_ROUND;
+        active =
+          reviewTurnFor(repoDir, state.loop, state.step, round) ??
+          unresolvedReviewTurn({ repoDir, loopName: state.loop, stepId: state.step, turnKey: state.turnKey, round });
+        if (state.status === 'error') {
+          liveError = { kind: 'turn-error', repoDir, loop: state.loop, step: state.step, turnKey: state.turnKey, reason: state.errorReason ?? 'error', round };
+        }
+        return;
+      }
       const r = deps.resolveDef(repoDir, state.loop);
       active = r.ok
         ? activeTurnFor(repoDir, state.loop, state.step, r.def)
-        : { repoDir, loopName: state.loop, stepId: state.step, turnKey: state.turnKey, recipePath: '', boundaryCmd: '/clear', completion: { kind: 'unresolved' } };
+        : { phase: 'work', repoDir, loopName: state.loop, stepId: state.step, turnKey: state.turnKey, recipePath: '', boundaryCmd: '/clear', completion: { kind: 'unresolved' } };
       if (state.status === 'error') {
         liveError = { kind: 'turn-error', repoDir, loop: state.loop, step: state.step, turnKey: state.turnKey, reason: state.errorReason ?? 'error' };
       }
@@ -296,8 +469,8 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
     activeRepoDir: () => active?.repoDir ?? null,
     liveErrorFor: (repoDir) => {
       if (!liveError || liveError.repoDir !== repoDir) return null;
-      const { kind, loop, step, turnKey, reason } = liveError;
-      return { kind, loop, step, turnKey, reason };
+      const { kind, loop, step, turnKey, reason, round } = liveError;
+      return { kind, loop, step, turnKey, reason, ...(round !== undefined ? { round } : {}) };
     },
   };
 }

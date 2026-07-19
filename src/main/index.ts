@@ -118,7 +118,7 @@ import {
 } from './installExamples';
 import { deriveAppLoopView } from './loopViewV2';
 import { createAppLoopEngine } from './appLoopEngine';
-import { APP_LOOP_DIR_SEGMENTS, writeAppLoopState } from './appLoopState';
+import { APP_LOOP_DIR_SEGMENTS, roundReportFile, roundReportRel, writeAppLoopState } from './appLoopState';
 import { resolveLoopDefV2 } from './loopDefV2';
 import { resolveExampleLoopsV2Dir } from './exampleAssets';
 import { userConfigLoopsV2Dir } from './userConfig';
@@ -487,6 +487,12 @@ async function createWindow(): Promise<void> {
       }
     },
     persist: (repoDir, state) => writeAppLoopState(repoDir, state),
+    // §27.5 — the round-keyed report location: the confined absolute path the engine reads back and the
+    // repo-relative path the fixer is told to write, from the ONE resolver (writer↔reader-location).
+    resolveReportLocation: (repoDir, round) => {
+      const abs = roundReportFile(repoDir, round);
+      return abs ? { abs, rel: roundReportRel(round) } : null;
+    },
     audit: (repoDir, cmd, exit) => audit.recordCommand(repoDir, 'turn', cmd, exit),
     emitError: (reason) => send(CH.flowOnLoopError, { sessionId: SESSION_ID, reason }),
     onViewChanged: () => pushFlowChanged(),

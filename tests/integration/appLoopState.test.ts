@@ -1,11 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { existsSync, mkdtempSync, rmSync, symlinkSync } from 'node:fs';
+import { existsSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   APP_LOOP_STATE_SCHEMA,
   parseAppLoopState,
   readAppLoopState,
+  roundReportFile,
+  roundReportRel,
   serializeAppLoopState,
   writeAppLoopState,
   type AppLoopRunState,
@@ -119,5 +121,70 @@ describe('§27 loop-state resume reconstruction', () => {
     writeAppLoopState(repo, errored, FIXED);
     // Relaunch = a fresh read against the same repo dir; the run reconstructs which turn stopped.
     expect(readAppLoopState(repo)).toEqual(errored);
+  });
+});
+
+// §27.12/AC9 — a review-and-fix turn persists its round number so a relaunch reconstructs the stopped
+// review turn AND knows which round it was. The round is absent through the work turn (no round has run).
+describe('§27 loop-state — the review turn round number', () => {
+  const REVIEW: AppLoopRunState = { loop: 'plan-loop', step: 'plan', turnKey: 'review-plan', status: 'working', round: 1 };
+
+  it('round-trips a review run carrying its round number', () => {
+    const text = serializeAppLoopState(REVIEW, FIXED);
+    expect(text).toContain('round: 1');
+    expect(parseAppLoopState(text)).toEqual(REVIEW);
+  });
+
+  it('round-trips an errored review run carrying both its round and reason', () => {
+    const errored: AppLoopRunState = { ...REVIEW, status: 'error', errorReason: 'report omits a roster persona' };
+    expect(parseAppLoopState(serializeAppLoopState(errored, FIXED))).toEqual(errored);
+  });
+
+  it('carries no round for a work run (absent = no round has run)', () => {
+    const text = serializeAppLoopState(RUN, FIXED);
+    expect(text).not.toContain('round:');
+    expect(parseAppLoopState(text)?.round).toBeUndefined();
+  });
+
+  it('drops a non-positive or non-integer round rather than surfacing a fabricated identity (field-local validation)', () => {
+    for (const bad of ['0', '-1', '1.5', 'two']) {
+      const text = serializeAppLoopState(REVIEW, FIXED).replace('round: 1', `round: ${bad}`);
+      expect(parseAppLoopState(text)?.round).toBeUndefined();
+    }
+  });
+
+  it('drops a non-positive or non-integer round on the WRITE side too (one gate governs serialize and parse)', () => {
+    for (const bad of [0, -1, 1.5]) {
+      expect(serializeAppLoopState({ ...REVIEW, round: bad }, FIXED)).not.toContain('round:');
+    }
+  });
+});
+
+// §27.5/AC7 — the round report's write-target (the fixer, via roundReportRel) and read-source (the engine,
+// via roundReportFile) derive from ONE resolver so they cannot drift (CLAUDE.md writer↔reader-location). The
+// location is round-keyed and disjoint from the engine's own run-state file, confined to the untrusted repo
+// tree (resolveJail). The pin runs first-run: the fixture mkdtemp'd only the repo, so the reports tree is
+// absent — a resolver that only works when the anchor already exists would fail here.
+describe('§27 round-report location resolver', () => {
+  it('resolves round N to <repo>/.agent-terminal/loop/reports/<N>.md, write-target === read-source', () => {
+    expect(existsSync(join(repo, '.agent-terminal'))).toBe(false); // first run: the tree is absent
+    expect(roundReportRel(1)).toBe('.agent-terminal/loop/reports/1.md');
+    expect(roundReportFile(repo, 1)).toBe(join(realpathSync(repo), roundReportRel(1)));
+    expect(roundReportFile(repo, 2)).toBe(join(realpathSync(repo), roundReportRel(2)));
+  });
+
+  it('keeps distinct rounds at disjoint locations, and disjoint from the run-state file', () => {
+    expect(roundReportFile(repo, 1)).not.toBe(roundReportFile(repo, 2));
+    expect(roundReportFile(repo, 1)).not.toBe(stateFile());
+  });
+
+  it('refuses a report location behind a symlinked loop container rather than following it (CWE-59)', () => {
+    const elsewhere = mkdtempSync(join(tmpdir(), 'apploop-evil-report-'));
+    try {
+      symlinkSync(elsewhere, join(repo, '.agent-terminal'));
+      expect(roundReportFile(repo, 1)).toBeNull();
+    } finally {
+      rmSync(elsewhere, { recursive: true, force: true });
+    }
   });
 });

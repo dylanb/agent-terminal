@@ -132,6 +132,31 @@ describe('deriveAppLoopView — live run-state (AC1, AC7)', () => {
     expect(view.appTurn).toEqual({ step: 'plan', turnKey: 'work-plan' });
   });
 
+  // §27.5/§27 IPC item 3 — the view begins carrying the round number in the existing optional `iteration`
+  // field once a review-and-fix round has run; it stays absent through the work turn (no fabricated 0).
+  it('carries the review round number in the iteration field for a running review turn', () => {
+    plant('plan-loop', ['approve']);
+    writeAppLoopState(repoDir, { loop: 'plan-loop', step: 'plan', turnKey: 'review-plan', status: 'working', round: 1 }, FIXED);
+    const view = deriveAppLoopView('plan-loop', { tiers: tiers(), repoDir });
+    expect(view.status).toBe('working');
+    expect(view.iteration).toBe(1);
+    expect(view.appTurn).toEqual({ step: 'plan', turnKey: 'review-plan' });
+  });
+
+  it('carries the round number on an errored review turn (route-out surfaces it)', () => {
+    plant('plan-loop', ['approve']);
+    writeAppLoopState(
+      repoDir,
+      { loop: 'plan-loop', step: 'plan', turnKey: 'review-plan', status: 'error', errorReason: 'report omits a roster persona', round: 1 },
+      FIXED,
+    );
+    const view = deriveAppLoopView('plan-loop', { tiers: tiers(), repoDir });
+    expect(view.status).toBe('error');
+    expect(view.iteration).toBe(1);
+    expect(view.humanNeeded).toBe(true);
+    expect(view.appTurn).toEqual({ step: 'plan', turnKey: 'review-plan' });
+  });
+
   it('ignores a run-state belonging to a DIFFERENT loop (falls back to the run-less view)', () => {
     plant('plan-loop', ['approve', 'request-changes']);
     writeAppLoopState(repoDir, { loop: 'groom-loop', step: 'groom', turnKey: 'work-groom', status: 'working' }, FIXED);
@@ -157,6 +182,19 @@ describe('deriveAppLoopView — live-error fallback when the persisted state can
     expect(view.humanNeeded).toBe(true);
     expect(view.errorReason).toBe('stalled: no terminal activity');
     expect(view.appTurn).toEqual({ step: 'plan', turnKey: 'work-plan' });
+    expect(view.iteration).toBeUndefined(); // a work-turn live error carries no round
+  });
+
+  it('carries the round number on a review-turn live error (persisted error write failed)', () => {
+    plant('plan-loop', ['approve']);
+    const view = deriveAppLoopView(
+      'plan-loop',
+      { tiers: tiers(), repoDir },
+      { kind: 'turn-error', loop: 'plan-loop', step: 'plan', turnKey: 'review-plan', reason: 'malformed report', round: 1 },
+    );
+    expect(view.status).toBe('error');
+    expect(view.iteration).toBe(1);
+    expect(view.appTurn).toEqual({ step: 'plan', turnKey: 'review-plan' });
   });
 
   it('ignores a live error belonging to a different loop (falls back to the run-less view)', () => {

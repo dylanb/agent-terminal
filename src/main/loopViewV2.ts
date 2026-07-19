@@ -39,6 +39,7 @@ export function deriveAppLoopView(name: string, ctx: LoopDefV2Context, liveError
       humanNeeded: isHumanNeededStatus(APP_LOOP_STATUS_ERROR),
       appTurn: { step: liveError.step, turnKey: liveError.turnKey },
       errorReason: liveError.reason,
+      ...(liveError.round !== undefined ? { iteration: liveError.round } : {}),
     };
   }
   // §27.12 — once a work turn has run, the persisted §27 run-state is the live view: mirror its status
@@ -56,6 +57,9 @@ export function deriveAppLoopView(name: string, ctx: LoopDefV2Context, liveError
       humanNeeded: isHumanNeededStatus(run.status),
       appTurn: { step: run.step, turnKey: run.turnKey },
       ...(run.errorReason ? { errorReason: run.errorReason } : {}),
+      // §27.5 IPC item 3 — carry the round number once a review-and-fix round has run (absent through the
+      // work turn, so a coalesce-to-zero never fabricates a round identity the dedup/audit key on).
+      ...(run.round !== undefined ? { iteration: run.round } : {}),
     };
   }
   const r = resolveLoopDefV2(name, ctx);
