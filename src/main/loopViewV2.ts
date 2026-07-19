@@ -25,6 +25,10 @@ export const APP_LOOP_STATUS_WORKING = 'working';
 export const APP_LOOP_STATUS_COMPLETE = 'complete';
 
 export function deriveAppLoopView(name: string, ctx: LoopDefV2Context, liveError?: AppLoopLiveError | null): FlowLoopView {
+  // §27.4/AC8 — the def's reviewer catalog surfaces on the run view once a roster can be selected. Resolved
+  // once here and reused; absent when the def does not resolve (the catalog then simply is not shown).
+  const r = resolveLoopDefV2(name, ctx);
+  const catalog = r.ok ? r.def.reviewers.map((rev) => rev.persona) : undefined;
   // §27.12c — when the status:error write could not land (ENOSPC/EPERM/a planted symlink), the persisted
   // state cannot reflect the error, so the engine's LIVE error is the truth: surface it (and its route-out
   // identity) so the §27 route-out is never a dead-end. It is the freshest signal, so it wins over a stale
@@ -40,6 +44,7 @@ export function deriveAppLoopView(name: string, ctx: LoopDefV2Context, liveError
       appTurn: { step: liveError.step, turnKey: liveError.turnKey },
       errorReason: liveError.reason,
       ...(liveError.round !== undefined ? { iteration: liveError.round } : {}),
+      ...(catalog ? { catalog } : {}),
     };
   }
   // §27.12 — once a work turn has run, the persisted §27 run-state is the live view: mirror its status
@@ -60,9 +65,13 @@ export function deriveAppLoopView(name: string, ctx: LoopDefV2Context, liveError
       // §27.5 IPC item 3 — carry the round number once a review-and-fix round has run (absent through the
       // work turn, so a coalesce-to-zero never fabricates a round identity the dedup/audit key on).
       ...(run.round !== undefined ? { iteration: run.round } : {}),
+      // §27.6/AC5/AC8 — the catalog, the consolidator's chosen roster, and the round's verdict + reason.
+      ...(catalog ? { catalog } : {}),
+      ...(run.chosenRoster ? { chosenRoster: run.chosenRoster } : {}),
+      ...(run.verdict ? { verdict: run.verdict } : {}),
+      ...(run.verdictReason ? { verdictReason: run.verdictReason } : {}),
     };
   }
-  const r = resolveLoopDefV2(name, ctx);
   if (!r.ok) {
     return {
       status: APP_LOOP_STATUS_ERROR,
