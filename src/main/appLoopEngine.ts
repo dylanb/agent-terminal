@@ -482,7 +482,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
     }
     const reason = 'cannot resolve the review round (def or report location unresolvable)';
     active = { ...unresolvedReviewTurn({ ...ctx, turnKey: `${REVIEW_TURN_PREFIX}${ctx.stepId}`, round }), ...(chosenRoster ? { chosenRoster } : {}) };
-    liveError = { kind: 'turn-error', repoDir: ctx.repoDir, loop: ctx.loopName, step: ctx.stepId, turnKey: active.turnKey, reason, round };
+    setLiveError('turn-error', reason, round);
     persist('error', reason);
     deps.audit(ctx.repoDir, reviewRoundAuditCmd('error', round, reason), 1);
     deps.emitError(reason);
@@ -530,7 +530,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
     }
     const reason = 'cannot resolve the consolidator turn (def, report, or output location unresolvable)';
     active = unresolvedConsolidateTurn({ ...ctx, turnKey: `${CONSOLIDATE_TURN_PREFIX}${ctx.stepId}`, round: review.round });
-    liveError = { kind: 'turn-error', repoDir: ctx.repoDir, loop: ctx.loopName, step: ctx.stepId, turnKey: active.turnKey, reason, round: review.round };
+    setLiveError('turn-error', reason, review.round);
     persist('error', reason);
     deps.audit(ctx.repoDir, consolidateAuditCmd('error', review.round, reason), 1);
     deps.emitError(reason);
