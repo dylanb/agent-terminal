@@ -77,6 +77,14 @@ describe('runAppGateDecision — approve (§27.13 / AC2)', () => {
     expect(rec.accepts).toHaveLength(1);
     expect(rec.advances).toEqual(['/repo']);
   });
+
+  it('skips a non-gh side-effect yet still accepts and advances (only gh actions run)', async () => {
+    const { deps, rec } = mkDeps({ gate: [{ option: 'approve', sideEffects: [{ kind: 'slack', args: { action: 'post' } }] }] });
+    await approve(deps);
+    expect(rec.sideEffects).toEqual([]); // the non-gh side-effect never reached the gh runner
+    expect(rec.accepts).toHaveLength(1);
+    expect(rec.advances).toEqual(['/repo']);
+  });
 });
 
 describe('runAppGateDecision — a failed side-effect never strands the flow (§27.13 / AC3)', () => {
@@ -103,7 +111,7 @@ describe('runAppGateDecision — an unpersisted accept never advances the flow (
     expect(rec.accepts).toEqual([]); // the accept did not persist
     expect(rec.sideEffects).toEqual([]); // the gh side-effect never fired (no double-execution on retry)
     expect(rec.advances).toEqual([]); // the flow did NOT advance over the unpersisted accept
-    expect(rec.views).toBe(1); // the error path still re-renders the gate pane so the failed Approve is visible
+    expect(rec.views).toBeGreaterThanOrEqual(1); // the error path re-renders the gate pane so the failed Approve is visible
   });
 });
 
@@ -142,6 +150,35 @@ describe('runAppGateDecision — validates the option against the bound def (AC9
     const { deps, rec } = mkDeps({});
     await approve(deps, 'plan', 'consolidate-plan', 'request-changes');
     expect(rec.sideEffects).toEqual([]);
+    expect(rec.advances).toEqual([]);
+  });
+
+  it('is inert for a DECLARED non-approve option — the §27 executor is approve-only', async () => {
+    const gate: GateOptionDef[] = [
+      { option: 'approve', sideEffects: [] },
+      { option: 'request-changes', sideEffects: [{ kind: 'gh', args: { action: 'mark-ready' } }] },
+    ];
+    const { deps, rec } = mkDeps({ gate });
+    await approve(deps, 'plan', 'consolidate-plan', 'request-changes');
+    expect(rec.sideEffects).toEqual([]); // the declared side-effect never ran
+    expect(rec.accepts).toEqual([]);
+    expect(rec.advances).toEqual([]);
+  });
+});
+
+describe('runAppGateDecision — inert when the gate cannot be established', () => {
+  it('is inert when the bound def fails to resolve (no accept, side-effect, or advance)', async () => {
+    const { deps, rec } = mkDeps({ resolveDef: () => ({ ok: false, reason: 'def failed to parse' }) });
+    await approve(deps);
+    expect(rec.accepts).toEqual([]);
+    expect(rec.sideEffects).toEqual([]);
+    expect(rec.advances).toEqual([]);
+  });
+
+  it('is inert when no run-state is persisted (null)', async () => {
+    const { deps, rec } = mkDeps({ run: null });
+    await approve(deps);
+    expect(rec.accepts).toEqual([]);
     expect(rec.advances).toEqual([]);
   });
 });

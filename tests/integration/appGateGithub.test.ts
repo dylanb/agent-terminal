@@ -35,6 +35,8 @@ describe('§27 approve side-effect port (appGateGithub)', () => {
     await expect(createAppGateGitHub(c.run)('mark-ready', { pr: null, ticket: null, bodyFile: null })).rejects.toThrow(/no PR/);
     await expect(createAppGateGitHub(c.run)('publish-pr-body', { pr: 5, ticket: null, bodyFile: null })).rejects.toThrow(/body artifact/);
     await expect(createAppGateGitHub(c.run)('update-issue-body', { pr: null, ticket: null, bodyFile: '/x' })).rejects.toThrow(/no issue/);
+    await expect(createAppGateGitHub(c.run)('update-issue-body', { pr: null, ticket: 7, bodyFile: null })).rejects.toThrow(/body artifact/);
+    await expect(createAppGateGitHub(c.run)('publish-pr-body', { pr: null, ticket: null, bodyFile: '/x' })).rejects.toThrow(/no PR/);
     expect(c.argvs).toEqual([]); // no malformed gh call was issued
   });
 
