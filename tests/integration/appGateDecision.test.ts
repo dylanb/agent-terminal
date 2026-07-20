@@ -91,7 +91,8 @@ describe('runAppGateDecision — a failed side-effect never strands the flow (§
   it('surfaces + audits the failure but still persists the accept and advances', async () => {
     const { deps, rec } = mkDeps({ sideEffectThrows: 'no PR to mark ready' });
     await approve(deps);
-    expect(rec.errors).toEqual(['approve side-effect failed: no PR to mark ready']); // surfaced to the operator
+    expect(rec.errors).toHaveLength(1); // exactly one failure surfaced to the operator
+    expect(rec.errors[0]).toMatch(/side-effect failed: no PR/); // carrying the underlying cause, not exact copy
     expect(rec.audits.some((a) => a.cmd.includes('side-effect failed') && a.exit === 1)).toBe(true); // recorded
     expect(rec.accepts).toHaveLength(1); // accept NOT aborted
     expect(rec.advances).toEqual(['/repo']); // the flow still advances — a visible next action
