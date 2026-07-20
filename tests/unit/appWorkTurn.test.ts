@@ -62,6 +62,17 @@ describe('completionArtifact (§27.12 — file-producing vs commit-producing, da
     const d = def({ work: { recipe: '/abs/prompts/work.md', artifact: 'commits' }, outputs: [] });
     expect(completionArtifact(d)).toBeNull();
   });
+
+  it('resolves by artifact id, not list position, when the matching output is not first', () => {
+    const d = def({
+      work: { recipe: '/abs/prompts/work.md', artifact: 'plan' },
+      outputs: [
+        { id: 'diff', path: '/abs/repo/.agent-terminal/loop/artifacts/diff.md' },
+        { id: 'plan', path: '/abs/repo/.agent-terminal/loop/artifacts/plan.md' },
+      ],
+    });
+    expect(completionArtifact(d)).toEqual({ path: '/abs/repo/.agent-terminal/loop/artifacts/plan.md' });
+  });
 });
 
 describe('completionMarker (§27.12 — the well-formedness marker, one definition)', () => {

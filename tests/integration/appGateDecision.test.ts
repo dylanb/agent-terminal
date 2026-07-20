@@ -103,6 +103,7 @@ describe('runAppGateDecision — an unpersisted accept never advances the flow (
     expect(rec.accepts).toEqual([]); // the accept did not persist
     expect(rec.sideEffects).toEqual([]); // the gh side-effect never fired (no double-execution on retry)
     expect(rec.advances).toEqual([]); // the flow did NOT advance over the unpersisted accept
+    expect(rec.views).toBe(1); // the error path still re-renders the gate pane so the failed Approve is visible
   });
 });
 
