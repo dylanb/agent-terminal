@@ -7,8 +7,8 @@ import type { Menu, MenuItemConstructorOptions } from 'electron';
 // selection + sanitized paste) instead of the default roles, which would act on xterm's hidden native
 // selection. Off darwin a minimal menu (keyboard zoom + fullscreen, no Edit routing) is installed —
 // enough to keep text-resize (WCAG 1.4.4) while freeing the app-nav chords (§7.7).
-function find(items: MenuItemConstructorOptions[] | null | undefined, label: string): MenuItemConstructorOptions {
-  const hit = (items ?? []).find((i) => i.label === label);
+function find(items: MenuItemConstructorOptions[], label: string): MenuItemConstructorOptions {
+  const hit = items.find((i) => i.label === label);
   if (!hit) throw new Error(`menu item not found: ${label}`);
   return hit;
 }
