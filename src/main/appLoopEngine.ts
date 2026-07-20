@@ -633,6 +633,17 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
         return;
       }
       if (action === 'accept') {
+        // §27.12c/CWE-703 — every Accept branch finalizes with `persist('complete')`; a failed finalize write
+        // (ENOSPC/EPERM/a planted symlink) leaves the disk on `error`, so re-surface the live error and record
+        // no `accept` the disk never saved, keeping Retry/Terminate the route out. One definition so the three
+        // phases cannot drift on the write-failure contract.
+        const acceptFinalize = (saveFailReason: string, successAudit: string, round?: number): void => {
+          if (!persist('complete')) {
+            refuseRouteOut('turn-error', saveFailReason, round);
+            return;
+          }
+          deps.audit(repoDir, successAudit, 0);
+        };
         if (active.phase === 'review') {
           // §27.12c/CWE-755 — an `unresolved` review turn (its def/report-location no longer resolves) has NO
           // report to keep, so the override has nothing to finalize; refuse it exactly as the work-turn guard
@@ -652,13 +663,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
           // §27.12c/AC8 — the review-turn accept is an OVERRIDE of the well-formedness gate, deliberately
           // divergent from the work turn's artifact-present accept: advance keeping the malformed report as
           // the round's record, WITHOUT re-running and WITHOUT re-injecting. Only a human can take it.
-          if (!persist('complete')) {
-            // §27.12c/CWE-703 — the finalize write failed (ENOSPC/EPERM/a planted symlink); the disk still
-            // holds `error`, so re-surface the live error and record no `accept` the disk never saved.
-            refuseRouteOut('turn-error', 'the review round was accepted but could not be saved — retry or terminate', active.round);
-            return;
-          }
-          deps.audit(repoDir, reviewRoundAuditCmd('accept', active.round), 0);
+          acceptFinalize('the review round was accepted but could not be saved — retry or terminate', reviewRoundAuditCmd('accept', active.round), active.round);
           return;
         }
         if (active.phase === 'consolidate') {
@@ -670,11 +675,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
             refuseRouteOut('def-unresolvable', 'the consolidator turn no longer resolves — retry or terminate', active.round);
             return;
           }
-          if (!persist('complete')) {
-            refuseRouteOut('turn-error', 'the consolidator turn was accepted but could not be saved — retry or terminate', active.round);
-            return;
-          }
-          deps.audit(repoDir, consolidateAuditCmd('accept', active.round), 0);
+          acceptFinalize('the consolidator turn was accepted but could not be saved — retry or terminate', consolidateAuditCmd('accept', active.round), active.round);
           return;
         }
         // §27.12c — accept a present work artifact: persist `complete` and stop, WITHOUT re-running and
@@ -687,11 +688,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
           }
           return;
         }
-        if (!persist('complete')) {
-          refuseRouteOut('turn-error', 'the work turn was accepted but could not be saved — retry or terminate');
-          return;
-        }
-        deps.audit(repoDir, `§27 work turn ${turnKey} accepted (artifact present)`, 0);
+        acceptFinalize('the work turn was accepted but could not be saved — retry or terminate', `§27 work turn ${turnKey} accepted (artifact present)`);
         return;
       }
       // retry — re-enter the same turn (boundary + prompt), gated on injectability (§27.12).
