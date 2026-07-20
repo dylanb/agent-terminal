@@ -179,8 +179,9 @@ export function createShell(root: HTMLElement, deps: ShellDeps = {}): Shell {
     if (target.closest('#tg')) return setTheme(theme === 'dark' ? 'light' : 'dark');
   };
 
-  // Capture phase + stopPropagation: xterm would otherwise swallow ⌘/Ctrl+K and ⌘/Ctrl+1-3 before
-  // they reach the shell, so these chords must be intercepted ahead of any focused descendant (§22.4).
+  // Capture phase + stopPropagation: xterm would otherwise swallow the app-nav chords (⌘/Ctrl+0/9 and
+  // ⌘/Ctrl+1/2) before they reach the shell, so they must be intercepted ahead of any focused
+  // descendant (§22.4).
   const onKeyDown = (e: KeyboardEvent): void => {
     if (e.key === 'Escape' && fullscreen) {
       if (modalIsOpen()) return; // a dialog over the viewer owns Escape (WCAG 2.4.3)

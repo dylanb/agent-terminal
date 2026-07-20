@@ -333,8 +333,8 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
     const activeIndex = railStn.findIndex((s) => s.st === 'active');
     host.append(header(doc, `Flow — step ${activeIndex + 1} / ${railStn.length}`));
 
-    // The station rail (§24.1). Deliberately deviates from that section's fully-connected mockup —
-    // connectors are drawn only around the active station — to keep the left rail tight.
+    // The station rail (§24.1). Deliberately deviates from that section's fully-connected mockup to
+    // keep the left rail tight.
     const rail = doc.createElement('div');
     rail.className = 'flow vert';
     railStn.forEach((s, i) => {

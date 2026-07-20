@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
-import { buildMenuTemplate } from '../../src/main/appMenu';
+import { buildMenuTemplate, applyApplicationMenu } from '../../src/main/appMenu';
 import { MAC_DEFAULTS, type Chord } from '../../src/shared/keymap';
-import type { MenuItemConstructorOptions } from 'electron';
+import type { Menu, MenuItemConstructorOptions } from 'electron';
 
 // The macOS application menu (§7.7): Copy/Paste/Select All route to OUR actions (the app-owned
 // selection + sanitized paste) instead of the default roles, which would act on xterm's hidden native
@@ -73,5 +73,30 @@ describe('appMenu (§7.7)', () => {
     const setZoomLevel = vi.fn();
     (actualSize.click as (i: unknown, w: unknown) => void)(null, { webContents: { setZoomLevel } });
     expect(setZoomLevel).toHaveBeenCalledWith(0);
+  });
+});
+
+// §7.6: off darwin no menu is installed — the renderer keymap owns every chord. Electron's DEFAULT
+// menu (kept if setApplicationMenu is never called) binds ⌘0/Ctrl+0 to "Reset Zoom", which would
+// preempt the openSettings chord (§7.7) on Linux/Windows — both target platforms. So off darwin the
+// app must actively CLEAR the default menu, not merely skip installing its own.
+describe('applyApplicationMenu (§7.6)', () => {
+  function fakeMenuApi() {
+    const built = { tag: 'built-menu' } as unknown as Menu;
+    return { built, setApplicationMenu: vi.fn(), buildFromTemplate: vi.fn(() => built) };
+  }
+
+  it('off macOS clears the default menu so the renderer keymap owns the chords', () => {
+    const api = fakeMenuApi();
+    applyApplicationMenu(buildMenuTemplate('linux', vi.fn()), api);
+    expect(api.buildFromTemplate).not.toHaveBeenCalled();
+    expect(api.setApplicationMenu).toHaveBeenCalledWith(null);
+  });
+
+  it('on macOS installs the custom menu built from the template', () => {
+    const api = fakeMenuApi();
+    applyApplicationMenu(buildMenuTemplate('darwin', vi.fn()), api);
+    expect(api.buildFromTemplate).toHaveBeenCalledTimes(1);
+    expect(api.setApplicationMenu).toHaveBeenCalledWith(api.built);
   });
 });

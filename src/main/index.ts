@@ -1,5 +1,5 @@
 import { app, BrowserWindow, clipboard, ipcMain, Menu, Notification, shell } from 'electron';
-import { buildMenuTemplate } from './appMenu';
+import { applyApplicationMenu, buildMenuTemplate } from './appMenu';
 import path from 'node:path';
 import os from 'node:os';
 import { readFileSync, statSync } from 'node:fs';
@@ -182,11 +182,11 @@ async function createWindow(): Promise<void> {
   };
 
   // macOS Edit menu (§7.7): route ⌘C/⌘V/⌘A to our renderer actions so they don't operate on xterm's
-  // hidden native selection. Off darwin buildMenuTemplate returns null and we leave the default menu.
+  // hidden native selection. Off darwin the template is null and applyApplicationMenu CLEARS the
+  // default menu (§7.6) so its ⌘0 "Reset Zoom" can't preempt the openSettings chord on Linux/Windows.
   // TODO(keymap): the menu-accelerator→IPC dispatch is macOS-only, so it has no Linux e2e; the pure
-  // template (appMenu.test) and the renderer router (menuActions.test) are unit/DOM covered.
-  const menuTemplate = buildMenuTemplate(process.platform, (action) => send(CH.menuEdit, { action }));
-  if (menuTemplate) Menu.setApplicationMenu(Menu.buildFromTemplate(menuTemplate));
+  // template + install logic (appMenu.test) and the renderer router (menuActions.test) are unit/DOM covered.
+  applyApplicationMenu(buildMenuTemplate(process.platform, (action) => send(CH.menuEdit, { action })), Menu);
 
   // S5 (§24.2.2): the flow's derived in-progress status (n/m done + agent activity) is PUSHED to
   // the strip — main fires flow:onStateChanged on any flow-relevant change (a todo mutated, the
