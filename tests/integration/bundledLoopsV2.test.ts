@@ -33,11 +33,14 @@ describe('bundled §27 loop-def tree (AC 1 / §27.15)', () => {
     });
   }
 
-  it('groom-loop and plan-loop declare different gate options (differing defs, AC 1)', () => {
+  it('groom-loop and plan-loop declare different approve side-effects (differing defs, AC 1 / §27.13)', () => {
+    // Post-N5 the shipped defs are all approve-only, so they differ by their §27.13 approve SIDE-EFFECT
+    // (groom → update-issue-body, plan → PR non-draft flip), not by their option list.
     const g = resolveLoopDefV2('groom-loop', { tiers: { operator: null, appBundled: SOURCE_TREE }, repoDir });
     const p = resolveLoopDefV2('plan-loop', { tiers: { operator: null, appBundled: SOURCE_TREE }, repoDir });
     expect(g.ok && p.ok).toBe(true);
     if (!g.ok || !p.ok) return;
-    expect(g.def.gate.map((x) => x.option)).not.toEqual(p.def.gate.map((x) => x.option));
+    const actions = (r: typeof g): unknown[] => (r.ok ? r.def.gate.flatMap((x) => x.sideEffects.map((se) => se.args.action)) : []);
+    expect(actions(g)).not.toEqual(actions(p));
   });
 });

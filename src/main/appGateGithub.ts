@@ -31,9 +31,27 @@ const EXEC_TIMEOUT_MS = 60_000;
  *  non-draft; update-issue-body / publish-pr-body publish the loop's output artifact as the issue/PR body via
  *  `--body-file` (the confined artifact path). An action whose required input is absent throws so the caller
  *  records a best-effort failure rather than issuing a malformed call. */
-export function createAppGateGitHub(_runGh: GhRunner): RunAppGateSideEffect {
-  // TODO(N5): map the declared action + ctx to the §27.13 gh argv.
-  return async () => {};
+export function createAppGateGitHub(runGh: GhRunner): RunAppGateSideEffect {
+  return async (action, ctx) => {
+    switch (action) {
+      case 'mark-ready':
+        if (ctx.pr === null) throw new Error('no PR to mark ready');
+        await runGh(['pr', 'ready', String(ctx.pr)]);
+        return;
+      case 'update-issue-body':
+        if (ctx.ticket === null) throw new Error('no issue to publish the body to');
+        if (ctx.bodyFile === null) throw new Error('no body artifact to publish');
+        await runGh(['issue', 'edit', String(ctx.ticket), '--body-file', ctx.bodyFile]);
+        return;
+      case 'publish-pr-body':
+        if (ctx.pr === null) throw new Error('no PR to publish the body to');
+        if (ctx.bodyFile === null) throw new Error('no body artifact to publish');
+        await runGh(['pr', 'edit', String(ctx.pr), '--body-file', ctx.bodyFile]);
+        return;
+      default:
+        throw new Error(`unknown approve side-effect action: ${action}`);
+    }
+  };
 }
 
 /** The production port: shells `gh` via execFile (CWE-78 — every value a distinct argv element, never a shell

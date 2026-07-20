@@ -465,8 +465,13 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
       // run-less view AND the §27 terminal consolidator gate carry the same gateOptions display-only
       // (loopGateActionable false) — the read-only row above shows them, but no clickable control renders;
       // the refusal guard is at the operation.
-      // TODO(N5): route a §27 gate (a view carrying appTurn) to the identity-carrying appGateDecision.
-      if (loop.gateOptions && loop.gateOptions.length > 0 && loopGateActionable(loop) && deps.gateDecision) {
+      // §27.9/N5 — a §27 gate view carries `appTurn` (the step+turn identity); its decision routes to the
+      // identity-carrying appGateDecision, NEVER the §26 gateDecision (AC8). A §26 gate carries no appTurn and
+      // routes to gateDecision as before. The buttons render only when the matching service is injected (an
+      // un-wired control would be inert, WCAG 4.1.2).
+      const appTurn = loop.appTurn;
+      const decideDep = appTurn ? deps.appGateDecision : deps.gateDecision;
+      if (loop.gateOptions && loop.gateOptions.length > 0 && loopGateActionable(loop) && decideDep) {
         const gate = doc.createElement('div');
         gate.className = 'gatebar';
         // A labelled group so a screen-reader user hears these controls' shared purpose, not three loose
@@ -482,7 +487,9 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
           // The visible label stays compact ("changes"); the accessible name is the unabbreviated option
           // so AT does not announce a bare, ambiguous verb (WCAG 2.4.6; label-in-name 2.5.3).
           btn.setAttribute('aria-label', option.replace('-', ' '));
-          btn.addEventListener('click', () => deps.gateDecision?.(option));
+          btn.addEventListener('click', () =>
+            appTurn ? deps.appGateDecision?.(appTurn.step, appTurn.turnKey, option) : deps.gateDecision?.(option),
+          );
           gate.append(btn);
         }
         body.append(gate);

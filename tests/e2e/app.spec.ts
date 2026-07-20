@@ -3871,6 +3871,112 @@ test('a §27 review-and-fix report omitting a roster persona drives one retry th
   rmSync(binDir, { recursive: true, force: true });
 });
 
+// §27.9/§27.13 / N5 — a two-step flow whose first step is an app-namespace plan-loop declaring a `pr` typed
+// input, plus a trailing manual step so "the flow advances off the loop step" is observable. The flow-state is
+// pre-seeded with the pr resolved (not_started, so Start still drives the loop) so plan-loop's approve
+// side-effect (`gh pr ready <pr>`, §27.13) has a PR to flip.
+function seedAppGateFlowRepo(prefix: string, pr: string | null): string {
+  const dir = mkdtempSync(join(tmpdir(), prefix));
+  mkdirSync(join(dir, '.git'), { recursive: true });
+  mkdirSync(join(dir, '.agent-terminal'), { recursive: true });
+  writeFileSync(
+    join(dir, '.agent-terminal', 'flow.yaml'),
+    'name: v2-gate\nsteps:\n  - id: plan\n    kind: loop\n    loop: plan-loop\n    loop_namespace: app\n    inputs:\n      - name: pr\n        type: pr\n  - id: done\n    kind: manual\n',
+  );
+  const inputs = pr === null ? '' : `inputs:\n  pr: "${pr}"\n`;
+  writeFileSync(join(dir, '.agent-terminal', 'flow-state.yaml'), `step: plan\nstatus: not_started\n${inputs}`);
+  return dir;
+}
+
+const readGhLog = (logFile: string): string => (existsSync(logFile) ? readFileSync(logFile, 'utf8') : '');
+
+test('a §27 app plan gate renders ONLY approve, and approve runs the loop\'s gh side-effect → terminal accept → the flow advances (AC1,2,7)', { tag: '@ownapp' }, async () => {
+  const repo = seedAppGateFlowRepo('agent-term-e2e-v2-approve-', '77');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-v2-approve-home-'));
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-v2-approve-bin-');
+  seedFakeAgentV2(binDir, { stepId: 'plan', artifactRel: APP_ARTIFACT_REL, work: 'complete', review: 'full' });
+  // A prior §26 run sits on disk: the §27 approve must never touch it (AC8 — the §26 executor never fires).
+  const stateFile = join(repo, '.agent-loop', 'state.yaml');
+  const priorState = 'schema_version: 4\nstatus: planning\niteration: 3\npr: 42\nbranch: feat/prior\nbound_loop: plan-loop\nlinked_issues:\n  - 7\n';
+  mkdirSync(join(repo, '.agent-loop'), { recursive: true });
+  writeFileSync(stateFile, priorState);
+  app = await electron.launch({
+    args: ['out/main/index.js'],
+    env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100', CLAUDE_CONFIG_DIR: exampleConfigDir, PATH: `${binDir}:${process.env.PATH}`, FAKE_GHGIT_LOG: logFile },
+  });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await typeCommand(`cd "${repo}"`);
+  await expect(flowControl()).toHaveText('Start', { timeout: 10_000 });
+  await typeCommand('fake-agent');
+  await flowControl().click(); // enter the app plan-loop step → work → review → consolidate → the clean gate
+
+  await expect.poll(() => readIf(appRunState(repo)), { timeout: 40_000 }).toContain('verdict: clean');
+  expect(readIf(appRunState(repo))).toContain('turn_key: consolidate-plan');
+
+  // AC1 — the actionable gate renders ONLY approve (the narrowed def), not request-changes/impasse.
+  await loopReadout().click();
+  await expect(loopPanel().locator('[data-gate-option="approve"]')).toBeVisible({ timeout: 10_000 });
+  expect(await loopPanel().locator('[data-gate-option]').count()).toBe(1);
+  await expect(loopPanel().locator('[data-gate-option="request-changes"]')).toHaveCount(0);
+  await expect(loopPanel().locator('[data-gate-option="impasse"]')).toHaveCount(0);
+
+  await loopPanel().locator('[data-gate-option="approve"]').click();
+
+  // AC2 — approve runs the bound loop's declared gh side-effect (plan → PR non-draft flip) on the pr the flow
+  // input resolved, reaches the terminal accept, and the flow advances off the loop step to the manual step.
+  await expect.poll(() => readGhLog(logFile), { timeout: 15_000 }).toContain('gh pr ready 77');
+  await expect.poll(() => readIf(appRunState(repo)), { timeout: 10_000 }).toContain('status: accepted');
+  await expect(page.locator('#flow-strip .sect')).toContainText('step 2 / 2', { timeout: 10_000 }); // advanced off the loop step
+
+  // AC8 — the §26 state.yaml is byte-for-byte unchanged: the §27 approve never fired the §26 executor.
+  expect(readFileSync(stateFile, 'utf8')).toBe(priorState);
+
+  await app.close();
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+  rmSync(binDir, { recursive: true, force: true });
+});
+
+test('a failed §27 approve side-effect is surfaced and the flow still reaches its terminal accept — never a strand (AC3)', { tag: '@ownapp' }, async () => {
+  // No pr resolved → plan-loop's mark-ready has no PR to flip → the side-effect fails best-effort.
+  const repo = seedAppGateFlowRepo('agent-term-e2e-v2-approvefail-', null);
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-v2-approvefail-home-'));
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-v2-approvefail-bin-');
+  seedFakeAgentV2(binDir, { stepId: 'plan', artifactRel: APP_ARTIFACT_REL, work: 'complete', review: 'full' });
+  app = await electron.launch({
+    args: ['out/main/index.js'],
+    env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100', CLAUDE_CONFIG_DIR: exampleConfigDir, PATH: `${binDir}:${process.env.PATH}`, FAKE_GHGIT_LOG: logFile },
+  });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await typeCommand(`cd "${repo}"`);
+  await expect(flowControl()).toHaveText('Start', { timeout: 10_000 });
+  await typeCommand('fake-agent');
+  await flowControl().click();
+
+  await expect.poll(() => readIf(appRunState(repo)), { timeout: 40_000 }).toContain('verdict: clean');
+
+  await loopReadout().click();
+  await expect(loopPanel().locator('[data-gate-option="approve"]')).toBeVisible({ timeout: 10_000 });
+  await loopPanel().locator('[data-gate-option="approve"]').click();
+
+  // AC3 — the failure is surfaced (the blocking loop-error dialog), yet the terminal accept is NOT aborted:
+  // the run reaches `accepted` and the flow advances, so the step is never stranded.
+  const errorDialog = page.locator('#flow-error-host .flow-modal');
+  await expect(errorDialog).toBeVisible({ timeout: 15_000 });
+  await expect(errorDialog).toContainText('side-effect failed');
+  await expect.poll(() => readIf(appRunState(repo)), { timeout: 10_000 }).toContain('status: accepted');
+  await expect(page.locator('#flow-strip .sect')).toContainText('step 2 / 2', { timeout: 10_000 }); // advanced despite the failure
+
+  await app.close();
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+  rmSync(binDir, { recursive: true, force: true });
+});
+
 test('a malformed/unresolvable §27 def surfaces its reason and the flow keeps a route off the step (§27.15 / AC 6)', { tag: '@ownapp' }, async () => {
   const repo = seedAppLoopFlowRepo('agent-term-e2e-v2-fail-', 'no-such-v2-loop');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-v2-fail-home-'));

@@ -11,9 +11,10 @@
 // redo / polish are declared by later slices' defs; until then an undeclared option is inert here.
 
 import type { GateDecisionOption } from '../shared/ipc';
+import { gateDecisionAuditCmd } from '../shared/audit';
 import type { AppLoopRunState } from './appLoopState';
 import type { LoopDefV2, LoopDefV2Result } from './loopDefV2';
-import type { RunAppGateSideEffect } from './appGateGithub';
+import type { AppGateSideEffectCtx, RunAppGateSideEffect } from './appGateGithub';
 
 /** The refs (§24.2.3 T7) an approve side-effect acts on, resolved from the flow view — a §27 step sources
  *  these only from the flow's typed inputs, never a §26 state.yaml (§27.15). */
@@ -45,11 +46,57 @@ export interface AppGateDecisionDeps {
  *  unless the persisted gate matches that identity, is AT the gate (a verdict reached), and the option is one
  *  the bound def declares. Sub-ticket 1 implements `approve`; other declared options land with their slices. */
 export async function runAppGateDecision(
-  _repoDir: string,
-  _step: string,
-  _turnKey: string,
-  _option: GateDecisionOption,
-  _deps: AppGateDecisionDeps,
+  repoDir: string,
+  step: string,
+  turnKey: string,
+  option: GateDecisionOption,
+  deps: AppGateDecisionDeps,
 ): Promise<void> {
-  // TODO(N5): validate the identity + option, run the declared side-effect, persist the accept, advance.
+  const run = deps.readRunState(repoDir);
+  // §6/AC7 — act only on the named step+turn, and only when it is AT the gate (a completed consolidator turn
+  // whose verdict was reached). A decision for a different step/turn, or one that isn't at a gate, is inert.
+  if (!run || run.step !== step || run.turnKey !== turnKey) return;
+  if (run.status !== 'complete' || run.verdict === undefined) return;
+
+  const r = deps.resolveDef(repoDir, run.loop);
+  if (!r.ok) return;
+  // AC9 — the option is validated against the bound def's declared gate options at the operation, never the
+  // (widened) wire type. An option the def does not declare cannot execute here.
+  const gateOpt = r.def.gate.find((g) => g.option === option);
+  if (!gateOpt) return;
+  // Sub-ticket 1 implements approve; request-changes/redo/polish are declared and handled by later slices.
+  if (option !== 'approve') return;
+
+  // Terminal accept FIRST (before the async side-effect): mark the loop accepted and surface it so a raced
+  // second approve reads a non-gate state and is inert. Best-effort — a persist failure must not strand the
+  // step, so the accept/advance still proceed (§27.13 / AC3).
+  const accepted: AppLoopRunState = { loop: run.loop, step: run.step, turnKey: run.turnKey, status: 'accepted' };
+  try {
+    deps.persistAccept(repoDir, accepted);
+  } catch (e) {
+    void (e instanceof Error ? e.message : String(e));
+  }
+  deps.onViewChanged();
+
+  // Run each declared `gh` side-effect out of band, data-driven from the bound def. A failure is surfaced +
+  // audited but never aborts the terminal accept (§27.13 / AC3).
+  const refs = deps.refs(repoDir);
+  const bodyFile = deps.bodyFile(r.def);
+  const ctx: AppGateSideEffectCtx = { pr: refs.pr, ticket: refs.ticket, bodyFile };
+  for (const se of gateOpt.sideEffects) {
+    if (se.kind !== 'gh') continue;
+    const action = typeof se.args.action === 'string' ? se.args.action : '';
+    try {
+      await deps.runSideEffect(action, ctx);
+      deps.audit(repoDir, gateDecisionAuditCmd('side-effect', option, action), 0);
+    } catch (e) {
+      const reason = e instanceof Error ? e.message : String(e);
+      deps.audit(repoDir, gateDecisionAuditCmd('side-effect-failed', option, `${action}: ${reason}`), 1);
+      deps.emitError(`approve side-effect failed: ${reason}`);
+    }
+  }
+
+  deps.audit(repoDir, gateDecisionAuditCmd('decision', option), 0);
+  deps.advanceFlow(repoDir);
+  deps.onViewChanged();
 }
