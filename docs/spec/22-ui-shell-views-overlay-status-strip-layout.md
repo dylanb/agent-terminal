@@ -2,7 +2,7 @@
 
 ### 22.1 Three full-screen views (D26)
 
-- **1 Terminal** (work with the agent), **2 Artifacts** (file tree + viewer, §20), and the **Settings** view (§7.7, reached via the gear / ⌘,). Hotkey switching; each view's state is preserved across switches. **Amended v2.132:** the originally-planned **view 3 Todos + Status** was removed — todos and captures live in the **drawer overlay** (§22.2) and status on the **rail status strip** (§22.3), so there is no standalone Todos view and no ⌘3 chord.
+- **1 Terminal** (work with the agent), **2 Artifacts** (file tree + viewer, §20), and the **Settings** view (§7.7, reached via the gear / ⌘0). Hotkey switching; each view's state is preserved across switches. **Amended v2.132:** the originally-planned **view 3 Todos + Status** was removed — todos and captures live in the **drawer overlay** (§22.2) and status on the **rail status strip** (§22.3), so there is no standalone Todos view and no ⌘3 chord.
 
 ### 22.2 Tabbed quick-send overlay (D26/D40)
 
@@ -67,7 +67,7 @@ sequenceDiagram
 ### 22.4 Layout is data, not code (D17/D28/D36)
 
 - The UI is built from **placement-agnostic widgets** (terminal, viewer, file tree, todos, capture, gate panel, status strip, overlay) positioned by a **layout config** at `~/.config/agent-terminal/layout.json`: which view holds which widgets, what the overlay shows, the hotkeys. **No runtime drag-dock** in v1 — changing layout = editing config, not rewriting widgets. This is a **first-class architectural constraint** (clean widget boundaries), not a nice-to-have.
-- Hotkey defaults: **Ctrl/Cmd+1/2** (views) + **Ctrl/Cmd+K** (overlay), remappable via the config (⌘3 was retired with view 3, v2.132).
+- Hotkey defaults: **Ctrl/Cmd+1/2** (views) + **Ctrl/Cmd+9** (overlay) + **Ctrl/Cmd+0** (Settings), remappable via the config (⌘3 was retired with view 3, v2.132; the overlay/Settings chords moved off ⌘K / ⌘, to the digit set in v2.139, §24.1C).
 
 ---
 

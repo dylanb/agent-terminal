@@ -41,7 +41,7 @@ const keymap = createKeymapController({
 });
 const terminalClipboard = wireSelection(term, () => keymap.current());
 // macOS Edit-menu actions (§7.7) route to the terminal's clipboard actions, or a focused input's
-// native editing. Off macOS this never fires (no menu is installed).
+// native editing. Off macOS the menu carries no Edit routing, so this never fires.
 window.term.onMenuAction((action) => runMenuEditAction(action, document, terminalClipboard, () => window.term.clipboardRead()));
 keyboardUi = createKeyboardSettings(document.getElementById('kb-settings-view')!, {
   getProfile: () => keymap.profile(),

@@ -62,6 +62,13 @@ const stateOf = (i: number) => {
   return cl.contains('active') ? 'active' : cl.contains('done') ? 'done' : 'todo';
 };
 const control = () => host.querySelector<HTMLButtonElement>('.flow-control');
+const segs = () => [...host.querySelectorAll<HTMLElement>('.flow.vert .seg')];
+// A connector bar touches the current step when the active station is one of its two neighbours in
+// the interleaved station/seg column.
+const segTouchesActive = (seg: HTMLElement): boolean =>
+  [seg.previousElementSibling, seg.nextElementSibling].some(
+    (n) => n instanceof HTMLElement && n.classList.contains('stn') && n.classList.contains('active'),
+  );
 
 describe('flow status strip (§22.3 / §24.2.2)', () => {
   it('renders nothing until a repo key is known (follows cwd)', async () => {
@@ -80,6 +87,31 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     expect([stateOf(0), stateOf(1), stateOf(2)]).toEqual(['active', 'todo', 'todo']);
     expect(sect()).toBe('Flow — step 1 / 3'); // synthetic-inclusive: the bookends count toward the total
     expect(control()!.textContent).toBe('Start');
+  });
+
+  it('draws connector bars only on the current step (the active station), tightening the rail', async () => {
+    const deps = fakeFlow();
+    const strip = createFlowStrip(host, deps);
+    strip.onRepoChanged('/repo');
+
+    // not_started → active is the "Not started" bookend (first station): one connector below it, none
+    // elsewhere in the [active, todo, todo] rail.
+    await vi.waitFor(() => expect(stateOf(0)).toBe('active'));
+    expect(segs()).toHaveLength(1);
+    expect(segs().every(segTouchesActive)).toBe(true);
+
+    // in_progress → the active station is the interior step: connectors above AND below it — both of
+    // the rail's two inter-station gaps are drawn.
+    (control() as HTMLButtonElement).click();
+    await vi.waitFor(() => expect(stateOf(1)).toBe('active'));
+    expect(segs()).toHaveLength(2);
+    expect(segs().every(segTouchesActive)).toBe(true);
+
+    // done → the active station is the "Completed" bookend (last station): one connector above it.
+    (control() as HTMLButtonElement).click();
+    await vi.waitFor(() => expect(stateOf(2)).toBe('active'));
+    expect(segs()).toHaveLength(1);
+    expect(segs().every(segTouchesActive)).toBe(true);
   });
 
   it('discards a late refresh from the prior repo after the new repo has rendered', async () => {

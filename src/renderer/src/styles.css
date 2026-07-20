@@ -77,8 +77,6 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible { outline:2px so
 .app.viewer-fullscreen > .rail, .app.viewer-fullscreen > .drawer, .app.viewer-fullscreen > .loop-panel { display:none; }
 
 .rail { background:var(--card); border-right:1px solid var(--hair); display:flex; flex-direction:column; padding:16px 14px; overflow:auto; }
-.rail .mark { font-weight:600; font-size:15px; margin-bottom:20px; white-space:nowrap; }
-.rail .mark .sig { color:var(--signal); }
 .rail .sect { text-transform:uppercase; letter-spacing:.14em; font-size:9px; color:var(--dim); margin:0 0 9px; }
 .rail .blk { margin-bottom:18px; padding-bottom:18px; border-bottom:1px solid var(--hair); }
 .navlist { display:flex; flex-direction:column; gap:2px; }

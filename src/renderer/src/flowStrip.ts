@@ -333,7 +333,8 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
     const activeIndex = railStn.findIndex((s) => s.st === 'active');
     host.append(header(doc, `Flow — step ${activeIndex + 1} / ${railStn.length}`));
 
-    // The station rail, 100%-fidelity to the §24.1 mockup (design/shell/converged.html).
+    // The station rail (§24.1). Deliberately deviates from that section's fully-connected mockup to
+    // keep the left rail tight.
     const rail = doc.createElement('div');
     rail.className = 'flow vert';
     railStn.forEach((s, i) => {
@@ -346,7 +347,8 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
       name.textContent = s.name;
       stn.append(dot, name);
       rail.append(stn);
-      if (i < railStn.length - 1) {
+      const next = railStn[i + 1];
+      if (next && (s.st === 'active' || next.st === 'active')) {
         const seg = doc.createElement('span');
         seg.className = s.st === 'done' ? 'seg' : 'seg future';
         rail.append(seg);

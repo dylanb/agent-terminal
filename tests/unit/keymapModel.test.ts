@@ -80,10 +80,13 @@ describe('keymap model — eventToChord (§7.7 rebinding capture)', () => {
 });
 
 describe('keymap model — app navigation actions (§7.7 / §24.1C)', () => {
-  it('binds drawer + view switching per profile, keeping Ctrl+K free for readline on PC', () => {
-    expect(matchChord(keydown({ key: 'k', metaKey: true }), MAC_DEFAULTS)).toBe('toggleDrawer');
-    expect(matchChord(keydown({ key: 'k', ctrlKey: true, shiftKey: true }), PC_DEFAULTS)).toBe('toggleDrawer');
-    // Bare Ctrl+K is NOT the drawer on PC — it passes through as readline kill-line.
+  it('binds the Quick-send drawer to ⌘9 / Ctrl+9 and view switching per profile', () => {
+    expect(matchChord(keydown({ key: '9', metaKey: true }), MAC_DEFAULTS)).toBe('toggleDrawer');
+    expect(matchChord(keydown({ key: '9', ctrlKey: true }), PC_DEFAULTS)).toBe('toggleDrawer');
+    // The old drawer chords are retired — ⌘K / Ctrl+Shift+K now pass through, and bare Ctrl+K stays
+    // free for readline kill-line on PC.
+    expect(matchChord(keydown({ key: 'k', metaKey: true }), MAC_DEFAULTS)).toBeNull();
+    expect(matchChord(keydown({ key: 'k', ctrlKey: true, shiftKey: true }), PC_DEFAULTS)).toBeNull();
     expect(matchChord(keydown({ key: 'k', ctrlKey: true }), PC_DEFAULTS)).toBeNull();
     expect(matchChord(keydown({ key: '1', ctrlKey: true }), PC_DEFAULTS)).toBe('viewTerminal');
     expect(matchChord(keydown({ key: '2', metaKey: true }), MAC_DEFAULTS)).toBe('viewArtifacts');
@@ -93,9 +96,12 @@ describe('keymap model — app navigation actions (§7.7 / §24.1C)', () => {
 });
 
 describe('keymap model — open settings action (§7.7)', () => {
-  it('binds Cmd+, on macOS and Ctrl+, on PC, and is a shell-owned app action', () => {
-    expect(matchChord(keydown({ key: ',', metaKey: true }), MAC_DEFAULTS)).toBe('openSettings');
-    expect(matchChord(keydown({ key: ',', ctrlKey: true }), PC_DEFAULTS)).toBe('openSettings');
+  it('binds Cmd+0 on macOS and Ctrl+0 on PC, and is a shell-owned app action', () => {
+    expect(matchChord(keydown({ key: '0', metaKey: true }), MAC_DEFAULTS)).toBe('openSettings');
+    expect(matchChord(keydown({ key: '0', ctrlKey: true }), PC_DEFAULTS)).toBe('openSettings');
+    // The old ⌘, / Ctrl+, Preferences chord is retired — it now passes through.
+    expect(matchChord(keydown({ key: ',', metaKey: true }), MAC_DEFAULTS)).toBeNull();
+    expect(matchChord(keydown({ key: ',', ctrlKey: true }), PC_DEFAULTS)).toBeNull();
     expect(APP_ACTION_IDS).toContain('openSettings');
     expect(KEY_ACTION_IDS).toContain('openSettings');
   });

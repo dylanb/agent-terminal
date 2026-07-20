@@ -436,28 +436,34 @@ test('rebinding the copy action to a custom chord takes effect (§7.7)', async (
     .toContain('rebindme-5');
 });
 
-test('the drawer toggles on Ctrl+Shift+K; bare Ctrl+K is left to the terminal as kill-line (§7.7)', async () => {
+test('the drawer toggles on Ctrl+9 (Quick-send); bare Ctrl+K is left to the terminal as kill-line (§7.7)', async () => {
+  // The rail wordmark is gone (§24.1C tidy-up) and the Quick-send chord label reads ⌘9.
+  await expect(page.locator('.rail .mark')).toHaveCount(0);
+  await expect(page.locator('#qs')).toContainText('⌘9');
+  await expect(page.locator('.dhint')).toContainText('⌘9');
+  await expect(page.locator('[data-viewbtn="4"]')).toContainText('⌘0');
+
   const appEl = page.locator('#app');
   const isOpen = () => appEl.evaluate((el) => el.classList.contains('drawer-open'));
   await page.locator('.xterm-screen').click();
   const before = await isOpen();
   await page.keyboard.press('Control+K'); // readline kill-line — must NOT toggle the drawer
   expect(await isOpen()).toBe(before);
-  await page.keyboard.press('Control+Shift+K'); // the PC-profile drawer chord
+  await page.keyboard.press('Control+9'); // the Quick-send drawer chord
   expect(await isOpen()).toBe(!before);
 });
 
-test('the Keyboard settings view opens from the gear and Ctrl+,, rebinds live, and blocks conflicts (§7.7)', async () => {
+test('the Keyboard settings view opens from the gear and Ctrl+0, rebinds live, and blocks conflicts (§7.7)', async () => {
   // Opens from the rail gear → view 4.
   await page.locator('[data-viewbtn="4"]').click();
   await expect(page.locator('[data-viewpane="4"]')).toBeVisible();
   await expect(page.locator('#kb-settings-view')).toContainText('Keyboard');
   await expect(page.locator('#kb-settings-view')).toContainText('Clipboard');
 
-  // Return to the terminal, then reopen via the keyboard chord (Linux → PC profile → Ctrl+,).
+  // Return to the terminal, then reopen via the keyboard chord (Linux → PC profile → Ctrl+0).
   await page.locator('[data-viewbtn="1"]').click();
   await expect(page.locator('[data-viewpane="4"]')).toBeHidden();
-  await page.keyboard.press('Control+Comma');
+  await page.keyboard.press('Control+0');
   await expect(page.locator('[data-viewpane="4"]')).toBeVisible();
 
   // Rebind "Word left" to Ctrl+Shift+B — its keycaps update live.
@@ -1559,8 +1565,8 @@ test('the quick-send drawer docks and undocks without a scrim, keeping the termi
   const appEl = page.locator('#app');
   await expect(appEl).toHaveClass(/drawer-open/); // docked in setup (it starts closed, §22.2)
 
-  // Ctrl+Shift+K undocks it (the PC drawer chord, §7.7); the terminal pane stays on screen (no scrim).
-  await page.keyboard.press('Control+Shift+K');
+  // Ctrl+9 undocks it (the Quick-send drawer chord, §7.7); the terminal pane stays on screen (no scrim).
+  await page.keyboard.press('Control+9');
   await expect(appEl).not.toHaveClass(/drawer-open/);
   await expect(page.locator('.scrim, .backdrop')).toHaveCount(0);
   await expect(page.locator('#terminal')).toBeVisible();
@@ -1572,15 +1578,15 @@ test('the quick-send drawer docks and undocks without a scrim, keeping the termi
   await expect(appEl).not.toHaveClass(/drawer-open/);
 });
 
-test('Ctrl+Shift+K toggles the drawer even while the terminal is focused (§22.4 / §7.7)', async () => {
+test('Ctrl+9 toggles the drawer even while the terminal is focused (§22.4 / §7.7)', async () => {
   const appEl = page.locator('#app');
   await page.locator('.xterm-screen').click();
   await expect(appEl).toHaveClass(/drawer-open/);
 
   // The shell intercepts the chord (capture phase) ahead of xterm, so the hotkey still reaches it.
-  await page.keyboard.press('Control+Shift+K');
+  await page.keyboard.press('Control+9');
   await expect(appEl).not.toHaveClass(/drawer-open/);
-  await page.keyboard.press('Control+Shift+K');
+  await page.keyboard.press('Control+9');
   await expect(appEl).toHaveClass(/drawer-open/);
 });
 
@@ -1589,7 +1595,7 @@ test('the terminal refits its PTY when the drawer docks/undocks (§7.1)', async 
   await expect(termRows()).toContainText(/cols-docked=\d+/);
   const docked = Number((await termRows().innerText()).match(/cols-docked=(\d+)/)![1]);
 
-  // Use the close button, not ⌘K: the terminal has focus, so xterm would consume the chord. Undocking
+  // Use the close button, not ⌘9: the terminal has focus, so xterm would consume the chord. Undocking
   // widens the terminal column and the PTY must follow (§7.1).
   await page.locator('#dclose').click();
   await expect

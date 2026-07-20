@@ -37,7 +37,7 @@ describe('keyboard settings view organism (§7.7)', () => {
     expect(host.textContent).toContain('Navigation');
     expect(row('copy')).toBeTruthy();
     expect(row('deleteLine')).toBeTruthy();
-    expect(row('openSettings')).toBeTruthy(); // ⌘, is a rebindable Navigation row
+    expect(row('openSettings')).toBeTruthy(); // ⌘0 is a rebindable Navigation row
   });
 
   it('renders each chord as keycaps using the mac glyph set', () => {

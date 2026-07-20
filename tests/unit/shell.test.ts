@@ -105,14 +105,14 @@ describe('shell controller (§24.1C — views, hotkeys, docked drawer, theme)', 
       expect(pane('1').classList.contains('on')).toBe(false);
 
       shell.setView('1');
-      key(','); // ⌘, (mac default) → openSettings → view 4
+      key('0'); // ⌘0 (mac default) → openSettings → view 4
       expect(shell.getView()).toBe('4');
     });
 
-    it('opens Settings on Ctrl+, under the PC profile (§7.7)', () => {
+    it('opens Settings on Ctrl+0 under the PC profile (§7.7)', () => {
       shell.dispose();
       shell = createShell(app, { getKeymap: () => resolveKeymap('pc') });
-      document.dispatchEvent(new KeyboardEvent('keydown', { key: ',', ctrlKey: true, cancelable: true }));
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: '0', ctrlKey: true, cancelable: true }));
       expect(shell.getView()).toBe('4');
     });
 
@@ -137,7 +137,7 @@ describe('shell controller (§24.1C — views, hotkeys, docked drawer, theme)', 
 
       it('does not toggle the drawer — it is chrome behind the scrim too', () => {
         const before = app.classList.contains('drawer-open');
-        key('k');
+        key('9'); // ⌘9 = toggleDrawer
         expect(app.classList.contains('drawer-open')).toBe(before);
       });
 
@@ -145,7 +145,7 @@ describe('shell controller (§24.1C — views, hotkeys, docked drawer, theme)', 
         modal.remove();
         shell.setView('1');
         document.body.append(modal);
-        key(',');
+        key('0'); // ⌘0 = openSettings
         expect(shell.getView()).toBe('1');
       });
 
@@ -304,20 +304,20 @@ describe('shell controller (§24.1C — views, hotkeys, docked drawer, theme)', 
       expect(document.querySelector('.scrim, .backdrop')).toBeNull();
     });
 
-    it('toggles on Cmd+K under the mac profile', () => {
-      key('k');
+    it('toggles on Cmd+9 (Quick-send) under the mac profile', () => {
+      key('9');
       expect(shell.isDrawerOpen()).toBe(false);
-      key('K');
+      key('9');
       expect(shell.isDrawerOpen()).toBe(true);
     });
 
-    it('under the PC profile uses Ctrl+Shift+K and leaves bare Ctrl+K for readline kill-line (§7.7)', () => {
+    it('under the PC profile uses Ctrl+9 and leaves bare Ctrl+K for readline kill-line (§7.7)', () => {
       shell.dispose();
       shell = createShell(app, { getKeymap: () => resolveKeymap('pc') }); // starts open from markup
       document.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', ctrlKey: true, cancelable: true, bubbles: true }));
-      expect(shell.isDrawerOpen()).toBe(true); // bare Ctrl+K is NOT the drawer — unchanged
-      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'K', ctrlKey: true, shiftKey: true, cancelable: true, bubbles: true }));
-      expect(shell.isDrawerOpen()).toBe(false); // Ctrl+Shift+K toggled it
+      expect(shell.isDrawerOpen()).toBe(true); // bare Ctrl+K is NOT the drawer — left to readline
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: '9', ctrlKey: true, cancelable: true, bubbles: true }));
+      expect(shell.isDrawerOpen()).toBe(false); // Ctrl+9 toggled it
     });
 
     it('marks the drawer hidden when closed so its controls leave the tab order (§22.2)', () => {

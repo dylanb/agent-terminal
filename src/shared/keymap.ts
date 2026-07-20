@@ -97,10 +97,10 @@ export const MAC_DEFAULTS: Keymap = {
   paste: [{ key: 'v', meta: true }],
   selectAll: [{ key: 'a', meta: true }],
   deleteLine: [{ key: 'Backspace', meta: true }], // Cmd+Backspace = delete to line start (macOS)
-  toggleDrawer: [{ key: 'k', meta: true }],
+  toggleDrawer: [{ key: '9', meta: true }],
   viewTerminal: [{ key: '1', meta: true }],
   viewArtifacts: [{ key: '2', meta: true }],
-  openSettings: [{ key: ',', meta: true }], // ⌘, — the macOS Preferences convention
+  openSettings: [{ key: '0', meta: true }],
   ...MOTIONS,
 };
 
@@ -109,11 +109,11 @@ export const PC_DEFAULTS: Keymap = {
   paste: [{ key: 'v', ctrl: true, shift: true }],
   selectAll: [{ key: 'a', ctrl: true, shift: true }],
   deleteLine: [], // no portable PC chord — users press Ctrl+U directly
-  // Ctrl+Shift+K (not Ctrl+K, which is readline kill-line) for the drawer; Ctrl+digit for views.
-  toggleDrawer: [{ key: 'k', ctrl: true, shift: true }],
+  // Ctrl+digit throughout — a digit never collides with a readline chord, so bare Ctrl+K stays kill-line.
+  toggleDrawer: [{ key: '9', ctrl: true }],
   viewTerminal: [{ key: '1', ctrl: true }],
   viewArtifacts: [{ key: '2', ctrl: true }],
-  openSettings: [{ key: ',', ctrl: true }], // Ctrl+, — the GTK/VS Code Preferences convention
+  openSettings: [{ key: '0', ctrl: true }],
   ...MOTIONS,
 };
 
