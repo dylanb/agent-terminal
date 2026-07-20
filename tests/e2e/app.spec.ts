@@ -3889,6 +3889,7 @@ function seedAppGateFlowRepo(prefix: string, pr: string | null): string {
 }
 
 const readGhLog = (logFile: string): string => (existsSync(logFile) ? readFileSync(logFile, 'utf8') : '');
+const appFlowState = (repo: string): string => join(repo, '.agent-terminal', 'flow-state.yaml');
 
 test('a §27 app plan gate renders ONLY approve, and approve runs the loop\'s gh side-effect → terminal accept → the flow advances (AC1,2,7)', { tag: '@ownapp' }, async () => {
   const repo = seedAppGateFlowRepo('agent-term-e2e-v2-approve-', '77');
@@ -3928,7 +3929,7 @@ test('a §27 app plan gate renders ONLY approve, and approve runs the loop\'s gh
   // input resolved, reaches the terminal accept, and the flow advances off the loop step to the manual step.
   await expect.poll(() => readGhLog(logFile), { timeout: 15_000 }).toContain('gh pr ready 77');
   await expect.poll(() => readIf(appRunState(repo)), { timeout: 10_000 }).toContain('status: accepted');
-  await expect(page.locator('#flow-strip .sect')).toContainText('step 2 / 2', { timeout: 10_000 }); // advanced off the loop step
+  await expect.poll(() => readIf(appFlowState(repo)), { timeout: 10_000 }).toContain('step: done'); // advanced off the loop step
 
   // AC8 — the §26 state.yaml is byte-for-byte unchanged: the §27 approve never fired the §26 executor.
   expect(readFileSync(stateFile, 'utf8')).toBe(priorState);
@@ -3969,7 +3970,7 @@ test('a failed §27 approve side-effect is surfaced and the flow still reaches i
   await expect(errorDialog).toBeVisible({ timeout: 15_000 });
   await expect(errorDialog).toContainText('side-effect failed');
   await expect.poll(() => readIf(appRunState(repo)), { timeout: 10_000 }).toContain('status: accepted');
-  await expect(page.locator('#flow-strip .sect')).toContainText('step 2 / 2', { timeout: 10_000 }); // advanced despite the failure
+  await expect.poll(() => readIf(appFlowState(repo)), { timeout: 10_000 }).toContain('step: done'); // advanced despite the failure
 
   await app.close();
   rmSync(repo, { recursive: true, force: true });
