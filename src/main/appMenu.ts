@@ -5,7 +5,7 @@
 // renderer decides terminal-vs-input by focus. Off darwin there is no such conflict, so we add no
 // menu and the renderer keymap (§7.5) owns the chords directly.
 
-import type { MenuItemConstructorOptions } from 'electron';
+import type { BrowserWindow, MenuItemConstructorOptions } from 'electron';
 import type { EditAction } from '../shared/ipc';
 
 export function buildMenuTemplate(
@@ -31,7 +31,23 @@ export function buildMenuTemplate(
         editItem('Select All', 'Cmd+A', 'selectAll'),
       ],
     },
-    { role: 'viewMenu' },
+    {
+      label: 'View',
+      submenu: [
+        { role: 'reload' },
+        { role: 'forceReload' },
+        { role: 'toggleDevTools' },
+        { type: 'separator' },
+        // "Actual Size" is a plain item, not the `resetZoom` role: that role (and `viewMenu`) binds ⌘0,
+        // which §7.7 reserves for openSettings — and on macOS a menu accelerator preempts the renderer,
+        // so the role would make ⌘0 reset zoom instead of opening Settings. Zoom in/out keep ⌘+/⌘-.
+        { label: 'Actual Size', click: (_item, win) => (win as BrowserWindow | undefined)?.webContents.setZoomLevel(0) },
+        { role: 'zoomIn' },
+        { role: 'zoomOut' },
+        { type: 'separator' },
+        { role: 'togglefullscreen' },
+      ],
+    },
     { role: 'windowMenu' },
   ];
 }

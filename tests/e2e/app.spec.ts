@@ -440,6 +440,7 @@ test('the drawer toggles on Ctrl+9 (Quick-send); bare Ctrl+K is left to the term
   // The rail wordmark is gone (§24.1C tidy-up) and the Quick-send chord label reads ⌘9.
   await expect(page.locator('.rail .mark')).toHaveCount(0);
   await expect(page.locator('#qs')).toContainText('⌘9');
+  await expect(page.locator('.dhint')).toContainText('⌘9');
   await expect(page.locator('[data-viewbtn="4"]')).toContainText('⌘0');
 
   const appEl = page.locator('#app');

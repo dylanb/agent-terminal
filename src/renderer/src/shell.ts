@@ -10,7 +10,7 @@ import { captureSubtreeFocus } from './dom';
 import { announceViewFocus, FOCUS_TERMINAL_EVENT } from './paneActions';
 import { matchChord, MAC_DEFAULTS, type Keymap } from '../../shared/keymap';
 
-export type ViewId = '1' | '2' | '4'; // 4 = the Settings view (§7.7), reached via the gear / ⌘,
+export type ViewId = '1' | '2' | '4'; // 4 = the Settings view (§7.7), reached via the gear / ⌘0
 
 export interface Shell {
   setView(v: ViewId): void;
@@ -208,9 +208,9 @@ export function createShell(root: HTMLElement, deps: ShellDeps = {}): Shell {
       return;
     }
     // App-nav chords come from the shared keymap (§7.7) so they follow the profile and are rebindable
-    // — and so the PC default keeps bare Ctrl+K free for the terminal (readline kill-line) by binding
-    // the drawer to Ctrl+Shift+K instead. Only the four app actions are claimed here; everything else
-    // (terminal chords, plain keys) propagates to the focused descendant.
+    // — and they sit on digits so none collides with a readline chord (bare Ctrl+K stays the terminal's
+    // kill-line). Only the four app actions are claimed here; everything else (terminal chords, plain
+    // keys) propagates to the focused descendant.
     const action = matchChord(e, getKeymap());
     if (!action) return;
     // The drawer is chrome behind the scrim too; `setView` guards itself. Gated behind the chord match, so

@@ -97,10 +97,10 @@ export const MAC_DEFAULTS: Keymap = {
   paste: [{ key: 'v', meta: true }],
   selectAll: [{ key: 'a', meta: true }],
   deleteLine: [{ key: 'Backspace', meta: true }], // Cmd+Backspace = delete to line start (macOS)
-  toggleDrawer: [{ key: '9', meta: true }], // ⌘9 — Quick-send drawer
+  toggleDrawer: [{ key: '9', meta: true }],
   viewTerminal: [{ key: '1', meta: true }],
   viewArtifacts: [{ key: '2', meta: true }],
-  openSettings: [{ key: '0', meta: true }], // ⌘0 — Settings
+  openSettings: [{ key: '0', meta: true }],
   ...MOTIONS,
 };
 
@@ -110,10 +110,10 @@ export const PC_DEFAULTS: Keymap = {
   selectAll: [{ key: 'a', ctrl: true, shift: true }],
   deleteLine: [], // no portable PC chord — users press Ctrl+U directly
   // Ctrl+digit throughout — a digit never collides with a readline chord, so bare Ctrl+K stays kill-line.
-  toggleDrawer: [{ key: '9', ctrl: true }], // Ctrl+9 — Quick-send drawer
+  toggleDrawer: [{ key: '9', ctrl: true }],
   viewTerminal: [{ key: '1', ctrl: true }],
   viewArtifacts: [{ key: '2', ctrl: true }],
-  openSettings: [{ key: '0', ctrl: true }], // Ctrl+0 — Settings
+  openSettings: [{ key: '0', ctrl: true }],
   ...MOTIONS,
 };
 
