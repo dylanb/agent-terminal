@@ -22,7 +22,6 @@
     <div id="app" class="app">
       <!-- SLIM LEFT CHROME (§24.1C) -->
       <aside class="rail" aria-label="Navigation and status">
-        <div class="mark serif">Agent <span class="sig">·—·</span> Terminal</div>
         <nav class="blk" aria-label="Views">
           <div class="sect">Views</div>
           <div class="navlist">
@@ -39,9 +38,9 @@
           <div id="monitor-status" role="status" aria-live="polite"></div>
         </div>
         <div class="foot">
-          <!-- Settings is view 4 (§7.7): the gear switches to it; ⌘, opens it via the keymap. -->
-          <button class="nav" data-viewbtn="4"><span class="navic" aria-hidden="true">⚙</span> Settings <span class="k">⌘,</span></button>
-          <button class="pill signal" id="qs">⌘K Quick-send</button>
+          <!-- Settings is view 4 (§7.7): the gear switches to it; ⌘0 opens it via the keymap. -->
+          <button class="nav" data-viewbtn="4"><span class="navic" aria-hidden="true">⚙</span> Settings <span class="k">⌘0</span></button>
+          <button class="pill signal" id="qs">⌘9 Quick-send</button>
           <div class="row">
             <button class="iconbtn" id="tg" title="Toggle theme" aria-label="Toggle theme">◐</button>
             <span class="mono" data-theme-label style="font-size:11px;color:var(--dim)">Light</span>
@@ -105,7 +104,7 @@
         <section id="panel-todo" class="panel" role="tabpanel" aria-labelledby="tab-todo" hidden>
           <div id="todo-list" aria-label="Todo list"></div>
         </section>
-        <div class="dhint"><span>double-click a finding → reveal in terminal</span><span><span class="kbd">⌘K</span> toggle</span></div>
+        <div class="dhint"><span>double-click a finding → reveal in terminal</span><span><span class="kbd">⌘9</span> toggle</span></div>
       </aside>
     </div>
     <!-- Typed-input modal host (§24.2.3 T3): the createFlowInputModal organism renders the one
