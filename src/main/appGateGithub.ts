@@ -1,15 +1,11 @@
-// The §27 human-gate approve side-effect port (§27.13 / N5): the out-of-band GitHub call a §27 loop's
-// approve gate declares, data-driven from the bound def. Kept a SIBLING of the §26 `gateGithub` port so no
-// §26 concept crosses the seam (§27.15). Like the §26 port it depends on a
-// domain runner, never raw exec(argv) (the CLAUDE.md seam rule); the real runner shells out via execFile so
-// every value crosses as a distinct argv element (CWE-78). Best-effort: a missing input or a failed call
-// throws, and the caller surfaces + audits it without aborting the terminal accept (§27.13 / AC3).
+// The §27 approve side-effect port (§27.13 / N5) — a SIBLING of the §26 `gateGithub` port; no §26 concept
+// crosses the seam (§27.15). Depends on a domain `gh` runner, never raw exec(argv) (CODE-STANDARDS seam
+// rule); the real runner uses execFile so every value crosses as a distinct argv element (CWE-78).
 
 import { execFile } from 'node:child_process';
 
-/** The refs + body source an approve side-effect acts on: the PR (mark-ready / publish-pr-body), the issue
- *  (update-issue-body), and the confined body-file the loop's output artifact resolved to. Any may be absent;
- *  an action that needs an absent input fails best-effort rather than fabricating a target. */
+/** The refs + confined body-file an approve side-effect acts on. Any may be absent; an action whose required
+ *  input is absent fails best-effort (throws) rather than fabricating a target. */
 export interface AppGateSideEffectCtx {
   pr: number | null;
   ticket: number | null;

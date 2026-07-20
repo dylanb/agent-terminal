@@ -102,8 +102,8 @@ function structuralSig(loop: FlowLoopView | null, title: string, refs?: FlowRefs
     refs?.pr ?? null,
     // iteration PRESENCE and actionability are structural: the iteration row and the gate-decision
     // buttons appear/disappear with them, so a run-less↔run transition forces a full render.
-    // appTurn PRESENCE is structural too (§27/N5): it decides whether the gate buttons wire to the §26 or the
-    // identity-carrying §27 decision service, so a §26↔§27 gate must force a full render, never a patch.
+    // §27/N5 — appTurn presence decides which decision service the buttons wire to, so a §26↔§27 gate must
+    // force a full render, not a patch.
     loop ? [loop.pr, loop.branch, loop.gateOptions ?? null, loop.iteration !== undefined, loop.actionable ?? null, loop.appTurn !== undefined] : null,
   ]);
 }
@@ -465,10 +465,8 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
       // run-less view AND the §27 terminal consolidator gate carry the same gateOptions display-only
       // (loopGateActionable false) — the read-only row above shows them, but no clickable control renders;
       // the refusal guard is at the operation.
-      // §27.9/N5 — a §27 gate view carries `appTurn` (the step+turn identity); its decision routes to the
-      // identity-carrying appGateDecision, NEVER the §26 gateDecision (AC8). A §26 gate carries no appTurn and
-      // routes to gateDecision as before. The buttons render only when the matching service is injected (an
-      // un-wired control would be inert, WCAG 4.1.2).
+      // §27.9/N5/AC8 — a §27 gate view (carrying `appTurn`) routes to appGateDecision, never the §26
+      // gateDecision. Rendered only when the matching service is injected (else inert — WCAG 4.1.2).
       const appTurn = loop.appTurn;
       const decideDep = appTurn ? deps.appGateDecision : deps.gateDecision;
       if (loop.gateOptions && loop.gateOptions.length > 0 && loopGateActionable(loop) && decideDep) {

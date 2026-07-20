@@ -464,8 +464,8 @@ async function createWindow(): Promise<void> {
   const appTurnDoneSubdir = path.join(...APP_LOOP_DIR_SEGMENTS);
   let appTurnTimer: ReturnType<typeof setTimeout> | null = null;
   let unwatchAppTurnDone: (() => void) | null = null;
-  // §27.15 — the one §27 def-resolution context (operator tier then app-bundled), shared by the engine's
-  // resolveDef and the §27 gate-decision executor so both resolve the same def from the same tiers.
+  // §27.15 — one def-resolution context shared by the engine's resolveDef and the §27 gate executor, so both
+  // resolve the same def from the same tiers.
   const appDefContext = (repoDir: string): LoopDefV2Context => ({
     tiers: { operator: userConfigLoopsV2Dir(), appBundled: resolveExampleLoopsV2Dir(iconLoc) },
     repoDir,
@@ -1225,10 +1225,7 @@ async function createWindow(): Promise<void> {
     });
   };
 
-  // §27.9/§27.13 / N5 — the §27 (app-namespace) human-gate decision, executed through a path ISOLATED from the
-  // §26 executor above: it reads the §27 run-state, resolves the §27 def, and (for approve) runs the def's
-  // declared gh side-effect out of band, persists the terminal accept, and advances the flow. It writes no §26
-  // state and injects no §26 actor (AC8), and acts only on the step+turn identity the payload names (AC7).
+  // §27.9/§27.13 / N5 — composition root for the §27 gate decision; isolated from the §26 executor above (AC8).
   const runAppGateDecision = (repoKey: string, step: string, turnKey: string, option: GateDecisionOption): void => {
     void runAppGateDecisionImpl(repoKey, step, turnKey, option, {
       readRunState: (repoDir) => readAppLoopState(repoDir),
@@ -1324,9 +1321,7 @@ async function createWindow(): Promise<void> {
         armAppTurnDoneWatch(m.repoKey);
         appEngine.routeOut(m.repoKey, m.step, m.turnKey, m.action);
       },
-      // §27.9/§27.13 / N5 — the §27 human-gate decision, acting on the step+turn identity the payload names
-      // (§6/AC7). Isolated from the §26 gate executor (AC8): it reads the persisted §27 run-state (which
-      // survives a relaunch, AC10) and never fires runGateDecision.
+      // §27.9/§27.13 / N5 / §6 / AC7
       [CH.flowAppGateDecision]: (_e, m) => {
         if (!isValidFlowAppGateDecision(m)) return;
         runAppGateDecision(m.repoKey, m.step, m.turnKey, m.option);

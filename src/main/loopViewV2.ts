@@ -56,11 +56,9 @@ export function deriveAppLoopView(name: string, ctx: LoopDefV2Context, liveError
   // prior binding) is not this step's, so it falls through to the resolve-time run-less/failure view.
   const run = readAppLoopState(ctx.repoDir);
   if (run && run.loop === name) {
-    // §27.9/N5 (AC1) — the TERMINAL consolidator gate (a verdict reached, with declared options) is the loop's
-    // human interface: its options become clickable and the loop is blocked awaiting the human's decision. Every
-    // other run-state view (working/error/accepted, or a verdict-less complete) is not a gate — display-only and
-    // classified by the shared human-needed predicate. The refusal guard for an undeclared option stays at the
-    // operation (loopViewV2 renders; appGateDecision validates).
+    // §27.9/N5 (AC1) — a terminal gate is a reached verdict with declared options; only then are options
+    // clickable and the loop blocked on the human. The undeclared-option refusal stays at the operation
+    // (appGateDecision validates), not here.
     const atGate = run.verdict !== undefined && gateOptions.length > 0;
     return {
       status: run.status,
