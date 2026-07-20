@@ -125,6 +125,7 @@ import { APP_LOOP_DIR_SEGMENTS, armInterrupt, consolidatorOutputFile, consolidat
 import { resolveLoopDefV2, type LoopDefV2Context } from './loopDefV2';
 import { createRealAppGateGitHub } from './appGateGithub';
 import { runAppGateDecision as runAppGateDecisionImpl } from './appGateDecision';
+import { completionArtifact } from './appWorkTurn';
 import { resolveExampleLoopsV2Dir } from './exampleAssets';
 import { userConfigLoopsV2Dir } from './userConfig';
 import type { CliInstallResult } from '../shared/ipc';
@@ -1236,7 +1237,7 @@ async function createWindow(): Promise<void> {
         const v = flow.state(repoDir);
         return { pr: v.refs?.pr ?? null, ticket: v.refs?.ticket ?? null };
       },
-      bodyFile: (def) => def.outputs[0]?.path ?? null,
+      bodyFile: (def) => completionArtifact(def)?.path ?? null,
       runSideEffect: createRealAppGateGitHub(repoKey),
       persistAccept: (repoDir, state) => writeAppLoopState(repoDir, state),
       advanceFlow: (repoDir) => autoAdvanceFlow(repoDir),
