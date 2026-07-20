@@ -6,7 +6,7 @@ import type { Menu, MenuItemConstructorOptions } from 'electron';
 // The macOS application menu (§7.7): Copy/Paste/Select All route to OUR actions (the app-owned
 // selection + sanitized paste) instead of the default roles, which would act on xterm's hidden native
 // selection. Off darwin a minimal menu (keyboard zoom + fullscreen, no Edit routing) is installed —
-// enough to keep text-resize (WCAG 1.4.4) while freeing the app-nav chords (§7.6).
+// enough to keep text-resize (WCAG 1.4.4) while freeing the app-nav chords (§7.7).
 function find(items: MenuItemConstructorOptions[] | null | undefined, label: string): MenuItemConstructorOptions {
   const hit = (items ?? []).find((i) => i.label === label);
   if (!hit) throw new Error(`menu item not found: ${label}`);
@@ -41,7 +41,7 @@ describe('appMenu (§7.7)', () => {
     }
   });
 
-  // §7.6: off darwin the renderer keymap owns the app-nav chords AND the §9.3-sanitized copy/paste, so
+  // §7.7: off darwin the renderer keymap owns the app-nav chords AND the §9.3-sanitized copy/paste, so
   // the off-darwin menu carries no Edit routing — but it must still expose keyboard zoom (Electron's
   // default menu was its only source), or a low-vision keyboard user loses text-resize (WCAG 1.4.4).
   it('off macOS installs a minimal View menu (keyboard zoom + fullscreen), no Edit routing', () => {
@@ -88,7 +88,7 @@ describe('appMenu (§7.7)', () => {
 
 // Setting ANY menu replaces Electron's default menu (whose View→Reset Zoom binds ⌘0/Ctrl+0, reserved
 // for openSettings §7.7), so both the darwin and the minimal off-darwin menu free the app-nav chords.
-describe('applyApplicationMenu (§7.6)', () => {
+describe('applyApplicationMenu (§7.7)', () => {
   function fakeMenuApi() {
     const built = { tag: 'built-menu' } as unknown as Menu;
     return { built, setApplicationMenu: vi.fn(), buildFromTemplate: vi.fn(() => built) };
