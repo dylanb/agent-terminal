@@ -100,8 +100,8 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     expect(segs()).toHaveLength(1);
     expect(segs().every(segTouchesActive)).toBe(true);
 
-    // in_progress → the active station is the interior step: connectors above AND below it, and only
-    // those two of the rail's three inter-station gaps are drawn.
+    // in_progress → the active station is the interior step: connectors above AND below it — both of
+    // the rail's two inter-station gaps are drawn.
     (control() as HTMLButtonElement).click();
     await vi.waitFor(() => expect(stateOf(1)).toBe('active'));
     expect(segs()).toHaveLength(2);
