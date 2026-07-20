@@ -5,10 +5,8 @@
 // validated against the bound def's declared gate options AT THE OPERATION (AC9): a legacy-bound step can
 // never reach this path (a different channel), and a §27 step can only run an option its def declares.
 //
-// Approve (this slice) runs the loop's declared side-effect data-driven from the bound def as an out-of-band
-// best-effort GitHub call, then reaches the terminal accept and advances the flow. A failed side-effect is
-// surfaced + audited but never aborts the accept and never strands the step (§27.13 / AC3). request-changes /
-// redo / polish are declared by later slices' defs; until then an undeclared option is inert here.
+// A failed side-effect is surfaced + audited but never aborts the terminal accept (§27.13 / AC3); a failed
+// accept persist DOES abort — the flow never advances over an unpersisted accept (§26 D48).
 
 import type { GateDecisionOption } from '../shared/ipc';
 import { gateDecisionAuditCmd } from '../shared/audit';
@@ -44,7 +42,7 @@ export interface AppGateDecisionDeps {
 
 /** Execute a §27 human-gate decision for the step+turn identity it names. Inert (no state change, no advance)
  *  unless the persisted gate matches that identity, is AT the gate (a verdict reached), and the option is one
- *  the bound def declares. Sub-ticket 1 implements `approve`; other declared options land with their slices. */
+ *  the bound def declares. */
 export async function runAppGateDecision(
   repoDir: string,
   step: string,
@@ -64,17 +62,21 @@ export async function runAppGateDecision(
   // (widened) wire type. An option the def does not declare cannot execute here.
   const gateOpt = r.def.gate.find((g) => g.option === option);
   if (!gateOpt) return;
-  // Sub-ticket 1 implements approve; request-changes/redo/polish are declared and handled by later slices.
   if (option !== 'approve') return;
 
   // Terminal accept FIRST (before the async side-effect): mark the loop accepted and surface it so a raced
-  // second approve reads a non-gate state and is inert. Best-effort — a persist failure must not strand the
-  // step, so the accept/advance still proceed (§27.13 / AC3).
+  // second approve reads a non-gate state and is inert. The accept is the critical write, not a cosmetic side
+  // effect: if it cannot persist (§26 D48), surface + audit and abort — never advance the flow over an
+  // unpersisted accept, else a relaunch reconstructs the gate and a second approve double-runs the side-effect.
   const accepted: AppLoopRunState = { loop: run.loop, step: run.step, turnKey: run.turnKey, status: 'accepted' };
   try {
     deps.persistAccept(repoDir, accepted);
   } catch (e) {
-    void (e instanceof Error ? e.message : String(e));
+    const reason = e instanceof Error ? e.message : String(e);
+    deps.audit(repoDir, gateDecisionAuditCmd('accept-failed', option, reason), 1);
+    deps.emitError(`could not persist gate accept: ${reason}`);
+    deps.onViewChanged();
+    return;
   }
   deps.onViewChanged();
 
