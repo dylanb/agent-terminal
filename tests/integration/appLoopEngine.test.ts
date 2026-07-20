@@ -784,6 +784,21 @@ describe('§27 engine — the verdict drives the branch (AC4, AC5, AC6)', () => 
     expect(emitError).toHaveBeenCalled(); // pushed so the panel renders the retry/terminate route-out
   });
 
+  it('a finish-time output read that vanishes AFTER the gate accepted it falls back to `stop for a human` — never a silent `clean` (§27.6 race)', () => {
+    // The completion gate reads the output as well-formed (`clean`), then a race (truncation, an unlink, a
+    // planted-symlink swap) makes the finish re-read return null. finishConsolidate must fall to the SAFE side —
+    // route to the gate as `stop for a human`, summoning the human — and MUST NOT advance a silent `clean` round
+    // on a verdict it can no longer read.
+    const engine = makeEngine();
+    driveToConsolidateInjected(engine);
+    writeConsolidatorOutput(1, 'verdict: clean\n');
+    readArtifact.mockImplementationOnce(() => 'verdict: clean\n').mockImplementationOnce(() => null);
+    engine.onDoneSignal();
+    const state = readAppLoopState(repo);
+    expect(state).toMatchObject({ turnKey: CONSOLIDATE_KEY, status: 'complete', verdict: 'stop for a human' });
+    expect(state?.verdict).not.toBe('clean');
+  });
+
   it('there is no iteration cap — a run that keeps emitting `another round` keeps iterating (AC10)', () => {
     const engine = makeEngine();
     driveToConsolidateInjected(engine);
