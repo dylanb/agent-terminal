@@ -90,6 +90,22 @@ describe('runAppGateDecision — a failed side-effect never strands the flow (§
   });
 });
 
+describe('runAppGateDecision — an unpersisted accept never advances the flow (§27.13 / AC3, §26 D48)', () => {
+  it('surfaces + audits the persist failure and runs no side-effect and no advance', async () => {
+    const { deps, rec } = mkDeps({
+      persistAccept: () => {
+        throw new Error('ENOSPC: no space left on device');
+      },
+    });
+    await approve(deps);
+    expect(rec.errors.some((e) => e.includes('ENOSPC'))).toBe(true); // surfaced, not swallowed
+    expect(rec.audits.some((a) => a.cmd.includes('accept failed') && a.exit === 1)).toBe(true); // recorded
+    expect(rec.accepts).toEqual([]); // the accept did not persist
+    expect(rec.sideEffects).toEqual([]); // the gh side-effect never fired (no double-execution on retry)
+    expect(rec.advances).toEqual([]); // the flow did NOT advance over the unpersisted accept
+  });
+});
+
 describe('runAppGateDecision — acts only on the named identity (§6/AC7)', () => {
   it('is inert for a decision naming a different step', async () => {
     const { deps, rec } = mkDeps({});
