@@ -182,8 +182,8 @@ async function createWindow(): Promise<void> {
   };
 
   // macOS Edit menu (§7.7): route ⌘C/⌘V/⌘A to our renderer actions so they don't operate on xterm's
-  // hidden native selection. Off darwin the template is null and applyApplicationMenu CLEARS the
-  // default menu (§7.6) so its ⌘0 "Reset Zoom" can't preempt the openSettings chord on Linux/Windows.
+  // hidden native selection. Off darwin a minimal menu (keyboard zoom + fullscreen) is installed
+  // instead — replacing Electron's default menu so its ⌘0 "Reset Zoom" can't preempt openSettings (§7.6).
   // TODO(keymap): the menu-accelerator→IPC dispatch is macOS-only, so it has no Linux e2e; the pure
   // template + install logic (appMenu.test) and the renderer router (menuActions.test) are unit/DOM covered.
   applyApplicationMenu(buildMenuTemplate(process.platform, (action) => send(CH.menuEdit, { action })), Menu);
