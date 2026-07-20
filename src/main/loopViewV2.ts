@@ -12,8 +12,9 @@
 import type { FlowLoopView } from '../shared/ipc';
 import { isHumanNeededStatus } from '../shared/loopStatus';
 import { resolveLoopDefV2, type LoopDefV2Context } from './loopDefV2';
+import { catalogPersonas } from './reviewTurn';
 import { readAppLoopState } from './appLoopState';
-import type { AppLoopLiveError } from './appLoopEngine';
+import type { AppLoopEngine, AppLoopLiveError } from './appLoopEngine';
 
 /** The run-less/failure status strings the §27 provider emits (§27-owned, mapped to a tone by the strip;
  *  never a §26 vocabulary term). `error` reuses the existing loop-error surface so the reason row renders. */
@@ -25,6 +26,12 @@ export const APP_LOOP_STATUS_WORKING = 'working';
 export const APP_LOOP_STATUS_COMPLETE = 'complete';
 
 export function deriveAppLoopView(name: string, ctx: LoopDefV2Context, liveError?: AppLoopLiveError | null): FlowLoopView {
+  // §27.4/§27.6/AC5/AC8 — the def is resolved once and reused on every surfacing branch: the reviewer catalog
+  // AND the gate options both come from it, so the terminal consolidator gate (a run-state view) can show the
+  // verdict and the def's options together. Both are absent when the def does not resolve.
+  const r = resolveLoopDefV2(name, ctx);
+  const catalog = r.ok ? catalogPersonas(r.def) : undefined;
+  const gateOptions = r.ok ? r.def.gate.map((g) => g.option) : [];
   // §27.12c — when the status:error write could not land (ENOSPC/EPERM/a planted symlink), the persisted
   // state cannot reflect the error, so the engine's LIVE error is the truth: surface it (and its route-out
   // identity) so the §27 route-out is never a dead-end. It is the freshest signal, so it wins over a stale
@@ -40,6 +47,7 @@ export function deriveAppLoopView(name: string, ctx: LoopDefV2Context, liveError
       appTurn: { step: liveError.step, turnKey: liveError.turnKey },
       errorReason: liveError.reason,
       ...(liveError.round !== undefined ? { iteration: liveError.round } : {}),
+      ...(catalog ? { catalog } : {}),
     };
   }
   // §27.12 — once a work turn has run, the persisted §27 run-state is the live view: mirror its status
@@ -60,9 +68,16 @@ export function deriveAppLoopView(name: string, ctx: LoopDefV2Context, liveError
       // §27.5 IPC item 3 — carry the round number once a review-and-fix round has run (absent through the
       // work turn, so a coalesce-to-zero never fabricates a round identity the dedup/audit key on).
       ...(run.round !== undefined ? { iteration: run.round } : {}),
+      // §27.6/AC5/AC8 — the catalog, the def's gate options, the consolidator's chosen roster, and the round's
+      // verdict + reason. The gate-options preview belongs at the TERMINAL consolidator gate, not during an
+      // active mid-loop turn (AC5 Non-goals), so it rides only once a verdict has been reached.
+      ...(catalog ? { catalog } : {}),
+      ...(run.verdict && gateOptions.length > 0 ? { gateOptions } : {}),
+      ...(run.chosenRoster ? { chosenRoster: run.chosenRoster } : {}),
+      ...(run.verdict ? { verdict: run.verdict } : {}),
+      ...(run.verdictReason ? { verdictReason: run.verdictReason } : {}),
     };
   }
-  const r = resolveLoopDefV2(name, ctx);
   if (!r.ok) {
     return {
       status: APP_LOOP_STATUS_ERROR,
@@ -74,7 +89,6 @@ export function deriveAppLoopView(name: string, ctx: LoopDefV2Context, liveError
       errorReason: r.reason,
     };
   }
-  const gateOptions = r.def.gate.map((g) => g.option);
   return {
     status: APP_LOOP_STATUS_RUN_LESS,
     pr: null,
@@ -84,4 +98,18 @@ export function deriveAppLoopView(name: string, ctx: LoopDefV2Context, liveError
     humanNeeded: false,
     ...(gateOptions.length > 0 ? { gateOptions } : {}),
   };
+}
+
+/** The flow manager's §27 loop-view provider: reconstruct a relaunch-stranded turn to routable BEFORE the
+ *  live error is read, then derive the view from it + the resolved def (§27.12/§27.15). Without this a
+ *  persisted `working` turn — definitionally stopped by the relaunch — mirrors to a not-human-needed view
+ *  with no route-out (CWE-703/755). resume() no-ops without a §27 run-state and is skipped once a live turn
+ *  for this repo is already active, so a genuinely in-flight turn is never disturbed. */
+export function provideAppLoopView(
+  engine: Pick<AppLoopEngine, 'activeRepoDir' | 'resume' | 'liveErrorFor'>,
+  name: string,
+  ctx: LoopDefV2Context,
+): FlowLoopView {
+  if (engine.activeRepoDir() !== ctx.repoDir) engine.resume(ctx.repoDir);
+  return deriveAppLoopView(name, ctx, engine.liveErrorFor(ctx.repoDir));
 }

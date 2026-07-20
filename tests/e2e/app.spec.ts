@@ -11,7 +11,7 @@ import { CLI_COMMAND_NAME } from '../../src/main/cliShim';
 import { parseAuditStream, type AuditEvent } from '../../src/shared/audit';
 import { TURN_DONE_FILENAME } from '../../src/shared/loopTurn';
 import { completionMarker } from '../../src/main/appWorkTurn';
-import { exampleRoundReport } from '../../src/shared/roundReport';
+import { exampleRoundReport, REPORT_GRAMMAR } from '../../src/shared/roundReport';
 
 // §26 D42a — the retired printable done-signal sentinel. Kept here ONLY so a regression test can inject it
 // into the PTY output and prove it no longer completes a turn (completion is the turn-done FILE alone).
@@ -3665,6 +3665,17 @@ const PLAN_V2_SECTIONS = ['summary', 'findings', 'disposition'];
 const b64 = (s: string): string => Buffer.from(s, 'utf8').toString('base64');
 const FULL_REPORT_B64 = b64(exampleRoundReport({ sections: PLAN_V2_SECTIONS, roster: PLAN_V2_ROSTER }));
 const OMIT_REPORT_B64 = b64(exampleRoundReport({ sections: PLAN_V2_SECTIONS, roster: [PLAN_V2_ROSTER[0]] }));
+// A well-formed report that records the FIRST roster persona as FAILED TO RUN (§27.5/AC7) — the signal the
+// consolidator clean-guard keys on. The second persona ran and found nothing (the empty marker).
+const v2FailedReport = (): string => {
+  const g = REPORT_GRAMMAR;
+  return (
+    ['## summary', '', '## findings', '', '## disposition', '',
+      `### ${PLAN_V2_ROSTER[0]}`, '', g.failedMarker, '',
+      `### ${PLAN_V2_ROSTER[1]}`, '', g.emptyMarker, ''].join('\n') + '\n'
+  );
+};
+const FAILED_REPORT_B64 = b64(v2FailedReport());
 
 // A scriptable §27 fake-agent (§27.15 test seam): on the app WORK prompt it produces the §27 completion
 // artifact and/or the §27 done-file IN THE §27 LOOP AREA (.agent-terminal/loop/); on the chained REVIEW-AND-FIX
@@ -3677,9 +3688,24 @@ const OMIT_REPORT_B64 = b64(exampleRoundReport({ sections: PLAN_V2_SECTIONS, ros
 //   review: full — a report accounting for the whole roster → the review turn completes (default).
 //           omit-persona — a report dropping a roster persona → one review retry then error.
 //           none — write nothing on the review turn → review stall/retry→error.
-function seedFakeAgentV2(binDir: string, opts: { stepId: string; artifactRel: string; work: 'complete' | 'no-marker' | 'file-only' | 'noop'; review?: 'full' | 'omit-persona' | 'none' }): void {
+function seedFakeAgentV2(
+  binDir: string,
+  opts: {
+    stepId: string;
+    artifactRel: string;
+    work: 'complete' | 'no-marker' | 'file-only' | 'noop';
+    // Round-1 review report kind; `failed` records the first persona as failed-to-run (§27.5/AC7).
+    review?: 'full' | 'omit-persona' | 'none' | 'failed';
+    // Round-2 review report kind (multi-round runs), default `full`.
+    review2?: 'full' | 'failed';
+    // The consolidator output per round (index = round-1); each is the FULL verdict file content. Absent →
+    // every round emits `verdict: clean` (so a plain work→review→consolidate run routes to the gate).
+    verdicts?: string[];
+  },
+): void {
   const turnKey = `work-${opts.stepId}`;
   const reviewKey = `review-${opts.stepId}`;
+  const consolidateKey = `consolidate-${opts.stepId}`;
   const marker = completionMarker(opts.stepId);
   const doneRel = `.agent-terminal/loop/${TURN_DONE_FILENAME}`;
   const writeArtifact = (withMarker: boolean): string =>
@@ -3698,22 +3724,35 @@ function seedFakeAgentV2(binDir: string, opts: { stepId: string; artifactRel: st
           ? `${bump}; ${writeArtifact(false)}; ${done(turnKey)}`
           : `${bump}; ${writeArtifact(true)}; ${done(turnKey)}`;
   const reviewBump = 'mkdir -p .agent-terminal; printf x >> .agent-terminal/review-runs';
-  const writeReport = (reportB64: string): string =>
-    `mkdir -p .agent-terminal/loop/reports; printf '%s' '${reportB64}' | base64 -d > .agent-terminal/loop/reports/1.md`;
   const reviewKind = opts.review ?? 'full';
+  const r1B64 = reviewKind === 'failed' ? FAILED_REPORT_B64 : reviewKind === 'omit-persona' ? OMIT_REPORT_B64 : FULL_REPORT_B64;
+  const r2B64 = (opts.review2 ?? 'full') === 'failed' ? FAILED_REPORT_B64 : FULL_REPORT_B64;
+  // Round-aware report write: the round is read from the §27 run-state so a re-review (round 2) writes to
+  // reports/2.md, keeping the last-two-report window real (§27.6/AC2).
+  const writeReportRoundAware =
+    'r=$(rnd); mkdir -p .agent-terminal/loop/reports; ' +
+    `RB='${r1B64}'; case "$r" in 2) RB='${r2B64}' ;; esac; ` +
+    'printf %s "$RB" | base64 -d > .agent-terminal/loop/reports/$r.md';
   const reviewAct =
-    reviewKind === 'none'
-      ? `${reviewBump}`
-      : reviewKind === 'omit-persona'
-        ? `${reviewBump}; ${writeReport(OMIT_REPORT_B64)}; ${done(reviewKey)}`
-        : `${reviewBump}; ${writeReport(FULL_REPORT_B64)}; ${done(reviewKey)}`;
+    reviewKind === 'none' ? `${reviewBump}` : `${reviewBump}; ${writeReportRoundAware}; ${done(reviewKey)}`;
+  // The consolidator writes its verdict output (round-keyed) then signals; the round is read from run-state
+  // so a multi-round run emits the scripted verdict for each round (§27.6).
+  const verdicts = opts.verdicts ?? ['verdict: clean\n'];
+  const verdictCase = verdicts.map((v, i) => `${i + 1}) OUTB='${b64(v)}' ;;`).join(' ');
+  const consolidateBump = 'mkdir -p .agent-terminal; printf x >> .agent-terminal/consolidate-runs';
+  const consolidateAct =
+    `${consolidateBump}; r=$(rnd); OUTB='${b64('verdict: clean\n')}'; case "$r" in ${verdictCase} esac; ` +
+    'mkdir -p .agent-terminal/loop/consolidate; printf %s "$OUTB" | base64 -d > .agent-terminal/loop/consolidate/$r.md; ' +
+    `${done(consolidateKey)}`;
   const script =
     '#!/usr/bin/env bash\n' +
+    'rnd() { r=$(grep -m1 "^round:" .agent-terminal/loop/run-state.yaml 2>/dev/null | tr -dc "0-9"); [ -z "$r" ] && r=1; printf %s "$r"; }\n' +
     'while IFS= read -r line; do\n' +
     '  [ -z "$line" ] && continue\n' +
     '  case "$line" in\n' +
     '    /clear) mkdir -p .agent-terminal; printf x >> .agent-terminal/clear-seen ;;\n' +
     '    /compact*) mkdir -p .agent-terminal; printf x >> .agent-terminal/compact-seen ;;\n' +
+    `    *turn-done:${consolidateKey}*) ${consolidateAct} ;;\n` +
     `    *turn-done:${reviewKey}*) ${reviewAct} ;;\n` +
     `    *turn-done:${turnKey}*) ${workAct} ;;\n` +
     '  esac\n' +
@@ -3726,7 +3765,7 @@ const appReport1 = (repo: string): string => join(repo, '.agent-terminal', 'loop
 const appRunState = (repo: string): string => join(repo, '.agent-terminal', 'loop', 'run-state.yaml');
 const readIf = (p: string): string => (existsSync(p) ? readFileSync(p, 'utf8') : '');
 
-test('a §27 app step runs work → review-and-fix to completion, writing the round report, leaving §26 untouched (§27.3 / AC1,2,3,5,7,9,10)', { tag: '@ownapp' }, async () => {
+test('a §27 app step runs work → review-and-fix → CONSOLIDATE → the clean gate, leaving §26 untouched (§27.3/§27.6 / AC1,2,3,5,6,10)', { tag: '@ownapp' }, async () => {
   const repo = seedAppLoopFlowRepo('agent-term-e2e-v2-work-');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-v2-work-home-'));
   const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-v2-work-bin-');
@@ -3750,17 +3789,21 @@ test('a §27 app step runs work → review-and-fix to completion, writing the ro
   await flowControl().click(); // Start → enter the app plan-loop step → the §27 work turn starts
 
   // The pre-work boundary (/clear) is issued, the work turn completes on its artifact, the engine crosses the
-  // def-declared pre-review boundary (/compact) on its own, the review-and-fix turn writes the round report
-  // accounting for the whole roster, and the run advances to complete (AC1, AC3).
+  // def-declared pre-review boundary (/compact) on its own, the review-and-fix turn writes the round report,
+  // then the consolidator turn runs on its own (AC1) and — on a no-change round — emits `clean`, routing to
+  // the gate with the verdict (AC5/AC6). status:complete first appears at that gate.
   await expect.poll(() => readIf(appRunState(repo)), { timeout: 40_000 }).toContain('status: complete');
+  expect(readIf(appRunState(repo))).toContain('verdict: clean'); // the consolidator judged the round and gated it
+  expect(readIf(appRunState(repo))).toContain('turn_key: consolidate-plan'); // stopped at the consolidator's gate
+  expect(existsSync(join(repo, '.agent-terminal', 'consolidate-runs'))).toBe(true); // the consolidator turn ran (AC1)
   expect(existsSync(join(repo, '.agent-terminal', 'clear-seen'))).toBe(true); // pre-work boundary issued
   expect(existsSync(join(repo, '.agent-terminal', 'compact-seen'))).toBe(true); // pre-review boundary issued (AC1)
   expect(readFileSync(join(repo, APP_ARTIFACT_REL), 'utf8')).toContain(completionMarker('plan'));
-  // AC7 — the round report is written to the round-keyed, app-owned location, accounting for the full roster.
+  // AC2/AC3 — the round report is written to the round-keyed, app-owned location, accounting for the full roster.
   expect(existsSync(appReport1(repo))).toBe(true);
   const report = readFileSync(appReport1(repo), 'utf8');
   for (const persona of PLAN_V2_ROSTER) expect(report).toContain(persona); // AC5 — every roster persona accounted for
-  // AC9 — the persisted run-state records the review turn and its round number.
+  // The persisted run-state records the round number the consolidator judged.
   expect(readIf(appRunState(repo))).toContain('round: 1');
 
   // AC10 — the §26 state.yaml is byte-for-byte unchanged, and no §26 artifact was written.
@@ -3953,6 +3996,194 @@ test('a §27 error resumed after relaunch completes on its done-signal when Retr
   rmSync(repo, { recursive: true, force: true });
   rmSync(home, { recursive: true, force: true });
   rmSync(binDir, { recursive: true, force: true });
+});
+
+// §27.12 / §27.15 / CWE-703/755 — a §27 turn left `working` when the app was killed mid-turn is
+// DEFINITIONALLY stopped after a relaunch (its PTY is gone). Unlike an `error` turn, `working` is not
+// human-needed, so pre-fix the panel showed no route-out at all: the run was recoverable only by hand-editing
+// run-state.yaml. The derived view must reconstruct the stranded turn so the retry/terminate route-out
+// renders, and Retry must re-arm the §27 done-watch so the re-driven turn completes on its done-signal.
+test('a §27 turn stranded `working` by a relaunch surfaces a route-out and Retry drives it to completion (§27.12 / CWE-703/755)', { tag: '@ownapp' }, async () => {
+  const repo = seedAppLoopFlowRepo('agent-term-e2e-v2-working-');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-v2-working-home-'));
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-v2-working-bin-');
+  // Process 1: a noop agent produces nothing, so the work turn stays `working` (a long stall timeout keeps it
+  // from erroring); the app is closed while it is still `working`, persisting the strand.
+  seedFakeAgentV2(binDir, { stepId: 'plan', artifactRel: APP_ARTIFACT_REL, work: 'noop' });
+  const launch = (turnTimeoutMs: string) =>
+    electron.launch({
+      args: ['out/main/index.js'],
+      env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100', APP_TURN_TIMEOUT_MS: turnTimeoutMs, CLAUDE_CONFIG_DIR: exampleConfigDir, PATH: `${binDir}:${process.env.PATH}`, FAKE_GHGIT_LOG: logFile },
+    });
+
+  app = await launch('60000'); // long: the noop turn stays `working`, never stalls to error
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+  await typeCommand(`cd "${repo}"`);
+  await expect(flowControl()).toHaveText('Start', { timeout: 10_000 });
+  await typeCommand('fake-agent');
+  await flowControl().click(); // enter the app step → §27 work turn → stays `working`
+  await expect.poll(() => readIf(appRunState(repo)), { timeout: 30_000 }).toContain('status: working');
+  await app.close(); // killed mid-turn: the disk holds `working`
+
+  // The operator fixes the agent; the retry after relaunch will now produce a marker-bearing artifact.
+  seedFakeAgentV2(binDir, { stepId: 'plan', artifactRel: APP_ARTIFACT_REL, work: 'complete' });
+
+  app = await launch('4000');
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+  await typeCommand(`cd "${repo}"`);
+  await typeCommand('fake-agent'); // host the agent so the re-driven turn injects
+
+  // Pre-fix the persisted `working` mirrored to a not-human-needed view with NO route-out — this never
+  // appeared. Post-fix the derived view reconstructs the stranded turn and the retry affordance renders.
+  await loopReadout().click();
+  await expect(loopPanel().locator('[data-app-route-out="retry"]')).toBeVisible({ timeout: 15_000 });
+  await loopPanel().locator('[data-app-route-out="retry"]').click();
+
+  // Land: the re-armed §27 done-watch observes the retried work turn's done-file; the turn completes, chains
+  // the review-and-fix + consolidate turns, and the run reaches the clean gate — never a silent idle.
+  await expect.poll(() => readIf(appRunState(repo)), { timeout: 40_000 }).toContain('status: complete');
+  expect(readFileSync(join(repo, APP_ARTIFACT_REL), 'utf8')).toContain(completionMarker('plan'));
+
+  await app.close();
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+  rmSync(binDir, { recursive: true, force: true });
+});
+
+// §27.6 tracer bullet (b) — a round that fixed something → `another round` over the consolidator's chosen
+// roster, and a SECOND review-and-fix round runs (its report is written to reports/2.md).
+test('a §27 `another round` verdict crosses the boundary back into a second review-and-fix round (§27.6 / AC4)', { tag: '@ownapp' }, async () => {
+  const repo = seedAppLoopFlowRepo('agent-term-e2e-v2-round2-');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-v2-round2-home-'));
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-v2-round2-bin-');
+  seedFakeAgentV2(binDir, {
+    stepId: 'plan',
+    artifactRel: APP_ARTIFACT_REL,
+    work: 'complete',
+    verdicts: [`verdict: another round\nroster: ${PLAN_V2_ROSTER[0]}\n`, 'verdict: clean\n'],
+  });
+  app = await electron.launch({
+    args: ['out/main/index.js'],
+    env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100', CLAUDE_CONFIG_DIR: exampleConfigDir, PATH: `${binDir}:${process.env.PATH}`, FAKE_GHGIT_LOG: logFile },
+  });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+  await typeCommand(`cd "${repo}"`);
+  await expect(flowControl()).toHaveText('Start', { timeout: 10_000 });
+  await typeCommand('fake-agent');
+  await flowControl().click(); // enter the app step → work → review round 1 → consolidate
+
+  // Round 1's `another round` loops back into a second review-and-fix round (reports/2.md is proof it ran),
+  // then round 2's consolidator emits clean → the gate.
+  await expect.poll(() => existsSync(join(repo, '.agent-terminal', 'loop', 'reports', '2.md')), { timeout: 40_000 }).toBe(true);
+  await expect.poll(() => readIf(appRunState(repo)), { timeout: 40_000 }).toContain('verdict: clean');
+
+  await app.close();
+  for (const d of [repo, home, binDir]) rmSync(d, { recursive: true, force: true });
+});
+
+// §27.6 tracer bullet (c) — a report recording a persona that failed to run is never presented clean: a
+// FRESH failure re-reviews, and a REPEAT failure (the same lens fails again) stops for a human.
+test('a §27 failed reviewer is never read as clean: fresh re-reviews, repeat stops for a human (§27.5/§27.6 / AC7)', { tag: '@ownapp' }, async () => {
+  const repo = seedAppLoopFlowRepo('agent-term-e2e-v2-failed-');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-v2-failed-home-'));
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-v2-failed-bin-');
+  // Both rounds record review-plan-principal as failed-to-run; the consolidator says `clean` both times, but
+  // the engine's failed-lens guard overrides: round 1 fresh → re-review, round 2 repeat → stop for a human.
+  seedFakeAgentV2(binDir, { stepId: 'plan', artifactRel: APP_ARTIFACT_REL, work: 'complete', review: 'failed', review2: 'failed', verdicts: ['verdict: clean\n', 'verdict: clean\n'] });
+  app = await electron.launch({
+    args: ['out/main/index.js'],
+    env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100', CLAUDE_CONFIG_DIR: exampleConfigDir, PATH: `${binDir}:${process.env.PATH}`, FAKE_GHGIT_LOG: logFile },
+  });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+  await typeCommand(`cd "${repo}"`);
+  await expect(flowControl()).toHaveText('Start', { timeout: 10_000 });
+  await typeCommand('fake-agent');
+  await flowControl().click();
+
+  // The fresh failure forces a re-review (round 2 runs), and the repeat failure routes to the human gate —
+  // the loop is NEVER presented as clean despite the consolidator's `clean` verdict.
+  await expect.poll(() => existsSync(join(repo, '.agent-terminal', 'loop', 'reports', '2.md')), { timeout: 40_000 }).toBe(true);
+  await expect.poll(() => readIf(appRunState(repo)), { timeout: 40_000 }).toContain('verdict: stop for a human');
+  expect(readIf(appRunState(repo))).not.toContain('verdict: clean');
+
+  await app.close();
+  for (const d of [repo, home, binDir]) rmSync(d, { recursive: true, force: true });
+});
+
+// §27.6 tracer bullet (d) — malformed consolidator output → one retry then a human-needed error with a
+// route out (the panel offers retry / accept / terminate).
+test('malformed §27 consolidator output drives one retry then a recoverable error (§27.12 / AC3,12)', { tag: '@ownapp' }, async () => {
+  const repo = seedAppLoopFlowRepo('agent-term-e2e-v2-cmalformed-');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-v2-cmalformed-home-'));
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-v2-cmalformed-bin-');
+  seedFakeAgentV2(binDir, { stepId: 'plan', artifactRel: APP_ARTIFACT_REL, work: 'complete', verdicts: ['this consolidator output carries no verdict at all\n'] });
+  app = await electron.launch({
+    args: ['out/main/index.js'],
+    env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100', CLAUDE_CONFIG_DIR: exampleConfigDir, PATH: `${binDir}:${process.env.PATH}`, FAKE_GHGIT_LOG: logFile },
+  });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+  await typeCommand(`cd "${repo}"`);
+  await expect(flowControl()).toHaveText('Start', { timeout: 10_000 });
+  await typeCommand('fake-agent');
+  await flowControl().click();
+
+  // The malformed output is re-injected once, then the consolidate turn stops in a human-needed error.
+  await expect.poll(() => readIf(appRunState(repo)), { timeout: 40_000 }).toContain('status: error');
+  expect(readIf(appRunState(repo))).toContain('turn_key: consolidate-plan');
+  expect(readIf(join(repo, '.agent-terminal', 'consolidate-runs')).length).toBe(2); // initial + one retry
+
+  // The error is never silent: dismiss the dialog, then the panel offers the §27 route-out (never a dead end).
+  const errorDialog = page.locator('#flow-error-host .flow-modal');
+  await expect(errorDialog).toBeVisible({ timeout: 15_000 });
+  await errorDialog.locator('.dismiss').click();
+  await expect(errorDialog).toHaveCount(0);
+  await loopReadout().click();
+  await expect(loopPanel().locator('[data-app-route-out="retry"]')).toBeVisible({ timeout: 10_000 });
+  await expect(loopPanel().locator('[data-app-route-out="terminate"]')).toBeVisible();
+
+  await app.close();
+  for (const d of [repo, home, binDir]) rmSync(d, { recursive: true, force: true });
+});
+
+// §27.6 tracer bullet (e) — an armed interrupt routes to the gate at the next consolidate, stating the
+// verdict it would otherwise have reached. Armed through the renderer's window.flow seam (the same IPC the
+// panel's "hand back to me" button fires); the button itself is covered by the loopPanel DOM unit tests.
+test('an armed §27 interrupt routes to the gate with the would-be verdict stated (§27.9 / AC9)', { tag: '@ownapp' }, async () => {
+  const repo = seedAppLoopFlowRepo('agent-term-e2e-v2-arm-');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-v2-arm-home-'));
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-v2-arm-bin-');
+  // Round 1's consolidator would return `another round` (loop back), but the armed interrupt diverts it.
+  seedFakeAgentV2(binDir, { stepId: 'plan', artifactRel: APP_ARTIFACT_REL, work: 'complete', verdicts: [`verdict: another round\nroster: ${PLAN_V2_ROSTER[0]}\n`] });
+  app = await electron.launch({
+    args: ['out/main/index.js'],
+    env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100', CLAUDE_CONFIG_DIR: exampleConfigDir, PATH: `${binDir}:${process.env.PATH}`, FAKE_GHGIT_LOG: logFile },
+  });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+  await typeCommand(`cd "${repo}"`);
+  await expect(flowControl()).toHaveText('Start', { timeout: 10_000 });
+  await typeCommand('fake-agent');
+
+  // Arm the interrupt BEFORE the run starts (queued, honored at the FIRST consolidate). It is persisted
+  // independently of the run-state, so it is honored regardless of when the consolidate turn arrives.
+  const repoKey = realpathSync(repo);
+  await page.evaluate((key) => window.flow.armInterrupt(key, 'plan'), repoKey);
+
+  await flowControl().click(); // enter the app step → work → review round 1 → consolidate (honors the arm)
+
+  // The consolidator would have looped back (`another round`), but the armed interrupt routes to the gate
+  // stating that would-be verdict — the loop stops at the consolidator's gate, not a new review round.
+  await expect.poll(() => readIf(appRunState(repo)), { timeout: 40_000 }).toContain('verdict: another round');
+  expect(readIf(appRunState(repo))).toContain('status: complete');
+  expect(readIf(appRunState(repo))).toContain('turn_key: consolidate-plan');
+
+  await app.close();
+  for (const d of [repo, home, binDir]) rmSync(d, { recursive: true, force: true });
 });
 
 test('a legacy (§26) loop step still runs the §26 work path unchanged, writing no §27 loop state (§27.15 / AC10)', async () => {
@@ -5704,3 +5935,4 @@ test('the in-app install affordance is reachable in the scrolling Settings colum
   });
   expect(within).toBe(true);
 });
+

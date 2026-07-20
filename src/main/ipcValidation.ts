@@ -10,6 +10,7 @@ import {
   INSTALL_DESTINATION_IDS,
   SESSION_ID,
   type FlowAppRouteOutMsg,
+  type FlowArmInterruptMsg,
   type AgentInjectMsg,
   type ClipboardWriteMsg,
   type CaptureLastMsg,
@@ -189,6 +190,12 @@ export function isValidFlowAppRouteOut(m: unknown): m is FlowAppRouteOutMsg {
     m.turnKey.length > 0 &&
     (APP_ROUTE_OUT_ACTIONS as readonly unknown[]).includes(m.action)
   );
+}
+
+/** flow:armInterrupt — the operator arms the §27 queued interrupt (§27.9). `repoKey` becomes a filesystem
+ *  path so it gets the safe-path guard; `step` is the non-empty identity the receiver acts on (§6). */
+export function isValidFlowArmInterrupt(m: unknown): m is FlowArmInterruptMsg {
+  return isRecord(m) && isLiveSession(m) && isSafeRepoKey(m.repoKey) && typeof m.step === 'string' && m.step.length > 0;
 }
 
 /** flow:resolveBootstrapConflict — the operator's answer to a §26.9 bootstrap conflict. `wipe` selects

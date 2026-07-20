@@ -78,6 +78,7 @@ export type FlowStripDeps = Omit<
   | 'gateDecision'
   | 'retryTurn'
   | 'appRouteOut'
+  | 'armInterrupt'
   | 'setTitle'
 > & {
   /** The docked loop panel's element id, injected by the composition root so the read-out's

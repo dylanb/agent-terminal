@@ -3,6 +3,7 @@
 
 import type { Chord, KeyActionId } from './keymap';
 import type { LoopActivity } from './loopActivity';
+import type { ConsolidatorVerdict } from './consolidatorOutput';
 
 export type SessionId = string;
 
@@ -60,6 +61,7 @@ export const CH = {
   flowGateDecision: 'flow:gateDecision',
   flowRetryTurn: 'flow:retryTurn',
   flowAppRouteOut: 'flow:appRouteOut',
+  flowArmInterrupt: 'flow:armInterrupt',
   appOpenExternal: 'app:openExternal',
   todoTemplateList: 'todoTemplate:list',
   todoTemplateInstantiate: 'todoTemplate:instantiate',
@@ -482,6 +484,18 @@ export interface FlowLoopView {
    *  onto the §27-only error route-out (retry / accept / terminate) so the receiver acts on the identity it
    *  names, never ambient state (§6). Additive and §27-only — no §26 concept crosses the seam (§27.15). */
   appTurn?: { step: string; turnKey: string };
+  /** §27.4/§27.6/AC8 — the def's reviewer catalog (every persona the loop can invoke) and, once the
+   *  consolidator has chosen, `chosenRoster` (the personas the next/current round runs). Both are the SAME
+   *  parsed-def data the round is drawn from, so the displayed roster and the round's actual roster cannot
+   *  drift. Additive and §27-only — the §26 provider populates neither. */
+  catalog?: string[];
+  chosenRoster?: string[];
+  /** §27.6/AC5/AC9 — the round's consolidator verdict, the closed `ConsolidatorVerdict` set the engine and
+   *  loop-state already carry, so a fourth value cannot cross the wire. Only under `stop for a human` does
+   *  `verdictReason` accompany it. The panel surfaces the verdict at the gate, and the would-be verdict on an
+   *  armed interrupt. Additive and §27-only; the §26 provider populates neither. */
+  verdict?: ConsolidatorVerdict;
+  verdictReason?: string;
 }
 
 /** The GitHub issue (ticket) and PR a flow is working (§24.2.3 T7). Numbers only — the title, body,
@@ -704,6 +718,16 @@ export interface FlowAppRouteOutMsg {
   step: string;
   turnKey: string;
   action: AppRouteOutAction;
+}
+
+/** flow:armInterrupt request (§27.9/AC9): the operator arms the queued interrupt for a §27 loop step. It
+ *  carries the identity of the `step` it acts on (§6) — the receiver arms that step's interrupt, never one
+ *  derived from ambient state — so an arm for one step can never fire against another. One-way; the consolidator
+ *  honors it at its next invocation (routing to the gate) and the panel re-pulls via flow:onStateChanged. */
+export interface FlowArmInterruptMsg {
+  sessionId: SessionId;
+  repoKey: string;
+  step: string;
 }
 
 /** flow:githubRef request (§24.2.3 T7): resolve a ref's title/body/url for the popout. `repoKey`
@@ -993,6 +1017,10 @@ export interface FlowApi {
    *  acts on (§6). `retry` re-runs the turn, `accept` advances a present artifact without re-running,
    *  `terminate` moves the flow off the step. One-way: the loop panel re-pulls via flow:onStateChanged. */
   appRouteOut(repoKey: string, step: string, turnKey: string, action: AppRouteOutAction): void;
+  /** §27.9/AC9 — arm the queued interrupt for `repoKey`'s §27 loop `step` (the identity it acts on, §6). The
+   *  consolidator honors it at its next invocation, routing to the human gate. One-way: the loop panel
+   *  re-pulls via flow:onStateChanged when the resulting state lands. */
+  armInterrupt(repoKey: string, step: string): void;
 }
 
 /** CLI launcher install (§23.4 / #25): the settings affordance's only seam to the install action. */

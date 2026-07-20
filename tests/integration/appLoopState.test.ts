@@ -4,8 +4,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   APP_LOOP_STATE_SCHEMA,
+  armInterrupt,
+  clearInterrupt,
+  consolidatorOutputFile,
+  consolidatorOutputRel,
   parseAppLoopState,
   readAppLoopState,
+  readArmedInterrupt,
   roundReportFile,
   roundReportRel,
   serializeAppLoopState,
@@ -183,6 +188,110 @@ describe('§27 round-report location resolver', () => {
     try {
       symlinkSync(elsewhere, join(repo, '.agent-terminal'));
       expect(roundReportFile(repo, 1)).toBeNull();
+    } finally {
+      rmSync(elsewhere, { recursive: true, force: true });
+    }
+  });
+});
+
+// §27.6/AC3 — the consolidator's output has a write-target (the actor, via consolidatorOutputRel) and a
+// read-source (the completion gate, via consolidatorOutputFile) that derive from ONE resolver, round-keyed
+// and disjoint from the round reports (writer↔reader-location).
+describe('§27 consolidator-output location resolver', () => {
+  it('resolves round N to <repo>/.agent-terminal/loop/consolidate/<N>.md, write-target === read-source', () => {
+    expect(consolidatorOutputRel(2)).toBe('.agent-terminal/loop/consolidate/2.md');
+    expect(consolidatorOutputFile(repo, 2)).toBe(join(realpathSync(repo), consolidatorOutputRel(2)));
+  });
+
+  it('keeps consolidator output disjoint from the round report of the same round', () => {
+    expect(consolidatorOutputFile(repo, 1)).not.toBe(roundReportFile(repo, 1));
+  });
+
+  it('refuses a consolidator-output location behind a symlinked loop container (CWE-59)', () => {
+    const elsewhere = mkdtempSync(join(tmpdir(), 'apploop-evil-consol-'));
+    try {
+      symlinkSync(elsewhere, join(repo, '.agent-terminal'));
+      expect(consolidatorOutputFile(repo, 1)).toBeNull();
+    } finally {
+      rmSync(elsewhere, { recursive: true, force: true });
+    }
+  });
+});
+
+// §27.6/AC5 — a consolidator run persists its verdict, and (through the single-sourced gate) its reason
+// ONLY under `stop for a human`, plus the roster it chose (AC8). Additive to the run-state document.
+describe('§27 loop-state — the consolidator verdict / reason / chosen roster', () => {
+  const CONSOL: AppLoopRunState = {
+    loop: 'plan-loop',
+    step: 'plan',
+    turnKey: 'consolidate-plan',
+    status: 'complete',
+    round: 2,
+    verdict: 'another round',
+    chosenRoster: ['review-plan-principal', 'review-plan-security'],
+  };
+
+  it('round-trips a consolidator run carrying its verdict and chosen roster', () => {
+    const text = serializeAppLoopState(CONSOL, FIXED);
+    expect(text).toContain('verdict: another round');
+    expect(parseAppLoopState(text)).toEqual(CONSOL);
+  });
+
+  it('round-trips a stop-for-a-human verdict carrying its reason', () => {
+    const stop: AppLoopRunState = { ...CONSOL, verdict: 'stop for a human', chosenRoster: undefined, verdictReason: 'reviewers disagree on the API shape' };
+    expect(parseAppLoopState(serializeAppLoopState(stop, FIXED))).toEqual(stop);
+  });
+
+  it('drops the verdict reason on any verdict other than stop-for-a-human (reason iff stop-for-a-human gate)', () => {
+    const withReason: AppLoopRunState = { ...CONSOL, verdict: 'another round', verdictReason: 'stale' };
+    const back = parseAppLoopState(serializeAppLoopState(withReason, FIXED));
+    expect(back?.verdictReason).toBeUndefined();
+    expect(back?.verdict).toBe('another round');
+  });
+
+  it('rejects an out-of-set verdict rather than surfacing a value the branch cannot handle', () => {
+    const text = serializeAppLoopState(CONSOL, FIXED).replace('verdict: another round', 'verdict: looks-fine');
+    expect(parseAppLoopState(text)?.verdict).toBeUndefined();
+  });
+});
+
+// §27.9/AC9/AC11 — the armed-interrupt flag is persisted INDEPENDENTLY of the wholesale run-state write, so
+// a turn-status persist can neither clobber an arm nor resurrect a cleared one, and it survives a relaunch.
+describe('§27 armed-interrupt — persisted independently of the run-state document', () => {
+  it('reads back the armed step after a simulated relaunch (null before any arm)', () => {
+    expect(readArmedInterrupt(repo)).toBeNull();
+    armInterrupt(repo, 'plan');
+    expect(readArmedInterrupt(repo)).toEqual({ step: 'plan' });
+  });
+
+  it('a wholesale run-state write does NOT clobber an armed interrupt (clobber regression)', () => {
+    armInterrupt(repo, 'plan');
+    writeAppLoopState(repo, { ...RUN, turnKey: 'consolidate-plan', status: 'working', round: 2 }, FIXED);
+    expect(readArmedInterrupt(repo)).toEqual({ step: 'plan' });
+  });
+
+  it('a wholesale run-state write does NOT resurrect a cleared interrupt', () => {
+    armInterrupt(repo, 'plan');
+    clearInterrupt(repo);
+    expect(readArmedInterrupt(repo)).toBeNull();
+    writeAppLoopState(repo, RUN, FIXED);
+    expect(readArmedInterrupt(repo)).toBeNull();
+  });
+
+  it('validates the persisted armed step on read — an empty/missing step is not armed (CWE-20)', () => {
+    armInterrupt(repo, 'plan');
+    clearInterrupt(repo);
+    // arming with a blank step is inert — never a phantom arm on an empty identity
+    armInterrupt(repo, '');
+    expect(readArmedInterrupt(repo)).toBeNull();
+  });
+
+  it('refuses to arm behind a symlinked loop container rather than following it (CWE-59)', () => {
+    const elsewhere = mkdtempSync(join(tmpdir(), 'apploop-evil-arm-'));
+    try {
+      symlinkSync(elsewhere, join(repo, '.agent-terminal'));
+      expect(() => armInterrupt(repo, 'plan')).toThrow();
+      expect(existsSync(join(elsewhere, 'loop', 'armed-interrupt.yaml'))).toBe(false);
     } finally {
       rmSync(elsewhere, { recursive: true, force: true });
     }

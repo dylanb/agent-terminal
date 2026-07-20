@@ -37,6 +37,7 @@ import {
   isValidFlowGateDecision,
   isValidFlowResolveBootstrapConflict,
   isValidFlowAppRouteOut,
+  isValidFlowArmInterrupt,
   isValidFlowGithubRef,
   openExternalTarget,
   isValidInject,
@@ -116,9 +117,9 @@ import {
   handleInstallExamplesApply,
   type InstallDestination,
 } from './installExamples';
-import { deriveAppLoopView } from './loopViewV2';
+import { provideAppLoopView } from './loopViewV2';
 import { createAppLoopEngine } from './appLoopEngine';
-import { APP_LOOP_DIR_SEGMENTS, roundReportFile, roundReportRel, writeAppLoopState } from './appLoopState';
+import { APP_LOOP_DIR_SEGMENTS, armInterrupt, consolidatorOutputFile, consolidatorOutputRel, roundReportFile, roundReportRel, writeAppLoopState } from './appLoopState';
 import { resolveLoopDefV2 } from './loopDefV2';
 import { resolveExampleLoopsV2Dir } from './exampleAssets';
 import { userConfigLoopsV2Dir } from './userConfig';
@@ -492,6 +493,12 @@ async function createWindow(): Promise<void> {
     resolveReportLocation: (repoDir, round) => {
       const abs = roundReportFile(repoDir, round);
       return abs ? { abs, rel: roundReportRel(round) } : null;
+    },
+    // §27.6 — the round-keyed consolidator-output location: the confined absolute path the engine reads back
+    // and the repo-relative path the consolidator is told to write, from the ONE resolver (writer↔reader).
+    resolveConsolidatorLocation: (repoDir, round) => {
+      const abs = consolidatorOutputFile(repoDir, round);
+      return abs ? { abs, rel: consolidatorOutputRel(round) } : null;
     },
     audit: (repoDir, cmd, exit) => audit.recordCommand(repoDir, 'turn', cmd, exit),
     emitError: (reason) => send(CH.flowOnLoopError, { sessionId: SESSION_ID, reason }),
@@ -985,14 +992,10 @@ async function createWindow(): Promise<void> {
     // parsed namespace, never derived from repo content; the loop name is held to a safe segment inside
     // the resolver before any tier root is joined.
     readAppLoopView: (repoKey, name) =>
-      deriveAppLoopView(
-        name,
-        {
-          tiers: { operator: userConfigLoopsV2Dir(), appBundled: resolveExampleLoopsV2Dir(iconLoc) },
-          repoDir: repoKey,
-        },
-        appEngine.liveErrorFor(repoKey),
-      ),
+      provideAppLoopView(appEngine, name, {
+        tiers: { operator: userConfigLoopsV2Dir(), appBundled: resolveExampleLoopsV2Dir(iconLoc) },
+        repoDir: repoKey,
+      }),
   });
 
   // §24.2.3 T7 — resolve a ticket/PR's title/body/url for the popout, best-effort via `gh`, cached.
@@ -1279,17 +1282,29 @@ async function createWindow(): Promise<void> {
       // §27.12c — the §27-only work-turn route-out (retry / accept-present-artifact / terminate), acting on
       // the step+turn identity the payload names (§6), never ambient state. After a relaunch the engine has
       // no live turn, so reconstruct the stopped turn from the persisted §27 run state first (never re-driven
-      // — only made routable); a live turn for this repo already matches, so the resume is skipped.
+      // — only made routable); a live turn for this repo already matches, so the resume is skipped. The
+      // done-file watch is armed unconditionally: the derived view (provideAppLoopView) may have already
+      // reconstructed the stranded turn, so gating the arm on the resume would leave a Retry re-injection
+      // without a completion signal — injector and completion signal must be armed together (§27.12).
       [CH.flowAppRouteOut]: (_e, m) => {
         if (!isValidFlowAppRouteOut(m)) return;
-        if (appEngine.activeRepoDir() !== m.repoKey) {
-          appEngine.resume(m.repoKey);
-          // Re-arm the §27 done-file watch for the reconstructed turn: after a relaunch the fresh process
-          // has no live watcher, so a Retry re-injection would otherwise never see the turn-done file and
-          // could only stall to a second error (injector and completion signal must be armed together).
-          armAppTurnDoneWatch(m.repoKey);
-        }
+        if (appEngine.activeRepoDir() !== m.repoKey) appEngine.resume(m.repoKey);
+        armAppTurnDoneWatch(m.repoKey);
         appEngine.routeOut(m.repoKey, m.step, m.turnKey, m.action);
+      },
+      // §27.9/AC9 — arm the §27 queued interrupt for the step the payload names (§6). Persisted independently
+      // of the run-state document (armInterrupt), so it survives a relaunch and no turn-status write clobbers
+      // it; the consolidator honors it at its next invocation. Best-effort: a write failure (planted symlink,
+      // ENOSPC) must never crash the IPC handler — the arm simply does not land, and the operator can retry.
+      [CH.flowArmInterrupt]: (_e, m) => {
+        if (!isValidFlowArmInterrupt(m)) return;
+        try {
+          armInterrupt(m.repoKey, m.step);
+        } catch (e) {
+          send(CH.flowOnLoopError, { sessionId: SESSION_ID, reason: `could not arm the interrupt: ${e instanceof Error ? e.message : String(e)}` });
+          return;
+        }
+        pushFlowChanged();
       },
       // §26.9 — the operator's wipe/cancel answer to a bootstrap conflict.
       [CH.flowResolveBootstrapConflict]: (_e, m) => {

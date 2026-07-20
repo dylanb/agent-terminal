@@ -33,6 +33,13 @@ export function reviewRoster(def: LoopDefV2): RosterEntry[] {
   return def.reviewers.map((r) => ({ persona: r.persona, charter: r.charter }));
 }
 
+/** The def's reviewer catalog as persona names (§27.4): the ONE projection the panel display, the
+ *  consolidator's roster-validation catalog, and the round roster derive from, so they cannot drift on which
+ *  personas the def declares (CLAUDE.md shared-semantics). */
+export function catalogPersonas(def: LoopDefV2): string[] {
+  return def.reviewers.map((r) => r.persona);
+}
+
 export interface ReviewAndFixPromptReq {
   /** The round's roster — charters handed by reference, not inlined content (§27.4). */
   roster: RosterEntry[];
@@ -71,9 +78,11 @@ export function composeReviewAndFixPrompt(req: ReviewAndFixPromptReq): string {
     '',
     `Then write the round report to ${req.reportRel}, a Markdown document with this structure:`,
     `- one \`${g.sectionPrefix.trim()} <section>\` heading for each of these sections: ${req.sections.join(', ')}`,
-    `- one \`${g.personaPrefix.trim()} <persona>\` record for EVERY reviewer above — including any that failed or`,
-    `  found nothing; a reviewer with no issues carries the line \`${g.emptyMarker}\` in its record. Dropping a`,
-    '  reviewer makes the report malformed.',
+    `- one \`${g.personaPrefix.trim()} <persona>\` record for EVERY reviewer above — including any that failed to`,
+    '  run or found nothing. Dropping a reviewer makes the report malformed. In a reviewer\'s record:',
+    `  a reviewer that RAN and raised no issues carries the line \`${g.emptyMarker}\`; a reviewer that FAILED to`,
+    `  run (crashed, timed out, produced nothing usable) carries the line \`${g.failedMarker}\` instead — the two`,
+    '  are distinct, and a round with a failed reviewer can never be judged clean (§27.5/§27.6).',
     `- for every issue you record under a reviewer, the labelled lines \`${g.issueLabel}:\`, \`${g.dispositionLabel}:\`,`,
     `  \`${g.reasonLabel}:\`, and (when fixed) \`${g.whatChangedLabel}:\`.`,
     `- each \`${g.dispositionLabel}:\` is EXACTLY one of: ${DISPOSITIONS.map((d) => `\`${d}\``).join(' / ')} — spelled`,

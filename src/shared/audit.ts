@@ -317,6 +317,28 @@ export function reviewRoundAuditCmd(kind: ReviewRoundAuditKind, round: number, d
   }
 }
 
+/** The lifecycle points of a §27 consolidator turn the §25 audit records (§27.6/§27.12) — one definition
+ *  beside ReviewRoundAuditKind so the main-process writer and any future viewer share the vocabulary. The
+ *  `interrupt` kind records an honored armed interrupt distinctly from a terminal `complete` (§27.9/AC9). */
+export type ConsolidateAuditKind = 'boundary' | 'complete' | 'error' | 'accept' | 'retry' | 'interrupt';
+
+export function consolidateAuditCmd(kind: ConsolidateAuditKind, round: number, detail?: string): string {
+  switch (kind) {
+    case 'boundary':
+      return `§27 consolidate round ${round} boundary: ${detail ?? ''}`;
+    case 'complete':
+      return `§27 consolidate round ${round} complete: ${detail ?? ''}`;
+    case 'error':
+      return `§27 consolidate round ${round} failed: ${detail ?? ''}`;
+    case 'retry':
+      return `§27 consolidate round ${round} retry`;
+    case 'accept':
+      return `§27 consolidate round ${round} accepted`;
+    case 'interrupt':
+      return `§27 consolidate round ${round} interrupt honored: ${detail ?? ''}`;
+  }
+}
+
 /** The events resolving a step's typed inputs produces (§25.5): an `input.resolved` per value, plus a
  *  `ticket.assoc` when a `github-ticket` input (per `typeByName`) resolved to a positive integer —
  *  explicit ID sourcing only, never scraped (§25.7). */

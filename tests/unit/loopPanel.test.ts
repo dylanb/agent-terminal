@@ -552,6 +552,90 @@ describe('docked loop panel (§24.2.3 T2)', () => {
   });
 });
 
+// §27.6/AC5/AC8/AC9 — the §27 consolidator surface: the def's reviewer catalog with the chosen roster
+// distinguished, the round verdict + reason, and the arm-interrupt control (offered only while iterating).
+describe('docked loop panel — the §27 consolidator surface (AC5, AC8, AC9)', () => {
+  const armDeps = () => {
+    const armInterrupt = vi.fn();
+    return { deps: { githubRef: () => Promise.resolve(null), openExternal: () => {}, armInterrupt }, armInterrupt };
+  };
+  const catalogNames = (): string[] => [...host.querySelectorAll<HTMLElement>('[data-catalog-persona]')].map((el) => el.textContent ?? '');
+  const chosenNames = (): string[] =>
+    [...host.querySelectorAll<HTMLElement>('[data-catalog-persona]')].filter((el) => el.dataset.chosen === 'true').map((el) => el.textContent ?? '');
+
+  it('renders the def reviewer catalog and distinguishes the chosen roster within it (AC8)', () => {
+    const { deps } = armDeps();
+    createLoopPanel(host, deps).render(
+      loop({
+        status: 'working',
+        iteration: 2,
+        appTurn: { step: 'plan', turnKey: 'review-plan' },
+        catalog: ['review-plan-principal', 'review-plan-security', 'review-plan-contracts'],
+        chosenRoster: ['review-plan-security'],
+      }),
+      'plan',
+    );
+    expect(catalogNames()).toEqual(['review-plan-principal', 'review-plan-security', 'review-plan-contracts']);
+    expect(chosenNames()).toEqual(['review-plan-security']); // only the chosen persona is marked
+  });
+
+  it('shows the verdict and (for stop-for-a-human) its reason at the gate (AC5)', () => {
+    createLoopPanel(host).render(
+      loop({ status: 'complete', iteration: 2, appTurn: { step: 'plan', turnKey: 'consolidate-plan' }, verdict: 'stop for a human', verdictReason: 'the reviewers disagree' }),
+      'plan',
+    );
+    expect(row('verdict')?.querySelector('.lv')?.textContent).toBe('stop for a human');
+    expect(row('verdict reason')?.querySelector('.lv')?.textContent).toBe('the reviewers disagree');
+  });
+
+  it('shows the verdict with no reason row on a non-stop verdict', () => {
+    createLoopPanel(host).render(
+      loop({ status: 'complete', iteration: 3, appTurn: { step: 'plan', turnKey: 'consolidate-plan' }, verdict: 'another round' }),
+      'plan',
+    );
+    expect(row('verdict')?.querySelector('.lv')?.textContent).toBe('another round');
+    expect(row('verdict reason')).toBeUndefined();
+  });
+
+  it('offers the arm-interrupt control while iterating and fires it with the step identity (AC9, §6)', () => {
+    const { deps, armInterrupt } = armDeps();
+    createLoopPanel(host, deps).render(
+      loop({ status: 'working', iteration: 2, appTurn: { step: 'plan', turnKey: 'review-plan' } }),
+      'plan',
+    );
+    const btn = host.querySelector<HTMLElement>('[data-arm-interrupt]');
+    expect(btn).not.toBeNull();
+    btn!.click();
+    expect(armInterrupt).toHaveBeenCalledWith('plan'); // the step identity it acts on, not ambient state
+  });
+
+  it('the arm-interrupt accessible name contains its visible label (WCAG 2.5.3 Label in Name)', () => {
+    const { deps } = armDeps();
+    createLoopPanel(host, deps).render(
+      loop({ status: 'working', iteration: 2, appTurn: { step: 'plan', turnKey: 'review-plan' } }),
+      'plan',
+    );
+    const btn = host.querySelector<HTMLElement>('[data-arm-interrupt]');
+    expect(btn).not.toBeNull();
+    const name = (btn!.getAttribute('aria-label') ?? '').toLowerCase();
+    expect(name).toContain((btn!.textContent ?? '').toLowerCase()); // 2.5.3: accessible name contains the visible text
+  });
+
+  it('offers NO arm-interrupt control when not iterating — at the gate (complete) or in error (AC9)', () => {
+    const { deps } = armDeps();
+    const panel = createLoopPanel(host, deps);
+    panel.render(loop({ status: 'complete', iteration: 2, appTurn: { step: 'plan', turnKey: 'consolidate-plan' }, verdict: 'clean' }), 'plan');
+    expect(host.querySelector('[data-arm-interrupt]')).toBeNull();
+    panel.render(loop({ status: 'error', errorReason: 'x', iteration: 2, appTurn: { step: 'plan', turnKey: 'consolidate-plan' } }), 'plan');
+    expect(host.querySelector('[data-arm-interrupt]')).toBeNull();
+  });
+
+  it('renders no arm-interrupt control when the service is not wired (inert-affordance guard, WCAG 4.1.2)', () => {
+    createLoopPanel(host).render(loop({ status: 'working', iteration: 2, appTurn: { step: 'plan', turnKey: 'review-plan' } }), 'plan');
+    expect(host.querySelector('[data-arm-interrupt]')).toBeNull();
+  });
+});
+
 // §24.2.3 T7 — the popout also surfaces the ticket + PR the flow is working: the bare number renders
 // immediately and a clickable GitHub link + title + truncated body fill in once `gh` resolves
 // (best-effort). The refs section shows whenever the flow is active, even on a non-loop step.

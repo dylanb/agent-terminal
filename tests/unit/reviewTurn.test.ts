@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { composeReviewAndFixPrompt, preReviewBoundaryCommand, reviewRoster } from '../../src/main/reviewTurn';
+import { catalogPersonas, composeReviewAndFixPrompt, preReviewBoundaryCommand, reviewRoster } from '../../src/main/reviewTurn';
 import { DISPOSITIONS, REPORT_GRAMMAR, roundReportWellFormed } from '../../src/shared/roundReport';
 import type { LoopDefV2 } from '../../src/main/loopDefV2';
 
@@ -61,6 +61,21 @@ describe('reviewRoster — the def\'s full reviewer catalog (§27.4, AC2)', () =
   });
 });
 
+// §27.4 / CLAUDE.md shared-semantics — the def's catalog-persona projection lives in ONE place, so the panel
+// display, the consolidator's validation catalog, and the round roster cannot drift on which personas the def
+// declares.
+describe('catalogPersonas — the ONE catalog-persona projection (§27.4)', () => {
+  it('is every persona the def declares, in order, and matches reviewRoster\'s persona projection', () => {
+    expect(catalogPersonas(def())).toEqual(['review-plan-principal', 'review-plan-security']);
+    expect(catalogPersonas(def())).toEqual(reviewRoster(def()).map((r) => r.persona));
+  });
+
+  it('follows the def: a different catalog is a different projection', () => {
+    const other = def({ reviewers: [{ persona: 'impl-review-tests', charter: '/c/t.md', tools: [] }] });
+    expect(catalogPersonas(other)).toEqual(['impl-review-tests']);
+  });
+});
+
 describe('composeReviewAndFixPrompt — single-sourced from the shared report vocabulary (§27.5)', () => {
   const req = () => ({
     roster: def().reviewers.map((r) => ({ persona: r.persona, charter: r.charter })),
@@ -90,6 +105,15 @@ describe('composeReviewAndFixPrompt — single-sourced from the shared report vo
       expect(p).toContain(label);
     }
     expect(p).toContain(REPORT_GRAMMAR.emptyMarker);
+  });
+
+  it('instructs the failed marker for a reviewer that FAILED TO RUN, distinct from the empty marker (§27.5/AC7)', () => {
+    // §27.5/v2.137 — a lens that failed to run must be recorded DISTINCTLY from one that ran and found
+    // nothing; the failed marker is the signal the consolidator's clean-guard keys on, so the prompt must
+    // name it (single-sourced from the grammar) rather than telling the fixer both carry the empty marker.
+    const p = composeReviewAndFixPrompt(req());
+    expect(p).toContain(REPORT_GRAMMAR.failedMarker);
+    expect(REPORT_GRAMMAR.failedMarker).not.toBe(REPORT_GRAMMAR.emptyMarker);
   });
 
   it('names the prescribed report sections and the round-keyed report location', () => {

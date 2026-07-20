@@ -40,6 +40,10 @@ export interface LoopPanelDeps {
    *  step+turn identity the receiver acts on (§6). Injected by the composition root; absent → the §27 error
    *  view shows no route-out (an un-wired control would be inert, WCAG 4.1.2). */
   appRouteOut?(step: string, turnKey: string, action: 'retry' | 'accept' | 'terminate'): void;
+  /** §27.9/AC9 — arm the queued interrupt for a §27 loop step, carrying the step identity it acts on (§6).
+   *  Injected by the composition root; absent → no arm control renders (an un-wired control would be inert,
+   *  WCAG 4.1.2). */
+  armInterrupt?(step: string): void;
 }
 
 const NOOP_DEPS: LoopPanelDeps = { githubRef: () => Promise.resolve(null), openExternal: () => {} };
@@ -181,6 +185,95 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
     body.append(group);
   };
 
+  /** §27.6/AC5 — the round's verdict and (only for `stop for a human`) its reason, kept INSIDE the live
+   *  region so they are announced as additions when the consolidator routes to the gate (WCAG 4.1.3). Added
+   *  after the reason anchor, ahead of any pr/branch rows, and removed in place when they fall away. */
+  const syncVerdictRows = (ldl: HTMLElement, anchor: HTMLElement, loop: FlowLoopView): void => {
+    syncNamedRow(ldl, anchor, 'loopVerdict', 'verdict', loop.verdict);
+    syncNamedRow(ldl, anchor, 'loopVerdictReason', 'verdict reason', loop.verdictReason);
+  };
+
+  /** Add / update / remove a keyed detail row in `ldl`, anchored after `anchor`. `datasetKey` is the
+   *  camelCase name; the matching `data-*` attribute is its kebab form. */
+  const syncNamedRow = (ldl: HTMLElement, anchor: HTMLElement, datasetKey: string, label: string, value: string | undefined): void => {
+    const attr = `data-${datasetKey.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`)}`;
+    const existing = ldl.querySelector<HTMLElement>(`[${attr}]`);
+    if (!value) {
+      existing?.remove();
+      return;
+    }
+    if (existing) {
+      const v = existing.querySelector('.lv')!;
+      if (v.textContent !== value) v.textContent = value;
+      return;
+    }
+    const rowEl = detailRow(doc, label, value);
+    rowEl.dataset[datasetKey] = '';
+    anchor.after(rowEl);
+  };
+
+  /** §27.4/§27.8/AC8 — the def's reviewer catalog with the consolidator's chosen roster distinguished within
+   *  it. Rendered whenever the view carries a catalog; each persona carries `data-catalog-persona`, and one
+   *  the chosen roster names carries `data-chosen="true"` (the visual treatment is the CSS's call). */
+  const syncCatalog = (body: HTMLElement, loop: FlowLoopView): void => {
+    const existing = body.querySelector<HTMLElement>('[data-catalog]');
+    if (!loop.catalog || loop.catalog.length === 0) {
+      existing?.remove();
+      return;
+    }
+    const sig = JSON.stringify([loop.catalog, loop.chosenRoster ?? []]);
+    if (existing && existing.dataset.catalogSig === sig) return; // unchanged — no rebuild, no re-announce
+    const chosen = new Set(loop.chosenRoster ?? []);
+    existing?.remove(); // rebuild the small list rather than diff it (catalog changes are rare and whole-set)
+    const wrap = doc.createElement('div');
+    wrap.className = 'catalog';
+    wrap.dataset.catalog = '';
+    wrap.dataset.catalogSig = sig;
+    const segH = doc.createElement('div');
+    segH.className = 'seg-h';
+    segH.textContent = 'Reviewers';
+    wrap.append(segH);
+    const list = doc.createElement('ul');
+    list.className = 'catalog-list';
+    for (const persona of loop.catalog) {
+      const li = doc.createElement('li');
+      li.className = 'catalog-persona';
+      li.dataset.catalogPersona = '';
+      if (chosen.has(persona)) {
+        li.dataset.chosen = 'true';
+        // Name the "runs next round" state for assistive tech, not colour alone (WCAG 1.4.1).
+        li.setAttribute('aria-label', `${persona} (runs the next round)`);
+      }
+      li.textContent = persona;
+      list.append(li);
+    }
+    wrap.append(list);
+    body.append(wrap);
+  };
+
+  /** §27.9/AC9 — the arm-interrupt control, offered ONLY while the loop is iterating (a live §27 working turn)
+   *  and only when the service is wired (an un-wired control would be inert, WCAG 4.1.2). Fires the injected
+   *  service with the step identity it acts on (§6); at the gate or in error there is nothing to interrupt, so
+   *  it is removed in place. */
+  const syncArmInterrupt = (body: HTMLElement, loop: FlowLoopView): void => {
+    const existing = body.querySelector<HTMLElement>('[data-arm-interrupt]');
+    if (loop.status !== 'working' || !loop.appTurn || !deps.armInterrupt) {
+      existing?.remove();
+      return;
+    }
+    if (existing) return;
+    const { step } = loop.appTurn;
+    const btn = doc.createElement('button');
+    btn.className = 'pill arm-interrupt';
+    btn.dataset.armInterrupt = '';
+    btn.textContent = 'Hand back to me';
+    // WCAG 2.5.3 Label in Name: the accessible name must contain the visible label contiguously, so a
+    // speech-input user saying "click Hand back to me" can activate it.
+    btn.setAttribute('aria-label', `Hand back to me — return the ${step} loop at the next consolidation`);
+    btn.addEventListener('click', () => deps.armInterrupt?.(step));
+    body.append(btn);
+  };
+
   /** A ticket/PR ref row. `retry` re-attempts the best-effort `gh` fetch (no-op once resolved); the row
    *  shows the bare number until the title/body/link fill in. */
   function refRow(label: string, kind: GithubRefKind, number: number): { el: HTMLElement; retry: () => void; resolved: () => boolean } {
@@ -248,8 +341,11 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
         if (liveLoop.iterVal.textContent !== iter) liveLoop.iterVal.textContent = iter;
       }
       syncReasonRow(liveLoop.ldl, liveLoop.reasonAnchor, loop.errorReason);
+      syncVerdictRows(liveLoop.ldl, liveLoop.reasonAnchor, loop);
       syncRetry(liveLoop.body, loop);
       syncAppRouteOut(liveLoop.body, loop);
+      syncCatalog(liveLoop.body, loop);
+      syncArmInterrupt(liveLoop.body, loop);
     }
     for (const r of refRows) if (!r.resolved()) r.retry();
   }
@@ -344,11 +440,14 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
       // §26.3/D48 — WHY a turn stopped, adjacent to `status: error`. Present only in error (the mirror
       // clears it on recovery).
       syncReasonRow(ldl, reasonAnchor, loop.errorReason);
+      // §27.6/AC5 — the consolidator verdict + reason, adjacent to the status/iteration rows.
+      syncVerdictRows(ldl, reasonAnchor, loop);
       if (loop.pr !== null) ldl.append(detailRow(doc, 'pr', `#${loop.pr}`, 'sig'));
       if (loop.branch !== null) ldl.append(detailRow(doc, 'branch', loop.branch));
       // The gate's human_options (§18.1/§19.4) — a read-only preview of what the gate offers, rendered
-      // whenever the view carries gateOptions (a §26 awaiting gate OR a §27 run-less def); the actionable
-      // decision buttons render below (loopGateActionable).
+      // whenever the view carries gateOptions (a §26 awaiting gate, a §27 run-less def, OR the §27 terminal
+      // consolidator gate once a verdict is reached); the actionable decision buttons render below
+      // (loopGateActionable).
       if (loop.gateOptions && loop.gateOptions.length > 0)
         ldl.append(detailRow(doc, 'gate options', loop.gateOptions.map(gateOptionLabel).join(' · ')));
 
@@ -357,8 +456,9 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
       // §26.6 / L5 — the gate DECISION surface (loop-flow.html's approve · changes · impasse): a button
       // per gate option the def offers. Choosing one runs the LoopDef `on_*` action list in-app; the
       // decision is the app's, surfaced via state.yaml → flow:onStateChanged (the panel re-pulls). A §27
-      // run-less view carries the same gateOptions display-only (loopGateActionable false) — the read-only
-      // row above shows them, but no clickable control renders; the refusal guard is at the operation.
+      // run-less view AND the §27 terminal consolidator gate carry the same gateOptions display-only
+      // (loopGateActionable false) — the read-only row above shows them, but no clickable control renders;
+      // the refusal guard is at the operation.
       if (loop.gateOptions && loop.gateOptions.length > 0 && loopGateActionable(loop) && deps.gateDecision) {
         const gate = doc.createElement('div');
         gate.className = 'gatebar';
@@ -383,6 +483,9 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
 
       syncRetry(body, loop);
       syncAppRouteOut(body, loop);
+      // §27.4/§27.9/AC8/AC9 — the reviewer catalog (chosen roster distinguished) and the arm-interrupt control.
+      syncCatalog(body, loop);
+      syncArmInterrupt(body, loop);
 
       // §26.3/D47a(c) — the human-in-the-loop escape hatch: advance a turn whose automatic done-signal
       // the orchestrator missed, without editing files. Present on a loop step only when the composition

@@ -11,12 +11,13 @@ import { writeAppLoopState } from '../../src/main/appLoopState';
 // (gate options display-only, no round has run) or a def-failure view carrying the reason (AC 6). It reads
 // no §26 loop state, so a §27 step renders with §26 defs and §26 loop state absent (AC "neither path").
 
-const DEF = (opts: string[]): string => `version: v2
+const DEF = (opts: string[], reviewers: string[] = []): string => `version: v2
 name: plan-loop
 work:
   recipe: prompts/work.md
   artifact: plan
-reviewers: []
+reviewers:
+${reviewers.length === 0 ? '  []' : reviewers.map((p) => `  - persona: ${p}\n    charter: charter/${p}.md\n    tools: [Read]`).join('\n')}
 consolidator:
   recipe: prompts/consolidate.md
 boundaries: []
@@ -34,12 +35,14 @@ let repoDir: string;
 function tiers(): LoopDefV2Tiers {
   return { operator: null, appBundled: join(appDir, 'loops-v2') };
 }
-function plant(name: string, opts: string[]): void {
+function plant(name: string, opts: string[], reviewers: string[] = []): void {
   const defDir = join(appDir, 'loops-v2', name);
   mkdirSync(join(defDir, 'prompts'), { recursive: true });
+  mkdirSync(join(defDir, 'charter'), { recursive: true });
   writeFileSync(join(defDir, 'prompts', 'work.md'), 'do work\n');
   writeFileSync(join(defDir, 'prompts', 'consolidate.md'), 'judge\n');
-  writeFileSync(join(defDir, `${name}.yaml`), DEF(opts).replace('name: plan-loop', `name: ${name}`));
+  for (const p of reviewers) writeFileSync(join(defDir, 'charter', `${p}.md`), `charter for ${p}\n`);
+  writeFileSync(join(defDir, `${name}.yaml`), DEF(opts, reviewers).replace('name: plan-loop', `name: ${name}`));
 }
 
 beforeEach(() => {
@@ -107,6 +110,9 @@ describe('deriveAppLoopView — live run-state (AC1, AC7)', () => {
     expect(view.appTurn).toEqual({ step: 'plan', turnKey: 'work-plan' });
     expect(view.iteration).toBeUndefined(); // no round has run
     expect(view.errorReason).toBeUndefined();
+    // §27.6/AC5 Non-goals — the gate's options preview belongs at the TERMINAL consolidator gate, not during
+    // an active mid-loop turn; a `working` run-state has reached no verdict, so it carries no gate options.
+    expect(view.gateOptions).toBeUndefined();
   });
 
   it('mirrors an errored work turn: status error, human-needed by the shared predicate, its reason + identity', () => {
@@ -141,6 +147,7 @@ describe('deriveAppLoopView — live run-state (AC1, AC7)', () => {
     expect(view.status).toBe('working');
     expect(view.iteration).toBe(1);
     expect(view.appTurn).toEqual({ step: 'plan', turnKey: 'review-plan' });
+    expect(view.gateOptions).toBeUndefined(); // a mid-loop review round is not at the gate (§27.6/AC5)
   });
 
   it('carries the round number on an errored review turn (route-out surfaces it)', () => {
@@ -164,6 +171,69 @@ describe('deriveAppLoopView — live run-state (AC1, AC7)', () => {
     expect(view.status).toBe('not-started'); // the stale run-state is not this loop's
     expect(view.gateOptions).toEqual(['approve', 'request-changes']);
     expect(view.appTurn).toBeUndefined();
+  });
+});
+
+// §27.4/§27.6/AC5/AC8 — once a roster is selected the view surfaces the def's reviewer catalog and the
+// consolidator's chosen roster (both parsed-def data), plus the round's verdict and (for stop-for-a-human)
+// its reason, so the panel can render them.
+describe('deriveAppLoopView — the catalog, chosen roster, and verdict (AC5, AC8)', () => {
+  const FIXED = (): Date => new Date('2026-07-17T12:00:00.000Z');
+  const CATALOG = ['review-plan-principal', 'review-plan-security', 'review-plan-contracts'];
+
+  it('surfaces the def reviewer catalog whenever the def resolves (AC8)', () => {
+    plant('plan-loop', ['approve'], CATALOG);
+    writeAppLoopState(repoDir, { loop: 'plan-loop', step: 'plan', turnKey: 'review-plan', status: 'working', round: 2 }, FIXED);
+    const view = deriveAppLoopView('plan-loop', { tiers: tiers(), repoDir });
+    expect(view.catalog).toEqual(CATALOG);
+  });
+
+  it('surfaces the consolidator chosen roster from the run-state (AC8)', () => {
+    plant('plan-loop', ['approve'], CATALOG);
+    writeAppLoopState(
+      repoDir,
+      { loop: 'plan-loop', step: 'plan', turnKey: 'review-plan', status: 'working', round: 2, chosenRoster: ['review-plan-security'] },
+      FIXED,
+    );
+    const view = deriveAppLoopView('plan-loop', { tiers: tiers(), repoDir });
+    expect(view.catalog).toEqual(CATALOG);
+    expect(view.chosenRoster).toEqual(['review-plan-security']);
+  });
+
+  it('surfaces the verdict and (for stop-for-a-human) its reason at the gate (AC5)', () => {
+    plant('plan-loop', ['approve'], CATALOG);
+    writeAppLoopState(
+      repoDir,
+      { loop: 'plan-loop', step: 'plan', turnKey: 'consolidate-plan', status: 'complete', round: 2, verdict: 'stop for a human', verdictReason: 'reviewers disagree' },
+      FIXED,
+    );
+    const view = deriveAppLoopView('plan-loop', { tiers: tiers(), repoDir });
+    expect(view.verdict).toBe('stop for a human');
+    expect(view.verdictReason).toBe('reviewers disagree');
+  });
+
+  it('carries no verdict/roster for a plain work turn (absent = none chosen yet)', () => {
+    plant('plan-loop', ['approve'], CATALOG);
+    writeAppLoopState(repoDir, { loop: 'plan-loop', step: 'plan', turnKey: 'work-plan', status: 'working' }, FIXED);
+    const view = deriveAppLoopView('plan-loop', { tiers: tiers(), repoDir });
+    expect(view.verdict).toBeUndefined();
+    expect(view.chosenRoster).toBeUndefined();
+    expect(view.catalog).toEqual(CATALOG); // the catalog still shows (AC8)
+  });
+
+  // §27.6/AC5 Non-goals — the slice "routes to the gate and displays the verdict and the def's gate options".
+  // The def's gate options must display at the terminal consolidator gate (a run-state view), not only on the
+  // pre-run run-less view, or the operator sits at the gate with the verdict but no options shown.
+  it('carries the def gate options on the terminal consolidator gate (run-state branch), display-only (AC5)', () => {
+    plant('plan-loop', ['approve', 'request-changes'], CATALOG);
+    writeAppLoopState(
+      repoDir,
+      { loop: 'plan-loop', step: 'plan', turnKey: 'consolidate-plan', status: 'complete', round: 2, verdict: 'clean' },
+      FIXED,
+    );
+    const view = deriveAppLoopView('plan-loop', { tiers: tiers(), repoDir });
+    expect(view.gateOptions).toEqual(['approve', 'request-changes']);
+    expect(view.actionable).toBe(false); // display-only — the option guard is at the operation (N5), not the render
   });
 });
 
