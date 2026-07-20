@@ -56,6 +56,7 @@ export function deriveAppLoopView(name: string, ctx: LoopDefV2Context, liveError
   // prior binding) is not this step's, so it falls through to the resolve-time run-less/failure view.
   const run = readAppLoopState(ctx.repoDir);
   if (run && run.loop === name) {
+    // TODO(N5): make the terminal consolidator gate actionable + human-needed.
     return {
       status: run.status,
       pr: null,

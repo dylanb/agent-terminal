@@ -145,6 +145,10 @@ if (flowStripHost) {
           const key = repo.repoKey();
           if (key) window.flow.appRouteOut(key, step, turnKey, action);
         },
+        appGateDecision: (step, turnKey, option) => {
+          const key = repo.repoKey();
+          if (key) window.flow.appGateDecision(key, step, turnKey, option as GateDecisionOption);
+        },
         armInterrupt: (step) => {
           const key = repo.repoKey();
           if (key) window.flow.armInterrupt(key, step);

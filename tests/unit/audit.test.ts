@@ -6,6 +6,7 @@ import {
   inputEvents,
   lifecycleEvents,
   consolidateAuditCmd,
+  gateDecisionAuditCmd,
   loopEvents,
   parseAuditStream,
   reconstructTimeline,
@@ -379,6 +380,21 @@ describe('§27 review-round audit vocabulary', () => {
     expect(reviewRoundAuditCmd('error', 1, 'report omits a roster persona')).toContain('report omits a roster persona');
     expect(reviewRoundAuditCmd('accept', 1)).toContain('accept');
     expect(reviewRoundAuditCmd('retry', 3)).toContain('round 3');
+  });
+});
+
+// §27.9/§27.13 / N5 — the human-gate decision audit vocabulary lives in this ONE shared module beside the
+// round/consolidate ones (CLAUDE.md single-home rule), so the writer and a future viewer read the same phrases.
+describe('§27 gate-decision audit vocabulary', () => {
+  it('builds command text carrying the option and the side-effect outcome, distinguishing success from failure', () => {
+    expect(gateDecisionAuditCmd('decision', 'approve')).toContain('approve');
+    const ok = gateDecisionAuditCmd('side-effect', 'approve', 'mark-ready');
+    expect(ok).toContain('approve');
+    expect(ok).toContain('mark-ready');
+    const failed = gateDecisionAuditCmd('side-effect-failed', 'approve', 'mark-ready: no PR to mark ready');
+    expect(failed).toContain('no PR to mark ready');
+    // A recorded failure is distinguishable from a success for the same action (§27.13 / AC3).
+    expect(failed).not.toBe(gateDecisionAuditCmd('side-effect', 'approve', 'mark-ready'));
   });
 });
 

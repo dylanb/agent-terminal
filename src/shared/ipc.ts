@@ -61,6 +61,7 @@ export const CH = {
   flowGateDecision: 'flow:gateDecision',
   flowRetryTurn: 'flow:retryTurn',
   flowAppRouteOut: 'flow:appRouteOut',
+  flowAppGateDecision: 'flow:appGateDecision',
   flowArmInterrupt: 'flow:armInterrupt',
   appOpenExternal: 'app:openExternal',
   todoTemplateList: 'todoTemplate:list',
@@ -720,6 +721,23 @@ export interface FlowAppRouteOutMsg {
   action: AppRouteOutAction;
 }
 
+/** flow:appGateDecision request (§27.9/§27.13 / N5): the human's decision at a §27 (app-namespace) human
+ *  gate. Like the §27 route-out it carries the identity of the `step` and `turnKey` it acts on (§6) — the
+ *  receiver acts on that identity, never ambient loop state — so a decision for one gate can never fire
+ *  against another (AC7). `option` is typed on the SHARED `GATE_DECISION_OPTIONS` set (§27 widens it
+ *  additively by `redo`/`polish` in a later slice), so the wire, main, and renderer cannot drift; the guard
+ *  that a legacy-bound step never runs a §27-only option (and a §27 step never runs `impasse`) is enforced
+ *  at the operation, validated against the bound def's declared options — never inferred from this type
+ *  (AC9). Distinct from the §26 `flow:gateDecision`, which carries no identity and never fires the §27 path
+ *  (AC8). One-way; the result surfaces through the §27 run state → flow:onStateChanged re-pull. */
+export interface FlowAppGateDecisionMsg {
+  sessionId: SessionId;
+  repoKey: string;
+  step: string;
+  turnKey: string;
+  option: GateDecisionOption;
+}
+
 /** flow:armInterrupt request (§27.9/AC9): the operator arms the queued interrupt for a §27 loop step. It
  *  carries the identity of the `step` it acts on (§6) — the receiver arms that step's interrupt, never one
  *  derived from ambient state — so an arm for one step can never fire against another. One-way; the consolidator
@@ -1017,6 +1035,11 @@ export interface FlowApi {
    *  acts on (§6). `retry` re-runs the turn, `accept` advances a present artifact without re-running,
    *  `terminate` moves the flow off the step. One-way: the loop panel re-pulls via flow:onStateChanged. */
   appRouteOut(repoKey: string, step: string, turnKey: string, action: AppRouteOutAction): void;
+  /** §27.9/§27.13 (N5) — submit the human's §27 gate decision for `repoKey`, carrying the `step`+`turnKey`
+   *  identity it acts on (§6). `approve` runs the bound loop's declared side-effect out of band and reaches
+   *  the terminal accept; a legacy step never fires this path (AC8) and an option the bound def does not
+   *  declare is rejected at the operation (AC9). One-way: the loop panel re-pulls via flow:onStateChanged. */
+  appGateDecision(repoKey: string, step: string, turnKey: string, option: GateDecisionOption): void;
   /** §27.9/AC9 — arm the queued interrupt for `repoKey`'s §27 loop `step` (the identity it acts on, §6). The
    *  consolidator honors it at its next invocation, routing to the human gate. One-way: the loop panel
    *  re-pulls via flow:onStateChanged when the resulting state lands. */

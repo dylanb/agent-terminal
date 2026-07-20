@@ -44,9 +44,13 @@ function isValidRound(round: unknown): round is number {
   return typeof round === 'number' && Number.isInteger(round) && round > 0;
 }
 
-const STATUSES: readonly AppLoopStatus[] = ['working', 'error', 'complete'];
+const STATUSES: readonly AppLoopStatus[] = ['working', 'error', 'complete', 'accepted'];
 
-export type AppLoopStatus = 'working' | 'error' | 'complete';
+/** The reconstructable §27 turn statuses. `working`/`error`/`complete` are the turn-driving states; `accepted`
+ *  is the terminal state a §27 human-gate approve writes (§27.9/§27.13 / N5) — the loop was accepted at its
+ *  gate and the flow advanced off the step. It survives a relaunch as app-owned loop state and reconstructs to
+ *  a benign, non-gate, non-human-needed view (no verdict), so a second approve on a raced re-pull is inert. */
+export type AppLoopStatus = 'working' | 'error' | 'complete' | 'accepted';
 
 /** The reconstructable identity of the §27 turn a relaunch resumes: the bound loop, the flow step it runs
  *  against, the turn key, its status, and (only under `error`) why it stopped. A consolidator turn also

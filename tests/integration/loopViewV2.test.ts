@@ -221,10 +221,10 @@ describe('deriveAppLoopView — the catalog, chosen roster, and verdict (AC5, AC
     expect(view.catalog).toEqual(CATALOG); // the catalog still shows (AC8)
   });
 
-  // §27.6/AC5 Non-goals — the slice "routes to the gate and displays the verdict and the def's gate options".
-  // The def's gate options must display at the terminal consolidator gate (a run-state view), not only on the
-  // pre-run run-less view, or the operator sits at the gate with the verdict but no options shown.
-  it('carries the def gate options on the terminal consolidator gate (run-state branch), display-only (AC5)', () => {
+  // §27.9/N5 (AC1) — the terminal consolidator gate is the loop's human interface: its declared options become
+  // CLICKABLE (actionable), and the loop is blocked awaiting the human's decision (humanNeeded). The refusal
+  // guard for an undeclared option stays at the operation. Supersedes N4's display-only gate.
+  it('makes the terminal consolidator gate ACTIONABLE and human-needed, carrying the def gate options (AC1)', () => {
     plant('plan-loop', ['approve', 'request-changes'], CATALOG);
     writeAppLoopState(
       repoDir,
@@ -233,7 +233,18 @@ describe('deriveAppLoopView — the catalog, chosen roster, and verdict (AC5, AC
     );
     const view = deriveAppLoopView('plan-loop', { tiers: tiers(), repoDir });
     expect(view.gateOptions).toEqual(['approve', 'request-changes']);
-    expect(view.actionable).toBe(false); // display-only — the option guard is at the operation (N5), not the render
+    expect(view.actionable).toBe(true); // N5 — the gate is actionable (clickable controls render)
+    expect(view.humanNeeded).toBe(true); // the loop is blocked awaiting the human's gate decision
+    expect(view.appTurn).toEqual({ step: 'plan', turnKey: 'consolidate-plan' }); // the identity the decision acts on
+  });
+
+  it('keeps a mid-loop working turn display-only and not a gate (no verdict → not actionable)', () => {
+    // A running turn is never a gate: no verdict reached, so no clickable controls and no gate options.
+    plant('plan-loop', ['approve'], CATALOG);
+    writeAppLoopState(repoDir, { loop: 'plan-loop', step: 'plan', turnKey: 'work-plan', status: 'working' }, FIXED);
+    const view = deriveAppLoopView('plan-loop', { tiers: tiers(), repoDir });
+    expect(view.actionable).toBe(false);
+    expect(view.gateOptions).toBeUndefined();
   });
 });
 

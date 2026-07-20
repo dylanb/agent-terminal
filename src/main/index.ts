@@ -10,6 +10,7 @@ import {
   type AgentState,
   type ChannelPayloads,
   type FlowStateView,
+  type GateDecisionOption,
   type GithubRef,
   type SendChannel,
   type TodoStatus,
@@ -37,6 +38,7 @@ import {
   isValidFlowGateDecision,
   isValidFlowResolveBootstrapConflict,
   isValidFlowAppRouteOut,
+  isValidFlowAppGateDecision,
   isValidFlowArmInterrupt,
   isValidFlowGithubRef,
   openExternalTarget,
@@ -119,8 +121,10 @@ import {
 } from './installExamples';
 import { provideAppLoopView } from './loopViewV2';
 import { createAppLoopEngine } from './appLoopEngine';
-import { APP_LOOP_DIR_SEGMENTS, armInterrupt, consolidatorOutputFile, consolidatorOutputRel, roundReportFile, roundReportRel, writeAppLoopState } from './appLoopState';
-import { resolveLoopDefV2 } from './loopDefV2';
+import { APP_LOOP_DIR_SEGMENTS, armInterrupt, consolidatorOutputFile, consolidatorOutputRel, readAppLoopState, roundReportFile, roundReportRel, writeAppLoopState } from './appLoopState';
+import { resolveLoopDefV2, type LoopDefV2Context } from './loopDefV2';
+import { createRealAppGateGitHub } from './appGateGithub';
+import { runAppGateDecision as runAppGateDecisionImpl } from './appGateDecision';
 import { resolveExampleLoopsV2Dir } from './exampleAssets';
 import { userConfigLoopsV2Dir } from './userConfig';
 import type { CliInstallResult } from '../shared/ipc';
@@ -459,6 +463,12 @@ async function createWindow(): Promise<void> {
   const appTurnDoneSubdir = path.join(...APP_LOOP_DIR_SEGMENTS);
   let appTurnTimer: ReturnType<typeof setTimeout> | null = null;
   let unwatchAppTurnDone: (() => void) | null = null;
+  // §27.15 — the one §27 def-resolution context (operator tier then app-bundled), shared by the engine's
+  // resolveDef and the §27 gate-decision executor so both resolve the same def from the same tiers.
+  const appDefContext = (repoDir: string): LoopDefV2Context => ({
+    tiers: { operator: userConfigLoopsV2Dir(), appBundled: resolveExampleLoopsV2Dir(iconLoc) },
+    repoDir,
+  });
   const appEngine = createAppLoopEngine({
     inject: (text) => inject(text, { submit: true }),
     hostedAgent: () => classifyHostedAgent(hostedAgentPresent(tracker.summaries()), agentActivity),
@@ -471,8 +481,7 @@ async function createWindow(): Promise<void> {
       appTurnTimer = null;
     },
     noteSettle: () => shadow.noteSettle(),
-    resolveDef: (repoDir, name) =>
-      resolveLoopDefV2(name, { tiers: { operator: userConfigLoopsV2Dir(), appBundled: resolveExampleLoopsV2Dir(iconLoc) }, repoDir }),
+    resolveDef: (repoDir, name) => resolveLoopDefV2(name, appDefContext(repoDir)),
     readRecipe: (absPath) => {
       try {
         return readFileSync(absPath, 'utf8');
@@ -1215,6 +1224,28 @@ async function createWindow(): Promise<void> {
     });
   };
 
+  // §27.9/§27.13 / N5 — the §27 (app-namespace) human-gate decision, executed through a path ISOLATED from the
+  // §26 executor above: it reads the §27 run-state, resolves the §27 def, and (for approve) runs the def's
+  // declared gh side-effect out of band, persists the terminal accept, and advances the flow. It writes no §26
+  // state and injects no §26 actor (AC8), and acts only on the step+turn identity the payload names (AC7).
+  const runAppGateDecision = (repoKey: string, step: string, turnKey: string, option: GateDecisionOption): void => {
+    void runAppGateDecisionImpl(repoKey, step, turnKey, option, {
+      readRunState: (repoDir) => readAppLoopState(repoDir),
+      resolveDef: (repoDir, name) => resolveLoopDefV2(name, appDefContext(repoDir)),
+      refs: (repoDir) => {
+        const v = flow.state(repoDir);
+        return { pr: v.refs?.pr ?? null, ticket: v.refs?.ticket ?? null };
+      },
+      bodyFile: (def) => def.outputs[0]?.path ?? null,
+      runSideEffect: createRealAppGateGitHub(repoKey),
+      persistAccept: (repoDir, state) => writeAppLoopState(repoDir, state),
+      advanceFlow: (repoDir) => autoAdvanceFlow(repoDir),
+      audit: (repoDir, cmd, exit) => audit.recordCommand(repoDir, 'gate', cmd, exit),
+      emitError: (reason) => send(CH.flowOnLoopError, { sessionId: SESSION_ID, reason }),
+      onViewChanged: () => pushFlowChanged(),
+    });
+  };
+
   // Flow A (§4): every output byte goes to the renderer AND the shadow tee. Turn completion is detected
   // via the .agent-loop/turn-done FILE only (§26.3/D47a; §26 D42a retired the echo-hazardous line scanner).
   ptyProcess.onData((data) => {
@@ -1291,6 +1322,13 @@ async function createWindow(): Promise<void> {
         if (appEngine.activeRepoDir() !== m.repoKey) appEngine.resume(m.repoKey);
         armAppTurnDoneWatch(m.repoKey);
         appEngine.routeOut(m.repoKey, m.step, m.turnKey, m.action);
+      },
+      // §27.9/§27.13 / N5 — the §27 human-gate decision, acting on the step+turn identity the payload names
+      // (§6/AC7). Isolated from the §26 gate executor (AC8): it reads the persisted §27 run-state (which
+      // survives a relaunch, AC10) and never fires runGateDecision.
+      [CH.flowAppGateDecision]: (_e, m) => {
+        if (!isValidFlowAppGateDecision(m)) return;
+        runAppGateDecision(m.repoKey, m.step, m.turnKey, m.option);
       },
       // §27.9/AC9 — arm the §27 queued interrupt for the step the payload names (§6). Persisted independently
       // of the run-state document (armInterrupt), so it survives a relaunch and no turn-status write clobbers
