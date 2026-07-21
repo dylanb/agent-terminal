@@ -24,11 +24,7 @@ gate:
   - option: approve
     side_effects:
       - kind: gh
-        action: publish-pr-body
-  - option: request-changes
-    side_effects: []
-  - option: impasse
-    side_effects: []
+        action: mark-ready
 pickup:
   initial_status: planning
   branch_template: plan-loop/issue-{issue}

@@ -21,9 +21,7 @@ gate:
   - option: approve
     side_effects:
       - kind: gh
-        action: mark-ready
-  - option: request-changes
-    side_effects: []
+        action: publish-pr-body
 pickup:
   initial_status: implementing
   branch_template: impl-loop/issue-{issue}

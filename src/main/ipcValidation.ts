@@ -10,6 +10,7 @@ import {
   INSTALL_DESTINATION_IDS,
   SESSION_ID,
   type FlowAppRouteOutMsg,
+  type FlowAppGateDecisionMsg,
   type FlowArmInterruptMsg,
   type AgentInjectMsg,
   type ClipboardWriteMsg,
@@ -189,6 +190,23 @@ export function isValidFlowAppRouteOut(m: unknown): m is FlowAppRouteOutMsg {
     typeof m.turnKey === 'string' &&
     m.turnKey.length > 0 &&
     (APP_ROUTE_OUT_ACTIONS as readonly unknown[]).includes(m.action)
+  );
+}
+
+/** flow:appGateDecision — the §27-only human-gate decision (§27.9/§27.13 / N5). Mirrors the route-out
+ *  validator: `repoKey` becomes a filesystem path so it gets the safe-path guard; `step` and `turnKey` are
+ *  the non-empty identity the receiver acts on (§6); `option` is confined to the SHARED `GATE_DECISION_OPTIONS`
+ *  set at the wire — the guard that a legacy step never runs a §27-only option is at the operation (AC9). */
+export function isValidFlowAppGateDecision(m: unknown): m is FlowAppGateDecisionMsg {
+  return (
+    isRecord(m) &&
+    isLiveSession(m) &&
+    isSafeRepoKey(m.repoKey) &&
+    typeof m.step === 'string' &&
+    m.step.length > 0 &&
+    typeof m.turnKey === 'string' &&
+    m.turnKey.length > 0 &&
+    (GATE_DECISION_OPTIONS as readonly unknown[]).includes(m.option)
   );
 }
 

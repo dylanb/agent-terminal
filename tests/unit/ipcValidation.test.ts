@@ -13,6 +13,7 @@ import {
   isValidFlowGithubRef,
   isValidFlowGateDecision,
   isValidFlowAppRouteOut,
+  isValidFlowAppGateDecision,
   isValidFlowArmInterrupt,
   isValidOpenExternal,
   openExternalTarget,
@@ -207,6 +208,24 @@ describe('IPC payload validation (§6 — renderer-supplied input is untrusted)'
     expect(isValidFlowAppRouteOut({ ...base, repoKey: 'relative', action: 'retry' })).toBe(false); // unsafe key
     expect(isValidFlowAppRouteOut({ ...base, sessionId: 'other', action: 'retry' })).toBe(false); // dead session
     expect(isValidFlowAppRouteOut(null)).toBe(false);
+  });
+
+  it('confines a flow:appGateDecision option to the shared GATE_DECISION_OPTIONS set + guards identity (§27.9/§6)', () => {
+    const base = { sessionId: sid, repoKey: '/repo', step: 'plan', turnKey: 'consolidate-plan' };
+    // The §27 gate decision is typed on the SHARED set — every shared option is accepted at the wire; the
+    // guard that a legacy step never runs a §27-only option lives at the operation, not this validator (AC9).
+    for (const option of GATE_DECISION_OPTIONS) {
+      expect(isValidFlowAppGateDecision({ ...base, option })).toBe(true);
+    }
+    expect(isValidFlowAppGateDecision({ ...base, option: 'retry' })).toBe(false); // not a gate option
+    expect(isValidFlowAppGateDecision({ ...base })).toBe(false); // option required
+    expect(isValidFlowAppGateDecision({ sessionId: sid, repoKey: '/repo', turnKey: 'consolidate-plan', option: 'approve' })).toBe(false); // step required
+    expect(isValidFlowAppGateDecision({ sessionId: sid, repoKey: '/repo', step: 'plan', option: 'approve' })).toBe(false); // turnKey required
+    expect(isValidFlowAppGateDecision({ ...base, step: '', option: 'approve' })).toBe(false); // step must be non-empty identity
+    expect(isValidFlowAppGateDecision({ ...base, turnKey: '', option: 'approve' })).toBe(false); // turnKey must be non-empty
+    expect(isValidFlowAppGateDecision({ ...base, repoKey: 'relative', option: 'approve' })).toBe(false); // unsafe key
+    expect(isValidFlowAppGateDecision({ ...base, sessionId: 'other', option: 'approve' })).toBe(false); // dead session
+    expect(isValidFlowAppGateDecision(null)).toBe(false);
   });
 
   it('guards a flow:armInterrupt on the step identity + repoKey/session (§27.9/§6)', () => {

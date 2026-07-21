@@ -339,6 +339,28 @@ export function consolidateAuditCmd(kind: ConsolidateAuditKind, round: number, d
   }
 }
 
+/** The lifecycle points of a §27 human-gate decision the §25 audit records (§27.9/§27.13 / N5) — one
+ *  definition beside the round/consolidate vocabularies so the main-process writer and any future viewer
+ *  share it, never re-spelled as ad-hoc strings. `decision` records the option the human took; `side-effect`
+ *  and `side-effect-failed` record the approve GitHub call's outcome (a failure is recorded, never swallowed,
+ *  yet never aborts the terminal accept — §27.13 / AC3). `accept-failed` records an unpersisted terminal
+ *  accept, which — unlike a side-effect failure — DOES abort the decision so the flow never advances over it
+ *  (§26 D48). */
+export type GateDecisionAuditKind = 'decision' | 'side-effect' | 'side-effect-failed' | 'accept-failed';
+
+export function gateDecisionAuditCmd(kind: GateDecisionAuditKind, option: string, detail?: string): string {
+  switch (kind) {
+    case 'decision':
+      return `§27 gate ${option}`;
+    case 'side-effect':
+      return `§27 gate ${option} side-effect: ${detail ?? ''}`;
+    case 'side-effect-failed':
+      return `§27 gate ${option} side-effect failed: ${detail ?? ''}`;
+    case 'accept-failed':
+      return `§27 gate ${option} accept failed: ${detail ?? ''}`;
+  }
+}
+
 /** The events resolving a step's typed inputs produces (§25.5): an `input.resolved` per value, plus a
  *  `ticket.assoc` when a `github-ticket` input (per `typeByName`) resolved to a positive integer —
  *  explicit ID sourcing only, never scraped (§25.7). */

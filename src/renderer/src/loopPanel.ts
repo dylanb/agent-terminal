@@ -29,9 +29,13 @@ export interface LoopPanelDeps {
   /** §26.3/D47a(c) — the operator's manual "this turn is done" override for a turn whose automatic
    *  done-signal was missed. Injected by the composition root; absent → the control is inert. */
   markTurnComplete?(): void;
-  /** §26.6 / L5 — submit the human's gate decision (the option the human picked at an awaiting gate).
-   *  Injected by the composition root; absent → the decision buttons are not rendered. */
+  /** §26.6 / L5 — submit the human's §26 gate decision (the option the human picked at an awaiting gate).
+   *  Injected by the composition root; absent → the §26 decision buttons are not rendered. */
   gateDecision?(option: string): void;
+  /** §27.9/§27.13 (N5) — submit the human's §27 gate decision, carrying the step+turn identity the receiver
+   *  acts on (§6). A §27 gate view (one carrying `appTurn`) routes its option here — never to the §26
+   *  `gateDecision` (AC8). Injected by the composition root; absent → the §27 decision buttons are not rendered. */
+  appGateDecision?(step: string, turnKey: string, option: string): void;
   /** §26.3/D48 — recover a loop stopped in `error`: re-drive the failed turn (e.g. after starting Claude
    *  for a `no hosted agent` stop). Injected by the composition root; absent → no Retry control is shown,
    *  so an errored loop is never a dead-end reachable only by Terminate (never-unrecoverable, CLAUDE.md). */
@@ -98,7 +102,9 @@ function structuralSig(loop: FlowLoopView | null, title: string, refs?: FlowRefs
     refs?.pr ?? null,
     // iteration PRESENCE and actionability are structural: the iteration row and the gate-decision
     // buttons appear/disappear with them, so a run-less↔run transition forces a full render.
-    loop ? [loop.pr, loop.branch, loop.gateOptions ?? null, loop.iteration !== undefined, loop.actionable ?? null] : null,
+    // §27/N5 — appTurn presence decides which decision service the buttons wire to, so a §26↔§27 gate must
+    // force a full render, not a patch.
+    loop ? [loop.pr, loop.branch, loop.gateOptions ?? null, loop.iteration !== undefined, loop.actionable ?? null, loop.appTurn !== undefined] : null,
   ]);
 }
 
@@ -459,7 +465,11 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
       // run-less view AND the §27 terminal consolidator gate carry the same gateOptions display-only
       // (loopGateActionable false) — the read-only row above shows them, but no clickable control renders;
       // the refusal guard is at the operation.
-      if (loop.gateOptions && loop.gateOptions.length > 0 && loopGateActionable(loop) && deps.gateDecision) {
+      // §27.9/N5/AC8 — a §27 gate view (carrying `appTurn`) routes to appGateDecision, never the §26
+      // gateDecision. Rendered only when the matching service is injected (else inert — WCAG 4.1.2).
+      const appTurn = loop.appTurn;
+      const decideDep = appTurn ? deps.appGateDecision : deps.gateDecision;
+      if (loop.gateOptions && loop.gateOptions.length > 0 && loopGateActionable(loop) && decideDep) {
         const gate = doc.createElement('div');
         gate.className = 'gatebar';
         // A labelled group so a screen-reader user hears these controls' shared purpose, not three loose
@@ -475,7 +485,9 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
           // The visible label stays compact ("changes"); the accessible name is the unabbreviated option
           // so AT does not announce a bare, ambiguous verb (WCAG 2.4.6; label-in-name 2.5.3).
           btn.setAttribute('aria-label', option.replace('-', ' '));
-          btn.addEventListener('click', () => deps.gateDecision?.(option));
+          btn.addEventListener('click', () =>
+            appTurn ? deps.appGateDecision?.(appTurn.step, appTurn.turnKey, option) : deps.gateDecision?.(option),
+          );
           gate.append(btn);
         }
         body.append(gate);

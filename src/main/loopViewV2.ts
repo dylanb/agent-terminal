@@ -56,13 +56,17 @@ export function deriveAppLoopView(name: string, ctx: LoopDefV2Context, liveError
   // prior binding) is not this step's, so it falls through to the resolve-time run-less/failure view.
   const run = readAppLoopState(ctx.repoDir);
   if (run && run.loop === name) {
+    // §27.9/N5 (AC1) — a terminal gate is a reached verdict with declared options; only then are options
+    // clickable and the loop blocked on the human. The undeclared-option refusal stays at the operation
+    // (appGateDecision validates), not here.
+    const atGate = run.verdict !== undefined && gateOptions.length > 0;
     return {
       status: run.status,
       pr: null,
       branch: null,
       ready: false,
-      actionable: false,
-      humanNeeded: isHumanNeededStatus(run.status),
+      actionable: atGate,
+      humanNeeded: atGate || isHumanNeededStatus(run.status),
       appTurn: { step: run.step, turnKey: run.turnKey },
       ...(run.errorReason ? { errorReason: run.errorReason } : {}),
       // §27.5 IPC item 3 — carry the round number once a review-and-fix round has run (absent through the
@@ -72,7 +76,7 @@ export function deriveAppLoopView(name: string, ctx: LoopDefV2Context, liveError
       // verdict + reason. The gate-options preview belongs at the TERMINAL consolidator gate, not during an
       // active mid-loop turn (AC5 Non-goals), so it rides only once a verdict has been reached.
       ...(catalog ? { catalog } : {}),
-      ...(run.verdict && gateOptions.length > 0 ? { gateOptions } : {}),
+      ...(atGate ? { gateOptions } : {}),
       ...(run.chosenRoster ? { chosenRoster: run.chosenRoster } : {}),
       ...(run.verdict ? { verdict: run.verdict } : {}),
       ...(run.verdictReason ? { verdictReason: run.verdictReason } : {}),

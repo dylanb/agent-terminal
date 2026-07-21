@@ -50,6 +50,15 @@ describe('§27 loop-state serialize/parse round-trip', () => {
     expect(parseAppLoopState(serializeAppLoopState(errored, FIXED))).toEqual(errored);
   });
 
+  it('round-trips the terminal accepted status a §27 gate approve writes (N5)', () => {
+    // §27.9/§27.13 / N5 — approve writes a terminal `accepted` run-state (no verdict), so a relaunch
+    // reconstructs a benign non-gate view and a raced second approve is inert.
+    const accepted: AppLoopRunState = { loop: 'plan-loop', step: 'plan', turnKey: 'consolidate-plan', status: 'accepted' };
+    const back = parseAppLoopState(serializeAppLoopState(accepted, FIXED));
+    expect(back).toEqual(accepted);
+    expect(back?.status).toBe('accepted');
+  });
+
   it('drops the error reason on a non-error status (writer↔reader agree on the gate)', () => {
     // The reason belongs only to `error`; a `working`/`complete` run carries none, so a stale reason can
     // never render on a recovered status.

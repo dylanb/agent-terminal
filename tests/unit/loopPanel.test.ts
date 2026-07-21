@@ -281,6 +281,34 @@ describe('docked loop panel (§24.2.3 T2)', () => {
     expect(host.querySelector('[data-gate-option]')).toBeNull();
   });
 
+  // §27.9/N5 — the ACTIONABLE §27 terminal gate: a view carrying appTurn (the step+turn identity) + declared
+  // gateOptions + actionable renders clickable controls that route to the identity-carrying appGateDecision,
+  // NEVER the §26 gateDecision (AC8), and carry the step+turn identity onto the service (AC7).
+  const appGate = (over: Partial<FlowLoopView> = {}): FlowLoopView =>
+    loop({ status: 'complete', actionable: true, gateOptions: ['approve'], appTurn: { step: 'plan', turnKey: 'consolidate-plan' }, iteration: 2, verdict: 'clean', ...over });
+
+  it('routes a §27 gate decision to appGateDecision with the step+turn identity, never §26 gateDecision (AC7/AC8)', () => {
+    const appGateDecision = vi.fn();
+    const gateDecision = vi.fn();
+    const panel = createLoopPanel(host, { githubRef: () => Promise.resolve(null), openExternal: () => {}, appGateDecision, gateDecision });
+    panel.render(appGate(), 'plan');
+    const btn = host.querySelector<HTMLButtonElement>('[data-gate-option="approve"]');
+    expect(btn).not.toBeNull();
+    btn!.click();
+    expect(appGateDecision).toHaveBeenCalledTimes(1);
+    expect(appGateDecision).toHaveBeenCalledWith('plan', 'consolidate-plan', 'approve');
+    expect(gateDecision).not.toHaveBeenCalled(); // the §26 executor is never fired for a §27 gate (AC8)
+  });
+
+  it('renders NO §27 gate buttons when appGateDecision is not injected, even if §26 gateDecision is (inert-affordance, WCAG 4.1.2)', () => {
+    const gateDecision = vi.fn();
+    const panel = createLoopPanel(host, { githubRef: () => Promise.resolve(null), openExternal: () => {}, gateDecision });
+    panel.render(appGate(), 'plan');
+    // The read-only gate-options row still shows, but no clickable control routes to the wrong (§26) service.
+    expect(row('gate options')).not.toBeUndefined();
+    expect(host.querySelector('[data-gate-option]')).toBeNull();
+  });
+
   it('omits the iteration row when no round has run (absent iteration is not "0", AC 1)', () => {
     createLoopPanel(host).render(loop({ status: 'not-started', actionable: false, gateOptions: ['approve'], iteration: undefined }), 'plan');
     expect(row('iteration')).toBeUndefined();
