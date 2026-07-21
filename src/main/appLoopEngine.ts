@@ -655,7 +655,15 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       // §27.9/AC6 — a fresh clean-slate work turn owns no prior stand-down: clear any stale polish so an
       // abandoned one (Terminated rather than approved, or a failed clear) cannot resurrect the polish view when
       // this step reaches its gate again. Relaunch reconstructs via resume(), not enter(), so AC11 is untouched.
-      deps.clearPolish(repoDir);
+      // Best-effort, exactly as the approve-path clear (appGateDecision): a throw (polish.yaml swapped for a
+      // directory → EISDIR that rmSync's `force` does not swallow) must NEVER abort the entry — else the step is
+      // committed with a work turn that never starts and cannot restart (re-entry would re-throw). Recorded, then
+      // the turn starts regardless; a residual stand-down still narrows to approve, never strands the operator.
+      try {
+        deps.clearPolish(repoDir);
+      } catch (e) {
+        deps.audit(repoDir, `§27 ${loopName} ${stepId} enter clear-polish failed: ${e instanceof Error ? e.message : String(e)}`, 1);
+      }
       start(activeTurnFor(repoDir, loopName, stepId, r.def));
     },
     onInjectable() {

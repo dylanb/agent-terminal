@@ -55,6 +55,10 @@ let readArtifact: Mock<(p: string) => string | null>;
  *  per-test; null (no stand-down) so the ordinary drive helpers inject as before. */
 let polishStep: string | null;
 
+/** When set, the engine's `clearPolish` dep throws this message — models a hostile on-disk state (polish.yaml
+ *  swapped for a directory → EISDIR that rmSync's `force` does not swallow). Null (no throw) by default. */
+let clearPolishError: string | null;
+
 /** A file-producing plan-loop def whose completion artifact resolves under the repo's §27 area, declaring a
  *  two-persona reviewer catalog and a compact pre-review boundary so the review-and-fix chain (N3) is real. */
 function fileDef(): LoopDefV2 {
@@ -96,6 +100,7 @@ function makeEngine(persistOverride?: (repoDir: string, state: AppLoopRunState) 
   cancelTimer = vi.fn();
   injected = [];
   polishStep = null;
+  clearPolishError = null;
   readArtifact = vi.fn((p: string) => {
     try {
       return readFileSync(p, 'utf8');
@@ -106,7 +111,10 @@ function makeEngine(persistOverride?: (repoDir: string, state: AppLoopRunState) 
   deps = {
     inject: (text) => injected.push(text),
     polishActive: (_repoDir, step) => polishStep === step,
-    clearPolish: (r) => clearPolish(r),
+    clearPolish: (r) => {
+      if (clearPolishError) throw new Error(clearPolishError);
+      clearPolish(r);
+    },
     hostedAgent: () => hosted,
     armTimer,
     cancelTimer,
@@ -1034,6 +1042,19 @@ describe('§27 engine — the polish stand-down suppresses the orchestrator leve
     expect(readPolish(repo)).toEqual({ step: STEP });
     engine.enter(repo, 'plan-loop', STEP);
     expect(readPolish(repo)).toBeNull(); // the stale stand-down did not survive the fresh entry
+  });
+
+  it('a throwing clearPolish never aborts a fresh entry — the work turn still starts (best-effort cleanup)', () => {
+    const engine = makeEngine();
+    enterPolish(repo, STEP); // a stale stand-down exists…
+    clearPolishError = 'EISDIR: illegal operation on a directory'; // …and clearing it will throw (polish.yaml is a dir)
+    const before = injected.length;
+    // The stale-polish clear is best-effort — a throw must NOT abort the entry, or the operator is stranded with a
+    // committed step whose work turn never starts and cannot restart (re-entry would re-throw the same EISDIR).
+    expect(() => engine.enter(repo, 'plan-loop', STEP)).not.toThrow();
+    engine.onInjectable();
+    engine.onInjectable();
+    expect(injected.slice(before).some((p) => p.includes('Produce the plan.'))).toBe(true); // the work turn started anyway
   });
 });
 
