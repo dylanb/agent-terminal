@@ -47,9 +47,10 @@ let terminateFlow: Mock<(repoDir: string) => void>;
 let armTimer: Mock<() => void>;
 let cancelTimer: Mock<() => void>;
 let readArtifact: Mock<(p: string) => string | null>;
-/** The polish stand-down flag the engine consults before injecting (§27.9/AC6). Toggled per-test; defaults
- *  off so the ordinary drive helpers inject as before. */
-let polishActive: boolean;
+/** The step a polish stand-down is active for (§27.9/AC6) — the engine consults it per decision, keyed on the
+ *  decision's step exactly as the view is, so a stand-down for one step never suppresses another's levers. Set
+ *  per-test; null (no stand-down) so the ordinary drive helpers inject as before. */
+let polishStep: string | null;
 
 /** A file-producing plan-loop def whose completion artifact resolves under the repo's §27 area, declaring a
  *  two-persona reviewer catalog and a compact pre-review boundary so the review-and-fix chain (N3) is real. */
@@ -91,7 +92,7 @@ function makeEngine(persistOverride?: (repoDir: string, state: AppLoopRunState) 
   armTimer = vi.fn();
   cancelTimer = vi.fn();
   injected = [];
-  polishActive = false;
+  polishStep = null;
   readArtifact = vi.fn((p: string) => {
     try {
       return readFileSync(p, 'utf8');
@@ -101,7 +102,7 @@ function makeEngine(persistOverride?: (repoDir: string, state: AppLoopRunState) 
   });
   deps = {
     inject: (text) => injected.push(text),
-    polishActive: () => polishActive,
+    polishActive: (_repoDir, step) => polishStep === step,
     hostedAgent: () => hosted,
     armTimer,
     cancelTimer,
@@ -946,6 +947,20 @@ describe('§27 engine — redo re-enters the work turn on a clean slate carrying
     expect(readAppLoopState(repo)).toMatchObject({ status: 'working' });
   });
 
+  it('is inert when the bound def no longer resolves — never a fabricated clean-slate run, reporting false', () => {
+    const engine = makeEngine();
+    driveToGate(engine);
+    // §27.9/AC5 — the clean-slate work turn needs the def's recipe + completion contract; an unresolvable def
+    // must be inert (return false, inject nothing, leave the gate intact), never a work run with no real backing.
+    defResult = { ok: false, reason: 'no §27 def named plan-loop in any tier' };
+    const before = injected.length;
+    expect(engine.redo(repo, STEP, CONSOLIDATE_KEY, INSTRUCTION)).toBe(false);
+    engine.onInjectable();
+    engine.onInjectable();
+    expect(injected.length).toBe(before); // nothing injected — no boundary, no work prompt
+    expect(readAppLoopState(repo)).toMatchObject({ status: 'complete', round: 1, verdict: 'clean' }); // still at the gate
+  });
+
   it('a Retry after a relaunch re-injects the persisted instruction rather than dropping the human input', () => {
     const engine = makeEngine();
     driveToGate(engine);
@@ -970,7 +985,7 @@ describe('§27 engine — the polish stand-down suppresses the orchestrator leve
   it('refuses request-changes while polish is active — no review round starts, nothing is injected', () => {
     const engine = makeEngine();
     driveToGate(engine);
-    polishActive = true; // the operator entered polish; the app-owned flag is set
+    polishStep = STEP; // the operator entered polish for this gated step; the app-owned flag is set
     const before = injected.length;
     expect(engine.requestChanges(repo, STEP, CONSOLIDATE_KEY, 'tighten the schema')).toBe(false);
     engine.onInjectable();
@@ -982,7 +997,7 @@ describe('§27 engine — the polish stand-down suppresses the orchestrator leve
   it('refuses redo while polish is active — the work turn does not re-run', () => {
     const engine = makeEngine();
     driveToGate(engine);
-    polishActive = true;
+    polishStep = STEP;
     const before = injected.length;
     expect(engine.redo(repo, STEP, CONSOLIDATE_KEY, 'start over')).toBe(false);
     engine.onInjectable();
@@ -992,10 +1007,19 @@ describe('§27 engine — the polish stand-down suppresses the orchestrator leve
   it('the levers work again once the stand-down is cleared (approve ends polish)', () => {
     const engine = makeEngine();
     driveToGate(engine);
-    polishActive = true;
+    polishStep = STEP;
     expect(engine.redo(repo, STEP, CONSOLIDATE_KEY, 'start over')).toBe(false); // refused during polish
-    polishActive = false; // approve cleared the stand-down
+    polishStep = null; // approve cleared the stand-down
     expect(engine.redo(repo, STEP, CONSOLIDATE_KEY, 'start over')).toBe(true); // the lever works again
+  });
+
+  it('a stand-down for a DIFFERENT step does not suppress this step’s levers (step-scoped, not repo-scoped)', () => {
+    const engine = makeEngine();
+    driveToGate(engine);
+    // A polish stand-down persists for some OTHER step (e.g. entered on an earlier step, never cleared). The
+    // engine keys suppression on the decision's step exactly as the view does, so this step's redo still runs.
+    polishStep = 'some-other-step';
+    expect(engine.redo(repo, STEP, CONSOLIDATE_KEY, 'start over')).toBe(true);
   });
 });
 

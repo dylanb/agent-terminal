@@ -475,8 +475,10 @@ async function createWindow(): Promise<void> {
   const appEngine = createAppLoopEngine({
     inject: (text) => inject(text, { submit: true }),
     // §27.9/AC6 — the polish stand-down is app-owned loop state in its own file; the engine consults it before
-    // running any lever that would re-enter a turn, so the orchestrator stands down until approve ends it.
-    polishActive: (repoDir) => readPolish(repoDir) !== null,
+    // running any lever that would re-enter a turn, so the orchestrator stands down until approve ends it. Keyed
+    // on the step (the same predicate loopViewV2's `inPolish` uses) so a stand-down for one step never suppresses
+    // another's levers.
+    polishActive: (repoDir, step) => readPolish(repoDir)?.step === step,
     hostedAgent: () => classifyHostedAgent(hostedAgentPresent(tracker.summaries()), agentActivity),
     armTimer: () => {
       if (appTurnTimer) clearTimeout(appTurnTimer); // self-clearing: each activity edge replaces, never leaks

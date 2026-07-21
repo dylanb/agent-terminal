@@ -736,7 +736,7 @@ export interface FlowAppRouteOutMsg {
  *  gate. Like the §27 route-out it carries the identity of the `step` and `turnKey` it acts on (§6) — the
  *  receiver acts on that identity, never ambient loop state — so a decision for one gate can never fire
  *  against another (AC7). `option` is typed on the SHARED `GATE_DECISION_OPTIONS` set (§27 widens it
- *  additively by `redo`/`polish` in a later slice), so the wire, main, and renderer cannot drift; the guard
+ *  additively by `redo`/`polish`), so the wire, main, and renderer cannot drift; the guard
  *  that a legacy-bound step never runs a §27-only option (and a §27 step never runs `impasse`) is enforced
  *  at the operation, validated against the bound def's declared options — never inferred from this type
  *  (AC9). Distinct from the §26 `flow:gateDecision`, which carries no identity and never fires the §27 path

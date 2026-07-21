@@ -52,9 +52,16 @@ function actionsFor(gate: LoopGate, option: GateOption): { actions: GateAction[]
       return { actions: gate.onImpasse, nextStatus: gate.nextStatusOnImpasse };
     // §27.9/§27.15 (AC8) — redo/polish are §27-only options that widen the shared GATE_DECISION_OPTIONS set;
     // the §26 executor never runs them (the §26 gate handler rejects an option its def does not declare), so if
-    // one reaches here it is inert: no §26 action and no status change (gate.id is the current status).
-    default:
+    // one reaches here it is inert: no §26 action and no status change (gate.id is the current status). Named
+    // explicitly (not a `default:`) so the `never` guard below keeps this switch exhaustive over the shared set:
+    // a future option added to GATE_DECISION_OPTIONS must be consciously handled here rather than silently inert.
+    case 'redo':
+    case 'polish':
       return { actions: [], nextStatus: gate.id };
+    default: {
+      const unhandled: never = option;
+      return unhandled;
+    }
   }
 }
 

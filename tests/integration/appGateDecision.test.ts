@@ -324,6 +324,22 @@ describe('runAppGateDecision — polish stands the orchestrator down (AC6)', () 
     await decide(deps, 'polish', undefined, 'implement', 'consolidate-plan');
     expect(rec.polishEnters).toEqual([]);
   });
+
+  // §27.9 / N5 (AC6, CWE-703) — entering polish is best-effort: a throw (an unresolvable loop area — a planted
+  // symlink) is surfaced to the operator and the decision resolves without stranding, never rejecting into the
+  // one-way caller. Pairs the happy path above so the surfacing behavior is pinned, not just the success.
+  it('surfaces a thrown enter-polish error and resolves without stranding (AC6)', async () => {
+    const { deps, rec } = mkDeps({
+      gate: POLISH_GATE,
+      enterPolish: () => {
+        throw new Error('ENOSPC: no space left on device');
+      },
+    });
+    await expect(decide(deps, 'polish')).resolves.toBe(false); // resolves — never rejects into the void caller
+    expect(rec.polishEnters).toEqual([]); // the stand-down write did not land
+    expect(rec.errors.some((e) => e.includes('ENOSPC'))).toBe(true); // the failure is surfaced to the operator
+    expect(rec.views).toBeGreaterThan(0); // the view still refreshes so the operator is not left with a stale gate
+  });
 });
 
 // §27.9 / N5 (AC6) — approve ends any active polish stand-down: it clears the polish state, then runs the normal
@@ -347,6 +363,25 @@ describe('runAppGateDecision — approve ends the polish stand-down (AC6)', () =
     await approve(deps);
     expect(rec.accepts).toEqual([]); // the accept did not persist
     expect(rec.polishClears).toEqual([]); // …so polish was NOT ended — a retry is still possible from polish
+  });
+
+  // §27.9 / N5 (AC6, CWE-703) — clearing polish is a best-effort cleanup on the approve critical path. A throw
+  // (e.g. the polish file swapped for a directory across a relaunch → EISDIR, which rmSync's `force` does not
+  // swallow) must NOT abort the approve: the accept has already persisted, so aborting here would strand the
+  // flow past a persisted accept (PR never published, flow never advanced, re-approve inert). The throw is
+  // caught and audited; a residual polish file is harmless (post-accept the gate view never renders).
+  it('a thrown clear-polish never aborts the approve — the accept still advances and the side-effect still runs', async () => {
+    const { deps, rec } = mkDeps({
+      clearPolish: () => {
+        throw new Error('EISDIR: illegal operation on a directory');
+      },
+    });
+    await expect(approve(deps)).resolves.toBe(false); // resolves — the throw is caught, never rejects into the void caller
+    expect(rec.accepts).toHaveLength(1); // the accept persisted before the (now-caught) clear
+    expect(rec.sideEffects).toEqual([{ action: 'mark-ready', ctx: { pr: 41, ticket: null, bodyFile: '/repo/.agent-terminal/loop/artifacts/plan.md' } }]);
+    expect(rec.advances).toEqual(['/repo']); // the flow advanced past the gate — no strand
+    expect(rec.errors).toEqual([]); // a best-effort clear failure is audited, not surfaced as a blocking dialog
+    expect(rec.audits.some((a) => a.cmd.includes('clear') && a.cmd.includes('polish') && a.exit === 1)).toBe(true);
   });
 });
 

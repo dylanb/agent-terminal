@@ -124,6 +124,19 @@ for (const theme of ['light', 'dark'] as const) {
         const el = card.querySelector('.kcapture')!;
         expect(contrast(fg(el), paintedBg(el))).toBeGreaterThanOrEqual(4.5);
       });
+
+      // §27.9 / N5 (AC6): the polish stand-down notice in the docked loop panel must read as a distinct status
+      // callout — a mouse-only sighted user learns the loop has stood down from the visual channel, not by
+      // already reading body text (WCAG 1.4.1 Use of Color / 1.3.1) — and its own text must clear 4.5:1 on
+      // whatever it paints on (WCAG 1.4.3). It lives in `.lbody`, NOT a `.flow-modal`, so the modal `.ph` rule
+      // never reaches it; it needs its own paint.
+      it('.polish-notice paints a distinct callout surface with 4.5:1 text (loop-panel stand-down)', () => {
+        mount(`<div class="loop-panel"><div class="lbody"><p class="polish-notice">Polish mode — the orchestrator has stood down.</p></div></div>`);
+        const el = card.querySelector('.polish-notice')!;
+        // Its own background is painted (a callout wash), not transparent — the state is visible without reading.
+        expect(parse(getComputedStyle(el).backgroundColor)[3]).toBeGreaterThan(0);
+        expect(contrast(fg(el), paintedBg(el))).toBeGreaterThanOrEqual(4.5);
+      });
     });
 
     // §22.3.1. In its attention state the bar paints on a tinted wash, not the plain card — and it shows

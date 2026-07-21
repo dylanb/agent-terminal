@@ -476,7 +476,7 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
       // provider has already narrowed the gate options to approve (which ends polish), rendered below.
       if (loop.polish) {
         const notice = doc.createElement('p');
-        notice.className = 'ph polish-notice';
+        notice.className = 'polish-notice';
         notice.dataset.polishStanddown = '';
         notice.setAttribute('role', 'status');
         notice.textContent = 'Polish mode — the orchestrator has stood down. Converse with the instance directly; approve to end polish and accept the artifact.';

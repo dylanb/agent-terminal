@@ -128,8 +128,17 @@ export async function runAppGateDecision(
     return false;
   }
   // §27.9/AC6 — approve ends any polish stand-down. Cleared ONLY after the accept persisted (above), so a failed
-  // accept leaves the operator still in polish and able to retry rather than stranded out of it.
-  deps.clearPolish(repoDir);
+  // accept leaves the operator still in polish and able to retry rather than stranded out of it. Best-effort: the
+  // accept has already persisted, so a throw here (e.g. the polish file swapped for a directory → EISDIR, which
+  // rmSync's `force` does not swallow) must NOT abort the approve — the residual file is harmless once the gate is
+  // accepted (post-accept the gate view never renders). Recorded, never swallowed; never surfaced as a blocking
+  // dialog (the accept succeeded, so alarming the operator over cosmetic cleanup would be the wrong signal).
+  try {
+    deps.clearPolish(repoDir);
+  } catch (e) {
+    const reason = e instanceof Error ? e.message : String(e);
+    deps.audit(repoDir, gateDecisionAuditCmd('clear-polish-failed', option, reason), 1);
+  }
   deps.onViewChanged();
 
   // §27.13/AC3

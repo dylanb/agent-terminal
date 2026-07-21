@@ -75,11 +75,12 @@ type AppCompletion =
 export interface AppLoopEngineDeps {
   /** Inject + submit `text` into the hosted instance (§9.3). */
   inject(text: string): void;
-  /** §27.9/AC6 — whether the polish stand-down is active for the repo: the operator has taken the keyboard and
+  /** §27.9/AC6 — whether the polish stand-down is active for THIS step: the operator has taken the keyboard and
    *  the orchestrator must inject nothing until approve ends it. The engine consults this before running any
    *  lever that would re-enter a turn (redo, request-changes), so a decision racing the stand-down never
-   *  restarts the orchestrator. A domain predicate, not the app-loop-state file shape behind it. */
-  polishActive(repoDir: string): boolean;
+   *  restarts the orchestrator. Keyed on the step exactly as the view is (loopViewV2's `inPolish`) so the two
+   *  cannot disagree on which gate is standing down. A domain predicate, not the app-loop-state file shape. */
+  polishActive(repoDir: string, step: string): boolean;
   /** The hosted instance's injection-readiness (§27.2) — idle / busy / absent. */
   hostedAgent(): HostedAgentState;
   /** Arm / cancel the stall watchdog (§27.12) — reset on visible activity, no wall-clock deadline. */
@@ -740,9 +741,9 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
     },
     requestChanges(repoDir, stepId, turnKey, feedback) {
       if (runner.state() === 'in-flight') return false; // §27.2 — never interleave a second turn
-      // §27.9/AC6 — while polish stands the orchestrator down, no lever may re-enter a turn: the operator owns
-      // the keyboard until approve ends it. A request-changes racing the stand-down is refused, not injected.
-      if (deps.polishActive(repoDir)) return false;
+      // §27.9/AC6 — while polish stands the orchestrator down for THIS step, no lever may re-enter a turn: the
+      // operator owns the keyboard until approve ends it. A request-changes racing the stand-down is refused.
+      if (deps.polishActive(repoDir, stepId)) return false;
       // §6/AC7 — identity + at-a-gate precondition; the round to iterate from is the gate's round, not a fresh counter.
       const state = readAppLoopState(repoDir);
       if (!state || state.step !== stepId || state.turnKey !== turnKey) return false;
@@ -755,8 +756,8 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
     },
     redo(repoDir, stepId, turnKey, instruction) {
       if (runner.state() === 'in-flight') return false; // §27.2 — never interleave a second turn
-      // §27.9/AC6 — polish stands the orchestrator down: a redo racing the stand-down is refused, not injected.
-      if (deps.polishActive(repoDir)) return false;
+      // §27.9/AC6 — polish stands the orchestrator down for THIS step: a redo racing the stand-down is refused.
+      if (deps.polishActive(repoDir, stepId)) return false;
       // §6/AC7 — identity + at-a-gate precondition, exactly as request-changes; only a reached gate can redo.
       const state = readAppLoopState(repoDir);
       if (!state || state.step !== stepId || state.turnKey !== turnKey) return false;
