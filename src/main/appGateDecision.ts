@@ -3,7 +3,7 @@
 
 import type { GateDecisionOption } from '../shared/ipc';
 import { gateDecisionAuditCmd } from '../shared/audit';
-import { validFeedback, type AppLoopRunState } from './appLoopState';
+import { validFeedback, validInstruction, type AppLoopRunState } from './appLoopState';
 import type { LoopDefV2, LoopDefV2Result } from './loopDefV2';
 import type { AppGateSideEffectCtx, RunAppGateSideEffect } from './appGateGithub';
 
@@ -32,6 +32,19 @@ export interface AppGateDecisionDeps {
    *  was actually started: `false` means the engine dropped it (runner mid-turn, or the gate raced out), which
    *  runAppGateDecision returns to its caller so the still-open composer keeps the feedback for a retry. */
   deliverFeedback(repoDir: string, step: string, turnKey: string, feedback: string): boolean;
+  /** §27.9/AC5 — redo re-enters the WORK turn on a clean slate carrying the operator's instruction (a domain
+   *  port the composition root wires to the §27 engine). Like deliverFeedback it is NOT approve: the flow does
+   *  not advance and no gh side-effect runs. Returns whether the work turn re-entered — `false` means the engine
+   *  dropped it (runner mid-turn, gate raced out, or a polish stand-down), which the two-way caller returns so
+   *  the still-open redo composer keeps the instruction for a retry. */
+  deliverRedo(repoDir: string, step: string, turnKey: string, instruction: string): boolean;
+  /** §27.9/AC6 — enter the polish stand-down for `step`: the orchestrator stops injecting and the operator
+   *  takes the keyboard. App-owned loop state only (never the §26 surface); persisted so it survives a relaunch.
+   *  Throws only when the loop area is unresolvable (a planted symlink) — the caller keeps that off the flow. */
+  enterPolish(repoDir: string, step: string): void;
+  /** §27.9/AC6 — end the polish stand-down. Approve is the one lever that clears it (best-effort; an absent
+   *  stand-down is already the cleared state). */
+  clearPolish(repoDir: string): void;
   audit(repoDir: string, cmd: string, exit: number | null): void;
   emitError(reason: string): void;
   onViewChanged(): void;
@@ -72,7 +85,34 @@ export async function runAppGateDecision(
     deps.audit(repoDir, gateDecisionAuditCmd('decision-dropped', option, 'the loop was busy'), 1);
     return false;
   }
-  // redo/polish (a later slice) and impasse (§26-only) are never executed here.
+  // §27.9/AC5 — redo is request-changes' clean-slate twin: the note carries the human's instruction, the
+  // delivered/dropped result is RETURNED so the two-way caller (the redo composer) holds open and keeps the
+  // instruction on a drop, and a blank note fires nothing.
+  if (option === 'redo') {
+    const instruction = validInstruction(note);
+    if (instruction === undefined) return false;
+    if (deps.deliverRedo(repoDir, step, turnKey, instruction)) {
+      deps.audit(repoDir, gateDecisionAuditCmd('decision', option), 0);
+      return true;
+    }
+    deps.audit(repoDir, gateDecisionAuditCmd('decision-dropped', option, 'the loop was busy'), 1);
+    return false;
+  }
+  // §27.9/AC6 — polish stands the orchestrator down: write app-owned loop state only (never the §26 surface).
+  // Best-effort — an unresolvable loop area (a planted symlink) must not crash the decision path; it is surfaced
+  // and the operator can retry. One-way (no human input to lose), so the result is ignored by the caller.
+  if (option === 'polish') {
+    try {
+      deps.enterPolish(repoDir, step);
+      deps.audit(repoDir, gateDecisionAuditCmd('decision', option), 0);
+    } catch (e) {
+      const reason = e instanceof Error ? e.message : String(e);
+      deps.emitError(`could not enter polish: ${reason}`);
+    }
+    deps.onViewChanged();
+    return false;
+  }
+  // impasse (§26-only) is never executed here.
   if (option !== 'approve') return false;
 
   // §26 D48 — a failed accept persist aborts the decision (a relaunch would otherwise reconstruct the gate and
@@ -86,6 +126,18 @@ export async function runAppGateDecision(
     deps.emitError(`could not persist gate accept: ${reason}`);
     deps.onViewChanged();
     return false;
+  }
+  // §27.9/AC6 — approve ends any polish stand-down. Cleared ONLY after the accept persisted (above), so a failed
+  // accept leaves the operator still in polish and able to retry rather than stranded out of it. Best-effort: the
+  // accept has already persisted, so a throw here (e.g. the polish file swapped for a directory → EISDIR, which
+  // rmSync's `force` does not swallow) must NOT abort the approve — the residual file is harmless once the gate is
+  // accepted (post-accept the gate view never renders). Recorded, never swallowed; never surfaced as a blocking
+  // dialog (the accept succeeded, so alarming the operator over cosmetic cleanup would be the wrong signal).
+  try {
+    deps.clearPolish(repoDir);
+  } catch (e) {
+    const reason = e instanceof Error ? e.message : String(e);
+    deps.audit(repoDir, gateDecisionAuditCmd('clear-polish-failed', option, reason), 1);
   }
   deps.onViewChanged();
 

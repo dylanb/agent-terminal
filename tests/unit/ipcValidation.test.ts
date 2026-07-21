@@ -15,6 +15,7 @@ import {
   isValidFlowAppRouteOut,
   isValidFlowAppGateDecision,
   isValidFlowAppRequestChanges,
+  isValidFlowAppRedo,
   isValidFlowArmInterrupt,
   isValidOpenExternal,
   openExternalTarget,
@@ -241,6 +242,31 @@ describe('IPC payload validation (§6 — renderer-supplied input is untrusted)'
     expect(isValidFlowAppRequestChanges({ ...base, repoKey: 'relative' })).toBe(false); // unsafe key
     expect(isValidFlowAppRequestChanges({ ...base, sessionId: 'other' })).toBe(false); // dead session
     expect(isValidFlowAppRequestChanges(null)).toBe(false);
+  });
+
+  it('guards flow:appRedo identity + requires non-empty instruction (§27.9/AC5)', () => {
+    // redo mirrors request-changes: two-way, carrying the human's typed INSTRUCTION into a clean-slate work
+    // turn, so a blank one fires no redo and the composer stays open (the human never loses what they typed).
+    const base = { sessionId: sid, repoKey: '/repo', step: 'plan', turnKey: 'consolidate-plan', instruction: 'start over, keep the schema section' };
+    expect(isValidFlowAppRedo(base)).toBe(true);
+    expect(isValidFlowAppRedo({ ...base, instruction: '' })).toBe(false); // instruction is the point of the op
+    expect(isValidFlowAppRedo({ ...base, instruction: 42 })).toBe(false); // must be a string
+    expect(isValidFlowAppRedo({ sessionId: sid, repoKey: '/repo', turnKey: 'consolidate-plan', instruction: 'x' })).toBe(false); // step required
+    expect(isValidFlowAppRedo({ sessionId: sid, repoKey: '/repo', step: 'plan', instruction: 'x' })).toBe(false); // turnKey required
+    expect(isValidFlowAppRedo({ ...base, step: '' })).toBe(false); // non-empty identity
+    expect(isValidFlowAppRedo({ ...base, turnKey: '' })).toBe(false);
+    expect(isValidFlowAppRedo({ ...base, repoKey: 'relative' })).toBe(false); // unsafe key
+    expect(isValidFlowAppRedo({ ...base, sessionId: 'other' })).toBe(false); // dead session
+    expect(isValidFlowAppRedo(null)).toBe(false);
+  });
+
+  it('the shared GATE_DECISION_OPTIONS set is widened additively by redo and polish (§27.9/§27.15)', () => {
+    // §27 makes ONE additive change to the gate surface: the shared set gains redo and polish, alongside the
+    // §26 approve/request-changes/impasse. Single-sourced so the type and the wire validator cannot drift.
+    expect(GATE_DECISION_OPTIONS).toContain('redo');
+    expect(GATE_DECISION_OPTIONS).toContain('polish');
+    expect(GATE_DECISION_OPTIONS).toContain('approve');
+    expect(GATE_DECISION_OPTIONS).toContain('request-changes');
   });
 
   it('guards a flow:armInterrupt on the step identity + repoKey/session (§27.9/§6)', () => {

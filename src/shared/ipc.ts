@@ -63,6 +63,7 @@ export const CH = {
   flowAppRouteOut: 'flow:appRouteOut',
   flowAppGateDecision: 'flow:appGateDecision',
   flowAppRequestChanges: 'flow:appRequestChanges',
+  flowAppRedo: 'flow:appRedo',
   flowArmInterrupt: 'flow:armInterrupt',
   appOpenExternal: 'app:openExternal',
   todoTemplateList: 'todoTemplate:list',
@@ -498,6 +499,11 @@ export interface FlowLoopView {
    *  armed interrupt. Additive and §27-only; the §26 provider populates neither. */
   verdict?: ConsolidatorVerdict;
   verdictReason?: string;
+  /** §27.9/AC6/AC11 — the polish stand-down is active for this step: the orchestrator has stood down and the
+   *  operator owns the keyboard, so the panel shows the polish view (only the approve control, which ends it)
+   *  rather than the full gate options. App-owned loop state, persisted independently of the run-state so it
+   *  survives a relaunch until the operator approves. Additive and §27-only; the §26 provider never sets it. */
+  polish?: boolean;
 }
 
 /** The GitHub issue (ticket) and PR a flow is working (§24.2.3 T7). Numbers only — the title, body,
@@ -687,8 +693,12 @@ export interface FlowMarkTurnCompleteMsg {
 
 /** The human's gate decision (§26.6 / L5): the option picked at a data-driven awaiting-human gate. The
  *  set mirrors the LoopDef `human_options` the gate offers. One runtime source (`GATE_DECISION_OPTIONS`)
- *  drives both the type and the §6 validator, so main, renderer, and the wire cannot drift on the set. */
-export const GATE_DECISION_OPTIONS = ['approve', 'request-changes', 'impasse'] as const;
+ *  drives both the type and the §6 validator, so main, renderer, and the wire cannot drift on the set. §27
+ *  widens it ADDITIVELY by `redo` and `polish` — the one additive change §27 makes to the gate surface
+ *  (§27.9/§27.15). Because the widened set admits every option on both the §26 and §27 messages, the guard
+ *  that a legacy step never runs a §27-only option (and a §27 step never runs `impasse`) is enforced at the
+ *  operation, validated against the bound def's declared options — never inferred from this type (AC9). */
+export const GATE_DECISION_OPTIONS = ['approve', 'request-changes', 'impasse', 'redo', 'polish'] as const;
 export type GateDecisionOption = (typeof GATE_DECISION_OPTIONS)[number];
 
 /** flow:gateDecision request (§26.6 / L5): the human picks an option at an awaiting-human gate. The app
@@ -726,7 +736,7 @@ export interface FlowAppRouteOutMsg {
  *  gate. Like the §27 route-out it carries the identity of the `step` and `turnKey` it acts on (§6) — the
  *  receiver acts on that identity, never ambient loop state — so a decision for one gate can never fire
  *  against another (AC7). `option` is typed on the SHARED `GATE_DECISION_OPTIONS` set (§27 widens it
- *  additively by `redo`/`polish` in a later slice), so the wire, main, and renderer cannot drift; the guard
+ *  additively by `redo`/`polish`), so the wire, main, and renderer cannot drift; the guard
  *  that a legacy-bound step never runs a §27-only option (and a §27 step never runs `impasse`) is enforced
  *  at the operation, validated against the bound def's declared options — never inferred from this type
  *  (AC9). Distinct from the §26 `flow:gateDecision`, which carries no identity and never fires the §27 path
@@ -749,6 +759,19 @@ export interface FlowAppRequestChangesMsg {
   step: string;
   turnKey: string;
   feedback: string;
+}
+
+/** flow:appRedo request (§27.9/AC5): the operator's redo decision for `repoKey`, carrying the `step`+`turnKey`
+ *  identity it acts on (§6) and the human `instruction` that re-enters the work turn on a clean slate (only the
+ *  ticket, the plan, and that instruction — no findings, no round history). Two-way like appRequestChanges (not
+ *  the one-way appGateDecision): the reply is whether the work turn re-entered, so the redo composer holds open
+ *  until it confirms and never discards the human's instruction on a drop (runner mid-turn / gate raced out). */
+export interface FlowAppRedoMsg {
+  sessionId: SessionId;
+  repoKey: string;
+  step: string;
+  turnKey: string;
+  instruction: string;
 }
 
 /** flow:armInterrupt request (§27.9/AC9): the operator arms the queued interrupt for a §27 loop step. It
@@ -1058,6 +1081,11 @@ export interface FlowApi {
    *  the feedback composer holds open until delivery confirms — a drop (runner mid-turn / gate raced out) never
    *  discards the human's input. */
   appRequestChanges(repoKey: string, step: string, turnKey: string, feedback: string): Promise<boolean>;
+  /** §27.9/AC5 — submit a redo decision for `repoKey`, carrying the `step`+`turnKey` identity (§6) and the human
+   *  `instruction` that re-enters the work turn on a clean slate (ticket + plan + instruction only). Resolves
+   *  whether the work turn re-entered, so the redo composer holds open until it confirms — a drop (runner
+   *  mid-turn / gate raced out) never discards the human's instruction. */
+  appRedo(repoKey: string, step: string, turnKey: string, instruction: string): Promise<boolean>;
   /** §27.9/AC9 — arm the queued interrupt for `repoKey`'s §27 loop `step` (the identity it acts on, §6). The
    *  consolidator honors it at its next invocation, routing to the human gate. One-way: the loop panel
    *  re-pulls via flow:onStateChanged when the resulting state lands. */

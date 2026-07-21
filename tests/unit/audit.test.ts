@@ -401,6 +401,12 @@ describe('§27 gate-decision audit vocabulary', () => {
     expect(dropped).toContain('request-changes');
     expect(dropped).toContain('the loop was busy');
     expect(dropped).not.toBe(gateDecisionAuditCmd('decision', 'request-changes'));
+    // §27.9/AC6 — an approve whose best-effort polish cleanup threw AFTER the accept persisted is recorded as a
+    // clear-polish failure, distinct from the decision that succeeded, so the accept is never read as aborted.
+    const clearFailed = gateDecisionAuditCmd('clear-polish-failed', 'approve', 'EISDIR: illegal operation on a directory');
+    expect(clearFailed).toContain('approve');
+    expect(clearFailed).toContain('EISDIR');
+    expect(clearFailed).not.toBe(gateDecisionAuditCmd('decision', 'approve'));
   });
 });
 

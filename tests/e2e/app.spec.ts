@@ -3927,14 +3927,15 @@ test('a §27 app plan gate renders approve + request-changes, and approve runs t
   await expect.poll(() => readIf(appRunState(repo)), { timeout: 40_000 }).toContain('verdict: clean');
   expect(readIf(appRunState(repo))).toContain('turn_key: consolidate-plan');
 
-  // AC1 — the actionable gate renders exactly the def's options: approve + request-changes (sub-ticket 2),
-  // and never redo/polish (a later slice) or the §27-illegal impasse.
+  // AC1 — the actionable gate renders exactly the def's options: approve + request-changes + redo + polish
+  // (sub-ticket 3 widened the shipped defs), and never the §27-illegal impasse.
   await loopReadout().click();
   await expect(loopPanel().locator('[data-gate-option="approve"]')).toBeVisible({ timeout: 10_000 });
   await expect(loopPanel().locator('[data-gate-option="request-changes"]')).toBeVisible();
-  expect(await loopPanel().locator('[data-gate-option]').count()).toBe(2);
+  await expect(loopPanel().locator('[data-gate-option="redo"]')).toBeVisible();
+  await expect(loopPanel().locator('[data-gate-option="polish"]')).toBeVisible();
+  expect(await loopPanel().locator('[data-gate-option]').count()).toBe(4);
   await expect(loopPanel().locator('[data-gate-option="impasse"]')).toHaveCount(0);
-  await expect(loopPanel().locator('[data-gate-option="redo"]')).toHaveCount(0);
 
   await loopPanel().locator('[data-gate-option="approve"]').click();
 
@@ -4029,6 +4030,133 @@ test('a §27 request-changes opens the composer; submitting returns the loop to 
   expect(readGhLog(logFile)).not.toContain('gh pr ready'); // request-changes ran NO gh side-effect (that is approve's)
 
   // AC8 — the §26 state.yaml is byte-for-byte unchanged: the §27 request-changes never fired the §26 executor.
+  expect(readFileSync(stateFile, 'utf8')).toBe(priorState);
+
+  await app.close();
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+  rmSync(binDir, { recursive: true, force: true });
+});
+
+test('a §27 redo opens the composer; submitting re-runs the WORK turn on a clean slate carrying the instruction, without advancing (§27.9 / AC5)', { tag: '@ownapp' }, async () => {
+  const repo = seedAppGateFlowRepo('agent-term-e2e-v2-redo-', '77');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-v2-redo-home-'));
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-v2-redo-bin-');
+  seedFakeAgentV2(binDir, { stepId: 'plan', artifactRel: APP_ARTIFACT_REL, work: 'complete', review: 'full', logInjected: true });
+  // A prior §26 run sits on disk: the §27 redo must never touch it (AC8 — the §26 executor never fires).
+  const stateFile = join(repo, '.agent-loop', 'state.yaml');
+  const priorState = 'schema_version: 4\nstatus: planning\niteration: 3\npr: 42\nbranch: feat/prior\nbound_loop: plan-loop\nlinked_issues:\n  - 7\n';
+  mkdirSync(join(repo, '.agent-loop'), { recursive: true });
+  writeFileSync(stateFile, priorState);
+  app = await electron.launch({
+    args: ['out/main/index.js'],
+    env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100', CLAUDE_CONFIG_DIR: exampleConfigDir, PATH: `${binDir}:${process.env.PATH}`, FAKE_GHGIT_LOG: logFile },
+  });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await typeCommand(`cd "${repo}"`);
+  await expect(flowControl()).toHaveText('Start', { timeout: 10_000 });
+  await typeCommand('fake-agent');
+  await flowControl().click(); // enter the app plan-loop step → work → review round 1 → consolidate → clean gate
+
+  await expect.poll(() => readIf(appRunState(repo)), { timeout: 40_000 }).toContain('verdict: clean');
+  expect(readIf(appRunState(repo))).toContain('turn_key: consolidate-plan');
+  expect(readIf(join(repo, '.agent-terminal', 'work-runs')).length).toBe(1); // the work turn ran exactly once so far
+
+  // AC5 — redo opens the instruction composer (a two-step interaction), NOT a direct dispatch.
+  await loopReadout().click();
+  await expect(loopPanel().locator('[data-gate-option="redo"]')).toBeVisible({ timeout: 10_000 });
+  await loopPanel().locator('[data-gate-option="redo"]').click();
+  const composer = page.locator('#redo-composer-host .flow-modal');
+  await expect(composer).toBeVisible({ timeout: 10_000 });
+  const INSTRUCTION = 'REDOINSTR-restructure-the-plan-around-the-schema';
+  await composer.locator('textarea').fill(INSTRUCTION);
+  await composer.locator('.confirm').click();
+  await expect(composer).toBeHidden({ timeout: 10_000 }); // the composer closes on a confirmed re-entry
+
+  // AC5 — the WORK turn re-ran (work-runs → 2) on a clean slate; the re-injected work prompt carried the
+  // operator's instruction and the redo framing (never a review round).
+  await expect.poll(() => readIf(join(repo, '.agent-terminal', 'injected-log')), { timeout: 40_000 }).toContain(INSTRUCTION);
+  expect(readIf(join(repo, '.agent-terminal', 'injected-log'))).toContain('REDO'); // the clean-slate framing traveled
+  await expect.poll(() => readIf(join(repo, '.agent-terminal', 'work-runs')).length, { timeout: 40_000 }).toBe(2); // the work turn re-ran
+
+  // redo is not terminal: the flow did NOT advance off the step and ran NO gh side-effect (that is approve's).
+  expect(readIf(appFlowState(repo))).toContain('step: plan');
+  expect(readGhLog(logFile)).not.toContain('gh pr ready');
+  // AC8 — the §26 state.yaml is byte-for-byte unchanged: the §27 redo never fired the §26 executor.
+  expect(readFileSync(stateFile, 'utf8')).toBe(priorState);
+
+  await app.close();
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+  rmSync(binDir, { recursive: true, force: true });
+});
+
+test('a §27 polish stands the orchestrator down, survives a relaunch, and approve ends it → terminal accept → advance (§27.9 / AC6,AC11)', { tag: '@ownapp' }, async () => {
+  const repo = seedAppGateFlowRepo('agent-term-e2e-v2-polish-', '77');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-v2-polish-home-'));
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-v2-polish-bin-');
+  seedFakeAgentV2(binDir, { stepId: 'plan', artifactRel: APP_ARTIFACT_REL, work: 'complete', review: 'full' });
+  const stateFile = join(repo, '.agent-loop', 'state.yaml');
+  const priorState = 'schema_version: 4\nstatus: planning\niteration: 3\npr: 42\nbranch: feat/prior\nbound_loop: plan-loop\nlinked_issues:\n  - 7\n';
+  mkdirSync(join(repo, '.agent-loop'), { recursive: true });
+  writeFileSync(stateFile, priorState);
+  const polishFile = join(repo, '.agent-terminal', 'loop', 'polish.yaml');
+  const launch = () =>
+    electron.launch({
+      args: ['out/main/index.js'],
+      env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100', CLAUDE_CONFIG_DIR: exampleConfigDir, PATH: `${binDir}:${process.env.PATH}`, FAKE_GHGIT_LOG: logFile },
+    });
+
+  app = await launch();
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+  await typeCommand(`cd "${repo}"`);
+  await expect(flowControl()).toHaveText('Start', { timeout: 10_000 });
+  await typeCommand('fake-agent');
+  await flowControl().click(); // enter the app plan-loop step → work → review → consolidate → clean gate
+
+  await expect.poll(() => readIf(appRunState(repo)), { timeout: 40_000 }).toContain('verdict: clean');
+
+  // AC6 — choosing polish stands the orchestrator down: app-owned loop state is written and the panel shows the
+  // polish view — only approve (which ends polish), never the other levers.
+  await loopReadout().click();
+  await expect(loopPanel().locator('[data-gate-option="polish"]')).toBeVisible({ timeout: 10_000 });
+  await loopPanel().locator('[data-gate-option="polish"]').click();
+  await expect.poll(() => existsSync(polishFile), { timeout: 10_000 }).toBe(true); // the stand-down is persisted
+  await expect(loopPanel().locator('[data-polish-standdown]')).toBeVisible({ timeout: 10_000 });
+  await expect(loopPanel().locator('[data-gate-option="redo"]')).toHaveCount(0);
+  await expect(loopPanel().locator('[data-gate-option="request-changes"]')).toHaveCount(0);
+  await expect(loopPanel().locator('[data-gate-option="approve"]')).toBeVisible();
+  // The run-state is untouched by polish — it stays at the gate (its own file carries the stand-down).
+  expect(readIf(appRunState(repo))).toContain('status: complete');
+  expect(readIf(appFlowState(repo))).toContain('step: plan'); // polish is not terminal — the flow did not advance
+
+  await app.close();
+
+  // AC11 — after a relaunch the polish stand-down is STILL active (the orchestrator still stands down): the
+  // panel reconstructs the polish view (only approve), never the full gate.
+  app = await launch();
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+  await typeCommand(`cd "${repo}"`);
+  await typeCommand('fake-agent');
+  await loopReadout().click();
+  await expect(loopPanel().locator('[data-polish-standdown]')).toBeVisible({ timeout: 15_000 });
+  await expect(loopPanel().locator('[data-gate-option="redo"]')).toHaveCount(0);
+  await expect(loopPanel().locator('[data-gate-option="approve"]')).toBeVisible();
+  expect(existsSync(polishFile)).toBe(true); // still standing down
+
+  // AC6 — approve ends polish: it clears the stand-down, runs the loop's gh side-effect (plan → PR non-draft
+  // flip), reaches the terminal accept, and the flow advances off the loop step.
+  await loopPanel().locator('[data-gate-option="approve"]').click();
+  await expect.poll(() => readGhLog(logFile), { timeout: 15_000 }).toContain('gh pr ready 77');
+  await expect.poll(() => existsSync(polishFile), { timeout: 10_000 }).toBe(false); // polish ended
+  await expect.poll(() => readIf(appRunState(repo)), { timeout: 10_000 }).toContain('status: accepted');
+  await expect.poll(() => readIf(appFlowState(repo)), { timeout: 10_000 }).toContain('step: done'); // advanced off the loop step
+
+  // AC8 — the §26 state.yaml is byte-for-byte unchanged: the §27 polish/approve never fired the §26 executor.
   expect(readFileSync(stateFile, 'utf8')).toBe(priorState);
 
   await app.close();

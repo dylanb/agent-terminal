@@ -45,6 +45,10 @@ export interface AppWorkPromptReq {
   doneRelPath: string;
   /** The file-producing completion contract, or null for a commit-producing turn (done-signal alone). */
   completion: { artifactRel: string; marker: string } | null;
+  /** §27.9/AC5 — the operator's redo instruction, threaded as a clean-slate directive when a redo re-entered
+   *  the work turn (ticket + plan + instruction only). Absent on an ordinary work run; a blank one emits no
+   *  block (the caller passes only a `validInstruction` value). */
+  instruction?: string;
 }
 
 /** Compose the §27 work-turn prompt (§27.3): the def's recipe body, then — for a file-producing turn — the
@@ -52,6 +56,19 @@ export interface AppWorkPromptReq {
  *  pointing at the §27 done-file (and, for a file-producing turn, verifying the artifact on disk first). */
 export function composeAppWorkPrompt(req: AppWorkPromptReq): string {
   const parts = [req.recipeBody.trimEnd()];
+  // §27.9/AC5 — a redo re-enters the work turn on a clean slate: the recipe body (which sources the ticket and
+  // the plan) still leads, and the operator's instruction is threaded as the redo directive. No findings and no
+  // round history reach it — the boundary before the turn cleared the context; this block adds only the
+  // instruction. A blank instruction never reaches here (the caller passes a `validInstruction` value only).
+  if (req.instruction) {
+    parts.push(
+      '',
+      'REDO — the operator asked you to redo the work from a clean slate. Start ONLY from the ticket and the plan',
+      'above, discarding any prior findings, review rounds, or accumulated context, and follow this instruction:',
+      '',
+      req.instruction,
+    );
+  }
   if (req.completion) {
     parts.push(
       '',

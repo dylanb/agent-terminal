@@ -80,6 +80,7 @@ export type FlowStripDeps = Omit<
   | 'appRouteOut'
   | 'appGateDecision'
   | 'appRequestChanges'
+  | 'appRedo'
   | 'armInterrupt'
   | 'setTitle'
 > & {

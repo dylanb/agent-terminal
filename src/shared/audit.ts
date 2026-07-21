@@ -346,8 +346,11 @@ export function consolidateAuditCmd(kind: ConsolidateAuditKind, round: number, d
  *  yet never aborts the terminal accept — §27.13 / AC3). `accept-failed` records an unpersisted terminal
  *  accept, which — unlike a side-effect failure — DOES abort the decision so the flow never advances over it
  *  (§26 D48). `decision-dropped` records a request-changes the engine could not start (the runner was mid-turn
- *  or the gate raced out), distinct from `decision` so the audit never claims a round that never ran (AC4). */
-export type GateDecisionAuditKind = 'decision' | 'decision-dropped' | 'side-effect' | 'side-effect-failed' | 'accept-failed';
+ *  or the gate raced out), distinct from `decision` so the audit never claims a round that never ran (AC4).
+ *  `clear-polish-failed` records an approve whose best-effort polish-stand-down cleanup threw AFTER the accept
+ *  persisted — recorded (never swallowed) yet never aborting the terminal accept, since a residual stand-down
+ *  file is harmless once the gate has been accepted (§27.9 / AC6). */
+export type GateDecisionAuditKind = 'decision' | 'decision-dropped' | 'side-effect' | 'side-effect-failed' | 'accept-failed' | 'clear-polish-failed';
 
 export function gateDecisionAuditCmd(kind: GateDecisionAuditKind, option: string, detail?: string): string {
   switch (kind) {
@@ -361,6 +364,8 @@ export function gateDecisionAuditCmd(kind: GateDecisionAuditKind, option: string
       return `§27 gate ${option} side-effect failed: ${detail ?? ''}`;
     case 'accept-failed':
       return `§27 gate ${option} accept failed: ${detail ?? ''}`;
+    case 'clear-polish-failed':
+      return `§27 gate ${option} clear-polish failed: ${detail ?? ''}`;
   }
 }
 

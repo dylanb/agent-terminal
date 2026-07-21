@@ -26,6 +26,8 @@ gate:
       - kind: gh
         action: mark-ready
   - option: request-changes
+  - option: redo
+  - option: polish
 pickup:
   initial_status: planning
   branch_template: plan-loop/issue-{issue}

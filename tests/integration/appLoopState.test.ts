@@ -6,6 +6,9 @@ import {
   APP_LOOP_STATE_SCHEMA,
   armInterrupt,
   clearInterrupt,
+  enterPolish,
+  clearPolish,
+  isPolishActiveForStep,
   consolidatorOutputFile,
   consolidatorOutputRel,
   parseAppLoopState,
@@ -214,6 +217,44 @@ describe('§27 loop-state — the request-changes feedback for a review round', 
   });
 });
 
+// §27.9/AC5 — a redo re-enters the WORK turn carrying the human's instruction; it is persisted on the work
+// run-state (mirroring the review feedback) so a relaunch mid-work reconstructs it and a Retry re-injects it
+// rather than dropping the instruction. Absent on an ordinary work run; a blank value is not persisted.
+describe('§27 loop-state — the redo instruction for a work run', () => {
+  const WORK_REDO: AppLoopRunState = {
+    loop: 'plan-loop',
+    step: 'plan',
+    turnKey: 'work-plan',
+    status: 'working',
+    instruction: 'Start over; the plan structure is wrong. Keep only the schema section.',
+  };
+
+  it('round-trips a work run carrying the redo instruction', () => {
+    const back = parseAppLoopState(serializeAppLoopState(WORK_REDO, FIXED));
+    expect(back).toEqual(WORK_REDO);
+    expect(back?.instruction).toBe('Start over; the plan structure is wrong. Keep only the schema section.');
+  });
+
+  it('carries no instruction for an ordinary work run (absent = none)', () => {
+    const text = serializeAppLoopState({ loop: 'plan-loop', step: 'plan', turnKey: 'work-plan', status: 'working' }, FIXED);
+    expect(text).not.toContain('instruction:');
+    expect(parseAppLoopState(text)?.instruction).toBeUndefined();
+  });
+
+  it('drops a blank/whitespace-only or non-string instruction rather than persisting an empty block (field-local)', () => {
+    for (const bad of ['', '   ']) {
+      expect(serializeAppLoopState({ ...WORK_REDO, instruction: bad }, FIXED)).not.toContain('instruction:');
+    }
+    const text = serializeAppLoopState(WORK_REDO, FIXED).replace(/instruction:.*/, 'instruction: 42');
+    expect(parseAppLoopState(text)?.instruction).toBeUndefined();
+  });
+
+  it('survives a write→read round-trip on disk (relaunch reconstructs the instruction)', () => {
+    writeAppLoopState(repo, WORK_REDO, FIXED);
+    expect(readAppLoopState(repo)?.instruction).toBe('Start over; the plan structure is wrong. Keep only the schema section.');
+  });
+});
+
 // §27.5/AC7 — the round report's write-target (the fixer, via roundReportRel) and read-source (the engine,
 // via roundReportFile) derive from ONE resolver so they cannot drift (CLAUDE.md writer↔reader-location). The
 // location is round-keyed and disjoint from the engine's own run-state file, confined to the untrusted repo
@@ -344,5 +385,81 @@ describe('§27 armed-interrupt — persisted independently of the run-state docu
     } finally {
       rmSync(elsewhere, { recursive: true, force: true });
     }
+  });
+});
+
+// §27.9/AC6/AC11 — the polish stand-down is app-owned loop state persisted in its OWN file, disjoint from the
+// run-state document, so a turn-status write can neither clobber an active stand-down nor resurrect a cleared
+// one, and it survives a relaunch (the orchestrator still stands down) until the operator approves.
+describe('§27 polish stand-down — persisted independently of the run-state document', () => {
+  it('is active for the polish step after a simulated relaunch (inactive before any polish)', () => {
+    expect(isPolishActiveForStep(repo, 'plan')).toBe(false);
+    enterPolish(repo, 'plan');
+    expect(isPolishActiveForStep(repo, 'plan')).toBe(true);
+  });
+
+  it('a wholesale run-state write does NOT clobber an active polish stand-down (AC11 clobber regression)', () => {
+    enterPolish(repo, 'plan');
+    writeAppLoopState(repo, { ...RUN, turnKey: 'consolidate-plan', status: 'complete', round: 2 }, FIXED);
+    expect(isPolishActiveForStep(repo, 'plan')).toBe(true);
+  });
+
+  it('a wholesale run-state write does NOT resurrect a cleared polish stand-down', () => {
+    enterPolish(repo, 'plan');
+    clearPolish(repo);
+    expect(isPolishActiveForStep(repo, 'plan')).toBe(false);
+    writeAppLoopState(repo, RUN, FIXED);
+    expect(isPolishActiveForStep(repo, 'plan')).toBe(false);
+  });
+
+  it('validates the persisted polish step on read — an empty/missing step is not a stand-down (CWE-20)', () => {
+    enterPolish(repo, 'plan');
+    clearPolish(repo);
+    enterPolish(repo, ''); // a blank step is inert — never a phantom stand-down on an empty identity
+    expect(isPolishActiveForStep(repo, '')).toBe(false);
+  });
+
+  it('refuses to enter polish behind a symlinked loop container rather than following it (CWE-59)', () => {
+    const elsewhere = mkdtempSync(join(tmpdir(), 'apploop-evil-polish-'));
+    try {
+      symlinkSync(elsewhere, join(repo, '.agent-terminal'));
+      expect(() => enterPolish(repo, 'plan')).toThrow();
+      expect(existsSync(join(elsewhere, 'loop', 'polish.yaml'))).toBe(false);
+    } finally {
+      rmSync(elsewhere, { recursive: true, force: true });
+    }
+  });
+
+  // §27.9/AC6 — the ONE stand-down-identity predicate both the engine's lever-suppression seam and the view's
+  // `inPolish` derive from, so they cannot drift on which step is standing down (CLAUDE.md shared-semantics).
+  it('isPolishActiveForStep is true only for the standing-down step (single-sourced identity)', () => {
+    expect(isPolishActiveForStep(repo, 'plan')).toBe(false); // none active
+    enterPolish(repo, 'plan');
+    expect(isPolishActiveForStep(repo, 'plan')).toBe(true); // active for this step
+    expect(isPolishActiveForStep(repo, 'implement')).toBe(false); // not for another step
+    clearPolish(repo);
+    expect(isPolishActiveForStep(repo, 'plan')).toBe(false); // cleared
+  });
+});
+
+// §27.9/AC6/AC9/AC11 — the polish stand-down and the armed interrupt are TWO independent flags. They share a
+// serialized shape but are disjoint state: writing or clearing one never surfaces as, clobbers, or resurrects
+// the other. (The disjointness a common single-flag primitive must preserve — a shared writer that collapsed
+// the two onto one file would pass every per-flag test above yet fail here.)
+describe('§27 polish stand-down and armed interrupt — disjoint flags', () => {
+  it('arming an interrupt is not a polish stand-down, and clearing one never touches the other', () => {
+    armInterrupt(repo, 'plan');
+    expect(isPolishActiveForStep(repo, 'plan')).toBe(false); // an armed interrupt never reads back as an active polish
+
+    enterPolish(repo, 'implement');
+    expect(readArmedInterrupt(repo)).toEqual({ step: 'plan' }); // the arm is untouched by entering polish
+    expect(isPolishActiveForStep(repo, 'implement')).toBe(true);
+
+    clearPolish(repo);
+    expect(readArmedInterrupt(repo)).toEqual({ step: 'plan' }); // clearing polish does not clear the interrupt
+    expect(isPolishActiveForStep(repo, 'implement')).toBe(false);
+
+    clearInterrupt(repo);
+    expect(readArmedInterrupt(repo)).toBeNull();
   });
 });

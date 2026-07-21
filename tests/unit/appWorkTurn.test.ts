@@ -129,4 +129,28 @@ describe('composeAppWorkPrompt (§27.3/§27.12 — recipe + marker + done-signal
     expect(prompt).toContain('turn-done:work-impl');
     expect(prompt.toLowerCase()).not.toContain('re-read'); // no artifact verification clause
   });
+
+  it('§27.9/AC5 — a redo instruction is threaded into the work prompt as a clean-slate directive', () => {
+    const INSTRUCTION = 'The structure is wrong — redo it keeping only the schema section.';
+    const prompt = composeAppWorkPrompt({
+      recipeBody: '# work turn\nImplement the plan.',
+      turnKey: 'work-plan',
+      doneRelPath: '.agent-terminal/loop/turn-done',
+      completion: { artifactRel: '.agent-terminal/loop/artifacts/plan.md', marker: completionMarker('plan') },
+      instruction: INSTRUCTION,
+    });
+    expect(prompt).toContain('Implement the plan.'); // the recipe body still leads (ticket + plan inputs)
+    expect(prompt).toContain(INSTRUCTION); // the operator's instruction rides along
+    expect(prompt.toLowerCase()).toContain('redo'); // framed as a redo, not an ordinary work run
+  });
+
+  it('§27.9/AC5 — no redo block on an ordinary work run (absent instruction = none)', () => {
+    const prompt = composeAppWorkPrompt({
+      recipeBody: '# work turn\nImplement the plan.',
+      turnKey: 'work-plan',
+      doneRelPath: '.agent-terminal/loop/turn-done',
+      completion: { artifactRel: '.agent-terminal/loop/artifacts/plan.md', marker: completionMarker('plan') },
+    });
+    expect(prompt.toLowerCase()).not.toContain('redo');
+  });
 });
