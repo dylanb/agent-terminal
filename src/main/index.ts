@@ -123,7 +123,7 @@ import {
 } from './installExamples';
 import { provideAppLoopView } from './loopViewV2';
 import { createAppLoopEngine } from './appLoopEngine';
-import { APP_LOOP_DIR_SEGMENTS, armInterrupt, clearPolish, consolidatorOutputFile, consolidatorOutputRel, enterPolish, readAppLoopState, readPolish, roundReportFile, roundReportRel, writeAppLoopState } from './appLoopState';
+import { APP_LOOP_DIR_SEGMENTS, armInterrupt, clearPolish, consolidatorOutputFile, consolidatorOutputRel, enterPolish, isPolishActiveForStep, readAppLoopState, roundReportFile, roundReportRel, writeAppLoopState } from './appLoopState';
 import { resolveLoopDefV2, type LoopDefV2Context } from './loopDefV2';
 import { createRealAppGateGitHub } from './appGateGithub';
 import { runAppGateDecision as runAppGateDecisionImpl } from './appGateDecision';
@@ -475,10 +475,13 @@ async function createWindow(): Promise<void> {
   const appEngine = createAppLoopEngine({
     inject: (text) => inject(text, { submit: true }),
     // §27.9/AC6 — the polish stand-down is app-owned loop state in its own file; the engine consults it before
-    // running any lever that would re-enter a turn, so the orchestrator stands down until approve ends it. Keyed
-    // on the step (the same predicate loopViewV2's `inPolish` uses) so a stand-down for one step never suppresses
-    // another's levers.
-    polishActive: (repoDir, step) => readPolish(repoDir)?.step === step,
+    // running any lever that would re-enter a turn, so the orchestrator stands down until approve ends it. The
+    // stand-down identity is single-sourced in `isPolishActiveForStep` (the view's `inPolish` derives from the
+    // same predicate) so the two cannot disagree on which step is standing down.
+    polishActive: isPolishActiveForStep,
+    // §27.9/AC6 — a fresh work-turn entry clears any stale stand-down (see the engine's `enter`), so an abandoned
+    // polish cannot resurrect on a later same-step re-drive.
+    clearPolish,
     hostedAgent: () => classifyHostedAgent(hostedAgentPresent(tracker.summaries()), agentActivity),
     armTimer: () => {
       if (appTurnTimer) clearTimeout(appTurnTimer); // self-clearing: each activity edge replaces, never leaks

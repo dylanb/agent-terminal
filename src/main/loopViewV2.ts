@@ -13,7 +13,7 @@ import type { FlowLoopView } from '../shared/ipc';
 import { isHumanNeededStatus } from '../shared/loopStatus';
 import { resolveLoopDefV2, type LoopDefV2Context } from './loopDefV2';
 import { catalogPersonas } from './reviewTurn';
-import { readAppLoopState, readPolish } from './appLoopState';
+import { readAppLoopState, isPolishActiveForStep } from './appLoopState';
 import type { AppLoopEngine, AppLoopLiveError } from './appLoopEngine';
 
 /** The run-less/failure status strings the §27 provider emits (§27-owned, mapped to a tone by the strip;
@@ -64,9 +64,12 @@ export function deriveAppLoopView(name: string, ctx: LoopDefV2Context, liveError
     // orchestrator has stood down and only approve (which ends polish) is offered. Read fresh from its own file
     // so a relaunch reconstructs it (it survives independently of the run-state). A stand-down for another step
     // — or on a non-gate run — is not this view's.
-    const inPolish = atGate && readPolish(ctx.repoDir)?.step === run.step;
+    const inPolish = atGate && isPolishActiveForStep(ctx.repoDir, run.step);
     // The polish view withdraws every lever but approve (approve ends the stand-down); otherwise the full set.
-    const shownOptions = inPolish ? gateOptions.filter((o) => o === 'approve') : gateOptions;
+    // Narrow ONLY when approve is actually on offer: a def may declare `polish` without `approve` (the operator
+    // tier is a supported authoring path), and narrowing that to approve-only yields an empty, actionable gate —
+    // an unrecoverable dead end. Fail toward the def's full controls, never toward zero (CLAUDE.md / CWE-20).
+    const shownOptions = inPolish && gateOptions.includes('approve') ? gateOptions.filter((o) => o === 'approve') : gateOptions;
     return {
       status: run.status,
       pr: null,

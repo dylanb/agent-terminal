@@ -8,10 +8,13 @@ import { createAppLoopEngine, type AppLoopEngineDeps } from '../../src/main/appL
 import { provideAppLoopView } from '../../src/main/loopViewV2';
 import {
   armInterrupt,
+  clearPolish,
   consolidatorOutputFile,
   consolidatorOutputRel,
+  enterPolish,
   readAppLoopState,
   readArmedInterrupt,
+  readPolish,
   roundReportFile,
   roundReportRel,
   writeAppLoopState,
@@ -103,6 +106,7 @@ function makeEngine(persistOverride?: (repoDir: string, state: AppLoopRunState) 
   deps = {
     inject: (text) => injected.push(text),
     polishActive: (_repoDir, step) => polishStep === step,
+    clearPolish: (r) => clearPolish(r),
     hostedAgent: () => hosted,
     armTimer,
     cancelTimer,
@@ -1020,6 +1024,16 @@ describe('§27 engine — the polish stand-down suppresses the orchestrator leve
     // engine keys suppression on the decision's step exactly as the view does, so this step's redo still runs.
     polishStep = 'some-other-step';
     expect(engine.redo(repo, STEP, CONSOLIDATE_KEY, 'start over')).toBe(true);
+  });
+
+  it('a fresh work-turn entry clears a stale stand-down — an abandoned polish never resurrects on re-drive', () => {
+    const engine = makeEngine();
+    // A prior run entered polish for this step but was Terminated (or the approve-time clear failed) rather than
+    // approved, so the stand-down file persists. Re-driving the same step must start a clean cycle, not inherit it.
+    enterPolish(repo, STEP);
+    expect(readPolish(repo)).toEqual({ step: STEP });
+    engine.enter(repo, 'plan-loop', STEP);
+    expect(readPolish(repo)).toBeNull(); // the stale stand-down did not survive the fresh entry
   });
 });
 

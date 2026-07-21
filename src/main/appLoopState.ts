@@ -344,3 +344,11 @@ export function readPolish(repoDir: string): { step: string } | null {
   if (typeof doc.step !== 'string' || doc.step.length === 0) return null;
   return { step: doc.step };
 }
+
+/** Whether a polish stand-down is active for `step` (§27.9/AC6). The ONE definition of the stand-down identity
+ *  both sides that must agree derive from — the engine's lever-suppression seam (index.ts) and the view's
+ *  `inPolish` (loopViewV2) — so the two cannot drift on which gate is standing down (CLAUDE.md shared-semantics).
+ *  A stand-down for a different step (or none) reads as not active here. */
+export function isPolishActiveForStep(repoDir: string, step: string): boolean {
+  return readPolish(repoDir)?.step === step;
+}

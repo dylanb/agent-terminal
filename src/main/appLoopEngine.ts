@@ -81,6 +81,10 @@ export interface AppLoopEngineDeps {
    *  restarts the orchestrator. Keyed on the step exactly as the view is (loopViewV2's `inPolish`) so the two
    *  cannot disagree on which gate is standing down. A domain predicate, not the app-loop-state file shape. */
   polishActive(repoDir: string, step: string): boolean;
+  /** §27.9/AC6 — end a polish stand-down. The engine clears any stale stand-down when a fresh work turn ENTERS
+   *  a step (a new clean-slate cycle owns no prior stand-down), so an abandoned polish (Terminated rather than
+   *  approved, or a clear that failed) can never resurrect the polish view on a later same-step re-drive. */
+  clearPolish(repoDir: string): void;
   /** The hosted instance's injection-readiness (§27.2) — idle / busy / absent. */
   hostedAgent(): HostedAgentState;
   /** Arm / cancel the stall watchdog (§27.12) — reset on visible activity, no wall-clock deadline. */
@@ -648,6 +652,10 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       if (runner.state() === 'in-flight') return; // §27.2 — never interleave a second turn
       const r = deps.resolveDef(repoDir, loopName);
       if (!r.ok) return; // AC6 — the def-failure view is produced at resolve time (loopViewV2)
+      // §27.9/AC6 — a fresh clean-slate work turn owns no prior stand-down: clear any stale polish so an
+      // abandoned one (Terminated rather than approved, or a failed clear) cannot resurrect the polish view when
+      // this step reaches its gate again. Relaunch reconstructs via resume(), not enter(), so AC11 is untouched.
+      deps.clearPolish(repoDir);
       start(activeTurnFor(repoDir, loopName, stepId, r.def));
     },
     onInjectable() {

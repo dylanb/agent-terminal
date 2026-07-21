@@ -280,6 +280,23 @@ describe('deriveAppLoopView — the catalog, chosen roster, and verdict (AC5, AC
     expect(view.gateOptions).toEqual(['approve', 'request-changes', 'redo', 'polish']); // the full gate
   });
 
+  // §27.9/N5 (AC6) + CLAUDE.md "never allow an unrecoverable state" — the polish view narrows to approve (the
+  // one lever that ends polish). An operator-authored def (the `operator` tier is a supported, tested path) can
+  // declare a gate with `polish` but no `approve`; narrowing to approve-only would then leave the operator at an
+  // actionable, human-needed gate with ZERO controls — a dead end. The narrowing must fail toward still showing
+  // the def's controls, never toward an empty gate: only narrow when narrowing still leaves a route out.
+  it('never narrows to an empty gate — a def declaring polish without approve keeps its full controls (AC6)', () => {
+    plant('plan-loop', ['request-changes', 'redo', 'polish'], CATALOG); // no approve declared
+    writeAppLoopState(
+      repoDir,
+      { loop: 'plan-loop', step: 'plan', turnKey: 'consolidate-plan', status: 'complete', round: 2, verdict: 'clean' },
+      FIXED,
+    );
+    enterPolish(repoDir, 'plan');
+    const view = deriveAppLoopView('plan-loop', { tiers: tiers(), repoDir });
+    expect(view.gateOptions).toEqual(['request-changes', 'redo', 'polish']); // never [] — the operator keeps a route out
+  });
+
   it('a polish flag on a non-gate (working) run is ignored — polish is a gate-only view', () => {
     plant('plan-loop', ['approve', 'request-changes', 'redo', 'polish'], CATALOG);
     writeAppLoopState(repoDir, { loop: 'plan-loop', step: 'plan', turnKey: 'work-plan', status: 'working' }, FIXED);

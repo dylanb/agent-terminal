@@ -9,6 +9,7 @@ import {
   enterPolish,
   clearPolish,
   readPolish,
+  isPolishActiveForStep,
   consolidatorOutputFile,
   consolidatorOutputRel,
   parseAppLoopState,
@@ -428,5 +429,16 @@ describe('§27 polish stand-down — persisted independently of the run-state do
     } finally {
       rmSync(elsewhere, { recursive: true, force: true });
     }
+  });
+
+  // §27.9/AC6 — the ONE stand-down-identity predicate both the engine's lever-suppression seam and the view's
+  // `inPolish` derive from, so they cannot drift on which step is standing down (CLAUDE.md shared-semantics).
+  it('isPolishActiveForStep is true only for the standing-down step (single-sourced identity)', () => {
+    expect(isPolishActiveForStep(repo, 'plan')).toBe(false); // none active
+    enterPolish(repo, 'plan');
+    expect(isPolishActiveForStep(repo, 'plan')).toBe(true); // active for this step
+    expect(isPolishActiveForStep(repo, 'implement')).toBe(false); // not for another step
+    clearPolish(repo);
+    expect(isPolishActiveForStep(repo, 'plan')).toBe(false); // cleared
   });
 });
