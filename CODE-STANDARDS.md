@@ -138,6 +138,25 @@ answered against whatever repo the user had since `cd`'d into — and the answer
 its PR. Bind the handler to the identity the message carries (`wireBootstrapConflict` takes it injected,
 no cwd dependency), never to a `repoKey()` the handler looks up for itself.
 
+## An action a receiver can refuse is a two-way request; the UI holds its collected input open until the reply confirms
+
+One-way dispatch plus a state-pull is the default IPC shape, and it is correct only when the near side can
+know the outcome from state it already owns. It is **wrong** the moment whether the action succeeds is state
+only the receiver holds — a runner mid-turn, a gate that has already raced out, a lock — because a one-way
+send leaves the sender to guess, and the reflexive guess is "assume it landed, close the UI." When that UI
+was collecting human input the operator cannot cheaply reproduce, the optimistic close *discards their typed
+work on the exact refusal it was meant to survive*. So: model such an action as a two-way request that
+returns the outcome (`ipcRenderer.invoke`/`ipcMain.handle`), and keep the input-collecting UI open until the
+reply confirms delivery — close on success, and on refusal preserve the entered value and surface why. The
+motivating case: request-changes rode a one-way `flow:appGateDecision` (with the feedback smuggled through
+an overloaded `note?`), so a decision that arrived while the loop was busy was dropped and the composer had
+already closed over the operator's feedback. Retightened, it rides a dedicated two-way `flow:appRequestChanges`
+that returns a `boolean`; `runAppGateDecision` returns that far-side outcome, and `feedbackComposer` holds
+the dialog open — `false` keeps the text and shows the reason, `true` closes — so a busy loop costs a retry,
+never the feedback. Litmus: if the operation can fail on state the receiver alone holds *and* the near side
+is holding input a drop would lose, a one-way channel is a data-loss defect — this is the collect-then-dispatch
+mechanism that satisfies the never-unrecoverable-state rule, named.
+
 ## A best-effort or cosmetic side effect must never abort the critical path it sits on
 
 Anything observe-only or decorative — the Dock icon, the §25 audit record, fire-and-forget telemetry — is
