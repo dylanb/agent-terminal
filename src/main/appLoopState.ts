@@ -321,9 +321,6 @@ export function enterPolish(repoDir: string, step: string): void {
 export function clearPolish(repoDir: string): void {
   polishStandDown.clear(repoDir);
 }
-export function readPolish(repoDir: string): { step: string } | null {
-  return polishStandDown.read(repoDir);
-}
 
 /** Whether a polish stand-down is active for `step` (§27.9/AC6). The ONE definition of the stand-down identity
  *  both sides that must agree derive from — the engine's lever-suppression seam (index.ts) and the view's

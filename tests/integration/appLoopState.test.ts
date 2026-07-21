@@ -8,7 +8,6 @@ import {
   clearInterrupt,
   enterPolish,
   clearPolish,
-  readPolish,
   isPolishActiveForStep,
   consolidatorOutputFile,
   consolidatorOutputRel,
@@ -393,31 +392,31 @@ describe('§27 armed-interrupt — persisted independently of the run-state docu
 // run-state document, so a turn-status write can neither clobber an active stand-down nor resurrect a cleared
 // one, and it survives a relaunch (the orchestrator still stands down) until the operator approves.
 describe('§27 polish stand-down — persisted independently of the run-state document', () => {
-  it('reads back the polish step after a simulated relaunch (null before any polish)', () => {
-    expect(readPolish(repo)).toBeNull();
+  it('is active for the polish step after a simulated relaunch (inactive before any polish)', () => {
+    expect(isPolishActiveForStep(repo, 'plan')).toBe(false);
     enterPolish(repo, 'plan');
-    expect(readPolish(repo)).toEqual({ step: 'plan' });
+    expect(isPolishActiveForStep(repo, 'plan')).toBe(true);
   });
 
   it('a wholesale run-state write does NOT clobber an active polish stand-down (AC11 clobber regression)', () => {
     enterPolish(repo, 'plan');
     writeAppLoopState(repo, { ...RUN, turnKey: 'consolidate-plan', status: 'complete', round: 2 }, FIXED);
-    expect(readPolish(repo)).toEqual({ step: 'plan' });
+    expect(isPolishActiveForStep(repo, 'plan')).toBe(true);
   });
 
   it('a wholesale run-state write does NOT resurrect a cleared polish stand-down', () => {
     enterPolish(repo, 'plan');
     clearPolish(repo);
-    expect(readPolish(repo)).toBeNull();
+    expect(isPolishActiveForStep(repo, 'plan')).toBe(false);
     writeAppLoopState(repo, RUN, FIXED);
-    expect(readPolish(repo)).toBeNull();
+    expect(isPolishActiveForStep(repo, 'plan')).toBe(false);
   });
 
   it('validates the persisted polish step on read — an empty/missing step is not a stand-down (CWE-20)', () => {
     enterPolish(repo, 'plan');
     clearPolish(repo);
     enterPolish(repo, ''); // a blank step is inert — never a phantom stand-down on an empty identity
-    expect(readPolish(repo)).toBeNull();
+    expect(isPolishActiveForStep(repo, '')).toBe(false);
   });
 
   it('refuses to enter polish behind a symlinked loop container rather than following it (CWE-59)', () => {
@@ -450,16 +449,15 @@ describe('§27 polish stand-down — persisted independently of the run-state do
 describe('§27 polish stand-down and armed interrupt — disjoint flags', () => {
   it('arming an interrupt is not a polish stand-down, and clearing one never touches the other', () => {
     armInterrupt(repo, 'plan');
-    expect(readPolish(repo)).toBeNull(); // an armed interrupt never reads back as an active polish
-    expect(isPolishActiveForStep(repo, 'plan')).toBe(false);
+    expect(isPolishActiveForStep(repo, 'plan')).toBe(false); // an armed interrupt never reads back as an active polish
 
     enterPolish(repo, 'implement');
     expect(readArmedInterrupt(repo)).toEqual({ step: 'plan' }); // the arm is untouched by entering polish
-    expect(readPolish(repo)).toEqual({ step: 'implement' });
+    expect(isPolishActiveForStep(repo, 'implement')).toBe(true);
 
     clearPolish(repo);
     expect(readArmedInterrupt(repo)).toEqual({ step: 'plan' }); // clearing polish does not clear the interrupt
-    expect(readPolish(repo)).toBeNull();
+    expect(isPolishActiveForStep(repo, 'implement')).toBe(false);
 
     clearInterrupt(repo);
     expect(readArmedInterrupt(repo)).toBeNull();

@@ -12,9 +12,9 @@ import {
   consolidatorOutputFile,
   consolidatorOutputRel,
   enterPolish,
+  isPolishActiveForStep,
   readAppLoopState,
   readArmedInterrupt,
-  readPolish,
   roundReportFile,
   roundReportRel,
   writeAppLoopState,
@@ -1039,9 +1039,9 @@ describe('§27 engine — the polish stand-down suppresses the orchestrator leve
     // A prior run entered polish for this step but was Terminated (or the approve-time clear failed) rather than
     // approved, so the stand-down file persists. Re-driving the same step must start a clean cycle, not inherit it.
     enterPolish(repo, STEP);
-    expect(readPolish(repo)).toEqual({ step: STEP });
+    expect(isPolishActiveForStep(repo, STEP)).toBe(true);
     engine.enter(repo, 'plan-loop', STEP);
-    expect(readPolish(repo)).toBeNull(); // the stale stand-down did not survive the fresh entry
+    expect(isPolishActiveForStep(repo, STEP)).toBe(false); // the stale stand-down did not survive the fresh entry
   });
 
   it('a throwing clearPolish never aborts a fresh entry — the work turn still starts (best-effort cleanup)', () => {
