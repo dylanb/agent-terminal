@@ -62,6 +62,7 @@ export const CH = {
   flowRetryTurn: 'flow:retryTurn',
   flowAppRouteOut: 'flow:appRouteOut',
   flowAppGateDecision: 'flow:appGateDecision',
+  flowAppRequestChanges: 'flow:appRequestChanges',
   flowArmInterrupt: 'flow:armInterrupt',
   appOpenExternal: 'app:openExternal',
   todoTemplateList: 'todoTemplate:list',
@@ -738,6 +739,18 @@ export interface FlowAppGateDecisionMsg {
   option: GateDecisionOption;
 }
 
+/** flow:appRequestChanges request (§27.9/§19.4 / AC4): the operator's request-changes decision for `repoKey`,
+ *  carrying the `step`+`turnKey` identity it acts on (§6) and the composed `feedback` delivered into the next
+ *  review-and-fix round. Two-way (unlike the one-way `appGateDecision`): the reply is whether the round started,
+ *  so the feedback composer holds open until delivery confirms and never discards the human's input on a drop. */
+export interface FlowAppRequestChangesMsg {
+  sessionId: SessionId;
+  repoKey: string;
+  step: string;
+  turnKey: string;
+  feedback: string;
+}
+
 /** flow:armInterrupt request (§27.9/AC9): the operator arms the queued interrupt for a §27 loop step. It
  *  carries the identity of the `step` it acts on (§6) — the receiver arms that step's interrupt, never one
  *  derived from ambient state — so an arm for one step can never fire against another. One-way; the consolidator
@@ -1040,6 +1053,11 @@ export interface FlowApi {
    *  the terminal accept; a legacy step never fires this path (AC8) and an option the bound def does not
    *  declare is rejected at the operation (AC9). One-way: the loop panel re-pulls via flow:onStateChanged. */
   appGateDecision(repoKey: string, step: string, turnKey: string, option: GateDecisionOption): void;
+  /** §27.9/§19.4 (AC4) — submit a request-changes decision for `repoKey`, carrying the `step`+`turnKey` identity
+   *  (§6) and the composed `feedback` for the next review-and-fix round. Resolves whether the round started, so
+   *  the feedback composer holds open until delivery confirms — a drop (runner mid-turn / gate raced out) never
+   *  discards the human's input. */
+  appRequestChanges(repoKey: string, step: string, turnKey: string, feedback: string): Promise<boolean>;
   /** §27.9/AC9 — arm the queued interrupt for `repoKey`'s §27 loop `step` (the identity it acts on, §6). The
    *  consolidator honors it at its next invocation, routing to the human gate. One-way: the loop panel
    *  re-pulls via flow:onStateChanged when the resulting state lands. */

@@ -36,6 +36,11 @@ export interface LoopPanelDeps {
    *  acts on (§6). A §27 gate view (one carrying `appTurn`) routes its option here — never to the §26
    *  `gateDecision` (AC8). Injected by the composition root; absent → the §27 decision buttons are not rendered. */
   appGateDecision?(step: string, turnKey: string, option: string): void;
+  /** §27.9/§19.4 (AC4) — open the feedback composer for a §27 request-changes at the gate. request-changes is
+   *  a two-step interaction: the click opens the composer (curate a review-todo subset + free text), and the
+   *  composer's submit carries the composed feedback back on the decision. Injected by the composition root;
+   *  absent → the §27 request-changes button does not render (a note-less dispatch is dropped, WCAG 4.1.2). */
+  composeFeedback?(step: string, turnKey: string): void;
   /** §26.3/D48 — recover a loop stopped in `error`: re-drive the failed turn (e.g. after starting Claude
    *  for a `no hosted agent` stop). Injected by the composition root; absent → no Retry control is shown,
    *  so an errored loop is never a dead-end reachable only by Terminate (never-unrecoverable, CLAUDE.md). */
@@ -477,6 +482,9 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
         gate.setAttribute('role', 'group');
         gate.setAttribute('aria-label', 'gate decision');
         for (const option of loop.gateOptions) {
+          // §27.9/AC4 — a §27 request-changes MUST carry feedback: it is a composer-only affordance, so with no
+          // composer wired render no button rather than one whose note-less dispatch the executor drops (WCAG 4.1.2).
+          if (appTurn && option === 'request-changes' && !deps.composeFeedback) continue;
           const btn = doc.createElement('button');
           // approve is the primary action (loop-flow.html) — the filled `app` tone; the rest are outline.
           btn.className = option === 'approve' ? 'pill app gate-approve' : `pill gate-${option}`;
@@ -485,9 +493,16 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
           // The visible label stays compact ("changes"); the accessible name is the unabbreviated option
           // so AT does not announce a bare, ambiguous verb (WCAG 2.4.6; label-in-name 2.5.3).
           btn.setAttribute('aria-label', option.replace('-', ' '));
-          btn.addEventListener('click', () =>
-            appTurn ? deps.appGateDecision?.(appTurn.step, appTurn.turnKey, option) : deps.gateDecision?.(option),
-          );
+          btn.addEventListener('click', () => {
+            // §27.9/AC4 — a §27 request-changes opens the feedback composer (its submit carries the feedback on
+            // the decision); the button only renders when composeFeedback is wired (guarded above).
+            if (appTurn && option === 'request-changes') {
+              deps.composeFeedback?.(appTurn.step, appTurn.turnKey);
+              return;
+            }
+            if (appTurn) deps.appGateDecision?.(appTurn.step, appTurn.turnKey, option);
+            else deps.gateDecision?.(option);
+          });
           gate.append(btn);
         }
         body.append(gate);

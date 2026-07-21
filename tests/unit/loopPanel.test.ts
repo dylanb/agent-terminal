@@ -300,6 +300,43 @@ describe('docked loop panel (§24.2.3 T2)', () => {
     expect(gateDecision).not.toHaveBeenCalled(); // the §26 executor is never fired for a §27 gate (AC8)
   });
 
+  it('routes a §27 request-changes to the feedback composer, not straight to appGateDecision (§27.9/AC4)', () => {
+    // request-changes is a two-step interaction: clicking it OPENS the composer (curate + free text), and the
+    // composer's submit is what carries the feedback on the decision. So the click fires composeFeedback with
+    // the step+turn identity, and does NOT dispatch a decision yet.
+    const appGateDecision = vi.fn();
+    const composeFeedback = vi.fn();
+    const panel = createLoopPanel(host, { githubRef: () => Promise.resolve(null), openExternal: () => {}, appGateDecision, composeFeedback });
+    panel.render(appGate({ gateOptions: ['approve', 'request-changes'] }), 'plan');
+    const rc = host.querySelector<HTMLButtonElement>('[data-gate-option="request-changes"]');
+    expect(rc).not.toBeNull();
+    rc!.click();
+    expect(composeFeedback).toHaveBeenCalledTimes(1);
+    expect(composeFeedback).toHaveBeenCalledWith('plan', 'consolidate-plan');
+    expect(appGateDecision).not.toHaveBeenCalled(); // no decision dispatched until the composer submits
+  });
+
+  it('still dispatches approve directly (only request-changes detours through the composer)', () => {
+    const appGateDecision = vi.fn();
+    const composeFeedback = vi.fn();
+    const panel = createLoopPanel(host, { githubRef: () => Promise.resolve(null), openExternal: () => {}, appGateDecision, composeFeedback });
+    panel.render(appGate({ gateOptions: ['approve', 'request-changes'] }), 'plan');
+    host.querySelector<HTMLButtonElement>('[data-gate-option="approve"]')!.click();
+    expect(appGateDecision).toHaveBeenCalledWith('plan', 'consolidate-plan', 'approve');
+    expect(composeFeedback).not.toHaveBeenCalled();
+  });
+
+  it('renders NO §27 request-changes button when no composer is wired — it is a composer-only affordance (WCAG 4.1.2)', () => {
+    // §27 request-changes MUST carry feedback (AC4); a note-less dispatch is dropped by the executor, so a
+    // button wired only to appGateDecision would be inert. Without composeFeedback, render no request-changes
+    // control at all (the same inert-affordance gate the whole gatebar uses), while approve still renders.
+    const appGateDecision = vi.fn();
+    const panel = createLoopPanel(host, { githubRef: () => Promise.resolve(null), openExternal: () => {}, appGateDecision });
+    panel.render(appGate({ gateOptions: ['approve', 'request-changes'] }), 'plan');
+    expect(host.querySelector('[data-gate-option="approve"]')).not.toBeNull();
+    expect(host.querySelector('[data-gate-option="request-changes"]')).toBeNull();
+  });
+
   it('renders NO §27 gate buttons when appGateDecision is not injected, even if §26 gateDecision is (inert-affordance, WCAG 4.1.2)', () => {
     const gateDecision = vi.fn();
     const panel = createLoopPanel(host, { githubRef: () => Promise.resolve(null), openExternal: () => {}, gateDecision });

@@ -556,6 +556,23 @@ button:hover { border-color:var(--dim); }
 .flow-modal .field .help { font-size:11px; color:var(--dim); margin-top:7px; line-height:1.4; }
 .flow-modal .mfoot { display:flex; justify-content:flex-end; gap:9px; margin-top:20px; }
 
+/* §27.9/AC4 — the request-changes feedback composer body: a free-text area, a curatable review-todo
+   checklist, and the delivery-mode radios, all styled to the modal's own field system so it reads as one
+   dialog. Each grouped list caps its height and scrolls, so a long todo set never blows out the card. */
+.flow-modal .field textarea { width:100%; box-sizing:border-box; font:inherit; font-size:13.5px; color:var(--text); background:var(--bg); border:1px solid var(--hair); border-radius:7px; padding:9px 11px; resize:vertical; }
+.flow-modal .field textarea:focus-visible { outline:2px solid var(--signal); outline-offset:-1px; }
+/* These fieldsets scroll independently at a capped height; `scroll-padding` insets the scrollport that
+   sequential-focus scroll-into-view aligns against, so a checkbox/radio scrolled to the edge keeps its ring
+   (WCAG 2.2 SC 2.4.11; SC 1.4.11) — the same guard `[data-modal-scroll]` carries. The controls get the app's
+   `--signal` ring (not the UA default) for a uniform indicator (SC 2.4.7). */
+.flow-modal .todo-curate, .flow-modal .feedback-mode { border:1px solid var(--hair); border-radius:7px; padding:10px 12px; margin-bottom:14px; max-height:9rem; overflow-y:auto; scroll-padding:var(--focus-ring-extent); }
+.flow-modal .todo-curate input:focus-visible, .flow-modal .feedback-mode input:focus-visible { outline:var(--focus-ring-w) solid var(--signal); outline-offset:var(--focus-ring-offset); }
+.flow-modal .todo-curate legend, .flow-modal .feedback-mode legend { font-size:12px; font-weight:600; padding:0 4px; }
+.flow-modal .todo-row, .flow-modal .mode-row { display:flex; align-items:flex-start; gap:8px; font-size:12.5px; line-height:1.4; padding:3px 0; cursor:pointer; }
+.flow-modal .todo-row input, .flow-modal .mode-row input { margin-top:2px; flex:none; }
+/* The required-feedback error reads as an error, not helper prose — the app's attention token (SC 3.3.1). */
+.flow-modal .err-msg { color:var(--attn-text); }
+
 /* Terminate (#26): the strip control reads as a destructive action with the design system's reserved
    --danger treatment — outlined (danger text + border) on the panel bg, distinct from the normal
    progression controls (mirrors the two-step todo-delete affordance). The confirmation's primary

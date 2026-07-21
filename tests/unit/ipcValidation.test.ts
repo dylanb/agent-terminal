@@ -14,6 +14,7 @@ import {
   isValidFlowGateDecision,
   isValidFlowAppRouteOut,
   isValidFlowAppGateDecision,
+  isValidFlowAppRequestChanges,
   isValidFlowArmInterrupt,
   isValidOpenExternal,
   openExternalTarget,
@@ -226,6 +227,20 @@ describe('IPC payload validation (§6 — renderer-supplied input is untrusted)'
     expect(isValidFlowAppGateDecision({ ...base, repoKey: 'relative', option: 'approve' })).toBe(false); // unsafe key
     expect(isValidFlowAppGateDecision({ ...base, sessionId: 'other', option: 'approve' })).toBe(false); // dead session
     expect(isValidFlowAppGateDecision(null)).toBe(false);
+  });
+
+  it('guards flow:appRequestChanges identity + requires non-empty feedback (§27.9/AC4)', () => {
+    const base = { sessionId: sid, repoKey: '/repo', step: 'plan', turnKey: 'consolidate-plan', feedback: 'tighten the schema' };
+    expect(isValidFlowAppRequestChanges(base)).toBe(true);
+    expect(isValidFlowAppRequestChanges({ ...base, feedback: '' })).toBe(false); // feedback is the point of the op
+    expect(isValidFlowAppRequestChanges({ ...base, feedback: 42 })).toBe(false); // must be a string
+    expect(isValidFlowAppRequestChanges({ sessionId: sid, repoKey: '/repo', turnKey: 'consolidate-plan', feedback: 'x' })).toBe(false); // step required
+    expect(isValidFlowAppRequestChanges({ sessionId: sid, repoKey: '/repo', step: 'plan', feedback: 'x' })).toBe(false); // turnKey required
+    expect(isValidFlowAppRequestChanges({ ...base, step: '' })).toBe(false); // non-empty identity
+    expect(isValidFlowAppRequestChanges({ ...base, turnKey: '' })).toBe(false);
+    expect(isValidFlowAppRequestChanges({ ...base, repoKey: 'relative' })).toBe(false); // unsafe key
+    expect(isValidFlowAppRequestChanges({ ...base, sessionId: 'other' })).toBe(false); // dead session
+    expect(isValidFlowAppRequestChanges(null)).toBe(false);
   });
 
   it('guards a flow:armInterrupt on the step identity + repoKey/session (§27.9/§6)', () => {

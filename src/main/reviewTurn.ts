@@ -6,6 +6,7 @@
 
 import type { LoopDefV2 } from './loopDefV2';
 import { boundaryCommand } from './appWorkTurn';
+import { validFeedback } from './appLoopState';
 import { doneSignalInstruction } from '../shared/loopTurn';
 import { DISPOSITIONS, REPORT_GRAMMAR, exampleRoundReport } from '../shared/roundReport';
 
@@ -53,6 +54,10 @@ export interface ReviewAndFixPromptReq {
   turnKey: string;
   /** The repo-relative §27 done-file the fixer writes last (after its subagents return, §27.12a). */
   doneRelPath: string;
+  /** §27.9/§19.4 (AC4) — the operator's request-changes feedback for THIS round, delivered alongside the
+   *  reviewers' findings (never to the consolidator or the work turn). Absent on a consolidator-driven
+   *  another-round; a blank/whitespace-only value is treated as none, so no empty block is ever emitted. */
+  feedback?: string;
 }
 
 /** Compose the §27 review-and-fix prompt (§27.3/§27.4/§27.5): spawn the roster as parallel subagents each
@@ -74,6 +79,19 @@ export function composeReviewAndFixPrompt(req: ReviewAndFixPromptReq): string {
     'Reviewers (persona — charter):',
   );
   for (const r of req.roster) lines.push(`- ${r.persona} — ${r.charter}`);
+  // This block is the OUTER framing every request-changes feedback carries ("weigh this / record how you
+  // addressed it"). The compose-with-agent mode adds its own inner "Synthesize…" prefix upstream in the
+  // renderer's frameFeedback; edit either aware of the other so the two divide labor rather than drift.
+  const feedback = validFeedback(req.feedback);
+  if (feedback !== undefined) {
+    lines.push(
+      '',
+      'The operator requested changes at the gate. Weigh this feedback as a first-class input to THIS round,',
+      "alongside the reviewers' findings — record how you addressed it in the round report:",
+      '',
+      feedback,
+    );
+  }
   lines.push(
     '',
     `Then write the round report to ${req.reportRel}, a Markdown document with this structure:`,

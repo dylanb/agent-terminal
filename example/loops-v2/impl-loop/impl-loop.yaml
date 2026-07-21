@@ -22,6 +22,7 @@ gate:
     side_effects:
       - kind: gh
         action: publish-pr-body
+  - option: request-changes
 pickup:
   initial_status: implementing
   branch_template: impl-loop/issue-{issue}

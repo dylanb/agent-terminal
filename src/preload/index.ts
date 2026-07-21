@@ -166,6 +166,8 @@ const flowApi: FlowApi = {
     ipcRenderer.send(CH.flowAppRouteOut, { sessionId: SESSION_ID, repoKey, step, turnKey, action }),
   appGateDecision: (repoKey, step, turnKey, option) =>
     ipcRenderer.send(CH.flowAppGateDecision, { sessionId: SESSION_ID, repoKey, step, turnKey, option }),
+  appRequestChanges: (repoKey, step, turnKey, feedback) =>
+    ipcRenderer.invoke(CH.flowAppRequestChanges, { sessionId: SESSION_ID, repoKey, step, turnKey, feedback }) as Promise<boolean>,
   armInterrupt: (repoKey, step) => ipcRenderer.send(CH.flowArmInterrupt, { sessionId: SESSION_ID, repoKey, step }),
 };
 

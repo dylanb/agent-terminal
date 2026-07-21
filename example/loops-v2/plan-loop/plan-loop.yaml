@@ -25,6 +25,7 @@ gate:
     side_effects:
       - kind: gh
         action: mark-ready
+  - option: request-changes
 pickup:
   initial_status: planning
   branch_template: plan-loop/issue-{issue}

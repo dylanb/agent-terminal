@@ -117,6 +117,9 @@
     <!-- Bootstrap-failure error-alert host (§26.9): createErrorDialog renders the blocking pickup-failure
          alert here. Empty until an async bootstrap fails and main pushes flow:onBootstrapError. -->
     <div id="flow-error-host"></div>
+    <!-- Request-changes feedback composer host (§27.9 / AC4): createFeedbackComposer renders the blocking
+         feedback dialog here when the operator chooses request-changes at a §27 gate. Empty until opened. -->
+    <div id="feedback-composer-host"></div>
     <script type="module" src="./src/index.ts"></script>
   </body>
 </html>

@@ -11,6 +11,7 @@ import {
   SESSION_ID,
   type FlowAppRouteOutMsg,
   type FlowAppGateDecisionMsg,
+  type FlowAppRequestChangesMsg,
   type FlowArmInterruptMsg,
   type AgentInjectMsg,
   type ClipboardWriteMsg,
@@ -207,6 +208,23 @@ export function isValidFlowAppGateDecision(m: unknown): m is FlowAppGateDecision
     typeof m.turnKey === 'string' &&
     m.turnKey.length > 0 &&
     (GATE_DECISION_OPTIONS as readonly unknown[]).includes(m.option)
+  );
+}
+
+/** flow:appRequestChanges — the operator's request-changes decision (§27.9/AC4). `repoKey` is a filesystem path
+ *  so it gets the safe-path guard; `step`/`turnKey` are the non-empty identity the receiver acts on (§6); the
+ *  composed `feedback` is required and non-empty (the whole point of the op — a blank one fires no round). */
+export function isValidFlowAppRequestChanges(m: unknown): m is FlowAppRequestChangesMsg {
+  return (
+    isRecord(m) &&
+    isLiveSession(m) &&
+    isSafeRepoKey(m.repoKey) &&
+    typeof m.step === 'string' &&
+    m.step.length > 0 &&
+    typeof m.turnKey === 'string' &&
+    m.turnKey.length > 0 &&
+    typeof m.feedback === 'string' &&
+    m.feedback.length > 0
   );
 }
 
