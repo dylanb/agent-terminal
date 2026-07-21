@@ -240,115 +240,94 @@ export function consolidatorOutputFile(repoDir: string, round: number): string |
   return confinedRealPath(jail, path.join(jail, roundLeaf(round)));
 }
 
-/** The confined absolute armed-interrupt file path (§27.9), or null when the loop area is unresolvable. */
-function armedInterruptFile(repoDir: string): string | null {
-  const jail = resolveJail(repoDir, ...APP_LOOP_DIR_SEGMENTS);
-  if (jail === null) return null;
-  return confinedRealPath(jail, path.join(jail, ARMED_INTERRUPT_FILE));
+/** A per-step flag in the §27 loop area — one small YAML document `{schema_version, step}` in its OWN file, so a
+ *  wholesale run-state write can neither clobber nor resurrect it and it survives a relaunch (§27.9). The armed
+ *  interrupt (AC9) and the polish stand-down (AC6/AC11) are two disjoint instances of this one shape; each names
+ *  its own file so the two never collide. Confined through resolveJail because the loop area sits inside the
+ *  untrusted repo working tree (CWE-22/59). */
+interface StepFlag {
+  /** Persist the flag for `step`. A blank step is inert — never a phantom flag on an empty identity (CWE-20).
+   *  Throws when the loop area is unresolvable (a planted symlink, CWE-59), matching the run-state writer's
+   *  fail-loud contract; the caller's best-effort wrapper keeps it off the critical path. */
+  set(repoDir: string, step: string): void;
+  /** Clear the flag — best-effort; an absent file is already the cleared state. */
+  clear(repoDir: string): void;
+  /** The flag's step identity, or null when unset. Field-local validation (CWE-20): an empty/missing/non-string
+   *  step is not a valid flag, so it reads as unset rather than surfacing a phantom identity. */
+  read(repoDir: string): { step: string } | null;
 }
 
-/** Arm the queued interrupt for `step` (§27.9/AC9), persisted in its OWN file so a wholesale run-state write
- *  can neither clobber nor resurrect it. A blank step is inert — never a phantom arm on an empty identity
- *  (CWE-20). Throws when the loop area is unresolvable (a planted symlink, CWE-59), matching the run-state
- *  writer's fail-loud contract; the caller's best-effort wrapper keeps it off the critical path. */
+function stepFlag(filename: string, what: string): StepFlag {
+  const fileOf = (repoDir: string): string | null => {
+    const jail = resolveJail(repoDir, ...APP_LOOP_DIR_SEGMENTS);
+    if (jail === null) return null;
+    return confinedRealPath(jail, path.join(jail, filename));
+  };
+  return {
+    set(repoDir, step) {
+      if (step.length === 0) return;
+      const file = fileOf(repoDir);
+      if (file === null) throw new Error('§27 loop area is unresolvable');
+      if (!atomicWriteFileSync(file, yaml.dump({ schema_version: APP_LOOP_STATE_SCHEMA, step }))) {
+        throw new Error(`cannot write §27 ${what}: ${path.dirname(file)} is not a real directory`);
+      }
+    },
+    clear(repoDir) {
+      const file = fileOf(repoDir);
+      if (file === null) return;
+      rmSync(file, { force: true });
+    },
+    read(repoDir) {
+      const file = fileOf(repoDir);
+      if (file === null) return null;
+      let text: string;
+      try {
+        text = readFileSync(file, 'utf8');
+      } catch {
+        return null;
+      }
+      let doc: unknown;
+      try {
+        doc = yaml.load(text);
+      } catch {
+        return null;
+      }
+      if (!isRecord(doc)) return null;
+      if (String(doc.schema_version) !== String(APP_LOOP_STATE_SCHEMA)) return null;
+      if (typeof doc.step !== 'string' || doc.step.length === 0) return null;
+      return { step: doc.step };
+    },
+  };
+}
+
+const armedInterrupt = stepFlag(ARMED_INTERRUPT_FILE, 'armed interrupt');
+const polishStandDown = stepFlag(POLISH_FILE, 'polish stand-down');
+
+/** Arm the queued one-shot interrupt for `step` (§27.9/AC9), cleared by `clearInterrupt`. */
 export function armInterrupt(repoDir: string, step: string): void {
-  if (step.length === 0) return;
-  const file = armedInterruptFile(repoDir);
-  if (file === null) throw new Error('§27 loop area is unresolvable');
-  if (!atomicWriteFileSync(file, yaml.dump({ schema_version: APP_LOOP_STATE_SCHEMA, step }))) {
-    throw new Error(`cannot write §27 armed interrupt: ${path.dirname(file)} is not a real directory`);
-  }
+  armedInterrupt.set(repoDir, step);
 }
-
-/** Clear the armed interrupt (§27.9/AC9) — the one-shot honor. Best-effort: an absent file is already the
- *  cleared state. */
 export function clearInterrupt(repoDir: string): void {
-  const file = armedInterruptFile(repoDir);
-  if (file === null) return;
-  rmSync(file, { force: true });
+  armedInterrupt.clear(repoDir);
 }
-
-/** The armed interrupt's step identity, or null when none is armed (§27.9/AC9/AC11). Field-local validation
- *  (CWE-20): an empty/missing/non-string step is not a valid arm, so it reads as not-armed rather than
- *  surfacing a phantom identity. Survives a relaunch as app-owned loop state. */
 export function readArmedInterrupt(repoDir: string): { step: string } | null {
-  const file = armedInterruptFile(repoDir);
-  if (file === null) return null;
-  let text: string;
-  try {
-    text = readFileSync(file, 'utf8');
-  } catch {
-    return null;
-  }
-  let doc: unknown;
-  try {
-    doc = yaml.load(text);
-  } catch {
-    return null;
-  }
-  if (!isRecord(doc)) return null;
-  if (String(doc.schema_version) !== String(APP_LOOP_STATE_SCHEMA)) return null;
-  if (typeof doc.step !== 'string' || doc.step.length === 0) return null;
-  return { step: doc.step };
+  return armedInterrupt.read(repoDir);
 }
 
-/** The confined absolute polish-stand-down file path (§27.9), or null when the loop area is unresolvable. */
-function polishFile(repoDir: string): string | null {
-  const jail = resolveJail(repoDir, ...APP_LOOP_DIR_SEGMENTS);
-  if (jail === null) return null;
-  return confinedRealPath(jail, path.join(jail, POLISH_FILE));
-}
-
-/** Enter the polish stand-down for `step` (§27.9/AC6), persisted in its OWN file so a wholesale run-state write
- *  can neither clobber nor resurrect it and it survives a relaunch (AC11). A blank step is inert — never a
- *  phantom stand-down on an empty identity (CWE-20). Throws when the loop area is unresolvable (a planted
- *  symlink, CWE-59), matching the run-state/arm writers' fail-loud contract; the caller's best-effort wrapper
- *  keeps it off the critical path. */
+/** Enter the polish stand-down for `step` (§27.9/AC6) — approve is the one lever that clears it (AC11). */
 export function enterPolish(repoDir: string, step: string): void {
-  if (step.length === 0) return;
-  const file = polishFile(repoDir);
-  if (file === null) throw new Error('§27 loop area is unresolvable');
-  if (!atomicWriteFileSync(file, yaml.dump({ schema_version: APP_LOOP_STATE_SCHEMA, step }))) {
-    throw new Error(`cannot write §27 polish stand-down: ${path.dirname(file)} is not a real directory`);
-  }
+  polishStandDown.set(repoDir, step);
 }
-
-/** End the polish stand-down (§27.9/AC6) — approve is the one lever that clears it. Best-effort: an absent
- *  file is already the cleared state. */
 export function clearPolish(repoDir: string): void {
-  const file = polishFile(repoDir);
-  if (file === null) return;
-  rmSync(file, { force: true });
+  polishStandDown.clear(repoDir);
 }
-
-/** The polish stand-down's step identity, or null when none is active (§27.9/AC6/AC11). Field-local validation
- *  (CWE-20): an empty/missing/non-string step is not a valid stand-down, so it reads as not-in-polish rather
- *  than surfacing a phantom identity. Survives a relaunch as app-owned loop state. */
 export function readPolish(repoDir: string): { step: string } | null {
-  const file = polishFile(repoDir);
-  if (file === null) return null;
-  let text: string;
-  try {
-    text = readFileSync(file, 'utf8');
-  } catch {
-    return null;
-  }
-  let doc: unknown;
-  try {
-    doc = yaml.load(text);
-  } catch {
-    return null;
-  }
-  if (!isRecord(doc)) return null;
-  if (String(doc.schema_version) !== String(APP_LOOP_STATE_SCHEMA)) return null;
-  if (typeof doc.step !== 'string' || doc.step.length === 0) return null;
-  return { step: doc.step };
+  return polishStandDown.read(repoDir);
 }
 
 /** Whether a polish stand-down is active for `step` (§27.9/AC6). The ONE definition of the stand-down identity
  *  both sides that must agree derive from — the engine's lever-suppression seam (index.ts) and the view's
- *  `inPolish` (loopViewV2) — so the two cannot drift on which gate is standing down (CLAUDE.md shared-semantics).
- *  A stand-down for a different step (or none) reads as not active here. */
+ *  `inPolish` (loopViewV2) — so the two cannot drift on which gate is standing down (CLAUDE.md shared-semantics). */
 export function isPolishActiveForStep(repoDir: string, step: string): boolean {
-  return readPolish(repoDir)?.step === step;
+  return polishStandDown.read(repoDir)?.step === step;
 }

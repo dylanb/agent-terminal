@@ -442,3 +442,26 @@ describe('§27 polish stand-down — persisted independently of the run-state do
     expect(isPolishActiveForStep(repo, 'plan')).toBe(false); // cleared
   });
 });
+
+// §27.9/AC6/AC9/AC11 — the polish stand-down and the armed interrupt are TWO independent flags. They share a
+// serialized shape but are disjoint state: writing or clearing one never surfaces as, clobbers, or resurrects
+// the other. (The disjointness a common single-flag primitive must preserve — a shared writer that collapsed
+// the two onto one file would pass every per-flag test above yet fail here.)
+describe('§27 polish stand-down and armed interrupt — disjoint flags', () => {
+  it('arming an interrupt is not a polish stand-down, and clearing one never touches the other', () => {
+    armInterrupt(repo, 'plan');
+    expect(readPolish(repo)).toBeNull(); // an armed interrupt never reads back as an active polish
+    expect(isPolishActiveForStep(repo, 'plan')).toBe(false);
+
+    enterPolish(repo, 'implement');
+    expect(readArmedInterrupt(repo)).toEqual({ step: 'plan' }); // the arm is untouched by entering polish
+    expect(readPolish(repo)).toEqual({ step: 'implement' });
+
+    clearPolish(repo);
+    expect(readArmedInterrupt(repo)).toEqual({ step: 'plan' }); // clearing polish does not clear the interrupt
+    expect(readPolish(repo)).toBeNull();
+
+    clearInterrupt(repo);
+    expect(readArmedInterrupt(repo)).toBeNull();
+  });
+});
