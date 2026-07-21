@@ -20,6 +20,8 @@ gate:
       - kind: gh
         action: update-issue-body
   - option: request-changes
+  - option: redo
+  - option: polish
 pickup:
   initial_status: grooming
   branch_template: groom/issue-{issue}

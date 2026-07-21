@@ -75,6 +75,11 @@ type AppCompletion =
 export interface AppLoopEngineDeps {
   /** Inject + submit `text` into the hosted instance (§9.3). */
   inject(text: string): void;
+  /** §27.9/AC6 — whether the polish stand-down is active for the repo: the operator has taken the keyboard and
+   *  the orchestrator must inject nothing until approve ends it. The engine consults this before running any
+   *  lever that would re-enter a turn (redo, request-changes), so a decision racing the stand-down never
+   *  restarts the orchestrator. A domain predicate, not the app-loop-state file shape behind it. */
+  polishActive(repoDir: string): boolean;
   /** The hosted instance's injection-readiness (§27.2) — idle / busy / absent. */
   hostedAgent(): HostedAgentState;
   /** Arm / cancel the stall watchdog (§27.12) — reset on visible activity, no wall-clock deadline. */
@@ -130,6 +135,13 @@ export interface AppLoopEngine {
    *  run is AT a gate (a reached verdict); otherwise inert. Never runs the consolidator or the work turn.
    *  Returns whether the round was started — `false` on every inert case so the caller can surface a drop. */
   requestChanges(repoDir: string, stepId: string, turnKey: string, feedback: string): boolean;
+  /** §27.9/AC5 — a redo gate decision: re-enter the WORK turn on a clean slate (after its entry boundary),
+   *  carrying ONLY the ticket, the plan, and the operator's `instruction` — no findings, no round history. The
+   *  only lever that re-runs the work turn. Acts only on the persisted gate matching the step+turn identity it
+   *  names (§6), only when that run is AT a gate (a reached verdict), and never while polish stands the
+   *  orchestrator down (AC6). Returns whether the work turn re-entered — `false` on every inert case so the
+   *  caller (the redo composer) can surface a drop and keep the human's instruction. */
+  redo(repoDir: string, stepId: string, turnKey: string, instruction: string): boolean;
   /** On launch: reconstruct a stopped turn from the persisted run state; an `error`/`complete` turn is
    *  human-owned and never re-driven, only made routable (§27.12). */
   resume(repoDir: string): void;
@@ -154,6 +166,10 @@ type ActiveAppTurn =
       boundaryCmd: string;
       recipePath: string;
       completion: AppCompletion;
+      /** §27.9/AC5 — the operator's redo instruction carried into this work turn, threaded into the work
+       *  prompt as the clean-slate directive; absent on an ordinary (non-redo) work run. Persisted so a
+       *  relaunch or Retry re-injects it rather than dropping the human's input (mirrors review `feedback`). */
+      instruction?: string;
     }
   | {
       phase: 'review';
@@ -260,7 +276,7 @@ function turnErrorAuditCmd(turn: ActiveAppTurn, reason: string): string {
   return `§27 work turn ${turn.turnKey} failed: ${reason}`;
 }
 
-function activeTurnFor(repoDir: string, loopName: string, stepId: string, def: LoopDefV2): ActiveAppTurn {
+function activeTurnFor(repoDir: string, loopName: string, stepId: string, def: LoopDefV2, instruction?: string): ActiveAppTurn {
   const artifact = completionArtifact(def);
   return {
     phase: 'work',
@@ -273,6 +289,7 @@ function activeTurnFor(repoDir: string, loopName: string, stepId: string, def: L
     completion: artifact
       ? { kind: 'file', path: artifact.path, marker: completionMarker(stepId), artifactRel: path.relative(repoDir, artifact.path) }
       : { kind: 'commits' },
+    ...(instruction !== undefined ? { instruction } : {}),
   };
 }
 
@@ -293,6 +310,8 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
     // §27.9/AC4 — a review round entered by request-changes carries the operator's feedback; persisted so a
     // relaunch or Retry re-injects it rather than dropping it.
     const feedback = active.phase === 'review' ? active.feedback : undefined;
+    // §27.9/AC5 — a work turn entered by redo carries the operator's instruction; persisted for the same reason.
+    const instruction = active.phase === 'work' ? active.instruction : undefined;
     let landed = true;
     try {
       deps.persist(active.repoDir, {
@@ -306,6 +325,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
         ...(verdictReason !== undefined ? { verdictReason } : {}),
         ...(chosenRoster !== undefined ? { chosenRoster } : {}),
         ...(feedback !== undefined ? { feedback } : {}),
+        ...(instruction !== undefined ? { instruction } : {}),
       });
     } catch (e) {
       // §27.10 resume state is best-effort: a write failure must never abort the turn's live path or crash
@@ -400,6 +420,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
         turnKey,
         doneRelPath: APP_DONE_REL_PATH,
         completion: active.completion.kind === 'file' ? { artifactRel: active.completion.artifactRel, marker: active.completion.marker } : null,
+        ...(active.instruction !== undefined ? { instruction: active.instruction } : {}),
       });
     },
     inject: (prompt, opts) => {
@@ -719,6 +740,9 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
     },
     requestChanges(repoDir, stepId, turnKey, feedback) {
       if (runner.state() === 'in-flight') return false; // §27.2 — never interleave a second turn
+      // §27.9/AC6 — while polish stands the orchestrator down, no lever may re-enter a turn: the operator owns
+      // the keyboard until approve ends it. A request-changes racing the stand-down is refused, not injected.
+      if (deps.polishActive(repoDir)) return false;
       // §6/AC7 — identity + at-a-gate precondition; the round to iterate from is the gate's round, not a fresh counter.
       const state = readAppLoopState(repoDir);
       if (!state || state.step !== stepId || state.turnKey !== turnKey) return false;
@@ -727,6 +751,23 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       // §27.9/AC4 — re-enter review at round+1 over the def's full catalog (fresh eyes on the human-driven
       // changes); undefined roster so the full catalog runs, never the consolidator or work turn.
       enterReview({ repoDir, loopName: state.loop, stepId }, round + 1, undefined, feedback);
+      return true;
+    },
+    redo(repoDir, stepId, turnKey, instruction) {
+      if (runner.state() === 'in-flight') return false; // §27.2 — never interleave a second turn
+      // §27.9/AC6 — polish stands the orchestrator down: a redo racing the stand-down is refused, not injected.
+      if (deps.polishActive(repoDir)) return false;
+      // §6/AC7 — identity + at-a-gate precondition, exactly as request-changes; only a reached gate can redo.
+      const state = readAppLoopState(repoDir);
+      if (!state || state.step !== stepId || state.turnKey !== turnKey) return false;
+      if (state.status !== 'complete' || state.verdict === undefined) return false;
+      // §27.9/AC5 — re-enter the WORK turn on a clean slate carrying only the instruction. The def must resolve
+      // (the work turn needs its recipe + completion contract); an unresolvable def is inert, not a fabricated
+      // run. `start` crosses the entry boundary (clear/compact — the clean slate) then injects the work prompt,
+      // which threads the instruction; no round, no feedback, no findings ride along (a fresh work run).
+      const r = deps.resolveDef(repoDir, state.loop);
+      if (!r.ok) return false;
+      start(activeTurnFor(repoDir, state.loop, stepId, r.def, instruction));
       return true;
     },
     resume(repoDir) {
@@ -765,8 +806,8 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       }
       const r = deps.resolveDef(repoDir, state.loop);
       active = r.ok
-        ? activeTurnFor(repoDir, state.loop, state.step, r.def)
-        : { phase: 'work', repoDir, loopName: state.loop, stepId: state.step, turnKey: state.turnKey, recipePath: '', boundaryCmd: '/clear', completion: { kind: 'unresolved' } };
+        ? activeTurnFor(repoDir, state.loop, state.step, r.def, state.instruction)
+        : { phase: 'work', repoDir, loopName: state.loop, stepId: state.step, turnKey: state.turnKey, recipePath: '', boundaryCmd: '/clear', completion: { kind: 'unresolved' }, ...(state.instruction !== undefined ? { instruction: state.instruction } : {}) };
       makeRoutable();
     },
     activeTurnKey: () => active?.turnKey ?? null,

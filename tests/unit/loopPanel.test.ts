@@ -337,6 +337,51 @@ describe('docked loop panel (§24.2.3 T2)', () => {
     expect(host.querySelector('[data-gate-option="request-changes"]')).toBeNull();
   });
 
+  it('routes a §27 redo to the redo composer, not straight to appGateDecision (§27.9/AC5)', () => {
+    // redo, like request-changes, is a two-step interaction: clicking it OPENS the instruction composer, and the
+    // composer's submit carries the instruction on the decision. So the click fires composeRedo with the identity,
+    // and does NOT dispatch a decision yet.
+    const appGateDecision = vi.fn();
+    const composeRedo = vi.fn();
+    const panel = createLoopPanel(host, { githubRef: () => Promise.resolve(null), openExternal: () => {}, appGateDecision, composeRedo });
+    panel.render(appGate({ gateOptions: ['approve', 'redo'] }), 'plan');
+    const redo = host.querySelector<HTMLButtonElement>('[data-gate-option="redo"]');
+    expect(redo).not.toBeNull();
+    redo!.click();
+    expect(composeRedo).toHaveBeenCalledTimes(1);
+    expect(composeRedo).toHaveBeenCalledWith('plan', 'consolidate-plan');
+    expect(appGateDecision).not.toHaveBeenCalled(); // no decision dispatched until the composer submits
+  });
+
+  it('renders NO §27 redo button when no redo composer is wired — it is a composer-only affordance (WCAG 4.1.2)', () => {
+    const appGateDecision = vi.fn();
+    const panel = createLoopPanel(host, { githubRef: () => Promise.resolve(null), openExternal: () => {}, appGateDecision });
+    panel.render(appGate({ gateOptions: ['approve', 'redo'] }), 'plan');
+    expect(host.querySelector('[data-gate-option="approve"]')).not.toBeNull();
+    expect(host.querySelector('[data-gate-option="redo"]')).toBeNull();
+  });
+
+  it('dispatches §27 polish directly to appGateDecision (one-way, no composer, no human input to lose)', () => {
+    const appGateDecision = vi.fn();
+    const panel = createLoopPanel(host, { githubRef: () => Promise.resolve(null), openExternal: () => {}, appGateDecision });
+    panel.render(appGate({ gateOptions: ['approve', 'polish'] }), 'plan');
+    host.querySelector<HTMLButtonElement>('[data-gate-option="polish"]')!.click();
+    expect(appGateDecision).toHaveBeenCalledWith('plan', 'consolidate-plan', 'polish');
+  });
+
+  it('renders the polish stand-down view: a polish notice + approve (end polish) only (§27.9/AC6)', () => {
+    // A polish view (the provider set polish:true and narrowed gateOptions to approve): the panel surfaces the
+    // stand-down so the operator knows the orchestrator has released the keyboard, and approve ends it.
+    const appGateDecision = vi.fn();
+    const panel = createLoopPanel(host, { githubRef: () => Promise.resolve(null), openExternal: () => {}, appGateDecision });
+    panel.render(appGate({ gateOptions: ['approve'], polish: true }), 'plan');
+    expect(host.querySelector('[data-polish-standdown]')).not.toBeNull(); // the stand-down is surfaced
+    expect(host.querySelector('[data-gate-option="approve"]')).not.toBeNull(); // approve ends it
+    // no redo/request-changes/polish controls in the polish view (the provider withdrew them)
+    expect(host.querySelector('[data-gate-option="redo"]')).toBeNull();
+    expect(host.querySelector('[data-gate-option="request-changes"]')).toBeNull();
+  });
+
   it('renders NO §27 gate buttons when appGateDecision is not injected, even if §26 gateDecision is (inert-affordance, WCAG 4.1.2)', () => {
     const gateDecision = vi.fn();
     const panel = createLoopPanel(host, { githubRef: () => Promise.resolve(null), openExternal: () => {}, gateDecision });

@@ -130,6 +130,21 @@ describe('decideGateOutcome (§26.6 / L5 — app-internal gate transition)', () 
     expect(out.effects.map((e) => e.kind)).toContain('append-human-note');
   });
 
+  // §27.9/§27.15 (AC8) — redo and polish are §27-only options that widen the shared GATE_DECISION_OPTIONS set.
+  // The §26 executor never runs them (the §26 gate handler rejects any option its def does not declare), but the
+  // widened type admits them here; if one reaches the §26 decision it must be INERT — no §26 action, no status
+  // change, no terminate/re-iterate — so a §27 concept never drives a §26 transition.
+  for (const option of ['redo', 'polish'] as const) {
+    it(`a §27-only ${option} is inert on the §26 gate — no transition, no advance (AC8)`, () => {
+      const out = decideGateOutcome(gate(), option);
+      expect(out.nextStatus).toBe(gate().id); // no status change (gate.id is the current status)
+      expect(out.terminate).toBe(false);
+      expect(out.reiterate).toBe(false);
+      expect(out.effects).toEqual([]);
+      expect(shouldAdvanceFlowOnGate(option, out)).toBe(false);
+    });
+  }
+
   // §26 D42a — a SUCCESS terminal (an approve whose action list terminates the loop) is the signal that
   // the enclosing flow's loop step is complete, so the flow auto-advances to its next step. Impasse also
   // terminates but is a human-owned FAILURE terminal (no advance); request-changes re-iterates; an approve

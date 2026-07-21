@@ -50,6 +50,11 @@ function actionsFor(gate: LoopGate, option: GateOption): { actions: GateAction[]
       return { actions: gate.onRequestChanges, nextStatus: gate.nextStatusOnRequestChanges };
     case 'impasse':
       return { actions: gate.onImpasse, nextStatus: gate.nextStatusOnImpasse };
+    // §27.9/§27.15 (AC8) — redo/polish are §27-only options that widen the shared GATE_DECISION_OPTIONS set;
+    // the §26 executor never runs them (the §26 gate handler rejects an option its def does not declare), so if
+    // one reaches here it is inert: no §26 action and no status change (gate.id is the current status).
+    default:
+      return { actions: [], nextStatus: gate.id };
   }
 }
 

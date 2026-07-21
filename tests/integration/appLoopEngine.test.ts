@@ -47,6 +47,9 @@ let terminateFlow: Mock<(repoDir: string) => void>;
 let armTimer: Mock<() => void>;
 let cancelTimer: Mock<() => void>;
 let readArtifact: Mock<(p: string) => string | null>;
+/** The polish stand-down flag the engine consults before injecting (§27.9/AC6). Toggled per-test; defaults
+ *  off so the ordinary drive helpers inject as before. */
+let polishActive: boolean;
 
 /** A file-producing plan-loop def whose completion artifact resolves under the repo's §27 area, declaring a
  *  two-persona reviewer catalog and a compact pre-review boundary so the review-and-fix chain (N3) is real. */
@@ -88,6 +91,7 @@ function makeEngine(persistOverride?: (repoDir: string, state: AppLoopRunState) 
   armTimer = vi.fn();
   cancelTimer = vi.fn();
   injected = [];
+  polishActive = false;
   readArtifact = vi.fn((p: string) => {
     try {
       return readFileSync(p, 'utf8');
@@ -97,6 +101,7 @@ function makeEngine(persistOverride?: (repoDir: string, state: AppLoopRunState) 
   });
   deps = {
     inject: (text) => injected.push(text),
+    polishActive: () => polishActive,
     hostedAgent: () => hosted,
     armTimer,
     cancelTimer,
@@ -876,6 +881,121 @@ describe('§27 engine — request-changes returns to a review-and-fix round carr
     relaunched.onInjectable();
     relaunched.onInjectable();
     expect(injected[injected.length - 1]).toContain(FEEDBACK); // the feedback survived the relaunch
+  });
+});
+
+describe('§27 engine — redo re-enters the work turn on a clean slate carrying only the instruction (§27.9 / AC5)', () => {
+  const INSTRUCTION = 'The plan structure is wrong — redo it keeping only the schema section.';
+
+  /** Drive work → review round 1 → consolidator → a terminal `clean` gate (status complete, round 1, verdict). */
+  function driveToGate(engine: ReturnType<typeof createAppLoopEngine>): void {
+    driveToConsolidateInjected(engine);
+    completeConsolidate(engine, 1, 'verdict: clean\n');
+  }
+
+  it('re-enters the WORK turn carrying the instruction, and persists it on the work run-state', () => {
+    const engine = makeEngine();
+    driveToGate(engine);
+    expect(readAppLoopState(repo)).toMatchObject({ status: 'complete', round: 1, verdict: 'clean' });
+    const before = injected.length;
+    expect(engine.redo(repo, STEP, CONSOLIDATE_KEY, INSTRUCTION)).toBe(true);
+    // Drain the boundary + work injection (the §26 runner's settle state is path-dependent, so drain generously
+    // and read the re-injected prompt out of the batch rather than a fixed index).
+    engine.onInjectable();
+    engine.onInjectable();
+    const since = injected.slice(before);
+    expect(since).toContain('/clear'); // re-enters after the def's pre-work boundary (clean slate)
+    const prompt = since.find((p) => p.includes('Produce the plan.')); // the work recipe (ticket + plan)
+    expect(prompt).toBeDefined();
+    expect(prompt).toContain(INSTRUCTION); // the operator's instruction rides along
+    expect(since.some((p) => p.includes(ROSTER[0]))).toBe(false); // NO reviewers/findings — no round history
+    expect(since.some((p) => p.includes('review-and-fix'))).toBe(false);
+    // the work turn is active again, carrying the instruction and NO round/feedback (a fresh work run)
+    const state = readAppLoopState(repo);
+    expect(state).toMatchObject({ turnKey: TURN_KEY, status: 'working', instruction: INSTRUCTION });
+    expect(state?.round).toBeUndefined();
+    expect(state?.feedback).toBeUndefined();
+  });
+
+  it('is the ONLY lever that re-runs the work turn — request-changes never does (§27.9)', () => {
+    const engine = makeEngine();
+    driveToGate(engine);
+    const before = injected.length;
+    engine.redo(repo, STEP, CONSOLIDATE_KEY, INSTRUCTION);
+    engine.onInjectable();
+    engine.onInjectable();
+    expect(injected.slice(before).some((p) => p.includes('Produce the plan.'))).toBe(true); // the work recipe re-ran
+  });
+
+  it('reports true only when it re-entered; inert cases (identity, at-gate) report false so the composer holds open', () => {
+    const engine = makeEngine();
+    driveToGate(engine);
+    const before = injected.length;
+    // a decision naming a different step (§6/AC7) is inert and reports false
+    expect(engine.redo(repo, 'implement', CONSOLIDATE_KEY, INSTRUCTION)).toBe(false);
+    expect(injected.length).toBe(before);
+    expect(readAppLoopState(repo)).toMatchObject({ status: 'complete', round: 1 }); // unchanged, still at the gate
+  });
+
+  it('is inert when the run is not AT a gate (no verdict reached), reporting false', () => {
+    const engine = makeEngine();
+    driveToReviewInjected(engine); // an in-flight review turn — status working, no verdict
+    const before = injected.length;
+    expect(engine.redo(repo, STEP, REVIEW_KEY, INSTRUCTION)).toBe(false);
+    expect(injected.length).toBe(before);
+    expect(readAppLoopState(repo)).toMatchObject({ status: 'working' });
+  });
+
+  it('a Retry after a relaunch re-injects the persisted instruction rather than dropping the human input', () => {
+    const engine = makeEngine();
+    driveToGate(engine);
+    engine.redo(repo, STEP, CONSOLIDATE_KEY, INSTRUCTION); // start persists the instruction on the work run-state
+    expect(readAppLoopState(repo)?.instruction).toBe(INSTRUCTION);
+    // Simulate a relaunch: a fresh engine reconstructs the stopped work turn from disk, then Retry.
+    const relaunched = makeEngine();
+    relaunched.resume(repo);
+    relaunched.routeOut(repo, STEP, TURN_KEY, 'retry');
+    relaunched.onInjectable();
+    relaunched.onInjectable();
+    expect(injected.some((p) => p.includes(INSTRUCTION))).toBe(true); // the instruction survived the relaunch
+  });
+});
+
+describe('§27 engine — the polish stand-down suppresses the orchestrator levers (§27.9 / AC6)', () => {
+  function driveToGate(engine: ReturnType<typeof createAppLoopEngine>): void {
+    driveToConsolidateInjected(engine);
+    completeConsolidate(engine, 1, 'verdict: clean\n');
+  }
+
+  it('refuses request-changes while polish is active — no review round starts, nothing is injected', () => {
+    const engine = makeEngine();
+    driveToGate(engine);
+    polishActive = true; // the operator entered polish; the app-owned flag is set
+    const before = injected.length;
+    expect(engine.requestChanges(repo, STEP, CONSOLIDATE_KEY, 'tighten the schema')).toBe(false);
+    engine.onInjectable();
+    engine.onInjectable();
+    expect(injected.length).toBe(before); // the orchestrator stood down — no injection during polish
+    expect(readAppLoopState(repo)).toMatchObject({ status: 'complete', round: 1 }); // still at the gate
+  });
+
+  it('refuses redo while polish is active — the work turn does not re-run', () => {
+    const engine = makeEngine();
+    driveToGate(engine);
+    polishActive = true;
+    const before = injected.length;
+    expect(engine.redo(repo, STEP, CONSOLIDATE_KEY, 'start over')).toBe(false);
+    engine.onInjectable();
+    expect(injected.length).toBe(before);
+  });
+
+  it('the levers work again once the stand-down is cleared (approve ends polish)', () => {
+    const engine = makeEngine();
+    driveToGate(engine);
+    polishActive = true;
+    expect(engine.redo(repo, STEP, CONSOLIDATE_KEY, 'start over')).toBe(false); // refused during polish
+    polishActive = false; // approve cleared the stand-down
+    expect(engine.redo(repo, STEP, CONSOLIDATE_KEY, 'start over')).toBe(true); // the lever works again
   });
 });
 

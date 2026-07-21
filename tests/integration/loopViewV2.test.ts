@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { deriveAppLoopView } from '../../src/main/loopViewV2';
 import type { LoopDefV2Tiers } from '../../src/main/loopDefV2';
-import { writeAppLoopState } from '../../src/main/appLoopState';
+import { writeAppLoopState, enterPolish } from '../../src/main/appLoopState';
 
 // The §27 loop-view provider (the READ meeting point, engine-selected on the flow step's `app` namespace):
 // it resolves the bound app-def and produces the whole loop view the strip/panel render — a run-less view
@@ -243,6 +243,49 @@ describe('deriveAppLoopView — the catalog, chosen roster, and verdict (AC5, AC
     plant('plan-loop', ['approve'], CATALOG);
     writeAppLoopState(repoDir, { loop: 'plan-loop', step: 'plan', turnKey: 'work-plan', status: 'working' }, FIXED);
     const view = deriveAppLoopView('plan-loop', { tiers: tiers(), repoDir });
+    expect(view.actionable).toBe(false);
+    expect(view.gateOptions).toBeUndefined();
+  });
+
+  // §27.9/N5 (AC6/AC11) — a polish stand-down active for the gated step turns the view into the polish view: it
+  // still renders at the gate (actionable, human-needed) but offers ONLY the approve control (which ends polish),
+  // never the full option set, and carries `polish: true` so the panel shows the stand-down. Persisted
+  // independently, so it survives a relaunch (this derive reads it fresh each pull).
+  it('a polish stand-down at the gate narrows the options to approve and marks the view polish (AC6/AC11)', () => {
+    plant('plan-loop', ['approve', 'request-changes', 'redo', 'polish'], CATALOG);
+    writeAppLoopState(
+      repoDir,
+      { loop: 'plan-loop', step: 'plan', turnKey: 'consolidate-plan', status: 'complete', round: 2, verdict: 'clean' },
+      FIXED,
+    );
+    enterPolish(repoDir, 'plan'); // the operator entered polish (persisted in its own file)
+    const view = deriveAppLoopView('plan-loop', { tiers: tiers(), repoDir });
+    expect(view.polish).toBe(true);
+    expect(view.gateOptions).toEqual(['approve']); // only approve ends polish — the other levers are withdrawn
+    expect(view.actionable).toBe(true); // approve is still clickable
+    expect(view.humanNeeded).toBe(true); // still blocked on the human
+    expect(view.appTurn).toEqual({ step: 'plan', turnKey: 'consolidate-plan' });
+  });
+
+  it('a polish stand-down for a DIFFERENT step does not affect this gate view', () => {
+    plant('plan-loop', ['approve', 'request-changes', 'redo', 'polish'], CATALOG);
+    writeAppLoopState(
+      repoDir,
+      { loop: 'plan-loop', step: 'plan', turnKey: 'consolidate-plan', status: 'complete', round: 2, verdict: 'clean' },
+      FIXED,
+    );
+    enterPolish(repoDir, 'implement'); // a stand-down for another step, not this gate's
+    const view = deriveAppLoopView('plan-loop', { tiers: tiers(), repoDir });
+    expect(view.polish).toBeUndefined();
+    expect(view.gateOptions).toEqual(['approve', 'request-changes', 'redo', 'polish']); // the full gate
+  });
+
+  it('a polish flag on a non-gate (working) run is ignored — polish is a gate-only view', () => {
+    plant('plan-loop', ['approve', 'request-changes', 'redo', 'polish'], CATALOG);
+    writeAppLoopState(repoDir, { loop: 'plan-loop', step: 'plan', turnKey: 'work-plan', status: 'working' }, FIXED);
+    enterPolish(repoDir, 'plan');
+    const view = deriveAppLoopView('plan-loop', { tiers: tiers(), repoDir });
+    expect(view.polish).toBeUndefined();
     expect(view.actionable).toBe(false);
     expect(view.gateOptions).toBeUndefined();
   });

@@ -41,6 +41,11 @@ export interface LoopPanelDeps {
    *  composer's submit carries the composed feedback back on the decision. Injected by the composition root;
    *  absent → the §27 request-changes button does not render (a note-less dispatch is dropped, WCAG 4.1.2). */
   composeFeedback?(step: string, turnKey: string): void;
+  /** §27.9/AC5 — open the redo instruction composer for a §27 redo at the gate. Like request-changes, redo is a
+   *  two-step interaction: the click opens the composer (a free-text instruction), and the composer's submit
+   *  carries the instruction back on the decision. Injected by the composition root; absent → the §27 redo
+   *  button does not render (an instruction-less dispatch is dropped, WCAG 4.1.2). */
+  composeRedo?(step: string, turnKey: string): void;
   /** §26.3/D48 — recover a loop stopped in `error`: re-drive the failed turn (e.g. after starting Claude
    *  for a `no hosted agent` stop). Injected by the composition root; absent → no Retry control is shown,
    *  so an errored loop is never a dead-end reachable only by Terminate (never-unrecoverable, CLAUDE.md). */
@@ -109,7 +114,9 @@ function structuralSig(loop: FlowLoopView | null, title: string, refs?: FlowRefs
     // buttons appear/disappear with them, so a run-less↔run transition forces a full render.
     // §27/N5 — appTurn presence decides which decision service the buttons wire to, so a §26↔§27 gate must
     // force a full render, not a patch.
-    loop ? [loop.pr, loop.branch, loop.gateOptions ?? null, loop.iteration !== undefined, loop.actionable ?? null, loop.appTurn !== undefined] : null,
+    // §27.9/AC6 — the polish stand-down flips the gate into the polish view (a notice + approve only), a
+    // structural change, so a gate↔polish transition forces a full render rather than a patch.
+    loop ? [loop.pr, loop.branch, loop.gateOptions ?? null, loop.iteration !== undefined, loop.actionable ?? null, loop.appTurn !== undefined, loop.polish ?? null] : null,
   ]);
 }
 
@@ -464,6 +471,18 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
 
       body.append(ldl);
 
+      // §27.9/AC6 — the polish stand-down: the orchestrator has released the keyboard and the operator converses
+      // with the live instance directly. Surface it so the operator knows why the loop is not iterating; the
+      // provider has already narrowed the gate options to approve (which ends polish), rendered below.
+      if (loop.polish) {
+        const notice = doc.createElement('p');
+        notice.className = 'ph polish-notice';
+        notice.dataset.polishStanddown = '';
+        notice.setAttribute('role', 'status');
+        notice.textContent = 'Polish mode — the orchestrator has stood down. Converse with the instance directly; approve to end polish and accept the artifact.';
+        body.append(notice);
+      }
+
       // §26.6 / L5 — the gate DECISION surface (loop-flow.html's approve · changes · impasse): a button
       // per gate option the def offers. Choosing one runs the LoopDef `on_*` action list in-app; the
       // decision is the app's, surfaced via state.yaml → flow:onStateChanged (the panel re-pulls). A §27
@@ -485,6 +504,8 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
           // §27.9/AC4 — a §27 request-changes MUST carry feedback: it is a composer-only affordance, so with no
           // composer wired render no button rather than one whose note-less dispatch the executor drops (WCAG 4.1.2).
           if (appTurn && option === 'request-changes' && !deps.composeFeedback) continue;
+          // §27.9/AC5 — a §27 redo MUST carry an instruction, same composer-only rule as request-changes.
+          if (appTurn && option === 'redo' && !deps.composeRedo) continue;
           const btn = doc.createElement('button');
           // approve is the primary action (loop-flow.html) — the filled `app` tone; the rest are outline.
           btn.className = option === 'approve' ? 'pill app gate-approve' : `pill gate-${option}`;
@@ -500,6 +521,12 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
               deps.composeFeedback?.(appTurn.step, appTurn.turnKey);
               return;
             }
+            // §27.9/AC5 — a §27 redo opens the instruction composer (its submit carries the instruction).
+            if (appTurn && option === 'redo') {
+              deps.composeRedo?.(appTurn.step, appTurn.turnKey);
+              return;
+            }
+            // approve and polish are one-way (no human input to lose) — dispatched straight to appGateDecision.
             if (appTurn) deps.appGateDecision?.(appTurn.step, appTurn.turnKey, option);
             else deps.gateDecision?.(option);
           });

@@ -8,6 +8,7 @@ import { createFlowStrip, type FlowStrip } from './flowStrip';
 import { createLoopPanel, type LoopPanel } from './loopPanel';
 import { createFlowInputModal } from './flowInputModal';
 import { createFeedbackComposer } from './feedbackComposer';
+import { createRedoComposer } from './redoComposer';
 import { wireBootstrapConflict } from './wireBootstrapConflict';
 import { createConfirmDialog } from './confirmDialog';
 import { createErrorDialog } from './errorDialog';
@@ -129,6 +130,11 @@ if (flowStripHost) {
   // button at all (approve remains the route out) rather than an inert control.
   const composerHost = document.getElementById('feedback-composer-host');
   const feedbackComposer = composerHost ? createFeedbackComposer(composerHost, { onFocusLost: landFocus }) : undefined;
+  // §27.9/AC5 — the redo instruction composer: a §27 gate redo opens it (below), and its submit dispatches the
+  // two-way redo decision carrying the typed instruction. Absent host → no composer, so the loop panel renders
+  // no redo button (approve/request-changes remain) rather than an inert control.
+  const redoComposerHost = document.getElementById('redo-composer-host');
+  const redoComposer = redoComposerHost ? createRedoComposer(redoComposerHost, { onFocusLost: landFocus }) : undefined;
   loopPanel = loopPanelHost
     ? createLoopPanel(loopPanelHost, {
         githubRef: (kind, number) => {
@@ -171,6 +177,17 @@ if (flowStripHost) {
                 .then((todos) => todos.filter((t) => t.status !== 'done').map((t) => ({ id: t.id, text: t.text })))
                 .catch(() => [] as Array<{ id: string; text: string }>)
                 .then((todos) => feedbackComposer.render({ step, todos }, dispatch));
+            }
+          : undefined,
+        // §27.9/AC5 — redo opens the instruction composer; its submit dispatches the two-way decision and the
+        // composer holds open until it resolves (true → close, false → keep the instruction for a retry). Wired
+        // only when the composer exists; on a build without the host the panel renders no redo button.
+        composeRedo: redoComposer
+          ? (step, turnKey) => {
+              const key = repo.repoKey();
+              if (!key) return;
+              const dispatch = (instruction: string): Promise<boolean> => window.flow.appRedo(key, step, turnKey, instruction);
+              redoComposer.render({ step }, dispatch);
             }
           : undefined,
         armInterrupt: (step) => {

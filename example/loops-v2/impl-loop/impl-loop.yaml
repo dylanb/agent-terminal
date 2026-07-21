@@ -23,6 +23,8 @@ gate:
       - kind: gh
         action: publish-pr-body
   - option: request-changes
+  - option: redo
+  - option: polish
 pickup:
   initial_status: implementing
   branch_template: impl-loop/issue-{issue}

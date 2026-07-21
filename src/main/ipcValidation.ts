@@ -12,6 +12,7 @@ import {
   type FlowAppRouteOutMsg,
   type FlowAppGateDecisionMsg,
   type FlowAppRequestChangesMsg,
+  type FlowAppRedoMsg,
   type FlowArmInterruptMsg,
   type AgentInjectMsg,
   type ClipboardWriteMsg,
@@ -225,6 +226,24 @@ export function isValidFlowAppRequestChanges(m: unknown): m is FlowAppRequestCha
     m.turnKey.length > 0 &&
     typeof m.feedback === 'string' &&
     m.feedback.length > 0
+  );
+}
+
+/** flow:appRedo — the operator's redo decision (§27.9/AC5). Mirrors appRequestChanges: `repoKey` is a
+ *  filesystem path so it gets the safe-path guard; `step`/`turnKey` are the non-empty identity the receiver
+ *  acts on (§6); the human `instruction` is required and non-empty (the whole point — a blank one re-enters
+ *  nothing). */
+export function isValidFlowAppRedo(m: unknown): m is FlowAppRedoMsg {
+  return (
+    isRecord(m) &&
+    isLiveSession(m) &&
+    isSafeRepoKey(m.repoKey) &&
+    typeof m.step === 'string' &&
+    m.step.length > 0 &&
+    typeof m.turnKey === 'string' &&
+    m.turnKey.length > 0 &&
+    typeof m.instruction === 'string' &&
+    m.instruction.length > 0
   );
 }
 

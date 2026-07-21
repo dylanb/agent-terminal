@@ -40,6 +40,7 @@ import {
   isValidFlowAppRouteOut,
   isValidFlowAppGateDecision,
   isValidFlowAppRequestChanges,
+  isValidFlowAppRedo,
   isValidFlowArmInterrupt,
   isValidFlowGithubRef,
   openExternalTarget,
@@ -122,7 +123,7 @@ import {
 } from './installExamples';
 import { provideAppLoopView } from './loopViewV2';
 import { createAppLoopEngine } from './appLoopEngine';
-import { APP_LOOP_DIR_SEGMENTS, armInterrupt, consolidatorOutputFile, consolidatorOutputRel, readAppLoopState, roundReportFile, roundReportRel, writeAppLoopState } from './appLoopState';
+import { APP_LOOP_DIR_SEGMENTS, armInterrupt, clearPolish, consolidatorOutputFile, consolidatorOutputRel, enterPolish, readAppLoopState, readPolish, roundReportFile, roundReportRel, writeAppLoopState } from './appLoopState';
 import { resolveLoopDefV2, type LoopDefV2Context } from './loopDefV2';
 import { createRealAppGateGitHub } from './appGateGithub';
 import { runAppGateDecision as runAppGateDecisionImpl } from './appGateDecision';
@@ -473,6 +474,9 @@ async function createWindow(): Promise<void> {
   });
   const appEngine = createAppLoopEngine({
     inject: (text) => inject(text, { submit: true }),
+    // §27.9/AC6 — the polish stand-down is app-owned loop state in its own file; the engine consults it before
+    // running any lever that would re-enter a turn, so the orchestrator stands down until approve ends it.
+    polishActive: (repoDir) => readPolish(repoDir) !== null,
     hostedAgent: () => classifyHostedAgent(hostedAgentPresent(tracker.summaries()), agentActivity),
     armTimer: () => {
       if (appTurnTimer) clearTimeout(appTurnTimer); // self-clearing: each activity edge replaces, never leaks
@@ -1258,6 +1262,16 @@ async function createWindow(): Promise<void> {
           armAppTurnDoneWatch(repoDir);
           return appEngine.requestChanges(repoDir, s, tk, feedback);
         },
+        // §27.9/AC5 — redo re-enters the work turn; same resume+done-watch preamble as deliverFeedback so a
+        // §27 engine idle for this repoDir after a relaunch reconstructs the gate before the clean-slate re-entry.
+        deliverRedo: (repoDir, s, tk, instruction) => {
+          if (appEngine.activeRepoDir() !== repoDir) appEngine.resume(repoDir);
+          armAppTurnDoneWatch(repoDir);
+          return appEngine.redo(repoDir, s, tk, instruction);
+        },
+        // §27.9/AC6 — polish is app-owned loop state written to its own file (never the §26 surface).
+        enterPolish: (repoDir, step) => enterPolish(repoDir, step),
+        clearPolish: (repoDir) => clearPolish(repoDir),
       },
       note,
     );
@@ -1389,6 +1403,11 @@ async function createWindow(): Promise<void> {
       // feedback composer holds open on a drop and never loses the human's input. Fail-closed to false.
       [CH.flowAppRequestChanges]: (_e, m) =>
         isValidFlowAppRequestChanges(m) ? runAppGateDecision(m.repoKey, m.step, m.turnKey, 'request-changes', m.feedback) : false,
+      // §27.9/AC5 — redo is TWO-way like request-changes: it returns whether the work turn re-entered so the redo
+      // composer holds open on a drop and never loses the human's instruction. The instruction rides as `note`.
+      // Fail-closed to false.
+      [CH.flowAppRedo]: (_e, m) =>
+        isValidFlowAppRedo(m) ? runAppGateDecision(m.repoKey, m.step, m.turnKey, 'redo', m.instruction) : false,
       // Todo CRUD (§16.4): fail-closed to [] on a malformed payload, so a bad message can never mutate
       // another repo's list. A mutation that moves the n/m count (add/setStatus/delete) pushes
       // flow:onStateChanged so the strip's derived count follows (§24.2.2 S5).
