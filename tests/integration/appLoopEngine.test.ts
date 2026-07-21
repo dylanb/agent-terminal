@@ -1055,6 +1055,9 @@ describe('§27 engine — the polish stand-down suppresses the orchestrator leve
     engine.onInjectable();
     engine.onInjectable();
     expect(injected.slice(before).some((p) => p.includes('Produce the plan.'))).toBe(true); // the work turn started anyway
+    // the failed best-effort clear is recorded, never silently swallowed (§25) — the same discipline the approve
+    // path pins for its own clear-polish failure.
+    expect(audit).toHaveBeenCalledWith(repo, expect.stringContaining('clear-polish'), 1);
   });
 });
 

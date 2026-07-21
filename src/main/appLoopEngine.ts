@@ -657,8 +657,8 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       // this step reaches its gate again. Relaunch reconstructs via resume(), not enter(), so AC11 is untouched.
       // Best-effort, exactly as the approve-path clear (appGateDecision): a throw (polish.yaml swapped for a
       // directory → EISDIR that rmSync's `force` does not swallow) must NEVER abort the entry — else the step is
-      // committed with a work turn that never starts and cannot restart (re-entry would re-throw). Recorded, then
-      // the turn starts regardless; a residual stand-down still narrows to approve, never strands the operator.
+      // committed with a work turn that never starts and cannot restart (re-entry would re-throw). A residual
+      // stand-down still narrows to approve (loopViewV2), never strands the operator.
       try {
         deps.clearPolish(repoDir);
       } catch (e) {
