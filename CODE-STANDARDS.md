@@ -110,6 +110,35 @@ Three disciplines hold it, the last two easy to drop:
    spacing or ordering. Over-constrain it and the test's fake agent passes while a real model's legitimate
    variation is rejected: mocking the VT parser, one layer out.
 
+## Independent-lifecycle state lives in its own file, disjoint from any wholesale-rewritten document
+
+A flag whose set/clear lifecycle is **independent** of a larger persisted document is stored in its own
+file — never as a field of that document — so that a wholesale write of the document is *structurally*
+unable to clobber or resurrect it. This is the on-disk dual of the shared-semantics writer↔reader rule and
+a load-bearing part of never-allow-unrecoverable-state: it removes an entire class of defect by construction
+rather than by every write remembering to preserve a field.
+
+The §27 loop keeps three concerns under `<repo>/.agent-terminal/loop/` in three disjoint files —
+`run-state.yaml` (the turn/round/verdict document), `armed-interrupt.yaml`, and `polish.yaml` (the two
+`{schema_version, step}` levers). The run-state writer serializes and re-writes the whole run-state document
+on every turn-status transition, which happens constantly. Had polish or the armed interrupt been a *field*
+of that document, two failure shapes open that no reviewer reliably catches: **(1)** any path that
+constructs a fresh run-state and writes it — a redo re-entry rebuilding the work turn, a relaunch replaying
+state — silently drops or carries a stale flag forward, because "write the whole document" and "preserve
+this one orthogonal field" are two obligations and only the first is visible in the diff; **(2)** a stale
+in-memory run-state object round-tripped back to disk *after* the flag was cleared elsewhere resurrects it,
+reviving a stand-down the operator already dismissed. Disjoint files make both impossible: the run-state
+writer cannot address `polish.yaml`, so no run-state write can touch it, and clearing polish (`rmSync` on
+its own file) cannot touch the run-state. (The orthogonal concern — an *abandoned* stand-down surviving a
+same-step re-drive — is handled separately by clearing on fresh work-turn entry; disjoint files answer only
+"a sibling's write can't move this flag," not "this flag expires correctly.")
+
+RED-first, the disjointness is pinned directly: `appLoopState.test.ts` ("§27 polish stand-down and armed
+interrupt — disjoint flags") asserts that arming an interrupt never surfaces as, clobbers, or resurrects a
+polish stand-down, and the reverse — a pin that fails the moment either lever is folded into a shared
+document or into the other's file. The general pin shape for any such flag: **writing the document leaves
+the flag file byte-for-byte untouched, and clearing the flag leaves the document byte-for-byte unchanged.**
+
 ## The app never modifies the user's `.gitignore`
 
 Whether to ignore or commit a path is the user's VCS decision, not the app's. App-owned files
