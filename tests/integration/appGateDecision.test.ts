@@ -29,13 +29,14 @@ interface Recorder {
   audits: Array<{ cmd: string; exit: number | null }>;
   errors: string[];
   views: number;
+  feedbacks: Array<{ step: string; turnKey: string; feedback: string }>;
 }
 
 function mkDeps(over: Partial<AppGateDecisionDeps> & { run?: AppLoopRunState | null; gate?: GateOptionDef[]; sideEffectThrows?: string; pr?: number | null; ticket?: number | null }): {
   deps: AppGateDecisionDeps;
   rec: Recorder;
 } {
-  const rec: Recorder = { sideEffects: [], accepts: [], advances: [], audits: [], errors: [], views: 0 };
+  const rec: Recorder = { sideEffects: [], accepts: [], advances: [], audits: [], errors: [], views: 0, feedbacks: [] };
   const deps: AppGateDecisionDeps = {
     readRunState: () => (over.run === undefined ? GATE_RUN : over.run),
     resolveDef: () => ({ ok: true, def: defWithGate(over.gate ?? APPROVE_MARK_READY) }),
@@ -50,13 +51,20 @@ function mkDeps(over: Partial<AppGateDecisionDeps> & { run?: AppLoopRunState | n
     audit: (_r, cmd, exit) => void rec.audits.push({ cmd, exit }),
     emitError: (reason) => void rec.errors.push(reason),
     onViewChanged: () => void (rec.views += 1),
+    deliverFeedback: (_repoDir, step, turnKey, feedback) => {
+      rec.feedbacks.push({ step, turnKey, feedback });
+      return true;
+    },
     ...over,
   };
   return { deps, rec };
 }
 
-const approve = (deps: AppGateDecisionDeps, step = 'plan', turnKey = 'consolidate-plan', option: GateDecisionOption = 'approve'): Promise<void> =>
+const approve = (deps: AppGateDecisionDeps, step = 'plan', turnKey = 'consolidate-plan', option: GateDecisionOption = 'approve'): Promise<boolean> =>
   runAppGateDecision('/repo', step, turnKey, option, deps);
+
+const decide = (deps: AppGateDecisionDeps, option: GateDecisionOption, note?: string, step = 'plan', turnKey = 'consolidate-plan'): Promise<boolean> =>
+  runAppGateDecision('/repo', step, turnKey, option, deps, note);
 
 describe('runAppGateDecision — approve (§27.13 / AC2)', () => {
   it('runs the declared side-effect, persists the terminal accept, and advances the flow', async () => {
@@ -154,16 +162,81 @@ describe('runAppGateDecision — validates the option against the bound def (AC9
     expect(rec.advances).toEqual([]);
   });
 
-  it('is inert for a DECLARED non-approve option — the §27 executor is approve-only', async () => {
+  it('is inert for a DECLARED option §27 does not execute — impasse is a §26-only concept', async () => {
+    // redo/polish land in a later slice; impasse is never a §27 option. A def declaring impasse still gets no
+    // §27 execution for it — the executor runs only approve and request-changes.
     const gate: GateOptionDef[] = [
       { option: 'approve', sideEffects: [] },
-      { option: 'request-changes', sideEffects: [{ kind: 'gh', args: { action: 'mark-ready' } }] },
+      { option: 'impasse', sideEffects: [] },
     ];
     const { deps, rec } = mkDeps({ gate });
-    await approve(deps, 'plan', 'consolidate-plan', 'request-changes');
-    expect(rec.sideEffects).toEqual([]); // the declared side-effect never ran
+    await decide(deps, 'impasse');
+    expect(rec.sideEffects).toEqual([]);
     expect(rec.accepts).toEqual([]);
     expect(rec.advances).toEqual([]);
+    expect(rec.feedbacks).toEqual([]);
+  });
+});
+
+// §27.9/§19.4 / N5 (AC4) — request-changes delivers the operator's feedback into the next review-and-fix round.
+// It is NOT approve: no accept, no gh side-effect, no flow advance — the loop returns to iterate, not off the
+// step. The engine's re-enter-review is a domain port (deliverFeedback); the executor validates the identity,
+// the at-gate precondition, and the option-against-the-def exactly as approve does.
+describe('runAppGateDecision — request-changes delivers feedback into the next round (AC4)', () => {
+  const RC_GATE: GateOptionDef[] = [
+    { option: 'approve', sideEffects: [{ kind: 'gh', args: { action: 'mark-ready' } }] },
+    { option: 'request-changes', sideEffects: [] },
+  ];
+
+  it('delivers the typed feedback, reports success, and neither accepts, runs a side-effect, nor advances', async () => {
+    const { deps, rec } = mkDeps({ gate: RC_GATE });
+    const delivered = await decide(deps, 'request-changes', 'Tighten the migration section.');
+    expect(delivered).toBe(true); // the caller (composer) closes only on a confirmed round
+    expect(rec.feedbacks).toEqual([{ step: 'plan', turnKey: 'consolidate-plan', feedback: 'Tighten the migration section.' }]);
+    expect(rec.accepts).toEqual([]); // request-changes is not terminal — no accept
+    expect(rec.sideEffects).toEqual([]); // no gh side-effect (that is approve's)
+    expect(rec.advances).toEqual([]); // the flow does not advance off the step — the loop iterates
+    expect(rec.audits.some((a) => a.cmd.includes('request-changes') && a.exit === 0)).toBe(true);
+  });
+
+  it('reports a DROPPED request-changes as false and audits the drop instead of claiming success', async () => {
+    // If the engine drops the re-entry (the runner is mid-turn, or the gate raced out from under the click) the
+    // decision returns false so the composer stays open with the operator's feedback intact — the human never
+    // silently loses what they typed. The §25 audit records the drop (exit 1), never a lie (exit 0 for a round
+    // that never ran). Surfacing is the caller's job now (the composer), so no toast/view-refresh is fired here.
+    const { deps, rec } = mkDeps({ gate: RC_GATE, deliverFeedback: () => false });
+    const delivered = await decide(deps, 'request-changes', 'Tighten the migration section.');
+    expect(delivered).toBe(false); // the composer reads this to stay open + preserve the feedback
+    expect(rec.audits.some((a) => a.cmd.includes('request-changes') && a.exit === 0)).toBe(false); // no false success
+    expect(rec.audits.some((a) => a.cmd.includes('request-changes') && a.exit === 1)).toBe(true); // recorded as a drop
+    expect(rec.errors).toEqual([]); // the executor no longer double-surfaces — the composer owns the message
+  });
+
+  it('is inert when the bound def does not declare request-changes (validated at the operation, AC9)', async () => {
+    // The approve-only def (the mkDeps default) declares no request-changes; the option is rejected AT THE
+    // operation, not the wire type (which admits it).
+    const { deps, rec } = mkDeps({});
+    await decide(deps, 'request-changes', 'do the thing');
+    expect(rec.feedbacks).toEqual([]);
+  });
+
+  it('is inert with blank/whitespace feedback — request-changes needs the human to type feedback (§27.9)', async () => {
+    const { deps, rec } = mkDeps({ gate: RC_GATE });
+    await decide(deps, 'request-changes', '   \n ');
+    expect(rec.feedbacks).toEqual([]); // no meaningless empty round is fired
+    expect(rec.advances).toEqual([]);
+  });
+
+  it('is inert for a decision naming a different step (§6/AC7)', async () => {
+    const { deps, rec } = mkDeps({ gate: RC_GATE });
+    await decide(deps, 'request-changes', 'valid feedback', 'implement', 'consolidate-plan');
+    expect(rec.feedbacks).toEqual([]);
+  });
+
+  it('is inert when the run is not AT a gate (no verdict reached)', async () => {
+    const { deps, rec } = mkDeps({ gate: RC_GATE, run: { loop: 'plan-loop', step: 'plan', turnKey: 'review-plan', status: 'working' } });
+    await decide(deps, 'request-changes', 'valid feedback', 'plan', 'review-plan');
+    expect(rec.feedbacks).toEqual([]);
   });
 });
 

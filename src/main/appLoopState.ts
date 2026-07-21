@@ -66,6 +66,18 @@ export interface AppLoopRunState {
   verdict?: ConsolidatorVerdict;
   verdictReason?: string;
   chosenRoster?: string[];
+  /** §27.9/§19.4 (AC4) — the operator's request-changes feedback carried into THIS review round, persisted
+   *  so a relaunch mid-round reconstructs it and a Retry re-injects it rather than dropping the human's input.
+   *  Present only on a review turn a request-changes entered; a blank value is never persisted. */
+  feedback?: string;
+}
+
+/** Non-empty feedback is feedback; blank or non-string is none. The ONE gate the writer and reader of the
+ *  persisted `feedback` field consult — and the same gate the request-changes IPC executor and the review
+ *  prompt apply, so "blank feedback = none" has a single definition across every boundary it crosses
+ *  (CLAUDE.md writer↔reader shared-semantics; CWE-20). */
+export function validFeedback(feedback: unknown): string | undefined {
+  return typeof feedback === 'string' && feedback.trim().length > 0 ? feedback : undefined;
 }
 
 /** The confined absolute run-state file path inside the §27 loop area, or null when the loop area cannot be
@@ -100,6 +112,9 @@ export function serializeAppLoopState(state: AppLoopRunState, now: () => Date): 
   // §27.6/AC8 — the chosen roster is carried by BOTH the consolidator turn (the roster it selected) and the
   // subsequent review round (the roster it runs), so it is persisted independently of the verdict.
   if (state.chosenRoster && state.chosenRoster.length > 0) doc.chosen_roster = state.chosenRoster;
+  // §27.9/AC4 — the request-changes feedback for this review round (the one gate both sides read).
+  const feedback = validFeedback(state.feedback);
+  if (feedback !== undefined) doc.feedback = feedback;
   return yaml.dump(doc);
 }
 
@@ -131,6 +146,8 @@ export function parseAppLoopState(text: string): AppLoopRunState | null {
     Array.isArray(doc.chosen_roster) && doc.chosen_roster.every((p) => typeof p === 'string') && doc.chosen_roster.length > 0
       ? (doc.chosen_roster as string[])
       : undefined;
+  // §27.9/AC4 — field-local validation (CWE-20): a blank or non-string feedback is dropped.
+  const feedback = validFeedback(doc.feedback);
   return {
     loop,
     step,
@@ -141,6 +158,7 @@ export function parseAppLoopState(text: string): AppLoopRunState | null {
     ...(verdict !== undefined ? { verdict } : {}),
     ...(verdictReason !== undefined ? { verdictReason } : {}),
     ...(chosenRoster !== undefined ? { chosenRoster } : {}),
+    ...(feedback !== undefined ? { feedback } : {}),
   };
 }
 

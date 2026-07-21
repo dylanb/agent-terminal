@@ -39,6 +39,7 @@ import {
   isValidFlowResolveBootstrapConflict,
   isValidFlowAppRouteOut,
   isValidFlowAppGateDecision,
+  isValidFlowAppRequestChanges,
   isValidFlowArmInterrupt,
   isValidFlowGithubRef,
   openExternalTarget,
@@ -1226,23 +1227,40 @@ async function createWindow(): Promise<void> {
   };
 
   // §27.9/§27.13 / N5 — composition root for the §27 gate decision; isolated from the §26 executor above (AC8).
-  const runAppGateDecision = (repoKey: string, step: string, turnKey: string, option: GateDecisionOption): void => {
-    void runAppGateDecisionImpl(repoKey, step, turnKey, option, {
-      readRunState: (repoDir) => readAppLoopState(repoDir),
-      resolveDef: (repoDir, name) => resolveLoopDefV2(name, appDefContext(repoDir)),
-      refs: (repoDir) => {
-        const v = flow.state(repoDir);
-        return { pr: v.refs?.pr ?? null, ticket: v.refs?.ticket ?? null };
+  // Returns the request-changes delivered/dropped result so the two-way flow:appRequestChanges caller can hold
+  // the composer open on a drop (approve goes through the one-way channel and ignores the result).
+  const runAppGateDecision = (repoKey: string, step: string, turnKey: string, option: GateDecisionOption, note?: string): Promise<boolean> =>
+    runAppGateDecisionImpl(
+      repoKey,
+      step,
+      turnKey,
+      option,
+      {
+        readRunState: (repoDir) => readAppLoopState(repoDir),
+        resolveDef: (repoDir, name) => resolveLoopDefV2(name, appDefContext(repoDir)),
+        refs: (repoDir) => {
+          const v = flow.state(repoDir);
+          return { pr: v.refs?.pr ?? null, ticket: v.refs?.ticket ?? null };
+        },
+        bodyFile: (def) => completionArtifact(def)?.path ?? null,
+        runSideEffect: createRealAppGateGitHub(repoKey),
+        persistAccept: (repoDir, state) => writeAppLoopState(repoDir, state),
+        advanceFlow: (repoDir) => autoAdvanceFlow(repoDir),
+        audit: (repoDir, cmd, exit) => audit.recordCommand(repoDir, 'gate', cmd, exit),
+        emitError: (reason) => send(CH.flowOnLoopError, { sessionId: SESSION_ID, reason }),
+        onViewChanged: () => pushFlowChanged(),
+        // §27.9/AC4 — the resume+done-watch preamble mirrors the flowAppRouteOut handler below; both drive a
+        // §27 engine that is idle for this repoDir after a relaunch (there is no launch-time §27 resume).
+        // TODO(dylanb): the resume-if-not-active leg is deferred coverage, not an untestability exemption — a
+        // cold-relaunch-then-request-changes @ownapp test (mirroring the §26 cd-resume e2e) closes it.
+        deliverFeedback: (repoDir, s, tk, feedback) => {
+          if (appEngine.activeRepoDir() !== repoDir) appEngine.resume(repoDir);
+          armAppTurnDoneWatch(repoDir);
+          return appEngine.requestChanges(repoDir, s, tk, feedback);
+        },
       },
-      bodyFile: (def) => completionArtifact(def)?.path ?? null,
-      runSideEffect: createRealAppGateGitHub(repoKey),
-      persistAccept: (repoDir, state) => writeAppLoopState(repoDir, state),
-      advanceFlow: (repoDir) => autoAdvanceFlow(repoDir),
-      audit: (repoDir, cmd, exit) => audit.recordCommand(repoDir, 'gate', cmd, exit),
-      emitError: (reason) => send(CH.flowOnLoopError, { sessionId: SESSION_ID, reason }),
-      onViewChanged: () => pushFlowChanged(),
-    });
-  };
+      note,
+    );
 
   // Flow A (§4): every output byte goes to the renderer AND the shadow tee. Turn completion is detected
   // via the .agent-loop/turn-done FILE only (§26.3/D47a; §26 D42a retired the echo-hazardous line scanner).
@@ -1321,10 +1339,10 @@ async function createWindow(): Promise<void> {
         armAppTurnDoneWatch(m.repoKey);
         appEngine.routeOut(m.repoKey, m.step, m.turnKey, m.action);
       },
-      // §27.9/§27.13 / N5 / §6 / AC7
+      // §27.9/§27.13 / N5 / §6 / AC7 — approve (and other one-way options); the result is not observed here.
       [CH.flowAppGateDecision]: (_e, m) => {
         if (!isValidFlowAppGateDecision(m)) return;
-        runAppGateDecision(m.repoKey, m.step, m.turnKey, m.option);
+        void runAppGateDecision(m.repoKey, m.step, m.turnKey, m.option);
       },
       // §27.9/AC9 — arm the §27 queued interrupt for the step the payload names (§6). Persisted independently
       // of the run-state document (armInterrupt), so it survives a relaunch and no turn-status write clobbers
@@ -1367,6 +1385,10 @@ async function createWindow(): Promise<void> {
       // "nothing captured, keep the prior report" (§6 live-session check).
       [CH.captureLast]: (_e, m) =>
         isValidCaptureLast(m) ? captureLastReport(SESSION_ID, store, scanner) : [],
+      // §27.9/AC4 — request-changes is TWO-way (unlike approve): it returns whether the round started so the
+      // feedback composer holds open on a drop and never loses the human's input. Fail-closed to false.
+      [CH.flowAppRequestChanges]: (_e, m) =>
+        isValidFlowAppRequestChanges(m) ? runAppGateDecision(m.repoKey, m.step, m.turnKey, 'request-changes', m.feedback) : false,
       // Todo CRUD (§16.4): fail-closed to [] on a malformed payload, so a bad message can never mutate
       // another repo's list. A mutation that moves the n/m count (add/setStatus/delete) pushes
       // flow:onStateChanged so the strip's derived count follows (§24.2.2 S5).

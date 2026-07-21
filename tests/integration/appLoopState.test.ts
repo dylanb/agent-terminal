@@ -174,6 +174,46 @@ describe('§27 loop-state — the review turn round number', () => {
   });
 });
 
+// §27.9/§19.4 / N5 (AC4) — a review round entered by a request-changes decision carries the operator's
+// feedback, persisted so a relaunch mid-round reconstructs it and a Retry re-injects it rather than silently
+// dropping the human's input. Absent on a consolidator-driven another-round; a blank value is not persisted.
+describe('§27 loop-state — the request-changes feedback for a review round', () => {
+  const REVIEW_FB: AppLoopRunState = {
+    loop: 'plan-loop',
+    step: 'plan',
+    turnKey: 'review-plan',
+    status: 'working',
+    round: 2,
+    feedback: 'Tighten the migration section; it overspecifies the schema.',
+  };
+
+  it('round-trips a review run carrying the operator feedback', () => {
+    const back = parseAppLoopState(serializeAppLoopState(REVIEW_FB, FIXED));
+    expect(back).toEqual(REVIEW_FB);
+    expect(back?.feedback).toBe('Tighten the migration section; it overspecifies the schema.');
+  });
+
+  it('carries no feedback for a work or consolidator-driven review run (absent = none)', () => {
+    const text = serializeAppLoopState({ loop: 'plan-loop', step: 'plan', turnKey: 'review-plan', status: 'working', round: 3 }, FIXED);
+    expect(text).not.toContain('feedback:');
+    expect(parseAppLoopState(text)?.feedback).toBeUndefined();
+  });
+
+  it('drops a blank/whitespace-only or non-string feedback rather than persisting an empty block (field-local)', () => {
+    for (const bad of ['', '   ']) {
+      expect(serializeAppLoopState({ ...REVIEW_FB, feedback: bad }, FIXED)).not.toContain('feedback:');
+    }
+    // a non-string value that reached disk (hand-edited) parses back as no feedback
+    const text = serializeAppLoopState(REVIEW_FB, FIXED).replace(/feedback:.*/, 'feedback: 42');
+    expect(parseAppLoopState(text)?.feedback).toBeUndefined();
+  });
+
+  it('survives a write→read round-trip on disk (relaunch reconstructs the feedback)', () => {
+    writeAppLoopState(repo, REVIEW_FB, FIXED);
+    expect(readAppLoopState(repo)?.feedback).toBe('Tighten the migration section; it overspecifies the schema.');
+  });
+});
+
 // §27.5/AC7 — the round report's write-target (the fixer, via roundReportRel) and read-source (the engine,
 // via roundReportFile) derive from ONE resolver so they cannot drift (CLAUDE.md writer↔reader-location). The
 // location is round-keyed and disjoint from the engine's own run-state file, confined to the untrusted repo

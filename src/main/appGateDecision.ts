@@ -3,7 +3,7 @@
 
 import type { GateDecisionOption } from '../shared/ipc';
 import { gateDecisionAuditCmd } from '../shared/audit';
-import type { AppLoopRunState } from './appLoopState';
+import { validFeedback, type AppLoopRunState } from './appLoopState';
 import type { LoopDefV2, LoopDefV2Result } from './loopDefV2';
 import type { AppGateSideEffectCtx, RunAppGateSideEffect } from './appGateGithub';
 
@@ -26,6 +26,12 @@ export interface AppGateDecisionDeps {
   runSideEffect: RunAppGateSideEffect;
   persistAccept(repoDir: string, state: AppLoopRunState): void;
   advanceFlow(repoDir: string): void;
+  /** §27.9/§19.4 (AC4) — request-changes re-enters the review-and-fix round carrying the operator's feedback
+   *  (a domain port the composition root wires to the §27 engine). It is NOT approve: the flow does not
+   *  advance and no gh side-effect runs — the loop returns to iterate on the step. Returns whether the round
+   *  was actually started: `false` means the engine dropped it (runner mid-turn, or the gate raced out), which
+   *  runAppGateDecision returns to its caller so the still-open composer keeps the feedback for a retry. */
+  deliverFeedback(repoDir: string, step: string, turnKey: string, feedback: string): boolean;
   audit(repoDir: string, cmd: string, exit: number | null): void;
   emitError(reason: string): void;
   onViewChanged(): void;
@@ -40,18 +46,34 @@ export async function runAppGateDecision(
   turnKey: string,
   option: GateDecisionOption,
   deps: AppGateDecisionDeps,
-): Promise<void> {
+  note?: string,
+): Promise<boolean> {
   const run = deps.readRunState(repoDir);
   // §6/AC7
-  if (!run || run.step !== step || run.turnKey !== turnKey) return;
-  if (run.status !== 'complete' || run.verdict === undefined) return;
+  if (!run || run.step !== step || run.turnKey !== turnKey) return false;
+  if (run.status !== 'complete' || run.verdict === undefined) return false;
 
   const r = deps.resolveDef(repoDir, run.loop);
-  if (!r.ok) return;
+  if (!r.ok) return false;
   // AC9
   const gateOpt = r.def.gate.find((g) => g.option === option);
-  if (!gateOpt) return;
-  if (option !== 'approve') return;
+  if (!gateOpt) return false;
+
+  // §27.9/§19.4 (AC4) — request-changes is not approve: a blank note fires no round, and the delivered/dropped
+  // result is RETURNED so the two-way caller (the feedback composer) holds open and keeps the human's feedback
+  // on a drop rather than losing it. A drop is audited (never a false-success exit 0); the caller surfaces it.
+  if (option === 'request-changes') {
+    const feedback = validFeedback(note);
+    if (feedback === undefined) return false;
+    if (deps.deliverFeedback(repoDir, step, turnKey, feedback)) {
+      deps.audit(repoDir, gateDecisionAuditCmd('decision', option), 0);
+      return true;
+    }
+    deps.audit(repoDir, gateDecisionAuditCmd('decision-dropped', option, 'the loop was busy'), 1);
+    return false;
+  }
+  // redo/polish (a later slice) and impasse (§26-only) are never executed here.
+  if (option !== 'approve') return false;
 
   // §26 D48 — a failed accept persist aborts the decision (a relaunch would otherwise reconstruct the gate and
   // re-run the outward side-effect); a failed side-effect does not (§27.13 / AC3).
@@ -63,7 +85,7 @@ export async function runAppGateDecision(
     deps.audit(repoDir, gateDecisionAuditCmd('accept-failed', option, reason), 1);
     deps.emitError(`could not persist gate accept: ${reason}`);
     deps.onViewChanged();
-    return;
+    return false;
   }
   deps.onViewChanged();
 
@@ -87,4 +109,5 @@ export async function runAppGateDecision(
   deps.audit(repoDir, gateDecisionAuditCmd('decision', option), 0);
   deps.advanceFlow(repoDir);
   deps.onViewChanged();
+  return false; // only a request-changes reports true; approve's result is ignored by the one-way caller
 }

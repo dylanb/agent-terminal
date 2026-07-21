@@ -19,6 +19,7 @@ gate:
     side_effects:
       - kind: gh
         action: update-issue-body
+  - option: request-changes
 pickup:
   initial_status: grooming
   branch_template: groom/issue-{issue}

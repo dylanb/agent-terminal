@@ -79,6 +79,7 @@ export type FlowStripDeps = Omit<
   | 'retryTurn'
   | 'appRouteOut'
   | 'appGateDecision'
+  | 'appRequestChanges'
   | 'armInterrupt'
   | 'setTitle'
 > & {

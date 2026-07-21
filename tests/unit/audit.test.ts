@@ -395,6 +395,12 @@ describe('§27 gate-decision audit vocabulary', () => {
     expect(failed).toContain('no PR to mark ready');
     // A recorded failure is distinguishable from a success for the same action (§27.13 / AC3).
     expect(failed).not.toBe(gateDecisionAuditCmd('side-effect', 'approve', 'mark-ready'));
+    // §27.9/AC4 — a request-changes the engine could not start is recorded as a DROP, distinct from the decision
+    // that ran, so the audit never claims a round that never happened.
+    const dropped = gateDecisionAuditCmd('decision-dropped', 'request-changes', 'the loop was busy');
+    expect(dropped).toContain('request-changes');
+    expect(dropped).toContain('the loop was busy');
+    expect(dropped).not.toBe(gateDecisionAuditCmd('decision', 'request-changes'));
   });
 });
 

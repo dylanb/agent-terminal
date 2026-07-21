@@ -3707,6 +3707,9 @@ function seedFakeAgentV2(
     // The consolidator output per round (index = round-1); each is the FULL verdict file content. Absent →
     // every round emits `verdict: clean` (so a plain work→review→consolidate run routes to the gate).
     verdicts?: string[];
+    // When true, append every non-empty injected line to .agent-terminal/injected-log, so an e2e can prove a
+    // prompt carried a given payload (e.g. the §27.9 request-changes feedback reaching the next review round).
+    logInjected?: boolean;
   },
 ): void {
   const turnKey = `work-${opts.stepId}`;
@@ -3750,11 +3753,13 @@ function seedFakeAgentV2(
     `${consolidateBump}; r=$(rnd); OUTB='${b64('verdict: clean\n')}'; case "$r" in ${verdictCase} esac; ` +
     'mkdir -p .agent-terminal/loop/consolidate; printf %s "$OUTB" | base64 -d > .agent-terminal/loop/consolidate/$r.md; ' +
     `${done(consolidateKey)}`;
+  const logInjected = opts.logInjected ? 'mkdir -p .agent-terminal; printf "%s\\n" "$line" >> .agent-terminal/injected-log;\n' : '';
   const script =
     '#!/usr/bin/env bash\n' +
     'rnd() { r=$(grep -m1 "^round:" .agent-terminal/loop/run-state.yaml 2>/dev/null | tr -dc "0-9"); [ -z "$r" ] && r=1; printf %s "$r"; }\n' +
     'while IFS= read -r line; do\n' +
     '  [ -z "$line" ] && continue\n' +
+    `  ${logInjected}` +
     '  case "$line" in\n' +
     '    /clear) mkdir -p .agent-terminal; printf x >> .agent-terminal/clear-seen ;;\n' +
     '    /compact*) mkdir -p .agent-terminal; printf x >> .agent-terminal/compact-seen ;;\n' +
@@ -3897,7 +3902,7 @@ function seedAppGateFlowRepo(prefix: string, pr: string | null): string {
 const readGhLog = (logFile: string): string => (existsSync(logFile) ? readFileSync(logFile, 'utf8') : '');
 const appFlowState = (repo: string): string => join(repo, '.agent-terminal', 'flow-state.yaml');
 
-test('a §27 app plan gate renders ONLY approve, and approve runs the loop\'s gh side-effect → terminal accept → the flow advances (AC1,2,7)', { tag: '@ownapp' }, async () => {
+test('a §27 app plan gate renders approve + request-changes, and approve runs the loop\'s gh side-effect → terminal accept → the flow advances (AC1,2,7)', { tag: '@ownapp' }, async () => {
   const repo = seedAppGateFlowRepo('agent-term-e2e-v2-approve-', '77');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-v2-approve-home-'));
   const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-v2-approve-bin-');
@@ -3922,12 +3927,14 @@ test('a §27 app plan gate renders ONLY approve, and approve runs the loop\'s gh
   await expect.poll(() => readIf(appRunState(repo)), { timeout: 40_000 }).toContain('verdict: clean');
   expect(readIf(appRunState(repo))).toContain('turn_key: consolidate-plan');
 
-  // AC1 — the actionable gate renders ONLY approve (the narrowed def), not request-changes/impasse.
+  // AC1 — the actionable gate renders exactly the def's options: approve + request-changes (sub-ticket 2),
+  // and never redo/polish (a later slice) or the §27-illegal impasse.
   await loopReadout().click();
   await expect(loopPanel().locator('[data-gate-option="approve"]')).toBeVisible({ timeout: 10_000 });
-  expect(await loopPanel().locator('[data-gate-option]').count()).toBe(1);
-  await expect(loopPanel().locator('[data-gate-option="request-changes"]')).toHaveCount(0);
+  await expect(loopPanel().locator('[data-gate-option="request-changes"]')).toBeVisible();
+  expect(await loopPanel().locator('[data-gate-option]').count()).toBe(2);
   await expect(loopPanel().locator('[data-gate-option="impasse"]')).toHaveCount(0);
+  await expect(loopPanel().locator('[data-gate-option="redo"]')).toHaveCount(0);
 
   await loopPanel().locator('[data-gate-option="approve"]').click();
 
@@ -3938,6 +3945,90 @@ test('a §27 app plan gate renders ONLY approve, and approve runs the loop\'s gh
   await expect.poll(() => readIf(appFlowState(repo)), { timeout: 10_000 }).toContain('step: done'); // advanced off the loop step
 
   // AC8 — the §26 state.yaml is byte-for-byte unchanged: the §27 approve never fired the §26 executor.
+  expect(readFileSync(stateFile, 'utf8')).toBe(priorState);
+
+  await app.close();
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+  rmSync(binDir, { recursive: true, force: true });
+});
+
+test('a §27 request-changes opens the composer; submitting returns the loop to a review-and-fix round carrying the feedback, without advancing (§27.9 / AC4)', { tag: '@ownapp' }, async () => {
+  const repo = seedAppGateFlowRepo('agent-term-e2e-v2-rc-', '77');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-v2-rc-home-'));
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-v2-rc-bin-');
+  seedFakeAgentV2(binDir, { stepId: 'plan', artifactRel: APP_ARTIFACT_REL, work: 'complete', review: 'full', review2: 'full', logInjected: true });
+  // §19.4 — a review todo the operator can curate into the feedback (a curated subset + free text). A second,
+  // already-DONE todo is seeded to prove the composer surfaces only open review work, never resolved items.
+  const TODO_TEXT = 'RCTODO-drop-the-dead-index';
+  const DONE_TODO_TEXT = 'RCTODO-already-done-do-not-show';
+  writeFileSync(
+    join(repo, '.agent-terminal', 'todos.json'),
+    JSON.stringify([
+      { id: 'rc-todo-1', repoKey: repo, text: TODO_TEXT, status: 'active', order: 1, createdAt: '2026-07-20T00:00:00.000Z' },
+      { id: 'rc-todo-done', repoKey: repo, text: DONE_TODO_TEXT, status: 'done', order: 2, createdAt: '2026-07-20T00:00:00.000Z' },
+    ]),
+  );
+  // A prior §26 run sits on disk: the §27 request-changes must never touch it (AC8 — the §26 executor never fires).
+  const stateFile = join(repo, '.agent-loop', 'state.yaml');
+  const priorState = 'schema_version: 4\nstatus: planning\niteration: 3\npr: 42\nbranch: feat/prior\nbound_loop: plan-loop\nlinked_issues:\n  - 7\n';
+  mkdirSync(join(repo, '.agent-loop'), { recursive: true });
+  writeFileSync(stateFile, priorState);
+  app = await electron.launch({
+    args: ['out/main/index.js'],
+    env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100', CLAUDE_CONFIG_DIR: exampleConfigDir, PATH: `${binDir}:${process.env.PATH}`, FAKE_GHGIT_LOG: logFile },
+  });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await typeCommand(`cd "${repo}"`);
+  await expect(flowControl()).toHaveText('Start', { timeout: 10_000 });
+  await typeCommand('fake-agent');
+  await flowControl().click(); // enter the app plan-loop step → work → review round 1 → consolidate → clean gate
+
+  await expect.poll(() => readIf(appRunState(repo)), { timeout: 40_000 }).toContain('verdict: clean');
+  expect(readIf(appRunState(repo))).toContain('turn_key: consolidate-plan');
+
+  // AC4 — request-changes opens the feedback composer (a two-step interaction), NOT a direct dispatch.
+  await loopReadout().click();
+  await expect(loopPanel().locator('[data-gate-option="request-changes"]')).toBeVisible({ timeout: 10_000 });
+  await loopPanel().locator('[data-gate-option="request-changes"]').click();
+  const composer = page.locator('#feedback-composer-host .flow-modal');
+  await expect(composer).toBeVisible({ timeout: 10_000 });
+
+  // §19.4 — the composer surfaces the repo's review todos to curate; select the todo AND add free text, so the
+  // composed feedback carries both (a curated subset + free text).
+  await expect(composer.locator('[data-todo]')).toContainText(TODO_TEXT, { timeout: 10_000 });
+  // N6 — only OPEN review todos are curatable; the already-done one is filtered out (exactly one row shows).
+  await expect(composer.locator('.todo-curate')).not.toContainText(DONE_TODO_TEXT);
+  await expect(composer.locator('[data-todo]')).toHaveCount(1);
+  await composer.locator('[data-todo] input[type="checkbox"]').first().check();
+  const FEEDBACK = 'RCFEEDBACK-tighten-the-migration-section';
+  await composer.locator('textarea').fill(FEEDBACK);
+  // §19.4 — choose compose-with-agent so the delivered feedback is framed for the fixer to synthesize.
+  await composer.locator('input[name="feedback-mode"][value="compose"]').check();
+  await composer.locator('.confirm').click();
+  await expect(composer).toBeHidden({ timeout: 10_000 }); // the composer closes on submit
+
+  // AC4 — a NEW review-and-fix round runs (round 2), and the injected round-2 review prompt carried BOTH the
+  // typed feedback and the curated review todo, framed by the compose-with-agent mode (§19.4/§27.9).
+  await expect.poll(() => readIf(join(repo, '.agent-terminal', 'injected-log')), { timeout: 40_000 }).toContain(FEEDBACK);
+  const injected = readIf(join(repo, '.agent-terminal', 'injected-log'));
+  expect(injected).toContain(TODO_TEXT); // the curated subset rode along
+  expect(injected).toContain('Synthesize'); // the compose-with-agent framing traveled in the feedback text
+  await expect.poll(() => readIf(join(repo, '.agent-terminal', 'review-runs')).length, { timeout: 40_000 }).toBe(2);
+  // The re-entered round runs to COMPLETION, not just to injection: round 2's review done-signal is heard (the
+  // done-watch was armed for the re-entry), so the consolidator runs a SECOND time and the loop reaches a gate
+  // again. Without the completion watch the round would hang at round-2 `working` with the suite otherwise green.
+  await expect.poll(() => readIf(join(repo, '.agent-terminal', 'consolidate-runs')).length, { timeout: 40_000 }).toBe(2);
+  await expect.poll(() => readIf(appRunState(repo)), { timeout: 40_000 }).toContain('status: complete');
+  // The loop iterated: the run reaches round 2 (not round 1), and the flow did NOT advance off the step —
+  // request-changes returns to iterate, it is not terminal (contrast approve, which advances to `done`).
+  await expect.poll(() => readIf(appRunState(repo)), { timeout: 40_000 }).toContain('round: 2');
+  expect(readIf(appFlowState(repo))).toContain('step: plan'); // still on the loop step, not advanced to `done`
+  expect(readGhLog(logFile)).not.toContain('gh pr ready'); // request-changes ran NO gh side-effect (that is approve's)
+
+  // AC8 — the §26 state.yaml is byte-for-byte unchanged: the §27 request-changes never fired the §26 executor.
   expect(readFileSync(stateFile, 'utf8')).toBe(priorState);
 
   await app.close();

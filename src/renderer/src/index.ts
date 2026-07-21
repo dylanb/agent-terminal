@@ -7,6 +7,7 @@ import { wireCrossHighlight } from './crossHighlight';
 import { createFlowStrip, type FlowStrip } from './flowStrip';
 import { createLoopPanel, type LoopPanel } from './loopPanel';
 import { createFlowInputModal } from './flowInputModal';
+import { createFeedbackComposer } from './feedbackComposer';
 import { wireBootstrapConflict } from './wireBootstrapConflict';
 import { createConfirmDialog } from './confirmDialog';
 import { createErrorDialog } from './errorDialog';
@@ -122,6 +123,12 @@ if (flowStripHost) {
   // (§24.2.3 T2) through the contract, not a DOM reach-across. No loop → clear + close.
   // The panel resolves ticket/PR detail through window.flow, repo-scoped at call time (the cwd may move
   // between renders), and opens links via the validated openExternal seam (§24.2.3 T7).
+  // §27.9/AC4 — the request-changes feedback composer: a §27 gate request-changes opens it (below), and its
+  // submit dispatches the decision carrying the composed feedback. Repo-scoped at composer-open time (bind to
+  // the gate the operator saw, §6). Absent host → no composer, so the loop panel renders no request-changes
+  // button at all (approve remains the route out) rather than an inert control.
+  const composerHost = document.getElementById('feedback-composer-host');
+  const feedbackComposer = composerHost ? createFeedbackComposer(composerHost, { onFocusLost: landFocus }) : undefined;
   loopPanel = loopPanelHost
     ? createLoopPanel(loopPanelHost, {
         githubRef: (kind, number) => {
@@ -149,6 +156,23 @@ if (flowStripHost) {
           const key = repo.repoKey();
           if (key) window.flow.appGateDecision(key, step, turnKey, option as GateDecisionOption);
         },
+        // §27.9/AC4 — request-changes opens the composer; its submit dispatches the two-way decision and the
+        // composer holds open until it resolves (true → close, false → keep the feedback for a retry). Wired
+        // only when the composer exists; on a build without the host the panel renders no request-changes button.
+        composeFeedback: feedbackComposer
+          ? (step, turnKey) => {
+              const key = repo.repoKey();
+              if (!key) return;
+              const dispatch = (feedback: string): Promise<boolean> => window.flow.appRequestChanges(key, step, turnKey, feedback);
+              // §19.4 — surface the repo's active review todos to curate; a fetch failure/empty just yields a
+              // free-text-only composer (best-effort, never blocks the request-changes path).
+              void window.monitor
+                .todoList(key)
+                .then((todos) => todos.filter((t) => t.status !== 'done').map((t) => ({ id: t.id, text: t.text })))
+                .catch(() => [] as Array<{ id: string; text: string }>)
+                .then((todos) => feedbackComposer.render({ step, todos }, dispatch));
+            }
+          : undefined,
         armInterrupt: (step) => {
           const key = repo.repoKey();
           if (key) window.flow.armInterrupt(key, step);

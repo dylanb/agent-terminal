@@ -345,13 +345,16 @@ export function consolidateAuditCmd(kind: ConsolidateAuditKind, round: number, d
  *  and `side-effect-failed` record the approve GitHub call's outcome (a failure is recorded, never swallowed,
  *  yet never aborts the terminal accept — §27.13 / AC3). `accept-failed` records an unpersisted terminal
  *  accept, which — unlike a side-effect failure — DOES abort the decision so the flow never advances over it
- *  (§26 D48). */
-export type GateDecisionAuditKind = 'decision' | 'side-effect' | 'side-effect-failed' | 'accept-failed';
+ *  (§26 D48). `decision-dropped` records a request-changes the engine could not start (the runner was mid-turn
+ *  or the gate raced out), distinct from `decision` so the audit never claims a round that never ran (AC4). */
+export type GateDecisionAuditKind = 'decision' | 'decision-dropped' | 'side-effect' | 'side-effect-failed' | 'accept-failed';
 
 export function gateDecisionAuditCmd(kind: GateDecisionAuditKind, option: string, detail?: string): string {
   switch (kind) {
     case 'decision':
       return `§27 gate ${option}`;
+    case 'decision-dropped':
+      return `§27 gate ${option} dropped: ${detail ?? ''}`;
     case 'side-effect':
       return `§27 gate ${option} side-effect: ${detail ?? ''}`;
     case 'side-effect-failed':

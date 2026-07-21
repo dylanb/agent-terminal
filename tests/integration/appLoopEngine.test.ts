@@ -809,6 +809,76 @@ describe('§27 engine — the verdict drives the branch (AC4, AC5, AC6)', () => 
   });
 });
 
+describe('§27 engine — request-changes returns to a review-and-fix round carrying the feedback (§27.9 / AC4)', () => {
+  const FEEDBACK = 'Tighten the migration section; it overspecifies the schema.';
+
+  /** Drive work → review round 1 → consolidator → a terminal `clean` gate (status complete, round 1, verdict). */
+  function driveToGate(engine: ReturnType<typeof createAppLoopEngine>): void {
+    driveToConsolidateInjected(engine);
+    completeConsolidate(engine, 1, 'verdict: clean\n');
+  }
+
+  it('re-enters review at round+1 carrying the feedback, and persists it on the review run-state', () => {
+    const engine = makeEngine();
+    driveToGate(engine);
+    expect(readAppLoopState(repo)).toMatchObject({ status: 'complete', round: 1, verdict: 'clean' });
+    const afterGate = injected.length;
+    engine.requestChanges(repo, STEP, CONSOLIDATE_KEY, FEEDBACK);
+    engine.onInjectable(); // the pre-review boundary drains
+    engine.onInjectable(); // the round-2 review prompt injects
+    const prompt = injected[injected.length - 1];
+    expect(injected.length).toBeGreaterThan(afterGate);
+    expect(prompt).toContain(FEEDBACK); // the feedback rides the next review round (§27.9)
+    expect(prompt).toContain(ROSTER[0]); // …alongside the reviewers' findings (full catalog: fresh eyes)
+    expect(prompt).toContain(ROSTER[1]);
+    expect(readAppLoopState(repo)).toMatchObject({ turnKey: REVIEW_KEY, status: 'working', round: 2, feedback: FEEDBACK });
+  });
+
+  it('runs no consolidator and no work turn — it is the narrow, incremental lever (§27.9)', () => {
+    const engine = makeEngine();
+    driveToGate(engine);
+    engine.requestChanges(repo, STEP, CONSOLIDATE_KEY, FEEDBACK);
+    engine.onInjectable();
+    engine.onInjectable();
+    const prompt = injected[injected.length - 1];
+    expect(prompt).toContain('review-and-fix'); // it is a review round…
+    expect(prompt).not.toContain('Produce the plan'); // …never the work turn (§27.9 redo is a separate lever)
+  });
+
+  it('is inert for a decision naming a different step (§6/AC7)', () => {
+    const engine = makeEngine();
+    driveToGate(engine);
+    const before = injected.length;
+    engine.requestChanges(repo, 'implement', CONSOLIDATE_KEY, FEEDBACK);
+    expect(injected.length).toBe(before);
+    expect(readAppLoopState(repo)).toMatchObject({ status: 'complete', round: 1 }); // unchanged, still at the gate
+  });
+
+  it('is inert when the run is not AT a gate (no verdict reached)', () => {
+    const engine = makeEngine();
+    driveToReviewInjected(engine); // an in-flight review turn — status working, no verdict
+    const before = injected.length;
+    engine.requestChanges(repo, STEP, REVIEW_KEY, FEEDBACK);
+    expect(injected.length).toBe(before);
+    expect(readAppLoopState(repo)).toMatchObject({ status: 'working' });
+  });
+
+  it('a Retry after a relaunch re-injects the persisted feedback rather than dropping the human input', () => {
+    const engine = makeEngine();
+    driveToGate(engine);
+    engine.requestChanges(repo, STEP, CONSOLIDATE_KEY, FEEDBACK);
+    engine.onInjectable();
+    engine.onInjectable(); // round-2 review prompt injected; run-state persisted with feedback
+    // Simulate a relaunch: a fresh engine reconstructs the stopped review turn from disk, then Retry.
+    const relaunched = makeEngine();
+    relaunched.resume(repo);
+    relaunched.routeOut(repo, STEP, REVIEW_KEY, 'retry');
+    relaunched.onInjectable();
+    relaunched.onInjectable();
+    expect(injected[injected.length - 1]).toContain(FEEDBACK); // the feedback survived the relaunch
+  });
+});
+
 describe('§27 engine — a failed reviewer is never read as clean (AC7)', () => {
   it('a FRESH failed lens forces a re-review with that lens, even when the consolidator emits `clean`', () => {
     const engine = makeEngine();

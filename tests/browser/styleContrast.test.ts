@@ -5,6 +5,7 @@ import { createInstallExamples } from '../../src/renderer/src/installExamples';
 import { createStatusBar, type StatusBar } from '../../src/renderer/src/statusBar';
 import type { StatusBarModel, StatusBarTitle } from '../../src/shared/statusBar';
 import type { DestRelativePath, InstallExamplesPreview, InstallExamplesResult } from '../../src/shared/ipc';
+import { createFeedbackComposer } from '../../src/renderer/src/feedbackComposer';
 import { parseColor as parse, compositeOver as over, contrastRatio as contrast, ringOver, type RGBA } from '../helpers/wcag';
 
 // WCAG contrast pins for the renderer's tokens and controls. The locked "Galley · Lit" mood keeps
@@ -538,6 +539,61 @@ describe('the consent scroll box does not clip the focus ring of a control it sc
       expect(r.top - clip.top).toBeGreaterThanOrEqual(ring);
       expect(clip.bottom - r.bottom).toBeGreaterThanOrEqual(ring);
     }
+  });
+});
+
+// §27.9/§19.4 (AC4) — the feedback composer caps its review-todo checklist and scrolls it independently. A
+// checkbox at that clip edge keeps its focus ring only if (1) it paints the app's own indicator, not the UA
+// default that the surrounding rules do not reach, and (2) the scrollport reserves the ring's extent so
+// sequential-focus scroll-into-view lands the control clear of the clip (WCAG SC 2.4.7 / 2.4.11 / 1.4.11).
+// The engine (real Chromium) resolves the tokens/calc; the assertions read only what it computed.
+describe('the feedback composer todo checklist paints and reserves room for its focus ring', () => {
+  let host: HTMLElement;
+  let rows: HTMLElement;
+  let box: HTMLElement;
+
+  beforeEach(async () => {
+    host = document.createElement('div');
+    document.body.replaceChildren(host);
+    const todos = Array.from({ length: 6 }, (_, i) => ({ id: `t${i}`, text: `Review todo ${i}` }));
+    createFeedbackComposer(host).render({ step: 'plan', todos }, () => {});
+    await vi.waitUntil(() => host.querySelector('.flow-modal .todo-curate') !== null);
+    rows = host.querySelector('.todo-curate') as HTMLElement;
+    box = rows.querySelector('input[type="checkbox"]') as HTMLElement;
+  });
+
+  it('gives a focused todo checkbox the app --signal ring, not the UA default', async () => {
+    await tabToProbe(box);
+    const cs = getComputedStyle(box);
+    expect(cs.outlineStyle).toBe('solid'); // the UA default is `auto`, not solid
+    expect(parseFloat(cs.outlineWidth)).toBeGreaterThanOrEqual(2);
+    const signal = document.createElement('span');
+    signal.style.color = 'var(--signal)';
+    host.appendChild(signal);
+    expect(cs.outlineColor).toBe(getComputedStyle(signal).color); // the ring is drawn from --signal
+    signal.remove();
+  });
+
+  it('reserves the ring extent in the scrollport so scroll-into-view never clips it', async () => {
+    await tabToProbe(box); // the ring extent is only defined in :focus-visible
+    const cs = getComputedStyle(box);
+    const ring = parseFloat(cs.outlineWidth) + parseFloat(cs.outlineOffset);
+    expect(ring).toBeGreaterThan(0);
+    const rc = getComputedStyle(rows);
+    expect(parseFloat(rc.scrollPaddingTop)).toBeGreaterThanOrEqual(ring);
+    expect(parseFloat(rc.scrollPaddingBottom)).toBeGreaterThanOrEqual(ring);
+  });
+
+  it('paints the required-feedback error in the app --attn error colour, not the dim helper colour', () => {
+    const submit = host.querySelector('.flow-modal .confirm') as HTMLElement;
+    submit.click(); // empty submit → the alert is populated
+    const err = host.querySelector('.flow-modal [role="alert"]') as HTMLElement;
+    expect(err.textContent?.trim().length).toBeGreaterThan(0);
+    const attn = document.createElement('span');
+    attn.style.color = 'var(--attn-text)';
+    host.appendChild(attn);
+    expect(getComputedStyle(err).color).toBe(getComputedStyle(attn).color); // reads as an error, not helper prose
+    attn.remove();
   });
 });
 

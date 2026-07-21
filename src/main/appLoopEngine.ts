@@ -124,6 +124,12 @@ export interface AppLoopEngine {
   onStall(): void;
   /** The §27-only error route-out, acting on the payload's step+turn identity, never ambient state (§6). */
   routeOut(repoDir: string, stepId: string, turnKey: string, action: AppRouteOut): void;
+  /** §27.9/§19.4 (AC4) — a request-changes gate decision: re-enter the review-and-fix turn at round+1
+   *  carrying the operator's `feedback` alongside the reviewers' findings, over the def's full catalog (fresh
+   *  eyes). Acts only on the persisted gate matching the step+turn identity it names (§6), and only when that
+   *  run is AT a gate (a reached verdict); otherwise inert. Never runs the consolidator or the work turn.
+   *  Returns whether the round was started — `false` on every inert case so the caller can surface a drop. */
+  requestChanges(repoDir: string, stepId: string, turnKey: string, feedback: string): boolean;
   /** On launch: reconstruct a stopped turn from the persisted run state; an `error`/`complete` turn is
    *  human-owned and never re-driven, only made routable (§27.12). */
   resume(repoDir: string): void;
@@ -164,6 +170,9 @@ type ActiveAppTurn =
       completion: { kind: 'report' } | { kind: 'unresolved' };
       /** The roster the consolidator chose for this round (§27.6/AC8); absent on round 1 (the full catalog). */
       chosenRoster?: string[];
+      /** §27.9/AC4 — the operator's request-changes feedback carried into this round, threaded into the
+       *  review prompt alongside the reviewers' findings; absent on a consolidator-driven another-round. */
+      feedback?: string;
     }
   | {
       phase: 'consolidate';
@@ -281,6 +290,9 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
     const verdict = active.phase === 'consolidate' ? active.verdict : undefined;
     const verdictReason = active.phase === 'consolidate' ? active.verdictReason : undefined;
     const chosenRoster = active.phase === 'consolidate' || active.phase === 'review' ? active.chosenRoster : undefined;
+    // §27.9/AC4 — a review round entered by request-changes carries the operator's feedback; persisted so a
+    // relaunch or Retry re-injects it rather than dropping it.
+    const feedback = active.phase === 'review' ? active.feedback : undefined;
     let landed = true;
     try {
       deps.persist(active.repoDir, {
@@ -293,6 +305,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
         ...(verdict !== undefined ? { verdict } : {}),
         ...(verdictReason !== undefined ? { verdictReason } : {}),
         ...(chosenRoster !== undefined ? { chosenRoster } : {}),
+        ...(feedback !== undefined ? { feedback } : {}),
       });
     } catch (e) {
       // §27.10 resume state is best-effort: a write failure must never abort the turn's live path or crash
@@ -377,6 +390,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
           round: active.round,
           turnKey,
           doneRelPath: APP_DONE_REL_PATH,
+          ...(active.feedback !== undefined ? { feedback: active.feedback } : {}),
         });
       }
       const body = deps.readRecipe(active.recipePath);
@@ -443,7 +457,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
    *  runs — a persona the catalog does not declare can never be invoked (§27.4), so an unknown one is simply
    *  filtered out. Round 1 (no `chosenRoster`) runs the full catalog. Returns null when the def no longer
    *  resolves or the report location is unresolvable (a routable error). */
-  const reviewTurnFor = (ctx: TurnCtx, round: number, chosenRoster?: string[]): Extract<ActiveAppTurn, { phase: 'review' }> | null => {
+  const reviewTurnFor = (ctx: TurnCtx, round: number, chosenRoster?: string[], feedback?: string): Extract<ActiveAppTurn, { phase: 'review' }> | null => {
     const r = deps.resolveDef(ctx.repoDir, ctx.loopName);
     if (!r.ok) return null;
     const loc = deps.resolveReportLocation(ctx.repoDir, round);
@@ -464,6 +478,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       reportRel: loc.rel,
       completion: { kind: 'report' },
       ...(chosenRoster ? { chosenRoster } : {}),
+      ...(feedback !== undefined ? { feedback } : {}),
     };
   };
 
@@ -471,8 +486,8 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
    *  when injectable. Chained after a completed work turn (round 1) or after the consolidator's `another
    *  round` (round ≥ 2, over the chosen roster). A def or report-location that no longer resolves stops in a
    *  routable review `error` rather than silently dropping the round. */
-  const enterReview = (ctx: TurnCtx, round: number, chosenRoster?: string[]): void => {
-    const turn = reviewTurnFor(ctx, round, chosenRoster);
+  const enterReview = (ctx: TurnCtx, round: number, chosenRoster?: string[], feedback?: string): void => {
+    const turn = reviewTurnFor(ctx, round, chosenRoster, feedback);
     if (turn) {
       active = turn;
       persist('working');
@@ -481,7 +496,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       return;
     }
     const reason = 'cannot resolve the review round (def or report location unresolvable)';
-    active = { ...unresolvedReviewTurn({ ...ctx, turnKey: `${REVIEW_TURN_PREFIX}${ctx.stepId}`, round }), ...(chosenRoster ? { chosenRoster } : {}) };
+    active = { ...unresolvedReviewTurn({ ...ctx, turnKey: `${REVIEW_TURN_PREFIX}${ctx.stepId}`, round }), ...(chosenRoster ? { chosenRoster } : {}), ...(feedback !== undefined ? { feedback } : {}) };
     setLiveError('turn-error', reason, round);
     persist('error', reason);
     deps.audit(ctx.repoDir, reviewRoundAuditCmd('error', round, reason), 1);
@@ -702,6 +717,18 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       deps.audit(repoDir, retryAudit, null);
       runner.requestTurn(turnKey, { preamble: active.boundaryCmd });
     },
+    requestChanges(repoDir, stepId, turnKey, feedback) {
+      if (runner.state() === 'in-flight') return false; // §27.2 — never interleave a second turn
+      // §6/AC7 — identity + at-a-gate precondition; the round to iterate from is the gate's round, not a fresh counter.
+      const state = readAppLoopState(repoDir);
+      if (!state || state.step !== stepId || state.turnKey !== turnKey) return false;
+      if (state.status !== 'complete' || state.verdict === undefined) return false;
+      const round = state.round ?? FIRST_ROUND;
+      // §27.9/AC4 — re-enter review at round+1 over the def's full catalog (fresh eyes on the human-driven
+      // changes); undefined roster so the full catalog runs, never the consolidator or work turn.
+      enterReview({ repoDir, loopName: state.loop, stepId }, round + 1, undefined, feedback);
+      return true;
+    },
     resume(repoDir) {
       const state = readAppLoopState(repoDir);
       if (!state) return;
@@ -727,8 +754,12 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       if (state.turnKey.startsWith(REVIEW_TURN_PREFIX)) {
         const round = state.round ?? FIRST_ROUND;
         active =
-          reviewTurnFor(ctx, round, state.chosenRoster) ??
-          { ...unresolvedReviewTurn({ ...ctx, turnKey: state.turnKey, round }), ...(state.chosenRoster ? { chosenRoster: state.chosenRoster } : {}) };
+          reviewTurnFor(ctx, round, state.chosenRoster, state.feedback) ??
+          {
+            ...unresolvedReviewTurn({ ...ctx, turnKey: state.turnKey, round }),
+            ...(state.chosenRoster ? { chosenRoster: state.chosenRoster } : {}),
+            ...(state.feedback !== undefined ? { feedback: state.feedback } : {}),
+          };
         makeRoutable(round);
         return;
       }

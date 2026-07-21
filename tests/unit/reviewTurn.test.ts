@@ -140,3 +140,50 @@ describe('composeReviewAndFixPrompt — single-sourced from the shared report vo
     expect(p).toContain('.agent-terminal/loop/reports/1.md'); // the artifact to verify before signalling
   });
 });
+
+// §27.9/§19.4 / N5 (AC4) — a request-changes decision delivers the operator's feedback into the NEXT
+// review-and-fix round, "alongside the reviewers' findings." The composer carries it as an optional block; the
+// engine threads it from the run-state a request-changes wrote. Absent feedback leaves the round unchanged.
+describe('composeReviewAndFixPrompt — human request-changes feedback (§27.9 / AC4)', () => {
+  const reqWith = (feedback?: string) => ({
+    roster: def().reviewers.map((r) => ({ persona: r.persona, charter: r.charter })),
+    sections: def().report.sections,
+    reportRel: '.agent-terminal/loop/reports/2.md',
+    round: 2,
+    turnKey: 'review-plan',
+    doneRelPath: '.agent-terminal/loop/turn-done',
+    ...(feedback !== undefined ? { feedback } : {}),
+  });
+
+  it('carries the operator feedback verbatim when present, framed alongside the reviewers\' findings', () => {
+    const p = composeReviewAndFixPrompt(reqWith('Tighten the migration section; it overspecifies the schema.'));
+    expect(p).toContain('Tighten the migration section; it overspecifies the schema.');
+    // The block names it as the human's request-changes feedback, not a reviewer finding, so the fixer weighs
+    // it as a first-class input to this round (§27.9).
+    expect(p.toLowerCase()).toContain('feedback');
+  });
+
+  it('adds no feedback block when the round carries none (a consolidator-driven another-round is unchanged)', () => {
+    const withFb = composeReviewAndFixPrompt(reqWith('do the thing'));
+    const without = composeReviewAndFixPrompt(reqWith());
+    expect(without).not.toContain('do the thing');
+    // The no-feedback prompt is exactly the base review-and-fix prompt (no empty block, no dangling header).
+    expect(without.length).toBeLessThan(withFb.length);
+  });
+
+  it('a whitespace-only feedback string is treated as no feedback (never a blank block)', () => {
+    const p = composeReviewAndFixPrompt(reqWith('   \n  '));
+    const without = composeReviewAndFixPrompt(reqWith());
+    expect(p).toBe(without);
+  });
+
+  it('still carries the done-signal instruction and the well-formed example — feedback never displaces the turn contract', () => {
+    const p = composeReviewAndFixPrompt(reqWith('address the taint flow'));
+    expect(p).toContain('turn-done:review-plan');
+    expect(p).toContain('.agent-terminal/loop/reports/2.md');
+    // The few-shot example still trails so the fixer sees the well-formed report shape.
+    expect(p).toContain('# Round report');
+    // The feedback appears BEFORE the done-signal contract, not after the example.
+    expect(p.indexOf('address the taint flow')).toBeLessThan(p.indexOf('turn-done:review-plan'));
+  });
+});
