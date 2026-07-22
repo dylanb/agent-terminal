@@ -117,14 +117,14 @@ describe('resolveChainedInputs (§27.10 — declared inputs partitioned by what 
   const twoInputs = () => def({ inputs: [binding('plan', 'plan.md'), binding('notes', 'notes.md')] });
 
   it('carries {id, rel} for each produced input, in declaration order', () => {
-    expect(resolveChainedInputs(twoInputs(), () => 'produced').carried).toEqual([
+    expect(resolveChainedInputs(twoInputs().inputs, () => 'produced').carried).toEqual([
       { id: 'plan', rel: '.agent-terminal/loop/artifacts/plan.md' },
       { id: 'notes', rel: '.agent-terminal/loop/artifacts/notes.md' },
     ]);
   });
 
   it('partitions per-element: a produced input carries while its declared sibling does not', () => {
-    const r = resolveChainedInputs(twoInputs(), (p) =>
+    const r = resolveChainedInputs(twoInputs().inputs, (p) =>
       p === '/abs/repo/.agent-terminal/loop/artifacts/plan.md' ? 'produced' : 'not-produced',
     );
     expect(r.carried).toEqual([{ id: 'plan', rel: '.agent-terminal/loop/artifacts/plan.md' }]);
@@ -132,7 +132,7 @@ describe('resolveChainedInputs (§27.10 — declared inputs partitioned by what 
   });
 
   it('keeps unreadable distinct from not-produced, so the caller can act on the one it can', () => {
-    const r = resolveChainedInputs(twoInputs(), (p) =>
+    const r = resolveChainedInputs(twoInputs().inputs, (p) =>
       p === '/abs/repo/.agent-terminal/loop/artifacts/plan.md' ? 'unreadable' : 'not-produced',
     );
     expect(r.carried).toEqual([]); // neither is material the work turn can be entered with
@@ -144,7 +144,7 @@ describe('resolveChainedInputs (§27.10 — declared inputs partitioned by what 
 
   it('hands the state predicate the binding\'s absolute path, not its repo-relative form', () => {
     const probed: string[] = [];
-    resolveChainedInputs(def({ inputs: [binding('plan', 'plan.md')] }), (p: string) => {
+    resolveChainedInputs([binding('plan', 'plan.md')], (p: string) => {
       probed.push(p);
       return 'produced';
     });
@@ -152,7 +152,7 @@ describe('resolveChainedInputs (§27.10 — declared inputs partitioned by what 
   });
 
   it('carries and declares nothing for a loop with no inputs (the first loop in a chain)', () => {
-    const r = resolveChainedInputs(def({ inputs: [] }), () => 'produced');
+    const r = resolveChainedInputs([], () => 'produced');
     expect(r).toEqual({ carried: [], unresolved: [] });
   });
 });

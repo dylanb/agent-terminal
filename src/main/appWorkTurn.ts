@@ -5,7 +5,7 @@
 // writer↔reader cannot desync — CLAUDE.md shared-semantics); and the work-prompt composer.
 
 import { doneSignalInstruction } from '../shared/loopTurn';
-import type { BoundaryPolicy, LoopDefV2 } from './loopDefV2';
+import type { ArtifactBinding, BoundaryPolicy, LoopDefV2 } from './loopDefV2';
 
 /** The instance command a boundary policy issues (§27.7). `clear` resets context; `compact` carries the
  *  def's message naming what must survive it. The graded observable is the command issued + the idle
@@ -32,16 +32,26 @@ export interface ChainedInput {
  *  distinct facts: the first says no upstream ran, the second that its product is there but unavailable. */
 export type ChainedInputState = 'produced' | 'not-produced' | 'unreadable';
 
-/** §27.10 — the declared inputs partitioned by what `stateOf` finds at each binding: `carried` is the
- *  material the work turn is entered with; `unresolved` names the rest, so a chain that did not carry is
- *  recorded rather than silent. */
+/** §27.10 */
+export interface UnresolvedChainedInput {
+  id: string;
+  state: Exclude<ChainedInputState, 'produced'>;
+}
+
+/** §27.10 */
+export interface ChainedInputResolution {
+  carried: ChainedInput[];
+  unresolved: UnresolvedChainedInput[];
+}
+
+/** §27.10 */
 export function resolveChainedInputs(
-  def: LoopDefV2,
+  bindings: ArtifactBinding[],
   stateOf: (absPath: string) => ChainedInputState,
-): { carried: ChainedInput[]; unresolved: { id: string; state: Exclude<ChainedInputState, 'produced'> }[] } {
+): ChainedInputResolution {
   const carried: ChainedInput[] = [];
-  const unresolved: { id: string; state: Exclude<ChainedInputState, 'produced'> }[] = [];
-  for (const i of def.inputs) {
+  const unresolved: UnresolvedChainedInput[] = [];
+  for (const i of bindings) {
     const state = stateOf(i.path);
     if (state === 'produced') carried.push({ id: i.id, rel: i.rel });
     else unresolved.push({ id: i.id, state });

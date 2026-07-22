@@ -83,6 +83,11 @@ export interface AppLoopRunState {
    *  rather than dropping the human's input. Present only on a work turn a redo entered; a blank value is
    *  never persisted. Mirrors `feedback` on the review turn. */
   instruction?: string;
+  /** §27.10 — the binding ids this work turn's ENTRY carried in. Persisted for the same reason as
+   *  `instruction`/`feedback`: a relaunch or a redo reconstructs the turn, and the carry is a decision the
+   *  entry already made (a `fresh-run` entry carried none) — re-deriving it from what happens to be on disk
+   *  would let a lever acquire material the entry refused. Absent means carried nothing. */
+  chainedInputs?: string[];
 }
 
 /** Non-empty text is text; blank or non-string is none. The ONE gate the writer and reader of any human-typed
@@ -143,6 +148,9 @@ export function serializeAppLoopState(state: AppLoopRunState, now: () => Date): 
   // §27.9/AC5 — the redo instruction for this work turn (the same one-gate treatment as feedback).
   const instruction = validInstruction(state.instruction);
   if (instruction !== undefined) doc.instruction = instruction;
+  // §27.10 — the binding ids the entry carried. Written only when non-empty; absent reads back as "carried
+  // nothing", so the recovered carry fails toward NOT carrying (the same direction the entry gate refuses in).
+  if (state.chainedInputs && state.chainedInputs.length > 0) doc.chained_inputs = state.chainedInputs;
   return yaml.dump(doc);
 }
 
@@ -178,6 +186,11 @@ export function parseAppLoopState(text: string): AppLoopRunState | null {
   const feedback = validFeedback(doc.feedback);
   // §27.9/AC5 — same field-local validation for the redo instruction.
   const instruction = validInstruction(doc.instruction);
+  // §27.10 — same field-local validation as the chosen roster; a malformed list reads as carried nothing.
+  const chainedInputs =
+    Array.isArray(doc.chained_inputs) && doc.chained_inputs.every((i) => typeof i === 'string') && doc.chained_inputs.length > 0
+      ? (doc.chained_inputs as string[])
+      : undefined;
   return {
     loop,
     step,
@@ -190,6 +203,7 @@ export function parseAppLoopState(text: string): AppLoopRunState | null {
     ...(chosenRoster !== undefined ? { chosenRoster } : {}),
     ...(feedback !== undefined ? { feedback } : {}),
     ...(instruction !== undefined ? { instruction } : {}),
+    ...(chainedInputs !== undefined ? { chainedInputs } : {}),
   };
 }
 

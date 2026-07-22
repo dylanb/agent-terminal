@@ -4,7 +4,7 @@ import { basename, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createAppLoopEngine, type AppLoopEngineDeps } from '../../src/main/appLoopEngine';
+import { createAppLoopEngine, type AppLoopEngineDeps, type AppLoopEntry } from '../../src/main/appLoopEngine';
 import { provideAppLoopView } from '../../src/main/loopViewV2';
 import {
   armInterrupt,
@@ -178,6 +178,20 @@ function writeReport(content = exampleRoundReport({ sections: ['summary'], roste
   writeFileSync(p, content);
 }
 
+/** Complete an ALREADY-ENTERED work turn → review → consolidate → the clean gate, so a test can choose the
+ *  entry kind itself rather than inheriting the helper's `chain-advance`. */
+function driveFromWorkToGate(engine: ReturnType<typeof createAppLoopEngine>): void {
+  writeArtifact(true);
+  engine.onDoneSignal();
+  engine.onInjectable();
+  engine.onInjectable();
+  writeRoundReport(1, []);
+  engine.onDoneSignal();
+  engine.onInjectable();
+  engine.onInjectable();
+  completeConsolidate(engine, 1, 'verdict: clean\n');
+}
+
 /** Enter → complete the WORK turn → drain the pre-review boundary → the review-and-fix prompt injects. */
 function driveToReviewInjected(engine: ReturnType<typeof createAppLoopEngine>): void {
   enterAndInjectWork(engine);
@@ -188,8 +202,8 @@ function driveToReviewInjected(engine: ReturnType<typeof createAppLoopEngine>): 
 }
 
 /** Drive enter → boundary drains → work prompt injects (hosted idle throughout). */
-function enterAndInjectWork(engine: ReturnType<typeof createAppLoopEngine>): void {
-  engine.enter(repo, 'plan-loop', STEP, 'chain-advance');
+function enterAndInjectWork(engine: ReturnType<typeof createAppLoopEngine>, entry: AppLoopEntry = 'chain-advance'): void {
+  engine.enter(repo, 'plan-loop', STEP, entry);
   engine.onInjectable(); // the boundary command drained + the instance re-quiesced
 }
 
@@ -619,11 +633,16 @@ describe('§27 engine — resume (AC8)', () => {
     expect(readAppLoopState(repo)?.status).toBe('complete');
   });
 
-  it('§27.10 — reconstructs a work turn re-carrying present inputs so Retry re-injects them; resume records no chained transition', () => {
+  it('§27.10 — reconstructs a work turn re-carrying the inputs its entry recorded so Retry re-injects them; resume records no chained transition', () => {
     const inputRel = '.agent-terminal/loop/artifacts/groomed-ticket.md';
     const inputPath = seedInputArtifact(join(repo, '.agent-terminal', 'loop', 'artifacts', 'groomed-ticket.md'));
     defResult = { ok: true, def: { ...fileDef(), inputs: [binding('groomed-ticket', inputPath)] } };
-    writeAppLoopState(repo, { loop: 'plan-loop', step: STEP, turnKey: TURN_KEY, status: 'working' }, FIXED);
+    // The entry that stopped mid-flight recorded what it carried; resume honours that record, never the disk.
+    writeAppLoopState(
+      repo,
+      { loop: 'plan-loop', step: STEP, turnKey: TURN_KEY, status: 'working', chainedInputs: ['groomed-ticket'] },
+      FIXED,
+    );
     const engine = makeEngine();
     engine.resume(repo);
     expect(injected).toEqual([]); // a relaunch-interrupted turn is never re-driven on resume
@@ -1183,6 +1202,41 @@ describe('§27 engine — redo re-enters the work turn on a clean slate carrying
     expect(prompt).toContain(INSTRUCTION); // alongside the redo instruction
     const chainAuditsAfter = audit.mock.calls.filter((c) => /chained transition/i.test(c[1])).length;
     expect(chainAuditsAfter).toBe(chainAuditsBefore); // the non-advance re-entry records no new transition
+  });
+
+  it('§27.10 — a redo does NOT acquire chained material a fresh-run entry refused to carry', () => {
+    // The entry decision must survive the lever: a step entered as a fresh run carried nothing, so redo —
+    // which is not a chain advance either — must not pick the leftover artifact up off the disk.
+    const inputRel = '.agent-terminal/loop/artifacts/groomed-ticket.md';
+    const inputPath = seedInputArtifact(join(repo, '.agent-terminal', 'loop', 'artifacts', 'groomed-ticket.md'));
+    defResult = { ok: true, def: { ...fileDef(), inputs: [binding('groomed-ticket', inputPath)] } };
+    const engine = makeEngine();
+    enterAndInjectWork(engine, 'fresh-run'); // carries nothing
+    driveFromWorkToGate(engine);
+    const before = injected.length;
+    expect(engine.redo(repo, STEP, CONSOLIDATE_KEY, INSTRUCTION)).toBe(true);
+    engine.onInjectable();
+    engine.onInjectable();
+    const prompt = injected.slice(before).find((p) => p.includes('Produce the plan.'));
+    expect(prompt).toBeDefined();
+    expect(prompt).not.toContain(inputRel);
+  });
+
+  it('§27.10 — a resumed turn re-carries only what its entry carried, not whatever is on disk', () => {
+    const inputRel = '.agent-terminal/loop/artifacts/groomed-ticket.md';
+    const inputPath = seedInputArtifact(join(repo, '.agent-terminal', 'loop', 'artifacts', 'groomed-ticket.md'));
+    defResult = { ok: true, def: { ...fileDef(), inputs: [binding('groomed-ticket', inputPath)] } };
+    const engine = makeEngine();
+    enterAndInjectWork(engine, 'fresh-run'); // carries nothing; the turn persists as `working`
+    const relaunched = makeEngine(); // a relaunch reconstructs the stopped turn from disk
+    relaunched.resume(repo);
+    const before = injected.length;
+    relaunched.routeOut(repo, STEP, TURN_KEY, 'retry');
+    relaunched.onInjectable();
+    relaunched.onInjectable();
+    const prompt = injected.slice(before).find((p) => p.includes('Produce the plan.'));
+    expect(prompt).toBeDefined();
+    expect(prompt).not.toContain(inputRel);
   });
 });
 
