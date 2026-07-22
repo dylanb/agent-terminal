@@ -23,23 +23,26 @@ export function completionArtifact(def: LoopDefV2): { path: string } | null {
   return binding ? { path: binding.path } : null;
 }
 
-/** A typed input artifact a §27 loop consumes (§27.10/§18.4), resolved from the def's declared input
- *  binding: `id` names it, `rel` is its repo-relative path (the material a chained work turn carries), and
- *  `path` is its confined absolute path (the presence probe's read target — carried through from the def
- *  parser's `confineArtifact` so the fs check never re-derives a read target from repo-relative data). */
+/** A typed input artifact a §27 loop consumes (§27.10/§18.4): `id` names it, `rel` is its repo-relative path
+ *  (all the carried material the prompt and audit reference). The confined absolute path is never exposed —
+ *  it is the presence probe's concern only, held inside `presentChainedInputs`. */
 export interface ChainedInput {
   id: string;
   rel: string;
-  path: string;
 }
 
-/** The typed input artifacts a §27 loop declares (§27.10/§18.4), each `{id, path}` binding resolved to its
- *  id, repo-relative path, and confined absolute path — the outputs a prior loop wrote into the shared
- *  artifacts subtree, carried in as this loop's inputs. Empty for the first loop in a chain (it declares no
- *  inputs). Data-driven: never a loop-name check. Presence on disk (did the prior loop actually produce it?)
- *  is the caller's fs concern, probed against the confined `path`. */
-export function resolveChainedInputs(def: LoopDefV2, repoDir: string): ChainedInput[] {
-  return def.inputs.map((i) => ({ id: i.id, rel: path.relative(repoDir, i.path), path: i.path }));
+/** The declared typed inputs (§27.10/§18.4) an upstream loop actually produced: `isPresent` decides, per
+ *  element, whether the artifact is on disk (probed at the def parser's already-confined absolute path, never
+ *  a re-derived target — CWE-22). Data-driven from `def.inputs`, never a loop-name check; empty for the first
+ *  loop in a chain (it declares none). */
+export function presentChainedInputs(
+  def: LoopDefV2,
+  repoDir: string,
+  isPresent: (absPath: string) => boolean,
+): ChainedInput[] {
+  return def.inputs
+    .filter((i) => isPresent(i.path))
+    .map((i) => ({ id: i.id, rel: path.relative(repoDir, i.path) }));
 }
 
 /** The one-line completion marker the work prompt instructs the agent to write into its artifact and the
@@ -69,11 +72,9 @@ export interface AppWorkPromptReq {
    *  the work turn (ticket + plan + instruction only). Absent on an ordinary work run; a blank one emits no
    *  block (the caller passes only a `validInstruction` value). */
   instruction?: string;
-  /** §27.10/§18.4 — the prior loop's output artifacts, resolved as this loop's typed inputs and carried into
-   *  the work turn. Empty/absent for the first loop in a chain (no upstream artifact); the caller passes only
-   *  inputs whose artifact is present on disk. The prompt names id + repo-relative path only — the confined
-   *  absolute `path` is the probe's concern, never the prompt's, so it takes the display slice of the shape. */
-  inputs?: Pick<ChainedInput, 'id' | 'rel'>[];
+  /** §27.10/§18.4 — the carried inputs the prompt names (id + repo-relative path); the confined absolute path
+   *  never reaches this type, so it cannot enter the prompt's vocabulary (§27.8). */
+  inputs?: ChainedInput[];
 }
 
 /** Compose the §27 work-turn prompt (§27.3): the def's recipe body, then — for a file-producing turn — the
@@ -81,9 +82,8 @@ export interface AppWorkPromptReq {
  *  pointing at the §27 done-file (and, for a file-producing turn, verifying the artifact on disk first). */
 export function composeAppWorkPrompt(req: AppWorkPromptReq): string {
   const parts = [req.recipeBody.trimEnd()];
-  // §27.10/§18.4 — a chained work turn is entered carrying the prior loop's outputs as this loop's typed
-  // inputs: name each carried artifact and its repo-relative path so the agent reads them before it begins.
-  // Above the redo block so a redo's "the ticket and the plan above" reference includes them.
+  // §27.10/§18.4 — above the redo block so a redo's "the ticket and the plan above" reference covers the
+  // carried inputs.
   if (req.inputs && req.inputs.length > 0) {
     parts.push(
       '',

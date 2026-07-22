@@ -5,7 +5,7 @@ import {
   completionArtifact,
   completionMarker,
   composeAppWorkPrompt,
-  resolveChainedInputs,
+  presentChainedInputs,
 } from '../../src/main/appWorkTurn';
 import type { BoundaryPolicy, LoopDefV2 } from '../../src/main/loopDefV2';
 
@@ -103,28 +103,47 @@ describe('artifactWellFormed (§27.12 — present AND carrying the marker, never
   });
 });
 
-describe('resolveChainedInputs (§27.10/§18.4 — the prior loop\'s outputs as this loop\'s typed inputs)', () => {
-  it('resolves each declared input binding to its id, repo-relative path, and confined absolute path', () => {
-    const d = def({
-      inputs: [{ id: 'plan', path: '/abs/repo/.agent-terminal/loop/artifacts/plan.md' }],
-    });
-    expect(resolveChainedInputs(d, '/abs/repo')).toEqual([
-      { id: 'plan', rel: '.agent-terminal/loop/artifacts/plan.md', path: '/abs/repo/.agent-terminal/loop/artifacts/plan.md' },
-    ]);
-  });
-
-  it('resolves every declared input, in declaration order', () => {
+describe('presentChainedInputs (§27.10/§18.4 — declared inputs an upstream loop produced, present-gated)', () => {
+  it('carries {id, rel} for each declared input the presence predicate accepts, in declaration order', () => {
     const d = def({
       inputs: [
         { id: 'plan', path: '/abs/repo/.agent-terminal/loop/artifacts/plan.md' },
         { id: 'notes', path: '/abs/repo/.agent-terminal/loop/artifacts/notes.md' },
       ],
     });
-    expect(resolveChainedInputs(d, '/abs/repo').map((i) => i.id)).toEqual(['plan', 'notes']);
+    expect(presentChainedInputs(d, '/abs/repo', () => true)).toEqual([
+      { id: 'plan', rel: '.agent-terminal/loop/artifacts/plan.md' },
+      { id: 'notes', rel: '.agent-terminal/loop/artifacts/notes.md' },
+    ]);
+  });
+
+  it('filters per-element: keeps only inputs whose artifact the predicate finds present', () => {
+    const d = def({
+      inputs: [
+        { id: 'plan', path: '/abs/repo/.agent-terminal/loop/artifacts/plan.md' },
+        { id: 'notes', path: '/abs/repo/.agent-terminal/loop/artifacts/notes.md' },
+      ],
+    });
+    const present = presentChainedInputs(
+      d,
+      '/abs/repo',
+      (p) => p === '/abs/repo/.agent-terminal/loop/artifacts/plan.md',
+    );
+    expect(present).toEqual([{ id: 'plan', rel: '.agent-terminal/loop/artifacts/plan.md' }]);
+  });
+
+  it('probes each declared input at its confined absolute path (never a repo-relative re-join — CWE-22)', () => {
+    const d = def({ inputs: [{ id: 'plan', path: '/abs/repo/.agent-terminal/loop/artifacts/plan.md' }] });
+    const probed: string[] = [];
+    presentChainedInputs(d, '/abs/repo', (p) => {
+      probed.push(p);
+      return true;
+    });
+    expect(probed).toEqual(['/abs/repo/.agent-terminal/loop/artifacts/plan.md']);
   });
 
   it('is empty for a loop that declares no inputs (the first loop in a chain)', () => {
-    expect(resolveChainedInputs(def({ inputs: [] }), '/abs/repo')).toEqual([]);
+    expect(presentChainedInputs(def({ inputs: [] }), '/abs/repo', () => true)).toEqual([]);
   });
 });
 
