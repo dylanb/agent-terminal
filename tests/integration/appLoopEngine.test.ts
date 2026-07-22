@@ -920,6 +920,23 @@ describe('§27.10 — the entry\'s carry is durable across every path that re-en
     expect(engine.liveErrorFor(repo)?.kind).toBe('def-unresolvable'); // and a route out remains
   });
 
+  it('refuses Accept after a retry-refuse even when a well-formed artifact is present (CWE-754, file parity)', () => {
+    // The commits sibling proves neutralization overrides an unconditionally-true completion; this proves it
+    // also overrides a genuinely SATISFIABLE one — a present, well-formed file — so an unresolvable def can
+    // never be finalized on a real artifact it no longer describes. This is the other half of the parity the
+    // retry-refuse comment claims, pinned independently.
+    writeAppLoopState(repo, { loop: 'plan-loop', step: STEP, turnKey: TURN_KEY, status: 'error', errorReason: 'stalled' }, FIXED);
+    defResult = { ok: true, def: fileDef() }; // a file-completion turn, resolvable at resume
+    const engine = makeEngine();
+    engine.resume(repo);
+    writeArtifact(true); // present and well-formed — completionSatisfied() would otherwise be true
+    defResult = { ok: false, reason: 'no §27 def named plan-loop in any tier' }; // operator edits the def unresolvable
+    engine.routeOut(repo, STEP, TURN_KEY, 'retry'); // refuses (def-unresolvable)
+    engine.routeOut(repo, STEP, TURN_KEY, 'accept'); // must NOT finalize on the present artifact
+    expect(readAppLoopState(repo)?.status).toBe('error'); // not fabricated complete
+    expect(engine.liveErrorFor(repo)?.kind).toBe('def-unresolvable');
+  });
+
   it('resolves no chained input when a REVIEW round is retried — only a work turn carries one', () => {
     const p = bindSeededInput(repo);
     const engine = makeEngine();

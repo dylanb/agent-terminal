@@ -285,6 +285,25 @@ function unresolvedConsolidateTurn(args: TurnCtx & { turnKey: string; round: num
   };
 }
 
+/** The work arm of an in-flight turn whose def no longer resolves (§27.12c): no recipe to read, no inputs to
+ *  carry, `completion.kind === 'unresolved'` so Accept refuses it. Seeded identically by `resume`'s fallback
+ *  and the retry lever's def-unresolvable refuse so the shape lives in one place (matching the review and
+ *  consolidate seeders). Carries only the identity a later resolvable retry re-resolves the def by — no
+ *  `recipePath`/`inputs` a `compose` could ever build a work prompt from for a turn whose def is gone. */
+function unresolvedWorkTurn(args: TurnCtx & { turnKey: string; instruction?: string }): Extract<ActiveAppTurn, { phase: 'work' }> {
+  return {
+    phase: 'work',
+    repoDir: args.repoDir,
+    loopName: args.loopName,
+    stepId: args.stepId,
+    turnKey: args.turnKey,
+    boundaryCmd: '/clear',
+    recipePath: '',
+    completion: { kind: 'unresolved' },
+    ...(args.instruction !== undefined ? { instruction: args.instruction } : {}),
+  };
+}
+
 /** The §25 audit command for a turn that stopped in `error`, keyed to the phase's vocabulary (§27.12). */
 function turnErrorAuditCmd(turn: ActiveAppTurn, reason: string): string {
   if (turn.phase === 'review') return reviewRoundAuditCmd('error', turn.round, reason);
@@ -871,11 +890,17 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       if (active.phase === 'work') {
         const rr = deps.resolveDef(repoDir, active.loopName);
         if (!rr.ok) {
-          // Neutralize completion before refusing so the sibling Accept lever honours the same
-          // def-resolves precondition — a `commits`/present-`file` turn otherwise stays acceptable
+          // Neutralize to the same unresolved shape `resume` builds so the sibling Accept lever honours the
+          // same def-resolves precondition — a `commits`/present-`file` turn otherwise stays acceptable
           // (completionSatisfied() unconditionally true) and fabricates a pass on a def that no longer
-          // resolves. A later retry with a resolvable def rebuilds completion via `activeTurnFor`.
-          active = { ...active, completion: { kind: 'unresolved' } };
+          // resolves. A later retry with a resolvable def rebuilds via `activeTurnFor` from the preserved id.
+          active = unresolvedWorkTurn({
+            repoDir,
+            loopName: active.loopName,
+            stepId,
+            turnKey,
+            ...(active.instruction !== undefined ? { instruction: active.instruction } : {}),
+          });
           refuseRouteOut('def-unresolvable', 'the bound def no longer resolves — retry or terminate');
           return;
         }
@@ -973,7 +998,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
             instruction: state.instruction,
             inputs: chainFor(repoDir, state.step, r.def, { kind: 'reconstruct', ids: reconstructIds }),
           })
-        : { phase: 'work', repoDir, loopName: state.loop, stepId: state.step, turnKey: state.turnKey, recipePath: '', boundaryCmd: '/clear', completion: { kind: 'unresolved' }, ...(state.instruction !== undefined ? { instruction: state.instruction } : {}) };
+        : unresolvedWorkTurn({ repoDir, loopName: state.loop, stepId: state.step, turnKey: state.turnKey, ...(state.instruction !== undefined ? { instruction: state.instruction } : {}) });
       makeRoutable();
     },
     activeTurnKey: () => active?.turnKey ?? null,
