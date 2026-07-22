@@ -88,7 +88,7 @@ export function composeAppWorkPrompt(req: AppWorkPromptReq): string {
     parts.push(
       '',
       "INPUTS — the previous loop produced these artifact(s), carried in as this loop's inputs. Read each before you begin:",
-      ...req.inputs.map((i) => `  - ${i.id}: ${i.rel}`),
+      ...req.inputs.map((i) => `- ${i.id}: ${i.rel}`),
     );
   }
   // §27.9/AC5 — a redo re-enters the work turn on a clean slate: the recipe body (which sources the ticket and

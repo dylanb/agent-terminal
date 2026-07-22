@@ -147,7 +147,7 @@ describe('presentChainedInputs (§27.10/§18.4 — declared inputs an upstream l
   });
 });
 
-describe('composeAppWorkPrompt (§27.3/§27.12 — recipe + marker + done-signal)', () => {
+describe('composeAppWorkPrompt (§27.10/§18.4 — chained-input block)', () => {
   it('§27.10/§18.4 — a chained input names each carried artifact id and its repo-relative path', () => {
     const prompt = composeAppWorkPrompt({
       recipeBody: '# work turn\nImplement the plan.',
@@ -157,7 +157,8 @@ describe('composeAppWorkPrompt (§27.3/§27.12 — recipe + marker + done-signal
       inputs: [{ id: 'plan', rel: '.agent-terminal/loop/artifacts/plan.md' }],
     });
     expect(prompt).toContain('Implement the plan.'); // the recipe body still leads
-    expect(prompt).toContain('- plan: .agent-terminal/loop/artifacts/plan.md'); // the carried input, id + path
+    // the carried input, id + path, as a column-0 bullet matching the sibling composers (consolidateTurn/reviewTurn)
+    expect(prompt.split('\n')).toContain('- plan: .agent-terminal/loop/artifacts/plan.md');
     expect(prompt.toLowerCase()).toContain('previous loop'); // framed as material from the prior loop
   });
 
@@ -187,7 +188,7 @@ describe('composeAppWorkPrompt (§27.3/§27.12 — recipe + marker + done-signal
   });
 });
 
-describe('composeAppWorkPrompt (§27.3/§27.12 — recipe + marker + done-signal, no chained input)', () => {
+describe('composeAppWorkPrompt (§27.3/§27.12 — recipe + marker + done-signal)', () => {
   it('for a file-producing turn: names the artifact, the marker, and the §27 done-file path', () => {
     const prompt = composeAppWorkPrompt({
       recipeBody: '# work turn\nImplement the plan.',
