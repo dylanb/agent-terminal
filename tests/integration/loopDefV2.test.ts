@@ -260,6 +260,21 @@ describe('resolveLoopDefV2 — artifact/input/output confinement to the artifact
     const r = resolveLoopDefV2('plan-loop', { tiers: tiers(), repoDir });
     expect(r.ok).toBe(false);
   });
+
+  it('rejects an input path whose confined target resolves through a symlink to a control-char-named file (§27.10)', () => {
+    // The confined (realpath-resolved) path — not the raw pattern — is what the work prompt embeds; a
+    // symlink planted inside the artifacts jail can redirect a clean declared path onto a file whose NAME
+    // carries a newline, re-introducing a prompt-line breakout past a pattern-only guard, so the control
+    // -char guard must also run on the resolved path.
+    const artDir = join(repoDir, '.agent-terminal', 'loop', 'artifacts', 'artifacts');
+    mkdirSync(artDir, { recursive: true });
+    const evil = join(artDir, 'evil\ninjected.md');
+    writeFileSync(evil, 'x\n');
+    symlinkSync(evil, join(artDir, 'groomed-ticket.md'));
+    plantDef(join(appDir, 'loops-v2'), 'plan-loop', VALID_DEF);
+    const r = resolveLoopDefV2('plan-loop', { tiers: tiers(), repoDir });
+    expect(r.ok).toBe(false);
+  });
 });
 
 describe('resolveLoopDefV2 — structural field rejections surface the offending field (AC 6)', () => {
