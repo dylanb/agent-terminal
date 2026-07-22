@@ -168,7 +168,7 @@ describe('composeAppWorkPrompt (§27.10 — the carried chained-input block)', (
     });
     expect(prompt).toContain('Implement the plan.'); // the recipe body still leads
     expect(prompt).toContain('- plan: .agent-terminal/loop/artifacts/plan.md'); // the carried input, id + path
-    expect(prompt.toLowerCase()).toContain('previous loop'); // framed as material from the prior loop
+    expect(prompt.toLowerCase()).toContain('upstream loop'); // framed as material carried in from the upstream loop
   });
 
   it('§27.10 — no chained-input block on a loop entered with no inputs', () => {
@@ -179,7 +179,7 @@ describe('composeAppWorkPrompt (§27.10 — the carried chained-input block)', (
       completion: { artifactRel: '.agent-terminal/loop/artifacts/groomed-ticket.md', marker: completionMarker('groom') },
       inputs: [],
     });
-    expect(prompt.toLowerCase()).not.toContain('previous loop');
+    expect(prompt.toLowerCase()).not.toContain('upstream loop');
   });
 
   it('§27.10 — the chained input survives alongside a redo instruction (recipe → inputs → redo)', () => {

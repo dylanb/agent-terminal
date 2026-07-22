@@ -4009,11 +4009,50 @@ test('a §27 approve chains the approved loop\'s output into the next app loop\'
     .toContain(`- plan: ${APP_ARTIFACT_REL}`); // impl-loop's work turn carries plan-loop's output as its input
 
   // The chained transition is recorded once in the §25 audit, naming the step it chained INTO (§6 identity).
-  await expect.poll(() => auditRunFiles(home, repo).length, { timeout: 10_000 }).toBeGreaterThan(0);
+  await expect.poll(() => auditRunFiles(home, repo).length, { timeout: 10_000 }).toBe(1);
   const run = readAuditRun(home, repo, auditRunFiles(home, repo)[0]);
   const chained = run.events.filter((e) => e.type === 'command' && /chained transition/i.test(e.cmd));
   expect(chained.length).toBe(1);
   expect((chained[0] as Extract<AuditEvent, { type: 'command' }>).cmd).toContain('implement');
+
+  await app.close();
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+  rmSync(binDir, { recursive: true, force: true });
+});
+
+// §27.10 — STARTING a run at a step is not a chain advance: no upstream loop has run, so an artifact already
+// sitting at a declared input path is left over from an earlier run (nothing clears the artifacts subtree) or
+// committed by the repo. Carrying it would have the app vouch to the agent that "the previous loop produced
+// this" about a file no previous loop in this run produced, and record a transition that never happened.
+test('a §27 flow START does not carry a leftover artifact at a declared input path, and records no chained transition (§27.10)', { tag: '@ownapp' }, async () => {
+  const repo = seedAppChainFlowRepo('agent-term-e2e-v2-stale-', '77');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-v2-stale-home-'));
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-v2-stale-bin-');
+  // A leftover groomed-ticket.md at exactly the path plan-loop declares as its typed input, as an earlier
+  // run (or a repo that committed the artifacts subtree) would leave it.
+  const staleRel = '.agent-terminal/loop/artifacts/groomed-ticket.md';
+  mkdirSync(join(repo, '.agent-terminal', 'loop', 'artifacts'), { recursive: true });
+  writeFileSync(join(repo, staleRel), '# a groomed ticket from some earlier run\n');
+  seedFakeAgentV2(binDir, { stepId: 'plan', artifactRel: APP_ARTIFACT_REL, work: 'complete', review: 'full', logInjected: true });
+  app = await electron.launch({
+    args: ['out/main/index.js'],
+    env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100', CLAUDE_CONFIG_DIR: exampleConfigDir, PATH: `${binDir}:${process.env.PATH}`, FAKE_GHGIT_LOG: logFile },
+  });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await typeCommand(`cd "${repo}"`);
+  await expect(flowControl()).toHaveText('Start', { timeout: 10_000 });
+  await typeCommand('fake-agent');
+  await flowControl().click(); // START the run at plan-loop — not an advance from any upstream loop
+
+  await expect.poll(() => readIf(appRunState(repo)), { timeout: 40_000 }).toContain('status: complete');
+  // The leftover artifact is never announced to the work agent as the previous loop's output.
+  expect(readIf(join(repo, '.agent-terminal', 'injected-log'))).not.toContain(staleRel);
+  await expect.poll(() => auditRunFiles(home, repo).length, { timeout: 10_000 }).toBe(1);
+  const run = readAuditRun(home, repo, auditRunFiles(home, repo)[0]);
+  expect(run.events.filter((e) => e.type === 'command' && /chained transition/i.test(e.cmd))).toHaveLength(0);
 
   await app.close();
   rmSync(repo, { recursive: true, force: true });

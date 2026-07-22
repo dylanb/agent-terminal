@@ -122,7 +122,7 @@ import {
   type InstallDestination,
 } from './installExamples';
 import { provideAppLoopView } from './loopViewV2';
-import { createAppLoopEngine } from './appLoopEngine';
+import { createAppLoopEngine, type AppLoopEntry } from './appLoopEngine';
 import { APP_LOOP_DIR_SEGMENTS, armInterrupt, clearPolish, consolidatorOutputFile, consolidatorOutputRel, enterPolish, isPolishActiveForStep, readAppLoopState, roundReportFile, roundReportRel, writeAppLoopState } from './appLoopState';
 import { resolveLoopDefV2, type LoopDefV2Context } from './loopDefV2';
 import { createRealAppGateGitHub } from './appGateGithub';
@@ -844,10 +844,18 @@ async function createWindow(): Promise<void> {
   };
 
   // `transitioningRepo` carries the active repoKey into the synchronous onEnterStep below, so a loop
-  // step's in-app pickup (§26.9) knows which repo it is bootstrapping.
+  // step's in-app pickup (§26.9) knows which repo it is bootstrapping. `transitioningEntry` carries WHY the
+  // step is being entered (§27.10): only the approve-driven `advance` is the chain advance an app loop's
+  // declared inputs carry across — a start or restart begins a run where no upstream loop has run.
   let transitioningRepo: string | null = null;
-  const inTransition = <T>(repoKey: string, fn: () => T): T => {
+  let transitioningEntry: AppLoopEntry = 'chain-advance';
+  /** §19.2/§27.10 — only `advance` moves the flow from one step to the next, which is the transition an app
+   *  loop's declared inputs chain across; `start` and `restart` begin a run at their first step. */
+  const entryFor = (kind: TransitionKind): AppLoopEntry =>
+    kind === 'advance' ? 'chain-advance' : kind === 'start' || kind === 'restart' ? 'fresh-run' : 're-entry';
+  const inTransition = <T>(repoKey: string, entry: AppLoopEntry, fn: () => T): T => {
     transitioningRepo = repoKey;
+    transitioningEntry = entry;
     try {
       return fn();
     } finally {
@@ -994,7 +1002,7 @@ async function createWindow(): Promise<void> {
     enterAppLoop: (step) => {
       const repoKey = transitioningRepo;
       if (!repoKey || !step.loop) return;
-      appEngine.enter(repoKey, step.loop, step.id);
+      appEngine.enter(repoKey, step.loop, step.id, transitioningEntry);
       armAppTurnDoneWatch(repoKey);
     },
   });
@@ -1123,7 +1131,7 @@ async function createWindow(): Promise<void> {
   // their own bodies because their readiness/notice handling diverges.
   const recordedTransition = (repoKey: string, kind: TransitionKind, mutate: () => FlowStateView): FlowStateView => {
     const before = flow.state(repoKey);
-    const after = inTransition(repoKey, mutate);
+    const after = inTransition(repoKey, entryFor(kind), mutate);
     audit.recordTransition(repoKey, kind, before, after);
     return trackLoop(repoKey, withDerived(repoKey, after));
   };
@@ -1164,7 +1172,7 @@ async function createWindow(): Promise<void> {
   const autoAdvanceFlow = (repoKey: string): void => {
     const pre = flow.state(repoKey);
     if (pre.status !== 'in_progress') return;
-    const view = inTransition(repoKey, () => flow.advance(repoKey));
+    const view = inTransition(repoKey, 'chain-advance', () => flow.advance(repoKey));
     audit.recordTransition(repoKey, 'advance', pre, view);
   };
 
@@ -1468,7 +1476,7 @@ async function createWindow(): Promise<void> {
         if (!isValidFlowRequest(m)) return flowRequestError();
         const pre = withDerived(m.repoKey, flow.state(m.repoKey));
         const ready = pre.loop ? pre.loop.ready : (pre.derived?.ready ?? true);
-        const view = inTransition(m.repoKey, () => flow.advance(m.repoKey));
+        const view = inTransition(m.repoKey, 'chain-advance', () => flow.advance(m.repoKey));
         audit.recordTransition(m.repoKey, 'advance', pre, view);
         if (ready) return trackLoop(m.repoKey, view);
         const notice = pre.loop
@@ -1503,7 +1511,7 @@ async function createWindow(): Promise<void> {
       [CH.flowProvideInput]: (_e, m) => {
         if (!isValidFlowProvideInput(m)) return flowRequestError();
         audit.recordInputs(m.repoKey, m.values, inputTypeMap(m.repoKey));
-        const view = inTransition(m.repoKey, () => flow.provideInput(m.repoKey, m.values));
+        const view = inTransition(m.repoKey, 're-entry', () => flow.provideInput(m.repoKey, m.values));
         return trackLoop(m.repoKey, withDerived(m.repoKey, view));
       },
       [CH.flowSetTitle]: (_e, m) => {

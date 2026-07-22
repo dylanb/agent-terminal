@@ -44,6 +44,14 @@ const RELAUNCH_INTERRUPTED_REASON = 'the turn was interrupted before it could fi
 
 export type AppRouteOut = 'retry' | 'accept' | 'terminate';
 
+/** §27.10 — why the engine is entering this step, which decides what the work turn is entered WITH.
+ *  `chain-advance` is the approve-driven advance the chain is defined by (§19.2): the upstream loop produced
+ *  its declared output, so it carries in and the transition is recorded. `fresh-run` begins a run AT this
+ *  step, where no upstream loop has run — anything sitting at a declared input path is left over from an
+ *  earlier run or committed by the repo, never this chain's product, so nothing carries. `re-entry` returns
+ *  to a step already legitimately entered: its material carries again, but nothing chained a second time. */
+export type AppLoopEntry = 'chain-advance' | 'fresh-run' | 're-entry';
+
 /** Why the §27 work turn holds a live error, as a structured discriminator so a consumer branches on the
  *  kind rather than the human-facing `reason` prose: `turn-error` is a stall/completion-gate failure of the
  *  turn itself; `def-unresolvable` is an Accept refused because the resumed turn's def no longer resolves
@@ -127,7 +135,7 @@ export interface AppLoopEngineDeps {
 export interface AppLoopEngine {
   /** Enter an `app` step: resolve the def, run the boundary, inject the work prompt once when injectable.
    *  A no-op (leaving the resolve-time failure view, AC6) when the def does not resolve. */
-  enter(repoDir: string, loopName: string, stepId: string): void;
+  enter(repoDir: string, loopName: string, stepId: string, entry: AppLoopEntry): void;
   /** The instance may have become injectable (a §8.3 quiet flip) — re-evaluate a pending/retry turn. */
   onInjectable(): void;
   /** The turn's done-file fired (host-watched, key-matched) — gate completion (§27.12). */
@@ -685,7 +693,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
   };
 
   return {
-    enter(repoDir, loopName, stepId) {
+    enter(repoDir, loopName, stepId, entry) {
       if (runner.state() === 'in-flight') return; // §27.2 — never interleave a second turn
       const r = deps.resolveDef(repoDir, loopName);
       if (!r.ok) return; // AC6 — the def-failure view is produced at resolve time (loopViewV2)
@@ -701,8 +709,8 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       } catch (e) {
         deps.audit(repoDir, `§27 ${loopName} ${stepId} enter clear-polish failed: ${e instanceof Error ? e.message : String(e)}`, 1);
       }
-      const chain = chainedInputs(r.def);
-      recordChain(repoDir, stepId, chain);
+      const chain = entry === 'fresh-run' ? { carried: [], unresolved: [] } : chainedInputs(r.def);
+      if (entry === 'chain-advance') recordChain(repoDir, stepId, chain);
       start(activeTurnFor(repoDir, loopName, stepId, r.def, { inputs: chain.carried }));
     },
     onInjectable() {

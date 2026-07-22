@@ -189,7 +189,7 @@ function driveToReviewInjected(engine: ReturnType<typeof createAppLoopEngine>): 
 
 /** Drive enter → boundary drains → work prompt injects (hosted idle throughout). */
 function enterAndInjectWork(engine: ReturnType<typeof createAppLoopEngine>): void {
-  engine.enter(repo, 'plan-loop', STEP);
+  engine.enter(repo, 'plan-loop', STEP, 'chain-advance');
   engine.onInjectable(); // the boundary command drained + the instance re-quiesced
 }
 
@@ -228,7 +228,7 @@ function seedInputArtifact(absPath: string, content = '# groomed ticket\n'): str
 describe('§27 engine — entry, boundary, and the work injection (AC1, AC9)', () => {
   it('injects the declared boundary command FIRST, then the work prompt, and persists status working', () => {
     const engine = makeEngine();
-    engine.enter(repo, 'plan-loop', STEP);
+    engine.enter(repo, 'plan-loop', STEP, 'chain-advance');
     expect(injected[0]).toBe('/clear'); // the def's pre-work boundary, before any work prompt
     expect(readAppLoopState(repo)).toMatchObject({ loop: 'plan-loop', step: STEP, turnKey: TURN_KEY, status: 'working' });
     engine.onInjectable(); // boundary drained + idle-confirm
@@ -243,14 +243,14 @@ describe('§27 engine — entry, boundary, and the work injection (AC1, AC9)', (
   it('a compact boundary issues /compact carrying the def message (§27.9)', () => {
     defResult = { ok: true, def: { ...fileDef(), boundaries: [{ boundary: 'pre-work', mode: 'compact', message: 'Keep the plan.' }] } };
     const engine = makeEngine();
-    engine.enter(repo, 'plan-loop', STEP);
+    engine.enter(repo, 'plan-loop', STEP, 'chain-advance');
     expect(injected[0]).toBe('/compact Keep the plan.');
   });
 
   it('does not start a turn or write run-state when the def fails to resolve (AC6 handled at the view)', () => {
     defResult = { ok: false, reason: 'no §27 def named plan-loop in any tier' };
     const engine = makeEngine();
-    engine.enter(repo, 'plan-loop', STEP);
+    engine.enter(repo, 'plan-loop', STEP, 'chain-advance');
     expect(injected).toEqual([]);
     expect(readAppLoopState(repo)).toBeNull();
   });
@@ -259,7 +259,7 @@ describe('§27 engine — entry, boundary, and the work injection (AC1, AC9)', (
     const engine = makeEngine();
     enterAndInjectWork(engine);
     const count = injected.length;
-    engine.enter(repo, 'plan-loop', STEP); // in-flight: ignored
+    engine.enter(repo, 'plan-loop', STEP, 'chain-advance'); // in-flight: ignored
     expect(injected.length).toBe(count);
   });
 });
@@ -280,7 +280,7 @@ describe('§27 engine — chained input into the work turn (AC1)', () => {
     const iPath = seedInputArtifact(CHAINED_INPUT_PATH());
     defResult = { ok: true, def: { ...fileDef(), inputs: [binding('groomed-ticket', iPath)] } };
     const engine = makeEngine();
-    engine.enter(repo, 'plan-loop', STEP);
+    engine.enter(repo, 'plan-loop', STEP, 'chain-advance');
     engine.onInjectable(); // boundary drains → the work prompt injects
     expect(injected[1]).toContain(`- groomed-ticket: ${CHAINED_INPUT_REL}`); // the resolved input carried in
     // The chained transition is recorded in the §25 audit, naming the entered step and the carried artifact id.
@@ -305,7 +305,7 @@ describe('§27 engine — chained input into the work turn (AC1)', () => {
       },
     };
     const engine = makeEngine();
-    engine.enter(repo, 'plan-loop', STEP);
+    engine.enter(repo, 'plan-loop', STEP, 'chain-advance');
     engine.onInjectable();
     expect(injected[1]).toContain(`- plan-input: ${PLAN_INPUT_REL}`); // the present one is carried
     expect(injected[1]).not.toContain(CHAINED_INPUT_REL); // the absent one is filtered per-element
@@ -318,7 +318,7 @@ describe('§27 engine — chained input into the work turn (AC1)', () => {
   it('records the declared input that did not chain, so a broken chain is not silent (present-gated carry)', () => {
     defResult = { ok: true, def: chainedDef() }; // declares the input, but the artifact was never produced
     const engine = makeEngine();
-    engine.enter(repo, 'plan-loop', STEP);
+    engine.enter(repo, 'plan-loop', STEP, 'chain-advance');
     engine.onInjectable();
     expect(injected[1]).not.toContain(CHAINED_INPUT_REL); // nothing to carry → no chained-input block
     const chainCall = audit.mock.calls.find((c) => /chained transition/i.test(c[1]));
@@ -326,6 +326,29 @@ describe('§27 engine — chained input into the work turn (AC1)', () => {
     expect(chainCall![1]).toContain('groomed-ticket');
     // Absent is not the operator's problem to fix — only an unreadable artifact is surfaced as an error.
     expect(emitError).not.toHaveBeenCalled();
+  });
+
+  it('carries nothing and records nothing when a run STARTS at this step (no upstream loop ran)', () => {
+    // A leftover artifact from an earlier run sits at the declared input path — nothing clears the artifacts
+    // subtree. Starting a fresh run here is not a chain advance, so that file is not the previous loop's
+    // approved output and must not be announced to the agent as one.
+    const iPath = seedInputArtifact(CHAINED_INPUT_PATH());
+    defResult = { ok: true, def: { ...fileDef(), inputs: [binding('groomed-ticket', iPath)] } };
+    const engine = makeEngine();
+    engine.enter(repo, 'plan-loop', STEP, 'fresh-run');
+    engine.onInjectable();
+    expect(injected[1]).not.toContain(CHAINED_INPUT_REL);
+    expect(audit.mock.calls.some((c) => /chained transition/i.test(c[1]))).toBe(false);
+  });
+
+  it('re-carries the step\'s inputs without recording a second transition when the step is RE-entered', () => {
+    const iPath = seedInputArtifact(CHAINED_INPUT_PATH());
+    defResult = { ok: true, def: { ...fileDef(), inputs: [binding('groomed-ticket', iPath)] } };
+    const engine = makeEngine();
+    engine.enter(repo, 'plan-loop', STEP, 're-entry');
+    engine.onInjectable();
+    expect(injected[1]).toContain(`- groomed-ticket: ${CHAINED_INPUT_REL}`); // the turn still gets its material
+    expect(audit.mock.calls.some((c) => /chained transition/i.test(c[1]))).toBe(false); // but nothing chained
   });
 
   it('surfaces a declared input that exists but cannot be read, rather than treating it as never produced', () => {
@@ -336,7 +359,7 @@ describe('§27 engine — chained input into the work turn (AC1)', () => {
     mkdirSync(iPath, { recursive: true }); // a directory where the artifact belongs
     defResult = { ok: true, def: { ...fileDef(), inputs: [binding('groomed-ticket', iPath)] } };
     const engine = makeEngine();
-    engine.enter(repo, 'plan-loop', STEP);
+    engine.enter(repo, 'plan-loop', STEP, 'chain-advance');
     engine.onInjectable();
     expect(injected[1]).not.toContain(CHAINED_INPUT_REL); // still not carried — it cannot be read
     expect(emitError).toHaveBeenCalledWith(expect.stringContaining('groomed-ticket'));
@@ -348,7 +371,7 @@ describe('§27 engine — chained input into the work turn (AC1)', () => {
   it('a loop declaring no inputs records no chained transition (the first loop in a chain)', () => {
     defResult = { ok: true, def: fileDef() }; // inputs: []
     const engine = makeEngine();
-    engine.enter(repo, 'plan-loop', STEP);
+    engine.enter(repo, 'plan-loop', STEP, 'chain-advance');
     engine.onInjectable();
     expect(audit.mock.calls.some((c) => /chained transition/i.test(c[1]))).toBe(false);
   });
@@ -365,7 +388,7 @@ describe('§27 engine — chained input into the work turn (AC1)', () => {
       def: { ...commitDef(), inputs: [{ id: 'groomed-ticket', path: iPath, rel: sentinelRel }] },
     };
     const engine = makeEngine();
-    engine.enter(repo, 'plan-loop', STEP);
+    engine.enter(repo, 'plan-loop', STEP, 'chain-advance');
     engine.onInjectable();
     expect(injected[1]).toContain(`- groomed-ticket: ${sentinelRel}`);
   });
@@ -377,7 +400,7 @@ describe('§27 engine — chained input into the work turn (AC1)', () => {
       def: { ...fileDef(), outputs: [{ id: 'plan', path: artifactPath, rel: sentinelRel }] },
     };
     const engine = makeEngine();
-    engine.enter(repo, 'plan-loop', STEP);
+    engine.enter(repo, 'plan-loop', STEP, 'chain-advance');
     engine.onInjectable();
     expect(injected[1]).toContain(`your ${sentinelRel} artifact`);
   });
@@ -1215,7 +1238,7 @@ describe('§27 engine — the polish stand-down suppresses the orchestrator leve
     // approved, so the stand-down file persists. Re-driving the same step must start a clean cycle, not inherit it.
     enterPolish(repo, STEP);
     expect(isPolishActiveForStep(repo, STEP)).toBe(true);
-    engine.enter(repo, 'plan-loop', STEP);
+    engine.enter(repo, 'plan-loop', STEP, 'chain-advance');
     expect(isPolishActiveForStep(repo, STEP)).toBe(false); // the stale stand-down did not survive the fresh entry
   });
 
@@ -1226,7 +1249,7 @@ describe('§27 engine — the polish stand-down suppresses the orchestrator leve
     const before = injected.length;
     // The stale-polish clear is best-effort — a throw must NOT abort the entry, or the operator is stranded with a
     // committed step whose work turn never starts and cannot restart (re-entry would re-throw the same EISDIR).
-    expect(() => engine.enter(repo, 'plan-loop', STEP)).not.toThrow();
+    expect(() => engine.enter(repo, 'plan-loop', STEP, 'chain-advance')).not.toThrow();
     engine.onInjectable();
     engine.onInjectable();
     expect(injected.slice(before).some((p) => p.includes('Produce the plan.'))).toBe(true); // the work turn started anyway
