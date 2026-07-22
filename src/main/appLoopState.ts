@@ -142,8 +142,7 @@ export function serializeAppLoopState(state: AppLoopRunState, now: () => Date): 
   // §27.9/AC5 — the redo instruction for this work turn (the same one-gate treatment as feedback).
   const instruction = validInstruction(state.instruction);
   if (instruction !== undefined) doc.instruction = instruction;
-  // §27.10 — the binding ids the entry carried. Written only when non-empty; absent reads back as "carried
-  // nothing", so the recovered carry fails toward NOT carrying (the same direction the entry gate refuses in).
+  // §27.10 — absent reads back as "carried nothing", so a recovered carry fails toward NOT carrying.
   if (state.chainedInputs && state.chainedInputs.length > 0) doc.chained_inputs = state.chainedInputs;
   return yaml.dump(doc);
 }

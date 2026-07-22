@@ -130,7 +130,7 @@ import { resolveLoopDefV2, type LoopDefV2Context } from './loopDefV2';
 import { createRealAppGateGitHub } from './appGateGithub';
 import { runAppGateDecision as runAppGateDecisionImpl } from './appGateDecision';
 import { completionArtifact } from './appWorkTurn';
-import { chainedInputState } from './chainedInputState';
+import { probeChainedInput } from './chainedInputProbe';
 import { resolveExampleLoopsV2Dir } from './exampleAssets';
 import { userConfigLoopsV2Dir } from './userConfig';
 import type { CliInstallResult } from '../shared/ipc';
@@ -510,7 +510,7 @@ async function createWindow(): Promise<void> {
         return null;
       }
     },
-    inputState: chainedInputState,
+    inputState: probeChainedInput,
     persist: (repoDir, state) => writeAppLoopState(repoDir, state),
     // §27.5 — the round-keyed report location: the confined absolute path the engine reads back and the
     // repo-relative path the fixer is told to write, from the ONE resolver (writer↔reader-location).

@@ -2,11 +2,11 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { chainedInputState } from '../../src/main/chainedInputState';
+import { probeChainedInput } from '../../src/main/chainedInputProbe';
 
 // §27.10 — real fixtures, not a fake: the whole point of this classifier is that it tells "no upstream ran"
 // apart from "its product is there but unavailable", which only real fs errno values exercise.
-describe('chainedInputState (§27.10 — what the upstream loop left at a binding)', () => {
+describe('probeChainedInput (§27.10 — what the upstream loop left at a binding)', () => {
   let dir: string;
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), 'chained-'));
@@ -18,17 +18,17 @@ describe('chainedInputState (§27.10 — what the upstream loop left at a bindin
   it('is produced for a regular file the upstream loop wrote', () => {
     const p = join(dir, 'plan.md');
     writeFileSync(p, '# plan\n');
-    expect(chainedInputState(p)).toBe('produced');
+    expect(probeChainedInput(p)).toBe('produced');
   });
 
   it('is not-produced when nothing is at the binding (no upstream ran)', () => {
-    expect(chainedInputState(join(dir, 'never-written.md'))).toBe('not-produced');
+    expect(probeChainedInput(join(dir, 'never-written.md'))).toBe('not-produced');
   });
 
   it('is unreadable — not not-produced — when a directory sits where the artifact belongs', () => {
     const p = join(dir, 'plan.md');
     mkdirSync(p);
-    expect(chainedInputState(p)).toBe('unreadable');
+    expect(probeChainedInput(p)).toBe('unreadable');
   });
 
   it.skipIf(process.getuid?.() === 0)('is unreadable when the artifact itself denies reading', () => {
@@ -38,7 +38,7 @@ describe('chainedInputState (§27.10 — what the upstream loop left at a bindin
     writeFileSync(p, '# plan\n');
     chmodSync(p, 0o000);
     try {
-      expect(chainedInputState(p)).toBe('unreadable');
+      expect(probeChainedInput(p)).toBe('unreadable');
     } finally {
       chmodSync(p, 0o644);
     }
@@ -51,7 +51,7 @@ describe('chainedInputState (§27.10 — what the upstream loop left at a bindin
     writeFileSync(p, '# plan\n');
     chmodSync(locked, 0o000);
     try {
-      expect(chainedInputState(p)).toBe('unreadable');
+      expect(probeChainedInput(p)).toBe('unreadable');
     } finally {
       chmodSync(locked, 0o755);
     }

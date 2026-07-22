@@ -371,6 +371,8 @@ export function gateDecisionAuditCmd(kind: GateDecisionAuditKind, option: string
 
 /** The §25 record of a §27 chained transition (§27.10/§27.9 / N6) — one definition beside the
  *  round/consolidate/gate vocabularies so the main-process writer and a future viewer read the same phrase.
+ *  TODO(dylan): the unresolved list collapses the `ChainedInputState` tri-state, so a viewer cannot tell a
+ *  never-produced input from an unreadable one; fixing it moves that vocabulary into `src/shared/`.
  *  TODO(dylan): the carry is gated on the flow having advanced plus presence at the binding, never on
  *  evidence that THIS run's upstream step wrote that file; closing it needs run-scoped artifact paths, which
  *  reach confineArtifact and every shipped def and belong to their own sub-ticket. */

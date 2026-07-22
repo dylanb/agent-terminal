@@ -5,7 +5,7 @@ import { accessSync, constants, statSync } from 'node:fs';
 import { isErrno } from './errno';
 import type { ChainedInputState } from './chainedInput';
 
-export function chainedInputState(absPath: string): ChainedInputState {
+export function probeChainedInput(absPath: string): ChainedInputState {
   try {
     if (!statSync(absPath).isFile()) return 'unreadable';
     // stat succeeds on an artifact this process cannot open — the case the tri-state exists for (one written

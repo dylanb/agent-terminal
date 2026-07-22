@@ -335,25 +335,32 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
     stepCarry !== null && stepCarry.repoDir === repoDir && stepCarry.stepId === stepId ? stepCarry.ids : null;
 
   /** §27.10 — the ids this step's entry recorded: the live record when it is this repo's step, else the one
-   *  persisted for it. Absent everywhere reads as carried nothing, so recovery fails toward NOT carrying. */
-  const recordedCarry = (repoDir: string, stepId: string, persisted?: string[]): string[] =>
-    liveCarry(repoDir, stepId) ?? persisted ?? [];
+   *  the run state persisted for that same step. run-state.yaml is ONE document per repo, overwritten by each
+   *  step's entry, so the persisted carry counts only when the document is about this step. Absent everywhere
+   *  reads as carried nothing, so recovery fails toward NOT carrying. */
+  const recordedCarry = (repoDir: string, stepId: string, persisted: AppLoopRunState | null): string[] =>
+    liveCarry(repoDir, stepId) ?? (persisted?.step === stepId ? (persisted.chainedInputs ?? []) : []);
 
   /** §27.10 — `declared` may establish a NEW carry from everything the def declares; `recorded` re-resolves
    *  exactly the ids an earlier entry decided on. Naming the scope keeps "carry everything" from being
    *  reachable by omitting an argument. */
   type ChainScope = { kind: 'declared' } | { kind: 'recorded'; ids: string[] };
 
+  /** §27.10 — whether this resolution is (re)starting a turn the operator is about to run, or merely
+   *  reconstructing a stopped one so it can be routed. `resume` runs on every route-out, including the
+   *  Terminate that abandons the flow, so only the former may raise an operator-facing alarm. */
+  type ChainPurpose = 'starting' | 'reconstructing';
+
   const chainFor = (
     repoDir: string,
     stepId: string,
     def: LoopDefV2,
-    opts: { scope: ChainScope; record: boolean },
+    scope: ChainScope,
+    purpose: ChainPurpose,
   ): ChainedInput[] => {
-    const scope = opts.scope;
     const bindings = scope.kind === 'recorded' ? def.inputs.filter((i) => scope.ids.includes(i.id)) : def.inputs;
     const chain = resolveChainedInputs(bindings, (absPath) => deps.inputState(absPath));
-    if (opts.record && (chain.carried.length > 0 || chain.unresolved.length > 0)) {
+    if (scope.kind === 'declared' && (chain.carried.length > 0 || chain.unresolved.length > 0)) {
       deps.audit(
         repoDir,
         chainedTransitionAuditCmd(
@@ -365,14 +372,25 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       );
     }
     const unreadable = chain.unresolved.filter((u) => u.state === 'unreadable').map((u) => u.id);
-    if (unreadable.length > 0) {
+    // TODO(dylan): `emitError` rides `flow:onLoopError`, documented as a FAILED loop-mechanics operation and
+    // rendered as a dismiss-only modal, while the turn starts anyway — an advisory on a failure channel.
+    // Operator decision (2026-07-22) is to keep it for this PR; the notice surface is the follow-up.
+    if (purpose === 'starting' && unreadable.length > 0) {
       deps.emitError(`§27 ${stepId}: declared input(s) present but unreadable — ${unreadable.join(', ')}`);
     }
-    // A recorded id the def no longer declares is material this step's entry established and the re-resolved
-    // def has stranded; dropping it silently loses the operator's chain with nothing said.
-    const unbound = scope.kind === 'recorded' ? scope.ids.filter((id) => !def.inputs.some((i) => i.id === id)) : [];
-    if (unbound.length > 0) {
-      deps.emitError(`§27 ${stepId}: recorded input(s) no longer declared by the loop def — ${unbound.join(', ')}`);
+    // Material this step's entry ALREADY carried, stranded since: the def no longer declares the binding, or
+    // the artifact it names is gone. Absent at a chain advance is normal (no upstream produced it) and stays
+    // silent; absent for an id the entry carried is a broken chain, and dropping it loses the operator's
+    // chain with nothing said.
+    if (purpose === 'starting' && scope.kind === 'recorded') {
+      const declared = new Set(def.inputs.map((i) => i.id));
+      const stranded = [
+        ...scope.ids.filter((id) => !declared.has(id)),
+        ...chain.unresolved.filter((u) => u.state === 'not-produced').map((u) => u.id),
+      ];
+      if (stranded.length > 0) {
+        deps.emitError(`§27 ${stepId}: recorded input(s) no longer available — ${stranded.join(', ')}`);
+      }
     }
     return chain.carried;
   };
@@ -744,12 +762,16 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       // loop ran), and a re-entry re-resolves exactly what this step's entry already decided on.
       let ids: string[] = [];
       let inputs: ChainedInput[] = [];
+      // TODO(dylan): the record conflates "the entry decided not to carry this" with "the entry failed to
+      // carry it" — an input unreadable at chain-advance is excluded from `ids`, so no lever re-probes it once
+      // the operator fixes the permission the dialog named. Needs the attempted-but-unresolved ids persisted
+      // beside the carried ones; recovery today is a flow restart.
       if (entry === 'chain-advance') {
-        inputs = chainFor(repoDir, stepId, r.def, { scope: { kind: 'declared' }, record: true });
+        inputs = chainFor(repoDir, stepId, r.def, { kind: 'declared' }, 'starting');
         ids = inputs.map((i) => i.id);
       } else if (entry === 're-entry') {
-        ids = recordedCarry(repoDir, stepId, readAppLoopState(repoDir)?.chainedInputs);
-        inputs = chainFor(repoDir, stepId, r.def, { scope: { kind: 'recorded', ids }, record: false });
+        ids = recordedCarry(repoDir, stepId, readAppLoopState(repoDir));
+        inputs = chainFor(repoDir, stepId, r.def, { kind: 'recorded', ids }, 'starting');
       }
       setCarry(repoDir, stepId, ids);
       start(activeTurnFor(repoDir, loopName, stepId, r.def, { inputs }));
@@ -872,12 +894,12 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       // which threads the instruction; no round, no feedback, no findings ride along (a fresh work run).
       const r = deps.resolveDef(repoDir, state.loop);
       if (!r.ok) return false;
-      const ids = recordedCarry(repoDir, stepId, state.chainedInputs);
+      const ids = recordedCarry(repoDir, stepId, state);
       setCarry(repoDir, stepId, ids);
       start(
         activeTurnFor(repoDir, state.loop, stepId, r.def, {
           instruction,
-          inputs: chainFor(repoDir, stepId, r.def, { scope: { kind: 'recorded', ids }, record: false }),
+          inputs: chainFor(repoDir, stepId, r.def, { kind: 'recorded', ids }, 'starting'),
         }),
       );
       return true;
@@ -923,7 +945,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       active = r.ok
         ? activeTurnFor(repoDir, state.loop, state.step, r.def, {
             instruction: state.instruction,
-            inputs: chainFor(repoDir, state.step, r.def, { scope: { kind: 'recorded', ids: state.chainedInputs ?? [] }, record: false }),
+            inputs: chainFor(repoDir, state.step, r.def, { kind: 'recorded', ids: state.chainedInputs ?? [] }, 'reconstructing'),
           })
         : { phase: 'work', repoDir, loopName: state.loop, stepId: state.step, turnKey: state.turnKey, recipePath: '', boundaryCmd: '/clear', completion: { kind: 'unresolved' }, ...(state.instruction !== undefined ? { instruction: state.instruction } : {}) };
       makeRoutable();

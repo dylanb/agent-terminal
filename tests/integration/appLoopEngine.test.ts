@@ -21,7 +21,7 @@ import {
   type AppLoopRunState,
 } from '../../src/main/appLoopState';
 import { completionMarker } from '../../src/main/appWorkTurn';
-import { chainedInputState } from '../../src/main/chainedInputState';
+import { probeChainedInput } from '../../src/main/chainedInputProbe';
 import type { ArtifactBinding } from '../../src/main/loopDefV2';
 import { APP_LOOP_DIR_SEGMENTS, ARTIFACTS_SUBDIR } from '../../src/main/appLoopPaths';
 import { exampleRoundReport, REPORT_GRAMMAR } from '../../src/shared/roundReport';
@@ -125,7 +125,7 @@ function makeEngine(persistOverride?: (repoDir: string, state: AppLoopRunState) 
     resolveDef: () => defResult,
     readRecipe: () => '# work turn\nProduce the plan.',
     readArtifact: (p) => readArtifact(p),
-    inputState: chainedInputState, // the real classifier, so EISDIR/EACCES are exercised, not faked
+    inputState: probeChainedInput, // the real classifier, so EISDIR/EACCES are exercised, not faked
 
     persist: persistOverride ?? ((repoDir, state) => writeAppLoopState(repoDir, state, FIXED)),
     audit,
@@ -326,6 +326,7 @@ describe('§27 engine — chained input into the work turn (AC1)', () => {
     expect(chainCall).toBeDefined();
     expect(chainCall![1]).toContain('plan-input'); // what was carried
     expect(chainCall![1]).toContain('groomed-ticket'); // and what was declared but did not chain
+    expect(chainCall![2]).toBe(1); // a chain that did not fully carry is a non-zero event
   });
 
   it('records the declared input that did not chain, so a broken chain is not silent (present-gated carry)', () => {
@@ -337,6 +338,7 @@ describe('§27 engine — chained input into the work turn (AC1)', () => {
     const chainCall = audit.mock.calls.find((c) => /chained transition/i.test(c[1]));
     expect(chainCall).toBeDefined(); // a declared-but-unresolved input is a fact the timeline must carry
     expect(chainCall![1]).toContain('groomed-ticket');
+    expect(chainCall![2]).toBe(1); // a chain that did not fully carry is a non-zero event
     // Absent is not the operator's problem to fix — only an unreadable artifact is surfaced as an error.
     expect(emitError).not.toHaveBeenCalled();
   });
@@ -387,6 +389,7 @@ describe('§27 engine — chained input into the work turn (AC1)', () => {
     const chainCall = audit.mock.calls.find((c) => /chained transition/i.test(c[1]));
     expect(chainCall).toBeDefined(); // the broken chain is recorded, not silent
     expect(chainCall![1]).toContain('groomed-ticket');
+    expect(chainCall![2]).toBe(1); // a chain that did not fully carry is a non-zero event
   });
 
   it('a loop declaring no inputs records no chained transition (the first loop in a chain)', () => {
@@ -722,6 +725,21 @@ describe('§27.10 — the entry\'s carry is durable across every path that re-en
     expect(prompt).not.toContain(INPUT_REL);
   });
 
+  it('does not let one step\'s recorded carry govern a DIFFERENT step re-entered from disk', () => {
+    // run-state.yaml is one document per repo, overwritten by each step's entry. After the flow advanced to a
+    // later step, an undo back here re-enters with no live record — reading that document's carry without
+    // checking whose step it describes hands this step the NEXT step's material.
+    bindSeededInput(repo);
+    writeAppLoopState(repo, { loop: 'plan-loop', step: 'implement', turnKey: 'work-implement', status: 'working', chainedInputs: ['groomed-ticket'] }, FIXED);
+    const engine = makeEngine(); // fresh: nothing live, so the disk is the only source
+    const before = injected.length;
+    engine.enter(repo, 'plan-loop', STEP, 're-entry');
+    engine.onInjectable();
+    const prompt = injected.slice(before).find((p) => p.includes('Produce the plan.'));
+    expect(prompt).toBeDefined();
+    expect(prompt).not.toContain(INPUT_REL);
+  });
+
   it('does not let one repo\'s carry govern another repo\'s step of the same name', () => {
     // One engine serves every open repo, and the shipped flow gives every repo the same step ids — so a carry
     // decided in repo B must not be adopted by repo A's redo, nor written into repo A's run state.
@@ -745,6 +763,34 @@ describe('§27.10 — the entry\'s carry is durable across every path that re-en
     } finally {
       rmSync(repoB, { recursive: true, force: true });
     }
+  });
+
+  it('raises no operator alarm from a reconstruction the operator did not ask to run', () => {
+    // resume() runs on EVERY route-out — including Terminate — and never re-drives the turn. An unreadable
+    // input there is not what the operator's action is about, and re-raising it on every route-out teaches
+    // them to dismiss the one channel a real stall depends on to summon a human.
+    const iPath = join(repo, '.agent-terminal', 'loop', 'artifacts', 'groomed-ticket.md');
+    mkdirSync(iPath, { recursive: true }); // a directory where the artifact belongs
+    defResult = { ok: true, def: { ...fileDef(), inputs: [binding('groomed-ticket', iPath)] } };
+    writeAppLoopState(repo, { loop: 'plan-loop', step: STEP, turnKey: TURN_KEY, status: 'working', chainedInputs: ['groomed-ticket'] }, FIXED);
+    const engine = makeEngine();
+    emitError.mockClear();
+    engine.resume(repo);
+    expect(emitError).not.toHaveBeenCalledWith(expect.stringContaining('groomed-ticket'));
+  });
+
+  it('says so when the artifact a recorded carry id names has vanished since the entry carried it', () => {
+    // Absent at a chain advance is normal (no upstream produced it) and stays silent. Absent for an id this
+    // step's entry ALREADY carried is a broken chain — the operator's material is gone and the re-entered turn
+    // would run without it, which is the same loss the unbound branch refuses to swallow.
+    const p = bindSeededInput(repo);
+    const engine = makeEngine();
+    enterAndInjectWork(engine, 'chain-advance');
+    driveFromWorkToGate(engine);
+    rmSync(p, { force: true }); // the artifacts subtree is uncommitted — a clean or a stray move removes it
+    emitError.mockClear();
+    expect(engine.redo(repo, STEP, CONSOLIDATE_KEY, REDO_INSTRUCTION)).toBe(true);
+    expect(emitError).toHaveBeenCalledWith(expect.stringContaining('groomed-ticket'));
   });
 
   it('says so when a recorded carry id no longer matches any binding the def declares', () => {
