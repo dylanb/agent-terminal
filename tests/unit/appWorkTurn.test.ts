@@ -109,7 +109,7 @@ describe('resolveChainedInputs (§27.10/§18.4 — the prior loop\'s outputs as 
       inputs: [{ id: 'plan', path: '/abs/repo/.agent-terminal/loop/artifacts/plan.md' }],
     });
     expect(resolveChainedInputs(d, '/abs/repo')).toEqual([
-      { id: 'plan', path: '/abs/repo/.agent-terminal/loop/artifacts/plan.md', rel: '.agent-terminal/loop/artifacts/plan.md' },
+      { id: 'plan', rel: '.agent-terminal/loop/artifacts/plan.md' },
     ]);
   });
 
