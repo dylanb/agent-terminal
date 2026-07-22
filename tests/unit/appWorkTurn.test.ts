@@ -103,7 +103,7 @@ describe('artifactWellFormed (§27.12 — present AND carrying the marker, never
   });
 });
 
-describe('presentChainedInputs (§27.10/§18.4 — declared inputs an upstream loop produced, present-gated)', () => {
+describe('presentChainedInputs (§27.10 — declared inputs an upstream loop produced, present-gated)', () => {
   it('carries {id, rel} for each declared input the presence predicate accepts, in declaration order', () => {
     const d = def({
       inputs: [
@@ -148,7 +148,7 @@ describe('presentChainedInputs (§27.10/§18.4 — declared inputs an upstream l
 });
 
 describe('composeAppWorkPrompt (§27.3/§27.12 — recipe + marker + done-signal)', () => {
-  it('§27.10/§18.4 — a chained input names each carried artifact id and its repo-relative path', () => {
+  it('§27.10 — a chained input names each carried artifact id and its repo-relative path', () => {
     const prompt = composeAppWorkPrompt({
       recipeBody: '# work turn\nImplement the plan.',
       turnKey: 'work-implement',

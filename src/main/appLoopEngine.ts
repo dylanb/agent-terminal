@@ -22,6 +22,7 @@ import type { LoopDefV2, LoopDefV2Result } from './loopDefV2';
 import { artifactWellFormed, boundaryCommand, completionArtifact, completionMarker, composeAppWorkPrompt, presentChainedInputs, type ChainedInput } from './appWorkTurn';
 import { catalogPersonas, composeReviewAndFixPrompt, preReviewBoundaryCommand, reviewRoster, type RosterEntry } from './reviewTurn';
 import { composeConsolidatePrompt, lastTwoReportRounds, preConsolidateBoundaryCommand } from './consolidateTurn';
+import { realpathBounded } from './confinedPath';
 import { clearTurnDone } from './turnDoneFile';
 import { TURN_DONE_FILENAME } from '../shared/loopTurn';
 import { failedReviewers, roundReportWellFormed } from '../shared/roundReport';
@@ -175,7 +176,7 @@ type ActiveAppTurn =
        *  prompt as the clean-slate directive; absent on an ordinary (non-redo) work run. Persisted so a
        *  relaunch or Retry re-injects it rather than dropping the human's input (mirrors review `feedback`). */
       instruction?: string;
-      /** §27.10/§18.4 (N6) — the carried typed inputs. Never persisted: the artifacts sit at def-declared
+      /** §27.10 (N6) — the carried typed inputs. Never persisted: the artifacts sit at def-declared
        *  paths every entry re-resolves, so a relaunched or resumed work turn re-carries them without a stored copy. */
       inputs?: ChainedInput[];
     }
@@ -284,6 +285,12 @@ function turnErrorAuditCmd(turn: ActiveAppTurn, reason: string): string {
   return `§27 work turn ${turn.turnKey} failed: ${reason}`;
 }
 
+/** The repo root canonicalized to the same real path the def parser resolved artifact paths against
+ *  (confineArtifact → resolveJail → realpathSync). Both prompt-embedded repo-relative paths — the chained
+ *  input `rel` and the completion `artifactRel` — diff against this, so a symlinked repo ancestor cannot
+ *  produce a `../..` escape the agent's logical cwd fails to read (§27.10). */
+const canonicalRepoDir = (repoDir: string): string => realpathBounded(repoDir) ?? repoDir;
+
 function activeTurnFor(
   repoDir: string,
   loopName: string,
@@ -301,7 +308,7 @@ function activeTurnFor(
     recipePath: def.work.recipe,
     boundaryCmd: entryBoundaryCommand(def),
     completion: artifact
-      ? { kind: 'file', path: artifact.path, marker: completionMarker(stepId), artifactRel: path.relative(repoDir, artifact.path) }
+      ? { kind: 'file', path: artifact.path, marker: completionMarker(stepId), artifactRel: path.relative(canonicalRepoDir(repoDir), artifact.path) }
       : { kind: 'commits' },
     ...(opts?.instruction !== undefined ? { instruction: opts.instruction } : {}),
     ...(opts?.inputs && opts.inputs.length > 0 ? { inputs: opts.inputs } : {}),
@@ -315,10 +322,10 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
   // even when the persisted error write failed (§27.12c). Cleared on every non-error persist.
   let liveError: (AppLoopLiveError & { repoDir: string }) | null = null;
 
-  // §27.10/§18.4 (N6) — the declared inputs an upstream loop actually produced. A loop with none (first in a
-  // chain, or input never produced) carries no input block and fires no chained transition.
+  // §27.10 (N6) — the declared inputs an upstream loop actually produced. A loop with none (first in a chain,
+  // or input never produced) carries no input block and fires no chained transition.
   const carriedInputs = (def: LoopDefV2, repoDir: string): ChainedInput[] =>
-    presentChainedInputs(def, repoDir, (absPath) => deps.readArtifact(absPath) !== null);
+    presentChainedInputs(def, canonicalRepoDir(repoDir), (absPath) => deps.readArtifact(absPath) !== null);
 
   const persist = (status: AppLoopRunState['status'], errorReason?: string): boolean => {
     if (!active) return false;
@@ -680,7 +687,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       } catch (e) {
         deps.audit(repoDir, `§27 ${loopName} ${stepId} enter clear-polish failed: ${e instanceof Error ? e.message : String(e)}`, 1);
       }
-      // §27.10/§18.4 (N6) — entry is the chain advance: carry the upstream loop's produced inputs and record
+      // §27.10 (N6) — entry is the chain advance: carry the upstream loop's produced inputs and record
       // the transition here only (redo/resume re-carry the same inputs without recording).
       const inputs = carriedInputs(r.def, repoDir);
       if (inputs.length > 0) deps.audit(repoDir, chainedTransitionAuditCmd(stepId, inputs.map((i) => i.id)), 0);
@@ -804,7 +811,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       // which threads the instruction; no round, no feedback, no findings ride along (a fresh work run).
       const r = deps.resolveDef(repoDir, state.loop);
       if (!r.ok) return false;
-      // §27.10/§18.4 — a redo re-enters the SAME step's work turn (not a chain advance), so it re-carries the
+      // §27.10 — a redo re-enters the SAME step's work turn (not a chain advance), so it re-carries the
       // step's present inputs but records no chained transition.
       start(activeTurnFor(repoDir, state.loop, stepId, r.def, { instruction, inputs: carriedInputs(r.def, repoDir) }));
       return true;

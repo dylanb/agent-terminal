@@ -370,7 +370,7 @@ export function gateDecisionAuditCmd(kind: GateDecisionAuditKind, option: string
 }
 
 /** The §25 record of a §27 chained transition (§27.10/§27.9 / N6) — an approved loop's output artifact,
- *  resolved as the next loop's typed input (§18.4) and carried into that loop's work turn — one definition
+ *  resolved as the next loop's typed input (§27.10) and carried into that loop's work turn — one definition
  *  beside the round/consolidate/gate vocabularies so the main-process writer and a future viewer read the
  *  same phrase. `step` is the loop step the artifact chained INTO (§6 identity); `artifactIds` are the
  *  resolved input bindings carried in. */

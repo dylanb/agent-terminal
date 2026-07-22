@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -205,6 +205,15 @@ function writeArtifact(withMarker: boolean): void {
   writeFileSync(artifactPath, withMarker ? `# plan\n${completionMarker(STEP)}\n` : '# plan\n(no marker)\n');
 }
 
+/** Seed a chained-input artifact on disk and return its realpath-resolved absolute path — the shape the def
+ *  parser's confineArtifact yields, so a test def's `inputs[].path` matches production (and `rel` is diffed
+ *  against the canonical root, not a symlinked spelling of it). */
+function seedInputArtifact(absPath: string, content = '# groomed ticket\n'): string {
+  mkdirSync(dirname(absPath), { recursive: true });
+  writeFileSync(absPath, content);
+  return realpathSync(absPath);
+}
+
 describe('§27 engine — entry, boundary, and the work injection (AC1, AC9)', () => {
   it('injects the declared boundary command FIRST, then the work prompt, and persists status working', () => {
     const engine = makeEngine();
@@ -245,7 +254,7 @@ describe('§27 engine — entry, boundary, and the work injection (AC1, AC9)', (
 });
 
 // §27.10/§27.9 / N6 (sub-ticket 1) — an approved loop's output artifact, resolved as the next loop's typed
-// input (§18.4), is the material the next loop's work turn is entered with. The engine reads the entered def's
+// input (§27.10), is the material the next loop's work turn is entered with. The engine reads the entered def's
 // declared inputs; only an input whose artifact is actually PRESENT on disk (the prior loop produced it) is
 // carried in and recorded as a chained transition, so a loop entered with no upstream artifact chains nothing.
 describe('§27 engine — chained input into the work turn (AC1)', () => {
@@ -254,14 +263,11 @@ describe('§27 engine — chained input into the work turn (AC1)', () => {
   function chainedDef(): LoopDefV2 {
     return { ...fileDef(), inputs: [{ id: 'groomed-ticket', path: CHAINED_INPUT_PATH() }] };
   }
-  function writeChainedInput(): void {
-    mkdirSync(dirname(CHAINED_INPUT_PATH()), { recursive: true });
-    writeFileSync(CHAINED_INPUT_PATH(), '# groomed ticket\n');
-  }
 
   it('carries a present input artifact into the work prompt and records the chained transition (AC1)', () => {
-    defResult = { ok: true, def: chainedDef() };
-    writeChainedInput(); // the prior loop's output sits at the next loop's declared input path
+    // the prior loop's output sits at the next loop's declared input path (realpath'd, as confineArtifact yields it)
+    const iPath = seedInputArtifact(CHAINED_INPUT_PATH());
+    defResult = { ok: true, def: { ...fileDef(), inputs: [{ id: 'groomed-ticket', path: iPath }] } };
     const engine = makeEngine();
     engine.enter(repo, 'plan-loop', STEP);
     engine.onInjectable(); // boundary drains → the work prompt injects
@@ -274,17 +280,16 @@ describe('§27 engine — chained input into the work turn (AC1)', () => {
   });
 
   it('carries only the present artifact when one of two declared inputs is absent (per-element gate, not all-or-nothing)', () => {
-    const PLAN_INPUT_PATH = join(repo, '.agent-terminal', 'loop', 'artifacts', 'plan-input.md');
     const PLAN_INPUT_REL = '.agent-terminal/loop/artifacts/plan-input.md';
-    mkdirSync(dirname(PLAN_INPUT_PATH), { recursive: true });
-    writeFileSync(PLAN_INPUT_PATH, '# plan\n'); // only this input's artifact exists on disk
+    // only this input's artifact exists on disk (realpath'd, as confineArtifact yields it)
+    const planInputPath = seedInputArtifact(join(repo, '.agent-terminal', 'loop', 'artifacts', 'plan-input.md'), '# plan\n');
     defResult = {
       ok: true,
       def: {
         ...fileDef(),
         inputs: [
           { id: 'groomed-ticket', path: CHAINED_INPUT_PATH() }, // declared, never produced
-          { id: 'plan-input', path: PLAN_INPUT_PATH },
+          { id: 'plan-input', path: planInputPath },
         ],
       },
     };
@@ -314,6 +319,44 @@ describe('§27 engine — chained input into the work turn (AC1)', () => {
     engine.enter(repo, 'plan-loop', STEP);
     engine.onInjectable();
     expect(audit.mock.calls.some((c) => /chained transition/i.test(c[1]))).toBe(false);
+  });
+
+  it('carries a clean repo-relative input path when the repo root is reached through a symlink (realpath parity)', () => {
+    // The def parser realpath-resolves each input's confined path (confineArtifact → resolveJail → realpathSync),
+    // so `rel` must be diffed against the SAME canonical root. A symlinked repo ancestor (macOS's /var/folders
+    // tmpdir is one; symlinked checkouts another) otherwise yields a `../..` escape that the agent — whose cwd is
+    // the logical repo — cannot read.
+    const realRoot = join(repo, 'real');
+    const linkRoot = join(repo, 'link');
+    mkdirSync(realRoot);
+    symlinkSync(realRoot, linkRoot);
+    const artAbs = join(realRoot, '.agent-terminal', 'loop', 'artifacts', 'groomed-ticket.md');
+    mkdirSync(dirname(artAbs), { recursive: true });
+    writeFileSync(artAbs, '# groomed ticket\n');
+    const iPath = realpathSync(artAbs); // as confineArtifact yields it
+    defResult = { ok: true, def: { ...commitDef(), inputs: [{ id: 'groomed-ticket', path: iPath }] } };
+    const engine = makeEngine();
+    engine.enter(linkRoot, 'plan-loop', STEP); // the operator's repo root goes through the symlink
+    engine.onInjectable();
+    expect(injected[1]).toContain('- groomed-ticket: .agent-terminal/loop/artifacts/groomed-ticket.md');
+    expect(injected[1]).not.toMatch(/groomed-ticket: \.\./); // never a `../` escape from a base/target realpath mismatch
+  });
+
+  it('computes a clean completion-artifact rel when the repo root is reached through a symlink (realpath parity)', () => {
+    // Same realpath-parity requirement as the chained-input `rel`, on the work turn's OWN completion artifact:
+    // `completionArtifact(def).path` is realpath-resolved, so its `artifactRel` — embedded in the marker
+    // instruction the agent follows to write the artifact — must diff against the canonical root too.
+    const realRoot = join(repo, 'real-out');
+    const linkRoot = join(repo, 'link-out');
+    mkdirSync(join(realRoot, '.agent-terminal', 'loop', 'artifacts'), { recursive: true });
+    symlinkSync(realRoot, linkRoot);
+    const outPath = join(realpathSync(realRoot), '.agent-terminal', 'loop', 'artifacts', 'plan.md'); // realpath'd, as confineArtifact yields
+    defResult = { ok: true, def: { ...fileDef(), outputs: [{ id: 'plan', path: outPath }] } };
+    const engine = makeEngine();
+    engine.enter(linkRoot, 'plan-loop', STEP);
+    engine.onInjectable();
+    expect(injected[1]).toContain('your .agent-terminal/loop/artifacts/plan.md artifact'); // the marker instruction names the clean rel
+    expect(injected[1]).not.toMatch(/your \.\.[^ ]*artifact/); // never a `../` escape in the completion-artifact line
   });
 });
 
@@ -531,10 +574,8 @@ describe('§27 engine — resume (AC8)', () => {
   });
 
   it('§27.10 — reconstructs a work turn re-carrying present inputs so Retry re-injects them; resume records no chained transition', () => {
-    const inputPath = join(repo, '.agent-terminal', 'loop', 'artifacts', 'groomed-ticket.md');
     const inputRel = '.agent-terminal/loop/artifacts/groomed-ticket.md';
-    mkdirSync(dirname(inputPath), { recursive: true });
-    writeFileSync(inputPath, '# groomed ticket\n');
+    const inputPath = seedInputArtifact(join(repo, '.agent-terminal', 'loop', 'artifacts', 'groomed-ticket.md'));
     defResult = { ok: true, def: { ...fileDef(), inputs: [{ id: 'groomed-ticket', path: inputPath }] } };
     writeAppLoopState(repo, { loop: 'plan-loop', step: STEP, turnKey: TURN_KEY, status: 'working' }, FIXED);
     const engine = makeEngine();
@@ -1080,10 +1121,8 @@ describe('§27 engine — redo re-enters the work turn on a clean slate carrying
   });
 
   it('§27.10 — re-carries the step\'s present inputs but records NO new chained transition (a redo is not a chain advance)', () => {
-    const inputPath = join(repo, '.agent-terminal', 'loop', 'artifacts', 'groomed-ticket.md');
     const inputRel = '.agent-terminal/loop/artifacts/groomed-ticket.md';
-    mkdirSync(dirname(inputPath), { recursive: true });
-    writeFileSync(inputPath, '# groomed ticket\n');
+    const inputPath = seedInputArtifact(join(repo, '.agent-terminal', 'loop', 'artifacts', 'groomed-ticket.md'));
     defResult = { ok: true, def: { ...fileDef(), inputs: [{ id: 'groomed-ticket', path: inputPath }] } };
     const engine = makeEngine();
     driveToGate(engine); // enter records ONE chained transition (the input is present)

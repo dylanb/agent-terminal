@@ -3956,7 +3956,7 @@ test('a §27 app plan gate renders approve + request-changes, and approve runs t
 
 // §27.10/§27.9 / N6 (sub-ticket 1) — a two-`app`-loop flow with NO pickup: an app plan-loop step (declaring a
 // `pr` typed input so approve's `gh pr ready` side-effect has a PR to flip) chained to an app impl-loop step,
-// which declares its `plan` artifact as a typed input (§18.4). plan-loop writes plan.md at the very path
+// which declares its `plan` artifact as a typed input (§27.10). plan-loop writes plan.md at the very path
 // impl-loop reads it, so on approve→advance impl-loop's work turn is entered carrying plan-loop's output.
 function seedAppChainFlowRepo(prefix: string, pr: string): string {
   const dir = mkdtempSync(join(tmpdir(), prefix));
@@ -4001,7 +4001,7 @@ test('a §27 approve chains the approved loop\'s output into the next app loop\'
   await loopPanel().locator('[data-gate-option="approve"]').click();
 
   // AC1 — approve runs plan-loop's side-effect and advances to impl-loop, whose work turn is entered carrying
-  // plan-loop's approved output (plan.md) as impl-loop's typed input (§18.4).
+  // plan-loop's approved output (plan.md) as impl-loop's typed input (§27.10).
   await expect.poll(() => readGhLog(logFile), { timeout: 15_000 }).toContain('gh pr ready 77');
   await expect.poll(() => readIf(appFlowState(repo)), { timeout: 15_000 }).toContain('step: implement'); // advanced onto the next app loop
   await expect
