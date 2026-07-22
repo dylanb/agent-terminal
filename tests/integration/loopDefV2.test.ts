@@ -215,6 +215,19 @@ describe('resolveLoopDefV2 — def-relative path confinement to the tier root (A
     const r = resolveLoopDefV2('plan-loop', { tiers: tiers(), repoDir });
     expect(r.ok).toBe(false);
   });
+
+  it('rejects a charter reference resolving through an in-tier-root symlink to a control-char-named file (§27.8)', () => {
+    // The confined (realpath-resolved) charter path is prompt-embedded like an artifact rel; a symlink to a
+    // file whose NAME carries a newline must be rejected by the resolved-path control-char guard, mirroring
+    // the input-path case — this pins confineDefRelative's resolved-path branch, not only confineArtifact's.
+    const tierRoot = join(appDir, 'loops-v2');
+    plantDef(tierRoot, 'plan-loop', VALID_DEF.replace('charter: charter/principal.md', 'charter: charter/link.md'));
+    const evil = join(tierRoot, 'plan-loop', 'charter', 'evil\nname.md');
+    writeFileSync(evil, '# principal\n');
+    symlinkSync(evil, join(tierRoot, 'plan-loop', 'charter', 'link.md'));
+    const r = resolveLoopDefV2('plan-loop', { tiers: tiers(), repoDir });
+    expect(r.ok).toBe(false);
+  });
 });
 
 describe('resolveLoopDefV2 — artifact/input/output confinement to the artifacts subtree (AC 9)', () => {
