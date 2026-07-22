@@ -104,7 +104,7 @@ describe('artifactWellFormed (§27.12 — present AND carrying the marker, never
 });
 
 describe('presentChainedInputs (§27.10/§18.4 — declared inputs an upstream loop produced, present-gated)', () => {
-  it('carries {id, rel} for each declared input the presence predicate accepts, in declaration order', () => {
+  it('carries {id, artifactRel} for each declared input the presence predicate accepts, in declaration order', () => {
     const d = def({
       inputs: [
         { id: 'plan', path: '/abs/repo/.agent-terminal/loop/artifacts/plan.md' },
@@ -112,8 +112,8 @@ describe('presentChainedInputs (§27.10/§18.4 — declared inputs an upstream l
       ],
     });
     expect(presentChainedInputs(d, '/abs/repo', () => true)).toEqual([
-      { id: 'plan', rel: '.agent-terminal/loop/artifacts/plan.md' },
-      { id: 'notes', rel: '.agent-terminal/loop/artifacts/notes.md' },
+      { id: 'plan', artifactRel: '.agent-terminal/loop/artifacts/plan.md' },
+      { id: 'notes', artifactRel: '.agent-terminal/loop/artifacts/notes.md' },
     ]);
   });
 
@@ -129,7 +129,7 @@ describe('presentChainedInputs (§27.10/§18.4 — declared inputs an upstream l
       '/abs/repo',
       (p) => p === '/abs/repo/.agent-terminal/loop/artifacts/plan.md',
     );
-    expect(present).toEqual([{ id: 'plan', rel: '.agent-terminal/loop/artifacts/plan.md' }]);
+    expect(present).toEqual([{ id: 'plan', artifactRel: '.agent-terminal/loop/artifacts/plan.md' }]);
   });
 
   it('probes each declared input at its confined absolute path (never a repo-relative re-join — CWE-22)', () => {
@@ -154,7 +154,7 @@ describe('composeAppWorkPrompt (§27.3/§27.12 — recipe + marker + done-signal
       turnKey: 'work-implement',
       doneRelPath: '.agent-terminal/loop/turn-done',
       completion: { artifactRel: '.agent-terminal/loop/artifacts/diff.md', marker: completionMarker('implement') },
-      inputs: [{ id: 'plan', rel: '.agent-terminal/loop/artifacts/plan.md' }],
+      inputs: [{ id: 'plan', artifactRel: '.agent-terminal/loop/artifacts/plan.md' }],
     });
     expect(prompt).toContain('Implement the plan.'); // the recipe body still leads
     expect(prompt).toContain('- plan: .agent-terminal/loop/artifacts/plan.md'); // the carried input, id + path
@@ -178,7 +178,7 @@ describe('composeAppWorkPrompt (§27.3/§27.12 — recipe + marker + done-signal
       turnKey: 'work-implement',
       doneRelPath: '.agent-terminal/loop/turn-done',
       completion: null,
-      inputs: [{ id: 'plan', rel: '.agent-terminal/loop/artifacts/plan.md' }],
+      inputs: [{ id: 'plan', artifactRel: '.agent-terminal/loop/artifacts/plan.md' }],
       instruction: 'Keep only the schema section.',
     });
     expect(prompt).toContain('- plan: .agent-terminal/loop/artifacts/plan.md'); // the carried input

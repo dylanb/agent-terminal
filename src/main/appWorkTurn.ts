@@ -23,12 +23,12 @@ export function completionArtifact(def: LoopDefV2): { path: string } | null {
   return binding ? { path: binding.path } : null;
 }
 
-/** A typed input artifact a §27 loop consumes (§27.10/§18.4): `id` names it, `rel` is its repo-relative path
- *  (all the carried material the prompt and audit reference). The confined absolute path is never exposed —
+/** A typed input artifact a §27 loop consumes (§27.10/§18.4): `id` names it, `artifactRel` is its repo-relative
+ *  path (all the carried material the prompt and audit reference). The confined absolute path is never exposed —
  *  it is the presence probe's concern only, held inside `presentChainedInputs`. */
 export interface ChainedInput {
   id: string;
-  rel: string;
+  artifactRel: string;
 }
 
 /** The declared typed inputs (§27.10/§18.4) an upstream loop actually produced: `isPresent` decides, per
@@ -42,7 +42,7 @@ export function presentChainedInputs(
 ): ChainedInput[] {
   return def.inputs
     .filter((i) => isPresent(i.path))
-    .map((i) => ({ id: i.id, rel: path.relative(repoDir, i.path) }));
+    .map((i) => ({ id: i.id, artifactRel: path.relative(repoDir, i.path) }));
 }
 
 /** The one-line completion marker the work prompt instructs the agent to write into its artifact and the
@@ -88,7 +88,7 @@ export function composeAppWorkPrompt(req: AppWorkPromptReq): string {
     parts.push(
       '',
       "INPUTS — the previous loop produced these artifact(s), carried in as this loop's inputs. Read each before you begin:",
-      ...req.inputs.map((i) => `  - ${i.id}: ${i.rel}`),
+      ...req.inputs.map((i) => `  - ${i.id}: ${i.artifactRel}`),
     );
   }
   // §27.9/AC5 — a redo re-enters the work turn on a clean slate: the recipe body (which sources the ticket and
