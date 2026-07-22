@@ -104,12 +104,12 @@ describe('artifactWellFormed (§27.12 — present AND carrying the marker, never
 });
 
 describe('resolveChainedInputs (§27.10/§18.4 — the prior loop\'s outputs as this loop\'s typed inputs)', () => {
-  it('resolves each declared input binding to its id and repo-relative path', () => {
+  it('resolves each declared input binding to its id, repo-relative path, and confined absolute path', () => {
     const d = def({
       inputs: [{ id: 'plan', path: '/abs/repo/.agent-terminal/loop/artifacts/plan.md' }],
     });
     expect(resolveChainedInputs(d, '/abs/repo')).toEqual([
-      { id: 'plan', rel: '.agent-terminal/loop/artifacts/plan.md' },
+      { id: 'plan', rel: '.agent-terminal/loop/artifacts/plan.md', path: '/abs/repo/.agent-terminal/loop/artifacts/plan.md' },
     ]);
   });
 
