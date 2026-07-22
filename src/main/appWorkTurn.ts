@@ -24,18 +24,22 @@ export function completionArtifact(def: LoopDefV2): { path: string } | null {
 }
 
 /** A typed input artifact a §27 loop consumes (§27.10/§18.4), resolved from the def's declared input
- *  binding: `id` names it, `rel` is its repo-relative path — the material a chained work turn carries. */
+ *  binding: `id` names it, `rel` is its repo-relative path (the material a chained work turn carries), and
+ *  `path` is its confined absolute path (the presence probe's read target — carried through from the def
+ *  parser's `confineArtifact` so the fs check never re-derives a read target from repo-relative data). */
 export interface ChainedInput {
   id: string;
   rel: string;
+  path: string;
 }
 
 /** The typed input artifacts a §27 loop declares (§27.10/§18.4), each `{id, path}` binding resolved to its
- *  id and repo-relative path — the outputs a prior loop wrote into the shared artifacts subtree, carried in
- *  as this loop's inputs. Empty for the first loop in a chain (it declares no inputs). Data-driven: never a
- *  loop-name check. Presence on disk (did the prior loop actually produce it?) is the caller's fs concern. */
+ *  id, repo-relative path, and confined absolute path — the outputs a prior loop wrote into the shared
+ *  artifacts subtree, carried in as this loop's inputs. Empty for the first loop in a chain (it declares no
+ *  inputs). Data-driven: never a loop-name check. Presence on disk (did the prior loop actually produce it?)
+ *  is the caller's fs concern, probed against the confined `path`. */
 export function resolveChainedInputs(def: LoopDefV2, repoDir: string): ChainedInput[] {
-  return def.inputs.map((i) => ({ id: i.id, rel: path.relative(repoDir, i.path) }));
+  return def.inputs.map((i) => ({ id: i.id, rel: path.relative(repoDir, i.path), path: i.path }));
 }
 
 /** The one-line completion marker the work prompt instructs the agent to write into its artifact and the
@@ -67,8 +71,9 @@ export interface AppWorkPromptReq {
   instruction?: string;
   /** §27.10/§18.4 — the prior loop's output artifacts, resolved as this loop's typed inputs and carried into
    *  the work turn. Empty/absent for the first loop in a chain (no upstream artifact); the caller passes only
-   *  inputs whose artifact is present on disk. */
-  inputs?: ChainedInput[];
+   *  inputs whose artifact is present on disk. The prompt names id + repo-relative path only — the confined
+   *  absolute `path` is the probe's concern, never the prompt's, so it takes the display slice of the shape. */
+  inputs?: Pick<ChainedInput, 'id' | 'rel'>[];
 }
 
 /** Compose the §27 work-turn prompt (§27.3): the def's recipe body, then — for a file-producing turn — the

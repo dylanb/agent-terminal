@@ -321,7 +321,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
   // on disk at the def-declared path. A loop entered with no upstream artifact (the first in a chain, or one
   // whose input was never produced) carries none, so no chained-input block and no chained-transition event.
   const presentChainedInputs = (def: LoopDefV2, repoDir: string): ChainedInput[] =>
-    resolveChainedInputs(def, repoDir).filter((i) => deps.readArtifact(path.join(repoDir, i.rel)) !== null);
+    resolveChainedInputs(def, repoDir).filter((i) => deps.readArtifact(i.path) !== null);
 
   const persist = (status: AppLoopRunState['status'], errorReason?: string): boolean => {
     if (!active) return false;
