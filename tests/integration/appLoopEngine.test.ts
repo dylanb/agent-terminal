@@ -1101,7 +1101,8 @@ describe('§27 engine — redo re-enters the work turn on a clean slate carrying
     const chainAuditsAfter = audit.mock.calls.filter((c) => /chained transition/i.test(c[1])).length;
     expect(chainAuditsAfter).toBe(chainAuditsBefore); // the non-advance re-entry records no new transition
     // Read the RAW persisted YAML, not readAppLoopState: parseAppLoopState rebuilds from a fixed field
-    // allow-list and would strip an `inputs` key, hiding the very leak this pins (appLoopEngine.ts:178-179).
+    // allow-list that strips unknown keys, so it would hide the very leak this pins — the never-persisted
+    // `inputs` on the work-turn ActiveAppTurn variant.
     expect(yaml.load(readFileSync(appLoopStateFile(repo)!, 'utf8'))).not.toHaveProperty('inputs');
   });
 });
