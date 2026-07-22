@@ -5,7 +5,8 @@
 // writer↔reader cannot desync — CLAUDE.md shared-semantics); and the work-prompt composer.
 
 import { doneSignalInstruction } from '../shared/loopTurn';
-import type { ArtifactBinding, BoundaryPolicy, LoopDefV2 } from './loopDefV2';
+import type { BoundaryPolicy, LoopDefV2 } from './loopDefV2';
+import type { ChainedInput } from './chainedInput';
 
 /** The instance command a boundary policy issues (§27.7). `clear` resets context; `compact` carries the
  *  def's message naming what must survive it. The graded observable is the command issued + the idle
@@ -20,42 +21,6 @@ export function boundaryCommand(policy: BoundaryPolicy): string {
 export function completionArtifact(def: LoopDefV2): { path: string; rel: string } | null {
   const binding = def.outputs.find((o) => o.id === def.work.artifact);
   return binding ? { path: binding.path, rel: binding.rel } : null;
-}
-
-/** §27.10 */
-export interface ChainedInput {
-  id: string;
-  rel: string;
-}
-
-/** §27.10 */
-export type ChainedInputState = 'produced' | 'not-produced' | 'unreadable';
-
-/** §27.10 */
-export interface UnresolvedChainedInput {
-  id: string;
-  state: Exclude<ChainedInputState, 'produced'>;
-}
-
-/** §27.10 */
-export interface ChainedInputResolution {
-  carried: ChainedInput[];
-  unresolved: UnresolvedChainedInput[];
-}
-
-/** §27.10 */
-export function resolveChainedInputs(
-  bindings: ArtifactBinding[],
-  stateOf: (absPath: string) => ChainedInputState,
-): ChainedInputResolution {
-  const carried: ChainedInput[] = [];
-  const unresolved: UnresolvedChainedInput[] = [];
-  for (const i of bindings) {
-    const state = stateOf(i.path);
-    if (state === 'produced') carried.push({ id: i.id, rel: i.rel });
-    else unresolved.push({ id: i.id, state });
-  }
-  return { carried, unresolved };
 }
 
 /** The one-line completion marker the work prompt instructs the agent to write into its artifact and the

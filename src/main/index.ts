@@ -124,7 +124,8 @@ import {
 import { provideAppLoopView } from './loopViewV2';
 import { createAppLoopEngine, type AppLoopEntry } from './appLoopEngine';
 import { appLoopEntryFor } from './appLoopEntry';
-import { APP_LOOP_DIR_SEGMENTS, armInterrupt, clearPolish, consolidatorOutputFile, consolidatorOutputRel, enterPolish, isPolishActiveForStep, readAppLoopState, roundReportFile, roundReportRel, writeAppLoopState } from './appLoopState';
+import { armInterrupt, clearPolish, consolidatorOutputFile, consolidatorOutputRel, enterPolish, isPolishActiveForStep, readAppLoopState, roundReportFile, roundReportRel, writeAppLoopState } from './appLoopState';
+import { APP_LOOP_DIR_SEGMENTS } from './appLoopPaths';
 import { resolveLoopDefV2, type LoopDefV2Context } from './loopDefV2';
 import { createRealAppGateGitHub } from './appGateGithub';
 import { runAppGateDecision as runAppGateDecisionImpl } from './appGateDecision';

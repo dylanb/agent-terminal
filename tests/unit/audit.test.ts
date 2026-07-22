@@ -443,8 +443,10 @@ describe('§27 chained-transition audit vocabulary', () => {
     // Live case: a step declares inputs and carries none. A dangling `: ` splits to [''] — one artifact whose
     // id is the empty string — which is exactly the writer↔reader desync the shared vocabulary exists to stop.
     const cmd = chainedTransitionAuditCmd('implement', [], ['plan']);
-    expect(cmd).not.toMatch(/:\s*\(/);
-    expect(cmd).toContain('none');
+    expect(cmd).not.toMatch(/:\s*\(declared/); // no blank slot where the carried ids belong
+    // `none` is a legal binding id (`^[a-z0-9][a-z0-9-]*$`), so a sentinel drawn from that grammar makes one
+    // carried artifact byte-identical to zero — the same reader ambiguity, relocated rather than removed.
+    expect(cmd).not.toBe(chainedTransitionAuditCmd('implement', ['none'], ['plan']));
   });
 });
 

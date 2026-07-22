@@ -255,6 +255,46 @@ describe('§27 loop-state — the redo instruction for a work run', () => {
   });
 });
 
+// §27.10 — the binding ids this step's entry decided to carry, persisted so a redo or a relaunch honours that
+// decision rather than re-deriving one from whatever is on disk. Absent means carried nothing, so a malformed
+// value must fail toward NOT carrying rather than toward carrying everything declared.
+describe('§27 loop-state — the chained-input carry for a work run', () => {
+  const WORK_CHAINED: AppLoopRunState = {
+    loop: 'plan-loop',
+    step: 'plan',
+    turnKey: 'work-plan',
+    status: 'working',
+    chainedInputs: ['groomed-ticket', 'design-notes'],
+  };
+
+  it('round-trips the carried binding ids in declaration order', () => {
+    const back = parseAppLoopState(serializeAppLoopState(WORK_CHAINED, FIXED));
+    expect(back).toEqual(WORK_CHAINED);
+    expect(back?.chainedInputs).toEqual(['groomed-ticket', 'design-notes']);
+  });
+
+  it('carries no field for a run that chained nothing (absent = carried nothing)', () => {
+    const text = serializeAppLoopState({ loop: 'plan-loop', step: 'plan', turnKey: 'work-plan', status: 'working' }, FIXED);
+    expect(text).not.toContain('chained_inputs:');
+    expect(parseAppLoopState(text)?.chainedInputs).toBeUndefined();
+  });
+
+  it('reads a malformed carry as carried nothing while every sibling field survives (field-local)', () => {
+    for (const bad of ['chained_inputs: groomed-ticket', 'chained_inputs:\n  - ok\n  - bad: 1', 'chained_inputs: []']) {
+      const text = serializeAppLoopState(WORK_CHAINED, FIXED).replace(/chained_inputs:\n(  - .*\n)+/, `${bad}\n`);
+      const back = parseAppLoopState(text);
+      expect(back?.chainedInputs).toBeUndefined();
+      expect(back?.step).toBe('plan'); // the rest of the document is unaffected
+      expect(back?.status).toBe('working');
+    }
+  });
+
+  it('survives a write→read round-trip on disk (relaunch reconstructs the carry)', () => {
+    writeAppLoopState(repo, WORK_CHAINED, FIXED);
+    expect(readAppLoopState(repo)?.chainedInputs).toEqual(['groomed-ticket', 'design-notes']);
+  });
+});
+
 // §27.5/AC7 — the round report's write-target (the fixer, via roundReportRel) and read-source (the engine,
 // via roundReportFile) derive from ONE resolver so they cannot drift (CLAUDE.md writer↔reader-location). The
 // location is round-keyed and disjoint from the engine's own run-state file, confined to the untrusted repo

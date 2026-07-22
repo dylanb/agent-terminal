@@ -375,7 +375,7 @@ export function gateDecisionAuditCmd(kind: GateDecisionAuditKind, option: string
  *  evidence that THIS run's upstream step wrote that file; closing it needs run-scoped artifact paths, which
  *  reach confineArtifact and every shipped def and belong to their own sub-ticket. */
 export function chainedTransitionAuditCmd(step: string, artifactIds: string[], unresolvedIds: string[] = []): string {
-  const carried = `§27 chained transition into ${step}: ${artifactIds.length > 0 ? artifactIds.join(', ') : 'none'}`;
+  const carried = `§27 chained transition into ${step}: ${artifactIds.length > 0 ? artifactIds.join(', ') : '(none)'}`;
   return unresolvedIds.length > 0 ? `${carried} (declared but unresolved: ${unresolvedIds.join(', ')})` : carried;
 }
 

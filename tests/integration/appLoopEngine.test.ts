@@ -354,14 +354,22 @@ describe('§27 engine — chained input into the work turn (AC1)', () => {
     expect(audit.mock.calls.some((c) => /chained transition/i.test(c[1]))).toBe(false);
   });
 
-  it('re-carries the step\'s inputs without recording a second transition when the step is RE-entered', () => {
+  it('re-carries what the step\'s entry carried, without recording a second transition, when the step is RE-entered', () => {
     const iPath = seedInputArtifact(CHAINED_INPUT_PATH());
     defResult = { ok: true, def: { ...fileDef(), inputs: [binding('groomed-ticket', iPath)] } };
     const engine = makeEngine();
+    engine.enter(repo, 'plan-loop', STEP, 'chain-advance'); // the entry that established the carry
+    engine.onInjectable();
+    const chainedBefore = audit.mock.calls.filter((c) => /chained transition/i.test(c[1])).length;
+    engine.onStall(); // the turn leaves flight, so the step can be re-entered
+    const before = injected.length;
     engine.enter(repo, 'plan-loop', STEP, 're-entry');
     engine.onInjectable();
-    expect(injected[1]).toContain(`- groomed-ticket: ${CHAINED_INPUT_REL}`); // the turn still gets its material
-    expect(audit.mock.calls.some((c) => /chained transition/i.test(c[1]))).toBe(false); // but nothing chained
+    engine.onInjectable();
+    const prompt = injected.slice(before).find((p) => p.includes('Produce the plan.'));
+    expect(prompt).toContain(`- groomed-ticket: ${CHAINED_INPUT_REL}`); // the turn still gets its material
+    const chainedAfter = audit.mock.calls.filter((c) => /chained transition/i.test(c[1])).length;
+    expect(chainedAfter).toBe(chainedBefore); // but the re-entry is not itself a chain advance
   });
 
   it('surfaces a declared input that exists but cannot be read, rather than treating it as never produced', () => {
@@ -652,6 +660,105 @@ describe('§27 engine — resume (AC8)', () => {
     const prompt = injected.find((p) => p.includes('Produce the plan.'));
     expect(prompt).toBeDefined();
     expect(prompt).toContain(`- groomed-ticket: ${inputRel}`); // the reconstructed turn carried the present input
+  });
+});
+
+describe('§27.10 — the entry\'s carry is durable across every path that re-enters or reconstructs the step', () => {
+  const INPUT_REL = '.agent-terminal/loop/artifacts/groomed-ticket.md';
+  const REDO_INSTRUCTION = 'Redo the plan.';
+
+  /** Seed the chained-input artifact for `dir` and bind the def to it. */
+  function bindSeededInput(dir: string): string {
+    const p = seedInputArtifact(join(dir, '.agent-terminal', 'loop', 'artifacts', 'groomed-ticket.md'));
+    defResult = { ok: true, def: { ...fileDef(), inputs: [binding('groomed-ticket', p)] } };
+    return p;
+  }
+
+  it('writes the carry into the run state on every phase of the step, not only the work phase', () => {
+    bindSeededInput(repo);
+    const engine = makeEngine();
+    enterAndInjectWork(engine, 'chain-advance');
+    driveFromWorkToGate(engine); // the review and consolidate phases persist over the same file
+    expect(readAppLoopState(repo)?.chainedInputs).toEqual(['groomed-ticket']);
+  });
+
+  it('re-injects the recorded carry when a redo arrives after a relaunch (a NEW engine, carry only on disk)', () => {
+    bindSeededInput(repo);
+    const engine = makeEngine();
+    enterAndInjectWork(engine, 'chain-advance');
+    driveFromWorkToGate(engine);
+    const relaunched = makeEngine(); // no in-memory carry — the record on disk is the only source
+    relaunched.resume(repo);
+    const before = injected.length;
+    expect(relaunched.redo(repo, STEP, CONSOLIDATE_KEY, REDO_INSTRUCTION)).toBe(true);
+    relaunched.onInjectable();
+    relaunched.onInjectable();
+    const prompt = injected.slice(before).find((p) => p.includes('Produce the plan.'));
+    expect(prompt).toContain(`- groomed-ticket: ${INPUT_REL}`);
+  });
+
+  it('keeps the recorded carry in the run state when a resumed turn is retried (a relaunch must not erase it)', () => {
+    bindSeededInput(repo);
+    writeAppLoopState(repo, { loop: 'plan-loop', step: STEP, turnKey: TURN_KEY, status: 'working', chainedInputs: ['groomed-ticket'] }, FIXED);
+    const engine = makeEngine();
+    engine.resume(repo);
+    engine.routeOut(repo, STEP, TURN_KEY, 'retry'); // the first persist after a relaunch rewrites the document
+    expect(readAppLoopState(repo)?.chainedInputs).toEqual(['groomed-ticket']);
+  });
+
+  it('does NOT acquire chained material on a RE-ENTRY of a step whose entry refused to carry it', () => {
+    // A fresh run deliberately carried nothing. Re-entering that step (flow.provideInput) must honour the
+    // entry's decision, not re-probe the disk and pick the leftover artifact back up.
+    bindSeededInput(repo);
+    const engine = makeEngine();
+    enterAndInjectWork(engine, 'fresh-run');
+    engine.onStall(); // the turn leaves flight, so the step can be re-entered
+    const before = injected.length;
+    engine.enter(repo, 'plan-loop', STEP, 're-entry');
+    engine.onInjectable();
+    engine.onInjectable();
+    const prompt = injected.slice(before).find((p) => p.includes('Produce the plan.'));
+    expect(prompt).toBeDefined();
+    expect(prompt).not.toContain(INPUT_REL);
+  });
+
+  it('does not let one repo\'s carry govern another repo\'s step of the same name', () => {
+    // One engine serves every open repo, and the shipped flow gives every repo the same step ids — so a carry
+    // decided in repo B must not be adopted by repo A's redo, nor written into repo A's run state.
+    const repoB = mkdtempSync(join(tmpdir(), 'appengine-b-'));
+    try {
+      bindSeededInput(repo); // repo A has a leftover artifact on disk, but its gate recorded NO carry
+      writeAppLoopState(repo, { loop: 'plan-loop', step: STEP, turnKey: CONSOLIDATE_KEY, status: 'complete', verdict: 'clean' }, FIXED);
+      const engine = makeEngine();
+      bindSeededInput(repoB);
+      engine.enter(repoB, 'plan-loop', STEP, 'chain-advance'); // repo B establishes a carry for step `plan`
+      engine.onStall();
+      bindSeededInput(repo);
+      const before = injected.length;
+      expect(engine.redo(repo, STEP, CONSOLIDATE_KEY, REDO_INSTRUCTION)).toBe(true);
+      engine.onInjectable();
+      engine.onInjectable();
+      const prompt = injected.slice(before).find((p) => p.includes('Produce the plan.'));
+      expect(prompt).toBeDefined();
+      expect(prompt).not.toContain(INPUT_REL); // repo A's step carried nothing and still carries nothing
+      expect(readAppLoopState(repo)?.chainedInputs).toBeUndefined();
+    } finally {
+      rmSync(repoB, { recursive: true, force: true });
+    }
+  });
+
+  it('says so when a recorded carry id no longer matches any binding the def declares', () => {
+    // The def is re-resolved on every reconstruct path, so an edit that renames an input binding strands the
+    // material the entry recorded. Dropping it silently is the swallowed-failure the standards forbid.
+    bindSeededInput(repo);
+    const engine = makeEngine();
+    enterAndInjectWork(engine, 'chain-advance');
+    driveFromWorkToGate(engine);
+    const renamed = seedInputArtifact(join(repo, '.agent-terminal', 'loop', 'artifacts', 'groomed-ticket-v2.md'));
+    defResult = { ok: true, def: { ...fileDef(), inputs: [binding('groomed-ticket-v2', renamed)] } };
+    emitError.mockClear();
+    expect(engine.redo(repo, STEP, CONSOLIDATE_KEY, REDO_INSTRUCTION)).toBe(true);
+    expect(emitError).toHaveBeenCalledWith(expect.stringContaining('groomed-ticket'));
   });
 });
 

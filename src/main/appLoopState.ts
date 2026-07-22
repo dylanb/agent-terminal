@@ -21,7 +21,6 @@ import { CONSOLIDATOR_VERDICTS, verdictCarriesReason, type ConsolidatorVerdict }
  *  def parsing); this keys resume-file compatibility. A file declaring any other value fails to parse. */
 export const APP_LOOP_STATE_SCHEMA = 1;
 
-export { APP_LOOP_DIR_SEGMENTS, ARTIFACTS_SUBDIR } from './appLoopPaths';
 const RUN_STATE_FILE = 'run-state.yaml';
 /** The round reports live under a dedicated subtree of the loop area, keyed by round number (§27.5/§27.10),
  *  disjoint from the run-state file and from every other round's report. */

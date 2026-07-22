@@ -5,8 +5,8 @@ import {
   completionArtifact,
   completionMarker,
   composeAppWorkPrompt,
-  resolveChainedInputs,
 } from '../../src/main/appWorkTurn';
+import { resolveChainedInputs } from '../../src/main/chainedInput';
 import type { BoundaryPolicy, LoopDefV2 } from '../../src/main/loopDefV2';
 
 // §27.7/§27.8/§27.12 — the pure, data-driven pieces of the §27 work turn: the boundary-policy→command

@@ -31,6 +31,19 @@ describe('chainedInputState (§27.10 — what the upstream loop left at a bindin
     expect(chainedInputState(p)).toBe('unreadable');
   });
 
+  it.skipIf(process.getuid?.() === 0)('is unreadable when the artifact itself denies reading', () => {
+    // The canonical case the tri-state exists for: an artifact written under another uid. stat succeeds on it
+    // — only the read fails — so classifying on stat alone announces it to the agent as required reading.
+    const p = join(dir, 'plan.md');
+    writeFileSync(p, '# plan\n');
+    chmodSync(p, 0o000);
+    try {
+      expect(chainedInputState(p)).toBe('unreadable');
+    } finally {
+      chmodSync(p, 0o644);
+    }
+  });
+
   it.skipIf(process.getuid?.() === 0)('is unreadable when an ancestor denies traversal', () => {
     const locked = join(dir, 'locked');
     mkdirSync(locked);

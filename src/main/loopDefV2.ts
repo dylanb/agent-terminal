@@ -158,17 +158,24 @@ function confineDefRelative(tierRoot: string, defDir: string, ref: string, what:
 /** Confine an artifact/input/output path (§27.10) to the dedicated artifacts subtree of the per-repo loop
  *  area — disjoint from the engine's own loop state and round reports, so `../state.yaml` escapes onto the
  *  engine's own state and is rejected. Throws DefError. */
+/** A control character in a prompt-embedded path would break the line it is named on and leave the
+ *  remainder standing as its own instruction to a tool-capable agent (CWE-74). */
+const CONTROL_CHAR = /[\u0000-\u001f\u007f]/;
+
 function confineArtifact(repoDir: string, pattern: string, what: string): { path: string; rel: string } {
   if (UNEXPANDED_SLOT.test(pattern)) fail(`${what} path carries an unexpanded slot: ${pattern}`);
   // The composed `rel` is interpolated into the agent-facing work prompt, where a control character would
   // break the line it is named on and leave the remainder standing as its own instruction (CWE-74).
-  if (/[\u0000-\u001f\u007f]/.test(pattern)) fail(`${what} path contains a control character`);
+  if (CONTROL_CHAR.test(pattern)) fail(`${what} path contains a control character`);
   const jail = resolveJail(repoDir, ...APP_LOOP_DIR_SEGMENTS, ARTIFACTS_SUBDIR);
   if (jail === null) fail(`${what} loop area is unresolvable`);
   const confined = confinedRealPath(jail, path.resolve(jail, pattern));
   if (confined === null) fail(`${what} path escapes the artifacts subtree: ${pattern}`);
   if (confined === jail) fail(`${what} path must name a file inside the artifacts subtree: ${pattern}`);
   const rel = [...APP_LOOP_DIR_SEGMENTS, ARTIFACTS_SUBDIR, ...path.relative(jail, confined).split(path.sep)].join('/');
+  // `rel` is composed from the POST-realpath location, whose segment names are repo working-tree content
+  // rather than def content (§27.8) — a symlink to a name carrying a control character passes the check above.
+  if (CONTROL_CHAR.test(rel)) fail(`${what} path resolves through a name containing a control character`);
   return { path: confined, rel };
 }
 

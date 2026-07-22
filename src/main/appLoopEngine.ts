@@ -19,7 +19,8 @@
 import path from 'node:path';
 import { createTurnRunner, type HostedAgentState, type TurnRunner } from './loopOrchestrator';
 import type { LoopDefV2, LoopDefV2Result } from './loopDefV2';
-import { artifactWellFormed, boundaryCommand, completionArtifact, completionMarker, composeAppWorkPrompt, resolveChainedInputs, type ChainedInput, type ChainedInputState } from './appWorkTurn';
+import { artifactWellFormed, boundaryCommand, completionArtifact, completionMarker, composeAppWorkPrompt } from './appWorkTurn';
+import { resolveChainedInputs, type ChainedInput, type ChainedInputState } from './chainedInput';
 import { catalogPersonas, composeReviewAndFixPrompt, preReviewBoundaryCommand, reviewRoster, type RosterEntry } from './reviewTurn';
 import { composeConsolidatePrompt, lastTwoReportRounds, preConsolidateBoundaryCommand } from './consolidateTurn';
 import { clearTurnDone } from './turnDoneFile';
@@ -27,7 +28,8 @@ import { TURN_DONE_FILENAME } from '../shared/loopTurn';
 import { failedReviewers, roundReportWellFormed } from '../shared/roundReport';
 import { consolidatorOutputWellFormed, parseConsolidatorOutput, verdictCarriesReason, type ConsolidatorVerdict } from '../shared/consolidatorOutput';
 import { chainedTransitionAuditCmd, consolidateAuditCmd, reviewRoundAuditCmd } from '../shared/audit';
-import { APP_LOOP_DIR_SEGMENTS, clearInterrupt, readAppLoopState, readArmedInterrupt, type AppLoopRunState } from './appLoopState';
+import { clearInterrupt, readAppLoopState, readArmedInterrupt, type AppLoopRunState } from './appLoopState';
+import { APP_LOOP_DIR_SEGMENTS } from './appLoopPaths';
 
 /** The §27 done-file lives in the §27 loop area, disjoint from §26's `.agent-loop/` (AC10 separation). */
 const APP_TURN_DONE_SUBDIR = path.join(...APP_LOOP_DIR_SEGMENTS);
@@ -321,21 +323,35 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
   // even when the persisted error write failed (§27.12c). Cleared on every non-error persist.
   let liveError: (AppLoopLiveError & { repoDir: string }) | null = null;
 
-  /** §27.10 — the carry the current step's entry established, held for the life of that step so every phase
-   *  persists it and a redo at the gate honours the entry rather than the disk. */
-  let stepCarry: { stepId: string; ids: string[] } | null = null;
+  /** §27.10 */
+  let stepCarry: { repoDir: string; stepId: string; ids: string[] } | null = null;
 
-  /** §27.10 — resolve a step's carry and surface what did not resolve, for EVERY path that enters or
-   *  reconstructs a work turn. `only` restricts the bindings to the ids a previous entry recorded, which is
-   *  what makes that entry's decision durable across redo and resume; `record` writes the chained-transition
-   *  event, which only a real chain advance may claim. Best-effort: never aborts the turn. */
+  const setCarry = (repoDir: string, stepId: string, ids: string[]): void => {
+    stepCarry = { repoDir, stepId, ids };
+  };
+
+  /** §27.10 — the live carry, only when it belongs to the very step being asked about. */
+  const liveCarry = (repoDir: string, stepId: string): string[] | null =>
+    stepCarry !== null && stepCarry.repoDir === repoDir && stepCarry.stepId === stepId ? stepCarry.ids : null;
+
+  /** §27.10 — the ids this step's entry recorded: the live record when it is this repo's step, else the one
+   *  persisted for it. Absent everywhere reads as carried nothing, so recovery fails toward NOT carrying. */
+  const recordedCarry = (repoDir: string, stepId: string, persisted?: string[]): string[] =>
+    liveCarry(repoDir, stepId) ?? persisted ?? [];
+
+  /** §27.10 — `declared` may establish a NEW carry from everything the def declares; `recorded` re-resolves
+   *  exactly the ids an earlier entry decided on. Naming the scope keeps "carry everything" from being
+   *  reachable by omitting an argument. */
+  type ChainScope = { kind: 'declared' } | { kind: 'recorded'; ids: string[] };
+
   const chainFor = (
     repoDir: string,
     stepId: string,
     def: LoopDefV2,
-    opts: { only?: string[]; record: boolean },
+    opts: { scope: ChainScope; record: boolean },
   ): ChainedInput[] => {
-    const bindings = opts.only ? def.inputs.filter((i) => opts.only!.includes(i.id)) : def.inputs;
+    const scope = opts.scope;
+    const bindings = scope.kind === 'recorded' ? def.inputs.filter((i) => scope.ids.includes(i.id)) : def.inputs;
     const chain = resolveChainedInputs(bindings, (absPath) => deps.inputState(absPath));
     if (opts.record && (chain.carried.length > 0 || chain.unresolved.length > 0)) {
       deps.audit(
@@ -352,6 +368,12 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
     if (unreadable.length > 0) {
       deps.emitError(`§27 ${stepId}: declared input(s) present but unreadable — ${unreadable.join(', ')}`);
     }
+    // A recorded id the def no longer declares is material this step's entry established and the re-resolved
+    // def has stranded; dropping it silently loses the operator's chain with nothing said.
+    const unbound = scope.kind === 'recorded' ? scope.ids.filter((id) => !def.inputs.some((i) => i.id === id)) : [];
+    if (unbound.length > 0) {
+      deps.emitError(`§27 ${stepId}: recorded input(s) no longer declared by the loop def — ${unbound.join(', ')}`);
+    }
     return chain.carried;
   };
 
@@ -367,10 +389,8 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
     const feedback = active.phase === 'review' ? active.feedback : undefined;
     // §27.9/AC5 — a work turn entered by redo carries the operator's instruction; persisted for the same reason.
     const instruction = active.phase === 'work' ? active.instruction : undefined;
-    // §27.10 — the carry the STEP's entry established. Written on every phase of that step (the review and
-    // consolidate turns persist over the same file), so a redo at the gate or a relaunch reconstructs the
-    // entry's decision rather than re-deriving one from whatever is on disk.
-    const chainedInputs = stepCarry?.stepId === active.stepId ? stepCarry.ids : undefined;
+    // §27.10
+    const chainedInputs = liveCarry(active.repoDir, active.stepId) ?? undefined;
     let landed = true;
     try {
       deps.persist(active.repoDir, {
@@ -720,8 +740,18 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       } catch (e) {
         deps.audit(repoDir, `§27 ${loopName} ${stepId} enter clear-polish failed: ${e instanceof Error ? e.message : String(e)}`, 1);
       }
-      const inputs = entry === 'fresh-run' ? [] : chainFor(repoDir, stepId, r.def, { record: entry === 'chain-advance' });
-      stepCarry = { stepId, ids: inputs.map((i) => i.id) };
+      // §27.10 — only a real chain advance may establish a NEW carry. A fresh run carries nothing (no upstream
+      // loop ran), and a re-entry re-resolves exactly what this step's entry already decided on.
+      let ids: string[] = [];
+      let inputs: ChainedInput[] = [];
+      if (entry === 'chain-advance') {
+        inputs = chainFor(repoDir, stepId, r.def, { scope: { kind: 'declared' }, record: true });
+        ids = inputs.map((i) => i.id);
+      } else if (entry === 're-entry') {
+        ids = recordedCarry(repoDir, stepId, readAppLoopState(repoDir)?.chainedInputs);
+        inputs = chainFor(repoDir, stepId, r.def, { scope: { kind: 'recorded', ids }, record: false });
+      }
+      setCarry(repoDir, stepId, ids);
       start(activeTurnFor(repoDir, loopName, stepId, r.def, { inputs }));
     },
     onInjectable() {
@@ -842,12 +872,22 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       // which threads the instruction; no round, no feedback, no findings ride along (a fresh work run).
       const r = deps.resolveDef(repoDir, state.loop);
       if (!r.ok) return false;
-      start(activeTurnFor(repoDir, state.loop, stepId, r.def, { instruction, inputs: chainFor(repoDir, stepId, r.def, { only: stepCarry?.stepId === stepId ? stepCarry.ids : (state.chainedInputs ?? []), record: false }) }));
+      const ids = recordedCarry(repoDir, stepId, state.chainedInputs);
+      setCarry(repoDir, stepId, ids);
+      start(
+        activeTurnFor(repoDir, state.loop, stepId, r.def, {
+          instruction,
+          inputs: chainFor(repoDir, stepId, r.def, { scope: { kind: 'recorded', ids }, record: false }),
+        }),
+      );
       return true;
     },
     resume(repoDir) {
       const state = readAppLoopState(repoDir);
       if (!state) return;
+      // §27.10 — restore the entry's record before any phase of this step persists again, or the first write
+      // after a relaunch rewrites the document without it and the carry is gone for good.
+      setCarry(repoDir, state.step, state.chainedInputs ?? []);
       // Reconstruct which turn stopped so Retry/accept act on the right one — re-resolving the def so the
       // reconstructed turn carries its real completion contract (accept must read the true artifact). NEVER
       // re-drive it: an `error`/`complete` turn is human-owned; the runner stays idle until an explicit
@@ -881,7 +921,10 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       }
       const r = deps.resolveDef(repoDir, state.loop);
       active = r.ok
-        ? activeTurnFor(repoDir, state.loop, state.step, r.def, { instruction: state.instruction, inputs: chainFor(repoDir, state.step, r.def, { only: state.chainedInputs ?? [], record: false }) })
+        ? activeTurnFor(repoDir, state.loop, state.step, r.def, {
+            instruction: state.instruction,
+            inputs: chainFor(repoDir, state.step, r.def, { scope: { kind: 'recorded', ids: state.chainedInputs ?? [] }, record: false }),
+          })
         : { phase: 'work', repoDir, loopName: state.loop, stepId: state.step, turnKey: state.turnKey, recipePath: '', boundaryCmd: '/clear', completion: { kind: 'unresolved' }, ...(state.instruction !== undefined ? { instruction: state.instruction } : {}) };
       makeRoutable();
     },
