@@ -239,6 +239,16 @@ describe('resolveLoopDefV2 — artifact/input/output confinement to the artifact
     const r = resolveLoopDefV2('plan-loop', { tiers: tiers(), repoDir });
     expect(r.ok).toBe(false);
   });
+
+  it('rejects an input path carrying an embedded newline, as a charter/recipe ref already is (§27.10)', () => {
+    // §27.10 — a carried input's repo-relative path is embedded verbatim into the work-turn prompt's
+    // `  - <id>: <rel>` INPUTS line; a newline in it breaks out of that line and injects free-standing
+    // prompt text, the same reason confineDefRelative rejects a newline in a prompt-embedded charter ref.
+    const withNewline = VALID_DEF.replace('path: artifacts/groomed-ticket.md', 'path: "artifacts/groomed\\ninjected.md"');
+    plantDef(join(appDir, 'loops-v2'), 'plan-loop', withNewline);
+    const r = resolveLoopDefV2('plan-loop', { tiers: tiers(), repoDir });
+    expect(r.ok).toBe(false);
+  });
 });
 
 describe('resolveLoopDefV2 — structural field rejections surface the offending field (AC 6)', () => {

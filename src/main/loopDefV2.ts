@@ -156,6 +156,7 @@ function confineDefRelative(tierRoot: string, defDir: string, ref: string, what:
  *  area — disjoint from the engine's own loop state and round reports, so `../state.yaml` escapes onto the
  *  engine's own state and is rejected. Throws DefError. */
 function confineArtifact(repoDir: string, pattern: string, what: string): string {
+  if (pattern.includes('\n')) fail(`${what} path must be a single-line reference, not an inline body`);
   if (UNEXPANDED_SLOT.test(pattern)) fail(`${what} path carries an unexpanded slot: ${pattern}`);
   const jail = resolveJail(repoDir, '.agent-terminal', 'loop', 'artifacts');
   if (jail === null) fail(`${what} loop area is unresolvable`);
