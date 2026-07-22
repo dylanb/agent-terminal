@@ -238,6 +238,13 @@ function seedInputArtifact(absPath: string, content = '# groomed ticket\n'): str
   return realpathSync(absPath);
 }
 
+/** Seed the chained-input artifact under `dir` and bind the def's single input to it. */
+function bindSeededInput(dir: string): string {
+  const p = seedInputArtifact(join(dir, '.agent-terminal', 'loop', 'artifacts', 'groomed-ticket.md'));
+  defResult = { ok: true, def: { ...fileDef(), inputs: [binding('groomed-ticket', p)] } };
+  return p;
+}
+
 describe('§27 engine — entry, boundary, and the work injection (AC1, AC9)', () => {
   it('injects the declared boundary command FIRST, then the work prompt, and persists status working', () => {
     const engine = makeEngine();
@@ -290,8 +297,7 @@ describe('§27 engine — chained input into the work turn (AC1)', () => {
 
   it('carries a present input artifact into the work prompt and records the chained transition (AC1)', () => {
     // the prior loop's output sits at the next loop's declared input path (realpath'd, as confineArtifact yields it)
-    const iPath = seedInputArtifact(CHAINED_INPUT_PATH());
-    defResult = { ok: true, def: { ...fileDef(), inputs: [binding('groomed-ticket', iPath)] } };
+    bindSeededInput(repo);
     const engine = makeEngine();
     engine.enter(repo, 'plan-loop', STEP, 'chain-advance');
     engine.onInjectable(); // boundary drains → the work prompt injects
@@ -347,8 +353,7 @@ describe('§27 engine — chained input into the work turn (AC1)', () => {
     // A leftover artifact from an earlier run sits at the declared input path — nothing clears the artifacts
     // subtree. Starting a fresh run here is not a chain advance, so that file is not the previous loop's
     // approved output and must not be announced to the agent as one.
-    const iPath = seedInputArtifact(CHAINED_INPUT_PATH());
-    defResult = { ok: true, def: { ...fileDef(), inputs: [binding('groomed-ticket', iPath)] } };
+    bindSeededInput(repo);
     const engine = makeEngine();
     engine.enter(repo, 'plan-loop', STEP, 'fresh-run');
     engine.onInjectable();
@@ -357,8 +362,7 @@ describe('§27 engine — chained input into the work turn (AC1)', () => {
   });
 
   it('re-carries what the step\'s entry carried, without recording a second transition, when the step is RE-entered', () => {
-    const iPath = seedInputArtifact(CHAINED_INPUT_PATH());
-    defResult = { ok: true, def: { ...fileDef(), inputs: [binding('groomed-ticket', iPath)] } };
+    bindSeededInput(repo);
     const engine = makeEngine();
     engine.enter(repo, 'plan-loop', STEP, 'chain-advance'); // the entry that established the carry
     engine.onInjectable();
@@ -670,13 +674,6 @@ describe('§27.10 — the entry\'s carry is durable across every path that re-en
   const INPUT_REL = '.agent-terminal/loop/artifacts/groomed-ticket.md';
   const REDO_INSTRUCTION = 'Redo the plan.';
 
-  /** Seed the chained-input artifact for `dir` and bind the def to it. */
-  function bindSeededInput(dir: string): string {
-    const p = seedInputArtifact(join(dir, '.agent-terminal', 'loop', 'artifacts', 'groomed-ticket.md'));
-    defResult = { ok: true, def: { ...fileDef(), inputs: [binding('groomed-ticket', p)] } };
-    return p;
-  }
-
   it('writes the carry into the run state on every phase of the step, not only the work phase', () => {
     bindSeededInput(repo);
     const engine = makeEngine();
@@ -791,6 +788,55 @@ describe('§27.10 — the entry\'s carry is durable across every path that re-en
     emitError.mockClear();
     expect(engine.redo(repo, STEP, CONSOLIDATE_KEY, REDO_INSTRUCTION)).toBe(true);
     expect(emitError).toHaveBeenCalledWith(expect.stringContaining('groomed-ticket'));
+  });
+
+  it('says so when a RETRIED turn can no longer get the input its entry recorded', () => {
+    // The route-out handler always resumes before it routes, so the reconstruct is silent by design — but the
+    // operator clicking Retry is asking this turn to RUN. Resolving once at reconstruct time and re-injecting
+    // from that stale result drops a vanished input from the INPUTS block with nothing said.
+    const p = bindSeededInput(repo);
+    writeAppLoopState(repo, { loop: 'plan-loop', step: STEP, turnKey: TURN_KEY, status: 'working', chainedInputs: ['groomed-ticket'] }, FIXED);
+    rmSync(p, { force: true });
+    const engine = makeEngine();
+    engine.resume(repo);
+    emitError.mockClear();
+    engine.routeOut(repo, STEP, TURN_KEY, 'retry');
+    expect(emitError).toHaveBeenCalledWith(expect.stringContaining('groomed-ticket'));
+  });
+
+  it('names every input a re-entered turn lost in ONE message, not one dialog that replaces another', () => {
+    // Two emitError calls in one resolution render twice into the same dialog host and the second rebuilds
+    // over the first, so the operator never sees the input the earlier one named — it is dropped from the
+    // INPUTS block, the turn runs anyway, and the recorded path writes no audit event to find it in.
+    const ticket = seedInputArtifact(join(repo, '.agent-terminal', 'loop', 'artifacts', 'groomed-ticket.md'));
+    const notes = seedInputArtifact(join(repo, '.agent-terminal', 'loop', 'artifacts', 'design-notes.md'), '# notes\n');
+    defResult = {
+      ok: true,
+      def: { ...fileDef(), inputs: [binding('groomed-ticket', ticket), binding('design-notes', notes)] },
+    };
+    const engine = makeEngine();
+    enterAndInjectWork(engine, 'chain-advance'); // both present → both recorded
+    driveFromWorkToGate(engine);
+    rmSync(ticket, { force: true }); // one vanishes -> not-produced
+    rmSync(notes, { force: true });
+    mkdirSync(notes, { recursive: true }); // the other becomes unreadable
+    emitError.mockClear();
+    expect(engine.redo(repo, STEP, CONSOLIDATE_KEY, REDO_INSTRUCTION)).toBe(true);
+    expect(emitError).toHaveBeenCalledTimes(1);
+    expect(emitError.mock.calls[0][0]).toContain('groomed-ticket');
+    expect(emitError.mock.calls[0][0]).toContain('design-notes');
+  });
+
+  it('announces nothing when a reconstruction finds a recorded input has vanished', () => {
+    // The reconstruct scope must stay silent for BOTH unresolved states, not just the unreadable one:
+    // resume runs on every route-out, including the Terminate that abandons the flow.
+    const p = bindSeededInput(repo);
+    writeAppLoopState(repo, { loop: 'plan-loop', step: STEP, turnKey: TURN_KEY, status: 'working', chainedInputs: ['groomed-ticket'] }, FIXED);
+    rmSync(p, { force: true }); // absent, not a directory — the not-produced leg of the stranded list
+    const engine = makeEngine();
+    emitError.mockClear();
+    engine.resume(repo);
+    expect(emitError).not.toHaveBeenCalledWith(expect.stringContaining('groomed-ticket'));
   });
 
   it('says so when a recorded carry id no longer matches any binding the def declares', () => {

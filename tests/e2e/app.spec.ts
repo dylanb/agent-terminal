@@ -3993,10 +3993,6 @@ test('a §27 approve chains the approved loop\'s output into the next app loop\'
 
   await expect.poll(() => readIf(appRunState(repo)), { timeout: 40_000 }).toContain('status: complete');
   expect(readIf(appRunState(repo))).toContain('verdict: clean');
-  // Starting the run enters plan-loop as a fresh run, not a chain advance, so nothing chains into it — the
-  // only chained transition is the one approve creates below, into impl-loop.
-  expect(readIf(join(repo, '.agent-terminal', 'injected-log'))).not.toContain('groomed-ticket.md');
-
   await loopReadout().click();
   await loopPanel().locator('[data-gate-option="approve"]').click();
 

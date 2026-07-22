@@ -341,26 +341,22 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
   const recordedCarry = (repoDir: string, stepId: string, persisted: AppLoopRunState | null): string[] =>
     liveCarry(repoDir, stepId) ?? (persisted?.step === stepId ? (persisted.chainedInputs ?? []) : []);
 
-  /** §27.10 — `declared` may establish a NEW carry from everything the def declares; `recorded` re-resolves
-   *  exactly the ids an earlier entry decided on. Naming the scope keeps "carry everything" from being
-   *  reachable by omitting an argument. */
-  type ChainScope = { kind: 'declared' } | { kind: 'recorded'; ids: string[] };
+  /** §27.10 — why a step's carry is being resolved. One discriminant decides all three side effects, so a
+   *  reconstruction that advanced nothing cannot be made to record a chained transition:
+   *  `advance` is a real chain advance (may establish a NEW carry, records the transition, announces);
+   *  `re-enter` re-resolves the ids an earlier entry decided on for a turn about to run (announces only);
+   *  `reconstruct` rebuilds a stopped turn so it can be routed — `resume` runs on every route-out, including
+   *  the Terminate that abandons the flow, so it must announce nothing. */
+  type ChainScope =
+    | { kind: 'advance' }
+    | { kind: 're-enter'; ids: string[] }
+    | { kind: 'reconstruct'; ids: string[] };
 
-  /** §27.10 — whether this resolution is (re)starting a turn the operator is about to run, or merely
-   *  reconstructing a stopped one so it can be routed. `resume` runs on every route-out, including the
-   *  Terminate that abandons the flow, so only the former may raise an operator-facing alarm. */
-  type ChainPurpose = 'starting' | 'reconstructing';
-
-  const chainFor = (
-    repoDir: string,
-    stepId: string,
-    def: LoopDefV2,
-    scope: ChainScope,
-    purpose: ChainPurpose,
-  ): ChainedInput[] => {
-    const bindings = scope.kind === 'recorded' ? def.inputs.filter((i) => scope.ids.includes(i.id)) : def.inputs;
+  const chainFor = (repoDir: string, stepId: string, def: LoopDefV2, scope: ChainScope): ChainedInput[] => {
+    const bindings = scope.kind === 'advance' ? def.inputs : def.inputs.filter((i) => scope.ids.includes(i.id));
     const chain = resolveChainedInputs(bindings, (absPath) => deps.inputState(absPath));
-    if (scope.kind === 'declared' && (chain.carried.length > 0 || chain.unresolved.length > 0)) {
+    const announces = scope.kind !== 'reconstruct';
+    if (scope.kind === 'advance' && (chain.carried.length > 0 || chain.unresolved.length > 0)) {
       deps.audit(
         repoDir,
         chainedTransitionAuditCmd(
@@ -372,26 +368,28 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       );
     }
     const unreadable = chain.unresolved.filter((u) => u.state === 'unreadable').map((u) => u.id);
-    // TODO(dylan): `emitError` rides `flow:onLoopError`, documented as a FAILED loop-mechanics operation and
-    // rendered as a dismiss-only modal, while the turn starts anyway — an advisory on a failure channel.
-    // Operator decision (2026-07-22) is to keep it for this PR; the notice surface is the follow-up.
-    if (purpose === 'starting' && unreadable.length > 0) {
-      deps.emitError(`§27 ${stepId}: declared input(s) present but unreadable — ${unreadable.join(', ')}`);
-    }
     // Material this step's entry ALREADY carried, stranded since: the def no longer declares the binding, or
     // the artifact it names is gone. Absent at a chain advance is normal (no upstream produced it) and stays
     // silent; absent for an id the entry carried is a broken chain, and dropping it loses the operator's
     // chain with nothing said.
-    if (purpose === 'starting' && scope.kind === 'recorded') {
-      const declared = new Set(def.inputs.map((i) => i.id));
-      const stranded = [
-        ...scope.ids.filter((id) => !declared.has(id)),
-        ...chain.unresolved.filter((u) => u.state === 'not-produced').map((u) => u.id),
-      ];
-      if (stranded.length > 0) {
-        deps.emitError(`§27 ${stepId}: recorded input(s) no longer available — ${stranded.join(', ')}`);
-      }
-    }
+    const declared = new Set(def.inputs.map((i) => i.id));
+    const stranded =
+      scope.kind === 'advance'
+        ? []
+        : [
+            ...scope.ids.filter((id) => !declared.has(id)),
+            ...chain.unresolved.filter((u) => u.state === 'not-produced').map((u) => u.id),
+          ];
+    // ONE message per resolution: each emitError renders into the same dialog host, so a second would rebuild
+    // over the first and the inputs it named would never reach the operator.
+    const notes = [
+      ...(unreadable.length > 0 ? [`declared input(s) present but unreadable — ${unreadable.join(', ')}`] : []),
+      ...(stranded.length > 0 ? [`recorded input(s) no longer available — ${stranded.join(', ')}`] : []),
+    ];
+    // TODO(dylan): `emitError` rides `flow:onLoopError`, documented as a FAILED loop-mechanics operation and
+    // rendered as a dismiss-only modal, while the turn starts anyway — an advisory on a failure channel.
+    // Operator decision (2026-07-22) is to keep it for this PR; the notice surface is the follow-up.
+    if (announces && notes.length > 0) deps.emitError(`${stepId}: ${notes.join('; ')}`);
     return chain.carried;
   };
 
@@ -758,8 +756,6 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       } catch (e) {
         deps.audit(repoDir, `§27 ${loopName} ${stepId} enter clear-polish failed: ${e instanceof Error ? e.message : String(e)}`, 1);
       }
-      // §27.10 — only a real chain advance may establish a NEW carry. A fresh run carries nothing (no upstream
-      // loop ran), and a re-entry re-resolves exactly what this step's entry already decided on.
       let ids: string[] = [];
       let inputs: ChainedInput[] = [];
       // TODO(dylan): the record conflates "the entry decided not to carry this" with "the entry failed to
@@ -767,11 +763,11 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       // the operator fixes the permission the dialog named. Needs the attempted-but-unresolved ids persisted
       // beside the carried ones; recovery today is a flow restart.
       if (entry === 'chain-advance') {
-        inputs = chainFor(repoDir, stepId, r.def, { kind: 'declared' }, 'starting');
+        inputs = chainFor(repoDir, stepId, r.def, { kind: 'advance' });
         ids = inputs.map((i) => i.id);
       } else if (entry === 're-entry') {
         ids = recordedCarry(repoDir, stepId, readAppLoopState(repoDir));
-        inputs = chainFor(repoDir, stepId, r.def, { kind: 'recorded', ids }, 'starting');
+        inputs = chainFor(repoDir, stepId, r.def, { kind: 're-enter', ids });
       }
       setCarry(repoDir, stepId, ids);
       start(activeTurnFor(repoDir, loopName, stepId, r.def, { inputs }));
@@ -855,6 +851,18 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
         return;
       }
       // retry — re-enter the same turn (boundary + prompt), gated on injectability (§27.12).
+      // §27.10 — the route-out handler resumes before it routes, so a work turn's carry was resolved by a
+      // reconstruction that deliberately announces nothing. Retry is the operator asking this turn to RUN, so
+      // resolve it again as a start: an input that vanished since is surfaced rather than dropped from the
+      // INPUTS block in silence, and one that came back is carried.
+      if (active.phase === 'work') {
+        const rr = deps.resolveDef(repoDir, active.loopName);
+        if (rr.ok) {
+          const inputs = chainFor(repoDir, stepId, rr.def, { kind: 're-enter', ids: recordedCarry(repoDir, stepId, readAppLoopState(repoDir)) });
+          active = { ...active, ...(inputs.length > 0 ? { inputs } : {}) };
+          if (inputs.length === 0) delete (active as { inputs?: ChainedInput[] }).inputs;
+        }
+      }
       persist('working');
       const retryAudit =
         active.phase === 'review'
@@ -899,7 +907,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       start(
         activeTurnFor(repoDir, state.loop, stepId, r.def, {
           instruction,
-          inputs: chainFor(repoDir, stepId, r.def, { kind: 'recorded', ids }, 'starting'),
+          inputs: chainFor(repoDir, stepId, r.def, { kind: 're-enter', ids }),
         }),
       );
       return true;
@@ -909,7 +917,8 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       if (!state) return;
       // §27.10 — restore the entry's record before any phase of this step persists again, or the first write
       // after a relaunch rewrites the document without it and the carry is gone for good.
-      setCarry(repoDir, state.step, state.chainedInputs ?? []);
+      const reconstructIds = recordedCarry(repoDir, state.step, state);
+      setCarry(repoDir, state.step, reconstructIds);
       // Reconstruct which turn stopped so Retry/accept act on the right one — re-resolving the def so the
       // reconstructed turn carries its real completion contract (accept must read the true artifact). NEVER
       // re-drive it: an `error`/`complete` turn is human-owned; the runner stays idle until an explicit
@@ -945,7 +954,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       active = r.ok
         ? activeTurnFor(repoDir, state.loop, state.step, r.def, {
             instruction: state.instruction,
-            inputs: chainFor(repoDir, state.step, r.def, { kind: 'recorded', ids: state.chainedInputs ?? [] }, 'reconstructing'),
+            inputs: chainFor(repoDir, state.step, r.def, { kind: 'reconstruct', ids: reconstructIds }),
           })
         : { phase: 'work', repoDir, loopName: state.loop, stepId: state.step, turnKey: state.turnKey, recipePath: '', boundaryCmd: '/clear', completion: { kind: 'unresolved' }, ...(state.instruction !== undefined ? { instruction: state.instruction } : {}) };
       makeRoutable();
