@@ -44,12 +44,7 @@ const RELAUNCH_INTERRUPTED_REASON = 'the turn was interrupted before it could fi
 
 export type AppRouteOut = 'retry' | 'accept' | 'terminate';
 
-/** §27.10 — why the engine is entering this step, which decides what the work turn is entered WITH.
- *  `chain-advance` is the approve-driven advance the chain is defined by (§19.2): the upstream loop produced
- *  its declared output, so it carries in and the transition is recorded. `fresh-run` begins a run AT this
- *  step, where no upstream loop has run — anything sitting at a declared input path is left over from an
- *  earlier run or committed by the repo, never this chain's product, so nothing carries. `re-entry` returns
- *  to a step already legitimately entered: its material carries again, but nothing chained a second time. */
+/** §19.2/§27.10 */
 export type AppLoopEntry = 'chain-advance' | 'fresh-run' | 're-entry';
 
 /** Why the §27 work turn holds a live error, as a structured discriminator so a consumer branches on the
@@ -847,8 +842,6 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       // which threads the instruction; no round, no feedback, no findings ride along (a fresh work run).
       const r = deps.resolveDef(repoDir, state.loop);
       if (!r.ok) return false;
-      // §27.10 — a redo re-enters the SAME step's work turn (not a chain advance), so it re-carries the
-      // step's present inputs but records no chained transition.
       start(activeTurnFor(repoDir, state.loop, stepId, r.def, { instruction, inputs: chainFor(repoDir, stepId, r.def, { only: stepCarry?.stepId === stepId ? stepCarry.ids : (state.chainedInputs ?? []), record: false }) }));
       return true;
     },

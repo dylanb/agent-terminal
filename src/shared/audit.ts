@@ -369,18 +369,13 @@ export function gateDecisionAuditCmd(kind: GateDecisionAuditKind, option: string
   }
 }
 
-/** The §25 record of a §27 chained transition (§27.10/§27.9 / N6) — the declared input artifacts found at
- *  their bindings when the flow ADVANCED into this step — one definition beside the round/consolidate/gate
- *  vocabularies so the main-process writer and a future viewer read the same phrase. `step` is the loop step
- *  the artifacts chained INTO (§6 identity); `artifactIds` are the bindings carried in; `unresolvedIds` are
- *  declared bindings that did not, so a broken chain is distinguishable in the timeline from a loop that
- *  declares no inputs at all.
- *  TODO(dbarrell): the carry is gated on the flow having advanced, which is the transition AC1 names, plus
- *  presence at the binding — not on evidence that THIS run's upstream step wrote that file. Closing the
- *  residual needs run-scoped artifact paths (§27.10), which reach confineArtifact and every shipped def, and
- *  are tracked as their own sub-ticket rather than asserted here. */
+/** The §25 record of a §27 chained transition (§27.10/§27.9 / N6) — one definition beside the
+ *  round/consolidate/gate vocabularies so the main-process writer and a future viewer read the same phrase.
+ *  TODO(dylan): the carry is gated on the flow having advanced plus presence at the binding, never on
+ *  evidence that THIS run's upstream step wrote that file; closing it needs run-scoped artifact paths, which
+ *  reach confineArtifact and every shipped def and belong to their own sub-ticket. */
 export function chainedTransitionAuditCmd(step: string, artifactIds: string[], unresolvedIds: string[] = []): string {
-  const carried = `§27 chained transition into ${step}: ${artifactIds.join(', ')}`;
+  const carried = `§27 chained transition into ${step}: ${artifactIds.length > 0 ? artifactIds.join(', ') : 'none'}`;
   return unresolvedIds.length > 0 ? `${carried} (declared but unresolved: ${unresolvedIds.join(', ')})` : carried;
 }
 

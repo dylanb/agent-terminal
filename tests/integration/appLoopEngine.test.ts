@@ -23,7 +23,7 @@ import {
 import { completionMarker } from '../../src/main/appWorkTurn';
 import { chainedInputState } from '../../src/main/chainedInputState';
 import type { ArtifactBinding } from '../../src/main/loopDefV2';
-import { APP_LOOP_DIR_SEGMENTS, ARTIFACTS_SUBDIR } from '../../src/main/appLoopState';
+import { APP_LOOP_DIR_SEGMENTS, ARTIFACTS_SUBDIR } from '../../src/main/appLoopPaths';
 import { exampleRoundReport, REPORT_GRAMMAR } from '../../src/shared/roundReport';
 import type { HostedAgentState } from '../../src/main/loopOrchestrator';
 import type { LoopDefV2, LoopDefV2Result } from '../../src/main/loopDefV2';
@@ -230,9 +230,8 @@ function writeArtifact(withMarker: boolean): void {
   writeFileSync(artifactPath, withMarker ? `# plan\n${completionMarker(STEP)}\n` : '# plan\n(no marker)\n');
 }
 
-/** Seed a chained-input artifact on disk and return its realpath-resolved absolute path — the shape the def
- *  parser's confineArtifact yields, so a test def's `inputs[].path` matches production (and `rel` is diffed
- *  against the canonical root, not a symlinked spelling of it). */
+/** Seed a chained-input artifact on disk and return its realpath — the shape `confineArtifact` yields for
+ *  a binding's `path`. */
 function seedInputArtifact(absPath: string, content = '# groomed ticket\n'): string {
   mkdirSync(dirname(absPath), { recursive: true });
   writeFileSync(absPath, content);

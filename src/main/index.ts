@@ -123,6 +123,7 @@ import {
 } from './installExamples';
 import { provideAppLoopView } from './loopViewV2';
 import { createAppLoopEngine, type AppLoopEntry } from './appLoopEngine';
+import { appLoopEntryFor } from './appLoopEntry';
 import { APP_LOOP_DIR_SEGMENTS, armInterrupt, clearPolish, consolidatorOutputFile, consolidatorOutputRel, enterPolish, isPolishActiveForStep, readAppLoopState, roundReportFile, roundReportRel, writeAppLoopState } from './appLoopState';
 import { resolveLoopDefV2, type LoopDefV2Context } from './loopDefV2';
 import { createRealAppGateGitHub } from './appGateGithub';
@@ -843,23 +844,16 @@ async function createWindow(): Promise<void> {
     else advanceAfterConsolidate({ repoDir, loopName, phase: decision.phaseId, iteration: decision.iteration });
   };
 
-  // `transitioningRepo` carries the active repoKey into the synchronous onEnterStep below, so a loop
-  // step's in-app pickup (§26.9) knows which repo it is bootstrapping. `transitioningEntry` carries WHY the
-  // step is being entered (§27.10): only the approve-driven `advance` is the chain advance an app loop's
-  // declared inputs carry across — a start or restart begins a run where no upstream loop has run.
-  let transitioningRepo: string | null = null;
-  let transitioningEntry: AppLoopEntry = 'chain-advance';
-  /** §19.2/§27.10 — only `advance` moves the flow from one step to the next, which is the transition an app
-   *  loop's declared inputs chain across; `start` and `restart` begin a run at their first step. */
-  const entryFor = (kind: TransitionKind): AppLoopEntry =>
-    kind === 'advance' ? 'chain-advance' : kind === 'start' || kind === 'restart' ? 'fresh-run' : 're-entry';
+  // The repo and the reason travel as ONE value into the synchronous onEnterStep below (§26.9/§27.10): an
+  // entry kind that outlived its window would let a step be entered as a chain advance that never advanced,
+  // so neither half can be observed without the other.
+  let transitioning: { repoKey: string; entry: AppLoopEntry } | null = null;
   const inTransition = <T>(repoKey: string, entry: AppLoopEntry, fn: () => T): T => {
-    transitioningRepo = repoKey;
-    transitioningEntry = entry;
+    transitioning = { repoKey, entry };
     try {
       return fn();
     } finally {
-      transitioningRepo = null;
+      transitioning = null;
     }
   };
 
@@ -929,7 +923,7 @@ async function createWindow(): Promise<void> {
   };
 
   const runPickupForStep = (step: FlowStepDef, inputs: Record<string, string>): void => {
-    const repoKey = transitioningRepo;
+    const repoKey = transitioning?.repoKey ?? null;
     if (!repoKey || step.kind !== 'loop' || !step.loop) return;
     const def = parseLoopDef(repoKey, step.loop);
     if (!def?.pickup) return; // no pickup_contract → nothing to bootstrap from
@@ -961,7 +955,7 @@ async function createWindow(): Promise<void> {
   // (§26.3/D46). Decision in loopRebind.ts; the "nothing to resume" outcomes are audited no-ops (a loop
   // step can be display-only), and only a persist failure mid-rebind is surfaced.
   const resumeLoopForStep = (step: FlowStepDef): void => {
-    const repoKey = transitioningRepo;
+    const repoKey = transitioning?.repoKey ?? null;
     if (!repoKey || step.kind !== 'loop' || !step.loop) return;
     const prior = parseAgentLoopState(repoKey);
     const plan = planStepResume(
@@ -1000,10 +994,10 @@ async function createWindow(): Promise<void> {
     // boundary, inject the work prompt once when injectable), NEVER a §26 run. The engine no-ops when the
     // def fails to resolve — the run-less/failure view (deriveAppLoopView) is the operator's surface then.
     enterAppLoop: (step) => {
-      const repoKey = transitioningRepo;
-      if (!repoKey || !step.loop) return;
-      appEngine.enter(repoKey, step.loop, step.id, transitioningEntry);
-      armAppTurnDoneWatch(repoKey);
+      const t = transitioning;
+      if (!t || !step.loop) return;
+      appEngine.enter(t.repoKey, step.loop, step.id, t.entry);
+      armAppTurnDoneWatch(t.repoKey);
     },
   });
   const flow = createFlowManager({
@@ -1131,7 +1125,7 @@ async function createWindow(): Promise<void> {
   // their own bodies because their readiness/notice handling diverges.
   const recordedTransition = (repoKey: string, kind: TransitionKind, mutate: () => FlowStateView): FlowStateView => {
     const before = flow.state(repoKey);
-    const after = inTransition(repoKey, entryFor(kind), mutate);
+    const after = inTransition(repoKey, appLoopEntryFor(kind), mutate);
     audit.recordTransition(repoKey, kind, before, after);
     return trackLoop(repoKey, withDerived(repoKey, after));
   };
@@ -1172,7 +1166,7 @@ async function createWindow(): Promise<void> {
   const autoAdvanceFlow = (repoKey: string): void => {
     const pre = flow.state(repoKey);
     if (pre.status !== 'in_progress') return;
-    const view = inTransition(repoKey, 'chain-advance', () => flow.advance(repoKey));
+    const view = inTransition(repoKey, appLoopEntryFor('advance'), () => flow.advance(repoKey));
     audit.recordTransition(repoKey, 'advance', pre, view);
   };
 
@@ -1476,7 +1470,7 @@ async function createWindow(): Promise<void> {
         if (!isValidFlowRequest(m)) return flowRequestError();
         const pre = withDerived(m.repoKey, flow.state(m.repoKey));
         const ready = pre.loop ? pre.loop.ready : (pre.derived?.ready ?? true);
-        const view = inTransition(m.repoKey, 'chain-advance', () => flow.advance(m.repoKey));
+        const view = inTransition(m.repoKey, appLoopEntryFor('advance'), () => flow.advance(m.repoKey));
         audit.recordTransition(m.repoKey, 'advance', pre, view);
         if (ready) return trackLoop(m.repoKey, view);
         const notice = pre.loop

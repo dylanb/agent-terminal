@@ -28,8 +28,7 @@ export interface ChainedInput {
   rel: string;
 }
 
-/** §27.10 — what the upstream loop left at a declared input's binding. `not-produced` and `unreadable` are
- *  distinct facts: the first says no upstream ran, the second that its product is there but unavailable. */
+/** §27.10 */
 export type ChainedInputState = 'produced' | 'not-produced' | 'unreadable';
 
 /** §27.10 */
@@ -101,7 +100,7 @@ export function composeAppWorkPrompt(req: AppWorkPromptReq): string {
   if (req.inputs && req.inputs.length > 0) {
     parts.push(
       '',
-      "INPUTS — this loop's declared input artifact(s), carried in from the upstream loop. Read each before you begin:",
+      "INPUTS — the artifact(s) found at this loop's declared input paths. Read each before you begin:",
       ...req.inputs.map((i) => `  - ${i.id}: ${i.rel}`),
     );
   }

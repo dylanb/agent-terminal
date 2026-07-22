@@ -438,6 +438,14 @@ describe('§27 chained-transition audit vocabulary', () => {
     // A chain that carried everything it declared must not read the same as one that dropped an input.
     expect(cmd).not.toBe(chainedTransitionAuditCmd('implement', ['plan'], []));
   });
+
+  it('names an empty carried list explicitly rather than leaving a blank slot a reader parses as an id', () => {
+    // Live case: a step declares inputs and carries none. A dangling `: ` splits to [''] — one artifact whose
+    // id is the empty string — which is exactly the writer↔reader desync the shared vocabulary exists to stop.
+    const cmd = chainedTransitionAuditCmd('implement', [], ['plan']);
+    expect(cmd).not.toMatch(/:\s*\(/);
+    expect(cmd).toContain('none');
+  });
 });
 
 // §27.6/§25 — the consolidator-turn audit vocabulary lives in this ONE shared module beside the review-round

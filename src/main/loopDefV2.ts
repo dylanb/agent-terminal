@@ -11,7 +11,7 @@ import { confinedRealPath, resolveJail } from './confinedPath';
 import { isRecord } from './yamlRecord';
 import { isSafePathSegment } from '../shared/pathSegment';
 import { isErrno } from './errno';
-import { APP_LOOP_DIR_SEGMENTS, ARTIFACTS_SUBDIR } from './appLoopState';
+import { APP_LOOP_DIR_SEGMENTS, ARTIFACTS_SUBDIR } from './appLoopPaths';
 
 /** The schema version this app knows. Engine selection keys on the def namespace plus this marker, never
  *  on which parser happens not to throw. N2–N7 add only OPTIONAL elements under `v2`; a breaking change
@@ -160,10 +160,14 @@ function confineDefRelative(tierRoot: string, defDir: string, ref: string, what:
  *  engine's own state and is rejected. Throws DefError. */
 function confineArtifact(repoDir: string, pattern: string, what: string): { path: string; rel: string } {
   if (UNEXPANDED_SLOT.test(pattern)) fail(`${what} path carries an unexpanded slot: ${pattern}`);
+  // The composed `rel` is interpolated into the agent-facing work prompt, where a control character would
+  // break the line it is named on and leave the remainder standing as its own instruction (CWE-74).
+  if (/[\u0000-\u001f\u007f]/.test(pattern)) fail(`${what} path contains a control character`);
   const jail = resolveJail(repoDir, ...APP_LOOP_DIR_SEGMENTS, ARTIFACTS_SUBDIR);
   if (jail === null) fail(`${what} loop area is unresolvable`);
   const confined = confinedRealPath(jail, path.resolve(jail, pattern));
   if (confined === null) fail(`${what} path escapes the artifacts subtree: ${pattern}`);
+  if (confined === jail) fail(`${what} path must name a file inside the artifacts subtree: ${pattern}`);
   const rel = [...APP_LOOP_DIR_SEGMENTS, ARTIFACTS_SUBDIR, ...path.relative(jail, confined).split(path.sep)].join('/');
   return { path: confined, rel };
 }
