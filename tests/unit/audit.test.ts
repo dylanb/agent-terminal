@@ -430,6 +430,14 @@ describe('§27 chained-transition audit vocabulary', () => {
   it('a transition into one step is distinguishable from the same artifact into another (§6 identity)', () => {
     expect(chainedTransitionAuditCmd('implement', ['plan'])).not.toBe(chainedTransitionAuditCmd('plan', ['plan']));
   });
+
+  it('names a declared input that did not chain, so a broken chain is not read as a loop declaring none', () => {
+    const cmd = chainedTransitionAuditCmd('implement', ['plan'], ['groomed-ticket']);
+    expect(cmd).toContain('plan');
+    expect(cmd).toContain('groomed-ticket');
+    // A chain that carried everything it declared must not read the same as one that dropped an input.
+    expect(cmd).not.toBe(chainedTransitionAuditCmd('implement', ['plan'], []));
+  });
 });
 
 // §27.6/§25 — the consolidator-turn audit vocabulary lives in this ONE shared module beside the review-round

@@ -28,9 +28,25 @@ export interface ChainedInput {
   rel: string;
 }
 
-/** §27.10 / CWE-22 */
-export function presentChainedInputs(def: LoopDefV2, isPresent: (absPath: string) => boolean): ChainedInput[] {
-  return def.inputs.filter((i) => isPresent(i.path)).map((i) => ({ id: i.id, rel: i.rel }));
+/** §27.10 — what the upstream loop left at a declared input's binding. `not-produced` and `unreadable` are
+ *  distinct facts: the first says no upstream ran, the second that its product is there but unavailable. */
+export type ChainedInputState = 'produced' | 'not-produced' | 'unreadable';
+
+/** §27.10 — the declared inputs partitioned by what `stateOf` finds at each binding: `carried` is the
+ *  material the work turn is entered with; `unresolved` names the rest, so a chain that did not carry is
+ *  recorded rather than silent. */
+export function resolveChainedInputs(
+  def: LoopDefV2,
+  stateOf: (absPath: string) => ChainedInputState,
+): { carried: ChainedInput[]; unresolved: { id: string; state: Exclude<ChainedInputState, 'produced'> }[] } {
+  const carried: ChainedInput[] = [];
+  const unresolved: { id: string; state: Exclude<ChainedInputState, 'produced'> }[] = [];
+  for (const i of def.inputs) {
+    const state = stateOf(i.path);
+    if (state === 'produced') carried.push({ id: i.id, rel: i.rel });
+    else unresolved.push({ id: i.id, state });
+  }
+  return { carried, unresolved };
 }
 
 /** The one-line completion marker the work prompt instructs the agent to write into its artifact and the

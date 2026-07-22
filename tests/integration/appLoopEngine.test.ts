@@ -21,6 +21,7 @@ import {
   type AppLoopRunState,
 } from '../../src/main/appLoopState';
 import { completionMarker } from '../../src/main/appWorkTurn';
+import { chainedInputState } from '../../src/main/chainedInputState';
 import type { ArtifactBinding } from '../../src/main/loopDefV2';
 import { APP_LOOP_DIR_SEGMENTS, ARTIFACTS_SUBDIR } from '../../src/main/appLoopState';
 import { exampleRoundReport, REPORT_GRAMMAR } from '../../src/shared/roundReport';
@@ -124,6 +125,8 @@ function makeEngine(persistOverride?: (repoDir: string, state: AppLoopRunState) 
     resolveDef: () => defResult,
     readRecipe: () => '# work turn\nProduce the plan.',
     readArtifact: (p) => readArtifact(p),
+    inputState: chainedInputState, // the real classifier, so EISDIR/EACCES are exercised, not faked
+
     persist: persistOverride ?? ((repoDir, state) => writeAppLoopState(repoDir, state, FIXED)),
     audit,
     emitError,
@@ -281,7 +284,7 @@ describe('§27 engine — chained input into the work turn (AC1)', () => {
     engine.onInjectable(); // boundary drains → the work prompt injects
     expect(injected[1]).toContain(`- groomed-ticket: ${CHAINED_INPUT_REL}`); // the resolved input carried in
     // The chained transition is recorded in the §25 audit, naming the entered step and the carried artifact id.
-    expect(audit).toHaveBeenCalledWith(repo, expect.stringContaining('groomed-ticket'), expect.anything());
+    expect(audit).toHaveBeenCalledWith(repo, expect.stringContaining('groomed-ticket'), 0);
     const chainCall = audit.mock.calls.find((c) => /chained transition/i.test(c[1]));
     expect(chainCall).toBeDefined();
     expect(chainCall![1]).toContain(STEP); // into the entered step (§6 identity)
@@ -308,17 +311,38 @@ describe('§27 engine — chained input into the work turn (AC1)', () => {
     expect(injected[1]).not.toContain(CHAINED_INPUT_REL); // the absent one is filtered per-element
     const chainCall = audit.mock.calls.find((c) => /chained transition/i.test(c[1]));
     expect(chainCall).toBeDefined();
-    expect(chainCall![1]).toContain('plan-input'); // the audit lists only what was actually carried
-    expect(chainCall![1]).not.toContain('groomed-ticket');
+    expect(chainCall![1]).toContain('plan-input'); // what was carried
+    expect(chainCall![1]).toContain('groomed-ticket'); // and what was declared but did not chain
   });
 
-  it('does NOT carry an input whose artifact is absent, and records no chained transition (present-gated)', () => {
+  it('records the declared input that did not chain, so a broken chain is not silent (present-gated carry)', () => {
     defResult = { ok: true, def: chainedDef() }; // declares the input, but the artifact was never produced
     const engine = makeEngine();
     engine.enter(repo, 'plan-loop', STEP);
     engine.onInjectable();
     expect(injected[1]).not.toContain(CHAINED_INPUT_REL); // nothing to carry → no chained-input block
-    expect(audit.mock.calls.some((c) => /chained transition/i.test(c[1]))).toBe(false);
+    const chainCall = audit.mock.calls.find((c) => /chained transition/i.test(c[1]));
+    expect(chainCall).toBeDefined(); // a declared-but-unresolved input is a fact the timeline must carry
+    expect(chainCall![1]).toContain('groomed-ticket');
+    // Absent is not the operator's problem to fix — only an unreadable artifact is surfaced as an error.
+    expect(emitError).not.toHaveBeenCalled();
+  });
+
+  it('surfaces a declared input that exists but cannot be read, rather than treating it as never produced', () => {
+    // A directory planted at the artifact path (or an artifact written under another uid) is EISDIR/EACCES,
+    // not ENOENT: the upstream loop's product is unavailable, which is not the same fact as "no upstream ran".
+    // Conflating them enters the work turn with no plan and leaves the §25 timeline blank.
+    const iPath = CHAINED_INPUT_PATH();
+    mkdirSync(iPath, { recursive: true }); // a directory where the artifact belongs
+    defResult = { ok: true, def: { ...fileDef(), inputs: [binding('groomed-ticket', iPath)] } };
+    const engine = makeEngine();
+    engine.enter(repo, 'plan-loop', STEP);
+    engine.onInjectable();
+    expect(injected[1]).not.toContain(CHAINED_INPUT_REL); // still not carried — it cannot be read
+    expect(emitError).toHaveBeenCalledWith(expect.stringContaining('groomed-ticket'));
+    const chainCall = audit.mock.calls.find((c) => /chained transition/i.test(c[1]));
+    expect(chainCall).toBeDefined(); // the broken chain is recorded, not silent
+    expect(chainCall![1]).toContain('groomed-ticket');
   });
 
   it('a loop declaring no inputs records no chained transition (the first loop in a chain)', () => {

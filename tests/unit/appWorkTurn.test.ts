@@ -5,7 +5,7 @@ import {
   completionArtifact,
   completionMarker,
   composeAppWorkPrompt,
-  presentChainedInputs,
+  resolveChainedInputs,
 } from '../../src/main/appWorkTurn';
 import type { BoundaryPolicy, LoopDefV2 } from '../../src/main/loopDefV2';
 
@@ -113,43 +113,47 @@ describe('artifactWellFormed (§27.12 — present AND carrying the marker, never
   });
 });
 
-describe('presentChainedInputs (§27.10 — declared inputs an upstream loop produced, present-gated)', () => {
-  it('carries {id, rel} for each declared input the presence predicate accepts, in declaration order', () => {
-    const d = def({
-      inputs: [
-        binding('plan', 'plan.md'),
-        binding('notes', 'notes.md'),
-      ],
-    });
-    expect(presentChainedInputs(d, () => true)).toEqual([
+describe('resolveChainedInputs (§27.10 — declared inputs partitioned by what the upstream loop left)', () => {
+  const twoInputs = () => def({ inputs: [binding('plan', 'plan.md'), binding('notes', 'notes.md')] });
+
+  it('carries {id, rel} for each produced input, in declaration order', () => {
+    expect(resolveChainedInputs(twoInputs(), () => 'produced').carried).toEqual([
       { id: 'plan', rel: '.agent-terminal/loop/artifacts/plan.md' },
       { id: 'notes', rel: '.agent-terminal/loop/artifacts/notes.md' },
     ]);
   });
 
-  it('filters per-element: keeps only inputs whose artifact the predicate finds present', () => {
-    const d = def({
-      inputs: [
-        binding('plan', 'plan.md'),
-        binding('notes', 'notes.md'),
-      ],
-    });
-    const present = presentChainedInputs(d, (p) => p === '/abs/repo/.agent-terminal/loop/artifacts/plan.md');
-    expect(present).toEqual([{ id: 'plan', rel: '.agent-terminal/loop/artifacts/plan.md' }]);
+  it('partitions per-element: a produced input carries while its declared sibling does not', () => {
+    const r = resolveChainedInputs(twoInputs(), (p) =>
+      p === '/abs/repo/.agent-terminal/loop/artifacts/plan.md' ? 'produced' : 'not-produced',
+    );
+    expect(r.carried).toEqual([{ id: 'plan', rel: '.agent-terminal/loop/artifacts/plan.md' }]);
+    expect(r.unresolved).toEqual([{ id: 'notes', state: 'not-produced' }]);
   });
 
-  it('hands the presence predicate the binding\'s absolute path, not its repo-relative form', () => {
-    const d = def({ inputs: [binding('plan', 'plan.md')] });
+  it('keeps unreadable distinct from not-produced, so the caller can act on the one it can', () => {
+    const r = resolveChainedInputs(twoInputs(), (p) =>
+      p === '/abs/repo/.agent-terminal/loop/artifacts/plan.md' ? 'unreadable' : 'not-produced',
+    );
+    expect(r.carried).toEqual([]); // neither is material the work turn can be entered with
+    expect(r.unresolved).toEqual([
+      { id: 'plan', state: 'unreadable' },
+      { id: 'notes', state: 'not-produced' },
+    ]);
+  });
+
+  it('hands the state predicate the binding\'s absolute path, not its repo-relative form', () => {
     const probed: string[] = [];
-    presentChainedInputs(d, (p) => {
+    resolveChainedInputs(def({ inputs: [binding('plan', 'plan.md')] }), (p: string) => {
       probed.push(p);
-      return true;
+      return 'produced';
     });
     expect(probed).toEqual(['/abs/repo/.agent-terminal/loop/artifacts/plan.md']);
   });
 
-  it('is empty for a loop that declares no inputs (the first loop in a chain)', () => {
-    expect(presentChainedInputs(def({ inputs: [] }), () => true)).toEqual([]);
+  it('carries and declares nothing for a loop with no inputs (the first loop in a chain)', () => {
+    const r = resolveChainedInputs(def({ inputs: [] }), () => 'produced');
+    expect(r).toEqual({ carried: [], unresolved: [] });
   });
 });
 

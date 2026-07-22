@@ -19,7 +19,7 @@
 import path from 'node:path';
 import { createTurnRunner, type HostedAgentState, type TurnRunner } from './loopOrchestrator';
 import type { LoopDefV2, LoopDefV2Result } from './loopDefV2';
-import { artifactWellFormed, boundaryCommand, completionArtifact, completionMarker, composeAppWorkPrompt, presentChainedInputs, type ChainedInput } from './appWorkTurn';
+import { artifactWellFormed, boundaryCommand, completionArtifact, completionMarker, composeAppWorkPrompt, resolveChainedInputs, type ChainedInput, type ChainedInputState } from './appWorkTurn';
 import { catalogPersonas, composeReviewAndFixPrompt, preReviewBoundaryCommand, reviewRoster, type RosterEntry } from './reviewTurn';
 import { composeConsolidatePrompt, lastTwoReportRounds, preConsolidateBoundaryCommand } from './consolidateTurn';
 import { clearTurnDone } from './turnDoneFile';
@@ -101,6 +101,10 @@ export interface AppLoopEngineDeps {
   /** Read the confined completion-artifact content; null when absent/unreadable (the domain concept, not
    *  an fs shape — the fs read is the host's). */
   readArtifact(absPath: string): string | null;
+  /** §27.10 — what the upstream loop left at a chained input's confined binding. Tri-state rather than a
+   *  boolean: "no upstream ran" and "its product is there but unavailable" are different facts, and only the
+   *  second is something the operator can act on. */
+  inputState(absPath: string): ChainedInputState;
   /** Persist the §27 run state (§27.10). */
   persist(repoDir: string, state: AppLoopRunState): void;
   /** Record a §25 audit event for the turn (best-effort; never aborts the turn). */
@@ -315,8 +319,27 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
   // even when the persisted error write failed (§27.12c). Cleared on every non-error persist.
   let liveError: (AppLoopLiveError & { repoDir: string }) | null = null;
 
-  const carriedInputs = (def: LoopDefV2): ChainedInput[] =>
-    presentChainedInputs(def, (absPath) => deps.readArtifact(absPath) !== null);
+  const chainedInputs = (def: LoopDefV2) => resolveChainedInputs(def, (absPath) => deps.inputState(absPath));
+
+  /** §27.10 — record what the chain carried and what it did not, and surface an input that exists but could
+   *  not be read: absent is a chain that has not run, unreadable is one whose product is unavailable, and the
+   *  operator can only act on the second if it is said out loud. Best-effort, never aborts entry. */
+  const recordChain = (repoDir: string, stepId: string, chain: ReturnType<typeof chainedInputs>): void => {
+    if (chain.carried.length === 0 && chain.unresolved.length === 0) return;
+    deps.audit(
+      repoDir,
+      chainedTransitionAuditCmd(
+        stepId,
+        chain.carried.map((i) => i.id),
+        chain.unresolved.map((u) => u.id),
+      ),
+      0,
+    );
+    const unreadable = chain.unresolved.filter((u) => u.state === 'unreadable').map((u) => u.id);
+    if (unreadable.length > 0) {
+      deps.emitError(`§27 ${stepId}: declared input(s) present but unreadable — ${unreadable.join(', ')}`);
+    }
+  };
 
   const persist = (status: AppLoopRunState['status'], errorReason?: string): boolean => {
     if (!active) return false;
@@ -678,11 +701,9 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       } catch (e) {
         deps.audit(repoDir, `§27 ${loopName} ${stepId} enter clear-polish failed: ${e instanceof Error ? e.message : String(e)}`, 1);
       }
-      // §27.10 (N6) — entry is the chain advance: carry the upstream loop's produced inputs and record
-      // the transition here only (redo/resume re-carry the same inputs without recording).
-      const inputs = carriedInputs(r.def);
-      if (inputs.length > 0) deps.audit(repoDir, chainedTransitionAuditCmd(stepId, inputs.map((i) => i.id)), 0);
-      start(activeTurnFor(repoDir, loopName, stepId, r.def, { inputs }));
+      const chain = chainedInputs(r.def);
+      recordChain(repoDir, stepId, chain);
+      start(activeTurnFor(repoDir, loopName, stepId, r.def, { inputs: chain.carried }));
     },
     onInjectable() {
       runner.onInjectable();
@@ -804,7 +825,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       if (!r.ok) return false;
       // §27.10 — a redo re-enters the SAME step's work turn (not a chain advance), so it re-carries the
       // step's present inputs but records no chained transition.
-      start(activeTurnFor(repoDir, state.loop, stepId, r.def, { instruction, inputs: carriedInputs(r.def) }));
+      start(activeTurnFor(repoDir, state.loop, stepId, r.def, { instruction, inputs: chainedInputs(r.def).carried }));
       return true;
     },
     resume(repoDir) {
@@ -843,7 +864,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       }
       const r = deps.resolveDef(repoDir, state.loop);
       active = r.ok
-        ? activeTurnFor(repoDir, state.loop, state.step, r.def, { instruction: state.instruction, inputs: carriedInputs(r.def) })
+        ? activeTurnFor(repoDir, state.loop, state.step, r.def, { instruction: state.instruction, inputs: chainedInputs(r.def).carried })
         : { phase: 'work', repoDir, loopName: state.loop, stepId: state.step, turnKey: state.turnKey, recipePath: '', boundaryCmd: '/clear', completion: { kind: 'unresolved' }, ...(state.instruction !== undefined ? { instruction: state.instruction } : {}) };
       makeRoutable();
     },
