@@ -134,6 +134,12 @@ const ALLOWED_TOP_KEYS = new Set([
 ]);
 
 const UNEXPANDED_SLOT = /\{[^}]*\}/;
+// A charter/recipe/artifact path reference is embedded verbatim into an agent prompt (§27.8/§27.10); any
+// C0 control character (newline, bare CR, tab, ESC) breaks out of its prompt line and injects free text.
+function hasControlChar(ref: string): boolean {
+  for (let i = 0; i < ref.length; i++) if (ref.charCodeAt(i) <= 0x1f) return true;
+  return false;
+}
 
 class DefError extends Error {}
 function fail(reason: string): never {
@@ -143,7 +149,7 @@ function fail(reason: string): never {
 /** Confine a def-relative resource reference (a charter, a recipe) to the tier root it was read beside
  *  (§27.8/§18.6). Throws DefError on escape. */
 function confineDefRelative(tierRoot: string, defDir: string, ref: string, what: string): string {
-  if (ref.includes('\n')) fail(`${what} must be a path reference, not an inline body`);
+  if (hasControlChar(ref)) fail(`${what} must be a path reference, not an inline body`);
   if (UNEXPANDED_SLOT.test(ref)) fail(`${what} reference carries an unexpanded slot: ${ref}`);
   const jail = resolveJail(tierRoot);
   if (jail === null) fail(`${what} tier root is unresolvable`);
@@ -156,7 +162,7 @@ function confineDefRelative(tierRoot: string, defDir: string, ref: string, what:
  *  area — disjoint from the engine's own loop state and round reports, so `../state.yaml` escapes onto the
  *  engine's own state and is rejected. Throws DefError. */
 function confineArtifact(repoDir: string, pattern: string, what: string): string {
-  if (pattern.includes('\n')) fail(`${what} path must be a single-line reference, not an inline body`);
+  if (hasControlChar(pattern)) fail(`${what} path must be a single-line reference, not an inline body`);
   if (UNEXPANDED_SLOT.test(pattern)) fail(`${what} path carries an unexpanded slot: ${pattern}`);
   const jail = resolveJail(repoDir, '.agent-terminal', 'loop', 'artifacts');
   if (jail === null) fail(`${what} loop area is unresolvable`);

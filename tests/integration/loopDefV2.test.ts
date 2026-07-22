@@ -240,12 +240,23 @@ describe('resolveLoopDefV2 — artifact/input/output confinement to the artifact
     expect(r.ok).toBe(false);
   });
 
-  it('rejects an input path carrying an embedded newline, as a charter/recipe ref already is (§27.10)', () => {
+  it('rejects an input path carrying any C0 control character (§27.10), not only a newline', () => {
     // §27.10 — a carried input's repo-relative path is embedded verbatim into the work-turn prompt's
-    // `  - <id>: <rel>` INPUTS line; a newline in it breaks out of that line and injects free-standing
-    // prompt text, the same reason confineDefRelative rejects a newline in a prompt-embedded charter ref.
-    const withNewline = VALID_DEF.replace('path: artifacts/groomed-ticket.md', 'path: "artifacts/groomed\\ninjected.md"');
-    plantDef(join(appDir, 'loops-v2'), 'plan-loop', withNewline);
+    // `  - <id>: <rel>` INPUTS line; a newline breaks out of that line, and a bare CR survives the
+    // inject-time \r?\n->CR normalization and reads as a line break to the receiving agent too, so the
+    // whole C0 control class is rejected — the same reason confineDefRelative rejects it in a charter ref.
+    for (const ctrl of ['\\n', '\\r', '\\t', '\\u001b']) {
+      const withCtrl = VALID_DEF.replace('path: artifacts/groomed-ticket.md', `path: "artifacts/groomed${ctrl}injected.md"`);
+      plantDef(join(appDir, 'loops-v2'), 'plan-loop', withCtrl);
+      const r = resolveLoopDefV2('plan-loop', { tiers: tiers(), repoDir });
+      expect(r.ok, ctrl).toBe(false);
+      rmSync(join(appDir, 'loops-v2'), { recursive: true, force: true });
+    }
+  });
+
+  it('rejects a charter reference carrying a bare carriage return (shares the prompt sink, §27.8)', () => {
+    const withCr = VALID_DEF.replace('charter: charter/principal.md', 'charter: "charter/principal\\r.md"');
+    plantDef(join(appDir, 'loops-v2'), 'plan-loop', withCr);
     const r = resolveLoopDefV2('plan-loop', { tiers: tiers(), repoDir });
     expect(r.ok).toBe(false);
   });
