@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node
 import { tmpdir } from 'node:os';
 import { join, sep } from 'node:path';
 import { resolveLoopDefV2, type LoopDefV2Tiers } from '../../src/main/loopDefV2';
+import { APP_LOOP_DIR_SEGMENTS, ARTIFACTS_SUBDIR } from '../../src/main/appLoopState';
 
 // A minimal, valid §27 (v2) def as YAML. Helpers below mutate one line at a time so each escape /
 // malformed case is exactly one departure from a def that is otherwise known-good.
@@ -45,6 +46,13 @@ outputs:
   - id: plan
     path: artifacts/plan.md
 `;
+
+// The shipped defs (example/loops-v2/*) name artifacts as bare leaves — the pattern resolves against the
+// artifacts subtree, so a leading `artifacts/` would nest a second one.
+const BARE_ARTIFACT_DEF = VALID_DEF.replace('path: artifacts/groomed-ticket.md', 'path: groomed-ticket.md').replace(
+  'path: artifacts/plan.md',
+  'path: plan.md',
+);
 
 let opDir: string;
 let appDir: string;
@@ -309,6 +317,27 @@ describe('resolveLoopDefV2 — artifact paths resolve inside the artifacts subtr
     const r = resolveLoopDefV2('plan-loop', { tiers: tiers(), repoDir });
     expect(r.ok).toBe(true);
     if (r.ok) expect(r.def.outputs[0].path).toContain(['loop', 'artifacts', 'plan.md'].join(sep));
+  });
+
+  it('composes each binding rel from the loop-area segments the reader resolves against', () => {
+    plantDef(join(appDir, 'loops-v2'), 'plan-loop', BARE_ARTIFACT_DEF);
+    const r = resolveLoopDefV2('plan-loop', { tiers: tiers(), repoDir });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.def.inputs[0].rel).toBe([...APP_LOOP_DIR_SEGMENTS, ARTIFACTS_SUBDIR, 'groomed-ticket.md'].join('/'));
+    expect(r.def.outputs[0].rel).toBe([...APP_LOOP_DIR_SEGMENTS, ARTIFACTS_SUBDIR, 'plan.md'].join('/'));
+  });
+
+  it('keeps rel free of a parent escape when the repo root is reached through a symlink', () => {
+    const linkRoot = join(mkdtempSync(join(tmpdir(), 'v2-link-')), 'repo');
+    symlinkSync(repoDir, linkRoot);
+    plantDef(join(appDir, 'loops-v2'), 'plan-loop', BARE_ARTIFACT_DEF);
+    const r = resolveLoopDefV2('plan-loop', { tiers: tiers(), repoDir: linkRoot });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    // Both prompt-embedded rels — the chained input and the work turn's own completion artifact.
+    expect(r.def.inputs[0].rel).toBe([...APP_LOOP_DIR_SEGMENTS, ARTIFACTS_SUBDIR, 'groomed-ticket.md'].join('/'));
+    expect(r.def.outputs[0].rel).toBe([...APP_LOOP_DIR_SEGMENTS, ARTIFACTS_SUBDIR, 'plan.md'].join('/'));
   });
 });
 

@@ -4,7 +4,6 @@
 // completion marker the work prompt instructs and the completion check reads (ONE definition, so the
 // writer↔reader cannot desync — CLAUDE.md shared-semantics); and the work-prompt composer.
 
-import path from 'node:path';
 import { doneSignalInstruction } from '../shared/loopTurn';
 import type { BoundaryPolicy, LoopDefV2 } from './loopDefV2';
 
@@ -18,31 +17,20 @@ export function boundaryCommand(policy: BoundaryPolicy): string {
 /** The completion artifact the work turn must produce, resolved from the def (§27.12): the confined output
  *  binding whose id matches `work.artifact`. Null when no output backs that id — a commit-producing loop
  *  whose product is commits, which advances on the done-signal alone. Data-driven: never a loop-name check. */
-export function completionArtifact(def: LoopDefV2): { path: string } | null {
+export function completionArtifact(def: LoopDefV2): { path: string; rel: string } | null {
   const binding = def.outputs.find((o) => o.id === def.work.artifact);
-  return binding ? { path: binding.path } : null;
+  return binding ? { path: binding.path, rel: binding.rel } : null;
 }
 
-/** A typed input artifact a §27 loop consumes (§27.10): `id` names it, `rel` is its repo-relative path
- *  (all the carried material the prompt and audit reference). The confined absolute path is never exposed —
- *  it is the presence probe's concern only, held inside `presentChainedInputs`. */
+/** §27.10 */
 export interface ChainedInput {
   id: string;
   rel: string;
 }
 
-/** The declared typed inputs (§27.10) an upstream loop actually produced: `isPresent` decides, per
- *  element, whether the artifact is on disk (probed at the def parser's already-confined absolute path, never
- *  a re-derived target — CWE-22). Data-driven from `def.inputs`, never a loop-name check; empty for the first
- *  loop in a chain (it declares none). */
-export function presentChainedInputs(
-  def: LoopDefV2,
-  repoDir: string,
-  isPresent: (absPath: string) => boolean,
-): ChainedInput[] {
-  return def.inputs
-    .filter((i) => isPresent(i.path))
-    .map((i) => ({ id: i.id, rel: path.relative(repoDir, i.path) }));
+/** §27.10 / CWE-22 */
+export function presentChainedInputs(def: LoopDefV2, isPresent: (absPath: string) => boolean): ChainedInput[] {
+  return def.inputs.filter((i) => isPresent(i.path)).map((i) => ({ id: i.id, rel: i.rel }));
 }
 
 /** The one-line completion marker the work prompt instructs the agent to write into its artifact and the

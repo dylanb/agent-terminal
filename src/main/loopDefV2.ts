@@ -11,6 +11,7 @@ import { confinedRealPath, resolveJail } from './confinedPath';
 import { isRecord } from './yamlRecord';
 import { isSafePathSegment } from '../shared/pathSegment';
 import { isErrno } from './errno';
+import { APP_LOOP_DIR_SEGMENTS, ARTIFACTS_SUBDIR } from './appLoopState';
 
 /** The schema version this app knows. Engine selection keys on the def namespace plus this marker, never
  *  on which parser happens not to throw. N2–N7 add only OPTIONAL elements under `v2`; a breaking change
@@ -68,10 +69,12 @@ export interface WorkRecipe {
 }
 
 /** An input the loop consumes or an output it produces (§27.10). `id` is a safe segment; `path` is the
- *  confined absolute path inside the dedicated artifacts subtree of the per-repo loop area. */
+ *  confined absolute path inside the dedicated artifacts subtree of the per-repo loop area, and `rel` is the
+ *  same location repo-relative, composed here from the segments the confinement itself used. */
 export interface ArtifactBinding {
   id: string;
   path: string;
+  rel: string;
 }
 
 /** The bootstrap (pickup) contract (§27.10) — declared here; nothing acts on it in this slice. */
@@ -155,13 +158,14 @@ function confineDefRelative(tierRoot: string, defDir: string, ref: string, what:
 /** Confine an artifact/input/output path (§27.10) to the dedicated artifacts subtree of the per-repo loop
  *  area — disjoint from the engine's own loop state and round reports, so `../state.yaml` escapes onto the
  *  engine's own state and is rejected. Throws DefError. */
-function confineArtifact(repoDir: string, pattern: string, what: string): string {
+function confineArtifact(repoDir: string, pattern: string, what: string): { path: string; rel: string } {
   if (UNEXPANDED_SLOT.test(pattern)) fail(`${what} path carries an unexpanded slot: ${pattern}`);
-  const jail = resolveJail(repoDir, '.agent-terminal', 'loop', 'artifacts');
+  const jail = resolveJail(repoDir, ...APP_LOOP_DIR_SEGMENTS, ARTIFACTS_SUBDIR);
   if (jail === null) fail(`${what} loop area is unresolvable`);
   const confined = confinedRealPath(jail, path.resolve(jail, pattern));
   if (confined === null) fail(`${what} path escapes the artifacts subtree: ${pattern}`);
-  return confined;
+  const rel = [...APP_LOOP_DIR_SEGMENTS, ARTIFACTS_SUBDIR, ...path.relative(jail, confined).split(path.sep)].join('/');
+  return { path: confined, rel };
 }
 
 function requireSegment(value: unknown, what: string): string {
@@ -234,8 +238,8 @@ function toArtifactBindings(raw: unknown, repoDir: string, what: string): Artifa
     if (!isRecord(a)) fail(`each ${what} entry must be a mapping`);
     const rec = a as Record<string, unknown>;
     const id = requireSegment(rec.id, `${what} id`);
-    const p = confineArtifact(repoDir, requireString(rec.path, `${what} ${id} path`), `${what} ${id}`);
-    return { id, path: p };
+    const { path: p, rel } = confineArtifact(repoDir, requireString(rec.path, `${what} ${id} path`), `${what} ${id}`);
+    return { id, path: p, rel };
   });
 }
 

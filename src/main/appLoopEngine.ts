@@ -22,7 +22,6 @@ import type { LoopDefV2, LoopDefV2Result } from './loopDefV2';
 import { artifactWellFormed, boundaryCommand, completionArtifact, completionMarker, composeAppWorkPrompt, presentChainedInputs, type ChainedInput } from './appWorkTurn';
 import { catalogPersonas, composeReviewAndFixPrompt, preReviewBoundaryCommand, reviewRoster, type RosterEntry } from './reviewTurn';
 import { composeConsolidatePrompt, lastTwoReportRounds, preConsolidateBoundaryCommand } from './consolidateTurn';
-import { realpathBounded } from './confinedPath';
 import { clearTurnDone } from './turnDoneFile';
 import { TURN_DONE_FILENAME } from '../shared/loopTurn';
 import { failedReviewers, roundReportWellFormed } from '../shared/roundReport';
@@ -285,12 +284,6 @@ function turnErrorAuditCmd(turn: ActiveAppTurn, reason: string): string {
   return `§27 work turn ${turn.turnKey} failed: ${reason}`;
 }
 
-/** The repo root canonicalized to the same real path the def parser resolved artifact paths against
- *  (confineArtifact → resolveJail → realpathSync). Both prompt-embedded repo-relative paths — the chained
- *  input `rel` and the completion `artifactRel` — diff against this, so a symlinked repo ancestor cannot
- *  produce a `../..` escape the agent's logical cwd fails to read (§27.10). */
-const canonicalRepoDir = (repoDir: string): string => realpathBounded(repoDir) ?? repoDir;
-
 function activeTurnFor(
   repoDir: string,
   loopName: string,
@@ -308,7 +301,7 @@ function activeTurnFor(
     recipePath: def.work.recipe,
     boundaryCmd: entryBoundaryCommand(def),
     completion: artifact
-      ? { kind: 'file', path: artifact.path, marker: completionMarker(stepId), artifactRel: path.relative(canonicalRepoDir(repoDir), artifact.path) }
+      ? { kind: 'file', path: artifact.path, marker: completionMarker(stepId), artifactRel: artifact.rel }
       : { kind: 'commits' },
     ...(opts?.instruction !== undefined ? { instruction: opts.instruction } : {}),
     ...(opts?.inputs && opts.inputs.length > 0 ? { inputs: opts.inputs } : {}),
@@ -322,10 +315,8 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
   // even when the persisted error write failed (§27.12c). Cleared on every non-error persist.
   let liveError: (AppLoopLiveError & { repoDir: string }) | null = null;
 
-  // §27.10 (N6) — the declared inputs an upstream loop actually produced. A loop with none (first in a chain,
-  // or input never produced) carries no input block and fires no chained transition.
-  const carriedInputs = (def: LoopDefV2, repoDir: string): ChainedInput[] =>
-    presentChainedInputs(def, canonicalRepoDir(repoDir), (absPath) => deps.readArtifact(absPath) !== null);
+  const carriedInputs = (def: LoopDefV2): ChainedInput[] =>
+    presentChainedInputs(def, (absPath) => deps.readArtifact(absPath) !== null);
 
   const persist = (status: AppLoopRunState['status'], errorReason?: string): boolean => {
     if (!active) return false;
@@ -689,7 +680,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       }
       // §27.10 (N6) — entry is the chain advance: carry the upstream loop's produced inputs and record
       // the transition here only (redo/resume re-carry the same inputs without recording).
-      const inputs = carriedInputs(r.def, repoDir);
+      const inputs = carriedInputs(r.def);
       if (inputs.length > 0) deps.audit(repoDir, chainedTransitionAuditCmd(stepId, inputs.map((i) => i.id)), 0);
       start(activeTurnFor(repoDir, loopName, stepId, r.def, { inputs }));
     },
@@ -813,7 +804,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       if (!r.ok) return false;
       // §27.10 — a redo re-enters the SAME step's work turn (not a chain advance), so it re-carries the
       // step's present inputs but records no chained transition.
-      start(activeTurnFor(repoDir, state.loop, stepId, r.def, { instruction, inputs: carriedInputs(r.def, repoDir) }));
+      start(activeTurnFor(repoDir, state.loop, stepId, r.def, { instruction, inputs: carriedInputs(r.def) }));
       return true;
     },
     resume(repoDir) {
@@ -852,7 +843,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       }
       const r = deps.resolveDef(repoDir, state.loop);
       active = r.ok
-        ? activeTurnFor(repoDir, state.loop, state.step, r.def, { instruction: state.instruction, inputs: carriedInputs(r.def, repoDir) })
+        ? activeTurnFor(repoDir, state.loop, state.step, r.def, { instruction: state.instruction, inputs: carriedInputs(r.def) })
         : { phase: 'work', repoDir, loopName: state.loop, stepId: state.step, turnKey: state.turnKey, recipePath: '', boundaryCmd: '/clear', completion: { kind: 'unresolved' }, ...(state.instruction !== undefined ? { instruction: state.instruction } : {}) };
       makeRoutable();
     },

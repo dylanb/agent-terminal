@@ -23,6 +23,10 @@ export const APP_LOOP_STATE_SCHEMA = 1;
 /** The per-repo §27 loop area, relative to the repo root. The state file is a sibling of the def's
  *  confined `artifacts/` subtree (loopDefV2 `confineArtifact`) — the engine's own state, disjoint from it. */
 export const APP_LOOP_DIR_SEGMENTS = ['.agent-terminal', 'loop'] as const;
+/** The artifacts subtree of the loop area (§27.10), disjoint from the run-state file, the round reports and
+ *  the consolidator outputs. One definition for the def parser that confines bindings into it and for the
+ *  repo-relative form the work prompt names. */
+export const ARTIFACTS_SUBDIR = 'artifacts';
 const RUN_STATE_FILE = 'run-state.yaml';
 /** The round reports live under a dedicated subtree of the loop area, keyed by round number (§27.5/§27.10),
  *  disjoint from the run-state file and from every other round's report. */
