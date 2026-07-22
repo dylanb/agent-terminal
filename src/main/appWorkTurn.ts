@@ -4,6 +4,7 @@
 // completion marker the work prompt instructs and the completion check reads (ONE definition, so the
 // writer↔reader cannot desync — CLAUDE.md shared-semantics); and the work-prompt composer.
 
+import path from 'node:path';
 import { doneSignalInstruction } from '../shared/loopTurn';
 import type { BoundaryPolicy, LoopDefV2 } from './loopDefV2';
 
@@ -20,6 +21,21 @@ export function boundaryCommand(policy: BoundaryPolicy): string {
 export function completionArtifact(def: LoopDefV2): { path: string } | null {
   const binding = def.outputs.find((o) => o.id === def.work.artifact);
   return binding ? { path: binding.path } : null;
+}
+
+/** A typed input artifact a §27 loop consumes (§27.10/§18.4), resolved from the def's declared input
+ *  binding: `id` names it, `rel` is its repo-relative path — the material a chained work turn carries. */
+export interface ChainedInput {
+  id: string;
+  rel: string;
+}
+
+/** The typed input artifacts a §27 loop declares (§27.10/§18.4), each `{id, path}` binding resolved to its
+ *  id and repo-relative path — the outputs a prior loop wrote into the shared artifacts subtree, carried in
+ *  as this loop's inputs. Empty for the first loop in a chain (it declares no inputs). Data-driven: never a
+ *  loop-name check. Presence on disk (did the prior loop actually produce it?) is the caller's fs concern. */
+export function resolveChainedInputs(def: LoopDefV2, repoDir: string): ChainedInput[] {
+  return def.inputs.map((i) => ({ id: i.id, rel: path.relative(repoDir, i.path) }));
 }
 
 /** The one-line completion marker the work prompt instructs the agent to write into its artifact and the
@@ -49,6 +65,10 @@ export interface AppWorkPromptReq {
    *  the work turn (ticket + plan + instruction only). Absent on an ordinary work run; a blank one emits no
    *  block (the caller passes only a `validInstruction` value). */
   instruction?: string;
+  /** §27.10/§18.4 — the prior loop's output artifacts, resolved as this loop's typed inputs and carried into
+   *  the work turn. Empty/absent for the first loop in a chain (no upstream artifact); the caller passes only
+   *  inputs whose artifact is present on disk. */
+  inputs?: ChainedInput[];
 }
 
 /** Compose the §27 work-turn prompt (§27.3): the def's recipe body, then — for a file-producing turn — the
@@ -56,6 +76,16 @@ export interface AppWorkPromptReq {
  *  pointing at the §27 done-file (and, for a file-producing turn, verifying the artifact on disk first). */
 export function composeAppWorkPrompt(req: AppWorkPromptReq): string {
   const parts = [req.recipeBody.trimEnd()];
+  // §27.10/§18.4 — a chained work turn is entered carrying the prior loop's outputs as this loop's typed
+  // inputs: name each carried artifact and its repo-relative path so the agent reads them before it begins.
+  // Above the redo block so a redo's "the ticket and the plan above" reference includes them.
+  if (req.inputs && req.inputs.length > 0) {
+    parts.push(
+      '',
+      "INPUTS — the previous loop produced these artifact(s), carried in as this loop's inputs. Read each before you begin:",
+      ...req.inputs.map((i) => `  - ${i.id}: ${i.rel}`),
+    );
+  }
   // §27.9/AC5 — a redo re-enters the work turn on a clean slate: the recipe body (which sources the ticket and
   // the plan) still leads, and the operator's instruction is threaded as the redo directive. No findings and no
   // round history reach it — the boundary before the turn cleared the context; this block adds only the
