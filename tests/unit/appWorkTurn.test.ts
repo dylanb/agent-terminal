@@ -5,6 +5,7 @@ import {
   completionArtifact,
   completionMarker,
   composeAppWorkPrompt,
+  resolveChainedInputs,
 } from '../../src/main/appWorkTurn';
 import type { BoundaryPolicy, LoopDefV2 } from '../../src/main/loopDefV2';
 
@@ -102,7 +103,72 @@ describe('artifactWellFormed (§27.12 — present AND carrying the marker, never
   });
 });
 
+describe('resolveChainedInputs (§27.10/§18.4 — the prior loop\'s outputs as this loop\'s typed inputs)', () => {
+  it('resolves each declared input binding to its id and repo-relative path', () => {
+    const d = def({
+      inputs: [{ id: 'plan', path: '/abs/repo/.agent-terminal/loop/artifacts/plan.md' }],
+    });
+    expect(resolveChainedInputs(d, '/abs/repo')).toEqual([
+      { id: 'plan', path: '/abs/repo/.agent-terminal/loop/artifacts/plan.md', rel: '.agent-terminal/loop/artifacts/plan.md' },
+    ]);
+  });
+
+  it('resolves every declared input, in declaration order', () => {
+    const d = def({
+      inputs: [
+        { id: 'plan', path: '/abs/repo/.agent-terminal/loop/artifacts/plan.md' },
+        { id: 'notes', path: '/abs/repo/.agent-terminal/loop/artifacts/notes.md' },
+      ],
+    });
+    expect(resolveChainedInputs(d, '/abs/repo').map((i) => i.id)).toEqual(['plan', 'notes']);
+  });
+
+  it('is empty for a loop that declares no inputs (the first loop in a chain)', () => {
+    expect(resolveChainedInputs(def({ inputs: [] }), '/abs/repo')).toEqual([]);
+  });
+});
+
 describe('composeAppWorkPrompt (§27.3/§27.12 — recipe + marker + done-signal)', () => {
+  it('§27.10/§18.4 — a chained input names each carried artifact id and its repo-relative path', () => {
+    const prompt = composeAppWorkPrompt({
+      recipeBody: '# work turn\nImplement the plan.',
+      turnKey: 'work-implement',
+      doneRelPath: '.agent-terminal/loop/turn-done',
+      completion: { artifactRel: '.agent-terminal/loop/artifacts/diff.md', marker: completionMarker('implement') },
+      inputs: [{ id: 'plan', rel: '.agent-terminal/loop/artifacts/plan.md' }],
+    });
+    expect(prompt).toContain('Implement the plan.'); // the recipe body still leads
+    expect(prompt).toContain('- plan: .agent-terminal/loop/artifacts/plan.md'); // the carried input, id + path
+    expect(prompt.toLowerCase()).toContain('previous loop'); // framed as material from the prior loop
+  });
+
+  it('§27.10 — no chained-input block on a loop entered with no inputs', () => {
+    const prompt = composeAppWorkPrompt({
+      recipeBody: '# work turn\nGroom the ticket.',
+      turnKey: 'work-groom',
+      doneRelPath: '.agent-terminal/loop/turn-done',
+      completion: { artifactRel: '.agent-terminal/loop/artifacts/groomed-ticket.md', marker: completionMarker('groom') },
+      inputs: [],
+    });
+    expect(prompt.toLowerCase()).not.toContain('previous loop');
+  });
+
+  it('§27.10 — the chained input survives alongside a redo instruction (recipe → inputs → redo)', () => {
+    const prompt = composeAppWorkPrompt({
+      recipeBody: '# work turn\nImplement the plan.',
+      turnKey: 'work-implement',
+      doneRelPath: '.agent-terminal/loop/turn-done',
+      completion: null,
+      inputs: [{ id: 'plan', rel: '.agent-terminal/loop/artifacts/plan.md' }],
+      instruction: 'Keep only the schema section.',
+    });
+    expect(prompt).toContain('- plan: .agent-terminal/loop/artifacts/plan.md'); // the carried input
+    expect(prompt).toContain('Keep only the schema section.'); // the redo instruction
+    expect(prompt.indexOf('plan.md')).toBeLessThan(prompt.indexOf('Keep only the schema section.')); // inputs above redo
+  });
+});
+
+describe('composeAppWorkPrompt (§27.3/§27.12 — recipe + marker + done-signal, no chained input)', () => {
   it('for a file-producing turn: names the artifact, the marker, and the §27 done-file path', () => {
     const prompt = composeAppWorkPrompt({
       recipeBody: '# work turn\nImplement the plan.',

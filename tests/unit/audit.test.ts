@@ -3,6 +3,7 @@ import path from 'node:path';
 import {
   auditFileStamp,
   auditTimestamp,
+  chainedTransitionAuditCmd,
   inputEvents,
   lifecycleEvents,
   consolidateAuditCmd,
@@ -407,6 +408,27 @@ describe('§27 gate-decision audit vocabulary', () => {
     expect(clearFailed).toContain('approve');
     expect(clearFailed).toContain('EISDIR');
     expect(clearFailed).not.toBe(gateDecisionAuditCmd('decision', 'approve'));
+  });
+});
+
+// §27.10/§27.9 / N6 — the chained-transition audit vocabulary lives in this ONE shared module beside the
+// round/consolidate/gate ones (CLAUDE.md single-home rule), so the main-process writer and a future viewer
+// read the same phrase for "an approved loop's output was carried into the next loop's work turn".
+describe('§27 chained-transition audit vocabulary', () => {
+  it('builds command text naming the entered step and the carried input artifact ids', () => {
+    const cmd = chainedTransitionAuditCmd('implement', ['plan']);
+    expect(cmd).toContain('implement'); // the step the artifact chained INTO
+    expect(cmd).toContain('plan'); // the resolved input artifact id carried in
+  });
+
+  it('lists every carried artifact id when more than one input chains in', () => {
+    const cmd = chainedTransitionAuditCmd('implement', ['plan', 'design-notes']);
+    expect(cmd).toContain('plan');
+    expect(cmd).toContain('design-notes');
+  });
+
+  it('a transition into one step is distinguishable from the same artifact into another (§6 identity)', () => {
+    expect(chainedTransitionAuditCmd('implement', ['plan'])).not.toBe(chainedTransitionAuditCmd('plan', ['plan']));
   });
 });
 

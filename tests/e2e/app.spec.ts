@@ -3954,6 +3954,73 @@ test('a §27 app plan gate renders approve + request-changes, and approve runs t
   rmSync(binDir, { recursive: true, force: true });
 });
 
+// §27.10/§27.9 / N6 (sub-ticket 1) — a two-`app`-loop flow with NO pickup: an app plan-loop step (declaring a
+// `pr` typed input so approve's `gh pr ready` side-effect has a PR to flip) chained to an app impl-loop step,
+// which declares its `plan` artifact as a typed input (§18.4). plan-loop writes plan.md at the very path
+// impl-loop reads it, so on approve→advance impl-loop's work turn is entered carrying plan-loop's output.
+function seedAppChainFlowRepo(prefix: string, pr: string): string {
+  const dir = mkdtempSync(join(tmpdir(), prefix));
+  mkdirSync(join(dir, '.git'), { recursive: true });
+  mkdirSync(join(dir, '.agent-terminal'), { recursive: true });
+  writeFileSync(
+    join(dir, '.agent-terminal', 'flow.yaml'),
+    'name: v2-chain\nsteps:\n' +
+      '  - id: plan\n    kind: loop\n    loop: plan-loop\n    loop_namespace: app\n    inputs:\n      - name: pr\n        type: pr\n' +
+      '  - id: implement\n    kind: loop\n    loop: impl-loop\n    loop_namespace: app\n',
+  );
+  writeFileSync(join(dir, '.agent-terminal', 'flow-state.yaml'), `step: plan\nstatus: not_started\ninputs:\n  pr: "${pr}"\n`);
+  return dir;
+}
+
+test('a §27 approve chains the approved loop\'s output into the next app loop\'s work turn, with the chained-transition audit event (§27.10 / AC1)', { tag: '@ownapp' }, async () => {
+  const repo = seedAppChainFlowRepo('agent-term-e2e-v2-chain-', '77');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-v2-chain-home-'));
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-v2-chain-bin-');
+  // Drive the FIRST loop (plan-loop) to its gate; logInjected so we can prove the SECOND loop's work turn
+  // carried plan-loop's output. The fake is keyed to step `plan`; the impl work prompt is logged, not driven.
+  seedFakeAgentV2(binDir, { stepId: 'plan', artifactRel: APP_ARTIFACT_REL, work: 'complete', review: 'full', logInjected: true });
+  app = await electron.launch({
+    args: ['out/main/index.js'],
+    env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100', CLAUDE_CONFIG_DIR: exampleConfigDir, PATH: `${binDir}:${process.env.PATH}`, FAKE_GHGIT_LOG: logFile },
+  });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await typeCommand(`cd "${repo}"`);
+  await expect(flowControl()).toHaveText('Start', { timeout: 10_000 });
+  await typeCommand('fake-agent');
+  await flowControl().click(); // enter plan-loop → work → review → consolidate → the clean gate
+
+  await expect.poll(() => readIf(appRunState(repo)), { timeout: 40_000 }).toContain('status: complete');
+  expect(readIf(appRunState(repo))).toContain('verdict: clean');
+  // plan-loop is the FIRST loop: its declared `groomed-ticket` input is absent (no groom ran), so entering it
+  // chained nothing — the only chained transition is the one approve creates below, into impl-loop.
+  expect(readIf(join(repo, '.agent-terminal', 'injected-log'))).not.toContain('groomed-ticket.md');
+
+  await loopReadout().click();
+  await loopPanel().locator('[data-gate-option="approve"]').click();
+
+  // AC1 — approve runs plan-loop's side-effect and advances to impl-loop, whose work turn is entered carrying
+  // plan-loop's approved output (plan.md) as impl-loop's typed input (§18.4).
+  await expect.poll(() => readGhLog(logFile), { timeout: 15_000 }).toContain('gh pr ready 77');
+  await expect.poll(() => readIf(appFlowState(repo)), { timeout: 15_000 }).toContain('step: implement'); // advanced onto the next app loop
+  await expect
+    .poll(() => readIf(join(repo, '.agent-terminal', 'injected-log')), { timeout: 40_000 })
+    .toContain(`- plan: ${APP_ARTIFACT_REL}`); // impl-loop's work turn carries plan-loop's output as its input
+
+  // The chained transition is recorded once in the §25 audit, naming the step it chained INTO (§6 identity).
+  await expect.poll(() => auditRunFiles(home, repo).length, { timeout: 10_000 }).toBeGreaterThan(0);
+  const run = readAuditRun(home, repo, auditRunFiles(home, repo)[0]);
+  const chained = run.events.filter((e) => e.type === 'command' && /chained transition/i.test(e.cmd));
+  expect(chained.length).toBe(1);
+  expect((chained[0] as Extract<AuditEvent, { type: 'command' }>).cmd).toContain('implement');
+
+  await app.close();
+  rmSync(repo, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+  rmSync(binDir, { recursive: true, force: true });
+});
+
 test('a §27 request-changes opens the composer; submitting returns the loop to a review-and-fix round carrying the feedback, without advancing (§27.9 / AC4)', { tag: '@ownapp' }, async () => {
   const repo = seedAppGateFlowRepo('agent-term-e2e-v2-rc-', '77');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-v2-rc-home-'));

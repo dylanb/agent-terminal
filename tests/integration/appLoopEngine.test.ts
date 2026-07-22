@@ -244,6 +244,53 @@ describe('§27 engine — entry, boundary, and the work injection (AC1, AC9)', (
   });
 });
 
+// §27.10/§27.9 / N6 (sub-ticket 1) — an approved loop's output artifact, resolved as the next loop's typed
+// input (§18.4), is the material the next loop's work turn is entered with. The engine reads the entered def's
+// declared inputs; only an input whose artifact is actually PRESENT on disk (the prior loop produced it) is
+// carried in and recorded as a chained transition, so a loop entered with no upstream artifact chains nothing.
+describe('§27 engine — chained input into the work turn (AC1)', () => {
+  const CHAINED_INPUT_PATH = () => join(repo, '.agent-terminal', 'loop', 'artifacts', 'groomed-ticket.md');
+  const CHAINED_INPUT_REL = '.agent-terminal/loop/artifacts/groomed-ticket.md';
+  function chainedDef(): LoopDefV2 {
+    return { ...fileDef(), inputs: [{ id: 'groomed-ticket', path: CHAINED_INPUT_PATH() }] };
+  }
+  function writeChainedInput(): void {
+    mkdirSync(dirname(CHAINED_INPUT_PATH()), { recursive: true });
+    writeFileSync(CHAINED_INPUT_PATH(), '# groomed ticket\n');
+  }
+
+  it('carries a present input artifact into the work prompt and records the chained transition (AC1)', () => {
+    defResult = { ok: true, def: chainedDef() };
+    writeChainedInput(); // the prior loop's output sits at the next loop's declared input path
+    const engine = makeEngine();
+    engine.enter(repo, 'plan-loop', STEP);
+    engine.onInjectable(); // boundary drains → the work prompt injects
+    expect(injected[1]).toContain(`- groomed-ticket: ${CHAINED_INPUT_REL}`); // the resolved input carried in
+    // The chained transition is recorded in the §25 audit, naming the entered step and the carried artifact id.
+    expect(audit).toHaveBeenCalledWith(repo, expect.stringContaining('groomed-ticket'), expect.anything());
+    const chainCall = audit.mock.calls.find((c) => /chained transition/i.test(c[1]));
+    expect(chainCall).toBeDefined();
+    expect(chainCall![1]).toContain(STEP); // into the entered step (§6 identity)
+  });
+
+  it('does NOT carry an input whose artifact is absent, and records no chained transition (present-gated)', () => {
+    defResult = { ok: true, def: chainedDef() }; // declares the input, but the artifact was never produced
+    const engine = makeEngine();
+    engine.enter(repo, 'plan-loop', STEP);
+    engine.onInjectable();
+    expect(injected[1]).not.toContain(CHAINED_INPUT_REL); // nothing to carry → no chained-input block
+    expect(audit.mock.calls.some((c) => /chained transition/i.test(c[1]))).toBe(false);
+  });
+
+  it('a loop declaring no inputs records no chained transition (the first loop in a chain)', () => {
+    defResult = { ok: true, def: fileDef() }; // inputs: []
+    const engine = makeEngine();
+    engine.enter(repo, 'plan-loop', STEP);
+    engine.onInjectable();
+    expect(audit.mock.calls.some((c) => /chained transition/i.test(c[1]))).toBe(false);
+  });
+});
+
 describe('§27 engine — work completion gate + review chain (AC2, AC3)', () => {
   it('a marker-bearing artifact completes the WORK turn and chains the pre-review boundary + review prompt (AC1)', () => {
     const engine = makeEngine();
