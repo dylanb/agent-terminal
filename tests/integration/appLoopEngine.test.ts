@@ -904,6 +904,22 @@ describe('§27.10 — the entry\'s carry is durable across every path that re-en
     expect(engine.liveErrorFor(repo)?.kind).toBe('def-unresolvable'); // and the operator keeps a route out
   });
 
+  it('refuses Accept after a retry-refuse leaves a commits turn on an unresolvable def (CWE-754)', () => {
+    // Retry's def-unresolvable refuse returned without touching `active`, so a commits turn kept
+    // `completion: { kind: 'commits' }` — whose completionSatisfied() is unconditionally true. The very next
+    // Accept then fabricated `complete` on a def that no longer resolves. Retry and Accept must agree on the
+    // def-resolves precondition, exactly as the resume path neutralizes it (completion → unresolved).
+    writeAppLoopState(repo, { loop: 'plan-loop', step: STEP, turnKey: TURN_KEY, status: 'error', errorReason: 'stalled' }, FIXED);
+    defResult = { ok: true, def: commitDef() }; // resolves at resume — the commits turn is routable
+    const engine = makeEngine();
+    engine.resume(repo);
+    defResult = { ok: false, reason: 'no §27 def named plan-loop in any tier' }; // operator edits the def unresolvable
+    engine.routeOut(repo, STEP, TURN_KEY, 'retry'); // refuses (def-unresolvable), disk stays error
+    engine.routeOut(repo, STEP, TURN_KEY, 'accept'); // must NOT finalize on the stale commits contract
+    expect(readAppLoopState(repo)?.status).toBe('error'); // not fabricated complete
+    expect(engine.liveErrorFor(repo)?.kind).toBe('def-unresolvable'); // and a route out remains
+  });
+
   it('resolves no chained input when a REVIEW round is retried — only a work turn carries one', () => {
     const p = bindSeededInput(repo);
     const engine = makeEngine();

@@ -871,6 +871,11 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       if (active.phase === 'work') {
         const rr = deps.resolveDef(repoDir, active.loopName);
         if (!rr.ok) {
+          // Neutralize completion before refusing so the sibling Accept lever honours the same
+          // def-resolves precondition — a `commits`/present-`file` turn otherwise stays acceptable
+          // (completionSatisfied() unconditionally true) and fabricates a pass on a def that no longer
+          // resolves. A later retry with a resolvable def rebuilds completion via `activeTurnFor`.
+          active = { ...active, completion: { kind: 'unresolved' } };
           refuseRouteOut('def-unresolvable', 'the bound def no longer resolves — retry or terminate');
           return;
         }
