@@ -47,7 +47,6 @@ outputs:
     path: plan.md
 `;
 
-
 let opDir: string;
 let appDir: string;
 let repoDir: string;
@@ -363,6 +362,15 @@ describe('resolveLoopDefV2 — artifact paths resolve inside the artifacts subtr
     expect(dup).not.toBe(VALID_DEF); // the fixture edit landed
     plantDef(join(appDir, 'loops-v2'), 'plan-loop', dup);
     expect(resolveLoopDefV2('plan-loop', { tiers: tiers(), repoDir }).ok).toBe(false);
+  });
+
+  it('accepts one id shared between inputs and outputs — uniqueness is per list, not per def', () => {
+    // A loop that reads and rewrites the same artifact declares it in both lists; the carry re-resolves
+    // against `def.inputs` alone, so only a collision WITHIN a list makes the persisted key ambiguous.
+    const shared = VALID_DEF.replace('  - id: plan\n    path: plan.md', '  - id: ticket\n    path: groomed-ticket.md');
+    expect(shared).not.toBe(VALID_DEF);
+    plantDef(join(appDir, 'loops-v2'), 'plan-loop', shared.replace('artifact: plan', 'artifact: ticket'));
+    expect(resolveLoopDefV2('plan-loop', { tiers: tiers(), repoDir }).ok).toBe(true);
   });
 
   it('rejects a binding whose rel gains a control character from an on-disk name the def never spelled', () => {

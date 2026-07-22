@@ -347,16 +347,16 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
    *  `re-enter` re-resolves the ids an earlier entry decided on for a turn about to run (announces only);
    *  `reconstruct` rebuilds a stopped turn so it can be routed — `resume` runs on every route-out, including
    *  the Terminate that abandons the flow, so it must announce nothing. */
-  type ChainScope =
+  type CarryOccasion =
     | { kind: 'advance' }
     | { kind: 're-enter'; ids: string[] }
     | { kind: 'reconstruct'; ids: string[] };
 
-  const chainFor = (repoDir: string, stepId: string, def: LoopDefV2, scope: ChainScope): ChainedInput[] => {
-    const bindings = scope.kind === 'advance' ? def.inputs : def.inputs.filter((i) => scope.ids.includes(i.id));
+  const chainFor = (repoDir: string, stepId: string, def: LoopDefV2, occasion: CarryOccasion): ChainedInput[] => {
+    const bindings = occasion.kind === 'advance' ? def.inputs : def.inputs.filter((i) => occasion.ids.includes(i.id));
     const chain = resolveChainedInputs(bindings, (absPath) => deps.inputState(absPath));
-    const announces = scope.kind !== 'reconstruct';
-    if (scope.kind === 'advance' && (chain.carried.length > 0 || chain.unresolved.length > 0)) {
+    const announces = occasion.kind !== 'reconstruct';
+    if (occasion.kind === 'advance' && (chain.carried.length > 0 || chain.unresolved.length > 0)) {
       deps.audit(
         repoDir,
         chainedTransitionAuditCmd(
@@ -374,10 +374,10 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
     // chain with nothing said.
     const declared = new Set(def.inputs.map((i) => i.id));
     const stranded =
-      scope.kind === 'advance'
+      occasion.kind === 'advance'
         ? []
         : [
-            ...scope.ids.filter((id) => !declared.has(id)),
+            ...occasion.ids.filter((id) => !declared.has(id)),
             ...chain.unresolved.filter((u) => u.state === 'not-produced').map((u) => u.id),
           ];
     // ONE message per resolution: each emitError renders into the same dialog host, so a second would rebuild
@@ -391,6 +391,18 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
     // Operator decision (2026-07-22) is to keep it for this PR; the notice surface is the follow-up.
     if (announces && notes.length > 0) deps.emitError(`${stepId}: ${notes.join('; ')}`);
     return chain.carried;
+  };
+
+  /** §27.10 — the ids this step's entry recorded, and what they resolve to now. Every lever that RE-ENTERS a
+   *  turn goes through here, so none can resolve from raw persisted ids instead of the recorded decision. */
+  const reEnter = (
+    repoDir: string,
+    stepId: string,
+    def: LoopDefV2,
+    persisted: AppLoopRunState | null,
+  ): { ids: string[]; inputs: ChainedInput[] } => {
+    const ids = recordedCarry(repoDir, stepId, persisted);
+    return { ids, inputs: chainFor(repoDir, stepId, def, { kind: 're-enter', ids }) };
   };
 
   const persist = (status: AppLoopRunState['status'], errorReason?: string): boolean => {
@@ -766,8 +778,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
         inputs = chainFor(repoDir, stepId, r.def, { kind: 'advance' });
         ids = inputs.map((i) => i.id);
       } else if (entry === 're-entry') {
-        ids = recordedCarry(repoDir, stepId, readAppLoopState(repoDir));
-        inputs = chainFor(repoDir, stepId, r.def, { kind: 're-enter', ids });
+        ({ ids, inputs } = reEnter(repoDir, stepId, r.def, readAppLoopState(repoDir)));
       }
       setCarry(repoDir, stepId, ids);
       start(activeTurnFor(repoDir, loopName, stepId, r.def, { inputs }));
@@ -851,17 +862,23 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
         return;
       }
       // retry — re-enter the same turn (boundary + prompt), gated on injectability (§27.12).
-      // §27.10 — the route-out handler resumes before it routes, so a work turn's carry was resolved by a
-      // reconstruction that deliberately announces nothing. Retry is the operator asking this turn to RUN, so
-      // resolve it again as a start: an input that vanished since is surfaced rather than dropped from the
-      // INPUTS block in silence, and one that came back is carried.
+      // §27.10 — after a relaunch the route-out handler reconstructs this turn first (`index.ts`, and only
+      // when no live turn for this repo holds), and that reconstruction announces nothing. Retry is the
+      // operator asking the turn to RUN, so rebuild it from ONE fresh def resolution: an input that vanished
+      // since is surfaced rather than dropped from the INPUTS block in silence, one that came back is
+      // carried, and the recipe, boundary and completion contract cannot be a revision older than the
+      // inputs they are graded beside. An unresolvable def refuses the retry exactly as Accept refuses.
       if (active.phase === 'work') {
         const rr = deps.resolveDef(repoDir, active.loopName);
-        if (rr.ok) {
-          const inputs = chainFor(repoDir, stepId, rr.def, { kind: 're-enter', ids: recordedCarry(repoDir, stepId, readAppLoopState(repoDir)) });
-          active = { ...active, ...(inputs.length > 0 ? { inputs } : {}) };
-          if (inputs.length === 0) delete (active as { inputs?: ChainedInput[] }).inputs;
+        if (!rr.ok) {
+          refuseRouteOut('def-unresolvable', 'the bound def no longer resolves — retry or terminate');
+          return;
         }
+        const { inputs } = reEnter(repoDir, stepId, rr.def, readAppLoopState(repoDir));
+        active = activeTurnFor(repoDir, active.loopName, stepId, rr.def, {
+          ...(active.instruction !== undefined ? { instruction: active.instruction } : {}),
+          inputs,
+        });
       }
       persist('working');
       const retryAudit =
@@ -902,14 +919,9 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       // which threads the instruction; no round, no feedback, no findings ride along (a fresh work run).
       const r = deps.resolveDef(repoDir, state.loop);
       if (!r.ok) return false;
-      const ids = recordedCarry(repoDir, stepId, state);
+      const { ids, inputs } = reEnter(repoDir, stepId, r.def, state);
       setCarry(repoDir, stepId, ids);
-      start(
-        activeTurnFor(repoDir, state.loop, stepId, r.def, {
-          instruction,
-          inputs: chainFor(repoDir, stepId, r.def, { kind: 're-enter', ids }),
-        }),
-      );
+      start(activeTurnFor(repoDir, state.loop, stepId, r.def, { instruction, inputs }));
       return true;
     },
     resume(repoDir) {

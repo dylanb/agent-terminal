@@ -839,6 +839,82 @@ describe('§27.10 — the entry\'s carry is durable across every path that re-en
     expect(emitError).not.toHaveBeenCalledWith(expect.stringContaining('groomed-ticket'));
   });
 
+  it('drops an input from the RETRIED prompt when it vanished after the turn was reconstructed', () => {
+    const p = bindSeededInput(repo);
+    writeAppLoopState(repo, { loop: 'plan-loop', step: STEP, turnKey: TURN_KEY, status: 'working', chainedInputs: ['groomed-ticket'] }, FIXED);
+    const engine = makeEngine();
+    engine.resume(repo); // present here — the reconstruction carried it
+    rmSync(p, { force: true }); // gone by the time the operator clicks Retry
+    const before = injected.length;
+    engine.routeOut(repo, STEP, TURN_KEY, 'retry');
+    engine.onInjectable();
+    engine.onInjectable();
+    const prompt = injected.slice(before).find((pr) => pr.includes('Produce the plan.'));
+    expect(prompt).toBeDefined();
+    expect(prompt).not.toContain(INPUT_REL); // never announce material the turn cannot read
+  });
+
+  it('carries an input into the RETRIED prompt when it was restored after the turn was reconstructed', () => {
+    const target = join(repo, '.agent-terminal', 'loop', 'artifacts', 'groomed-ticket.md');
+    bindSeededInput(repo);
+    rmSync(target, { force: true }); // absent at reconstruct
+    writeAppLoopState(repo, { loop: 'plan-loop', step: STEP, turnKey: TURN_KEY, status: 'working', chainedInputs: ['groomed-ticket'] }, FIXED);
+    const engine = makeEngine();
+    engine.resume(repo);
+    seedInputArtifact(target); // the operator restores it, then retries
+    const before = injected.length;
+    engine.routeOut(repo, STEP, TURN_KEY, 'retry');
+    engine.onInjectable();
+    engine.onInjectable();
+    const prompt = injected.slice(before).find((pr) => pr.includes('Produce the plan.'));
+    expect(prompt).toContain(`- groomed-ticket: ${INPUT_REL}`);
+  });
+
+  it('grades a retried turn against the SAME def revision its prompt was composed from', () => {
+    // The natural repair loop after a turn-error is: edit the def, press Retry. Refreshing only the inputs
+    // would inject the new revision's INPUTS block beside the old revision's recipe and completion contract,
+    // so the agent writes where the prompt says while the gate reads somewhere else — and no number of
+    // retries ever picks the edit up.
+    bindSeededInput(repo);
+    writeAppLoopState(repo, { loop: 'plan-loop', step: STEP, turnKey: TURN_KEY, status: 'working', chainedInputs: ['groomed-ticket'] }, FIXED);
+    const engine = makeEngine();
+    engine.resume(repo);
+    const edited = 'sentinel/edited-def/plan.md'; // the operator's edit moves the completion artifact
+    defResult = {
+      ok: true,
+      def: { ...fileDef(), outputs: [{ id: 'plan', path: artifactPath, rel: edited }] },
+    };
+    const before = injected.length;
+    engine.routeOut(repo, STEP, TURN_KEY, 'retry');
+    engine.onInjectable();
+    engine.onInjectable();
+    const prompt = injected.slice(before).find((pr) => pr.includes('Produce the plan.'));
+    expect(prompt).toContain(edited); // the completion contract came from the same resolution as the inputs
+  });
+
+  it('refuses a retry whose def no longer resolves rather than re-running on a stale contract', () => {
+    bindSeededInput(repo);
+    writeAppLoopState(repo, { loop: 'plan-loop', step: STEP, turnKey: TURN_KEY, status: 'working', chainedInputs: ['groomed-ticket'] }, FIXED);
+    const engine = makeEngine();
+    engine.resume(repo);
+    defResult = { ok: false, reason: 'no §27 def named plan-loop in any tier' };
+    const before = injected.length;
+    engine.routeOut(repo, STEP, TURN_KEY, 'retry');
+    expect(injected.length).toBe(before); // nothing re-injected
+    expect(engine.liveErrorFor(repo)?.kind).toBe('def-unresolvable'); // and the operator keeps a route out
+  });
+
+  it('resolves no chained input when a REVIEW round is retried — only a work turn carries one', () => {
+    const p = bindSeededInput(repo);
+    const engine = makeEngine();
+    enterAndInjectWork(engine, 'chain-advance');
+    driveToReviewInjected(engine);
+    rmSync(p, { force: true });
+    emitError.mockClear();
+    engine.routeOut(repo, STEP, REVIEW_KEY, 'retry');
+    expect(emitError).not.toHaveBeenCalledWith(expect.stringContaining('groomed-ticket'));
+  });
+
   it('says so when a recorded carry id no longer matches any binding the def declares', () => {
     // The def is re-resolved on every reconstruct path, so an edit that renames an input binding strands the
     // material the entry recorded. Dropping it silently is the swallowed-failure the standards forbid.
