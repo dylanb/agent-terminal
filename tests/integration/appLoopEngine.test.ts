@@ -4,9 +4,11 @@ import { dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import yaml from 'js-yaml';
 import { createAppLoopEngine, type AppLoopEngineDeps } from '../../src/main/appLoopEngine';
 import { provideAppLoopView } from '../../src/main/loopViewV2';
 import {
+  appLoopStateFile,
   armInterrupt,
   clearPolish,
   consolidatorOutputFile,
@@ -1098,9 +1100,9 @@ describe('§27 engine — redo re-enters the work turn on a clean slate carrying
     expect(prompt).toContain(INSTRUCTION); // alongside the redo instruction
     const chainAuditsAfter = audit.mock.calls.filter((c) => /chained transition/i.test(c[1])).length;
     expect(chainAuditsAfter).toBe(chainAuditsBefore); // the non-advance re-entry records no new transition
-    // The carried inputs live only in the active turn; a persist while they are carried must not leak them onto
-    // the run-state document (appLoopEngine.ts — the inputs are re-resolved from the def, never persisted).
-    expect(readAppLoopState(repo)).not.toHaveProperty('inputs');
+    // Read the RAW persisted YAML, not readAppLoopState: parseAppLoopState rebuilds from a fixed field
+    // allow-list and would strip an `inputs` key, hiding the very leak this pins (appLoopEngine.ts:178-179).
+    expect(yaml.load(readFileSync(appLoopStateFile(repo)!, 'utf8'))).not.toHaveProperty('inputs');
   });
 });
 
