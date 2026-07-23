@@ -251,6 +251,83 @@ export function consolidatorOutputFile(repoDir: string, round: number): string |
   return confinedRealPath(jail, path.join(jail, roundLeaf(round)));
 }
 
+const BOOTSTRAP_FILE = 'bootstrap.yaml';
+
+/** The identity a §27 bootstrap opens (§27.10 / ST2 AC8). Set once by the pickup executor and read many
+ *  times by later turns and side-effects, so its lifecycle is independent of the per-turn run-state
+ *  document — it lives in its OWN file (the polish/armed-interrupt own-file pattern) and a wholesale
+ *  run-state write can neither clobber nor resurrect it. */
+export interface AppLoopBootstrap {
+  pr: number;
+  branch: string;
+  issue: number;
+}
+
+const bootstrapFileOf = (repoDir: string): string | null => {
+  const jail = resolveJail(repoDir, ...APP_LOOP_DIR_SEGMENTS);
+  if (jail === null) return null;
+  return confinedRealPath(jail, path.join(jail, BOOTSTRAP_FILE));
+};
+
+/** A positive integer or it is no valid id at all — the ONE gate both the writer and the reader of a persisted
+ *  pr/issue number consult (CWE-20), so a value the writer would never emit can never be one the reader keeps. */
+function isPositiveInt(v: unknown): v is number {
+  return typeof v === 'number' && Number.isSafeInteger(v) && v > 0;
+}
+
+function isNonBlank(v: unknown): v is string {
+  return typeof v === 'string' && v.trim().length > 0;
+}
+
+/** Persist the bootstrap identity to its own disjoint file, confined (the loop area sits in the untrusted repo
+ *  working tree, CWE-22/59). Throws when the loop area is unresolvable (a planted symlink), matching the
+ *  run-state writer's fail-loud contract. Never writes a `.gitignore`. */
+export function writeAppLoopBootstrap(repoDir: string, b: AppLoopBootstrap, now: () => Date = () => new Date()): void {
+  if (!isPositiveInt(b.pr) || !isPositiveInt(b.issue) || !isNonBlank(b.branch)) {
+    throw new Error('invalid §27 bootstrap identity');
+  }
+  const file = bootstrapFileOf(repoDir);
+  if (file === null) throw new Error('§27 loop area is unresolvable');
+  const doc = {
+    schema_version: APP_LOOP_STATE_SCHEMA,
+    pr: b.pr,
+    branch: b.branch,
+    issue: b.issue,
+    updated_at: now().toISOString(),
+  };
+  if (!atomicWriteFileSync(file, yaml.dump(doc))) {
+    throw new Error(`cannot write §27 bootstrap identity: ${path.dirname(file)} is not a real directory`);
+  }
+}
+
+/** The bootstrap identity, or null when absent or field-invalid — a non-positive/mistyped pr or issue, or
+ *  a blank/missing branch, is not a valid identity and reads as none rather than a phantom (CWE-20). */
+export function readAppLoopBootstrap(repoDir: string): AppLoopBootstrap | null {
+  const file = bootstrapFileOf(repoDir);
+  if (file === null) return null;
+  let text: string;
+  try {
+    text = readFileSync(file, 'utf8');
+  } catch {
+    return null;
+  }
+  let doc: unknown;
+  try {
+    doc = yaml.load(text);
+  } catch {
+    return null;
+  }
+  if (!isRecord(doc)) return null;
+  if (String(doc.schema_version) !== String(APP_LOOP_STATE_SCHEMA)) return null;
+  if (!isPositiveInt(doc.pr) || !isPositiveInt(doc.issue)) return null;
+  if (!isNonBlank(doc.branch)) return null;
+  return {
+    pr: doc.pr,
+    branch: doc.branch,
+    issue: doc.issue,
+  };
+}
+
 /** A per-step flag in the §27 loop area — one small YAML document `{schema_version, step}` in its OWN file, so a
  *  wholesale run-state write can neither clobber nor resurrect it and it survives a relaunch (§27.9). The armed
  *  interrupt (AC9) and the polish stand-down (AC6/AC11) are two disjoint instances of this one shape; each names

@@ -972,7 +972,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     expect(seen.at(-1)).toEqual({ names: ['ticket'], stepName: 'plan' });
 
     lastSubmit!({ ticket: '176' });
-    expect(provideInput).toHaveBeenCalledWith('/repo', { ticket: '176' });
+    expect(provideInput).toHaveBeenCalledWith('/repo', 'plan', { ticket: '176' });
   });
 
   it('surfaces a provideInput write-failure from a prompt submit instead of swallowing it', async () => {
@@ -1153,7 +1153,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     const seenBefore = seen.filter(Boolean).length;
 
     lastSubmit!({ ticket: '176' }); // provideInput now pending for /repo
-    expect(deps.provideInput).toHaveBeenCalledWith('/repo', { ticket: '176' });
+    expect(deps.provideInput).toHaveBeenCalledWith('/repo', 'plan', { ticket: '176' });
     strip.onRepoChanged('/other'); // cwd moves while provideInput is in flight
     await vi.waitFor(() => expect(deps.state).toHaveBeenCalledWith('/other'));
 

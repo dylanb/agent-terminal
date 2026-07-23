@@ -615,13 +615,16 @@ export interface FlowRevealLoopMsg {
   sessionId: SessionId;
 }
 
-/** flow:onBootstrapError push (§26.9): main signals that a loop step's async in-app pickup FAILED and the
+/** flow:onBootstrapError push (§26.9/§27.10): main signals that a loop step's async in-app pickup FAILED and the
  *  flow was rolled back to the previous step (revertStep). The failure is never silent — the renderer
  *  raises a blocking error dialog carrying `reason` (the human-readable cause: dirty tree, unresolvable
- *  base, conflicting branch). Distinct from the transient strip `notice`: an async failure has no
+ *  base, conflicting branch). `repoKey` and `step` name the failed resource, so a late push cannot be
+ *  attributed to ambient flow state. Distinct from the transient strip `notice`: an async failure has no
  *  transition response to ride, so it needs its own push. */
 export interface FlowBootstrapErrorMsg {
   sessionId: SessionId;
+  repoKey: string;
+  step: string;
   reason: string;
 }
 
@@ -665,12 +668,14 @@ export interface FlowRequestMsg {
   repoKey: string;
 }
 
-/** flow:provideInput request (§18.4 / §24.2.3 T3): the renderer's answer to a step-entry `prompt`.
- *  `values` maps each prompted input name to the user's typed value; main persists them to flow-state
- *  and re-runs the entry bootstrap (`agent-loop pickup <input>`) now that the input is resolved. */
+/** flow:provideInput request (§18.4 / §24.2.3 T3 / §27.10): the renderer's answer to a step-entry
+ *  `prompt`. `step` is the identity the prompt was raised for; a stale answer is inert rather than being
+ *  applied to the flow's ambient current step. `values` maps each prompted input name to the user's typed
+ *  value; main persists them and re-runs that step's entry action. */
 export interface FlowProvideInputMsg {
   sessionId: SessionId;
   repoKey: string;
+  step: string;
   values: Record<string, string>;
 }
 
@@ -1021,10 +1026,9 @@ export interface FlowApi {
    *  resolves to the reset (not_started) view. Inert from not_started / load-error. Main also clears
    *  the repo's todos, the global capture tab, and finalizes the audit run as one user-confirmed action. */
   terminate(repoKey: string): Promise<FlowStateView>;
-  /** Answer a step-entry input `prompt` (§18.4 / §24.2.3 T3): persist the typed `values` to
-   *  flow-state and re-run the entry bootstrap (`agent-loop pickup <input>`), returning the new
-   *  view (its `notice` carries any §19.3 busy refusal). */
-  provideInput(repoKey: string, values: Record<string, string>): Promise<FlowStateView>;
+  /** Answer a step-entry input `prompt` (§18.4 / §24.2.3 T3): persist the typed `values` only while
+   *  `step` is still current, then re-run its entry action and return the new view. */
+  provideInput(repoKey: string, step: string, values: Record<string, string>): Promise<FlowStateView>;
   /** Name the repo's work, or clear the name with a blank (§22.3.1). Resolves to the new view; unlike the
    *  other flow:* calls, an unsafe or unregistered-repo target REJECTS rather than resolving to a benign
    *  error view (§22.3.1). */
@@ -1035,10 +1039,10 @@ export interface FlowApi {
   /** Subscribe to main's flow:revealLoop push (§24.2.3 T4): `cb` fires when the OS attention
    *  notification was activated and the loop read-out must be revealed. Returns an unsubscribe. */
   onRevealLoop(cb: () => void): () => void;
-  /** Subscribe to main's flow:onBootstrapError push (§26.9): `cb` fires with the human-readable `reason`
-   *  when a loop step's async pickup failed and the flow was rolled back; the renderer raises a blocking
-   *  error dialog. Returns an unsubscribe. */
-  onBootstrapError(cb: (reason: string) => void): () => void;
+  /** Subscribe to main's flow:onBootstrapError push (§26.9/§27.10): `cb` fires with the human-readable
+   *  `reason` and the failed repo/step identity when an async pickup rolled back; the renderer raises a
+   *  blocking error dialog. Returns an unsubscribe. */
+  onBootstrapError(cb: (reason: string, repoKey: string, step: string) => void): () => void;
   /** Subscribe to main's flow:onLoopError push (§26.3/§26.6/D48): `cb` fires with the human-readable
    *  `reason` when a loop-mechanics operation failed after bootstrap (a turn-runner error or an
    *  un-persistable gate transition); the renderer raises a blocking error dialog. Returns an unsubscribe. */

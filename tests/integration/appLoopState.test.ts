@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { existsSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -18,6 +18,9 @@ import {
   roundReportRel,
   serializeAppLoopState,
   writeAppLoopState,
+  writeAppLoopBootstrap,
+  readAppLoopBootstrap,
+  type AppLoopBootstrap,
   type AppLoopRunState,
 } from '../../src/main/appLoopState';
 
@@ -126,6 +129,91 @@ describe('§27 loop-state writer — confined, first-run, atomic, no .gitignore'
       symlinkSync(elsewhere, join(repo, '.agent-terminal')); // a planted link where the app dir should be
       expect(() => writeAppLoopState(repo, RUN, FIXED)).toThrow();
       expect(existsSync(join(elsewhere, 'loop', 'run-state.yaml'))).toBe(false);
+    } finally {
+      rmSync(elsewhere, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('§27 bootstrap-identity file — disjoint from the run-state document (ST2 AC8)', () => {
+  // §27.10 — the pr/branch/issue a bootstrap opens is set once and read many times over later turns; its
+  // lifecycle is independent of the per-turn run-state doc, so it lives in its OWN file (the polish/armed-
+  // interrupt own-file pattern) — a wholesale run-state write can neither clobber nor resurrect it.
+  const IDENTITY: AppLoopBootstrap = {
+    pr: 87,
+    branch: 'plan-loop/issue-78',
+    issue: 78,
+  };
+  const bootstrapFile = (): string => join(loopDir(), 'bootstrap.yaml');
+
+  it('round-trips pr/branch/issue through its own file, created first-run (target root absent)', () => {
+    expect(existsSync(join(repo, '.agent-terminal'))).toBe(false);
+    writeAppLoopBootstrap(repo, IDENTITY, FIXED);
+    expect(existsSync(bootstrapFile())).toBe(true);
+    expect(readAppLoopBootstrap(repo)).toEqual(IDENTITY);
+  });
+
+  it('is byte-for-byte untouched by a wholesale run-state write, and vice versa (disjoint files)', () => {
+    writeAppLoopBootstrap(repo, IDENTITY, FIXED);
+    const bootstrapBytes = readFileSync(bootstrapFile(), 'utf8');
+    // A full run-state document write must not perturb the bootstrap-identity file.
+    writeAppLoopState(repo, { ...RUN, status: 'error', errorReason: 'boom' }, FIXED);
+    expect(readFileSync(bootstrapFile(), 'utf8')).toBe(bootstrapBytes);
+    expect(readAppLoopBootstrap(repo)).toEqual(IDENTITY);
+    // And re-writing the bootstrap identity must not perturb the run-state document.
+    writeAppLoopState(repo, RUN, FIXED);
+    const runBytes = readFileSync(stateFile(), 'utf8');
+    writeAppLoopBootstrap(repo, { ...IDENTITY, pr: 99 }, FIXED);
+    expect(readFileSync(stateFile(), 'utf8')).toBe(runBytes);
+  });
+
+  it('never writes a .gitignore (§19.1/§25 no-gitignore rule)', () => {
+    writeAppLoopBootstrap(repo, IDENTITY, FIXED);
+    expect(existsSync(join(loopDir(), '.gitignore'))).toBe(false);
+    expect(existsSync(join(repo, '.agent-terminal', '.gitignore'))).toBe(false);
+    expect(existsSync(join(repo, '.gitignore'))).toBe(false);
+  });
+
+  it('leaves a pre-existing .gitignore byte-for-byte unchanged', () => {
+    const gitignore = join(repo, '.gitignore');
+    const before = '# operator-owned\n.agent-terminal/\n';
+    writeFileSync(gitignore, before);
+
+    writeAppLoopBootstrap(repo, IDENTITY, FIXED);
+
+    expect(readFileSync(gitignore, 'utf8')).toBe(before);
+  });
+
+  it('returns null when absent, and drops a field-invalid file rather than surfacing a phantom identity', () => {
+    expect(readAppLoopBootstrap(repo)).toBeNull();
+    writeAppLoopBootstrap(repo, IDENTITY, FIXED);
+    // A non-integer / negative pr or issue, or blank branch, is not a valid identity (CWE-20).
+    for (const bad of [
+      'pr: -1',
+      'pr: 1.5',
+      'pr: 9007199254740992',
+      'issue: 0',
+      'branch: ""',
+    ]) {
+      const good = readFileSync(bootstrapFile(), 'utf8');
+      const field = bad.split(':')[0];
+      const mutated = good.replace(new RegExp(`^${field}:.*$`, 'm'), bad);
+      writeFileSync(bootstrapFile(), mutated);
+      expect(readAppLoopBootstrap(repo), bad).toBeNull();
+    }
+  });
+
+  it('refuses a field-invalid identity on write instead of persisting an unreadable bootstrap file', () => {
+    expect(() => writeAppLoopBootstrap(repo, { ...IDENTITY, pr: 0 }, FIXED)).toThrow(/invalid/i);
+    expect(existsSync(bootstrapFile())).toBe(false);
+  });
+
+  it('refuses to write through a symlinked loop container rather than following it (CWE-59)', () => {
+    const elsewhere = mkdtempSync(join(tmpdir(), 'apploop-boot-evil-'));
+    try {
+      symlinkSync(elsewhere, join(repo, '.agent-terminal'));
+      expect(() => writeAppLoopBootstrap(repo, IDENTITY, FIXED)).toThrow();
+      expect(existsSync(join(elsewhere, 'loop', 'bootstrap.yaml'))).toBe(false);
     } finally {
       rmSync(elsewhere, { recursive: true, force: true });
     }

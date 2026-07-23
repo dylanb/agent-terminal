@@ -4,6 +4,7 @@ import {
   auditFileStamp,
   auditTimestamp,
   chainedTransitionAuditCmd,
+  appBootstrapAuditCmd,
   inputEvents,
   lifecycleEvents,
   consolidateAuditCmd,
@@ -447,6 +448,16 @@ describe('§27 chained-transition audit vocabulary', () => {
     // `none` is a legal binding id (`^[a-z0-9][a-z0-9-]*$`), so a sentinel drawn from that grammar makes one
     // carried artifact byte-identical to zero — the same reader ambiguity, relocated rather than removed.
     expect(cmd).not.toBe(chainedTransitionAuditCmd('implement', ['none'], ['plan']));
+  });
+});
+
+describe('§27 bootstrap audit vocabulary', () => {
+  it('distinguishes the step-keyed lifecycle outcomes and carries failure detail', () => {
+    expect(appBootstrapAuditCmd('start', 'plan')).toContain('plan');
+    expect(appBootstrapAuditCmd('success', 'plan', 'plan-loop/issue-78')).toContain('plan-loop/issue-78');
+    expect(appBootstrapAuditCmd('failure', 'plan', 'working tree is not clean')).toContain('working tree is not clean');
+    expect(appBootstrapAuditCmd('rollback', 'plan')).not.toBe(appBootstrapAuditCmd('failure', 'plan'));
+    expect(appBootstrapAuditCmd('stale', 'plan')).not.toBe(appBootstrapAuditCmd('success', 'plan'));
   });
 });
 

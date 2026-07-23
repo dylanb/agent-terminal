@@ -381,6 +381,24 @@ export function chainedTransitionAuditCmd(step: string, artifactIds: string[], u
   return unresolvedIds.length > 0 ? `${carried} (declared but unresolved: ${unresolvedIds.join(', ')})` : carried;
 }
 
+export type AppBootstrapAuditKind = 'start' | 'success' | 'failure' | 'rollback' | 'stale';
+
+export function appBootstrapAuditCmd(kind: AppBootstrapAuditKind, step: string, detail?: string): string {
+  const suffix = detail ? `: ${detail}` : '';
+  switch (kind) {
+    case 'start':
+      return `§27 bootstrap ${step} started${suffix}`;
+    case 'success':
+      return `§27 bootstrap ${step} succeeded${suffix}`;
+    case 'failure':
+      return `§27 bootstrap ${step} failed${suffix}`;
+    case 'rollback':
+      return `§27 bootstrap ${step} rolled back${suffix}`;
+    case 'stale':
+      return `§27 bootstrap ${step} stale${suffix}`;
+  }
+}
+
 /** The events resolving a step's typed inputs produces (§25.5): an `input.resolved` per value, plus a
  *  `ticket.assoc` when a `github-ticket` input (per `typeByName`) resolved to a positive integer —
  *  explicit ID sourcing only, never scraped (§25.7). */

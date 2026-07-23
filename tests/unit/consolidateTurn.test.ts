@@ -27,7 +27,7 @@ function def(over: Partial<LoopDefV2> = {}): LoopDefV2 {
     ],
     report: { sections: ['summary', 'findings', 'disposition'] },
     gate: [],
-    pickup: { initialStatus: 'planning', branchTemplate: 'plan-loop/issue-{issue}' },
+    pickup: { initialStatus: 'planning', branchTemplate: 'plan-loop/issue-{issue}', initialLabels: [], wipe: { mode: 'abort' } },
     inputs: [],
     outputs: [],
     exec: null,

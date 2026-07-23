@@ -19,14 +19,14 @@ import { APP_LOOP_DIR_SEGMENTS, ARTIFACTS_SUBDIR } from './appLoopPaths';
 export const LOOP_DEF_V2_VERSION = 'v2';
 
 /** The tier a def resolved from, assigned by the resolver — NEVER a schema-authorable field. `operator` is
- *  the user's own config tier (trusted); `app-bundled` is the default shipped with the app (trusted). The
- *  repo tier (untrusted) is added by sub-ticket 2. Capability slices key their privilege on this label, so
- *  no def content can forge it. */
-export type LoopDefV2Origin = 'operator' | 'app-bundled';
+ *  the user's own config tier, `app-bundled` is the default shipped with the app, and `repo` is the
+ *  untrusted repository tier. Capability slices key their privilege on this label, so no def content can
+ *  forge it. */
+export type LoopDefV2Origin = 'operator' | 'app-bundled' | 'repo';
 
-/** The tier roots, injected so tests can point resolution at a temp root. `operator` is null when the
- *  user-config root is refused (a relative CLAUDE_CONFIG_DIR — see userConfig.ts); `appBundled` is the
- *  bundled default tree's root. First hit wins, operator before app-bundled. */
+/** The trusted tier roots, injected so tests can point resolution at a temp root. `operator` is null when
+ *  the user-config root is refused (a relative CLAUDE_CONFIG_DIR — see userConfig.ts); `appBundled` is the
+ *  bundled default tree's root. A repo registry override is resolved separately before these tiers. */
 export interface LoopDefV2Tiers {
   operator: string | null;
   appBundled: string;
@@ -77,10 +77,29 @@ export interface ArtifactBinding {
   rel: string;
 }
 
-/** The bootstrap (pickup) contract (§27.10) — declared here; nothing acts on it in this slice. */
+/** One resolved label mutation a pickup applies to the issue or PR it opens (§27.10). Self-contained — the
+ *  label string is named directly on the def, not resolved through a §26 config-binding slot map. */
+export interface PickupLabelV2 {
+  action: 'add' | 'remove';
+  target: 'issue' | 'pr';
+  label: string;
+}
+
+/** The on-conflict wipe policy (§27.10), a discriminated union so a def that declares no wipe cannot carry
+ *  the fields the wipe path consumes: `abort` (the wipe-absent arm) makes a branch conflict a plain rollback
+ *  failure; `wipe-and-retry` is the confirm-first destructive-wipe arm ST3 acts on. ST2 parses both and runs
+ *  neither wipe — the executor treats every conflict as an abort until ST3 wires the confirm (plan.md line 10). */
+export type WipePolicy = { mode: 'abort' } | { mode: 'wipe-and-retry' };
+
+/** The bootstrap (pickup) contract (§27.10) — self-contained (no §26 config-binding indirection). Optional on
+ *  the def: a def that declares no pickup enters with NO bootstrap (AC3). The executor lands (ST2 Slice 1) but
+ *  the wipe branch of `wipe` defers to ST3. */
 export interface PickupContractV2 {
   initialStatus: string;
   branchTemplate: string;
+  /** The issue/PR label mutations applied on bootstrap; empty when the def names none. */
+  initialLabels: PickupLabelV2[];
+  wipe: WipePolicy;
 }
 
 /** The prescribed round-report structure (§27.5). */
@@ -107,7 +126,7 @@ export interface LoopDefV2 {
   boundaries: BoundaryPolicy[];
   report: ReportStructure;
   gate: GateOptionDef[];
-  pickup: PickupContractV2;
+  pickup: PickupContractV2 | null;
   inputs: ArtifactBinding[];
   outputs: ArtifactBinding[];
   exec: ExecSideEffect | null;
@@ -187,6 +206,12 @@ function requireString(value: unknown, what: string): string {
   return value;
 }
 
+function requireNonBlankString(value: unknown, what: string): string {
+  const text = requireString(value, what);
+  if (text.trim().length === 0) fail(`${what} must not be blank`);
+  return text;
+}
+
 function requireRecord(value: unknown, what: string): Record<string, unknown> {
   if (!isRecord(value)) fail(`${what} must be a mapping`);
   return value as Record<string, unknown>;
@@ -257,6 +282,38 @@ function toArtifactBindings(raw: unknown, repoDir: string, what: string): Artifa
   });
 }
 
+/** The closed on_conflict vocabulary → its `WipePolicy` arm. Absent is the wipe-absent (`abort`) arm; any
+ *  value outside the set is a surfaced reason, never a silent abort (AC6). */
+function toWipePolicy(raw: unknown): WipePolicy {
+  if (raw === undefined) return { mode: 'abort' };
+  if (raw === 'abort') return { mode: 'abort' };
+  if (raw === 'wipe-and-retry') return { mode: 'wipe-and-retry' };
+  fail(`pickup on_conflict must be abort or wipe-and-retry: ${String(raw)}`);
+}
+
+function toPickupLabels(raw: unknown): PickupLabelV2[] {
+  if (raw === undefined) return [];
+  if (!Array.isArray(raw)) fail('pickup initial_labels must be a list');
+  return (raw as unknown[]).map((l) => {
+    const rec = requireRecord(l, 'pickup initial_labels entry');
+    if (rec.action !== 'add' && rec.action !== 'remove') fail(`pickup label action must be add or remove: ${String(rec.action)}`);
+    if (rec.target !== 'issue' && rec.target !== 'pr') fail(`pickup label target must be issue or pr: ${String(rec.target)}`);
+    return { action: rec.action, target: rec.target, label: requireNonBlankString(rec.label, 'pickup label') };
+  });
+}
+
+/** The bootstrap contract (§27.10) — null when the def declares none (AC3: no pickup → no bootstrap). */
+function toPickup(raw: unknown): PickupContractV2 | null {
+  if (raw === undefined) return null;
+  const pickup = requireRecord(raw, 'pickup');
+  return {
+    initialStatus: requireString(pickup.initial_status, 'pickup initial_status'),
+    branchTemplate: requireString(pickup.branch_template, 'pickup branch_template'),
+    initialLabels: toPickupLabels(pickup.initial_labels),
+    wipe: toWipePolicy(pickup.on_conflict),
+  };
+}
+
 function parse(body: string, tierRoot: string, defDir: string, name: string, origin: LoopDefV2Origin, repoDir: string): LoopDefV2 {
   let doc: unknown;
   try {
@@ -286,8 +343,6 @@ function parse(body: string, tierRoot: string, defDir: string, name: string, ori
   const sections = report.sections;
   if (!Array.isArray(sections) || !(sections as unknown[]).every((s) => typeof s === 'string')) fail('report sections must be a list of strings');
 
-  const pickup = requireRecord(rec.pickup, 'pickup');
-
   let exec: ExecSideEffect | null = null;
   if (rec.exec !== undefined && rec.exec !== null) {
     exec = { program: requireString(requireRecord(rec.exec, 'exec').program, 'exec program') };
@@ -303,28 +358,73 @@ function parse(body: string, tierRoot: string, defDir: string, name: string, ori
     boundaries: toBoundaries(rec.boundaries),
     report: { sections: sections as string[] },
     gate: toGate(rec.gate),
-    pickup: {
-      initialStatus: requireString(pickup.initial_status, 'pickup initial_status'),
-      branchTemplate: requireString(pickup.branch_template, 'pickup branch_template'),
-    },
+    pickup: toPickup(rec.pickup),
     inputs: toArtifactBindings(rec.inputs, repoDir, 'input'),
     outputs: toArtifactBindings(rec.outputs, repoDir, 'output'),
     exec,
   };
 }
 
-/** Resolve a §27 loop NAME to a parsed def across the injected tiers (operator, then app-bundled; first
+/** Resolve a §27 loop NAME through a repo registry override, then the operator and app-bundled tiers (first
  *  EXISTING file wins). The loop name is held to a single safe segment BEFORE it is joined to any tier root.
  *  A found-but-malformed def surfaces its reason rather than falling through to a different tier. */
+interface DefCandidate {
+  tierRoot: string;
+  defDir: string;
+  defPath: string;
+  origin: LoopDefV2Origin;
+}
+
+function repoCandidate(name: string, repoDir: string): DefCandidate | { reason: string } | null {
+  let raw: string;
+  try {
+    raw = readFileSync(path.join(repoDir, '.agent-loop.yaml'), 'utf8');
+  } catch (e) {
+    if (isErrno(e, 'ENOENT')) return null;
+    return { reason: `cannot read repo loop registry: ${e instanceof Error ? e.message : String(e)}` };
+  }
+  let doc: unknown;
+  try {
+    doc = yaml.load(raw);
+  } catch {
+    return null;
+  }
+  if (!isRecord(doc) || !isRecord(doc.loops) || typeof doc.loops[name] !== 'string') return null;
+  const root = path.resolve(repoDir);
+  const target = path.resolve(root, doc.loops[name]);
+  const jail = resolveJail(root);
+  if (jail === null || (target !== root && !target.startsWith(root + path.sep))) {
+    return { reason: `repo loop override for ${name} escapes the repository` };
+  }
+  const defPath = confinedRealPath(jail, target);
+  if (defPath === null) return { reason: `repo loop override for ${name} is unresolvable` };
+  return { tierRoot: root, defDir: path.dirname(defPath), defPath, origin: 'repo' };
+}
+
 export function resolveLoopDefV2(name: string, ctx: LoopDefV2Context): LoopDefV2Result {
   if (!isSafePathSegment(name)) return { ok: false, reason: `loop name is not a single safe path segment: ${name}` };
-  const candidates: Array<{ tierRoot: string; origin: LoopDefV2Origin }> = [];
-  if (ctx.tiers.operator !== null) candidates.push({ tierRoot: ctx.tiers.operator, origin: 'operator' });
-  candidates.push({ tierRoot: ctx.tiers.appBundled, origin: 'app-bundled' });
+  const candidates: DefCandidate[] = [];
+  const repo = repoCandidate(name, ctx.repoDir);
+  if (repo && 'reason' in repo) return { ok: false, reason: repo.reason };
+  if (repo) candidates.push(repo);
+  if (ctx.tiers.operator !== null) {
+    const defDir = path.join(ctx.tiers.operator, name);
+    candidates.push({
+      tierRoot: ctx.tiers.operator,
+      defDir,
+      defPath: path.join(defDir, `${name}.yaml`),
+      origin: 'operator',
+    });
+  }
+  const appDefDir = path.join(ctx.tiers.appBundled, name);
+  candidates.push({
+    tierRoot: ctx.tiers.appBundled,
+    defDir: appDefDir,
+    defPath: path.join(appDefDir, `${name}.yaml`),
+    origin: 'app-bundled',
+  });
 
-  for (const { tierRoot, origin } of candidates) {
-    const defDir = path.join(tierRoot, name);
-    const defPath = path.join(defDir, `${name}.yaml`);
+  for (const { tierRoot, defDir, defPath, origin } of candidates) {
     let body: string;
     try {
       body = readFileSync(defPath, 'utf8');

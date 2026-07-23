@@ -92,7 +92,12 @@ const landFocus = (): void => {
 const errorHost = document.getElementById('flow-error-host');
 const errorDialog = errorHost ? createErrorDialog(errorHost, { onFocusLost: landFocus }) : undefined;
 if (errorDialog) {
-  window.flow.onBootstrapError((reason) => errorDialog.render({ title: 'Bootstrap failed', message: reason }));
+  window.flow.onBootstrapError((reason, repoKey, step) =>
+    errorDialog.render({
+      title: `Bootstrap failed — ${step}`,
+      message: `${reason}\n\nRepository: ${repoKey}`,
+    }),
+  );
   window.flow.onLoopError((reason) => errorDialog.render({ title: 'Loop error', message: reason }));
 }
 

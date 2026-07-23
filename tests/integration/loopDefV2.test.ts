@@ -102,7 +102,7 @@ describe('resolveLoopDefV2 — parse round-trip (§27.8, AC 3)', () => {
     expect(d.gate[0].sideEffects[0]).toMatchObject({ kind: 'gh' });
     expect(d.gate[0].sideEffects[0].args).toMatchObject({ action: 'publish-pr-body' });
     // pickup contract; inputs and outputs
-    expect(d.pickup.initialStatus).toBe('planning');
+    expect(d.pickup?.initialStatus).toBe('planning');
     expect(d.inputs[0].id).toBe('ticket');
     expect(d.outputs[0].id).toBe('plan');
   });
@@ -117,11 +117,94 @@ describe('resolveLoopDefV2 — parse round-trip (§27.8, AC 3)', () => {
     expect(op.ok && op.def.origin).toBe('operator'); // operator tier wins (first-hit)
   });
 
+  it('resolves a repo-local registry override as untrusted repo origin before the operator tier', () => {
+    plantDef(join(opDir, 'loops-v2'), 'plan-loop', VALID_DEF);
+    plantDef(join(repoDir, 'defs'), 'plan-loop', VALID_DEF);
+    writeFileSync(join(repoDir, '.agent-loop.yaml'), 'loops:\n  plan-loop: defs/plan-loop/plan-loop.yaml\n');
+    const r = resolveLoopDefV2('plan-loop', { tiers: tiers(), repoDir });
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.def.origin).toBe('repo');
+  });
+
   it('rejects a def that declares origin in its own content as an unknown key (AC 5)', () => {
     plantDef(join(appDir, 'loops-v2'), 'plan-loop', VALID_DEF + 'origin: operator\n');
     const r = resolveLoopDefV2('plan-loop', { tiers: tiers(), repoDir });
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.reason.toLowerCase()).toContain('origin');
+  });
+});
+
+describe('resolveLoopDefV2 — the bootstrap pickup contract is optional and self-contained (§27.10, ST2 AC3)', () => {
+  // The pickup block spanning initial_status + branch_template in VALID_DEF; removing it yields a def that
+  // declares no bootstrap (the AC3 "no pickup → no bootstrap" trigger, keyed on the def, not a flow marker).
+  const PICKUP_BLOCK = 'pickup:\n  initial_status: planning\n  branch_template: plan-loop/issue-{issue}\n';
+
+  it('resolves a def that declares NO pickup, with pickup null (the AC3 no-bootstrap trigger)', () => {
+    const noPickup = VALID_DEF.replace(PICKUP_BLOCK, '');
+    expect(noPickup).not.toBe(VALID_DEF); // the fixture edit landed
+    plantDef(join(appDir, 'loops-v2'), 'plan-loop', noPickup);
+    const r = resolveLoopDefV2('plan-loop', { tiers: tiers(), repoDir });
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.def.pickup).toBeNull();
+  });
+
+  it('parses the extended pickup contract — labels and a wipe-and-retry policy', () => {
+    const extended = VALID_DEF.replace(
+      PICKUP_BLOCK,
+      'pickup:\n  initial_status: planning\n  branch_template: plan-loop/issue-{issue}\n' +
+        '  on_conflict: wipe-and-retry\n' +
+        '  initial_labels:\n    - target: issue\n      action: add\n      label: agent-loop/in-progress\n' +
+        '    - target: pr\n      action: remove\n      label: needs-triage\n',
+    );
+    plantDef(join(appDir, 'loops-v2'), 'plan-loop', extended);
+    const r = resolveLoopDefV2('plan-loop', { tiers: tiers(), repoDir });
+    expect(r.ok).toBe(true);
+    if (!r.ok || r.def.pickup === null) return;
+    expect(r.def.pickup.initialStatus).toBe('planning');
+    expect(r.def.pickup.branchTemplate).toBe('plan-loop/issue-{issue}');
+    expect(r.def.pickup.wipe).toEqual({ mode: 'wipe-and-retry' });
+    expect(r.def.pickup.initialLabels).toEqual([
+      { target: 'issue', action: 'add', label: 'agent-loop/in-progress' },
+      { target: 'pr', action: 'remove', label: 'needs-triage' },
+    ]);
+  });
+
+  it('defaults a pickup that names no on_conflict to the abort wipe policy (wipe-absent arm)', () => {
+    // The committed VALID_DEF pickup names no on_conflict → the discriminated union's wipe-absent arm, so a
+    // branch conflict is a plain rollback failure (ST2 runs no wipe; the wipe path is ST3).
+    plantDef(join(appDir, 'loops-v2'), 'plan-loop', VALID_DEF);
+    const r = resolveLoopDefV2('plan-loop', { tiers: tiers(), repoDir });
+    expect(r.ok).toBe(true);
+    if (r.ok && r.def.pickup) {
+      expect(r.def.pickup.wipe).toEqual({ mode: 'abort' });
+      expect(r.def.pickup.initialLabels).toEqual([]);
+    }
+  });
+
+  it('rejects an on_conflict outside the closed vocabulary, naming the field', () => {
+    plantDef(join(appDir, 'loops-v2'), 'plan-loop', VALID_DEF.replace(PICKUP_BLOCK, PICKUP_BLOCK + '  on_conflict: nuke-everything\n'));
+    const r = resolveLoopDefV2('plan-loop', { tiers: tiers(), repoDir });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason.toLowerCase()).toContain('on_conflict');
+  });
+
+  it('rejects a malformed initial_labels entry, naming the field', () => {
+    const bad = VALID_DEF.replace(PICKUP_BLOCK, PICKUP_BLOCK + '  initial_labels:\n    - target: moon\n      action: add\n      label: x\n');
+    plantDef(join(appDir, 'loops-v2'), 'plan-loop', bad);
+    const r = resolveLoopDefV2('plan-loop', { tiers: tiers(), repoDir });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason.toLowerCase()).toContain('label');
+  });
+
+  it('rejects a blank pickup label at the parser boundary instead of sending an empty gh argument', () => {
+    const bad = VALID_DEF.replace(
+      PICKUP_BLOCK,
+      PICKUP_BLOCK + '  initial_labels:\n    - target: issue\n      action: add\n      label: "   "\n',
+    );
+    plantDef(join(appDir, 'loops-v2'), 'plan-loop', bad);
+    const r = resolveLoopDefV2('plan-loop', { tiers: tiers(), repoDir });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason.toLowerCase()).toContain('pickup label');
   });
 });
 
