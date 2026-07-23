@@ -309,6 +309,7 @@ describe('install consent dialog stays operable with a long file manifest', () =
     createInstallExamples(host, {
       preview: async (): Promise<InstallExamplesPreview> => ({
         ok: true,
+        confirmationId: 'confirmation',
         destinations: [
           { destination: 'flow', conflict: false },
           { destination: 'loops', conflict: true, files },
@@ -363,6 +364,7 @@ describe('the consent dialog survives a short viewport (200% zoom / reflow — W
     createInstallExamples(host, {
       preview: async (): Promise<InstallExamplesPreview> => ({
         ok: true,
+        confirmationId: 'confirmation',
         destinations: [
           { destination: 'flow', conflict: false },
           { destination: 'loops', conflict: true, files },
@@ -413,6 +415,7 @@ describe('the consent dialog reflows at 320x256 (WCAG 1.4.10)', () => {
     createInstallExamples(host, {
       preview: async (): Promise<InstallExamplesPreview> => ({
         ok: true,
+        confirmationId: 'confirmation',
         destinations: [
           { destination: 'flow', conflict: false },
           { destination: 'loops', conflict: true, files },
@@ -462,6 +465,7 @@ describe('the consent scroll box does not clip the checkbox focus ring', () => {
     createInstallExamples(host, {
       preview: async (): Promise<InstallExamplesPreview> => ({
         ok: true,
+        confirmationId: 'confirmation',
         destinations: [
           { destination: 'flow', conflict: false },
           { destination: 'loops', conflict: true, files },
@@ -508,6 +512,7 @@ describe('the consent scroll box does not clip the focus ring of a control it sc
     createInstallExamples(host, {
       preview: async (): Promise<InstallExamplesPreview> => ({
         ok: true,
+        confirmationId: 'confirmation',
         destinations: [
           { destination: 'flow', conflict: true, files: files('flow') },
           { destination: 'loops', conflict: true, files: files('loops') },

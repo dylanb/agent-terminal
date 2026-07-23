@@ -1,8 +1,11 @@
 import type { ConfirmDialogOptions } from './confirmDialog';
+import type { AppBootstrapConflictTarget } from '../../shared/appBootstrap';
 
 export interface AppBootstrapConflictDeps {
   onConflict(
-    cb: (conflict: { branch: string; repoKey: string; step: string }) => void,
+    cb: (
+      conflict: AppBootstrapConflictTarget & { repoKey: string; step: string },
+    ) => void,
   ): () => void;
   confirm(opts: ConfirmDialogOptions): void;
   resolve(repoKey: string, step: string, wipe: boolean): void;
@@ -11,10 +14,27 @@ export interface AppBootstrapConflictDeps {
 export function wireAppBootstrapConflict(
   deps: AppBootstrapConflictDeps,
 ): () => void {
-  return deps.onConflict(({ branch, repoKey, step }) => {
+  return deps.onConflict(({
+    branch,
+    localOid,
+    remoteOid,
+    pullRequests,
+    repoKey,
+    step,
+  }) => {
+    const resources: string[] = [];
+    if (localOid !== null) {
+      resources.push(`local branch ${branch} at ${localOid}`);
+    }
+    if (remoteOid !== null) {
+      resources.push(`origin branch ${branch} at ${remoteOid}`);
+    }
+    resources.push(
+      ...pullRequests.map((pullRequest) => `pull request #${pullRequest}`),
+    );
     deps.confirm({
-      title: 'Branch already exists',
-      message: `A branch ${branch} already exists. Wiping deletes it locally and on origin and closes its PR. Wipe and retry?`,
+      title: 'Bootstrap resources already exist',
+      message: `Wiping will delete or close exactly: ${resources.join(', ')}. Wipe and retry?`,
       confirmLabel: 'Wipe and retry',
       onConfirm: () => deps.resolve(repoKey, step, true),
       onCancel: () => deps.resolve(repoKey, step, false),

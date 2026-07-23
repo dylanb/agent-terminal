@@ -14,7 +14,10 @@ import { captureFocusReturn } from './dom';
 
 export interface InstallExamplesDeps {
   preview(): Promise<InstallExamplesPreview>;
-  apply(replace: InstallDestinationId[]): Promise<InstallExamplesResult>;
+  apply(
+    confirmationId: string,
+    replace: InstallDestinationId[],
+  ): Promise<InstallExamplesResult>;
 }
 
 export interface InstallExamples {
@@ -147,11 +150,15 @@ export function createInstallExamples(host: HTMLElement, deps: InstallExamplesDe
   }
   setBusy(false);
 
-  async function install(replace: InstallDestinationId[], returnFocus: () => void): Promise<void> {
+  async function install(
+    confirmationId: string,
+    replace: InstallDestinationId[],
+    returnFocus: () => void,
+  ): Promise<void> {
     setBusy(true);
     showStatus('cli-status', 'Installing…');
     try {
-      const res = await deps.apply(replace);
+      const res = await deps.apply(confirmationId, replace);
       renderReport(res);
       // The failure arm carries the same created/overwritten/skipped sets, and this is the branch where
       // the user most needs them: a partial install is not rolled back (§18.1), so the alert has to say
@@ -168,7 +175,11 @@ export function createInstallExamples(host: HTMLElement, deps: InstallExamplesDe
 
   type Conflict = Extract<InstallDestinationPreview, { conflict: true }>;
 
-  function promptReplace(conflicts: Conflict[], returnFocus: () => void): void {
+  function promptReplace(
+    confirmationId: string,
+    conflicts: Conflict[],
+    returnFocus: () => void,
+  ): void {
     modal.render(({ doc: d, titleId, close, confirm: accept }) => {
       const describedById = `${titleId}-msg`;
       const cardEl = d.createElement('div');
@@ -241,7 +252,7 @@ export function createInstallExamples(host: HTMLElement, deps: InstallExamplesDe
       confirm.addEventListener('click', () => {
         const replace = [...boxes].filter(([, box]) => box.checked).map(([id]) => id);
         accept(); // NOT close(): installing is the affirmative answer, so nothing is retracted
-        void install(replace, returnFocus);
+        void install(confirmationId, replace, returnFocus);
       });
       foot.append(cancel, confirm);
       cardEl.append(foot);
@@ -259,6 +270,7 @@ export function createInstallExamples(host: HTMLElement, deps: InstallExamplesDe
     reportList.hidden = true;
     showStatus('cli-status', 'Checking…');
     let conflicts: Conflict[];
+    let confirmationId: string;
     try {
       const preview = await deps.preview();
       if (!preview.ok) {
@@ -267,6 +279,7 @@ export function createInstallExamples(host: HTMLElement, deps: InstallExamplesDe
         returnFocus();
         return;
       }
+      confirmationId = preview.confirmationId;
       conflicts = preview.destinations.flatMap((d) => (d.conflict ? [d] : []));
     } catch (e) {
       showError(e instanceof Error ? e.message : 'Install failed.');
@@ -275,11 +288,11 @@ export function createInstallExamples(host: HTMLElement, deps: InstallExamplesDe
       return;
     }
     if (conflicts.length === 0) {
-      await install([], returnFocus);
+      await install(confirmationId, [], returnFocus);
       return;
     }
     setBusy(false);
-    promptReplace(conflicts, returnFocus);
+    promptReplace(confirmationId, conflicts, returnFocus);
   }
 
   btn.addEventListener('click', () => void run());

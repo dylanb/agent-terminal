@@ -158,7 +158,14 @@ const flowApi: FlowApi = {
     ipcRenderer.send(CH.flowResolveBootstrapConflict, { sessionId: SESSION_ID, repoKey, wipe }),
   onAppBootstrapConflict: (cb) => {
     const handler = (_e: unknown, msg: FlowAppBootstrapConflictMsg): void =>
-      cb({ branch: msg.branch, repoKey: msg.repoKey, step: msg.step });
+      cb({
+        branch: msg.branch,
+        localOid: msg.localOid,
+        remoteOid: msg.remoteOid,
+        pullRequests: msg.pullRequests,
+        repoKey: msg.repoKey,
+        step: msg.step,
+      });
     ipcRenderer.on(CH.flowOnAppBootstrapConflict, handler);
     return () => ipcRenderer.removeListener(CH.flowOnAppBootstrapConflict, handler);
   },
@@ -194,9 +201,10 @@ export const cliApi: CliApi = {
 export const examplesApi: ExamplesApi = {
   preview: () =>
     ipcRenderer.invoke(CH.installExamplesPreview, { sessionId: SESSION_ID }) as Promise<InstallExamplesPreview>,
-  apply: (replace) =>
+  apply: (confirmationId, replace) =>
     ipcRenderer.invoke(CH.installExamplesApply, {
       sessionId: SESSION_ID,
+      confirmationId,
       replace,
     }) as Promise<InstallExamplesResult>,
 };

@@ -107,7 +107,16 @@ export function isValidInstallExamplesPreview(m: unknown): m is InstallExamplesP
  *  outside the known set is REJECTED rather than ignored: the list drives filesystem writes, so an
  *  unrecognized value is a malformed request, not a no-op (CWE-20). */
 export function isValidInstallExamplesApply(m: unknown): m is InstallExamplesApplyMsg {
-  if (!isRecord(m) || !isLiveSession(m) || !Array.isArray(m.replace)) return false;
+  if (
+    !isRecord(m) ||
+    !isLiveSession(m) ||
+    typeof m.confirmationId !== 'string' ||
+    m.confirmationId.length === 0 ||
+    m.confirmationId.length > 200 ||
+    !Array.isArray(m.replace)
+  ) {
+    return false;
+  }
   const known: readonly string[] = INSTALL_DESTINATION_IDS;
   return m.replace.every((d) => typeof d === 'string' && known.includes(d));
 }

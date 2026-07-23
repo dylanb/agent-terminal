@@ -3,7 +3,12 @@
 
 import type { GateDecisionOption } from '../shared/ipc';
 import { gateDecisionAuditCmd } from '../shared/audit';
-import { validFeedback, validInstruction, type AppLoopRunState } from './appLoopState';
+import {
+  validFeedback,
+  validInstruction,
+  type AppLoopBootstrap,
+  type AppLoopRunState,
+} from './appLoopState';
 import type { LoopDefV2, LoopDefV2Result } from './loopDefV2';
 import type { AppGateSideEffectCtx, RunAppGateSideEffect } from './appGateGithub';
 
@@ -12,15 +17,22 @@ import type { AppGateSideEffectCtx, RunAppGateSideEffect } from './appGateGithub
 export interface AppGateRefs {
   pr: number | null;
   ticket: number | null;
+  bootstrap: AppLoopBootstrap | null;
 }
 
 export function resolveAppGateRefs(
   flow: { pr?: number; ticket?: number } | undefined,
-  bootstrap: { pr: number; issue: number } | null,
+  bootstrap: AppLoopBootstrap | null,
 ): AppGateRefs {
+  const ticket = flow?.ticket ?? bootstrap?.issue ?? null;
+  const usesBootstrap =
+    flow?.pr === undefined &&
+    bootstrap !== null &&
+    bootstrap.issue === ticket;
   return {
-    pr: flow?.pr ?? bootstrap?.pr ?? null,
-    ticket: flow?.ticket ?? bootstrap?.issue ?? null,
+    pr: flow?.pr ?? (usesBootstrap ? bootstrap.pr : null),
+    ticket,
+    bootstrap: usesBootstrap ? bootstrap : null,
   };
 }
 
@@ -154,7 +166,12 @@ export async function runAppGateDecision(
   // §27.13/AC3
   const refs = deps.refs(repoDir);
   const bodyFile = deps.bodyFile(r.def);
-  const ctx: AppGateSideEffectCtx = { pr: refs.pr, ticket: refs.ticket, bodyFile };
+  const ctx: AppGateSideEffectCtx = {
+    pr: refs.pr,
+    ticket: refs.ticket,
+    bodyFile,
+    bootstrap: refs.bootstrap,
+  };
   for (const se of gateOpt.sideEffects) {
     if (se.kind !== 'gh') continue;
     const action = typeof se.args.action === 'string' ? se.args.action : '';

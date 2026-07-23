@@ -17,8 +17,7 @@ import {
   applyInstallExamples,
   destRelative,
   exampleInstallDirs,
-  handleInstallExamplesPreview,
-  handleInstallExamplesApply,
+  createInstallExamplesCoordinator,
   type InstallDestination,
 } from '../../src/main/installExamples';
 import { loadFlowDefinitionLocalFirst } from '../../src/main/flow';
@@ -1095,7 +1094,9 @@ describe('previewInstallExamples — the read path is confined exactly as the wr
       mkdirSync(targetDirOf('commands'), { recursive: true });
       symlinkSync(secret, targetOf('commands', commandRel));
 
-      const res = handleInstallExamplesPreview({ sessionId: SESSION_ID }, () => dirs);
+      const res = createInstallExamplesCoordinator(() => dirs).preview({
+        sessionId: SESSION_ID,
+      });
       expect(res.ok).toBe(false);
       expect(readFileSync(secret, 'utf8')).toBe('a file outside every destination\n');
     } finally {
@@ -1108,10 +1109,12 @@ describe('previewInstallExamples — the read path is confined exactly as the wr
     const tf = targetOf('flow', flowRel);
     writeFileSync(tf, 'name: my-custom-flow\nsteps: []\n');
     chmodSync(tf, 0o000); // present but unreadable → classify's read throws EACCES, not ENOENT
-    let res: ReturnType<typeof handleInstallExamplesPreview> | undefined;
+    let res: InstallExamplesPreview | undefined;
     try {
       expect(() => {
-        res = handleInstallExamplesPreview({ sessionId: SESSION_ID }, () => dirs);
+        res = createInstallExamplesCoordinator(() => dirs).preview({
+          sessionId: SESSION_ID,
+        });
       }).not.toThrow();
     } finally {
       chmodSync(tf, 0o600);
@@ -1135,11 +1138,18 @@ describe('applyInstallExamples — an unresolvable destination jail is a refusal
   });
 });
 
-describe('handleInstallExamplesPreview / handleInstallExamplesApply — contract guards (§6)', () => {
+describe('install examples coordinator — contract guards (§6)', () => {
   const thunk = (): InstallDestination[] => dirs;
 
   it('applies for a valid live-session request', () => {
-    const res = handleInstallExamplesApply({ sessionId: SESSION_ID, replace: [] }, thunk);
+    const coordinator = createInstallExamplesCoordinator(thunk, () => 'nonce');
+    const preview = coordinator.preview({ sessionId: SESSION_ID });
+    expect(preview.ok).toBe(true);
+    const res = coordinator.apply({
+      sessionId: SESSION_ID,
+      confirmationId: 'nonce',
+      replace: [],
+    });
     expect(res.ok).toBe(true);
     expect(existsSync(targetOf('flow', flowRel))).toBe(true);
     expect(existsSync(targetOf('loops', planDefRel))).toBe(true);
@@ -1147,9 +1157,14 @@ describe('handleInstallExamplesPreview / handleInstallExamplesApply — contract
 
   it('rejects a wrong-session apply with an error and performs no filesystem work', () => {
     let consulted = 0;
-    const res = handleInstallExamplesApply({ sessionId: 'nope', replace: ['flow'] }, () => {
+    const coordinator = createInstallExamplesCoordinator(() => {
       consulted++;
       return dirs;
+    });
+    const res = coordinator.apply({
+      sessionId: 'nope',
+      confirmationId: 'nonce',
+      replace: ['flow'],
     });
     expect(res.ok).toBe(false);
     expect(consulted).toBe(0);
@@ -1157,18 +1172,131 @@ describe('handleInstallExamplesPreview / handleInstallExamplesApply — contract
   });
 
   it('rejects an apply whose replace list is missing or holds an unknown destination', () => {
-    expect(handleInstallExamplesApply({ sessionId: SESSION_ID }, thunk).ok).toBe(false);
-    expect(handleInstallExamplesApply({ sessionId: SESSION_ID, replace: ['everything'] }, thunk).ok).toBe(false);
+    const coordinator = createInstallExamplesCoordinator(thunk);
+    expect(coordinator.apply({ sessionId: SESSION_ID }).ok).toBe(false);
+    expect(
+      coordinator.apply({
+        sessionId: SESSION_ID,
+        confirmationId: 'nonce',
+        replace: ['everything'],
+      }).ok,
+    ).toBe(false);
     expect(existsSync(targetDirOf('flow'))).toBe(false);
   });
 
   it('previews conflicts for a live session and refuses a wrong session with an error, not an empty list', () => {
     mkdirSync(targetDirOf('commands'), { recursive: true });
     writeFileSync(targetOf('commands', commandRel), 'mine\n');
-    const live = handleInstallExamplesPreview({ sessionId: SESSION_ID }, thunk);
+    const coordinator = createInstallExamplesCoordinator(thunk);
+    const live = coordinator.preview({ sessionId: SESSION_ID });
     expect(live.ok).toBe(true);
     expect(conflictsFor(live, 'commands')).toEqual([commandRel]);
     // A refused request is distinguishable from a clean preview: it carries an error, not { destinations: [] }.
-    expect(handleInstallExamplesPreview({ sessionId: 'nope' }, thunk).ok).toBe(false);
+    expect(
+      coordinator.preview({ sessionId: 'nope' }).ok,
+    ).toBe(false);
+  });
+});
+
+describe('createInstallExamplesCoordinator — preview-bound, one-time confirmation', () => {
+  const request = (confirmationId: string, replace: InstallDestinationId[] = []) => ({
+    sessionId: SESSION_ID,
+    confirmationId,
+    replace,
+  });
+
+  function preview(
+    coordinator: ReturnType<typeof createInstallExamplesCoordinator>,
+  ): Extract<InstallExamplesPreview, { ok: true }> {
+    const result = coordinator.preview({ sessionId: SESSION_ID });
+    if (!result.ok) throw new Error(result.error);
+    return result;
+  }
+
+  it('refuses apply without a main-owned preview authorization', () => {
+    const coordinator = createInstallExamplesCoordinator(() => dirs, () => 'nonce');
+
+    const result = coordinator.apply(request('nonce'));
+
+    expect(result.ok).toBe(false);
+    expect(existsSync(targetOf('flow', flowRel))).toBe(false);
+  });
+
+  it('consumes the exact confirmation once and rejects replay', () => {
+    const coordinator = createInstallExamplesCoordinator(() => dirs, () => 'nonce');
+    const confirmation = preview(coordinator);
+
+    expect(
+      coordinator.apply(request(confirmation.confirmationId)).ok,
+    ).toBe(true);
+    expect(
+      coordinator.apply(request(confirmation.confirmationId)).ok,
+    ).toBe(false);
+  });
+
+  it('refuses a token other than the one returned by preview', () => {
+    const coordinator = createInstallExamplesCoordinator(() => dirs, () => 'nonce');
+    preview(coordinator);
+
+    const result = coordinator.apply(request('forged'));
+
+    expect(result.ok).toBe(false);
+    expect(existsSync(targetOf('flow', flowRel))).toBe(false);
+  });
+
+  it('never reissues a consumed confirmation id', () => {
+    const coordinator = createInstallExamplesCoordinator(
+      () => dirs,
+      () => 'reused',
+    );
+    const confirmation = preview(coordinator);
+    expect(
+      coordinator.apply(request(confirmation.confirmationId)).ok,
+    ).toBe(true);
+
+    const next = coordinator.preview({ sessionId: SESSION_ID });
+
+    expect(next.ok).toBe(false);
+  });
+
+  it('refuses replacement for a destination that had no previewed conflict', () => {
+    const coordinator = createInstallExamplesCoordinator(() => dirs, () => 'nonce');
+    const confirmation = preview(coordinator);
+
+    const result = coordinator.apply(
+      request(confirmation.confirmationId, ['flow']),
+    );
+
+    expect(result.ok).toBe(false);
+    expect(existsSync(targetOf('flow', flowRel))).toBe(false);
+  });
+
+  it('preserves a target whose bytes changed after preview', () => {
+    mkdirSync(targetDirOf('flow'), { recursive: true });
+    writeFileSync(targetOf('flow', flowRel), 'mine-before\n');
+    const coordinator = createInstallExamplesCoordinator(() => dirs, () => 'nonce');
+    const confirmation = preview(coordinator);
+    writeFileSync(targetOf('flow', flowRel), 'mine-after\n');
+
+    const result = coordinator.apply(
+      request(confirmation.confirmationId, ['flow']),
+    );
+
+    expect(result.ok).toBe(false);
+    expect(readFileSync(targetOf('flow', flowRel), 'utf8')).toBe('mine-after\n');
+  });
+
+  it('preserves a target that appeared after preview', () => {
+    const coordinator = createInstallExamplesCoordinator(() => dirs, () => 'nonce');
+    const confirmation = preview(coordinator);
+    mkdirSync(targetDirOf('flow'), { recursive: true });
+    writeFileSync(targetOf('flow', flowRel), 'appeared\n');
+
+    const result = coordinator.apply(
+      request(confirmation.confirmationId),
+    );
+
+    expect(result.ok).toBe(false);
+    expect(readFileSync(targetOf('flow', flowRel), 'utf8')).toBe('appeared\n');
   });
 });

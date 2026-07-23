@@ -4,6 +4,7 @@
 import type { Chord, KeyActionId } from './keymap';
 import type { LoopActivity } from './loopActivity';
 import type { ConsolidatorVerdict } from './consolidatorOutput';
+import type { AppBootstrapConflictTarget } from './appBootstrap';
 
 export type SessionId = string;
 
@@ -665,9 +666,8 @@ export interface FlowResolveBootstrapConflictMsg {
 }
 
 /** §6/§27.10. */
-export interface FlowAppBootstrapConflictMsg {
+export interface FlowAppBootstrapConflictMsg extends AppBootstrapConflictTarget {
   sessionId: SessionId;
-  branch: string;
   repoKey: string;
   step: string;
 }
@@ -903,15 +903,17 @@ export type InstallDestinationPreview =
  *  refused request could drive an apply the user never consented to. Observing a preview never writes
  *  anything (§18.1). */
 export type InstallExamplesPreview =
-  | { ok: true; destinations: InstallDestinationPreview[] }
+  | {
+      ok: true;
+      confirmationId: string;
+      destinations: InstallDestinationPreview[];
+    }
   | { ok: false; error: string };
 
-/** examples:apply request (§6): seed every destination. `replace` names the destinations the user
- *  consented to replace conflicting files in — a destination absent from the list keeps its files. The
- *  decision is per destination, so consenting in one never replaces files in another. Absent targets
- *  are always created regardless of the decision (§18.1). */
+/** examples:apply request (§6/§18.1). */
 export interface InstallExamplesApplyMsg {
   sessionId: SessionId;
+  confirmationId: string;
   replace: InstallDestinationId[];
 }
 
@@ -1077,7 +1079,9 @@ export interface FlowApi {
   resolveBootstrapConflict(repoKey: string, wipe: boolean): void;
   /** §6/§27.10. */
   onAppBootstrapConflict(
-    cb: (conflict: { branch: string; repoKey: string; step: string }) => void,
+    cb: (
+      conflict: AppBootstrapConflictTarget & { repoKey: string; step: string },
+    ) => void,
   ): () => void;
   /** §6/§27.10. */
   resolveAppBootstrapConflict(repoKey: string, step: string, wipe: boolean): void;
@@ -1132,7 +1136,10 @@ export interface CliApi {
  *  Observing a preview never writes anything. */
 export interface ExamplesApi {
   preview(): Promise<InstallExamplesPreview>;
-  apply(replace: InstallDestinationId[]): Promise<InstallExamplesResult>;
+  apply(
+    confirmationId: string,
+    replace: InstallDestinationId[],
+  ): Promise<InstallExamplesResult>;
 }
 
 declare global {

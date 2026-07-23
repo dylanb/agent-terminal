@@ -132,18 +132,31 @@ The gate is the **whole** human interface to a running loop. Its options are dec
 **The three loops are the same shape over different data, chained by artifact.**
 
 ```mermaid
-flowchart LR
+flowchart TD
   RAW["GitHub issue (raw)"] --> G["groom-loop"]
-  G -->|"the groomed ticket<br/>(published to the issue body on approve)"| P["plan-loop"]
-  P -->|"plan.md"| I["impl-loop"]
-  I -->|"the PR"| TR["team review"]
+  G -->|"approve: publish issue body<br/>and carry groomed ticket"| PE["enter plan-loop"]
+  PE --> BOOT["async in-app bootstrap"]
+  BOOT -->|"no conflict"| P["plan-loop"]
+  BOOT -->|"failure"| RB["roll back to groom<br/>inputs preserved"]
+  BOOT -->|"existing refs or open PRs"| CF["confirm exact ref OIDs<br/>and PR numbers"]
+  CF -->|"decline"| RB
+  CF -->|"confirm"| CHECK{"target still matches?"}
+  CHECK -->|"changed, conflicts remain"| CF
+  CHECK -->|"changed, no conflicts remain"| RB
+  CHECK -->|"yes"| WIPE["close exact PRs<br/>conditionally delete exact refs"]
+  WIPE -->|"complete"| P
+  WIPE -->|"incomplete or failed"| RB
+  RB --> RELAUNCH["relaunch at rolled-back step"]
+  RELAUNCH -->|"advance with preserved input"| BOOT
+  P -->|"approve: gh pr ready<br/>and carry plan.md"| I["impl-loop"]
+  I -->|"approve: publish PR body<br/>and preserve closes #issue"| TR["team review"]
 ```
 
 - **`groom-loop`** takes the raw GitHub issue and produces **the groomed ticket**. Its approve gate **publishes the groomed ticket back to the GitHub issue body** (§27.13).
 - **`plan-loop`** takes the groomed ticket and produces **`plan.md`**.
 - **`impl-loop`** takes the plan and produces **the implementation on the PR**. Its work turn's product is commits, not a file.
 - **Bootstrap (pickup) stays a separate app action**, as today: on entering the first loop step that needs one, the app validates a clean tree, creates the branch, writes an empty `[skip ci]` start commit, pushes, assigns the issue and applies labels, and opens the **draft PR that `closes #n`** — driven by the def's `pickup` contract, never hardcoded. **Groom does not absorb it.**
-- **A pickup that cannot run never fails silently and never strands the flow.** It runs asynchronously after the loop step is entered, so a failure (dirty tree, unresolvable base, conflicting branch, rejected PR create) arrives after the transition returned. When it does, the app **rolls the flow back one step**, preserving the resolved inputs, and **surfaces the reason in a blocking error dialog**. A destructive re-pickup (an existing target branch under a wipe policy) is **confirm-first**: the app does nothing destructive on detection and names what will be deleted.
+- **A pickup that cannot run never fails silently and never strands the flow.** It runs asynchronously after the loop step is entered, so a failure (dirty tree, unresolvable base, conflicting branch, rejected PR create) arrives after the transition returned. When it does, the app **rolls the flow back one step**, preserving the resolved inputs, and **surfaces the reason in a blocking error dialog**. A destructive re-pickup under a wipe policy is **confirm-first**: the app does nothing destructive on detection, names the exact local/remote ref object IDs and open PR numbers, revalidates that snapshot at the operation, and recreates the branch only after the exact wipe completes.
 - **Loop state is app-owned**, under `<repo>/.agent-terminal/loop/`, in a schema of the app's choosing. **The `.agent-loop/state.yaml` v4 contract is gone** (§27.14) — there is no external writer to reconcile with, no re-handoff to the Go engine to preserve, and no reason to carry fields (`persona_state`, `phase2_active`, `severity_cycle_iter`, `impasse`, `completed_loops`) for machinery this design deleted.
 - **Epics create sub-PRs only.** A plan the work agent classifies an epic reuses the current PR for sub-ticket 1 and creates the remaining N−1 sub-tickets/PRs out of band, recording them in the loop state. It **does not auto-launch** child instances; the operator opens a loop per sub-PR by hand.
 

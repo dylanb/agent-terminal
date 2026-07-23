@@ -58,7 +58,8 @@ keyboardUi = createKeyboardSettings(document.getElementById('kb-settings-view')!
 createCliInstall(document.getElementById('cli-install-view')!, { install: () => window.cli.install() });
 createInstallExamples(document.getElementById('install-examples-view')!, {
   preview: () => window.examples.preview(),
-  apply: (replace) => window.examples.apply(replace),
+  apply: (confirmationId, replace) =>
+    window.examples.apply(confirmationId, replace),
 });
 void window.monitor
   .getSettings()

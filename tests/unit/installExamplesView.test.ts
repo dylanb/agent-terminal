@@ -31,9 +31,15 @@ describe('install examples view organism (§18.1/§23.4)', () => {
     { destination: 'skills', conflict: false },
     { destination: 'commands', conflict: false },
   ];
-  const clean: InstallExamplesPreview = { ok: true, destinations: cleanDestinations };
+  const confirmationId = 'preview-confirmation';
+  const clean: InstallExamplesPreview = {
+    ok: true,
+    confirmationId,
+    destinations: cleanDestinations,
+  };
   const conflicting = (...ids: InstallDestinationId[]): InstallExamplesPreview => ({
     ok: true,
+    confirmationId,
     destinations: cleanDestinations.map((d) =>
       ids.includes(d.destination) ? { destination: d.destination, conflict: true, files: rels(`${d.destination}-file.md`) } : d,
     ),
@@ -112,7 +118,7 @@ describe('install examples view organism (§18.1/§23.4)', () => {
     createInstallExamples(host, deps({ apply }));
     button().click();
     await vi.waitFor(() => expect(apply).toHaveBeenCalledTimes(1));
-    expect(apply).toHaveBeenCalledWith([]);
+    expect(apply).toHaveBeenCalledWith(confirmationId, []);
     expect(prompt()).toBeNull();
     await vi.waitFor(() => expect(status().textContent?.toLowerCase()).toContain('created'));
   });
@@ -141,14 +147,18 @@ describe('install examples view organism (§18.1/§23.4)', () => {
     await openConsent(['skills', 'commands'], { apply });
     consentBox('commands').click();
     confirmBtn().click();
-    await vi.waitFor(() => expect(apply).toHaveBeenCalledWith(['commands']));
+    await vi.waitFor(() =>
+      expect(apply).toHaveBeenCalledWith(confirmationId, ['commands']),
+    );
   });
 
   it('forwards an empty list when the user confirms with nothing checked, so absent files still install', async () => {
     const apply = vi.fn(async () => okResult({ created: [{ destination: 'loops', files: rels('plan-loop/plan-loop.yaml') }], skipped: [{ destination: 'skills', files: rels('a/SKILL.md') }] }));
     await openConsent(['skills'], { apply });
     confirmBtn().click();
-    await vi.waitFor(() => expect(apply).toHaveBeenCalledWith([]));
+    await vi.waitFor(() =>
+      expect(apply).toHaveBeenCalledWith(confirmationId, []),
+    );
     await vi.waitFor(() => expect(status().textContent?.toLowerCase()).toContain('skipped'));
     expect(prompt()).toBeNull();
   });

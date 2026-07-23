@@ -24,21 +24,40 @@ const APPROVE_MARK_READY: GateOptionDef[] = [{ option: 'approve', sideEffects: [
 
 describe('resolveAppGateRefs', () => {
   it('uses the app-owned bootstrap identity when the flow has no explicit PR input', () => {
-    expect(resolveAppGateRefs({ ticket: 78 }, { pr: 4242, issue: 78 })).toEqual({
+    const bootstrap = {
+      pr: 4242,
+      issue: 78,
+      branch: 'plan-loop/issue-78',
+    };
+    expect(resolveAppGateRefs({ ticket: 78 }, bootstrap)).toEqual({
       pr: 4242,
       ticket: 78,
+      bootstrap,
     });
   });
 
   it('keeps explicit flow inputs authoritative over the bootstrap fallback', () => {
-    expect(resolveAppGateRefs({ pr: 9, ticket: 10 }, { pr: 4242, issue: 78 })).toEqual({
+    expect(resolveAppGateRefs({ pr: 9, ticket: 10 }, { pr: 4242, issue: 78, branch: 'plan-loop/issue-78' })).toEqual({
       pr: 9,
       ticket: 10,
+      bootstrap: null,
+    });
+  });
+
+  it('never combines a current flow ticket with a stale bootstrap PR for another issue', () => {
+    expect(resolveAppGateRefs({ ticket: 200 }, { pr: 4242, issue: 78, branch: 'plan-loop/issue-78' })).toEqual({
+      pr: null,
+      ticket: 200,
+      bootstrap: null,
     });
   });
 
   it('returns absent refs when neither source carries an identity', () => {
-    expect(resolveAppGateRefs(undefined, null)).toEqual({ pr: null, ticket: null });
+    expect(resolveAppGateRefs(undefined, null)).toEqual({
+      pr: null,
+      ticket: null,
+      bootstrap: null,
+    });
   });
 });
 
@@ -63,7 +82,11 @@ function mkDeps(over: Partial<AppGateDecisionDeps> & { run?: AppLoopRunState | n
   const deps: AppGateDecisionDeps = {
     readRunState: () => (over.run === undefined ? GATE_RUN : over.run),
     resolveDef: () => ({ ok: true, def: defWithGate(over.gate ?? APPROVE_MARK_READY) }),
-    refs: () => ({ pr: over.pr ?? 41, ticket: over.ticket ?? null }),
+    refs: () => ({
+      pr: over.pr ?? 41,
+      ticket: over.ticket ?? null,
+      bootstrap: null,
+    }),
     bodyFile: () => '/repo/.agent-terminal/loop/artifacts/plan.md',
     runSideEffect: async (action, ctx) => {
       rec.sideEffects.push({ action, ctx });
@@ -99,7 +122,7 @@ describe('runAppGateDecision — approve (§27.13 / AC2)', () => {
   it('runs the declared side-effect, persists the terminal accept, and advances the flow', async () => {
     const { deps, rec } = mkDeps({});
     await approve(deps);
-    expect(rec.sideEffects).toEqual([{ action: 'mark-ready', ctx: { pr: 41, ticket: null, bodyFile: '/repo/.agent-terminal/loop/artifacts/plan.md' } }]);
+    expect(rec.sideEffects).toEqual([{ action: 'mark-ready', ctx: { pr: 41, ticket: null, bodyFile: '/repo/.agent-terminal/loop/artifacts/plan.md', bootstrap: null } }]);
     expect(rec.accepts).toEqual([{ loop: 'plan-loop', step: 'plan', turnKey: 'consolidate-plan', status: 'accepted' }]);
     expect(rec.advances).toEqual(['/repo']);
     expect(rec.audits.some((a) => a.cmd.includes('mark-ready') && a.exit === 0)).toBe(true);
@@ -398,7 +421,7 @@ describe('runAppGateDecision — approve ends the polish stand-down (AC6)', () =
     });
     await expect(approve(deps)).resolves.toBe(false); // resolves — the throw is caught, never rejects into the void caller
     expect(rec.accepts).toHaveLength(1); // the accept persisted before the (now-caught) clear
-    expect(rec.sideEffects).toEqual([{ action: 'mark-ready', ctx: { pr: 41, ticket: null, bodyFile: '/repo/.agent-terminal/loop/artifacts/plan.md' } }]);
+    expect(rec.sideEffects).toEqual([{ action: 'mark-ready', ctx: { pr: 41, ticket: null, bodyFile: '/repo/.agent-terminal/loop/artifacts/plan.md', bootstrap: null } }]);
     expect(rec.advances).toEqual(['/repo']); // the flow advanced past the gate — no strand
     expect(rec.errors).toEqual([]); // a best-effort clear failure is audited, not surfaced as a blocking dialog
     expect(rec.audits.some((a) => a.cmd.includes('clear') && a.cmd.includes('polish') && a.exit === 1)).toBe(true);

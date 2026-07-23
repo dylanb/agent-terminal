@@ -117,9 +117,8 @@ import { handleCliInstall } from './cliInstall';
 import { resolveLaunchInvocation } from './cliShim';
 import type { BundleLocation } from './bundleLocation';
 import {
+  createInstallExamplesCoordinator,
   exampleInstallDirs,
-  handleInstallExamplesPreview,
-  handleInstallExamplesApply,
   type InstallDestination,
 } from './installExamples';
 import { provideAppLoopView } from './loopViewV2';
@@ -136,7 +135,11 @@ import { resolveExampleLoopsV2Dir } from './exampleAssets';
 import { userConfigLoopsV2Dir } from './userConfig';
 import type { CliInstallResult } from '../shared/ipc';
 import { createAppLoopBootstrapCoordinator, runAppLoopBootstrap, type AppLoopBootstrapCoordinator } from './appLoopBootstrap';
-import { createRealBootstrapGit, createRealBootstrapGitHub } from './bootstrapPorts';
+import {
+  createRealAppBootstrapConflicts,
+  createRealBootstrapGit,
+  createRealBootstrapGitHub,
+} from './bootstrapPorts';
 
 async function createWindow(): Promise<void> {
   const iconLoc: BundleLocation = app.isPackaged
@@ -164,9 +167,9 @@ async function createWindow(): Promise<void> {
   const config = resolveRuntimeConfig(process.env);
   // §23.4: L anchors the cwd surfaces; the flow global dir is the per-user home (§18.1), not L.
   const { launchRoot, flowGlobalDir } = resolveLaunchSurfaces(process.env, os.homedir());
-  // §18.1/§23.4/§26.5: the install-examples action's bundle sources (build-aware) + its install targets
-  // (the GLOBAL flow home and the user-level Claude config directories). The handlers read this seam.
-  const exampleDirs = (): InstallDestination[] => exampleInstallDirs(iconLoc, flowGlobalDir);
+  const resolveExampleInstallDestinations = (): InstallDestination[] =>
+    exampleInstallDirs(iconLoc, flowGlobalDir);
+  const installExamples = createInstallExamplesCoordinator(resolveExampleInstallDestinations);
   const ptyProcess = await spawnAgentShell({
     integrationScriptPath: config.shellIntegration ? SHELL_INTEGRATION_SCRIPT : undefined,
     cwd: launchRoot,
@@ -1073,7 +1076,7 @@ async function createWindow(): Promise<void> {
           {
             git,
             github: createRealBootstrapGitHub(repoDir),
-            wipeConflictingBranch: (branch) => git.wipeConflictingBranch(branch),
+            conflicts: createRealAppBootstrapConflicts(repoDir),
             rollbackCreatedBranch: (branch) => git.rollbackCreatedBranch(branch),
             writeBootstrap: (identity) => writeAppLoopBootstrap(repoDir, identity),
           },
@@ -1108,12 +1111,12 @@ async function createWindow(): Promise<void> {
         step: stepId,
         reason,
       }),
-    emitConflict: ({ repoDir, stepId, branch }) =>
+    emitConflict: ({ repoDir, stepId, ...target }) =>
       send(CH.flowOnAppBootstrapConflict, {
         sessionId: SESSION_ID,
         repoKey: repoDir,
         step: stepId,
-        branch,
+        ...target,
       }),
     audit: (repoDir, kind, stepId, detail) =>
       audit.recordCommand(
@@ -1668,8 +1671,8 @@ async function createWindow(): Promise<void> {
       // the unpackaged app path); the flow lands in the GLOBAL flow home read back by
       // loadFlowDefinitionLocalFirst, and the definitions, persona skills and commands land in the
       // user-level Claude config directories that the engine and Claude Code discover from.
-      [CH.installExamplesPreview]: (_e, m) => handleInstallExamplesPreview(m, exampleDirs),
-      [CH.installExamplesApply]: (_e, m) => handleInstallExamplesApply(m, exampleDirs),
+      [CH.installExamplesPreview]: (_e, m) => installExamples.preview(m),
+      [CH.installExamplesApply]: (_e, m) => installExamples.apply(m),
     },
   );
 

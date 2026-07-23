@@ -1,6 +1,7 @@
 // §18.1/§23.4/§26.5; writes route through atomicWriteFileSync (CWE-59).
 
 import { accessSync, constants, lstatSync, readFileSync, statSync } from 'node:fs';
+import { createHash, randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { atomicWriteFileSync, isRealContainer } from './atomicFile';
 import { confinedRealPathResult, resolveOwnedDirJail, type PathRefusal } from './confinedPath';
@@ -232,6 +233,12 @@ export function exampleInstallDirs(loc: BundleLocation, flowGlobalDir: string, c
 
 type Classification = 'create' | 'identical' | 'differ';
 
+function allowsOverwrite(
+  overwrite: InstallDestination['overwrite'],
+): boolean {
+  return overwrite.mode === 'confirm-overwrite';
+}
+
 function classify(bundleFile: string, targetFile: string): Classification {
   let target: Buffer;
   try {
@@ -342,6 +349,99 @@ function report(groups: Groups): InstallDestinationFiles[] {
   }));
 }
 
+interface InstallFileSnapshot {
+  destination: InstallDestinationId;
+  rel: DestRelativePath;
+  src: string;
+  real: string;
+  sourceHash: string;
+  targetHash: string | null;
+}
+
+interface InstallAuthorization {
+  files: InstallFileSnapshot[];
+  conflicts: Set<InstallDestinationId>;
+}
+
+function hash(bytes: Buffer): string {
+  return createHash('sha256').update(bytes).digest('hex');
+}
+
+function targetHash(file: string): string | null {
+  try {
+    return hash(readFileSync(file));
+  } catch (error) {
+    if (isErrno(error, 'ENOENT')) return null;
+    throw error;
+  }
+}
+
+function snapshotFile(
+  destination: InstallDestinationId,
+  file: ResolvedFile,
+): InstallFileSnapshot {
+  return {
+    destination,
+    rel: file.rel,
+    src: file.src,
+    real: file.real,
+    sourceHash: hash(readFileSync(file.src)),
+    targetHash: targetHash(file.real),
+  };
+}
+
+function captureInstallSnapshot(
+  destinations: ResolvedDestination[],
+): InstallFileSnapshot[] {
+  return destinations.flatMap((destination) =>
+    destination.files.map((file) => snapshotFile(destination.id, file)),
+  );
+}
+
+function snapshotKey(
+  destination: InstallDestinationId,
+  rel: DestRelativePath,
+): string {
+  return `${destination}\0${rel}`;
+}
+
+function sameSnapshot(
+  expected: InstallFileSnapshot,
+  actual: InstallFileSnapshot,
+): boolean {
+  return (
+    expected.destination === actual.destination &&
+    expected.rel === actual.rel &&
+    expected.src === actual.src &&
+    expected.real === actual.real &&
+    expected.sourceHash === actual.sourceHash &&
+    expected.targetHash === actual.targetHash
+  );
+}
+
+function verifyAuthorization(
+  destinations: ResolvedDestination[],
+  authorization: InstallAuthorization,
+): string | null {
+  const actual = captureInstallSnapshot(destinations);
+  if (actual.length !== authorization.files.length) {
+    return 'the install file set changed after preview';
+  }
+  const expected = new Map(
+    authorization.files.map((file) => [
+      snapshotKey(file.destination, file.rel),
+      file,
+    ]),
+  );
+  for (const file of actual) {
+    const previewed = expected.get(snapshotKey(file.destination, file.rel));
+    if (previewed === undefined || !sameSnapshot(previewed, file)) {
+      return `the install target changed after preview: ${file.real}`;
+    }
+  }
+  return null;
+}
+
 export function previewInstallExamples(destinations: InstallDestination[]): InstallExamplesPreview {
   let resolution: Resolution;
   try {
@@ -362,7 +462,7 @@ export function previewInstallExamples(destinations: InstallDestination[]): Inst
       // apply the user never consented to.
       return { ok: false, error: `Could not check the install targets: ${errMsg(e)}` };
     }
-    if (files.length > 0 && dest.overwrite.mode !== 'confirm-overwrite') {
+    if (files.length > 0 && !allowsOverwrite(dest.overwrite)) {
       return {
         ok: false,
         error: `Could not install ${dest.id}: its overwrite policy does not authorize replacing ${files.join(', ')}`,
@@ -370,10 +470,18 @@ export function previewInstallExamples(destinations: InstallDestination[]): Inst
     }
     out.push(files.length === 0 ? { destination: dest.id, conflict: false } : { destination: dest.id, conflict: true, files });
   }
-  return { ok: true, destinations: out };
+  return {
+    ok: true,
+    confirmationId: 'unbound-inspection',
+    destinations: out,
+  };
 }
 
-export function applyInstallExamples(destinations: InstallDestination[], replace: InstallDestinationId[]): InstallExamplesResult {
+function applyInstallExamplesWithAuthorization(
+  destinations: InstallDestination[],
+  replace: InstallDestinationId[],
+  authorization?: InstallAuthorization,
+): InstallExamplesResult {
   const empty = { created: [], overwritten: [], skipped: [] };
   let resolution: Resolution;
   try {
@@ -382,12 +490,34 @@ export function applyInstallExamples(destinations: InstallDestination[], replace
     return { ok: false, error: `Could not install: ${errMsg(e)}`, ...empty };
   }
   if (!resolution.ok) return { ok: false, error: resolution.error, ...empty };
+  if (authorization !== undefined) {
+    let changed: string | null;
+    try {
+      changed = verifyAuthorization(
+        resolution.destinations,
+        authorization,
+      );
+    } catch (error) {
+      return {
+        ok: false,
+        error: `Could not verify install confirmation: ${errMsg(error)}`,
+        ...empty,
+      };
+    }
+    if (changed !== null) {
+      return {
+        ok: false,
+        error: `Could not install: ${changed}; preview again`,
+        ...empty,
+      };
+    }
+  }
 
   const plan = resolution.destinations.filter((d) => d.files.length > 0);
   try {
     for (const dest of plan) {
       if (
-        dest.overwrite.mode !== 'confirm-overwrite' &&
+        !allowsOverwrite(dest.overwrite) &&
         dest.files.some((file) => classify(file.src, file.real) === 'differ')
       ) {
         return {
@@ -415,6 +545,12 @@ export function applyInstallExamples(destinations: InstallDestination[], replace
   }
 
   const consented = new Set(replace);
+  const expected = new Map(
+    (authorization?.files ?? []).map((file) => [
+      snapshotKey(file.destination, file.rel),
+      file,
+    ]),
+  );
   const created: Groups = new Map();
   const overwritten: Groups = new Map();
   const skipped: Groups = new Map();
@@ -429,12 +565,23 @@ export function applyInstallExamples(destinations: InstallDestination[], replace
   for (const dest of plan) {
     for (const file of dest.files) {
       try {
+        if (authorization !== undefined) {
+          const previewed = expected.get(snapshotKey(dest.id, file.rel));
+          if (
+            previewed === undefined ||
+            !sameSnapshot(previewed, snapshotFile(dest.id, file))
+          ) {
+            return fail(
+              `Could not install ${file.rel}: its source or target changed after preview; preview again`,
+            );
+          }
+        }
         const cls = classify(file.src, file.real);
         if (cls === 'identical' || (cls === 'differ' && !consented.has(dest.id))) {
           record(skipped, dest.id, file.rel);
           continue;
         }
-        if (cls === 'differ' && dest.overwrite.mode !== 'confirm-overwrite') {
+        if (cls === 'differ' && !allowsOverwrite(dest.overwrite)) {
           return fail(`Could not install ${file.rel}: its overwrite policy does not authorize replacement`);
         }
         // Bytes, not text: the bundle is a tree the build ships, and decoding a non-UTF-8 asset would both
@@ -449,12 +596,142 @@ export function applyInstallExamples(destinations: InstallDestination[], replace
   return { ok: true, created: report(created), overwritten: report(overwritten), skipped: report(skipped) };
 }
 
-export function handleInstallExamplesPreview(m: unknown, dirs: () => InstallDestination[]): InstallExamplesPreview {
-  if (!isValidInstallExamplesPreview(m)) return { ok: false, error: 'invalid preview request' };
-  return previewInstallExamples(dirs());
+export function applyInstallExamples(
+  destinations: InstallDestination[],
+  replace: InstallDestinationId[],
+): InstallExamplesResult {
+  return applyInstallExamplesWithAuthorization(destinations, replace);
 }
 
-export function handleInstallExamplesApply(m: unknown, dirs: () => InstallDestination[]): InstallExamplesResult {
-  if (!isValidInstallExamplesApply(m)) return { ok: false, error: 'invalid install request', created: [], overwritten: [], skipped: [] };
-  return applyInstallExamples(dirs(), m.replace);
+function failedInstall(error: string): InstallExamplesResult {
+  return {
+    ok: false,
+    error,
+    created: [],
+    overwritten: [],
+    skipped: [],
+  };
+}
+
+function prepareInstallAuthorization(
+  destinations: InstallDestination[],
+): { preview: InstallDestinationPreview[]; authorization: InstallAuthorization } {
+  const resolution = resolveAll(destinations);
+  if (!resolution.ok) throw new Error(resolution.error);
+  const files = captureInstallSnapshot(resolution.destinations);
+  const conflicts = new Set<InstallDestinationId>();
+  const preview = resolution.destinations.map((destination) => {
+    const differing = files
+      .filter(
+        (file) =>
+          file.destination === destination.id &&
+          file.targetHash !== null &&
+          file.targetHash !== file.sourceHash,
+      )
+      .map((file) => file.rel);
+    if (differing.length === 0) {
+      return {
+        destination: destination.id,
+        conflict: false as const,
+      };
+    }
+    if (!allowsOverwrite(destination.overwrite)) {
+      throw new Error(
+        `Could not install ${destination.id}: its overwrite policy does not authorize replacing ${differing.join(', ')}`,
+      );
+    }
+    conflicts.add(destination.id);
+    return {
+      destination: destination.id,
+      conflict: true as const,
+      files: differing,
+    };
+  });
+  return { preview, authorization: { files, conflicts } };
+}
+
+export interface InstallExamplesCoordinator {
+  preview(message: unknown): InstallExamplesPreview;
+  apply(message: unknown): InstallExamplesResult;
+}
+
+export function createInstallExamplesCoordinator(
+  dirs: () => InstallDestination[],
+  createConfirmationId: () => string = randomUUID,
+): InstallExamplesCoordinator {
+  const issuedConfirmationIds = new Set<string>();
+  let pending:
+    | {
+        confirmationId: string;
+        authorization: InstallAuthorization;
+      }
+    | undefined;
+
+  return {
+    preview(message) {
+      pending = undefined;
+      if (!isValidInstallExamplesPreview(message)) {
+        return { ok: false, error: 'invalid preview request' };
+      }
+      try {
+        const prepared = prepareInstallAuthorization(dirs());
+        const confirmationId = createConfirmationId();
+        if (
+          confirmationId.length === 0 ||
+          confirmationId.length > 200 ||
+          issuedConfirmationIds.has(confirmationId)
+        ) {
+          return {
+            ok: false,
+            error: 'could not create an install confirmation',
+          };
+        }
+        issuedConfirmationIds.add(confirmationId);
+        pending = {
+          confirmationId,
+          authorization: prepared.authorization,
+        };
+        return {
+          ok: true,
+          confirmationId,
+          destinations: prepared.preview,
+        };
+      } catch (error) {
+        return {
+          ok: false,
+          error: `Could not check the install targets: ${errMsg(error)}`,
+        };
+      }
+    },
+    apply(message) {
+      if (!isValidInstallExamplesApply(message)) {
+        return failedInstall('invalid install request');
+      }
+      const confirmation = pending;
+      if (
+        confirmation === undefined ||
+        confirmation.confirmationId !== message.confirmationId
+      ) {
+        return failedInstall(
+          'install confirmation is missing, stale, or already used; preview again',
+        );
+      }
+      pending = undefined;
+      if (
+        message.replace.some(
+          (destination) =>
+            !confirmation.authorization.conflicts.has(destination),
+        )
+      ) {
+        return failedInstall(
+          'install request names a replacement that was not offered in its preview',
+        );
+      }
+      return applyInstallExamplesWithAuthorization(
+        dirs(),
+        message.replace,
+        confirmation.authorization,
+      );
+    },
+  };
 }

@@ -1722,26 +1722,33 @@ function seedFakeGhGit(prefix: string): { binDir: string; logFile: string } {
     // porcelain line → a dirty tree, so pickup aborts (§26.9). Every other op is a recorded no-op success.
     'if [ "$1" = "status" ] && [ -n "$FAKE_GIT_DIRTY" ]; then echo " M src/app.ts"; exit 0; fi\n' +
     'if [ "$1" = "status" ] && [ -n "$FAKE_GIT_DIRTY_ONCE" ] && [ ! -e "$FAKE_GHGIT_LOG.dirty-seen" ]; then touch "$FAKE_GHGIT_LOG.dirty-seen"; echo " M src/app.ts"; exit 0; fi\n' +
-    // branch --list prints the queried branch when FAKE_GIT_BRANCH_EXISTS is set → a pickup conflict (§26.9).
-    'if [ "$1" = "branch" ] && [ "$2" = "--list" ]; then local_branch=$(cat "$FAKE_GHGIT_LOG.local-branch" 2>/dev/null || true); if [ -n "$FAKE_GIT_BRANCH_EXISTS" ] || [ "$local_branch" = "$3" ]; then echo "  $3"; fi; exit 0; fi\n' +
-    'if [ "$1" = "checkout" ] && [ "$2" = "-b" ]; then echo "$3" > "$FAKE_GHGIT_LOG.local-branch"; exit 0; fi\n' +
-    'if [ "$1" = "branch" ] && [ "$2" = "-D" ]; then rm -f "$FAKE_GHGIT_LOG.local-branch"; exit 0; fi\n' +
+    'if [ "$1" = "branch" ] && [ "$2" = "--list" ]; then local_branch=$(cat "$FAKE_GHGIT_LOG.local-branch" 2>/dev/null || true); if { [ -n "$FAKE_GIT_BRANCH_EXISTS" ] && [ ! -e "$FAKE_GHGIT_LOG.local-deleted" ]; } || [ "$local_branch" = "$3" ]; then echo "  $3"; fi; exit 0; fi\n' +
+    'if [ "$1" = "rev-parse" ] && [ "$2" = "--verify" ]; then echo "1111111111111111111111111111111111111111"; exit 0; fi\n' +
+    'if [ "$1" = "checkout" ] && [ "$2" = "-b" ]; then rm -f "$FAKE_GHGIT_LOG.local-deleted"; echo "$3" > "$FAKE_GHGIT_LOG.local-branch"; exit 0; fi\n' +
+    'if [ "$1" = "branch" ] && [ "$2" = "-D" ]; then touch "$FAKE_GHGIT_LOG.local-deleted"; rm -f "$FAKE_GHGIT_LOG.local-branch"; exit 0; fi\n' +
+    'if [ "$1" = "update-ref" ] && [ "$2" = "-d" ]; then touch "$FAKE_GHGIT_LOG.local-deleted"; rm -f "$FAKE_GHGIT_LOG.local-branch"; exit 0; fi\n' +
     'if [ "$1" = "push" ] && [ "$2" = "-u" ]; then echo "$4" > "$FAKE_GHGIT_LOG.remote-branch"; exit 0; fi\n' +
-    'if [ "$1" = "ls-remote" ]; then remote_branch=$(cat "$FAKE_GHGIT_LOG.remote-branch" 2>/dev/null || true); if [ "$remote_branch" = "$4" ]; then echo "deadbeef refs/heads/$4"; fi; exit 0; fi\n' +
-    'if [ "$1" = "push" ] && [ "$3" = "--delete" ]; then rm -f "$FAKE_GHGIT_LOG.remote-branch"; exit 0; fi\n' +
+    'if [ "$1" = "ls-remote" ]; then remote_branch=$(cat "$FAKE_GHGIT_LOG.remote-branch" 2>/dev/null || true); queried=${4#refs/heads/}; if { [ -n "$FAKE_GIT_BRANCH_EXISTS" ] && [ ! -e "$FAKE_GHGIT_LOG.remote-deleted" ]; } || [ "$remote_branch" = "$queried" ]; then echo "2222222222222222222222222222222222222222 refs/heads/$queried"; fi; exit 0; fi\n' +
+    'if [ "$1" = "push" ] && [ "$3" = "--delete" ]; then touch "$FAKE_GHGIT_LOG.remote-deleted"; rm -f "$FAKE_GHGIT_LOG.remote-branch"; exit 0; fi\n' +
+    'if [ "$1" = "push" ] && [[ "$3" = --force-with-lease=* ]]; then touch "$FAKE_GHGIT_LOG.remote-deleted"; rm -f "$FAKE_GHGIT_LOG.remote-branch"; exit 0; fi\n' +
     'exit 0\n';
   const fakeGh =
     '#!/usr/bin/env bash\n' +
     'echo "gh $*" >> "$FAKE_GHGIT_LOG"\n' +
+    'if [ "$1" = "repo" ] && [ "$2" = "view" ] && [[ "$*" = *nameWithOwner* ]]; then echo \'{"nameWithOwner":"fake/repo"}\'; exit 0; fi\n' +
     'if [ "$1" = "repo" ] && [ "$2" = "view" ]; then echo "main"; exit 0; fi\n' +
     'if [ "$1" = "issue" ] && [ "$2" = "view" ]; then echo \'{"title":"Fake ticket","url":"https://example/issues/176"}\'; exit 0; fi\n' +
+    'if [ "$1" = "pr" ] && [ "$2" = "view" ]; then printf \'{"number":%s,"headRefName":"plan-loop/issue-176","state":"OPEN","closingIssuesReferences":[{"number":176}]}\\n\' "$3"; exit 0; fi\n' +
+    'if [ "$1" = "pr" ] && [ "$2" = "list" ]; then if [ -n "$FAKE_GIT_BRANCH_EXISTS" ] && [ ! -e "$FAKE_GHGIT_LOG.pr-321-closed" ]; then echo \'[{"number":321,"isCrossRepository":false,"headRepository":{"name":"repo"},"headRepositoryOwner":{"login":"fake"}}]\'; else echo \'[]\'; fi; exit 0; fi\n' +
+    'if [ "$1" = "pr" ] && [ "$2" = "close" ]; then [ -n "$FAKE_PR_CLOSE_FAIL" ] && { echo "collaborator-secret-from-stderr" >&2; exit 1; }; touch "$FAKE_GHGIT_LOG.pr-$3-closed"; exit 0; fi\n' +
+    'if [ "$1" = "pr" ] && [ "$2" = "edit" ] && [ "$4" = "--body-file" ] && [ "$5" = "-" ]; then cat > "$FAKE_GHGIT_LOG.pr-body"; exit 0; fi\n' +
     // §26.9/L8 epic-promote — each `gh issue create` returns a fresh issue URL (a per-binDir counter file
     // seeded at 500) so the sub-issues carry distinct numbers the executor appends to linked_issues.
     'if [ "$1" = "issue" ] && [ "$2" = "create" ]; then seq="$FAKE_GHGIT_LOG.issue-seq"; n=$(cat "$seq" 2>/dev/null || echo 500); n=$((n+1)); echo "$n" > "$seq"; echo "https://github.com/fake/repo/issues/$n"; exit 0; fi\n' +
     // The `pr create` call is logged BEFORE an optional FAKE_PICKUP_DELAY sleep, so a test can hold the
     // pickup mid-flight (the branch is created, state.yaml not yet written) long enough to terminate the
     // flow and prove the async completion drops as stale (§26.9).
-    'if [ "$1" = "pr" ] && [ "$2" = "create" ]; then [ -n "$FAKE_PICKUP_DELAY" ] && sleep "$FAKE_PICKUP_DELAY"; [ -n "$FAKE_PR_CREATE_FAIL" ] && exit 1; echo "https://github.com/fake/repo/pull/4242"; exit 0; fi\n' +
+    'if [ "$1" = "pr" ] && [ "$2" = "create" ]; then [ -n "$FAKE_PICKUP_DELAY" ] && sleep "$FAKE_PICKUP_DELAY"; if [ -n "$FAKE_PR_CREATE_FAIL_ONCE" ] && [ ! -e "$FAKE_GHGIT_LOG.pr-create-failed" ]; then touch "$FAKE_GHGIT_LOG.pr-create-failed"; exit 1; fi; [ -n "$FAKE_PR_CREATE_FAIL" ] && exit 1; echo "https://github.com/fake/repo/pull/4242"; exit 0; fi\n' +
     // §26.7/L8 CI run-don't-block — `gh pr checks` returns the current bucket state (one pending, one pass)
     // and exits non-zero (8) as real gh does when checks are pending; the app parses stdout regardless and
     // never waits. The invocation is logged (above) BEFORE the optional FAKE_GH_CHECKS_DELAY sleep, so a
@@ -2422,7 +2429,9 @@ test('installing the bundled examples seeds the flow, app and legacy loop defini
   // Back to the terminal; cd into a repo with no local flow → the installed global flow renders its steps.
   await page.locator('[data-viewbtn="1"]').click();
   await typeCommand(`cd "${repo}"`);
-  await expect(page.locator('#flow-strip .flow.vert .stn')).toHaveCount(5, { timeout: 10_000 }); // 3 steps + 2 bookends
+  await expect(page.locator('#flow-strip .flow.vert .stn')).toHaveCount(5, {
+    timeout: 10_000,
+  });
   await expect(flowStepName()).toHaveText('groom');
 
   await app.close();
@@ -4192,7 +4201,7 @@ test('a failed §27 pickup stays rolled back across relaunch, preserving inputs 
       CLAUDE_CONFIG_DIR: exampleConfigDir,
       PATH: `${binDir}:${process.env.PATH}`,
       FAKE_GHGIT_LOG: logFile,
-      FAKE_GIT_DIRTY_ONCE: '1',
+      FAKE_PR_CREATE_FAIL_ONCE: '1',
       },
     });
   app = await launch();
@@ -4208,15 +4217,29 @@ test('a failed §27 pickup stays rolled back across relaunch, preserving inputs 
 
   const errorDialog = page.locator('#flow-error-host .flow-modal');
   await expect(errorDialog).toBeVisible({ timeout: 15_000 });
-  await expect(errorDialog).toContainText('working tree is not clean');
+  await expect(errorDialog).toContainText('Bootstrap failed');
   await expect(errorDialog).toContainText(repo);
   await expect(errorDialog).toContainText('plan');
   await expect(flowStation(1)).toHaveClass(/\bactive\b/, { timeout: 10_000 });
   await expect(flowStation(2)).not.toHaveClass(/\bactive\b/);
-  expect(readIf(appFlowState(repo))).toContain("ticket: '176'");
   expect(existsSync(join(repo, '.agent-terminal', 'loop', 'bootstrap.yaml'))).toBe(false);
   expect(existsSync(join(repo, '.agent-loop', 'state.yaml'))).toBe(false);
-  expect(readGhLog(logFile)).not.toContain('gh pr create');
+  const failedAttemptCalls = readGhLog(logFile);
+  expect(failedAttemptCalls).toContain(
+    'git checkout -b plan-loop/issue-176 FETCH_HEAD',
+  );
+  expect(failedAttemptCalls).toContain(
+    'git push -u origin plan-loop/issue-176',
+  );
+  expect(failedAttemptCalls).toContain('gh pr create --draft');
+  expect(failedAttemptCalls).toContain(
+    'git branch -D plan-loop/issue-176',
+  );
+  expect(failedAttemptCalls).toContain(
+    'git push origin --delete plan-loop/issue-176',
+  );
+  expect(existsSync(`${logFile}.local-branch`)).toBe(false);
+  expect(existsSync(`${logFile}.remote-branch`)).toBe(false);
   await errorDialog.locator('.dismiss').click();
   await app.close();
 
@@ -4226,13 +4249,18 @@ test('a failed §27 pickup stays rolled back across relaunch, preserving inputs 
   await typeCommand(`cd "${repo}"`);
   await expect(flowStation(1)).toHaveClass(/\bactive\b/, { timeout: 10_000 });
   await expect(flowStation(2)).not.toHaveClass(/\bactive\b/);
-  expect(readIf(appFlowState(repo))).toContain("ticket: '176'");
   expect(readGhLog(logFile).match(/git status --porcelain/g)).toHaveLength(1);
   await expect(flowControl()).toHaveText('Advance', { timeout: 10_000 });
   await flowControl().click();
+  await expect(inputModal()).toBeHidden();
   await expect.poll(() => readIf(join(repo, '.agent-terminal', 'loop', 'bootstrap.yaml')), { timeout: 15_000 }).toContain('issue: 176');
   expect(readGhLog(logFile).match(/git status --porcelain/g)).toHaveLength(2);
-  expect(readGhLog(logFile)).toContain('git checkout -b plan-loop/issue-176 FETCH_HEAD');
+  expect(
+    readGhLog(logFile).match(
+      /git checkout -b plan-loop\/issue-176 FETCH_HEAD/g,
+    ),
+  ).toHaveLength(2);
+  expect(readGhLog(logFile).match(/gh pr create --draft/g)).toHaveLength(2);
 
   await app.close();
   for (const dir of [repo, home, binDir]) rmSync(dir, { recursive: true, force: true });
@@ -4267,25 +4295,37 @@ test('the shipped §27 flow runs groom → plan → implement and resumes at pla
   await inputModal().locator('.field input').fill('176');
   await inputModal().locator('.confirm').click();
 
-  await expect.poll(() => readIf(appRunState(repo)), { timeout: 40_000 }).toContain('step: groom');
-  await expect.poll(() => readIf(appRunState(repo)), { timeout: 40_000 }).toContain('status: complete');
-  expect(readIf(appFlowState(repo))).toContain('step: groom');
-  expect(readIf(join(repo, '.agent-terminal', 'work-groom-runs'))).toBe('x');
+  await expect(flowStation(1)).toHaveClass(/\bactive\b/, {
+    timeout: 40_000,
+  });
+  await expect(loopReadout()).toContainText('settled', { timeout: 40_000 });
   const groomApprove = loopPanel().locator('[data-gate-option="approve"]');
   if (!(await groomApprove.isVisible())) await loopReadout().click();
   await expect(groomApprove).toBeVisible({ timeout: 10_000 });
+  expect(readIf(join(repo, '.agent-terminal', 'work-groom-runs'))).toBe('x');
   await groomApprove.click();
 
   await expect.poll(() => readGhLog(logFile), { timeout: 15_000 }).toContain(
     `gh issue edit 176 --body-file ${join(repo, '.agent-terminal', 'loop', 'artifacts', 'groomed-ticket.md')}`,
   );
-  await expect.poll(() => readIf(appRunState(repo)), { timeout: 40_000 }).toContain('step: plan');
-  await expect.poll(() => readIf(appRunState(repo)), { timeout: 40_000 }).toContain('status: complete');
-  expect(readIf(appFlowState(repo))).toContain('step: plan');
+  await expect(flowStation(2)).toHaveClass(/\bactive\b/, {
+    timeout: 40_000,
+  });
+  await expect
+    .poll(
+      () => readIf(join(repo, '.agent-terminal', 'work-plan-runs')),
+      { timeout: 40_000 },
+    )
+    .toBe('x');
   expect(readIf(join(repo, '.agent-terminal', 'injected-log'))).toContain(
     '- groomed-ticket: .agent-terminal/loop/artifacts/groomed-ticket.md',
   );
-  expect(readIf(join(repo, '.agent-terminal', 'work-plan-runs'))).toBe('x');
+  await expect(loopReadout()).toContainText('settled', { timeout: 40_000 });
+  const planGateBeforeRelaunch = loopPanel().locator(
+    '[data-gate-option="approve"]',
+  );
+  if (!(await planGateBeforeRelaunch.isVisible())) await loopReadout().click();
+  await expect(planGateBeforeRelaunch).toBeVisible({ timeout: 10_000 });
   await app.close();
 
   app = await launch();
@@ -4293,7 +4333,9 @@ test('the shipped §27 flow runs groom → plan → implement and resumes at pla
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
   await typeCommand(`cd "${repo}"`);
   await typeCommand('fake-agent');
-  expect(readIf(appFlowState(repo))).toContain('step: plan');
+  await expect(flowStation(2)).toHaveClass(/\bactive\b/, {
+    timeout: 10_000,
+  });
   expect(readIf(join(repo, '.agent-terminal', 'work-groom-runs'))).toBe('x');
   expect(readIf(join(repo, '.agent-terminal', 'work-plan-runs'))).toBe('x');
   expect(readGhLog(logFile).match(/gh issue edit 176 --body-file/g)).toHaveLength(1);
@@ -4303,26 +4345,34 @@ test('the shipped §27 flow runs groom → plan → implement and resumes at pla
     ),
   ).toHaveLength(1);
 
+  await expect(loopReadout()).toContainText('settled', { timeout: 10_000 });
   const planApprove = loopPanel().locator('[data-gate-option="approve"]');
   if (!(await planApprove.isVisible())) await loopReadout().click();
   await expect(planApprove).toBeVisible({ timeout: 10_000 });
   await planApprove.click();
   await expect.poll(() => readGhLog(logFile), { timeout: 15_000 }).toContain('gh pr ready 4242');
-  await expect.poll(() => readIf(appRunState(repo)), { timeout: 40_000 }).toContain('step: implement');
-  await expect.poll(() => readIf(appRunState(repo)), { timeout: 40_000 }).toContain('status: complete');
-  expect(readIf(appFlowState(repo))).toContain('step: implement');
+  await expect(flowStation(3)).toHaveClass(/\bactive\b/, {
+    timeout: 40_000,
+  });
+  await expect
+    .poll(
+      () => readIf(join(repo, '.agent-terminal', 'work-implement-runs')),
+      { timeout: 40_000 },
+    )
+    .toBe('x');
   expect(readIf(join(repo, '.agent-terminal', 'injected-log'))).toContain(
     '- plan: .agent-terminal/loop/artifacts/plan.md',
   );
-  expect(readIf(join(repo, '.agent-terminal', 'work-implement-runs'))).toBe('x');
 
+  await expect(loopReadout()).toContainText('settled', { timeout: 40_000 });
   const implementApprove = loopPanel().locator('[data-gate-option="approve"]');
   if (!(await implementApprove.isVisible())) await loopReadout().click();
   await expect(implementApprove).toBeVisible({ timeout: 10_000 });
   await implementApprove.click();
   await expect.poll(() => readGhLog(logFile), { timeout: 15_000 }).toContain(
-    `gh pr edit 4242 --body-file ${join(repo, '.agent-terminal', 'loop', 'artifacts', 'diff.md')}`,
+    'gh pr edit 4242 --body-file -',
   );
+  expect(readIf(`${logFile}.pr-body`)).toContain('closes #176');
   await expect(flowControl()).toHaveText('Restart', { timeout: 15_000 });
   expect(readIf(join(repo, '.agent-terminal', 'work-groom-runs'))).toBe('x');
   expect(readIf(join(repo, '.agent-terminal', 'work-plan-runs'))).toBe('x');
@@ -4366,7 +4416,9 @@ test('a §27 re-pickup conflict deletes nothing on decline and rolls back the na
   const conflict = page.locator('#flow-confirm-host .flow-modal');
   await expect(conflict).toBeVisible({ timeout: 15_000 });
   await expect(conflict).toContainText('plan-loop/issue-176');
-  await expect(conflict).toContainText('closes its PR');
+  await expect(conflict).toContainText('111111111111');
+  await expect(conflict).toContainText('222222222222');
+  await expect(conflict).toContainText('pull request #321');
   expect(readGhLog(logFile)).not.toContain(
     'git branch -D plan-loop/issue-176',
   );
@@ -4379,7 +4431,10 @@ test('a §27 re-pickup conflict deletes nothing on decline and rolls back the na
 
   await expect(flowStation(1)).toHaveClass(/\bactive\b/, { timeout: 10_000 });
   await expect(flowStation(2)).not.toHaveClass(/\bactive\b/);
-  expect(readIf(appFlowState(repo))).toContain("ticket: '176'");
+  await flowControl().click();
+  await expect(inputModal()).toBeHidden();
+  await expect(conflict).toBeVisible({ timeout: 15_000 });
+  await conflict.locator('.cancel').click();
   expect(readGhLog(logFile)).not.toContain(
     'git branch -D plan-loop/issue-176',
   );
@@ -4430,8 +4485,9 @@ test('a confirmed §27 re-pickup wipes only the named branch and recreates it (S
 
   const conflict = page.locator('#flow-confirm-host .flow-modal');
   await expect(conflict).toBeVisible({ timeout: 15_000 });
+  await expect(conflict).toContainText('pull request #321');
   expect(readGhLog(logFile)).not.toContain(
-    'git branch -D plan-loop/issue-176',
+    'git update-ref -d refs/heads/plan-loop/issue-176',
   );
   await conflict.locator('.confirm').click();
 
@@ -4443,12 +4499,95 @@ test('a confirmed §27 re-pickup wipes only the named branch and recreates it (S
     )
     .toContain('issue: 176');
   const calls = readGhLog(logFile);
-  expect(calls).toContain('git branch -D plan-loop/issue-176');
-  expect(calls).toContain('git push origin --delete plan-loop/issue-176');
+  expect(calls).toContain(
+    'git update-ref -d refs/heads/plan-loop/issue-176 1111111111111111111111111111111111111111',
+  );
+  expect(calls).toContain(
+    'git push origin --force-with-lease=refs/heads/plan-loop/issue-176:2222222222222222222222222222222222222222 :refs/heads/plan-loop/issue-176',
+  );
+  expect(calls).toContain('gh pr close 321');
+  expect(calls).not.toContain('gh pr close 999');
+  expect(calls).not.toContain('git branch -D plan-loop/issue-176');
+  expect(calls).not.toContain('git push origin --delete plan-loop/issue-176');
   expect(calls).toContain(
     'git checkout -b plan-loop/issue-176 FETCH_HEAD',
   );
   expect(calls).toContain('gh pr create --draft');
+
+  await app.close();
+  for (const dir of [repo, home, config, binDir]) {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a failed exact §27 wipe blocks recreation and rolls the step back (ST3 AC5/AC7)', { tag: '@ownapp' }, async () => {
+  const repo = seedAppBootstrapFlowRepo(
+    'agent-term-e2e-v2-wipe-failure-',
+  );
+  const home = mkdtempSync(
+    join(tmpdir(), 'agent-term-e2e-v2-wipe-failure-home-'),
+  );
+  const config = seedOperatorPlanLoopConfig(
+    'agent-term-e2e-v2-wipe-failure-config-',
+  );
+  const { binDir, logFile } = seedFakeGhGit(
+    'agent-term-e2e-v2-wipe-failure-bin-',
+  );
+  app = await electron.launch({
+    args: ['out/main/index.js'],
+    env: {
+      ...process.env,
+      APP_SHELL: 'bash',
+      HOME: home,
+      APP_SUBMIT_DELAY_MS: '100',
+      CLAUDE_CONFIG_DIR: config,
+      PATH: `${binDir}:${process.env.PATH}`,
+      FAKE_GHGIT_LOG: logFile,
+      FAKE_GIT_BRANCH_EXISTS: '1',
+      FAKE_PR_CLOSE_FAIL: '1',
+    },
+  });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await typeCommand(`cd "${repo}"`);
+  await flowControl().click();
+  await flowControl().click();
+  await inputModal().locator('.field input').fill('176');
+  await inputModal().locator('.confirm').click();
+
+  const conflict = page.locator('#flow-confirm-host .flow-modal');
+  await expect(conflict).toBeVisible({ timeout: 15_000 });
+  await conflict.locator('.confirm').click();
+
+  const error = page.locator('#flow-error-host .flow-modal');
+  await expect(error).toBeVisible({ timeout: 15_000 });
+  await expect(error).not.toContainText('collaborator-secret-from-stderr');
+  await expect(flowStation(1)).toHaveClass(/\bactive\b/, {
+    timeout: 10_000,
+  });
+  await expect
+    .poll(() => auditRunFiles(home, repo).length, { timeout: 10_000 })
+    .toBeGreaterThan(0);
+  expect(
+    JSON.stringify(
+      readAuditRun(home, repo, auditRunFiles(home, repo)[0]).events,
+    ),
+  ).not.toContain('collaborator-secret-from-stderr');
+  const calls = readGhLog(logFile);
+  expect(calls).toContain('gh pr close 321');
+  expect(calls).not.toContain(
+    'git update-ref -d refs/heads/plan-loop/issue-176',
+  );
+  expect(calls).not.toContain(
+    'git push origin --force-with-lease=refs/heads/plan-loop/issue-176',
+  );
+  expect(calls).not.toContain(
+    'git checkout -b plan-loop/issue-176 FETCH_HEAD',
+  );
+  expect(
+    existsSync(join(repo, '.agent-terminal', 'loop', 'bootstrap.yaml')),
+  ).toBe(false);
 
   await app.close();
   for (const dir of [repo, home, config, binDir]) {
