@@ -456,6 +456,10 @@ describe('§27 bootstrap audit vocabulary', () => {
     expect(appBootstrapAuditCmd('start', 'plan')).toContain('plan');
     expect(appBootstrapAuditCmd('success', 'plan', 'plan-loop/issue-78')).toContain('plan-loop/issue-78');
     expect(appBootstrapAuditCmd('failure', 'plan', 'working tree is not clean')).toContain('working tree is not clean');
+    expect(appBootstrapAuditCmd('conflict', 'plan', 'plan-loop/issue-78')).toContain('conflict');
+    expect(appBootstrapAuditCmd('wipe', 'plan', 'plan-loop/issue-78')).toContain('wipe confirmed');
+    expect(appBootstrapAuditCmd('decline', 'plan', 'plan-loop/issue-78')).toContain('wipe declined');
+    expect(appBootstrapAuditCmd('wipe', 'plan')).not.toBe(appBootstrapAuditCmd('decline', 'plan'));
     expect(appBootstrapAuditCmd('rollback', 'plan')).not.toBe(appBootstrapAuditCmd('failure', 'plan'));
     expect(appBootstrapAuditCmd('stale', 'plan')).not.toBe(appBootstrapAuditCmd('success', 'plan'));
   });

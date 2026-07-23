@@ -1,30 +1,19 @@
-# Agent Terminal — global feature-dev flow (§18.1).
-# Local-first then global: a repo's own .agent-terminal/flow.yaml wins; this is the default.
-# Steps: a manual grooming step, then two loop steps. Each loop step binds an agent-loop LoopDef by
-# name (`loop:`); the def resolves relative to the Claude config dir by default —
-# $CLAUDE_CONFIG_DIR/loops/<name>/<name>.yaml (default ~/.claude/loops/<name>/<name>.yaml) — unless a
-# repo-local .agent-loop.yaml `loops:` registry overrides it. The status strip renders each step id.
+# Agent Terminal — global feature-dev flow (§18.1/§27.10).
 name: feature-dev
 steps:
-  - id: groom-ticket
-    kind: manual
-    todo_template: ticket-grooming
-  - id: plan
+  - id: groom
     kind: loop
-    loop: plan-loop
-    bootstrap: pickup
-    todo_template: plan-loop-review
+    loop: groom-loop
+    loop_namespace: app
     inputs:
       - name: ticket
         type: github-ticket
         required: true
+  - id: plan
+    kind: loop
+    loop: plan-loop
+    loop_namespace: app
   - id: implement
     kind: loop
     loop: impl-loop
-    todo_template: impl-loop-review
-  - id: polish
-    kind: manual
-    todo_template: polish
-  - id: copilot
-    kind: manual
-    todo_template: copilot
+    loop_namespace: app

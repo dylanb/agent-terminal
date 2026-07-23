@@ -10,6 +10,7 @@ import { createFlowInputModal } from './flowInputModal';
 import { createFeedbackComposer } from './feedbackComposer';
 import { createRedoComposer } from './redoComposer';
 import { wireBootstrapConflict } from './wireBootstrapConflict';
+import { wireAppBootstrapConflict } from './wireAppBootstrapConflict';
 import { createConfirmDialog } from './confirmDialog';
 import { createErrorDialog } from './errorDialog';
 import { createTerminateConfirm } from './terminateConfirm';
@@ -219,6 +220,12 @@ if (flowStripHost) {
       onBootstrapConflict: (cb) => window.flow.onBootstrapConflict(cb),
       confirm: (opts) => confirmDialog.render(opts),
       resolve: (key, wipe) => window.flow.resolveBootstrapConflict(key, wipe),
+    });
+    wireAppBootstrapConflict({
+      onConflict: (cb) => window.flow.onAppBootstrapConflict(cb),
+      confirm: (opts) => confirmDialog.render(opts),
+      resolve: (key, step, wipe) =>
+        window.flow.resolveAppBootstrapConflict(key, step, wipe),
     });
   }
   const strip = createFlowStrip(flowStripHost, {

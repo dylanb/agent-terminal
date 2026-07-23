@@ -7,11 +7,21 @@ import { confinedRealPathResult, resolveOwnedDirJail, type PathRefusal } from '.
 import { readDirEntries } from './dirEntries';
 import { errMsg, isErrno } from './errno';
 import type { BundleLocation } from './bundleLocation';
-import { resolveExampleCommandsDir, resolveExampleFlowDir, resolveExampleLoopsDir } from './exampleAssets';
+import {
+  resolveExampleCommandsDir,
+  resolveExampleFlowDir,
+  resolveExampleLoopsDir,
+  resolveExampleLoopsV2Dir,
+} from './exampleAssets';
 import { listBundledSkills } from './exampleSkills';
 import { FLOW_DEF_FILE, flowHomeDir } from './flow';
 import { TODO_TEMPLATES_SUBDIR, isTodoTemplateFile, todoTemplatesDir } from './todoTemplate';
-import { userConfigCommandsDir, userConfigLoopsDir, userConfigSkillsDir } from './userConfig';
+import {
+  userConfigCommandsDir,
+  userConfigLoopsDir,
+  userConfigLoopsV2Dir,
+  userConfigSkillsDir,
+} from './userConfig';
 import {
   INSTALL_DESTINATION_IDS,
   type DestRelativePath,
@@ -142,6 +152,7 @@ function skillFiles(loopsBundleDir: string): Plan {
 export interface InstallDestination {
   id: InstallDestinationId;
   bundleDir: string;
+  overwrite: { mode: 'confirm-overwrite' } | { mode: 'forbid-overwrite' };
   /** `null` when this destination has no absolute install location — a relative CLAUDE_CONFIG_DIR (config
    *  destinations) or a relative launch home from an empty $HOME (flow). `resolveAll` turns it into a
    *  refusal the user sees rather than a guessed path. */
@@ -158,25 +169,49 @@ interface DestinationSpec {
   target: (flowGlobalDir: string, configDir?: string) => string | null;
   rootFix: string;
   plan: (bundleDir: string) => Plan;
+  overwrite: InstallDestination['overwrite'];
 }
 
 const CONFIG_ROOT_FIX = 'Set CLAUDE_CONFIG_DIR to an absolute path, or unset it to use ~/.claude.';
 const HOME_ROOT_FIX = 'Set $HOME to an absolute path.';
 
-/** The loops/skills/commands targets are the NAMED user-config branches (§24.2.3), never `resolveLoopDir`'s
- *  precedence-aware answer: an install wired to that would seed whichever repo the app is pointed at and
- *  leave every other one unseeded. The skills source is the loops bundle — its files fan in from every
- *  loop's `skills/` (§26.5). */
+/** §18.1/§26.5/§27.1. */
 const DESTINATIONS: Record<InstallDestinationId, DestinationSpec> = {
   flow: {
     bundle: resolveExampleFlowDir,
     target: (flowGlobalDir) => (path.isAbsolute(flowGlobalDir) ? flowHomeDir(flowGlobalDir) : null),
     rootFix: HOME_ROOT_FIX,
     plan: flowFiles,
+    overwrite: { mode: 'confirm-overwrite' },
   },
-  loops: { bundle: resolveExampleLoopsDir, target: (_flow, cfg) => userConfigLoopsDir(cfg), rootFix: CONFIG_ROOT_FIX, plan: filesUnder },
-  skills: { bundle: resolveExampleLoopsDir, target: (_flow, cfg) => userConfigSkillsDir(cfg), rootFix: CONFIG_ROOT_FIX, plan: skillFiles },
-  commands: { bundle: resolveExampleCommandsDir, target: (_flow, cfg) => userConfigCommandsDir(cfg), rootFix: CONFIG_ROOT_FIX, plan: filesUnder },
+  appLoops: {
+    bundle: resolveExampleLoopsV2Dir,
+    target: (_flow, cfg) => userConfigLoopsV2Dir(cfg),
+    rootFix: CONFIG_ROOT_FIX,
+    plan: filesUnder,
+    overwrite: { mode: 'confirm-overwrite' },
+  },
+  loops: {
+    bundle: resolveExampleLoopsDir,
+    target: (_flow, cfg) => userConfigLoopsDir(cfg),
+    rootFix: CONFIG_ROOT_FIX,
+    plan: filesUnder,
+    overwrite: { mode: 'confirm-overwrite' },
+  },
+  skills: {
+    bundle: resolveExampleLoopsDir,
+    target: (_flow, cfg) => userConfigSkillsDir(cfg),
+    rootFix: CONFIG_ROOT_FIX,
+    plan: skillFiles,
+    overwrite: { mode: 'confirm-overwrite' },
+  },
+  commands: {
+    bundle: resolveExampleCommandsDir,
+    target: (_flow, cfg) => userConfigCommandsDir(cfg),
+    rootFix: CONFIG_ROOT_FIX,
+    plan: filesUnder,
+    overwrite: { mode: 'confirm-overwrite' },
+  },
 };
 
 /** Resolve every destination for the running build: its bundle source from `loc`, its install target
@@ -184,7 +219,14 @@ const DESTINATIONS: Record<InstallDestinationId, DestinationSpec> = {
 export function exampleInstallDirs(loc: BundleLocation, flowGlobalDir: string, configDir?: string): InstallDestination[] {
   return INSTALL_DESTINATION_IDS.map((id) => {
     const d = DESTINATIONS[id];
-    return { id, bundleDir: d.bundle(loc), targetDir: d.target(flowGlobalDir, configDir), rootFix: d.rootFix, plan: d.plan };
+    return {
+      id,
+      bundleDir: d.bundle(loc),
+      targetDir: d.target(flowGlobalDir, configDir),
+      rootFix: d.rootFix,
+      plan: d.plan,
+      overwrite: d.overwrite,
+    };
   });
 }
 
@@ -219,6 +261,7 @@ interface ResolvedDestination {
   /** Its symlink-free real location — what the write is confined to and gated on. */
   jail: string;
   files: ResolvedFile[];
+  overwrite: InstallDestination['overwrite'];
 }
 type Resolution = { ok: true; destinations: ResolvedDestination[] } | { ok: false; error: string };
 
@@ -255,7 +298,13 @@ function resolveAll(destinations: InstallDestination[]): Resolution {
       if (!real.ok) return { ok: false, error: refusal(file.rel, dest.targetDir, real.cause) };
       resolved.push({ rel: file.rel, src: file.src, real: real.path });
     }
-    out.push({ id: dest.id, targetDir: dest.targetDir, jail, files: resolved });
+    out.push({
+      id: dest.id,
+      targetDir: dest.targetDir,
+      jail,
+      files: resolved,
+      overwrite: dest.overwrite,
+    });
   }
   return { ok: true, destinations: out };
 }
@@ -313,6 +362,12 @@ export function previewInstallExamples(destinations: InstallDestination[]): Inst
       // apply the user never consented to.
       return { ok: false, error: `Could not check the install targets: ${errMsg(e)}` };
     }
+    if (files.length > 0 && dest.overwrite.mode !== 'confirm-overwrite') {
+      return {
+        ok: false,
+        error: `Could not install ${dest.id}: its overwrite policy does not authorize replacing ${files.join(', ')}`,
+      };
+    }
     out.push(files.length === 0 ? { destination: dest.id, conflict: false } : { destination: dest.id, conflict: true, files });
   }
   return { ok: true, destinations: out };
@@ -329,6 +384,26 @@ export function applyInstallExamples(destinations: InstallDestination[], replace
   if (!resolution.ok) return { ok: false, error: resolution.error, ...empty };
 
   const plan = resolution.destinations.filter((d) => d.files.length > 0);
+  try {
+    for (const dest of plan) {
+      if (
+        dest.overwrite.mode !== 'confirm-overwrite' &&
+        dest.files.some((file) => classify(file.src, file.real) === 'differ')
+      ) {
+        return {
+          ok: false,
+          error: `Could not install ${dest.id}: its overwrite policy does not authorize replacing existing files`,
+          ...empty,
+        };
+      }
+    }
+  } catch (e) {
+    return {
+      ok: false,
+      error: `Could not install: ${errMsg(e)}`,
+      ...empty,
+    };
+  }
   // Every container the write will actually enter, not just each destination's root: an unwritable nested
   // directory is detectable before the first write, and §18.1's all-or-nothing covers everything that is.
   for (const dest of plan) {
@@ -358,6 +433,9 @@ export function applyInstallExamples(destinations: InstallDestination[], replace
         if (cls === 'identical' || (cls === 'differ' && !consented.has(dest.id))) {
           record(skipped, dest.id, file.rel);
           continue;
+        }
+        if (cls === 'differ' && dest.overwrite.mode !== 'confirm-overwrite') {
+          return fail(`Could not install ${file.rel}: its overwrite policy does not authorize replacement`);
         }
         // Bytes, not text: the bundle is a tree the build ships, and decoding a non-UTF-8 asset would both
         // corrupt it and leave it permanently `differ` against the byte-compare that classifies it.

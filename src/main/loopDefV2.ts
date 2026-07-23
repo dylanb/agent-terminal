@@ -85,15 +85,10 @@ export interface PickupLabelV2 {
   label: string;
 }
 
-/** The on-conflict wipe policy (§27.10), a discriminated union so a def that declares no wipe cannot carry
- *  the fields the wipe path consumes: `abort` (the wipe-absent arm) makes a branch conflict a plain rollback
- *  failure; `wipe-and-retry` is the confirm-first destructive-wipe arm ST3 acts on. ST2 parses both and runs
- *  neither wipe — the executor treats every conflict as an abort until ST3 wires the confirm (plan.md line 10). */
+/** §27.10. */
 export type WipePolicy = { mode: 'abort' } | { mode: 'wipe-and-retry' };
 
-/** The bootstrap (pickup) contract (§27.10) — self-contained (no §26 config-binding indirection). Optional on
- *  the def: a def that declares no pickup enters with NO bootstrap (AC3). The executor lands (ST2 Slice 1) but
- *  the wipe branch of `wipe` defers to ST3. */
+/** §27.10. */
 export interface PickupContractV2 {
   initialStatus: string;
   branchTemplate: string;

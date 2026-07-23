@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { runAppGateDecision, type AppGateDecisionDeps } from '../../src/main/appGateDecision';
+import { resolveAppGateRefs, runAppGateDecision, type AppGateDecisionDeps } from '../../src/main/appGateDecision';
 import type { AppLoopRunState } from '../../src/main/appLoopState';
 import type { GateOptionDef, LoopDefV2 } from '../../src/main/loopDefV2';
 import type { GateDecisionOption } from '../../src/shared/ipc';
@@ -21,6 +21,26 @@ const GATE_RUN: AppLoopRunState = {
 
 const defWithGate = (gate: GateOptionDef[]): LoopDefV2 => ({ gate, outputs: [] } as unknown as LoopDefV2);
 const APPROVE_MARK_READY: GateOptionDef[] = [{ option: 'approve', sideEffects: [{ kind: 'gh', args: { action: 'mark-ready' } }] }];
+
+describe('resolveAppGateRefs', () => {
+  it('uses the app-owned bootstrap identity when the flow has no explicit PR input', () => {
+    expect(resolveAppGateRefs({ ticket: 78 }, { pr: 4242, issue: 78 })).toEqual({
+      pr: 4242,
+      ticket: 78,
+    });
+  });
+
+  it('keeps explicit flow inputs authoritative over the bootstrap fallback', () => {
+    expect(resolveAppGateRefs({ pr: 9, ticket: 10 }, { pr: 4242, issue: 78 })).toEqual({
+      pr: 9,
+      ticket: 10,
+    });
+  });
+
+  it('returns absent refs when neither source carries an identity', () => {
+    expect(resolveAppGateRefs(undefined, null)).toEqual({ pr: null, ticket: null });
+  });
+});
 
 interface Recorder {
   sideEffects: Array<{ action: string; ctx: unknown }>;

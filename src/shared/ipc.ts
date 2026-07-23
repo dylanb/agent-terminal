@@ -56,6 +56,8 @@ export const CH = {
   flowOnLoopError: 'flow:onLoopError',
   flowOnBootstrapConflict: 'flow:onBootstrapConflict',
   flowResolveBootstrapConflict: 'flow:resolveBootstrapConflict',
+  flowOnAppBootstrapConflict: 'flow:onAppBootstrapConflict',
+  flowResolveAppBootstrapConflict: 'flow:resolveAppBootstrapConflict',
   flowGithubRef: 'flow:githubRef',
   flowMarkTurnComplete: 'flow:markTurnComplete',
   flowGateDecision: 'flow:gateDecision',
@@ -363,6 +365,7 @@ export interface ChannelPayloads {
   'flow:onBootstrapError': FlowBootstrapErrorMsg;
   'flow:onLoopError': FlowLoopErrorMsg;
   'flow:onBootstrapConflict': FlowBootstrapConflictMsg;
+  'flow:onAppBootstrapConflict': FlowAppBootstrapConflictMsg;
 }
 
 export type SendChannel = keyof ChannelPayloads;
@@ -661,6 +664,22 @@ export interface FlowResolveBootstrapConflictMsg {
   wipe: boolean;
 }
 
+/** §6/§27.10. */
+export interface FlowAppBootstrapConflictMsg {
+  sessionId: SessionId;
+  branch: string;
+  repoKey: string;
+  step: string;
+}
+
+/** §6/§27.10. */
+export interface FlowResolveAppBootstrapConflictMsg {
+  sessionId: SessionId;
+  repoKey: string;
+  step: string;
+  wipe: boolean;
+}
+
 /** flow:state/start/advance/restart request. `repoKey` scopes the flow to the terminal's current
  *  repo (§16.3), threaded like the todo channels so the flow follows the cwd (§6). */
 export interface FlowRequestMsg {
@@ -853,13 +872,14 @@ export type CliInstallResult =
 
 // ---- Install bundled examples (§18.1/§23.4/§26.5) ----
 
-/** The destinations the install action seeds. This is the ONE definition of destination identity: main
- *  groups its results by these ids, the renderer collects one decision per id, and the request validator
- *  admits no other. `flow` is the global flow home (§18.1); `loops` the engine's loop-config location
- *  (§24.2.3); `skills` and `commands` the directories Claude Code — a separate process — discovers a
- *  skill and a slash command from. Declaration order is also the canonical display order: both main's
- *  install report and the renderer's report iterate this array, so reordering it reorders the report. */
-export const INSTALL_DESTINATION_IDS = ['flow', 'loops', 'skills', 'commands'] as const;
+/** §18.1/§23.4/§26.5/§27.1. */
+export const INSTALL_DESTINATION_IDS = [
+  'flow',
+  'appLoops',
+  'loops',
+  'skills',
+  'commands',
+] as const;
 
 export type InstallDestinationId = (typeof INSTALL_DESTINATION_IDS)[number];
 
@@ -1055,6 +1075,12 @@ export interface FlowApi {
   /** Answer a bootstrap conflict (§26.9): `wipe` true wipes the branch + retries, false rolls the flow
    *  back. One-way; the result surfaces through the state.yaml watch / a rolled-back state re-pull. */
   resolveBootstrapConflict(repoKey: string, wipe: boolean): void;
+  /** §6/§27.10. */
+  onAppBootstrapConflict(
+    cb: (conflict: { branch: string; repoKey: string; step: string }) => void,
+  ): () => void;
+  /** §6/§27.10. */
+  resolveAppBootstrapConflict(repoKey: string, step: string, wipe: boolean): void;
   /** Resolve a GitHub ref's title/body/url for the popout (§24.2.3 T7), best-effort: null when it
    *  can't be resolved (no `gh`, not a GitHub repo, offline) so the popout shows the number alone. */
   githubRef(repoKey: string, kind: GithubRefKind, number: number): Promise<GithubRef | null>;

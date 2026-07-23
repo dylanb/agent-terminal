@@ -37,6 +37,7 @@ import {
   isValidFlowSetTitle,
   isValidFlowGateDecision,
   isValidFlowResolveBootstrapConflict,
+  isValidFlowResolveAppBootstrapConflict,
   isValidFlowAppRouteOut,
   isValidFlowAppGateDecision,
   isValidFlowAppRequestChanges,
@@ -128,7 +129,7 @@ import { armInterrupt, clearPolish, consolidatorOutputFile, consolidatorOutputRe
 import { APP_LOOP_DIR_SEGMENTS } from './appLoopPaths';
 import { resolveLoopDefV2, type LoopDefV2Context } from './loopDefV2';
 import { createRealAppGateGitHub } from './appGateGithub';
-import { runAppGateDecision as runAppGateDecisionImpl } from './appGateDecision';
+import { resolveAppGateRefs, runAppGateDecision as runAppGateDecisionImpl } from './appGateDecision';
 import { completionArtifact } from './appWorkTurn';
 import { probeChainedInput } from './chainedInputProbe';
 import { resolveExampleLoopsV2Dir } from './exampleAssets';
@@ -1019,6 +1020,7 @@ async function createWindow(): Promise<void> {
             : {
                 origin: resolved.def.origin,
                 branchTemplate: resolved.def.pickup.branchTemplate,
+                wipe: resolved.def.pickup.wipe,
                 initialLabels: resolved.def.pickup.initialLabels,
               },
       });
@@ -1059,7 +1061,11 @@ async function createWindow(): Promise<void> {
 
   appBootstrapCoordinator = createAppLoopBootstrapCoordinator({
     run: async (repoDir, request) => {
-      pickupInFlight = { repoKey: repoDir, issue: request.issue, wipe: false };
+      pickupInFlight = {
+        repoKey: repoDir,
+        issue: request.issue,
+        wipe: request.confirmedWipe !== undefined,
+      };
       pushFlowChanged();
       try {
         const git = createRealBootstrapGit(repoDir);
@@ -1067,6 +1073,7 @@ async function createWindow(): Promise<void> {
           {
             git,
             github: createRealBootstrapGitHub(repoDir),
+            wipeConflictingBranch: (branch) => git.wipeConflictingBranch(branch),
             rollbackCreatedBranch: (branch) => git.rollbackCreatedBranch(branch),
             writeBootstrap: (identity) => writeAppLoopBootstrap(repoDir, identity),
           },
@@ -1101,12 +1108,26 @@ async function createWindow(): Promise<void> {
         step: stepId,
         reason,
       }),
+    emitConflict: ({ repoDir, stepId, branch }) =>
+      send(CH.flowOnAppBootstrapConflict, {
+        sessionId: SESSION_ID,
+        repoKey: repoDir,
+        step: stepId,
+        branch,
+      }),
     audit: (repoDir, kind, stepId, detail) =>
       audit.recordCommand(
         repoDir,
         'pickup',
         appBootstrapAuditCmd(kind, stepId, detail),
-        kind === 'start' || kind === 'stale' ? null : kind === 'success' ? 0 : 1,
+        kind === 'start' ||
+          kind === 'stale' ||
+          kind === 'conflict' ||
+          kind === 'wipe'
+          ? null
+          : kind === 'success'
+            ? 0
+            : 1,
       ),
   });
 
@@ -1330,7 +1351,7 @@ async function createWindow(): Promise<void> {
         resolveDef: (repoDir, name) => resolveLoopDefV2(name, appDefContext(repoDir)),
         refs: (repoDir) => {
           const v = flow.state(repoDir);
-          return { pr: v.refs?.pr ?? null, ticket: v.refs?.ticket ?? null };
+          return resolveAppGateRefs(v.refs, readAppLoopBootstrap(repoDir));
         },
         bodyFile: (def) => completionArtifact(def)?.path ?? null,
         runSideEffect: createRealAppGateGitHub(repoKey),
@@ -1461,6 +1482,11 @@ async function createWindow(): Promise<void> {
       // §26.9 — the operator's wipe/cancel answer to a bootstrap conflict.
       [CH.flowResolveBootstrapConflict]: (_e, m) => {
         if (isValidFlowResolveBootstrapConflict(m)) resolveBootstrapConflict(m.repoKey, m.wipe);
+      },
+      [CH.flowResolveAppBootstrapConflict]: (_e, m) => {
+        if (isValidFlowResolveAppBootstrapConflict(m)) {
+          appBootstrapCoordinator?.resolve(m.repoKey, m.step, m.wipe);
+        }
       },
       // Clipboard is an OS resource owned by main (§7.7); the sandboxed preload can't reach it.
       [CH.clipboardWrite]: (_e, m) => {

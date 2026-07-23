@@ -2341,7 +2341,6 @@ test('a multi-step flow walks the bookended rail: Start → Advance ×3 reaches 
   rmSync(home, { recursive: true, force: true });
 });
 
-// ---- #41: the install action seeds four destinations — flow home, loop-config, skills, commands ----
 // TODO(dylan): the flow-render and todo-template cases below originally landed green-first (#40); their
 // RED observation cannot be reconstructed. Every #41 assertion (the loop/skill/command destinations, the
 // grouped report, the per-destination consent step, the second-run skip) was added RED-first, observed
@@ -2368,7 +2367,7 @@ function installEnv(home: string, configDir: string): Record<string, string> {
   };
 }
 
-test('installing the bundled examples seeds the flow, the loop definitions, the skills and the commands (§18.1/§23.4/§26.5 #41)', { tag: '@ownapp' }, async () => {
+test('installing the bundled examples seeds the flow, app and legacy loop definitions, skills and commands (§18.1/§23.4/§26.5 #41/#78)', { tag: '@ownapp' }, async () => {
   // The tracer bullet: click the settings control against a temp HOME + temp config root, then prove
   // every destination was seeded and reported under its own group — and that a repo with no local flow
   // renders the bundled steps.
@@ -2389,16 +2388,19 @@ test('installing the bundled examples seeds the flow, the loop definitions, the 
   await expect(installExamplesBtn()).toBeFocused();
 
   // Every destination is reported under its own group in the result panel.
-  for (const dest of ['flow', 'loops', 'skills', 'commands']) {
+  for (const dest of ['flow', 'appLoops', 'loops', 'skills', 'commands']) {
     await expect(installReportGroup(dest)).toBeVisible();
   }
+  await expect(installReportGroup('appLoops')).toContainText('plan-loop.yaml');
   await expect(installReportGroup('loops')).toContainText('plan-loop.yaml');
   await expect(installReportGroup('commands')).toContainText('groom-ticket.md');
 
   // The bundled flow definition + its todo templates now exist in the global flow home.
   expect(existsSync(join(home, '.agent-terminal', 'flow.yaml'))).toBe(true);
   expect(existsSync(join(home, '.agent-terminal', 'todo-templates', 'ticket-grooming.md'))).toBe(true);
-  // The loop definitions and everything bundled with them exist at the engine's loop-config location.
+  expect(existsSync(join(configDir, 'loops-v2', 'groom-loop', 'groom-loop.yaml'))).toBe(true);
+  expect(existsSync(join(configDir, 'loops-v2', 'plan-loop', 'plan-loop.yaml'))).toBe(true);
+  expect(existsSync(join(configDir, 'loops-v2', 'impl-loop', 'impl-loop.yaml'))).toBe(true);
   expect(existsSync(join(configDir, 'loops', 'plan-loop', 'plan-loop.yaml'))).toBe(true);
   expect(existsSync(join(configDir, 'loops', 'impl-loop', 'impl-loop.yaml'))).toBe(true);
   expect(existsSync(join(configDir, 'loops', 'plan-loop', 'prompts', 'work-plan.md'))).toBe(true);
@@ -2420,8 +2422,8 @@ test('installing the bundled examples seeds the flow, the loop definitions, the 
   // Back to the terminal; cd into a repo with no local flow → the installed global flow renders its steps.
   await page.locator('[data-viewbtn="1"]').click();
   await typeCommand(`cd "${repo}"`);
-  await expect(page.locator('#flow-strip .flow.vert .stn')).toHaveCount(7, { timeout: 10_000 }); // 5 steps + 2 bookends
-  await expect(flowStepName()).toHaveText('groom-ticket');
+  await expect(page.locator('#flow-strip .flow.vert .stn')).toHaveCount(5, { timeout: 10_000 }); // 3 steps + 2 bookends
+  await expect(flowStepName()).toHaveText('groom');
 
   await app.close();
   rmSync(home, { recursive: true, force: true });
@@ -2429,7 +2431,7 @@ test('installing the bundled examples seeds the flow, the loop definitions, the 
   rmSync(repo, { recursive: true, force: true });
 });
 
-test('the consent step collects one decision per conflicting destination; a decline leaves those files unchanged (§18.1 #41)', { tag: '@ownapp' }, async () => {
+test('the shipped-flow migration is confirm-first and a decline preserves the existing flow (§18.1/§27.10 #41/#78)', { tag: '@ownapp' }, async () => {
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-install-ex2-home-'));
   const configDir = mkdtempSync(join(tmpdir(), 'agent-term-e2e-install-ex2-cfg-'));
   const customFlow = 'name: my-custom-flow\nsteps:\n  - id: mine\n    kind: manual\n';
@@ -2449,8 +2451,16 @@ test('the consent step collects one decision per conflicting destination; a decl
   // One decision per CONFLICTING destination; the clean ones offer none.
   await expect(consentBox('flow')).toBeVisible();
   await expect(consentBox('commands')).toBeVisible();
+  await expect(consentBox('appLoops')).toHaveCount(0);
   await expect(consentBox('loops')).toHaveCount(0);
 
+  await page.locator('#install-examples-view .flow-modal button.cancel').click();
+  await expect(installExamplesPrompt()).toBeHidden();
+  expect(readFileSync(join(home, '.agent-terminal', 'flow.yaml'), 'utf8')).toBe(customFlow);
+  expect(readFileSync(join(configDir, 'commands', 'groom-ticket.md'), 'utf8')).toBe(customCommand);
+
+  await installExamplesBtn().click();
+  await expect(installExamplesPrompt()).toBeVisible({ timeout: 10_000 });
   await consentBox('flow').check(); // replace the flow; leave the command alone
   await installExamplesConfirm().click();
   await expect(installExamplesStatus()).toContainText('skipped', { timeout: 10_000 });
@@ -2458,7 +2468,12 @@ test('the consent step collects one decision per conflicting destination; a decl
   // Consenting in one destination never replaced the other: the custom command survives byte-for-byte,
   // while the customized flow was replaced by the bundled one.
   expect(readFileSync(join(configDir, 'commands', 'groom-ticket.md'), 'utf8')).toBe(customCommand);
-  expect(readFileSync(join(home, '.agent-terminal', 'flow.yaml'), 'utf8')).not.toBe(customFlow);
+  const installedFlow = readFileSync(join(home, '.agent-terminal', 'flow.yaml'), 'utf8');
+  expect(installedFlow).not.toBe(customFlow);
+  expect(installedFlow).toContain('loop_namespace: app');
+  expect(installedFlow).toContain('loop: groom-loop');
+  expect(installedFlow).toContain('loop: plan-loop');
+  expect(installedFlow).toContain('loop: impl-loop');
   expect(existsSync(join(home, '.agent-terminal', 'todo-templates', 'ticket-grooming.md'))).toBe(true);
 
   await app.close();
@@ -2679,6 +2694,11 @@ test('after install, the active step offers its bundled todo template as the pic
   await page.locator('[data-viewbtn="4"]').click();
   await installExamplesBtn().click();
   await expect(installExamplesStatus()).toContainText('created', { timeout: 15_000 });
+
+  writeFileSync(
+    join(home, '.agent-terminal', 'flow.yaml'),
+    'name: todo-template-compat\nsteps:\n  - id: groom-ticket\n    kind: manual\n    todo_template: ticket-grooming\n',
+  );
   await page.locator('[data-viewbtn="1"]').click();
 
   await typeCommand(`cd "${repo}"`);
@@ -3791,6 +3811,51 @@ function seedFakeAgentV2(
   writeFileSync(join(binDir, 'fake-agent'), script, { mode: 0o755 });
 }
 
+function seedFakeAgentV2Chain(binDir: string): void {
+  const sections = ['summary', 'findings', 'disposition'];
+  const steps = [
+    {
+      step: 'groom',
+      artifact: '.agent-terminal/loop/artifacts/groomed-ticket.md',
+      roster: ['review-plan-intent'],
+    },
+    {
+      step: 'plan',
+      artifact: '.agent-terminal/loop/artifacts/plan.md',
+      roster: PLAN_V2_ROSTER,
+    },
+    {
+      step: 'implement',
+      artifact: '.agent-terminal/loop/artifacts/diff.md',
+      roster: ['impl-review-principal', 'impl-review-tests'],
+    },
+  ];
+  const done = (key: string): string =>
+    `mkdir -p .agent-terminal/loop; printf '%s' '${key}' > .agent-terminal/loop/${TURN_DONE_FILENAME}`;
+  const cases = steps.flatMap(({ step, artifact, roster }) => {
+    const workKey = `work-${step}`;
+    const reviewKey = `review-${step}`;
+    const consolidateKey = `consolidate-${step}`;
+    const report = b64(exampleRoundReport({ sections, roster }));
+    return [
+      `    *turn-done:${consolidateKey}*) printf x >> .agent-terminal/consolidate-${step}-runs; mkdir -p .agent-terminal/loop/consolidate; printf '%s' '${b64('verdict: clean\n')}' | base64 -d > .agent-terminal/loop/consolidate/1.md; ${done(consolidateKey)} ;;`,
+      `    *turn-done:${reviewKey}*) printf x >> .agent-terminal/review-${step}-runs; mkdir -p .agent-terminal/loop/reports; printf '%s' '${report}' | base64 -d > .agent-terminal/loop/reports/1.md; ${done(reviewKey)} ;;`,
+      `    *turn-done:${workKey}*) printf x >> .agent-terminal/work-${step}-runs; mkdir -p "$(dirname ${artifact})"; printf '%s\\n' '# ${step}' '${completionMarker(step)}' > ${artifact}; ${done(workKey)} ;;`,
+    ];
+  });
+  const script =
+    '#!/usr/bin/env bash\n' +
+    'mkdir -p .agent-terminal\n' +
+    'while IFS= read -r line; do\n' +
+    '  [ -z "$line" ] && continue\n' +
+    '  printf "%s\\n" "$line" >> .agent-terminal/injected-log\n' +
+    '  case "$line" in\n' +
+    `${cases.join('\n')}\n` +
+    '  esac\n' +
+    'done\n';
+  writeFileSync(join(binDir, 'fake-agent'), script, { mode: 0o755 });
+}
+
 const APP_ARTIFACT_REL = '.agent-terminal/loop/artifacts/plan.md';
 const appReport1 = (repo: string): string => join(repo, '.agent-terminal', 'loop', 'reports', '1.md');
 const appRunState = (repo: string): string => join(repo, '.agent-terminal', 'loop', 'run-state.yaml');
@@ -4014,16 +4079,30 @@ function seedAppBootstrapFlowRepo(prefix: string): string {
   return dir;
 }
 
-function seedOperatorPlanLoopConfig(prefix: string, transform: (yaml: string) => string): string {
+function seedShippedAppChainRepo(prefix: string): string {
+  const dir = mkdtempSync(join(tmpdir(), prefix));
+  mkdirSync(join(dir, '.git'), { recursive: true });
+  mkdirSync(join(dir, '.agent-terminal'), { recursive: true });
+  cpSync(join(process.cwd(), 'example', 'flow', 'flow.yaml'), join(dir, '.agent-terminal', 'flow.yaml'));
+  return dir;
+}
+
+function seedOperatorPlanLoopConfig(prefix: string, transform?: (yaml: string) => string): string {
   const root = mkdtempSync(join(tmpdir(), prefix));
   const target = join(root, 'loops-v2', 'plan-loop');
   cpSync(join(exampleConfigDir, 'loops-v2', 'plan-loop'), target, { recursive: true });
-  const defFile = join(target, 'plan-loop.yaml');
-  const before = readFileSync(defFile, 'utf8');
-  const after = transform(before);
-  expect(after).not.toBe(before);
-  writeFileSync(defFile, after);
+  if (transform) {
+    const defFile = join(target, 'plan-loop.yaml');
+    const before = readFileSync(defFile, 'utf8');
+    const after = transform(before);
+    expect(after).not.toBe(before);
+    writeFileSync(defFile, after);
+  }
   return root;
+}
+
+function withoutPickup(yaml: string): string {
+  return yaml.replace(/^pickup:\n[\s\S]*?(?=^inputs:)/m, '');
 }
 
 function seedRepoPlanLoopOverride(repo: string): void {
@@ -4035,15 +4114,7 @@ function seedRepoPlanLoopOverride(repo: string): void {
 test('entering a pickup-bearing §27 def bootstraps out-of-band into app-owned state, never §26 state or terminal injection (ST2 AC3/AC8)', { tag: '@ownapp' }, async () => {
   const repo = seedAppBootstrapFlowRepo('agent-term-e2e-v2-bootstrap-');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-v2-bootstrap-home-'));
-  const config = seedOperatorPlanLoopConfig('agent-term-e2e-v2-bootstrap-config-', (yaml) =>
-    yaml.replace(
-      '  branch_template: plan-loop/issue-{issue}\n',
-      '  branch_template: plan-loop/issue-{issue}\n' +
-        '  initial_labels:\n' +
-        '    - target: issue\n      action: add\n      label: agent-loop/in-progress\n' +
-        '    - target: pr\n      action: remove\n      label: needs-triage\n',
-    ),
-  );
+  const config = seedOperatorPlanLoopConfig('agent-term-e2e-v2-bootstrap-config-');
   const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-v2-bootstrap-bin-');
   seedFakeAgentV2(binDir, { stepId: 'plan', artifactRel: APP_ARTIFACT_REL, work: 'noop' });
   app = await electron.launch({
@@ -4080,17 +4151,19 @@ test('entering a pickup-bearing §27 def bootstraps out-of-band into app-owned s
   expect(calls).toContain('git commit --allow-empty -m [skip ci] start work on #176');
   expect(calls).toContain('git push -u origin plan-loop/issue-176');
   expect(calls).toContain('gh issue edit 176 --add-assignee @me');
-  expect(calls).toContain('gh issue edit 176 --add-label agent-loop/in-progress');
+  expect(calls).toContain('gh issue edit 176 --remove-label ready');
+  expect(calls).toContain('gh issue edit 176 --add-label in-progress');
   expect(calls).toContain('gh pr create --draft --base main --head plan-loop/issue-176');
-  expect(calls).toContain('gh pr edit 4242 --remove-label needs-triage');
+  expect(calls).toContain('gh pr edit 4242 --add-label plan-draft');
   expect(
     calls
       .split('\n')
       .filter((call) => /^gh (issue|pr) edit .*--(add|remove)-label /.test(call))
       .sort(),
   ).toEqual([
-    'gh issue edit 176 --add-label agent-loop/in-progress',
-    'gh pr edit 4242 --remove-label needs-triage',
+    'gh issue edit 176 --add-label in-progress',
+    'gh issue edit 176 --remove-label ready',
+    'gh pr edit 4242 --add-label plan-draft',
   ]);
   expect(existsSync(join(repo, '.agent-loop', 'state.yaml'))).toBe(false);
   await expect(termRows()).not.toContainText('agent-loop pickup');
@@ -4104,13 +4177,14 @@ test('entering a pickup-bearing §27 def bootstraps out-of-band into app-owned s
   for (const dir of [repo, home, config, binDir]) rmSync(dir, { recursive: true, force: true });
 });
 
-test('a failed §27 pickup rolls back its named step with typed inputs preserved and a blocking route out (ST2 AC4/AC7)', { tag: '@ownapp' }, async () => {
+test('a failed §27 pickup stays rolled back across relaunch, preserving inputs for the correct re-pickup (ST2 AC4/AC7, ST3 AC11)', { tag: '@ownapp' }, async () => {
   const repo = seedAppBootstrapFlowRepo('agent-term-e2e-v2-bootstrap-fail-');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-v2-bootstrap-fail-home-'));
   const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-v2-bootstrap-fail-bin-');
-  app = await electron.launch({
-    args: ['out/main/index.js'],
-    env: {
+  const launch = () =>
+    electron.launch({
+      args: ['out/main/index.js'],
+      env: {
       ...process.env,
       APP_SHELL: 'bash',
       HOME: home,
@@ -4119,8 +4193,9 @@ test('a failed §27 pickup rolls back its named step with typed inputs preserved
       PATH: `${binDir}:${process.env.PATH}`,
       FAKE_GHGIT_LOG: logFile,
       FAKE_GIT_DIRTY_ONCE: '1',
-    },
-  });
+      },
+    });
+  app = await launch();
   page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
@@ -4143,6 +4218,16 @@ test('a failed §27 pickup rolls back its named step with typed inputs preserved
   expect(existsSync(join(repo, '.agent-loop', 'state.yaml'))).toBe(false);
   expect(readGhLog(logFile)).not.toContain('gh pr create');
   await errorDialog.locator('.dismiss').click();
+  await app.close();
+
+  app = await launch();
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+  await typeCommand(`cd "${repo}"`);
+  await expect(flowStation(1)).toHaveClass(/\bactive\b/, { timeout: 10_000 });
+  await expect(flowStation(2)).not.toHaveClass(/\bactive\b/);
+  expect(readIf(appFlowState(repo))).toContain("ticket: '176'");
+  expect(readGhLog(logFile).match(/git status --porcelain/g)).toHaveLength(1);
   await expect(flowControl()).toHaveText('Advance', { timeout: 10_000 });
   await flowControl().click();
   await expect.poll(() => readIf(join(repo, '.agent-terminal', 'loop', 'bootstrap.yaml')), { timeout: 15_000 }).toContain('issue: 176');
@@ -4151,6 +4236,276 @@ test('a failed §27 pickup rolls back its named step with typed inputs preserved
 
   await app.close();
   for (const dir of [repo, home, binDir]) rmSync(dir, { recursive: true, force: true });
+});
+
+test('the shipped §27 flow runs groom → plan → implement and resumes at plan without re-driving groom (ST3 AC1/AC11)', { tag: '@ownapp' }, async () => {
+  const repo = seedShippedAppChainRepo('agent-term-e2e-v2-full-chain-');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-v2-full-chain-home-'));
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-v2-full-chain-bin-');
+  seedFakeAgentV2Chain(binDir);
+  const launch = () =>
+    electron.launch({
+      args: ['out/main/index.js'],
+      env: {
+        ...process.env,
+        APP_SHELL: 'bash',
+        HOME: home,
+        APP_SUBMIT_DELAY_MS: '100',
+        CLAUDE_CONFIG_DIR: exampleConfigDir,
+        PATH: `${binDir}:${process.env.PATH}`,
+        FAKE_GHGIT_LOG: logFile,
+      },
+    });
+
+  app = await launch();
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+  await typeCommand(`cd "${repo}"`);
+  await typeCommand('fake-agent');
+  await flowControl().click();
+  await expect(inputModal()).toBeVisible({ timeout: 10_000 });
+  await inputModal().locator('.field input').fill('176');
+  await inputModal().locator('.confirm').click();
+
+  await expect.poll(() => readIf(appRunState(repo)), { timeout: 40_000 }).toContain('step: groom');
+  await expect.poll(() => readIf(appRunState(repo)), { timeout: 40_000 }).toContain('status: complete');
+  expect(readIf(appFlowState(repo))).toContain('step: groom');
+  expect(readIf(join(repo, '.agent-terminal', 'work-groom-runs'))).toBe('x');
+  const groomApprove = loopPanel().locator('[data-gate-option="approve"]');
+  if (!(await groomApprove.isVisible())) await loopReadout().click();
+  await expect(groomApprove).toBeVisible({ timeout: 10_000 });
+  await groomApprove.click();
+
+  await expect.poll(() => readGhLog(logFile), { timeout: 15_000 }).toContain(
+    `gh issue edit 176 --body-file ${join(repo, '.agent-terminal', 'loop', 'artifacts', 'groomed-ticket.md')}`,
+  );
+  await expect.poll(() => readIf(appRunState(repo)), { timeout: 40_000 }).toContain('step: plan');
+  await expect.poll(() => readIf(appRunState(repo)), { timeout: 40_000 }).toContain('status: complete');
+  expect(readIf(appFlowState(repo))).toContain('step: plan');
+  expect(readIf(join(repo, '.agent-terminal', 'injected-log'))).toContain(
+    '- groomed-ticket: .agent-terminal/loop/artifacts/groomed-ticket.md',
+  );
+  expect(readIf(join(repo, '.agent-terminal', 'work-plan-runs'))).toBe('x');
+  await app.close();
+
+  app = await launch();
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+  await typeCommand(`cd "${repo}"`);
+  await typeCommand('fake-agent');
+  expect(readIf(appFlowState(repo))).toContain('step: plan');
+  expect(readIf(join(repo, '.agent-terminal', 'work-groom-runs'))).toBe('x');
+  expect(readIf(join(repo, '.agent-terminal', 'work-plan-runs'))).toBe('x');
+  expect(readGhLog(logFile).match(/gh issue edit 176 --body-file/g)).toHaveLength(1);
+  expect(
+    readIf(join(repo, '.agent-terminal', 'injected-log')).match(
+      /- groomed-ticket: \.agent-terminal\/loop\/artifacts\/groomed-ticket\.md/g,
+    ),
+  ).toHaveLength(1);
+
+  const planApprove = loopPanel().locator('[data-gate-option="approve"]');
+  if (!(await planApprove.isVisible())) await loopReadout().click();
+  await expect(planApprove).toBeVisible({ timeout: 10_000 });
+  await planApprove.click();
+  await expect.poll(() => readGhLog(logFile), { timeout: 15_000 }).toContain('gh pr ready 4242');
+  await expect.poll(() => readIf(appRunState(repo)), { timeout: 40_000 }).toContain('step: implement');
+  await expect.poll(() => readIf(appRunState(repo)), { timeout: 40_000 }).toContain('status: complete');
+  expect(readIf(appFlowState(repo))).toContain('step: implement');
+  expect(readIf(join(repo, '.agent-terminal', 'injected-log'))).toContain(
+    '- plan: .agent-terminal/loop/artifacts/plan.md',
+  );
+  expect(readIf(join(repo, '.agent-terminal', 'work-implement-runs'))).toBe('x');
+
+  const implementApprove = loopPanel().locator('[data-gate-option="approve"]');
+  if (!(await implementApprove.isVisible())) await loopReadout().click();
+  await expect(implementApprove).toBeVisible({ timeout: 10_000 });
+  await implementApprove.click();
+  await expect.poll(() => readGhLog(logFile), { timeout: 15_000 }).toContain(
+    `gh pr edit 4242 --body-file ${join(repo, '.agent-terminal', 'loop', 'artifacts', 'diff.md')}`,
+  );
+  await expect(flowControl()).toHaveText('Restart', { timeout: 15_000 });
+  expect(readIf(join(repo, '.agent-terminal', 'work-groom-runs'))).toBe('x');
+  expect(readIf(join(repo, '.agent-terminal', 'work-plan-runs'))).toBe('x');
+  expect(readIf(join(repo, '.agent-terminal', 'work-implement-runs'))).toBe('x');
+
+  await app.close();
+  for (const dir of [repo, home, binDir]) rmSync(dir, { recursive: true, force: true });
+});
+
+test('a §27 re-pickup conflict deletes nothing on decline and rolls back the named step (ST3 AC5/AC7)', { tag: '@ownapp' }, async () => {
+  const repo = seedAppBootstrapFlowRepo('agent-term-e2e-v2-wipe-decline-');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-v2-wipe-decline-home-'));
+  const config = seedOperatorPlanLoopConfig(
+    'agent-term-e2e-v2-wipe-decline-config-',
+  );
+  const { binDir, logFile } = seedFakeGhGit(
+    'agent-term-e2e-v2-wipe-decline-bin-',
+  );
+  app = await electron.launch({
+    args: ['out/main/index.js'],
+    env: {
+      ...process.env,
+      APP_SHELL: 'bash',
+      HOME: home,
+      APP_SUBMIT_DELAY_MS: '100',
+      CLAUDE_CONFIG_DIR: config,
+      PATH: `${binDir}:${process.env.PATH}`,
+      FAKE_GHGIT_LOG: logFile,
+      FAKE_GIT_BRANCH_EXISTS: '1',
+    },
+  });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await typeCommand(`cd "${repo}"`);
+  await flowControl().click();
+  await flowControl().click();
+  await inputModal().locator('.field input').fill('176');
+  await inputModal().locator('.confirm').click();
+
+  const conflict = page.locator('#flow-confirm-host .flow-modal');
+  await expect(conflict).toBeVisible({ timeout: 15_000 });
+  await expect(conflict).toContainText('plan-loop/issue-176');
+  await expect(conflict).toContainText('closes its PR');
+  expect(readGhLog(logFile)).not.toContain(
+    'git branch -D plan-loop/issue-176',
+  );
+  expect(readGhLog(logFile)).not.toContain(
+    'git push origin --delete plan-loop/issue-176',
+  );
+  expect(readGhLog(logFile)).not.toContain('gh pr close');
+
+  await conflict.locator('.cancel').click();
+
+  await expect(flowStation(1)).toHaveClass(/\bactive\b/, { timeout: 10_000 });
+  await expect(flowStation(2)).not.toHaveClass(/\bactive\b/);
+  expect(readIf(appFlowState(repo))).toContain("ticket: '176'");
+  expect(readGhLog(logFile)).not.toContain(
+    'git branch -D plan-loop/issue-176',
+  );
+  expect(readGhLog(logFile)).not.toContain(
+    'git push origin --delete plan-loop/issue-176',
+  );
+  expect(readGhLog(logFile)).not.toContain('gh pr close');
+  expect(existsSync(join(repo, '.agent-terminal', 'loop', 'bootstrap.yaml'))).toBe(
+    false,
+  );
+
+  await app.close();
+  for (const dir of [repo, home, config, binDir]) {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a confirmed §27 re-pickup wipes only the named branch and recreates it (ST3 AC5/AC7)', { tag: '@ownapp' }, async () => {
+  const repo = seedAppBootstrapFlowRepo('agent-term-e2e-v2-wipe-confirm-');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-v2-wipe-confirm-home-'));
+  const config = seedOperatorPlanLoopConfig(
+    'agent-term-e2e-v2-wipe-confirm-config-',
+  );
+  const { binDir, logFile } = seedFakeGhGit(
+    'agent-term-e2e-v2-wipe-confirm-bin-',
+  );
+  app = await electron.launch({
+    args: ['out/main/index.js'],
+    env: {
+      ...process.env,
+      APP_SHELL: 'bash',
+      HOME: home,
+      APP_SUBMIT_DELAY_MS: '100',
+      CLAUDE_CONFIG_DIR: config,
+      PATH: `${binDir}:${process.env.PATH}`,
+      FAKE_GHGIT_LOG: logFile,
+      FAKE_GIT_BRANCH_EXISTS: '1',
+    },
+  });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await typeCommand(`cd "${repo}"`);
+  await flowControl().click();
+  await flowControl().click();
+  await inputModal().locator('.field input').fill('176');
+  await inputModal().locator('.confirm').click();
+
+  const conflict = page.locator('#flow-confirm-host .flow-modal');
+  await expect(conflict).toBeVisible({ timeout: 15_000 });
+  expect(readGhLog(logFile)).not.toContain(
+    'git branch -D plan-loop/issue-176',
+  );
+  await conflict.locator('.confirm').click();
+
+  await expect
+    .poll(
+      () =>
+        readIf(join(repo, '.agent-terminal', 'loop', 'bootstrap.yaml')),
+      { timeout: 15_000 },
+    )
+    .toContain('issue: 176');
+  const calls = readGhLog(logFile);
+  expect(calls).toContain('git branch -D plan-loop/issue-176');
+  expect(calls).toContain('git push origin --delete plan-loop/issue-176');
+  expect(calls).toContain(
+    'git checkout -b plan-loop/issue-176 FETCH_HEAD',
+  );
+  expect(calls).toContain('gh pr create --draft');
+
+  await app.close();
+  for (const dir of [repo, home, config, binDir]) {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a §27 branch conflict with no wipe policy never offers deletion (ST3 AC5)', { tag: '@ownapp' }, async () => {
+  const repo = seedAppBootstrapFlowRepo('agent-term-e2e-v2-no-wipe-');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-v2-no-wipe-home-'));
+  const config = seedOperatorPlanLoopConfig(
+    'agent-term-e2e-v2-no-wipe-config-',
+    (yaml) =>
+      yaml.includes('  on_conflict: wipe-and-retry\n')
+        ? yaml.replace('  on_conflict: wipe-and-retry\n', '')
+        : `${yaml}\n`,
+  );
+  const { binDir, logFile } = seedFakeGhGit(
+    'agent-term-e2e-v2-no-wipe-bin-',
+  );
+  app = await electron.launch({
+    args: ['out/main/index.js'],
+    env: {
+      ...process.env,
+      APP_SHELL: 'bash',
+      HOME: home,
+      APP_SUBMIT_DELAY_MS: '100',
+      CLAUDE_CONFIG_DIR: config,
+      PATH: `${binDir}:${process.env.PATH}`,
+      FAKE_GHGIT_LOG: logFile,
+      FAKE_GIT_BRANCH_EXISTS: '1',
+    },
+  });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await typeCommand(`cd "${repo}"`);
+  await flowControl().click();
+  await flowControl().click();
+  await inputModal().locator('.field input').fill('176');
+  await inputModal().locator('.confirm').click();
+
+  await expect(page.locator('#flow-confirm-host .flow-modal')).toHaveCount(0);
+  const error = page.locator('#flow-error-host .flow-modal');
+  await expect(error).toBeVisible({ timeout: 15_000 });
+  await expect(error).toContainText('already exists');
+  expect(readGhLog(logFile)).not.toContain(
+    'git branch -D plan-loop/issue-176',
+  );
+  expect(readGhLog(logFile)).not.toContain(
+    'git push origin --delete plan-loop/issue-176',
+  );
+
+  await app.close();
+  for (const dir of [repo, home, config, binDir]) {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test('a repo-resident pickup def is refused by the wired executor before any bootstrap git or gh operation (ST2 origin gate)', { tag: '@ownapp' }, async () => {
@@ -4198,11 +4553,9 @@ test('a repo-resident pickup def is refused by the wired executor before any boo
 test('a §27 def with no pickup enters work without invoking bootstrap ports (ST2 AC3)', { tag: '@ownapp' }, async () => {
   const repo = seedAppBootstrapFlowRepo('agent-term-e2e-v2-no-bootstrap-');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-v2-no-bootstrap-home-'));
-  const config = seedOperatorPlanLoopConfig('agent-term-e2e-v2-no-bootstrap-config-', (yaml) =>
-    yaml.replace(
-      'pickup:\n  initial_status: planning\n  branch_template: plan-loop/issue-{issue}\n',
-      '',
-    ),
+  const config = seedOperatorPlanLoopConfig(
+    'agent-term-e2e-v2-no-bootstrap-config-',
+    withoutPickup,
   );
   const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-v2-no-bootstrap-bin-');
   seedFakeAgentV2(binDir, { stepId: 'plan', artifactRel: APP_ARTIFACT_REL, work: 'noop' });
@@ -4621,11 +4974,16 @@ test('a failed §27 approve side-effect is surfaced and the flow still reaches i
   // No pr resolved → plan-loop's mark-ready has no PR to flip → the side-effect fails best-effort.
   const repo = seedAppGateFlowRepo('agent-term-e2e-v2-approvefail-', null);
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-v2-approvefail-home-'));
+  const config = seedOperatorPlanLoopConfig(
+    'agent-term-e2e-v2-approvefail-config-',
+    withoutPickup,
+  );
+  rmSync(join(repo, '.agent-terminal', 'loop', 'bootstrap.yaml'));
   const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-v2-approvefail-bin-');
   seedFakeAgentV2(binDir, { stepId: 'plan', artifactRel: APP_ARTIFACT_REL, work: 'complete', review: 'full' });
   app = await electron.launch({
     args: ['out/main/index.js'],
-    env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100', CLAUDE_CONFIG_DIR: exampleConfigDir, PATH: `${binDir}:${process.env.PATH}`, FAKE_GHGIT_LOG: logFile },
+    env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100', CLAUDE_CONFIG_DIR: config, PATH: `${binDir}:${process.env.PATH}`, FAKE_GHGIT_LOG: logFile },
   });
   page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
@@ -4652,6 +5010,7 @@ test('a failed §27 approve side-effect is surfaced and the flow still reaches i
   await app.close();
   rmSync(repo, { recursive: true, force: true });
   rmSync(home, { recursive: true, force: true });
+  rmSync(config, { recursive: true, force: true });
   rmSync(binDir, { recursive: true, force: true });
 });
 

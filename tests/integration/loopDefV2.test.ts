@@ -170,8 +170,6 @@ describe('resolveLoopDefV2 — the bootstrap pickup contract is optional and sel
   });
 
   it('defaults a pickup that names no on_conflict to the abort wipe policy (wipe-absent arm)', () => {
-    // The committed VALID_DEF pickup names no on_conflict → the discriminated union's wipe-absent arm, so a
-    // branch conflict is a plain rollback failure (ST2 runs no wipe; the wipe path is ST3).
     plantDef(join(appDir, 'loops-v2'), 'plan-loop', VALID_DEF);
     const r = resolveLoopDefV2('plan-loop', { tiers: tiers(), repoDir });
     expect(r.ok).toBe(true);

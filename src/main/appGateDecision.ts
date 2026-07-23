@@ -14,6 +14,16 @@ export interface AppGateRefs {
   ticket: number | null;
 }
 
+export function resolveAppGateRefs(
+  flow: { pr?: number; ticket?: number } | undefined,
+  bootstrap: { pr: number; issue: number } | null,
+): AppGateRefs {
+  return {
+    pr: flow?.pr ?? bootstrap?.pr ?? null,
+    ticket: flow?.ticket ?? bootstrap?.issue ?? null,
+  };
+}
+
 /** The executor's injection seam — each member a domain concept, not a mechanism (CODE-STANDARDS seam rule),
  *  so the decision logic runs under fakes with no PTY while the composition root wires the real ports. */
 export interface AppGateDecisionDeps {

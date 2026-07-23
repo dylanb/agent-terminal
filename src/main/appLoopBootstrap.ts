@@ -7,6 +7,7 @@ import type { AppBootstrapAuditKind } from '../shared/audit';
 export interface AppLoopBootstrapDeps {
   git: BootstrapGit;
   github: BootstrapGitHub;
+  wipeConflictingBranch(branch: string): Promise<void>;
   rollbackCreatedBranch(branch: string): Promise<void>;
   writeBootstrap(identity: AppLoopBootstrap): void;
 }
@@ -14,11 +15,15 @@ export interface AppLoopBootstrapDeps {
 export interface AppLoopBootstrapRequest {
   issue: number;
   spec: AppLoopBootstrapSpec;
+  confirmedWipe?: {
+    branch: string;
+  };
 }
 
 export interface AppLoopBootstrapSpec {
   origin: 'operator' | 'app-bundled' | 'repo';
   branchTemplate: string;
+  wipe: { mode: 'abort' } | { mode: 'wipe-and-retry' };
   initialLabels: Array<{
     action: 'add' | 'remove';
     target: 'issue' | 'pr';
@@ -28,7 +33,8 @@ export interface AppLoopBootstrapSpec {
 
 export type AppLoopBootstrapResult =
   | { ok: true; identity: AppLoopBootstrap }
-  | { ok: false; error: string };
+  | { ok: false; error: string }
+  | { ok: false; conflict: { branch: string } };
 
 const SAFE_BRANCH = /^[A-Za-z0-9._/][A-Za-z0-9._/-]*$/;
 
@@ -49,15 +55,29 @@ export async function runAppLoopBootstrap(
     return fail(`refused bootstrap from a non-operator-authored loop def (origin: ${req.spec.origin})`);
   }
   if (!Number.isSafeInteger(req.issue) || req.issue <= 0) return fail('pickup requires a positive GitHub issue number');
+  const branch = req.spec.branchTemplate.replaceAll('{issue}', String(req.issue));
+  if (!SAFE_BRANCH.test(branch)) return fail(`unsafe branch name from branch_template: ${branch}`);
+  if (req.confirmedWipe !== undefined) {
+    if (req.spec.wipe.mode !== 'wipe-and-retry') {
+      return fail('pickup has no wipe policy authorizing branch deletion');
+    }
+    if (req.confirmedWipe.branch !== branch) {
+      return fail(`wipe confirmation names a different branch: ${req.confirmedWipe.branch}`);
+    }
+  }
   let createdBranch: string | null = null;
   try {
     if (!(await deps.git.isCleanTree())) return fail('working tree is not clean');
     const base = await deps.git.resolveBaseBranch();
     if (!base) return fail('could not resolve base branch');
-    const branch = req.spec.branchTemplate.replaceAll('{issue}', String(req.issue));
-    if (!SAFE_BRANCH.test(branch)) return fail(`unsafe branch name from branch_template: ${branch}`);
     if (await deps.git.branchExists(branch)) {
-      return fail(`branch ${branch} already exists`);
+      if (req.confirmedWipe !== undefined) {
+        await deps.wipeConflictingBranch(branch);
+      } else if (req.spec.wipe.mode === 'wipe-and-retry') {
+        return { ok: false, conflict: { branch } };
+      } else {
+        return fail(`branch ${branch} already exists`);
+      }
     }
 
     await deps.git.createBranchFromBase(branch, base);
@@ -115,18 +135,77 @@ export interface AppLoopBootstrapCoordinatorDeps {
   rollbackStep(repoDir: string, stepId: string): boolean;
   enterWork(repoDir: string, loopName: string, stepId: string, entry: AppLoopEntry): void;
   emitError(error: { repoDir: string; stepId: string; reason: string }): void;
+  emitConflict(conflict: { repoDir: string; stepId: string; branch: string }): void;
   audit(repoDir: string, kind: AppBootstrapAuditKind, stepId: string, detail?: string): void;
 }
 
 export interface AppLoopBootstrapCoordinator {
   enter(job: AppLoopBootstrapJob): void;
+  resolve(repoDir: string, stepId: string, wipe: boolean): void;
 }
 
 export function createAppLoopBootstrapCoordinator(
   deps: AppLoopBootstrapCoordinatorDeps,
 ): AppLoopBootstrapCoordinator {
+  const pending = new Map<string, { job: AppLoopBootstrapJob; branch: string }>();
+  const pendingKey = (repoDir: string, stepId: string): string => `${repoDir}\0${stepId}`;
   const enterWork = (job: AppLoopBootstrapJob): void =>
     deps.enterWork(job.repoDir, job.loopName, job.stepId, job.entry);
+
+  const handle = (job: AppLoopBootstrapJob, result: AppLoopBootstrapResult): void => {
+    if (!deps.isCurrentStep(job.repoDir, job.stepId)) {
+      deps.audit(job.repoDir, 'stale', job.stepId);
+      return;
+    }
+    if (result.ok) {
+      deps.audit(job.repoDir, 'success', job.stepId, result.identity.branch);
+      enterWork(job);
+      return;
+    }
+    if ('conflict' in result) {
+      pending.set(pendingKey(job.repoDir, job.stepId), {
+        job,
+        branch: result.conflict.branch,
+      });
+      deps.audit(job.repoDir, 'conflict', job.stepId, result.conflict.branch);
+      deps.emitConflict({
+        repoDir: job.repoDir,
+        stepId: job.stepId,
+        branch: result.conflict.branch,
+      });
+      return;
+    }
+    deps.audit(job.repoDir, 'failure', job.stepId, result.error);
+    if (!deps.rollbackStep(job.repoDir, job.stepId)) {
+      deps.audit(job.repoDir, 'stale', job.stepId);
+      return;
+    }
+    deps.audit(job.repoDir, 'rollback', job.stepId, result.error);
+    deps.emitError({ repoDir: job.repoDir, stepId: job.stepId, reason: result.error });
+  };
+
+  const run = (job: AppLoopBootstrapJob, confirmedWipe?: { branch: string }): void => {
+    const bootstrap = job.bootstrap;
+    let operation: Promise<AppLoopBootstrapResult>;
+    if (bootstrap === null) {
+      operation = Promise.resolve({ ok: false, error: 'pickup bootstrap is missing' });
+    } else if (job.issue === null) {
+      operation = Promise.resolve({
+        ok: false,
+        error: 'pickup requires a resolved GitHub ticket input',
+      });
+    } else {
+      operation = deps.run(job.repoDir, {
+        issue: job.issue,
+        spec: bootstrap,
+        ...(confirmedWipe ? { confirmedWipe } : {}),
+      });
+    }
+    void operation.then(
+      (result) => handle(job, result),
+      (e: unknown) => handle(job, { ok: false, error: errMsg(e) }),
+    );
+  };
 
   return {
     enter(job) {
@@ -139,34 +218,28 @@ export function createAppLoopBootstrapCoordinator(
         return;
       }
       deps.audit(job.repoDir, 'start', job.stepId);
-      const resolve = (result: AppLoopBootstrapResult): void => {
-        if (!deps.isCurrentStep(job.repoDir, job.stepId)) {
-          deps.audit(job.repoDir, 'stale', job.stepId);
-          return;
-        }
-        if (result.ok) {
-          deps.audit(job.repoDir, 'success', job.stepId, result.identity.branch);
-          enterWork(job);
-          return;
-        }
-        deps.audit(job.repoDir, 'failure', job.stepId, result.error);
-        if (!deps.rollbackStep(job.repoDir, job.stepId)) {
-          deps.audit(job.repoDir, 'stale', job.stepId);
-          return;
-        }
-        deps.audit(job.repoDir, 'rollback', job.stepId, result.error);
-        deps.emitError({ repoDir: job.repoDir, stepId: job.stepId, reason: result.error });
-      };
-      const operation =
-        job.issue === null
-          ? Promise.resolve<AppLoopBootstrapResult>({
-              ok: false,
-              error: 'pickup requires a resolved GitHub ticket input',
-            })
-          : deps.run(job.repoDir, { issue: job.issue, spec: job.bootstrap });
-      void operation.then(resolve, (e: unknown) =>
-        resolve({ ok: false, error: errMsg(e) }),
-      );
+      run(job);
+    },
+    resolve(repoDir, stepId, wipe) {
+      const key = pendingKey(repoDir, stepId);
+      const conflict = pending.get(key);
+      if (!conflict) return;
+      pending.delete(key);
+      if (!deps.isCurrentStep(repoDir, stepId)) {
+        deps.audit(repoDir, 'stale', stepId);
+        return;
+      }
+      if (wipe) {
+        deps.audit(repoDir, 'wipe', stepId, conflict.branch);
+        run(conflict.job, { branch: conflict.branch });
+        return;
+      }
+      deps.audit(repoDir, 'decline', stepId, conflict.branch);
+      if (!deps.rollbackStep(repoDir, stepId)) {
+        deps.audit(repoDir, 'stale', stepId);
+        return;
+      }
+      deps.audit(repoDir, 'rollback', stepId, 'operator declined branch wipe');
     },
   };
 }

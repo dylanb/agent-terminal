@@ -5,13 +5,11 @@ import path from 'node:path';
 import yaml from 'js-yaml';
 import { applyInstallExamples, exampleInstallDirs, type InstallDestination } from '../../src/main/installExamples';
 import { parseLoopDef, resolveLoopDir } from '../../src/main/loopDef';
-import { composeWorkPrompt, composeConsolidatePrompt } from '../../src/main/loopRecipe';
-
-// After a real install into a temp config root, the flow's bound loop names must resolve to the seeded
-// definitions and their actor turns must compose from the seeded templates (§24.2.3/§26.5). And the
-// install must be GLOBAL: a repo-local override never redirects where the definitions land.
+import { loadFlowDefinitionLocalFirst, flowHomeDir } from '../../src/main/flow';
+import { resolveLoopDefV2 } from '../../src/main/loopDefV2';
 
 const BUNDLE_FLOW = path.resolve('example', 'flow');
+const BUNDLE_APP_LOOPS = path.resolve('example', 'loops-v2');
 const BUNDLE_LOOPS = path.resolve('example', 'loops');
 
 function walk(dir: string, base: string = dir): string[] {
@@ -34,6 +32,7 @@ let configRoot: string;
 let repo: string;
 let dirs: InstallDestination[];
 const loopsTargetDir = (): string => (dirs.find((d) => d.id === 'loops') as InstallDestination).targetDir as string;
+const appLoopsTargetDir = (): string => (dirs.find((d) => d.id === 'appLoops') as InstallDestination).targetDir as string;
 
 beforeEach(() => {
   home = mkdtempSync(path.join(tmpdir(), 'install-res-home-'));
@@ -45,63 +44,128 @@ afterEach(() => {
   for (const d of [home, configRoot, repo]) rmSync(d, { recursive: true, force: true });
 });
 
-describe('after the install, every loop name the flow binds resolves and composes', () => {
+describe('after the install, every loop name the shipped flow binds resolves on the §27 engine', () => {
   it('binds at least one loop name (the fixture would otherwise grade nothing)', () => {
     expect(boundLoopNames().length).toBeGreaterThan(0);
   });
 
-  it('resolves each bound name to a definition at the engine loop-config location', () => {
+  it('resolves each bound name from the operator app-loop location', () => {
     applyInstallExamples(dirs, []);
     for (const name of boundLoopNames()) {
-      expect(resolveLoopDir(repo, name, configRoot)).toBe(path.join(loopsTargetDir(), name));
-      expect(parseLoopDef(repo, name, configRoot)).not.toBeNull();
+      const resolved = resolveLoopDefV2(name, {
+        repoDir: repo,
+        tiers: {
+          operator: appLoopsTargetDir(),
+          appBundled: BUNDLE_APP_LOOPS,
+        },
+      });
+      expect(resolved.ok).toBe(true);
+      if (resolved.ok) expect(resolved.def.origin).toBe('operator');
     }
   });
 
-  it('makes each definition an operator-config copy, so its exec gate is admissible (§26.6)', () => {
+  it('has no operator definition before install, then installs every bound definition there', () => {
+    for (const name of boundLoopNames()) {
+      expect(existsSync(path.join(appLoopsTargetDir(), name, `${name}.yaml`))).toBe(false);
+    }
     applyInstallExamples(dirs, []);
     for (const name of boundLoopNames()) {
-      expect(parseLoopDef(repo, name, configRoot)?.origin).toBe('operator-config');
+      expect(existsSync(path.join(appLoopsTargetDir(), name, `${name}.yaml`))).toBe(true);
     }
   });
 
-  it('exposes each definition declared human gate options to its loop step (§19.4)', () => {
+  it('exposes each definition declared human gate options', () => {
     applyInstallExamples(dirs, []);
     for (const name of boundLoopNames()) {
-      const def = parseLoopDef(repo, name, configRoot);
-      expect(def).not.toBeNull();
-      expect(def?.gates.some((g) => g.humanOptions.length > 0)).toBe(true);
+      const resolved = resolveLoopDefV2(name, {
+        repoDir: repo,
+        tiers: { operator: appLoopsTargetDir(), appBundled: BUNDLE_APP_LOOPS },
+      });
+      expect(resolved.ok).toBe(true);
+      if (resolved.ok) {
+        expect(resolved.def.gate.some((gate) => gate.option === 'approve')).toBe(true);
+        expect(resolved.def.gate.some((gate) => gate.option === 'request-changes')).toBe(true);
+      }
     }
   });
+});
 
-  it('composes the work turn and the consolidate turn for each bound name without a configuration error', () => {
+describe('the shipped feature-dev flow binds the complete §27 chain (ST3 AC6)', () => {
+  it('installs exactly groom-loop → plan-loop → impl-loop on the app namespace', () => {
     applyInstallExamples(dirs, []);
-    for (const name of boundLoopNames()) {
-      const def = parseLoopDef(repo, name, configRoot);
-      expect(def?.phases.length).toBeGreaterThan(0);
-      const phase = def!.phases[0].id;
-      expect(
-        composeWorkPrompt({ repoDir: repo, loopName: name, phase, turnKey: `work-${phase}`, tokens: {}, configDir: configRoot }),
-      ).not.toBeNull();
-      expect(
-        composeConsolidatePrompt({
-          repoDir: repo,
-          loopName: name,
-          phase,
-          iteration: 1,
-          turnKey: `consolidate-${phase}`,
-          tokens: {},
-          configDir: configRoot,
-        }),
-      ).not.toBeNull();
-    }
+
+    const loaded = loadFlowDefinitionLocalFirst(repo, home);
+    expect(loaded.ok).toBe(true);
+    if (!loaded.ok) return;
+    expect(loaded.definition.steps).toEqual([
+      {
+        id: 'groom',
+        kind: 'loop',
+        loop: 'groom-loop',
+        loopNamespace: 'app',
+        inputs: [
+          { name: 'ticket', type: 'github-ticket', required: true },
+        ],
+      },
+      {
+        id: 'plan',
+        kind: 'loop',
+        loop: 'plan-loop',
+        loopNamespace: 'app',
+      },
+      {
+        id: 'implement',
+        kind: 'loop',
+        loop: 'impl-loop',
+        loopNamespace: 'app',
+      },
+    ]);
   });
 
-  it('fails to compose before the install — the RED half of the resolution guarantee', () => {
-    const name = boundLoopNames()[0];
-    expect(
-      composeWorkPrompt({ repoDir: repo, loopName: name, phase: 'plan', turnKey: 'work-plan', tokens: {}, configDir: configRoot }),
-    ).toBeNull();
+  it('pins the installer target to the runtime reader resolver', () => {
+    const flowTarget = dirs.find((d) => d.id === 'flow')?.targetDir;
+    expect(flowTarget).toBe(flowHomeDir(home));
+
+    applyInstallExamples(dirs, []);
+    const loaded = loadFlowDefinitionLocalFirst(repo, home);
+    expect(loaded.ok).toBe(true);
+    if (loaded.ok) expect(loaded.flowDir).toBe(flowTarget);
+  });
+
+  it('joins each writer output to the next reader input by one id and path', () => {
+    const defs = ['groom-loop', 'plan-loop', 'impl-loop'].map((name) => {
+      const resolved = resolveLoopDefV2(name, {
+        repoDir: repo,
+        tiers: {
+          operator: null,
+          appBundled: BUNDLE_APP_LOOPS,
+        },
+      });
+      expect(resolved.ok).toBe(true);
+      if (!resolved.ok) throw new Error(resolved.reason);
+      return resolved.def;
+    });
+
+    expect(defs[0].outputs).toHaveLength(1);
+    expect(defs[1].inputs).toEqual(defs[0].outputs);
+    expect(defs[1].outputs).toHaveLength(1);
+    expect(defs[2].inputs).toEqual(defs[1].outputs);
+    expect(defs[2].outputs).toHaveLength(1);
+  });
+
+  it('installs the §27 defs into the operator tier used by the bootstrap origin gate', () => {
+    applyInstallExamples(dirs, []);
+    for (const name of ['groom-loop', 'plan-loop', 'impl-loop']) {
+      const resolved = resolveLoopDefV2(name, {
+        repoDir: repo,
+        tiers: {
+          operator: appLoopsTargetDir(),
+          appBundled: BUNDLE_APP_LOOPS,
+        },
+      });
+      expect(resolved.ok).toBe(true);
+      if (resolved.ok) expect(resolved.def.origin).toBe('operator');
+    }
   });
 });
 
@@ -128,6 +192,14 @@ describe('the install is global — a repo-local override never redirects where 
     applyInstallExamples(dirs, []);
     for (const rel of walk(BUNDLE_LOOPS)) {
       expect(existsSync(path.join(loopsTargetDir(), rel))).toBe(true);
+    }
+  });
+
+  it('writes every app-loop definition into the operator tier, not the repo override', () => {
+    seedOverride();
+    applyInstallExamples(dirs, []);
+    for (const rel of walk(BUNDLE_APP_LOOPS)) {
+      expect(existsSync(path.join(appLoopsTargetDir(), rel))).toBe(true);
     }
   });
 

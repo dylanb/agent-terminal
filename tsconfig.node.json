@@ -47,6 +47,7 @@
     "src/renderer/src/feedbackComposer.ts",
     "src/renderer/src/redoComposer.ts",
     "src/renderer/src/wireBootstrapConflict.ts",
+    "src/renderer/src/wireAppBootstrapConflict.ts",
     "src/renderer/src/modalShell.ts",
     "src/renderer/src/confirmDialog.ts",
     "src/renderer/src/errorDialog.ts",

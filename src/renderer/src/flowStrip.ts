@@ -72,6 +72,8 @@ export type FlowStripDeps = Omit<
   | 'onLoopError'
   | 'onBootstrapConflict'
   | 'resolveBootstrapConflict'
+  | 'onAppBootstrapConflict'
+  | 'resolveAppBootstrapConflict'
   | 'githubRef'
   | 'openExternal'
   | 'markTurnComplete'

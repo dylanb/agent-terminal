@@ -17,6 +17,7 @@ import {
   isValidFlowAppRequestChanges,
   isValidFlowAppRedo,
   isValidFlowArmInterrupt,
+  isValidFlowResolveAppBootstrapConflict,
   isValidOpenExternal,
   openExternalTarget,
   isValidTemplateList,
@@ -280,6 +281,21 @@ describe('IPC payload validation (§6 — renderer-supplied input is untrusted)'
     expect(isValidFlowArmInterrupt({ ...base, repoKey: 'relative' })).toBe(false); // unsafe key
     expect(isValidFlowArmInterrupt({ ...base, sessionId: 'other' })).toBe(false); // dead session
     expect(isValidFlowArmInterrupt(null)).toBe(false);
+  });
+
+  it('guards a §27 wipe decision on the exact repo + step identity it acts on', () => {
+    const base = {
+      sessionId: sid,
+      repoKey: '/repo',
+      step: 'plan',
+      wipe: true,
+    };
+    expect(isValidFlowResolveAppBootstrapConflict(base)).toBe(true);
+    expect(isValidFlowResolveAppBootstrapConflict({ ...base, step: '' })).toBe(false);
+    expect(isValidFlowResolveAppBootstrapConflict({ ...base, step: 7 })).toBe(false);
+    expect(isValidFlowResolveAppBootstrapConflict({ ...base, wipe: 'yes' })).toBe(false);
+    expect(isValidFlowResolveAppBootstrapConflict({ ...base, repoKey: 'relative' })).toBe(false);
+    expect(isValidFlowResolveAppBootstrapConflict({ ...base, sessionId: 'other' })).toBe(false);
   });
 
   it('accepts exactly the shared GATE_DECISION_OPTIONS set — one source for the validator (§26.6)', () => {

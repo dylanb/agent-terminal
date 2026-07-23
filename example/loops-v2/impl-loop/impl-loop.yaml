@@ -25,9 +25,6 @@ gate:
   - option: request-changes
   - option: redo
   - option: polish
-pickup:
-  initial_status: implementing
-  branch_template: impl-loop/issue-{issue}
 inputs:
   - id: plan
     path: plan.md

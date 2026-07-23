@@ -44,6 +44,7 @@ import {
 // a hard-coded list silently under-installs the next bundle refresh.
 
 const BUNDLE_FLOW = path.resolve('example', 'flow');
+const BUNDLE_APP_LOOPS = path.resolve('example', 'loops-v2');
 const BUNDLE_LOOPS = path.resolve('example', 'loops');
 const BUNDLE_COMMANDS = path.resolve('example', 'commands');
 
@@ -63,6 +64,7 @@ const FLOW_SET = [
     .filter((f) => f.endsWith('.md'))
     .map((f) => path.join('todo-templates', f)),
 ];
+const APP_LOOPS_SET = walk(BUNDLE_APP_LOOPS);
 const LOOPS_SET = walk(BUNDLE_LOOPS);
 const COMMANDS_SET = walk(BUNDLE_COMMANDS);
 const LOOP_NAMES = readdirSync(BUNDLE_LOOPS, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name);
@@ -104,7 +106,7 @@ afterEach(() => {
   rmSync(configRoot, { recursive: true, force: true });
 });
 
-const ALL: InstallDestinationId[] = ['flow', 'loops', 'skills', 'commands'];
+const ALL: InstallDestinationId[] = ['flow', 'appLoops', 'loops', 'skills', 'commands'];
 const targetOf = (id: InstallDestinationId, rel: string): string => path.join(targetDirOf(id), rel);
 const filesFor = (
   groups: { destination: InstallDestinationId; files: string[] }[],
@@ -176,6 +178,7 @@ describe('applyInstallExamples — a clean run seeds every destination and repor
   it('reports every bundled file created under the destination it was written to', () => {
     const res = okOf(applyInstallExamples(dirs, []));
     expect(filesFor(res.created, 'flow').sort()).toEqual([...FLOW_SET].sort());
+    expect(filesFor(res.created, 'appLoops').sort()).toEqual([...APP_LOOPS_SET].sort());
     expect(filesFor(res.created, 'loops').sort()).toEqual([...LOOPS_SET].sort());
     expect(filesFor(res.created, 'skills').sort()).toEqual([...SKILLS_SET].sort());
     expect(filesFor(res.created, 'commands').sort()).toEqual([...COMMANDS_SET].sort());
@@ -186,6 +189,7 @@ describe('applyInstallExamples — a clean run seeds every destination and repor
   it('writes bytes identical to the bundle at every destination', () => {
     applyInstallExamples(dirs, []);
     expect(readFileSync(targetOf('flow', flowRel))).toEqual(readFileSync(path.join(BUNDLE_FLOW, flowRel)));
+    expect(readFileSync(targetOf('appLoops', planDefRel))).toEqual(readFileSync(path.join(BUNDLE_APP_LOOPS, planDefRel)));
     expect(readFileSync(targetOf('loops', planDefRel))).toEqual(readFileSync(path.join(BUNDLE_LOOPS, planDefRel)));
     expect(readFileSync(targetOf('skills', skillRel))).toEqual(
       readFileSync(path.join(BUNDLE_LOOPS, 'plan-loop', 'skills', skillRel)),
@@ -440,10 +444,56 @@ describe('applyInstallExamples — one replace decision per destination, never o
     expect(res.created).toEqual([]);
     expect(res.overwritten).toEqual([]);
     expect(filesFor(res.skipped, 'flow').sort()).toEqual([...FLOW_SET].sort());
+    expect(filesFor(res.skipped, 'appLoops').sort()).toEqual([...APP_LOOPS_SET].sort());
     expect(filesFor(res.skipped, 'loops').sort()).toEqual([...LOOPS_SET].sort());
     expect(filesFor(res.skipped, 'skills').sort()).toEqual([...SKILLS_SET].sort());
     expect(filesFor(res.skipped, 'commands').sort()).toEqual([...COMMANDS_SET].sort());
     for (const d of previewOk(previewInstallExamples(dirs))) expect(d.conflict).toBe(false);
+  });
+});
+
+describe('the shipped-flow overwrite policy is checked before consent or write (ST3 AC10)', () => {
+  function forbiddenFlowDestination(): InstallDestination {
+    return {
+      ...destOf('flow'),
+      overwrite: { mode: 'forbid-overwrite' },
+    };
+  }
+
+  function seedExistingFlow(): string {
+    const body = 'name: keep-me\nsteps:\n  - id: mine\n    kind: manual\n';
+    mkdirSync(targetDirOf('flow'), { recursive: true });
+    writeFileSync(targetOf('flow', flowRel), body);
+    return body;
+  }
+
+  it('hard-fails detection instead of offering an overwrite when authorization is absent', () => {
+    const original = seedExistingFlow();
+
+    const preview = previewInstallExamples([forbiddenFlowDestination()]);
+
+    expect(preview).toEqual({
+      ok: false,
+      error: expect.stringMatching(/overwrite policy|not authorized/i),
+    });
+    expect(readFileSync(targetOf('flow', flowRel), 'utf8')).toBe(original);
+  });
+
+  it('re-checks authorization at the write even if a caller submits confirmation directly', () => {
+    const original = seedExistingFlow();
+
+    const result = applyInstallExamples(
+      [forbiddenFlowDestination()],
+      ['flow'],
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.ok ? '' : result.error).toMatch(
+      /overwrite policy|not authorized/i,
+    );
+    expect(result.created).toEqual([]);
+    expect(result.overwritten).toEqual([]);
+    expect(readFileSync(targetOf('flow', flowRel), 'utf8')).toBe(original);
   });
 });
 
@@ -634,6 +684,7 @@ describe('applyInstallExamples — first run seeds a config root that does not e
     const res = applyInstallExamples(dirs, []);
     expect(res.ok).toBe(true);
     if (!res.ok) return;
+    expect(existsSync(targetOf('appLoops', planDefRel))).toBe(true);
     expect(existsSync(targetOf('loops', planDefRel))).toBe(true);
     expect(existsSync(targetOf('skills', skillRel))).toBe(true);
     expect(existsSync(targetOf('commands', commandRel))).toBe(true);
@@ -841,7 +892,7 @@ describe('installed bytes are renderable by the runtime read path (§18.1/§18.6
       expect(load.ok).toBe(true);
       if (!load.ok) return;
       expect(load.definition.name).toBe('feature-dev');
-      expect(load.definition.steps.map((s) => s.id)).toEqual(['groom-ticket', 'plan', 'implement', 'polish', 'copilot']);
+      expect(load.definition.steps.map((s) => s.id)).toEqual(['groom', 'plan', 'implement']);
     } finally {
       rmSync(localWithoutFlow, { recursive: true, force: true });
     }
@@ -870,7 +921,7 @@ describe('an absent bundle source is a refusal, never a silent success (§18.1)'
   // carries no files. Reported as ok, the user is told the examples were installed and nothing was.
   const absent = path.join(tmpdir(), 'install-examples-no-such-bundle');
 
-  it.each(['loops', 'skills', 'commands', 'flow'] as const)(
+  it.each(['appLoops', 'loops', 'skills', 'commands', 'flow'] as const)(
     'reports a failure when the %s bundle tree is missing from the build',
     (id) => {
       const res = applyInstallExamples(withBundle(id, absent), []);
@@ -938,11 +989,6 @@ describe('the pre-write writability gate covers the containers the write actuall
 });
 
 describe('a destination root the USER symlinked is followed, not refused — it is their config, not a planted link', () => {
-  // The four destination roots are derived by the APP (home / CLAUDE_CONFIG_DIR); they are never read out
-  // of untrusted content. Symlinking ~/.claude/skills into a dotfiles repo is a standard stow-style setup,
-  // and Claude Code READS through it — so refusing to WRITE through it seeds nothing the reader will load,
-  // strands the user with no route out, and blames them for an attack. Confinement still holds INSIDE the
-  // resolved root.
   let dotfiles: string;
   beforeEach(() => {
     dotfiles = mkdtempSync(path.join(tmpdir(), 'install-dotfiles-'));

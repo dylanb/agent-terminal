@@ -26,6 +26,7 @@ describe('install examples view organism (§18.1/§23.4)', () => {
 
   const cleanDestinations: InstallDestinationPreview[] = [
     { destination: 'flow', conflict: false },
+    { destination: 'appLoops', conflict: false },
     { destination: 'loops', conflict: false },
     { destination: 'skills', conflict: false },
     { destination: 'commands', conflict: false },
@@ -295,7 +296,10 @@ describe('install examples view organism (§18.1/§23.4)', () => {
           { destination: 'commands', files: rels('groom-ticket.md') },
           { destination: 'flow', files: rels('flow.yaml') },
         ],
-        overwritten: [{ destination: 'skills', files: rels('review-intent/SKILL.md') }],
+        overwritten: [
+          { destination: 'skills', files: rels('review-intent/SKILL.md') },
+          { destination: 'appLoops', files: rels('plan-loop/plan-loop.yaml') },
+        ],
         skipped: [{ destination: 'loops', files: rels('plan-loop/plan-loop.yaml') }],
       }),
     );
@@ -303,7 +307,7 @@ describe('install examples view organism (§18.1/§23.4)', () => {
     button().click();
     await vi.waitFor(() => expect(reportGroup('flow')).not.toBeNull());
     const order = [...reportList().children].map((li) => li.getAttribute('data-destination'));
-    expect(order).toEqual(['flow', 'loops', 'skills', 'commands']);
+    expect(order).toEqual(['flow', 'appLoops', 'loops', 'skills', 'commands']);
   });
 
   it('exposes the consent options as a NAMED group (WAI-ARIA group; WCAG 1.3.1)', async () => {
