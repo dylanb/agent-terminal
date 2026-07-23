@@ -4,6 +4,7 @@ import { wireAppBootstrapConflict } from '../../src/renderer/src/wireAppBootstra
 import type { AppBootstrapConflictTarget } from '../../src/shared/appBootstrap';
 
 const conflict: AppBootstrapConflictTarget = {
+  repository: 'github.com/owner/repository',
   branch: 'plan-loop/issue-78',
   localOid: '1'.repeat(40),
   remoteOid: '2'.repeat(40),
@@ -81,14 +82,19 @@ describe('wireAppBootstrapConflict (§27.10 — destructive answer keeps repo + 
     expect(h.opts().message).toContain('plan-loop/issue-78');
     expect(h.opts().message).toContain('1'.repeat(40));
     expect(h.opts().message).toContain('2'.repeat(64));
-    expect(h.opts().message).toContain('pull request #321');
-    expect(h.opts().message).toContain('pull request #654');
+    expect(h.opts().message).toContain(
+      'pull request github.com/owner/repository#321',
+    );
+    expect(h.opts().message).toContain(
+      'pull request github.com/owner/repository#654',
+    );
   });
 
   it('does not promise to delete resources absent from the snapshot', () => {
     const h = harness();
     h.deliver(
       {
+        repository: conflict.repository,
         branch: conflict.branch,
         localOid: null,
         remoteOid: null,
@@ -98,7 +104,9 @@ describe('wireAppBootstrapConflict (§27.10 — destructive answer keeps repo + 
       'plan',
     );
 
-    expect(h.opts().message).toContain('pull request #321');
+    expect(h.opts().message).toContain(
+      'pull request github.com/owner/repository#321',
+    );
     expect(h.opts().message).not.toContain('local branch');
     expect(h.opts().message).not.toContain('origin branch');
   });

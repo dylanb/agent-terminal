@@ -69,8 +69,8 @@ describe('§27 approve side-effect port (appGateGithub)', () => {
 
   it('publish-pr-body publishes the body artifact to the PR via `gh pr edit <n> --body-file` (§27.13 impl approve)', async () => {
     const c = captured();
-    await createAppGateGitHub(c.run)('publish-pr-body', { pr: 99, ticket: null, bodyFile: '/repo/.agent-terminal/loop/artifacts/diff.md', bootstrap: null });
-    expect(c.argvs).toEqual([['pr', 'edit', '99', '--body-file', '/repo/.agent-terminal/loop/artifacts/diff.md']]);
+    await createAppGateGitHub(c.run)('publish-pr-body', { pr: 99, ticket: null, bodyFile: '/repo/.agent-terminal/loop/artifacts/plan.md', bootstrap: null });
+    expect(c.argvs).toEqual([['pr', 'edit', '99', '--body-file', '/repo/.agent-terminal/loop/artifacts/plan.md']]);
   });
 
   it('fails best-effort (throws, issues no call) when a required input is absent', async () => {
@@ -139,7 +139,7 @@ describe('§27 approve side-effect port (appGateGithub)', () => {
     )('publish-pr-body', {
       pr: 42,
       ticket: 78,
-      bodyFile: '/repo/.agent-terminal/loop/artifacts/diff.md',
+      bodyFile: '/repo/.agent-terminal/loop/artifacts/plan.md',
       bootstrap: {
         pr: 42,
         issue: 78,

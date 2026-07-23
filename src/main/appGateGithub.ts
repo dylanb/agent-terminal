@@ -115,13 +115,15 @@ export function createAppGateGitHub(
 /** The production port: shells `gh` via execFile (CWE-78 — every value a distinct argv element, never a shell
  *  string), scoped to the repo working tree. */
 export function createRealAppGateGitHub(repoDir: string): RunAppGateSideEffect {
+  const environment = { ...process.env };
+  delete environment.GH_REPO;
   return createAppGateGitHub(
     (argv, stdin) =>
       new Promise<string>((resolve, reject) => {
         const child = execFile(
           'gh',
           argv,
-          { cwd: repoDir, timeout: EXEC_TIMEOUT_MS },
+          { cwd: repoDir, timeout: EXEC_TIMEOUT_MS, env: environment },
           (err, stdout) => {
             if (!err) {
               resolve(stdout);

@@ -34,9 +34,32 @@ export interface AppBootstrapConflicts {
   wipe(target: AppBootstrapConflictTarget): Promise<void>;
 }
 
-export interface AppBootstrapConflictRunners {
-  git(args: string[]): Promise<string>;
-  gh(args: string[]): Promise<string>;
+export interface AppBootstrapRepositoryIdentity {
+  selector: string;
+  owner: string;
+  name: string;
+}
+
+export interface AppBootstrapOpenPullRequest {
+  number: number;
+  crossRepository: boolean;
+  headOwner: string;
+  headRepository: string;
+}
+
+export interface AppBootstrapConflictResources {
+  localObjectId(branch: string): Promise<string | null>;
+  remoteObjectId(branch: string): Promise<string | null>;
+  repositoryIdentity(): Promise<AppBootstrapRepositoryIdentity>;
+  openPullRequests(
+    repository: string,
+    branch: string,
+  ): Promise<AppBootstrapOpenPullRequest[]>;
+  closePullRequest(repository: string, pullRequest: number): Promise<void>;
+  currentBranch(): Promise<string | null>;
+  detach(oid: string): Promise<void>;
+  deleteLocalBranch(branch: string, expectedOid: string): Promise<void>;
+  deleteRemoteBranch(branch: string, expectedOid: string): Promise<void>;
 }
 
 export interface BootstrapGitHub {
@@ -51,7 +74,9 @@ const EXEC_TIMEOUT_MS = 60_000;
 
 function run(file: 'git' | 'gh', args: string[], cwd: string): Promise<string> {
   return new Promise((resolve, reject) => {
-    execFile(file, args, { cwd, timeout: EXEC_TIMEOUT_MS }, (err, stdout) => {
+    const environment = { ...process.env };
+    delete environment.GH_REPO;
+    execFile(file, args, { cwd, timeout: EXEC_TIMEOUT_MS, env: environment }, (err, stdout) => {
       if (!err) {
         resolve(stdout);
         return;
@@ -77,7 +102,12 @@ function treeIsClean(porcelain: string): boolean {
   return porcelain
     .split('\n')
     .filter((line) => line.length > 0)
-    .every((line) => line.slice(3).split(' -> ').every(isAppState));
+    .every((line) => {
+      const indexState = line[0];
+      if (indexState !== ' ' && indexState !== '?') return false;
+      if (indexState === '?' && line[1] !== '?') return false;
+      return line.slice(3).split(' -> ').every(isAppState);
+    });
 }
 
 export function createRealBootstrapGit(repoDir: string): BootstrapGit & BootstrapBranchWiper & BootstrapBranchRollback {
@@ -130,7 +160,21 @@ export function createRealBootstrapGit(repoDir: string): BootstrapGit & Bootstra
       await git(['fetch', 'origin', base]);
       await git(['checkout', '-b', branch, 'FETCH_HEAD']);
     },
-    commitEmptyStart: async (message) => void (await git(['commit', '--allow-empty', '-m', message])),
+    commitEmptyStart: async (message) => {
+      const parent = parseObjectId(
+        await git(['rev-parse', '--verify', 'HEAD']),
+        'bootstrap parent',
+      );
+      const tree = parseObjectId(
+        await git(['rev-parse', '--verify', 'HEAD^{tree}']),
+        'bootstrap tree',
+      );
+      const commit = parseObjectId(
+        await git(['commit-tree', tree, '-p', parent, '-m', message]),
+        'bootstrap commit',
+      );
+      await git(['update-ref', 'HEAD', commit, parent]);
+    },
     pushBranchUpstream: async (branch) => void (await git(['push', '-u', 'origin', branch])),
   };
 }
@@ -143,100 +187,114 @@ function parseObjectId(value: string, source: string): string {
   return oid;
 }
 
-export function createAppBootstrapConflicts({
-  git,
-  gh,
-}: AppBootstrapConflictRunners): AppBootstrapConflicts {
+const REPOSITORY_PART = /^[A-Za-z0-9_.-]+$/;
+
+function repositoryFromRemote(
+  value: string,
+): AppBootstrapRepositoryIdentity | null {
+  const remote = value.trim();
+  let host: string;
+  let repositoryPath: string;
+  const scp = /^[^@]+@([^:]+):(.+)$/.exec(remote);
+  if (scp) {
+    host = scp[1] ?? '';
+    repositoryPath = scp[2] ?? '';
+  } else {
+    try {
+      const parsed = new URL(remote);
+      host = parsed.hostname;
+      repositoryPath = parsed.pathname.replace(/^\/+/, '');
+    } catch {
+      return null;
+    }
+  }
+  repositoryPath = repositoryPath.replace(/\.git$/, '');
+  const parts = repositoryPath.split('/');
+  if (
+    parts.length !== 2 ||
+    !REPOSITORY_PART.test(host) ||
+    !REPOSITORY_PART.test(parts[0] ?? '') ||
+    !REPOSITORY_PART.test(parts[1] ?? '')
+  ) {
+    return null;
+  }
+  const owner = (parts[0] ?? '').toLowerCase();
+  const name = (parts[1] ?? '').toLowerCase();
+  return {
+    selector: `${host.toLowerCase()}/${owner}/${name}`,
+    owner,
+    name,
+  };
+}
+
+function validRepositoryIdentity(
+  identity: AppBootstrapRepositoryIdentity,
+): boolean {
+  const parts = identity.selector.split('/');
+  return (
+    parts.length === 3 &&
+    REPOSITORY_PART.test(parts[0] ?? '') &&
+    REPOSITORY_PART.test(parts[1] ?? '') &&
+    REPOSITORY_PART.test(parts[2] ?? '') &&
+    (parts[1] ?? '').toLowerCase() === identity.owner.toLowerCase() &&
+    (parts[2] ?? '').toLowerCase() === identity.name.toLowerCase()
+  );
+}
+
+export function createAppBootstrapConflicts(
+  resources: AppBootstrapConflictResources,
+): AppBootstrapConflicts {
   const inspect = async (branch: string): Promise<AppBootstrapConflictTarget> => {
-    const local = await git(['branch', '--list', branch]);
+    const local = await resources.localObjectId(branch);
+    const remote = await resources.remoteObjectId(branch);
     const localOid =
-      local.trim().length === 0
-        ? null
-        : parseObjectId(
-            await git(['rev-parse', '--verify', `refs/heads/${branch}`]),
-            'local branch',
-          );
-
-    const remote = (await git([
-      'ls-remote',
-      '--heads',
-      'origin',
-      `refs/heads/${branch}`,
-    ])).trim();
+      local === null ? null : parseObjectId(local, 'local branch');
     const remoteOid =
-      remote.length === 0
-        ? null
-        : parseObjectId(remote.split(/\s+/, 1)[0] ?? '', 'remote branch');
-
-    const rawRepository: unknown = JSON.parse(
-      await gh(['repo', 'view', '--json', 'nameWithOwner']),
-    );
-    if (
-      !isRecord(rawRepository) ||
-      typeof rawRepository.nameWithOwner !== 'string' ||
-      rawRepository.nameWithOwner.trim().length === 0
-    ) {
+      remote === null ? null : parseObjectId(remote, 'remote branch');
+    const identity = await resources.repositoryIdentity();
+    if (!validRepositoryIdentity(identity)) {
       throw new Error('invalid repository identity');
     }
-    const repository = rawRepository.nameWithOwner.trim().toLowerCase();
-    const repositorySeparator = repository.indexOf('/');
-    if (
-      repositorySeparator <= 0 ||
-      repositorySeparator !== repository.lastIndexOf('/') ||
-      repositorySeparator === repository.length - 1
-    ) {
-      throw new Error('invalid repository identity');
-    }
-    const repositoryOwner = repository.slice(0, repositorySeparator);
-    const repositoryName = repository.slice(repositorySeparator + 1);
-
-    const rawPullRequests: unknown = JSON.parse(
-      await gh([
-        'pr',
-        'list',
-        '--head',
-        branch,
-        '--state',
-        'open',
-        '--limit',
-        '1000',
-        '--json',
-        'number,isCrossRepository,headRepository,headRepositoryOwner',
-      ]),
+    const repository: AppBootstrapRepositoryIdentity = {
+      selector: identity.selector.toLowerCase(),
+      owner: identity.owner.toLowerCase(),
+      name: identity.name.toLowerCase(),
+    };
+    const openPullRequests = await resources.openPullRequests(
+      repository.selector,
+      branch,
     );
-    if (!Array.isArray(rawPullRequests)) {
-      throw new Error('invalid open pull request list');
-    }
     const pullRequests: number[] = [];
-    for (const entry of rawPullRequests) {
-      const number = isRecord(entry) ? entry.number : null;
+    for (const entry of openPullRequests) {
       if (
-        typeof number !== 'number' ||
-        !Number.isSafeInteger(number) ||
-        number <= 0 ||
-        typeof entry.isCrossRepository !== 'boolean' ||
-        !isRecord(entry.headRepository) ||
-        typeof entry.headRepository.name !== 'string' ||
-        !isRecord(entry.headRepositoryOwner) ||
-        typeof entry.headRepositoryOwner.login !== 'string'
+        !Number.isSafeInteger(entry.number) ||
+        entry.number <= 0 ||
+        typeof entry.crossRepository !== 'boolean' ||
+        typeof entry.headOwner !== 'string' ||
+        typeof entry.headRepository !== 'string'
       ) {
         throw new Error('invalid open pull request identity');
       }
-      if (entry.isCrossRepository) continue;
+      if (entry.crossRepository) continue;
       if (
-        entry.headRepositoryOwner.login.trim().toLowerCase() !==
-          repositoryOwner ||
-        entry.headRepository.name.trim().toLowerCase() !== repositoryName
+        entry.headOwner.trim().toLowerCase() !== repository.owner ||
+        entry.headRepository.trim().toLowerCase() !== repository.name
       ) {
         throw new Error('same-repository pull request has a mismatched head repository');
       }
-      pullRequests.push(number);
+      pullRequests.push(entry.number);
     }
     pullRequests.sort((left, right) => left - right);
     if (new Set(pullRequests).size !== pullRequests.length) {
       throw new Error('duplicate open pull request number');
     }
-    return { branch, localOid, remoteOid, pullRequests };
+    return {
+      repository: repository.selector,
+      branch,
+      localOid,
+      remoteOid,
+      pullRequests,
+    };
   };
 
   return {
@@ -248,29 +306,23 @@ export function createAppBootstrapConflicts({
       }
 
       for (const pr of target.pullRequests) {
-        await gh(['pr', 'close', String(pr)]);
+        await resources.closePullRequest(target.repository, pr);
       }
       if (target.localOid !== null) {
-        const currentBranch = (
-          await git(['branch', '--show-current'])
-        ).trim();
+        const currentBranch = await resources.currentBranch();
         if (currentBranch === target.branch) {
-          await git(['checkout', '--detach', target.localOid]);
+          await resources.detach(target.localOid);
         }
-        await git([
-          'update-ref',
-          '-d',
-          `refs/heads/${target.branch}`,
+        await resources.deleteLocalBranch(
+          target.branch,
           target.localOid,
-        ]);
+        );
       }
       if (target.remoteOid !== null) {
-        await git([
-          'push',
-          'origin',
-          `--force-with-lease=refs/heads/${target.branch}:${target.remoteOid}`,
-          `:refs/heads/${target.branch}`,
-        ]);
+        await resources.deleteRemoteBranch(
+          target.branch,
+          target.remoteOid,
+        );
       }
 
       const remaining = await inspect(target.branch);
@@ -285,13 +337,148 @@ export function createAppBootstrapConflicts({
   };
 }
 
+function createRealAppBootstrapConflictResources(
+  repoDir: string,
+): AppBootstrapConflictResources {
+  const git = (args: string[]): Promise<string> => run('git', args, repoDir);
+  const gh = (args: string[]): Promise<string> => run('gh', args, repoDir);
+  return {
+    localObjectId: async (branch) => {
+      const local = await git(['branch', '--list', branch]);
+      if (local.trim().length === 0) return null;
+      return parseObjectId(
+        await git(['rev-parse', '--verify', `refs/heads/${branch}`]),
+        'local branch',
+      );
+    },
+    remoteObjectId: async (branch) => {
+      const remote = (
+        await git([
+          'ls-remote',
+          '--heads',
+          'origin',
+          `refs/heads/${branch}`,
+        ])
+      ).trim();
+      return remote.length === 0
+        ? null
+        : parseObjectId(
+            remote.split(/\s+/, 1)[0] ?? '',
+            'remote branch',
+          );
+    },
+    repositoryIdentity: async () => {
+      const expected = repositoryFromRemote(
+        await git(['remote', 'get-url', 'origin']),
+      );
+      if (expected === null) throw new Error('invalid origin repository');
+      const raw: unknown = JSON.parse(
+        await gh([
+          'repo',
+          'view',
+          expected.selector,
+          '--json',
+          'nameWithOwner,url',
+        ]),
+      );
+      if (
+        !isRecord(raw) ||
+        typeof raw.nameWithOwner !== 'string' ||
+        typeof raw.url !== 'string'
+      ) {
+        throw new Error('invalid repository identity');
+      }
+      const viewed = repositoryFromRemote(raw.url);
+      if (
+        viewed === null ||
+        viewed.selector !== expected.selector ||
+        raw.nameWithOwner.trim().toLowerCase() !==
+          `${expected.owner}/${expected.name}`
+      ) {
+        throw new Error('origin repository does not match GitHub');
+      }
+      return expected;
+    },
+    openPullRequests: async (repository, branch) => {
+      const raw: unknown = JSON.parse(
+        await gh([
+          'pr',
+          'list',
+          '--repo',
+          repository,
+          '--head',
+          branch,
+          '--state',
+          'open',
+          '--limit',
+          '1000',
+          '--json',
+          'number,isCrossRepository,headRepository,headRepositoryOwner',
+        ]),
+      );
+      if (!Array.isArray(raw)) {
+        throw new Error('invalid open pull request list');
+      }
+      return raw.map((entry): AppBootstrapOpenPullRequest => {
+        if (
+          !isRecord(entry) ||
+          typeof entry.number !== 'number' ||
+          typeof entry.isCrossRepository !== 'boolean' ||
+          !isRecord(entry.headRepository) ||
+          typeof entry.headRepository.name !== 'string' ||
+          !isRecord(entry.headRepositoryOwner) ||
+          typeof entry.headRepositoryOwner.login !== 'string'
+        ) {
+          throw new Error('invalid open pull request identity');
+        }
+        return {
+          number: entry.number,
+          crossRepository: entry.isCrossRepository,
+          headOwner: entry.headRepositoryOwner.login,
+          headRepository: entry.headRepository.name,
+        };
+      });
+    },
+    closePullRequest: async (repository, pullRequest) =>
+      void (
+        await gh([
+          'pr',
+          'close',
+          String(pullRequest),
+          '--repo',
+          repository,
+        ])
+      ),
+    currentBranch: async () =>
+      (await git(['branch', '--show-current'])).trim() || null,
+    detach: async (oid) => void (await git(['checkout', '--detach', oid])),
+    deleteLocalBranch: async (branch, expectedOid) =>
+      void (
+        await git([
+          'update-ref',
+          '-d',
+          `refs/heads/${branch}`,
+          expectedOid,
+        ])
+      ),
+    deleteRemoteBranch: async (branch, expectedOid) =>
+      void (
+        await git([
+          'push',
+          'origin',
+          `--force-with-lease=refs/heads/${branch}:${expectedOid}`,
+          `:refs/heads/${branch}`,
+        ])
+      ),
+  };
+}
+
 export function createRealAppBootstrapConflicts(
   repoDir: string,
 ): AppBootstrapConflicts {
-  return createAppBootstrapConflicts({
-    git: (args) => run('git', args, repoDir),
-    gh: (args) => run('gh', args, repoDir),
-  });
+  return createAppBootstrapConflicts(
+    createRealAppBootstrapConflictResources(repoDir),
+  );
 }
 
 export function createRealBootstrapGitHub(repoDir: string): BootstrapGitHub {

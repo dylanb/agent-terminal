@@ -15,6 +15,7 @@ export function wireAppBootstrapConflict(
   deps: AppBootstrapConflictDeps,
 ): () => void {
   return deps.onConflict(({
+    repository,
     branch,
     localOid,
     remoteOid,
@@ -30,7 +31,9 @@ export function wireAppBootstrapConflict(
       resources.push(`origin branch ${branch} at ${remoteOid}`);
     }
     resources.push(
-      ...pullRequests.map((pullRequest) => `pull request #${pullRequest}`),
+      ...pullRequests.map(
+        (pullRequest) => `pull request ${repository}#${pullRequest}`,
+      ),
     );
     deps.confirm({
       title: 'Bootstrap resources already exist',

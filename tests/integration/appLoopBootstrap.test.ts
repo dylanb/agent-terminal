@@ -22,6 +22,7 @@ function target(
   over: Partial<AppBootstrapConflictTarget> = {},
 ): AppBootstrapConflictTarget {
   return {
+    repository: 'github.com/owner/repository',
     branch: BRANCH,
     localOid: LOCAL_OID,
     remoteOid: REMOTE_OID,
@@ -32,6 +33,7 @@ function target(
 
 function noTarget(branch = BRANCH): AppBootstrapConflictTarget {
   return {
+    repository: 'github.com/owner/repository',
     branch,
     localOid: null,
     remoteOid: null,

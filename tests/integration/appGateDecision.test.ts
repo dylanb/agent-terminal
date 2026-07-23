@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { resolveAppGateRefs, runAppGateDecision, type AppGateDecisionDeps } from '../../src/main/appGateDecision';
+import {
+  resolveAppGateRefs,
+  resolveGateSideEffectBodyFile,
+  runAppGateDecision,
+  type AppGateDecisionDeps,
+} from '../../src/main/appGateDecision';
 import type { AppLoopRunState } from '../../src/main/appLoopState';
 import type { GateOptionDef, LoopDefV2 } from '../../src/main/loopDefV2';
 import type { GateDecisionOption } from '../../src/shared/ipc';
@@ -61,6 +66,33 @@ describe('resolveAppGateRefs', () => {
   });
 });
 
+describe('resolveGateSideEffectBodyFile', () => {
+  it('resolves only the binding explicitly named by the declared side-effect', () => {
+    const def = {
+      inputs: [
+        {
+          id: 'plan',
+          path: '/repo/.agent-terminal/loop/artifacts/plan.md',
+          rel: '.agent-terminal/loop/artifacts/plan.md',
+        },
+      ],
+      outputs: [],
+    } as unknown as LoopDefV2;
+    expect(
+      resolveGateSideEffectBodyFile(def, {
+        kind: 'gh',
+        args: { action: 'publish-pr-body', artifact: 'plan' },
+      }),
+    ).toBe('/repo/.agent-terminal/loop/artifacts/plan.md');
+    expect(
+      resolveGateSideEffectBodyFile(def, {
+        kind: 'gh',
+        args: { action: 'publish-pr-body', artifact: 'missing' },
+      }),
+    ).toBeNull();
+  });
+});
+
 interface Recorder {
   sideEffects: Array<{ action: string; ctx: unknown }>;
   accepts: AppLoopRunState[];
@@ -87,7 +119,6 @@ function mkDeps(over: Partial<AppGateDecisionDeps> & { run?: AppLoopRunState | n
       ticket: over.ticket ?? null,
       bootstrap: null,
     }),
-    bodyFile: () => '/repo/.agent-terminal/loop/artifacts/plan.md',
     runSideEffect: async (action, ctx) => {
       rec.sideEffects.push({ action, ctx });
       if (over.sideEffectThrows) throw new Error(over.sideEffectThrows);
@@ -122,7 +153,7 @@ describe('runAppGateDecision — approve (§27.13 / AC2)', () => {
   it('runs the declared side-effect, persists the terminal accept, and advances the flow', async () => {
     const { deps, rec } = mkDeps({});
     await approve(deps);
-    expect(rec.sideEffects).toEqual([{ action: 'mark-ready', ctx: { pr: 41, ticket: null, bodyFile: '/repo/.agent-terminal/loop/artifacts/plan.md', bootstrap: null } }]);
+    expect(rec.sideEffects).toEqual([{ action: 'mark-ready', ctx: { pr: 41, ticket: null, bodyFile: null, bootstrap: null } }]);
     expect(rec.accepts).toEqual([{ loop: 'plan-loop', step: 'plan', turnKey: 'consolidate-plan', status: 'accepted' }]);
     expect(rec.advances).toEqual(['/repo']);
     expect(rec.audits.some((a) => a.cmd.includes('mark-ready') && a.exit === 0)).toBe(true);
@@ -421,7 +452,7 @@ describe('runAppGateDecision — approve ends the polish stand-down (AC6)', () =
     });
     await expect(approve(deps)).resolves.toBe(false); // resolves — the throw is caught, never rejects into the void caller
     expect(rec.accepts).toHaveLength(1); // the accept persisted before the (now-caught) clear
-    expect(rec.sideEffects).toEqual([{ action: 'mark-ready', ctx: { pr: 41, ticket: null, bodyFile: '/repo/.agent-terminal/loop/artifacts/plan.md', bootstrap: null } }]);
+    expect(rec.sideEffects).toEqual([{ action: 'mark-ready', ctx: { pr: 41, ticket: null, bodyFile: null, bootstrap: null } }]);
     expect(rec.advances).toEqual(['/repo']); // the flow advanced past the gate — no strand
     expect(rec.errors).toEqual([]); // a best-effort clear failure is audited, not surfaced as a blocking dialog
     expect(rec.audits.some((a) => a.cmd.includes('clear') && a.cmd.includes('polish') && a.exit === 1)).toBe(true);

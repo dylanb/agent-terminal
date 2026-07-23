@@ -129,7 +129,6 @@ import { APP_LOOP_DIR_SEGMENTS } from './appLoopPaths';
 import { resolveLoopDefV2, type LoopDefV2Context } from './loopDefV2';
 import { createRealAppGateGitHub } from './appGateGithub';
 import { resolveAppGateRefs, runAppGateDecision as runAppGateDecisionImpl } from './appGateDecision';
-import { completionArtifact } from './appWorkTurn';
 import { probeChainedInput } from './chainedInputProbe';
 import { resolveExampleLoopsV2Dir } from './exampleAssets';
 import { userConfigLoopsV2Dir } from './userConfig';
@@ -1356,7 +1355,6 @@ async function createWindow(): Promise<void> {
           const v = flow.state(repoDir);
           return resolveAppGateRefs(v.refs, readAppLoopBootstrap(repoDir));
         },
-        bodyFile: (def) => completionArtifact(def)?.path ?? null,
         runSideEffect: createRealAppGateGitHub(repoKey),
         persistAccept: (repoDir, state) => writeAppLoopState(repoDir, state),
         advanceFlow: (repoDir) => autoAdvanceFlow(repoDir),

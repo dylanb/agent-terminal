@@ -19,6 +19,7 @@ gate:
     side_effects:
       - kind: gh
         action: update-issue-body
+        artifact: groomed-ticket
   - option: request-changes
   - option: redo
   - option: polish

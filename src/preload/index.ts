@@ -159,6 +159,7 @@ const flowApi: FlowApi = {
   onAppBootstrapConflict: (cb) => {
     const handler = (_e: unknown, msg: FlowAppBootstrapConflictMsg): void =>
       cb({
+        repository: msg.repository,
         branch: msg.branch,
         localOid: msg.localOid,
         remoteOid: msg.remoteOid,

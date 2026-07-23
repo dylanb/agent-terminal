@@ -2,7 +2,7 @@ version: v2
 name: impl-loop
 work:
   recipe: prompts/work.md
-  artifact: diff
+  artifact: commits
 reviewers:
   - persona: impl-review-principal
     charter: charter/principal.md
@@ -22,12 +22,10 @@ gate:
     side_effects:
       - kind: gh
         action: publish-pr-body
+        artifact: plan
   - option: request-changes
   - option: redo
   - option: polish
 inputs:
   - id: plan
     path: plan.md
-outputs:
-  - id: diff
-    path: diff.md

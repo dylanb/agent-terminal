@@ -132,7 +132,7 @@ describe('the shipped feature-dev flow binds the complete §27 chain (ST3 AC6)',
     if (loaded.ok) expect(loaded.flowDir).toBe(flowTarget);
   });
 
-  it('joins each writer output to the next reader input by one id and path', () => {
+  it('joins file-producing steps by one id and path, then leaves implementation commit-producing', () => {
     const defs = ['groom-loop', 'plan-loop', 'impl-loop'].map((name) => {
       const resolved = resolveLoopDefV2(name, {
         repoDir: repo,
@@ -150,7 +150,8 @@ describe('the shipped feature-dev flow binds the complete §27 chain (ST3 AC6)',
     expect(defs[1].inputs).toEqual(defs[0].outputs);
     expect(defs[1].outputs).toHaveLength(1);
     expect(defs[2].inputs).toEqual(defs[1].outputs);
-    expect(defs[2].outputs).toHaveLength(1);
+    expect(defs[2].work.artifact).toBe('commits');
+    expect(defs[2].outputs).toEqual([]);
   });
 
   it('installs the §27 defs into the operator tier used by the bootstrap origin gate', () => {

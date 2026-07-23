@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { resolveLoopDefV2, type LoopDefV2Result } from '../../src/main/loopDefV2';
+import { completionArtifact } from '../../src/main/appWorkTurn';
 
 // §27.9/§27.13 / N5 — the three shipped §27 loop defs declare an approve gate whose side-effect matches
 // §27.13 (groom → update-issue-body, plan → mark-ready, impl → publish-pr-body), a request-changes option
@@ -52,12 +53,20 @@ describe('shipped §27 loop defs — approve (§27.13 side-effect) + request-cha
   });
 
   it('impl-loop offers approve (publish the PR body), request-changes, redo, polish', () => {
-    expect(gateActions(resolve('impl-loop'))).toEqual([
+    const resolved = resolve('impl-loop');
+    expect(gateActions(resolved)).toEqual([
       { option: 'approve', actions: ['publish-pr-body'] },
       { option: 'request-changes', actions: [] },
       { option: 'redo', actions: [] },
       { option: 'polish', actions: [] },
     ]);
+    expect(resolved.ok).toBe(true);
+    if (!resolved.ok) return;
+    expect(completionArtifact(resolved.def)).toBeNull();
+    expect(resolved.def.outputs).toEqual([]);
+    expect(resolved.def.gate[0].sideEffects[0].args).toMatchObject({
+      artifact: 'plan',
+    });
   });
 
   it('every shipped def now offers redo and polish, and still never the §27-illegal impasse (§27.9/AC5,6,9)', () => {

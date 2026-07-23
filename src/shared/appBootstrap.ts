@@ -9,6 +9,7 @@ export interface AppBootstrapLabelMutation {
 }
 
 export interface AppBootstrapConflictTarget {
+  repository: string;
   branch: string;
   localOid: string | null;
   remoteOid: string | null;
@@ -30,6 +31,7 @@ export function sameAppBootstrapConflictTarget(
   right: AppBootstrapConflictTarget,
 ): boolean {
   return (
+    left.repository === right.repository &&
     left.branch === right.branch &&
     left.localOid === right.localOid &&
     left.remoteOid === right.remoteOid &&

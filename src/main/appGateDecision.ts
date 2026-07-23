@@ -9,7 +9,11 @@ import {
   type AppLoopBootstrap,
   type AppLoopRunState,
 } from './appLoopState';
-import type { LoopDefV2, LoopDefV2Result } from './loopDefV2';
+import type {
+  GateSideEffect,
+  LoopDefV2,
+  LoopDefV2Result,
+} from './loopDefV2';
 import type { AppGateSideEffectCtx, RunAppGateSideEffect } from './appGateGithub';
 
 /** The refs (§24.2.3 T7) an approve side-effect acts on, resolved from the flow view — a §27 step sources
@@ -42,9 +46,6 @@ export interface AppGateDecisionDeps {
   readRunState(repoDir: string): AppLoopRunState | null;
   resolveDef(repoDir: string, loopName: string): LoopDefV2Result;
   refs(repoDir: string): AppGateRefs;
-  /** The confined path (CWE-22) of the loop's completion artifact, published as the issue/PR body; null when no
-   *  declared output backs the loop's `work.artifact` id. */
-  bodyFile(def: LoopDefV2): string | null;
   runSideEffect: RunAppGateSideEffect;
   persistAccept(repoDir: string, state: AppLoopRunState): void;
   advanceFlow(repoDir: string): void;
@@ -70,6 +71,24 @@ export interface AppGateDecisionDeps {
   audit(repoDir: string, cmd: string, exit: number | null): void;
   emitError(reason: string): void;
   onViewChanged(): void;
+}
+
+/** Resolve only the confined binding a side-effect explicitly names. Work completion and publication are
+ * separate contracts: a commit-producing loop can publish an input without pretending to emit a file. */
+export function resolveGateSideEffectBodyFile(
+  def: LoopDefV2,
+  sideEffect: GateSideEffect,
+): string | null {
+  const artifact =
+    typeof sideEffect.args.artifact === 'string'
+      ? sideEffect.args.artifact
+      : null;
+  if (artifact === null) return null;
+  return (
+    [...def.inputs, ...def.outputs].find(
+      (binding) => binding.id === artifact,
+    )?.path ?? null
+  );
 }
 
 /** Execute a §27 human-gate decision for the step+turn identity it names. Inert (no state change, no advance)
@@ -165,16 +184,15 @@ export async function runAppGateDecision(
 
   // §27.13/AC3
   const refs = deps.refs(repoDir);
-  const bodyFile = deps.bodyFile(r.def);
-  const ctx: AppGateSideEffectCtx = {
-    pr: refs.pr,
-    ticket: refs.ticket,
-    bodyFile,
-    bootstrap: refs.bootstrap,
-  };
   for (const se of gateOpt.sideEffects) {
     if (se.kind !== 'gh') continue;
     const action = typeof se.args.action === 'string' ? se.args.action : '';
+    const ctx: AppGateSideEffectCtx = {
+      pr: refs.pr,
+      ticket: refs.ticket,
+      bodyFile: resolveGateSideEffectBodyFile(r.def, se),
+      bootstrap: refs.bootstrap,
+    };
     try {
       await deps.runSideEffect(action, ctx);
       deps.audit(repoDir, gateDecisionAuditCmd('side-effect', option, action), 0);
