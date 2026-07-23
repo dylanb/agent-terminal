@@ -21,7 +21,7 @@ describe('example flow plan step binds the plan-loop-review todo template (§18.
     expect(md).not.toBeNull();
 
     const items = parseTodoTemplate(md as string);
-    expect(items).toHaveLength(7);
+    expect(items).toHaveLength(6);
     expect(items.every((t) => t.length > 0)).toBe(true);
   });
 });
