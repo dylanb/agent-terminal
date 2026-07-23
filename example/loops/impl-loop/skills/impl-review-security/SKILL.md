@@ -40,6 +40,10 @@ Enumerate from the diff:
 
 Practical heuristic: open the new entry point, follow each parameter that came from the network/user, and stop only when the data is dropped, encoded for its sink, or returned. If that chain crosses an unsanitized logger / query / shell call, you have a finding regardless of where in the chain the code was last edited.
 
+## Latent flows count: a constructed sink is a finding before its source is live
+
+A vulnerability does not require the untrusted source to be wired up _in this diff_. If the change **constructs** a dangerous flow — the sink is reachable and the neutralization absent — treat it as a finding whenever the input that completes it is either (a) promised by the code's own comments, TODOs, or an adjacent in-flight change, or (b) already suppliable through a trust tier the value passes through (see the trust-tier-after-resolution probe). The source not yet being connected is a **severity input** — drop to `minor` (latent) — never a reason to move a constructed flaw to `considered_dropped`. "Not reachable in _this exact_ diff" and "a later change wires the untrusted caller" are severity qualifiers, not dismissals: the guard belongs with the code that built the flow, because the promised source is not guaranteed to arrive carrying its own guard.
+
 {{CHARTER}}
 
 ## Output
@@ -54,3 +58,9 @@ Lane severity maps to exploitability: remote-unauth-RCE class → `blocker`; aut
 - **Trace the taint across the diff edge.** For every injection / PII / auth finding, name the **Source** (where user-controlled input enters via this change), the **Sink** (where it's used dangerously, which may sit in pre-existing code), and the **Hop(s)** in between (wrappers, middleware, helpers the data passes through). Cite file+line for each. The source+hops+sink triple makes the finding falsifiable — a reviewer can walk the path. "Tainted input reaches query" without the chain is not enough.
 - **Cluster multi-site flaws.** If three new handlers are missing the same AuthZ check, or five new inputs hit the same unescaped sink, emit ONE finding at the most prominent location and list the other affected files/lines in the message body. Don't drip-feed the same flaw across N objects.
 - Don't repeat a prior-iteration finding unless the relevant lines are still unfixed.
+
+## Depth probes
+
+- **Trust-tier-after-resolution probe.** Re-derive who controls a value _at the sink, component by component, after every resolution step_ — symlink / `realpath` resolution, path joins, decode / unescape, interpolation, template expansion. A value from a trusted source (config, bundled definition, operator input) can acquire an untrusted component through resolution: a resolved filesystem path exposes on-disk **segment names** (working-tree content, influenceable by a committed file or symlink); a joined URL exposes the host; a decoded blob exposes its payload. Ask "who controls this _now_, after resolution?" — not "where was it declared?"
+- **Guarded-sibling probe.** When two code paths handle structurally similar inputs (two validators, two path-confiners, two encoders, two setters of one field) and _one neutralizes a threat the other omits_, treat the gap as a probable finding. The guarded sibling is the codebase's own evidence the threat is real and in scope. Flag the unguarded side, citing the sibling that carries the check.
+- **Instruction-channel probe.** Treat any value interpolated into an instruction channel consumed by a tool-capable agent or LLM — a composed prompt, a system / user / developer message, a tool or skill description, or a file the agent is directed to read as instructions — as an injection sink (CWE-74). Verify that every character class able to break the channel's framing is neutralized: a newline in a line-oriented block (the remainder stands as its own instruction), a fence / delimiter that closes a quoted region early, a role or turn marker. Line-structured prompt blocks are the common miss.
