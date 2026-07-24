@@ -1317,4 +1317,35 @@ describe('createInstallExamplesCoordinator — preview-bound, one-time authoriza
     expect(result.ok).toBe(false);
     expect(readFileSync(targetOf('flow', flowRel), 'utf8')).toBe('appeared\n');
   });
+
+  it('writes nothing when bundled source bytes change after preview', () => {
+    const bundle = path.join(home, 'preview-source');
+    mkdirSync(bundle);
+    writeFileSync(path.join(bundle, flowRel), 'source-before\n');
+    const previewDirs = withBundle('flow', bundle);
+    const coordinator = createInstallExamplesCoordinator(() => previewDirs);
+    const prepared = preview(coordinator);
+    writeFileSync(path.join(bundle, flowRel), 'source-after\n');
+
+    const result = coordinator.apply(request(prepared.previewId));
+
+    expect(result.ok).toBe(false);
+    expect(existsSync(targetOf('flow', flowRel))).toBe(false);
+  });
+
+  it('writes nothing when the bundled file set shrinks after preview', () => {
+    const bundle = path.join(home, 'preview-file-set');
+    mkdirSync(bundle);
+    writeFileSync(path.join(bundle, 'first.md'), 'first\n');
+    writeFileSync(path.join(bundle, 'second.md'), 'second\n');
+    const previewDirs = withBundle('commands', bundle);
+    const coordinator = createInstallExamplesCoordinator(() => previewDirs);
+    const prepared = preview(coordinator);
+    rmSync(path.join(bundle, 'second.md'));
+
+    const result = coordinator.apply(request(prepared.previewId));
+
+    expect(result.ok).toBe(false);
+    expect(existsSync(targetDirOf('commands'))).toBe(false);
+  });
 });

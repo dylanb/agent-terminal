@@ -3,7 +3,10 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { runAppCommand } from '../../src/main/appCommand';
+import {
+  createAppGitRemote,
+  runAppCommand,
+} from '../../src/main/appCommand';
 
 const cleanup: string[] = [];
 const originalPath = process.env.PATH;
@@ -83,5 +86,55 @@ describe('app command boundary', () => {
     await expect(runAppCommand('gh', [], bin)).rejects.toThrow(
       'gh command failed (exit 7)',
     );
+  });
+
+  it('does not delete a remote ref that moved past the expected object', async () => {
+    const repo = mkdtempSync(join(tmpdir(), 'app-command-delete-repo-'));
+    const remote = mkdtempSync(join(tmpdir(), 'app-command-delete-remote-'));
+    cleanup.push(repo, remote);
+    const git = (args: string[]): string =>
+      execFileSync('git', args, {
+        cwd: repo,
+        encoding: 'utf8',
+      }).trim();
+    git(['init', '-b', 'main']);
+    git(['config', 'user.name', 'Command Test']);
+    git(['config', 'user.email', 'command@example.test']);
+    execFileSync('git', ['init', '--bare'], { cwd: remote });
+    writeFileSync(join(repo, 'README.md'), 'old\n');
+    git(['add', 'README.md']);
+    git(['commit', '-m', 'old']);
+    const expectedOid = git(['rev-parse', 'HEAD']);
+    git(['push', remote, 'HEAD:refs/heads/plan-loop/issue-78']);
+    writeFileSync(join(repo, 'README.md'), 'new\n');
+    git(['add', 'README.md']);
+    git(['commit', '-m', 'new']);
+    const movedOid = git(['rev-parse', 'HEAD']);
+    git([
+      'push',
+      '--force',
+      remote,
+      'HEAD:refs/heads/plan-loop/issue-78',
+    ]);
+
+    await expect(
+      createAppGitRemote(repo).deleteRef(
+        remote,
+        'refs/heads/plan-loop/issue-78',
+        expectedOid,
+      ),
+    ).rejects.toThrow();
+    expect(
+      execFileSync(
+        'git',
+        [
+          '--git-dir',
+          remote,
+          'rev-parse',
+          'refs/heads/plan-loop/issue-78',
+        ],
+        { encoding: 'utf8' },
+      ).trim(),
+    ).toBe(movedOid);
   });
 });

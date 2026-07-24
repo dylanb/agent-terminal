@@ -167,6 +167,26 @@ answered against whatever repo the user had since `cd`'d into — and the answer
 its PR. Bind the handler to the identity the message carries (`wireBootstrapConflict` takes it injected,
 no cwd dependency), never to a `repoKey()` the handler looks up for itself.
 
+## Delayed consent and asynchronous results act only on the exact occurrence they were raised for
+
+Resource identity says *which object*; it does not say *which observed version*. Between inspection and
+mutation, the object can change while keeping the same repository, path, branch, or numeric id. A preview,
+confirmation, or asynchronous result MUST therefore carry an opaque occurrence identity or an immutable
+version snapshot sufficient to reject a stale, replayed, or expanded action. Consume a one-use
+authorization before attempting the operation, verify that every requested mutation was offered by that
+authorization, revalidate the snapshot immediately before mutation, and use the backing system's
+compare-and-mutate primitive with the expected version where one exists. If the identity or version no
+longer matches, make the result inert and require a fresh inspection; never reinterpret old consent against
+current ambient state.
+
+The inspection shown to the user and the authorization consumed by the operation derive from one
+inspection/snapshot pipeline, not parallel implementations of the same conflict semantics. The install
+examples action is the local-file case: its opaque `previewId` names one retained source/target hash
+snapshot, apply consumes it once, accepts replacements only for conflicts that snapshot offered, and
+rechecks the snapshot before each write. Bootstrap conflict resolution is the outward-facing case: the
+decision carries repository, branch, local and remote object ids, and pull-request ids; wipe rejects a
+changed snapshot, and ref deletion supplies the expected object id to Git's conditional update.
+
 ## An action a receiver can refuse is a two-way request; the UI holds its collected input open until the reply confirms
 
 One-way dispatch plus a state-pull is the default IPC shape, and it is correct only when the near side can

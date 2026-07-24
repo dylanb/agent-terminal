@@ -27,6 +27,56 @@ afterEach(() => {
 });
 
 describe('real app bootstrap conflict adapter', () => {
+  it('refuses a mismatched pull-request identity before exposing a destructive target', async () => {
+    const repo = mkdtempSync(join(tmpdir(), 'bootstrap-conflict-identity-'));
+    const bin = mkdtempSync(
+      join(tmpdir(), 'bootstrap-conflict-identity-bin-'),
+    );
+    const remote = mkdtempSync(
+      join(tmpdir(), 'bootstrap-conflict-identity-remote-'),
+    );
+    const configDir = mkdtempSync(
+      join(tmpdir(), 'bootstrap-conflict-identity-config-'),
+    );
+    cleanup.push(repo, bin, remote, configDir);
+    execFileSync('git', ['init'], { cwd: repo });
+    execFileSync('git', ['init', '--bare'], { cwd: remote });
+    execFileSync(
+      'git',
+      [
+        'remote',
+        'add',
+        'origin',
+        'https://github.com/owner/repository.git',
+      ],
+      { cwd: repo },
+    );
+    writeFileSync(
+      join(bin, 'gh'),
+      '#!/usr/bin/env bash\n' +
+        'if [ "$1" = "repo" ]; then printf \'%s\\n\' \'{"nameWithOwner":"owner/repository","url":"https://github.com/owner/repository","defaultBranchRef":{"name":"main"}}\'; exit 0; fi\n' +
+        'if [ "$1" = "pr" ] && [ "$2" = "list" ]; then printf \'%s\\n\' \'[{"number":42,"url":"https://github.com/attacker/other/pull/42","headRefOid":"2222222222222222222222222222222222222222","isCrossRepository":false,"headRepository":{"name":"repository"},"headRepositoryOwner":{"login":"owner"}}]\'; exit 0; fi\n' +
+        'exit 1\n',
+      { mode: 0o755 },
+    );
+    process.env.PATH = `${bin}:${originalPath ?? ''}`;
+
+    const ports = createRealAppBootstrapPorts(repo);
+    await expect(ports.git.resolveBaseBranch()).resolves.toBe('main');
+    execFileSync('git', [
+      'config',
+      '--file',
+      join(configDir, 'gitconfig'),
+      `url.file://${remote}/.insteadOf`,
+      'https://github.com/owner/repository.git',
+    ]);
+    process.env.GIT_CONFIG_GLOBAL = join(configDir, 'gitconfig');
+
+    await expect(
+      ports.conflicts.inspect('plan-loop/issue-78'),
+    ).rejects.toThrow(/mismatched identity/i);
+  });
+
   it('does not close a pull request whose head moved after inspection', async () => {
     const repo = mkdtempSync(join(tmpdir(), 'bootstrap-conflict-github-'));
     const bin = mkdtempSync(join(tmpdir(), 'bootstrap-conflict-github-bin-'));

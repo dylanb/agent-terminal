@@ -73,8 +73,6 @@ export interface AppGateDecisionDeps {
   onViewChanged(): void;
 }
 
-/** Resolve only the confined binding a side-effect explicitly names. Work completion and publication are
- * separate contracts: a commit-producing loop can publish an input without pretending to emit a file. */
 export function resolveGateSideEffectBodyFile(
   def: LoopDefV2,
   sideEffect: GateSideEffect,
