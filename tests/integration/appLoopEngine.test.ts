@@ -267,7 +267,7 @@ describe('§27 engine — chained input into the work turn (AC1)', () => {
     engine.onInjectable(); // boundary drains → the work prompt injects
     expect(injected[1]).toContain(`- groomed-ticket: ${CHAINED_INPUT_REL}`); // the resolved input carried in
     // The chained transition is recorded in the §25 audit, naming the entered step and the carried artifact id.
-    expect(audit).toHaveBeenCalledWith(repo, expect.stringContaining('groomed-ticket'), expect.anything());
+    expect(audit).toHaveBeenCalledWith(repo, expect.stringContaining('groomed-ticket'), 0);
     const chainCall = audit.mock.calls.find((c) => /chained transition/i.test(c[1]));
     expect(chainCall).toBeDefined();
     expect(chainCall![1]).toContain(STEP); // into the entered step (§6 identity)
