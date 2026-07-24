@@ -12,12 +12,17 @@ import {
   createAppBootstrapConflicts,
   type AppBootstrapConflictStore,
 } from '../../src/main/appBootstrapConflicts';
-import { createRealAppBootstrapGit } from '../../src/main/appBootstrapGit';
+import { createRealAppBootstrapPorts } from '../../src/main/appBootstrapPorts';
 import type { AppBootstrapConflictTarget } from '../../src/shared/appBootstrap';
 
 const cleanup: string[] = [];
+const originalPath = process.env.PATH;
+const originalGlobalConfig = process.env.GIT_CONFIG_GLOBAL;
 
 afterEach(() => {
+  process.env.PATH = originalPath;
+  if (originalGlobalConfig === undefined) delete process.env.GIT_CONFIG_GLOBAL;
+  else process.env.GIT_CONFIG_GLOBAL = originalGlobalConfig;
   while (cleanup.length > 0) {
     rmSync(cleanup.pop()!, { recursive: true, force: true });
   }
@@ -130,14 +135,39 @@ describe('bootstrap start commit', () => {
     const competingOid = git(['rev-parse', 'HEAD']);
     git(['push', remote, `HEAD:refs/heads/${branch}`]);
     git(['checkout', '-b', branch]);
-    const adapter = createRealAppBootstrapGit(repo, {
-      selector: 'github.com/owner/repository',
-      owner: 'owner',
-      name: 'repository',
-      defaultBranch: 'main',
-      fetchUrl: remote,
-      pushUrl: remote,
-    });
+    const bin = mkdtempSync(path.join(tmpdir(), 'bootstrap-remote-race-bin-'));
+    const config = path.join(
+      mkdtempSync(path.join(tmpdir(), 'bootstrap-remote-race-config-')),
+      'gitconfig',
+    );
+    cleanup.push(bin, path.dirname(config));
+    git([
+      'remote',
+      'add',
+      'origin',
+      'https://github.com/owner/repository.git',
+    ]);
+    writeFileSync(
+      path.join(bin, 'gh'),
+      '#!/usr/bin/env bash\n' +
+        'printf \'%s\\n\' \'{"nameWithOwner":"owner/repository","url":"https://github.com/owner/repository","defaultBranchRef":{"name":"main"}}\'\n',
+      { mode: 0o755 },
+    );
+    process.env.PATH = `${bin}:${originalPath ?? ''}`;
+    const ports = createRealAppBootstrapPorts(repo);
+    await expect(ports.git.resolveBaseBranch()).resolves.toBe('main');
+    execFileSync(
+      'git',
+      [
+        'config',
+        '--file',
+        config,
+        `url.file://${remote}/.insteadOf`,
+        'https://github.com/owner/repository.git',
+      ],
+    );
+    process.env.GIT_CONFIG_GLOBAL = config;
+    const adapter = ports.git;
     await adapter.commitEmptyStart('start issue 78');
 
     await expect(adapter.pushBranchUpstream(branch)).rejects.toThrow();
@@ -164,7 +194,7 @@ describe('bootstrap start commit', () => {
     git(['commit', '-m', 'concurrent move']);
 
     await expect(
-      createRealAppBootstrapGit(repo).rollbackCreatedBranch(
+      createRealAppBootstrapPorts(repo).rollbackCreatedBranch(
         'plan-loop/issue-78',
         expectedOid,
       ),
@@ -180,7 +210,7 @@ describe('bootstrap start commit', () => {
     writeFileSync(path.join(repo, '.agent-terminal', 'capture.txt'), 'secret\n');
     git(['add', '.agent-terminal/capture.txt']);
 
-    expect(await createRealAppBootstrapGit(repo).isCleanTree()).toBe(
+    expect(await createRealAppBootstrapPorts(repo).git.isCleanTree()).toBe(
       false,
     );
   });
@@ -192,7 +222,7 @@ describe('bootstrap start commit', () => {
     writeFileSync(path.join(repo, '.agent-terminal', 'capture.txt'), 'secret\n');
     git(['add', '.agent-terminal/capture.txt']);
 
-    await createRealAppBootstrapGit(repo).commitEmptyStart(
+    await createRealAppBootstrapPorts(repo).git.commitEmptyStart(
       'start issue',
     );
 

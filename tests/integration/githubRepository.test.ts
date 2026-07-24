@@ -14,7 +14,7 @@ import {
   validGitHubRepositorySelector,
   type GitHubRepositoryIdentity,
 } from '../../src/main/githubRepository';
-import { createRealAppBootstrapGit } from '../../src/main/appBootstrapGit';
+import { createRealAppBootstrapPorts } from '../../src/main/appBootstrapPorts';
 
 const cleanup: string[] = [];
 const originalPath = process.env.PATH;
@@ -213,6 +213,8 @@ describe('GitHub repository identity', () => {
     ]);
     fakeGitHub(bin);
     const resolved = await resolveGitHubRepository(repo);
+    const ports = createRealAppBootstrapPorts(repo);
+    await expect(ports.git.resolveBaseBranch()).resolves.toBe('main');
     execFileSync(
       'git',
       [
@@ -231,7 +233,7 @@ describe('GitHub repository identity', () => {
     ]);
 
     const expectedOid = git(['rev-parse', 'refs/heads/plan-loop/issue-78']);
-    await createRealAppBootstrapGit(repo, resolved).rollbackCreatedBranch(
+    await ports.rollbackCreatedBranch(
       'plan-loop/issue-78',
       expectedOid,
     );
@@ -315,6 +317,8 @@ describe('GitHub repository identity', () => {
     ]);
     fakeGitHub(bin);
     const resolved = await resolveGitHubRepository(repo);
+    const ports = createRealAppBootstrapPorts(repo);
+    await expect(ports.git.resolveBaseBranch()).resolves.toBe('main');
     execFileSync(
       'git',
       [
@@ -332,7 +336,7 @@ describe('GitHub repository identity', () => {
       resolved.pushUrl,
     ]);
 
-    const adapter = createRealAppBootstrapGit(repo, resolved);
+    const adapter = ports.git;
     await expect(
       adapter.createBranchFromBase('plan-loop/issue-78', 'main'),
     ).resolves.toBe(trustedBase);

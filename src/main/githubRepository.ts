@@ -14,6 +14,20 @@ export interface ResolvedGitHubRepository
   pushUrl: string;
 }
 
+export interface GitHubRepositorySource {
+  resolve(): Promise<ResolvedGitHubRepository>;
+}
+
+export function createGitHubRepositorySource(
+  repoDir: string,
+): GitHubRepositorySource {
+  let repository: Promise<ResolvedGitHubRepository> | undefined;
+  return {
+    resolve: () =>
+      (repository ??= resolveGitHubRepository(repoDir)),
+  };
+}
+
 const REPOSITORY_PART = /^[A-Za-z0-9_.-]+$/;
 const BRANCH_NAME = /^[A-Za-z0-9._/][A-Za-z0-9._/-]*$/;
 

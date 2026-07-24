@@ -4,12 +4,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { runAppLoopBootstrap } from '../../src/main/appLoopBootstrap';
-import { createRealAppBootstrapConflicts } from '../../src/main/appBootstrapConflicts';
-import { createRealAppBootstrapGitHub } from '../../src/main/appBootstrapGithub';
+import { createRealAppBootstrapPorts } from '../../src/main/appBootstrapPorts';
 import type { GitHubRepositoryIdentity } from '../../src/main/githubRepository';
 
 const cleanup: string[] = [];
 const originalPath = process.env.PATH;
+const originalGlobalConfig = process.env.GIT_CONFIG_GLOBAL;
 const repository: GitHubRepositoryIdentity = {
   selector: 'github.com/owner/repository',
   owner: 'owner',
@@ -19,6 +19,8 @@ const repository: GitHubRepositoryIdentity = {
 
 afterEach(() => {
   process.env.PATH = originalPath;
+  if (originalGlobalConfig === undefined) delete process.env.GIT_CONFIG_GLOBAL;
+  else process.env.GIT_CONFIG_GLOBAL = originalGlobalConfig;
   while (cleanup.length > 0) {
     rmSync(cleanup.pop()!, { recursive: true, force: true });
   }
@@ -33,6 +35,16 @@ describe('real app bootstrap conflict adapter', () => {
     cleanup.push(repo, bin, remote);
     execFileSync('git', ['init'], { cwd: repo });
     execFileSync('git', ['init', '--bare'], { cwd: remote });
+    execFileSync(
+      'git',
+      [
+        'remote',
+        'add',
+        'origin',
+        'https://github.com/owner/repository.git',
+      ],
+      { cwd: repo },
+    );
     writeFileSync(
       join(bin, 'gh'),
       '#!/usr/bin/env bash\n' +
@@ -45,11 +57,20 @@ describe('real app bootstrap conflict adapter', () => {
     );
     process.env.PATH = `${bin}:${originalPath ?? ''}`;
 
-    const conflicts = createRealAppBootstrapConflicts(repo, {
-      ...repository,
-      fetchUrl: remote,
-      pushUrl: remote,
-    });
+    const ports = createRealAppBootstrapPorts(repo);
+    await expect(ports.git.resolveBaseBranch()).resolves.toBe('main');
+    const configDir = mkdtempSync(join(tmpdir(), 'bootstrap-conflict-config-'));
+    const config = join(configDir, 'gitconfig');
+    cleanup.push(configDir);
+    execFileSync('git', [
+      'config',
+      '--file',
+      config,
+      `url.file://${remote}/.insteadOf`,
+      'https://github.com/owner/repository.git',
+    ]);
+    process.env.GIT_CONFIG_GLOBAL = config;
+    const conflicts = ports.conflicts;
     const target = await conflicts.inspect('plan-loop/issue-78');
 
     await expect(conflicts.wipe(target)).rejects.toThrow(
@@ -66,6 +87,7 @@ describe('real app bootstrap conflict adapter', () => {
     writeFileSync(
       join(bin, 'gh'),
       '#!/usr/bin/env bash\n' +
+        'if [ "$1" = "repo" ]; then printf \'%s\\n\' \'{"nameWithOwner":"owner/repository","url":"https://github.com/owner/repository","defaultBranchRef":{"name":"main"}}\'; exit 0; fi\n' +
         'if [ "$1" = "issue" ] && [ "$2" = "view" ]; then printf \'%s\\n\' \'{"title":"Ticket 78","url":"https://github.com/owner/repository/issues/78"}\'; exit 0; fi\n' +
         'if [ "$1" = "issue" ] && [ "$2" = "edit" ]; then exit 0; fi\n' +
         'if [ "$1" = "pr" ] && [ "$2" = "create" ]; then printf \'%s\\n\' \'https://github.com/attacker/other/pull/4242\'; exit 0; fi\n' +
@@ -74,8 +96,20 @@ describe('real app bootstrap conflict adapter', () => {
       { mode: 0o755 },
     );
     process.env.PATH = `${bin}:${originalPath ?? ''}`;
+    execFileSync('git', ['init'], { cwd: repo });
+    execFileSync(
+      'git',
+      [
+        'remote',
+        'add',
+        'origin',
+        'https://github.com/owner/repository.git',
+      ],
+      { cwd: repo },
+    );
     const rollbackCreatedBranch = vi.fn(async () => {});
     const writeBootstrap = vi.fn();
+    const ports = createRealAppBootstrapPorts(repo);
 
     const result = await runAppLoopBootstrap(
       {
@@ -86,7 +120,7 @@ describe('real app bootstrap conflict adapter', () => {
           commitEmptyStart: async () => '4'.repeat(40),
           pushBranchUpstream: async () => {},
         },
-        github: createRealAppBootstrapGitHub(repo, repository),
+        github: ports.github,
         conflicts: {
           inspect: async (branch) => ({
             repository: repository.selector,

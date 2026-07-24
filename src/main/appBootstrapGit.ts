@@ -4,22 +4,11 @@ import {
   parseAppGitObjectId,
   runAppCommand,
 } from './appCommand';
-import {
-  resolveGitHubRepository,
-  type ResolvedGitHubRepository,
-} from './githubRepository';
-
-export interface AppBootstrapGit {
-  isCleanTree(): Promise<boolean>;
-  resolveBaseBranch(): Promise<string | null>;
-  createBranchFromBase(branch: string, base: string): Promise<string>;
-  commitEmptyStart(message: string): Promise<string>;
-  pushBranchUpstream(branch: string): Promise<void>;
-}
-
-export interface AppBootstrapBranchRollback {
-  rollbackCreatedBranch(branch: string, expectedOid: string): Promise<void>;
-}
+import type { GitHubRepositorySource } from './githubRepository';
+import type {
+  AppBootstrapGit,
+  AppBootstrapPorts,
+} from './appLoopBootstrap';
 
 const APP_STATE_PREFIXES = APP_STATE_DIRS.map((dir) => `${dir}/`);
 
@@ -39,20 +28,11 @@ function treeIsClean(porcelain: string): boolean {
 
 export function createRealAppBootstrapGit(
   repoDir: string,
-  repositorySource?:
-    | ResolvedGitHubRepository
-    | (() => Promise<ResolvedGitHubRepository>),
-): AppBootstrapGit & AppBootstrapBranchRollback {
+  repositorySource: GitHubRepositorySource,
+): AppBootstrapGit & Pick<AppBootstrapPorts, 'rollbackCreatedBranch'> {
   const git = (args: string[]): Promise<string> =>
     runAppCommand('git', args, repoDir);
   const remote = createAppGitRemote(repoDir);
-  let repositoryPromise: Promise<ResolvedGitHubRepository> | undefined;
-  const repository = (): Promise<ResolvedGitHubRepository> =>
-    typeof repositorySource === 'function'
-      ? repositorySource()
-      : repositorySource !== undefined
-        ? Promise.resolve(repositorySource)
-        : (repositoryPromise ??= resolveGitHubRepository(repoDir));
   const localObjectId = async (branch: string): Promise<string | null> => {
     try {
       return parseAppGitObjectId(
@@ -70,7 +50,7 @@ export function createRealAppBootstrapGit(
   };
   const remoteObjectId = async (branch: string): Promise<string | null> =>
     remote.readRef(
-      (await repository()).pushUrl,
+      (await repositorySource.resolve()).pushUrl,
       `refs/heads/${branch}`,
     );
   const deleteExactBranch = async (
@@ -91,7 +71,7 @@ export function createRealAppBootstrapGit(
     }
     if (remoteOid !== null) {
       await remote.deleteRef(
-        (await repository()).pushUrl,
+        (await repositorySource.resolve()).pushUrl,
         `refs/heads/${branch}`,
         remoteOid,
       );
@@ -101,7 +81,7 @@ export function createRealAppBootstrapGit(
     isCleanTree: async () => treeIsClean(await git(['status', '--porcelain'])),
     resolveBaseBranch: async () => {
       try {
-        return (await repository()).defaultBranch;
+        return (await repositorySource.resolve()).defaultBranch;
       } catch {
         return null;
       }
@@ -123,7 +103,7 @@ export function createRealAppBootstrapGit(
     },
     createBranchFromBase: async (branch, base) => {
       const baseOid = await remote.fetchRef(
-        (await repository()).fetchUrl,
+        (await repositorySource.resolve()).fetchUrl,
         base,
       );
       await git(['checkout', '-b', branch, baseOid]);
@@ -154,7 +134,7 @@ export function createRealAppBootstrapGit(
         throw new Error(`local branch ${branch} does not exist`);
       }
       await remote.createRef(
-        (await repository()).pushUrl,
+        (await repositorySource.resolve()).pushUrl,
         oid,
         `refs/heads/${branch}`,
       );

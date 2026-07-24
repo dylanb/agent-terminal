@@ -5,11 +5,11 @@ import {
   type AppLoopBootstrapJob,
   type AppLoopBootstrapResult,
   type AppLoopBootstrapSpec,
+  type AppBootstrapConflicts,
+  type AppBootstrapGit,
+  type AppBootstrapGitHub,
 } from '../../src/main/appLoopBootstrap';
 import type { AppLoopBootstrap } from '../../src/main/appLoopState';
-import type { BootstrapGitHub } from '../../src/main/bootstrapPorts';
-import type { AppBootstrapGit } from '../../src/main/appBootstrapGit';
-import type { AppBootstrapConflicts } from '../../src/main/appBootstrapConflicts';
 import type { AppBootstrapConflictTarget } from '../../src/shared/appBootstrap';
 
 const BRANCH = 'plan-loop/issue-78';
@@ -130,7 +130,7 @@ function fakeGit(over: { clean?: boolean; base?: string | null } = {}): {
 }
 
 function fakeGitHub(pr: number | null = 42): {
-  github: BootstrapGitHub;
+  github: AppBootstrapGitHub;
   calls: string[];
   prBody(): string;
   isAssigned(issue: number): boolean;

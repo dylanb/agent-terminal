@@ -1,32 +1,22 @@
 import { runAppCommand } from './appCommand';
-import type { BootstrapGitHub } from './bootstrapPorts';
 import { numberFromGithubUrl } from '../shared/githubUrl';
 import { isRecord } from './yamlRecord';
 import {
   matchesGitHubRepositoryUrl,
-  resolveGitHubRepository,
-  type GitHubRepositoryIdentity,
+  type GitHubRepositorySource,
 } from './githubRepository';
+import type { AppBootstrapGitHub } from './appLoopBootstrap';
 
 export function createRealAppBootstrapGitHub(
   repoDir: string,
-  repositorySource?:
-    | GitHubRepositoryIdentity
-    | (() => Promise<GitHubRepositoryIdentity>),
-): BootstrapGitHub {
-  let repositoryPromise: Promise<GitHubRepositoryIdentity> | undefined;
-  const repository = (): Promise<GitHubRepositoryIdentity> =>
-    typeof repositorySource === 'function'
-      ? repositorySource()
-      : repositorySource !== undefined
-        ? Promise.resolve(repositorySource)
-        : (repositoryPromise ??= resolveGitHubRepository(repoDir));
+  repositorySource: GitHubRepositorySource,
+): AppBootstrapGitHub {
   const gh = (args: string[]): Promise<string> =>
     runAppCommand('gh', args, repoDir);
   return {
     viewIssue: async (issue) => {
       try {
-        const identity = await repository();
+        const identity = await repositorySource.resolve();
         const parsed: unknown = JSON.parse(
           await gh([
             'issue',
@@ -57,7 +47,7 @@ export function createRealAppBootstrapGitHub(
       }
     },
     assignIssueToSelf: async (issue) => {
-      const identity = await repository();
+      const identity = await repositorySource.resolve();
       await gh([
         'issue',
         'edit',
@@ -69,7 +59,7 @@ export function createRealAppBootstrapGitHub(
       ]);
     },
     setIssueLabel: async (issue, label, on) => {
-      const identity = await repository();
+      const identity = await repositorySource.resolve();
       await gh([
         'issue',
         'edit',
@@ -81,7 +71,7 @@ export function createRealAppBootstrapGitHub(
       ]);
     },
     createDraftPr: async ({ base, head, title, body }) => {
-      const identity = await repository();
+      const identity = await repositorySource.resolve();
       const out = await gh([
         'pr',
         'create',
@@ -104,7 +94,7 @@ export function createRealAppBootstrapGitHub(
         : null;
     },
     setPrLabel: async (pullRequest, label, on) => {
-      const identity = await repository();
+      const identity = await repositorySource.resolve();
       await gh([
         'pr',
         'edit',

@@ -1,28 +1,13 @@
-import type { BootstrapGitHub } from './bootstrapPorts';
-import {
-  createRealAppBootstrapGit,
-  type AppBootstrapGit,
-} from './appBootstrapGit';
-import {
-  createRealAppBootstrapConflicts,
-  type AppBootstrapConflicts,
-} from './appBootstrapConflicts';
+import { createRealAppBootstrapGit } from './appBootstrapGit';
+import { createRealAppBootstrapConflicts } from './appBootstrapConflicts';
 import { createRealAppBootstrapGitHub } from './appBootstrapGithub';
-import { resolveGitHubRepository } from './githubRepository';
+import { createGitHubRepositorySource } from './githubRepository';
+import type { AppBootstrapPorts } from './appLoopBootstrap';
 
-export interface RealAppBootstrapPorts {
-  git: AppBootstrapGit;
-  github: BootstrapGitHub;
-  conflicts: AppBootstrapConflicts;
-  rollbackCreatedBranch(branch: string, expectedOid: string): Promise<void>;
-}
-
-export async function createRealAppBootstrapPorts(
+export function createRealAppBootstrapPorts(
   repoDir: string,
-): Promise<RealAppBootstrapPorts> {
-  let repositoryPromise: ReturnType<typeof resolveGitHubRepository> | undefined;
-  const repository = () =>
-    (repositoryPromise ??= resolveGitHubRepository(repoDir));
+): AppBootstrapPorts {
+  const repository = createGitHubRepositorySource(repoDir);
   const git = createRealAppBootstrapGit(repoDir, repository);
   return {
     git,

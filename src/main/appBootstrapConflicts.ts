@@ -10,15 +10,11 @@ import {
 import { isRecord } from './yamlRecord';
 import {
   matchesGitHubRepositoryUrl,
-  resolveGitHubRepository,
   validGitHubRepositorySelector,
+  type GitHubRepositorySource,
   type ResolvedGitHubRepository,
 } from './githubRepository';
-
-export interface AppBootstrapConflicts {
-  inspect(branch: string): Promise<AppBootstrapConflictTarget>;
-  wipe(target: AppBootstrapConflictTarget): Promise<void>;
-}
+import type { AppBootstrapConflicts } from './appLoopBootstrap';
 
 export interface AppBootstrapConflictStore {
   inspect(branch: string): Promise<AppBootstrapConflictTarget>;
@@ -297,17 +293,12 @@ function createRealAppBootstrapConflictStore(
 
 export function createRealAppBootstrapConflicts(
   repoDir: string,
-  repositorySource?:
-    | ResolvedGitHubRepository
-    | (() => Promise<ResolvedGitHubRepository>),
+  repositorySource: GitHubRepositorySource,
 ): AppBootstrapConflicts {
   let conflicts: AppBootstrapConflicts | undefined;
   const resolve = async (): Promise<AppBootstrapConflicts> => {
     if (conflicts === undefined) {
-      const repository =
-        typeof repositorySource === 'function'
-          ? await repositorySource()
-          : repositorySource ?? (await resolveGitHubRepository(repoDir));
+      const repository = await repositorySource.resolve();
       conflicts = createAppBootstrapConflicts(
         createRealAppBootstrapConflictStore(repoDir, repository),
       );

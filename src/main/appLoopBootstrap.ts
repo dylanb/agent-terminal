@@ -1,8 +1,5 @@
 import type { AppLoopEntry } from './appLoopEngine';
 import type { AppLoopBootstrap } from './appLoopState';
-import type { BootstrapGitHub } from './bootstrapPorts';
-import type { AppBootstrapGit } from './appBootstrapGit';
-import type { AppBootstrapConflicts } from './appBootstrapConflicts';
 import { errMsg } from './errno';
 import type { AppBootstrapAuditKind } from '../shared/audit';
 import {
@@ -13,11 +10,45 @@ import {
   type AppBootstrapWipePolicy,
 } from '../shared/appBootstrap';
 
-export interface AppLoopBootstrapDeps {
+export interface AppBootstrapGit {
+  isCleanTree(): Promise<boolean>;
+  resolveBaseBranch(): Promise<string | null>;
+  createBranchFromBase(branch: string, base: string): Promise<string>;
+  commitEmptyStart(message: string): Promise<string>;
+  pushBranchUpstream(branch: string): Promise<void>;
+}
+
+export interface AppBootstrapIssue {
+  title: string;
+  url: string;
+}
+
+export interface AppBootstrapGitHub {
+  viewIssue(issue: number): Promise<AppBootstrapIssue | null>;
+  assignIssueToSelf(issue: number): Promise<void>;
+  setIssueLabel(issue: number, label: string, on: boolean): Promise<void>;
+  createDraftPr(args: {
+    base: string;
+    head: string;
+    title: string;
+    body: string;
+  }): Promise<number | null>;
+  setPrLabel(pr: number, label: string, on: boolean): Promise<void>;
+}
+
+export interface AppBootstrapConflicts {
+  inspect(branch: string): Promise<AppBootstrapConflictTarget>;
+  wipe(target: AppBootstrapConflictTarget): Promise<void>;
+}
+
+export interface AppBootstrapPorts {
   git: AppBootstrapGit;
-  github: BootstrapGitHub;
+  github: AppBootstrapGitHub;
   conflicts: AppBootstrapConflicts;
   rollbackCreatedBranch(branch: string, expectedOid: string): Promise<void>;
+}
+
+export interface AppLoopBootstrapDeps extends AppBootstrapPorts {
   writeBootstrap(identity: AppLoopBootstrap): void;
 }
 
