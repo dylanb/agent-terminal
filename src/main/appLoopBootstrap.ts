@@ -1,8 +1,8 @@
 import type { AppLoopEntry } from './appLoopEngine';
 import type { AppLoopBootstrap } from './appLoopState';
 import type {
+  AppBootstrapGit,
   AppBootstrapConflicts,
-  BootstrapGit,
   BootstrapGitHub,
 } from './bootstrapPorts';
 import { errMsg } from './errno';
@@ -16,10 +16,10 @@ import {
 } from '../shared/appBootstrap';
 
 export interface AppLoopBootstrapDeps {
-  git: BootstrapGit;
+  git: AppBootstrapGit;
   github: BootstrapGitHub;
   conflicts: AppBootstrapConflicts;
-  rollbackCreatedBranch(branch: string): Promise<void>;
+  rollbackCreatedBranch(branch: string, expectedOid: string): Promise<void>;
   writeBootstrap(identity: AppLoopBootstrap): void;
 }
 
@@ -73,7 +73,7 @@ export async function runAppLoopBootstrap(
       return fail(`wipe confirmation names a different branch: ${req.confirmedWipe.branch}`);
     }
   }
-  let createdBranch: string | null = null;
+  let createdBranch: { branch: string; oid: string } | null = null;
   try {
     if (!(await deps.git.isCleanTree())) return fail('working tree is not clean');
     const base = await deps.git.resolveBaseBranch();
@@ -94,11 +94,15 @@ export async function runAppLoopBootstrap(
       return fail(`branch ${branch} already exists`);
     }
 
-    await deps.git.createBranchFromBase(branch, base);
-    createdBranch = branch;
+    createdBranch = {
+      branch,
+      oid: await deps.git.createBranchFromBase(branch, base),
+    };
     const issue = await deps.github.viewIssue(req.issue);
     const seeLine = issue?.url ? `\n\nSee ${issue.url}` : '';
-    await deps.git.commitEmptyStart(`[skip ci] start work on #${req.issue}${seeLine}`);
+    createdBranch.oid = await deps.git.commitEmptyStart(
+      `[skip ci] start work on #${req.issue}${seeLine}`,
+    );
     await deps.git.pushBranchUpstream(branch);
 
     await bestEffort(() => deps.github.assignIssueToSelf(req.issue));
@@ -124,9 +128,12 @@ export async function runAppLoopBootstrap(
     const error = errMsg(e);
     if (createdBranch !== null) {
       try {
-        await deps.rollbackCreatedBranch(createdBranch);
+        await deps.rollbackCreatedBranch(
+          createdBranch.branch,
+          createdBranch.oid,
+        );
       } catch (rollbackError) {
-        return fail(`${error}; could not roll back branch ${createdBranch}: ${errMsg(rollbackError)}`);
+        return fail(`${error}; could not roll back branch ${createdBranch.branch}: ${errMsg(rollbackError)}`);
       }
     }
     return fail(error);

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { resolveLoopDefV2, type LoopDefV2Result } from '../../src/main/loopDefV2';
@@ -64,6 +64,9 @@ describe('shipped §27 loop defs — approve (§27.13 side-effect) + request-cha
     if (!resolved.ok) return;
     expect(completionArtifact(resolved.def)).toBeNull();
     expect(resolved.def.outputs).toEqual([]);
+    expect(readFileSync(resolved.def.work.recipe, 'utf8')).toMatch(
+      /push .*bootstrapped PR branch/i,
+    );
     expect(resolved.def.gate[0].sideEffects[0].args).toMatchObject({
       artifact: 'plan',
     });

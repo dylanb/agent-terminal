@@ -103,16 +103,16 @@ export function isValidInstallExamplesPreview(m: unknown): m is InstallExamplesP
   return isRecord(m) && isLiveSession(m);
 }
 
-/** examples:apply (§6) — a live-session request carrying one replace decision per destination. An id
- *  outside the known set is REJECTED rather than ignored: the list drives filesystem writes, so an
- *  unrecognized value is a malformed request, not a no-op (CWE-20). */
+/** §6; CWE-20. */
+const INSTALL_PREVIEW_ID_MAX = 128;
+
 export function isValidInstallExamplesApply(m: unknown): m is InstallExamplesApplyMsg {
   if (
     !isRecord(m) ||
     !isLiveSession(m) ||
-    typeof m.confirmationId !== 'string' ||
-    m.confirmationId.length === 0 ||
-    m.confirmationId.length > 200 ||
+    typeof m.previewId !== 'string' ||
+    m.previewId.length === 0 ||
+    m.previewId.length > INSTALL_PREVIEW_ID_MAX ||
     !Array.isArray(m.replace)
   ) {
     return false;

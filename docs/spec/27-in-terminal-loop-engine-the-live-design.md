@@ -146,8 +146,10 @@ flowchart TD
   CHECK -->|"yes"| WIPE["close exact PRs<br/>conditionally delete exact refs"]
   WIPE -->|"complete"| P
   WIPE -->|"incomplete or failed"| RB
-  RB --> RELAUNCH["relaunch at rolled-back step"]
-  RELAUNCH -->|"advance with preserved input"| BOOT
+  RB --> RETRY["approve / advance rolled-back step"]
+  RB -.->|"optional"| RELAUNCH["relaunch restores rolled-back step"]
+  RELAUNCH --> RETRY
+  RETRY -->|"preserved input"| BOOT
   P -->|"approve: gh pr ready<br/>and carry plan.md"| I["impl-loop"]
   I -->|"approve: publish PR body<br/>and preserve closes #issue"| TR["team review"]
 ```

@@ -8,12 +8,14 @@ import type {
   InstallDestinationPreview,
   InstallExamplesPreview,
   InstallExamplesResult,
+  InstallPreviewId,
 } from '../../src/shared/ipc';
 
 // Install-examples VIEW organism (§18.1/§23.4 / UI-STANDARDS): preview → conditional per-destination
 // consent step → apply → destination-grouped result reporting. Tests assert the observable DOM + the
 // injected contract, never internals.
 describe('install examples view organism (§18.1/§23.4)', () => {
+  const PREVIEW_ID = 'preview-1' as InstallPreviewId;
   let host: HTMLElement;
   beforeEach(() => {
     host = document.createElement('div');
@@ -31,15 +33,14 @@ describe('install examples view organism (§18.1/§23.4)', () => {
     { destination: 'skills', conflict: false },
     { destination: 'commands', conflict: false },
   ];
-  const confirmationId = 'preview-confirmation';
   const clean: InstallExamplesPreview = {
     ok: true,
-    confirmationId,
+    previewId: PREVIEW_ID,
     destinations: cleanDestinations,
   };
   const conflicting = (...ids: InstallDestinationId[]): InstallExamplesPreview => ({
     ok: true,
-    confirmationId,
+    previewId: PREVIEW_ID,
     destinations: cleanDestinations.map((d) =>
       ids.includes(d.destination) ? { destination: d.destination, conflict: true, files: rels(`${d.destination}-file.md`) } : d,
     ),
@@ -118,7 +119,7 @@ describe('install examples view organism (§18.1/§23.4)', () => {
     createInstallExamples(host, deps({ apply }));
     button().click();
     await vi.waitFor(() => expect(apply).toHaveBeenCalledTimes(1));
-    expect(apply).toHaveBeenCalledWith(confirmationId, []);
+    expect(apply).toHaveBeenCalledWith(PREVIEW_ID, []);
     expect(prompt()).toBeNull();
     await vi.waitFor(() => expect(status().textContent?.toLowerCase()).toContain('created'));
   });
@@ -148,7 +149,7 @@ describe('install examples view organism (§18.1/§23.4)', () => {
     consentBox('commands').click();
     confirmBtn().click();
     await vi.waitFor(() =>
-      expect(apply).toHaveBeenCalledWith(confirmationId, ['commands']),
+      expect(apply).toHaveBeenCalledWith(PREVIEW_ID, ['commands']),
     );
   });
 
@@ -157,7 +158,7 @@ describe('install examples view organism (§18.1/§23.4)', () => {
     await openConsent(['skills'], { apply });
     confirmBtn().click();
     await vi.waitFor(() =>
-      expect(apply).toHaveBeenCalledWith(confirmationId, []),
+      expect(apply).toHaveBeenCalledWith(PREVIEW_ID, []),
     );
     await vi.waitFor(() => expect(status().textContent?.toLowerCase()).toContain('skipped'));
     expect(prompt()).toBeNull();

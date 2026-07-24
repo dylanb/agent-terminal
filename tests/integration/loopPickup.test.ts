@@ -20,8 +20,12 @@ function makeFakeGit(overrides: Partial<Record<string, unknown>> = {}): { git: P
     resolveBaseBranch: async () => ('base' in overrides ? (overrides.base as string | null) : 'main'),
     branchExists: async () => ('branchExists' in overrides ? (overrides.branchExists as boolean) : false),
     wipeConflictingBranch: async (branch) => void calls.push(`wipe:${branch}`),
-    createBranchFromBase: async (branch, base) => void calls.push(`branch:${branch}<-${base}`),
-    commitEmptyStart: async (msg) => void calls.push(`commit:${msg.split('\n')[0]}`),
+    createBranchFromBase: async (branch, base) => {
+      calls.push(`branch:${branch}<-${base}`);
+    },
+    commitEmptyStart: async (msg) => {
+      calls.push(`commit:${msg.split('\n')[0]}`);
+    },
     pushBranchUpstream: async (branch) => void calls.push(`push:${branch}`),
   };
   return { git, calls };
@@ -317,6 +321,13 @@ describe('createRealPickupGit.isCleanTree — app-owned state is not "dirty" (§
   it('treats churn under .agent-loop/ as clean (engine parity)', async () => {
     mkdirSync(join(repo, '.agent-loop'));
     writeFileSync(join(repo, '.agent-loop', 'state.yaml'), 'x\n');
+    expect(await createRealPickupGit(repo).isCleanTree()).toBe(true);
+  });
+
+  it('preserves §26 behavior for staged app-owned state', async () => {
+    mkdirSync(join(repo, '.agent-loop'));
+    writeFileSync(join(repo, '.agent-loop', 'state.yaml'), 'x\n');
+    git(['add', '.agent-loop/state.yaml']);
     expect(await createRealPickupGit(repo).isCleanTree()).toBe(true);
   });
 

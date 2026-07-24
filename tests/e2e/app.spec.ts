@@ -1722,35 +1722,46 @@ function seedFakeGhGit(prefix: string): { binDir: string; logFile: string } {
   const logFile = join(binDir, 'calls.log');
   const fakeGit =
     '#!/usr/bin/env bash\n' +
+    'if [ "$1" = "--git-dir" ]; then shift 2; fi\n' +
     'echo "git $*" >> "$FAKE_GHGIT_LOG"\n' +
     // status --porcelain emits nothing → a clean tree; when FAKE_GIT_DIRTY is set it emits a non-.agent-loop
     // porcelain line → a dirty tree, so pickup aborts (§26.9). Every other op is a recorded no-op success.
     'if [ "$1" = "status" ] && [ -n "$FAKE_GIT_DIRTY" ]; then echo " M src/app.ts"; exit 0; fi\n' +
     'if [ "$1" = "status" ] && [ -n "$FAKE_GIT_DIRTY_ONCE" ] && [ ! -e "$FAKE_GHGIT_LOG.dirty-seen" ]; then touch "$FAKE_GHGIT_LOG.dirty-seen"; echo " M src/app.ts"; exit 0; fi\n' +
     'if [ "$1" = "branch" ] && [ "$2" = "--list" ]; then local_branch=$(cat "$FAKE_GHGIT_LOG.local-branch" 2>/dev/null || true); if { [ -n "$FAKE_GIT_BRANCH_EXISTS" ] && [ ! -e "$FAKE_GHGIT_LOG.local-deleted" ]; } || [ "$local_branch" = "$3" ]; then echo "  $3"; fi; exit 0; fi\n' +
-    'if [ "$1" = "remote" ] && [ "$2" = "get-url" ] && [ "$3" = "origin" ]; then echo "https://github.com/fake/repo.git"; exit 0; fi\n' +
+    'if [ "$1" = "show-ref" ] && [ "$2" = "--verify" ] && [ "$3" = "--hash" ]; then branch=${4#refs/heads/}; local_branch=$(cat "$FAKE_GHGIT_LOG.local-branch" 2>/dev/null || true); if [ "$local_branch" = "$branch" ]; then cat "$FAKE_GHGIT_LOG.local-oid" 2>/dev/null || echo "5555555555555555555555555555555555555555"; exit 0; fi; if [ -n "$FAKE_GIT_BRANCH_EXISTS" ] && [ ! -e "$FAKE_GHGIT_LOG.local-deleted" ]; then echo "1111111111111111111111111111111111111111"; exit 0; fi; exit 1; fi\n' +
+    'if [ "$1" = "remote" ] && [ "$2" = "get-url" ]; then echo "https://github.com/fake/repo.git"; exit 0; fi\n' +
+    'if [ "$1" = "rev-parse" ] && [ "$2" = "--path-format=absolute" ]; then echo "$FAKE_GHGIT_LOG.objects"; exit 0; fi\n' +
+    'if [ "$1" = "rev-parse" ] && [ "$2" = "--show-object-format" ]; then echo "sha1"; exit 0; fi\n' +
+    'if [ "$1" = "rev-parse" ] && [ "$2" = "--verify" ] && [ "$3" = "FETCH_HEAD" ]; then echo "3333333333333333333333333333333333333333"; exit 0; fi\n' +
     'if [ "$1" = "rev-parse" ] && [ "$2" = "--verify" ] && [ "$3" = "HEAD" ]; then echo "3333333333333333333333333333333333333333"; exit 0; fi\n' +
     'if [ "$1" = "rev-parse" ] && [ "$2" = "--verify" ] && [ "$3" = "HEAD^{tree}" ]; then echo "4444444444444444444444444444444444444444"; exit 0; fi\n' +
     'if [ "$1" = "rev-parse" ] && [ "$2" = "--verify" ]; then echo "1111111111111111111111111111111111111111"; exit 0; fi\n' +
     'if [ "$1" = "commit-tree" ]; then echo "5555555555555555555555555555555555555555"; exit 0; fi\n' +
-    'if [ "$1" = "branch" ] && [ "$2" = "--show-current" ]; then cat "$FAKE_GHGIT_LOG.local-branch" 2>/dev/null || true; exit 0; fi\n' +
-    'if [ "$1" = "checkout" ] && [ "$2" = "-b" ]; then rm -f "$FAKE_GHGIT_LOG.local-deleted"; echo "$3" > "$FAKE_GHGIT_LOG.local-branch"; exit 0; fi\n' +
+    'if [ "$1" = "branch" ] && [ "$2" = "--show-current" ]; then if [ ! -e "$FAKE_GHGIT_LOG.detached" ]; then local_branch=$(cat "$FAKE_GHGIT_LOG.local-branch" 2>/dev/null || true); [ -n "$local_branch" ] && echo "$local_branch" || printf %s "$FAKE_GIT_CURRENT_BRANCH"; fi; exit 0; fi\n' +
+    'if [ "$1" = "checkout" ] && [ "$2" = "--detach" ]; then touch "$FAKE_GHGIT_LOG.detached"; exit 0; fi\n' +
+    'if [ "$1" = "checkout" ] && [ "$2" = "-b" ]; then rm -f "$FAKE_GHGIT_LOG.local-deleted" "$FAKE_GHGIT_LOG.detached"; echo "$3" > "$FAKE_GHGIT_LOG.local-branch"; echo "3333333333333333333333333333333333333333" > "$FAKE_GHGIT_LOG.local-oid"; exit 0; fi\n' +
     'if [ "$1" = "branch" ] && [ "$2" = "-D" ]; then touch "$FAKE_GHGIT_LOG.local-deleted"; rm -f "$FAKE_GHGIT_LOG.local-branch"; exit 0; fi\n' +
-    'if [ "$1" = "update-ref" ] && [ "$2" = "-d" ]; then touch "$FAKE_GHGIT_LOG.local-deleted"; rm -f "$FAKE_GHGIT_LOG.local-branch"; exit 0; fi\n' +
-    'if [ "$1" = "push" ] && [ "$2" = "-u" ]; then echo "$4" > "$FAKE_GHGIT_LOG.remote-branch"; exit 0; fi\n' +
-    'if [ "$1" = "ls-remote" ]; then remote_branch=$(cat "$FAKE_GHGIT_LOG.remote-branch" 2>/dev/null || true); queried=${4#refs/heads/}; if { [ -n "$FAKE_GIT_BRANCH_EXISTS" ] && [ ! -e "$FAKE_GHGIT_LOG.remote-deleted" ]; } || [ "$remote_branch" = "$queried" ]; then echo "2222222222222222222222222222222222222222 refs/heads/$queried"; fi; exit 0; fi\n' +
+    'if [ "$1" = "update-ref" ] && [ "$2" = "-d" ]; then touch "$FAKE_GHGIT_LOG.local-deleted"; rm -f "$FAKE_GHGIT_LOG.local-branch" "$FAKE_GHGIT_LOG.local-oid"; exit 0; fi\n' +
+    'if [ "$1" = "update-ref" ] && [ "$2" = "HEAD" ]; then echo "$3" > "$FAKE_GHGIT_LOG.local-oid"; exit 0; fi\n' +
+    'if [ "$1" = "push" ] && [ "$2" = "-u" ]; then echo "$4" > "$FAKE_GHGIT_LOG.remote-branch"; cp "$FAKE_GHGIT_LOG.local-oid" "$FAKE_GHGIT_LOG.remote-oid"; exit 0; fi\n' +
+    'if [ "$1" = "push" ] && [ "$2" = "--" ] && [[ "$4" = *:refs/heads/* ]]; then ref=${4#*:refs/heads/}; oid=${4%%:*}; echo "$ref" > "$FAKE_GHGIT_LOG.remote-branch"; echo "$oid" > "$FAKE_GHGIT_LOG.remote-oid"; exit 0; fi\n' +
+    'if [ "$1" = "push" ] && [[ "$2" = --force-with-lease=* ]] && [ "$3" = "--" ] && [[ "$5" != :* ]] && [[ "$5" = *:refs/heads/* ]]; then ref=${5#*:refs/heads/}; oid=${5%%:*}; echo "$ref" > "$FAKE_GHGIT_LOG.remote-branch"; echo "$oid" > "$FAKE_GHGIT_LOG.remote-oid"; exit 0; fi\n' +
+    `if [ "$1" = "push" ] && [ "$2" = "origin" ] && [[ "$3" = HEAD:* ]]; then ${JSON.stringify(HOST_GIT)} rev-parse HEAD > "$FAKE_GHGIT_LOG.remote-oid"; exit 0; fi\n` +
+    'if [ "$1" = "ls-remote" ]; then remote_branch=$(cat "$FAKE_GHGIT_LOG.remote-branch" 2>/dev/null || true); queried=${!#}; queried=${queried#refs/heads/}; if [ "$remote_branch" = "$queried" ]; then oid=$(cat "$FAKE_GHGIT_LOG.remote-oid" 2>/dev/null || echo "5555555555555555555555555555555555555555"); echo "$oid refs/heads/$queried"; elif [ -n "$FAKE_GIT_BRANCH_EXISTS" ] && [ ! -e "$FAKE_GHGIT_LOG.remote-deleted" ]; then echo "2222222222222222222222222222222222222222 refs/heads/$queried"; fi; exit 0; fi\n' +
     'if [ "$1" = "push" ] && [ "$3" = "--delete" ]; then touch "$FAKE_GHGIT_LOG.remote-deleted"; rm -f "$FAKE_GHGIT_LOG.remote-branch"; exit 0; fi\n' +
     'if [ "$1" = "push" ] && [[ "$3" = --force-with-lease=* ]]; then touch "$FAKE_GHGIT_LOG.remote-deleted"; rm -f "$FAKE_GHGIT_LOG.remote-branch"; exit 0; fi\n' +
+    'if [ "$1" = "push" ] && [[ "$2" = --force-with-lease=* ]]; then touch "$FAKE_GHGIT_LOG.remote-deleted"; rm -f "$FAKE_GHGIT_LOG.remote-branch"; exit 0; fi\n' +
     'exit 0\n';
   const fakeGh =
     '#!/usr/bin/env bash\n' +
     'echo "gh $*" >> "$FAKE_GHGIT_LOG"\n' +
-    'if [ "$1" = "repo" ] && [ "$2" = "view" ] && [[ "$*" = *nameWithOwner* ]]; then echo \'{"nameWithOwner":"fake/repo","url":"https://github.com/fake/repo"}\'; exit 0; fi\n' +
+    'if [ "$1" = "repo" ] && [ "$2" = "view" ] && [[ "$*" = *nameWithOwner* ]]; then echo \'{"nameWithOwner":"fake/repo","url":"https://github.com/fake/repo","defaultBranchRef":{"name":"main"}}\'; exit 0; fi\n' +
     'if [ "$1" = "repo" ] && [ "$2" = "view" ]; then echo "main"; exit 0; fi\n' +
-    'if [ "$1" = "issue" ] && [ "$2" = "view" ]; then echo \'{"title":"Fake ticket","url":"https://example/issues/176"}\'; exit 0; fi\n' +
-    'if [ "$1" = "pr" ] && [ "$2" = "view" ]; then printf \'{"number":%s,"headRefName":"plan-loop/issue-176","state":"OPEN","closingIssuesReferences":[{"number":176}]}\\n\' "$3"; exit 0; fi\n' +
-    'if [ "$1" = "pr" ] && [ "$2" = "list" ]; then if [ -n "$FAKE_GIT_BRANCH_EXISTS" ] && [ ! -e "$FAKE_GHGIT_LOG.pr-321-closed" ]; then echo \'[{"number":321,"isCrossRepository":false,"headRepository":{"name":"repo"},"headRepositoryOwner":{"login":"fake"}}]\'; else echo \'[]\'; fi; exit 0; fi\n' +
-    'if [ "$1" = "pr" ] && [ "$2" = "close" ]; then [ -n "$FAKE_PR_CLOSE_FAIL" ] && { echo "collaborator-secret-from-stderr" >&2; exit 1; }; touch "$FAKE_GHGIT_LOG.pr-$3-closed"; exit 0; fi\n' +
+    'if [ "$1" = "issue" ] && [ "$2" = "view" ]; then echo \'{"title":"Fake ticket","url":"https://github.com/fake/repo/issues/176"}\'; exit 0; fi\n' +
+    'if [ "$1" = "pr" ] && [ "$2" = "view" ]; then state=OPEN; [ -e "$FAKE_GHGIT_LOG.pr-$3-closed" ] && state=CLOSED; head_oid=5555555555555555555555555555555555555555; [ "$3" = "321" ] && head_oid=2222222222222222222222222222222222222222; closing_url=https://github.com/fake/repo/issues/176; [ -n "$FAKE_CLOSING_ISSUE_OTHER_REPO" ] && closing_url=https://github.com/other/repo/issues/176; printf \'{"number":%s,"url":"https://github.com/fake/repo/pull/%s","headRefName":"plan-loop/issue-176","headRefOid":"%s","state":"%s","closingIssuesReferences":[{"number":176,"url":"%s"}],"isCrossRepository":false,"headRepository":{"name":"Repo"},"headRepositoryOwner":{"login":"Fake"}}\\n\' "$3" "$3" "$head_oid" "$state" "$closing_url"; exit 0; fi\n' +
+    'if [ "$1" = "pr" ] && [ "$2" = "list" ]; then if [ -n "$FAKE_GIT_BRANCH_EXISTS" ] && [ ! -e "$FAKE_GHGIT_LOG.pr-321-closed" ]; then echo \'[{"number":321,"url":"https://github.com/fake/repo/pull/321","headRefOid":"2222222222222222222222222222222222222222","isCrossRepository":false,"headRepository":{"name":"Repo"},"headRepositoryOwner":{"login":"Fake"}},{"number":999,"url":"https://github.com/contributor/fork/pull/999","headRefOid":"9999999999999999999999999999999999999999","isCrossRepository":true,"headRepository":{"name":"fork"},"headRepositoryOwner":{"login":"contributor"}}]\'; else echo \'[]\'; fi; exit 0; fi\n' +
+    'if [ "$1" = "pr" ] && [ "$2" = "close" ]; then touch "$FAKE_GHGIT_LOG.pr-$3-closed"; exit 0; fi\n' +
     'if [ "$1" = "pr" ] && [ "$2" = "edit" ] && [ "$4" = "--body-file" ] && [ "$5" = "-" ]; then cat > "$FAKE_GHGIT_LOG.pr-body"; exit 0; fi\n' +
     // §26.9/L8 epic-promote — each `gh issue create` returns a fresh issue URL (a per-binDir counter file
     // seeded at 500) so the sub-issues carry distinct numbers the executor appends to linked_issues.
@@ -2815,7 +2826,9 @@ test('entering a bootstrap loop step prompts for its input; Confirm runs in-app 
   // Land: a draft PR was opened (recorded by the fake gh), and pickup forked the templated branch.
   const calls = readFileSync(logFile, 'utf8');
   expect(calls).toContain('gh pr create --draft');
-  expect(calls).toContain('git push -u origin plan-loop/issue-176');
+  expect(calls).toContain(
+    'git push -u origin plan-loop/issue-176',
+  );
 
   // Land: the T2 mirror renders the freshly-written state live (the watcher re-pull after the write) —
   // the rail read-out shows the tone + iteration, and the docked panel the exact v4 status string.
@@ -3858,7 +3871,7 @@ function seedFakeAgentV2Chain(binDir: string): void {
     const report = b64(exampleRoundReport({ sections, roster }));
     const workAction =
       artifact === null
-        ? `${JSON.stringify(HOST_GIT)} -c user.name=Agent -c user.email=agent@example.test commit --allow-empty -m "implement issue"`
+        ? `${JSON.stringify(HOST_GIT)} -c user.name=Agent -c user.email=agent@example.test commit --allow-empty -m "implement issue"; ${JSON.stringify(join(binDir, 'git'))} push origin HEAD:plan-loop/issue-176`
         : `mkdir -p "$(dirname ${artifact})"; printf '%s\\n' '# ${step}' '${completionMarker(step)}' > ${artifact}`;
     return [
       `    *turn-done:${consolidateKey}*) printf x >> .agent-terminal/consolidate-${step}-runs; mkdir -p .agent-terminal/loop/consolidate; printf '%s' '${b64('verdict: clean\n')}' | base64 -d > .agent-terminal/loop/consolidate/1.md; ${done(consolidateKey)} ;;`,
@@ -4173,28 +4186,36 @@ test('entering a pickup-bearing §27 def bootstraps out-of-band into app-owned s
   expect(readIf(bootstrapState)).toContain('issue: 176');
   const calls = readGhLog(logFile);
   expect(calls).toContain('git status --porcelain');
-  expect(calls).toContain('git checkout -b plan-loop/issue-176 FETCH_HEAD');
+  expect(calls).toContain(
+    'gh repo view github.com/fake/repo --json nameWithOwner,url,defaultBranchRef',
+  );
+  expect(calls).toContain(
+    'git checkout -b plan-loop/issue-176 3333333333333333333333333333333333333333',
+  );
   expect(calls).toContain(
     'git commit-tree 4444444444444444444444444444444444444444 -p 3333333333333333333333333333333333333333 -m [skip ci] start work on #176',
   );
   expect(calls).toContain(
     'git update-ref HEAD 5555555555555555555555555555555555555555 3333333333333333333333333333333333333333',
   );
-  expect(calls).toContain('git push -u origin plan-loop/issue-176');
-  expect(calls).toContain('gh issue edit 176 --add-assignee @me');
-  expect(calls).toContain('gh issue edit 176 --remove-label ready');
-  expect(calls).toContain('gh issue edit 176 --add-label in-progress');
-  expect(calls).toContain('gh pr create --draft --base main --head plan-loop/issue-176');
-  expect(calls).toContain('gh pr edit 4242 --add-label plan-draft');
+  expect(calls).toContain(
+    'git push --force-with-lease=refs/heads/plan-loop/issue-176: -- https://github.com/fake/repo.git 5555555555555555555555555555555555555555:refs/heads/plan-loop/issue-176',
+  );
+  expect(calls).toContain(
+    'gh issue edit 176 --add-assignee @me --repo github.com/fake/repo',
+  );
+  expect(calls).toContain(
+    'gh pr create --draft --base main --head plan-loop/issue-176 --title Fake ticket (closes #176) --body closes #176',
+  );
   expect(
     calls
       .split('\n')
       .filter((call) => /^gh (issue|pr) edit .*--(add|remove)-label /.test(call))
       .sort(),
   ).toEqual([
-    'gh issue edit 176 --add-label in-progress',
-    'gh issue edit 176 --remove-label ready',
-    'gh pr edit 4242 --add-label plan-draft',
+    'gh issue edit 176 --add-label in-progress --repo github.com/fake/repo',
+    'gh issue edit 176 --remove-label ready --repo github.com/fake/repo',
+    'gh pr edit 4242 --add-label plan-draft --repo github.com/fake/repo',
   ]);
   expect(existsSync(join(repo, '.agent-loop', 'state.yaml'))).toBe(false);
   await expect(termRows()).not.toContainText('agent-loop pickup');
@@ -4248,17 +4269,19 @@ test('a failed §27 pickup stays rolled back across relaunch, preserving inputs 
   expect(existsSync(join(repo, '.agent-loop', 'state.yaml'))).toBe(false);
   const failedAttemptCalls = readGhLog(logFile);
   expect(failedAttemptCalls).toContain(
-    'git checkout -b plan-loop/issue-176 FETCH_HEAD',
+    'git checkout -b plan-loop/issue-176 3333333333333333333333333333333333333333',
   );
   expect(failedAttemptCalls).toContain(
-    'git push -u origin plan-loop/issue-176',
-  );
-  expect(failedAttemptCalls).toContain('gh pr create --draft');
-  expect(failedAttemptCalls).toContain(
-    'git branch -D plan-loop/issue-176',
+    'git push --force-with-lease=refs/heads/plan-loop/issue-176: -- https://github.com/fake/repo.git 5555555555555555555555555555555555555555:refs/heads/plan-loop/issue-176',
   );
   expect(failedAttemptCalls).toContain(
-    'git push origin --delete plan-loop/issue-176',
+    'gh pr create --draft',
+  );
+  expect(failedAttemptCalls).toContain(
+    'git update-ref -d refs/heads/plan-loop/issue-176 5555555555555555555555555555555555555555',
+  );
+  expect(failedAttemptCalls).toContain(
+    'git push --force-with-lease=refs/heads/plan-loop/issue-176:5555555555555555555555555555555555555555 -- https://github.com/fake/repo.git :refs/heads/plan-loop/issue-176',
   );
   expect(existsSync(`${logFile}.local-branch`)).toBe(false);
   expect(existsSync(`${logFile}.remote-branch`)).toBe(false);
@@ -4279,7 +4302,7 @@ test('a failed §27 pickup stays rolled back across relaunch, preserving inputs 
   expect(readGhLog(logFile).match(/git status --porcelain/g)).toHaveLength(2);
   expect(
     readGhLog(logFile).match(
-      /git checkout -b plan-loop\/issue-176 FETCH_HEAD/g,
+      /git checkout -b plan-loop\/issue-176 3333333333333333333333333333333333333333/g,
     ),
   ).toHaveLength(2);
   expect(readGhLog(logFile).match(/gh pr create --draft/g)).toHaveLength(2);
@@ -4304,6 +4327,7 @@ test('the shipped §27 flow runs groom → plan → implement and resumes at pla
         CLAUDE_CONFIG_DIR: exampleConfigDir,
         PATH: `${binDir}:${process.env.PATH}`,
         FAKE_GHGIT_LOG: logFile,
+        GH_REPO: 'attacker/other',
       },
     });
 
@@ -4375,6 +4399,9 @@ test('the shipped §27 flow runs groom → plan → implement and resumes at pla
   await expect(planApprove).toBeVisible({ timeout: 10_000 });
   await planApprove.click();
   await expect.poll(() => readGhLog(logFile), { timeout: 15_000 }).toContain('gh pr ready 4242');
+  expect(readGhLog(logFile)).toContain(
+    'gh pr ready 4242 --repo github.com/fake/repo',
+  );
   await expect(flowStation(3)).toHaveClass(/\bactive\b/, {
     timeout: 40_000,
   });
@@ -4397,6 +4424,18 @@ test('the shipped §27 flow runs groom → plan → implement and resumes at pla
       { timeout: 10_000 },
     )
     .toBe('implement issue');
+  const implementationOid = execFileSync(
+    HOST_GIT,
+    ['rev-parse', 'HEAD'],
+    {
+      cwd: repo,
+      encoding: 'utf8',
+    },
+  ).trim();
+  expect(readIf(`${logFile}.remote-oid`).trim()).toBe(implementationOid);
+  expect(implementationOid).not.toBe(
+    '5555555555555555555555555555555555555555',
+  );
   expect(
     existsSync(
       join(repo, '.agent-terminal', 'loop', 'artifacts', 'diff.md'),
@@ -4514,6 +4553,7 @@ test('a confirmed §27 re-pickup wipes only the named branch and recreates it (S
       PATH: `${binDir}:${process.env.PATH}`,
       FAKE_GHGIT_LOG: logFile,
       FAKE_GIT_BRANCH_EXISTS: '1',
+      FAKE_GIT_CURRENT_BRANCH: 'plan-loop/issue-176',
       GH_REPO: 'attacker/other',
     },
   });
@@ -4548,10 +4588,13 @@ test('a confirmed §27 re-pickup wipes only the named branch and recreates it (S
     'git update-ref -d refs/heads/plan-loop/issue-176 1111111111111111111111111111111111111111',
   );
   expect(calls).toContain(
-    'git push origin --force-with-lease=refs/heads/plan-loop/issue-176:2222222222222222222222222222222222222222 :refs/heads/plan-loop/issue-176',
+    'git checkout --detach 1111111111111111111111111111111111111111',
   );
   expect(calls).toContain(
-    'gh repo view github.com/fake/repo --json nameWithOwner,url',
+    'git push --force-with-lease=refs/heads/plan-loop/issue-176:2222222222222222222222222222222222222222 -- https://github.com/fake/repo.git :refs/heads/plan-loop/issue-176',
+  );
+  expect(calls).toContain(
+    'gh repo view github.com/fake/repo --json nameWithOwner,url,defaultBranchRef',
   );
   expect(calls).toContain(
     'gh pr list --repo github.com/fake/repo --head plan-loop/issue-176',
@@ -4559,90 +4602,18 @@ test('a confirmed §27 re-pickup wipes only the named branch and recreates it (S
   expect(calls).toContain(
     'gh pr close 321 --repo github.com/fake/repo',
   );
+  expect(calls).toContain(
+    'gh pr view 321 --repo github.com/fake/repo --json number,url,state,headRefOid,isCrossRepository,headRefName,headRepository,headRepositoryOwner',
+  );
   expect(calls).not.toContain('gh pr close 999');
   expect(calls).not.toContain('git branch -D plan-loop/issue-176');
   expect(calls).not.toContain('git push origin --delete plan-loop/issue-176');
   expect(calls).toContain(
-    'git checkout -b plan-loop/issue-176 FETCH_HEAD',
+    'git checkout -b plan-loop/issue-176 3333333333333333333333333333333333333333',
   );
-  expect(calls).toContain('gh pr create --draft');
-
-  await app.close();
-  for (const dir of [repo, home, config, binDir]) {
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test('a failed exact §27 wipe blocks recreation and rolls the step back (ST3 AC5/AC7)', { tag: '@ownapp' }, async () => {
-  const repo = seedAppBootstrapFlowRepo(
-    'agent-term-e2e-v2-wipe-failure-',
-  );
-  const home = mkdtempSync(
-    join(tmpdir(), 'agent-term-e2e-v2-wipe-failure-home-'),
-  );
-  const config = seedOperatorPlanLoopConfig(
-    'agent-term-e2e-v2-wipe-failure-config-',
-  );
-  const { binDir, logFile } = seedFakeGhGit(
-    'agent-term-e2e-v2-wipe-failure-bin-',
-  );
-  app = await electron.launch({
-    args: ['out/main/index.js'],
-    env: {
-      ...process.env,
-      APP_SHELL: 'bash',
-      HOME: home,
-      APP_SUBMIT_DELAY_MS: '100',
-      CLAUDE_CONFIG_DIR: config,
-      PATH: `${binDir}:${process.env.PATH}`,
-      FAKE_GHGIT_LOG: logFile,
-      FAKE_GIT_BRANCH_EXISTS: '1',
-      FAKE_PR_CLOSE_FAIL: '1',
-    },
-  });
-  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
-  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
-
-  await typeCommand(`cd "${repo}"`);
-  await flowControl().click();
-  await flowControl().click();
-  await inputModal().locator('.field input').fill('176');
-  await inputModal().locator('.confirm').click();
-
-  const conflict = page.locator('#flow-confirm-host .flow-modal');
-  await expect(conflict).toBeVisible({ timeout: 15_000 });
-  await conflict.locator('.confirm').click();
-
-  const error = page.locator('#flow-error-host .flow-modal');
-  await expect(error).toBeVisible({ timeout: 15_000 });
-  await expect(error).not.toContainText('collaborator-secret-from-stderr');
-  await expect(flowStation(1)).toHaveClass(/\bactive\b/, {
-    timeout: 10_000,
-  });
-  await expect
-    .poll(() => auditRunFiles(home, repo).length, { timeout: 10_000 })
-    .toBeGreaterThan(0);
-  expect(
-    JSON.stringify(
-      readAuditRun(home, repo, auditRunFiles(home, repo)[0]).events,
-    ),
-  ).not.toContain('collaborator-secret-from-stderr');
-  const calls = readGhLog(logFile);
   expect(calls).toContain(
-    'gh pr close 321 --repo github.com/fake/repo',
+    'gh pr create --draft',
   );
-  expect(calls).not.toContain(
-    'git update-ref -d refs/heads/plan-loop/issue-176',
-  );
-  expect(calls).not.toContain(
-    'git push origin --force-with-lease=refs/heads/plan-loop/issue-176',
-  );
-  expect(calls).not.toContain(
-    'git checkout -b plan-loop/issue-176 FETCH_HEAD',
-  );
-  expect(
-    existsSync(join(repo, '.agent-terminal', 'loop', 'bootstrap.yaml')),
-  ).toBe(false);
 
   await app.close();
   for (const dir of [repo, home, config, binDir]) {
@@ -4859,8 +4830,14 @@ test('a late §27 pickup failure removes the branch created by that attempt befo
   await expect(errorDialog).toContainText('Bootstrap failed');
   await expect(flowStation(1)).toHaveClass(/\bactive\b/, { timeout: 10_000 });
   await expect(flowStation(2)).not.toHaveClass(/\bactive\b/);
-  await expect.poll(() => readGhLog(logFile), { timeout: 10_000 }).toContain('git branch -D plan-loop/issue-176');
-  expect(readGhLog(logFile)).toContain('git push origin --delete plan-loop/issue-176');
+  await expect
+    .poll(() => readGhLog(logFile), { timeout: 10_000 })
+    .toContain(
+      'git update-ref -d refs/heads/plan-loop/issue-176 5555555555555555555555555555555555555555',
+    );
+  expect(readGhLog(logFile)).toContain(
+    'git push --force-with-lease=refs/heads/plan-loop/issue-176:5555555555555555555555555555555555555555 -- https://github.com/fake/repo.git :refs/heads/plan-loop/issue-176',
+  );
   expect(existsSync(`${logFile}.local-branch`)).toBe(false);
   expect(existsSync(`${logFile}.remote-branch`)).toBe(false);
   expect(existsSync(join(repo, '.agent-terminal', 'loop', 'bootstrap.yaml'))).toBe(false);

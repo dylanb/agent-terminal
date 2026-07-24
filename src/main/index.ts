@@ -134,11 +134,7 @@ import { resolveExampleLoopsV2Dir } from './exampleAssets';
 import { userConfigLoopsV2Dir } from './userConfig';
 import type { CliInstallResult } from '../shared/ipc';
 import { createAppLoopBootstrapCoordinator, runAppLoopBootstrap, type AppLoopBootstrapCoordinator } from './appLoopBootstrap';
-import {
-  createRealAppBootstrapConflicts,
-  createRealBootstrapGit,
-  createRealBootstrapGitHub,
-} from './bootstrapPorts';
+import { createRealAppBootstrapPorts } from './bootstrapPorts';
 
 async function createWindow(): Promise<void> {
   const iconLoc: BundleLocation = app.isPackaged
@@ -1070,13 +1066,10 @@ async function createWindow(): Promise<void> {
       };
       pushFlowChanged();
       try {
-        const git = createRealBootstrapGit(repoDir);
+        const ports = await createRealAppBootstrapPorts(repoDir);
         return await runAppLoopBootstrap(
           {
-            git,
-            github: createRealBootstrapGitHub(repoDir),
-            conflicts: createRealAppBootstrapConflicts(repoDir),
-            rollbackCreatedBranch: (branch) => git.rollbackCreatedBranch(branch),
+            ...ports,
             writeBootstrap: (identity) => writeAppLoopBootstrap(repoDir, identity),
           },
           request,

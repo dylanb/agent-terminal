@@ -24,7 +24,7 @@ describe('isValidInstallExamplesPreview', () => {
 describe('isValidInstallExamplesApply', () => {
   const valid = {
     sessionId: SESSION_ID,
-    confirmationId: 'confirmation',
+    previewId: 'preview-1',
   };
 
   it('accepts a live-session request whose replace list is empty', () => {
@@ -42,8 +42,11 @@ describe('isValidInstallExamplesApply', () => {
     expect(isValidInstallExamplesApply({ ...valid, sessionId: 'other', replace: [] })).toBe(false);
   });
 
-  it('rejects a missing replace list or confirmation id', () => {
+  it('rejects a missing replace list', () => {
     expect(isValidInstallExamplesApply(valid)).toBe(false);
+  });
+
+  it('rejects a missing, empty, or unbounded preview identity', () => {
     expect(
       isValidInstallExamplesApply({
         sessionId: SESSION_ID,
@@ -51,9 +54,12 @@ describe('isValidInstallExamplesApply', () => {
       }),
     ).toBe(false);
     expect(
+      isValidInstallExamplesApply({ ...valid, previewId: '', replace: [] }),
+    ).toBe(false);
+    expect(
       isValidInstallExamplesApply({
         ...valid,
-        confirmationId: '',
+        previewId: 'x'.repeat(129),
         replace: [],
       }),
     ).toBe(false);

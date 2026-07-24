@@ -19,6 +19,7 @@ import {
   exampleInstallDirs,
   createInstallExamplesCoordinator,
   type InstallDestination,
+  type InstallExamplesInspection,
 } from '../../src/main/installExamples';
 import { loadFlowDefinitionLocalFirst } from '../../src/main/flow';
 import {
@@ -115,11 +116,16 @@ const okOf = (res: InstallExamplesResult): Extract<InstallExamplesResult, { ok: 
   if (!res.ok) throw new Error(`expected ok, got error: ${res.error}`);
   return res;
 };
-const previewOk = (res: InstallExamplesPreview): InstallDestinationPreview[] => {
+const previewOk = (
+  res: InstallExamplesInspection,
+): InstallDestinationPreview[] => {
   if (!res.ok) throw new Error(`expected a preview, got error: ${res.error}`);
   return res.destinations;
 };
-const conflictsFor = (res: InstallExamplesPreview, id: InstallDestinationId): string[] => {
+const conflictsFor = (
+  res: InstallExamplesInspection,
+  id: InstallDestinationId,
+): string[] => {
   const d = previewOk(res).find((x) => x.destination === id);
   return d && d.conflict ? [...d.files] : [];
 };
@@ -1109,7 +1115,7 @@ describe('previewInstallExamples — the read path is confined exactly as the wr
     const tf = targetOf('flow', flowRel);
     writeFileSync(tf, 'name: my-custom-flow\nsteps: []\n');
     chmodSync(tf, 0o000); // present but unreadable → classify's read throws EACCES, not ENOENT
-    let res: InstallExamplesPreview | undefined;
+    let res: InstallExamplesInspection | undefined;
     try {
       expect(() => {
         res = createInstallExamplesCoordinator(() => dirs).preview({
@@ -1142,12 +1148,12 @@ describe('install examples coordinator — contract guards (§6)', () => {
   const thunk = (): InstallDestination[] => dirs;
 
   it('applies for a valid live-session request', () => {
-    const coordinator = createInstallExamplesCoordinator(thunk, () => 'nonce');
+    const coordinator = createInstallExamplesCoordinator(thunk);
     const preview = coordinator.preview({ sessionId: SESSION_ID });
-    expect(preview.ok).toBe(true);
+    if (!preview.ok) throw new Error(preview.error);
     const res = coordinator.apply({
       sessionId: SESSION_ID,
-      confirmationId: 'nonce',
+      previewId: preview.previewId,
       replace: [],
     });
     expect(res.ok).toBe(true);
@@ -1163,7 +1169,6 @@ describe('install examples coordinator — contract guards (§6)', () => {
     });
     const res = coordinator.apply({
       sessionId: 'nope',
-      confirmationId: 'nonce',
       replace: ['flow'],
     });
     expect(res.ok).toBe(false);
@@ -1174,10 +1179,12 @@ describe('install examples coordinator — contract guards (§6)', () => {
   it('rejects an apply whose replace list is missing or holds an unknown destination', () => {
     const coordinator = createInstallExamplesCoordinator(thunk);
     expect(coordinator.apply({ sessionId: SESSION_ID }).ok).toBe(false);
+    const preview = coordinator.preview({ sessionId: SESSION_ID });
+    if (!preview.ok) throw new Error(preview.error);
     expect(
       coordinator.apply({
         sessionId: SESSION_ID,
-        confirmationId: 'nonce',
+        previewId: preview.previewId,
         replace: ['everything'],
       }).ok,
     ).toBe(false);
@@ -1198,10 +1205,13 @@ describe('install examples coordinator — contract guards (§6)', () => {
   });
 });
 
-describe('createInstallExamplesCoordinator — preview-bound, one-time confirmation', () => {
-  const request = (confirmationId: string, replace: InstallDestinationId[] = []) => ({
+describe('createInstallExamplesCoordinator — preview-bound, one-time authorization', () => {
+  const request = (
+    previewId: string,
+    replace: InstallDestinationId[] = [],
+  ) => ({
     sessionId: SESSION_ID,
-    confirmationId,
+    previewId,
     replace,
   });
 
@@ -1214,57 +1224,67 @@ describe('createInstallExamplesCoordinator — preview-bound, one-time confirmat
   }
 
   it('refuses apply without a main-owned preview authorization', () => {
-    const coordinator = createInstallExamplesCoordinator(() => dirs, () => 'nonce');
+    const coordinator = createInstallExamplesCoordinator(() => dirs);
 
-    const result = coordinator.apply(request('nonce'));
+    const result = coordinator.apply(request('missing'));
 
     expect(result.ok).toBe(false);
     expect(existsSync(targetOf('flow', flowRel))).toBe(false);
   });
 
-  it('consumes the exact confirmation once and rejects replay', () => {
-    const coordinator = createInstallExamplesCoordinator(() => dirs, () => 'nonce');
-    const confirmation = preview(coordinator);
+  it('consumes the preview authorization once and rejects replay', () => {
+    const coordinator = createInstallExamplesCoordinator(() => dirs);
+    const prepared = preview(coordinator);
 
-    expect(
-      coordinator.apply(request(confirmation.confirmationId)).ok,
-    ).toBe(true);
-    expect(
-      coordinator.apply(request(confirmation.confirmationId)).ok,
-    ).toBe(false);
+    expect(coordinator.apply(request(prepared.previewId)).ok).toBe(true);
+    expect(coordinator.apply(request(prepared.previewId)).ok).toBe(false);
   });
 
-  it('refuses a token other than the one returned by preview', () => {
-    const coordinator = createInstallExamplesCoordinator(() => dirs, () => 'nonce');
+  it('a second preview replaces the pending authorization with a fresh snapshot', () => {
+    mkdirSync(targetDirOf('flow'), { recursive: true });
+    writeFileSync(targetOf('flow', flowRel), 'first\n');
+    const coordinator = createInstallExamplesCoordinator(() => dirs);
     preview(coordinator);
+    writeFileSync(targetOf('flow', flowRel), 'second\n');
+    const prepared = preview(coordinator);
 
-    const result = coordinator.apply(request('forged'));
+    const result = coordinator.apply(
+      request(prepared.previewId, ['flow']),
+    );
 
-    expect(result.ok).toBe(false);
-    expect(existsSync(targetOf('flow', flowRel))).toBe(false);
+    expect(result.ok).toBe(true);
+    expect(readFileSync(targetOf('flow', flowRel), 'utf8')).not.toBe('second\n');
   });
 
-  it('never reissues a consumed confirmation id', () => {
-    const coordinator = createInstallExamplesCoordinator(
-      () => dirs,
-      () => 'reused',
+  it('a stale confirmation cannot apply or consume the authorization issued by a newer preview', () => {
+    mkdirSync(targetDirOf('flow'), { recursive: true });
+    writeFileSync(targetOf('flow', flowRel), 'first\n');
+    const coordinator = createInstallExamplesCoordinator(() => dirs);
+    const first = preview(coordinator);
+    writeFileSync(targetOf('flow', flowRel), 'second\n');
+    const second = preview(coordinator);
+
+    const stale = coordinator.apply({
+      ...request(first.previewId, ['flow']),
+    });
+    expect(stale.ok).toBe(false);
+    expect(readFileSync(targetOf('flow', flowRel), 'utf8')).toBe('second\n');
+
+    const current = coordinator.apply({
+      ...request(second.previewId, ['flow']),
+    });
+    expect(current.ok).toBe(true);
+    expect(readFileSync(targetOf('flow', flowRel), 'utf8')).not.toBe(
+      'second\n',
     );
-    const confirmation = preview(coordinator);
-    expect(
-      coordinator.apply(request(confirmation.confirmationId)).ok,
-    ).toBe(true);
-
-    const next = coordinator.preview({ sessionId: SESSION_ID });
-
-    expect(next.ok).toBe(false);
   });
 
   it('refuses replacement for a destination that had no previewed conflict', () => {
-    const coordinator = createInstallExamplesCoordinator(() => dirs, () => 'nonce');
-    const confirmation = preview(coordinator);
+    const coordinator = createInstallExamplesCoordinator(() => dirs);
+    const prepared = preview(coordinator);
 
     const result = coordinator.apply(
-      request(confirmation.confirmationId, ['flow']),
+      request(prepared.previewId, ['flow']),
     );
 
     expect(result.ok).toBe(false);
@@ -1274,12 +1294,12 @@ describe('createInstallExamplesCoordinator — preview-bound, one-time confirmat
   it('preserves a target whose bytes changed after preview', () => {
     mkdirSync(targetDirOf('flow'), { recursive: true });
     writeFileSync(targetOf('flow', flowRel), 'mine-before\n');
-    const coordinator = createInstallExamplesCoordinator(() => dirs, () => 'nonce');
-    const confirmation = preview(coordinator);
+    const coordinator = createInstallExamplesCoordinator(() => dirs);
+    const prepared = preview(coordinator);
     writeFileSync(targetOf('flow', flowRel), 'mine-after\n');
 
     const result = coordinator.apply(
-      request(confirmation.confirmationId, ['flow']),
+      request(prepared.previewId, ['flow']),
     );
 
     expect(result.ok).toBe(false);
@@ -1287,14 +1307,12 @@ describe('createInstallExamplesCoordinator — preview-bound, one-time confirmat
   });
 
   it('preserves a target that appeared after preview', () => {
-    const coordinator = createInstallExamplesCoordinator(() => dirs, () => 'nonce');
-    const confirmation = preview(coordinator);
+    const coordinator = createInstallExamplesCoordinator(() => dirs);
+    const prepared = preview(coordinator);
     mkdirSync(targetDirOf('flow'), { recursive: true });
     writeFileSync(targetOf('flow', flowRel), 'appeared\n');
 
-    const result = coordinator.apply(
-      request(confirmation.confirmationId),
-    );
+    const result = coordinator.apply(request(prepared.previewId));
 
     expect(result.ok).toBe(false);
     expect(readFileSync(targetOf('flow', flowRel), 'utf8')).toBe('appeared\n');

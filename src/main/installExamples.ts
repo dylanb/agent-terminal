@@ -31,6 +31,7 @@ import {
   type InstallDestinationPreview,
   type InstallExamplesPreview,
   type InstallExamplesResult,
+  type InstallPreviewId,
 } from '../shared/ipc';
 import { isValidInstallExamplesPreview, isValidInstallExamplesApply } from './ipcValidation';
 
@@ -442,7 +443,13 @@ function verifyAuthorization(
   return null;
 }
 
-export function previewInstallExamples(destinations: InstallDestination[]): InstallExamplesPreview {
+export type InstallExamplesInspection =
+  | { ok: true; destinations: InstallDestinationPreview[] }
+  | { ok: false; error: string };
+
+export function previewInstallExamples(
+  destinations: InstallDestination[],
+): InstallExamplesInspection {
   let resolution: Resolution;
   try {
     resolution = resolveAll(destinations);
@@ -472,7 +479,6 @@ export function previewInstallExamples(destinations: InstallDestination[]): Inst
   }
   return {
     ok: true,
-    confirmationId: 'unbound-inspection',
     destinations: out,
   };
 }
@@ -657,14 +663,9 @@ export interface InstallExamplesCoordinator {
 
 export function createInstallExamplesCoordinator(
   dirs: () => InstallDestination[],
-  createConfirmationId: () => string = randomUUID,
 ): InstallExamplesCoordinator {
-  const issuedConfirmationIds = new Set<string>();
   let pending:
-    | {
-        confirmationId: string;
-        authorization: InstallAuthorization;
-      }
+    | { previewId: string; authorization: InstallAuthorization }
     | undefined;
 
   return {
@@ -675,25 +676,14 @@ export function createInstallExamplesCoordinator(
       }
       try {
         const prepared = prepareInstallAuthorization(dirs());
-        const confirmationId = createConfirmationId();
-        if (
-          confirmationId.length === 0 ||
-          confirmationId.length > 200 ||
-          issuedConfirmationIds.has(confirmationId)
-        ) {
-          return {
-            ok: false,
-            error: 'could not create an install confirmation',
-          };
-        }
-        issuedConfirmationIds.add(confirmationId);
+        const previewId = randomUUID() as InstallPreviewId;
         pending = {
-          confirmationId,
+          previewId,
           authorization: prepared.authorization,
         };
         return {
           ok: true,
-          confirmationId,
+          previewId,
           destinations: prepared.preview,
         };
       } catch (error) {
@@ -710,10 +700,10 @@ export function createInstallExamplesCoordinator(
       const confirmation = pending;
       if (
         confirmation === undefined ||
-        confirmation.confirmationId !== message.confirmationId
+        confirmation.previewId !== message.previewId
       ) {
         return failedInstall(
-          'install confirmation is missing, stale, or already used; preview again',
+          'install preview is missing, stale, or already used; preview again',
         );
       }
       pending = undefined;

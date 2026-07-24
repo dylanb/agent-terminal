@@ -9,6 +9,7 @@
   - **Global, never override-aware.** The loops destination is the **user-level** loops directory, not whatever `resolveLoopDir` would answer for the repo the app is pointed at. A repo carrying an override has deliberately taken ownership of what that override contains; reconciling it against a newly-seeded global definition is the user's business (§24.2.3 resolution order, unchanged). An install that landed inside one repo would leave every other repo — and the packaged app opened against none — unseeded.
   - **Skills fan in.** A LoopDef names its personas by bare skill name and Claude Code discovers a skill only as `<skills root>/<skill name>/`, so each bundled skill is written **twice**: once under its own loop's directory at the loop-config destination (the §26.5 layout the engine reads), and once under the shared skills root. It is a copy-out, not a move.
   - **Non-destructive, per destination.** A file that is absent is created; a file present and byte-identical is skipped; a file present and differing is replaced **only** in a destination the user consented to. Consent in one destination never replaces files in another. Enumeration is tree-driven over the bundle, so a file added to the bundle later is seeded with no code change.
+  - **Consent names the exact preview.** A successful preview returns an opaque `previewId`; apply carries that identity back with the per-destination decisions. Main consumes only the matching one-use authorization, so an older confirmation cannot act on a snapshot created by a newer preview.
   - **All-or-nothing is bounded to a pre-write check.** **Before the first write**, every destination is checked: its bundle tree is present (an absent tree is a mispackaged build, and is refused — never enumerated as "no files" and reported as a successful install of nothing), every planned file resolves inside its destination (the link-following refusal, CWE-59), and its container is writable. If any check fails, nothing is written anywhere. A failure appearing only *after* writing has begun is **not** rolled back: the result then names every file the action created or overwrote before failing, and nothing outside that list differs from its pre-action bytes. That is a reporting guarantee, not a transactional one.
   - **The bundle is copied as bytes.** A bundled asset need not be UTF-8 text; it is written byte-for-byte, so a binary asset is neither corrupted on the way out nor left permanently mismatched against the byte-compare that classifies it.
   - **A destination root the USER has symlinked is followed, not refused.** The five destination roots are derived by the app (the home dir, `CLAUDE_CONFIG_DIR`) and never read out of untrusted content, so a link the user placed at one — a dotfiles repo, a stow-style setup — is their own configuration. The tools that *read* those directories follow it, so refusing to write through it seeds nothing the reader will load, and grants no protection: whatever could plant the link can already write the directory. The write is confined to the **resolved** root, and a link *inside* it that escapes is still refused (CWE-22/59).
@@ -17,18 +18,22 @@
 
 ```mermaid
 flowchart TD
-  CLICK["User clicks Install examples"] --> PREVIEW["examples:preview — confine and classify; issue confirmationId + exact source/target hash snapshot"]
+  CLICK["User clicks Install examples"] --> PREVIEW["examples:preview — confine and classify; return opaque previewId; retain one-use source/target snapshot in main"]
   PREVIEW -->|"refused — ok: false"| PERR["Error surfaced, nothing written"]
-  PREVIEW -->|"no destination differs"| APPLY["examples:apply {confirmationId, replace: []}"]
+  PREVIEW -->|"no destination differs"| APPLY["examples:apply {previewId, replace: []}"]
   PREVIEW -->|"one or more differ"| CONSENT["Consent step: one checkbox per CONFLICTING destination"]
   CONSENT -->|"dismissed"| NOOP["Nothing written"]
-  CONSENT -->|"confirmed"| APPLY2["examples:apply {confirmationId, replace: consented ids}"]
-  APPLY --> VERIFY{"One-time confirmation; replacements were offered; exact bundle/target hashes unchanged?"}
-  APPLY2 --> VERIFY
-  VERIFY -->|"no — changed, replayed, or not offered"| REFUSE
-  VERIFY -->|"yes"| GATE{"Bundle trees present, every file confined to its destination, every container writable?"}
-  GATE -->|"no"| REFUSE["ok: false — nothing written anywhere"]
-  GATE -->|"yes"| WRITE["Write, destination by destination"]
+  CONSENT -->|"confirmed"| APPLY2["examples:apply {previewId, replace: consented ids}"]
+  APPLY --> AUTH{"Matching pending one-use previewId; replacements were offered?"}
+  APPLY2 --> AUTH
+  AUTH -->|"no — stale, replayed, or not offered"| REFUSE
+  AUTH -->|"yes"| RESOLVE{"Bundle trees present and every file confined to its destination?"}
+  RESOLVE -->|"no"| REFUSE["ok: false — nothing written anywhere"]
+  RESOLVE -->|"yes"| VERIFY{"Exact bundle/target snapshot unchanged?"}
+  VERIFY -->|"no"| REFUSE
+  VERIFY -->|"yes"| GATE{"Overwrite authorized and every container writable?"}
+  GATE -->|"no"| REFUSE
+  GATE -->|"yes"| WRITE["Recheck each snapshot, then write destination by destination"]
   WRITE -->|"a write fails partway"| PARTIAL["ok: false — NOT rolled back; names what already landed"]
   WRITE -->|"all writes land"| RESULT["Result groups created / overwritten / skipped by destination"]
 
@@ -58,29 +63,27 @@ flowchart TD
 ```yaml
 name: feature-dev
 steps:
-  - id: groom-ticket
-    kind: manual
-    skill: groom-ticket            # reference: skill name OR file path; injected on entry (§18.6)
-    todo_template: ticket-grooming # reference: template name OR file path (§18.6/§21.2)
-    inputs:  [{name: ticket, type: github-ticket, required: true}]   # §18.4
-    outputs: [{name: ticket, type: github-ticket}]
+  - id: groom
+    kind: loop
+    loop: groom-loop
+    loop_namespace: app
+    inputs:
+      - name: ticket
+        type: github-ticket
+        required: true
   - id: plan
     kind: loop
-    loop: plan-loop                # agent-loop LoopDef name
-    bootstrap: pickup              # on ENTRY to this step: `agent-loop pickup <ticket>` → PR (§18.3)
-    inputs:  [{name: ticket, type: github-ticket, required: true}]
-    outputs: [{name: pr, type: pr}, {name: plan, type: files, paths: [plan.md]}]
+    loop: plan-loop
+    loop_namespace: app
   - id: implement
     kind: loop
     loop: impl-loop
-    inputs:  [{name: pr, type: pr, required: true}]
-    outputs: [{name: pr, type: pr}]
-  - id: open-for-review
-    kind: action
-    command: gh pr ready "$PR"     # declared shell command, run in the hosted terminal (§18.2/D30)
-    inputs:  [{name: pr, type: pr, required: true}]
-    outputs: [{name: pr, type: pr}]
+    loop_namespace: app
 ```
+
+The shipped flow binds all three steps to the app-owned §27 engine. Its V2 loop definitions declare the
+groomed-ticket and plan artifact chain, and `plan-loop` owns the in-app pickup that creates the branch and
+draft PR; the flow therefore carries no legacy `bootstrap: pickup` field and no synthetic action step.
 
 ### 18.2 Steps & kinds (D3/D7/D30)
 
@@ -91,8 +94,9 @@ steps:
 
 ### 18.3 Bootstrap is a per-step entry action (D15)
 
-- `bootstrap: pickup` runs `agent-loop pickup <input>` **on entry to the step that declares it** — which may be **any** step, including the first. A flow whose first step needs a PR bootstraps at the very start; a flow opening with a `manual` step does not. Bootstrap is therefore **not intrinsically a "flow start" action**.
-- Worked example: step 1 `manual` groom-ticket (no PR yet) → on entering step 2 `loop plan-loop` with `bootstrap: pickup`, the app runs `agent-loop pickup <ticket>` to create the PR, then `agent-loop <pr> --loop plan-loop`; output may be a single PR (+ issues) or an epic of N PRs (§23.2).
+- For a legacy-bound (§26) loop step, `bootstrap: pickup` runs `agent-loop pickup <input>` **on entry to the step that declares it** — which may be **any** step, including the first. A flow whose first step needs a PR bootstraps at the very start; a flow opening with a `manual` step does not. Bootstrap is therefore **not intrinsically a "flow start" action**.
+- An app-bound (§27) loop step does not use the flow-level `bootstrap` field. Its selected V2 loop definition owns any `pickup` recipe; the main-process §27 executor runs that recipe on entry, subject to the definition-origin gate and its own conflict policy (§27.8/§27.10).
+- Legacy worked example: step 1 `manual` groom-ticket (no PR yet) → on entering step 2 `loop plan-loop` with `bootstrap: pickup`, the app runs `agent-loop pickup <ticket>` to create the PR, then `agent-loop <pr> --loop plan-loop`; output may be a single PR (+ issues) or an epic of N PRs (§23.2).
 
 ### 18.4 Typed step inputs (D29/D34)
 

@@ -5,7 +5,10 @@ import { createInstallExamples } from '../../src/renderer/src/installExamples';
 import { createStatusBar, type StatusBar } from '../../src/renderer/src/statusBar';
 import type { StatusBarModel, StatusBarTitle } from '../../src/shared/statusBar';
 import type { DestRelativePath, InstallExamplesPreview, InstallExamplesResult } from '../../src/shared/ipc';
+import type { AppBootstrapConflictTarget } from '../../src/shared/appBootstrap';
 import { createFeedbackComposer } from '../../src/renderer/src/feedbackComposer';
+import { createConfirmDialog } from '../../src/renderer/src/confirmDialog';
+import { wireAppBootstrapConflict } from '../../src/renderer/src/wireAppBootstrapConflict';
 import { parseColor as parse, compositeOver as over, contrastRatio as contrast, ringOver, type RGBA } from '../helpers/wcag';
 
 // WCAG contrast pins for the renderer's tokens and controls. The locked "Galley · Lit" mood keeps
@@ -309,7 +312,6 @@ describe('install consent dialog stays operable with a long file manifest', () =
     createInstallExamples(host, {
       preview: async (): Promise<InstallExamplesPreview> => ({
         ok: true,
-        confirmationId: 'confirmation',
         destinations: [
           { destination: 'flow', conflict: false },
           { destination: 'loops', conflict: true, files },
@@ -364,7 +366,6 @@ describe('the consent dialog survives a short viewport (200% zoom / reflow — W
     createInstallExamples(host, {
       preview: async (): Promise<InstallExamplesPreview> => ({
         ok: true,
-        confirmationId: 'confirmation',
         destinations: [
           { destination: 'flow', conflict: false },
           { destination: 'loops', conflict: true, files },
@@ -415,7 +416,6 @@ describe('the consent dialog reflows at 320x256 (WCAG 1.4.10)', () => {
     createInstallExamples(host, {
       preview: async (): Promise<InstallExamplesPreview> => ({
         ok: true,
-        confirmationId: 'confirmation',
         destinations: [
           { destination: 'flow', conflict: false },
           { destination: 'loops', conflict: true, files },
@@ -452,6 +452,55 @@ describe('the consent dialog reflows at 320x256 (WCAG 1.4.10)', () => {
   });
 });
 
+describe('the exact bootstrap-wipe target reflows at 320px (WCAG 1.4.10)', () => {
+  beforeEach(async () => {
+    await page.viewport(320, 700);
+  });
+
+  afterEach(async () => {
+    await page.viewport(1280, 896);
+  });
+
+  for (const oidLength of [40, 64]) {
+    it(`wraps an unbroken ${oidLength}-character object id without horizontal scrolling`, () => {
+      const host = document.createElement('div');
+      document.body.replaceChildren(host);
+      const dialog = createConfirmDialog(host);
+      let emit:
+        | ((
+            conflict: AppBootstrapConflictTarget & {
+              repoKey: string;
+              step: string;
+            },
+          ) => void)
+        | undefined;
+      const dispose = wireAppBootstrapConflict({
+        onConflict: (cb) => {
+          emit = cb;
+          return () => {};
+        },
+        confirm: (options) => dialog.render(options),
+        resolve: () => {},
+      });
+
+      emit?.({
+        repository: 'github.com/owner/repository',
+        branch: 'plan-loop/issue-78',
+        localOid: 'a'.repeat(oidLength),
+        remoteOid: null,
+        pullRequests: [],
+        repoKey: '/repo',
+        step: 'plan',
+      });
+
+      const modal = host.querySelector('.flow-modal') as HTMLElement;
+      expect(modal.scrollWidth).toBeLessThanOrEqual(modal.clientWidth + 1);
+      dispose();
+      dialog.dispose();
+    });
+  }
+});
+
 // `overflow-y:auto` computes `overflow-x` to `auto` too (CSS Overflow L3 §3), so the scroll box clips ink
 // on BOTH axes at its padding box. A focus ring is ink OUTSIDE the control's border box, so a checkbox
 // flush against the clip edge loses the inline-start stroke of its ring (WCAG 1.4.11).
@@ -465,7 +514,6 @@ describe('the consent scroll box does not clip the checkbox focus ring', () => {
     createInstallExamples(host, {
       preview: async (): Promise<InstallExamplesPreview> => ({
         ok: true,
-        confirmationId: 'confirmation',
         destinations: [
           { destination: 'flow', conflict: false },
           { destination: 'loops', conflict: true, files },
@@ -512,7 +560,6 @@ describe('the consent scroll box does not clip the focus ring of a control it sc
     createInstallExamples(host, {
       preview: async (): Promise<InstallExamplesPreview> => ({
         ok: true,
-        confirmationId: 'confirmation',
         destinations: [
           { destination: 'flow', conflict: true, files: files('flow') },
           { destination: 'loops', conflict: true, files: files('loops') },

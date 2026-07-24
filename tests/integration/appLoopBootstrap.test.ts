@@ -8,8 +8,8 @@ import {
 } from '../../src/main/appLoopBootstrap';
 import type { AppLoopBootstrap } from '../../src/main/appLoopState';
 import type {
+  AppBootstrapGit,
   AppBootstrapConflicts,
-  BootstrapGit,
   BootstrapGitHub,
 } from '../../src/main/bootstrapPorts';
 import type { AppBootstrapConflictTarget } from '../../src/shared/appBootstrap';
@@ -17,6 +17,8 @@ import type { AppBootstrapConflictTarget } from '../../src/shared/appBootstrap';
 const BRANCH = 'plan-loop/issue-78';
 const LOCAL_OID = '1'.repeat(40);
 const REMOTE_OID = '2'.repeat(40);
+const CREATED_OID = '3'.repeat(40);
+const BOOTSTRAP_OID = '4'.repeat(40);
 
 function target(
   over: Partial<AppBootstrapConflictTarget> = {},
@@ -84,18 +86,21 @@ function spec(origin: AppLoopBootstrapSpec['origin'] = 'operator'): AppLoopBoots
   };
 }
 
-function fakeGit(over: { clean?: boolean; base?: string | null; branchExists?: boolean } = {}): {
-  git: BootstrapGit;
+function fakeGit(over: { clean?: boolean; base?: string | null } = {}): {
+  git: AppBootstrapGit;
   calls: string[];
   wipeConflictingBranch(branch: string): Promise<void>;
-  rollbackCreatedBranch(branch: string): Promise<void>;
+  rollbackCreatedBranch(branch: string, expectedOid: string): Promise<void>;
   hasBranch(branch: string): boolean;
 } {
   const calls: string[] = [];
   const branches = new Set<string>();
   return {
     calls,
-    rollbackCreatedBranch: async (branch) => {
+    rollbackCreatedBranch: async (branch, expectedOid) => {
+      if (expectedOid !== BOOTSTRAP_OID) {
+        throw new Error('unexpected branch identity');
+      }
       branches.delete(branch);
     },
     wipeConflictingBranch: async (branch) => {
@@ -112,15 +117,15 @@ function fakeGit(over: { clean?: boolean; base?: string | null; branchExists?: b
         calls.push('base');
         return over.base === undefined ? 'main' : over.base;
       },
-      branchExists: async (branch) => {
-        calls.push(`exists:${branch}`);
-        return over.branchExists ?? branches.has(branch);
-      },
       createBranchFromBase: async (branch, base) => {
         calls.push(`branch:${branch}<-${base}`);
         branches.add(branch);
+        return CREATED_OID;
       },
-      commitEmptyStart: async (message) => void calls.push(`commit:${message}`),
+      commitEmptyStart: async (message) => {
+        calls.push(`commit:${message}`);
+        return BOOTSTRAP_OID;
+      },
       pushBranchUpstream: async (branch) => void calls.push(`push:${branch}`),
     },
   };

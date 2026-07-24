@@ -1,14 +1,13 @@
-// The §27 approve side-effect port (§27.13 / N5) — a SIBLING of the §26 `gateGithub` port; no §26 concept
-// crosses the seam (§27.15). Depends on a domain `gh` runner, never raw exec(argv) (CODE-STANDARDS seam
-// rule); the real runner uses execFile so every value crosses as a distinct argv element (CWE-78).
-
-import { execFile } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import type { AppLoopBootstrap } from './appLoopState';
+import { runAppCommand } from './appCommand';
+import {
+  matchesGitHubRepositoryUrl,
+  resolveGitHubRepository,
+  type GitHubRepositoryIdentity,
+} from './githubRepository';
 import { isRecord } from './yamlRecord';
 
-/** The refs + confined body-file an approve side-effect acts on. Any may be absent; an action whose required
- *  input is absent fails best-effort (throws) rather than fabricating a target. */
 export interface AppGateSideEffectCtx {
   pr: number | null;
   ticket: number | null;
@@ -16,22 +15,31 @@ export interface AppGateSideEffectCtx {
   bootstrap: AppLoopBootstrap | null;
 }
 
-/** Run one declared approve `gh` action for the ctx it acts on. Throws on an unknown action or a missing
- *  required input; the caller treats the throw as a best-effort failure (surfaced + audited, §27.13 / AC3). */
-export type RunAppGateSideEffect = (action: string, ctx: AppGateSideEffectCtx) => Promise<void>;
+export type RunAppGateSideEffect = (
+  action: string,
+  ctx: AppGateSideEffectCtx,
+) => Promise<void>;
 
-/** The domain runner the port depends on: run a `gh` invocation as a structured argv (CWE-78). Injected so a
- *  test asserts the argv mapping without shelling a real `gh`; the real one is `createRealAppGateGitHub`. */
-export type GhRunner = (argv: string[], stdin?: string) => Promise<string>;
-export type ReadBodyFile = (path: string) => Promise<string>;
+export interface AppGatePullRequest {
+  number: number;
+  branch: string;
+  state: 'OPEN' | 'CLOSED' | 'MERGED';
+  closingIssues: number[];
+}
 
-const EXEC_TIMEOUT_MS = 60_000;
+export interface AppGateGitHubOperations {
+  pullRequest(number: number): Promise<AppGatePullRequest>;
+  markPullRequestReady(number: number): Promise<void>;
+  updateIssueBody(issue: number, bodyFile: string): Promise<void>;
+  publishPullRequestBody(
+    pullRequest: number,
+    bodyFile: string,
+    closingIssue: number | null,
+  ): Promise<void>;
+}
 
-/** Map a §27 approve `gh` action + ctx to its structured `gh` argv (§27.13). An action whose required input
- *  is absent throws so the caller records a best-effort failure rather than issuing a malformed call. */
 export function createAppGateGitHub(
-  runGh: GhRunner,
-  readBodyFile: ReadBodyFile = (path) => readFile(path, 'utf8'),
+  github: AppGateGitHubOperations,
 ): RunAppGateSideEffect {
   const verifyBootstrap = async (ctx: AppGateSideEffectCtx): Promise<void> => {
     const bootstrap = ctx.bootstrap;
@@ -39,33 +47,17 @@ export function createAppGateGitHub(
     if (ctx.pr !== bootstrap.pr || ctx.ticket !== bootstrap.issue) {
       throw new Error('bootstrap PR identity does not match the gate refs');
     }
-    let value: unknown;
+    let pullRequest: AppGatePullRequest;
     try {
-      value = JSON.parse(
-        await runGh([
-          'pr',
-          'view',
-          String(bootstrap.pr),
-          '--json',
-          'number,headRefName,state,closingIssuesReferences',
-        ]),
-      );
+      pullRequest = await github.pullRequest(bootstrap.pr);
     } catch {
       throw new Error('bootstrap PR identity could not be verified');
     }
-    if (!isRecord(value)) {
-      throw new Error('bootstrap PR identity could not be verified');
-    }
-    const closesIssue =
-      Array.isArray(value.closingIssuesReferences) &&
-      value.closingIssuesReferences.some(
-        (item) => isRecord(item) && item.number === bootstrap.issue,
-      );
     if (
-      value.number !== bootstrap.pr ||
-      value.headRefName !== bootstrap.branch ||
-      value.state !== 'OPEN' ||
-      !closesIssue
+      pullRequest.number !== bootstrap.pr ||
+      pullRequest.branch !== bootstrap.branch ||
+      pullRequest.state !== 'OPEN' ||
+      !pullRequest.closingIssues.includes(bootstrap.issue)
     ) {
       throw new Error('bootstrap PR identity does not match GitHub');
     }
@@ -76,35 +68,30 @@ export function createAppGateGitHub(
       case 'mark-ready':
         if (ctx.pr === null) throw new Error('no PR to mark ready');
         await verifyBootstrap(ctx);
-        await runGh(['pr', 'ready', String(ctx.pr)]);
+        await github.markPullRequestReady(ctx.pr);
         return;
       case 'update-issue-body':
-        if (ctx.ticket === null) throw new Error('no issue to publish the body to');
-        if (ctx.bodyFile === null) throw new Error('no body artifact to publish');
-        await runGh(['issue', 'edit', String(ctx.ticket), '--body-file', ctx.bodyFile]);
+        if (ctx.ticket === null) {
+          throw new Error('no issue to publish the body to');
+        }
+        if (ctx.bodyFile === null) {
+          throw new Error('no body artifact to publish');
+        }
+        await github.updateIssueBody(ctx.ticket, ctx.bodyFile);
         return;
       case 'publish-pr-body':
-        if (ctx.pr === null) throw new Error('no PR to publish the body to');
-        if (ctx.bodyFile === null) throw new Error('no body artifact to publish');
-        await verifyBootstrap(ctx);
-        if (ctx.bootstrap !== null) {
-          let body: string;
-          try {
-            body = await readBodyFile(ctx.bodyFile);
-          } catch {
-            throw new Error('could not read the PR body artifact');
-          }
-          const artifact = body.trimEnd();
-          const closingLine = `closes #${ctx.bootstrap.issue}`;
-          await runGh(
-            ['pr', 'edit', String(ctx.pr), '--body-file', '-'],
-            artifact.length === 0
-              ? `${closingLine}\n`
-              : `${artifact}\n\n${closingLine}\n`,
-          );
-          return;
+        if (ctx.pr === null) {
+          throw new Error('no PR to publish the body to');
         }
-        await runGh(['pr', 'edit', String(ctx.pr), '--body-file', ctx.bodyFile]);
+        if (ctx.bodyFile === null) {
+          throw new Error('no body artifact to publish');
+        }
+        await verifyBootstrap(ctx);
+        await github.publishPullRequestBody(
+          ctx.pr,
+          ctx.bodyFile,
+          ctx.bootstrap?.issue ?? null,
+        );
         return;
       default:
         throw new Error(`unknown approve side-effect action: ${action}`);
@@ -112,48 +99,157 @@ export function createAppGateGitHub(
   };
 }
 
-/** The production port: shells `gh` via execFile (CWE-78 — every value a distinct argv element, never a shell
- *  string), scoped to the repo working tree. */
-export function createRealAppGateGitHub(repoDir: string): RunAppGateSideEffect {
-  const environment = { ...process.env };
-  delete environment.GH_REPO;
-  return createAppGateGitHub(
-    (argv, stdin) =>
-      new Promise<string>((resolve, reject) => {
-        const child = execFile(
+function parsePullRequest(
+  value: unknown,
+  expectedNumber: number,
+  repository: GitHubRepositoryIdentity,
+): AppGatePullRequest {
+  if (
+    !isRecord(value) ||
+    value.number !== expectedNumber ||
+    typeof value.url !== 'string' ||
+    !matchesGitHubRepositoryUrl(
+      value.url,
+      repository,
+      'pull',
+      expectedNumber,
+    ) ||
+    typeof value.headRefName !== 'string' ||
+    (value.state !== 'OPEN' &&
+      value.state !== 'CLOSED' &&
+      value.state !== 'MERGED') ||
+    !Array.isArray(value.closingIssuesReferences)
+  ) {
+    throw new Error('invalid GitHub pull request identity');
+  }
+  const closingIssues = value.closingIssuesReferences.map((entry) => {
+    if (
+      !isRecord(entry) ||
+      !Number.isSafeInteger(entry.number) ||
+      (entry.number as number) <= 0 ||
+      typeof entry.url !== 'string' ||
+      !matchesGitHubRepositoryUrl(
+        entry.url,
+        repository,
+        'issues',
+        entry.number as number,
+      )
+    ) {
+      throw new Error('invalid GitHub closing issue identity');
+    }
+    return entry.number as number;
+  });
+  return {
+    number: expectedNumber,
+    branch: value.headRefName,
+    state: value.state,
+    closingIssues,
+  };
+}
+
+export function createRealAppGateGitHub(
+  repoDir: string,
+): RunAppGateSideEffect {
+  let repositoryPromise: Promise<GitHubRepositoryIdentity> | undefined;
+  const repository = (): Promise<GitHubRepositoryIdentity> =>
+    (repositoryPromise ??= resolveGitHubRepository(repoDir));
+  const github: AppGateGitHubOperations = {
+    pullRequest: async (number) => {
+      const identity = await repository();
+      const raw: unknown = JSON.parse(
+        await runAppCommand(
           'gh',
-          argv,
-          { cwd: repoDir, timeout: EXEC_TIMEOUT_MS, env: environment },
-          (err, stdout) => {
-            if (!err) {
-              resolve(stdout);
-              return;
-            }
-            const classification =
-              typeof err.code === 'number' &&
-              Number.isInteger(err.code) &&
-              err.code >= 0 &&
-              err.code <= 255
-                ? `exit ${err.code}`
-                : err.killed
-                  ? 'timed out'
-                  : 'could not start';
-            reject(
-              new Error(`GitHub command failed (${classification})`),
-            );
-          },
+          [
+            'pr',
+            'view',
+            String(number),
+            '--repo',
+            identity.selector,
+            '--json',
+            'number,url,headRefName,state,closingIssuesReferences',
+          ],
+          repoDir,
+        ),
+      );
+      return parsePullRequest(raw, number, identity);
+    },
+    markPullRequestReady: async (number) => {
+      const identity = await repository();
+      await runAppCommand(
+        'gh',
+        [
+          'pr',
+          'ready',
+          String(number),
+          '--repo',
+          identity.selector,
+        ],
+        repoDir,
+      );
+    },
+    updateIssueBody: async (issue, bodyFile) => {
+      const identity = await repository();
+      await runAppCommand(
+        'gh',
+        [
+          'issue',
+          'edit',
+          String(issue),
+          '--body-file',
+          bodyFile,
+          '--repo',
+          identity.selector,
+        ],
+        repoDir,
+      );
+    },
+    publishPullRequestBody: async (
+      pullRequest,
+      bodyFile,
+      closingIssue,
+    ) => {
+      const identity = await repository();
+      if (closingIssue === null) {
+        await runAppCommand(
+          'gh',
+          [
+            'pr',
+            'edit',
+            String(pullRequest),
+            '--body-file',
+            bodyFile,
+            '--repo',
+            identity.selector,
+          ],
+          repoDir,
         );
-        if (stdin !== undefined) {
-          if (child.stdin === null) {
-            child.kill();
-            reject(new Error('could not write GitHub CLI input'));
-          } else {
-            child.stdin.on('error', () =>
-              reject(new Error('could not write GitHub CLI input')),
-            );
-            child.stdin.end(stdin);
-          }
-        }
-      }),
-  );
+        return;
+      }
+      let body: string;
+      try {
+        body = await readFile(bodyFile, 'utf8');
+      } catch {
+        throw new Error('could not read the PR body artifact');
+      }
+      const artifact = body.trimEnd();
+      const closingLine = `closes #${closingIssue}`;
+      await runAppCommand(
+        'gh',
+        [
+          'pr',
+          'edit',
+          String(pullRequest),
+          '--body-file',
+          '-',
+          '--repo',
+          identity.selector,
+        ],
+        repoDir,
+        artifact.length === 0
+          ? `${closingLine}\n`
+          : `${artifact}\n\n${closingLine}\n`,
+      );
+    },
+  };
+  return createAppGateGitHub(github);
 }

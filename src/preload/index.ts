@@ -202,10 +202,10 @@ export const cliApi: CliApi = {
 export const examplesApi: ExamplesApi = {
   preview: () =>
     ipcRenderer.invoke(CH.installExamplesPreview, { sessionId: SESSION_ID }) as Promise<InstallExamplesPreview>,
-  apply: (confirmationId, replace) =>
+  apply: (previewId, replace) =>
     ipcRenderer.invoke(CH.installExamplesApply, {
       sessionId: SESSION_ID,
-      confirmationId,
+      previewId,
       replace,
     }) as Promise<InstallExamplesResult>,
 };

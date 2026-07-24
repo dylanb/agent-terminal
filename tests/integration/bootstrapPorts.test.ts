@@ -10,9 +10,10 @@ import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   createAppBootstrapConflicts,
-  createRealBootstrapGit,
-  type AppBootstrapConflictResources,
+  createRealAppBootstrapGit,
+  type AppBootstrapConflictStore,
 } from '../../src/main/bootstrapPorts';
+import type { AppBootstrapConflictTarget } from '../../src/shared/appBootstrap';
 
 const cleanup: string[] = [];
 
@@ -40,113 +41,148 @@ function realGitRepo(): {
 }
 
 describe('app bootstrap conflict port', () => {
-  it('never offers or closes a fork pull request that reuses the target branch name', async () => {
-    let closedSameRepositoryPullRequest = false;
-    const closed: Array<{ repository: string; pullRequest: number }> = [];
-    const resources: AppBootstrapConflictResources = {
-      localObjectId: async () => null,
-      remoteObjectId: async () => null,
-      repositoryIdentity: async () => ({
-        selector: 'github.com/owner/repository',
-        owner: 'owner',
-        name: 'repository',
-      }),
-      openPullRequests: async () => [
-        ...(
-          closedSameRepositoryPullRequest
-            ? []
-            : [
-                {
-                  number: 41,
-                  crossRepository: false,
-                  headOwner: 'owner',
-                  headRepository: 'repository',
-                },
-              ]
-        ),
-        {
-          number: 99,
-          crossRepository: true,
-          headOwner: 'contributor',
-          headRepository: 'fork',
-        },
-      ],
-      closePullRequest: async (repository, pullRequest) => {
-        closed.push({ repository, pullRequest });
-        closedSameRepositoryPullRequest = true;
+  it('condition-checks and deletes exact refs before closing pull requests', async () => {
+    const target: AppBootstrapConflictTarget = {
+      repository: 'github.com/owner/repository',
+      branch: 'plan-loop/issue-78',
+      localOid: '1'.repeat(40),
+      remoteOid: '2'.repeat(40),
+      pullRequests: [41],
+    };
+    const store: AppBootstrapConflictStore = {
+      inspect: async () => target,
+      closePullRequest: async () => {
+        if (target.localOid !== null || target.remoteOid !== null) {
+          throw new Error('ref remained when PR close was attempted');
+        }
+        target.pullRequests = [];
       },
-      currentBranch: async () => null,
-      detach: async () => {},
-      deleteLocalBranch: async () => {},
-      deleteRemoteBranch: async () => {},
+      deleteLocalBranch: async () => {
+        target.localOid = null;
+      },
+      deleteRemoteBranch: async () => {
+        target.remoteOid = null;
+      },
     };
 
-    const conflicts = createAppBootstrapConflicts(resources);
-    const target = await conflicts.inspect('plan-loop/issue-78');
+    const conflicts = createAppBootstrapConflicts(store);
+    await conflicts.wipe(await conflicts.inspect('plan-loop/issue-78'));
 
-    expect(target).toMatchObject({
-      repository: 'github.com/owner/repository',
-      pullRequests: [41],
+    expect(await conflicts.inspect('plan-loop/issue-78')).toMatchObject({
+      localOid: null,
+      remoteOid: null,
+      pullRequests: [],
     });
-    await conflicts.wipe(target);
-    expect(closed).toEqual([
-      {
-        repository: 'github.com/owner/repository',
-        pullRequest: 41,
-      },
-    ]);
   });
 
-  it('detaches a checked-out target branch before conditionally deleting its exact ref', async () => {
-    const { git } = realGitRepo();
-    git(['checkout', '-b', 'plan-loop/issue-78']);
-    const oid = git(['rev-parse', 'HEAD']);
-    const resources: AppBootstrapConflictResources = {
-      localObjectId: async (branch) => {
-        try {
-          return git(['rev-parse', '--verify', `refs/heads/${branch}`]);
-        } catch {
-          return null;
-        }
-      },
-      remoteObjectId: async () => null,
-      repositoryIdentity: async () => ({
-        selector: 'github.com/owner/repository',
-        owner: 'owner',
-        name: 'repository',
-      }),
-      openPullRequests: async () => [],
-      closePullRequest: async () => {},
-      currentBranch: async () => git(['branch', '--show-current']) || null,
-      detach: async (at) => {
-        git(['checkout', '--detach', at]);
-      },
-      deleteLocalBranch: async (branch, expectedOid) => {
-        git(['update-ref', '-d', `refs/heads/${branch}`, expectedOid]);
-      },
-      deleteRemoteBranch: async () => {},
+  it('is safely resumable when PR closure fails after the exact refs are deleted', async () => {
+    const target: AppBootstrapConflictTarget = {
+      repository: 'github.com/owner/repository',
+      branch: 'plan-loop/issue-78',
+      localOid: '1'.repeat(40),
+      remoteOid: '2'.repeat(40),
+      pullRequests: [41],
     };
+    let closeAttempts = 0;
+    const store: AppBootstrapConflictStore = {
+      inspect: async () => target,
+      deleteLocalBranch: async () => {
+        target.localOid = null;
+      },
+      deleteRemoteBranch: async () => {
+        target.remoteOid = null;
+      },
+      closePullRequest: async () => {
+        closeAttempts += 1;
+        if (closeAttempts === 1) throw new Error('transient close failure');
+        target.pullRequests = [];
+      },
+    };
+    const conflicts = createAppBootstrapConflicts(store);
+    const firstSnapshot = await conflicts.inspect(target.branch);
 
-    const conflicts = createAppBootstrapConflicts(resources);
-    const target = await conflicts.inspect('plan-loop/issue-78');
-    await conflicts.wipe(target);
+    await expect(conflicts.wipe(firstSnapshot)).rejects.toThrow(
+      /transient close failure/,
+    );
+    expect(await conflicts.inspect(target.branch)).toEqual({
+      ...firstSnapshot,
+      localOid: null,
+      remoteOid: null,
+    });
 
-    expect(target.localOid).toBe(oid);
-    expect(git(['branch', '--show-current'])).toBe('');
-    expect(() =>
-      git(['rev-parse', '--verify', 'refs/heads/plan-loop/issue-78']),
-    ).toThrow();
+    const remaining = await conflicts.inspect(target.branch);
+    await conflicts.wipe(remaining);
+    expect(await conflicts.inspect(target.branch)).toMatchObject({
+      localOid: null,
+      remoteOid: null,
+      pullRequests: [],
+    });
   });
 });
 
 describe('bootstrap start commit', () => {
+  it('does not replace a remote branch created after conflict inspection', async () => {
+    const { git, repo } = realGitRepo();
+    const remote = mkdtempSync(path.join(tmpdir(), 'bootstrap-remote-race-'));
+    cleanup.push(remote);
+    execFileSync('git', ['init', '--bare'], { cwd: remote });
+    const branch = 'plan-loop/issue-78';
+    const competingOid = git(['rev-parse', 'HEAD']);
+    git(['push', remote, `HEAD:refs/heads/${branch}`]);
+    git(['checkout', '-b', branch]);
+    const adapter = createRealAppBootstrapGit(repo, {
+      selector: 'github.com/owner/repository',
+      owner: 'owner',
+      name: 'repository',
+      defaultBranch: 'main',
+      fetchUrl: remote,
+      pushUrl: remote,
+    });
+    await adapter.commitEmptyStart('start issue 78');
+
+    await expect(adapter.pushBranchUpstream(branch)).rejects.toThrow();
+    expect(
+      execFileSync(
+        'git',
+        [
+          '--git-dir',
+          remote,
+          'rev-parse',
+          `refs/heads/${branch}`,
+        ],
+        { encoding: 'utf8' },
+      ).trim(),
+    ).toBe(competingOid);
+  });
+
+  it('refuses to roll back a local branch that moved after bootstrap', async () => {
+    const { git, repo } = realGitRepo();
+    git(['checkout', '-b', 'plan-loop/issue-78']);
+    const expectedOid = git(['rev-parse', 'HEAD']);
+    writeFileSync(path.join(repo, 'moved.txt'), 'moved\n');
+    git(['add', 'moved.txt']);
+    git(['commit', '-m', 'concurrent move']);
+
+    await expect(
+      createRealAppBootstrapGit(repo).rollbackCreatedBranch(
+        'plan-loop/issue-78',
+        expectedOid,
+      ),
+    ).rejects.toThrow();
+    expect(git(['rev-parse', 'refs/heads/plan-loop/issue-78'])).not.toBe(
+      expectedOid,
+    );
+  });
+
   it('rejects staged app-state files even though unstaged app state is ignored', async () => {
     const { repo, git } = realGitRepo();
     mkdirSync(path.join(repo, '.agent-terminal'), { recursive: true });
     writeFileSync(path.join(repo, '.agent-terminal', 'capture.txt'), 'secret\n');
     git(['add', '.agent-terminal/capture.txt']);
 
-    expect(await createRealBootstrapGit(repo).isCleanTree()).toBe(false);
+    expect(await createRealAppBootstrapGit(repo).isCleanTree()).toBe(
+      false,
+    );
   });
 
   it('creates an empty-tree commit without consuming a concurrently staged index', async () => {
@@ -156,7 +192,9 @@ describe('bootstrap start commit', () => {
     writeFileSync(path.join(repo, '.agent-terminal', 'capture.txt'), 'secret\n');
     git(['add', '.agent-terminal/capture.txt']);
 
-    await createRealBootstrapGit(repo).commitEmptyStart('start issue');
+    await createRealAppBootstrapGit(repo).commitEmptyStart(
+      'start issue',
+    );
 
     expect(() =>
       git(['show', 'HEAD:.agent-terminal/capture.txt']),

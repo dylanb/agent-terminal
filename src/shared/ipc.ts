@@ -882,6 +882,9 @@ export const INSTALL_DESTINATION_IDS = [
 ] as const;
 
 export type InstallDestinationId = (typeof INSTALL_DESTINATION_IDS)[number];
+export type InstallPreviewId = string & {
+  readonly __installPreviewId: unique symbol;
+};
 
 /** examples:preview request (§6): report which bundled files would conflict (exist and differ from
  *  the bundled content), driving the up-front consent step. Carries only sessionId — the bundle
@@ -905,7 +908,7 @@ export type InstallDestinationPreview =
 export type InstallExamplesPreview =
   | {
       ok: true;
-      confirmationId: string;
+      previewId: InstallPreviewId;
       destinations: InstallDestinationPreview[];
     }
   | { ok: false; error: string };
@@ -913,7 +916,7 @@ export type InstallExamplesPreview =
 /** examples:apply request (§6/§18.1). */
 export interface InstallExamplesApplyMsg {
   sessionId: SessionId;
-  confirmationId: string;
+  previewId: InstallPreviewId;
   replace: InstallDestinationId[];
 }
 
@@ -1137,7 +1140,7 @@ export interface CliApi {
 export interface ExamplesApi {
   preview(): Promise<InstallExamplesPreview>;
   apply(
-    confirmationId: string,
+    previewId: InstallPreviewId,
     replace: InstallDestinationId[],
   ): Promise<InstallExamplesResult>;
 }

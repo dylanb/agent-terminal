@@ -8,17 +8,23 @@ vi.mock('electron', () => ({
 
 import { ipcRenderer } from 'electron';
 import { examplesApi } from '../../src/preload/index';
-import { CH, SESSION_ID } from '../../src/shared/ipc';
+import {
+  CH,
+  SESSION_ID,
+  type InstallPreviewId,
+} from '../../src/shared/ipc';
 
 const invoke = ipcRenderer.invoke as unknown as ReturnType<typeof vi.fn>;
 
 beforeEach(() => invoke.mockClear());
 
 describe('examplesApi routing (§6 / §18.1)', () => {
+  const previewId = 'preview-1' as InstallPreviewId;
+
   it('preview invokes examples:preview with the session id and resolves the preview', async () => {
     const preview = {
       ok: true,
-      confirmationId: 'confirmation',
+      previewId,
       destinations: [
         { destination: 'flow', conflict: true, files: ['flow.yaml'] },
       ],
@@ -31,20 +37,20 @@ describe('examplesApi routing (§6 / §18.1)', () => {
 
   it('apply forwards the per-destination replace list intact', async () => {
     invoke.mockResolvedValueOnce({ ok: true, created: [], overwritten: [], skipped: [] });
-    await examplesApi.apply('confirmation', ['skills', 'commands']);
+    await examplesApi.apply(previewId, ['skills', 'commands']);
     expect(invoke).toHaveBeenCalledWith(CH.installExamplesApply, {
       sessionId: SESSION_ID,
-      confirmationId: 'confirmation',
+      previewId,
       replace: ['skills', 'commands'],
     });
   });
 
   it('apply forwards an empty replace list as an empty list, never as a missing field', async () => {
     invoke.mockResolvedValueOnce({ ok: true, created: [], overwritten: [], skipped: [] });
-    await examplesApi.apply('confirmation', []);
+    await examplesApi.apply(previewId, []);
     expect(invoke).toHaveBeenCalledWith(CH.installExamplesApply, {
       sessionId: SESSION_ID,
-      confirmationId: 'confirmation',
+      previewId,
       replace: [],
     });
   });
@@ -57,7 +63,7 @@ describe('examplesApi routing (§6 / §18.1)', () => {
       skipped: [{ destination: 'flow', files: ['flow.yaml'] }],
     };
     invoke.mockResolvedValueOnce(result);
-    expect(await examplesApi.apply('confirmation', ['commands'])).toEqual(
+    expect(await examplesApi.apply(previewId, ['commands'])).toEqual(
       result,
     );
   });

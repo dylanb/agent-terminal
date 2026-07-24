@@ -1,11 +1,23 @@
 import { execFile } from 'node:child_process';
 import { APP_STATE_DIRS } from './appStateDirs';
+import {
+  createAppGitRemote,
+  parseAppGitObjectId,
+  runAppCommand,
+} from './appCommand';
 import { numberFromGithubUrl } from '../shared/githubUrl';
 import {
   sameAppBootstrapConflictTarget,
   type AppBootstrapConflictTarget,
 } from '../shared/appBootstrap';
 import { isRecord } from './yamlRecord';
+import {
+  matchesGitHubRepositoryUrl,
+  resolveGitHubRepository,
+  validGitHubRepositorySelector,
+  type GitHubRepositoryIdentity,
+  type ResolvedGitHubRepository,
+} from './githubRepository';
 
 export interface BootstrapIssue {
   title: string;
@@ -21,6 +33,14 @@ export interface BootstrapGit {
   pushBranchUpstream(branch: string): Promise<void>;
 }
 
+export interface AppBootstrapGit {
+  isCleanTree(): Promise<boolean>;
+  resolveBaseBranch(): Promise<string | null>;
+  createBranchFromBase(branch: string, base: string): Promise<string>;
+  commitEmptyStart(message: string): Promise<string>;
+  pushBranchUpstream(branch: string): Promise<void>;
+}
+
 export interface BootstrapBranchWiper {
   wipeConflictingBranch(branch: string): Promise<void>;
 }
@@ -29,37 +49,24 @@ export interface BootstrapBranchRollback {
   rollbackCreatedBranch(branch: string): Promise<void>;
 }
 
+export interface AppBootstrapBranchRollback {
+  rollbackCreatedBranch(branch: string, expectedOid: string): Promise<void>;
+}
+
 export interface AppBootstrapConflicts {
   inspect(branch: string): Promise<AppBootstrapConflictTarget>;
   wipe(target: AppBootstrapConflictTarget): Promise<void>;
 }
 
-export interface AppBootstrapRepositoryIdentity {
-  selector: string;
-  owner: string;
-  name: string;
-}
-
-export interface AppBootstrapOpenPullRequest {
-  number: number;
-  crossRepository: boolean;
-  headOwner: string;
-  headRepository: string;
-}
-
-export interface AppBootstrapConflictResources {
-  localObjectId(branch: string): Promise<string | null>;
-  remoteObjectId(branch: string): Promise<string | null>;
-  repositoryIdentity(): Promise<AppBootstrapRepositoryIdentity>;
-  openPullRequests(
-    repository: string,
-    branch: string,
-  ): Promise<AppBootstrapOpenPullRequest[]>;
-  closePullRequest(repository: string, pullRequest: number): Promise<void>;
-  currentBranch(): Promise<string | null>;
-  detach(oid: string): Promise<void>;
+export interface AppBootstrapConflictStore {
+  inspect(branch: string): Promise<AppBootstrapConflictTarget>;
   deleteLocalBranch(branch: string, expectedOid: string): Promise<void>;
   deleteRemoteBranch(branch: string, expectedOid: string): Promise<void>;
+  closePullRequest(
+    repository: string,
+    branch: string,
+    pullRequest: number,
+  ): Promise<void>;
 }
 
 export interface BootstrapGitHub {
@@ -72,26 +79,21 @@ export interface BootstrapGitHub {
 
 const EXEC_TIMEOUT_MS = 60_000;
 
-function run(file: 'git' | 'gh', args: string[], cwd: string): Promise<string> {
+function runLegacy(
+  file: 'git' | 'gh',
+  args: string[],
+  cwd: string,
+): Promise<string> {
   return new Promise((resolve, reject) => {
-    const environment = { ...process.env };
-    delete environment.GH_REPO;
-    execFile(file, args, { cwd, timeout: EXEC_TIMEOUT_MS, env: environment }, (err, stdout) => {
-      if (!err) {
-        resolve(stdout);
-        return;
-      }
-      const classification =
-        typeof err.code === 'number' &&
-        Number.isInteger(err.code) &&
-        err.code >= 0 &&
-        err.code <= 255
-          ? `exit ${err.code}`
-          : err.killed
-            ? 'timed out'
-            : 'could not start';
-      reject(new Error(`${file} command failed (${classification})`));
-    });
+    execFile(
+      file,
+      args,
+      { cwd, timeout: EXEC_TIMEOUT_MS },
+      (error, stdout) => {
+        if (error) reject(error);
+        else resolve(stdout);
+      },
+    );
   });
 }
 
@@ -110,32 +112,59 @@ function treeIsClean(porcelain: string): boolean {
     });
 }
 
-export function createRealBootstrapGit(repoDir: string): BootstrapGit & BootstrapBranchWiper & BootstrapBranchRollback {
-  const git = (args: string[]): Promise<string> => run('git', args, repoDir);
+function legacyTreeIsClean(porcelain: string): boolean {
+  const isAppState = (path: string): boolean =>
+    APP_STATE_PREFIXES.some((prefix) => path.startsWith(prefix));
+  return porcelain
+    .split('\n')
+    .filter((line) => line.length > 0)
+    .every((line) =>
+      line.slice(3).split(' -> ').every(isAppState),
+    );
+}
+
+export function createRealBootstrapGit(
+  repoDir: string,
+): BootstrapGit & BootstrapBranchWiper & BootstrapBranchRollback {
+  const git = (args: string[]): Promise<string> =>
+    runLegacy('git', args, repoDir);
   const bestEffortGit = async (args: string[]): Promise<void> => {
     try {
       await git(args);
     } catch {
-      // A branch already absent on one side of cleanup is the target state.
+      // §26.9.
     }
   };
   return {
-    isCleanTree: async () => treeIsClean(await git(['status', '--porcelain'])),
+    isCleanTree: async () =>
+      legacyTreeIsClean(await git(['status', '--porcelain'])),
     resolveBaseBranch: async () => {
       try {
-        const out = await run('gh', ['repo', 'view', '--json', 'defaultBranchRef', '--jq', '.defaultBranchRef.name'], repoDir);
-        const name = out.trim();
-        return name.length > 0 ? name : null;
+        const output = await runLegacy(
+          'gh',
+          [
+            'repo',
+            'view',
+            '--json',
+            'defaultBranchRef',
+            '--jq',
+            '.defaultBranchRef.name',
+          ],
+          repoDir,
+        );
+        return output.trim() || null;
       } catch {
         return null;
       }
     },
     branchExists: async (branch) => {
-      const local = await git(['branch', '--list', branch]);
-      if (local.trim().length > 0) return true;
+      if ((await git(['branch', '--list', branch])).trim().length > 0) {
+        return true;
+      }
       try {
-        const remote = await run('git', ['ls-remote', '--heads', 'origin', branch], repoDir);
-        return remote.trim().length > 0;
+        return (
+          await git(['ls-remote', '--heads', 'origin', branch])
+        ).trim().length > 0;
       } catch {
         return false;
       }
@@ -146,13 +175,15 @@ export function createRealBootstrapGit(repoDir: string): BootstrapGit & Bootstra
       await bestEffortGit(['push', 'origin', '--delete', branch]);
     },
     rollbackCreatedBranch: async (branch) => {
-      const local = await git(['branch', '--list', branch]);
-      if (local.trim().length > 0) {
+      if ((await git(['branch', '--list', branch])).trim().length > 0) {
         await git(['checkout', '--detach']);
         await git(['branch', '-D', branch]);
       }
-      const remote = await git(['ls-remote', '--heads', 'origin', branch]);
-      if (remote.trim().length > 0) {
+      if (
+        (
+          await git(['ls-remote', '--heads', 'origin', branch])
+        ).trim().length > 0
+      ) {
         await git(['push', 'origin', '--delete', branch]);
       }
     },
@@ -161,135 +192,179 @@ export function createRealBootstrapGit(repoDir: string): BootstrapGit & Bootstra
       await git(['checkout', '-b', branch, 'FETCH_HEAD']);
     },
     commitEmptyStart: async (message) => {
-      const parent = parseObjectId(
+      await git(['commit', '--allow-empty', '-m', message]);
+    },
+    pushBranchUpstream: async (branch) => {
+      await git(['push', '-u', 'origin', branch]);
+    },
+  };
+}
+
+export function createRealAppBootstrapGit(
+  repoDir: string,
+  resolvedRepository?: ResolvedGitHubRepository,
+): AppBootstrapGit & AppBootstrapBranchRollback {
+  const git = (args: string[]): Promise<string> =>
+    runAppCommand('git', args, repoDir);
+  const remote = createAppGitRemote(repoDir);
+  let repositoryPromise: Promise<ResolvedGitHubRepository> | undefined;
+  const repository = (): Promise<ResolvedGitHubRepository> =>
+    resolvedRepository !== undefined
+      ? Promise.resolve(resolvedRepository)
+      : (repositoryPromise ??= resolveGitHubRepository(repoDir));
+  const localObjectId = async (branch: string): Promise<string | null> => {
+    try {
+      return parseAppGitObjectId(
+        await git([
+          'show-ref',
+          '--verify',
+          '--hash',
+          `refs/heads/${branch}`,
+        ]),
+        'local branch',
+      );
+    } catch {
+      return null;
+    }
+  };
+  const remoteObjectId = async (branch: string): Promise<string | null> =>
+    remote.readRef(
+      (await repository()).pushUrl,
+      `refs/heads/${branch}`,
+    );
+  const deleteExactBranch = async (
+    branch: string,
+    localOid: string | null,
+    remoteOid: string | null,
+  ): Promise<void> => {
+    if (localOid !== null) {
+      if ((await git(['branch', '--show-current'])).trim() === branch) {
+        await git(['checkout', '--detach', localOid]);
+      }
+      await git([
+        'update-ref',
+        '-d',
+        `refs/heads/${branch}`,
+        localOid,
+      ]);
+    }
+    if (remoteOid !== null) {
+      await remote.deleteRef(
+        (await repository()).pushUrl,
+        `refs/heads/${branch}`,
+        remoteOid,
+      );
+    }
+  };
+  return {
+    isCleanTree: async () => treeIsClean(await git(['status', '--porcelain'])),
+    resolveBaseBranch: async () => {
+      try {
+        return (await repository()).defaultBranch;
+      } catch {
+        return null;
+      }
+    },
+    rollbackCreatedBranch: async (branch, expectedOid) => {
+      const expected = parseAppGitObjectId(
+        expectedOid,
+        'created branch',
+      );
+      const local = await localObjectId(branch);
+      const remote = await remoteObjectId(branch);
+      if (local !== null && local !== expected) {
+        throw new Error(`local branch ${branch} moved during bootstrap`);
+      }
+      if (remote !== null && remote !== expected) {
+        throw new Error(`remote branch ${branch} moved during bootstrap`);
+      }
+      await deleteExactBranch(branch, local, remote);
+    },
+    createBranchFromBase: async (branch, base) => {
+      const baseOid = await remote.fetchRef(
+        (await repository()).fetchUrl,
+        base,
+      );
+      await git(['checkout', '-b', branch, baseOid]);
+      return parseAppGitObjectId(
+        await git(['rev-parse', '--verify', 'HEAD']),
+        'created branch',
+      );
+    },
+    commitEmptyStart: async (message) => {
+      const parent = parseAppGitObjectId(
         await git(['rev-parse', '--verify', 'HEAD']),
         'bootstrap parent',
       );
-      const tree = parseObjectId(
+      const tree = parseAppGitObjectId(
         await git(['rev-parse', '--verify', 'HEAD^{tree}']),
         'bootstrap tree',
       );
-      const commit = parseObjectId(
+      const commit = parseAppGitObjectId(
         await git(['commit-tree', tree, '-p', parent, '-m', message]),
         'bootstrap commit',
       );
       await git(['update-ref', 'HEAD', commit, parent]);
+      return commit;
     },
-    pushBranchUpstream: async (branch) => void (await git(['push', '-u', 'origin', branch])),
+    pushBranchUpstream: async (branch) => {
+      const oid = await localObjectId(branch);
+      if (oid === null) {
+        throw new Error(`local branch ${branch} does not exist`);
+      }
+      await remote.createRef(
+        (await repository()).pushUrl,
+        oid,
+        `refs/heads/${branch}`,
+      );
+      await git([
+        'update-ref',
+        `refs/remotes/origin/${branch}`,
+        oid,
+      ]);
+      await git([
+        'branch',
+        '--set-upstream-to',
+        `origin/${branch}`,
+        branch,
+      ]);
+    },
   };
-}
-
-const OBJECT_ID = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/;
-
-function parseObjectId(value: string, source: string): string {
-  const oid = value.trim().toLowerCase();
-  if (!OBJECT_ID.test(oid)) throw new Error(`invalid ${source} object id`);
-  return oid;
-}
-
-const REPOSITORY_PART = /^[A-Za-z0-9_.-]+$/;
-
-function repositoryFromRemote(
-  value: string,
-): AppBootstrapRepositoryIdentity | null {
-  const remote = value.trim();
-  let host: string;
-  let repositoryPath: string;
-  const scp = /^[^@]+@([^:]+):(.+)$/.exec(remote);
-  if (scp) {
-    host = scp[1] ?? '';
-    repositoryPath = scp[2] ?? '';
-  } else {
-    try {
-      const parsed = new URL(remote);
-      host = parsed.hostname;
-      repositoryPath = parsed.pathname.replace(/^\/+/, '');
-    } catch {
-      return null;
-    }
-  }
-  repositoryPath = repositoryPath.replace(/\.git$/, '');
-  const parts = repositoryPath.split('/');
-  if (
-    parts.length !== 2 ||
-    !REPOSITORY_PART.test(host) ||
-    !REPOSITORY_PART.test(parts[0] ?? '') ||
-    !REPOSITORY_PART.test(parts[1] ?? '')
-  ) {
-    return null;
-  }
-  const owner = (parts[0] ?? '').toLowerCase();
-  const name = (parts[1] ?? '').toLowerCase();
-  return {
-    selector: `${host.toLowerCase()}/${owner}/${name}`,
-    owner,
-    name,
-  };
-}
-
-function validRepositoryIdentity(
-  identity: AppBootstrapRepositoryIdentity,
-): boolean {
-  const parts = identity.selector.split('/');
-  return (
-    parts.length === 3 &&
-    REPOSITORY_PART.test(parts[0] ?? '') &&
-    REPOSITORY_PART.test(parts[1] ?? '') &&
-    REPOSITORY_PART.test(parts[2] ?? '') &&
-    (parts[1] ?? '').toLowerCase() === identity.owner.toLowerCase() &&
-    (parts[2] ?? '').toLowerCase() === identity.name.toLowerCase()
-  );
 }
 
 export function createAppBootstrapConflicts(
-  resources: AppBootstrapConflictResources,
+  store: AppBootstrapConflictStore,
 ): AppBootstrapConflicts {
   const inspect = async (branch: string): Promise<AppBootstrapConflictTarget> => {
-    const local = await resources.localObjectId(branch);
-    const remote = await resources.remoteObjectId(branch);
-    const localOid =
-      local === null ? null : parseObjectId(local, 'local branch');
-    const remoteOid =
-      remote === null ? null : parseObjectId(remote, 'remote branch');
-    const identity = await resources.repositoryIdentity();
-    if (!validRepositoryIdentity(identity)) {
-      throw new Error('invalid repository identity');
+    const target = await store.inspect(branch);
+    if (
+      target.branch !== branch ||
+      !validGitHubRepositorySelector(target.repository)
+    ) {
+      throw new Error('invalid bootstrap conflict identity');
     }
-    const repository: AppBootstrapRepositoryIdentity = {
-      selector: identity.selector.toLowerCase(),
-      owner: identity.owner.toLowerCase(),
-      name: identity.name.toLowerCase(),
-    };
-    const openPullRequests = await resources.openPullRequests(
-      repository.selector,
-      branch,
-    );
-    const pullRequests: number[] = [];
-    for (const entry of openPullRequests) {
-      if (
-        !Number.isSafeInteger(entry.number) ||
-        entry.number <= 0 ||
-        typeof entry.crossRepository !== 'boolean' ||
-        typeof entry.headOwner !== 'string' ||
-        typeof entry.headRepository !== 'string'
-      ) {
-        throw new Error('invalid open pull request identity');
-      }
-      if (entry.crossRepository) continue;
-      if (
-        entry.headOwner.trim().toLowerCase() !== repository.owner ||
-        entry.headRepository.trim().toLowerCase() !== repository.name
-      ) {
-        throw new Error('same-repository pull request has a mismatched head repository');
-      }
-      pullRequests.push(entry.number);
+    const localOid =
+      target.localOid === null
+        ? null
+        : parseAppGitObjectId(target.localOid, 'local branch');
+    const remoteOid =
+      target.remoteOid === null
+        ? null
+        : parseAppGitObjectId(target.remoteOid, 'remote branch');
+    const pullRequests = [...target.pullRequests];
+    if (
+      pullRequests.some(
+        (number) => !Number.isSafeInteger(number) || number <= 0,
+      )
+    ) {
+      throw new Error('invalid open pull request identity');
     }
     pullRequests.sort((left, right) => left - right);
     if (new Set(pullRequests).size !== pullRequests.length) {
       throw new Error('duplicate open pull request number');
     }
     return {
-      repository: repository.selector,
+      repository: target.repository.toLowerCase(),
       branch,
       localOid,
       remoteOid,
@@ -305,23 +380,23 @@ export function createAppBootstrapConflicts(
         throw new Error(`conflicting resources changed for branch ${target.branch}`);
       }
 
-      for (const pr of target.pullRequests) {
-        await resources.closePullRequest(target.repository, pr);
-      }
       if (target.localOid !== null) {
-        const currentBranch = await resources.currentBranch();
-        if (currentBranch === target.branch) {
-          await resources.detach(target.localOid);
-        }
-        await resources.deleteLocalBranch(
+        await store.deleteLocalBranch(
           target.branch,
           target.localOid,
         );
       }
       if (target.remoteOid !== null) {
-        await resources.deleteRemoteBranch(
+        await store.deleteRemoteBranch(
           target.branch,
           target.remoteOid,
+        );
+      }
+      for (const pr of target.pullRequests) {
+        await store.closePullRequest(
+          target.repository,
+          target.branch,
+          pr,
         );
       }
 
@@ -337,75 +412,47 @@ export function createAppBootstrapConflicts(
   };
 }
 
-function createRealAppBootstrapConflictResources(
+function createRealAppBootstrapConflictStore(
   repoDir: string,
-): AppBootstrapConflictResources {
-  const git = (args: string[]): Promise<string> => run('git', args, repoDir);
-  const gh = (args: string[]): Promise<string> => run('gh', args, repoDir);
-  return {
-    localObjectId: async (branch) => {
-      const local = await git(['branch', '--list', branch]);
-      if (local.trim().length === 0) return null;
-      return parseObjectId(
-        await git(['rev-parse', '--verify', `refs/heads/${branch}`]),
+  repository: ResolvedGitHubRepository,
+): AppBootstrapConflictStore {
+  const git = (args: string[]): Promise<string> =>
+    runAppCommand('git', args, repoDir);
+  const remote = createAppGitRemote(repoDir);
+  const gh = (args: string[]): Promise<string> =>
+    runAppCommand('gh', args, repoDir);
+  const expectedPullRequestHeads = new Map<string, string>();
+  const pullRequestKey = (branch: string, pullRequest: number): string =>
+    `${branch}\0${pullRequest}`;
+  const localObjectId = async (branch: string): Promise<string | null> => {
+    try {
+      return parseAppGitObjectId(
+        await git([
+          'show-ref',
+          '--verify',
+          '--hash',
+          `refs/heads/${branch}`,
+        ]),
         'local branch',
       );
-    },
-    remoteObjectId: async (branch) => {
-      const remote = (
-        await git([
-          'ls-remote',
-          '--heads',
-          'origin',
-          `refs/heads/${branch}`,
-        ])
-      ).trim();
-      return remote.length === 0
-        ? null
-        : parseObjectId(
-            remote.split(/\s+/, 1)[0] ?? '',
-            'remote branch',
-          );
-    },
-    repositoryIdentity: async () => {
-      const expected = repositoryFromRemote(
-        await git(['remote', 'get-url', 'origin']),
-      );
-      if (expected === null) throw new Error('invalid origin repository');
-      const raw: unknown = JSON.parse(
-        await gh([
-          'repo',
-          'view',
-          expected.selector,
-          '--json',
-          'nameWithOwner,url',
-        ]),
-      );
-      if (
-        !isRecord(raw) ||
-        typeof raw.nameWithOwner !== 'string' ||
-        typeof raw.url !== 'string'
-      ) {
-        throw new Error('invalid repository identity');
-      }
-      const viewed = repositoryFromRemote(raw.url);
-      if (
-        viewed === null ||
-        viewed.selector !== expected.selector ||
-        raw.nameWithOwner.trim().toLowerCase() !==
-          `${expected.owner}/${expected.name}`
-      ) {
-        throw new Error('origin repository does not match GitHub');
-      }
-      return expected;
-    },
-    openPullRequests: async (repository, branch) => {
+    } catch {
+      return null;
+    }
+  };
+  const remoteObjectId = async (branch: string): Promise<string | null> =>
+    remote.readRef(
+      repository.pushUrl,
+      `refs/heads/${branch}`,
+    );
+  return {
+    inspect: async (branch) => {
+      expectedPullRequestHeads.clear();
       const raw: unknown = JSON.parse(
         await gh([
           'pr',
           'list',
           '--repo',
-          repository,
+          repository.selector,
           '--head',
           branch,
           '--state',
@@ -413,16 +460,19 @@ function createRealAppBootstrapConflictResources(
           '--limit',
           '1000',
           '--json',
-          'number,isCrossRepository,headRepository,headRepositoryOwner',
+          'number,url,headRefOid,isCrossRepository,headRepository,headRepositoryOwner',
         ]),
       );
       if (!Array.isArray(raw)) {
         throw new Error('invalid open pull request list');
       }
-      return raw.map((entry): AppBootstrapOpenPullRequest => {
+      const pullRequests: number[] = [];
+      for (const entry of raw) {
         if (
           !isRecord(entry) ||
           typeof entry.number !== 'number' ||
+          typeof entry.url !== 'string' ||
+          typeof entry.headRefOid !== 'string' ||
           typeof entry.isCrossRepository !== 'boolean' ||
           !isRecord(entry.headRepository) ||
           typeof entry.headRepository.name !== 'string' ||
@@ -431,63 +481,251 @@ function createRealAppBootstrapConflictResources(
         ) {
           throw new Error('invalid open pull request identity');
         }
-        return {
-          number: entry.number,
-          crossRepository: entry.isCrossRepository,
-          headOwner: entry.headRepositoryOwner.login,
-          headRepository: entry.headRepository.name,
-        };
-      });
+        if (entry.isCrossRepository) continue;
+        const headOid = parseAppGitObjectId(
+          entry.headRefOid,
+          'pull request head',
+        );
+        if (
+          entry.headRepositoryOwner.login.trim().toLowerCase() !==
+            repository.owner ||
+          entry.headRepository.name.trim().toLowerCase() !==
+            repository.name ||
+          !matchesGitHubRepositoryUrl(
+            entry.url,
+            repository,
+            'pull',
+            entry.number,
+          )
+        ) {
+          throw new Error(
+            'same-repository pull request has a mismatched identity',
+          );
+        }
+        pullRequests.push(entry.number);
+        expectedPullRequestHeads.set(
+          pullRequestKey(branch, entry.number),
+          headOid,
+        );
+      }
+      return {
+        repository: repository.selector,
+        branch,
+        localOid: await localObjectId(branch),
+        remoteOid: await remoteObjectId(branch),
+        pullRequests,
+      };
     },
-    closePullRequest: async (repository, pullRequest) =>
-      void (
+    closePullRequest: async (repositorySelector, branch, pullRequest) => {
+      if (repositorySelector !== repository.selector) {
+        throw new Error('conflict repository changed before PR close');
+      }
+      const expectedHeadOid = expectedPullRequestHeads.get(
+        pullRequestKey(branch, pullRequest),
+      );
+      if (expectedHeadOid === undefined) {
+        throw new Error('pull request was not freshly inspected');
+      }
+      const raw: unknown = JSON.parse(
         await gh([
           'pr',
-          'close',
+          'view',
           String(pullRequest),
           '--repo',
+          repository.selector,
+          '--json',
+          'number,url,state,headRefOid,isCrossRepository,headRefName,headRepository,headRepositoryOwner',
+        ]),
+      );
+      if (
+        !isRecord(raw) ||
+        raw.number !== pullRequest ||
+        typeof raw.url !== 'string' ||
+        !matchesGitHubRepositoryUrl(
+          raw.url,
           repository,
-        ])
-      ),
-    currentBranch: async () =>
-      (await git(['branch', '--show-current'])).trim() || null,
-    detach: async (oid) => void (await git(['checkout', '--detach', oid])),
-    deleteLocalBranch: async (branch, expectedOid) =>
-      void (
-        await git([
+          'pull',
+          pullRequest,
+        ) ||
+        typeof raw.state !== 'string' ||
+        typeof raw.headRefOid !== 'string' ||
+        parseAppGitObjectId(raw.headRefOid, 'pull request head') !==
+          expectedHeadOid ||
+        raw.isCrossRepository !== false ||
+        raw.headRefName !== branch ||
+        !isRecord(raw.headRepository) ||
+        typeof raw.headRepository.name !== 'string' ||
+        raw.headRepository.name.trim().toLowerCase() !==
+          repository.name ||
+        !isRecord(raw.headRepositoryOwner) ||
+        typeof raw.headRepositoryOwner.login !== 'string' ||
+        raw.headRepositoryOwner.login.trim().toLowerCase() !==
+          repository.owner
+      ) {
+        throw new Error('pull request changed before close');
+      }
+      if (raw.state === 'CLOSED') return;
+      if (raw.state !== 'OPEN') {
+        throw new Error('pull request is not open');
+      }
+      await gh([
+        'pr',
+        'close',
+        String(pullRequest),
+        '--repo',
+        repository.selector,
+      ]);
+    },
+    deleteLocalBranch: async (branch, expectedOid) => {
+      if ((await git(['branch', '--show-current'])).trim() === branch) {
+        await git(['checkout', '--detach', expectedOid]);
+      }
+      await git([
           'update-ref',
           '-d',
           `refs/heads/${branch}`,
           expectedOid,
-        ])
-      ),
+      ]);
+    },
     deleteRemoteBranch: async (branch, expectedOid) =>
-      void (
-        await git([
-          'push',
-          'origin',
-          `--force-with-lease=refs/heads/${branch}:${expectedOid}`,
-          `:refs/heads/${branch}`,
-        ])
+      remote.deleteRef(
+        repository.pushUrl,
+        `refs/heads/${branch}`,
+        expectedOid,
       ),
   };
 }
 
 export function createRealAppBootstrapConflicts(
   repoDir: string,
+  resolvedRepository?: ResolvedGitHubRepository,
 ): AppBootstrapConflicts {
-  return createAppBootstrapConflicts(
-    createRealAppBootstrapConflictResources(repoDir),
-  );
+  let conflicts: AppBootstrapConflicts | undefined;
+  const resolve = async (): Promise<AppBootstrapConflicts> => {
+    if (conflicts === undefined) {
+      const repository =
+        resolvedRepository ?? (await resolveGitHubRepository(repoDir));
+      conflicts = createAppBootstrapConflicts(
+        createRealAppBootstrapConflictStore(repoDir, repository),
+      );
+    }
+    return conflicts;
+  };
+  return {
+    inspect: async (branch) => (await resolve()).inspect(branch),
+    wipe: async (target) => (await resolve()).wipe(target),
+  };
 }
 
-export function createRealBootstrapGitHub(repoDir: string): BootstrapGitHub {
-  const gh = (args: string[]): Promise<string> => run('gh', args, repoDir);
+export function createRealBootstrapGitHub(
+  repoDir: string,
+): BootstrapGitHub {
+  const gh = (args: string[]): Promise<string> =>
+    runLegacy('gh', args, repoDir);
   return {
     viewIssue: async (issue) => {
       try {
-        const parsed = JSON.parse(await gh(['issue', 'view', String(issue), '--json', 'title,url']));
-        if (typeof parsed?.title === 'string' && typeof parsed?.url === 'string') {
+        const parsed: unknown = JSON.parse(
+          await gh([
+            'issue',
+            'view',
+            String(issue),
+            '--json',
+            'title,url',
+          ]),
+        );
+        return isRecord(parsed) &&
+          typeof parsed.title === 'string' &&
+          typeof parsed.url === 'string'
+          ? { title: parsed.title, url: parsed.url }
+          : null;
+      } catch {
+        return null;
+      }
+    },
+    assignIssueToSelf: async (issue) => {
+      await gh([
+        'issue',
+        'edit',
+        String(issue),
+        '--add-assignee',
+        '@me',
+      ]);
+    },
+    setIssueLabel: async (issue, label, on) => {
+      await gh([
+        'issue',
+        'edit',
+        String(issue),
+        on ? '--add-label' : '--remove-label',
+        label,
+      ]);
+    },
+    createDraftPr: async ({ base, head, title, body }) =>
+      numberFromGithubUrl(
+        await gh([
+          'pr',
+          'create',
+          '--draft',
+          '--base',
+          base,
+          '--head',
+          head,
+          '--title',
+          title,
+          '--body',
+          body,
+        ]),
+      ),
+    setPrLabel: async (pr, label, on) => {
+      await gh([
+        'pr',
+        'edit',
+        String(pr),
+        on ? '--add-label' : '--remove-label',
+        label,
+      ]);
+    },
+  };
+}
+
+export function createRealAppBootstrapGitHub(
+  repoDir: string,
+  resolvedRepository?: GitHubRepositoryIdentity,
+): BootstrapGitHub {
+  let repositoryPromise: Promise<GitHubRepositoryIdentity> | undefined;
+  const repository = (): Promise<GitHubRepositoryIdentity> =>
+    resolvedRepository !== undefined
+      ? Promise.resolve(resolvedRepository)
+      : (repositoryPromise ??= resolveGitHubRepository(repoDir));
+  const gh = (args: string[]): Promise<string> =>
+    runAppCommand('gh', args, repoDir);
+  return {
+    viewIssue: async (issue) => {
+      try {
+        const identity = await repository();
+        const parsed: unknown = JSON.parse(
+          await gh([
+            'issue',
+            'view',
+            String(issue),
+            '--repo',
+            identity.selector,
+            '--json',
+            'title,url',
+          ]),
+        );
+        if (
+          isRecord(parsed) &&
+          typeof parsed.title === 'string' &&
+          typeof parsed.url === 'string' &&
+          matchesGitHubRepositoryUrl(
+            parsed.url,
+            identity,
+            'issues',
+            issue,
+          )
+        ) {
           return { title: parsed.title, url: parsed.url };
         }
         return null;
@@ -495,14 +733,117 @@ export function createRealBootstrapGitHub(repoDir: string): BootstrapGitHub {
         return null;
       }
     },
-    assignIssueToSelf: async (issue) => void (await gh(['issue', 'edit', String(issue), '--add-assignee', '@me'])),
-    setIssueLabel: async (issue, label, on) =>
-      void (await gh(['issue', 'edit', String(issue), on ? '--add-label' : '--remove-label', label])),
-    createDraftPr: async ({ base, head, title, body }) => {
-      const out = await gh(['pr', 'create', '--draft', '--base', base, '--head', head, '--title', title, '--body', body]);
-      return numberFromGithubUrl(out);
+    assignIssueToSelf: async (issue) => {
+      const identity = await repository();
+      await gh([
+        'issue',
+        'edit',
+        String(issue),
+        '--add-assignee',
+        '@me',
+        '--repo',
+        identity.selector,
+      ]);
     },
-    setPrLabel: async (pr, label, on) =>
-      void (await gh(['pr', 'edit', String(pr), on ? '--add-label' : '--remove-label', label])),
+    setIssueLabel: async (issue, label, on) => {
+      const identity = await repository();
+      await gh([
+        'issue',
+        'edit',
+        String(issue),
+        on ? '--add-label' : '--remove-label',
+        label,
+        '--repo',
+        identity.selector,
+      ]);
+    },
+    createDraftPr: async ({ base, head, title, body }) => {
+      const identity = await repository();
+      const out = await gh([
+        'pr',
+        'create',
+        '--draft',
+        '--base',
+        base,
+        '--head',
+        head,
+        '--title',
+        title,
+        '--body',
+        body,
+        '--repo',
+        identity.selector,
+      ]);
+      const number = numberFromGithubUrl(out);
+      return number !== null &&
+        matchesGitHubRepositoryUrl(out.trim(), identity, 'pull', number)
+        ? number
+        : null;
+    },
+    setPrLabel: async (pr, label, on) => {
+      const identity = await repository();
+      await gh([
+        'pr',
+        'edit',
+        String(pr),
+        on ? '--add-label' : '--remove-label',
+        label,
+        '--repo',
+        identity.selector,
+      ]);
+    },
+  };
+}
+
+export interface RealAppBootstrapPorts {
+  git: AppBootstrapGit;
+  github: BootstrapGitHub;
+  conflicts: AppBootstrapConflicts;
+  rollbackCreatedBranch(branch: string, expectedOid: string): Promise<void>;
+}
+
+export function createRealAppBootstrapPorts(
+  repoDir: string,
+): RealAppBootstrapPorts {
+  let portsPromise: Promise<RealAppBootstrapPorts> | undefined;
+  const ports = (): Promise<RealAppBootstrapPorts> =>
+    (portsPromise ??= resolveGitHubRepository(repoDir).then((repository) => {
+      const git = createRealAppBootstrapGit(repoDir, repository);
+      return {
+        git,
+        github: createRealAppBootstrapGitHub(repoDir, repository),
+        conflicts: createRealAppBootstrapConflicts(repoDir, repository),
+        rollbackCreatedBranch: (branch, expectedOid) =>
+          git.rollbackCreatedBranch(branch, expectedOid),
+      };
+    }));
+  return {
+    git: {
+      isCleanTree: async () => (await ports()).git.isCleanTree(),
+      resolveBaseBranch: async () => (await ports()).git.resolveBaseBranch(),
+      createBranchFromBase: async (branch, base) =>
+        (await ports()).git.createBranchFromBase(branch, base),
+      commitEmptyStart: async (message) =>
+        (await ports()).git.commitEmptyStart(message),
+      pushBranchUpstream: async (branch) =>
+        (await ports()).git.pushBranchUpstream(branch),
+    },
+    github: {
+      viewIssue: async (issue) => (await ports()).github.viewIssue(issue),
+      assignIssueToSelf: async (issue) =>
+        (await ports()).github.assignIssueToSelf(issue),
+      setIssueLabel: async (issue, label, on) =>
+        (await ports()).github.setIssueLabel(issue, label, on),
+      createDraftPr: async (args) =>
+        (await ports()).github.createDraftPr(args),
+      setPrLabel: async (pullRequest, label, on) =>
+        (await ports()).github.setPrLabel(pullRequest, label, on),
+    },
+    conflicts: {
+      inspect: async (branch) => (await ports()).conflicts.inspect(branch),
+      wipe: async (target) => (await ports()).conflicts.wipe(target),
+    },
+    rollbackCreatedBranch: async (branch, expectedOid) =>
+      (await ports()).rollbackCreatedBranch(branch, expectedOid),
   };
 }
