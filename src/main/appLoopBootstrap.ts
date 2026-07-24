@@ -1,10 +1,8 @@
 import type { AppLoopEntry } from './appLoopEngine';
 import type { AppLoopBootstrap } from './appLoopState';
-import type {
-  AppBootstrapGit,
-  AppBootstrapConflicts,
-  BootstrapGitHub,
-} from './bootstrapPorts';
+import type { BootstrapGitHub } from './bootstrapPorts';
+import type { AppBootstrapGit } from './appBootstrapGit';
+import type { AppBootstrapConflicts } from './appBootstrapConflicts';
 import { errMsg } from './errno';
 import type { AppBootstrapAuditKind } from '../shared/audit';
 import {

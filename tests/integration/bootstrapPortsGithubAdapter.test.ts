@@ -4,10 +4,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { runAppLoopBootstrap } from '../../src/main/appLoopBootstrap';
-import {
-  createRealAppBootstrapConflicts,
-  createRealAppBootstrapGitHub,
-} from '../../src/main/bootstrapPorts';
+import { createRealAppBootstrapConflicts } from '../../src/main/appBootstrapConflicts';
+import { createRealAppBootstrapGitHub } from '../../src/main/appBootstrapGithub';
 import type { GitHubRepositoryIdentity } from '../../src/main/githubRepository';
 
 const cleanup: string[] = [];

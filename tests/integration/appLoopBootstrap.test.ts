@@ -7,11 +7,9 @@ import {
   type AppLoopBootstrapSpec,
 } from '../../src/main/appLoopBootstrap';
 import type { AppLoopBootstrap } from '../../src/main/appLoopState';
-import type {
-  AppBootstrapGit,
-  AppBootstrapConflicts,
-  BootstrapGitHub,
-} from '../../src/main/bootstrapPorts';
+import type { BootstrapGitHub } from '../../src/main/bootstrapPorts';
+import type { AppBootstrapGit } from '../../src/main/appBootstrapGit';
+import type { AppBootstrapConflicts } from '../../src/main/appBootstrapConflicts';
 import type { AppBootstrapConflictTarget } from '../../src/shared/appBootstrap';
 
 const BRANCH = 'plan-loop/issue-78';

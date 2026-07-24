@@ -134,7 +134,7 @@ import { resolveExampleLoopsV2Dir } from './exampleAssets';
 import { userConfigLoopsV2Dir } from './userConfig';
 import type { CliInstallResult } from '../shared/ipc';
 import { createAppLoopBootstrapCoordinator, runAppLoopBootstrap, type AppLoopBootstrapCoordinator } from './appLoopBootstrap';
-import { createRealAppBootstrapPorts } from './bootstrapPorts';
+import { createRealAppBootstrapPorts } from './appBootstrapPorts';
 
 async function createWindow(): Promise<void> {
   const iconLoc: BundleLocation = app.isPackaged

@@ -443,6 +443,74 @@ function verifyAuthorization(
   return null;
 }
 
+interface PreparedInstallExamples {
+  destinations: InstallDestinationPreview[];
+  authorization: InstallAuthorization;
+}
+
+type InstallExamplesPreparation =
+  | { ok: true; prepared: PreparedInstallExamples }
+  | { ok: false; error: string };
+
+function prepareInstallExamples(
+  destinations: InstallDestination[],
+): InstallExamplesPreparation {
+  let resolution: Resolution;
+  try {
+    resolution = resolveAll(destinations);
+  } catch (error) {
+    return {
+      ok: false,
+      error: `Could not check the install targets: ${errMsg(error)}`,
+    };
+  }
+  if (!resolution.ok) return resolution;
+
+  try {
+    const files = captureInstallSnapshot(resolution.destinations);
+    const conflicts = new Set<InstallDestinationId>();
+    const previews = resolution.destinations.map((destination) => {
+      const differing = files
+        .filter(
+          (file) =>
+            file.destination === destination.id &&
+            file.targetHash !== null &&
+            file.targetHash !== file.sourceHash,
+        )
+        .map((file) => file.rel);
+      if (differing.length === 0) {
+        return {
+          destination: destination.id,
+          conflict: false as const,
+        };
+      }
+      if (!allowsOverwrite(destination.overwrite)) {
+        throw new Error(
+          `Could not install ${destination.id}: its overwrite policy does not authorize replacing ${differing.join(', ')}`,
+        );
+      }
+      conflicts.add(destination.id);
+      return {
+        destination: destination.id,
+        conflict: true as const,
+        files: differing,
+      };
+    });
+    return {
+      ok: true,
+      prepared: {
+        destinations: previews,
+        authorization: { files, conflicts },
+      },
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      error: `Could not check the install targets: ${errMsg(error)}`,
+    };
+  }
+}
+
 export type InstallExamplesInspection =
   | { ok: true; destinations: InstallDestinationPreview[] }
   | { ok: false; error: string };
@@ -450,36 +518,11 @@ export type InstallExamplesInspection =
 export function previewInstallExamples(
   destinations: InstallDestination[],
 ): InstallExamplesInspection {
-  let resolution: Resolution;
-  try {
-    resolution = resolveAll(destinations);
-  } catch (e) {
-    return { ok: false, error: `Could not check the install targets: ${errMsg(e)}` };
-  }
-  if (!resolution.ok) return resolution;
-
-  const out: InstallDestinationPreview[] = [];
-  for (const dest of resolution.destinations) {
-    let files: DestRelativePath[];
-    try {
-      files = dest.files.filter((f) => classify(f.src, f.real) === 'differ').map((f) => f.rel);
-    } catch (e) {
-      // classify rethrows a non-ENOENT read (an unreadable target). The contract carries a refusal arm for
-      // exactly this: an empty destination list would otherwise read as "nothing conflicts" and drive an
-      // apply the user never consented to.
-      return { ok: false, error: `Could not check the install targets: ${errMsg(e)}` };
-    }
-    if (files.length > 0 && !allowsOverwrite(dest.overwrite)) {
-      return {
-        ok: false,
-        error: `Could not install ${dest.id}: its overwrite policy does not authorize replacing ${files.join(', ')}`,
-      };
-    }
-    out.push(files.length === 0 ? { destination: dest.id, conflict: false } : { destination: dest.id, conflict: true, files });
-  }
+  const preparation = prepareInstallExamples(destinations);
+  if (!preparation.ok) return preparation;
   return {
     ok: true,
-    destinations: out,
+    destinations: preparation.prepared.destinations,
   };
 }
 
@@ -619,43 +662,6 @@ function failedInstall(error: string): InstallExamplesResult {
   };
 }
 
-function prepareInstallAuthorization(
-  destinations: InstallDestination[],
-): { preview: InstallDestinationPreview[]; authorization: InstallAuthorization } {
-  const resolution = resolveAll(destinations);
-  if (!resolution.ok) throw new Error(resolution.error);
-  const files = captureInstallSnapshot(resolution.destinations);
-  const conflicts = new Set<InstallDestinationId>();
-  const preview = resolution.destinations.map((destination) => {
-    const differing = files
-      .filter(
-        (file) =>
-          file.destination === destination.id &&
-          file.targetHash !== null &&
-          file.targetHash !== file.sourceHash,
-      )
-      .map((file) => file.rel);
-    if (differing.length === 0) {
-      return {
-        destination: destination.id,
-        conflict: false as const,
-      };
-    }
-    if (!allowsOverwrite(destination.overwrite)) {
-      throw new Error(
-        `Could not install ${destination.id}: its overwrite policy does not authorize replacing ${differing.join(', ')}`,
-      );
-    }
-    conflicts.add(destination.id);
-    return {
-      destination: destination.id,
-      conflict: true as const,
-      files: differing,
-    };
-  });
-  return { preview, authorization: { files, conflicts } };
-}
-
 export interface InstallExamplesCoordinator {
   preview(message: unknown): InstallExamplesPreview;
   apply(message: unknown): InstallExamplesResult;
@@ -674,24 +680,18 @@ export function createInstallExamplesCoordinator(
       if (!isValidInstallExamplesPreview(message)) {
         return { ok: false, error: 'invalid preview request' };
       }
-      try {
-        const prepared = prepareInstallAuthorization(dirs());
-        const previewId = randomUUID() as InstallPreviewId;
-        pending = {
-          previewId,
-          authorization: prepared.authorization,
-        };
-        return {
-          ok: true,
-          previewId,
-          destinations: prepared.preview,
-        };
-      } catch (error) {
-        return {
-          ok: false,
-          error: `Could not check the install targets: ${errMsg(error)}`,
-        };
-      }
+      const preparation = prepareInstallExamples(dirs());
+      if (!preparation.ok) return preparation;
+      const previewId = randomUUID() as InstallPreviewId;
+      pending = {
+        previewId,
+        authorization: preparation.prepared.authorization,
+      };
+      return {
+        ok: true,
+        previewId,
+        destinations: preparation.prepared.destinations,
+      };
     },
     apply(message) {
       if (!isValidInstallExamplesApply(message)) {

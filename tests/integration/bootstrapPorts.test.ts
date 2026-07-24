@@ -10,9 +10,9 @@ import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   createAppBootstrapConflicts,
-  createRealAppBootstrapGit,
   type AppBootstrapConflictStore,
-} from '../../src/main/bootstrapPorts';
+} from '../../src/main/appBootstrapConflicts';
+import { createRealAppBootstrapGit } from '../../src/main/appBootstrapGit';
 import type { AppBootstrapConflictTarget } from '../../src/shared/appBootstrap';
 
 const cleanup: string[] = [];

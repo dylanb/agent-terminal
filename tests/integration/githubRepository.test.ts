@@ -14,7 +14,7 @@ import {
   validGitHubRepositorySelector,
   type GitHubRepositoryIdentity,
 } from '../../src/main/githubRepository';
-import { createRealAppBootstrapGit } from '../../src/main/bootstrapPorts';
+import { createRealAppBootstrapGit } from '../../src/main/appBootstrapGit';
 
 const cleanup: string[] = [];
 const originalPath = process.env.PATH;
