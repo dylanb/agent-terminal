@@ -124,8 +124,8 @@ const flowApi: FlowApi = {
   restart: (repoKey) => ipcRenderer.invoke(CH.flowRestart, { sessionId: SESSION_ID, repoKey }) as Promise<FlowStateView>,
   undo: (repoKey) => ipcRenderer.invoke(CH.flowUndo, { sessionId: SESSION_ID, repoKey }) as Promise<FlowStateView>,
   terminate: (repoKey) => ipcRenderer.invoke(CH.flowTerminate, { sessionId: SESSION_ID, repoKey }) as Promise<FlowStateView>,
-  provideInput: (repoKey, values) =>
-    ipcRenderer.invoke(CH.flowProvideInput, { sessionId: SESSION_ID, repoKey, values }) as Promise<FlowStateView>,
+  provideInput: (repoKey, step, values) =>
+    ipcRenderer.invoke(CH.flowProvideInput, { sessionId: SESSION_ID, repoKey, step, values }) as Promise<FlowStateView>,
   setTitle: (repoKey, title) =>
     ipcRenderer.invoke(CH.flowSetTitle, { sessionId: SESSION_ID, repoKey, title }) as Promise<FlowStateView>,
   onStateChanged: (cb) => {
@@ -139,7 +139,7 @@ const flowApi: FlowApi = {
     return () => ipcRenderer.removeListener(CH.flowRevealLoop, handler);
   },
   onBootstrapError: (cb) => {
-    const handler = (_e: unknown, msg: FlowBootstrapErrorMsg): void => cb(msg.reason);
+    const handler = (_e: unknown, msg: FlowBootstrapErrorMsg): void => cb(msg.reason, msg.repoKey, msg.step);
     ipcRenderer.on(CH.flowOnBootstrapError, handler);
     return () => ipcRenderer.removeListener(CH.flowOnBootstrapError, handler);
   },

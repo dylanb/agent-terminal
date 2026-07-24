@@ -158,18 +158,21 @@ describe('IPC payload validation (§6 — renderer-supplied input is untrusted)'
   });
 
   it('accepts a flow:provideInput with a string→string values map, rejecting bad shapes (§24.2.3 T3)', () => {
-    expect(isValidFlowProvideInput({ sessionId: sid, repoKey: '/repo', values: { ticket: '176' } })).toBe(true);
-    expect(isValidFlowProvideInput({ sessionId: sid, repoKey: '/repo', values: {} })).toBe(true); // empty is fine
-    expect(isValidFlowProvideInput({ sessionId: sid, repoKey: '/repo', values: { ticket: 176 } })).toBe(false); // non-string value
-    expect(isValidFlowProvideInput({ sessionId: sid, repoKey: '/repo' })).toBe(false); // values required
-    expect(isValidFlowProvideInput({ sessionId: sid, repoKey: '/repo', values: [] })).toBe(false); // not a record
-    expect(isValidFlowProvideInput({ sessionId: sid, repoKey: 'relative', values: {} })).toBe(false); // unsafe key
-    expect(isValidFlowProvideInput({ sessionId: 'other', repoKey: '/repo', values: {} })).toBe(false);
+    expect(isValidFlowProvideInput({ sessionId: sid, repoKey: '/repo', step: 'plan', values: { ticket: '176' } })).toBe(true);
+    expect(isValidFlowProvideInput({ sessionId: sid, repoKey: '/repo', step: 'plan', values: {} })).toBe(true); // empty is fine
+    expect(isValidFlowProvideInput({ sessionId: sid, repoKey: '/repo', values: {} })).toBe(false); // step identity required
+    expect(isValidFlowProvideInput({ sessionId: sid, repoKey: '/repo', step: '', values: {} })).toBe(false);
+    expect(isValidFlowProvideInput({ sessionId: sid, repoKey: '/repo', step: 'plan', values: { ticket: 176 } })).toBe(false); // non-string value
+    expect(isValidFlowProvideInput({ sessionId: sid, repoKey: '/repo', step: 'plan' })).toBe(false); // values required
+    expect(isValidFlowProvideInput({ sessionId: sid, repoKey: '/repo', step: 'plan', values: [] })).toBe(false); // not a record
+    expect(isValidFlowProvideInput({ sessionId: sid, repoKey: 'relative', step: 'plan', values: {} })).toBe(false); // unsafe key
+    expect(isValidFlowProvideInput({ sessionId: 'other', repoKey: '/repo', step: 'plan', values: {} })).toBe(false);
     expect(isValidFlowProvideInput(null)).toBe(false);
     // An array carrying the required props must not pass the trust boundary (arrays are not records).
     const arr: any = [];
     arr.sessionId = sid;
     arr.repoKey = '/repo';
+    arr.step = 'plan';
     arr.values = {};
     expect(isValidFlowProvideInput(arr)).toBe(false);
   });

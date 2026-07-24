@@ -82,7 +82,7 @@ function fileDef(): LoopDefV2 {
     ],
     report: { sections: ['summary'] },
     gate: [{ option: 'approve', sideEffects: [] }],
-    pickup: { initialStatus: 'planning', branchTemplate: 'plan-loop/issue-{issue}' },
+    pickup: { initialStatus: 'planning', branchTemplate: 'plan-loop/issue-{issue}', initialLabels: [], wipe: { mode: 'abort' } },
     inputs: [],
     outputs: [binding('plan', artifactPath)],
     exec: null,

@@ -149,6 +149,8 @@ export function isValidFlowProvideInput(m: unknown): m is FlowProvideInputMsg {
     isRecord(m) &&
     isLiveSession(m) &&
     isSafeRepoKey(m.repoKey) &&
+    typeof m.step === 'string' &&
+    m.step.length > 0 &&
     isRecord(m.values) &&
     !Array.isArray(m.values) &&
     Object.values(m.values).every((v) => typeof v === 'string')

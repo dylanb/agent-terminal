@@ -73,7 +73,7 @@ import { captureLastReport } from './captureLast';
 import { createFlowManager, deriveFlowView, legacyLoopNameForStep, loadFlowDefinitionLocalFirst } from './flow';
 import { createGithubRefs } from './githubRefs';
 import { createAuditRecorder } from './auditRecorder';
-import type { TransitionKind } from '../shared/audit';
+import { appBootstrapAuditCmd, type TransitionKind } from '../shared/audit';
 import { auditRootDir } from './auditPaths';
 import { createFlowEntryActions } from './flowEntryActions';
 import { planStepResume } from './loopRebind';
@@ -124,7 +124,7 @@ import {
 import { provideAppLoopView } from './loopViewV2';
 import { createAppLoopEngine, type AppLoopEntry } from './appLoopEngine';
 import { appLoopEntryFor } from './appLoopEntry';
-import { armInterrupt, clearPolish, consolidatorOutputFile, consolidatorOutputRel, enterPolish, isPolishActiveForStep, readAppLoopState, roundReportFile, roundReportRel, writeAppLoopState } from './appLoopState';
+import { armInterrupt, clearPolish, consolidatorOutputFile, consolidatorOutputRel, enterPolish, isPolishActiveForStep, readAppLoopBootstrap, readAppLoopState, roundReportFile, roundReportRel, writeAppLoopBootstrap, writeAppLoopState } from './appLoopState';
 import { APP_LOOP_DIR_SEGMENTS } from './appLoopPaths';
 import { resolveLoopDefV2, type LoopDefV2Context } from './loopDefV2';
 import { createRealAppGateGitHub } from './appGateGithub';
@@ -134,6 +134,8 @@ import { probeChainedInput } from './chainedInputProbe';
 import { resolveExampleLoopsV2Dir } from './exampleAssets';
 import { userConfigLoopsV2Dir } from './userConfig';
 import type { CliInstallResult } from '../shared/ipc';
+import { createAppLoopBootstrapCoordinator, runAppLoopBootstrap, type AppLoopBootstrapCoordinator } from './appLoopBootstrap';
+import { createRealBootstrapGit, createRealBootstrapGitHub } from './bootstrapPorts';
 
 async function createWindow(): Promise<void> {
   const iconLoc: BundleLocation = app.isPackaged
@@ -917,7 +919,7 @@ async function createWindow(): Promise<void> {
             // clicking must never be swallowed).
             flow.revertStep(repoKey, stepId);
             pushFlowChanged();
-            send(CH.flowOnBootstrapError, { sessionId: SESSION_ID, reason: action.reason });
+            send(CH.flowOnBootstrapError, { sessionId: SESSION_ID, repoKey, step: stepId, reason: action.reason });
             return;
         }
       });
@@ -986,6 +988,7 @@ async function createWindow(): Promise<void> {
   // busy shell — a live OSC-133 command span means not at a ready prompt. A `bootstrap: pickup` loop
   // step runs in-app pickup instead (§26.9); a non-pickup loop step RESUMES the existing run (§26 D42a).
   // Must be built after the injector + tracker exist.
+  let appBootstrapCoordinator: AppLoopBootstrapCoordinator | null = null;
   const flowEntryActions = createFlowEntryActions({
     isShellBusy: () => tracker.summaries().some((s) => s.running),
     inject: (text) => inject(text, { submit: false }),
@@ -997,8 +1000,28 @@ async function createWindow(): Promise<void> {
     enterAppLoop: (step) => {
       const t = transitioning;
       if (!t || !step.loop) return;
-      appEngine.enter(t.repoKey, step.loop, step.id, t.entry);
-      armAppTurnDoneWatch(t.repoKey);
+      const resolved = resolveLoopDefV2(step.loop, appDefContext(t.repoKey));
+      const issue = flow.state(t.repoKey).refs?.ticket ?? null;
+      if (!resolved.ok || appBootstrapCoordinator === null) {
+        appEngine.enter(t.repoKey, step.loop, step.id, t.entry);
+        armAppTurnDoneWatch(t.repoKey);
+        return;
+      }
+      appBootstrapCoordinator.enter({
+        repoDir: t.repoKey,
+        loopName: step.loop,
+        stepId: step.id,
+        entry: t.entry,
+        issue,
+        bootstrap:
+          resolved.def.pickup === null
+            ? null
+            : {
+                origin: resolved.def.origin,
+                branchTemplate: resolved.def.pickup.branchTemplate,
+                initialLabels: resolved.def.pickup.initialLabels,
+              },
+      });
     },
   });
   const flow = createFlowManager({
@@ -1023,9 +1046,6 @@ async function createWindow(): Promise<void> {
       }),
   });
 
-  // §24.2.3 T7 — resolve a ticket/PR's title/body/url for the popout, best-effort via `gh`, cached.
-  const githubRefs = createGithubRefs();
-
   // Flow audit record (§25): observe-only, best-effort — records each run's lifecycle to
   // ~/.agent-terminal/audit/<repo>/<flow>_<ts>.yaml. Never throws into the flow path.
   const audit = createAuditRecorder({
@@ -1036,6 +1056,62 @@ async function createWindow(): Promise<void> {
       return load.ok ? load.definition.name : null;
     },
   });
+
+  appBootstrapCoordinator = createAppLoopBootstrapCoordinator({
+    run: async (repoDir, request) => {
+      pickupInFlight = { repoKey: repoDir, issue: request.issue, wipe: false };
+      pushFlowChanged();
+      try {
+        const git = createRealBootstrapGit(repoDir);
+        return await runAppLoopBootstrap(
+          {
+            git,
+            github: createRealBootstrapGitHub(repoDir),
+            rollbackCreatedBranch: (branch) => git.rollbackCreatedBranch(branch),
+            writeBootstrap: (identity) => writeAppLoopBootstrap(repoDir, identity),
+          },
+          request,
+        );
+      } finally {
+        if (pickupInFlight?.repoKey === repoDir) pickupInFlight = null;
+        pushFlowChanged();
+      }
+    },
+    hasBootstrapForIssue: (repoDir, issue) => readAppLoopBootstrap(repoDir)?.issue === issue,
+    isCurrentStep: (repoDir, stepId) => {
+      const current = flow.state(repoDir);
+      return current.status === 'in_progress' && current.stepName === stepId;
+    },
+    rollbackStep: (repoDir, stepId) => {
+      const current = flow.state(repoDir);
+      if (current.status !== 'in_progress' || current.stepName !== stepId) return false;
+      flow.revertStep(repoDir, stepId);
+      pushFlowChanged();
+      return true;
+    },
+    enterWork: (repoDir, loopName, stepId, entry) => {
+      appEngine.enter(repoDir, loopName, stepId, entry);
+      armAppTurnDoneWatch(repoDir);
+      pushFlowChanged();
+    },
+    emitError: ({ repoDir, stepId, reason }) =>
+      send(CH.flowOnBootstrapError, {
+        sessionId: SESSION_ID,
+        repoKey: repoDir,
+        step: stepId,
+        reason,
+      }),
+    audit: (repoDir, kind, stepId, detail) =>
+      audit.recordCommand(
+        repoDir,
+        'pickup',
+        appBootstrapAuditCmd(kind, stepId, detail),
+        kind === 'start' || kind === 'stale' ? null : kind === 'success' ? 0 : 1,
+      ),
+  });
+
+  // §24.2.3 T7 — resolve a ticket/PR's title/body/url for the popout, best-effort via `gh`, cached.
+  const githubRefs = createGithubRefs();
 
   // T2 (§24.2.3): watch a loop repo's state.yaml so a hand-edit re-pushes over the EXISTING
   // flow:onStateChanged seam (§24.2.2 S5) — no new plumbing. One watcher per repo, established
@@ -1505,6 +1581,10 @@ async function createWindow(): Promise<void> {
       // busy-shell refusal.
       [CH.flowProvideInput]: (_e, m) => {
         if (!isValidFlowProvideInput(m)) return flowRequestError();
+        const current = flow.state(m.repoKey);
+        if (current.status !== 'in_progress' || current.stepName !== m.step) {
+          return trackLoop(m.repoKey, withDerived(m.repoKey, current));
+        }
         audit.recordInputs(m.repoKey, m.values, inputTypeMap(m.repoKey));
         const view = inTransition(m.repoKey, 're-entry', () => flow.provideInput(m.repoKey, m.values));
         return trackLoop(m.repoKey, withDerived(m.repoKey, view));

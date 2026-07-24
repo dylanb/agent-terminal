@@ -1,7 +1,7 @@
 /// <reference lib="dom" />
 // page.evaluate callbacks run in the renderer; DOM lib gives them window.monitor's type.
 import { _electron as electron, expect, test, type ElectronApplication, type Page } from '@playwright/test';
-import { mkdtempSync, mkdirSync, writeFileSync, appendFileSync, rmSync, existsSync, statSync, readFileSync, readdirSync, realpathSync, symlinkSync } from 'node:fs';
+import { cpSync, mkdtempSync, mkdirSync, writeFileSync, appendFileSync, rmSync, existsSync, statSync, readFileSync, readdirSync, realpathSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, basename } from 'node:path';
 import { parseColor, contrastRatio, ringOver } from '../helpers/wcag';
@@ -1721,8 +1721,14 @@ function seedFakeGhGit(prefix: string): { binDir: string; logFile: string } {
     // status --porcelain emits nothing → a clean tree; when FAKE_GIT_DIRTY is set it emits a non-.agent-loop
     // porcelain line → a dirty tree, so pickup aborts (§26.9). Every other op is a recorded no-op success.
     'if [ "$1" = "status" ] && [ -n "$FAKE_GIT_DIRTY" ]; then echo " M src/app.ts"; exit 0; fi\n' +
+    'if [ "$1" = "status" ] && [ -n "$FAKE_GIT_DIRTY_ONCE" ] && [ ! -e "$FAKE_GHGIT_LOG.dirty-seen" ]; then touch "$FAKE_GHGIT_LOG.dirty-seen"; echo " M src/app.ts"; exit 0; fi\n' +
     // branch --list prints the queried branch when FAKE_GIT_BRANCH_EXISTS is set → a pickup conflict (§26.9).
-    'if [ "$1" = "branch" ] && [ "$2" = "--list" ] && [ -n "$FAKE_GIT_BRANCH_EXISTS" ]; then echo "  $3"; exit 0; fi\n' +
+    'if [ "$1" = "branch" ] && [ "$2" = "--list" ]; then local_branch=$(cat "$FAKE_GHGIT_LOG.local-branch" 2>/dev/null || true); if [ -n "$FAKE_GIT_BRANCH_EXISTS" ] || [ "$local_branch" = "$3" ]; then echo "  $3"; fi; exit 0; fi\n' +
+    'if [ "$1" = "checkout" ] && [ "$2" = "-b" ]; then echo "$3" > "$FAKE_GHGIT_LOG.local-branch"; exit 0; fi\n' +
+    'if [ "$1" = "branch" ] && [ "$2" = "-D" ]; then rm -f "$FAKE_GHGIT_LOG.local-branch"; exit 0; fi\n' +
+    'if [ "$1" = "push" ] && [ "$2" = "-u" ]; then echo "$4" > "$FAKE_GHGIT_LOG.remote-branch"; exit 0; fi\n' +
+    'if [ "$1" = "ls-remote" ]; then remote_branch=$(cat "$FAKE_GHGIT_LOG.remote-branch" 2>/dev/null || true); if [ "$remote_branch" = "$4" ]; then echo "deadbeef refs/heads/$4"; fi; exit 0; fi\n' +
+    'if [ "$1" = "push" ] && [ "$3" = "--delete" ]; then rm -f "$FAKE_GHGIT_LOG.remote-branch"; exit 0; fi\n' +
     'exit 0\n';
   const fakeGh =
     '#!/usr/bin/env bash\n' +
@@ -1735,7 +1741,7 @@ function seedFakeGhGit(prefix: string): { binDir: string; logFile: string } {
     // The `pr create` call is logged BEFORE an optional FAKE_PICKUP_DELAY sleep, so a test can hold the
     // pickup mid-flight (the branch is created, state.yaml not yet written) long enough to terminate the
     // flow and prove the async completion drops as stale (§26.9).
-    'if [ "$1" = "pr" ] && [ "$2" = "create" ]; then [ -n "$FAKE_PICKUP_DELAY" ] && sleep "$FAKE_PICKUP_DELAY"; echo "https://github.com/fake/repo/pull/4242"; exit 0; fi\n' +
+    'if [ "$1" = "pr" ] && [ "$2" = "create" ]; then [ -n "$FAKE_PICKUP_DELAY" ] && sleep "$FAKE_PICKUP_DELAY"; [ -n "$FAKE_PR_CREATE_FAIL" ] && exit 1; echo "https://github.com/fake/repo/pull/4242"; exit 0; fi\n' +
     // §26.7/L8 CI run-don't-block — `gh pr checks` returns the current bucket state (one pending, one pass)
     // and exits non-zero (8) as real gh does when checks are pending; the app parses stdout regardless and
     // never waits. The invocation is logged (above) BEFORE the optional FAKE_GH_CHECKS_DELAY sleep, so a
@@ -3647,16 +3653,30 @@ test('a needs-work verdict at the iteration cap routes to the plan-triage gate (
   rmSync(binDir, { recursive: true, force: true });
 });
 
-// §27.3 — a single-step flow whose one loop step binds an app-namespace def. `plan-loop` is a file-producing
-// def (its work artifact `plan` maps to `plan.md`); an unresolvable name drives the def-failure view (AC6).
+function seedCompletedAppBootstrap(dir: string, issue = 176): void {
+  mkdirSync(join(dir, '.agent-terminal', 'loop'), { recursive: true });
+  writeFileSync(
+    join(dir, '.agent-terminal', 'loop', 'bootstrap.yaml'),
+    `schema_version: 1\npr: 4242\nbranch: plan-loop/issue-${issue}\nissue: ${issue}\nupdated_at: 2026-07-23T00:00:00.000Z\n`,
+  );
+}
+
+// §27.3 — a single-step flow whose one loop step binds an app-namespace def. These N2–N5 fixtures start
+// from an already-completed bootstrap identity so they isolate turn behavior; the ST2 fixtures below start
+// without one. `plan-loop` is file-producing; an unresolvable name drives the def-failure view (AC6).
 function seedAppLoopFlowRepo(prefix: string, loopName = 'plan-loop'): string {
   const dir = mkdtempSync(join(tmpdir(), prefix));
   mkdirSync(join(dir, '.git'), { recursive: true });
   mkdirSync(join(dir, '.agent-terminal'), { recursive: true });
   writeFileSync(
     join(dir, '.agent-terminal', 'flow.yaml'),
-    `name: v2-work\nsteps:\n  - id: plan\n    kind: loop\n    loop: ${loopName}\n    loop_namespace: app\n`,
+    `name: v2-work\nsteps:\n  - id: plan\n    kind: loop\n    loop: ${loopName}\n    loop_namespace: app\n    inputs:\n      - name: ticket\n        type: github-ticket\n`,
   );
+  writeFileSync(
+    join(dir, '.agent-terminal', 'flow-state.yaml'),
+    'step: plan\nstatus: not_started\ninputs:\n  ticket: "176"\n',
+  );
+  seedCompletedAppBootstrap(dir);
   return dir;
 }
 
@@ -3884,18 +3904,22 @@ test('a §27 review-and-fix report omitting a roster persona drives one retry th
 
 // §27.9/§27.13 / N5 — a two-step flow whose first step is an app-namespace plan-loop declaring a `pr` typed
 // input, plus a trailing manual step so "the flow advances off the loop step" is observable. The flow-state is
-// pre-seeded with the pr resolved (not_started, so Start still drives the loop) so plan-loop's approve
-// side-effect (`gh pr ready <pr>`, §27.13) has a PR to flip.
+// pre-seeded with the PR and ticket resolved (not_started, so Start still drives the loop) and a completed
+// bootstrap identity so plan-loop's approve side-effect (`gh pr ready <pr>`, §27.13) has a PR to flip.
 function seedAppGateFlowRepo(prefix: string, pr: string | null): string {
   const dir = mkdtempSync(join(tmpdir(), prefix));
   mkdirSync(join(dir, '.git'), { recursive: true });
   mkdirSync(join(dir, '.agent-terminal'), { recursive: true });
   writeFileSync(
     join(dir, '.agent-terminal', 'flow.yaml'),
-    'name: v2-gate\nsteps:\n  - id: plan\n    kind: loop\n    loop: plan-loop\n    loop_namespace: app\n    inputs:\n      - name: pr\n        type: pr\n  - id: done\n    kind: manual\n',
+    'name: v2-gate\nsteps:\n  - id: plan\n    kind: loop\n    loop: plan-loop\n    loop_namespace: app\n    inputs:\n      - name: ticket\n        type: github-ticket\n      - name: pr\n        type: pr\n  - id: done\n    kind: manual\n',
   );
-  const inputs = pr === null ? '' : `inputs:\n  pr: "${pr}"\n`;
-  writeFileSync(join(dir, '.agent-terminal', 'flow-state.yaml'), `step: plan\nstatus: not_started\n${inputs}`);
+  const prInput = pr === null ? '' : `  pr: "${pr}"\n`;
+  writeFileSync(
+    join(dir, '.agent-terminal', 'flow-state.yaml'),
+    `step: plan\nstatus: not_started\ninputs:\n  ticket: "176"\n${prInput}`,
+  );
+  seedCompletedAppBootstrap(dir);
   return dir;
 }
 
@@ -3954,7 +3978,7 @@ test('a §27 app plan gate renders approve + request-changes, and approve runs t
   rmSync(binDir, { recursive: true, force: true });
 });
 
-// §27.10/§27.9 / N6 (sub-ticket 1) — a two-`app`-loop flow with NO pickup: an app plan-loop step (declaring a
+// §27.10/§27.9 / N6 (sub-ticket 1) — a pre-bootstrapped two-`app`-loop flow: an app plan-loop step (declaring a
 // `pr` typed input so approve's `gh pr ready` side-effect has a PR to flip) chained to an app impl-loop step,
 // which declares its `plan` artifact as a typed input (§27.10). plan-loop writes plan.md at the very path
 // impl-loop reads it, so on approve→advance impl-loop's work turn is entered carrying plan-loop's output.
@@ -3965,12 +3989,338 @@ function seedAppChainFlowRepo(prefix: string, pr: string): string {
   writeFileSync(
     join(dir, '.agent-terminal', 'flow.yaml'),
     'name: v2-chain\nsteps:\n' +
-      '  - id: plan\n    kind: loop\n    loop: plan-loop\n    loop_namespace: app\n    inputs:\n      - name: pr\n        type: pr\n' +
+      '  - id: plan\n    kind: loop\n    loop: plan-loop\n    loop_namespace: app\n    inputs:\n      - name: ticket\n        type: github-ticket\n      - name: pr\n        type: pr\n' +
       '  - id: implement\n    kind: loop\n    loop: impl-loop\n    loop_namespace: app\n',
   );
-  writeFileSync(join(dir, '.agent-terminal', 'flow-state.yaml'), `step: plan\nstatus: not_started\ninputs:\n  pr: "${pr}"\n`);
+  writeFileSync(
+    join(dir, '.agent-terminal', 'flow-state.yaml'),
+    `step: plan\nstatus: not_started\ninputs:\n  ticket: "176"\n  pr: "${pr}"\n`,
+  );
+  seedCompletedAppBootstrap(dir);
   return dir;
 }
+
+function seedAppBootstrapFlowRepo(prefix: string): string {
+  const dir = mkdtempSync(join(tmpdir(), prefix));
+  mkdirSync(join(dir, '.git'), { recursive: true });
+  mkdirSync(join(dir, '.agent-terminal'), { recursive: true });
+  writeFileSync(
+    join(dir, '.agent-terminal', 'flow.yaml'),
+    'name: v2-bootstrap\nsteps:\n' +
+      '  - id: groom\n    kind: manual\n' +
+      '  - id: plan\n    kind: loop\n    loop: plan-loop\n    loop_namespace: app\n' +
+      '    inputs:\n      - name: ticket\n        type: github-ticket\n        required: true\n',
+  );
+  return dir;
+}
+
+function seedOperatorPlanLoopConfig(prefix: string, transform: (yaml: string) => string): string {
+  const root = mkdtempSync(join(tmpdir(), prefix));
+  const target = join(root, 'loops-v2', 'plan-loop');
+  cpSync(join(exampleConfigDir, 'loops-v2', 'plan-loop'), target, { recursive: true });
+  const defFile = join(target, 'plan-loop.yaml');
+  const before = readFileSync(defFile, 'utf8');
+  const after = transform(before);
+  expect(after).not.toBe(before);
+  writeFileSync(defFile, after);
+  return root;
+}
+
+function seedRepoPlanLoopOverride(repo: string): void {
+  const target = join(repo, 'defs', 'plan-loop');
+  cpSync(join(exampleConfigDir, 'loops-v2', 'plan-loop'), target, { recursive: true });
+  writeFileSync(join(repo, '.agent-loop.yaml'), 'loops:\n  plan-loop: defs/plan-loop/plan-loop.yaml\n');
+}
+
+test('entering a pickup-bearing §27 def bootstraps out-of-band into app-owned state, never §26 state or terminal injection (ST2 AC3/AC8)', { tag: '@ownapp' }, async () => {
+  const repo = seedAppBootstrapFlowRepo('agent-term-e2e-v2-bootstrap-');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-v2-bootstrap-home-'));
+  const config = seedOperatorPlanLoopConfig('agent-term-e2e-v2-bootstrap-config-', (yaml) =>
+    yaml.replace(
+      '  branch_template: plan-loop/issue-{issue}\n',
+      '  branch_template: plan-loop/issue-{issue}\n' +
+        '  initial_labels:\n' +
+        '    - target: issue\n      action: add\n      label: agent-loop/in-progress\n' +
+        '    - target: pr\n      action: remove\n      label: needs-triage\n',
+    ),
+  );
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-v2-bootstrap-bin-');
+  seedFakeAgentV2(binDir, { stepId: 'plan', artifactRel: APP_ARTIFACT_REL, work: 'noop' });
+  app = await electron.launch({
+    args: ['out/main/index.js'],
+    env: {
+      ...process.env,
+      APP_SHELL: 'bash',
+      HOME: home,
+      APP_SUBMIT_DELAY_MS: '100',
+      APP_TURN_TIMEOUT_MS: '60000',
+      CLAUDE_CONFIG_DIR: config,
+      PATH: `${binDir}:${process.env.PATH}`,
+      FAKE_GHGIT_LOG: logFile,
+    },
+  });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await typeCommand(`cd "${repo}"`);
+  await typeCommand('fake-agent');
+  await flowControl().click();
+  await flowControl().click();
+  await expect(inputModal()).toBeVisible({ timeout: 10_000 });
+  await inputModal().locator('.field input').fill('176');
+  await inputModal().locator('.confirm').click();
+
+  const bootstrapState = join(repo, '.agent-terminal', 'loop', 'bootstrap.yaml');
+  await expect.poll(() => readIf(bootstrapState), { timeout: 15_000 }).toContain('pr: 4242');
+  expect(readIf(bootstrapState)).toContain('branch: plan-loop/issue-176');
+  expect(readIf(bootstrapState)).toContain('issue: 176');
+  const calls = readGhLog(logFile);
+  expect(calls).toContain('git status --porcelain');
+  expect(calls).toContain('git checkout -b plan-loop/issue-176 FETCH_HEAD');
+  expect(calls).toContain('git commit --allow-empty -m [skip ci] start work on #176');
+  expect(calls).toContain('git push -u origin plan-loop/issue-176');
+  expect(calls).toContain('gh issue edit 176 --add-assignee @me');
+  expect(calls).toContain('gh issue edit 176 --add-label agent-loop/in-progress');
+  expect(calls).toContain('gh pr create --draft --base main --head plan-loop/issue-176');
+  expect(calls).toContain('gh pr edit 4242 --remove-label needs-triage');
+  expect(
+    calls
+      .split('\n')
+      .filter((call) => /^gh (issue|pr) edit .*--(add|remove)-label /.test(call))
+      .sort(),
+  ).toEqual([
+    'gh issue edit 176 --add-label agent-loop/in-progress',
+    'gh pr edit 4242 --remove-label needs-triage',
+  ]);
+  expect(existsSync(join(repo, '.agent-loop', 'state.yaml'))).toBe(false);
+  await expect(termRows()).not.toContainText('agent-loop pickup');
+
+  await expect.poll(() => auditRunFiles(home, repo).length, { timeout: 10_000 }).toBe(1);
+  const run = readAuditRun(home, repo, auditRunFiles(home, repo)[0]);
+  const bootstrapEvents = run.events.filter((event) => event.type === 'command' && /§27 bootstrap plan/.test(event.cmd));
+  expect(bootstrapEvents.map((event) => (event as Extract<AuditEvent, { type: 'command' }>).exit)).toEqual([null, 0]);
+
+  await app.close();
+  for (const dir of [repo, home, config, binDir]) rmSync(dir, { recursive: true, force: true });
+});
+
+test('a failed §27 pickup rolls back its named step with typed inputs preserved and a blocking route out (ST2 AC4/AC7)', { tag: '@ownapp' }, async () => {
+  const repo = seedAppBootstrapFlowRepo('agent-term-e2e-v2-bootstrap-fail-');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-v2-bootstrap-fail-home-'));
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-v2-bootstrap-fail-bin-');
+  app = await electron.launch({
+    args: ['out/main/index.js'],
+    env: {
+      ...process.env,
+      APP_SHELL: 'bash',
+      HOME: home,
+      APP_SUBMIT_DELAY_MS: '100',
+      CLAUDE_CONFIG_DIR: exampleConfigDir,
+      PATH: `${binDir}:${process.env.PATH}`,
+      FAKE_GHGIT_LOG: logFile,
+      FAKE_GIT_DIRTY_ONCE: '1',
+    },
+  });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await typeCommand(`cd "${repo}"`);
+  await flowControl().click();
+  await flowControl().click();
+  await expect(inputModal()).toBeVisible({ timeout: 10_000 });
+  await inputModal().locator('.field input').fill('176');
+  await inputModal().locator('.confirm').click();
+
+  const errorDialog = page.locator('#flow-error-host .flow-modal');
+  await expect(errorDialog).toBeVisible({ timeout: 15_000 });
+  await expect(errorDialog).toContainText('working tree is not clean');
+  await expect(errorDialog).toContainText(repo);
+  await expect(errorDialog).toContainText('plan');
+  await expect(flowStation(1)).toHaveClass(/\bactive\b/, { timeout: 10_000 });
+  await expect(flowStation(2)).not.toHaveClass(/\bactive\b/);
+  expect(readIf(appFlowState(repo))).toContain("ticket: '176'");
+  expect(existsSync(join(repo, '.agent-terminal', 'loop', 'bootstrap.yaml'))).toBe(false);
+  expect(existsSync(join(repo, '.agent-loop', 'state.yaml'))).toBe(false);
+  expect(readGhLog(logFile)).not.toContain('gh pr create');
+  await errorDialog.locator('.dismiss').click();
+  await expect(flowControl()).toHaveText('Advance', { timeout: 10_000 });
+  await flowControl().click();
+  await expect.poll(() => readIf(join(repo, '.agent-terminal', 'loop', 'bootstrap.yaml')), { timeout: 15_000 }).toContain('issue: 176');
+  expect(readGhLog(logFile).match(/git status --porcelain/g)).toHaveLength(2);
+  expect(readGhLog(logFile)).toContain('git checkout -b plan-loop/issue-176 FETCH_HEAD');
+
+  await app.close();
+  for (const dir of [repo, home, binDir]) rmSync(dir, { recursive: true, force: true });
+});
+
+test('a repo-resident pickup def is refused by the wired executor before any bootstrap git or gh operation (ST2 origin gate)', { tag: '@ownapp' }, async () => {
+  const repo = seedAppBootstrapFlowRepo('agent-term-e2e-v2-bootstrap-origin-');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-v2-bootstrap-origin-home-'));
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-v2-bootstrap-origin-bin-');
+  seedRepoPlanLoopOverride(repo);
+  app = await electron.launch({
+    args: ['out/main/index.js'],
+    env: {
+      ...process.env,
+      APP_SHELL: 'bash',
+      HOME: home,
+      APP_SUBMIT_DELAY_MS: '100',
+      CLAUDE_CONFIG_DIR: exampleConfigDir,
+      PATH: `${binDir}:${process.env.PATH}`,
+      FAKE_GHGIT_LOG: logFile,
+    },
+  });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await typeCommand(`cd "${repo}"`);
+  await flowControl().click();
+  await flowControl().click();
+  await expect(inputModal()).toBeVisible({ timeout: 10_000 });
+  await inputModal().locator('.field input').fill('176');
+  await inputModal().locator('.confirm').click();
+
+  const errorDialog = page.locator('#flow-error-host .flow-modal');
+  await expect(errorDialog).toBeVisible({ timeout: 15_000 });
+  await expect(errorDialog).toContainText(/operator-authored|origin/i);
+  const calls = readGhLog(logFile);
+  expect(calls).not.toContain('git status --porcelain');
+  expect(calls).not.toContain('gh repo view');
+  expect(calls).not.toContain('gh issue view 176 --json title,url');
+  expect(calls).not.toContain('gh issue edit');
+  expect(calls).not.toContain('gh pr create');
+  expect(existsSync(join(repo, '.agent-terminal', 'loop', 'bootstrap.yaml'))).toBe(false);
+
+  await app.close();
+  for (const dir of [repo, home, binDir]) rmSync(dir, { recursive: true, force: true });
+});
+
+test('a §27 def with no pickup enters work without invoking bootstrap ports (ST2 AC3)', { tag: '@ownapp' }, async () => {
+  const repo = seedAppBootstrapFlowRepo('agent-term-e2e-v2-no-bootstrap-');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-v2-no-bootstrap-home-'));
+  const config = seedOperatorPlanLoopConfig('agent-term-e2e-v2-no-bootstrap-config-', (yaml) =>
+    yaml.replace(
+      'pickup:\n  initial_status: planning\n  branch_template: plan-loop/issue-{issue}\n',
+      '',
+    ),
+  );
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-v2-no-bootstrap-bin-');
+  seedFakeAgentV2(binDir, { stepId: 'plan', artifactRel: APP_ARTIFACT_REL, work: 'noop' });
+  app = await electron.launch({
+    args: ['out/main/index.js'],
+    env: {
+      ...process.env,
+      APP_SHELL: 'bash',
+      HOME: home,
+      APP_SUBMIT_DELAY_MS: '100',
+      APP_TURN_TIMEOUT_MS: '60000',
+      CLAUDE_CONFIG_DIR: config,
+      PATH: `${binDir}:${process.env.PATH}`,
+      FAKE_GHGIT_LOG: logFile,
+    },
+  });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await typeCommand(`cd "${repo}"`);
+  await typeCommand('fake-agent');
+  await flowControl().click();
+  await flowControl().click();
+  await expect(inputModal()).toBeVisible({ timeout: 10_000 });
+  await inputModal().locator('.field input').fill('176');
+  await inputModal().locator('.confirm').click();
+
+  await expect.poll(() => readIf(appRunState(repo)), { timeout: 15_000 }).toContain('turn_key: work-plan');
+  const calls = readGhLog(logFile);
+  expect(calls).not.toContain('git status --porcelain');
+  expect(calls).not.toContain('gh repo view');
+  expect(calls).not.toContain('gh issue view 176 --json title,url');
+  expect(calls).not.toContain('gh issue edit');
+  expect(calls).not.toContain('gh pr create');
+  expect(existsSync(join(repo, '.agent-terminal', 'loop', 'bootstrap.yaml'))).toBe(false);
+
+  await app.close();
+  for (const dir of [repo, home, config, binDir]) rmSync(dir, { recursive: true, force: true });
+});
+
+test('a stale flow input answer is inert at the main-process receiver (ST2 AC7)', { tag: '@ownapp' }, async () => {
+  const repo = seedAppBootstrapFlowRepo('agent-term-e2e-v2-bootstrap-stale-input-');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-v2-bootstrap-stale-input-home-'));
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-v2-bootstrap-stale-input-bin-');
+  app = await electron.launch({
+    args: ['out/main/index.js'],
+    env: {
+      ...process.env,
+      APP_SHELL: 'bash',
+      HOME: home,
+      APP_SUBMIT_DELAY_MS: '100',
+      CLAUDE_CONFIG_DIR: exampleConfigDir,
+      PATH: `${binDir}:${process.env.PATH}`,
+      FAKE_GHGIT_LOG: logFile,
+    },
+  });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await typeCommand(`cd "${repo}"`);
+  await flowControl().click();
+  await flowControl().click();
+  await expect(inputModal()).toBeVisible({ timeout: 10_000 });
+  await page.evaluate(
+    ([repoKey]) => window.flow.provideInput(repoKey, 'groom', { ticket: '999' }),
+    [repo] as const,
+  );
+
+  await expect(inputModal()).toBeVisible();
+  expect(readIf(appFlowState(repo))).not.toContain('999');
+  expect(readGhLog(logFile)).not.toContain('git status --porcelain');
+  expect(readGhLog(logFile)).not.toContain('gh ');
+
+  await app.close();
+  for (const dir of [repo, home, binDir]) rmSync(dir, { recursive: true, force: true });
+});
+
+test('a late §27 pickup failure removes the branch created by that attempt before rolling the flow back (ST2 AC4)', { tag: '@ownapp' }, async () => {
+  const repo = seedAppBootstrapFlowRepo('agent-term-e2e-v2-bootstrap-pr-fail-');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-v2-bootstrap-pr-fail-home-'));
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-v2-bootstrap-pr-fail-bin-');
+  app = await electron.launch({
+    args: ['out/main/index.js'],
+    env: {
+      ...process.env,
+      APP_SHELL: 'bash',
+      HOME: home,
+      APP_SUBMIT_DELAY_MS: '100',
+      CLAUDE_CONFIG_DIR: exampleConfigDir,
+      PATH: `${binDir}:${process.env.PATH}`,
+      FAKE_GHGIT_LOG: logFile,
+      FAKE_PR_CREATE_FAIL: '1',
+    },
+  });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await typeCommand(`cd "${repo}"`);
+  await flowControl().click();
+  await flowControl().click();
+  await expect(inputModal()).toBeVisible({ timeout: 10_000 });
+  await inputModal().locator('.field input').fill('176');
+  await inputModal().locator('.confirm').click();
+
+  const errorDialog = page.locator('#flow-error-host .flow-modal');
+  await expect(errorDialog).toBeVisible({ timeout: 15_000 });
+  await expect(errorDialog).toContainText('Bootstrap failed');
+  await expect(flowStation(1)).toHaveClass(/\bactive\b/, { timeout: 10_000 });
+  await expect(flowStation(2)).not.toHaveClass(/\bactive\b/);
+  await expect.poll(() => readGhLog(logFile), { timeout: 10_000 }).toContain('git branch -D plan-loop/issue-176');
+  expect(readGhLog(logFile)).toContain('git push origin --delete plan-loop/issue-176');
+  expect(existsSync(`${logFile}.local-branch`)).toBe(false);
+  expect(existsSync(`${logFile}.remote-branch`)).toBe(false);
+  expect(existsSync(join(repo, '.agent-terminal', 'loop', 'bootstrap.yaml'))).toBe(false);
+
+  await app.close();
+  for (const dir of [repo, home, binDir]) rmSync(dir, { recursive: true, force: true });
+});
 
 test('a §27 approve chains the approved loop\'s output into the next app loop\'s work turn, with the chained-transition audit event (§27.10 / AC1)', { tag: '@ownapp' }, async () => {
   const repo = seedAppChainFlowRepo('agent-term-e2e-v2-chain-', '77');
@@ -6369,4 +6719,3 @@ test('the in-app install affordance is reachable in the scrolling Settings colum
   });
   expect(within).toBe(true);
 });
-
