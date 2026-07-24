@@ -4,6 +4,7 @@
 // completion marker the work prompt instructs and the completion check reads (ONE definition, so the
 // writer↔reader cannot desync — CLAUDE.md shared-semantics); and the work-prompt composer.
 
+import path from 'node:path';
 import { doneSignalInstruction } from '../shared/loopTurn';
 import type { BoundaryPolicy, LoopDefV2 } from './loopDefV2';
 
@@ -20,6 +21,28 @@ export function boundaryCommand(policy: BoundaryPolicy): string {
 export function completionArtifact(def: LoopDefV2): { path: string } | null {
   const binding = def.outputs.find((o) => o.id === def.work.artifact);
   return binding ? { path: binding.path } : null;
+}
+
+/** A typed input artifact a §27 loop consumes (§27.10/§18.4): `id` names it, `rel` is its repo-relative path
+ *  (all the carried material the prompt and audit reference). The confined absolute path is never exposed —
+ *  it is the presence probe's concern only, held inside `presentChainedInputs`. */
+export interface ChainedInput {
+  id: string;
+  rel: string;
+}
+
+/** The declared typed inputs (§27.10/§18.4) an upstream loop actually produced: `isPresent` decides, per
+ *  element, whether the artifact is on disk (probed at the def parser's already-confined absolute path, never
+ *  a re-derived target — CWE-22). Data-driven from `def.inputs`, never a loop-name check; empty for the first
+ *  loop in a chain (it declares none). */
+export function presentChainedInputs(
+  def: LoopDefV2,
+  repoDir: string,
+  isPresent: (absPath: string) => boolean,
+): ChainedInput[] {
+  return def.inputs
+    .filter((i) => isPresent(i.path))
+    .map((i) => ({ id: i.id, rel: path.relative(repoDir, i.path) }));
 }
 
 /** The one-line completion marker the work prompt instructs the agent to write into its artifact and the
@@ -49,6 +72,9 @@ export interface AppWorkPromptReq {
    *  the work turn (ticket + plan + instruction only). Absent on an ordinary work run; a blank one emits no
    *  block (the caller passes only a `validInstruction` value). */
   instruction?: string;
+  /** §27.10/§18.4 — the carried inputs the prompt names (id + repo-relative path); the confined absolute path
+   *  never reaches this type, so it cannot enter the prompt's vocabulary (§27.8). */
+  inputs?: ChainedInput[];
 }
 
 /** Compose the §27 work-turn prompt (§27.3): the def's recipe body, then — for a file-producing turn — the
@@ -56,6 +82,15 @@ export interface AppWorkPromptReq {
  *  pointing at the §27 done-file (and, for a file-producing turn, verifying the artifact on disk first). */
 export function composeAppWorkPrompt(req: AppWorkPromptReq): string {
   const parts = [req.recipeBody.trimEnd()];
+  // §27.10/§18.4 — above the redo block so a redo's "the ticket and the plan above" reference covers the
+  // carried inputs.
+  if (req.inputs && req.inputs.length > 0) {
+    parts.push(
+      '',
+      "INPUTS — the previous loop produced these artifact(s), carried in as this loop's inputs. Read each before you begin:",
+      ...req.inputs.map((i) => `  - ${i.id}: ${i.rel}`),
+    );
+  }
   // §27.9/AC5 — a redo re-enters the work turn on a clean slate: the recipe body (which sources the ticket and
   // the plan) still leads, and the operator's instruction is threaded as the redo directive. No findings and no
   // round history reach it — the boundary before the turn cleared the context; this block adds only the

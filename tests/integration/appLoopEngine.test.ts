@@ -244,6 +244,79 @@ describe('§27 engine — entry, boundary, and the work injection (AC1, AC9)', (
   });
 });
 
+// §27.10/§27.9 / N6 (sub-ticket 1) — an approved loop's output artifact, resolved as the next loop's typed
+// input (§18.4), is the material the next loop's work turn is entered with. The engine reads the entered def's
+// declared inputs; only an input whose artifact is actually PRESENT on disk (the prior loop produced it) is
+// carried in and recorded as a chained transition, so a loop entered with no upstream artifact chains nothing.
+describe('§27 engine — chained input into the work turn (AC1)', () => {
+  const CHAINED_INPUT_PATH = () => join(repo, '.agent-terminal', 'loop', 'artifacts', 'groomed-ticket.md');
+  const CHAINED_INPUT_REL = '.agent-terminal/loop/artifacts/groomed-ticket.md';
+  function chainedDef(): LoopDefV2 {
+    return { ...fileDef(), inputs: [{ id: 'groomed-ticket', path: CHAINED_INPUT_PATH() }] };
+  }
+  function writeChainedInput(): void {
+    mkdirSync(dirname(CHAINED_INPUT_PATH()), { recursive: true });
+    writeFileSync(CHAINED_INPUT_PATH(), '# groomed ticket\n');
+  }
+
+  it('carries a present input artifact into the work prompt and records the chained transition (AC1)', () => {
+    defResult = { ok: true, def: chainedDef() };
+    writeChainedInput(); // the prior loop's output sits at the next loop's declared input path
+    const engine = makeEngine();
+    engine.enter(repo, 'plan-loop', STEP);
+    engine.onInjectable(); // boundary drains → the work prompt injects
+    expect(injected[1]).toContain(`- groomed-ticket: ${CHAINED_INPUT_REL}`); // the resolved input carried in
+    // The chained transition is recorded in the §25 audit, naming the entered step and the carried artifact id.
+    expect(audit).toHaveBeenCalledWith(repo, expect.stringContaining('groomed-ticket'), expect.anything());
+    const chainCall = audit.mock.calls.find((c) => /chained transition/i.test(c[1]));
+    expect(chainCall).toBeDefined();
+    expect(chainCall![1]).toContain(STEP); // into the entered step (§6 identity)
+  });
+
+  it('carries only the present artifact when one of two declared inputs is absent (per-element gate, not all-or-nothing)', () => {
+    const PLAN_INPUT_PATH = join(repo, '.agent-terminal', 'loop', 'artifacts', 'plan-input.md');
+    const PLAN_INPUT_REL = '.agent-terminal/loop/artifacts/plan-input.md';
+    mkdirSync(dirname(PLAN_INPUT_PATH), { recursive: true });
+    writeFileSync(PLAN_INPUT_PATH, '# plan\n'); // only this input's artifact exists on disk
+    defResult = {
+      ok: true,
+      def: {
+        ...fileDef(),
+        inputs: [
+          { id: 'groomed-ticket', path: CHAINED_INPUT_PATH() }, // declared, never produced
+          { id: 'plan-input', path: PLAN_INPUT_PATH },
+        ],
+      },
+    };
+    const engine = makeEngine();
+    engine.enter(repo, 'plan-loop', STEP);
+    engine.onInjectable();
+    expect(injected[1]).toContain(`- plan-input: ${PLAN_INPUT_REL}`); // the present one is carried
+    expect(injected[1]).not.toContain(CHAINED_INPUT_REL); // the absent one is filtered per-element
+    const chainCall = audit.mock.calls.find((c) => /chained transition/i.test(c[1]));
+    expect(chainCall).toBeDefined();
+    expect(chainCall![1]).toContain('plan-input'); // the audit lists only what was actually carried
+    expect(chainCall![1]).not.toContain('groomed-ticket');
+  });
+
+  it('does NOT carry an input whose artifact is absent, and records no chained transition (present-gated)', () => {
+    defResult = { ok: true, def: chainedDef() }; // declares the input, but the artifact was never produced
+    const engine = makeEngine();
+    engine.enter(repo, 'plan-loop', STEP);
+    engine.onInjectable();
+    expect(injected[1]).not.toContain(CHAINED_INPUT_REL); // nothing to carry → no chained-input block
+    expect(audit.mock.calls.some((c) => /chained transition/i.test(c[1]))).toBe(false);
+  });
+
+  it('a loop declaring no inputs records no chained transition (the first loop in a chain)', () => {
+    defResult = { ok: true, def: fileDef() }; // inputs: []
+    const engine = makeEngine();
+    engine.enter(repo, 'plan-loop', STEP);
+    engine.onInjectable();
+    expect(audit.mock.calls.some((c) => /chained transition/i.test(c[1]))).toBe(false);
+  });
+});
+
 describe('§27 engine — work completion gate + review chain (AC2, AC3)', () => {
   it('a marker-bearing artifact completes the WORK turn and chains the pre-review boundary + review prompt (AC1)', () => {
     const engine = makeEngine();
@@ -455,6 +528,25 @@ describe('§27 engine — resume (AC8)', () => {
     engine.resume(repo);
     expect(injected).toEqual([]);
     expect(readAppLoopState(repo)?.status).toBe('complete');
+  });
+
+  it('§27.10 — reconstructs a work turn re-carrying present inputs so Retry re-injects them; resume records no chained transition', () => {
+    const inputPath = join(repo, '.agent-terminal', 'loop', 'artifacts', 'groomed-ticket.md');
+    const inputRel = '.agent-terminal/loop/artifacts/groomed-ticket.md';
+    mkdirSync(dirname(inputPath), { recursive: true });
+    writeFileSync(inputPath, '# groomed ticket\n');
+    defResult = { ok: true, def: { ...fileDef(), inputs: [{ id: 'groomed-ticket', path: inputPath }] } };
+    writeAppLoopState(repo, { loop: 'plan-loop', step: STEP, turnKey: TURN_KEY, status: 'working' }, FIXED);
+    const engine = makeEngine();
+    engine.resume(repo);
+    expect(injected).toEqual([]); // a relaunch-interrupted turn is never re-driven on resume
+    expect(audit.mock.calls.some((c) => /chained transition/i.test(c[1]))).toBe(false); // resume is not a chain advance
+    engine.routeOut(repo, STEP, TURN_KEY, 'retry'); // the operator re-drives the reconstructed turn
+    engine.onInjectable();
+    engine.onInjectable();
+    const prompt = injected.find((p) => p.includes('Produce the plan.'));
+    expect(prompt).toBeDefined();
+    expect(prompt).toContain(`- groomed-ticket: ${inputRel}`); // the reconstructed turn carried the present input
   });
 });
 
@@ -985,6 +1077,27 @@ describe('§27 engine — redo re-enters the work turn on a clean slate carrying
     relaunched.onInjectable();
     relaunched.onInjectable();
     expect(injected.some((p) => p.includes(INSTRUCTION))).toBe(true); // the instruction survived the relaunch
+  });
+
+  it('§27.10 — re-carries the step\'s present inputs but records NO new chained transition (a redo is not a chain advance)', () => {
+    const inputPath = join(repo, '.agent-terminal', 'loop', 'artifacts', 'groomed-ticket.md');
+    const inputRel = '.agent-terminal/loop/artifacts/groomed-ticket.md';
+    mkdirSync(dirname(inputPath), { recursive: true });
+    writeFileSync(inputPath, '# groomed ticket\n');
+    defResult = { ok: true, def: { ...fileDef(), inputs: [{ id: 'groomed-ticket', path: inputPath }] } };
+    const engine = makeEngine();
+    driveToGate(engine); // enter records ONE chained transition (the input is present)
+    const chainAuditsBefore = audit.mock.calls.filter((c) => /chained transition/i.test(c[1])).length;
+    const before = injected.length;
+    expect(engine.redo(repo, STEP, CONSOLIDATE_KEY, INSTRUCTION)).toBe(true);
+    engine.onInjectable();
+    engine.onInjectable();
+    const prompt = injected.slice(before).find((p) => p.includes('Produce the plan.'));
+    expect(prompt).toBeDefined();
+    expect(prompt).toContain(`- groomed-ticket: ${inputRel}`); // the redo re-carries the present input
+    expect(prompt).toContain(INSTRUCTION); // alongside the redo instruction
+    const chainAuditsAfter = audit.mock.calls.filter((c) => /chained transition/i.test(c[1])).length;
+    expect(chainAuditsAfter).toBe(chainAuditsBefore); // the non-advance re-entry records no new transition
   });
 });
 
