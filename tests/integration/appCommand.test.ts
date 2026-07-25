@@ -95,7 +95,10 @@ describe('app command boundary', () => {
     ).resolves.toBe('unset|body\n');
   });
 
-  it('surfaces only the command and exit classification', async () => {
+  // Callers interpolate this message into their own (appBootstrapGit's remoteOp), so argv-freedom is a
+  // cross-module invariant rather than a local property. The argv reaching here includes the origin URL,
+  // which may carry credentials — Node's own `error.message` is "Command failed: gh --repo <url>…".
+  it('surfaces neither the argv nor the stderr, only the exit classification', async () => {
     const bin = mkdtempSync(join(tmpdir(), 'app-command-error-'));
     cleanup.push(bin);
     writeFileSync(
@@ -104,6 +107,19 @@ describe('app command boundary', () => {
       { mode: 0o755 },
     );
     process.env.PATH = `${bin}:${originalPath ?? ''}`;
+
+    const message = await runAppCommand(
+      'gh',
+      ['--repo', 'https://operator:s3cr3t@host/private-repo'],
+      bin,
+    ).then(
+      () => '',
+      (e: unknown) => (e instanceof Error ? e.message : String(e)),
+    );
+    expect(message).toMatch(/exit 7/);
+    expect(message).not.toContain('s3cr3t');
+    expect(message).not.toContain('private-repo');
+    expect(message).not.toContain('secret stderr');
 
     await expect(runAppCommand('gh', [], bin)).rejects.toThrow(
       'gh command failed (exit 7)',
@@ -319,5 +335,57 @@ describe('legacy §26 pickup runner', () => {
     await expect(runLegacy('git', [], bin)).resolves.toBe(
       'ssh -i /home/operator/.ssh/deploy_key\n',
     );
+  });
+});
+
+// The isolated bare dir borrows the USER'S object database as its own primary ODB and has no refs of
+// its own, so git's automatic housekeeping there sees every object the operator owns as unreachable.
+// A plain fetch — what fetchRef runs on every §27.10 pickup — then deletes them: verified to take a
+// repo to `fatal: bad object HEAD`, gated only on auto-gc firing and objects older than gc.pruneExpire.
+describe('isolated remote operations and the operator object store', () => {
+  it('never lets housekeeping in the throwaway dir collect the repository it borrows', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'app-command-gc-'));
+    cleanup.push(root);
+    const origin = join(root, 'origin.git');
+    const work = join(root, 'work');
+    const git = (cwd: string, args: string[]): string =>
+      execFileSync('git', args, { cwd, encoding: 'utf8' }).trim();
+    execFileSync('git', ['init', '--quiet', '--bare', origin], { cwd: root });
+    execFileSync('git', ['init', '--quiet', work], { cwd: root });
+    git(work, ['config', 'user.email', 'gc@example.test']);
+    git(work, ['config', 'user.name', 'GC Test']);
+    writeFileSync(join(work, 'a.txt'), 'a\n');
+    git(work, ['add', 'a.txt']);
+    git(work, ['commit', '-m', 'seed']);
+    git(work, ['branch', '-M', 'main']);
+    git(work, ['push', '--quiet', origin, 'main']);
+    writeFileSync(join(work, 'b.txt'), 'b\n');
+    git(work, ['add', 'b.txt']);
+    git(work, ['commit', '-m', 'unpushed work']);
+    const unpushed = git(work, ['rev-parse', 'HEAD']);
+    // auto-gc estimates the loose count by sampling ONE fanout dir and scaling by 256, so the object
+    // count has to be high enough that the sampled dir is reliably non-empty.
+    for (let i = 0; i < 3000; i++) {
+      writeFileSync(join(work, `bulk-${i}.txt`), `content-${i}\n`);
+    }
+    git(work, ['add', '--', '.']);
+
+    // The operator's own housekeeping settings reach the child: GIT_CONFIG_GLOBAL is deliberately
+    // preserved, and pruneExpire is what an ordinary repo's history is already past.
+    const globalConfig = join(root, 'global.gitconfig');
+    writeFileSync(
+      globalConfig,
+      '[gc]\n\tauto = 1\n\tautoDetach = false\n\tpruneExpire = now\n',
+    );
+    process.env.GIT_CONFIG_GLOBAL = globalConfig;
+
+    await createAppGitRemote(work).fetchRef(origin, 'refs/heads/main');
+
+    expect(
+      execFileSync('git', ['cat-file', '-t', unpushed], {
+        cwd: work,
+        encoding: 'utf8',
+      }).trim(),
+    ).toBe('commit');
   });
 });

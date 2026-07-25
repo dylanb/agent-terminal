@@ -14,10 +14,6 @@ const GIT_REPOSITORY_ENV = [
   'GIT_ALTERNATE_OBJECT_DIRECTORIES',
   'GIT_NAMESPACE',
 ] as const;
-// Each names a program git executes to reach the remote, and each outranks the config key that would
-// otherwise pin it: GIT_SSH_COMMAND beats core.sshCommand even when the latter arrives as an explicit
-// `-c`, and GIT_EXEC_PATH relocates the helper binaries git runs itself — a planted git-remote-https is
-// executed in place of the real one — so the neutralizer in protectedArgs is inert while either is set.
 const GIT_TRANSPORT_ENV = [
   'GIT_SSH_COMMAND',
   'GIT_SSH',
@@ -40,13 +36,6 @@ export function commandEnvironment(
   delete environment.GH_REPO;
   for (const key of GIT_REPOSITORY_ENV) delete environment[key];
   for (const key of GIT_TRANSPORT_ENV) delete environment[key];
-  // Each of these SUPPLANTS the repository's own config for the read that decides where an operation
-  // goes: COUNT/KEY_n/VALUE_n and PARAMETERS inject values inline (the latter is git's own
-  // command-line-precedence channel, the one `-c` serializes into), and bare GIT_CONFIG repoints
-  // `git config` at another file outright — enough to answer `remote.origin.url` from a file the
-  // operator never chose. GIT_CONFIG_GLOBAL/SYSTEM are left alone: they name the user's own config in
-  // place of ~/.gitconfig and /etc/gitconfig, they cannot displace the repository's, and dropping them
-  // breaks a legitimate setup.
   for (const key of Object.keys(environment)) {
     if (/^GIT_CONFIG(?:_(?:COUNT|KEY_\d+|VALUE_\d+|PARAMETERS))?$/.test(key)) {
       delete environment[key];
@@ -198,10 +187,14 @@ export function createAppGitRemote(
         ],
         temporaryGitDir,
       );
+      // This dir borrows the operator's object database and has none of its refs, so housekeeping here
+      // sees every object they own as unreachable and collects it. Last -c wins, so these sit after
+      // configArgs: disabling them is a requirement of the isolation, not a caller's choice.
+      const noHousekeeping = ['-c', 'gc.auto=0', '-c', 'maintenance.auto=false'];
       const git = (args: string[]): Promise<string> =>
         executeAppCommand(
           'git',
-          ['--git-dir', temporaryGitDir, ...configArgs, ...args],
+          ['--git-dir', temporaryGitDir, ...configArgs, ...noHousekeeping, ...args],
           temporaryGitDir,
           {
             environment: {
