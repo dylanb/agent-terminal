@@ -2,9 +2,9 @@ import { execFile } from 'node:child_process';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { isAbsolute, join, resolve } from 'node:path';
+import { isGitObjectId } from '../shared/appBootstrap';
 
 export const APP_COMMAND_TIMEOUT_MS = 60_000;
-const OBJECT_ID = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/;
 const GIT_REPOSITORY_ENV = [
   'GIT_DIR',
   'GIT_WORK_TREE',
@@ -20,12 +20,19 @@ interface AppCommandOptions {
   environment?: Record<string, string>;
 }
 
-function commandEnvironment(
+export function commandEnvironment(
   additions: Record<string, string> = {},
 ): NodeJS.ProcessEnv {
   const environment = { ...process.env };
   delete environment.GH_REPO;
   for (const key of GIT_REPOSITORY_ENV) delete environment[key];
+  // GIT_CONFIG_COUNT/KEY_n/VALUE_n inject configuration inline, with no file the user ever chose —
+  // enough to reinstate a url.*.insteadOf redirect that neither the repo-local config screen nor the
+  // isolated git dir can see. GIT_CONFIG_GLOBAL/SYSTEM are left alone: they name the user's own config
+  // files, exactly as ~/.gitconfig does, and dropping them would break a legitimate setup.
+  for (const key of Object.keys(environment)) {
+    if (/^GIT_CONFIG_(?:COUNT|KEY_\d+|VALUE_\d+)$/.test(key)) delete environment[key];
+  }
   return { ...environment, ...additions };
 }
 
@@ -55,9 +62,13 @@ function executeAppCommand(
           error.code >= 0 &&
           error.code <= 255
             ? `exit ${error.code}`
-            : error.killed
-              ? 'timed out'
-              : 'could not start';
+            : error.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER'
+              ? 'output limit exceeded'
+              : error.killed && (error.signal ?? 'SIGTERM') === 'SIGTERM'
+                ? 'timed out'
+                : error.signal
+                  ? `killed by ${error.signal}`
+                  : 'could not start';
         reject(new Error(`${file} command failed (${classification})`));
       },
     );
@@ -67,9 +78,10 @@ function executeAppCommand(
       reject(new Error(`${file} command failed (could not write input)`));
       return;
     }
-    child.stdin.on('error', () =>
-      reject(new Error(`${file} command failed (could not write input)`)),
-    );
+    child.stdin.on('error', () => {
+      child.kill();
+      reject(new Error(`${file} command failed (could not write input)`));
+    });
     child.stdin.end(options.stdin);
   });
 }
@@ -88,7 +100,7 @@ export function parseAppGitObjectId(
   source: string,
 ): string {
   const oid = value.trim().toLowerCase();
-  if (!OBJECT_ID.test(oid)) throw new Error(`invalid ${source} object id`);
+  if (!isGitObjectId(oid)) throw new Error(`invalid ${source} object id`);
   return oid;
 }
 

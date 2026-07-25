@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { APP_COMMAND_TIMEOUT_MS } from './appCommand';
+import { APP_COMMAND_TIMEOUT_MS, commandEnvironment } from './appCommand';
 
 export class CommandFailure extends Error {
   constructor(message: string, readonly exitCode: string | number | undefined) {
@@ -9,7 +9,7 @@ export class CommandFailure extends Error {
 
 export function run(file: string, args: string[], cwd: string, failure: string): Promise<string> {
   return new Promise((resolve, reject) => {
-    execFile(file, args, { cwd, timeout: APP_COMMAND_TIMEOUT_MS }, (err, stdout) => {
+    execFile(file, args, { cwd, timeout: APP_COMMAND_TIMEOUT_MS, env: commandEnvironment() }, (err, stdout) => {
       if (err) {
         const commandError = err as NodeJS.ErrnoException & {
           killed?: boolean;
@@ -27,7 +27,7 @@ export function run(file: string, args: string[], cwd: string, failure: string):
 
 export function runLegacy(file: string, args: string[], cwd: string): Promise<string> {
   return new Promise((resolve, reject) => {
-    execFile(file, args, { cwd, timeout: APP_COMMAND_TIMEOUT_MS }, (err, stdout) => {
+    execFile(file, args, { cwd, timeout: APP_COMMAND_TIMEOUT_MS, env: commandEnvironment() }, (err, stdout) => {
       if (err) reject(err);
       else resolve(stdout);
     });

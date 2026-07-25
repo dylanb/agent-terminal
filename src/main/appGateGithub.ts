@@ -212,11 +212,12 @@ export function createRealAppGateGitHub(
           'edit',
           String(issue),
           '--body-file',
-          bodyFile,
+          '-',
           '--repo',
           identity.selector,
         ],
         repoDir,
+        body,
       );
     },
     publishPullRequestBody: async (
@@ -225,6 +226,15 @@ export function createRealAppGateGitHub(
       closingIssue,
     ) => {
       const identity = await repository();
+      let body: string;
+      try {
+        body = await readFile(bodyFile, 'utf8');
+      } catch (e) {
+        throw new Error(`could not read the PR body artifact: ${errMsg(e)}`);
+      }
+      if (body.trim().length === 0) {
+        throw new Error('refused to publish an empty PR body artifact');
+      }
       if (closingIssue === null) {
         await runAppCommand(
           'gh',
@@ -233,19 +243,14 @@ export function createRealAppGateGitHub(
             'edit',
             String(pullRequest),
             '--body-file',
-            bodyFile,
+            '-',
             '--repo',
             identity.selector,
           ],
           repoDir,
+          body,
         );
         return;
-      }
-      let body: string;
-      try {
-        body = await readFile(bodyFile, 'utf8');
-      } catch (e) {
-        throw new Error(`could not read the PR body artifact: ${errMsg(e)}`);
       }
       const artifact = body.trimEnd();
       const closingLine = `closes #${closingIssue}`;
@@ -261,9 +266,7 @@ export function createRealAppGateGitHub(
           identity.selector,
         ],
         repoDir,
-        artifact.length === 0
-          ? `${closingLine}\n`
-          : `${artifact}\n\n${closingLine}\n`,
+        `${artifact}\n\n${closingLine}\n`,
       );
     },
   };

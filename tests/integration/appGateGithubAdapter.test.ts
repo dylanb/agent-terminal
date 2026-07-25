@@ -2,6 +2,7 @@ import { execFileSync } from 'node:child_process';
 import {
   existsSync,
   mkdtempSync,
+  readFileSync,
   rmSync,
   writeFileSync,
 } from 'node:fs';
@@ -69,6 +70,31 @@ describe('real app gate GitHub adapter', () => {
     expect(existsSync(marker)).toBe(false);
   });
 
+  // The guard reads the artifact; `gh --body-file <path>` would open it again and publish a second,
+  // possibly different read. Publish the bytes that were graded.
+  it('publishes the artifact bytes it validated, not a re-read of the path', async () => {
+    const { repo, bin } = seedRepoWithGh(
+      'app-gate-issue-stdin',
+      '#!/usr/bin/env bash\n' +
+        'if [ "$1" = "repo" ]; then printf \'%s\\n\' \'{"nameWithOwner":"owner/repository","url":"https://github.com/owner/repository","defaultBranchRef":{"name":"main"}}\'; exit 0; fi\n' +
+        'if [ "$1" = "issue" ] && [ "$2" = "edit" ]; then cat > "$FAKE_EDIT_MARKER"; exit 0; fi\n' +
+        'exit 1\n',
+    );
+    const marker = join(bin, 'issue-body');
+    process.env.FAKE_EDIT_MARKER = marker;
+    const body = join(repo, 'groomed-ticket.md');
+    writeFileSync(body, '# Groomed\n');
+
+    await createRealAppGateGitHub(repo)('update-issue-body', {
+      pr: null,
+      ticket: 78,
+      bodyFile: body,
+      bootstrap: null,
+    });
+
+    expect(readFileSync(marker, 'utf8')).toBe('# Groomed\n');
+  });
+
   it('publishes a non-empty issue body artifact', async () => {
     const { repo, bin } = seedRepoWithGh(
       'app-gate-issue-body',
@@ -133,6 +159,32 @@ describe('real app gate GitHub adapter', () => {
         },
       }),
     ).rejects.toThrow(/bootstrap PR identity/i);
+    expect(existsSync(marker)).toBe(false);
+  });
+
+  // One rule for the port, not three: `updateIssueBody` refuses a blank artifact, so neither
+  // `publishPullRequestBody` arm may publish one either.
+  it('refuses to replace a PR body with an empty artifact', async () => {
+    const { repo, bin } = seedRepoWithGh(
+      'app-gate-empty-pr',
+      '#!/usr/bin/env bash\n' +
+        'if [ "$1" = "repo" ]; then printf \'%s\\n\' \'{"nameWithOwner":"owner/repository","url":"https://github.com/owner/repository","defaultBranchRef":{"name":"main"}}\'; exit 0; fi\n' +
+        'if [ "$1" = "pr" ] && [ "$2" = "edit" ]; then touch "$FAKE_EDIT_MARKER"; exit 0; fi\n' +
+        'exit 1\n',
+    );
+    const marker = join(bin, 'pr-edited');
+    process.env.FAKE_EDIT_MARKER = marker;
+    const body = join(repo, 'plan.md');
+    writeFileSync(body, '  \n');
+
+    await expect(
+      createRealAppGateGitHub(repo)('publish-pr-body', {
+        pr: 42,
+        ticket: null,
+        bodyFile: body,
+        bootstrap: null,
+      }),
+    ).rejects.toThrow(/empty/i);
     expect(existsSync(marker)).toBe(false);
   });
 });

@@ -18,8 +18,14 @@ export interface AppBootstrapConflictTarget {
 
 const OBJECT_ID = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/;
 
+// One definition of what a git object id looks like: main normalizes oids onto the wire through
+// parseAppGitObjectId and validates the renderer's echo of the same values through this module.
+export function isGitObjectId(value: string): boolean {
+  return OBJECT_ID.test(value);
+}
+
 function isConflictOid(value: unknown): boolean {
-  return value === null || (typeof value === 'string' && OBJECT_ID.test(value));
+  return value === null || (typeof value === 'string' && isGitObjectId(value));
 }
 
 export function isAppBootstrapConflictTarget(

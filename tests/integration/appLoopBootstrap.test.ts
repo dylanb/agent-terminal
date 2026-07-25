@@ -1904,6 +1904,25 @@ describe('createAppLoopBootstrapCoordinator — confirm-first wipe (§27.10)', (
 
   // §27.10 — the answer authorizes the resources the operator was shown, so a confirmation that names a
   // different set than the one now held cannot be spent on it.
+  // Defense in depth: the base branch is resolved two statements earlier, so a branch_template whose
+  // expansion collides with it must never reach a wipe prompt (CLAUDE.md: never allow an unrecoverable
+  // state to occur).
+  it('refuses a pickup whose branch is the repository default branch', async () => {
+    const g = fakeGit();
+    const conflicts = fakeConflicts(target({ branch: 'main' }));
+    const result = await runAppLoopBootstrap(
+      runnerDeps(g, fakeGitHub(), undefined, undefined, undefined, conflicts),
+      request({ spec: { ...wipeSpec(), branchTemplate: 'main' } }),
+    );
+
+    expect(result).toEqual({
+      ok: false,
+      error: expect.stringMatching(/default branch|base branch/i),
+    });
+    expect(conflicts.wiped).toEqual([]);
+    expect(g.calls.some((call) => call.startsWith('branch:'))).toBe(false);
+  });
+
   it('makes a wipe answer for a superseded target inert', async () => {
     const shown = target();
     const superseded = target({ pullRequests: [321, 999] });

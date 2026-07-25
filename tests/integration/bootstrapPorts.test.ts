@@ -105,22 +105,26 @@ describe('createRealAppBootstrapGit — owned remote-ref compensation', () => {
     );
   });
 
-  it('rejects a work-tree identity redirected through inherited Git state', async () => {
+  // Inherited repository-selection variables are stripped from every child, so the port operates on the
+  // repo it was constructed for rather than merely detecting the redirect after the fact.
+  it('ignores a work-tree redirected through inherited Git state', async () => {
     const redirectedTree = join(root, 'inherited-worktree');
     mkdirSync(redirectedTree);
     const previousWorkTree = process.env.GIT_WORK_TREE;
+    const previousGitDir = process.env.GIT_DIR;
     process.env.GIT_WORK_TREE = redirectedTree;
+    process.env.GIT_DIR = join(redirectedTree, '.git');
     try {
       const port = createRealAppBootstrapGit(repo);
-      await expect(port.branchState(branch)).rejects.toThrow(
-        /repository identity mismatch/i,
-      );
+      await expect(port.branchState(branch)).resolves.toEqual({
+        localOid: null,
+        remoteOid: null,
+      });
     } finally {
-      if (previousWorkTree === undefined) {
-        delete process.env.GIT_WORK_TREE;
-      } else {
-        process.env.GIT_WORK_TREE = previousWorkTree;
-      }
+      if (previousWorkTree === undefined) delete process.env.GIT_WORK_TREE;
+      else process.env.GIT_WORK_TREE = previousWorkTree;
+      if (previousGitDir === undefined) delete process.env.GIT_DIR;
+      else process.env.GIT_DIR = previousGitDir;
     }
   });
 

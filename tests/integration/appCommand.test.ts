@@ -13,6 +13,14 @@ const originalPath = process.env.PATH;
 const originalRepository = process.env.GH_REPO;
 const originalGitDir = process.env.GIT_DIR;
 const originalGitWorkTree = process.env.GIT_WORK_TREE;
+const gitConfigVars = [
+  'GIT_CONFIG_COUNT',
+  'GIT_CONFIG_KEY_0',
+  'GIT_CONFIG_VALUE_0',
+  'GIT_CONFIG_GLOBAL',
+  'GIT_CONFIG_SYSTEM',
+];
+const originalGitConfig = gitConfigVars.map((k) => [k, process.env[k]] as const);
 
 afterEach(() => {
   process.env.PATH = originalPath;
@@ -22,6 +30,10 @@ afterEach(() => {
   else process.env.GIT_DIR = originalGitDir;
   if (originalGitWorkTree === undefined) delete process.env.GIT_WORK_TREE;
   else process.env.GIT_WORK_TREE = originalGitWorkTree;
+  for (const [key, value] of originalGitConfig) {
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
   while (cleanup.length > 0) {
     rmSync(cleanup.pop()!, { recursive: true, force: true });
   }
@@ -193,5 +205,50 @@ describe('app command boundary', () => {
         { encoding: 'utf8' },
       ).trim(),
     ).toBe(movedOid);
+  });
+});
+
+describe('app command environment neutralization', () => {
+  it('drops inherited GIT_CONFIG_* injection, which can rewrite any remote URL', async () => {
+    const bin = mkdtempSync(join(tmpdir(), 'app-command-gitconfig-'));
+    cleanup.push(bin);
+    writeFileSync(
+      join(bin, 'git'),
+      '#!/usr/bin/env bash\nprintf \'%s|%s|%s\\n\' "${GIT_CONFIG_COUNT-unset}" "${GIT_CONFIG_KEY_0-unset}" "${GIT_CONFIG_VALUE_0-unset}"\n',
+      { mode: 0o755 },
+    );
+    process.env.PATH = `${bin}:${originalPath ?? ''}`;
+    process.env.GIT_CONFIG_COUNT = '1';
+    process.env.GIT_CONFIG_KEY_0 = 'url.https://evil.example/.insteadOf';
+    process.env.GIT_CONFIG_VALUE_0 = 'https://github.com/';
+
+    await expect(runAppCommand('git', [], bin)).resolves.toBe(
+      'unset|unset|unset\n',
+    );
+  });
+});
+
+describe('app command failure classification', () => {
+  it('names an output-limit overrun rather than reporting a timeout', async () => {
+    const bin = mkdtempSync(join(tmpdir(), 'app-command-maxbuffer-'));
+    cleanup.push(bin);
+    // execFile kills the child on a maxBuffer overrun and sets `killed`, which is the same flag a real
+    // timeout sets — so a classification keyed on `killed` alone sends the operator hunting a hang.
+    writeFileSync(
+      join(bin, 'gh'),
+      '#!/usr/bin/env bash\nhead -c 2000000 /dev/zero | tr "\\0" "x"\n',
+      { mode: 0o755 },
+    );
+    process.env.PATH = `${bin}:${originalPath ?? ''}`;
+
+    await expect(runAppCommand('gh', [], bin)).rejects.toThrow(/output limit/i);
+  });
+
+  it('names a missing executable rather than reporting a timeout', async () => {
+    const bin = mkdtempSync(join(tmpdir(), 'app-command-missing-'));
+    cleanup.push(bin);
+    process.env.PATH = bin;
+
+    await expect(runAppCommand('gh', [], bin)).rejects.toThrow(/could not start/i);
   });
 });

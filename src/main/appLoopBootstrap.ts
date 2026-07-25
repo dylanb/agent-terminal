@@ -209,6 +209,9 @@ export async function runAppLoopBootstrap(
     if (!(await deps.git.isCleanTree())) return fail('working tree is not clean');
     const base = await deps.git.resolveBaseBranch();
     if (!base) return fail('could not resolve base branch');
+    if (branch === base) {
+      return fail(`refused a pickup onto the repository default branch: ${branch}`);
+    }
     const conflict = await deps.conflicts.inspect(branch);
     if (confirmedWipe !== undefined) {
       if (!sameAppBootstrapConflictTarget(conflict, confirmedWipe)) {
