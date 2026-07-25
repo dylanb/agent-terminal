@@ -138,14 +138,18 @@ flowchart TD
   PE --> BOOT["async in-app bootstrap"]
   BOOT -->|"no conflict"| P["plan-loop"]
   BOOT -->|"failure"| RB["roll back to groom<br/>inputs preserved"]
-  BOOT -->|"existing refs or open PRs"| CF["confirm exact ref OIDs<br/>and PR numbers"]
+  BOOT -->|"existing refs or open PRs, wipe policy"| CF["confirm exact ref OIDs<br/>and PR numbers"]
+  BOOT -->|"existing refs or open PRs, no wipe policy"| RB
   CF -->|"decline"| RBQ["roll back to groom<br/>inputs preserved, no error dialog"]
   CF -->|"confirm"| CHECK{"target still matches?"}
   CHECK -->|"changed, conflicts remain"| CF
   CHECK -->|"changed, no conflicts remain"| RB
-  CHECK -->|"yes"| WIPE["delete exact refs under a lease<br/>remote first, then local, then close any PR still open"]
-  WIPE -->|"complete"| P
-  WIPE -->|"incomplete or failed"| RB
+  CHECK -->|"yes"| WIPE["verify both ref leases, then delete<br/>remote first, then local, then close any PR still open"]
+  WIPE -->|"complete"| CREATE["create branch, start commit,<br/>push, open draft PR"]
+  CREATE -->|"ok"| P
+  CREATE -->|"failed, wiped refs are not restored"| RB
+  WIPE -->|"a lease refused, nothing destroyed"| RB
+  WIPE -->|"failed after the remote ref was deleted,<br/>wiped refs are not restored"| RB
   RBQ --> RETRY
   RB --> RETRY["approve / advance rolled-back step"]
   RB -.->|"optional"| RELAUNCH["relaunch restores rolled-back step"]
