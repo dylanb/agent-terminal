@@ -71,7 +71,13 @@ export function createRealAppBootstrapGit(
     try {
       return await op(remote);
     } catch (e) {
-      throw new CommandFailure(failure, e instanceof CommandFailure ? e.exitCode : undefined);
+      // Every value reachable here is argv-free by construction: executeAppCommand builds its rejection
+      // from a closed classification vocabulary and discards Node's own tainted `error.message`, and the
+      // remaining throws name no ref, URL or oid.
+      throw new CommandFailure(
+        `${failure}: ${errMsg(e)}`,
+        e instanceof CommandFailure ? e.exitCode : undefined,
+      );
     }
   };
   const originConfig = createOriginConfigReader((args) =>

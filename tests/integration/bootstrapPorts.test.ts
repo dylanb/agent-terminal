@@ -556,13 +556,23 @@ describe('createRealAppBootstrapGit — owned remote-ref compensation', () => {
     expect(hasRef(repo, `refs/heads/${branch}`)).toBe(false);
   });
 
-  it('redacts tainted argv from surfaced command failures', async () => {
+  // Two properties, not one. The operator needs to tell a timeout apart from a bad remote apart from a
+  // missing base, so the classification must survive; the argv must not, because a base branch name is
+  // tainted. Anchoring the whole message enforced the second by discarding the first.
+  it('surfaces the failure classification but never the tainted argv', async () => {
     const port = createRealAppBootstrapGit(repo);
     const taintedBase = 'private-base-name';
 
-    await expect(
-      port.createBranchFromBase('plan-loop/issue-78', taintedBase),
-    ).rejects.toThrow(/^base fetch failed(?: \(exit \d+\))?$/);
+    const failure = await port
+      .createBranchFromBase('plan-loop/issue-78', taintedBase)
+      .then(
+        () => null,
+        (e: unknown) => (e instanceof Error ? e.message : String(e)),
+      );
+
+    expect(failure).toMatch(/^base fetch failed/);
+    expect(failure).toMatch(/exit \d+|timed out|could not start|output limit/);
+    expect(failure).not.toContain(taintedBase);
   });
 
   it('reports both sides of a conflicting branch by object id', async () => {

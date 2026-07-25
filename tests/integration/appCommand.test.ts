@@ -7,6 +7,7 @@ import {
   createAppGitRemote,
   runAppCommand,
 } from '../../src/main/appCommand';
+import { runLegacy } from '../../src/main/appBootstrapCommand';
 
 const cleanup: string[] = [];
 const originalPath = process.env.PATH;
@@ -25,6 +26,9 @@ const gitConfigVars = [
   'GIT_SSH',
   'GIT_ASKPASS',
   'GIT_PROXY_COMMAND',
+  'GIT_EXEC_PATH',
+  'SSH_ASKPASS',
+  'SSH_ASKPASS_REQUIRE',
 ];
 const originalGitConfig = gitConfigVars.map((k) => [k, process.env[k]] as const);
 
@@ -251,7 +255,7 @@ describe('app command environment neutralization', () => {
     cleanup.push(bin);
     writeFileSync(
       join(bin, 'git'),
-      '#!/usr/bin/env bash\nprintf \'%s|%s|%s|%s\\n\' "${GIT_SSH_COMMAND-unset}" "${GIT_SSH-unset}" "${GIT_ASKPASS-unset}" "${GIT_PROXY_COMMAND-unset}"\n',
+      '#!/usr/bin/env bash\nprintf \'%s|%s|%s|%s|%s|%s|%s\\n\' "${GIT_SSH_COMMAND-unset}" "${GIT_SSH-unset}" "${GIT_ASKPASS-unset}" "${GIT_PROXY_COMMAND-unset}" "${GIT_EXEC_PATH-unset}" "${SSH_ASKPASS-unset}" "${SSH_ASKPASS_REQUIRE-unset}"\n',
       { mode: 0o755 },
     );
     process.env.PATH = `${bin}:${originalPath ?? ''}`;
@@ -259,9 +263,14 @@ describe('app command environment neutralization', () => {
     process.env.GIT_SSH = '/tmp/evil-ssh';
     process.env.GIT_ASKPASS = '/tmp/evil-askpass';
     process.env.GIT_PROXY_COMMAND = '/tmp/evil-proxy';
+    // GIT_EXEC_PATH relocates the helper programs git itself executes — a planted git-remote-https is
+    // run in place of the real one, so the transport never reaches the code the neutralizer pins.
+    process.env.GIT_EXEC_PATH = '/tmp/evil-exec';
+    process.env.SSH_ASKPASS = '/tmp/evil-ssh-askpass';
+    process.env.SSH_ASKPASS_REQUIRE = 'force';
 
     await expect(runAppCommand('git', [], bin)).resolves.toBe(
-      'unset|unset|unset|unset\n',
+      'unset|unset|unset|unset|unset|unset|unset\n',
     );
   });
 });
@@ -288,5 +297,27 @@ describe('app command failure classification', () => {
     process.env.PATH = bin;
 
     await expect(runAppCommand('gh', [], bin)).rejects.toThrow(/could not start/i);
+  });
+});
+
+// §27.15 — "The old engine is never modified, only routed around. No §26 code is edited to accommodate
+// §27." The module split that moved this runner out of bootstrapPorts.ts was a verbatim relocation, so
+// the live §26 pickup path must still see the operator's environment. Hardening §26 is a deliberate
+// change in its own right, with its own departure entry; it is not something a refactor does silently.
+describe('legacy §26 pickup runner', () => {
+  it('leaves the operator environment as the old engine had it', async () => {
+    const bin = mkdtempSync(join(tmpdir(), 'app-command-legacy-'));
+    cleanup.push(bin);
+    writeFileSync(
+      join(bin, 'git'),
+      '#!/usr/bin/env bash\nprintf \'%s\\n\' "${GIT_SSH_COMMAND-unset}"\n',
+      { mode: 0o755 },
+    );
+    process.env.PATH = `${bin}:${originalPath ?? ''}`;
+    process.env.GIT_SSH_COMMAND = 'ssh -i /home/operator/.ssh/deploy_key';
+
+    await expect(runLegacy('git', [], bin)).resolves.toBe(
+      'ssh -i /home/operator/.ssh/deploy_key\n',
+    );
   });
 });

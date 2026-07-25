@@ -16,12 +16,16 @@ const GIT_REPOSITORY_ENV = [
 ] as const;
 // Each names a program git executes to reach the remote, and each outranks the config key that would
 // otherwise pin it: GIT_SSH_COMMAND beats core.sshCommand even when the latter arrives as an explicit
-// `-c`, so the neutralizer in protectedArgs is inert while it is set.
+// `-c`, and GIT_EXEC_PATH relocates the helper binaries git runs itself — a planted git-remote-https is
+// executed in place of the real one — so the neutralizer in protectedArgs is inert while either is set.
 const GIT_TRANSPORT_ENV = [
   'GIT_SSH_COMMAND',
   'GIT_SSH',
   'GIT_ASKPASS',
   'GIT_PROXY_COMMAND',
+  'GIT_EXEC_PATH',
+  'SSH_ASKPASS',
+  'SSH_ASKPASS_REQUIRE',
 ] as const;
 
 interface AppCommandOptions {
