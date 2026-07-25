@@ -196,7 +196,12 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
       btn.className = cls;
       btn.dataset.appRouteOut = action;
       btn.textContent = label;
-      btn.setAttribute('aria-label', `${label} the ${step} work turn`);
+      btn.setAttribute(
+        'aria-label',
+        action === 'terminate'
+          ? `Terminate flow from the ${step} work turn`
+          : `${label} the ${step} work turn`,
+      );
       btn.addEventListener('click', () => deps.appRouteOut?.(step, turnKey, action));
       group.append(btn);
     }

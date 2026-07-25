@@ -1,10 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   APP_LOOP_STATE_SCHEMA,
   armInterrupt,
+  clearAppLoopBootstrap,
   clearInterrupt,
   enterPolish,
   clearPolish,
@@ -19,6 +20,7 @@ import {
   serializeAppLoopState,
   writeAppLoopState,
   writeAppLoopBootstrap,
+  writeAppLoopBootstrapIntent,
   readAppLoopBootstrap,
   type AppLoopBootstrap,
   type AppLoopRunState,
@@ -143,6 +145,7 @@ describe('§27 bootstrap-identity file — disjoint from the run-state document 
     pr: 87,
     branch: 'plan-loop/issue-78',
     issue: 78,
+    initialStatus: 'planning',
   };
   const bootstrapFile = (): string => join(loopDir(), 'bootstrap.yaml');
 
@@ -151,6 +154,95 @@ describe('§27 bootstrap-identity file — disjoint from the run-state document 
     writeAppLoopBootstrap(repo, IDENTITY, FIXED);
     expect(existsSync(bootstrapFile())).toBe(true);
     expect(readAppLoopBootstrap(repo)).toEqual(IDENTITY);
+  });
+
+  it.each(['grooming', 'planning', 'implementing'])(
+    'preserves the def-declared initial status %s',
+    (initialStatus) => {
+      writeAppLoopBootstrap(repo, { ...IDENTITY, initialStatus }, FIXED);
+      expect(readAppLoopBootstrap(repo)?.initialStatus).toBe(initialStatus);
+    },
+  );
+
+  it('reads the additive v1 completed shape written before initial_status existed', () => {
+    mkdirSync(loopDir(), { recursive: true });
+    writeFileSync(
+      bootstrapFile(),
+      'schema_version: 1\npr: 87\nbranch: plan-loop/issue-78\nissue: 78\n',
+    );
+
+    expect(readAppLoopBootstrap(repo)).toEqual({
+      pr: 87,
+      branch: 'plan-loop/issue-78',
+      issue: 78,
+    });
+  });
+
+  it('clears only the completed bootstrap journal after owned compensation', () => {
+    writeAppLoopBootstrap(repo, IDENTITY, FIXED);
+    writeAppLoopState(repo, RUN, FIXED);
+
+    clearAppLoopBootstrap(repo);
+
+    expect(existsSync(bootstrapFile())).toBe(false);
+    expect(readAppLoopState(repo)).toEqual(expect.objectContaining(RUN));
+  });
+
+  it('journals intent before outward mutation without surfacing a completed identity', () => {
+    writeAppLoopBootstrapIntent(
+      repo,
+      {
+        branch: IDENTITY.branch,
+        issue: IDENTITY.issue,
+        initialStatus: IDENTITY.initialStatus,
+      },
+      FIXED,
+    );
+    expect(readFileSync(bootstrapFile(), 'utf8')).toContain('status: pending');
+    expect(readFileSync(bootstrapFile(), 'utf8')).toContain('initial_status: planning');
+    expect(readAppLoopBootstrap(repo)).toBeNull();
+
+    writeAppLoopBootstrap(repo, IDENTITY, FIXED);
+    expect(readFileSync(bootstrapFile(), 'utf8')).toContain('status: complete');
+    expect(readAppLoopBootstrap(repo)).toEqual(IDENTITY);
+  });
+
+  it('refuses a planted bootstrap directory before a journal can be written', () => {
+    mkdirSync(bootstrapFile(), { recursive: true });
+    expect(() =>
+      writeAppLoopBootstrapIntent(
+        repo,
+        {
+          branch: IDENTITY.branch,
+          issue: IDENTITY.issue,
+          initialStatus: IDENTITY.initialStatus,
+        },
+        FIXED,
+      ),
+    ).toThrow();
+  });
+
+  it('refuses a bootstrap leaf symlink without writing or deleting its target', () => {
+    mkdirSync(loopDir(), { recursive: true });
+    const target = join(loopDir(), 'artifacts', 'operator-owned.md');
+    mkdirSync(join(loopDir(), 'artifacts'), { recursive: true });
+    writeFileSync(target, 'operator owned\n');
+    symlinkSync(target, bootstrapFile());
+
+    expect(() =>
+      writeAppLoopBootstrapIntent(
+        repo,
+        {
+          branch: IDENTITY.branch,
+          issue: IDENTITY.issue,
+          initialStatus: IDENTITY.initialStatus,
+        },
+        FIXED,
+      ),
+    ).toThrow();
+    expect(() => clearAppLoopBootstrap(repo)).toThrow();
+    expect(readFileSync(target, 'utf8')).toBe('operator owned\n');
+    expect(readAppLoopBootstrap(repo)).toBeNull();
   });
 
   it('is byte-for-byte untouched by a wholesale run-state write, and vice versa (disjoint files)', () => {
@@ -187,6 +279,7 @@ describe('§27 bootstrap-identity file — disjoint from the run-state document 
   it('returns null when absent, and drops a field-invalid file rather than surfacing a phantom identity', () => {
     expect(readAppLoopBootstrap(repo)).toBeNull();
     writeAppLoopBootstrap(repo, IDENTITY, FIXED);
+    const good = readFileSync(bootstrapFile(), 'utf8');
     // A non-integer / negative pr or issue, or blank branch, is not a valid identity (CWE-20).
     for (const bad of [
       'pr: -1',
@@ -194,8 +287,8 @@ describe('§27 bootstrap-identity file — disjoint from the run-state document 
       'pr: 9007199254740992',
       'issue: 0',
       'branch: ""',
+      'initial_status: ""',
     ]) {
-      const good = readFileSync(bootstrapFile(), 'utf8');
       const field = bad.split(':')[0];
       const mutated = good.replace(new RegExp(`^${field}:.*$`, 'm'), bad);
       writeFileSync(bootstrapFile(), mutated);

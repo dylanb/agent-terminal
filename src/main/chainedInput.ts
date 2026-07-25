@@ -1,7 +1,3 @@
-// §27.10 — the chained-input vocabulary: what an upstream loop left at a declared input binding, and the
-// partition of a step's declared bindings into what carries into its work turn and what did not resolve.
-// One home, so the fs classifier, the prompt composer and the engine all name the same concept.
-
 import type { ArtifactBinding } from './loopDefV2';
 
 /** §27.10 */

@@ -61,6 +61,7 @@ describe('real app gate GitHub adapter', () => {
           pr: 42,
           issue: 78,
           branch: 'plan-loop/issue-78',
+          initialStatus: 'planning',
         },
       }),
     ).rejects.toThrow(/bootstrap PR identity/i);

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { createRealPickupGit, decidePickupAction, runPickup, type PickupGit, type PickupGitHub, type PickupResult } from '../../src/main/loopPickup';
@@ -20,13 +20,13 @@ function makeFakeGit(overrides: Partial<Record<string, unknown>> = {}): { git: P
     resolveBaseBranch: async () => ('base' in overrides ? (overrides.base as string | null) : 'main'),
     branchExists: async () => ('branchExists' in overrides ? (overrides.branchExists as boolean) : false),
     wipeConflictingBranch: async (branch) => void calls.push(`wipe:${branch}`),
-    createBranchFromBase: async (branch, base) => {
-      calls.push(`branch:${branch}<-${base}`);
-    },
+    createBranchFromBase: async (branch, base) => void calls.push(`branch:${branch}<-${base}`),
     commitEmptyStart: async (msg) => {
       calls.push(`commit:${msg.split('\n')[0]}`);
     },
-    pushBranchUpstream: async (branch) => void calls.push(`push:${branch}`),
+    pushBranchUpstream: async (branch) => {
+      calls.push(`push:${branch}`);
+    },
   };
   return { git, calls };
 }
@@ -324,11 +324,33 @@ describe('createRealPickupGit.isCleanTree — app-owned state is not "dirty" (§
     expect(await createRealPickupGit(repo).isCleanTree()).toBe(true);
   });
 
-  it('preserves §26 behavior for staged app-owned state', async () => {
-    mkdirSync(join(repo, '.agent-loop'));
-    writeFileSync(join(repo, '.agent-loop', 'state.yaml'), 'x\n');
-    git(['add', '.agent-loop/state.yaml']);
+  it('keeps staged app-owned state eligible for the legacy pickup path', async () => {
+    mkdirSync(join(repo, '.agent-terminal'));
+    writeFileSync(join(repo, '.agent-terminal', 'flow-state.yaml'), 'step: groom\n');
+    git(['add', '.agent-terminal/flow-state.yaml']);
+
     expect(await createRealPickupGit(repo).isCleanTree()).toBe(true);
+  });
+
+  it('keeps legacy commit hooks observable at the public pickup boundary', async () => {
+    const remote = mkdtempSync(join(tmpdir(), 'pickup-legacy-remote-'));
+    execFileSync('git', ['init', '--bare', '-q', remote]);
+    git(['remote', 'add', 'origin', remote]);
+    git(['push', '-q', 'origin', 'HEAD:main']);
+    const hookMarker = join(repo, 'legacy-hook-ran');
+    writeFileSync(
+      join(repo, '.git', 'hooks', 'post-commit'),
+      `#!/bin/sh\ntouch ${JSON.stringify(hookMarker)}\n`,
+      { mode: 0o755 },
+    );
+    try {
+      const pickup = createRealPickupGit(repo);
+      await pickup.createBranchFromBase('plan-loop/issue-78', 'main');
+      await pickup.commitEmptyStart('[skip ci] start work on #78');
+      expect(existsSync(hookMarker)).toBe(true);
+    } finally {
+      rmSync(remote, { recursive: true, force: true });
+    }
   });
 
   it('treats a real source change as dirty', async () => {

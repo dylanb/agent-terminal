@@ -86,6 +86,7 @@ describe('§27 approve side-effect port (appGateGithub)', () => {
         pr: 42,
         issue: 78,
         branch: 'plan-loop/issue-78',
+        initialStatus: 'planning',
       },
     });
     expect(g.state.issueBodies).toEqual(new Map([[78, bodyFile]]));
@@ -162,6 +163,7 @@ describe('§27 approve side-effect port (appGateGithub)', () => {
         pr: 42,
         issue: 78,
         branch: 'plan-loop/issue-78',
+        initialStatus: 'planning',
       },
     });
     expect(g.state.ready).toEqual(new Set([42]));
@@ -178,6 +180,7 @@ describe('§27 approve side-effect port (appGateGithub)', () => {
         pr: 42,
         issue: 78,
         branch: 'plan-loop/issue-78',
+        initialStatus: 'planning',
       },
     });
     expect(g.state.pullRequestBodies).toEqual(
@@ -201,6 +204,7 @@ describe('§27 approve side-effect port (appGateGithub)', () => {
           pr: 42,
           issue: 78,
           branch: 'plan-loop/issue-78',
+          initialStatus: 'planning',
         },
       }),
     ).rejects.toThrow(/bootstrap PR identity/i);

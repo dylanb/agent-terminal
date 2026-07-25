@@ -10,13 +10,12 @@ import path from 'node:path';
 import type { PickupContract } from './loopDef';
 import { writeLoopState, type LoopStateWrite } from './loopStateWriter';
 import { errMsg } from './errno';
-import {
-  createRealBootstrapGit,
-  createRealBootstrapGitHub,
-  type BootstrapBranchWiper,
-  type BootstrapGit,
-  type BootstrapGitHub,
-  type BootstrapIssue,
+import { createRealBootstrapGit, createRealBootstrapGitHub } from './legacyPickupPorts';
+import type {
+  BootstrapBranchWiper,
+  BootstrapGit,
+  BootstrapGitHub,
+  BootstrapIssue,
 } from './bootstrapPorts';
 
 /** GitHub issue facts the pickup needs for the start commit + PR title. */

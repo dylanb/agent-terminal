@@ -1,7 +1,3 @@
-// Reusable modal-dialog shell (#26): the one definition of the blocking-dialog focus management
-// (UI-STANDARDS §5). EVERY blocking dialog composes it — an enumeration here would rot, and the composer it
-// omitted is precisely the one that would drift. Callers supply only the card body via render(build).
-
 export interface ModalCard {
   card: HTMLElement;
   initialFocus: HTMLElement | null;
@@ -26,7 +22,7 @@ export type ModalShellBuild = (ctx: {
 
 export interface ModalShell {
   /** Open with a freshly built card; `null` closes any open dialog. */
-  render(build: ModalShellBuild | null): void;
+  render(build: ModalShellBuild | null, restoreFocusTo?: HTMLElement | null): void;
   /** Tear down the host subtree WITHOUT restoring focus (unmount/relocation, UI §2.2.1). */
   dispose(): void;
 }
@@ -69,11 +65,16 @@ export function createModalShell(
     if (wasOpen) onDismiss?.();
   };
   return {
-    render(build) {
+    render(build, restoreFocusTo) {
       if (!build) return clear();
       const wasOpen = host.firstChild !== null;
       host.replaceChildren();
-      if (!wasOpen) opener = doc.activeElement as HTMLElement | null;
+      if (!wasOpen) {
+        opener =
+          restoreFocusTo === undefined
+            ? doc.activeElement as HTMLElement | null
+            : restoreFocusTo;
+      }
 
       const scrim = doc.createElement('div');
       scrim.className = 'flow-scrim';

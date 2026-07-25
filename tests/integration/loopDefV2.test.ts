@@ -117,6 +117,40 @@ describe('resolveLoopDefV2 — parse round-trip (§27.8, AC 3)', () => {
     expect(op.ok && op.def.origin).toBe('operator'); // operator tier wins (first-hit)
   });
 
+  it('refuses an operator def leaf symlinked to repository-owned content', () => {
+    const operatorRoot = join(opDir, 'loops-v2');
+    const operatorDef = join(operatorRoot, 'plan-loop', 'plan-loop.yaml');
+    plantDef(operatorRoot, 'plan-loop', VALID_DEF);
+    rmSync(operatorDef);
+    const repositoryDef = join(repoDir, 'untrusted-plan-loop.yaml');
+    writeFileSync(repositoryDef, VALID_DEF);
+    symlinkSync(repositoryDef, operatorDef);
+
+    const r = resolveLoopDefV2('plan-loop', { tiers: tiers(), repoDir });
+
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.reason).toMatch(/operator.*tier.*escapes/i);
+      expect(r.reason).not.toMatch(/unresolvable/i);
+    }
+  });
+
+  it('distinguishes an unresolvable operator def leaf from a tier escape', () => {
+    const operatorRoot = join(opDir, 'loops-v2');
+    const operatorDef = join(operatorRoot, 'plan-loop', 'plan-loop.yaml');
+    plantDef(operatorRoot, 'plan-loop', VALID_DEF);
+    rmSync(operatorDef);
+    symlinkSync(join(repoDir, 'missing-plan-loop.yaml'), operatorDef);
+
+    const r = resolveLoopDefV2('plan-loop', { tiers: tiers(), repoDir });
+
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.reason).toMatch(/operator.*tier.*unresolvable/i);
+      expect(r.reason).not.toMatch(/escapes/i);
+    }
+  });
+
   it('resolves a repo-local registry override as untrusted repo origin before the operator tier', () => {
     plantDef(join(opDir, 'loops-v2'), 'plan-loop', VALID_DEF);
     plantDef(join(repoDir, 'defs'), 'plan-loop', VALID_DEF);
@@ -170,6 +204,8 @@ describe('resolveLoopDefV2 — the bootstrap pickup contract is optional and sel
   });
 
   it('defaults a pickup that names no on_conflict to the abort wipe policy (wipe-absent arm)', () => {
+    // The committed VALID_DEF pickup names no on_conflict → the discriminated union's wipe-absent arm, so a
+    // branch conflict is a plain rollback failure (ST2 runs no wipe; the wipe path is ST3).
     plantDef(join(appDir, 'loops-v2'), 'plan-loop', VALID_DEF);
     const r = resolveLoopDefV2('plan-loop', { tiers: tiers(), repoDir });
     expect(r.ok).toBe(true);

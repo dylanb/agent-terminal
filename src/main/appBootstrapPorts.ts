@@ -1,19 +1,18 @@
 import { createRealAppBootstrapGit } from './appBootstrapGit';
-import { createRealAppBootstrapConflicts } from './appBootstrapConflicts';
 import { createRealAppBootstrapGitHub } from './appBootstrapGithub';
-import { createGitHubRepositorySource } from './githubRepository';
-import type { AppBootstrapPorts } from './appLoopBootstrap';
+import type { AppBootstrapGit, AppBootstrapGitFaults, AppBootstrapGitHub } from './bootstrapPorts';
+
+export interface AppBootstrapPorts {
+  git: AppBootstrapGit;
+  github: AppBootstrapGitHub;
+}
 
 export function createRealAppBootstrapPorts(
   repoDir: string,
+  faults?: AppBootstrapGitFaults,
 ): AppBootstrapPorts {
-  const repository = createGitHubRepositorySource(repoDir);
-  const git = createRealAppBootstrapGit(repoDir, repository);
   return {
-    git,
-    github: createRealAppBootstrapGitHub(repoDir, repository),
-    conflicts: createRealAppBootstrapConflicts(repoDir, repository),
-    rollbackCreatedBranch: (branch, expectedOid) =>
-      git.rollbackCreatedBranch(branch, expectedOid),
+    git: createRealAppBootstrapGit(repoDir, faults),
+    github: createRealAppBootstrapGitHub(repoDir),
   };
 }

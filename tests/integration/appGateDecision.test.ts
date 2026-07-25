@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import {
-  resolveAppGateRefs,
   resolveGateSideEffectBodyFile,
   runAppGateDecision,
   type AppGateDecisionDeps,
@@ -26,45 +25,6 @@ const GATE_RUN: AppLoopRunState = {
 
 const defWithGate = (gate: GateOptionDef[]): LoopDefV2 => ({ gate, outputs: [] } as unknown as LoopDefV2);
 const APPROVE_MARK_READY: GateOptionDef[] = [{ option: 'approve', sideEffects: [{ kind: 'gh', args: { action: 'mark-ready' } }] }];
-
-describe('resolveAppGateRefs', () => {
-  it('uses the app-owned bootstrap identity when the flow has no explicit PR input', () => {
-    const bootstrap = {
-      pr: 4242,
-      issue: 78,
-      branch: 'plan-loop/issue-78',
-    };
-    expect(resolveAppGateRefs({ ticket: 78 }, bootstrap)).toEqual({
-      pr: 4242,
-      ticket: 78,
-      bootstrap,
-    });
-  });
-
-  it('keeps explicit flow inputs authoritative over the bootstrap fallback', () => {
-    expect(resolveAppGateRefs({ pr: 9, ticket: 10 }, { pr: 4242, issue: 78, branch: 'plan-loop/issue-78' })).toEqual({
-      pr: 9,
-      ticket: 10,
-      bootstrap: null,
-    });
-  });
-
-  it('never combines a current flow ticket with a stale bootstrap PR for another issue', () => {
-    expect(resolveAppGateRefs({ ticket: 200 }, { pr: 4242, issue: 78, branch: 'plan-loop/issue-78' })).toEqual({
-      pr: null,
-      ticket: 200,
-      bootstrap: null,
-    });
-  });
-
-  it('returns absent refs when neither source carries an identity', () => {
-    expect(resolveAppGateRefs(undefined, null)).toEqual({
-      pr: null,
-      ticket: null,
-      bootstrap: null,
-    });
-  });
-});
 
 describe('resolveGateSideEffectBodyFile', () => {
   it('resolves only the binding explicitly named by the declared side-effect', () => {

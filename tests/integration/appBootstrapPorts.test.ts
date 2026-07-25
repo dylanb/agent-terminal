@@ -33,6 +33,8 @@ it('constructs working app bootstrap ports from a repository directory', async (
   writeFileSync(
     join(bin, 'gh'),
     '#!/usr/bin/env bash\n' +
+      'for a in "$@"; do if [ "$a" = "--jq" ]; then jq_next=1; elif [ -n "$jq_next" ]; then jq_filter=$a; jq_next=; fi; done\n' +
+      'if [ "$jq_filter" = ".defaultBranchRef.name" ]; then printf \'%s\\n\' main; exit 0; fi\n' +
       'if [ "$1" = "repo" ]; then printf \'%s\\n\' \'{"nameWithOwner":"owner/repository","url":"https://github.com/owner/repository","defaultBranchRef":{"name":"main"}}\'; exit 0; fi\n' +
       'if [ "$1" = "issue" ] && [ "$2" = "view" ]; then printf \'%s\\n\' \'{"title":"Ticket 78","url":"https://github.com/owner/repository/issues/78"}\'; exit 0; fi\n' +
       'exit 1\n',

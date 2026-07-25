@@ -1,236 +1,597 @@
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import {
-  mkdtempSync,
+  existsSync,
   mkdirSync,
+  mkdtempSync,
+  readFileSync,
   rmSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import path from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
-import {
-  createAppBootstrapConflicts,
-  type AppBootstrapConflictStore,
-} from '../../src/main/appBootstrapConflicts';
-import { createRealAppBootstrapPorts } from '../../src/main/appBootstrapPorts';
-import type { AppBootstrapConflictTarget } from '../../src/shared/appBootstrap';
+import { join } from 'node:path';
+import { type AppBootstrapGitFaults, OwnedBootstrapBranchError } from '../../src/main/bootstrapPorts';
+import { createRealAppBootstrapGit } from '../../src/main/appBootstrapGit';
+import { createRealAppBootstrapGitHub } from '../../src/main/appBootstrapGithub';
 
-const cleanup: string[] = [];
-const originalPath = process.env.PATH;
-const originalGlobalConfig = process.env.GIT_CONFIG_GLOBAL;
+const runGit = (cwd: string, args: string[]): string =>
+  execFileSync('git', args, { cwd, encoding: 'utf8' }).trim();
 
-afterEach(() => {
-  process.env.PATH = originalPath;
-  if (originalGlobalConfig === undefined) delete process.env.GIT_CONFIG_GLOBAL;
-  else process.env.GIT_CONFIG_GLOBAL = originalGlobalConfig;
-  while (cleanup.length > 0) {
-    rmSync(cleanup.pop()!, { recursive: true, force: true });
+const hasRef = (cwd: string, ref: string): boolean => {
+  try {
+    execFileSync('git', ['show-ref', '--verify', '--quiet', ref], { cwd, stdio: 'ignore' });
+    return true;
+  } catch {
+    return false;
   }
-});
+};
 
-function realGitRepo(): {
-  repo: string;
-  git(args: string[]): string;
-} {
-  const repo = mkdtempSync(path.join(tmpdir(), 'bootstrap-ports-'));
-  cleanup.push(repo);
-  const git = (args: string[]): string =>
-    execFileSync('git', args, { cwd: repo, encoding: 'utf8' }).trim();
-  git(['init', '-b', 'main']);
-  git(['config', 'user.name', 'Bootstrap Test']);
-  git(['config', 'user.email', 'bootstrap@example.test']);
-  writeFileSync(path.join(repo, 'README.md'), 'base\n');
-  git(['add', 'README.md']);
-  git(['commit', '-m', 'base']);
-  return { repo, git };
-}
+describe('createRealAppBootstrapGit — owned remote-ref compensation', () => {
+  const branch = 'plan-loop/issue-78';
+  let root: string;
+  let remote: string;
+  let repo: string;
 
-describe('app bootstrap conflict port', () => {
-  it('condition-checks and deletes exact refs before closing pull requests', async () => {
-    const target: AppBootstrapConflictTarget = {
-      repository: 'github.com/owner/repository',
-      branch: 'plan-loop/issue-78',
-      localOid: '1'.repeat(40),
-      remoteOid: '2'.repeat(40),
-      pullRequests: [41],
-    };
-    const store: AppBootstrapConflictStore = {
-      inspect: async () => target,
-      closePullRequest: async () => {
-        if (target.localOid !== null || target.remoteOid !== null) {
-          throw new Error('ref remained when PR close was attempted');
-        }
-        target.pullRequests = [];
-      },
-      deleteLocalBranch: async () => {
-        target.localOid = null;
-      },
-      deleteRemoteBranch: async () => {
-        target.remoteOid = null;
-      },
-    };
+  const createOwnedBranch = async (faults: AppBootstrapGitFaults = {}) => {
+    const port = createRealAppBootstrapGit(repo, faults);
+    await port.createBranchFromBase(branch, 'main');
+    const ownedOid = await port.commitEmptyStart('[skip ci] start work on #78');
+    return { port, ownedOid };
+  };
 
-    const conflicts = createAppBootstrapConflicts(store);
-    await conflicts.wipe(await conflicts.inspect('plan-loop/issue-78'));
+  const createPushedOwnedBranch = async () => {
+    const created = await createOwnedBranch();
+    const pushedOid = await created.port.pushBranchUpstream(branch, created.ownedOid);
+    return { ...created, pushedOid };
+  };
 
-    expect(await conflicts.inspect('plan-loop/issue-78')).toMatchObject({
-      localOid: null,
-      remoteOid: null,
-      pullRequests: [],
-    });
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), 'bootstrap-ports-'));
+    remote = join(root, 'remote.git');
+    const seed = join(root, 'seed');
+    repo = join(root, 'repo');
+    runGit(root, ['init', '--bare', remote]);
+    runGit(root, ['init', seed]);
+    runGit(seed, ['config', 'user.email', 'test@example.test']);
+    runGit(seed, ['config', 'user.name', 'Test']);
+    writeFileSync(join(seed, 'README.md'), 'seed\n');
+    runGit(seed, ['add', 'README.md']);
+    runGit(seed, ['commit', '-m', 'seed']);
+    runGit(seed, ['remote', 'add', 'origin', remote]);
+    runGit(seed, ['push', 'origin', 'HEAD:refs/heads/main']);
+    runGit(remote, ['symbolic-ref', 'HEAD', 'refs/heads/main']);
+    runGit(root, ['clone', remote, repo]);
+    runGit(repo, ['config', 'user.email', 'test@example.test']);
+    runGit(repo, ['config', 'user.name', 'Test']);
   });
 
-  it('is safely resumable when PR closure fails after the exact refs are deleted', async () => {
-    const target: AppBootstrapConflictTarget = {
-      repository: 'github.com/owner/repository',
-      branch: 'plan-loop/issue-78',
-      localOid: '1'.repeat(40),
-      remoteOid: '2'.repeat(40),
-      pullRequests: [41],
-    };
-    let closeAttempts = 0;
-    const store: AppBootstrapConflictStore = {
-      inspect: async () => target,
-      deleteLocalBranch: async () => {
-        target.localOid = null;
-      },
-      deleteRemoteBranch: async () => {
-        target.remoteOid = null;
-      },
-      closePullRequest: async () => {
-        closeAttempts += 1;
-        if (closeAttempts === 1) throw new Error('transient close failure');
-        target.pullRequests = [];
-      },
-    };
-    const conflicts = createAppBootstrapConflicts(store);
-    const firstSnapshot = await conflicts.inspect(target.branch);
-
-    await expect(conflicts.wipe(firstSnapshot)).rejects.toThrow(
-      /transient close failure/,
-    );
-    expect(await conflicts.inspect(target.branch)).toEqual({
-      ...firstSnapshot,
-      localOid: null,
-      remoteOid: null,
-    });
-
-    const remaining = await conflicts.inspect(target.branch);
-    await conflicts.wipe(remaining);
-    expect(await conflicts.inspect(target.branch)).toMatchObject({
-      localOid: null,
-      remoteOid: null,
-      pullRequests: [],
-    });
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
   });
-});
 
-describe('bootstrap start commit', () => {
-  it('does not replace a remote branch created after conflict inspection', async () => {
-    const { git, repo } = realGitRepo();
-    const remote = mkdtempSync(path.join(tmpdir(), 'bootstrap-remote-race-'));
-    cleanup.push(remote);
-    execFileSync('git', ['init', '--bare'], { cwd: remote });
-    const branch = 'plan-loop/issue-78';
-    const competingOid = git(['rev-parse', 'HEAD']);
-    git(['push', remote, `HEAD:refs/heads/${branch}`]);
-    git(['checkout', '-b', branch]);
-    const bin = mkdtempSync(path.join(tmpdir(), 'bootstrap-remote-race-bin-'));
-    const config = path.join(
-      mkdtempSync(path.join(tmpdir(), 'bootstrap-remote-race-config-')),
-      'gitconfig',
-    );
-    cleanup.push(bin, path.dirname(config));
-    git([
-      'remote',
-      'add',
-      'origin',
-      'https://github.com/owner/repository.git',
+  it('fails closed when the remote branch probe cannot be completed', async () => {
+    runGit(repo, ['remote', 'set-url', 'origin', join(root, 'missing.git')]);
+    const port = createRealAppBootstrapGit(repo);
+
+    await expect(port.branchExists('plan-loop/issue-78')).rejects.toThrow(/remote branch probe failed/i);
+  });
+
+  it('rejects command-capable repository-local Git configuration before it can execute', async () => {
+    const marker = join(root, 'ssh-command-ran');
+    runGit(repo, [
+      'config',
+      'core.sshCommand',
+      `sh -c 'touch "${marker}"; exit 1'`,
     ]);
+    runGit(repo, ['remote', 'set-url', 'origin', 'ssh://example.invalid/repo.git']);
+    const port = createRealAppBootstrapGit(repo);
+
+    await expect(port.branchExists(branch)).rejects.toThrow(
+      /unsafe repository-local git configuration/i,
+    );
+
+    expect(existsSync(marker)).toBe(false);
+  });
+
+  it('rejects repository-local work-tree redirection', async () => {
+    const redirectedTree = join(root, 'redirected-worktree');
+    mkdirSync(redirectedTree);
+    runGit(repo, ['config', 'core.worktree', redirectedTree]);
+    const port = createRealAppBootstrapGit(repo);
+
+    await expect(port.branchExists(branch)).rejects.toThrow(
+      /unsafe repository-local git configuration/i,
+    );
+  });
+
+  it('rejects a work-tree identity redirected through inherited Git state', async () => {
+    const redirectedTree = join(root, 'inherited-worktree');
+    mkdirSync(redirectedTree);
+    const previousWorkTree = process.env.GIT_WORK_TREE;
+    process.env.GIT_WORK_TREE = redirectedTree;
+    try {
+      const port = createRealAppBootstrapGit(repo);
+      await expect(port.branchExists(branch)).rejects.toThrow(
+        /repository identity mismatch/i,
+      );
+    } finally {
+      if (previousWorkTree === undefined) {
+        delete process.env.GIT_WORK_TREE;
+      } else {
+        process.env.GIT_WORK_TREE = previousWorkTree;
+      }
+    }
+  });
+
+  it('rejects a repository-local upload-pack override before a read operation', async () => {
+    runGit(repo, ['config', 'remote.origin.uploadpack', 'git-upload-pack']);
+    const port = createRealAppBootstrapGit(repo);
+
+    await expect(port.branchExists(branch)).rejects.toThrow(
+      /unsafe repository-local git configuration/i,
+    );
+  });
+
+  it('rejects a repository-local receive-pack override before a push operation', async () => {
+    const port = createRealAppBootstrapGit(repo);
+    await port.createBranchFromBase(branch, 'main');
+    const ownedOid = await port.commitEmptyStart('[skip ci] start work on #78');
+    runGit(repo, ['config', 'remote.origin.receivepack', 'git-receive-pack']);
+
+    await expect(port.pushBranchUpstream(branch, ownedOid)).rejects.toThrow(
+      /unsafe repository-local git configuration/i,
+    );
+  });
+
+  it('neutralizes command-capable inherited Git configuration', async () => {
+    const inheritedConfig = join(root, 'inherited.gitconfig');
+    const hooks = join(root, 'inherited-hooks');
+    const hookMarker = join(root, 'inherited-hook-ran');
+    const uploadMarker = join(root, 'inherited-upload-pack-ran');
+    const receiveMarker = join(root, 'inherited-receive-pack-ran');
+    const uploadPack = join(root, 'upload-pack');
+    const receivePack = join(root, 'receive-pack');
+    mkdirSync(hooks);
     writeFileSync(
-      path.join(bin, 'gh'),
-      '#!/usr/bin/env bash\n' +
-        'printf \'%s\\n\' \'{"nameWithOwner":"owner/repository","url":"https://github.com/owner/repository","defaultBranchRef":{"name":"main"}}\'\n',
+      join(hooks, 'post-checkout'),
+      `#!/bin/sh\ntouch '${hookMarker}'\n`,
       { mode: 0o755 },
     );
-    process.env.PATH = `${bin}:${originalPath ?? ''}`;
-    const ports = createRealAppBootstrapPorts(repo);
-    await expect(ports.git.resolveBaseBranch()).resolves.toBe('main');
-    execFileSync(
-      'git',
-      [
-        'config',
-        '--file',
-        config,
-        `url.file://${remote}/.insteadOf`,
-        'https://github.com/owner/repository.git',
-      ],
+    writeFileSync(
+      join(hooks, 'pre-push'),
+      `#!/bin/sh\ntouch '${hookMarker}'\n`,
+      { mode: 0o755 },
     );
-    process.env.GIT_CONFIG_GLOBAL = config;
-    const adapter = ports.git;
-    await adapter.commitEmptyStart('start issue 78');
+    writeFileSync(
+      uploadPack,
+      `#!/bin/sh\ntouch '${uploadMarker}'\nexec git-upload-pack "$@"\n`,
+      { mode: 0o755 },
+    );
+    writeFileSync(
+      receivePack,
+      `#!/bin/sh\ntouch '${receiveMarker}'\nexec git-receive-pack "$@"\n`,
+      { mode: 0o755 },
+    );
+    runGit(root, ['config', '--file', inheritedConfig, 'core.hooksPath', hooks]);
+    runGit(root, [
+      'config',
+      '--file',
+      inheritedConfig,
+      'remote.origin.uploadpack',
+      uploadPack,
+    ]);
+    runGit(root, [
+      'config',
+      '--file',
+      inheritedConfig,
+      'remote.origin.receivepack',
+      receivePack,
+    ]);
 
-    await expect(adapter.pushBranchUpstream(branch)).rejects.toThrow();
-    expect(
-      execFileSync(
-        'git',
-        [
-          '--git-dir',
-          remote,
-          'rev-parse',
-          `refs/heads/${branch}`,
-        ],
-        { encoding: 'utf8' },
-      ).trim(),
-    ).toBe(competingOid);
+    const previousGlobalConfig = process.env.GIT_CONFIG_GLOBAL;
+    process.env.GIT_CONFIG_GLOBAL = inheritedConfig;
+    try {
+      const port = createRealAppBootstrapGit(repo);
+      expect(await port.branchExists(branch)).toBe(false);
+      await port.createBranchFromBase(branch, 'main');
+      const ownedOid = await port.commitEmptyStart(
+        '[skip ci] start work on #78',
+      );
+      await port.pushBranchUpstream(branch, ownedOid);
+      await port.rollbackCreatedBranch(branch, ownedOid);
+    } finally {
+      if (previousGlobalConfig === undefined) {
+        delete process.env.GIT_CONFIG_GLOBAL;
+      } else {
+        process.env.GIT_CONFIG_GLOBAL = previousGlobalConfig;
+      }
+    }
+
+    expect(existsSync(hookMarker)).toBe(false);
+    expect(existsSync(uploadMarker)).toBe(false);
+    expect(existsSync(receiveMarker)).toBe(false);
   });
 
-  it('refuses to roll back a local branch that moved after bootstrap', async () => {
-    const { git, repo } = realGitRepo();
-    git(['checkout', '-b', 'plan-loop/issue-78']);
-    const expectedOid = git(['rev-parse', 'HEAD']);
-    writeFileSync(path.join(repo, 'moved.txt'), 'moved\n');
-    git(['add', 'moved.txt']);
-    git(['commit', '-m', 'concurrent move']);
+  it('rejects a staged app-state file before creating the empty start commit', async () => {
+    const report = join(repo, '.agent-terminal', 'loop', 'reports', '1.md');
+    mkdirSync(join(repo, '.agent-terminal', 'loop', 'reports'), { recursive: true });
+    writeFileSync(report, 'operator-private report\n');
+    runGit(repo, ['add', report]);
+    const port = createRealAppBootstrapGit(repo);
+
+    expect(await port.isCleanTree()).toBe(false);
+    expect(runGit(repo, ['diff', '--cached', '--name-only'])).toBe(
+      '.agent-terminal/loop/reports/1.md',
+    );
+  });
+
+  it('never commits user content staged after the clean-tree preflight', async () => {
+    const port = createRealAppBootstrapGit(repo);
+    const branch = 'plan-loop/issue-78';
+    expect(await port.isCleanTree()).toBe(true);
+    await port.createBranchFromBase(branch, 'main');
+    writeFileSync(join(repo, 'raced.txt'), 'staged after preflight\n');
+    runGit(repo, ['add', 'raced.txt']);
+
+    const ownedOid = await port.commitEmptyStart('[skip ci] start work on #78');
+
+    expect(runGit(repo, ['diff-tree', '--no-commit-id', '--name-only', '-r', ownedOid])).toBe('');
+    expect(runGit(repo, ['diff', '--cached', '--name-only'])).toBe('raced.txt');
+    await port.rollbackCreatedBranch(branch, ownedOid);
+    expect(runGit(repo, ['branch', '--show-current'])).toBe('main');
+    expect(runGit(repo, ['diff', '--cached', '--name-only'])).toBe('raced.txt');
+  });
+
+  it('requires the remote ref to remain absent when the initial push lands', async () => {
+    const port = createRealAppBootstrapGit(repo);
+    expect(await port.branchExists(branch)).toBe(false);
+    await port.createBranchFromBase(branch, 'main');
+    const ownedOid = await port.commitEmptyStart('[skip ci] start work on #78');
+
+    const main = runGit(remote, ['rev-parse', 'refs/heads/main']);
+    runGit(remote, ['update-ref', `refs/heads/${branch}`, main]);
+
+    await expect(port.pushBranchUpstream(branch, ownedOid)).rejects.toThrow(/branch push failed/i);
+    await expect(port.rollbackCreatedBranch(branch, ownedOid)).rejects.toThrow(
+      /remote branch rollback refused/i,
+    );
+    expect(runGit(remote, ['rev-parse', `refs/heads/${branch}`])).toBe(main);
+    expect(runGit(repo, ['branch', '--show-current'])).toBe('main');
+    expect(runGit(repo, ['branch', '--list', branch])).toBe('');
+
+    const laterBranch = 'plan-loop/issue-79';
+    await port.createBranchFromBase(laterBranch, 'main');
+    await port.rollbackCreatedBranch(laterBranch, null);
+    expect(runGit(repo, ['branch', '--show-current'])).toBe('main');
+    expect(runGit(repo, ['branch', '--list', laterBranch])).toBe('');
+  });
+
+  it('does not claim an exact-OID remote ref without a confirmed app push', async () => {
+    const { port, ownedOid } = await createOwnedBranch();
+    runGit(repo, ['push', 'origin', `refs/heads/${branch}:refs/heads/${branch}`]);
+
+    await port.rollbackCreatedBranch(branch, ownedOid);
+
+    expect(hasRef(remote, `refs/heads/${branch}`)).toBe(true);
+    expect(runGit(repo, ['branch', '--show-current'])).toBe('main');
+    expect(runGit(repo, ['branch', '--list', branch])).toBe('');
+  });
+
+  it('refuses to publish a local branch that advanced after the owned empty commit', async () => {
+    const { port, ownedOid } = await createOwnedBranch();
+    const tree = runGit(repo, ['rev-parse', `${ownedOid}^{tree}`]);
+    const advancedOid = runGit(repo, [
+      'commit-tree',
+      tree,
+      '-p',
+      ownedOid,
+      '-m',
+      'concurrent user commit',
+    ]);
+    runGit(repo, ['update-ref', `refs/heads/${branch}`, advancedOid, ownedOid]);
+
+    await expect(port.pushBranchUpstream(branch, ownedOid)).rejects.toThrow(
+      /branch changed after bootstrap commit/i,
+    );
+
+    expect(hasRef(remote, `refs/heads/${branch}`)).toBe(false);
+    expect(runGit(repo, ['rev-parse', branch])).toBe(advancedOid);
+  });
+
+  it('preserves an uncertain remote while cleaning the app-owned local branch', async () => {
+    const { port, ownedOid } = await createOwnedBranch({
+      pushResult: () => new Error('branch push result unavailable'),
+    });
+
+    await expect(port.pushBranchUpstream(branch, ownedOid)).rejects.toThrow(
+      /branch push result unavailable/i,
+    );
+    expect(runGit(remote, ['rev-parse', `refs/heads/${branch}`])).toBe(ownedOid);
+    await expect(port.rollbackCreatedBranch(branch, ownedOid)).rejects.toThrow(
+      /remote branch rollback refused/i,
+    );
+
+    expect(hasRef(remote, `refs/heads/${branch}`)).toBe(true);
+    expect(runGit(repo, ['branch', '--show-current'])).toBe('main');
+    expect(runGit(repo, ['branch', '--list', branch])).toBe('');
+  });
+
+  it('retains rollback ownership until a remote failure can be retried', async () => {
+    const { port, pushedOid } = await createPushedOwnedBranch();
+    runGit(repo, ['remote', 'set-url', 'origin', join(root, 'missing.git')]);
+
+    await expect(port.rollbackCreatedBranch(branch, pushedOid)).rejects.toThrow(/remote branch rollback failed/i);
+    expect(runGit(repo, ['branch', '--show-current'])).toBe(branch);
+    expect(runGit(repo, ['branch', '--list', branch])).not.toBe('');
+
+    runGit(repo, ['remote', 'set-url', 'origin', remote]);
+    await port.rollbackCreatedBranch(branch, pushedOid);
+    expect(hasRef(remote, `refs/heads/${branch}`)).toBe(false);
+    expect(runGit(repo, ['branch', '--show-current'])).toBe('main');
+    expect(runGit(repo, ['branch', '--list', branch])).toBe('');
+  });
+
+  it('finishes remote compensation when the owned local ref is already absent', async () => {
+    const { port, pushedOid } = await createPushedOwnedBranch();
+    runGit(repo, ['switch', 'main']);
+    runGit(repo, ['branch', '-D', branch]);
+
+    await port.rollbackCreatedBranch(branch, pushedOid);
+
+    expect(hasRef(remote, `refs/heads/${branch}`)).toBe(false);
+    expect(runGit(repo, ['branch', '--show-current'])).toBe('main');
+    expect(runGit(repo, ['branch', '--list', branch])).toBe('');
+  });
+
+  it('refuses to delete a remote branch that advanced after this bootstrap pushed it', async () => {
+    const { port, pushedOid } = await createPushedOwnedBranch();
+
+    const other = join(root, 'other');
+    runGit(root, ['clone', remote, other]);
+    runGit(other, ['config', 'user.email', 'other@example.test']);
+    runGit(other, ['config', 'user.name', 'Other']);
+    runGit(other, ['checkout', branch]);
+    writeFileSync(join(other, 'other.txt'), 'advanced\n');
+    runGit(other, ['add', 'other.txt']);
+    runGit(other, ['commit', '-m', 'advance branch']);
+    runGit(other, ['push', 'origin', branch]);
+    const advancedOid = runGit(remote, ['rev-parse', `refs/heads/${branch}`]);
+
+    await expect(port.rollbackCreatedBranch(branch, pushedOid)).rejects.toThrow(/remote branch rollback refused/i);
+    expect(runGit(remote, ['rev-parse', `refs/heads/${branch}`])).toBe(advancedOid);
+    expect(runGit(repo, ['branch', '--show-current'])).toBe('main');
+    expect(runGit(repo, ['branch', '--list', branch])).toBe('');
+  });
+
+  it('refuses to delete a local branch that advanced after this bootstrap created it', async () => {
+    const { port, pushedOid } = await createPushedOwnedBranch();
+    writeFileSync(join(repo, 'local.txt'), 'local advance\n');
+    runGit(repo, ['add', 'local.txt']);
+    runGit(repo, ['commit', '-m', 'advance locally']);
+    const advancedOid = runGit(repo, ['rev-parse', branch]);
+
+    await expect(port.rollbackCreatedBranch(branch, pushedOid)).rejects.toThrow(
+      /local branch rollback refused/i,
+    );
+    expect(runGit(repo, ['rev-parse', branch])).toBe(advancedOid);
+    expect(hasRef(remote, `refs/heads/${branch}`)).toBe(false);
+    expect(runGit(repo, ['branch', '--show-current'])).toBe('main');
+  });
+
+  it('CAS-refuses local deletion when the branch advances during awaited remote cleanup', async () => {
+    const { port, pushedOid: ownedOid } = await createPushedOwnedBranch();
+    const tree = runGit(repo, ['rev-parse', `${ownedOid}^{tree}`]);
+    const advancedOid = runGit(repo, [
+      'commit-tree',
+      tree,
+      '-p',
+      ownedOid,
+      '-m',
+      'advance during remote cleanup',
+    ]);
+    const escapedRepo = repo
+      .replaceAll('\\', '\\\\')
+      .replaceAll('"', '\\"')
+      .replaceAll('$', '\\$')
+      .replaceAll('`', '\\`');
+    const hook = join(remote, 'hooks', 'pre-receive');
+    writeFileSync(
+      hook,
+      '#!/bin/sh\n' +
+        `env -u GIT_DIR -u GIT_WORK_TREE git -C "${escapedRepo}" update-ref refs/heads/${branch} ${advancedOid} ${ownedOid}\n` +
+        'exit 0\n',
+      { mode: 0o755 },
+    );
+
+    await expect(port.rollbackCreatedBranch(branch, ownedOid)).rejects.toThrow(
+      /local branch rollback failed/i,
+    );
+
+    expect(hasRef(remote, `refs/heads/${branch}`)).toBe(false);
+    expect(runGit(repo, ['rev-parse', branch])).toBe(advancedOid);
+    expect(runGit(repo, ['branch', '--show-current'])).toBe('main');
+  });
+
+  it('retains typed ownership when checkout fails after the branch ref is created', async () => {
+    const port = createRealAppBootstrapGit(repo, {
+      checkoutResult: () => new Error('branch checkout failed'),
+    });
+    const branch = 'plan-loop/issue-78';
+
+    await expect(port.createBranchFromBase(branch, 'main')).rejects.toBeInstanceOf(
+      OwnedBootstrapBranchError,
+    );
+    await port.rollbackCreatedBranch(branch, null);
+
+    expect(runGit(repo, ['branch', '--show-current'])).toBe('main');
+    expect(hasRef(repo, `refs/heads/${branch}`)).toBe(false);
+  });
+
+  it('retains typed ownership when atomic branch creation lands before reporting failure', async () => {
+    const port = createRealAppBootstrapGit(repo, {
+      branchCreationResult: () => new Error('branch creation result unavailable'),
+    });
+    const branch = 'plan-loop/issue-78';
+
+    await expect(port.createBranchFromBase(branch, 'main')).rejects.toBeInstanceOf(
+      OwnedBootstrapBranchError,
+    );
+    await port.rollbackCreatedBranch(branch, null);
+
+    expect(runGit(repo, ['branch', '--show-current'])).toBe('main');
+    expect(hasRef(repo, `refs/heads/${branch}`)).toBe(false);
+  });
+
+  it('reconciles a landed empty commit after its first verification command fails', async () => {
+    const port = createRealAppBootstrapGit(repo, {
+      startCommitResult: () => new Error('start commit verification failed'),
+    });
+    const branch = 'plan-loop/issue-78';
+
+    await port.createBranchFromBase(branch, 'main');
+    await expect(
+      port.commitEmptyStart('[skip ci] start work on #78'),
+    ).rejects.toThrow(/start commit verification failed/i);
+    await port.rollbackCreatedBranch(branch, null);
+
+    expect(runGit(repo, ['branch', '--show-current'])).toBe('main');
+    expect(hasRef(repo, `refs/heads/${branch}`)).toBe(false);
+  });
+
+  it('makes no mutation when the current checkout identity cannot be resolved', async () => {
+    const port = createRealAppBootstrapGit(repo, {
+      currentCheckoutResult: () => new Error('current checkout resolution unavailable'),
+    });
+
+    await expect(port.createBranchFromBase(branch, 'main')).rejects.toThrow(
+      /current checkout resolution unavailable/i,
+    );
+
+    expect(runGit(repo, ['branch', '--show-current'])).toBe('main');
+    expect(hasRef(repo, `refs/heads/${branch}`)).toBe(false);
+  });
+
+  it('does not replace caller-owned FETCH_HEAD while resolving the bootstrap base', async () => {
+    runGit(repo, ['checkout', '-b', 'other']);
+    writeFileSync(join(repo, 'other.txt'), 'other\n');
+    runGit(repo, ['add', 'other.txt']);
+    runGit(repo, ['commit', '-m', 'other']);
+    runGit(repo, ['push', 'origin', 'other']);
+    runGit(repo, ['switch', 'main']);
+    runGit(repo, ['fetch', 'origin', 'other']);
+    const fetchHead = join(repo, '.git', 'FETCH_HEAD');
+    const callerFetchHead = readFileSync(fetchHead, 'utf8');
+    const mainOid = runGit(repo, ['rev-parse', 'origin/main']);
+    const port = createRealAppBootstrapGit(repo);
+
+    await port.createBranchFromBase(branch, 'main');
+
+    expect(runGit(repo, ['rev-parse', branch])).toBe(mainOid);
+    expect(readFileSync(fetchHead, 'utf8')).toBe(callerFetchHead);
+    await port.rollbackCreatedBranch(branch, null);
+  });
+
+  it('restores an option-shaped symbolic branch without interpreting it as checkout flags', async () => {
+    const unusual = '--orphan=restored-by-option';
+    const oid = runGit(repo, ['rev-parse', 'HEAD']);
+    runGit(repo, ['update-ref', `refs/heads/${unusual}`, oid]);
+    runGit(repo, ['symbolic-ref', 'HEAD', `refs/heads/${unusual}`]);
+    const port = createRealAppBootstrapGit(repo);
+    const branch = 'plan-loop/issue-78';
+
+    await port.createBranchFromBase(branch, 'main');
+    await port.rollbackCreatedBranch(branch, null);
+
+    expect(runGit(repo, ['symbolic-ref', '--short', 'HEAD'])).toBe(unusual);
+    expect(hasRef(repo, `refs/heads/${branch}`)).toBe(false);
+  });
+
+  it('restores the exact detached HEAD after compensating the created branch', async () => {
+    const originalOid = runGit(repo, ['rev-parse', 'HEAD']);
+    runGit(repo, ['checkout', '--detach', originalOid]);
+    const port = createRealAppBootstrapGit(repo);
+    const branch = 'plan-loop/issue-78';
+
+    await port.createBranchFromBase(branch, 'main');
+    await port.rollbackCreatedBranch(branch, null);
+
+    expect(runGit(repo, ['rev-parse', '--abbrev-ref', 'HEAD'])).toBe('HEAD');
+    expect(runGit(repo, ['rev-parse', 'HEAD'])).toBe(originalOid);
+    expect(hasRef(repo, `refs/heads/${branch}`)).toBe(false);
+  });
+
+  it('redacts tainted argv from surfaced command failures', async () => {
+    const port = createRealAppBootstrapGit(repo);
+    const taintedBase = 'private-base-name';
 
     await expect(
-      createRealAppBootstrapPorts(repo).rollbackCreatedBranch(
-        'plan-loop/issue-78',
-        expectedOid,
-      ),
-    ).rejects.toThrow();
-    expect(git(['rev-parse', 'refs/heads/plan-loop/issue-78'])).not.toBe(
-      expectedOid,
+      port.createBranchFromBase('plan-loop/issue-78', taintedBase),
+    ).rejects.toThrow(/^base fetch failed(?: \(exit \d+\))?$/);
+  });
+});
+
+describe('createRealAppBootstrapGitHub — owned PR reconciliation', () => {
+  let root: string;
+  let responseFile: string;
+  let previousPath: string | undefined;
+  let previousResponse: string | undefined;
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), 'bootstrap-github-'));
+    responseFile = join(root, 'response.json');
+    previousPath = process.env.PATH;
+    previousResponse = process.env.FAKE_PR_LOOKUP_RESPONSE;
+    writeFileSync(
+      join(root, 'gh'),
+      '#!/bin/sh\ncat "$FAKE_PR_LOOKUP_RESPONSE"\n',
+      { mode: 0o755 },
     );
+    process.env.PATH = `${root}:${previousPath ?? ''}`;
+    process.env.FAKE_PR_LOOKUP_RESPONSE = responseFile;
   });
 
-  it('rejects staged app-state files even though unstaged app state is ignored', async () => {
-    const { repo, git } = realGitRepo();
-    mkdirSync(path.join(repo, '.agent-terminal'), { recursive: true });
-    writeFileSync(path.join(repo, '.agent-terminal', 'capture.txt'), 'secret\n');
-    git(['add', '.agent-terminal/capture.txt']);
-
-    expect(await createRealAppBootstrapPorts(repo).git.isCleanTree()).toBe(
-      false,
-    );
+  afterEach(() => {
+    if (previousPath === undefined) delete process.env.PATH;
+    else process.env.PATH = previousPath;
+    if (previousResponse === undefined) delete process.env.FAKE_PR_LOOKUP_RESPONSE;
+    else process.env.FAKE_PR_LOOKUP_RESPONSE = previousResponse;
+    rmSync(root, { recursive: true, force: true });
   });
 
-  it('creates an empty-tree commit without consuming a concurrently staged index', async () => {
-    const { repo, git } = realGitRepo();
-    git(['checkout', '-b', 'plan-loop/issue-78']);
-    mkdirSync(path.join(repo, '.agent-terminal'), { recursive: true });
-    writeFileSync(path.join(repo, '.agent-terminal', 'capture.txt'), 'secret\n');
-    git(['add', '.agent-terminal/capture.txt']);
-
-    await createRealAppBootstrapPorts(repo).git.commitEmptyStart(
-      'start issue',
+  it('selects only one marked draft and distinguishes absent from foreign PRs', async () => {
+    const github = createRealAppBootstrapGitHub(root);
+    writeFileSync(responseFile, '[]');
+    await expect(
+      github.findOwnedOpenPr({ base: 'main', head: 'topic', marker: '<!-- owned -->' }),
+    ).resolves.toEqual({ kind: 'absent' });
+    writeFileSync(
+      responseFile,
+      JSON.stringify([{ number: 9, body: 'collaborator', isDraft: true }]),
     );
+    await expect(
+      github.findOwnedOpenPr({ base: 'main', head: 'topic', marker: '<!-- owned -->' }),
+    ).resolves.toEqual({ kind: 'foreign' });
+    writeFileSync(responseFile, JSON.stringify([
+      { number: 9, body: '<!-- owned -->', isDraft: false },
+      { number: 10, body: '<!-- owned -->', isDraft: true },
+    ]));
+    await expect(
+      github.findOwnedOpenPr({ base: 'main', head: 'topic', marker: '<!-- owned -->' }),
+    ).resolves.toEqual({ kind: 'owned', number: 10 });
+  });
 
-    expect(() =>
-      git(['show', 'HEAD:.agent-terminal/capture.txt']),
-    ).toThrow();
-    expect(git(['diff', '--cached', '--name-only'])).toBe(
-      '.agent-terminal/capture.txt',
-    );
+  it('fails closed for malformed or multiply-owned reconciliation data', async () => {
+    const github = createRealAppBootstrapGitHub(root);
+    const find = () =>
+      github.findOwnedOpenPr({ base: 'main', head: 'topic', marker: '<!-- owned -->' });
+    writeFileSync(responseFile, JSON.stringify([{ number: 0, body: '', isDraft: true }]));
+    await expect(find()).rejects.toThrow(/invalid data/i);
+    writeFileSync(responseFile, JSON.stringify([
+      { number: 9, body: '<!-- owned -->', isDraft: true },
+      { number: 10, body: '<!-- owned -->', isDraft: true },
+    ]));
+    await expect(find()).rejects.toThrow(/multiple owned/i);
+    writeFileSync(responseFile, 'not-json');
+    await expect(find()).rejects.toThrow(/invalid data/i);
   });
 });

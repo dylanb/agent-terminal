@@ -7,7 +7,12 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import yaml from 'js-yaml';
-import { confinedRealPath, resolveJail } from './confinedPath';
+import {
+  confinedRealPath,
+  confinedRealPathResult,
+  resolveJail,
+  resolveOwnedDirJail,
+} from './confinedPath';
 import { isRecord } from './yamlRecord';
 import { isSafePathSegment } from '../shared/pathSegment';
 import { isErrno } from './errno';
@@ -72,28 +77,28 @@ export interface WorkRecipe {
   artifact: string;
 }
 
-/** An input the loop consumes or an output it produces (§27.10). `id` is a safe segment; `path` is the
- *  confined absolute path inside the dedicated artifacts subtree of the per-repo loop area, and `rel` is the
- *  same location repo-relative, composed here from the segments the confinement itself used. */
+/** §27.10 */
 export interface ArtifactBinding {
   id: string;
   path: string;
   rel: string;
 }
 
-/** One resolved label mutation a pickup applies to the issue or PR it opens (§27.10). Self-contained — the
- *  label string is named directly on the def, not resolved through a §26 config-binding slot map. */
+/** §27.10 */
 export type PickupLabelV2 = AppBootstrapLabelMutation;
 
-/** §27.10. */
+/** §27.10 */
 export type WipePolicy = AppBootstrapWipePolicy;
 
-/** §27.10. */
-export interface PickupContractV2 {
+/** §27.10 */
+export interface PickupExecutionV2 {
   initialStatus: string;
   branchTemplate: string;
-  /** The issue/PR label mutations applied on bootstrap; empty when the def names none. */
   initialLabels: PickupLabelV2[];
+}
+
+/** §27.10 */
+export interface PickupContractV2 extends PickupExecutionV2 {
   wipe: WipePolicy;
 }
 
@@ -277,8 +282,6 @@ function toArtifactBindings(raw: unknown, repoDir: string, what: string): Artifa
   });
 }
 
-/** The closed on_conflict vocabulary → its `WipePolicy` arm. Absent is the wipe-absent (`abort`) arm; any
- *  value outside the set is a surfaced reason, never a silent abort (AC6). */
 function toWipePolicy(raw: unknown): WipePolicy {
   if (raw === undefined) return { mode: 'abort' };
   if (raw === 'abort') return { mode: 'abort' };
@@ -297,7 +300,6 @@ function toPickupLabels(raw: unknown): PickupLabelV2[] {
   });
 }
 
-/** The bootstrap contract (§27.10) — null when the def declares none (AC3: no pickup → no bootstrap). */
 function toPickup(raw: unknown): PickupContractV2 | null {
   if (raw === undefined) return null;
   const pickup = requireRecord(raw, 'pickup');
@@ -420,9 +422,24 @@ export function resolveLoopDefV2(name: string, ctx: LoopDefV2Context): LoopDefV2
   });
 
   for (const { tierRoot, defDir, defPath, origin } of candidates) {
+    const jail =
+      origin === 'repo'
+        ? resolveJail(tierRoot)
+        : resolveOwnedDirJail(tierRoot);
+    if (jail === null) continue;
+    const confinedDefPath = confinedRealPathResult(jail, defPath);
+    if (!confinedDefPath.ok) {
+      return {
+        ok: false,
+        reason:
+          confinedDefPath.cause === 'escapes'
+            ? `def ${name} in the ${origin} tier escapes its tier root`
+            : `def ${name} in the ${origin} tier is unresolvable`,
+      };
+    }
     let body: string;
     try {
-      body = readFileSync(defPath, 'utf8');
+      body = readFileSync(confinedDefPath.path, 'utf8');
     } catch (e) {
       if (isErrno(e, 'ENOENT')) continue;
       return { ok: false, reason: `cannot read def ${name}: ${e instanceof Error ? e.message : String(e)}` };

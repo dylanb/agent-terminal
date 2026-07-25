@@ -40,6 +40,8 @@ function fakeGitHub(bin: string): void {
   writeFileSync(
     join(bin, 'gh'),
     '#!/usr/bin/env bash\n' +
+      'for a in "$@"; do if [ "$a" = "--jq" ]; then jq_next=1; elif [ -n "$jq_next" ]; then jq_filter=$a; jq_next=; fi; done\n' +
+      'if [ "$jq_filter" = ".defaultBranchRef.name" ]; then printf \'%s\\n\' main; exit 0; fi\n' +
       'printf \'%s\\n\' \'{"nameWithOwner":"owner/repository","url":"https://github.com/owner/repository","defaultBranchRef":{"name":"main"}}\'\n',
     { mode: 0o755 },
   );
@@ -200,17 +202,8 @@ describe('GitHub repository identity', () => {
       'origin',
       'https://github.com/owner/repository.git',
     ]);
-    git(['checkout', '-b', 'plan-loop/issue-78']);
-    git([
-      'push',
-      trusted,
-      'plan-loop/issue-78:refs/heads/plan-loop/issue-78',
-    ]);
-    git([
-      'push',
-      attacker,
-      'plan-loop/issue-78:refs/heads/plan-loop/issue-78',
-    ]);
+    git(['push', trusted, 'main:refs/heads/main']);
+    git(['push', attacker, 'main:refs/heads/main']);
     fakeGitHub(bin);
     const resolved = await resolveGitHubRepository(repo);
     const ports = createRealAppBootstrapPorts(repo);
@@ -226,14 +219,34 @@ describe('GitHub repository identity', () => {
       ],
     );
     process.env.GIT_CONFIG_GLOBAL = globalConfig;
+
+    // The branch the rollback must delete is one this port owns, created and pushed through it.
+    await ports.git.createBranchFromBase('plan-loop/issue-78', 'main');
+    const expectedOid = await ports.git.commitEmptyStart('[skip ci] start work on #78');
+    await ports.git.pushBranchUpstream('plan-loop/issue-78', expectedOid);
+    execFileSync('git', [
+      '--git-dir',
+      attacker,
+      'update-ref',
+      'refs/heads/plan-loop/issue-78',
+      execFileSync('git', ['--git-dir', attacker, 'rev-parse', 'refs/heads/main'], {
+        encoding: 'utf8',
+      }).trim(),
+    ]);
+    const attackerOid = execFileSync(
+      'git',
+      ['--git-dir', attacker, 'rev-parse', 'refs/heads/plan-loop/issue-78'],
+      { encoding: 'utf8' },
+    ).trim();
+
+    // Only now does the repository claim that origin's push URL is the attacker's.
     git([
       'config',
       `url.file://${attacker}.insteadOf`,
       resolved.pushUrl,
     ]);
 
-    const expectedOid = git(['rev-parse', 'refs/heads/plan-loop/issue-78']);
-    await ports.rollbackCreatedBranch(
+    await ports.git.rollbackCreatedBranch(
       'plan-loop/issue-78',
       expectedOid,
     );
@@ -261,7 +274,7 @@ describe('GitHub repository identity', () => {
         ],
         { encoding: 'utf8' },
       ).trim(),
-    ).toBe(expectedOid);
+    ).toBe(attackerOid);
   });
 
   it('fetches and pushes only through the isolated repository identity after a local insteadOf rewrite', async () => {
@@ -337,11 +350,10 @@ describe('GitHub repository identity', () => {
     ]);
 
     const adapter = ports.git;
-    await expect(
-      adapter.createBranchFromBase('plan-loop/issue-78', 'main'),
-    ).resolves.toBe(trustedBase);
+    await adapter.createBranchFromBase('plan-loop/issue-78', 'main');
+    expect(git(['rev-parse', 'plan-loop/issue-78'])).toBe(trustedBase);
     const pushed = await adapter.commitEmptyStart('start issue 78');
-    await adapter.pushBranchUpstream('plan-loop/issue-78');
+    await adapter.pushBranchUpstream('plan-loop/issue-78', pushed);
 
     expect(
       execFileSync(

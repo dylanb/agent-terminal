@@ -99,7 +99,10 @@ export interface AppGitRemote {
   deleteRef(url: string, ref: string, expectedOid: string): Promise<void>;
 }
 
-export function createAppGitRemote(repoDir: string): AppGitRemote {
+export function createAppGitRemote(
+  repoDir: string,
+  configArgs: readonly string[] = [],
+): AppGitRemote {
   let layoutPromise:
     | Promise<{ objectDirectory: string; objectFormat: 'sha1' | 'sha256' }>
     | undefined;
@@ -145,6 +148,7 @@ export function createAppGitRemote(repoDir: string): AppGitRemote {
       await runAppCommand(
         'git',
         [
+          ...configArgs,
           'init',
           '--quiet',
           '--bare',
@@ -156,7 +160,7 @@ export function createAppGitRemote(repoDir: string): AppGitRemote {
       const git = (args: string[]): Promise<string> =>
         executeAppCommand(
           'git',
-          ['--git-dir', temporaryGitDir, ...args],
+          ['--git-dir', temporaryGitDir, ...configArgs, ...args],
           temporaryGitDir,
           {
             environment: {
