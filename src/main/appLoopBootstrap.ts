@@ -58,19 +58,14 @@ export interface AppLoopBootstrapOwnership {
 
 export type AppLoopBootstrapResult =
   | { ok: true; identity: AppLoopBootstrap; ownership: AppLoopBootstrapOwnership }
-  | { ok: false; conflict: AppBootstrapConflictTarget }
+  | { ok: false; kind: 'conflict'; conflict: AppBootstrapConflictTarget }
   | {
       ok: false;
+      kind: 'error';
       error: string;
       requiresAttention?: true;
       recovery?: AppLoopBootstrapOwnership;
     };
-
-export function isAppBootstrapConflictResult(
-  result: AppLoopBootstrapResult,
-): result is { ok: false; conflict: AppBootstrapConflictTarget } {
-  return !result.ok && 'conflict' in result;
-}
 
 export function resolveAppGateRefs(
   flowRefs: FlowRefs | undefined,
@@ -179,8 +174,8 @@ export async function runAppLoopBootstrap(
     recovery?: AppLoopBootstrapOwnership,
   ): AppLoopBootstrapResult =>
     recovery === undefined
-      ? { ok: false, error }
-      : { ok: false, error, requiresAttention: true, recovery };
+      ? { ok: false, kind: 'error', error }
+      : { ok: false, kind: 'error', error, requiresAttention: true, recovery };
   if (req.spec.origin !== 'operator') {
     return fail(`refused bootstrap from a non-operator-authored loop def (origin: ${req.spec.origin})`);
   }
@@ -215,12 +210,14 @@ export async function runAppLoopBootstrap(
     const conflict = await deps.conflicts.inspect(branch);
     if (confirmedWipe !== undefined) {
       if (!sameAppBootstrapConflictTarget(conflict, confirmedWipe)) {
-        if (hasAppBootstrapConflict(conflict)) return { ok: false, conflict };
+        if (hasAppBootstrapConflict(conflict)) return { ok: false, kind: 'conflict', conflict };
         return fail(`conflicting resources changed for branch ${branch}`);
       }
       await deps.conflicts.wipe(confirmedWipe);
     } else if (hasAppBootstrapConflict(conflict)) {
-      if (req.spec.wipe.mode === 'wipe-and-retry') return { ok: false, conflict };
+      if (req.spec.wipe.mode === 'wipe-and-retry') {
+        return { ok: false, kind: 'conflict', conflict };
+      }
       return fail(`branch ${branch} already exists`);
     }
 
@@ -283,7 +280,7 @@ export async function runAppLoopBootstrap(
     if (compensation.ok) return fail(error);
     const combined = `${error}; ${compensation.error}`;
     return compensation.recovery === undefined
-      ? { ok: false, error: combined, requiresAttention: true }
+      ? { ok: false, kind: 'error', error: combined, requiresAttention: true }
       : fail(combined, compensation.recovery);
   }
 }
@@ -329,6 +326,7 @@ export function createAppLoopBootstrapSession(
       } catch (e) {
         return {
           ok: false,
+          kind: 'error' as const,
           error: `pending bootstrap cleanup failed: ${errMsg(e)}`,
           requiresAttention: true,
           ...(pendingRecovery === null
@@ -337,7 +335,7 @@ export function createAppLoopBootstrapSession(
         };
       }
       const result = await runAppLoopBootstrap(deps, request);
-      if (!result.ok && !isAppBootstrapConflictResult(result) && result.recovery !== undefined) {
+      if (!result.ok && result.kind === 'error' && result.recovery !== undefined) {
         pendingRecovery = {
           ownership: result.recovery,
           clearBootstrapAfterRecovery: false,
@@ -540,7 +538,7 @@ export function createAppLoopBootstrapCoordinator(
           `Bootstrap cleanup needs attention after step ${job.stepId} was no longer current: ${errMsg(e)}`,
         );
       }
-    } else if (!isAppBootstrapConflictResult(result) && result.requiresAttention) {
+    } else if (result.kind === 'error' && result.requiresAttention) {
       emitError(job, `Bootstrap cleanup needs attention after step ${job.stepId} was no longer current: ${result.error}`);
     }
   };
@@ -624,7 +622,7 @@ export function createAppLoopBootstrapCoordinator(
             } catch (e) {
               reason = `${reason}; bootstrap cleanup failed: ${errMsg(e)}`;
             }
-          } else if (!isAppBootstrapConflictResult(result) && result.requiresAttention) {
+          } else if (result.kind === 'error' && result.requiresAttention) {
             reason = `${reason}; bootstrap cleanup needs attention: ${result.error}`;
           }
           rollbackJob(job, reason);
@@ -665,7 +663,7 @@ export function createAppLoopBootstrapCoordinator(
         }
         // Nothing destructive has happened yet: the step stays put and the operator decides. Releasing
         // the in-flight slot below is what keeps another repo from queueing behind an unanswered dialog.
-        if (isAppBootstrapConflictResult(result)) {
+        if (result.kind === 'conflict') {
           held.set(heldKey(job.repoDir, job.stepId), { job, target: result.conflict });
           audit(job, 'conflict', result.conflict.branch);
           emitConflict(job, result.conflict);
@@ -688,6 +686,7 @@ export function createAppLoopBootstrapCoordinator(
         job.issue === null
           ? Promise.resolve<AppLoopBootstrapResult>({
               ok: false,
+              kind: 'error',
               error: 'pickup requires a resolved GitHub ticket input',
             })
           : deps.run(job.repoDir, {
@@ -696,11 +695,11 @@ export function createAppLoopBootstrapCoordinator(
               ...(confirmedWipe === undefined ? {} : { confirmedWipe }),
             });
     } catch (e) {
-      operation = Promise.resolve({ ok: false, error: errMsg(e) });
+      operation = Promise.resolve({ ok: false, kind: 'error', error: errMsg(e) });
     }
     void operation.then(
       (result) => void resolve(result),
-      (e: unknown) => void resolve({ ok: false, error: errMsg(e) }),
+      (e: unknown) => void resolve({ ok: false, kind: 'error', error: errMsg(e) }),
     );
   };
 
