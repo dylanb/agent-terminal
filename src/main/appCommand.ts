@@ -36,14 +36,15 @@ export function commandEnvironment(
   delete environment.GH_REPO;
   for (const key of GIT_REPOSITORY_ENV) delete environment[key];
   for (const key of GIT_TRANSPORT_ENV) delete environment[key];
-  // GIT_CONFIG_COUNT/KEY_n/VALUE_n and GIT_CONFIG_PARAMETERS inject configuration inline, with no file
-  // the user ever chose — the latter is git's own command-line-precedence channel, the one `-c`
-  // serializes into —
-  // enough to reinstate a url.*.insteadOf redirect that neither the repo-local config screen nor the
-  // isolated git dir can see. GIT_CONFIG_GLOBAL/SYSTEM are left alone: they name the user's own config
-  // files, exactly as ~/.gitconfig does, and dropping them would break a legitimate setup.
+  // Each of these SUPPLANTS the repository's own config for the read that decides where an operation
+  // goes: COUNT/KEY_n/VALUE_n and PARAMETERS inject values inline (the latter is git's own
+  // command-line-precedence channel, the one `-c` serializes into), and bare GIT_CONFIG repoints
+  // `git config` at another file outright — enough to answer `remote.origin.url` from a file the
+  // operator never chose. GIT_CONFIG_GLOBAL/SYSTEM are left alone: they name the user's own config in
+  // place of ~/.gitconfig and /etc/gitconfig, they cannot displace the repository's, and dropping them
+  // breaks a legitimate setup.
   for (const key of Object.keys(environment)) {
-    if (/^GIT_CONFIG_(?:COUNT|KEY_\d+|VALUE_\d+|PARAMETERS)$/.test(key)) {
+    if (/^GIT_CONFIG(?:_(?:COUNT|KEY_\d+|VALUE_\d+|PARAMETERS))?$/.test(key)) {
       delete environment[key];
     }
   }

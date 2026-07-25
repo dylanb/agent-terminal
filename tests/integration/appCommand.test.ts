@@ -14,6 +14,7 @@ const originalRepository = process.env.GH_REPO;
 const originalGitDir = process.env.GIT_DIR;
 const originalGitWorkTree = process.env.GIT_WORK_TREE;
 const gitConfigVars = [
+  'GIT_CONFIG',
   'GIT_CONFIG_COUNT',
   'GIT_CONFIG_KEY_0',
   'GIT_CONFIG_VALUE_0',
@@ -222,10 +223,11 @@ describe('app command environment neutralization', () => {
     cleanup.push(bin);
     writeFileSync(
       join(bin, 'git'),
-      '#!/usr/bin/env bash\nprintf \'%s|%s|%s|%s|%s|%s\\n\' "${GIT_CONFIG_COUNT-unset}" "${GIT_CONFIG_KEY_0-unset}" "${GIT_CONFIG_VALUE_0-unset}" "${GIT_CONFIG_PARAMETERS-unset}" "${GIT_CONFIG_GLOBAL-unset}" "${GIT_CONFIG_SYSTEM-unset}"\n',
+      '#!/usr/bin/env bash\nprintf \'%s|%s|%s|%s|%s|%s|%s\\n\' "${GIT_CONFIG-unset}" "${GIT_CONFIG_COUNT-unset}" "${GIT_CONFIG_KEY_0-unset}" "${GIT_CONFIG_VALUE_0-unset}" "${GIT_CONFIG_PARAMETERS-unset}" "${GIT_CONFIG_GLOBAL-unset}" "${GIT_CONFIG_SYSTEM-unset}"\n',
       { mode: 0o755 },
     );
     process.env.PATH = `${bin}:${originalPath ?? ''}`;
+    process.env.GIT_CONFIG = '/tmp/decoy.gitconfig';
     process.env.GIT_CONFIG_COUNT = '1';
     process.env.GIT_CONFIG_KEY_0 = 'url.https://evil.example/.insteadOf';
     process.env.GIT_CONFIG_VALUE_0 = 'https://github.com/';
@@ -237,7 +239,7 @@ describe('app command environment neutralization', () => {
     process.env.GIT_CONFIG_SYSTEM = '/etc/gitconfig';
 
     await expect(runAppCommand('git', [], bin)).resolves.toBe(
-      'unset|unset|unset|unset|/home/operator/.gitconfig|/etc/gitconfig\n',
+      'unset|unset|unset|unset|unset|/home/operator/.gitconfig|/etc/gitconfig\n',
     );
   });
 
