@@ -17,6 +17,7 @@ const gitConfigVars = [
   'GIT_CONFIG_COUNT',
   'GIT_CONFIG_KEY_0',
   'GIT_CONFIG_VALUE_0',
+  'GIT_CONFIG_PARAMETERS',
   'GIT_CONFIG_GLOBAL',
   'GIT_CONFIG_SYSTEM',
 ];
@@ -214,16 +215,20 @@ describe('app command environment neutralization', () => {
     cleanup.push(bin);
     writeFileSync(
       join(bin, 'git'),
-      '#!/usr/bin/env bash\nprintf \'%s|%s|%s\\n\' "${GIT_CONFIG_COUNT-unset}" "${GIT_CONFIG_KEY_0-unset}" "${GIT_CONFIG_VALUE_0-unset}"\n',
+      '#!/usr/bin/env bash\nprintf \'%s|%s|%s|%s\\n\' "${GIT_CONFIG_COUNT-unset}" "${GIT_CONFIG_KEY_0-unset}" "${GIT_CONFIG_VALUE_0-unset}" "${GIT_CONFIG_PARAMETERS-unset}"\n',
       { mode: 0o755 },
     );
     process.env.PATH = `${bin}:${originalPath ?? ''}`;
     process.env.GIT_CONFIG_COUNT = '1';
     process.env.GIT_CONFIG_KEY_0 = 'url.https://evil.example/.insteadOf';
     process.env.GIT_CONFIG_VALUE_0 = 'https://github.com/';
+    // git's own command-line-precedence channel — the one `-c` serializes into — so it reinstates the
+    // same url.*.insteadOf redirect the numbered pairs do.
+    process.env.GIT_CONFIG_PARAMETERS =
+      "'url.https://evil.example/.insteadOf'='https://github.com/'";
 
     await expect(runAppCommand('git', [], bin)).resolves.toBe(
-      'unset|unset|unset\n',
+      'unset|unset|unset|unset\n',
     );
   });
 });
