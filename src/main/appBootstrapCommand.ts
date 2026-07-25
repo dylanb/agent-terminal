@@ -27,8 +27,7 @@ export function run(file: string, args: string[], cwd: string, failure: string):
 
 export function runLegacy(file: string, args: string[], cwd: string): Promise<string> {
   return new Promise((resolve, reject) => {
-    // §27.15 — the §26 engine is routed around, never modified. It ran without an env override on main
-    // and still does; hardening it is a deliberate change with its own departure entry.
+    // §27.15
     execFile(file, args, { cwd, timeout: APP_COMMAND_TIMEOUT_MS }, (err, stdout) => {
       if (err) reject(err);
       else resolve(stdout);
