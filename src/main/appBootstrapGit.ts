@@ -7,6 +7,7 @@ import { errMsg } from './errno';
 import { run, CommandFailure } from './appBootstrapCommand';
 import { createAppGitRemote, type AppGitRemote } from './appCommand';
 import { originUrls, type OriginConfigReader } from './originUrl';
+import { isGitObjectId } from '../shared/appBootstrap';
 import {
   createGitHubRepositorySource,
   type GitHubRepositorySource,
@@ -440,7 +441,7 @@ export function createRealAppBootstrapGit(
           ['commit-tree', tree, '-p', state.expectedLocalOid, '-m', message],
           'start commit creation failed',
         )).trim();
-        if (!/^[0-9a-f]{40,64}$/.test(oid)) {
+        if (!isGitObjectId(oid)) {
           throw new Error('start commit creation returned an invalid object id');
         }
         await git(
