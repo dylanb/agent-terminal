@@ -18,6 +18,19 @@ import { createGitHubRepositorySource } from '../../src/main/githubRepository';
 const runGit = (cwd: string, args: string[]): string =>
   execFileSync('git', args, { cwd, encoding: 'utf8' }).trim();
 
+// Every key git's upstream bookkeeping wrote for the branch. `git config --get-regexp` exits 1 when the
+// section is gone, which is what "removed" looks like.
+const branchConfig = (cwd: string, branch: string): string => {
+  try {
+    return execFileSync('git', ['config', '--get-regexp', `^branch\\.${branch}\\.`], {
+      cwd,
+      encoding: 'utf8',
+    }).trim();
+  } catch {
+    return '';
+  }
+};
+
 const hasRef = (cwd: string, ref: string): boolean => {
   try {
     execFileSync('git', ['show-ref', '--verify', '--quiet', ref], { cwd, stdio: 'ignore' });
@@ -32,6 +45,8 @@ describe('createRealAppBootstrapGit — owned remote-ref compensation', () => {
   let root: string;
   let remote: string;
   let repo: string;
+
+  const branchSection = (): string => branchConfig(repo, branch);
 
   const createOwnedBranch = async (faults: AppBootstrapGitFaults = {}) => {
     const port = createRealAppBootstrapGit(repo, faults);
@@ -319,6 +334,23 @@ describe('createRealAppBootstrapGit — owned remote-ref compensation', () => {
     await port.rollbackCreatedBranch(laterBranch, null);
     expect(runGit(repo, ['branch', '--show-current'])).toBe('main');
     expect(runGit(repo, ['branch', '--list', laterBranch])).toBe('');
+  });
+
+  // Same shape as the wipe: the rollback deletes through the URL-addressed port, which performs none of
+  // the local bookkeeping a delete-push to a NAMED remote and `git branch -D` do. The tracking ref this
+  // port wrote by hand on push has to come back off on rollback, or the branch outlives itself.
+  it('clears the tracking ref and branch config it wrote when rolling back a pushed branch', async () => {
+    const { port, ownedOid } = await createPushedOwnedBranch();
+    expect(hasRef(repo, `refs/remotes/origin/${branch}`)).toBe(true);
+    expect(branchSection()).toContain('.remote origin');
+    expect(branchSection()).toContain('.merge ');
+
+    await port.rollbackCreatedBranch(branch, ownedOid);
+
+    expect(hasRef(repo, `refs/remotes/origin/${branch}`)).toBe(false);
+    // The whole section, not one key: `--set-upstream-to` writes branch.<n>.remote AND .merge, and the
+    // fix removes the section — reading only .remote would pass a narrower `--unset` that leaves .merge.
+    expect(branchSection()).toBe('');
   });
 
   it('does not claim an exact-OID remote ref without a confirmed app push', async () => {
@@ -727,9 +759,8 @@ describe('createRealAppBootstrapGit — owned remote-ref compensation', () => {
   it('clears the tracking ref and branch config the wipe deleted the branch for', async () => {
     const { port, pushedOid } = await createPushedOwnedBranch();
     expect(hasRef(repo, `refs/remotes/origin/${branch}`)).toBe(true);
-    expect(runGit(repo, ['config', '--get', `branch.${branch}.remote`])).toBe(
-      'origin',
-    );
+    expect(branchSection()).toContain('.remote origin');
+    expect(branchSection()).toContain('.merge ');
 
     await port.deleteBranch(branch, {
       localOid: pushedOid,
@@ -737,15 +768,24 @@ describe('createRealAppBootstrapGit — owned remote-ref compensation', () => {
     });
 
     expect(hasRef(repo, `refs/remotes/origin/${branch}`)).toBe(false);
-    // `git config --get` exits 1 for an unset key, which is what "the section is gone" looks like.
-    const trackedRemote = (): string => {
-      try {
-        return runGit(repo, ['config', '--get', `branch.${branch}.remote`]);
-      } catch {
-        return '';
-      }
-    };
-    expect(trackedRemote()).toBe('');
+    expect(branchSection()).toBe('');
+  });
+
+  // main's wipe deleted the local branch with the porcelain `git branch -D`, which REFUSES a branch any
+  // worktree has checked out; the plumbing `update-ref -d` that replaced it has no such check, and the
+  // detach arm only moves repoDir's own HEAD. Deleting the ref leaves the other worktree on a branch
+  // that no longer exists.
+  it('refuses to delete a branch another worktree has checked out', async () => {
+    const port = createRealAppBootstrapGit(repo);
+    runGit(repo, ['branch', branch, 'main']);
+    const otherTree = join(root, 'other-worktree');
+    runGit(repo, ['worktree', 'add', otherTree, branch]);
+    const state = await port.branchState(branch);
+
+    await expect(port.deleteBranch(branch, state)).rejects.toThrow(
+      /local branch wipe failed/i,
+    );
+    expect(hasRef(repo, `refs/heads/${branch}`)).toBe(true);
   });
 
   // Either lease refusing must leave BOTH halves intact: a wipe that destroys the origin branch and then
@@ -762,8 +802,13 @@ describe('createRealAppBootstrapGit — owned remote-ref compensation', () => {
     runGit(repo, ['commit', '--allow-empty', '-m', 'moved']);
     runGit(repo, ['checkout', 'main']);
 
+    // The §27.10 chart's "failed before anything was destroyed, checkout restored" edge, asserted in
+    // full: nothing in the suite can falsify a chart edge, so the residue taxonomy the wipe's safety
+    // argument rests on is bound here instead — every artifact that edge promises survives.
     await expect(port.deleteBranch(branch, state)).rejects.toThrow(/local branch wipe failed/i);
     expect(hasRef(remote, `refs/heads/${branch}`)).toBe(true);
+    expect(hasRef(repo, `refs/heads/${branch}`)).toBe(true);
+    expect(runGit(repo, ['rev-parse', '--abbrev-ref', 'HEAD'])).toBe('main');
   });
 });
 

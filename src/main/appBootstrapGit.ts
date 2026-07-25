@@ -176,26 +176,42 @@ export function createRealAppBootstrapGit(
     await git(['checkout', '--detach', checkout.value], 'previous commit restoration failed');
   };
   // A delete-push to a NAMED remote drops refs/remotes/<remote>/<branch>, and `git branch -D` drops the
-  // branch.<name> section; deleting through the isolated dir does neither, so the caches outlive the
-  // branch. Cleanup only — it must never fail a wipe whose destructive half already landed.
-  const forgetRemoteTracking = async (branch: string): Promise<void> => {
-    try {
-      await git(
-        ['update-ref', '-d', `refs/remotes/origin/${branch}`],
-        'remote-tracking cleanup failed',
-      );
-    } catch {
-      /* best-effort */
+  // branch.<name> section; deleting through the URL-addressed isolated dir does neither, so both caches
+  // outlive the branch. Keyed on the RESOURCE, not on which leg ran: every route that removes the branch
+  // leaves neither behind. Cleanup only — it must never fail a step whose destructive half already landed.
+  // `git branch -D` — what the wipe used before the split — refuses a branch any worktree has checked
+  // out; `update-ref -d` does not, so without this the ref goes and the other worktree is left on a
+  // branch that no longer exists. repoDir's own checkout is handled by the detach arm below.
+  const heldByAnotherWorktree = async (branch: string): Promise<boolean> => {
+    const listed = await git(
+      ['worktree', 'list', '--porcelain'],
+      'local branch wipe failed',
+    );
+    let tree: string | null = null;
+    for (const line of listed.split('\n')) {
+      if (line.startsWith('worktree ')) tree = line.slice('worktree '.length).trim();
+      else if (line.trim() === `branch refs/heads/${branch}` && tree !== null) {
+        let resolved: string;
+        try {
+          resolved = realpathSync(tree);
+        } catch {
+          return true;
+        }
+        if (resolved !== expectedRepoRoot) return true;
+      }
     }
+    return false;
   };
-  const forgetBranchConfig = async (branch: string): Promise<void> => {
-    try {
-      await git(
-        ['config', '--remove-section', `branch.${branch}`],
-        'branch configuration cleanup failed',
-      );
-    } catch {
-      /* best-effort */
+  const forgetBranchCaches = async (branch: string): Promise<void> => {
+    for (const args of [
+      ['update-ref', '-d', `refs/remotes/origin/${branch}`],
+      ['config', '--remove-section', `branch.${branch}`],
+    ]) {
+      try {
+        await git(args, 'branch cache cleanup failed');
+      } catch {
+        /* best-effort */
+      }
     }
   };
   const reconcileStartCommit = async (
@@ -276,6 +292,11 @@ export function createRealAppBootstrapGit(
       await assertSafeRepository();
       const localOid = state.localOid;
       if (localOid !== null) {
+        if (await heldByAnotherWorktree(branch)) {
+          throw new Error(
+            'local branch wipe failed: another worktree has the branch checked out',
+          );
+        }
         const current = (
           await git(
             ['rev-parse', '--verify', `refs/heads/${branch}`],
@@ -293,7 +314,6 @@ export function createRealAppBootstrapGit(
         const wipeUrl = await approvedOriginUrl('push');
         await remoteOp('remote branch wipe failed', async (r) =>
           r.deleteRef(wipeUrl, `refs/heads/${branch}`, remoteOid));
-        await forgetRemoteTracking(branch);
       }
       if (localOid !== null) {
         const checkout = await currentCheckout();
@@ -317,8 +337,8 @@ export function createRealAppBootstrapGit(
           }
           throw e;
         }
-        await forgetBranchConfig(branch);
       }
+      await forgetBranchCaches(branch);
     },
     rollbackCreatedBranch: async (branch, ownedOid) => {
       await assertSafeRepository();
@@ -385,6 +405,7 @@ export function createRealAppBootstrapGit(
           'local branch rollback failed',
         );
       }
+      await forgetBranchCaches(branch);
       created.delete(branch);
       pushed.delete(branch);
       if (activeCreatedBranch === branch) activeCreatedBranch = null;
