@@ -5,6 +5,7 @@ steps:
     kind: loop
     loop: groom-loop
     loop_namespace: app
+    todo_template: ticket-grooming
     inputs:
       - name: ticket
         type: github-ticket
@@ -13,7 +14,9 @@ steps:
     kind: loop
     loop: plan-loop
     loop_namespace: app
+    todo_template: plan-loop-review
   - id: implement
     kind: loop
     loop: impl-loop
     loop_namespace: app
+    todo_template: impl-loop-review

@@ -103,6 +103,7 @@ describe('the shipped feature-dev flow binds the complete §27 chain (ST3 AC6)',
         kind: 'loop',
         loop: 'groom-loop',
         loopNamespace: 'app',
+        todoTemplate: 'ticket-grooming',
         inputs: [
           { name: 'ticket', type: 'github-ticket', required: true },
         ],
@@ -112,12 +113,14 @@ describe('the shipped feature-dev flow binds the complete §27 chain (ST3 AC6)',
         kind: 'loop',
         loop: 'plan-loop',
         loopNamespace: 'app',
+        todoTemplate: 'plan-loop-review',
       },
       {
         id: 'implement',
         kind: 'loop',
         loop: 'impl-loop',
         loopNamespace: 'app',
+        todoTemplate: 'impl-loop-review',
       },
     ]);
   });
