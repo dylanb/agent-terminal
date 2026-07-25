@@ -501,6 +501,14 @@ describe('the exact bootstrap-wipe target reflows at 320px (WCAG 1.4.10)', () =>
       ) as HTMLElement;
       try {
         expect(modal.scrollWidth).toBeLessThanOrEqual(modal.clientWidth + 1);
+        // `.flow-modal` cannot overflow horizontally whatever the content does — the box that scrolls is
+        // the one carrying the resource list, so it is the one SC 1.4.10 is about.
+        const scroller = host.querySelector(
+          '.flow-modal [data-modal-scroll]',
+        ) as HTMLElement;
+        expect(scroller.scrollWidth).toBeLessThanOrEqual(
+          scroller.clientWidth + 1,
+        );
         // The action must be reachable once the card is scrolled to its end, not merely painted somewhere.
         modal.scrollTop = modal.scrollHeight;
         expect(confirm.getBoundingClientRect().bottom).toBeLessThanOrEqual(

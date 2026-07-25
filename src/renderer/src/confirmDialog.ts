@@ -64,8 +64,7 @@ export function createConfirmDialog(host: HTMLElement, opts?: { onFocusLost?: ()
         h3.className = 'serif';
         h3.id = titleId;
         h3.textContent = opts.title;
-        // UI §5.7 — the message is unbounded (a wipe names every ref and PR it would destroy), so it is
-        // the box that scrolls; without the slots the footer paints outside the card onto the scrim.
+        // UI §5.7
         const body = doc.createElement('div');
         const ph = doc.createElement('p');
         ph.className = 'ph';
