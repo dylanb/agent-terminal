@@ -856,6 +856,38 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     });
   });
 
+  // The other half of the same rule: a PASSIVE repaint must not pull focus away from wherever the
+  // operator actually is. `render()` runs for onStateChanged pushes and onRepoChanged too, where focus
+  // legitimately lives outside the strip (the terminal, the monitor pane) — WCAG 2.1 SC 3.2.5.
+  it('leaves focus alone when a repaint finds the operator outside the strip', async () => {
+    let fire: () => void = () => {};
+    const flow = fakeFlow('in_progress');
+    const deps = {
+      ...flow,
+      onStateChanged: vi.fn((cb: () => void) => {
+        fire = cb;
+        return () => {};
+      }),
+    };
+    createFlowStrip(host, deps).onRepoChanged('/repo');
+    await vi.waitFor(() => expect(host.querySelector('.flow-control')).not.toBeNull());
+
+    const outside = host.ownerDocument.createElement('button');
+    outside.textContent = 'terminal';
+    host.ownerDocument.body.append(outside);
+    outside.focus();
+    expect(document.activeElement).toBe(outside);
+
+    await flow.terminate('/repo'); // a background change repaints the strip under the operator
+    fire();
+    await vi.waitFor(() =>
+      expect(deps.state.mock.calls.length).toBeGreaterThanOrEqual(2),
+    );
+
+    expect(document.activeElement).toBe(outside);
+    outside.remove();
+  });
+
   // WCAG 2.4.3. A repaint that detaches the focused control must re-anchor focus, whatever path the
   // repaint arrives by — declining the §27.10 wipe rolls the step back through a plain state push, not
   // through a transition response, and left the keyboard user on <body>.
