@@ -1,0 +1,59 @@
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { probeChainedInput } from '../../src/main/chainedInputProbe';
+
+// §27.10 — real fixtures, not a fake: the whole point of this classifier is that it tells "no upstream ran"
+// apart from "its product is there but unavailable", which only real fs errno values exercise.
+describe('probeChainedInput (§27.10 — what the upstream loop left at a binding)', () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'chained-'));
+  });
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('is produced for a regular file the upstream loop wrote', () => {
+    const p = join(dir, 'plan.md');
+    writeFileSync(p, '# plan\n');
+    expect(probeChainedInput(p)).toBe('produced');
+  });
+
+  it('is not-produced when nothing is at the binding (no upstream ran)', () => {
+    expect(probeChainedInput(join(dir, 'never-written.md'))).toBe('not-produced');
+  });
+
+  it('is unreadable — not not-produced — when a directory sits where the artifact belongs', () => {
+    const p = join(dir, 'plan.md');
+    mkdirSync(p);
+    expect(probeChainedInput(p)).toBe('unreadable');
+  });
+
+  it.skipIf(process.getuid?.() === 0)('is unreadable when the artifact itself denies reading', () => {
+    // The canonical case the tri-state exists for: an artifact written under another uid. stat succeeds on it
+    // — only the read fails — so classifying on stat alone announces it to the agent as required reading.
+    const p = join(dir, 'plan.md');
+    writeFileSync(p, '# plan\n');
+    chmodSync(p, 0o000);
+    try {
+      expect(probeChainedInput(p)).toBe('unreadable');
+    } finally {
+      chmodSync(p, 0o644);
+    }
+  });
+
+  it.skipIf(process.getuid?.() === 0)('is unreadable when an ancestor denies traversal', () => {
+    const locked = join(dir, 'locked');
+    mkdirSync(locked);
+    const p = join(locked, 'plan.md');
+    writeFileSync(p, '# plan\n');
+    chmodSync(locked, 0o000);
+    try {
+      expect(probeChainedInput(p)).toBe('unreadable');
+    } finally {
+      chmodSync(locked, 0o755);
+    }
+  });
+});

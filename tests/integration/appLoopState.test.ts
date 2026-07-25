@@ -1,10 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { existsSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   APP_LOOP_STATE_SCHEMA,
   armInterrupt,
+  clearAppLoopBootstrap,
   clearInterrupt,
   enterPolish,
   clearPolish,
@@ -18,6 +19,10 @@ import {
   roundReportRel,
   serializeAppLoopState,
   writeAppLoopState,
+  writeAppLoopBootstrap,
+  writeAppLoopBootstrapIntent,
+  readAppLoopBootstrap,
+  type AppLoopBootstrap,
   type AppLoopRunState,
 } from '../../src/main/appLoopState';
 
@@ -126,6 +131,182 @@ describe('§27 loop-state writer — confined, first-run, atomic, no .gitignore'
       symlinkSync(elsewhere, join(repo, '.agent-terminal')); // a planted link where the app dir should be
       expect(() => writeAppLoopState(repo, RUN, FIXED)).toThrow();
       expect(existsSync(join(elsewhere, 'loop', 'run-state.yaml'))).toBe(false);
+    } finally {
+      rmSync(elsewhere, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('§27 bootstrap-identity file — disjoint from the run-state document (ST2 AC8)', () => {
+  // §27.10 — the pr/branch/issue a bootstrap opens is set once and read many times over later turns; its
+  // lifecycle is independent of the per-turn run-state doc, so it lives in its OWN file (the polish/armed-
+  // interrupt own-file pattern) — a wholesale run-state write can neither clobber nor resurrect it.
+  const IDENTITY: AppLoopBootstrap = {
+    pr: 87,
+    branch: 'plan-loop/issue-78',
+    issue: 78,
+    initialStatus: 'planning',
+  };
+  const bootstrapFile = (): string => join(loopDir(), 'bootstrap.yaml');
+
+  it('round-trips pr/branch/issue through its own file, created first-run (target root absent)', () => {
+    expect(existsSync(join(repo, '.agent-terminal'))).toBe(false);
+    writeAppLoopBootstrap(repo, IDENTITY, FIXED);
+    expect(existsSync(bootstrapFile())).toBe(true);
+    expect(readAppLoopBootstrap(repo)).toEqual(IDENTITY);
+  });
+
+  it.each(['grooming', 'planning', 'implementing'])(
+    'preserves the def-declared initial status %s',
+    (initialStatus) => {
+      writeAppLoopBootstrap(repo, { ...IDENTITY, initialStatus }, FIXED);
+      expect(readAppLoopBootstrap(repo)?.initialStatus).toBe(initialStatus);
+    },
+  );
+
+  it('reads the additive v1 completed shape written before initial_status existed', () => {
+    mkdirSync(loopDir(), { recursive: true });
+    writeFileSync(
+      bootstrapFile(),
+      'schema_version: 1\npr: 87\nbranch: plan-loop/issue-78\nissue: 78\n',
+    );
+
+    expect(readAppLoopBootstrap(repo)).toEqual({
+      pr: 87,
+      branch: 'plan-loop/issue-78',
+      issue: 78,
+    });
+  });
+
+  it('clears only the completed bootstrap journal after owned compensation', () => {
+    writeAppLoopBootstrap(repo, IDENTITY, FIXED);
+    writeAppLoopState(repo, RUN, FIXED);
+
+    clearAppLoopBootstrap(repo);
+
+    expect(existsSync(bootstrapFile())).toBe(false);
+    expect(readAppLoopState(repo)).toEqual(expect.objectContaining(RUN));
+  });
+
+  it('journals intent before outward mutation without surfacing a completed identity', () => {
+    writeAppLoopBootstrapIntent(
+      repo,
+      {
+        branch: IDENTITY.branch,
+        issue: IDENTITY.issue,
+        initialStatus: IDENTITY.initialStatus,
+      },
+      FIXED,
+    );
+    expect(readFileSync(bootstrapFile(), 'utf8')).toContain('status: pending');
+    expect(readFileSync(bootstrapFile(), 'utf8')).toContain('initial_status: planning');
+    expect(readAppLoopBootstrap(repo)).toBeNull();
+
+    writeAppLoopBootstrap(repo, IDENTITY, FIXED);
+    expect(readFileSync(bootstrapFile(), 'utf8')).toContain('status: complete');
+    expect(readAppLoopBootstrap(repo)).toEqual(IDENTITY);
+  });
+
+  it('refuses a planted bootstrap directory before a journal can be written', () => {
+    mkdirSync(bootstrapFile(), { recursive: true });
+    expect(() =>
+      writeAppLoopBootstrapIntent(
+        repo,
+        {
+          branch: IDENTITY.branch,
+          issue: IDENTITY.issue,
+          initialStatus: IDENTITY.initialStatus,
+        },
+        FIXED,
+      ),
+    ).toThrow();
+  });
+
+  it('refuses a bootstrap leaf symlink without writing or deleting its target', () => {
+    mkdirSync(loopDir(), { recursive: true });
+    const target = join(loopDir(), 'artifacts', 'operator-owned.md');
+    mkdirSync(join(loopDir(), 'artifacts'), { recursive: true });
+    writeFileSync(target, 'operator owned\n');
+    symlinkSync(target, bootstrapFile());
+
+    expect(() =>
+      writeAppLoopBootstrapIntent(
+        repo,
+        {
+          branch: IDENTITY.branch,
+          issue: IDENTITY.issue,
+          initialStatus: IDENTITY.initialStatus,
+        },
+        FIXED,
+      ),
+    ).toThrow();
+    expect(() => clearAppLoopBootstrap(repo)).toThrow();
+    expect(readFileSync(target, 'utf8')).toBe('operator owned\n');
+    expect(readAppLoopBootstrap(repo)).toBeNull();
+  });
+
+  it('is byte-for-byte untouched by a wholesale run-state write, and vice versa (disjoint files)', () => {
+    writeAppLoopBootstrap(repo, IDENTITY, FIXED);
+    const bootstrapBytes = readFileSync(bootstrapFile(), 'utf8');
+    // A full run-state document write must not perturb the bootstrap-identity file.
+    writeAppLoopState(repo, { ...RUN, status: 'error', errorReason: 'boom' }, FIXED);
+    expect(readFileSync(bootstrapFile(), 'utf8')).toBe(bootstrapBytes);
+    expect(readAppLoopBootstrap(repo)).toEqual(IDENTITY);
+    // And re-writing the bootstrap identity must not perturb the run-state document.
+    writeAppLoopState(repo, RUN, FIXED);
+    const runBytes = readFileSync(stateFile(), 'utf8');
+    writeAppLoopBootstrap(repo, { ...IDENTITY, pr: 99 }, FIXED);
+    expect(readFileSync(stateFile(), 'utf8')).toBe(runBytes);
+  });
+
+  it('never writes a .gitignore (§19.1/§25 no-gitignore rule)', () => {
+    writeAppLoopBootstrap(repo, IDENTITY, FIXED);
+    expect(existsSync(join(loopDir(), '.gitignore'))).toBe(false);
+    expect(existsSync(join(repo, '.agent-terminal', '.gitignore'))).toBe(false);
+    expect(existsSync(join(repo, '.gitignore'))).toBe(false);
+  });
+
+  it('leaves a pre-existing .gitignore byte-for-byte unchanged', () => {
+    const gitignore = join(repo, '.gitignore');
+    const before = '# operator-owned\n.agent-terminal/\n';
+    writeFileSync(gitignore, before);
+
+    writeAppLoopBootstrap(repo, IDENTITY, FIXED);
+
+    expect(readFileSync(gitignore, 'utf8')).toBe(before);
+  });
+
+  it('returns null when absent, and drops a field-invalid file rather than surfacing a phantom identity', () => {
+    expect(readAppLoopBootstrap(repo)).toBeNull();
+    writeAppLoopBootstrap(repo, IDENTITY, FIXED);
+    const good = readFileSync(bootstrapFile(), 'utf8');
+    // A non-integer / negative pr or issue, or blank branch, is not a valid identity (CWE-20).
+    for (const bad of [
+      'pr: -1',
+      'pr: 1.5',
+      'pr: 9007199254740992',
+      'issue: 0',
+      'branch: ""',
+      'initial_status: ""',
+    ]) {
+      const field = bad.split(':')[0];
+      const mutated = good.replace(new RegExp(`^${field}:.*$`, 'm'), bad);
+      writeFileSync(bootstrapFile(), mutated);
+      expect(readAppLoopBootstrap(repo), bad).toBeNull();
+    }
+  });
+
+  it('refuses a field-invalid identity on write instead of persisting an unreadable bootstrap file', () => {
+    expect(() => writeAppLoopBootstrap(repo, { ...IDENTITY, pr: 0 }, FIXED)).toThrow(/invalid/i);
+    expect(existsSync(bootstrapFile())).toBe(false);
+  });
+
+  it('refuses to write through a symlinked loop container rather than following it (CWE-59)', () => {
+    const elsewhere = mkdtempSync(join(tmpdir(), 'apploop-boot-evil-'));
+    try {
+      symlinkSync(elsewhere, join(repo, '.agent-terminal'));
+      expect(() => writeAppLoopBootstrap(repo, IDENTITY, FIXED)).toThrow();
+      expect(existsSync(join(elsewhere, 'loop', 'bootstrap.yaml'))).toBe(false);
     } finally {
       rmSync(elsewhere, { recursive: true, force: true });
     }
@@ -252,6 +433,46 @@ describe('§27 loop-state — the redo instruction for a work run', () => {
   it('survives a write→read round-trip on disk (relaunch reconstructs the instruction)', () => {
     writeAppLoopState(repo, WORK_REDO, FIXED);
     expect(readAppLoopState(repo)?.instruction).toBe('Start over; the plan structure is wrong. Keep only the schema section.');
+  });
+});
+
+// §27.10 — the binding ids this step's entry decided to carry, persisted so a redo or a relaunch honours that
+// decision rather than re-deriving one from whatever is on disk. Absent means carried nothing, so a malformed
+// value must fail toward NOT carrying rather than toward carrying everything declared.
+describe('§27 loop-state — the chained-input carry for a work run', () => {
+  const WORK_CHAINED: AppLoopRunState = {
+    loop: 'plan-loop',
+    step: 'plan',
+    turnKey: 'work-plan',
+    status: 'working',
+    chainedInputs: ['groomed-ticket', 'design-notes'],
+  };
+
+  it('round-trips the carried binding ids in declaration order', () => {
+    const back = parseAppLoopState(serializeAppLoopState(WORK_CHAINED, FIXED));
+    expect(back).toEqual(WORK_CHAINED);
+    expect(back?.chainedInputs).toEqual(['groomed-ticket', 'design-notes']);
+  });
+
+  it('carries no field for a run that chained nothing (absent = carried nothing)', () => {
+    const text = serializeAppLoopState({ loop: 'plan-loop', step: 'plan', turnKey: 'work-plan', status: 'working' }, FIXED);
+    expect(text).not.toContain('chained_inputs:');
+    expect(parseAppLoopState(text)?.chainedInputs).toBeUndefined();
+  });
+
+  it('reads a malformed carry as carried nothing while every sibling field survives (field-local)', () => {
+    for (const bad of ['chained_inputs: groomed-ticket', 'chained_inputs:\n  - ok\n  - bad: 1', 'chained_inputs: []']) {
+      const text = serializeAppLoopState(WORK_CHAINED, FIXED).replace(/chained_inputs:\n(  - .*\n)+/, `${bad}\n`);
+      const back = parseAppLoopState(text);
+      expect(back?.chainedInputs).toBeUndefined();
+      expect(back?.step).toBe('plan'); // the rest of the document is unaffected
+      expect(back?.status).toBe('working');
+    }
+  });
+
+  it('survives a write→read round-trip on disk (relaunch reconstructs the carry)', () => {
+    writeAppLoopState(repo, WORK_CHAINED, FIXED);
+    expect(readAppLoopState(repo)?.chainedInputs).toEqual(['groomed-ticket', 'design-notes']);
   });
 });
 

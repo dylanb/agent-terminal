@@ -1,28 +1,17 @@
-// The app-owned §27 loop-state persistence (§27.10/§27.12): one small YAML document under the per-repo §27
-// loop area recording which work turn is running, its status, and its error reason, so a relaunch
-// reconstructs the stopped turn and never re-drives a completed one. It carries a version/schema
-// discriminator (mirroring §26's versioned state.yaml, §19.1) so a later slice can migrate or reject an
-// older resume file deterministically. Writer and reader agree on one gate — the error reason is persisted
-// only under `status: error` — so a recovered status can never surface a stale reason (CLAUDE.md
-// writer↔reader shared-semantics). This slice adds a WRITER N1 did not have, so its destination is confined
-// (resolveJail — the loop area sits inside the untrusted repo working tree) before it is written, and it
-// never writes a `.gitignore`.
-
 import path from 'node:path';
-import { readFileSync, rmSync } from 'node:fs';
+import { lstatSync, readFileSync, rmSync } from 'node:fs';
 import yaml from 'js-yaml';
 import { atomicWriteFileSync } from './atomicFile';
 import { confinedRealPath, resolveJail } from './confinedPath';
+import { APP_LOOP_DIR_SEGMENTS } from './appLoopPaths';
 import { isRecord } from './yamlRecord';
+import { isErrno } from './errno';
 import { CONSOLIDATOR_VERDICTS, verdictCarriesReason, type ConsolidatorVerdict } from '../shared/consolidatorOutput';
 
 /** The §27 loop-state schema this app writes and accepts. Independent of the def's `v2` marker (that keys
  *  def parsing); this keys resume-file compatibility. A file declaring any other value fails to parse. */
 export const APP_LOOP_STATE_SCHEMA = 1;
 
-/** The per-repo §27 loop area, relative to the repo root. The state file is a sibling of the def's
- *  confined `artifacts/` subtree (loopDefV2 `confineArtifact`) — the engine's own state, disjoint from it. */
-export const APP_LOOP_DIR_SEGMENTS = ['.agent-terminal', 'loop'] as const;
 const RUN_STATE_FILE = 'run-state.yaml';
 /** The round reports live under a dedicated subtree of the loop area, keyed by round number (§27.5/§27.10),
  *  disjoint from the run-state file and from every other round's report. */
@@ -79,6 +68,8 @@ export interface AppLoopRunState {
    *  rather than dropping the human's input. Present only on a work turn a redo entered; a blank value is
    *  never persisted. Mirrors `feedback` on the review turn. */
   instruction?: string;
+  /** §27.10 */
+  chainedInputs?: string[];
 }
 
 /** Non-empty text is text; blank or non-string is none. The ONE gate the writer and reader of any human-typed
@@ -139,6 +130,8 @@ export function serializeAppLoopState(state: AppLoopRunState, now: () => Date): 
   // §27.9/AC5 — the redo instruction for this work turn (the same one-gate treatment as feedback).
   const instruction = validInstruction(state.instruction);
   if (instruction !== undefined) doc.instruction = instruction;
+  // §27.10 — absent reads back as "carried nothing", so a recovered carry fails toward NOT carrying.
+  if (state.chainedInputs && state.chainedInputs.length > 0) doc.chained_inputs = state.chainedInputs;
   return yaml.dump(doc);
 }
 
@@ -174,6 +167,11 @@ export function parseAppLoopState(text: string): AppLoopRunState | null {
   const feedback = validFeedback(doc.feedback);
   // §27.9/AC5 — same field-local validation for the redo instruction.
   const instruction = validInstruction(doc.instruction);
+  // §27.10 — same field-local validation as the chosen roster; a malformed list reads as carried nothing.
+  const chainedInputs =
+    Array.isArray(doc.chained_inputs) && doc.chained_inputs.every((i) => typeof i === 'string') && doc.chained_inputs.length > 0
+      ? (doc.chained_inputs as string[])
+      : undefined;
   return {
     loop,
     step,
@@ -186,6 +184,7 @@ export function parseAppLoopState(text: string): AppLoopRunState | null {
     ...(chosenRoster !== undefined ? { chosenRoster } : {}),
     ...(feedback !== undefined ? { feedback } : {}),
     ...(instruction !== undefined ? { instruction } : {}),
+    ...(chainedInputs !== undefined ? { chainedInputs } : {}),
   };
 }
 
@@ -238,6 +237,122 @@ export function consolidatorOutputFile(repoDir: string, round: number): string |
   const jail = resolveJail(repoDir, ...APP_LOOP_DIR_SEGMENTS, CONSOLIDATE_SUBDIR);
   if (jail === null) return null;
   return confinedRealPath(jail, path.join(jail, roundLeaf(round)));
+}
+
+const BOOTSTRAP_FILE = 'bootstrap.yaml';
+
+/** §27.10 */
+export interface AppLoopBootstrap {
+  pr: number;
+  branch: string;
+  issue: number;
+  initialStatus: string;
+}
+
+export type ReadAppLoopBootstrap = Omit<AppLoopBootstrap, 'initialStatus'> & {
+  initialStatus?: string;
+};
+
+export type AppLoopBootstrapIntent = Omit<AppLoopBootstrap, 'pr'>;
+
+const bootstrapFileOf = (repoDir: string): string | null => {
+  const jail = resolveJail(repoDir, ...APP_LOOP_DIR_SEGMENTS);
+  if (jail === null) return null;
+  const parent = confinedRealPath(jail, jail);
+  if (parent !== jail) return null;
+  const file = path.join(jail, BOOTSTRAP_FILE);
+  try {
+    if (!lstatSync(file).isFile()) return null;
+  } catch (e) {
+    if (!isErrno(e, 'ENOENT')) return null;
+  }
+  return file;
+};
+
+function isPositiveInt(v: unknown): v is number {
+  return typeof v === 'number' && Number.isSafeInteger(v) && v > 0;
+}
+
+function isNonBlank(v: unknown): v is string {
+  return typeof v === 'string' && v.trim().length > 0;
+}
+
+export function writeAppLoopBootstrap(repoDir: string, b: AppLoopBootstrap, now: () => Date = () => new Date()): void {
+  if (!isPositiveInt(b.pr) || !isPositiveInt(b.issue) || !isNonBlank(b.branch) || !isNonBlank(b.initialStatus)) {
+    throw new Error('invalid §27 bootstrap identity');
+  }
+  const file = bootstrapFileOf(repoDir);
+  if (file === null) throw new Error('§27 loop area is unresolvable');
+  const doc = {
+    schema_version: APP_LOOP_STATE_SCHEMA,
+    status: 'complete',
+    pr: b.pr,
+    branch: b.branch,
+    issue: b.issue,
+    initial_status: b.initialStatus,
+    updated_at: now().toISOString(),
+  };
+  if (!atomicWriteFileSync(file, yaml.dump(doc))) {
+    throw new Error(`cannot write §27 bootstrap identity: ${path.dirname(file)} is not a real directory`);
+  }
+}
+
+export function writeAppLoopBootstrapIntent(
+  repoDir: string,
+  intent: AppLoopBootstrapIntent,
+  now: () => Date = () => new Date(),
+): void {
+  if (!isPositiveInt(intent.issue) || !isNonBlank(intent.branch) || !isNonBlank(intent.initialStatus)) {
+    throw new Error('invalid §27 bootstrap intent');
+  }
+  const file = bootstrapFileOf(repoDir);
+  if (file === null) throw new Error('§27 loop area is unresolvable');
+  const doc = {
+    schema_version: APP_LOOP_STATE_SCHEMA,
+    status: 'pending',
+    branch: intent.branch,
+    issue: intent.issue,
+    initial_status: intent.initialStatus,
+    updated_at: now().toISOString(),
+  };
+  if (!atomicWriteFileSync(file, yaml.dump(doc))) {
+    throw new Error(`cannot write §27 bootstrap intent: ${path.dirname(file)} is not a real directory`);
+  }
+}
+
+export function readAppLoopBootstrap(repoDir: string): ReadAppLoopBootstrap | null {
+  const file = bootstrapFileOf(repoDir);
+  if (file === null) return null;
+  let text: string;
+  try {
+    text = readFileSync(file, 'utf8');
+  } catch {
+    return null;
+  }
+  let doc: unknown;
+  try {
+    doc = yaml.load(text);
+  } catch {
+    return null;
+  }
+  if (!isRecord(doc)) return null;
+  if (String(doc.schema_version) !== String(APP_LOOP_STATE_SCHEMA)) return null;
+  if (doc.status !== undefined && doc.status !== 'complete') return null;
+  if (!isPositiveInt(doc.pr) || !isPositiveInt(doc.issue)) return null;
+  if (!isNonBlank(doc.branch)) return null;
+  if (doc.initial_status !== undefined && !isNonBlank(doc.initial_status)) return null;
+  return {
+    pr: doc.pr,
+    branch: doc.branch,
+    issue: doc.issue,
+    ...(isNonBlank(doc.initial_status) ? { initialStatus: doc.initial_status } : {}),
+  };
+}
+
+export function clearAppLoopBootstrap(repoDir: string): void {
+  const file = bootstrapFileOf(repoDir);
+  if (file === null) throw new Error('§27 loop area is unresolvable');
+  rmSync(file, { force: true });
 }
 
 /** A per-step flag in the §27 loop area — one small YAML document `{schema_version, step}` in its OWN file, so a

@@ -408,11 +408,12 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
    *  modal. `submit` records the typed values (provideInput) and re-applies the response. */
   function emitPrompt(state: FlowStateView): void {
     const boundRepo = repoKey; // bind the submit to the repo the prompt was raised for
+    const boundStep = state.stepName;
     deps.onPrompt?.(state.prompt ?? null, state.stepName, (values) => {
       // A stale submit (cwd moved while the modal was open) must not land on the now-current repo.
       if (boundRepo === null || repoKey !== boundRepo) return;
       deps
-        .provideInput(boundRepo, values)
+        .provideInput(boundRepo, boundStep, values)
         .then((view) => {
           // The cwd may also move while provideInput is in flight (mirrors controlButton's guard).
           if (repoKey !== boundRepo) return;

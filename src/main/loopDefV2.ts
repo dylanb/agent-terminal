@@ -7,10 +7,16 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import yaml from 'js-yaml';
-import { confinedRealPath, resolveJail } from './confinedPath';
+import {
+  confinedRealPath,
+  confinedRealPathResult,
+  resolveJail,
+  resolveOwnedDirJail,
+} from './confinedPath';
 import { isRecord } from './yamlRecord';
 import { isSafePathSegment } from '../shared/pathSegment';
 import { isErrno } from './errno';
+import { APP_LOOP_DIR_SEGMENTS, ARTIFACTS_SUBDIR } from './appLoopPaths';
 
 /** The schema version this app knows. Engine selection keys on the def namespace plus this marker, never
  *  on which parser happens not to throw. N2–N7 add only OPTIONAL elements under `v2`; a breaking change
@@ -18,14 +24,14 @@ import { isErrno } from './errno';
 export const LOOP_DEF_V2_VERSION = 'v2';
 
 /** The tier a def resolved from, assigned by the resolver — NEVER a schema-authorable field. `operator` is
- *  the user's own config tier (trusted); `app-bundled` is the default shipped with the app (trusted). The
- *  repo tier (untrusted) is added by sub-ticket 2. Capability slices key their privilege on this label, so
- *  no def content can forge it. */
-export type LoopDefV2Origin = 'operator' | 'app-bundled';
+ *  the user's own config tier, `app-bundled` is the default shipped with the app, and `repo` is the
+ *  untrusted repository tier. Capability slices key their privilege on this label, so no def content can
+ *  forge it. */
+export type LoopDefV2Origin = 'operator' | 'app-bundled' | 'repo';
 
-/** The tier roots, injected so tests can point resolution at a temp root. `operator` is null when the
- *  user-config root is refused (a relative CLAUDE_CONFIG_DIR — see userConfig.ts); `appBundled` is the
- *  bundled default tree's root. First hit wins, operator before app-bundled. */
+/** The trusted tier roots, injected so tests can point resolution at a temp root. `operator` is null when
+ *  the user-config root is refused (a relative CLAUDE_CONFIG_DIR — see userConfig.ts); `appBundled` is the
+ *  bundled default tree's root. A repo registry override is resolved separately before these tiers. */
 export interface LoopDefV2Tiers {
   operator: string | null;
   appBundled: string;
@@ -67,17 +73,33 @@ export interface WorkRecipe {
   artifact: string;
 }
 
-/** An input the loop consumes or an output it produces (§27.10). `id` is a safe segment; `path` is the
- *  confined absolute path inside the dedicated artifacts subtree of the per-repo loop area. */
+/** §27.10 */
 export interface ArtifactBinding {
   id: string;
   path: string;
+  rel: string;
 }
 
-/** The bootstrap (pickup) contract (§27.10) — declared here; nothing acts on it in this slice. */
-export interface PickupContractV2 {
+/** §27.10 */
+export interface PickupLabelV2 {
+  action: 'add' | 'remove';
+  target: 'issue' | 'pr';
+  label: string;
+}
+
+/** §27.10 */
+export type WipePolicy = { mode: 'abort' } | { mode: 'wipe-and-retry' };
+
+/** §27.10 */
+export interface PickupExecutionV2 {
   initialStatus: string;
   branchTemplate: string;
+  initialLabels: PickupLabelV2[];
+}
+
+/** §27.10 */
+export interface PickupContractV2 extends PickupExecutionV2 {
+  wipe: WipePolicy;
 }
 
 /** The prescribed round-report structure (§27.5). */
@@ -104,7 +126,7 @@ export interface LoopDefV2 {
   boundaries: BoundaryPolicy[];
   report: ReportStructure;
   gate: GateOptionDef[];
-  pickup: PickupContractV2;
+  pickup: PickupContractV2 | null;
   inputs: ArtifactBinding[];
   outputs: ArtifactBinding[];
   exec: ExecSideEffect | null;
@@ -152,16 +174,26 @@ function confineDefRelative(tierRoot: string, defDir: string, ref: string, what:
   return confined;
 }
 
+const CONTROL_CHAR = /[\u0000-\u001f\u007f]/;
+
 /** Confine an artifact/input/output path (§27.10) to the dedicated artifacts subtree of the per-repo loop
  *  area — disjoint from the engine's own loop state and round reports, so `../state.yaml` escapes onto the
  *  engine's own state and is rejected. Throws DefError. */
-function confineArtifact(repoDir: string, pattern: string, what: string): string {
+function confineArtifact(repoDir: string, pattern: string, what: string): { path: string; rel: string } {
   if (UNEXPANDED_SLOT.test(pattern)) fail(`${what} path carries an unexpanded slot: ${pattern}`);
-  const jail = resolveJail(repoDir, '.agent-terminal', 'loop', 'artifacts');
+  // The composed `rel` is interpolated into the agent-facing work prompt, where a control character would
+  // break the line it is named on and leave the remainder standing as its own instruction (CWE-74).
+  if (CONTROL_CHAR.test(pattern)) fail(`${what} path contains a control character`);
+  const jail = resolveJail(repoDir, ...APP_LOOP_DIR_SEGMENTS, ARTIFACTS_SUBDIR);
   if (jail === null) fail(`${what} loop area is unresolvable`);
   const confined = confinedRealPath(jail, path.resolve(jail, pattern));
   if (confined === null) fail(`${what} path escapes the artifacts subtree: ${pattern}`);
-  return confined;
+  if (confined === jail) fail(`${what} path must name a file inside the artifacts subtree: ${pattern}`);
+  const rel = [...APP_LOOP_DIR_SEGMENTS, ARTIFACTS_SUBDIR, ...path.relative(jail, confined).split(path.sep)].join('/');
+  // `rel` is composed from the POST-realpath location, whose segment names are repo working-tree content
+  // rather than def content (§27.8) — a symlink to a name carrying a control character passes the check above.
+  if (CONTROL_CHAR.test(rel)) fail(`${what} path resolves through a name containing a control character`);
+  return { path: confined, rel };
 }
 
 function requireSegment(value: unknown, what: string): string {
@@ -172,6 +204,12 @@ function requireSegment(value: unknown, what: string): string {
 function requireString(value: unknown, what: string): string {
   if (typeof value !== 'string') fail(`${what} must be a string`);
   return value;
+}
+
+function requireNonBlankString(value: unknown, what: string): string {
+  const text = requireString(value, what);
+  if (text.trim().length === 0) fail(`${what} must not be blank`);
+  return text;
 }
 
 function requireRecord(value: unknown, what: string): Record<string, unknown> {
@@ -230,13 +268,47 @@ function toGate(raw: unknown): GateOptionDef[] {
 function toArtifactBindings(raw: unknown, repoDir: string, what: string): ArtifactBinding[] {
   if (raw === undefined) return [];
   if (!Array.isArray(raw)) fail(`${what} must be a list`);
+  const seen = new Set<string>();
   return (raw as unknown[]).map((a) => {
     if (!isRecord(a)) fail(`each ${what} entry must be a mapping`);
     const rec = a as Record<string, unknown>;
     const id = requireSegment(rec.id, `${what} id`);
-    const p = confineArtifact(repoDir, requireString(rec.path, `${what} ${id} path`), `${what} ${id}`);
-    return { id, path: p };
+    // §27.10 persists carried ids and re-resolves them by id, so a duplicate is an ambiguous key: one
+    // recorded id would select two bindings naming two different paths.
+    if (seen.has(id)) fail(`${what} id is declared twice: ${id}`);
+    seen.add(id);
+    const { path: p, rel } = confineArtifact(repoDir, requireString(rec.path, `${what} ${id} path`), `${what} ${id}`);
+    return { id, path: p, rel };
   });
+}
+
+function toWipePolicy(raw: unknown): WipePolicy {
+  if (raw === undefined) return { mode: 'abort' };
+  if (raw === 'abort') return { mode: 'abort' };
+  if (raw === 'wipe-and-retry') return { mode: 'wipe-and-retry' };
+  fail(`pickup on_conflict must be abort or wipe-and-retry: ${String(raw)}`);
+}
+
+function toPickupLabels(raw: unknown): PickupLabelV2[] {
+  if (raw === undefined) return [];
+  if (!Array.isArray(raw)) fail('pickup initial_labels must be a list');
+  return (raw as unknown[]).map((l) => {
+    const rec = requireRecord(l, 'pickup initial_labels entry');
+    if (rec.action !== 'add' && rec.action !== 'remove') fail(`pickup label action must be add or remove: ${String(rec.action)}`);
+    if (rec.target !== 'issue' && rec.target !== 'pr') fail(`pickup label target must be issue or pr: ${String(rec.target)}`);
+    return { action: rec.action, target: rec.target, label: requireNonBlankString(rec.label, 'pickup label') };
+  });
+}
+
+function toPickup(raw: unknown): PickupContractV2 | null {
+  if (raw === undefined) return null;
+  const pickup = requireRecord(raw, 'pickup');
+  return {
+    initialStatus: requireString(pickup.initial_status, 'pickup initial_status'),
+    branchTemplate: requireString(pickup.branch_template, 'pickup branch_template'),
+    initialLabels: toPickupLabels(pickup.initial_labels),
+    wipe: toWipePolicy(pickup.on_conflict),
+  };
 }
 
 function parse(body: string, tierRoot: string, defDir: string, name: string, origin: LoopDefV2Origin, repoDir: string): LoopDefV2 {
@@ -268,8 +340,6 @@ function parse(body: string, tierRoot: string, defDir: string, name: string, ori
   const sections = report.sections;
   if (!Array.isArray(sections) || !(sections as unknown[]).every((s) => typeof s === 'string')) fail('report sections must be a list of strings');
 
-  const pickup = requireRecord(rec.pickup, 'pickup');
-
   let exec: ExecSideEffect | null = null;
   if (rec.exec !== undefined && rec.exec !== null) {
     exec = { program: requireString(requireRecord(rec.exec, 'exec').program, 'exec program') };
@@ -285,31 +355,91 @@ function parse(body: string, tierRoot: string, defDir: string, name: string, ori
     boundaries: toBoundaries(rec.boundaries),
     report: { sections: sections as string[] },
     gate: toGate(rec.gate),
-    pickup: {
-      initialStatus: requireString(pickup.initial_status, 'pickup initial_status'),
-      branchTemplate: requireString(pickup.branch_template, 'pickup branch_template'),
-    },
+    pickup: toPickup(rec.pickup),
     inputs: toArtifactBindings(rec.inputs, repoDir, 'input'),
     outputs: toArtifactBindings(rec.outputs, repoDir, 'output'),
     exec,
   };
 }
 
-/** Resolve a §27 loop NAME to a parsed def across the injected tiers (operator, then app-bundled; first
+/** Resolve a §27 loop NAME through a repo registry override, then the operator and app-bundled tiers (first
  *  EXISTING file wins). The loop name is held to a single safe segment BEFORE it is joined to any tier root.
  *  A found-but-malformed def surfaces its reason rather than falling through to a different tier. */
+interface DefCandidate {
+  tierRoot: string;
+  defDir: string;
+  defPath: string;
+  origin: LoopDefV2Origin;
+}
+
+function repoCandidate(name: string, repoDir: string): DefCandidate | { reason: string } | null {
+  let raw: string;
+  try {
+    raw = readFileSync(path.join(repoDir, '.agent-loop.yaml'), 'utf8');
+  } catch (e) {
+    if (isErrno(e, 'ENOENT')) return null;
+    return { reason: `cannot read repo loop registry: ${e instanceof Error ? e.message : String(e)}` };
+  }
+  let doc: unknown;
+  try {
+    doc = yaml.load(raw);
+  } catch {
+    return null;
+  }
+  if (!isRecord(doc) || !isRecord(doc.loops) || typeof doc.loops[name] !== 'string') return null;
+  const root = path.resolve(repoDir);
+  const target = path.resolve(root, doc.loops[name]);
+  const jail = resolveJail(root);
+  if (jail === null || (target !== root && !target.startsWith(root + path.sep))) {
+    return { reason: `repo loop override for ${name} escapes the repository` };
+  }
+  const defPath = confinedRealPath(jail, target);
+  if (defPath === null) return { reason: `repo loop override for ${name} is unresolvable` };
+  return { tierRoot: root, defDir: path.dirname(defPath), defPath, origin: 'repo' };
+}
+
 export function resolveLoopDefV2(name: string, ctx: LoopDefV2Context): LoopDefV2Result {
   if (!isSafePathSegment(name)) return { ok: false, reason: `loop name is not a single safe path segment: ${name}` };
-  const candidates: Array<{ tierRoot: string; origin: LoopDefV2Origin }> = [];
-  if (ctx.tiers.operator !== null) candidates.push({ tierRoot: ctx.tiers.operator, origin: 'operator' });
-  candidates.push({ tierRoot: ctx.tiers.appBundled, origin: 'app-bundled' });
+  const candidates: DefCandidate[] = [];
+  const repo = repoCandidate(name, ctx.repoDir);
+  if (repo && 'reason' in repo) return { ok: false, reason: repo.reason };
+  if (repo) candidates.push(repo);
+  if (ctx.tiers.operator !== null) {
+    const defDir = path.join(ctx.tiers.operator, name);
+    candidates.push({
+      tierRoot: ctx.tiers.operator,
+      defDir,
+      defPath: path.join(defDir, `${name}.yaml`),
+      origin: 'operator',
+    });
+  }
+  const appDefDir = path.join(ctx.tiers.appBundled, name);
+  candidates.push({
+    tierRoot: ctx.tiers.appBundled,
+    defDir: appDefDir,
+    defPath: path.join(appDefDir, `${name}.yaml`),
+    origin: 'app-bundled',
+  });
 
-  for (const { tierRoot, origin } of candidates) {
-    const defDir = path.join(tierRoot, name);
-    const defPath = path.join(defDir, `${name}.yaml`);
+  for (const { tierRoot, defDir, defPath, origin } of candidates) {
+    const jail =
+      origin === 'repo'
+        ? resolveJail(tierRoot)
+        : resolveOwnedDirJail(tierRoot);
+    if (jail === null) continue;
+    const confinedDefPath = confinedRealPathResult(jail, defPath);
+    if (!confinedDefPath.ok) {
+      return {
+        ok: false,
+        reason:
+          confinedDefPath.cause === 'escapes'
+            ? `def ${name} in the ${origin} tier escapes its tier root`
+            : `def ${name} in the ${origin} tier is unresolvable`,
+      };
+    }
     let body: string;
     try {
-      body = readFileSync(defPath, 'utf8');
+      body = readFileSync(confinedDefPath.path, 'utf8');
     } catch (e) {
       if (isErrno(e, 'ENOENT')) continue;
       return { ok: false, reason: `cannot read def ${name}: ${e instanceof Error ? e.message : String(e)}` };

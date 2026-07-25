@@ -5,14 +5,24 @@ import {
   completionArtifact,
   completionMarker,
   composeAppWorkPrompt,
-  presentChainedInputs,
 } from '../../src/main/appWorkTurn';
+import { resolveChainedInputs } from '../../src/main/chainedInput';
 import type { BoundaryPolicy, LoopDefV2 } from '../../src/main/loopDefV2';
 
 // §27.7/§27.8/§27.12 — the pure, data-driven pieces of the §27 work turn: the boundary-policy→command
 // mapping, the completion-artifact resolver (read from the def's declared artifact, NOT a hard-coded loop
 // name), the completion marker the prompt instructs and the checker reads (one definition, so writer↔reader
 // cannot desync), and the work-prompt composer. No fs, no engine — asserted purely from the outside.
+
+// An artifact binding as the def parser composes it: the confined absolute path and the repo-relative form
+// of that same location, which the parser derives from one segment list (loopDefV2 `confineArtifact`).
+function artifactOf(leaf: string): { path: string; rel: string } {
+  return { path: `/abs/repo/.agent-terminal/loop/artifacts/${leaf}`, rel: `.agent-terminal/loop/artifacts/${leaf}` };
+}
+
+function binding(id: string, leaf: string): { id: string; path: string; rel: string } {
+  return { id, ...artifactOf(leaf) };
+}
 
 function def(over: Partial<LoopDefV2>): LoopDefV2 {
   return {
@@ -25,9 +35,9 @@ function def(over: Partial<LoopDefV2>): LoopDefV2 {
     boundaries: [],
     report: { sections: ['summary'] },
     gate: [],
-    pickup: { initialStatus: 'planning', branchTemplate: 'plan-loop/issue-{issue}' },
+    pickup: { initialStatus: 'planning', branchTemplate: 'plan-loop/issue-{issue}', initialLabels: [], wipe: { mode: 'abort' } },
     inputs: [],
-    outputs: [{ id: 'plan', path: '/abs/repo/.agent-terminal/loop/artifacts/plan.md' }],
+    outputs: [binding('plan', 'plan.md')],
     exec: null,
     ...over,
   };
@@ -54,7 +64,7 @@ describe('boundaryCommand (§27.7 — boundaries are data)', () => {
 describe('completionArtifact (§27.12 — file-producing vs commit-producing, data-driven)', () => {
   it('resolves the confined output path whose id matches the work artifact (file-producing)', () => {
     const d = def({ work: { recipe: '/abs/prompts/work.md', artifact: 'plan' } });
-    expect(completionArtifact(d)).toEqual({ path: '/abs/repo/.agent-terminal/loop/artifacts/plan.md' });
+    expect(completionArtifact(d)).toEqual(artifactOf('plan.md'));
   });
 
   it('returns null when the work artifact id has no matching output binding (commit-producing)', () => {
@@ -68,11 +78,11 @@ describe('completionArtifact (§27.12 — file-producing vs commit-producing, da
     const d = def({
       work: { recipe: '/abs/prompts/work.md', artifact: 'plan' },
       outputs: [
-        { id: 'diff', path: '/abs/repo/.agent-terminal/loop/artifacts/diff.md' },
-        { id: 'plan', path: '/abs/repo/.agent-terminal/loop/artifacts/plan.md' },
+        binding('diff', 'diff.md'),
+        binding('plan', 'plan.md'),
       ],
     });
-    expect(completionArtifact(d)).toEqual({ path: '/abs/repo/.agent-terminal/loop/artifacts/plan.md' });
+    expect(completionArtifact(d)).toEqual(artifactOf('plan.md'));
   });
 });
 
@@ -103,52 +113,52 @@ describe('artifactWellFormed (§27.12 — present AND carrying the marker, never
   });
 });
 
-describe('presentChainedInputs (§27.10/§18.4 — declared inputs an upstream loop produced, present-gated)', () => {
-  it('carries {id, rel} for each declared input the presence predicate accepts, in declaration order', () => {
-    const d = def({
-      inputs: [
-        { id: 'plan', path: '/abs/repo/.agent-terminal/loop/artifacts/plan.md' },
-        { id: 'notes', path: '/abs/repo/.agent-terminal/loop/artifacts/notes.md' },
-      ],
-    });
-    expect(presentChainedInputs(d, '/abs/repo', () => true)).toEqual([
+describe('resolveChainedInputs (§27.10 — declared inputs partitioned by what the upstream loop left)', () => {
+  const twoInputs = () => def({ inputs: [binding('plan', 'plan.md'), binding('notes', 'notes.md')] });
+
+  it('carries {id, rel} for each produced input, in declaration order', () => {
+    expect(resolveChainedInputs(twoInputs().inputs, () => 'produced').carried).toEqual([
       { id: 'plan', rel: '.agent-terminal/loop/artifacts/plan.md' },
       { id: 'notes', rel: '.agent-terminal/loop/artifacts/notes.md' },
     ]);
   });
 
-  it('filters per-element: keeps only inputs whose artifact the predicate finds present', () => {
-    const d = def({
-      inputs: [
-        { id: 'plan', path: '/abs/repo/.agent-terminal/loop/artifacts/plan.md' },
-        { id: 'notes', path: '/abs/repo/.agent-terminal/loop/artifacts/notes.md' },
-      ],
-    });
-    const present = presentChainedInputs(
-      d,
-      '/abs/repo',
-      (p) => p === '/abs/repo/.agent-terminal/loop/artifacts/plan.md',
+  it('partitions per-element: a produced input carries while its declared sibling does not', () => {
+    const r = resolveChainedInputs(twoInputs().inputs, (p) =>
+      p === '/abs/repo/.agent-terminal/loop/artifacts/plan.md' ? 'produced' : 'not-produced',
     );
-    expect(present).toEqual([{ id: 'plan', rel: '.agent-terminal/loop/artifacts/plan.md' }]);
+    expect(r.carried).toEqual([{ id: 'plan', rel: '.agent-terminal/loop/artifacts/plan.md' }]);
+    expect(r.unresolved).toEqual([{ id: 'notes', state: 'not-produced' }]);
   });
 
-  it('probes each declared input at its confined absolute path (never a repo-relative re-join — CWE-22)', () => {
-    const d = def({ inputs: [{ id: 'plan', path: '/abs/repo/.agent-terminal/loop/artifacts/plan.md' }] });
+  it('keeps unreadable distinct from not-produced, so the caller can act on the one it can', () => {
+    const r = resolveChainedInputs(twoInputs().inputs, (p) =>
+      p === '/abs/repo/.agent-terminal/loop/artifacts/plan.md' ? 'unreadable' : 'not-produced',
+    );
+    expect(r.carried).toEqual([]); // neither is material the work turn can be entered with
+    expect(r.unresolved).toEqual([
+      { id: 'plan', state: 'unreadable' },
+      { id: 'notes', state: 'not-produced' },
+    ]);
+  });
+
+  it('hands the state predicate the binding\'s absolute path, not its repo-relative form', () => {
     const probed: string[] = [];
-    presentChainedInputs(d, '/abs/repo', (p) => {
+    resolveChainedInputs([binding('plan', 'plan.md')], (p: string) => {
       probed.push(p);
-      return true;
+      return 'produced';
     });
     expect(probed).toEqual(['/abs/repo/.agent-terminal/loop/artifacts/plan.md']);
   });
 
-  it('is empty for a loop that declares no inputs (the first loop in a chain)', () => {
-    expect(presentChainedInputs(def({ inputs: [] }), '/abs/repo', () => true)).toEqual([]);
+  it('carries and declares nothing for a loop with no inputs (the first loop in a chain)', () => {
+    const r = resolveChainedInputs([], () => 'produced');
+    expect(r).toEqual({ carried: [], unresolved: [] });
   });
 });
 
-describe('composeAppWorkPrompt (§27.3/§27.12 — recipe + marker + done-signal)', () => {
-  it('§27.10/§18.4 — a chained input names each carried artifact id and its repo-relative path', () => {
+describe('composeAppWorkPrompt (§27.10 — the carried chained-input block)', () => {
+  it('§27.10 — a chained input names each carried artifact id and its repo-relative path', () => {
     const prompt = composeAppWorkPrompt({
       recipeBody: '# work turn\nImplement the plan.',
       turnKey: 'work-implement',
@@ -158,7 +168,10 @@ describe('composeAppWorkPrompt (§27.3/§27.12 — recipe + marker + done-signal
     });
     expect(prompt).toContain('Implement the plan.'); // the recipe body still leads
     expect(prompt).toContain('- plan: .agent-terminal/loop/artifacts/plan.md'); // the carried input, id + path
-    expect(prompt.toLowerCase()).toContain('previous loop'); // framed as material from the prior loop
+    expect(prompt.toLowerCase()).toContain('declared input');
+    // The prompt names where the material came from on disk, never what produced it — the app does not
+    // establish that, and the residual is recorded against its own sub-ticket.
+    expect(prompt.toLowerCase()).not.toContain('upstream loop');
   });
 
   it('§27.10 — no chained-input block on a loop entered with no inputs', () => {
@@ -169,7 +182,7 @@ describe('composeAppWorkPrompt (§27.3/§27.12 — recipe + marker + done-signal
       completion: { artifactRel: '.agent-terminal/loop/artifacts/groomed-ticket.md', marker: completionMarker('groom') },
       inputs: [],
     });
-    expect(prompt.toLowerCase()).not.toContain('previous loop');
+    expect(prompt.toLowerCase()).not.toContain('declared input');
   });
 
   it('§27.10 — the chained input survives alongside a redo instruction (recipe → inputs → redo)', () => {
@@ -187,7 +200,7 @@ describe('composeAppWorkPrompt (§27.3/§27.12 — recipe + marker + done-signal
   });
 });
 
-describe('composeAppWorkPrompt (§27.3/§27.12 — recipe + marker + done-signal, no chained input)', () => {
+describe('composeAppWorkPrompt (§27.3/§27.12 — recipe + marker + done-signal)', () => {
   it('for a file-producing turn: names the artifact, the marker, and the §27 done-file path', () => {
     const prompt = composeAppWorkPrompt({
       recipeBody: '# work turn\nImplement the plan.',

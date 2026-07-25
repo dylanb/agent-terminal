@@ -19,7 +19,8 @@
 import path from 'node:path';
 import { createTurnRunner, type HostedAgentState, type TurnRunner } from './loopOrchestrator';
 import type { LoopDefV2, LoopDefV2Result } from './loopDefV2';
-import { artifactWellFormed, boundaryCommand, completionArtifact, completionMarker, composeAppWorkPrompt, presentChainedInputs, type ChainedInput } from './appWorkTurn';
+import { artifactWellFormed, boundaryCommand, completionArtifact, completionMarker, composeAppWorkPrompt } from './appWorkTurn';
+import { resolveChainedInputs, type ChainedInput, type ChainedInputState } from './chainedInput';
 import { catalogPersonas, composeReviewAndFixPrompt, preReviewBoundaryCommand, reviewRoster, type RosterEntry } from './reviewTurn';
 import { composeConsolidatePrompt, lastTwoReportRounds, preConsolidateBoundaryCommand } from './consolidateTurn';
 import { clearTurnDone } from './turnDoneFile';
@@ -27,7 +28,8 @@ import { TURN_DONE_FILENAME } from '../shared/loopTurn';
 import { failedReviewers, roundReportWellFormed } from '../shared/roundReport';
 import { consolidatorOutputWellFormed, parseConsolidatorOutput, verdictCarriesReason, type ConsolidatorVerdict } from '../shared/consolidatorOutput';
 import { chainedTransitionAuditCmd, consolidateAuditCmd, reviewRoundAuditCmd } from '../shared/audit';
-import { APP_LOOP_DIR_SEGMENTS, clearInterrupt, readAppLoopState, readArmedInterrupt, type AppLoopRunState } from './appLoopState';
+import { clearInterrupt, readAppLoopState, readArmedInterrupt, type AppLoopRunState } from './appLoopState';
+import { APP_LOOP_DIR_SEGMENTS } from './appLoopPaths';
 
 /** The §27 done-file lives in the §27 loop area, disjoint from §26's `.agent-loop/` (AC10 separation). */
 const APP_TURN_DONE_SUBDIR = path.join(...APP_LOOP_DIR_SEGMENTS);
@@ -43,6 +45,10 @@ const FIRST_ROUND = 1;
 const RELAUNCH_INTERRUPTED_REASON = 'the turn was interrupted before it could finish — retry or terminate';
 
 export type AppRouteOut = 'retry' | 'accept' | 'terminate';
+
+/** §19.2/§27.10 */
+export type AppLoopEntry = 'chain-advance' | 'fresh-run' | 're-entry';
+export type AppLoopEnterResult = 'entered' | 'busy' | 'unresolved';
 
 /** Why the §27 work turn holds a live error, as a structured discriminator so a consumer branches on the
  *  kind rather than the human-facing `reason` prose: `turn-error` is a stall/completion-gate failure of the
@@ -101,6 +107,8 @@ export interface AppLoopEngineDeps {
   /** Read the confined completion-artifact content; null when absent/unreadable (the domain concept, not
    *  an fs shape — the fs read is the host's). */
   readArtifact(absPath: string): string | null;
+  /** §27.10 */
+  inputState(absPath: string): ChainedInputState;
   /** Persist the §27 run state (§27.10). */
   persist(repoDir: string, state: AppLoopRunState): void;
   /** Record a §25 audit event for the turn (best-effort; never aborts the turn). */
@@ -121,9 +129,10 @@ export interface AppLoopEngineDeps {
 }
 
 export interface AppLoopEngine {
-  /** Enter an `app` step: resolve the def, run the boundary, inject the work prompt once when injectable.
-   *  A no-op (leaving the resolve-time failure view, AC6) when the def does not resolve. */
-  enter(repoDir: string, loopName: string, stepId: string): void;
+  /** §27.10 */
+  canEnter(): boolean;
+  /** §27.10 */
+  enter(repoDir: string, loopName: string, stepId: string, entry: AppLoopEntry): AppLoopEnterResult;
   /** The instance may have become injectable (a §8.3 quiet flip) — re-evaluate a pending/retry turn. */
   onInjectable(): void;
   /** The turn's done-file fired (host-watched, key-matched) — gate completion (§27.12). */
@@ -175,8 +184,7 @@ type ActiveAppTurn =
        *  prompt as the clean-slate directive; absent on an ordinary (non-redo) work run. Persisted so a
        *  relaunch or Retry re-injects it rather than dropping the human's input (mirrors review `feedback`). */
       instruction?: string;
-      /** §27.10/§18.4 (N6) — the carried typed inputs. Never persisted: the artifacts sit at def-declared
-       *  paths every entry re-resolves, so a relaunched or resumed work turn re-carries them without a stored copy. */
+      /** §27.10 (N6) */
       inputs?: ChainedInput[];
     }
   | {
@@ -277,6 +285,25 @@ function unresolvedConsolidateTurn(args: TurnCtx & { turnKey: string; round: num
   };
 }
 
+/** The work arm of an in-flight turn whose def no longer resolves (§27.12c): no recipe to read, no inputs to
+ *  carry, `completion.kind === 'unresolved'` so Accept refuses it. Seeded identically by `resume`'s fallback
+ *  and the retry lever's def-unresolvable refuse so the shape lives in one place (matching the review and
+ *  consolidate seeders). Carries only the identity a later resolvable retry re-resolves the def by — no
+ *  `recipePath`/`inputs` a `compose` could ever build a work prompt from for a turn whose def is gone. */
+function unresolvedWorkTurn(args: TurnCtx & { turnKey: string; instruction?: string }): Extract<ActiveAppTurn, { phase: 'work' }> {
+  return {
+    phase: 'work',
+    repoDir: args.repoDir,
+    loopName: args.loopName,
+    stepId: args.stepId,
+    turnKey: args.turnKey,
+    boundaryCmd: '/clear',
+    recipePath: '',
+    completion: { kind: 'unresolved' },
+    ...(args.instruction !== undefined ? { instruction: args.instruction } : {}),
+  };
+}
+
 /** The §25 audit command for a turn that stopped in `error`, keyed to the phase's vocabulary (§27.12). */
 function turnErrorAuditCmd(turn: ActiveAppTurn, reason: string): string {
   if (turn.phase === 'review') return reviewRoundAuditCmd('error', turn.round, reason);
@@ -301,7 +328,7 @@ function activeTurnFor(
     recipePath: def.work.recipe,
     boundaryCmd: entryBoundaryCommand(def),
     completion: artifact
-      ? { kind: 'file', path: artifact.path, marker: completionMarker(stepId), artifactRel: path.relative(repoDir, artifact.path) }
+      ? { kind: 'file', path: artifact.path, marker: completionMarker(stepId), artifactRel: artifact.rel }
       : { kind: 'commits' },
     ...(opts?.instruction !== undefined ? { instruction: opts.instruction } : {}),
     ...(opts?.inputs && opts.inputs.length > 0 ? { inputs: opts.inputs } : {}),
@@ -315,10 +342,67 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
   // even when the persisted error write failed (§27.12c). Cleared on every non-error persist.
   let liveError: (AppLoopLiveError & { repoDir: string }) | null = null;
 
-  // §27.10/§18.4 (N6) — the declared inputs an upstream loop actually produced. A loop with none (first in a
-  // chain, or input never produced) carries no input block and fires no chained transition.
-  const carriedInputs = (def: LoopDefV2, repoDir: string): ChainedInput[] =>
-    presentChainedInputs(def, repoDir, (absPath) => deps.readArtifact(absPath) !== null);
+  /** §27.10 */
+  let stepCarry: { repoDir: string; stepId: string; ids: string[] } | null = null;
+
+  const setCarry = (repoDir: string, stepId: string, ids: string[]): void => {
+    stepCarry = { repoDir, stepId, ids };
+  };
+
+  const liveCarry = (repoDir: string, stepId: string): string[] | null =>
+    stepCarry !== null && stepCarry.repoDir === repoDir && stepCarry.stepId === stepId ? stepCarry.ids : null;
+
+  const recordedCarry = (repoDir: string, stepId: string, persisted: AppLoopRunState | null): string[] =>
+    liveCarry(repoDir, stepId) ?? (persisted?.step === stepId ? (persisted.chainedInputs ?? []) : []);
+
+  type CarryOccasion =
+    | { kind: 'advance' }
+    | { kind: 're-enter'; ids: string[] }
+    | { kind: 'reconstruct'; ids: string[] };
+
+  const chainFor = (repoDir: string, stepId: string, def: LoopDefV2, occasion: CarryOccasion): ChainedInput[] => {
+    const bindings = occasion.kind === 'advance' ? def.inputs : def.inputs.filter((i) => occasion.ids.includes(i.id));
+    const chain = resolveChainedInputs(bindings, (absPath) => deps.inputState(absPath));
+    const announces = occasion.kind !== 'reconstruct';
+    if (occasion.kind === 'advance' && (chain.carried.length > 0 || chain.unresolved.length > 0)) {
+      deps.audit(
+        repoDir,
+        chainedTransitionAuditCmd(
+          stepId,
+          chain.carried.map((i) => i.id),
+          chain.unresolved.map((u) => u.id),
+        ),
+        chain.unresolved.length > 0 ? 1 : 0,
+      );
+    }
+    const unreadable = chain.unresolved.filter((u) => u.state === 'unreadable').map((u) => u.id);
+    const declared = new Set(def.inputs.map((i) => i.id));
+    const stranded =
+      occasion.kind === 'advance'
+        ? []
+        : [
+            ...occasion.ids.filter((id) => !declared.has(id)),
+            ...chain.unresolved.filter((u) => u.state === 'not-produced').map((u) => u.id),
+          ];
+    const notes = [
+      ...(unreadable.length > 0 ? [`declared input(s) present but unreadable — ${unreadable.join(', ')}`] : []),
+      ...(stranded.length > 0 ? [`recorded input(s) no longer available — ${stranded.join(', ')}`] : []),
+    ];
+    // TODO(dylan): Move chained-input advisories off flow:onLoopError.
+    if (announces && notes.length > 0) deps.emitError(`${stepId}: ${notes.join('; ')}`);
+    return chain.carried;
+  };
+
+  /** §27.10 */
+  const reEnter = (
+    repoDir: string,
+    stepId: string,
+    def: LoopDefV2,
+    persisted: AppLoopRunState | null,
+  ): { ids: string[]; inputs: ChainedInput[] } => {
+    const ids = recordedCarry(repoDir, stepId, persisted);
+    return { ids, inputs: chainFor(repoDir, stepId, def, { kind: 're-enter', ids }) };
+  };
 
   const persist = (status: AppLoopRunState['status'], errorReason?: string): boolean => {
     if (!active) return false;
@@ -332,6 +416,8 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
     const feedback = active.phase === 'review' ? active.feedback : undefined;
     // §27.9/AC5 — a work turn entered by redo carries the operator's instruction; persisted for the same reason.
     const instruction = active.phase === 'work' ? active.instruction : undefined;
+    // §27.10
+    const chainedInputs = liveCarry(active.repoDir, active.stepId) ?? undefined;
     let landed = true;
     try {
       deps.persist(active.repoDir, {
@@ -346,6 +432,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
         ...(chosenRoster !== undefined ? { chosenRoster } : {}),
         ...(feedback !== undefined ? { feedback } : {}),
         ...(instruction !== undefined ? { instruction } : {}),
+        ...(chainedInputs !== undefined && chainedInputs.length > 0 ? { chainedInputs } : {}),
       });
     } catch (e) {
       // §27.10 resume state is best-effort: a write failure must never abort the turn's live path or crash
@@ -664,10 +751,13 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
   };
 
   return {
-    enter(repoDir, loopName, stepId) {
-      if (runner.state() === 'in-flight') return; // §27.2 — never interleave a second turn
+    canEnter() {
+      return runner.state() !== 'in-flight';
+    },
+    enter(repoDir, loopName, stepId, entry) {
+      if (runner.state() === 'in-flight') return 'busy';
       const r = deps.resolveDef(repoDir, loopName);
-      if (!r.ok) return; // AC6 — the def-failure view is produced at resolve time (loopViewV2)
+      if (!r.ok) return 'unresolved';
       // §27.9/AC6 — a fresh clean-slate work turn owns no prior stand-down: clear any stale polish so an
       // abandoned one (Terminated rather than approved, or a failed clear) cannot resurrect the polish view when
       // this step reaches its gate again. Relaunch reconstructs via resume(), not enter(), so AC11 is untouched.
@@ -680,11 +770,21 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       } catch (e) {
         deps.audit(repoDir, `§27 ${loopName} ${stepId} enter clear-polish failed: ${e instanceof Error ? e.message : String(e)}`, 1);
       }
-      // §27.10/§18.4 (N6) — entry is the chain advance: carry the upstream loop's produced inputs and record
-      // the transition here only (redo/resume re-carry the same inputs without recording).
-      const inputs = carriedInputs(r.def, repoDir);
-      if (inputs.length > 0) deps.audit(repoDir, chainedTransitionAuditCmd(stepId, inputs.map((i) => i.id)), 0);
+      let ids: string[] = [];
+      let inputs: ChainedInput[] = [];
+      // TODO(dylan): the record conflates "the entry decided not to carry this" with "the entry failed to
+      // carry it" — an input unreadable at chain-advance is excluded from `ids`, so no lever re-probes it once
+      // the operator fixes the permission the dialog named. Needs the attempted-but-unresolved ids persisted
+      // beside the carried ones; recovery today is a flow restart.
+      if (entry === 'chain-advance') {
+        inputs = chainFor(repoDir, stepId, r.def, { kind: 'advance' });
+        ids = inputs.map((i) => i.id);
+      } else if (entry === 're-entry') {
+        ({ ids, inputs } = reEnter(repoDir, stepId, r.def, readAppLoopState(repoDir)));
+      }
+      setCarry(repoDir, stepId, ids);
       start(activeTurnFor(repoDir, loopName, stepId, r.def, { inputs }));
+      return 'entered';
     },
     onInjectable() {
       runner.onInjectable();
@@ -765,6 +865,35 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
         return;
       }
       // retry — re-enter the same turn (boundary + prompt), gated on injectability (§27.12).
+      // §27.10 — after a relaunch the route-out handler reconstructs this turn first (`index.ts`, and only
+      // when no live turn for this repo holds), and that reconstruction announces nothing. Retry is the
+      // operator asking the turn to RUN, so rebuild it from ONE fresh def resolution: an input that vanished
+      // since is surfaced rather than dropped from the INPUTS block in silence, one that came back is
+      // carried, and the recipe, boundary and completion contract cannot be a revision older than the
+      // inputs they are graded beside. An unresolvable def refuses the retry exactly as Accept refuses.
+      if (active.phase === 'work') {
+        const rr = deps.resolveDef(repoDir, active.loopName);
+        if (!rr.ok) {
+          // Neutralize to the same unresolved shape `resume` builds so the sibling Accept lever honours the
+          // same def-resolves precondition — a `commits`/present-`file` turn otherwise stays acceptable
+          // (completionSatisfied() unconditionally true) and fabricates a pass on a def that no longer
+          // resolves. A later retry with a resolvable def rebuilds via `activeTurnFor` from the preserved id.
+          active = unresolvedWorkTurn({
+            repoDir,
+            loopName: active.loopName,
+            stepId,
+            turnKey,
+            ...(active.instruction !== undefined ? { instruction: active.instruction } : {}),
+          });
+          refuseRouteOut('def-unresolvable', 'the bound def no longer resolves — retry or terminate');
+          return;
+        }
+        const { inputs } = reEnter(repoDir, stepId, rr.def, readAppLoopState(repoDir));
+        active = activeTurnFor(repoDir, active.loopName, stepId, rr.def, {
+          ...(active.instruction !== undefined ? { instruction: active.instruction } : {}),
+          inputs,
+        });
+      }
       persist('working');
       const retryAudit =
         active.phase === 'review'
@@ -804,14 +933,18 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       // which threads the instruction; no round, no feedback, no findings ride along (a fresh work run).
       const r = deps.resolveDef(repoDir, state.loop);
       if (!r.ok) return false;
-      // §27.10/§18.4 — a redo re-enters the SAME step's work turn (not a chain advance), so it re-carries the
-      // step's present inputs but records no chained transition.
-      start(activeTurnFor(repoDir, state.loop, stepId, r.def, { instruction, inputs: carriedInputs(r.def, repoDir) }));
+      const { ids, inputs } = reEnter(repoDir, stepId, r.def, state);
+      setCarry(repoDir, stepId, ids);
+      start(activeTurnFor(repoDir, state.loop, stepId, r.def, { instruction, inputs }));
       return true;
     },
     resume(repoDir) {
       const state = readAppLoopState(repoDir);
       if (!state) return;
+      // §27.10 — restore the entry's record before any phase of this step persists again, or the first write
+      // after a relaunch rewrites the document without it and the carry is gone for good.
+      const reconstructIds = recordedCarry(repoDir, state.step, state);
+      setCarry(repoDir, state.step, reconstructIds);
       // Reconstruct which turn stopped so Retry/accept act on the right one — re-resolving the def so the
       // reconstructed turn carries its real completion contract (accept must read the true artifact). NEVER
       // re-drive it: an `error`/`complete` turn is human-owned; the runner stays idle until an explicit
@@ -845,8 +978,11 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       }
       const r = deps.resolveDef(repoDir, state.loop);
       active = r.ok
-        ? activeTurnFor(repoDir, state.loop, state.step, r.def, { instruction: state.instruction, inputs: carriedInputs(r.def, repoDir) })
-        : { phase: 'work', repoDir, loopName: state.loop, stepId: state.step, turnKey: state.turnKey, recipePath: '', boundaryCmd: '/clear', completion: { kind: 'unresolved' }, ...(state.instruction !== undefined ? { instruction: state.instruction } : {}) };
+        ? activeTurnFor(repoDir, state.loop, state.step, r.def, {
+            instruction: state.instruction,
+            inputs: chainFor(repoDir, state.step, r.def, { kind: 'reconstruct', ids: reconstructIds }),
+          })
+        : unresolvedWorkTurn({ repoDir, loopName: state.loop, stepId: state.step, turnKey: state.turnKey, ...(state.instruction !== undefined ? { instruction: state.instruction } : {}) });
       makeRoutable();
     },
     activeTurnKey: () => active?.turnKey ?? null,

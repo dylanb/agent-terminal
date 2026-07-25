@@ -4,6 +4,7 @@ import {
   auditFileStamp,
   auditTimestamp,
   chainedTransitionAuditCmd,
+  appBootstrapAuditCmd,
   inputEvents,
   lifecycleEvents,
   consolidateAuditCmd,
@@ -429,6 +430,34 @@ describe('§27 chained-transition audit vocabulary', () => {
 
   it('a transition into one step is distinguishable from the same artifact into another (§6 identity)', () => {
     expect(chainedTransitionAuditCmd('implement', ['plan'])).not.toBe(chainedTransitionAuditCmd('plan', ['plan']));
+  });
+
+  it('names a declared input that did not chain, so a broken chain is not read as a loop declaring none', () => {
+    const cmd = chainedTransitionAuditCmd('implement', ['plan'], ['groomed-ticket']);
+    expect(cmd).toContain('plan');
+    expect(cmd).toContain('groomed-ticket');
+    // A chain that carried everything it declared must not read the same as one that dropped an input.
+    expect(cmd).not.toBe(chainedTransitionAuditCmd('implement', ['plan'], []));
+  });
+
+  it('names an empty carried list explicitly rather than leaving a blank slot a reader parses as an id', () => {
+    // Live case: a step declares inputs and carries none. A dangling `: ` splits to [''] — one artifact whose
+    // id is the empty string — which is exactly the writer↔reader desync the shared vocabulary exists to stop.
+    const cmd = chainedTransitionAuditCmd('implement', [], ['plan']);
+    expect(cmd).not.toMatch(/:\s*\(declared/); // no blank slot where the carried ids belong
+    // `none` is a legal binding id (`^[a-z0-9][a-z0-9-]*$`), so a sentinel drawn from that grammar makes one
+    // carried artifact byte-identical to zero — the same reader ambiguity, relocated rather than removed.
+    expect(cmd).not.toBe(chainedTransitionAuditCmd('implement', ['none'], ['plan']));
+  });
+});
+
+describe('§27 bootstrap audit vocabulary', () => {
+  it('distinguishes the step-keyed lifecycle outcomes and carries failure detail', () => {
+    expect(appBootstrapAuditCmd('start', 'plan')).toContain('plan');
+    expect(appBootstrapAuditCmd('success', 'plan', 'plan-loop/issue-78')).toContain('plan-loop/issue-78');
+    expect(appBootstrapAuditCmd('failure', 'plan', 'working tree is not clean')).toContain('working tree is not clean');
+    expect(appBootstrapAuditCmd('rollback', 'plan')).not.toBe(appBootstrapAuditCmd('failure', 'plan'));
+    expect(appBootstrapAuditCmd('stale', 'plan')).not.toBe(appBootstrapAuditCmd('success', 'plan'));
   });
 });
 

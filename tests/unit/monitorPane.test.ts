@@ -300,14 +300,19 @@ describe('action window DOM (§16 / §24.1 — tabs, capture cards, focus)', () 
     expect(blocks().querySelector('[data-event-id="f1"]')).toBeNull();
   });
 
-  it('drops every capture card when main signals the store was cleared (#26 Terminate)', async () => {
+  it('refreshes todos and drops every capture card when main signals termination cleanup', async () => {
     wireMonitorPane();
     await flush();
+    handlers.cwdChanged!({ sessionId: 's1', cwd: '/repo', repoKey: '/repo' });
+    await flush();
+    monitor.todoList.mockClear();
     handlers.event!(makeEvent({ id: 'c1', type: 'capture', parentId: null, text: 'one' }));
     handlers.event!(makeEvent({ id: 'c2', type: 'capture', parentId: null, text: 'two' }));
     expect(blocks().querySelectorAll('[data-event-id]').length).toBe(2);
     handlers.cleared!();
+    await flush();
     expect(blocks().querySelectorAll('[data-event-id]').length).toBe(0);
+    expect(monitor.todoList).toHaveBeenCalledWith('/repo');
     expect(monitor.dismissAll).not.toHaveBeenCalled(); // main already cleared the store; no re-clear
   });
 

@@ -5,50 +5,28 @@
 // rule — so the runner is tested against fakes while the real ports shell out via execFile (CWE-78:
 // every value crosses as a distinct argv element, never spliced into a command string).
 
-import { execFile } from 'node:child_process';
 import { rmSync } from 'node:fs';
 import path from 'node:path';
 import type { PickupContract } from './loopDef';
 import { writeLoopState, type LoopStateWrite } from './loopStateWriter';
-import { numberFromGithubUrl } from '../shared/githubUrl';
 import { errMsg } from './errno';
-import { APP_STATE_DIRS } from './appStateDirs';
+import {
+  createRealBootstrapGit,
+  createRealBootstrapGitHub,
+  type BootstrapBranchWiper,
+  type BootstrapGit,
+  type BootstrapGitHub,
+  type BootstrapIssue,
+} from './bootstrapPorts';
 
 /** GitHub issue facts the pickup needs for the start commit + PR title. */
-export interface IssueInfo {
-  title: string;
-  url: string;
-}
+export type IssueInfo = BootstrapIssue;
 
 /** Git operations pickup needs, in the runner's own vocabulary (not the git CLI's). */
-export interface PickupGit {
-  /** True iff the tree is clean enough to bootstrap — churn under app-owned state dirs (`.agent-loop/`
-   *  engine parity, `.agent-terminal/` app state) is ignored (§26.9). */
-  isCleanTree(): Promise<boolean>;
-  /** The branch to fork from + target the PR at; null when undiscoverable (the run then aborts). */
-  resolveBaseBranch(): Promise<string | null>;
-  /** True iff `branch` already exists (local or remote) — a re-pickup conflict (§26.9 `on_conflict`). */
-  branchExists(branch: string): Promise<boolean>;
-  /** Remove a conflicting `branch` (local + remote) so a fresh bootstrap can proceed (§26.9
-   *  wipe-and-retry). Deleting the remote head closes its PR. Destructive + outward-facing — the runner
-   *  calls this ONLY after the operator confirmed the wipe (`wipeConflict`), never on mere detection. */
-  wipeConflictingBranch(branch: string): Promise<void>;
-  /** Create `branch` off a freshly-fetched `base`, checked out. */
-  createBranchFromBase(branch: string, base: string): Promise<void>;
-  /** Commit an empty `[skip ci]` start commit so the branch has a tip to open a PR against. */
-  commitEmptyStart(message: string): Promise<void>;
-  /** Push `branch` to origin and set its upstream. */
-  pushBranchUpstream(branch: string): Promise<void>;
-}
+export type PickupGit = BootstrapGit & BootstrapBranchWiper;
 
 /** GitHub operations pickup needs, as domain ops the real port satisfies via `gh`. */
-export interface PickupGitHub {
-  viewIssue(issue: number): Promise<IssueInfo | null>;
-  assignIssueToSelf(issue: number): Promise<void>;
-  setIssueLabel(issue: number, label: string, on: boolean): Promise<void>;
-  createDraftPr(args: { base: string; head: string; title: string; body: string }): Promise<number | null>;
-  setPrLabel(pr: number, label: string, on: boolean): Promise<void>;
-}
+export type PickupGitHub = BootstrapGitHub;
 
 export interface PickupDeps {
   git: PickupGit;
@@ -183,109 +161,12 @@ export async function runPickup(deps: PickupDeps, req: PickupRequest): Promise<P
   }
 }
 
-// ---------------------------------------------------------------------------
-// Real ports — execFile-backed git/gh. Each value crosses as a distinct argv
-// element (CWE-78); nothing is concatenated into a shell string.
-// ---------------------------------------------------------------------------
-
-const EXEC_TIMEOUT_MS = 60_000;
-
-function run(file: string, args: string[], cwd: string): Promise<string> {
-  return new Promise((resolve, reject) => {
-    execFile(file, args, { cwd, timeout: EXEC_TIMEOUT_MS }, (err, stdout) => {
-      if (err) reject(err);
-      else resolve(stdout);
-    });
-  });
-}
-
-const APP_STATE_PREFIXES = APP_STATE_DIRS.map((d) => `${d}/`);
-
-// `git status --porcelain` v1: each line is `XY <path>` (two status columns + a space), and a rename/copy
-// carries `<orig> -> <new>`. Clean iff every changed path — BOTH sides of a rename — is app-owned, so a
-// rename OUT of an app dir to a real file still reads dirty. Slicing the fixed status columns (not trimming)
-// keeps a worktree-modified " M " line's leading space from defeating the prefix match.
-function treeIsClean(porcelain: string): boolean {
-  const isAppState = (p: string): boolean => APP_STATE_PREFIXES.some((prefix) => p.startsWith(prefix));
-  return porcelain
-    .split('\n')
-    .filter((l) => l.length > 0)
-    .every((line) => line.slice(3).split(' -> ').every(isAppState));
-}
-
 export function createRealPickupGit(repoDir: string): PickupGit {
-  const git = (args: string[]): Promise<string> => run('git', args, repoDir);
-  // A git op whose failure means "the thing is already in the goal state" (a branch already absent on one
-  // side of the wipe): swallow so the wipe is idempotent across local-only / remote-only leftovers.
-  const bestEffortGit = async (args: string[]): Promise<void> => {
-    try {
-      await git(args);
-    } catch {
-      /* the branch was already gone on this side — that IS the goal (§26.9 wipe-and-retry) */
-    }
-  };
-  return {
-    isCleanTree: async () => treeIsClean(await git(['status', '--porcelain'])),
-    resolveBaseBranch: async () => {
-      try {
-        const out = await run('gh', ['repo', 'view', '--json', 'defaultBranchRef', '--jq', '.defaultBranchRef.name'], repoDir);
-        const name = out.trim();
-        return name.length > 0 ? name : null;
-      } catch {
-        return null;
-      }
-    },
-    branchExists: async (branch) => {
-      // Local first (`git branch --list` prints the branch when it exists), then the remote head.
-      const local = await git(['branch', '--list', branch]);
-      if (local.trim().length > 0) return true;
-      try {
-        const remote = await run('git', ['ls-remote', '--heads', 'origin', branch], repoDir);
-        return remote.trim().length > 0;
-      } catch {
-        return false; // no remote / offline — treat as no remote conflict
-      }
-    },
-    wipeConflictingBranch: async (branch) => {
-      // Detach HEAD so `branch` isn't the current branch, then force-delete it locally and on origin.
-      // Deleting the remote head closes its PR. Each deletion is best-effort — a side already gone is fine.
-      await bestEffortGit(['checkout', '--detach']);
-      await bestEffortGit(['branch', '-D', branch]);
-      await bestEffortGit(['push', 'origin', '--delete', branch]);
-    },
-    createBranchFromBase: async (branch, base) => {
-      await git(['fetch', 'origin', base]);
-      await git(['checkout', '-b', branch, 'FETCH_HEAD']);
-    },
-    commitEmptyStart: async (message) => void (await git(['commit', '--allow-empty', '-m', message])),
-    pushBranchUpstream: async (branch) => void (await git(['push', '-u', 'origin', branch])),
-  };
+  return createRealBootstrapGit(repoDir);
 }
 
 export function createRealPickupGitHub(repoDir: string): PickupGitHub {
-  const gh = (args: string[]): Promise<string> => run('gh', args, repoDir);
-  return {
-    viewIssue: async (issue) => {
-      try {
-        const parsed = JSON.parse(await gh(['issue', 'view', String(issue), '--json', 'title,url']));
-        if (typeof parsed?.title === 'string' && typeof parsed?.url === 'string') {
-          return { title: parsed.title, url: parsed.url };
-        }
-        return null;
-      } catch {
-        return null;
-      }
-    },
-    assignIssueToSelf: async (issue) => void (await gh(['issue', 'edit', String(issue), '--add-assignee', '@me'])),
-    setIssueLabel: async (issue, label, on) =>
-      void (await gh(['issue', 'edit', String(issue), on ? '--add-label' : '--remove-label', label])),
-    createDraftPr: async ({ base, head, title, body }) => {
-      const out = await gh(['pr', 'create', '--draft', '--base', base, '--head', head, '--title', title, '--body', body]);
-      return numberFromGithubUrl(out);
-    },
-    setPrLabel: async (pr, label, on) =>
-      void (await gh(['pr', 'edit', String(pr), on ? '--add-label' : '--remove-label', label])),
-  };
+  return createRealBootstrapGitHub(repoDir);
 }
 
 /** Remove a stale `.agent-loop/` dir under `repoDir` (best-effort; absent is fine). */

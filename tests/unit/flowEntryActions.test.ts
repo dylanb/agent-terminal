@@ -191,6 +191,19 @@ describe('flow entry actions — app-namespace step routes to the §27 engine (�
     expect(d.runPickup).not.toHaveBeenCalled();
   });
 
+  it('prompts before entering a §27 step whose required typed input is unresolved', () => {
+    const d = deps();
+    const result = createFlowEntryActions(d)(
+      appStep({ inputs: [{ name: 'ticket', type: 'github-ticket', required: true }] }),
+      {},
+    );
+    expect(result.prompt).toEqual({
+      inputs: [{ name: 'ticket', type: 'github-ticket' }],
+      bootstrap: BOOTSTRAP_PICKUP,
+    });
+    expect(d.enterAppLoop).not.toHaveBeenCalled();
+  });
+
   it('routes an app-namespace step carrying a skill to §27 without injecting it', () => {
     const d = deps();
     createFlowEntryActions(d)(appStep({ skill: 'groom' }), {});
