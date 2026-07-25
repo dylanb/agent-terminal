@@ -67,6 +67,7 @@ steps:
     kind: loop
     loop: groom-loop
     loop_namespace: app
+    todo_template: ticket-grooming
     inputs:
       - name: ticket
         type: github-ticket
@@ -75,10 +76,12 @@ steps:
     kind: loop
     loop: plan-loop
     loop_namespace: app
+    todo_template: plan-loop-review
   - id: implement
     kind: loop
     loop: impl-loop
     loop_namespace: app
+    todo_template: impl-loop-review
 ```
 
 The shipped flow binds all three steps to the app-owned §27 engine. Its V2 loop definitions declare the
@@ -89,7 +92,8 @@ draft PR; the flow therefore carries no legacy `bootstrap: pickup` field and no 
 
 - Every step is **typed**: `loop` (runs an agent-loop), `manual` (a human produces an artifact), `action` (a declared side-effect). **All kinds end in a gate.**
 - **`loop`** binds a `loop:` LoopDef and may declare `bootstrap:` (§18.3). **Only loop steps** can be **sent back for more work** (request-changes — §19.4/D7); manual/action steps are done/not-done.
-- **`manual`** may bind `skill:` and `todo_template:` (§18.6); the human decides when done.
+- **`manual`** may bind `skill:`; the human decides when done.
+- **`todo_template:`** (§18.6) may be bound by **any** step kind — the shipped flow binds one on each of its three `loop` steps.
 - **`action`** declares a `command:` string run in the hosted terminal via the §9.3 path (subject to the running-process refusal of §19.3); e.g. `gh pr ready "$PR"`. No built-in typed-action catalog in v1.
 
 ### 18.3 Bootstrap is a per-step entry action (D15)

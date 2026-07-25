@@ -147,9 +147,10 @@ flowchart TD
   CHECK -->|"yes"| WIPE["verify both ref leases, then delete<br/>remote first, then local, then close any PR still open"]
   WIPE -->|"complete"| CREATE["create branch, start commit,<br/>push, open draft PR"]
   CREATE -->|"ok"| P
-  CREATE -->|"failed after a delete landed, wiped refs are not restored<br/>and a checkout on the wiped branch is left detached"| RB
-  WIPE -->|"failed before anything was destroyed"| RB
-  WIPE -->|"failed after a delete landed, wiped refs are not restored<br/>and a checkout on the wiped branch is left detached"| RB
+  CREATE -->|"failed, wiped refs are not restored"| RB
+  WIPE -->|"failed before any delete landed, checkout restored"| RB
+  WIPE -->|"failed after a delete landed, wiped refs are not restored,<br/>checkout restored"| RB
+  WIPE -->|"failed and the checkout could not be restored,<br/>HEAD left detached"| RB
   RBQ --> RETRY
   RB --> RETRY["approve / advance rolled-back step"]
   RB -.->|"optional"| RELAUNCH["relaunch restores rolled-back step"]
