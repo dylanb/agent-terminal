@@ -9,6 +9,7 @@ export interface ConfirmDialogOptions {
   message: string;
   confirmLabel: string;
   onConfirm: () => void;
+  restoreFocusTo?: HTMLElement | null;
   /** Fired when the operator DECLINES — Cancel, Escape, or scrim — but never on confirm (§26.9). Lets a
    *  caller react to a dismissal (e.g. roll the flow back); omit when a dismiss needs no action. */
   onCancel?: () => void;
@@ -17,6 +18,7 @@ export interface ConfirmDialogOptions {
 export interface ConfirmDialog {
   /** Open the dialog for `opts`; `null` closes any open dialog. */
   render(opts: ConfirmDialogOptions | null): void;
+  cancel(): void;
   /** Tear down: clear the host subtree on unmount/relocation (UI §2.2.1). */
   dispose(): void;
 }
@@ -80,7 +82,13 @@ export function createConfirmDialog(host: HTMLElement, opts?: { onFocusLost?: ()
         card.append(foot);
 
         return { card, initialFocus: null, describedById };
-      });
+      }, opts.restoreFocusTo);
+    },
+    cancel() {
+      const onCancel = pending?.onCancel;
+      pending = null;
+      shell.render(null);
+      onCancel?.();
     },
     dispose() {
       pending = null; // teardown, not a dismiss: drop the pending dialog without firing onCancel

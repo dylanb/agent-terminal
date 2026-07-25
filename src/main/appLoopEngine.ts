@@ -48,6 +48,7 @@ export type AppRouteOut = 'retry' | 'accept' | 'terminate';
 
 /** §19.2/§27.10 */
 export type AppLoopEntry = 'chain-advance' | 'fresh-run' | 're-entry';
+export type AppLoopEnterResult = 'entered' | 'busy' | 'unresolved';
 
 /** Why the §27 work turn holds a live error, as a structured discriminator so a consumer branches on the
  *  kind rather than the human-facing `reason` prose: `turn-error` is a stall/completion-gate failure of the
@@ -106,9 +107,7 @@ export interface AppLoopEngineDeps {
   /** Read the confined completion-artifact content; null when absent/unreadable (the domain concept, not
    *  an fs shape — the fs read is the host's). */
   readArtifact(absPath: string): string | null;
-  /** §27.10 — what the upstream loop left at a chained input's confined binding. Tri-state rather than a
-   *  boolean: "no upstream ran" and "its product is there but unavailable" are different facts, and only the
-   *  second is something the operator can act on. */
+  /** §27.10 */
   inputState(absPath: string): ChainedInputState;
   /** Persist the §27 run state (§27.10). */
   persist(repoDir: string, state: AppLoopRunState): void;
@@ -130,9 +129,10 @@ export interface AppLoopEngineDeps {
 }
 
 export interface AppLoopEngine {
-  /** Enter an `app` step: resolve the def, run the boundary, inject the work prompt once when injectable.
-   *  A no-op (leaving the resolve-time failure view, AC6) when the def does not resolve. */
-  enter(repoDir: string, loopName: string, stepId: string, entry: AppLoopEntry): void;
+  /** §27.10 */
+  canEnter(): boolean;
+  /** §27.10 */
+  enter(repoDir: string, loopName: string, stepId: string, entry: AppLoopEntry): AppLoopEnterResult;
   /** The instance may have become injectable (a §8.3 quiet flip) — re-evaluate a pending/retry turn. */
   onInjectable(): void;
   /** The turn's done-file fired (host-watched, key-matched) — gate completion (§27.12). */
@@ -349,23 +349,12 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
     stepCarry = { repoDir, stepId, ids };
   };
 
-  /** §27.10 — the live carry, only when it belongs to the very step being asked about. */
   const liveCarry = (repoDir: string, stepId: string): string[] | null =>
     stepCarry !== null && stepCarry.repoDir === repoDir && stepCarry.stepId === stepId ? stepCarry.ids : null;
 
-  /** §27.10 — the ids this step's entry recorded: the live record when it is this repo's step, else the one
-   *  the run state persisted for that same step. run-state.yaml is ONE document per repo, overwritten by each
-   *  step's entry, so the persisted carry counts only when the document is about this step. Absent everywhere
-   *  reads as carried nothing, so recovery fails toward NOT carrying. */
   const recordedCarry = (repoDir: string, stepId: string, persisted: AppLoopRunState | null): string[] =>
     liveCarry(repoDir, stepId) ?? (persisted?.step === stepId ? (persisted.chainedInputs ?? []) : []);
 
-  /** §27.10 — why a step's carry is being resolved. One discriminant decides all three side effects, so a
-   *  reconstruction that advanced nothing cannot be made to record a chained transition:
-   *  `advance` is a real chain advance (may establish a NEW carry, records the transition, announces);
-   *  `re-enter` re-resolves the ids an earlier entry decided on for a turn about to run (announces only);
-   *  `reconstruct` rebuilds a stopped turn so it can be routed — `resume` runs on every route-out, including
-   *  the Terminate that abandons the flow, so it must announce nothing. */
   type CarryOccasion =
     | { kind: 'advance' }
     | { kind: 're-enter'; ids: string[] }
@@ -387,10 +376,6 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       );
     }
     const unreadable = chain.unresolved.filter((u) => u.state === 'unreadable').map((u) => u.id);
-    // Material this step's entry ALREADY carried, stranded since: the def no longer declares the binding, or
-    // the artifact it names is gone. Absent at a chain advance is normal (no upstream produced it) and stays
-    // silent; absent for an id the entry carried is a broken chain, and dropping it loses the operator's
-    // chain with nothing said.
     const declared = new Set(def.inputs.map((i) => i.id));
     const stranded =
       occasion.kind === 'advance'
@@ -399,21 +384,16 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
             ...occasion.ids.filter((id) => !declared.has(id)),
             ...chain.unresolved.filter((u) => u.state === 'not-produced').map((u) => u.id),
           ];
-    // ONE message per resolution: each emitError renders into the same dialog host, so a second would rebuild
-    // over the first and the inputs it named would never reach the operator.
     const notes = [
       ...(unreadable.length > 0 ? [`declared input(s) present but unreadable — ${unreadable.join(', ')}`] : []),
       ...(stranded.length > 0 ? [`recorded input(s) no longer available — ${stranded.join(', ')}`] : []),
     ];
-    // TODO(dylan): `emitError` rides `flow:onLoopError`, documented as a FAILED loop-mechanics operation and
-    // rendered as a dismiss-only modal, while the turn starts anyway — an advisory on a failure channel.
-    // Operator decision (2026-07-22) is to keep it for this PR; the notice surface is the follow-up.
+    // TODO(dylan): Move chained-input advisories off flow:onLoopError.
     if (announces && notes.length > 0) deps.emitError(`${stepId}: ${notes.join('; ')}`);
     return chain.carried;
   };
 
-  /** §27.10 — the ids this step's entry recorded, and what they resolve to now. Every lever that RE-ENTERS a
-   *  turn goes through here, so none can resolve from raw persisted ids instead of the recorded decision. */
+  /** §27.10 */
   const reEnter = (
     repoDir: string,
     stepId: string,
@@ -771,10 +751,13 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
   };
 
   return {
+    canEnter() {
+      return runner.state() !== 'in-flight';
+    },
     enter(repoDir, loopName, stepId, entry) {
-      if (runner.state() === 'in-flight') return; // §27.2 — never interleave a second turn
+      if (runner.state() === 'in-flight') return 'busy';
       const r = deps.resolveDef(repoDir, loopName);
-      if (!r.ok) return; // AC6 — the def-failure view is produced at resolve time (loopViewV2)
+      if (!r.ok) return 'unresolved';
       // §27.9/AC6 — a fresh clean-slate work turn owns no prior stand-down: clear any stale polish so an
       // abandoned one (Terminated rather than approved, or a failed clear) cannot resurrect the polish view when
       // this step reaches its gate again. Relaunch reconstructs via resume(), not enter(), so AC11 is untouched.
@@ -801,6 +784,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
       }
       setCarry(repoDir, stepId, ids);
       start(activeTurnFor(repoDir, loopName, stepId, r.def, { inputs }));
+      return 'entered';
     },
     onInjectable() {
       runner.onInjectable();

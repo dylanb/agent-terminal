@@ -1,14 +1,25 @@
-import type { AppLoopEntry } from './appLoopEngine';
+import { randomUUID } from 'node:crypto';
+import type { AppLoopEnterResult, AppLoopEntry } from './appLoopEngine';
 import type { AppLoopBootstrap } from './appLoopState';
-import type { BootstrapGit, BootstrapGitHub } from './bootstrapPorts';
+import type { AppGateRefs } from './appGateDecision';
+import {
+  AmbiguousBootstrapOperationError,
+  OwnedBootstrapBranchError,
+  UnresolvedRemoteBootstrapBranchError,
+  type AppBootstrapGit,
+  type AppBootstrapGitHub,
+} from './bootstrapPorts';
+import type { LoopDefV2Origin, PickupContractV2, PickupExecutionV2 } from './loopDefV2';
 import { errMsg } from './errno';
 import type { AppBootstrapAuditKind } from '../shared/audit';
+import type { FlowRefs } from '../shared/ipc';
 
 export interface AppLoopBootstrapDeps {
-  git: BootstrapGit;
-  github: BootstrapGitHub;
-  rollbackCreatedBranch(branch: string): Promise<void>;
+  git: AppBootstrapGit;
+  github: AppBootstrapGitHub;
+  prepareBootstrap(identity: Omit<AppLoopBootstrap, 'pr'>): void;
   writeBootstrap(identity: AppLoopBootstrap): void;
+  clearBootstrap(): void;
 }
 
 export interface AppLoopBootstrapRequest {
@@ -16,19 +27,49 @@ export interface AppLoopBootstrapRequest {
   spec: AppLoopBootstrapSpec;
 }
 
-export interface AppLoopBootstrapSpec {
-  origin: 'operator' | 'app-bundled' | 'repo';
-  branchTemplate: string;
-  initialLabels: Array<{
-    action: 'add' | 'remove';
-    target: 'issue' | 'pr';
-    label: string;
-  }>;
+export type AppLoopBootstrapSpec = { origin: LoopDefV2Origin } & PickupExecutionV2;
+
+export function toAppLoopBootstrapSpec(
+  origin: LoopDefV2Origin,
+  pickup: PickupContractV2,
+): AppLoopBootstrapSpec {
+  const { wipe: _wipe, ...execution } = pickup;
+  return { origin, ...execution };
+}
+
+export type AppBootstrapPrOwnership =
+  | { kind: 'none' }
+  | { kind: 'known'; number: number }
+  | { kind: 'ambiguous'; marker: string; absentChecks?: number };
+
+export interface AppLoopBootstrapOwnership {
+  base: string;
+  branch: string;
+  ownedOid: string | null;
+  pr: AppBootstrapPrOwnership;
 }
 
 export type AppLoopBootstrapResult =
-  | { ok: true; identity: AppLoopBootstrap }
-  | { ok: false; error: string };
+  | { ok: true; identity: AppLoopBootstrap; ownership: AppLoopBootstrapOwnership }
+  | {
+      ok: false;
+      error: string;
+      requiresAttention?: true;
+      recovery?: AppLoopBootstrapOwnership;
+    };
+
+export function resolveAppGateRefs(
+  flowRefs: FlowRefs | undefined,
+  trustedBootstrap: AppLoopBootstrap | null,
+): AppGateRefs {
+  if (trustedBootstrap !== null) {
+    return { pr: trustedBootstrap.pr, ticket: trustedBootstrap.issue };
+  }
+  return {
+    pr: flowRefs?.pr ?? null,
+    ticket: flowRefs?.ticket ?? null,
+  };
+}
 
 const SAFE_BRANCH = /^[A-Za-z0-9._/][A-Za-z0-9._/-]*$/;
 
@@ -40,16 +81,102 @@ async function bestEffort(op: () => Promise<void>): Promise<void> {
   }
 }
 
+async function compensateBootstrapOwnership(
+  deps: Pick<AppLoopBootstrapDeps, 'git' | 'github'>,
+  ownership: AppLoopBootstrapOwnership,
+): Promise<
+  | { ok: true }
+  | { ok: false; error: string; recovery?: AppLoopBootstrapOwnership }
+> {
+  const recovery: AppLoopBootstrapOwnership = { ...ownership, pr: { ...ownership.pr } };
+  if (recovery.pr.kind === 'ambiguous') {
+    let reconciled: Awaited<ReturnType<AppBootstrapGitHub['findOwnedOpenPr']>>;
+    try {
+      reconciled = await deps.github.findOwnedOpenPr({
+        base: recovery.base,
+        head: recovery.branch,
+        marker: recovery.pr.marker,
+      });
+    } catch (e) {
+      return {
+        ok: false,
+        error: `could not reconcile draft PR creation: ${errMsg(e)}`,
+        recovery,
+      };
+    }
+    if (reconciled.kind === 'foreign') {
+      return {
+        ok: false,
+        error: `draft PR outcome conflicts with another open PR for ${recovery.branch}`,
+        recovery,
+      };
+    }
+    if (reconciled.kind === 'owned') {
+      recovery.pr = { kind: 'known', number: reconciled.number };
+    } else {
+      const absentChecks = recovery.pr.absentChecks ?? 0;
+      if (absentChecks < 1) {
+        recovery.pr = {
+          kind: 'ambiguous',
+          marker: recovery.pr.marker,
+          absentChecks: absentChecks + 1,
+        };
+        return {
+          ok: false,
+          error: `draft PR absence is not yet stable for ${recovery.branch}`,
+          recovery,
+        };
+      }
+      recovery.pr = { kind: 'none' };
+    }
+  }
+  if (recovery.pr.kind === 'known') {
+    const number = recovery.pr.number;
+    try {
+      await deps.github.closePr(number);
+      recovery.pr = { kind: 'none' };
+    } catch (e) {
+      return {
+        ok: false,
+        error: `could not close draft PR ${number}: ${errMsg(e)}`,
+        recovery,
+      };
+    }
+  }
+  try {
+    await deps.git.rollbackCreatedBranch(recovery.branch, recovery.ownedOid);
+  } catch (e) {
+    return {
+      ok: false,
+      error: `could not roll back branch ${recovery.branch}: ${errMsg(e)}`,
+      ...(e instanceof UnresolvedRemoteBootstrapBranchError ? {} : { recovery }),
+    };
+  }
+  return { ok: true };
+}
+
 export async function runAppLoopBootstrap(
   deps: AppLoopBootstrapDeps,
   req: AppLoopBootstrapRequest,
 ): Promise<AppLoopBootstrapResult> {
-  const fail = (error: string): AppLoopBootstrapResult => ({ ok: false, error });
+  const fail = (
+    error: string,
+    recovery?: AppLoopBootstrapOwnership,
+  ): AppLoopBootstrapResult =>
+    recovery === undefined
+      ? { ok: false, error }
+      : { ok: false, error, requiresAttention: true, recovery };
   if (req.spec.origin !== 'operator') {
     return fail(`refused bootstrap from a non-operator-authored loop def (origin: ${req.spec.origin})`);
   }
   if (!Number.isSafeInteger(req.issue) || req.issue <= 0) return fail('pickup requires a positive GitHub issue number');
+  if (req.spec.initialStatus.trim().length === 0) return fail('pickup requires a non-blank initial status');
   let createdBranch: string | null = null;
+  let createdBase: string | null = null;
+  let ownedOid: string | null = null;
+  let createdPr: number | null = null;
+  let prOwnership: AppBootstrapPrOwnership = { kind: 'none' };
+  const prMarker = `<!-- agent-terminal-bootstrap:${randomUUID()} -->`;
   try {
     if (!(await deps.git.isCleanTree())) return fail('working tree is not clean');
     const base = await deps.git.resolveBaseBranch();
@@ -60,49 +187,167 @@ export async function runAppLoopBootstrap(
       return fail(`branch ${branch} already exists`);
     }
 
-    await deps.git.createBranchFromBase(branch, base);
-    createdBranch = branch;
+    deps.prepareBootstrap({ branch, issue: req.issue, initialStatus: req.spec.initialStatus });
+    try {
+      await deps.git.createBranchFromBase(branch, base);
+      createdBranch = branch;
+      createdBase = base;
+    } catch (e) {
+      if (e instanceof OwnedBootstrapBranchError) {
+        createdBranch = branch;
+        createdBase = base;
+      }
+      throw e;
+    }
     const issue = await deps.github.viewIssue(req.issue);
     const seeLine = issue?.url ? `\n\nSee ${issue.url}` : '';
-    await deps.git.commitEmptyStart(`[skip ci] start work on #${req.issue}${seeLine}`);
-    await deps.git.pushBranchUpstream(branch);
-
-    await bestEffort(() => deps.github.assignIssueToSelf(req.issue));
-    for (const label of req.spec.initialLabels) {
-      if (label.target === 'issue') {
-        await bestEffort(() => deps.github.setIssueLabel(req.issue, label.label, label.action === 'add'));
-      }
-    }
+    ownedOid = await deps.git.commitEmptyStart(`[skip ci] start work on #${req.issue}${seeLine}`);
+    await deps.git.pushBranchUpstream(branch, ownedOid);
 
     const title = `${issue?.title ?? `issue #${req.issue}`} (closes #${req.issue})`;
-    const body = `closes #${req.issue}\n`;
-    const pr = await deps.github.createDraftPr({ base, head: branch, title, body });
-    if (pr === null) throw new Error('draft PR creation failed');
-    for (const label of req.spec.initialLabels) {
-      if (label.target === 'pr') {
-        await bestEffort(() => deps.github.setPrLabel(pr, label.label, label.action === 'add'));
+    const body = `closes #${req.issue}\n\n${prMarker}\n`;
+    try {
+      createdPr = await deps.github.createDraftPr({ base, head: branch, title, body });
+      prOwnership = { kind: 'known', number: createdPr };
+    } catch (createError) {
+      if (createError instanceof AmbiguousBootstrapOperationError) {
+        prOwnership = { kind: 'ambiguous', marker: prMarker };
       }
+      throw createError;
     }
-    const identity = { pr, branch, issue: req.issue };
+    const identity = {
+      pr: createdPr,
+      branch,
+      issue: req.issue,
+      initialStatus: req.spec.initialStatus,
+    };
     deps.writeBootstrap(identity);
-    return { ok: true, identity };
+
+    return {
+      ok: true,
+      identity,
+      ownership: {
+        base,
+        branch,
+        ownedOid,
+        pr: prOwnership,
+      },
+    };
   } catch (e) {
     const error = errMsg(e);
-    if (createdBranch !== null) {
-      try {
-        await deps.rollbackCreatedBranch(createdBranch);
-      } catch (rollbackError) {
-        return fail(`${error}; could not roll back branch ${createdBranch}: ${errMsg(rollbackError)}`);
-      }
-    }
-    return fail(error);
+    if (createdBranch === null || createdBase === null) return fail(error);
+    const recovery: AppLoopBootstrapOwnership = {
+      base: createdBase,
+      branch: createdBranch,
+      ownedOid,
+      pr: prOwnership,
+    };
+    const compensation = await compensateBootstrapOwnership(deps, recovery);
+    if (compensation.ok) return fail(error);
+    const combined = `${error}; ${compensation.error}`;
+    return compensation.recovery === undefined
+      ? { ok: false, error: combined, requiresAttention: true }
+      : fail(combined, compensation.recovery);
   }
+}
+
+export interface AppLoopBootstrapSession {
+  run(request: AppLoopBootstrapRequest): Promise<AppLoopBootstrapResult>;
+  compensate(ownership: AppLoopBootstrapOwnership): Promise<void>;
+  finalize(request: AppLoopBootstrapRequest, identity: AppLoopBootstrap): Promise<void>;
+}
+
+export function createAppLoopBootstrapSession(
+  deps: AppLoopBootstrapDeps,
+): AppLoopBootstrapSession {
+  type PendingRecovery = {
+    ownership: AppLoopBootstrapOwnership;
+    clearBootstrapAfterRecovery: boolean;
+  };
+  let pendingRecovery: PendingRecovery | null = null;
+  const recover = async (): Promise<void> => {
+    if (pendingRecovery === null) return;
+    const pending = pendingRecovery;
+    const compensation = await compensateBootstrapOwnership(deps, pending.ownership);
+    if (!compensation.ok) {
+      pendingRecovery =
+        compensation.recovery === undefined
+          ? null
+          : {
+              ownership: compensation.recovery,
+              clearBootstrapAfterRecovery: pending.clearBootstrapAfterRecovery,
+            };
+      if (compensation.recovery === undefined) {
+        if (pending.clearBootstrapAfterRecovery) deps.clearBootstrap();
+      }
+      throw new Error(compensation.error);
+    }
+    pendingRecovery = null;
+    if (pending.clearBootstrapAfterRecovery) deps.clearBootstrap();
+  };
+  return {
+    async run(request) {
+      try {
+        await recover();
+      } catch (e) {
+        return {
+          ok: false,
+          error: `pending bootstrap cleanup failed: ${errMsg(e)}`,
+          requiresAttention: true,
+          ...(pendingRecovery === null
+            ? {}
+            : { recovery: pendingRecovery.ownership }),
+        };
+      }
+      const result = await runAppLoopBootstrap(deps, request);
+      if (!result.ok && result.recovery !== undefined) {
+        pendingRecovery = {
+          ownership: result.recovery,
+          clearBootstrapAfterRecovery: false,
+        };
+      }
+      return result;
+    },
+    async compensate(ownership) {
+      const compensation = await compensateBootstrapOwnership(deps, ownership);
+      if (!compensation.ok) {
+        pendingRecovery =
+          compensation.recovery === undefined
+            ? null
+            : {
+                ownership: compensation.recovery,
+                clearBootstrapAfterRecovery: true,
+              };
+        if (compensation.recovery === undefined) deps.clearBootstrap();
+        throw new Error(compensation.error);
+      }
+      deps.clearBootstrap();
+    },
+    async finalize(request, identity) {
+      await bestEffort(() => deps.github.assignIssueToSelf(request.issue));
+      for (const label of request.spec.initialLabels) {
+        if (label.target === 'issue') {
+          await bestEffort(() =>
+            deps.github.setIssueLabel(request.issue, label.label, label.action === 'add'),
+          );
+        }
+      }
+      for (const label of request.spec.initialLabels) {
+        if (label.target === 'pr') {
+          await bestEffort(() =>
+            deps.github.setPrLabel(identity.pr, label.label, label.action === 'add'),
+          );
+        }
+      }
+    },
+  };
 }
 
 export interface AppLoopBootstrapJob {
   repoDir: string;
   loopName: string;
   stepId: string;
+  entryToken: number;
   issue: number | null;
   entry: AppLoopEntry;
   bootstrap: AppLoopBootstrapSpec | null;
@@ -110,10 +355,19 @@ export interface AppLoopBootstrapJob {
 
 export interface AppLoopBootstrapCoordinatorDeps {
   run(repoDir: string, request: AppLoopBootstrapRequest): Promise<AppLoopBootstrapResult>;
-  hasBootstrapForIssue(repoDir: string, issue: number): boolean;
-  isCurrentStep(repoDir: string, stepId: string): boolean;
-  rollbackStep(repoDir: string, stepId: string): boolean;
-  enterWork(repoDir: string, loopName: string, stepId: string, entry: AppLoopEntry): void;
+  compensateBootstrap(job: AppLoopBootstrapJob, ownership: AppLoopBootstrapOwnership): Promise<void>;
+  finalizeBootstrap(job: AppLoopBootstrapJob, identity: AppLoopBootstrap): Promise<void>;
+  hasBootstrapForJob(job: AppLoopBootstrapJob): boolean;
+  isCurrentJob(job: AppLoopBootstrapJob): boolean;
+  canEnterWork(job: AppLoopBootstrapJob): boolean;
+  acceptBootstrap(job: AppLoopBootstrapJob, identity: AppLoopBootstrap): void;
+  rollbackStep(job: AppLoopBootstrapJob): boolean;
+  enterWork(
+    repoDir: string,
+    loopName: string,
+    stepId: string,
+    entry: AppLoopEntry,
+  ): AppLoopEnterResult;
   emitError(error: { repoDir: string; stepId: string; reason: string }): void;
   audit(repoDir: string, kind: AppBootstrapAuditKind, stepId: string, detail?: string): void;
 }
@@ -125,48 +379,282 @@ export interface AppLoopBootstrapCoordinator {
 export function createAppLoopBootstrapCoordinator(
   deps: AppLoopBootstrapCoordinatorDeps,
 ): AppLoopBootstrapCoordinator {
-  const enterWork = (job: AppLoopBootstrapJob): void =>
+  let inFlight: { token: symbol; job: AppLoopBootstrapJob } | null = null;
+  const pending = new Map<string, AppLoopBootstrapJob>();
+  const enterWork = (job: AppLoopBootstrapJob): AppLoopEnterResult =>
     deps.enterWork(job.repoDir, job.loopName, job.stepId, job.entry);
+  const audit = (job: AppLoopBootstrapJob, kind: AppBootstrapAuditKind, detail?: string): void => {
+    try {
+      if (detail === undefined) deps.audit(job.repoDir, kind, job.stepId);
+      else deps.audit(job.repoDir, kind, job.stepId, detail);
+    } catch {}
+  };
+  const emitError = (job: AppLoopBootstrapJob, reason: string): void => {
+    try {
+      deps.emitError({ repoDir: job.repoDir, stepId: job.stepId, reason });
+    } catch {}
+  };
+  const acquire = (job: AppLoopBootstrapJob): symbol => {
+    const token = Symbol(`${job.stepId}:${job.entryToken}`);
+    inFlight = { token, job };
+    return token;
+  };
+  const release = (job: AppLoopBootstrapJob, token: symbol): boolean => {
+    if (inFlight?.token !== token || inFlight.job !== job) return false;
+    inFlight = null;
+    return true;
+  };
+  const owns = (job: AppLoopBootstrapJob, token: symbol): boolean =>
+    inFlight?.token === token && inFlight.job === job;
+  const rollbackJob = (job: AppLoopBootstrapJob, reason: string): void => {
+    try {
+      if (!deps.rollbackStep(job)) {
+        audit(job, 'stale');
+        return;
+      }
+      audit(job, 'rollback', reason);
+      emitError(job, reason);
+    } catch (e) {
+      const combined = `${reason}; could not roll back step ${job.stepId}: ${errMsg(e)}`;
+      audit(job, 'rollback', combined);
+      emitError(job, combined);
+    }
+  };
+  type CurrentJobStatus =
+    | { kind: 'current' }
+    | { kind: 'stale' }
+    | { kind: 'failed'; reason: string };
+  const currentStatus = (job: AppLoopBootstrapJob): CurrentJobStatus => {
+    try {
+      return deps.isCurrentJob(job) ? { kind: 'current' } : { kind: 'stale' };
+    } catch (e) {
+      return {
+        kind: 'failed',
+        reason: `could not verify bootstrap step ${job.stepId}: ${errMsg(e)}`,
+      };
+    }
+  };
+  const rollbackUnverifiableJob = (job: AppLoopBootstrapJob, reason: string): void => {
+    audit(job, 'failure', reason);
+    rollbackJob(job, reason);
+  };
+  type WorkEntryReadiness =
+    | { kind: 'ready' }
+    | { kind: 'busy' }
+    | { kind: 'failed'; reason: string };
+  const workEntryReadiness = (job: AppLoopBootstrapJob): WorkEntryReadiness => {
+    try {
+      return deps.canEnterWork(job) ? { kind: 'ready' } : { kind: 'busy' };
+    } catch (e) {
+      return {
+        kind: 'failed',
+        reason: `could not verify work-entry readiness for step ${job.stepId}: ${errMsg(e)}`,
+      };
+    }
+  };
+  const requireWorkEntryReadiness = (
+    job: AppLoopBootstrapJob,
+    busyReason: string,
+  ): boolean => {
+    const readiness = workEntryReadiness(job);
+    if (readiness.kind === 'ready') return true;
+    const reason = readiness.kind === 'failed' ? readiness.reason : busyReason;
+    audit(job, 'failure', reason);
+    rollbackJob(job, reason);
+    return false;
+  };
+  const stale = async (job: AppLoopBootstrapJob, result: AppLoopBootstrapResult): Promise<void> => {
+    audit(job, 'stale');
+    if (result.ok) {
+      try {
+        await deps.compensateBootstrap(job, result.ownership);
+        emitError(
+          job,
+          `Bootstrap completed after step ${job.stepId} was no longer current; its draft PR and branch were removed.`,
+        );
+      } catch (e) {
+        emitError(
+          job,
+          `Bootstrap cleanup needs attention after step ${job.stepId} was no longer current: ${errMsg(e)}`,
+        );
+      }
+    } else if (result.requiresAttention) {
+      emitError(job, `Bootstrap cleanup needs attention after step ${job.stepId} was no longer current: ${result.error}`);
+    }
+  };
+  const workEntryReason = (result: AppLoopEnterResult): string =>
+    result === 'busy'
+      ? 'the app loop runner is busy'
+      : 'the app loop definition no longer resolves';
+  const enterFastPath = (job: AppLoopBootstrapJob): void => {
+    if (!requireWorkEntryReadiness(
+      job,
+      `could not enter work for step ${job.stepId}: the app loop runner is busy`,
+    )) {
+      return;
+    }
+    let result: AppLoopEnterResult;
+    try {
+      result = enterWork(job);
+    } catch (e) {
+      const reason = `could not enter work for step ${job.stepId}: ${errMsg(e)}`;
+      audit(job, 'failure', reason);
+      rollbackJob(job, reason);
+      return;
+    }
+    if (result !== 'entered') {
+      const reason = `could not enter work for step ${job.stepId}: ${workEntryReason(result)}`;
+      audit(job, 'failure', reason);
+      rollbackJob(job, reason);
+    }
+  };
 
-  return {
-    enter(job) {
-      if (job.bootstrap === null) {
-        enterWork(job);
-        return;
+  let dispatch: (job: AppLoopBootstrapJob) => void;
+  const start = (job: AppLoopBootstrapJob): void => {
+    const bootstrap = job.bootstrap;
+    if (bootstrap === null) {
+      enterFastPath(job);
+      return;
+    }
+    const status = currentStatus(job);
+    if (status.kind === 'failed') {
+      rollbackUnverifiableJob(job, status.reason);
+      return;
+    }
+    if (status.kind === 'stale') return;
+    if (!requireWorkEntryReadiness(
+      job,
+      `could not start bootstrap for step ${job.stepId}: the app loop runner is busy`,
+    )) {
+      return;
+    }
+    const token = acquire(job);
+    audit(job, 'start');
+    const finish = (): void => {
+      while (inFlight === null) {
+        const nextEntry = pending.entries().next();
+        if (nextEntry.done) return;
+        const [repoDir, next] = nextEntry.value;
+        pending.delete(repoDir);
+        dispatch(next);
       }
-      if (job.issue !== null && deps.hasBootstrapForIssue(job.repoDir, job.issue)) {
-        enterWork(job);
-        return;
-      }
-      deps.audit(job.repoDir, 'start', job.stepId);
-      const resolve = (result: AppLoopBootstrapResult): void => {
-        if (!deps.isCurrentStep(job.repoDir, job.stepId)) {
-          deps.audit(job.repoDir, 'stale', job.stepId);
+    };
+    const resolve = async (result: AppLoopBootstrapResult): Promise<void> => {
+      if (!owns(job, token)) return;
+      try {
+        const status = currentStatus(job);
+        if (status.kind === 'stale') {
+          await stale(job, result);
+          return;
+        }
+        if (status.kind === 'failed') {
+          audit(job, 'failure', status.reason);
+          let reason = status.reason;
+          if (result.ok) {
+            try {
+              await deps.compensateBootstrap(job, result.ownership);
+            } catch (e) {
+              reason = `${reason}; bootstrap cleanup failed: ${errMsg(e)}`;
+            }
+          } else if (result.requiresAttention) {
+            reason = `${reason}; bootstrap cleanup needs attention: ${result.error}`;
+          }
+          rollbackJob(job, reason);
           return;
         }
         if (result.ok) {
-          deps.audit(job.repoDir, 'success', job.stepId, result.identity.branch);
-          enterWork(job);
+          let entryResult: AppLoopEnterResult;
+          try {
+            entryResult = enterWork(job);
+          } catch (e) {
+            const reason = `bootstrap succeeded but work entry failed: ${errMsg(e)}`;
+            audit(job, 'failure', reason);
+            try {
+              await deps.compensateBootstrap(job, result.ownership);
+            } catch (cleanupError) {
+              rollbackJob(job, `${reason}; bootstrap cleanup failed: ${errMsg(cleanupError)}`);
+              return;
+            }
+            rollbackJob(job, reason);
+            return;
+          }
+          if (entryResult !== 'entered') {
+            const reason = `bootstrap succeeded but work entry was refused: ${workEntryReason(entryResult)}`;
+            audit(job, 'failure', reason);
+            try {
+              await deps.compensateBootstrap(job, result.ownership);
+            } catch (cleanupError) {
+              rollbackJob(job, `${reason}; bootstrap cleanup failed: ${errMsg(cleanupError)}`);
+              return;
+            }
+            rollbackJob(job, reason);
+            return;
+          }
+          deps.acceptBootstrap(job, result.identity);
+          await deps.finalizeBootstrap(job, result.identity);
+          audit(job, 'success', result.identity.branch);
           return;
         }
-        deps.audit(job.repoDir, 'failure', job.stepId, result.error);
-        if (!deps.rollbackStep(job.repoDir, job.stepId)) {
-          deps.audit(job.repoDir, 'stale', job.stepId);
-          return;
-        }
-        deps.audit(job.repoDir, 'rollback', job.stepId, result.error);
-        deps.emitError({ repoDir: job.repoDir, stepId: job.stepId, reason: result.error });
-      };
-      const operation =
+        audit(job, 'failure', result.error);
+        rollbackJob(job, result.error);
+      } catch (e) {
+        const reason = `bootstrap completion failed for step ${job.stepId}: ${errMsg(e)}`;
+        audit(job, 'failure', reason);
+        emitError(job, reason);
+      } finally {
+        release(job, token);
+        finish();
+      }
+    };
+    let operation: Promise<AppLoopBootstrapResult>;
+    try {
+      operation =
         job.issue === null
           ? Promise.resolve<AppLoopBootstrapResult>({
               ok: false,
               error: 'pickup requires a resolved GitHub ticket input',
             })
-          : deps.run(job.repoDir, { issue: job.issue, spec: job.bootstrap });
-      void operation.then(resolve, (e: unknown) =>
-        resolve({ ok: false, error: errMsg(e) }),
-      );
-    },
+          : deps.run(job.repoDir, { issue: job.issue, spec: bootstrap });
+    } catch (e) {
+      operation = Promise.resolve({ ok: false, error: errMsg(e) });
+    }
+    void operation.then(
+      (result) => void resolve(result),
+      (e: unknown) => void resolve({ ok: false, error: errMsg(e) }),
+    );
+  };
+
+  dispatch = (job) => {
+    if (inFlight !== null) {
+      if (
+        inFlight.job.repoDir !== job.repoDir ||
+        inFlight.job.entryToken !== job.entryToken
+      ) {
+        pending.set(job.repoDir, job);
+      }
+      return;
+    }
+    const status = currentStatus(job);
+    if (status.kind === 'failed') {
+      rollbackUnverifiableJob(job, status.reason);
+      return;
+    }
+    if (status.kind === 'stale') {
+      audit(job, 'stale');
+      return;
+    }
+    if (job.bootstrap === null) {
+      enterFastPath(job);
+      return;
+    }
+    if (job.issue !== null && deps.hasBootstrapForJob(job)) {
+      enterFastPath(job);
+      return;
+    }
+    start(job);
+  };
+
+  return {
+    enter: dispatch,
   };
 }

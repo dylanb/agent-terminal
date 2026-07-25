@@ -11,8 +11,15 @@ import { createFeedbackComposer } from './feedbackComposer';
 import { createRedoComposer } from './redoComposer';
 import { wireBootstrapConflict } from './wireBootstrapConflict';
 import { createConfirmDialog } from './confirmDialog';
-import { createErrorDialog } from './errorDialog';
-import { createTerminateConfirm } from './terminateConfirm';
+import { createErrorDialog, type ErrorDialogOptions } from './errorDialog';
+import {
+  createTerminateConfirm,
+  handleTerminateRepoChange,
+} from './terminateConfirm';
+import {
+  createFlowModalCoordinator,
+  type FlowModalCoordinator,
+} from './flowModalCoordinator';
 import { createStatusBar } from './statusBar';
 import { revealLoopReadout } from './loopReveal';
 import { createArtifacts, type Artifacts } from './artifacts';
@@ -91,14 +98,19 @@ const landFocus = (): void => {
 };
 const errorHost = document.getElementById('flow-error-host');
 const errorDialog = errorHost ? createErrorDialog(errorHost, { onFocusLost: landFocus }) : undefined;
+let flowModals: FlowModalCoordinator | undefined;
+const showError = (options: ErrorDialogOptions): void => {
+  if (flowModals) flowModals.showError(options);
+  else errorDialog?.render(options);
+};
 if (errorDialog) {
   window.flow.onBootstrapError((reason, repoKey, step) =>
-    errorDialog.render({
+    showError({
       title: `Bootstrap failed — ${step}`,
       message: `${reason}\n\nRepository: ${repoKey}`,
     }),
   );
-  window.flow.onLoopError((reason) => errorDialog.render({ title: 'Loop error', message: reason }));
+  window.flow.onLoopError((reason) => showError({ title: 'Loop error', message: reason }));
 }
 
 // §22.3.1.
@@ -114,8 +126,8 @@ const statusBar = statusBarHost
         shell.openLoopPanel(opener);
         loopPanel?.focusDecision();
       },
-      onError: (reason) => errorDialog?.render({ title: 'Could not save the name', message: reason }),
-      onOpenError: (reason) => errorDialog?.render({ title: 'Could not open link', message: reason }),
+      onError: (reason) => showError({ title: 'Could not save the name', message: reason }),
+      onOpenError: (reason) => showError({ title: 'Could not open link', message: reason }),
       loopPanelId: loopPanelHost?.id ?? '',
     })
   : undefined;
@@ -140,6 +152,23 @@ if (flowStripHost) {
   // no redo button (approve/request-changes remain) rather than an inert control.
   const redoComposerHost = document.getElementById('redo-composer-host');
   const redoComposer = redoComposerHost ? createRedoComposer(redoComposerHost, { onFocusLost: landFocus }) : undefined;
+  const confirmHost = document.getElementById('flow-confirm-host');
+  const confirmDialog = confirmHost ? createConfirmDialog(confirmHost, { onFocusLost: landFocus }) : undefined;
+  const requestTerminate = confirmDialog
+    ? createTerminateConfirm({ todoList: window.monitor.todoList, dialog: confirmDialog })
+    : undefined;
+  if (confirmDialog) {
+    flowModals = createFlowModalCoordinator({
+      errors: errorDialog,
+      confirmations: confirmDialog,
+      cancelPendingConfirmation: () => requestTerminate?.cancelPending(),
+    });
+    wireBootstrapConflict({
+      onBootstrapConflict: (cb) => window.flow.onBootstrapConflict(cb),
+      confirm: (opts) => flowModals!.showConfirmation(opts),
+      resolve: (key, wipe) => window.flow.resolveBootstrapConflict(key, wipe),
+    });
+  }
   loopPanel = loopPanelHost
     ? createLoopPanel(loopPanelHost, {
         githubRef: (kind, number) => {
@@ -161,7 +190,15 @@ if (flowStripHost) {
         },
         appRouteOut: (step, turnKey, action) => {
           const key = repo.repoKey();
-          if (key) window.flow.appRouteOut(key, step, turnKey, action);
+          if (!key) return;
+          if (action === 'terminate') {
+            requestTerminate?.(key, () =>
+              window.flow.appRouteOut(key, step, turnKey, action),
+              document.activeElement as HTMLElement | null,
+            );
+            return;
+          }
+          window.flow.appRouteOut(key, step, turnKey, action);
         },
         appGateDecision: (step, turnKey, option) => {
           const key = repo.repoKey();
@@ -205,22 +242,6 @@ if (flowStripHost) {
   // strip hands it the prompt + a submit closure; the modal collects values and submit calls provideInput.
   const modalHost = document.getElementById('flow-modal-host');
   const inputModal = modalHost ? createFlowInputModal(modalHost, { onFocusLost: landFocus }) : undefined;
-  // Terminate confirmation (#26): a separate destructive modal-dialog organism. The strip hands it the
-  // repo + a confirm closure; createTerminateConfirm surfaces the repo's current todo count
-  // (window.monitor owns the count — the strip stays flow-only, §9.1) and gates the IPC call.
-  const confirmHost = document.getElementById('flow-confirm-host');
-  const confirmDialog = confirmHost ? createConfirmDialog(confirmHost, { onFocusLost: landFocus }) : undefined;
-  // Bootstrap-conflict confirm (§26.9): main pushes flow:onBootstrapConflict when a re-pickup hit an
-  // existing branch under a wipe-and-retry policy. Confirm-first — the wipe is destructive + outward-facing
-  // (deletes the branch on origin, closes its PR), so the operator answers a blocking confirm; the answer
-  // (wipe / cancel-and-roll-back) rides resolveBootstrapConflict, keyed by the conflict's own repoKey.
-  if (confirmDialog) {
-    wireBootstrapConflict({
-      onBootstrapConflict: (cb) => window.flow.onBootstrapConflict(cb),
-      confirm: (opts) => confirmDialog.render(opts),
-      resolve: (key, wipe) => window.flow.resolveBootstrapConflict(key, wipe),
-    });
-  }
   const strip = createFlowStrip(flowStripHost, {
     ...window.flow,
     loopPanelId: loopPanelHost?.id, // instance-scoped aria-controls target
@@ -232,14 +253,37 @@ if (flowStripHost) {
       });
     },
     onStatusBar: (model, key) => statusBar?.render(model, key),
-    onError: (reason) => errorDialog?.render({ title: 'Flow action failed', message: reason }),
+    onError: (reason) => showError({ title: 'Flow action failed', message: reason }),
     onPrompt: (prompt, stepName, submit) => inputModal?.render(prompt, stepName, submit),
-    onTerminate: confirmDialog
-      ? createTerminateConfirm({ todoList: window.monitor.todoList, dialog: confirmDialog })
+    onTerminate: requestTerminate
+      ? (key, confirm) =>
+          requestTerminate(
+            key,
+            confirm,
+            document.activeElement as HTMLElement | null,
+          )
       : undefined,
   });
   flowStrip = strip;
-  repo.onChange((info) => strip.onRepoChanged(info.repoKey));
+  repo.onChange((info) => {
+    flowModals?.cancelConfirmation();
+    handleTerminateRepoChange(
+      requestTerminate,
+      info.repoKey,
+      (repoKey) => strip.onRepoChanged(repoKey),
+      {
+        isAffected: () => {
+          const active = document.activeElement;
+          return (
+            active !== null &&
+            (flowStripHost.contains(active) ||
+              (confirmHost?.contains(active) ?? false))
+          );
+        },
+        land: landFocus,
+      },
+    );
+  });
   const seededKey = repo.repoKey();
   if (seededKey !== null) strip.onRepoChanged(seededKey);
 }

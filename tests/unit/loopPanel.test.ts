@@ -432,6 +432,9 @@ describe('docked loop panel (§24.2.3 T2)', () => {
     expect(host.querySelector('[data-app-route-out="retry"]')).not.toBeNull();
     expect(host.querySelector('[data-app-route-out="accept"]')).not.toBeNull();
     expect(host.querySelector('[data-app-route-out="terminate"]')).not.toBeNull();
+    expect(
+      host.querySelector('[data-app-route-out="terminate"]')?.getAttribute('aria-label'),
+    ).toBe('Terminate flow from the plan work turn');
     // The §26 turn-error Retry is NOT rendered for a §27 error (no iteration): the §27 route-out replaces it.
     expect(host.querySelector('[data-loop-retry]')).toBeNull();
   });

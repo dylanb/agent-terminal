@@ -124,7 +124,7 @@ import {
 import { provideAppLoopView } from './loopViewV2';
 import { createAppLoopEngine, type AppLoopEntry } from './appLoopEngine';
 import { appLoopEntryFor } from './appLoopEntry';
-import { armInterrupt, clearPolish, consolidatorOutputFile, consolidatorOutputRel, enterPolish, isPolishActiveForStep, readAppLoopBootstrap, readAppLoopState, roundReportFile, roundReportRel, writeAppLoopBootstrap, writeAppLoopState } from './appLoopState';
+import { armInterrupt, clearAppLoopBootstrap, clearPolish, consolidatorOutputFile, consolidatorOutputRel, enterPolish, isPolishActiveForStep, readAppLoopState, roundReportFile, roundReportRel, writeAppLoopBootstrap, writeAppLoopBootstrapIntent, writeAppLoopState, type AppLoopBootstrap } from './appLoopState';
 import { APP_LOOP_DIR_SEGMENTS } from './appLoopPaths';
 import { resolveLoopDefV2, type LoopDefV2Context } from './loopDefV2';
 import { createRealAppGateGitHub } from './appGateGithub';
@@ -134,8 +134,15 @@ import { probeChainedInput } from './chainedInputProbe';
 import { resolveExampleLoopsV2Dir } from './exampleAssets';
 import { userConfigLoopsV2Dir } from './userConfig';
 import type { CliInstallResult } from '../shared/ipc';
-import { createAppLoopBootstrapCoordinator, runAppLoopBootstrap, type AppLoopBootstrapCoordinator } from './appLoopBootstrap';
-import { createRealBootstrapGit, createRealBootstrapGitHub } from './bootstrapPorts';
+import {
+  createAppLoopBootstrapCoordinator,
+  createAppLoopBootstrapSession,
+  resolveAppGateRefs,
+  toAppLoopBootstrapSpec,
+  type AppLoopBootstrapCoordinator,
+  type AppLoopBootstrapSession,
+} from './appLoopBootstrap';
+import { createRealAppBootstrapGit, createRealAppBootstrapGitHub } from './bootstrapPorts';
 
 async function createWindow(): Promise<void> {
   const iconLoc: BundleLocation = app.isPackaged
@@ -477,6 +484,7 @@ async function createWindow(): Promise<void> {
     tiers: { operator: userConfigLoopsV2Dir(), appBundled: resolveExampleLoopsV2Dir(iconLoc) },
     repoDir,
   });
+  let terminateFlowLifecycle: (repoDir: string) => FlowStateView;
   const appEngine = createAppLoopEngine({
     inject: (text) => inject(text, { submit: true }),
     // §27.9/AC6 — the polish stand-down is app-owned loop state in its own file; the engine consults it before
@@ -529,10 +537,7 @@ async function createWindow(): Promise<void> {
     audit: (repoDir, cmd, exit) => audit.recordCommand(repoDir, 'turn', cmd, exit),
     emitError: (reason) => send(CH.flowOnLoopError, { sessionId: SESSION_ID, reason }),
     onViewChanged: () => pushFlowChanged(),
-    terminateFlow: (repoDir) => {
-      flow.terminate(repoDir);
-      pushFlowChanged();
-    },
+    terminateFlow: (repoDir) => void terminateFlowLifecycle(repoDir),
   });
   // Watch the §27 done-file (in the §27 loop area) for the active §27 turn, key-matched so a prior turn's
   // latched file cannot complete a different one — the §27 analogue of armTurnDoneWatch (§27.12).
@@ -847,16 +852,22 @@ async function createWindow(): Promise<void> {
     else advanceAfterConsolidate({ repoDir, loopName, phase: decision.phaseId, iteration: decision.iteration });
   };
 
-  // The repo and the reason travel as ONE value into the synchronous onEnterStep below (§26.9/§27.10): an
-  // entry kind that outlived its window would let a step be entered as a chain advance that never advanced,
-  // so neither half can be observed without the other.
-  let transitioning: { repoKey: string; entry: AppLoopEntry } | null = null;
+  let nextFlowEntryToken = 0;
+  const currentFlowEntryTokens = new Map<string, number>();
+  let activeFlowEntryOccurrence: { repoKey: string; entry: AppLoopEntry; token: number } | null = null;
   const inTransition = <T>(repoKey: string, entry: AppLoopEntry, fn: () => T): T => {
-    transitioning = { repoKey, entry };
+    const token = ++nextFlowEntryToken;
+    const previousToken = currentFlowEntryTokens.get(repoKey);
+    currentFlowEntryTokens.set(repoKey, token);
+    activeFlowEntryOccurrence = { repoKey, entry, token };
     try {
       return fn();
+    } catch (e) {
+      if (previousToken === undefined) currentFlowEntryTokens.delete(repoKey);
+      else currentFlowEntryTokens.set(repoKey, previousToken);
+      throw e;
     } finally {
-      transitioning = null;
+      activeFlowEntryOccurrence = null;
     }
   };
 
@@ -926,7 +937,7 @@ async function createWindow(): Promise<void> {
   };
 
   const runPickupForStep = (step: FlowStepDef, inputs: Record<string, string>): void => {
-    const repoKey = transitioning?.repoKey ?? null;
+    const repoKey = activeFlowEntryOccurrence?.repoKey ?? null;
     if (!repoKey || step.kind !== 'loop' || !step.loop) return;
     const def = parseLoopDef(repoKey, step.loop);
     if (!def?.pickup) return; // no pickup_contract → nothing to bootstrap from
@@ -958,7 +969,7 @@ async function createWindow(): Promise<void> {
   // (§26.3/D46). Decision in loopRebind.ts; the "nothing to resume" outcomes are audited no-ops (a loop
   // step can be display-only), and only a persist failure mid-rebind is surfaced.
   const resumeLoopForStep = (step: FlowStepDef): void => {
-    const repoKey = transitioning?.repoKey ?? null;
+    const repoKey = activeFlowEntryOccurrence?.repoKey ?? null;
     if (!repoKey || step.kind !== 'loop' || !step.loop) return;
     const prior = parseAgentLoopState(repoKey);
     const plan = planStepResume(
@@ -998,7 +1009,7 @@ async function createWindow(): Promise<void> {
     // boundary, inject the work prompt once when injectable), NEVER a §26 run. The engine no-ops when the
     // def fails to resolve — the run-less/failure view (deriveAppLoopView) is the operator's surface then.
     enterAppLoop: (step) => {
-      const t = transitioning;
+      const t = activeFlowEntryOccurrence;
       if (!t || !step.loop) return;
       const resolved = resolveLoopDefV2(step.loop, appDefContext(t.repoKey));
       const issue = flow.state(t.repoKey).refs?.ticket ?? null;
@@ -1011,16 +1022,13 @@ async function createWindow(): Promise<void> {
         repoDir: t.repoKey,
         loopName: step.loop,
         stepId: step.id,
+        entryToken: t.token,
         entry: t.entry,
         issue,
         bootstrap:
           resolved.def.pickup === null
             ? null
-            : {
-                origin: resolved.def.origin,
-                branchTemplate: resolved.def.pickup.branchTemplate,
-                initialLabels: resolved.def.pickup.initialLabels,
-              },
+            : toAppLoopBootstrapSpec(resolved.def.origin, resolved.def.pickup),
       });
     },
   });
@@ -1057,42 +1065,78 @@ async function createWindow(): Promise<void> {
     },
   });
 
+  const trustedAppBootstraps = new Map<string, AppLoopBootstrap>();
+  const appBootstrapSessions = new Map<string, AppLoopBootstrapSession>();
+  const appBootstrapSession = (repoDir: string): AppLoopBootstrapSession => {
+    const existing = appBootstrapSessions.get(repoDir);
+    if (existing !== undefined) return existing;
+    const session = createAppLoopBootstrapSession({
+      git: createRealAppBootstrapGit(repoDir),
+      github: createRealAppBootstrapGitHub(repoDir),
+      prepareBootstrap: (identity) => writeAppLoopBootstrapIntent(repoDir, identity),
+      writeBootstrap: (identity) => writeAppLoopBootstrap(repoDir, identity),
+      clearBootstrap: () => clearAppLoopBootstrap(repoDir),
+    });
+    appBootstrapSessions.set(repoDir, session);
+    return session;
+  };
   appBootstrapCoordinator = createAppLoopBootstrapCoordinator({
     run: async (repoDir, request) => {
       pickupInFlight = { repoKey: repoDir, issue: request.issue, wipe: false };
       pushFlowChanged();
       try {
-        const git = createRealBootstrapGit(repoDir);
-        return await runAppLoopBootstrap(
-          {
-            git,
-            github: createRealBootstrapGitHub(repoDir),
-            rollbackCreatedBranch: (branch) => git.rollbackCreatedBranch(branch),
-            writeBootstrap: (identity) => writeAppLoopBootstrap(repoDir, identity),
-          },
-          request,
-        );
+        return await appBootstrapSession(repoDir).run(request);
       } finally {
         if (pickupInFlight?.repoKey === repoDir) pickupInFlight = null;
         pushFlowChanged();
       }
     },
-    hasBootstrapForIssue: (repoDir, issue) => readAppLoopBootstrap(repoDir)?.issue === issue,
-    isCurrentStep: (repoDir, stepId) => {
-      const current = flow.state(repoDir);
-      return current.status === 'in_progress' && current.stepName === stepId;
+    compensateBootstrap: (job, ownership) =>
+      appBootstrapSession(job.repoDir).compensate(ownership),
+    finalizeBootstrap: (job, identity) => {
+      if (job.issue === null || job.bootstrap === null) return Promise.resolve();
+      return appBootstrapSession(job.repoDir).finalize(
+        { issue: job.issue, spec: job.bootstrap },
+        identity,
+      );
     },
-    rollbackStep: (repoDir, stepId) => {
-      const current = flow.state(repoDir);
-      if (current.status !== 'in_progress' || current.stepName !== stepId) return false;
-      flow.revertStep(repoDir, stepId);
+    hasBootstrapForJob: (job) => {
+      const trusted = trustedAppBootstraps.get(job.repoDir);
+      return trusted?.issue === job.issue;
+    },
+    isCurrentJob: (job) => {
+      const current = flow.state(job.repoDir);
+      return (
+        currentFlowEntryTokens.get(job.repoDir) === job.entryToken &&
+        current.status === 'in_progress' &&
+        current.stepName === job.stepId &&
+        (current.refs?.ticket ?? null) === job.issue
+      );
+    },
+    canEnterWork: () => appEngine.canEnter(),
+    acceptBootstrap: (job, identity) =>
+      trustedAppBootstraps.set(job.repoDir, identity),
+    rollbackStep: (job) => {
+      const current = flow.state(job.repoDir);
+      if (
+        currentFlowEntryTokens.get(job.repoDir) !== job.entryToken ||
+        current.status !== 'in_progress' ||
+        current.stepName !== job.stepId ||
+        (current.refs?.ticket ?? null) !== job.issue
+      ) {
+        return false;
+      }
+      flow.revertStep(job.repoDir, job.stepId);
       pushFlowChanged();
       return true;
     },
     enterWork: (repoDir, loopName, stepId, entry) => {
-      appEngine.enter(repoDir, loopName, stepId, entry);
-      armAppTurnDoneWatch(repoDir);
-      pushFlowChanged();
+      const result = appEngine.enter(repoDir, loopName, stepId, entry);
+      if (result === 'entered') {
+        armAppTurnDoneWatch(repoDir);
+        pushFlowChanged();
+      }
+      return result;
     },
     emitError: ({ repoDir, stepId, reason }) =>
       send(CH.flowOnBootstrapError, {
@@ -1194,6 +1238,29 @@ async function createWindow(): Promise<void> {
     const base = deriveFlowView(view, todoStore.list(repoKey), agentActivity);
     const activity = loopActivityFor(repoKey);
     return activity ? { ...base, loopActivity: activity } : base;
+  };
+
+  terminateFlowLifecycle = (repoKey) => {
+    const after = flow.terminate(repoKey);
+    currentFlowEntryTokens.delete(repoKey);
+    trustedAppBootstraps.delete(repoKey);
+    audit.recordTerminate(repoKey);
+    todoStore.clear(repoKey);
+    store.clear();
+    send(CH.monitorCleared, { sessionId: SESSION_ID });
+    pushFlowChanged();
+    return trackLoop(repoKey, withDerived(repoKey, after));
+  };
+
+  const withoutTrustedBootstrap = <T>(repoKey: string, transition: () => T): T => {
+    const previous = trustedAppBootstraps.get(repoKey);
+    trustedAppBootstraps.delete(repoKey);
+    try {
+      return transition();
+    } catch (e) {
+      if (previous !== undefined) trustedAppBootstraps.set(repoKey, previous);
+      throw e;
+    }
   };
 
   // A flow transition that records its before/after audit diff (§25.5): capture the pre-state, run the
@@ -1329,8 +1396,10 @@ async function createWindow(): Promise<void> {
         readRunState: (repoDir) => readAppLoopState(repoDir),
         resolveDef: (repoDir, name) => resolveLoopDefV2(name, appDefContext(repoDir)),
         refs: (repoDir) => {
-          const v = flow.state(repoDir);
-          return { pr: v.refs?.pr ?? null, ticket: v.refs?.ticket ?? null };
+          return resolveAppGateRefs(
+            flow.state(repoDir).refs,
+            trustedAppBootstraps.get(repoDir) ?? null,
+          );
         },
         bodyFile: (def) => completionArtifact(def)?.path ?? null,
         runSideEffect: createRealAppGateGitHub(repoKey),
@@ -1538,13 +1607,17 @@ async function createWindow(): Promise<void> {
       // rejects and the strip re-pulls; a malformed payload fails closed to a benign error view.
       [CH.flowState]: (_e, m) =>
         isValidFlowRequest(m) ? trackLoop(m.repoKey, withDerived(m.repoKey, flow.state(m.repoKey))) : flowRequestError(),
-      [CH.flowStart]: (_e, m) =>
-        isValidFlowRequest(m) ? recordedTransition(m.repoKey, 'start', () => flow.start(m.repoKey)) : flowRequestError(),
+      [CH.flowStart]: (_e, m) => {
+        if (!isValidFlowRequest(m) || !knownRepoKeys.has(m.repoKey)) return flowRequestError();
+        return withoutTrustedBootstrap(m.repoKey, () =>
+          recordedTransition(m.repoKey, 'start', () => flow.start(m.repoKey)),
+        );
+      },
       // Advancing while NOT ready is a human override (§19.2): warns via a one-shot notice but still
       // completes. Readiness is read from the PRE-advance state — loop readiness for a loop step, else
       // the todo gate (S5).
       [CH.flowAdvance]: (_e, m) => {
-        if (!isValidFlowRequest(m)) return flowRequestError();
+        if (!isValidFlowRequest(m) || !knownRepoKeys.has(m.repoKey)) return flowRequestError();
         const pre = withDerived(m.repoKey, flow.state(m.repoKey));
         const ready = pre.loop ? pre.loop.ready : (pre.derived?.ready ?? true);
         const view = inTransition(m.repoKey, appLoopEntryFor('advance'), () => flow.advance(m.repoKey));
@@ -1555,32 +1628,32 @@ async function createWindow(): Promise<void> {
           : 'Advanced with todos still outstanding.';
         return trackLoop(m.repoKey, { ...view, notice });
       },
-      [CH.flowRestart]: (_e, m) =>
-        isValidFlowRequest(m) ? recordedTransition(m.repoKey, 'restart', () => flow.restart(m.repoKey)) : flowRequestError(),
+      [CH.flowRestart]: (_e, m) => {
+        if (!isValidFlowRequest(m) || !knownRepoKeys.has(m.repoKey)) return flowRequestError();
+        return withoutTrustedBootstrap(m.repoKey, () =>
+          recordedTransition(m.repoKey, 'restart', () => flow.restart(m.repoKey)),
+        );
+      },
       [CH.flowUndo]: (_e, m) =>
-        isValidFlowRequest(m) ? recordedTransition(m.repoKey, 'undo', () => flow.undo(m.repoKey)) : flowRequestError(),
+        isValidFlowRequest(m) && knownRepoKeys.has(m.repoKey)
+          ? recordedTransition(m.repoKey, 'undo', () => flow.undo(m.repoKey))
+          : flowRequestError(),
       // Terminate (#26): inert from not_started / load-error (the control is absent there, AC2) — guard
       // on the pre-state so a malformed/raced request never clears on an error flow. The audit write is
       // best-effort (§25.7) and never blocks the reset (AC5–AC7 hold unconditionally). Per AC9/AC10
       // nothing here signals the terminal process or touches external agent-loop engine state.
       [CH.flowTerminate]: (_e, m) => {
-        if (!isValidFlowRequest(m)) return flowRequestError();
+        if (!isValidFlowRequest(m) || !knownRepoKeys.has(m.repoKey)) return flowRequestError();
         const before = flow.state(m.repoKey);
         if (before.status !== 'in_progress' && before.status !== 'done') {
           return trackLoop(m.repoKey, withDerived(m.repoKey, before));
         }
-        const after = flow.terminate(m.repoKey);
-        audit.recordTerminate(m.repoKey);
-        todoStore.clear(m.repoKey);
-        store.clear();
-        send(CH.monitorCleared, { sessionId: SESSION_ID });
-        pushFlowChanged();
-        return trackLoop(m.repoKey, withDerived(m.repoKey, after));
+        return terminateFlowLifecycle(m.repoKey);
       },
       // Provide a step's typed input (§18.4 / §24.2.3 T3); the returned view's notice carries any §19.3
       // busy-shell refusal.
       [CH.flowProvideInput]: (_e, m) => {
-        if (!isValidFlowProvideInput(m)) return flowRequestError();
+        if (!isValidFlowProvideInput(m) || !knownRepoKeys.has(m.repoKey)) return flowRequestError();
         const current = flow.state(m.repoKey);
         if (current.status !== 'in_progress' || current.stepName !== m.step) {
           return trackLoop(m.repoKey, withDerived(m.repoKey, current));

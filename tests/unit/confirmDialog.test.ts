@@ -142,6 +142,17 @@ describe('confirm dialog (#26 AC3/AC4/AC13)', () => {
     expect(dialog()).toBeNull();
   });
 
+  it('cancel() closes an open dialog through its semantic decline action', () => {
+    const onCancel = vi.fn();
+    const d = createConfirmDialog(host);
+    d.render(opts({ onCancel }));
+
+    d.cancel();
+
+    expect(dialog()).toBeNull();
+    expect(onCancel).toHaveBeenCalledTimes(1);
+  });
+
   it('builds from host.ownerDocument, not the global document (UI-STANDARDS §3.3 relocation)', async () => {
     await assertRendersFromHostDocument((h) => {
       createConfirmDialog(h).render(opts());

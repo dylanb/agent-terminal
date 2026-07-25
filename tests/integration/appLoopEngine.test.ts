@@ -270,16 +270,21 @@ describe('§27 engine — entry, boundary, and the work injection (AC1, AC9)', (
   it('does not start a turn or write run-state when the def fails to resolve (AC6 handled at the view)', () => {
     defResult = { ok: false, reason: 'no §27 def named plan-loop in any tier' };
     const engine = makeEngine();
-    engine.enter(repo, 'plan-loop', STEP, 'chain-advance');
+    expect(engine.canEnter()).toBe(true);
+    expect(engine.enter(repo, 'plan-loop', STEP, 'chain-advance')).toBe('unresolved');
+    expect(engine.canEnter()).toBe(true);
     expect(injected).toEqual([]);
     expect(readAppLoopState(repo)).toBeNull();
   });
 
   it('refuses a second entry while a turn is in flight (AC4 — not interleaved)', () => {
     const engine = makeEngine();
-    enterAndInjectWork(engine);
+    expect(engine.canEnter()).toBe(true);
+    expect(engine.enter(repo, 'plan-loop', STEP, 'chain-advance')).toBe('entered');
+    expect(engine.canEnter()).toBe(false);
+    engine.onInjectable();
     const count = injected.length;
-    engine.enter(repo, 'plan-loop', STEP, 'chain-advance'); // in-flight: ignored
+    expect(engine.enter(repo, 'plan-loop', STEP, 'chain-advance')).toBe('busy');
     expect(injected.length).toBe(count);
   });
 });
