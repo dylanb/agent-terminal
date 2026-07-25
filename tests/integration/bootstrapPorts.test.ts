@@ -142,6 +142,23 @@ describe('createRealAppBootstrapGit — owned remote-ref compensation', () => {
     );
   });
 
+  // Two consumers read this one list: this probe and resolveGitHubRepository, which already refuses a
+  // multi-valued origin. Two rules over one list are indistinguishable from one until the list has two
+  // elements — at which point the URL graded here and the URL the identity lookup approved differ.
+  it('refuses a multi-valued origin rather than picking one of its URLs', async () => {
+    runGit(repo, [
+      'config',
+      '--add',
+      'remote.origin.url',
+      `${remote}-second`,
+    ]);
+    const port = createRealAppBootstrapGit(repo);
+
+    await expect(port.branchState(branch)).rejects.toThrow(
+      /unsafe origin transport configuration/i,
+    );
+  });
+
   it('rejects a repository-local upload-pack override before a read operation', async () => {
     runGit(repo, ['config', 'remote.origin.uploadpack', 'git-upload-pack']);
     const port = createRealAppBootstrapGit(repo);
@@ -636,6 +653,24 @@ describe('createRealAppBootstrapGit — owned remote-ref compensation', () => {
 
     await expect(port.deleteBranch(branch, state)).rejects.toThrow(/local branch wipe failed/i);
     expect(runGit(repo, ['rev-parse', `refs/heads/${branch}`])).toBe(movedOid);
+  });
+
+  // Either lease refusing must leave BOTH halves intact: a wipe that destroys the origin branch and then
+  // refuses the local one strands the operator in a state no UI action reaches (§27.10).
+  it('refuses a moved local branch without destroying the remote half first', async () => {
+    const port = createRealAppBootstrapGit(repo);
+    const main = runGit(remote, ['rev-parse', 'refs/heads/main']);
+    runGit(remote, ['update-ref', `refs/heads/${branch}`, main]);
+    runGit(repo, ['branch', branch, 'main']);
+    const state = await port.branchState(branch);
+    expect(state.remoteOid).not.toBeNull();
+
+    runGit(repo, ['checkout', branch]);
+    runGit(repo, ['commit', '--allow-empty', '-m', 'moved']);
+    runGit(repo, ['checkout', 'main']);
+
+    await expect(port.deleteBranch(branch, state)).rejects.toThrow(/local branch wipe failed/i);
+    expect(hasRef(remote, `refs/heads/${branch}`)).toBe(true);
   });
 });
 

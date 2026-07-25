@@ -6,7 +6,11 @@ import { treeIsClean } from './gitTreeState';
 import { errMsg } from './errno';
 import { run, CommandFailure } from './appBootstrapCommand';
 import { createAppGitRemote, type AppGitRemote } from './appCommand';
-import { originUrls, type OriginConfigReader, type OriginDirection } from './originUrl';
+import {
+  createOriginConfigReader,
+  soleOriginUrl,
+  type OriginDirection,
+} from './originUrl';
 import { isGitObjectId } from '../shared/appBootstrap';
 import {
   createGitHubRepositorySource,
@@ -70,24 +74,9 @@ export function createRealAppBootstrapGit(
       throw new CommandFailure(failure, e instanceof CommandFailure ? e.exitCode : undefined);
     }
   };
-  const originConfig: OriginConfigReader = {
-    values: async (key) => {
-      try {
-        return (
-          await git(
-            ['config', '--get-all', `remote.origin.${key}`],
-            'origin resolution failed',
-          )
-        )
-          .split('\n')
-          .map((url) => url.trim())
-          .filter((url) => url.length > 0);
-      } catch (e) {
-        if (e instanceof CommandFailure && e.exitCode === 1) return [];
-        throw e;
-      }
-    },
-  };
+  const originConfig = createOriginConfigReader((args) =>
+    git(args, 'origin resolution failed'),
+  );
   const disabledHooksPath = join(
     tmpdir(),
     `agent-terminal-disabled-hooks-${randomUUID()}`,
@@ -156,11 +145,11 @@ export function createRealAppBootstrapGit(
   const approvedOriginUrl = async (
     direction: OriginDirection,
   ): Promise<string> => {
-    const urls = await originUrls(originConfig, direction);
-    if (urls.length === 0 || urls.some((url) => !isApprovedGitRemote(url))) {
+    const url = await soleOriginUrl(originConfig, direction);
+    if (url === null || !isApprovedGitRemote(url)) {
       throw new Error('unsafe origin transport configuration');
     }
-    return urls[urls.length - 1] ?? '';
+    return url;
   };
   const currentCheckout = async (): Promise<Checkout> => {
     const injectedFailure = faults.currentCheckoutResult?.();
@@ -258,16 +247,8 @@ export function createRealAppBootstrapGit(
         r.readRef(probeUrl, `refs/heads/${branch}`));
       return { localOid, remoteOid };
     },
-    // The remote goes first: it is the outward-facing half and the only one a server can refuse, so a
-    // stale lease aborts the wipe with nothing yet destroyed on either side (§27.10).
     deleteBranch: async (branch, state) => {
       await assertSafeRepository();
-      const remoteOid = state.remoteOid;
-      if (remoteOid !== null) {
-        const wipeUrl = await approvedOriginUrl('push');
-        await remoteOp('remote branch wipe failed', async (r) =>
-          r.deleteRef(wipeUrl, `refs/heads/${branch}`, remoteOid));
-      }
       const localOid = state.localOid;
       if (localOid !== null) {
         const current = (
@@ -281,6 +262,14 @@ export function createRealAppBootstrapGit(
             'local branch wipe failed: branch changed after the caller read its identity',
           );
         }
+      }
+      const remoteOid = state.remoteOid;
+      if (remoteOid !== null) {
+        const wipeUrl = await approvedOriginUrl('push');
+        await remoteOp('remote branch wipe failed', async (r) =>
+          r.deleteRef(wipeUrl, `refs/heads/${branch}`, remoteOid));
+      }
+      if (localOid !== null) {
         const checkout = await currentCheckout();
         if (checkout.kind === 'branch' && checkout.value === branch) {
           await git(['checkout', '--detach', localOid], 'local branch wipe failed');

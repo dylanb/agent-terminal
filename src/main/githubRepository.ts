@@ -1,7 +1,11 @@
 import { runAppCommand } from './appCommand';
-import { run, CommandFailure } from './appBootstrapCommand';
+import { run } from './appBootstrapCommand';
 import { isRecord } from './yamlRecord';
-import { originUrls, type OriginConfigReader } from './originUrl';
+import {
+  createOriginConfigReader,
+  originUrls,
+  type OriginConfigReader,
+} from './originUrl';
 
 export interface GitHubRepositoryIdentity {
   selector: string;
@@ -132,26 +136,9 @@ export function matchesGitHubRepositoryUrl(
 }
 
 function originConfigReader(repoDir: string): OriginConfigReader {
-  return {
-    values: async (key) => {
-      try {
-        return (
-          await run(
-            'git',
-            ['config', '--get-all', `remote.origin.${key}`],
-            repoDir,
-            'origin resolution failed',
-          )
-        )
-          .split('\n')
-          .map((value) => value.trim())
-          .filter((value) => value.length > 0);
-      } catch (e) {
-        if (e instanceof CommandFailure && e.exitCode === 1) return [];
-        throw e;
-      }
-    },
-  };
+  return createOriginConfigReader((args) =>
+    run('git', args, repoDir, 'origin resolution failed'),
+  );
 }
 
 export async function resolveGitHubRepository(
