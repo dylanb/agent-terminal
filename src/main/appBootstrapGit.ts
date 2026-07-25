@@ -173,6 +173,8 @@ export function createRealAppBootstrapGit(
     return { kind: 'detached', value: oid };
   };
   const restoreCheckout = async (checkout: Checkout): Promise<void> => {
+    const injectedFailure = faults.restoreCheckoutResult?.();
+    if (injectedFailure) throw injectedFailure;
     if (checkout.kind === 'branch') {
       await git(['switch', '--', checkout.value], 'previous branch restoration failed');
       return;

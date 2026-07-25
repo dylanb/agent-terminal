@@ -683,6 +683,24 @@ describe('createRealAppBootstrapGit — owned remote-ref compensation', () => {
     expect(runGit(repo, ['rev-parse', '--abbrev-ref', 'HEAD'])).toBe(branch);
   });
 
+  // The other arm of the same repair: when the restore ITSELF fails, the operator is on a detached HEAD
+  // with the remote half already destroyed. That is the worst state this port produces, so the message
+  // has to name it rather than report only that the wipe failed.
+  it('reports the detached HEAD when the restore itself fails', async () => {
+    const port = createRealAppBootstrapGit(repo, {
+      restoreCheckoutResult: () => new Error('restore refused'),
+    });
+    const main = runGit(remote, ['rev-parse', 'refs/heads/main']);
+    runGit(remote, ['update-ref', `refs/heads/${branch}`, main]);
+    runGit(repo, ['checkout', '-q', '-b', branch, 'main']);
+    const state = await port.branchState(branch);
+    writeFileSync(join(repo, '.git', 'refs', 'heads', `${branch}.lock`), '');
+
+    await expect(port.deleteBranch(branch, state)).rejects.toThrow(
+      /HEAD is detached and the previous checkout could not be restored/i,
+    );
+  });
+
   // Either lease refusing must leave BOTH halves intact: a wipe that destroys the origin branch and then
   // refuses the local one strands the operator in a state no UI action reaches (§27.10).
   it('refuses a moved local branch without destroying the remote half first', async () => {

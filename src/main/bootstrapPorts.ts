@@ -36,6 +36,7 @@ export interface AppBootstrapGitFaults {
   checkoutResult?: () => Error | null;
   startCommitResult?: () => Error | null;
   pushResult?: () => Error | null;
+  restoreCheckoutResult?: () => Error | null;
 }
 
 export type OwnedPrLookup =
