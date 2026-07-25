@@ -880,9 +880,10 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
 
     await flow.terminate('/repo'); // a background change repaints the strip under the operator
     fire();
-    await vi.waitFor(() =>
-      expect(deps.state.mock.calls.length).toBeGreaterThanOrEqual(2),
-    );
+    // Wait on the REPAINT, not on the state() call: refresh() invokes state synchronously, so a
+    // call-count predicate is satisfied before render() has run and the assertion below would be
+    // trivially true. The control's label only flips once the children have been replaced.
+    await vi.waitFor(() => expect(control()!.textContent).toBe('Start'));
 
     expect(document.activeElement).toBe(outside);
     outside.remove();
@@ -908,12 +909,9 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
 
     await flow.terminate('/repo'); // the step rolls back underneath the operator
     fire();
-    await vi.waitFor(() =>
-      expect(deps.state.mock.calls.length).toBeGreaterThanOrEqual(2),
-    );
+    await vi.waitFor(() => expect(control()!.textContent).toBe('Start'));
 
-    expect(document.activeElement).not.toBe(document.body);
-    expect(host.contains(document.activeElement)).toBe(true);
+    expect(document.activeElement).toBe(control());
   });
 
   it('maps an arbitrary per-LoopDef status onto one of three tones (await/work/settle)', async () => {
