@@ -87,10 +87,6 @@ export function createRealAppBootstrapGit(
       }
     },
   };
-  const originUrl = async (push: boolean): Promise<string> => {
-    const urls = await originUrls(originConfig, push);
-    return urls[urls.length - 1] ?? '';
-  };
   const disabledHooksPath = join(
     tmpdir(),
     `agent-terminal-disabled-hooks-${randomUUID()}`,
@@ -149,11 +145,19 @@ export function createRealAppBootstrapGit(
       throw new Error('repository identity mismatch');
     }
   };
-  const assertSafeOrigin = async (push: boolean): Promise<void> => {
+  // One read, graded and used: a check over its own read of config leaves a window in which the value
+  // the operation reaches is not the value the allow-list approved.
+  // TODO(dylanb): the destination is still config at operation time rather than the pushUrl/fetchUrl
+  // resolveGitHubRepository already validated against the pinned identity. Binding it there would make
+  // every fetch/push/ref-delete — including the offline rollback path — require a live `gh repo view`,
+  // and would refuse the non-GitHub remotes the port supports today. That is a design decision, not a
+  // local fix: it narrows this port to GitHub-only.
+  const approvedOriginUrl = async (push: boolean): Promise<string> => {
     const urls = await originUrls(originConfig, push);
     if (urls.length === 0 || urls.some((url) => !isApprovedGitRemote(url))) {
       throw new Error('unsafe origin transport configuration');
     }
+    return urls[urls.length - 1] ?? '';
   };
   const currentCheckout = async (): Promise<Checkout> => {
     const injectedFailure = faults.currentCheckoutResult?.();
@@ -246,9 +250,9 @@ export function createRealAppBootstrapGit(
         if (e instanceof CommandFailure && e.exitCode === 1) localOid = null;
         else throw e;
       }
-      await assertSafeOrigin(false);
+      const probeUrl = await approvedOriginUrl(false);
       const remoteOid = await remoteOp('remote branch probe failed', async (r) =>
-        r.readRef(await originUrl(false), `refs/heads/${branch}`));
+        r.readRef(probeUrl, `refs/heads/${branch}`));
       return { localOid, remoteOid };
     },
     // The remote goes first: it is the outward-facing half and the only one a server can refuse, so a
@@ -257,9 +261,9 @@ export function createRealAppBootstrapGit(
       await assertSafeRepository();
       const remoteOid = state.remoteOid;
       if (remoteOid !== null) {
-        await assertSafeOrigin(true);
+        const wipeUrl = await approvedOriginUrl(true);
         await remoteOp('remote branch wipe failed', async (r) =>
-          r.deleteRef(await originUrl(true), `refs/heads/${branch}`, remoteOid));
+          r.deleteRef(wipeUrl, `refs/heads/${branch}`, remoteOid));
       }
       const localOid = state.localOid;
       if (localOid !== null) {
@@ -317,10 +321,9 @@ export function createRealAppBootstrapGit(
       const remoteOwnership = pushed.get(branch);
       let unresolvedRemote: string | null = null;
       if (ownedOid !== null && remoteOwnership !== undefined) {
-        await assertSafeOrigin(false);
-        await assertSafeOrigin(true);
+        const rollbackUrl = await approvedOriginUrl(true);
         const remoteOid = await remoteOp('remote branch rollback failed', async (r) =>
-          r.readRef(await originUrl(true), `refs/heads/${branch}`));
+          r.readRef(rollbackUrl, `refs/heads/${branch}`));
         if (remoteOid !== null) {
           if (remoteOwnership === 'ambiguous') {
             unresolvedRemote =
@@ -330,7 +333,7 @@ export function createRealAppBootstrapGit(
               'remote branch rollback refused: branch changed after bootstrap creation';
           } else {
             await remoteOp('remote branch rollback failed', async (r) =>
-              r.deleteRef(await originUrl(true), `refs/heads/${branch}`, ownedOid));
+              r.deleteRef(rollbackUrl, `refs/heads/${branch}`, ownedOid));
           }
         }
       }
@@ -359,7 +362,7 @@ export function createRealAppBootstrapGit(
     },
     createBranchFromBase: async (branch, base) => {
       await assertSafeRepository();
-      await assertSafeOrigin(false);
+      const baseUrl = await approvedOriginUrl(false);
       const restore = await currentCheckout();
       await git(
         ['check-ref-format', '--branch', base],
@@ -368,7 +371,7 @@ export function createRealAppBootstrapGit(
       // The isolated fetch deposits the base commit in this repo's shared object store and hands back its
       // id, so no temporary ref is written into the real repository and none needs cleaning up.
       const fetchedBase = await remoteOp('base fetch failed', async (r) =>
-        r.fetchRef(await originUrl(false), `refs/heads/${base}`));
+        r.fetchRef(baseUrl, `refs/heads/${base}`));
       const baseOid = (await git(
         ['rev-parse', '--verify', `${fetchedBase}^{commit}`],
         'base commit resolution failed',
@@ -476,7 +479,7 @@ export function createRealAppBootstrapGit(
     },
     pushBranchUpstream: async (branch, ownedOid) => {
       await assertSafeRepository();
-      await assertSafeOrigin(true);
+      const pushUrl = await approvedOriginUrl(true);
       const state = created.get(branch);
       if (state === undefined || state.expectedLocalOid !== ownedOid) {
         throw new Error('branch push refused: bootstrap ownership changed');
@@ -490,7 +493,7 @@ export function createRealAppBootstrapGit(
       }
       try {
         await remoteOp('branch push failed', async (r) =>
-          r.createRef(await originUrl(true), ownedOid, `refs/heads/${branch}`));
+          r.createRef(pushUrl, ownedOid, `refs/heads/${branch}`));
         const injectedFailure = faults.pushResult?.();
         if (injectedFailure) throw injectedFailure;
         pushed.set(branch, 'confirmed');
