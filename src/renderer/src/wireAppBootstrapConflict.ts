@@ -23,19 +23,20 @@ export function wireAppBootstrapConflict(
     const { repository, branch, localOid, remoteOid, pullRequests } = target;
     const resources: string[] = [];
     if (localOid !== null) {
-      resources.push(`local branch ${branch} at ${localOid}`);
+      resources.push(`Delete local branch ${branch} (${localOid})`);
     }
     if (remoteOid !== null) {
-      resources.push(`origin branch ${branch} at ${remoteOid}`);
+      resources.push(`Delete origin branch ${branch} (${remoteOid})`);
     }
     resources.push(
       ...pullRequests.map(
-        (pullRequest) => `pull request ${repository}#${pullRequest}`,
+        (pullRequest) => `Close pull request ${repository}#${pullRequest}`,
       ),
     );
     deps.confirm({
       title: 'Wipe existing resources?',
-      message: `Wiping will delete or close exactly: ${resources.join(', ')}. Wipe and retry?`,
+      message: `This will destroy ${resources.length} ${resources.length === 1 ? 'resource' : 'resources'}. It cannot be undone.`,
+      resources,
       confirmLabel: 'Wipe and retry',
       role: 'alertdialog',
       onConfirm: () => deps.resolve(repoKey, step, true, target),

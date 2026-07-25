@@ -547,6 +547,8 @@ button:hover { border-color:var(--dim); }
 .flow-modal .mfoot { flex:none; }
 .flow-modal h3 { font-family:"Fraunces",serif; font-weight:500; font-size:19px; margin:0 0 4px; }
 .flow-modal .ph { font-size:12.5px; color:var(--dim); margin:0 0 16px; overflow-wrap:anywhere; }
+.flow-modal .cd-resources { margin:0 0 16px; padding:0 0 0 18px; font-size:12.5px; color:var(--dim); overflow-wrap:anywhere; }
+.flow-modal .cd-resources li { margin:0 0 4px; }
 /* §27.9/AC6 — the polish stand-down notice in the docked loop panel. A distinct callout surface (a signal wash
    + accent edge) so a sighted user sees the loop has stood down without reading the text (WCAG 1.4.1/1.3.1); its
    --text foreground on that wash clears 4.5:1 (WCAG 1.4.3). Lives in .lbody, so it carries its own paint (the

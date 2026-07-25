@@ -8,6 +8,9 @@ export interface ConfirmDialogOptions {
   title: string;
   message: string;
   confirmLabel: string;
+  /** Discrete items the action acts on, rendered as a list so the set carries a count and each item is
+   *  its own navigable node (WCAG 1.3.1); `message` stays the short lead the dialog is described by. */
+  resources?: string[];
   onConfirm: () => void;
   restoreFocusTo?: HTMLElement | null;
   /** WAI-ARIA APG / UI-STANDARDS §5.2: `alertdialog` when the app raised this without the operator
@@ -68,6 +71,16 @@ export function createConfirmDialog(host: HTMLElement, opts?: { onFocusLost?: ()
         ph.id = describedById;
         ph.textContent = opts.message;
         body.append(ph);
+        if (opts.resources !== undefined && opts.resources.length > 0) {
+          const list = doc.createElement('ul');
+          list.className = 'cd-resources';
+          for (const resource of opts.resources) {
+            const item = doc.createElement('li');
+            item.textContent = resource;
+            list.append(item);
+          }
+          body.append(list);
+        }
         card.append(h3, body);
 
         const foot = doc.createElement('div');
