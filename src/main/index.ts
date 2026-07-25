@@ -37,6 +37,7 @@ import {
   isValidFlowSetTitle,
   isValidFlowGateDecision,
   isValidFlowResolveBootstrapConflict,
+  isValidFlowResolveAppBootstrapConflict,
   isValidFlowAppRouteOut,
   isValidFlowAppGateDecision,
   isValidFlowAppRequestChanges,
@@ -1079,7 +1080,11 @@ async function createWindow(): Promise<void> {
   };
   appBootstrapCoordinator = createAppLoopBootstrapCoordinator({
     run: async (repoDir, request) => {
-      pickupInFlight = { repoKey: repoDir, issue: request.issue, wipe: false };
+      pickupInFlight = {
+        repoKey: repoDir,
+        issue: request.issue,
+        wipe: request.confirmedWipe !== undefined,
+      };
       pushFlowChanged();
       try {
         return await appBootstrapSession(repoDir).run(request);
@@ -1141,6 +1146,13 @@ async function createWindow(): Promise<void> {
         repoKey: repoDir,
         step: stepId,
         reason,
+      }),
+    emitConflict: ({ repoDir, stepId, ...conflict }) =>
+      send(CH.flowOnAppBootstrapConflict, {
+        sessionId: SESSION_ID,
+        repoKey: repoDir,
+        step: stepId,
+        ...conflict,
       }),
     audit: (repoDir, kind, stepId, detail) =>
       audit.recordCommand(
@@ -1526,6 +1538,13 @@ async function createWindow(): Promise<void> {
       // §26.9 — the operator's wipe/cancel answer to a bootstrap conflict.
       [CH.flowResolveBootstrapConflict]: (_e, m) => {
         if (isValidFlowResolveBootstrapConflict(m)) resolveBootstrapConflict(m.repoKey, m.wipe);
+      },
+      // §27.10 — the same answer for an app-loop pickup. The step is named in the payload rather than
+      // re-derived here, so an answer cannot be applied to a step the operator was never shown.
+      [CH.flowResolveAppBootstrapConflict]: (_e, m) => {
+        if (isValidFlowResolveAppBootstrapConflict(m)) {
+          appBootstrapCoordinator?.resolve(m.repoKey, m.step, m.wipe);
+        }
       },
       // Clipboard is an OS resource owned by main (§7.7); the sandboxed preload can't reach it.
       [CH.clipboardWrite]: (_e, m) => {

@@ -73,7 +73,7 @@ describe('createRealAppBootstrapGit — owned remote-ref compensation', () => {
     runGit(repo, ['remote', 'set-url', 'origin', join(root, 'missing.git')]);
     const port = createRealAppBootstrapGit(repo);
 
-    await expect(port.branchExists('plan-loop/issue-78')).rejects.toThrow(/remote branch probe failed/i);
+    await expect(port.branchState('plan-loop/issue-78')).rejects.toThrow(/remote branch probe failed/i);
   });
 
   it('rejects command-capable repository-local Git configuration before it can execute', async () => {
@@ -86,7 +86,7 @@ describe('createRealAppBootstrapGit — owned remote-ref compensation', () => {
     runGit(repo, ['remote', 'set-url', 'origin', 'ssh://example.invalid/repo.git']);
     const port = createRealAppBootstrapGit(repo);
 
-    await expect(port.branchExists(branch)).rejects.toThrow(
+    await expect(port.branchState(branch)).rejects.toThrow(
       /unsafe repository-local git configuration/i,
     );
 
@@ -99,7 +99,7 @@ describe('createRealAppBootstrapGit — owned remote-ref compensation', () => {
     runGit(repo, ['config', 'core.worktree', redirectedTree]);
     const port = createRealAppBootstrapGit(repo);
 
-    await expect(port.branchExists(branch)).rejects.toThrow(
+    await expect(port.branchState(branch)).rejects.toThrow(
       /unsafe repository-local git configuration/i,
     );
   });
@@ -111,7 +111,7 @@ describe('createRealAppBootstrapGit — owned remote-ref compensation', () => {
     process.env.GIT_WORK_TREE = redirectedTree;
     try {
       const port = createRealAppBootstrapGit(repo);
-      await expect(port.branchExists(branch)).rejects.toThrow(
+      await expect(port.branchState(branch)).rejects.toThrow(
         /repository identity mismatch/i,
       );
     } finally {
@@ -127,7 +127,7 @@ describe('createRealAppBootstrapGit — owned remote-ref compensation', () => {
     runGit(repo, ['config', 'remote.origin.uploadpack', 'git-upload-pack']);
     const port = createRealAppBootstrapGit(repo);
 
-    await expect(port.branchExists(branch)).rejects.toThrow(
+    await expect(port.branchState(branch)).rejects.toThrow(
       /unsafe repository-local git configuration/i,
     );
   });
@@ -192,7 +192,7 @@ describe('createRealAppBootstrapGit — owned remote-ref compensation', () => {
     process.env.GIT_CONFIG_GLOBAL = inheritedConfig;
     try {
       const port = createRealAppBootstrapGit(repo);
-      expect(await port.branchExists(branch)).toBe(false);
+      expect((await port.branchState(branch)).remoteOid).toBe(null);
       await port.createBranchFromBase(branch, 'main');
       const ownedOid = await port.commitEmptyStart(
         '[skip ci] start work on #78',
@@ -244,7 +244,7 @@ describe('createRealAppBootstrapGit — owned remote-ref compensation', () => {
 
   it('requires the remote ref to remain absent when the initial push lands', async () => {
     const port = createRealAppBootstrapGit(repo);
-    expect(await port.branchExists(branch)).toBe(false);
+    expect((await port.branchState(branch)).remoteOid).toBe(null);
     await port.createBranchFromBase(branch, 'main');
     const ownedOid = await port.commitEmptyStart('[skip ci] start work on #78');
 
@@ -527,6 +527,63 @@ describe('createRealAppBootstrapGit — owned remote-ref compensation', () => {
     await expect(
       port.createBranchFromBase('plan-loop/issue-78', taintedBase),
     ).rejects.toThrow(/^base fetch failed(?: \(exit \d+\))?$/);
+  });
+
+  it('reports both sides of a conflicting branch by object id', async () => {
+    const port = createRealAppBootstrapGit(repo);
+    expect(await port.branchState(branch)).toEqual({ localOid: null, remoteOid: null });
+
+    const main = runGit(remote, ['rev-parse', 'refs/heads/main']);
+    runGit(remote, ['update-ref', `refs/heads/${branch}`, main]);
+    runGit(repo, ['branch', branch, 'main']);
+    const localOid = runGit(repo, ['rev-parse', `refs/heads/${branch}`]);
+
+    expect(await port.branchState(branch)).toEqual({ localOid, remoteOid: main });
+  });
+
+  it('deletes exactly the branch objects named by the caller', async () => {
+    const port = createRealAppBootstrapGit(repo);
+    const main = runGit(remote, ['rev-parse', 'refs/heads/main']);
+    runGit(remote, ['update-ref', `refs/heads/${branch}`, main]);
+    runGit(repo, ['branch', branch, 'main']);
+
+    await port.deleteBranch(branch, await port.branchState(branch));
+
+    expect(hasRef(repo, `refs/heads/${branch}`)).toBe(false);
+    expect(hasRef(remote, `refs/heads/${branch}`)).toBe(false);
+    expect(hasRef(remote, 'refs/heads/main')).toBe(true);
+  });
+
+  // The operator confirms a wipe against the resources they were shown; anything that moves between the
+  // confirmation and the delete is a resource they never authorized destroying (§27.10).
+  it('refuses to delete a branch that moved after the caller read its identity', async () => {
+    const port = createRealAppBootstrapGit(repo);
+    const main = runGit(remote, ['rev-parse', 'refs/heads/main']);
+    runGit(remote, ['update-ref', `refs/heads/${branch}`, main]);
+    runGit(repo, ['branch', branch, 'main']);
+    const state = await port.branchState(branch);
+
+    const seed = join(root, 'seed');
+    runGit(seed, ['commit', '--allow-empty', '-m', 'moved']);
+    runGit(seed, ['push', '--force', 'origin', `HEAD:refs/heads/${branch}`]);
+    const movedOid = runGit(remote, ['rev-parse', `refs/heads/${branch}`]);
+
+    await expect(port.deleteBranch(branch, state)).rejects.toThrow(/remote branch wipe failed/i);
+    expect(runGit(remote, ['rev-parse', `refs/heads/${branch}`])).toBe(movedOid);
+  });
+
+  it('refuses to delete a local branch that moved after the caller read its identity', async () => {
+    const port = createRealAppBootstrapGit(repo);
+    runGit(repo, ['branch', branch, 'main']);
+    const state = await port.branchState(branch);
+
+    runGit(repo, ['checkout', branch]);
+    runGit(repo, ['commit', '--allow-empty', '-m', 'moved']);
+    const movedOid = runGit(repo, ['rev-parse', `refs/heads/${branch}`]);
+    runGit(repo, ['checkout', 'main']);
+
+    await expect(port.deleteBranch(branch, state)).rejects.toThrow(/local branch wipe failed/i);
+    expect(runGit(repo, ['rev-parse', `refs/heads/${branch}`])).toBe(movedOid);
   });
 });
 

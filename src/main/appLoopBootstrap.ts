@@ -6,17 +6,24 @@ import {
   AmbiguousBootstrapOperationError,
   OwnedBootstrapBranchError,
   UnresolvedRemoteBootstrapBranchError,
+  type AppBootstrapConflicts,
   type AppBootstrapGit,
   type AppBootstrapGitHub,
 } from './bootstrapPorts';
-import type { LoopDefV2Origin, PickupContractV2, PickupExecutionV2 } from './loopDefV2';
+import type { LoopDefV2Origin, PickupContractV2 } from './loopDefV2';
 import { errMsg } from './errno';
 import type { AppBootstrapAuditKind } from '../shared/audit';
+import {
+  hasAppBootstrapConflict,
+  sameAppBootstrapConflictTarget,
+  type AppBootstrapConflictTarget,
+} from '../shared/appBootstrap';
 import type { FlowRefs } from '../shared/ipc';
 
 export interface AppLoopBootstrapDeps {
   git: AppBootstrapGit;
   github: AppBootstrapGitHub;
+  conflicts: AppBootstrapConflicts;
   prepareBootstrap(identity: Omit<AppLoopBootstrap, 'pr'>): void;
   writeBootstrap(identity: AppLoopBootstrap): void;
   clearBootstrap(): void;
@@ -25,16 +32,16 @@ export interface AppLoopBootstrapDeps {
 export interface AppLoopBootstrapRequest {
   issue: number;
   spec: AppLoopBootstrapSpec;
+  confirmedWipe?: AppBootstrapConflictTarget;
 }
 
-export type AppLoopBootstrapSpec = { origin: LoopDefV2Origin } & PickupExecutionV2;
+export type AppLoopBootstrapSpec = { origin: LoopDefV2Origin } & PickupContractV2;
 
 export function toAppLoopBootstrapSpec(
   origin: LoopDefV2Origin,
   pickup: PickupContractV2,
 ): AppLoopBootstrapSpec {
-  const { wipe: _wipe, ...execution } = pickup;
-  return { origin, ...execution };
+  return { origin, ...pickup };
 }
 
 export type AppBootstrapPrOwnership =
@@ -51,12 +58,19 @@ export interface AppLoopBootstrapOwnership {
 
 export type AppLoopBootstrapResult =
   | { ok: true; identity: AppLoopBootstrap; ownership: AppLoopBootstrapOwnership }
+  | { ok: false; conflict: AppBootstrapConflictTarget }
   | {
       ok: false;
       error: string;
       requiresAttention?: true;
       recovery?: AppLoopBootstrapOwnership;
     };
+
+export function isAppBootstrapConflictResult(
+  result: AppLoopBootstrapResult,
+): result is { ok: false; conflict: AppBootstrapConflictTarget } {
+  return !result.ok && 'conflict' in result;
+}
 
 export function resolveAppGateRefs(
   flowRefs: FlowRefs | undefined,
@@ -172,6 +186,19 @@ export async function runAppLoopBootstrap(
   }
   if (!Number.isSafeInteger(req.issue) || req.issue <= 0) return fail('pickup requires a positive GitHub issue number');
   if (req.spec.initialStatus.trim().length === 0) return fail('pickup requires a non-blank initial status');
+  const branch = req.spec.branchTemplate.replaceAll('{issue}', String(req.issue));
+  if (!SAFE_BRANCH.test(branch)) return fail(`unsafe branch name from branch_template: ${branch}`);
+  const confirmedWipe = req.confirmedWipe;
+  // The policy that authorizes the deletion is re-read here, at the destructive operation, rather than
+  // trusted from the prompt that produced this confirmation (§27.10).
+  if (confirmedWipe !== undefined) {
+    if (req.spec.wipe.mode !== 'wipe-and-retry') {
+      return fail('pickup has no wipe policy authorizing branch deletion');
+    }
+    if (confirmedWipe.branch !== branch) {
+      return fail(`wipe confirmation names a different branch: ${confirmedWipe.branch}`);
+    }
+  }
   let createdBranch: string | null = null;
   let createdBase: string | null = null;
   let ownedOid: string | null = null;
@@ -182,9 +209,15 @@ export async function runAppLoopBootstrap(
     if (!(await deps.git.isCleanTree())) return fail('working tree is not clean');
     const base = await deps.git.resolveBaseBranch();
     if (!base) return fail('could not resolve base branch');
-    const branch = req.spec.branchTemplate.replaceAll('{issue}', String(req.issue));
-    if (!SAFE_BRANCH.test(branch)) return fail(`unsafe branch name from branch_template: ${branch}`);
-    if (await deps.git.branchExists(branch)) {
+    const conflict = await deps.conflicts.inspect(branch);
+    if (confirmedWipe !== undefined) {
+      if (!sameAppBootstrapConflictTarget(conflict, confirmedWipe)) {
+        if (hasAppBootstrapConflict(conflict)) return { ok: false, conflict };
+        return fail(`conflicting resources changed for branch ${branch}`);
+      }
+      await deps.conflicts.wipe(confirmedWipe);
+    } else if (hasAppBootstrapConflict(conflict)) {
+      if (req.spec.wipe.mode === 'wipe-and-retry') return { ok: false, conflict };
       return fail(`branch ${branch} already exists`);
     }
 
@@ -301,7 +334,7 @@ export function createAppLoopBootstrapSession(
         };
       }
       const result = await runAppLoopBootstrap(deps, request);
-      if (!result.ok && result.recovery !== undefined) {
+      if (!result.ok && !isAppBootstrapConflictResult(result) && result.recovery !== undefined) {
         pendingRecovery = {
           ownership: result.recovery,
           clearBootstrapAfterRecovery: false,
@@ -370,18 +403,30 @@ export interface AppLoopBootstrapCoordinatorDeps {
     entry: AppLoopEntry,
   ): AppLoopEnterResult;
   emitError(error: { repoDir: string; stepId: string; reason: string }): void;
+  emitConflict(
+    conflict: { repoDir: string; stepId: string } & AppBootstrapConflictTarget,
+  ): void;
   audit(repoDir: string, kind: AppBootstrapAuditKind, stepId: string, detail?: string): void;
 }
 
 export interface AppLoopBootstrapCoordinator {
   enter(job: AppLoopBootstrapJob): void;
+  resolve(repoDir: string, stepId: string, wipe: boolean): void;
 }
 
 export function createAppLoopBootstrapCoordinator(
   deps: AppLoopBootstrapCoordinatorDeps,
 ): AppLoopBootstrapCoordinator {
   let inFlight: { token: symbol; job: AppLoopBootstrapJob } | null = null;
-  const pending = new Map<string, AppLoopBootstrapJob>();
+  const pending = new Map<
+    string,
+    { job: AppLoopBootstrapJob; confirmedWipe?: AppBootstrapConflictTarget }
+  >();
+  const held = new Map<
+    string,
+    { job: AppLoopBootstrapJob; target: AppBootstrapConflictTarget }
+  >();
+  const heldKey = (repoDir: string, stepId: string): string => `${repoDir}\0${stepId}`;
   const enterWork = (job: AppLoopBootstrapJob): AppLoopEnterResult =>
     deps.enterWork(job.repoDir, job.loopName, job.stepId, job.entry);
   const audit = (job: AppLoopBootstrapJob, kind: AppBootstrapAuditKind, detail?: string): void => {
@@ -393,6 +438,14 @@ export function createAppLoopBootstrapCoordinator(
   const emitError = (job: AppLoopBootstrapJob, reason: string): void => {
     try {
       deps.emitError({ repoDir: job.repoDir, stepId: job.stepId, reason });
+    } catch {}
+  };
+  const emitConflict = (
+    job: AppLoopBootstrapJob,
+    target: AppBootstrapConflictTarget,
+  ): void => {
+    try {
+      deps.emitConflict({ repoDir: job.repoDir, stepId: job.stepId, ...target });
     } catch {}
   };
   const acquire = (job: AppLoopBootstrapJob): symbol => {
@@ -479,7 +532,7 @@ export function createAppLoopBootstrapCoordinator(
           `Bootstrap cleanup needs attention after step ${job.stepId} was no longer current: ${errMsg(e)}`,
         );
       }
-    } else if (result.requiresAttention) {
+    } else if (!isAppBootstrapConflictResult(result) && result.requiresAttention) {
       emitError(job, `Bootstrap cleanup needs attention after step ${job.stepId} was no longer current: ${result.error}`);
     }
   };
@@ -510,8 +563,14 @@ export function createAppLoopBootstrapCoordinator(
     }
   };
 
-  let dispatch: (job: AppLoopBootstrapJob) => void;
-  const start = (job: AppLoopBootstrapJob): void => {
+  let dispatchJob: (
+    job: AppLoopBootstrapJob,
+    confirmedWipe?: AppBootstrapConflictTarget,
+  ) => void;
+  const start = (
+    job: AppLoopBootstrapJob,
+    confirmedWipe?: AppBootstrapConflictTarget,
+  ): void => {
     const bootstrap = job.bootstrap;
     if (bootstrap === null) {
       enterFastPath(job);
@@ -537,7 +596,7 @@ export function createAppLoopBootstrapCoordinator(
         if (nextEntry.done) return;
         const [repoDir, next] = nextEntry.value;
         pending.delete(repoDir);
-        dispatch(next);
+        dispatchJob(next.job, next.confirmedWipe);
       }
     };
     const resolve = async (result: AppLoopBootstrapResult): Promise<void> => {
@@ -557,7 +616,7 @@ export function createAppLoopBootstrapCoordinator(
             } catch (e) {
               reason = `${reason}; bootstrap cleanup failed: ${errMsg(e)}`;
             }
-          } else if (result.requiresAttention) {
+          } else if (!isAppBootstrapConflictResult(result) && result.requiresAttention) {
             reason = `${reason}; bootstrap cleanup needs attention: ${result.error}`;
           }
           rollbackJob(job, reason);
@@ -596,6 +655,14 @@ export function createAppLoopBootstrapCoordinator(
           audit(job, 'success', result.identity.branch);
           return;
         }
+        // Nothing destructive has happened yet: the step stays put and the operator decides. Releasing
+        // the in-flight slot below is what keeps another repo from queueing behind an unanswered dialog.
+        if (isAppBootstrapConflictResult(result)) {
+          held.set(heldKey(job.repoDir, job.stepId), { job, target: result.conflict });
+          audit(job, 'conflict', result.conflict.branch);
+          emitConflict(job, result.conflict);
+          return;
+        }
         audit(job, 'failure', result.error);
         rollbackJob(job, result.error);
       } catch (e) {
@@ -615,7 +682,11 @@ export function createAppLoopBootstrapCoordinator(
               ok: false,
               error: 'pickup requires a resolved GitHub ticket input',
             })
-          : deps.run(job.repoDir, { issue: job.issue, spec: bootstrap });
+          : deps.run(job.repoDir, {
+              issue: job.issue,
+              spec: bootstrap,
+              ...(confirmedWipe === undefined ? {} : { confirmedWipe }),
+            });
     } catch (e) {
       operation = Promise.resolve({ ok: false, error: errMsg(e) });
     }
@@ -625,13 +696,13 @@ export function createAppLoopBootstrapCoordinator(
     );
   };
 
-  dispatch = (job) => {
+  dispatchJob = (job, confirmedWipe) => {
     if (inFlight !== null) {
       if (
         inFlight.job.repoDir !== job.repoDir ||
         inFlight.job.entryToken !== job.entryToken
       ) {
-        pending.set(job.repoDir, job);
+        pending.set(job.repoDir, { job, confirmedWipe });
       }
       return;
     }
@@ -648,14 +719,50 @@ export function createAppLoopBootstrapCoordinator(
       enterFastPath(job);
       return;
     }
-    if (job.issue !== null && deps.hasBootstrapForJob(job)) {
+    if (confirmedWipe === undefined && job.issue !== null && deps.hasBootstrapForJob(job)) {
       enterFastPath(job);
       return;
     }
-    start(job);
+    start(job, confirmedWipe);
+  };
+
+  const declineWipe = (job: AppLoopBootstrapJob): void => {
+    try {
+      if (!deps.rollbackStep(job)) {
+        audit(job, 'stale');
+        return;
+      }
+      audit(job, 'rollback', 'operator declined branch wipe');
+    } catch (e) {
+      const reason = `could not roll back step ${job.stepId} after a declined wipe: ${errMsg(e)}`;
+      audit(job, 'rollback', reason);
+      emitError(job, reason);
+    }
   };
 
   return {
-    enter: dispatch,
+    enter: (job) => dispatchJob(job),
+    resolve(repoDir, stepId, wipe) {
+      const key = heldKey(repoDir, stepId);
+      const conflict = held.get(key);
+      if (conflict === undefined) return;
+      held.delete(key);
+      const status = currentStatus(conflict.job);
+      if (status.kind === 'failed') {
+        rollbackUnverifiableJob(conflict.job, status.reason);
+        return;
+      }
+      if (status.kind === 'stale') {
+        audit(conflict.job, 'stale');
+        return;
+      }
+      if (wipe) {
+        audit(conflict.job, 'wipe', conflict.target.branch);
+        dispatchJob(conflict.job, conflict.target);
+        return;
+      }
+      audit(conflict.job, 'decline', conflict.target.branch);
+      declineWipe(conflict.job);
+    },
   };
 }

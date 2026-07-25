@@ -92,6 +92,9 @@ export function createRealAppBootstrapGitHub(repoDir: string): AppBootstrapGitHu
       if (number === null) {
         throw new AmbiguousBootstrapOperationError('draft PR creation outcome was not recognized');
       }
+      // TODO(dylanb): the printed URL's repository is not checked against the resolved origin, so a `gh`
+      // that returns another repository's PR URL yields a number this app then labels and marks ready.
+      // Closing it means resolving the repository here and treating a mismatch as an ambiguous outcome.
       return number;
     },
     findOwnedOpenPr: async ({ base, head, marker }) => {

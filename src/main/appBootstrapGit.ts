@@ -11,7 +11,6 @@ import {
   UnresolvedRemoteBootstrapBranchError,
   type AppBootstrapGit,
   type AppBootstrapGitFaults,
-  type BootstrapBranchWiper,
 } from './bootstrapPorts';
 
 
@@ -42,7 +41,7 @@ function isApprovedGitRemote(url: string): boolean {
 export function createRealAppBootstrapGit(
   repoDir: string,
   faults: AppBootstrapGitFaults = {},
-): AppBootstrapGit & BootstrapBranchWiper {
+): AppBootstrapGit {
   type Checkout = { kind: 'branch'; value: string } | { kind: 'detached'; value: string };
   interface CreatedBranch {
     restore: Checkout;
@@ -161,12 +160,6 @@ export function createRealAppBootstrapGit(
       throw new Error('unsafe origin transport configuration');
     }
   };
-  const bestEffortGit = async (args: string[], failure: string): Promise<void> => {
-    try {
-      await git(args, failure);
-    } catch {
-    }
-  };
   const currentCheckout = async (): Promise<Checkout> => {
     const injectedFailure = faults.currentCheckoutResult?.();
     if (injectedFailure) throw injectedFailure;
@@ -248,23 +241,50 @@ export function createRealAppBootstrapGit(
         return null;
       }
     },
-    branchExists: async (branch) => {
+    branchState: async (branch) => {
       await assertSafeRepository();
-      const local = await git(['branch', '--list', branch], 'local branch probe failed');
-      if (local.trim().length > 0) return true;
+      let localOid: string | null;
+      try {
+        await git(
+          ['show-ref', '--verify', '--quiet', `refs/heads/${branch}`],
+          'local branch probe failed',
+        );
+        localOid = (
+          await git(
+            ['rev-parse', '--verify', `refs/heads/${branch}`],
+            'local branch probe failed',
+          )
+        ).trim();
+      } catch (e) {
+        if (e instanceof CommandFailure && e.exitCode === 1) localOid = null;
+        else throw e;
+      }
       await assertSafeOrigin(false);
-      return (await remoteOp('remote branch probe failed', async (r) =>
-        r.readRef(await originUrl(false), `refs/heads/${branch}`))) !== null;
+      const remoteOid = await remoteOp('remote branch probe failed', async (r) =>
+        r.readRef(await originUrl(false), `refs/heads/${branch}`));
+      return { localOid, remoteOid };
     },
-    wipeConflictingBranch: async (branch) => {
+    // The remote goes first: it is the outward-facing half and the only one a server can refuse, so a
+    // stale lease aborts the wipe with nothing yet destroyed on either side (§27.10).
+    deleteBranch: async (branch, state) => {
       await assertSafeRepository();
-      await assertSafeOrigin(true);
-      await bestEffortGit(['checkout', '--detach'], 'branch detach failed');
-      await bestEffortGit(['branch', '-D', branch], 'local branch wipe failed');
-      await bestEffortGit(
-        ['push', '--receive-pack=git-receive-pack', 'origin', '--delete', branch],
-        'remote branch wipe failed',
-      );
+      const remoteOid = state.remoteOid;
+      if (remoteOid !== null) {
+        await assertSafeOrigin(true);
+        await remoteOp('remote branch wipe failed', async (r) =>
+          r.deleteRef(await originUrl(true), `refs/heads/${branch}`, remoteOid));
+      }
+      const localOid = state.localOid;
+      if (localOid !== null) {
+        const checkout = await currentCheckout();
+        if (checkout.kind === 'branch' && checkout.value === branch) {
+          await git(['checkout', '--detach', localOid], 'local branch wipe failed');
+        }
+        await git(
+          ['update-ref', '-d', `refs/heads/${branch}`, localOid],
+          'local branch wipe failed',
+        );
+      }
     },
     rollbackCreatedBranch: async (branch, ownedOid) => {
       await assertSafeRepository();

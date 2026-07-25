@@ -1729,6 +1729,9 @@ function seedFakeGhGit(prefix: string): { binDir: string; logFile: string } {
     // branch --list prints the queried branch when FAKE_GIT_BRANCH_EXISTS is set → a pickup conflict (§26.9).
     'if [ "$1" = "branch" ] && [ "$2" = "--list" ]; then local_branch=$(cat "$FAKE_GHGIT_LOG.local-branch" 2>/dev/null || true); if [ -n "$FAKE_GIT_BRANCH_EXISTS" ] || [ "$local_branch" = "$3" ]; then echo "  $3"; fi; exit 0; fi\n' +
     'if [ "$1" = "remote" ] && [ "$2" = "get-url" ]; then echo "https://github.com/fake/repo.git"; exit 0; fi\n' +
+    // show-ref --verify is the local half of the §27.10 conflict probe: exit 1 (not 128) when the ref is
+    // absent, which is what the port distinguishes "no local branch" from "the probe itself failed" by.
+    'if [ "$1" = "show-ref" ]; then ref=${!#}; local_branch=$(cat "$FAKE_GHGIT_LOG.local-branch" 2>/dev/null || true); if [ "$local_branch" = "${ref#refs/heads/}" ]; then exit 0; fi; exit 1; fi\n' +
     'if [ "$1" = "symbolic-ref" ]; then cat "$FAKE_GHGIT_LOG.current-branch" 2>/dev/null || echo main; exit 0; fi\n' +
     'if [ "$1" = "rev-parse" ] && [ "$2" = "--show-toplevel" ]; then pwd -P; exit 0; fi\n' +
     'if [ "$1" = "config" ] && [ "$2" = "--get" ] && [ "$3" = "remote.origin.url" ]; then echo "https://github.com/fake/repo.git"; exit 0; fi\n' +
@@ -4208,6 +4211,77 @@ test('entering a pickup-bearing §27 def bootstraps out-of-band into app-owned s
   for (const dir of [repo, home, config, binDir]) rmSync(dir, { recursive: true, force: true });
 });
 
+// §27.10 confirm-first wipe — the pickup target already exists (local branch, origin branch, and an open
+// same-repo PR). The wipe is destructive and outward-facing, so the app names the exact resources and
+// waits: nothing is deleted or closed until the operator confirms.
+test('a §27 pickup onto existing resources (on_conflict: wipe-and-retry) confirms first, then wipes exactly those and bootstraps', { tag: '@ownapp' }, async () => {
+  const repo = seedAppBootstrapFlowRepo('agent-term-e2e-v2-wipe-');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-v2-wipe-home-'));
+  const config = seedOperatorPlanLoopConfig('agent-term-e2e-v2-wipe-config-', (yaml) =>
+    withPickup(
+      yaml,
+      'pickup:\n' +
+        '  initial_status: planning\n' +
+        '  branch_template: plan-loop/issue-{issue}\n' +
+        '  on_conflict: wipe-and-retry\n',
+    ),
+  );
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-v2-wipe-bin-');
+  seedFakeAgentV2(binDir, { stepId: 'plan', artifactRel: APP_ARTIFACT_REL, work: 'complete', review: 'full' });
+  // The conflicting resources the operator will be asked about: a local branch, the same branch on
+  // origin, and open PR 321 (which the fake `gh pr list` reports while FAKE_GIT_BRANCH_EXISTS is set).
+  writeFileSync(`${logFile}.local-branch`, 'plan-loop/issue-176\n');
+  writeFileSync(`${logFile}.remote-branch`, 'plan-loop/issue-176\n');
+  app = await electron.launch({
+    args: ['out/main/index.js'],
+    env: {
+      ...process.env,
+      APP_SHELL: 'bash',
+      HOME: home,
+      APP_SUBMIT_DELAY_MS: '100',
+      APP_TURN_TIMEOUT_MS: '60000',
+      CLAUDE_CONFIG_DIR: config,
+      PATH: `${binDir}:${process.env.PATH}`,
+      FAKE_GHGIT_LOG: logFile,
+      FAKE_GIT_BRANCH_EXISTS: '1',
+    },
+  });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await typeCommand(`cd "${repo}"`);
+  await typeCommand('fake-agent');
+  await flowControl().click();
+  await flowControl().click();
+  await expect(inputModal()).toBeVisible({ timeout: 10_000 });
+  await inputModal().locator('.field input').fill('176');
+  await inputModal().locator('.confirm').click();
+
+  // Ask first, naming every resource the wipe would destroy — and nothing destroyed yet.
+  const conflict = page.locator('#flow-confirm-host .flow-modal');
+  await expect(conflict).toBeVisible({ timeout: 20_000 });
+  await expect(conflict).toContainText('plan-loop/issue-176');
+  await expect(conflict).toContainText('#321');
+  expect(existsSync(`${logFile}.pr-321-closed`)).toBe(false);
+  expect(readGhLog(logFile)).not.toContain(':refs/heads/plan-loop/issue-176');
+  expect(readIf(join(repo, '.agent-terminal', 'loop', 'bootstrap.yaml'))).toBe('');
+
+  await conflict.locator('.confirm').click();
+
+  // Confirmed: the open PR is closed, the origin branch is deleted under an exact lease naming the OID
+  // the operator was shown, and the bootstrap then completes normally.
+  await expect.poll(() => existsSync(`${logFile}.pr-321-closed`), { timeout: 20_000 }).toBe(true);
+  expect(readGhLog(logFile)).toContain(
+    '--force-with-lease=refs/heads/plan-loop/issue-176:1111111111111111111111111111111111111111',
+  );
+  const bootstrapState = join(repo, '.agent-terminal', 'loop', 'bootstrap.yaml');
+  await expect.poll(() => readIf(bootstrapState), { timeout: 20_000 }).toContain('pr: 4242');
+  expect(readIf(bootstrapState)).toContain('branch: plan-loop/issue-176');
+
+  await app.close();
+  for (const dir of [repo, home, config, binDir]) rmSync(dir, { recursive: true, force: true });
+});
+
 test('a failed §27 pickup rolls back its named step with typed inputs preserved and a blocking route out (ST2 AC4/AC7)', { tag: '@ownapp' }, async () => {
   const repo = seedAppBootstrapFlowRepo('agent-term-e2e-v2-bootstrap-fail-');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-v2-bootstrap-fail-home-'));
@@ -4267,17 +4341,21 @@ test('a failed §27 pickup rolls back its named step with typed inputs preserved
   await errorDialog.locator('.dismiss').click();
   await expect(flowControl()).toHaveText('Advance', { timeout: 10_000 });
   await flowControl().click();
+  // `issue: 176` lands with the bootstrap INTENT, which is written before the branch is created — so it
+  // marks the start of the git work below, not its completion. Poll to the last command of the creation
+  // sequence (fetch → update-ref → checkout) before reading the log, then assert against one snapshot.
   await expect.poll(() => readIf(join(repo, '.agent-terminal', 'loop', 'bootstrap.yaml')), { timeout: 15_000 }).toContain('issue: 176');
-  expect(
-    readGhLog(logFile).match(/^git status --porcelain$/gm),
-  ).toHaveLength(2);
-  expect(readGhLog(logFile)).toMatch(
+  await expect
+    .poll(() => readGhLog(logFile), { timeout: 15_000 })
+    .toContain('git checkout plan-loop/issue-176');
+  const bootstrapLog = readGhLog(logFile);
+  expect(bootstrapLog.match(/^git status --porcelain$/gm)).toHaveLength(2);
+  expect(bootstrapLog).toMatch(
     /git fetch --no-tags --no-recurse-submodules -- https:\/\/github\.com\/fake\/repo\.git refs\/heads\/main/,
   );
-  expect(readGhLog(logFile)).toContain(
+  expect(bootstrapLog).toContain(
     'git update-ref --create-reflog -m agent-terminal-bootstrap:',
   );
-  expect(readGhLog(logFile)).toContain('git checkout plan-loop/issue-176');
 
   await app.close();
   for (const dir of [repo, home, binDir]) rmSync(dir, { recursive: true, force: true });
@@ -4446,7 +4524,9 @@ test('a stale flow input answer is inert at the main-process receiver (ST2 AC7)'
   );
 
   await expect(inputModal()).toBeVisible();
-  expect(readIf(appFlowState(repo))).not.toContain('999');
+  // Match 999 as a recorded VALUE, not anywhere in the file: `started_at` is epoch millis, so a bare
+  // substring check fails for every run whose clock happens to contain the digits.
+  expect(readIf(appFlowState(repo))).not.toMatch(/:\s*"?999"?\s*$/m);
   const calls = readGhLog(logFile).slice(staleInputLogStart);
   expect(calls).not.toContain('git status --porcelain');
   expect(calls).not.toContain('gh ');

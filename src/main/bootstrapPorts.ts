@@ -1,3 +1,4 @@
+import type { AppBootstrapConflictTarget } from '../shared/appBootstrap';
 
 export interface BootstrapIssue {
   title: string;
@@ -13,10 +14,16 @@ export interface BootstrapGit {
   pushBranchUpstream(branch: string): Promise<void>;
 }
 
+export interface AppBootstrapBranchState {
+  localOid: string | null;
+  remoteOid: string | null;
+}
+
 export interface AppBootstrapGit {
   isCleanTree(): Promise<boolean>;
   resolveBaseBranch(): Promise<string | null>;
-  branchExists(branch: string): Promise<boolean>;
+  branchState(branch: string): Promise<AppBootstrapBranchState>;
+  deleteBranch(branch: string, state: AppBootstrapBranchState): Promise<void>;
   createBranchFromBase(branch: string, base: string): Promise<void>;
   commitEmptyStart(message: string): Promise<string>;
   pushBranchUpstream(branch: string, ownedOid: string): Promise<string>;
@@ -38,6 +45,11 @@ export type OwnedPrLookup =
 
 export interface BootstrapBranchWiper {
   wipeConflictingBranch(branch: string): Promise<void>;
+}
+
+export interface AppBootstrapConflicts {
+  inspect(branch: string): Promise<AppBootstrapConflictTarget>;
+  wipe(target: AppBootstrapConflictTarget): Promise<void>;
 }
 
 export interface BootstrapGitHub {
