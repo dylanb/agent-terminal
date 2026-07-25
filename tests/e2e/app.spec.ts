@@ -4284,6 +4284,85 @@ test('a §27 pickup onto existing resources (on_conflict: wipe-and-retry) confir
   for (const dir of [repo, home, config, binDir]) rmSync(dir, { recursive: true, force: true });
 });
 
+// AC5's other half: declining destroys nothing and reverts the step. `declineWipe` is the one rollback
+// path that deliberately does NOT emit an error, so the absence of the blocking dialog is observable
+// only full-stack.
+test('a §27 pickup conflict declined destroys nothing and reverts the step', { tag: '@ownapp' }, async () => {
+  const repo = seedAppBootstrapFlowRepo('agent-term-e2e-v2-decline-');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-v2-decline-home-'));
+  const config = seedOperatorPlanLoopConfig('agent-term-e2e-v2-decline-config-', (yaml) =>
+    withPickup(
+      yaml,
+      'pickup:\n' +
+        '  initial_status: planning\n' +
+        '  branch_template: plan-loop/issue-{issue}\n' +
+        '  on_conflict: wipe-and-retry\n',
+    ),
+  );
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-v2-decline-bin-');
+  seedFakeAgentV2(binDir, { stepId: 'plan', artifactRel: APP_ARTIFACT_REL, work: 'complete', review: 'full' });
+  writeFileSync(`${logFile}.local-branch`, 'plan-loop/issue-176\n');
+  writeFileSync(`${logFile}.remote-branch`, 'plan-loop/issue-176\n');
+  app = await electron.launch({
+    args: ['out/main/index.js'],
+    env: {
+      ...process.env,
+      APP_SHELL: 'bash',
+      HOME: home,
+      APP_SUBMIT_DELAY_MS: '100',
+      APP_TURN_TIMEOUT_MS: '60000',
+      CLAUDE_CONFIG_DIR: config,
+      PATH: `${binDir}:${process.env.PATH}`,
+      FAKE_GHGIT_LOG: logFile,
+      FAKE_GIT_BRANCH_EXISTS: '1',
+    },
+  });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await typeCommand(`cd "${repo}"`);
+  await typeCommand('fake-agent');
+  await flowControl().click();
+  await flowControl().click();
+  await expect(inputModal()).toBeVisible({ timeout: 10_000 });
+  await inputModal().locator('.field input').fill('176');
+  await inputModal().locator('.confirm').click();
+
+  const conflict = page.locator('#flow-confirm-host .flow-modal');
+  await expect(conflict).toBeVisible({ timeout: 20_000 });
+  await expect(conflict).toContainText('plan-loop/issue-176');
+
+  await conflict.locator('.cancel').click();
+  await expect(conflict).toBeHidden({ timeout: 10_000 });
+  // Wait for the decline to be RECORDED before asserting absence: the wipe is asynchronous, so
+  // asserting straight after the click passes whether the answer was honoured or ignored.
+  await expect
+    .poll(
+      () =>
+        auditRunFiles(home, repo).length === 1 &&
+        readAuditRun(home, repo, auditRunFiles(home, repo)[0]).events.some(
+          (e) => JSON.stringify(e).includes('decline'),
+        ),
+      { timeout: 20_000 },
+    )
+    .toBe(true);
+
+  // Nothing destroyed: the PR was never closed, no ref delete was pushed, and both refs still stand.
+  expect(existsSync(`${logFile}.pr-321-closed`)).toBe(false);
+  expect(readGhLog(logFile)).not.toContain(':refs/heads/plan-loop/issue-176');
+  expect(readIf(`${logFile}.local-branch`).trim()).toBe('plan-loop/issue-176');
+  expect(readIf(`${logFile}.remote-branch`).trim()).toBe('plan-loop/issue-176');
+  expect(readIf(join(repo, '.agent-terminal', 'loop', 'bootstrap.yaml'))).toBe('');
+
+  // Reverted to the prior step with its typed input intact, and NO blocking error dialog — a decline is
+  // an answer, not a failure.
+  await expect.poll(() => readIf(appFlowState(repo)), { timeout: 15_000 }).toContain('ticket: ');
+  await expect(page.locator('#flow-error-host .flow-modal')).toBeHidden();
+
+  await app.close();
+  for (const dir of [repo, home, config, binDir]) rmSync(dir, { recursive: true, force: true });
+});
+
 test('a failed §27 pickup rolls back its named step with typed inputs preserved and a blocking route out (ST2 AC4/AC7)', { tag: '@ownapp' }, async () => {
   const repo = seedAppBootstrapFlowRepo('agent-term-e2e-v2-bootstrap-fail-');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-v2-bootstrap-fail-home-'));
