@@ -856,6 +856,34 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     });
   });
 
+  // WCAG 2.4.3. A repaint that detaches the focused control must re-anchor focus, whatever path the
+  // repaint arrives by — declining the §27.10 wipe rolls the step back through a plain state push, not
+  // through a transition response, and left the keyboard user on <body>.
+  it('re-anchors focus on a control when any repaint detaches the focused one', async () => {
+    let fire: () => void = () => {};
+    const flow = fakeFlow('in_progress');
+    const deps = {
+      ...flow,
+      onStateChanged: vi.fn((cb: () => void) => {
+        fire = cb;
+        return () => {};
+      }),
+    };
+    createFlowStrip(host, deps).onRepoChanged('/repo');
+    await vi.waitFor(() => expect(host.querySelector('.flow-control')).not.toBeNull());
+    host.querySelector<HTMLElement>('.flow-control')!.focus();
+    expect(host.contains(document.activeElement)).toBe(true);
+
+    await flow.terminate('/repo'); // the step rolls back underneath the operator
+    fire();
+    await vi.waitFor(() =>
+      expect(deps.state.mock.calls.length).toBeGreaterThanOrEqual(2),
+    );
+
+    expect(document.activeElement).not.toBe(document.body);
+    expect(host.contains(document.activeElement)).toBe(true);
+  });
+
   it('maps an arbitrary per-LoopDef status onto one of three tones (await/work/settle)', async () => {
     const make = (status: string) => ({
       state: vi.fn(

@@ -402,6 +402,13 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
       notice.textContent = state.notice;
       host.append(notice);
     }
+
+    // A repaint detaches whatever control the operator was on, dropping focus to <body>. Re-anchor it
+    // here rather than at one caller: the §27.10 decline rolls the step back through a plain state
+    // push, and any future path that repaints inherits this (WCAG 2.4.3).
+    if (!host.contains(doc.activeElement)) {
+      host.querySelector<HTMLElement>('.flow-control, .flow-undo, .flow-terminate')?.focus();
+    }
   }
 
   /** Hand a step-entry input prompt (§24.2.3 T3) to the composition root's modal via the contract
@@ -430,13 +437,6 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
    *  the modal. */
   function applyTransition(view: FlowStateView): void {
     render(view);
-    // The repaint detached the just-clicked control, dropping focus to <body>. Re-anchor it on a
-    // real control so the keyboard user keeps their place (WCAG 2.4.3) — including the Terminate →
-    // not_started case, which carries no prompt — and so a following modal restores focus there on
-    // close. render() already re-anchors the loop read-out, which leaves focus inside the host.
-    if (!host.contains(doc.activeElement)) {
-      host.querySelector<HTMLElement>('.flow-control, .flow-undo, .flow-terminate')?.focus();
-    }
     emitPrompt(view);
   }
 
