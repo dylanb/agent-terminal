@@ -210,12 +210,15 @@ describe('app command boundary', () => {
 });
 
 describe('app command environment neutralization', () => {
-  it('drops inherited GIT_CONFIG_* injection, which can rewrite any remote URL', async () => {
+  // Both halves of one policy: the value-injecting channels are dropped, the two vars that merely NAME
+  // the user's own config files are passed through — widening the scrub to all of GIT_CONFIG_* breaks
+  // every user with a non-default global config, and has shipped once already.
+  it('drops inherited GIT_CONFIG_* injection while preserving the user config files it names', async () => {
     const bin = mkdtempSync(join(tmpdir(), 'app-command-gitconfig-'));
     cleanup.push(bin);
     writeFileSync(
       join(bin, 'git'),
-      '#!/usr/bin/env bash\nprintf \'%s|%s|%s|%s\\n\' "${GIT_CONFIG_COUNT-unset}" "${GIT_CONFIG_KEY_0-unset}" "${GIT_CONFIG_VALUE_0-unset}" "${GIT_CONFIG_PARAMETERS-unset}"\n',
+      '#!/usr/bin/env bash\nprintf \'%s|%s|%s|%s|%s|%s\\n\' "${GIT_CONFIG_COUNT-unset}" "${GIT_CONFIG_KEY_0-unset}" "${GIT_CONFIG_VALUE_0-unset}" "${GIT_CONFIG_PARAMETERS-unset}" "${GIT_CONFIG_GLOBAL-unset}" "${GIT_CONFIG_SYSTEM-unset}"\n',
       { mode: 0o755 },
     );
     process.env.PATH = `${bin}:${originalPath ?? ''}`;
@@ -226,9 +229,11 @@ describe('app command environment neutralization', () => {
     // same url.*.insteadOf redirect the numbered pairs do.
     process.env.GIT_CONFIG_PARAMETERS =
       "'url.https://evil.example/.insteadOf'='https://github.com/'";
+    process.env.GIT_CONFIG_GLOBAL = '/home/operator/.gitconfig';
+    process.env.GIT_CONFIG_SYSTEM = '/etc/gitconfig';
 
     await expect(runAppCommand('git', [], bin)).resolves.toBe(
-      'unset|unset|unset|unset\n',
+      'unset|unset|unset|unset|/home/operator/.gitconfig|/etc/gitconfig\n',
     );
   });
 });

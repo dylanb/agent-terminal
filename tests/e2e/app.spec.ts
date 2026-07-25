@@ -4355,8 +4355,15 @@ test('a §27 pickup conflict declined destroys nothing and reverts the step', { 
   expect(readIf(join(repo, '.agent-terminal', 'loop', 'bootstrap.yaml'))).toBe('');
 
   // Reverted to the prior step with its typed input intact, and NO blocking error dialog — a decline is
-  // an answer, not a failure.
-  await expect.poll(() => readIf(appFlowState(repo)), { timeout: 15_000 }).toContain('ticket: ');
+  // an answer, not a failure. `ticket:` alone cannot fail here: provideInput persists it before the
+  // conflict is raised, so it is present on the honoured-wipe path too. The step moving back off `plan`
+  // is what distinguishes reverted from not-reverted.
+  await expect
+    .poll(() => readIf(appFlowState(repo)), { timeout: 15_000 })
+    .toContain('step: groom');
+  await expect(flowStation(1)).toHaveClass(/\bactive\b/, { timeout: 10_000 });
+  await expect(flowStation(2)).not.toHaveClass(/\bactive\b/);
+  expect(readIf(appFlowState(repo))).toContain("ticket: '176'");
   await expect(page.locator('#flow-error-host .flow-modal')).toBeHidden();
 
   await app.close();

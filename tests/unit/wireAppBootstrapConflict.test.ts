@@ -104,7 +104,7 @@ describe('wireAppBootstrapConflict (§27.10 — destructive answer keeps repo + 
     const named = (h.opts().resources ?? []).join('\n');
     expect(named).toContain('github.com/owner/repository#321');
     expect(named).not.toContain('local branch');
-    expect(h.opts().message).not.toContain('origin branch');
+    expect(named).not.toContain('origin branch');
   });
   // WCAG 1.3.1 — the resources are discrete data items whose boundaries exist only as commas in one
   // ~350-character utterance, so the set has no programmatically determinable count and no per-item
