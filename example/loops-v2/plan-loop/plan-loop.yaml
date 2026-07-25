@@ -34,13 +34,13 @@ pickup:
   initial_labels:
     - action: remove
       target: issue
-      label: ready
+      label: plan-loop/ready
     - action: add
       target: issue
-      label: in-progress
+      label: plan-loop/in-progress
     - action: add
       target: pr
-      label: plan-draft
+      label: plan-loop/plan-draft
   on_conflict: wipe-and-retry
 inputs:
   - id: groomed-ticket
