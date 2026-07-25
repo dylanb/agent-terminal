@@ -655,6 +655,24 @@ describe('createRealAppBootstrapGit — owned remote-ref compensation', () => {
     expect(runGit(repo, ['rev-parse', `refs/heads/${branch}`])).toBe(movedOid);
   });
 
+  // The local leg detaches HEAD before deleting the ref, so anything that fails BETWEEN the two leaves
+  // the operator on a detached HEAD they never asked for — with the remote half already destroyed and no
+  // UI action that restores either. A stale ref lock triggers it deterministically: rev-parse and
+  // `checkout --detach` do not touch refs/heads/<branch>.lock, and only `update-ref -d` takes it.
+  it('restores the checkout when the local wipe fails after detaching', async () => {
+    const port = createRealAppBootstrapGit(repo);
+    const main = runGit(remote, ['rev-parse', 'refs/heads/main']);
+    runGit(remote, ['update-ref', `refs/heads/${branch}`, main]);
+    runGit(repo, ['checkout', '-q', '-b', branch, 'main']);
+    const state = await port.branchState(branch);
+    writeFileSync(join(repo, '.git', 'refs', 'heads', `${branch}.lock`), '');
+
+    await expect(port.deleteBranch(branch, state)).rejects.toThrow(
+      /local branch wipe failed/i,
+    );
+    expect(runGit(repo, ['rev-parse', '--abbrev-ref', 'HEAD'])).toBe(branch);
+  });
+
   // Either lease refusing must leave BOTH halves intact: a wipe that destroys the origin branch and then
   // refuses the local one strands the operator in a state no UI action reaches (§27.10).
   it('refuses a moved local branch without destroying the remote half first', async () => {

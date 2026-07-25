@@ -271,13 +271,26 @@ export function createRealAppBootstrapGit(
       }
       if (localOid !== null) {
         const checkout = await currentCheckout();
-        if (checkout.kind === 'branch' && checkout.value === branch) {
+        const movedHead = checkout.kind === 'branch' && checkout.value === branch;
+        if (movedHead) {
           await git(['checkout', '--detach', localOid], 'local branch wipe failed');
         }
-        await git(
-          ['update-ref', '-d', `refs/heads/${branch}`, localOid],
-          'local branch wipe failed',
-        );
+        try {
+          await git(
+            ['update-ref', '-d', `refs/heads/${branch}`, localOid],
+            'local branch wipe failed',
+          );
+        } catch (e) {
+          if (!movedHead) throw e;
+          try {
+            await restoreCheckout(checkout);
+          } catch {
+            throw new Error(
+              'local branch wipe failed: HEAD is detached and the previous checkout could not be restored',
+            );
+          }
+          throw e;
+        }
       }
     },
     rollbackCreatedBranch: async (branch, ownedOid) => {
