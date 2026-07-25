@@ -8,8 +8,8 @@ export interface ConfirmDialogOptions {
   title: string;
   message: string;
   confirmLabel: string;
-  /** Discrete items the action acts on, rendered as a list so the set carries a count and each item is
-   *  its own navigable node (WCAG 1.3.1); `message` stays the short lead the dialog is described by. */
+  /** Discrete items the action acts on; each is its own navigable node in the dialog's accessible
+   *  description, so an irreversible confirmation is never announced as a bare count (WCAG 1.3.1). */
   resources?: string[];
   onConfirm: () => void;
   restoreFocusTo?: HTMLElement | null;
@@ -56,7 +56,8 @@ export function createConfirmDialog(host: HTMLElement, opts?: { onFocusLost?: ()
       if (pending) pending.onCancel?.();
       pending = opts;
       shell.render(({ doc, titleId, close, confirm: accept }) => {
-        const describedById = `${titleId}-msg`;
+        const messageId = `${titleId}-msg`;
+        let describedById = messageId;
         const card = doc.createElement('div');
         card.className = 'card';
         const h3 = doc.createElement('h3');
@@ -68,12 +69,14 @@ export function createConfirmDialog(host: HTMLElement, opts?: { onFocusLost?: ()
         const body = doc.createElement('div');
         const ph = doc.createElement('p');
         ph.className = 'ph';
-        ph.id = describedById;
+        ph.id = messageId;
         ph.textContent = opts.message;
         body.append(ph);
         if (opts.resources !== undefined && opts.resources.length > 0) {
           const list = doc.createElement('ul');
           list.className = 'cd-resources';
+          list.id = `${titleId}-res`;
+          describedById = `${messageId} ${list.id}`;
           for (const resource of opts.resources) {
             const item = doc.createElement('li');
             item.textContent = resource;
