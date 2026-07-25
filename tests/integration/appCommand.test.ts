@@ -154,7 +154,7 @@ describe('app command boundary', () => {
     ]);
 
     await expect(
-      createAppGitRemote(repo).readRef(remote, 'refs/heads/plan-loop/issue-78'),
+      createAppGitRemote(repo, []).readRef(remote, 'refs/heads/plan-loop/issue-78'),
     ).resolves.toBe(realOid);
   });
 
@@ -178,7 +178,7 @@ describe('app command boundary', () => {
     ]);
 
     await expect(
-      createAppGitRemote(repo).readRef(remote, 'refs/heads/plan-loop/issue-78'),
+      createAppGitRemote(repo, []).readRef(remote, 'refs/heads/plan-loop/issue-78'),
     ).resolves.toBeNull();
   });
 
@@ -212,7 +212,7 @@ describe('app command boundary', () => {
     ]);
 
     await expect(
-      createAppGitRemote(repo).deleteRef(
+      createAppGitRemote(repo, []).deleteRef(
         remote,
         'refs/heads/plan-loop/issue-78',
         expectedOid,

@@ -121,7 +121,7 @@ export interface AppGitRemote {
 
 export function createAppGitRemote(
   repoDir: string,
-  configArgs: readonly string[] = [],
+  configArgs: readonly string[],
 ): AppGitRemote {
   let layoutPromise:
     | Promise<{ objectDirectory: string; objectFormat: 'sha1' | 'sha256' }>

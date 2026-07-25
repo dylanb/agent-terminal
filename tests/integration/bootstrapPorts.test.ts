@@ -720,6 +720,34 @@ describe('createRealAppBootstrapGit — owned remote-ref compensation', () => {
     );
   });
 
+  // The isolated dir has no remotes, so deleting through it leaves the remote-tracking ref and the
+  // branch config that a delete-push to a named remote and `git branch -D` remove for free — and this
+  // port already compensates the PUSH direction by hand for the same reason. A wipe that leaves
+  // refs/remotes/origin/<branch> behind shows the operator a branch that no longer exists.
+  it('clears the tracking ref and branch config the wipe deleted the branch for', async () => {
+    const { port, pushedOid } = await createPushedOwnedBranch();
+    expect(hasRef(repo, `refs/remotes/origin/${branch}`)).toBe(true);
+    expect(runGit(repo, ['config', '--get', `branch.${branch}.remote`])).toBe(
+      'origin',
+    );
+
+    await port.deleteBranch(branch, {
+      localOid: pushedOid,
+      remoteOid: pushedOid,
+    });
+
+    expect(hasRef(repo, `refs/remotes/origin/${branch}`)).toBe(false);
+    // `git config --get` exits 1 for an unset key, which is what "the section is gone" looks like.
+    const trackedRemote = (): string => {
+      try {
+        return runGit(repo, ['config', '--get', `branch.${branch}.remote`]);
+      } catch {
+        return '';
+      }
+    };
+    expect(trackedRemote()).toBe('');
+  });
+
   // Either lease refusing must leave BOTH halves intact: a wipe that destroys the origin branch and then
   // refuses the local one strands the operator in a state no UI action reaches (§27.10).
   it('refuses a moved local branch without destroying the remote half first', async () => {

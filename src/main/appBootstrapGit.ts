@@ -104,10 +104,6 @@ export function createRealAppBootstrapGit(
     'protocol.https.allow=always',
     '-c',
     'protocol.ssh.allow=always',
-    '-c',
-    'remote.origin.uploadpack=git-upload-pack',
-    '-c',
-    'remote.origin.receivepack=git-receive-pack',
   ];
   const git = (args: string[], failure: string): Promise<string> =>
     run('git', [...protectedArgs, ...args], repoDir, failure);
@@ -178,6 +174,29 @@ export function createRealAppBootstrapGit(
       return;
     }
     await git(['checkout', '--detach', checkout.value], 'previous commit restoration failed');
+  };
+  // A delete-push to a NAMED remote drops refs/remotes/<remote>/<branch>, and `git branch -D` drops the
+  // branch.<name> section; deleting through the isolated dir does neither, so the caches outlive the
+  // branch. Cleanup only — it must never fail a wipe whose destructive half already landed.
+  const forgetRemoteTracking = async (branch: string): Promise<void> => {
+    try {
+      await git(
+        ['update-ref', '-d', `refs/remotes/origin/${branch}`],
+        'remote-tracking cleanup failed',
+      );
+    } catch {
+      /* best-effort */
+    }
+  };
+  const forgetBranchConfig = async (branch: string): Promise<void> => {
+    try {
+      await git(
+        ['config', '--remove-section', `branch.${branch}`],
+        'branch configuration cleanup failed',
+      );
+    } catch {
+      /* best-effort */
+    }
   };
   const reconcileStartCommit = async (
     branch: string,
@@ -274,6 +293,7 @@ export function createRealAppBootstrapGit(
         const wipeUrl = await approvedOriginUrl('push');
         await remoteOp('remote branch wipe failed', async (r) =>
           r.deleteRef(wipeUrl, `refs/heads/${branch}`, remoteOid));
+        await forgetRemoteTracking(branch);
       }
       if (localOid !== null) {
         const checkout = await currentCheckout();
@@ -297,6 +317,7 @@ export function createRealAppBootstrapGit(
           }
           throw e;
         }
+        await forgetBranchConfig(branch);
       }
     },
     rollbackCreatedBranch: async (branch, ownedOid) => {
