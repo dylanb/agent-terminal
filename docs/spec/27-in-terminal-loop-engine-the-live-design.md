@@ -149,7 +149,7 @@ flowchart TD
   CREATE -->|"ok"| P
   CREATE -->|"failed, wiped refs are not restored, closed PRs are not reopened,<br/>and a checkout on the wiped branch is left detached"| RB
   WIPE -->|"failed before anything was destroyed, checkout restored"| RB
-  WIPE -->|"failed after a delete or a PR close landed, wiped refs are not restored,<br/>closed PRs are not reopened, checkout restored"| RB
+  WIPE -->|"failed after a delete or a PR close landed, wiped refs are not restored,<br/>closed PRs are not reopened, and a checkout on a locally deleted branch is left detached"| RB
   WIPE -->|"failed and the checkout could not be restored,<br/>wiped refs are not restored and HEAD is left detached"| RB
   RBQ --> RETRY
   RB --> RETRY["approve / advance rolled-back step"]
