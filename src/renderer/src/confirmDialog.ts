@@ -1,6 +1,5 @@
 // Destructive confirmation dialog (#26) — a placement-agnostic blocking dialog (UI-STANDARDS §5),
-// NOT the §4 Alert live-region pattern. Composes createModalShell and supplies the todo-count
-// message + Cancel/Terminate actions.
+// NOT the §4 Alert live-region pattern.
 
 import { createModalShell } from './modalShell';
 
