@@ -41,7 +41,7 @@ export function createGitHubRepositorySource(
   };
 }
 
-const REPOSITORY_PART = /^[A-Za-z0-9_.-]+$/;
+const REPOSITORY_PART = /^[A-Za-z0-9_.][A-Za-z0-9_.-]*$/;
 const BRANCH_NAME = /^[A-Za-z0-9._/][A-Za-z0-9._/-]*$/;
 
 function repositoryFromRemote(

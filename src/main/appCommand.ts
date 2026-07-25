@@ -14,6 +14,15 @@ const GIT_REPOSITORY_ENV = [
   'GIT_ALTERNATE_OBJECT_DIRECTORIES',
   'GIT_NAMESPACE',
 ] as const;
+// Each names a program git executes to reach the remote, and each outranks the config key that would
+// otherwise pin it: GIT_SSH_COMMAND beats core.sshCommand even when the latter arrives as an explicit
+// `-c`, so the neutralizer in protectedArgs is inert while it is set.
+const GIT_TRANSPORT_ENV = [
+  'GIT_SSH_COMMAND',
+  'GIT_SSH',
+  'GIT_ASKPASS',
+  'GIT_PROXY_COMMAND',
+] as const;
 
 interface AppCommandOptions {
   stdin?: string;
@@ -26,6 +35,7 @@ export function commandEnvironment(
   const environment = { ...process.env };
   delete environment.GH_REPO;
   for (const key of GIT_REPOSITORY_ENV) delete environment[key];
+  for (const key of GIT_TRANSPORT_ENV) delete environment[key];
   // GIT_CONFIG_COUNT/KEY_n/VALUE_n and GIT_CONFIG_PARAMETERS inject configuration inline, with no file
   // the user ever chose — the latter is git's own command-line-precedence channel, the one `-c`
   // serializes into —

@@ -232,6 +232,26 @@ describe('GitHub repository identity', () => {
     );
   });
 
+  // The selector is the one value here that reaches `gh` as a POSITIONAL argument, so a leading hyphen
+  // anywhere it is built from turns repository-local config into `gh` flags (CWE-88). The sibling
+  // BRANCH_NAME grammar in this module already excludes a leading `-`; this one did not.
+  it('rejects an origin host that would reach gh as a flag', async () => {
+    const repo = mkdtempSync(join(tmpdir(), 'github-repository-dashhost-'));
+    const bin = mkdtempSync(join(tmpdir(), 'github-repository-dashhost-bin-'));
+    cleanup.push(repo, bin);
+    execFileSync('git', ['init'], { cwd: repo });
+    execFileSync(
+      'git',
+      ['remote', 'add', 'origin', 'git@-w.evil:owner/repository.git'],
+      { cwd: repo },
+    );
+    fakeGitHub(bin);
+
+    await expect(resolveGitHubRepository(repo)).rejects.toThrow(
+      /invalid origin repository/i,
+    );
+  });
+
   it('rejects an origin URL carrying embedded credentials', async () => {
     const repo = mkdtempSync(join(tmpdir(), 'github-repository-credentials-'));
     const bin = mkdtempSync(join(tmpdir(), 'github-repository-credentials-bin-'));

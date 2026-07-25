@@ -20,6 +20,10 @@ const gitConfigVars = [
   'GIT_CONFIG_PARAMETERS',
   'GIT_CONFIG_GLOBAL',
   'GIT_CONFIG_SYSTEM',
+  'GIT_SSH_COMMAND',
+  'GIT_SSH',
+  'GIT_ASKPASS',
+  'GIT_PROXY_COMMAND',
 ];
 const originalGitConfig = gitConfigVars.map((k) => [k, process.env[k]] as const);
 
@@ -234,6 +238,28 @@ describe('app command environment neutralization', () => {
 
     await expect(runAppCommand('git', [], bin)).resolves.toBe(
       'unset|unset|unset|unset|/home/operator/.gitconfig|/etc/gitconfig\n',
+    );
+  });
+
+  // GIT_SSH_COMMAND takes precedence over core.sshCommand INCLUDING an explicit `-c`, so while it is set
+  // the `-c core.sshCommand=ssh` neutralizer every bootstrap operation carries is inert and the ambient
+  // value is the program that speaks to the remote (CWE-15, CWE-78).
+  it('drops the transport commands that would override the ssh neutralizer', async () => {
+    const bin = mkdtempSync(join(tmpdir(), 'app-command-transport-'));
+    cleanup.push(bin);
+    writeFileSync(
+      join(bin, 'git'),
+      '#!/usr/bin/env bash\nprintf \'%s|%s|%s|%s\\n\' "${GIT_SSH_COMMAND-unset}" "${GIT_SSH-unset}" "${GIT_ASKPASS-unset}" "${GIT_PROXY_COMMAND-unset}"\n',
+      { mode: 0o755 },
+    );
+    process.env.PATH = `${bin}:${originalPath ?? ''}`;
+    process.env.GIT_SSH_COMMAND = 'sh -c "id > /tmp/pwned"';
+    process.env.GIT_SSH = '/tmp/evil-ssh';
+    process.env.GIT_ASKPASS = '/tmp/evil-askpass';
+    process.env.GIT_PROXY_COMMAND = '/tmp/evil-proxy';
+
+    await expect(runAppCommand('git', [], bin)).resolves.toBe(
+      'unset|unset|unset|unset\n',
     );
   });
 });
