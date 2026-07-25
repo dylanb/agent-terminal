@@ -356,7 +356,18 @@ describe('isolated remote operations and the operator object store', () => {
     );
     process.env.GIT_CONFIG_GLOBAL = globalConfig;
 
-    await createAppGitRemote(work).fetchRef(origin, 'refs/heads/main');
+    // The caller's own -c arguments arrive on the channel the fix must outrank: these ask for exactly
+    // the housekeeping the isolation forbids, so a reordering that let configArgs win destroys the repo.
+    await createAppGitRemote(work, [
+      '-c',
+      'gc.auto=1',
+      '-c',
+      'gc.autoDetach=false',
+      '-c',
+      'gc.pruneExpire=now',
+      '-c',
+      'maintenance.auto=true',
+    ]).fetchRef(origin, 'refs/heads/main');
 
     expect(
       execFileSync('git', ['cat-file', '-t', unpushed], {

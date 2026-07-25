@@ -63,9 +63,10 @@ export function createRealAppBootstrapGit(
   let activeCreatedBranch: string | null = null;
   const expectedRepoRoot = realpathSync(repoDir);
   // Every remote operation runs in a throwaway bare git dir sharing only this repo's object store, so
-  // repository-local configuration (notably url.*.insteadOf) cannot redirect a fetch, push or delete to
-  // a remote the operator never named. The isolated dir carries the same neutralizing -c arguments as the
-  // in-repo invocations, or inherited hooks and upload/receive-pack overrides would revive there.
+  // repository-local configuration cannot redirect a fetch, push or delete to a remote the operator
+  // never named. The isolated dir carries the same neutralizing -c arguments as the in-repo
+  // invocations, or inherited hooks would revive there; the pack programs are pinned on the argv
+  // instead, since these operations address the remote by URL and remote.origin.* would not bind.
   let remote: AppGitRemote;
   const remoteOp = async <T>(failure: string, op: (r: AppGitRemote) => Promise<T>): Promise<T> => {
     try {

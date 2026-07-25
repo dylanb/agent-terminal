@@ -223,6 +223,25 @@ describe('createRealAppBootstrapGit — owned remote-ref compensation', () => {
       'remote.origin.receivepack',
       receivePack,
     ]);
+    // The remote operations address the remote by URL, not by the name `origin`, so git resolves these
+    // keys as remote.<url>.* — pinning remote.origin.* neutralizes nothing on that path. Both spellings
+    // are planted so the test covers whichever addressing the port uses.
+    const originUrl = `file://${remote}`;
+    runGit(repo, ['config', 'remote.origin.url', originUrl]);
+    runGit(root, [
+      'config',
+      '--file',
+      inheritedConfig,
+      `remote.${originUrl}.uploadpack`,
+      uploadPack,
+    ]);
+    runGit(root, [
+      'config',
+      '--file',
+      inheritedConfig,
+      `remote.${originUrl}.receivepack`,
+      receivePack,
+    ]);
 
     const previousGlobalConfig = process.env.GIT_CONFIG_GLOBAL;
     process.env.GIT_CONFIG_GLOBAL = inheritedConfig;

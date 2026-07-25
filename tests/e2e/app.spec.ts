@@ -4457,8 +4457,10 @@ test('a failed §27 pickup rolls back its named step with typed inputs preserved
     .toContain('git checkout plan-loop/issue-176');
   const bootstrapLog = readGhLog(logFile);
   expect(bootstrapLog.match(/^git status --porcelain$/gm)).toHaveLength(2);
+  // The pack program is pinned on the argv, not via remote.origin.*: these operations address the
+  // remote by URL, so a `-c remote.origin.uploadpack` entry would bind to nothing.
   expect(bootstrapLog).toMatch(
-    /git fetch --no-tags --no-recurse-submodules -- https:\/\/github\.com\/fake\/repo\.git refs\/heads\/main/,
+    /git fetch --upload-pack=git-upload-pack --no-tags --no-recurse-submodules -- https:\/\/github\.com\/fake\/repo\.git refs\/heads\/main/,
   );
   expect(bootstrapLog).toContain(
     'git update-ref --create-reflog -m agent-terminal-bootstrap:',

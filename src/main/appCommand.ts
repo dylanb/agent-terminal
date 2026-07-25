@@ -188,8 +188,7 @@ export function createAppGitRemote(
         temporaryGitDir,
       );
       // This dir borrows the operator's object database and has none of its refs, so housekeeping here
-      // sees every object they own as unreachable and collects it. Last -c wins, so these sit after
-      // configArgs: disabling them is a requirement of the isolation, not a caller's choice.
+      // sees every object they own as unreachable and collects it.
       const noHousekeeping = ['-c', 'gc.auto=0', '-c', 'maintenance.auto=false'];
       const git = (args: string[]): Promise<string> =>
         executeAppCommand(
@@ -212,6 +211,7 @@ export function createAppGitRemote(
       isolated(async (git) => {
         await git([
           'fetch',
+          '--upload-pack=git-upload-pack',
           '--no-tags',
           '--no-recurse-submodules',
           '--',
@@ -225,7 +225,14 @@ export function createAppGitRemote(
       }),
     readRef: (url, ref) =>
       isolated(async (git) => {
-        const output = await git(['ls-remote', '--heads', '--', url, ref]);
+        const output = await git([
+          'ls-remote',
+          '--upload-pack=git-upload-pack',
+          '--heads',
+          '--',
+          url,
+          ref,
+        ]);
         const matches = output
           .split('\n')
           .map((line) => line.trim().split(/\s+/))
@@ -239,6 +246,7 @@ export function createAppGitRemote(
         const source = parseAppGitObjectId(oid, 'local ref');
         await git([
           'push',
+          '--receive-pack=git-receive-pack',
           `--force-with-lease=${ref}:`,
           '--',
           url,
@@ -253,6 +261,7 @@ export function createAppGitRemote(
         );
         await git([
           'push',
+          '--receive-pack=git-receive-pack',
           `--force-with-lease=${ref}:${expected}`,
           '--',
           url,
