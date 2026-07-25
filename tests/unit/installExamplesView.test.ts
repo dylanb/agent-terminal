@@ -346,7 +346,9 @@ describe('install examples view organism (§18.1/§23.4)', () => {
     await openConsent(['loops']);
     const box = consentBox('loops');
     const label = box.closest('label') as HTMLElement;
-    expect(label.textContent).toContain('Loop definitions');
+    // Both loop trees can conflict in one install, and this control authorizes overwriting one of
+    // them: the legacy §26 tree has to name itself as such, not as the unqualified "Loop definitions".
+    expect(label.textContent).toContain('Legacy loop definitions');
     expect(label.textContent).not.toContain('loops-file.md');
 
     const describedBy = box.getAttribute('aria-describedby');

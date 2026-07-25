@@ -399,10 +399,6 @@ export function appBootstrapAuditExit(kind: AppBootstrapAuditKind): number | nul
     case 'conflict':
     case 'stale':
       return null;
-    default: {
-      const unreachable: never = kind;
-      return unreachable;
-    }
   }
 }
 

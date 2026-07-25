@@ -28,7 +28,7 @@ export interface InstallExamples {
 const DESTINATION_LABEL: Record<InstallDestinationId, string> = {
   flow: 'Flow home',
   appLoops: 'App loop definitions',
-  loops: 'Loop definitions',
+  loops: 'Legacy loop definitions',
   skills: 'Claude Code skills',
   commands: 'Claude Code commands',
 };

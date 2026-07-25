@@ -321,9 +321,7 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
     // Carry focus across the rebuild if the keyboard user was on the Loop read-out, rather than
     // dropping it to <body> (WCAG 2.4.3).
     const keepLoopFocus = doc.activeElement instanceof HTMLElement && doc.activeElement.classList.contains('loopstat') && host.contains(doc.activeElement);
-    // Asked BEFORE the teardown: afterwards "focus is not in the host" cannot tell a control this
-    // repaint detached from a focus that was never here — a passive push repaints while the operator
-    // is in the terminal, and re-anchoring then would take the keyboard off them (WCAG 3.2.5).
+    // WCAG 3.2.5
     const hadFocus = host.contains(doc.activeElement);
     host.replaceChildren();
 
@@ -407,9 +405,7 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
       host.append(notice);
     }
 
-    // A repaint detaches whatever control the operator was on, dropping focus to <body>. Re-anchor it
-    // here rather than at one caller: the §27.10 decline rolls the step back through a plain state
-    // push, and any future path that repaints inherits this (WCAG 2.4.3).
+    // WCAG 2.4.3
     if (hadFocus && !host.contains(doc.activeElement)) {
       host.querySelector<HTMLElement>('.flow-control, .flow-undo, .flow-terminate')?.focus();
     }
@@ -441,9 +437,7 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
    *  the modal. */
   function applyTransition(view: FlowStateView): void {
     render(view);
-    // The operator acted, so this repaint detached the control they were standing on whatever
-    // activeElement now reads — including the Terminate → not_started case, which carries no prompt.
-    // render()'s own re-anchor cannot assume that: it also runs for passive pushes (WCAG 2.4.3).
+    // WCAG 2.4.3
     if (!host.contains(doc.activeElement)) {
       host.querySelector<HTMLElement>('.flow-control, .flow-undo, .flow-terminate')?.focus();
     }

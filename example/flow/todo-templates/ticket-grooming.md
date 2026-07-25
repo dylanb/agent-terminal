@@ -1,6 +1,6 @@
 # Ticket grooming
 
-Checklist instantiated when the `groom-ticket` step starts (§21.2). Each top-level list item
+Checklist instantiated when the `groom` step starts (§21.2). Each top-level list item
 below becomes one active todo; this heading and any prose are ignored by the instantiator.
 
 - Run `/groom-ticket <issue-number>` to groom the ticket

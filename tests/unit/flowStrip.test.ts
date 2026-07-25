@@ -892,7 +892,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
   // WCAG 2.4.3. A repaint that detaches the focused control must re-anchor focus, whatever path the
   // repaint arrives by — declining the §27.10 wipe rolls the step back through a plain state push, not
   // through a transition response, and left the keyboard user on <body>.
-  it('re-anchors focus on a control when any repaint detaches the focused one', async () => {
+  it('re-anchors focus when a repaint detaches a control the operator was on', async () => {
     let fire: () => void = () => {};
     const flow = fakeFlow('in_progress');
     const deps = {

@@ -35,27 +35,14 @@ function seedRepo(prefix: string): { repo: string; bin: string; remote: string }
 
 // The isolated remote dir cannot reach a real github.com from a test, so origin's fetch URL is rewritten
 // to a local bare repo through INHERITED config — the layer the port neutralizes named keys in but does
-// not forbid. `git remote get-url` (how the repository identity is read) applies that same rewrite, so
-// the identity must be resolved and memoized BEFORE the redirect is installed, or it resolves to a
-// file:// URL that is not a GitHub repository at all.
+// not forbid. The redirect goes in FIRST: identity is read with `git config --get-all`, which reports the
+// raw stored value (url.*.insteadOf is applied by the transport, not by a config read), so the warm-up
+// resolves the same identity either way — and warming up first would send a probe to the real origin.
 async function redirectOriginToLocal(
   prefix: string,
   remote: string,
   ports: ReturnType<typeof createRealAppBootstrapPorts>,
 ): Promise<void> {
-  // The warm-up cannot fully succeed (the probe reaches the real origin, and the fakes answer for one
-  // branch only), but it MUST get past origin-identity resolution — that is what memoizes the identity
-  // before the redirect below. Swallowing every error here let a resolution failure resolve the identity
-  // afterwards against a file:// URL, reproducing the very messages these tests assert on.
-  const warmUp = await ports.conflicts
-    .inspect('identity-warmup')
-    .then(
-      () => null,
-      (e: unknown) => (e instanceof Error ? e.message : String(e)),
-    );
-  expect(warmUp ?? '').not.toMatch(
-    /origin repository|invalid repository identity|invalid origin/i,
-  );
   const configDir = mkdtempSync(join(tmpdir(), `${prefix}-config-`));
   cleanup.push(configDir);
   const config = join(configDir, 'gitconfig');
@@ -67,6 +54,18 @@ async function redirectOriginToLocal(
     'https://github.com/owner/repository.git',
   ]);
   process.env.GIT_CONFIG_GLOBAL = config;
+  // The warm-up cannot fully succeed (the fakes answer for one branch only), but it MUST get past
+  // origin-identity resolution: swallowing every error here let a resolution failure surface later as
+  // the very messages these tests assert on.
+  const warmUp = await ports.conflicts
+    .inspect('identity-warmup')
+    .then(
+      () => null,
+      (e: unknown) => (e instanceof Error ? e.message : String(e)),
+    );
+  expect(warmUp ?? '').not.toMatch(
+    /origin repository|invalid repository identity|invalid origin/i,
+  );
 }
 
 describe('real app bootstrap conflict adapter (§27.10)', () => {
