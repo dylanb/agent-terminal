@@ -6,6 +6,7 @@ import { treeIsClean } from './gitTreeState';
 import { errMsg } from './errno';
 import { run, CommandFailure } from './appBootstrapCommand';
 import { createAppGitRemote, type AppGitRemote } from './appCommand';
+import { originUrls, type OriginConfigReader } from './originUrl';
 import {
   createGitHubRepositorySource,
   type GitHubRepositorySource,
@@ -68,34 +69,26 @@ export function createRealAppBootstrapGit(
       throw new CommandFailure(failure, e instanceof CommandFailure ? e.exitCode : undefined);
     }
   };
-  // Read from configuration, not `git remote get-url`: the latter applies url.*.insteadOf rewriting, so it
-  // reports one repository while the operation reaches another. Paired with the isolated git dir above,
-  // a repository-local rewrite can neither be read here nor applied there.
-  const configuredOrigin = async (key: 'url' | 'pushurl'): Promise<string[]> => {
-    try {
-      return (
-        await git(
-          ['config', '--get-all', `remote.origin.${key}`],
-          'origin resolution failed',
+  const originConfig: OriginConfigReader = {
+    values: async (key) => {
+      try {
+        return (
+          await git(
+            ['config', '--get-all', `remote.origin.${key}`],
+            'origin resolution failed',
+          )
         )
-      )
-        .split('\n')
-        .map((url) => url.trim())
-        .filter((url) => url.length > 0);
-    } catch (e) {
-      if (e instanceof CommandFailure && e.exitCode === 1) return [];
-      throw e;
-    }
-  };
-  const originUrls = async (push: boolean): Promise<string[]> => {
-    if (push) {
-      const pushUrls = await configuredOrigin('pushurl');
-      if (pushUrls.length > 0) return pushUrls;
-    }
-    return configuredOrigin('url');
+          .split('\n')
+          .map((url) => url.trim())
+          .filter((url) => url.length > 0);
+      } catch (e) {
+        if (e instanceof CommandFailure && e.exitCode === 1) return [];
+        throw e;
+      }
+    },
   };
   const originUrl = async (push: boolean): Promise<string> => {
-    const urls = await originUrls(push);
+    const urls = await originUrls(originConfig, push);
     return urls[urls.length - 1] ?? '';
   };
   const disabledHooksPath = join(
@@ -157,7 +150,7 @@ export function createRealAppBootstrapGit(
     }
   };
   const assertSafeOrigin = async (push: boolean): Promise<void> => {
-    const urls = await originUrls(push);
+    const urls = await originUrls(originConfig, push);
     if (urls.length === 0 || urls.some((url) => !isApprovedGitRemote(url))) {
       throw new Error('unsafe origin transport configuration');
     }
@@ -228,13 +221,12 @@ export function createRealAppBootstrapGit(
         return false;
       }
     },
+    // The reason a base cannot be resolved (unauthenticated gh, an origin that does not match GitHub)
+    // reaches the operator through the caller's error path; collapsing it to null reported every one of
+    // them as "could not resolve base branch".
     resolveBaseBranch: async () => {
-      try {
-        await assertSafeRepository();
-        return (await repositorySource.resolve()).defaultBranch;
-      } catch {
-        return null;
-      }
+      await assertSafeRepository();
+      return (await repositorySource.resolve()).defaultBranch;
     },
     branchState: async (branch) => {
       await assertSafeRepository();
@@ -271,6 +263,17 @@ export function createRealAppBootstrapGit(
       }
       const localOid = state.localOid;
       if (localOid !== null) {
+        const current = (
+          await git(
+            ['rev-parse', '--verify', `refs/heads/${branch}`],
+            'local branch wipe failed',
+          )
+        ).trim();
+        if (current !== localOid) {
+          throw new Error(
+            'local branch wipe failed: branch changed after the caller read its identity',
+          );
+        }
         const checkout = await currentCheckout();
         if (checkout.kind === 'branch' && checkout.value === branch) {
           await git(['checkout', '--detach', localOid], 'local branch wipe failed');

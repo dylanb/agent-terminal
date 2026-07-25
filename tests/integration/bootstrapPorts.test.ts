@@ -605,6 +605,25 @@ describe('createRealAppBootstrapGit — owned remote-ref compensation', () => {
     expect(runGit(repo, ['rev-parse', 'HEAD'])).toBe(state.localOid);
   });
 
+  // The stale-lease abort must destroy nothing on either side — including the operator's checkout. The
+  // detach runs before update-ref performs the lease check, so this is the combination that matters.
+  it('leaves the checkout alone when the branch it is on moved past the lease', async () => {
+    const port = createRealAppBootstrapGit(repo);
+    runGit(repo, ['checkout', '-b', branch, 'main']);
+    const state = await port.branchState(branch);
+    runGit(repo, ['commit', '--allow-empty', '-m', 'moved']);
+    const movedOid = runGit(repo, ['rev-parse', `refs/heads/${branch}`]);
+
+    await expect(port.deleteBranch(branch, state)).rejects.toThrow(
+      /local branch wipe failed/i,
+    );
+
+    expect(hasRef(repo, `refs/heads/${branch}`)).toBe(true);
+    expect(runGit(repo, ['rev-parse', `refs/heads/${branch}`])).toBe(movedOid);
+    expect(runGit(repo, ['rev-parse', '--abbrev-ref', 'HEAD'])).toBe(branch);
+    expect(runGit(repo, ['rev-parse', 'HEAD'])).toBe(movedOid);
+  });
+
   it('refuses to delete a local branch that moved after the caller read its identity', async () => {
     const port = createRealAppBootstrapGit(repo);
     runGit(repo, ['branch', branch, 'main']);

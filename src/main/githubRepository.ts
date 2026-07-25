@@ -1,5 +1,6 @@
 import { runAppCommand } from './appCommand';
 import { isRecord } from './yamlRecord';
+import { originUrls, type OriginConfigReader } from './originUrl';
 
 export interface GitHubRepositoryIdentity {
   selector: string;
@@ -129,37 +130,35 @@ export function matchesGitHubRepositoryUrl(
   }
 }
 
-// `git remote get-url` applies url.*.insteadOf rewriting; the bootstrap's remote operations hand the
-// raw config value to an isolated git dir that never loads that rewrite. Both sides read config here so
-// the repository this names is the repository those operations reach.
-async function configuredOriginUrls(
-  repoDir: string,
-  key: 'url' | 'pushurl',
-): Promise<string[]> {
-  try {
-    return (
-      await runAppCommand(
-        'git',
-        ['config', '--get-all', `remote.origin.${key}`],
-        repoDir,
-      )
-    )
-      .split('\n')
-      .filter((value) => value.trim().length > 0);
-  } catch {
-    return [];
-  }
+function originConfigReader(repoDir: string): OriginConfigReader {
+  return {
+    values: async (key) => {
+      try {
+        return (
+          await runAppCommand(
+            'git',
+            ['config', '--get-all', `remote.origin.${key}`],
+            repoDir,
+          )
+        )
+          .split('\n')
+          .map((value) => value.trim())
+          .filter((value) => value.length > 0);
+      } catch {
+        return [];
+      }
+    },
+  };
 }
 
 export async function resolveGitHubRepository(
   repoDir: string,
 ): Promise<ResolvedGitHubRepository> {
-  const fetchUrls = await configuredOriginUrls(repoDir, 'url');
+  const reader = originConfigReader(repoDir);
+  const fetchUrls = await originUrls(reader, false);
   const expected = repositoryFromRemote(fetchUrls[0] ?? '');
   if (expected === null) throw new Error('invalid origin repository');
-  const configuredPushUrls = await configuredOriginUrls(repoDir, 'pushurl');
-  const pushUrls =
-    configuredPushUrls.length === 0 ? fetchUrls : configuredPushUrls;
+  const pushUrls = await originUrls(reader, true);
   if (
     fetchUrls.length !== 1 ||
     pushUrls.length !== 1 ||

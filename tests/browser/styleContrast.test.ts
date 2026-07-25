@@ -507,6 +507,14 @@ describe('the exact bootstrap-wipe target reflows at 320px (WCAG 1.4.10)', () =>
           window.innerHeight + 1,
         );
         expect(confirm.getBoundingClientRect().top).toBeGreaterThanOrEqual(-1);
+        // The actions must paint ON the card, not escape its border box onto the scrim — a `.pill` is
+        // transparent, so ink outside `--card` has no determinate background (WCAG 1.4.3 / 1.4.11).
+        const card = host.querySelector('.flow-modal .card') as HTMLElement;
+        expect(confirm.getBoundingClientRect().bottom).toBeLessThanOrEqual(
+          card.getBoundingClientRect().bottom + 1,
+        );
+        modal.scrollTop = 0;
+        expect(card.getBoundingClientRect().top).toBeGreaterThanOrEqual(-1);
       } finally {
         dispose();
         dialog.dispose();

@@ -60,11 +60,15 @@ export function createConfirmDialog(host: HTMLElement, opts?: { onFocusLost?: ()
         h3.className = 'serif';
         h3.id = titleId;
         h3.textContent = opts.title;
+        // UI §5.7 — the message is unbounded (a wipe names every ref and PR it would destroy), so it is
+        // the box that scrolls; without the slots the footer paints outside the card onto the scrim.
+        const body = doc.createElement('div');
         const ph = doc.createElement('p');
         ph.className = 'ph';
         ph.id = describedById;
         ph.textContent = opts.message;
-        card.append(h3, ph);
+        body.append(ph);
+        card.append(h3, body);
 
         const foot = doc.createElement('div');
         foot.className = 'mfoot';
@@ -84,7 +88,14 @@ export function createConfirmDialog(host: HTMLElement, opts?: { onFocusLost?: ()
         foot.append(cancel, confirm);
         card.append(foot);
 
-        return { card, initialFocus: null, describedById, ...(opts.role ? { role: opts.role } : {}) };
+        return {
+          card,
+          initialFocus: null,
+          describedById,
+          grow: body,
+          scroll: body,
+          ...(opts.role ? { role: opts.role } : {}),
+        };
       }, opts.restoreFocusTo);
     },
     cancel() {

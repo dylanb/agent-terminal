@@ -34,7 +34,7 @@ export function wireAppBootstrapConflict(
       ),
     );
     deps.confirm({
-      title: 'Bootstrap resources already exist',
+      title: 'Wipe existing resources?',
       message: `Wiping will delete or close exactly: ${resources.join(', ')}. Wipe and retry?`,
       confirmLabel: 'Wipe and retry',
       role: 'alertdialog',
