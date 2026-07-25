@@ -7,11 +7,13 @@ export interface OriginConfigReader {
   values(key: 'url' | 'pushurl'): Promise<string[]>;
 }
 
+export type OriginDirection = 'fetch' | 'push';
+
 export async function originUrls(
   reader: OriginConfigReader,
-  push: boolean,
+  direction: OriginDirection,
 ): Promise<string[]> {
-  if (push) {
+  if (direction === 'push') {
     const pushUrls = await reader.values('pushurl');
     if (pushUrls.length > 0) return pushUrls;
   }

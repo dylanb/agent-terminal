@@ -99,6 +99,25 @@ describe('GitHub repository identity', () => {
     });
   });
 
+  // `git config --get-all` exits 1 for an unset key and non-1 for a real problem (unreadable or
+  // unparsable config). Collapsing both to "no values" reports a broken config as "there is no origin".
+  it('tells an unset origin apart from a config it could not read', async () => {
+    const repo = mkdtempSync(join(tmpdir(), 'github-repository-badconfig-'));
+    const bin = mkdtempSync(join(tmpdir(), 'github-repository-badconfig-bin-'));
+    cleanup.push(repo, bin);
+    execFileSync('git', ['init'], { cwd: repo });
+    writeFileSync(
+      join(bin, 'git'),
+      '#!/usr/bin/env bash\nif [ "$1" = "config" ]; then exit 3; fi\nexit 0\n',
+      { mode: 0o755 },
+    );
+    process.env.PATH = `${bin}:${originalPath ?? ''}`;
+
+    await expect(resolveGitHubRepository(repo)).rejects.toThrow(
+      /origin resolution failed/i,
+    );
+  });
+
   it('names a non-JSON repository lookup rather than leaking the parser error', async () => {
     const repo = mkdtempSync(join(tmpdir(), 'github-repository-nonjson-'));
     const bin = mkdtempSync(join(tmpdir(), 'github-repository-nonjson-bin-'));

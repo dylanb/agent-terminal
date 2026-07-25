@@ -6,7 +6,7 @@ import { treeIsClean } from './gitTreeState';
 import { errMsg } from './errno';
 import { run, CommandFailure } from './appBootstrapCommand';
 import { createAppGitRemote, type AppGitRemote } from './appCommand';
-import { originUrls, type OriginConfigReader } from './originUrl';
+import { originUrls, type OriginConfigReader, type OriginDirection } from './originUrl';
 import { isGitObjectId } from '../shared/appBootstrap';
 import {
   createGitHubRepositorySource,
@@ -153,8 +153,10 @@ export function createRealAppBootstrapGit(
   // every fetch/push/ref-delete — including the offline rollback path — require a live `gh repo view`,
   // and would refuse the non-GitHub remotes the port supports today. That is a design decision, not a
   // local fix: it narrows this port to GitHub-only.
-  const approvedOriginUrl = async (push: boolean): Promise<string> => {
-    const urls = await originUrls(originConfig, push);
+  const approvedOriginUrl = async (
+    direction: OriginDirection,
+  ): Promise<string> => {
+    const urls = await originUrls(originConfig, direction);
     if (urls.length === 0 || urls.some((url) => !isApprovedGitRemote(url))) {
       throw new Error('unsafe origin transport configuration');
     }
@@ -251,7 +253,7 @@ export function createRealAppBootstrapGit(
         if (e instanceof CommandFailure && e.exitCode === 1) localOid = null;
         else throw e;
       }
-      const probeUrl = await approvedOriginUrl(false);
+      const probeUrl = await approvedOriginUrl('fetch');
       const remoteOid = await remoteOp('remote branch probe failed', async (r) =>
         r.readRef(probeUrl, `refs/heads/${branch}`));
       return { localOid, remoteOid };
@@ -262,7 +264,7 @@ export function createRealAppBootstrapGit(
       await assertSafeRepository();
       const remoteOid = state.remoteOid;
       if (remoteOid !== null) {
-        const wipeUrl = await approvedOriginUrl(true);
+        const wipeUrl = await approvedOriginUrl('push');
         await remoteOp('remote branch wipe failed', async (r) =>
           r.deleteRef(wipeUrl, `refs/heads/${branch}`, remoteOid));
       }
@@ -322,7 +324,7 @@ export function createRealAppBootstrapGit(
       const remoteOwnership = pushed.get(branch);
       let unresolvedRemote: string | null = null;
       if (ownedOid !== null && remoteOwnership !== undefined) {
-        const rollbackUrl = await approvedOriginUrl(true);
+        const rollbackUrl = await approvedOriginUrl('push');
         const remoteOid = await remoteOp('remote branch rollback failed', async (r) =>
           r.readRef(rollbackUrl, `refs/heads/${branch}`));
         if (remoteOid !== null) {
@@ -363,7 +365,7 @@ export function createRealAppBootstrapGit(
     },
     createBranchFromBase: async (branch, base) => {
       await assertSafeRepository();
-      const baseUrl = await approvedOriginUrl(false);
+      const baseUrl = await approvedOriginUrl('fetch');
       const restore = await currentCheckout();
       await git(
         ['check-ref-format', '--branch', base],
@@ -480,7 +482,7 @@ export function createRealAppBootstrapGit(
     },
     pushBranchUpstream: async (branch, ownedOid) => {
       await assertSafeRepository();
-      const pushUrl = await approvedOriginUrl(true);
+      const pushUrl = await approvedOriginUrl('push');
       const state = created.get(branch);
       if (state === undefined || state.expectedLocalOid !== ownedOid) {
         throw new Error('branch push refused: bootstrap ownership changed');

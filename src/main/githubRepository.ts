@@ -1,4 +1,5 @@
 import { runAppCommand } from './appCommand';
+import { run, CommandFailure } from './appBootstrapCommand';
 import { isRecord } from './yamlRecord';
 import { originUrls, type OriginConfigReader } from './originUrl';
 
@@ -135,17 +136,19 @@ function originConfigReader(repoDir: string): OriginConfigReader {
     values: async (key) => {
       try {
         return (
-          await runAppCommand(
+          await run(
             'git',
             ['config', '--get-all', `remote.origin.${key}`],
             repoDir,
+            'origin resolution failed',
           )
         )
           .split('\n')
           .map((value) => value.trim())
           .filter((value) => value.length > 0);
-      } catch {
-        return [];
+      } catch (e) {
+        if (e instanceof CommandFailure && e.exitCode === 1) return [];
+        throw e;
       }
     },
   };
@@ -155,10 +158,10 @@ export async function resolveGitHubRepository(
   repoDir: string,
 ): Promise<ResolvedGitHubRepository> {
   const reader = originConfigReader(repoDir);
-  const fetchUrls = await originUrls(reader, false);
+  const fetchUrls = await originUrls(reader, 'fetch');
   const expected = repositoryFromRemote(fetchUrls[0] ?? '');
   if (expected === null) throw new Error('invalid origin repository');
-  const pushUrls = await originUrls(reader, true);
+  const pushUrls = await originUrls(reader, 'push');
   if (
     fetchUrls.length !== 1 ||
     pushUrls.length !== 1 ||
