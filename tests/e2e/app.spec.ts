@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join, basename } from 'node:path';
 import { parseColor, contrastRatio, ringOver } from '../helpers/wcag';
 import { WINDOW_TIMEOUT_MS } from '../helpers/e2eBudget';
+import { load } from 'js-yaml';
 import { CH, SESSION_ID } from '../../src/shared/ipc';
 import { CLI_COMMAND_NAME } from '../../src/main/cliShim';
 import { parseAuditStream, type AuditEvent } from '../../src/shared/audit';
@@ -4630,9 +4631,14 @@ test('a stale flow input answer is inert at the main-process receiver (ST2 AC7)'
   );
 
   await expect(inputModal()).toBeVisible();
-  // Match 999 as a recorded VALUE, not anywhere in the file: `started_at` is epoch millis, so a bare
-  // substring check fails for every run whose clock happens to contain the digits.
-  expect(readIf(appFlowState(repo))).not.toMatch(/:\s*"?999"?\s*$/m);
+  // Read the document the way the SUT wrote it rather than matching its text: `started_at` is epoch
+  // millis, so a bare substring check trips on the clock, and a regex has to guess the writer's
+  // quoting — the previous one admitted only a bare or double-quoted value while yaml.dump emits
+  // single quotes, so it could not fail for the exact value it forbids.
+  const staleState = load(readIf(appFlowState(repo))) as
+    | { inputs?: Record<string, unknown> }
+    | undefined;
+  expect(Object.values(staleState?.inputs ?? {})).not.toContain('999');
   const calls = readGhLog(logFile).slice(staleInputLogStart);
   expect(calls).not.toContain('git status --porcelain');
   expect(calls).not.toContain('gh ');
