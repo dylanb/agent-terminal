@@ -673,7 +673,8 @@ export interface FlowAppBootstrapConflictMsg extends AppBootstrapConflictTarget 
 }
 
 /** §6/§27.10. */
-export interface FlowResolveAppBootstrapConflictMsg {
+export interface FlowResolveAppBootstrapConflictMsg
+  extends AppBootstrapConflictTarget {
   sessionId: SessionId;
   repoKey: string;
   step: string;
@@ -872,7 +873,7 @@ export type CliInstallResult =
 
 // ---- Install bundled examples (§18.1/§23.4/§26.5) ----
 
-/** §18.1/§23.4/§26.5/§27.1. */
+/** §18.1/§23.4/§26.5/§27.15. */
 export const INSTALL_DESTINATION_IDS = [
   'flow',
   'appLoops',
@@ -1087,7 +1088,12 @@ export interface FlowApi {
     ) => void,
   ): () => void;
   /** §6/§27.10. */
-  resolveAppBootstrapConflict(repoKey: string, step: string, wipe: boolean): void;
+  resolveAppBootstrapConflict(
+    repoKey: string,
+    step: string,
+    wipe: boolean,
+    target: AppBootstrapConflictTarget,
+  ): void;
   /** Resolve a GitHub ref's title/body/url for the popout (§24.2.3 T7), best-effort: null when it
    *  can't be resolved (no `gh`, not a GitHub repo, offline) so the popout shows the number alone. */
   githubRef(repoKey: string, kind: GithubRefKind, number: number): Promise<GithubRef | null>;

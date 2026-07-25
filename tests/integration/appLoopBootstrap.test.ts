@@ -1875,7 +1875,7 @@ describe('createAppLoopBootstrapCoordinator — confirm-first wipe (§27.10)', (
     x.c.enter(job());
     await vi.waitFor(() => expect(x.emitConflict).toHaveBeenCalledTimes(1));
 
-    x.c.resolve('/repo', 'plan', false);
+    x.c.resolve('/repo', 'plan', false, target());
 
     expect(x.rollbackStep).toHaveBeenCalledWith(expect.objectContaining({ stepId: 'plan' }));
     expect(run).toHaveBeenCalledTimes(1);
@@ -1890,7 +1890,7 @@ describe('createAppLoopBootstrapCoordinator — confirm-first wipe (§27.10)', (
     x.c.enter(job());
     await vi.waitFor(() => expect(x.emitConflict).toHaveBeenCalledTimes(1));
 
-    x.c.resolve('/repo', 'plan', true);
+    x.c.resolve('/repo', 'plan', true, target());
 
     await vi.waitFor(() => expect(run).toHaveBeenCalledTimes(2));
     expect(run.mock.calls[1]).toEqual([
@@ -1902,15 +1902,31 @@ describe('createAppLoopBootstrapCoordinator — confirm-first wipe (§27.10)', (
     );
   });
 
+  // §27.10 — the answer authorizes the resources the operator was shown, so a confirmation that names a
+  // different set than the one now held cannot be spent on it.
+  it('makes a wipe answer for a superseded target inert', async () => {
+    const shown = target();
+    const superseded = target({ pullRequests: [321, 999] });
+    const run = vi.fn(async () => ({ ok: false as const, conflict: superseded }));
+    const x = conflictCoordinator(run);
+    x.c.enter(job());
+    await vi.waitFor(() => expect(x.emitConflict).toHaveBeenCalledTimes(1));
+
+    x.c.resolve('/repo', 'plan', true, shown);
+
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(x.rollbackStep).not.toHaveBeenCalled();
+  });
+
   it('makes a stale or wrong-step wipe decision inert', async () => {
     const run = vi.fn(async () => ({ ok: false as const, conflict: target() }));
     const x = conflictCoordinator(run);
     x.c.enter(job());
     await vi.waitFor(() => expect(x.emitConflict).toHaveBeenCalledTimes(1));
 
-    x.c.resolve('/repo', 'implement', true);
+    x.c.resolve('/repo', 'implement', true, target());
     x.moveAway();
-    x.c.resolve('/repo', 'plan', true);
+    x.c.resolve('/repo', 'plan', true, target());
 
     expect(run).toHaveBeenCalledTimes(1);
     expect(x.rollbackStep).not.toHaveBeenCalled();

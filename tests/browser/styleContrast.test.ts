@@ -454,7 +454,9 @@ describe('the consent dialog reflows at 320x256 (WCAG 1.4.10)', () => {
 
 describe('the exact bootstrap-wipe target reflows at 320px (WCAG 1.4.10)', () => {
   beforeEach(async () => {
-    await page.viewport(320, 700);
+    // SC 1.4.10 names 320x256 as the reflow target, and the block axis is the one this card can lose:
+    // the real conflict payload names a local ref, an origin ref and open PRs, not a single oid.
+    await page.viewport(320, 256);
   });
 
   afterEach(async () => {
@@ -487,16 +489,28 @@ describe('the exact bootstrap-wipe target reflows at 320px (WCAG 1.4.10)', () =>
         repository: 'github.com/owner/repository',
         branch: 'plan-loop/issue-78',
         localOid: 'a'.repeat(oidLength),
-        remoteOid: null,
-        pullRequests: [],
+        remoteOid: 'b'.repeat(oidLength),
+        pullRequests: [321, 654],
         repoKey: '/repo',
         step: 'plan',
       });
 
       const modal = host.querySelector('.flow-modal') as HTMLElement;
-      expect(modal.scrollWidth).toBeLessThanOrEqual(modal.clientWidth + 1);
-      dispose();
-      dialog.dispose();
+      const confirm = host.querySelector(
+        '.flow-modal button.confirm',
+      ) as HTMLElement;
+      try {
+        expect(modal.scrollWidth).toBeLessThanOrEqual(modal.clientWidth + 1);
+        // The action must be reachable once the card is scrolled to its end, not merely painted somewhere.
+        modal.scrollTop = modal.scrollHeight;
+        expect(confirm.getBoundingClientRect().bottom).toBeLessThanOrEqual(
+          window.innerHeight + 1,
+        );
+        expect(confirm.getBoundingClientRect().top).toBeGreaterThanOrEqual(-1);
+      } finally {
+        dispose();
+        dialog.dispose();
+      }
     });
   }
 });

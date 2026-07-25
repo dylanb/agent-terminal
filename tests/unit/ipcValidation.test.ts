@@ -283,12 +283,17 @@ describe('IPC payload validation (§6 — renderer-supplied input is untrusted)'
     expect(isValidFlowArmInterrupt(null)).toBe(false);
   });
 
-  it('guards a §27 wipe decision on the exact repo + step identity it acts on', () => {
+  it('guards a §27 wipe decision on the repo, step and resources it acts on', () => {
     const base = {
       sessionId: sid,
       repoKey: '/repo',
       step: 'plan',
       wipe: true,
+      repository: 'github.com/owner/repository',
+      branch: 'plan-loop/issue-78',
+      localOid: '1'.repeat(40),
+      remoteOid: null,
+      pullRequests: [321],
     };
     expect(isValidFlowResolveAppBootstrapConflict(base)).toBe(true);
     expect(isValidFlowResolveAppBootstrapConflict({ ...base, step: '' })).toBe(false);
@@ -296,6 +301,15 @@ describe('IPC payload validation (§6 — renderer-supplied input is untrusted)'
     expect(isValidFlowResolveAppBootstrapConflict({ ...base, wipe: 'yes' })).toBe(false);
     expect(isValidFlowResolveAppBootstrapConflict({ ...base, repoKey: 'relative' })).toBe(false);
     expect(isValidFlowResolveAppBootstrapConflict({ ...base, sessionId: 'other' })).toBe(false);
+    // The destroyed resources travel with the answer, so a payload that omits or malforms them is not
+    // an authorization this app will spend.
+    expect(isValidFlowResolveAppBootstrapConflict({ ...base, branch: '' })).toBe(false);
+    expect(isValidFlowResolveAppBootstrapConflict({ ...base, repository: 7 })).toBe(false);
+    expect(isValidFlowResolveAppBootstrapConflict({ ...base, localOid: 'nope' })).toBe(false);
+    expect(isValidFlowResolveAppBootstrapConflict({ ...base, remoteOid: 42 })).toBe(false);
+    expect(isValidFlowResolveAppBootstrapConflict({ ...base, pullRequests: [0] })).toBe(false);
+    expect(isValidFlowResolveAppBootstrapConflict({ ...base, pullRequests: ['1'] })).toBe(false);
+    expect(isValidFlowResolveAppBootstrapConflict({ ...base, pullRequests: 321 })).toBe(false);
   });
 
   it('accepts exactly the shared GATE_DECISION_OPTIONS set — one source for the validator (§26.6)', () => {

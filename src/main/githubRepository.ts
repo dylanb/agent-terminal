@@ -23,8 +23,15 @@ export function createGitHubRepositorySource(
 ): GitHubRepositorySource {
   let repository: Promise<ResolvedGitHubRepository> | undefined;
   return {
-    resolve: () =>
-      (repository ??= resolveGitHubRepository(repoDir)),
+    resolve: () => {
+      if (repository !== undefined) return repository;
+      const attempt = resolveGitHubRepository(repoDir);
+      repository = attempt;
+      attempt.catch(() => {
+        if (repository === attempt) repository = undefined;
+      });
+      return attempt;
+    },
   };
 }
 
@@ -122,29 +129,37 @@ export function matchesGitHubRepositoryUrl(
   }
 }
 
+// `git remote get-url` applies url.*.insteadOf rewriting; the bootstrap's remote operations hand the
+// raw config value to an isolated git dir that never loads that rewrite. Both sides read config here so
+// the repository this names is the repository those operations reach.
+async function configuredOriginUrls(
+  repoDir: string,
+  key: 'url' | 'pushurl',
+): Promise<string[]> {
+  try {
+    return (
+      await runAppCommand(
+        'git',
+        ['config', '--get-all', `remote.origin.${key}`],
+        repoDir,
+      )
+    )
+      .split('\n')
+      .filter((value) => value.trim().length > 0);
+  } catch {
+    return [];
+  }
+}
+
 export async function resolveGitHubRepository(
   repoDir: string,
 ): Promise<ResolvedGitHubRepository> {
-  const fetchUrls = (
-    await runAppCommand(
-      'git',
-      ['remote', 'get-url', '--all', 'origin'],
-      repoDir,
-    )
-  )
-    .split('\n')
-    .filter((value) => value.trim().length > 0);
+  const fetchUrls = await configuredOriginUrls(repoDir, 'url');
   const expected = repositoryFromRemote(fetchUrls[0] ?? '');
   if (expected === null) throw new Error('invalid origin repository');
-  const pushUrls = (
-    await runAppCommand(
-      'git',
-      ['remote', 'get-url', '--push', '--all', 'origin'],
-      repoDir,
-    )
-  )
-    .split('\n')
-    .filter((value) => value.trim().length > 0);
+  const configuredPushUrls = await configuredOriginUrls(repoDir, 'pushurl');
+  const pushUrls =
+    configuredPushUrls.length === 0 ? fetchUrls : configuredPushUrls;
   if (
     fetchUrls.length !== 1 ||
     pushUrls.length !== 1 ||
@@ -155,19 +170,23 @@ export async function resolveGitHubRepository(
   ) {
     throw new Error('origin repository targets do not match');
   }
-  const raw: unknown = JSON.parse(
-    await runAppCommand(
-      'gh',
-      [
-        'repo',
-        'view',
-        expected.selector,
-        '--json',
-        'nameWithOwner,url,defaultBranchRef',
-      ],
-      repoDir,
-    ),
+  const viewedRepository = await runAppCommand(
+    'gh',
+    [
+      'repo',
+      'view',
+      expected.selector,
+      '--json',
+      'nameWithOwner,url,defaultBranchRef',
+    ],
+    repoDir,
   );
+  let raw: unknown;
+  try {
+    raw = JSON.parse(viewedRepository);
+  } catch {
+    throw new Error('invalid repository identity');
+  }
   if (
     !isRecord(raw) ||
     typeof raw.nameWithOwner !== 'string' ||

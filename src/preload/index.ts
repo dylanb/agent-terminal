@@ -170,12 +170,13 @@ const flowApi: FlowApi = {
     ipcRenderer.on(CH.flowOnAppBootstrapConflict, handler);
     return () => ipcRenderer.removeListener(CH.flowOnAppBootstrapConflict, handler);
   },
-  resolveAppBootstrapConflict: (repoKey, step, wipe) =>
+  resolveAppBootstrapConflict: (repoKey, step, wipe, target) =>
     ipcRenderer.send(CH.flowResolveAppBootstrapConflict, {
       sessionId: SESSION_ID,
       repoKey,
       step,
       wipe,
+      ...target,
     }),
   githubRef: (repoKey, kind, number) =>
     ipcRenderer.invoke(CH.flowGithubRef, { sessionId: SESSION_ID, repoKey, kind, number }) as Promise<GithubRef | null>,

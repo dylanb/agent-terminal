@@ -7,12 +7,15 @@ import { errMsg } from './errno';
 import { run, CommandFailure } from './appBootstrapCommand';
 import { createAppGitRemote, type AppGitRemote } from './appCommand';
 import {
+  createGitHubRepositorySource,
+  type GitHubRepositorySource,
+} from './githubRepository';
+import {
   OwnedBootstrapBranchError,
   UnresolvedRemoteBootstrapBranchError,
   type AppBootstrapGit,
   type AppBootstrapGitFaults,
 } from './bootstrapPorts';
-
 
 function isUnsafeLocalGitConfigKey(key: string): boolean {
   const normalized = key.toLowerCase();
@@ -41,6 +44,7 @@ function isApprovedGitRemote(url: string): boolean {
 export function createRealAppBootstrapGit(
   repoDir: string,
   faults: AppBootstrapGitFaults = {},
+  repositorySource: GitHubRepositorySource = createGitHubRepositorySource(repoDir),
 ): AppBootstrapGit {
   type Checkout = { kind: 'branch'; value: string } | { kind: 'detached'; value: string };
   interface CreatedBranch {
@@ -67,20 +71,32 @@ export function createRealAppBootstrapGit(
   // Read from configuration, not `git remote get-url`: the latter applies url.*.insteadOf rewriting, so it
   // reports one repository while the operation reaches another. Paired with the isolated git dir above,
   // a repository-local rewrite can neither be read here nor applied there.
-  const originUrl = async (push: boolean): Promise<string> => {
-    if (push) {
-      try {
-        const configured = (
-          await git(['config', '--get', 'remote.origin.pushurl'], 'origin resolution failed')
-        ).trim();
-        if (configured.length > 0) return configured;
-      } catch {
-        // no separate push URL configured; fall back to the fetch URL, as git does
-      }
+  const configuredOrigin = async (key: 'url' | 'pushurl'): Promise<string[]> => {
+    try {
+      return (
+        await git(
+          ['config', '--get-all', `remote.origin.${key}`],
+          'origin resolution failed',
+        )
+      )
+        .split('\n')
+        .map((url) => url.trim())
+        .filter((url) => url.length > 0);
+    } catch (e) {
+      if (e instanceof CommandFailure && e.exitCode === 1) return [];
+      throw e;
     }
-    return (
-      await git(['config', '--get', 'remote.origin.url'], 'origin resolution failed')
-    ).trim();
+  };
+  const originUrls = async (push: boolean): Promise<string[]> => {
+    if (push) {
+      const pushUrls = await configuredOrigin('pushurl');
+      if (pushUrls.length > 0) return pushUrls;
+    }
+    return configuredOrigin('url');
+  };
+  const originUrl = async (push: boolean): Promise<string> => {
+    const urls = await originUrls(push);
+    return urls[urls.length - 1] ?? '';
   };
   const disabledHooksPath = join(
     tmpdir(),
@@ -141,21 +157,7 @@ export function createRealAppBootstrapGit(
     }
   };
   const assertSafeOrigin = async (push: boolean): Promise<void> => {
-    const urls = (
-      await git(
-        [
-          'remote',
-          'get-url',
-          ...(push ? ['--push'] : []),
-          '--all',
-          'origin',
-        ],
-        'origin URL resolution failed',
-      )
-    )
-      .split('\n')
-      .map((url) => url.trim())
-      .filter((url) => url.length > 0);
+    const urls = await originUrls(push);
     if (urls.length === 0 || urls.some((url) => !isApprovedGitRemote(url))) {
       throw new Error('unsafe origin transport configuration');
     }
@@ -229,14 +231,7 @@ export function createRealAppBootstrapGit(
     resolveBaseBranch: async () => {
       try {
         await assertSafeRepository();
-        const out = await run(
-          'gh',
-          ['repo', 'view', '--json', 'defaultBranchRef', '--jq', '.defaultBranchRef.name'],
-          repoDir,
-          'default branch resolution failed',
-        );
-        const name = out.trim();
-        return name.length > 0 ? name : null;
+        return (await repositorySource.resolve()).defaultBranch;
       } catch {
         return null;
       }
@@ -521,4 +516,3 @@ export function createRealAppBootstrapGit(
     },
   };
 }
-

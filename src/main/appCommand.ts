@@ -3,7 +3,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { isAbsolute, join, resolve } from 'node:path';
 
-const APP_COMMAND_TIMEOUT_MS = 60_000;
+export const APP_COMMAND_TIMEOUT_MS = 60_000;
 const OBJECT_ID = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/;
 const GIT_REPOSITORY_ENV = [
   'GIT_DIR',
@@ -106,8 +106,12 @@ export function createAppGitRemote(
   let layoutPromise:
     | Promise<{ objectDirectory: string; objectFormat: 'sha1' | 'sha256' }>
     | undefined;
-  const layout = () =>
-    (layoutPromise ??= Promise.all([
+  const layout = () => {
+    if (layoutPromise !== undefined) return layoutPromise;
+    const attempt: Promise<{
+      objectDirectory: string;
+      objectFormat: 'sha1' | 'sha256';
+    }> = Promise.all([
       runAppCommand(
         'git',
         [
@@ -134,7 +138,13 @@ export function createAppGitRemote(
           : resolve(repoDir, rawObjects),
         objectFormat: format,
       };
-    }));
+    });
+    layoutPromise = attempt;
+    attempt.catch(() => {
+      if (layoutPromise === attempt) layoutPromise = undefined;
+    });
+    return attempt;
+  };
   const isolated = async <T>(
     operation: (
       git: (args: string[]) => Promise<string>,
@@ -191,14 +201,14 @@ export function createAppGitRemote(
       }),
     readRef: (url, ref) =>
       isolated(async (git) => {
-        const output = (
-          await git(['ls-remote', '--heads', '--', url, ref])
-        ).trim();
-        if (output.length === 0) return null;
-        return parseAppGitObjectId(
-          output.split(/\s+/, 1)[0] ?? '',
-          'remote ref',
-        );
+        const output = await git(['ls-remote', '--heads', '--', url, ref]);
+        const matches = output
+          .split('\n')
+          .map((line) => line.trim().split(/\s+/))
+          .filter((columns) => columns[1] === ref);
+        if (matches.length === 0) return null;
+        if (matches.length > 1) throw new Error('ambiguous remote ref');
+        return parseAppGitObjectId(matches[0]?.[0] ?? '', 'remote ref');
       }),
     createRef: (url, oid, ref) =>
       isolated(async (git) => {

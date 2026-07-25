@@ -58,6 +58,54 @@ function githubState(
 }
 
 describe('§27 approve side-effect port (appGateGithub)', () => {
+  it('keeps why the bootstrap PR identity could not be verified', async () => {
+    const { github } = githubState();
+    const run = createAppGateGitHub({
+      ...github,
+      pullRequest: async () => {
+        throw new Error('gh command failed (exit 4)');
+      },
+    });
+
+    await expect(
+      run('mark-ready', {
+        pr: 42,
+        ticket: 78,
+        bodyFile: null,
+        bootstrap: {
+          pr: 42,
+          issue: 78,
+          branch: 'plan-loop/issue-78',
+          initialStatus: 'planning',
+        },
+      }),
+    ).rejects.toThrow(/exit 4/);
+  });
+
+  it('coerces a non-Error verification failure into the reason', async () => {
+    const { github } = githubState();
+    const run = createAppGateGitHub({
+      ...github,
+      pullRequest: async () => {
+        throw 'lookup exploded';
+      },
+    });
+
+    await expect(
+      run('mark-ready', {
+        pr: 42,
+        ticket: 78,
+        bodyFile: null,
+        bootstrap: {
+          pr: 42,
+          issue: 78,
+          branch: 'plan-loop/issue-78',
+          initialStatus: 'planning',
+        },
+      }),
+    ).rejects.toThrow(/lookup exploded/);
+  });
+
   it('marks an unbound PR ready without fabricating bootstrap identity', async () => {
     const g = githubState();
     await createAppGateGitHub(g.github)('mark-ready', {

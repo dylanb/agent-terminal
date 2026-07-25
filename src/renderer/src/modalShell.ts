@@ -8,6 +8,9 @@ export interface ModalCard {
    *  own class names — is what keeps the shell from knowing anything about its callers. */
   grow?: HTMLElement;
   scroll?: HTMLElement;
+  /** WAI-ARIA APG: overrides the shell's role for this card, so one shell instance can serve both a
+   *  user-initiated confirmation and a system-raised alert. */
+  role?: 'dialog' | 'alertdialog';
 }
 
 export type ModalShellBuild = (ctx: {
@@ -106,7 +109,8 @@ export function createModalShell(
         }
       });
 
-      const { card, initialFocus, describedById, grow, scroll } = build({ doc, titleId, close, confirm: clear });
+      const { card, initialFocus, describedById, grow, scroll, role } = build({ doc, titleId, close, confirm: clear });
+      if (role) modal.setAttribute('role', role);
       if (describedById) modal.setAttribute('aria-describedby', describedById);
       grow?.setAttribute('data-modal-grow', '');
       scroll?.setAttribute('data-modal-scroll', '');

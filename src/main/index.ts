@@ -1064,6 +1064,11 @@ async function createWindow(): Promise<void> {
     },
   });
 
+  // TODO(dylanb): §27.12 — after a relaunch this map is empty, so appGateGithub's verifyBootstrap takes its
+  // `bootstrap === null` early return and the gate's PR-identity check is silently skipped. The persisted
+  // document (readAppLoopBootstrap) cannot simply seed it: resolveAppGateRefs lets a bootstrap OVERRIDE the
+  // flow's own refs, and that document is repo-scoped rather than step-scoped, so a stale one retargets
+  // `gh pr ready` at another PR. Closing this needs the persisted identity bound to the step it bootstrapped.
   const trustedAppBootstraps = new Map<string, AppLoopBootstrap>();
   const appBootstrapSessions = new Map<string, AppLoopBootstrapSession>();
   const appBootstrapSession = (repoDir: string): AppLoopBootstrapSession => {
@@ -1539,11 +1544,17 @@ async function createWindow(): Promise<void> {
       [CH.flowResolveBootstrapConflict]: (_e, m) => {
         if (isValidFlowResolveBootstrapConflict(m)) resolveBootstrapConflict(m.repoKey, m.wipe);
       },
-      // §27.10 — the same answer for an app-loop pickup. The step is named in the payload rather than
-      // re-derived here, so an answer cannot be applied to a step the operator was never shown.
+      // §27.10 — the step and the destroyed resources are both named in the payload, so an answer cannot
+      // be applied to a step, or a resource set, the operator was never shown.
       [CH.flowResolveAppBootstrapConflict]: (_e, m) => {
         if (isValidFlowResolveAppBootstrapConflict(m)) {
-          appBootstrapCoordinator?.resolve(m.repoKey, m.step, m.wipe);
+          appBootstrapCoordinator?.resolve(m.repoKey, m.step, m.wipe, {
+            repository: m.repository,
+            branch: m.branch,
+            localOid: m.localOid,
+            remoteOid: m.remoteOid,
+            pullRequests: m.pullRequests,
+          });
         }
       },
       // Clipboard is an OS resource owned by main (§7.7); the sandboxed preload can't reach it.

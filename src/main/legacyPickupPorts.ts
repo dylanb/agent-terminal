@@ -107,4 +107,3 @@ export function createRealBootstrapGitHub(repoDir: string): BootstrapGitHub {
       ])),
   };
 }
-

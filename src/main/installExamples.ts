@@ -177,7 +177,7 @@ interface DestinationSpec {
 const CONFIG_ROOT_FIX = 'Set CLAUDE_CONFIG_DIR to an absolute path, or unset it to use ~/.claude.';
 const HOME_ROOT_FIX = 'Set $HOME to an absolute path.';
 
-/** §18.1/§26.5/§27.1. */
+/** §18.1/§26.5/§27.15. */
 const DESTINATIONS: Record<InstallDestinationId, DestinationSpec> = {
   flow: {
     bundle: resolveExampleFlowDir,

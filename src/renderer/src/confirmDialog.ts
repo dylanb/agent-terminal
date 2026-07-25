@@ -10,6 +10,9 @@ export interface ConfirmDialogOptions {
   confirmLabel: string;
   onConfirm: () => void;
   restoreFocusTo?: HTMLElement | null;
+  /** WAI-ARIA APG / UI-STANDARDS §5.2: `alertdialog` when the app raised this without the operator
+   *  asking, `dialog` (the default) when they did. */
+  role?: 'dialog' | 'alertdialog';
   /** Fired when the operator DECLINES — Cancel, Escape, or scrim — but never on confirm (§26.9). Lets a
    *  caller react to a dismissal (e.g. roll the flow back); omit when a dismiss needs no action. */
   onCancel?: () => void;
@@ -81,7 +84,7 @@ export function createConfirmDialog(host: HTMLElement, opts?: { onFocusLost?: ()
         foot.append(cancel, confirm);
         card.append(foot);
 
-        return { card, initialFocus: null, describedById };
+        return { card, initialFocus: null, describedById, ...(opts.role ? { role: opts.role } : {}) };
       }, opts.restoreFocusTo);
     },
     cancel() {

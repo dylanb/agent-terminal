@@ -3,6 +3,7 @@
 
 import path from 'node:path';
 import { githubHttpsHref } from '../shared/githubUrl';
+import { isAppBootstrapConflictTarget } from '../shared/appBootstrap';
 import { TITLE_MAX } from '../shared/statusBar';
 import {
   APP_ROUTE_OUT_ACTIONS,
@@ -103,9 +104,9 @@ export function isValidInstallExamplesPreview(m: unknown): m is InstallExamplesP
   return isRecord(m) && isLiveSession(m);
 }
 
-/** §6; CWE-20. */
 const INSTALL_PREVIEW_ID_MAX = 128;
 
+/** §6; CWE-20. */
 export function isValidInstallExamplesApply(m: unknown): m is InstallExamplesApplyMsg {
   if (
     !isRecord(m) ||
@@ -281,7 +282,8 @@ export function isValidFlowResolveAppBootstrapConflict(
     isSafeRepoKey(m.repoKey) &&
     typeof m.step === 'string' &&
     m.step.length > 0 &&
-    typeof m.wipe === 'boolean'
+    typeof m.wipe === 'boolean' &&
+    isAppBootstrapConflictTarget(m)
   );
 }
 

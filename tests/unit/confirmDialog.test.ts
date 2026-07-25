@@ -224,3 +224,45 @@ describe('confirm dialog (#26 AC3/AC4/AC13)', () => {
     });
   });
 });
+
+// WAI-ARIA APG names this exact case for `alertdialog`: a modal that interrupts the user's workflow with
+// an action confirmation. UI-STANDARDS §5.2 draws the same boundary — errorDialog is system-raised and
+// uses `alertdialog`; a user-initiated confirm stays `dialog`.
+describe('createConfirmDialog — system-raised alerts', () => {
+  it('carries role=alertdialog when the caller declares the confirmation an alert', () => {
+    const host = document.createElement('div');
+    document.body.append(host);
+    const dialog = createConfirmDialog(host);
+    dialog.render({
+      title: 'Bootstrap resources already exist',
+      message: 'Wiping will delete or close exactly: origin branch topic.',
+      confirmLabel: 'Wipe and retry',
+      role: 'alertdialog',
+      onConfirm: () => {},
+    });
+
+    expect(
+      host.querySelector('.flow-modal')?.getAttribute('role'),
+    ).toBe('alertdialog');
+    dialog.dispose();
+    host.remove();
+  });
+
+  it('stays role=dialog for a confirmation the user asked for', () => {
+    const host = document.createElement('div');
+    document.body.append(host);
+    const dialog = createConfirmDialog(host);
+    dialog.render({
+      title: 'Terminate',
+      message: 'Terminate the flow?',
+      confirmLabel: 'Terminate',
+      onConfirm: () => {},
+    });
+
+    expect(
+      host.querySelector('.flow-modal')?.getAttribute('role'),
+    ).toBe('dialog');
+    dialog.dispose();
+    host.remove();
+  });
+});

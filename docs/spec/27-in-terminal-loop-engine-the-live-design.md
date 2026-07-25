@@ -139,13 +139,14 @@ flowchart TD
   BOOT -->|"no conflict"| P["plan-loop"]
   BOOT -->|"failure"| RB["roll back to groom<br/>inputs preserved"]
   BOOT -->|"existing refs or open PRs"| CF["confirm exact ref OIDs<br/>and PR numbers"]
-  CF -->|"decline"| RB
+  CF -->|"decline"| RBQ["roll back to groom<br/>inputs preserved, no error dialog"]
   CF -->|"confirm"| CHECK{"target still matches?"}
   CHECK -->|"changed, conflicts remain"| CF
   CHECK -->|"changed, no conflicts remain"| RB
-  CHECK -->|"yes"| WIPE["close exact PRs<br/>conditionally delete exact refs"]
+  CHECK -->|"yes"| WIPE["delete exact refs under a lease<br/>remote first, then local, then close any PR still open"]
   WIPE -->|"complete"| P
   WIPE -->|"incomplete or failed"| RB
+  RBQ --> RETRY
   RB --> RETRY["approve / advance rolled-back step"]
   RB -.->|"optional"| RELAUNCH["relaunch restores rolled-back step"]
   RELAUNCH --> RETRY

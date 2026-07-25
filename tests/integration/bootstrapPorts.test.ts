@@ -13,6 +13,7 @@ import { join } from 'node:path';
 import { type AppBootstrapGitFaults, OwnedBootstrapBranchError } from '../../src/main/bootstrapPorts';
 import { createRealAppBootstrapGit } from '../../src/main/appBootstrapGit';
 import { createRealAppBootstrapGitHub } from '../../src/main/appBootstrapGithub';
+import { createGitHubRepositorySource } from '../../src/main/githubRepository';
 
 const runGit = (cwd: string, args: string[]): string =>
   execFileSync('git', args, { cwd, encoding: 'utf8' }).trim();
@@ -121,6 +122,20 @@ describe('createRealAppBootstrapGit — owned remote-ref compensation', () => {
         process.env.GIT_WORK_TREE = previousWorkTree;
       }
     }
+  });
+
+  it('grades the origin URL the remote operation uses, not a rewritten one', async () => {
+    runGit(repo, ['config', 'remote.origin.url', '-upload-pack=evil']);
+    runGit(repo, [
+      'config',
+      'url.https://example.invalid/.insteadOf',
+      '-upload-pack=evil',
+    ]);
+    const port = createRealAppBootstrapGit(repo);
+
+    await expect(port.branchState(branch)).rejects.toThrow(
+      /unsafe origin transport configuration/i,
+    );
   });
 
   it('rejects a repository-local upload-pack override before a read operation', async () => {
@@ -570,6 +585,20 @@ describe('createRealAppBootstrapGit — owned remote-ref compensation', () => {
 
     await expect(port.deleteBranch(branch, state)).rejects.toThrow(/remote branch wipe failed/i);
     expect(runGit(remote, ['rev-parse', `refs/heads/${branch}`])).toBe(movedOid);
+    expect(hasRef(repo, `refs/heads/${branch}`)).toBe(true);
+    expect(runGit(repo, ['rev-parse', `refs/heads/${branch}`])).toBe(state.localOid);
+  });
+
+  it('detaches HEAD off the branch it is asked to delete', async () => {
+    const port = createRealAppBootstrapGit(repo);
+    runGit(repo, ['checkout', '-b', branch, 'main']);
+    const state = await port.branchState(branch);
+
+    await port.deleteBranch(branch, state);
+
+    expect(hasRef(repo, `refs/heads/${branch}`)).toBe(false);
+    expect(runGit(repo, ['rev-parse', '--abbrev-ref', 'HEAD'])).toBe('HEAD');
+    expect(runGit(repo, ['rev-parse', 'HEAD'])).toBe(state.localOid);
   });
 
   it('refuses to delete a local branch that moved after the caller read its identity', async () => {
@@ -587,6 +616,104 @@ describe('createRealAppBootstrapGit — owned remote-ref compensation', () => {
   });
 });
 
+describe('createRealAppBootstrapGitHub — repository pinning', () => {
+  let root: string;
+  let repo: string;
+  let log: string;
+  let previousPath: string | undefined;
+  let previousLog: string | undefined;
+  let previousRepository: string | undefined;
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), 'bootstrap-github-pin-'));
+    repo = join(root, 'repo');
+    log = join(root, 'gh.log');
+    mkdirSync(repo);
+    runGit(repo, ['init']);
+    runGit(repo, [
+      'remote',
+      'add',
+      'origin',
+      'https://github.com/owner/repository.git',
+    ]);
+    writeFileSync(
+      join(root, 'gh'),
+      '#!/usr/bin/env bash\n' +
+        'printf \'%s GH_REPO=%s\\n\' "$*" "${GH_REPO-unset}" >> "$FAKE_GH_LOG"\n' +
+        'if [ "$1" = "repo" ]; then printf \'%s\\n\' \'{"nameWithOwner":"owner/repository","url":"https://github.com/owner/repository","defaultBranchRef":{"name":"main"}}\'; exit 0; fi\n' +
+        'if [ "$1" = "pr" ] && [ "$2" = "create" ]; then printf \'%s\\n\' "https://github.com/owner/repository/pull/7"; exit 0; fi\n' +
+        'exit 0\n',
+      { mode: 0o755 },
+    );
+    previousPath = process.env.PATH;
+    previousLog = process.env.FAKE_GH_LOG;
+    previousRepository = process.env.GH_REPO;
+    process.env.PATH = `${root}:${previousPath ?? ''}`;
+    process.env.FAKE_GH_LOG = log;
+    process.env.GH_REPO = 'attacker/other';
+  });
+
+  afterEach(() => {
+    if (previousPath === undefined) delete process.env.PATH;
+    else process.env.PATH = previousPath;
+    if (previousLog === undefined) delete process.env.FAKE_GH_LOG;
+    else process.env.FAKE_GH_LOG = previousLog;
+    if (previousRepository === undefined) delete process.env.GH_REPO;
+    else process.env.GH_REPO = previousRepository;
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it('names the resolved origin on every mutation and drops an inherited GH_REPO', async () => {
+    const github = createRealAppBootstrapGitHub(
+      repo,
+      createGitHubRepositorySource(repo),
+    );
+
+    await github.createDraftPr({
+      base: 'main',
+      head: 'plan-loop/issue-78',
+      title: 'title',
+      body: 'body',
+    });
+    await github.assignIssueToSelf(78);
+    await github.setIssueLabel(78, 'agent-loop/in-progress', true);
+    await github.setPrLabel(7, 'plan-draft', true);
+    await github.closePr(7);
+
+    const recorded = readFileSync(log, 'utf8')
+      .split('\n')
+      .filter((line) => line.length > 0 && !line.startsWith('repo view'));
+    expect(recorded.length).toBeGreaterThan(0);
+    for (const line of recorded) {
+      expect(line).toContain('--repo github.com/owner/repository');
+      expect(line).toContain('GH_REPO=unset');
+    }
+  });
+
+  it('refuses a created PR URL that names another repository', async () => {
+    writeFileSync(
+      join(root, 'gh'),
+      '#!/usr/bin/env bash\n' +
+        'if [ "$1" = "repo" ]; then printf \'%s\\n\' \'{"nameWithOwner":"owner/repository","url":"https://github.com/owner/repository","defaultBranchRef":{"name":"main"}}\'; exit 0; fi\n' +
+        'printf \'%s\\n\' "https://github.com/attacker/other/pull/7"\n',
+      { mode: 0o755 },
+    );
+    const github = createRealAppBootstrapGitHub(
+      repo,
+      createGitHubRepositorySource(repo),
+    );
+
+    await expect(
+      github.createDraftPr({
+        base: 'main',
+        head: 'plan-loop/issue-78',
+        title: 'title',
+        body: 'body',
+      }),
+    ).rejects.toThrow(/not recognized|ambiguous|repository/i);
+  });
+});
+
 describe('createRealAppBootstrapGitHub — owned PR reconciliation', () => {
   let root: string;
   let responseFile: string;
@@ -598,9 +725,18 @@ describe('createRealAppBootstrapGitHub — owned PR reconciliation', () => {
     responseFile = join(root, 'response.json');
     previousPath = process.env.PATH;
     previousResponse = process.env.FAKE_PR_LOOKUP_RESPONSE;
+    runGit(root, ['init']);
+    runGit(root, [
+      'remote',
+      'add',
+      'origin',
+      'https://github.com/owner/repository.git',
+    ]);
     writeFileSync(
       join(root, 'gh'),
-      '#!/bin/sh\ncat "$FAKE_PR_LOOKUP_RESPONSE"\n',
+      '#!/bin/sh\n' +
+        'if [ "$1" = "repo" ]; then printf \'%s\\n\' \'{"nameWithOwner":"owner/repository","url":"https://github.com/owner/repository","defaultBranchRef":{"name":"main"}}\'; exit 0; fi\n' +
+        'cat "$FAKE_PR_LOOKUP_RESPONSE"\n',
       { mode: 0o755 },
     );
     process.env.PATH = `${root}:${previousPath ?? ''}`;
@@ -616,7 +752,10 @@ describe('createRealAppBootstrapGitHub — owned PR reconciliation', () => {
   });
 
   it('selects only one marked draft and distinguishes absent from foreign PRs', async () => {
-    const github = createRealAppBootstrapGitHub(root);
+    const github = createRealAppBootstrapGitHub(
+      root,
+      createGitHubRepositorySource(root),
+    );
     writeFileSync(responseFile, '[]');
     await expect(
       github.findOwnedOpenPr({ base: 'main', head: 'topic', marker: '<!-- owned -->' }),
@@ -638,7 +777,10 @@ describe('createRealAppBootstrapGitHub — owned PR reconciliation', () => {
   });
 
   it('fails closed for malformed or multiply-owned reconciliation data', async () => {
-    const github = createRealAppBootstrapGitHub(root);
+    const github = createRealAppBootstrapGitHub(
+      root,
+      createGitHubRepositorySource(root),
+    );
     const find = () =>
       github.findOwnedOpenPr({ base: 'main', head: 'topic', marker: '<!-- owned -->' });
     writeFileSync(responseFile, JSON.stringify([{ number: 0, body: '', isDraft: true }]));

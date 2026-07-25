@@ -73,4 +73,3 @@ export interface AppBootstrapGitHub {
 export class AmbiguousBootstrapOperationError extends Error {}
 export class OwnedBootstrapBranchError extends Error {}
 export class UnresolvedRemoteBootstrapBranchError extends Error {}
-

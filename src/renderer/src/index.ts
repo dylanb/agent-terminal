@@ -173,7 +173,8 @@ if (flowStripHost) {
     wireAppBootstrapConflict({
       onConflict: (cb) => window.flow.onAppBootstrapConflict(cb),
       confirm: (opts) => flowModals!.showConfirmation(opts),
-      resolve: (key, step, wipe) => window.flow.resolveAppBootstrapConflict(key, step, wipe),
+      resolve: (key, step, wipe, target) =>
+        window.flow.resolveAppBootstrapConflict(key, step, wipe, target),
     });
   }
   loopPanel = loopPanelHost

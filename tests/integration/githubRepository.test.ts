@@ -9,6 +9,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
+  createGitHubRepositorySource,
   matchesGitHubRepositoryUrl,
   resolveGitHubRepository,
   validGitHubRepositorySelector,
@@ -19,11 +20,14 @@ import { createRealAppBootstrapPorts } from '../../src/main/appBootstrapPorts';
 const cleanup: string[] = [];
 const originalPath = process.env.PATH;
 const originalGlobalConfig = process.env.GIT_CONFIG_GLOBAL;
+const originalAttempts = process.env.FAKE_ATTEMPTS;
 
 afterEach(() => {
   process.env.PATH = originalPath;
   if (originalGlobalConfig === undefined) delete process.env.GIT_CONFIG_GLOBAL;
   else process.env.GIT_CONFIG_GLOBAL = originalGlobalConfig;
+  if (originalAttempts === undefined) delete process.env.FAKE_ATTEMPTS;
+  else process.env.FAKE_ATTEMPTS = originalAttempts;
   while (cleanup.length > 0) {
     rmSync(cleanup.pop()!, { recursive: true, force: true });
   }
@@ -48,7 +52,101 @@ function fakeGitHub(bin: string): void {
   process.env.PATH = `${bin}:${originalPath ?? ''}`;
 }
 
+function echoingGitHub(bin: string): void {
+  writeFileSync(
+    join(bin, 'gh'),
+    '#!/usr/bin/env bash\n' +
+      'selector=$3\n' +
+      'host=${selector%%/*}\n' +
+      'nameWithOwner=${selector#*/}\n' +
+      'for a in "$@"; do if [ "$a" = "--jq" ]; then jq_next=1; elif [ -n "$jq_next" ]; then jq_filter=$a; jq_next=; fi; done\n' +
+      'if [ "$jq_filter" = ".defaultBranchRef.name" ]; then printf \'%s\\n\' main; exit 0; fi\n' +
+      'printf \'{"nameWithOwner":"%s","url":"https://%s/%s","defaultBranchRef":{"name":"main"}}\\n\' "$nameWithOwner" "$host" "$nameWithOwner"\n',
+    { mode: 0o755 },
+  );
+  process.env.PATH = `${bin}:${originalPath ?? ''}`;
+}
+
 describe('GitHub repository identity', () => {
+  it('resolves on a later attempt after a transient failure', async () => {
+    const repo = mkdtempSync(join(tmpdir(), 'github-repository-retry-'));
+    const bin = mkdtempSync(join(tmpdir(), 'github-repository-retry-bin-'));
+    cleanup.push(repo, bin);
+    execFileSync('git', ['init'], { cwd: repo });
+    execFileSync(
+      'git',
+      ['remote', 'add', 'origin', 'https://github.com/owner/repository.git'],
+      { cwd: repo },
+    );
+    const attempts = join(bin, 'attempts');
+    writeFileSync(
+      join(bin, 'gh'),
+      '#!/usr/bin/env bash\n' +
+        'printf x >> "$FAKE_ATTEMPTS"\n' +
+        'if [ "$(wc -c < "$FAKE_ATTEMPTS")" -le 1 ]; then echo "auth required" >&2; exit 4; fi\n' +
+        'printf \'%s\\n\' \'{"nameWithOwner":"owner/repository","url":"https://github.com/owner/repository","defaultBranchRef":{"name":"main"}}\'\n',
+      { mode: 0o755 },
+    );
+    writeFileSync(attempts, '');
+    process.env.PATH = `${bin}:${originalPath ?? ''}`;
+    process.env.FAKE_ATTEMPTS = attempts;
+
+    const source = createGitHubRepositorySource(repo);
+    await expect(source.resolve()).rejects.toThrow();
+
+    await expect(source.resolve()).resolves.toMatchObject({
+      selector: 'github.com/owner/repository',
+    });
+  });
+
+  it('names a non-JSON repository lookup rather than leaking the parser error', async () => {
+    const repo = mkdtempSync(join(tmpdir(), 'github-repository-nonjson-'));
+    const bin = mkdtempSync(join(tmpdir(), 'github-repository-nonjson-bin-'));
+    cleanup.push(repo, bin);
+    execFileSync('git', ['init'], { cwd: repo });
+    execFileSync(
+      'git',
+      ['remote', 'add', 'origin', 'https://github.com/owner/repository.git'],
+      { cwd: repo },
+    );
+    writeFileSync(
+      join(bin, 'gh'),
+      '#!/usr/bin/env bash\nprintf \'%s\\n\' "A new release of gh is available"\n',
+      { mode: 0o755 },
+    );
+    process.env.PATH = `${bin}:${originalPath ?? ''}`;
+
+    await expect(resolveGitHubRepository(repo)).rejects.toThrow(
+      /invalid repository identity/i,
+    );
+  });
+
+  it('names the repository the operations contact, not a rewritten one', async () => {
+    const repo = mkdtempSync(join(tmpdir(), 'github-repository-rewrite-'));
+    const bin = mkdtempSync(join(tmpdir(), 'github-repository-rewrite-bin-'));
+    cleanup.push(repo, bin);
+    const git = (args: string[]): void => {
+      execFileSync('git', args, { cwd: repo });
+    };
+    git(['init']);
+    git(['remote', 'add', 'origin', 'https://github.com/owner/repository.git']);
+    // The remote operations read `remote.origin.url` straight out of config and hand the raw string
+    // to an isolated git dir that never loads this rewrite, so an identity taken from the rewritten
+    // value names a repository no operation will reach.
+    git([
+      'config',
+      '--local',
+      'url.https://github.com/attacker/other.git.insteadOf',
+      'https://github.com/owner/repository.git',
+    ]);
+    echoingGitHub(bin);
+
+    const resolved = await resolveGitHubRepository(repo);
+    expect(resolved.selector).toBe('github.com/owner/repository');
+    expect(resolved.fetchUrl).toBe('https://github.com/owner/repository.git');
+    expect(resolved.pushUrl).toBe('https://github.com/owner/repository.git');
+  });
+
   it('accepts only a canonical HTTPS URL for the expected repository resource', () => {
     expect(
       matchesGitHubRepositoryUrl(

@@ -8,21 +8,19 @@ export interface AppBootstrapConflictDeps {
     ) => void,
   ): () => void;
   confirm(opts: ConfirmDialogOptions): void;
-  resolve(repoKey: string, step: string, wipe: boolean): void;
+  resolve(
+    repoKey: string,
+    step: string,
+    wipe: boolean,
+    target: AppBootstrapConflictTarget,
+  ): void;
 }
 
 export function wireAppBootstrapConflict(
   deps: AppBootstrapConflictDeps,
 ): () => void {
-  return deps.onConflict(({
-    repository,
-    branch,
-    localOid,
-    remoteOid,
-    pullRequests,
-    repoKey,
-    step,
-  }) => {
+  return deps.onConflict(({ repoKey, step, ...target }) => {
+    const { repository, branch, localOid, remoteOid, pullRequests } = target;
     const resources: string[] = [];
     if (localOid !== null) {
       resources.push(`local branch ${branch} at ${localOid}`);
@@ -39,8 +37,9 @@ export function wireAppBootstrapConflict(
       title: 'Bootstrap resources already exist',
       message: `Wiping will delete or close exactly: ${resources.join(', ')}. Wipe and retry?`,
       confirmLabel: 'Wipe and retry',
-      onConfirm: () => deps.resolve(repoKey, step, true),
-      onCancel: () => deps.resolve(repoKey, step, false),
+      role: 'alertdialog',
+      onConfirm: () => deps.resolve(repoKey, step, true, target),
+      onCancel: () => deps.resolve(repoKey, step, false, target),
     });
   });
 }

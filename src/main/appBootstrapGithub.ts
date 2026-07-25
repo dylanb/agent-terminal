@@ -1,6 +1,10 @@
 import { errMsg } from './errno';
 import { numberFromGithubUrl } from '../shared/githubUrl';
-import { run } from './appBootstrapCommand';
+import { runAppCommand } from './appCommand';
+import {
+  matchesGitHubRepositoryUrl,
+  type GitHubRepositorySource,
+} from './githubRepository';
 import {
   AmbiguousBootstrapOperationError,
   type AppBootstrapGitHub,
@@ -42,9 +46,22 @@ function parseOwnedPrLookup(out: string, marker: string): OwnedPrLookup {
   return candidates.length === 0 ? { kind: 'absent' } : { kind: 'foreign' };
 }
 
-export function createRealAppBootstrapGitHub(repoDir: string): AppBootstrapGitHub {
-  const gh = (args: string[], failure: string): Promise<string> =>
-    run('gh', args, repoDir, failure);
+export function createRealAppBootstrapGitHub(
+  repoDir: string,
+  repositorySource: GitHubRepositorySource,
+): AppBootstrapGitHub {
+  const gh = async (args: string[], failure: string): Promise<string> => {
+    const identity = await repositorySource.resolve();
+    try {
+      return await runAppCommand(
+        'gh',
+        [...args, '--repo', identity.selector],
+        repoDir,
+      );
+    } catch (e) {
+      throw new Error(`${failure}: ${errMsg(e)}`);
+    }
+  };
   return {
     viewIssue: async (issue) => {
       try {
@@ -92,9 +109,14 @@ export function createRealAppBootstrapGitHub(repoDir: string): AppBootstrapGitHu
       if (number === null) {
         throw new AmbiguousBootstrapOperationError('draft PR creation outcome was not recognized');
       }
-      // TODO(dylanb): the printed URL's repository is not checked against the resolved origin, so a `gh`
-      // that returns another repository's PR URL yields a number this app then labels and marks ready.
-      // Closing it means resolving the repository here and treating a mismatch as an ambiguous outcome.
+      const identity = await repositorySource.resolve();
+      if (
+        !matchesGitHubRepositoryUrl(out.trim(), identity, 'pull', number)
+      ) {
+        throw new AmbiguousBootstrapOperationError(
+          'draft PR creation named another repository',
+        );
+      }
       return number;
     },
     findOwnedOpenPr: async ({ base, head, marker }) => {
@@ -135,4 +157,3 @@ export function createRealAppBootstrapGitHub(repoDir: string): AppBootstrapGitHu
       )),
   };
 }
-

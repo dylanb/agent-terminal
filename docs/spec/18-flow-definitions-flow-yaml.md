@@ -5,7 +5,7 @@
 - A flow definition is a **declarative YAML file** the app reads and watches. The **instantiated** definition for a run lives at `<worktree>/.agent-terminal/flow.yaml`; progression at `<worktree>/.agent-terminal/flow-state.yaml` (§19.1).
 - **Library:** definitions are chosen from a merged library — **global** `~/.config/agent-terminal/flows/*.yaml` ∪ **per-repo** `<repo>/.agent-terminal/flows/*.yaml`; **repo entries win on name clash** (`flow:list`).
 - **Global directory = the per-user home `~/.agent-terminal/` (§23.4).** The "global" flow definition/template lookup resolves relative to the user's home (F = `$HOME`, else the OS home) — a fixed per-process anchor that does not track later cwd changes, **independent of the launch root L**. The local-first repo tier (`<repo>/.agent-terminal/flow.yaml`) already covers the repo the instance launched at; the global tier is the per-user fallback for a repo that has none, so it must never be re-anchored to L (which would shadow the user's `~/.agent-terminal/flow.yaml` rather than fall back to it).
-- **Install-examples action — a user-invoked seed across a set of destinations (v2.134, was flow-home-only).** A Settings affordance seeds what the bundle carries into the places their readers discover them from. There are five **destinations**, and a destination is the unit the user consents to, the unit a conflict is reported under, and the unit a result is grouped by: the **flow home** (above); the legacy engine's **loop-config location** (§24.2.3); the app-owned **V2 loop-definition location** (§27.3); and the two directories **Claude Code** — a separate process — loads **skills** and **slash commands** from. Nothing the app reads out of its own bundle makes a persona or a command discoverable, so the files must physically land there.
+- **Install-examples action — a user-invoked seed across a set of destinations (v2.134, was flow-home-only).** A Settings affordance seeds what the bundle carries into the places their readers discover them from. There are five **destinations**, and a destination is the unit the user consents to, the unit a conflict is reported under, and the unit a result is grouped by: the **flow home** (above); the app-owned **V2 loop-definition location** (§27.15); the legacy engine's **loop-config location** (§24.2.3); and the two directories **Claude Code** — a separate process — loads **skills** and **slash commands** from. Nothing the app reads out of its own bundle makes a persona or a command discoverable, so the files must physically land there.
   - **Global, never override-aware.** The loops destination is the **user-level** loops directory, not whatever `resolveLoopDir` would answer for the repo the app is pointed at. A repo carrying an override has deliberately taken ownership of what that override contains; reconciling it against a newly-seeded global definition is the user's business (§24.2.3 resolution order, unchanged). An install that landed inside one repo would leave every other repo — and the packaged app opened against none — unseeded.
   - **Skills fan in.** A LoopDef names its personas by bare skill name and Claude Code discovers a skill only as `<skills root>/<skill name>/`, so each bundled skill is written **twice**: once under its own loop's directory at the loop-config destination (the §26.5 layout the engine reads), and once under the shared skills root. It is a copy-out, not a move.
   - **Non-destructive, per destination.** A file that is absent is created; a file present and byte-identical is skipped; a file present and differing is replaced **only** in a destination the user consented to. Consent in one destination never replaces files in another. Enumeration is tree-driven over the bundle, so a file added to the bundle later is seeded with no code change.
@@ -18,13 +18,13 @@
 
 ```mermaid
 flowchart TD
-  CLICK["User clicks Install examples"] --> PREVIEW["examples:preview — confine and classify; return opaque previewId; retain one-use source/target snapshot in main"]
+  CLICK["User clicks Install examples"] --> PREVIEW["examples:preview — confine and classify, return an opaque previewId, retain a one-use source/target snapshot in main"]
   PREVIEW -->|"refused — ok: false"| PERR["Error surfaced, nothing written"]
   PREVIEW -->|"no destination differs"| APPLY["examples:apply {previewId, replace: []}"]
   PREVIEW -->|"one or more differ"| CONSENT["Consent step: one checkbox per CONFLICTING destination"]
   CONSENT -->|"dismissed"| NOOP["Nothing written"]
   CONSENT -->|"confirmed"| APPLY2["examples:apply {previewId, replace: consented ids}"]
-  APPLY --> AUTH{"Matching pending one-use previewId; replacements were offered?"}
+  APPLY --> AUTH{"Matching pending one-use previewId, and replacements that were offered?"}
   APPLY2 --> AUTH
   AUTH -->|"no — stale, replayed, or not offered"| REFUSE
   AUTH -->|"yes"| RESOLVE{"Bundle trees present and every file confined to its destination?"}
@@ -46,8 +46,8 @@ flowchart TD
 
   subgraph DEST["Destinations (write targets)"]
     DF["flow — ~/.agent-terminal &#40;§23.4&#41;"]
+    DV["appLoops — user-config loops-v2 dir read by V2 resolver &#40;§27.15&#41;"]
     DL["loops — user-config loops dir &#40;§24.2.3, never override-aware&#41;"]
-    DV["appLoops — user-config loops-v2 dir read by V2 resolver &#40;§27.3&#41;"]
     DS["skills — user-config skills dir &#40;Claude Code&#41;"]
     DC["commands — user-config commands dir &#40;Claude Code&#41;"]
   end

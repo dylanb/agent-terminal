@@ -411,7 +411,12 @@ export interface AppLoopBootstrapCoordinatorDeps {
 
 export interface AppLoopBootstrapCoordinator {
   enter(job: AppLoopBootstrapJob): void;
-  resolve(repoDir: string, stepId: string, wipe: boolean): void;
+  resolve(
+    repoDir: string,
+    stepId: string,
+    wipe: boolean,
+    target: AppBootstrapConflictTarget,
+  ): void;
 }
 
 export function createAppLoopBootstrapCoordinator(
@@ -742,10 +747,11 @@ export function createAppLoopBootstrapCoordinator(
 
   return {
     enter: (job) => dispatchJob(job),
-    resolve(repoDir, stepId, wipe) {
+    resolve(repoDir, stepId, wipe, target) {
       const key = heldKey(repoDir, stepId);
       const conflict = held.get(key);
       if (conflict === undefined) return;
+      if (!sameAppBootstrapConflictTarget(conflict.target, target)) return;
       held.delete(key);
       const status = currentStatus(conflict.job);
       if (status.kind === 'failed') {

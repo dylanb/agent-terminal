@@ -19,16 +19,13 @@ export function createRealAppBootstrapPorts(
   repoDir: string,
   faults?: AppBootstrapGitFaults,
 ): AppBootstrapPorts {
-  // The conflict store reads and deletes branches through this same git port, so every destructive
-  // remote operation inherits its neutralized configuration and isolated remote dir (§27.10).
-  const git = createRealAppBootstrapGit(repoDir, faults);
+  // §27.10 — one repository identity and one git port across all three, so a conflict this names and a
+  // branch this deletes cannot resolve to different repositories.
+  const repositorySource = createGitHubRepositorySource(repoDir);
+  const git = createRealAppBootstrapGit(repoDir, faults, repositorySource);
   return {
     git,
-    github: createRealAppBootstrapGitHub(repoDir),
-    conflicts: createRealAppBootstrapConflicts(
-      repoDir,
-      git,
-      createGitHubRepositorySource(repoDir),
-    ),
+    github: createRealAppBootstrapGitHub(repoDir, repositorySource),
+    conflicts: createRealAppBootstrapConflicts(repoDir, git, repositorySource),
   };
 }

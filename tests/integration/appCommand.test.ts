@@ -88,6 +88,63 @@ describe('app command boundary', () => {
     );
   });
 
+  it('reads the object of the named ref, not of another ref the pattern matches', async () => {
+    const repo = mkdtempSync(join(tmpdir(), 'app-command-read-repo-'));
+    const remote = mkdtempSync(join(tmpdir(), 'app-command-read-remote-'));
+    cleanup.push(repo, remote);
+    const git = (args: string[]): string =>
+      execFileSync('git', args, { cwd: repo, encoding: 'utf8' }).trim();
+    git(['init', '-b', 'main']);
+    git(['config', 'user.name', 'Command Test']);
+    git(['config', 'user.email', 'command@example.test']);
+    execFileSync('git', ['init', '--bare'], { cwd: remote });
+    writeFileSync(join(repo, 'README.md'), 'decoy\n');
+    git(['add', 'README.md']);
+    git(['commit', '-m', 'decoy']);
+    const decoyOid = git(['rev-parse', 'HEAD']);
+    writeFileSync(join(repo, 'README.md'), 'real\n');
+    git(['add', 'README.md']);
+    git(['commit', '-m', 'real']);
+    const realOid = git(['rev-parse', 'HEAD']);
+    expect(decoyOid).not.toBe(realOid);
+    // `git ls-remote <pattern>` matches the tail of a ref name on a slash boundary, and this decoy
+    // sorts ahead of the real ref.
+    git([
+      'push',
+      remote,
+      `${decoyOid}:refs/heads/decoy/refs/heads/plan-loop/issue-78`,
+      `${realOid}:refs/heads/plan-loop/issue-78`,
+    ]);
+
+    await expect(
+      createAppGitRemote(repo).readRef(remote, 'refs/heads/plan-loop/issue-78'),
+    ).resolves.toBe(realOid);
+  });
+
+  it('reports a ref absent when only another ref the pattern matches exists', async () => {
+    const repo = mkdtempSync(join(tmpdir(), 'app-command-absent-repo-'));
+    const remote = mkdtempSync(join(tmpdir(), 'app-command-absent-remote-'));
+    cleanup.push(repo, remote);
+    const git = (args: string[]): string =>
+      execFileSync('git', args, { cwd: repo, encoding: 'utf8' }).trim();
+    git(['init', '-b', 'main']);
+    git(['config', 'user.name', 'Command Test']);
+    git(['config', 'user.email', 'command@example.test']);
+    execFileSync('git', ['init', '--bare'], { cwd: remote });
+    writeFileSync(join(repo, 'README.md'), 'decoy\n');
+    git(['add', 'README.md']);
+    git(['commit', '-m', 'decoy']);
+    git([
+      'push',
+      remote,
+      'HEAD:refs/heads/decoy/refs/heads/plan-loop/issue-78',
+    ]);
+
+    await expect(
+      createAppGitRemote(repo).readRef(remote, 'refs/heads/plan-loop/issue-78'),
+    ).resolves.toBeNull();
+  });
+
   it('does not delete a remote ref that moved past the expected object', async () => {
     const repo = mkdtempSync(join(tmpdir(), 'app-command-delete-repo-'));
     const remote = mkdtempSync(join(tmpdir(), 'app-command-delete-remote-'));

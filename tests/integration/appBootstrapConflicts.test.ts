@@ -43,7 +43,19 @@ async function redirectOriginToLocal(
   remote: string,
   ports: ReturnType<typeof createRealAppBootstrapPorts>,
 ): Promise<void> {
-  await ports.conflicts.inspect('identity-warmup').catch(() => {});
+  // The warm-up cannot fully succeed (the probe reaches the real origin, and the fakes answer for one
+  // branch only), but it MUST get past origin-identity resolution — that is what memoizes the identity
+  // before the redirect below. Swallowing every error here let a resolution failure resolve the identity
+  // afterwards against a file:// URL, reproducing the very messages these tests assert on.
+  const warmUp = await ports.conflicts
+    .inspect('identity-warmup')
+    .then(
+      () => null,
+      (e: unknown) => (e instanceof Error ? e.message : String(e)),
+    );
+  expect(warmUp ?? '').not.toMatch(
+    /origin repository|invalid repository identity|invalid origin/i,
+  );
   const configDir = mkdtempSync(join(tmpdir(), `${prefix}-config-`));
   cleanup.push(configDir);
   const config = join(configDir, 'gitconfig');

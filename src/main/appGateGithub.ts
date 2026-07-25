@@ -1,9 +1,10 @@
 import { readFile } from 'node:fs/promises';
+import { errMsg } from './errno';
 import type { AppLoopBootstrap } from './appLoopState';
 import { runAppCommand } from './appCommand';
 import {
+  createGitHubRepositorySource,
   matchesGitHubRepositoryUrl,
-  resolveGitHubRepository,
   type GitHubRepositoryIdentity,
 } from './githubRepository';
 import { isRecord } from './yamlRecord';
@@ -50,8 +51,10 @@ export function createAppGateGitHub(
     let pullRequest: AppGatePullRequest;
     try {
       pullRequest = await github.pullRequest(bootstrap.pr);
-    } catch {
-      throw new Error('bootstrap PR identity could not be verified');
+    } catch (e) {
+      throw new Error(
+        `bootstrap PR identity could not be verified: ${errMsg(e)}`,
+      );
     }
     if (
       pullRequest.number !== bootstrap.pr ||
@@ -150,27 +153,31 @@ function parsePullRequest(
 export function createRealAppGateGitHub(
   repoDir: string,
 ): RunAppGateSideEffect {
-  let repositoryPromise: Promise<GitHubRepositoryIdentity> | undefined;
+  const repositorySource = createGitHubRepositorySource(repoDir);
   const repository = (): Promise<GitHubRepositoryIdentity> =>
-    (repositoryPromise ??= resolveGitHubRepository(repoDir));
+    repositorySource.resolve();
   const github: AppGateGitHubOperations = {
     pullRequest: async (number) => {
       const identity = await repository();
-      const raw: unknown = JSON.parse(
-        await runAppCommand(
-          'gh',
-          [
-            'pr',
-            'view',
-            String(number),
-            '--repo',
-            identity.selector,
-            '--json',
-            'number,url,headRefName,state,closingIssuesReferences',
-          ],
-          repoDir,
-        ),
+      const viewed = await runAppCommand(
+        'gh',
+        [
+          'pr',
+          'view',
+          String(number),
+          '--repo',
+          identity.selector,
+          '--json',
+          'number,url,headRefName,state,closingIssuesReferences',
+        ],
+        repoDir,
       );
+      let raw: unknown;
+      try {
+        raw = JSON.parse(viewed);
+      } catch {
+        throw new Error('invalid GitHub pull request identity');
+      }
       return parsePullRequest(raw, number, identity);
     },
     markPullRequestReady: async (number) => {
@@ -189,6 +196,15 @@ export function createRealAppGateGitHub(
     },
     updateIssueBody: async (issue, bodyFile) => {
       const identity = await repository();
+      let body: string;
+      try {
+        body = await readFile(bodyFile, 'utf8');
+      } catch (e) {
+        throw new Error(`could not read the issue body artifact: ${errMsg(e)}`);
+      }
+      if (body.trim().length === 0) {
+        throw new Error('refused to publish an empty issue body artifact');
+      }
       await runAppCommand(
         'gh',
         [
@@ -228,8 +244,8 @@ export function createRealAppGateGitHub(
       let body: string;
       try {
         body = await readFile(bodyFile, 'utf8');
-      } catch {
-        throw new Error('could not read the PR body artifact');
+      } catch (e) {
+        throw new Error(`could not read the PR body artifact: ${errMsg(e)}`);
       }
       const artifact = body.trimEnd();
       const closingLine = `closes #${closingIssue}`;
