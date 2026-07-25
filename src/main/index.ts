@@ -74,7 +74,7 @@ import { captureLastReport } from './captureLast';
 import { createFlowManager, deriveFlowView, legacyLoopNameForStep, loadFlowDefinitionLocalFirst } from './flow';
 import { createGithubRefs } from './githubRefs';
 import { createAuditRecorder } from './auditRecorder';
-import { appBootstrapAuditCmd, type TransitionKind } from '../shared/audit';
+import { appBootstrapAuditCmd, appBootstrapAuditExit, type TransitionKind } from '../shared/audit';
 import { auditRootDir } from './auditPaths';
 import { createFlowEntryActions } from './flowEntryActions';
 import { planStepResume } from './loopRebind';
@@ -1164,7 +1164,7 @@ async function createWindow(): Promise<void> {
         repoDir,
         'pickup',
         appBootstrapAuditCmd(kind, stepId, detail),
-        kind === 'start' || kind === 'stale' ? null : kind === 'success' ? 0 : 1,
+        appBootstrapAuditExit(kind),
       ),
   });
 

@@ -4336,16 +4336,34 @@ test('a §27 pickup conflict declined destroys nothing and reverts the step', { 
   await expect(conflict).toBeHidden({ timeout: 10_000 });
   // Wait for the decline to be RECORDED before asserting absence: the wipe is asynchronous, so
   // asserting straight after the click passes whether the answer was honoured or ignored.
+  const declineCommands = (): { cmd: string; exit: number | null }[] => {
+    const files = auditRunFiles(home, repo);
+    if (files.length !== 1) return [];
+    return readAuditRun(home, repo, files[0])
+      .events.filter(
+        (e): e is Extract<AuditEvent, { type: 'command' }> => e.type === 'command',
+      )
+      .filter((e) => e.cmd.startsWith('§27 bootstrap plan'))
+      .map((e) => ({ cmd: e.cmd, exit: e.exit }));
+  };
+  // The whole sequence, not a substring: `includes('decline')` matched the ROLLBACK event's detail
+  // ("operator declined branch wipe"), so it passed without a decline event ever being recorded. The
+  // exits carry the meaning — a decline is an ANSWER (0), the conflict is a pause awaiting one (null).
   await expect
-    .poll(
-      () =>
-        auditRunFiles(home, repo).length === 1 &&
-        readAuditRun(home, repo, auditRunFiles(home, repo)[0]).events.some(
-          (e) => JSON.stringify(e).includes('decline'),
-        ),
-      { timeout: 20_000 },
-    )
-    .toBe(true);
+    .poll(() => declineCommands().length, { timeout: 20_000 })
+    .toBe(4);
+  expect(declineCommands()).toEqual([
+    { cmd: '§27 bootstrap plan started', exit: null },
+    {
+      cmd: '§27 bootstrap plan found a conflict: plan-loop/issue-176',
+      exit: null,
+    },
+    { cmd: '§27 bootstrap plan wipe declined: plan-loop/issue-176', exit: 0 },
+    {
+      cmd: '§27 bootstrap plan rolled back: operator declined branch wipe',
+      exit: 1,
+    },
+  ]);
 
   // Nothing destroyed: the PR was never closed, no ref delete was pushed, and both refs still stand.
   expect(existsSync(`${logFile}.pr-321-closed`)).toBe(false);

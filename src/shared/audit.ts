@@ -386,6 +386,29 @@ export type AppBootstrapAuditKind =
   | 'rollback'
   | 'stale';
 
+/** The exit each kind records: 0 for an outcome that succeeded, 1 for one that failed, null for a kind
+ *  that is not an outcome at all. It lives beside the vocabulary it classifies so widening the union is
+ *  a compile error here rather than a silent fall-through at whichever caller does the mapping. */
+export function appBootstrapAuditExit(kind: AppBootstrapAuditKind): number | null {
+  switch (kind) {
+    case 'success':
+    case 'wipe':
+    case 'decline':
+      return 0;
+    case 'failure':
+    case 'rollback':
+      return 1;
+    case 'start':
+    case 'conflict':
+    case 'stale':
+      return null;
+    default: {
+      const unreachable: never = kind;
+      return unreachable;
+    }
+  }
+}
+
 export function appBootstrapAuditCmd(kind: AppBootstrapAuditKind, step: string, detail?: string): string {
   const suffix = detail ? `: ${detail}` : '';
   switch (kind) {
