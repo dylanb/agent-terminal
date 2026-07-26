@@ -46,4 +46,12 @@ describe('the shipped flow and the todo templates installed beside it', () => {
       expect(items.every((item) => item.trim().length > 0)).toBe(true);
     }
   });
+
+  it('opens the plan review by asking for the plan in business language', () => {
+    const items = parseTodoTemplate(
+      loadTodoTemplateFile(todoTemplatesDir(flowDir), 'plan-loop-review')!,
+    );
+
+    expect(items[0]).toBe('describe the plan to me in concise, simple, business language bullets');
+  });
 });

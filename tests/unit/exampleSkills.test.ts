@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { listBundledSkills, skillNameConflicts } from '../../src/main/exampleSkills';
@@ -64,5 +64,20 @@ describe('the real bundled loops carry no colliding skill name', () => {
   it('has no skill name shipped by more than one loop', () => {
     const conflicts = skillNameConflicts(path.resolve('example', 'loops'));
     expect(conflicts).toEqual([]);
+  });
+
+  it('runs the security latent-flow keep/drop gate after the general finding guidance', () => {
+    const skill = readFileSync(
+      path.resolve('example', 'loops', 'impl-loop', 'skills', 'impl-review-security', 'SKILL.md'),
+      'utf8',
+    );
+    const findingQuality = skill.indexOf('## Finding quality');
+    const gate = skill.indexOf('## Latent-flow keep/drop gate — run this last');
+
+    expect(findingQuality).toBeGreaterThanOrEqual(0);
+    expect(gate).toBeGreaterThan(findingQuality);
+    expect(skill.slice(gate)).toContain('If both answers are yes, emit a finding.');
+    expect(skill.slice(gate)).toContain('"only trusted callers today"');
+    expect(skill.slice(gate)).toContain('must not return `clean` or move the candidate to `considered_dropped`');
   });
 });
