@@ -283,7 +283,31 @@ engine will look for them.
   `reviewTurn.ts:109`, `consolidateTurn.ts:75`. The only caller relying on the default is the deleted
   `loopRecipe.ts` (`:52`, `:139`).
 
-## B.18 `src/main/flowState.ts` (2) — the persisted document
+## B.18 `src/renderer/src/flowInputModal.ts` (1) — **Split, not Scrub. Operator-visible text.**
+
+The one place in production `src/` where a §26 citation is **rendered to the user**, not written in a
+comment:
+
+```
+flowInputModal.ts:62
+help.textContent = `Runs ${prompt.bootstrap} on entry to start the loop (§26.9). Threaded to later steps' inputs.`
+```
+
+That element is the input's `aria-describedby` target (`:64`), so the string is also the field's
+**accessible description** — the text a screen-reader user hears before typing. Filing this as a scrub
+would have shipped a retired section number in the UI *and* in the a11y tree.
+
+- **Goes:** the `(§26.9)` citation, and the sentence's claim about what `bootstrap` does, which AC 10
+  changes — `bootstrap: pickup` is now satisfied by the surviving engine's bootstrap contract.
+- **Graded under AC 9** (no surface may imply a removed capability is still available) and re-checked
+  against **WCAG 4.1.2** (name/role/value) and **1.3.1** (info and relationships), since the description
+  association is what carries it.
+- **`tests/unit/flowInputModal.test.ts:38`** asserts `host.textContent` contains `'§26.9'`. That assertion
+  **must change**, and it is **not** an AC 2 "weakened assertion" defect: its subject's rendered text
+  legitimately changes under AC 9. The replacement asserts the new text and keeps the description
+  association — it does not merely drop the check.
+
+## B.19 `src/main/flowState.ts` (2) — the persisted document
 
 - **Goes:** nothing from `PERSISTED_KEYS`.
 - **Stays:** `started_at` / `startedAt` and `readStartedAt`. The decoder **rejects any key outside a fixed
@@ -310,9 +334,15 @@ worked example of why a §26 header is evidence and not proof, in the direction 
 content is a live exported constant, not a citation, so scrubbing it would have changed behavior.
 
 **`src/renderer`:** `confirmDialog.ts` (3), `spinner.ts` (1), `installExamples.ts` (1),
-`flowInputModal.ts` (1 — the helper text names `bootstrap`; re-pointed at §27.10, and its wording is
-re-checked against AC 10), `errorDialog.ts` (1), `wireBootstrapConflict.ts` (1), `styles.css` (2),
-`index.html` (1).
+`errorDialog.ts` (1), `wireBootstrapConflict.ts` (1), `styles.css` (2), `index.html` (1).
+`flowInputModal.ts` (1) was initially filed here and **re-classified Split** — see §B.18.
+
+**How the three re-classifications out of this section were found**, so the operator can judge the coverage
+rather than take it on trust: a mechanical scan for `§26` on lines that are **not** pure comment lines,
+across all of `src/` and `tests/`. In production `src/` it returns exactly four hits —
+`flowInputModal.ts:62` (a rendered string), `exampleAssetsBuild.ts:36` (a thrown message, inside code §B.11
+deletes anyway), and two trailing comments on code lines in modules already Split. Everything else in
+`tests/` is a `describe`/`it` title, which is scrub territory by AC 3's own wording.
 
 **`tests/`:** `unit/shadow.test.ts`-class files — see §D.3.
 
