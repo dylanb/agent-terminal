@@ -828,8 +828,10 @@ describe('createRealAppBootstrapGit — owned remote-ref compensation', () => {
       /* the --exec false stops the rebase mid-flight, which is the state under test */
     }
 
+    // The reason must name the cause: git's stderr carries the branch name and cannot be surfaced,
+    // and a bare exit code tells the operator nothing they can act on.
     await expect(port.deleteBranch(branch, state)).rejects.toThrow(
-      /local branch wipe failed/i,
+      /while it is in use/i,
     );
     expect(hasRef(repo, `refs/heads/${branch}`)).toBe(true);
   });
@@ -899,6 +901,23 @@ describe('createRealAppBootstrapGit — owned remote-ref compensation', () => {
       /branch changed after the caller read its identity/i,
     );
     expect(runGit(repo, ['rev-parse', `refs/heads/${branch}`])).toBe(moveTo);
+  });
+
+  // Each cache belongs to the act that orphans it: the tracking ref to the remote delete, the branch
+  // config to the local one. Cleaning both wherever either lands strips the upstream config of a branch
+  // the operator still has, when the remote half went and the local delete then failed.
+  it('keeps the branch config when the local branch survives a failed wipe', async () => {
+    const { port, pushedOid } = await createPushedOwnedBranch();
+    expect(branchSection()).toContain('.remote origin');
+    writeFileSync(join(repo, '.git', 'refs', 'heads', `${branch}.lock`), '');
+
+    await expect(
+      port.deleteBranch(branch, { localOid: pushedOid, remoteOid: pushedOid }),
+    ).rejects.toThrow(/local branch wipe failed/i);
+
+    expect(hasRef(repo, `refs/remotes/origin/${branch}`)).toBe(false);
+    expect(hasRef(repo, `refs/heads/${branch}`)).toBe(true);
+    expect(branchSection()).toContain('.remote origin');
   });
 
   // Either lease refusing must leave BOTH halves intact: a wipe that destroys the origin branch and then

@@ -175,14 +175,21 @@ export function createRealAppBootstrapGit(
     }
     await git(['checkout', '--detach', checkout.value], 'previous commit restoration failed');
   };
-  // A delete-push to a NAMED remote drops refs/remotes/<remote>/<branch>, and `git branch -D` drops the
-  // branch.<name> section; deleting through the URL-addressed isolated dir does neither, so both caches
-  // outlive the branch. Keyed on the RESOURCE, not on which leg ran: every route that removes the branch
-  // leaves neither behind. Cleanup only — it must never fail a step whose destructive half already landed.
-  // A cheap PRE-check so an in-use branch is refused before the remote half is destroyed. It is not the
-  // authority — `git branch -D` at the delete is, and it knows cases no query reports (mid-rebase a
-  // worktree prints `detached` with no branch line). This exists so the common case fails early rather
-  // than after an irreversible remote delete.
+  // Each cache belongs to the act that orphans it. A delete-push to a NAMED remote drops
+  // refs/remotes/<remote>/<branch> and `git branch -D` drops the branch.<name> section; deleting
+  // through the URL-addressed isolated dir does neither. Cleanup only — it must never fail a step
+  // whose destructive half already landed.
+  const bestEffort = async (args: string[]): Promise<void> => {
+    try {
+      await git(args, 'branch cache cleanup failed');
+    } catch {
+      /* best-effort */
+    }
+  };
+  const forgetRemoteTracking = (branch: string): Promise<void> =>
+    bestEffort(['update-ref', '-d', `refs/remotes/origin/${branch}`]);
+  const forgetBranchConfig = (branch: string): Promise<void> =>
+    bestEffort(['config', '--remove-section', `branch.${branch}`]);
   const branchLooksInUse = async (branch: string): Promise<boolean> => {
     const listed = await git(
       ['worktree', 'list', '--porcelain'],
@@ -202,18 +209,6 @@ export function createRealAppBootstrapGit(
       }
     }
     return false;
-  };
-  const forgetBranchCaches = async (branch: string): Promise<void> => {
-    for (const args of [
-      ['update-ref', '-d', `refs/remotes/origin/${branch}`],
-      ['config', '--remove-section', `branch.${branch}`],
-    ]) {
-      try {
-        await git(args, 'branch cache cleanup failed');
-      } catch {
-        /* best-effort */
-      }
-    }
   };
   const reconcileStartCommit = async (
     branch: string,
@@ -315,7 +310,7 @@ export function createRealAppBootstrapGit(
         const wipeUrl = await approvedOriginUrl('push');
         await remoteOp('remote branch wipe failed', async (r) =>
           r.deleteRef(wipeUrl, `refs/heads/${branch}`, remoteOid));
-        await forgetBranchCaches(branch);
+        await forgetRemoteTracking(branch);
       }
       if (localOid !== null) {
         const checkout = await currentCheckout();
@@ -344,7 +339,23 @@ export function createRealAppBootstrapGit(
               'local branch wipe failed: branch changed after the caller read its identity',
             );
           }
-          await git(['branch', '-D', '--', branch], 'local branch wipe failed');
+          try {
+            await git(['branch', '-D', '--', branch], 'local branch wipe failed');
+          } catch (deleteError) {
+            // git's stderr names the branch, so it cannot be surfaced (§27.10 redaction). The ref
+            // surviving its own delete is what distinguishes a refusal from any other failure, and a
+            // refusal is the one the operator can act on.
+            const survived = await git(
+              ['branch', '--list', '--format=%(refname)', '--', branch],
+              'local branch wipe failed',
+            ).then((listed) => listed.trim().length > 0, () => false);
+            if (survived) {
+              throw new Error(
+                'local branch wipe failed: git refuses to delete the branch while it is in use',
+              );
+            }
+            throw deleteError;
+          }
         } catch (e) {
           if (!movedHead) throw e;
           try {
@@ -356,7 +367,7 @@ export function createRealAppBootstrapGit(
           }
           throw e;
         }
-        await forgetBranchCaches(branch);
+        await forgetBranchConfig(branch);
       }
     },
     rollbackCreatedBranch: async (branch, ownedOid) => {
@@ -424,7 +435,8 @@ export function createRealAppBootstrapGit(
           'local branch rollback failed',
         );
       }
-      await forgetBranchCaches(branch);
+      await forgetRemoteTracking(branch);
+      await forgetBranchConfig(branch);
       created.delete(branch);
       pushed.delete(branch);
       if (activeCreatedBranch === branch) activeCreatedBranch = null;
