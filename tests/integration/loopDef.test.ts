@@ -10,6 +10,7 @@ import {
   normalizeConsolidatedVerdict,
   isPersonaClean,
 } from '../../src/main/loopDef';
+import { resolveLoopDefV2 } from '../../src/main/loopDefV2';
 
 // §24.2.3 T2 (folded) / §18.1 — the read-only LoopDef resolver. Each gate's `id` IS a status string,
 // carrying `human_options` + `kind`. Resolution mirrors `agent-loop list`: a repo `.agent-loop.yaml`
@@ -231,6 +232,22 @@ describe('pickup_contract resolution (§26.5 / §26.9)', () => {
     );
     expect(parseLoopDef(repo, 'mini-loop', cfg)?.resume).toBeUndefined();
     rmSync(cfg, { recursive: true, force: true });
+  });
+
+  // The v2 schema renamed `slot:` to `label:` and dropped the resolver, so the v2 def carries concrete
+  // label strings. The migration must not change WHICH labels a pickup applies: bare slot names left in
+  // the v2 def would remove a label named `ready` — which does not exist — and add `in-progress` in
+  // place of `plan-loop/in-progress`.
+  it('applies the same concrete labels as the v1 def it was migrated from', () => {
+    const result = resolveLoopDefV2('plan-loop', {
+      tiers: { operator: null, appBundled: join(exampleConfigDir, 'loops-v2') },
+      repoDir: repo,
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.def.pickup?.initialLabels).toEqual(
+      parseLoopDef(repo, 'plan-loop', exampleConfigDir)?.pickup?.initialLabels,
+    );
   });
 
   it('resolves each initial_labels slot to its concrete label string (target-scoped)', () => {

@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join, basename } from 'node:path';
 import { parseColor, contrastRatio, ringOver } from '../helpers/wcag';
 import { WINDOW_TIMEOUT_MS } from '../helpers/e2eBudget';
+import { load } from 'js-yaml';
 import { CH, SESSION_ID } from '../../src/shared/ipc';
 import { CLI_COMMAND_NAME } from '../../src/main/cliShim';
 import { parseAuditStream, type AuditEvent } from '../../src/shared/audit';
@@ -1717,6 +1718,9 @@ function seedFakeGhGit(prefix: string): { binDir: string; logFile: string } {
   const logFile = join(binDir, 'calls.log');
   const fakeGit =
     '#!/usr/bin/env bash\n' +
+    // The bootstrap port runs remote operations in a throwaway bare git dir, so the shim sees
+    // `--git-dir <tmp>` ahead of the neutralizing -c pairs.
+    'if [ "$1" = "--git-dir" ]; then shift 2; fi\n' +
     'while [ "$1" = "-c" ]; do shift 2; done\n' +
     'echo "git $*" >> "$FAKE_GHGIT_LOG"\n' +
     // status --porcelain emits nothing → a clean tree; when FAKE_GIT_DIRTY is set it emits a non-.agent-loop
@@ -1725,28 +1729,50 @@ function seedFakeGhGit(prefix: string): { binDir: string; logFile: string } {
     'if [ "$1" = "status" ] && [ "$2" = "--porcelain" ] && [ "$#" -eq 2 ] && [ -n "$FAKE_GIT_DIRTY_ONCE" ] && [ ! -e "$FAKE_GHGIT_LOG.dirty-seen" ]; then touch "$FAKE_GHGIT_LOG.dirty-seen"; echo " M src/app.ts"; exit 0; fi\n' +
     // branch --list prints the queried branch when FAKE_GIT_BRANCH_EXISTS is set → a pickup conflict (§26.9).
     'if [ "$1" = "branch" ] && [ "$2" = "--list" ]; then local_branch=$(cat "$FAKE_GHGIT_LOG.local-branch" 2>/dev/null || true); if [ -n "$FAKE_GIT_BRANCH_EXISTS" ] || [ "$local_branch" = "$3" ]; then echo "  $3"; fi; exit 0; fi\n' +
-    'if [ "$1" = "remote" ] && [ "$2" = "get-url" ]; then echo "https://example.invalid/repo.git"; exit 0; fi\n' +
+    'if [ "$1" = "remote" ] && [ "$2" = "get-url" ]; then echo "https://github.com/fake/repo.git"; exit 0; fi\n' +
+    // show-ref --verify is the local half of the §27.10 conflict probe: exit 1 (not 128) when the ref is
+    // absent, which is what the port distinguishes "no local branch" from "the probe itself failed" by.
+    'if [ "$1" = "show-ref" ]; then ref=${!#}; local_branch=$(cat "$FAKE_GHGIT_LOG.local-branch" 2>/dev/null || true); if [ "$local_branch" = "${ref#refs/heads/}" ]; then exit 0; fi; exit 1; fi\n' +
     'if [ "$1" = "symbolic-ref" ]; then cat "$FAKE_GHGIT_LOG.current-branch" 2>/dev/null || echo main; exit 0; fi\n' +
     'if [ "$1" = "rev-parse" ] && [ "$2" = "--show-toplevel" ]; then pwd -P; exit 0; fi\n' +
+    // Origin is read from config, never `remote get-url` (which applies url.*.insteadOf). Real git exits 1
+    // for an unset key, which is how the port tells "no separate push URL" from a broken config.
+    'if [ "$1" = "config" ] && { [ "$2" = "--get" ] || [ "$2" = "--get-all" ]; }; then case "$3" in remote.origin.url) echo "https://github.com/fake/repo.git"; exit 0;; remote.origin.pushurl) exit 1;; esac; fi\n' +
+    'if [ "$1" = "init" ]; then exit 0; fi\n' +
+    'if [ "$1" = "rev-parse" ] && [ "$2" = "--path-format=absolute" ]; then mkdir -p "$FAKE_GHGIT_LOG.objects"; echo "$FAKE_GHGIT_LOG.objects"; exit 0; fi\n' +
+    'if [ "$1" = "rev-parse" ] && [ "$2" = "--show-object-format" ]; then echo sha1; exit 0; fi\n' +
+    'if [ "$1" = "rev-parse" ] && [ "$2" = "--verify" ] && [ "$3" = "FETCH_HEAD" ]; then echo "1111111111111111111111111111111111111111"; exit 0; fi\n' +
+    'if [ "$1" = "fetch" ]; then exit 0; fi\n' +
     'if [ "$1" = "rev-parse" ]; then echo "1111111111111111111111111111111111111111"; exit 0; fi\n' +
     'if [ "$1" = "commit-tree" ]; then echo "1111111111111111111111111111111111111111"; exit 0; fi\n' +
     'if [ "$1" = "update-ref" ] && [ "$2" = "--create-reflog" ]; then echo "${5#refs/heads/}" > "$FAKE_GHGIT_LOG.local-branch"; echo "$6" > "$FAKE_GHGIT_LOG.local-oid"; exit 0; fi\n' +
     'if [ "$1" = "update-ref" ]; then case "$2" in refs/heads/*) echo "${2#refs/heads/}" > "$FAKE_GHGIT_LOG.local-branch"; echo "$3" > "$FAKE_GHGIT_LOG.local-oid"; exit 0;; esac; fi\n' +
+    // The wipe deletes the local branch with the PORCELAIN `git branch -D` (only it knows git's full
+    // "branch is in use" rule), and reads back the object it removed to re-establish the lease.
+    // Upstream is configured as the pair `git push -u` writes, not via --set-upstream-to, which resolves
+    // through the remote's fetch refspec and refuses on a single-branch clone.
+    'if [ "$1" = "config" ]; then case "$2" in branch.*.remote|branch.*.merge) echo "$2=$3" >> "$FAKE_GHGIT_LOG.upstream"; exit 0;; esac; fi\n' +
+    'if [ "$1" = "branch" ] && [ "$2" = "-D" ]; then name=${!#}; rm -f "$FAKE_GHGIT_LOG.local-branch" "$FAKE_GHGIT_LOG.local-oid"; echo "Deleted branch $name (was 1111111111111111111111111111111111111111)."; exit 0; fi\n' +
     'if [ "$1" = "branch" ] && [ "$3" = "FETCH_HEAD" ]; then echo "$2" > "$FAKE_GHGIT_LOG.local-branch"; exit 0; fi\n' +
     'if [ "$1" = "branch" ]; then case "$2" in --set-upstream-to=*) echo "${2#--set-upstream-to=}" > "$FAKE_GHGIT_LOG.upstream"; exit 0;; esac; fi\n' +
     'if [ "$1" = "checkout" ] && [ "$2" != "--detach" ]; then echo "$2" > "$FAKE_GHGIT_LOG.current-branch"; exit 0; fi\n' +
     'if [ "$1" = "branch" ] && [ "$2" = "-D" ]; then rm -f "$FAKE_GHGIT_LOG.local-branch"; exit 0; fi\n' +
     'if [ "$1" = "update-ref" ] && [ "$2" = "-d" ]; then rm -f "$FAKE_GHGIT_LOG.local-branch"; exit 0; fi\n' +
     'if [ "$1" = "push" ]; then for arg in "$@"; do case "$arg" in [0-9a-f]*:refs/heads/*) branch=${arg##*:refs/heads/}; oid=${arg%%:*}; echo "$branch" > "$FAKE_GHGIT_LOG.remote-branch"; echo "$oid" > "$FAKE_GHGIT_LOG.remote-oid"; exit 0;; esac; done; fi\n' +
-    'if [ "$1" = "ls-remote" ]; then branch=${!#}; remote_branch=$(cat "$FAKE_GHGIT_LOG.remote-branch" 2>/dev/null || true); if [ "$remote_branch" = "$branch" ]; then echo "1111111111111111111111111111111111111111 refs/heads/$branch"; fi; exit 0; fi\n' +
+    'if [ "$1" = "ls-remote" ]; then branch=${!#}; branch=${branch#refs/heads/}; remote_branch=$(cat "$FAKE_GHGIT_LOG.remote-branch" 2>/dev/null || true); if [ "$remote_branch" = "$branch" ]; then printf "%s\\t%s\\n" 1111111111111111111111111111111111111111 "refs/heads/$branch"; fi; exit 0; fi\n' +
     'if [ "$1" = "push" ]; then delete_next=; for arg in "$@"; do if [ -n "$delete_next" ]; then rm -f "$FAKE_GHGIT_LOG.remote-branch"; exit 0; fi; [ "$arg" = "--delete" ] && delete_next=1; done; fi\n' +
     'if [ "$1" = "push" ]; then for arg in "$@"; do case "$arg" in :refs/heads/*) rm -f "$FAKE_GHGIT_LOG.remote-branch" "$FAKE_GHGIT_LOG.remote-oid"; exit 0;; esac; done; fi\n' +
     'exit 0\n';
   const fakeGh =
     '#!/usr/bin/env bash\n' +
     'echo "gh $*" >> "$FAKE_GHGIT_LOG"\n' +
+    'if [ "$1" = "repo" ] && [ "$2" = "view" ] && [[ "$*" = *nameWithOwner* ]]; then echo \'{"nameWithOwner":"fake/repo","url":"https://github.com/fake/repo","defaultBranchRef":{"name":"main"}}\'; exit 0; fi\n' +
     'if [ "$1" = "repo" ] && [ "$2" = "view" ]; then echo "main"; exit 0; fi\n' +
-    'if [ "$1" = "issue" ] && [ "$2" = "view" ]; then echo \'{"title":"Fake ticket","url":"https://example/issues/176"}\'; exit 0; fi\n' +
+    'if [ "$1" = "issue" ] && [ "$2" = "view" ]; then echo \'{"title":"Fake ticket","url":"https://github.com/fake/repo/issues/176"}\'; exit 0; fi\n' +
+    'if [ "$1" = "pr" ] && [ "$2" = "view" ]; then state=OPEN; [ -e "$FAKE_GHGIT_LOG.pr-$3-closed" ] && state=CLOSED; head_oid=5555555555555555555555555555555555555555; [ "$3" = "321" ] && head_oid=2222222222222222222222222222222222222222; closing_url=https://github.com/fake/repo/issues/176; [ -n "$FAKE_CLOSING_ISSUE_OTHER_REPO" ] && closing_url=https://github.com/other/repo/issues/176; printf \'{"number":%s,"url":"https://github.com/fake/repo/pull/%s","headRefName":"plan-loop/issue-176","headRefOid":"%s","state":"%s","closingIssuesReferences":[{"number":176,"url":"%s"}],"isCrossRepository":false,"headRepository":{"name":"Repo"},"headRepositoryOwner":{"login":"Fake"}}\\n\' "$3" "$3" "$head_oid" "$state" "$closing_url"; exit 0; fi\n' +
+    'if [ "$1" = "pr" ] && [ "$2" = "list" ]; then if [ -n "$FAKE_GIT_BRANCH_EXISTS" ] && [ ! -e "$FAKE_GHGIT_LOG.pr-321-closed" ]; then echo \'[{"number":321,"url":"https://github.com/fake/repo/pull/321","headRefOid":"2222222222222222222222222222222222222222","isCrossRepository":false,"headRepository":{"name":"Repo"},"headRepositoryOwner":{"login":"Fake"}},{"number":999,"url":"https://github.com/contributor/fork/pull/999","headRefOid":"9999999999999999999999999999999999999999","isCrossRepository":true,"headRepository":{"name":"fork"},"headRepositoryOwner":{"login":"contributor"}}]\'; else echo \'[]\'; fi; exit 0; fi\n' +
+    'if [ "$1" = "pr" ] && [ "$2" = "close" ]; then touch "$FAKE_GHGIT_LOG.pr-$3-closed"; exit 0; fi\n' +
+    'if [ "$1" = "pr" ] && [ "$2" = "edit" ] && [ "$4" = "--body-file" ] && [ "$5" = "-" ]; then cat > "$FAKE_GHGIT_LOG.pr-body"; exit 0; fi\n' +
     // §26.9/L8 epic-promote — each `gh issue create` returns a fresh issue URL (a per-binDir counter file
     // seeded at 500) so the sub-issues carry distinct numbers the executor appends to linked_issues.
     'if [ "$1" = "issue" ] && [ "$2" = "create" ]; then seq="$FAKE_GHGIT_LOG.issue-seq"; n=$(cat "$seq" 2>/dev/null || echo 500); n=$((n+1)); echo "$n" > "$seq"; echo "https://github.com/fake/repo/issues/$n"; exit 0; fi\n' +
@@ -2358,7 +2384,6 @@ test('a multi-step flow walks the bookended rail: Start → Advance ×3 reaches 
   rmSync(home, { recursive: true, force: true });
 });
 
-// ---- #41: the install action seeds four destinations — flow home, loop-config, skills, commands ----
 // TODO(dylan): the flow-render and todo-template cases below originally landed green-first (#40); their
 // RED observation cannot be reconstructed. Every #41 assertion (the loop/skill/command destinations, the
 // grouped report, the per-destination consent step, the second-run skip) was added RED-first, observed
@@ -2385,7 +2410,7 @@ function installEnv(home: string, configDir: string): Record<string, string> {
   };
 }
 
-test('installing the bundled examples seeds the flow, the loop definitions, the skills and the commands (§18.1/§23.4/§26.5 #41)', { tag: '@ownapp' }, async () => {
+test('installing the bundled examples seeds the flow, app and legacy loop definitions, skills and commands (§18.1/§23.4/§26.5 #41/#78)', { tag: '@ownapp' }, async () => {
   // The tracer bullet: click the settings control against a temp HOME + temp config root, then prove
   // every destination was seeded and reported under its own group — and that a repo with no local flow
   // renders the bundled steps.
@@ -2406,16 +2431,19 @@ test('installing the bundled examples seeds the flow, the loop definitions, the 
   await expect(installExamplesBtn()).toBeFocused();
 
   // Every destination is reported under its own group in the result panel.
-  for (const dest of ['flow', 'loops', 'skills', 'commands']) {
+  for (const dest of ['flow', 'appLoops', 'loops', 'skills', 'commands']) {
     await expect(installReportGroup(dest)).toBeVisible();
   }
+  await expect(installReportGroup('appLoops')).toContainText('plan-loop.yaml');
   await expect(installReportGroup('loops')).toContainText('plan-loop.yaml');
   await expect(installReportGroup('commands')).toContainText('groom-ticket.md');
 
   // The bundled flow definition + its todo templates now exist in the global flow home.
   expect(existsSync(join(home, '.agent-terminal', 'flow.yaml'))).toBe(true);
   expect(existsSync(join(home, '.agent-terminal', 'todo-templates', 'ticket-grooming.md'))).toBe(true);
-  // The loop definitions and everything bundled with them exist at the engine's loop-config location.
+  expect(existsSync(join(configDir, 'loops-v2', 'groom-loop', 'groom-loop.yaml'))).toBe(true);
+  expect(existsSync(join(configDir, 'loops-v2', 'plan-loop', 'plan-loop.yaml'))).toBe(true);
+  expect(existsSync(join(configDir, 'loops-v2', 'impl-loop', 'impl-loop.yaml'))).toBe(true);
   expect(existsSync(join(configDir, 'loops', 'plan-loop', 'plan-loop.yaml'))).toBe(true);
   expect(existsSync(join(configDir, 'loops', 'impl-loop', 'impl-loop.yaml'))).toBe(true);
   expect(existsSync(join(configDir, 'loops', 'plan-loop', 'prompts', 'work-plan.md'))).toBe(true);
@@ -2437,8 +2465,10 @@ test('installing the bundled examples seeds the flow, the loop definitions, the 
   // Back to the terminal; cd into a repo with no local flow → the installed global flow renders its steps.
   await page.locator('[data-viewbtn="1"]').click();
   await typeCommand(`cd "${repo}"`);
-  await expect(page.locator('#flow-strip .flow.vert .stn')).toHaveCount(7, { timeout: 10_000 }); // 5 steps + 2 bookends
-  await expect(flowStepName()).toHaveText('groom-ticket');
+  await expect(page.locator('#flow-strip .flow.vert .stn')).toHaveCount(5, {
+    timeout: 10_000,
+  });
+  await expect(flowStepName()).toHaveText('groom');
 
   await app.close();
   rmSync(home, { recursive: true, force: true });
@@ -2446,7 +2476,7 @@ test('installing the bundled examples seeds the flow, the loop definitions, the 
   rmSync(repo, { recursive: true, force: true });
 });
 
-test('the consent step collects one decision per conflicting destination; a decline leaves those files unchanged (§18.1 #41)', { tag: '@ownapp' }, async () => {
+test('the shipped-flow migration is confirm-first and a decline preserves the existing flow (§18.1/§27.10 #41/#78)', { tag: '@ownapp' }, async () => {
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-install-ex2-home-'));
   const configDir = mkdtempSync(join(tmpdir(), 'agent-term-e2e-install-ex2-cfg-'));
   const customFlow = 'name: my-custom-flow\nsteps:\n  - id: mine\n    kind: manual\n';
@@ -2466,8 +2496,16 @@ test('the consent step collects one decision per conflicting destination; a decl
   // One decision per CONFLICTING destination; the clean ones offer none.
   await expect(consentBox('flow')).toBeVisible();
   await expect(consentBox('commands')).toBeVisible();
+  await expect(consentBox('appLoops')).toHaveCount(0);
   await expect(consentBox('loops')).toHaveCount(0);
 
+  await page.locator('#install-examples-view .flow-modal button.cancel').click();
+  await expect(installExamplesPrompt()).toBeHidden();
+  expect(readFileSync(join(home, '.agent-terminal', 'flow.yaml'), 'utf8')).toBe(customFlow);
+  expect(readFileSync(join(configDir, 'commands', 'groom-ticket.md'), 'utf8')).toBe(customCommand);
+
+  await installExamplesBtn().click();
+  await expect(installExamplesPrompt()).toBeVisible({ timeout: 10_000 });
   await consentBox('flow').check(); // replace the flow; leave the command alone
   await installExamplesConfirm().click();
   await expect(installExamplesStatus()).toContainText('skipped', { timeout: 10_000 });
@@ -2475,7 +2513,12 @@ test('the consent step collects one decision per conflicting destination; a decl
   // Consenting in one destination never replaced the other: the custom command survives byte-for-byte,
   // while the customized flow was replaced by the bundled one.
   expect(readFileSync(join(configDir, 'commands', 'groom-ticket.md'), 'utf8')).toBe(customCommand);
-  expect(readFileSync(join(home, '.agent-terminal', 'flow.yaml'), 'utf8')).not.toBe(customFlow);
+  const installedFlow = readFileSync(join(home, '.agent-terminal', 'flow.yaml'), 'utf8');
+  expect(installedFlow).not.toBe(customFlow);
+  expect(installedFlow).toContain('loop_namespace: app');
+  expect(installedFlow).toContain('loop: groom-loop');
+  expect(installedFlow).toContain('loop: plan-loop');
+  expect(installedFlow).toContain('loop: impl-loop');
   expect(existsSync(join(home, '.agent-terminal', 'todo-templates', 'ticket-grooming.md'))).toBe(true);
 
   await app.close();
@@ -2696,6 +2739,11 @@ test('after install, the active step offers its bundled todo template as the pic
   await page.locator('[data-viewbtn="4"]').click();
   await installExamplesBtn().click();
   await expect(installExamplesStatus()).toContainText('created', { timeout: 15_000 });
+
+  writeFileSync(
+    join(home, '.agent-terminal', 'flow.yaml'),
+    'name: todo-template-compat\nsteps:\n  - id: groom-ticket\n    kind: manual\n    todo_template: ticket-grooming\n',
+  );
   await page.locator('[data-viewbtn="1"]').click();
 
   await typeCommand(`cd "${repo}"`);
@@ -2793,7 +2841,9 @@ test('entering a bootstrap loop step prompts for its input; Confirm runs in-app 
   // Land: a draft PR was opened (recorded by the fake gh), and pickup forked the templated branch.
   const calls = readFileSync(logFile, 'utf8');
   expect(calls).toContain('gh pr create --draft');
-  expect(calls).toContain('git push -u origin plan-loop/issue-176');
+  expect(calls).toContain(
+    'git push -u origin plan-loop/issue-176',
+  );
 
   // Land: the T2 mirror renders the freshly-written state live (the watcher re-pull after the write) —
   // the rail read-out shows the tone + iteration, and the docked panel the exact v4 status string.
@@ -4040,6 +4090,19 @@ function seedOperatorPlanLoopConfig(prefix: string, transform: (yaml: string) =>
   return root;
 }
 
+// The shipped def's pickup block is replaced wholesale rather than by matching the lines a test happens to
+// care about: a def that grows a key would otherwise leave an orphaned indented remainder behind, and the
+// unparseable result reads as "the step never entered" rather than "the fixture is stale".
+const PICKUP_BLOCK = /^pickup:\n[\s\S]*?(?=^inputs:)/m;
+
+function withoutPickup(yaml: string): string {
+  return yaml.replace(PICKUP_BLOCK, '');
+}
+
+function withPickup(yaml: string, block: string): string {
+  return yaml.replace(PICKUP_BLOCK, block);
+}
+
 function seedRepoPlanLoopOverride(repo: string): void {
   const target = join(repo, 'defs', 'plan-loop');
   cpSync(join(exampleConfigDir, 'loops-v2', 'plan-loop'), target, { recursive: true });
@@ -4050,9 +4113,11 @@ test('entering a pickup-bearing §27 def bootstraps out-of-band into app-owned s
   const repo = seedAppBootstrapFlowRepo('agent-term-e2e-v2-bootstrap-');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-v2-bootstrap-home-'));
   const config = seedOperatorPlanLoopConfig('agent-term-e2e-v2-bootstrap-config-', (yaml) =>
-    yaml.replace(
-      '  branch_template: plan-loop/issue-{issue}\n',
-      '  branch_template: plan-loop/issue-{issue}\n' +
+    withPickup(
+      yaml,
+      'pickup:\n' +
+        '  initial_status: planning\n' +
+        '  branch_template: plan-loop/issue-{issue}\n' +
         '  initial_labels:\n' +
         '    - target: issue\n      action: add\n      label: agent-loop/in-progress,urgent\n' +
         '    - target: pr\n      action: remove\n      label: needs-triage\n',
@@ -4092,13 +4157,22 @@ test('entering a pickup-bearing §27 def bootstraps out-of-band into app-owned s
   expect(readIf(`${logFile}.local-branch`).trim()).toBe('plan-loop/issue-176');
   expect(readIf(`${logFile}.remote-branch`).trim()).toBe('plan-loop/issue-176');
   expect(readIf(`${logFile}.remote-oid`).trim()).toBe('1111111111111111111111111111111111111111');
-  expect(readIf(`${logFile}.upstream`).trim()).toBe('origin/plan-loop/issue-176');
-  expect(readIf(`${logFile}.pr-created`).trim()).toBe('4242');
-  expect(readIf(`${logFile}.issue-assignee`).trim()).toBe('176:@me');
-  expect(readIf(`${logFile}.issue-label`).trim()).toBe(
-    '176:--add-label:agent-loop/in-progress,urgent',
+  expect(readIf(`${logFile}.upstream`)).toContain(
+    'branch.plan-loop/issue-176.remote=origin',
   );
-  expect(readIf(`${logFile}.pr-label`).trim()).toBe('4242:--remove-label:needs-triage');
+  expect(readIf(`${logFile}.upstream`)).toContain(
+    'branch.plan-loop/issue-176.merge=refs/heads/plan-loop/issue-176',
+  );
+  expect(readIf(`${logFile}.pr-created`).trim()).toBe('4242');
+  // Assignment and labelling are best-effort work the session does AFTER persisting the identity and
+  // entering work (§27.10), so they land after bootstrap.yaml rather than with it.
+  await expect.poll(() => readIf(`${logFile}.issue-assignee`).trim(), { timeout: 15_000 }).toBe('176:@me');
+  await expect
+    .poll(() => readIf(`${logFile}.issue-label`).trim(), { timeout: 15_000 })
+    .toBe('176:--add-label:agent-loop/in-progress,urgent');
+  await expect
+    .poll(() => readIf(`${logFile}.pr-label`).trim(), { timeout: 15_000 })
+    .toBe('4242:--remove-label:needs-triage');
   expect(existsSync(join(repo, '.agent-loop', 'state.yaml'))).toBe(false);
   await expect(termRows()).not.toContainText('agent-loop pickup');
 
@@ -4146,6 +4220,181 @@ test('entering a pickup-bearing §27 def bootstraps out-of-band into app-owned s
       timeout: 10_000,
     })
     .toBe(beforeRestartProbes + 1);
+
+  await app.close();
+  for (const dir of [repo, home, config, binDir]) rmSync(dir, { recursive: true, force: true });
+});
+
+// §27.10 confirm-first wipe — the pickup target already exists (local branch, origin branch, and an open
+// same-repo PR). The wipe is destructive and outward-facing, so the app names the exact resources and
+// waits: nothing is deleted or closed until the operator confirms.
+test('a §27 pickup onto existing resources (on_conflict: wipe-and-retry) confirms first, then wipes exactly those and bootstraps', { tag: '@ownapp' }, async () => {
+  const repo = seedAppBootstrapFlowRepo('agent-term-e2e-v2-wipe-');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-v2-wipe-home-'));
+  const config = seedOperatorPlanLoopConfig('agent-term-e2e-v2-wipe-config-', (yaml) =>
+    withPickup(
+      yaml,
+      'pickup:\n' +
+        '  initial_status: planning\n' +
+        '  branch_template: plan-loop/issue-{issue}\n' +
+        '  on_conflict: wipe-and-retry\n',
+    ),
+  );
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-v2-wipe-bin-');
+  seedFakeAgentV2(binDir, { stepId: 'plan', artifactRel: APP_ARTIFACT_REL, work: 'complete', review: 'full' });
+  // The conflicting resources the operator will be asked about: a local branch, the same branch on
+  // origin, and open PR 321 (which the fake `gh pr list` reports while FAKE_GIT_BRANCH_EXISTS is set).
+  writeFileSync(`${logFile}.local-branch`, 'plan-loop/issue-176\n');
+  writeFileSync(`${logFile}.remote-branch`, 'plan-loop/issue-176\n');
+  app = await electron.launch({
+    args: ['out/main/index.js'],
+    env: {
+      ...process.env,
+      APP_SHELL: 'bash',
+      HOME: home,
+      APP_SUBMIT_DELAY_MS: '100',
+      APP_TURN_TIMEOUT_MS: '60000',
+      CLAUDE_CONFIG_DIR: config,
+      PATH: `${binDir}:${process.env.PATH}`,
+      FAKE_GHGIT_LOG: logFile,
+      FAKE_GIT_BRANCH_EXISTS: '1',
+    },
+  });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await typeCommand(`cd "${repo}"`);
+  await typeCommand('fake-agent');
+  await flowControl().click();
+  await flowControl().click();
+  await expect(inputModal()).toBeVisible({ timeout: 10_000 });
+  await inputModal().locator('.field input').fill('176');
+  await inputModal().locator('.confirm').click();
+
+  // Ask first, naming every resource the wipe would destroy — and nothing destroyed yet.
+  const conflict = page.locator('#flow-confirm-host .flow-modal');
+  await expect(conflict).toBeVisible({ timeout: 20_000 });
+  await expect(conflict).toContainText('plan-loop/issue-176');
+  await expect(conflict).toContainText('#321');
+  expect(existsSync(`${logFile}.pr-321-closed`)).toBe(false);
+  expect(readGhLog(logFile)).not.toContain(':refs/heads/plan-loop/issue-176');
+  expect(readIf(join(repo, '.agent-terminal', 'loop', 'bootstrap.yaml'))).toBe('');
+
+  await conflict.locator('.confirm').click();
+
+  // Confirmed: the open PR is closed, the origin branch is deleted under an exact lease naming the OID
+  // the operator was shown, and the bootstrap then completes normally.
+  await expect.poll(() => existsSync(`${logFile}.pr-321-closed`), { timeout: 20_000 }).toBe(true);
+  expect(readGhLog(logFile)).toContain(
+    '--force-with-lease=refs/heads/plan-loop/issue-176:1111111111111111111111111111111111111111',
+  );
+  const bootstrapState = join(repo, '.agent-terminal', 'loop', 'bootstrap.yaml');
+  await expect.poll(() => readIf(bootstrapState), { timeout: 20_000 }).toContain('pr: 4242');
+  expect(readIf(bootstrapState)).toContain('branch: plan-loop/issue-176');
+
+  await app.close();
+  for (const dir of [repo, home, config, binDir]) rmSync(dir, { recursive: true, force: true });
+});
+
+// AC5's other half: declining destroys nothing and reverts the step. `declineWipe` is the one rollback
+// path that deliberately does NOT emit an error, so the absence of the blocking dialog is observable
+// only full-stack.
+test('a §27 pickup conflict declined destroys nothing and reverts the step', { tag: '@ownapp' }, async () => {
+  const repo = seedAppBootstrapFlowRepo('agent-term-e2e-v2-decline-');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-v2-decline-home-'));
+  const config = seedOperatorPlanLoopConfig('agent-term-e2e-v2-decline-config-', (yaml) =>
+    withPickup(
+      yaml,
+      'pickup:\n' +
+        '  initial_status: planning\n' +
+        '  branch_template: plan-loop/issue-{issue}\n' +
+        '  on_conflict: wipe-and-retry\n',
+    ),
+  );
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-v2-decline-bin-');
+  seedFakeAgentV2(binDir, { stepId: 'plan', artifactRel: APP_ARTIFACT_REL, work: 'complete', review: 'full' });
+  writeFileSync(`${logFile}.local-branch`, 'plan-loop/issue-176\n');
+  writeFileSync(`${logFile}.remote-branch`, 'plan-loop/issue-176\n');
+  app = await electron.launch({
+    args: ['out/main/index.js'],
+    env: {
+      ...process.env,
+      APP_SHELL: 'bash',
+      HOME: home,
+      APP_SUBMIT_DELAY_MS: '100',
+      APP_TURN_TIMEOUT_MS: '60000',
+      CLAUDE_CONFIG_DIR: config,
+      PATH: `${binDir}:${process.env.PATH}`,
+      FAKE_GHGIT_LOG: logFile,
+      FAKE_GIT_BRANCH_EXISTS: '1',
+    },
+  });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await typeCommand(`cd "${repo}"`);
+  await typeCommand('fake-agent');
+  await flowControl().click();
+  await flowControl().click();
+  await expect(inputModal()).toBeVisible({ timeout: 10_000 });
+  await inputModal().locator('.field input').fill('176');
+  await inputModal().locator('.confirm').click();
+
+  const conflict = page.locator('#flow-confirm-host .flow-modal');
+  await expect(conflict).toBeVisible({ timeout: 20_000 });
+  await expect(conflict).toContainText('plan-loop/issue-176');
+
+  await conflict.locator('.cancel').click();
+  await expect(conflict).toBeHidden({ timeout: 10_000 });
+  // Wait for the decline to be RECORDED before asserting absence: the wipe is asynchronous, so
+  // asserting straight after the click passes whether the answer was honoured or ignored.
+  const declineCommands = (): { cmd: string; exit: number | null }[] => {
+    const files = auditRunFiles(home, repo);
+    if (files.length !== 1) return [];
+    return readAuditRun(home, repo, files[0])
+      .events.filter(
+        (e): e is Extract<AuditEvent, { type: 'command' }> => e.type === 'command',
+      )
+      .filter((e) => e.cmd.startsWith('§27 bootstrap plan'))
+      .map((e) => ({ cmd: e.cmd, exit: e.exit }));
+  };
+  // The whole sequence, not a substring: `includes('decline')` matched the ROLLBACK event's detail
+  // ("operator declined branch wipe"), so it passed without a decline event ever being recorded. The
+  // exits carry the meaning — a decline is an ANSWER (0), the conflict is a pause awaiting one (null).
+  await expect
+    .poll(() => declineCommands().length, { timeout: 20_000 })
+    .toBe(4);
+  expect(declineCommands()).toEqual([
+    { cmd: '§27 bootstrap plan started', exit: null },
+    {
+      cmd: '§27 bootstrap plan found a conflict: plan-loop/issue-176',
+      exit: null,
+    },
+    { cmd: '§27 bootstrap plan wipe declined: plan-loop/issue-176', exit: 0 },
+    {
+      cmd: '§27 bootstrap plan rolled back: operator declined branch wipe',
+      exit: 1,
+    },
+  ]);
+
+  // Nothing destroyed: the PR was never closed, no ref delete was pushed, and both refs still stand.
+  expect(existsSync(`${logFile}.pr-321-closed`)).toBe(false);
+  expect(readGhLog(logFile)).not.toContain(':refs/heads/plan-loop/issue-176');
+  expect(readIf(`${logFile}.local-branch`).trim()).toBe('plan-loop/issue-176');
+  expect(readIf(`${logFile}.remote-branch`).trim()).toBe('plan-loop/issue-176');
+  expect(readIf(join(repo, '.agent-terminal', 'loop', 'bootstrap.yaml'))).toBe('');
+
+  // Reverted to the prior step with its typed input intact, and NO blocking error dialog — a decline is
+  // an answer, not a failure. `ticket:` alone cannot fail here: provideInput persists it before the
+  // conflict is raised, so it is present on the honoured-wipe path too. The step moving back off `plan`
+  // is what distinguishes reverted from not-reverted.
+  await expect
+    .poll(() => readIf(appFlowState(repo)), { timeout: 15_000 })
+    .toContain('step: groom');
+  await expect(flowStation(1)).toHaveClass(/\bactive\b/, { timeout: 10_000 });
+  await expect(flowStation(2)).not.toHaveClass(/\bactive\b/);
+  expect(readIf(appFlowState(repo))).toContain("ticket: '176'");
+  await expect(page.locator('#flow-error-host .flow-modal')).toBeHidden();
 
   await app.close();
   for (const dir of [repo, home, config, binDir]) rmSync(dir, { recursive: true, force: true });
@@ -4210,17 +4459,23 @@ test('a failed §27 pickup rolls back its named step with typed inputs preserved
   await errorDialog.locator('.dismiss').click();
   await expect(flowControl()).toHaveText('Advance', { timeout: 10_000 });
   await flowControl().click();
+  // `issue: 176` lands with the bootstrap INTENT, which is written before the branch is created — so it
+  // marks the start of the git work below, not its completion. Poll to the last command of the creation
+  // sequence (fetch → update-ref → checkout) before reading the log, then assert against one snapshot.
   await expect.poll(() => readIf(join(repo, '.agent-terminal', 'loop', 'bootstrap.yaml')), { timeout: 15_000 }).toContain('issue: 176');
-  expect(
-    readGhLog(logFile).match(/^git status --porcelain$/gm),
-  ).toHaveLength(2);
-  expect(readGhLog(logFile)).toMatch(
-    /git fetch --upload-pack=git-upload-pack --no-tags --no-write-fetch-head origin refs\/heads\/main:refs\/agent-terminal\/bootstrap\//,
+  await expect
+    .poll(() => readGhLog(logFile), { timeout: 15_000 })
+    .toContain('git checkout plan-loop/issue-176');
+  const bootstrapLog = readGhLog(logFile);
+  expect(bootstrapLog.match(/^git status --porcelain$/gm)).toHaveLength(2);
+  // The pack program is pinned on the argv, not via remote.origin.*: these operations address the
+  // remote by URL, so a `-c remote.origin.uploadpack` entry would bind to nothing.
+  expect(bootstrapLog).toMatch(
+    /git fetch --upload-pack=git-upload-pack --no-tags --no-recurse-submodules -- https:\/\/github\.com\/fake\/repo\.git refs\/heads\/main/,
   );
-  expect(readGhLog(logFile)).toContain(
+  expect(bootstrapLog).toContain(
     'git update-ref --create-reflog -m agent-terminal-bootstrap:',
   );
-  expect(readGhLog(logFile)).toContain('git checkout plan-loop/issue-176');
 
   await app.close();
   for (const dir of [repo, home, binDir]) rmSync(dir, { recursive: true, force: true });
@@ -4317,10 +4572,7 @@ test('a §27 def with no pickup enters work without invoking bootstrap ports (ST
   const repo = seedAppBootstrapFlowRepo('agent-term-e2e-v2-no-bootstrap-');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-v2-no-bootstrap-home-'));
   const config = seedOperatorPlanLoopConfig('agent-term-e2e-v2-no-bootstrap-config-', (yaml) =>
-    yaml.replace(
-      'pickup:\n  initial_status: planning\n  branch_template: plan-loop/issue-{issue}\n',
-      '',
-    ),
+    withoutPickup(yaml),
   );
   const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-v2-no-bootstrap-bin-');
   seedFakeAgentV2(binDir, { stepId: 'plan', artifactRel: APP_ARTIFACT_REL, work: 'noop' });
@@ -4392,7 +4644,14 @@ test('a stale flow input answer is inert at the main-process receiver (ST2 AC7)'
   );
 
   await expect(inputModal()).toBeVisible();
-  expect(readIf(appFlowState(repo))).not.toContain('999');
+  // Read the document the way the SUT wrote it rather than matching its text: `started_at` is epoch
+  // millis, so a bare substring check trips on the clock, and a regex has to guess the writer's
+  // quoting — the previous one admitted only a bare or double-quoted value while yaml.dump emits
+  // single quotes, so it could not fail for the exact value it forbids.
+  const staleState = load(readIf(appFlowState(repo))) as
+    | { inputs?: Record<string, unknown> }
+    | undefined;
+  expect(Object.values(staleState?.inputs ?? {})).not.toContain('999');
   const calls = readGhLog(logFile).slice(staleInputLogStart);
   expect(calls).not.toContain('git status --porcelain');
   expect(calls).not.toContain('gh ');
@@ -4827,7 +5086,7 @@ test('a failed §27 approve side-effect is surfaced and the flow still reaches i
   const repo = seedAppGateFlowRepo('agent-term-e2e-v2-approvefail-', null);
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-v2-approvefail-home-'));
   const config = seedOperatorPlanLoopConfig('agent-term-e2e-v2-approvefail-config-', (yaml) =>
-    yaml.replace('pickup:\n  initial_status: planning\n  branch_template: plan-loop/issue-{issue}\n', ''),
+    withoutPickup(yaml),
   );
   const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-v2-approvefail-bin-');
   seedFakeAgentV2(binDir, { stepId: 'plan', artifactRel: APP_ARTIFACT_REL, work: 'complete', review: 'full' });

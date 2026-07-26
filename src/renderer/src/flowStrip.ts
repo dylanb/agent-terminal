@@ -72,6 +72,8 @@ export type FlowStripDeps = Omit<
   | 'onLoopError'
   | 'onBootstrapConflict'
   | 'resolveBootstrapConflict'
+  | 'onAppBootstrapConflict'
+  | 'resolveAppBootstrapConflict'
   | 'githubRef'
   | 'openExternal'
   | 'markTurnComplete'
@@ -319,6 +321,8 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
     // Carry focus across the rebuild if the keyboard user was on the Loop read-out, rather than
     // dropping it to <body> (WCAG 2.4.3).
     const keepLoopFocus = doc.activeElement instanceof HTMLElement && doc.activeElement.classList.contains('loopstat') && host.contains(doc.activeElement);
+    // WCAG 3.2.5
+    const hadFocus = host.contains(doc.activeElement);
     host.replaceChildren();
 
     if (state.status === 'error') {
@@ -400,6 +404,11 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
       notice.textContent = state.notice;
       host.append(notice);
     }
+
+    // WCAG 2.4.3
+    if (hadFocus && !host.contains(doc.activeElement)) {
+      host.querySelector<HTMLElement>('.flow-control, .flow-undo, .flow-terminate')?.focus();
+    }
   }
 
   /** Hand a step-entry input prompt (§24.2.3 T3) to the composition root's modal via the contract
@@ -428,10 +437,7 @@ export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStr
    *  the modal. */
   function applyTransition(view: FlowStateView): void {
     render(view);
-    // The repaint detached the just-clicked control, dropping focus to <body>. Re-anchor it on a
-    // real control so the keyboard user keeps their place (WCAG 2.4.3) — including the Terminate →
-    // not_started case, which carries no prompt — and so a following modal restores focus there on
-    // close. render() already re-anchors the loop read-out, which leaves focus inside the host.
+    // WCAG 2.4.3
     if (!host.contains(doc.activeElement)) {
       host.querySelector<HTMLElement>('.flow-control, .flow-undo, .flow-terminate')?.focus();
     }

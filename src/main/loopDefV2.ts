@@ -17,6 +17,10 @@ import { isRecord } from './yamlRecord';
 import { isSafePathSegment } from '../shared/pathSegment';
 import { isErrno } from './errno';
 import { APP_LOOP_DIR_SEGMENTS, ARTIFACTS_SUBDIR } from './appLoopPaths';
+import type {
+  AppBootstrapLabelMutation,
+  AppBootstrapWipePolicy,
+} from '../shared/appBootstrap';
 
 /** The schema version this app knows. Engine selection keys on the def namespace plus this marker, never
  *  on which parser happens not to throw. N2–N7 add only OPTIONAL elements under `v2`; a breaking change
@@ -81,14 +85,10 @@ export interface ArtifactBinding {
 }
 
 /** §27.10 */
-export interface PickupLabelV2 {
-  action: 'add' | 'remove';
-  target: 'issue' | 'pr';
-  label: string;
-}
+export type PickupLabelV2 = AppBootstrapLabelMutation;
 
 /** §27.10 */
-export type WipePolicy = { mode: 'abort' } | { mode: 'wipe-and-retry' };
+export type WipePolicy = AppBootstrapWipePolicy;
 
 /** §27.10 */
 export interface PickupExecutionV2 {

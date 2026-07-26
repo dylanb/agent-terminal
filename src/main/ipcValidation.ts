@@ -3,6 +3,7 @@
 
 import path from 'node:path';
 import { githubHttpsHref } from '../shared/githubUrl';
+import { isAppBootstrapConflictTarget } from '../shared/appBootstrap';
 import { TITLE_MAX } from '../shared/statusBar';
 import {
   APP_ROUTE_OUT_ACTIONS,
@@ -27,6 +28,7 @@ import {
   type FlowSetTitleMsg,
   type FlowGateDecisionMsg,
   type FlowResolveBootstrapConflictMsg,
+  type FlowResolveAppBootstrapConflictMsg,
   type FlowGithubRefMsg,
   type AppOpenExternalMsg,
   type TodoTemplateListMsg,
@@ -102,11 +104,20 @@ export function isValidInstallExamplesPreview(m: unknown): m is InstallExamplesP
   return isRecord(m) && isLiveSession(m);
 }
 
-/** examples:apply (§6) — a live-session request carrying one replace decision per destination. An id
- *  outside the known set is REJECTED rather than ignored: the list drives filesystem writes, so an
- *  unrecognized value is a malformed request, not a no-op (CWE-20). */
+const INSTALL_PREVIEW_ID_MAX = 128;
+
+/** §6; CWE-20. */
 export function isValidInstallExamplesApply(m: unknown): m is InstallExamplesApplyMsg {
-  if (!isRecord(m) || !isLiveSession(m) || !Array.isArray(m.replace)) return false;
+  if (
+    !isRecord(m) ||
+    !isLiveSession(m) ||
+    typeof m.previewId !== 'string' ||
+    m.previewId.length === 0 ||
+    m.previewId.length > INSTALL_PREVIEW_ID_MAX ||
+    !Array.isArray(m.replace)
+  ) {
+    return false;
+  }
   const known: readonly string[] = INSTALL_DESTINATION_IDS;
   return m.replace.every((d) => typeof d === 'string' && known.includes(d));
 }
@@ -260,6 +271,20 @@ export function isValidFlowArmInterrupt(m: unknown): m is FlowArmInterruptMsg {
  *  safe-path guard as the other flow channels. */
 export function isValidFlowResolveBootstrapConflict(m: unknown): m is FlowResolveBootstrapConflictMsg {
   return isRecord(m) && isLiveSession(m) && isSafeRepoKey(m.repoKey) && typeof m.wipe === 'boolean';
+}
+
+export function isValidFlowResolveAppBootstrapConflict(
+  m: unknown,
+): m is FlowResolveAppBootstrapConflictMsg {
+  return (
+    isRecord(m) &&
+    isLiveSession(m) &&
+    isSafeRepoKey(m.repoKey) &&
+    typeof m.step === 'string' &&
+    m.step.length > 0 &&
+    typeof m.wipe === 'boolean' &&
+    isAppBootstrapConflictTarget(m)
+  );
 }
 
 /** flow:githubRef — resolve a ref's detail for the popout (§24.2.3 T7). `kind` is the issue/PR

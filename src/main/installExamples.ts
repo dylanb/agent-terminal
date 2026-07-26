@@ -1,17 +1,28 @@
 // §18.1/§23.4/§26.5; writes route through atomicWriteFileSync (CWE-59).
 
 import { accessSync, constants, lstatSync, readFileSync, statSync } from 'node:fs';
+import { createHash, randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { atomicWriteFileSync, isRealContainer } from './atomicFile';
 import { confinedRealPathResult, resolveOwnedDirJail, type PathRefusal } from './confinedPath';
 import { readDirEntries } from './dirEntries';
 import { errMsg, isErrno } from './errno';
 import type { BundleLocation } from './bundleLocation';
-import { resolveExampleCommandsDir, resolveExampleFlowDir, resolveExampleLoopsDir } from './exampleAssets';
+import {
+  resolveExampleCommandsDir,
+  resolveExampleFlowDir,
+  resolveExampleLoopsDir,
+  resolveExampleLoopsV2Dir,
+} from './exampleAssets';
 import { listBundledSkills } from './exampleSkills';
 import { FLOW_DEF_FILE, flowHomeDir } from './flow';
 import { TODO_TEMPLATES_SUBDIR, isTodoTemplateFile, todoTemplatesDir } from './todoTemplate';
-import { userConfigCommandsDir, userConfigLoopsDir, userConfigSkillsDir } from './userConfig';
+import {
+  userConfigCommandsDir,
+  userConfigLoopsDir,
+  userConfigLoopsV2Dir,
+  userConfigSkillsDir,
+} from './userConfig';
 import {
   INSTALL_DESTINATION_IDS,
   type DestRelativePath,
@@ -20,6 +31,7 @@ import {
   type InstallDestinationPreview,
   type InstallExamplesPreview,
   type InstallExamplesResult,
+  type InstallPreviewId,
 } from '../shared/ipc';
 import { isValidInstallExamplesPreview, isValidInstallExamplesApply } from './ipcValidation';
 
@@ -142,6 +154,7 @@ function skillFiles(loopsBundleDir: string): Plan {
 export interface InstallDestination {
   id: InstallDestinationId;
   bundleDir: string;
+  overwrite: { mode: 'confirm-overwrite' } | { mode: 'forbid-overwrite' };
   /** `null` when this destination has no absolute install location — a relative CLAUDE_CONFIG_DIR (config
    *  destinations) or a relative launch home from an empty $HOME (flow). `resolveAll` turns it into a
    *  refusal the user sees rather than a guessed path. */
@@ -158,25 +171,49 @@ interface DestinationSpec {
   target: (flowGlobalDir: string, configDir?: string) => string | null;
   rootFix: string;
   plan: (bundleDir: string) => Plan;
+  overwrite: InstallDestination['overwrite'];
 }
 
 const CONFIG_ROOT_FIX = 'Set CLAUDE_CONFIG_DIR to an absolute path, or unset it to use ~/.claude.';
 const HOME_ROOT_FIX = 'Set $HOME to an absolute path.';
 
-/** The loops/skills/commands targets are the NAMED user-config branches (§24.2.3), never `resolveLoopDir`'s
- *  precedence-aware answer: an install wired to that would seed whichever repo the app is pointed at and
- *  leave every other one unseeded. The skills source is the loops bundle — its files fan in from every
- *  loop's `skills/` (§26.5). */
+/** §18.1/§26.5/§27.15. */
 const DESTINATIONS: Record<InstallDestinationId, DestinationSpec> = {
   flow: {
     bundle: resolveExampleFlowDir,
     target: (flowGlobalDir) => (path.isAbsolute(flowGlobalDir) ? flowHomeDir(flowGlobalDir) : null),
     rootFix: HOME_ROOT_FIX,
     plan: flowFiles,
+    overwrite: { mode: 'confirm-overwrite' },
   },
-  loops: { bundle: resolveExampleLoopsDir, target: (_flow, cfg) => userConfigLoopsDir(cfg), rootFix: CONFIG_ROOT_FIX, plan: filesUnder },
-  skills: { bundle: resolveExampleLoopsDir, target: (_flow, cfg) => userConfigSkillsDir(cfg), rootFix: CONFIG_ROOT_FIX, plan: skillFiles },
-  commands: { bundle: resolveExampleCommandsDir, target: (_flow, cfg) => userConfigCommandsDir(cfg), rootFix: CONFIG_ROOT_FIX, plan: filesUnder },
+  appLoops: {
+    bundle: resolveExampleLoopsV2Dir,
+    target: (_flow, cfg) => userConfigLoopsV2Dir(cfg),
+    rootFix: CONFIG_ROOT_FIX,
+    plan: filesUnder,
+    overwrite: { mode: 'confirm-overwrite' },
+  },
+  loops: {
+    bundle: resolveExampleLoopsDir,
+    target: (_flow, cfg) => userConfigLoopsDir(cfg),
+    rootFix: CONFIG_ROOT_FIX,
+    plan: filesUnder,
+    overwrite: { mode: 'confirm-overwrite' },
+  },
+  skills: {
+    bundle: resolveExampleLoopsDir,
+    target: (_flow, cfg) => userConfigSkillsDir(cfg),
+    rootFix: CONFIG_ROOT_FIX,
+    plan: skillFiles,
+    overwrite: { mode: 'confirm-overwrite' },
+  },
+  commands: {
+    bundle: resolveExampleCommandsDir,
+    target: (_flow, cfg) => userConfigCommandsDir(cfg),
+    rootFix: CONFIG_ROOT_FIX,
+    plan: filesUnder,
+    overwrite: { mode: 'confirm-overwrite' },
+  },
 };
 
 /** Resolve every destination for the running build: its bundle source from `loc`, its install target
@@ -184,11 +221,24 @@ const DESTINATIONS: Record<InstallDestinationId, DestinationSpec> = {
 export function exampleInstallDirs(loc: BundleLocation, flowGlobalDir: string, configDir?: string): InstallDestination[] {
   return INSTALL_DESTINATION_IDS.map((id) => {
     const d = DESTINATIONS[id];
-    return { id, bundleDir: d.bundle(loc), targetDir: d.target(flowGlobalDir, configDir), rootFix: d.rootFix, plan: d.plan };
+    return {
+      id,
+      bundleDir: d.bundle(loc),
+      targetDir: d.target(flowGlobalDir, configDir),
+      rootFix: d.rootFix,
+      plan: d.plan,
+      overwrite: d.overwrite,
+    };
   });
 }
 
 type Classification = 'create' | 'identical' | 'differ';
+
+function allowsOverwrite(
+  overwrite: InstallDestination['overwrite'],
+): boolean {
+  return overwrite.mode === 'confirm-overwrite';
+}
 
 function classify(bundleFile: string, targetFile: string): Classification {
   let target: Buffer;
@@ -219,6 +269,7 @@ interface ResolvedDestination {
   /** Its symlink-free real location — what the write is confined to and gated on. */
   jail: string;
   files: ResolvedFile[];
+  overwrite: InstallDestination['overwrite'];
 }
 type Resolution = { ok: true; destinations: ResolvedDestination[] } | { ok: false; error: string };
 
@@ -255,7 +306,13 @@ function resolveAll(destinations: InstallDestination[]): Resolution {
       if (!real.ok) return { ok: false, error: refusal(file.rel, dest.targetDir, real.cause) };
       resolved.push({ rel: file.rel, src: file.src, real: real.path });
     }
-    out.push({ id: dest.id, targetDir: dest.targetDir, jail, files: resolved });
+    out.push({
+      id: dest.id,
+      targetDir: dest.targetDir,
+      jail,
+      files: resolved,
+      overwrite: dest.overwrite,
+    });
   }
   return { ok: true, destinations: out };
 }
@@ -293,32 +350,187 @@ function report(groups: Groups): InstallDestinationFiles[] {
   }));
 }
 
-export function previewInstallExamples(destinations: InstallDestination[]): InstallExamplesPreview {
+interface InstallFileSnapshot {
+  destination: InstallDestinationId;
+  rel: DestRelativePath;
+  src: string;
+  real: string;
+  sourceHash: string;
+  targetHash: string | null;
+}
+
+interface InstallAuthorization {
+  files: InstallFileSnapshot[];
+  conflicts: Set<InstallDestinationId>;
+}
+
+function hash(bytes: Buffer): string {
+  return createHash('sha256').update(bytes).digest('hex');
+}
+
+function targetHash(file: string): string | null {
+  try {
+    return hash(readFileSync(file));
+  } catch (error) {
+    if (isErrno(error, 'ENOENT')) return null;
+    throw error;
+  }
+}
+
+function snapshotFile(
+  destination: InstallDestinationId,
+  file: ResolvedFile,
+): InstallFileSnapshot {
+  return {
+    destination,
+    rel: file.rel,
+    src: file.src,
+    real: file.real,
+    sourceHash: hash(readFileSync(file.src)),
+    targetHash: targetHash(file.real),
+  };
+}
+
+function captureInstallSnapshot(
+  destinations: ResolvedDestination[],
+): InstallFileSnapshot[] {
+  return destinations.flatMap((destination) =>
+    destination.files.map((file) => snapshotFile(destination.id, file)),
+  );
+}
+
+function snapshotKey(
+  destination: InstallDestinationId,
+  rel: DestRelativePath,
+): string {
+  return `${destination}\0${rel}`;
+}
+
+function sameSnapshot(
+  expected: InstallFileSnapshot,
+  actual: InstallFileSnapshot,
+): boolean {
+  return (
+    expected.destination === actual.destination &&
+    expected.rel === actual.rel &&
+    expected.src === actual.src &&
+    expected.real === actual.real &&
+    expected.sourceHash === actual.sourceHash &&
+    expected.targetHash === actual.targetHash
+  );
+}
+
+function verifyAuthorization(
+  destinations: ResolvedDestination[],
+  authorization: InstallAuthorization,
+): string | null {
+  const actual = captureInstallSnapshot(destinations);
+  if (actual.length !== authorization.files.length) {
+    return 'the install file set changed after preview';
+  }
+  const expected = new Map(
+    authorization.files.map((file) => [
+      snapshotKey(file.destination, file.rel),
+      file,
+    ]),
+  );
+  for (const file of actual) {
+    const previewed = expected.get(snapshotKey(file.destination, file.rel));
+    if (previewed === undefined || !sameSnapshot(previewed, file)) {
+      return `the install target changed after preview: ${file.real}`;
+    }
+  }
+  return null;
+}
+
+interface PreparedInstallExamples {
+  destinations: InstallDestinationPreview[];
+  authorization: InstallAuthorization;
+}
+
+type InstallExamplesPreparation =
+  | { ok: true; prepared: PreparedInstallExamples }
+  | { ok: false; error: string };
+
+function prepareInstallExamples(
+  destinations: InstallDestination[],
+): InstallExamplesPreparation {
   let resolution: Resolution;
   try {
     resolution = resolveAll(destinations);
-  } catch (e) {
-    return { ok: false, error: `Could not check the install targets: ${errMsg(e)}` };
+  } catch (error) {
+    return {
+      ok: false,
+      error: `Could not check the install targets: ${errMsg(error)}`,
+    };
   }
   if (!resolution.ok) return resolution;
 
-  const out: InstallDestinationPreview[] = [];
-  for (const dest of resolution.destinations) {
-    let files: DestRelativePath[];
-    try {
-      files = dest.files.filter((f) => classify(f.src, f.real) === 'differ').map((f) => f.rel);
-    } catch (e) {
-      // classify rethrows a non-ENOENT read (an unreadable target). The contract carries a refusal arm for
-      // exactly this: an empty destination list would otherwise read as "nothing conflicts" and drive an
-      // apply the user never consented to.
-      return { ok: false, error: `Could not check the install targets: ${errMsg(e)}` };
-    }
-    out.push(files.length === 0 ? { destination: dest.id, conflict: false } : { destination: dest.id, conflict: true, files });
+  try {
+    const files = captureInstallSnapshot(resolution.destinations);
+    const conflicts = new Set<InstallDestinationId>();
+    const previews = resolution.destinations.map((destination) => {
+      const differing = files
+        .filter(
+          (file) =>
+            file.destination === destination.id &&
+            file.targetHash !== null &&
+            file.targetHash !== file.sourceHash,
+        )
+        .map((file) => file.rel);
+      if (differing.length === 0) {
+        return {
+          destination: destination.id,
+          conflict: false as const,
+        };
+      }
+      if (!allowsOverwrite(destination.overwrite)) {
+        throw new Error(
+          `Could not install ${destination.id}: its overwrite policy does not authorize replacing ${differing.join(', ')}`,
+        );
+      }
+      conflicts.add(destination.id);
+      return {
+        destination: destination.id,
+        conflict: true as const,
+        files: differing,
+      };
+    });
+    return {
+      ok: true,
+      prepared: {
+        destinations: previews,
+        authorization: { files, conflicts },
+      },
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      error: `Could not check the install targets: ${errMsg(error)}`,
+    };
   }
-  return { ok: true, destinations: out };
 }
 
-export function applyInstallExamples(destinations: InstallDestination[], replace: InstallDestinationId[]): InstallExamplesResult {
+export type InstallExamplesInspection =
+  | { ok: true; destinations: InstallDestinationPreview[] }
+  | { ok: false; error: string };
+
+export function previewInstallExamples(
+  destinations: InstallDestination[],
+): InstallExamplesInspection {
+  const preparation = prepareInstallExamples(destinations);
+  if (!preparation.ok) return preparation;
+  return {
+    ok: true,
+    destinations: preparation.prepared.destinations,
+  };
+}
+
+function applyInstallExamplesWithAuthorization(
+  destinations: InstallDestination[],
+  replace: InstallDestinationId[],
+  authorization?: InstallAuthorization,
+): InstallExamplesResult {
   const empty = { created: [], overwritten: [], skipped: [] };
   let resolution: Resolution;
   try {
@@ -327,8 +539,50 @@ export function applyInstallExamples(destinations: InstallDestination[], replace
     return { ok: false, error: `Could not install: ${errMsg(e)}`, ...empty };
   }
   if (!resolution.ok) return { ok: false, error: resolution.error, ...empty };
+  if (authorization !== undefined) {
+    let changed: string | null;
+    try {
+      changed = verifyAuthorization(
+        resolution.destinations,
+        authorization,
+      );
+    } catch (error) {
+      return {
+        ok: false,
+        error: `Could not verify install confirmation: ${errMsg(error)}`,
+        ...empty,
+      };
+    }
+    if (changed !== null) {
+      return {
+        ok: false,
+        error: `Could not install: ${changed}; preview again`,
+        ...empty,
+      };
+    }
+  }
 
   const plan = resolution.destinations.filter((d) => d.files.length > 0);
+  try {
+    for (const dest of plan) {
+      if (
+        !allowsOverwrite(dest.overwrite) &&
+        dest.files.some((file) => classify(file.src, file.real) === 'differ')
+      ) {
+        return {
+          ok: false,
+          error: `Could not install ${dest.id}: its overwrite policy does not authorize replacing existing files`,
+          ...empty,
+        };
+      }
+    }
+  } catch (e) {
+    return {
+      ok: false,
+      error: `Could not install: ${errMsg(e)}`,
+      ...empty,
+    };
+  }
   // Every container the write will actually enter, not just each destination's root: an unwritable nested
   // directory is detectable before the first write, and §18.1's all-or-nothing covers everything that is.
   for (const dest of plan) {
@@ -340,6 +594,12 @@ export function applyInstallExamples(destinations: InstallDestination[], replace
   }
 
   const consented = new Set(replace);
+  const expected = new Map(
+    (authorization?.files ?? []).map((file) => [
+      snapshotKey(file.destination, file.rel),
+      file,
+    ]),
+  );
   const created: Groups = new Map();
   const overwritten: Groups = new Map();
   const skipped: Groups = new Map();
@@ -354,10 +614,24 @@ export function applyInstallExamples(destinations: InstallDestination[], replace
   for (const dest of plan) {
     for (const file of dest.files) {
       try {
+        if (authorization !== undefined) {
+          const previewed = expected.get(snapshotKey(dest.id, file.rel));
+          if (
+            previewed === undefined ||
+            !sameSnapshot(previewed, snapshotFile(dest.id, file))
+          ) {
+            return fail(
+              `Could not install ${file.rel}: its source or target changed after preview; preview again`,
+            );
+          }
+        }
         const cls = classify(file.src, file.real);
         if (cls === 'identical' || (cls === 'differ' && !consented.has(dest.id))) {
           record(skipped, dest.id, file.rel);
           continue;
+        }
+        if (cls === 'differ' && !allowsOverwrite(dest.overwrite)) {
+          return fail(`Could not install ${file.rel}: its overwrite policy does not authorize replacement`);
         }
         // Bytes, not text: the bundle is a tree the build ships, and decoding a non-UTF-8 asset would both
         // corrupt it and leave it permanently `differ` against the byte-compare that classifies it.
@@ -371,12 +645,83 @@ export function applyInstallExamples(destinations: InstallDestination[], replace
   return { ok: true, created: report(created), overwritten: report(overwritten), skipped: report(skipped) };
 }
 
-export function handleInstallExamplesPreview(m: unknown, dirs: () => InstallDestination[]): InstallExamplesPreview {
-  if (!isValidInstallExamplesPreview(m)) return { ok: false, error: 'invalid preview request' };
-  return previewInstallExamples(dirs());
+export function applyInstallExamples(
+  destinations: InstallDestination[],
+  replace: InstallDestinationId[],
+): InstallExamplesResult {
+  return applyInstallExamplesWithAuthorization(destinations, replace);
 }
 
-export function handleInstallExamplesApply(m: unknown, dirs: () => InstallDestination[]): InstallExamplesResult {
-  if (!isValidInstallExamplesApply(m)) return { ok: false, error: 'invalid install request', created: [], overwritten: [], skipped: [] };
-  return applyInstallExamples(dirs(), m.replace);
+function failedInstall(error: string): InstallExamplesResult {
+  return {
+    ok: false,
+    error,
+    created: [],
+    overwritten: [],
+    skipped: [],
+  };
+}
+
+export interface InstallExamplesCoordinator {
+  preview(message: unknown): InstallExamplesPreview;
+  apply(message: unknown): InstallExamplesResult;
+}
+
+export function createInstallExamplesCoordinator(
+  dirs: () => InstallDestination[],
+): InstallExamplesCoordinator {
+  let pending:
+    | { previewId: string; authorization: InstallAuthorization }
+    | undefined;
+
+  return {
+    preview(message) {
+      pending = undefined;
+      if (!isValidInstallExamplesPreview(message)) {
+        return { ok: false, error: 'invalid preview request' };
+      }
+      const preparation = prepareInstallExamples(dirs());
+      if (!preparation.ok) return preparation;
+      const previewId = randomUUID() as InstallPreviewId;
+      pending = {
+        previewId,
+        authorization: preparation.prepared.authorization,
+      };
+      return {
+        ok: true,
+        previewId,
+        destinations: preparation.prepared.destinations,
+      };
+    },
+    apply(message) {
+      if (!isValidInstallExamplesApply(message)) {
+        return failedInstall('invalid install request');
+      }
+      const confirmation = pending;
+      if (
+        confirmation === undefined ||
+        confirmation.previewId !== message.previewId
+      ) {
+        return failedInstall(
+          'install preview is missing, stale, or already used; preview again',
+        );
+      }
+      pending = undefined;
+      if (
+        message.replace.some(
+          (destination) =>
+            !confirmation.authorization.conflicts.has(destination),
+        )
+      ) {
+        return failedInstall(
+          'install request names a replacement that was not offered in its preview',
+        );
+      }
+      return applyInstallExamplesWithAuthorization(
+        dirs(),
+        message.replace,
+        confirmation.authorization,
+      );
+    },
+  };
 }

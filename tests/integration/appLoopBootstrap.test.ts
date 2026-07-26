@@ -5,6 +5,7 @@ import {
   resolveAppGateRefs,
   runAppLoopBootstrap,
   type AppLoopBootstrapJob,
+  type AppLoopBootstrapRequest,
   type AppLoopBootstrapResult,
   type AppLoopBootstrapSpec,
 } from '../../src/main/appLoopBootstrap';
@@ -13,13 +14,18 @@ import {
   AmbiguousBootstrapOperationError,
   OwnedBootstrapBranchError,
   UnresolvedRemoteBootstrapBranchError,
+  type AppBootstrapConflicts,
   type AppBootstrapGit,
   type AppBootstrapGitHub,
 } from '../../src/main/bootstrapPorts';
+import type { AppBootstrapConflictTarget } from '../../src/shared/appBootstrap';
+
+const PREEXISTING_OID = 'a'.repeat(40);
 
 const bootstrap: AppLoopBootstrapSpec = {
   origin: 'operator',
   initialStatus: 'planning',
+  wipe: { mode: 'abort' },
   branchTemplate: 'plan-loop/issue-{issue}',
   initialLabels: [
     { action: 'remove', target: 'issue', label: 'ready' },
@@ -36,7 +42,7 @@ function spec(origin: AppLoopBootstrapSpec['origin'] = 'operator'): AppLoopBoots
   };
 }
 
-function fakeGit(over: { clean?: boolean; base?: string | null; branchExists?: boolean } = {}): {
+function fakeGit(over: { clean?: boolean; base?: string | null } = {}): {
   git: AppBootstrapGit;
   calls: string[];
   rollbackCreatedBranch(branch: string, ownedOid: string | null): Promise<void>;
@@ -69,9 +75,17 @@ function fakeGit(over: { clean?: boolean; base?: string | null; branchExists?: b
         calls.push('base');
         return over.base === undefined ? 'main' : over.base;
       },
-      branchExists: async (branch) => {
+      branchState: async (branch) => {
         calls.push(`exists:${branch}`);
-        return over.branchExists ?? branches.has(branch);
+        return {
+          localOid: branches.has(branch) ? PREEXISTING_OID : null,
+          remoteOid: remoteBranches.get(branch) ?? null,
+        };
+      },
+      deleteBranch: async (branch, state) => {
+        calls.push(`wipe:${branch}`);
+        if (state.localOid !== null) branches.delete(branch);
+        if (state.remoteOid !== null) remoteBranches.delete(branch);
       },
       createBranchFromBase: async (branch, base) => {
         calls.push(`branch:${branch}<-${base}`);
@@ -167,20 +181,91 @@ function fakeGitHub(pr: number | null = 42): {
   };
 }
 
+function target(
+  over: Partial<AppBootstrapConflictTarget> = {},
+): AppBootstrapConflictTarget {
+  return {
+    repository: 'github.com/owner/repository',
+    branch: 'plan-loop/issue-78',
+    localOid: '1'.repeat(40),
+    remoteOid: '2'.repeat(40),
+    pullRequests: [321],
+    ...over,
+  };
+}
+
+function noTarget(branch = 'plan-loop/issue-78'): AppBootstrapConflictTarget {
+  return {
+    repository: 'github.com/owner/repository',
+    branch,
+    localOid: null,
+    remoteOid: null,
+    pullRequests: [],
+  };
+}
+
+function fakeConflicts(initial = noTarget()): {
+  conflicts: AppBootstrapConflicts;
+  wiped: AppBootstrapConflictTarget[];
+  failWipe(error: unknown): void;
+} {
+  let current = structuredClone(initial);
+  let wipeError: unknown;
+  const wiped: AppBootstrapConflictTarget[] = [];
+  return {
+    wiped,
+    failWipe(error) {
+      wipeError = error;
+    },
+    conflicts: {
+      inspect: async () => structuredClone(current),
+      wipe: async (confirmed) => {
+        if (wipeError !== undefined) throw wipeError;
+        wiped.push(structuredClone(confirmed));
+        current = noTarget(confirmed.branch);
+      },
+    },
+  };
+}
+
 function runnerDeps(
   g: ReturnType<typeof fakeGit>,
   h: ReturnType<typeof fakeGitHub>,
   writeBootstrap: (identity: AppLoopBootstrap) => void = () => {},
   prepareBootstrap: (identity: Omit<AppLoopBootstrap, 'pr'>) => void = () => {},
   clearBootstrap: () => void = () => {},
+  conflicts: ReturnType<typeof fakeConflicts> = fakeConflicts(),
 ) {
   return {
     git: g.git,
     github: h.github,
+    conflicts: conflicts.conflicts,
     writeBootstrap,
     prepareBootstrap,
     clearBootstrap,
   };
+}
+
+const wipeSpec = (): AppLoopBootstrapSpec => ({
+  ...spec(),
+  wipe: { mode: 'wipe-and-retry' },
+});
+
+function completed(result: AppLoopBootstrapResult) {
+  if (result.ok) return result;
+  throw new Error(
+    'conflict' in result
+      ? `expected a completed bootstrap, got a conflict for ${result.conflict.branch}`
+      : result.error,
+  );
+}
+
+function failed(result: AppLoopBootstrapResult) {
+  if (result.ok) throw new Error('expected a failed bootstrap, got a completed one');
+  if ('conflict' in result) {
+    throw new Error(`expected a failed bootstrap, got a conflict for ${result.conflict.branch}`);
+  }
+  return result;
 }
 
 const request = (over: Partial<Parameters<typeof runAppLoopBootstrap>[1]> = {}) => ({
@@ -220,8 +305,7 @@ describe('runAppLoopBootstrap (§27.10 ST2)', () => {
     );
     expect(h.prBody()).toContain('closes #78');
     expect(h.isAssigned(78)).toBe(false);
-    if (!result.ok) throw new Error(result.error);
-    await createAppLoopBootstrapSession(deps).finalize(request(), result.identity);
+    await createAppLoopBootstrapSession(deps).finalize(request(), completed(result).identity);
     expect(h.isAssigned(78)).toBe(true);
     expect(h.issueHasLabel(78, 'ready')).toBe(false);
     expect(h.issueHasLabel(78, 'in-progress')).toBe(true);
@@ -241,7 +325,7 @@ describe('runAppLoopBootstrap (§27.10 ST2)', () => {
       runnerDeps(g, h),
       request({ spec: spec('repo') }),
     );
-    expect(result).toEqual({ ok: false, error: expect.stringMatching(/origin|repo-resident/i) });
+    expect(result).toEqual({ ok: false, kind: 'error' as const, error: expect.stringMatching(/origin|repo-resident/i) });
     expect(g.calls).toEqual([]);
     expect(h.calls).toEqual([]);
   });
@@ -253,7 +337,7 @@ describe('runAppLoopBootstrap (§27.10 ST2)', () => {
       runnerDeps(g, h),
       request({ spec: spec('app-bundled') }),
     );
-    expect(result).toEqual({ ok: false, error: expect.stringMatching(/operator-authored|origin/i) });
+    expect(result).toEqual({ ok: false, kind: 'error' as const, error: expect.stringMatching(/operator-authored|origin/i) });
     expect(g.calls).toEqual([]);
     expect(h.calls).toEqual([]);
   });
@@ -267,7 +351,7 @@ describe('runAppLoopBootstrap (§27.10 ST2)', () => {
         runnerDeps(g, h),
         request({ issue }),
       );
-      expect(result).toEqual({ ok: false, error: expect.stringMatching(/issue/i) });
+      expect(result).toEqual({ ok: false, kind: 'error' as const, error: expect.stringMatching(/issue/i) });
       expect(g.calls).toEqual([]);
       expect(h.calls).toEqual([]);
     },
@@ -284,7 +368,7 @@ describe('runAppLoopBootstrap (§27.10 ST2)', () => {
       request({ spec: blank }),
     );
 
-    expect(result).toEqual({ ok: false, error: expect.stringMatching(/initial status/i) });
+    expect(result).toEqual({ ok: false, kind: 'error' as const, error: expect.stringMatching(/initial status/i) });
     expect(g.calls).toEqual([]);
     expect(h.calls).toEqual([]);
   });
@@ -298,7 +382,7 @@ describe('runAppLoopBootstrap (§27.10 ST2)', () => {
       runnerDeps(g, h),
       request({ spec: unsafe }),
     );
-    expect(result).toEqual({ ok: false, error: expect.stringMatching(/unsafe branch/i) });
+    expect(result).toEqual({ ok: false, kind: 'error' as const, error: expect.stringMatching(/unsafe branch/i) });
     expect(g.calls.some((call) => /^(exists|branch|commit|push):/.test(call))).toBe(false);
     expect(h.calls).toEqual([]);
   });
@@ -306,7 +390,6 @@ describe('runAppLoopBootstrap (§27.10 ST2)', () => {
   it.each([
     { name: 'dirty tree', git: { clean: false }, error: /not clean/ },
     { name: 'unresolvable base', git: { base: null }, error: /base branch/ },
-    { name: 'existing branch', git: { branchExists: true }, error: /already exists/ },
   ])('fails safely for $name without opening a PR', async ({ git, error }) => {
     const g = fakeGit(git);
     const h = fakeGitHub();
@@ -314,8 +397,108 @@ describe('runAppLoopBootstrap (§27.10 ST2)', () => {
       runnerDeps(g, h),
       request(),
     );
-    expect(result).toEqual({ ok: false, error: expect.stringMatching(error) });
+    expect(result).toEqual({ ok: false, kind: 'error' as const, error: expect.stringMatching(error) });
     expect(h.calls.some((call) => call.startsWith('pr:'))).toBe(false);
+  });
+
+  it('detects a wipe-authorized conflict without deleting anything before confirmation', async () => {
+    const h = fakeGitHub();
+    const conflicts = fakeConflicts(target());
+
+    const result = await runAppLoopBootstrap(
+      runnerDeps(fakeGit(), h, undefined, undefined, undefined, conflicts),
+      request({ spec: wipeSpec() }),
+    );
+
+    expect(result).toEqual({ ok: false, kind: 'conflict' as const, conflict: target() });
+    expect(conflicts.wiped).toEqual([]);
+    expect(h.calls).toEqual([]);
+  });
+
+  it('hard-fails a conflict with no wipe policy instead of offering a destructive decision', async () => {
+    const conflicts = fakeConflicts(target());
+
+    const result = await runAppLoopBootstrap(
+      runnerDeps(fakeGit(), fakeGitHub(), undefined, undefined, undefined, conflicts),
+      request(),
+    );
+
+    expect(result).toEqual({ ok: false, kind: 'error' as const, error: expect.stringMatching(/already exists/i) });
+    expect(conflicts.wiped).toEqual([]);
+  });
+
+  // The authorizing policy is re-read at the destructive operation, not merely at the prompt that
+  // produced the confirmation, so a def edited between the two cannot license a wipe.
+  it('re-checks the wipe policy at the destructive operation before touching git or gh', async () => {
+    const g = fakeGit();
+    const h = fakeGitHub();
+
+    const result = await runAppLoopBootstrap(
+      runnerDeps(g, h),
+      request({ confirmedWipe: target() }),
+    );
+
+    expect(result).toEqual({ ok: false, kind: 'error' as const, error: expect.stringMatching(/wipe policy/i) });
+    expect(g.calls).toEqual([]);
+    expect(h.calls).toEqual([]);
+  });
+
+  it('wipes only the exact confirmed resources, then recreates the bootstrap', async () => {
+    const conflicts = fakeConflicts(target());
+
+    const result = await runAppLoopBootstrap(
+      runnerDeps(fakeGit(), fakeGitHub(), undefined, undefined, undefined, conflicts),
+      request({ spec: wipeSpec(), confirmedWipe: target() }),
+    );
+
+    expect(result).toMatchObject({
+      ok: true,
+      identity: { pr: 42, branch: 'plan-loop/issue-78', issue: 78 },
+    });
+    expect(conflicts.wiped).toEqual([target()]);
+  });
+
+  it('refuses a confirmation naming a different branch before any operation', async () => {
+    const g = fakeGit();
+    const h = fakeGitHub();
+
+    const result = await runAppLoopBootstrap(
+      runnerDeps(g, h),
+      request({ spec: wipeSpec(), confirmedWipe: target({ branch: 'other/branch' }) }),
+    );
+
+    expect(result).toEqual({ ok: false, kind: 'error' as const, error: expect.stringMatching(/different branch/i) });
+    expect(g.calls).toEqual([]);
+    expect(h.calls).toEqual([]);
+  });
+
+  it('requires fresh confirmation when any destructive target changes', async () => {
+    const g = fakeGit();
+    const moved = target({ remoteOid: '3'.repeat(40), pullRequests: [321, 654] });
+    const conflicts = fakeConflicts(moved);
+
+    const result = await runAppLoopBootstrap(
+      runnerDeps(g, fakeGitHub(), undefined, undefined, undefined, conflicts),
+      request({ spec: wipeSpec(), confirmedWipe: target() }),
+    );
+
+    expect(result).toEqual({ ok: false, kind: 'conflict' as const, conflict: moved });
+    expect(conflicts.wiped).toEqual([]);
+    expect(g.calls.some((call) => call.startsWith('branch:'))).toBe(false);
+  });
+
+  it('does not recreate the branch when the exact wipe fails', async () => {
+    const g = fakeGit();
+    const conflicts = fakeConflicts(target());
+    conflicts.failWipe(new Error('PR #321 could not be closed'));
+
+    const result = await runAppLoopBootstrap(
+      runnerDeps(g, fakeGitHub(), undefined, undefined, undefined, conflicts),
+      request({ spec: wipeSpec(), confirmedWipe: target() }),
+    );
+
+    expect(result).toEqual({ ok: false, kind: 'error' as const, error: 'PR #321 could not be closed' });
+    expect(g.calls.some((call) => call.startsWith('branch:'))).toBe(false);
   });
 
   it('fails when draft PR creation is rejected and writes no bootstrap identity', async () => {
@@ -331,7 +514,7 @@ describe('runAppLoopBootstrap (§27.10 ST2)', () => {
       runnerDeps(g, h, writeBootstrap),
       request(),
     );
-    expect(result).toEqual({ ok: false, error: expect.stringMatching(/PR creation/i) });
+    expect(result).toEqual({ ok: false, kind: 'error' as const, error: expect.stringMatching(/PR creation/i) });
     expect(writeBootstrap).not.toHaveBeenCalled();
     expect(g.hasBranch('plan-loop/issue-78')).toBe(false);
     expect(h.isAssigned(78)).toBe(false);
@@ -354,7 +537,7 @@ describe('runAppLoopBootstrap (§27.10 ST2)', () => {
 
     const result = await runAppLoopBootstrap(runnerDeps(g, fakeGitHub()), request());
 
-    expect(result).toEqual({ ok: false, error: 'branch push failed' });
+    expect(result).toEqual({ ok: false, kind: 'error' as const, error: 'branch push failed' });
     expect(rollback).toHaveBeenCalledWith(
       'plan-loop/issue-78',
       '1111111111111111111111111111111111111111',
@@ -372,7 +555,7 @@ describe('runAppLoopBootstrap (§27.10 ST2)', () => {
 
     const result = await runAppLoopBootstrap(runnerDeps(g, fakeGitHub()), request());
 
-    expect(result).toEqual({ ok: false, error: 'initial commit failed' });
+    expect(result).toEqual({ ok: false, kind: 'error' as const, error: 'initial commit failed' });
     expect(rollback).toHaveBeenCalledWith('plan-loop/issue-78', null);
     expect(g.hasBranch('plan-loop/issue-78')).toBe(false);
     expect(g.hasRemoteBranch('plan-loop/issue-78')).toBe(false);
@@ -391,7 +574,7 @@ describe('runAppLoopBootstrap (§27.10 ST2)', () => {
 
     const result = await runAppLoopBootstrap(runnerDeps(g, h), request());
 
-    expect(result).toEqual({ ok: false, error: 'branch checkout failed' });
+    expect(result).toEqual({ ok: false, kind: 'error' as const, error: 'branch checkout failed' });
     expect(rollback).toHaveBeenCalledWith('plan-loop/issue-78', null);
     expect(g.hasBranch('plan-loop/issue-78')).toBe(false);
     expect(h.calls).toEqual([]);
@@ -423,6 +606,7 @@ describe('runAppLoopBootstrap (§27.10 ST2)', () => {
 
     expect(result).toEqual({
       ok: false,
+      kind: 'error',
       error: 'ENOSPC while writing bootstrap identity',
     });
     expect(h.calls).toContain('close-pr:42');
@@ -448,7 +632,7 @@ describe('runAppLoopBootstrap (§27.10 ST2)', () => {
 
     const result = await runAppLoopBootstrap(runnerDeps(g, h), request());
 
-    expect(result).toEqual({ ok: false, error: 'draft PR creation failed' });
+    expect(result).toEqual({ ok: false, kind: 'error' as const, error: 'draft PR creation failed' });
     expect(h.calls).toContain('find-pr:main<-plan-loop/issue-78');
     expect(h.calls).toContain('close-pr:42');
     expect(h.hasOpenPr(42)).toBe(false);
@@ -592,7 +776,7 @@ describe('runAppLoopBootstrap (§27.10 ST2)', () => {
       request(),
     );
 
-    expect(result).toEqual({ ok: false, error: expect.stringMatching(/bootstrap\.yaml is a directory/i) });
+    expect(result).toEqual({ ok: false, kind: 'error' as const, error: expect.stringMatching(/bootstrap\.yaml is a directory/i) });
     expect(g.calls.some((call) => /^(branch|commit|push):/.test(call))).toBe(false);
     expect(h.calls).toEqual([]);
   });
@@ -609,8 +793,7 @@ describe('runAppLoopBootstrap (§27.10 ST2)', () => {
         written = identity;
       });
     const result = await runAppLoopBootstrap(deps, request());
-    if (!result.ok) throw new Error(result.error);
-    await createAppLoopBootstrapSession(deps).finalize(request(), result.identity);
+    await createAppLoopBootstrapSession(deps).finalize(request(), completed(result).identity);
 
     expect(result).toMatchObject({
       ok: true,
@@ -639,7 +822,7 @@ describe('runAppLoopBootstrap (§27.10 ST2)', () => {
       request(),
     );
 
-    expect(result).toEqual({ ok: false, error: 'bootstrap state is unwritable' });
+    expect(result).toEqual({ ok: false, kind: 'error' as const, error: 'bootstrap state is unwritable' });
     expect(g.hasBranch('plan-loop/issue-78')).toBe(false);
   });
 
@@ -669,7 +852,7 @@ describe('runAppLoopBootstrap (§27.10 ST2)', () => {
       runnerDeps(g, fakeGitHub()),
       request(),
     );
-    expect(result).toEqual({ ok: false, error: 'git exploded' });
+    expect(result).toEqual({ ok: false, kind: 'error' as const, error: 'git exploded' });
   });
 
   it('retries retained in-process compensation before the next bootstrap attempt', async () => {
@@ -719,7 +902,7 @@ describe('runAppLoopBootstrap (§27.10 ST2)', () => {
 
     const first = await session.run(request());
     expect(first).toMatchObject({ ok: false, requiresAttention: true });
-    if (!first.ok) expect(first.recovery).toBeUndefined();
+    expect(failed(first).recovery).toBeUndefined();
 
     h.github.createDraftPr = async () => 42;
     const second = await session.run(request());
@@ -745,8 +928,7 @@ describe('runAppLoopBootstrap (§27.10 ST2)', () => {
       runnerDeps(g, h, () => {}, () => {}, clearBootstrap),
     );
     const accepted = await session.run(request());
-    if (!accepted.ok) throw new Error(accepted.error);
-    await expect(session.compensate(accepted.ownership)).rejects.toThrow(
+    await expect(session.compensate(completed(accepted).ownership)).rejects.toThrow(
       /transient remote probe failure/i,
     );
 
@@ -757,7 +939,7 @@ describe('runAppLoopBootstrap (§27.10 ST2)', () => {
       requiresAttention: true,
       error: expect.stringMatching(/terminally ambiguous/i),
     });
-    if (!recovery.ok) expect(recovery.recovery).toBeUndefined();
+    expect(failed(recovery).recovery).toBeUndefined();
     expect(clearBootstrap).toHaveBeenCalledTimes(1);
   });
 
@@ -786,9 +968,7 @@ describe('runAppLoopBootstrap (§27.10 ST2)', () => {
       ),
     );
     const first = await session.run(request());
-    if (!first.ok) throw new Error(first.error);
-
-    await expect(session.compensate(first.ownership)).rejects.toThrow(/close failure/i);
+    await expect(session.compensate(completed(first).ownership)).rejects.toThrow(/close failure/i);
     trace.length = 0;
     const second = await session.run(request());
 
@@ -808,15 +988,23 @@ describe('resolveAppGateRefs — live bootstrap identity routing', () => {
   };
 
   it('supplies the generated PR to the matching ticket gate', () => {
-    expect(resolveAppGateRefs({ ticket: 78 }, identity)).toEqual({ pr: 42, ticket: 78 });
+    expect(resolveAppGateRefs({ ticket: 78 }, identity)).toEqual({ pr: 42, ticket: 78, bootstrap: identity });
   });
 
   it('keeps the accepted issue authoritative over mutable flow refs', () => {
-    expect(resolveAppGateRefs({ ticket: 79 }, identity)).toEqual({ pr: 42, ticket: 78 });
+    expect(resolveAppGateRefs({ ticket: 79 }, identity)).toEqual({ pr: 42, ticket: 78, bootstrap: identity });
   });
 
   it('keeps the accepted bootstrap PR authoritative over mutable flow state', () => {
-    expect(resolveAppGateRefs({ ticket: 78, pr: 99 }, identity)).toEqual({ pr: 42, ticket: 78 });
+    expect(resolveAppGateRefs({ ticket: 78, pr: 99 }, identity)).toEqual({ pr: 42, ticket: 78, bootstrap: identity });
+  });
+
+  it('carries the accepted identity into the gate side-effect context', () => {
+    expect(resolveAppGateRefs({ ticket: 78 }, identity).bootstrap).toBe(identity);
+  });
+
+  it('reports no identity to the gate when nothing was accepted', () => {
+    expect(resolveAppGateRefs({ ticket: 78 }, null)).toEqual({ pr: null, ticket: 78, bootstrap: null });
   });
 });
 
@@ -871,6 +1059,7 @@ describe('createAppLoopBootstrapCoordinator — async step identity + rollback (
       rollbackStep,
       enterWork,
       emitError,
+      emitConflict: vi.fn(),
       audit,
     });
     return {
@@ -878,6 +1067,7 @@ describe('createAppLoopBootstrapCoordinator — async step identity + rollback (
       enterWork,
       rollbackStep,
       emitError,
+      emitConflict: vi.fn(),
       audit,
       acceptBootstrap,
       compensateBootstrap,
@@ -924,6 +1114,7 @@ describe('createAppLoopBootstrapCoordinator — async step identity + rollback (
       rollbackStep: () => true,
       enterWork,
       emitError: vi.fn(),
+      emitConflict: vi.fn(),
       audit,
     });
 
@@ -960,6 +1151,7 @@ describe('createAppLoopBootstrapCoordinator — async step identity + rollback (
       rollbackStep: vi.fn(() => true),
       enterWork,
       emitError: vi.fn(),
+      emitConflict: vi.fn(),
       audit: vi.fn(),
     });
 
@@ -1005,6 +1197,7 @@ describe('createAppLoopBootstrapCoordinator — async step identity + rollback (
       rollbackStep: vi.fn(() => true),
       enterWork,
       emitError,
+      emitConflict: vi.fn(),
       audit,
     });
 
@@ -1071,6 +1264,7 @@ describe('createAppLoopBootstrapCoordinator — async step identity + rollback (
       rollbackStep: vi.fn(() => true),
       enterWork,
       emitError: vi.fn(),
+      emitConflict: vi.fn(),
       audit,
     });
 
@@ -1078,7 +1272,7 @@ describe('createAppLoopBootstrapCoordinator — async step identity + rollback (
     currentToken = 2;
     c.enter(job({ entryToken: 2, bootstrap: null }));
     currentToken = 3;
-    finish({ ok: false, error: 'late failure' });
+    finish({ ok: false, kind: 'error' as const, error: 'late failure' });
 
     await vi.waitFor(() => expect(audit).toHaveBeenCalledWith('/repo', 'stale', 'plan'));
     expect(enterWork).not.toHaveBeenCalled();
@@ -1098,6 +1292,7 @@ describe('createAppLoopBootstrapCoordinator — async step identity + rollback (
       rollbackStep: () => true,
       enterWork,
       emitError: vi.fn(),
+      emitConflict: vi.fn(),
       audit: vi.fn(),
     });
 
@@ -1169,6 +1364,7 @@ describe('createAppLoopBootstrapCoordinator — async step identity + rollback (
       rollbackStep,
       enterWork,
       emitError,
+      emitConflict: vi.fn(),
       audit: vi.fn(),
     });
 
@@ -1207,6 +1403,7 @@ describe('createAppLoopBootstrapCoordinator — async step identity + rollback (
       rollbackStep,
       enterWork: vi.fn(() => 'busy' as const),
       emitError: vi.fn(),
+      emitConflict: vi.fn(),
       audit: vi.fn(),
     });
 
@@ -1236,6 +1433,7 @@ describe('createAppLoopBootstrapCoordinator — async step identity + rollback (
       rollbackStep,
       enterWork: vi.fn(() => 'entered' as const),
       emitError,
+      emitConflict: vi.fn(),
       audit,
     });
 
@@ -1270,6 +1468,7 @@ describe('createAppLoopBootstrapCoordinator — async step identity + rollback (
       rollbackStep,
       enterWork: vi.fn(() => 'entered' as const),
       emitError,
+      emitConflict: vi.fn(),
       audit,
     });
 
@@ -1314,6 +1513,7 @@ describe('createAppLoopBootstrapCoordinator — async step identity + rollback (
       rollbackStep,
       enterWork: () => 'busy',
       emitError: vi.fn(),
+      emitConflict: vi.fn(),
       audit: vi.fn(),
     });
 
@@ -1353,6 +1553,7 @@ describe('createAppLoopBootstrapCoordinator — async step identity + rollback (
       rollbackStep,
       enterWork: () => 'busy',
       emitError,
+      emitConflict: vi.fn(),
       audit,
     });
 
@@ -1385,6 +1586,7 @@ describe('createAppLoopBootstrapCoordinator — async step identity + rollback (
         throw new Error('work entry exploded');
       },
       emitError,
+      emitConflict: vi.fn(),
       audit,
     });
 
@@ -1408,7 +1610,7 @@ describe('createAppLoopBootstrapCoordinator — async step identity + rollback (
   });
 
   it('rolls back the exact failed step and emits a blocking error carrying repo + step identity', async () => {
-    const x = coordinator({ ok: false, error: 'working tree is not clean' });
+    const x = coordinator({ ok: false, kind: 'error' as const, error: 'working tree is not clean' });
     x.c.enter(job());
     await vi.waitFor(() =>
       expect(x.rollbackStep).toHaveBeenCalledWith(
@@ -1432,7 +1634,7 @@ describe('createAppLoopBootstrapCoordinator — async step identity + rollback (
     const emitError = vi.fn();
     const audit = vi.fn();
     const c = createAppLoopBootstrapCoordinator({
-      run: async () => ({ ok: false, error: 'draft PR creation failed' }),
+      run: async () => ({ ok: false, kind: 'error' as const, error: 'draft PR creation failed' }),
       compensateBootstrap: vi.fn(async () => {}),
       finalizeBootstrap: vi.fn(async () => {}),
       hasBootstrapForJob: () => false,
@@ -1444,6 +1646,7 @@ describe('createAppLoopBootstrapCoordinator — async step identity + rollback (
       },
       enterWork: vi.fn(() => 'entered' as const),
       emitError,
+      emitConflict: vi.fn(),
       audit,
     });
 
@@ -1469,7 +1672,7 @@ describe('createAppLoopBootstrapCoordinator — async step identity + rollback (
   });
 
   it('makes a stale failure inert', async () => {
-    const x = coordinator({ ok: false, error: 'wrong target' });
+    const x = coordinator({ ok: false, kind: 'error' as const, error: 'wrong target' });
     x.c.enter(job());
     x.moveAway();
     await vi.waitFor(() => expect(x.audit).toHaveBeenCalledWith('/repo', 'stale', 'plan'));
@@ -1484,6 +1687,7 @@ describe('createAppLoopBootstrapCoordinator — async step identity + rollback (
     };
     const x = coordinator({
       ok: false,
+      kind: 'error' as const,
       error: 'draft PR outcome could not be reconciled',
       requiresAttention: true,
       recovery,
@@ -1519,6 +1723,7 @@ describe('createAppLoopBootstrapCoordinator — async step identity + rollback (
       rollbackStep: vi.fn(() => true),
       enterWork: vi.fn(() => 'entered' as const),
       emitError,
+      emitConflict: vi.fn(),
       audit,
     });
 
@@ -1554,6 +1759,7 @@ describe('createAppLoopBootstrapCoordinator — async step identity + rollback (
       rollbackStep,
       enterWork: vi.fn(() => 'entered' as const),
       emitError,
+      emitConflict: vi.fn(),
       audit: vi.fn(),
     });
 
@@ -1575,7 +1781,7 @@ describe('createAppLoopBootstrapCoordinator — async step identity + rollback (
     const emitError = vi.fn();
     const audit = vi.fn();
     const c = createAppLoopBootstrapCoordinator({
-      run: async () => ({ ok: false, error: 'late failure' }),
+      run: async () => ({ ok: false, kind: 'error' as const, error: 'late failure' }),
       compensateBootstrap: vi.fn(async () => {}),
       finalizeBootstrap: vi.fn(async () => {}),
       hasBootstrapForJob: () => false,
@@ -1585,6 +1791,7 @@ describe('createAppLoopBootstrapCoordinator — async step identity + rollback (
       rollbackStep: () => false,
       enterWork: vi.fn(() => 'entered' as const),
       emitError,
+      emitConflict: vi.fn(),
       audit,
     });
 
@@ -1592,5 +1799,176 @@ describe('createAppLoopBootstrapCoordinator — async step identity + rollback (
 
     await vi.waitFor(() => expect(audit).toHaveBeenCalledWith('/repo', 'stale', 'plan'));
     expect(emitError).not.toHaveBeenCalled();
+  });
+});
+
+describe('createAppLoopBootstrapCoordinator — confirm-first wipe (§27.10)', () => {
+  const success: AppLoopBootstrapResult = {
+    ok: true,
+    identity: {
+      pr: 42,
+      branch: 'plan-loop/issue-78',
+      issue: 78,
+      initialStatus: 'planning',
+    },
+    ownership: {
+      base: 'main',
+      branch: 'plan-loop/issue-78',
+      ownedOid: '1'.repeat(40),
+      pr: { kind: 'known' as const, number: 42 },
+    },
+  };
+
+  function conflictCoordinator(
+    run: (repoDir: string, request: AppLoopBootstrapRequest) => Promise<AppLoopBootstrapResult>,
+  ) {
+    const enterWork = vi.fn(() => 'entered' as const);
+    const rollbackStep = vi.fn(() => true);
+    const emitError = vi.fn();
+    const emitConflict = vi.fn();
+    const audit = vi.fn();
+    let current = true;
+    const c = createAppLoopBootstrapCoordinator({
+      run,
+      compensateBootstrap: vi.fn(async () => {}),
+      finalizeBootstrap: vi.fn(async () => {}),
+      hasBootstrapForJob: () => false,
+      isCurrentJob: (candidate) => current && candidate.stepId === 'plan',
+      canEnterWork: () => true,
+      acceptBootstrap: vi.fn(),
+      rollbackStep,
+      enterWork,
+      emitError,
+      emitConflict,
+      audit,
+    });
+    return {
+      c,
+      enterWork,
+      rollbackStep,
+      emitError,
+      emitConflict,
+      audit,
+      moveAway: () => (current = false),
+    };
+  }
+
+  it('holds a wipe-authorized conflict on its named step until the operator decides', async () => {
+    const run = vi.fn(async () => ({ ok: false as const, kind: 'conflict' as const, conflict: target() }));
+    const x = conflictCoordinator(run);
+
+    x.c.enter(job());
+
+    await vi.waitFor(() =>
+      expect(x.emitConflict).toHaveBeenCalledWith({
+        repoDir: '/repo',
+        stepId: 'plan',
+        ...target(),
+      }),
+    );
+    expect(x.rollbackStep).not.toHaveBeenCalled();
+    expect(x.emitError).not.toHaveBeenCalled();
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it('declining a pending wipe rolls back the exact step without re-running pickup', async () => {
+    const run = vi.fn(async () => ({ ok: false as const, kind: 'conflict' as const, conflict: target() }));
+    const x = conflictCoordinator(run);
+    x.c.enter(job());
+    await vi.waitFor(() => expect(x.emitConflict).toHaveBeenCalledTimes(1));
+
+    x.c.resolve('/repo', 'plan', false, target());
+
+    expect(x.rollbackStep).toHaveBeenCalledWith(expect.objectContaining({ stepId: 'plan' }));
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it('confirming re-runs the same job with the exact named wipe target', async () => {
+    const run = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: false as const, kind: 'conflict' as const, conflict: target() })
+      .mockResolvedValueOnce(success);
+    const x = conflictCoordinator(run);
+    x.c.enter(job());
+    await vi.waitFor(() => expect(x.emitConflict).toHaveBeenCalledTimes(1));
+
+    x.c.resolve('/repo', 'plan', true, target());
+
+    await vi.waitFor(() => expect(run).toHaveBeenCalledTimes(2));
+    expect(run.mock.calls[1]).toEqual([
+      '/repo',
+      expect.objectContaining({ confirmedWipe: target() }),
+    ]);
+    await vi.waitFor(() =>
+      expect(x.enterWork).toHaveBeenCalledWith('/repo', 'plan-loop', 'plan', 'chain-advance'),
+    );
+  });
+
+  // §27.10 — the answer authorizes the resources the operator was shown, so a confirmation that names a
+  // different set than the one now held cannot be spent on it.
+  // Defense in depth: the base branch is resolved two statements earlier, so a branch_template whose
+  // expansion collides with it must never reach a wipe prompt (CLAUDE.md: never allow an unrecoverable
+  // state to occur).
+  it('refuses a pickup whose branch is the repository default branch', async () => {
+    const g = fakeGit();
+    const conflicts = fakeConflicts(target({ branch: 'main' }));
+    const result = await runAppLoopBootstrap(
+      runnerDeps(g, fakeGitHub(), undefined, undefined, undefined, conflicts),
+      request({ spec: { ...wipeSpec(), branchTemplate: 'main' } }),
+    );
+
+    expect(result).toEqual({
+      ok: false,
+      kind: 'error',
+      error: expect.stringMatching(/default branch|base branch/i),
+    });
+    expect(conflicts.wiped).toEqual([]);
+    expect(g.calls.some((call) => call.startsWith('branch:'))).toBe(false);
+  });
+
+  it('makes a wipe answer for a superseded target inert', async () => {
+    const shown = target();
+    const superseded = target({ pullRequests: [321, 999] });
+    const run = vi.fn(async () => ({ ok: false as const, kind: 'conflict' as const, conflict: superseded }));
+    const x = conflictCoordinator(run);
+    x.c.enter(job());
+    await vi.waitFor(() => expect(x.emitConflict).toHaveBeenCalledTimes(1));
+
+    x.c.resolve('/repo', 'plan', true, shown);
+
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(x.rollbackStep).not.toHaveBeenCalled();
+  });
+
+  it('makes a stale or wrong-step wipe decision inert', async () => {
+    const run = vi.fn(async () => ({ ok: false as const, kind: 'conflict' as const, conflict: target() }));
+    const x = conflictCoordinator(run);
+    x.c.enter(job());
+    await vi.waitFor(() => expect(x.emitConflict).toHaveBeenCalledTimes(1));
+
+    x.c.resolve('/repo', 'implement', true, target());
+    x.moveAway();
+    x.c.resolve('/repo', 'plan', true, target());
+
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(x.rollbackStep).not.toHaveBeenCalled();
+  });
+
+  // A held conflict must not keep the single bootstrap slot: the operator may take arbitrarily long to
+  // answer, and another repo's pickup would otherwise wait behind a dialog nobody is looking at.
+  it('frees the bootstrap slot for another repo while a conflict awaits the operator', async () => {
+    const run = vi.fn(async (repoDir: string) =>
+      repoDir === '/repo'
+        ? { ok: false as const, kind: 'conflict' as const, conflict: target() }
+        : success,
+    );
+    const x = conflictCoordinator(run);
+    x.c.enter(job());
+    await vi.waitFor(() => expect(x.emitConflict).toHaveBeenCalledTimes(1));
+
+    x.c.enter(job({ repoDir: '/other' }));
+
+    await vi.waitFor(() => expect(run).toHaveBeenCalledTimes(2));
+    expect(run.mock.calls[1][0]).toBe('/other');
   });
 });

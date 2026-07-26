@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { runAppGateDecision, type AppGateDecisionDeps } from '../../src/main/appGateDecision';
+import {
+  resolveGateSideEffectBodyFile,
+  runAppGateDecision,
+  type AppGateDecisionDeps,
+} from '../../src/main/appGateDecision';
 import type { AppLoopRunState } from '../../src/main/appLoopState';
 import type { GateOptionDef, LoopDefV2 } from '../../src/main/loopDefV2';
 import type { GateDecisionOption } from '../../src/shared/ipc';
@@ -22,6 +26,33 @@ const GATE_RUN: AppLoopRunState = {
 const defWithGate = (gate: GateOptionDef[]): LoopDefV2 => ({ gate, outputs: [] } as unknown as LoopDefV2);
 const APPROVE_MARK_READY: GateOptionDef[] = [{ option: 'approve', sideEffects: [{ kind: 'gh', args: { action: 'mark-ready' } }] }];
 
+describe('resolveGateSideEffectBodyFile', () => {
+  it('resolves only the binding explicitly named by the declared side-effect', () => {
+    const def = {
+      inputs: [
+        {
+          id: 'plan',
+          path: '/repo/.agent-terminal/loop/artifacts/plan.md',
+          rel: '.agent-terminal/loop/artifacts/plan.md',
+        },
+      ],
+      outputs: [],
+    } as unknown as LoopDefV2;
+    expect(
+      resolveGateSideEffectBodyFile(def, {
+        kind: 'gh',
+        args: { action: 'publish-pr-body', artifact: 'plan' },
+      }),
+    ).toBe('/repo/.agent-terminal/loop/artifacts/plan.md');
+    expect(
+      resolveGateSideEffectBodyFile(def, {
+        kind: 'gh',
+        args: { action: 'publish-pr-body', artifact: 'missing' },
+      }),
+    ).toBeNull();
+  });
+});
+
 interface Recorder {
   sideEffects: Array<{ action: string; ctx: unknown }>;
   accepts: AppLoopRunState[];
@@ -43,8 +74,11 @@ function mkDeps(over: Partial<AppGateDecisionDeps> & { run?: AppLoopRunState | n
   const deps: AppGateDecisionDeps = {
     readRunState: () => (over.run === undefined ? GATE_RUN : over.run),
     resolveDef: () => ({ ok: true, def: defWithGate(over.gate ?? APPROVE_MARK_READY) }),
-    refs: () => ({ pr: over.pr ?? 41, ticket: over.ticket ?? null }),
-    bodyFile: () => '/repo/.agent-terminal/loop/artifacts/plan.md',
+    refs: () => ({
+      pr: over.pr ?? 41,
+      ticket: over.ticket ?? null,
+      bootstrap: null,
+    }),
     runSideEffect: async (action, ctx) => {
       rec.sideEffects.push({ action, ctx });
       if (over.sideEffectThrows) throw new Error(over.sideEffectThrows);
@@ -79,7 +113,7 @@ describe('runAppGateDecision — approve (§27.13 / AC2)', () => {
   it('runs the declared side-effect, persists the terminal accept, and advances the flow', async () => {
     const { deps, rec } = mkDeps({});
     await approve(deps);
-    expect(rec.sideEffects).toEqual([{ action: 'mark-ready', ctx: { pr: 41, ticket: null, bodyFile: '/repo/.agent-terminal/loop/artifacts/plan.md' } }]);
+    expect(rec.sideEffects).toEqual([{ action: 'mark-ready', ctx: { pr: 41, ticket: null, bodyFile: null, bootstrap: null } }]);
     expect(rec.accepts).toEqual([{ loop: 'plan-loop', step: 'plan', turnKey: 'consolidate-plan', status: 'accepted' }]);
     expect(rec.advances).toEqual(['/repo']);
     expect(rec.audits.some((a) => a.cmd.includes('mark-ready') && a.exit === 0)).toBe(true);
@@ -378,7 +412,7 @@ describe('runAppGateDecision — approve ends the polish stand-down (AC6)', () =
     });
     await expect(approve(deps)).resolves.toBe(false); // resolves — the throw is caught, never rejects into the void caller
     expect(rec.accepts).toHaveLength(1); // the accept persisted before the (now-caught) clear
-    expect(rec.sideEffects).toEqual([{ action: 'mark-ready', ctx: { pr: 41, ticket: null, bodyFile: '/repo/.agent-terminal/loop/artifacts/plan.md' } }]);
+    expect(rec.sideEffects).toEqual([{ action: 'mark-ready', ctx: { pr: 41, ticket: null, bodyFile: null, bootstrap: null } }]);
     expect(rec.advances).toEqual(['/repo']); // the flow advanced past the gate — no strand
     expect(rec.errors).toEqual([]); // a best-effort clear failure is audited, not surfaced as a blocking dialog
     expect(rec.audits.some((a) => a.cmd.includes('clear') && a.cmd.includes('polish') && a.exit === 1)).toBe(true);

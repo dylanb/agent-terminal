@@ -22,34 +22,58 @@ describe('isValidInstallExamplesPreview', () => {
 });
 
 describe('isValidInstallExamplesApply', () => {
+  const valid = {
+    sessionId: SESSION_ID,
+    previewId: 'preview-1',
+  };
+
   it('accepts a live-session request whose replace list is empty', () => {
-    expect(isValidInstallExamplesApply({ sessionId: SESSION_ID, replace: [] })).toBe(true);
+    expect(isValidInstallExamplesApply({ ...valid, replace: [] })).toBe(true);
   });
 
   it('accepts every known destination id, singly and together', () => {
     for (const id of INSTALL_DESTINATION_IDS) {
-      expect(isValidInstallExamplesApply({ sessionId: SESSION_ID, replace: [id] })).toBe(true);
+      expect(isValidInstallExamplesApply({ ...valid, replace: [id] })).toBe(true);
     }
-    expect(isValidInstallExamplesApply({ sessionId: SESSION_ID, replace: [...INSTALL_DESTINATION_IDS] })).toBe(true);
+    expect(isValidInstallExamplesApply({ ...valid, replace: [...INSTALL_DESTINATION_IDS] })).toBe(true);
   });
 
   it('rejects a wrong session', () => {
-    expect(isValidInstallExamplesApply({ sessionId: 'other', replace: [] })).toBe(false);
+    expect(isValidInstallExamplesApply({ ...valid, sessionId: 'other', replace: [] })).toBe(false);
   });
 
   it('rejects a missing replace list', () => {
-    expect(isValidInstallExamplesApply({ sessionId: SESSION_ID })).toBe(false);
+    expect(isValidInstallExamplesApply(valid)).toBe(false);
+  });
+
+  it('rejects a missing, empty, or unbounded preview identity', () => {
+    expect(
+      isValidInstallExamplesApply({
+        sessionId: SESSION_ID,
+        replace: [],
+      }),
+    ).toBe(false);
+    expect(
+      isValidInstallExamplesApply({ ...valid, previewId: '', replace: [] }),
+    ).toBe(false);
+    expect(
+      isValidInstallExamplesApply({
+        ...valid,
+        previewId: 'x'.repeat(129),
+        replace: [],
+      }),
+    ).toBe(false);
   });
 
   it('rejects a replace list that is not an array of destination ids', () => {
-    expect(isValidInstallExamplesApply({ sessionId: SESSION_ID, replace: 'flow' })).toBe(false);
-    expect(isValidInstallExamplesApply({ sessionId: SESSION_ID, replace: true })).toBe(false);
-    expect(isValidInstallExamplesApply({ sessionId: SESSION_ID, replace: [1] })).toBe(false);
-    expect(isValidInstallExamplesApply({ sessionId: SESSION_ID, replace: [null] })).toBe(false);
+    expect(isValidInstallExamplesApply({ ...valid, replace: 'flow' })).toBe(false);
+    expect(isValidInstallExamplesApply({ ...valid, replace: true })).toBe(false);
+    expect(isValidInstallExamplesApply({ ...valid, replace: [1] })).toBe(false);
+    expect(isValidInstallExamplesApply({ ...valid, replace: [null] })).toBe(false);
   });
 
   it('rejects an unknown destination id rather than ignoring it', () => {
-    expect(isValidInstallExamplesApply({ sessionId: SESSION_ID, replace: ['everything'] })).toBe(false);
-    expect(isValidInstallExamplesApply({ sessionId: SESSION_ID, replace: ['flow', '../../etc'] })).toBe(false);
+    expect(isValidInstallExamplesApply({ ...valid, replace: ['everything'] })).toBe(false);
+    expect(isValidInstallExamplesApply({ ...valid, replace: ['flow', '../../etc'] })).toBe(false);
   });
 });

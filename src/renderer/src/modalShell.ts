@@ -8,6 +8,9 @@ export interface ModalCard {
    *  own class names — is what keeps the shell from knowing anything about its callers. */
   grow?: HTMLElement;
   scroll?: HTMLElement;
+  /** WAI-ARIA APG: overrides the shell's role for this card, so one shell instance can serve both a
+   *  user-initiated confirmation and a system-raised alert. */
+  role?: 'dialog' | 'alertdialog';
 }
 
 export type ModalShellBuild = (ctx: {
@@ -80,6 +83,12 @@ export function createModalShell(
       scrim.className = 'flow-scrim';
       scrim.addEventListener('click', close);
 
+      // TODO(dylanb): a [data-modal-scroll] box with no focusable children is focusable by the UA itself
+      // (Chromium 127+) once it actually overflows, but the Tab cycle below is enumerated by a literal
+      // selector that cannot match it — so at reflow sizes the confirm dialog's scroller sits inside the
+      // trap's DOM and outside its model. Fix belongs in the Tab handler (union the selector matches with
+      // descendants whose scrollHeight exceeds clientHeight, in DOM order), not an unconditional tabindex,
+      // which would add a phantom stop to every non-overflowing dialog.
       const modal = doc.createElement('div');
       modal.className = 'flow-modal';
       modal.setAttribute('role', opts?.role ?? 'dialog');
@@ -106,7 +115,8 @@ export function createModalShell(
         }
       });
 
-      const { card, initialFocus, describedById, grow, scroll } = build({ doc, titleId, close, confirm: clear });
+      const { card, initialFocus, describedById, grow, scroll, role } = build({ doc, titleId, close, confirm: clear });
+      if (role) modal.setAttribute('role', role);
       if (describedById) modal.setAttribute('aria-describedby', describedById);
       grow?.setAttribute('data-modal-grow', '');
       scroll?.setAttribute('data-modal-scroll', '');

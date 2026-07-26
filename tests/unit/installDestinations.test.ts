@@ -8,12 +8,14 @@ import { resolveLoopDir } from '../../src/main/loopDef';
 import { flowHomeDir } from '../../src/main/flow';
 import {
   userConfigLoopsDir,
+  userConfigLoopsV2Dir,
   userConfigSkillsDir,
   userConfigCommandsDir,
 } from '../../src/main/userConfig';
 import {
   resolveExampleFlowDir,
   resolveExampleLoopsDir,
+  resolveExampleLoopsV2Dir,
   resolveExampleCommandsDir,
 } from '../../src/main/exampleAssets';
 
@@ -44,6 +46,7 @@ describe('exampleInstallDirs — bundle sources come from the runtime resolvers'
     expect(bundleOf(dirs, 'flow')).toBe(resolveExampleFlowDir(loc));
     expect(bundleOf(dirs, 'loops')).toBe(resolveExampleLoopsDir(loc));
     expect(bundleOf(dirs, 'commands')).toBe(resolveExampleCommandsDir(loc));
+    expect(bundleOf(dirs, 'appLoops')).toBe(resolveExampleLoopsV2Dir(loc));
     // The skills destination has no bundle of its own — its files fan in from the loops bundle (§26.5).
     expect(bundleOf(dirs, 'skills')).toBe(resolveExampleLoopsDir(loc));
   });
@@ -60,6 +63,7 @@ describe('exampleInstallDirs — targets are the destinations their readers disc
   it('targets the user-config loops, skills and commands directories (§24.2.3)', () => {
     const dirs = exampleInstallDirs(loc, FLOW_HOME, '/cfg');
     expect(targetOf(dirs, 'loops')).toBe(userConfigLoopsDir('/cfg'));
+    expect(targetOf(dirs, 'appLoops')).toBe(userConfigLoopsV2Dir('/cfg'));
     expect(targetOf(dirs, 'skills')).toBe(userConfigSkillsDir('/cfg'));
     expect(targetOf(dirs, 'commands')).toBe(userConfigCommandsDir('/cfg'));
   });

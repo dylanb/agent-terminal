@@ -8,12 +8,14 @@ import type {
   InstallDestinationPreview,
   InstallExamplesPreview,
   InstallExamplesResult,
+  InstallPreviewId,
 } from '../../src/shared/ipc';
 
 // Install-examples VIEW organism (§18.1/§23.4 / UI-STANDARDS): preview → conditional per-destination
 // consent step → apply → destination-grouped result reporting. Tests assert the observable DOM + the
 // injected contract, never internals.
 describe('install examples view organism (§18.1/§23.4)', () => {
+  const PREVIEW_ID = 'preview-1' as InstallPreviewId;
   let host: HTMLElement;
   beforeEach(() => {
     host = document.createElement('div');
@@ -26,13 +28,19 @@ describe('install examples view organism (§18.1/§23.4)', () => {
 
   const cleanDestinations: InstallDestinationPreview[] = [
     { destination: 'flow', conflict: false },
+    { destination: 'appLoops', conflict: false },
     { destination: 'loops', conflict: false },
     { destination: 'skills', conflict: false },
     { destination: 'commands', conflict: false },
   ];
-  const clean: InstallExamplesPreview = { ok: true, destinations: cleanDestinations };
+  const clean: InstallExamplesPreview = {
+    ok: true,
+    previewId: PREVIEW_ID,
+    destinations: cleanDestinations,
+  };
   const conflicting = (...ids: InstallDestinationId[]): InstallExamplesPreview => ({
     ok: true,
+    previewId: PREVIEW_ID,
     destinations: cleanDestinations.map((d) =>
       ids.includes(d.destination) ? { destination: d.destination, conflict: true, files: rels(`${d.destination}-file.md`) } : d,
     ),
@@ -111,7 +119,7 @@ describe('install examples view organism (§18.1/§23.4)', () => {
     createInstallExamples(host, deps({ apply }));
     button().click();
     await vi.waitFor(() => expect(apply).toHaveBeenCalledTimes(1));
-    expect(apply).toHaveBeenCalledWith([]);
+    expect(apply).toHaveBeenCalledWith(PREVIEW_ID, []);
     expect(prompt()).toBeNull();
     await vi.waitFor(() => expect(status().textContent?.toLowerCase()).toContain('created'));
   });
@@ -140,14 +148,18 @@ describe('install examples view organism (§18.1/§23.4)', () => {
     await openConsent(['skills', 'commands'], { apply });
     consentBox('commands').click();
     confirmBtn().click();
-    await vi.waitFor(() => expect(apply).toHaveBeenCalledWith(['commands']));
+    await vi.waitFor(() =>
+      expect(apply).toHaveBeenCalledWith(PREVIEW_ID, ['commands']),
+    );
   });
 
   it('forwards an empty list when the user confirms with nothing checked, so absent files still install', async () => {
     const apply = vi.fn(async () => okResult({ created: [{ destination: 'loops', files: rels('plan-loop/plan-loop.yaml') }], skipped: [{ destination: 'skills', files: rels('a/SKILL.md') }] }));
     await openConsent(['skills'], { apply });
     confirmBtn().click();
-    await vi.waitFor(() => expect(apply).toHaveBeenCalledWith([]));
+    await vi.waitFor(() =>
+      expect(apply).toHaveBeenCalledWith(PREVIEW_ID, []),
+    );
     await vi.waitFor(() => expect(status().textContent?.toLowerCase()).toContain('skipped'));
     expect(prompt()).toBeNull();
   });
@@ -295,7 +307,10 @@ describe('install examples view organism (§18.1/§23.4)', () => {
           { destination: 'commands', files: rels('groom-ticket.md') },
           { destination: 'flow', files: rels('flow.yaml') },
         ],
-        overwritten: [{ destination: 'skills', files: rels('review-intent/SKILL.md') }],
+        overwritten: [
+          { destination: 'skills', files: rels('review-intent/SKILL.md') },
+          { destination: 'appLoops', files: rels('plan-loop/plan-loop.yaml') },
+        ],
         skipped: [{ destination: 'loops', files: rels('plan-loop/plan-loop.yaml') }],
       }),
     );
@@ -303,7 +318,7 @@ describe('install examples view organism (§18.1/§23.4)', () => {
     button().click();
     await vi.waitFor(() => expect(reportGroup('flow')).not.toBeNull());
     const order = [...reportList().children].map((li) => li.getAttribute('data-destination'));
-    expect(order).toEqual(['flow', 'loops', 'skills', 'commands']);
+    expect(order).toEqual(['flow', 'appLoops', 'loops', 'skills', 'commands']);
   });
 
   it('exposes the consent options as a NAMED group (WAI-ARIA group; WCAG 1.3.1)', async () => {
@@ -331,7 +346,9 @@ describe('install examples view organism (§18.1/§23.4)', () => {
     await openConsent(['loops']);
     const box = consentBox('loops');
     const label = box.closest('label') as HTMLElement;
-    expect(label.textContent).toContain('Loop definitions');
+    // Both loop trees can conflict in one install, and this control authorizes overwriting one of
+    // them: the legacy §26 tree has to name itself as such, not as the unqualified "Loop definitions".
+    expect(label.textContent).toContain('Legacy loop definitions');
     expect(label.textContent).not.toContain('loops-file.md');
 
     const describedBy = box.getAttribute('aria-describedby');

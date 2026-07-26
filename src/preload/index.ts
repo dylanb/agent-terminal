@@ -15,6 +15,7 @@ import {
   type FlowBootstrapErrorMsg,
   type FlowLoopErrorMsg,
   type FlowBootstrapConflictMsg,
+  type FlowAppBootstrapConflictMsg,
   type FlowStateView,
   type GithubRef,
   type MonitorApi,
@@ -155,6 +156,28 @@ const flowApi: FlowApi = {
   },
   resolveBootstrapConflict: (repoKey, wipe) =>
     ipcRenderer.send(CH.flowResolveBootstrapConflict, { sessionId: SESSION_ID, repoKey, wipe }),
+  onAppBootstrapConflict: (cb) => {
+    const handler = (_e: unknown, msg: FlowAppBootstrapConflictMsg): void =>
+      cb({
+        repository: msg.repository,
+        branch: msg.branch,
+        localOid: msg.localOid,
+        remoteOid: msg.remoteOid,
+        pullRequests: msg.pullRequests,
+        repoKey: msg.repoKey,
+        step: msg.step,
+      });
+    ipcRenderer.on(CH.flowOnAppBootstrapConflict, handler);
+    return () => ipcRenderer.removeListener(CH.flowOnAppBootstrapConflict, handler);
+  },
+  resolveAppBootstrapConflict: (repoKey, step, wipe, target) =>
+    ipcRenderer.send(CH.flowResolveAppBootstrapConflict, {
+      sessionId: SESSION_ID,
+      repoKey,
+      step,
+      wipe,
+      ...target,
+    }),
   githubRef: (repoKey, kind, number) =>
     ipcRenderer.invoke(CH.flowGithubRef, { sessionId: SESSION_ID, repoKey, kind, number }) as Promise<GithubRef | null>,
   openExternal: (url) => ipcRenderer.invoke(CH.appOpenExternal, { sessionId: SESSION_ID, url }) as Promise<boolean>,
@@ -180,9 +203,10 @@ export const cliApi: CliApi = {
 export const examplesApi: ExamplesApi = {
   preview: () =>
     ipcRenderer.invoke(CH.installExamplesPreview, { sessionId: SESSION_ID }) as Promise<InstallExamplesPreview>,
-  apply: (replace) =>
+  apply: (previewId, replace) =>
     ipcRenderer.invoke(CH.installExamplesApply, {
       sessionId: SESSION_ID,
+      previewId,
       replace,
     }) as Promise<InstallExamplesResult>,
 };

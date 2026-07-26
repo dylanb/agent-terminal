@@ -10,6 +10,7 @@ import { createFlowInputModal } from './flowInputModal';
 import { createFeedbackComposer } from './feedbackComposer';
 import { createRedoComposer } from './redoComposer';
 import { wireBootstrapConflict } from './wireBootstrapConflict';
+import { wireAppBootstrapConflict } from './wireAppBootstrapConflict';
 import { createConfirmDialog } from './confirmDialog';
 import { createErrorDialog, type ErrorDialogOptions } from './errorDialog';
 import {
@@ -64,7 +65,8 @@ keyboardUi = createKeyboardSettings(document.getElementById('kb-settings-view')!
 createCliInstall(document.getElementById('cli-install-view')!, { install: () => window.cli.install() });
 createInstallExamples(document.getElementById('install-examples-view')!, {
   preview: () => window.examples.preview(),
-  apply: (replace) => window.examples.apply(replace),
+  apply: (previewId, replace) =>
+    window.examples.apply(previewId, replace),
 });
 void window.monitor
   .getSettings()
@@ -167,6 +169,12 @@ if (flowStripHost) {
       onBootstrapConflict: (cb) => window.flow.onBootstrapConflict(cb),
       confirm: (opts) => flowModals!.showConfirmation(opts),
       resolve: (key, wipe) => window.flow.resolveBootstrapConflict(key, wipe),
+    });
+    wireAppBootstrapConflict({
+      onConflict: (cb) => window.flow.onAppBootstrapConflict(cb),
+      confirm: (opts) => flowModals!.showConfirmation(opts),
+      resolve: (key, step, wipe, target) =>
+        window.flow.resolveAppBootstrapConflict(key, step, wipe, target),
     });
   }
   loopPanel = loopPanelHost

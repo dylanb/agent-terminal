@@ -1,6 +1,5 @@
 // Destructive confirmation dialog (#26) — a placement-agnostic blocking dialog (UI-STANDARDS §5),
-// NOT the §4 Alert live-region pattern. Composes createModalShell and supplies the todo-count
-// message + Cancel/Terminate actions.
+// NOT the §4 Alert live-region pattern.
 
 import { createModalShell } from './modalShell';
 
@@ -8,8 +7,14 @@ export interface ConfirmDialogOptions {
   title: string;
   message: string;
   confirmLabel: string;
+  /** Discrete items the action acts on; each is its own navigable node in the dialog's accessible
+   *  description, so an irreversible confirmation is never announced as a bare count (WCAG 1.3.1). */
+  resources?: string[];
   onConfirm: () => void;
   restoreFocusTo?: HTMLElement | null;
+  /** WAI-ARIA APG / UI-STANDARDS §5.2: `alertdialog` when the app raised this without the operator
+   *  asking, `dialog` (the default) when they did. */
+  role?: 'dialog' | 'alertdialog';
   /** Fired when the operator DECLINES — Cancel, Escape, or scrim — but never on confirm (§26.9). Lets a
    *  caller react to a dismissal (e.g. roll the flow back); omit when a dismiss needs no action. */
   onCancel?: () => void;
@@ -50,18 +55,34 @@ export function createConfirmDialog(host: HTMLElement, opts?: { onFocusLost?: ()
       if (pending) pending.onCancel?.();
       pending = opts;
       shell.render(({ doc, titleId, close, confirm: accept }) => {
-        const describedById = `${titleId}-msg`;
+        const messageId = `${titleId}-msg`;
+        let describedById = messageId;
         const card = doc.createElement('div');
         card.className = 'card';
         const h3 = doc.createElement('h3');
         h3.className = 'serif';
         h3.id = titleId;
         h3.textContent = opts.title;
+        // UI §5.7
+        const body = doc.createElement('div');
         const ph = doc.createElement('p');
         ph.className = 'ph';
-        ph.id = describedById;
+        ph.id = messageId;
         ph.textContent = opts.message;
-        card.append(h3, ph);
+        body.append(ph);
+        if (opts.resources !== undefined && opts.resources.length > 0) {
+          const list = doc.createElement('ul');
+          list.className = 'cd-resources';
+          list.id = `${titleId}-res`;
+          describedById = `${messageId} ${list.id}`;
+          for (const resource of opts.resources) {
+            const item = doc.createElement('li');
+            item.textContent = resource;
+            list.append(item);
+          }
+          body.append(list);
+        }
+        card.append(h3, body);
 
         const foot = doc.createElement('div');
         foot.className = 'mfoot';
@@ -81,7 +102,14 @@ export function createConfirmDialog(host: HTMLElement, opts?: { onFocusLost?: ()
         foot.append(cancel, confirm);
         card.append(foot);
 
-        return { card, initialFocus: null, describedById };
+        return {
+          card,
+          initialFocus: null,
+          describedById,
+          grow: body,
+          scroll: body,
+          ...(opts.role ? { role: opts.role } : {}),
+        };
       }, opts.restoreFocusTo);
     },
     cancel() {

@@ -376,7 +376,31 @@ export function chainedTransitionAuditCmd(step: string, artifactIds: string[], u
   return unresolvedIds.length > 0 ? `${carried} (declared but unresolved: ${unresolvedIds.join(', ')})` : carried;
 }
 
-export type AppBootstrapAuditKind = 'start' | 'success' | 'failure' | 'rollback' | 'stale';
+export type AppBootstrapAuditKind =
+  | 'start'
+  | 'success'
+  | 'failure'
+  | 'conflict'
+  | 'wipe'
+  | 'decline'
+  | 'rollback'
+  | 'stale';
+
+export function appBootstrapAuditExit(kind: AppBootstrapAuditKind): number | null {
+  switch (kind) {
+    case 'success':
+    case 'wipe':
+    case 'decline':
+      return 0;
+    case 'failure':
+    case 'rollback':
+      return 1;
+    case 'start':
+    case 'conflict':
+    case 'stale':
+      return null;
+  }
+}
 
 export function appBootstrapAuditCmd(kind: AppBootstrapAuditKind, step: string, detail?: string): string {
   const suffix = detail ? `: ${detail}` : '';
@@ -387,6 +411,12 @@ export function appBootstrapAuditCmd(kind: AppBootstrapAuditKind, step: string, 
       return `§27 bootstrap ${step} succeeded${suffix}`;
     case 'failure':
       return `§27 bootstrap ${step} failed${suffix}`;
+    case 'conflict':
+      return `§27 bootstrap ${step} found a conflict${suffix}`;
+    case 'wipe':
+      return `§27 bootstrap ${step} wipe confirmed${suffix}`;
+    case 'decline':
+      return `§27 bootstrap ${step} wipe declined${suffix}`;
     case 'rollback':
       return `§27 bootstrap ${step} rolled back${suffix}`;
     case 'stale':

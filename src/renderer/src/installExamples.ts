@@ -8,13 +8,17 @@ import {
   type InstallExamplesPreview,
   type InstallExamplesResult,
   type InstallExamplesWritten,
+  type InstallPreviewId,
 } from '../../shared/ipc';
 import { createModalShell } from './modalShell';
 import { captureFocusReturn } from './dom';
 
 export interface InstallExamplesDeps {
   preview(): Promise<InstallExamplesPreview>;
-  apply(replace: InstallDestinationId[]): Promise<InstallExamplesResult>;
+  apply(
+    previewId: InstallPreviewId,
+    replace: InstallDestinationId[],
+  ): Promise<InstallExamplesResult>;
 }
 
 export interface InstallExamples {
@@ -23,7 +27,8 @@ export interface InstallExamples {
 
 const DESTINATION_LABEL: Record<InstallDestinationId, string> = {
   flow: 'Flow home',
-  loops: 'Loop definitions',
+  appLoops: 'App loop definitions',
+  loops: 'Legacy loop definitions',
   skills: 'Claude Code skills',
   commands: 'Claude Code commands',
 };
@@ -61,7 +66,7 @@ export function createInstallExamples(host: HTMLElement, deps: InstallExamplesDe
     el(
       'div',
       'sub',
-      'Install the bundled feature-dev flow, its loop definitions, the reviewer persona skills, and the bundled commands so a new instance can render and run them.',
+      'Install the bundled feature-dev flow, its app and legacy loop definitions, reviewer persona skills, and commands so a new instance can render and run them.',
     ),
   );
 
@@ -72,7 +77,7 @@ export function createInstallExamples(host: HTMLElement, deps: InstallExamplesDe
     el(
       'div',
       'kp-help',
-      'Copies the flow to ~/.agent-terminal, and the loop definitions, persona skills and commands to your Claude config directory. Files you already have are left untouched unless you choose to replace them.',
+      'Copies the flow to ~/.agent-terminal, and the app loops, legacy loops, persona skills and commands to your Claude config directory. Files you already have are left untouched unless you choose to replace them.',
     ),
   );
   const btn = el('button', 'pill signal', 'Install examples');
@@ -146,11 +151,15 @@ export function createInstallExamples(host: HTMLElement, deps: InstallExamplesDe
   }
   setBusy(false);
 
-  async function install(replace: InstallDestinationId[], returnFocus: () => void): Promise<void> {
+  async function install(
+    previewId: InstallPreviewId,
+    replace: InstallDestinationId[],
+    returnFocus: () => void,
+  ): Promise<void> {
     setBusy(true);
     showStatus('cli-status', 'Installing…');
     try {
-      const res = await deps.apply(replace);
+      const res = await deps.apply(previewId, replace);
       renderReport(res);
       // The failure arm carries the same created/overwritten/skipped sets, and this is the branch where
       // the user most needs them: a partial install is not rolled back (§18.1), so the alert has to say
@@ -167,7 +176,11 @@ export function createInstallExamples(host: HTMLElement, deps: InstallExamplesDe
 
   type Conflict = Extract<InstallDestinationPreview, { conflict: true }>;
 
-  function promptReplace(conflicts: Conflict[], returnFocus: () => void): void {
+  function promptReplace(
+    previewId: InstallPreviewId,
+    conflicts: Conflict[],
+    returnFocus: () => void,
+  ): void {
     modal.render(({ doc: d, titleId, close, confirm: accept }) => {
       const describedById = `${titleId}-msg`;
       const cardEl = d.createElement('div');
@@ -240,7 +253,7 @@ export function createInstallExamples(host: HTMLElement, deps: InstallExamplesDe
       confirm.addEventListener('click', () => {
         const replace = [...boxes].filter(([, box]) => box.checked).map(([id]) => id);
         accept(); // NOT close(): installing is the affirmative answer, so nothing is retracted
-        void install(replace, returnFocus);
+        void install(previewId, replace, returnFocus);
       });
       foot.append(cancel, confirm);
       cardEl.append(foot);
@@ -257,28 +270,31 @@ export function createInstallExamples(host: HTMLElement, deps: InstallExamplesDe
     reportList.replaceChildren();
     reportList.hidden = true;
     showStatus('cli-status', 'Checking…');
-    let conflicts: Conflict[];
+    let preview: Extract<InstallExamplesPreview, { ok: true }>;
     try {
-      const preview = await deps.preview();
-      if (!preview.ok) {
-        showError(preview.error);
+      const response = await deps.preview();
+      if (!response.ok) {
+        showError(response.error);
         setBusy(false);
         returnFocus();
         return;
       }
-      conflicts = preview.destinations.flatMap((d) => (d.conflict ? [d] : []));
+      preview = response;
     } catch (e) {
       showError(e instanceof Error ? e.message : 'Install failed.');
       setBusy(false);
       returnFocus();
       return;
     }
+    const conflicts = preview.destinations.flatMap((d) =>
+      d.conflict ? [d] : [],
+    );
     if (conflicts.length === 0) {
-      await install([], returnFocus);
+      await install(preview.previewId, [], returnFocus);
       return;
     }
     setBusy(false);
-    promptReplace(conflicts, returnFocus);
+    promptReplace(preview.previewId, conflicts, returnFocus);
   }
 
   btn.addEventListener('click', () => void run());

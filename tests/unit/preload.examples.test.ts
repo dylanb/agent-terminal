@@ -8,15 +8,27 @@ vi.mock('electron', () => ({
 
 import { ipcRenderer } from 'electron';
 import { examplesApi } from '../../src/preload/index';
-import { CH, SESSION_ID } from '../../src/shared/ipc';
+import {
+  CH,
+  SESSION_ID,
+  type InstallPreviewId,
+} from '../../src/shared/ipc';
 
 const invoke = ipcRenderer.invoke as unknown as ReturnType<typeof vi.fn>;
 
 beforeEach(() => invoke.mockClear());
 
 describe('examplesApi routing (§6 / §18.1)', () => {
+  const previewId = 'preview-1' as InstallPreviewId;
+
   it('preview invokes examples:preview with the session id and resolves the preview', async () => {
-    const preview = { ok: true, destinations: [{ destination: 'flow', conflict: true, files: ['flow.yaml'] }] };
+    const preview = {
+      ok: true,
+      previewId,
+      destinations: [
+        { destination: 'flow', conflict: true, files: ['flow.yaml'] },
+      ],
+    };
     invoke.mockResolvedValueOnce(preview);
     const res = await examplesApi.preview();
     expect(invoke).toHaveBeenCalledWith(CH.installExamplesPreview, { sessionId: SESSION_ID });
@@ -25,17 +37,22 @@ describe('examplesApi routing (§6 / §18.1)', () => {
 
   it('apply forwards the per-destination replace list intact', async () => {
     invoke.mockResolvedValueOnce({ ok: true, created: [], overwritten: [], skipped: [] });
-    await examplesApi.apply(['skills', 'commands']);
+    await examplesApi.apply(previewId, ['skills', 'commands']);
     expect(invoke).toHaveBeenCalledWith(CH.installExamplesApply, {
       sessionId: SESSION_ID,
+      previewId,
       replace: ['skills', 'commands'],
     });
   });
 
   it('apply forwards an empty replace list as an empty list, never as a missing field', async () => {
     invoke.mockResolvedValueOnce({ ok: true, created: [], overwritten: [], skipped: [] });
-    await examplesApi.apply([]);
-    expect(invoke).toHaveBeenCalledWith(CH.installExamplesApply, { sessionId: SESSION_ID, replace: [] });
+    await examplesApi.apply(previewId, []);
+    expect(invoke).toHaveBeenCalledWith(CH.installExamplesApply, {
+      sessionId: SESSION_ID,
+      previewId,
+      replace: [],
+    });
   });
 
   it('apply resolves the destination-grouped result', async () => {
@@ -46,6 +63,8 @@ describe('examplesApi routing (§6 / §18.1)', () => {
       skipped: [{ destination: 'flow', files: ['flow.yaml'] }],
     };
     invoke.mockResolvedValueOnce(result);
-    expect(await examplesApi.apply(['commands'])).toEqual(result);
+    expect(await examplesApi.apply(previewId, ['commands'])).toEqual(
+      result,
+    );
   });
 });

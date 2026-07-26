@@ -5,6 +5,7 @@ import {
   auditTimestamp,
   chainedTransitionAuditCmd,
   appBootstrapAuditCmd,
+  appBootstrapAuditExit,
   inputEvents,
   lifecycleEvents,
   consolidateAuditCmd,
@@ -456,8 +457,27 @@ describe('§27 bootstrap audit vocabulary', () => {
     expect(appBootstrapAuditCmd('start', 'plan')).toContain('plan');
     expect(appBootstrapAuditCmd('success', 'plan', 'plan-loop/issue-78')).toContain('plan-loop/issue-78');
     expect(appBootstrapAuditCmd('failure', 'plan', 'working tree is not clean')).toContain('working tree is not clean');
+    expect(appBootstrapAuditCmd('conflict', 'plan', 'plan-loop/issue-78')).toContain('conflict');
+    expect(appBootstrapAuditCmd('wipe', 'plan', 'plan-loop/issue-78')).toContain('wipe confirmed');
+    expect(appBootstrapAuditCmd('decline', 'plan', 'plan-loop/issue-78')).toContain('wipe declined');
+    expect(appBootstrapAuditCmd('wipe', 'plan')).not.toBe(appBootstrapAuditCmd('decline', 'plan'));
     expect(appBootstrapAuditCmd('rollback', 'plan')).not.toBe(appBootstrapAuditCmd('failure', 'plan'));
     expect(appBootstrapAuditCmd('stale', 'plan')).not.toBe(appBootstrapAuditCmd('success', 'plan'));
+  });
+
+  // The exit each kind records lives beside the vocabulary it classifies, not at the one call site: this
+  // diff widened the union by three and the caller's mapping was a closed expression with a catch-all,
+  // so a declined wipe — an answer — and a completed one were both recorded as failed commands.
+  it('records an outcome only for the kinds that are one', () => {
+    expect(appBootstrapAuditExit('success')).toBe(0);
+    expect(appBootstrapAuditExit('wipe')).toBe(0);
+    expect(appBootstrapAuditExit('decline')).toBe(0);
+    expect(appBootstrapAuditExit('failure')).toBe(1);
+    expect(appBootstrapAuditExit('rollback')).toBe(1);
+    // Not outcomes: begun, awaiting the operator, and superseded.
+    expect(appBootstrapAuditExit('start')).toBeNull();
+    expect(appBootstrapAuditExit('conflict')).toBeNull();
+    expect(appBootstrapAuditExit('stale')).toBeNull();
   });
 });
 

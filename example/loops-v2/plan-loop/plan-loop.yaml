@@ -31,6 +31,17 @@ gate:
 pickup:
   initial_status: planning
   branch_template: plan-loop/issue-{issue}
+  initial_labels:
+    - action: remove
+      target: issue
+      label: plan-loop/ready
+    - action: add
+      target: issue
+      label: plan-loop/in-progress
+    - action: add
+      target: pr
+      label: plan-loop/plan-draft
+  on_conflict: wipe-and-retry
 inputs:
   - id: groomed-ticket
     path: groomed-ticket.md

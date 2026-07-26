@@ -1,48 +1,261 @@
 import { describe, expect, it } from 'vitest';
-import { createAppGateGitHub } from '../../src/main/appGateGithub';
+import {
+  createAppGateGitHub,
+  type AppGateGitHubOperations,
+  type AppGatePullRequest,
+} from '../../src/main/appGateGithub';
 
-// §27.13 / N5 — the §27 approve side-effect port maps the declared `gh` action + the refs it acts on to a
-// STRUCTURED gh argv (CWE-78: every value a distinct element, never a shell string). The domain runner is
-// injected so the mapping is asserted without shelling a real `gh` (the real path is e2e). A missing required
-// input is a best-effort FAILURE (throw), never a malformed call.
+interface GitHubState {
+  pullRequests: Map<number, AppGatePullRequest>;
+  ready: Set<number>;
+  issueBodies: Map<number, string>;
+  pullRequestBodies: Map<
+    number,
+    { bodyFile: string; closingIssue: number | null }
+  >;
+}
 
-const captured = (): { argvs: string[][]; run: (argv: string[]) => Promise<void> } => {
-  const argvs: string[][] = [];
-  return { argvs, run: async (argv) => void argvs.push(argv) };
-};
+function githubState(
+  pullRequest: AppGatePullRequest = {
+    number: 42,
+    branch: 'plan-loop/issue-78',
+    state: 'OPEN',
+    closingIssues: [78],
+  },
+): { state: GitHubState; github: AppGateGitHubOperations } {
+  const state: GitHubState = {
+    pullRequests: new Map([[pullRequest.number, pullRequest]]),
+    ready: new Set(),
+    issueBodies: new Map(),
+    pullRequestBodies: new Map(),
+  };
+  return {
+    state,
+    github: {
+      pullRequest: async (number) => {
+        const value = state.pullRequests.get(number);
+        if (value === undefined) throw new Error('not found');
+        return value;
+      },
+      markPullRequestReady: async (number) => {
+        state.ready.add(number);
+      },
+      updateIssueBody: async (issue, bodyFile) => {
+        state.issueBodies.set(issue, bodyFile);
+      },
+      publishPullRequestBody: async (
+        number,
+        bodyFile,
+        closingIssue,
+      ) => {
+        state.pullRequestBodies.set(number, {
+          bodyFile,
+          closingIssue,
+        });
+      },
+    },
+  };
+}
 
 describe('§27 approve side-effect port (appGateGithub)', () => {
-  it('mark-ready flips the PR non-draft via `gh pr ready <pr>` (§27.13 plan approve)', async () => {
-    const c = captured();
-    await createAppGateGitHub(c.run)('mark-ready', { pr: 42, ticket: null, bodyFile: null });
-    expect(c.argvs).toEqual([['pr', 'ready', '42']]);
+  it('keeps why the bootstrap PR identity could not be verified', async () => {
+    const { github } = githubState();
+    const run = createAppGateGitHub({
+      ...github,
+      pullRequest: async () => {
+        throw new Error('gh command failed (exit 4)');
+      },
+    });
+
+    await expect(
+      run('mark-ready', {
+        pr: 42,
+        ticket: 78,
+        bodyFile: null,
+        bootstrap: {
+          pr: 42,
+          issue: 78,
+          branch: 'plan-loop/issue-78',
+          initialStatus: 'planning',
+        },
+      }),
+    ).rejects.toThrow(/exit 4/);
   });
 
-  it('update-issue-body publishes the body artifact to the issue via `gh issue edit <n> --body-file` (§27.13 groom approve)', async () => {
-    const c = captured();
-    await createAppGateGitHub(c.run)('update-issue-body', { pr: null, ticket: 7, bodyFile: '/repo/.agent-terminal/loop/artifacts/groomed-ticket.md' });
-    expect(c.argvs).toEqual([['issue', 'edit', '7', '--body-file', '/repo/.agent-terminal/loop/artifacts/groomed-ticket.md']]);
+  it('coerces a non-Error verification failure into the reason', async () => {
+    const { github } = githubState();
+    const run = createAppGateGitHub({
+      ...github,
+      pullRequest: async () => {
+        throw 'lookup exploded';
+      },
+    });
+
+    await expect(
+      run('mark-ready', {
+        pr: 42,
+        ticket: 78,
+        bodyFile: null,
+        bootstrap: {
+          pr: 42,
+          issue: 78,
+          branch: 'plan-loop/issue-78',
+          initialStatus: 'planning',
+        },
+      }),
+    ).rejects.toThrow(/lookup exploded/);
   });
 
-  it('publish-pr-body publishes the body artifact to the PR via `gh pr edit <n> --body-file` (§27.13 impl approve)', async () => {
-    const c = captured();
-    await createAppGateGitHub(c.run)('publish-pr-body', { pr: 99, ticket: null, bodyFile: '/repo/.agent-terminal/loop/artifacts/diff.md' });
-    expect(c.argvs).toEqual([['pr', 'edit', '99', '--body-file', '/repo/.agent-terminal/loop/artifacts/diff.md']]);
+  it('marks an unbound PR ready without fabricating bootstrap identity', async () => {
+    const g = githubState();
+    await createAppGateGitHub(g.github)('mark-ready', {
+      pr: 42,
+      ticket: null,
+      bodyFile: null,
+      bootstrap: null,
+    });
+    expect(g.state.ready).toEqual(new Set([42]));
   });
 
-  it('fails best-effort (throws, issues no call) when a required input is absent', async () => {
-    const c = captured();
-    await expect(createAppGateGitHub(c.run)('mark-ready', { pr: null, ticket: null, bodyFile: null })).rejects.toThrow(/no PR/);
-    await expect(createAppGateGitHub(c.run)('publish-pr-body', { pr: 5, ticket: null, bodyFile: null })).rejects.toThrow(/body artifact/);
-    await expect(createAppGateGitHub(c.run)('update-issue-body', { pr: null, ticket: null, bodyFile: '/x' })).rejects.toThrow(/no issue/);
-    await expect(createAppGateGitHub(c.run)('update-issue-body', { pr: null, ticket: 7, bodyFile: null })).rejects.toThrow(/body artifact/);
-    await expect(createAppGateGitHub(c.run)('publish-pr-body', { pr: null, ticket: null, bodyFile: '/x' })).rejects.toThrow(/no PR/);
-    expect(c.argvs).toEqual([]); // no malformed gh call was issued
+  it('publishes the groom artifact without consulting stale PR state', async () => {
+    const g = githubState({
+      number: 42,
+      branch: 'tampered',
+      state: 'CLOSED',
+      closingIssues: [],
+    });
+    const bodyFile =
+      '/repo/.agent-terminal/loop/artifacts/groomed-ticket.md';
+    await createAppGateGitHub(g.github)('update-issue-body', {
+      pr: 42,
+      ticket: 78,
+      bodyFile,
+      bootstrap: {
+        pr: 42,
+        issue: 78,
+        branch: 'plan-loop/issue-78',
+        initialStatus: 'planning',
+      },
+    });
+    expect(g.state.issueBodies).toEqual(new Map([[78, bodyFile]]));
   });
 
-  it('rejects an unknown action rather than issuing an arbitrary gh call', async () => {
-    const c = captured();
-    await expect(createAppGateGitHub(c.run)('rm-rf', { pr: 1, ticket: 1, bodyFile: '/x' })).rejects.toThrow(/unknown approve side-effect action/);
-    expect(c.argvs).toEqual([]);
+  it('publishes an unbound PR body without adding a closing issue', async () => {
+    const g = githubState();
+    const bodyFile = '/repo/.agent-terminal/loop/artifacts/plan.md';
+    await createAppGateGitHub(g.github)('publish-pr-body', {
+      pr: 99,
+      ticket: null,
+      bodyFile,
+      bootstrap: null,
+    });
+    expect(g.state.pullRequestBodies).toEqual(
+      new Map([[99, { bodyFile, closingIssue: null }]]),
+    );
+  });
+
+  it('fails without mutating GitHub when a required input is absent', async () => {
+    const g = githubState();
+    const run = createAppGateGitHub(g.github);
+    await expect(
+      run('mark-ready', {
+        pr: null,
+        ticket: null,
+        bodyFile: null,
+        bootstrap: null,
+      }),
+    ).rejects.toThrow(/no PR/);
+    await expect(
+      run('publish-pr-body', {
+        pr: 5,
+        ticket: null,
+        bodyFile: null,
+        bootstrap: null,
+      }),
+    ).rejects.toThrow(/body artifact/);
+    await expect(
+      run('update-issue-body', {
+        pr: null,
+        ticket: null,
+        bodyFile: '/x',
+        bootstrap: null,
+      }),
+    ).rejects.toThrow(/no issue/);
+    expect(g.state.ready).toEqual(new Set());
+    expect(g.state.issueBodies).toEqual(new Map());
+    expect(g.state.pullRequestBodies).toEqual(new Map());
+  });
+
+  it('rejects an unknown action without exposing a generic command seam', async () => {
+    const g = githubState();
+    await expect(
+      createAppGateGitHub(g.github)('rm-rf', {
+        pr: 1,
+        ticket: 1,
+        bodyFile: '/x',
+        bootstrap: null,
+      }),
+    ).rejects.toThrow(/unknown approve side-effect action/);
+    expect(g.state.ready).toEqual(new Set());
+    expect(g.state.issueBodies).toEqual(new Map());
+    expect(g.state.pullRequestBodies).toEqual(new Map());
+  });
+
+  it('verifies the persisted bootstrap identity before marking its PR ready', async () => {
+    const g = githubState();
+    await createAppGateGitHub(g.github)('mark-ready', {
+      pr: 42,
+      ticket: 78,
+      bodyFile: null,
+      bootstrap: {
+        pr: 42,
+        issue: 78,
+        branch: 'plan-loop/issue-78',
+        initialStatus: 'planning',
+      },
+    });
+    expect(g.state.ready).toEqual(new Set([42]));
+  });
+
+  it('preserves the bootstrap closing issue in the implementation body', async () => {
+    const g = githubState();
+    const bodyFile = '/repo/.agent-terminal/loop/artifacts/plan.md';
+    await createAppGateGitHub(g.github)('publish-pr-body', {
+      pr: 42,
+      ticket: 78,
+      bodyFile,
+      bootstrap: {
+        pr: 42,
+        issue: 78,
+        branch: 'plan-loop/issue-78',
+        initialStatus: 'planning',
+      },
+    });
+    expect(g.state.pullRequestBodies).toEqual(
+      new Map([[42, { bodyFile, closingIssue: 78 }]]),
+    );
+  });
+
+  it('refuses a tampered persisted bootstrap identity before mutation', async () => {
+    const g = githubState({
+      number: 42,
+      branch: 'other/branch',
+      state: 'OPEN',
+      closingIssues: [999],
+    });
+    await expect(
+      createAppGateGitHub(g.github)('mark-ready', {
+        pr: 42,
+        ticket: 78,
+        bodyFile: null,
+        bootstrap: {
+          pr: 42,
+          issue: 78,
+          branch: 'plan-loop/issue-78',
+          initialStatus: 'planning',
+        },
+      }),
+    ).rejects.toThrow(/bootstrap PR identity/i);
+    expect(g.state.ready).toEqual(new Set());
   });
 });

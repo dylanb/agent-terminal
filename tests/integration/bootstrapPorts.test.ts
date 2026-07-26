@@ -10,15 +10,26 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import {
-  type AppBootstrapGitFaults,
-  OwnedBootstrapBranchError,
-  createRealAppBootstrapGit,
-  createRealAppBootstrapGitHub,
-} from '../../src/main/bootstrapPorts';
+import { type AppBootstrapGitFaults, OwnedBootstrapBranchError } from '../../src/main/bootstrapPorts';
+import { createRealAppBootstrapGit } from '../../src/main/appBootstrapGit';
+import { createRealAppBootstrapGitHub } from '../../src/main/appBootstrapGithub';
+import { createGitHubRepositorySource } from '../../src/main/githubRepository';
 
 const runGit = (cwd: string, args: string[]): string =>
   execFileSync('git', args, { cwd, encoding: 'utf8' }).trim();
+
+// Every key git's upstream bookkeeping wrote for the branch. `git config --get-regexp` exits 1 when the
+// section is gone, which is what "removed" looks like.
+const branchConfig = (cwd: string, branch: string): string => {
+  try {
+    return execFileSync('git', ['config', '--get-regexp', `^branch\\.${branch}\\.`], {
+      cwd,
+      encoding: 'utf8',
+    }).trim();
+  } catch {
+    return '';
+  }
+};
 
 const hasRef = (cwd: string, ref: string): boolean => {
   try {
@@ -34,6 +45,8 @@ describe('createRealAppBootstrapGit — owned remote-ref compensation', () => {
   let root: string;
   let remote: string;
   let repo: string;
+
+  const branchSection = (): string => branchConfig(repo, branch);
 
   const createOwnedBranch = async (faults: AppBootstrapGitFaults = {}) => {
     const port = createRealAppBootstrapGit(repo, faults);
@@ -76,7 +89,7 @@ describe('createRealAppBootstrapGit — owned remote-ref compensation', () => {
     runGit(repo, ['remote', 'set-url', 'origin', join(root, 'missing.git')]);
     const port = createRealAppBootstrapGit(repo);
 
-    await expect(port.branchExists('plan-loop/issue-78')).rejects.toThrow(/remote branch probe failed/i);
+    await expect(port.branchState('plan-loop/issue-78')).rejects.toThrow(/remote branch probe failed/i);
   });
 
   it('rejects command-capable repository-local Git configuration before it can execute', async () => {
@@ -89,7 +102,7 @@ describe('createRealAppBootstrapGit — owned remote-ref compensation', () => {
     runGit(repo, ['remote', 'set-url', 'origin', 'ssh://example.invalid/repo.git']);
     const port = createRealAppBootstrapGit(repo);
 
-    await expect(port.branchExists(branch)).rejects.toThrow(
+    await expect(port.branchState(branch)).rejects.toThrow(
       /unsafe repository-local git configuration/i,
     );
 
@@ -102,35 +115,70 @@ describe('createRealAppBootstrapGit — owned remote-ref compensation', () => {
     runGit(repo, ['config', 'core.worktree', redirectedTree]);
     const port = createRealAppBootstrapGit(repo);
 
-    await expect(port.branchExists(branch)).rejects.toThrow(
+    await expect(port.branchState(branch)).rejects.toThrow(
       /unsafe repository-local git configuration/i,
     );
   });
 
-  it('rejects a work-tree identity redirected through inherited Git state', async () => {
+  // Inherited repository-selection variables are stripped from every child, so the port operates on the
+  // repo it was constructed for rather than merely detecting the redirect after the fact.
+  it('ignores a work-tree redirected through inherited Git state', async () => {
     const redirectedTree = join(root, 'inherited-worktree');
     mkdirSync(redirectedTree);
     const previousWorkTree = process.env.GIT_WORK_TREE;
+    const previousGitDir = process.env.GIT_DIR;
     process.env.GIT_WORK_TREE = redirectedTree;
+    process.env.GIT_DIR = join(redirectedTree, '.git');
     try {
       const port = createRealAppBootstrapGit(repo);
-      await expect(port.branchExists(branch)).rejects.toThrow(
-        /repository identity mismatch/i,
-      );
+      await expect(port.branchState(branch)).resolves.toEqual({
+        localOid: null,
+        remoteOid: null,
+      });
     } finally {
-      if (previousWorkTree === undefined) {
-        delete process.env.GIT_WORK_TREE;
-      } else {
-        process.env.GIT_WORK_TREE = previousWorkTree;
-      }
+      if (previousWorkTree === undefined) delete process.env.GIT_WORK_TREE;
+      else process.env.GIT_WORK_TREE = previousWorkTree;
+      if (previousGitDir === undefined) delete process.env.GIT_DIR;
+      else process.env.GIT_DIR = previousGitDir;
     }
+  });
+
+  it('grades the origin URL the remote operation uses, not a rewritten one', async () => {
+    runGit(repo, ['config', 'remote.origin.url', '-upload-pack=evil']);
+    runGit(repo, [
+      'config',
+      'url.https://example.invalid/.insteadOf',
+      '-upload-pack=evil',
+    ]);
+    const port = createRealAppBootstrapGit(repo);
+
+    await expect(port.branchState(branch)).rejects.toThrow(
+      /unsafe origin transport configuration/i,
+    );
+  });
+
+  // Two consumers read this one list: this probe and resolveGitHubRepository, which already refuses a
+  // multi-valued origin. Two rules over one list are indistinguishable from one until the list has two
+  // elements — at which point the URL graded here and the URL the identity lookup approved differ.
+  it('refuses a multi-valued origin rather than picking one of its URLs', async () => {
+    runGit(repo, [
+      'config',
+      '--add',
+      'remote.origin.url',
+      `${remote}-second`,
+    ]);
+    const port = createRealAppBootstrapGit(repo);
+
+    await expect(port.branchState(branch)).rejects.toThrow(
+      /unsafe origin transport configuration/i,
+    );
   });
 
   it('rejects a repository-local upload-pack override before a read operation', async () => {
     runGit(repo, ['config', 'remote.origin.uploadpack', 'git-upload-pack']);
     const port = createRealAppBootstrapGit(repo);
 
-    await expect(port.branchExists(branch)).rejects.toThrow(
+    await expect(port.branchState(branch)).rejects.toThrow(
       /unsafe repository-local git configuration/i,
     );
   });
@@ -190,12 +238,31 @@ describe('createRealAppBootstrapGit — owned remote-ref compensation', () => {
       'remote.origin.receivepack',
       receivePack,
     ]);
+    // The remote operations address the remote by URL, not by the name `origin`, so git resolves these
+    // keys as remote.<url>.* — pinning remote.origin.* neutralizes nothing on that path. Both spellings
+    // are planted so the test covers whichever addressing the port uses.
+    const originUrl = `file://${remote}`;
+    runGit(repo, ['config', 'remote.origin.url', originUrl]);
+    runGit(root, [
+      'config',
+      '--file',
+      inheritedConfig,
+      `remote.${originUrl}.uploadpack`,
+      uploadPack,
+    ]);
+    runGit(root, [
+      'config',
+      '--file',
+      inheritedConfig,
+      `remote.${originUrl}.receivepack`,
+      receivePack,
+    ]);
 
     const previousGlobalConfig = process.env.GIT_CONFIG_GLOBAL;
     process.env.GIT_CONFIG_GLOBAL = inheritedConfig;
     try {
       const port = createRealAppBootstrapGit(repo);
-      expect(await port.branchExists(branch)).toBe(false);
+      expect((await port.branchState(branch)).remoteOid).toBe(null);
       await port.createBranchFromBase(branch, 'main');
       const ownedOid = await port.commitEmptyStart(
         '[skip ci] start work on #78',
@@ -247,7 +314,7 @@ describe('createRealAppBootstrapGit — owned remote-ref compensation', () => {
 
   it('requires the remote ref to remain absent when the initial push lands', async () => {
     const port = createRealAppBootstrapGit(repo);
-    expect(await port.branchExists(branch)).toBe(false);
+    expect((await port.branchState(branch)).remoteOid).toBe(null);
     await port.createBranchFromBase(branch, 'main');
     const ownedOid = await port.commitEmptyStart('[skip ci] start work on #78');
 
@@ -267,6 +334,23 @@ describe('createRealAppBootstrapGit — owned remote-ref compensation', () => {
     await port.rollbackCreatedBranch(laterBranch, null);
     expect(runGit(repo, ['branch', '--show-current'])).toBe('main');
     expect(runGit(repo, ['branch', '--list', laterBranch])).toBe('');
+  });
+
+  // Same shape as the wipe: the rollback deletes through the URL-addressed port, which performs none of
+  // the local bookkeeping a delete-push to a NAMED remote and `git branch -D` do. The tracking ref this
+  // port wrote by hand on push has to come back off on rollback, or the branch outlives itself.
+  it('clears the tracking ref and branch config it wrote when rolling back a pushed branch', async () => {
+    const { port, ownedOid } = await createPushedOwnedBranch();
+    expect(hasRef(repo, `refs/remotes/origin/${branch}`)).toBe(true);
+    expect(branchSection()).toContain('.remote origin');
+    expect(branchSection()).toContain('.merge ');
+
+    await port.rollbackCreatedBranch(branch, ownedOid);
+
+    expect(hasRef(repo, `refs/remotes/origin/${branch}`)).toBe(false);
+    // The whole section, not one key: `--set-upstream-to` writes branch.<n>.remote AND .merge, and the
+    // fix removes the section — reading only .remote would pass a narrower `--unset` that leaves .merge.
+    expect(branchSection()).toBe('');
   });
 
   it('does not claim an exact-OID remote ref without a confirmed app push', async () => {
@@ -523,13 +607,438 @@ describe('createRealAppBootstrapGit — owned remote-ref compensation', () => {
     expect(hasRef(repo, `refs/heads/${branch}`)).toBe(false);
   });
 
-  it('redacts tainted argv from surfaced command failures', async () => {
+  // Two properties, not one. The operator needs to tell a timeout apart from a bad remote apart from a
+  // missing base, so the classification must survive; the argv must not, because a base branch name is
+  // tainted. Anchoring the whole message enforced the second by discarding the first.
+  it('surfaces the failure classification but never the tainted argv', async () => {
     const port = createRealAppBootstrapGit(repo);
     const taintedBase = 'private-base-name';
 
+    const failure = await port
+      .createBranchFromBase('plan-loop/issue-78', taintedBase)
+      .then(
+        () => null,
+        (e: unknown) => (e instanceof Error ? e.message : String(e)),
+      );
+
+    expect(failure).toMatch(/^base fetch failed/);
+    expect(failure).toMatch(/exit \d+|timed out|could not start|output limit/);
+    expect(failure).not.toContain(taintedBase);
+  });
+
+  it('reports both sides of a conflicting branch by object id', async () => {
+    const port = createRealAppBootstrapGit(repo);
+    expect(await port.branchState(branch)).toEqual({ localOid: null, remoteOid: null });
+
+    const main = runGit(remote, ['rev-parse', 'refs/heads/main']);
+    runGit(remote, ['update-ref', `refs/heads/${branch}`, main]);
+    runGit(repo, ['branch', branch, 'main']);
+    const localOid = runGit(repo, ['rev-parse', `refs/heads/${branch}`]);
+
+    expect(await port.branchState(branch)).toEqual({ localOid, remoteOid: main });
+  });
+
+  it('deletes exactly the branch objects named by the caller', async () => {
+    const port = createRealAppBootstrapGit(repo);
+    const main = runGit(remote, ['rev-parse', 'refs/heads/main']);
+    runGit(remote, ['update-ref', `refs/heads/${branch}`, main]);
+    runGit(repo, ['branch', branch, 'main']);
+
+    await port.deleteBranch(branch, await port.branchState(branch));
+
+    expect(hasRef(repo, `refs/heads/${branch}`)).toBe(false);
+    expect(hasRef(remote, `refs/heads/${branch}`)).toBe(false);
+    expect(hasRef(remote, 'refs/heads/main')).toBe(true);
+  });
+
+  // The operator confirms a wipe against the resources they were shown; anything that moves between the
+  // confirmation and the delete is a resource they never authorized destroying (§27.10).
+  it('refuses to delete a branch that moved after the caller read its identity', async () => {
+    const port = createRealAppBootstrapGit(repo);
+    const main = runGit(remote, ['rev-parse', 'refs/heads/main']);
+    runGit(remote, ['update-ref', `refs/heads/${branch}`, main]);
+    runGit(repo, ['branch', branch, 'main']);
+    const state = await port.branchState(branch);
+
+    const seed = join(root, 'seed');
+    runGit(seed, ['commit', '--allow-empty', '-m', 'moved']);
+    runGit(seed, ['push', '--force', 'origin', `HEAD:refs/heads/${branch}`]);
+    const movedOid = runGit(remote, ['rev-parse', `refs/heads/${branch}`]);
+
+    await expect(port.deleteBranch(branch, state)).rejects.toThrow(/remote branch wipe failed/i);
+    expect(runGit(remote, ['rev-parse', `refs/heads/${branch}`])).toBe(movedOid);
+    expect(hasRef(repo, `refs/heads/${branch}`)).toBe(true);
+    expect(runGit(repo, ['rev-parse', `refs/heads/${branch}`])).toBe(state.localOid);
+  });
+
+  it('detaches HEAD off the branch it is asked to delete', async () => {
+    const port = createRealAppBootstrapGit(repo);
+    runGit(repo, ['checkout', '-b', branch, 'main']);
+    const state = await port.branchState(branch);
+
+    await port.deleteBranch(branch, state);
+
+    expect(hasRef(repo, `refs/heads/${branch}`)).toBe(false);
+    expect(runGit(repo, ['rev-parse', '--abbrev-ref', 'HEAD'])).toBe('HEAD');
+    expect(runGit(repo, ['rev-parse', 'HEAD'])).toBe(state.localOid);
+  });
+
+  // The stale-lease abort must destroy nothing on either side — including the operator's checkout. The
+  // detach runs before update-ref performs the lease check, so this is the combination that matters.
+  it('leaves the checkout alone when the branch it is on moved past the lease', async () => {
+    const port = createRealAppBootstrapGit(repo);
+    runGit(repo, ['checkout', '-b', branch, 'main']);
+    const state = await port.branchState(branch);
+    runGit(repo, ['commit', '--allow-empty', '-m', 'moved']);
+    const movedOid = runGit(repo, ['rev-parse', `refs/heads/${branch}`]);
+
+    await expect(port.deleteBranch(branch, state)).rejects.toThrow(
+      /local branch wipe failed/i,
+    );
+
+    expect(hasRef(repo, `refs/heads/${branch}`)).toBe(true);
+    expect(runGit(repo, ['rev-parse', `refs/heads/${branch}`])).toBe(movedOid);
+    expect(runGit(repo, ['rev-parse', '--abbrev-ref', 'HEAD'])).toBe(branch);
+    expect(runGit(repo, ['rev-parse', 'HEAD'])).toBe(movedOid);
+  });
+
+  it('refuses to delete a local branch that moved after the caller read its identity', async () => {
+    const port = createRealAppBootstrapGit(repo);
+    runGit(repo, ['branch', branch, 'main']);
+    const state = await port.branchState(branch);
+
+    runGit(repo, ['checkout', branch]);
+    runGit(repo, ['commit', '--allow-empty', '-m', 'moved']);
+    const movedOid = runGit(repo, ['rev-parse', `refs/heads/${branch}`]);
+    runGit(repo, ['checkout', 'main']);
+
+    await expect(port.deleteBranch(branch, state)).rejects.toThrow(/local branch wipe failed/i);
+    expect(runGit(repo, ['rev-parse', `refs/heads/${branch}`])).toBe(movedOid);
+  });
+
+  // The local leg detaches HEAD before deleting the ref, so anything that fails BETWEEN the two leaves
+  // the operator on a detached HEAD they never asked for — with the remote half already destroyed and no
+  // UI action that restores either. A stale ref lock triggers it deterministically: rev-parse and
+  // `checkout --detach` do not touch refs/heads/<branch>.lock, and only `update-ref -d` takes it.
+  it('restores the checkout when the local wipe fails after detaching', async () => {
+    const port = createRealAppBootstrapGit(repo);
+    const main = runGit(remote, ['rev-parse', 'refs/heads/main']);
+    runGit(remote, ['update-ref', `refs/heads/${branch}`, main]);
+    runGit(repo, ['checkout', '-q', '-b', branch, 'main']);
+    const state = await port.branchState(branch);
+    writeFileSync(join(repo, '.git', 'refs', 'heads', `${branch}.lock`), '');
+
+    await expect(port.deleteBranch(branch, state)).rejects.toThrow(
+      /local branch wipe failed/i,
+    );
+    expect(runGit(repo, ['rev-parse', '--abbrev-ref', 'HEAD'])).toBe(branch);
+  });
+
+  // The other arm of the same repair: when the restore ITSELF fails, the operator is on a detached HEAD
+  // with the remote half already destroyed. That is the worst state this port produces, so the message
+  // has to name it rather than report only that the wipe failed.
+  it('reports the detached HEAD when the restore itself fails', async () => {
+    const port = createRealAppBootstrapGit(repo, {
+      restoreCheckoutResult: () => new Error('restore refused'),
+    });
+    const main = runGit(remote, ['rev-parse', 'refs/heads/main']);
+    runGit(remote, ['update-ref', `refs/heads/${branch}`, main]);
+    runGit(repo, ['checkout', '-q', '-b', branch, 'main']);
+    const state = await port.branchState(branch);
+    writeFileSync(join(repo, '.git', 'refs', 'heads', `${branch}.lock`), '');
+
+    await expect(port.deleteBranch(branch, state)).rejects.toThrow(
+      /HEAD is detached and the previous checkout could not be restored/i,
+    );
+  });
+
+  // The isolated dir has no remotes, so deleting through it leaves the remote-tracking ref and the
+  // branch config that a delete-push to a named remote and `git branch -D` remove for free — and this
+  // port already compensates the PUSH direction by hand for the same reason. A wipe that leaves
+  // refs/remotes/origin/<branch> behind shows the operator a branch that no longer exists.
+  it('clears the tracking ref and branch config the wipe deleted the branch for', async () => {
+    const { port, pushedOid } = await createPushedOwnedBranch();
+    expect(hasRef(repo, `refs/remotes/origin/${branch}`)).toBe(true);
+    expect(branchSection()).toContain('.remote origin');
+    expect(branchSection()).toContain('.merge ');
+
+    await port.deleteBranch(branch, {
+      localOid: pushedOid,
+      remoteOid: pushedOid,
+    });
+
+    expect(hasRef(repo, `refs/remotes/origin/${branch}`)).toBe(false);
+    expect(branchSection()).toBe('');
+  });
+
+  // main's wipe deleted the local branch with the porcelain `git branch -D`, which REFUSES a branch any
+  // worktree has checked out; the plumbing `update-ref -d` that replaced it has no such check, and the
+  // detach arm only moves repoDir's own HEAD. Deleting the ref leaves the other worktree on a branch
+  // that no longer exists.
+  it('refuses to delete a branch another worktree has checked out', async () => {
+    const port = createRealAppBootstrapGit(repo);
+    runGit(repo, ['branch', branch, 'main']);
+    const otherTree = join(root, 'other-worktree');
+    runGit(repo, ['worktree', 'add', otherTree, branch]);
+    const state = await port.branchState(branch);
+
+    await expect(port.deleteBranch(branch, state)).rejects.toThrow(
+      /local branch wipe failed/i,
+    );
+    expect(hasRef(repo, `refs/heads/${branch}`)).toBe(true);
+  });
+
+  // The cleanup has to run with the act that makes it true, not once at the end: a wipe whose remote
+  // delete lands and whose local leg then fails must still not leave a tracking ref for a branch that
+  // is gone from origin. Moving it to a single tail call regressed exactly this.
+  it('clears the tracking ref when the remote delete lands and the local leg then fails', async () => {
+    const { port, pushedOid } = await createPushedOwnedBranch();
+    expect(hasRef(repo, `refs/remotes/origin/${branch}`)).toBe(true);
+    writeFileSync(join(repo, '.git', 'refs', 'heads', `${branch}.lock`), '');
+
     await expect(
-      port.createBranchFromBase('plan-loop/issue-78', taintedBase),
-    ).rejects.toThrow(/^base fetch failed(?: \(exit \d+\))?$/);
+      port.deleteBranch(branch, { localOid: pushedOid, remoteOid: pushedOid }),
+    ).rejects.toThrow(/local branch wipe failed/i);
+
+    expect(hasRef(remote, `refs/heads/${branch}`)).toBe(false);
+    expect(hasRef(repo, `refs/remotes/origin/${branch}`)).toBe(false);
+  });
+
+  // No plumbing query expresses git's "branch is in use" rule: mid-rebase, `worktree list --porcelain`
+  // reports `detached` with no branch line and `for-each-ref %(worktreepath)` is empty, while
+  // `git branch -D` still refuses. The wipe must refuse the same, or it destroys a branch a rebase is
+  // actively rewriting.
+  it('refuses to delete a branch a rebase in progress is rewriting', async () => {
+    const port = createRealAppBootstrapGit(repo);
+    runGit(repo, ['checkout', '-q', '-b', branch, 'main']);
+    writeFileSync(join(repo, 'one.txt'), 'one\n');
+    runGit(repo, ['add', 'one.txt']);
+    runGit(repo, ['commit', '-m', 'one']);
+    writeFileSync(join(repo, 'two.txt'), 'two\n');
+    runGit(repo, ['add', 'two.txt']);
+    runGit(repo, ['commit', '-m', 'two']);
+    const state = await port.branchState(branch);
+    try {
+      execFileSync('git', ['rebase', '-i', '--exec', 'false', 'main'], {
+        cwd: repo,
+        env: { ...process.env, GIT_SEQUENCE_EDITOR: 'true' },
+        stdio: 'ignore',
+      });
+    } catch {
+      /* the --exec false stops the rebase mid-flight, which is the state under test */
+    }
+
+    // The reason must name the cause: git's stderr carries the branch name and cannot be surfaced,
+    // and a bare exit code tells the operator nothing they can act on.
+    await expect(port.deleteBranch(branch, state)).rejects.toThrow(
+      /while it is in use/i,
+    );
+    expect(hasRef(repo, `refs/heads/${branch}`)).toBe(true);
+  });
+
+  // main pushed with `git push -u`, which writes the tracking ref AND its config in one operation. The
+  // split writes the ref by hand and then asks `--set-upstream-to` to resolve it, which goes through the
+  // remote's FETCH REFSPEC — so on a single-branch clone the upstream step fails outright.
+  it('publishes a branch on a clone whose fetch refspec covers only the base', async () => {
+    runGit(repo, [
+      'config',
+      '--replace-all',
+      'remote.origin.fetch',
+      '+refs/heads/main:refs/remotes/origin/main',
+    ]);
+    const { port, ownedOid } = await createOwnedBranch();
+
+    await expect(port.pushBranchUpstream(branch, ownedOid)).resolves.toBe(ownedOid);
+    expect(runGit(repo, ['config', '--get', `branch.${branch}.remote`])).toBe('origin');
+    expect(runGit(repo, ['config', '--get', `branch.${branch}.merge`])).toBe(
+      `refs/heads/${branch}`,
+    );
+  });
+
+  // BOTH halves present, which the other refusal tests lack: an in-use refusal that only fires at the
+  // local delete arrives after the remote half is already gone, so the operator is left with a
+  // half-wiped state. The refusal has to reach them before anything is destroyed.
+  it('refuses a worktree-held branch before the remote half is destroyed', async () => {
+    const port = createRealAppBootstrapGit(repo);
+    const main = runGit(remote, ['rev-parse', 'refs/heads/main']);
+    runGit(remote, ['update-ref', `refs/heads/${branch}`, main]);
+    runGit(repo, ['branch', branch, 'main']);
+    const otherTree = join(root, 'held-worktree');
+    runGit(repo, ['worktree', 'add', otherTree, branch]);
+    const state = await port.branchState(branch);
+    expect(state.remoteOid).not.toBeNull();
+
+    await expect(port.deleteBranch(branch, state)).rejects.toThrow(
+      /local branch wipe failed/i,
+    );
+    expect(hasRef(remote, `refs/heads/${branch}`)).toBe(true);
+    expect(hasRef(repo, `refs/heads/${branch}`)).toBe(true);
+  });
+
+  // The lease has to hold across the remote leg, not just before it: the identity is read, then a
+  // network push runs on a 60 s budget, and only then is the local branch deleted. A branch the hosted
+  // agent moves during that window must not be destroyed.
+  it('refuses a branch that moved during the remote leg', async () => {
+    const main = runGit(remote, ['rev-parse', 'refs/heads/main']);
+    runGit(remote, ['update-ref', `refs/heads/${branch}`, main]);
+    runGit(repo, ['branch', branch, 'main']);
+    runGit(repo, ['commit', '--allow-empty', '-m', 'later']);
+    const moveTo = runGit(repo, ['rev-parse', 'HEAD']);
+    let moved = false;
+    const port = createRealAppBootstrapGit(repo, {
+      // Fires after the remote delete and before the local one — the window under test.
+      currentCheckoutResult: () => {
+        if (!moved) {
+          moved = true;
+          runGit(repo, ['branch', '-f', branch, moveTo]);
+        }
+        return null;
+      },
+    });
+    const state = await port.branchState(branch);
+
+    await expect(port.deleteBranch(branch, state)).rejects.toThrow(
+      /branch changed after the caller read its identity/i,
+    );
+    expect(runGit(repo, ['rev-parse', `refs/heads/${branch}`])).toBe(moveTo);
+  });
+
+  // Each cache belongs to the act that orphans it: the tracking ref to the remote delete, the branch
+  // config to the local one. Cleaning both wherever either lands strips the upstream config of a branch
+  // the operator still has, when the remote half went and the local delete then failed.
+  it('keeps the branch config when the local branch survives a failed wipe', async () => {
+    const { port, pushedOid } = await createPushedOwnedBranch();
+    expect(branchSection()).toContain('.remote origin');
+    writeFileSync(join(repo, '.git', 'refs', 'heads', `${branch}.lock`), '');
+
+    await expect(
+      port.deleteBranch(branch, { localOid: pushedOid, remoteOid: pushedOid }),
+    ).rejects.toThrow(/local branch wipe failed/i);
+
+    expect(hasRef(repo, `refs/remotes/origin/${branch}`)).toBe(false);
+    expect(hasRef(repo, `refs/heads/${branch}`)).toBe(true);
+    expect(branchSection()).toContain('.remote origin');
+  });
+
+  // Either lease refusing must leave BOTH halves intact: a wipe that destroys the origin branch and then
+  // refuses the local one strands the operator in a state no UI action reaches (§27.10).
+  it('refuses a moved local branch without destroying the remote half first', async () => {
+    const port = createRealAppBootstrapGit(repo);
+    const main = runGit(remote, ['rev-parse', 'refs/heads/main']);
+    runGit(remote, ['update-ref', `refs/heads/${branch}`, main]);
+    runGit(repo, ['branch', branch, 'main']);
+    const state = await port.branchState(branch);
+    expect(state.remoteOid).not.toBeNull();
+
+    runGit(repo, ['checkout', branch]);
+    runGit(repo, ['commit', '--allow-empty', '-m', 'moved']);
+    runGit(repo, ['checkout', 'main']);
+
+    // The §27.10 chart's "failed before anything was destroyed, checkout restored" edge, asserted in
+    // full: nothing in the suite can falsify a chart edge, so the residue taxonomy the wipe's safety
+    // argument rests on is bound here instead — every artifact that edge promises survives.
+    await expect(port.deleteBranch(branch, state)).rejects.toThrow(/local branch wipe failed/i);
+    expect(hasRef(remote, `refs/heads/${branch}`)).toBe(true);
+    expect(hasRef(repo, `refs/heads/${branch}`)).toBe(true);
+    expect(runGit(repo, ['rev-parse', '--abbrev-ref', 'HEAD'])).toBe('main');
+  });
+});
+
+describe('createRealAppBootstrapGitHub — repository pinning', () => {
+  let root: string;
+  let repo: string;
+  let log: string;
+  let previousPath: string | undefined;
+  let previousLog: string | undefined;
+  let previousRepository: string | undefined;
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), 'bootstrap-github-pin-'));
+    repo = join(root, 'repo');
+    log = join(root, 'gh.log');
+    mkdirSync(repo);
+    runGit(repo, ['init']);
+    runGit(repo, [
+      'remote',
+      'add',
+      'origin',
+      'https://github.com/owner/repository.git',
+    ]);
+    writeFileSync(
+      join(root, 'gh'),
+      '#!/usr/bin/env bash\n' +
+        'printf \'%s GH_REPO=%s\\n\' "$*" "${GH_REPO-unset}" >> "$FAKE_GH_LOG"\n' +
+        'if [ "$1" = "repo" ]; then printf \'%s\\n\' \'{"nameWithOwner":"owner/repository","url":"https://github.com/owner/repository","defaultBranchRef":{"name":"main"}}\'; exit 0; fi\n' +
+        'if [ "$1" = "pr" ] && [ "$2" = "create" ]; then printf \'%s\\n\' "https://github.com/owner/repository/pull/7"; exit 0; fi\n' +
+        'exit 0\n',
+      { mode: 0o755 },
+    );
+    previousPath = process.env.PATH;
+    previousLog = process.env.FAKE_GH_LOG;
+    previousRepository = process.env.GH_REPO;
+    process.env.PATH = `${root}:${previousPath ?? ''}`;
+    process.env.FAKE_GH_LOG = log;
+    process.env.GH_REPO = 'attacker/other';
+  });
+
+  afterEach(() => {
+    if (previousPath === undefined) delete process.env.PATH;
+    else process.env.PATH = previousPath;
+    if (previousLog === undefined) delete process.env.FAKE_GH_LOG;
+    else process.env.FAKE_GH_LOG = previousLog;
+    if (previousRepository === undefined) delete process.env.GH_REPO;
+    else process.env.GH_REPO = previousRepository;
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it('names the resolved origin on every mutation and drops an inherited GH_REPO', async () => {
+    const github = createRealAppBootstrapGitHub(
+      repo,
+      createGitHubRepositorySource(repo),
+    );
+
+    await github.createDraftPr({
+      base: 'main',
+      head: 'plan-loop/issue-78',
+      title: 'title',
+      body: 'body',
+    });
+    await github.assignIssueToSelf(78);
+    await github.setIssueLabel(78, 'agent-loop/in-progress', true);
+    await github.setPrLabel(7, 'plan-draft', true);
+    await github.closePr(7);
+
+    const recorded = readFileSync(log, 'utf8')
+      .split('\n')
+      .filter((line) => line.length > 0 && !line.startsWith('repo view'));
+    expect(recorded.length).toBeGreaterThan(0);
+    for (const line of recorded) {
+      expect(line).toContain('--repo github.com/owner/repository');
+      expect(line).toContain('GH_REPO=unset');
+    }
+  });
+
+  it('refuses a created PR URL that names another repository', async () => {
+    writeFileSync(
+      join(root, 'gh'),
+      '#!/usr/bin/env bash\n' +
+        'if [ "$1" = "repo" ]; then printf \'%s\\n\' \'{"nameWithOwner":"owner/repository","url":"https://github.com/owner/repository","defaultBranchRef":{"name":"main"}}\'; exit 0; fi\n' +
+        'printf \'%s\\n\' "https://github.com/attacker/other/pull/7"\n',
+      { mode: 0o755 },
+    );
+    const github = createRealAppBootstrapGitHub(
+      repo,
+      createGitHubRepositorySource(repo),
+    );
+
+    await expect(
+      github.createDraftPr({
+        base: 'main',
+        head: 'plan-loop/issue-78',
+        title: 'title',
+        body: 'body',
+      }),
+    ).rejects.toThrow(/not recognized|ambiguous|repository/i);
   });
 });
 
@@ -544,9 +1053,18 @@ describe('createRealAppBootstrapGitHub — owned PR reconciliation', () => {
     responseFile = join(root, 'response.json');
     previousPath = process.env.PATH;
     previousResponse = process.env.FAKE_PR_LOOKUP_RESPONSE;
+    runGit(root, ['init']);
+    runGit(root, [
+      'remote',
+      'add',
+      'origin',
+      'https://github.com/owner/repository.git',
+    ]);
     writeFileSync(
       join(root, 'gh'),
-      '#!/bin/sh\ncat "$FAKE_PR_LOOKUP_RESPONSE"\n',
+      '#!/bin/sh\n' +
+        'if [ "$1" = "repo" ]; then printf \'%s\\n\' \'{"nameWithOwner":"owner/repository","url":"https://github.com/owner/repository","defaultBranchRef":{"name":"main"}}\'; exit 0; fi\n' +
+        'cat "$FAKE_PR_LOOKUP_RESPONSE"\n',
       { mode: 0o755 },
     );
     process.env.PATH = `${root}:${previousPath ?? ''}`;
@@ -562,7 +1080,10 @@ describe('createRealAppBootstrapGitHub — owned PR reconciliation', () => {
   });
 
   it('selects only one marked draft and distinguishes absent from foreign PRs', async () => {
-    const github = createRealAppBootstrapGitHub(root);
+    const github = createRealAppBootstrapGitHub(
+      root,
+      createGitHubRepositorySource(root),
+    );
     writeFileSync(responseFile, '[]');
     await expect(
       github.findOwnedOpenPr({ base: 'main', head: 'topic', marker: '<!-- owned -->' }),
@@ -584,7 +1105,10 @@ describe('createRealAppBootstrapGitHub — owned PR reconciliation', () => {
   });
 
   it('fails closed for malformed or multiply-owned reconciliation data', async () => {
-    const github = createRealAppBootstrapGitHub(root);
+    const github = createRealAppBootstrapGitHub(
+      root,
+      createGitHubRepositorySource(root),
+    );
     const find = () =>
       github.findOwnedOpenPr({ base: 'main', head: 'topic', marker: '<!-- owned -->' });
     writeFileSync(responseFile, JSON.stringify([{ number: 0, body: '', isDraft: true }]));

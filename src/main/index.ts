@@ -37,6 +37,7 @@ import {
   isValidFlowSetTitle,
   isValidFlowGateDecision,
   isValidFlowResolveBootstrapConflict,
+  isValidFlowResolveAppBootstrapConflict,
   isValidFlowAppRouteOut,
   isValidFlowAppGateDecision,
   isValidFlowAppRequestChanges,
@@ -73,7 +74,7 @@ import { captureLastReport } from './captureLast';
 import { createFlowManager, deriveFlowView, legacyLoopNameForStep, loadFlowDefinitionLocalFirst } from './flow';
 import { createGithubRefs } from './githubRefs';
 import { createAuditRecorder } from './auditRecorder';
-import { appBootstrapAuditCmd, type TransitionKind } from '../shared/audit';
+import { appBootstrapAuditCmd, appBootstrapAuditExit, type TransitionKind } from '../shared/audit';
 import { auditRootDir } from './auditPaths';
 import { createFlowEntryActions } from './flowEntryActions';
 import { planStepResume } from './loopRebind';
@@ -116,9 +117,8 @@ import { handleCliInstall } from './cliInstall';
 import { resolveLaunchInvocation } from './cliShim';
 import type { BundleLocation } from './bundleLocation';
 import {
+  createInstallExamplesCoordinator,
   exampleInstallDirs,
-  handleInstallExamplesPreview,
-  handleInstallExamplesApply,
   type InstallDestination,
 } from './installExamples';
 import { provideAppLoopView } from './loopViewV2';
@@ -129,7 +129,6 @@ import { APP_LOOP_DIR_SEGMENTS } from './appLoopPaths';
 import { resolveLoopDefV2, type LoopDefV2Context } from './loopDefV2';
 import { createRealAppGateGitHub } from './appGateGithub';
 import { runAppGateDecision as runAppGateDecisionImpl } from './appGateDecision';
-import { completionArtifact } from './appWorkTurn';
 import { probeChainedInput } from './chainedInputProbe';
 import { resolveExampleLoopsV2Dir } from './exampleAssets';
 import { userConfigLoopsV2Dir } from './userConfig';
@@ -142,7 +141,7 @@ import {
   type AppLoopBootstrapCoordinator,
   type AppLoopBootstrapSession,
 } from './appLoopBootstrap';
-import { createRealAppBootstrapGit, createRealAppBootstrapGitHub } from './bootstrapPorts';
+import { createRealAppBootstrapPorts } from './appBootstrapPorts';
 
 async function createWindow(): Promise<void> {
   const iconLoc: BundleLocation = app.isPackaged
@@ -170,9 +169,9 @@ async function createWindow(): Promise<void> {
   const config = resolveRuntimeConfig(process.env);
   // §23.4: L anchors the cwd surfaces; the flow global dir is the per-user home (§18.1), not L.
   const { launchRoot, flowGlobalDir } = resolveLaunchSurfaces(process.env, os.homedir());
-  // §18.1/§23.4/§26.5: the install-examples action's bundle sources (build-aware) + its install targets
-  // (the GLOBAL flow home and the user-level Claude config directories). The handlers read this seam.
-  const exampleDirs = (): InstallDestination[] => exampleInstallDirs(iconLoc, flowGlobalDir);
+  const resolveExampleInstallDestinations = (): InstallDestination[] =>
+    exampleInstallDirs(iconLoc, flowGlobalDir);
+  const installExamples = createInstallExamplesCoordinator(resolveExampleInstallDestinations);
   const ptyProcess = await spawnAgentShell({
     integrationScriptPath: config.shellIntegration ? SHELL_INTEGRATION_SCRIPT : undefined,
     cwd: launchRoot,
@@ -1065,14 +1064,18 @@ async function createWindow(): Promise<void> {
     },
   });
 
+  // TODO(dylanb): §27.12 — after a relaunch this map is empty, so appGateGithub's verifyBootstrap takes its
+  // `bootstrap === null` early return and the gate's PR-identity check is silently skipped. The persisted
+  // document (readAppLoopBootstrap) cannot simply seed it: resolveAppGateRefs lets a bootstrap OVERRIDE the
+  // flow's own refs, and that document is repo-scoped rather than step-scoped, so a stale one retargets
+  // `gh pr ready` at another PR. Closing this needs the persisted identity bound to the step it bootstrapped.
   const trustedAppBootstraps = new Map<string, AppLoopBootstrap>();
   const appBootstrapSessions = new Map<string, AppLoopBootstrapSession>();
   const appBootstrapSession = (repoDir: string): AppLoopBootstrapSession => {
     const existing = appBootstrapSessions.get(repoDir);
     if (existing !== undefined) return existing;
     const session = createAppLoopBootstrapSession({
-      git: createRealAppBootstrapGit(repoDir),
-      github: createRealAppBootstrapGitHub(repoDir),
+      ...createRealAppBootstrapPorts(repoDir),
       prepareBootstrap: (identity) => writeAppLoopBootstrapIntent(repoDir, identity),
       writeBootstrap: (identity) => writeAppLoopBootstrap(repoDir, identity),
       clearBootstrap: () => clearAppLoopBootstrap(repoDir),
@@ -1082,7 +1085,11 @@ async function createWindow(): Promise<void> {
   };
   appBootstrapCoordinator = createAppLoopBootstrapCoordinator({
     run: async (repoDir, request) => {
-      pickupInFlight = { repoKey: repoDir, issue: request.issue, wipe: false };
+      pickupInFlight = {
+        repoKey: repoDir,
+        issue: request.issue,
+        wipe: request.confirmedWipe !== undefined,
+      };
       pushFlowChanged();
       try {
         return await appBootstrapSession(repoDir).run(request);
@@ -1145,12 +1152,19 @@ async function createWindow(): Promise<void> {
         step: stepId,
         reason,
       }),
+    emitConflict: ({ repoDir, stepId, ...conflict }) =>
+      send(CH.flowOnAppBootstrapConflict, {
+        sessionId: SESSION_ID,
+        repoKey: repoDir,
+        step: stepId,
+        ...conflict,
+      }),
     audit: (repoDir, kind, stepId, detail) =>
       audit.recordCommand(
         repoDir,
         'pickup',
         appBootstrapAuditCmd(kind, stepId, detail),
-        kind === 'start' || kind === 'stale' ? null : kind === 'success' ? 0 : 1,
+        appBootstrapAuditExit(kind),
       ),
   });
 
@@ -1401,7 +1415,6 @@ async function createWindow(): Promise<void> {
             trustedAppBootstraps.get(repoDir) ?? null,
           );
         },
-        bodyFile: (def) => completionArtifact(def)?.path ?? null,
         runSideEffect: createRealAppGateGitHub(repoKey),
         persistAccept: (repoDir, state) => writeAppLoopState(repoDir, state),
         advanceFlow: (repoDir) => autoAdvanceFlow(repoDir),
@@ -1530,6 +1543,19 @@ async function createWindow(): Promise<void> {
       // §26.9 — the operator's wipe/cancel answer to a bootstrap conflict.
       [CH.flowResolveBootstrapConflict]: (_e, m) => {
         if (isValidFlowResolveBootstrapConflict(m)) resolveBootstrapConflict(m.repoKey, m.wipe);
+      },
+      // §27.10 — the step and the destroyed resources are both named in the payload, so an answer cannot
+      // be applied to a step, or a resource set, the operator was never shown.
+      [CH.flowResolveAppBootstrapConflict]: (_e, m) => {
+        if (isValidFlowResolveAppBootstrapConflict(m)) {
+          appBootstrapCoordinator?.resolve(m.repoKey, m.step, m.wipe, {
+            repository: m.repository,
+            branch: m.branch,
+            localOid: m.localOid,
+            remoteOid: m.remoteOid,
+            pullRequests: m.pullRequests,
+          });
+        }
       },
       // Clipboard is an OS resource owned by main (§7.7); the sandboxed preload can't reach it.
       [CH.clipboardWrite]: (_e, m) => {
@@ -1715,8 +1741,8 @@ async function createWindow(): Promise<void> {
       // the unpackaged app path); the flow lands in the GLOBAL flow home read back by
       // loadFlowDefinitionLocalFirst, and the definitions, persona skills and commands land in the
       // user-level Claude config directories that the engine and Claude Code discover from.
-      [CH.installExamplesPreview]: (_e, m) => handleInstallExamplesPreview(m, exampleDirs),
-      [CH.installExamplesApply]: (_e, m) => handleInstallExamplesApply(m, exampleDirs),
+      [CH.installExamplesPreview]: (_e, m) => installExamples.preview(m),
+      [CH.installExamplesApply]: (_e, m) => installExamples.apply(m),
     },
   );
 

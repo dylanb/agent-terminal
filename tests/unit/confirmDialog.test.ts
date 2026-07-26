@@ -224,3 +224,81 @@ describe('confirm dialog (#26 AC3/AC4/AC13)', () => {
     });
   });
 });
+
+// WAI-ARIA APG names this exact case for `alertdialog`: a modal that interrupts the user's workflow with
+// an action confirmation. UI-STANDARDS §5.2 draws the same boundary — errorDialog is system-raised and
+// uses `alertdialog`; a user-initiated confirm stays `dialog`.
+describe('createConfirmDialog — system-raised alerts', () => {
+  it('carries role=alertdialog when the caller declares the confirmation an alert', () => {
+    const host = document.createElement('div');
+    document.body.append(host);
+    const dialog = createConfirmDialog(host);
+    dialog.render({
+      title: 'Bootstrap resources already exist',
+      message: 'Wiping will delete or close exactly: origin branch topic.',
+      confirmLabel: 'Wipe and retry',
+      role: 'alertdialog',
+      onConfirm: () => {},
+    });
+
+    expect(
+      host.querySelector('.flow-modal')?.getAttribute('role'),
+    ).toBe('alertdialog');
+    dialog.dispose();
+    host.remove();
+  });
+
+  // The resources are the whole content of an irreversible confirmation: a description that carries only
+  // their COUNT tells a screen-reader user to answer a question a sighted user can read the answer to.
+  it('names every resource it would destroy in the dialog accessible description (WCAG 1.3.1/4.1.2)', () => {
+    createConfirmDialog(host).render(
+      opts({
+        title: 'Wipe existing resources?',
+        message: 'This will destroy 2 resources. It cannot be undone.',
+        resources: ['Delete local branch topic (abc1234)', 'Close pull request owner/repo#7'],
+        confirmLabel: 'Wipe and retry',
+        role: 'alertdialog',
+      }),
+    );
+    // aria-describedby is an IDREF *list*; the description AT announces is every referenced node, in order.
+    const description = dialog()!
+      .getAttribute('aria-describedby')!
+      .split(/\s+/)
+      .map((id) => host.querySelector(`#${id}`)?.textContent ?? '')
+      .join(' ');
+    expect(description).toContain('Delete local branch topic (abc1234)');
+    expect(description).toContain('Close pull request owner/repo#7');
+  });
+
+  // WCAG 1.3.1 — the set's count and each item's boundary must be programmatically determinable, not
+  // recoverable only by reading commas out of one utterance.
+  it('renders each resource as its own list item', () => {
+    createConfirmDialog(host).render(
+      opts({
+        message: 'This will destroy 2 resources. It cannot be undone.',
+        resources: ['Delete local branch topic (abc1234)', 'Close pull request owner/repo#7'],
+      }),
+    );
+    expect(
+      [...host.querySelectorAll('.flow-modal li')].map((li) => li.textContent),
+    ).toEqual(['Delete local branch topic (abc1234)', 'Close pull request owner/repo#7']);
+  });
+
+  it('stays role=dialog for a confirmation the user asked for', () => {
+    const host = document.createElement('div');
+    document.body.append(host);
+    const dialog = createConfirmDialog(host);
+    dialog.render({
+      title: 'Terminate',
+      message: 'Terminate the flow?',
+      confirmLabel: 'Terminate',
+      onConfirm: () => {},
+    });
+
+    expect(
+      host.querySelector('.flow-modal')?.getAttribute('role'),
+    ).toBe('dialog');
+    dialog.dispose();
+    host.remove();
+  });
+});

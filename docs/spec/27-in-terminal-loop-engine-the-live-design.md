@@ -132,18 +132,39 @@ The gate is the **whole** human interface to a running loop. Its options are dec
 **The three loops are the same shape over different data, chained by artifact.**
 
 ```mermaid
-flowchart LR
+flowchart TD
   RAW["GitHub issue (raw)"] --> G["groom-loop"]
-  G -->|"the groomed ticket<br/>(published to the issue body on approve)"| P["plan-loop"]
-  P -->|"plan.md"| I["impl-loop"]
-  I -->|"the PR"| TR["team review"]
+  G -->|"approve: publish issue body<br/>and carry groomed ticket"| PE["enter plan-loop"]
+  PE --> BOOT["async in-app bootstrap"]
+  BOOT -->|"no conflict"| P["plan-loop"]
+  BOOT -->|"failure"| RB["roll back to groom<br/>inputs preserved"]
+  BOOT -->|"existing refs or open PRs, wipe policy"| CF["confirm exact ref OIDs<br/>and PR numbers"]
+  BOOT -->|"existing refs or open PRs, no wipe policy"| RB
+  CF -->|"decline"| RBQ["roll back to groom<br/>inputs preserved, no error dialog"]
+  CF -->|"confirm"| CHECK{"target still matches?"}
+  CHECK -->|"changed, conflicts remain"| CF
+  CHECK -->|"changed, no conflicts remain"| RB
+  CHECK -->|"yes"| WIPE["verify both ref leases, then delete<br/>remote first, then local, then close any PR still open"]
+  WIPE -->|"complete"| CREATE["create branch, start commit,<br/>push, open draft PR"]
+  CREATE -->|"ok"| P
+  CREATE -->|"failed, wiped refs are not restored, closed PRs are not reopened,<br/>and a checkout on the wiped branch is left detached"| RB
+  WIPE -->|"failed before anything was destroyed, checkout restored"| RB
+  WIPE -->|"failed after a delete or a PR close landed, wiped refs are not restored,<br/>closed PRs are not reopened, and a checkout on a locally deleted branch is left detached"| RB
+  WIPE -->|"failed and the checkout could not be restored,<br/>wiped refs are not restored and HEAD is left detached"| RB
+  RBQ --> RETRY
+  RB --> RETRY["approve / advance rolled-back step"]
+  RB -.->|"optional"| RELAUNCH["relaunch restores rolled-back step"]
+  RELAUNCH --> RETRY
+  RETRY -->|"preserved input"| BOOT
+  P -->|"approve: gh pr ready<br/>and carry plan.md"| I["impl-loop"]
+  I -->|"approve: publish PR body<br/>and preserve closes #issue"| TR["team review"]
 ```
 
 - **`groom-loop`** takes the raw GitHub issue and produces **the groomed ticket**. Its approve gate **publishes the groomed ticket back to the GitHub issue body** (§27.13).
 - **`plan-loop`** takes the groomed ticket and produces **`plan.md`**.
 - **`impl-loop`** takes the plan and produces **the implementation on the PR**. Its work turn's product is commits, not a file.
 - **Bootstrap (pickup) stays a separate app action**, as today: on entering the first loop step that needs one, the app validates a clean tree, creates the branch **off the base the `pickup` contract resolves** (the repo's base branch, or the preceding slice's branch for an epic sub-ticket — below), writes an empty `[skip ci]` start commit, pushes, opens and persists the **draft PR that `closes #n`**, enters work, and then assigns the issue and applies labels best-effort — driven by the def's `pickup` contract, never hardcoded. **Groom does not absorb it.**
-- **A pickup that cannot run never fails silently and never strands the flow.** It runs asynchronously after the loop step is entered, so a failure (dirty tree, unresolvable base, conflicting branch, rejected PR create) arrives after the transition returned. When it does, the app **rolls the flow back one step**, preserving the resolved inputs, and **surfaces the reason in a blocking error dialog**. A destructive re-pickup (an existing target branch under a wipe policy) is **confirm-first**: the app does nothing destructive on detection and names what will be deleted.
+- **A pickup that cannot run never fails silently and never strands the flow.** It runs asynchronously after the loop step is entered, so a failure (dirty tree, unresolvable base, conflicting branch, rejected PR create) arrives after the transition returned. When it does, the app **rolls the flow back one step**, preserving the resolved inputs, and **surfaces the reason in a blocking error dialog**. A destructive re-pickup (an existing target branch under a wipe policy) is **confirm-first**: the app does nothing destructive on detection, names the exact local/remote ref object IDs and open PR numbers, revalidates that snapshot at the operation, and recreates the branch only after the exact wipe completes.
 - **Loop state is app-owned**, under `<repo>/.agent-terminal/loop/`, in a schema of the app's choosing. **The `.agent-loop/state.yaml` v4 contract is gone** (§27.14) — there is no external writer to reconcile with, no re-handoff to the Go engine to preserve, and no reason to carry fields (`persona_state`, `phase2_active`, `severity_cycle_iter`, `impasse`, `completed_loops`) for machinery this design deleted.
 **Epics fan out into a chain of self-contained sub-tickets.** A plan the work agent classifies an **epic** is planned once, as a whole, and then implemented one slice at a time in **parallel worktrees** — the operator opens the next slice while the previous one is still in review. The chain is what makes that possible, and it lives on **GitHub**, not in loop state: a slice is picked up in a fresh worktree whose loop state is empty, so everything its pickup needs is recoverable from the issue alone. App-owned loop state records only that the promotion already ran, so it cannot fire twice.
 

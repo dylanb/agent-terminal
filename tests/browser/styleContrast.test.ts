@@ -5,7 +5,10 @@ import { createInstallExamples } from '../../src/renderer/src/installExamples';
 import { createStatusBar, type StatusBar } from '../../src/renderer/src/statusBar';
 import type { StatusBarModel, StatusBarTitle } from '../../src/shared/statusBar';
 import type { DestRelativePath, InstallExamplesPreview, InstallExamplesResult } from '../../src/shared/ipc';
+import type { AppBootstrapConflictTarget } from '../../src/shared/appBootstrap';
 import { createFeedbackComposer } from '../../src/renderer/src/feedbackComposer';
+import { createConfirmDialog } from '../../src/renderer/src/confirmDialog';
+import { wireAppBootstrapConflict } from '../../src/renderer/src/wireAppBootstrapConflict';
 import { parseColor as parse, compositeOver as over, contrastRatio as contrast, ringOver, type RGBA } from '../helpers/wcag';
 
 // WCAG contrast pins for the renderer's tokens and controls. The locked "Galley · Lit" mood keeps
@@ -447,6 +450,85 @@ describe('the consent dialog reflows at 320x256 (WCAG 1.4.10)', () => {
     expect(confirm.getBoundingClientRect().bottom).toBeLessThanOrEqual(window.innerHeight + 1);
     expect(confirm.getBoundingClientRect().top).toBeGreaterThanOrEqual(-1);
   });
+});
+
+describe('the exact bootstrap-wipe target reflows at 320px (WCAG 1.4.10)', () => {
+  beforeEach(async () => {
+    // SC 1.4.10 names 320x256 as the reflow target, and the block axis is the one this card can lose:
+    // the real conflict payload names a local ref, an origin ref and open PRs, not a single oid.
+    await page.viewport(320, 256);
+  });
+
+  afterEach(async () => {
+    await page.viewport(1280, 896);
+  });
+
+  for (const oidLength of [40, 64]) {
+    it(`wraps an unbroken ${oidLength}-character object id without horizontal scrolling`, () => {
+      const host = document.createElement('div');
+      document.body.replaceChildren(host);
+      const dialog = createConfirmDialog(host);
+      let emit:
+        | ((
+            conflict: AppBootstrapConflictTarget & {
+              repoKey: string;
+              step: string;
+            },
+          ) => void)
+        | undefined;
+      const dispose = wireAppBootstrapConflict({
+        onConflict: (cb) => {
+          emit = cb;
+          return () => {};
+        },
+        confirm: (options) => dialog.render(options),
+        resolve: () => {},
+      });
+
+      emit?.({
+        repository: 'github.com/owner/repository',
+        branch: 'plan-loop/issue-78',
+        localOid: 'a'.repeat(oidLength),
+        remoteOid: 'b'.repeat(oidLength),
+        pullRequests: [321, 654],
+        repoKey: '/repo',
+        step: 'plan',
+      });
+
+      const modal = host.querySelector('.flow-modal') as HTMLElement;
+      const confirm = host.querySelector(
+        '.flow-modal button.confirm',
+      ) as HTMLElement;
+      try {
+        expect(modal.scrollWidth).toBeLessThanOrEqual(modal.clientWidth + 1);
+        // `.flow-modal` cannot overflow horizontally whatever the content does — the box that scrolls is
+        // the one carrying the resource list, so it is the one SC 1.4.10 is about.
+        const scroller = host.querySelector(
+          '.flow-modal [data-modal-scroll]',
+        ) as HTMLElement;
+        expect(scroller.scrollWidth).toBeLessThanOrEqual(
+          scroller.clientWidth + 1,
+        );
+        // The action must be reachable once the card is scrolled to its end, not merely painted somewhere.
+        modal.scrollTop = modal.scrollHeight;
+        expect(confirm.getBoundingClientRect().bottom).toBeLessThanOrEqual(
+          window.innerHeight + 1,
+        );
+        expect(confirm.getBoundingClientRect().top).toBeGreaterThanOrEqual(-1);
+        // The actions must paint ON the card, not escape its border box onto the scrim — a `.pill` is
+        // transparent, so ink outside `--card` has no determinate background (WCAG 1.4.3 / 1.4.11).
+        const card = host.querySelector('.flow-modal .card') as HTMLElement;
+        expect(confirm.getBoundingClientRect().bottom).toBeLessThanOrEqual(
+          card.getBoundingClientRect().bottom + 1,
+        );
+        modal.scrollTop = 0;
+        expect(card.getBoundingClientRect().top).toBeGreaterThanOrEqual(-1);
+      } finally {
+        dispose();
+        dialog.dispose();
+      }
+    });
+  }
 });
 
 // `overflow-y:auto` computes `overflow-x` to `auto` too (CSS Overflow L3 §3), so the scroll box clips ink
