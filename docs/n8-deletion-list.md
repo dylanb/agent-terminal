@@ -240,10 +240,18 @@ The §27 engine imports `createTurnRunner`, `TurnRunner` and `HostedAgentState` 
 
 ### B.2 `src/main/turnDoneFile.ts` (5)
 
-- **Goes:** the `AGENT_LOOP_TURN_DONE_SUBDIR = '.agent-loop'` default and its defaulted parameter — after
-  the sweep every caller is §27 and passes its own area.
-- **Stays:** `readTurnDone` / `clearTurnDone` / the watcher, with `subDir` **required**. §27's
-  `appLoopEngine.ts` already passes `APP_LOOP_DIR_SEGMENTS`.
+- **Goes:** the `AGENT_LOOP_TURN_DONE_SUBDIR = '.agent-loop'` default (`:12`) and its defaulted parameter on
+  all three exports (`readTurnDone` `:20`, `clearTurnDone` `:33`, `watchTurnDone` `:44`).
+- **Stays:** `readTurnDone` / `clearTurnDone` / the watcher, with `subDir` **required**.
+- **Ordering, because "every caller passes its own area" is only true after §B.15 lands.** Three call sites
+  rely on the default today and all three are in the §26 chain: `index.ts:412` (`clearTurnDone`), `:572`
+  (`watchTurnDone` inside `armTurnDoneWatch`) and `:574` (`readTurnDone`, key-matching against
+  `activeTurn`). They go with §B.15, so **this edit is made after it, not before** — made first it produces
+  three type errors whose easiest "fix" is to keep the default, which is the change not happening.
+- **Checked:** §27's `armAppTurnDoneWatch` (`index.ts:543`–`:553`) already passes `appTurnDoneSubdir`
+  explicitly to **both** `watchTurnDone` and the `readTurnDone` inside its callback, and
+  `appLoopEngine.ts:537` passes `APP_TURN_DONE_SUBDIR` to `clearTurnDone`. No surviving caller relies on the
+  default, so requiring the parameter changes no §27 behavior (AC 2).
 
 ### B.3 `src/main/flow.ts` (21)
 
@@ -1224,9 +1232,19 @@ band, during the iteration-3 review round — with **5 blockers and 6 warnings**
 them naming files no persona reviewer reached. This section now records what it returned rather than that it
 did not, and §K.1 states what was done with each item, including the one item rejected and why.
 
-A second pass was spawned against **this** revision at the start of iteration 4; whether it has returned by
-the time the operator reads this is recorded in the PR body rather than here, so this section is not left
-asserting a result it does not have.
+**A second pass was spawned against this revision and did not deliver a report either.** It was spawned at
+the start of iteration 4, asked twice for partial findings, and went idle without sending anything — the same
+failure mode as iteration 3's attempt. Recorded plainly rather than dressed up: the ticket asks for an
+independent adversarial pass per presentation, and this revision has one (the returned pass in §K.1, which
+was run against the *previous* draft) rather than one of its own.
+
+What was run in its place, against the tree rather than the document, is the dependency-claim sweep whose
+results are the last seven rows of §L: every "its only consumer is X" / "every caller already passes Y"
+claim in §A and §B re-checked with `grep`. Six held as written. One did not, and it is now in §B.2 — the
+claim that "after the sweep every caller passes its own area" is true only *after* §B.15's edit, because
+three §26-chain call sites rely on the defaulted `subDir` today, so §B.2's edit has to follow §B.15 rather
+than precede it. That is a sequencing trap of exactly the class the pass exists to catch, and it argues the
+operator should still want an independent pass before agreeing.
 
 ### K.1 What the returned pass found, and what was done with it
 
@@ -1316,3 +1334,9 @@ mis-classification that a reader would reasonably challenge; each was checked ag
 | Does any surviving module still call `runLegacy` / `userConfigSkillsDir`? | **No.** Sole callers were `legacyPickupPorts.ts` and the `skills` destination (§I.3). |
 | Does a symlink at the retired tier's entry keep AC 5's probe from firing? | **No, and the negative had to be rewritten.** `resolveOwnedDirJail` resolves the root *including* its final segment (`confinedPath.ts:55`–`:57`), by deliberate §18.1 policy (`:53`–`:54`), so the link relocates the jail and the probe fires inside it. What is provable — and what the plan actually says — is that neither probe nor write lands **outside its root** (§D.4). |
 | Is `confirmDialog.ts` orphaned when `wireBootstrapConflict.ts` goes? | **No.** `wireAppBootstrapConflict.ts`, `terminateConfirm.ts` and `flowModalCoordinator.ts` are its other consumers. Scrub (§C). |
+| Does any surviving §27 caller of `doneSignalInstruction` rely on the `.agent-loop` default `loopTurn.ts` drops? | **No.** `appWorkTurn.ts:93`, `consolidateTurn.ts:75` and `reviewTurn.ts:109` each pass `req.doneRelPath`; the only default-relying callers are `loopRecipe.ts:52` and `:139`, both deleted. `TURN_DONE_FILENAME` keeps two surviving consumers (`appLoopEngine.ts:27`, `turnDoneFile.ts:7`), which is why it stays (§B.16). |
+| Does any surviving caller of `turnDoneFile`'s three exports rely on the defaulted `subDir`? | **No — but the ordering matters.** §27 passes it explicitly at `index.ts:545`/`:548` and `appLoopEngine.ts:537`. Three §26-chain sites do rely on the default (`index.ts:412`, `:572`, `:574`) and go with §B.15, so §B.2's edit follows §B.15 rather than preceding it. |
+| Is `decideConsolidateOutcome` consumed anywhere but the §26 chain? | **No.** `index.ts:85` (import) and `:714` (its one call). Nothing else in `src/` names it or its two types, which is what makes §B.1's Split boundary a clean cut. |
+| Does `humanNotes.ts` have wiring beyond the gate executor's port? | **No.** One import (`index.ts:99`) and one use (`index.ts:1372`, the `writeHumanNote` port on the gate-executor deps). §27 persists a request-changes reason on its own run-state instead. |
+| Is `userConfigSkillsDir` reached from anywhere but the `skills` destination? | **No.** `installExamples.ts:24` (import) and `:205` (the destination's `target`). Dead once that destination goes (§I.3). |
+| Is `runLegacy` reached from anywhere but `legacyPickupPorts.ts`? | **No.** Four call sites, all in `legacyPickupPorts.ts` (`:7`, `:17`, `:32`, `:59`). `run` and `CommandFailure` keep their §27 consumers (§B.13). |
