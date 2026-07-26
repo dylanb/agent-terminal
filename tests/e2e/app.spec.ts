@@ -1749,6 +1749,9 @@ function seedFakeGhGit(prefix: string): { binDir: string; logFile: string } {
     'if [ "$1" = "update-ref" ]; then case "$2" in refs/heads/*) echo "${2#refs/heads/}" > "$FAKE_GHGIT_LOG.local-branch"; echo "$3" > "$FAKE_GHGIT_LOG.local-oid"; exit 0;; esac; fi\n' +
     // The wipe deletes the local branch with the PORCELAIN `git branch -D` (only it knows git's full
     // "branch is in use" rule), and reads back the object it removed to re-establish the lease.
+    // Upstream is configured as the pair `git push -u` writes, not via --set-upstream-to, which resolves
+    // through the remote's fetch refspec and refuses on a single-branch clone.
+    'if [ "$1" = "config" ]; then case "$2" in branch.*.remote|branch.*.merge) echo "$2=$3" >> "$FAKE_GHGIT_LOG.upstream"; exit 0;; esac; fi\n' +
     'if [ "$1" = "branch" ] && [ "$2" = "-D" ]; then name=${!#}; rm -f "$FAKE_GHGIT_LOG.local-branch" "$FAKE_GHGIT_LOG.local-oid"; echo "Deleted branch $name (was 1111111111111111111111111111111111111111)."; exit 0; fi\n' +
     'if [ "$1" = "branch" ] && [ "$3" = "FETCH_HEAD" ]; then echo "$2" > "$FAKE_GHGIT_LOG.local-branch"; exit 0; fi\n' +
     'if [ "$1" = "branch" ]; then case "$2" in --set-upstream-to=*) echo "${2#--set-upstream-to=}" > "$FAKE_GHGIT_LOG.upstream"; exit 0;; esac; fi\n' +
@@ -4154,7 +4157,12 @@ test('entering a pickup-bearing §27 def bootstraps out-of-band into app-owned s
   expect(readIf(`${logFile}.local-branch`).trim()).toBe('plan-loop/issue-176');
   expect(readIf(`${logFile}.remote-branch`).trim()).toBe('plan-loop/issue-176');
   expect(readIf(`${logFile}.remote-oid`).trim()).toBe('1111111111111111111111111111111111111111');
-  expect(readIf(`${logFile}.upstream`).trim()).toBe('origin/plan-loop/issue-176');
+  expect(readIf(`${logFile}.upstream`)).toContain(
+    'branch.plan-loop/issue-176.remote=origin',
+  );
+  expect(readIf(`${logFile}.upstream`)).toContain(
+    'branch.plan-loop/issue-176.merge=refs/heads/plan-loop/issue-176',
+  );
   expect(readIf(`${logFile}.pr-created`).trim()).toBe('4242');
   // Assignment and labelling are best-effort work the session does AFTER persisting the identity and
   // entering work (§27.10), so they land after bootstrap.yaml rather than with it.

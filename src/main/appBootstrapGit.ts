@@ -554,8 +554,14 @@ export function createRealAppBootstrapGit(
         ['update-ref', `refs/remotes/origin/${branch}`, ownedOid],
         'branch upstream configuration failed',
       );
+      // The pair `git push -u` writes, set directly: `--set-upstream-to` resolves origin/<branch>
+      // through the remote's FETCH REFSPEC, so on a single-branch clone it refuses outright.
       await git(
-        ['branch', `--set-upstream-to=origin/${branch}`, branch],
+        ['config', `branch.${branch}.remote`, 'origin'],
+        'branch upstream configuration failed',
+      );
+      await git(
+        ['config', `branch.${branch}.merge`, `refs/heads/${branch}`],
         'branch upstream configuration failed',
       );
       return ownedOid;

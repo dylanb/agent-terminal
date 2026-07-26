@@ -834,6 +834,25 @@ describe('createRealAppBootstrapGit — owned remote-ref compensation', () => {
     expect(hasRef(repo, `refs/heads/${branch}`)).toBe(true);
   });
 
+  // main pushed with `git push -u`, which writes the tracking ref AND its config in one operation. The
+  // split writes the ref by hand and then asks `--set-upstream-to` to resolve it, which goes through the
+  // remote's FETCH REFSPEC — so on a single-branch clone the upstream step fails outright.
+  it('publishes a branch on a clone whose fetch refspec covers only the base', async () => {
+    runGit(repo, [
+      'config',
+      '--replace-all',
+      'remote.origin.fetch',
+      '+refs/heads/main:refs/remotes/origin/main',
+    ]);
+    const { port, ownedOid } = await createOwnedBranch();
+
+    await expect(port.pushBranchUpstream(branch, ownedOid)).resolves.toBe(ownedOid);
+    expect(runGit(repo, ['config', '--get', `branch.${branch}.remote`])).toBe('origin');
+    expect(runGit(repo, ['config', '--get', `branch.${branch}.merge`])).toBe(
+      `refs/heads/${branch}`,
+    );
+  });
+
   // Either lease refusing must leave BOTH halves intact: a wipe that destroys the origin branch and then
   // refuses the local one strands the operator in a state no UI action reaches (§27.10).
   it('refuses a moved local branch without destroying the remote half first', async () => {
