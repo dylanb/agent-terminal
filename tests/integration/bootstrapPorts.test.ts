@@ -804,6 +804,36 @@ describe('createRealAppBootstrapGit — owned remote-ref compensation', () => {
     expect(hasRef(repo, `refs/remotes/origin/${branch}`)).toBe(false);
   });
 
+  // No plumbing query expresses git's "branch is in use" rule: mid-rebase, `worktree list --porcelain`
+  // reports `detached` with no branch line and `for-each-ref %(worktreepath)` is empty, while
+  // `git branch -D` still refuses. The wipe must refuse the same, or it destroys a branch a rebase is
+  // actively rewriting.
+  it('refuses to delete a branch a rebase in progress is rewriting', async () => {
+    const port = createRealAppBootstrapGit(repo);
+    runGit(repo, ['checkout', '-q', '-b', branch, 'main']);
+    writeFileSync(join(repo, 'one.txt'), 'one\n');
+    runGit(repo, ['add', 'one.txt']);
+    runGit(repo, ['commit', '-m', 'one']);
+    writeFileSync(join(repo, 'two.txt'), 'two\n');
+    runGit(repo, ['add', 'two.txt']);
+    runGit(repo, ['commit', '-m', 'two']);
+    const state = await port.branchState(branch);
+    try {
+      execFileSync('git', ['rebase', '-i', '--exec', 'false', 'main'], {
+        cwd: repo,
+        env: { ...process.env, GIT_SEQUENCE_EDITOR: 'true' },
+        stdio: 'ignore',
+      });
+    } catch {
+      /* the --exec false stops the rebase mid-flight, which is the state under test */
+    }
+
+    await expect(port.deleteBranch(branch, state)).rejects.toThrow(
+      /local branch wipe failed/i,
+    );
+    expect(hasRef(repo, `refs/heads/${branch}`)).toBe(true);
+  });
+
   // Either lease refusing must leave BOTH halves intact: a wipe that destroys the origin branch and then
   // refuses the local one strands the operator in a state no UI action reaches (§27.10).
   it('refuses a moved local branch without destroying the remote half first', async () => {

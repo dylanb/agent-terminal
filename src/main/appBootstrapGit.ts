@@ -179,29 +179,6 @@ export function createRealAppBootstrapGit(
   // branch.<name> section; deleting through the URL-addressed isolated dir does neither, so both caches
   // outlive the branch. Keyed on the RESOURCE, not on which leg ran: every route that removes the branch
   // leaves neither behind. Cleanup only — it must never fail a step whose destructive half already landed.
-  // `git branch -D` — what the wipe used before the split — refuses a branch any worktree has checked
-  // out; `update-ref -d` does not, so without this the ref goes and the other worktree is left on a
-  // branch that no longer exists. repoDir's own checkout is handled by the detach arm below.
-  const heldByAnotherWorktree = async (branch: string): Promise<boolean> => {
-    const listed = await git(
-      ['worktree', 'list', '--porcelain'],
-      'local branch wipe failed',
-    );
-    let tree: string | null = null;
-    for (const line of listed.split('\n')) {
-      if (line.startsWith('worktree ')) tree = line.slice('worktree '.length).trim();
-      else if (line.trim() === `branch refs/heads/${branch}` && tree !== null) {
-        let resolved: string;
-        try {
-          resolved = realpathSync(tree);
-        } catch {
-          return true;
-        }
-        if (resolved !== expectedRepoRoot) return true;
-      }
-    }
-    return false;
-  };
   const forgetBranchCaches = async (branch: string): Promise<void> => {
     for (const args of [
       ['update-ref', '-d', `refs/remotes/origin/${branch}`],
@@ -292,11 +269,6 @@ export function createRealAppBootstrapGit(
       await assertSafeRepository();
       const localOid = state.localOid;
       if (localOid !== null) {
-        if (await heldByAnotherWorktree(branch)) {
-          throw new Error(
-            'local branch wipe failed: another worktree has the branch checked out',
-          );
-        }
         const current = (
           await git(
             ['rev-parse', '--verify', `refs/heads/${branch}`],
@@ -323,10 +295,24 @@ export function createRealAppBootstrapGit(
           await git(['checkout', '--detach', localOid], 'local branch wipe failed');
         }
         try {
-          await git(
-            ['update-ref', '-d', `refs/heads/${branch}`, localOid],
+          // The porcelain delete, not `update-ref -d`: only `git branch -D` knows git's full "branch is
+          // in use" rule — mid-rebase a worktree reports `detached` with no branch line and
+          // `for-each-ref %(worktreepath)` is empty, so no plumbing query can express it. It reports the
+          // object it removed, which re-establishes the lease `update-ref -d <oid>` gave atomically.
+          const deleted = await git(
+            ['branch', '-D', '--', branch],
             'local branch wipe failed',
           );
+          const was = /\(was ([0-9a-f]+)\)/.exec(deleted)?.[1] ?? '';
+          if (!localOid.startsWith(was) || was.length === 0) {
+            await git(
+              ['branch', '--no-track', '--', branch, was || localOid],
+              'local branch wipe failed',
+            );
+            throw new Error(
+              'local branch wipe failed: branch changed after the caller read its identity',
+            );
+          }
         } catch (e) {
           if (!movedHead) throw e;
           try {
