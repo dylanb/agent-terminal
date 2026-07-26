@@ -179,6 +179,30 @@ export function createRealAppBootstrapGit(
   // branch.<name> section; deleting through the URL-addressed isolated dir does neither, so both caches
   // outlive the branch. Keyed on the RESOURCE, not on which leg ran: every route that removes the branch
   // leaves neither behind. Cleanup only — it must never fail a step whose destructive half already landed.
+  // A cheap PRE-check so an in-use branch is refused before the remote half is destroyed. It is not the
+  // authority — `git branch -D` at the delete is, and it knows cases no query reports (mid-rebase a
+  // worktree prints `detached` with no branch line). This exists so the common case fails early rather
+  // than after an irreversible remote delete.
+  const branchLooksInUse = async (branch: string): Promise<boolean> => {
+    const listed = await git(
+      ['worktree', 'list', '--porcelain'],
+      'local branch wipe failed',
+    );
+    let tree: string | null = null;
+    for (const line of listed.split('\n')) {
+      if (line.startsWith('worktree ')) tree = line.slice('worktree '.length).trim();
+      else if (line.trim() === `branch refs/heads/${branch}` && tree !== null) {
+        let resolved: string;
+        try {
+          resolved = realpathSync(tree);
+        } catch {
+          return true;
+        }
+        if (resolved !== expectedRepoRoot) return true;
+      }
+    }
+    return false;
+  };
   const forgetBranchCaches = async (branch: string): Promise<void> => {
     for (const args of [
       ['update-ref', '-d', `refs/remotes/origin/${branch}`],
@@ -278,6 +302,11 @@ export function createRealAppBootstrapGit(
         if (current !== localOid) {
           throw new Error(
             'local branch wipe failed: branch changed after the caller read its identity',
+          );
+        }
+        if (await branchLooksInUse(branch)) {
+          throw new Error(
+            'local branch wipe failed: another worktree has the branch checked out',
           );
         }
       }

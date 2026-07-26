@@ -853,6 +853,26 @@ describe('createRealAppBootstrapGit — owned remote-ref compensation', () => {
     );
   });
 
+  // BOTH halves present, which the other refusal tests lack: an in-use refusal that only fires at the
+  // local delete arrives after the remote half is already gone, so the operator is left with a
+  // half-wiped state. The refusal has to reach them before anything is destroyed.
+  it('refuses a worktree-held branch before the remote half is destroyed', async () => {
+    const port = createRealAppBootstrapGit(repo);
+    const main = runGit(remote, ['rev-parse', 'refs/heads/main']);
+    runGit(remote, ['update-ref', `refs/heads/${branch}`, main]);
+    runGit(repo, ['branch', branch, 'main']);
+    const otherTree = join(root, 'held-worktree');
+    runGit(repo, ['worktree', 'add', otherTree, branch]);
+    const state = await port.branchState(branch);
+    expect(state.remoteOid).not.toBeNull();
+
+    await expect(port.deleteBranch(branch, state)).rejects.toThrow(
+      /local branch wipe failed/i,
+    );
+    expect(hasRef(remote, `refs/heads/${branch}`)).toBe(true);
+    expect(hasRef(repo, `refs/heads/${branch}`)).toBe(true);
+  });
+
   // Either lease refusing must leave BOTH halves intact: a wipe that destroys the origin branch and then
   // refuses the local one strands the operator in a state no UI action reaches (§27.10).
   it('refuses a moved local branch without destroying the remote half first', async () => {
