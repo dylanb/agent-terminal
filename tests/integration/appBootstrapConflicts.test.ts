@@ -112,6 +112,55 @@ describe('real app bootstrap conflict adapter (§27.10)', () => {
     expect(existsSync(marker)).toBe(false);
   });
 
+  // §27.10's residue taxonomy is normative (the chart's RB edges), and it has been re-partitioned five
+  // times because nothing could falsify it. This binds the edge that claims what survives when the wipe
+  // fails AFTER a delete landed: no test reached that state before — wipe()'s other cases refuse first.
+  it('leaves the landed deletes and a detached checkout when a later close fails', async () => {
+    const { repo, bin, remote } = seedRepo('bootstrap-conflict-residue');
+    writeFileSync(
+      join(bin, 'gh'),
+      '#!/usr/bin/env bash\n' +
+        'if [ "$1" = "repo" ]; then printf \'%s\\n\' \'{"nameWithOwner":"Owner/Repository","url":"https://github.com/Owner/Repository","defaultBranchRef":{"name":"main"}}\'; exit 0; fi\n' +
+        'if [ "$1" = "pr" ] && [ "$2" = "list" ]; then printf \'%s\\n\' \'[{"number":42,"url":"https://github.com/Owner/Repository/pull/42","headRefOid":"3333333333333333333333333333333333333333","isCrossRepository":false,"headRepository":{"name":"Repository"},"headRepositoryOwner":{"login":"Owner"}}]\'; exit 0; fi\n' +
+        'if [ "$1" = "pr" ] && [ "$2" = "view" ]; then printf \'%s\\n\' \'{"number":42,"url":"https://github.com/Owner/Repository/pull/42","state":"OPEN","headRefOid":"3333333333333333333333333333333333333333","isCrossRepository":false,"headRefName":"plan-loop/issue-78","headRepository":{"name":"Repository"},"headRepositoryOwner":{"login":"Owner"}}\'; exit 0; fi\n' +
+        'if [ "$1" = "pr" ] && [ "$2" = "close" ]; then exit 1; fi\n' +
+        'exit 1\n',
+      { mode: 0o755 },
+    );
+    process.env.PATH = `${bin}:${originalPath ?? ''}`;
+    const git = (args: string[]): string =>
+      execFileSync('git', args, { cwd: repo, encoding: 'utf8' }).trim();
+    git(['config', 'user.email', 'residue@example.test']);
+    git(['config', 'user.name', 'Residue']);
+    writeFileSync(join(repo, 'seed.txt'), 'seed\n');
+    git(['add', 'seed.txt']);
+    git(['commit', '-m', 'seed']);
+    git(['branch', '-M', 'main']);
+    git(['checkout', '-b', 'plan-loop/issue-78']);
+    const ports = createRealAppBootstrapPorts(repo);
+    await redirectOriginToLocal('bootstrap-conflict-residue', remote, ports);
+    git(['push', `file://${remote}`, 'HEAD:refs/heads/plan-loop/issue-78']);
+    const target = await ports.conflicts.inspect('plan-loop/issue-78');
+    expect(target.localOid).not.toBeNull();
+    expect(target.pullRequests).toContain(42);
+
+    await expect(ports.conflicts.wipe(target)).rejects.toThrow();
+
+    // Exactly the residue the chart's post-delete edge promises: the deletes stand, and the operator is
+    // left on a detached HEAD because the wipe detaches before deleting and only restores on failure.
+    const refPresent = (cwd: string, ref: string): boolean => {
+      try {
+        execFileSync('git', ['show-ref', '--verify', '--quiet', ref], { cwd, stdio: 'ignore' });
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    expect(refPresent(repo, 'refs/heads/plan-loop/issue-78')).toBe(false);
+    expect(refPresent(remote, 'refs/heads/plan-loop/issue-78')).toBe(false);
+    expect(git(['rev-parse', '--abbrev-ref', 'HEAD'])).toBe('HEAD');
+  });
+
   // The operator authorizes a specific set of resources; a PR that opens between the confirmation and the
   // wipe was never on that list, so the wipe must refuse rather than widen itself.
   it('refuses to wipe when a pull request appears after the operator confirmed', async () => {

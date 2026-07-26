@@ -314,6 +314,7 @@ export function createRealAppBootstrapGit(
         const wipeUrl = await approvedOriginUrl('push');
         await remoteOp('remote branch wipe failed', async (r) =>
           r.deleteRef(wipeUrl, `refs/heads/${branch}`, remoteOid));
+        await forgetBranchCaches(branch);
       }
       if (localOid !== null) {
         const checkout = await currentCheckout();
@@ -337,8 +338,8 @@ export function createRealAppBootstrapGit(
           }
           throw e;
         }
+        await forgetBranchCaches(branch);
       }
-      await forgetBranchCaches(branch);
     },
     rollbackCreatedBranch: async (branch, ownedOid) => {
       await assertSafeRepository();

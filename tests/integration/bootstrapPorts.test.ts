@@ -788,6 +788,22 @@ describe('createRealAppBootstrapGit — owned remote-ref compensation', () => {
     expect(hasRef(repo, `refs/heads/${branch}`)).toBe(true);
   });
 
+  // The cleanup has to run with the act that makes it true, not once at the end: a wipe whose remote
+  // delete lands and whose local leg then fails must still not leave a tracking ref for a branch that
+  // is gone from origin. Moving it to a single tail call regressed exactly this.
+  it('clears the tracking ref when the remote delete lands and the local leg then fails', async () => {
+    const { port, pushedOid } = await createPushedOwnedBranch();
+    expect(hasRef(repo, `refs/remotes/origin/${branch}`)).toBe(true);
+    writeFileSync(join(repo, '.git', 'refs', 'heads', `${branch}.lock`), '');
+
+    await expect(
+      port.deleteBranch(branch, { localOid: pushedOid, remoteOid: pushedOid }),
+    ).rejects.toThrow(/local branch wipe failed/i);
+
+    expect(hasRef(remote, `refs/heads/${branch}`)).toBe(false);
+    expect(hasRef(repo, `refs/remotes/origin/${branch}`)).toBe(false);
+  });
+
   // Either lease refusing must leave BOTH halves intact: a wipe that destroys the origin branch and then
   // refuses the local one strands the operator in a state no UI action reaches (§27.10).
   it('refuses a moved local branch without destroying the remote half first', async () => {
