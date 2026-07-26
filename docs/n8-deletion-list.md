@@ -606,7 +606,34 @@ listed in §B. That set is derived, not guessed: it is what the graph reports.
 
 ---
 
-# K. Checked and cleared
+# K. Review status — one mandated step did not complete
+
+**The ticket's devil's-advocate subagent pass did not return.** #98 requires: *"Before presenting it, the
+impl agent spawns a devil's-advocate subagent to review the list against this ticket and the plan,
+evaluates its findings, and addresses the valid ones."* The subagent was spawned against this list, the
+ticket and the plan, and was asked twice for partial findings; it had produced nothing by the end of the
+iteration. **No finding from it has been incorporated, because none was received.** This is recorded here
+rather than left for the operator to discover.
+
+What stands in its place is an adversarial pass run directly against the tree while the subagent worked. It
+is **not** a substitute — one reviewer, not two — but it was not nothing: it found five defects in the
+list's first draft, three of them the exact class the ticket calls load-bearing.
+
+| found by the self-pass | class |
+|---|---|
+| `src/shared/loopTurn.ts` filed Scrub when `AGENT_LOOP_DONE_REL_PATH` is a live default parameter | AC 3 — a scrub that would have changed behavior |
+| `tests/integration/appBootstrapCommand.test.ts` and `tests/helpers/loopGate.ts` filed Scrub while importing deleted symbols | AC 3, same class |
+| `tests/integration/loopNotifier.test.ts` — surviving subject, deleted fixtures, zero §26 citations | AC 2 — the trap the grep cannot see |
+| `flow:markTurnComplete` / `flow:retryTurn` left as "verify at implementation time" | an unclosed hole in an agreed list |
+| seven surviving zero-citation files carrying retiring surface (§I.2) | AC 1's reach |
+
+**Recommended:** re-run the devil's-advocate pass against this list before agreeing to it. The list is
+complete enough to review, and the operator's own review is the gate that matters — but the ticket asked
+for two adversarial passes and got one.
+
+---
+
+# L. Checked and cleared
 
 Recorded so the operator knows what was verified, not only what failed. Each was a plausible
 mis-classification that a reader would reasonably challenge; each was checked against the tree.
