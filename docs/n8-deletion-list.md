@@ -215,6 +215,7 @@ Every entry names the subject from §A whose deletion accounts for it (AC 2).
 | `tests/unit/agentLoopBridge.test.ts` | 0 | `agentLoopBridge.ts` — **invisible to the grep** |
 | `tests/unit/exampleSkills.test.ts` | 1 | `exampleSkills.ts` (§I.1) |
 | `tests/unit/wireBootstrapConflict.test.ts` | 2 | `wireBootstrapConflict.ts` (§A.3) — **re-classified out of §D.3** |
+| `tests/unit/flowLoop.test.ts` | 4 | `deriveLoopView` + `classifyHumanNeeded` (§B.3). **Re-classified out of §D.2 in this revision:** the file has exactly two `describe` blocks — `deriveLoopView (§24.2.3 T2)` at `:41` and `classifyHumanNeeded (§24.2.3 T4)` at `:169` — and both subjects go. It imports `AgentLoopState` (`:4`), `LoopDef` (`:5`) and `mkGate` (`:7`), all deleted, and cites §27 nowhere, so its former §D.2 row ("goes: §26 provider paths / stays: §27 provider paths") described content the file does not contain. The surviving predicate is already covered by `tests/unit/loopStatusShared.test.ts`, so no coverage is lost. |
 | `tests/helpers/loopGate.ts` | 1 | `loopDef.ts`'s `LoopGate`. **Re-classified: delete whole.** Its sole export `mkGate` returns a §26.6 `LoopGate` and it builds **no** `FlowLoopView` fixture; its only two importers are `tests/unit/flowMachine.test.ts:7` and `tests/unit/flowLoop.test.ts:7`, both of which lose their §26 fixture code under §D.2. Nothing in it survives. |
 
 **No surviving subject loses its test, and no surviving assertion is weakened.** Where a test file mixes
@@ -256,12 +257,21 @@ The §27 engine imports `createTurnRunner`, `TurnRunner` and `HostedAgentState` 
 ### B.3 `src/main/flow.ts` (21)
 
 - **Goes:** `import type { AgentLoopState }` and `import { gateForStatus, type LoopDef }`; the
-  `FlowReadLoop` / `FlowReadLoopDef` ports and their `readLoopState` / `readLoopDef` deps; `deriveLoopView`
-  (`:50`–`:60`, the §26 mirror fold); the `legacyLoopName` selector (the §26 gate-decision write half's
-  engine selector); the `cost` readout member and the `startedAt` stamping that fed the cost meter's sweep
-  window (AC 9 — the readout goes). `classifyHumanNeeded`'s gate-driven branch collapses to the shared
-  `isHumanNeededStatus` predicate. `computeRefs`' fallback onto the mirror's `linkedIssues` / `pr`
-  (`:394`) goes with the bridge — recorded in §F as a removed capability, not as an incidental edit.
+  `FlowReadLoop` / `FlowReadLoopDef` ports and their `readLoopState` / `readLoopDef` deps;
+  **`deriveLoopView` in full** (`:50`–`:80`) — its second parameter is `AgentLoopState | null` and its third
+  is `LoopDef | null`, both deleted types, and its body calls the deleted `gateForStatus` at `:57` and `:60`,
+  so nothing in it can be kept; its only production caller is the §26 provider path at `:434`, and the
+  **surviving `FlowLoopView` producer is `deriveAppLoopView` (`loopViewV2.ts:28`)**. Also the whole cost
+  port — `FlowReadLoopCost` (`:280`), the `readLoopCost` parameter (`:296`), the dep (`:578`) and its
+  plumbing (`:607`) — with the `cost` readout member and the `startedAt` stamping that fed the cost meter's
+  sweep window (AC 9 — the readout goes); and `legacyLoopNameForStep` (`:119`, the §26 gate-decision write
+  half's engine selector — **named exactly**, an earlier draft called it `legacyLoopName`).
+  **`classifyHumanNeeded` (`:26`) goes too, rather than surviving with a changed signature:** its second
+  parameter is the deleted `LoopDef`, and with it always absent the function reduces to
+  `if (!loopDef) return isHumanNeededStatus(status)` — it *is* the shared predicate, so its callers use that
+  directly. `tests/unit/loopStatusShared.test.ts` already covers the predicate, so no coverage is lost.
+  `computeRefs`' fallback onto the mirror's `linkedIssues` / `pr` (`:394`) goes with the bridge — recorded in
+  §F as a removed capability, not as an incidental edit.
 - **Stays:** everything else, including `FlowLoopView` production and the whole flow state machine.
 - **Changes (AC 4, new behavior, own tests):** `loop_namespace` parsing — absence resolves to the
   surviving engine; `legacy` parses and marks the binding as **naming no surviving engine**; every other
@@ -381,9 +391,13 @@ Every §27 widening was additive, so what goes is the surface only the retired e
 
 - **Goes:** `FlowLoopView.cost` (with its only producer — AC 9); `flow:gateDecision` and its
   `GateDecisionRequest` (the §26 decision channel); `flow:markTurnComplete` and `flow:retryTurn`;
-  `flow:onBootstrapConflict` / `flow:resolveBootstrapConflict` with `FlowBootstrapConflictMsg`
-  (`:645`–`:658`) and the matching `FlowApi.onBootstrapConflict` / `resolveBootstrapConflict` members
-  (`:1080`, `:1083`) — the §26.9 pair whose only producer is `index.ts:921`/`:953`; the
+  the §26.9 bootstrap-conflict pair **in full**: the channel names `flow:onBootstrapConflict` /
+  `flow:resolveBootstrapConflict` (`:58`–`:59`), their channel-map entry (`:368`), **both** message types —
+  `FlowBootstrapConflictMsg` (`:649`) and `FlowResolveBootstrapConflictMsg` (`:662`) — and the matching
+  `FlowApi.onBootstrapConflict` / `resolveBootstrapConflict` members (`:1080`, `:1083`). Its only producer is
+  `index.ts:918`–`:923` (the `case 'conflict'` arm of `firePickup`'s `decidePickupAction` result) and its only
+  consumer `index.ts:953`–`:963`, both dying with `loopPickup.ts`; §27's independent pair is `:60`–`:61`,
+  `:669`, `:676`. Also the
   `loops` and `skills` members of `INSTALL_DESTINATION_IDS` (`:877`–`:883`, five → three); and the
   `state.yaml linked_issues` / `pr` fallback half of the `FlowRefs` doc-comment at `:513`–`:519`.
 - **Stays, checked not assumed:** `flow:onBootstrapError` (`:622`) is **shared** — `index.ts:1149` is its
@@ -435,6 +449,11 @@ Its labels are text an operator reads, so AC 3's behavior-preserving rule does n
   §B.7 deleting `flow:retryTurn` — `deps.retryTurn` would be permanently `undefined` and `syncRetry`'s
   guard could never pass. What stays is `syncAppRouteOut`'s **Retry** at `:183`–`:205`, which is a
   different control on a different channel.
+- **Also goes: the `[data-loop-retry]` term in `focusDecision`'s selector** (`:566`). It is the middle of
+  three, so the query still resolves — which is exactly why a stale term here is invisible: it silently
+  never matches instead of failing. `[data-gate-option]` and `[data-app-route-out]` stay, and
+  `[data-loop-close]` remains the fallback, so the §22.3.1 alert→panel→focus contract (WCAG 2.4.3) is
+  unchanged.
 - **Stays:** the gate-options row, the error/reason row, the live region, `syncAppRouteOut`, `syncCatalog`,
   `syncArmInterrupt`.
 - **AC 4's route out for a marked binding is on the flow strip, and that is stated rather than implied.** A
@@ -462,8 +481,13 @@ Its labels are text an operator reads, so AC 3's behavior-preserving rule does n
 
 - **Goes:** the §26.10 cost node — both its value (`:188`–`:196`) and its **structural presence**
   (`:138`–`:140`; AC 9: no surface may be left asserting the strip carries a running cost) — and the three
-  retired `FlowStripDeps` `Omit` keys at `:79`–`:81` (`markTurnComplete`, `gateDecision`, `retryTurn`) with
-  the doc-comment at `:66` that cites §26.3/D47a c and §26.3/D48 for methods that will no longer exist.
+  **five** retired `FlowStripDeps` `Omit` keys — `markTurnComplete`, `gateDecision`, `retryTurn` (`:79`–`:81`)
+  **and `onBootstrapConflict` / `resolveBootstrapConflict` (`:73`–`:74`)** — with the doc-comment at
+  `:61`–`:67` that names `markTurnComplete` (§26.3/D47a c) and `retryTurn` (§26.3/D48) for methods that will
+  no longer exist. And `src/renderer/src/styles.css:302`
+  (`.flowstrip .loopstat .loop-cost { … }`), whose only consumer is the cost node at `:189`–`:196`: dead CSS
+  the moment the node goes, and `styles.css`'s own two §26 citations are at `:124` and `:163`, so AC 1's grep
+  never lands on `:302`.
 - **Corrected:** an earlier draft named "the `formatCost` import from the deleted `pricing.ts`". There is no
   such import — the strip consumes the already-formatted `loop.cost` **string** off `FlowLoopView`
   (`:140`, `:189`–`:196`), and the real `formatCost` call site is `src/main/index.ts:1043` (§B.15).
@@ -483,8 +507,14 @@ Its labels are text an operator reads, so AC 3's behavior-preserving rule does n
 
 ### B.12 `src/main/userConfig.ts` (3)
 
-- **Goes:** `userConfigSkillsDir` (dead once the `skills` destination goes); the "the origin §26.6 grants
-  `exec` authority on" sentence.
+- **Three citations, three different dispositions — enumerated because they do not share one:**
+  - `:1` (header, "§24.2.3, §26.10 … and by the cost meter's session logs") — **rewritten**: the cost
+    meter's session logs stop being a consumer of this root.
+  - `:18` ("the origin §26.6 grants `exec` authority on") — **removed** with `userConfigSkillsDir`.
+  - `:47`, on the **surviving** `userConfigLoopsV2Dir` ("a sibling of the §26 `loops` dir") — **rewritten,
+    not removed.** That sibling relationship is precisely what §H.4's retained presence-check anchor rests
+    on, so the sentence has to say it without citing the deleted section.
+- **Goes:** `userConfigSkillsDir` (dead once the `skills` destination goes).
 - **Stays:** `userConfigLoopsDir` — **retained deliberately** as AC 5's presence-check anchor (§H.4);
   `userConfigLoopsV2Dir`, `userConfigCommandsDir`, the root resolver.
 
@@ -493,11 +523,17 @@ Its labels are text an operator reads, so AC 3's behavior-preserving rule does n
 - **Goes:** `runLegacy` — dead once `legacyPickupPorts.ts` goes (**invisible to the grep**; §I.3).
 - **Stays:** `run`, `CommandFailure`.
 
-### B.14 `src/main/auditRecorder.ts` (2) + `src/shared/audit.ts` (5) — writer half only
+### B.14 `src/main/auditRecorder.ts` (2) — the writer half
 
-- **Goes:** `recordCost` / `recordCi` and the `loop.cost` / `loop.ci` **emitters**, with their
-  `CostResult` / `CiSnapshot` imports.
+- **Goes:** `recordCost` (`:205`) / `recordCi` (`:213`) and the `loop.cost` / `loop.ci` **emitters**, with
+  their `CostResult` / `CiSnapshot` imports (`:26`–`:27`).
 - **Stays:** the `loop.cost` and `loop.ci` **union members** and the reader's fold of them — see §H.1.
+- **`src/shared/audit.ts` (5) is Scrub, not Split, and is listed in §C.** Re-classified in this revision:
+  all five of its §26 lines are comments — `:40` and `:42` (union-member docs), `:213` and `:215`
+  (`RunTimeline` field docs), `:348` (a `§26 D48` reference inside the surviving `gateDecisionAuditCmd`
+  doc) — and both the union members (`:41`, `:44`) and the reader's fold (`:290`–`:295`) stay under §H.1.
+  Nothing in the module's behavior changes, which is the definition of the scrub class. Pairing it with
+  `auditRecorder.ts` under one Split heading implied otherwise.
   `recordLoopStatus` stays and is fed by the surviving view provider, so the §25 `loop.status` record is
   not a casualty (§D.2a).
 
@@ -596,7 +632,9 @@ state — see §H.3. The array's membership is unchanged.
 
 `exampleSkills.ts` is **not** here — it is deleted (§I.1). Bare pointer only; the prescription is there.
 
-**`src/shared`:** `loopGate.ts` (2), `loopStatus.ts` (1), `loopActivity.ts` (1).
+**`src/shared`:** `loopGate.ts` (2), `loopStatus.ts` (1), `loopActivity.ts` (1), `audit.ts` (5 — all five
+citations are comments; the union members and the reader's fold stay under §H.1, so nothing behavioural
+changes. **Re-classified out of §B.14** in this revision).
 `loopTurn.ts` (4) was initially filed here and **re-classified Split** on inspection — see §B.16. It is the
 worked example of why a §26 header is evidence and not proof, in the direction AC 3 forbids: its §26
 content is a live exported constant, not a citation, so scrubbing it would have changed behavior.
@@ -649,7 +687,6 @@ See §A.5. Every entry names its subject.
 | `tests/unit/loopNamespace.test.ts` | 4 | the two-member set | the narrowed set + the "names no surviving engine" classification |
 | `tests/unit/audit.test.ts` | 4 | the cost/CI **emitter** tests | the **reader** fold of `loop.cost` / `loop.ci` — retitled as historical-record tolerance (§H.1), **kept and strengthened** with the no-surviving-emitter assertion |
 | `tests/unit/flowMachine.test.ts` | 4 | §26 loop-state wiring; its `mkGate` import (§A.5) | flow machine behavior |
-| `tests/unit/flowLoop.test.ts` | 4 | §26 provider paths; its `mkGate` import (§A.5) | §27 provider paths |
 | `tests/integration/installExamples.test.ts` | 4 | `loops` / `skills` destination assertions | `flow` / `appLoops` / `commands` |
 | `tests/unit/installDestinations.test.ts` | 1 | `loops` / `skills` target pins | the narrowed id set |
 | `tests/unit/userConfig.test.ts` | 0 | `userConfigSkillsDir` pins | `userConfigLoopsDir` pin **kept** (§H.4) |
@@ -657,7 +694,7 @@ See §A.5. Every entry names its subject.
 | `tests/unit/exampleAssetsBuild.test.ts` | 2 | `copyExampleLoops` + collision-guard pins | the surviving copies |
 | `tests/unit/ipcValidation.test.ts` | 3 | the `flow:gateDecision` validator tests (incl. `:315`) and the `flow:resolveBootstrapConflict` validator tests | every §27 validator, **including `:219` and `:267`** — the `GATE_DECISION_OPTIONS` cases, whose subject survives (§B.8) |
 | `tests/unit/flowStrip.test.ts` | 2 | the cost-node presence test | the strip's surviving nodes; **new**: the flow-error sink sanitizes through the shared strip (§B.3) |
-| `tests/unit/installExamplesView.test.ts` | 1 | the `loops` / `skills` rows of its destination fixtures (`:30`–`:34`, `:129`–`:158`) and the report-group assertion for `loops` at `:157` | every other view behavior. **Re-classified out of §D.3**: the fixtures enumerate the destination id set, so the edit is not confined to prose (§B.19) |
+| `tests/unit/installExamplesView.test.ts` | 1 | the `loops` / `skills` rows of its destination fixtures (`:30`–`:34`, `:129`–`:158`), the report-group assertion for `loops` at `:157`, and the removed ids in the contract-order test at `:311`/`:314`/`:321` (`expect(order).toEqual(['flow','appLoops','loops','skills','commands'])`) | every other view behavior, and **two WCAG pins RE-ANCHORED on `appLoops`/`commands`, never deleted** — `:324` "exposes the consent options as a NAMED group (WAI-ARIA group; WCAG 1.3.1)", whose fixtures are `openConsent(['loops','skills'])` at `:327` and a loop at `:337` over `['loops','skills'] as InstallDestinationId[]`, where **the `as` cast means `tsc` stays green after the union narrows** so nothing but this row catches it; and `:342` "keeps the conflicting file list out of a consent checkbox's accessible name (accname 1.2, WCAG 4.1.2)", whose only fixture is `openConsent(['loops'])` at `:346` asserting `'Legacy loop definitions'` at `:351` while its subject (the checkbox's accessible name) survives — deleting it is the AC 2 defect shape exactly. **Re-classified out of §D.3**: the fixtures enumerate the destination id set, so the edit is not confined to prose (§B.19) |
 | `tests/unit/flowInputModal.test.ts` | 2 | the `'§26.9'` rendered-text assertion at `:38` | `:231`'s `aria-describedby` pin, **re-asserted against the rewritten help text** (§B.17). **Re-classified out of §D.3** |
 | `tests/integration/flowState.test.ts` | 1 | — | **strengthened**: a pre-sweep document survives a `setTitle` round-trip (§H.2) |
 | `tests/integration/appBootstrapCommand.test.ts` | 3 | the `runLegacy` tests (§I.3) | the `run` / `CommandFailure` tests |
@@ -734,15 +771,33 @@ the orphan walk points at it, and every one of them would pass a careless "it wa
 | 6315 | a loop step shows a Loop read-out that expands a docked state-mirror panel, live; advancing early warns (§24.2.3 T2) | the read-out, the docked panel and the §19.2 not-ready warning are engine-neutral; re-driven from a §27 run-state |
 | 6405 | the reveal signal lands the user on the loop read-out, from another view and from viewer-fullscreen (§24.2.3 T4) | engine-neutral; re-driven from a §27 run-state |
 
+**Two surviving §27 tests carry a §26 NEGATIVE in their title and assertions, and need an explicit call.**
+Both subjects survive; both assert that a §27 step writes no `.agent-loop/state.yaml`. Silently dropping the
+negative is AC 2's "weakened assertion" shape, so the disposition is stated: **the assertion is retained**,
+re-worded from "leaving §26 untouched" / "never §26 state" to "creates no `.agent-loop/state.yaml`" — still
+meaningful after the sweep, because §F item 2 makes *nothing* in the app write that file, so a regression
+that started writing it would be a real defect.
+
+| line | test |
+|---:|---|
+| 3863 | a §27 app step runs work → review-and-fix → CONSOLIDATE → the clean gate, **leaving §26 untouched** |
+| 4112 | entering a pickup-bearing §27 def bootstraps out-of-band into app-owned state, **never §26 state** or terminal injection |
+
 **Narrowed, not deleted (1 test).** `:2413` *"installing the bundled examples seeds the flow, app and legacy
 loop definitions, skills and commands"* — its subject (the install action) survives; the assertion narrows
 to flow + app + commands and the title loses "legacy … skills".
 
 **Scrub (1 test).** `:299` *"the CMD-3 Todos/Review-gate view is gone"* — one prose citation, no fixture.
 
-**Accounting:** 39 deleted + 9 re-expressed + 1 narrowed + 1 scrubbed = 50 of the 177 tests touched; 127
-untouched. The three sets are closed: every test the sweep removes appears in the first table with a named
-subject, and every test whose fixture the sweep breaks appears in the second.
+**Accounting:** 39 deleted + 9 re-expressed + 2 negative-retained + 1 narrowed + 1 scrubbed = 52 of the
+**177** top-level `test(` blocks touched; 125 untouched. (`grep -cE '^[[:space:]]*(it|test)(\.[a-z]+)?\('`
+also returns 177 — the file has no nested `it(`, so there is no second count to reconcile.)
+
+**Cross-check against the citation, which reaches the same boundary from the other side:**
+`grep -cE '^test\(.*§26'` returns **42** titles citing §26, and 42 = the 39 deleted + the 2 §27 negatives
+above + the 1 narrowed install test. Nothing is left over and no deleted test is missing from the first
+table. The two counts are independent — one is built from fixture helpers, the other from title text — so
+their agreeing is worth more than either alone.
 
 **@ownapp tagging.** CLAUDE.md makes this a correctness rule (a stranded boot is a worker-teardown timeout
 that belongs to no test, which `retries` cannot absorb), pinned by the canary at `app.spec.ts:160`. Of AC 6's
@@ -898,6 +953,7 @@ correction; `:238` was carved out of the `:231` row.)
 | `CODE-STANDARDS.md:260` (`error` status + retry, §26.3/D48) | §27.12 |
 | `CODE-STANDARDS.md:354` ("reviewable … by the §26 persona fan-out") | **§27.4** (*Reviewers pull; the engine never pushes*) — a present-tense claim about how review works now, and the concept survives. **This row was stranded outside every table before the correction, and §E is the criterion's evidence.** |
 | `electron-builder.yml:19` (`§18.1/§23.4/§26.5`) | §18.1/§23.4/§27.8, **and** the `example/loops` entry is removed from the shipped files list (§A.4) |
+| `electron.vite.config.ts:5`, `:23` (**0** citing lines) | **not a citation at all — a live call to a function the sweep deletes.** `:5` imports `copyExampleLoops` from `./src/main/exampleAssetsBuild` and `:23` calls it; §B.11 removes the function. Both the import term and the call go (`copyExampleCommands`, `copyExampleFlow`, `copyExampleLoopsV2` and the `:24` call stay). Zero §26 citations and outside `src/`/`tests/`, so **neither AC 1's grep nor a citation-driven §E could reach it** — §G's sixth class in a build config. Listed here because §E is the only table that reaches outside `src/`/`tests/`. |
 | `design/shell/tokens.css:69` (`§26` loop-mechanics activity) | §27.11 |
 
 ### E.4 Left standing as history — not rewritten
@@ -1001,13 +1057,24 @@ AC 1 passing is evidence for **none** of these; each carries its own test (§D.4
 citing §26 zero times.** Neither the grep nor the orphan walk reaches it, because the file survives and
 cites nothing. It spans three roots, not one:
 
-- **`src/`** — `src/preload/index.ts`, `src/renderer/src/index.ts`, `src/main/artifactTree.ts` (§I.2), plus
-  `FlowStripDeps`'s three retired `Omit` keys, which `tsc` cannot check either (§B.10).
+- **`src/`** — `src/preload/index.ts`, `src/renderer/src/index.ts`, `src/main/artifactTree.ts` (§I.2);
+  `FlowStripDeps`'s five retired `Omit` keys and `styles.css:302`'s `.loop-cost` rule (§B.10); the
+  `[data-loop-retry]` term in `focusDecision`'s selector, which silently never matches rather than failing
+  (§B.9); and `bootstrapPorts.ts`'s three §26-only interfaces, which the orphan walk cannot see either
+  because the module survives (§I.3).
 - **`tests/`** — five unit/integration files plus `tests/e2e/statusBar.spec.ts` and nine tests inside
   `tests/e2e/app.spec.ts` (§I.2, §D.2, §D.2a).
-- **`docs/`** — `docs/spec/18-…:8`/`:15` ("five destinations"), `docs/spec/19-…:5` and `docs/spec/17-…:13`
-  (the present-tense `state.yaml` ownership contract), and the two `docs/spec/24-…` data-flow diagrams
-  (§E.2). §E was built by grepping for §26, so none of these could surface that way.
+- **`docs/` and the build config** — `docs/spec/18-…:8`/`:15` ("five destinations"), `docs/spec/19-…:5` and
+  `docs/spec/17-…:13` (the present-tense `state.yaml` ownership contract), the two `docs/spec/24-…` data-flow
+  diagrams, `docs/spec/27-…:238`'s running-cost claim, the spec table-of-contents row at
+  `terminal-web-ui-spec.md:37` (it cites §27), and **`electron.vite.config.ts:5`/`:23`, which is not a
+  citation at all but a live call to a function §B.11 deletes** (§E.1–§E.3). §E was built by grepping for
+  §26, so none of these could surface that way.
+
+The two `Omit`-key and `as`-cast cases are worth separating out, because they defeat the *type checker* as
+well: TypeScript constrains `Omit<T, K>`'s `K extends keyof any`, not `keyof T`, so a stale key compiles
+clean (§B.10), and a `['loops','skills'] as InstallDestinationId[]` cast in a test keeps compiling after the
+union narrows (§D.2). "`tsc` is green" is evidence for neither.
 
 The only mechanism that reaches all three is **asking by retiring surface name** — every
 `INSTALL_DESTINATION_IDS` member, channel name, `FlowLoopView` field, `FlowApi` member and def-tier the
@@ -1052,6 +1119,14 @@ document from a run that stamped it, not literally every document. The operator 
 rename the worktree, recoverable only by hand-editing the file — surfaced, not silent, and unrecoverable
 through the UI (CWE-754; CLAUDE.md "never allow an unrecoverable state to occur"). The format carries no
 version and is never migrated.
+
+**The tolerance window is bounded, and saying so is part of the justification.** Once §B.3 removes the
+`startedAt` threading, the first post-sweep flow transition rewrites the document through `write()`, which
+omits the key when `startedAt` is unset — so the member is dropped from that document at its next
+transition. The retention therefore covers exactly the interval between the sweep landing and a repo's next
+flow transition, which is when `writeTitle` would otherwise throw on a document written by the old build.
+That is a real interval on every repo an operator already has a flow in, and it is not open-ended; framing it
+as indefinite tolerance would overclaim.
 
 **Pin (a write exercise, not a read one):** write a pre-sweep `flow-state.yaml` carrying `started_at` plus
 step/status/inputs, then assert `setTitle('x')` **succeeds** and the re-persisted document still carries
@@ -1188,6 +1263,12 @@ Not orphan modules, so neither the walk nor the grep sees them; caught by the fi
 
 - `runLegacy` in `src/main/appBootstrapCommand.ts` — only `legacyPickupPorts.ts` called it.
 - `userConfigSkillsDir` in `src/main/userConfig.ts` — only the `skills` destination used it.
+- **`BootstrapGit` (`:8`–`:15`), `BootstrapBranchWiper` (`:47`–`:49`) and `BootstrapGitHub` (`:56`–`:62`) in
+  `src/main/bootstrapPorts.ts`** — imported only by `loopPickup.ts:15`–`:18` and `legacyPickupPorts.ts:4`,
+  both deleted. The module itself **survives** (its `App*` ports back the §27 bootstrap) and it carries
+  **zero** §26 citations, so it is invisible to the grep *and* to the orphan walk: the only question that
+  reaches it is "which surviving file holds an export whose last consumer just went". `BootstrapIssue`
+  (`:3`) **stays** — `AppBootstrapGitHub.viewIssue` (`:65`) uses it inside the same module.
 
 ---
 
@@ -1213,7 +1294,9 @@ points plus `appIconBuild.ts` / `exampleAssetsBuild.ts`, over the 169 `.ts` file
 | `src/main/auditRecorder.ts` | `pricing.ts`, `ciChecks.ts` |
 
 **That is the whole graph-derived result: three files, all in `src/main`. No renderer, shared or preload
-module imports any §A module.** Every other §B entry is Split for a reason the import graph **cannot**
+module imports any §A module.** The two importers of the *second* seed are also `src/main`, not renderer or
+shared: `installExamples.ts:17` and `exampleAssetsBuild.ts:9` both import the orphaned `exampleSkills.ts`,
+and both are already Split under §B.11. Every other §B entry is Split for a reason the import graph **cannot**
 report — an operator-visible label, a rendered string, a default parameter, an `Omit` key list, a
 `Record` over a narrowed union, a dispatcher's ordering — and §I.2/§I.3 are the register for those reasons.
 An earlier draft appended "plus the renderer and shared modules listed in §B" to a graph-derived sentence,
@@ -1232,19 +1315,56 @@ band, during the iteration-3 review round — with **5 blockers and 6 warnings**
 them naming files no persona reviewer reached. This section now records what it returned rather than that it
 did not, and §K.1 states what was done with each item, including the one item rejected and why.
 
-**A second pass was spawned against this revision and did not deliver a report either.** It was spawned at
-the start of iteration 4, asked twice for partial findings, and went idle without sending anything — the same
-failure mode as iteration 3's attempt. Recorded plainly rather than dressed up: the ticket asks for an
-independent adversarial pass per presentation, and this revision has one (the returned pass in §K.1, which
-was run against the *previous* draft) rather than one of its own.
+**A second, independent pass was run against this revision and delivered.** It reported 10 blockers and 10
+warnings; §K.1a records what each produced. It initially went idle twice without sending anything (the same
+failure mode as iteration 3) and delivered once asked directly — so the ticket's precondition is met for this
+presentation, not only for the previous draft.
 
-What was run in its place, against the tree rather than the document, is the dependency-claim sweep whose
-results are the last seven rows of §L: every "its only consumer is X" / "every caller already passes Y"
-claim in §A and §B re-checked with `grep`. Six held as written. One did not, and it is now in §B.2 — the
-claim that "after the sweep every caller passes its own area" is true only *after* §B.15's edit, because
-three §26-chain call sites rely on the defaulted `subDir` today, so §B.2's edit has to follow §B.15 rather
-than precede it. That is a sequencing trap of exactly the class the pass exists to catch, and it argues the
-operator should still want an independent pass before agreeing.
+Alongside it, and independently, the dependency-claim sweep in the last seven rows of §L was run directly
+against the tree: every "its only consumer is X" / "every caller already passes Y" claim in §A and §B
+re-checked with `grep`. Six held as written. One did not — §B.2's "after the sweep every caller passes its own
+area" is true only *after* §B.15's edit, because three §26-chain call sites rely on the defaulted `subDir`
+today — and §B.2 now carries the ordering.
+
+### K.1a What the second pass found, and what was done with it
+
+Ten of its twenty items were already closed by the corrections above and were reported as residuals or
+independent confirmations; the rest are new. Kept and folded in:
+
+| finding | where it landed |
+|---|---|
+| `tests/unit/flowLoop.test.ts` holds **no** §27 subject — both its `describe` blocks are deleted subjects, so it is delete-whole, not Split | §A.5 (moved out of §D.2) |
+| `src/main/bootstrapPorts.ts` keeps three dead §26-only interfaces — invisible to the grep (0 citations) **and** to the orphan walk (the module survives) | §I.3 |
+| `electron.vite.config.ts` calls `copyExampleLoops`, which §B.11 deletes — zero citations, outside `src/`/`tests/`, so no mechanism in the list reached it | §E.3 |
+| `src/shared/audit.ts` changes nothing but comments — Scrub, not Split | §B.14, §C |
+| `styles.css:302`'s `.loop-cost` rule becomes dead CSS, and the file's own citations are at `:124`/`:163` so the grep never lands on it | §B.10 |
+| `deriveLoopView` is wholly §26 (both non-view parameters are deleted types; the body calls the deleted `gateForStatus`) and cannot be kept | §B.3 |
+| the `flow.ts` Goes list omitted the whole cost port (`FlowReadLoopCost` `:280`, the `readLoopCost` parameter `:296`, the dep `:578`), and named the selector `legacyLoopName` where the tree has `legacyLoopNameForStep` `:119` | §B.3 |
+| `classifyHumanNeeded`'s second parameter is a deleted type, so its exported signature must change either way — and with `loopDef` always absent it *is* the shared predicate | §B.3 (deleted, not aliased) |
+| `userConfig.ts`'s three citations need three different dispositions, and `:47`'s is on the **surviving** `userConfigLoopsV2Dir` | §B.12 |
+| `installExamplesView.test.ts`'s two WCAG pins are bound to removed destinations, and its `as InstallDestinationId[]` cast at `:337` means `tsc` stays green after the narrowing | §D.2 (re-anchored, not deleted) |
+| `focusDecision`'s selector keeps a `[data-loop-retry]` term that will silently never match | §B.9 |
+| the channel pair's residual surface: both `Msg` types, the channel names, the channel-map entry, and five (not three) `flowStrip` `Omit` keys | §B.7, §B.10 |
+| two surviving §27 e2e tests assert a §26 negative in their titles; dropping it silently is AC 2's weakened-assertion shape | §D.2a |
+| `docs/spec/26-…` has **43** citing lines, not the "25 self-citations" an earlier draft claimed | §E.1 |
+| `app.spec.ts`: 42 titles cite §26 — a second, independent boundary that reconciles against §D.2a's 39 + 2 + 1 | §D.2a |
+
+Two of its items were **not** taken:
+
+- **"Make the busy-shell refusal abort the whole entry."** §B.5 decides the opposite, and the reasoning is
+  recorded there: an `app`-bound step starts its work turn on a busy shell today, so a refusal that
+  short-circuits the reordered dispatch is an AC 2 regression on a surviving path. The pass is right that the
+  behavior was unspecified; it is now specified, the other way.
+- **"The orphan walk's three entry points flag `appIconBuild.ts` and `exampleAssetsBuild.ts`."** Already
+  handled — §D.4's row and the plan both name **five** roots (the three entry points plus the two
+  `electron.vite.config.ts` imports). Reported against text that had already changed.
+
+**What it did not reach, in its own words:** `src/main/index.ts`'s 92 citations were spot-checked, not
+systematically walked — the largest unreviewed surface, and the one an operator reviewing §B.15 should press
+on. Also unreached: `loopOrchestrator.ts`'s Goes/Stays split beyond confirming the turn-runner import, the
+enumeration of `ipc.ts`'s 32 citations, the bodies of the nine delete-whole gate/review modules, four
+install-related test files, the Scrub classifications in §C, and the changelog's byte-for-byte claim. These
+are the places where "checked and cleared" is *not* yet the right description, and §L does not claim them.
 
 ### K.1 What the returned pass found, and what was done with it
 
