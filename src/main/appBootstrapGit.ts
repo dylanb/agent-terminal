@@ -295,24 +295,12 @@ export function createRealAppBootstrapGit(
           await git(['checkout', '--detach', localOid], 'local branch wipe failed');
         }
         try {
-          // The porcelain delete, not `update-ref -d`: only `git branch -D` knows git's full "branch is
-          // in use" rule — mid-rebase a worktree reports `detached` with no branch line and
-          // `for-each-ref %(worktreepath)` is empty, so no plumbing query can express it. It reports the
-          // object it removed, which re-establishes the lease `update-ref -d <oid>` gave atomically.
-          const deleted = await git(
-            ['branch', '-D', '--', branch],
-            'local branch wipe failed',
-          );
-          const was = /\(was ([0-9a-f]+)\)/.exec(deleted)?.[1] ?? '';
-          if (!localOid.startsWith(was) || was.length === 0) {
-            await git(
-              ['branch', '--no-track', '--', branch, was || localOid],
-              'local branch wipe failed',
-            );
-            throw new Error(
-              'local branch wipe failed: branch changed after the caller read its identity',
-            );
-          }
+          // The porcelain delete: only `git branch -D` knows git's full "branch is in use" rule —
+          // mid-rebase a worktree reports `detached` with no branch line and `for-each-ref
+          // %(worktreepath)` is empty, so no plumbing query expresses it. Its output is NOT parsed:
+          // git translates "Deleted branch %s (was %s)." through gettext, so a locale would decide
+          // whether the wipe worked. The lease is the rev-parse check immediately above.
+          await git(['branch', '-D', '--', branch], 'local branch wipe failed');
         } catch (e) {
           if (!movedHead) throw e;
           try {
