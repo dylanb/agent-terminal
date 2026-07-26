@@ -329,11 +329,21 @@ export function createRealAppBootstrapGit(
           // %(worktreepath)` is empty, so no plumbing query expresses it. Its output is NOT parsed:
           // git translates "Deleted branch %s (was %s)." through gettext, so a locale would decide
           // whether the wipe worked.
-          // TODO(dylanb): this delete carries NO lease. `update-ref -d <ref> <oid>` checked the old
-          // value atomically; the rev-parse check at the top of deleteBranch is separated from here by
-          // approvedOriginUrl, the isolated network push in deleteRef (60 s budget), forgetBranchCaches
-          // and currentCheckout — so a branch that moves during the remote leg is deleted anyway. The
-          // in-use refusal moved here with the delete and now also runs AFTER the remote half is gone.
+          // Re-read immediately before the delete: the check at the top of deleteBranch is separated
+          // from here by the isolated network push, so it cannot speak for the branch now. This is not
+          // atomic the way `update-ref -d <ref> <oid>` was — the window is one spawn rather than a
+          // round trip — which is the price of the porcelain form's refusals.
+          const atDelete = (
+            await git(
+              ['rev-parse', '--verify', `refs/heads/${branch}`],
+              'local branch wipe failed',
+            )
+          ).trim();
+          if (atDelete !== localOid) {
+            throw new Error(
+              'local branch wipe failed: branch changed after the caller read its identity',
+            );
+          }
           await git(['branch', '-D', '--', branch], 'local branch wipe failed');
         } catch (e) {
           if (!movedHead) throw e;

@@ -873,6 +873,34 @@ describe('createRealAppBootstrapGit — owned remote-ref compensation', () => {
     expect(hasRef(repo, `refs/heads/${branch}`)).toBe(true);
   });
 
+  // The lease has to hold across the remote leg, not just before it: the identity is read, then a
+  // network push runs on a 60 s budget, and only then is the local branch deleted. A branch the hosted
+  // agent moves during that window must not be destroyed.
+  it('refuses a branch that moved during the remote leg', async () => {
+    const main = runGit(remote, ['rev-parse', 'refs/heads/main']);
+    runGit(remote, ['update-ref', `refs/heads/${branch}`, main]);
+    runGit(repo, ['branch', branch, 'main']);
+    runGit(repo, ['commit', '--allow-empty', '-m', 'later']);
+    const moveTo = runGit(repo, ['rev-parse', 'HEAD']);
+    let moved = false;
+    const port = createRealAppBootstrapGit(repo, {
+      // Fires after the remote delete and before the local one — the window under test.
+      currentCheckoutResult: () => {
+        if (!moved) {
+          moved = true;
+          runGit(repo, ['branch', '-f', branch, moveTo]);
+        }
+        return null;
+      },
+    });
+    const state = await port.branchState(branch);
+
+    await expect(port.deleteBranch(branch, state)).rejects.toThrow(
+      /branch changed after the caller read its identity/i,
+    );
+    expect(runGit(repo, ['rev-parse', `refs/heads/${branch}`])).toBe(moveTo);
+  });
+
   // Either lease refusing must leave BOTH halves intact: a wipe that destroys the origin branch and then
   // refuses the local one strands the operator in a state no UI action reaches (§27.10).
   it('refuses a moved local branch without destroying the remote half first', async () => {
