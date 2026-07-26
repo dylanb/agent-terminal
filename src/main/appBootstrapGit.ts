@@ -299,7 +299,12 @@ export function createRealAppBootstrapGit(
           // mid-rebase a worktree reports `detached` with no branch line and `for-each-ref
           // %(worktreepath)` is empty, so no plumbing query expresses it. Its output is NOT parsed:
           // git translates "Deleted branch %s (was %s)." through gettext, so a locale would decide
-          // whether the wipe worked. The lease is the rev-parse check immediately above.
+          // whether the wipe worked.
+          // TODO(dylanb): this delete carries NO lease. `update-ref -d <ref> <oid>` checked the old
+          // value atomically; the rev-parse check at the top of deleteBranch is separated from here by
+          // approvedOriginUrl, the isolated network push in deleteRef (60 s budget), forgetBranchCaches
+          // and currentCheckout — so a branch that moves during the remote leg is deleted anyway. The
+          // in-use refusal moved here with the delete and now also runs AFTER the remote half is gone.
           await git(['branch', '-D', '--', branch], 'local branch wipe failed');
         } catch (e) {
           if (!movedHead) throw e;
