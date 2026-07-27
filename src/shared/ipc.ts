@@ -471,9 +471,11 @@ export interface FlowLoopView {
    *  (`approve`/`request-changes`/`impasse`), OR the options a §27 def declares for a run-less view.
    *  The producing engine owns when to fill it; `actionable` carries whether they are clickable. */
   gateOptions?: string[];
-  /** The §26.10 cost-meter readout: the display-only priced dollars for the run (`$X.XX`, `unknown`, or
-   *  `$X.XX +unknown` when some model was unpriced), formatted by the shared `formatCost`. Present once an
-   *  iteration boundary has recorded a cost; absent before then. Display-only — it never gates the loop. */
+  /** The cost-meter readout: the display-only priced dollars (`$X.XX`, `unknown`, or `$X.XX +unknown` when
+   *  some model was unpriced), formatted by the shared `formatCost`. Engine-neutral (§27.15) — the producing
+   *  engine owns what the figure MEANS and the renderer never learns which one filled it: §26.10 records a
+   *  per-iteration figure at each iteration boundary, §27.11 a whole-run total from the flow's recorded
+   *  start. Absent until that engine has a figure. Display-only — it never gates the loop. */
   cost?: string;
   /** Observable "the loop is blocked awaiting a human" classification (§24.2.3 T4): true at a
    *  LoopDef human-decision gate (or, with no resolvable LoopDef, the shared awaiting-human/impasse
