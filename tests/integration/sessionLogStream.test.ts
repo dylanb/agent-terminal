@@ -171,6 +171,21 @@ describe('reading only what a session log gained', () => {
     expect(chunked).toBeGreaterThan(20);
   });
 
+  // Two cost samples for one repo can overlap — a push re-arms while a slow drain is still in flight — so
+  // two reads of this stream can be live at once. Each holds an incomplete line across chunk boundaries,
+  // and a read scratch space shared between them splices one log's bytes into the other's lines.
+  it('reads two logs at once without one splicing into the other', async () => {
+    const other = join(dir, 'other.jsonl');
+    const aLines = Array.from({ length: 60 }, (_, i) => `aaaa-${i}`);
+    const bLines = Array.from({ length: 60 }, (_, i) => `bbbb-${i}`);
+    writeFileSync(log, `${aLines.join('\n')}\n`);
+    writeFileSync(other, `${bLines.join('\n')}\n`);
+    const small = createLogStream(9);
+    const [a, b] = await Promise.all([read(small, seen(log)), read(small, seen(other))]);
+    expect(a).toEqual(aLines);
+    expect(b).toEqual(bLines);
+  });
+
   // The caller breaks out of a read on every retirement or floor change mid-drain, so the log being read
   // is abandoned at a `yield`. Without an explicit return the generator stays suspended and its FileHandle
   // survives until GC (CWE-772).
