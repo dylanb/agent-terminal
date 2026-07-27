@@ -49,6 +49,8 @@ describe('resolveRuntimeConfig (§15.7 — env-overridable per-agent profile sea
     expect(def.reportMinChars).toBeGreaterThan(0);
     expect(def.selfInjectWindowMs).toBeGreaterThan(0);
     expect(def.maxDoneTodos).toBeGreaterThan(0);
+    expect(def.costSampleMs).toBeGreaterThan(0);
+    expect(def.sessionLogChunkBytes).toBeGreaterThan(0);
 
     const over = resolveRuntimeConfig({
       APP_DEDUP_RETENTION: '7',
@@ -58,6 +60,8 @@ describe('resolveRuntimeConfig (§15.7 — env-overridable per-agent profile sea
       APP_REPORT_MIN_CHARS: '42',
       APP_SELF_INJECT_WINDOW_MS: '5000',
       APP_MAX_DONE_TODOS: '8',
+      APP_COST_SAMPLE_MS: '250',
+      APP_SESSION_LOG_CHUNK_BYTES: '4096',
     });
     expect(over.dedupRetention).toBe(7);
     expect(over.maxCommandSummaries).toBe(11);
@@ -66,6 +70,8 @@ describe('resolveRuntimeConfig (§15.7 — env-overridable per-agent profile sea
     expect(over.reportMinChars).toBe(42);
     expect(over.selfInjectWindowMs).toBe(5000);
     expect(over.maxDoneTodos).toBe(8);
+    expect(over.costSampleMs).toBe(250);
+    expect(over.sessionLogChunkBytes).toBe(4096);
 
     const garbage = resolveRuntimeConfig({
       APP_DEDUP_RETENTION: 'x',
@@ -75,6 +81,8 @@ describe('resolveRuntimeConfig (§15.7 — env-overridable per-agent profile sea
       APP_REPORT_MIN_CHARS: 'nope',
       APP_SELF_INJECT_WINDOW_MS: 'bad',
       APP_MAX_DONE_TODOS: 'x',
+      APP_COST_SAMPLE_MS: '-5',
+      APP_SESSION_LOG_CHUNK_BYTES: '0',
     });
     expect(garbage.dedupRetention).toBe(def.dedupRetention);
     expect(garbage.maxCommandSummaries).toBe(def.maxCommandSummaries);
@@ -83,5 +91,9 @@ describe('resolveRuntimeConfig (§15.7 — env-overridable per-agent profile sea
     expect(garbage.reportMinChars).toBe(def.reportMinChars);
     expect(garbage.selfInjectWindowMs).toBe(def.selfInjectWindowMs);
     expect(garbage.maxDoneTodos).toBe(def.maxDoneTodos);
+    expect(garbage.costSampleMs).toBe(def.costSampleMs);
+    // A chunk size of 0 makes every read return zero bytes, so every log reads as empty and the strip
+    // shows a confident $0.00 for a run that spent money — the silent zero §27.11 rejects.
+    expect(garbage.sessionLogChunkBytes).toBe(def.sessionLogChunkBytes);
   });
 });

@@ -69,6 +69,19 @@ describe('token pricing (§26.10)', () => {
     expect(r.unpricedModels).toEqual(['x-unknown']);
   });
 
+  // The model id is a raw string out of Claude Code's private log format, so it can name a member of
+  // Object.prototype. A lookup that resolves through the prototype chain returns a truthy non-price, skips
+  // the unpriced branch, and multiplies tokens by `undefined` — a NaN total that no equality can ever call
+  // unchanged, so every later sample re-reports and re-records it (CWE-1321).
+  it('treats a model id naming an Object.prototype member as unpriced, never pricing it to NaN', () => {
+    for (const hostile of ['constructor', 'toString', 'valueOf', 'hasOwnProperty', '__proto__']) {
+      const r = priceTokens([{ model: hostile, input: 1_000_000, cacheCreate: 0, cacheRead: 0, output: 0 }]);
+      expect(r.usd, hostile).toBe(0);
+      expect(Number.isNaN(r.usd), hostile).toBe(false);
+      expect(r.unpricedModels, hostile).toEqual([hostile]);
+    }
+  });
+
   // The models the loop actually runs on must be in the table, or every real readout reads `+unknown`.
   it('prices the models the hosted agent and its reviewer subagents run on', () => {
     for (const model of ['claude-opus-4-8', 'claude-sonnet-4-6']) {

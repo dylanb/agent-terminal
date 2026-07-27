@@ -180,6 +180,31 @@ describe('audit recorder — run file lifecycle (§25.4)', () => {
     expect(existsSync(auditRepoDir(root, repo))).toBe(false);
   });
 
+  // §27.11 — the §27 whole-run figure, recorded additively while the run is open. It carries no iteration:
+  // a whole-run total that fabricated one would be indistinguishable from §26's per-iteration series.
+  it('records the §27 whole-run cost event to the open run file', () => {
+    const rec = recorder();
+    rec.recordTransition(repo, 'start', NOT_STARTED, IN_PROGRESS);
+    rec.recordAppCost(repo, { usd: 4.5, unpricedModels: ['claude-made-up-9'] });
+    const events = parseAuditStream(readFileSync(join(auditRepoDir(root, repo), runFiles()[0]), 'utf8')).events;
+    expect(events.map((e) => e.type)).toEqual(['flow.started', 'app.cost']);
+    expect(events[1]).toMatchObject({ type: 'app.cost', usd: 4.5, unpriced: ['claude-made-up-9'] });
+  });
+
+  it('records nothing for a §27 cost event when no run is open', () => {
+    recorder().recordAppCost(repo, { usd: 1, unpricedModels: [] });
+    expect(existsSync(auditRepoDir(root, repo))).toBe(false);
+  });
+
+  // The meter re-attempts a record the audit refused, and it can only do that if the refusal reaches it.
+  it('surfaces an append failure to its caller rather than swallowing it', () => {
+    const rec = recorder();
+    rec.recordTransition(repo, 'start', NOT_STARTED, IN_PROGRESS);
+    rmSync(auditRepoDir(root, repo), { recursive: true, force: true });
+    writeFileSync(auditRepoDir(root, repo), 'not a directory');
+    expect(() => rec.recordAppCost(repo, { usd: 1, unpricedModels: [] })).toThrow();
+  });
+
   // §26.7 — the per-iteration CI snapshot: display-only, recorded best-effort at the iteration boundary.
   it('records a per-iteration CI snapshot event to the open run file', () => {
     const rec = recorder();

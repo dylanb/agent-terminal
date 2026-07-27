@@ -13,7 +13,7 @@ import { parseAuditStream, type AuditEvent } from '../../src/shared/audit';
 import { TURN_DONE_FILENAME } from '../../src/shared/loopTurn';
 import { completionMarker } from '../../src/main/appWorkTurn';
 import { exampleRoundReport, REPORT_GRAMMAR } from '../../src/shared/roundReport';
-import { encodeProjectDir } from '../../src/main/sessionLogSweep';
+import { encodeProjectDir, sessionLogDir } from '../../src/main/sessionLogSweep';
 import { formatCost } from '../../src/shared/pricing';
 
 // §26 D42a — the retired printable done-signal sentinel. Kept here ONLY so a regression test can inject it
@@ -1835,7 +1835,7 @@ function fileOnlySignal(turnKey: string): string {
 const jsonlTurn = (ts: string, id: string, model: string, usage: string): string =>
   `{"type":"assistant","timestamp":"${ts}","requestId":"req-${id}","message":{"id":"msg-${id}","model":"${model}","usage":{${usage}}}}`;
 const emitJsonl = (obj: string, file: string, redirect = '>'): string =>
-  `printf '%s\\n' '${obj.replace(/NOW/, "'\"$NOW\"'").replace(/RND/, "'\"$r\"'")}' ${redirect} "${file}"; `;
+  `printf '%s\\n' '${obj.replace(/NOW/g, "'\"$NOW\"'").replace(/RND/g, "'\"$r\"'")}' ${redirect} "${file}"; `;
 /** The current second at .999 — at or after the instant the flow started, whatever the sub-second offset. */
 const FIXTURE_NOW = 'NOW=$(date -u +%Y-%m-%dT%H:%M:%S.999Z); ';
 
@@ -3822,8 +3822,8 @@ function seedFakeAgentV2(
   const bump = 'mkdir -p .agent-terminal; printf x >> .agent-terminal/work-runs';
   // §27.11 — one fixture turn per §27 turn, at that turn's own instant, in the repo's project dir.
   //   work:        $15 of an opus session predating this flow (excluded by the run's floor), $3.00 of work
-  //                tokens written TWICE under one billing identity (a resumed session replays them), and a
-  //                zero-token `<synthetic>` API-error turn (bills nothing, so never a pricing gap)
+  //                tokens written twice under one billing identity — the replay lands in a SECOND log with a
+  //                later mtime, the envelope AC 3 binds — and a zero-token `<synthetic>` API-error turn
   //   review:      a reviewer SUBAGENT log nested under the session dir, $1.50 per round
   //   consolidate: $3.00 per round, plus an unpriced model on round 1 (zero dollars, `+unknown`)
   const logDir = opts.costLogDir;
@@ -3832,7 +3832,7 @@ function seedFakeAgentV2(
     ? `${costPrelude}` +
       emitJsonl(jsonlTurn('2020-01-01T00:00:00.000Z', 'stale', 'claude-opus-4-8', '"input_tokens":1000000'), `${logDir}/stale.jsonl`) +
       emitJsonl(jsonlTurn('NOW', 'work', 'claude-sonnet-5', '"input_tokens":1000000'), `${logDir}/session.jsonl`) +
-      emitJsonl(jsonlTurn('NOW', 'work', 'claude-sonnet-5', '"input_tokens":1000000'), `${logDir}/session.jsonl`, '>>') +
+      emitJsonl(jsonlTurn('NOW', 'work', 'claude-sonnet-5', '"input_tokens":1000000'), `${logDir}/resumed.jsonl`) +
       emitJsonl(jsonlTurn('NOW', 'err', '<synthetic>', '"input_tokens":0,"output_tokens":0'), `${logDir}/session.jsonl`, '>>')
     : '';
   const reviewCost = logDir
@@ -5402,7 +5402,11 @@ test('a §27 run meters its WHOLE cost onto the strip and into the §25 audit, l
   // second repo would read the first's logs.
   const cfgDir = mkdtempSync(join(tmpdir(), 'agent-term-e2e-v2-cost-cfg-'));
   cpSync(exampleConfigDir, cfgDir, { recursive: true });
-  const projectDir = (dir: string): string => join(cfgDir, 'projects', encodeProjectDir(dir));
+  // The seeder writes where the production reader will look, derived through the reader's own resolver
+  // rather than re-spelling its layout (CLAUDE.md § Architecture, writer↔reader).
+  const projectDir = (dir: string): string =>
+    sessionLogDir(dir, { CLAUDE_CONFIG_DIR: cfgDir } as NodeJS.ProcessEnv, home)!;
+  expect(projectDir(repo)).toBe(join(cfgDir, 'projects', encodeProjectDir(repo)));
 
   seedFakeAgentV2(binDir, {
     stepId: 'plan',

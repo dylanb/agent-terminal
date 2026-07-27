@@ -644,6 +644,39 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     expect(host.querySelector('.loop-iter')).toBeNull();
   });
 
+  // WCAG SC 2.2.2 (Pause, Stop, Hide) — a §27 run's total is re-metered on a timer for the whole run, and
+  // the strip host is a polite live region, so leaving the figure inside it narrates a new dollar amount
+  // every couple of seconds for hours with no user action and no mechanism to stop it. The figure opts out
+  // of announcement and keeps its accessible name, so it is still read on focus and on demand (SC 1.3.1).
+  it('keeps the §27 cost figure out of the strip`s live region while it still carries its accessible name', async () => {
+    let view: FlowStateView = {
+      stepName: 'plan',
+      steps: ['plan'],
+      position: 1,
+      total: 1,
+      status: 'in_progress',
+      loop: { status: 'working', pr: null, branch: null, ready: false, humanNeeded: false, cost: '$4.50' },
+    };
+    let fire = (): void => {};
+    const deps = {
+      state: vi.fn(async (): Promise<FlowStateView> => view),
+      onStatusBar: vi.fn(),
+      onStateChanged: (cb: () => void) => {
+        fire = cb;
+        return () => {};
+      },
+    };
+    createFlowStrip(host, deps).onRepoChanged('/repo-live');
+    await vi.waitFor(() => expect(host.querySelector('.loop-cost')).not.toBeNull());
+    expect(host.querySelector('.loop-cost')!.getAttribute('aria-live')).toBe('off');
+
+    view = { ...view, loop: { ...view.loop!, cost: '$6.00' } };
+    fire();
+    await vi.waitFor(() => expect(host.querySelector('.loop-cost')?.textContent).toBe('$6.00'));
+    expect(host.querySelector('.loop-cost')!.getAttribute('aria-live')).toBe('off');
+    expect(host.querySelector('.loop-cost')!.getAttribute('aria-label')).toBe('cost $6.00');
+  });
+
   it('patches the §26.10 cost readout in place on a same-signature background push', async () => {
     let view: FlowStateView = {
       stepName: 'build',

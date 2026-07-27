@@ -32,13 +32,16 @@ function seedRepo(steps: string): string {
   return dir;
 }
 
-function manager(): ReturnType<typeof createFlowManager> {
+function manager(
+  push: (repoKey: string, loop: string | null, startedAt: number | null) => void = (repoKey, loop, startedAt) =>
+    void pushes.push({ repoKey, loop, startedAt }),
+): ReturnType<typeof createFlowManager> {
   return createFlowManager({
     globalDir: join(tmpdir(), 'flow-cost-window-global-does-not-exist'),
     now: () => clock,
     // A §27 provider must exist or the flow renders no loop view; its content is irrelevant here.
     readAppLoopView: () => ({ status: 'not-started', pr: null, branch: null, ready: false, actionable: false, humanNeeded: false }),
-    pushCostWindow: (repoKey, loop, startedAt) => void pushes.push({ repoKey, loop, startedAt }),
+    pushCostWindow: push,
   });
 }
 
@@ -115,23 +118,43 @@ describe('the window push the §27 meter is handed', () => {
     expect(pushes.at(-1)).toEqual({ repoKey: repo, loop: 'impl-loop', startedAt: 5_000 });
   });
 
-  it('pushes nothing when a re-read observes no change', () => {
+  // The triple is deduped in ONE place — the meter, which is keyed by repo and outlives a flow.yaml edit
+  // that rebuilds the machine. The manager forwards every render's value unchanged, so a re-read hands the
+  // meter the same triple rather than nothing.
+  it('forwards the same triple on every re-read rather than deduping it here', () => {
     const repo = seedRepo(APP_STEP('plan', 'plan-loop'));
     const flow = manager();
     flow.start(repo);
-    const before = pushes.length;
+    const live = { repoKey: repo, loop: 'plan-loop', startedAt: 5_000 };
+    expect(pushes.at(-1)).toEqual(live);
+    pushes = [];
     for (let i = 0; i < 10; i += 1) flow.state(repo);
-    expect(pushes).toHaveLength(before);
+    expect(pushes).toHaveLength(10);
+    expect(pushes.every((p) => p.repoKey === live.repoKey && p.loop === live.loop && p.startedAt === live.startedAt)).toBe(true);
   });
 
-  it('pushes nothing on an undo that leaves the window and the selection unchanged', () => {
+  it('forwards the unchanged triple after an undo that moves neither the window nor the selection', () => {
     const repo = seedRepo(APP_STEP('plan', 'plan-loop'));
     const flow = manager();
     flow.start(repo);
     flow.advance(repo);
-    const before = pushes.length;
+    pushes = [];
     flow.undo(repo);
-    expect(pushes).toHaveLength(before);
+    expect(pushes.at(-1)).toEqual({ repoKey: repo, loop: 'plan-loop', startedAt: 5_000 });
+  });
+
+  // AC 7 — cost never gates, pauses, delays or fails a flow advance. The push sits inside the view every
+  // transition returns through, so a sink that throws would take the operator's transition down with it.
+  it('leaves every transition intact when the meter it pushes to throws', () => {
+    const repo = seedRepo(APP_STEP('plan', 'plan-loop') + APP_STEP('impl', 'impl-loop'));
+    const flow = manager(() => {
+      throw new Error('meter gone');
+    });
+    expect(() => flow.state(repo)).not.toThrow();
+    expect(flow.state(repo).status).toBe('not_started');
+    expect(flow.start(repo).status).toBe('in_progress');
+    expect(flow.advance(repo).stepName).toBe('impl');
+    expect(flow.terminate(repo).status).toBe('not_started');
   });
 
   // After a relaunch there is no prior pushed value to differ from: the hydrate's restore is what hands the
