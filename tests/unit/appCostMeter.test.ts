@@ -53,7 +53,7 @@ interface Harness {
   now: number;
 }
 
-function harness(): Harness {
+function harness(sampleDelayMs = BASE_DELAY): Harness {
   const logs = new Map<string, PricedTurn[]>();
   const armedRuns = new Map<string, Armed>();
   let sweepThrows = false;
@@ -84,7 +84,7 @@ function harness(): Harness {
     },
   };
   h.meter = createAppCostMeter({
-    sampleDelayMs: BASE_DELAY,
+    sampleDelayMs,
     openSweep: (repoDir, since): SessionSweep => {
       h.opened.push({ repoDir, since });
       // The seam promises each drain yields every turn in the window the sweep has not already yielded
@@ -421,12 +421,23 @@ describe('the §27 sampler`s steady state', () => {
     expect(delays[delays.length - 1]).toBeGreaterThan(BASE_DELAY);
   });
 
-  it('caps the backoff rather than growing it without bound', async () => {
-    h.meter.pushWindow(REPO, LOOP, FLOOR);
-    for (let i = 0; i < 60; i += 1) await h.sample();
-    const capped = h.armedDelay()!;
-    expect(Number.isFinite(capped)).toBe(true);
-    expect(capped).toBeLessThanOrEqual(60_000);
+  // The ceiling is a multiple of the configured cadence, not an absolute duration: an operator who tunes
+  // the cadence down (the e2e runs at 200 ms) would otherwise get a steady state hundreds of samples out,
+  // and one who tunes it up past the absolute cap would get no backoff at all.
+  it('settles the backoff at a fixed multiple of the base interval, whatever that interval is', async () => {
+    const settled = async (base: number): Promise<number> => {
+      const g = harness(base);
+      g.meter.pushWindow(REPO, LOOP, FLOOR);
+      for (let i = 0; i < 40; i += 1) await g.sample();
+      const reached = g.armedDelay()!;
+      for (let i = 0; i < 20; i += 1) await g.sample();
+      expect(g.armedDelay()).toBe(reached);
+      return reached;
+    };
+    const fast = await settled(200);
+    const slow = await settled(2_000);
+    expect(fast).toBeGreaterThan(200);
+    expect(slow).toBe(fast * 10);
   });
 
   it('returns to the base interval the moment the figure moves again', async () => {
