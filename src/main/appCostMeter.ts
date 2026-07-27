@@ -6,7 +6,7 @@ import type { PricedTurn, SessionSweep } from './sessionLogSweep';
 // flow.ts pushes a null loop only on the transitions that land in `not_started`; completing a flow leaves
 // the app loop step entered, so nothing ever retires a finished run. Remove this ceiling and such a run
 // re-walks the whole log tree every `sampleDelayMs` for as long as the app stays open.
-const MAX_SAMPLE_DELAY_MS = 60_000;
+const MAX_SAMPLE_BACKOFF = 32;
 
 export interface AppCostMeterDeps {
   /** Open a sweep of the repo's session logs over a run window opening at `since` (unbounded when null).
@@ -79,7 +79,7 @@ export function createAppCostMeter(deps: AppCostMeterDeps): AppCostMeter {
   };
 
   const delayFor = (idleSamples: number): number =>
-    Math.min(deps.sampleDelayMs * 2 ** Math.min(idleSamples, 30), Math.max(deps.sampleDelayMs, MAX_SAMPLE_DELAY_MS));
+    deps.sampleDelayMs * Math.min(2 ** Math.min(idleSamples, 30), MAX_SAMPLE_BACKOFF);
 
   const sample = async (repoDir: string): Promise<void> => {
     const run = runs.get(repoDir);
