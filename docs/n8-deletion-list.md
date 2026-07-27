@@ -445,19 +445,22 @@ isolation. For a `kind: 'loop'` step the seam runs, **in this order**, returning
 |---:|---|---|
 | 1 | **the binding names no surviving engine** (§B.4's marking) → surfaced per-step error; **nothing injected, nothing dispatched**; return | A marked binding can never run, so none of its entry actions may fire. Placed below the `skill` block it would inject a repo-authored scalar with nothing to submit it and nothing to clear it — today's swallower is `resumeLoop`'s submitted `/clear` (`:89`–`:91`), which this section **deletes**, so the scalar would sit at the prompt and the operator's next Enter would submit their own text behind a repo-authored prefix (CWE-74, instruction-channel framing). First in the order is the only position where that is structurally impossible |
 | 2 | **the binding resolves to no def at all** → surface the resolver's reason on the loop-error path; **nothing injected, nothing dispatched, and NO revert**; return | Added in this revision; the order previously had no position for it and position 4 read as if it covered it. `resolveLoopDefV2` returns `{ok:false, reason}` (`loopDefV2.ts:459`) for a name no tier answers — the shape AC 5's final paragraph is about, and the one §B.6 keeps in the resolver as a `FlowLoopView.errorReason`. It must not revert: today an unresolved def plus `bootstrap: pickup` takes `index.ts:1015`'s `!resolved.ok` branch into `appEngine.enter` and **the step stays**, so reverting would be an AC 2 behaviour change on a surviving `app`-namespace path. And it must sit above item 6, or a step whose engine cannot run would first submit a repo-authored `skill` at the agent |
-| 3 | **an unsatisfied required input** → `prompt`, **carrying any notice already accumulated**; return | Above `skill`, so answering the prompt (which re-runs `enter(view())`, `flow.ts:526`) cannot inject the invocation a second time. Scoped to `kind: 'loop'` — see item 5 |
+| 3 | **an unsatisfied required input** → `prompt` **alone**; return | Above `skill`, so answering the prompt (which re-runs `enter(view())`, `flow.ts:526`) cannot inject the invocation a second time. Scoped to `kind: 'loop'` — see numbered item 5. **`alone` is a consequence of position, not a rule:** every step that can produce a notice — the migration (5) and the busy-shell refusal (6) — now sits *below* this row, so nothing can have been accumulated when it returns. That is today's behaviour at `:65` and `:78` unchanged, and it is what makes numbered item 5's dropped-refusal hazard structurally impossible rather than merely handled |
 | 4 | **a declared `bootstrap` the RESOLVED def cannot satisfy** → surface + deferred revert + push; **nothing injected, nothing dispatched**; return | Above `skill`, not below it. Numbered item 4 below the table makes the injection **submitted**, so below this check the revert would land on a step whose agent turn is already running: bytes submitted to a live agent at a ready prompt are an external, non-transactional side effect preceding a persisted rollback with no compensation, and recovery would be interrupting the agent by hand with no surface pointing at it (CWE-755; CLAUDE.md never allow an unrecoverable state). The check itself is a pure read of the resolved def — does it declare a `pickup:` block — so it costs nothing to make first. **"Resolved" is load-bearing:** item 2 has already returned for a binding with no def, so this row never has to answer the question on a def that does not exist |
 | 5 | **AC 5's def migration** (§B.6) → probe, write, notice accumulated | **Moved down in this revision, from above item 3 to here**, and the move is what closes the notice. Every branch that can schedule a `flow.revertStep` + `pushFlowChanged()` is now above it: `pushFlowChanged()` re-pulls `flow:state`, whose view carries **no** `notice` by contract (`ipc.ts:574`–`:577`), and the strip's `refresh()` → `render(state)` begins `host.replaceChildren()` (`flowStrip.ts:326`) and re-appends `.flow-notice` only from `state.notice` (`:401`–`:405`) — so a notice produced above item 4 was **erased by item 4's own push in the same interaction**, after which §H.4 makes the filesystem condition false forever and it can never be re-raised. Below every synchronous revert, the notice rides the transition response uninterrupted. What that costs is stated rather than implied: on a branch that returns above this row the migration does not happen **at all** on that entry — which is correct, not a loss, because none of those branches runs the step, and the next entry that does run it migrates and reports then. The one push this position cannot get above is the **asynchronous** bootstrap failure (item 7); §F item 17, the async repaint of AC 5's notice, records that residual |
 | 6 | **`skill` injection**, submitted, under the §19.3 busy-shell refusal — **for a step declaring no `bootstrap`**. A `bootstrap: pickup` step's skill is injected by the bootstrap coordinator on its success handoff instead (numbered item 6 below the table) | Everything that can *synchronously* refuse the step has already run, so an injection here is never rolled back |
 | 7 | **`bootstrap` setup, then the engine dispatch** | AC 10's order: the skill is injected before the engine dispatch — on both routes, since the coordinator injects immediately before `enterWork` |
 
 **`EntryActionResult.notice` carries at most one string and this order can produce two, so the seam
-composes rather than overwrites.** A busy shell on a step that also migrated produces `BUSY_NOTICE` **and**
-AC 5's notice; item 3's prompt returns alongside a §19.3 refusal. Neither may drop the
+composes rather than overwrites.** The reachable pair is positions 5 and 6: a step that migrates **and**
+then meets a busy shell produces AC 5's notice **and** `BUSY_NOTICE`. Neither may drop the
 other — a discarded migration notice is AC 5 unmet, and a discarded §19.3 refusal is an operator who was
-never told why nothing was typed. The seam accumulates notices and joins them into the one field; the
-`prompt` slot is likewise **not** mutually exclusive with `notice` (both are returned together). No contract
-change: `EntryActionResult` and `FlowStateView.notice` keep the shapes they have.
+never told why nothing was typed. The seam accumulates notices and joins them into the one field.
+(**Narrowed in this revision.** An earlier ordering also had `prompt` returning alongside an accumulated
+notice, and the composition rule was written to cover it. With the migration moved to position 5, nothing
+above position 3 produces a notice, so that pair is unreachable — the rule is kept for the 5+6 pair it does
+still need to serve, and the `prompt` case is now closed by *position* rather than by composition.) No
+contract change: `EntryActionResult` and `FlowStateView.notice` keep the shapes they have.
 
 **A step parked `in_progress` receives no further entry, so AC 5's migration also runs on ATTACH — the same
 step, at the one other moment that is not a poll.** `onEnter` is reached only through `enter()`
@@ -655,12 +658,16 @@ is the process dying between a function returning and its caller serving the res
      injected). **The hoist is scoped to `kind: 'loop'` deliberately:** applied unconditionally it would
      also reorder a *manual* step that declares `skill` with unsatisfied required inputs, which today
      injects its skill and prompts for nothing — a behavior change on a surviving path, i.e. an AC 2 defect
-     introduced by the fix. **And:** the bootstrap branch returns `{ prompt }` alone today, so a skill
-     refused over a busy shell (`:73`) would have its §19.3 refusal silently dropped whenever a prompt is
-     also produced — closed by the notice-composition rule stated above the numbered items, which returns
-     `prompt` and every accumulated `notice` together. AC 10's own test shape — a namespace-less step
-     declaring `skill` *and* `bootstrap: pickup` — is exactly the shape that exercises this. RED rows in
-     §D.4.
+     introduced by the fix. **And the hoist is also what closes a dropped-refusal hazard, structurally
+     rather than by composition** — restated in this revision, because the previous wording routed it to the
+     notice-composition rule and the reorder made that unreachable. The hazard: the bootstrap branch returns
+     `{ prompt }` alone today (`:77`–`:79`), so once item 1 stops the busy-shell refusal short-circuiting the
+     whole entry, a skill refused over a busy shell (`:73`) could have its §19.3 refusal dropped by a prompt
+     produced after it. With the prompt hoisted to ordering position 3 the two cannot co-occur at all: the
+     first entry returns the prompt having attempted no injection, and the re-entry through `provideInput`
+     finds the input satisfied and reaches the skill block with nothing to drop. AC 10's own test shape — a
+     namespace-less step declaring `skill` *and* `bootstrap: pickup` — is exactly the shape that exercises
+     this. RED rows in §D.4.
 
   6. **A `bootstrap: pickup` step's `skill` is injected by the COORDINATOR on its success handoff, not by
      the seam — because the bootstrap's own failures are asynchronous and item 2's ordering cannot reach
