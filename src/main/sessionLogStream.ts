@@ -32,20 +32,27 @@ export interface LogStream {
  *  an uninterruptible block on the main thread. */
 export function createLogStream(chunkBytes: number): LogStream {
   const positions = new Map<string, number>();
-  let buffer: Buffer | null = null;
+  // Two reads of one stream can be live at once (two cost samples for one repo overlap), and each holds an
+  // incomplete line across chunk boundaries — so a read never shares its scratch space with another.
+  let spare: Buffer | null = null;
+  const take = (): Buffer => {
+    const buffer = spare ?? Buffer.allocUnsafe(chunkBytes);
+    spare = null;
+    return buffer;
+  };
 
   return {
     async *lines(file: LogFile): AsyncGenerator<string> {
       const remembered = positions.get(file.path) ?? 0;
       const from = file.size !== null && file.size < remembered ? 0 : remembered;
       if (file.size !== null && file.size === from) return;
-      buffer ??= Buffer.allocUnsafe(chunkBytes);
-      const read = buffer;
+      const read = take();
 
       let handle: fsp.FileHandle;
       try {
         handle = await fsp.open(file.path, 'r');
       } catch {
+        spare = read;
         return;
       }
       const decoder = new StringDecoder('utf8');
@@ -79,6 +86,7 @@ export function createLogStream(chunkBytes: number): LogStream {
         return;
       } finally {
         positions.set(file.path, consumed);
+        spare = read;
         await handle.close().catch(() => {});
       }
     },
