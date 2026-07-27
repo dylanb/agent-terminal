@@ -3,7 +3,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { encodeProjectDir, sessionLogDir, readSessionTokens } from '../../src/main/sessionLogSweep';
-import { boundAuditText } from '../../src/shared/audit';
+import { boundExternalText } from '../../src/shared/audit';
 import { priceTokens } from '../../src/shared/pricing';
 import { userConfigRoot } from '../../src/main/userConfig';
 
@@ -134,7 +134,7 @@ describe('session-log token recovery (§26.10)', () => {
     const hostile = `claude-made-up\u200e${'x'.repeat(500)}`;
     writeFileSync(join(dir, 'session.jsonl'), line(hostile, { input_tokens: 5 }));
     const unpriced = priceTokens(readSessionTokens(dir)).unpricedModels;
-    expect(unpriced).toEqual([boundAuditText(hostile)]);
+    expect(unpriced).toEqual([boundExternalText(hostile)]);
     expect(unpriced[0]).not.toContain('\u200e');
     expect(unpriced[0].length).toBeLessThan(hostile.length);
   });

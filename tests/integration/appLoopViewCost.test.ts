@@ -72,7 +72,7 @@ describe('the §27 loop view`s cost readout', () => {
     const view = deriveAppLoopView(
       'plan-loop',
       { tiers: tiers(), repoDir },
-      { loop: 'plan-loop', step: 'plan', turnKey: 'work-plan', reason: 'state write refused' },
+      { kind: 'turn-error', loop: 'plan-loop', step: 'plan', turnKey: 'work-plan', reason: 'state write refused' },
       '$4.50',
     );
     expect(view.status).toBe('error');

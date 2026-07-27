@@ -1,28 +1,29 @@
 // §27.11
 
-import { formatCost, priceTokens, type CostResult, type ModelTokens } from '../shared/pricing';
+import { addTokens, formatCost, priceTokens, sortedTotals, type CostResult, type ModelTokens } from '../shared/pricing';
 import type { PricedTurn, SessionSweep } from './sessionLogSweep';
 
-// flow.ts pushes a null loop only on the transitions that land in `not_started`; completing a flow leaves
-// the app loop step entered, so nothing ever retires a finished run. Remove this ceiling and such a run
-// re-walks the whole log tree every `sampleDelayMs` for as long as the app stays open.
-const MAX_SAMPLE_BACKOFF = 32;
+// No push retires a COMPLETED run: `done` leaves the app loop step entered, so a finished run keeps
+// sampling for as long as the app stays open, and only this ceiling bounds how often.
+const SAMPLE_BACKOFF_FACTOR_MAX = 32;
 
 export interface AppCostMeterDeps {
   /** Open a sweep of the repo's session logs over a run window opening at `since` (unbounded when null).
-   *  Opening does no I/O; each drain yields the priced turns the window has gained. */
+   *  Each drain re-yields every turn in the window from any log that changed, so the caller must bank the
+   *  identities it has already counted rather than assume the drains are disjoint. */
   openSweep: (repoDir: string, since: number | null) => SessionSweep;
   now: () => number;
   /** How long after a figure moves the next sample is taken; a still figure backs off from it. */
   sampleDelayMs: number;
   /** Arm a repo's next cost sample `delayMs` from now, replacing any already armed. */
   armSample: (repoDir: string, delayMs: number, run: () => Promise<void>) => void;
-  /** Cancel a repo's armed sample. */
+  /** Cancel a repo's armed sample; cancelling a repo with none armed is a no-op. */
   cancelSample: (repoDir: string) => void;
   /** The reported figure moved, so whatever renders it should re-read. */
   onFigureChanged: () => void;
-  /** Record the run's cost into its §25 audit record. Throwing means the record did not land. */
-  recordCost: (repoDir: string, cost: CostResult) => void;
+  /** Record the run's cost into its §25 audit record. False means the record did not land, so the meter
+   *  re-attempts it on the next sample. */
+  recordCost: (repoDir: string, cost: CostResult) => boolean;
   log?: (msg: string, err: unknown) => void;
 }
 
@@ -48,12 +49,7 @@ interface RunCost {
 function bank(run: RunCost, turn: PricedTurn): void {
   if (run.banked.has(turn.id)) return;
   run.banked.add(turn.id);
-  const cur = run.byModel.get(turn.model) ?? { model: turn.model, input: 0, cacheCreate: 0, cacheRead: 0, output: 0 };
-  cur.input += turn.input;
-  cur.cacheCreate += turn.cacheCreate;
-  cur.cacheRead += turn.cacheRead;
-  cur.output += turn.output;
-  run.byModel.set(turn.model, cur);
+  addTokens(run.byModel, turn);
 }
 
 function sameCost(a: CostResult | null, b: CostResult): boolean {
@@ -79,7 +75,7 @@ export function createAppCostMeter(deps: AppCostMeterDeps): AppCostMeter {
   };
 
   const delayFor = (idleSamples: number): number =>
-    deps.sampleDelayMs * Math.min(2 ** idleSamples, MAX_SAMPLE_BACKOFF);
+    deps.sampleDelayMs * Math.min(2 ** idleSamples, SAMPLE_BACKOFF_FACTOR_MAX);
 
   const sample = async (repoDir: string): Promise<void> => {
     const run = runs.get(repoDir);
@@ -90,14 +86,13 @@ export function createAppCostMeter(deps: AppCostMeterDeps): AppCostMeter {
         if (runs.get(repoDir) !== run) return;
         bank(run, turn);
       }
-      const next = priceTokens([...run.byModel.values()].sort((a, b) => a.model.localeCompare(b.model)));
+      const next = priceTokens(sortedTotals(run.byModel));
       if (runs.get(repoDir) !== run) return;
       moved = !sameCost(run.cost, next);
       const shown = run.cost === null ? null : formatCost(run.cost);
       if (!sameCost(run.recordedCost, next)) {
         bestEffort('audit record', () => {
-          deps.recordCost(repoDir, next);
-          run.recordedCost = next;
+          if (deps.recordCost(repoDir, next)) run.recordedCost = next;
         });
       }
       run.cost = next;
@@ -115,10 +110,12 @@ export function createAppCostMeter(deps: AppCostMeterDeps): AppCostMeter {
     pushWindow(repoDir, loop, startedAt) {
       const key = JSON.stringify([loop, startedAt]);
       if (pushed.get(repoDir) === key) return;
-      pushed.set(repoDir, key);
       if (loop === null) {
         runs.delete(repoDir);
-        bestEffort('sample cancel', () => deps.cancelSample(repoDir));
+        bestEffort('sample cancel', () => {
+          deps.cancelSample(repoDir);
+          pushed.set(repoDir, key);
+        });
         return;
       }
       bestEffort('window push', () => {
@@ -136,6 +133,7 @@ export function createAppCostMeter(deps: AppCostMeterDeps): AppCostMeter {
           });
         }
         deps.armSample(repoDir, deps.sampleDelayMs, () => sample(repoDir));
+        pushed.set(repoDir, key);
       });
     },
 

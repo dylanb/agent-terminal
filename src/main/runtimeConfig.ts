@@ -28,6 +28,10 @@ const DEFAULTS = {
   sessionLogChunkBytes: 64 * 1024,
 } as const;
 
+/** Ceiling on `sessionLogChunkBytes`: it is the one key that reaches a `Buffer` allocation, and every
+ *  field-local check passes a value the allocator then refuses. */
+const MAX_CHUNK_BYTES = 16 * 1024 * 1024;
+
 export interface RuntimeConfig {
   quietMs: number;
   shellIntegration: boolean;
@@ -52,6 +56,12 @@ function posInt(raw: string | undefined, fallback: number): number {
   return Number.isInteger(n) && n > 0 ? n : fallback;
 }
 
+/** `posInt` for a key whose value reaches an allocation: an above-range value is clamped to `max` rather
+ *  than dropped to the default, so an operator who asked for more gets as much as the process can give. */
+function posIntCapped(raw: string | undefined, fallback: number, max: number): number {
+  return Math.min(posInt(raw, fallback), max);
+}
+
 export function resolveRuntimeConfig(env: NodeJS.ProcessEnv): RuntimeConfig {
   return {
     quietMs: posInt(env.APP_QUIET_MS, DEFAULTS.quietMs),
@@ -67,6 +77,6 @@ export function resolveRuntimeConfig(env: NodeJS.ProcessEnv): RuntimeConfig {
     stallTimeoutMs: posInt(env.APP_TURN_TIMEOUT_MS, DEFAULTS.stallTimeoutMs),
     startupExitGraceMs: posInt(env.APP_STARTUP_EXIT_GRACE_MS, DEFAULTS.startupExitGraceMs),
     costSampleMs: posInt(env.APP_COST_SAMPLE_MS, DEFAULTS.costSampleMs),
-    sessionLogChunkBytes: posInt(env.APP_SESSION_LOG_CHUNK_BYTES, DEFAULTS.sessionLogChunkBytes),
+    sessionLogChunkBytes: posIntCapped(env.APP_SESSION_LOG_CHUNK_BYTES, DEFAULTS.sessionLogChunkBytes, MAX_CHUNK_BYTES),
   };
 }

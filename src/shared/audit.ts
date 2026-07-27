@@ -194,17 +194,17 @@ export function loopEvents(before: LoopLike | null, after: LoopLike | null, ts: 
   return events;
 }
 
-/** Bound and strip text that reaches the record from outside the process — the OS's notification-rejection
- *  reason (§24.2.3 T4) and the model ids the §27 meter reads out of Claude Code's private log format
- *  (§27.11) — so a record cannot be forged or made unbounded (CWE-117). ONE primitive: two copies of a
- *  bound agree the day they are written and diverge at the first change to either. */
+/** Strip the control characters out of text that reached this process from outside it, and cap what is left
+ *  at `AUDIT_TEXT_MAX`, so no such text can forge a record or grow one without bound (CWE-117 / CWE-770).
+ *  ONE primitive: two copies of a bound agree the day they are written and diverge at the first change to
+ *  either. */
 const AUDIT_TEXT_MAX = 200;
-export function boundAuditText(text: string): string {
+export function boundExternalText(text: string): string {
   return stripStatusControlChars(text).slice(0, AUDIT_TEXT_MAX);
 }
 
 export function notifyFailedEvent(reason: string, ts: string): AuditEvent {
-  return { ts, type: 'notify.failed', reason: boundAuditText(reason) };
+  return { ts, type: 'notify.failed', reason: boundExternalText(reason) };
 }
 
 const AUDIT_UNPRICED_MAX = 32;
@@ -215,7 +215,7 @@ const AUDIT_UNPRICED_MAX = 32;
  *  Code's private log format, and every newly-observed one moves the figure and so appends another record
  *  carrying every id seen so far — quadratic in a vocabulary from outside the process (CWE-770). */
 export function appCostEvent(cost: { usd: number; unpricedModels: string[] }, ts: string): AuditEvent {
-  return { ts, type: 'app.cost', usd: cost.usd, unpriced: cost.unpricedModels.slice(0, AUDIT_UNPRICED_MAX).map(boundAuditText) };
+  return { ts, type: 'app.cost', usd: cost.usd, unpriced: cost.unpricedModels.slice(0, AUDIT_UNPRICED_MAX).map(boundExternalText) };
 }
 
 /** A run replayed from its append-only stream (§25.6): the ordered events plus the folded final

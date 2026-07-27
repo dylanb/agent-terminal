@@ -76,8 +76,9 @@ export interface AuditRecorder {
   /** Record the §26.10 per-iteration cost (priced dollars + unpriced model ids), only while a run is open. */
   recordCost(repoKey: string, iteration: number, cost: CostResult): void;
   /** Record the §27.11 whole-run cost (priced dollars + unpriced model ids), only while a run is open.
-   *  THROWS when the append fails, so the §27 meter can re-attempt the same figure on its next sample. */
-  recordAppCost(repoKey: string, cost: CostResult): void;
+   *  Returns whether the append landed, so the §27 meter can re-attempt the same figure on its next
+   *  sample; a repo with no open run has nothing to append and reports true. */
+  recordAppCost(repoKey: string, cost: CostResult): boolean;
   /** Record the §26.7 per-iteration CI snapshot (run-don't-block), only while a run is open. Best-effort. */
   recordCi(repoKey: string, iteration: number, snapshot: CiSnapshot): void;
   /** Record the OS refusing to deliver a §24.2.3 T4 attention notification, only while a run is open.
@@ -215,7 +216,13 @@ export function createAuditRecorder(deps: AuditRecorderDeps): AuditRecorder {
     },
 
     recordAppCost(repoKey, cost) {
-      appendIfOpen(repoKey, [appCostEvent(cost, auditTimestamp(now()))]);
+      try {
+        appendIfOpen(repoKey, [appCostEvent(cost, auditTimestamp(now()))]);
+        return true;
+      } catch (e) {
+        log('audit recordAppCost failed', e);
+        return false;
+      }
     },
 
     recordCi(repoKey, iteration, snapshot) {

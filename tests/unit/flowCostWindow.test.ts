@@ -5,9 +5,10 @@ import { join } from 'node:path';
 import { createFlowManager } from '../../src/main/flow';
 
 // §27.11 — the meter never reads flow state: every change to the run window or to engine selection reaches
-// it as a value it is HANDED, deduped so an unchanged value reaches it not at all. The pushed value is a
-// TRIPLE — the repo, the selected `app` loop's name or null, and the run window — because the same field
-// answers both "is §27 the engine here" and "which loop is this".
+// it as a value it is HANDED. The manager forwards the value on every view computation and narrows nothing;
+// the meter is where an unchanged one is ignored. The pushed value is a TRIPLE — the repo, the selected
+// `app` loop's name or null, and the run window — because the same field answers both "is §27 the engine
+// here" and "which loop is this".
 
 interface Push {
   repoKey: string;

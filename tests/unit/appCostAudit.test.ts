@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   appCostEvent,
-  boundAuditText,
+  boundExternalText,
   notifyFailedEvent,
   parseAuditStream,
   reconstructTimeline,
@@ -54,7 +54,7 @@ describe('the §27 cost record in the shared audit vocabulary', () => {
   // The strip-and-bound is ONE primitive: two copies agree the day they are written and diverge after.
   it('bounds and strips a model id and a notify reason through the same primitive', () => {
     const hostile = `claude\u200e${'x'.repeat(500)}`;
-    const bounded = boundAuditText(hostile);
+    const bounded = boundExternalText(hostile);
     const event = appCostEvent({ usd: 0, unpricedModels: [hostile] }, TS);
     expect(event).toEqual({ ts: TS, type: 'app.cost', usd: 0, unpriced: [bounded] });
     expect(notifyFailedEvent(hostile, TS)).toEqual({ ts: TS, type: 'notify.failed', reason: bounded });

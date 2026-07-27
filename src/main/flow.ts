@@ -288,7 +288,8 @@ export type FlowReadAppLoopView = (name: string) => FlowLoopView;
 /** Hand the §27 cost meter the run window and the engine binding (§27.11): the selected `app` loop's name,
  *  or null when §27 is not the engine for the most-recent entered loop step, plus the run's recorded start.
  *  One nullable name answers both questions the meter has — IS this §27, and WHICH loop is it — so the
- *  meter never re-derives either from flow state. Called whenever the value changes. */
+ *  meter never re-derives either from flow state. Called on every view computation; the meter is what
+ *  ignores an unchanged triple. */
 export type FlowPushCostWindow = (loop: string | null, startedAt: number | null) => void;
 
 // Optional `store` (§19.1) persists every transition and restores on construction so a relaunch
@@ -592,8 +593,8 @@ export interface FlowManagerDeps {
   /** Resolve a repo's `app`-namespace loop step's §27 def and produce its whole loop view (§27.15);
    *  omitted → an app step renders no loop view rather than falling back to §26. Reads no §26 state. */
   readAppLoopView?: (repoKey: string, name: string) => FlowLoopView;
-  /** Hand a repo's §27 cost meter the run window and the engine binding (§27.11), deduped on the whole
-   *  triple so an unchanged value reaches the meter not at all; omitted → nothing is metered. */
+  /** Hand a repo's §27 cost meter the run window and the engine binding (§27.11). Every render forwards
+   *  the triple unchanged; narrowing it is the meter's job. Omitted → nothing is metered. */
   pushCostWindow?: (repoKey: string, loop: string | null, startedAt: number | null) => void;
   /** The current instant, stamped onto a run when it starts (§26.10); omitted → the wall clock. */
   now?: () => number;

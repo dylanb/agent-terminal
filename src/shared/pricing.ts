@@ -40,6 +40,23 @@ export const PRICING: Record<string, ModelPrice> = {
   'claude-haiku-4-5-20251001': { input: 1, cacheCreate: 1.25, cacheRead: 0.1, output: 5 },
 };
 
+/** Add one turn's counts to `into`'s running total for its model, leaving the turn untouched. Both engines'
+ *  meters fold through here, so a newly billed token category is a compile error at one site rather than a
+ *  silent under-count at whichever fold the change missed. */
+export function addTokens(into: Map<string, ModelTokens>, turn: ModelTokens): void {
+  const cur = into.get(turn.model) ?? { model: turn.model, input: 0, cacheCreate: 0, cacheRead: 0, output: 0 };
+  cur.input += turn.input;
+  cur.cacheCreate += turn.cacheCreate;
+  cur.cacheRead += turn.cacheRead;
+  cur.output += turn.output;
+  into.set(turn.model, cur);
+}
+
+/** The folded totals in a stable order, so one run's spend always prices and renders the same way. */
+export function sortedTotals(into: Map<string, ModelTokens>): ModelTokens[] {
+  return [...into.values()].sort((a, b) => a.model.localeCompare(b.model));
+}
+
 /** Price per-model token totals against PRICING (§26.10). A model absent from the table contributes zero
  *  dollars and is named once in `unpricedModels`; the returned `usd` is always finite. A model that consumed
  *  no tokens bills nothing, so it is never a pricing gap however unfamiliar its id — Claude Code logs a

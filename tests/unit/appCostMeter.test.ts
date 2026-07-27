@@ -615,7 +615,7 @@ describe('the §27 meter reaching the §25 audit and never damaging the run', ()
       armSample: () => {},
       cancelSample: () => {},
       onFigureChanged: () => {},
-      recordCost: () => {},
+      recordCost: () => true,
       log: () => {},
     });
     expect(() => meter.pushWindow(REPO, LOOP, FLOOR)).not.toThrow();

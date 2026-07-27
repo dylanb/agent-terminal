@@ -1,32 +1,48 @@
-// Claude Code's session JSONL logs: their location, and the two traversals of them the app needs. The
-// layout is Claude Code's PRIVATE format; every accessor degrades on drift (a malformed line, a missing
-// field, an absent dir) — cost is display-only and must never abort a loop (CLAUDE.md best-effort
-// side-effect rule). The one thing the §27 sweep will not degrade is a root that exists and refuses
-// enumeration, which it raises rather than price as $0.00 (CLAUDE.md dirEntries rule). The pricing that
-// turns tokens into dollars is shared (pricing.ts). Engine-neutral: §26.10's aggregate entry point and
-// §27.11's per-run sweep both live here, beside the log-root resolver and the project-dir encoder that
-// §27 keeps past the §27.15 N8 sweep.
+// Claude Code's session JSONL logs. The layout is Claude Code's PRIVATE format; every accessor degrades on
+// drift (a malformed line, a missing field, an absent dir) — cost is display-only and must never abort a
+// loop (CLAUDE.md best-effort side-effect rule). The one thing the §27 sweep will not degrade is a root
+// that exists and refuses enumeration, which it raises rather than price as $0.00 (CLAUDE.md dirEntries
+// rule).
 
 import { readFileSync, readdirSync, promises as fsp } from 'node:fs';
 import { StringDecoder } from 'node:string_decoder';
 import path from 'node:path';
-import type { ModelTokens } from '../shared/pricing';
-import { boundAuditText } from '../shared/audit';
+import { addTokens, sortedTotals, type ModelTokens } from '../shared/pricing';
+import { boundExternalText } from '../shared/audit';
 import { readDirEntriesAsync } from './dirEntries';
 import { userConfigRootFrom } from './userConfig';
 
+/** Longest `message.id` / `requestId` the sweep will bank a turn under. Longer is REJECTED, not truncated:
+ *  a truncated identity could collapse two distinct billed turns and drop the second's dollars. */
+const MAX_ID_CHARS = 200;
+/** Longest line the sweep will hold across chunk boundaries. `chunkBytes` bounds the read, not the string
+ *  a newline-free log would otherwise accumulate. Well above the longest line the format produces. */
+const MAX_LINE_CHARS = 1_000_000;
+/** Ceiling on one turn's count for any single token category. Far below where the product with the table's
+ *  largest per-token price could leave the finite range `CostResult.usd` promises. */
+const MAX_TURN_TOKENS = 1e12;
+
 /** One assistant turn recovered from a session log: its billed tokens, the instant it happened, and the
  *  identity Claude Code bills it under. `at` is NaN and `id` is null when the line carries neither. */
-export interface SessionTurn extends ModelTokens {
+interface SessionTurn extends ModelTokens {
   at: number;
   id: string | null;
 }
 
-/** A turn the §27 sweep places and banks. Both fields the caller depends on are established here rather
- *  than promised in prose: the instant is finite, so the turn belongs to an interval of the run's window,
- *  and the identity is total, so a caller that banks it cannot double-count a turn it re-reads. */
+declare const finiteBrand: unique symbol;
+/** An instant checked finite. The sweep narrows once, at the only place a turn enters the §27 stream, so a
+ *  provider that hands back an unplaceable turn fails to type-check rather than being caught downstream. */
+export type FiniteInstant = number & { readonly [finiteBrand]: true };
+
+export function finiteInstant(at: number): FiniteInstant | null {
+  return Number.isFinite(at) ? (at as FiniteInstant) : null;
+}
+
+/** A turn the §27 sweep places and banks. Both fields are structural rather than promised in prose: the
+ *  instant is branded finite, so the turn belongs to an interval of the run's window, and the identity is
+ *  total, so a caller that banks it cannot double-count a turn it re-reads. */
 export interface PricedTurn extends ModelTokens {
-  at: number;
+  at: FiniteInstant;
   id: string;
 }
 
@@ -48,18 +64,19 @@ export function sessionLogDir(repoPath: string, env: NodeJS.ProcessEnv, home: st
 }
 
 function num(v: unknown): number {
-  return typeof v === 'number' && Number.isFinite(v) ? v : 0;
+  return typeof v === 'number' && Number.isFinite(v) && v >= 0 ? Math.min(v, MAX_TURN_TOKENS) : 0;
 }
 
 function str(v: unknown): string | null {
-  return typeof v === 'string' && v.length > 0 ? v : null;
+  return typeof v === 'string' && v.length > 0 && v.length <= MAX_ID_CHARS ? v : null;
 }
 
 /** One assistant event's model, usage, billing identity, and instant — or null when the line is not a priced
  *  assistant turn. Claude Code's format: `message.model` + `message.usage.{input_tokens,
  *  cache_creation_input_tokens, cache_read_input_tokens, output_tokens}`, alongside a top-level `timestamp`
- *  and the `message.id`/`requestId` pair the turn is billed under. Any missing/ill-typed field degrades (an
- *  absent usage/model → null → skipped; an absent identity → uncollapsible; an absent timestamp → NaN). */
+ *  and the `message.id`/`requestId` pair the turn is billed under. Any missing, ill-typed or out-of-range
+ *  field degrades (an absent usage/model → null → skipped; an absent or over-long identity →
+ *  uncollapsible; an absent timestamp → NaN; a negative or absurd token count → 0 or the ceiling). */
 function extractTurn(obj: unknown): SessionTurn | null {
   if (obj === null || typeof obj !== 'object') return null;
   const line = obj as { message?: unknown; timestamp?: unknown; requestId?: unknown };
@@ -73,7 +90,7 @@ function extractTurn(obj: unknown): SessionTurn | null {
   const msgId = str(m.id);
   const reqId = str(line.requestId);
   return {
-    model: boundAuditText(m.model),
+    model: boundExternalText(m.model),
     input: num(u.input_tokens),
     cacheCreate: num(u.cache_creation_input_tokens),
     cacheRead: num(u.cache_read_input_tokens),
@@ -141,15 +158,10 @@ export function readSessionTokens(logDir: string | null, since?: number): ModelT
         if (counted.has(turn.id)) continue;
         counted.add(turn.id);
       }
-      const cur = byModel.get(turn.model) ?? { model: turn.model, input: 0, cacheCreate: 0, cacheRead: 0, output: 0 };
-      cur.input += turn.input;
-      cur.cacheCreate += turn.cacheCreate;
-      cur.cacheRead += turn.cacheRead;
-      cur.output += turn.output;
-      byModel.set(turn.model, cur);
+      addTokens(byModel, turn);
     }
   }
-  return [...byModel.values()].sort((a, b) => a.model.localeCompare(b.model));
+  return sortedTotals(byModel);
 }
 
 export interface SessionSweepOptions {
@@ -162,9 +174,11 @@ export interface SessionSweepOptions {
 /** A sweep of ONE run's window over a repo's session logs (§27.11). Each drain yields every priced turn in
  *  the window the sweep has not already yielded from an UNCHANGED log: the first yields the whole window,
  *  and a log that grew is re-yielded whole, so a caller must bank each turn's identity rather than assume
- *  the drains are disjoint. Every drift the private log format can produce degrades — an absent root, an
- *  unreadable file, an unparseable line — but a root that exists and refuses enumeration THROWS, because a
- *  caller that read it as empty would price the run at a confident $0.00. */
+ *  the drains are disjoint. Only a log read through to its end is remembered, so a read that failed is
+ *  retried on the next drain instead of becoming a permanent undercount. Every drift the private log
+ *  format can produce degrades — an absent root, an unreadable file, an unparseable or over-long line —
+ *  but a root that exists and refuses enumeration THROWS, and so does a chunk size that cannot be
+ *  allocated, because a caller that read either as empty would price the run at a confident $0.00. */
 export interface SessionSweep {
   drain(): AsyncIterable<PricedTurn>;
 }
@@ -197,29 +211,39 @@ async function stampOf(file: string): Promise<LogStamp | null> {
 /** Yield the file's complete lines, relinquishing the event loop between chunks so no single read of a log
  *  is an uninterruptible block on the main thread (§27.11 / AC7). A chunk boundary is a BYTE boundary, so
  *  the decoder holds an incomplete trailing character across it and `carry` holds an incomplete trailing
- *  line; an unreadable file yields nothing. */
-async function* logLines(file: string, chunkBytes: number): AsyncGenerator<string> {
+ *  line; a line that outgrows `MAX_LINE_CHARS` is dropped rather than accumulated. Returns whether the file
+ *  was read through to its end: `false` means the caller saw only part of it, or none of it, and must not
+ *  remember having read it. */
+async function* logLines(file: string, buffer: Buffer): AsyncGenerator<string, boolean> {
   let handle: fsp.FileHandle;
   try {
     handle = await fsp.open(file, 'r');
   } catch {
-    return;
+    return false;
   }
   try {
-    const buffer = Buffer.allocUnsafe(chunkBytes);
     const decoder = new StringDecoder('utf8');
     let carry = '';
+    let dropping = false;
     for (;;) {
-      const { bytesRead } = await handle.read(buffer, 0, chunkBytes, null);
+      const { bytesRead } = await handle.read(buffer, 0, buffer.length, null);
       if (bytesRead === 0) break;
       const parts = (carry + decoder.write(buffer.subarray(0, bytesRead))).split('\n');
       carry = parts.pop() ?? '';
-      for (const line of parts) yield line;
+      for (const line of parts) {
+        if (dropping) dropping = false;
+        else yield line;
+      }
+      if (carry.length > MAX_LINE_CHARS) {
+        carry = '';
+        dropping = true;
+      }
     }
     carry += decoder.end();
-    if (carry !== '') yield carry;
+    if (!dropping && carry !== '') yield carry;
+    return true;
   } catch {
-    /* mid-read failure — cost is display-only, so what was read stands and the rest is dropped */
+    return false;
   } finally {
     await handle.close().catch(() => {});
   }
@@ -229,8 +253,8 @@ async function* logLines(file: string, chunkBytes: number): AsyncGenerator<strin
  *  entry point above this yields turns rather than per-model sums, so each one carries the instant a caller
  *  places it by and the identity a caller banks it under. A turn with NO usable instant is excluded in both
  *  directions, since a dollar that can be placed in no interval of the run's window could never be
- *  accounted for by the run's parts; a turn the log stamps no billing identity on is given one derived from
- *  where it sits, which is stable across drains because the logs are append-only. */
+ *  accounted for by the run's parts; a turn the log stamps no usable billing identity on is given one
+ *  derived from where it sits, which is stable across drains because the logs are append-only. */
 export function openSessionSweep(logDir: string | null, options: SessionSweepOptions): SessionSweep {
   const read = new Map<string, LogStamp>();
   const unchanged = (file: string, stamp: LogStamp | null): boolean => {
@@ -241,19 +265,32 @@ export function openSessionSweep(logDir: string | null, options: SessionSweepOpt
   return {
     async *drain(): AsyncGenerator<PricedTurn> {
       if (logDir === null) return;
+      const buffer = Buffer.allocUnsafe(options.chunkBytes);
       for await (const file of jsonlFilesAsync(logDir)) {
         const stamp = await stampOf(file);
         if (options.since !== undefined && stamp !== null && stamp.mtimeMs < options.since) continue;
         if (unchanged(file, stamp)) continue;
         let ordinal = 0;
-        for await (const line of logLines(file, options.chunkBytes)) {
-          const turn = parseLine(line);
-          if (!turn || !Number.isFinite(turn.at)) continue;
-          ordinal += 1;
-          if (options.since !== undefined && turn.at < options.since) continue;
-          yield { ...turn, id: turn.id ?? JSON.stringify([file, ordinal]) };
+        let complete = false;
+        const lines = logLines(file, buffer);
+        try {
+          for (;;) {
+            const next = await lines.next();
+            if (next.done === true) {
+              complete = next.value;
+              break;
+            }
+            const turn = parseLine(next.value);
+            const at = turn === null ? null : finiteInstant(turn.at);
+            if (turn === null || at === null) continue;
+            ordinal += 1;
+            if (options.since !== undefined && at < options.since) continue;
+            yield { ...turn, at, id: turn.id ?? JSON.stringify([file, ordinal]) };
+          }
+        } finally {
+          await lines.return(false);
         }
-        if (stamp !== null) read.set(file, stamp);
+        if (complete && stamp !== null) read.set(file, stamp);
       }
     },
   };

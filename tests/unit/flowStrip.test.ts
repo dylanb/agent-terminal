@@ -722,8 +722,8 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     view = { ...view, loop: { ...view.loop!, iteration: 2, cost: '$0.42' } };
     fire();
     await vi.waitFor(() => expect(host.querySelector('.loop-cost')?.textContent).toBe('$0.42'));
-    // WCAG SC 4.1.3 / 1.3.1: with the host aria-atomic=false, only the changed cost node is announced.
-    // Its visible text is a bare figure, so it must carry the "cost" context in its accessible name.
+    // WCAG SC 1.3.1: the visible figure is bare, so the "cost" context it is read with — as the read-out's
+    // description on focus and on demand — has to come from the node's own accessible name.
     expect(host.querySelector('.loop-cost')?.getAttribute('aria-label')).toBe('cost $0.42');
   });
 

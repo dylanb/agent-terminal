@@ -28,7 +28,7 @@ The foundation is "done" when all of the following pass on both Linux and macOS:
 - [x] Injected text containing the literal sequence `ESC[201~` does not break out of paste mode (sanitization works on both paths). *(main path e2e-verified end-to-end; the shared `stripPasteBreakout` guard is unit-tested and applied on both the main `wrapForPaste` and renderer `term.paste()` paths; the Send-button path is e2e-verified)*
 
 **Lifecycle**
-- [ ] Exiting the shell (`exit`) shows the exit notice in both panes; closing the window terminates the shell process (no orphaned PTY) and disposes the shadow terminal. *(exit notices in both panes e2e-verified; PTY-kill/shadow-dispose on window close implemented but not asserted by a test)*
+- [ ] Exiting the shell (`exit`) shows the exit notice in both panes; closing the window terminates the shell process (no orphaned PTY), disposes the shadow terminal, and disarms every self-rearming timer the window created (the §26 turn watchdogs, the §27 cost samplers). *(exit notices in both panes e2e-verified; the `win.on('closed')` disposal list itself is not asserted by any test — the app is single-window and `window-all-closed` quits, so the state the list guards against (a closed window with a live process, reachable on macOS through an `activate` reopen) cannot be reached from the unit, integration or Playwright layer: `app.close()` ends the process before any armed timer could fire)*
 
 ---
 

@@ -1055,6 +1055,10 @@ async function createWindow(): Promise<void> {
     onFigureChanged: () => pushFlowChanged(),
     recordCost: (repoDir, cost) => audit.recordAppCost(repoDir, cost),
   });
+  const disposeCostSampleTimers = (): void => {
+    for (const armed of costSampleTimers.values()) clearTimeout(armed);
+    costSampleTimers.clear();
+  };
   const appLoopCostReadout = (repoKey: string): string | null => {
     const cost = appCostMeter.current(repoKey);
     return cost === null ? null : formatCost(cost);
@@ -1802,6 +1806,7 @@ async function createWindow(): Promise<void> {
       () => {
         if (appTurnTimer) clearTimeout(appTurnTimer);
       },
+      () => disposeCostSampleTimers(),
       () => unwatchTurnDone?.(),
       () => unwatchAppTurnDone?.(),
     ]);
