@@ -70,7 +70,11 @@ function harness(): Harness {
   h.meter = createAppCostMeter({
     turns: (repoDir, since) => {
       h.sweeps.push({ repoDir, since });
-      const scripted = logs.get(repoDir) ?? [];
+      // The seam promises every turn the logs hold AT OR AFTER `since`, and excludes any turn with no usable
+      // instant — so the fake honours both, or an assertion on the meter's total grades the fake instead.
+      const scripted = (logs.get(repoDir) ?? []).filter(
+        (t) => Number.isFinite(t.at) && (since === null || t.at >= since),
+      );
       return {
         async *[Symbol.asyncIterator]() {
           if (sweepThrows) throw new Error('log root unreadable');
@@ -189,13 +193,6 @@ describe('the §27 run total', () => {
     h.meter.pushWindow(REPO, LOOP, FLOOR);
     await h.sample();
     expect(h.meter.current(REPO)?.usd).toBe(6);
-  });
-
-  it('excludes a turn with no usable instant rather than admitting an unplaceable dollar', async () => {
-    h.setLogs(REPO, [turn({ at: Number.NaN, id: 'unplaceable', input: MTOK }), turn({ at: FLOOR + 1, id: 'ok', input: MTOK })]);
-    h.meter.pushWindow(REPO, LOOP, FLOOR);
-    await h.sample();
-    expect(h.meter.current(REPO)?.usd).toBe(3);
   });
 
   // AC 4 — an unpriced model contributes zero dollars and surfaces as `unknown`, never as NaN.

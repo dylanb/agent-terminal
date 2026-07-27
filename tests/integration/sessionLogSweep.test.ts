@@ -36,16 +36,18 @@ async function drain(dir: string | null, opts?: { since?: number; chunkBytes?: n
   return out;
 }
 
-/** Event-loop turns elapsed, counted by a self-rescheduling macrotask — ordering only, no wall clock. */
+/** Event-loop iterations elapsed, counted by a self-rescheduling check-phase callback — ordering only, with
+ *  no wall clock: `setImmediate` fires once per iteration, where a zero timer is clamped to a millisecond and
+ *  would report nothing for a sweep that yields many times inside one. */
 function eventLoopTicker(): { ticks: () => number; stop: () => void } {
   let ticks = 0;
   let running = true;
   const pump = (): void => {
     if (!running) return;
     ticks += 1;
-    setTimeout(pump, 0);
+    setImmediate(pump);
   };
-  setTimeout(pump, 0);
+  setImmediate(pump);
   return { ticks: () => ticks, stop: () => { running = false; } };
 }
 
