@@ -203,6 +203,25 @@ describe('the §27 sweep`s memory across drains', () => {
     expect(inputOf(await sweep.drain())).toBe(7);
   });
 
+  // A sample can still be walking the tree when the next one is armed — `pushWindow` re-arms whenever the
+  // pushed triple changes, and a chain advance changes the loop name while keeping the run and its sweep —
+  // so two drains of one sweep can overlap. Both would start from the same read position and fold the same
+  // bytes twice; the identity memory hides that for a turn the log identifies, and not for one it does not.
+  it('counts each turn once when two drains of one sweep overlap', async () => {
+    writeFileSync(
+      join(dir, 'session.jsonl'),
+      logBytes(
+        turnLine({ ts: '2026-07-09T12:00:01.000Z', input: 100 }),
+        turnLine({ ts: '2026-07-09T12:00:02.000Z', id: 'identified', input: 20 }),
+      ),
+    );
+    const sweep = sweepOf(dir, { chunkBytes: 16 });
+    const [first, second] = await Promise.all([sweep.drain(), sweep.drain()]);
+    expect(inputOf(first)).toBe(120);
+    expect(inputOf(second)).toBe(120);
+    expect(inputOf(await sweep.drain())).toBe(120);
+  });
+
   it('picks up a log created after the first drain', async () => {
     writeFileSync(join(dir, 'a.jsonl'), logBytes(turnLine({ ts: '2026-07-09T12:00:01.000Z', id: 'a', input: 1 })));
     const sweep = sweepOf(dir);
