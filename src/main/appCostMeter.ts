@@ -79,7 +79,7 @@ export function createAppCostMeter(deps: AppCostMeterDeps): AppCostMeter {
   };
 
   const delayFor = (idleSamples: number): number =>
-    deps.sampleDelayMs * Math.min(2 ** Math.min(idleSamples, 30), MAX_SAMPLE_BACKOFF);
+    deps.sampleDelayMs * Math.min(2 ** idleSamples, MAX_SAMPLE_BACKOFF);
 
   const sample = async (repoDir: string): Promise<void> => {
     const run = runs.get(repoDir);

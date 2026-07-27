@@ -431,7 +431,7 @@ export function createFlowMachine(
     try {
       pushCostWindow?.(appLoopName ?? null, startedAt);
     } catch (e) {
-      console.error('flow cost window push failed', e instanceof Error ? e.message : String(e));
+      console.error('flow cost window push failed', errMsg(e));
     }
     // §27.15 — the flow module holds no independent reader of §26 loop state on the app path: an app step's
     // refs never source from a stray §26 state.yaml, so a §27 step surfaces none of that engine's ticket/PR.
