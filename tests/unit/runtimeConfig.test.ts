@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { constants } from 'node:buffer';
 import { resolveRuntimeConfig } from '../../src/main/runtimeConfig';
+import { SAMPLE_BACKOFF_FACTOR_MAX } from '../../src/main/appCostMeter';
 
 describe('resolveRuntimeConfig (§15.7 — env-overridable per-agent profile seam, no magic numbers)', () => {
   it('defaults quietMs to 1000 and parses a valid override, falling back on garbage', () => {
@@ -114,5 +115,21 @@ describe('resolveRuntimeConfig (§15.7 — env-overridable per-agent profile sea
 
   it('passes an in-range chunk-size override through unchanged', () => {
     expect(resolveRuntimeConfig({ APP_SESSION_LOG_CHUNK_BYTES: '4096' }).sessionLogChunkBytes).toBe(4096);
+  });
+
+  // The cadence reaches `setTimeout` after being multiplied by the meter's backoff factor, and Node does
+  // not raise on a delay past the 32-bit signed range — it warns and fires in 1 ms. An operator who set the
+  // knob to "sample essentially never" would get the tightest self-rearming loop the code can produce, each
+  // rung a whole-tree sweep on the process that also drains the PTY (CWE-400).
+  it('caps the cost-sample cadence at a delay the timer can still hold after the backoff multiplies it', () => {
+    for (const raw of ['99999999999', String(Number.MAX_SAFE_INTEGER), '2147483647']) {
+      const capped = resolveRuntimeConfig({ APP_COST_SAMPLE_MS: raw }).costSampleMs;
+      expect(capped, raw).toBeGreaterThan(0);
+      expect(capped * SAMPLE_BACKOFF_FACTOR_MAX, raw).toBeLessThanOrEqual(2 ** 31 - 1);
+    }
+  });
+
+  it('passes an in-range cost-sample cadence through unchanged', () => {
+    expect(resolveRuntimeConfig({ APP_COST_SAMPLE_MS: '200' }).costSampleMs).toBe(200);
   });
 });

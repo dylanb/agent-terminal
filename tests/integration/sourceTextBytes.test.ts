@@ -1,8 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { readFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { join } from 'node:path';
 
 const REPO = fileURLToPath(new URL('../..', import.meta.url));
 
@@ -17,8 +15,31 @@ function trackedSources(): { src: string[]; other: string[] } {
   return { src: files.filter((f) => f.startsWith('src/')), other: files.filter((f) => !f.startsWith('src/')) };
 }
 
+/** The bytes git holds for each path, read from the INDEX the paths were enumerated from. Reading the
+ *  worktree instead lets the two disagree — an ordinary state while a tracked file is being deleted or
+ *  moved — and the ENOENT surfaces under the name of a property that did not fail. */
+function indexBytes(files: string[]): Map<string, Buffer> {
+  if (files.length === 0) return new Map();
+  const batch = execFileSync('git', ['cat-file', '--batch'], {
+    cwd: REPO,
+    input: `${files.map((f) => `:${f}`).join('\n')}\n`,
+    maxBuffer: 512 * 1024 * 1024,
+  });
+  const bytes = new Map<string, Buffer>();
+  let at = 0;
+  for (const file of files) {
+    const eol = batch.indexOf(0x0a, at);
+    const size = Number(batch.toString('utf8', at, eol).split(' ')[2]);
+    bytes.set(file, batch.subarray(eol + 1, eol + 1 + size));
+    at = eol + 1 + size + 1;
+  }
+  return bytes;
+}
+
 function carrying(files: string[], bad: (byte: number) => boolean): string[] {
-  return files.filter((file) => [...readFileSync(join(REPO, file))].some(bad));
+  const bytes = indexBytes(files);
+  expect(bytes.size).toBe(files.length);
+  return files.filter((file) => bytes.get(file)!.some(bad));
 }
 
 // A raw NUL makes git classify a .ts as BINARY and drop it from every diff, so the file stops being

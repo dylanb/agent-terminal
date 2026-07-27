@@ -1,5 +1,17 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { appendFileSync, chmodSync, mkdtempSync, mkdirSync, symlinkSync, writeFileSync, utimesSync, rmSync } from 'node:fs';
+import {
+  appendFileSync,
+  chmodSync,
+  mkdtempSync,
+  mkdirSync,
+  readdirSync,
+  statSync,
+  symlinkSync,
+  truncateSync,
+  writeFileSync,
+  utimesSync,
+  rmSync,
+} from 'node:fs';
 import { constants as bufferConstants } from 'node:buffer';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -287,35 +299,90 @@ describe('the §27 per-turn session-log sweep', () => {
   // Claude Code's private log format at whatever length that format hands over. It is REJECTED rather than
   // truncated: two distinct billed turns sharing a truncated prefix would collapse into one and drop the
   // second turn's dollars from the run's total.
-  it('rejects a billing identity longer than the cap, leaving the turn its position-derived one', async () => {
+  it('rejects a billing identity longer than the cap and derives one from the turn itself', async () => {
     const huge = 'x'.repeat(5_000);
+    const replay = turnLine({ ts: '2026-07-09T12:00:01.000Z', msgId: huge, reqId: huge, input: 1 });
+    writeFileSync(
+      join(dir, 'session.jsonl'),
+      [replay, turnLine({ ts: '2026-07-09T12:00:03.000Z', id: 'ok', input: 3 })].join('\n'),
+    );
+    writeFileSync(join(dir, 'resumed.jsonl'), replay);
+    const turns = await drain(dir);
+    expect(turns.map((t) => t.input).sort()).toEqual([1, 1, 3]);
+    for (const t of turns) expect(t.id.length).toBeLessThan(huge.length);
+    expect(new Set(turns.map((t) => t.id)).size).toBe(2);
+  });
+
+  // AC 3 — the replay a billing identity exists to collapse lands in a DIFFERENT file, so an identity
+  // derived from where the turn SITS collapses nothing: the same turn banks once per file it is replayed
+  // into and the run's dollars rise by one full copy per resume.
+  it('gives a turn carrying no billing identity one identity across the files it is replayed into', async () => {
+    const line = turnLine({ ts: '2026-07-09T12:00:01.000Z', input: 7 });
+    writeFileSync(join(dir, 'session.jsonl'), line);
+    writeFileSync(join(dir, 'resumed.jsonl'), line);
+    const turns = await drain(dir);
+    expect(turns.map((t) => t.input)).toEqual([7, 7]);
+    expect(new Set(turns.map((t) => t.id)).size).toBe(1);
+  });
+
+  it('keeps two DIFFERENT turns carrying no billing identity apart', async () => {
     writeFileSync(
       join(dir, 'session.jsonl'),
       [
-        turnLine({ ts: '2026-07-09T12:00:01.000Z', msgId: huge, reqId: 'r', input: 1 }),
-        turnLine({ ts: '2026-07-09T12:00:02.000Z', msgId: 'm', reqId: huge, input: 2 }),
-        turnLine({ ts: '2026-07-09T12:00:03.000Z', id: 'ok', input: 3 }),
+        turnLine({ ts: '2026-07-09T12:00:01.000Z', input: 7 }),
+        turnLine({ ts: '2026-07-09T12:00:02.000Z', input: 7 }),
+        turnLine({ ts: '2026-07-09T12:00:02.000Z', input: 9 }),
       ].join('\n'),
     );
+    expect(new Set((await drain(dir)).map((t) => t.id)).size).toBe(3);
+  });
+
+  // §27 admission, not §26 decode: the model id reaches an in-memory accumulator key, the strip and the
+  // append-only §25 record, all from Claude Code's private format (CWE-117/CWE-770).
+  it('bounds the model id it hands on, whatever the log stamps', async () => {
+    const long = `claude-${'x'.repeat(500)}`;
+    writeFileSync(join(dir, 'session.jsonl'), turnLine({ ts: '2026-07-09T12:00:01.000Z', id: 'wide', model: long, input: 1 }));
     const turns = await drain(dir);
-    expect(turns.map((t) => t.input)).toEqual([1, 2, 3]);
-    expect(new Set(turns.map((t) => t.id)).size).toBe(3);
-    for (const t of turns) expect(t.id.length).toBeLessThan(huge.length);
+    expect(turns[0].model.length).toBeLessThan(long.length);
+    expect(long.startsWith(turns[0].model)).toBe(true);
   });
 
   // A log line has no length limit in the format, and the sweep holds an incomplete line across chunk
   // boundaries — so `chunkBytes` bounds the READ but not the allocation, and one newline-free log is
-  // materialised whole on the process that also drains the PTY.
-  it('drops a line longer than the cap instead of materialising it, and keeps reading past it', async () => {
-    writeFileSync(
-      join(dir, 'session.jsonl'),
-      [
-        turnLine({ ts: '2026-07-09T12:00:01.000Z', id: 'huge', input: 5, pad: 2_000_000 }),
-        turnLine({ ts: '2026-07-09T12:00:02.000Z', id: 'after', input: 4 }),
-      ].join('\n'),
-    );
-    const turns = await drain(dir, { chunkBytes: 64 * 1024 });
-    expect(turns.map((t) => t.id)).toEqual([billed('after')]);
+  // materialised whole on the process that also drains the PTY. `APP_SESSION_LOG_CHUNK_BYTES` reaches
+  // 16 MiB, sixteen times the line cap, so an over-long line also arrives as a COMPLETE split element.
+  it.each([64 * 1024, 4_000_000])(
+    'drops a line longer than the cap instead of materialising it, and keeps reading past it (chunkBytes %d)',
+    async (chunkBytes) => {
+      writeFileSync(
+        join(dir, 'session.jsonl'),
+        [
+          turnLine({ ts: '2026-07-09T12:00:01.000Z', id: 'huge', input: 5, pad: 2_000_000 }),
+          turnLine({ ts: '2026-07-09T12:00:02.000Z', id: 'after', input: 4 }),
+        ].join('\n'),
+      );
+      const turns = await drain(dir, { chunkBytes });
+      expect(turns.map((t) => t.id)).toEqual([billed('after')]);
+    },
+  );
+
+  // `sample()` breaks out of the drain on every retirement or floor change mid-drain, so the log the sweep
+  // was reading is abandoned at a `yield`. Without an explicit return the inner generator stays suspended
+  // and its FileHandle survives until GC (CWE-772).
+  it('closes the log it was reading when the caller abandons the drain', async () => {
+    for (let i = 0; i < 8; i += 1) {
+      writeFileSync(join(dir, `s${i}.jsonl`), turnLine({ ts: '2026-07-09T12:00:01.000Z', id: `t${i}`, input: 1 }));
+    }
+    const openFds = (): number => readdirSync('/dev/fd').length;
+    const abandon = async (sweep: SessionSweep): Promise<void> => {
+      const iter = sweep.drain()[Symbol.asyncIterator]();
+      await iter.next();
+      await iter.return?.(undefined);
+    };
+    await abandon(sweepOf(dir));
+    const baseline = openFds();
+    for (let i = 0; i < 40; i += 1) await abandon(sweepOf(dir));
+    expect(openFds()).toBeLessThanOrEqual(baseline);
   });
 
   it('yields nothing and completes when a log holds one over-long line and nothing else', async () => {
@@ -356,6 +423,27 @@ describe('the §27 per-turn session-log sweep', () => {
   it('surfaces a chunk size it cannot allocate rather than pricing every log at nothing', async () => {
     writeFileSync(join(dir, 'session.jsonl'), turnLine({ ts: '2026-07-09T12:00:01.000Z', id: 'real', input: 9 }));
     await expect(drain(dir, { chunkBytes: bufferConstants.MAX_LENGTH + 1 })).rejects.toThrow();
+  });
+
+  // A subdirectory the app cannot enumerate — a `<session-uuid>/subagents/` left root-owned by a Claude
+  // Code run under sudo — aborts the walk. The sweep raises rather than pricing the tree at $0.00, and the
+  // turns it had already read are the caller's: they are the run's dollars, already banked.
+  it.skipIf(process.getuid?.() === 0)('hands back the turns it read before an unreadable directory aborts the walk', async () => {
+    writeFileSync(join(dir, 'a.jsonl'), turnLine({ ts: '2026-07-09T12:00:01.000Z', id: 'a', input: 1 }));
+    const locked = join(dir, 'locked');
+    mkdirSync(locked);
+    chmodSync(locked, 0o000);
+    const seen: PricedTurn[] = [];
+    try {
+      await expect(
+        (async () => {
+          for await (const turn of sweepOf(dir).drain()) seen.push(turn);
+        })(),
+      ).rejects.toThrow();
+    } finally {
+      chmodSync(locked, 0o755);
+    }
+    expect(seen.map((t) => t.id)).toEqual([billed('a')]);
   });
 
   it('skips a log whose last write predates the floor, and opens it when there is no floor', async () => {
@@ -441,6 +529,41 @@ describe('the §27 sweep`s memory across drains', () => {
     expect(await collect(sweep)).toEqual([]);
   });
 
+  // The subtler half of the same arm: a failed OPEN yields nothing, but a failed mid-READ yields PART of a
+  // log — and remembering that partial read strands the remainder for the life of the run. Both arms yield
+  // nothing on the drain that fails, so the memo is only observable on a LATER drain of the same path: the
+  // fixture swaps the unreadable target for a real log stamped to the byte with the memo the sweep would
+  // have taken, so a remembered file is skipped and a forgotten one is read.
+  it('re-reads a log whose mid-read failure left it half-read, rather than remembering the read that failed', async () => {
+    writeFileSync(join(dir, 'real.jsonl'), turnLine({ ts: '2026-07-09T12:00:01.000Z', id: 'real', input: 1 }));
+    const target = join(dir, 'a-directory');
+    const link = join(dir, 'unreadable.jsonl');
+    mkdirSync(target);
+    const late = `${turnLine({ ts: '2026-07-09T12:00:02.000Z', id: 'late', input: 2 })}\n`;
+    for (let i = 0; statSync(target).size < late.length && i < 4_000; i += 1) {
+      writeFileSync(join(target, `pad-${i}.txt`), '');
+    }
+    expect(statSync(target).size).toBeGreaterThanOrEqual(late.length);
+    const stampSec = 1_785_000_000;
+    utimesSync(target, stampSec, stampSec);
+    symlinkSync(target, link);
+
+    const sweep = sweepOf(dir);
+    expect((await collect(sweep)).map((t) => t.id)).toEqual([billed('real')]);
+
+    const stamp = statSync(target);
+    const payload = join(dir, 'payload.log');
+    writeFileSync(payload, late);
+    truncateSync(payload, stamp.size);
+    utimesSync(payload, stampSec, stampSec);
+    rmSync(link);
+    symlinkSync(payload, link);
+    expect(statSync(link).size).toBe(stamp.size);
+    expect(statSync(link).mtimeMs).toBe(stamp.mtimeMs);
+
+    expect((await collect(sweep)).map((t) => t.id)).toEqual([billed('late')]);
+  });
+
   // A log truncated or replaced under the sweep is not an append: the recorded size goes backwards, so the
   // memory of it is worthless and the file is read from the top again.
   it('re-reads a log that was rewritten smaller rather than trusting its memory of it', async () => {
@@ -522,14 +645,30 @@ describe('the aggregate entry point §26 still calls', () => {
     expect(readSessionTokens(notADir)).toEqual([]);
   });
 
-  // A model id longer than the audit bound is truncated at extraction, so the in-memory key the run
-  // accumulates under is already bounded — but a turn's tokens still land under it.
-  it('keeps counting a turn whose model id is longer than the audit bound', () => {
+  // AC 10 — every §27 admission rule sits on the §27 yield site, so the decoder both engines share is
+  // `origin/main`'s byte for byte. Each of the three below is a §26-observable value the sweep's own
+  // window bounds and the aggregate deliberately does not.
+  it('reports a model id exactly as the log stamps it, however long', () => {
     const long = `claude-${'x'.repeat(500)}`;
     writeFileSync(join(dir, 'session.jsonl'), turnLine({ ts: '2026-07-09T12:00:01.000Z', model: long, input: 12 }));
-    const totals = readSessionTokens(dir);
-    expect(totals).toHaveLength(1);
-    expect(totals[0].input).toBe(12);
-    expect(totals[0].model.length).toBeLessThan(long.length);
+    expect(readSessionTokens(dir)).toEqual([{ model: long, input: 12, cacheCreate: 0, cacheRead: 0, output: 0 }]);
+  });
+
+  it('reports an out-of-range usage count exactly as it reads it', () => {
+    writeFileSync(join(dir, 'session.jsonl'), turnLine({ ts: '2026-07-09T12:00:01.000Z', input: -5, output: 1e308 }));
+    expect(readSessionTokens(dir)).toEqual([
+      { model: 'claude-sonnet-5', input: -5, cacheCreate: 0, cacheRead: 0, output: 1e308 },
+    ]);
+  });
+
+  // The regression the §27 identity cap introduced when it sat on the shared decoder: a rejected identity
+  // reads as an ABSENT one here, and an absent identity skips the dedup block entirely — so a resumed
+  // session's replayed turn was counted once per file it appeared in, doubling the run's §26 dollars.
+  it('counts a replayed turn once however long its billing identity is', () => {
+    const long = 'x'.repeat(254);
+    const replay = turnLine({ ts: '2026-07-09T12:00:01.000Z', msgId: long, reqId: long, input: 1000 });
+    writeFileSync(join(dir, 'session.jsonl'), replay);
+    writeFileSync(join(dir, 'resumed.jsonl'), replay);
+    expect(readSessionTokens(dir)[0].input).toBe(1000);
   });
 });

@@ -69,6 +69,18 @@ describe('the window push the §27 meter is handed', () => {
     expect(pushes.at(-1)).toEqual({ repoKey: repo, loop: null, startedAt: null });
   });
 
+  // The invariant the meter's backoff ceiling exists for: `done` leaves the app loop step ENTERED, so no
+  // push retires a completed run and it keeps sampling for as long as the app stays open. Were an advance
+  // to `done` to retire the window the way terminate does, the run's total would blank off the strip and
+  // its §25 record would stop at the moment the operator wants the figure.
+  it('keeps pushing the app loop after the flow advances to done', () => {
+    const repo = seedRepo(APP_STEP('plan', 'plan-loop'));
+    const flow = manager();
+    flow.start(repo);
+    flow.advance(repo);
+    expect(pushes.at(-1)).toEqual({ repoKey: repo, loop: 'plan-loop', startedAt: 5_000 });
+  });
+
   it('pushes the new floor on restart', () => {
     const repo = seedRepo(APP_STEP('plan', 'plan-loop'));
     const flow = manager();

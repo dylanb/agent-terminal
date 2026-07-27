@@ -5393,6 +5393,28 @@ const V2_COST_TOTAL = '$12.00 +unknown';
 /** The same run after one further billed turn is logged while it awaits the human at its gate: +$3.00. */
 const V2_COST_AFTER_GATE = '$15.00 +unknown';
 
+/** The loop read-out's accessible name and description, as CHROMIUM computes them. */
+async function readoutAx(): Promise<{ name: string; description: string }> {
+  const cdp = await app.context().newCDPSession(page);
+  try {
+    await cdp.send('Accessibility.enable');
+    const doc = (await cdp.send('DOM.getDocument', { depth: 0 })) as { root: { nodeId: number } };
+    const hit = (await cdp.send('DOM.querySelector', {
+      nodeId: doc.root.nodeId,
+      selector: '#flow-strip .loopstat',
+    })) as { nodeId: number };
+    expect(hit.nodeId).toBeGreaterThan(0);
+    const tree = (await cdp.send('Accessibility.getPartialAXTree', {
+      nodeId: hit.nodeId,
+      fetchRelatives: false,
+    })) as { nodes: { name?: { value?: string }; description?: { value?: string } }[] };
+    const node = tree.nodes[0];
+    return { name: node?.name?.value ?? '', description: node?.description?.value ?? '' };
+  } finally {
+    await cdp.detach();
+  }
+}
+
 test('a §27 run meters its WHOLE cost onto the strip and into the §25 audit, leaving §26 unpriced (§27.11 / AC1,2,3,4,5,7,8a,10)', { tag: '@ownapp' }, async () => {
   const repo = seedPrebootstrappedAppLoopFlowRepo('agent-term-e2e-v2-cost-');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-v2-cost-home-'));
@@ -5482,13 +5504,12 @@ test('a §27 run meters its WHOLE cost onto the strip and into the §25 audit, l
   await expect(cost).toHaveText(V2_COST_TOTAL, { timeout: 30_000 });
   expect(await cost.getAttribute('aria-label')).toBe(`cost ${V2_COST_TOTAL}`);
 
-  // WCAG SC 2.2.2 — the timer-driven figure must not reach the strip's polite live region, and the node
-  // that changes when the meter ticks is the READ-OUT, whose name-from-content would otherwise absorb the
-  // figure. Only a real accessibility tree can grade this: the name is what a live change is announced
-  // from, and the description is what a focused read-out still reports (SC 1.3.1). jsdom computes neither.
-  const figureRe = (figure: string): RegExp => new RegExp(figure.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
-  await expect(loopReadout()).not.toHaveAccessibleName(figureRe(V2_COST_TOTAL));
-  await expect(loopReadout()).toHaveAccessibleDescription(`cost ${V2_COST_TOTAL}`);
+  // WCAG SC 4.1.3 / SC 1.3.1 — the name is what a live change is announced from and the description is
+  // what a focused read-out still reports, both read from the browser's own accessibility tree rather than
+  // from a re-implementation of the accname algorithm (CLAUDE.md: ask the engine what it painted).
+  let ax = await readoutAx();
+  expect(ax.name).not.toContain(V2_COST_TOTAL);
+  expect(ax.description).toBe(`cost ${V2_COST_TOTAL}`);
 
   // AC7 — the gate is reached with its full declared option set even though a model priced to nothing.
   await loopReadout().click();
@@ -5506,10 +5527,9 @@ test('a §27 run meters its WHOLE cost onto the strip and into the §25 audit, l
     })}\n`,
   );
   await expect(cost).toHaveText(V2_COST_AFTER_GATE, { timeout: 30_000 });
-  // ...and the moved figure is still outside the name the live region would announce, and still on the
-  // description a focused read-out reports.
-  await expect(loopReadout()).not.toHaveAccessibleName(figureRe(V2_COST_AFTER_GATE));
-  await expect(loopReadout()).toHaveAccessibleDescription(`cost ${V2_COST_AFTER_GATE}`);
+  ax = await readoutAx();
+  expect(ax.name).not.toContain(V2_COST_AFTER_GATE);
+  expect(ax.description).toBe(`cost ${V2_COST_AFTER_GATE}`);
 
   // (f) — the run's §25 audit carries the §27 cost record, asserted BY VALUE. The two sides are different
   // types and one is composite (the strip shows `$X.XX +unknown`), so the comparison runs the record's

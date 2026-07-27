@@ -692,6 +692,52 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     expect(readout().getAttribute('aria-describedby')).toBe(cost().id);
   });
 
+  // UI-STANDARDS §2.2 rule 1 — the id the read-out points `aria-describedby` at is minted per instance, so
+  // two strips in one document never share it. A baked-in id makes strip B's read-out describe strip A's
+  // cost node, reporting the wrong repo's dollars to anyone who focuses it.
+  it('two strips in one document get DIFFERENT cost ids, each read-out described by its own host`s figure', async () => {
+    const viewOf = (cost: string): FlowStateView => ({
+      stepName: 'plan',
+      steps: ['plan'],
+      position: 1,
+      total: 1,
+      status: 'in_progress',
+      loop: { status: 'working', pr: null, branch: null, ready: false, humanNeeded: false, cost },
+    });
+    const mount = (id: string, cost: string): HTMLElement => {
+      const el = document.createElement('div');
+      el.id = id;
+      document.body.append(el);
+      createFlowStrip(el, {
+        state: vi.fn(async (): Promise<FlowStateView> => viewOf(cost)),
+        start: vi.fn(),
+        advance: vi.fn(),
+        restart: vi.fn(),
+        undo: vi.fn(),
+        terminate: vi.fn(),
+        provideInput: vi.fn(),
+        onStatusBar: vi.fn(),
+        onStateChanged: noopSub,
+      }).onRepoChanged(`/${id}`);
+      return el;
+    };
+    const a = mount('strip-a', '$1.00');
+    const b = mount('strip-b', '$2.00');
+    await vi.waitFor(() => {
+      expect(a.querySelector('.loop-cost')).not.toBeNull();
+      expect(b.querySelector('.loop-cost')).not.toBeNull();
+    });
+
+    const costOf = (h: HTMLElement): HTMLElement => h.querySelector<HTMLElement>('.loop-cost')!;
+    const readoutOf = (h: HTMLElement): HTMLElement => h.querySelector<HTMLElement>('.loopstat')!;
+    expect(costOf(a).id).toBeTruthy();
+    expect(costOf(a).id).not.toBe(costOf(b).id);
+    expect(document.getElementById(readoutOf(a).getAttribute('aria-describedby')!)).toBe(costOf(a));
+    expect(document.getElementById(readoutOf(b).getAttribute('aria-describedby')!)).toBe(costOf(b));
+    expect(costOf(a).textContent).toBe('$1.00');
+    expect(costOf(b).textContent).toBe('$2.00');
+  });
+
   it('patches the §26.10 cost readout in place on a same-signature background push', async () => {
     let view: FlowStateView = {
       stepName: 'build',

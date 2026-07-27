@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { createAppCostMeter, type AppCostMeter } from '../../src/main/appCostMeter';
+import { createAppCostMeter, MAX_BANKED_MODELS, MAX_BANKED_TURNS, type AppCostMeter } from '../../src/main/appCostMeter';
 import { finiteInstant, type PricedTurn, type SessionSweep } from '../../src/main/sessionLogSweep';
 import type { CostResult } from '../../src/shared/pricing';
 
@@ -51,9 +51,12 @@ interface Harness {
   recorded: { repoDir: string; cost: CostResult }[];
   setLogs(repoDir: string, turns: PricedTurn[]): void;
   failSweep(): void;
+  healSweep(): void;
   failNextOpen(): void;
   failNextArm(): void;
   failNextRecord(): void;
+  /** Everything the meter reported through its injected log seam, newest last. */
+  logged: string[];
   now: number;
 }
 
@@ -71,10 +74,14 @@ function harness(sampleDelayMs = BASE_DELAY): Harness {
     arms: 0,
     figureChanges: 0,
     recorded: [],
+    logged: [],
     now: FLOOR + 10_000,
     setLogs: (repoDir, turns) => void logs.set(repoDir, turns),
     failSweep: () => {
       sweepThrows = true;
+    },
+    healSweep: () => {
+      sweepThrows = false;
     },
     failNextOpen: () => {
       openThrows = true;
@@ -146,7 +153,7 @@ function harness(sampleDelayMs = BASE_DELAY): Harness {
       h.recorded.push({ repoDir, cost });
       return true;
     },
-    log: () => {},
+    log: (msg) => void h.logged.push(msg),
   });
   return h;
 }
@@ -500,6 +507,20 @@ describe('the §27 sampler`s steady state', () => {
     expect(slow).toBe(fast * 10);
   });
 
+  // The cadence is an operator-set env value and the backoff multiplies it, so the PRODUCT is what reaches
+  // `setTimeout`. Node does not raise past the 32-bit signed range — it fires in 1 ms — turning "sample
+  // essentially never" into the tightest whole-tree-sweep loop the code can produce (CWE-400).
+  it('never arms a sample further out than a timer can hold, whatever cadence it is configured with', async () => {
+    const g = harness(2 ** 31 - 1);
+    g.meter.pushWindow(REPO, LOOP, FLOOR);
+    for (let i = 0; i < 40; i += 1) {
+      expect(g.armedDelay()!).toBeLessThanOrEqual(2 ** 31 - 1);
+      expect(g.armedDelay()!).toBeGreaterThan(0);
+      await g.sample();
+    }
+    expect(g.armedDelay()!).toBeLessThanOrEqual(2 ** 31 - 1);
+  });
+
   it('returns to the base interval the moment the figure moves again', async () => {
     h.meter.pushWindow(REPO, LOOP, FLOOR);
     for (let i = 0; i < 4; i += 1) await h.sample();
@@ -557,7 +578,82 @@ describe('the §27 meter reaching the §25 audit and never damaging the run', ()
     await h.sample();
     expect(h.meter.current(REPO)?.usd).toBeCloseTo(3.003, 6);
     expect(h.figureChanges).toBe(1);
+    // The record is gated on the same rendered figure the repaint is: an `Object.is` on the raw dollars
+    // appends a §25 document for every tick the UI deliberately refuses to repaint, making a run-total
+    // restatement the only timer-driven member of an otherwise event-driven vocabulary (CWE-770).
+    expect(h.recorded).toHaveLength(1);
+
+    h.setLogs(REPO, [
+      turn({ at: FLOOR + 1, id: 'work', input: MTOK }),
+      turn({ at: FLOOR + 2, id: 'crumb', input: 1000 }),
+      turn({ at: FLOOR + 3, id: 'retry', input: MTOK }),
+    ]);
+    await h.sample();
+    expect(h.figureChanges).toBe(2);
     expect(h.recorded).toHaveLength(2);
+    expect(h.recorded[1].cost.usd).toBeCloseTo(6.003, 6);
+  });
+
+  // AC 7 — the meter keeps sampling through an outage, so a permanent one (a `<session-uuid>/subagents/`
+  // left root-owned by a Claude Code run under sudo) otherwise emits one line per sample for the life of
+  // the app while the readout stays at the same `null` that means "no figure yet" (CWE-703/755).
+  it('names a sweep that stopped working once per outage, not once per sample', async () => {
+    h.setLogs(REPO, [turn({ at: FLOOR + 1, id: 'work', input: MTOK })]);
+    h.failSweep();
+    h.meter.pushWindow(REPO, LOOP, FLOOR);
+    for (let i = 0; i < 3; i += 1) await h.sample();
+    expect(h.logged).toHaveLength(1);
+    expect(h.meter.current(REPO)).toBeNull();
+
+    h.healSweep();
+    await h.sample();
+    expect(h.meter.current(REPO)?.usd).toBe(3);
+    expect(h.logged).toHaveLength(1);
+
+    h.failSweep();
+    for (let i = 0; i < 3; i += 1) await h.sample();
+    expect(h.logged).toHaveLength(2);
+  });
+
+  // CWE-770 — the run's identity set and its per-model table are keyed on Claude Code's private log
+  // content and are released only by a `loop === null` push, which a completed run never produces. The
+  // worst case is the branch AC 2 requires: with no usable recorded start the sweep is unbounded, so the
+  // repo's ENTIRE Claude Code history is banked and held for as long as the app stays open.
+  it('stops admitting new turn identities past its ceiling, leaving the figure finite and still reported', async () => {
+    const spread = (count: number): PricedTurn[] =>
+      Array.from({ length: count }, (_, i) => turn({ at: FLOOR + 1 + i, id: `t${i}`, input: 1000 }));
+    h.setLogs(REPO, spread(MAX_BANKED_TURNS));
+    h.meter.pushWindow(REPO, LOOP, FLOOR);
+    await h.sample();
+    const atCeiling = h.meter.current(REPO)!.usd;
+    expect(atCeiling).toBeGreaterThan(0);
+
+    h.setLogs(REPO, spread(MAX_BANKED_TURNS + 50));
+    await h.sample();
+    expect(h.meter.current(REPO)!.usd).toBe(atCeiling);
+  });
+
+  it('stops admitting new models past its ceiling, leaving the run`s unpriced list bounded', async () => {
+    const models = (count: number): PricedTurn[] =>
+      Array.from({ length: count }, (_, i) => turn({ at: FLOOR + 1 + i, id: `m${i}`, model: `made-up-${i}`, input: 1000 }));
+    h.setLogs(REPO, models(MAX_BANKED_MODELS + 50));
+    h.meter.pushWindow(REPO, LOOP, FLOOR);
+    await h.sample();
+    expect(h.meter.current(REPO)!.unpricedModels).toHaveLength(MAX_BANKED_MODELS);
+  });
+
+  it('keeps counting a turn under a model it has already seen once the model ceiling is reached', async () => {
+    const seed = Array.from({ length: MAX_BANKED_MODELS }, (_, i) =>
+      turn({ at: FLOOR + 1 + i, id: `m${i}`, model: i === 0 ? 'claude-sonnet-5' : `made-up-${i}`, input: 0, output: 0 }),
+    );
+    h.setLogs(REPO, seed);
+    h.meter.pushWindow(REPO, LOOP, FLOOR);
+    await h.sample();
+    expect(h.meter.current(REPO)!.usd).toBe(0);
+
+    h.setLogs(REPO, [...seed, turn({ at: FLOOR + 9_000, id: 'late', input: MTOK })]);
+    await h.sample();
+    expect(h.meter.current(REPO)!.usd).toBe(3);
   });
 
   // AC 7 — the meter is display-only. A run whose cost cannot be computed AT ALL completes exactly as one
