@@ -62,9 +62,12 @@ describe('git keeps every tracked .ts in this repo text', () => {
   });
 
   // The two pins above assert an EMPTY list, so they read identically against a checker that finds nothing
-  // and one that reads nothing. This drives the same reader over the byte the tree does carry — §25.7's
-  // strip fixture holds a raw BEL — so an empty answer above means the bytes were read and were clean.
-  it('finds the control byte the tree does carry, so an empty answer above is not an empty read', () => {
-    expect(carrying(trackedSources().other, (b) => b === 0x07)).not.toEqual([]);
+  // and one that reads nothing. This drives the same reader over a byte every source file necessarily
+  // carries, so an empty answer above means every enumerated file was opened and was clean — and it names
+  // the file it lost if one ever goes unread, rather than reporting `[] not to deeply equal []`.
+  it('finds a newline in every file it enumerated, so an empty answer above is not an empty read', () => {
+    const { src, other } = trackedSources();
+    expect(carrying(src, (b) => b === 0x0a)).toEqual(src);
+    expect(carrying(other, (b) => b === 0x0a)).toEqual(other);
   });
 });

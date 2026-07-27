@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   appCostEvent,
+  auditCost,
   boundExternalText,
   notifyFailedEvent,
   parseAuditStream,
@@ -73,5 +74,16 @@ describe('the §27 cost record in the shared audit vocabulary', () => {
     expect(carried(1000)).toEqual(carried(500));
     expect(carried(500)[0]).toBe('claude-made-up-0');
     expect(carried(2)).toEqual(['claude-made-up-0', 'claude-made-up-1']);
+  });
+
+  // Whoever decides whether restating the run's cost would say anything new has to compare against what the
+  // record CARRIES, not against the live figure — a run discovering ids past the bound above would otherwise
+  // append records byte-identical to their predecessor forever. That is one definition, not two.
+  it('answers what a record carries for a cost, in the shape the record is built from', () => {
+    const ids = (n: number): string[] => Array.from({ length: n }, (_, i) => `claude-made-up-${i}`);
+    const cost = { usd: 1, unpricedModels: ids(500) };
+    const event = appCostEvent(cost, TS) as Extract<AuditEvent, { type: 'app.cost' }>;
+    expect(auditCost(cost)).toEqual({ usd: event.usd, unpricedModels: event.unpriced });
+    expect(auditCost(cost).unpricedModels).toEqual(auditCost({ usd: 1, unpricedModels: ids(1000) }).unpricedModels);
   });
 });

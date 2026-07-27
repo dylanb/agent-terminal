@@ -1,24 +1,21 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { createAppCostMeter, MAX_BANKED_MODELS, renderCost, type AppCostMeter } from '../../src/main/appCostMeter';
-import { finiteInstant, type PricedTurn, type SessionSweep } from '../../src/main/sessionLogSweep';
-import type { CostResult } from '../../src/shared/pricing';
+import { createAppCostMeter, type AppCostMeter } from '../../src/main/appCostMeter';
+import type { SessionSweep } from '../../src/main/sessionLogSweep';
+import { addTokens, sortedTotals, type CostResult, type ModelTokens } from '../../src/shared/pricing';
 
 const REPO = '/repo/one';
 const OTHER = '/repo/two';
 const FLOOR = 1_000_000;
 const LOOP = 'plan-loop';
 const BASE_DELAY = 2_000;
-const BANKED_CEILING = 512;
 
-const turn = (opts: {
+/** One billed turn as a log carries it: its per-model tokens and the instant it happened. */
+interface LoggedTurn extends ModelTokens {
   at: number;
-  id: string;
-  model?: string;
-  input?: number;
-  output?: number;
-}): PricedTurn => ({
-  at: finiteInstant(opts.at)!,
-  id: opts.id,
+}
+
+const turn = (opts: { at: number; model?: string; input?: number; output?: number }): LoggedTurn => ({
+  at: opts.at,
   model: opts.model ?? 'claude-sonnet-5',
   input: opts.input ?? 0,
   cacheCreate: 0,
@@ -28,11 +25,6 @@ const turn = (opts: {
 
 /** 1,000,000 claude-sonnet-5 input tokens is exactly $3.00 against the checked-in table. */
 const MTOK = 1_000_000;
-
-/** `count` distinctly-identified billed turns, one per instant, each cheap enough that the ceiling rather
- *  than the arithmetic is what the assertion reads. */
-const spread = (count: number): PricedTurn[] =>
-  Array.from({ length: count }, (_, i) => turn({ at: FLOOR + 1 + i, id: `t${i}`, input: 1000 }));
 
 interface Armed {
   delayMs: number;
@@ -51,11 +43,14 @@ interface Harness {
   armedDelay(repoDir?: string): number | undefined;
   opened: { repoDir: string; since: number | null }[];
   drains: { repoDir: string }[];
+  /** Every repo whose sweep was released, in order. */
+  closed: string[];
   /** How many times a sample has been armed, counted across replacements the map itself cannot show. */
   arms: number;
   figureChanges: number;
   recorded: { repoDir: string; cost: CostResult }[];
-  setLogs(repoDir: string, turns: PricedTurn[]): void;
+  /** Append billed turns to a repo's logs, as an agent writing them does. */
+  append(repoDir: string, turns: LoggedTurn[]): void;
   failSweep(): void;
   healSweep(): void;
   failNextOpen(): void;
@@ -66,8 +61,8 @@ interface Harness {
   now: number;
 }
 
-function harness(sampleDelayMs = BASE_DELAY, maxBankedTurns = BANKED_CEILING): Harness {
-  const logs = new Map<string, PricedTurn[]>();
+function harness(sampleDelayMs = BASE_DELAY): Harness {
+  const logs = new Map<string, LoggedTurn[]>();
   const armedRuns = new Map<string, Armed>();
   let sweepThrows = false;
   let openThrows = false;
@@ -77,12 +72,13 @@ function harness(sampleDelayMs = BASE_DELAY, maxBankedTurns = BANKED_CEILING): H
     meter: undefined as unknown as AppCostMeter,
     opened: [],
     drains: [],
+    closed: [],
     arms: 0,
     figureChanges: 0,
     recorded: [],
     logged: [],
     now: FLOOR + 10_000,
-    setLogs: (repoDir, turns) => void logs.set(repoDir, turns),
+    append: (repoDir, turns) => void logs.set(repoDir, [...(logs.get(repoDir) ?? []), ...turns]),
     failSweep: () => {
       sweepThrows = true;
     },
@@ -111,31 +107,32 @@ function harness(sampleDelayMs = BASE_DELAY, maxBankedTurns = BANKED_CEILING): H
   };
   h.meter = createAppCostMeter({
     sampleDelayMs,
-    maxBankedTurns,
+    // The seam promises each drain consumes what the run's logs GAINED since the last one and answers with
+    // the run's per-model totals so far. The fake models a log as the append-only list it is: it folds the
+    // entries it has not already folded, and a release drops both the position and the totals.
     openSweep: (repoDir, since): SessionSweep => {
       if (openThrows) {
         openThrows = false;
         throw new Error('log root refused');
       }
       h.opened.push({ repoDir, since });
-      // The seam promises each drain yields every turn in the window the sweep has not already yielded
-      // from an UNCHANGED log — the first drain yields the whole window, and a log that grew is re-yielded
-      // whole. The fake models a log's content by the array it was set from: the same array is the
-      // unchanged log (nothing to yield), a new one is the grown log (everything again).
-      let drained: PricedTurn[] | null = null;
+      let folded = 0;
+      let byModel = new Map<string, ModelTokens>();
       return {
-        drain: () => {
+        drain: async () => {
           h.drains.push({ repoDir });
+          if (sweepThrows) throw new Error('log root unreadable');
           const content = logs.get(repoDir) ?? [];
-          const fresh = content === drained ? [] : content;
-          const scripted = fresh.filter((t) => Number.isFinite(t.at) && (since === null || t.at >= since));
-          return {
-            async *[Symbol.asyncIterator]() {
-              if (sweepThrows) throw new Error('log root unreadable');
-              for (const t of scripted) yield t;
-              drained = content;
-            },
-          };
+          for (const t of content.slice(folded)) {
+            if (since === null || t.at >= since) addTokens(byModel, t);
+          }
+          folded = content.length;
+          return sortedTotals(byModel);
+        },
+        close: () => {
+          h.closed.push(repoDir);
+          folded = 0;
+          byModel = new Map();
         },
       };
     },
@@ -172,154 +169,98 @@ beforeEach(() => {
 
 describe('the §27 run total', () => {
   // AC 1 — the readout covers the WHOLE run: the work turn, every reviewer subagent, the consolidator, the
-  // polish conversation and every retry. The sweep is what walks the nested logs; the meter accumulates
-  // every turn it is handed into one running figure.
-  it('accumulates every priced turn in the window into one running total', async () => {
-    h.setLogs(REPO, [
-      turn({ at: FLOOR + 1, id: 'work', input: MTOK }),
-      turn({ at: FLOOR + 2, id: 'reviewer', output: MTOK / 10 }),
-      turn({ at: FLOOR + 3, id: 'consolidator', input: MTOK }),
+  // polish conversation and every retry. The sweep is what walks the nested logs; the meter prices whatever
+  // totals it is handed into one running figure.
+  it('reports the priced dollars of every turn in the window', async () => {
+    h.append(REPO, [
+      turn({ at: FLOOR + 1, input: MTOK }),
+      turn({ at: FLOOR + 2, output: MTOK / 10 }),
+      turn({ at: FLOOR + 3, input: MTOK }),
     ]);
     h.meter.pushWindow(REPO, LOOP, FLOOR);
     await h.sample();
-    expect(h.meter.current(REPO)?.cost).toEqual({ usd: 3 + 1.5 + 3, unpricedModels: [] });
+    expect(h.meter.current(REPO)).toEqual({ usd: 3 + 1.5 + 3, unpricedModels: [] });
   });
 
   it('rises when a later sample discovers a further turn, and signals the view changed once per move', async () => {
-    h.setLogs(REPO, [turn({ at: FLOOR + 1, id: 'work', input: MTOK })]);
+    h.append(REPO, [turn({ at: FLOOR + 1, input: MTOK })]);
     h.meter.pushWindow(REPO, LOOP, FLOOR);
     await h.sample();
-    expect(h.meter.current(REPO)?.cost.usd).toBe(3);
+    expect(h.meter.current(REPO)?.usd).toBe(3);
     expect(h.figureChanges).toBe(1);
 
-    h.setLogs(REPO, [
-      turn({ at: FLOOR + 1, id: 'work', input: MTOK }),
-      turn({ at: FLOOR + 5, id: 'retry', input: MTOK }),
-    ]);
+    h.append(REPO, [turn({ at: FLOOR + 5, input: MTOK })]);
     await h.sample();
-    expect(h.meter.current(REPO)?.cost.usd).toBe(6);
+    expect(h.meter.current(REPO)?.usd).toBe(6);
     expect(h.figureChanges).toBe(2);
 
     await h.sample(); // nothing new — the figure did not move
     expect(h.figureChanges).toBe(2);
   });
 
-  // The run's accumulator outlives every sample while the log the run is writing grows under it, so the
-  // sweep re-yields that log whole on each pass. A turn re-read that way must not be added twice: with the
-  // identity total, the same three-dollar turn read on twenty passes is three dollars, not sixty.
-  it('holds the figure steady while an unchanged window is re-read, and adds only what a grown log gained', async () => {
-    const work = turn({ at: FLOOR + 1, id: 'work', input: MTOK });
-    h.setLogs(REPO, [work]);
+  it('holds the figure and the record steady across samples that find nothing new', async () => {
+    h.append(REPO, [turn({ at: FLOOR + 1, input: MTOK })]);
     h.meter.pushWindow(REPO, LOOP, FLOOR);
     for (let i = 0; i < 5; i += 1) {
-      h.setLogs(REPO, [work]); // a fresh array: the log's mtime moved, so it is re-read whole
       await h.sample();
-      expect(h.meter.current(REPO)?.cost.usd).toBe(3);
+      expect(h.meter.current(REPO)?.usd).toBe(3);
     }
-    h.setLogs(REPO, [work, turn({ at: FLOOR + 2, id: 'polish', input: MTOK })]);
-    await h.sample();
-    expect(h.meter.current(REPO)?.cost.usd).toBe(6);
-    expect(h.recorded.map((r) => r.cost.usd)).toEqual([3, 6]);
-  });
-
-  // The sweep gives a turn the log stamps no billing identity on a position-derived one, stable across
-  // drains of the same log. Two such turns are two dollars-worth of distinct spend; the SAME one re-read is
-  // not. A meter that banked only identified turns ratcheted the run's figure upward with no new spend.
-  it('counts each turn carrying no billing identity once, however many drains re-read its log', async () => {
-    const first = turn({ at: FLOOR + 1, id: '["/logs/session.jsonl",1]', input: MTOK });
-    const second = turn({ at: FLOOR + 2, id: '["/logs/session.jsonl",2]', input: MTOK });
-    h.setLogs(REPO, [first, second]);
-    h.meter.pushWindow(REPO, LOOP, FLOOR);
-    await h.sample();
-    expect(h.meter.current(REPO)?.cost.usd).toBe(6);
-
-    for (let i = 0; i < 3; i += 1) {
-      h.setLogs(REPO, [first, second]);
-      await h.sample();
-      expect(h.meter.current(REPO)?.cost.usd).toBe(6);
-    }
-    expect(h.recorded).toHaveLength(1);
+    expect(h.recorded.map((r) => r.cost.usd)).toEqual([3]);
   });
 
   // AC 2 — the sweep is bounded below by the flow's recorded start.
-  it('sweeps from the recorded start, so turns logged before it are excluded', async () => {
-    h.setLogs(REPO, [
-      turn({ at: FLOOR - 1, id: 'before', input: 100 * MTOK }),
-      turn({ at: FLOOR, id: 'at-floor', input: MTOK }),
-    ]);
+  it('opens the sweep at the recorded start, so turns logged before it are excluded', async () => {
+    h.append(REPO, [turn({ at: FLOOR - 1, input: 100 * MTOK }), turn({ at: FLOOR, input: MTOK })]);
     h.meter.pushWindow(REPO, LOOP, FLOOR);
     await h.sample();
     expect(h.opened[0]).toEqual({ repoDir: REPO, since: FLOOR });
-    expect(h.meter.current(REPO)?.cost.usd).toBe(3);
+    expect(h.meter.current(REPO)?.usd).toBe(3);
   });
 
   // AC 2 — a flow with no recorded start sweeps UNBOUNDED. An unbounded number is wrong; a silent zero
   // hides that it is wrong, so the meter must still report the sweep rather than declining to run.
-  it('sweeps unbounded when the flow records no start, and never substitutes $0', async () => {
-    h.setLogs(REPO, [turn({ at: FLOOR - 500_000, id: 'ancient', input: MTOK })]);
+  it('opens an unbounded sweep when the flow records no start, and never substitutes $0', async () => {
+    h.append(REPO, [turn({ at: FLOOR - 500_000, input: MTOK })]);
     h.meter.pushWindow(REPO, LOOP, null);
     await h.sample();
     expect(h.opened[0]).toEqual({ repoDir: REPO, since: null });
-    expect(h.meter.current(REPO)?.cost).toEqual({ usd: 3, unpricedModels: [] });
+    expect(h.meter.current(REPO)).toEqual({ usd: 3, unpricedModels: [] });
   });
 
   // A floor after the present survives every field-local check while doing maximum damage: the pre-filter
   // then excludes every log and the strip reads $0.00 for a run that spent money. Clamping to no-floor
   // lands on the unbounded sweep — a wrong-but-loud number rather than a silent zero.
   it('clamps a floor dated in the future to no recorded floor rather than filtering every log away', async () => {
-    h.setLogs(REPO, [turn({ at: h.now - 1000, id: 'real', input: MTOK })]);
+    h.append(REPO, [turn({ at: h.now - 1000, input: MTOK })]);
     h.meter.pushWindow(REPO, LOOP, h.now + 3_600_000);
     await h.sample();
     expect(h.opened[0].since).toBeNull();
-    expect(h.meter.current(REPO)?.cost.usd).toBe(3);
-  });
-
-  // AC 3 — a billed turn counts once. A resumed or forked session replays prior turns verbatim, so the same
-  // billing identity arrives again from a different file, at a later log time and in a different position.
-  it('banks a billing identity once, across samples and within one sample', async () => {
-    h.setLogs(REPO, [
-      turn({ at: FLOOR + 1, id: 'work', input: MTOK }),
-      turn({ at: FLOOR + 1, id: 'work', input: MTOK }),
-    ]);
-    h.meter.pushWindow(REPO, LOOP, FLOOR);
-    await h.sample();
-    expect(h.meter.current(REPO)?.cost.usd).toBe(3);
-
-    h.setLogs(REPO, [
-      turn({ at: FLOOR + 9, id: 'work', input: MTOK }),
-      turn({ at: FLOOR + 1, id: 'work', input: MTOK }),
-    ]);
-    await h.sample();
-    expect(h.meter.current(REPO)?.cost.usd).toBe(3);
+    expect(h.meter.current(REPO)?.usd).toBe(3);
   });
 
   // AC 4 — an unpriced model contributes zero dollars and surfaces as `unknown`, never as NaN.
   it('surfaces an unpriced model beside the priced dollars and never yields NaN', async () => {
-    h.setLogs(REPO, [
-      turn({ at: FLOOR + 1, id: 'priced', input: MTOK }),
-      turn({ at: FLOOR + 2, id: 'unpriced', model: 'claude-made-up-9', input: MTOK }),
-      turn({ at: FLOOR + 3, id: 'synthetic', model: '<synthetic>' }),
+    h.append(REPO, [
+      turn({ at: FLOOR + 1, input: MTOK }),
+      turn({ at: FLOOR + 2, model: 'claude-made-up-9', input: MTOK }),
+      turn({ at: FLOOR + 3, model: '<synthetic>' }),
     ]);
     h.meter.pushWindow(REPO, LOOP, FLOOR);
     await h.sample();
-    const cost = h.meter.current(REPO)?.cost;
-    expect(cost).toEqual({ usd: 3, unpricedModels: ['claude-made-up-9'] });
-    expect(Number.isFinite(cost?.usd)).toBe(true);
+    expect(h.meter.current(REPO)).toEqual({ usd: 3, unpricedModels: ['claude-made-up-9'] });
+    expect(Number.isFinite(h.meter.current(REPO)?.usd)).toBe(true);
   });
 
   // A model id that names an Object.prototype member resolves through the prototype chain unless the table
   // lookup is own-property gated, and the un-gated lookup prices it to NaN — which no later comparison can
   // ever call equal, so every sample appends another audit record forever.
   it('treats a prototype-named model as unpriced, and records it once rather than on every sample', async () => {
-    h.setLogs(REPO, [turn({ at: FLOOR + 1, id: 'hostile', model: 'constructor', input: MTOK })]);
+    h.append(REPO, [turn({ at: FLOOR + 1, model: 'constructor', input: MTOK })]);
     h.meter.pushWindow(REPO, LOOP, FLOOR);
     await h.sample();
-    expect(h.meter.current(REPO)?.cost).toEqual({ usd: 0, unpricedModels: ['constructor'] });
+    expect(h.meter.current(REPO)).toEqual({ usd: 0, unpricedModels: ['constructor'] });
 
-    for (let i = 0; i < 3; i += 1) {
-      h.setLogs(REPO, [turn({ at: FLOOR + 1, id: 'hostile', model: 'constructor', input: MTOK })]);
-      await h.sample();
-    }
+    for (let i = 0; i < 3; i += 1) await h.sample();
     expect(h.recorded).toHaveLength(1);
     expect(h.figureChanges).toBe(1);
   });
@@ -329,7 +270,7 @@ describe('the §27 meter`s activation, retirement and blast radius', () => {
   // AC 10 — a `legacy`-bound step pushes a real floor with NO selected app loop. The meter must stay inert:
   // a rule that samples on any push would run the §27 meter over a §26 run.
   it('never samples for a push carrying no selected app loop', async () => {
-    h.setLogs(REPO, [turn({ at: FLOOR + 1, id: 'work', input: MTOK })]);
+    h.append(REPO, [turn({ at: FLOOR + 1, input: MTOK })]);
     h.meter.pushWindow(REPO, null, FLOOR);
     expect(h.armed()).toBe(false);
     await h.sample();
@@ -344,20 +285,24 @@ describe('the §27 meter`s activation, retirement and blast radius', () => {
     expect(h.armed()).toBe(true);
   });
 
-  it('retires a repo`s figure when the pushed loop goes null, and stops sampling it', async () => {
-    h.setLogs(REPO, [turn({ at: FLOOR + 1, id: 'work', input: MTOK })]);
+  // A sweep holds a read position per log and the run's accumulated totals; a flow that terminates and a
+  // different one that starts must inherit neither, so the retirement releases them rather than dropping
+  // the reference and letting a repeated flow switch accumulate them.
+  it('retires a repo`s figure when the pushed loop goes null, releasing its sweep and stopping the sampling', async () => {
+    h.append(REPO, [turn({ at: FLOOR + 1, input: MTOK })]);
     h.meter.pushWindow(REPO, LOOP, FLOOR);
     await h.sample();
-    expect(h.meter.current(REPO)?.cost.usd).toBe(3);
+    expect(h.meter.current(REPO)?.usd).toBe(3);
 
     h.meter.pushWindow(REPO, null, null);
     expect(h.meter.current(REPO)).toBeNull();
     expect(h.armed()).toBe(false);
+    expect(h.closed).toEqual([REPO]);
   });
 
-  it('leaves a second repo`s figure untouched when the first is retired', async () => {
-    h.setLogs(REPO, [turn({ at: FLOOR + 1, id: 'a', input: MTOK })]);
-    h.setLogs(OTHER, [turn({ at: FLOOR + 1, id: 'b', input: MTOK })]);
+  it('leaves a second repo`s figure and sweep untouched when the first is retired', async () => {
+    h.append(REPO, [turn({ at: FLOOR + 1, input: MTOK })]);
+    h.append(OTHER, [turn({ at: FLOOR + 1, input: MTOK })]);
     h.meter.pushWindow(REPO, LOOP, FLOOR);
     h.meter.pushWindow(OTHER, LOOP, FLOOR);
     await h.sample(REPO);
@@ -365,43 +310,46 @@ describe('the §27 meter`s activation, retirement and blast radius', () => {
 
     h.meter.pushWindow(REPO, null, null);
     expect(h.meter.current(REPO)).toBeNull();
-    expect(h.meter.current(OTHER)?.cost.usd).toBe(3);
+    expect(h.meter.current(OTHER)?.usd).toBe(3);
+    expect(h.closed).toEqual([REPO]);
   });
 
   // A chain advance leaves the recorded floor untouched, so the run — and its total — continues.
   it('keeps the accumulated figure across a loop-name change on the same floor', async () => {
-    h.setLogs(REPO, [turn({ at: FLOOR + 1, id: 'work', input: MTOK })]);
+    h.append(REPO, [turn({ at: FLOOR + 1, input: MTOK })]);
     h.meter.pushWindow(REPO, 'plan-loop', FLOOR);
     await h.sample();
-    expect(h.meter.current(REPO)?.cost.usd).toBe(3);
+    expect(h.meter.current(REPO)?.usd).toBe(3);
 
     h.meter.pushWindow(REPO, 'impl-loop', FLOOR);
-    expect(h.meter.current(REPO)?.cost.usd).toBe(3);
+    expect(h.meter.current(REPO)?.usd).toBe(3);
     await h.sample();
-    expect(h.meter.current(REPO)?.cost.usd).toBe(3);
+    expect(h.meter.current(REPO)?.usd).toBe(3);
     expect(h.opened).toHaveLength(1);
+    expect(h.closed).toEqual([]);
   });
 
   // A restart stamps a NEW floor: that is a new run, and its figure starts from zero rather than carrying
-  // the previous run's banked turns forward.
-  it('starts a fresh figure when the recorded floor moves', async () => {
-    h.setLogs(REPO, [turn({ at: FLOOR + 1, id: 'work', input: MTOK })]);
+  // the previous run's totals — or its read positions — forward.
+  it('releases the old sweep and starts a fresh figure when the recorded floor moves', async () => {
+    h.append(REPO, [turn({ at: FLOOR + 1, input: MTOK })]);
     h.meter.pushWindow(REPO, LOOP, FLOOR);
     await h.sample();
-    expect(h.meter.current(REPO)?.cost.usd).toBe(3);
+    expect(h.meter.current(REPO)?.usd).toBe(3);
 
     h.meter.pushWindow(REPO, LOOP, FLOOR + 100);
     expect(h.meter.current(REPO)).toBeNull();
-    h.setLogs(REPO, [turn({ at: FLOOR + 101, id: 'fresh', output: MTOK / 10 })]);
+    expect(h.closed).toEqual([REPO]);
+    h.append(REPO, [turn({ at: FLOOR + 101, output: MTOK / 10 })]);
     await h.sample();
-    expect(h.meter.current(REPO)?.cost.usd).toBe(1.5);
+    expect(h.meter.current(REPO)?.usd).toBe(1.5);
     expect(h.opened).toHaveLength(2);
   });
 
   // AC 8a — the flow hydrates on EVERY render and therefore reaches the push, so the seeding read has to be
   // deferred rather than run on it. Neither the push nor the readout may sweep.
   it('sweeps nothing on the push or on the readout — only on the deferred sample', async () => {
-    h.setLogs(REPO, [turn({ at: FLOOR + 1, id: 'work', input: MTOK })]);
+    h.append(REPO, [turn({ at: FLOOR + 1, input: MTOK })]);
     for (let i = 0; i < 20; i += 1) {
       h.meter.pushWindow(REPO, LOOP, FLOOR);
       h.meter.current(REPO);
@@ -415,14 +363,14 @@ describe('the §27 meter`s activation, retirement and blast radius', () => {
 
   // The flow manager forwards every render's push, so the meter is the ONE place the triple is deduped.
   it('re-pushing an unchanged triple neither re-arms a sample nor disturbs the figure', async () => {
-    h.setLogs(REPO, [turn({ at: FLOOR + 1, id: 'work', input: MTOK })]);
+    h.append(REPO, [turn({ at: FLOOR + 1, input: MTOK })]);
     h.meter.pushWindow(REPO, LOOP, FLOOR);
     await h.sample();
     expect(h.armed()).toBe(true); // the sample re-arms itself while the run is open
     await h.sample();
     h.meter.pushWindow(REPO, LOOP, FLOOR);
     h.meter.pushWindow(REPO, LOOP, FLOOR);
-    expect(h.meter.current(REPO)?.cost.usd).toBe(3);
+    expect(h.meter.current(REPO)?.usd).toBe(3);
     expect(h.drains).toHaveLength(2);
     expect(h.opened).toHaveLength(1);
   });
@@ -441,31 +389,31 @@ describe('the §27 meter`s activation, retirement and blast radius', () => {
   // flow.ts emits that identical triple on every render for the rest of the run, so every one of them takes
   // the early return and the repo never gets a sweep, a figure or an `app.cost` record again.
   it('retries an identical push after one whose sweep could not be opened', async () => {
-    h.setLogs(REPO, [turn({ at: FLOOR + 1, id: 'work', input: MTOK })]);
+    h.append(REPO, [turn({ at: FLOOR + 1, input: MTOK })]);
     h.failNextOpen();
     h.meter.pushWindow(REPO, LOOP, FLOOR);
     expect(h.armed()).toBe(false);
 
     h.meter.pushWindow(REPO, LOOP, FLOOR);
     await h.sample();
-    expect(h.meter.current(REPO)?.cost.usd).toBe(3);
+    expect(h.meter.current(REPO)?.usd).toBe(3);
   });
 
   it('retries an identical push after one whose sample could not be armed', async () => {
-    h.setLogs(REPO, [turn({ at: FLOOR + 1, id: 'work', input: MTOK })]);
+    h.append(REPO, [turn({ at: FLOOR + 1, input: MTOK })]);
     h.failNextArm();
     h.meter.pushWindow(REPO, LOOP, FLOOR);
     expect(h.armed()).toBe(false);
 
     h.meter.pushWindow(REPO, LOOP, FLOOR);
     await h.sample();
-    expect(h.meter.current(REPO)?.cost.usd).toBe(3);
+    expect(h.meter.current(REPO)?.usd).toBe(3);
   });
 
   // CODE-STANDARDS § delayed consent — a sample scheduled against one run completes later, by which time
-  // the ledger may have been retired. A stale result is inert, never reinterpreted against current state.
+  // the run may have been retired. A stale result is inert, never reinterpreted against current state.
   it('drops a sample whose repo was retired while it was in flight', async () => {
-    h.setLogs(REPO, [turn({ at: FLOOR + 1, id: 'work', input: MTOK })]);
+    h.append(REPO, [turn({ at: FLOOR + 1, input: MTOK })]);
     h.meter.pushWindow(REPO, LOOP, FLOOR);
     const inFlight = h.takeArmed()!();
     h.meter.pushWindow(REPO, null, null);
@@ -481,7 +429,7 @@ describe('the §27 sampler`s steady state', () => {
   // advances to done` holds. Without a backoff the meter therefore re-walks the log tree every two seconds
   // for as long as the app stays open, on the process that also drains the PTY.
   it('backs the sample interval off while the figure sits still', async () => {
-    h.setLogs(REPO, [turn({ at: FLOOR + 1, id: 'work', input: MTOK })]);
+    h.append(REPO, [turn({ at: FLOOR + 1, input: MTOK })]);
     h.meter.pushWindow(REPO, LOOP, FLOOR);
     expect(h.armedDelay()).toBe(BASE_DELAY);
     await h.sample();
@@ -534,9 +482,9 @@ describe('the §27 sampler`s steady state', () => {
     for (let i = 0; i < 4; i += 1) await h.sample();
     expect(h.armedDelay()).toBeGreaterThan(BASE_DELAY);
 
-    h.setLogs(REPO, [turn({ at: FLOOR + 1, id: 'polish', input: MTOK })]);
+    h.append(REPO, [turn({ at: FLOOR + 1, input: MTOK })]);
     await h.sample();
-    expect(h.meter.current(REPO)?.cost.usd).toBe(3);
+    expect(h.meter.current(REPO)?.usd).toBe(3);
     expect(h.armedDelay()).toBe(BASE_DELAY);
   });
 });
@@ -544,10 +492,7 @@ describe('the §27 sampler`s steady state', () => {
 describe('the §27 meter reaching the §25 audit and never damaging the run', () => {
   // AC 5 — the run's cost reaches the audit additively, by value, on each figure-moving sample.
   it('records the run`s priced dollars and unpriced ids on each sample that moves the figure', async () => {
-    h.setLogs(REPO, [
-      turn({ at: FLOOR + 1, id: 'work', input: MTOK }),
-      turn({ at: FLOOR + 2, id: 'gap', model: 'claude-made-up-9', input: MTOK }),
-    ]);
+    h.append(REPO, [turn({ at: FLOOR + 1, input: MTOK }), turn({ at: FLOOR + 2, model: 'claude-made-up-9', input: MTOK })]);
     h.meter.pushWindow(REPO, LOOP, FLOOR);
     await h.sample();
     expect(h.recorded).toEqual([{ repoDir: REPO, cost: { usd: 3, unpricedModels: ['claude-made-up-9'] } }]);
@@ -555,28 +500,41 @@ describe('the §27 meter reaching the §25 audit and never damaging the run', ()
     expect(h.recorded).toHaveLength(1);
 
     // The audit record is the ONLY artifact carrying the model ids — the strip renders just the ` +unknown`
-    // suffix — so a record gated on the rendered string loses every id discovered after the last
+    // suffix — so a record gated on the rendered string alone loses every id discovered after the last
     // figure-moving sample, and a fully-unpriced run freezes at the first id it ever saw.
-    h.setLogs(REPO, [
-      turn({ at: FLOOR + 1, id: 'work', input: MTOK }),
-      turn({ at: FLOOR + 2, id: 'gap', model: 'claude-made-up-9', input: MTOK }),
-      turn({ at: FLOOR + 3, id: 'gap-two', model: 'claude-made-up-8', input: MTOK }),
-    ]);
+    h.append(REPO, [turn({ at: FLOOR + 3, model: 'claude-made-up-8', input: MTOK })]);
     await h.sample();
     expect(h.recorded).toHaveLength(2);
     expect(h.recorded[1].cost).toEqual({ usd: 3, unpricedModels: ['claude-made-up-8', 'claude-made-up-9'] });
     expect(h.figureChanges).toBe(1);
   });
 
+  // ...and the ids the record carries are BOUNDED, so a run discovering ids past that bound restates
+  // nothing: gating on the live list instead appends a record byte-identical to its predecessor, and a
+  // reader of an append-only stream is entitled to read a new entry as a change.
+  it('appends no record for an unpriced id the record itself would not carry', async () => {
+    const gap = (i: number): LoggedTurn => turn({ at: FLOOR + 1 + i, model: `gap-${String(i).padStart(3, '0')}`, input: MTOK });
+    h.append(REPO, Array.from({ length: 32 }, (_, i) => gap(i)));
+    h.meter.pushWindow(REPO, LOOP, FLOOR);
+    await h.sample();
+    expect(h.recorded).toHaveLength(1);
+    expect(h.recorded[0].cost.unpricedModels).toHaveLength(32);
+
+    h.append(REPO, [gap(32), gap(33), gap(34)]);
+    await h.sample();
+    expect(h.meter.current(REPO)?.unpricedModels).toHaveLength(35);
+    expect(h.recorded).toHaveLength(1);
+  });
+
   // The record and the reported figure are separate commitments: a record the audit refused is re-attempted
   // on the next sample, rather than being suppressed by a memo that says the figure has not moved since.
   it('re-attempts a record the audit refused, at the same figure', async () => {
-    h.setLogs(REPO, [turn({ at: FLOOR + 1, id: 'work', input: MTOK })]);
+    h.append(REPO, [turn({ at: FLOOR + 1, input: MTOK })]);
     h.meter.pushWindow(REPO, LOOP, FLOOR);
     h.failNextRecord();
     await h.sample();
     expect(h.recorded).toEqual([]);
-    expect(h.meter.current(REPO)?.cost.usd).toBe(3);
+    expect(h.meter.current(REPO)?.usd).toBe(3);
 
     await h.sample();
     expect(h.recorded).toEqual([{ repoDir: REPO, cost: { usd: 3, unpricedModels: [] } }]);
@@ -588,28 +546,21 @@ describe('the §27 meter reaching the §25 audit and never damaging the run', ()
   // small to change the rendered figure has nothing to announce and must not push one; the §25 append is
   // gated on the SAME rendered figure, so the record cannot restate a total the UI refused to paint.
   it('signals the view only when the RENDERED figure changes, not on a sub-cent move', async () => {
-    h.setLogs(REPO, [turn({ at: FLOOR + 1, id: 'work', input: MTOK })]);
+    h.append(REPO, [turn({ at: FLOOR + 1, input: MTOK })]);
     h.meter.pushWindow(REPO, LOOP, FLOOR);
     await h.sample();
     expect(h.figureChanges).toBe(1);
 
-    h.setLogs(REPO, [
-      turn({ at: FLOOR + 1, id: 'work', input: MTOK }),
-      turn({ at: FLOOR + 2, id: 'crumb', input: 1000 }),
-    ]);
+    h.append(REPO, [turn({ at: FLOOR + 2, input: 1000 })]);
     await h.sample();
-    expect(h.meter.current(REPO)?.cost.usd).toBeCloseTo(3.003, 6);
+    expect(h.meter.current(REPO)?.usd).toBeCloseTo(3.003, 6);
     expect(h.figureChanges).toBe(1);
     // The record is gated on the same rendered figure the repaint is: an `Object.is` on the raw dollars
     // appends a §25 document for every tick the UI deliberately refuses to repaint, making a run-total
     // restatement the only timer-driven member of an otherwise event-driven vocabulary (CWE-770).
     expect(h.recorded).toHaveLength(1);
 
-    h.setLogs(REPO, [
-      turn({ at: FLOOR + 1, id: 'work', input: MTOK }),
-      turn({ at: FLOOR + 2, id: 'crumb', input: 1000 }),
-      turn({ at: FLOOR + 3, id: 'retry', input: MTOK }),
-    ]);
+    h.append(REPO, [turn({ at: FLOOR + 3, input: MTOK })]);
     await h.sample();
     expect(h.figureChanges).toBe(2);
     expect(h.recorded).toHaveLength(2);
@@ -620,7 +571,7 @@ describe('the §27 meter reaching the §25 audit and never damaging the run', ()
   // left root-owned by a Claude Code run under sudo) otherwise emits one line per sample for the life of
   // the app while the readout stays at the same `null` that means "no figure yet" (CWE-703/755).
   it('names a sweep that stopped working once per outage, not once per sample', async () => {
-    h.setLogs(REPO, [turn({ at: FLOOR + 1, id: 'work', input: MTOK })]);
+    h.append(REPO, [turn({ at: FLOOR + 1, input: MTOK })]);
     h.failSweep();
     h.meter.pushWindow(REPO, LOOP, FLOOR);
     for (let i = 0; i < 3; i += 1) await h.sample();
@@ -629,85 +580,12 @@ describe('the §27 meter reaching the §25 audit and never damaging the run', ()
 
     h.healSweep();
     await h.sample();
-    expect(h.meter.current(REPO)?.cost.usd).toBe(3);
+    expect(h.meter.current(REPO)?.usd).toBe(3);
     expect(h.logged).toHaveLength(1);
 
     h.failSweep();
     for (let i = 0; i < 3; i += 1) await h.sample();
     expect(h.logged).toHaveLength(2);
-  });
-
-  // CWE-770 — the run's identity set and its per-model table are keyed on Claude Code's private log
-  // content and are released only by a `loop === null` push, which a completed run never produces. The
-  // worst case is the branch AC 2 requires: with no usable recorded start the sweep is unbounded, so the
-  // repo's ENTIRE Claude Code history is banked and held for as long as the app stays open.
-  it('stops admitting new turn identities past its ceiling, leaving the figure finite and still reported', async () => {
-    h.setLogs(REPO, spread(BANKED_CEILING));
-    h.meter.pushWindow(REPO, LOOP, FLOOR);
-    await h.sample();
-    const atCeiling = h.meter.current(REPO)!.cost.usd;
-    expect(atCeiling).toBeGreaterThan(0);
-
-    h.setLogs(REPO, spread(BANKED_CEILING + 50));
-    await h.sample();
-    expect(h.meter.current(REPO)!.cost.usd).toBe(atCeiling);
-  });
-
-  // A refused admission drops billed dollars the run really spent, so the figure is a FLOOR — and once the
-  // ceiling is reached nothing moves it again, so the run's last word is a wrong number rendered with the
-  // same confidence as a right one (CWE-682/CWE-755). Two runs reporting identical dollars, one of which
-  // stopped counting, must not be indistinguishable to whatever renders them.
-  it('reports a run whose retention ceiling was reached as a floor, not as a total', async () => {
-    h.setLogs(REPO, spread(BANKED_CEILING + 1));
-    h.meter.pushWindow(REPO, LOOP, FLOOR);
-    await h.sample();
-    const capped = h.meter.current(REPO)!;
-    expect(capped.capped).toBe(true);
-    expect(renderCost(capped)).toBe(`${'$' + capped.cost.usd.toFixed(2)} +uncounted`);
-
-    h.setLogs(OTHER, spread(BANKED_CEILING));
-    h.meter.pushWindow(OTHER, LOOP, FLOOR);
-    await h.sample(OTHER);
-    const whole = h.meter.current(OTHER)!;
-    expect(whole.capped).toBe(false);
-    expect(renderCost(whole)).toBe('$' + whole.cost.usd.toFixed(2));
-    expect(renderCost(capped)).not.toBe(renderCost(whole));
-  });
-
-  // The same shape the sweep outage gets: one line on the transition, not one per sample for the life of
-  // the app. Nothing throws when an admission is refused, so this log is the only main-process trace.
-  it('names the retention ceiling once on reaching it, not once per sample', async () => {
-    h.setLogs(REPO, spread(BANKED_CEILING + 1));
-    h.meter.pushWindow(REPO, LOOP, FLOOR);
-    for (let i = 0; i < 4; i += 1) {
-      h.setLogs(REPO, spread(BANKED_CEILING + 1 + i));
-      await h.sample();
-    }
-    expect(h.logged).toHaveLength(1);
-  });
-
-  it('stops admitting new models past its ceiling, leaving the run`s unpriced list bounded', async () => {
-    const models = (count: number): PricedTurn[] =>
-      Array.from({ length: count }, (_, i) => turn({ at: FLOOR + 1 + i, id: `m${i}`, model: `made-up-${i}`, input: 1000 }));
-    h.setLogs(REPO, models(MAX_BANKED_MODELS + 50));
-    h.meter.pushWindow(REPO, LOOP, FLOOR);
-    await h.sample();
-    expect(h.meter.current(REPO)!.cost.unpricedModels).toHaveLength(MAX_BANKED_MODELS);
-    expect(h.meter.current(REPO)!.capped).toBe(true);
-  });
-
-  it('keeps counting a turn under a model it has already seen once the model ceiling is reached', async () => {
-    const seed = Array.from({ length: MAX_BANKED_MODELS }, (_, i) =>
-      turn({ at: FLOOR + 1 + i, id: `m${i}`, model: i === 0 ? 'claude-sonnet-5' : `made-up-${i}`, input: 0, output: 0 }),
-    );
-    h.setLogs(REPO, seed);
-    h.meter.pushWindow(REPO, LOOP, FLOOR);
-    await h.sample();
-    expect(h.meter.current(REPO)!.cost.usd).toBe(0);
-
-    h.setLogs(REPO, [...seed, turn({ at: FLOOR + 9_000, id: 'late', input: MTOK })]);
-    await h.sample();
-    expect(h.meter.current(REPO)!.cost.usd).toBe(3);
   });
 
   // AC 7 — the meter is display-only. A run whose cost cannot be computed AT ALL completes exactly as one
@@ -723,17 +601,12 @@ describe('the §27 meter reaching the §25 audit and never damaging the run', ()
   });
 
   it('swallows a throwing audit recorder and a throwing view-changed signal', async () => {
-    const logs: PricedTurn[] = [turn({ at: FLOOR + 1, id: 'work', input: MTOK })];
     let armed: (() => Promise<void>) | null = null;
     const meter = createAppCostMeter({
       sampleDelayMs: BASE_DELAY,
-      maxBankedTurns: BANKED_CEILING,
       openSweep: () => ({
-        drain: () => ({
-          async *[Symbol.asyncIterator]() {
-            for (const t of logs) yield t;
-          },
-        }),
+        drain: async () => [{ model: 'claude-sonnet-5', input: MTOK, cacheCreate: 0, cacheRead: 0, output: 0 }],
+        close: () => {},
       }),
       now: () => FLOOR + 10_000,
       armSample: (_repoDir, _delayMs, run) => {
@@ -750,16 +623,15 @@ describe('the §27 meter reaching the §25 audit and never damaging the run', ()
     });
     meter.pushWindow(REPO, LOOP, FLOOR);
     await expect((armed as unknown as () => Promise<void>)()).resolves.toBeUndefined();
-    expect(meter.current(REPO)?.cost.usd).toBe(3);
+    expect(meter.current(REPO)?.usd).toBe(3);
   });
 
-  it('never throws out of the push itself, even when opening the sweep fails', () => {
+  it('never throws out of the push itself, even when opening or releasing the sweep fails', () => {
     expect(() => h.meter.pushWindow(REPO, LOOP, Number.NaN)).not.toThrow();
     expect(() => h.meter.pushWindow(REPO, null, null)).not.toThrow();
 
-    const meter = createAppCostMeter({
+    const refusing = createAppCostMeter({
       sampleDelayMs: BASE_DELAY,
-      maxBankedTurns: BANKED_CEILING,
       openSweep: () => {
         throw new Error('log root refused');
       },
@@ -770,7 +642,26 @@ describe('the §27 meter reaching the §25 audit and never damaging the run', ()
       recordCost: () => true,
       log: () => {},
     });
-    expect(() => meter.pushWindow(REPO, LOOP, FLOOR)).not.toThrow();
-    expect(meter.current(REPO)).toBeNull();
+    expect(() => refusing.pushWindow(REPO, LOOP, FLOOR)).not.toThrow();
+    expect(refusing.current(REPO)).toBeNull();
+
+    const unreleasable = createAppCostMeter({
+      sampleDelayMs: BASE_DELAY,
+      openSweep: () => ({
+        drain: async () => [],
+        close: () => {
+          throw new Error('release failed');
+        },
+      }),
+      now: () => FLOOR,
+      armSample: () => {},
+      cancelSample: () => {},
+      onFigureChanged: () => {},
+      recordCost: () => true,
+      log: () => {},
+    });
+    unreleasable.pushWindow(REPO, LOOP, FLOOR);
+    expect(() => unreleasable.pushWindow(REPO, null, null)).not.toThrow();
+    expect(unreleasable.current(REPO)).toBeNull();
   });
 });

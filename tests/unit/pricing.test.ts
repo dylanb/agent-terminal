@@ -86,20 +86,42 @@ describe('token pricing (§26.10)', () => {
   // but the counts come from Claude Code's private log format and reach the multiply unchecked on §26's
   // path. `1e308 * 15` overflows BEFORE the divide, and one overflow to +Infinity beside one to -Infinity
   // is NaN — a figure that then reaches the strip, the §25 record and the persisted state.yaml, where it
-  // reads back as `.nan`. The postcondition is the type's own, so it is enforced where the type is built
-  // (CWE-20, CWE-1339, OWASP ASVS V5.1.4).
-  it('holds usd finite whatever counts it is handed, so the readout never renders NaN or Infinity', () => {
-    const hostile: ModelTokens[][] = [
-      [{ model: priced, input: -1e308, cacheCreate: 1e308, cacheRead: 0, output: 1 }],
-      [{ model: priced, input: 0, cacheCreate: 0, cacheRead: 0, output: 1e308 }],
-      [{ model: priced, input: Number.POSITIVE_INFINITY, cacheCreate: 0, cacheRead: 0, output: 0 }],
-      [{ model: priced, input: Number.NaN, cacheCreate: 0, cacheRead: 0, output: 0 }],
+  // reads back as `.nan`. A guard on the ACCUMULATED total buys that finiteness by discarding every
+  // correctly-priced dollar beside the overflowing term, which turns a loud wrong number into a silent
+  // `$0.00` — character-for-character what a genuinely-zero run reports. Each model's own contribution is
+  // therefore checked before it joins the sum (CWE-20, CWE-682, CWE-755, OWASP ASVS V5.1.4).
+  it('drops only the model whose own contribution is unpriceable, keeping the dollars beside it', () => {
+    const unpriceable: ModelTokens[] = [
+      { model: 'claude-opus-4-8', input: -1e308, cacheCreate: 1e308, cacheRead: 0, output: 1 },
+      { model: 'claude-opus-4-8', input: 0, cacheCreate: 0, cacheRead: 0, output: 1e308 },
+      { model: 'claude-opus-4-8', input: Number.POSITIVE_INFINITY, cacheCreate: 0, cacheRead: 0, output: 0 },
+      { model: 'claude-opus-4-8', input: Number.NaN, cacheCreate: 0, cacheRead: 0, output: 0 },
     ];
-    for (const totals of hostile) {
-      const r = priceTokens(totals);
-      expect(Number.isFinite(r.usd), JSON.stringify(totals)).toBe(true);
-      expect(formatCost(r), JSON.stringify(totals)).not.toMatch(/NaN|Infinity/);
+    for (const hostile of unpriceable) {
+      const r = priceTokens([{ model: 'claude-sonnet-5', input: 1_000_000, cacheCreate: 0, cacheRead: 0, output: 0 }, hostile]);
+      const why = JSON.stringify(hostile);
+      expect(r.usd, why).toBe(PRICING['claude-sonnet-5'].input);
+      expect(r.unpricedModels, why).toEqual(['claude-opus-4-8']);
+      expect(formatCost(r), why).toBe('$3.00 +unknown');
     }
+  });
+
+  // ...and an unpriceable model on its own is distinguishable from a genuinely-zero run: naming it in
+  // unpricedModels is what makes the readout say `unknown` rather than a confident `$0.00`.
+  it('reads unknown, not $0.00, for a run whose every model was unpriceable', () => {
+    const r = priceTokens([{ model: priced, input: 0, cacheCreate: 0, cacheRead: 0, output: 1e308 }]);
+    expect(r).toEqual({ usd: 0, unpricedModels: [priced] });
+    expect(formatCost(r)).toBe('unknown');
+    expect(formatCost(priceTokens([]))).toBe('$0.00');
+  });
+
+  // The other axis of the same input: a plain negative count prices to a finite negative figure, which is
+  // WRONG but LOUD — the operator can see it is wrong. That is the exchange this branch takes deliberately
+  // over a silent zero, so the number it renders is pinned rather than left to whatever the code does.
+  it('renders a negative count as the negative dollars it prices to, rather than hiding it', () => {
+    const r = priceTokens([{ model: 'claude-sonnet-5', input: -1e12, cacheCreate: 0, cacheRead: 0, output: 0 }]);
+    expect(r).toEqual({ usd: -3_000_000, unpricedModels: [] });
+    expect(formatCost(r)).toBe('$-3000000.00');
   });
 
   it('leaves an ordinary in-range total exactly as it prices it', () => {
