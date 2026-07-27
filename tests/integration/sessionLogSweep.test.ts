@@ -20,6 +20,7 @@ import {
   sessionLogDir,
   readSessionTokens,
   openSessionSweep,
+  MAX_IDENTITY_CHARS,
   type PricedTurn,
   type SessionSweep,
 } from '../../src/main/sessionLogSweep';
@@ -140,9 +141,6 @@ describe('the §27 per-turn session-log sweep', () => {
     expect(new Set(turns.map((t) => t.id)).size).toBe(2);
   });
 
-  // A log that stamps only half an identity (or neither) leaves the turn unidentifiable, and a run's
-  // accumulator re-reads the log it is growing on every sample — so the sweep gives such a turn a
-  // position-derived identity that is the SAME on every drain of that log, or the run's figure ratchets.
   it('gives a turn carrying no billing identity an identity stable across drains of its log', async () => {
     const log = join(dir, 'session.jsonl');
     writeFileSync(
@@ -292,14 +290,12 @@ describe('the §27 per-turn session-log sweep', () => {
     expect(turns.map((t) => t.input)).toEqual([7]);
   });
 
-  // The mtime pre-filter is what collapses a 359 MB log root to the handful of files written during the run.
-  // The stale file is planted READABLE and carrying in-window turns: an unreadable one is contractually
-  // skipped anyway (AC 7), so it could not tell a skipped file from an opened one.
-  // The billing identity is the key a run banks a turn under for its whole life, and it comes out of
-  // Claude Code's private log format at whatever length that format hands over. It is REJECTED rather than
-  // truncated: two distinct billed turns sharing a truncated prefix would collapse into one and drop the
-  // second turn's dollars from the run's total.
-  it('rejects a billing identity longer than the cap and derives one from the turn itself', async () => {
+  // The identity a run banks a turn under comes out of Claude Code's private format at whatever length
+  // that format hands over, so it is bounded before it becomes a key held for the life of the run
+  // (CWE-770). Bounding it by DIGEST rather than by rejection keeps both properties the key needs: the
+  // same turn replayed into a resumed session still banks once, and two turns the format identified
+  // differently stay apart however long those identities were.
+  it('bounds an over-long billing identity without collapsing the turns it identified', async () => {
     const huge = 'x'.repeat(5_000);
     const replay = turnLine({ ts: '2026-07-09T12:00:01.000Z', msgId: huge, reqId: huge, input: 1 });
     writeFileSync(
@@ -311,6 +307,44 @@ describe('the §27 per-turn session-log sweep', () => {
     expect(turns.map((t) => t.input).sort()).toEqual([1, 1, 3]);
     for (const t of turns) expect(t.id.length).toBeLessThan(huge.length);
     expect(new Set(turns.map((t) => t.id)).size).toBe(2);
+  });
+
+  // Two turns the log identified DIFFERENTLY, alike in every other field: the same instant, model and
+  // counts. Rejecting the over-long identity and re-deriving one from the turn's content gives them one
+  // key, so the run banks the first and silently drops the second's dollars — the exact collapse the
+  // bound exists to prevent, arrived at from the other side (CWE-20, CWE-694).
+  it('keeps two turns apart whose over-long identities differ but whose content is identical', async () => {
+    const a = 'a'.repeat(5_000);
+    const b = 'b'.repeat(5_000);
+    writeFileSync(
+      join(dir, 'session.jsonl'),
+      [
+        turnLine({ ts: '2026-07-09T12:00:01.000Z', msgId: a, reqId: a, input: 1000 }),
+        turnLine({ ts: '2026-07-09T12:00:01.000Z', msgId: b, reqId: b, input: 1000 }),
+      ].join('\n'),
+    );
+    const turns = await drain(dir);
+    expect(turns.map((t) => t.input)).toEqual([1000, 1000]);
+    expect(new Set(turns.map((t) => t.id)).size).toBe(2);
+  });
+
+  // The boundary the bound is applied at is the COMPOSITE of both halves, not either field: two halves
+  // each well under the cap compose past it. At the cap the identity is banked as the log stamped it.
+  it('banks an identity exactly at the cap as the log stamped it, and the next character over as a digest', async () => {
+    const stamped = async (msgId: string, reqId: string): Promise<PricedTurn> => {
+      writeFileSync(join(dir, 'session.jsonl'), turnLine({ ts: '2026-07-09T12:00:01.000Z', msgId, reqId, input: 1 }));
+      return (await drain(dir))[0];
+    };
+    const msgId = 'y'.repeat(MAX_IDENTITY_CHARS / 2);
+    const reqId = 'z'.repeat(MAX_IDENTITY_CHARS - JSON.stringify([msgId, '']).length);
+    expect(JSON.stringify([msgId, reqId])).toHaveLength(MAX_IDENTITY_CHARS);
+
+    const kept = await stamped(msgId, reqId);
+    expect(kept.id).toBe(JSON.stringify([msgId, reqId]));
+
+    const over = await stamped(msgId, `${reqId}z`);
+    expect(over.id).not.toBe(JSON.stringify([msgId, `${reqId}z`]));
+    expect(over.id.length).toBeLessThan(MAX_IDENTITY_CHARS);
   });
 
   // AC 3 — the replay a billing identity exists to collapse lands in a DIFFERENT file, so an identity
@@ -335,6 +369,22 @@ describe('the §27 per-turn session-log sweep', () => {
       ].join('\n'),
     );
     expect(new Set((await drain(dir)).map((t) => t.id)).size).toBe(3);
+  });
+
+  // Two identical billed turns are ordinary — the same prompt retried, two subagents handed the same
+  // slice — and with no identity stamped nothing in their content tells them apart. An identity that is
+  // a pure function of content gives them one key and the run reports half the tokens it was billed for.
+  // A replay of the same log still collapses, because the replayed copies arrive in the same order.
+  it('keeps two identical turns carrying no billing identity apart, and still collapses their replay', async () => {
+    const line = turnLine({ ts: '2026-07-09T12:00:01.000Z', input: 1000 });
+    writeFileSync(join(dir, 'session.jsonl'), [line, line].join('\n'));
+    const first = await drain(dir);
+    expect(first.map((t) => t.input)).toEqual([1000, 1000]);
+    expect(new Set(first.map((t) => t.id)).size).toBe(2);
+
+    writeFileSync(join(dir, 'resumed.jsonl'), [line, line, turnLine({ ts: '2026-07-09T12:00:02.000Z', input: 5 })].join('\n'));
+    const both = await drain(dir);
+    expect(new Set(both.map((t) => t.id)).size).toBe(3);
   });
 
   // §27 admission, not §26 decode: the model id reaches an in-memory accumulator key, the strip and the
@@ -446,6 +496,8 @@ describe('the §27 per-turn session-log sweep', () => {
     expect(seen.map((t) => t.id)).toEqual([billed('a')]);
   });
 
+  // The stale file is planted READABLE and carrying in-window turns: an unreadable one is contractually
+  // skipped anyway (AC 7), so it could not tell a skipped file from an opened one.
   it('skips a log whose last write predates the floor, and opens it when there is no floor', async () => {
     const stale = join(dir, 'stale.jsonl');
     writeFileSync(stale, turnLine({ ts: '2026-07-09T12:00:05.000Z', id: 'hidden', input: 999 }));

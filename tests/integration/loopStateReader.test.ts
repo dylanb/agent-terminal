@@ -96,6 +96,16 @@ describe('loop state.yaml extension reader (§26.6)', () => {
     expect(readLoopExtension(repo).cost).toBeNull();
   });
 
+  // YAML spells non-finite floats, so `.nan` and `.inf` survive the round trip as numbers and pass a bare
+  // `typeof === 'number'` — while `cap_baseline` seven lines away already carries the full check over the
+  // same attacker-plantable document. A planted one reaches the strip as `$NaN` (CWE-20, ASVS V5.1.3).
+  it('degrades a non-finite cost to no recorded cost rather than rendering it', () => {
+    for (const usd of ['.nan', '.inf', '-.inf']) {
+      writeFileSync(join(repo, '.agent-loop', 'state.yaml'), `schema_version: 4\nstatus: plan-draft\ncost:\n  usd: ${usd}\n`);
+      expect(readLoopExtension(repo).cost, usd).toBeNull();
+    }
+  });
+
   // §26.11 — resume reads which LoopDef governs the interrupted run from state.yaml's bound_loop.
   it('reads the bound_loop back as written (§26.11 resume)', () => {
     write({ status: 'plan-draft', iteration: 1, bound_loop: 'plan-loop' });

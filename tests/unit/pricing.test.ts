@@ -82,6 +82,34 @@ describe('token pricing (§26.10)', () => {
     }
   });
 
+  // `CostResult` documents `usd` as always finite so the readout never renders `$NaN` and never blocks,
+  // but the counts come from Claude Code's private log format and reach the multiply unchecked on §26's
+  // path. `1e308 * 15` overflows BEFORE the divide, and one overflow to +Infinity beside one to -Infinity
+  // is NaN — a figure that then reaches the strip, the §25 record and the persisted state.yaml, where it
+  // reads back as `.nan`. The postcondition is the type's own, so it is enforced where the type is built
+  // (CWE-20, CWE-1339, OWASP ASVS V5.1.4).
+  it('holds usd finite whatever counts it is handed, so the readout never renders NaN or Infinity', () => {
+    const hostile: ModelTokens[][] = [
+      [{ model: priced, input: -1e308, cacheCreate: 1e308, cacheRead: 0, output: 1 }],
+      [{ model: priced, input: 0, cacheCreate: 0, cacheRead: 0, output: 1e308 }],
+      [{ model: priced, input: Number.POSITIVE_INFINITY, cacheCreate: 0, cacheRead: 0, output: 0 }],
+      [{ model: priced, input: Number.NaN, cacheCreate: 0, cacheRead: 0, output: 0 }],
+    ];
+    for (const totals of hostile) {
+      const r = priceTokens(totals);
+      expect(Number.isFinite(r.usd), JSON.stringify(totals)).toBe(true);
+      expect(formatCost(r), JSON.stringify(totals)).not.toMatch(/NaN|Infinity/);
+    }
+  });
+
+  it('leaves an ordinary in-range total exactly as it prices it', () => {
+    const p = PRICING[priced];
+    expect(priceTokens([{ model: priced, input: 2_000_000, cacheCreate: 0, cacheRead: 0, output: 0 }]).usd).toBeCloseTo(
+      p.input * 2,
+      6,
+    );
+  });
+
   // The models the loop actually runs on must be in the table, or every real readout reads `+unknown`.
   it('prices the models the hosted agent and its reviewer subagents run on', () => {
     for (const model of ['claude-opus-4-8', 'claude-sonnet-4-6']) {

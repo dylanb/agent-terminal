@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { execFileSync } from 'node:child_process';
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const REPO = fileURLToPath(new URL('../..', import.meta.url));
@@ -15,31 +17,23 @@ function trackedSources(): { src: string[]; other: string[] } {
   return { src: files.filter((f) => f.startsWith('src/')), other: files.filter((f) => !f.startsWith('src/')) };
 }
 
-/** The bytes git holds for each path, read from the INDEX the paths were enumerated from. Reading the
- *  worktree instead lets the two disagree — an ordinary state while a tracked file is being deleted or
- *  moved — and the ENOENT surfaces under the name of a property that did not fail. */
-function indexBytes(files: string[]): Map<string, Buffer> {
-  if (files.length === 0) return new Map();
-  const batch = execFileSync('git', ['cat-file', '--batch'], {
-    cwd: REPO,
-    input: `${files.map((f) => `:${f}`).join('\n')}\n`,
-    maxBuffer: 512 * 1024 * 1024,
-  });
+/** The bytes on disk for each tracked path. The worktree is where the property lives: the write-run-commit
+ *  order this repo works in stages the file only AFTER the suite has run, so a pin that read the index
+ *  could not fail in the window it exists to guard. A tracked path with no file is an ordinary state while
+ *  one is being deleted or moved, and is skipped rather than surfacing an ENOENT under this name. */
+function worktreeBytes(files: string[]): Map<string, Buffer> {
   const bytes = new Map<string, Buffer>();
-  let at = 0;
   for (const file of files) {
-    const eol = batch.indexOf(0x0a, at);
-    const size = Number(batch.toString('utf8', at, eol).split(' ')[2]);
-    bytes.set(file, batch.subarray(eol + 1, eol + 1 + size));
-    at = eol + 1 + size + 1;
+    const full = join(REPO, file);
+    if (existsSync(full)) bytes.set(file, readFileSync(full));
   }
   return bytes;
 }
 
 function carrying(files: string[], bad: (byte: number) => boolean): string[] {
-  const bytes = indexBytes(files);
-  expect(bytes.size).toBe(files.length);
-  return files.filter((file) => bytes.get(file)!.some(bad));
+  const bytes = worktreeBytes(files);
+  expect(bytes.size).toBeGreaterThan(0);
+  return [...bytes].filter(([, b]) => b.some(bad)).map(([file]) => file);
 }
 
 // A raw NUL makes git classify a .ts as BINARY and drop it from every diff, so the file stops being
@@ -65,5 +59,12 @@ describe('git keeps every tracked .ts in this repo text', () => {
     expect(src.length).toBeGreaterThan(0);
     expect(other.some((f) => f.startsWith('tests/'))).toBe(true);
     expect(other.some((f) => !f.includes('/'))).toBe(true);
+  });
+
+  // The two pins above assert an EMPTY list, so they read identically against a checker that finds nothing
+  // and one that reads nothing. This drives the same reader over the byte the tree does carry — §25.7's
+  // strip fixture holds a raw BEL — so an empty answer above means the bytes were read and were clean.
+  it('finds the control byte the tree does carry, so an empty answer above is not an empty read', () => {
+    expect(carrying(trackedSources().other, (b) => b === 0x07)).not.toEqual([]);
   });
 });

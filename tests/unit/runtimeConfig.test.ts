@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { constants } from 'node:buffer';
 import { resolveRuntimeConfig } from '../../src/main/runtimeConfig';
-import { SAMPLE_BACKOFF_FACTOR_MAX } from '../../src/main/appCostMeter';
 
 describe('resolveRuntimeConfig (§15.7 — env-overridable per-agent profile seam, no magic numbers)', () => {
   it('defaults quietMs to 1000 and parses a valid override, falling back on garbage', () => {
@@ -53,6 +52,7 @@ describe('resolveRuntimeConfig (§15.7 — env-overridable per-agent profile sea
     expect(def.maxDoneTodos).toBeGreaterThan(0);
     expect(def.costSampleMs).toBeGreaterThan(0);
     expect(def.sessionLogChunkBytes).toBeGreaterThan(0);
+    expect(def.costMaxBankedTurns).toBeGreaterThan(0);
 
     const over = resolveRuntimeConfig({
       APP_DEDUP_RETENTION: '7',
@@ -64,6 +64,7 @@ describe('resolveRuntimeConfig (§15.7 — env-overridable per-agent profile sea
       APP_MAX_DONE_TODOS: '8',
       APP_COST_SAMPLE_MS: '250',
       APP_SESSION_LOG_CHUNK_BYTES: '4096',
+      APP_COST_MAX_BANKED_TURNS: '25',
     });
     expect(over.dedupRetention).toBe(7);
     expect(over.maxCommandSummaries).toBe(11);
@@ -74,6 +75,7 @@ describe('resolveRuntimeConfig (§15.7 — env-overridable per-agent profile sea
     expect(over.maxDoneTodos).toBe(8);
     expect(over.costSampleMs).toBe(250);
     expect(over.sessionLogChunkBytes).toBe(4096);
+    expect(over.costMaxBankedTurns).toBe(25);
 
     const garbage = resolveRuntimeConfig({
       APP_DEDUP_RETENTION: 'x',
@@ -85,6 +87,7 @@ describe('resolveRuntimeConfig (§15.7 — env-overridable per-agent profile sea
       APP_MAX_DONE_TODOS: 'x',
       APP_COST_SAMPLE_MS: '-5',
       APP_SESSION_LOG_CHUNK_BYTES: '0',
+      APP_COST_MAX_BANKED_TURNS: '-2',
     });
     expect(garbage.dedupRetention).toBe(def.dedupRetention);
     expect(garbage.maxCommandSummaries).toBe(def.maxCommandSummaries);
@@ -97,6 +100,9 @@ describe('resolveRuntimeConfig (§15.7 — env-overridable per-agent profile sea
     // A chunk size of 0 makes every read return zero bytes, so every log reads as empty and the strip
     // shows a confident $0.00 for a run that spent money — the silent zero §27.11 rejects.
     expect(garbage.sessionLogChunkBytes).toBe(def.sessionLogChunkBytes);
+    // Out of range fails TOWARD the limit still firing: a ceiling that fell back to zero would refuse
+    // every admission and report $0.00 for a run that spent money.
+    expect(garbage.costMaxBankedTurns).toBe(def.costMaxBankedTurns);
   });
 
   // The chunk size is the only key that reaches a Buffer allocation. `1e15` is a positive integer, so every
@@ -117,19 +123,33 @@ describe('resolveRuntimeConfig (§15.7 — env-overridable per-agent profile sea
     expect(resolveRuntimeConfig({ APP_SESSION_LOG_CHUNK_BYTES: '4096' }).sessionLogChunkBytes).toBe(4096);
   });
 
-  // The cadence reaches `setTimeout` after being multiplied by the meter's backoff factor, and Node does
-  // not raise on a delay past the 32-bit signed range — it warns and fires in 1 ms. An operator who set the
-  // knob to "sample essentially never" would get the tightest self-rearming loop the code can produce, each
-  // rung a whole-tree sweep on the process that also drains the PTY (CWE-400).
-  it('caps the cost-sample cadence at a delay the timer can still hold after the backoff multiplies it', () => {
+  // The cadence reaches `setTimeout` directly on the run's first sample, and Node does not raise on a delay
+  // past the 32-bit signed range — it warns and fires in 1 ms. An operator who set the knob to "sample
+  // essentially never" would get the tightest self-rearming loop the code can produce, each rung a
+  // whole-tree sweep on the process that also drains the PTY (CWE-400).
+  it('caps the cost-sample cadence at a delay a timer can hold', () => {
     for (const raw of ['99999999999', String(Number.MAX_SAFE_INTEGER), '2147483647']) {
       const capped = resolveRuntimeConfig({ APP_COST_SAMPLE_MS: raw }).costSampleMs;
       expect(capped, raw).toBeGreaterThan(0);
-      expect(capped * SAMPLE_BACKOFF_FACTOR_MAX, raw).toBeLessThanOrEqual(2 ** 31 - 1);
+      expect(capped, raw).toBeLessThanOrEqual(2 ** 31 - 1);
     }
   });
 
   it('passes an in-range cost-sample cadence through unchanged', () => {
     expect(resolveRuntimeConfig({ APP_COST_SAMPLE_MS: '200' }).costSampleMs).toBe(200);
+  });
+
+  // The §27 meter's retention ceiling is the operator's only route out of a run whose figure has frozen
+  // below what it spent, so it is raisable — and still bounded, because the identities it retains are keyed
+  // on Claude Code's private log content and held for the life of the run (CWE-770).
+  it('lets an operator raise the §27 retention ceiling, and still bounds what they can ask for', () => {
+    const def = resolveRuntimeConfig({}).costMaxBankedTurns;
+    const raised = resolveRuntimeConfig({ APP_COST_MAX_BANKED_TURNS: String(def * 2) }).costMaxBankedTurns;
+    expect(raised).toBe(def * 2);
+    for (const raw of ['1e15', String(Number.MAX_SAFE_INTEGER)]) {
+      const capped = resolveRuntimeConfig({ APP_COST_MAX_BANKED_TURNS: raw }).costMaxBankedTurns;
+      expect(capped, raw).toBeGreaterThanOrEqual(def);
+      expect(capped, raw).toBeLessThan(Number.MAX_SAFE_INTEGER);
+    }
   });
 });

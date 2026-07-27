@@ -2038,7 +2038,8 @@ function seedRefsFlowRepo(prefix: string): { dir: string; stateFile: string } {
   return { dir, stateFile: join(loopDir, 'state.yaml') };
 }
 
-const loopReadout = () => page.locator('#flow-strip .loopstat'); // compact rail read-out; click opens the panel
+const LOOP_READOUT_SEL = '#flow-strip .loopstat';
+const loopReadout = () => page.locator(LOOP_READOUT_SEL); // compact rail read-out; click opens the panel
 const loopPanel = () => page.locator('#loop-panel');
 const statusActivity = () => page.locator('#status-bar .sb-activity');
 const statusAlert = () => page.locator('#status-bar [data-status-alert]');
@@ -5401,7 +5402,7 @@ async function readoutAx(): Promise<{ name: string; description: string }> {
     const doc = (await cdp.send('DOM.getDocument', { depth: 0 })) as { root: { nodeId: number } };
     const hit = (await cdp.send('DOM.querySelector', {
       nodeId: doc.root.nodeId,
-      selector: '#flow-strip .loopstat',
+      selector: LOOP_READOUT_SEL,
     })) as { nodeId: number };
     expect(hit.nodeId).toBeGreaterThan(0);
     const tree = (await cdp.send('Accessibility.getPartialAXTree', {
@@ -5508,6 +5509,10 @@ test('a §27 run meters its WHOLE cost onto the strip and into the §25 audit, l
   // what a focused read-out still reports, both read from the browser's own accessibility tree rather than
   // from a re-implementation of the accname algorithm (CLAUDE.md: ask the engine what it painted).
   let ax = await readoutAx();
+  // The negative needs a positive on the SAME value: with no anchor it reads identically whether the figure
+  // is out of the name or the read-out has no accessible name at all, which is an SC 4.1.2 regression on a
+  // `role=button`. `Loop` is the read-out's own label text, contributed by name-from-content.
+  expect(ax.name).toContain('Loop');
   expect(ax.name).not.toContain(V2_COST_TOTAL);
   expect(ax.description).toBe(`cost ${V2_COST_TOTAL}`);
 
@@ -5528,6 +5533,7 @@ test('a §27 run meters its WHOLE cost onto the strip and into the §25 audit, l
   );
   await expect(cost).toHaveText(V2_COST_AFTER_GATE, { timeout: 30_000 });
   ax = await readoutAx();
+  expect(ax.name).toContain('Loop');
   expect(ax.name).not.toContain(V2_COST_AFTER_GATE);
   expect(ax.description).toBe(`cost ${V2_COST_AFTER_GATE}`);
 
