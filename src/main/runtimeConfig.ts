@@ -26,15 +26,11 @@ const DEFAULTS = {
   costSampleMs: 2000,
   // §27.11
   sessionLogChunkBytes: 64 * 1024,
-  // §27.11
-  costMaxBankedTurns: 100_000,
 } as const;
 
 /** Ceiling on `sessionLogChunkBytes`: every field-local check passes a value the `Buffer` allocator then
  *  refuses. */
 const MAX_CHUNK_BYTES = 16 * 1024 * 1024;
-/** CWE-770 */
-const MAX_BANKED_TURNS_LIMIT = 1_000_000;
 
 export interface RuntimeConfig {
   quietMs: number;
@@ -51,7 +47,6 @@ export interface RuntimeConfig {
   startupExitGraceMs: number;
   costSampleMs: number;
   sessionLogChunkBytes: number;
-  costMaxBankedTurns: number;
 }
 
 /** Parse a positive integer env value; fall back on unset/garbage/non-positive (§15.7). */
@@ -83,6 +78,5 @@ export function resolveRuntimeConfig(env: NodeJS.ProcessEnv): RuntimeConfig {
     startupExitGraceMs: posInt(env.APP_STARTUP_EXIT_GRACE_MS, DEFAULTS.startupExitGraceMs),
     costSampleMs: posIntCapped(env.APP_COST_SAMPLE_MS, DEFAULTS.costSampleMs, MAX_TIMER_DELAY_MS),
     sessionLogChunkBytes: posIntCapped(env.APP_SESSION_LOG_CHUNK_BYTES, DEFAULTS.sessionLogChunkBytes, MAX_CHUNK_BYTES),
-    costMaxBankedTurns: posIntCapped(env.APP_COST_MAX_BANKED_TURNS, DEFAULTS.costMaxBankedTurns, MAX_BANKED_TURNS_LIMIT),
   };
 }

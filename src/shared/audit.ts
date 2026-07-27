@@ -206,11 +206,20 @@ export function notifyFailedEvent(reason: string, ts: string): AuditEvent {
 
 const AUDIT_UNPRICED_MAX = 32;
 
-/** The §27 run's cost, as the §25 record carries it (§27.11). The stream holds a series whose LAST entry
- *  is the run's figure. Both the length of each model id and how many of them one record carries are
- *  bounded: the ids come from Claude Code's private log format (CWE-117 / CWE-770). */
+/** What a §25 record carries for a §27 run's cost (§27.11). Both the length of each model id and how many
+ *  of them one record carries are bounded: the ids come from Claude Code's private log format (CWE-117 /
+ *  CWE-770). Whoever decides whether restating the cost would say anything new compares against THIS, not
+ *  against the live figure, so a run discovering ids past the bound cannot append records identical to
+ *  their predecessor. */
+export function auditCost(cost: { usd: number; unpricedModels: string[] }): { usd: number; unpricedModels: string[] } {
+  return { usd: cost.usd, unpricedModels: cost.unpricedModels.slice(0, AUDIT_UNPRICED_MAX).map(boundExternalText) };
+}
+
+/** The §27 run's cost as one append-only §25 event. The stream holds a series whose LAST entry is the run's
+ *  figure. */
 export function appCostEvent(cost: { usd: number; unpricedModels: string[] }, ts: string): AuditEvent {
-  return { ts, type: 'app.cost', usd: cost.usd, unpriced: cost.unpricedModels.slice(0, AUDIT_UNPRICED_MAX).map(boundExternalText) };
+  const bounded = auditCost(cost);
+  return { ts, type: 'app.cost', usd: bounded.usd, unpriced: bounded.unpricedModels };
 }
 
 /** A run replayed from its append-only stream (§25.6): the ordered events plus the folded final

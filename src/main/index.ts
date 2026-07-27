@@ -123,7 +123,7 @@ import {
 } from './installExamples';
 import { provideAppLoopView } from './loopViewV2';
 import { createAppLoopEngine, type AppLoopEntry } from './appLoopEngine';
-import { createAppCostMeter, renderCost } from './appCostMeter';
+import { createAppCostMeter } from './appCostMeter';
 import { appLoopEntryFor } from './appLoopEntry';
 import { armInterrupt, clearAppLoopBootstrap, clearPolish, consolidatorOutputFile, consolidatorOutputRel, enterPolish, isPolishActiveForStep, readAppLoopState, roundReportFile, roundReportRel, writeAppLoopBootstrap, writeAppLoopBootstrapIntent, writeAppLoopState, type AppLoopBootstrap } from './appLoopState';
 import { APP_LOOP_DIR_SEGMENTS } from './appLoopPaths';
@@ -1042,7 +1042,6 @@ async function createWindow(): Promise<void> {
       }),
     now: () => Date.now(),
     sampleDelayMs: config.costSampleMs,
-    maxBankedTurns: config.costMaxBankedTurns,
     armSample: (repoDir, delayMs, run) => {
       const armed = costSampleTimers.get(repoDir);
       if (armed) clearTimeout(armed);
@@ -1061,8 +1060,8 @@ async function createWindow(): Promise<void> {
     costSampleTimers.clear();
   };
   const appLoopCostReadout = (repoKey: string): string | null => {
-    const run = appCostMeter.current(repoKey);
-    return run === null ? null : renderCost(run);
+    const cost = appCostMeter.current(repoKey);
+    return cost === null ? null : formatCost(cost);
   };
   const flow = createFlowManager({
     globalDir: flowGlobalDir,

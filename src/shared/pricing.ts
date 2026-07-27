@@ -61,22 +61,37 @@ export function sortedTotals(byModel: Map<string, ModelTokens>): ModelTokens[] {
  *  dollars and is named once in `unpricedModels`; the returned `usd` is always finite. A model that consumed
  *  no tokens bills nothing, so it is never a pricing gap however unfamiliar its id — Claude Code logs a
  *  `<synthetic>` model on API-error turns with every token field at zero, and reporting that as unpriced
- *  would append `+unknown` to a readout that is in fact complete. */
+ *  would append `+unknown` to a readout that is in fact complete.
+ *
+ *  Each model's own contribution is checked before it joins the sum, and a model that cannot join it is
+ *  named unpriced rather than discarding the correctly-priced dollars beside it: §26's aggregate leaves an
+ *  out-of-range count exactly as it reads it (AC 10), and a guard on the accumulated total would report a
+ *  run that really spent $3.00 as `$0.00` — character-for-character what a genuinely-zero run reports
+ *  (CWE-682, CWE-755). */
 export function priceTokens(totals: ModelTokens[]): CostResult {
   let usd = 0;
   const unpricedModels: string[] = [];
+  const unpriced = (model: string): void => {
+    if (!unpricedModels.includes(model)) unpricedModels.push(model);
+  };
   for (const t of totals) {
     if (t.input + t.cacheCreate + t.cacheRead + t.output === 0) continue;
     const price = Object.hasOwn(PRICING, t.model) ? PRICING[t.model] : undefined;
     if (!price) {
-      if (!unpricedModels.includes(t.model)) unpricedModels.push(t.model);
+      unpriced(t.model);
       continue;
     }
-    usd +=
+    const own =
       (t.input * price.input + t.cacheCreate * price.cacheCreate + t.cacheRead * price.cacheRead + t.output * price.output) /
       1_000_000;
+    const summed = usd + own;
+    if (!Number.isFinite(own) || !Number.isFinite(summed)) {
+      unpriced(t.model);
+      continue;
+    }
+    usd = summed;
   }
-  return { usd: Number.isFinite(usd) ? usd : 0, unpricedModels };
+  return { usd, unpricedModels };
 }
 
 /** The status-strip / audit-viewer readout for a cost (§26.10). Never `$NaN`: an all-unpriced result reads
