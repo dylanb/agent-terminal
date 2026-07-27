@@ -5511,8 +5511,9 @@ test('a §27 run meters its WHOLE cost onto the strip and into the §25 audit, l
   let ax = await readoutAx();
   // The negative needs a positive on the SAME value: with no anchor it reads identically whether the figure
   // is out of the name or the read-out has no accessible name at all, which is an SC 4.1.2 regression on a
-  // `role=button`. `Loop` is the read-out's own label text, contributed by name-from-content.
-  expect(ax.name).toContain('Loop');
+  // `role=button`. Name-from-content reads the RENDERED text, which `text-transform` upper-cases.
+  expect(ax.name.trim()).not.toBe('');
+  expect(ax.name.toLowerCase()).toContain('loop');
   expect(ax.name).not.toContain(V2_COST_TOTAL);
   expect(ax.description).toBe(`cost ${V2_COST_TOTAL}`);
 
@@ -5533,7 +5534,7 @@ test('a §27 run meters its WHOLE cost onto the strip and into the §25 audit, l
   );
   await expect(cost).toHaveText(V2_COST_AFTER_GATE, { timeout: 30_000 });
   ax = await readoutAx();
-  expect(ax.name).toContain('Loop');
+  expect(ax.name.toLowerCase()).toContain('loop');
   expect(ax.name).not.toContain(V2_COST_AFTER_GATE);
   expect(ax.description).toBe(`cost ${V2_COST_AFTER_GATE}`);
 

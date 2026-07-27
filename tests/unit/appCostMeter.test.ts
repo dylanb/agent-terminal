@@ -29,6 +29,11 @@ const turn = (opts: {
 /** 1,000,000 claude-sonnet-5 input tokens is exactly $3.00 against the checked-in table. */
 const MTOK = 1_000_000;
 
+/** `count` distinctly-identified billed turns, one per instant, each cheap enough that the ceiling rather
+ *  than the arithmetic is what the assertion reads. */
+const spread = (count: number): PricedTurn[] =>
+  Array.from({ length: count }, (_, i) => turn({ at: FLOOR + 1 + i, id: `t${i}`, input: 1000 }));
+
 interface Armed {
   delayMs: number;
   run: () => Promise<void>;
@@ -637,8 +642,6 @@ describe('the §27 meter reaching the §25 audit and never damaging the run', ()
   // worst case is the branch AC 2 requires: with no usable recorded start the sweep is unbounded, so the
   // repo's ENTIRE Claude Code history is banked and held for as long as the app stays open.
   it('stops admitting new turn identities past its ceiling, leaving the figure finite and still reported', async () => {
-    const spread = (count: number): PricedTurn[] =>
-      Array.from({ length: count }, (_, i) => turn({ at: FLOOR + 1 + i, id: `t${i}`, input: 1000 }));
     h.setLogs(REPO, spread(BANKED_CEILING));
     h.meter.pushWindow(REPO, LOOP, FLOOR);
     await h.sample();
@@ -655,8 +658,6 @@ describe('the §27 meter reaching the §25 audit and never damaging the run', ()
   // same confidence as a right one (CWE-682/CWE-755). Two runs reporting identical dollars, one of which
   // stopped counting, must not be indistinguishable to whatever renders them.
   it('reports a run whose retention ceiling was reached as a floor, not as a total', async () => {
-    const spread = (count: number): PricedTurn[] =>
-      Array.from({ length: count }, (_, i) => turn({ at: FLOOR + 1 + i, id: `t${i}`, input: 1000 }));
     h.setLogs(REPO, spread(BANKED_CEILING + 1));
     h.meter.pushWindow(REPO, LOOP, FLOOR);
     await h.sample();
@@ -676,8 +677,6 @@ describe('the §27 meter reaching the §25 audit and never damaging the run', ()
   // The same shape the sweep outage gets: one line on the transition, not one per sample for the life of
   // the app. Nothing throws when an admission is refused, so this log is the only main-process trace.
   it('names the retention ceiling once on reaching it, not once per sample', async () => {
-    const spread = (count: number): PricedTurn[] =>
-      Array.from({ length: count }, (_, i) => turn({ at: FLOOR + 1 + i, id: `t${i}`, input: 1000 }));
     h.setLogs(REPO, spread(BANKED_CEILING + 1));
     h.meter.pushWindow(REPO, LOOP, FLOOR);
     for (let i = 0; i < 4; i += 1) {
