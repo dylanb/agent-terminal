@@ -62,9 +62,9 @@ describe('the §27 cost record in the shared audit vocabulary', () => {
     expect(bounded.length).toBeLessThan(hostile.length);
   });
 
-  // Each newly-observed distinct model id changes the figure, so it also defeats the has-this-moved memo
-  // and appends another record carrying every id seen so far. Bounding the element without bounding the
-  // array leaves the record's size quadratic in a vocabulary that comes from outside the process (CWE-770).
+  // A record is appended for each newly-observed distinct model id, carrying every id seen so far, so
+  // bounding the element without bounding the array leaves the record's size quadratic in a vocabulary
+  // that comes from outside the process (CWE-770).
   it('bounds how many unpriced ids one record can carry, not only how long each is', () => {
     const ids = (n: number): string[] => Array.from({ length: n }, (_, i) => `claude-made-up-${i}`);
     const carried = (n: number): string[] =>

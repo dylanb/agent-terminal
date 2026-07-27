@@ -1,6 +1,6 @@
 // Runtime configuration seam (§15.7): env-overridable thresholds, no magic numbers downstream.
 
-import { SAMPLE_BACKOFF_FACTOR_MAX } from './appCostMeter';
+import { MAX_TIMER_DELAY_MS } from './timerBounds';
 
 // TODO(dylan): a per-agent profile table (D10) is the intended future seam to
 // replace these env lookups without touching call sites.
@@ -26,14 +26,15 @@ const DEFAULTS = {
   costSampleMs: 2000,
   // §27.11
   sessionLogChunkBytes: 64 * 1024,
+  // §27.11
+  costMaxBankedTurns: 100_000,
 } as const;
 
 /** Ceiling on `sessionLogChunkBytes`: every field-local check passes a value the `Buffer` allocator then
  *  refuses. */
 const MAX_CHUNK_BYTES = 16 * 1024 * 1024;
-/** Ceiling on `costSampleMs`: the meter multiplies it by `SAMPLE_BACKOFF_FACTOR_MAX` and hands the product
- *  to a timer, which fires in 1 ms rather than raising once the product leaves the 32-bit signed range. */
-const MAX_SAMPLE_DELAY_MS = Math.floor((2 ** 31 - 1) / SAMPLE_BACKOFF_FACTOR_MAX);
+/** CWE-770 */
+const MAX_BANKED_TURNS_LIMIT = 1_000_000;
 
 export interface RuntimeConfig {
   quietMs: number;
@@ -50,6 +51,7 @@ export interface RuntimeConfig {
   startupExitGraceMs: number;
   costSampleMs: number;
   sessionLogChunkBytes: number;
+  costMaxBankedTurns: number;
 }
 
 /** Parse a positive integer env value; fall back on unset/garbage/non-positive (§15.7). */
@@ -79,7 +81,8 @@ export function resolveRuntimeConfig(env: NodeJS.ProcessEnv): RuntimeConfig {
     maxDoneTodos: posInt(env.APP_MAX_DONE_TODOS, DEFAULTS.maxDoneTodos),
     stallTimeoutMs: posInt(env.APP_TURN_TIMEOUT_MS, DEFAULTS.stallTimeoutMs),
     startupExitGraceMs: posInt(env.APP_STARTUP_EXIT_GRACE_MS, DEFAULTS.startupExitGraceMs),
-    costSampleMs: posIntCapped(env.APP_COST_SAMPLE_MS, DEFAULTS.costSampleMs, MAX_SAMPLE_DELAY_MS),
+    costSampleMs: posIntCapped(env.APP_COST_SAMPLE_MS, DEFAULTS.costSampleMs, MAX_TIMER_DELAY_MS),
     sessionLogChunkBytes: posIntCapped(env.APP_SESSION_LOG_CHUNK_BYTES, DEFAULTS.sessionLogChunkBytes, MAX_CHUNK_BYTES),
+    costMaxBankedTurns: posIntCapped(env.APP_COST_MAX_BANKED_TURNS, DEFAULTS.costMaxBankedTurns, MAX_BANKED_TURNS_LIMIT),
   };
 }

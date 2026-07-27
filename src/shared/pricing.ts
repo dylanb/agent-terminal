@@ -76,7 +76,7 @@ export function priceTokens(totals: ModelTokens[]): CostResult {
       (t.input * price.input + t.cacheCreate * price.cacheCreate + t.cacheRead * price.cacheRead + t.output * price.output) /
       1_000_000;
   }
-  return { usd, unpricedModels };
+  return { usd: Number.isFinite(usd) ? usd : 0, unpricedModels };
 }
 
 /** The status-strip / audit-viewer readout for a cost (§26.10). Never `$NaN`: an all-unpriced result reads

@@ -195,9 +195,7 @@ export function loopEvents(before: LoopLike | null, after: LoopLike | null, ts: 
 }
 
 const AUDIT_TEXT_MAX = 200;
-/** Every string that reached this process from outside it passes through here before it can reach a record
- *  or key anything the record carries. The returned string is free of control characters and bounded in
- *  length, so no such text can forge a record or grow one without bound (CWE-117 / CWE-770). */
+/** CWE-117 / CWE-770 */
 export function boundExternalText(text: string): string {
   return stripStatusControlChars(text).slice(0, AUDIT_TEXT_MAX);
 }
@@ -208,11 +206,9 @@ export function notifyFailedEvent(reason: string, ts: string): AuditEvent {
 
 const AUDIT_UNPRICED_MAX = 32;
 
-/** The §27 run's cost, as the §25 record carries it (§27.11). Written on each sample that moves the figure
- *  while the run is open, so the stream holds a series whose LAST entry is the run's figure. Both the
- *  length of each model id and how many of them one record carries are bounded: the ids come from Claude
- *  Code's private log format, and every newly-observed one moves the figure and so appends another record
- *  carrying every id seen so far — quadratic in a vocabulary from outside the process (CWE-770). */
+/** The §27 run's cost, as the §25 record carries it (§27.11). The stream holds a series whose LAST entry
+ *  is the run's figure. Both the length of each model id and how many of them one record carries are
+ *  bounded: the ids come from Claude Code's private log format (CWE-117 / CWE-770). */
 export function appCostEvent(cost: { usd: number; unpricedModels: string[] }, ts: string): AuditEvent {
   return { ts, type: 'app.cost', usd: cost.usd, unpriced: cost.unpricedModels.slice(0, AUDIT_UNPRICED_MAX).map(boundExternalText) };
 }

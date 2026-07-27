@@ -2,17 +2,23 @@
 
 import { addTokens, formatCost, priceTokens, sortedTotals, type CostResult, type ModelTokens } from '../shared/pricing';
 import type { PricedTurn, SessionSweep } from './sessionLogSweep';
+import { MAX_TIMER_DELAY_MS } from './timerBounds';
 
-/** Most a still figure may stretch the configured cadence by. `runtimeConfig` derives the cadence's own
- *  ceiling from it, so the product can still be held by a timer. */
 export const SAMPLE_BACKOFF_FACTOR_MAX = 32;
-/** Most distinct billed-turn identities one run retains. Reached, the figure stops growing rather than the
- *  retention (CWE-770). */
-export const MAX_BANKED_TURNS = 20_000;
-/** Most distinct model ids one run retains, on the same terms. */
+/** CWE-770 */
 export const MAX_BANKED_MODELS = 256;
-/** Longest delay a timer can hold. */
-const MAX_TIMER_DELAY_MS = 2 ** 31 - 1;
+
+/** A run's figure together with whether its retention ceiling stopped that figure growing (§27.11). */
+export interface AppRunCost {
+  cost: CostResult;
+  capped: boolean;
+}
+
+/** An `AppRunCost` as the §27 loop-view read-out shows it: a capped run's dollars are a floor the run has
+ *  already passed, so the figure is marked rather than presented as the run's total. */
+export function renderCost(run: AppRunCost): string {
+  return run.capped ? `${formatCost(run.cost)} +uncounted` : formatCost(run.cost);
+}
 
 export interface AppCostMeterDeps {
   /** Open a sweep of the repo's session logs over a run window opening at `since` (unbounded when null).
@@ -22,6 +28,8 @@ export interface AppCostMeterDeps {
   now: () => number;
   /** How long after a figure moves the next sample is taken; a still figure backs off from it. */
   sampleDelayMs: number;
+  /** Most distinct billed-turn identities one run retains before it stops admitting new ones (CWE-770). */
+  maxBankedTurns: number;
   /** Arm a repo's next cost sample `delayMs` from now, replacing any already armed. */
   armSample: (repoDir: string, delayMs: number, run: () => Promise<void>) => void;
   /** Cancel a repo's armed sample; cancelling a repo with none armed is a no-op. */
@@ -31,7 +39,7 @@ export interface AppCostMeterDeps {
   /** Record the run's cost into its §25 audit record. False means the record did not land, so the meter
    *  re-attempts it on the next sample. */
   recordCost: (repoDir: string, cost: CostResult) => boolean;
-  log?: (msg: string, err: unknown) => void;
+  log?: (msg: string, detail?: unknown) => void;
 }
 
 export interface AppCostMeter {
@@ -40,7 +48,7 @@ export interface AppCostMeter {
    *  pushes of the same triple; a null loop retires that repo's figure. Never sweeps, never throws. */
   pushWindow(repoDir: string, loop: string | null, startedAt: number | null): void;
   /** The repo's current figure, from memory — never a sweep, never a parse. Null before the first sample. */
-  current(repoDir: string): CostResult | null;
+  current(repoDir: string): AppRunCost | null;
 }
 
 interface RunCost {
@@ -50,29 +58,37 @@ interface RunCost {
   byModel: Map<string, ModelTokens>;
   cost: CostResult | null;
   recordedShown: string | null;
+  recordedUnpriced: string[] | null;
   idleSamples: number;
   degraded: boolean;
+  capped: boolean;
 }
 
-function bank(run: RunCost, turn: PricedTurn): void {
+function bank(run: RunCost, turn: PricedTurn, maxBankedTurns: number): void {
   if (run.banked.has(turn.id)) return;
-  if (run.banked.size >= MAX_BANKED_TURNS) return;
-  if (!run.byModel.has(turn.model) && run.byModel.size >= MAX_BANKED_MODELS) return;
+  if (run.banked.size >= maxBankedTurns || (!run.byModel.has(turn.model) && run.byModel.size >= MAX_BANKED_MODELS)) {
+    run.capped = true;
+    return;
+  }
   run.banked.add(turn.id);
   addTokens(run.byModel, turn);
 }
 
+function sameList(a: readonly string[] | null, b: readonly string[]): boolean {
+  return a !== null && a.length === b.length && a.every((m, i) => m === b[i]);
+}
+
 function sameCost(a: CostResult | null, b: CostResult): boolean {
-  return (
-    a !== null &&
-    Object.is(a.usd, b.usd) &&
-    a.unpricedModels.length === b.unpricedModels.length &&
-    a.unpricedModels.every((m, i) => m === b.unpricedModels[i])
-  );
+  return a !== null && Object.is(a.usd, b.usd) && sameList(a.unpricedModels, b.unpricedModels);
 }
 
 export function createAppCostMeter(deps: AppCostMeterDeps): AppCostMeter {
-  const log = deps.log ?? ((m, e): void => console.error(m, e));
+  const log =
+    deps.log ??
+    ((m: string, detail?: unknown): void => {
+      if (detail === undefined) console.error(m);
+      else console.error(m, detail);
+    });
   const runs = new Map<string, RunCost>();
   const pushed = new Map<string, string>();
 
@@ -92,18 +108,23 @@ export function createAppCostMeter(deps: AppCostMeterDeps): AppCostMeter {
     if (!run) return;
     let moved = false;
     try {
+      const wasCapped = run.capped;
       for await (const turn of run.sweep.drain()) {
         if (runs.get(repoDir) !== run) return;
-        bank(run, turn);
+        bank(run, turn, deps.maxBankedTurns);
       }
+      if (run.capped && !wasCapped) log('app cost stopped admitting turns at its retention ceiling');
       const next = priceTokens(sortedTotals(run.byModel));
       if (runs.get(repoDir) !== run) return;
       moved = !sameCost(run.cost, next);
-      const rendered = formatCost(next);
-      const wasShown = run.cost === null ? null : formatCost(run.cost);
-      if (rendered !== run.recordedShown) {
+      const rendered = renderCost({ cost: next, capped: run.capped });
+      const wasShown = run.cost === null ? null : renderCost({ cost: run.cost, capped: wasCapped });
+      if (rendered !== run.recordedShown || !sameList(run.recordedUnpriced, next.unpricedModels)) {
         bestEffort('audit record', () => {
-          if (deps.recordCost(repoDir, next)) run.recordedShown = rendered;
+          if (deps.recordCost(repoDir, next)) {
+            run.recordedShown = rendered;
+            run.recordedUnpriced = next.unpricedModels;
+          }
         });
       }
       run.cost = next;
@@ -142,8 +163,10 @@ export function createAppCostMeter(deps: AppCostMeterDeps): AppCostMeter {
             byModel: new Map(),
             cost: null,
             recordedShown: null,
+            recordedUnpriced: null,
             idleSamples: 0,
             degraded: false,
+            capped: false,
           });
         }
         deps.armSample(repoDir, deps.sampleDelayMs, () => sample(repoDir));
@@ -151,6 +174,9 @@ export function createAppCostMeter(deps: AppCostMeterDeps): AppCostMeter {
       });
     },
 
-    current: (repoDir) => runs.get(repoDir)?.cost ?? null,
+    current: (repoDir) => {
+      const run = runs.get(repoDir);
+      return run === undefined || run.cost === null ? null : { cost: run.cost, capped: run.capped };
+    },
   };
 }

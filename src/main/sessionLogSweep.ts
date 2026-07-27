@@ -1,6 +1,7 @@
 // The session-JSONL layout is Claude Code's PRIVATE format — an external dependency the app does not
 // control (§27.11).
 
+import { createHash } from 'node:crypto';
 import { readFileSync, readdirSync, promises as fsp } from 'node:fs';
 import { StringDecoder } from 'node:string_decoder';
 import path from 'node:path';
@@ -9,9 +10,6 @@ import { boundExternalText } from '../shared/audit';
 import { readDirEntriesAsync } from './dirEntries';
 import { userConfigRootFrom } from './userConfig';
 
-/** Longest `message.id` / `requestId` the §27 sweep will bank a turn under. Longer is REJECTED, not
- *  truncated: a truncated identity could collapse two distinct billed turns and drop the second's dollars. */
-const MAX_ID_CHARS = 200;
 /** Longest line the sweep will hold or yield. `chunkBytes` bounds the read, not the string a newline-free
  *  log would otherwise accumulate. Well above the longest line the format produces. */
 const MAX_LINE_CHARS = 1_000_000;
@@ -247,10 +245,15 @@ async function* logLines(file: string, buffer: Buffer): AsyncGenerator<string, b
   }
 }
 
-/** Every §27 admission rule, in the one place a turn enters the §27 stream. The returned turn's model id is
- *  bounded, its counts are priceable, and its identity is total and derived only from values a resume or
- *  fork replays verbatim — never from the file or the position, which no replay preserves. */
-function admit(turn: SessionTurn, at: FiniteInstant): PricedTurn {
+/** Longest composite `[message.id, requestId]` the §27 sweep banks a turn under whole; past it the digest
+ *  of that composite is the key instead (CWE-770). */
+export const MAX_IDENTITY_CHARS = 200;
+
+/** Every §27 admission rule, in the one place a turn enters the §27 stream — never in `extractTurn`, which
+ *  both engines decode every line through (AC 10 / §27.15). `seenContent` counts how many turns of
+ *  identical content THIS read of THIS log has already yielded, so two indistinguishable billed turns stay
+ *  apart while the copies a resume replays into a second log still line up with the originals. */
+function admit(turn: SessionTurn, at: FiniteInstant, seenContent: Map<string, number>): PricedTurn {
   const priced = {
     model: boundExternalText(turn.model),
     input: clampTokens(turn.input),
@@ -258,14 +261,14 @@ function admit(turn: SessionTurn, at: FiniteInstant): PricedTurn {
     cacheRead: clampTokens(turn.cacheRead),
     output: clampTokens(turn.output),
   };
-  const stamped = turn.id !== null && turn.id.length <= MAX_ID_CHARS ? turn.id : null;
-  return {
-    ...priced,
-    at,
-    id:
-      stamped ??
-      JSON.stringify(['derived', at, priced.model, priced.input, priced.cacheCreate, priced.cacheRead, priced.output]),
-  };
+  if (turn.id !== null) {
+    const id = turn.id.length <= MAX_IDENTITY_CHARS ? turn.id : createHash('sha256').update(turn.id).digest('base64');
+    return { ...priced, at, id };
+  }
+  const content = JSON.stringify([at, priced.model, priced.input, priced.cacheCreate, priced.cacheRead, priced.output]);
+  const nth = seenContent.get(content) ?? 0;
+  seenContent.set(content, nth + 1);
+  return { ...priced, at, id: `derived ${nth} ${content}` };
 }
 
 function clampTokens(v: number): number {
@@ -293,6 +296,7 @@ export function openSessionSweep(logDir: string | null, options: SessionSweepOpt
         if (options.since !== undefined && stamp !== null && stamp.mtimeMs < options.since) continue;
         if (unchanged(file, stamp)) continue;
         let complete = false;
+        const seenContent = new Map<string, number>();
         const lines = logLines(file, buffer);
         try {
           for (;;) {
@@ -305,7 +309,7 @@ export function openSessionSweep(logDir: string | null, options: SessionSweepOpt
             const at = turn === null ? null : finiteInstant(turn.at);
             if (turn === null || at === null) continue;
             if (options.since !== undefined && at < options.since) continue;
-            yield admit(turn, at);
+            yield admit(turn, at, seenContent);
           }
         } finally {
           await lines.return(false);
