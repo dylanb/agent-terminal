@@ -121,12 +121,12 @@ function harness(sampleDelayMs = BASE_DELAY): Harness {
           h.drains.push({ repoDir });
           const content = logs.get(repoDir) ?? [];
           const fresh = content === drained ? [] : content;
-          drained = content;
           const scripted = fresh.filter((t) => Number.isFinite(t.at) && (since === null || t.at >= since));
           return {
             async *[Symbol.asyncIterator]() {
               if (sweepThrows) throw new Error('log root unreadable');
               for (const t of scripted) yield t;
+              drained = content;
             },
           };
         },

@@ -3,7 +3,6 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { encodeProjectDir, sessionLogDir, readSessionTokens } from '../../src/main/sessionLogSweep';
-import { boundExternalText } from '../../src/shared/audit';
 import { priceTokens } from '../../src/shared/pricing';
 import { userConfigRoot } from '../../src/main/userConfig';
 
@@ -127,16 +126,14 @@ describe('session-log token recovery (§26.10)', () => {
     ]);
   });
 
-  // The strip-and-bound is applied where the id is EXTRACTED, which is upstream of both engines — so §26's
-  // `loop.cost` record carries a bounded, stripped id too. That is an §26-observable change and therefore a
-  // contract, not an incidental: the id reaching the record is the same one the shared primitive produces.
-  it('bounds and strips a model id before §26 can record it as unpriced', () => {
+  // AC 10 — the §25 strip-and-bound is a §27 ADMISSION rule and sits on the §27 yield site, not on the
+  // decoder both engines share. §26's aggregate therefore reports the id the log stamps, exactly as it did
+  // before this branch; what is still unbounded on its path is `auditRecorder.recordCost`'s own `unpriced`
+  // write, which is pre-existing and routed to a follow-up.
+  it('reports a model id to §26 exactly as the log stamps it', () => {
     const hostile = `claude-made-up\u200e${'x'.repeat(500)}`;
     writeFileSync(join(dir, 'session.jsonl'), line(hostile, { input_tokens: 5 }));
-    const unpriced = priceTokens(readSessionTokens(dir)).unpricedModels;
-    expect(unpriced).toEqual([boundExternalText(hostile)]);
-    expect(unpriced[0]).not.toContain('\u200e');
-    expect(unpriced[0].length).toBeLessThan(hostile.length);
+    expect(priceTokens(readSessionTokens(dir)).unpricedModels).toEqual([hostile]);
   });
 });
 
