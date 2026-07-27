@@ -95,7 +95,9 @@ export interface SessionSweepOptions {
  *  enumeration THROWS, and so does a chunk size that cannot be allocated, because a caller that read either
  *  as empty would price the run at a confident $0.00. */
 export interface SessionSweep {
-  /** Consume everything the run's logs have gained, and answer the run's per-model totals so far. */
+  /** Consume everything the run's logs have gained, and answer the run's per-model totals so far. A drain
+   *  begun while one is still in flight answers with that one rather than walking the tree a second time
+   *  from the same read positions. */
   drain(): Promise<ModelTokens[]>;
   /** Release the read positions and the totals. The run they were accumulated for is over. */
   close(): void;
@@ -107,15 +109,23 @@ export interface SessionSweep {
 export function openSessionSweep(logDir: string | null, options: SessionSweepOptions): SessionSweep {
   const stream = createLogStream(options.chunkBytes);
   let totals = createRunTotals(options.since);
+  let inFlight: Promise<ModelTokens[]> | null = null;
+
+  const walk = async (): Promise<ModelTokens[]> => {
+    const run = totals;
+    if (logDir === null) return run.totals();
+    for await (const file of logFilesInWindow(logDir, options.since)) {
+      for await (const line of stream.lines(file)) run.fold(line);
+    }
+    return run.totals();
+  };
 
   return {
-    async drain(): Promise<ModelTokens[]> {
-      const run = totals;
-      if (logDir === null) return run.totals();
-      for await (const file of logFilesInWindow(logDir, options.since)) {
-        for await (const line of stream.lines(file)) run.fold(line);
-      }
-      return run.totals();
+    drain(): Promise<ModelTokens[]> {
+      inFlight ??= walk().finally(() => {
+        inFlight = null;
+      });
+      return inFlight;
     },
 
     close(): void {
