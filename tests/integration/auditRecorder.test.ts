@@ -196,13 +196,32 @@ describe('audit recorder — run file lifecycle (§25.4)', () => {
     expect(existsSync(auditRepoDir(root, repo))).toBe(false);
   });
 
-  // The meter re-attempts a record the audit refused, and it can only do that if the refusal reaches it.
-  it('surfaces an append failure to its caller rather than swallowing it', () => {
+  // The meter re-attempts a record the audit refused, and it can only do that if the refusal reaches it —
+  // but this recorder's blanket policy is that no member throws into the flow path, so the refusal is the
+  // return value rather than an exception. Nothing in the type distinguishes a throwing member from the
+  // nine swallowing ones, so a member that answered by throwing would hand the next caller a surprise.
+  it('reports an append failure to its caller as false, without throwing into the flow path', () => {
     const rec = recorder();
     rec.recordTransition(repo, 'start', NOT_STARTED, IN_PROGRESS);
     rmSync(auditRepoDir(root, repo), { recursive: true, force: true });
     writeFileSync(auditRepoDir(root, repo), 'not a directory');
-    expect(() => rec.recordAppCost(repo, { usd: 1, unpricedModels: [] })).toThrow();
+    let landed: boolean | undefined;
+    expect(() => {
+      landed = rec.recordAppCost(repo, { usd: 1, unpricedModels: [] });
+    }).not.toThrow();
+    expect(landed).toBe(false);
+  });
+
+  it('reports an append that landed as true', () => {
+    const rec = recorder();
+    rec.recordTransition(repo, 'start', NOT_STARTED, IN_PROGRESS);
+    expect(rec.recordAppCost(repo, { usd: 1, unpricedModels: [] })).toBe(true);
+  });
+
+  // No run file is open, so there is nothing to append to and nothing failed: the caller must not be told
+  // to re-attempt a record that has no destination.
+  it('reports true when there is no open run to record into', () => {
+    expect(recorder().recordAppCost(repo, { usd: 1, unpricedModels: [] })).toBe(true);
   });
 
   // §26.7 — the per-iteration CI snapshot: display-only, recorded best-effort at the iteration boundary.

@@ -5482,6 +5482,14 @@ test('a §27 run meters its WHOLE cost onto the strip and into the §25 audit, l
   await expect(cost).toHaveText(V2_COST_TOTAL, { timeout: 30_000 });
   expect(await cost.getAttribute('aria-label')).toBe(`cost ${V2_COST_TOTAL}`);
 
+  // WCAG SC 2.2.2 — the timer-driven figure must not reach the strip's polite live region, and the node
+  // that changes when the meter ticks is the READ-OUT, whose name-from-content would otherwise absorb the
+  // figure. Only a real accessibility tree can grade this: the name is what a live change is announced
+  // from, and the description is what a focused read-out still reports (SC 1.3.1). jsdom computes neither.
+  const figureRe = (figure: string): RegExp => new RegExp(figure.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+  await expect(loopReadout()).not.toHaveAccessibleName(figureRe(V2_COST_TOTAL));
+  await expect(loopReadout()).toHaveAccessibleDescription(`cost ${V2_COST_TOTAL}`);
+
   // AC7 — the gate is reached with its full declared option set even though a model priced to nothing.
   await loopReadout().click();
   await expect(loopPanel().locator('[data-gate-option="approve"]')).toBeVisible({ timeout: 15_000 });
@@ -5498,6 +5506,10 @@ test('a §27 run meters its WHOLE cost onto the strip and into the §25 audit, l
     })}\n`,
   );
   await expect(cost).toHaveText(V2_COST_AFTER_GATE, { timeout: 30_000 });
+  // ...and the moved figure is still outside the name the live region would announce, and still on the
+  // description a focused read-out reports.
+  await expect(loopReadout()).not.toHaveAccessibleName(figureRe(V2_COST_AFTER_GATE));
+  await expect(loopReadout()).toHaveAccessibleDescription(`cost ${V2_COST_AFTER_GATE}`);
 
   // (f) — the run's §25 audit carries the §27 cost record, asserted BY VALUE. The two sides are different
   // types and one is composite (the strip shows `$X.XX +unknown`), so the comparison runs the record's

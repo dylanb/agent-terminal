@@ -65,6 +65,21 @@ describe('the §27 loop view`s cost readout', () => {
     expect(view.cost).toBe('$1.25');
   });
 
+  // §27.12c — the LIVE-error view is the route out when the status:error write itself could not land. It is
+  // the fourth and last shape the provider returns, and the shape a run is in when the operator most wants
+  // to know what it has already cost.
+  it('carries the run`s figure on a live-error view, so the route-out view still prices', () => {
+    const view = deriveAppLoopView(
+      'plan-loop',
+      { tiers: tiers(), repoDir },
+      { loop: 'plan-loop', step: 'plan', turnKey: 'work-plan', reason: 'state write refused' },
+      '$4.50',
+    );
+    expect(view.status).toBe('error');
+    expect(view.errorReason).toBe('state write refused');
+    expect(view.cost).toBe('$4.50');
+  });
+
   it('carries the run`s figure on a def-failure view, so a failed run still prices', () => {
     const view = deriveAppLoopView('no-such-loop', { tiers: tiers(), repoDir }, null, '$0.75');
     expect(view.status).toBe('error');

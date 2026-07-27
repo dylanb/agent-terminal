@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { PRICING, priceTokens, formatCost, type ModelTokens } from '../../src/shared/pricing';
+import { PRICING, priceTokens, formatCost, addTokens, sortedTotals, type ModelTokens } from '../../src/shared/pricing';
 
 // §26.10 — the cost meter prices per-model token totals against a checked-in table and formats the readout.
 // An id absent from the table contributes ZERO dollars and is surfaced as `unknown` — the meter never NaN.
@@ -87,6 +87,48 @@ describe('token pricing (§26.10)', () => {
     for (const model of ['claude-opus-4-8', 'claude-sonnet-4-6']) {
       expect(PRICING[model], `${model} missing from PRICING`).toBeDefined();
     }
+  });
+});
+
+// The fold from per-turn tokens to per-model totals runs on both engines' paths — §26's whole-file
+// aggregate and §27's live per-turn banking. It belongs to the module that owns what a token total IS, so
+// a newly billed token category is a compile error at one site rather than a silent under-count at another.
+describe('folding per-turn tokens into per-model totals', () => {
+  const zero = (model: string): ModelTokens => ({ model, input: 0, cacheCreate: 0, cacheRead: 0, output: 0 });
+
+  it('sums every field of two turns of the same model', () => {
+    const into = new Map<string, ModelTokens>();
+    addTokens(into, { model: 'm', input: 1, cacheCreate: 2, cacheRead: 3, output: 4 });
+    addTokens(into, { model: 'm', input: 10, cacheCreate: 20, cacheRead: 30, output: 40 });
+    expect(sortedTotals(into)).toEqual([{ model: 'm', input: 11, cacheCreate: 22, cacheRead: 33, output: 44 }]);
+  });
+
+  it('keeps distinct models apart and orders the result by model id', () => {
+    const into = new Map<string, ModelTokens>();
+    for (const model of ['zeta', 'alpha', 'zeta']) addTokens(into, { ...zero(model), input: 1 });
+    expect(sortedTotals(into)).toEqual([
+      { ...zero('alpha'), input: 1 },
+      { ...zero('zeta'), input: 2 },
+    ]);
+  });
+
+  it('folds an empty map to no totals', () => {
+    expect(sortedTotals(new Map())).toEqual([]);
+  });
+
+  // The model id is a raw string out of Claude Code's private log format, so it can name an
+  // Object.prototype member — the same input the priced lookup is hardened against.
+  it('folds a model id naming an Object.prototype member like any other', () => {
+    const into = new Map<string, ModelTokens>();
+    addTokens(into, { ...zero('__proto__'), input: 5 });
+    addTokens(into, { ...zero('__proto__'), output: 2 });
+    expect(sortedTotals(into)).toEqual([{ ...zero('__proto__'), input: 5, output: 2 }]);
+  });
+
+  it('leaves the turn it folded untouched, so a caller may keep reading it', () => {
+    const turn = { ...zero('m'), input: 3 };
+    addTokens(new Map(), turn);
+    expect(turn).toEqual({ ...zero('m'), input: 3 });
   });
 });
 

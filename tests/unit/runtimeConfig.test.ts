@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { constants } from 'node:buffer';
 import { resolveRuntimeConfig } from '../../src/main/runtimeConfig';
 
 describe('resolveRuntimeConfig (§15.7 — env-overridable per-agent profile seam, no magic numbers)', () => {
@@ -95,5 +96,23 @@ describe('resolveRuntimeConfig (§15.7 — env-overridable per-agent profile sea
     // A chunk size of 0 makes every read return zero bytes, so every log reads as empty and the strip
     // shows a confident $0.00 for a run that spent money — the silent zero §27.11 rejects.
     expect(garbage.sessionLogChunkBytes).toBe(def.sessionLogChunkBytes);
+  });
+
+  // The chunk size is the only key that reaches a Buffer allocation. `1e15` is a positive integer, so every
+  // field-local check passes it through to a RangeError the sweep's per-file degradation cannot be told
+  // apart from an unreadable log — every log then yields nothing and the run prices at a confident $0.00.
+  // Out of range clamps to the ceiling rather than to the default: the sweep keeps working either way, and
+  // an operator who asked for more gets as much as the process can actually allocate.
+  it('caps the session-log chunk size at a size the process can allocate', () => {
+    for (const raw of ['1e15', String(Number.MAX_SAFE_INTEGER), String(constants.MAX_LENGTH + 1)]) {
+      const capped = resolveRuntimeConfig({ APP_SESSION_LOG_CHUNK_BYTES: raw }).sessionLogChunkBytes;
+      expect(capped, raw).toBeGreaterThan(0);
+      expect(capped, raw).toBeLessThanOrEqual(constants.MAX_LENGTH);
+      expect(() => Buffer.allocUnsafe(capped), raw).not.toThrow();
+    }
+  });
+
+  it('passes an in-range chunk-size override through unchanged', () => {
+    expect(resolveRuntimeConfig({ APP_SESSION_LOG_CHUNK_BYTES: '4096' }).sessionLogChunkBytes).toBe(4096);
   });
 });

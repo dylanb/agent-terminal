@@ -1,17 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { encodeProjectDir, sessionLogDir, readSessionTokens } from '../../src/main/sessionLogSweep';
+import { boundAuditText } from '../../src/shared/audit';
+import { priceTokens } from '../../src/shared/pricing';
 import { userConfigRoot } from '../../src/main/userConfig';
-
-it('the source file carries no raw control bytes, so git keeps it text (diffable/reviewable)', () => {
-  // The per-message dedup key's separator must be spelled as an escape (\x00), not embedded as a raw NUL —
-  // a single raw NUL makes git classify the .ts as binary and drop it from every diff (cf. findingSignature.ts).
-  const bytes = readFileSync(new URL('../../src/main/sessionLogSweep.ts', import.meta.url));
-  const control = [...bytes].filter((b) => b < 9 || (b > 13 && b < 32));
-  expect(control).toEqual([]);
-});
 
 // §26.10 — the meter recovers per-model token totals from Claude Code's session JSONL logs (the same data
 // `cache-analyze` reads). The layout is Claude Code's private format, so every accessor degrades on drift.
@@ -131,6 +125,18 @@ describe('session-log token recovery (§26.10)', () => {
     expect(readSessionTokens(dir)).toEqual([
       { model: 'claude-sonnet-5', input: 100, cacheCreate: 0, cacheRead: 0, output: 40 },
     ]);
+  });
+
+  // The strip-and-bound is applied where the id is EXTRACTED, which is upstream of both engines — so §26's
+  // `loop.cost` record carries a bounded, stripped id too. That is an §26-observable change and therefore a
+  // contract, not an incidental: the id reaching the record is the same one the shared primitive produces.
+  it('bounds and strips a model id before §26 can record it as unpriced', () => {
+    const hostile = `claude-made-up\u200e${'x'.repeat(500)}`;
+    writeFileSync(join(dir, 'session.jsonl'), line(hostile, { input_tokens: 5 }));
+    const unpriced = priceTokens(readSessionTokens(dir)).unpricedModels;
+    expect(unpriced).toEqual([boundAuditText(hostile)]);
+    expect(unpriced[0]).not.toContain('\u200e');
+    expect(unpriced[0].length).toBeLessThan(hostile.length);
   });
 });
 

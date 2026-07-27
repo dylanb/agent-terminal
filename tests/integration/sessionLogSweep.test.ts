@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { appendFileSync, chmodSync, mkdtempSync, mkdirSync, writeFileSync, utimesSync, rmSync } from 'node:fs';
+import { appendFileSync, chmodSync, mkdtempSync, mkdirSync, symlinkSync, writeFileSync, utimesSync, rmSync } from 'node:fs';
+import { constants as bufferConstants } from 'node:buffer';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -10,6 +11,7 @@ import {
   type PricedTurn,
   type SessionSweep,
 } from '../../src/main/sessionLogSweep';
+import { priceTokens } from '../../src/shared/pricing';
 
 const FLOOR = Date.parse('2026-07-09T12:00:00.000Z');
 const CHUNK = 64 * 1024;
@@ -23,9 +25,11 @@ const turnLine = (opts: {
   model?: string;
   input?: number;
   output?: number;
+  pad?: number;
 }): string =>
   JSON.stringify({
     type: 'assistant',
+    ...(opts.pad === undefined ? {} : { pad: 'x'.repeat(opts.pad) }),
     ...(opts.ts === undefined ? {} : { timestamp: opts.ts }),
     ...(opts.reqId !== undefined
       ? { requestId: opts.reqId }
@@ -279,6 +283,81 @@ describe('the §27 per-turn session-log sweep', () => {
   // The mtime pre-filter is what collapses a 359 MB log root to the handful of files written during the run.
   // The stale file is planted READABLE and carrying in-window turns: an unreadable one is contractually
   // skipped anyway (AC 7), so it could not tell a skipped file from an opened one.
+  // The billing identity is the key a run banks a turn under for its whole life, and it comes out of
+  // Claude Code's private log format at whatever length that format hands over. It is REJECTED rather than
+  // truncated: two distinct billed turns sharing a truncated prefix would collapse into one and drop the
+  // second turn's dollars from the run's total.
+  it('rejects a billing identity longer than the cap, leaving the turn its position-derived one', async () => {
+    const huge = 'x'.repeat(5_000);
+    writeFileSync(
+      join(dir, 'session.jsonl'),
+      [
+        turnLine({ ts: '2026-07-09T12:00:01.000Z', msgId: huge, reqId: 'r', input: 1 }),
+        turnLine({ ts: '2026-07-09T12:00:02.000Z', msgId: 'm', reqId: huge, input: 2 }),
+        turnLine({ ts: '2026-07-09T12:00:03.000Z', id: 'ok', input: 3 }),
+      ].join('\n'),
+    );
+    const turns = await drain(dir);
+    expect(turns.map((t) => t.input)).toEqual([1, 2, 3]);
+    expect(new Set(turns.map((t) => t.id)).size).toBe(3);
+    for (const t of turns) expect(t.id.length).toBeLessThan(huge.length);
+  });
+
+  // A log line has no length limit in the format, and the sweep holds an incomplete line across chunk
+  // boundaries — so `chunkBytes` bounds the READ but not the allocation, and one newline-free log is
+  // materialised whole on the process that also drains the PTY.
+  it('drops a line longer than the cap instead of materialising it, and keeps reading past it', async () => {
+    writeFileSync(
+      join(dir, 'session.jsonl'),
+      [
+        turnLine({ ts: '2026-07-09T12:00:01.000Z', id: 'huge', input: 5, pad: 2_000_000 }),
+        turnLine({ ts: '2026-07-09T12:00:02.000Z', id: 'after', input: 4 }),
+      ].join('\n'),
+    );
+    const turns = await drain(dir, { chunkBytes: 64 * 1024 });
+    expect(turns.map((t) => t.id)).toEqual([billed('after')]);
+  });
+
+  it('yields nothing and completes when a log holds one over-long line and nothing else', async () => {
+    writeFileSync(join(dir, 'session.jsonl'), turnLine({ ts: '2026-07-09T12:00:01.000Z', id: 'huge', input: 5, pad: 2_000_000 }));
+    expect(await drain(dir)).toEqual([]);
+  });
+
+  // `usage` is four numbers out of a private format, and the sweep is what puts them on a repeating timer
+  // into the strip and the append-only §25 record. A negative one drives the run's total below zero; a
+  // pair that cancels hides an unpriced model from the `+unknown` marker; two enormous ones price to NaN,
+  // falsifying pricing.ts's own stated invariant that `usd` is always finite.
+  it('admits no negative or unbounded usage value, so every sink is handed a priceable number', async () => {
+    writeFileSync(
+      join(dir, 'session.jsonl'),
+      [
+        turnLine({ ts: '2026-07-09T12:00:01.000Z', id: 'neg', input: -1_000_000 }),
+        turnLine({ ts: '2026-07-09T12:00:02.000Z', id: 'huge', input: 1e308, output: 1e308 }),
+        turnLine({ ts: '2026-07-09T12:00:03.000Z', id: 'wide', model: 'claude-opus-4-8', input: 1e308 }),
+      ].join('\n'),
+    );
+    const turns = await drain(dir);
+    for (const t of turns) {
+      for (const n of [t.input, t.cacheCreate, t.cacheRead, t.output]) {
+        expect(Number.isFinite(n)).toBe(true);
+        expect(n).toBeGreaterThanOrEqual(0);
+      }
+    }
+    const usd = priceTokens(
+      turns.map((t) => ({ model: t.model, input: t.input, cacheCreate: t.cacheCreate, cacheRead: t.cacheRead, output: t.output })),
+    ).usd;
+    expect(Number.isFinite(usd)).toBe(true);
+    expect(usd).toBeGreaterThanOrEqual(0);
+  });
+
+  // A chunk size the process cannot allocate is none of the three drifts this module commits to degrading
+  // on (absent root, unreadable file, unparseable line). Swallowed alongside them it prices every log at
+  // nothing, and the run's §25 record gains a confident $0.00 — the landing §27.11 rejects.
+  it('surfaces a chunk size it cannot allocate rather than pricing every log at nothing', async () => {
+    writeFileSync(join(dir, 'session.jsonl'), turnLine({ ts: '2026-07-09T12:00:01.000Z', id: 'real', input: 9 }));
+    await expect(drain(dir, { chunkBytes: bufferConstants.MAX_LENGTH + 1 })).rejects.toThrow();
+  });
+
   it('skips a log whose last write predates the floor, and opens it when there is no floor', async () => {
     const stale = join(dir, 'stale.jsonl');
     writeFileSync(stale, turnLine({ ts: '2026-07-09T12:00:05.000Z', id: 'hidden', input: 999 }));
@@ -330,6 +409,36 @@ describe('the §27 sweep`s memory across drains', () => {
 
     writeFileSync(join(dir, 'b.jsonl'), turnLine({ ts: '2026-07-09T12:00:02.000Z', id: 'b', input: 2 }));
     expect((await collect(sweep)).map((t) => t.id)).toEqual([billed('b')]);
+  });
+
+  // A read that failed is not a read. The memo records the pre-read stamp, and a log that is never written
+  // again keeps that mtime and size forever — so remembering a file the sweep could not open turns one
+  // transient EACCES/EMFILE into a permanent, silent undercount for the rest of the run. The logs this
+  // strands are exactly the ones AC 1 is about: a reviewer subagent's log is closed the moment it exits.
+  it.skipIf(process.getuid?.() === 0)('re-reads a log it could not open rather than remembering the read that failed', async () => {
+    const locked = join(dir, 'locked.jsonl');
+    writeFileSync(join(dir, 'ok.jsonl'), turnLine({ ts: '2026-07-09T12:00:01.000Z', id: 'ok', input: 1 }));
+    writeFileSync(locked, turnLine({ ts: '2026-07-09T12:00:02.000Z', id: 'locked', input: 2 }));
+    const sweep = sweepOf(dir);
+    chmodSync(locked, 0o000);
+    try {
+      expect((await collect(sweep)).map((t) => t.id)).toEqual([billed('ok')]);
+    } finally {
+      chmodSync(locked, 0o644);
+    }
+    expect((await collect(sweep)).map((t) => t.id)).toEqual([billed('locked')]);
+  });
+
+  // The other arm: the open succeeded and the READ failed, so the generator returns having yielded only
+  // what it got. A symlink to a directory opens and then fails at the first read — the same shape as an
+  // EIO or an fd the OS pulls out from under a mid-flight read.
+  it('degrades on a log that opens and then refuses to be read, without stranding the rest of the sweep', async () => {
+    writeFileSync(join(dir, 'real.jsonl'), turnLine({ ts: '2026-07-09T12:00:01.000Z', id: 'real', input: 1 }));
+    mkdirSync(join(dir, 'a-directory'));
+    symlinkSync(join(dir, 'a-directory'), join(dir, 'unreadable.jsonl'));
+    const sweep = sweepOf(dir);
+    expect((await collect(sweep)).map((t) => t.id)).toEqual([billed('real')]);
+    expect(await collect(sweep)).toEqual([]);
   });
 
   // A log truncated or replaced under the sweep is not an append: the recorded size goes backwards, so the

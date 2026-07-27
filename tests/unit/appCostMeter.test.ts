@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { createAppCostMeter, type AppCostMeter } from '../../src/main/appCostMeter';
-import type { PricedTurn, SessionSweep } from '../../src/main/sessionLogSweep';
+import { finiteInstant, type PricedTurn, type SessionSweep } from '../../src/main/sessionLogSweep';
 import type { CostResult } from '../../src/shared/pricing';
 
 const REPO = '/repo/one';
@@ -16,7 +16,7 @@ const turn = (opts: {
   input?: number;
   output?: number;
 }): PricedTurn => ({
-  at: opts.at,
+  at: finiteInstant(opts.at)!,
   id: opts.id,
   model: opts.model ?? 'claude-sonnet-5',
   input: opts.input ?? 0,
@@ -45,10 +45,14 @@ interface Harness {
   armedDelay(repoDir?: string): number | undefined;
   opened: { repoDir: string; since: number | null }[];
   drains: { repoDir: string }[];
+  /** How many times a sample has been armed, counted across replacements the map itself cannot show. */
+  arms: number;
   figureChanges: number;
   recorded: { repoDir: string; cost: CostResult }[];
   setLogs(repoDir: string, turns: PricedTurn[]): void;
   failSweep(): void;
+  failNextOpen(): void;
+  failNextArm(): void;
   failNextRecord(): void;
   now: number;
 }
@@ -57,11 +61,14 @@ function harness(sampleDelayMs = BASE_DELAY): Harness {
   const logs = new Map<string, PricedTurn[]>();
   const armedRuns = new Map<string, Armed>();
   let sweepThrows = false;
-  let recordThrows = false;
+  let openThrows = false;
+  let armThrows = false;
+  let recordFails = false;
   const h: Harness = {
     meter: undefined as unknown as AppCostMeter,
     opened: [],
     drains: [],
+    arms: 0,
     figureChanges: 0,
     recorded: [],
     now: FLOOR + 10_000,
@@ -69,8 +76,14 @@ function harness(sampleDelayMs = BASE_DELAY): Harness {
     failSweep: () => {
       sweepThrows = true;
     },
+    failNextOpen: () => {
+      openThrows = true;
+    },
+    failNextArm: () => {
+      armThrows = true;
+    },
     failNextRecord: () => {
-      recordThrows = true;
+      recordFails = true;
     },
     armed: (repoDir = REPO) => armedRuns.has(repoDir),
     armedDelay: (repoDir = REPO) => armedRuns.get(repoDir)?.delayMs,
@@ -86,6 +99,10 @@ function harness(sampleDelayMs = BASE_DELAY): Harness {
   h.meter = createAppCostMeter({
     sampleDelayMs,
     openSweep: (repoDir, since): SessionSweep => {
+      if (openThrows) {
+        openThrows = false;
+        throw new Error('log root refused');
+      }
       h.opened.push({ repoDir, since });
       // The seam promises each drain yields every turn in the window the sweep has not already yielded
       // from an UNCHANGED log — the first drain yields the whole window, and a log that grew is re-yielded
@@ -109,17 +126,25 @@ function harness(sampleDelayMs = BASE_DELAY): Harness {
       };
     },
     now: () => h.now,
-    armSample: (repoDir, delayMs, run) => void armedRuns.set(repoDir, { delayMs, run }),
+    armSample: (repoDir, delayMs, run) => {
+      if (armThrows) {
+        armThrows = false;
+        throw new Error('timer refused');
+      }
+      h.arms += 1;
+      armedRuns.set(repoDir, { delayMs, run });
+    },
     cancelSample: (repoDir) => void armedRuns.delete(repoDir),
     onFigureChanged: () => {
       h.figureChanges += 1;
     },
     recordCost: (repoDir, cost) => {
-      if (recordThrows) {
-        recordThrows = false;
-        throw new Error('audit append failed');
+      if (recordFails) {
+        recordFails = false;
+        return false;
       }
       h.recorded.push({ repoDir, cost });
+      return true;
     },
     log: () => {},
   });
@@ -386,6 +411,41 @@ describe('the §27 meter`s activation, retirement and blast radius', () => {
     expect(h.meter.current(REPO)?.usd).toBe(3);
     expect(h.drains).toHaveLength(2);
     expect(h.opened).toHaveLength(1);
+  });
+
+  // The memo that suppresses an unchanged push is what terminates the render↔sample cycle: a sample moves
+  // the figure, the strip re-pulls, the re-pull forwards the same triple, and every shadow active↔quiet
+  // flip forwards it again. Without the memo each one re-arms at the base delay and a busy turn starves the
+  // sample outright, so the memo has to be pinned by something a deletion fails.
+  it('arms exactly one sample across a run of identical window pushes', () => {
+    for (let i = 0; i < 25; i += 1) h.meter.pushWindow(REPO, LOOP, FLOOR);
+    expect(h.arms).toBe(1);
+    expect(h.opened).toHaveLength(1);
+  });
+
+  // ...and the same memo, committed before the work it suppresses has succeeded, kills the meter outright:
+  // flow.ts emits that identical triple on every render for the rest of the run, so every one of them takes
+  // the early return and the repo never gets a sweep, a figure or an `app.cost` record again.
+  it('retries an identical push after one whose sweep could not be opened', async () => {
+    h.setLogs(REPO, [turn({ at: FLOOR + 1, id: 'work', input: MTOK })]);
+    h.failNextOpen();
+    h.meter.pushWindow(REPO, LOOP, FLOOR);
+    expect(h.armed()).toBe(false);
+
+    h.meter.pushWindow(REPO, LOOP, FLOOR);
+    await h.sample();
+    expect(h.meter.current(REPO)?.usd).toBe(3);
+  });
+
+  it('retries an identical push after one whose sample could not be armed', async () => {
+    h.setLogs(REPO, [turn({ at: FLOOR + 1, id: 'work', input: MTOK })]);
+    h.failNextArm();
+    h.meter.pushWindow(REPO, LOOP, FLOOR);
+    expect(h.armed()).toBe(false);
+
+    h.meter.pushWindow(REPO, LOOP, FLOOR);
+    await h.sample();
+    expect(h.meter.current(REPO)?.usd).toBe(3);
   });
 
   // CODE-STANDARDS § delayed consent — a sample scheduled against one run completes later, by which time

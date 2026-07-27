@@ -646,9 +646,12 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
 
   // WCAG SC 2.2.2 (Pause, Stop, Hide) — a §27 run's total is re-metered on a timer for the whole run, and
   // the strip host is a polite live region, so leaving the figure inside it narrates a new dollar amount
-  // every couple of seconds for hours with no user action and no mechanism to stop it. The figure opts out
-  // of announcement and keeps its accessible name, so it is still read on focus and on demand (SC 1.3.1).
-  it('keeps the §27 cost figure out of the strip`s live region while it still carries its accessible name', async () => {
+  // every couple of seconds for hours with no user action and no mechanism to stop it. Silencing the figure
+  // node alone does not stop it: the figure is also part of the enclosing read-out's name-from-content, and
+  // a live change resolves against the nearest live region of the node that CHANGED — the read-out, whose
+  // nearest one is the polite strip. The figure leaves the tree and rides the read-out's DESCRIPTION
+  // instead, so it is still conveyed on focus and on demand (SC 1.3.1) with nothing announced on a tick.
+  it('keeps the §27 cost figure out of the read-out`s name, carrying it as the read-out`s description', async () => {
     let view: FlowStateView = {
       stepName: 'plan',
       steps: ['plan'],
@@ -674,13 +677,19 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     };
     createFlowStrip(host, deps).onRepoChanged('/repo-live');
     await vi.waitFor(() => expect(host.querySelector('.loop-cost')).not.toBeNull());
-    expect(host.querySelector('.loop-cost')!.getAttribute('aria-live')).toBe('off');
+    const cost = (): HTMLElement => host.querySelector<HTMLElement>('.loop-cost')!;
+    const readout = (): HTMLElement => host.querySelector<HTMLElement>('.loopstat')!;
+    expect(cost().getAttribute('aria-hidden')).toBe('true');
+    expect(cost().id).not.toBe('');
+    expect(readout().getAttribute('aria-describedby')).toBe(cost().id);
+    expect(readout().textContent).toContain('$4.50');
 
     view = { ...view, loop: { ...view.loop!, cost: '$6.00' } };
     fire();
-    await vi.waitFor(() => expect(host.querySelector('.loop-cost')?.textContent).toBe('$6.00'));
-    expect(host.querySelector('.loop-cost')!.getAttribute('aria-live')).toBe('off');
-    expect(host.querySelector('.loop-cost')!.getAttribute('aria-label')).toBe('cost $6.00');
+    await vi.waitFor(() => expect(cost().textContent).toBe('$6.00'));
+    expect(cost().getAttribute('aria-hidden')).toBe('true');
+    expect(cost().getAttribute('aria-label')).toBe('cost $6.00');
+    expect(readout().getAttribute('aria-describedby')).toBe(cost().id);
   });
 
   it('patches the §26.10 cost readout in place on a same-signature background push', async () => {
