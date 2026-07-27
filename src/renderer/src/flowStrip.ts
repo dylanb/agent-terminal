@@ -193,6 +193,10 @@ function loopReadout(doc: Document, loop: FlowLoopView, controlsId?: string): HT
     // The visible figure is bare; under aria-atomic=false only this node is announced, so it carries the
     // "cost" context in its accessible name (WCAG SC 1.3.1) — the label `.loop-iter` keeps in its text.
     cost.setAttribute('aria-label', `cost ${loop.cost}`);
+    // WCAG SC 2.2.2 — a §27 run re-meters this figure on a timer for the whole run, so leaving it inside
+    // the host's polite region narrates a new amount every few seconds with no mechanism to stop it. The
+    // accessible name above still conveys it on focus and on demand.
+    cost.setAttribute('aria-live', 'off');
     v.append(cost);
   }
   v.append(car);

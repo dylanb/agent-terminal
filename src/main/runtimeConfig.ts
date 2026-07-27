@@ -1,7 +1,5 @@
 // Runtime configuration seam (§15.7): env-overridable thresholds, no magic numbers downstream.
 
-import { SESSION_LOG_CHUNK_BYTES } from './sessionLogSweep';
-
 // TODO(dylan): a per-agent profile table (D10) is the intended future seam to
 // replace these env lookups without touching call sites.
 
@@ -25,6 +23,9 @@ const DEFAULTS = {
   // §27.11: how long the §27 cost meter waits before its next sample of the session logs. Off the turn's
   // synchronous path by construction, so this is a freshness/cost trade, never a deadline on anything.
   costSampleMs: 2000,
+  // §27.11: how much of a session log the §27 sweep reads before relinquishing the event loop. A fixture
+  // that had to exceed a multi-megabyte chunk to exercise the yielding would ship megabytes into the suite.
+  sessionLogChunkBytes: 64 * 1024,
 } as const;
 
 export interface RuntimeConfig {
@@ -66,6 +67,6 @@ export function resolveRuntimeConfig(env: NodeJS.ProcessEnv): RuntimeConfig {
     stallTimeoutMs: posInt(env.APP_TURN_TIMEOUT_MS, DEFAULTS.stallTimeoutMs),
     startupExitGraceMs: posInt(env.APP_STARTUP_EXIT_GRACE_MS, DEFAULTS.startupExitGraceMs),
     costSampleMs: posInt(env.APP_COST_SAMPLE_MS, DEFAULTS.costSampleMs),
-    sessionLogChunkBytes: posInt(env.APP_SESSION_LOG_CHUNK_BYTES, SESSION_LOG_CHUNK_BYTES),
+    sessionLogChunkBytes: posInt(env.APP_SESSION_LOG_CHUNK_BYTES, DEFAULTS.sessionLogChunkBytes),
   };
 }

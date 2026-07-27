@@ -1,13 +1,18 @@
 // Claude Code's session JSONL logs: their location, and the two traversals of them the app needs. The
-// layout is Claude Code's PRIVATE format; every accessor degrades silently on drift (a malformed line, a
-// missing field, an absent dir) and never throws — cost is display-only and must never abort a loop
-// (CLAUDE.md best-effort side-effect rule). The pricing that turns tokens into dollars is shared
-// (pricing.ts). Engine-neutral: §26.10's aggregate entry point and §27.11's per-turn stream both live here,
-// beside the log-root resolver and the project-dir encoder that §27 keeps past the §27.15 N8 sweep.
+// layout is Claude Code's PRIVATE format; every accessor degrades on drift (a malformed line, a missing
+// field, an absent dir) — cost is display-only and must never abort a loop (CLAUDE.md best-effort
+// side-effect rule). The one thing the §27 sweep will not degrade is a root that exists and refuses
+// enumeration, which it raises rather than price as $0.00 (CLAUDE.md dirEntries rule). The pricing that
+// turns tokens into dollars is shared (pricing.ts). Engine-neutral: §26.10's aggregate entry point and
+// §27.11's per-run sweep both live here, beside the log-root resolver and the project-dir encoder that
+// §27 keeps past the §27.15 N8 sweep.
 
-import { readFileSync, readdirSync, statSync, promises as fsp } from 'node:fs';
+import { readFileSync, readdirSync, promises as fsp } from 'node:fs';
+import { StringDecoder } from 'node:string_decoder';
 import path from 'node:path';
 import type { ModelTokens } from '../shared/pricing';
+import { boundAuditText } from '../shared/audit';
+import { readDirEntriesAsync } from './dirEntries';
 import { userConfigRootFrom } from './userConfig';
 
 /** One assistant turn recovered from a session log: its billed tokens, the instant it happened, and the
@@ -15,6 +20,14 @@ import { userConfigRootFrom } from './userConfig';
 export interface SessionTurn extends ModelTokens {
   at: number;
   id: string | null;
+}
+
+/** A turn the §27 sweep places and banks. Both fields the caller depends on are established here rather
+ *  than promised in prose: the instant is finite, so the turn belongs to an interval of the run's window,
+ *  and the identity is total, so a caller that banks it cannot double-count a turn it re-reads. */
+export interface PricedTurn extends ModelTokens {
+  at: number;
+  id: string;
 }
 
 /** Encode a repo path into Claude Code's project-dir name: every non-alphanumeric → `-`. */
@@ -60,13 +73,13 @@ function extractTurn(obj: unknown): SessionTurn | null {
   const msgId = str(m.id);
   const reqId = str(line.requestId);
   return {
-    model: m.model,
+    model: boundAuditText(m.model),
     input: num(u.input_tokens),
     cacheCreate: num(u.cache_creation_input_tokens),
     cacheRead: num(u.cache_read_input_tokens),
     output: num(u.output_tokens),
     at: Date.parse(typeof line.timestamp === 'string' ? line.timestamp : ''),
-    id: msgId === null || reqId === null ? null : `${msgId}\x00${reqId}`,
+    id: msgId === null || reqId === null ? null : JSON.stringify([msgId, reqId]),
   };
 }
 
@@ -139,32 +152,52 @@ export function readSessionTokens(logDir: string | null, since?: number): ModelT
   return [...byModel.values()].sort((a, b) => a.model.localeCompare(b.model));
 }
 
-/** How much of a log is read before the sweep relinquishes the event loop (§27.11 / AC7). Named and
- *  overridable in the same idiom as every other threshold (§15.7): a fixture that had to exceed a hard-coded
- *  multi-megabyte chunk to exercise the yielding would ship megabytes into every test run. */
-export const SESSION_LOG_CHUNK_BYTES = 64 * 1024;
-
-export interface SessionTurnStreamOptions {
+export interface SessionSweepOptions {
   /** Epoch ms the run's window opens at; absent sweeps unbounded. */
   since?: number;
-  chunkBytes?: number;
+  /** How much of a log is read before the sweep relinquishes the event loop (§27.11 / AC7). */
+  chunkBytes: number;
 }
 
-/** Whether a log can hold a turn inside a window opening at `since`. A file whose last write predates the
- *  floor cannot; appends bump the mtime, so one that existed before the run and grew during it still can.
- *  An unstattable file is opened — absent and unreadable both degrade to "read it and find out" (AC7). */
-function writtenSince(file: string, since: number | undefined): boolean {
-  if (since === undefined) return true;
+/** A sweep of ONE run's window over a repo's session logs (§27.11). Each drain yields every priced turn in
+ *  the window the sweep has not already yielded from an UNCHANGED log: the first yields the whole window,
+ *  and a log that grew is re-yielded whole, so a caller must bank each turn's identity rather than assume
+ *  the drains are disjoint. Every drift the private log format can produce degrades — an absent root, an
+ *  unreadable file, an unparseable line — but a root that exists and refuses enumeration THROWS, because a
+ *  caller that read it as empty would price the run at a confident $0.00. */
+export interface SessionSweep {
+  drain(): AsyncIterable<PricedTurn>;
+}
+
+/** Every `*.jsonl` under `dir`, recursively, without occupying the main thread for the walk (AC7). */
+async function* jsonlFilesAsync(dir: string): AsyncGenerator<string> {
+  for (const entry of await readDirEntriesAsync(dir)) {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory) yield* jsonlFilesAsync(full);
+    else if (entry.name.endsWith('.jsonl')) yield full;
+  }
+}
+
+/** What a log looked like last time the sweep read it. Null for a file that will not stat: absent and
+ *  unreadable both degrade to "read it and find out", and neither is remembered. */
+interface LogStamp {
+  mtimeMs: number;
+  size: number;
+}
+
+async function stampOf(file: string): Promise<LogStamp | null> {
   try {
-    return statSync(file).mtimeMs >= since;
+    const s = await fsp.stat(file);
+    return { mtimeMs: s.mtimeMs, size: s.size };
   } catch {
-    return true;
+    return null;
   }
 }
 
 /** Yield the file's complete lines, relinquishing the event loop between chunks so no single read of a log
- *  is an uninterruptible block on the main thread (§27.11 / AC7). A trailing partial line is carried into
- *  the next chunk; an unreadable file yields nothing. */
+ *  is an uninterruptible block on the main thread (§27.11 / AC7). A chunk boundary is a BYTE boundary, so
+ *  the decoder holds an incomplete trailing character across it and `carry` holds an incomplete trailing
+ *  line; an unreadable file yields nothing. */
 async function* logLines(file: string, chunkBytes: number): AsyncGenerator<string> {
   let handle: fsp.FileHandle;
   try {
@@ -174,14 +207,16 @@ async function* logLines(file: string, chunkBytes: number): AsyncGenerator<strin
   }
   try {
     const buffer = Buffer.allocUnsafe(chunkBytes);
+    const decoder = new StringDecoder('utf8');
     let carry = '';
     for (;;) {
       const { bytesRead } = await handle.read(buffer, 0, chunkBytes, null);
       if (bytesRead === 0) break;
-      const parts = (carry + buffer.toString('utf8', 0, bytesRead)).split('\n');
+      const parts = (carry + decoder.write(buffer.subarray(0, bytesRead))).split('\n');
       carry = parts.pop() ?? '';
       for (const line of parts) yield line;
     }
+    carry += decoder.end();
     if (carry !== '') yield carry;
   } catch {
     /* mid-read failure — cost is display-only, so what was read stands and the rest is dropped */
@@ -190,26 +225,36 @@ async function* logLines(file: string, chunkBytes: number): AsyncGenerator<strin
   }
 }
 
-/** Every priced turn under `logDir`, in the order the logs are walked, bounded below by `since` and by
- *  nothing above it (§27.11). Unlike the aggregate entry point above this yields turns rather than
- *  per-model sums, so each one carries the instant a caller places it by and the identity a caller banks it
- *  under — and a turn with NO usable instant is excluded in both directions, since a dollar that can be
- *  placed in no interval of the run's window could never be accounted for by the run's parts.
- *
- *  Never throws: a refused root, an absent dir, an unreadable file and an unparseable line all degrade. */
-export async function* streamSessionTurns(
-  logDir: string | null,
-  options: SessionTurnStreamOptions = {},
-): AsyncGenerator<SessionTurn> {
-  if (logDir === null) return;
-  const chunkBytes = options.chunkBytes ?? SESSION_LOG_CHUNK_BYTES;
-  for (const file of jsonlFiles(logDir)) {
-    if (!writtenSince(file, options.since)) continue;
-    for await (const line of logLines(file, chunkBytes)) {
-      const turn = parseLine(line);
-      if (!turn || !Number.isFinite(turn.at)) continue;
-      if (options.since !== undefined && turn.at < options.since) continue;
-      yield turn;
-    }
-  }
+/** Open a sweep over `logDir` for a run window opening at `options.since` (§27.11). Unlike the aggregate
+ *  entry point above this yields turns rather than per-model sums, so each one carries the instant a caller
+ *  places it by and the identity a caller banks it under. A turn with NO usable instant is excluded in both
+ *  directions, since a dollar that can be placed in no interval of the run's window could never be
+ *  accounted for by the run's parts; a turn the log stamps no billing identity on is given one derived from
+ *  where it sits, which is stable across drains because the logs are append-only. */
+export function openSessionSweep(logDir: string | null, options: SessionSweepOptions): SessionSweep {
+  const read = new Map<string, LogStamp>();
+  const unchanged = (file: string, stamp: LogStamp | null): boolean => {
+    if (stamp === null) return false;
+    const last = read.get(file);
+    return last !== undefined && last.mtimeMs === stamp.mtimeMs && last.size === stamp.size;
+  };
+  return {
+    async *drain(): AsyncGenerator<PricedTurn> {
+      if (logDir === null) return;
+      for await (const file of jsonlFilesAsync(logDir)) {
+        const stamp = await stampOf(file);
+        if (options.since !== undefined && stamp !== null && stamp.mtimeMs < options.since) continue;
+        if (unchanged(file, stamp)) continue;
+        let ordinal = 0;
+        for await (const line of logLines(file, options.chunkBytes)) {
+          const turn = parseLine(line);
+          if (!turn || !Number.isFinite(turn.at)) continue;
+          ordinal += 1;
+          if (options.since !== undefined && turn.at < options.since) continue;
+          yield { ...turn, id: turn.id ?? JSON.stringify([file, ordinal]) };
+        }
+        if (stamp !== null) read.set(file, stamp);
+      }
+    },
+  };
 }

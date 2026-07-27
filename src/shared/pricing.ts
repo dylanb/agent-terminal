@@ -50,7 +50,7 @@ export function priceTokens(totals: ModelTokens[]): CostResult {
   const unpricedModels: string[] = [];
   for (const t of totals) {
     if (t.input + t.cacheCreate + t.cacheRead + t.output === 0) continue;
-    const price = PRICING[t.model];
+    const price = Object.hasOwn(PRICING, t.model) ? PRICING[t.model] : undefined;
     if (!price) {
       if (!unpricedModels.includes(t.model)) unpricedModels.push(t.model);
       continue;

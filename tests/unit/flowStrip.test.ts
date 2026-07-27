@@ -660,6 +660,12 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     let fire = (): void => {};
     const deps = {
       state: vi.fn(async (): Promise<FlowStateView> => view),
+      start: vi.fn(),
+      advance: vi.fn(),
+      restart: vi.fn(),
+      undo: vi.fn(),
+      terminate: vi.fn(),
+      provideInput: vi.fn(),
       onStatusBar: vi.fn(),
       onStateChanged: (cb: () => void) => {
         fire = cb;

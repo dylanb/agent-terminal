@@ -207,10 +207,15 @@ export function notifyFailedEvent(reason: string, ts: string): AuditEvent {
   return { ts, type: 'notify.failed', reason: boundAuditText(reason) };
 }
 
+const AUDIT_UNPRICED_MAX = 32;
+
 /** The §27 run's cost, as the §25 record carries it (§27.11). Written on each sample that moves the figure
- *  while the run is open, so the stream holds a series whose LAST entry is the run's figure. */
+ *  while the run is open, so the stream holds a series whose LAST entry is the run's figure. Both the
+ *  length of each model id and how many of them one record carries are bounded: the ids come from Claude
+ *  Code's private log format, and every newly-observed one moves the figure and so appends another record
+ *  carrying every id seen so far — quadratic in a vocabulary from outside the process (CWE-770). */
 export function appCostEvent(cost: { usd: number; unpricedModels: string[] }, ts: string): AuditEvent {
-  return { ts, type: 'app.cost', usd: cost.usd, unpriced: cost.unpricedModels.map(boundAuditText) };
+  return { ts, type: 'app.cost', usd: cost.usd, unpriced: cost.unpricedModels.slice(0, AUDIT_UNPRICED_MAX).map(boundAuditText) };
 }
 
 /** A run replayed from its append-only stream (§25.6): the ordered events plus the folded final

@@ -87,7 +87,7 @@ import { deriveLoopActivity, type LoopActivity } from '../shared/loopActivity';
 import { composeWorkPrompt, composeSpawnReviewersPrompt, composeConsolidatePrompt } from './loopRecipe';
 import { allReviewsPresent, anyReviewPresent, consolidatedVerdict, consolidatedFindings, personaVerdict, carryForwardReviews, planDigest } from './reviewArtifacts';
 import { findingSignature, nextImpasse } from './findingSignature';
-import { readSessionTokens, sessionLogDir, streamSessionTurns } from './sessionLogSweep';
+import { openSessionSweep, readSessionTokens, sessionLogDir } from './sessionLogSweep';
 import { createFlowStateStore } from './flowState';
 import { createRealCiChecks } from './ciChecks';
 import { priceTokens, formatCost, type CostResult } from '../shared/pricing';
@@ -1032,22 +1032,20 @@ async function createWindow(): Promise<void> {
       });
     },
   });
-  // §27.11 — the §27 whole-run cost meter. Fed the flow's window push, it prices off the turn's synchronous
-  // path (its own timer per repo) and holds the run's figure in memory, so neither the render path nor the
-  // flow's per-render hydrate ever sweeps. Every sink it drains to is best-effort: cost is display-only and
-  // can never gate, pause, delay or fail a turn, a round, a gate decision or a flow advance (AC7).
+  // §27.11
   const costSampleTimers = new Map<string, ReturnType<typeof setTimeout>>();
   const appCostMeter = createAppCostMeter({
-    turns: (repoDir, since) =>
-      streamSessionTurns(sessionLogDir(repoDir, process.env, os.homedir()), {
+    openSweep: (repoDir, since) =>
+      openSessionSweep(sessionLogDir(repoDir, process.env, os.homedir()), {
         ...(since === null ? {} : { since }),
         chunkBytes: config.sessionLogChunkBytes,
       }),
     now: () => Date.now(),
-    armSample: (repoDir, run) => {
+    sampleDelayMs: config.costSampleMs,
+    armSample: (repoDir, delayMs, run) => {
       const armed = costSampleTimers.get(repoDir);
-      if (armed) clearTimeout(armed); // self-clearing: each arm replaces, never leaks
-      costSampleTimers.set(repoDir, setTimeout(() => void run(), config.costSampleMs));
+      if (armed) clearTimeout(armed);
+      costSampleTimers.set(repoDir, setTimeout(() => void run(), delayMs));
     },
     cancelSample: (repoDir) => {
       const armed = costSampleTimers.get(repoDir);

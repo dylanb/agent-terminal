@@ -427,10 +427,12 @@ export function createFlowMachine(
     // §26 loop state; a `legacy` (or namespace-absent) step feeds the §26 provider unchanged.
     const mostRecentLoopStep = entered.reduce<FlowStepDef | undefined>((last, s) => (s.kind === 'loop' ? s : last), undefined);
     const appLoopName = mostRecentLoopStep?.loopNamespace === APP_LOOP_NAMESPACE ? mostRecentLoopStep.loop : undefined;
-    // §27.11 — the meter is handed the window and the binding rather than reading either. This runs on the
-    // render path (the flow hydrates on every render), so the push itself must do no work: the meter records
-    // the value and defers.
-    pushCostWindow?.(appLoopName ?? null, startedAt);
+    // §27.11 / AC7
+    try {
+      pushCostWindow?.(appLoopName ?? null, startedAt);
+    } catch (e) {
+      console.error('flow cost window push failed', e instanceof Error ? e.message : String(e));
+    }
     // §27.15 — the flow module holds no independent reader of §26 loop state on the app path: an app step's
     // refs never source from a stray §26 state.yaml, so a §27 step surfaces none of that engine's ticket/PR.
     const liveLoop = appLoopName !== undefined ? null : (readLoop?.() ?? null);
@@ -605,15 +607,6 @@ export function createFlowManager(deps: FlowManagerDeps): FlowManager {
   // that definition changed, so a flow.yaml added/edited/removed while the app runs is picked up on
   // the next directory entry. A cached "no flow.yaml" error no longer sticks (the reported bug).
   const cache = new Map<string, { sig: string; machine: FlowMachine }>();
-  // Dedup on the whole triple, and here rather than in the machine: a flow.yaml edit rebuilds the machine,
-  // and a per-machine memory would re-push an unchanged value on the next render.
-  const lastPushed = new Map<string, string>();
-  const pushWindowOnce = (repoKey: string, loop: string | null, startedAt: number | null): void => {
-    const key = JSON.stringify([loop, startedAt]);
-    if (lastPushed.get(repoKey) === key) return;
-    lastPushed.set(repoKey, key);
-    deps.pushCostWindow?.(repoKey, loop, startedAt);
-  };
   const machineFor = (repoKey: string): FlowMachine => {
     const load = loadDef(repoKey, deps.globalDir);
     const sig = JSON.stringify(load);
@@ -630,7 +623,7 @@ export function createFlowManager(deps: FlowManagerDeps): FlowManager {
       deps.readLoopCost ? () => deps.readLoopCost!(repoKey) : undefined,
       deps.now,
       deps.readAppLoopView ? (name) => deps.readAppLoopView!(repoKey, name) : undefined,
-      deps.pushCostWindow ? (loop, startedAt) => pushWindowOnce(repoKey, loop, startedAt) : undefined,
+      deps.pushCostWindow ? (loop, startedAt) => deps.pushCostWindow!(repoKey, loop, startedAt) : undefined,
     );
     cache.set(repoKey, { sig, machine });
     return machine;
