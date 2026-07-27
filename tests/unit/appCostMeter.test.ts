@@ -469,9 +469,10 @@ describe('the §27 meter`s activation, retirement and blast radius', () => {
 });
 
 describe('the §27 sampler`s steady state', () => {
-  // The run is retired only by a push carrying a null loop, and completing the flow does not produce one —
-  // `done` leaves the app loop step entered. Without a backoff the meter re-walks the log tree every two
-  // seconds forever, on the process that also drains the PTY, for a run that has finished.
+  // A run is retired only by a push carrying a null loop, and no flow transition produces one for a
+  // COMPLETED run — the invariant `flowCostWindow.test.ts`'s `keeps pushing the app loop after the flow
+  // advances to done` holds. Without a backoff the meter therefore re-walks the log tree every two seconds
+  // for as long as the app stays open, on the process that also drains the PTY.
   it('backs the sample interval off while the figure sits still', async () => {
     h.setLogs(REPO, [turn({ at: FLOOR + 1, id: 'work', input: MTOK })]);
     h.meter.pushWindow(REPO, LOOP, FLOOR);
@@ -563,8 +564,9 @@ describe('the §27 meter reaching the §25 audit and never damaging the run', ()
     expect(h.recorded).toHaveLength(1);
   });
 
-  // WCAG SC 2.2.2 / 4.1.3 — the readout rides a polite live region, so a repaint is an announcement. A move
-  // too small to change the rendered figure has nothing to announce and must not push one.
+  // WCAG SC 4.1.3 — the readout rides a polite live region, so a repaint is an announcement. A move too
+  // small to change the rendered figure has nothing to announce and must not push one; the §25 append is
+  // gated on the SAME rendered figure, so the record cannot restate a total the UI refused to paint.
   it('signals the view only when the RENDERED figure changes, not on a sub-cent move', async () => {
     h.setLogs(REPO, [turn({ at: FLOOR + 1, id: 'work', input: MTOK })]);
     h.meter.pushWindow(REPO, LOOP, FLOOR);

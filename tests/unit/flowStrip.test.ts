@@ -644,13 +644,12 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     expect(host.querySelector('.loop-iter')).toBeNull();
   });
 
-  // WCAG SC 2.2.2 (Pause, Stop, Hide) — a §27 run's total is re-metered on a timer for the whole run, and
-  // the strip host is a polite live region, so leaving the figure inside it narrates a new dollar amount
-  // every couple of seconds for hours with no user action and no mechanism to stop it. Silencing the figure
-  // node alone does not stop it: the figure is also part of the enclosing read-out's name-from-content, and
-  // a live change resolves against the nearest live region of the node that CHANGED — the read-out, whose
-  // nearest one is the polite strip. The figure leaves the tree and rides the read-out's DESCRIPTION
-  // instead, so it is still conveyed on focus and on demand (SC 1.3.1) with nothing announced on a tick.
+  // WCAG SC 4.1.3 / SC 1.3.1 — a §27 run's total is re-metered on a timer for the whole run and the strip
+  // host is a polite live region, so leaving the figure inside it narrates a new dollar amount every couple
+  // of seconds. Silencing the figure node alone does not stop it: the figure is also part of the enclosing
+  // read-out's name-from-content, and a live change resolves against the nearest live region of the node
+  // that CHANGED. The figure leaves the tree and rides the read-out's DESCRIPTION instead, so it is still
+  // conveyed on focus and on demand with nothing announced on a tick.
   it('keeps the §27 cost figure out of the read-out`s name, carrying it as the read-out`s description', async () => {
     let view: FlowStateView = {
       stepName: 'plan',
