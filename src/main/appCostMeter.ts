@@ -3,9 +3,16 @@
 import { addTokens, formatCost, priceTokens, sortedTotals, type CostResult, type ModelTokens } from '../shared/pricing';
 import type { PricedTurn, SessionSweep } from './sessionLogSweep';
 
-// No push retires a COMPLETED run: `done` leaves the app loop step entered, so a finished run keeps
-// sampling for as long as the app stays open, and only this ceiling bounds how often.
-const SAMPLE_BACKOFF_FACTOR_MAX = 32;
+/** Most a still figure may stretch the configured cadence by. `runtimeConfig` derives the cadence's own
+ *  ceiling from it, so the product can still be held by a timer. */
+export const SAMPLE_BACKOFF_FACTOR_MAX = 32;
+/** Most distinct billed-turn identities one run retains. Reached, the figure stops growing rather than the
+ *  retention (CWE-770). */
+export const MAX_BANKED_TURNS = 20_000;
+/** Most distinct model ids one run retains, on the same terms. */
+export const MAX_BANKED_MODELS = 256;
+/** Longest delay a timer can hold. */
+const MAX_TIMER_DELAY_MS = 2 ** 31 - 1;
 
 export interface AppCostMeterDeps {
   /** Open a sweep of the repo's session logs over a run window opening at `since` (unbounded when null).
@@ -42,12 +49,15 @@ interface RunCost {
   banked: Set<string>;
   byModel: Map<string, ModelTokens>;
   cost: CostResult | null;
-  recordedCost: CostResult | null;
+  recordedShown: string | null;
   idleSamples: number;
+  degraded: boolean;
 }
 
 function bank(run: RunCost, turn: PricedTurn): void {
   if (run.banked.has(turn.id)) return;
+  if (run.banked.size >= MAX_BANKED_TURNS) return;
+  if (!run.byModel.has(turn.model) && run.byModel.size >= MAX_BANKED_MODELS) return;
   run.banked.add(turn.id);
   addTokens(run.byModel, turn);
 }
@@ -75,7 +85,7 @@ export function createAppCostMeter(deps: AppCostMeterDeps): AppCostMeter {
   };
 
   const delayFor = (idleSamples: number): number =>
-    deps.sampleDelayMs * Math.min(2 ** idleSamples, SAMPLE_BACKOFF_FACTOR_MAX);
+    Math.min(deps.sampleDelayMs * Math.min(2 ** idleSamples, SAMPLE_BACKOFF_FACTOR_MAX), MAX_TIMER_DELAY_MS);
 
   const sample = async (repoDir: string): Promise<void> => {
     const run = runs.get(repoDir);
@@ -89,17 +99,22 @@ export function createAppCostMeter(deps: AppCostMeterDeps): AppCostMeter {
       const next = priceTokens(sortedTotals(run.byModel));
       if (runs.get(repoDir) !== run) return;
       moved = !sameCost(run.cost, next);
+      const rendered = formatCost(next);
       const shown = run.cost === null ? null : formatCost(run.cost);
-      if (!sameCost(run.recordedCost, next)) {
+      if (rendered !== run.recordedShown) {
         bestEffort('audit record', () => {
-          if (deps.recordCost(repoDir, next)) run.recordedCost = next;
+          if (deps.recordCost(repoDir, next)) run.recordedShown = rendered;
         });
       }
       run.cost = next;
-      // WCAG SC 2.2.2 / 4.1.3
-      if (shown !== formatCost(next)) bestEffort('view-changed signal', () => deps.onFigureChanged());
+      run.degraded = false;
+      // WCAG SC 4.1.3
+      if (shown !== rendered) bestEffort('view-changed signal', () => deps.onFigureChanged());
     } catch (e) {
-      log('app cost sample failed', e);
+      // The sweep keeps being retried, so a lasting refusal — an unreadable `<session-uuid>/subagents/` —
+      // would otherwise name itself once per sample for the life of the app.
+      if (!run.degraded) log('app cost sample failed', e);
+      run.degraded = true;
     }
     if (runs.get(repoDir) !== run) return;
     run.idleSamples = moved ? 0 : run.idleSamples + 1;
@@ -128,8 +143,9 @@ export function createAppCostMeter(deps: AppCostMeterDeps): AppCostMeter {
             banked: new Set(),
             byModel: new Map(),
             cost: null,
-            recordedCost: null,
+            recordedShown: null,
             idleSamples: 0,
+            degraded: false,
           });
         }
         deps.armSample(repoDir, deps.sampleDelayMs, () => sample(repoDir));

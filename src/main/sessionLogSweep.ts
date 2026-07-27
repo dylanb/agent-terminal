@@ -1,8 +1,5 @@
-// Claude Code's session JSONL logs. The layout is Claude Code's PRIVATE format; every accessor degrades on
-// drift (a malformed line, a missing field, an absent dir) — cost is display-only and must never abort a
-// loop (CLAUDE.md best-effort side-effect rule). The one thing the §27 sweep will not degrade is a root
-// that exists and refuses enumeration, which it raises rather than price as $0.00 (CLAUDE.md dirEntries
-// rule).
+// The session-JSONL layout is Claude Code's PRIVATE format — an external dependency the app does not
+// control (§27.11).
 
 import { readFileSync, readdirSync, promises as fsp } from 'node:fs';
 import { StringDecoder } from 'node:string_decoder';
@@ -12,11 +9,11 @@ import { boundExternalText } from '../shared/audit';
 import { readDirEntriesAsync } from './dirEntries';
 import { userConfigRootFrom } from './userConfig';
 
-/** Longest `message.id` / `requestId` the sweep will bank a turn under. Longer is REJECTED, not truncated:
- *  a truncated identity could collapse two distinct billed turns and drop the second's dollars. */
+/** Longest `message.id` / `requestId` the §27 sweep will bank a turn under. Longer is REJECTED, not
+ *  truncated: a truncated identity could collapse two distinct billed turns and drop the second's dollars. */
 const MAX_ID_CHARS = 200;
-/** Longest line the sweep will hold across chunk boundaries. `chunkBytes` bounds the read, not the string
- *  a newline-free log would otherwise accumulate. Well above the longest line the format produces. */
+/** Longest line the sweep will hold or yield. `chunkBytes` bounds the read, not the string a newline-free
+ *  log would otherwise accumulate. Well above the longest line the format produces. */
 const MAX_LINE_CHARS = 1_000_000;
 /** Ceiling on one turn's count for any single token category. Far below where the product with the table's
  *  largest per-token price could leave the finite range `CostResult.usd` promises. */
@@ -29,10 +26,9 @@ interface SessionTurn extends ModelTokens {
   id: string | null;
 }
 
-declare const finiteBrand: unique symbol;
 /** An instant checked finite. The sweep narrows once, at the only place a turn enters the §27 stream, so a
  *  provider that hands back an unplaceable turn fails to type-check rather than being caught downstream. */
-export type FiniteInstant = number & { readonly [finiteBrand]: true };
+export type FiniteInstant = number & { readonly __finiteInstant: unique symbol };
 
 export function finiteInstant(at: number): FiniteInstant | null {
   return Number.isFinite(at) ? (at as FiniteInstant) : null;
@@ -64,19 +60,21 @@ export function sessionLogDir(repoPath: string, env: NodeJS.ProcessEnv, home: st
 }
 
 function num(v: unknown): number {
-  return typeof v === 'number' && Number.isFinite(v) && v >= 0 ? Math.min(v, MAX_TURN_TOKENS) : 0;
+  return typeof v === 'number' && Number.isFinite(v) ? v : 0;
 }
 
 function str(v: unknown): string | null {
-  return typeof v === 'string' && v.length > 0 && v.length <= MAX_ID_CHARS ? v : null;
+  return typeof v === 'string' && v.length > 0 ? v : null;
 }
 
 /** One assistant event's model, usage, billing identity, and instant — or null when the line is not a priced
  *  assistant turn. Claude Code's format: `message.model` + `message.usage.{input_tokens,
  *  cache_creation_input_tokens, cache_read_input_tokens, output_tokens}`, alongside a top-level `timestamp`
- *  and the `message.id`/`requestId` pair the turn is billed under. Any missing, ill-typed or out-of-range
- *  field degrades (an absent usage/model → null → skipped; an absent or over-long identity →
- *  uncollapsible; an absent timestamp → NaN; a negative or absurd token count → 0 or the ceiling). */
+ *  and the `message.id`/`requestId` pair the turn is billed under. This is a DECODER and nothing else: it
+ *  admits what the format carries, degrading a missing or ill-typed field (an absent usage/model → null →
+ *  skipped; an absent identity → uncollapsible; an absent timestamp → NaN; an ill-typed count → 0). Both
+ *  engines parse every line through it, so a §27 admission rule applied here would move §26's numbers
+ *  (AC 10); those live on `openSessionSweep`'s per-turn path instead. */
 function extractTurn(obj: unknown): SessionTurn | null {
   if (obj === null || typeof obj !== 'object') return null;
   const line = obj as { message?: unknown; timestamp?: unknown; requestId?: unknown };
@@ -90,7 +88,7 @@ function extractTurn(obj: unknown): SessionTurn | null {
   const msgId = str(m.id);
   const reqId = str(line.requestId);
   return {
-    model: boundExternalText(m.model),
+    model: m.model,
     input: num(u.input_tokens),
     cacheCreate: num(u.cache_creation_input_tokens),
     cacheRead: num(u.cache_read_input_tokens),
@@ -211,9 +209,10 @@ async function stampOf(file: string): Promise<LogStamp | null> {
 /** Yield the file's complete lines, relinquishing the event loop between chunks so no single read of a log
  *  is an uninterruptible block on the main thread (§27.11 / AC7). A chunk boundary is a BYTE boundary, so
  *  the decoder holds an incomplete trailing character across it and `carry` holds an incomplete trailing
- *  line; a line that outgrows `MAX_LINE_CHARS` is dropped rather than accumulated. Returns whether the file
- *  was read through to its end: `false` means the caller saw only part of it, or none of it, and must not
- *  remember having read it. */
+ *  line. A line longer than `MAX_LINE_CHARS` is dropped at every chunk size — whether it spans chunks or
+ *  arrives whole inside one — so the peak string this holds is bounded by `chunkBytes + MAX_LINE_CHARS`
+ *  however the operator tunes the read. Returns whether the file was read through to its end: `false`
+ *  means the caller saw only part of it, or none of it, and must not remember having read it. */
 async function* logLines(file: string, buffer: Buffer): AsyncGenerator<string, boolean> {
   let handle: fsp.FileHandle;
   try {
@@ -232,7 +231,7 @@ async function* logLines(file: string, buffer: Buffer): AsyncGenerator<string, b
       carry = parts.pop() ?? '';
       for (const line of parts) {
         if (dropping) dropping = false;
-        else yield line;
+        else if (line.length <= MAX_LINE_CHARS) yield line;
       }
       if (carry.length > MAX_LINE_CHARS) {
         carry = '';
@@ -240,7 +239,7 @@ async function* logLines(file: string, buffer: Buffer): AsyncGenerator<string, b
       }
     }
     carry += decoder.end();
-    if (!dropping && carry !== '') yield carry;
+    if (!dropping && carry !== '' && carry.length <= MAX_LINE_CHARS) yield carry;
     return true;
   } catch {
     return false;
@@ -249,12 +248,40 @@ async function* logLines(file: string, buffer: Buffer): AsyncGenerator<string, b
   }
 }
 
+/** Every §27 admission rule, in the one place a turn enters the §27 stream: the model id is bounded before
+ *  it can key an accumulator or reach the §25 record, each token count is clamped into a priceable range,
+ *  and the identity is made TOTAL. An identity the log stamps is kept only while it is short enough to bank;
+ *  otherwise — and whenever the log stamps none — it is derived from the turn's own content, which is what
+ *  the replay this identity exists to collapse preserves verbatim. Deriving it from where the turn SITS
+ *  would be stable across drains of one log and unstable across FILES, which is the axis a resumed or forked
+ *  session actually crosses. */
+function admit(turn: SessionTurn, at: FiniteInstant): PricedTurn {
+  const priced = {
+    model: boundExternalText(turn.model),
+    input: clampTokens(turn.input),
+    cacheCreate: clampTokens(turn.cacheCreate),
+    cacheRead: clampTokens(turn.cacheRead),
+    output: clampTokens(turn.output),
+  };
+  const stamped = turn.id !== null && turn.id.length <= MAX_ID_CHARS ? turn.id : null;
+  return {
+    ...priced,
+    at,
+    id:
+      stamped ??
+      JSON.stringify(['derived', at, priced.model, priced.input, priced.cacheCreate, priced.cacheRead, priced.output]),
+  };
+}
+
+function clampTokens(v: number): number {
+  return Math.min(Math.max(v, 0), MAX_TURN_TOKENS);
+}
+
 /** Open a sweep over `logDir` for a run window opening at `options.since` (§27.11). Unlike the aggregate
  *  entry point above this yields turns rather than per-model sums, so each one carries the instant a caller
  *  places it by and the identity a caller banks it under. A turn with NO usable instant is excluded in both
  *  directions, since a dollar that can be placed in no interval of the run's window could never be
- *  accounted for by the run's parts; a turn the log stamps no usable billing identity on is given one
- *  derived from where it sits, which is stable across drains because the logs are append-only. */
+ *  accounted for by the run's parts. */
 export function openSessionSweep(logDir: string | null, options: SessionSweepOptions): SessionSweep {
   const read = new Map<string, LogStamp>();
   const unchanged = (file: string, stamp: LogStamp | null): boolean => {
@@ -270,7 +297,6 @@ export function openSessionSweep(logDir: string | null, options: SessionSweepOpt
         const stamp = await stampOf(file);
         if (options.since !== undefined && stamp !== null && stamp.mtimeMs < options.since) continue;
         if (unchanged(file, stamp)) continue;
-        let ordinal = 0;
         let complete = false;
         const lines = logLines(file, buffer);
         try {
@@ -283,9 +309,8 @@ export function openSessionSweep(logDir: string | null, options: SessionSweepOpt
             const turn = parseLine(next.value);
             const at = turn === null ? null : finiteInstant(turn.at);
             if (turn === null || at === null) continue;
-            ordinal += 1;
             if (options.since !== undefined && at < options.since) continue;
-            yield { ...turn, at, id: turn.id ?? JSON.stringify([file, ordinal]) };
+            yield admit(turn, at);
           }
         } finally {
           await lines.return(false);

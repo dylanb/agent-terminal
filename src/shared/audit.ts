@@ -194,11 +194,10 @@ export function loopEvents(before: LoopLike | null, after: LoopLike | null, ts: 
   return events;
 }
 
-/** Strip the control characters out of text that reached this process from outside it, and cap what is left
- *  at `AUDIT_TEXT_MAX`, so no such text can forge a record or grow one without bound (CWE-117 / CWE-770).
- *  ONE primitive: two copies of a bound agree the day they are written and diverge at the first change to
- *  either. */
 const AUDIT_TEXT_MAX = 200;
+/** Every string that reached this process from outside it passes through here before it can reach a record
+ *  or key anything the record carries. The returned string is free of control characters and bounded in
+ *  length, so no such text can forge a record or grow one without bound (CWE-117 / CWE-770). */
 export function boundExternalText(text: string): string {
   return stripStatusControlChars(text).slice(0, AUDIT_TEXT_MAX);
 }

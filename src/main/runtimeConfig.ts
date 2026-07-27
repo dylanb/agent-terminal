@@ -1,5 +1,7 @@
 // Runtime configuration seam (§15.7): env-overridable thresholds, no magic numbers downstream.
 
+import { SAMPLE_BACKOFF_FACTOR_MAX } from './appCostMeter';
+
 // TODO(dylan): a per-agent profile table (D10) is the intended future seam to
 // replace these env lookups without touching call sites.
 
@@ -20,17 +22,18 @@ const DEFAULTS = {
   // §5: a shell that exits within this window of spawn is a startup failure — keep the window open
   // for the diagnostic rather than terminating the app.
   startupExitGraceMs: 1000,
-  // §27.11: how long the §27 cost meter waits before its next sample of the session logs. Off the turn's
-  // synchronous path by construction, so this is a freshness/cost trade, never a deadline on anything.
+  // §27.11
   costSampleMs: 2000,
-  // §27.11: how much of a session log the §27 sweep reads before relinquishing the event loop. A fixture
-  // that had to exceed a multi-megabyte chunk to exercise the yielding would ship megabytes into the suite.
+  // §27.11
   sessionLogChunkBytes: 64 * 1024,
 } as const;
 
-/** Ceiling on `sessionLogChunkBytes`: it is the one key that reaches a `Buffer` allocation, and every
- *  field-local check passes a value the allocator then refuses. */
+/** Ceiling on `sessionLogChunkBytes`: every field-local check passes a value the `Buffer` allocator then
+ *  refuses. */
 const MAX_CHUNK_BYTES = 16 * 1024 * 1024;
+/** Ceiling on `costSampleMs`: the meter multiplies it by `SAMPLE_BACKOFF_FACTOR_MAX` and hands the product
+ *  to a timer, which fires in 1 ms rather than raising once the product leaves the 32-bit signed range. */
+const MAX_SAMPLE_DELAY_MS = Math.floor((2 ** 31 - 1) / SAMPLE_BACKOFF_FACTOR_MAX);
 
 export interface RuntimeConfig {
   quietMs: number;
@@ -76,7 +79,7 @@ export function resolveRuntimeConfig(env: NodeJS.ProcessEnv): RuntimeConfig {
     maxDoneTodos: posInt(env.APP_MAX_DONE_TODOS, DEFAULTS.maxDoneTodos),
     stallTimeoutMs: posInt(env.APP_TURN_TIMEOUT_MS, DEFAULTS.stallTimeoutMs),
     startupExitGraceMs: posInt(env.APP_STARTUP_EXIT_GRACE_MS, DEFAULTS.startupExitGraceMs),
-    costSampleMs: posInt(env.APP_COST_SAMPLE_MS, DEFAULTS.costSampleMs),
+    costSampleMs: posIntCapped(env.APP_COST_SAMPLE_MS, DEFAULTS.costSampleMs, MAX_SAMPLE_DELAY_MS),
     sessionLogChunkBytes: posIntCapped(env.APP_SESSION_LOG_CHUNK_BYTES, DEFAULTS.sessionLogChunkBytes, MAX_CHUNK_BYTES),
   };
 }

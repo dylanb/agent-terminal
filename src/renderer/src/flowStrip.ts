@@ -149,7 +149,7 @@ function structuralSig(state: FlowStateView): string {
   ]);
 }
 
-let costSeq = 0; // instance-unique describedby ids: two strips in one document must not collide (UI §2.2 rule 1)
+let costSeq = 0; // UI §2.2 rule 1
 
 /** The compact read-only loop read-out (§24.2.3 T2) shown in the rail: a 3-tone status pill (the
  *  one-word tone, not the unbounded status) + the iteration, framed as a `role=button` that opens
@@ -195,7 +195,7 @@ function loopReadout(doc: Document, loop: FlowLoopView, costId: string, controls
     cost.textContent = loop.cost;
     // WCAG SC 1.3.1
     cost.setAttribute('aria-label', `cost ${loop.cost}`);
-    // WCAG SC 2.2.2
+    // WCAG SC 4.1.3
     cost.setAttribute('aria-hidden', 'true');
     stat.setAttribute('aria-describedby', costId);
     v.append(cost);
@@ -241,7 +241,7 @@ function refsReadout(doc: Document, refs: FlowRefs, controlsId?: string): HTMLEl
 
 export function createFlowStrip(host: HTMLElement, deps: FlowStripDeps): FlowStrip {
   const doc = host.ownerDocument; // build from the host's document so the strip relocates (UI §2.2.1)
-  const costId = `flow-loop-cost-${costSeq++}`; // the read-out's aria-describedby target
+  const costId = `flow-loop-cost-${costSeq++}`;
   // WCAG SC 4.1.3: `role=status` is an implicitly atomic live region; the strip patches individual nodes
   // in place, so it must announce only the changed node, not re-read the whole strip on every update.
   host.setAttribute('aria-atomic', 'false');

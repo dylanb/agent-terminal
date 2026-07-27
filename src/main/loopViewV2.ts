@@ -31,9 +31,7 @@ export function deriveAppLoopView(
   liveError?: AppLoopLiveError | null,
   cost?: string | null,
 ): FlowLoopView {
-  // §27.11/§27.15 — the engine-neutral cost readout carries the §27 run's whole-run total on EVERY shape of
-  // the view: AC 2's no-recorded-start figure is read from a step that never ran a turn, so a readout riding
-  // only the run-state view would have nowhere to show it. The figure is handed in already computed.
+  // §27.11/§27.15
   const withCost = (view: FlowLoopView): FlowLoopView => (cost ? { ...view, cost } : view);
   // §27.4/§27.6/AC5/AC8 — the def is resolved once and reused on every surfacing branch: the reviewer catalog
   // AND the gate options both come from it, so the terminal consolidator gate (a run-state view) can show the

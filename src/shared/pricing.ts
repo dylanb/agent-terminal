@@ -53,8 +53,8 @@ export function addTokens(into: Map<string, ModelTokens>, turn: ModelTokens): vo
 }
 
 /** The folded totals in a stable order, so one run's spend always prices and renders the same way. */
-export function sortedTotals(into: Map<string, ModelTokens>): ModelTokens[] {
-  return [...into.values()].sort((a, b) => a.model.localeCompare(b.model));
+export function sortedTotals(byModel: Map<string, ModelTokens>): ModelTokens[] {
+  return [...byModel.values()].sort((a, b) => a.model.localeCompare(b.model));
 }
 
 /** Price per-model token totals against PRICING (§26.10). A model absent from the table contributes zero
