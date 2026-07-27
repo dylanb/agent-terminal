@@ -346,6 +346,24 @@ describe('the §27 meter`s activation, retirement and blast radius', () => {
     expect(h.opened).toHaveLength(2);
   });
 
+  // ...and the release is ordered AFTER the replacement is in hand: releasing first and then failing to
+  // open the new sweep would destroy a live run's figure over a transient refusal the next push retries.
+  it('leaves the run intact when a floor change cannot open its replacement sweep', async () => {
+    h.append(REPO, [turn({ at: FLOOR + 1, input: MTOK })]);
+    h.meter.pushWindow(REPO, LOOP, FLOOR);
+    await h.sample();
+    expect(h.meter.current(REPO)?.usd).toBe(3);
+
+    h.failNextOpen();
+    h.meter.pushWindow(REPO, LOOP, FLOOR + 100);
+    expect(h.meter.current(REPO)?.usd).toBe(3);
+    expect(h.closed).toEqual([]);
+
+    h.meter.pushWindow(REPO, LOOP, FLOOR + 100);
+    expect(h.meter.current(REPO)).toBeNull();
+    expect(h.closed).toEqual([REPO]);
+  });
+
   // AC 8a — the flow hydrates on EVERY render and therefore reaches the push, so the seeding read has to be
   // deferred rather than run on it. Neither the push nor the readout may sweep.
   it('sweeps nothing on the push or on the readout — only on the deferred sample', async () => {
