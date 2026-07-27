@@ -76,7 +76,7 @@ stated so the figure reproduces rather than being asserted: references to a sect
 (`§` followed by a single capital letter, optionally `.n`), taken over everything from the
 `## How to read this` heading down — the boundary is **named** rather than left as "below this index",
 because two reviewers measuring under two other readings of that phrase got two other numbers. By that
-rule **75% name a subsection — 781 of 1039** — and §B and §D hold **68%** of those between them, so a
+rule **75% name a subsection — 781 of 1040** — and §B and §D hold **68%** of those between them, so a
 top-level-only index resolves a minority of them. (Both absolutes are re-measured as the last edit of each
 revision, since any prose change moves them; the previous pair, `597 of 779`, did not reproduce under any
 reading of its own rule and was stale in the commit that introduced it.)
@@ -876,7 +876,8 @@ a function returning and its caller serving the response.
        attach route already uses. On a busy shell the skill is not injected, `BUSY_NOTICE` reaches the strip,
        and the work turn still starts on the synchronous arm (item 4's no-injection case).
      A step whose bound def declares **no** `pickup:` block keeps the seam injection at position 7,
-     where nothing asynchronous can revert it. The coordinator therefore gains the skill text on
+     where the only reverts left below it are `enterFastPath`'s two entry arms (§F item 17, the repaint of
+     AC 5's notice) rather than the coordinator's asynchronous git work. The coordinator therefore gains the skill text on
      `AppLoopBootstrapJob`, an inject dep, `isShellBusy` and the notice dep — the §B.13a widening. RED rows
      in §D.4 on the dirty-tree fixture, on the no-`bootstrap`-key-on-a-pickup-def fixture, and on the
      busy-shell-at-handoff fixture; the residual notice-erasure this leaves (a push still repaints a strip
@@ -1706,7 +1707,7 @@ silently gain exported surface, which is §M's whole premise.
   (`if (req.spec.origin !== 'operator') return fail(…)`). This is the **live, shipped** gate — reached on
   every pickup — as distinct from §26's deleted `loopExecAllowed` program-exec authority, and the two are
   recorded as separate §F entries (items 5 and 18) for exactly that reason. What it was guarding is stated in
-  §F item 18 rather than deleted silently: after this, a def resolved from the repository tier declaring a
+  §F item 18, the bootstrap origin gate, rather than deleted silently: after this, a def resolved from the repository tier declaring a
   `pickup` contract **bootstraps** — branch creation, draft PR, and branch deletion under
   `on_conflict: wipe-and-retry` — where today it is refused. RED row in §D.4; the e2e whose subject it is
   goes with it (§D.2a).
@@ -2298,7 +2299,7 @@ to flow + app + commands and the title loses "legacy … skills".
 `:4484` *"a repo-resident pickup def is refused by the wired executor before any bootstrap git or gh
 operation (ST2 origin gate)"* (`{ tag: '@ownapp' }`). Its assertions are the origin gate itself —
 `await expect(errorDialog).toContainText(/operator-authored|origin/i)` at `:4514`, then six negatives that no
-git or gh call was made — and the operator's decision deletes that gate outright (§B.13a, §F item 18). **The
+git or gh call was made — and the operator's decision deletes that gate outright (§B.13a, §F item 18, the bootstrap origin gate). **The
 subject goes, so the test goes: AC 2's expected case**, named here because the helper rule cannot select it
 (it calls only `seedFakeGhGit`, the engine-neutral helper this section deliberately excludes) and because a
 deletion of a §27 test must never be silent. **It is not deleted alone:** §D.4 carries the positive that
@@ -2843,7 +2844,7 @@ AC 1 passing is evidence for **none** of these; each carries its own test (§D.4
 3. The persisted flow-state **key set** (§H.2).
 4. AC 5's **migration behavior**.
 5. AC 10's **dispatch ordering**, its busy-shell scoping, and its revert-on-no-contract failure path.
-6. The **deletion of the surviving engine's def-origin gate** (§F item 18) — the operator's decision. Not one
+6. The **deletion of the surviving engine's def-origin gate** (§F item 18, the bootstrap origin gate) — the operator's decision. Not one
    of its sites carries a §26 citation, so the grep sees neither the removal nor the behaviour change it
    produces: a repository-tier def declaring a `pickup` contract goes from refused to bootstrapping. §D.4
    carries both the RED and the no-trust-label pin.
@@ -3254,7 +3255,7 @@ repository under review, the operator's own config and the app's bundle are trus
 the label and the type are deleted and the question dissolves rather than being answered. What that touches
 is prescribed in §B.6 (the resolver's surface, and the two non-trust facts the label was carrying), §B.13a
 (the live gate, the spec type and the identity wrapper), §B.15 (the composition-root call site) and §D.2a
-(the e2e whose subject it is). What it **costs** is recorded, not smoothed: §F item 18 names the concrete
+(the e2e whose subject it is). What it **costs** is recorded, not smoothed: §F item 18, the bootstrap origin gate, names the concrete
 consequence — a repo-supplied def may now drive `pickup`, including branch deletion under
 `on_conflict: wipe-and-retry` — §E.2 rewrites `docs/spec/27-…:116` off the promise it made, and §E.4 binds
 the one new changelog entry to name this as a deliberate reversal of the **v2.129** finding, with its reason
