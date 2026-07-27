@@ -100,7 +100,7 @@ export function createAppCostMeter(deps: AppCostMeterDeps): AppCostMeter {
       if (runs.get(repoDir) !== run) return;
       moved = !sameCost(run.cost, next);
       const rendered = formatCost(next);
-      const shown = run.cost === null ? null : formatCost(run.cost);
+      const wasShown = run.cost === null ? null : formatCost(run.cost);
       if (rendered !== run.recordedShown) {
         bestEffort('audit record', () => {
           if (deps.recordCost(repoDir, next)) run.recordedShown = rendered;
@@ -109,10 +109,8 @@ export function createAppCostMeter(deps: AppCostMeterDeps): AppCostMeter {
       run.cost = next;
       run.degraded = false;
       // WCAG SC 4.1.3
-      if (shown !== rendered) bestEffort('view-changed signal', () => deps.onFigureChanged());
+      if (rendered !== wasShown) bestEffort('view-changed signal', () => deps.onFigureChanged());
     } catch (e) {
-      // The sweep keeps being retried, so a lasting refusal — an unreadable `<session-uuid>/subagents/` —
-      // would otherwise name itself once per sample for the life of the app.
       if (!run.degraded) log('app cost sample failed', e);
       run.degraded = true;
     }

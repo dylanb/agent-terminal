@@ -70,11 +70,10 @@ function str(v: unknown): string | null {
 /** One assistant event's model, usage, billing identity, and instant — or null when the line is not a priced
  *  assistant turn. Claude Code's format: `message.model` + `message.usage.{input_tokens,
  *  cache_creation_input_tokens, cache_read_input_tokens, output_tokens}`, alongside a top-level `timestamp`
- *  and the `message.id`/`requestId` pair the turn is billed under. This is a DECODER and nothing else: it
- *  admits what the format carries, degrading a missing or ill-typed field (an absent usage/model → null →
- *  skipped; an absent identity → uncollapsible; an absent timestamp → NaN; an ill-typed count → 0). Both
- *  engines parse every line through it, so a §27 admission rule applied here would move §26's numbers
- *  (AC 10); those live on `openSessionSweep`'s per-turn path instead. */
+ *  and the `message.id`/`requestId` pair the turn is billed under. A missing or ill-typed field degrades (an
+ *  absent usage/model → null → skipped; an absent identity → uncollapsible; an absent timestamp → NaN; an
+ *  ill-typed count → 0). BOTH engines parse every line through this, so an admission rule added here moves
+ *  §26's numbers (AC 10); every §27 one lives on `openSessionSweep`'s per-turn path instead. */
 function extractTurn(obj: unknown): SessionTurn | null {
   if (obj === null || typeof obj !== 'object') return null;
   const line = obj as { message?: unknown; timestamp?: unknown; requestId?: unknown };
@@ -248,13 +247,9 @@ async function* logLines(file: string, buffer: Buffer): AsyncGenerator<string, b
   }
 }
 
-/** Every §27 admission rule, in the one place a turn enters the §27 stream: the model id is bounded before
- *  it can key an accumulator or reach the §25 record, each token count is clamped into a priceable range,
- *  and the identity is made TOTAL. An identity the log stamps is kept only while it is short enough to bank;
- *  otherwise — and whenever the log stamps none — it is derived from the turn's own content, which is what
- *  the replay this identity exists to collapse preserves verbatim. Deriving it from where the turn SITS
- *  would be stable across drains of one log and unstable across FILES, which is the axis a resumed or forked
- *  session actually crosses. */
+/** Every §27 admission rule, in the one place a turn enters the §27 stream. The returned turn's model id is
+ *  bounded, its counts are priceable, and its identity is total and derived only from values a resume or
+ *  fork replays verbatim — never from the file or the position, which no replay preserves. */
 function admit(turn: SessionTurn, at: FiniteInstant): PricedTurn {
   const priced = {
     model: boundExternalText(turn.model),
