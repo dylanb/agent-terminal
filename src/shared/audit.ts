@@ -39,6 +39,10 @@ export type AuditEvent =
   | { ts: string; type: 'outputs.snapshot'; pr: number | null; files: AuditOutputFile[] }
   // §26.10 — the per-iteration cost meter: the priced dollars + any unpriced model ids, tagged by iteration.
   | { ts: string; type: 'loop.cost'; iteration: number; usd: number; unpriced: string[] }
+  // §27.11 — the §27 whole-run cost meter: the run's priced dollars + any unpriced model ids. Carries no
+  // iteration, because the figure is the RUN's rather than any one round's — a fabricated round identity is
+  // exactly what §27.15 forbids a §27 action from writing into the §26 series.
+  | { ts: string; type: 'app.cost'; usd: number; unpriced: string[] }
   // §26.7 — the per-iteration CI snapshot (run-don't-block): the check counts read at review time, tagged
   // by iteration. Display-only — recorded best-effort, never gates the loop.
   | { ts: string; type: 'loop.ci'; iteration: number; total: number; passed: number; failed: number; pending: number }
@@ -190,11 +194,23 @@ export function loopEvents(before: LoopLike | null, after: LoopLike | null, ts: 
   return events;
 }
 
-/** The OS's rejection reason is an untrusted string from outside the process (§24.2.3 T4); bound and
- *  strip it exactly as `loopEvents` does the status, so the record cannot be forged (CWE-117). */
-const NOTIFY_REASON_MAX = 200;
+/** Bound and strip text that reaches the record from outside the process — the OS's notification-rejection
+ *  reason (§24.2.3 T4) and the model ids the §27 meter reads out of Claude Code's private log format
+ *  (§27.11) — so a record cannot be forged or made unbounded (CWE-117). ONE primitive: two copies of a
+ *  bound agree the day they are written and diverge at the first change to either. */
+const AUDIT_TEXT_MAX = 200;
+export function boundAuditText(text: string): string {
+  return stripStatusControlChars(text).slice(0, AUDIT_TEXT_MAX);
+}
+
 export function notifyFailedEvent(reason: string, ts: string): AuditEvent {
-  return { ts, type: 'notify.failed', reason: stripStatusControlChars(reason).slice(0, NOTIFY_REASON_MAX) };
+  return { ts, type: 'notify.failed', reason: boundAuditText(reason) };
+}
+
+/** The §27 run's cost, as the §25 record carries it (§27.11). Written on each sample that moves the figure
+ *  while the run is open, so the stream holds a series whose LAST entry is the run's figure. */
+export function appCostEvent(cost: { usd: number; unpricedModels: string[] }, ts: string): AuditEvent {
+  return { ts, type: 'app.cost', usd: cost.usd, unpriced: cost.unpricedModels.map(boundAuditText) };
 }
 
 /** A run replayed from its append-only stream (§25.6): the ordered events plus the folded final
@@ -212,6 +228,9 @@ export interface RunTimeline {
   snapshots: { pr: number | null; files: AuditOutputFile[] }[];
   /** The §26.10 per-iteration cost events, in order — priced dollars + any unpriced model ids per iteration. */
   costs: { iteration: number; usd: number; unpriced: string[] }[];
+  /** The §27.11 whole-run cost: the LAST `app.cost` entry, never a sum of the series — each entry restates
+   *  the run's total, so summing them reports several times what the run spent. Null when none was recorded. */
+  appCost: { usd: number; unpriced: string[] } | null;
   /** The §26.7 per-iteration CI snapshot events, in order — the check counts read at review time. */
   ci: { iteration: number; total: number; passed: number; failed: number; pending: number }[];
 }
@@ -232,6 +251,7 @@ export function reconstructTimeline(text: string): RunTimeline {
     commands: [],
     snapshots: [],
     costs: [],
+    appCost: null,
     ci: [],
   };
   const todoOf = (id: string): TodoLike | undefined => tl.todos.find((t) => t.id === id);
@@ -289,6 +309,9 @@ export function reconstructTimeline(text: string): RunTimeline {
         break;
       case 'loop.cost':
         tl.costs.push({ iteration: e.iteration, usd: e.usd, unpriced: e.unpriced });
+        break;
+      case 'app.cost':
+        tl.appCost = { usd: e.usd, unpriced: e.unpriced };
         break;
       case 'loop.ci':
         tl.ci.push({ iteration: e.iteration, total: e.total, passed: e.passed, failed: e.failed, pending: e.pending });

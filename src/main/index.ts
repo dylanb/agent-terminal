@@ -87,7 +87,7 @@ import { deriveLoopActivity, type LoopActivity } from '../shared/loopActivity';
 import { composeWorkPrompt, composeSpawnReviewersPrompt, composeConsolidatePrompt } from './loopRecipe';
 import { allReviewsPresent, anyReviewPresent, consolidatedVerdict, consolidatedFindings, personaVerdict, carryForwardReviews, planDigest } from './reviewArtifacts';
 import { findingSignature, nextImpasse } from './findingSignature';
-import { readSessionTokens, sessionLogDir } from './costMeter';
+import { readSessionTokens, sessionLogDir, streamSessionTurns } from './sessionLogSweep';
 import { createFlowStateStore } from './flowState';
 import { createRealCiChecks } from './ciChecks';
 import { priceTokens, formatCost, type CostResult } from '../shared/pricing';
@@ -123,6 +123,7 @@ import {
 } from './installExamples';
 import { provideAppLoopView } from './loopViewV2';
 import { createAppLoopEngine, type AppLoopEntry } from './appLoopEngine';
+import { createAppCostMeter } from './appCostMeter';
 import { appLoopEntryFor } from './appLoopEntry';
 import { armInterrupt, clearAppLoopBootstrap, clearPolish, consolidatorOutputFile, consolidatorOutputRel, enterPolish, isPolishActiveForStep, readAppLoopState, roundReportFile, roundReportRel, writeAppLoopBootstrap, writeAppLoopBootstrapIntent, writeAppLoopState, type AppLoopBootstrap } from './appLoopState';
 import { APP_LOOP_DIR_SEGMENTS } from './appLoopPaths';
@@ -1031,6 +1032,35 @@ async function createWindow(): Promise<void> {
       });
     },
   });
+  // §27.11 — the §27 whole-run cost meter. Fed the flow's window push, it prices off the turn's synchronous
+  // path (its own timer per repo) and holds the run's figure in memory, so neither the render path nor the
+  // flow's per-render hydrate ever sweeps. Every sink it drains to is best-effort: cost is display-only and
+  // can never gate, pause, delay or fail a turn, a round, a gate decision or a flow advance (AC7).
+  const costSampleTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  const appCostMeter = createAppCostMeter({
+    turns: (repoDir, since) =>
+      streamSessionTurns(sessionLogDir(repoDir, process.env, os.homedir()), {
+        ...(since === null ? {} : { since }),
+        chunkBytes: config.sessionLogChunkBytes,
+      }),
+    now: () => Date.now(),
+    armSample: (repoDir, run) => {
+      const armed = costSampleTimers.get(repoDir);
+      if (armed) clearTimeout(armed); // self-clearing: each arm replaces, never leaks
+      costSampleTimers.set(repoDir, setTimeout(() => void run(), config.costSampleMs));
+    },
+    cancelSample: (repoDir) => {
+      const armed = costSampleTimers.get(repoDir);
+      if (armed) clearTimeout(armed);
+      costSampleTimers.delete(repoDir);
+    },
+    onFigureChanged: () => pushFlowChanged(),
+    recordCost: (repoDir, cost) => audit.recordAppCost(repoDir, cost),
+  });
+  const appLoopCostReadout = (repoKey: string): string | null => {
+    const cost = appCostMeter.current(repoKey);
+    return cost === null ? null : formatCost(cost);
+  };
   const flow = createFlowManager({
     globalDir: flowGlobalDir,
     onEnterStep: (step, inputs) => flowEntryActions(step, inputs),
@@ -1047,10 +1077,16 @@ async function createWindow(): Promise<void> {
     // parsed namespace, never derived from repo content; the loop name is held to a safe segment inside
     // the resolver before any tier root is joined.
     readAppLoopView: (repoKey, name) =>
-      provideAppLoopView(appEngine, name, {
-        tiers: { operator: userConfigLoopsV2Dir(), appBundled: resolveExampleLoopsV2Dir(iconLoc) },
-        repoDir: repoKey,
-      }),
+      provideAppLoopView(
+        appEngine,
+        name,
+        {
+          tiers: { operator: userConfigLoopsV2Dir(), appBundled: resolveExampleLoopsV2Dir(iconLoc) },
+          repoDir: repoKey,
+        },
+        appLoopCostReadout(repoKey),
+      ),
+    pushCostWindow: (repoKey, loop, startedAt) => appCostMeter.pushWindow(repoKey, loop, startedAt),
   });
 
   // Flow audit record (§25): observe-only, best-effort — records each run's lifecycle to

@@ -7,6 +7,7 @@ import { appendFileSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmS
 import path from 'node:path';
 import yaml from 'js-yaml';
 import {
+  appCostEvent,
   auditTimestamp,
   inputEvents,
   lifecycleEvents,
@@ -74,6 +75,8 @@ export interface AuditRecorder {
   recordCommand(repoKey: string, source: string, cmd: string, exit: number | null): void;
   /** Record the §26.10 per-iteration cost (priced dollars + unpriced model ids), only while a run is open. */
   recordCost(repoKey: string, iteration: number, cost: CostResult): void;
+  /** Record the §27.11 whole-run cost (priced dollars + unpriced model ids), only while a run is open. */
+  recordAppCost(repoKey: string, cost: CostResult): void;
   /** Record the §26.7 per-iteration CI snapshot (run-don't-block), only while a run is open. Best-effort. */
   recordCi(repoKey: string, iteration: number, snapshot: CiSnapshot): void;
   /** Record the OS refusing to deliver a §24.2.3 T4 attention notification, only while a run is open.
@@ -207,6 +210,14 @@ export function createAuditRecorder(deps: AuditRecorderDeps): AuditRecorder {
         appendIfOpen(repoKey, [{ ts: auditTimestamp(now()), type: 'loop.cost', iteration, usd: cost.usd, unpriced: cost.unpricedModels }]);
       } catch (e) {
         log('audit recordCost failed', e);
+      }
+    },
+
+    recordAppCost(repoKey, cost) {
+      try {
+        appendIfOpen(repoKey, [appCostEvent(cost, auditTimestamp(now()))]);
+      } catch (e) {
+        log('audit recordAppCost failed', e);
       }
     },
 

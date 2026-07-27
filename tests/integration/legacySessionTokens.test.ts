@@ -2,13 +2,13 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { encodeProjectDir, sessionLogDir, readSessionTokens } from '../../src/main/costMeter';
+import { encodeProjectDir, sessionLogDir, readSessionTokens } from '../../src/main/sessionLogSweep';
 import { userConfigRoot } from '../../src/main/userConfig';
 
 it('the source file carries no raw control bytes, so git keeps it text (diffable/reviewable)', () => {
   // The per-message dedup key's separator must be spelled as an escape (\x00), not embedded as a raw NUL —
   // a single raw NUL makes git classify the .ts as binary and drop it from every diff (cf. findingSignature.ts).
-  const bytes = readFileSync(new URL('../../src/main/costMeter.ts', import.meta.url));
+  const bytes = readFileSync(new URL('../../src/main/sessionLogSweep.ts', import.meta.url));
   const control = [...bytes].filter((b) => b < 9 || (b > 13 && b < 32));
   expect(control).toEqual([]);
 });

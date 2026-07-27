@@ -1,4 +1,7 @@
 // Runtime configuration seam (§15.7): env-overridable thresholds, no magic numbers downstream.
+
+import { SESSION_LOG_CHUNK_BYTES } from './sessionLogSweep';
+
 // TODO(dylan): a per-agent profile table (D10) is the intended future seam to
 // replace these env lookups without touching call sites.
 
@@ -19,6 +22,9 @@ const DEFAULTS = {
   // §5: a shell that exits within this window of spawn is a startup failure — keep the window open
   // for the diagnostic rather than terminating the app.
   startupExitGraceMs: 1000,
+  // §27.11: how long the §27 cost meter waits before its next sample of the session logs. Off the turn's
+  // synchronous path by construction, so this is a freshness/cost trade, never a deadline on anything.
+  costSampleMs: 2000,
 } as const;
 
 export interface RuntimeConfig {
@@ -34,6 +40,8 @@ export interface RuntimeConfig {
   maxDoneTodos: number;
   stallTimeoutMs: number;
   startupExitGraceMs: number;
+  costSampleMs: number;
+  sessionLogChunkBytes: number;
 }
 
 /** Parse a positive integer env value; fall back on unset/garbage/non-positive (§15.7). */
@@ -57,5 +65,7 @@ export function resolveRuntimeConfig(env: NodeJS.ProcessEnv): RuntimeConfig {
     maxDoneTodos: posInt(env.APP_MAX_DONE_TODOS, DEFAULTS.maxDoneTodos),
     stallTimeoutMs: posInt(env.APP_TURN_TIMEOUT_MS, DEFAULTS.stallTimeoutMs),
     startupExitGraceMs: posInt(env.APP_STARTUP_EXIT_GRACE_MS, DEFAULTS.startupExitGraceMs),
+    costSampleMs: posInt(env.APP_COST_SAMPLE_MS, DEFAULTS.costSampleMs),
+    sessionLogChunkBytes: posInt(env.APP_SESSION_LOG_CHUNK_BYTES, SESSION_LOG_CHUNK_BYTES),
   };
 }
