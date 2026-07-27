@@ -13,6 +13,8 @@ import { parseAuditStream, type AuditEvent } from '../../src/shared/audit';
 import { TURN_DONE_FILENAME } from '../../src/shared/loopTurn';
 import { completionMarker } from '../../src/main/appWorkTurn';
 import { exampleRoundReport, REPORT_GRAMMAR } from '../../src/shared/roundReport';
+import { encodeProjectDir } from '../../src/main/sessionLogSweep';
+import { formatCost } from '../../src/shared/pricing';
 
 // §26 D42a — the retired printable done-signal sentinel. Kept here ONLY so a regression test can inject it
 // into the PTY output and prove it no longer completes a turn (completion is the turn-done FILE alone).
@@ -1826,6 +1828,17 @@ function fileOnlySignal(turnKey: string): string {
   return `printf '%s' '${turnKey}' > .agent-loop/${TURN_DONE_FILENAME}`;
 }
 
+// The session-JSONL token fixture format, spelled ONCE for both engines' fake-agent seeders (§26.10/§27.11).
+// Claude Code's private layout: `message.model` + `message.usage`, the `message.id`/`requestId` billing
+// identity, and a top-level `timestamp`. `NOW` in a timestamp and `RND` in an id expand to the emitting
+// shell's `$NOW` / `$r`, so a fixture can be stamped at the instant of the turn that writes it.
+const jsonlTurn = (ts: string, id: string, model: string, usage: string): string =>
+  `{"type":"assistant","timestamp":"${ts}","requestId":"req-${id}","message":{"id":"msg-${id}","model":"${model}","usage":{${usage}}}}`;
+const emitJsonl = (obj: string, file: string, redirect = '>'): string =>
+  `printf '%s\\n' '${obj.replace(/NOW/, "'\"$NOW\"'").replace(/RND/, "'\"$r\"'")}' ${redirect} "${file}"; `;
+/** The current second at .999 — at or after the instant the flow started, whatever the sub-second offset. */
+const FIXTURE_NOW = 'NOW=$(date -u +%Y-%m-%dT%H:%M:%S.999Z); ';
+
 function seedFakeAgent(
   binDir: string,
   opts: {
@@ -1883,21 +1896,17 @@ function seedFakeAgent(
   //   subagents/     a reviewer subagent nested under the session dir (sonnet-5, 100k output = $1.50)
   //   <synthetic>    Claude Code's zero-token API-error turn — bills nothing, so no `+unknown`
   // A correctly scoped, deduped, recursive, synthetic-skipping meter reads exactly $4.50.
-  const jsonl = (ts: string, id: string, model: string, usage: string): string =>
-    `{"type":"assistant","timestamp":"${ts}","requestId":"req-${id}","message":{"id":"msg-${id}","model":"${model}","usage":{${usage}}}}`;
-  const emit = (obj: string, file: string, redirect = '>'): string =>
-    `printf '%s\\n' '${obj.replace(/NOW/, "'\"$NOW\"'")}' ${redirect} "${file}"; `;
   const root = '$APP_SESSION_LOG_ROOT';
   const writeTokens = opts.costFixture
     ? `; if [ -n "$APP_SESSION_LOG_ROOT" ]; then mkdir -p "${root}/session-uuid/subagents"; ` +
       // The current second at .999 — always at or after the instant the flow started, which lies in this
       // second or an earlier one, whatever the sub-second offset.
-      `NOW=$(date -u +%Y-%m-%dT%H:%M:%S.999Z); ` +
-      emit(jsonl('2020-01-01T00:00:00.000Z', 'stale', 'claude-opus-4-8', '"input_tokens":1000000'), `${root}/stale.jsonl`) +
-      emit(jsonl('NOW', 'work', 'claude-sonnet-5', '"input_tokens":1000000,"output_tokens":0'), `${root}/session.jsonl`) +
-      emit(jsonl('NOW', 'work', 'claude-sonnet-5', '"input_tokens":1000000,"output_tokens":0'), `${root}/session.jsonl`, '>>') +
-      emit(jsonl('NOW', 'err', '<synthetic>', '"input_tokens":0,"output_tokens":0'), `${root}/session.jsonl`, '>>') +
-      emit(jsonl('NOW', 'rev', 'claude-sonnet-5', '"output_tokens":100000'), `${root}/session-uuid/subagents/agent-x.jsonl`) +
+      `${FIXTURE_NOW}` +
+      emitJsonl(jsonlTurn('2020-01-01T00:00:00.000Z', 'stale', 'claude-opus-4-8', '"input_tokens":1000000'), `${root}/stale.jsonl`) +
+      emitJsonl(jsonlTurn('NOW', 'work', 'claude-sonnet-5', '"input_tokens":1000000,"output_tokens":0'), `${root}/session.jsonl`) +
+      emitJsonl(jsonlTurn('NOW', 'work', 'claude-sonnet-5', '"input_tokens":1000000,"output_tokens":0'), `${root}/session.jsonl`, '>>') +
+      emitJsonl(jsonlTurn('NOW', 'err', '<synthetic>', '"input_tokens":0,"output_tokens":0'), `${root}/session.jsonl`, '>>') +
+      emitJsonl(jsonlTurn('NOW', 'rev', 'claude-sonnet-5', '"output_tokens":100000'), `${root}/session-uuid/subagents/agent-x.jsonl`) +
       `fi`
     : '';
   // §26.3 — a stream of changing lines that outlasts a short stall window; each line is a §8.3 edge that
@@ -3794,6 +3803,9 @@ function seedFakeAgentV2(
     // When true, append every non-empty injected line to .agent-terminal/injected-log, so an e2e can prove a
     // prompt carried a given payload (e.g. the §27.9 request-changes feedback reaching the next review round).
     logInjected?: boolean;
+    // §27.11 — the repo's Claude Code project dir. When set, each turn writes its own session-JSONL fixture
+    // there AT THAT TURN'S OWN INSTANT, so the run's window and the per-turn amounts are both drivable.
+    costLogDir?: string;
   },
 ): void {
   const turnKey = `work-${opts.stepId}`;
@@ -3808,14 +3820,40 @@ function seedFakeAgentV2(
       : `printf '%s\\n' '# plan' 'no marker here' > ${opts.artifactRel}`);
   const done = (key: string): string => `mkdir -p .agent-terminal/loop; printf '%s' '${key}' > ${doneRel}`;
   const bump = 'mkdir -p .agent-terminal; printf x >> .agent-terminal/work-runs';
+  // §27.11 — one fixture turn per §27 turn, at that turn's own instant, in the repo's project dir.
+  //   work:        $15 of an opus session predating this flow (excluded by the run's floor), $3.00 of work
+  //                tokens written TWICE under one billing identity (a resumed session replays them), and a
+  //                zero-token `<synthetic>` API-error turn (bills nothing, so never a pricing gap)
+  //   review:      a reviewer SUBAGENT log nested under the session dir, $1.50 per round
+  //   consolidate: $3.00 per round, plus an unpriced model on round 1 (zero dollars, `+unknown`)
+  const logDir = opts.costLogDir;
+  const costPrelude = logDir ? `mkdir -p "${logDir}/session-uuid/subagents"; ${FIXTURE_NOW}` : '';
+  const workCost = logDir
+    ? `${costPrelude}` +
+      emitJsonl(jsonlTurn('2020-01-01T00:00:00.000Z', 'stale', 'claude-opus-4-8', '"input_tokens":1000000'), `${logDir}/stale.jsonl`) +
+      emitJsonl(jsonlTurn('NOW', 'work', 'claude-sonnet-5', '"input_tokens":1000000'), `${logDir}/session.jsonl`) +
+      emitJsonl(jsonlTurn('NOW', 'work', 'claude-sonnet-5', '"input_tokens":1000000'), `${logDir}/session.jsonl`, '>>') +
+      emitJsonl(jsonlTurn('NOW', 'err', '<synthetic>', '"input_tokens":0,"output_tokens":0'), `${logDir}/session.jsonl`, '>>')
+    : '';
+  const reviewCost = logDir
+    ? `${costPrelude}` +
+      emitJsonl(jsonlTurn('NOW', 'revRND', 'claude-sonnet-5', '"output_tokens":100000'), `${logDir}/session-uuid/subagents/agent-$r.jsonl`)
+    : '';
+  const consolidateCost = logDir
+    ? `${costPrelude}` +
+      emitJsonl(jsonlTurn('NOW', 'conRND', 'claude-sonnet-5', '"output_tokens":200000'), `${logDir}/session.jsonl`, '>>') +
+      `case "$r" in 1) ` +
+      emitJsonl(jsonlTurn('NOW', 'gap', 'claude-made-up-9', '"input_tokens":1000000'), `${logDir}/session.jsonl`, '>>') +
+      `;; esac; `
+    : '';
   const workAct =
     opts.work === 'noop'
       ? ':'
       : opts.work === 'file-only'
-        ? `${bump}; ${writeArtifact(true)}`
+        ? `${bump}; ${workCost}${writeArtifact(true)}`
         : opts.work === 'no-marker'
-          ? `${bump}; ${writeArtifact(false)}; ${done(turnKey)}`
-          : `${bump}; ${writeArtifact(true)}; ${done(turnKey)}`;
+          ? `${bump}; ${workCost}${writeArtifact(false)}; ${done(turnKey)}`
+          : `${bump}; ${workCost}${writeArtifact(true)}; ${done(turnKey)}`;
   const reviewBump = 'mkdir -p .agent-terminal; printf x >> .agent-terminal/review-runs';
   const reviewKind = opts.review ?? 'full';
   const r1B64 = reviewKind === 'failed' ? FAILED_REPORT_B64 : reviewKind === 'omit-persona' ? OMIT_REPORT_B64 : FULL_REPORT_B64;
@@ -3827,7 +3865,9 @@ function seedFakeAgentV2(
     `RB='${r1B64}'; case "$r" in 2) RB='${r2B64}' ;; esac; ` +
     'printf %s "$RB" | base64 -d > .agent-terminal/loop/reports/$r.md';
   const reviewAct =
-    reviewKind === 'none' ? `${reviewBump}` : `${reviewBump}; ${writeReportRoundAware}; ${done(reviewKey)}`;
+    reviewKind === 'none'
+      ? `${reviewBump}`
+      : `${reviewBump}; ${writeReportRoundAware}; ${reviewCost}${done(reviewKey)}`;
   // The consolidator writes its verdict output (round-keyed) then signals; the round is read from run-state
   // so a multi-round run emits the scripted verdict for each round (§27.6).
   const verdicts = opts.verdicts ?? ['verdict: clean\n'];
@@ -3836,7 +3876,7 @@ function seedFakeAgentV2(
   const consolidateAct =
     `${consolidateBump}; r=$(rnd); OUTB='${b64('verdict: clean\n')}'; case "$r" in ${verdictCase} esac; ` +
     'mkdir -p .agent-terminal/loop/consolidate; printf %s "$OUTB" | base64 -d > .agent-terminal/loop/consolidate/$r.md; ' +
-    `${done(consolidateKey)}`;
+    `${consolidateCost}${done(consolidateKey)}`;
   const logInjected = opts.logInjected ? 'mkdir -p .agent-terminal; printf "%s\\n" "$line" >> .agent-terminal/injected-log;\n' : '';
   const script =
     '#!/usr/bin/env bash\n' +
@@ -5334,6 +5374,143 @@ test('a §27 `another round` verdict crosses the boundary back into a second rev
 
   await app.close();
   for (const d of [repo, home, binDir]) rmSync(d, { recursive: true, force: true });
+});
+
+// §27.11 tracer bullet — the whole-run cost meter. A multi-round `app`-bound run is driven on a real PTY
+// with the scriptable fake-agent writing session-JSONL token fixtures per turn, at that turn's own instant,
+// into the repo's own project dir under a test-controlled CLAUDE_CONFIG_DIR. The strip's loop readout
+// carries the run's running total and the run's §25 audit record carries the same figure.
+//
+// The fixture's arithmetic against the checked-in pricing table:
+//   work        1M sonnet-5 input, logged TWICE under one billing identity (a resumed session replays it)  $3.00
+//   review ×2   100k sonnet-5 output in a NESTED subagent log per round                                    $1.50 each
+//   consolidate ×2  200k sonnet-5 output per round                                                         $3.00 each
+//   stale       1M opus input timestamped in 2020 — before the run's floor                                 excluded
+//   <synthetic> Claude Code's zero-token API-error turn — bills nothing, so never a pricing gap            $0.00
+//   claude-made-up-9  1M input on a model absent from the table                                            unpriced
+// → $12.00 with the unknown marker.
+const V2_COST_TOTAL = '$12.00 +unknown';
+/** The same run after one further billed turn is logged while it awaits the human at its gate: +$3.00. */
+const V2_COST_AFTER_GATE = '$15.00 +unknown';
+
+test('a §27 run meters its WHOLE cost onto the strip and into the §25 audit, leaving §26 unpriced (§27.11 / AC1,2,3,4,5,7,8a,10)', { tag: '@ownapp' }, async () => {
+  const repo = seedPrebootstrappedAppLoopFlowRepo('agent-term-e2e-v2-cost-');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-v2-cost-home-'));
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-v2-cost-bin-');
+  // The log root is the per-repo project dir under the config root, not the exact-directory seam: this boot
+  // drives TWO repos in one instance, and the exact-directory seam is shared by every repo, so under it the
+  // second repo would read the first's logs.
+  const cfgDir = mkdtempSync(join(tmpdir(), 'agent-term-e2e-v2-cost-cfg-'));
+  cpSync(exampleConfigDir, cfgDir, { recursive: true });
+  const projectDir = (dir: string): string => join(cfgDir, 'projects', encodeProjectDir(dir));
+
+  seedFakeAgentV2(binDir, {
+    stepId: 'plan',
+    artifactRel: APP_ARTIFACT_REL,
+    work: 'complete',
+    verdicts: [`verdict: another round\nroster: ${PLAN_V2_ROSTER[0]}\n`, 'verdict: clean\n'],
+    costLogDir: projectDir(repo),
+  });
+
+  // AC10 — a prior §26 run sits on disk. The §27 meter must not touch it, and must record no §26 cost event.
+  const legacyState = join(repo, '.agent-loop', 'state.yaml');
+  const priorState = 'schema_version: 4\nstatus: planning\niteration: 3\npr: 42\nbranch: feat/prior\nbound_loop: plan-loop\nlinked_issues:\n  - 7\n';
+  mkdirSync(join(repo, '.agent-loop'), { recursive: true });
+  writeFileSync(legacyState, priorState);
+
+  app = await electron.launch({
+    args: ['out/main/index.js'],
+    env: {
+      ...process.env,
+      APP_SHELL: 'bash',
+      HOME: home,
+      APP_SUBMIT_DELAY_MS: '100',
+      CLAUDE_CONFIG_DIR: cfgDir,
+      APP_COST_SAMPLE_MS: '200',
+      PATH: `${binDir}:${process.env.PATH}`,
+      FAKE_GHGIT_LOG: logFile,
+    },
+  });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await typeCommand(`cd "${repo}"`);
+  await expect(flowControl()).toHaveText('Start', { timeout: 10_000 });
+  await typeCommand('fake-agent');
+  await flowControl().click(); // work → review round 1 → `another round` → review round 2 → clean → the gate
+
+  // The run reaches its gate: an unpriced model never blocks (AC4/AC7).
+  await expect.poll(() => readIf(appRunState(repo)), { timeout: 60_000 }).toContain('verdict: clean');
+
+  // (a)/(b)/(c)/(d) — the strip total covers the work turn, the NESTED reviewer-subagent logs and the
+  // consolidator; the pre-floor opus session is excluded; the replayed billing identity does not raise it;
+  // the unpriced model reads the marker and never `$NaN`.
+  const cost = loopReadout().locator('.loop-cost');
+  await expect(cost).toHaveText(V2_COST_TOTAL, { timeout: 30_000 });
+  expect(await cost.getAttribute('aria-label')).toBe(`cost ${V2_COST_TOTAL}`);
+
+  // AC7 — the gate is reached with its full declared option set even though a model priced to nothing.
+  await loopReadout().click();
+  await expect(loopPanel().locator('[data-gate-option="approve"]')).toBeVisible({ timeout: 15_000 });
+
+  // AC1 — every token the run spends is the run's, including spend while it awaits the human at the gate
+  // (the operator's polish conversation, an inspection, a retry). Adding a turn raises the displayed total.
+  appendFileSync(
+    join(projectDir(repo), 'session.jsonl'),
+    `${JSON.stringify({
+      type: 'assistant',
+      timestamp: new Date().toISOString(),
+      requestId: 'req-polish',
+      message: { id: 'msg-polish', model: 'claude-sonnet-5', usage: { output_tokens: 200000 } },
+    })}\n`,
+  );
+  await expect(cost).toHaveText(V2_COST_AFTER_GATE, { timeout: 30_000 });
+
+  // (f) — the run's §25 audit carries the §27 cost record, asserted BY VALUE. The two sides are different
+  // types and one is composite (the strip shows `$X.XX +unknown`), so the comparison runs the record's
+  // dollars and unpriced ids through the same shared formatter the strip uses.
+  const events = readAuditRun(home, repo, auditRunFiles(home, repo)[0]).events;
+  const appCosts = events.filter((e): e is Extract<AuditEvent, { type: 'app.cost' }> => e.type === 'app.cost');
+  expect(appCosts.length).toBeGreaterThan(0);
+  const last = appCosts[appCosts.length - 1];
+  expect(formatCost({ usd: last.usd, unpricedModels: last.unpriced })).toBe(await cost.textContent());
+  // The formatter reads the unpriced list only through whether it is empty, so WHICH ids were unpriced gets
+  // its own assertion — which is also where the record's use of the shared strip-and-bound becomes visible.
+  expect(last.unpriced).toEqual(['claude-made-up-9']);
+
+  // AC10 — the §26 engine is untouched: its state.yaml is byte-for-byte unchanged and no §26 per-iteration
+  // cost event was recorded for this §27 action.
+  expect(readFileSync(legacyState, 'utf8')).toBe(priorState);
+  expect(events.filter((e) => e.type === 'loop.cost')).toEqual([]);
+
+  // (b), second half — AC2's no-recorded-start branch, taken from a SECOND repo in the same instance after
+  // the assertions above. A run driven from Start has a recorded start by construction, and every in-app
+  // route to no-recorded-start clears the window and retires the very figure this boot asserts against.
+  const bare = mkdtempSync(join(tmpdir(), 'agent-term-e2e-v2-cost-bare-'));
+  mkdirSync(join(bare, '.git'), { recursive: true });
+  mkdirSync(join(bare, '.agent-terminal'), { recursive: true });
+  writeFileSync(
+    join(bare, '.agent-terminal', 'flow.yaml'),
+    'name: v2-work\nsteps:\n  - id: plan\n    kind: loop\n    loop: plan-loop\n    loop_namespace: app\n',
+  );
+  // `done` with NO started_at: the step is entered so the loop view is built, and the document stays valid.
+  writeFileSync(join(bare, '.agent-terminal', 'flow-state.yaml'), 'step: plan\nstatus: done\n');
+  mkdirSync(projectDir(bare), { recursive: true });
+  writeFileSync(
+    join(projectDir(bare), 'ancient.jsonl'),
+    `${JSON.stringify({
+      type: 'assistant',
+      timestamp: '2020-01-01T00:00:00.000Z',
+      requestId: 'req-old',
+      message: { id: 'msg-old', model: 'claude-sonnet-5', usage: { input_tokens: 1000000 } },
+    })}\n`,
+  );
+  await typeCommand(`cd "${bare}"`);
+  // Never `$0.00`: with no recorded start the sweep is unbounded, so the repo's whole history prices.
+  await expect(loopReadout().locator('.loop-cost')).toHaveText('$3.00', { timeout: 30_000 });
+
+  await app.close();
+  for (const d of [repo, home, binDir, cfgDir, bare]) rmSync(d, { recursive: true, force: true });
 });
 
 // §27.6 tracer bullet (c) — a report recording a persona that failed to run is never presented clean: a

@@ -613,6 +613,37 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     expect(host.querySelector('.loop-cost')).toBeNull();
   });
 
+  // §27.11 — a §27 run's whole-run total rides the SAME engine-neutral readout: no round has run, so the
+  // view carries no iteration, and an all-unpriced run reads the unknown marker rather than `$NaN`.
+  it('renders a §27 whole-run total with its accessible name and never NaN, with no round on the view', async () => {
+    const appView: FlowStateView = {
+      stepName: 'plan',
+      steps: ['plan'],
+      position: 1,
+      total: 1,
+      status: 'in_progress',
+      loop: { status: 'working', pr: null, branch: null, ready: false, humanNeeded: false, cost: '$4.50 +unknown' },
+    };
+    const deps = {
+      state: vi.fn(async (): Promise<FlowStateView> => appView),
+      start: vi.fn(),
+      advance: vi.fn(),
+      restart: vi.fn(),
+      undo: vi.fn(),
+      terminate: vi.fn(),
+      provideInput: vi.fn(),
+      onStatusBar: vi.fn(),
+      onStateChanged: noopSub,
+    };
+    createFlowStrip(host, deps).onRepoChanged('/repo-v2');
+    await vi.waitFor(() => expect(host.querySelector('.loop-cost')).not.toBeNull());
+    const cost = host.querySelector<HTMLElement>('.loop-cost')!;
+    expect(cost.textContent).toBe('$4.50 +unknown');
+    expect(cost.textContent).not.toContain('NaN');
+    expect(cost.getAttribute('aria-label')).toBe('cost $4.50 +unknown');
+    expect(host.querySelector('.loop-iter')).toBeNull();
+  });
+
   it('patches the §26.10 cost readout in place on a same-signature background push', async () => {
     let view: FlowStateView = {
       stepName: 'build',
