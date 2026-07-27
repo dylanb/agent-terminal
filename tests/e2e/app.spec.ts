@@ -5412,6 +5412,29 @@ test('a §27 run meters its WHOLE cost onto the strip and into the §25 audit, l
     costLogDir: projectDir(repo),
   });
 
+  // (b), second half — AC2's no-recorded-start branch needs a SECOND repo: a run driven from Start has a
+  // recorded start by construction, and every in-app route to no-recorded-start clears the window and
+  // retires the very figure this boot asserts against. `done` with NO started_at is the observable shape —
+  // the step is entered so the loop view is built, and the document stays valid.
+  const bare = mkdtempSync(join(tmpdir(), 'agent-term-e2e-v2-cost-bare-'));
+  mkdirSync(join(bare, '.git'), { recursive: true });
+  mkdirSync(join(bare, '.agent-terminal'), { recursive: true });
+  writeFileSync(
+    join(bare, '.agent-terminal', 'flow.yaml'),
+    'name: v2-work\nsteps:\n  - id: plan\n    kind: loop\n    loop: plan-loop\n    loop_namespace: app\n',
+  );
+  writeFileSync(join(bare, '.agent-terminal', 'flow-state.yaml'), 'step: plan\nstatus: done\n');
+  mkdirSync(projectDir(bare), { recursive: true });
+  writeFileSync(
+    join(projectDir(bare), 'ancient.jsonl'),
+    `${JSON.stringify({
+      type: 'assistant',
+      timestamp: '2020-01-01T00:00:00.000Z',
+      requestId: 'req-old',
+      message: { id: 'msg-old', model: 'claude-sonnet-5', usage: { input_tokens: 1000000 } },
+    })}\n`,
+  );
+
   // AC10 — a prior §26 run sits on disk. The §27 meter must not touch it, and must record no §26 cost event.
   const legacyState = join(repo, '.agent-loop', 'state.yaml');
   const priorState = 'schema_version: 4\nstatus: planning\niteration: 3\npr: 42\nbranch: feat/prior\nbound_loop: plan-loop\nlinked_issues:\n  - 7\n';
@@ -5433,6 +5456,12 @@ test('a §27 run meters its WHOLE cost onto the strip and into the §25 audit, l
   });
   page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  // Take the second repo's leg FIRST: the fake-agent below owns the shell's stdin for the rest of the boot,
+  // so a later `cd` would be typed into the agent rather than into bash. Never `$0.00` — with no recorded
+  // start the sweep is unbounded, so that repo's whole history prices.
+  await typeCommand(`cd "${bare}"`);
+  await expect(loopReadout().locator('.loop-cost')).toHaveText('$3.00', { timeout: 30_000 });
 
   await typeCommand(`cd "${repo}"`);
   await expect(flowControl()).toHaveText('Start', { timeout: 10_000 });
@@ -5482,32 +5511,6 @@ test('a §27 run meters its WHOLE cost onto the strip and into the §25 audit, l
   // cost event was recorded for this §27 action.
   expect(readFileSync(legacyState, 'utf8')).toBe(priorState);
   expect(events.filter((e) => e.type === 'loop.cost')).toEqual([]);
-
-  // (b), second half — AC2's no-recorded-start branch, taken from a SECOND repo in the same instance after
-  // the assertions above. A run driven from Start has a recorded start by construction, and every in-app
-  // route to no-recorded-start clears the window and retires the very figure this boot asserts against.
-  const bare = mkdtempSync(join(tmpdir(), 'agent-term-e2e-v2-cost-bare-'));
-  mkdirSync(join(bare, '.git'), { recursive: true });
-  mkdirSync(join(bare, '.agent-terminal'), { recursive: true });
-  writeFileSync(
-    join(bare, '.agent-terminal', 'flow.yaml'),
-    'name: v2-work\nsteps:\n  - id: plan\n    kind: loop\n    loop: plan-loop\n    loop_namespace: app\n',
-  );
-  // `done` with NO started_at: the step is entered so the loop view is built, and the document stays valid.
-  writeFileSync(join(bare, '.agent-terminal', 'flow-state.yaml'), 'step: plan\nstatus: done\n');
-  mkdirSync(projectDir(bare), { recursive: true });
-  writeFileSync(
-    join(projectDir(bare), 'ancient.jsonl'),
-    `${JSON.stringify({
-      type: 'assistant',
-      timestamp: '2020-01-01T00:00:00.000Z',
-      requestId: 'req-old',
-      message: { id: 'msg-old', model: 'claude-sonnet-5', usage: { input_tokens: 1000000 } },
-    })}\n`,
-  );
-  await typeCommand(`cd "${bare}"`);
-  // Never `$0.00`: with no recorded start the sweep is unbounded, so the repo's whole history prices.
-  await expect(loopReadout().locator('.loop-cost')).toHaveText('$3.00', { timeout: 30_000 });
 
   await app.close();
   for (const d of [repo, home, binDir, cfgDir, bare]) rmSync(d, { recursive: true, force: true });

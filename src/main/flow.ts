@@ -609,7 +609,7 @@ export function createFlowManager(deps: FlowManagerDeps): FlowManager {
   // and a per-machine memory would re-push an unchanged value on the next render.
   const lastPushed = new Map<string, string>();
   const pushWindowOnce = (repoKey: string, loop: string | null, startedAt: number | null): void => {
-    const key = `${loop ?? ''} ${startedAt ?? ''}`;
+    const key = JSON.stringify([loop, startedAt]);
     if (lastPushed.get(repoKey) === key) return;
     lastPushed.set(repoKey, key);
     deps.pushCostWindow?.(repoKey, loop, startedAt);
