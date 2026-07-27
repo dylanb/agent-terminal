@@ -15,6 +15,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createLogStream, type LogStream } from '../../src/main/sessionLogStream';
 import type { LogFile } from '../../src/main/sessionLogFiles';
+import { ticksDuring } from '../helpers/eventLoop';
 
 const CHUNK = 64 * 1024;
 
@@ -26,20 +27,6 @@ async function read(stream: LogStream, file: LogFile): Promise<string[]> {
   const out: string[] = [];
   for await (const line of stream.lines(file)) out.push(line);
   return out;
-}
-
-/** Event-loop iterations elapsed, counted by a self-rescheduling check-phase callback — ordering only,
- *  with no wall clock. */
-function eventLoopTicker(): { ticks: () => number; stop: () => void } {
-  let ticks = 0;
-  let running = true;
-  const pump = (): void => {
-    if (!running) return;
-    ticks += 1;
-    setImmediate(pump);
-  };
-  setImmediate(pump);
-  return { ticks: () => ticks, stop: () => void (running = false) };
 }
 
 describe('reading only what a session log gained', () => {
@@ -177,14 +164,7 @@ describe('reading only what a session log gained', () => {
   // between logs but still reads each one whole freezes the counter across a single log's turns.
   it('relinquishes the event loop WITHIN one log, more the smaller the chunk', async () => {
     writeFileSync(log, `${Array.from({ length: 400 }, (_, i) => `line-${i}`).join('\n')}\n`);
-    const ticksFor = async (chunkBytes: number): Promise<number> => {
-      const ticker = eventLoopTicker();
-      const baseline = ticker.ticks();
-      await read(createLogStream(chunkBytes), seen(log));
-      const elapsed = ticker.ticks() - baseline;
-      ticker.stop();
-      return elapsed;
-    };
+    const ticksFor = (chunkBytes: number): Promise<number> => ticksDuring(() => read(createLogStream(chunkBytes), seen(log)));
     const chunked = await ticksFor(64);
     const whole = await ticksFor(4_000_000);
     expect(chunked).toBeGreaterThan(whole);

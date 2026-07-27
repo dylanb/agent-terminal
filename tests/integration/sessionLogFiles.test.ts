@@ -3,6 +3,7 @@ import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, utimesSync, wri
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { logFilesInWindow, type LogFile } from '../../src/main/sessionLogFiles';
+import { ticksDuring } from '../helpers/eventLoop';
 
 const FLOOR = Date.parse('2026-07-09T12:00:00.000Z');
 
@@ -18,20 +19,6 @@ async function names(dir: string, since?: number): Promise<string[]> {
 
 function stampedAt(file: string, ms: number): void {
   utimesSync(file, ms / 1000, ms / 1000);
-}
-
-/** Event-loop iterations elapsed, counted by a self-rescheduling check-phase callback — ordering only,
- *  with no wall clock. */
-function eventLoopTicker(): { ticks: () => number; stop: () => void } {
-  let ticks = 0;
-  let running = true;
-  const pump = (): void => {
-    if (!running) return;
-    ticks += 1;
-    setImmediate(pump);
-  };
-  setImmediate(pump);
-  return { ticks: () => ticks, stop: () => void (running = false) };
 }
 
 describe('which session logs are in a run`s window', () => {
@@ -120,11 +107,6 @@ describe('which session logs are in a run`s window', () => {
   // settles, so a synchronous enumeration of a project dir holding hundreds of logs cannot pass.
   it('relinquishes the event loop while enumerating', async () => {
     for (let i = 0; i < 12; i += 1) writeFileSync(join(dir, `s${i}.jsonl`), 'x\n');
-    const ticker = eventLoopTicker();
-    const baseline = ticker.ticks();
-    await walk(dir);
-    const elapsed = ticker.ticks() - baseline;
-    ticker.stop();
-    expect(elapsed).toBeGreaterThan(1);
+    expect(await ticksDuring(() => walk(dir))).toBeGreaterThan(1);
   });
 });

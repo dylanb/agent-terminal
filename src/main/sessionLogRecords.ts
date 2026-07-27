@@ -9,8 +9,9 @@ import { boundExternalText } from '../shared/audit';
  *  largest per-token price could leave the finite range `CostResult.usd` promises. */
 const MAX_TURN_TOKENS = 1e12;
 
-/** Longest composite `[message.id, requestId]` a run retains whole; past it the digest of that composite
- *  is the key instead (CWE-770). */
+/** Longest composite `[message.id, requestId]` a run retains whole. Bounding it by digest rather than by
+ *  rejection keeps both properties the key needs: a replayed turn still collapses, and two turns the log
+ *  identified differently stay apart however long those identities were (CWE-770). */
 export const MAX_IDENTITY_CHARS = 200;
 
 /** How many distinct models one run accumulates. The key space is Claude Code's private log content

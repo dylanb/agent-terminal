@@ -12,6 +12,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { encodeProjectDir, sessionLogDir, readSessionTokens, openSessionSweep, type SessionSweep } from '../../src/main/sessionLogSweep';
 import { priceTokens, type ModelTokens } from '../../src/shared/pricing';
+import { ticksDuring } from '../helpers/eventLoop';
 
 const FLOOR = Date.parse('2026-07-09T12:00:00.000Z');
 const CHUNK = 64 * 1024;
@@ -51,21 +52,6 @@ function sweepOf(dir: string | null, opts?: { since?: number; chunkBytes?: numbe
 }
 
 const inputOf = (totals: ModelTokens[]): number => totals.reduce((n, t) => n + t.input, 0);
-
-/** Event-loop iterations elapsed, counted by a self-rescheduling check-phase callback — ordering only, with
- *  no wall clock: `setImmediate` fires once per iteration, where a zero timer is clamped to a millisecond and
- *  would report nothing for a sweep that yields many times inside one. */
-function eventLoopTicker(): { ticks: () => number; stop: () => void } {
-  let ticks = 0;
-  let running = true;
-  const pump = (): void => {
-    if (!running) return;
-    ticks += 1;
-    setImmediate(pump);
-  };
-  setImmediate(pump);
-  return { ticks: () => ticks, stop: () => { running = false; } };
-}
 
 describe('the §27 session-log sweep', () => {
   let dir: string;
@@ -178,14 +164,7 @@ describe('the §27 session-log sweep', () => {
       join(dir, 'single.jsonl'),
       logBytes(...Array.from({ length: 200 }, (_, i) => turnLine({ ts: '2026-07-09T12:00:01.000Z', id: `t${i}`, input: 1 }))),
     );
-    const ticksFor = async (chunkBytes: number): Promise<number> => {
-      const ticker = eventLoopTicker();
-      const baseline = ticker.ticks();
-      await sweepOf(dir, { chunkBytes }).drain();
-      const elapsed = ticker.ticks() - baseline;
-      ticker.stop();
-      return elapsed;
-    };
+    const ticksFor = (chunkBytes: number): Promise<number> => ticksDuring(() => sweepOf(dir, { chunkBytes }).drain());
     const chunked = await ticksFor(256);
     const whole = await ticksFor(4_000_000);
     expect(chunked).toBeGreaterThan(whole);
