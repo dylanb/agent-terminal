@@ -1,5 +1,6 @@
 // The closed set of def namespaces a flow step's loop binding may name that select a SURVIVING engine
-// (§27.15). The N8 sweep narrowed it to one member: the §26 engine and its `legacy` namespace are gone. The
+// (§27.15). The N8 sweep narrowed it to one member: the retired in-terminal loop engine and its `legacy`
+// namespace are gone. The
 // namespace is REPO CONTENT, so it is validated at flow-load — an unrecognized value is a surfaced failure,
 // never a silent default — and it is NEVER joined into a path (tier roots are chosen by the parsed enum,
 // not derived from the string). Absence selects the surviving engine, so a namespace-unaware flow file
@@ -19,7 +20,7 @@ export const APP_LOOP_NAMESPACE: LoopNamespace = 'app';
  *  flow shipped before this release, so a namespace-unaware flow file binds the engine that ships. */
 export const DEFAULT_LOOP_NAMESPACE: LoopNamespace = APP_LOOP_NAMESPACE;
 
-/** The retired §26 engine's namespace literal. It is no longer a legal MEMBER of the closed set, but the
+/** The retired in-terminal loop engine's namespace literal. It is no longer a legal MEMBER of the closed set, but the
  *  loader still RECOGNIZES it (§H.5) so a flow file that names it LOADS and fails per-step (AC 4) rather
  *  than being rejected whole — tolerance for flow files that were valid until this release. It selects NO
  *  surviving engine. */
