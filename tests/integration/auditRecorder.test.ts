@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, 
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { createAuditRecorder } from '../../src/main/auditRecorder';
-import { parseAuditStream, reconstructTimeline, type AuditEvent } from '../../src/shared/audit';
+import { boundExternalText, parseAuditStream, reconstructTimeline, type AuditEvent } from '../../src/shared/audit';
 import { auditFilePath, auditRepoDir } from '../../src/main/auditPaths';
 
 const D = new Date('2026-06-23T10:00:01.000Z');
@@ -178,6 +178,67 @@ describe('audit recorder — run file lifecycle (§25.4)', () => {
   it('records nothing for a cost event when no run is open', () => {
     recorder().recordCost(repo, 1, { usd: 1, unpricedModels: [] });
     expect(existsSync(auditRepoDir(root, repo))).toBe(false);
+  });
+
+  // The model ids in BOTH cost events come from the same decoder over Claude Code's private log format, so
+  // the §26 event bounds them exactly as the §27 one does rather than writing the class raw into the same
+  // append-only file (CWE-117 / CWE-770). Authorized against AC 10 by the operator at the iter-10 gate:
+  // what the RECORD carries moves, §26's numbers and rendering do not.
+  it('bounds the model ids a per-iteration cost event writes into the append-only record', () => {
+    const hostile = `claude\u200e${'x'.repeat(500)}`;
+    const rec = recorder();
+    rec.recordTransition(repo, 'start', NOT_STARTED, IN_PROGRESS);
+    rec.recordCost(repo, 3, { usd: 1, unpricedModels: [hostile, ...Array.from({ length: 60 }, (_, i) => `m-${i}`)] });
+    const events = parseAuditStream(readFileSync(join(auditRepoDir(root, repo), runFiles()[0]), 'utf8')).events;
+    const carried = (events[1] as Extract<AuditEvent, { type: 'loop.cost' }>).unpriced;
+
+    expect(carried[0]).toBe(boundExternalText(hostile));
+    expect(carried.length).toBeLessThan(61);
+    expect(carried.every((m) => m.length <= 200 && !m.includes('\u200e'))).toBe(true);
+  });
+
+  // §27.11 — the §27 whole-run figure, recorded additively while the run is open. It carries no iteration:
+  // a whole-run total that fabricated one would be indistinguishable from §26's per-iteration series.
+  it('records the §27 whole-run cost event to the open run file', () => {
+    const rec = recorder();
+    rec.recordTransition(repo, 'start', NOT_STARTED, IN_PROGRESS);
+    rec.recordAppCost(repo, { usd: 4.5, unpricedModels: ['claude-made-up-9'] });
+    const events = parseAuditStream(readFileSync(join(auditRepoDir(root, repo), runFiles()[0]), 'utf8')).events;
+    expect(events.map((e) => e.type)).toEqual(['flow.started', 'app.cost']);
+    expect(events[1]).toMatchObject({ type: 'app.cost', usd: 4.5, unpriced: ['claude-made-up-9'] });
+  });
+
+  it('records nothing for a §27 cost event when no run is open', () => {
+    recorder().recordAppCost(repo, { usd: 1, unpricedModels: [] });
+    expect(existsSync(auditRepoDir(root, repo))).toBe(false);
+  });
+
+  // The meter re-attempts a record the audit refused, and it can only do that if the refusal reaches it —
+  // but this recorder's blanket policy is that no member throws into the flow path, so the refusal is the
+  // return value rather than an exception. Nothing in the type distinguishes a throwing member from the
+  // nine swallowing ones, so a member that answered by throwing would hand the next caller a surprise.
+  it('reports an append failure to its caller as false, without throwing into the flow path', () => {
+    const rec = recorder();
+    rec.recordTransition(repo, 'start', NOT_STARTED, IN_PROGRESS);
+    rmSync(auditRepoDir(root, repo), { recursive: true, force: true });
+    writeFileSync(auditRepoDir(root, repo), 'not a directory');
+    let landed: boolean | undefined;
+    expect(() => {
+      landed = rec.recordAppCost(repo, { usd: 1, unpricedModels: [] });
+    }).not.toThrow();
+    expect(landed).toBe(false);
+  });
+
+  it('reports an append that landed as true', () => {
+    const rec = recorder();
+    rec.recordTransition(repo, 'start', NOT_STARTED, IN_PROGRESS);
+    expect(rec.recordAppCost(repo, { usd: 1, unpricedModels: [] })).toBe(true);
+  });
+
+  // No run file is open, so there is nothing to append to and nothing failed: the caller must not be told
+  // to re-attempt a record that has no destination.
+  it('reports true when there is no open run to record into', () => {
+    expect(recorder().recordAppCost(repo, { usd: 1, unpricedModels: [] })).toBe(true);
   });
 
   // §26.7 — the per-iteration CI snapshot: display-only, recorded best-effort at the iteration boundary.

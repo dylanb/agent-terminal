@@ -285,6 +285,13 @@ export type FlowReadLoopCost = () => string | null;
  *  loop view rather than falling back to the §26 engine. It reads no §26 loop state. */
 export type FlowReadAppLoopView = (name: string) => FlowLoopView;
 
+/** Hand the §27 cost meter the run window and the engine binding (§27.11): the selected `app` loop's name,
+ *  or null when §27 is not the engine for the most-recent entered loop step, plus the run's recorded start.
+ *  One nullable name answers both questions the meter has — IS this §27, and WHICH loop is it — so the
+ *  meter never re-derives either from flow state. Called on every view computation; the meter is what
+ *  ignores an unchanged triple. */
+export type FlowPushCostWindow = (loop: string | null, startedAt: number | null) => void;
+
 // Optional `store` (§19.1) persists every transition and restores on construction so a relaunch
 // resumes; without it the machine is in-memory only. Optional `onEnter` (§18.6) runs entry actions.
 export function createFlowMachine(
@@ -296,6 +303,7 @@ export function createFlowMachine(
   readLoopCost?: FlowReadLoopCost,
   now: () => number = Date.now,
   readAppLoopView?: FlowReadAppLoopView,
+  pushCostWindow?: FlowPushCostWindow,
 ): FlowMachine {
   if (!load.ok) {
     const view = (): FlowStateView => {
@@ -420,6 +428,12 @@ export function createFlowMachine(
     // §26 loop state; a `legacy` (or namespace-absent) step feeds the §26 provider unchanged.
     const mostRecentLoopStep = entered.reduce<FlowStepDef | undefined>((last, s) => (s.kind === 'loop' ? s : last), undefined);
     const appLoopName = mostRecentLoopStep?.loopNamespace === APP_LOOP_NAMESPACE ? mostRecentLoopStep.loop : undefined;
+    // §27.11 / AC7
+    try {
+      pushCostWindow?.(appLoopName ?? null, startedAt);
+    } catch (e) {
+      console.error('flow cost window push failed', errMsg(e));
+    }
     // §27.15 — the flow module holds no independent reader of §26 loop state on the app path: an app step's
     // refs never source from a stray §26 state.yaml, so a §27 step surfaces none of that engine's ticket/PR.
     const liveLoop = appLoopName !== undefined ? null : (readLoop?.() ?? null);
@@ -579,6 +593,9 @@ export interface FlowManagerDeps {
   /** Resolve a repo's `app`-namespace loop step's §27 def and produce its whole loop view (§27.15);
    *  omitted → an app step renders no loop view rather than falling back to §26. Reads no §26 state. */
   readAppLoopView?: (repoKey: string, name: string) => FlowLoopView;
+  /** Hand a repo's §27 cost meter the run window and the engine binding (§27.11). Every render forwards
+   *  the triple unchanged; narrowing it is the meter's job. Omitted → nothing is metered. */
+  pushCostWindow?: (repoKey: string, loop: string | null, startedAt: number | null) => void;
   /** The current instant, stamped onto a run when it starts (§26.10); omitted → the wall clock. */
   now?: () => number;
 }
@@ -607,6 +624,7 @@ export function createFlowManager(deps: FlowManagerDeps): FlowManager {
       deps.readLoopCost ? () => deps.readLoopCost!(repoKey) : undefined,
       deps.now,
       deps.readAppLoopView ? (name) => deps.readAppLoopView!(repoKey, name) : undefined,
+      deps.pushCostWindow ? (loop, startedAt) => deps.pushCostWindow!(repoKey, loop, startedAt) : undefined,
     );
     cache.set(repoKey, { sig, machine });
     return machine;

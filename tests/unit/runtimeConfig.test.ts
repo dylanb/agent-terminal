@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { constants } from 'node:buffer';
 import { resolveRuntimeConfig } from '../../src/main/runtimeConfig';
 
 describe('resolveRuntimeConfig (§15.7 — env-overridable per-agent profile seam, no magic numbers)', () => {
@@ -49,6 +50,8 @@ describe('resolveRuntimeConfig (§15.7 — env-overridable per-agent profile sea
     expect(def.reportMinChars).toBeGreaterThan(0);
     expect(def.selfInjectWindowMs).toBeGreaterThan(0);
     expect(def.maxDoneTodos).toBeGreaterThan(0);
+    expect(def.costSampleMs).toBeGreaterThan(0);
+    expect(def.sessionLogChunkBytes).toBeGreaterThan(0);
 
     const over = resolveRuntimeConfig({
       APP_DEDUP_RETENTION: '7',
@@ -58,6 +61,8 @@ describe('resolveRuntimeConfig (§15.7 — env-overridable per-agent profile sea
       APP_REPORT_MIN_CHARS: '42',
       APP_SELF_INJECT_WINDOW_MS: '5000',
       APP_MAX_DONE_TODOS: '8',
+      APP_COST_SAMPLE_MS: '250',
+      APP_SESSION_LOG_CHUNK_BYTES: '4096',
     });
     expect(over.dedupRetention).toBe(7);
     expect(over.maxCommandSummaries).toBe(11);
@@ -66,6 +71,8 @@ describe('resolveRuntimeConfig (§15.7 — env-overridable per-agent profile sea
     expect(over.reportMinChars).toBe(42);
     expect(over.selfInjectWindowMs).toBe(5000);
     expect(over.maxDoneTodos).toBe(8);
+    expect(over.costSampleMs).toBe(250);
+    expect(over.sessionLogChunkBytes).toBe(4096);
 
     const garbage = resolveRuntimeConfig({
       APP_DEDUP_RETENTION: 'x',
@@ -75,6 +82,8 @@ describe('resolveRuntimeConfig (§15.7 — env-overridable per-agent profile sea
       APP_REPORT_MIN_CHARS: 'nope',
       APP_SELF_INJECT_WINDOW_MS: 'bad',
       APP_MAX_DONE_TODOS: 'x',
+      APP_COST_SAMPLE_MS: '-5',
+      APP_SESSION_LOG_CHUNK_BYTES: '0',
     });
     expect(garbage.dedupRetention).toBe(def.dedupRetention);
     expect(garbage.maxCommandSummaries).toBe(def.maxCommandSummaries);
@@ -83,5 +92,43 @@ describe('resolveRuntimeConfig (§15.7 — env-overridable per-agent profile sea
     expect(garbage.reportMinChars).toBe(def.reportMinChars);
     expect(garbage.selfInjectWindowMs).toBe(def.selfInjectWindowMs);
     expect(garbage.maxDoneTodos).toBe(def.maxDoneTodos);
+    expect(garbage.costSampleMs).toBe(def.costSampleMs);
+    // A chunk size of 0 makes every read return zero bytes, so every log reads as empty and the strip
+    // shows a confident $0.00 for a run that spent money — the silent zero §27.11 rejects.
+    expect(garbage.sessionLogChunkBytes).toBe(def.sessionLogChunkBytes);
+  });
+
+  // The chunk size is the only key that reaches a Buffer allocation. `1e15` is a positive integer, so every
+  // field-local check passes it through to a RangeError the sweep's per-file degradation cannot be told
+  // apart from an unreadable log — every log then yields nothing and the run prices at a confident $0.00.
+  // Out of range clamps to the ceiling rather than to the default: the sweep keeps working either way, and
+  // an operator who asked for more gets as much as the process can actually allocate.
+  it('caps the session-log chunk size at a size the process can allocate', () => {
+    for (const raw of ['1e15', String(Number.MAX_SAFE_INTEGER), String(constants.MAX_LENGTH + 1)]) {
+      const capped = resolveRuntimeConfig({ APP_SESSION_LOG_CHUNK_BYTES: raw }).sessionLogChunkBytes;
+      expect(capped, raw).toBeGreaterThan(0);
+      expect(capped, raw).toBeLessThanOrEqual(constants.MAX_LENGTH);
+      expect(() => Buffer.allocUnsafe(capped), raw).not.toThrow();
+    }
+  });
+
+  it('passes an in-range chunk-size override through unchanged', () => {
+    expect(resolveRuntimeConfig({ APP_SESSION_LOG_CHUNK_BYTES: '4096' }).sessionLogChunkBytes).toBe(4096);
+  });
+
+  // The cadence reaches `setTimeout` directly on the run's first sample, and Node does not raise on a delay
+  // past the 32-bit signed range — it warns and fires in 1 ms. An operator who set the knob to "sample
+  // essentially never" would get the tightest self-rearming loop the code can produce, each rung a
+  // whole-tree sweep on the process that also drains the PTY (CWE-400).
+  it('caps the cost-sample cadence at a delay a timer can hold', () => {
+    for (const raw of ['99999999999', String(Number.MAX_SAFE_INTEGER), '2147483647']) {
+      const capped = resolveRuntimeConfig({ APP_COST_SAMPLE_MS: raw }).costSampleMs;
+      expect(capped, raw).toBeGreaterThan(0);
+      expect(capped, raw).toBeLessThanOrEqual(2 ** 31 - 1);
+    }
+  });
+
+  it('passes an in-range cost-sample cadence through unchanged', () => {
+    expect(resolveRuntimeConfig({ APP_COST_SAMPLE_MS: '200' }).costSampleMs).toBe(200);
   });
 });

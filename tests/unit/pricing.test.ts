@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { PRICING, priceTokens, formatCost, type ModelTokens } from '../../src/shared/pricing';
+import { PRICING, priceTokens, formatCost, addTokens, sortedTotals, type ModelTokens } from '../../src/shared/pricing';
 
 // §26.10 — the cost meter prices per-model token totals against a checked-in table and formats the readout.
 // An id absent from the table contributes ZERO dollars and is surfaced as `unknown` — the meter never NaN.
@@ -69,11 +69,116 @@ describe('token pricing (§26.10)', () => {
     expect(r.unpricedModels).toEqual(['x-unknown']);
   });
 
+  // The model id is a raw string out of Claude Code's private log format, so it can name a member of
+  // Object.prototype. A lookup that resolves through the prototype chain returns a truthy non-price, skips
+  // the unpriced branch, and multiplies tokens by `undefined` — a NaN total that no equality can ever call
+  // unchanged, so every later sample re-reports and re-records it (CWE-1321).
+  it('treats a model id naming an Object.prototype member as unpriced, never pricing it to NaN', () => {
+    for (const hostile of ['constructor', 'toString', 'valueOf', 'hasOwnProperty', '__proto__']) {
+      const r = priceTokens([{ model: hostile, input: 1_000_000, cacheCreate: 0, cacheRead: 0, output: 0 }]);
+      expect(r.usd, hostile).toBe(0);
+      expect(Number.isNaN(r.usd), hostile).toBe(false);
+      expect(r.unpricedModels, hostile).toEqual([hostile]);
+    }
+  });
+
+  // `CostResult` documents `usd` as always finite so the readout never renders `$NaN` and never blocks,
+  // but the counts come from Claude Code's private log format and reach the multiply unchecked on §26's
+  // path. `1e308 * 15` overflows BEFORE the divide, and one overflow to +Infinity beside one to -Infinity
+  // is NaN — a figure that then reaches the strip, the §25 record and the persisted state.yaml, where it
+  // reads back as `.nan`. A guard on the ACCUMULATED total buys that finiteness by discarding every
+  // correctly-priced dollar beside the overflowing term, which turns a loud wrong number into a silent
+  // `$0.00` — character-for-character what a genuinely-zero run reports. Each model's own contribution is
+  // therefore checked before it joins the sum (CWE-20, CWE-682, CWE-755, OWASP ASVS V5.1.4).
+  it('drops only the model whose own contribution is unpriceable, keeping the dollars beside it', () => {
+    const unpriceable: ModelTokens[] = [
+      { model: 'claude-opus-4-8', input: -1e308, cacheCreate: 1e308, cacheRead: 0, output: 1 },
+      { model: 'claude-opus-4-8', input: 0, cacheCreate: 0, cacheRead: 0, output: 1e308 },
+      { model: 'claude-opus-4-8', input: Number.POSITIVE_INFINITY, cacheCreate: 0, cacheRead: 0, output: 0 },
+      { model: 'claude-opus-4-8', input: Number.NaN, cacheCreate: 0, cacheRead: 0, output: 0 },
+    ];
+    for (const hostile of unpriceable) {
+      const r = priceTokens([{ model: 'claude-sonnet-5', input: 1_000_000, cacheCreate: 0, cacheRead: 0, output: 0 }, hostile]);
+      const why = JSON.stringify(hostile);
+      expect(r.usd, why).toBe(PRICING['claude-sonnet-5'].input);
+      expect(r.unpricedModels, why).toEqual(['claude-opus-4-8']);
+      expect(formatCost(r), why).toBe('$3.00 +unknown');
+    }
+  });
+
+  // ...and an unpriceable model on its own is distinguishable from a genuinely-zero run: naming it in
+  // unpricedModels is what makes the readout say `unknown` rather than a confident `$0.00`.
+  it('reads unknown, not $0.00, for a run whose every model was unpriceable', () => {
+    const r = priceTokens([{ model: priced, input: 0, cacheCreate: 0, cacheRead: 0, output: 1e308 }]);
+    expect(r).toEqual({ usd: 0, unpricedModels: [priced] });
+    expect(formatCost(r)).toBe('unknown');
+    expect(formatCost(priceTokens([]))).toBe('$0.00');
+  });
+
+  // The other axis of the same input: a plain negative count prices to a finite negative figure, which is
+  // WRONG but LOUD — the operator can see it is wrong. That is the exchange this branch takes deliberately
+  // over a silent zero, so the number it renders is pinned rather than left to whatever the code does.
+  it('renders a negative count as the negative dollars it prices to, rather than hiding it', () => {
+    const r = priceTokens([{ model: 'claude-sonnet-5', input: -1e12, cacheCreate: 0, cacheRead: 0, output: 0 }]);
+    expect(r).toEqual({ usd: -3_000_000, unpricedModels: [] });
+    expect(formatCost(r)).toBe('$-3000000.00');
+  });
+
+  it('leaves an ordinary in-range total exactly as it prices it', () => {
+    const p = PRICING[priced];
+    expect(priceTokens([{ model: priced, input: 2_000_000, cacheCreate: 0, cacheRead: 0, output: 0 }]).usd).toBeCloseTo(
+      p.input * 2,
+      6,
+    );
+  });
+
   // The models the loop actually runs on must be in the table, or every real readout reads `+unknown`.
   it('prices the models the hosted agent and its reviewer subagents run on', () => {
     for (const model of ['claude-opus-4-8', 'claude-sonnet-4-6']) {
       expect(PRICING[model], `${model} missing from PRICING`).toBeDefined();
     }
+  });
+});
+
+// The fold from per-turn tokens to per-model totals runs on both engines' paths — §26's whole-file
+// aggregate and §27's live per-turn banking. It belongs to the module that owns what a token total IS, so
+// a newly billed token category is a compile error at one site rather than a silent under-count at another.
+describe('folding per-turn tokens into per-model totals', () => {
+  const zero = (model: string): ModelTokens => ({ model, input: 0, cacheCreate: 0, cacheRead: 0, output: 0 });
+
+  it('sums every field of two turns of the same model', () => {
+    const into = new Map<string, ModelTokens>();
+    addTokens(into, { model: 'm', input: 1, cacheCreate: 2, cacheRead: 3, output: 4 });
+    addTokens(into, { model: 'm', input: 10, cacheCreate: 20, cacheRead: 30, output: 40 });
+    expect(sortedTotals(into)).toEqual([{ model: 'm', input: 11, cacheCreate: 22, cacheRead: 33, output: 44 }]);
+  });
+
+  it('keeps distinct models apart and orders the result by model id', () => {
+    const into = new Map<string, ModelTokens>();
+    for (const model of ['zeta', 'alpha', 'zeta']) addTokens(into, { ...zero(model), input: 1 });
+    expect(sortedTotals(into)).toEqual([
+      { ...zero('alpha'), input: 1 },
+      { ...zero('zeta'), input: 2 },
+    ]);
+  });
+
+  it('folds an empty map to no totals', () => {
+    expect(sortedTotals(new Map())).toEqual([]);
+  });
+
+  // The model id is a raw string out of Claude Code's private log format, so it can name an
+  // Object.prototype member — the same input the priced lookup is hardened against.
+  it('folds a model id naming an Object.prototype member like any other', () => {
+    const into = new Map<string, ModelTokens>();
+    addTokens(into, { ...zero('__proto__'), input: 5 });
+    addTokens(into, { ...zero('__proto__'), output: 2 });
+    expect(sortedTotals(into)).toEqual([{ ...zero('__proto__'), input: 5, output: 2 }]);
+  });
+
+  it('leaves the turn it folded untouched, so a caller may keep reading it', () => {
+    const turn = { ...zero('m'), input: 3 };
+    addTokens(new Map(), turn);
+    expect(turn).toEqual({ ...zero('m'), input: 3 });
   });
 });
 

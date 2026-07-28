@@ -5,6 +5,7 @@
 import yaml from 'js-yaml';
 import type { FlowStatus, TodoStatus } from './ipc';
 import { stripStatusControlChars } from './loopStatus';
+import type { CostResult } from './pricing';
 
 export interface AuditHeader {
   flow: string;
@@ -39,6 +40,10 @@ export type AuditEvent =
   | { ts: string; type: 'outputs.snapshot'; pr: number | null; files: AuditOutputFile[] }
   // §26.10 — the per-iteration cost meter: the priced dollars + any unpriced model ids, tagged by iteration.
   | { ts: string; type: 'loop.cost'; iteration: number; usd: number; unpriced: string[] }
+  // §27.11 — the §27 whole-run cost meter: the run's priced dollars + any unpriced model ids. Carries no
+  // iteration, because the figure is the RUN's rather than any one round's — a fabricated round identity is
+  // exactly what §27.15 forbids a §27 action from writing into the §26 series.
+  | { ts: string; type: 'app.cost'; usd: number; unpriced: string[] }
   // §26.7 — the per-iteration CI snapshot (run-don't-block): the check counts read at review time, tagged
   // by iteration. Display-only — recorded best-effort, never gates the loop.
   | { ts: string; type: 'loop.ci'; iteration: number; total: number; passed: number; failed: number; pending: number }
@@ -190,11 +195,40 @@ export function loopEvents(before: LoopLike | null, after: LoopLike | null, ts: 
   return events;
 }
 
-/** The OS's rejection reason is an untrusted string from outside the process (§24.2.3 T4); bound and
- *  strip it exactly as `loopEvents` does the status, so the record cannot be forged (CWE-117). */
-const NOTIFY_REASON_MAX = 200;
+const AUDIT_TEXT_MAX = 200;
+/** CWE-117 / CWE-770 */
+export function boundExternalText(text: string): string {
+  return stripStatusControlChars(text).slice(0, AUDIT_TEXT_MAX);
+}
+
 export function notifyFailedEvent(reason: string, ts: string): AuditEvent {
-  return { ts, type: 'notify.failed', reason: stripStatusControlChars(reason).slice(0, NOTIFY_REASON_MAX) };
+  return { ts, type: 'notify.failed', reason: boundExternalText(reason) };
+}
+
+const AUDIT_UNPRICED_MAX = 32;
+
+/** What a §25 record carries for a §27 run's cost (§27.11). Both the length of each model id and how many
+ *  of them one record carries are bounded: the ids come from Claude Code's private log format (CWE-117 /
+ *  CWE-770). Whoever decides whether restating the cost would say anything new compares against THIS, not
+ *  against the live figure, so a run discovering ids past the bound cannot append records identical to
+ *  their predecessor. */
+export function auditCost(cost: CostResult): CostResult {
+  return { usd: cost.usd, unpricedModels: cost.unpricedModels.slice(0, AUDIT_UNPRICED_MAX).map(boundExternalText) };
+}
+
+/** The §27 run's cost as one append-only §25 event. The stream holds a series whose LAST entry is the run's
+ *  figure. */
+export function appCostEvent(cost: CostResult, ts: string): AuditEvent {
+  const bounded = auditCost(cost);
+  return { ts, type: 'app.cost', usd: bounded.usd, unpriced: bounded.unpricedModels };
+}
+
+/** The §26 per-iteration cost as one append-only §25 event. Both engines' cost records reach this file
+ *  carrying model ids from one decoder over the same private log format, so both bound them through
+ *  `auditCost` rather than either spelling the rule itself. */
+export function loopCostEvent(cost: CostResult, iteration: number, ts: string): AuditEvent {
+  const bounded = auditCost(cost);
+  return { ts, type: 'loop.cost', iteration, usd: bounded.usd, unpriced: bounded.unpricedModels };
 }
 
 /** A run replayed from its append-only stream (§25.6): the ordered events plus the folded final
@@ -212,6 +246,9 @@ export interface RunTimeline {
   snapshots: { pr: number | null; files: AuditOutputFile[] }[];
   /** The §26.10 per-iteration cost events, in order — priced dollars + any unpriced model ids per iteration. */
   costs: { iteration: number; usd: number; unpriced: string[] }[];
+  /** The §27.11 whole-run cost: the LAST `app.cost` entry, never a sum of the series — each entry restates
+   *  the run's total, so summing them reports several times what the run spent. Null when none was recorded. */
+  appCost: { usd: number; unpriced: string[] } | null;
   /** The §26.7 per-iteration CI snapshot events, in order — the check counts read at review time. */
   ci: { iteration: number; total: number; passed: number; failed: number; pending: number }[];
 }
@@ -232,6 +269,7 @@ export function reconstructTimeline(text: string): RunTimeline {
     commands: [],
     snapshots: [],
     costs: [],
+    appCost: null,
     ci: [],
   };
   const todoOf = (id: string): TodoLike | undefined => tl.todos.find((t) => t.id === id);
@@ -289,6 +327,9 @@ export function reconstructTimeline(text: string): RunTimeline {
         break;
       case 'loop.cost':
         tl.costs.push({ iteration: e.iteration, usd: e.usd, unpriced: e.unpriced });
+        break;
+      case 'app.cost':
+        tl.appCost = { usd: e.usd, unpriced: e.unpriced };
         break;
       case 'loop.ci':
         tl.ci.push({ iteration: e.iteration, total: e.total, passed: e.passed, failed: e.failed, pending: e.pending });

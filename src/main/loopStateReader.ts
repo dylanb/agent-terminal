@@ -66,7 +66,7 @@ export function readLoopExtension(repoDir: string): LoopExtension {
     }
   }
   let cost: CostResult | null = null;
-  if (isRecord(doc.cost) && typeof doc.cost.usd === 'number') {
+  if (isRecord(doc.cost) && typeof doc.cost.usd === 'number' && Number.isFinite(doc.cost.usd)) {
     cost = {
       usd: doc.cost.usd,
       unpricedModels: Array.isArray(doc.cost.unpriced) ? doc.cost.unpriced.filter((s): s is string => typeof s === 'string') : [],

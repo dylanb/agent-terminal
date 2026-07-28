@@ -1,4 +1,7 @@
 // Runtime configuration seam (§15.7): env-overridable thresholds, no magic numbers downstream.
+
+import { MAX_TIMER_DELAY_MS } from './timerBounds';
+
 // TODO(dylan): a per-agent profile table (D10) is the intended future seam to
 // replace these env lookups without touching call sites.
 
@@ -19,7 +22,15 @@ const DEFAULTS = {
   // §5: a shell that exits within this window of spawn is a startup failure — keep the window open
   // for the diagnostic rather than terminating the app.
   startupExitGraceMs: 1000,
+  // §27.11
+  costSampleMs: 2000,
+  // §27.11
+  sessionLogChunkBytes: 64 * 1024,
 } as const;
+
+/** Ceiling on `sessionLogChunkBytes`: every field-local check passes a value the `Buffer` allocator then
+ *  refuses. */
+const MAX_CHUNK_BYTES = 16 * 1024 * 1024;
 
 export interface RuntimeConfig {
   quietMs: number;
@@ -34,6 +45,8 @@ export interface RuntimeConfig {
   maxDoneTodos: number;
   stallTimeoutMs: number;
   startupExitGraceMs: number;
+  costSampleMs: number;
+  sessionLogChunkBytes: number;
 }
 
 /** Parse a positive integer env value; fall back on unset/garbage/non-positive (§15.7). */
@@ -41,6 +54,12 @@ function posInt(raw: string | undefined, fallback: number): number {
   if (raw === undefined || raw.trim() === '') return fallback;
   const n = Number(raw);
   return Number.isInteger(n) && n > 0 ? n : fallback;
+}
+
+/** `posInt` for a key whose value reaches an allocation: an above-range value is clamped to `max` rather
+ *  than dropped to the default, so an operator who asked for more gets as much as the process can give. */
+function posIntCapped(raw: string | undefined, fallback: number, max: number): number {
+  return Math.min(posInt(raw, fallback), max);
 }
 
 export function resolveRuntimeConfig(env: NodeJS.ProcessEnv): RuntimeConfig {
@@ -57,5 +76,7 @@ export function resolveRuntimeConfig(env: NodeJS.ProcessEnv): RuntimeConfig {
     maxDoneTodos: posInt(env.APP_MAX_DONE_TODOS, DEFAULTS.maxDoneTodos),
     stallTimeoutMs: posInt(env.APP_TURN_TIMEOUT_MS, DEFAULTS.stallTimeoutMs),
     startupExitGraceMs: posInt(env.APP_STARTUP_EXIT_GRACE_MS, DEFAULTS.startupExitGraceMs),
+    costSampleMs: posIntCapped(env.APP_COST_SAMPLE_MS, DEFAULTS.costSampleMs, MAX_TIMER_DELAY_MS),
+    sessionLogChunkBytes: posIntCapped(env.APP_SESSION_LOG_CHUNK_BYTES, DEFAULTS.sessionLogChunkBytes, MAX_CHUNK_BYTES),
   };
 }

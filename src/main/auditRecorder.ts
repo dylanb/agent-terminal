@@ -7,6 +7,8 @@ import { appendFileSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmS
 import path from 'node:path';
 import yaml from 'js-yaml';
 import {
+  appCostEvent,
+  loopCostEvent,
   auditTimestamp,
   inputEvents,
   lifecycleEvents,
@@ -74,6 +76,10 @@ export interface AuditRecorder {
   recordCommand(repoKey: string, source: string, cmd: string, exit: number | null): void;
   /** Record the §26.10 per-iteration cost (priced dollars + unpriced model ids), only while a run is open. */
   recordCost(repoKey: string, iteration: number, cost: CostResult): void;
+  /** Record the §27.11 whole-run cost (priced dollars + unpriced model ids), only while a run is open.
+   *  Returns whether the append landed, so the §27 meter can re-attempt the same figure on its next
+   *  sample; a repo with no open run has nothing to append and reports true. */
+  recordAppCost(repoKey: string, cost: CostResult): boolean;
   /** Record the §26.7 per-iteration CI snapshot (run-don't-block), only while a run is open. Best-effort. */
   recordCi(repoKey: string, iteration: number, snapshot: CiSnapshot): void;
   /** Record the OS refusing to deliver a §24.2.3 T4 attention notification, only while a run is open.
@@ -204,9 +210,19 @@ export function createAuditRecorder(deps: AuditRecorderDeps): AuditRecorder {
 
     recordCost(repoKey, iteration, cost) {
       try {
-        appendIfOpen(repoKey, [{ ts: auditTimestamp(now()), type: 'loop.cost', iteration, usd: cost.usd, unpriced: cost.unpricedModels }]);
+        appendIfOpen(repoKey, [loopCostEvent(cost, iteration, auditTimestamp(now()))]);
       } catch (e) {
         log('audit recordCost failed', e);
+      }
+    },
+
+    recordAppCost(repoKey, cost) {
+      try {
+        appendIfOpen(repoKey, [appCostEvent(cost, auditTimestamp(now()))]);
+        return true;
+      } catch (e) {
+        log('audit recordAppCost failed', e);
+        return false;
       }
     },
 

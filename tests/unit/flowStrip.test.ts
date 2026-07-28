@@ -613,6 +613,130 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     expect(host.querySelector('.loop-cost')).toBeNull();
   });
 
+  // §27.11 — a §27 run's whole-run total rides the SAME engine-neutral readout: no round has run, so the
+  // view carries no iteration, and an all-unpriced run reads the unknown marker rather than `$NaN`.
+  it('renders a §27 whole-run total with its accessible name and never NaN, with no round on the view', async () => {
+    const appView: FlowStateView = {
+      stepName: 'plan',
+      steps: ['plan'],
+      position: 1,
+      total: 1,
+      status: 'in_progress',
+      loop: { status: 'working', pr: null, branch: null, ready: false, humanNeeded: false, cost: '$4.50 +unknown' },
+    };
+    const deps = {
+      state: vi.fn(async (): Promise<FlowStateView> => appView),
+      start: vi.fn(),
+      advance: vi.fn(),
+      restart: vi.fn(),
+      undo: vi.fn(),
+      terminate: vi.fn(),
+      provideInput: vi.fn(),
+      onStatusBar: vi.fn(),
+      onStateChanged: noopSub,
+    };
+    createFlowStrip(host, deps).onRepoChanged('/repo-v2');
+    await vi.waitFor(() => expect(host.querySelector('.loop-cost')).not.toBeNull());
+    const cost = host.querySelector<HTMLElement>('.loop-cost')!;
+    expect(cost.textContent).toBe('$4.50 +unknown');
+    expect(cost.textContent).not.toContain('NaN');
+    expect(cost.getAttribute('aria-label')).toBe('cost $4.50 +unknown');
+    expect(host.querySelector('.loop-iter')).toBeNull();
+  });
+
+  // WCAG SC 4.1.3 / SC 1.3.1 — a §27 run's total is re-metered on a timer for the whole run and the strip
+  // host is a polite live region, so leaving the figure inside it narrates a new dollar amount every couple
+  // of seconds. Silencing the figure node alone does not stop it: the figure is also part of the enclosing
+  // read-out's name-from-content, and a live change resolves against the nearest live region of the node
+  // that CHANGED. The figure leaves the tree and rides the read-out's DESCRIPTION instead, so it is still
+  // conveyed on focus and on demand with nothing announced on a tick.
+  it("keeps the §27 cost figure out of the read-out's name, carrying it as the read-out's description", async () => {
+    let view: FlowStateView = {
+      stepName: 'plan',
+      steps: ['plan'],
+      position: 1,
+      total: 1,
+      status: 'in_progress',
+      loop: { status: 'working', pr: null, branch: null, ready: false, humanNeeded: false, cost: '$4.50' },
+    };
+    let fire = (): void => {};
+    const deps = {
+      state: vi.fn(async (): Promise<FlowStateView> => view),
+      start: vi.fn(),
+      advance: vi.fn(),
+      restart: vi.fn(),
+      undo: vi.fn(),
+      terminate: vi.fn(),
+      provideInput: vi.fn(),
+      onStatusBar: vi.fn(),
+      onStateChanged: (cb: () => void) => {
+        fire = cb;
+        return () => {};
+      },
+    };
+    createFlowStrip(host, deps).onRepoChanged('/repo-live');
+    await vi.waitFor(() => expect(host.querySelector('.loop-cost')).not.toBeNull());
+    const cost = (): HTMLElement => host.querySelector<HTMLElement>('.loop-cost')!;
+    const readout = (): HTMLElement => host.querySelector<HTMLElement>('.loopstat')!;
+    expect(cost().getAttribute('aria-hidden')).toBe('true');
+    expect(cost().id).not.toBe('');
+    expect(readout().getAttribute('aria-describedby')).toBe(cost().id);
+    expect(readout().textContent).toContain('$4.50');
+
+    view = { ...view, loop: { ...view.loop!, cost: '$6.00' } };
+    fire();
+    await vi.waitFor(() => expect(cost().textContent).toBe('$6.00'));
+    expect(cost().getAttribute('aria-hidden')).toBe('true');
+    expect(cost().getAttribute('aria-label')).toBe('cost $6.00');
+    expect(readout().getAttribute('aria-describedby')).toBe(cost().id);
+  });
+
+  // UI-STANDARDS §2.2 rule 1 — the id the read-out points `aria-describedby` at is minted per instance, so
+  // two strips in one document never share it. A baked-in id makes strip B's read-out describe strip A's
+  // cost node, reporting the wrong repo's dollars to anyone who focuses it.
+  it("two strips in one document get DIFFERENT cost ids, each read-out described by its own host's figure", async () => {
+    const viewOf = (cost: string): FlowStateView => ({
+      stepName: 'plan',
+      steps: ['plan'],
+      position: 1,
+      total: 1,
+      status: 'in_progress',
+      loop: { status: 'working', pr: null, branch: null, ready: false, humanNeeded: false, cost },
+    });
+    const mount = (id: string, cost: string): HTMLElement => {
+      const el = document.createElement('div');
+      el.id = id;
+      document.body.append(el);
+      createFlowStrip(el, {
+        state: vi.fn(async (): Promise<FlowStateView> => viewOf(cost)),
+        start: vi.fn(),
+        advance: vi.fn(),
+        restart: vi.fn(),
+        undo: vi.fn(),
+        terminate: vi.fn(),
+        provideInput: vi.fn(),
+        onStatusBar: vi.fn(),
+        onStateChanged: noopSub,
+      }).onRepoChanged(`/${id}`);
+      return el;
+    };
+    const a = mount('strip-a', '$1.00');
+    const b = mount('strip-b', '$2.00');
+    await vi.waitFor(() => {
+      expect(a.querySelector('.loop-cost')).not.toBeNull();
+      expect(b.querySelector('.loop-cost')).not.toBeNull();
+    });
+
+    const costOf = (h: HTMLElement): HTMLElement => h.querySelector<HTMLElement>('.loop-cost')!;
+    const readoutOf = (h: HTMLElement): HTMLElement => h.querySelector<HTMLElement>('.loopstat')!;
+    expect(costOf(a).id).toBeTruthy();
+    expect(costOf(a).id).not.toBe(costOf(b).id);
+    expect(document.getElementById(readoutOf(a).getAttribute('aria-describedby')!)).toBe(costOf(a));
+    expect(document.getElementById(readoutOf(b).getAttribute('aria-describedby')!)).toBe(costOf(b));
+    expect(costOf(a).textContent).toBe('$1.00');
+    expect(costOf(b).textContent).toBe('$2.00');
+  });
+
   it('patches the §26.10 cost readout in place on a same-signature background push', async () => {
     let view: FlowStateView = {
       stepName: 'build',
@@ -643,8 +767,8 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     view = { ...view, loop: { ...view.loop!, iteration: 2, cost: '$0.42' } };
     fire();
     await vi.waitFor(() => expect(host.querySelector('.loop-cost')?.textContent).toBe('$0.42'));
-    // WCAG SC 4.1.3 / 1.3.1: with the host aria-atomic=false, only the changed cost node is announced.
-    // Its visible text is a bare figure, so it must carry the "cost" context in its accessible name.
+    // WCAG SC 1.3.1: the visible figure is bare, so the "cost" context it is read with — as the read-out's
+    // description on focus and on demand — has to come from the node's own accessible name.
     expect(host.querySelector('.loop-cost')?.getAttribute('aria-label')).toBe('cost $0.42');
   });
 

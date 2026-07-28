@@ -25,7 +25,14 @@ export const APP_LOOP_STATUS_ERROR = 'error';
 export const APP_LOOP_STATUS_WORKING = 'working';
 export const APP_LOOP_STATUS_COMPLETE = 'complete';
 
-export function deriveAppLoopView(name: string, ctx: LoopDefV2Context, liveError?: AppLoopLiveError | null): FlowLoopView {
+export function deriveAppLoopView(
+  name: string,
+  ctx: LoopDefV2Context,
+  liveError?: AppLoopLiveError | null,
+  cost?: string | null,
+): FlowLoopView {
+  // §27.11/§27.15
+  const withCost = (view: FlowLoopView): FlowLoopView => (cost ? { ...view, cost } : view);
   // §27.4/§27.6/AC5/AC8 — the def is resolved once and reused on every surfacing branch: the reviewer catalog
   // AND the gate options both come from it, so the terminal consolidator gate (a run-state view) can show the
   // verdict and the def's options together. Both are absent when the def does not resolve.
@@ -37,7 +44,7 @@ export function deriveAppLoopView(name: string, ctx: LoopDefV2Context, liveError
   // identity) so the §27 route-out is never a dead-end. It is the freshest signal, so it wins over a stale
   // persisted status; a live error for a DIFFERENT loop is not this step's.
   if (liveError && liveError.loop === name) {
-    return {
+    return withCost({
       status: APP_LOOP_STATUS_ERROR,
       pr: null,
       branch: null,
@@ -48,7 +55,7 @@ export function deriveAppLoopView(name: string, ctx: LoopDefV2Context, liveError
       errorReason: liveError.reason,
       ...(liveError.round !== undefined ? { iteration: liveError.round } : {}),
       ...(catalog ? { catalog } : {}),
-    };
+    });
   }
   // §27.12 — once a work turn has run, the persisted §27 run-state is the live view: mirror its status
   // (working/error/complete) and carry the turn identity the route-out acts on. `error` is classified
@@ -70,7 +77,7 @@ export function deriveAppLoopView(name: string, ctx: LoopDefV2Context, liveError
     // tier is a supported authoring path), and narrowing that to approve-only yields an empty, actionable gate —
     // an unrecoverable dead end. Fail toward the def's full controls, never toward zero (CLAUDE.md / CWE-20).
     const shownOptions = inPolish && gateOptions.includes('approve') ? gateOptions.filter((o) => o === 'approve') : gateOptions;
-    return {
+    return withCost({
       status: run.status,
       pr: null,
       branch: null,
@@ -91,10 +98,10 @@ export function deriveAppLoopView(name: string, ctx: LoopDefV2Context, liveError
       ...(run.chosenRoster ? { chosenRoster: run.chosenRoster } : {}),
       ...(run.verdict ? { verdict: run.verdict } : {}),
       ...(run.verdictReason ? { verdictReason: run.verdictReason } : {}),
-    };
+    });
   }
   if (!r.ok) {
-    return {
+    return withCost({
       status: APP_LOOP_STATUS_ERROR,
       pr: null,
       branch: null,
@@ -102,9 +109,9 @@ export function deriveAppLoopView(name: string, ctx: LoopDefV2Context, liveError
       actionable: false,
       humanNeeded: true,
       errorReason: r.reason,
-    };
+    });
   }
-  return {
+  return withCost({
     status: APP_LOOP_STATUS_RUN_LESS,
     pr: null,
     branch: null,
@@ -112,7 +119,7 @@ export function deriveAppLoopView(name: string, ctx: LoopDefV2Context, liveError
     actionable: false,
     humanNeeded: false,
     ...(gateOptions.length > 0 ? { gateOptions } : {}),
-  };
+  });
 }
 
 /** The flow manager's §27 loop-view provider: reconstruct a relaunch-stranded turn to routable BEFORE the
@@ -124,7 +131,8 @@ export function provideAppLoopView(
   engine: Pick<AppLoopEngine, 'activeRepoDir' | 'resume' | 'liveErrorFor'>,
   name: string,
   ctx: LoopDefV2Context,
+  cost?: string | null,
 ): FlowLoopView {
   if (engine.activeRepoDir() !== ctx.repoDir) engine.resume(ctx.repoDir);
-  return deriveAppLoopView(name, ctx, engine.liveErrorFor(ctx.repoDir));
+  return deriveAppLoopView(name, ctx, engine.liveErrorFor(ctx.repoDir), cost);
 }

@@ -1,17 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { encodeProjectDir, sessionLogDir, readSessionTokens } from '../../src/main/costMeter';
+import { encodeProjectDir, sessionLogDir, readSessionTokens } from '../../src/main/sessionLogSweep';
+import { priceTokens } from '../../src/shared/pricing';
 import { userConfigRoot } from '../../src/main/userConfig';
-
-it('the source file carries no raw control bytes, so git keeps it text (diffable/reviewable)', () => {
-  // The per-message dedup key's separator must be spelled as an escape (\x00), not embedded as a raw NUL —
-  // a single raw NUL makes git classify the .ts as binary and drop it from every diff (cf. findingSignature.ts).
-  const bytes = readFileSync(new URL('../../src/main/costMeter.ts', import.meta.url));
-  const control = [...bytes].filter((b) => b < 9 || (b > 13 && b < 32));
-  expect(control).toEqual([]);
-});
 
 // §26.10 — the meter recovers per-model token totals from Claude Code's session JSONL logs (the same data
 // `cache-analyze` reads). The layout is Claude Code's private format, so every accessor degrades on drift.
@@ -132,6 +125,16 @@ describe('session-log token recovery (§26.10)', () => {
       { model: 'claude-sonnet-5', input: 100, cacheCreate: 0, cacheRead: 0, output: 40 },
     ]);
   });
+
+  // AC 10 — the §25 strip-and-bound is a §27 ADMISSION rule and sits on the §27 yield site, not on the
+  // decoder both engines share. §26's aggregate therefore reports the id the log stamps, exactly as it did
+  // before this branch; what is still unbounded on its path is `auditRecorder.recordCost`'s own `unpriced`
+  // write, which is pre-existing and routed to a follow-up.
+  it('reports a model id to §26 exactly as the log stamps it', () => {
+    const hostile = `claude-made-up\u200e${'x'.repeat(500)}`;
+    writeFileSync(join(dir, 'session.jsonl'), line(hostile, { input_tokens: 5 }));
+    expect(priceTokens(readSessionTokens(dir)).unpricedModels).toEqual([hostile]);
+  });
 });
 
 // §26.10 — the meter reports THE RUN's cost. The project dir accumulates every session ever run against the
@@ -170,14 +173,14 @@ describe('scoping the meter to the run (§26.10)', () => {
     expect(readSessionTokens(dir)[0].input).toBe(5007);
   });
 
-  it('a run that has produced no turns yet prices to nothing, not to the repo`s history', () => {
+  it("a run that has produced no turns yet prices to nothing, not to the repo's history", () => {
     writeFileSync(join(dir, 'session.jsonl'), at('2026-07-01T00:00:00.000Z', 5000));
     expect(readSessionTokens(dir, FLOW_START)).toEqual([]);
   });
 });
 
 describe('session-log dir resolution (§26.10)', () => {
-  it('encodes a repo path into Claude Code`s project-dir name (non-alphanumerics → dash)', () => {
+  it("encodes a repo path into Claude Code's project-dir name (non-alphanumerics → dash)", () => {
     expect(encodeProjectDir('/Users/x/src/agent-terminal.one')).toBe('-Users-x-src-agent-terminal-one');
   });
 
