@@ -3915,21 +3915,19 @@ item 13 on the strength of a commitment nobody had made; it now matches.
  population it widens.
 
 **Prose-parity debt, recorded rather than chased — the operator's iteration-8 call.** These are real and
-none is a gate blocker; they are listed so the gate reads them as known rather than missed. Decision 2
-removes the *cause* of most of them, so they are re-measured after that
-conversion rather than fixed one at a time before it — and what the conversion did not remove is listed
-here:
+none is a gate blocker; they are listed so the gate reads them as known rather than missed.
 
-- **The subsection-reference denominator.** The paragraph under the H1 prints a pair that must be
- re-measured as the last edit of every revision, and two successive revisions printed a denominator that
- did not reproduce under the paragraph's own counting rule. The stated rule now names its exclusions and
- the pair is re-measured against the rule as written; the residual risk is that any prose edit moves it
- again, which is exactly why it is item 8 of the mechanical re-check list rather than a fact anyone
- remembers.
-- **`held by` precision on register rows whose subject is prose.** A row whose whole addition is a set of
- doc-comment rewrites has no behavioural grader, and the honest cell is `none — stated risk only`. The
- conversion in decision 2 makes those cells uniform; a reader who wants prose graded should ask for the
- removed-identifier guard to carry text needles, which is a scope question and not a wording one.
+**The iteration-9 restructure closed this list rather than shortening it.** Every debt recorded here was a
+drifting copy — the subsection-reference denominator, the stale intra-document line pointers, the bare
+ordinals into the register, the one past-EOF pointer. All four described bookkeeping that no longer exists:
+the pointers, the counts, the self-check list and the register itself are deleted, so the debts have no
+subject. What survives from that list is a single genuine question, and it is a scope question rather than
+a wording one:
+
+- **Prose has no behavioural grader.** An addition whose whole content is a set of doc-comment rewrites
+ cannot be held by a behavioural test, so its grader is honestly `none — stated risk only`. A reader who
+ wants prose graded should ask for §D.4's removed-identifier guard to carry text needles over `docs/` and
+ `design/` as well as `src/` — which is a real proposal with a real cost, not a nit to be fixed in passing.
 
 ---
 
