@@ -1,6 +1,6 @@
-// Model→dollar pricing for the §26.10 cost meter. Shared (CLAUDE.md src/shared rule) so the main-process
-// meter that prices tokens for the §25 audit and the renderer strip that formats the readout agree on both
-// the price table and the display string, and cannot drift. Prices are per MILLION tokens (the published
+// Model→dollar pricing for the §26.10 and §27.11 cost meters. Shared (CLAUDE.md src/shared rule) so the
+// §26/§27 main-process meters, the `.agent-loop/state.yaml` writer/reader pair and the §25 audit record
+// cannot drift on `CostResult` or on the string it renders as. Prices are per MILLION tokens (the published
 // unit). The table is a checked-in default kept current by hand; an id absent from it is UNPRICED (§26.10).
 
 /** Per-model token totals summed from the session JSONL (§26.10) — one entry per distinct `message.model`. */
@@ -13,7 +13,8 @@ export interface ModelTokens {
 }
 
 /** A priced result (§26.10): `usd` is the summed dollars of every PRICED model; `unpricedModels` names each
- *  model absent from the table that actually consumed tokens (each contributes zero, surfaced as `unknown`).
+ *  model that consumed tokens whose dollars could not be computed — absent from the table, or present but
+ *  with a contribution outside the finite range (each contributes zero, surfaced as `unknown`).
  *  `usd` is always finite — never NaN — so the readout never renders `$NaN` and never blocks. */
 export interface CostResult {
   usd: number;

@@ -472,8 +472,7 @@ export interface FlowLoopView {
    *  The producing engine owns when to fill it; `actionable` carries whether they are clickable. */
   gateOptions?: string[];
   /** The cost-meter readout: the display-only priced dollars (`$X.XX`, `unknown`, or `$X.XX +unknown` when
-   *  some model was unpriced), formatted by the shared `formatCost` and possibly marked further by the
-   *  producing engine. Engine-neutral (§27.15) — that engine owns what the figure MEANS and the renderer
+   *  some model was unpriced), formatted by the shared `formatCost`. Engine-neutral (§27.15) — that engine owns what the figure MEANS and the renderer
    *  never learns which one filled it nor parses what it sent: §26.10 records a per-iteration figure at each
    *  iteration boundary, §27.11 a whole-run total from the flow's recorded start. Absent until that engine
    *  has a figure. Display-only — it never gates the loop. */
