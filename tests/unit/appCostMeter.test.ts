@@ -639,6 +639,24 @@ describe('the §27 meter reaching the §25 audit and never damaging the run', ()
     expect(h.armedDelay()).toBe(BASE_DELAY);
   });
 
+  // ...and the coalescing is scoped to the RUN, not the repo. A floor change replaces the run while the
+  // previous run's sample is still draining; that sample returns early at its own identity check WITHOUT
+  // re-arming, because the replacement got its own arm from the push. Coalescing per repo would hand the
+  // replacement's arm the retired run's promise, so the new run would never sample and never re-arm —
+  // its figure would stay null for the life of the run.
+  it('samples the replacement run when a floor change lands while the previous sample is draining', async () => {
+    h.append(REPO, [turn({ at: FLOOR + 1, input: MTOK })]);
+    h.meter.pushWindow(REPO, LOOP, FLOOR);
+    const draining = h.takeArmed()?.();
+
+    h.meter.pushWindow(REPO, LOOP, FLOOR + 100);
+    h.append(REPO, [turn({ at: FLOOR + 101, output: MTOK / 10 })]);
+    await Promise.all([draining, h.takeArmed()?.()]);
+
+    expect(h.meter.current(REPO)?.usd).toBe(1.5);
+    expect(h.armed()).toBe(true);
+  });
+
   // The per-id LENGTH bound is the half the count bound cannot show: an over-long id records once and the
   // memo that decides whether a restatement would say anything new compares the same bounded string back,
   // so the following samples append nothing.
