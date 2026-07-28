@@ -1,9 +1,9 @@
 // §18.1/§23.4/§26.5; writes route through atomicWriteFileSync (CWE-59).
 
-import { accessSync, constants, lstatSync, readFileSync, statSync } from 'node:fs';
+import { lstatSync, readFileSync, statSync } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import path from 'node:path';
-import { atomicWriteFileSync, isRealContainer } from './atomicFile';
+import { atomicWriteFileSync, isWritableContainer } from './atomicFile';
 import { confinedRealPathResult, resolveOwnedDirJail, type PathRefusal } from './confinedPath';
 import { readDirEntries } from './dirEntries';
 import { errMsg, isErrno } from './errno';
@@ -315,24 +315,6 @@ function resolveAll(destinations: InstallDestination[]): Resolution {
     });
   }
   return { ok: true, destinations: out };
-}
-
-/** CWE-59: a symlinked container would land the write outside the destination, and the loops container
- *  confers §26.6 `exec` authority on what lands there (CWE-829). */
-function isWritableContainer(dir: string): boolean {
-  if (!isRealContainer(dir)) return false;
-  let probe = dir;
-  for (;;) {
-    try {
-      accessSync(probe, constants.W_OK);
-      return true;
-    } catch (e) {
-      if (!isErrno(e, 'ENOENT')) return false;
-      const parent = path.dirname(probe);
-      if (parent === probe) return false;
-      probe = parent;
-    }
-  }
 }
 
 type Groups = Map<InstallDestinationId, DestRelativePath[]>;
