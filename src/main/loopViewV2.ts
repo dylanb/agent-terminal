@@ -1,7 +1,5 @@
-// The §27 loop-view provider — the READ meeting point of the coexistence seam (§27.15), engine-selected
-// on a flow step's `app` namespace. It resolves the bound app-def and owns the WHOLE loop view the strip
-// and panel render, reading no §26 loop state, so a §27-bound step renders with the §26 defs and §26 loop
-// state absent. Two shapes:
+// The §27 loop-view provider, selected by an `app` namespace or by its absence. It resolves the bound
+// app-def and owns the WHOLE loop view the strip and panel render. Two shapes:
 //   - a def that resolved before any round → a RUN-LESS view: its declared gate options, display-only
 //     (actionable false — the refusal guard is at the write operation, not the render), no iteration (no
 //     round has run — never a fabricated 0), not human-needed, advance gate false (§19.2 override is the
@@ -17,7 +15,7 @@ import { readAppLoopState, isPolishActiveForStep } from './appLoopState';
 import type { AppLoopEngine, AppLoopLiveError } from './appLoopEngine';
 
 /** The run-less/failure status strings the §27 provider emits (§27-owned, mapped to a tone by the strip;
- *  never a §26 vocabulary term). `error` reuses the existing loop-error surface so the reason row renders. */
+ *  a closed vocabulary of its own). `error` reuses the existing loop-error surface so the reason row renders. */
 export const APP_LOOP_STATUS_RUN_LESS = 'not-started';
 export const APP_LOOP_STATUS_ERROR = 'error';
 /** The live §27 work-turn statuses the provider mirrors from the persisted run state (§27.12). Equal to the

@@ -12,7 +12,7 @@ const DEFAULTS = {
   // §16.5: must exceed the active→quiet gap of the agent's reply, or the reply gets suppressed too.
   selfInjectWindowMs: 30_000,
   maxDoneTodos: 50, // §16.4
-  // §26.3/D48: how long a turn's screen may stay frozen (no visible-content change) before the run stalls
+  // §27.12/D48: how long a turn's screen may stay frozen (no visible-content change) before the run stalls
   // into a recoverable error. Deliberately long (~20 min) and activity-gated — NOT a wall-clock deadline
   // on a working turn, which resets it via §8.3 activity. Env keeps the historical APP_TURN_TIMEOUT_MS name.
   stallTimeoutMs: 1_200_000,

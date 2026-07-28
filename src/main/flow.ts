@@ -10,25 +10,11 @@ import type { AgentState, FlowLoopView, FlowPrompt, FlowRefs, FlowStateView, Flo
 import { hasFlowRefs } from '../shared/ipc';
 import { normalizeTitle } from '../shared/statusBar';
 import { createFlowStateStore, type FlowStateStore } from './flowState';
-import type { AgentLoopState } from './agentLoopBridge';
-import { gateForStatus, type LoopDef } from './loopDef';
-import { isHumanNeededStatus } from '../shared/loopStatus';
 import { isRecord } from './yamlRecord';
-import { errMsg } from './errno';
-import { APP_LOOP_NAMESPACE, DEFAULT_LOOP_NAMESPACE, isRecognizedLoopBinding, type LoopBinding } from '../shared/loopNamespace';
+import { errMsg, isErrno } from './errno';
+import { stripDisplayControlChars } from '../shared/controlChars';
+import { APP_LOOP_NAMESPACE, DEFAULT_LOOP_NAMESPACE, bindsNoSurvivingEngine, isRecognizedLoopBinding, type LoopBinding } from '../shared/loopNamespace';
 import { isSafePathSegment } from '../shared/pathSegment';
-
-/**
- * Single source of truth for "the loop needs you" (§24.2.3 T4), consumed by both the status bar's alert and
- * the OS notification. With a LoopDef this is gate-driven; without one it degrades to the shared
- * awaiting-human/impasse family. Both paths classify the shipped vocabulary identically.
- */
-export function classifyHumanNeeded(status: string, loopDef: LoopDef | null): boolean {
-  if (!loopDef) return isHumanNeededStatus(status);
-  if (status === 'impasse') return true;
-  const gate = gateForStatus(loopDef, status);
-  return status.startsWith('awaiting-') && gate !== undefined && !gate.terminal && gate.humanOptions.length > 0;
-}
 
 /**
  * Fold the live derived status onto an `in_progress` view (§22.3 / §24.2.2 S5); any other status
@@ -39,44 +25,6 @@ export function deriveFlowView(view: FlowStateView, todos: TodoItem[], activity:
   const todosTotal = todos.length;
   const todosDone = todos.filter((t) => t.status === 'done').length;
   return { ...view, derived: { activity, todosDone, todosTotal, ready: todosDone === todosTotal } };
-}
-
-/**
- * Fold the read-only agent-loop state.yaml mirror (§24.2.3 T2) onto a view as a `loop` field
- * PARALLEL to S5's `derived`, never nested inside it: loop state outlives the manual `in_progress`
- * window. `ready` is the §19.2 advance gate — gate-driven when the LoopDef resolves (§18.1),
- * degrading to the awaiting-human-* family with no options when it does not. Input is never mutated.
- */
-export function deriveLoopView(
-  view: FlowStateView,
-  loop: AgentLoopState | null,
-  loopDef: LoopDef | null = null,
-  cost: string | null = null,
-): FlowStateView {
-  if (!loop) return view;
-  const gate = loopDef ? gateForStatus(loopDef, loop.status) : undefined;
-  const ready = loopDef ? gate?.terminal === true : !loop.status.startsWith('awaiting-human');
-  const gateOptions = gate && gate.humanOptions.length > 0 ? gate.humanOptions : undefined;
-  const humanNeeded = classifyHumanNeeded(loop.status, loopDef);
-  // Project only the FlowLoopView fields — spreading the whole AgentLoopState would leak its
-  // linkedIssues (which feeds FlowRefs, not the mirror) onto the wire (src/shared/ipc.ts contract).
-  return {
-    ...view,
-    loop: {
-      status: loop.status,
-      // §26 D42a — iteration is a single MONOTONIC counter across the whole run (ai-deque parity): it is
-      // already the running total across every loop the run has passed through (a successor loop carries it
-      // forward, never resetting to 1), so the wire value is the raw counter — no cross-loop summation here.
-      iteration: loop.iteration,
-      pr: loop.pr,
-      branch: loop.branch,
-      ready,
-      humanNeeded,
-      ...(gateOptions ? { gateOptions, actionable: true } : {}),
-      ...(cost !== null ? { cost } : {}),
-      ...(loop.errorReason ? { errorReason: loop.errorReason } : {}),
-    },
-  };
 }
 
 /** A step's declared typed input (§18.4 / §24.2.3 T3). A `required` input must be resolved on step
@@ -111,15 +59,6 @@ export interface FlowStepDef {
 export interface FlowDefinition {
   name: string;
   steps: FlowStepDef[];
-}
-
-/** The §26 (legacy) LoopDef name a step binds, or null when none applies — the gate-decision write half's
- *  engine selector (§27.15), symmetric with the read/entry halves. An `app`-namespace step resolves NO §26
- *  name, so a decision arriving for a §27-bound step is refused before it can dispatch into the §26 write
- *  path; a manual or missing step resolves none either. */
-export function legacyLoopNameForStep(step: FlowStepDef | undefined): string | null {
-  if (step?.kind !== 'loop' || step.loopNamespace === APP_LOOP_NAMESPACE) return null;
-  return step.loop ?? null;
 }
 
 /** Result of reading <worktree>/.agent-terminal/flow.yaml. On success `flowDir` is the directory the
@@ -160,8 +99,12 @@ export function loadFlowDefinition(worktreeDir: string): FlowLoad {
   let raw: string;
   try {
     raw = readFileSync(file, 'utf8');
-  } catch {
-    return { ok: false, error: `no flow.yaml found at ${FLOW_REL}` };
+  } catch (e) {
+    // AC 4 reason-accuracy: ENOENT is genuinely "no flow.yaml"; any other errno (EISDIR from a directory
+    // planted at the path, EACCES on a shared machine, ENOTDIR/ELOOP from a bad symlink) names what actually
+    // failed rather than reporting the flow absent while it sits on disk. Both questions answered through errno.ts.
+    if (isErrno(e, 'ENOENT')) return { ok: false, error: `no flow.yaml found at ${FLOW_REL}` };
+    return { ok: false, error: `cannot read ${FLOW_REL}: ${errMsg(e)}` };
   }
 
   let doc: unknown;
@@ -230,8 +173,11 @@ export function loadFlowDefinition(worktreeDir: string): FlowLoad {
  */
 export function loadFlowDefinitionLocalFirst(localDir: string, globalDir: string): FlowLoad {
   if (existsSync(path.join(localDir, FLOW_REL))) return loadFlowDefinition(localDir);
-  const global = loadFlowDefinition(globalDir);
-  return global.ok ? global : loadFlowDefinition(localDir); // neither: report the local (absent) error
+  // No local file. A PRESENT global file's result stands — even a present-but-invalid one surfaces its own
+  // reason (AC 4) rather than being masked behind the absent local's "no flow.yaml found". Only when neither
+  // exists do we report the local (absent) error, so a bad value is never reported as a missing flow (§B.3).
+  if (existsSync(path.join(globalDir, FLOW_REL))) return loadFlowDefinition(globalDir);
+  return loadFlowDefinition(localDir); // neither exists: report the local (absent) error
 }
 
 export interface FlowMachine {
@@ -246,7 +192,7 @@ export interface FlowMachine {
   /** done → in_progress; reverts a manual advance WITHOUT re-running the step's entry actions
    *  (the inverse of advance, not a restart). Throws on any other status (inert on error). */
   undo(): FlowStateView;
-  /** Roll a half-entered bootstrap step back one step when its async pickup failed (§26.9): in_progress
+  /** Roll a half-entered bootstrap step back one step when its async bootstrap failed (§27): in_progress
    *  at `fromStepId` → in_progress at the previous step, re-running NO entry actions and PRESERVING
    *  resolved inputs, so the operator can fix the cause and re-advance. A first-step loop (no previous
    *  step) reverts to not_started — a recoverable state (Start re-fires pickup). A NO-OP GUARD, never a
@@ -266,27 +212,15 @@ export interface FlowMachine {
 }
 
 /** Run a step's entry actions, given the flow's resolved typed inputs (§18.4). Returns a one-shot
- *  `notice` (e.g. the §19.3 busy refusal) and/or a `prompt` for an unsatisfied required input, to
- *  ride the transition view (§24.2.2 S4) — never part of state(). */
+ *  `notice` (the §19.3 busy refusal, or AC 5's migration notice) and/or a `prompt` for an unsatisfied
+ *  required input. One-shot: carried on a transition response (and, when an asynchronous producer has one
+ *  pending, on a state response); the strip holds it across passive re-pulls and clears it on the next
+ *  transition (§B.5 carrier). */
 export type FlowEnterStep = (step: FlowStepDef, inputs: Record<string, string>) => { notice?: string; prompt?: FlowPrompt } | void;
 
-/** Read the agent-loop state.yaml mirror for this flow's repo (§24.2.3 T2); null for a
- *  missing/corrupt/unknown-version file. Called on every view, so the mirror is live. */
-export type FlowReadLoop = () => AgentLoopState | null;
-
-/** Resolve a loop step's bound LoopDef by name (§24.2.3 T2 / §18.1); null for an
- *  unresolvable/corrupt one — readiness then degrades to the awaiting-human-* family with no gate
- *  options. */
-export type FlowReadLoopDef = (name: string) => LoopDef | null;
-
-/** The formatted §26.10 cost-meter readout for this flow's repo, or null when no cost has been recorded
- *  yet. Called on every view so the strip shows the live last-recorded cost. */
-export type FlowReadLoopCost = () => string | null;
-
-/** The §27 (app-namespace) loop-view provider: resolve the bound app-def by name and produce its whole
- *  loop view — a run-less view or a def-failure view (see loopViewV2). Selected when a loop step's
- *  `loopNamespace` is `app` (§27.15); absent for a §26-only wiring (tests), where an app step renders no
- *  loop view rather than falling back to the §26 engine. It reads no §26 loop state. */
+/** The §27 loop-view provider: resolve the bound app-def by name and produce its whole loop view — a
+ *  run-less view or a def-failure view (see loopViewV2). Selected for every surviving loop binding (§27.15);
+ *  omitted in tests, where a loop step then renders no loop view. */
 export type FlowReadAppLoopView = (name: string) => FlowLoopView;
 
 // Optional `store` (§19.1) persists every transition and restores on construction so a relaunch
@@ -295,10 +229,6 @@ export function createFlowMachine(
   load: FlowLoad,
   store?: FlowStateStore,
   onEnter?: FlowEnterStep,
-  readLoop?: FlowReadLoop,
-  readLoopDef?: FlowReadLoopDef,
-  readLoopCost?: FlowReadLoopCost,
-  now: () => number = Date.now,
   readAppLoopView?: FlowReadAppLoopView,
 ): FlowMachine {
   if (!load.ok) {
@@ -310,7 +240,10 @@ export function createFlowMachine(
         position: 0,
         total: 0,
         status: 'error',
-        error: load.error,
+        // CWE-117/CWE-1007 (§16.3): the load-error message interpolates repo-authored content (a step id, a
+        // kind:, a js-yaml snippet), so strip display-unsafe control chars ONCE over the whole composed
+        // message at the single place FlowStateView.error is populated (§B.3).
+        error: stripDisplayControlChars(load.error),
         ...(named !== null ? { userTitle: named } : {}),
       };
     };
@@ -350,9 +283,6 @@ export function createFlowMachine(
   // The flow's resolved typed inputs (§18.4 / §24.2.3 T3), flow-wide so a value resolved at one step
   // threads to later steps.
   let inputs: Record<string, string> = {};
-  // §26.10 — when THIS run of the flow began. The cost meter sweeps session logs from here, so it must
-  // survive every transition within a run and never outlive one.
-  let startedAt: number | null = null;
   // §22.3.1.
   let userTitle: string | null = null;
 
@@ -365,7 +295,6 @@ export function createFlowMachine(
     index = 0;
     status = 'not_started';
     inputs = {};
-    startedAt = null;
     const persisted = store.read();
     if (persisted) {
       const i = names.indexOf(persisted.step);
@@ -374,7 +303,6 @@ export function createFlowMachine(
         status = persisted.status;
       }
       if (persisted.inputs) inputs = { ...persisted.inputs };
-      if (persisted.startedAt !== undefined) startedAt = persisted.startedAt;
       userTitle = persisted.title ?? null;
     } else userTitle = store.readTitle();
   };
@@ -389,14 +317,11 @@ export function createFlowMachine(
     const raw = inputs[name];
     return typeof raw === 'string' && /^\d+$/.test(raw.trim()) ? Number(raw.trim()) : undefined;
   };
-  const computeRefs = (
-    loop: AgentLoopState | null,
-    gates: { ticketStepEntered: boolean; prStepEntered: boolean; loopEntered: boolean },
-  ): FlowRefs | undefined => {
-    const ticketFromInput = gates.ticketStepEntered ? numericInput(ticketInput?.name) : undefined;
-    const prFromInput = gates.prStepEntered ? numericInput(prInput?.name) : undefined;
-    const ticket = ticketFromInput ?? (gates.loopEntered ? loop?.linkedIssues[0] : undefined);
-    const pr = prFromInput ?? (gates.loopEntered ? (loop?.pr ?? undefined) : undefined);
+  const computeRefs = (gates: { ticketStepEntered: boolean; prStepEntered: boolean }): FlowRefs | undefined => {
+    // Refs come only from the flow's typed inputs now — the fallback onto the retired engine's state-mirror
+    // linkedIssues/pr went with the bridge (§B.3; recorded as a removed capability in §F).
+    const ticket = gates.ticketStepEntered ? numericInput(ticketInput?.name) : undefined;
+    const pr = gates.prStepEntered ? numericInput(prInput?.name) : undefined;
     const refs: FlowRefs = {};
     if (typeof ticket === 'number') refs.ticket = ticket;
     if (typeof pr === 'number') refs.pr = pr;
@@ -414,28 +339,39 @@ export function createFlowMachine(
       ...(step.todoTemplate ? { templateRef: step.todoTemplate } : {}),
       ...(userTitle !== null ? { userTitle } : {}),
     };
-    // §24.2.3 T7 (refs) / §24.2.3 T2 (loop mirror).
+    // §24.2.3 T7 (refs) / §27.15 (loop view).
     const entered = status === 'not_started' ? [] : steps.slice(0, index + 1);
     const ticketStepEntered = ticketInput !== undefined && entered.includes(ticketInput.step);
     const prStepEntered = prInput !== undefined && entered.includes(prInput.step);
-    const loopEntered = entered.some((s) => s.kind === 'loop');
-    // §24.2.3 T2 / §27.15 — the loop-view provider is engine-selected on the most-recent loop step's
-    // namespace binding. An `app` step feeds the §27 provider, which owns the whole view and reads no
-    // §26 loop state; a `legacy` (or namespace-absent) step feeds the §26 provider unchanged.
-    const mostRecentLoopStep = entered.reduce<FlowStepDef | undefined>((last, s) => (s.kind === 'loop' ? s : last), undefined);
-    const appLoopName = mostRecentLoopStep?.loopNamespace === APP_LOOP_NAMESPACE ? mostRecentLoopStep.loop : undefined;
-    // §27.15 — the flow module holds no independent reader of §26 loop state on the app path: an app step's
-    // refs never source from a stray §26 state.yaml, so a §27 step surfaces none of that engine's ticket/PR.
-    const liveLoop = appLoopName !== undefined ? null : (readLoop?.() ?? null);
-    const refs = computeRefs(liveLoop, { ticketStepEntered, prStepEntered, loopEntered });
+    const refs = computeRefs({ ticketStepEntered, prStepEntered });
     const withRefs = refs ? { ...base, refs } : base;
-    if (!loopEntered) return withRefs;
-    if (appLoopName !== undefined) {
-      const appLoop = readAppLoopView?.(appLoopName);
-      return appLoop ? { ...withRefs, loop: appLoop } : withRefs;
+    // §27.15 — the loop-view provider is selected on the most-recent loop step's namespace binding. Every
+    // binding names the surviving (§27) engine except an explicitly-`legacy` one, which names no surviving
+    // engine (AC 4): that marked binding yields an error loop view here rather than reaching any provider.
+    const mostRecentLoopStep = entered.reduce<FlowStepDef | undefined>((last, s) => (s.kind === 'loop' ? s : last), undefined);
+    if (!mostRecentLoopStep) return withRefs;
+    const binding = mostRecentLoopStep.loopNamespace ?? DEFAULT_LOOP_NAMESPACE;
+    if (bindsNoSurvivingEngine(binding)) {
+      // AC 4 marked-binding arm: a `legacy`-bound step names no surviving engine. Surface an error loop view
+      // on the existing loop-error surface (human-needed so the cue/notifier fire, no round) with a reason
+      // naming the real cause; the rest of the flow stays operable, and the gate-decision seam refuses a
+      // marked binding at the operation (§B.3). Replaces the deleted legacy deriveLoopView fall-through, stated
+      // as an affirmative test on the marking rather than the residue of a deleted branch.
+      return {
+        ...withRefs,
+        loop: {
+          status: 'error',
+          pr: null,
+          branch: null,
+          ready: false,
+          actionable: false,
+          humanNeeded: true,
+          errorReason: 'this loop step binds the retired "legacy" engine, which no longer exists — set loop_namespace to the surviving engine, or remove it',
+        },
+      };
     }
-    const loopDef = mostRecentLoopStep?.loop ? (readLoopDef?.(mostRecentLoopStep.loop) ?? null) : null;
-    return deriveLoopView(withRefs, liveLoop, loopDef, readLoopCost?.() ?? null);
+    const appLoop = readAppLoopView?.(mostRecentLoopStep.loop);
+    return appLoop ? { ...withRefs, loop: appLoop } : withRefs;
   };
 
   const persist = (): void =>
@@ -443,7 +379,6 @@ export function createFlowMachine(
       step: current().id,
       status,
       ...(Object.keys(inputs).length > 0 ? { inputs } : {}),
-      ...(startedAt !== null ? { startedAt } : {}),
       ...(userTitle !== null ? { title: userTitle } : {}),
     });
 
@@ -473,7 +408,6 @@ export function createFlowMachine(
     start: () => {
       requireStatus('not_started', 'start');
       status = 'in_progress';
-      startedAt = now();
       persist();
       return enter(view());
     },
@@ -493,7 +427,6 @@ export function createFlowMachine(
       index = 0;
       status = 'in_progress';
       inputs = {}; // §18.4: a restart re-requests resolved inputs; undo() preserves them
-      startedAt = now(); // a re-run is a new run: its cost starts from zero (§26.10)
       persist();
       return enter(view());
     },
@@ -505,12 +438,11 @@ export function createFlowMachine(
     },
     revertStep: (fromStepId) => {
       // Guard, don't throw: an async bootstrap failure may arrive after the operator terminated or
-      // navigated, so a mismatch is inert rather than an unhandled rejection (§26.9).
+      // navigated, so a mismatch is inert rather than an unhandled rejection (§27).
       if (status !== 'in_progress' || current().id !== fromStepId) return view();
       if (index > 0) index -= 1;
       else {
         status = 'not_started'; // a first-step loop has no previous step; not_started is recoverable
-        startedAt = null; // reverted to not_started: no active run window (mirrors terminate, §26.10)
       }
       persist();
       return view(); // no enter(): a rollback restores the prior step, it does not re-run its entry actions
@@ -522,7 +454,6 @@ export function createFlowMachine(
       index = 0;
       status = 'not_started';
       inputs = {};
-      startedAt = null; // an abandoned run leaves no window for the next run's cost to be measured from
       persist();
       return view(); // not_started enters no step, so no onEnter (mirrors advance → done)
     },
@@ -558,7 +489,7 @@ export interface FlowManager {
   advance(repoKey: string): FlowStateView;
   restart(repoKey: string): FlowStateView;
   undo(repoKey: string): FlowStateView;
-  /** Roll a repo's half-entered bootstrap step back one step after a failed pickup (§26.9). */
+  /** Roll a repo's half-entered bootstrap step back one step after a failed bootstrap (§27). */
   revertStep(repoKey: string, fromStepId: string): FlowStateView;
   terminate(repoKey: string): FlowStateView;
   provideInput(repoKey: string, values: Record<string, string>): FlowStateView;
@@ -573,18 +504,10 @@ export interface FlowManagerDeps {
   makeStore?: (repoKey: string) => FlowStateStore;
   /** Run a step's entry action (§18.6/§19.3). Todo templates instantiate on demand, not here. */
   onEnterStep?: FlowEnterStep;
-  /** Read a repo's agent-loop state.yaml mirror (§24.2.3 T2); omitted → loop steps render no mirror. */
-  readLoopState?: (repoKey: string) => AgentLoopState | null;
-  /** Resolve a repo's loop step's bound LoopDef (§24.2.3 T2 / §18.1); omitted → readiness degrades
-   *  to the awaiting-human-* family with no gate options. */
-  readLoopDef?: (repoKey: string, name: string) => LoopDef | null;
-  /** The formatted §26.10 cost readout for a repo's loop, or null when none recorded; omitted → no cost. */
-  readLoopCost?: (repoKey: string) => string | null;
-  /** Resolve a repo's `app`-namespace loop step's §27 def and produce its whole loop view (§27.15);
-   *  omitted → an app step renders no loop view rather than falling back to §26. Reads no §26 state. */
+  /** Resolve a repo's loop step's §27 def and produce its whole loop view (§27.15); omitted → a loop step
+   *  renders no loop view. A `legacy`-marked step never reaches this — its marked-binding error view (AC 4)
+   *  is produced in the machine. */
   readAppLoopView?: (repoKey: string, name: string) => FlowLoopView;
-  /** The current instant, stamped onto a run when it starts (§26.10); omitted → the wall clock. */
-  now?: () => number;
 }
 
 export function createFlowManager(deps: FlowManagerDeps): FlowManager {
@@ -606,10 +529,6 @@ export function createFlowManager(deps: FlowManagerDeps): FlowManager {
       load,
       makeStore(repoKey),
       deps.onEnterStep,
-      deps.readLoopState ? () => deps.readLoopState!(repoKey) : undefined,
-      deps.readLoopDef ? (name) => deps.readLoopDef!(repoKey, name) : undefined,
-      deps.readLoopCost ? () => deps.readLoopCost!(repoKey) : undefined,
-      deps.now,
       deps.readAppLoopView ? (name) => deps.readAppLoopView!(repoKey, name) : undefined,
     );
     cache.set(repoKey, { sig, machine });

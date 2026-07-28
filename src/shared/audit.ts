@@ -37,9 +37,9 @@ export type AuditEvent =
   | { ts: string; type: 'loop.iteration'; n: number }
   | { ts: string; type: 'command'; source: string; cmd: string; exit: number | null }
   | { ts: string; type: 'outputs.snapshot'; pr: number | null; files: AuditOutputFile[] }
-  // §26.10 — the per-iteration cost meter: the priced dollars + any unpriced model ids, tagged by iteration.
+  // The per-iteration cost meter: the priced dollars + any unpriced model ids, tagged by iteration.
   | { ts: string; type: 'loop.cost'; iteration: number; usd: number; unpriced: string[] }
-  // §26.7 — the per-iteration CI snapshot (run-don't-block): the check counts read at review time, tagged
+  // The per-iteration CI snapshot (run-don't-block): the check counts read at review time, tagged
   // by iteration. Display-only — recorded best-effort, never gates the loop.
   | { ts: string; type: 'loop.ci'; iteration: number; total: number; passed: number; failed: number; pending: number }
   // §24.2.3 T4 — the OS refused to deliver a raised attention notification. Not folded into the
@@ -210,9 +210,9 @@ export interface RunTimeline {
   todos: TodoLike[];
   commands: { source: string; cmd: string; exit: number | null }[];
   snapshots: { pr: number | null; files: AuditOutputFile[] }[];
-  /** The §26.10 per-iteration cost events, in order — priced dollars + any unpriced model ids per iteration. */
+  /** The per-iteration cost events, in order — priced dollars + any unpriced model ids per iteration. */
   costs: { iteration: number; usd: number; unpriced: string[] }[];
-  /** The §26.7 per-iteration CI snapshot events, in order — the check counts read at review time. */
+  /** The per-iteration CI snapshot events, in order — the check counts read at review time. */
   ci: { iteration: number; total: number; passed: number; failed: number; pending: number }[];
 }
 
@@ -344,8 +344,8 @@ export function consolidateAuditCmd(kind: ConsolidateAuditKind, round: number, d
  *  share it, never re-spelled as ad-hoc strings. `decision` records the option the human took; `side-effect`
  *  and `side-effect-failed` record the approve GitHub call's outcome (a failure is recorded, never swallowed,
  *  yet never aborts the terminal accept — §27.13 / AC3). `accept-failed` records an unpersisted terminal
- *  accept, which — unlike a side-effect failure — DOES abort the decision so the flow never advances over it
- *  (§26 D48). `decision-dropped` records a request-changes the engine could not start (the runner was mid-turn
+ *  accept, which — unlike a side-effect failure — DOES abort the decision so the flow never advances over it.
+ *  `decision-dropped` records a request-changes the engine could not start (the runner was mid-turn
  *  or the gate raced out), distinct from `decision` so the audit never claims a round that never ran (AC4).
  *  `clear-polish-failed` records an approve whose best-effort polish-stand-down cleanup threw AFTER the accept
  *  persisted — recorded (never swallowed) yet never aborting the terminal accept, since a residual stand-down
