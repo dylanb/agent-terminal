@@ -1237,15 +1237,12 @@ async function createWindow(): Promise<void> {
     return list;
   };
 
-  // §26 — the live "what the loop mechanics are doing now" descriptor, derived fresh on every view so a
-  // spinner phrase is never stale. Scoped to the repo the view is for.
+  // §27.10 — the live "what the loop mechanics are doing now" descriptor, derived fresh on every view so a
+  // spinner phrase is never stale. Scoped to the repo the view is for. Only the surviving bootstrap (pickup)
+  // phrase remains; the retired engine's turn-phase arm is gone (§B.21).
   const loopActivityFor = (repoKey: string): LoopActivity | null =>
     deriveLoopActivity({
       pickup: pickupInFlight?.repoKey === repoKey ? { issue: pickupInFlight.issue, wipe: pickupInFlight.wipe } : null,
-      turn:
-        activeTurn?.repoDir === repoKey && turnRunner.state() === 'in-flight'
-          ? { kind: activeTurn.kind, injected: turnPromptInjected }
-          : null,
     });
 
   const withDerived = (repoKey: string, view: FlowStateView): FlowStateView => {
