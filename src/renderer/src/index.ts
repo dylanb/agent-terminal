@@ -9,7 +9,6 @@ import { createLoopPanel, type LoopPanel } from './loopPanel';
 import { createFlowInputModal } from './flowInputModal';
 import { createFeedbackComposer } from './feedbackComposer';
 import { createRedoComposer } from './redoComposer';
-import { wireBootstrapConflict } from './wireBootstrapConflict';
 import { wireAppBootstrapConflict } from './wireAppBootstrapConflict';
 import { createConfirmDialog } from './confirmDialog';
 import { createErrorDialog, type ErrorDialogOptions } from './errorDialog';
@@ -164,11 +163,6 @@ if (flowStripHost) {
       errors: errorDialog,
       confirmations: confirmDialog,
       cancelPendingConfirmation: () => requestTerminate?.cancelPending(),
-    });
-    wireBootstrapConflict({
-      onBootstrapConflict: (cb) => window.flow.onBootstrapConflict(cb),
-      confirm: (opts) => flowModals!.showConfirmation(opts),
-      resolve: (key, wipe) => window.flow.resolveBootstrapConflict(key, wipe),
     });
     wireAppBootstrapConflict({
       onConflict: (cb) => window.flow.onAppBootstrapConflict(cb),
