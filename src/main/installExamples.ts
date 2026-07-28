@@ -1,4 +1,4 @@
-// §18.1/§23.4/§26.5; writes route through atomicWriteFileSync (CWE-59).
+// §18.1/§23.4; writes route through atomicWriteFileSync (CWE-59).
 
 import { lstatSync, readFileSync, statSync } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
@@ -11,18 +11,11 @@ import type { BundleLocation } from './bundleLocation';
 import {
   resolveExampleCommandsDir,
   resolveExampleFlowDir,
-  resolveExampleLoopsDir,
   resolveExampleLoopsV2Dir,
 } from './exampleAssets';
-import { listBundledSkills } from './exampleSkills';
 import { FLOW_DEF_FILE, flowHomeDir } from './flow';
 import { TODO_TEMPLATES_SUBDIR, isTodoTemplateFile, todoTemplatesDir } from './todoTemplate';
-import {
-  userConfigCommandsDir,
-  userConfigLoopsDir,
-  userConfigLoopsV2Dir,
-  userConfigSkillsDir,
-} from './userConfig';
+import { userConfigCommandsDir, userConfigLoopsV2Dir } from './userConfig';
 import {
   INSTALL_DESTINATION_IDS,
   type DestRelativePath,
@@ -138,19 +131,6 @@ function flowFiles(bundleDir: string): Plan {
   return rels.map((rel) => ({ rel, src: path.join(bundleDir, rel) }));
 }
 
-/** Claude Code discovers a skill only as `<skills root>/<skill name>/`, while §26.5 requires each skill
- *  under its own loop directory. Colliding names across loops are refused at build time (exampleSkills). */
-function skillFiles(loopsBundleDir: string): Plan {
-  if (absent(loopsBundleDir)) return null;
-  const out: PlannedFile[] = [];
-  for (const skill of listBundledSkills(loopsBundleDir)) {
-    for (const rel of walkFiles(skill.dir)) {
-      out.push({ rel: destRelative(path.join(skill.name, rel)), src: path.join(skill.dir, rel) });
-    }
-  }
-  return out;
-}
-
 export interface InstallDestination {
   id: InstallDestinationId;
   bundleDir: string;
@@ -177,7 +157,7 @@ interface DestinationSpec {
 const CONFIG_ROOT_FIX = 'Set CLAUDE_CONFIG_DIR to an absolute path, or unset it to use ~/.claude.';
 const HOME_ROOT_FIX = 'Set $HOME to an absolute path.';
 
-/** §18.1/§26.5/§27.15. */
+/** §18.1/§27.15. */
 const DESTINATIONS: Record<InstallDestinationId, DestinationSpec> = {
   flow: {
     bundle: resolveExampleFlowDir,
@@ -191,20 +171,6 @@ const DESTINATIONS: Record<InstallDestinationId, DestinationSpec> = {
     target: (_flow, cfg) => userConfigLoopsV2Dir(cfg),
     rootFix: CONFIG_ROOT_FIX,
     plan: filesUnder,
-    overwrite: { mode: 'confirm-overwrite' },
-  },
-  loops: {
-    bundle: resolveExampleLoopsDir,
-    target: (_flow, cfg) => userConfigLoopsDir(cfg),
-    rootFix: CONFIG_ROOT_FIX,
-    plan: filesUnder,
-    overwrite: { mode: 'confirm-overwrite' },
-  },
-  skills: {
-    bundle: resolveExampleLoopsDir,
-    target: (_flow, cfg) => userConfigSkillsDir(cfg),
-    rootFix: CONFIG_ROOT_FIX,
-    plan: skillFiles,
     overwrite: { mode: 'confirm-overwrite' },
   },
   commands: {

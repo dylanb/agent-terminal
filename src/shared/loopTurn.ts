@@ -1,18 +1,12 @@
-// §26.3/D47a — the per-turn done-signal contract. One definition so the orchestrator (which emits the
-// instruction) and the main-process detector (which watches the file) cannot drift — the shared-semantics
-// rule. A turn is "done" when the `.agent-loop/turn-done` FILE is written with the turn key as its content.
+// The per-turn done-signal contract. One definition so the caller that emits the instruction and the
+// main-process detector that watches the file cannot drift — the shared-semantics rule. A turn is "done"
+// when the caller-supplied `doneRelPath` FILE is written with the turn key as its content.
 //
-// §26 D42a — the signal must never be anything the agent can PRINT: a hosted TUI agent reflows the injected
-// prompt on echo, so any printable marker named in the prompt is echoed back and read as a completion.
+// The signal must never be anything the agent can PRINT: a hosted TUI agent reflows the injected prompt on
+// echo, so any printable marker named in the prompt is echoed back and read as a completion.
 
 /** The file a turn writes last as a robust, cross-process done-signal. */
 export const TURN_DONE_FILENAME = 'turn-done';
-
-/** The §26 engine's repo-relative done-file path (its `.agent-loop/` area) — the default the instruction
- *  names, so §26 is byte-for-byte unchanged. §26 is an active, coexisting engine (§27.15), not deprecated.
- *  The §27 engine passes its own area (.agent-terminal/loop/turn-done): one vocabulary,
- *  directory-parameterized (the ticket's authorized leaf-primitive lift), never a copy. */
-export const AGENT_LOOP_DONE_REL_PATH = `.agent-loop/${TURN_DONE_FILENAME}`;
 
 /** The text the orchestrator appends to an injected turn prompt, instructing the agent to write the
  *  done-signal FILE as its final action once its own work and any spawned subagents have finished. When
@@ -21,7 +15,7 @@ export const AGENT_LOOP_DONE_REL_PATH = `.agent-loop/${TURN_DONE_FILENAME}`;
  *  MUST re-read it and confirm each output is present and non-empty on disk BEFORE writing the done-signal:
  *  a done-signal written while an output was never produced (a silently failed / mis-pathed Write) makes the
  *  run detect "done" against a missing file → retry → error. */
-export function doneSignalInstruction(turnKey: string, artifact?: string, doneRelPath: string = AGENT_LOOP_DONE_REL_PATH): string {
+export function doneSignalInstruction(turnKey: string, artifact: string | undefined, doneRelPath: string): string {
   const verify = artifact
     ? [
         '',

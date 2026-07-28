@@ -24,13 +24,3 @@ export function run(file: string, args: string[], cwd: string, failure: string):
     });
   });
 }
-
-export function runLegacy(file: string, args: string[], cwd: string): Promise<string> {
-  return new Promise((resolve, reject) => {
-    // §27.15
-    execFile(file, args, { cwd, timeout: APP_COMMAND_TIMEOUT_MS }, (err, stdout) => {
-      if (err) reject(err);
-      else resolve(stdout);
-    });
-  });
-}
