@@ -240,28 +240,31 @@ describe('folding session-log records into a run`s totals', () => {
     expect(totals.totals().reduce((n, t) => n + t.input, 0)).toBe(banked + 500);
   });
 
-  // The whole point of evicting rather than refusing: real spend under a PRICED model still reaches the
-  // figure once the bound is crossed, and the figure is distinguishable from a genuinely-zero run.
-  it('prices real spend that arrives after the model bound is crossed, and never reports a bare $0.00', () => {
+  // The exchange eviction buys, at the sink the operator's ruling names. Drift ids that consumed NOTHING
+  // are the hostile shape: `priceTokens` skips a zero-token model, so they never reach `unpricedModels`
+  // and the `unknown` fallback has nothing to fire on — a refusal then reports a run's real spend as a
+  // bare `$0.00`, character-for-character what a genuinely-zero run reports. Evicting puts those dollars
+  // under an id no table holds, so the figure says `unknown` instead.
+  it('says unknown, not a bare $0.00, for spend that arrives after the model bound is crossed', () => {
     const totals = createRunTotals(FLOOR);
     for (let i = 0; i < MAX_BANKED_MODELS; i += 1) {
-      totals.fold(turnLine({ ts: '2026-07-09T12:00:01.000Z', id: `drift${i}`, model: `drifted-${i}`, input: 1 }));
+      totals.fold(turnLine({ ts: '2026-07-09T12:00:01.000Z', id: `drift${i}`, model: `drifted-${i}` }));
     }
-    totals.fold(turnLine({ ts: '2026-07-09T12:00:02.000Z', id: 'real', model: 'claude-sonnet-5', input: 1_000_000 }));
+    totals.fold(turnLine({ ts: '2026-07-09T12:00:02.000Z', id: 'real', model: 'claude-sonnet-5', output: 1_000_000 }));
 
     const cost = priceTokens(totals.totals());
-    expect(cost.usd).toBe(3);
-    expect(cost.unpricedModels.length).toBeGreaterThan(0);
-    expect(formatCost(cost)).toBe('$3.00 +unknown');
+    expect(formatCost(cost)).toBe('unknown');
+    expect(cost.unpricedModels).not.toEqual([]);
   });
 
-  // ...and a run that crosses the bound with NO priced spend still says `unknown` rather than `$0.00`,
-  // which is what a run that genuinely spent nothing reports.
-  it('reports unknown rather than a confident zero for a run whose every model is past the bound', () => {
+  // ...and spend under a model banked BEFORE the bound is crossed keeps its dollars, so the figure reads
+  // the priced total beside the marker rather than collapsing to one or the other.
+  it('keeps the priced dollars of a model banked before the bound beside the unknown marker', () => {
     const totals = createRunTotals(FLOOR);
+    totals.fold(turnLine({ ts: '2026-07-09T12:00:01.000Z', id: 'real', model: 'claude-sonnet-5', input: 1_000_000 }));
     for (let i = 0; i < MAX_BANKED_MODELS + 10; i += 1) {
-      totals.fold(turnLine({ ts: '2026-07-09T12:00:01.000Z', id: `drift${i}`, model: `drifted-${i}`, input: 1 }));
+      totals.fold(turnLine({ ts: '2026-07-09T12:00:02.000Z', id: `drift${i}`, model: `drifted-${i}`, input: 1 }));
     }
-    expect(formatCost(priceTokens(totals.totals()))).toBe('unknown');
+    expect(formatCost(priceTokens(totals.totals()))).toBe('$3.00 +unknown');
   });
 });
