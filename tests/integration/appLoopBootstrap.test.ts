@@ -23,7 +23,6 @@ import type { AppBootstrapConflictTarget } from '../../src/shared/appBootstrap';
 const PREEXISTING_OID = 'a'.repeat(40);
 
 const bootstrap: AppLoopBootstrapSpec = {
-  origin: 'operator',
   initialStatus: 'planning',
   wipe: { mode: 'abort' },
   branchTemplate: 'plan-loop/issue-{issue}',
@@ -34,10 +33,9 @@ const bootstrap: AppLoopBootstrapSpec = {
   ],
 };
 
-function spec(origin: AppLoopBootstrapSpec['origin'] = 'operator'): AppLoopBootstrapSpec {
+function spec(): AppLoopBootstrapSpec {
   return {
     ...bootstrap,
-    origin,
     initialLabels: [...bootstrap.initialLabels],
   };
 }
@@ -316,30 +314,6 @@ describe('runAppLoopBootstrap (§27.10 ST2)', () => {
       issue: 78,
       initialStatus: 'planning',
     });
-  });
-
-  it('refuses a repo-resident pickup before the first git or gh operation (CWE-829)', async () => {
-    const g = fakeGit();
-    const h = fakeGitHub();
-    const result = await runAppLoopBootstrap(
-      runnerDeps(g, h),
-      request({ spec: spec('repo') }),
-    );
-    expect(result).toEqual({ ok: false, kind: 'error' as const, error: expect.stringMatching(/origin|repo-resident/i) });
-    expect(g.calls).toEqual([]);
-    expect(h.calls).toEqual([]);
-  });
-
-  it('honors command-bearing pickup only from the operator-authored resolver branch', async () => {
-    const g = fakeGit();
-    const h = fakeGitHub();
-    const result = await runAppLoopBootstrap(
-      runnerDeps(g, h),
-      request({ spec: spec('app-bundled') }),
-    );
-    expect(result).toEqual({ ok: false, kind: 'error' as const, error: expect.stringMatching(/operator-authored|origin/i) });
-    expect(g.calls).toEqual([]);
-    expect(h.calls).toEqual([]);
   });
 
   it.each([0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1])(

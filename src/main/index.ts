@@ -113,7 +113,6 @@ import {
   createAppLoopBootstrapCoordinator,
   createAppLoopBootstrapSession,
   resolveAppGateRefs,
-  toAppLoopBootstrapSpec,
   type AppLoopBootstrapCoordinator,
   type AppLoopBootstrapSession,
 } from './appLoopBootstrap';
@@ -440,10 +439,7 @@ async function createWindow(): Promise<void> {
         entryToken: t.token,
         entry: t.entry,
         issue,
-        bootstrap:
-          resolved.def.pickup === null
-            ? null
-            : toAppLoopBootstrapSpec(resolved.def.origin, resolved.def.pickup),
+        bootstrap: resolved.def.pickup,
       });
     },
   });

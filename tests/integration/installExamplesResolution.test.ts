@@ -60,7 +60,7 @@ describe('after the install, every loop name the shipped flow binds resolves on 
         },
       });
       expect(resolved.ok).toBe(true);
-      if (resolved.ok) expect(resolved.def.origin).toBe('operator');
+      if (resolved.ok) expect(resolved.tierRoot).toBe(appLoopsTargetDir());
     }
   });
 
@@ -157,7 +157,7 @@ describe('the shipped feature-dev flow binds the complete §27 chain (ST3 AC6)',
     expect(defs[2].outputs).toEqual([]);
   });
 
-  it('installs the §27 defs into the operator tier used by the bootstrap origin gate', () => {
+  it('installs the §27 defs into the operator tier', () => {
     applyInstallExamples(dirs, []);
     for (const name of ['groom-loop', 'plan-loop', 'impl-loop']) {
       const resolved = resolveLoopDefV2(name, {
@@ -168,7 +168,7 @@ describe('the shipped feature-dev flow binds the complete §27 chain (ST3 AC6)',
         },
       });
       expect(resolved.ok).toBe(true);
-      if (resolved.ok) expect(resolved.def.origin).toBe('operator');
+      if (resolved.ok) expect(resolved.tierRoot).toBe(appLoopsTargetDir());
     }
   });
 });

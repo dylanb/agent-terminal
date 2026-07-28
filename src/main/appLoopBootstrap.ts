@@ -10,7 +10,7 @@ import {
   type AppBootstrapGit,
   type AppBootstrapGitHub,
 } from './bootstrapPorts';
-import type { LoopDefV2Origin, PickupContractV2 } from './loopDefV2';
+import type { PickupContractV2 } from './loopDefV2';
 import { errMsg } from './errno';
 import type { AppBootstrapAuditKind } from '../shared/audit';
 import {
@@ -35,14 +35,9 @@ export interface AppLoopBootstrapRequest {
   confirmedWipe?: AppBootstrapConflictTarget;
 }
 
-export type AppLoopBootstrapSpec = { origin: LoopDefV2Origin } & PickupContractV2;
-
-export function toAppLoopBootstrapSpec(
-  origin: LoopDefV2Origin,
-  pickup: PickupContractV2,
-): AppLoopBootstrapSpec {
-  return { origin, ...pickup };
-}
+// Def tiers carry no trust distinction (v2.129): a bootstrap spec is exactly the resolved def's pickup
+// contract, with no tier/origin label gating it.
+export type AppLoopBootstrapSpec = PickupContractV2;
 
 export type AppBootstrapPrOwnership =
   | { kind: 'none' }
@@ -176,9 +171,6 @@ export async function runAppLoopBootstrap(
     recovery === undefined
       ? { ok: false, kind: 'error', error }
       : { ok: false, kind: 'error', error, requiresAttention: true, recovery };
-  if (req.spec.origin !== 'operator') {
-    return fail(`refused bootstrap from a non-operator-authored loop def (origin: ${req.spec.origin})`);
-  }
   if (!Number.isSafeInteger(req.issue) || req.issue <= 0) return fail('pickup requires a positive GitHub issue number');
   if (req.spec.initialStatus.trim().length === 0) return fail('pickup requires a non-blank initial status');
   const branch = req.spec.branchTemplate.replaceAll('{issue}', String(req.issue));

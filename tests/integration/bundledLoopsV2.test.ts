@@ -19,7 +19,7 @@ describe('bundled §27 loop-def tree (AC 1 / §27.15)', () => {
       const r = resolveLoopDefV2(name, { tiers: { operator: null, appBundled: SOURCE_TREE }, repoDir });
       expect(r.ok, r.ok ? '' : r.reason).toBe(true);
       if (!r.ok) return;
-      expect(r.def.origin).toBe('app-bundled');
+      expect(r.tierRoot).toBe(SOURCE_TREE);
       expect(r.def.gate.length).toBeGreaterThan(0);
     });
 

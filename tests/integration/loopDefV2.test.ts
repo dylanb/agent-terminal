@@ -107,14 +107,14 @@ describe('resolveLoopDefV2 — parse round-trip (§27.8, AC 3)', () => {
     expect(d.outputs[0].id).toBe('plan');
   });
 
-  it('assigns origin from the tier it resolved from — never from def content (AC 5)', () => {
+  it('reports the tier ROOT it resolved from — a structural fact, never a def-content field (AC 5)', () => {
     plantDef(join(appDir, 'loops-v2'), 'plan-loop', VALID_DEF);
     const app = resolveLoopDefV2('plan-loop', { tiers: tiers(), repoDir });
-    expect(app.ok && app.def.origin).toBe('app-bundled');
+    expect(app.ok && app.tierRoot).toBe(join(appDir, 'loops-v2'));
 
     plantDef(join(opDir, 'loops-v2'), 'plan-loop', VALID_DEF);
     const op = resolveLoopDefV2('plan-loop', { tiers: tiers(), repoDir });
-    expect(op.ok && op.def.origin).toBe('operator'); // operator tier wins (first-hit)
+    expect(op.ok && op.tierRoot).toBe(join(opDir, 'loops-v2')); // operator tier wins (first-hit)
   });
 
   it('refuses an operator def leaf symlinked to repository-owned content', () => {
@@ -151,13 +151,13 @@ describe('resolveLoopDefV2 — parse round-trip (§27.8, AC 3)', () => {
     }
   });
 
-  it('resolves a repo-local registry override as untrusted repo origin before the operator tier', () => {
+  it('resolves a repo-local registry override before the operator tier (repo tier root)', () => {
     plantDef(join(opDir, 'loops-v2'), 'plan-loop', VALID_DEF);
     plantDef(join(repoDir, 'defs'), 'plan-loop', VALID_DEF);
     writeFileSync(join(repoDir, '.agent-loop.yaml'), 'loops:\n  plan-loop: defs/plan-loop/plan-loop.yaml\n');
     const r = resolveLoopDefV2('plan-loop', { tiers: tiers(), repoDir });
     expect(r.ok).toBe(true);
-    if (r.ok) expect(r.def.origin).toBe('repo');
+    if (r.ok) expect(r.tierRoot).toBe(repoDir);
   });
 
   it('rejects a def that declares origin in its own content as an unknown key (AC 5)', () => {
@@ -425,7 +425,7 @@ describe('resolveLoopDefV2 — one executable surface (§27.8, Parnas / CWE-829)
   });
 });
 
-describe('resolveLoopDefV2 — name is resolver-assigned, not forgeable (contract symmetry with origin)', () => {
+describe('resolveLoopDefV2 — name is resolver-assigned, not forgeable', () => {
   it('rejects a def whose declared name disagrees with its filename-derived name', () => {
     plantDef(join(appDir, 'loops-v2'), 'plan-loop', VALID_DEF.replace('name: plan-loop', 'name: impl-loop'));
     const r = resolveLoopDefV2('plan-loop', { tiers: tiers(), repoDir });
