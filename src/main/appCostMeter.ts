@@ -50,6 +50,10 @@ interface RunCost {
   recorded: RecordedCost | null;
   idleSamples: number;
   degraded: boolean;
+  /** This run's sample already in flight, so a second arm for the SAME run settles as one. Held per run
+   *  rather than per repo: a run replaced mid-sample re-arms, and the replacement must not be handed the
+   *  retired run's promise — the retired sample returns at its own identity check without re-arming. */
+  sampling: Promise<void> | null;
 }
 
 function sameList(a: readonly string[] | null, b: readonly string[]): boolean {
@@ -83,19 +87,7 @@ export function createAppCostMeter(deps: AppCostMeterDeps): AppCostMeter {
 
   const release = (run: RunCost): void => bestEffort('sweep release', () => run.sweep.close());
 
-  const sampling = new Map<string, Promise<void>>();
-
-  const sample = (repoDir: string): Promise<void> => {
-    const already = sampling.get(repoDir);
-    if (already) return already;
-    const settled = takeSample(repoDir).finally(() => sampling.delete(repoDir));
-    sampling.set(repoDir, settled);
-    return settled;
-  };
-
-  const takeSample = async (repoDir: string): Promise<void> => {
-    const run = runs.get(repoDir);
-    if (!run) return;
+  const takeSample = async (repoDir: string, run: RunCost): Promise<void> => {
     let moved = false;
     try {
       const totals = await run.sweep.drain();
@@ -123,6 +115,15 @@ export function createAppCostMeter(deps: AppCostMeterDeps): AppCostMeter {
     if (runs.get(repoDir) !== run) return;
     run.idleSamples = moved ? 0 : run.idleSamples + 1;
     deps.armSample(repoDir, delayFor(run.idleSamples), () => sample(repoDir));
+  };
+
+  const sample = (repoDir: string): Promise<void> => {
+    const run = runs.get(repoDir);
+    if (!run) return Promise.resolve();
+    run.sampling ??= takeSample(repoDir, run).finally(() => {
+      run.sampling = null;
+    });
+    return run.sampling;
   };
 
   return {
@@ -156,6 +157,7 @@ export function createAppCostMeter(deps: AppCostMeterDeps): AppCostMeter {
             recorded: null,
             idleSamples: 0,
             degraded: false,
+            sampling: null,
           });
         }
         deps.armSample(repoDir, deps.sampleDelayMs, () => sample(repoDir));
