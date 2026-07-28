@@ -19,6 +19,17 @@ export function skillInvocation(ref: string): string {
   return ref.startsWith('/') ? ref : `/${ref}`;
 }
 
+/** A LOOP step's skill invocation, ready to inject as ONE submitted line: `skillInvocation`'s value with
+ *  every run of CR/LF collapsed to a single space (CWE-74). A repo-authored `skill:` scalar can carry a
+ *  newline, and a loop step's injection is submitted by the app (it supplies the final Enter), so an
+ *  un-collapsed value would submit N command lines with zero operator keystrokes. Collapse, not reject:
+ *  AC 10's clause is that the skill IS injected. Called ONLY at the two loop injection points (the seam's
+ *  loop-step arm and the bootstrap coordinator's hand-off); the manual-step arm keeps `skillInvocation`'s
+ *  value byte-identical, because there the operator is the one who presses Enter (§B.5 item 3, #98 non-goal). */
+export function injectableSkill(ref: string): string {
+  return skillInvocation(ref).replace(/[\r\n]+/g, ' ');
+}
+
 export interface FlowEntryActionDeps {
   /** True iff the shell is not at a ready prompt (§19.3, via OSC-133 / §8.3 quiescence). */
   isShellBusy(): boolean;

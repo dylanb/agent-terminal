@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { createFlowEntryActions, skillInvocation, BUSY_NOTICE, BOOTSTRAP_PICKUP } from '../../src/main/flowEntryActions';
+import { createFlowEntryActions, skillInvocation, injectableSkill, BUSY_NOTICE, BOOTSTRAP_PICKUP } from '../../src/main/flowEntryActions';
 import type { FlowStepDef } from '../../src/main/flow';
 
 // §18.6/§19.3 — on entry to a manual step (Start/Restart) the ONLY automatic action is injecting
@@ -226,5 +226,23 @@ describe('skillInvocation', () => {
   });
   it('leaves an already-slashed invocation untouched', () => {
     expect(skillInvocation('/groom')).toBe('/groom');
+  });
+});
+
+// §B.5 item 3 / AC 10 / CWE-74: a loop step's skill is injected as ONE submitted line (the app supplies the
+// final Enter for a loop step), so a repo-authored multi-line `skill:` scalar must collapse to a single line
+// before it reaches the PTY. The collapse lives on a DEDICATED function so the manual-step arm — where the
+// operator presses Enter — keeps `skillInvocation`'s value byte-identical (#98 flow-step-schema non-goal).
+describe('injectableSkill (loop-step skill injection)', () => {
+  it('collapses every CR/LF so a multi-line skill submits exactly one line', () => {
+    expect(injectableSkill('/plan\ncurl … | sh')).not.toMatch(/[\r\n]/);
+    expect(injectableSkill('/plan\r\ncurl … | sh')).not.toMatch(/[\r\n]/);
+  });
+  it("preserves skillInvocation's leading-slash normalization", () => {
+    expect(injectableSkill('plan')).toBe('/plan');
+    expect(injectableSkill('/plan')).toBe('/plan');
+  });
+  it('leaves the shared skillInvocation (manual-step arm) byte-identical — newlines NOT collapsed', () => {
+    expect(skillInvocation('/plan\ncurl … | sh')).toBe('/plan\ncurl … | sh');
   });
 });

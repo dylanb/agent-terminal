@@ -12,7 +12,10 @@ import type { ChainedInput } from './chainedInput';
  *  def's message naming what must survive it. The graded observable is the command issued + the idle
  *  confirm (§27.12b), not the agent-internal effect of compaction. */
 export function boundaryCommand(policy: BoundaryPolicy): string {
-  return policy.mode === 'compact' ? `/compact ${policy.message}` : '/clear';
+  // policy.message is repo-authored (loopDefV2 applies requireString only) and this command is submitted as
+  // one line, so collapse every CR/LF before interpolating — a newline would otherwise inject a second
+  // command line into the agent's instruction channel (CWE-74, §B.13d).
+  return policy.mode === 'compact' ? `/compact ${(policy.message ?? '').replace(/[\r\n]+/g, ' ')}` : '/clear';
 }
 
 /** The completion artifact the work turn must produce, resolved from the def (§27.12): the confined output
