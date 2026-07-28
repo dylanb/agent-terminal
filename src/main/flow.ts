@@ -15,7 +15,7 @@ import { gateForStatus, type LoopDef } from './loopDef';
 import { isHumanNeededStatus } from '../shared/loopStatus';
 import { isRecord } from './yamlRecord';
 import { errMsg } from './errno';
-import { APP_LOOP_NAMESPACE, DEFAULT_LOOP_NAMESPACE, isLoopNamespace, type LoopNamespace } from '../shared/loopNamespace';
+import { APP_LOOP_NAMESPACE, DEFAULT_LOOP_NAMESPACE, isRecognizedLoopBinding, type LoopBinding } from '../shared/loopNamespace';
 import { isSafePathSegment } from '../shared/pathSegment';
 
 /**
@@ -97,10 +97,11 @@ export interface FlowStepDef {
   todoTemplate?: string;
   /** The bound agent-loop LoopDef name; `loop` steps only. */
   loop?: string;
-  /** Which def namespace the loop binding names (§27.15): the closed set of `legacy` (§26) and `app`
-   *  (§27). Present on every `loop` step, defaulting to `legacy` when the flow file names none — so
-   *  engine choice is a property of the reviewed flow file, not of what is installed on the machine. */
-  loopNamespace?: LoopNamespace;
+  /** Which def namespace the loop binding names (§27.15): the surviving `app` (§27) member, or the retired
+   *  `legacy` marker the loader still recognizes (§H.5). Present on every `loop` step, defaulting to the
+   *  surviving engine when the flow file names none (AC 4) — so engine choice is a property of the reviewed
+   *  flow file, not of what is installed on the machine. */
+  loopNamespace?: LoopBinding;
   /** Per-step entry bootstrap (§18.3): `pickup` runs `agent-loop pickup <input>` on entry. The only
    *  kind in scope (§24.2.3 T3); the loader rejects any other value. */
   bootstrap?: 'pickup';
@@ -185,16 +186,19 @@ export function loadFlowDefinition(worktreeDir: string): FlowLoad {
       return { ok: false, error: `flow.yaml step "${raw.id}" has unsupported kind "${String(raw.kind)}" (supports: manual, loop)` };
     if (raw.kind === 'loop' && (typeof raw.loop !== 'string' || raw.loop.length === 0))
       return { ok: false, error: `flow.yaml loop step "${raw.id}" is missing its loop: LoopDef name` };
-    let loopNamespace: LoopNamespace = DEFAULT_LOOP_NAMESPACE;
+    let loopNamespace: LoopBinding = DEFAULT_LOOP_NAMESPACE;
     if (raw.kind === 'loop') {
       if (raw.loop_namespace !== undefined) {
-        if (!isLoopNamespace(raw.loop_namespace))
-          return { ok: false, error: `flow.yaml loop step "${raw.id}" names an unrecognized def namespace "${String(raw.loop_namespace)}" (supports: legacy, app)` };
+        if (!isRecognizedLoopBinding(raw.loop_namespace))
+          return { ok: false, error: `flow.yaml loop step "${raw.id}" names an unrecognized def namespace "${String(raw.loop_namespace)}" (supports: app)` };
         loopNamespace = raw.loop_namespace;
       }
-      // The §27 engine holds the flow-supplied loop name to one safe segment BEFORE it is joined to any
-      // tier root (§27.9); a §26 (legacy) name still validates at resolution, unchanged.
-      if (loopNamespace === APP_LOOP_NAMESPACE && !isSafePathSegment(raw.loop as string))
+      // The whole-file safe-segment abort gates on the namespace the FILE names, not on the resolved binding
+      // (§B.3): an explicitly-`app` step keeps today's whole-file rejection, while a namespace-less or a
+      // `legacy`-marked step with an unsafe name LOADS and fails per-step (AC 4's floor). The §27 engine
+      // still holds the flow-supplied name to one safe segment before joining any tier root (§27.9), so the
+      // per-step confinement is unchanged — only the file-level abort narrows.
+      if (raw.loop_namespace === APP_LOOP_NAMESPACE && !isSafePathSegment(raw.loop as string))
         return { ok: false, error: `flow.yaml loop step "${raw.id}" binds an app def name that is not a single safe path segment: ${String(raw.loop)}` };
     }
     if (raw.skill !== undefined && typeof raw.skill !== 'string')
