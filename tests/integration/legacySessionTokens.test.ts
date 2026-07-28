@@ -173,14 +173,14 @@ describe('scoping the meter to the run (§26.10)', () => {
     expect(readSessionTokens(dir)[0].input).toBe(5007);
   });
 
-  it('a run that has produced no turns yet prices to nothing, not to the repo`s history', () => {
+  it("a run that has produced no turns yet prices to nothing, not to the repo's history", () => {
     writeFileSync(join(dir, 'session.jsonl'), at('2026-07-01T00:00:00.000Z', 5000));
     expect(readSessionTokens(dir, FLOW_START)).toEqual([]);
   });
 });
 
 describe('session-log dir resolution (§26.10)', () => {
-  it('encodes a repo path into Claude Code`s project-dir name (non-alphanumerics → dash)', () => {
+  it("encodes a repo path into Claude Code's project-dir name (non-alphanumerics → dash)", () => {
     expect(encodeProjectDir('/Users/x/src/agent-terminal.one')).toBe('-Users-x-src-agent-terminal-one');
   });
 

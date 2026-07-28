@@ -1651,6 +1651,21 @@ const flowStation = (i: number) => page.locator('#flow-strip .flow.vert .stn').n
 const flowStepName = () => flowStation(1).locator('.nm'); // station 1 = the first real step (Not-started bookend at 0)
 const flowControl = () => page.locator('#flow-strip .flow-control');
 
+/** How long the strip gets to show a step after the `cd` that selects its flow — the same budget the
+ *  neighbouring boot waits in this file use. */
+const FLOW_STEP_TIMEOUT_MS = 15_000;
+
+/** Wait for the strip's first real step to read `name`. `typeCommand` returns once the keystrokes are
+ *  sent, so this is waiting on a chain that has not started: bash runs the `cd`, main notices the cwd,
+ *  resolves the flow def off disk and pushes it, and only then does the strip paint a station. Waiting for
+ *  the station to exist first splits "the strip has not rendered" from "the step is not this one" into two
+ *  failures with their own budgets, rather than one shared budget that reports `element(s) not found` for
+ *  either. */
+async function awaitFlowStep(name: string): Promise<void> {
+  await expect(flowStation(1)).toBeAttached({ timeout: FLOW_STEP_TIMEOUT_MS });
+  await expect(flowStepName()).toHaveText(name, { timeout: FLOW_STEP_TIMEOUT_MS });
+}
+
 // Multi-step manual flow named by `stepIds` (§24.2.3 T1).
 function seedMultiStepFlowRepo(prefix: string, stepIds: string[]): string {
   const dir = mkdtempSync(join(tmpdir(), prefix));
@@ -2276,7 +2291,7 @@ test('resolving a github-ticket input records input.resolved and ticket.assoc (�
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   await typeCommand(`cd "${repo}"`);
-  await expect(flowStepName()).toHaveText('groom', { timeout: 10_000 });
+  await awaitFlowStep('groom');
   await flowControl().click(); // Start → groom: run opens
   await expect.poll(() => auditRunFiles(home, repo).length).toBe(1);
   await flowControl().click(); // Advance → plan (bootstrap): the typed-input modal opens
@@ -2325,7 +2340,7 @@ test('in-app pickup records a `pickup` command event with its exit (§26.9 / §2
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   await typeCommand(`cd "${repo}"`);
-  await expect(flowStepName()).toHaveText('groom', { timeout: 10_000 });
+  await awaitFlowStep('groom');
   await flowControl().click(); // Start → groom: run opens
   await expect.poll(() => auditRunFiles(home, repo).length).toBe(1);
   await flowControl().click(); // Advance → plan (bootstrap): the typed-input modal opens
@@ -2785,7 +2800,7 @@ test('advancing INTO a later step fires its entry action: the skill injects on A
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   await typeCommand(`cd "${repo}"`);
-  await expect(flowStepName()).toHaveText('groom', { timeout: 10_000 });
+  await awaitFlowStep('groom');
 
   await flowControl().click(); // Start → groom: no skill, nothing injected
   await expect(flowStation(1)).toHaveClass(/\bactive\b/);
@@ -2825,7 +2840,7 @@ test('entering a bootstrap loop step prompts for its input; Confirm runs in-app 
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   await typeCommand(`cd "${repo}"`);
-  await expect(flowStepName()).toHaveText('groom', { timeout: 10_000 });
+  await awaitFlowStep('groom');
   await typeCommand('fake-agent'); // the hosted agent REPL owns the prompt (present), so the work turn injects rather than erroring
 
   await flowControl().click(); // Start → groom (manual): no input prompt
@@ -2895,7 +2910,7 @@ test('a busy shell does NOT block pickup: it runs out-of-band and still writes s
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   await typeCommand(`cd "${repo}"`);
-  await expect(flowStepName()).toHaveText('groom', { timeout: 10_000 });
+  await awaitFlowStep('groom');
   await flowControl().click(); // Start → groom
 
   // A live foreground process holds the shell off its ready prompt → busy (a live OSC-133 span).
@@ -2945,7 +2960,7 @@ test('a bootstrap pickup that cannot run (dirty tree) NEVER fails silently: it s
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   await typeCommand(`cd "${repo}"`);
-  await expect(flowStepName()).toHaveText('groom', { timeout: 10_000 });
+  await awaitFlowStep('groom');
 
   await flowControl().click(); // Start → groom
   await expect(flowStation(1)).toHaveClass(/\bactive\b/);
@@ -3007,7 +3022,7 @@ test('a pickup that completes AFTER the operator terminates the flow drops as st
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   await typeCommand(`cd "${repo}"`);
-  await expect(flowStepName()).toHaveText('groom', { timeout: 10_000 });
+  await awaitFlowStep('groom');
   await typeCommand('fake-agent'); // a hosted agent IS at the prompt: a leaked work turn would inject here
 
   await flowControl().click(); // Start → groom
@@ -3077,7 +3092,7 @@ test('a re-pickup onto an EXISTING branch (on_conflict: wipe-and-retry) asks fir
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   await typeCommand(`cd "${repo}"`);
-  await expect(flowStepName()).toHaveText('groom', { timeout: 10_000 });
+  await awaitFlowStep('groom');
   await typeCommand('fake-agent');
 
   await flowControl().click(); // Start → groom
@@ -3134,7 +3149,7 @@ test('a re-pickup conflict that the operator CANCELS wipes nothing and rolls the
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   await typeCommand(`cd "${repo}"`);
-  await expect(flowStepName()).toHaveText('groom', { timeout: 10_000 });
+  await awaitFlowStep('groom');
 
   await flowControl().click(); // Start → groom
   await flowControl().click(); // Advance → plan
@@ -3195,7 +3210,7 @@ async function driveToWorkTurn(
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   await typeCommand(`cd "${repo}"`);
-  await expect(flowStepName()).toHaveText('groom', { timeout: 10_000 });
+  await awaitFlowStep('groom');
   if (startAgent) await typeCommand('fake-agent'); // the hosted agent REPL now owns the prompt; injection reaches it
 
   await flowControl().click(); // Start → groom: opens the audit run
@@ -6377,7 +6392,7 @@ test('Restart clears a resolved stage-transition input so the next entry re-prom
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   await typeCommand(`cd "${repo}"`);
-  await expect(flowStepName()).toHaveText('groom', { timeout: 10_000 });
+  await awaitFlowStep('groom');
 
   await flowControl().click(); // Start → groom (manual, no prompt)
   await flowControl().click(); // Advance → plan (bootstrap): the typed-input modal opens
@@ -6610,7 +6625,7 @@ test('a flow transition whose write cannot land surfaces a blocking error and st
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   await typeCommand(`cd "${repo}"`);
-  await expect(flowStepName()).toHaveText('groom', { timeout: 10_000 });
+  await awaitFlowStep('groom');
   await flowControl().click(); // Start → persist() throws (symlinked container)
 
   const errorDialog = page.locator('#flow-error-host .flow-modal');
@@ -6639,7 +6654,7 @@ test('the reveal signal lands the user on the loop read-out, from another view a
     `cd "${repo}" && rm -rf .git && git init -q && git config user.email t@t && git config user.name T && ` +
       `git add -A && git commit -qm init && printf '# Doc\\n' > doc.md && pwd`,
   );
-  await expect(flowStepName()).toHaveText('groom', { timeout: 10_000 });
+  await awaitFlowStep('groom');
   await flowControl().click(); // Start → groom
   await flowControl().click(); // Advance → build (loop) active, human-needed
   await expect(loopReadout()).toHaveCount(1, { timeout: 10_000 });

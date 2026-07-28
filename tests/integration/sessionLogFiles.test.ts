@@ -21,7 +21,7 @@ function stampedAt(file: string, ms: number): void {
   utimesSync(file, ms / 1000, ms / 1000);
 }
 
-describe('which session logs are in a run`s window', () => {
+describe("which session logs are in a run's window", () => {
   let dir: string;
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), 'log-files-'));
@@ -30,7 +30,7 @@ describe('which session logs are in a run`s window', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it('finds the nested reviewer-subagent logs, not only the main session`s', async () => {
+  it("finds the nested reviewer-subagent logs, not only the main session's", async () => {
     writeFileSync(join(dir, 'main.jsonl'), 'a\n');
     mkdirSync(join(dir, 'session-uuid', 'subagents'), { recursive: true });
     writeFileSync(join(dir, 'session-uuid', 'subagents', 'agent-x.jsonl'), 'b\n');

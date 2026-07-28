@@ -7,36 +7,17 @@ import {
   type RunTotals,
 } from '../../src/main/sessionLogRecords';
 import { formatCost, priceTokens, type ModelTokens } from '../../src/shared/pricing';
+import { turnLine } from '../helpers/sessionLogFixtures';
 
 const FLOOR = Date.parse('2026-07-09T12:00:00.000Z');
-
-const turnLine = (opts: {
-  ts?: string;
-  id?: string;
-  msgId?: string;
-  reqId?: string;
-  model?: string;
-  input?: number;
-  output?: number;
-}): string =>
-  JSON.stringify({
-    type: 'assistant',
-    ...(opts.ts === undefined ? {} : { timestamp: opts.ts }),
-    ...(opts.reqId !== undefined ? { requestId: opts.reqId } : opts.id === undefined ? {} : { requestId: `req-${opts.id}` }),
-    message: {
-      ...(opts.msgId !== undefined ? { id: opts.msgId } : opts.id === undefined ? {} : { id: `msg-${opts.id}` }),
-      model: opts.model ?? 'claude-sonnet-5',
-      usage: { input_tokens: opts.input ?? 0, output_tokens: opts.output ?? 0 },
-    },
-  });
 
 function foldAll(totals: RunTotals, lines: string[]): ModelTokens[] {
   for (const line of lines) totals.fold(line);
   return totals.totals();
 }
 
-describe('folding session-log records into a run`s totals', () => {
-  it('folds a priced turn`s tokens under its model', () => {
+describe("folding session-log records into a run's totals", () => {
+  it("folds a priced turn's tokens under its model", () => {
     const totals = foldAll(createRunTotals(), [turnLine({ ts: '2026-07-09T12:00:01.000Z', id: 'a', input: 100, output: 20 })]);
     expect(totals).toEqual([{ model: 'claude-sonnet-5', input: 100, cacheCreate: 0, cacheRead: 0, output: 20 }]);
   });
@@ -68,7 +49,7 @@ describe('folding session-log records into a run`s totals', () => {
 
   // AC 2 — the run's window is bounded below by the flow's recorded start, so the readout is THIS run's
   // cost and not the repo's lifetime spend, whose sessions share the same project dir.
-  it('folds a turn exactly at the window`s floor and none before it', () => {
+  it("folds a turn exactly at the window's floor and none before it", () => {
     const lines = [
       turnLine({ ts: '2026-07-01T00:00:00.000Z', id: 'old', input: 5000 }),
       turnLine({ ts: '2026-07-09T12:00:00.000Z', id: 'edge', input: 7 }),

@@ -294,7 +294,7 @@ describe('the §27 run total', () => {
   });
 });
 
-describe('the §27 meter`s activation, retirement and blast radius', () => {
+describe("the §27 meter's activation, retirement and blast radius", () => {
   // AC 10 — a `legacy`-bound step pushes a real floor with NO selected app loop. The meter must stay inert:
   // a rule that samples on any push would run the §27 meter over a §26 run.
   it('never samples for a push carrying no selected app loop', async () => {
@@ -316,7 +316,7 @@ describe('the §27 meter`s activation, retirement and blast radius', () => {
   // A sweep holds a read position per log and the run's accumulated totals; a flow that terminates and a
   // different one that starts must inherit neither, so the retirement releases them rather than dropping
   // the reference and letting a repeated flow switch accumulate them.
-  it('retires a repo`s figure when the pushed loop goes null, releasing its sweep and stopping the sampling', async () => {
+  it("retires a repo's figure when the pushed loop goes null, releasing its sweep and stopping the sampling", async () => {
     h.append(REPO, [turn({ at: FLOOR + 1, input: MTOK })]);
     h.meter.pushWindow(REPO, LOOP, FLOOR);
     await h.sample();
@@ -328,7 +328,7 @@ describe('the §27 meter`s activation, retirement and blast radius', () => {
     expect(h.closed).toEqual([{ repoDir: REPO, since: FLOOR }]);
   });
 
-  it('leaves a second repo`s figure and sweep untouched when the first is retired', async () => {
+  it("leaves a second repo's figure and sweep untouched when the first is retired", async () => {
     h.append(REPO, [turn({ at: FLOOR + 1, input: MTOK })]);
     h.append(OTHER, [turn({ at: FLOOR + 1, input: MTOK })]);
     h.meter.pushWindow(REPO, LOOP, FLOOR);
@@ -469,7 +469,7 @@ describe('the §27 meter`s activation, retirement and blast radius', () => {
   });
 });
 
-describe('the §27 sampler`s steady state', () => {
+describe("the §27 sampler's steady state", () => {
   // A run is retired only by a push carrying a null loop, and no flow transition produces one for a
   // COMPLETED run — the invariant `flowCostWindow.test.ts`'s `keeps pushing the app loop after the flow
   // advances to done` holds. Without a backoff the meter therefore re-walks the log tree every two seconds
@@ -537,7 +537,7 @@ describe('the §27 sampler`s steady state', () => {
 
 describe('the §27 meter reaching the §25 audit and never damaging the run', () => {
   // AC 5 — the run's cost reaches the audit additively, by value, on each figure-moving sample.
-  it('records the run`s priced dollars and unpriced ids on each sample that moves the figure', async () => {
+  it("records the run's priced dollars and unpriced ids on each sample that moves the figure", async () => {
     h.append(REPO, [turn({ at: FLOOR + 1, input: MTOK }), turn({ at: FLOOR + 2, model: 'claude-made-up-9', input: MTOK })]);
     h.meter.pushWindow(REPO, LOOP, FLOOR);
     await h.sample();
@@ -610,7 +610,7 @@ describe('the §27 meter reaching the §25 audit and never damaging the run', ()
   // ...and the string the signal is gated on is the one the strip renders — `formatCost` over the meter's
   // own published figure — not the §25 record's bounded copy of it. The two agree only while `formatCost`
   // reads nothing out of `unpricedModels` but its emptiness, which no type, name or test holds.
-  it('gates the view-changed signal on the figure it publishes, past the record`s own id bound', async () => {
+  it("gates the view-changed signal on the figure it publishes, past the record's own id bound", async () => {
     const drifted = (n: number, at: number): LoggedTurn[] =>
       Array.from({ length: n }, (_, i) => turn({ at: at + i, model: `claude-made-up-${i}`, input: 1 }));
     h.append(REPO, [turn({ at: FLOOR + 1, input: MTOK }), ...drifted(40, FLOOR + 10)]);

@@ -650,7 +650,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
   // read-out's name-from-content, and a live change resolves against the nearest live region of the node
   // that CHANGED. The figure leaves the tree and rides the read-out's DESCRIPTION instead, so it is still
   // conveyed on focus and on demand with nothing announced on a tick.
-  it('keeps the §27 cost figure out of the read-out`s name, carrying it as the read-out`s description', async () => {
+  it("keeps the §27 cost figure out of the read-out's name, carrying it as the read-out's description", async () => {
     let view: FlowStateView = {
       stepName: 'plan',
       steps: ['plan'],
@@ -694,7 +694,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
   // UI-STANDARDS §2.2 rule 1 — the id the read-out points `aria-describedby` at is minted per instance, so
   // two strips in one document never share it. A baked-in id makes strip B's read-out describe strip A's
   // cost node, reporting the wrong repo's dollars to anyone who focuses it.
-  it('two strips in one document get DIFFERENT cost ids, each read-out described by its own host`s figure', async () => {
+  it("two strips in one document get DIFFERENT cost ids, each read-out described by its own host's figure", async () => {
     const viewOf = (cost: string): FlowStateView => ({
       stepName: 'plan',
       steps: ['plan'],

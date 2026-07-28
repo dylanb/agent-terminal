@@ -194,7 +194,7 @@ describe('the window push the §27 meter is handed', () => {
     expect(pushes.at(-1)).toEqual({ repoKey: repo, loop: 'plan-loop', startedAt: 9999 });
   });
 
-  it('keys every push on its repo, so one repo`s clear leaves another`s untouched', () => {
+  it("keys every push on its repo, so one repo's clear leaves another's untouched", () => {
     const a = seedRepo(APP_STEP('plan', 'plan-loop'));
     const b = seedRepo(APP_STEP('plan', 'plan-loop'));
     const flow = manager();

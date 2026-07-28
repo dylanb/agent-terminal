@@ -13,36 +13,10 @@ import { join } from 'node:path';
 import { encodeProjectDir, sessionLogDir, readSessionTokens, openSessionSweep, type SessionSweep } from '../../src/main/sessionLogSweep';
 import { priceTokens, type ModelTokens } from '../../src/shared/pricing';
 import { ticksDuring } from '../helpers/eventLoop';
+import { logBytes, turnLine } from '../helpers/sessionLogFixtures';
 
 const FLOOR = Date.parse('2026-07-09T12:00:00.000Z');
 const CHUNK = 64 * 1024;
-
-const turnLine = (opts: {
-  ts?: string;
-  id?: string;
-  msgId?: string;
-  reqId?: string;
-  model?: string;
-  input?: number;
-  output?: number;
-}): string =>
-  JSON.stringify({
-    type: 'assistant',
-    ...(opts.ts === undefined ? {} : { timestamp: opts.ts }),
-    ...(opts.reqId !== undefined
-      ? { requestId: opts.reqId }
-      : opts.id === undefined
-        ? {}
-        : { requestId: `req-${opts.id}` }),
-    message: {
-      ...(opts.msgId !== undefined ? { id: opts.msgId } : opts.id === undefined ? {} : { id: `msg-${opts.id}` }),
-      model: opts.model ?? 'claude-sonnet-5',
-      usage: { input_tokens: opts.input ?? 0, output_tokens: opts.output ?? 0 },
-    },
-  });
-
-/** A session log's bytes: every line newline-terminated, as Claude Code writes them. */
-const logBytes = (...lines: string[]): string => `${lines.join('\n')}\n`;
 
 function sweepOf(dir: string | null, opts?: { since?: number; chunkBytes?: number }): SessionSweep {
   return openSessionSweep(dir, {
@@ -62,7 +36,7 @@ describe('the §27 session-log sweep', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it('folds the window`s priced turns into per-model totals', async () => {
+  it("folds the window's priced turns into per-model totals", async () => {
     writeFileSync(
       join(dir, 'session.jsonl'),
       logBytes(
@@ -77,7 +51,7 @@ describe('the §27 session-log sweep', () => {
   });
 
   // AC 1 — the run's total covers every reviewer subagent, whose logs are nested under the session dir.
-  it('reaches the nested reviewer-subagent logs, not only the main session`s', async () => {
+  it("reaches the nested reviewer-subagent logs, not only the main session's", async () => {
     writeFileSync(join(dir, 'main.jsonl'), logBytes(turnLine({ ts: '2026-07-09T12:00:01.000Z', id: 'w', input: 10 })));
     const subagents = join(dir, 'session-uuid', 'subagents');
     mkdirSync(subagents, { recursive: true });
@@ -184,7 +158,7 @@ describe('the §27 session-log sweep', () => {
 // The run's own logs are the ones the mtime floor can never exclude — they are written during the run by
 // definition — so a sweep with no memory re-opens, re-reads and re-parses every one of them, whole, every
 // two seconds for the life of the run, on the process that also drains the PTY.
-describe('the §27 sweep`s memory across drains', () => {
+describe("the §27 sweep's memory across drains", () => {
   let dir: string;
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), 'sweep-cursor-'));
@@ -312,7 +286,7 @@ describe('the §27 sweep`s memory across drains', () => {
   // than be handed the retired run's promise. Deleting a log the retired run already counted separates the
   // two answers — a fresh walk of the tree can no longer reach those dollars, and the retired ledger still
   // holds them.
-  it('never answers a drain issued after the release with the released run`s totals', async () => {
+  it("never answers a drain issued after the release with the released run's totals", async () => {
     writeFileSync(join(dir, 'a.jsonl'), logBytes(turnLine({ ts: '2026-07-09T12:00:01.000Z', id: 'a', input: 3 })));
     const gone = join(dir, 'b.jsonl');
     writeFileSync(gone, logBytes(turnLine({ ts: '2026-07-09T12:00:02.000Z', id: 'b', input: 5 })));
@@ -332,7 +306,7 @@ describe('the §27 sweep`s memory across drains', () => {
 // The §27 sweep, its log-root resolver and its project-dir encoder have ONE owner that the N8 sweep keeps,
 // so deleting §26 whole cannot take §27's log-root resolution or its environment override with it.
 describe('the §27-owned log-root resolution', () => {
-  it('encodes a repo path into Claude Code`s project-dir name', () => {
+  it("encodes a repo path into Claude Code's project-dir name", () => {
     expect(encodeProjectDir('/Users/x/src/agent-terminal.one')).toBe('-Users-x-src-agent-terminal-one');
   });
 
@@ -377,7 +351,7 @@ describe('the aggregate entry point §26 still calls', () => {
     expect(readSessionTokens(dir)[0].input).toBe(5007);
   });
 
-  it('opens a log whose mtime predates the bound — the pre-filter is the sweep`s, not the aggregate`s', () => {
+  it("opens a log whose mtime predates the bound — the pre-filter is the sweep's, not the aggregate's", () => {
     const stale = join(dir, 'stale.jsonl');
     writeFileSync(stale, turnLine({ ts: '2026-07-09T12:00:05.000Z', input: 11 }));
     const before = (FLOOR - 60_000) / 1000;
