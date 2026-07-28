@@ -45,9 +45,10 @@ the notice is not a revert at all, it is the *ordinary success path*, firing in 
 on every migrating entry. So the carrier is named rather than the position moved again — **the strip holds
 the notice across passive re-pulls and clears it at the next transition**, which is the lifetime the
 sibling one-shot field already has in the same renderer module, and needs no acknowledgement channel and no
-new IPC member. One residual is recorded, §F item 17, the repaint of AC 5's notice: the notice can now be
-shown beside a step the flow has reverted away from. It is written
-up in [§K.1](#k1-the-escalations-and-how-they-are-settled); an operator who disagrees with that call should press
+new IPC member. Two residuals are recorded, both §F item 17, the repaint of AC 5's notice: the notice can now
+be shown beside a step the flow has reverted away from, and — because the carrier holds it in volatile
+renderer state until the next transition — a quit before that transition loses it. They are written
+up in [§K.1](#k1-the-escalations-and-how-they-are-settled); an operator who disagrees with either call should press
 there first.
 
 The artifact §27.15 and issue #98 require: the sweep is **reviewed with the operator, not decided
@@ -440,6 +441,19 @@ The §27 engine imports `createTurnRunner`, `TurnRunner` and `HostedAgentState` 
  view provider, the entry dispatcher and the gate decision — and §D.4's row dispatches
  `flow:appGateDecision` for a marked binding **directly**, not through a rendered control, since a row that
  drives it through the panel grades the renderer's render gate instead of the seam.
+ **The LOOKUP is named too, not only the site — the payload's step, by id, never the flow's current
+ position.** `runAppGateDecision` receives `(repoKey, step, turnKey, option)`, where `step` is the id the IPC
+ payload names; `FlowStateView` carries no per-step kind and no bound loop name, so the marking is read from
+ the **loaded definition** — `loadFlowDefinitionLocalFirst(repoKey, flowGlobalDir)` then
+ `steps.find((s) => s.id === step)` — and the affirmative test runs against THAT step's `loop_namespace`. It
+ must **not** reuse `boundLoopName`'s own lookup, which derives the step from `flow.state(repoKey).position - 1`
+ (the flow's CURRENT position): `boundLoopName` is the precedent for WHERE the guard sits, not for HOW it
+ finds its subject, and copying the whole shape keys the check on ambient state — CLAUDE.md's committed rule
+ inverted (*every IPC payload carries the identity of the resource it acts on; the receiver never re-derives
+ that target from ambient state*) on the exact call `approve`'s outward-facing `runSideEffect` sits behind.
+ The divergence is real: a marked step at a verdict while the flow has been **advanced past it** makes a
+ position-keyed check read the wrong (unmarked) step and let `approve` through, while an id-keyed check
+ refuses. §D.4's three-seam row plants that case.
 - **SIX hand-maintained copies of the `notice` one-shot invariant, and the sweep changes what it says — so
  they move together or they drift.** Two clauses of that invariant become false, by two different routes
  the sweep adds. (i) *Never part of `state`* — falsified by §B.5 item 6's **transient-notice dep on the
@@ -564,6 +578,11 @@ composes rather than overwrites.** The reachable pair is positions 6 and 7: a st
 then meets a busy shell produces AC 5's notice **and** `BUSY_NOTICE`. Neither may drop the
 other — a discarded migration notice is AC 5 unmet, and a discarded §19.3 refusal is an operator who was
 never told why nothing was typed. The seam accumulates notices and joins them into the one field.
+**A second pair the seam cannot reach — the coordinator route — is composed one layer out, at the strip.**
+When position 6 migrates and returns AC 5's notice on the transition reply and the async pickup then meets a
+busy shell, the coordinator's `BUSY_NOTICE` arrives on a **later** `state` push (item 6, §B.13a), not on the
+same `EntryActionResult`; the two are on different responses, so the strip's carrier joins them rather than
+the seam (§B.10). *Neither may drop the other* holds for both pairs — only where they are joined differs.
 (**Narrowed in this revision.** An earlier ordering also had `prompt` returning alongside an accumulated
 notice, and the composition rule was written to cover it. With the migration at position 6, nothing
 above position 3 produces a notice, so that pair is unreachable — the rule is kept for the 6+7 pair it does
@@ -613,14 +632,22 @@ position 8 — because none of them is a transition.
 **What that carrier is and is not, stated because §K.1 settled the semantics one round earlier.** It is
 **not** *shown until acknowledged*: there is no acknowledgement channel, no new IPC member and no new
 on-disk artifact, so the plan's Contracts commitment (*"AC 5's notice rides the existing one-shot
-transient-notice field rather than widening the view contract"*) holds literally, and `notice` is still
-**never part of `state`** on the main side. What changes is only which event clears it — **the next
-transition rather than the next re-pull** — which is the lifetime `prompt` has today, in the same module,
-for the same reason. §K.1 records the adjustment to its own earlier wording rather than leaving *rendered
-once* to be read two ways. The consequence for the four hand-maintained copies of the one-shot invariant is
-that the clause each of them must lose is *"a re-pull clears it"*, not *"never part of `state`"*: the
-prescriptions live in §B.3, §B.7 and §B.10. §B.10 carries this carrier as its own
-row, and §D.4 carries its RED.
+transient-notice field rather than widening the view contract"*) holds literally — the `FlowStateView.notice`
+field already exists and no field is added. What the sweep **does** change is that field's behaviour on
+**both** axes, because the carrier alone does not deliver the coordinator's asynchronous §19.3 refusal: that
+notice is produced *after* the transition reply has already been sent, so it can ride only a later
+`pushFlowChanged` → `state` response (item 6, §B.13a). So `notice` is **carried on a transition response OR on
+a `state` response when an asynchronous producer has one pending** — the main-side clause *"never part of
+`state`"* becomes **false** — and the strip holds it across passive re-pulls and clears it on the **next
+transition** rather than the next re-pull — the renderer-side clause *"a re-pull clears it"* becomes **false**
+too. §K.1 records the adjustment to its own earlier *rendered once* wording rather than leaving it to be read
+two ways. There are **six** hand-maintained copies of the one-shot invariant and each loses **both** clauses,
+not one: §B.3 holds the two in `flow.ts`, §B.7 the two on `ipc.ts` (`FlowStateView.notice` and its `prompt`
+sibling), and §B.10 the renderer's two. §B.10 carries this carrier as its own row, and §D.4 carries its RED.
+**Dropping only one clause is the trap:** an implementer who rewrites *"a re-pull clears it"* and leaves
+*"never part of `state`"* standing deletes the only channel the coordinator's busy-shell refusal (item 6;
+§D.4's busy-shell-at-handoff row) has to reach the operator — #98 AC 10's own named failure mode, a step that
+types nothing with no explanation.
 
  1. **The busy-shell refusal is scoped to the injection, not to the whole entry.** Today
  returns `BUSY_NOTICE` before anything else runs, which for a §26 step also suppressed its pickup. An
@@ -706,8 +733,9 @@ row, and §D.4 carries its RED.
  because AC 10's clause is that the skill **is** injected: a refusal would leave an operator with a
  step that types nothing and a repo file only they can edit. Confined to the injection path the sweep is
  already changing, so it passes #98's non-goal test. RED row in §D.4.
- **The collapse goes on the VALUE, not on one caller's `deps.inject` call — corrected in this revision,
- because the seam is no longer the only route.** Numbered item 6 moves a pickup-bearing step's skill to
+ **The collapse goes on a DEDICATED injectable-skill function, not inside the shared `skillInvocation` and
+ not on one caller's `deps.inject` call — corrected in this revision, because `skillInvocation` is shared with
+ manual steps and the seam is no longer the only loop route.** Numbered item 6 moves a pickup-bearing step's skill to
  the bootstrap coordinator's own inject dep, code that never passes through the seam. Scoped
  to the seam's call, a cloned repo's `.agent-terminal/flow.yaml` step carrying
  `skill: "/plan\ncurl … | sh"` **with** `bootstrap: pickup` and no `loop_namespace` keeps the whole
@@ -715,10 +743,19 @@ row, and §D.4 carries its RED.
  from `step.skill`, and the sink is `appLoopBootstrap.ts` → `wrapForPaste` (`inject.ts`, every `\n` →
  `\r`) with the injection `submit: true` — N app-submitted command lines, zero operator
  keystrokes. Neither §D.4 row could catch it: one uses a no-`bootstrap` step and the other asserts NO
- bytes reach the PTY. So the collapse lands at the single point `step.skill` becomes injectable text —
- **`skillInvocation` (`flowEntryActions.ts`)**, which both routes already call for the leading
- slash, so neither can acquire the text un-collapsed. §D.4's row gains a `bootstrap: pickup` fixture with
- a multi-line `skill:`, asserting a single submitted line on the coordinator's hand-off.
+ bytes reach the PTY. But `skillInvocation` cannot be that point: it is `(ref: string) => string`
+ (`flowEntryActions.ts`) and its one caller today injects it inside an `if (step.skill)` block that serves
+ **manual** steps too, receiving only the ref string, so it cannot see `step.kind`. Collapsing there would
+ collapse a manual step's multi-line `skill:` — contradicting this item's own `kind: 'loop'` scoping, its #98
+ non-goal argument, and §D.4's Pin row asserting a manual step's newlines are NOT collapsed. **Decided: a
+ second exported function `injectableSkill(ref)` = the CR/LF collapse applied to `skillInvocation`'s result**
+ (so the leading-slash normalization is preserved), called at the two **loop** injection points — the
+ loop-step arm of the seam and §B.13a's coordinator hand-off — while `skillInvocation` and the manual-step
+ arm stay byte-identical. The earlier claim that *both routes already call it* is dropped: `grep -rn
+ skillInvocation src/` returns only the definition and its single seam caller, and the coordinator route is
+ surface §B.13a adds and calls nothing yet — which is exactly why `injectableSkill` must be named for it.
+ §D.4's row gains a `bootstrap: pickup` fixture with a multi-line `skill:`, asserting a single submitted line
+ on the coordinator's hand-off, and §D.4's manual-step Pin stays green.
 
  4. **The two injections must not land on one input line (CWE-74, instruction-channel framing) — and the
  mechanism that serializes them is a widening of surviving code, which is stated here and registered in
@@ -737,7 +774,7 @@ row, and §D.4 carries its RED.
  (`appWorkTurn.ts`) returns `/clear` for a `clear` policy but `` `/compact ${policy.message}` ``
  for a `compact` one, and `policy.message` is repo-authored whenever the resolved def came from the repo
  tier: `loopDefV2.ts` applies `requireString` **only**, while the guarded sibling inside the very
- same parser, `confineArtifact`, applies `CONTROL_CHAR`. It reaches the same submitted
+ same parser, `confineArtifact`, applies `CONTROL_CHAR` **twice** — on the declared pattern and again on the post-realpath composition — where `confineDefRelative`, the charter-reference guard, applies it **zero** times (§F item 18). It reaches the same submitted
  sink — `appLoopEngine.ts` (and `reviewTurn.ts`) →
  `loopOrchestrator.ts`'s `deps.inject(cmd, { preamble: true })`, wired at `index.ts` as
  `submit: true` → `inject.ts` — so a compact message carrying a newline becomes N
@@ -915,6 +952,23 @@ row, and §D.4 carries its RED.
  gains, and §D.4 runs the two-injections ordering assertion on the **coordinator**
  fixture at `APP_SUBMIT_DELAY_MS > APP_QUIET_MS` — the existing ordering row's fixture uses a def
  declaring no `pickup:` block, so it takes the seam route and cannot fail on this.
+ **The window between `'entered'` and the trigger is bounded and interlocked, decided here rather than left
+ open — added in this revision.** Deferring `requestTurn` opens a gap in which the turn is accepted but not
+ yet requested, and three tree facts make an unbounded gap unrecoverable: every stall timer and
+ `APP_TURN_TIMEOUT_MS` is armed **inside** `requestTurn`/`tryInject` and gated on `state === 'in-flight'`
+ (`loopOrchestrator.ts`), so while the request is deferred nothing can report the turn failed; `canEnter()`
+ is `runner.state() !== 'in-flight'` (`appLoopEngine.ts`), so the §27.2 interlock reads **free** for the
+ whole gap; and the gap's length is operator-set through `APP_SUBMIT_DELAY_MS`, which §D.4's ordering row
+ raises well above `APP_QUIET_MS`. **Decided, two clauses.** (a) **The deferral has a deadline** — the
+ injector signals its completion once (§B.13c's `Injector` channel), and the coordinator fires the trigger
+ on that signal OR on a deadline derived from `APP_SUBMIT_DELAY_MS`, whichever is first; if the deadline
+ lapses with no signal, the coordinator takes the **same `rollbackJob` + `flow:onBootstrapError` path** its
+ `enterWork` refusal arms already take, so the step reverts to the prior good state rather than sitting
+ `in_progress` with no turn ever requested (CLAUDE.md never-allow-an-unrecoverable-state; CWE-755). (b) **An
+ accepted-but-not-yet-requested turn OCCUPIES the runner** — `AppLoopEngine` treats the interval from
+ returning `'entered'` until `requestTurn` actually runs as in-flight for `canEnter()`, so a second entry
+ inside the gap is answered `'busy'`, never `'entered'`, and cannot overwrite the active turn while its step
+ stays persisted `in_progress`. §D.4 grades both on the coordinator fixture the ordering row already builds.
  - **Refusal: the coordinator gets the §19.3 check and a carrier for it.** AC 10 binds the skill to be
  injected *"under the same busy-shell refusal it obeys today"*, and this route is separated from entry
  by the coordinator's git/gh round trip, so the shell is plausibly busy at the handoff — `isShellBusy`
@@ -928,8 +982,12 @@ row, and §D.4 carries its RED.
  is produced asynchronously, after the transition response has already been served, so it is the one
  notice the strip's transition-held carrier cannot deliver** — it needs the push, and the push is what
  makes the re-pull carry it. So the renderer's carrier holds a notice across a passive re-pull rather
- than *discarding* whatever the re-pull brings: a re-pull carrying its own `notice` renders that one.
- Stated because the two rules would otherwise contradict each other on this route. On a busy shell the
+ than *discarding* whatever the re-pull brings: a re-pull carrying its own `notice` **joins** it to the held
+ one and both render. Rendering the re-pull's notice *instead* would drop the migration notice whenever this
+ route runs on a migrating population — position 6 has already returned AC 5's notice on the transition reply
+ and the strip is holding it — so the two are composed, the same *neither may drop the other* rule the seam
+ applies to positions 6 and 7, on the pair the seam cannot reach because its members arrive on different
+ responses. Stated because the two rules would otherwise contradict each other on this route. On a busy shell the
  skill is not injected, `BUSY_NOTICE` reaches the strip,
  and the work turn still starts on the synchronous arm (item 4's no-injection case).
  A step whose bound def declares **no** `pickup:` block keeps the seam injection at position 7,
@@ -1068,13 +1126,16 @@ row, and §D.4 carries its RED.
  schedule a `revertStep` + `pushFlowChanged` **without entering the step**, and its own row states why
  that is necessary but not sufficient — the ordinary success path pushes too, which is what the renderer
  carrier closes. Consequences, each stated because each is what makes an AC 5 clause hold:
- - **The notice is delivered in the same synchronous call as the write.** No one-shot in main, no
- cross-call state, no durability question — the write and its notice cannot be separated by a poll, a
- branch or a process boundary, because there is nothing between them, and the strip then holds the
- rendered notice across the pushes that follow (§B.5's carrier). AC 5's *"tells the operator — once"* is
- met by construction rather than bounded. One residual is booked as §F item 17, the repaint of AC 5's
- notice, re-scoped this revision to any `pushFlowChanged` below ordering position 6 including the
- success path.
+ - **The notice is PRODUCED in the same synchronous call as the write.** No one-shot in main and no
+ cross-call state: the write and the notice's production cannot be separated by a poll, a branch or a
+ process boundary, because there is nothing between them, and the strip then holds the rendered notice
+ across the pushes that follow (§B.5's carrier). AC 5's *"tells the operator — once"* is met on the delivery
+ path rather than bounded. The **durability question is narrowed, not removed**: production is atomic with
+ the write, but *delivery* lives in volatile renderer state until the next transition while §H.4 makes the
+ on-disk trigger false the moment the copy lands, so a quit before that transition still loses the notice.
+ Two residuals are booked as §F item 17, the repaint of AC 5's notice, re-scoped this revision to any
+ `pushFlowChanged` below ordering position 6 including the success path, **and the delivery window** the
+ carrier's volatile state leaves.
  - **A `state` poll performs no probe and no write, unqualified.** The qualifier the previous revision
  added — *after the bind that attaches the step* — existed only for the attach route and goes with it.
  The probe runs on `enter` and on nothing else, so any number of `flow:state` re-pulls leave both tiers
@@ -1247,18 +1308,27 @@ row, and §D.4 carries its RED.
  swallowing it; the migration write pairs it the same way. **Which of the four outcomes that pre-staging
  refusal produces is named here rather than left to the implementer — added in this revision, because the
  four-outcome union below is defined by what the DESTINATION is, detected at commit, and a container refusal
- is detected BEFORE staging, so the union as written had no arm for it.** Reachable without anything
- planted: `~/.claude` symlinked onto a dotfiles or synced volume is an ordinary setup, and
- `isWritableContainer` opens with `if (!isRealContainer(dir)) return false` (`installExamples.ts`).
- Reusing the seam's `refuse` arm — which `installExamples`' own `escapes` precedent models — would stop a
- step that runs today, since `resolveLoopDefV2` still answers from the app bundle, violating AC 5's third
- bound (*the step still runs*) and CLAUDE.md's rule that a best-effort side effect must not abort the path
- it sits on (CWE-703). **Decided: a pre-staging `isWritableContainer` refusal answers `container-refused`**
- — the same arm the post-commit detection of the same condition takes, so the two detections cannot
- disagree: skip the copy, notice naming the refused container, step runs. §D.4's `container-refused` row
- gains a second plant site, a symlink at `<userConfigLoopsV2Dir>` **itself** and not only at
- `<userConfigLoopsV2Dir>/<name>` — the current row plants only the latter and would pass over a
- `refuse`-routed container check.
+ is detected BEFORE staging, so the union as written had no arm for it.** The refusal is **not** a symlink
+ check, and stating so is what keeps this arm off the population AC 5 exists for. The migration jails
+ `userConfigLoopsV2Dir` through `resolveOwnedDirJail`, which resolves the tier root **including its final
+ segment**, so a `~/.claude` (or `~/.claude/loops-v2`) the **user** symlinked onto a dotfiles or synced
+ volume is **FOLLOWED**, not refused — §18.1's committed policy, and exactly what `isWritableContainer(dest.jail)`
+ sees at its guarded sibling `installExamples.ts`, where `isRealContainer` is handed the resolved jail and
+ never the user's link. What the pre-staging refusal actually catches is a **non-writable resolved
+ container**: `isWritableContainer` does `isRealContainer(dir)` then `accessSync(probe, W_OK)`, so a read-only
+ tier root (`0o555`, the ordinary managed-machine case — a root-owned or locked `~/.claude`) returns false
+ with nothing planted. Reusing the seam's `refuse` arm — which `installExamples`' own `escapes` precedent
+ models — would stop a step that runs today, since `resolveLoopDefV2` still answers from the app bundle,
+ violating AC 5's third bound (*the step still runs*) and CLAUDE.md's rule that a best-effort side effect must
+ not abort the path it sits on (CWE-703). **Decided: a pre-staging `isWritableContainer` refusal answers
+ `container-refused`** — the same arm the post-commit non-directory detection takes, so the two detections
+ cannot disagree: skip the copy, notice naming the refused container (unwritable), step runs. **This is the
+ one arm a non-writable tier takes** — there is no errno to name, because no write is attempted; the errno
+ branch below fires only for a write that gets PAST this pre-check and then fails (a full volume, a
+ mid-write fault). §D.4's `container-refused` primitive row plants that reachable case — a **non-writable
+ resolved `<userConfigLoopsV2Dir>` (`0o555`)** — which the destination-keyed clauses structurally cannot
+ reach; a plant that merely symlinks the tier entry is not the fixture, because `resolveOwnedDirJail` follows
+ it.
  **The return is a discriminated union with FOUR outcomes, not a boolean — because the container refusal
  and the benign destination-exists must not be collidable.** `atomicWriteFileSync` has a non-throwing
  outcome beyond success that a three-arm table omits: `if (!isRealContainer(dir)) return false`
@@ -1406,8 +1476,10 @@ Every §27 widening was additive, so what goes is the surface only the retired e
  and §B.6 names the one producer that makes it fire — the entry seam's own migration step, writing
  `EntryActionResult.notice` in the same transition as the copy. **Settled semantics (§K.1): rendered
  once**, cleared by the next transition rather than by the next re-pull (§B.5's carrier), and **not** shown
- until acknowledged — there is no acknowledgement channel and no new IPC member. The write and the notice
- are the same synchronous step; the one residual is §F item 17, the repaint of AC 5's notice.
+ until acknowledged — there is no acknowledgement channel and no new IPC member. The write and the notice's
+ production are the same synchronous step; two residuals remain, both §F item 17, the repaint of AC 5's
+ notice — the notice shown beside a reverted step, and the carrier's volatile-state delivery window (a quit
+ before the next transition loses it).
 - **SIX further doc-comment REWRITES on surviving wire surface, each carrying a claim the sweep falsifies.**
  **Corrected in this revision on the count AND on the grep claim, which was false against the tree.** The
  previous revision split the sites into *three carry a `§26` token* and *two carry
@@ -1572,15 +1644,28 @@ Its labels are text an operator reads, so AC 3's behavior-preserving rule does n
  by `flow.ts` as any non-empty string with **no** `isSafePathSegment` and no control-character check —
  contrast `raw.loop` — and carried verbatim, then `flowEntryActions.ts` →
  `index.ts` (`stepId: step.id`) → `appLoopState.ts` → `loopViewV2.ts`,
- which re-emits it as `appTurn.step`. It reaches the arm-interrupt `aria-label` at `loopPanel.ts`,
- rendered on **every** `working` view, and the three route-out controls' accessible names.
- Every member of `DISPLAY_UNSAFE`, `U+202E` included, lands in an announced name (WCAG 4.1.2). It is in
+ which re-emits it as `appTurn.step`. It reaches the arm-interrupt `aria-label` at `loopPanel.ts`
+ (rendered on **every** `working` view), the three route-out controls' accessible names, **and — corrected in
+ this revision — the two composer dialog titles**: the click dispatch hands the RAW `appTurn.step` to
+ `deps.composeFeedback` / `deps.composeRedo` (`loopPanel.ts`), and `feedbackComposer.ts` renders it as
+ `` `Request changes to ${ctx.step}` `` and `redoComposer.ts` as `` `Redo ${ctx.step}` ``, each the modal's
+ accessible name via `aria-labelledby` (`modalShell.ts`). Every member of `DISPLAY_UNSAFE`, `U+202E` included,
+ lands in one of those announced names (WCAG 4.1.2) — five in all, not the two an earlier enumeration named. It is in
  scope on the panel-strip reasoning: the absence re-point makes every namespace-less loop step a first-time
- producer of a §27 view carrying `appTurn`. **So the covered set gains a fourth strip site:** a
- **display-only stripped copy** of `loop.appTurn.step`, consumed by the two `aria-label`s and by nothing
- else — the destructured `step` that reaches the click dispatches keeps the **RAW** value, because the
- receiver matches persisted step identity (§6). The strip-site list below states why that distinction is
- load-bearing rather than stylistic. RED row in §D.4 planting `U+202E` in a step `id`.
+ producer of a §27 view carrying `appTurn`. **So the covered set gains a strip site:** a
+ **display-only stripped copy** of `loop.appTurn.step`, consumed by the panel's own arm-interrupt and
+ route-out `aria-label`s and by nothing else — the destructured `step` that reaches the click dispatches keeps
+ the **RAW** value, because the receiver matches persisted step identity (§6). **That raw value is exactly
+ what the two composers render**, and they are a **different organism** the panel's strip cannot reach:
+ stripping their titles is one `stripDisplayControlChars` call each in `feedbackComposer.ts` and
+ `redoComposer.ts`, a §27 guard added while in the tree — #98's non-goal — so it is **escalated with the other
+ override candidates (§K.1/§K.5) and only the recording is done here**: the two modules are named here as a
+ reached-but-unguarded exposure so no production module the widened population reaches is left unmentioned, and
+ if the operator widens the override set they each gain a §B class row in `errorDialog.ts`'s shape (Goes:
+ nothing; Gains: one `stripDisplayControlChars` call per sink) plus a §D.4 assertion that the rendered dialog
+ title carries no `U+202E`. The strip-site list below
+ states why the raw-vs-stripped distinction is load-bearing rather than stylistic. RED row in §D.4 planting
+ `U+202E` in a step `id`.
  `deriveAppLoopView` computes `gateOptions = r.ok ? r.def.gate.map((g) => g.option): []`
  (`loopViewV2.ts`) from the **same** `resolveLoopDefV2` call, and `option` is only `requireString`
  (`loopDefV2.ts`) — no control-character check anywhere on that path, in contrast with
@@ -1622,40 +1707,45 @@ Its labels are text an operator reads, so AC 3's behavior-preserving rule does n
  neutralizes the first render and nothing after it. The strips go at:
  - **`syncReasonRow`'s own entry **, above both branches, covering create and patch alike;
  - **`syncNamedRow`'s value**, covering `verdict` and `verdictReason`;
- - **`gateOptionLabel`'s ENTRY — the `option` argument, above the `request-changes` comparison
- — corrected in this revision from *its return*, which cannot work.** The function is
- `return option === 'request-changes' ? 'changes': option`, so the comparison sits **above** the return
- and a strip placed on the return never reaches it. `stripDisplayControlChars` substitutes a **SPACE**,
- not the empty string (`controlChars.ts`), so for a repo-authored option `request-changes` +
- `U+202E` the comparison is `false`, the raw string is returned, and the return-site strip yields visible
- `textContent` `"request-changes "` while yields the accessible name `"request changes "` — a name
- that does not contain the visible text, which is the exact WCAG 2.5.3 failure the
- rationale says the design exists to prevent. It also made §D.4's plant site unsatisfiable as written: no
- implementation of the return-site prescription can produce the abbreviated `changes` the row asserts, so
- the realistic field repair would have been to weaken that assertion — AC 2's weakened-assertion shape.
- Stripping the **argument** and then comparing abbreviates the planted option to `changes`, yields
- `request changes`, and satisfies all three of the row's assertions. This is the same
- entry-vs-branch placement error §B.9 diagnoses one bullet earlier for `syncReasonRow` and then repeated;
- the site covers the gate-options row *and* `btn.textContent`;
- - **the decision button's `aria-label`, as its own site — named separately, corrected in this
- revision, because folding it into `gateOptionLabel` REGRESSES the accessible name.** An earlier wording
- said the label is *derived from the stripped value instead*; with the strip placed inside
- `gateOptionLabel`'s return, the only stripped value in scope is that function's return, whose
- whole job is to abbreviate `request-changes` to `changes`. Taken that way the button's
- accessible name collapses from `request changes` to the bare ambiguous verb `changes` — exactly what the
- rationale comment says the design exists to avoid, citing WCAG 2.4.6 and 2.5.3, and
- what the surviving pin at `tests/unit/loopPanel.test.ts` asserts (the name contains **both**
- `changes` and `request`). So takes the **raw** option through `stripDisplayControlChars` and then
- `.replace('-', ' ')`, explicitly **not** `gateOptionLabel`'s abbreviated return. **The 2.4.6 / 2.5.3
- grade on this site is qualified rather than asserted, added in this revision:** `String.prototype.replace`
- with a *string* pattern replaces only the FIRST occurrence, so for a repo-authored option carrying more
- than one hyphen the accessible name stops containing the visible label — `stop-for-a-human` renders
- visibly as `stop-for-a-human` and announces as `stop for-a-human`, a 2.5.3 failure. The behaviour is
- pre-existing and its remedy is one character (`/-/g`), but it is **not** fixed here: the abbreviation
- applies to exactly one literal and rewriting the derivation is a §27 improvement that would stand
- without the sweep. What the sweep does is widen the exposed population, so it is **recorded in §K.5**
- rather than asserted as met — this site meets 2.4.6 / 2.5.3 for the single-hyphen options the bundled
- defs declare, and the multi-hyphen case is named debt;
+ - **`gateOptionLabel`'s ENTRY — the `option` argument, stripped **and trimmed** before the
+ `request-changes` comparison — corrected in this revision from *its return*, and then again from *a bare
+ strip on the argument*, because neither abbreviates.** The function is
+ `return option === 'request-changes' ? 'changes': option`, so the comparison sits **above** the return and
+ a strip placed on the return never reaches it. But a strip on the argument alone is not enough either:
+ `stripDisplayControlChars` substitutes a **SPACE**, not the empty string (`controlChars.ts`), so
+ `stripDisplayControlChars('request-changes' + U+202E)` is `"request-changes "` — a trailing space — and
+ `"request-changes " === 'request-changes'` is `false` exactly as the raw comparison was, so the option is
+ returned unabbreviated and `btn.textContent` reads `"request-changes "`. The normalization the substitution
+ requires is a `.trim()` between the strip and the comparison —
+ `const cleaned = stripDisplayControlChars(option).trim(); return cleaned === 'request-changes' ? 'changes' : cleaned`
+ — the pairing this repo already ships at `statusBar.ts`. A `request-changes` option carrying a leading or
+ trailing `U+202E` then abbreviates to `changes`; an interior plant (`request` + `U+202E` + `-changes`) trims
+ to `"request -changes"` and renders unabbreviated but still carries no `DISPLAY_UNSAFE` byte — so the strip
+ holds for every plant position and abbreviation holds for the appended-override attack §D.4 plants. The
+ returned value is the sole strip for the visible label, and the accessible name is derived from it — not
+ from the raw option (next bullet). This is the same entry-vs-branch placement error §B.9 diagnoses one
+ bullet earlier for `syncReasonRow`, now with the substitution's own arithmetic carried through rather than
+ asserted around; the site covers the gate-options row *and* `btn.textContent`;
+ - **the decision button's `aria-label`, derived from the VISIBLE label rather than from the raw option —
+ corrected in this revision, because deriving it from arbitrary repo bytes fails WCAG 2.5.3 by
+ construction.** The earlier wording took the **raw** option through `stripDisplayControlChars` and then
+ `.replace('-', ' ')`, and two things broke. First, the strip substitutes a space, so a `request-changes`
+ option carrying `U+202E` gave the visible label `"request-changes "` (via `gateOptionLabel`) while the
+ accessible name computed off the raw option gave `"request changes "` — a name that does not *contain* the
+ visible text, the exact WCAG 2.5.3 (Label in Name) failure the rationale comment says the design exists to
+ prevent. Second, `String.prototype.replace` with a *string* pattern rewrites only the FIRST hyphen, so a
+ multi-hyphen option — `stop-for-a-human` — announced as `stop for-a-human`, a second 2.5.3 failure
+ (previously carried as §K.5 debt). Both close by construction if the accessible name is derived from the
+ already-stripped visible label:
+ `const visible = gateOptionLabel(option); btn.textContent = visible; btn.setAttribute('aria-label', visible === 'changes' ? 'request changes' : visible)`.
+ The only option `gateOptionLabel` abbreviates is `request-changes`, so the single expansion `request changes`
+ restores what the abbreviation dropped (and contains the visible `changes`), and every other option's
+ accessible name IS its visible label — 2.5.3 holds for all of them, the surviving pin at
+ `tests/unit/loopPanel.test.ts` (the name contains **both** `changes` and `request`) still passes, and the
+ multi-hyphen §K.5 debt is closed here rather than deferred, because no `.replace` runs on repo bytes at all.
+ **This is now the whole strip for the gate label: `gateOptionLabel` strips-and-trims once, the visible label
+ and the accessible name both derive from its result, so a bidi override reaches neither** (WCAG 2.4.6 /
+ 2.5.3);
  - **a display-only stripped COPY of `loop.appTurn.step`, consumed only by the `aria-label`s — never the destructured `step` itself.** **Corrected in this revision** from
  *stripped at the destructure*, which mutates the dispatched identity: `const { step, turnKey } =
  loop.appTurn;` and `const { step } = loop.appTurn;` are each **one** binding, read by
@@ -1689,6 +1779,20 @@ Its labels are text an operator reads, so AC 3's behavior-preserving rule does n
  step (`flowStrip.ts` renders the control, the Terminate button). §D.4 pins it: a
  legacy-bound step reaches `error` with an `errorReason`, the panel renders no inert control, and Terminate
  on the strip returns the flow to `not_started`.
+- **What the blocked screen-reader user hears and where focus lands is named too, not left to the reader.**
+ `error` is human-needed (`loopStatus.ts`), so the status bar's `role=alert` region announces *Loop needs
+ you — error …*, and activating it opens the panel and calls `loopPanel.focusDecision()` (`index.ts`). On a
+ marked binding there is no gate row, no `syncAppRouteOut` and no `syncRetry`, so `focusDecision`'s comma-list
+ `querySelector` falls through to its last term and lands focus on **`[data-loop-close]`** — the only control
+ the panel renders. The payload a screen-reader user gets on this branch is therefore *Close loop panel,
+ button*, with the reason itself in the `[data-loop-reason]` row. This is **graded, not asserted**: §D.4's
+ marked-binding row adds that `focusDecision()` lands on `[data-loop-close]` and that the `[data-loop-reason]`
+ row is present carrying the surfaced reason, so the branch cannot ship with focus landing on nothing or the
+ reason absent. The residual — a first-render error view builds the reason inside `.ldl` in the same
+ `render`, so the polite region announces nothing and the *why* reaches the user only as the `role=alert`
+ status, while the route out is on a different component — is recorded in §K.5 beside the first-render
+ announcement follow-up. **No new affordance is built** (the ticket forbids §27 improvements); what changes is
+ only that the branch's narration is stated and graded rather than left silent.
 - **Graded under AC 2 / AC 9 with its own component test + the `@relocatable` organism test**
  (UI-STANDARDS: organisms get a per-component test, an e2e, and a relocation test).
 - **Accessibility, corrected.** The `State · …` string is a `div.seg-h` with plain `textContent`, no role
@@ -1793,11 +1897,23 @@ Its labels are text an operator reads, so AC 3's behavior-preserving rule does n
  `notice`, `structuralSig` differs on `state.notice ?? ''`, and `render`'s
  `host.replaceChildren` wipes the `.flow-notice` node the transition response had just painted —
  so AC 5's notice is erased on **every** migrating entry rather than on an edge. The strip therefore holds a
- transition-supplied `notice` in renderer-local state, re-renders it on subsequent passive re-pulls, and
- clears it on the next transition or a repo change; a re-pull that carries its **own** `notice` (the
- bootstrap coordinator's asynchronous §19.3 refusal, §B.5 item 6) renders that one instead. This is the
+ transition-supplied `notice` in renderer-local state and **computes `structuralSig` over the EFFECTIVE
+ notice — the carried value, not the transport `state.notice ?? ''`** — so a passive re-pull whose only delta
+ is the absent transport notice produces an **unchanged** signature, takes `patchInPlace`, leaves the same
+ `.flow-notice` node in place, and neither rebuilds the strip nor re-announces the notice into the
+ `role=status` `aria-live=polite` region. Keying the signature on the transport notice instead would flip it
+ from *present* to *absent* on that re-pull, take the `host.replaceChildren` path, and re-insert the same
+ text — the operator hearing one migration notice announced **twice** for one event, which is the
+ no-re-announce invariant `statusBar.ts` and `loopPanel.ts` already keep (WCAG 4.1.3), and the strip's
+ focus-recovery rebuild moving a keyboard user off whatever control they were on. It clears the held notice on
+ the next transition or a repo change; a re-pull that carries its **own** `notice` (the
+ bootstrap coordinator's asynchronous §19.3 refusal, §B.5 item 6) **joins** it to the held one and BOTH
+ render — not *renders that one instead*, which would silently drop AC 5's migration notice on the
+ migrating-and-busy coordinator population. On that route the two notices arrive on **different responses**
+ (the migration on the transition reply, the refusal on a later `state` push), so §B.5's single-field seam
+ composition cannot reach them and the strip is the only place they can be joined. This carrier is the
  lifetime `prompt` already has in this module, which is why no new IPC member and no new on-disk artifact
- are involved. RED row in §D.4 on the ordinary success fixture.
+ are involved. RED rows in §D.4 on the ordinary success fixture and on the coordinator-route composed pair.
 - **Two of the six hand-maintained copies of the `notice` one-shot invariant live here, and the
  prescriptions are spelled in THIS section — added in this revision.** §B.3 and §B.7 deferred the
  renderer's copies to §B.10 and §B.10 prescribed nothing for them, which is the same *deferred to a section
@@ -2006,7 +2122,7 @@ verbatim the argument §B.13b and §B.13c give for their own existence. Only its
  it is interpolated into `` `/compact ${policy.message}` ``. `boundaryCommand` is the one place all three
  boundary call sites funnel through, and `policy.message` is repo-authored whenever the resolved def came
  from the repo tier — `loopDefV2.ts` applies `requireString` **only**, while `confineArtifact`, the
- guarded sibling inside the same parser, applies `CONTROL_CHAR`. §B.5 numbered item 4 states the sink chain
+ guarded sibling inside the same parser, applies `CONTROL_CHAR` **twice** (declared pattern and post-realpath), where `confineDefRelative` applies it **zero** times (§F item 18). §B.5 numbered item 4 states the sink chain
  and §B.13d carries the forcing.
 - **Stays:** the boundary-policy→command mapping, `completionArtifact`, the done-marker definition and the
  work-prompt composer, unchanged.
@@ -2161,7 +2277,7 @@ granularity the risk lives at.
 | entry-action wiring | **Split** — comment rewritten, `enterAppLoop` dep survives and gains AC 10's ordering | §B.5 |
 | the bootstrap-spec construction (**0 §26**) | **narrowed** — `toAppLoopBootstrapSpec(resolved.def.origin, resolved.def.pickup)` loses its first argument and, with the helper itself gone, becomes `resolved.def.pickup` directly. Invisible to AC 1's grep | the operator's origin decision (§B.6, §B.13a) |
 | the `CH.flowState` handler (**0 §26**) | **stays, untouched** — the attach hook and its `(repoKey, definition signature)` once-memo are **deleted from the design** by the operator's iteration-8 decision, so this handler gains nothing | §B.5's deleted-attach paragraph; §K.1 |
-| the marked-binding refusal on the §27 gate wiring (**0 §26**) | **Split — gains** one affirmative test on §B.4's marking before `runAppGateDecisionImpl` is called. `runAppGateDecision` selects its engine from persisted run state and reads no namespace, so this is the only place the third seam can sit at the operation | §B.3's gate-decision seam bullet; §D.4's three-seam row |
+| the marked-binding refusal on the §27 gate wiring (**0 §26**) | **Split — gains** one affirmative test on §B.4's marking **for the step the payload names — found by id in the loaded def (`steps.find((s) => s.id === step)`), never by `flow.state().position - 1`** — before `runAppGateDecisionImpl` is called. `runAppGateDecision` selects its engine from persisted run state and reads no namespace, so this is the only place the third seam can sit at the operation | §B.3's gate-decision seam bullet; §D.4's three-seam row |
 | §27 gate composition root | **stays**; its §26 citations are negatives, re-pointed | §27 wiring, untouched |
 | install-examples bundle resolution | **stays**; citation re-points at §18.1/§23.4/§27.8 | §B.11 |
 
@@ -2707,37 +2823,39 @@ unmarked. A marker that has to be inferred is the same defect as no marker.
 | the orphan walk from the three entry points + the two build-time modules, `*.d.ts` excluded as a closed rule, test files counted as non-consumers | **RED, but only once SEQUENCED — measured today: 168 of 169 `src/**/*.ts` are reachable and the one exception is `src/renderer/src/env.d.ts`, a declaration file — so there are zero real orphans pre-sweep and the guard would pass the moment it is written.** Its RED is therefore *sequenced*: the walk is written and run **after** §A's modules are deleted and **before** §I.1's, so it fails naming `legacyPickupPorts.ts` in its assertion message; §I.1's deletions turn it green. A unit test over a synthetic module graph with a planted orphan and a planted test-only importer pins the algorithm independently of the tree. The walk resolves relative `from`/`import` specifiers only; a non-relative specifier is a package, not a module in the graph | 1 |
 | for each removed identifier, the token appears **nowhere in any tracked path** outside a named allowlist. The needle list is seeded from the same constants the sweep removes — the removed `FlowApi` member names, the removed message TYPE names, the three channel names, the `INSTALL_DESTINATION_IDS` members, the four `loopActivityPhrase` strings, `.agent-loop/state.yaml`, `agent-loop pickup` — plus every path literal §A deletes. **The four phrase needles are matched as exact quoted literals, not bare words**, or the guard is permanently red on surviving code: `loopPanel.ts` renders a `Working on` section heading, and five `statusBar.test.ts` fixtures carry the phrases incidentally (§I.2). The allowlist is the history set §E.4 keeps: `docs/spec/changelog.md`, `design/new-loop-brief.md`, §27's own history lines, and this document once it reads `spent` | **RED.** `markTurnComplete`, `gateDecision`, `retryTurn`, `onBootstrapConflict`, `resolveBootstrapConflict` all appear today, including in `Omit` key lists `tsc` cannot check (§B.10) and in a `Record` it can (§B.19); so do `FlowGateDecisionMsg` and `FlowMarkTurnCompleteMsg`, which the member-name half **cannot** match case-sensitively (§B.7). **Widened in this revision from `nowhere under src/` to every tracked path**, which is what makes it fail on the four sites §E's re-runs found by hand: `design/shell/loop-flow.html`, `tsconfig.node.json`, `electron.vite.config.ts`. Pointed at the pre-sweep tree it is red on all of them (§G) | 1 / 2 / 7 |
 | the narrowed namespace vocabulary; absence → surviving engine; `legacy` → marked; any other value → whole-file rejection; the classification helpers agree | **RED.** Absence selects §26 today | 4 |
-| each of the **three** seams — the view provider, the entry dispatcher, and the gate decision — yields a human-needed error for a marked binding, with a route out, while the rest of the flow still advances, undoes, reverts and terminates. **The gate-decision clause dispatches `flow:appGateDecision` DIRECTLY for a marked binding, never through a rendered control** | **RED.** Absence selects §26 today, so no marked binding reaches any of the three. **Restored from two seams to three in this revision.** The previous revision dropped the gate-decision seam on the argument that a marked binding is *structurally unable* to reach one — every conjunct of which is a render condition in `loopPanel.ts`, i.e. the renderer enforcing a main-process invariant. `runAppGateDecision` (`appGateDecision.ts`) selects its engine from persisted run state and reads no namespace, and `CH.flowAppGateDecision` (`index.ts`) validates payload shape only, so a repo that acquires `loop_namespace: legacy` on a step already at a verdict still runs the outward-facing `runSideEffect` on `approve`. A row driven through the panel grades the render gate instead of the seam, which is why this one dispatches the channel itself | 4 |
-| a legacy-bound step reaches `error` with an `errorReason`, the loop panel renders **no** inert control, and **Terminate on the strip** returns the flow to `not_started` | **RED.** `legacy` binds and runs today, so no step reaches `error` for this reason at all — the row is red on the tree, not merely a placement note. (The clause about which surface carries the route out is §B.9's prescription, not this row's failure mode; an earlier revision put the prescription in this cell and left the failure mode unstated.) | 4 |
+| each of the **three** seams — the view provider, the entry dispatcher, and the gate decision — yields a human-needed error for a marked binding, with a route out, while the rest of the flow still advances, undoes, reverts and terminates. **The gate-decision clause dispatches `flow:appGateDecision` DIRECTLY for a marked binding, never through a rendered control, and its fixture puts the marked step at a verdict while the flow has been ADVANCED past it** — so a position-keyed lookup (`flow.state().position - 1`) reads the wrong, unmarked step and lets `approve` reach the outward-facing `runSideEffect`, while the id-keyed lookup (`steps.find((s) => s.id === step)`) refuses (§B.3) | **RED.** Absence selects §26 today, so no marked binding reaches any of the three. **Restored from two seams to three in this revision.** The previous revision dropped the gate-decision seam on the argument that a marked binding is *structurally unable* to reach one — every conjunct of which is a render condition in `loopPanel.ts`, i.e. the renderer enforcing a main-process invariant. `runAppGateDecision` (`appGateDecision.ts`) selects its engine from persisted run state and reads no namespace, and `CH.flowAppGateDecision` (`index.ts`) validates payload shape only, so a repo that acquires `loop_namespace: legacy` on a step already at a verdict still runs the outward-facing `runSideEffect` on `approve`. A row driven through the panel grades the render gate instead of the seam, which is why this one dispatches the channel itself | 4 |
+| a legacy-bound step reaches `error` with an `errorReason`, the loop panel renders **no** inert control, **`focusDecision()` lands on `[data-loop-close]`** and the **`[data-loop-reason]` row is present carrying the surfaced reason**, and **Terminate on the strip** returns the flow to `not_started` | **RED.** `legacy` binds and runs today, so no step reaches `error` for this reason at all — the row is red on the tree, not merely a placement note. The two focus/narration clauses are added in this revision so the branch the sweep CREATES cannot ship with focus landing on nothing or the reason absent (WCAG 2.4.3; §B.9). (The clause about which surface carries the route out is §B.9's prescription, not this row's failure mode; an earlier revision put the prescription in this cell and left the failure mode unstated.) | 4 |
 | a misspelled namespace fails the whole load, reason names the real cause — **including from the operator's global home**; and when **neither** file exists the reason still names the repo-local path, not the global home | **RED** on the first half: today the global-home path re-reads the absent local file and reports a missing flow (`flow.ts`). The neither-exists half is the **negative that stops the obvious wrong fix** — returning the global's failure whenever the global load fails passes the first half *and* all four existing assertions in `tests/unit/flowDefinition.test.ts`, every one of which grades `ok` alone ( is `expect(loadFlowDefinitionLocalFirst(local, global).ok).toBe(false)`), while silently reporting a missing flow in the operator's GLOBAL home. `flow.ts`'s own trailing note (*"neither: report the local (absent) error"*) is the behaviour that would be lost. **These cases join that existing block in place** rather than growing a parallel fixture in the namespace test file, so its four `ok`-only assertions are strengthened with the reason they were always meant to imply (§I.2's `flowDefinition.test.ts` row) | 4 |
 | a flow whose **`legacy`-marked** step — and, separately, whose **namespace-less** step — names `plan_loop` (not a safe path segment) still **LOADS**; the step surfaces a reason naming the real cause, and Terminate / Advance on the strip still work. A third case, an **explicitly `app`** step with the same name, still fails the whole load | **RED on the namespace-less half, Pin on the other two — re-marked in this revision from a flat `Pin`.** The row was labelled a pin because such a file loads on today's tree, and it does — but for a reason the sweep removes: `flow.ts` assigns `loopNamespace = DEFAULT_LOOP_NAMESPACE` before runs, and §B.4 re-points that default at the surviving member, so post-sweep the conjunct is TRUE for a namespace-less step and `loadFlowDefinition` rejects the **whole file** — no advance, no revert, no undo, no terminate, and the only route out an edit to a repo file the app does not own (AC 4's floor; CWE-754). §B.3's edit — gate on `raw.loop_namespace === APP_LOOP_NAMESPACE`, the namespace the FILE names — is what turns it green, and the `app` half is the pin that stops that edit widening into a relaxation. It still **replaces the `and an unsafe loop name` half of the misspelled-namespace row above**, which treated the two as unrecognized-value siblings | 4 |
 | the flow-load error surface strips display-unsafe control characters from the **whole composed message**, planted in a step **`id`** and, separately, in **`kind:`** — not only in `loop:` | **RED**, and RED on the right thing: `stripDisplayControlChars` has no caller on the flow path today, and a `‮` reorders the reason text. A `loop:`-only fixture cannot distinguish the whole-message strip from the per-scalar one the earlier draft prescribed, which is why the plant sites are named (§B.3) | 4 (§B.3) |
 | the migration copies the **whole app-bundled def tree** into the surviving tier — `<name>.yaml` **and** its `charter/` and `prompts/` members — and the migrated step then **runs a work turn to its gate**; the notice fires **exactly once** (settled semantics, §K.1 — *rendered once*, not *shown until acknowledged*); the retired def is never read/parsed/moved/deleted. **RED removes the user-config root first.** The copy is asserted to land at `userConfigLoopsV2Dir(configDir)/<name>/` and explicitly **NOT** at the `defDir` the resolver returned for that name — which on the migrating branch is the **app-bundled** tier's dir, and is the mutant this row can actually kill | **RED.** No migration exists, and `FlowStateView.notice` has no producer for it: it is written only from `onEnter`'s return (`flow.ts`). **Two corrections in this revision.** (i) *Runs a work turn to its gate* is the only assertion shape that can fail on a one-file copy: `realpathBounded` appends an absent tail, so a `<name>.yaml`-only copy **parses clean** and dies later at `compose` (§B.6). (ii) The `with a repo.agent-loop.yaml loops: override in force` clause is **deleted** — §B.6 fires the probe and write only when resolution stopped at the app-bundled tier root, and a same-name override stops at the repo root first (`loopDefV2.ts`), so under **no** same-name override could this row ever be green; that case belongs entirely to the override-negative row below. The precedence-aware corollary was imported wholesale from §D.2's `installDestinations` pin, whose writer has no such gate | 5 |
-| **a `state` poll writes NOTHING, and the migration notice SURVIVES the ordinary success push** — the population AC 5 exists for, entered rather than parked: a pre-N1 namespace-less step `loop: impl-loop` on a machine holding `~/.claude/loops/impl-loop/` and **no** `loops-v2/impl-loop/`, entered and entering work **successfully**. (a) the entry migrates and reports exactly once; (b) any number of `flow:state` re-pulls before or after it leave both tiers untouched and raise no further notice; and (c) **after the push-driven re-pull settles, the `.flow-notice` node is still in the strip** — asserted after `flow:onStateChanged` has been served, not merely after `applyTransition` paints | **RED on (a) and (c), Pin on (b)** — the split-label model this table's audit-stream row states. (a) is red because no migration exists. **(c) is the blocker's own grader and is red for a second, independent reason, corrected in this revision:** the previous clause (c) drove an *attach* on a parked step, a route the operator's iteration-8 decision deletes, and it graded the notice against a **revert**. The erasing push is the ordinary **success** path — `index.ts` fires `pushFlowChanged` when `appEngine.enter` answers `'entered'`, and `index.ts` fires it before its first `await` — so a fixture built on an error branch cannot fail on the population the AC serves. Dry-run with the migration hypothetically in place on today's renderer: the push re-pulls a view whose `notice` is undefined, `structuralSig` differs on `state.notice ?? ''` (`flowStrip.ts`), `render` calls `host.replaceChildren`, and the node is gone. It passes only once §B.10's carrier holds the notice across passive re-pulls. (b) **passes today vacuously** and its falsifier is the rejected resolver placement: move the probe and write back into `resolveLoopDefV2`'s fall-through and it fails, because `pushFlowChanged` is invoked from **26** sites in `index.ts` (declared, including the active↔quiet flip), each driving `state` → `hydrate; view` | 5 |
+| **a `state` poll writes NOTHING, and the migration notice SURVIVES the ordinary success push** — the population AC 5 exists for, entered rather than parked: a pre-N1 namespace-less step `loop: impl-loop` on a machine holding `~/.claude/loops/impl-loop/` and **no** `loops-v2/impl-loop/`, entered and entering work **successfully**. (a) the entry migrates and reports exactly once; (b) any number of `flow:state` re-pulls before or after it leave both tiers untouched and raise no further notice; and (c) **after the push-driven re-pull settles, the `.flow-notice` node is the SAME node** (an identity check — `===` the node the transition created, not merely a `.flow-notice` present) — asserted after `flow:onStateChanged` has been served, not merely after `applyTransition` paints, so it distinguishes a held notice that was never re-rendered from one re-painted into the polite live region (which would announce twice, WCAG 4.1.3) | **RED on (a) and (c), Pin on (b)** — the split-label model this table's audit-stream row states. (a) is red because no migration exists. **(c) is the blocker's own grader and is red for a second, independent reason, corrected in this revision:** the previous clause (c) drove an *attach* on a parked step, a route the operator's iteration-8 decision deletes, and it graded the notice against a **revert**. The erasing push is the ordinary **success** path — `index.ts` fires `pushFlowChanged` when `appEngine.enter` answers `'entered'`, and `index.ts` fires it before its first `await` — so a fixture built on an error branch cannot fail on the population the AC serves. Dry-run with the migration hypothetically in place on today's renderer: the push re-pulls a view whose `notice` is undefined, `structuralSig` differs on `state.notice ?? ''` (`flowStrip.ts`), `render` calls `host.replaceChildren`, and the node is gone. It passes only once §B.10's carrier holds the notice across passive re-pulls. (b) **passes today vacuously** and its falsifier is the rejected resolver placement: move the probe and write back into `resolveLoopDefV2`'s fall-through and it fails, because `pushFlowChanged` is invoked from **26** sites in `index.ts` (declared, including the active↔quiet flip), each driving `state` → `hydrate; view` | 5 |
 | **the same fixture on a BUSY shell keeps `BUSY_NOTICE` too** — the migration notice and the §19.3 refusal are composed into one field (§B.5's composition rule, positions 6 and 7), and after the push-driven re-pull settles the strip still carries both | **RED.** Added in this revision as the second half of the blocker's grader. Neither producer exists today, and the composed pair is the case a single-notice fixture cannot distinguish: a carrier that happened to hold only the last-written notice would pass the row above and fail here. It also grades AC 10's busy-shell clause on the migrating population, whose named failure mode is a step that types nothing with no explanation | 5, 10 |
-| **a relaunch loses nothing**: enter the step, quit before the operator acts, relaunch and enter it again — the copy is on disk from the first entry, and the second entry neither re-writes nor re-notifies | **RED.** No migration exists, so neither half has a producer. **Re-scoped in this revision from the deleted attach route to the entry route**, which is now AC 5's only delivery moment. The rejected resolver design failed the *first* clause (write on the read path, notice on a process-local one-shot, so a relaunch dropped it permanently); with the write and the notice in one synchronous call whose return value carries both, the only remaining window is the process dying between that call returning and its caller serving the response, which this row does not attempt to close (§B.6) | 5 |
+| **a relaunch does not re-migrate or re-notify** (the residual that leaves is booked, not hidden): enter the step, quit before the operator acts, relaunch and enter it again — the copy is on disk from the first entry, so the second entry neither re-writes nor re-notifies | **RED.** No migration exists, so neither half has a producer. **Re-scoped in this revision from the deleted attach route to the entry route**, which is now AC 5's only delivery moment. The rejected resolver design failed the *first* clause (write on the read path, notice on a process-local one-shot, so a relaunch dropped it permanently); the write and the notice are now **produced** together in one synchronous call, but the notice is then held in **volatile renderer state until the next transition** (§B.10's carrier) while §H.4 makes the on-disk trigger false the moment the copy lands — so a quit or renderer reload anywhere in that operator-paced window loses the notice. This row grades the idempotency (no re-migrate, no re-notify on relaunch); the delivery window it does **not** close is booked as §F item 17, against the real interval (§B.6) | 5 |
 | **the notice survives every entry branch that returns early, and is not repainted by a SYNCHRONOUS revert**: on a **busy shell** the migration notice is delivered **alongside** `BUSY_NOTICE`; and on a **declared `bootstrap` the resolved def cannot satisfy** the step reverts with **no** migration having run on that entry, the next entry that does run the step migrating and reporting then; and on a step whose **bound def declares no `pickup:` block, entered while the §27 runner is already in-flight for another repo**, the same holds — nothing migrated, the step recoverable. **The busy-shell half's fixture declares NO `bootstrap`**, since that is the only population for which ordering position 7 runs at all. **Asserted on the RENDERED strip after `flow:onStateChanged` has settled**, not on the returned `EntryActionResult` | **RED.** `EntryActionResult` carries one `notice` (`flowEntryActions.ts`) and today's seam overwrites, so the busy-shell half fails on the tree. **Corrected in this revision on two axes.** (i) The assertion moved from the returned result to the rendered strip: a result-level assertion **cannot fail**, because the erasure happens downstream — `pushFlowChanged` → `refresh` → `render(state)` → `host.replaceChildren` (`flowStrip.ts`) with `state` carrying no `notice` by contract (`ipc.ts`). (ii) The no-contract clause **inverted**: §B.5 moved the migration below that branch precisely because the branch's own push erased the notice it had just produced, so the correct assertion is that nothing was migrated *and* the step is recoverable, on the same fixture the no-contract row uses. **(iii) The runner-in-flight clause is added in this revision**, because the two fixtures above both return at ordering position 3 or 4 and cannot exercise position 5 at all: `enterFastPath`'s `requireWorkEntryReadiness` refusal is a **synchronous** revert reached through the dispatch, in the same tick as the notice and with no git latency to separate them, and hoisting it to position 5 is what closes it (§B.5 ordering positions 5 and 6, §B.6) | 5 / 10 |
 | **the trigger is where resolution STOPPED, not operator silence** — with a repo `.agent-loop.yaml` `loops:` override answering for the name and a retired-tier def present, the repo def resolves, **no** probe fires, **nothing** is written into the operator tier and no notice is raised | **RED.** `repoCandidate` is pushed first (`loopDefV2.ts`); keyed on operator silence the migration fires here and writes app-bundled content into the operator's own tier at an untrusted repo's request, where it then outranks the bundle for every repo forever (CWE-829/CWE-732, §B.6) | 5 |
 | a repo whose `.agent-loop.yaml` maps the bound name to a **retired-schema** def gets a surfaced per-step reason **naming the retired schema** — not a bare parse error — and the rest of the flow stays operable | **RED.** Today the parse failure returns `{ok:false, reason}` with no fall-through (`loopDefV2.ts`) and nothing names the schema (§B.6) | 4 / 5 / 9 |
-| **the new `atomicWriteTreeSync` primitive, graded on its own, in five parts:** (i) a pre-existing non-empty destination directory is left byte-for-byte unchanged, the call returns `{ok:false, cause:'destination-exists'}` rather than clobbering, **and leaves no staging directory behind**; (ii) a **planted temp inside the staging tree**, planted through the `stageDir` seam `AtomicWriteTreeOptions` carries, still throws and is **not** unlinked, so the CWE-59 signal is not reclassified as the additive-only no-op — and the staging directory is left in place rather than removed around it; (iii) a **non-directory planted at the destination itself** — `<loopsV2Dir>/<name>` as a symlink to a directory, as a dangling symlink, and as a plain file — returns `{ok:false, cause:'container-refused'}` on all three, asserted as a value **distinct from** `destination-exists`, because collapsing them is what would record a planted symlink as the silent AC 9 substitution; (iv) a failure part-way through the tree leaves **no `<name>/` at all**, so resolution keeps falling through to the app bundle and the step still runs, **and leaves no staging directory behind** — added in this revision, matching clause (i), because *no `<name>/` at all* is true for free on a mid-tree failure (`rename` never ran), so nothing in this table could fail on the leak the `tryUnlink`-shaped cleanup would have produced; (v) a **symlink planted at `<userConfigLoopsV2Dir>` ITSELF**, not at `<…>/<name>`, likewise answers `container-refused` and the step still runs — the pre-staging `isWritableContainer` refusal, whose arm §B.6 names in this revision and which the destination-keyed clauses above structurally cannot reach | **RED** on all five — `atomicWriteTreeSync` does not exist. (iii) is red on the *distinctness*, not merely on the refusal: `atomicWriteFileSync` today returns a bare `false` for `!isRealContainer(dir)` (`atomicFile.ts`), so any test written against a boolean cannot tell the two apart. **Two corrections in this revision.** (ii) previously said *a planted temp* with no seam named, and the staging path is a `randomUUID` sibling a test cannot predict — `AtomicWriteOptions.tmpPath` exists in this very module for exactly that reason (`atomicFile.ts`), so the row now names the seam it plants through and the staging-cleanup exclusion it grades. (iii) previously planted at the *container* and keyed on `isRealContainer`, which under the staged-tree design only ever sees the unpredictable staging path — a fixture that cannot be built; it plants at the **destination**, which is where §B.6 now classifies. New clause (v) restores a container plant on the axis that IS reachable — `isWritableContainer`, evaluated before staging — so a `refuse`-routed container check cannot pass this table. **Changed in an earlier revision from a three-part `exclusive` option on `atomicWriteFileSync`**: a def is a directory tree, per-file exclusivity cannot give the all-or-nothing guarantee, and widening the existing return endangers all nine call sites (§B.6, §B.13b) | 5 |
+| **the new `atomicWriteTreeSync` primitive, graded on its own, in five parts:** (i) a pre-existing non-empty destination directory is left byte-for-byte unchanged, the call returns `{ok:false, cause:'destination-exists'}` rather than clobbering, **and leaves no staging directory behind**; (ii) a **planted temp inside the staging tree**, planted through the `stageDir` seam `AtomicWriteTreeOptions` carries, still throws and is **not** unlinked, so the CWE-59 signal is not reclassified as the additive-only no-op — and the staging directory is left in place rather than removed around it; (iii) a **non-directory planted at the destination itself** — `<loopsV2Dir>/<name>` as a symlink to a directory, as a dangling symlink, and as a plain file — returns `{ok:false, cause:'container-refused'}` on all three, asserted as a value **distinct from** `destination-exists`, because collapsing them is what would record a planted symlink as the silent AC 9 substitution; (iv) a failure part-way through the tree leaves **no `<name>/` at all**, so resolution keeps falling through to the app bundle and the step still runs, **and leaves no staging directory behind** — added in this revision, matching clause (i), because *no `<name>/` at all* is true for free on a mid-tree failure (`rename` never ran), so nothing in this table could fail on the leak the `tryUnlink`-shaped cleanup would have produced; (v) a **non-writable resolved `<userConfigLoopsV2Dir>` (`0o555`)**, nothing planted, likewise answers `container-refused` and the step still runs — the pre-staging `isWritableContainer` refusal (`isRealContainer` true, then `accessSync(probe, W_OK)` false), whose arm §B.6 names in this revision and which the destination-keyed clauses above structurally cannot reach; marked `it.skipIf` as root, since `0o555` denies nothing under uid 0, while clause (ii)'s `stageDir`/`EEXIST` plant is the root-provokable one. A symlink at the tier ENTRY is **not** this fixture — `resolveOwnedDirJail` follows it (§18.1), so it is graded by the tier-entry-followed row | **RED** on all five — `atomicWriteTreeSync` does not exist. (iii) is red on the *distinctness*, not merely on the refusal: `atomicWriteFileSync` today returns a bare `false` for `!isRealContainer(dir)` (`atomicFile.ts`), so any test written against a boolean cannot tell the two apart. **Two corrections in this revision.** (ii) previously said *a planted temp* with no seam named, and the staging path is a `randomUUID` sibling a test cannot predict — `AtomicWriteOptions.tmpPath` exists in this very module for exactly that reason (`atomicFile.ts`), so the row now names the seam it plants through and the staging-cleanup exclusion it grades. (iii) previously planted at the *container* and keyed on `isRealContainer`, which under the staged-tree design only ever sees the unpredictable staging path — a fixture that cannot be built; it plants at the **destination**, which is where §B.6 now classifies. New clause (v) restores a container plant on the axis that IS reachable — `isWritableContainer`, evaluated before staging — so a `refuse`-routed container check cannot pass this table. **Changed in an earlier revision from a three-part `exclusive` option on `atomicWriteFileSync`**: a def is a directory tree, per-file exclusivity cannot give the all-or-nothing guarantee, and widening the existing return endangers all nine call sites (§B.6, §B.13b) | 5 |
 | both-tiers-answer → the surviving def wins (the recorded AC 9 substitution) | **Pin, not RED** — it grades retained resolver precedence, which is already correct. Falsified by mutating the tier order in `resolveLoopDefV2` and watching it fail | 5 / 9 |
 | no-tier-answers + retired tier present → surfaced reason naming the retired schema, and an `unresolvable` root is **not** reported as an `escapes` | **RED.** Neither behaviour exists today: nothing names the retired schema, and nothing distinguishes the two causes at all — `confinedRealPath` collapses them, so the reporting branch must use `confinedRealPathResult` (§B.6) | 5 |
 | a symlink at a candidate **under** the tier (`<loops>/<name>` → outside) makes the probe report absent and the write refuse with cause `escapes`; a symlink at the tier **entry** is followed as §18.1 policy and probe and write stay confined to the relocated jail; an unresolvable config root suppresses both | **RED** — there is no probe and no write on today's build, so every clause fails for want of a subject. **Corrected:** `resolveOwnedDirJail` is `realpathBounded(resolve(dir))` (`confinedPath.ts`), which resolves the tier root *including* its final segment, so a link at the entry **does** relocate the jail and the probe **does** fire — by deliberate §18.1 policy (`confinedPath.ts`). The negative that is provable is "never *outside its root*", which is the plan's own wording | 5 |
 | a destination directory created **after** the probe and **before** the commit is left byte-for-byte unchanged, and the migration reports rather than clobbers | **RED.** No tree write exists; and a probe-then-write implementation has a TOCTOU window the single-`renameSync` commit closes structurally, since `rename(2)` refuses a non-empty destination outright (§B.6) | 5 |
-| with a **non-writable `<userConfigLoopsV2Dir>` whose `<name>` is genuinely absent**, and separately with a read-only tier root, the step still enters and runs, no exception escapes the transition, and the surfaced notice names the write failure by errno | **RED.** There is no write to fail today; and unwrapped, an `EACCES`/`ENOSPC` would abort the transition itself, leaving the operator unable to advance the flow at all (§B.6). **Fixture corrected in this revision:** the first half previously planted a **plain file at `<loopsV2Dir>/<name>`**, which cannot reach the write at all — the operator candidate's `confinedRealPathResult(jail, <name>/<name>.yaml)` answers `unresolvable` (`realpathBounded` returns null because `lstat` under a plain file throws `ENOTDIR`, `confinedPath.ts`) and `resolveLoopDefV2` **returns** on that branch rather than continuing, so resolution never reaches the app-bundled tier, no write is attempted, and the row's assertion had no producer. That plain-file case is a **resolver-reason** case and belongs to the no-tier-answers row above; what this row needs is a fixture where the trigger fires and the write itself fails. The planted **non-directory at the destination** is graded by the primitive row's clause (iii) **Fixture corrected AGAIN in this revision, on root-provokability.** A `chmod` fixture denies nothing under uid 0, so under the canonical Podman/Xvfb harness and any containerised CI running as root the write **succeeds** and this row's assertion has no producer — it goes green having graded nothing, which is the *guard that passes the moment it is written* this section's preamble forbids. The planted-directory row below names the hazard in as many words (*`EISDIR` is provokable in every environment including as root, unlike a `chmod` fixture that would need `it.skipIf`*), so the table applied the rule to one row and not its neighbour. **Decided: provoke the write failure through a root-provokable seam instead** — plant an entry inside the staging tree via the `stageDir` seam the primitive row already uses, so the member's `wx` create throws `EEXIST` and the wrap-and-`errMsg` path is exercised in **every** environment. The two permission halves are **kept as well**, each marked `it.skipIf(process.getuid?. === 0)` in the shape this repo already uses four times (`tests/unit/dirEntries.test.ts`, `tests/integration/chainedInputProbe.test.ts`, `tests/unit/launchRoot.test.ts`) and CLAUDE.md states as a rule, with fixture mode `0o555` — **not** `0o000`, or the tier stops being traversable and `resolveLoopDefV2` returns `unresolvable` before any write is attempted, the same dead end this row already corrected for the plain-file fixture. | 5 |
+| a **non-writable resolved `<userConfigLoopsV2Dir>` (`0o555`)** with `<name>` absent, and separately a **read-only tier root**, take the pre-staging `container-refused` arm — the step still enters and runs, no exception escapes the transition, and the surfaced notice names the **refused container** (unwritable), NOT an errno, because no write is attempted (§B.6); and separately a write that gets PAST the pre-check and fails mid-way — provoked root-provokably by a `stageDir`/`EEXIST` plant — surfaces a notice naming the failure **by errno** (the `errMsg` wrap) | **RED.** There is no write to fail today; and unwrapped, an `EACCES`/`ENOSPC` would abort the transition itself, leaving the operator unable to advance the flow at all (§B.6). **Fixture corrected in this revision:** the first half previously planted a **plain file at `<loopsV2Dir>/<name>`**, which cannot reach the write at all — the operator candidate's `confinedRealPathResult(jail, <name>/<name>.yaml)` answers `unresolvable` (`realpathBounded` returns null because `lstat` under a plain file throws `ENOTDIR`, `confinedPath.ts`) and `resolveLoopDefV2` **returns** on that branch rather than continuing, so resolution never reaches the app-bundled tier, no write is attempted, and the row's assertion had no producer. That plain-file case is a **resolver-reason** case and belongs to the no-tier-answers row above. The two arms this row grades are distinct: a **non-writable resolved container** (`0o555`) takes the pre-staging `container-refused` arm whose notice names the container, **not** an errno (no write is attempted), and only a write that reaches the commit and fails mid-way carries an errno — so the by-errno assertion is scoped to that mid-write half alone. The planted **non-directory at the destination** is graded by the primitive row's clause (iii). **Fixture corrected AGAIN in this revision, on root-provokability.** A `chmod` fixture denies nothing under uid 0, so under the canonical Podman/Xvfb harness and any containerised CI running as root the write **succeeds** and this row's assertion has no producer — it goes green having graded nothing, which is the *guard that passes the moment it is written* this section's preamble forbids. The planted-directory row below names the hazard in as many words (*`EISDIR` is provokable in every environment including as root, unlike a `chmod` fixture that would need `it.skipIf`*), so the table applied the rule to one row and not its neighbour. **Decided: provoke the write failure through a root-provokable seam instead** — plant an entry inside the staging tree via the `stageDir` seam the primitive row already uses, so the member's `wx` create throws `EEXIST` and the wrap-and-`errMsg` path is exercised in **every** environment — this is the ONLY half that grades the by-errno notice. The two permission halves are **kept as well** (each asserting the `container-refused` notice naming the unwritable container, not an errno), each marked `it.skipIf(process.getuid?. === 0)` in the shape this repo already uses four times (`tests/unit/dirEntries.test.ts`, `tests/integration/chainedInputProbe.test.ts`, `tests/unit/launchRoot.test.ts`) and CLAUDE.md states as a rule, with fixture mode `0o555` — **not** `0o000`, or the tier stops being traversable and `resolveLoopDefV2` returns `unresolvable` before any write is attempted, the same dead end this row already corrected for the plain-file fixture. | 5 |
 | a namespace-less step's `skill` is injected and its `bootstrap: pickup` sets up the branch | **RED.** Today the `app` dispatch at `flowEntryActions.ts` returns before either | 10 |
 | **the two injections never share the agent's input line:** on a namespace-less step declaring `skill`, the bytes written to the PTY carry the skill invocation followed by its **own** `\r` before any boundary-preamble or work-prompt body is written | **RED**, and this is the guard for it — the withdrawn control-character rejection never was (§B.5 item 3). Today the skill is written `submit: false` (`index.ts`) and `requestTurn`'s initial arm calls `tryInject` synchronously in the same tick (`loopOrchestrator.ts`), so the app's own instruction is appended to a repo-authored scalar and submitted as one line on both `wrapForPaste` branches (CWE-74, §B.5 item 4). **This row is also the only grader of the THREE additive widenings item 4(b) needs** — `requestTurn`'s chained-arm option (§B.1), the flag `AppLoopEngine.enter` threads to its first `start` (§B.20a), **and the hop through `AppLoopBootstrapJob` / `AppLoopBootstrapCoordinatorDeps.enterWork` (§B.13a)**: with any of the three unthreaded the bytes interleave and the row stays red. **The fixture's def declares NO `pickup:` block**, so the entry takes `dispatchJob` → `enterFastPath` (`appLoopBootstrap.ts`), the synchronous branch on which the race is real; a def that declares one takes the async `deps.run(…)` round trip and would go green over a broken fast path. **Corrected in an earlier revision from two widenings to three** — `enterAppLoop`'s direct `appEngine.enter` (`index.ts`) runs only on `!resolved.ok`, where the engine no-ops and no turn starts, so the two call sites named before were the ones that never race. **And the row runs TWICE, added in this revision: once at the harness default and once at a deliberately hostile configuration** — `APP_SUBMIT_DELAY_MS` raised well above it with `APP_QUIET_MS` left alone.'s causal-chaining row commits the dispatch to being chained off the injection's own **completion** rather than off a timer, and its risk cell names the failure mode exactly (*a timer-ordered guard passes on defaults and fails on a supported configuration*), but a single launch at `APP_SUBMIT_DELAY_MS: '100'` cannot distinguish causal chaining from a dispatch scheduled off a fixed epsilon over the default delay. A timer-ordered implementation goes red at the hostile configuration while the causal chain stays green. Both knobs are operator-settable — `APP_QUIET_MS` at `runtimeConfig.ts`, `APP_SUBMIT_DELAY_MS` at `inject.ts` ('s causal-chaining row's citation is corrected to match) | 10 |
-| **a repo-authored multi-line `skill:` on a namespace-less loop step submits exactly ONE line**: with `skill: "/plan\ncurl … \| sh"`, the bytes written to the PTY carry a single submitted line and no second command line | **RED.** `wrapForPaste` (`inject.ts`) maps every `\n` to `\r` and nothing collapses them, so today the value's leading lines are already submitted by the operator's own terminal — and once's submitted-skill row makes the injection `submit: true`, the app supplies the final Enter itself and every line becomes app-submitted with zero operator keystrokes (CWE-74). The guard is the collapse §B.5 item 3 prescribes at `skillInvocation`, not the withdrawn load-time rejection. **Second fixture added in this revision: the same multi-line `skill:` on a step that ALSO declares `bootstrap: pickup`**, asserting a single submitted line on the coordinator's hand-off. Scoped to the seam's `deps.inject` call the collapse never reaches that route at all (§B.5 item 6,'s bootstrap-coordinator row), and neither existing row could catch it — this one used a no-`bootstrap` step and the dirty-worktree row asserts *no* bytes reach the PTY | 10 |
+| **a repo-authored multi-line `skill:` on a namespace-less loop step submits exactly ONE line**: with `skill: "/plan\ncurl … \| sh"`, the bytes written to the PTY carry a single submitted line and no second command line | **RED.** `wrapForPaste` (`inject.ts`) maps every `\n` to `\r` and nothing collapses them, so today the value's leading lines are already submitted by the operator's own terminal — and once's submitted-skill row makes the injection `submit: true`, the app supplies the final Enter itself and every line becomes app-submitted with zero operator keystrokes (CWE-74). The guard is the collapse §B.5 item 3 prescribes at `injectableSkill` (a dedicated function, not the manual-shared `skillInvocation`), not the withdrawn load-time rejection. **Second fixture added in this revision: the same multi-line `skill:` on a step that ALSO declares `bootstrap: pickup`**, asserting a single submitted line on the coordinator's hand-off. Both loop injection points call `injectableSkill` — the seam's loop-step arm and the coordinator's hand-off — so this route is collapsed too (§B.5 item 6); neither existing row could catch it, since this one used a no-`bootstrap` step and the dirty-worktree row asserts *no* bytes reach the PTY | 10 |
 | a `kind: 'loop'` step whose bound loop name **no tier answers**, declaring `skill` **and** `bootstrap: pickup`, surfaces the retired-schema reason, **stays `in_progress`**, receives **no bytes at the PTY**, and raises **no** bootstrap-error dialog | **RED.** Today `flowEntryActions.ts` returns before both blocks so no skill is injected at all, and after the re-point the ordering has to place this case explicitly: read broadly, the no-contract check would revert a step that `index.ts`'s `!resolved.ok` branch leaves standing today (an AC 2 regression on a surviving `app`-namespace path); read narrowly, control would fall through to an injection that submits a repo-authored scalar at an agent for a step whose engine cannot run. §B.5 ordering position 2 is that placement, added in this revision (CWE-754) | 4 / 5 / 10 |
 | a namespace-less step declaring `skill` **and** `bootstrap: pickup`, entered on a **dirty worktree** so the bootstrap fails asynchronously: **no bytes reached the PTY before the revert** | **RED.** Today's early return means no skill is ever injected on an app-bound step, so the sweep creates this path. With the injection at the seam, `rollbackJob` (`appLoopBootstrap.ts`) and the operator-driven `declineWipe` both revert a step whose agent turn is already running — an external side effect ahead of a persisted rollback with no compensation and no surface pointing at the recovery (CWE-755). §B.5 numbered item 6 closes it by moving the injection to the coordinator's success handoff; this row is what fails if it is left at the seam | 10 |
 | on a **busy** shell the same `skill` + `bootstrap: pickup` step **types nothing at the seam, raises no `BUSY_NOTICE` there, and still starts its work turn** — its skill reaches the PTY only on the coordinator's hand-off | **RED.** Today the refusal returns before the dispatch for a §26 step; the assertion is that an app-bound step's dispatch is not newly suppressed (AC 2). **Split in this revision.** The row previously asserted *returns the refusal notice* on this fixture, which ordering position 7 makes structurally unreachable — position 7 runs only for a step whose bound def declares no `pickup:` block, and §B.5 item 6 moves this population's skill to the coordinator. That half has no producer here and moves to its own row below; what survives on this fixture is the AC 2 assertion its RED reason actually argues for | 10 / 2 |
 | a **`skill`-only step whose bound def declares NO `pickup:` block**, entered on a busy shell: the seam returns `BUSY_NOTICE`, types nothing, and the work turn still starts | **RED.** This is where ordering position 7's §19.3 refusal actually runs, and today `flowEntryActions.ts` returns before the skill block entirely, so no refusal is produced on an app-bound step at all (§B.5 ordering position 7) | 10 / 19.3 |
 | a **`skill` + `bootstrap: pickup` step whose bootstrap SUCCEEDS while a long-running command holds the shell**: no bytes reach the PTY at the coordinator's hand-off, the refusal reaches the **rendered strip** as a transient notice, and the work turn still starts | **RED.** The coordinator has no `isShellBusy` dep and no notice channel today — only `emitError` and `audit` (`appLoopBootstrap.ts`) — so AC 10's *under the same busy-shell refusal it obeys today* is unmet on the route §B.5 item 6 creates, and a silent refusal leaves a step reporting as running with no command typed (§B.5 item 6, §B.13a) | 10 / 19.3 |
+| **a MIGRATING step on the coordinator route at a busy shell keeps BOTH notices** — a namespace-less step bound to a name whose def declares a `pickup:` block, on a machine holding `~/.claude/loops/<name>/` and **no** `loops-v2/<name>/`, entered while a long-running command holds the shell: the migration notice returns on the transition reply, the coordinator's `BUSY_NOTICE` arrives on a later `state` push, and after that push settles the strip carries **both** | **RED.** Neither producer exists today, and this is the composed pair no other row builds: the migrating-success row uses `impl-loop` (no `pickup:`, so the seam route with no coordinator push) and the busy-at-handoff row above does not migrate — so the two notices arrive on **different responses** and a carrier that rendered the re-pull's notice *instead* of the held one passes both those rows while silently dropping AC 5's migration notice here (§B.5 item 6, §B.10) | 5, 10 |
+| **a DEFERRED turn that is never triggered reverts, and a second entry during the gap is refused** — on the coordinator fixture (`skill` + `bootstrap: pickup`, `APP_SUBMIT_DELAY_MS > APP_QUIET_MS`): (a) with the injector's completion signal suppressed, the deferral's `APP_SUBMIT_DELAY_MS`-derived deadline lapses and the coordinator reverts the step via `rollbackJob` + `flow:onBootstrapError`, leaving no turn un-requested with the step stuck `in_progress`; and (b) a second `enter` issued while the first is accepted-but-not-yet-requested is answered `'busy'`, not `'entered'`, and does not overwrite the active turn | **RED.** No deferral exists today — `enter` requests the turn synchronously inside itself — so neither the deadline arm nor the occupies-the-runner interlock has a producer, and `canEnter()` (`runner.state() !== 'in-flight'`) reads free across the gap the sweep opens (§B.5 item 6, CWE-755) | 10 |
 | a namespace-less step with `skill` + `bootstrap: pickup` + an **unresolved required input** injects its skill **exactly once** across the prompt round-trip | **RED.** `provideInput` re-runs `enter(view)` (`flow.ts`), so with `skill` above the missing-input check the invocation is submitted twice (§B.5 item 5) | 10 |
 | a **busy shell on that same step** returns the input **prompt** and **no** refusal notice, **having attempted no injection** — and the `provideInput` re-entry then injects exactly once | **RED — re-marked in this revision from `Pin`, which this table's own taxonomy contradicts.** Dry-run the fixture on today's tree: `DEFAULT_LOOP_NAMESPACE` is `'legacy'` (`src/shared/loopNamespace.ts`), so the app branch at `flowEntryActions.ts` is **not** taken, control reaches, and the seam returns `{ notice: BUSY_NOTICE }` with **no** `prompt` — the exact inverse of this row's assertion. Its immediate sibling above is marked RED on the same fixture for the same absence-selects-legacy reason, so the two rows disagreed about one tree. The ordering-position-3 mutation is kept as the **post-sweep** falsifier, the way this table's other split-label rows already do. It is otherwise the negative the hoist creates rather than the co-occurrence an earlier revision asserted. **Restated in this revision:** the row read *surfaces the §19.3 refusal **alongside** the input prompt*, which §B.5 ordering position 3 makes structurally impossible — the prompt returns **alone** — and §B.5 item 5 says so in as many words, while the row still cited that item as its authority. It could never have gone green, leaving an implementer to rewrite it (AC 2's named defect) or to re-introduce notice composition at position 3, which is the notice-erasure path the reorder removed. Falsified by moving the missing-input check back below the skill block: the two co-occur again and the prompt drops the refusal (§B.5 ordering position 3, item 5) | 10 / 19.3 |
-| a **manual** step declaring `skill` with an unsatisfied required input still injects its skill and does not newly prompt; a manual step whose `skill` carries a control character still **LOADS**; **and on a manual step declaring a MULTI-LINE `skill`, the bytes written to the PTY carry no app-supplied trailing `\r` and the newlines are NOT collapsed** — today's `wrapForPaste` behaviour (`inject.ts`) byte-for-byte | **Pin, not RED** — all three grade behaviour the sweep must not disturb (AC 2, and #98's flow-step-schema non-goal). Falsified by making the hoist unconditional, by reinstating the withdrawn load-time rejection, and — the clause **added in this revision** — by applying either of's submitted-skill row and 13 unconditionally. That last mutant is the reachable one: `index.ts` is a **single shared dep**, `inject: (text) => inject(text, { submit: false })`, which `flowEntryActions` uses for **both** step kinds, so making loop steps submit means editing the one call every manual step also flows through. Without this clause nothing in §D.4 can fail when the app starts pressing Enter on repo-authored text at the one step kind whose entire justification is that it must not ('s submitted-skill row's own words: *a manual step is where the operator IS the one who presses Enter*) — an AC 2/AC 3 behaviour change on a surviving path and a CWE-74 exposure widening with no grader (§B.5 items 3 and 5) | 2 |
+| a **manual** step declaring `skill` with an unsatisfied required input still injects its skill and does not newly prompt; a manual step whose `skill` carries a control character still **LOADS**; **and on a manual step declaring a MULTI-LINE `skill`, the bytes written to the PTY carry no app-supplied trailing `\r` and the newlines are NOT collapsed** — today's `wrapForPaste` behaviour (`inject.ts`) byte-for-byte | **Pin, not RED** — all three grade behaviour the sweep must not disturb (AC 2, and #98's flow-step-schema non-goal). Falsified by making the hoist unconditional, by reinstating the withdrawn load-time rejection, by routing the manual-step arm through `injectableSkill` so its newlines collapse too (§B.5 item 3), and — the clause **added in this revision** — by applying either of's submitted-skill row and 13 unconditionally. That last mutant is the reachable one: `index.ts` is a **single shared dep**, `inject: (text) => inject(text, { submit: false })`, which `flowEntryActions` uses for **both** step kinds, so making loop steps submit means editing the one call every manual step also flows through. Without this clause nothing in §D.4 can fail when the app starts pressing Enter on repo-authored text at the one step kind whose entire justification is that it must not ('s submitted-skill row's own words: *a manual step is where the operator IS the one who presses Enter*) — an AC 2/AC 3 behaviour change on a surviving path and a CWE-74 exposure widening with no grader (§B.5 items 3 and 5) | 2 |
 | a declared `bootstrap` whose bound def carries no contract raises `flow:onBootstrapError`, **reverts the step**, **pushes the change**, **injects nothing** and **starts no work turn**: afterwards the strip shows the PRIOR step, the error dialog carries the reason, no turn exists for the failed step, **and — on a step that also declares `skill` — no bytes reached the PTY** | **RED.** Today the step short-circuits with no bootstrap at all; without the push nothing re-pulls, so a revert-only implementation leaves the strip on the stale station; and with the check below the (now submitted) injection the revert lands on a step whose agent turn is already running, with no compensation and no surface pointing at the recovery (§B.5 item 2, ordering position 4) | 10 |
-| **the loop panel strips display-unsafe control characters from its repo-sourced view fields**, on **five** plant sites and, for the reason, across **two pushes on one structurally-identical view**: (a) render with a clean reason, then push a reason carrying `U+202E`, asserting the rendered `textContent` after **both**; (b) a repo-authored `gate[].option` fixed at **`request-changes`** carrying `U+202E`, asserting three things on that one button — the visible `textContent` is the abbreviated `changes`, the `aria-label` carries no `U+202E`, and the `aria-label` still contains `request`; (c) a **`verdictReason`** carrying `U+202E`, asserted on the rendered `textContent` and then re-pushed on a structurally-identical view so `syncNamedRow`'s in-place branch runs too; (d) a step **`id`** carrying `U+202E`, asserted on the arm-interrupt `aria-label` (`loopPanel.ts`) and on the three route-out controls' accessible names — **and, added in this revision, that the `step` DISPATCHED on click equals the RAW planted id**, which is the assertion that closes the wrong reading of the prescription (stripping at the destructure mutates one binding read by both the names and `deps.appRouteOut` / `deps.armInterrupt`, so the controls would announce an action and dispatch a step the receiver cannot match — WCAG 4.1.2, §6); (e) an `errorReason` carrying `U+202E`, the field the other four were added around | **RED.** Nothing on the panel path calls `stripDisplayControlChars` today, while the absence re-point makes every namespace-less loop step a first-time caller of the §27 resolver whose reasons and gate options embed repo bytes (CWE-117/CWE-1007, §16.3; §B.9). **Two corrections in this revision, each of which the earlier one-push, reason-only fixture could not have caught.** (i) The sink is `syncReasonRow`'s own entry (`loopPanel.ts`), **not** `detailRow`'s `v.textContent = value`: is only the row-**creation** path, while the in-place branch `if (v.textContent !== reason) v.textContent = reason` is taken on every subsequent push, because `structuralSig` deliberately excludes `errorReason`. A one-push fixture cannot tell a create-only strip from a whole-sink one, so it stays green over an unstripped patch (WCAG 4.1.3). (ii) `gateOptions` is a second repo-sourced field — `requireString` only (`loopDefV2.ts`), reaching and, via `option.replace('-',' ')`, a control's **accessible name**. **Three more in this revision.** (b) fixes the option at `request-changes` because an `approve`-shaped fixture passes under **either** reading of the prescription, so the regression §B.9 corrects — the accessible name collapsing to the bare `changes` — would ship green. (c) exists because's panel-strip row commits the sweep to stripping `verdict`/`verdictReason` at `syncNamedRow` and the tokens `verdict` and `syncNamedRow` occurred **zero** times anywhere in this table: `loopPanel.ts` pass them into `syncNamedRow`, and `verdictReason` is free text lifted from a labelled line of the consolidator agent's own output (`src/shared/consolidatorOutput.ts`), as untrusted as `errorReason`. (d) exists because `appTurn.step` is a **fifth** repo-authored field — `flow.ts` accepts any non-empty string with no `isSafePathSegment` — landing in two announced control names §B.9's first three sinks do not reach | 4 / 9 |
+| **the loop panel strips display-unsafe control characters from its repo-sourced view fields**, on **five** plant sites and, for the reason, across **two pushes on one structurally-identical view**: (a) render with a clean reason, then push a reason carrying `U+202E`, asserting the rendered `textContent` after **both**; (b) a repo-authored `gate[].option` **`request-changes`** on **two** fixtures — a **clean** one asserting the visible `textContent` abbreviates to `changes` and the `aria-label` is `request changes` (containing **both** `request` and `changes`, the Label-in-Name derivation §B.9 takes off the visible label); and one carrying a **trailing** `U+202E` asserting the visible `textContent` is still the abbreviated `changes` — the strip-then-`.trim()` normalizes the appended override (§B.9) — and that neither the `textContent` nor the `aria-label` carries any `DISPLAY_UNSAFE` byte. The clean fixture pins the abbreviation and the accessible-name derivation; the planted one pins the strip; an `approve`-shaped fixture passes under either the correct or the broken derivation, and neither half alone tells the abbreviation and the strip apart; (c) a **`verdictReason`** carrying `U+202E`, asserted on the rendered `textContent` and then re-pushed on a structurally-identical view so `syncNamedRow`'s in-place branch runs too; (d) a step **`id`** carrying `U+202E`, asserted on the arm-interrupt `aria-label` (`loopPanel.ts`) and on the three route-out controls' accessible names — **and, added in this revision, that the `step` DISPATCHED on click equals the RAW planted id**, which is the assertion that closes the wrong reading of the prescription (stripping at the destructure mutates one binding read by both the names and `deps.appRouteOut` / `deps.armInterrupt`, so the controls would announce an action and dispatch a step the receiver cannot match — WCAG 4.1.2, §6); (e) an `errorReason` carrying `U+202E`, the field the other four were added around | **RED.** Nothing on the panel path calls `stripDisplayControlChars` today, while the absence re-point makes every namespace-less loop step a first-time caller of the §27 resolver whose reasons and gate options embed repo bytes (CWE-117/CWE-1007, §16.3; §B.9). **Two corrections in this revision, each of which the earlier one-push, reason-only fixture could not have caught.** (i) The sink is `syncReasonRow`'s own entry (`loopPanel.ts`), **not** `detailRow`'s `v.textContent = value`: is only the row-**creation** path, while the in-place branch `if (v.textContent !== reason) v.textContent = reason` is taken on every subsequent push, because `structuralSig` deliberately excludes `errorReason`. A one-push fixture cannot tell a create-only strip from a whole-sink one, so it stays green over an unstripped patch (WCAG 4.1.3). (ii) `gateOptions` is a second repo-sourced field — `requireString` only (`loopDefV2.ts`), reaching and, via `option.replace('-',' ')`, a control's **accessible name**. **Three more in this revision.** (b) fixes the option at `request-changes` because an `approve`-shaped fixture passes under **either** reading of the prescription, so the derivation bug §B.9 corrects — an accessible name that does not contain its visible label, and an option that never abbreviates because the strip leaves a trailing space the comparison does not trim — would ship green. (c) exists because's panel-strip row commits the sweep to stripping `verdict`/`verdictReason` at `syncNamedRow` and the tokens `verdict` and `syncNamedRow` occurred **zero** times anywhere in this table: `loopPanel.ts` pass them into `syncNamedRow`, and `verdictReason` is free text lifted from a labelled line of the consolidator agent's own output (`src/shared/consolidatorOutput.ts`), as untrusted as `errorReason`. (d) exists because `appTurn.step` is a **fifth** repo-authored field — `flow.ts` accepts any non-empty string with no `isSafePathSegment` — landing in the arm-interrupt and route-out control names §B.9's first three sinks do not reach; the two composer dialog titles it also reaches are a different organism whose strip is escalated (§B.9), so this plant asserts the panel names and the raw-dispatch identity, not the composer titles | 4 / 9 |
 | **the gate row's render gate is affirmative on both conjuncts:** a view carrying `gateOptions` + actionable but **no** `appTurn` renders **no** decision buttons, and one carrying `appTurn` without `deps.appGateDecision` renders none either | **RED on the first half, Pin on the second — with the split-label treatment this table's focus-target row already gives `deps.retryTurn`, added in this revision.** The RED fixture **injects `deps.gateDecision`**: today `decideDep = appTurn ? deps.appGateDecision: deps.gateDecision` (`loopPanel.ts`), so a no-`appTurn` view with only `appGateDecision` injected already renders no buttons and the row would pass on the tree. With `gateDecision` injected it fails, because the §26 service routes it. **`deps.gateDecision` is exactly what §B.9 removes, so the SHIPPED test cannot inject it** and it becomes a pin whose falsifier is a mutation, not a pre-sweep red — the row must say what the shipped test is, not only what the red one is. Surviving falsifier: collapse the render condition at `loopPanel.ts` back to a bare `gateOptions.length > 0 && loopGateActionable(loop)` presence test and watch buttons render on a no-`appTurn` view with no turn identity to act on (WCAG 4.1.2, §B.9) | 2 / 9 |
 | the typed-input modal's field help names the surviving bootstrap contract and no retired section, **scoped to the element `aria-describedby` resolves to**, and stays that element | **RED.** asserts `'§26.9'` on `host.textContent` today, and no assertion is scoped to the described element at all (§B.17) | 9 / 10 |
 | loop panel + status strip carry no mirror label and no cost readout; the panel **still renders a `.seg-h` naming the state section** and its text carries no `.agent-loop/state.yaml`; the tab-stop count drops by **one** where only mark-complete renders and by **two** on a §27 error view carrying a round | **RED.** `loopPanel.ts` renders `State ·.agent-loop/state.yaml (v4)` and `flowStrip.ts` render the cost node, so the negatives fail on this build, and the tab-stop counts are red as absolute post-sweep numbers. The positive `.seg-h` half is what stops a bare deletion satisfying the row (§B.9) | 2 / 9 |
@@ -2820,7 +2938,7 @@ defers the call to implementation.
 | `docs/spec/18-…` | **"There are five destinations"** → three, dropping "the legacy engine's **loop-config location** (§24.2.3)" and the **skills** directory from the prose. Carries no §26 citation, which is why the citation-driven sweep missed it. |
 | `docs/spec/18-…` | the **Skills fan in** bullet — the whole mechanism (each bundled skill written twice, once under the §26.5 loop-config layout) goes with the destination (AC 9). |
 | `docs/spec/18-…` | "The **five** destination roots are derived by the app" → three. No citation; found only by asking which prose names the retiring set. |
-| `docs/spec/18-…` | **Rewritten in this revision to match §F item 5's own correction, which the previous cell predated.** The line reads *`loopExecAllowed` (§26.6) admits an `exec` action only from an `operator-config`-origin def … so the container guard on that destination protects an execution-authority boundary (CWE-829), not merely a config directory* — a second **live, present-tense** statement of the rule the operator's decision deletes, sitting on the very container AC 5's migration now performs the app's first unattended write into (§F item 13, the operator-tier unattended writer). The previous cell said only that *the surviving schema still declares the capability*, which §F item 5, §26's origin-gated execute authority, now records as **half the story**: the surviving engine's own bootstrap origin gate goes too (§F item 18, the bootstrap origin gate), leaving `ExecSideEffect` declared with **no** trust model behind it. Written as previously prescribed, the shipped spec would assert an execution-authority boundary at a directory that no longer has one. **The note becomes:** the user-level loops container holds def content the app seeds and reads and carries **no** execution-authority distinction — `loopExecAllowed` and the §27 bootstrap origin gate are both deleted, the schema's `ExecSideEffect` is unshipped, and shipping it requires deciding trust afresh (naming v2.129) — with the container guard justified by what it still does, which is stop a symlinked or non-directory destination being written through (CWE-59), not by a privilege boundary. Same disposition as the parallel `docs/spec/27-…` row, which already handles it correctly. |
+| `docs/spec/18-…` | **Rewritten in this revision to match §F item 5's own correction, which the previous cell predated.** The line reads *`loopExecAllowed` (§26.6) admits an `exec` action only from an `operator-config`-origin def … so the container guard on that destination protects an execution-authority boundary (CWE-829), not merely a config directory* — a second **live, present-tense** statement of the rule the operator's decision deletes, sitting on the very container AC 5's migration now performs the app's first unattended write into (§F item 13, the operator-tier unattended writer). The previous cell said only that *the surviving schema still declares the capability*, which §F item 5, §26's origin-gated execute authority, now records as **half the story**: the surviving engine's own bootstrap origin gate goes too (§F item 18, the bootstrap origin gate), leaving `ExecSideEffect` declared with **no** trust model behind it. Written as previously prescribed, the shipped spec would assert an execution-authority boundary at a directory that no longer has one. **The note becomes:** the user-level loops container holds def content the app seeds and reads and carries **no** execution-authority distinction — `loopExecAllowed` and the §27 bootstrap origin gate are both deleted, the schema's `ExecSideEffect` is unshipped, and shipping it requires deciding trust afresh (naming v2.129) — with the container guard justified by what it still does, which is stop a non-directory destination `<name>` (a symlink, dangling symlink or plain file the sweep would otherwise write a def through) or a non-writable container (CWE-59) — while a symlink the **user** placed at the tier entry is followed as §18.1 policy, not refused — rather than by a privilege boundary. Same disposition as the parallel `docs/spec/27-…` row, which already handles it correctly. |
 | `docs/spec/18-…` | the install-examples `flowchart TD`: drop node `BL` (`example/loops/<loop>`, the tree §A.4 deletes), nodes `DL` (`loops`) and `DS` (`skills`), and the two `BL` edges (`whole tree` → `DL`, `skills/ fan in` → `DS`). `BF`/`BV`/`BC` → `DF`/`DV`/`DC` and the `WRITE --> DEST` edge survive unchanged, and the `DEST` subgraph title stays accurate at three destinations — node/edge removal only, no re-quoting, and the block already follows the repo Mermaid rules. |
 | `docs/spec/18-…` | the flow-step schema's own account of `loop_namespace`'s legal values and its absence default (AC 4). |
 | `docs/spec/18-…` | §18.3's account of `bootstrap` (AC 10) — no longer "runs `agent-loop pickup` for a legacy-bound step". |
@@ -3114,8 +3232,9 @@ repaint of AC 5's notice** (also widened from *async*, per the item itself), use
 16. **AC 5's migration notice is rendered once, not held until acknowledged.** The notice is produced by
  the migration step itself and merges into `FlowStateView.notice` — on the transition that enters the
  step — the entry seam being AC 5's only delivery moment after the operator's iteration-8 decision (§B.5,
- §K.1) — and it is not a persisted acknowledgement the operator must dismiss. **There is no delivery shortfall, and this item no
- longer records one.** Two earlier revisions booked one here: the migration then ran on the resolver's
+ §K.1) — and it is not a persisted acknowledgement the operator must dismiss. **The resolver design's delivery
+ shortfall is gone, and this item no longer records it** (the carrier that replaced it leaves a narrower
+ delivery window — a quit before the next transition — recorded at item 17). Two earlier revisions booked one here: the migration then ran on the resolver's
  read path and carried its notice to the seam on a
  process-local one-shot, so a poll with no entry, an early-returning entry branch, and a relaunch each
  dropped it. That was AC 5's *"and tells the operator — once"* going unmet, which is an AC reduction and
@@ -3169,6 +3288,17 @@ repaint of AC 5's notice** (also widened from *async*, per the item itself), use
  reached solely from its `catch`. That route is operator-initiated — they chose to
  decline — which is why the residual is judged acceptable; it is stated rather than smoothed over,
  because a residual an operator is not told about is indistinguishable from one nobody found (CWE-703).
+ **A SECOND residual the carrier does not close — the delivery window.** The carrier holds the notice in
+ renderer-local state, which is **volatile**: it does not survive a quit or a renderer reload. Meanwhile §H.4
+ makes the filesystem condition that produced it false the moment the copy lands, so a re-entry after a
+ restart neither re-migrates nor re-notifies (§D.4's relaunch row). The interval in which a quit loses AC 5's
+ notice to zero is therefore the whole **operator-paced window from the transition that produced it until the
+ next transition** — not the microsecond between a call returning and its response being served, which an
+ earlier revision claimed was the only remaining window. The FIRED half (the copy, on disk) is durable and
+ the DELIVERED half (the rendered notice) is not, and the two can desync permanently. Its remedy is the
+ durable acknowledged notice §K.1 and item 16 record as a §K.5 follow-up — a new IPC member or a sequenced
+ sub-ticket, the operator's call — so the residual is stated against the real window rather than smoothed
+ over.
 
 18. **§27's SHIPPED bootstrap origin gate — deleted by operator decision.** Distinct from item 5 and kept
  apart from it deliberately: item 5's gate admitted a **program** and belonged to the retired engine;
@@ -3180,8 +3310,8 @@ repaint of AC 5's notice** (also widened from *async*, per the item itself), use
  override pointing at an in-repo v2 def with a `pickup:` block — is refused today and, after this slice,
  runs the bootstrap: branch creation, a draft PR, and **branch deletion** under
  `on_conflict: wipe-and-retry`, whose policy is re-read at the destructive operation.
- **Two further consequences, both added in this revision because the three-item list above was an
- incomplete enumeration of the blast radius and this item is the record the decision makes load-bearing:**
+ **Further consequences — enumerated without a count, because the blast radius is exactly what an incomplete
+ list understates and this item is the record the decision makes load-bearing:**
  - **A write to the operator's own GitHub account.** A repo-tier def's `pickup.initial_labels[].label`
  passes `toPickupLabels` (`loopDefV2.ts`) under `requireNonBlankString` **only** — no charset, no
  closed set — and `action: remove` is legal. The whole `PickupContractV2` rides the coordinator
@@ -3192,14 +3322,49 @@ repaint of AC 5's notice** (also widened from *async*, per the item itself), use
  - **A repo-authored instruction channel into a tool-capable agent — the widest instance, and the one a
  collapse cannot fix.** After §B.4's absence re-point every namespace-less loop step binds §27,
  `resolveLoopDefV2` pushes `repoCandidate` **first** (`loopDefV2.ts`), and a repo-tier def's
- `work.recipe` body is composed into the work prompt (`appWorkTurn.ts`) and injected at
- `appLoopEngine.ts` through a dep wired `submit: true` (`index.ts`), as are its reviewer
- charters. The list already books this class for two narrower fields on the same path — the CR/LF
+ `work.recipe` body, its `consolidator.recipe` body (`appLoopEngine.ts` → `composeConsolidatePrompt`) and its
+ reviewer charter **bodies** are composed into the work / review / consolidate prompts (`appWorkTurn.ts`,
+ `reviewTurn.ts`) and injected through a dep wired `submit: true` (`index.ts`) — all **three** by-reference
+ bodies, not two. The list already books this class for two narrower fields on the same path — the CR/LF
  collapses on a step's `skill:` and on `boundaryCommand` — so the widest one is the one that was left
  unrecorded. A collapse is the **wrong** remedy here (a recipe body is meant to be multi-line prose),
  which is precisely why it belongs in §F as an exposure rather than in §B as an edit (CWE-74).
+ - **Two line-structured landings whose remedy IS a collapse, un-guarded today — recorded here, guard
+ deferred.** These differ from the prose bodies above because each is composed into a **single line** of the
+ prompt, so a newline in one ends that line and starts a fresh instruction to the agent. (i)
+ `report.sections` (`loopDefV2.ts`, `Array.isArray` + `typeof === 'string'` only, **no** control-character
+ check) is joined into the review prompt's *"one … heading for each of these sections: ${req.sections.join(',
+ ')}"* line (`reviewTurn.ts`) and injected `submit: true`, and it also feeds the completion predicate
+ (`roundReportWellFormed`), so one repo-authored value sits on **both** sides of that contract (CLAUDE.md's
+ composed-prompt/predicate rule). (ii) `reviewers[].charter`'s **path** — the confined path, not the body
+ booked above — is pushed into the roster block *"- <persona> — <charter>"* (`reviewTurn.ts`);
+ `confineDefRelative` (`loopDefV2.ts`) refuses only an LF and an unexpanded `{…}` slot, so a bare CR walks
+ straight past and reaches the agent as a second submitted line — where its own sibling `confineArtifact`
+ applies `CONTROL_CHAR` **twice** (declared pattern and post-realpath), the two-vs-zero gap the other
+ citations of that "guarded sibling" obscure. A CR/LF collapse (`report.sections`) and a
+ two-sided `CONTROL_CHAR` check (charter path) WOULD close these, but adding a production guard to §27 while
+ it is in the tree is #98's stated non-goal and the operator authorised exactly three such overrides (§K.1) —
+ so **the guards are sequenced to a §K.5 follow-up and only the recording is done here**; if the operator
+ widens the override set, §B gains a `reviewTurn.ts` class row and `confineDefRelative` gains the check, with
+ §D.4 REDs planting an LF in `report.sections` and a bare CR in a charter reference.
+ - **A REPLACEMENT of the operator's own GitHub issue/PR body — reached on the APPROVE path, which this gate
+ never guarded, so its forcing is §B.4's absence re-point, not this deletion.** A repo-tier def's
+ `gate[].side_effects[]` (`toGate`, `loopDefV2.ts`: `kind` is `requireString` and every remaining key becomes
+ free-form `args`) with its `outputs[]`/`inputs[]` bindings rides the **gate approve**, not the bootstrap:
+ `index.ts` wires `resolveDef` to `resolveLoopDefV2`, so `runAppGateDecision` resolves the repo-tier def for
+ the approve it executes (the executor reads no namespace, §B.3); `appGateDecision.ts` walks
+ `gateOpt.sideEffects`, takes `action` from `se.args.action` and the `bodyFile` from
+ `resolveGateSideEffectBodyFile` — the def's own binding list choosing which file under
+ `<repo>/.agent-terminal/loop/artifacts/` is published; `index.ts` wires `runSideEffect: createRealAppGateGitHub`
+ unconditionally; and the sink is `appGateGithub.ts` `gh issue edit <ticket> --body-file -` / `gh pr edit <pr>
+ --body-file -`, both **replacing** the operator's own issue/PR body under the operator's own `gh`
+ credentials, with `update-issue-body` carrying no `verifyBootstrap` at all. The bootstrap origin gate never
+ sat on this path, so it is the absence re-point (§B.4) that widens the reaching population — the forcing is
+ the absence re-point, not this gate's deletion. §D.4's repo-tier-pickup reversal row gains a sibling: a def
+ declaring a `gate[].side_effects` `gh` action plus a matching `outputs` binding, asserting the executor
+ reaches `updateIssueBody`/`publishPullRequestBody` with the repo-chosen `bodyFile`.
 
- Both are carried into the one new changelog entry AC 8 requires, beside the pickup consequence, so a
+ All of these are carried into the one new changelog entry AC 8 requires, beside the pickup consequence, so a
  reader deciding trust afresh for the exec sink sees the whole surface rather than the bootstrap half.
  This reverses the v2.129 finding; the changelog entry AC 8 requires names it as a deliberate reversal
  with its reason and this consequence (§E.4), `docs/spec/27-…` is rewritten off the promise (§E.2),
@@ -3723,7 +3888,10 @@ earlier revision:** *"one dep"* was the previous cost claim and it was
 short. Ordering positions 2 and 4 also need answers the seam cannot compute, and leaving them unnamed is
 what makes an implementer reach for `resolveLoopDefV2` and the flow machine inside `flowEntryActions.ts` —
 the layering inversion the one-dep sentence was written to avoid.) It buys the
-removal of the one-shot, of the cross-call state and of the durability question — and
+removal of the one-shot and of the cross-call state, and it **narrows** the durability question rather than
+removing it — the write and the notice's production are atomic, but the notice's *delivery* is held in
+volatile renderer state until the next transition (§B.10) while §H.4 makes the on-disk trigger false at
+once, so a quit in that window still loses it (§F item 17) — and
 `enterAppLoop` goes back to returning `void`. Nothing on the wire changes and no on-disk artifact is added:
 the plan's commitment that *"AC 5's notice rides the existing one-shot transient-notice field"* is met
 literally, since `FlowStateView.notice` keeps its shape and its one-shot lifetime. What does change is
@@ -3761,6 +3929,20 @@ to the next implementer:
 Each applies #98's own non-goal test — *would the change still make sense with §26 left in the tree?* — and
 answers **yes** on the mechanism and **no** on the forcing: the hazard exists today, and it is this sweep
 that widens the population reaching it.
+
+**Three further §27-guard candidates were raised at the iteration-9 gate, and the decision is to HOLD the
+override set at three.** The taint and accessibility lanes traced three more hazards whose reachable
+population this sweep widens and whose remedy would be a new production guard on §27 code: a CR/LF collapse on
+`reviewTurn.ts`'s `report.sections`, a two-sided `CONTROL_CHAR` check on `confineDefRelative`
+(`reviewers[].charter`'s path), and a `stripDisplayControlChars` call in each of `feedbackComposer.ts` /
+`redoComposer.ts` (the composer dialog titles). Each carries the **same forcing** as the three above — a
+hazard reachable today whose population the absence re-point widens — so widening the override set to six
+would be *consistent*. But #98's non-goal is the operator's to override, and the operator authorised exactly
+three; adding three more is a scope decision, not a reviewer's call. **Decision: the three new guards are NOT
+added to this PR.** Their *exposures* are recorded and block regardless (the enumeration halves — §F item 18,
+§B.9), and the guards themselves are sequenced to a follow-up sub-ticket (§K.5), keeping this PR's §27 surface
+at exactly the three authorised. An operator who prefers to close all six in this PR should say so here; the
+enumeration work is done either way.
 
 **Which additions need this override, and which do not — one criterion, one authority.** An earlier revision
 used the phrase *exposure widening* for two different things, and so gave an operator two different answers
@@ -3888,7 +4070,10 @@ item 13 on the strength of a commitment nobody had made; it now matches.
  `loop` presence, so a `legacy`-marked binding — which always enters as a first-render
  error view — builds `.ldl` and the reason row inside it in one `render`, and a live region inserted with
  its content already present announces nothing. AC 4's headline promise, *the reported reason names the
- real cause*, therefore reaches a screen-reader user only as the `role=alert` status and not as the reason.
+ real cause*, therefore reaches a screen-reader user only as the `role=alert` status and not as the reason —
+ and on a `legacy`-marked binding `focusDecision()` lands on `[data-loop-close]`, with the route out on the
+ flow strip, a different component. §B.9 now **states** that focus destination and the `[data-loop-reason]`
+ row, and §D.4 **grades** both, so the only residual left here is the *announcement* of the reason.
  The fix — hoisting `.ldl` above `structuralSig`, or an `aria-live` region that outlives the render — is a
  §27 a11y improvement that would stand without the sweep, so it sits here beside the `role="group"` +
  `aria-labelledby` entry above. **What this PR owes is only the comment rewrite and the AC 9 record**, both
@@ -3901,18 +4086,24 @@ item 13 on the strength of a commitment nobody had made; it now matches.
  accepting the settlement on the strength of the residual being tracked would have found it recorded
  nowhere but in the prose asserting it. Same defect §F item 13, the operator-tier unattended writer, carried one revision earlier, in the item
  the PR body puts first in what the operator is asked to agree.
-- **Loop panel: the gate button's accessible name diverges from its visible label for a multi-hyphen
- repo-authored option (WCAG 2.5.3).** Added in this revision. `loopPanel.ts` derives the name with
- `option.replace('-', ' ')`, and `String.prototype.replace` with a *string* pattern replaces only the FIRST
- occurrence — so `stop-for-a-human` renders visibly as `stop-for-a-human` and announces as
- `stop for-a-human`, and a speech-input user saying "click stop-for-a-human" cannot activate it. The
- behaviour is pre-existing and the fix is one character (`/-/g`), or deriving the name only for the known
- `request-changes` literal and using the visible text otherwise. **What the sweep does is widen the exposed
- population** — every namespace-less loop step becomes a first-time caller of the §27 resolver, and a repo
- `.agent-loop.yaml` `loops:` entry resolves first for a def whose whole `gate[].option` list is
- repo-authored under `requireString` alone — which is why §B.9 now *qualifies* the 2.4.6 / 2.5.3 grade on
- that site rather than asserting it, instead of the list claiming a criterion it does not meet for the
- population it widens.
+- ~~**Loop panel: the gate button's accessible name diverges from its visible label for a multi-hyphen
+ repo-authored option (WCAG 2.5.3).**~~ **CLOSED in this revision, not deferred.** The divergence came from
+ deriving the accessible name with `option.replace('-', ' ')`, whose *string* pattern rewrites only the
+ first hyphen. §B.9 no longer runs any `.replace` on repo bytes: `gateOptionLabel` strips-and-trims the
+ option once, and the accessible name is derived from that visible label
+ (`visible === 'changes' ? 'request changes' : visible`), so the name contains the visible label for every
+ option — single- or multi-hyphen — by construction. There is no residual to defer; struck rather than
+ deleted so a reader who remembers this bullet finds out it was fixed at the sink, not carried.
+- **Three deferred §27 guards — a sequenced sub-ticket, not done here (the override set is held at three,
+ §K.1).** The iteration-9 gate surfaced three more repo-authored → submitted-agent exposures whose fix is a
+ production guard on §27 code: (i) a CR/LF collapse on `reviewTurn.ts`'s `report.sections` list item (CWE-74);
+ (ii) a two-sided `CONTROL_CHAR` check on `confineDefRelative` for `reviewers[].charter`'s path — a bare CR
+ walks past its LF-only test (CWE-74); (iii) a `stripDisplayControlChars` call in `feedbackComposer.ts` and
+ `redoComposer.ts` on the repo-authored step id they render as a dialog title (WCAG 4.1.2). All three
+ *exposures* are RECORDED (§F item 18, §B.9), so the enumeration the document calls complete is complete; the
+ *guards* are a §27 improvement that would stand without the sweep, so they sit here beside the
+ durable-notice candidate above. If the operator widens the override set to six, each gains its §B class row
+ and §D.4 RED as §K.1 describes.
 
 **Prose-parity debt, recorded rather than chased — the operator's iteration-8 call.** These are real and
 none is a gate blocker; they are listed so the gate reads them as known rather than missed.
