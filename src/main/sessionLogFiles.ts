@@ -39,7 +39,7 @@ export async function* logFilesInWindow(dir: string, since?: number): AsyncGener
       yield* logFilesInWindow(full, since);
       continue;
     }
-    if (!entry.name.endsWith('.jsonl')) continue;
+    if (!entry.isFile || !entry.name.endsWith('.jsonl')) continue;
     const stamp = await stampOf(full);
     if (stamp !== null && since !== undefined && stamp.mtimeMs < since) continue;
     yield { path: full, size: stamp === null ? null : stamp.size };

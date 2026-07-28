@@ -5,6 +5,7 @@
 import yaml from 'js-yaml';
 import type { FlowStatus, TodoStatus } from './ipc';
 import { stripStatusControlChars } from './loopStatus';
+import type { CostResult } from './pricing';
 
 export interface AuditHeader {
   flow: string;
@@ -211,15 +212,23 @@ const AUDIT_UNPRICED_MAX = 32;
  *  CWE-770). Whoever decides whether restating the cost would say anything new compares against THIS, not
  *  against the live figure, so a run discovering ids past the bound cannot append records identical to
  *  their predecessor. */
-export function auditCost(cost: { usd: number; unpricedModels: string[] }): { usd: number; unpricedModels: string[] } {
+export function auditCost(cost: CostResult): CostResult {
   return { usd: cost.usd, unpricedModels: cost.unpricedModels.slice(0, AUDIT_UNPRICED_MAX).map(boundExternalText) };
 }
 
 /** The §27 run's cost as one append-only §25 event. The stream holds a series whose LAST entry is the run's
  *  figure. */
-export function appCostEvent(cost: { usd: number; unpricedModels: string[] }, ts: string): AuditEvent {
+export function appCostEvent(cost: CostResult, ts: string): AuditEvent {
   const bounded = auditCost(cost);
   return { ts, type: 'app.cost', usd: bounded.usd, unpriced: bounded.unpricedModels };
+}
+
+/** The §26 per-iteration cost as one append-only §25 event. Both engines' cost records reach this file
+ *  carrying model ids from one decoder over the same private log format, so both bound them through
+ *  `auditCost` rather than either spelling the rule itself. */
+export function loopCostEvent(cost: CostResult, iteration: number, ts: string): AuditEvent {
+  const bounded = auditCost(cost);
+  return { ts, type: 'loop.cost', iteration, usd: bounded.usd, unpriced: bounded.unpricedModels };
 }
 
 /** A run replayed from its append-only stream (§25.6): the ordered events plus the folded final

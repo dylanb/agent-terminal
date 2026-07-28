@@ -8,6 +8,7 @@ import path from 'node:path';
 import yaml from 'js-yaml';
 import {
   appCostEvent,
+  loopCostEvent,
   auditTimestamp,
   inputEvents,
   lifecycleEvents,
@@ -209,7 +210,7 @@ export function createAuditRecorder(deps: AuditRecorderDeps): AuditRecorder {
 
     recordCost(repoKey, iteration, cost) {
       try {
-        appendIfOpen(repoKey, [{ ts: auditTimestamp(now()), type: 'loop.cost', iteration, usd: cost.usd, unpriced: cost.unpricedModels }]);
+        appendIfOpen(repoKey, [loopCostEvent(cost, iteration, auditTimestamp(now()))]);
       } catch (e) {
         log('audit recordCost failed', e);
       }

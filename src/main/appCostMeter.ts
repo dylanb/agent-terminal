@@ -83,7 +83,17 @@ export function createAppCostMeter(deps: AppCostMeterDeps): AppCostMeter {
 
   const release = (run: RunCost): void => bestEffort('sweep release', () => run.sweep.close());
 
-  const sample = async (repoDir: string): Promise<void> => {
+  const sampling = new Map<string, Promise<void>>();
+
+  const sample = (repoDir: string): Promise<void> => {
+    const already = sampling.get(repoDir);
+    if (already) return already;
+    const settled = takeSample(repoDir).finally(() => sampling.delete(repoDir));
+    sampling.set(repoDir, settled);
+    return settled;
+  };
+
+  const takeSample = async (repoDir: string): Promise<void> => {
     const run = runs.get(repoDir);
     if (!run) return;
     let moved = false;
@@ -93,17 +103,19 @@ export function createAppCostMeter(deps: AppCostMeterDeps): AppCostMeter {
       const next = priceTokens(totals);
       moved = !sameCost(run.cost, next);
       const content = auditCost(next);
-      const shown = formatCost(content);
-      if (run.recorded === null || shown !== run.recorded.shown || !sameList(run.recorded.unpriced, content.unpricedModels)) {
+      const recordShown = formatCost(content);
+      if (run.recorded === null || recordShown !== run.recorded.shown || !sameList(run.recorded.unpriced, content.unpricedModels)) {
         bestEffort('audit record', () => {
-          if (deps.recordCost(repoDir, next)) run.recorded = { shown, unpriced: content.unpricedModels };
+          if (deps.recordCost(repoDir, next)) run.recorded = { shown: recordShown, unpriced: content.unpricedModels };
         });
       }
-      // WCAG SC 4.1.3
-      if (shown !== run.shown) bestEffort('view-changed signal', () => deps.onFigureChanged());
+      const rendered = formatCost(next);
+      const was = run.shown;
       run.cost = next;
-      run.shown = shown;
+      run.shown = rendered;
       run.degraded = false;
+      // WCAG SC 4.1.3
+      if (rendered !== was) bestEffort('view-changed signal', () => deps.onFigureChanged());
     } catch (e) {
       if (!run.degraded) log('app cost sample failed', e);
       run.degraded = true;
@@ -130,7 +142,7 @@ export function createAppCostMeter(deps: AppCostMeterDeps): AppCostMeter {
       bestEffort('window push', () => {
         const existing = runs.get(repoDir);
         if (!existing || existing.startedAt !== startedAt) {
-          const floor = startedAt !== null && startedAt <= deps.now() ? startedAt : null;
+          const floor = startedAt === null ? null : Math.min(startedAt, deps.now());
           const sweep = deps.openSweep(repoDir, floor);
           if (existing) {
             runs.delete(repoDir);

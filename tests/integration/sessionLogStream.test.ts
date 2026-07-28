@@ -196,9 +196,9 @@ describe('reading only what a session log gained', () => {
     expect(chunked).toBeGreaterThan(20);
   });
 
-  // Two cost samples for one repo can overlap — a push re-arms while a slow drain is still in flight — so
-  // two reads of this stream can be live at once. Each holds an incomplete line across chunk boundaries,
-  // and a read scratch space shared between them splices one log's bytes into the other's lines.
+  // `lines()` is re-entrant at this module's own boundary, whoever the caller is: each read holds an
+  // incomplete line across chunk boundaries, and a scratch space shared between two of them splices one
+  // log's bytes into the other's lines.
   it('reads two logs at once without one splicing into the other', async () => {
     const other = join(dir, 'other.jsonl');
     const aLines = Array.from({ length: 60 }, (_, i) => `aaaa-${i}`);

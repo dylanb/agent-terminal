@@ -91,15 +91,17 @@ export interface SessionSweepOptions {
 /** A sweep of ONE run's window over a repo's session logs (§27.11), composed of the three concerns each
  *  drain moves through: which logs are in the window, what each has gained since it was last read, and how
  *  a line folds into the run's totals. Every drift the private log format can produce degrades — an absent
- *  root, an unreadable file, an unparseable or over-long line — but a root that exists and refuses
- *  enumeration THROWS, and so does a chunk size that cannot be allocated, because a caller that read either
- *  as empty would price the run at a confident $0.00. */
+ *  root, an unreadable file, an unparseable or over-long line — but a REFUSED root, a root that exists and
+ *  refuses enumeration, and a chunk size that cannot be allocated all THROW, because a caller that read any
+ *  of them as empty would price the run at a confident $0.00. */
 export interface SessionSweep {
   /** Consume everything the run's logs have gained, and answer the run's per-model totals so far. A drain
    *  begun while one is still in flight answers with that one rather than walking the tree a second time
    *  from the same read positions. */
   drain(): Promise<ModelTokens[]>;
-  /** Release the read positions and the totals. The run they were accumulated for is over. */
+  /** Release the read positions and the totals. The run they were accumulated for is over: a drain already
+   *  in flight is fenced off, so neither its fold nor the read positions it would leave behind reach the
+   *  ledger the next drain answers from. */
   close(): void;
 }
 
@@ -110,11 +112,14 @@ export function openSessionSweep(logDir: string | null, options: SessionSweepOpt
   const stream = createLogStream(options.chunkBytes);
   let totals = createRunTotals(options.since);
   let inFlight: Promise<ModelTokens[]> | null = null;
+  let generation = 0;
 
   const walk = async (): Promise<ModelTokens[]> => {
+    const mine = generation;
     const run = totals;
-    if (logDir === null) return run.totals();
+    if (logDir === null) throw new Error('session log root refused');
     for await (const file of logFilesInWindow(logDir, options.since)) {
+      if (generation !== mine) return run.totals();
       for await (const line of stream.lines(file)) run.fold(line);
     }
     return run.totals();
@@ -129,6 +134,8 @@ export function openSessionSweep(logDir: string | null, options: SessionSweepOpt
     },
 
     close(): void {
+      generation += 1;
+      inFlight = null;
       stream.forget();
       totals = createRunTotals(options.since);
     },

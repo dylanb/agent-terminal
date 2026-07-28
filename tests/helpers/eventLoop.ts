@@ -1,7 +1,7 @@
 /** Event-loop iterations elapsed, counted by a self-rescheduling check-phase callback — ordering only,
  *  with no wall clock: `setImmediate` fires once per iteration, where a zero timer is clamped to a
  *  millisecond and would report nothing for work that yields many times inside one. */
-export function eventLoopTicker(): { ticks: () => number; stop: () => void } {
+function eventLoopTicker(): { ticks: () => number; stop: () => void } {
   let ticks = 0;
   let running = true;
   const pump = (): void => {
@@ -23,8 +23,10 @@ export function eventLoopTicker(): { ticks: () => number; stop: () => void } {
 export async function ticksDuring(work: () => Promise<unknown>): Promise<number> {
   const ticker = eventLoopTicker();
   const baseline = ticker.ticks();
-  await work();
-  const elapsed = ticker.ticks() - baseline;
-  ticker.stop();
-  return elapsed;
+  try {
+    await work();
+    return ticker.ticks() - baseline;
+  } finally {
+    ticker.stop();
+  }
 }

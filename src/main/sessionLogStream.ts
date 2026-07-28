@@ -1,6 +1,6 @@
 // §27.11
 
-import { promises as fsp } from 'node:fs';
+import { constants as fsConstants, promises as fsp } from 'node:fs';
 import { StringDecoder } from 'node:string_decoder';
 import type { LogFile } from './sessionLogFiles';
 
@@ -17,10 +17,10 @@ function newlineOffsets(chunk: Buffer): number[] {
 }
 
 export interface LogStream {
-  /** Every complete line `file` gained since this stream last read it. A log smaller than the position
-   *  left behind was rewritten and is read from the top; a trailing fragment is a write in progress and is
-   *  withheld until its newline arrives. The position advances only past a line already handed on, so a
-   *  read that fails part way hands the rest to the next pass rather than stranding it. */
+  /** Every complete line `file` gained since this stream last read it that is no longer than
+   *  `MAX_LINE_CHARS`. A log smaller than the position left behind was rewritten and is read from the top;
+   *  a trailing fragment is a write in progress and is withheld until its newline arrives. A read that
+   *  fails part way hands what it had not reached to the next pass rather than stranding it. */
   lines(file: LogFile): AsyncGenerator<string>;
   /** Forget where every log was read to. */
   forget(): void;
@@ -29,11 +29,11 @@ export interface LogStream {
 /** Hold one read position per session log, so the run's own logs — the ones no window filter can exclude,
  *  because they are written during the run by definition — are consumed once rather than re-read whole on
  *  every sample (§27.11 / AC 7). Relinquishes the event loop between chunks, so no single read of a log is
- *  an uninterruptible block on the main thread. */
+ *  an uninterruptible block on the main thread. `lines()` is re-entrant: two of its generators may be
+ *  interleaved without one splicing into the other. */
 export function createLogStream(chunkBytes: number): LogStream {
   const positions = new Map<string, number>();
-  // Two reads of one stream can be live at once (two cost samples for one repo overlap), and each holds an
-  // incomplete line across chunk boundaries — so a read never shares its scratch space with another.
+  let epoch = 0;
   let spare: Buffer | null = null;
   const take = (): Buffer => {
     const buffer = spare ?? Buffer.allocUnsafe(chunkBytes);
@@ -43,6 +43,7 @@ export function createLogStream(chunkBytes: number): LogStream {
 
   return {
     async *lines(file: LogFile): AsyncGenerator<string> {
+      const mine = epoch;
       const remembered = positions.get(file.path) ?? 0;
       const from = file.size !== null && file.size < remembered ? 0 : remembered;
       if (file.size !== null && file.size === from) return;
@@ -50,7 +51,7 @@ export function createLogStream(chunkBytes: number): LogStream {
 
       let handle: fsp.FileHandle;
       try {
-        handle = await fsp.open(file.path, 'r');
+        handle = await fsp.open(file.path, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
       } catch {
         spare = read;
         return;
@@ -65,12 +66,10 @@ export function createLogStream(chunkBytes: number): LogStream {
           const { bytesRead } = await handle.read(read, 0, read.length, cursor);
           if (bytesRead === 0) break;
           const chunk = read.subarray(0, bytesRead);
-          // A chunk boundary is a BYTE boundary, so the decoder holds an incomplete trailing character
-          // across it and `carry` an incomplete trailing line; a held-back character is never a newline,
-          // so each split element past the carry has exactly one newline offset in this chunk.
           const newlines = newlineOffsets(chunk);
           const parts = (carry + decoder.write(chunk)).split('\n');
           carry = parts.pop() ?? '';
+          if (parts.length !== newlines.length) throw new Error('log stream: newline scan and decode disagree');
           for (let i = 0; i < parts.length; i += 1) {
             consumed = cursor + newlines[i] + 1;
             if (dropping) dropping = false;
@@ -85,13 +84,14 @@ export function createLogStream(chunkBytes: number): LogStream {
       } catch {
         return;
       } finally {
-        positions.set(file.path, consumed);
+        if (epoch === mine) positions.set(file.path, consumed);
         spare = read;
         await handle.close().catch(() => {});
       }
     },
 
     forget(): void {
+      epoch += 1;
       positions.clear();
     },
   };

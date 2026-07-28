@@ -347,7 +347,7 @@ describe('the §27-owned log-root resolution', () => {
   // verbatim, anchoring §27's only log-root seam to the process cwd.
   it('refuses a RELATIVE exact-directory override rather than anchoring it at the cwd', async () => {
     expect(sessionLogDir('/repo', { APP_SESSION_LOG_ROOT: 'relative/logs' } as NodeJS.ProcessEnv, '/home')).toBeNull();
-    expect(await sweepOf(sessionLogDir('/repo', { APP_SESSION_LOG_ROOT: 'rel' } as NodeJS.ProcessEnv, '/home')).drain()).toEqual([]);
+    await expect(sweepOf(sessionLogDir('/repo', { APP_SESSION_LOG_ROOT: 'rel' } as NodeJS.ProcessEnv, '/home')).drain()).rejects.toThrow();
   });
 
   it('refuses a relative CLAUDE_CONFIG_DIR, and still resolves an absolute one', () => {

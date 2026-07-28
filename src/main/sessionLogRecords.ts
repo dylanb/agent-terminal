@@ -14,9 +14,15 @@ const MAX_TURN_TOKENS = 1e12;
  *  identified differently stay apart however long those identities were (CWE-770). */
 export const MAX_IDENTITY_CHARS = 200;
 
-/** How many distinct models one run accumulates. The key space is Claude Code's private log content
- *  (CWE-770). */
+/** How many distinct models one run accumulates under their own ids. The key space is Claude Code's private
+ *  log content (CWE-770). The bound EVICTS into `OVERFLOW_MODEL` rather than refusing, so nothing ever stops
+ *  being counted. */
 export const MAX_BANKED_MODELS = 256;
+
+/** Where a turn goes when the run is already holding `MAX_BANKED_MODELS` other ids. Absent from `PRICING`
+ *  by construction — no model id contains a space — so its dollars surface as `unknown` rather than
+ *  vanishing into a figure that has quietly stopped rising (CWE-682/CWE-755). */
+export const OVERFLOW_MODEL = 'models past the run bound';
 
 /** How many billing identities a run remembers. Claude Code writes one record per content block of an
  *  assistant message and repeats that message's whole `usage` on each, so a streamed read still meets one
@@ -115,8 +121,8 @@ export function createRunTotals(since?: number): RunTotals {
         recent.add(key);
         if (recent.size > MAX_RECENT_IDENTITIES) recent.delete(recent.values().next().value as string);
       }
-      const model = boundExternalText(turn.model);
-      if (!byModel.has(model) && byModel.size >= MAX_BANKED_MODELS) return;
+      const named = boundExternalText(turn.model);
+      const model = !byModel.has(named) && byModel.size >= MAX_BANKED_MODELS ? OVERFLOW_MODEL : named;
       addTokens(byModel, {
         model,
         input: clampTokens(turn.input),
