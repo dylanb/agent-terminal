@@ -84,6 +84,20 @@ describe('which session logs are in a run`s window', () => {
     expect(await names(dir)).toEqual(['live.jsonl', 'stale.jsonl']);
   });
 
+  // ...and the pre-filter has to reach the nested logs, which is where the bulk of a mature project dir
+  // lives: the reviewer-subagent fan-out under `<session-uuid>/subagents/`. Pinned only at the top level,
+  // a walk that stops propagating the window into its recursive call opens every prior session's logs.
+  it('passes over a nested subagent log whose last write predates the window', async () => {
+    const nested = join(dir, 'session-uuid', 'subagents');
+    mkdirSync(nested, { recursive: true });
+    const stale = join(nested, 'agent-old.jsonl');
+    writeFileSync(stale, 'old\n');
+    stampedAt(stale, FLOOR - 60_000);
+    writeFileSync(join(nested, 'agent-live.jsonl'), 'new\n');
+
+    expect(await names(dir, FLOOR)).toEqual([join('session-uuid', 'subagents', 'agent-live.jsonl')]);
+  });
+
   // An append bumps the mtime, so a log that existed before the run but grew during it is in the window.
   it('keeps a log that predates the window but was written to inside it', async () => {
     const grown = join(dir, 'grown.jsonl');
@@ -93,13 +107,43 @@ describe('which session logs are in a run`s window', () => {
   });
 
   // A log that will not stat cannot be placed on either side of the window, and excluding it would drop
-  // the run's dollars silently. It is handed on with no size, so the reader opens it and finds out.
-  it('hands on a log it cannot stat, with no size, on both the bounded and unbounded branches', async () => {
-    symlinkSync(join(dir, 'no-such-target'), join(dir, 'dangling.jsonl'));
-    for (const since of [undefined, FLOOR]) {
-      const files = await walk(dir, since);
-      expect(files.map((f) => f.path)).toEqual([join(dir, 'dangling.jsonl')]);
-      expect(files[0].size).toBeNull();
+  // the run's dollars silently. It is handed on with no size, so the reader opens it and finds out. A
+  // directory readable but not searchable is the reachable shape of that: readdir names the entry, stat
+  // of it is refused.
+  it.skipIf(process.getuid?.() === 0)('hands on a log it cannot stat, with no size, on both the bounded and unbounded branches', async () => {
+    const sealed = join(dir, 'sealed');
+    mkdirSync(sealed);
+    const unstattable = join(sealed, 'unstattable.jsonl');
+    writeFileSync(unstattable, 'x\n');
+    chmodSync(sealed, 0o600);
+    try {
+      for (const since of [undefined, FLOOR]) {
+        const files = await walk(dir, since);
+        expect(files.map((f) => f.path)).toEqual([unstattable]);
+        expect(files[0].size).toBeNull();
+      }
+    } finally {
+      chmodSync(sealed, 0o755);
+    }
+  });
+
+  // The log root is Claude Code's tree, not the app's, so an entry in it is untrusted: a `.jsonl` SYMLINK
+  // resolves to a file outside the walked root, whose content then reaches the run's totals and — bounded
+  // but permanent — the append-only §25 record (CWE-59 link following / CWE-22 after resolution). A
+  // symlinked DIRECTORY is already not descended, because `isDirectory` is false for one; the file leg is
+  // the unguarded half. Skipped rather than refused: AC 7 forbids the meter aborting the run.
+  it('passes over a .jsonl symlink rather than reading the file it points outside the root at', async () => {
+    const outside = mkdtempSync(join(tmpdir(), 'log-files-outside-'));
+    try {
+      const secret = join(outside, 'secret.jsonl');
+      writeFileSync(secret, 'planted\n');
+      writeFileSync(join(dir, 'real.jsonl'), 'a\n');
+      symlinkSync(secret, join(dir, 'planted.jsonl'));
+      symlinkSync(outside, join(dir, 'planted-dir'));
+
+      expect(await names(dir)).toEqual(['real.jsonl']);
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
     }
   });
 

@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, 
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { createAuditRecorder } from '../../src/main/auditRecorder';
-import { parseAuditStream, reconstructTimeline, type AuditEvent } from '../../src/shared/audit';
+import { boundExternalText, parseAuditStream, reconstructTimeline, type AuditEvent } from '../../src/shared/audit';
 import { auditFilePath, auditRepoDir } from '../../src/main/auditPaths';
 
 const D = new Date('2026-06-23T10:00:01.000Z');
@@ -178,6 +178,23 @@ describe('audit recorder — run file lifecycle (§25.4)', () => {
   it('records nothing for a cost event when no run is open', () => {
     recorder().recordCost(repo, 1, { usd: 1, unpricedModels: [] });
     expect(existsSync(auditRepoDir(root, repo))).toBe(false);
+  });
+
+  // The model ids in BOTH cost events come from the same decoder over Claude Code's private log format, so
+  // the §26 event bounds them exactly as the §27 one does rather than writing the class raw into the same
+  // append-only file (CWE-117 / CWE-770). Authorized against AC 10 by the operator at the iter-10 gate:
+  // what the RECORD carries moves, §26's numbers and rendering do not.
+  it('bounds the model ids a per-iteration cost event writes into the append-only record', () => {
+    const hostile = `claude\u200e${'x'.repeat(500)}`;
+    const rec = recorder();
+    rec.recordTransition(repo, 'start', NOT_STARTED, IN_PROGRESS);
+    rec.recordCost(repo, 3, { usd: 1, unpricedModels: [hostile, ...Array.from({ length: 60 }, (_, i) => `m-${i}`)] });
+    const events = parseAuditStream(readFileSync(join(auditRepoDir(root, repo), runFiles()[0]), 'utf8')).events;
+    const carried = (events[1] as Extract<AuditEvent, { type: 'loop.cost' }>).unpriced;
+
+    expect(carried[0]).toBe(boundExternalText(hostile));
+    expect(carried.length).toBeLessThan(61);
+    expect(carried.every((m) => m.length <= 200 && !m.includes('\u200e'))).toBe(true);
   });
 
   // §27.11 — the §27 whole-run figure, recorded additively while the run is open. It carries no iteration:

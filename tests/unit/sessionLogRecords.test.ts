@@ -6,7 +6,7 @@ import {
   MAX_RECENT_IDENTITIES,
   type RunTotals,
 } from '../../src/main/sessionLogRecords';
-import { priceTokens, type ModelTokens } from '../../src/shared/pricing';
+import { formatCost, priceTokens, type ModelTokens } from '../../src/shared/pricing';
 
 const FLOOR = Date.parse('2026-07-09T12:00:00.000Z');
 
@@ -218,10 +218,50 @@ describe('folding session-log records into a run`s totals', () => {
     for (let i = 0; i < MAX_BANKED_MODELS + 50; i += 1) {
       totals.fold(turnLine({ ts: '2026-07-09T12:00:01.000Z', id: `m${i}`, model: `made-up-${i}`, input: 1 }));
     }
-    expect(totals.totals()).toHaveLength(MAX_BANKED_MODELS);
+    expect(totals.totals().length).toBeLessThanOrEqual(MAX_BANKED_MODELS + 1);
 
     const held = totals.totals()[0].model;
     totals.fold(turnLine({ ts: '2026-07-09T12:00:02.000Z', id: 'late', model: held, input: 100 }));
     expect(totals.totals().find((t) => t.model === held)?.input).toBe(101);
+  });
+
+  // The model bound EVICTS into an overflow bucket rather than refusing the turn, matching the identity
+  // window beside it: a run past the bound keeps rising, and its dollars land under an id no pricing table
+  // holds, so the figure reads `$X.XX +unknown` instead of ceasing to move (CWE-770 mitigated without
+  // constructing the CWE-682/CWE-755 silent under-report).
+  it('folds a turn under a model past the bound into the run rather than dropping it', () => {
+    const totals = createRunTotals(FLOOR);
+    for (let i = 0; i < MAX_BANKED_MODELS; i += 1) {
+      totals.fold(turnLine({ ts: '2026-07-09T12:00:01.000Z', id: `m${i}`, model: `made-up-${i}`, input: 1 }));
+    }
+    const banked = totals.totals().reduce((n, t) => n + t.input, 0);
+
+    totals.fold(turnLine({ ts: '2026-07-09T12:00:02.000Z', id: 'over', model: 'one-model-too-many', input: 500 }));
+    expect(totals.totals().reduce((n, t) => n + t.input, 0)).toBe(banked + 500);
+  });
+
+  // The whole point of evicting rather than refusing: real spend under a PRICED model still reaches the
+  // figure once the bound is crossed, and the figure is distinguishable from a genuinely-zero run.
+  it('prices real spend that arrives after the model bound is crossed, and never reports a bare $0.00', () => {
+    const totals = createRunTotals(FLOOR);
+    for (let i = 0; i < MAX_BANKED_MODELS; i += 1) {
+      totals.fold(turnLine({ ts: '2026-07-09T12:00:01.000Z', id: `drift${i}`, model: `drifted-${i}`, input: 1 }));
+    }
+    totals.fold(turnLine({ ts: '2026-07-09T12:00:02.000Z', id: 'real', model: 'claude-sonnet-5', input: 1_000_000 }));
+
+    const cost = priceTokens(totals.totals());
+    expect(cost.usd).toBe(3);
+    expect(cost.unpricedModels.length).toBeGreaterThan(0);
+    expect(formatCost(cost)).toBe('$3.00 +unknown');
+  });
+
+  // ...and a run that crosses the bound with NO priced spend still says `unknown` rather than `$0.00`,
+  // which is what a run that genuinely spent nothing reports.
+  it('reports unknown rather than a confident zero for a run whose every model is past the bound', () => {
+    const totals = createRunTotals(FLOOR);
+    for (let i = 0; i < MAX_BANKED_MODELS + 10; i += 1) {
+      totals.fold(turnLine({ ts: '2026-07-09T12:00:01.000Z', id: `drift${i}`, model: `drifted-${i}`, input: 1 }));
+    }
+    expect(formatCost(priceTokens(totals.totals()))).toBe('unknown');
   });
 });

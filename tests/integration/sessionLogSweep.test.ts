@@ -114,7 +114,16 @@ describe('the §27 session-log sweep', () => {
     writeFileSync(join(dir, 'notes.txt'), logBytes(turnLine({ ts: '2026-07-09T12:00:01.000Z', id: 'nope', input: 999 })));
     expect(inputOf(await sweepOf(dir).drain())).toBe(7);
     expect(await sweepOf(join(dir, 'does-not-exist')).drain()).toEqual([]);
-    expect(await sweepOf(null).drain()).toEqual([]);
+  });
+
+  // A REFUSED root is the one case where the meter KNOWS it cannot see the logs, and it is the only path
+  // that used to fabricate a figure from that: empty totals price to `$0.00`, character-for-character what
+  // a genuinely-zero run reports, and that zero reaches the append-only §25 record. It lands on the same
+  // loud branch as the unreadable root two lines above, which `appCostMeter.sample` degrades safely
+  // without touching the run (CWE-755).
+  it('throws rather than pricing a run at a confident $0.00 when the log root is refused', async () => {
+    await expect(sweepOf(null).drain()).rejects.toThrow();
+    await expect(sweepOf(null, { since: FLOOR }).drain()).rejects.toThrow();
   });
 
   // CLAUDE.md § dirEntries — absent yields nothing, unreadable THROWS. Conflating them prices an
@@ -277,6 +286,46 @@ describe('the §27 sweep`s memory across drains', () => {
 
     sweep.close();
     expect(await sweep.drain()).toEqual([{ model: 'claude-sonnet-5', input: 3, cacheCreate: 0, cacheRead: 0, output: 0 }]);
+  });
+
+  // The release is reachable WHILE a walk is running: a floor change opens the replacement sweep and
+  // releases the previous one mid-catch-up. An orphan walk keeps calling into the stream, and the stream
+  // writes a read position back for every log it finishes — repopulating the map the release just cleared,
+  // so the released sweep resumes from positions belonging to a run that is over and reads nothing.
+  it('re-reads every log from the top when it is released while a drain is in flight', async () => {
+    for (let i = 0; i < 6; i += 1) {
+      writeFileSync(
+        join(dir, `s${i}.jsonl`),
+        logBytes(turnLine({ ts: '2026-07-09T12:00:01.000Z', id: `a${i}`, input: 1 })),
+      );
+    }
+    const sweep = sweepOf(dir, { chunkBytes: 8 });
+    const inFlight = sweep.drain();
+    sweep.close();
+    await inFlight;
+
+    expect(inputOf(await sweep.drain())).toBe(6);
+  });
+
+  // ...and the totals the released run accumulated are not what the next drain answers with: `close()`
+  // orphans the fold, so a drain issued while one is still in flight must walk for the FRESH ledger rather
+  // than be handed the retired run's promise. Deleting a log the retired run already counted separates the
+  // two answers — a fresh walk of the tree can no longer reach those dollars, and the retired ledger still
+  // holds them.
+  it('never answers a drain issued after the release with the released run`s totals', async () => {
+    writeFileSync(join(dir, 'a.jsonl'), logBytes(turnLine({ ts: '2026-07-09T12:00:01.000Z', id: 'a', input: 3 })));
+    const gone = join(dir, 'b.jsonl');
+    writeFileSync(gone, logBytes(turnLine({ ts: '2026-07-09T12:00:02.000Z', id: 'b', input: 5 })));
+    const sweep = sweepOf(dir, { chunkBytes: 8 });
+    expect(inputOf(await sweep.drain())).toBe(8);
+
+    rmSync(gone);
+    const inFlight = sweep.drain();
+    sweep.close();
+    const after = sweep.drain();
+    await inFlight;
+
+    expect(inputOf(await after)).toBe(3);
   });
 });
 

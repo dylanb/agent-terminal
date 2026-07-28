@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   appCostEvent,
   auditCost,
+  loopCostEvent,
   boundExternalText,
   notifyFailedEvent,
   parseAuditStream,
@@ -80,10 +81,28 @@ describe('the §27 cost record in the shared audit vocabulary', () => {
   // record CARRIES, not against the live figure — a run discovering ids past the bound above would otherwise
   // append records byte-identical to their predecessor forever. That is one definition, not two.
   it('answers what a record carries for a cost, in the shape the record is built from', () => {
-    const ids = (n: number): string[] => Array.from({ length: n }, (_, i) => `claude-made-up-${i}`);
+    // Hostile ids, not clean ones: on `claude-made-up-0` the strip-and-bound is the identity, so a fixture
+    // built from those cannot tell one shared definition from two hand-maintained copies that agree today.
+    const ids = (n: number): string[] => Array.from({ length: n }, (_, i) => `claude\u200e${i}${'x'.repeat(500)}`);
     const cost = { usd: 1, unpricedModels: ids(500) };
     const event = appCostEvent(cost, TS) as Extract<AuditEvent, { type: 'app.cost' }>;
     expect(auditCost(cost)).toEqual({ usd: event.usd, unpricedModels: event.unpriced });
     expect(auditCost(cost).unpricedModels).toEqual(auditCost({ usd: 1, unpricedModels: ids(1000) }).unpricedModels);
+    expect(auditCost(cost).unpricedModels[0]).toBe(boundExternalText(ids(1)[0]));
+    expect(auditCost(cost).unpricedModels.every((m) => !m.includes('\u200e') && m.length <= 200)).toBe(true);
+  });
+
+  // §26.10's `loop.cost` carries the SAME class of text from the SAME decoder into the SAME append-only
+  // file, so it is bounded by the same primitive rather than by a second copy of the rule: two sibling
+  // events must not spell one bound two ways (CWE-117 / CWE-770). Authorized against AC 10 by the operator
+  // at the iter-10 gate — what the RECORD carries moves; §26's numbers, behaviour and rendering do not.
+  it('bounds the §26 per-iteration cost record through the same primitive as the §27 one', () => {
+    const hostile = `claude\u200e${'x'.repeat(500)}`;
+    const event = loopCostEvent({ usd: 2.5, unpricedModels: [hostile] }, 7, TS);
+    expect(event).toEqual({ ts: TS, type: 'loop.cost', iteration: 7, usd: 2.5, unpriced: [boundExternalText(hostile)] });
+
+    const many = Array.from({ length: 500 }, (_, i) => `claude-made-up-${i}`);
+    const carried = (loopCostEvent({ usd: 1, unpricedModels: many }, 1, TS) as Extract<AuditEvent, { type: 'loop.cost' }>).unpriced;
+    expect(carried).toEqual(auditCost({ usd: 1, unpricedModels: many }).unpricedModels);
   });
 });

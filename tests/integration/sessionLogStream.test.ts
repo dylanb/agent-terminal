@@ -105,6 +105,31 @@ describe('reading only what a session log gained', () => {
     expect(await read(createLogStream(boundary), seen(log))).toEqual([line]);
   });
 
+  // The resume position is a BYTE offset into the log, while the lines it is derived from are counted in
+  // the DECODED string — identical only for pure ASCII, which every other resume fixture here is. Every
+  // assistant turn carries UTF-8 prose, so a position built from character indices under-advances by the
+  // multi-byte surplus, and the next drain re-reads a partial line and splices it onto the one after.
+  it('resumes after a line carrying multi-byte UTF-8, handing on neither a fragment nor a repeat', async () => {
+    writeFileSync(log, '{"t":"héllo — “wörld” 🎉"}\n');
+    expect(await read(stream, seen(log))).toEqual(['{"t":"héllo — “wörld” 🎉"}']);
+
+    appendFileSync(log, '{"t":"next"}\n');
+    expect(await read(stream, seen(log))).toEqual(['{"t":"next"}']);
+  });
+
+  // ...and the same when the multi-byte character straddles a chunk boundary, so the decoder's carry and
+  // the byte-offset advance are pinned together rather than one covering for the other.
+  it('resumes after a multi-byte character split across a chunk boundary', async () => {
+    const first = '{"t":"a-é-b"}';
+    writeFileSync(log, `${first}\n`);
+    const boundary = Buffer.from('{"t":"a-', 'utf8').length + 1;
+    const small = createLogStream(boundary);
+    expect(await read(small, seen(log))).toEqual([first]);
+
+    appendFileSync(log, '{"t":"next"}\n');
+    expect(await read(small, seen(log))).toEqual(['{"t":"next"}']);
+  });
+
   // A log line has no length limit in the format, and the reader holds an incomplete line across chunk
   // boundaries — so the chunk size bounds the READ but not the allocation, and one newline-free log is
   // materialised whole on the process that also drains the PTY.
