@@ -11,8 +11,8 @@
 // of the well-formedness gate (§27.12c/AC8).
 //
 // The in-flight turn STATE MACHINE — inject-when-injectable, the boundary preamble drain, retry-once, the
-// stall watchdog — is reused read-only from the §26 turn runner (loopOrchestrator.ts, the plan's authorized
-// "read-only §26-cited copy"); this module owns only the §27-specific run state, the artifact-marker gate,
+// stall watchdog — is reused from the §27 turn runner (loopOrchestrator.ts); this module owns only the
+// §27-specific run state, the artifact-marker gate,
 // and the route-out. Every effect is a domain port the host wires to the injector, the §8.3 quiescence
 // signal, the stall timer, the §27 loop-state writer, and the flow — never the primitives behind them.
 
@@ -31,7 +31,7 @@ import { chainedTransitionAuditCmd, consolidateAuditCmd, reviewRoundAuditCmd } f
 import { clearInterrupt, readAppLoopState, readArmedInterrupt, type AppLoopRunState } from './appLoopState';
 import { APP_LOOP_DIR_SEGMENTS } from './appLoopPaths';
 
-/** The §27 done-file lives in the §27 loop area, disjoint from §26's `.agent-loop/` (AC10 separation). */
+/** The §27 done-file lives in the §27 loop area, disjoint from the retired engine's `.agent-loop/` (AC10 separation). */
 const APP_TURN_DONE_SUBDIR = path.join(...APP_LOOP_DIR_SEGMENTS);
 const APP_DONE_REL_PATH = APP_LOOP_DIR_SEGMENTS.join('/') + '/' + TURN_DONE_FILENAME;
 
@@ -113,7 +113,7 @@ export interface AppLoopEngineDeps {
   persist(repoDir: string, state: AppLoopRunState): void;
   /** Record a §25 audit event for the turn (best-effort; never aborts the turn). */
   audit(repoDir: string, cmd: string, exit: number | null): void;
-  /** §27-only error push so the renderer surfaces the reason (never a silent stop, §26.3/D48 parallel). */
+  /** §27-only error push so the renderer surfaces the reason (never a silent stop, §27.12/D48 parallel). */
   emitError(reason: string): void;
   /** The live loop view changed — the panel/strip re-pull. */
   onViewChanged(): void;
@@ -533,7 +533,7 @@ export function createAppLoopEngine(deps: AppLoopEngineDeps): AppLoopEngine {
     },
     inject: (prompt, opts) => {
       // Clear the prior turn's done-signal at the PROMPT inject (not the preamble): any earlier and a
-      // completion arriving during the boundary drain would be dropped (§26.3/D46 parallel).
+      // completion arriving during the boundary drain would be dropped (§27.12/D46 parallel).
       if (!opts?.preamble && active) clearTurnDone(active.repoDir, APP_TURN_DONE_SUBDIR);
       deps.inject(prompt);
     },
