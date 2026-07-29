@@ -59,7 +59,7 @@ export function createFlowInputModal(host: HTMLElement, opts?: { onFocusLost?: (
             help.className = 'help';
             const helpId = `${titleId}-help`;
             help.id = helpId;
-            help.textContent = `Runs ${prompt.bootstrap} on entry to start the loop (§26.9). Threaded to later steps' inputs.`;
+            help.textContent = `Runs ${prompt.bootstrap} on entry: the bound loop definition's own branch-and-draft-PR setup. Threaded to later steps' inputs.`;
             field.append(help);
             field.querySelector('input')?.setAttribute('aria-describedby', helpId);
           }
