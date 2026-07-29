@@ -127,3 +127,48 @@ describe('createInjector (§9.3)', () => {
     expect(marks).toEqual([]);
   });
 });
+
+describe('createInjector completion channel (§B.13c — causal chaining off injection, not a timer)', () => {
+  let written: string[];
+  let inject: ReturnType<typeof createInjector>;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    written = [];
+    inject = createInjector({
+      write: (data) => written.push(data),
+      isBracketedPaste: () => false,
+      submitDelayMs: 50,
+    });
+  });
+  afterEach(() => vi.useRealTimers());
+
+  it('signals completion only after the submit CR is written, never before', () => {
+    const done: string[] = [];
+    inject('cmd', { submit: true, onComplete: () => done.push(`done@${written.length}`) });
+    // Paste written, CR still pending — no completion yet.
+    expect(written).toEqual(['cmd']);
+    expect(done).toEqual([]);
+    vi.advanceTimersByTime(49);
+    expect(done).toEqual([]);
+    vi.advanceTimersByTime(1);
+    // Fires in the same tick as, and after, the CR write — so a chained requestTurn is causal.
+    expect(written).toEqual(['cmd', '\r']);
+    expect(done).toEqual(['done@2']);
+  });
+
+  it('does not signal completion when nothing is submitted (no CR is written)', () => {
+    const done: string[] = [];
+    inject('text', { submit: false, onComplete: () => done.push('x') });
+    vi.advanceTimersByTime(1000);
+    expect(written).toEqual(['text']);
+    expect(done).toEqual([]);
+  });
+
+  it('does not signal completion for empty text (no injection occurred)', () => {
+    const done: string[] = [];
+    inject('', { submit: true, onComplete: () => done.push('x') });
+    vi.advanceTimersByTime(1000);
+    expect(done).toEqual([]);
+  });
+});
