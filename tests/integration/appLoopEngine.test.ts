@@ -289,6 +289,58 @@ describe('§27 engine — entry, boundary, and the work injection (AC1, AC9)', (
   });
 });
 
+// §B.20a / §B.5 item 6 (AC10) — a step whose bound def declares a `pickup:` block has its skill injected by
+// the COORDINATOR after work entry is accepted, so `enter` must ACCEPT the turn WITHOUT REQUESTING it: it
+// answers 'entered' having deferred `start`'s `requestTurn` to a caller-supplied trigger the coordinator fires
+// from the injection's completion. The accepted-but-not-yet-requested turn OCCUPIES the runner (a second entry
+// in the gap is refused), and the deferral is abandonable so the coordinator's deadline-lapse revert frees it.
+describe('§27 engine — deferred work-turn request (§B.20a / §B.5 item 6)', () => {
+  it('deferRequest accepts the turn WITHOUT requesting it — nothing injected, runner occupied, second entry busy', () => {
+    const engine = makeEngine();
+    hosted = 'idle'; // an idle instance would inject the boundary synchronously on the initial arm — the deferral must not
+    expect(engine.enter(repo, 'plan-loop', STEP, 'chain-advance', { deferRequest: true })).toBe('entered');
+    expect(injected).toEqual([]); // the request is deferred — no boundary drained, no prompt
+    expect(engine.canEnter()).toBe(false); // the accepted turn occupies the runner across the gap
+    expect(engine.enter(repo, 'plan-loop', STEP, 'chain-advance', { deferRequest: true })).toBe('busy');
+    expect(injected).toEqual([]);
+    // the turn identity is available for the host's done-watch even before the request fires
+    expect(engine.activeTurnKey()).toBe(TURN_KEY);
+  });
+
+  it('triggerDeferredTurn requests the deferred turn on the CHAINED arm (boundary then work prompt)', () => {
+    const engine = makeEngine();
+    hosted = 'idle';
+    engine.enter(repo, 'plan-loop', STEP, 'chain-advance', { deferRequest: true });
+    expect(injected).toEqual([]);
+    engine.triggerDeferredTurn();
+    // chained arm: re-arm quiescence and wait for a FRESH settle — nothing injected until onInjectable
+    expect(injected).toEqual([]);
+    engine.onInjectable(); // the fresh settle drains the boundary preamble
+    expect(injected[0]).toBe('/clear');
+    engine.onInjectable(); // the boundary drains → the work prompt injects
+    expect(injected[1]).toContain('Produce the plan.');
+    expect(engine.canEnter()).toBe(false); // genuinely in-flight now
+  });
+
+  it('cancelDeferredTurn abandons a deferred turn — frees the runner, injects nothing, no active turn', () => {
+    const engine = makeEngine();
+    hosted = 'idle';
+    engine.enter(repo, 'plan-loop', STEP, 'chain-advance', { deferRequest: true });
+    expect(engine.canEnter()).toBe(false);
+    engine.cancelDeferredTurn();
+    expect(engine.canEnter()).toBe(true); // the runner is free again
+    expect(injected).toEqual([]); // nothing was ever injected
+    expect(engine.activeTurnKey()).toBeNull(); // no turn lingers un-requested
+  });
+
+  it('a bare enter (no opts) still requests synchronously — the deferral is opt-in only (AC2)', () => {
+    const engine = makeEngine();
+    hosted = 'idle';
+    engine.enter(repo, 'plan-loop', STEP, 'chain-advance');
+    expect(injected[0]).toBe('/clear'); // today's initial-arm behavior, unchanged
+  });
+});
+
 // §27.10/§27.9 / N6 (sub-ticket 1) — an approved loop's output artifact, resolved as the next loop's typed
 // input (§27.10), is the material the next loop's work turn is entered with. The engine reads the entered def's
 // declared inputs; only an input whose artifact is actually PRESENT on disk (the prior loop produced it) is
