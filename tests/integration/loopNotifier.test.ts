@@ -1,47 +1,29 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { parseAgentLoopState } from '../../src/main/agentLoopBridge';
-import { parseLoopDef } from '../../src/main/loopDef';
-import { deriveLoopView } from '../../src/main/flow';
+import { describe, expect, it, vi } from 'vitest';
 import { createLoopNotifier, type LoopNotifyOpts } from '../../src/main/loopNotifier';
-import type { FlowStateView } from '../../src/shared/ipc';
+import type { FlowLoopView, FlowStateView } from '../../src/shared/ipc';
 
-// §24.2.3 T4 — the OS-notification decision driven END-TO-END from a real state.yaml + LoopDef on
-// disk, asserting the file content alone drives raise/dedup/clear. Real temp files (parser and
-// derivation unmocked); only the OS-notification surface is spied (CLAUDE.md permits it).
+// §24.2.3 T4 — the OS-notification decision is engine-neutral: the notifier observes a FlowStateView and
+// keys only on the loop view's human-needed state and its (status, iteration) occurrence identity, knowing
+// nothing about which engine produced it. These fixtures reproduce each precondition as a §27 loop view
+// directly (the §26 state.yaml→deriveLoopView derivation is gone); only the OS-notification surface is spied.
 
-const IMPL_LOOP =
-  'name: impl-loop\n' +
-  'schema_version: "4"\n' +
-  'gates:\n' +
-  '  - id: awaiting-human-pr-approval\n    kind: approve-required\n    human_options: [approve, request-changes, impasse]\n' +
-  '  - id: awaiting-human-impl-triage\n    kind: triage\n    human_options: [approve, request-changes, impasse]\n' +
-  '  - id: impl-draft\n    kind: in-flight\n    human_options: [impasse]\n' +
-  '  - id: awaiting-team-review\n    kind: terminal\n    human_options: []\n' +
-  '  - id: impasse\n    kind: terminal\n    human_options: []\n';
-
+const REPO = '/repo';
 const BASE: FlowStateView = { stepName: 'build', steps: ['build'], position: 1, total: 1, status: 'in_progress' };
 
-describe('loop notifier driven from real state.yaml (§24.2.3 T4)', () => {
-  let repo: string;
-  beforeEach(() => {
-    repo = mkdtempSync(join(tmpdir(), 'loopnotify-'));
-    mkdirSync(join(repo, '.agent-loop'), { recursive: true });
-    writeFileSync(join(repo, 'impl-loop.yaml'), IMPL_LOOP);
-    writeFileSync(join(repo, '.agent-loop.yaml'), 'loops:\n  impl-loop: ./impl-loop.yaml\n');
-  });
-  afterEach(() => rmSync(repo, { recursive: true, force: true }));
+const view = (status: string, iteration: number | undefined, humanNeeded: boolean): FlowStateView => {
+  const loop: FlowLoopView = {
+    status,
+    pr: 179,
+    branch: 'b',
+    ready: false,
+    actionable: false,
+    humanNeeded,
+    ...(iteration === undefined ? {} : { iteration }),
+  };
+  return { ...BASE, loop };
+};
 
-  const writeState = (status: string, iteration: number): void =>
-    writeFileSync(
-      join(repo, '.agent-loop', 'state.yaml'),
-      `schema_version: 4\npr: 179\nbranch: b\niteration: ${iteration}\nstatus: ${status}\n`,
-    );
-  const viewNow = (): FlowStateView =>
-    deriveLoopView(BASE, parseAgentLoopState(repo), parseLoopDef(repo, 'impl-loop'));
-
+describe('loop notifier driven from a §27 loop view (§24.2.3 T4)', () => {
   function spyNotifier(focused = false) {
     const notify = vi.fn<(o: LoopNotifyOpts) => () => void>(() => () => {});
     let isFocused = focused;
@@ -60,26 +42,24 @@ describe('loop notifier driven from real state.yaml (§24.2.3 T4)', () => {
     return { notify, notifier, setFocused };
   }
 
-  it('raises on a real awaiting-human state.yaml when unfocused', () => {
-    writeState('awaiting-human-pr-approval', 9);
+  it('raises on a human-needed gate view when unfocused', () => {
     const { notifier, notify } = spyNotifier();
-    notifier.observe(repo, viewNow());
+    notifier.observe(REPO, view('awaiting-human-pr-approval', 9, true));
     expect(notify).toHaveBeenCalledTimes(1);
   });
 
-  it('does not raise on a real terminal hand-off state.yaml', () => {
-    writeState('awaiting-team-review', 9);
+  it('does not raise on a terminal hand-off view', () => {
     const { notifier, notify } = spyNotifier();
-    notifier.observe(repo, viewNow());
+    notifier.observe(REPO, view('awaiting-team-review', 9, false));
     expect(notify).not.toHaveBeenCalled();
   });
 
-  it('re-raises when the human-needed status advances in a later iteration', () => {
+  it('re-raises when a distinct human-needed occurrence arrives in a later round', () => {
     const { notifier, notify } = spyNotifier();
-    writeState('awaiting-human-pr-approval', 9);
-    notifier.observe(repo, viewNow());
-    writeState('awaiting-human-impl-triage', 11);
-    notifier.observe(repo, viewNow());
+    // Two DISTINCT §27 human-needed occurrences — the §27 vocabulary reaches human-needed only via `error`
+    // or a gate — so the shared occurrence identity (status, iteration) separates them and both raise.
+    notifier.observe(REPO, view('error', 9, true));
+    notifier.observe(REPO, view('awaiting-human-impl-triage', 11, true));
     expect(notify).toHaveBeenCalledTimes(2);
   });
 
@@ -87,39 +67,30 @@ describe('loop notifier driven from real state.yaml (§24.2.3 T4)', () => {
   // the human. A raise skipped for focus must stay PENDING, not count as signalled — otherwise walking
   // away from the app is exactly the moment the notification is guaranteed never to arrive.
   it('raises when the user leaves the app, for an entry that arrived while the window was focused', () => {
-    writeState('awaiting-human-pr-approval', 9);
     const { notifier, notify, setFocused } = spyNotifier(true);
-
-    notifier.observe(repo, viewNow());
+    notifier.observe(REPO, view('awaiting-human-pr-approval', 9, true));
     expect(notify).not.toHaveBeenCalled();
-
     setFocused(false);
     expect(notify).toHaveBeenCalledTimes(1);
   });
 
   it('does not re-raise an already-raised entry when the window is focused and left again', () => {
-    writeState('awaiting-human-pr-approval', 9);
     const { notifier, notify, setFocused } = spyNotifier(false);
-
-    notifier.observe(repo, viewNow());
+    notifier.observe(REPO, view('awaiting-human-pr-approval', 9, true));
     setFocused(true);
     setFocused(false);
     expect(notify).toHaveBeenCalledTimes(1);
   });
 
   it('never raises for an entry the loop resolved while the window was focused', () => {
-    writeState('awaiting-human-pr-approval', 9);
     const { notifier, notify, setFocused } = spyNotifier(true);
-    notifier.observe(repo, viewNow());
-
-    writeState('impl-draft', 10); // the human answered in-app; the loop moved on
-    notifier.observe(repo, viewNow());
-
+    notifier.observe(REPO, view('awaiting-human-pr-approval', 9, true));
+    notifier.observe(REPO, view('working', 10, false)); // the human answered in-app; the loop moved on
     setFocused(false);
     expect(notify).not.toHaveBeenCalled();
   });
 
-  it('clears the notification when the mirror becomes a null mirror (corrupt state.yaml)', () => {
+  it('clears the notification when the step leaves the loop view, raising nothing in its place', () => {
     const close = vi.fn();
     const notify = vi.fn<(o: LoopNotifyOpts) => () => void>(() => close);
     const notifier = createLoopNotifier({
@@ -129,10 +100,12 @@ describe('loop notifier driven from real state.yaml (§24.2.3 T4)', () => {
       focusWindow: vi.fn(),
       reveal: vi.fn(),
     });
-    writeState('awaiting-human-pr-approval', 9);
-    notifier.observe(repo, viewNow());
-    writeFileSync(join(repo, '.agent-loop', 'state.yaml'), 'schema_version: 99\n: not: valid');
-    notifier.observe(repo, viewNow()); // null mirror → no loop on the view
+    notifier.observe(REPO, view('awaiting-human-pr-approval', 9, true));
+    // A FlowStateView with NO loop member — the step is not loop-bound / the provider is not consulted — is
+    // the precondition that takes observe's `!loop` clear branch. An unresolvable §27 def would instead be a
+    // human-needed error view and raise a SECOND notification, so the negative below is what keeps this honest.
+    notifier.observe(REPO, { ...BASE });
     expect(close).toHaveBeenCalledTimes(1);
+    expect(notify).toHaveBeenCalledTimes(1);
   });
 });
