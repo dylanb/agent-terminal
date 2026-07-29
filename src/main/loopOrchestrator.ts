@@ -65,8 +65,11 @@ export interface TurnRunnerDeps {
 export interface TurnRunner {
   /** Begin a turn; injects now if the hosted agent is idle, defers if busy, errors if absent (§27.2).
    *  `opts.preamble` (§27.12) is a command drained BEFORE the turn prompt — the actor-boundary /clear —
-   *  injected gated on its own settle and ordered ahead of the prompt, so neither races the agent. */
-  requestTurn(turnKey: string, opts?: { preamble?: string }): void;
+   *  injected gated on its own settle and ordered ahead of the prompt, so neither races the agent.
+   *  `opts.forceChained` (§B.5 item 4b) forces the chained arm on an INITIAL turn: the runner re-arms
+   *  quiescence and waits for a fresh settle instead of injecting on the current quiet, so a work turn
+   *  requested in the same tick as a just-submitted skill injection never races it (CWE-74). */
+  requestTurn(turnKey: string, opts?: { preamble?: string; forceChained?: boolean }): void;
   /** The instance may have become injectable (a §8.3 quiet flip) — re-evaluate a pending/retry turn: inject
    *  if now idle, keep waiting if still busy, or error if the agent has left the prompt (§27.2). */
   onInjectable(): void;
@@ -170,8 +173,9 @@ export function createTurnRunner(deps: TurnRunnerDeps): TurnRunner {
       // §27.12 — a CHAINED turn (requested after a prior turn completed or errored) must not inject on
       // the stale quiet the previous turn's done-signal left behind: re-arm quiescence and defer until a
       // FRESH settle (onInjectable). The INITIAL turn (state 'idle') has no prior output to race, so it
-      // injects immediately against the already-at-rest agent.
-      const chained = state === 'complete' || state === 'error';
+      // injects immediately against the already-at-rest agent — UNLESS the caller forces the chained arm
+      // because it just submitted an injection this turn must not race (§B.5 item 4b).
+      const chained = state === 'complete' || state === 'error' || opts?.forceChained === true;
       state = 'in-flight';
       turnKey = key;
       attempts = 0;
