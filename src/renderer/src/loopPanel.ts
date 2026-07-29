@@ -1,24 +1,27 @@
 // The docked loop+gate panel (§24.2.3 T2/T7) — a placement-agnostic organism (UI-STANDARDS §1.2).
 // It renders two read-only sections: the ticket/PR the flow is working (T7), shown whenever the flow
-// is active even on a non-loop step; and the EXPANDED agent-loop state mirror (T2) on loop steps. The
-// ticket/PR detail (title, body, link) is fetched best-effort via injected services — the organism
-// reaches for nothing itself.
+// is active even on a non-loop step; and the §27 run-state view (T2) on loop steps. The ticket/PR detail
+// (title, body, link) is fetched best-effort via injected services — the organism reaches for nothing itself.
 //
-// Scope: the state mirror + the read-only "gate options" row, plus the §26.6 / L5 gate DECISION section
-// (a button per gate option, firing the injected gateDecision). The §19.4 feedback composer that supplies
-// the human-note text is a later slice.
+// Scope: the run-state view + the read-only "gate options" row, plus the §27.9 gate DECISION section (a
+// button per gate option, firing the injected appGateDecision with the step+turn identity it acts on, §6).
+// A §27 request-changes / redo detours through its composer (composeFeedback / composeRedo).
 
 import type { FlowLoopView, FlowRefs, GithubRef, GithubRefKind } from '../../shared/ipc';
 import { hasFlowRefs } from '../../shared/ipc';
 import { loopGateActionable } from '../../shared/loopGate';
+import { stripDisplayControlChars } from '../../shared/controlChars';
 import { githubHttpsHref } from '../../shared/githubUrl';
 import { spillTone } from './loopStatus';
 import { captureSubtreeFocus } from './dom';
 
 /** Display label for a gate `human_option` — matches loop-flow.html's "approve · changes · impasse"
- *  (the verbose `request-changes` reads as `changes` in the compact options row). */
+ *  (the verbose `request-changes` reads as `changes` in the compact options row). The option is
+ *  repo-authored, so it is stripped of display-unsafe bytes and trimmed before the comparison: a bidi
+ *  override then neither defeats the abbreviation nor reaches the label derived from the result (CWE-117). */
 function gateOptionLabel(option: string): string {
-  return option === 'request-changes' ? 'changes' : option;
+  const cleaned = stripDisplayControlChars(option).trim();
+  return cleaned === 'request-changes' ? 'changes' : cleaned;
 }
 
 /** The §24.2.3 T7 services the panel needs: resolve a ref's detail (best-effort; null → bare number)
@@ -26,15 +29,9 @@ function gateOptionLabel(option: string): string {
 export interface LoopPanelDeps {
   githubRef(kind: GithubRefKind, number: number): Promise<GithubRef | null>;
   openExternal(url: string): void;
-  /** §26.3/D47a(c) — the operator's manual "this turn is done" override for a turn whose automatic
-   *  done-signal was missed. Injected by the composition root; absent → the control is inert. */
-  markTurnComplete?(): void;
-  /** §26.6 / L5 — submit the human's §26 gate decision (the option the human picked at an awaiting gate).
-   *  Injected by the composition root; absent → the §26 decision buttons are not rendered. */
-  gateDecision?(option: string): void;
   /** §27.9/§27.13 (N5) — submit the human's §27 gate decision, carrying the step+turn identity the receiver
-   *  acts on (§6). A §27 gate view (one carrying `appTurn`) routes its option here — never to the §26
-   *  `gateDecision` (AC8). Injected by the composition root; absent → the §27 decision buttons are not rendered. */
+   *  acts on (§6). A §27 gate view (one carrying `appTurn`) routes its option here. Injected by the
+   *  composition root; absent → the §27 decision buttons are not rendered. */
   appGateDecision?(step: string, turnKey: string, option: string): void;
   /** §27.9/§19.4 (AC4) — open the feedback composer for a §27 request-changes at the gate. request-changes is
    *  a two-step interaction: the click opens the composer (curate a review-todo subset + free text), and the
@@ -46,10 +43,6 @@ export interface LoopPanelDeps {
    *  carries the instruction back on the decision. Injected by the composition root; absent → the §27 redo
    *  button does not render (an instruction-less dispatch is dropped, WCAG 4.1.2). */
   composeRedo?(step: string, turnKey: string): void;
-  /** §26.3/D48 — recover a loop stopped in `error`: re-drive the failed turn (e.g. after starting Claude
-   *  for a `no hosted agent` stop). Injected by the composition root; absent → no Retry control is shown,
-   *  so an errored loop is never a dead-end reachable only by Terminate (never-unrecoverable, CLAUDE.md). */
-  retryTurn?(): void;
   /** §27.12c — the §27-only work-turn route-out (retry / accept-present-artifact / terminate), carrying the
    *  step+turn identity the receiver acts on (§6). Injected by the composition root; absent → the §27 error
    *  view shows no route-out (an un-wired control would be inert, WCAG 4.1.2). */
@@ -74,9 +67,9 @@ export interface LoopPanel {
    *  preceded by moving focus out of the host — the close-before-clear contract `syncDockedPanel` holds
    *  (UI §4.5) — so emptying never strands focus on `<body>`. */
   render(loop: FlowLoopView | null, title: string, refs?: FlowRefs): void;
-  /** Move focus onto the gate decision, recovery Retry, or stable Close entry, returning whether one was
-   *  there to focus. The panel owns this so a sibling never reaches into its markup for the control
-   *  (§26.6 / §26.3 D48; WCAG 2.4.3). */
+  /** Move focus onto the gate decision, the work-turn route-out, or the stable Close entry, returning
+   *  whether one was there to focus. The panel owns this so a sibling never reaches into its markup for the
+   *  control (§27.9 / §27.12c; WCAG 2.4.3). */
   focusDecision(): boolean;
   /** Clean teardown (UI-STANDARDS). */
   dispose(): void;
@@ -103,8 +96,8 @@ function detailRow(doc: Document, key: string, value: string, valueClass = ''): 
 /** A signature of what fixes the panel's DOM STRUCTURE — deliberately NOT the live loop values
  *  (status/iteration/error reason) that `patchInPlace` updates without a teardown (mirrors flowStrip's
  *  structuralSig, §24.2.2 S5). The async ref title/body/link fill the DOM in place keyed by (kind,
- *  number), so they are excluded too. The error reason and its Retry control are excluded because
- *  rebuilding the live region to show them would announce nothing at all (WCAG SC 4.1.3). */
+ *  number), so they are excluded too. The error reason is excluded because rebuilding the live region to
+ *  show it would announce nothing at all (WCAG SC 4.1.3). */
 function structuralSig(loop: FlowLoopView | null, title: string, refs?: FlowRefs): string {
   return JSON.stringify([
     title,
@@ -112,8 +105,8 @@ function structuralSig(loop: FlowLoopView | null, title: string, refs?: FlowRefs
     refs?.pr ?? null,
     // iteration PRESENCE and actionability are structural: the iteration row and the gate-decision
     // buttons appear/disappear with them, so a run-less↔run transition forces a full render.
-    // §27/N5 — appTurn presence decides which decision service the buttons wire to, so a §26↔§27 gate must
-    // force a full render, not a patch.
+    // §27.9/N5 — appTurn presence decides whether the gate row renders at all (an appTurn-less view shows the
+    // gate options read-only), so an appTurn↔no-appTurn transition forces a full render, not a patch.
     // §27.9/AC6 — the polish stand-down flips the gate into the polish view (a notice + approve only), a
     // structural change, so a gate↔polish transition forces a full render rather than a patch.
     loop ? [loop.pr, loop.branch, loop.gateOptions ?? null, loop.iteration !== undefined, loop.actionable ?? null, loop.appTurn !== undefined, loop.polish ?? null] : null,
@@ -129,43 +122,27 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
   let liveLoop: { statusVal: HTMLElement; iterVal: HTMLElement | null; ldl: HTMLElement; reasonAnchor: HTMLElement; body: HTMLElement } | null = null;
   let refRows: Array<{ retry: () => void; resolved: () => boolean }> = [];
 
-  /** §26.3/D48 — the `reason` row, kept INSIDE the surviving live region so entering error announces it as
-   *  an addition (WCAG SC 4.1.3) instead of silently recreating the region around it. `anchor` is the
-   *  iteration row when a round has run, else the status row (a run-less §27 failure carries no iteration). */
+  /** §27.12 — the `reason` row. On the patch path (a status→error transition on an already-rendered view) it
+   *  is added INSIDE the surviving live region so it announces as an addition (WCAG SC 4.1.3); on a first
+   *  render the region is built with the row already present, so that render is silent (§K.5). `anchor` is
+   *  the iteration row when a round has run, else the status row (a run-less §27 failure carries no iteration).
+   *  The reason is repo-sourced, so it is stripped of display-unsafe bytes before the live region (CWE-117),
+   *  above both branches so create and patch are covered alike. */
   const syncReasonRow = (ldl: HTMLElement, anchor: HTMLElement, reason: string | undefined): void => {
     const existing = ldl.querySelector<HTMLElement>('[data-loop-reason]');
     if (!reason) {
       existing?.remove();
       return;
     }
+    const clean = stripDisplayControlChars(reason);
     if (existing) {
       const v = existing.querySelector('.lv')!;
-      if (v.textContent !== reason) v.textContent = reason;
+      if (v.textContent !== clean) v.textContent = clean;
       return;
     }
-    const row = detailRow(doc, 'reason', reason, 'bad');
+    const row = detailRow(doc, 'reason', clean, 'bad');
     row.dataset.loopReason = '';
     anchor.after(row);
-  };
-
-  /** §26.3/D48 — recovery from the error stop: re-drive the failed turn (start Claude, then Retry) so an
-   *  errored loop is never a UI dead-end. Error-only + service-gated (an un-wired control would be inert,
-   *  WCAG 4.1.2). */
-  const syncRetry = (body: HTMLElement, loop: FlowLoopView): void => {
-    const existing = body.querySelector<HTMLElement>('[data-loop-retry]');
-    // Retry re-drives the errored TURN (§26.3/D48); a run-less failure (no iteration — a §27 def that
-    // never resolved) has no turn to re-drive, so rendering Retry would be an inert affordance (WCAG 4.1.2).
-    if (loop.status !== 'error' || loop.iteration === undefined || !deps.retryTurn) {
-      existing?.remove();
-      return;
-    }
-    if (existing) return;
-    const retryBtn = doc.createElement('button');
-    retryBtn.className = 'pill retry';
-    retryBtn.dataset.loopRetry = '';
-    retryBtn.textContent = 'Retry';
-    retryBtn.addEventListener('click', () => deps.retryTurn?.());
-    body.append(retryBtn);
   };
 
   /** §27.12c — the §27 work-turn route-out: retry / accept-present-artifact / terminate. Present ONLY on a
@@ -181,6 +158,9 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
     }
     if (existing) return;
     const { step, turnKey } = loop.appTurn;
+    // A display-only stripped copy for the accessible names; the dispatch keeps the RAW step, which the
+    // receiver matches against persisted step identity (§6) — stripping there would dispatch an unmatchable id.
+    const stepLabel = stripDisplayControlChars(step);
     const group = doc.createElement('div');
     group.className = 'gatebar';
     group.dataset.appRouteOutGroup = '';
@@ -199,8 +179,8 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
       btn.setAttribute(
         'aria-label',
         action === 'terminate'
-          ? `Terminate flow from the ${step} work turn`
-          : `${label} the ${step} work turn`,
+          ? `Terminate flow from the ${stepLabel} work turn`
+          : `${label} the ${stepLabel} work turn`,
       );
       btn.addEventListener('click', () => deps.appRouteOut?.(step, turnKey, action));
       group.append(btn);
@@ -217,7 +197,9 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
   };
 
   /** Add / update / remove a keyed detail row in `ldl`, anchored after `anchor`. `datasetKey` is the
-   *  camelCase name; the matching `data-*` attribute is its kebab form. */
+   *  camelCase name; the matching `data-*` attribute is its kebab form. The value (verdict / verdict reason)
+   *  is repo-sourced, so it is stripped of display-unsafe bytes before the live region (CWE-117), above both
+   *  branches so create and patch are covered alike. */
   const syncNamedRow = (ldl: HTMLElement, anchor: HTMLElement, datasetKey: string, label: string, value: string | undefined): void => {
     const attr = `data-${datasetKey.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`)}`;
     const existing = ldl.querySelector<HTMLElement>(`[${attr}]`);
@@ -225,12 +207,13 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
       existing?.remove();
       return;
     }
+    const clean = stripDisplayControlChars(value);
     if (existing) {
       const v = existing.querySelector('.lv')!;
-      if (v.textContent !== value) v.textContent = value;
+      if (v.textContent !== clean) v.textContent = clean;
       return;
     }
-    const rowEl = detailRow(doc, label, value);
+    const rowEl = detailRow(doc, label, clean);
     rowEl.dataset[datasetKey] = '';
     anchor.after(rowEl);
   };
@@ -286,13 +269,16 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
     }
     if (existing) return;
     const { step } = loop.appTurn;
+    // A display-only stripped copy for the accessible name; the dispatch keeps the RAW step, matched against
+    // persisted step identity by the receiver (§6) — stripping there would arm an unmatchable id.
+    const stepLabel = stripDisplayControlChars(step);
     const btn = doc.createElement('button');
     btn.className = 'pill arm-interrupt';
     btn.dataset.armInterrupt = '';
     btn.textContent = 'Hand back to me';
     // WCAG 2.5.3 Label in Name: the accessible name must contain the visible label contiguously, so a
     // speech-input user saying "click Hand back to me" can activate it.
-    btn.setAttribute('aria-label', `Hand back to me — return the ${step} loop at the next consolidation`);
+    btn.setAttribute('aria-label', `Hand back to me — return the ${stepLabel} loop at the next consolidation`);
     btn.addEventListener('click', () => deps.armInterrupt?.(step));
     body.append(btn);
   };
@@ -365,7 +351,6 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
       }
       syncReasonRow(liveLoop.ldl, liveLoop.reasonAnchor, loop.errorReason);
       syncVerdictRows(liveLoop.ldl, liveLoop.reasonAnchor, loop);
-      syncRetry(liveLoop.body, loop);
       syncAppRouteOut(liveLoop.body, loop);
       syncCatalog(liveLoop.body, loop);
       syncArmInterrupt(liveLoop.body, loop);
@@ -440,13 +425,13 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
       body.className = 'lbody';
       const segH = doc.createElement('div');
       segH.className = 'seg-h';
-      segH.textContent = 'State · .agent-loop/state.yaml (v4)';
+      segH.textContent = 'State';
       body.append(segH);
 
       const ldl = doc.createElement('div');
       ldl.className = 'ldl';
-      // WCAG 4.1.3 — `patchInPlace` updates status/iteration here without moving focus (e.g. after the
-      // mark-complete control or an orchestrator transition); a polite live region announces that change.
+      // WCAG 4.1.3 — `patchInPlace` updates status/iteration here without moving focus (an orchestrator
+      // transition that advances the run in place); a polite live region announces that change.
       ldl.setAttribute('aria-live', 'polite');
       // An awaiting-human status still needs the human — the §22.3 "act" tone (`bad`).
       const statusRow = detailRow(doc, 'status', loop.status, spillTone(loop.status) === 'await' ? 'bad' : '');
@@ -460,17 +445,16 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
       }
       const reasonAnchor = iterRow ?? statusRow;
       liveLoop = { statusVal: statusRow.querySelector('.lv')!, iterVal: iterRow?.querySelector('.lv') ?? null, ldl, reasonAnchor, body };
-      // §26.3/D48 — WHY a turn stopped, adjacent to `status: error`. Present only in error (the mirror
-      // clears it on recovery).
+      // §27.12 — WHY a turn stopped, adjacent to `status: error`. Present only in error; the surviving run
+      // state drops the reason on recovery.
       syncReasonRow(ldl, reasonAnchor, loop.errorReason);
       // §27.6/AC5 — the consolidator verdict + reason, adjacent to the status/iteration rows.
       syncVerdictRows(ldl, reasonAnchor, loop);
       if (loop.pr !== null) ldl.append(detailRow(doc, 'pr', `#${loop.pr}`, 'sig'));
       if (loop.branch !== null) ldl.append(detailRow(doc, 'branch', loop.branch));
       // The gate's human_options (§18.1/§19.4) — a read-only preview of what the gate offers, rendered
-      // whenever the view carries gateOptions (a §26 awaiting gate, a §27 run-less def, OR the §27 terminal
-      // consolidator gate once a verdict is reached); the actionable decision buttons render below
-      // (loopGateActionable).
+      // whenever the view carries gateOptions (a §27 run-less def OR the §27 terminal consolidator gate once
+      // a verdict is reached); the actionable decision buttons render below (loopGateActionable + appTurn).
       if (loop.gateOptions && loop.gateOptions.length > 0)
         ldl.append(detailRow(doc, 'gate options', loop.gateOptions.map(gateOptionLabel).join(' · ')));
 
@@ -488,17 +472,15 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
         body.append(notice);
       }
 
-      // §26.6 / L5 — the gate DECISION surface (loop-flow.html's approve · changes · impasse): a button
-      // per gate option the def offers. Choosing one runs the LoopDef `on_*` action list in-app; the
-      // decision is the app's, surfaced via state.yaml → flow:onStateChanged (the panel re-pulls). A §27
-      // run-less view AND the §27 terminal consolidator gate carry the same gateOptions display-only
-      // (loopGateActionable false) — the read-only row above shows them, but no clickable control renders;
-      // the refusal guard is at the operation.
-      // §27.9/N5/AC8 — a §27 gate view (carrying `appTurn`) routes to appGateDecision, never the §26
-      // gateDecision. Rendered only when the matching service is injected (else inert — WCAG 4.1.2).
+      // §27.9/N5 — the gate DECISION surface (loop-flow.html's approve · changes · impasse): a button per
+      // gate option the def offers, routed to appGateDecision with the step+turn identity the receiver acts
+      // on (§6). The decision is the app's, surfaced through the surviving run state (the panel re-pulls).
+      // §27.9/AC8 — the row is affirmative on BOTH conjuncts: it renders only when the view carries `appTurn`
+      // (a decidable turn) AND appGateDecision is injected. A view carrying gateOptions but no appTurn — a
+      // §27 run-less def or a display-only preview — shows the read-only row above but no clickable control,
+      // because a button with no turn identity to carry would be inert (WCAG 4.1.2).
       const appTurn = loop.appTurn;
-      const decideDep = appTurn ? deps.appGateDecision : deps.gateDecision;
-      if (loop.gateOptions && loop.gateOptions.length > 0 && loopGateActionable(loop) && decideDep) {
+      if (appTurn && deps.appGateDecision && loop.gateOptions && loop.gateOptions.length > 0 && loopGateActionable(loop)) {
         const gate = doc.createElement('div');
         gate.className = 'gatebar';
         // A labelled group so a screen-reader user hears these controls' shared purpose, not three loose
@@ -508,62 +490,52 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
         for (const option of loop.gateOptions) {
           // §27.9/AC4 — a §27 request-changes MUST carry feedback: it is a composer-only affordance, so with no
           // composer wired render no button rather than one whose note-less dispatch the executor drops (WCAG 4.1.2).
-          if (appTurn && option === 'request-changes' && !deps.composeFeedback) continue;
+          if (option === 'request-changes' && !deps.composeFeedback) continue;
           // §27.9/AC5 — a §27 redo MUST carry an instruction, same composer-only rule as request-changes.
-          if (appTurn && option === 'redo' && !deps.composeRedo) continue;
+          if (option === 'redo' && !deps.composeRedo) continue;
           const btn = doc.createElement('button');
-          // approve is the primary action (loop-flow.html) — the filled `app` tone; the rest are outline.
-          btn.className = option === 'approve' ? 'pill app gate-approve' : `pill gate-${option}`;
-          btn.dataset.gateOption = option;
-          btn.textContent = gateOptionLabel(option);
-          // The visible label stays compact ("changes"); the accessible name is the unabbreviated option
-          // so AT does not announce a bare, ambiguous verb (WCAG 2.4.6; label-in-name 2.5.3).
-          btn.setAttribute('aria-label', option.replace('-', ' '));
+          // approve is the primary action (loop-flow.html) — the filled `app` tone; every other option is
+          // outline. The tone is the closed set (approve vs else), never interpolated from the raw option: a
+          // space-bearing option would inject extra class tokens — affordance spoofing at the gate (§16.3).
+          btn.className = option === 'approve' ? 'pill app gate-approve' : 'pill gate-option';
+          btn.dataset.gateOption = option; // the RAW option — the click dispatch carries persisted identity (§6)
+          const visible = gateOptionLabel(option);
+          btn.textContent = visible;
+          // The accessible name is derived from the STRIPPED visible label, never the raw option, so a bidi
+          // override reaches neither and the name still contains the visible text (WCAG 2.5.3 label-in-name).
+          // gateOptionLabel's only abbreviation is request-changes→changes, so expand exactly that.
+          btn.setAttribute('aria-label', visible === 'changes' ? 'request changes' : visible);
           btn.addEventListener('click', () => {
             // §27.9/AC4 — a §27 request-changes opens the feedback composer (its submit carries the feedback on
             // the decision); the button only renders when composeFeedback is wired (guarded above).
-            if (appTurn && option === 'request-changes') {
+            if (option === 'request-changes') {
               deps.composeFeedback?.(appTurn.step, appTurn.turnKey);
               return;
             }
             // §27.9/AC5 — a §27 redo opens the instruction composer (its submit carries the instruction).
-            if (appTurn && option === 'redo') {
+            if (option === 'redo') {
               deps.composeRedo?.(appTurn.step, appTurn.turnKey);
               return;
             }
             // approve and polish are one-way (no human input to lose) — dispatched straight to appGateDecision.
-            if (appTurn) deps.appGateDecision?.(appTurn.step, appTurn.turnKey, option);
-            else deps.gateDecision?.(option);
+            deps.appGateDecision?.(appTurn.step, appTurn.turnKey, option);
           });
           gate.append(btn);
         }
         body.append(gate);
       }
 
-      syncRetry(body, loop);
       syncAppRouteOut(body, loop);
       // §27.4/§27.9/AC8/AC9 — the reviewer catalog (chosen roster distinguished) and the arm-interrupt control.
       syncCatalog(body, loop);
       syncArmInterrupt(body, loop);
-
-      // §26.3/D47a(c) — the human-in-the-loop escape hatch: advance a turn whose automatic done-signal
-      // the orchestrator missed, without editing files. Present on a loop step only when the composition
-      // root injects the service — an un-wired control would be an inert affordance (WCAG 4.1.2).
-      if (deps.markTurnComplete) {
-        const markBtn = doc.createElement('button');
-        markBtn.className = 'pill mark-complete';
-        markBtn.dataset.loopMarkComplete = '';
-        markBtn.textContent = 'Mark turn complete';
-        markBtn.addEventListener('click', () => deps.markTurnComplete?.());
-        body.append(markBtn);
-      }
 
       host.append(body);
       restoreFocus(() => host.querySelector<HTMLElement>('[data-loop-close]'));
     },
     focusDecision() {
       const action =
-        host.querySelector<HTMLElement>('[data-gate-option], [data-loop-retry], [data-app-route-out]') ??
+        host.querySelector<HTMLElement>('[data-gate-option], [data-app-route-out]') ??
         host.querySelector<HTMLElement>('[data-loop-close]');
       action?.focus();
       return action !== null;

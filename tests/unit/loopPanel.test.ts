@@ -42,7 +42,7 @@ describe('docked loop panel (§24.2.3 T2)', () => {
     expect(row('branch')?.querySelector('.lv')?.textContent).toBe('agent-loop/issue-176');
   });
 
-  it('shows the D48 error reason so a stopped loop says WHY, not a bare "error" (§26.3)', () => {
+  it('shows the error reason so a stopped loop says WHY, not a bare "error" (§27.12)', () => {
     createLoopPanel(host).render(loop({ status: 'error', errorReason: 'no Claude at the prompt' }), 'build');
     expect(row('status')?.querySelector('.lv')?.textContent).toBe('error');
     expect(row('reason')?.querySelector('.lv')?.textContent).toBe('no Claude at the prompt');
@@ -98,55 +98,24 @@ describe('docked loop panel (§24.2.3 T2)', () => {
     expect(b.querySelectorAll('[data-loop-close]').length).toBe(1);
   });
 
-  it('renders a "mark turn complete" control on a loop step that invokes the injected service (§26.3/D47a c)', () => {
-    const markTurnComplete = vi.fn();
-    const panel = createLoopPanel(host, {
-      githubRef: () => Promise.resolve(null),
-      openExternal: () => {},
-      markTurnComplete,
-    });
-    panel.render(loop({ status: 'plan-draft' }), 'plan');
-    const btn = host.querySelector<HTMLButtonElement>('[data-loop-mark-complete]');
-    expect(btn).not.toBeNull();
-    btn!.click();
-    expect(markTurnComplete).toHaveBeenCalledTimes(1);
-  });
-
-  it('renders a "Retry" control on an errored loop that invokes the injected retry service (§26.3/D48)', () => {
-    const retryTurn = vi.fn();
-    const panel = createLoopPanel(host, {
-      githubRef: () => Promise.resolve(null),
-      openExternal: () => {},
-      retryTurn,
-    });
-    panel.render(loop({ status: 'error', errorReason: 'no Claude at the prompt' }), 'plan');
-    const btn = host.querySelector<HTMLButtonElement>('[data-loop-retry]');
-    expect(btn).not.toBeNull();
-    btn!.click();
-    expect(retryTurn).toHaveBeenCalledTimes(1);
-  });
-
   // WCAG 2.1 SC 4.1.3 (Status Messages). Assistive tech does not announce content that already exists when
   // a live region is registered. Rebuilding `.ldl` to enter `error` therefore produces SILENCE at exactly
   // the moment the turn failed. The region must survive, so the reason row is announced as an addition.
-  it('keeps the live region alive when the loop enters error, and adds the reason + Retry into it', () => {
-    const retryTurn = vi.fn();
-    const panel = createLoopPanel(host, { githubRef: () => Promise.resolve(null), openExternal: () => {}, retryTurn });
+  it('keeps the live region alive when the loop enters error, and adds the reason into it', () => {
+    const panel = createLoopPanel(host);
 
     panel.render(loop({ status: 'impl-draft' }), 'impl');
     const ldlBefore = host.querySelector('.ldl')!;
-    expect(host.querySelector('[data-loop-retry]')).toBeNull();
+    expect(row('reason')).toBeUndefined();
 
     panel.render(loop({ status: 'error', errorReason: 'no Claude at the prompt' }), 'impl');
 
     expect(host.querySelector('.ldl')).toBe(ldlBefore); // same live region → the addition is announced
     expect(row('reason')?.querySelector('.lv')?.textContent).toBe('no Claude at the prompt');
-    expect(host.querySelector('[data-loop-retry]')).not.toBeNull();
   });
 
-  it('removes the reason row and the Retry control when the loop recovers out of error', () => {
-    const retryTurn = vi.fn();
-    const panel = createLoopPanel(host, { githubRef: () => Promise.resolve(null), openExternal: () => {}, retryTurn });
+  it('removes the reason row when the loop recovers out of error', () => {
+    const panel = createLoopPanel(host);
 
     panel.render(loop({ status: 'error', errorReason: 'no Claude at the prompt' }), 'impl');
     const ldlBefore = host.querySelector('.ldl')!;
@@ -155,12 +124,10 @@ describe('docked loop panel (§24.2.3 T2)', () => {
 
     expect(host.querySelector('.ldl')).toBe(ldlBefore);
     expect(row('reason')).toBeUndefined();
-    expect(host.querySelector('[data-loop-retry]')).toBeNull();
   });
 
   it('updates a changed reason without replacing the live region', () => {
-    const retryTurn = vi.fn();
-    const panel = createLoopPanel(host, { githubRef: () => Promise.resolve(null), openExternal: () => {}, retryTurn });
+    const panel = createLoopPanel(host);
 
     panel.render(loop({ status: 'error', errorReason: 'first reason' }), 'impl');
     const ldlBefore = host.querySelector('.ldl')!;
@@ -171,48 +138,24 @@ describe('docked loop panel (§24.2.3 T2)', () => {
     expect(row('reason')?.querySelector('.lv')?.textContent).toBe('second reason');
   });
 
-  it('renders NO Retry control when the loop is not in error (recovery is error-only, WCAG 4.1.2)', () => {
-    const retryTurn = vi.fn();
-    const panel = createLoopPanel(host, {
-      githubRef: () => Promise.resolve(null),
-      openExternal: () => {},
-      retryTurn,
-    });
-    panel.render(loop({ status: 'plan-draft' }), 'plan');
-    expect(host.querySelector('[data-loop-retry]')).toBeNull();
-  });
-
-  it('renders a gate-decision button per gate option that invokes the injected service (§26.6 / L5)', () => {
-    const gateDecision = vi.fn();
-    const panel = createLoopPanel(host, {
-      githubRef: () => Promise.resolve(null),
-      openExternal: () => {},
-      gateDecision,
-    });
-    panel.render(loop({ status: 'awaiting-human-plan-approval', gateOptions: ['approve', 'request-changes', 'impasse'] }), 'plan');
-    const buttons = [...host.querySelectorAll<HTMLButtonElement>('[data-gate-option]')];
-    expect(buttons.map((b) => b.dataset.gateOption)).toEqual(['approve', 'request-changes', 'impasse']);
-    buttons.find((b) => b.dataset.gateOption === 'request-changes')!.click();
-    expect(gateDecision).toHaveBeenCalledTimes(1);
-    expect(gateDecision).toHaveBeenCalledWith('request-changes');
-  });
-
   it('focuses its own gate decision on request, so the shell need not know the gate markup (WCAG 2.4.3)', () => {
     // The alert routes the human ONTO the decision; the panel owns which control that is, rather than a
-    // sibling reaching into its DOM for [data-gate-option] (UI-STANDARDS §2.2 rule 4).
-    const panel = createLoopPanel(host, { githubRef: () => Promise.resolve(null), openExternal: () => {}, gateDecision: () => {} });
-    panel.render(loop({ status: 'awaiting-human-plan-approval', gateOptions: ['approve', 'request-changes', 'impasse'] }), 'plan');
+    // sibling reaching into its DOM for [data-gate-option] (UI-STANDARDS §2.2 rule 4). A §27 gate view
+    // (carrying appTurn + appGateDecision) is the only shape that renders clickable gate controls.
+    const panel = createLoopPanel(host, { githubRef: () => Promise.resolve(null), openExternal: () => {}, appGateDecision: () => {} });
+    panel.render(loop({ status: 'complete', actionable: true, gateOptions: ['approve', 'request-changes', 'impasse'], appTurn: { step: 'plan', turnKey: 'consolidate-plan' }, iteration: 2 }), 'plan');
     expect(panel.focusDecision()).toBe(true);
     expect(document.activeElement).toBe(host.querySelector('[data-gate-option="approve"]'));
   });
 
-  it('falls back to the recovery action when the human-needed state is an error, not a gate (WCAG 2.4.3)', () => {
-    // `error` is human-needed but shows a Retry control, not gate options. The blocked human must still
-    // land on the panel's actionable control, not be left on the alert button.
-    const panel = createLoopPanel(host, { githubRef: () => Promise.resolve(null), openExternal: () => {}, retryTurn: () => {} });
-    panel.render(loop({ status: 'error' }), 'plan');
+  it('falls back to the work-turn route-out when the human-needed state is an error, not a gate (WCAG 2.4.3)', () => {
+    // `error` is human-needed but shows the §27 route-out group, not gate options. The blocked human must
+    // still land on the panel's actionable control, not be left on the alert button. syncRetry is gone, so
+    // the route-out group's first button is the surviving focus target on a §27 error view carrying a turn.
+    const panel = createLoopPanel(host, { githubRef: () => Promise.resolve(null), openExternal: () => {}, appRouteOut: () => {} });
+    panel.render(loop({ status: 'error', errorReason: 'stalled', iteration: undefined, appTurn: { step: 'plan', turnKey: 'work-plan' } }), 'plan');
     expect(panel.focusDecision()).toBe(true);
-    expect(document.activeElement).toBe(host.querySelector('[data-loop-retry]'));
+    expect(document.activeElement).toBe(host.querySelector('[data-app-route-out]'));
   });
 
   it('falls back to the panel close control when a human-needed state has no decision metadata', () => {
@@ -222,25 +165,23 @@ describe('docked loop panel (§24.2.3 T2)', () => {
     expect(document.activeElement).toBe(host.querySelector('[data-loop-close]'));
   });
 
+  // §27.9/N5 — the ACTIONABLE §27 terminal gate: a view carrying appTurn (the step+turn identity) + declared
+  // gateOptions + actionable renders clickable controls that route to the identity-carrying appGateDecision
+  // and carry the step+turn identity onto the service (AC7). It is the ONLY shape that renders gate controls.
+  const appGate = (over: Partial<FlowLoopView> = {}): FlowLoopView =>
+    loop({ status: 'complete', actionable: true, gateOptions: ['approve'], appTurn: { step: 'plan', turnKey: 'consolidate-plan' }, iteration: 2, verdict: 'clean', ...over });
+
   it('groups the gate-decision buttons in a labelled group so AT announces their purpose (WCAG 4.1.2)', () => {
-    const panel = createLoopPanel(host, {
-      githubRef: () => Promise.resolve(null),
-      openExternal: () => {},
-      gateDecision: () => {},
-    });
-    panel.render(loop({ status: 'awaiting-human-plan-approval', gateOptions: ['approve', 'request-changes', 'impasse'] }), 'plan');
+    const panel = createLoopPanel(host, { githubRef: () => Promise.resolve(null), openExternal: () => {}, appGateDecision: () => {}, composeFeedback: () => {} });
+    panel.render(appGate({ gateOptions: ['approve', 'request-changes', 'impasse'] }), 'plan');
     const group = host.querySelector<HTMLElement>('.gatebar');
     expect(group?.getAttribute('role')).toBe('group');
     expect((group?.getAttribute('aria-label') ?? '').length).toBeGreaterThan(0);
   });
 
   it('gives the abbreviated "changes" button an unabbreviated accessible name (WCAG 2.4.6 / 2.5.3)', () => {
-    const panel = createLoopPanel(host, {
-      githubRef: () => Promise.resolve(null),
-      openExternal: () => {},
-      gateDecision: () => {},
-    });
-    panel.render(loop({ status: 'awaiting-human-plan-approval', gateOptions: ['approve', 'request-changes', 'impasse'] }), 'plan');
+    const panel = createLoopPanel(host, { githubRef: () => Promise.resolve(null), openExternal: () => {}, appGateDecision: () => {}, composeFeedback: () => {} });
+    panel.render(appGate({ gateOptions: ['approve', 'request-changes', 'impasse'] }), 'plan');
     const btn = host.querySelector<HTMLButtonElement>('[data-gate-option="request-changes"]')!;
     expect(btn.textContent).toBe('changes'); // visible label stays compact
     const name = btn.getAttribute('aria-label') ?? '';
@@ -248,56 +189,29 @@ describe('docked loop panel (§24.2.3 T2)', () => {
     expect(name).toContain('request'); // …and is not the bare abbreviation
   });
 
-  it('omits the "mark turn complete" control when no markTurnComplete service is injected (inert-affordance, WCAG 4.1.2)', () => {
-    // The control does nothing without deps.markTurnComplete; rendering an operable-looking button that
-    // is inert on activation misleads every user, AT included. Gate it on the service like the gate bar.
-    const panel = createLoopPanel(host, {
-      githubRef: () => Promise.resolve(null),
-      openExternal: () => {},
-    });
-    panel.render(loop({ status: 'plan-draft' }), 'plan');
-    expect(host.querySelector('[data-loop-mark-complete]')).toBeNull();
-  });
-
   it('renders NO gate-decision buttons when the gate offers no options (mid-work / terminal)', () => {
-    const panel = createLoopPanel(host, {
-      githubRef: () => Promise.resolve(null),
-      openExternal: () => {},
-      gateDecision: () => {},
-    });
-    panel.render(loop({ status: 'plan-draft' }), 'plan'); // no gateOptions
+    const panel = createLoopPanel(host, { githubRef: () => Promise.resolve(null), openExternal: () => {}, appGateDecision: () => {} });
+    panel.render(appGate({ gateOptions: [] }), 'plan'); // an appTurn view but no options to offer
     expect(host.querySelector('[data-gate-option]')).toBeNull();
   });
 
   it('renders a §27 run-less def\'s gate options display-only: the read-only row, but NO decision buttons (AC 1)', () => {
-    const panel = createLoopPanel(host, {
-      githubRef: () => Promise.resolve(null),
-      openExternal: () => {},
-      gateDecision: () => {},
-    });
-    // A §27 run-less view: gate options present but not actionable, no round has run.
+    const panel = createLoopPanel(host, { githubRef: () => Promise.resolve(null), openExternal: () => {}, appGateDecision: () => {} });
+    // A §27 run-less view: gate options present but not actionable, no round has run, no appTurn.
     panel.render(loop({ status: 'not-started', actionable: false, gateOptions: ['approve', 'request-changes'], iteration: undefined }), 'plan');
     expect(row('gate options')?.querySelector('.lv')?.textContent).toBe('approve · changes');
     expect(host.querySelector('[data-gate-option]')).toBeNull();
   });
 
-  // §27.9/N5 — the ACTIONABLE §27 terminal gate: a view carrying appTurn (the step+turn identity) + declared
-  // gateOptions + actionable renders clickable controls that route to the identity-carrying appGateDecision,
-  // NEVER the §26 gateDecision (AC8), and carry the step+turn identity onto the service (AC7).
-  const appGate = (over: Partial<FlowLoopView> = {}): FlowLoopView =>
-    loop({ status: 'complete', actionable: true, gateOptions: ['approve'], appTurn: { step: 'plan', turnKey: 'consolidate-plan' }, iteration: 2, verdict: 'clean', ...over });
-
-  it('routes a §27 gate decision to appGateDecision with the step+turn identity, never §26 gateDecision (AC7/AC8)', () => {
+  it('routes a §27 gate decision to appGateDecision with the step+turn identity (AC7/AC8)', () => {
     const appGateDecision = vi.fn();
-    const gateDecision = vi.fn();
-    const panel = createLoopPanel(host, { githubRef: () => Promise.resolve(null), openExternal: () => {}, appGateDecision, gateDecision });
+    const panel = createLoopPanel(host, { githubRef: () => Promise.resolve(null), openExternal: () => {}, appGateDecision });
     panel.render(appGate(), 'plan');
     const btn = host.querySelector<HTMLButtonElement>('[data-gate-option="approve"]');
     expect(btn).not.toBeNull();
     btn!.click();
     expect(appGateDecision).toHaveBeenCalledTimes(1);
     expect(appGateDecision).toHaveBeenCalledWith('plan', 'consolidate-plan', 'approve');
-    expect(gateDecision).not.toHaveBeenCalled(); // the §26 executor is never fired for a §27 gate (AC8)
   });
 
   it('routes a §27 request-changes to the feedback composer, not straight to appGateDecision (§27.9/AC4)', () => {
@@ -382,11 +296,10 @@ describe('docked loop panel (§24.2.3 T2)', () => {
     expect(host.querySelector('[data-gate-option="request-changes"]')).toBeNull();
   });
 
-  it('renders NO §27 gate buttons when appGateDecision is not injected, even if §26 gateDecision is (inert-affordance, WCAG 4.1.2)', () => {
-    const gateDecision = vi.fn();
-    const panel = createLoopPanel(host, { githubRef: () => Promise.resolve(null), openExternal: () => {}, gateDecision });
+  it('renders NO §27 gate buttons when appGateDecision is not injected (inert-affordance, WCAG 4.1.2)', () => {
+    const panel = createLoopPanel(host, { githubRef: () => Promise.resolve(null), openExternal: () => {} });
     panel.render(appGate(), 'plan');
-    // The read-only gate-options row still shows, but no clickable control routes to the wrong (§26) service.
+    // The read-only gate-options row still shows, but with no decision service wired no clickable control renders.
     expect(row('gate options')).not.toBeUndefined();
     expect(host.querySelector('[data-gate-option]')).toBeNull();
   });
@@ -400,19 +313,6 @@ describe('docked loop panel (§24.2.3 T2)', () => {
     createLoopPanel(host).render(loop({ status: 'error', errorReason: 'no §27 def named plan-loop in any tier', iteration: undefined }), 'plan');
     expect(row('reason')?.querySelector('.lv')?.textContent).toBe('no §27 def named plan-loop in any tier');
     expect(row('iteration')).toBeUndefined();
-  });
-
-  it('renders NO Retry on a run-less §27 failure (no turn to re-drive), but does on a §26 turn error (WCAG 4.1.2)', () => {
-    const deps = { githubRef: () => Promise.resolve(null), openExternal: () => {}, retryTurn: () => {} };
-    // §27 resolution failure: error and retryTurn wired, but no round has run — Retry (re-drive the
-    // turn) is inert here, so only the iteration guard keeps it from rendering an inert affordance.
-    createLoopPanel(host, deps).render(loop({ status: 'error', errorReason: 'no §27 def named plan-loop', iteration: undefined }), 'plan');
-    expect(host.querySelector('[data-loop-retry]')).toBeNull();
-    // §26 turn error: a round ran, so re-driving it is meaningful — Retry renders.
-    document.body.innerHTML = '<aside id="loop-panel"></aside>';
-    const host2 = document.getElementById('loop-panel')!;
-    createLoopPanel(host2, deps).render(loop({ status: 'error', errorReason: 'no Claude at the prompt', iteration: 3 }), 'plan');
-    expect(host2.querySelector('[data-loop-retry]')).not.toBeNull();
   });
 
   // §27.12c — a §27 work turn that stopped in `error` (no round has run, so `appTurn` carries the identity
@@ -435,8 +335,6 @@ describe('docked loop panel (§24.2.3 T2)', () => {
     expect(
       host.querySelector('[data-app-route-out="terminate"]')?.getAttribute('aria-label'),
     ).toBe('Terminate flow from the plan work turn');
-    // The §26 turn-error Retry is NOT rendered for a §27 error (no iteration): the §27 route-out replaces it.
-    expect(host.querySelector('[data-loop-retry]')).toBeNull();
   });
 
   it('each §27 route-out button fires the injected service with its step+turn identity (§6)', () => {
@@ -463,10 +361,10 @@ describe('docked loop panel (§24.2.3 T2)', () => {
 
   it('removes the §27 route-out group IN PLACE when a live turn recovers error → working (structuralSig omits status)', () => {
     // A §27 error and working view share one structural signature (structuralSig excludes loop.status and
-    // keys only on iteration PRESENCE, absent for both), so a Retry re-pull goes through patchInPlace →
+    // keys only on iteration PRESENCE, absent for both), so a re-pull goes through patchInPlace →
     // syncAppRouteOut, exercising the in-place removal. If that regressed, stale retry/accept/terminate
-    // controls would sit over a now-running turn and route-out against a live turn. Mirrors §26's
-    // "removes the reason row in place when the status recovers from error".
+    // controls would sit over a now-running turn and route-out against a live turn — the same in-place
+    // removal the reason row gets when the status recovers from error.
     const { deps } = appRouteOutDeps();
     const panel = createLoopPanel(host, deps);
     panel.render(loop({ status: 'error', errorReason: 'stalled: no terminal activity', iteration: undefined, appTurn: { step: 'plan', turnKey: 'work-plan' } }), 'plan');
@@ -491,16 +389,6 @@ describe('docked loop panel (§24.2.3 T2)', () => {
       'plan',
     );
     expect(host.querySelector('[data-app-route-out="retry"]')).toBeNull();
-  });
-
-  it('shows no "mark turn complete" control when there is no loop step (refs-only panel)', () => {
-    const panel = createLoopPanel(host, {
-      githubRef: () => Promise.resolve(null),
-      openExternal: () => {},
-      markTurnComplete: () => {},
-    });
-    panel.render(null, 'plan', { ticket: 176 }); // ticket/PR popout, no loop mirror
-    expect(host.querySelector('[data-loop-mark-complete]')).toBeNull();
   });
 
   it('does not rebuild the DOM when re-rendered with unchanged content (no flicker on a no-op push)', () => {
@@ -877,5 +765,103 @@ describe('docked loop panel — ticket/PR refs (§24.2.3 T7)', () => {
     await flush();
     expect(refRow('Ticket')?.textContent).toContain('#25');
     expect(refRow('Ticket')?.querySelector('a.reflink')).toBeNull();
+  });
+});
+
+// The N8 sweep's split of this organism (§B.9): the surviving State section is relabelled off the retired
+// file, the five repo-authored display sinks are stripped (CWE-117 / CWE-1007), the gate row is affirmative
+// on both conjuncts (appTurn present AND appGateDecision injected), and focus routes to the surviving
+// control. AC 3's behavior-preserving rule does not cover the labels an operator reads (AC 9).
+describe('docked loop panel — the sweep split (§B.9)', () => {
+  const BIDI = '‮'; // right-to-left override — a DISPLAY_UNSAFE byte that reorders an accessible name
+
+  const appGate = (over: Partial<FlowLoopView> = {}): FlowLoopView =>
+    loop({ status: 'complete', actionable: true, gateOptions: ['approve'], appTurn: { step: 'plan', turnKey: 'consolidate-plan' }, iteration: 2, ...over });
+
+  it('labels the surviving state section "State", naming the run state — not the retired file path (AC 9)', () => {
+    createLoopPanel(host).render(loop(), 'build');
+    const segH = host.querySelector<HTMLElement>('.lbody .seg-h');
+    // positive: the section is still labelled (the .ldl live region's SC 1.3.1 heading survives)…
+    expect(segH?.textContent).toBe('State');
+    // …negative: and it no longer names the retired .agent-loop/state.yaml file.
+    expect(host.textContent).not.toContain('.agent-loop/state.yaml');
+  });
+
+  it('strips a bidi override from the error reason on BOTH the create and the patch path (CWE-117)', () => {
+    const panel = createLoopPanel(host);
+    // create path — first render of an error view builds the reason row
+    panel.render(loop({ status: 'error', errorReason: `no Claude${BIDI} at the prompt` }), 'build');
+    expect(row('reason')?.querySelector('.lv')?.textContent).not.toContain(BIDI);
+    // patch path — structuralSig excludes errorReason, so a changed reason patches the SAME node
+    panel.render(loop({ status: 'error', errorReason: `still${BIDI} no Claude` }), 'build');
+    expect(row('reason')?.querySelector('.lv')?.textContent).not.toContain(BIDI);
+  });
+
+  it('strips a bidi override from the verdict reason across create and patch (syncNamedRow, CWE-117)', () => {
+    const panel = createLoopPanel(host);
+    panel.render(appGate({ verdict: 'stop for a human', verdictReason: `they${BIDI} disagree` }), 'plan');
+    expect(row('verdict reason')?.querySelector('.lv')?.textContent).not.toContain(BIDI);
+    panel.render(appGate({ verdict: 'stop for a human', verdictReason: `still${BIDI} disagree` }), 'plan');
+    expect(row('verdict reason')?.querySelector('.lv')?.textContent).not.toContain(BIDI);
+  });
+
+  it('strips a bidi override planted in a gate option: visible "changes", accessible name clean and still reading "request" (WCAG 2.5.3)', () => {
+    const appGateDecision = vi.fn();
+    const composeFeedback = vi.fn();
+    const panel = createLoopPanel(host, { githubRef: () => Promise.resolve(null), openExternal: () => {}, appGateDecision, composeFeedback });
+    panel.render(appGate({ gateOptions: ['approve', `request-changes${BIDI}`] }), 'plan');
+    // the trailing override trims off, so the option still abbreviates to the compact visible label…
+    const btn = [...host.querySelectorAll<HTMLButtonElement>('[data-gate-option]')].find((b) => b.textContent === 'changes');
+    expect(btn).toBeDefined();
+    const name = btn!.getAttribute('aria-label') ?? '';
+    expect(name).not.toContain(BIDI); // …no override reaches the accessible name…
+    expect(name).toContain('request'); // …which is still the unabbreviated form (label-in-name)
+  });
+
+  it('strips a bidi override from the step in the arm-interrupt aria-label, but dispatches the RAW step identity (§6, CWE-117)', () => {
+    const armInterrupt = vi.fn();
+    const step = `plan${BIDI}`;
+    createLoopPanel(host, { githubRef: () => Promise.resolve(null), openExternal: () => {}, armInterrupt }).render(
+      loop({ status: 'working', iteration: 2, appTurn: { step, turnKey: 'review-plan' } }),
+      'plan',
+    );
+    const btn = host.querySelector<HTMLElement>('[data-arm-interrupt]')!;
+    expect(btn.getAttribute('aria-label')).not.toContain(BIDI); // the announced name is stripped…
+    btn.click();
+    expect(armInterrupt).toHaveBeenCalledWith(step); // …but the dispatched identity is the RAW planted id (§6)
+  });
+
+  it('strips a bidi override from the step in the route-out aria-labels, dispatching the RAW step (§6)', () => {
+    const appRouteOut = vi.fn();
+    const step = `plan${BIDI}`;
+    createLoopPanel(host, { githubRef: () => Promise.resolve(null), openExternal: () => {}, appRouteOut }).render(
+      loop({ status: 'error', errorReason: 'x', iteration: undefined, appTurn: { step, turnKey: 'work-plan' } }),
+      'plan',
+    );
+    for (const el of host.querySelectorAll<HTMLElement>('[data-app-route-out]')) {
+      expect(el.getAttribute('aria-label')).not.toContain(BIDI);
+    }
+    host.querySelector<HTMLElement>('[data-app-route-out="accept"]')!.click();
+    expect(appRouteOut).toHaveBeenCalledWith(step, 'work-plan', 'accept');
+  });
+
+  it('renders NO gate buttons on a view carrying gateOptions but NO appTurn, even with appGateDecision wired (affirmative gate, WCAG 4.1.2)', () => {
+    // The negation-collapse bug: dropping the appTurn conjunct would render buttons whose click reaches
+    // appGateDecision(appTurn.step, …) with no turn identity — an inert control at a destructive gate.
+    const appGateDecision = vi.fn();
+    createLoopPanel(host, { githubRef: () => Promise.resolve(null), openExternal: () => {}, appGateDecision }).render(
+      loop({ status: 'awaiting-human-plan-approval', gateOptions: ['approve', 'request-changes'] }), // no appTurn
+      'plan',
+    );
+    expect(row('gate options')).toBeDefined(); // the read-only preview still renders…
+    expect(host.querySelector('[data-gate-option]')).toBeNull(); // …but no clickable control without a turn
+  });
+
+  it('focusDecision lands on the route-out on a §27 error view carrying a turn (the surviving control, WCAG 2.4.3)', () => {
+    const appRouteOut = vi.fn();
+    const panel = createLoopPanel(host, { githubRef: () => Promise.resolve(null), openExternal: () => {}, appRouteOut });
+    panel.render(loop({ status: 'error', errorReason: 'stalled', iteration: undefined, appTurn: { step: 'plan', turnKey: 'work-plan' } }), 'plan');
+    expect(panel.focusDecision()).toBe(true);
+    expect(document.activeElement).toBe(host.querySelector('[data-app-route-out]')); // the first route-out button
   });
 });
