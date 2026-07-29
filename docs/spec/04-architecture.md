@@ -36,7 +36,7 @@ flowchart LR
     SHADOW -- "active→quiet scan" --> SCAN
     SCAN -- "monitor:event (semantic)" --> STORE
     SHADOW -- "OSC 133 marks" --> CMD
-    CMD -- "closed-span ranges + hosted-agent presence (§15.6/§26.2)" --> SCAN
+    CMD -- "closed-span ranges + hosted-agent presence (§15.6/§27.2)" --> SCAN
     ACT -- "agent:inject {text, submit}" --> Preload --> INJ --> PTY
 ```
 
@@ -66,13 +66,13 @@ After PTY writes settle (debounced), main reads shadow state — `buffer.active.
 On `ptyProcess.onExit` → main sends `pty:exit` → both panes show a notice. On window close → main kills the PTY and disposes the shadow.
 
 **G2. Flow audit record (observe-only)** — *§25*
-A main-process recorder taps the flow lifecycle, the TODO store, the agent-loop `state.yaml` mirror, and OSC-133 command spans, and writes a per-run append-only YAML record under `~/.agent-terminal/audit/`. It is observe-only and best-effort — it injects nothing and never throws into the flow path. This overview omits it from the component diagram above (whose flow/TODO/loop sources are themselves not depicted there); its lifecycle is the §25.4 `stateDiagram-v2` and its event vocabulary is §25.5.
+A main-process recorder taps the flow lifecycle, the TODO store, the surviving engine's run state, and OSC-133 command spans, and writes a per-run append-only YAML record under `~/.agent-terminal/audit/`. It is observe-only and best-effort — it injects nothing and never throws into the flow path. This overview omits it from the component diagram above (whose flow/TODO/loop sources are themselves not depicted there); its lifecycle is the §25.4 `stateDiagram-v2` and its event vocabulary is §25.5.
 
 **H. Agent-semantic capture (shadow → event store → monitor)** — *§15.2/§15.3*
 On the active→quiet transition (§8.3), the **semantic scanner** reads the shadow buffer from a marker watermark, dispatches the scan window to the per-agent adapters (or the generic heuristic fallback when none match), dedups regions by content, and emits each new region on `monitor:event` (`source: shadow-scan` / `heuristic`). Detection only — the scanner never acts on what it finds.
 
 **I. Command-output capture (OSC 133 → command tracker → monitor)** — *§15.5*
-The **command tracker** segments the stream into command spans from OSC 133 marks (`A` prompt-start, `B` command-start, `C` output-start, `D;exit` finished), keyed off the marks and independent of the §8.3 quiescence machinery. The spans are consumed **entirely in the main process**: closed-span output ranges gate the generic heuristic so command output is not mistaken for an agent prompt (§15.6), and the live spans drive hosted-agent presence (§26.2) and the shell-busy signal. (The former renderer-facing command-history channels — `monitor:commands` / `monitor:commandsChanged` / `monitor:captureCommandText` / `monitor:clearCommands` — were removed in v2.132 along with the Capture-selection button that was their only consumer; the tracker's own capture capability is retained and unit-tested.)
+The **command tracker** segments the stream into command spans from OSC 133 marks (`A` prompt-start, `B` command-start, `C` output-start, `D;exit` finished), keyed off the marks and independent of the §8.3 quiescence machinery. The spans are consumed **entirely in the main process**: closed-span output ranges gate the generic heuristic so command output is not mistaken for an agent prompt (§15.6), and the live spans drive hosted-agent presence (§27.2) and the shell-busy signal. (The former renderer-facing command-history channels — `monitor:commands` / `monitor:commandsChanged` / `monitor:captureCommandText` / `monitor:clearCommands` — were removed in v2.132 along with the Capture-selection button that was their only consumer; the tracker's own capture capability is retained and unit-tested.)
 
 ---
 

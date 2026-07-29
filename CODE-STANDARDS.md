@@ -61,8 +61,8 @@ claim about the code that is not true — widen it only when a caller needs it.
 A tree-walk whose emptiness would be a silent DATA problem uses this module: an **absent** directory yields
 `[]` (an optional subtree legitimately has no files), an **unreadable** one **throws**. Conflating them is
 how a mispackaged bundle plans zero files and reports a *successful install of nothing* — so the install
-walk uses it. A best-effort *reader* that treats any failure as "nothing to show" (the cost meter's logs,
-the todo-template picker) is a different, correct policy — the rule is not "every readdir routes here."
+walk uses it. A best-effort *reader* that treats any failure as "nothing to show" (the todo-template
+picker) is a different, correct policy — the rule is not "every readdir routes here."
 
 ## Validating an untrusted value that feeds a safety limit — where, and which way it fails
 
@@ -73,22 +73,24 @@ in two places, and the two are **not redundant**.
 **Field-local constraints go at the untrusted read boundary; a relational constraint goes at the use
 site.** The reader enforces everything judgeable about the value *alone* — finite, non-negative, integer —
 degrading anything else to the safe default. A constraint relating the value to *another* the reader does
-not have in scope belongs where both operands are live. `cap_baseline` (§26.6/§26.8) is decoded by
-`loopStateReader` as a finite non-negative integer or `0`, but its real invariant — `cap_baseline <=
-iteration` — is checked in `decideConsolidateOutcome`, where `iteration` exists. **Passing the
-read-boundary gate is not proof the relational invariant holds**; treating "the reader already validated
-it" as sufficient is the bug.
+not have in scope belongs where both operands are live. This was the shape of a real defect in the retired
+loop engine: its `cap_baseline` field was decoded at the read boundary as a finite non-negative integer or
+`0`, but its real invariant — `cap_baseline <= iteration` — was checked only where `iteration` was also
+live. **Passing the read-boundary gate is not proof the relational invariant holds**; treating "the reader
+already validated it" as sufficient is the bug.
 
 **A normalization that feeds a safety limit fails TOWARD the limit still firing, never away from it.** Out
-of range, the fallback is the one that *preserves* the backstop — `cap_baseline` degrades to `0`, the
-monotonic window `iteration - 0`, so the cap fires exactly as with no reset — never one that silently
+of range, the fallback is the one that *preserves* the backstop — `cap_baseline` degraded to `0`, the
+monotonic window `iteration - 0`, so the cap fired exactly as with no reset — never one that silently
 disables it. The sharpest corollary: **when you change how a limit is computed, re-derive whether
 out-of-range inputs still fail safe.** That is where the defect lived — moving the cap test from `iteration
 >= cap` to `iteration - cap_baseline >= cap` *flipped the safe direction*: a planted `cap_baseline` larger
-than `iteration` (or `NaN` / `±Inf`) drove the subtraction negative or incomparable, so the §26.8 runaway
+than `iteration` (or `NaN` / `±Inf`) drove the subtraction negative or incomparable, so the runaway
 backstop went from "fires early" to **never fires** — unbounded autonomous iteration out of one line of
-untrusted YAML (CWE-20/770). The fix is the two layers above, each with a RED test: the reader over the
-hostile numeric family (`-1`, `NaN`, `±Inf`, non-integer), the decision over `cap_baseline > iteration`.
+untrusted YAML (CWE-20/770). The fix was the two layers above, each with a RED test: the reader over the
+hostile numeric family (`-1`, `NaN`, `±Inf`, non-integer), the decision over `cap_baseline > iteration`. The
+retired engine and its persisted iteration cap are gone (the surviving engine's consolidator stops for a
+human instead); the rule they illustrate does not depend on either surviving.
 
 ## An agent-produced artifact contract — one vocabulary, a self-validating example, a minimal predicate
 
@@ -162,10 +164,11 @@ The `sessionId`-on-every-payload rule is one instance; this is the principle. Am
 repo, selected pane — moves between the moment a message is *raised* and the moment it is *answered*, so a
 receiver that reaches for "the current repo" instead of reading it off the message will eventually act on
 the wrong one. **For a destructive or outward-facing action this is a data-loss defect, not a tidiness
-one:** `flow:onBootstrapConflict` shipped without a `repoKey`, so a conflict raised for repo A could be
-answered against whatever repo the user had since `cd`'d into — and the answer wipes a branch and closes
-its PR. Bind the handler to the identity the message carries (`wireBootstrapConflict` takes it injected,
-no cwd dependency), never to a `repoKey()` the handler looks up for itself.
+one:** the retired engine's `flow:onBootstrapConflict` shipped without a `repoKey`, so a conflict raised for
+repo A could be answered against whatever repo the user had since `cd`'d into — and the answer wipes a
+branch and closes its PR. The surviving `flow:onAppBootstrapConflict` pair carries the fix forward: bind the
+handler to the identity the message carries (`wireAppBootstrapConflict` takes the `repoKey` and `step` the
+message injects, no cwd dependency), never to a `repoKey()` the handler looks up for itself.
 
 ## Delayed consent and asynchronous results act only on the exact occurrence they were raised for
 
@@ -256,8 +259,8 @@ A state is unrecoverable when the user cannot get back to a good state through t
 surgery (hand-editing `state.yaml`/`flow-state.yaml`, deleting `.agent-loop/`, running `git`/`gh` by hand,
 restarting the app to clear stuck in-memory state). Design every operation so that on failure it **rolls
 back to the prior good state or forward to one with a visible next action** — never a dead end. This is why
-a failed bootstrap reverts the flow (§26.9) rather than leaving it half-advanced, and why a stuck turn
-stops in a first-class `error` status with a retry/impasse affordance (§26.3/D48) rather than hanging. When
+a failed bootstrap reverts the flow (§27.10) rather than leaving it half-advanced, and why a stuck turn
+stops in a first-class `error` status with a retry/impasse affordance (§27.12/D48) rather than hanging. When
 a change could introduce a path with no UI route out — or when you cannot tell whether one exists — **stop
 and ask the operator before building it.**
 
@@ -351,7 +354,7 @@ load-bearing cost paid by the tests that cannot use it.** Make the fixture opt-o
 
 ## One theme per PR
 
-A branch that accumulates unrelated themes is not reviewable, by a human or by the §26 persona fan-out:
+A branch that accumulates unrelated themes is not reviewable, by a human or by the §27.4 persona fan-out:
 reviewer recall falls with surface area while a mechanical per-hunk pass's does not, which is exactly how a
 5,782-line, 8-theme branch passed an 11-persona round and then collected 21 valid findings from an
 automated reviewer. If a branch grows a second theme, it wants a second PR — or, when the themes genuinely
