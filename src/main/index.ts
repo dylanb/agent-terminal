@@ -417,8 +417,6 @@ async function createWindow(): Promise<void> {
   const flowEntryActions = createFlowEntryActions({
     isShellBusy: () => tracker.summaries().some((s) => s.running),
     inject: (text) => inject(text, { submit: false }),
-    runPickup: runPickupForStep,
-    resumeLoop: resumeLoopForStep,
     // §27.15/§27.3 — an app-namespace step binds the §27 engine: start its work turn (run the declared
     // boundary, inject the work prompt once when injectable), NEVER a §26 run. The engine no-ops when the
     // def fails to resolve — the run-less/failure view (deriveAppLoopView) is the operator's surface then.
