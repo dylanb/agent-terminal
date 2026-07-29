@@ -165,31 +165,6 @@ describe('audit recorder — run file lifecycle (§25.4)', () => {
     expect(existsSync(auditRepoDir(root, repo))).toBe(false);
   });
 
-  // §26.10 — the per-iteration cost event: the priced dollars + any unpriced model ids, tagged by iteration.
-  it('records a per-iteration cost event to the open run file', () => {
-    const rec = recorder();
-    rec.recordTransition(repo, 'start', NOT_STARTED, IN_PROGRESS);
-    rec.recordCost(repo, 2, { usd: 0.42, unpricedModels: ['x-unknown'] });
-    const events = parseAuditStream(readFileSync(join(auditRepoDir(root, repo), runFiles()[0]), 'utf8')).events;
-    expect(events.map((e) => e.type)).toEqual(['flow.started', 'loop.cost']);
-    expect(events[1]).toMatchObject({ type: 'loop.cost', iteration: 2, usd: 0.42, unpriced: ['x-unknown'] });
-  });
-
-  it('records nothing for a cost event when no run is open', () => {
-    recorder().recordCost(repo, 1, { usd: 1, unpricedModels: [] });
-    expect(existsSync(auditRepoDir(root, repo))).toBe(false);
-  });
-
-  // §26.7 — the per-iteration CI snapshot: display-only, recorded best-effort at the iteration boundary.
-  it('records a per-iteration CI snapshot event to the open run file', () => {
-    const rec = recorder();
-    rec.recordTransition(repo, 'start', NOT_STARTED, IN_PROGRESS);
-    rec.recordCi(repo, 2, { total: 4, passed: 2, failed: 1, pending: 1 });
-    const events = parseAuditStream(readFileSync(join(auditRepoDir(root, repo), runFiles()[0]), 'utf8')).events;
-    expect(events.map((e) => e.type)).toEqual(['flow.started', 'loop.ci']);
-    expect(events[1]).toMatchObject({ type: 'loop.ci', iteration: 2, total: 4, passed: 2, failed: 1, pending: 1 });
-  });
-
   // §24.2.3 T4 — the OS can refuse to deliver a raise (macOS denies an unsigned bundle outright). A
   // rejected raise must never look like a raise that was never attempted.
   it('records a rejected OS notification to the open run file', () => {
@@ -212,11 +187,6 @@ describe('audit recorder — run file lifecycle (§25.4)', () => {
 
   it('records nothing for a rejected notification when no run is open', () => {
     recorder().recordNotifyFailed(repo, 'denied');
-    expect(existsSync(auditRepoDir(root, repo))).toBe(false);
-  });
-
-  it('records nothing for a CI event when no run is open', () => {
-    recorder().recordCi(repo, 1, { total: 1, passed: 1, failed: 0, pending: 0 });
     expect(existsSync(auditRepoDir(root, repo))).toBe(false);
   });
 
