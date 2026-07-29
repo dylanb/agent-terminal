@@ -752,3 +752,29 @@ describe('focusRing (the helper the ring pins are graded through)', () => {
     expect(contrast(focusRing(el), paintedBgBehindRing(el))).toBeGreaterThan(3);
   });
 });
+
+// §B.10a — the retired §26.10 cost read-out (`.loop-cost`) is removed from the grouped rail rule it
+// shared with the surviving iteration read-out (`.loop-iter`). Editing the wrong line would leave
+// `.loop-iter,` dangling onto the next selector (`.car`), silently inheriting its 8px / margin-left:auto
+// and LOSING white-space:nowrap + flex-shrink:0 — breaking values mid-token in the 200px rail (WCAG
+// 1.4.10 Reflow, 1.4.4 Resize Text). This grades the PAINTED box, per CLAUDE.md's no-mock-CSS rule.
+describe('flow strip rail geometry (§B.10a — Reflow 1.4.10 / Resize 1.4.4)', () => {
+  beforeEach(() => {
+    card = document.createElement('div');
+    card.style.background = 'var(--card)';
+    document.body.replaceChildren(card);
+  });
+
+  it('the surviving iteration read-out keeps its own rail typography, not the car chevron\'s', () => {
+    const iter = mount(
+      '<div class="flowstrip"><span class="stat loopstat"><span class="v">' +
+        '<span class="mono loop-iter">iter 2</span>' +
+        '<span class="car" aria-hidden="true">▸</span>' +
+      '</span></span></div>',
+    ).querySelector('.loop-iter') as HTMLElement;
+    const cs = getComputedStyle(iter);
+    expect(cs.fontSize).toBe('11px'); // the group's size, never the .car chevron's 8px
+    expect(cs.whiteSpace).toBe('nowrap');
+    expect(cs.flexShrink).toBe('0');
+  });
+});

@@ -363,21 +363,54 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     expect(host.querySelector('.flow-undo')).toBeNull();
   });
 
-  it('renders a one-shot notice returned by start(), and a re-pull clears it (§24.2.2 S4)', async () => {
-    const notified: FlowStateView = {
-      stepName: '/repo-step',
-      steps: ['/repo-step'],
-      position: 1,
-      total: 1,
-      status: 'in_progress',
-      notice: 'agent is busy — wait or interrupt, then retry',
-    };
+  const inProgress = (notice?: string): FlowStateView => ({
+    stepName: '/repo-step',
+    steps: ['/repo-step'],
+    position: 1,
+    total: 1,
+    status: 'in_progress',
+    ...(notice ? { notice } : {}),
+  });
+
+  it('holds a transition notice across a passive re-pull, clearing it only on the NEXT transition (§B.10 carrier, AC5)', async () => {
+    // AC 5's migration notice arrives on the transition that enters the step; the ordinary success push
+    // then drives a passive state re-pull carrying NO notice. Under the pre-sweep one-shot rule that
+    // re-pull erased it before the operator could read it — the defect §B.5 position 6 names. The strip
+    // now holds it across passive re-pulls and drops it only on the next transition.
     const deps = {
-      state: vi.fn(
-        async (): Promise<FlowStateView> => ({ stepName: '/repo-step', steps: ['/repo-step'], position: 1, total: 1, status: 'not_started' }),
-      ),
-      start: vi.fn(async (): Promise<FlowStateView> => notified),
-      advance: vi.fn(),
+      state: vi.fn(async (): Promise<FlowStateView> => inProgress()), // passive pulls carry no notice
+      start: vi.fn(),
+      advance: vi.fn(async (): Promise<FlowStateView> => inProgress()), // the clearing transition
+      restart: vi.fn(),
+      undo: vi.fn(),
+      terminate: vi.fn(),
+      provideInput: vi.fn(),
+      onStatusBar: vi.fn(),
+      onStateChanged: noopSub,
+    };
+    deps.advance.mockResolvedValueOnce(inProgress('migrated: retired-schema customizations were not carried across'));
+    const strip = createFlowStrip(host, deps);
+    strip.onRepoChanged('/repo');
+    await vi.waitFor(() => expect(control()!.textContent).toBe('Advance'));
+
+    control()!.click(); // transition #1 raises the migration notice
+    await vi.waitFor(() => expect(host.querySelector('.flow-notice')?.textContent).toContain('migrated'));
+
+    await strip.refresh(); // passive re-pull, state() carries no notice → HELD, not erased
+    expect(host.querySelector('.flow-notice')).not.toBeNull();
+
+    control()!.click(); // transition #2 carries no notice → clears the held line
+    await vi.waitFor(() => expect(host.querySelector('.flow-notice')).toBeNull());
+  });
+
+  it('joins a passive re-pull\'s own notice to the held transition notice — both render (§B.10 carrier, AC5+AC10)', async () => {
+    // The migration notice rides the transition; the coordinator's asynchronous §19.3 refusal (§B.5 item
+    // 6) arrives on a LATER passive state push. They are on different responses, so the seam cannot join
+    // them — the strip must, and neither may drop the other.
+    const deps = {
+      state: vi.fn(async (): Promise<FlowStateView> => inProgress()),
+      start: vi.fn(),
+      advance: vi.fn(async (): Promise<FlowStateView> => inProgress('migrated: retired-schema customizations were not carried across')),
       restart: vi.fn(),
       undo: vi.fn(),
       terminate: vi.fn(),
@@ -387,15 +420,39 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     };
     const strip = createFlowStrip(host, deps);
     strip.onRepoChanged('/repo');
-    await vi.waitFor(() => expect(control()!.textContent).toBe('Start'));
+    await vi.waitFor(() => expect(control()!.textContent).toBe('Advance'));
+    control()!.click(); // transition raises the migration notice
+    await vi.waitFor(() => expect(host.querySelector('.flow-notice')?.textContent).toContain('migrated'));
 
+    // A later passive push carries the coordinator's own busy-shell refusal.
+    deps.state.mockResolvedValueOnce(inProgress('agent is busy — wait or interrupt, then retry'));
+    await strip.refresh();
+
+    const notices = [...host.querySelectorAll('.flow-notice')].map((n) => n.textContent).join(' | ');
+    expect(notices).toContain('migrated');
+    expect(notices).toContain('agent is busy');
+  });
+
+  it('clears the held notice on a repo change — it belongs to the prior repo\'s step (§B.10 carrier)', async () => {
+    const deps = {
+      state: vi.fn(async (): Promise<FlowStateView> => inProgress()),
+      start: vi.fn(),
+      advance: vi.fn(async (): Promise<FlowStateView> => inProgress('migrated: retired-schema customizations were not carried across')),
+      restart: vi.fn(),
+      undo: vi.fn(),
+      terminate: vi.fn(),
+      provideInput: vi.fn(),
+      onStatusBar: vi.fn(),
+      onStateChanged: noopSub,
+    };
+    const strip = createFlowStrip(host, deps);
+    strip.onRepoChanged('/repo');
+    await vi.waitFor(() => expect(control()!.textContent).toBe('Advance'));
     control()!.click();
-    await vi.waitFor(() =>
-      expect(host.querySelector('.flow-notice')?.textContent).toContain('agent is busy'),
-    );
+    await vi.waitFor(() => expect(host.querySelector('.flow-notice')).not.toBeNull());
 
-    await strip.refresh(); // state() carries no notice → the one-shot line clears (§24.2.2 S4)
-    expect(host.querySelector('.flow-notice')).toBeNull();
+    strip.onRepoChanged('/other-repo');
+    await vi.waitFor(() => expect(host.querySelector('.flow-notice')).toBeNull());
   });
 
   it('carries no template picker — that moved to the todo overlay (§4.1/§9.1)', async () => {
@@ -580,72 +637,6 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     const readout = host.querySelector<HTMLElement>('.loopstat')!;
     expect(readout.textContent).not.toContain('iter');
     expect(host.querySelector('.loop-iter')).toBeNull();
-  });
-
-  it('renders the §26.10 cost readout on the loop read-out when the view carries one, omits it otherwise', async () => {
-    const withCost: FlowStateView = {
-      stepName: 'build',
-      steps: ['build'],
-      position: 1,
-      total: 1,
-      status: 'in_progress',
-      loop: { status: 'plan-draft', iteration: 2, pr: null, branch: null, ready: false, cost: '$0.42' },
-    };
-    const deps = {
-      state: vi.fn(async (): Promise<FlowStateView> => withCost),
-      start: vi.fn(),
-      advance: vi.fn(),
-      restart: vi.fn(),
-      undo: vi.fn(),
-      terminate: vi.fn(),
-      provideInput: vi.fn(),
-      onStatusBar: vi.fn(),
-      onStateChanged: noopSub,
-    };
-    createFlowStrip(host, deps).onRepoChanged('/repo');
-    await vi.waitFor(() => expect(host.querySelector('.loop-cost')).not.toBeNull());
-    expect(host.querySelector<HTMLElement>('.loop-cost')!.textContent).toBe('$0.42');
-
-    // A view with no cost renders no cost node (the strip shows nothing before an iteration records one).
-    deps.state.mockResolvedValue({ ...withCost, loop: { ...withCost.loop!, cost: undefined } });
-    createFlowStrip(host, deps).onRepoChanged('/repo2');
-    await vi.waitFor(() => expect(host.querySelector('.loopstat')).not.toBeNull());
-    expect(host.querySelector('.loop-cost')).toBeNull();
-  });
-
-  it('patches the §26.10 cost readout in place on a same-signature background push', async () => {
-    let view: FlowStateView = {
-      stepName: 'build',
-      steps: ['build'],
-      position: 1,
-      total: 1,
-      status: 'in_progress',
-      loop: { status: 'plan-draft', iteration: 1, pr: null, branch: null, ready: false, cost: '$0.10' },
-    };
-    let fire: () => void = () => {};
-    const deps = {
-      state: vi.fn(async (): Promise<FlowStateView> => view),
-      start: vi.fn(),
-      advance: vi.fn(),
-      restart: vi.fn(),
-      undo: vi.fn(),
-      terminate: vi.fn(),
-      provideInput: vi.fn(),
-      onStatusBar: vi.fn(),
-      onStateChanged: (cb: () => void) => {
-        fire = cb;
-        return () => {};
-      },
-    };
-    createFlowStrip(host, deps).onRepoChanged('/repo');
-    await vi.waitFor(() => expect(host.querySelector('.loop-cost')?.textContent).toBe('$0.10'));
-    // A live value-only push (iteration + cost changed, structure identical) patches the existing node.
-    view = { ...view, loop: { ...view.loop!, iteration: 2, cost: '$0.42' } };
-    fire();
-    await vi.waitFor(() => expect(host.querySelector('.loop-cost')?.textContent).toBe('$0.42'));
-    // WCAG SC 4.1.3 / 1.3.1: with the host aria-atomic=false, only the changed cost node is announced.
-    // Its visible text is a bare figure, so it must carry the "cost" context in its accessible name.
-    expect(host.querySelector('.loop-cost')?.getAttribute('aria-label')).toBe('cost $0.42');
   });
 
   it('omits aria-controls on the loop read-out when no panel id is injected (no hard-coded global id)', async () => {
@@ -990,8 +981,8 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     expect(seen.at(-1)).toBeNull();
   });
 
-  // §24.2.3 T3 — the prompt is transition-driven and one-shot (like `notice`): a passive `state()`
-  // re-pull must NOT pop it, else a background flow:onStateChanged refresh reopens the modal under the user.
+  // §24.2.3 T3 — the prompt is transition-driven: a passive `state()` re-pull must NOT pop it, else a
+  // background flow:onStateChanged refresh reopens the modal under the user.
   it('hands a step-entry input prompt to the composition root on a transition, and submit calls provideInput (§24.2.3 T3)', async () => {
     const seen: Array<{ names: string[]; stepName: string }> = [];
     let lastSubmit: ((v: Record<string, string>) => void) | undefined;

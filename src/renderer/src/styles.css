@@ -296,10 +296,9 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible { outline:2px so
 .flowstrip .loopstat[aria-expanded="true"] { border-color:var(--signal); }
 .flowstrip .loopstat .k { text-transform:uppercase; letter-spacing:.14em; font-size:9px; color:var(--dim); }
 /* Values wrap as whole items onto a second row, never inside themselves: a shrinkable flex item breaks
-   `$4104.09 +unknown` mid-value and interleaves it with `iter N` into unreadable columns in the 200px rail. */
+   the `iter N` read-out mid-value and interleaves it with the status pill into unreadable columns in the 200px rail. */
 .flowstrip .loopstat .v { display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
-.flowstrip .loopstat .loop-iter,
-.flowstrip .loopstat .loop-cost { font-size:11px; color:var(--dim); white-space:nowrap; flex-shrink:0; }
+.flowstrip .loopstat .loop-iter { font-size:11px; color:var(--dim); white-space:nowrap; flex-shrink:0; }
 .flowstrip .loopstat .car { font-size:8px; color:var(--dim); margin-left:auto; }
 
 /* generic status pill — an arbitrary per-LoopDef status maps onto one of three tones, never an
