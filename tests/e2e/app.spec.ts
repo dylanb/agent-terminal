@@ -14,9 +14,6 @@ import { TURN_DONE_FILENAME } from '../../src/shared/loopTurn';
 import { completionMarker } from '../../src/main/appWorkTurn';
 import { exampleRoundReport, REPORT_GRAMMAR } from '../../src/shared/roundReport';
 
-/** How long a falsely-completed work turn would need to fan the reviewers out. Comfortably longer than the
- *  chain's own settle, and well under the stall watchdog, so the absence it proves is a real absence. */
-const FALSE_COMPLETION_GRACE_MS = 6_000;
 
 // Full-loop e2e (§12 acceptance): real Electron, real node-pty, real bash.
 // Every launch pins APP_SHELL=bash so the bash-only shell-integration path (OSC 7/133, §15.5)
@@ -2009,7 +2006,6 @@ function seedRefsFlowRepo(prefix: string): { dir: string; stateFile: string } {
 
 const loopReadout = () => page.locator('#flow-strip .loopstat'); // compact rail read-out; click opens the panel
 const loopPanel = () => page.locator('#loop-panel');
-const statusActivity = () => page.locator('#status-bar .sb-activity');
 const statusAlert = () => page.locator('#status-bar [data-status-alert]');
 
 // Fire main's flow:revealLoop push directly (§24.2.3 T4) so the real renderer reveal path runs. The
@@ -2768,29 +2764,6 @@ async function driveToWorkTurn(
   }
 }
 
-// §26 D42a — a printed done-signal sentinel line must NOT complete a turn; only the .agent-loop/turn-done
-// FILE does. This regression pins the fix for the premature-completion bug: a real Claude Code TUI reflowed
-// the injected prompt on echo so the retired line-scanner matched the sentinel inside its own "print this
-// line" instruction and fired the NEXT turn while the agent was still working. Here the work turn writes
-// plan.md (so the artifact check would PASS) and prints the sentinel alone on a line, but writes NO
-// turn-done file — under the old line-scanner the reviewers fan-out would start; under the fix it must not.
-const turnEvents = (home: string, repo: string): Array<Extract<AuditEvent, { type: 'command' }>> => {
-  const files = auditRunFiles(home, repo);
-  if (files.length === 0) return [];
-  return readAuditRun(home, repo, files[0]).events.filter(
-    (e): e is Extract<AuditEvent, { type: 'command' }> => e.type === 'command' && e.source === 'turn',
-  );
-};
-
-// §26 D42a / §26.11 — resume/error-recovery must be keyed to the repo the operator is IN, not only the
-// launch root. `resumeLoop` ran once at launch against launchRoot; if the operator launched elsewhere and
-// cd'd into a repo whose run is stranded in `error`, the errored turn was never reconstructed, so the loop
-// panel's Retry / mark-turn-complete (which need the reconstructed activeTurn) did nothing. Fix: re-run the
-// resume reconstruction on cd-into-repo. Here the app launches in a NON-repo dir, then cd's into a repo
-// stranded in `error`; Retry must reconstruct the work turn and re-drive it (the run leaves error).
-// The reviews/<iter> directory for the plan phase's fan-out (§26.4).
-const reviewsDir = (repo: string): string => join(repo, '.agent-loop', 'reviews', '1');
-
 function seedCompletedAppBootstrap(dir: string, issue = 176): void {
   mkdirSync(join(dir, '.agent-terminal', 'loop'), { recursive: true });
   writeFileSync(
@@ -3172,12 +3145,6 @@ function withoutPickup(yaml: string): string {
 
 function withPickup(yaml: string, block: string): string {
   return yaml.replace(PICKUP_BLOCK, block);
-}
-
-function seedRepoPlanLoopOverride(repo: string): void {
-  const target = join(repo, 'defs', 'plan-loop');
-  cpSync(join(exampleConfigDir, 'loops-v2', 'plan-loop'), target, { recursive: true });
-  writeFileSync(join(repo, '.agent-loop.yaml'), 'loops:\n  plan-loop: defs/plan-loop/plan-loop.yaml\n');
 }
 
 test('entering a pickup-bearing §27 def bootstraps out-of-band into app-owned state, never writing .agent-loop/state.yaml or injecting into the terminal (ST2 AC3/AC8)', { tag: '@ownapp' }, async () => {
