@@ -66,9 +66,9 @@ picker) is a different, correct policy — the rule is not "every readdir routes
 
 ## Validating an untrusted value that feeds a safety limit — where, and which way it fails
 
-A value read from attacker-plantable persisted state (`.agent-loop/state.yaml`, and any on-disk doc a repo
-can carry) that feeds a **runaway backstop** — an iteration cap, budget, quota, rate limit — is validated
-in two places, and the two are **not redundant**.
+A value read from attacker-plantable persisted state (`.agent-terminal/loop/run-state.yaml`, and any on-disk
+doc a repo can carry) that feeds a **runaway backstop** — an iteration cap, budget, quota, rate limit — is
+validated in two places, and the two are **not redundant**.
 
 **Field-local constraints go at the untrusted read boundary; a relational constraint goes at the use
 site.** The reader enforces everything judgeable about the value *alone* — finite, non-negative, integer —
