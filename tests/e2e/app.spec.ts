@@ -3094,6 +3094,122 @@ test('a def resolved from the REPOSITORY tier declaring a pickup contract bootst
   for (const dir of [repo, home, binDir]) rmSync(dir, { recursive: true, force: true });
 });
 
+// AC 6 tracer, assertion (a) + the bootstrap half of (f) — the sweep's grep-invisible AC 10 change made
+// visible end-to-end. A pre-N1 flow file that names NO loop_namespace now binds the SURVIVING §27 engine
+// (absence → app, §B.4) and runs to its gate; before the sweep the same file bound the retired in-terminal
+// engine. Its `bootstrap: pickup` entry action still sets up the branch + draft PR (AC 10). Full-stack
+// acceptance pin; its RED sibling is the committed namespace-vocabulary unit test (a namespace-less binding
+// selected the retired engine pre-sweep, §B.4) and the position-4 bootstrap-preparer test. A hosted agent
+// holds the shell here (busy, §19.3), so a
+// `skill` would be refused — the skill half of (f) is proven at a ready prompt in the next test.
+test('a NAMESPACE-LESS loop step binds §27, sets up its bootstrap: pickup branch and runs to its clean gate — AC 6 tracer (a)/(f) (§B.4 / AC 10)', { tag: '@ownapp' }, async () => {
+  const repo = mkdtempSync(join(tmpdir(), 'agent-term-e2e-tracer-a-'));
+  mkdirSync(join(repo, '.git'), { recursive: true });
+  mkdirSync(join(repo, '.agent-terminal'), { recursive: true });
+  writeFileSync(
+    join(repo, '.agent-terminal', 'flow.yaml'),
+    'name: tracer-a\nsteps:\n' +
+      '  - id: groom\n    kind: manual\n' +
+      // NO loop_namespace on this loop step — absence binds the surviving engine (§B.4).
+      '  - id: build\n    kind: loop\n    loop: plan-loop\n' +
+      '    bootstrap: pickup\n' +
+      '    inputs:\n      - name: ticket\n        type: github-ticket\n        required: true\n',
+  );
+  writeFileSync(join(repo, '.agent-terminal', 'flow-state.yaml'), 'step: groom\nstatus: not_started\n');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-tracer-a-home-'));
+  const config = seedOperatorPlanLoopConfig('agent-term-e2e-tracer-a-config-', (yaml) =>
+    withPickup(yaml, 'pickup:\n  initial_status: planning\n  branch_template: plan-loop/issue-{issue}\n'),
+  );
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-tracer-a-bin-');
+  seedFakeAgentV2(binDir, { stepId: 'build', artifactRel: APP_ARTIFACT_REL, work: 'complete', review: 'full' });
+  app = await electron.launch({
+    args: ['out/main/index.js'],
+    env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100', APP_TURN_TIMEOUT_MS: '60000', CLAUDE_CONFIG_DIR: config, PATH: `${binDir}:${process.env.PATH}`, FAKE_GHGIT_LOG: logFile },
+  });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await typeCommand(`cd "${repo}"`);
+  await expect(flowControl()).toHaveText('Start', { timeout: 10_000 });
+  await typeCommand('fake-agent'); // a hosted agent is at the prompt for the work-prompt injection
+
+  await flowControl().click(); // Start → enter groom (manual)
+  await flowControl().click(); // Advance → enter the NAMESPACE-LESS build loop step → prompts for the ticket
+  await expect(inputModal()).toBeVisible({ timeout: 10_000 });
+  await inputModal().locator('.field input').fill('176');
+  await inputModal().locator('.confirm').click();
+
+  // (f) bootstrap: pickup — the namespace-less step set up its branch + draft PR through the surviving
+  // engine's own bootstrap contract; the fake gh/git recorded both.
+  const bootstrapState = join(repo, '.agent-terminal', 'loop', 'bootstrap.yaml');
+  await expect.poll(() => readIf(bootstrapState), { timeout: 20_000 }).toContain('pr: 4242');
+  expect(readIf(bootstrapState)).toContain('branch: plan-loop/issue-176');
+  expect(readIf(`${logFile}.local-branch`).trim()).toBe('plan-loop/issue-176');
+  expect(readIf(`${logFile}.pr-created`).trim()).toBe('4242');
+
+  // (a) binds §27 and reaches its gate — only the surviving engine drives work → review → consolidate to a
+  // `verdict: clean` gate; the retired engine never produced that run-state. Reaching it proves the
+  // namespace-less step bound §27.
+  await expect.poll(() => readIf(appRunState(repo)), { timeout: 40_000 }).toContain('verdict: clean');
+  expect(existsSync(join(repo, '.agent-loop', 'state.yaml'))).toBe(false); // and wrote no legacy mirror
+
+  await app.close();
+  for (const dir of [repo, home, config, binDir]) rmSync(dir, { recursive: true, force: true });
+});
+
+// AC 6 tracer, the skill half of (f) — a namespace-less step's `skill` entry action is honoured too. At a
+// READY prompt (no hosted agent holding the shell, so the §19.3 refusal does not fire) the coordinator
+// injects the skill on its bootstrap-success hand-off (§B.5 item 6), so its invocation reaches the PTY while
+// the SAME step's `bootstrap: pickup` sets up the branch. Before the sweep the app dispatch short-circuited
+// both (§D.4 row 2844 RED). A raised submit delay keeps the injected skill line alone in the viewport: its
+// own submit `\r` — and the work prompt the coordinator chains after it — land after this test observes it.
+test('a NAMESPACE-LESS step injects its skill on the bootstrap hand-off while pickup sets up the branch — AC 6 tracer (f) (§B.5 item 6 / AC 10)', { tag: '@ownapp' }, async () => {
+  const repo = mkdtempSync(join(tmpdir(), 'agent-term-e2e-tracer-f-'));
+  mkdirSync(join(repo, '.git'), { recursive: true });
+  mkdirSync(join(repo, '.agent-terminal'), { recursive: true });
+  writeFileSync(
+    join(repo, '.agent-terminal', 'flow.yaml'),
+    'name: tracer-f\nsteps:\n' +
+      '  - id: groom\n    kind: manual\n' +
+      // NO loop_namespace → binds §27 (§B.4) — declaring BOTH per-step entry actions AC 10 preserves.
+      '  - id: build\n    kind: loop\n    loop: plan-loop\n' +
+      '    skill: /tracer-skill\n    bootstrap: pickup\n' +
+      '    inputs:\n      - name: ticket\n        type: github-ticket\n        required: true\n',
+  );
+  writeFileSync(join(repo, '.agent-terminal', 'flow-state.yaml'), 'step: groom\nstatus: not_started\n');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-tracer-f-home-'));
+  const config = seedOperatorPlanLoopConfig('agent-term-e2e-tracer-f-config-', (yaml) =>
+    withPickup(yaml, 'pickup:\n  initial_status: planning\n  branch_template: plan-loop/issue-{issue}\n'),
+  );
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-tracer-f-bin-');
+  app = await electron.launch({
+    args: ['out/main/index.js'],
+    env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '3000', APP_TURN_TIMEOUT_MS: '60000', CLAUDE_CONFIG_DIR: config, PATH: `${binDir}:${process.env.PATH}`, FAKE_GHGIT_LOG: logFile },
+  });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await typeCommand(`cd "${repo}"`);
+  await expect(flowControl()).toHaveText('Start', { timeout: 10_000 });
+  // No hosted agent is started — the shell stays at a ready prompt, so the skill is injected on the hand-off.
+  await flowControl().click(); // Start → enter groom (manual)
+  await flowControl().click(); // Advance → enter the NAMESPACE-LESS build loop step → prompts for the ticket
+  await expect(inputModal()).toBeVisible({ timeout: 10_000 });
+  await inputModal().locator('.field input').fill('176');
+  await inputModal().locator('.confirm').click();
+
+  // bootstrap: pickup ran out-of-band and set up the branch + draft PR.
+  const bootstrapState = join(repo, '.agent-terminal', 'loop', 'bootstrap.yaml');
+  await expect.poll(() => readIf(bootstrapState), { timeout: 20_000 }).toContain('pr: 4242');
+  expect(readIf(`${logFile}.local-branch`).trim()).toBe('plan-loop/issue-176');
+
+  // The skill invocation reached the PTY on the coordinator's success hand-off (§B.5 item 6).
+  await expect(termRows()).toContainText('/tracer-skill', { timeout: 15_000 });
+
+  await app.close();
+  for (const dir of [repo, home, config, binDir]) rmSync(dir, { recursive: true, force: true });
+});
+
 // §27.10 confirm-first wipe — the pickup target already exists (local branch, origin branch, and an open
 // same-repo PR). The wipe is destructive and outward-facing, so the app names the exact resources and
 // waits: nothing is deleted or closed until the operator confirms.
