@@ -1,6 +1,12 @@
 # N8 sweep — the proposed deletion list
 
-**Status:** proposed, awaiting the operator gate. Assembled 2026-07-26; corrected against the iteration-3
+> **This is a spent record, not live prescription.** It is the §27.15 operator-gate record for a completed
+> sweep — the retired in-terminal loop engine it plans to delete is already gone from the tree. Every
+> pointer, count, and present-tense verb below describes the pre-sweep tree and is deliberately not
+> maintained; every §26 citation in it is the *subject* of this record — the engine the sweep removed — not
+> a surviving remnant of one.
+
+**Status:** spent — the sweep has landed; the tree this document describes no longer exists, and the file is a dated record of a completed gate (§E.4). Assembled 2026-07-26; corrected against the iteration-3
 through iteration-8 review rounds, two returned devil's-advocate passes (§K), and the operator decisions
 recorded in §K.1. Those settled, among others: the def-origin trust model is deleted outright rather than
 remediated; the sign-off is this list and the code follows it; AC 5's idle-repo migration route is

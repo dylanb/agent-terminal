@@ -197,3 +197,21 @@ describe('AC1 (§A) — no tsconfig names a deleted module', () => {
     expect(missing, `tsconfig names deleted files:\n${missing.join('\n')}`).toEqual([]);
   });
 });
+
+// ─── §D.4 row (§E.4): the deletion list records itself spent (AC 7) ──────────────────────────────────────
+// This is the largest retired-engine-citing path in the repo, and AC 1's grep deliberately does not reach
+// it. §E.4's two edits are the only sign between it and a future reader mistaking it for live prescription:
+// the Status line flips to `spent`, and a one-paragraph H1 fence says what the file is. A grep for the
+// literal Status token plus the fence's first sentence is the whole test. Falsified by leaving the word at
+// `proposed`/`agreed`, or dropping the fence.
+describe('AC7 (§E.4) — the deletion list records itself spent', () => {
+  const doc = readText('docs/n8-deletion-list.md');
+
+  it('the Status line reads spent', () => {
+    expect(doc).toMatch(/\*\*Status:\*\*\s*spent\b/);
+  });
+
+  it('the H1 fence paragraph is present', () => {
+    expect(doc).toContain('This is a spent record, not live prescription.');
+  });
+});
