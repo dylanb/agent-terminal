@@ -178,18 +178,6 @@ if (flowStripHost) {
           return key ? window.flow.githubRef(key, kind, number) : Promise.resolve(null);
         },
         openExternal: (url) => void window.flow.openExternal(url),
-        markTurnComplete: () => {
-          const key = repo.repoKey();
-          if (key) window.flow.markTurnComplete(key);
-        },
-        gateDecision: (option) => {
-          const key = repo.repoKey();
-          if (key) window.flow.gateDecision(key, option as GateDecisionOption);
-        },
-        retryTurn: () => {
-          const key = repo.repoKey();
-          if (key) window.flow.retryTurn(key);
-        },
         appRouteOut: (step, turnKey, action) => {
           const key = repo.repoKey();
           if (!key) return;
