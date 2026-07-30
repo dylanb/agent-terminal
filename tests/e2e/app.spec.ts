@@ -3256,6 +3256,48 @@ test('a shipped app-namespace flow on a RETIRED-TIER-ONLY config migrates its de
   for (const dir of [repo, home, config, binDir]) rmSync(dir, { recursive: true, force: true });
 });
 
+// AC 6 tracer, assertion (b) — a step that names the RETIRED namespace fails per-step with a route out and
+// strands nothing, while a MISSPELLED namespace fails the whole load with a reason naming the real cause
+// (§B.3/§B.4 / AC 4). RED siblings: the committed namespace-vocabulary + flowDefinition load-reason units.
+test('a legacy-bound step surfaces a per-step reason with a route out; a misspelled namespace fails the whole load — AC 6 tracer (b) (§B.4 / AC 4)', { tag: '@ownapp' }, async () => {
+  const legacyRepo = mkdtempSync(join(tmpdir(), 'agent-term-e2e-tracer-b-legacy-'));
+  mkdirSync(join(legacyRepo, '.agent-terminal'), { recursive: true });
+  writeFileSync(
+    join(legacyRepo, '.agent-terminal', 'flow.yaml'),
+    'name: legacy-flow\nsteps:\n  - id: build\n    kind: loop\n    loop: plan-loop\n    loop_namespace: legacy\n',
+  );
+  writeFileSync(join(legacyRepo, '.agent-terminal', 'flow-state.yaml'), 'step: build\nstatus: not_started\n');
+  const badRepo = mkdtempSync(join(tmpdir(), 'agent-term-e2e-tracer-b-bad-'));
+  mkdirSync(join(badRepo, '.agent-terminal'), { recursive: true });
+  writeFileSync(
+    join(badRepo, '.agent-terminal', 'flow.yaml'),
+    'name: bad-ns-flow\nsteps:\n  - id: build\n    kind: loop\n    loop: plan-loop\n    loop_namespace: aap\n',
+  );
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-tracer-b-home-'));
+  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  // The legacy-bound step LOADS (the retired namespace is still recognized, §B.4) and enters, but its loop
+  // view is an error naming the retired engine — with the rest of the flow still operable (Advance routes out).
+  await typeCommand(`cd "${legacyRepo}"`);
+  await expect(flowControl()).toHaveText('Start', { timeout: 10_000 });
+  await flowControl().click(); // Start → enter the legacy-bound step → error loop view, no turn
+  await loopReadout().click();
+  await expect(loopPanel()).toContainText('retired "legacy" engine', { timeout: 10_000 });
+  await expect(flowControl()).toHaveText('Advance'); // a route off the step, no file hand-editing
+  await flowControl().click();
+  await expect(flowControl()).toHaveText('Restart', { timeout: 10_000 }); // the flow still advanced to done
+
+  // A MISSPELLED namespace is unrecognized → the WHOLE file is rejected at load, with a reason naming the
+  // real cause (the unrecognized value), not a bare parse error.
+  await typeCommand(`cd "${badRepo}"`);
+  await expect(page.locator('#flow-strip .flow-error')).toContainText('unrecognized def namespace "aap"', { timeout: 10_000 });
+
+  await app.close();
+  for (const dir of [legacyRepo, badRepo, home]) rmSync(dir, { recursive: true, force: true });
+});
+
 // §27.10 confirm-first wipe — the pickup target already exists (local branch, origin branch, and an open
 // same-repo PR). The wipe is destructive and outward-facing, so the app names the exact resources and
 // waits: nothing is deleted or closed until the operator confirms.
