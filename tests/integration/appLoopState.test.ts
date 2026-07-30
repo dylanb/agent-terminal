@@ -27,7 +27,7 @@ import {
 } from '../../src/main/appLoopState';
 
 // §27.10/§27.12 — the app-owned §27 loop-state file under <repo>/.agent-terminal/loop/, carrying a
-// version/schema discriminator (mirroring §26's versioned state.yaml) so a later slice can migrate or
+// version/schema discriminator (like a versioned state.yaml) so a later slice can migrate or
 // reject an older resume file deterministically. Real temp files, no fs mocks. The writer is NEW in this
 // slice, so its destination is confined and its FIRST-RUN test removes the target root before asserting the
 // tree is created (CLAUDE.md first-run-writer rule).

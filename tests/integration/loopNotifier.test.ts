@@ -5,7 +5,7 @@ import type { FlowLoopView, FlowStateView } from '../../src/shared/ipc';
 // §24.2.3 T4 — the OS-notification decision is engine-neutral: the notifier observes a FlowStateView and
 // keys only on the loop view's human-needed state and its (status, iteration) occurrence identity, knowing
 // nothing about which engine produced it. These fixtures reproduce each precondition as a §27 loop view
-// directly (the §26 state.yaml→deriveLoopView derivation is gone); only the OS-notification surface is spied.
+// directly (the retired engine's state.yaml→deriveLoopView derivation is gone); only the OS-notification surface is spied.
 
 const REPO = '/repo';
 const BASE: FlowStateView = { stepName: 'build', steps: ['build'], position: 1, total: 1, status: 'in_progress' };

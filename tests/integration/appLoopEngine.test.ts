@@ -30,7 +30,7 @@ import type { LoopDefV2, LoopDefV2Result } from '../../src/main/loopDefV2';
 
 // §27.3/§27.12 — the §27 work-turn engine, driven at its observable boundary with REAL fs (the run-state
 // file, the completion artifact) and its domain ports as controllable fakes (hostedAgent injectability, the
-// stall timer, the injector). The engine reuses the §26 turn state machine (loopOrchestrator) for the
+// stall timer, the injector). The engine reuses the surviving turn state machine (loopOrchestrator) for the
 // in-flight mechanics; these tests grade the §27-specific behavior: boundary-then-work injection, the
 // artifact-marker completion gate, retry-once-then-error, stall→error without a kill, the identity-carrying
 // route-out, and resume that never re-drives a stopped or completed turn.
@@ -1474,7 +1474,7 @@ describe('§27 engine — redo re-enters the work turn on a clean slate carrying
     expect(readAppLoopState(repo)).toMatchObject({ status: 'complete', round: 1, verdict: 'clean' });
     const before = injected.length;
     expect(engine.redo(repo, STEP, CONSOLIDATE_KEY, INSTRUCTION)).toBe(true);
-    // Drain the boundary + work injection (the §26 runner's settle state is path-dependent, so drain generously
+    // Drain the boundary + work injection (the runner's settle state is path-dependent, so drain generously
     // and read the re-injected prompt out of the batch rather than a fixed index).
     engine.onInjectable();
     engine.onInjectable();

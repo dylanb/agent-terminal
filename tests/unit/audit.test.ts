@@ -283,8 +283,8 @@ describe('reconstructTimeline — replay a full run into its ordered timeline + 
     expect(reconstructTimeline(iterFirst).loop).toEqual({ status: 'building', iteration: 4 });
   });
 
-  // §26.10 — a per-iteration cost event folds into an ordered costs list for the run.
-  it('folds loop.cost events into the run’s costs list (§26.10)', () => {
+  // §25 — a per-iteration cost event folds into an ordered costs list for the run.
+  it('folds loop.cost events into the run’s costs list (§25)', () => {
     const h = serializeDoc(header);
     const withCosts =
       h +
@@ -296,8 +296,8 @@ describe('reconstructTimeline — replay a full run into its ordered timeline + 
     ]);
   });
 
-  // §26.7 — a per-iteration CI snapshot event folds into an ordered ci list for the run.
-  it('folds loop.ci events into the run’s ci list (§26.7)', () => {
+  // §25 — a per-iteration CI snapshot event folds into an ordered ci list for the run.
+  it('folds loop.ci events into the run’s ci list (§25)', () => {
     const h = serializeDoc(header);
     const withCi =
       h +

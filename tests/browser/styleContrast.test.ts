@@ -753,7 +753,7 @@ describe('focusRing (the helper the ring pins are graded through)', () => {
   });
 });
 
-// §B.10a — the retired §26.10 cost read-out (`.loop-cost`) is removed from the grouped rail rule it
+// §B.10a — the retired cost read-out (`.loop-cost`) is removed from the grouped rail rule it
 // shared with the surviving iteration read-out (`.loop-iter`). Editing the wrong line would leave
 // `.loop-iter,` dangling onto the next selector (`.car`), silently inheriting its 8px / margin-left:auto
 // and LOSING white-space:nowrap + flex-shrink:0 — breaking values mid-token in the 200px rail (WCAG

@@ -512,8 +512,8 @@ describe('resolveLoopDefV2 — tier precedence + schema independence (AC 7)', ()
     expect(r.ok).toBe(false);
   });
 
-  it('parses content that would be invalid under the §26 schema (independent schemas)', () => {
-    // VALID_DEF has no §26 gates:/schema_version:4 — it is invalid §26 content, yet resolves here
+  it('parses a v2 def lacking the fields the retired schema demanded (independent schemas)', () => {
+    // VALID_DEF has no gates:/schema_version:4 — fields the retired schema required, yet it resolves here
     plantDef(join(appDir, 'loops-v2'), 'plan-loop', VALID_DEF);
     const r = resolveLoopDefV2('plan-loop', { tiers: tiers(), repoDir });
     expect(r.ok).toBe(true);
