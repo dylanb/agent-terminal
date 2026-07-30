@@ -1771,193 +1771,6 @@ function seedFakeGhGit(prefix: string): { binDir: string; logFile: string } {
   return { binDir, logFile };
 }
 
-// §26.13 test seam — the deterministic fake hosted agent (the analogue of the engine's `fakeclaude`).
-// Written into the same PATH-prepended bin dir as the fake gh/git; launched as the terminal's
-// foreground REPL so the orchestrator's injected work-{phase} prompt reaches its stdin. Each injected
-// line drives the scripted turn for `mode`: `write-plan` writes the artifact + emits BOTH done-signals
-// (sentinel line + `.agent-loop/turn-done`), `plan-only` writes the artifact but NO signal (drives the
-// manual mark-complete path), `noop` produces nothing (drives retry-then-error). The sentinel + file
-// name are generated from the shared contract so the seam cannot drift from the detectors.
-// The plan-loop reviewer roster (§26.4) — the real six personas the fan-out turn must satisfy. `missing`
-// mode omits the last one so the orchestrator sees a partial fan-out and drives retry-then-error.
-const PLAN_PERSONAS = [
-  'review-principal',
-  'review-security',
-  'review-architecture',
-  'review-intent',
-  'review-maintainability',
-  'review-contracts',
-];
-
-// Signal a turn done by writing the turn-done FILE (§26.3/D47a — the sole completion signal since §26 D42a
-// retired the printable sentinel line). Contents are exactly the turn key, which main key-matches.
-function doneSignal(turnKey: string): string {
-  return `printf '%s' '${turnKey}' > .agent-loop/${TURN_DONE_FILENAME}`;
-}
-
-// Alias kept for the tests that name the file half explicitly — identical to doneSignal now that
-// completion is file-only.
-function fileOnlySignal(turnKey: string): string {
-  return `printf '%s' '${turnKey}' > .agent-loop/${TURN_DONE_FILENAME}`;
-}
-
-function seedFakeAgent(
-  binDir: string,
-  opts: {
-    work: 'write-plan' | 'file-only' | 'plan-only' | 'noop';
-    reviews?: 'all' | 'missing';
-    consolidate?: 'clean' | 'needs-work';
-    // §26.6/L6 — when set, iteration 1's consolidate verdict is this INSTEAD of `consolidate` (later
-    // iterations use `consolidate`). Lets an e2e reach a gate at iteration 1 (e.g. clean → approval) and
-    // then exercise needs-work cap routing on the following iterations without extra rounds.
-    consolidateIter1?: 'clean' | 'needs-work';
-    // §26.8/L6 — the consolidated `findings_kept` the stuck detector signs. `stable` writes the same
-    // finding every iteration (identical signature → stuck at x2); `changing` stamps the iteration into
-    // the finding (a fresh signature each round → never stuck). Absent → no kept findings (empty signature).
-    findings?: 'stable' | 'changing';
-    // §26.10/L7 — when set, the work turn writes a deterministic session-JSONL token fixture into the
-    // test-controlled log root ($APP_SESSION_LOG_ROOT) so the cost meter has tokens to price without an
-    // LLM. 1,000,000 claude-sonnet-5 input tokens → exactly $3.00 against the checked-in pricing table.
-    costFixture?: boolean;
-    // §26.9/L8 — when set, the work turn writes a plan.md whose frontmatter classifies it an epic with a
-    // three-sub-ticket breakdown, so epic-promote at the plan-approval gate creates the N-1 (=2) sub-issues.
-    epicPlan?: boolean;
-    // §26.11/L8 — when set, each turn appends to `.agent-loop/<turn>-ran` when it runs, so a resume e2e can
-    // prove a completed turn was NOT re-executed (the marker for a skipped turn stays absent).
-    turnMarkers?: boolean;
-    // §8.3/§26.2 — when set, the agent enters the alt screen and repaints an IDENTICAL idle frame on a
-    // ~200ms timer (< QUIET_MS) from a background writer that never reads stdin, modelling a full-screen TUI
-    // agent (Claude Code, Codex) that is never byte-silent even at rest. This is the one agent shape the
-    // line-oriented REPL cannot otherwise produce. Under byte-presence quiescence the repaint pins
-    // agentState 'active' forever, so the §26.2 gate reads `busy` and defers the work turn indefinitely;
-    // content-diff quiescence (§8.3) sees an unchanged frame, reaches quiet, and the turn injects.
-    idleRepaint?: boolean;
-    // §26.3 — when set, the work turn STREAMS changing lines (~9s of new content faster than the stall
-    // window) BEFORE it writes plan.md and signals done. Each changed line is a §8.3 content edge that
-    // resets the stall watchdog, so a turn that runs far past a short APP_TURN_TIMEOUT_MS still advances.
-    // Under a wall-clock deadline (or with the activity reset unwired) the same turn is killed mid-stream.
-    slowWork?: boolean;
-    // §26 D42a — when set, the work turn PRINTS the retired done-signal sentinel line (alone on a line) but
-    // writes NO turn-done file. Pair with work:'plan-only' to reproduce the false-completion the retired
-    // line-scanner caused (a real TUI reflowed the injected instruction's echo onto its own line): under
-    // the fix, a printed sentinel must NOT complete the turn — only the file does.
-    printBareSentinel?: boolean;
-  },
-): void {
-  // A per-turn execution marker (§26.11 resume): its presence proves that turn actually ran this session.
-  const mark = (turn: string): string => (opts.turnMarkers ? `mkdir -p .agent-loop; printf x >> .agent-loop/${turn}-ran; ` : '');
-  const writePlan = opts.epicPlan
-    ? "mkdir -p .agent-loop; printf '%s\\n' '---' 'classification: epic' 'sub_tickets:' " +
-      "'  - title: Slice one' '  - title: Slice two' '  - title: Slice three' '---' '' '# Plan' > .agent-loop/plan.md"
-    : "mkdir -p .agent-loop; printf '# Plan\\n\\nfake plan body\\n' > .agent-loop/plan.md";
-  // The token log the §26.10 meter reads (Claude Code's private JSONL shape). Guarded on the env var so only
-  // the L7 test (which sets it) writes a fixture. It reproduces the four shapes a real project dir holds:
-  //   stale.jsonl    a session from BEFORE this flow began (opus, 1M input = $15) — outside the run's window
-  //   session.jsonl  this run's work turn (sonnet-5, 1M input = $3.00), written TWICE under one billing
-  //                  identity, as a resumed session replays it — the API billed it once
-  //   subagents/     a reviewer subagent nested under the session dir (sonnet-5, 100k output = $1.50)
-  //   <synthetic>    Claude Code's zero-token API-error turn — bills nothing, so no `+unknown`
-  // A correctly scoped, deduped, recursive, synthetic-skipping meter reads exactly $4.50.
-  const jsonl = (ts: string, id: string, model: string, usage: string): string =>
-    `{"type":"assistant","timestamp":"${ts}","requestId":"req-${id}","message":{"id":"msg-${id}","model":"${model}","usage":{${usage}}}}`;
-  const emit = (obj: string, file: string, redirect = '>'): string =>
-    `printf '%s\\n' '${obj.replace(/NOW/, "'\"$NOW\"'")}' ${redirect} "${file}"; `;
-  const root = '$APP_SESSION_LOG_ROOT';
-  const writeTokens = opts.costFixture
-    ? `; if [ -n "$APP_SESSION_LOG_ROOT" ]; then mkdir -p "${root}/session-uuid/subagents"; ` +
-      // The current second at .999 — always at or after the instant the flow started, which lies in this
-      // second or an earlier one, whatever the sub-second offset.
-      `NOW=$(date -u +%Y-%m-%dT%H:%M:%S.999Z); ` +
-      emit(jsonl('2020-01-01T00:00:00.000Z', 'stale', 'claude-opus-4-8', '"input_tokens":1000000'), `${root}/stale.jsonl`) +
-      emit(jsonl('NOW', 'work', 'claude-sonnet-5', '"input_tokens":1000000,"output_tokens":0'), `${root}/session.jsonl`) +
-      emit(jsonl('NOW', 'work', 'claude-sonnet-5', '"input_tokens":1000000,"output_tokens":0'), `${root}/session.jsonl`, '>>') +
-      emit(jsonl('NOW', 'err', '<synthetic>', '"input_tokens":0,"output_tokens":0'), `${root}/session.jsonl`, '>>') +
-      emit(jsonl('NOW', 'rev', 'claude-sonnet-5', '"output_tokens":100000'), `${root}/session-uuid/subagents/agent-x.jsonl`) +
-      `fi`
-    : '';
-  // §26.3 — a stream of changing lines that outlasts a short stall window; each line is a §8.3 edge that
-  // must reset the watchdog. Runs BEFORE plan.md so a killed turn leaves no artifact (a clean RED landing).
-  const workStream = opts.slowWork ? "for i in $(seq 1 30); do printf 'working %s\\n' \"$i\"; sleep 0.3; done; " : '';
-  // §26 D42a — print the retired sentinel alone on a line (no file). Proves a printed line never completes.
-  const bareSentinel = opts.printBareSentinel ? `; printf '\\n<<<agent-loop:turn-done:work-plan>>>\\n'` : '';
-  const workAct =
-    opts.work === 'noop'
-      ? ':'
-      : opts.work === 'plan-only'
-        ? `${mark('work')}${writePlan}${writeTokens}${bareSentinel}`
-        : opts.work === 'file-only'
-          ? `${mark('work')}${writePlan}${writeTokens}; ${fileOnlySignal('work-plan')}`
-          : `${mark('work')}${workStream}${writePlan}${writeTokens}; ${doneSignal('work-plan')}`;
-  // §26.4/§26.13 L4 — reviews + consolidated are per-iteration (reviews/<iter>/…). The REPL derives the
-  // iteration from the app-written state.yaml so a re-iteration (needs-work) writes reviews/<iter+1>/.
-  const getIter = "iter=$(grep -m1 '^iteration:' .agent-loop/state.yaml | tr -dc '0-9')";
-  // §26.4 — on the reviewers turn, write each roster persona's JSON for the iteration then signal done.
-  // `missing` writes all but one so the fan-out is incomplete (retry-then-error); undefined = do nothing.
-  const personas = opts.reviews === 'missing' ? PLAN_PERSONAS.slice(0, -1) : PLAN_PERSONAS;
-  // §26.5/L6 — stamp the iteration into each review so a carried-forward (reused) review is distinguishable
-  // from a freshly-written one: a pruned persona's reviews/<iter>/ file keeps the PRIOR iteration's stamp.
-  const writeReviews =
-    `${getIter}; mkdir -p .agent-loop/reviews/$iter; ` +
-    personas
-      .map((p) => `printf '{\"verdict\":\"clean\",\"seen_iter\":%s}' \"$iter\" > .agent-loop/reviews/$iter/${p}.json`)
-      .join('; ');
-  const reviewAct = opts.reviews === undefined ? ':' : `${mark('reviewers')}${writeReviews}; ${doneSignal('review-plan')}`;
-  // §26.3/D45 — on the consolidate turn, write reviews/<iter>/consolidated.json with the scripted verdict
-  // then signal done. undefined = do nothing (the turn never confirms → retry-then-error).
-  const verdictExpr = opts.consolidateIter1
-    ? `if [ "$iter" = "1" ]; then verdict='${opts.consolidateIter1}'; else verdict='${opts.consolidate}'; fi`
-    : `verdict='${opts.consolidate}'`;
-  // §26.8/L6 — the kept findings the signature is computed over. `stable` is identical each iteration
-  // (single-quoted, no expansion); `changing` stamps $iter (double-quoted so bash expands it).
-  const keptAssign =
-    opts.findings === 'stable'
-      ? `kept='[{"severity":"major","message":"stable finding"}]'`
-      : `kept="[{\\"severity\\":\\"major\\",\\"message\\":\\"iter $iter\\"}]"`;
-  const findingsSetup = opts.findings ? `${keptAssign}; ` : '';
-  const printfFmt = opts.findings ? `{\"verdict\":\"%s\",\"findings_kept\":%s}` : `{\"verdict\":\"%s\"}`;
-  const printfArgs = opts.findings ? `\"$verdict\" \"$kept\"` : `\"$verdict\"`;
-  const consolidateAct =
-    opts.consolidate === undefined
-      ? ':'
-      : `${mark('consolidate')}${getIter}; ${verdictExpr}; ${findingsSetup}mkdir -p .agent-loop/reviews/$iter; ` +
-        `printf '${printfFmt}' ${printfArgs} > .agent-loop/reviews/$iter/consolidated.json; ` +
-        `${doneSignal('consolidate-plan')}`;
-  // The injected prompt's done-signal instruction line carries `turn-done:<turnKey>` (inside the sentinel
-  // it tells the agent to print), so the REPL keys its scripted turn off which sentinel marker it sees.
-  // §8.3 — before the read loop, a repainting agent enters the alt screen and repaints an identical idle
-  // frame every 200ms from a background writer redirected off stdin (so the REPL below still owns injected
-  // input). The EXIT trap reaps the writer when the process closes. Bytes never stop; the frame never changes.
-  const repaintPrelude = opts.idleRepaint
-    ? "printf '\\x1b[?1049h'\n" +
-      "( while :; do printf '\\x1b[2J\\x1b[Hclaude idle >'; sleep 0.2; done ) </dev/null &\n" +
-      'RPID=$!\n' +
-      "trap 'kill $RPID 2>/dev/null' EXIT\n"
-    : '';
-  const script =
-    '#!/usr/bin/env bash\n' +
-    '# Fake hosted agent REPL; each injected prompt line drives the scripted turn (§26.13).\n' +
-    repaintPrelude +
-    'while IFS= read -r line; do\n' +
-    '  [ -z "$line" ] && continue\n' +
-    '  case "$line" in\n' +
-    // §26.3/D46 — record each injected `/clear` boundary so the e2e can assert the orchestrator issued it
-    // (the echo scrolls out of the visible xterm-rows behind the next prompt, so a marker file is stable).
-    '    /clear) mkdir -p .agent-loop; printf x >> .agent-loop/clear-seen ;;\n' +
-    `    *turn-done:work-plan*) ${workAct} ;;\n` +
-    `    *turn-done:review-plan*) ${reviewAct} ;;\n` +
-    `    *turn-done:consolidate-plan*) ${consolidateAct} ;;\n` +
-    // §26 D42a — record that the IMPL loop's first work prompt reached the agent, then COMPLETE the turn by
-    // writing the turn-done file (the impl work turn produces code, not a plan.md deliverable, so completion
-    // is the turn-done file alone — §26.3/D47a). Completing advances the run to the impl reviewers turn.
-    `    *turn-done:work-impl*) mkdir -p .agent-loop; printf x >> .agent-loop/impl-work-ran; ${fileOnlySignal('work-impl')} ;;\n` +
-    // Record that the impl REVIEWERS prompt reached the agent — proof the impl work turn completed on the
-    // turn-done file and the run advanced into the impl loop's fan-out (turnKey review-impl).
-    '    *turn-done:review-impl*) mkdir -p .agent-loop; printf x >> .agent-loop/impl-review-ran ;;\n' +
-    '  esac\n' +
-    'done\n';
-  writeFileSync(join(binDir, 'fake-agent'), script, { mode: 0o755 });
-}
-
 // LoopDef resolution for e2e: $CLAUDE_CONFIG_DIR/loops/<name>/<name>.yaml, so the committed example
 // defs (example/loops, real plan-loop/impl-loop) resolve when CLAUDE_CONFIG_DIR points at example/.
 const exampleConfigDir = join(process.cwd(), 'example');
@@ -2709,60 +2522,6 @@ test('advancing INTO a later step fires its entry action: the skill injects on A
   rmSync(repo, { recursive: true, force: true });
   rmSync(home, { recursive: true, force: true });
 });
-
-// §26.13 / L2 — one work-agent turn + completion detection. The shared sequence: cd into the repo,
-// launch the fake-agent REPL as the foreground program, then drive the flow into the bootstrap loop
-// step. After pickup writes plan-draft (§26.9/L1) the orchestrator injects the work-plan prompt into
-// the fake-agent and advances on the done-signal + plan.md (§26.3/D47a), retrying once then `error`.
-async function driveToWorkTurn(
-  repo: string,
-  home: string,
-  binDir: string,
-  logFile: string,
-  turnTimeoutMs: string,
-  extraEnv: Record<string, string> = {},
-  // §26.2 — when false, no hosted agent is started: the shell stays at a bare ready prompt, so the work
-  // turn injected after pickup finds `no hosted agent` (`absent`) and stops in error instead of leaking
-  // the prompt into the shell. The caller then asserts the error landing rather than plan-draft.
-  startAgent = true,
-): Promise<void> {
-  await app.close();
-  app = await electron.launch({
-    args: ['out/main/index.js'],
-    env: {
-      ...process.env,
-      APP_SHELL: 'bash',
-      HOME: home,
-      APP_SUBMIT_DELAY_MS: '100',
-      APP_TURN_TIMEOUT_MS: turnTimeoutMs,
-      CLAUDE_CONFIG_DIR: exampleConfigDir,
-      PATH: `${binDir}:${process.env.PATH}`,
-      FAKE_GHGIT_LOG: logFile,
-      ...extraEnv,
-    },
-  });
-  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
-  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
-
-  await typeCommand(`cd "${repo}"`);
-  await expect(flowStepName()).toHaveText('groom', { timeout: 10_000 });
-  if (startAgent) await typeCommand('fake-agent'); // the hosted agent REPL now owns the prompt; injection reaches it
-
-  await flowControl().click(); // Start → groom: opens the audit run
-  await expect.poll(() => auditRunFiles(home, repo).length).toBe(1);
-  await flowControl().click(); // Advance → plan (loop, bootstrap): the typed-input modal opens
-  await expect(inputModal()).toBeVisible({ timeout: 10_000 });
-  await inputModal().locator('.field input').fill('176');
-  await inputModal().locator('.confirm').click();
-  await expect(inputModal()).toHaveCount(0);
-
-  // With an agent present, bootstrap lands plan-draft and the work turn injects; without one the caller
-  // asserts the `absent` error landing itself (pickup still writes plan-draft first, then the turn errors).
-  if (startAgent) {
-    const stateFile = join(repo, '.agent-loop', 'state.yaml');
-    await expect.poll(() => (existsSync(stateFile) ? readFileSync(stateFile, 'utf8') : ''), { timeout: 15_000 }).toContain('status: plan-draft');
-  }
-}
 
 function seedCompletedAppBootstrap(dir: string, issue = 176): void {
   mkdirSync(join(dir, '.agent-terminal', 'loop'), { recursive: true });
@@ -4459,24 +4218,30 @@ test('an armed §27 interrupt routes to the gate with the would-be verdict state
 
 const gateButton = (option: string) => loopPanel().locator(`[data-gate-option="${option}"]`);
 
-// §26 D42a (Slice 3 / Q3) — the FIRST work turn of a freshly-bootstrapped loop step is preceded by the same
-// actor-boundary /clear (§26.3/D46) as every other loop-step entry, so the loop starts from a clean agent
-// context (e.g. the human's grooming conversation is cleared before the plan work begins). `plan-only` never
-// signals done, so the loop never advances past this first work turn — clear-seen can ONLY come from the
-// bootstrap /clear, not a later reviewers/consolidate boundary. That isolates this slice's behavior.
-test('activating the status-bar alert opens the docked panel and lands focus on the gate decision (§22.3.1 / WCAG 2.4.3)', async () => {
+test('activating the status-bar alert opens the docked panel and lands focus on the gate decision (§22.3.1 / WCAG 2.4.3)', { tag: '@ownapp' }, async () => {
   // The whole point of the alert→panel seam: a keyboard user who activates the red alert is routed ONTO
   // the decision, not merely shown the panel. This drives the REAL alert through the composition root
   // (openLoopPanel + the panel's own focusDecision) and observes focus land — the un-hide-then-focus
-  // ordering jsdom cannot exercise.
-  const repo = seedBootstrapFlowRepo('agent-term-e2e-alertfocus-');
+  // ordering jsdom cannot exercise. Re-driven onto a §27 consolidator gate (the retired in-terminal work path is gone).
+  const repo = seedPrebootstrappedAppLoopFlowRepo('agent-term-e2e-alertfocus-');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-alertfocus-home-'));
   const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-alertfocus-bin-');
-  seedFakeAgent(binDir, { work: 'write-plan', reviews: 'all', consolidate: 'clean' });
-  await driveToWorkTurn(repo, home, binDir, logFile, '30000');
-  await expect
-    .poll(() => readFileSync(join(repo, '.agent-loop', 'state.yaml'), 'utf8'), { timeout: 25_000 })
-    .toContain('status: awaiting-human-plan-approval');
+  seedFakeAgentV2(binDir, { stepId: 'plan', artifactRel: APP_ARTIFACT_REL, work: 'complete', review: 'full' });
+  app = await electron.launch({
+    args: ['out/main/index.js'],
+    env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100', CLAUDE_CONFIG_DIR: exampleConfigDir, PATH: `${binDir}:${process.env.PATH}`, FAKE_GHGIT_LOG: logFile },
+  });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await typeCommand(`cd "${repo}"`);
+  await expect(flowControl()).toHaveText('Start', { timeout: 10_000 });
+  await typeCommand('fake-agent'); // a hosted agent IS at the prompt; the §27 work prompt reaches it
+  await flowControl().click(); // Start → enter the app plan-loop step → work → review → consolidate → the clean gate
+
+  // The run stops at the consolidator's clean gate, awaiting a human decision (the human-needed state).
+  await expect.poll(() => readIf(appRunState(repo)), { timeout: 40_000 }).toContain('status: complete');
+  expect(readIf(appRunState(repo))).toContain('turn_key: consolidate-plan');
 
   // The panel is still closed; the alert is the status bar's attention state.
   await expect(statusAlert()).toBeVisible({ timeout: 10_000 });
