@@ -2258,9 +2258,10 @@ test('the REAL consent checkbox paints a focus ring, and the dialog footer stays
   // bundle, which is exactly the content that pushed the footer off-screen.
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-install-ring-home-'));
   const configDir = mkdtempSync(join(tmpdir(), 'agent-term-e2e-install-ring-cfg-'));
-  // The manifest lists only files that are present AND differ, so seeding ONE conflicting file would
-  // render a ONE-path manifest — and the footer assertion below would pass against content that never
-  // overflowed anything. Conflict the WHOLE loops bundle, which is the content that clipped the footer.
+  // The manifest lists only files that are present AND differ, so a one-file conflict would render a
+  // one-path manifest — and the footer assertion below would pass against content that never overflowed
+  // anything. Conflict the WHOLE example bundle across all three install destinations (flow, appLoops,
+  // commands), which is the content that clipped the footer (§27.15: the loops tier is loops-v2 now).
   const seedConflicts = (src: string, dest: string): number => {
     let n = 0;
     mkdirSync(dest, { recursive: true });
@@ -2273,7 +2274,11 @@ test('the REAL consent checkbox paints a focus ring, and the dialog footer stays
     }
     return n;
   };
-  const conflicting = seedConflicts(join(process.cwd(), 'example', 'loops'), join(configDir, 'loops'));
+  const ex = join(process.cwd(), 'example');
+  const conflicting =
+    seedConflicts(join(ex, 'flow'), join(home, '.agent-terminal')) +
+    seedConflicts(join(ex, 'loops-v2'), join(configDir, 'loops-v2')) +
+    seedConflicts(join(ex, 'commands'), join(configDir, 'commands'));
   expect(conflicting).toBeGreaterThan(20); // the fixture must actually be the overflowing case
   app = await electron.launch({ args: ['out/main/index.js'], env: installEnv(home, configDir) });
   page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
@@ -2283,12 +2288,15 @@ test('the REAL consent checkbox paints a focus ring, and the dialog footer stays
   await installExamplesBtn().click();
   await expect(installExamplesPrompt()).toBeVisible({ timeout: 10_000 });
 
-  const box = consentBox('loops');
+  // Grade the FIRST consent checkbox — the one the dialog gives initial focus. Destinations render in the
+  // contract's order (flow, appLoops, commands), so with all three conflicting the first box is `flow`.
+  const box = consentBox('flow');
   await expect(box).toBeVisible();
   // The dialog is genuinely rendering the long manifest — otherwise the footer check below grades a
-  // dialog that never overflowed and cannot fail.
-  const manifest = page.locator('#install-examples-view .flow-modal .ic-files').first();
-  expect((await manifest.innerText()).length).toBeGreaterThan(500);
+  // dialog that never overflowed and cannot fail. Sum every destination's file list (the first section is
+  // `flow`'s short one), so the length reflects the whole manifest that pushed the footer off-screen.
+  const manifestText = (await page.locator('#install-examples-view .flow-modal .ic-files').allInnerTexts()).join('');
+  expect(manifestText.length).toBeGreaterThan(500);
 
   // The dialog gives the first checkbox its INITIAL focus programmatically, and a programmatic focus need
   // not match :focus-visible. Focus has to ARRIVE by keyboard, so step off the control and come back.
@@ -4164,11 +4172,15 @@ test('a malformed/unresolvable §27 def surfaces its reason and the flow keeps a
   await expect(flowControl()).toHaveText('Start', { timeout: 10_000 });
   await flowControl().click(); // Start → enter the step bound to an unresolvable §27 def: no turn starts (AC6)
 
-  // The reason is readable in the panel, and the Advance control is still present — the route off the
-  // failed step that needs no hand-editing of files on disk (AC 6). No §27 run state was written (no turn).
-  await loopReadout().click();
-  await expect(loopPanel()).toContainText('no-such-v2-loop', { timeout: 10_000 });
+  // The reason surfaces on the shared blocking loop-error dialog (the §27 error surface for a def that
+  // never resolved), naming the def that could not be found. The Advance control stays present behind it —
+  // the route off the failed step that needs no hand-editing of files on disk (AC 6). No §27 run state was
+  // written (no turn ran). Dismiss the dialog so it does not intercept the control exercised below.
+  const errorDialog = page.locator('#flow-error-host .flow-modal');
+  await expect(errorDialog).toContainText('no-such-v2-loop', { timeout: 10_000 });
   expect(existsSync(appRunState(repo))).toBe(false);
+  await errorDialog.locator('.dismiss').click();
+  await expect(errorDialog).toHaveCount(0);
   await expect(flowControl()).toHaveText('Advance');
   await flowControl().click(); // the route out completes the flow
   await expect(flowControl()).toHaveText('Restart', { timeout: 10_000 });
