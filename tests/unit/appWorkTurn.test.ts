@@ -28,7 +28,6 @@ function def(over: Partial<LoopDefV2>): LoopDefV2 {
   return {
     version: 'v2',
     name: 'plan-loop',
-    origin: 'app-bundled',
     work: { recipe: '/abs/prompts/work.md', artifact: 'plan' },
     reviewers: [],
     consolidator: '/abs/prompts/consolidate.md',

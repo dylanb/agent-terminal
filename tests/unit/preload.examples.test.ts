@@ -37,11 +37,11 @@ describe('examplesApi routing (§6 / §18.1)', () => {
 
   it('apply forwards the per-destination replace list intact', async () => {
     invoke.mockResolvedValueOnce({ ok: true, created: [], overwritten: [], skipped: [] });
-    await examplesApi.apply(previewId, ['skills', 'commands']);
+    await examplesApi.apply(previewId, ['appLoops', 'commands']);
     expect(invoke).toHaveBeenCalledWith(CH.installExamplesApply, {
       sessionId: SESSION_ID,
       previewId,
-      replace: ['skills', 'commands'],
+      replace: ['appLoops', 'commands'],
     });
   });
 

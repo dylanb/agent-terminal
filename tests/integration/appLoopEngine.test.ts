@@ -68,7 +68,6 @@ function fileDef(): LoopDefV2 {
   return {
     version: 'v2',
     name: 'plan-loop',
-    origin: 'app-bundled',
     work: { recipe: join(repo, 'recipe', 'work.md'), artifact: 'plan' },
     reviewers: [
       { persona: ROSTER[0], charter: join(repo, 'charter', 'principal.md'), tools: ['Read'] },
@@ -95,6 +94,9 @@ function commitDef(): LoopDefV2 {
 }
 
 let defResult: LoopDefV2Result;
+/** A resolved §27 def result rooted at the test repo's own temp dir — the honest "resolved-from tier" for
+ *  every def these tests hand the engine through `resolveDef`. */
+const resolved = (def: LoopDefV2): LoopDefV2Result => ({ ok: true, def, tierRoot: repo });
 function makeEngine(persistOverride?: (repoDir: string, state: AppLoopRunState) => void): ReturnType<typeof createAppLoopEngine> {
   audit = vi.fn();
   emitError = vi.fn();
@@ -213,7 +215,7 @@ beforeEach(() => {
   writeFileSync(join(repo, 'recipe', 'work.md'), '# work turn\nProduce the plan.\n');
   artifactPath = join(repo, '.agent-terminal', 'loop', 'artifacts', 'plan.md');
   hosted = 'idle';
-  defResult = { ok: true, def: fileDef() };
+  defResult = resolved(fileDef());
 });
 afterEach(() => {
   rmSync(repo, { recursive: true, force: true });
@@ -241,7 +243,7 @@ function seedInputArtifact(absPath: string, content = '# groomed ticket\n'): str
 /** Seed the chained-input artifact under `dir` and bind the def's single input to it. */
 function bindSeededInput(dir: string): string {
   const p = seedInputArtifact(join(dir, '.agent-terminal', 'loop', 'artifacts', 'groomed-ticket.md'));
-  defResult = { ok: true, def: { ...fileDef(), inputs: [binding('groomed-ticket', p)] } };
+  defResult = resolved({ ...fileDef(), inputs: [binding('groomed-ticket', p)] });
   return p;
 }
 
@@ -261,7 +263,7 @@ describe('§27 engine — entry, boundary, and the work injection (AC1, AC9)', (
   });
 
   it('a compact boundary issues /compact carrying the def message (§27.9)', () => {
-    defResult = { ok: true, def: { ...fileDef(), boundaries: [{ boundary: 'pre-work', mode: 'compact', message: 'Keep the plan.' }] } };
+    defResult = resolved({ ...fileDef(), boundaries: [{ boundary: 'pre-work', mode: 'compact', message: 'Keep the plan.' }] });
     const engine = makeEngine();
     engine.enter(repo, 'plan-loop', STEP, 'chain-advance');
     expect(injected[0]).toBe('/compact Keep the plan.');
@@ -370,16 +372,13 @@ describe('§27 engine — chained input into the work turn (AC1)', () => {
     const PLAN_INPUT_REL = '.agent-terminal/loop/artifacts/plan-input.md';
     // only this input's artifact exists on disk (realpath'd, as confineArtifact yields it)
     const planInputPath = seedInputArtifact(join(repo, '.agent-terminal', 'loop', 'artifacts', 'plan-input.md'), '# plan\n');
-    defResult = {
-      ok: true,
-      def: {
-        ...fileDef(),
-        inputs: [
-          binding('groomed-ticket', CHAINED_INPUT_PATH()), // declared, never produced
-          binding('plan-input', planInputPath),
-        ],
-      },
-    };
+    defResult = resolved({
+      ...fileDef(),
+      inputs: [
+        binding('groomed-ticket', CHAINED_INPUT_PATH()), // declared, never produced
+        binding('plan-input', planInputPath),
+      ],
+    });
     const engine = makeEngine();
     engine.enter(repo, 'plan-loop', STEP, 'chain-advance');
     engine.onInjectable();
@@ -393,7 +392,7 @@ describe('§27 engine — chained input into the work turn (AC1)', () => {
   });
 
   it('records the declared input that did not chain, so a broken chain is not silent (present-gated carry)', () => {
-    defResult = { ok: true, def: chainedDef() }; // declares the input, but the artifact was never produced
+    defResult = resolved(chainedDef()); // declares the input, but the artifact was never produced
     const engine = makeEngine();
     engine.enter(repo, 'plan-loop', STEP, 'chain-advance');
     engine.onInjectable();
@@ -441,7 +440,7 @@ describe('§27 engine — chained input into the work turn (AC1)', () => {
     // Conflating them enters the work turn with no plan and leaves the §25 timeline blank.
     const iPath = CHAINED_INPUT_PATH();
     mkdirSync(iPath, { recursive: true }); // a directory where the artifact belongs
-    defResult = { ok: true, def: { ...fileDef(), inputs: [binding('groomed-ticket', iPath)] } };
+    defResult = resolved({ ...fileDef(), inputs: [binding('groomed-ticket', iPath)] });
     const engine = makeEngine();
     engine.enter(repo, 'plan-loop', STEP, 'chain-advance');
     engine.onInjectable();
@@ -454,7 +453,7 @@ describe('§27 engine — chained input into the work turn (AC1)', () => {
   });
 
   it('a loop declaring no inputs records no chained transition (the first loop in a chain)', () => {
-    defResult = { ok: true, def: fileDef() }; // inputs: []
+    defResult = resolved(fileDef()); // inputs: []
     const engine = makeEngine();
     engine.enter(repo, 'plan-loop', STEP, 'chain-advance');
     engine.onInjectable();
@@ -468,10 +467,7 @@ describe('§27 engine — chained input into the work turn (AC1)', () => {
     // fixed by canonicalizing the left operand instead of removing the arithmetic.
     const iPath = seedInputArtifact(CHAINED_INPUT_PATH());
     const sentinelRel = 'sentinel/loop-area/groomed-ticket.md';
-    defResult = {
-      ok: true,
-      def: { ...commitDef(), inputs: [{ id: 'groomed-ticket', path: iPath, rel: sentinelRel }] },
-    };
+    defResult = resolved({ ...commitDef(), inputs: [{ id: 'groomed-ticket', path: iPath, rel: sentinelRel }] });
     const engine = makeEngine();
     engine.enter(repo, 'plan-loop', STEP, 'chain-advance');
     engine.onInjectable();
@@ -480,10 +476,7 @@ describe('§27 engine — chained input into the work turn (AC1)', () => {
 
   it('embeds the completion binding rel the def parser composed for the work turn\'s own artifact', () => {
     const sentinelRel = 'sentinel/loop-area/plan.md';
-    defResult = {
-      ok: true,
-      def: { ...fileDef(), outputs: [{ id: 'plan', path: artifactPath, rel: sentinelRel }] },
-    };
+    defResult = resolved({ ...fileDef(), outputs: [{ id: 'plan', path: artifactPath, rel: sentinelRel }] });
     const engine = makeEngine();
     engine.enter(repo, 'plan-loop', STEP, 'chain-advance');
     engine.onInjectable();
@@ -508,7 +501,7 @@ describe('§27 engine — work completion gate + review chain (AC2, AC3)', () =>
   });
 
   it('a def declaring no work artifact completes the work turn on the done-signal alone, then chains review (AC3)', () => {
-    defResult = { ok: true, def: commitDef() };
+    defResult = resolved(commitDef());
     const engine = makeEngine();
     enterAndInjectWork(engine);
     engine.onDoneSignal(); // work completes on the done-signal → chains review
@@ -707,7 +700,7 @@ describe('§27 engine — resume (AC8)', () => {
   it('§27.10 — reconstructs a work turn re-carrying the inputs its entry recorded so Retry re-injects them; resume records no chained transition', () => {
     const inputRel = '.agent-terminal/loop/artifacts/groomed-ticket.md';
     const inputPath = seedInputArtifact(join(repo, '.agent-terminal', 'loop', 'artifacts', 'groomed-ticket.md'));
-    defResult = { ok: true, def: { ...fileDef(), inputs: [binding('groomed-ticket', inputPath)] } };
+    defResult = resolved({ ...fileDef(), inputs: [binding('groomed-ticket', inputPath)] });
     // The entry that stopped mid-flight recorded what it carried; resume honours that record, never the disk.
     writeAppLoopState(
       repo,
@@ -825,7 +818,7 @@ describe('§27.10 — the entry\'s carry is durable across every path that re-en
     // them to dismiss the one channel a real stall depends on to summon a human.
     const iPath = join(repo, '.agent-terminal', 'loop', 'artifacts', 'groomed-ticket.md');
     mkdirSync(iPath, { recursive: true }); // a directory where the artifact belongs
-    defResult = { ok: true, def: { ...fileDef(), inputs: [binding('groomed-ticket', iPath)] } };
+    defResult = resolved({ ...fileDef(), inputs: [binding('groomed-ticket', iPath)] });
     writeAppLoopState(repo, { loop: 'plan-loop', step: STEP, turnKey: TURN_KEY, status: 'working', chainedInputs: ['groomed-ticket'] }, FIXED);
     const engine = makeEngine();
     emitError.mockClear();
@@ -867,10 +860,7 @@ describe('§27.10 — the entry\'s carry is durable across every path that re-en
     // INPUTS block, the turn runs anyway, and the recorded path writes no audit event to find it in.
     const ticket = seedInputArtifact(join(repo, '.agent-terminal', 'loop', 'artifacts', 'groomed-ticket.md'));
     const notes = seedInputArtifact(join(repo, '.agent-terminal', 'loop', 'artifacts', 'design-notes.md'), '# notes\n');
-    defResult = {
-      ok: true,
-      def: { ...fileDef(), inputs: [binding('groomed-ticket', ticket), binding('design-notes', notes)] },
-    };
+    defResult = resolved({ ...fileDef(), inputs: [binding('groomed-ticket', ticket), binding('design-notes', notes)] });
     const engine = makeEngine();
     enterAndInjectWork(engine, 'chain-advance'); // both present → both recorded
     driveFromWorkToGate(engine);
@@ -937,10 +927,7 @@ describe('§27.10 — the entry\'s carry is durable across every path that re-en
     const engine = makeEngine();
     engine.resume(repo);
     const edited = 'sentinel/edited-def/plan.md'; // the operator's edit moves the completion artifact
-    defResult = {
-      ok: true,
-      def: { ...fileDef(), outputs: [{ id: 'plan', path: artifactPath, rel: edited }] },
-    };
+    defResult = resolved({ ...fileDef(), outputs: [{ id: 'plan', path: artifactPath, rel: edited }] });
     const before = injected.length;
     engine.routeOut(repo, STEP, TURN_KEY, 'retry');
     engine.onInjectable();
@@ -967,7 +954,7 @@ describe('§27.10 — the entry\'s carry is durable across every path that re-en
     // Accept then fabricated `complete` on a def that no longer resolves. Retry and Accept must agree on the
     // def-resolves precondition, exactly as the resume path neutralizes it (completion → unresolved).
     writeAppLoopState(repo, { loop: 'plan-loop', step: STEP, turnKey: TURN_KEY, status: 'error', errorReason: 'stalled' }, FIXED);
-    defResult = { ok: true, def: commitDef() }; // resolves at resume — the commits turn is routable
+    defResult = resolved(commitDef()); // resolves at resume — the commits turn is routable
     const engine = makeEngine();
     engine.resume(repo);
     defResult = { ok: false, reason: 'no §27 def named plan-loop in any tier' }; // operator edits the def unresolvable
@@ -983,7 +970,7 @@ describe('§27.10 — the entry\'s carry is durable across every path that re-en
     // never be finalized on a real artifact it no longer describes. This is the other half of the parity the
     // retry-refuse comment claims, pinned independently.
     writeAppLoopState(repo, { loop: 'plan-loop', step: STEP, turnKey: TURN_KEY, status: 'error', errorReason: 'stalled' }, FIXED);
-    defResult = { ok: true, def: fileDef() }; // a file-completion turn, resolvable at resume
+    defResult = resolved(fileDef()); // a file-completion turn, resolvable at resume
     const engine = makeEngine();
     engine.resume(repo);
     writeArtifact(true); // present and well-formed — completionSatisfied() would otherwise be true
@@ -1013,7 +1000,7 @@ describe('§27.10 — the entry\'s carry is durable across every path that re-en
     enterAndInjectWork(engine, 'chain-advance');
     driveFromWorkToGate(engine);
     const renamed = seedInputArtifact(join(repo, '.agent-terminal', 'loop', 'artifacts', 'groomed-ticket-v2.md'));
-    defResult = { ok: true, def: { ...fileDef(), inputs: [binding('groomed-ticket-v2', renamed)] } };
+    defResult = resolved({ ...fileDef(), inputs: [binding('groomed-ticket-v2', renamed)] });
     emitError.mockClear();
     expect(engine.redo(repo, STEP, CONSOLIDATE_KEY, REDO_INSTRUCTION)).toBe(true);
     expect(emitError).toHaveBeenCalledWith(expect.stringContaining('groomed-ticket'));
@@ -1552,7 +1539,7 @@ describe('§27 engine — redo re-enters the work turn on a clean slate carrying
   it('§27.10 — re-carries the step\'s present inputs but records NO new chained transition (a redo is not a chain advance)', () => {
     const inputRel = '.agent-terminal/loop/artifacts/groomed-ticket.md';
     const inputPath = seedInputArtifact(join(repo, '.agent-terminal', 'loop', 'artifacts', 'groomed-ticket.md'));
-    defResult = { ok: true, def: { ...fileDef(), inputs: [binding('groomed-ticket', inputPath)] } };
+    defResult = resolved({ ...fileDef(), inputs: [binding('groomed-ticket', inputPath)] });
     const engine = makeEngine();
     driveToGate(engine); // enter records ONE chained transition (the input is present)
     const chainAuditsBefore = audit.mock.calls.filter((c) => /chained transition/i.test(c[1])).length;
@@ -1573,7 +1560,7 @@ describe('§27 engine — redo re-enters the work turn on a clean slate carrying
     // which is not a chain advance either — must not pick the leftover artifact up off the disk.
     const inputRel = '.agent-terminal/loop/artifacts/groomed-ticket.md';
     const inputPath = seedInputArtifact(join(repo, '.agent-terminal', 'loop', 'artifacts', 'groomed-ticket.md'));
-    defResult = { ok: true, def: { ...fileDef(), inputs: [binding('groomed-ticket', inputPath)] } };
+    defResult = resolved({ ...fileDef(), inputs: [binding('groomed-ticket', inputPath)] });
     const engine = makeEngine();
     enterAndInjectWork(engine, 'fresh-run'); // carries nothing
     driveFromWorkToGate(engine);
@@ -1589,7 +1576,7 @@ describe('§27 engine — redo re-enters the work turn on a clean slate carrying
   it('§27.10 — a resumed turn re-carries only what its entry carried, not whatever is on disk', () => {
     const inputRel = '.agent-terminal/loop/artifacts/groomed-ticket.md';
     const inputPath = seedInputArtifact(join(repo, '.agent-terminal', 'loop', 'artifacts', 'groomed-ticket.md'));
-    defResult = { ok: true, def: { ...fileDef(), inputs: [binding('groomed-ticket', inputPath)] } };
+    defResult = resolved({ ...fileDef(), inputs: [binding('groomed-ticket', inputPath)] });
     const engine = makeEngine();
     enterAndInjectWork(engine, 'fresh-run'); // carries nothing; the turn persists as `working`
     const relaunched = makeEngine(); // a relaunch reconstructs the stopped turn from disk

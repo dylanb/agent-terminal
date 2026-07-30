@@ -73,7 +73,7 @@ function mkDeps(over: Partial<AppGateDecisionDeps> & { run?: AppLoopRunState | n
   const rec: Recorder = { sideEffects: [], accepts: [], advances: [], audits: [], errors: [], views: 0, feedbacks: [], redos: [], polishEnters: [], polishClears: [] };
   const deps: AppGateDecisionDeps = {
     readRunState: () => (over.run === undefined ? GATE_RUN : over.run),
-    resolveDef: () => ({ ok: true, def: defWithGate(over.gate ?? APPROVE_MARK_READY) }),
+    resolveDef: () => ({ ok: true, def: defWithGate(over.gate ?? APPROVE_MARK_READY), tierRoot: '/tmp/tier' }),
     refs: () => ({
       pr: over.pr ?? 41,
       ticket: over.ticket ?? null,
