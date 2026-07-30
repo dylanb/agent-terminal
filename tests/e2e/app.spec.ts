@@ -294,7 +294,7 @@ test('the terminal view carries no selection toolbar (Send/Capture/Clear removed
 
 test('the CMD-3 Todos/Review-gate view is gone (view 3 + gate mock removed)', async () => {
   // The fixture-mocked view 3 (Todos beside the Review-gate mock) and its ⌘3 nav button were
-  // removed; only views 1/2/4 remain. Todos live in the drawer Todo tab, the gate in the §26 panel.
+  // removed; only views 1/2/4 remain. Todos live in the drawer Todo tab, the gate in the docked loop panel.
   await expect(page.locator('[data-viewpane="3"]')).toHaveCount(0);
   await expect(page.locator('[data-viewbtn="3"]')).toHaveCount(0);
   await expect(page.locator('#gate-panel')).toHaveCount(0);
@@ -1687,9 +1687,9 @@ function seedBootstrapFlowRepo(prefix: string): string {
 
 const inputModal = () => page.locator('#flow-modal-host .flow-modal');
 
-// §26.13 test seam — the orchestrator's in-app pickup (§26.9) shells real git/gh. e2e prepends a fake
-// gh + git on PATH that record their argv and emit canned output (no network/auth/remote), so the run
-// is deterministic on a real PTY: the PTY + shell are real, only the bootstrap helpers are stubbed.
+// The §27 bootstrap shells real git/gh. e2e prepends a fake gh + git on PATH that record their argv
+// and emit canned output (no network/auth/remote), so the run is deterministic on a real PTY: the PTY
+// + shell are real, only the bootstrap helpers are stubbed.
 // Returns the bin dir to prepend to PATH and the log file the fakes append every invocation to.
 function seedFakeGhGit(prefix: string): { binDir: string; logFile: string } {
   const binDir = mkdtempSync(join(tmpdir(), prefix));
@@ -1702,10 +1702,10 @@ function seedFakeGhGit(prefix: string): { binDir: string; logFile: string } {
     'while [ "$1" = "-c" ]; do shift 2; done\n' +
     'echo "git $*" >> "$FAKE_GHGIT_LOG"\n' +
     // status --porcelain emits nothing → a clean tree; when FAKE_GIT_DIRTY is set it emits a non-.agent-loop
-    // porcelain line → a dirty tree, so pickup aborts (§26.9). Every other op is a recorded no-op success.
+    // porcelain line → a dirty tree, so the bootstrap's clean-tree gate aborts. Every other op is a recorded no-op success.
     'if [ "$1" = "status" ] && [ -n "$FAKE_GIT_DIRTY" ]; then echo " M src/app.ts"; exit 0; fi\n' +
     'if [ "$1" = "status" ] && [ "$2" = "--porcelain" ] && [ "$#" -eq 2 ] && [ -n "$FAKE_GIT_DIRTY_ONCE" ] && [ ! -e "$FAKE_GHGIT_LOG.dirty-seen" ]; then touch "$FAKE_GHGIT_LOG.dirty-seen"; echo " M src/app.ts"; exit 0; fi\n' +
-    // branch --list prints the queried branch when FAKE_GIT_BRANCH_EXISTS is set → a pickup conflict (§26.9).
+    // branch --list prints the queried branch when FAKE_GIT_BRANCH_EXISTS is set → a bootstrap branch conflict.
     'if [ "$1" = "branch" ] && [ "$2" = "--list" ]; then local_branch=$(cat "$FAKE_GHGIT_LOG.local-branch" 2>/dev/null || true); if [ -n "$FAKE_GIT_BRANCH_EXISTS" ] || [ "$local_branch" = "$3" ]; then echo "  $3"; fi; exit 0; fi\n' +
     'if [ "$1" = "remote" ] && [ "$2" = "get-url" ]; then echo "https://github.com/fake/repo.git"; exit 0; fi\n' +
     // show-ref --verify is the local half of the §27.10 conflict probe: exit 1 (not 128) when the ref is
@@ -1751,19 +1751,19 @@ function seedFakeGhGit(prefix: string): { binDir: string; logFile: string } {
     'if [ "$1" = "pr" ] && [ "$2" = "list" ]; then if [ -n "$FAKE_GIT_BRANCH_EXISTS" ] && [ ! -e "$FAKE_GHGIT_LOG.pr-321-closed" ]; then echo \'[{"number":321,"url":"https://github.com/fake/repo/pull/321","headRefOid":"2222222222222222222222222222222222222222","isCrossRepository":false,"headRepository":{"name":"Repo"},"headRepositoryOwner":{"login":"Fake"}},{"number":999,"url":"https://github.com/contributor/fork/pull/999","headRefOid":"9999999999999999999999999999999999999999","isCrossRepository":true,"headRepository":{"name":"fork"},"headRepositoryOwner":{"login":"contributor"}}]\'; else echo \'[]\'; fi; exit 0; fi\n' +
     'if [ "$1" = "pr" ] && [ "$2" = "close" ]; then touch "$FAKE_GHGIT_LOG.pr-$3-closed"; exit 0; fi\n' +
     'if [ "$1" = "pr" ] && [ "$2" = "edit" ] && [ "$4" = "--body-file" ] && [ "$5" = "-" ]; then cat > "$FAKE_GHGIT_LOG.pr-body"; exit 0; fi\n' +
-    // §26.9/L8 epic-promote — each `gh issue create` returns a fresh issue URL (a per-binDir counter file
+    // epic-promote — each `gh issue create` returns a fresh issue URL (a per-binDir counter file
     // seeded at 500) so the sub-issues carry distinct numbers the executor appends to linked_issues.
     'if [ "$1" = "issue" ] && [ "$2" = "create" ]; then seq="$FAKE_GHGIT_LOG.issue-seq"; n=$(cat "$seq" 2>/dev/null || echo 500); n=$((n+1)); echo "$n" > "$seq"; echo "https://github.com/fake/repo/issues/$n"; exit 0; fi\n' +
     'if [ "$1" = "issue" ] && [ "$2" = "edit" ] && [ "$4" = "--add-assignee" ]; then echo "$3:$5" > "$FAKE_GHGIT_LOG.issue-assignee"; exit 0; fi\n' +
     'if [ "$1" = "issue" ] && [ "$2" = "edit" ]; then value=$5; case "$value" in \\"*\\") value=${value#\\"}; value=${value%\\"};; esac; echo "$3:$4:$value" > "$FAKE_GHGIT_LOG.issue-label"; exit 0; fi\n' +
     // The `pr create` call is logged BEFORE an optional FAKE_PICKUP_DELAY sleep, so a test can hold the
-    // pickup mid-flight (the branch is created, state.yaml not yet written) long enough to terminate the
-    // flow and prove the async completion drops as stale (§26.9).
+    // bootstrap mid-flight (the branch is created, app state not yet written) long enough to terminate the
+    // flow and prove the async completion drops as stale.
     'if [ "$1" = "pr" ] && [ "$2" = "create" ]; then [ -n "$FAKE_PICKUP_DELAY" ] && sleep "$FAKE_PICKUP_DELAY"; [ -n "$FAKE_PR_CREATE_FAIL" ] && exit 1; echo 4242 > "$FAKE_GHGIT_LOG.pr-created"; echo "https://github.com/fake/repo/pull/4242"; exit 0; fi\n' +
     'if [ "$1" = "pr" ] && [ "$2" = "list" ]; then echo "[]"; exit 0; fi\n' +
     'if [ "$1" = "pr" ] && [ "$2" = "edit" ]; then value=$5; case "$value" in \\"*\\") value=${value#\\"}; value=${value%\\"};; esac; echo "$3:$4:$value" > "$FAKE_GHGIT_LOG.pr-label"; exit 0; fi\n' +
     'if [ "$1" = "pr" ] && [ "$2" = "ready" ]; then echo "$3" > "$FAKE_GHGIT_LOG.pr-ready"; exit 0; fi\n' +
-    // §26.7/L8 CI run-don't-block — `gh pr checks` returns the current bucket state (one pending, one pass)
+    // CI run-don't-block — `gh pr checks` returns the current bucket state (one pending, one pass)
     // and exits non-zero (8) as real gh does when checks are pending; the app parses stdout regardless and
     // never waits. The invocation is logged (above) BEFORE the optional FAKE_GH_CHECKS_DELAY sleep, so a
     // test can hold the snapshot's RESULT back to prove the loop reaches its gate before the snapshot lands.
@@ -2341,7 +2341,7 @@ function installEnv(home: string, configDir: string): Record<string, string> {
   };
 }
 
-test('installing the bundled examples seeds the flow, app and legacy loop definitions, skills and commands (§18.1/§23.4/§26.5 #41/#78)', { tag: '@ownapp' }, async () => {
+test('installing the bundled examples seeds the flow, app and commands (§18.1/§23.4 #41/#78)', { tag: '@ownapp' }, async () => {
   // The tracer bullet: click the settings control against a temp HOME + temp config root, then prove
   // every destination was seeded and reported under its own group — and that a repo with no local flow
   // renders the bundled steps.
@@ -2362,11 +2362,10 @@ test('installing the bundled examples seeds the flow, app and legacy loop defini
   await expect(installExamplesBtn()).toBeFocused();
 
   // Every destination is reported under its own group in the result panel.
-  for (const dest of ['flow', 'appLoops', 'loops', 'skills', 'commands']) {
+  for (const dest of ['flow', 'appLoops', 'commands']) {
     await expect(installReportGroup(dest)).toBeVisible();
   }
   await expect(installReportGroup('appLoops')).toContainText('plan-loop.yaml');
-  await expect(installReportGroup('loops')).toContainText('plan-loop.yaml');
   await expect(installReportGroup('commands')).toContainText('groom-ticket.md');
 
   // The bundled flow definition + its todo templates now exist in the global flow home.
@@ -2375,12 +2374,6 @@ test('installing the bundled examples seeds the flow, app and legacy loop defini
   expect(existsSync(join(configDir, 'loops-v2', 'groom-loop', 'groom-loop.yaml'))).toBe(true);
   expect(existsSync(join(configDir, 'loops-v2', 'plan-loop', 'plan-loop.yaml'))).toBe(true);
   expect(existsSync(join(configDir, 'loops-v2', 'impl-loop', 'impl-loop.yaml'))).toBe(true);
-  expect(existsSync(join(configDir, 'loops', 'plan-loop', 'plan-loop.yaml'))).toBe(true);
-  expect(existsSync(join(configDir, 'loops', 'impl-loop', 'impl-loop.yaml'))).toBe(true);
-  expect(existsSync(join(configDir, 'loops', 'plan-loop', 'prompts', 'work-plan.md'))).toBe(true);
-  // The persona skills fanned in to the location Claude Code loads skills from.
-  expect(existsSync(join(configDir, 'skills', 'review-intent', 'SKILL.md'))).toBe(true);
-  expect(existsSync(join(configDir, 'skills', 'impl-review-tests', 'SKILL.md'))).toBe(true);
   // The bundled commands landed where Claude Code discovers a slash command.
   expect(existsSync(join(configDir, 'commands', 'groom-ticket.md'))).toBe(true);
 
@@ -2938,12 +2931,12 @@ const appReport1 = (repo: string): string => join(repo, '.agent-terminal', 'loop
 const appRunState = (repo: string): string => join(repo, '.agent-terminal', 'loop', 'run-state.yaml');
 const readIf = (p: string): string => (existsSync(p) ? readFileSync(p, 'utf8') : '');
 
-test('a §27 app step runs work → review-and-fix → CONSOLIDATE → the clean gate, leaving §26 untouched (§27.3/§27.6 / AC1,2,3,5,6,10)', { tag: '@ownapp' }, async () => {
+test('a §27 app step runs work → review-and-fix → CONSOLIDATE → the clean gate, leaving a pre-existing .agent-loop/state.yaml untouched (§27.3/§27.6 / AC1,2,3,5,6,10)', { tag: '@ownapp' }, async () => {
   const repo = seedPrebootstrappedAppLoopFlowRepo('agent-term-e2e-v2-work-');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-v2-work-home-'));
   const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-v2-work-bin-');
   seedFakeAgentV2(binDir, { stepId: 'plan', artifactRel: APP_ARTIFACT_REL, work: 'complete', review: 'full' });
-  // A prior §26 run sits on disk: the §27 engine must never touch it (AC10 — neither engine perturbs the other).
+  // A pre-existing legacy .agent-loop/state.yaml sits on disk: the §27 engine must never touch it (AC10 — the app never writes that file).
   const stateFile = join(repo, '.agent-loop', 'state.yaml');
   const priorState = 'schema_version: 4\nstatus: planning\niteration: 3\npr: 42\nbranch: feat/prior\nbound_loop: plan-loop\nlinked_issues:\n  - 7\n';
   mkdirSync(join(repo, '.agent-loop'), { recursive: true });
@@ -2979,7 +2972,7 @@ test('a §27 app step runs work → review-and-fix → CONSOLIDATE → the clean
   // The persisted run-state records the round number the consolidator judged.
   expect(readIf(appRunState(repo))).toContain('round: 1');
 
-  // AC10 — the §26 state.yaml is byte-for-byte unchanged, and no §26 artifact was written.
+  // AC10 — the legacy .agent-loop/state.yaml is byte-for-byte unchanged, and no legacy artifact was written.
   expect(readFileSync(stateFile, 'utf8')).toBe(priorState);
   expect(existsSync(join(repo, '.agent-loop', 'plan.md'))).toBe(false);
 
@@ -3073,7 +3066,7 @@ test('a §27 app plan gate renders approve + request-changes, and approve runs t
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-v2-approve-home-'));
   const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-v2-approve-bin-');
   seedFakeAgentV2(binDir, { stepId: 'plan', artifactRel: APP_ARTIFACT_REL, work: 'complete', review: 'full' });
-  // A prior §26 run sits on disk: the §27 approve must never touch it (AC8 — the §26 executor never fires).
+  // A pre-existing legacy .agent-loop/state.yaml sits on disk: the §27 approve must never touch it (AC8 — the app never writes that file).
   const stateFile = join(repo, '.agent-loop', 'state.yaml');
   const priorState = 'schema_version: 4\nstatus: planning\niteration: 3\npr: 42\nbranch: feat/prior\nbound_loop: plan-loop\nlinked_issues:\n  - 7\n';
   mkdirSync(join(repo, '.agent-loop'), { recursive: true });
@@ -3111,7 +3104,7 @@ test('a §27 app plan gate renders approve + request-changes, and approve runs t
   await expect.poll(() => readIf(appRunState(repo)), { timeout: 10_000 }).toContain('status: accepted');
   await expect.poll(() => readIf(appFlowState(repo)), { timeout: 10_000 }).toContain('step: done'); // advanced off the loop step
 
-  // AC8 — the §26 state.yaml is byte-for-byte unchanged: the §27 approve never fired the §26 executor.
+  // AC8 — the legacy .agent-loop/state.yaml is byte-for-byte unchanged: the §27 approve wrote nothing to it.
   expect(readFileSync(stateFile, 'utf8')).toBe(priorState);
 
   await app.close();
@@ -3187,7 +3180,7 @@ function seedRepoPlanLoopOverride(repo: string): void {
   writeFileSync(join(repo, '.agent-loop.yaml'), 'loops:\n  plan-loop: defs/plan-loop/plan-loop.yaml\n');
 }
 
-test('entering a pickup-bearing §27 def bootstraps out-of-band into app-owned state, never §26 state or terminal injection (ST2 AC3/AC8)', { tag: '@ownapp' }, async () => {
+test('entering a pickup-bearing §27 def bootstraps out-of-band into app-owned state, never writing .agent-loop/state.yaml or injecting into the terminal (ST2 AC3/AC8)', { tag: '@ownapp' }, async () => {
   const repo = seedAppBootstrapFlowRepo('agent-term-e2e-v2-bootstrap-');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-v2-bootstrap-home-'));
   const config = seedOperatorPlanLoopConfig('agent-term-e2e-v2-bootstrap-config-', (yaml) =>
@@ -3559,49 +3552,6 @@ test('a failed §27 pickup rolls back its named step with typed inputs preserved
   for (const dir of [repo, home, binDir]) rmSync(dir, { recursive: true, force: true });
 });
 
-test('a repo-resident pickup def is refused by the wired executor before any bootstrap git or gh operation (ST2 origin gate)', { tag: '@ownapp' }, async () => {
-  const repo = seedAppBootstrapFlowRepo('agent-term-e2e-v2-bootstrap-origin-');
-  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-v2-bootstrap-origin-home-'));
-  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-v2-bootstrap-origin-bin-');
-  seedRepoPlanLoopOverride(repo);
-  app = await electron.launch({
-    args: ['out/main/index.js'],
-    env: {
-      ...process.env,
-      APP_SHELL: 'bash',
-      HOME: home,
-      APP_SUBMIT_DELAY_MS: '100',
-      CLAUDE_CONFIG_DIR: exampleConfigDir,
-      PATH: `${binDir}:${process.env.PATH}`,
-      FAKE_GHGIT_LOG: logFile,
-    },
-  });
-  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
-  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
-
-  await typeCommand(`cd "${repo}"`);
-  await flowControl().click();
-  await flowControl().click();
-  await expect(inputModal()).toBeVisible({ timeout: 10_000 });
-  await inputModal().locator('.field input').fill('176');
-  const refusedPickupLogStart = readGhLog(logFile).length;
-  await inputModal().locator('.confirm').click();
-
-  const errorDialog = page.locator('#flow-error-host .flow-modal');
-  await expect(errorDialog).toBeVisible({ timeout: 15_000 });
-  await expect(errorDialog).toContainText(/operator-authored|origin/i);
-  const calls = readGhLog(logFile).slice(refusedPickupLogStart);
-  expect(calls).not.toContain('git status --porcelain');
-  expect(calls).not.toContain('gh repo view');
-  expect(calls).not.toContain('gh issue view 176 --json title,url');
-  expect(calls).not.toContain('gh issue edit');
-  expect(calls).not.toContain('gh pr create');
-  expect(existsSync(join(repo, '.agent-terminal', 'loop', 'bootstrap.yaml'))).toBe(false);
-
-  await app.close();
-  for (const dir of [repo, home, binDir]) rmSync(dir, { recursive: true, force: true });
-});
-
 test('repo-authored bootstrap.yaml cannot suppress the trusted §27 pickup executor (ST2 origin gate)', { tag: '@ownapp' }, async () => {
   const repo = seedAppBootstrapFlowRepo('agent-term-e2e-v2-bootstrap-forged-state-');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-v2-bootstrap-forged-state-home-'));
@@ -3964,7 +3914,7 @@ test('a §27 request-changes opens the composer; submitting returns the loop to 
       { id: 'rc-todo-done', repoKey: repo, text: DONE_TODO_TEXT, status: 'done', order: 2, createdAt: '2026-07-20T00:00:00.000Z' },
     ]),
   );
-  // A prior §26 run sits on disk: the §27 request-changes must never touch it (AC8 — the §26 executor never fires).
+  // A pre-existing legacy .agent-loop/state.yaml sits on disk: the §27 request-changes must never touch it (AC8 — the app never writes that file).
   const stateFile = join(repo, '.agent-loop', 'state.yaml');
   const priorState = 'schema_version: 4\nstatus: planning\niteration: 3\npr: 42\nbranch: feat/prior\nbound_loop: plan-loop\nlinked_issues:\n  - 7\n';
   mkdirSync(join(repo, '.agent-loop'), { recursive: true });
@@ -4023,7 +3973,7 @@ test('a §27 request-changes opens the composer; submitting returns the loop to 
   expect(readIf(appFlowState(repo))).toContain('step: plan'); // still on the loop step, not advanced to `done`
   expect(readGhLog(logFile)).not.toContain('gh pr ready'); // request-changes ran NO gh side-effect (that is approve's)
 
-  // AC8 — the §26 state.yaml is byte-for-byte unchanged: the §27 request-changes never fired the §26 executor.
+  // AC8 — the legacy .agent-loop/state.yaml is byte-for-byte unchanged: the §27 request-changes wrote nothing to it.
   expect(readFileSync(stateFile, 'utf8')).toBe(priorState);
 
   await app.close();
@@ -4037,7 +3987,7 @@ test('a §27 redo opens the composer; submitting re-runs the WORK turn on a clea
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-v2-redo-home-'));
   const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-v2-redo-bin-');
   seedFakeAgentV2(binDir, { stepId: 'plan', artifactRel: APP_ARTIFACT_REL, work: 'complete', review: 'full', logInjected: true });
-  // A prior §26 run sits on disk: the §27 redo must never touch it (AC8 — the §26 executor never fires).
+  // A pre-existing legacy .agent-loop/state.yaml sits on disk: the §27 redo must never touch it (AC8 — the app never writes that file).
   const stateFile = join(repo, '.agent-loop', 'state.yaml');
   const priorState = 'schema_version: 4\nstatus: planning\niteration: 3\npr: 42\nbranch: feat/prior\nbound_loop: plan-loop\nlinked_issues:\n  - 7\n';
   mkdirSync(join(repo, '.agent-loop'), { recursive: true });
@@ -4078,7 +4028,7 @@ test('a §27 redo opens the composer; submitting re-runs the WORK turn on a clea
   // redo is not terminal: the flow did NOT advance off the step and ran NO gh side-effect (that is approve's).
   expect(readIf(appFlowState(repo))).toContain('step: plan');
   expect(readGhLog(logFile)).not.toContain('gh pr ready');
-  // AC8 — the §26 state.yaml is byte-for-byte unchanged: the §27 redo never fired the §26 executor.
+  // AC8 — the legacy .agent-loop/state.yaml is byte-for-byte unchanged: the §27 redo wrote nothing to it.
   expect(readFileSync(stateFile, 'utf8')).toBe(priorState);
 
   await app.close();
@@ -4150,7 +4100,7 @@ test('a §27 polish stands the orchestrator down, survives a relaunch, and appro
   await expect.poll(() => readIf(appRunState(repo)), { timeout: 10_000 }).toContain('status: accepted');
   await expect.poll(() => readIf(appFlowState(repo)), { timeout: 10_000 }).toContain('step: done'); // advanced off the loop step
 
-  // AC8 — the §26 state.yaml is byte-for-byte unchanged: the §27 polish/approve never fired the §26 executor.
+  // AC8 — the legacy .agent-loop/state.yaml is byte-for-byte unchanged: the §27 polish/approve wrote nothing to it.
   expect(readFileSync(stateFile, 'utf8')).toBe(priorState);
 
   await app.close();
@@ -4249,7 +4199,7 @@ test('a §27 work turn with no valid artifact retries then errors, offering all 
   await expect.poll(() => readIf(appRunState(repo)), { timeout: 30_000 }).toContain('status: error');
   expect(readIf(join(repo, '.agent-terminal', 'work-runs')).length).toBe(2); // initial + one retry, then stop
 
-  // The turn failure is never silent: it raises the blocking error dialog (§26.3/D48 surface, reused).
+  // The turn failure is never silent: it raises the shared blocking error-dialog surface.
   // Dismiss it so it does not intercept the panel controls exercised below.
   const errorDialog = page.locator('#flow-error-host .flow-modal');
   await expect(errorDialog).toBeVisible({ timeout: 15_000 });
@@ -4639,7 +4589,7 @@ test('loop-derived ticket + PR surface only once the flow enters the loop step (
   await flowControl().click(); // Advance → enter the `work` loop step
   await expect(loopReadout()).toBeVisible({ timeout: 10_000 });
   // A display-only loop step (no resumable def/run) must NOT pop a blocking error dialog — entering it is a
-  // legitimate no-op, not a failure (§26 D42a; the round-1 raise regressed this by intercepting all clicks).
+  // legitimate no-op, not a failure (the round-1 raise regressed this by intercepting all clicks).
   await expect(page.locator('#flow-error-host .flow-modal')).toHaveCount(0);
   // The docked popout's "Working on" section now carries the loop's ticket + PR (bare numbers, since the
   // temp repo is not on GitHub for gh to resolve titles/links).
