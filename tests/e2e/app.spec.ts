@@ -1668,6 +1668,10 @@ function seedSkillOnSecondStepFlowRepo(prefix: string, skill: string): string {
 // §24.2.3 T3 — second step is a loop with `bootstrap: pickup` and a required typed input
 // (§18.3/§18.4): entering prompts via the modal, Confirm injects `agent-loop pickup <input>`
 // (subject to the §19.3 busy refusal) and persists the value.
+// A §27 loop step (explicit `loop_namespace: app`) with a REQUIRED github-ticket input, so entering it
+// opens the typed-input modal (§18.4). Bound to `impl-loop`, which declares NO `pickup:` block, so entry
+// runs only a work turn (no git/gh bootstrap ports) — the input-resolution and input-clearing behaviours
+// under test are engine-neutral and unaffected by that turn.
 function seedBootstrapFlowRepo(prefix: string): string {
   const dir = mkdtempSync(join(tmpdir(), prefix));
   mkdirSync(join(dir, '.git'), { recursive: true });
@@ -1676,7 +1680,7 @@ function seedBootstrapFlowRepo(prefix: string): string {
     join(dir, '.agent-terminal', 'flow.yaml'),
     'name: dev-flow\nsteps:\n' +
       '  - id: groom\n    kind: manual\n' +
-      '  - id: plan\n    kind: loop\n    loop: plan-loop\n    bootstrap: pickup\n' +
+      '  - id: plan\n    kind: loop\n    loop: impl-loop\n    loop_namespace: app\n' +
       '    inputs:\n      - name: ticket\n        type: github-ticket\n        required: true\n',
   );
   return dir;
@@ -1775,46 +1779,31 @@ function seedFakeGhGit(prefix: string): { binDir: string; logFile: string } {
 // defs (example/loops, real plan-loop/impl-loop) resolve when CLAUDE_CONFIG_DIR points at example/.
 const exampleConfigDir = join(process.cwd(), 'example');
 
-// §24.2.3 T2 — step 2 is a `loop` bound to a LoopDef, plus a real v4 agent-loop state.yaml the app
-// mirrors read-only. Returns the state.yaml path so the test hand-edits it (standing in for the
-// human driving agent-loop) and watches the strip update.
-function seedLoopFlowRepo(prefix: string): { dir: string; stateFile: string } {
+// §24.2.3 T7 — refs come from the flow's TYPED INPUTS now (§18.4); the retired engine's state-mirror
+// source (linked_issues/pr) went with the bridge (§F item 12). A pre-loop MANUAL `groom` step then a
+// `work` step declaring the ticket/PR typed inputs, whose values are pre-resolved in flow-state.yaml, so
+// the refs are progress-gated on entering `work` (they render as the §24.2.3 T7 "Flow" refs read-out). A
+// residual `.agent-terminal/loop/run-state.yaml` sits on disk that the app never writes — a test proves the
+// display clears without that run-state being touched. Returns its path for that assertion.
+function seedRefsFlowRepo(prefix: string, ticket = '25', pr = '179'): { dir: string; runStateFile: string } {
   const dir = mkdtempSync(join(tmpdir(), prefix));
   mkdirSync(join(dir, '.git'), { recursive: true });
   mkdirSync(join(dir, '.agent-terminal'), { recursive: true });
   writeFileSync(
     join(dir, '.agent-terminal', 'flow.yaml'),
-    'name: dev-flow\nsteps:\n  - id: groom\n    kind: manual\n  - id: build\n    kind: loop\n    loop: impl-loop\n',
+    'name: refs-flow\nsteps:\n  - id: groom\n    kind: manual\n' +
+      '  - id: work\n    kind: manual\n    inputs:\n' +
+      '      - name: ticket\n        type: github-ticket\n      - name: pr\n        type: pr\n',
   );
-  // Hermetic LoopDef resolution (§18.1): a repo-local .agent-loop.yaml registry override points at a
-  // working-tree LoopDef copy, so the gate model resolves without the machine's ~/.claude/loops install.
-  writeFileSync(join(dir, '.agent-loop.yaml'), 'loops:\n  impl-loop: ./impl-loop.yaml\n');
   writeFileSync(
-    join(dir, 'impl-loop.yaml'),
-    'name: impl-loop\nschema_version: "4"\ngates:\n' +
-      '  - id: awaiting-human-pr-approval\n    kind: approve-required\n    human_options: [approve, request-changes, impasse]\n    next_status_on_approve: awaiting-team-review\n' +
-      '  - id: awaiting-human-impl-triage\n    kind: triage\n    human_options: [approve, request-changes, impasse]\n    next_status_on_approve: awaiting-team-review\n' +
-      '  - id: awaiting-team-review\n    kind: terminal\n    human_options: []\n',
+    join(dir, '.agent-terminal', 'flow-state.yaml'),
+    `step: groom\nstatus: not_started\ninputs:\n  ticket: "${ticket}"\n  pr: "${pr}"\n`,
   );
-  const loopDir = join(dir, '.agent-loop');
+  const loopDir = join(dir, '.agent-terminal', 'loop');
   mkdirSync(loopDir, { recursive: true });
-  return { dir, stateFile: join(loopDir, 'state.yaml') };
-}
-
-// §24.2.3 T7 — a single MANUAL step plus a state.yaml carrying a PR + linked_issues, so the
-// ticket/PR refs resolve and surface even though the step is not a loop step. Returns the state.yaml
-// path for the test to seed.
-function seedRefsFlowRepo(prefix: string): { dir: string; stateFile: string } {
-  const dir = mkdtempSync(join(tmpdir(), prefix));
-  mkdirSync(join(dir, '.git'), { recursive: true });
-  mkdirSync(join(dir, '.agent-terminal'), { recursive: true });
-  writeFileSync(
-    join(dir, '.agent-terminal', 'flow.yaml'),
-    'name: refs-flow\nsteps:\n  - id: groom\n    kind: manual\n  - id: work\n    kind: loop\n    loop: work-loop\n',
-  );
-  const loopDir = join(dir, '.agent-loop');
-  mkdirSync(loopDir, { recursive: true });
-  return { dir, stateFile: join(loopDir, 'state.yaml') };
+  const runStateFile = join(loopDir, 'run-state.yaml');
+  writeFileSync(runStateFile, 'schema_version: 1\nloop: work-loop\nstep: work\nturn_key: t1\nstatus: complete\nround: 9\n');
+  return { dir, runStateFile };
 }
 
 const loopReadout = () => page.locator('#flow-strip .loopstat'); // compact rail read-out; click opens the panel
@@ -2006,43 +1995,46 @@ test('todo edits during an active flow are recorded; none when no flow is active
 
 // Phase 2 (§25.5): the agent-loop bridge feeds the run. Entering a loop step records the state.yaml
 // mirror; a hand-edit (the human driving agent-loop) appends the change live.
-test('a loop step records the state.yaml mirror and live edits append loop.status (§25.5)', { tag: '@ownapp' }, async () => {
-  const { dir: repo, stateFile } = seedLoopFlowRepo('agent-term-e2e-audit-loop-');
-  writeFileSync(stateFile, 'schema_version: 4\npr: 179\nbranch: agent-loop/issue-176\niteration: 9\nstatus: awaiting-human-pr-approval\n');
+test('a §27 loop step records its run-state and its status changes append loop.status + an empty outputs.snapshot (§25.5)', { tag: '@ownapp' }, async () => {
+  // The §27 engine's OWN run-state changes (through `working` to the `complete` gate) are what the §25
+  // recorder observes now — the retired external state-mirror source is gone (§F). Driven by a real turn.
+  const repo = seedPrebootstrappedAppLoopFlowRepo('agent-term-e2e-audit-loop-');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-audit-loop-home-'));
-  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-audit-loop-bin-');
+  seedFakeAgentV2(binDir, { stepId: 'plan', artifactRel: APP_ARTIFACT_REL, work: 'complete', review: 'full' });
+  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100', CLAUDE_CONFIG_DIR: exampleConfigDir, PATH: `${binDir}:${process.env.PATH}`, FAKE_GHGIT_LOG: logFile } });
   page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   await typeCommand(`cd "${repo}"`);
   await expect(flowControl()).toHaveText('Start', { timeout: 10_000 });
-  await flowControl().click(); // Start → groom (manual): run opens
+  await typeCommand('fake-agent'); // a hosted agent is at the prompt for the work turn
+  await flowControl().click(); // Start → enter the app plan-loop step → run opens, the §27 work turn starts
   await expect.poll(() => auditRunFiles(home, repo).length).toBe(1);
-  await flowControl().click(); // Advance → build (loop): the state.yaml mirror is observed
+  await expect.poll(() => readIf(appRunState(repo)), { timeout: 40_000 }).toContain('status: complete');
 
   const file = (): string => auditRunFiles(home, repo)[0];
+  // loop.status appends on each run-state status change; the round the consolidator judged appends
+  // loop.iteration. pr.assoc CANNOT fire — the §27 run-state carries no PR number (§F).
   await expect
     .poll(() => readAuditRun(home, repo, file()).events.map((e) => e.type))
-    .toEqual(expect.arrayContaining(['loop.status', 'loop.iteration', 'pr.assoc']));
-  const pr = readAuditRun(home, repo, file()).events.find(
-    (e): e is Extract<AuditEvent, { type: 'pr.assoc' }> => e.type === 'pr.assoc',
-  );
-  expect(pr?.pr).toBe(179);
-  // The status change snapshots the .agent-loop/ files (path + bytes) — here state.yaml itself (§25.5).
-  const snap = readAuditRun(home, repo, file()).events.find(
-    (e): e is Extract<AuditEvent, { type: 'outputs.snapshot' }> => e.type === 'outputs.snapshot',
-  );
-  expect(snap?.files.map((f) => f.path)).toContain('.agent-loop/state.yaml');
-
-  // A hand-edit of state.yaml (no app action) re-pulls the mirror and appends the status change.
-  writeFileSync(stateFile, 'schema_version: 4\npr: 179\nbranch: agent-loop/issue-176\niteration: 11\nstatus: awaiting-human-impl-triage\n');
+    .toEqual(expect.arrayContaining(['loop.status', 'loop.iteration']));
+  expect(readAuditRun(home, repo, file()).events.some((e) => e.type === 'pr.assoc')).toBe(false);
+  // The turn passes through `working` then `complete`, so at least two distinct loop.status events append.
   await expect
     .poll(() => readAuditRun(home, repo, file()).events.filter((e) => e.type === 'loop.status').length)
     .toBeGreaterThanOrEqual(2);
+  // Each status change still snapshots the retired .agent-loop/ area read-only (§25.5); a §27 repo has no
+  // such directory, so the snapshot is empty — a documented residue of the retired engine (§F).
+  const snap = readAuditRun(home, repo, file()).events.find(
+    (e): e is Extract<AuditEvent, { type: 'outputs.snapshot' }> => e.type === 'outputs.snapshot',
+  );
+  expect(snap?.files).toEqual([]);
 
   await app.close();
   rmSync(repo, { recursive: true, force: true });
   rmSync(home, { recursive: true, force: true });
+  rmSync(binDir, { recursive: true, force: true });
 });
 
 test('resolving a github-ticket input records input.resolved and ticket.assoc (§25.5)', { tag: '@ownapp' }, async () => {
@@ -2542,6 +2534,25 @@ function seedPrebootstrappedAppLoopFlowRepo(prefix: string, loopName = 'plan-loo
   writeFileSync(
     join(dir, '.agent-terminal', 'flow-state.yaml'),
     'step: plan\nstatus: not_started\ninputs:\n  ticket: "176"\n',
+  );
+  seedCompletedAppBootstrap(dir);
+  return dir;
+}
+
+// A pre-loop MANUAL `groom` step then a pre-bootstrapped §27 `build` loop step — so a test can watch the
+// loop read-out appear only once the flow ENTERS the loop step (progress-gating, §24.2.3 T2), driven by a
+// real §27 turn. The bound loop's ticket input is pre-resolved so entry drives the turn without a modal.
+function seedManualThenAppLoopFlowRepo(prefix: string, loopName = 'plan-loop'): string {
+  const dir = mkdtempSync(join(tmpdir(), prefix));
+  mkdirSync(join(dir, '.git'), { recursive: true });
+  mkdirSync(join(dir, '.agent-terminal'), { recursive: true });
+  writeFileSync(
+    join(dir, '.agent-terminal', 'flow.yaml'),
+    `name: dev-flow\nsteps:\n  - id: groom\n    kind: manual\n  - id: build\n    kind: loop\n    loop: ${loopName}\n    loop_namespace: app\n    inputs:\n      - name: ticket\n        type: github-ticket\n`,
+  );
+  writeFileSync(
+    join(dir, '.agent-terminal', 'flow-state.yaml'),
+    'step: groom\nstatus: not_started\ninputs:\n  ticket: "176"\n',
   );
   seedCompletedAppBootstrap(dir);
   return dir;
@@ -4256,34 +4267,48 @@ test('activating the status-bar alert opens the docked panel and lands focus on 
 });
 
 test('Restart clears a resolved stage-transition input so the next entry re-prompts (§24.2.3 T3)', { tag: '@ownapp' }, async () => {
-  // The user supplies the plan step's ticket once; after completing and Restarting the flow, the
-  // ticket must be re-requested — Restart wipes resolved inputs (unlike Undo).
-  const repo = seedBootstrapFlowRepo('agent-term-e2e-restart-reprompt-');
+  // The user supplies the plan step's ticket once (a §27 loop step's REQUIRED typed input, resolved via the
+  // modal); after completing and Restarting the flow, the ticket must be re-requested — Restart wipes
+  // resolved inputs (unlike Undo). A fake agent completes the driven §27 turn so it reaches a clean gate
+  // rather than erroring for want of a hosted agent; that is incidental to the Restart-clears-input behavior.
+  const repo = mkdtempSync(join(tmpdir(), 'agent-term-e2e-restart-reprompt-'));
+  mkdirSync(join(repo, '.git'), { recursive: true });
+  mkdirSync(join(repo, '.agent-terminal'), { recursive: true });
+  writeFileSync(
+    join(repo, '.agent-terminal', 'flow.yaml'),
+    'name: dev-flow\nsteps:\n  - id: groom\n    kind: manual\n' +
+      '  - id: plan\n    kind: loop\n    loop: plan-loop\n    loop_namespace: app\n' +
+      '    inputs:\n      - name: ticket\n        type: github-ticket\n        required: true\n',
+  );
+  seedCompletedAppBootstrap(repo);
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-restart-reprompt-home-'));
-  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-restart-reprompt-bin-');
+  seedFakeAgentV2(binDir, { stepId: 'plan', artifactRel: APP_ARTIFACT_REL, work: 'complete', review: 'full' });
+  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100', CLAUDE_CONFIG_DIR: exampleConfigDir, PATH: `${binDir}:${process.env.PATH}`, FAKE_GHGIT_LOG: logFile } });
   page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   await typeCommand(`cd "${repo}"`);
-  await expect(flowStepName()).toHaveText('groom', { timeout: 10_000 });
+  await expect(flowStation(1).locator('.nm')).toHaveText('groom', { timeout: 10_000 });
+  await typeCommand('fake-agent'); // a hosted agent is at the prompt for the §27 work turn
 
   await flowControl().click(); // Start → groom (manual, no prompt)
-  await flowControl().click(); // Advance → plan (bootstrap): the typed-input modal opens
+  await flowControl().click(); // Advance → plan (loop): the required-input modal opens
   await expect(inputModal()).toBeVisible({ timeout: 10_000 });
   await inputModal().locator('.field input').fill('176');
   await inputModal().locator('.confirm').click();
   await expect(inputModal()).toHaveCount(0);
-  // The resolved input persists to flow-state.yaml (no CLAUDE_CONFIG_DIR here, so pickup itself no-ops —
-  // this test isolates the Restart-clears-input behavior, not the pickup side-effects).
+  // The resolved input persists to flow-state.yaml; the driven §27 turn runs to its clean gate (no error).
   await expect
     .poll(() => readFileSync(join(repo, '.agent-terminal', 'flow-state.yaml'), 'utf8'), { timeout: 10_000 })
     .toContain('176');
+  await expect.poll(() => readIf(appRunState(repo)), { timeout: 40_000 }).toContain('status: complete');
 
-  await flowControl().click(); // Advance → done (plan is the last step)
+  await flowControl().click(); // Advance → done (plan is the last step; a §19.2 warn at the gate, proceeds)
   await expect(flowControl()).toHaveText('Restart', { timeout: 10_000 });
 
   await flowControl().click(); // Restart → back to groom, with the resolved ticket wiped
-  await expect(flowStepName()).toHaveText('groom');
+  await expect(flowStation(1).locator('.nm')).toHaveText('groom');
   // The cleared input is persisted: flow-state.yaml no longer carries the stale ticket.
   await expect
     .poll(() => readFileSync(join(repo, '.agent-terminal', 'flow-state.yaml'), 'utf8'), { timeout: 10_000 })
@@ -4296,16 +4321,14 @@ test('Restart clears a resolved stage-transition input so the next entry re-prom
   await app.close(); // HOME=temp ⇒ Electron writes userData under it; stop writes before removing it
   rmSync(repo, { recursive: true, force: true });
   rmSync(home, { recursive: true, force: true });
+  rmSync(binDir, { recursive: true, force: true });
 });
 
-test('loop-derived ticket + PR surface only once the flow enters the loop step (§24.2.3 T7)', { tag: '@ownapp' }, async () => {
-  // The loop's linked_issues ticket and state.yaml PR are agent-loop state: progress-gated, they stay
-  // hidden on the pre-loop manual step and appear only once the flow enters a loop step (§24.2.3 T7).
-  const { dir: repo, stateFile } = seedRefsFlowRepo('agent-term-e2e-refs-');
-  writeFileSync(
-    stateFile,
-    'schema_version: 4\npr: 179\nbranch: agent-loop/issue-176\niteration: 9\nstatus: planning\nlinked_issues:\n  - 25\n',
-  );
+test('typed-input ticket + PR surface only once the flow enters the step that declares them (§24.2.3 T7)', { tag: '@ownapp' }, async () => {
+  // Refs are the flow's typed inputs (§18.4): progress-gated, they stay hidden on the pre-`work` step and
+  // appear only once the flow enters the `work` step that declares them — even though the resolved values
+  // sit in flow-state.yaml from the start (§24.2.3 T7).
+  const { dir: repo } = seedRefsFlowRepo('agent-term-e2e-refs-');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-refs-home-'));
   app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
   page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
@@ -4315,16 +4338,15 @@ test('loop-derived ticket + PR surface only once the flow enters the loop step (
   await expect(flowControl()).toHaveText('Start', { timeout: 10_000 });
   await flowControl().click(); // Start → in_progress on the manual `groom` step
   await expect(flowStepName()).toHaveText('groom');
-  // The loop step has not been entered, so nothing loop-derived shows — even though state.yaml carries it.
+  // The `work` step has not been entered, so nothing ref-derived shows — even though flow-state carries it.
   await expect(loopReadout()).toHaveCount(0);
 
-  await flowControl().click(); // Advance → enter the `work` loop step
+  await flowControl().click(); // Advance → enter the `work` step that declares the typed inputs
   await expect(loopReadout()).toBeVisible({ timeout: 10_000 });
-  // A display-only loop step (no resumable def/run) must NOT pop a blocking error dialog — entering it is a
-  // legitimate no-op, not a failure (the round-1 raise regressed this by intercepting all clicks).
+  // Entering a ref-bearing step must NOT pop a blocking error dialog — it is a legitimate no-op.
   await expect(page.locator('#flow-error-host .flow-modal')).toHaveCount(0);
-  // The docked popout's "Working on" section now carries the loop's ticket + PR (bare numbers, since the
-  // temp repo is not on GitHub for gh to resolve titles/links).
+  // The docked popout's "Working on" section carries the ticket + PR (bare numbers, since the temp repo is
+  // not on GitHub for gh to resolve titles/links).
   await loopReadout().click();
   await expect(page.locator('#app')).toHaveClass(/\bloop-open\b/);
   await expect(loopPanel()).toContainText('Working on');
@@ -4338,15 +4360,11 @@ test('loop-derived ticket + PR surface only once the flow enters the loop step (
   rmSync(home, { recursive: true, force: true });
 });
 
-test('Terminate clears the ticket/PR display even though state.yaml still carries the loop (§24.2.3 T7)', { tag: '@ownapp' }, async () => {
-  // The prior run's PR/ticket lives on in the read-only state.yaml; Terminate resets the flow to its
-  // first step, closing the loop-step gate, so the rail read-out and docked popout empty (loop
-  // dismissed, not deleted).
-  const { dir: repo, stateFile } = seedRefsFlowRepo('agent-term-e2e-refs-term-');
-  writeFileSync(
-    stateFile,
-    'schema_version: 4\npr: 179\nbranch: agent-loop/issue-176\niteration: 9\nstatus: planning\nlinked_issues:\n  - 25\n',
-  );
+test('Terminate clears the ticket/PR display even though the loop run-state still carries it (§24.2.3 T7)', { tag: '@ownapp' }, async () => {
+  // Terminate resets the flow to its first step and wipes the resolved typed inputs, so the rail read-out
+  // and docked popout empty — the refs display is a projection, not the source. The residual loop
+  // run-state.yaml the app never writes is untouched by the clear.
+  const { dir: repo, runStateFile } = seedRefsFlowRepo('agent-term-e2e-refs-term-');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-refs-term-home-'));
   app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
   page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
@@ -4355,7 +4373,7 @@ test('Terminate clears the ticket/PR display even though state.yaml still carrie
   await typeCommand(`cd "${repo}"`);
   await expect(flowControl()).toHaveText('Start', { timeout: 10_000 });
   await flowControl().click(); // Start → groom (manual)
-  await flowControl().click(); // Advance → work (loop): the display appears
+  await flowControl().click(); // Advance → work: the refs display appears
   await expect(loopReadout()).toBeVisible({ timeout: 10_000 });
   await loopReadout().click(); // open the docked popout
   await expect(loopPanel()).toContainText('Working on');
@@ -4364,28 +4382,24 @@ test('Terminate clears the ticket/PR display even though state.yaml still carrie
   await expect(confirmModal()).toBeVisible();
   await confirmModal().locator('.confirm').click();
 
-  // Back at Not started: the loop step is no longer entered, so the display is gone — read-out removed,
-  // popout closed and emptied — despite state.yaml still holding the PR.
+  // Back at Not started: the `work` step is no longer entered and its inputs are wiped, so the display is
+  // gone — read-out removed, popout closed and emptied — while the loop's run-state.yaml still holds it.
   await expect(flowControl()).toHaveText('Start');
   await expect(loopReadout()).toHaveCount(0);
   await expect(page.locator('#app')).not.toHaveClass(/\bloop-open\b/);
   await expect(loopPanel()).not.toContainText('Working on');
-  expect(readFileSync(stateFile, 'utf8')).toContain('pr: 179'); // the read-only mirror is untouched
+  expect(readFileSync(runStateFile, 'utf8')).toContain('status: complete'); // the run-state the app never writes is untouched
 
   await app.close();
   rmSync(repo, { recursive: true, force: true });
   rmSync(home, { recursive: true, force: true });
 });
 
-test('Restart clears the ticket/PR display until the flow re-enters a loop step (§24.2.3 T7)', { tag: '@ownapp' }, async () => {
-  // Restart returns the flow to its first step, closing the loop-step gate; the display clears with no
-  // state.yaml write and returns only once the flow re-enters the loop step — then reflecting whatever
-  // loop state.yaml now holds (a fresh pickup).
-  const { dir: repo, stateFile } = seedRefsFlowRepo('agent-term-e2e-refs-restart-');
-  writeFileSync(
-    stateFile,
-    'schema_version: 4\npr: 179\nbranch: agent-loop/issue-176\niteration: 9\nstatus: planning\nlinked_issues:\n  - 25\n',
-  );
+test('Restart clears the ticket/PR display and wipes its resolved inputs (§24.2.3 T7 / §18.4)', { tag: '@ownapp' }, async () => {
+  // Restart returns the flow to its first step and wipes resolved inputs (§18.4, unlike Undo). The refs
+  // display clears with no run-state write, and — because the source is the wiped inputs, not a re-read
+  // external mirror — it stays cleared on re-entry until the inputs are provided again.
+  const { dir: repo, runStateFile } = seedRefsFlowRepo('agent-term-e2e-refs-restart-');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-refs-restart-home-'));
   app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
   page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
@@ -4394,52 +4408,43 @@ test('Restart clears the ticket/PR display until the flow re-enters a loop step 
   await typeCommand(`cd "${repo}"`);
   await expect(flowControl()).toHaveText('Start', { timeout: 10_000 });
   await flowControl().click(); // Start → groom (manual)
-  await flowControl().click(); // Advance → work (loop): the display appears
+  await flowControl().click(); // Advance → work: the refs display appears
   await expect(loopReadout()).toBeVisible({ timeout: 10_000 });
   await flowControl().click(); // Advance → done (past the last step)
   await expect(flowControl()).toHaveText('Restart');
-  await expect(loopReadout()).toBeVisible(); // still shown at done — the loop step was entered this run
+  await expect(loopReadout()).toBeVisible(); // still shown at done — the `work` step was entered this run
 
-  await flowControl().click(); // Restart → in_progress at the groom step
+  await flowControl().click(); // Restart → in_progress at the groom step, resolved inputs wiped
   await expect(flowStepName()).toHaveText('groom');
-  await expect(loopReadout()).toHaveCount(0); // cleared — the loop step is no longer entered
+  await expect(loopReadout()).toHaveCount(0); // cleared — the `work` step is no longer entered
 
-  // A fresh pickup rewrites state.yaml; re-entering the loop step shows the NEW ticket/PR.
-  writeFileSync(
-    stateFile,
-    'schema_version: 4\npr: 200\nbranch: agent-loop/issue-42\niteration: 1\nstatus: planning\nlinked_issues:\n  - 42\n',
-  );
-  await flowControl().click(); // Advance → work (loop): the new loop's display appears
-  await expect(loopReadout()).toBeVisible({ timeout: 10_000 });
-  await loopReadout().click();
-  await expect(loopPanel()).toContainText('Working on');
-  const ticketRow = loopPanel().locator('.refs .rrow', { has: page.locator('.rk', { hasText: 'Ticket' }) });
-  const prRow = loopPanel().locator('.refs .rrow', { has: page.locator('.rk', { hasText: 'PR' }) });
-  await expect(ticketRow).toContainText('#42');
-  await expect(prRow).toContainText('#200');
+  // Re-entering `work` shows nothing: Restart wiped the inputs, and (unlike the retired mirror) there is no
+  // external source to re-read — flow-state.yaml no longer carries the ticket/PR.
+  expect(readFileSync(join(repo, '.agent-terminal', 'flow-state.yaml'), 'utf8')).not.toContain('179');
+  await flowControl().click(); // Advance → work again
+  await expect(flowStation(2)).toHaveClass(/\bactive\b/); // on `work` (station 2), yet…
+  await expect(loopReadout()).toHaveCount(0); // …no refs: the inputs were wiped and there is nothing to re-read
+  expect(readFileSync(runStateFile, 'utf8')).toContain('status: complete'); // the run-state the app never writes is untouched
 
   await app.close();
   rmSync(repo, { recursive: true, force: true });
   rmSync(home, { recursive: true, force: true });
 });
 
-test('a loop step shows a Loop read-out that expands a docked state-mirror panel, live; advancing early warns (§24.2.3 T2)', { tag: '@ownapp' }, async () => {
-  // The app DRIVES NOTHING — it mirrors agent-loop's v4 state.yaml read-only, updating live as the
-  // file changes (§24.2.3 T2).
-  const { dir: repo, stateFile } = seedLoopFlowRepo('agent-term-e2e-loop-');
-  writeFileSync(
-    stateFile,
-    'schema_version: 4\npr: 179\nbranch: agent-loop/issue-176\niteration: 9\nstatus: awaiting-human-pr-approval\n',
-  );
+test('a §27 loop step shows a Loop read-out that expands a docked panel reflecting the run-state; advancing at the gate warns (§24.2.3 T2 / §19.2)', { tag: '@ownapp' }, async () => {
+  // The read-out is progress-gated: absent on the pre-loop `groom` step, it appears once the flow enters
+  // the `build` loop step and reflects the §27 engine's run-state (driven by a real turn). Advancing while
+  // the loop sits at its (human-needed) gate is a §19.2 override: it warns but proceeds.
+  const repo = seedManualThenAppLoopFlowRepo('agent-term-e2e-loop-');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-loop-home-'));
-  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-loop-bin-');
+  seedFakeAgentV2(binDir, { stepId: 'build', artifactRel: APP_ARTIFACT_REL, work: 'complete', review: 'full' });
+  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100', CLAUDE_CONFIG_DIR: exampleConfigDir, PATH: `${binDir}:${process.env.PATH}`, FAKE_GHGIT_LOG: logFile } });
   page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
   await typeCommand(`cd "${repo}"`);
-  // Rail: [Not started] · groom · build · [Completed]. Although state.yaml carries a PR, the
-  // loop-derived display is progress-gated (§24.2.3 T7): the pre-loop manual `groom` step shows no
-  // read-out at all, so there is certainly no loop STATUS pill (`.spill`) yet.
+  // Rail: [Not started] · groom · build · [Completed]. The pre-loop manual `groom` step shows no read-out.
   await expect(page.locator('#flow-strip .flow.vert .stn')).toHaveCount(4, { timeout: 10_000 });
   await expect(flowStation(2).locator('.nm')).toHaveText('build');
   await expect(loopReadout().locator('.spill')).toHaveCount(0);
@@ -4448,30 +4453,24 @@ test('a loop step shows a Loop read-out that expands a docked state-mirror panel
   await expect(flowStation(1)).toHaveClass(/\bactive\b/);
   await expect(loopReadout().locator('.spill')).toHaveCount(0);
 
-  await flowControl().click(); // Advance → build (loop): the compact Loop STATUS read-out appears
+  await typeCommand('fake-agent'); // a hosted agent is at the prompt for the work turn
+  await flowControl().click(); // Advance → build (loop): the §27 work turn runs to its gate
   await expect(flowStation(2)).toHaveClass(/\bactive\b/);
-  await expect(loopReadout().locator('.spill')).toHaveText('awaiting', { timeout: 10_000 });
-  await expect(loopReadout().locator('.spill')).toHaveClass(/\bawait\b/); // awaiting-human → needs-you tone
-  await expect(loopReadout()).toContainText('iter 9');
+  await expect.poll(() => readIf(appRunState(repo)), { timeout: 40_000 }).toContain('status: complete');
+  // The compact Loop STATUS read-out appears, reflecting the run-state.
+  await expect(loopReadout().locator('.spill')).toBeVisible({ timeout: 10_000 });
+  await expect(loopReadout()).toContainText('iter 1');
 
-  // Clicking the read-out opens the docked panel with the full v4 vocabulary (it starts closed).
+  // Clicking the read-out opens the docked panel with the run's status and the def's gate options.
   await expect(page.locator('#app')).not.toHaveClass(/\bloop-open\b/);
   await loopReadout().click();
   await expect(page.locator('#app')).toHaveClass(/\bloop-open\b/);
-  await expect(loopPanel()).toContainText('awaiting-human-pr-approval'); // exact status, not the tone
-  await expect(loopPanel()).toContainText('#179');
-  await expect(loopPanel()).toContainText('agent-loop/issue-176');
-  // The bound LoopDef (resolved via the repo's .agent-loop.yaml registry) drives the gate-options row
-  // from this gate's human_options [approve, request-changes, impasse].
+  await expect(loopPanel()).toContainText('complete'); // the run-state status, not the tone
+  // The bound §27 def drives the gate-options row from plan-loop's gate [approve, request-changes, redo, polish].
   const gateRow = loopPanel().locator('.ldl .lrow', { has: page.locator('.lk', { hasText: 'gate options' }) });
-  await expect(gateRow.locator('.lv')).toHaveText('approve · changes · impasse');
+  await expect(gateRow.locator('.lv')).toHaveText('approve · changes · redo · polish');
 
-  // A hand-edit of state.yaml (no app write, no user action) must re-pull the open panel live.
-  writeFileSync(stateFile, 'schema_version: 4\npr: 179\nbranch: agent-loop/issue-176\niteration: 11\nstatus: awaiting-human-impl-triage\n');
-  await expect(loopPanel()).toContainText('awaiting-human-impl-triage', { timeout: 10_000 });
-  await expect(loopPanel()).toContainText('11');
-
-  // Advancing while the loop still needs a human is a §19.2 override: it warns but proceeds.
+  // Advancing while the loop still sits at its (human-needed) gate is a §19.2 override: it warns but proceeds.
   await flowControl().click();
   await expect(page.locator('#flow-strip .flow-notice')).toContainText('still needs you', { timeout: 10_000 });
   await expect(flowStation(3)).toHaveClass(/\bactive\b/); // Completed — advanced anyway
@@ -4480,6 +4479,7 @@ test('a loop step shows a Loop read-out that expands a docked state-mirror panel
   await app.close(); // HOME=temp ⇒ Electron writes userData under it; stop writes before removing it
   rmSync(repo, { recursive: true, force: true });
   rmSync(home, { recursive: true, force: true });
+  rmSync(binDir, { recursive: true, force: true });
 });
 
 test('a flow transition whose write cannot land surfaces a blocking error and stays retryable (§19.1)', { tag: '@ownapp' }, async () => {
@@ -4514,12 +4514,13 @@ test('a flow transition whose write cannot land surfaces a blocking error and st
 });
 
 test('the reveal signal lands the user on the loop read-out, from another view and from viewer-fullscreen with the strip hidden (§24.2.3 T4)', { tag: '@ownapp' }, async () => {
-  // Needs a real git repo so the artifact viewer's full-screen (which hides the rail/strip) works
-  // (§24.2.3 T4).
-  const { dir: repo, stateFile } = seedLoopFlowRepo('agent-term-e2e-reveal-');
-  writeFileSync(stateFile, 'schema_version: 4\npr: 179\nbranch: agent-loop/issue-176\niteration: 9\nstatus: awaiting-human-pr-approval\n');
+  // Needs a real git repo so the artifact viewer's full-screen (which hides the rail/strip) works. The §27
+  // loop is driven to its (human-needed) gate so the status-bar alert is present throughout (§24.2.3 T4).
+  const repo = seedPrebootstrappedAppLoopFlowRepo('agent-term-e2e-reveal-');
   const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-reveal-home-'));
-  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100' } });
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-reveal-bin-');
+  seedFakeAgentV2(binDir, { stepId: 'plan', artifactRel: APP_ARTIFACT_REL, work: 'complete', review: 'full' });
+  app = await electron.launch({ args: ['out/main/index.js'], env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100', CLAUDE_CONFIG_DIR: exampleConfigDir, PATH: `${binDir}:${process.env.PATH}`, FAKE_GHGIT_LOG: logFile } });
   page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
   await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
 
@@ -4527,9 +4528,10 @@ test('the reveal signal lands the user on the loop read-out, from another view a
     `cd "${repo}" && rm -rf .git && git init -q && git config user.email t@t && git config user.name T && ` +
       `git add -A && git commit -qm init && printf '# Doc\\n' > doc.md && pwd`,
   );
-  await expect(flowStepName()).toHaveText('groom', { timeout: 10_000 });
-  await flowControl().click(); // Start → groom
-  await flowControl().click(); // Advance → build (loop) active, human-needed
+  await expect(flowControl()).toHaveText('Start', { timeout: 10_000 });
+  await typeCommand('fake-agent'); // a hosted agent is at the prompt for the work turn
+  await flowControl().click(); // Start → enter the plan loop → the §27 work turn drives to its gate
+  await expect.poll(() => readIf(appRunState(repo)), { timeout: 40_000 }).toContain('status: complete');
   await expect(loopReadout()).toHaveCount(1, { timeout: 10_000 });
   await expect(statusAlert()).toBeVisible();
   await expect(page.locator('#app')).not.toHaveClass(/\bloop-open\b/); // the docked panel starts closed
@@ -4540,7 +4542,7 @@ test('the reveal signal lands the user on the loop read-out, from another view a
   await fireRevealLoop();
   await expect(page.locator('[data-viewpane="1"]')).toBeVisible();
   await expect(page.locator('#app')).toHaveClass(/\bloop-open\b/);
-  await expect(loopPanel()).toContainText('awaiting-human-pr-approval');
+  await expect(loopPanel()).toContainText('complete');
 
   // Reveal from viewer-fullscreen (rail/strip hidden) must exit full-screen and re-open the read-out
   // on Terminal — and the alert must stay perceivable in the always-visible main region throughout.
@@ -4560,6 +4562,7 @@ test('the reveal signal lands the user on the loop read-out, from another view a
   await app.close(); // HOME=temp ⇒ Electron writes userData under it; stop writes before removing it
   rmSync(repo, { recursive: true, force: true });
   rmSync(home, { recursive: true, force: true });
+  rmSync(binDir, { recursive: true, force: true });
 });
 
 test('changing directories swaps flow state; each repo is independent and visiting writes nothing (§24.2.2 / §19.1)', { tag: '@ownapp' }, async () => {
