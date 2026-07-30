@@ -31,14 +31,26 @@ export function injectableSkill(ref: string): string {
   return skillInvocation(ref).replace(/[\r\n]+/g, ' ');
 }
 
+/** §B.5 positions 2/4/5/6 — the seam's ONE domain answer for a loop step's binding: `ready` (the binding
+ *  resolved; a `notice` carries AC 5's def migration, position 6), or `refuse` (positions 2/4/5 — the def
+ *  did not resolve, a declared bootstrap the def cannot satisfy, or the runner cannot accept a turn now).
+ *  A refuse's operator-facing surface — the resolver reason on the loop-error path, the deferred revert and
+ *  its `pushFlowChanged` — lives in the index.ts implementation of this dep (where the resolver and flow
+ *  machine are), so the seam branches on the domain answer and re-derives nothing (CLAUDE.md injection-seam). */
+export type LoopBindingResult = { kind: 'ready'; notice?: string } | { kind: 'refuse' };
+
 export interface FlowEntryActionDeps {
   /** True iff the shell is not at a ready prompt (§19.3, via OSC-133 / §8.3 quiescence). */
   isShellBusy(): boolean;
   /** Inject a manual step's skill invocation into the terminal (§9.3). */
   inject(text: string): void;
-  /** §27.15 — a loop step binds the §27 engine. Called for a surviving binding once any required input is
-   *  satisfied, so entering it resolves the def and starts the §27 work turn (§27.3). The §27 entry owns
-   *  what the entry does — the skill/bootstrap/dispatch ordering (AC 10) and the run-less/failure view. */
+  /** §B.5 positions 2/4/5/6 — resolve (and, on the app-bundled tier, migrate) the step's loop binding.
+   *  Called once, after the marked-binding (position 1) and required-input (position 3) gates, so its
+   *  migration side effect never fires on an entry that returns a prompt. */
+  prepareLoopBinding(step: FlowStepDef): LoopBindingResult;
+  /** §27.15 / §B.5 positions 7/8 — dispatch a ready loop binding: inject the step's skill (submitted, for a
+   *  def with no `pickup:` block) and start the §27 work turn / bootstrap. Owns the skill/bootstrap/dispatch
+   *  ordering (AC 10), where the resolved def's `pickup:` block is known. */
   enterAppLoop(step: FlowStepDef): void;
 }
 
@@ -65,16 +77,23 @@ export function createFlowEntryActions(deps: FlowEntryActionDeps): FlowEntryActi
     const required = (step.inputs ?? []).filter((i) => i.required);
     const missing = required.filter((i) => resolved(i.name) === '');
     if (step.kind === 'loop') {
-      // AC 4 marked binding: a `legacy` binding names no surviving engine, so entry does NOTHING — no
-      // injection with nothing to submit it, no dispatch (§B.5 item 1). Its error is the loop view's (§B.4).
+      // §B.5 position 1 — AC 4 marked binding: a `legacy` binding names no surviving engine, so entry does
+      // NOTHING (nothing resolved, injected or dispatched). Its error is the loop view's (§B.4).
       if (bindsNoSurvivingEngine(step.loopNamespace ?? DEFAULT_LOOP_NAMESPACE)) return {};
-      // §18.4: an unsatisfied required input prompts ALONE, above the entry, so answering it (which re-runs
-      // enter) cannot double-fire the §27 entry (§B.5 item 3).
+      // §B.5 position 3 — an unsatisfied required input prompts ALONE, hoisted above the binding prep (whose
+      // migration side effect must not fire on a prompt entry) and the dispatch, so answering it (which
+      // re-runs enter) cannot double-fire the §27 entry or drop an accumulated notice.
       if (missing.length > 0) {
         return { prompt: { inputs: missing.map(({ name, type }) => ({ name, type })), bootstrap: BOOTSTRAP_PICKUP } };
       }
+      // §B.5 positions 2/4/5/6 — resolve (and migrate) the binding. A refuse's surface/revert/push happened
+      // in the dep's impl; the seam only stops dispatching. A ready binding's notice is AC 5's migration
+      // notice (position 6), forwarded on the transition reply.
+      const binding = deps.prepareLoopBinding(step);
+      if (binding.kind === 'refuse') return {};
+      // §B.5 positions 7/8 — the dispatch owns the skill injection (submitted) and bootstrap/dispatch.
       deps.enterAppLoop(step);
-      return {};
+      return binding.notice !== undefined ? { notice: binding.notice } : {};
     }
     if (step.skill) {
       if (deps.isShellBusy()) return { notice: BUSY_NOTICE };

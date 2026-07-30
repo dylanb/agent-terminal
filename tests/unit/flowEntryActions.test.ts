@@ -14,6 +14,9 @@ function deps(over: Partial<Parameters<typeof createFlowEntryActions>[0]> = {}) 
     isShellBusy: vi.fn(() => false),
     inject: vi.fn(),
     enterAppLoop: vi.fn(),
+    // §B.5 positions 2/4/5/6 — resolve + migrate the binding; a refuse's surface/revert/push side effects
+    // live in the index.ts impl (§B.5). Default: a clean ready binding with no migration notice.
+    prepareLoopBinding: vi.fn(() => ({ kind: 'ready' as const })),
     ...over,
   };
 }
@@ -49,19 +52,22 @@ describe('flow entry actions (§18.6/§19.3 — skill-only)', () => {
   });
 });
 
-// §27.15 / AC 4 / AC 10 — every loop step is the §27 engine's. The dispatcher routes a surviving-binding
-// loop step to the §27 entry (enterAppLoop), which resolves the def and orders the skill/bootstrap/dispatch
-// (index.ts); the seam itself injects nothing and runs no pickup. AC 4's binding cases are graded here:
-// absence and `app` bind the surviving engine; the recognized-but-retired `legacy` marker names no surviving
-// engine, so its entry does nothing (its error is the loop VIEW's — §B.4). AC 10's ordering is downstream.
+// §27.15 / AC 4 / AC 10 — every loop step is the §27 engine's. For a surviving binding the seam runs, in
+// §B.5's order: (1) a `legacy` marking names no surviving engine so entry does NOTHING; (3) an unsatisfied
+// required input prompts ALONE, hoisted above every producer so answering it re-enters cleanly; then it asks
+// the injected `prepareLoopBinding` seam (positions 2/4/5/6 — resolve + migrate; a `refuse`'s surface/revert/
+// push side effects live in the index.ts impl) and, only on `ready`, dispatches via `enterAppLoop` (positions
+// 7/8 — the skill injection and bootstrap/dispatch, where the resolved def's `pickup:` block is known). The
+// seam itself injects no loop skill and forwards the migration `notice` on the transition reply.
 describe('flow entry actions — loop step routes to the §27 engine (§27.15 / AC4 / AC10)', () => {
   const appStep = (over: Partial<FlowStepDef> = {}): FlowStepDef =>
     step({ id: 'plan', kind: 'loop', loop: 'plan-loop', loopNamespace: 'app', ...over });
 
-  it('routes an explicit app-namespace loop step to §27: no pickup, no injection, no notice/prompt', () => {
+  it('prepares the binding then dispatches a ready app-namespace loop step: no seam injection, no notice/prompt', () => {
     const d = deps();
     const s = appStep();
     const result = createFlowEntryActions(d)(s, {});
+    expect(d.prepareLoopBinding).toHaveBeenCalledWith(s);
     expect(d.enterAppLoop).toHaveBeenCalledWith(s);
     expect(d.inject).not.toHaveBeenCalled();
     expect(result.notice).toBeUndefined();
@@ -72,6 +78,7 @@ describe('flow entry actions — loop step routes to the §27 engine (§27.15 / 
     const d = deps();
     const s = step({ id: 'implement', kind: 'loop', loop: 'impl-loop' });
     createFlowEntryActions(d)(s, {});
+    expect(d.prepareLoopBinding).toHaveBeenCalledWith(s);
     expect(d.enterAppLoop).toHaveBeenCalledWith(s);
     expect(d.inject).not.toHaveBeenCalled();
   });
@@ -85,7 +92,24 @@ describe('flow entry actions — loop step routes to the §27 engine (§27.15 / 
     expect(d.enterAppLoop).toHaveBeenCalled();
   });
 
-  it('prompts (alone) before entering a §27 step whose required typed input is unresolved (§B.5 item 3)', () => {
+  it('forwards the migration notice a ready binding accumulates onto the transition reply (§B.5 position 6)', () => {
+    const d = deps({ prepareLoopBinding: vi.fn(() => ({ kind: 'ready' as const, notice: 'moved plan-loop into your config' })) });
+    const result = createFlowEntryActions(d)(appStep(), {});
+    expect(d.enterAppLoop).toHaveBeenCalled();
+    expect(result.notice).toBe('moved plan-loop into your config');
+  });
+
+  it('a refused binding dispatches nothing and returns no notice — the impl already surfaced/reverted (§B.5 pos 2/4/5)', () => {
+    const d = deps({ prepareLoopBinding: vi.fn(() => ({ kind: 'refuse' as const })) });
+    const result = createFlowEntryActions(d)(appStep(), {});
+    expect(d.prepareLoopBinding).toHaveBeenCalled();
+    expect(d.enterAppLoop).not.toHaveBeenCalled();
+    expect(d.inject).not.toHaveBeenCalled();
+    expect(result.notice).toBeUndefined();
+    expect(result.prompt).toBeUndefined();
+  });
+
+  it('prompts (alone) before preparing the binding when a required typed input is unresolved (§B.5 position 3)', () => {
     const d = deps();
     const result = createFlowEntryActions(d)(
       appStep({ inputs: [{ name: 'ticket', type: 'github-ticket', required: true }] }),
@@ -95,6 +119,8 @@ describe('flow entry actions — loop step routes to the §27 engine (§27.15 / 
       inputs: [{ name: 'ticket', type: 'github-ticket' }],
       bootstrap: BOOTSTRAP_PICKUP,
     });
+    // Hoisted above position 6: neither the binding prep (with its migration side effect) nor the dispatch runs.
+    expect(d.prepareLoopBinding).not.toHaveBeenCalled();
     expect(d.enterAppLoop).not.toHaveBeenCalled();
     expect(d.inject).not.toHaveBeenCalled();
     expect(result.notice).toBeUndefined();
@@ -106,6 +132,7 @@ describe('flow entry actions — loop step routes to the §27 engine (§27.15 / 
       appStep({ inputs: [{ name: '__proto__', type: 'free-text', required: true }] }),
       {},
     );
+    expect(d.prepareLoopBinding).not.toHaveBeenCalled();
     expect(d.enterAppLoop).not.toHaveBeenCalled();
     expect(result.prompt).toEqual({ inputs: [{ name: '__proto__', type: 'free-text' }], bootstrap: BOOTSTRAP_PICKUP });
   });
@@ -126,17 +153,18 @@ describe('flow entry actions — loop step routes to the §27 engine (§27.15 / 
     expect(d.enterAppLoop).toHaveBeenCalled();
   });
 
-  it('routes an app-namespace step carrying a skill to §27 without injecting it (skill is ordered downstream)', () => {
+  it('routes an app-namespace step carrying a skill to §27 without injecting it at the seam (skill is ordered downstream)', () => {
     const d = deps();
     createFlowEntryActions(d)(appStep({ skill: 'groom' }), {});
     expect(d.enterAppLoop).toHaveBeenCalled();
     expect(d.inject).not.toHaveBeenCalled();
   });
 
-  it('a legacy-marked loop step names no surviving engine: nothing entered, nothing injected (§B.5 item 1)', () => {
+  it('a legacy-marked loop step names no surviving engine: nothing prepared, entered, or injected (§B.5 position 1)', () => {
     const d = deps();
     const s = step({ id: 'plan', kind: 'loop', loop: 'plan-loop', loopNamespace: 'legacy' });
     const result = createFlowEntryActions(d)(s, {});
+    expect(d.prepareLoopBinding).not.toHaveBeenCalled();
     expect(d.enterAppLoop).not.toHaveBeenCalled();
     expect(d.inject).not.toHaveBeenCalled();
     expect(result.notice).toBeUndefined();
@@ -146,6 +174,7 @@ describe('flow entry actions — loop step routes to the §27 engine (§27.15 / 
   it('does not enter a manual step through the loop path', () => {
     const d = deps();
     createFlowEntryActions(d)(step({ id: 'polish', kind: 'manual' }));
+    expect(d.prepareLoopBinding).not.toHaveBeenCalled();
     expect(d.enterAppLoop).not.toHaveBeenCalled();
   });
 });
