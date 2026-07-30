@@ -370,7 +370,11 @@ export function createFlowMachine(
         },
       };
     }
-    const appLoop = readAppLoopView?.(mostRecentLoopStep.loop);
+    // A loop step always carries `loop` (loadFlowDefinition enforces it, §18.1); guard the optional type
+    // and degrade to no loop view rather than crashing if a caller hands us a malformed loop step.
+    const loopName = mostRecentLoopStep.loop;
+    if (loopName === undefined) return withRefs;
+    const appLoop = readAppLoopView?.(loopName);
     return appLoop ? { ...withRefs, loop: appLoop } : withRefs;
   };
 
