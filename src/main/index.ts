@@ -15,7 +15,7 @@ import {
   type SendChannel,
   type TodoStatus,
 } from '../shared/ipc';
-import { createInjector } from './inject';
+import { createInjector, DEFER_DEADLINE_MS } from './inject';
 import { createMonitorEventStore } from './eventStore';
 import { createMonitorEventsFile } from './monitorEventsFile';
 import { createShadowModel } from './shadow';
@@ -74,7 +74,9 @@ import { createGithubRefs } from './githubRefs';
 import { createAuditRecorder } from './auditRecorder';
 import { appBootstrapAuditCmd, appBootstrapAuditExit, type TransitionKind } from '../shared/audit';
 import { auditRootDir } from './auditPaths';
-import { createFlowEntryActions } from './flowEntryActions';
+import { createFlowEntryActions, injectableSkill } from './flowEntryActions';
+import { createLoopBindingPreparer } from './loopBinding';
+import { migrateBundledLoopDef } from './migrateLoopDef';
 import { createLoopNotifier } from './loopNotifier';
 import { classifyHostedAgent, hostedAgentPresent } from './loopOrchestrator';
 import { deriveLoopActivity, type LoopActivity } from '../shared/loopActivity';
@@ -300,6 +302,12 @@ async function createWindow(): Promise<void> {
   // bar's activity via deriveLoopActivity; not authority, only display. Written by the §27 bootstrap
   // coordinator and cleared when the bootstrap resolves.
   let pickupInFlight: { repoKey: string; issue: number; wipe: boolean } | null = null;
+  // §B.5 item 6 / §B.13a — the main-side carrier for a transient notice produced AFTER a transition reply was
+  // already sent (the coordinator's asynchronous §19.3 busy-shell refusal). It rides the next `flow:state`
+  // response for the repo — consumed one-shot when that view is built — because there is no delivery-ack
+  // channel to hang it on. The strip then holds it across passive re-pulls and clears it on the next
+  // transition (§B.10). Keyed by repoKey; the receiver never re-derives the target (one payload = one repo).
+  const pendingNotice = new Map<string, string>();
   // §27.15 — the §27 (app-namespace) work-turn engine, driving the hosted instance through its own domain
   // ports. Only one turn is ever in flight (one instance). It keeps its run state and done-file in the §27
   // loop area (AC10).
@@ -409,20 +417,69 @@ async function createWindow(): Promise<void> {
     }
   };
 
-  // §18.6/§19.3: a manual step's only automatic entry action is injecting its `skill`, refused over a
-  // busy shell — a live OSC-133 command span means not at a ready prompt. A `bootstrap: pickup` loop
-  // step runs in-app pickup instead (§26.9); a non-pickup loop step RESUMES the existing run (§26 D42a).
-  // Must be built after the injector + tracker exist.
+  // §18.6/§19.3: a manual step's only automatic entry action is injecting its `skill`, refused over a busy
+  // shell — a live OSC-133 command span means not at a ready prompt. A loop step binds the §27 engine via the
+  // preparer (positions 2/4/5/6) then the dispatch (positions 7/8). Must be built after the injector + tracker.
   let appBootstrapCoordinator: AppLoopBootstrapCoordinator | null = null;
+  // §B.5 positions 2/4/5/6 — resolve the bound def, then REFUSE (with the right operator-facing surface) or
+  // READY (optionally carrying AC 5's migration notice). The order lives in createLoopBindingPreparer; the
+  // effects are wired here to the real resolver, engine, IPC and flow machine (CLAUDE.md injection-seam).
+  const prepareLoopBinding = createLoopBindingPreparer({
+    resolveDef: (step) => {
+      const t = activeFlowEntryOccurrence;
+      if (!t || step.loop === undefined) return { ok: false, reason: 'this loop step names no loop to run' };
+      return resolveLoopDefV2(step.loop, appDefContext(t.repoKey));
+    },
+    canEnterWork: () => appEngine.canEnter(),
+    // Position 2 — an unresolved def keeps the surviving app-namespace step (reverting would be an AC 2
+    // change), so surface the reason on the per-step loop-error path and dispatch nothing.
+    refuseUnresolved: (reason) => send(CH.flowOnLoopError, { sessionId: SESSION_ID, reason }),
+    // Positions 4/5 — surface the durable bootstrap error, then DEFER an identity-guarded revert + push. The
+    // entry action fires inside advance's `enter(view())`, whose reply view was captured at the entered step;
+    // a synchronous revert's push would be overwritten by that stale reply, so the revert rides a later tick
+    // (mirrors the coordinator's naturally-async rollbackStep guard — entryToken + status + step + issue).
+    refuseAndRevert: (reason) => {
+      const t = activeFlowEntryOccurrence;
+      if (!t) return;
+      const snap = flow.state(t.repoKey);
+      const guard = { repoKey: t.repoKey, token: t.token, step: snap.stepName, issue: snap.refs?.ticket ?? null };
+      send(CH.flowOnBootstrapError, { sessionId: SESSION_ID, repoKey: guard.repoKey, step: guard.step, reason });
+      setImmediate(() => {
+        const current = flow.state(guard.repoKey);
+        if (
+          currentFlowEntryTokens.get(guard.repoKey) !== guard.token ||
+          current.status !== 'in_progress' ||
+          current.stepName !== guard.step ||
+          (current.refs?.ticket ?? null) !== guard.issue
+        ) {
+          return;
+        }
+        flow.revertStep(guard.repoKey, guard.step);
+        pushFlowChanged();
+      });
+    },
+    // Position 6 — AC 5's def migration, only when the binding resolved from the app-bundled tier and the
+    // operator tier exists; the copy is best-effort and returns its one-shot notice (or null).
+    migrateIfBundled: (step, resolved) => {
+      const appBundledDir = resolveExampleLoopsV2Dir(iconLoc);
+      const operatorDir = userConfigLoopsV2Dir();
+      if (resolved.tierRoot !== appBundledDir || operatorDir === null || step.loop === undefined) return null;
+      return migrateBundledLoopDef({ name: step.loop, appBundledDir, operatorDir });
+    },
+  });
   const flowEntryActions = createFlowEntryActions({
     isShellBusy: () => tracker.summaries().some((s) => s.running),
     inject: (text) => inject(text, { submit: false }),
-    // §27.15/§27.3 — an app-namespace step binds the §27 engine: start its work turn (run the declared
-    // boundary, inject the work prompt once when injectable), NEVER a §26 run. The engine no-ops when the
-    // def fails to resolve — the run-less/failure view (deriveAppLoopView) is the operator's surface then.
+    prepareLoopBinding,
+    // §B.5 positions 7/8 (AC 10) — dispatch a READY binding. The coordinator injects the step's `skill`
+    // (submitted, §19.3-refused on a busy shell) strictly BEFORE the engine boundary on BOTH routes: a
+    // no-`pickup` def defers the accepted turn and chains the boundary off the skill's submit; a `pickup` def
+    // injects after the bootstrap's work entry. So the seam only forwards the collapsed skill line on the job
+    // (CWE-74). The `!resolved.ok`/no-coordinator arm is a defensive direct entry the preparer's position 2
+    // has already made unreachable on the live path.
     enterAppLoop: (step) => {
       const t = activeFlowEntryOccurrence;
-      if (!t || !step.loop) return;
+      if (!t || step.loop === undefined) return;
       const resolved = resolveLoopDefV2(step.loop, appDefContext(t.repoKey));
       const issue = flow.state(t.repoKey).refs?.ticket ?? null;
       if (!resolved.ok || appBootstrapCoordinator === null) {
@@ -438,6 +495,7 @@ async function createWindow(): Promise<void> {
         entry: t.entry,
         issue,
         bootstrap: resolved.def.pickup,
+        ...(step.skill ? { skill: injectableSkill(step.skill) } : {}),
       });
     },
   });
@@ -539,13 +597,36 @@ async function createWindow(): Promise<void> {
       pushFlowChanged();
       return true;
     },
-    enterWork: (repoDir, loopName, stepId, entry) => {
-      const result = appEngine.enter(repoDir, loopName, stepId, entry);
+    enterWork: (repoDir, loopName, stepId, entry, deferRequest) => {
+      // §B.20a — with `deferRequest` the engine ACCEPTS the turn (occupying the runner) without requesting it;
+      // the coordinator fires `triggerWork` off the skill injection's completion so the boundary preamble is
+      // written strictly after the skill's submit (§B.5 item 6, CWE-74). Non-deferred, the turn requests now.
+      const result = appEngine.enter(repoDir, loopName, stepId, entry, { deferRequest });
       if (result === 'entered') {
         armAppTurnDoneWatch(repoDir);
         pushFlowChanged();
       }
       return result;
+    },
+    // §B.13c — inject the collapsed skill line submitted, signalling completion once its submit `\r` is written
+    // so the deferred work turn can chain strictly after it (§B.5 item 6).
+    inject: (text, onComplete) => inject(text, { submit: true, onComplete }),
+    // §19.3 — a live OSC-133 command span means the shell is not at a ready prompt.
+    isShellBusy: () => tracker.summaries().some((s) => s.running),
+    // §B.5 item 6 / §B.13a — the coordinator's async busy-shell refusal is not an error (the work turn runs
+    // fine); stash it on the main-side carrier so it rides the next `flow:state` response for the repo.
+    emitNotice: ({ repoDir, notice }) => {
+      pendingNotice.set(repoDir, notice);
+      pushFlowChanged();
+    },
+    // §B.20a — request the turn deferred by `enterWork(…, true)`, and abandon one never triggered.
+    triggerWork: () => appEngine.triggerDeferredTurn(),
+    cancelWork: () => appEngine.cancelDeferredTurn(),
+    // §B.20a (CWE-755) — the deadline the deferred turn's skill injection must signal completion within, or the
+    // coordinator reverts rather than leave the runner occupied by a turn never requested.
+    armDeferDeadline: (onLapse) => {
+      const timer = setTimeout(onLapse, DEFER_DEADLINE_MS);
+      return () => clearTimeout(timer);
     },
     emitError: ({ repoDir, stepId, reason }) =>
       send(CH.flowOnBootstrapError, {
@@ -920,8 +1001,16 @@ async function createWindow(): Promise<void> {
       [CH.viewerRead]: (_e, m) => (isValidViewerRead(m) ? readArtifact(viewerCwd(), m.relPath) : null),
       // Flow lifecycle (§24.2.2). An illegal transition throws (machine invariant) → the invoke
       // rejects and the strip re-pulls; a malformed payload fails closed to a benign error view.
-      [CH.flowState]: (_e, m) =>
-        isValidFlowRequest(m) ? trackLoop(m.repoKey, withDerived(m.repoKey, flow.state(m.repoKey))) : flowRequestError(),
+      [CH.flowState]: (_e, m) => {
+        if (!isValidFlowRequest(m)) return flowRequestError();
+        const view = trackLoop(m.repoKey, withDerived(m.repoKey, flow.state(m.repoKey)));
+        // §B.5 item 6 / §B.13a — a coordinator-produced async notice (busy shell at hand-off) rides exactly
+        // ONE state response: attach it when this view carries none, and consume it so it is not re-sent.
+        const pending = pendingNotice.get(m.repoKey);
+        if (pending === undefined || view.notice !== undefined) return view;
+        pendingNotice.delete(m.repoKey);
+        return { ...view, notice: pending };
+      },
       [CH.flowStart]: (_e, m) => {
         if (!isValidFlowRequest(m) || !knownRepoKeys.has(m.repoKey)) return flowRequestError();
         return withoutTrustedBootstrap(m.repoKey, () =>
