@@ -165,7 +165,7 @@ for (const theme of ['light', 'dark'] as const) {
       };
       const withAlert = (title: StatusBarTitle): StatusBarModel => ({
         title,
-        activity: { phrase: 'Waiting for the agent' },
+        activity: { phrase: 'Bootstrapping #12' },
         alert: { status: 'awaiting-plan-review', iteration: 3, pr: 58 },
       });
 
@@ -314,8 +314,7 @@ describe('install consent dialog stays operable with a long file manifest', () =
         ok: true,
         destinations: [
           { destination: 'flow', conflict: false },
-          { destination: 'loops', conflict: true, files },
-          { destination: 'skills', conflict: false },
+          { destination: 'appLoops', conflict: true, files },
           { destination: 'commands', conflict: false },
         ],
       }),
@@ -368,8 +367,7 @@ describe('the consent dialog survives a short viewport (200% zoom / reflow — W
         ok: true,
         destinations: [
           { destination: 'flow', conflict: false },
-          { destination: 'loops', conflict: true, files },
-          { destination: 'skills', conflict: false },
+          { destination: 'appLoops', conflict: true, files },
           { destination: 'commands', conflict: false },
         ],
       }),
@@ -418,8 +416,7 @@ describe('the consent dialog reflows at 320x256 (WCAG 1.4.10)', () => {
         ok: true,
         destinations: [
           { destination: 'flow', conflict: false },
-          { destination: 'loops', conflict: true, files },
-          { destination: 'skills', conflict: false },
+          { destination: 'appLoops', conflict: true, files },
           { destination: 'commands', conflict: false },
         ],
       }),
@@ -546,8 +543,7 @@ describe('the consent scroll box does not clip the checkbox focus ring', () => {
         ok: true,
         destinations: [
           { destination: 'flow', conflict: false },
-          { destination: 'loops', conflict: true, files },
-          { destination: 'skills', conflict: false },
+          { destination: 'appLoops', conflict: true, files },
           { destination: 'commands', conflict: false },
         ],
       }),
@@ -592,8 +588,7 @@ describe('the consent scroll box does not clip the focus ring of a control it sc
         ok: true,
         destinations: [
           { destination: 'flow', conflict: true, files: files('flow') },
-          { destination: 'loops', conflict: true, files: files('loops') },
-          { destination: 'skills', conflict: true, files: files('skills') },
+          { destination: 'appLoops', conflict: true, files: files('appLoops') },
           { destination: 'commands', conflict: true, files: files('commands') },
         ],
       }),
@@ -621,7 +616,7 @@ describe('the consent scroll box does not clip the focus ring of a control it sc
   it('leaves room for the ring on the BLOCK axis for every checkbox, including ones below the fold', async () => {
     const rows = host.querySelector('[data-modal-scroll]') as HTMLElement;
     const boxes = [...host.querySelectorAll<HTMLElement>('.install-consent-opt input[type="checkbox"]')];
-    expect(boxes.length).toBe(4);
+    expect(boxes.length).toBe(3);
     expect(rows.scrollHeight).toBeGreaterThan(rows.clientHeight); // it really does have to scroll
 
     for (const box of boxes) {

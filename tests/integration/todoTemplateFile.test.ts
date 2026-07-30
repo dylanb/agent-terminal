@@ -53,7 +53,7 @@ describe('loadTodoTemplateFile (§18.6 — co-located with flow.yaml)', () => {
 
   it('reads an in-root symlink that targets an in-root file (read via the validated real path)', () => {
     // A legitimate in-root symlink must still return its target's content — regression pin for the
-    // CWE-367 abs→real-path switch (mirrors readArtifact/loopDef, §20.2).
+    // CWE-367 abs→real-path switch (mirrors readArtifact, §20.2).
     writeFileSync(join(flowDir, 'target.md'), '- real target body\n');
     try {
       symlinkSync(join(flowDir, 'target.md'), join(flowDir, 'alias.md'));

@@ -245,11 +245,11 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     expect(host.getAttribute('aria-atomic')).toBe('false');
   });
 
-  // A phrase moving 'Working' -> 'Running reviewers' arrives on a PASSIVE push, which the strip answers by
-  // patching in place. The status bar must still be handed the new phrase — otherwise the one surface that
-  // shows what the engine is doing freezes on the first phrase of the run.
+  // A phrase moving 'Bootstrapping #12' -> 'Bootstrapping #13' arrives on a PASSIVE push, which the strip
+  // answers by patching in place. The status bar must still be handed the new phrase — otherwise the one
+  // surface that shows what the engine is doing freezes on the first phrase of the run.
   it('keeps the status bar live across a passive push that patches the strip in place', async () => {
-    let phrase = 'Working';
+    let phrase = 'Bootstrapping #12';
     let fire = (): void => {};
     const onStatusBar = vi.fn();
     const deps = {
@@ -272,11 +272,11 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     await vi.waitFor(() => expect(onStatusBar).toHaveBeenCalled());
     const stationBefore = host.querySelector('.stn')!;
 
-    phrase = 'Running reviewers';
+    phrase = 'Bootstrapping #13';
     fire();
 
     await vi.waitFor(() =>
-      expect(onStatusBar.mock.calls.at(-1)![0].activity).toEqual({ phrase: 'Running reviewers' }),
+      expect(onStatusBar.mock.calls.at(-1)![0].activity).toEqual({ phrase: 'Bootstrapping #13' }),
     );
     expect(host.querySelector('.stn')).toBe(stationBefore); // the strip itself was patched, not rebuilt
   });

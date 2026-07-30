@@ -173,7 +173,7 @@ describe('status bar (§22.3.1)', () => {
       const { render } = mount({ githubRef });
       render(model({ title: { kind: 'pr', number: 57 } }));
       await flush();
-      render(model({ title: { kind: 'pr', number: 57 }, activity: { phrase: 'Working' } }));
+      render(model({ title: { kind: 'pr', number: 57 }, activity: { phrase: 'Bootstrapping #12' } }));
       await flush();
       expect(githubRef).toHaveBeenCalledTimes(1);
     });
@@ -275,7 +275,7 @@ describe('status bar (§22.3.1)', () => {
       render(model({ title: { kind: 'user', text: '' } }));
       const input = startEditing(host);
       type(input, 'half a nam');
-      render(model({ title: { kind: 'user', text: '' }, activity: { phrase: 'Working' } }));
+      render(model({ title: { kind: 'user', text: '' }, activity: { phrase: 'Bootstrapping #12' } }));
       expect(editor(host)).toBe(input);
       expect(editor(host)!.value).toBe('half a nam');
     });
@@ -676,7 +676,7 @@ describe('status bar (§22.3.1)', () => {
       input.value = 'New name';
       press(input, 'Enter');
       // an ordinary background push (same repo, no new edit) lands while the save is still pending
-      render(model({ title: { kind: 'user', text: 'Old' }, activity: { phrase: 'Working' } }));
+      render(model({ title: { kind: 'user', text: 'Old' }, activity: { phrase: 'Bootstrapping #12' } }));
       reject(new Error('EROFS'));
       await flush();
       expect(onError).toHaveBeenCalledTimes(1);

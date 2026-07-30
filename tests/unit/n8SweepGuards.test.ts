@@ -1,11 +1,19 @@
 // N8 sweep completion guards (issue #98, docs/n8-deletion-list.md §D.4). AC 1's real guard is a test in
 // the suite, not a manual grep: the retired in-terminal loop engine and every citation of it are gone, and
 // these tests keep them gone. Each guard names the mutation that falsifies it, per §D.4's preamble.
+//
+// This file names the retired section only through the constructed `SECTION` glyph and the identifier
+// needles below — never as a bare literal — so the citation grep it defines does not match its own source
+// (honouring §D.4's "needs no exclusion list"). Its own path IS allowlisted in the identifier guard, where
+// the needle strings are its data.
 
 import { describe, expect, it } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
+
+const SELF = 'tests/unit/n8SweepGuards.test.ts';
+const SECTION = String.fromCharCode(0xa7); // U+00A7 '§' — constructed so this file carries no bare citation
 
 /** Tracked files under the given repo-relative roots — the "tracked path" set §D.4 grades over, never the
  *  working tree (which would sweep in build output). */
@@ -24,12 +32,11 @@ const readText = (f: string): string => {
 };
 
 // ─── §D.4 row: the citation grep over `src` + `tests` returns zero (AC 1) ───────────────────────────────
-// The needle is CONSTRUCTED (not the literal), so this test file does not match its own source and needs no
-// exclusion list. The file set is every tracked file under src/ and tests/, not a TypeScript glob —
-// index.html and styles.css carry citations the AC's grep counts too. Falsified by planting the sequence in
-// any tracked src/ or tests/ file (890 matching lines before the sweep).
-describe('AC1 — no §26 citation survives under src/ or tests/', () => {
-  const SECTION = String.fromCharCode(0xa7); // U+00A7 '§' — constructed so this file is not a self-match
+// The needle is CONSTRUCTED (not the literal), so this file is not a self-match and no exclusion list is
+// needed. The file set is every tracked file under src/ and tests/, not a TypeScript glob — index.html and
+// styles.css carry citations the AC's grep counts too. Falsified by planting the sequence in any tracked
+// src/ or tests/ file (890 matching lines before the sweep).
+describe(`AC1 — no ${SECTION}26 citation survives under src/ or tests/`, () => {
   const NEEDLE = SECTION + '26';
 
   it('every tracked file under src/ and tests/ is free of the retired-section citation', () => {
@@ -43,7 +50,7 @@ describe('AC1 — no §26 citation survives under src/ or tests/', () => {
 // following ONLY relative import/export specifiers (a non-relative specifier is a package, not a module in
 // the graph). `*.d.ts` is excluded as a closed rule; test files are non-consumers (a src module reachable
 // only from a test is still an orphan). Post-sweep every src module is reachable; a leftover module from the
-// deletion (e.g. legacyPickupPorts.ts) would be named in the failure.
+// deletion (e.g. a §I.1-deleted port) would be named in the failure.
 
 /** Generic reachability: the set of nodes reachable from `roots` under `neighbors`. Pure — the synthetic
  *  test below plants an orphan and a test-only importer to grade it independently of the tree. */
@@ -93,8 +100,8 @@ describe('AC1 — no orphaned src module survives the sweep', () => {
     'src/main/index.ts',
     'src/preload/index.ts',
     'src/renderer/src/index.ts',
-    'src/main/appIconBuild.ts', // build-time (§ appIconBuild)
-    'src/main/exampleAssetsBuild.ts', // build-time (§ exampleAssetsBuild)
+    'src/main/appIconBuild.ts', // build-time
+    'src/main/exampleAssetsBuild.ts', // build-time
   ];
 
   it('the entry points still exist', () => {
@@ -128,5 +135,65 @@ describe('AC1 — no orphaned src module survives the sweep', () => {
     expect(orphans).toContain('src/orphan.ts');
     expect(orphans).toContain('src/testOnly.ts');
     expect(orphans).not.toContain('src/used.ts');
+  });
+});
+
+// ─── §D.4 row: no removed retired-engine identifier survives outside the history allowlist (AC 1/2/7) ────
+// Seeded from the same constants the sweep removed (§B.7): the retired FlowApi members, the retired Flow*Msg
+// IPC message types, and the retired CH channel-key names. Matched WHOLE-WORD and CASE-SENSITIVE — the
+// surviving §27 tokens (`appGateDecision`, `gateDecisionAuditCmd`, `flowAppGateDecision`, `appRouteOut`)
+// differ in case or carry a boundary-less camelCase prefix, so none is a match; and a member needle also
+// catches the retired channel VALUE it embeds (`\bgateDecision\b` hits `'flow:gateDecision'`). Allowlist =
+// §E.4's history set that legitimately still names them (the changelog byte-for-byte, CODE-STANDARDS.md's
+// past-tense motivating-defect record, and this deletion list) plus THIS file, whose data the needles are.
+// Falsified by reintroducing any needle in a source/test/config file (verified: all five members appear today).
+//
+// Deliberately NOT needles (documented so the scope is checkable): the four loopActivity phrases and the
+// removed install-destination ids (`loops`/`skills`) are generic words / path segments that recur
+// incidentally, so their removal is graded by the fixtures that no longer carry them; `.agent-loop/state.yaml`
+// and `agent-loop pickup` are NOT dead identifiers (the residual file AC8 tests prove the app never writes,
+// and the live §27 bootstrap CLI); and the §A deleted MODULE paths are graded by the orphan walk above, by
+// the files' deletion, and by the tsconfig-integrity guard below.
+describe('AC1/2/7 — no removed retired-engine identifier survives outside the history allowlist', () => {
+  const ALLOWLIST = new Set(['docs/spec/changelog.md', 'CODE-STANDARDS.md', 'docs/n8-deletion-list.md', SELF]);
+  const NEEDLES = [
+    'markTurnComplete', 'gateDecision', 'retryTurn', 'onBootstrapConflict', 'resolveBootstrapConflict', // FlowApi members
+    'FlowGateDecisionMsg', 'FlowMarkTurnCompleteMsg', 'FlowBootstrapConflictMsg', 'FlowResolveBootstrapConflictMsg', // Flow*Msg types
+    'flowGateDecision', 'flowMarkTurnComplete', 'flowRetryTurn', 'flowOnBootstrapConflict', 'flowResolveBootstrapConflict', // CH keys
+  ];
+  const patterns = NEEDLES.map((n) => ({ needle: n, re: new RegExp(`\\b${n}\\b`) }));
+
+  it('every removed identifier is absent from tracked code, tests, and config', () => {
+    const files = trackedFiles('.').filter((f) => !ALLOWLIST.has(f));
+    const violations: string[] = [];
+    for (const f of files) {
+      const text = readText(f);
+      for (const { needle, re } of patterns) if (re.test(text)) violations.push(`${needle} → ${f}`);
+    }
+    expect(violations, `removed retired-engine identifiers still present:\n${violations.join('\n')}`).toEqual([]);
+  });
+});
+
+// ─── §D.4 row (§A): no build config names a deleted module ──────────────────────────────────────────────
+// tsconfig.node.json kept deleted renderer/main modules (wireBootstrapConflict.ts, flow.ts) in its include
+// array after §A deleted them; tsc ignores a missing include silently, so `pnpm run build` stayed green over
+// it. Every concrete (non-glob) `.ts`/`.tsx` path a tsconfig names must resolve to a real file. Falsified by
+// naming a deleted module in any tsconfig include.
+describe('AC1 (§A) — no tsconfig names a deleted module', () => {
+  const tsconfigs = trackedFiles('.').filter((f) => /(?:^|\/)tsconfig[^/]*\.json$/.test(f));
+
+  it('there are tsconfig files to grade', () => {
+    expect(tsconfigs.length).toBeGreaterThan(0);
+  });
+
+  it('every concrete .ts/.tsx path a tsconfig names resolves to a real file', () => {
+    const missing: string[] = [];
+    for (const cfg of tsconfigs) {
+      const text = readText(cfg);
+      for (const m of text.matchAll(/"([^"*?]+\.tsx?)"/g)) {
+        if (!existsSync(resolve(dirname(cfg), m[1]))) missing.push(`${cfg}: ${m[1]}`);
+      }
+    }
+    expect(missing, `tsconfig names deleted files:\n${missing.join('\n')}`).toEqual([]);
   });
 });
