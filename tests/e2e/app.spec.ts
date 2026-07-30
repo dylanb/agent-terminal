@@ -3210,6 +3210,52 @@ test('a NAMESPACE-LESS step injects its skill on the bootstrap hand-off while pi
   for (const dir of [repo, home, config, binDir]) rmSync(dir, { recursive: true, force: true });
 });
 
+// AC 6 tracer, assertions (c) + (d) — the shipped app-namespace flow still drives on a machine that never
+// migrated its config, and the named cost of the re-point is PAID by migrating rather than failing (AC 5).
+// The config carries ONLY the retired operator tier (loops/), no loops-v2/, so the app-namespace step
+// resolves plan-loop from the APP BUNDLE, writes its own copy into the surviving loops-v2 tier, tells the
+// operator once, and runs to its gate — while the retired tree is left byte-for-byte untouched (§B.6).
+test('a shipped app-namespace flow on a RETIRED-TIER-ONLY config migrates its def, notifies once and drives to its gate — AC 6 tracer (c)/(d) (§B.6 / AC 5)', { tag: '@ownapp' }, async () => {
+  const repo = seedPrebootstrappedAppLoopFlowRepo('agent-term-e2e-tracer-cd-');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-tracer-cd-home-'));
+  // A config carrying ONLY the retired operator tier (loops/), and NO surviving loops-v2/ — the un-migrated
+  // machine AC 5 / AC 6 exist for.
+  const config = mkdtempSync(join(tmpdir(), 'agent-term-e2e-tracer-cd-config-'));
+  const retiredDir = join(config, 'loops', 'plan-loop');
+  mkdirSync(retiredDir, { recursive: true });
+  const retiredDef = join(retiredDir, 'plan-loop.yaml');
+  const retiredContent = 'schema_version: 4\nname: plan-loop\n# retired-schema customization the app must NOT read or carry across\n';
+  writeFileSync(retiredDef, retiredContent);
+  const migratedDef = join(config, 'loops-v2', 'plan-loop', 'plan-loop.yaml');
+  expect(existsSync(migratedDef)).toBe(false); // the surviving tier is absent on this first-run machine
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-tracer-cd-bin-');
+  seedFakeAgentV2(binDir, { stepId: 'plan', artifactRel: APP_ARTIFACT_REL, work: 'complete', review: 'full' });
+  app = await electron.launch({
+    args: ['out/main/index.js'],
+    env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100', APP_TURN_TIMEOUT_MS: '60000', CLAUDE_CONFIG_DIR: config, PATH: `${binDir}:${process.env.PATH}`, FAKE_GHGIT_LOG: logFile },
+  });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await typeCommand(`cd "${repo}"`);
+  await expect(flowControl()).toHaveText('Start', { timeout: 10_000 });
+  await typeCommand('fake-agent');
+  await flowControl().click(); // Start → enter the app plan-loop step: resolves from the app bundle → migrates
+
+  // (d) the app wrote its OWN copy of the def into the SURVIVING tier (loops-v2), and told the operator once.
+  await expect.poll(() => existsSync(migratedDef), { timeout: 15_000 }).toBe(true);
+  await expect(page.locator('#flow-strip .flow-notice')).toContainText('Copied the built-in', { timeout: 10_000 });
+  await expect(page.locator('#flow-strip .flow-notice')).toContainText('plan-loop');
+  // The retired tier is left byte-for-byte untouched — the app does not read, move or rewrite files it retired.
+  expect(readFileSync(retiredDef, 'utf8')).toBe(retiredContent);
+
+  // (c) the shipped flow still drives — the migrated def runs work → review → consolidate to its clean gate.
+  await expect.poll(() => readIf(appRunState(repo)), { timeout: 40_000 }).toContain('verdict: clean');
+
+  await app.close();
+  for (const dir of [repo, home, config, binDir]) rmSync(dir, { recursive: true, force: true });
+});
+
 // §27.10 confirm-first wipe — the pickup target already exists (local branch, origin branch, and an open
 // same-repo PR). The wipe is destructive and outward-facing, so the app names the exact resources and
 // waits: nothing is deleted or closed until the operator confirms.
