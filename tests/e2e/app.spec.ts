@@ -3033,6 +3033,67 @@ test('entering a pickup-bearing §27 def bootstraps out-of-band into app-owned s
   for (const dir of [repo, home, config, binDir]) rmSync(dir, { recursive: true, force: true });
 });
 
+test('a def resolved from the REPOSITORY tier declaring a pickup contract bootstraps — branch, draft PR and its own initial_labels reach gh (§B.13a / §F item 18)', { tag: '@ownapp' }, async () => {
+  // The operator's origin decision made visible (§F item 18): the executor no longer refuses a
+  // non-operator-tier def, so a repo whose .agent-loop.yaml maps the bound name to an IN-REPO v2 def with a
+  // pickup: block reaches branch creation and the draft PR. The repo def's initial_labels are DISTINCT from
+  // the app-bundled def's, so a passing label assertion can only have come from the repo def (§B.13a).
+  const repo = seedAppBootstrapFlowRepo('agent-term-e2e-repo-pickup-');
+  const repoDef = join(repo, 'loops', 'plan-loop');
+  cpSync(join(exampleConfigDir, 'loops-v2', 'plan-loop'), repoDef, { recursive: true });
+  const defFile = join(repoDef, 'plan-loop.yaml');
+  writeFileSync(
+    defFile,
+    withPickup(
+      readFileSync(defFile, 'utf8'),
+      'pickup:\n' +
+        '  initial_status: planning\n' +
+        '  branch_template: plan-loop/issue-{issue}\n' +
+        '  initial_labels:\n' +
+        '    - target: issue\n      action: add\n      label: repo-tier/active\n' +
+        '    - target: pr\n      action: remove\n      label: repo-tier/stale\n' +
+        '  on_conflict: wipe-and-retry\n',
+    ),
+  );
+  // The repo registry the resolver reads FIRST (loopDefV2 repoCandidate), pointing at the in-repo def.
+  writeFileSync(join(repo, '.agent-loop.yaml'), 'loops:\n  plan-loop: ./loops/plan-loop/plan-loop.yaml\n');
+  const home = mkdtempSync(join(tmpdir(), 'agent-term-e2e-repo-pickup-home-'));
+  const { binDir, logFile } = seedFakeGhGit('agent-term-e2e-repo-pickup-bin-');
+  seedFakeAgentV2(binDir, { stepId: 'plan', artifactRel: APP_ARTIFACT_REL, work: 'complete', review: 'full' });
+  // No CLAUDE_CONFIG_DIR: the operator tier is empty and the repo tier resolves the def (proving the repo
+  // route). The def carries its own prompts (copied), so the work turn resolves without an operator config.
+  app = await electron.launch({
+    args: ['out/main/index.js'],
+    env: { ...process.env, APP_SHELL: 'bash', HOME: home, APP_SUBMIT_DELAY_MS: '100', APP_TURN_TIMEOUT_MS: '60000', PATH: `${binDir}:${process.env.PATH}`, FAKE_GHGIT_LOG: logFile },
+  });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await typeCommand(`cd "${repo}"`);
+  await typeCommand('fake-agent');
+  await flowControl().click(); // Start → groom
+  await flowControl().click(); // Advance → plan (loop): the required-input modal opens
+  await expect(inputModal()).toBeVisible({ timeout: 10_000 });
+  await inputModal().locator('.field input').fill('176');
+  await inputModal().locator('.confirm').click();
+
+  // The repo-tier def's pickup reaches branch creation and the draft PR — the origin gate no longer refuses it.
+  const bootstrapState = join(repo, '.agent-terminal', 'loop', 'bootstrap.yaml');
+  await expect.poll(() => readIf(bootstrapState), { timeout: 15_000 }).toContain('pr: 4242');
+  expect(readIf(bootstrapState)).toContain('branch: plan-loop/issue-176');
+  expect(readIf(`${logFile}.local-branch`).trim()).toBe('plan-loop/issue-176');
+  expect(readIf(`${logFile}.remote-branch`).trim()).toBe('plan-loop/issue-176');
+  expect(readIf(`${logFile}.pr-created`).trim()).toBe('4242');
+  // The REPO def's DISTINCT initial_labels reach gh under the operator's own credentials — proving the repo
+  // def (not the app bundle) resolved, and grading the widened blast radius the origin-gate deletion opens.
+  await expect.poll(() => readIf(`${logFile}.issue-label`).trim(), { timeout: 15_000 }).toBe('176:--add-label:repo-tier/active');
+  await expect.poll(() => readIf(`${logFile}.pr-label`).trim(), { timeout: 15_000 }).toBe('4242:--remove-label:repo-tier/stale');
+  expect(existsSync(join(repo, '.agent-loop', 'state.yaml'))).toBe(false); // §27 writes no legacy mirror
+
+  await app.close();
+  for (const dir of [repo, home, binDir]) rmSync(dir, { recursive: true, force: true });
+});
+
 // §27.10 confirm-first wipe — the pickup target already exists (local branch, origin branch, and an open
 // same-repo PR). The wipe is destructive and outward-facing, so the app names the exact resources and
 // waits: nothing is deleted or closed until the operator confirms.
