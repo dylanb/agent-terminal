@@ -1,0 +1,83 @@
+// §B.6 / AC 5 — copy a resolved app-bundled §27 loop def into the operator tier the first time a loop step
+// binds it, so the operator can edit it, and tell them ONCE. Best-effort: a failure degrades to "no copy,
+// the step still runs on the app bundle" (CWE-703), never a throw into the transition path. The trigger — the
+// def resolved from `ctx.tiers.appBundled` — is the composition root's; this module only performs the copy.
+
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { atomicWriteTreeSync, type AtomicWriteTreeMember } from './atomicFile';
+import { confinedRealPath, resolveOwnedDirJail } from './confinedPath';
+import { readDirEntries } from './dirEntries';
+import { errMsg } from './errno';
+
+export interface MigrateBundledLoopDefParams {
+  /** The def name — already held to a single safe path segment by `resolveLoopDefV2` before any tier root
+   *  was joined (§B.6), so it is trusted here and never re-validated. */
+  name: string;
+  /** The app-bundled tier root the def resolved from (`ctx.tiers.appBundled`). */
+  appBundledDir: string;
+  /** The operator tier root the copy lands in (`userConfigLoopsV2Dir()` = `ctx.tiers.operator`). */
+  operatorDir: string;
+  /** Test seam for the otherwise-unpredictable staging directory, threaded to `atomicWriteTreeSync`. */
+  stageDir?: (destDir: string) => string;
+}
+
+/** A source member that is neither a regular file nor a directory — a symlink above all. The bundle is an
+ *  installed artifact this build did not necessarily write, so it is never read through (CWE-59); it is
+ *  REFUSED, not skipped, exactly as `installExamples`'s `walkFiles` refuses one (§18.1). */
+const sourceAnomaly = (p: string): Error =>
+  new Error(`the bundled loop def is damaged: a symbolic link or special file stands at ${p}`);
+
+/** Read `<defDir>/**` into tree members — `relPath` POSIX-relative to `defDir`, `data` the file bytes (a def
+ *  member may be a non-UTF-8 asset, so bytes not text). An absent def dir yields `[]`; an unreadable one
+ *  throws (the `readDirEntries` absent-vs-unreadable split), and the caller wraps the throw. */
+function readDefTree(defDir: string): AtomicWriteTreeMember[] {
+  const members: AtomicWriteTreeMember[] = [];
+  const walk = (dir: string): void => {
+    for (const entry of readDirEntries(dir)) {
+      const abs = path.join(dir, entry.name);
+      if (entry.isDirectory) walk(abs);
+      else if (entry.isFile) members.push({ relPath: path.relative(defDir, abs).split(path.sep).join('/'), data: readFileSync(abs) });
+      else throw sourceAnomaly(abs);
+    }
+  };
+  walk(defDir);
+  return members;
+}
+
+const migratedNotice = (name: string): string =>
+  `Copied the built-in "${name}" loop into your config so you can customize it.`;
+const containerRefusedNotice = (name: string, dir: string): string =>
+  `Kept the built-in "${name}" loop — couldn't write to your config folder ${dir}.`;
+const migrationFailedNotice = (name: string, e: unknown): string =>
+  `Kept the built-in "${name}" loop — copying it into your config failed: ${errMsg(e)}.`;
+
+/** Copy `<appBundledDir>/<name>/**` into `<operatorDir>/<name>/` once, all-or-nothing (§B.6). Returns the
+ *  one-shot operator-facing notice to accumulate on the transition reply (§B.5 position 6), or `null` when
+ *  there is nothing to say: the def is already in the operator tier (AC 9 silent substitution — idempotent),
+ *  the config root does not resolve, or the source raced away after it resolved. NEVER throws. */
+export function migrateBundledLoopDef(params: MigrateBundledLoopDefParams): string | null {
+  const { name, appBundledDir, operatorDir, stageDir } = params;
+  try {
+    // §18.1 — the operator tier is ground the user owns, so a link they placed at their own config dir is
+    // FOLLOWED, not refused (`resolveOwnedDirJail` resolves the final segment too). A config root the app
+    // cannot reduce to a real path yields no probe and no write.
+    const jail = resolveOwnedDirJail(operatorDir);
+    if (jail === null) return null;
+    const destDir = confinedRealPath(jail, path.join(jail, name));
+    if (destDir === null) return null;
+    const members = readDefTree(path.join(appBundledDir, name));
+    if (members.length === 0) return null; // source absent/empty (raced away): a copy of nothing is not a def
+    const result = atomicWriteTreeSync(destDir, members, stageDir ? { stageDir } : {});
+    if (result.ok) return migratedNotice(name);
+    // A non-writable resolved tier root (0o555, the managed-machine case): the step still runs on the app
+    // bundle, so this carries a notice, not a refusal (§B.6). A benign already-present def is the silent case.
+    return result.cause === 'container-refused' ? containerRefusedNotice(name, operatorDir) : null;
+  } catch (e) {
+    // errMsg alone (§B.6): the classification is answered inside the primitive off the destination's shape,
+    // so `isErrno` at the caller is both unimplementable (EACCES/ENOSPC are outside the closed union) and
+    // wrong (it would re-key on errno the primitive deliberately does not). A failed write degrades to "no
+    // copy, step still runs" and reports the real message rather than a bare failure.
+    return migrationFailedNotice(name, e);
+  }
+}
