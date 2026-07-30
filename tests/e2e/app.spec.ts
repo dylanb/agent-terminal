@@ -14,10 +14,6 @@ import { TURN_DONE_FILENAME } from '../../src/shared/loopTurn';
 import { completionMarker } from '../../src/main/appWorkTurn';
 import { exampleRoundReport, REPORT_GRAMMAR } from '../../src/shared/roundReport';
 
-// §26 D42a — the retired printable done-signal sentinel. Kept here ONLY so a regression test can inject it
-// into the PTY output and prove it no longer completes a turn (completion is the turn-done FILE alone).
-const RETIRED_SENTINEL = (turnKey: string): string => `<<<agent-loop:turn-done:${turnKey}>>>`;
-
 /** How long a falsely-completed work turn would need to fan the reviewers out. Comfortably longer than the
  *  chain's own settle, and well under the stall watchdog, so the absence it proves is a real absence. */
 const FALSE_COMPLETION_GRACE_MS = 6_000;
@@ -1685,24 +1681,6 @@ function seedBootstrapFlowRepo(prefix: string): string {
       '  - id: groom\n    kind: manual\n' +
       '  - id: plan\n    kind: loop\n    loop: plan-loop\n    bootstrap: pickup\n' +
       '    inputs:\n      - name: ticket\n        type: github-ticket\n        required: true\n',
-  );
-  return dir;
-}
-
-// §26 D42a — a chain flow whose plan loop step is FOLLOWED by an `implement` loop step (no bootstrap):
-// approving the plan gate reaches a success terminal, so the flow auto-advances plan → implement. Same
-// pickup-driven plan step as seedBootstrapFlowRepo, plus the successor the auto-advance lands on.
-function seedChainFlowRepo(prefix: string): string {
-  const dir = mkdtempSync(join(tmpdir(), prefix));
-  mkdirSync(join(dir, '.git'), { recursive: true });
-  mkdirSync(join(dir, '.agent-terminal'), { recursive: true });
-  writeFileSync(
-    join(dir, '.agent-terminal', 'flow.yaml'),
-    'name: dev-flow\nsteps:\n' +
-      '  - id: groom\n    kind: manual\n' +
-      '  - id: plan\n    kind: loop\n    loop: plan-loop\n    bootstrap: pickup\n' +
-      '    inputs:\n      - name: ticket\n        type: github-ticket\n        required: true\n' +
-      '  - id: implement\n    kind: loop\n    loop: impl-loop\n',
   );
   return dir;
 }
@@ -4562,19 +4540,7 @@ test('an armed §27 interrupt routes to the gate with the would-be verdict state
   for (const d of [repo, home, binDir]) rmSync(d, { recursive: true, force: true });
 });
 
-// §26.13 / L5 — the human's gate decision, executed app-internally. Drive to the plan-approval gate
-// (clean verdict), open the docked panel, click a gate button, and assert the transition + gh side-effect.
 const gateButton = (option: string) => loopPanel().locator(`[data-gate-option="${option}"]`);
-
-async function driveToPlanGate(repo: string, home: string, binDir: string, logFile: string): Promise<void> {
-  await driveToWorkTurn(repo, home, binDir, logFile, '30000');
-  const stateFile = join(repo, '.agent-loop', 'state.yaml');
-  await expect
-    .poll(() => readFileSync(stateFile, 'utf8'), { timeout: 25_000 })
-    .toContain('status: awaiting-human-plan-approval');
-  await loopReadout().click();
-  await expect(gateButton('approve')).toBeVisible({ timeout: 10_000 });
-}
 
 // §26 D42a (Slice 3 / Q3) — the FIRST work turn of a freshly-bootstrapped loop step is preceded by the same
 // actor-boundary /clear (§26.3/D46) as every other loop-step entry, so the loop starts from a clean agent
@@ -4607,78 +4573,6 @@ test('activating the status-bar alert opens the docked panel and lands focus on 
   rmSync(binDir, { recursive: true, force: true });
 });
 
-// §26 D42a — reaching a SUCCESS terminal (approve at the plan gate) auto-advances the flow into the next
-// step (Slice 1), and entering that `implement` loop step — which has no `bootstrap: pickup` — RESUMES the
-// existing run under impl-loop (Slice 2, `agent-loop resume --loop`): state.yaml is rebound to impl-loop at
-// its impl-draft entry status with the per-loop internal counters reset to a new-run baseline — EXCEPT the
-// run's MONOTONIC iteration, which carries forward (plan's 1 → impl's 2) — but the SAME PR/branch/issue
-// carried, and the impl loop's first work turn is driven behind an actor-boundary /clear.
-// §26.6 — the exec gate action (ticket-body publish). The vendored plan-loop's plan-approve gate carries
-// `exec: [gh, issue, edit, {{state.linked_issues[0]}}, --body-file, {{artifact.ticket-body}}]`; approving
-// interpolates it against the run (issue 176, .agent-loop/ticket.md) and runs it out of band. Allowed by
-// default; a repo opts a loop out via `.agent-loop.yaml` loops_deny_exec.
-// §26.13 / L8 — epic-promote. The work-agent classifies the plan an epic (three sub-tickets) in plan.md;
-// approving at the plan gate reuses the current PR for sub-ticket-1 and creates the remaining N-1 (=2)
-// sub-issues out of band, appending them to linked_issues + recording `epic` in state.yaml.
-// §26.13 / L7 — the cost meter. The fake-agent writes a deterministic session-JSONL token fixture at a
-// test-controlled log root ($APP_SESSION_LOG_ROOT); completing an iteration prices those tokens against the
-// checked-in table, surfaces the dollars on the status-strip loop read-out, and records a §25 cost event.
-// §26.13 / L8 — CI runs, it does not block (§26.7). At the iteration boundary the app takes a best-effort,
-// NON-BLOCKING `gh pr checks` snapshot of the non-draft PR and records it (display-only). A pending check
-// must not stall the loop: it still reaches its gate on the same iteration, and the snapshot is recorded.
-// §26.13 / L8 — auto-resume from state.yaml. A run interrupted mid-iteration (plan.md + all reviews on
-// disk, consolidated absent) is resumed on launch at the consolidate turn — NOT re-running the completed
-// work/reviewers turns. Proven on a real relaunch: the app launches into the repo (APP_LAUNCH_DIR) with the
-// fake-agent AS the shell (APP_SHELL) so the resumed turn injects into the agent, and the run drives forward
-// to its plan-approval gate while the work/reviewers execution markers stay absent (no double-execution).
-function seedResumeRepo(
-  prefix: string,
-  opts: { iteration?: number; reviews?: 'all' | 'none'; consolidated?: boolean } = {},
-): string {
-  const iteration = opts.iteration ?? 1;
-  const reviews = opts.reviews ?? 'all';
-  const repo = mkdtempSync(join(tmpdir(), prefix));
-  mkdirSync(join(repo, '.agent-loop', 'reviews', String(iteration)), { recursive: true });
-  writeFileSync(
-    join(repo, '.agent-loop', 'state.yaml'),
-    [
-      'schema_version: 4',
-      'status: plan-draft',
-      `iteration: ${iteration}`,
-      'bound_loop: plan-loop',
-      'pr: 4242',
-      'branch: plan-loop/issue-176',
-      'linked_issues:',
-      '  - 176',
-      'phase2_active: false',
-      'persona_state: {}',
-      'impasse: {}',
-      'sessions: {}',
-      'terminated: false',
-      '',
-    ].join('\n'),
-  );
-  // plan.md is always on disk (it is rewritten in place, so it can be stale from a prior iteration). What
-  // varies is the iteration-scoped downstream evidence — reviews and the consolidated verdict.
-  writeFileSync(join(repo, '.agent-loop', 'plan.md'), '# Plan\n\ninterrupted mid-run\n');
-  if (reviews === 'all') {
-    for (const p of PLAN_PERSONAS) {
-      writeFileSync(join(repo, '.agent-loop', 'reviews', String(iteration), `${p}.json`), `{"verdict":"clean","seen_iter":${iteration}}`);
-    }
-  }
-  if (opts.consolidated) {
-    writeFileSync(join(repo, '.agent-loop', 'reviews', String(iteration), 'consolidated.json'), '{"verdict":"clean","findings_kept":[]}');
-  }
-  return repo;
-}
-
-// §26.13 / L8 — a re-iteration interrupted BEFORE its work turn rewrote plan.md leaves a stale prior-iteration
-// plan.md with no iteration-scoped review for the new iteration. Resume must re-enter WORK (regenerating the
-// plan), never skip to reviewers and grade the stale plan — plan.md is not iteration-stamped, so only a
-// downstream artifact for the current iteration proves the work turn ran.
-// §26.13 / L8 — an interrupted run whose work, reviewers AND consolidate turns all completed (every
-// iteration artifact on disk, including consolidated.json) resumes straight into the post-consolidate
-// verdict branch: it re-injects NO turn, reads the recorded clean verdict, and drives to the gate.
 test('Restart clears a resolved stage-transition input so the next entry re-prompts (§24.2.3 T3)', { tag: '@ownapp' }, async () => {
   // The user supplies the plan step's ticket once; after completing and Restarting the flow, the
   // ticket must be re-requested — Restart wipes resolved inputs (unlike Undo).
