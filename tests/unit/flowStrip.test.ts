@@ -395,9 +395,12 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
 
     control()!.click(); // transition #1 raises the migration notice
     await vi.waitFor(() => expect(host.querySelector('.flow-notice')?.textContent).toContain('migrated'));
+    const noticeNode = host.querySelector('.flow-notice'); // the node the transition created
 
     await strip.refresh(); // passive re-pull, state() carries no notice → HELD, not erased
-    expect(host.querySelector('.flow-notice')).not.toBeNull();
+    // §D.4 row 2838(c) / WCAG 4.1.3: HELD means the SAME node survives — a re-created node in the
+    // role=status region would re-announce the unchanged notice to assistive tech. Identity, not presence.
+    expect(host.querySelector('.flow-notice')).toBe(noticeNode);
 
     control()!.click(); // transition #2 carries no notice → clears the held line
     await vi.waitFor(() => expect(host.querySelector('.flow-notice')).toBeNull());
