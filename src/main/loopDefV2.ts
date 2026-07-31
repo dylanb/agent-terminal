@@ -462,9 +462,11 @@ export function resolveLoopDefV2(name: string, ctx: LoopDefV2Context): LoopDefV2
   if (ctx.tiers.retired !== null) {
     const retiredJail = resolveOwnedDirJail(ctx.tiers.retired);
     if (retiredJail !== null) {
-      // Confine FIRST (realpathBounded appends an absent tail, so `.ok` alone means "bounded", not "exists"),
-      // then test existence on the bounded path — presence, no content read.
-      const probe = confinedRealPathResult(retiredJail, path.join(ctx.tiers.retired, name));
+      // The retired-schema def is `<retired>/<name>/<name>.yaml` (the retired engine's own path convention) —
+      // a bare directory of that name is not a def. Confine FIRST (realpathBounded appends an absent tail, so
+      // `.ok` alone means "bounded", not "exists"), then test existence of the FILE on the bounded path —
+      // presence, no content read.
+      const probe = confinedRealPathResult(retiredJail, path.join(ctx.tiers.retired, name, `${name}.yaml`));
       if (probe.ok && existsSync(probe.path)) {
         return {
           ok: false,

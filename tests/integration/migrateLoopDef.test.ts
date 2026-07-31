@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { migrateBundledLoopDef } from '../../src/main/migrateLoopDef';
+import { migrateBundledLoopDef, migrateBundledLoopDefOnEntry } from '../../src/main/migrateLoopDef';
 
 // §B.6 / AC 5 — the first time a loop step binds a def that resolves from the app bundle, the whole def tree
 // is copied into the operator's config tier so they can edit it, and they are told ONCE. The copy is
@@ -112,5 +112,49 @@ describe('migrateBundledLoopDef (§B.6 / AC 5)', () => {
 
     expect(notice).toBeNull();
     expect(existsSync(path.join(operatorDir, NAME))).toBe(false);
+  });
+});
+
+// §D.4 (row 2842) / §B.6 — the position-6 migration TRIGGER. The write fires ONLY when resolution stopped at
+// the app-bundled tier root the caller supplied, never on the operator tier's silence: resolveLoopDefV2 pushes
+// a repo `.agent-loop.yaml` override FIRST, so keying on silence would copy the bundle into the operator's own
+// tier at a cloned repo's request, where it then outranks the bundle for every repo forever (CWE-829/CWE-732).
+describe('migrateBundledLoopDefOnEntry — the trigger fires only when resolution stopped at the app bundle', () => {
+  const tiers = () => ({ appBundled: appBundledDir, operator: operatorDir });
+
+  it('does NOT migrate a def that resolved from a REPO override — the operator tier is left untouched (CWE-829/732)', () => {
+    seedBundledDef(appBundledDir); // the bundle HAS the def…
+    const repoDir = path.join(root, 'a-cloned-repo');
+    // …but resolution stopped at the repo tier (the repo's own registry answered first)
+    const notice = migrateBundledLoopDefOnEntry({ loop: NAME }, { tierRoot: repoDir }, tiers());
+    expect(notice).toBeNull();
+    expect(existsSync(path.join(operatorDir, NAME))).toBe(false);
+  });
+
+  it('does NOT migrate a def that resolved from the OPERATOR tier (they already have their own)', () => {
+    seedBundledDef(appBundledDir);
+    const notice = migrateBundledLoopDefOnEntry({ loop: NAME }, { tierRoot: operatorDir }, tiers());
+    expect(notice).toBeNull();
+    expect(existsSync(path.join(operatorDir, NAME))).toBe(false);
+  });
+
+  it('does NOT migrate when the operator tier is refused (null) — there is nowhere to write', () => {
+    seedBundledDef(appBundledDir);
+    const notice = migrateBundledLoopDefOnEntry({ loop: NAME }, { tierRoot: appBundledDir }, { appBundled: appBundledDir, operator: null });
+    expect(notice).toBeNull();
+  });
+
+  it('does NOT migrate a step that carries no loop name', () => {
+    seedBundledDef(appBundledDir);
+    const notice = migrateBundledLoopDefOnEntry({}, { tierRoot: appBundledDir }, tiers());
+    expect(notice).toBeNull();
+  });
+
+  it('DOES migrate when resolution stopped at the app-bundled tier and the operator tier exists', () => {
+    seedBundledDef(appBundledDir);
+    const notice = migrateBundledLoopDefOnEntry({ loop: NAME }, { tierRoot: appBundledDir }, tiers());
+    expect(notice).not.toBeNull();
+    expect(notice).toContain(NAME);
+    expect(existsSync(path.join(operatorDir, NAME))).toBe(true); // the copy landed in the operator tier
   });
 });

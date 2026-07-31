@@ -81,3 +81,19 @@ export function migrateBundledLoopDef(params: MigrateBundledLoopDefParams): stri
     return migrationFailedNotice(name, e);
   }
 }
+
+/** The position-6 migration TRIGGER (§B.5/§B.6): decide whether entering `step` migrates its def, then do it.
+ *  The affirmative test is on WHERE RESOLUTION STOPPED — the app-bundled tier root the caller supplied — never
+ *  on the operator tier's silence. `resolveLoopDefV2` pushes a repo `.agent-loop.yaml` `loops:` override FIRST,
+ *  so keying on silence would copy the app bundle into the operator's own tier at a cloned repo's request,
+ *  where it then outranks the bundle for every repo forever (CWE-829/CWE-732). Returns the one-shot notice, or
+ *  `null` when no migration fires (a repo/operator-tier resolution, a refused operator root, or a nameless
+ *  step). Only `step.loop` and `resolved.tierRoot` are read — the narrowest slice the decision needs. */
+export function migrateBundledLoopDefOnEntry(
+  step: { loop?: string },
+  resolved: { tierRoot: string },
+  tiers: { appBundled: string; operator: string | null },
+): string | null {
+  if (resolved.tierRoot !== tiers.appBundled || tiers.operator === null || step.loop === undefined) return null;
+  return migrateBundledLoopDef({ name: step.loop, appBundledDir: tiers.appBundled, operatorDir: tiers.operator });
+}

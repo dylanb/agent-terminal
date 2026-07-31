@@ -76,7 +76,7 @@ import { appBootstrapAuditCmd, appBootstrapAuditExit, type TransitionKind } from
 import { auditRootDir } from './auditPaths';
 import { createFlowEntryActions, injectableSkill } from './flowEntryActions';
 import { createLoopBindingPreparer } from './loopBinding';
-import { migrateBundledLoopDef } from './migrateLoopDef';
+import { migrateBundledLoopDefOnEntry } from './migrateLoopDef';
 import { createLoopNotifier } from './loopNotifier';
 import { classifyHostedAgent, hostedAgentPresent } from './loopOrchestrator';
 import { deriveLoopActivity, type LoopActivity } from '../shared/loopActivity';
@@ -108,9 +108,7 @@ import { resolveLoopDefV2, type LoopDefV2Context } from './loopDefV2';
 import { createRealAppGateGitHub } from './appGateGithub';
 import { runAppGateDecision as runAppGateDecisionImpl } from './appGateDecision';
 import { probeChainedInput } from './chainedInputProbe';
-import { resolveExampleLoopsV2Dir } from './exampleAssets';
 import { resolveAppLoopDefTiers } from './appLoopDefTiers';
-import { userConfigLoopsV2Dir } from './userConfig';
 import type { CliInstallResult } from '../shared/ipc';
 import {
   createAppLoopBootstrapCoordinator,
@@ -461,12 +459,7 @@ async function createWindow(): Promise<void> {
     },
     // Position 6 — AC 5's def migration, only when the binding resolved from the app-bundled tier and the
     // operator tier exists; the copy is best-effort and returns its one-shot notice (or null).
-    migrateIfBundled: (step, resolved) => {
-      const appBundledDir = resolveExampleLoopsV2Dir(iconLoc);
-      const operatorDir = userConfigLoopsV2Dir();
-      if (resolved.tierRoot !== appBundledDir || operatorDir === null || step.loop === undefined) return null;
-      return migrateBundledLoopDef({ name: step.loop, appBundledDir, operatorDir });
-    },
+    migrateIfBundled: (step, resolved) => migrateBundledLoopDefOnEntry(step, resolved, resolveAppLoopDefTiers(iconLoc)),
   });
   const flowEntryActions = createFlowEntryActions({
     isShellBusy: () => tracker.summaries().some((s) => s.running),

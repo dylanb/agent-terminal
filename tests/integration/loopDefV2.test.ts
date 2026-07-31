@@ -555,6 +555,16 @@ describe('resolveLoopDefV2 — no-tier-answers names a present retired def (AC 5
     expect(r.reason).toBe(BARE);
   });
 
+  it('requires the retired def FILE, not just a directory — an empty <name>/ dir is not a present def', () => {
+    // the retired-schema def is <retired>/<name>/<name>.yaml (the engine's own path convention); a bare
+    // directory of that name is not a def, so it must not enrich the reason.
+    mkdirSync(join(opDir, 'loops', 'plan-loop'), { recursive: true }); // dir only, no plan-loop.yaml
+    const r = resolveLoopDefV2('plan-loop', { tiers: { ...tiers(), retired: join(opDir, 'loops') }, repoDir });
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.reason).toBe(BARE);
+  });
+
   it('leaves the bare reason unchanged when no retired tier is configured (null)', () => {
     plantRetiredDef('plan-loop'); // present on disk, but the resolver is handed retired: null
     const r = resolveLoopDefV2('plan-loop', { tiers: { ...tiers(), retired: null }, repoDir });
