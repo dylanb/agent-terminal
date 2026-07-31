@@ -52,27 +52,30 @@ const containerRefusedNotice = (name: string, dir: string): string =>
 const migrationFailedNotice = (name: string, e: unknown): string =>
   `Kept the built-in "${name}" loop — copying it into your config failed: ${errMsg(e)}.`;
 
+/** `<rootDir>/<seg>` as a symlink-free real path confined within `rootDir`, or null when the root does not
+ *  resolve or `seg` escapes it. `rootDir` is ground the app owns (the operator's config, the installed
+ *  bundle), so a link the owner placed at the root itself is FOLLOWED (§18.1) while `seg` is confined WITHIN
+ *  it (CWE-22/59). One derivation for both tier joins the migration makes — the read and the write cannot
+ *  confine differently. */
+function confinedChild(rootDir: string, seg: string): string | null {
+  const jail = resolveOwnedDirJail(rootDir);
+  return jail === null ? null : confinedRealPath(jail, path.join(jail, seg));
+}
+
 /** Copy `<appBundledDir>/<name>/**` into `<operatorDir>/<name>/` once, all-or-nothing (§B.6). Returns the
  *  one-shot operator-facing notice to accumulate on the transition reply (§B.5 position 6), or `null` when
  *  there is nothing to say: the def is already in the operator tier (AC 9 silent substitution — idempotent),
- *  the config root does not resolve, either tier path resolves outside its root, or the source raced away
- *  after it resolved. NEVER throws. */
+ *  a tier root does not resolve or its `<root>/<name>` escapes it, or the source raced away after it
+ *  resolved. NEVER throws. */
 export function migrateBundledLoopDef(params: MigrateBundledLoopDefParams): string | null {
   const { name, appBundledDir, operatorDir, stageDir } = params;
   try {
-    // §18.1 — the operator tier is ground the user owns, so a link they placed at their own config dir is
-    // FOLLOWED, not refused (`resolveOwnedDirJail` resolves the final segment too). A config root the app
-    // cannot reduce to a real path yields no probe and no write.
-    const jail = resolveOwnedDirJail(operatorDir);
-    if (jail === null) return null;
-    const destDir = confinedRealPath(jail, path.join(jail, name));
-    if (destDir === null) return null;
-    // The bundle is an installed artifact this build did not necessarily write (§B.6), so the READ is confined
-    // exactly as the write above is: a `..` or a symlink at `<appBundledDir>/<name>` that escapes the bundle
-    // root yields no read and no copy, not a walk of whatever it resolves to (CWE-22/59; CLAUDE.md).
-    const srcJail = resolveOwnedDirJail(appBundledDir);
-    const srcDir = srcJail === null ? null : confinedRealPath(srcJail, path.join(srcJail, name));
-    if (srcDir === null) return null;
+    // The bundle is an installed artifact this build did not necessarily write, so the read is confined
+    // exactly as the write is: a `..` or a symlink at `<root>/<name>` that escapes yields no path, so the
+    // read walks only what stays inside the bundle and the copy lands only inside the operator tier (§B.6).
+    const destDir = confinedChild(operatorDir, name);
+    const srcDir = confinedChild(appBundledDir, name);
+    if (destDir === null || srcDir === null) return null;
     const members = readDefTree(srcDir);
     if (members.length === 0) return null; // source absent/empty (raced away): a copy of nothing is not a def
     const result = atomicWriteTreeSync(destDir, members, stageDir ? { stageDir } : {});

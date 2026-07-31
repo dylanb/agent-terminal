@@ -341,7 +341,7 @@ export function createLoopPanel(host: HTMLElement, deps: LoopPanelDeps = NOOP_DE
    *  resolved DOM survive a passive push whose structure is unchanged (§24.2.2 S5). */
   function patchInPlace(loop: FlowLoopView | null): void {
     if (loop && liveLoop) {
-      // WCAG 4.1.3 — only touch the live-region text on a real change; an unchanged passive push (cost/refs
+      // WCAG 4.1.3 — only touch the live-region text on a real change; an unchanged passive push (refs
       // only) must not rewrite these nodes, or a screen reader re-announces content that did not change.
       if (liveLoop.statusVal.textContent !== loop.status) liveLoop.statusVal.textContent = loop.status;
       liveLoop.statusVal.classList.toggle('bad', spillTone(loop.status) === 'await');

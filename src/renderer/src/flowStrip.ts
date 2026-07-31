@@ -146,7 +146,7 @@ function structuralSig(state: FlowStateView, effectiveNotices: string[]): string
 
 /** The compact read-only loop read-out (§24.2.3 T2) shown in the rail: a 3-tone status pill (the
  *  one-word tone, not the unbounded status) + the iteration, framed as a `role=button` that opens
- *  the docked panel (the shell wires the click). The exact v4 vocabulary lives in that panel. */
+ *  the docked panel (the shell wires the click). The full loop read-out lives in that panel. */
 function loopReadout(doc: Document, loop: FlowLoopView, controlsId?: string): HTMLElement {
   const stat = doc.createElement('span');
   stat.className = 'stat loopstat';
