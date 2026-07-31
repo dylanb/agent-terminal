@@ -152,8 +152,8 @@ describe('AC1 — no orphaned src module survives the sweep', () => {
 // nor the already-removed flow:gateDecision (a word char follows gate). Allowlist =
 // §E.4's history set that legitimately still names them (the changelog byte-for-byte, CODE-STANDARDS.md's
 // past-tense motivating-defect record, and this deletion list) plus THIS file, whose data the needles are.
-// Falsified by reintroducing any needle in a source/test/config file (verified: all five members, and
-// `flow:gate` in the §6 contract doc, appear today).
+// Falsified by reintroducing any needle in a source/test/config file (verified: all five members and
+// `flow:gate` appear today only in the §E.4 allowlist history, never in live src/test/config).
 //
 // Deliberately NOT needles (documented so the scope is checkable): the four loopActivity phrases and the
 // removed install-destination ids (`loops`/`skills`) are generic words / path segments that recur

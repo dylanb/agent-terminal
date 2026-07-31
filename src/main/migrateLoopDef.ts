@@ -11,8 +11,8 @@ import { readDirEntries } from './dirEntries';
 import { errMsg } from './errno';
 
 export interface MigrateBundledLoopDefParams {
-  /** The def name — already held to a single safe path segment by `resolveLoopDefV2` before any tier root
-   *  was joined (§B.6), so it is trusted here and never re-validated. */
+  /** The def name. Held to a single safe path segment by `resolveLoopDefV2` upstream (§B.6); both tier-root
+   *  joins below are independently confined (`confinedRealPath`), so a direct caller cannot escape either root. */
   name: string;
   /** The app-bundled tier root the def resolved from (`ctx.tiers.appBundled`). */
   appBundledDir: string;
@@ -55,7 +55,8 @@ const migrationFailedNotice = (name: string, e: unknown): string =>
 /** Copy `<appBundledDir>/<name>/**` into `<operatorDir>/<name>/` once, all-or-nothing (§B.6). Returns the
  *  one-shot operator-facing notice to accumulate on the transition reply (§B.5 position 6), or `null` when
  *  there is nothing to say: the def is already in the operator tier (AC 9 silent substitution — idempotent),
- *  the config root does not resolve, or the source raced away after it resolved. NEVER throws. */
+ *  the config root does not resolve, either tier path resolves outside its root, or the source raced away
+ *  after it resolved. NEVER throws. */
 export function migrateBundledLoopDef(params: MigrateBundledLoopDefParams): string | null {
   const { name, appBundledDir, operatorDir, stageDir } = params;
   try {
@@ -66,7 +67,13 @@ export function migrateBundledLoopDef(params: MigrateBundledLoopDefParams): stri
     if (jail === null) return null;
     const destDir = confinedRealPath(jail, path.join(jail, name));
     if (destDir === null) return null;
-    const members = readDefTree(path.join(appBundledDir, name));
+    // The bundle is an installed artifact this build did not necessarily write (§B.6), so the READ is confined
+    // exactly as the write above is: a `..` or a symlink at `<appBundledDir>/<name>` that escapes the bundle
+    // root yields no read and no copy, not a walk of whatever it resolves to (CWE-22/59; CLAUDE.md).
+    const srcJail = resolveOwnedDirJail(appBundledDir);
+    const srcDir = srcJail === null ? null : confinedRealPath(srcJail, path.join(srcJail, name));
+    if (srcDir === null) return null;
+    const members = readDefTree(srcDir);
     if (members.length === 0) return null; // source absent/empty (raced away): a copy of nothing is not a def
     const result = atomicWriteTreeSync(destDir, members, stageDir ? { stageDir } : {});
     if (result.ok) return migratedNotice(name);

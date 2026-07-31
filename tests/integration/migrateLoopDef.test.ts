@@ -96,6 +96,22 @@ describe('migrateBundledLoopDef (§B.6 / AC 5)', () => {
     expect(existsSync(path.join(operatorDir, NAME))).toBe(false);
   });
 
+  it('refuses a source def dir that is a symlink escaping the app bundle — reads nothing outside it and copies nothing (CWE-59/CWE-22)', () => {
+    // A tampered bundle (an installed artifact this build did not necessarily write): `<appBundledDir>/<NAME>`
+    // is itself a symlink to a directory OUTSIDE the bundle root. The read must confine the same way the write
+    // does, or it follows the link and copies whatever it points at into the operator's own tier.
+    const outside = path.join(root, 'outside');
+    mkdirSync(outside, { recursive: true });
+    writeFileSync(path.join(outside, 'secret.md'), 'SECRET\n');
+    symlinkSync(outside, path.join(appBundledDir, NAME));
+
+    const notice = migrateBundledLoopDef({ name: NAME, appBundledDir, operatorDir });
+
+    expect(notice).toBeNull();
+    expect(existsSync(path.join(operatorDir, NAME))).toBe(false);
+    expect(existsSync(path.join(operatorDir, NAME, 'secret.md'))).toBe(false);
+  });
+
   it('a config root the app declines to resolve (a dangling-symlink parent) yields no write and no notice', () => {
     seedBundledDef(appBundledDir);
     const danglingParent = path.join(root, 'dangling');

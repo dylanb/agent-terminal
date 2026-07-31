@@ -36,8 +36,7 @@ export interface FlowInputDef {
 }
 
 /** A §18.1 step. `manual`: a human produces an artifact. `loop` (§24.2.3 T2): runs an agent-loop,
- *  binding its LoopDef by name (`loop`) and mirroring that loop's state.yaml read-only. The `action`
- *  kind (§18.2) is a later phase. */
+ *  binding its LoopDef by name (`loop`). The `action` kind (§18.2) is a later phase. */
 export interface FlowStepDef {
   id: string;
   kind: 'manual' | 'loop';
