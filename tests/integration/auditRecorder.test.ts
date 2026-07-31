@@ -401,10 +401,14 @@ describe('audit recorder — terminate finalization (§25.4 / #26)', () => {
 describe('audit writer — the retired cost/ci kinds stay closed to new writers (§H.1)', () => {
   const writerSrc = readFileSync(new URL('../../src/main/auditRecorder.ts', import.meta.url), 'utf8');
 
+  // The writer neither declares the retired union (that is the reader, `audit.ts`) nor reads these kinds, so
+  // the token appears in the writer ONLY if something emits it. Match the whole `loop.cost` / `loop.ci` token
+  // (a trailing non-word boundary rules out `loop.circular`) in ANY quote form — `'…'`, `"…"`, or a template
+  // `` `…` `` — so the guard cannot be evaded by swapping quotes, the exact escape a string-literal match left open.
   for (const kind of ['loop.cost', 'loop.ci']) {
     it(`the §25 writer constructs no ${kind} event`, () => {
-      const emits = writerSrc.includes(`type: '${kind}'`) || writerSrc.includes(`type: "${kind}"`);
-      expect(emits, `src/main/auditRecorder.ts must not emit a ${kind} event (§H.1: closed to new writers)`).toBe(false);
+      const token = new RegExp(`\\bloop\\.${kind.slice('loop.'.length)}\\b`);
+      expect(token.test(writerSrc), `src/main/auditRecorder.ts must not name a ${kind} event (§H.1: closed to new writers)`).toBe(false);
     });
   }
 });
