@@ -639,6 +639,34 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
     expect(host.querySelector('.loop-iter')).toBeNull();
   });
 
+  it('renders no running-cost read-out on the loop rail — the retired cost node is gone (AC 9)', async () => {
+    const deps = {
+      state: vi.fn(
+        async (): Promise<FlowStateView> => ({
+          stepName: 'build',
+          steps: ['build'],
+          position: 1,
+          total: 1,
+          status: 'in_progress' as FlowStatus,
+          loop: { status: 'impl-review', iteration: 3, pr: 12, branch: 'agent-loop/x', ready: false },
+        }),
+      ),
+      start: vi.fn(),
+      advance: vi.fn(),
+      restart: vi.fn(),
+      undo: vi.fn(),
+      terminate: vi.fn(),
+      provideInput: vi.fn(),
+      onStatusBar: vi.fn(),
+      onStateChanged: noopSub,
+    };
+    createFlowStrip(host, deps).onRepoChanged('/repo');
+    await vi.waitFor(() => expect(host.querySelector('.loopstat')).not.toBeNull());
+    // the retired running-cost node — its structure and its value — no longer renders; no surface asserts a cost
+    expect(host.querySelector('.loop-cost')).toBeNull();
+    expect(host.querySelector<HTMLElement>('.loopstat')!.textContent).not.toMatch(/\$\s*\d/);
+  });
+
   it('omits aria-controls on the loop read-out when no panel id is injected (no hard-coded global id)', async () => {
     const deps = {
       state: vi.fn(

@@ -3,7 +3,7 @@
 // failure mode returns a surfaced reason (AC 6). The declared version and the tier a def resolves from are
 // the two things engine selection keys on.
 
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import yaml from 'js-yaml';
 import {
@@ -28,10 +28,14 @@ export const LOOP_DEF_V2_VERSION = 'v2';
 
 /** The trusted tier roots, injected so tests can point resolution at a temp root. `operator` is null when
  *  the user-config root is refused (a relative CLAUDE_CONFIG_DIR — see userConfig.ts); `appBundled` is the
- *  bundled default tree's root. A repo registry override is resolved separately before these tiers. */
+ *  bundled default tree's root. A repo registry override is resolved separately before these tiers.
+ *  `retired` is the retired engine's operator def dir (`userConfigLoopsDir()`), read for PRESENCE only
+ *  when no surviving tier answers (AC 5) — its content is never read, parsed, moved or deleted; null when the
+ *  root is refused. */
 export interface LoopDefV2Tiers {
   operator: string | null;
   appBundled: string;
+  retired: string | null;
 }
 
 /** One reviewer-catalog entry (§27.4/§27.8): a persona, its charter carried BY REFERENCE (§18.6 — never an
@@ -448,5 +452,26 @@ export function resolveLoopDefV2(name: string, ctx: LoopDefV2Context): LoopDefV2
       return { ok: false, reason: e instanceof Error ? e.message : String(e) };
     }
   }
-  return { ok: false, reason: `no §27 def named ${name} in any tier` };
+  const bareReason = `no §27 def named ${name} in any tier`;
+  // AC 5 (§B.6): with no surviving tier answering, a retired-schema def of the same name — if PRESENT —
+  // turns the bare miss into a reason naming why it stopped resolving, on the same per-step loop-error path
+  // AC 4 uses. PRESENCE only: the retired def's content is never read, parsed, moved or deleted. The retired
+  // root is the operator's own ground and may be absent on a first run, so it jails through resolveOwnedDirJail
+  // (a null jail — no ~/.claude — is simply "no retired def", the bare reason); the reason-surfacing branch
+  // uses confinedRealPathResult so an unresolvable entry is never reported as an escape (§B.6).
+  if (ctx.tiers.retired !== null) {
+    const retiredJail = resolveOwnedDirJail(ctx.tiers.retired);
+    if (retiredJail !== null) {
+      // Confine FIRST (realpathBounded appends an absent tail, so `.ok` alone means "bounded", not "exists"),
+      // then test existence on the bounded path — presence, no content read.
+      const probe = confinedRealPathResult(retiredJail, path.join(ctx.tiers.retired, name));
+      if (probe.ok && existsSync(probe.path)) {
+        return {
+          ok: false,
+          reason: `${bareReason}; a retired-schema def named ${name} is present in your config and is no longer read — re-create it under loops-v2`,
+        };
+      }
+    }
+  }
+  return { ok: false, reason: bareReason };
 }

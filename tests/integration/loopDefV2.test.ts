@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, sep } from 'node:path';
 import { resolveLoopDefV2, type LoopDefV2Tiers } from '../../src/main/loopDefV2';
@@ -53,7 +53,16 @@ let repoDir: string;
 let linkDir: string;
 
 function tiers(): LoopDefV2Tiers {
-  return { operator: join(opDir, 'loops-v2'), appBundled: join(appDir, 'loops-v2') };
+  return { operator: join(opDir, 'loops-v2'), appBundled: join(appDir, 'loops-v2'), retired: null };
+}
+
+// The retired engine's operator def dir is a SIBLING of the surviving `loops-v2` tier — `<root>/loops/<name>/`
+// (`userConfigLoopsDir`). Plant one so the resolver's no-tier-answers branch can find it by PRESENCE.
+function plantRetiredDef(name: string): string {
+  const retiredRoot = join(opDir, 'loops');
+  mkdirSync(join(retiredRoot, name), { recursive: true });
+  writeFileSync(join(retiredRoot, name, `${name}.yaml`), 'name: ' + name + '\n'); // retired schema — never read
+  return retiredRoot;
 }
 
 // Plant a def named `name` in a tier root, with real charter + prompt files so confinement resolves.
@@ -517,5 +526,49 @@ describe('resolveLoopDefV2 — tier precedence + schema independence (AC 7)', ()
     plantDef(join(appDir, 'loops-v2'), 'plan-loop', VALID_DEF);
     const r = resolveLoopDefV2('plan-loop', { tiers: tiers(), repoDir });
     expect(r.ok).toBe(true);
+  });
+});
+
+// §D.4 rows 2843/2846 + changelog v2.141(2): after the re-point a namespace-less step binds §27, so an
+// operator's own retired-schema def of that name no longer resolves. When NO tier answers at all and a retired
+// def of that name is PRESENT, the bare "no §27 def named X" is enriched to name the retired schema, on the
+// same per-step loop-error path AC 4 uses — so the operator learns why their def stopped resolving rather
+// than seeing a generic miss. The retired def's content is never read, parsed, moved or deleted.
+describe('resolveLoopDefV2 — no-tier-answers names a present retired def (AC 5, §D.4)', () => {
+  const BARE = 'no §27 def named plan-loop in any tier';
+
+  it('enriches the reason to name the retired schema when the retired tier holds a def of that name', () => {
+    plantRetiredDef('plan-loop'); // <opDir>/loops/plan-loop/ present; no §27 def in any surviving tier
+    const r = resolveLoopDefV2('plan-loop', { tiers: { ...tiers(), retired: join(opDir, 'loops') }, repoDir });
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.reason).toContain('plan-loop');
+    expect(r.reason).toMatch(/retired/i);
+    expect(r.reason).not.toBe(BARE); // enriched, not the bare miss
+  });
+
+  it('leaves the bare reason unchanged when the retired tier holds no def of that name', () => {
+    mkdirSync(join(opDir, 'loops'), { recursive: true }); // retired root exists, this name absent
+    const r = resolveLoopDefV2('plan-loop', { tiers: { ...tiers(), retired: join(opDir, 'loops') }, repoDir });
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.reason).toBe(BARE);
+  });
+
+  it('leaves the bare reason unchanged when no retired tier is configured (null)', () => {
+    plantRetiredDef('plan-loop'); // present on disk, but the resolver is handed retired: null
+    const r = resolveLoopDefV2('plan-loop', { tiers: { ...tiers(), retired: null }, repoDir });
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.reason).toBe(BARE);
+  });
+
+  it('never moves, deletes or rewrites the retired def while probing it (presence only)', () => {
+    const retiredRoot = plantRetiredDef('plan-loop');
+    const defFile = join(retiredRoot, 'plan-loop', 'plan-loop.yaml');
+    const before = readFileSync(defFile, 'utf8');
+    resolveLoopDefV2('plan-loop', { tiers: { ...tiers(), retired: retiredRoot }, repoDir });
+    expect(existsSync(defFile)).toBe(true);
+    expect(readFileSync(defFile, 'utf8')).toBe(before);
   });
 });

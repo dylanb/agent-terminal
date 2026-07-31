@@ -54,6 +54,7 @@ describe('after the install, every loop name the shipped flow binds resolves on 
         tiers: {
           operator: appLoopsTargetDir(),
           appBundled: BUNDLE_APP_LOOPS,
+          retired: null,
         },
       });
       expect(resolved.ok).toBe(true);
@@ -76,7 +77,7 @@ describe('after the install, every loop name the shipped flow binds resolves on 
     for (const name of boundLoopNames()) {
       const resolved = resolveLoopDefV2(name, {
         repoDir: repo,
-        tiers: { operator: appLoopsTargetDir(), appBundled: BUNDLE_APP_LOOPS },
+        tiers: { operator: appLoopsTargetDir(), appBundled: BUNDLE_APP_LOOPS, retired: null },
       });
       expect(resolved.ok).toBe(true);
       if (resolved.ok) {
@@ -139,6 +140,7 @@ describe('the shipped feature-dev flow binds the complete §27 chain (ST3 AC6)',
         tiers: {
           operator: null,
           appBundled: BUNDLE_APP_LOOPS,
+          retired: null,
         },
       });
       expect(resolved.ok).toBe(true);
@@ -162,6 +164,7 @@ describe('the shipped feature-dev flow binds the complete §27 chain (ST3 AC6)',
         tiers: {
           operator: appLoopsTargetDir(),
           appBundled: BUNDLE_APP_LOOPS,
+          retired: null,
         },
       });
       expect(resolved.ok).toBe(true);
@@ -193,7 +196,7 @@ describe('the install is global — a repo-local override never redirects where 
     '',
   ].join('\n');
 
-  const tiers = () => ({ operator: appLoopsTargetDir(), appBundled: BUNDLE_APP_LOOPS });
+  const tiers = () => ({ operator: appLoopsTargetDir(), appBundled: BUNDLE_APP_LOOPS, retired: null });
 
   function seedOverride(): string {
     const overrideDir = path.join(repo, overrideDirRel);

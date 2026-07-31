@@ -1860,7 +1860,7 @@ describe('§27 engine — resume routes a stopped (working) turn to the human (C
 // `working` in the view carries no route-out and is human-recoverable only by hand-editing run-state.yaml.
 describe('§27 derived view — a relaunch-stranded turn surfaces a route-out (CWE-703/755)', () => {
   const appBundled = fileURLToPath(new URL('../../example/loops-v2', import.meta.url));
-  const viewCtx = () => ({ tiers: { operator: null, appBundled }, repoDir: repo });
+  const viewCtx = () => ({ tiers: { operator: null, appBundled, retired: null }, repoDir: repo });
 
   it('derives a persisted `working` consolidator turn to a routable error over a fresh engine', () => {
     writeAppLoopState(repo, { loop: 'plan-loop', step: STEP, turnKey: CONSOLIDATE_KEY, status: 'working', round: 2 }, FIXED);

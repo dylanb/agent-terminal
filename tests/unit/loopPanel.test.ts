@@ -158,6 +158,24 @@ describe('docked loop panel (§24.2.3 T2)', () => {
     expect(document.activeElement).toBe(host.querySelector('[data-app-route-out]'));
   });
 
+  // WCAG 2.4.3 / 2.1.1 (AC 9, §B.9): the two retired controls that used to render on an ERROR view carrying a
+  // round — the mark-complete button (the panel's last tab stop) and syncRetry's recovery Retry — are BOTH
+  // gone. The delta is per branch (two here), the case a single flat tab-stop number would miss: the
+  // surviving keyboard-reachable controls are exactly the §27 work-turn route-out group and the Close entry.
+  it('leaves no retired mark-complete or recovery-Retry tab stop on an error-with-round view (WCAG 2.4.3, AC 9)', () => {
+    const panel = createLoopPanel(host, { githubRef: () => Promise.resolve(null), openExternal: () => {}, appRouteOut: () => {} });
+    panel.render(loop({ status: 'error', errorReason: 'stalled', iteration: 2, appTurn: { step: 'plan', turnKey: 'work-plan' } }), 'plan');
+    expect(host.querySelector('[data-loop-retry]')).toBeNull(); // syncRetry's recovery Retry is gone
+    const buttons = [...host.querySelectorAll<HTMLButtonElement>('button')];
+    expect(buttons.some((b) => /mark\s+(turn\s+)?complete/i.test(b.textContent ?? ''))).toBe(false); // mark-complete gone
+    // the surviving tab stops are exactly the §27 route-out controls + the stable Close entry — nothing retired
+    const routeOut = [...host.querySelectorAll('[data-app-route-out]')];
+    const close = host.querySelector('[data-loop-close]');
+    expect(routeOut.length).toBeGreaterThan(0);
+    expect(close).not.toBeNull();
+    expect(buttons.length).toBe(routeOut.length + 1);
+  });
+
   it('falls back to the panel close control when a human-needed state has no decision metadata', () => {
     const panel = createLoopPanel(host, { githubRef: () => Promise.resolve(null), openExternal: () => {} });
     panel.render(loop({ status: 'awaiting-human-plan-approval', gateOptions: [] }), 'plan');

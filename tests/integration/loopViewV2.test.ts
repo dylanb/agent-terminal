@@ -33,7 +33,7 @@ pickup:
 let appDir: string;
 let repoDir: string;
 function tiers(): LoopDefV2Tiers {
-  return { operator: null, appBundled: join(appDir, 'loops-v2') };
+  return { operator: null, appBundled: join(appDir, 'loops-v2'), retired: null };
 }
 function plant(name: string, opts: string[], reviewers: string[] = []): void {
   const defDir = join(appDir, 'loops-v2', name);

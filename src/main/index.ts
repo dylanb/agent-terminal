@@ -109,6 +109,7 @@ import { createRealAppGateGitHub } from './appGateGithub';
 import { runAppGateDecision as runAppGateDecisionImpl } from './appGateDecision';
 import { probeChainedInput } from './chainedInputProbe';
 import { resolveExampleLoopsV2Dir } from './exampleAssets';
+import { resolveAppLoopDefTiers } from './appLoopDefTiers';
 import { userConfigLoopsV2Dir } from './userConfig';
 import type { CliInstallResult } from '../shared/ipc';
 import {
@@ -317,7 +318,7 @@ async function createWindow(): Promise<void> {
   // §27.15 — one def-resolution context shared by the engine's resolveDef and the §27 gate executor, so both
   // resolve the same def from the same tiers.
   const appDefContext = (repoDir: string): LoopDefV2Context => ({
-    tiers: { operator: userConfigLoopsV2Dir(), appBundled: resolveExampleLoopsV2Dir(iconLoc) },
+    tiers: resolveAppLoopDefTiers(iconLoc),
     repoDir,
   });
   let terminateFlowLifecycle: (repoDir: string) => FlowStateView;
@@ -508,7 +509,7 @@ async function createWindow(): Promise<void> {
     // the resolver before any tier root is joined.
     readAppLoopView: (repoKey, name) =>
       provideAppLoopView(appEngine, name, {
-        tiers: { operator: userConfigLoopsV2Dir(), appBundled: resolveExampleLoopsV2Dir(iconLoc) },
+        tiers: resolveAppLoopDefTiers(iconLoc),
         repoDir: repoKey,
       }),
   });
