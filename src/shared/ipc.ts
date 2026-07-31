@@ -440,8 +440,8 @@ export interface FlowDerived {
   ready: boolean;
 }
 
-/** The engine-neutral loop-step view the app surfaces (§24.2.3 T2 / §27.15): the live vocabulary the loop
- *  panel and strip render, produced by the bound engine — not a mirror of any file the app reads.
+/** The §27 loop view (§24.2.3 T2 / §27.15): the engine-neutral vocabulary the loop panel and strip
+ *  render, produced by the bound engine — not a mirror of any file the app reads.
  *  `status` is the per-LoopDef state-machine string (unbounded — the
  *  strip maps it onto a generic 3-tone pill, never an enum); `pr`/`branch` are null before the loop
  *  has a PR. `ready` is the §19.2 advance gate — gate-driven when the bound LoopDef resolves (true

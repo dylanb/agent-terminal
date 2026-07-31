@@ -1540,7 +1540,7 @@ describe('flow status strip (§22.3 / §24.2.2)', () => {
   });
 
   // A passive flow:onStateChanged push (§24.2.2 S5) carries only LIVE-DERIVED change — todo counts,
-  // agent activity, the loop's state.yaml mirror — never a structural change (status/steps/controls
+  // agent activity, the loop's live view — never a structural change (status/steps/controls
   // move only via a user transition). Repainting it by tearing the whole subtree down detaches any
   // node the user (or an open modal) is mid-interaction with: the focused control loses focus to
   // <body>, an in-flight click target keeps detaching so the click never lands, and a confirm

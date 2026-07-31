@@ -6,9 +6,9 @@ import type { FlowLoopView, GithubRef, GithubRefKind } from '../../src/shared/ip
 
 const flush = (): Promise<void> => new Promise((r) => setTimeout(r, 0));
 
-// §24.2.3 T2 — the docked loop panel organism (UI-STANDARDS §1.2): the EXPANDED read-only state
-// mirror that the rail's compact Loop read-out opens. It renders the real v4 `state.yaml` vocabulary
-// (status / iteration / pr / branch) at 100% fidelity to design/shell/loop-flow.html's State section.
+// §24.2.3 T2 — the docked loop panel organism (UI-STANDARDS §1.2): the EXPANDED read-only loop
+// read-out that the rail's compact Loop read-out opens. It renders the engine-neutral `FlowLoopView`
+// vocabulary (status / iteration / pr / branch) at 100% fidelity to design/shell/loop-flow.html's State section.
 // (The gate decision section + LoopDef gate options are T5/T6.) It is placement-agnostic: it touches
 // only its host subtree and renders identically wherever it is mounted. Tests assert rendered DOM.
 
@@ -34,7 +34,7 @@ const row = (key: string): HTMLElement | undefined =>
   [...host.querySelectorAll<HTMLElement>('.ldl .lrow')].find((r) => r.querySelector('.lk')?.textContent === key);
 
 describe('docked loop panel (§24.2.3 T2)', () => {
-  it('renders the v4 state mirror rows from the loop view', () => {
+  it('renders the loop-view rows from the loop view', () => {
     createLoopPanel(host).render(loop(), 'build');
     expect(row('status')?.querySelector('.lv')?.textContent).toBe('awaiting-human-pr-approval');
     expect(row('iteration')?.querySelector('.lv')?.textContent).toBe('9');

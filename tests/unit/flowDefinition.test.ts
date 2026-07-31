@@ -119,8 +119,8 @@ describe('flow.yaml loader (§24.2.2 S2 / §18.1)', () => {
     expect(loadFlowDefinition(dir).ok).toBe(false);
   });
 
-  // §24.2.3 T2 — the loader gains the `loop` kind: a step binding an agent-loop LoopDef by name. T2 is
-  // a read-only state.yaml mirror, so the binding is only captured, never driven.
+  // §24.2.3 T2 — the loader gains the `loop` kind: a step binding an agent-loop LoopDef by name. The
+  // loader only captures the binding; the bound §27 engine drives it (AC 4).
   it('loads a loop step binding its LoopDef name (§24.2.3 T2)', () => {
     writeFlow(
       'name: feature-dev\nsteps:\n' +

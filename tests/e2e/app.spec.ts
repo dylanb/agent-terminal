@@ -1993,8 +1993,8 @@ test('todo edits during an active flow are recorded; none when no flow is active
   rmSync(home, { recursive: true, force: true });
 });
 
-// Phase 2 (§25.5): the agent-loop bridge feeds the run. Entering a loop step records the state.yaml
-// mirror; a hand-edit (the human driving agent-loop) appends the change live.
+// Phase 2 (§25.5): the §27 engine's run-state feeds the audit. Entering a loop step records the run
+// state; its status changes append live.
 test('a §27 loop step records its run-state and its status changes append loop.status + an empty outputs.snapshot (§25.5)', { tag: '@ownapp' }, async () => {
   // The §27 engine's OWN run-state changes (through `working` to the `complete` gate) are what the §25
   // recorder observes now — the retired external state-mirror source is gone (§F). Driven by a real turn.

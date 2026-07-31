@@ -141,7 +141,7 @@ describe('audit recorder — run file lifecycle (§25.4)', () => {
     expect(existsSync(auditRepoDir(root, repo))).toBe(false);
   });
 
-  it('records loop status/iteration/pr changes from the state.yaml mirror to the open run file', () => {
+  it('records loop status/iteration/pr changes from the §27 loop view to the open run file', () => {
     const rec = recorder();
     rec.recordTransition(repo, 'start', NOT_STARTED, IN_PROGRESS);
     rec.recordLoop(repo, { status: 'planning', iteration: 1, pr: null });

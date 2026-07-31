@@ -167,7 +167,7 @@ export function todoEvents(before: TodoLike[], after: TodoLike[], ts: string): A
   return events;
 }
 
-/** The events an agent-loop state.yaml observation produces, from the before/after diff (§25.5).
+/** The events a loop-view observation produces, from the before/after diff (§25.5).
  *  First observation (`before` null) records the initial status + iteration (and PR if present); a
  *  later observation records only what changed. An absent `after` (left the loop step) yields nothing. */
 export function loopEvents(before: LoopLike | null, after: LoopLike | null, ts: string): AuditEvent[] {

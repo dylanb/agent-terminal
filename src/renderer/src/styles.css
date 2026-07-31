@@ -288,7 +288,7 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible { outline:2px so
 .flowstrip .flow-notice { font-family:"IBM Plex Mono",ui-monospace,monospace; font-size:11.5px; color:var(--dim); margin-top:8px; line-height:1.35; }
 /* §24.2.3 T2 — the read-only loop read-out (design/shell/loop-flow.html). The rail shows a
    COMPACT Loop read-out (a 3-tone status pill + iteration) that opens the docked panel; the full
-   loop view lives in that panel. */
+   loop read-out lives in that panel. */
 .flowstrip .loopstat { margin-top:9px; cursor:pointer; border:1px solid transparent; border-radius:7px; padding:6px 7px; margin-left:-7px; margin-right:-7px; display:flex; flex-direction:column; gap:6px; }
 .flowstrip .loopstat:hover { background:var(--hair2); }
 /* Open-state cue is a signal border, NOT a background wash: a wash would stack under the spill pill's

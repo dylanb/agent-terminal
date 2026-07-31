@@ -140,7 +140,7 @@ describe('lifecycleEvents — append kinds diff before/after (§25.4/§25.5)', (
   });
 });
 
-describe('loopEvents — diff the agent-loop state.yaml mirror (§25.5)', () => {
+describe('loopEvents — diff the §27 loop view (§25.5)', () => {
   const T = '2026-06-23T10:30:00Z';
   const loop = (status: string, iteration: number, pr: number | null) => ({ status, iteration, pr });
 
@@ -151,7 +151,7 @@ describe('loopEvents — diff the agent-loop state.yaml mirror (§25.5)', () => 
     ]);
   });
 
-  it('associates the PR the first time state.yaml carries one', () => {
+  it('associates the PR the first time the view carries one', () => {
     expect(loopEvents(loop('building', 3, null), loop('building', 3, 42), T)).toEqual([
       { ts: T, type: 'pr.assoc', pr: 42 },
     ]);
