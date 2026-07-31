@@ -51,3 +51,52 @@ export function createLoopBindingPreparer(
     return notice !== null ? { kind: 'ready', notice } : { kind: 'ready' };
   };
 }
+
+/** The flow's identity for a repo at a moment — the tuple the deferred revert re-checks so a revert scheduled
+ *  for one entry never lands on a different step/status/issue the flow has since moved to (§B.5 item 2). */
+export interface FlowEntryIdentity {
+  step: string;
+  status: string;
+  issue: number | null;
+}
+
+/** The seams positions 4/5's revert effect needs, each a domain concept (never the flow machine's shape): the
+ *  entry in flight, the token currently owning a repo's entries, the flow's identity, and the four effects. */
+export interface RefuseAndRevertDeps {
+  activeOccurrence(): { repoKey: string; token: number } | null;
+  entryToken(repoKey: string): number | undefined;
+  identity(repoKey: string): FlowEntryIdentity;
+  emitError(repoKey: string, step: string, reason: string): void;
+  revert(repoKey: string, step: string): void;
+  push(): void;
+  /** Schedule the revert on a later tick (setImmediate in production). */
+  defer(fn: () => void): void;
+}
+
+/** Positions 4/5's EFFECT: surface the durable bootstrap error, then DEFER an identity-guarded revert + push,
+ *  so the flow never sits `in_progress` with no run. The entry action fires inside advance's `enter(view())`,
+ *  whose reply view was captured at the entered step, so a SYNCHRONOUS revert's push would be overwritten by
+ *  that stale reply — the revert rides a later tick and lands ONLY if the entry token, status, step and issue
+ *  are still the ones the refusal was raised against (mirrors the coordinator's async rollbackStep guard). */
+export function createRefuseAndRevert(deps: RefuseAndRevertDeps): (reason: string) => void {
+  return (reason) => {
+    const active = deps.activeOccurrence();
+    if (active === null) return;
+    const at = deps.identity(active.repoKey);
+    const guard = { repoKey: active.repoKey, token: active.token, step: at.step, issue: at.issue };
+    deps.emitError(guard.repoKey, guard.step, reason);
+    deps.defer(() => {
+      const now = deps.identity(guard.repoKey);
+      if (
+        deps.entryToken(guard.repoKey) !== guard.token ||
+        now.status !== 'in_progress' ||
+        now.step !== guard.step ||
+        now.issue !== guard.issue
+      ) {
+        return;
+      }
+      deps.revert(guard.repoKey, guard.step);
+      deps.push();
+    });
+  };
+}

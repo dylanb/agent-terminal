@@ -75,7 +75,7 @@ import { createAuditRecorder } from './auditRecorder';
 import { appBootstrapAuditCmd, appBootstrapAuditExit, type TransitionKind } from '../shared/audit';
 import { auditRootDir } from './auditPaths';
 import { createFlowEntryActions, injectableSkill } from './flowEntryActions';
-import { createLoopBindingPreparer } from './loopBinding';
+import { createLoopBindingPreparer, createRefuseAndRevert } from './loopBinding';
 import { migrateBundledLoopDefOnEntry } from './migrateLoopDef';
 import { createLoopNotifier } from './loopNotifier';
 import { classifyHostedAgent, hostedAgentPresent } from './loopOrchestrator';
@@ -438,26 +438,21 @@ async function createWindow(): Promise<void> {
     // entry action fires inside advance's `enter(view())`, whose reply view was captured at the entered step;
     // a synchronous revert's push would be overwritten by that stale reply, so the revert rides a later tick
     // (mirrors the coordinator's naturally-async rollbackStep guard — entryToken + status + step + issue).
-    refuseAndRevert: (reason) => {
-      const t = activeFlowEntryOccurrence;
-      if (!t) return;
-      const snap = flow.state(t.repoKey);
-      const guard = { repoKey: t.repoKey, token: t.token, step: snap.stepName, issue: snap.refs?.ticket ?? null };
-      send(CH.flowOnBootstrapError, { sessionId: SESSION_ID, repoKey: guard.repoKey, step: guard.step, reason });
-      setImmediate(() => {
-        const current = flow.state(guard.repoKey);
-        if (
-          currentFlowEntryTokens.get(guard.repoKey) !== guard.token ||
-          current.status !== 'in_progress' ||
-          current.stepName !== guard.step ||
-          (current.refs?.ticket ?? null) !== guard.issue
-        ) {
-          return;
-        }
-        flow.revertStep(guard.repoKey, guard.step);
-        pushFlowChanged();
-      });
-    },
+    refuseAndRevert: createRefuseAndRevert({
+      activeOccurrence: () =>
+        activeFlowEntryOccurrence
+          ? { repoKey: activeFlowEntryOccurrence.repoKey, token: activeFlowEntryOccurrence.token }
+          : null,
+      entryToken: (repoKey) => currentFlowEntryTokens.get(repoKey),
+      identity: (repoKey) => {
+        const s = flow.state(repoKey);
+        return { step: s.stepName, status: s.status, issue: s.refs?.ticket ?? null };
+      },
+      emitError: (repoKey, step, reason) => send(CH.flowOnBootstrapError, { sessionId: SESSION_ID, repoKey, step, reason }),
+      revert: (repoKey, step) => flow.revertStep(repoKey, step),
+      push: () => pushFlowChanged(),
+      defer: (fn) => setImmediate(fn),
+    }),
     // Position 6 — AC 5's def migration, only when the binding resolved from the app-bundled tier and the
     // operator tier exists; the copy is best-effort and returns its one-shot notice (or null).
     migrateIfBundled: (step, resolved) => migrateBundledLoopDefOnEntry(step, resolved, resolveAppLoopDefTiers(iconLoc)),

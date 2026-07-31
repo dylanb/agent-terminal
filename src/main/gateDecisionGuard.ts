@@ -10,8 +10,6 @@ import { DEFAULT_LOOP_NAMESPACE, MARKED_BINDING_REASON, bindsNoSurvivingEngine, 
 import type { FlowStepDef } from './flow';
 import type { GateDecisionOption } from '../shared/ipc';
 
-export { MARKED_BINDING_REASON };
-
 /** The loop binding a gate decision for `stepId` acts on, looked up BY ID from the flow's steps — never the
  *  flow's current position (the payload names the step it acts on, §6). A marked step the flow has ADVANCED
  *  past must still be found, or a position-keyed lookup reads the wrong, unmarked step. `null` when `stepId`
