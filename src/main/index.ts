@@ -109,6 +109,7 @@ import { createRealAppGateGitHub } from './appGateGithub';
 import { runAppGateDecision as runAppGateDecisionImpl } from './appGateDecision';
 import { probeChainedInput } from './chainedInputProbe';
 import { resolveAppLoopDefTiers } from './appLoopDefTiers';
+import { createGuardedGateDecision, stepLoopBinding } from './gateDecisionGuard';
 import type { CliInstallResult } from '../shared/ipc';
 import {
   createAppLoopBootstrapCoordinator,
@@ -782,7 +783,7 @@ async function createWindow(): Promise<void> {
   // §27.9/§27.13 / N5 — composition root for the §27 gate decision. Returns the request-changes
   // delivered/dropped result so the two-way flow:appRequestChanges caller can hold the composer open on a
   // drop (approve goes through the one-way channel and ignores the result).
-  const runAppGateDecision = (repoKey: string, step: string, turnKey: string, option: GateDecisionOption, note?: string): Promise<boolean> =>
+  const runAppGateDecisionRaw = (repoKey: string, step: string, turnKey: string, option: GateDecisionOption, note?: string): Promise<boolean> =>
     runAppGateDecisionImpl(
       repoKey,
       step,
@@ -825,6 +826,19 @@ async function createWindow(): Promise<void> {
       },
       note,
     );
+
+  // §B.3/AC 4 — the gate-decision seam refuses a marked binding at the operation: a step that binds no
+  // surviving engine (loop_namespace: legacy) never reaches the outward-facing side effect, even if its run
+  // state already sits at a verdict. The binding is read from the loaded def by the step id the payload names
+  // (§6), never the flow's current position — a marked step the flow has advanced past must still be found.
+  const runAppGateDecision = createGuardedGateDecision({
+    bindingOf: (repoKey, step) => {
+      const load = loadFlowDefinitionLocalFirst(repoKey, flowGlobalDir);
+      return load.ok ? stepLoopBinding(load.definition.steps, step) : null;
+    },
+    refuse: (reason) => send(CH.flowOnLoopError, { sessionId: SESSION_ID, reason }),
+    run: runAppGateDecisionRaw,
+  });
 
   // Flow A (§4): every output byte goes to the renderer AND the shadow tee. §27 turn completion is detected
   // via the §27 loop area's turn-done FILE only (§27.12); there is no echo-hazardous line scanner.

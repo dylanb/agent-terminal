@@ -13,7 +13,7 @@ import { createFlowStateStore, type FlowStateStore } from './flowState';
 import { isRecord } from './yamlRecord';
 import { errMsg, isErrno } from './errno';
 import { stripDisplayControlChars } from '../shared/controlChars';
-import { APP_LOOP_NAMESPACE, DEFAULT_LOOP_NAMESPACE, bindsNoSurvivingEngine, isRecognizedLoopBinding, type LoopBinding } from '../shared/loopNamespace';
+import { APP_LOOP_NAMESPACE, DEFAULT_LOOP_NAMESPACE, MARKED_BINDING_REASON, bindsNoSurvivingEngine, isRecognizedLoopBinding, type LoopBinding } from '../shared/loopNamespace';
 import { isSafePathSegment } from '../shared/pathSegment';
 
 /**
@@ -366,7 +366,7 @@ export function createFlowMachine(
           ready: false,
           actionable: false,
           humanNeeded: true,
-          errorReason: 'this loop step binds the retired "legacy" engine, which no longer exists — set loop_namespace to the surviving engine, or remove it',
+          errorReason: MARKED_BINDING_REASON,
         },
       };
     }

@@ -50,3 +50,9 @@ export function isRecognizedLoopBinding(v: unknown): v is LoopBinding {
 export function bindsNoSurvivingEngine(binding: LoopBinding): boolean {
   return !isLoopNamespace(binding);
 }
+
+/** The human-needed reason every seam surfaces for a step that binds no surviving engine — ONE definition so
+ *  the view provider, the entry dispatcher and the gate decision cannot drift on the text an operator reads
+ *  (CLAUDE.md shared-semantics). */
+export const MARKED_BINDING_REASON =
+  'this loop step binds the retired "legacy" engine, which no longer exists — set loop_namespace to the surviving engine, or remove it';
