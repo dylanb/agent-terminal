@@ -140,13 +140,20 @@ describe('AC1 — no orphaned src module survives the sweep', () => {
 
 // ─── §D.4 row: no removed retired-engine identifier survives outside the history allowlist (AC 1/2/7) ────
 // Seeded from the same constants the sweep removed (§B.7): the retired FlowApi members, the retired Flow*Msg
-// IPC message types, and the retired CH channel-key names. Matched WHOLE-WORD and CASE-SENSITIVE — the
+// IPC message types, and the retired CH channel-key names — PLUS `flow:gate`, the older retired-engine
+// injected-command gate CHANNEL (`window.flow.gate`, v2.27/§19.3) removed from code by an earlier slice but
+// left standing in the §6 IPC-contract doc, where it cited §19.3 — not the retired section — and so slipped
+// past both AC 1's grep and every other needle until the operator's Finding-N direction pulled it into this
+// sweep. Matched WHOLE-WORD and CASE-SENSITIVE — the
 // surviving §27 tokens (`appGateDecision`, `gateDecisionAuditCmd`, `flowAppGateDecision`, `appRouteOut`)
 // differ in case or carry a boundary-less camelCase prefix, so none is a match; and a member needle also
-// catches the retired channel VALUE it embeds (`\bgateDecision\b` hits `'flow:gateDecision'`). Allowlist =
+// catches the retired channel VALUE it embeds (`\bgateDecision\b` hits `'flow:gateDecision'`); likewise
+// `\bflow:gate\b` matches the doc's bare `flow:gate` channel but NOT flow:appGateDecision (no such substring)
+// nor the already-removed flow:gateDecision (a word char follows gate). Allowlist =
 // §E.4's history set that legitimately still names them (the changelog byte-for-byte, CODE-STANDARDS.md's
 // past-tense motivating-defect record, and this deletion list) plus THIS file, whose data the needles are.
-// Falsified by reintroducing any needle in a source/test/config file (verified: all five members appear today).
+// Falsified by reintroducing any needle in a source/test/config file (verified: all five members, and
+// `flow:gate` in the §6 contract doc, appear today).
 //
 // Deliberately NOT needles (documented so the scope is checkable): the four loopActivity phrases and the
 // removed install-destination ids (`loops`/`skills`) are generic words / path segments that recur
@@ -160,6 +167,7 @@ describe('AC1/2/7 — no removed retired-engine identifier survives outside the 
     'markTurnComplete', 'gateDecision', 'retryTurn', 'onBootstrapConflict', 'resolveBootstrapConflict', // FlowApi members
     'FlowGateDecisionMsg', 'FlowMarkTurnCompleteMsg', 'FlowBootstrapConflictMsg', 'FlowResolveBootstrapConflictMsg', // Flow*Msg types
     'flowGateDecision', 'flowMarkTurnComplete', 'flowRetryTurn', 'flowOnBootstrapConflict', 'flowResolveBootstrapConflict', // CH keys
+    'flow:gate', // retired-engine injected-command gate CHANNEL, grep-invisible in the §6 doc (Finding-N scope add — see header)
   ];
   const patterns = NEEDLES.map((n) => ({ needle: n, re: new RegExp(`\\b${n}\\b`) }));
 

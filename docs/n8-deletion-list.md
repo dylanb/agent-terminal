@@ -2940,6 +2940,7 @@ defers the call to implementation.
 
 | file | what changes |
 |---|---|
+| `docs/spec/06-ipc-contract.md` | **Added post-N8 by operator direction (Finding N).** The §6 channel table and its `preload.js` sketch still documented `flow:gate` — the §26-era injected-command gate channel (v2.27/§19.3), removed from code by an earlier slice but never scrubbed here because the row cited §19.3, **not** §26, so both AC 1's grep and the §D.4 removed-identifier needle missed it. **Rewritten** (not blank-deleted) to the surviving successor `flow:appGateDecision` (§27.9/§27.13), which carries the `step`+`turnKey` identity §6 requires — the same "describe what ships; a documented-but-dead channel is worse than none" disposition every other injected-gate row in this table takes (`docs/spec/17-…`, `docs/spec/19-…`). The §D.4 needle now carries `flow:gate`, so the row cannot silently return. |
 | `terminal-web-ui-spec.md` | the document-status / **Scope** paragraph — three claims become false at once: §26 is "retired-but-running", §27 "is built alongside it", and the sweep is "pending". Rewritten to what ships. |
 | `docs/spec/18-…` | **"There are five destinations"** → three, dropping "the legacy engine's **loop-config location** (§24.2.3)" and the **skills** directory from the prose. Carries no §26 citation, which is why the citation-driven sweep missed it. |
 | `docs/spec/18-…` | the **Skills fan in** bullet — the whole mechanism (each bundled skill written twice, once under the §26.5 loop-config layout) goes with the destination (AC 9). |

@@ -39,7 +39,7 @@ All payloads carry a `sessionId` (a single fixed id in this version). This costs
 | `flow:setTitle` | renderer → main (invoke) | `{sessionId, repoKey, title} → FlowStateView` | **(v2.133, §22.3.1)** Name the registered worktree's work. `title` is bounded by `TITLE_MAX`; blank clears it. The response is the newly persisted view, while a refused or unsafe write rejects for visible rollback/error handling. |
 | `flow:advance` | renderer → main (invoke) | `{sessionId} → FlowState` | **(v2.27, §19.2)** User-driven advance to the next step. Warns (does not block) if the current gate is unsatisfied (`ready: false` in the result). |
 | `flow:undo` | renderer → main (invoke) | `{sessionId, repoKey} → FlowStateView` | **(v2.64, §24.2.2)** Revert a manual advance: `done → in_progress` **without** re-running the step's entry actions (distinct from `flow:restart`). `window.flow.undo(repoKey)`. |
-| `flow:gate` | renderer → main | `{sessionId, action: 'approve'\|'request-changes'\|'impasse', reason?}` | **(v2.27, §19.3)** Drive an agent-loop gate by **injecting** the matching slash command (§19.3); refuses while a process is running (§19.3/D32). |
+| `flow:appGateDecision` | renderer → main | `{sessionId, repoKey, step, turnKey, option}` | **(§27.9/§27.13, N5)** The human's one-way decision at a §27 (app-namespace) gate. Carries the `step`+`turnKey` identity it acts on (§6) so a decision can never fire against another gate; `option` is typed on the shared `GATE_DECISION_OPTIONS` set, and the guard that a step never runs an option its bound def does not declare is enforced at the operation (AC9). The result surfaces through the §27 run state → `flow:onStateChanged` re-pull. |
 | `flow:composeFeedback` | renderer → main (invoke) | `{sessionId, todoIds, instructions?, mode: 'compose'\|'verbatim'} → string` | **(v2.27, §19.4)** Build request-changes feedback from selected review todos (+ optional instructions): agent-composed or submitted verbatim (D9/D11). |
 | `flow:openChild` | renderer → main (invoke) | `{sessionId, prRef, atStep} → {worktree, launched}` | **(v2.27, §23)** Create a git worktree for an epic child PR and launch a new instance, seeding its flow-state at the right step (D22). |
 | `flow:onStateChanged` | main → renderer | `{sessionId}` | **(v2.27, §19; built v2.63, §24.2.2 S5)** A flow-relevant input changed — a count-changing todo mutation or the §8.3 `active↔quiet` flip; the strip re-pulls `flow:state` (whose `in_progress` view carries the derived `n/m done` + activity + readiness). `window.flow.onStateChanged(cb)` returns an unsubscribe. (Agent-loop file-watch is still future.) |
@@ -92,7 +92,7 @@ contextBridge.exposeInMainWorld('flow', {
   start:   (flowName, inputs) => ipcRenderer.invoke('flow:start', { sessionId: SID, flowName, inputs }),
   state:   () => ipcRenderer.invoke('flow:state', { sessionId: SID }),
   advance: () => ipcRenderer.invoke('flow:advance', { sessionId: SID }),
-  gate:    (action, reason) => ipcRenderer.send('flow:gate', { sessionId: SID, action, reason }),
+  appGateDecision: (repoKey, step, turnKey, option) => ipcRenderer.send('flow:appGateDecision', { sessionId: SID, repoKey, step, turnKey, option }),
   composeFeedback: (todoIds, instructions, mode) => ipcRenderer.invoke('flow:composeFeedback', { sessionId: SID, todoIds, instructions, mode }),
   openChild: (prRef, atStep) => ipcRenderer.invoke('flow:openChild', { sessionId: SID, prRef, atStep }),
   onStateChanged: (cb) => ipcRenderer.on('flow:onStateChanged', (_e, m) => cb(m)),
