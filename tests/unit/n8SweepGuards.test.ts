@@ -237,3 +237,24 @@ describe('AC8 — the changelog keeps every pre-sweep entry byte-for-byte and ad
     expect(entryCount(current) - entryCount(preSweep)).toBe(1);
   });
 });
+
+// ─── §D.4 row (§E.3 / §A.4): the packaging manifest ships no deleted tree and cites the surviving engine ──
+// electron-builder.yml is outside AC 1's src/+tests/ grep, so a retired-section citation and a shipped-files
+// entry for a deleted tree survive it silently — and the second one breaks `pnpm run package` (electron-builder
+// copies each `from:` at package time; a source that no longer exists aborts the build) with no unit/e2e/build
+// step exercising it. Every concrete `from:` path must exist, and the manifest must carry no retired citation.
+// Falsified by naming a deleted tree in `from:` (as `example/loops` did after §A.4) or by a retired citation.
+describe('§E.3/§A.4 — the packaging manifest ships no deleted path and cites §27, not the retired engine', () => {
+  const yml = readText('electron-builder.yml');
+
+  it('every concrete extraResources `from:` path exists on disk', () => {
+    const froms = [...yml.matchAll(/^\s*-\s*from:\s*(\S+)\s*$/gm)].map((m) => m[1]).filter((p) => !/[*?]/.test(p));
+    expect(froms.length).toBeGreaterThan(0);
+    const missing = froms.filter((p) => !existsSync(p));
+    expect(missing, `electron-builder.yml ships nonexistent path(s):\n${missing.join('\n')}`).toEqual([]);
+  });
+
+  it('carries no retired-section citation', () => {
+    expect(yml.includes(SECTION + '26')).toBe(false);
+  });
+});
