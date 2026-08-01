@@ -33,6 +33,9 @@ describe('the shipped flow and the todo templates installed beside it', () => {
     expect(steps.length).toBeGreaterThan(0);
     for (const step of steps) {
       const ref = step.todo_template;
+      // A step may legitimately bind no template (e.g. `preparation`) — it simply offers no picker
+      // default. The invariant guards steps that DO bind one: the name must resolve to a seeded, parseable file.
+      if (ref === undefined) continue;
       expect(typeof ref === 'string' && ref.length > 0).toBe(true);
       expect(
         existsSync(path.join(todoTemplatesDir(flowDir), todoTemplateFile(ref!))),

@@ -2229,10 +2229,12 @@ test('installing the bundled examples seeds the flow, app and commands (§18.1/�
   // Back to the terminal; cd into a repo with no local flow → the installed global flow renders its steps.
   await page.locator('[data-viewbtn="1"]').click();
   await typeCommand(`cd "${repo}"`);
-  await expect(page.locator('#flow-strip .flow.vert .stn')).toHaveCount(5, {
+  // 5 flow steps (preparation, groom, plan, implement, finalize) render as 7 stations — the Not-started
+  // and Completed caps bracket the steps.
+  await expect(page.locator('#flow-strip .flow.vert .stn')).toHaveCount(7, {
     timeout: 10_000,
   });
-  await expect(flowStepName()).toHaveText('groom');
+  await expect(flowStepName()).toHaveText('preparation');
 
   await app.close();
   rmSync(home, { recursive: true, force: true });
@@ -2529,7 +2531,7 @@ test('after install, the active step offers its bundled todo template as the pic
   await expect(page.locator('#todo-list .tmpl-pick')).toHaveValue('ticket-grooming'); // the step's bundled default
   await page.locator('#todo-list .tmpl-add').click();
   // Instantiating the bundled template resolves (§18.6) and yields todos from its content.
-  await expect(page.locator('.todo').filter({ hasText: 'groom the ticket' })).not.toHaveCount(0, { timeout: 10_000 });
+  await expect(page.locator('.todo').filter({ hasText: 'run grooming skill' })).not.toHaveCount(0, { timeout: 10_000 });
 
   await app.close();
   rmSync(home, { recursive: true, force: true });
