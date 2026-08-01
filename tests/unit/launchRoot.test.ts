@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdtempSync, mkdirSync, rmSync, realpathSync, symlinkSync, writeFileSync, chmodSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
-import { resolveLaunchRoot, homeFallback, resolveLaunchSurfaces, APP_LAUNCH_DIR_ENV } from '../../src/main/launchRoot';
+import { resolveLaunchRoot, homeFallback, resolveAppHome, resolveLaunchSurfaces, APP_LAUNCH_DIR_ENV, APP_HOME_DIR_ENV } from '../../src/main/launchRoot';
 
 const FALLBACK = '/home/fallback-marker';
 
@@ -13,6 +13,22 @@ describe('homeFallback (§23.4 — F: the $HOME-else-OS-home value resolveLaunch
   it('falls back to the home arg when $HOME is unset or empty', () => {
     expect(homeFallback({}, '/fallback')).toBe('/fallback');
     expect(homeFallback({ HOME: '' }, '/fallback')).toBe('/fallback');
+  });
+});
+
+describe('resolveAppHome (§23.4 — the app-state home under which ~/.agent-terminal lives: APP_HOME_DIR override, else F)', () => {
+  it('uses an absolute APP_HOME_DIR, overriding $HOME', () => {
+    expect(resolveAppHome({ HOME: '/home/u', [APP_HOME_DIR_ENV]: '/alt/state' }, '/os')).toBe('/alt/state');
+  });
+  it('ignores a RELATIVE APP_HOME_DIR (no single meaning from this process cwd — CWE-829) and falls back to F', () => {
+    expect(resolveAppHome({ HOME: '/home/u', [APP_HOME_DIR_ENV]: 'rel/state' }, '/os')).toBe('/home/u');
+  });
+  it('ignores a blank APP_HOME_DIR and falls back to F', () => {
+    expect(resolveAppHome({ HOME: '/home/u', [APP_HOME_DIR_ENV]: '   ' }, '/os')).toBe('/home/u');
+  });
+  it('falls back to F ($HOME else the OS home) when APP_HOME_DIR is unset', () => {
+    expect(resolveAppHome({ HOME: '/home/u' }, '/os')).toBe('/home/u');
+    expect(resolveAppHome({}, '/os')).toBe('/os');
   });
 });
 
@@ -130,5 +146,19 @@ describe('resolveLaunchSurfaces (§23.4/§18.1 — launch root for the cwd surfa
     const surfaces = resolveLaunchSurfaces({}, osHome);
     expect(surfaces.flowGlobalDir).toBe(osHome);
     expect(surfaces.launchRoot).toBe(osHome); // no target → L falls back to F = the same home
+  });
+
+  it('relocates the flow global dir to APP_HOME_DIR while the launch root stays on the real home (decoupled)', () => {
+    // APP_HOME_DIR moves the app-STATE home (flow.yaml/audit) — NOT the shell cwd, which stays on the real
+    // home (or APP_LAUNCH_DIR). The two axes are independent: pointing state at a sandbox must not move the
+    // terminal's working directory.
+    const appState = join(base, 'app-state');
+    const home = join(base, 'home');
+    mkdirSync(appState);
+    mkdirSync(home);
+    const env: NodeJS.ProcessEnv = { HOME: home, [APP_HOME_DIR_ENV]: appState };
+    const surfaces = resolveLaunchSurfaces(env, '/os-home-unused');
+    expect(surfaces.flowGlobalDir).toBe(appState); // the flow.yaml/audit home moves
+    expect(surfaces.launchRoot).toBe(home); // the shell cwd fallback does NOT
   });
 });

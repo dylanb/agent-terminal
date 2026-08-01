@@ -1906,6 +1906,45 @@ test('flow Start opens an audit run file with a flow.started event (§25.4)', { 
   rmSync(home, { recursive: true, force: true });
 });
 
+// APP_HOME_DIR (§23.4) relocates the app-state home — the global flow.yaml (§18.1) AND the audit tree
+// (§25) — independently of $HOME and the launch cwd. A repo with no local flow reads the GLOBAL flow from
+// the overridden home, and its run's audit lands there, never under the real $HOME (which has no flow at all).
+test('APP_HOME_DIR relocates the global flow.yaml and the audit tree off the real home (§23.4)', { tag: '@ownapp' }, async () => {
+  const appHome = mkdtempSync(join(tmpdir(), 'agent-term-e2e-apphome-'));
+  mkdirSync(join(appHome, '.agent-terminal'), { recursive: true });
+  writeFileSync(
+    join(appHome, '.agent-terminal', 'flow.yaml'),
+    'name: relocated-flow\nsteps:\n  - id: relocated-step\n    kind: manual\n',
+  );
+  const realHome = mkdtempSync(join(tmpdir(), 'agent-term-e2e-realhome-')); // no flow.yaml lives here
+  const workdir = mkdtempSync(join(tmpdir(), 'agent-term-e2e-apphome-work-'));
+  mkdirSync(join(workdir, '.git'), { recursive: true }); // its own repo key, with NO local flow → the global wins
+  app = await electron.launch({
+    args: ['out/main/index.js'],
+    env: { ...process.env, APP_SHELL: 'bash', HOME: realHome, APP_HOME_DIR: appHome, APP_SUBMIT_DELAY_MS: '100' },
+  });
+  page = await app.firstWindow({ timeout: WINDOW_TIMEOUT_MS });
+  await expect(termRows()).not.toHaveText('', { timeout: 15_000 });
+
+  await typeCommand(`cd "${workdir}"`);
+  // The global flow resolved from APP_HOME_DIR, not $HOME (which has none) — the step id proves the source.
+  await expect(flowStepName()).toHaveText('relocated-step', { timeout: 10_000 });
+
+  await expect(flowControl()).toHaveText('Start');
+  await flowControl().click();
+  await expect(flowControl()).toHaveText('Advance');
+
+  // The run's audit file lands under APP_HOME_DIR, and NOT under the real $HOME.
+  await expect.poll(() => auditRunFiles(appHome, workdir).length).toBe(1);
+  expect(readAuditRun(appHome, workdir, auditRunFiles(appHome, workdir)[0]).header).toMatchObject({ flow: 'relocated-flow' });
+  expect(auditRunFiles(realHome, workdir)).toHaveLength(0);
+
+  await app.close();
+  rmSync(appHome, { recursive: true, force: true });
+  rmSync(realHome, { recursive: true, force: true });
+  rmSync(workdir, { recursive: true, force: true });
+});
+
 // A run file accrues lifecycle events and go-back-after-done appends to the SAME file. (The
 // new-file-per-flow:start case is integration-covered in auditRecorder.test: the UI never returns to
 // not_started, so a second flow:start is not reachable from the strip.)

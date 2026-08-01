@@ -504,9 +504,11 @@ async function createWindow(): Promise<void> {
   });
 
   // Flow audit record (§25): observe-only, best-effort — records each run's lifecycle to
-  // ~/.agent-terminal/audit/<repo>/<flow>_<ts>.yaml. Never throws into the flow path.
+  // <app-state home>/.agent-terminal/audit/<repo>/<flow>_<ts>.yaml. The audit tree hangs off the SAME
+  // app-state home as the global flow.yaml (flowGlobalDir, APP_HOME_DIR-overridable), never a second
+  // home literal. Never throws into the flow path.
   const audit = createAuditRecorder({
-    root: auditRootDir(os.homedir()),
+    root: auditRootDir(flowGlobalDir),
     now: () => new Date(),
     flowName: (repoKey) => {
       const load = loadFlowDefinitionLocalFirst(repoKey, flowGlobalDir);
