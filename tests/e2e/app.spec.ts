@@ -2568,7 +2568,14 @@ function seedManualThenAppLoopFlowRepo(prefix: string, loopName = 'plan-loop'): 
 
 // The plan-loop (§27) reviewer catalog + report structure the committed example def declares — the roster
 // the round report must account for and the sections it must carry (example/loops-v2/plan-loop/plan-loop.yaml).
-const PLAN_V2_ROSTER = ['review-plan-principal', 'review-plan-security'];
+const PLAN_V2_ROSTER = [
+  'review-plan-principal',
+  'review-plan-security',
+  'review-plan-architecture',
+  'review-plan-intent',
+  'review-plan-maintainability',
+  'review-plan-contracts',
+];
 const PLAN_V2_SECTIONS = ['summary', 'findings', 'disposition'];
 // The canonical report generator is the ONE anchor: the fake-agent emits exactly what the shared predicate
 // (which gates the review turn's completion) accepts, so the e2e fixture cannot drift from the engine.
@@ -2581,11 +2588,13 @@ const OMIT_REPORT_B64 = b64(exampleRoundReport({ sections: PLAN_V2_SECTIONS, ros
 // consolidator clean-guard keys on. The second persona ran and found nothing (the empty marker).
 const v2FailedReport = (): string => {
   const g = REPORT_GRAMMAR;
-  return (
-    ['## summary', '', '## findings', '', '## disposition', '',
-      `### ${PLAN_V2_ROSTER[0]}`, '', g.failedMarker, '',
-      `### ${PLAN_V2_ROSTER[1]}`, '', g.emptyMarker, ''].join('\n') + '\n'
-  );
+  const parts = ['## summary', '', '## findings', '', '## disposition', ''];
+  // The first persona is recorded as FAILED TO RUN; every other roster persona ran and found nothing, so the
+  // report stays well-formed (full-roster accounting) while carrying the failed-lens signal the clean-guard keys on.
+  PLAN_V2_ROSTER.forEach((persona, idx) => {
+    parts.push(`### ${persona}`, '', idx === 0 ? g.failedMarker : g.emptyMarker, '');
+  });
+  return parts.join('\n') + '\n';
 };
 const FAILED_REPORT_B64 = b64(v2FailedReport());
 
